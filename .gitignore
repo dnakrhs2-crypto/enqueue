@@ -1,0 +1,25 @@
+# Build output
+build/
+out/
+Testing/
+installer/output/
+
+# Local machine configuration (JUCE / ASIO SDK paths)
+CMakeUserPresets.json
+
+# Visual Studio / editors
+.vs/
+*.user
+*.suo
+*.VC.db
+*.VC.opendb
+.vscode/
+.idea/
+
+# Third-party SDKs must never be committed (ASIO SDK licence)
+external/
+third_party/asiosdk*/
+
+# OS noise
+Thumbs.db
+desktop.ini

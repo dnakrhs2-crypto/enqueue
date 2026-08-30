@@ -1,0 +1,155 @@
+#include "ui/TransportBar.h"
+
+#include "app/Commands.h"
+#include "ui/UiUtils.h"
+
+namespace gocue
+{
+
+TransportBar::TransportBar (juce::ApplicationCommandManager& cm)
+    : commands (cm)
+{
+    goButton.setColour (juce::TextButton::buttonColourId, Palette::goButton);
+    goButton.setColour (juce::TextButton::textColourOffId, juce::Colours::white);
+    goButton.setWantsKeyboardFocus (false);
+    goButton.onClick = [this] { commands.invokeDirectly (CommandIDs::go, true); };
+    addAndMakeVisible (goButton);
+
+    stopButton.setButtonText (ko ("정지 (S)"));
+    styleButton (stopButton, Palette::stopButton);
+    stopButton.onClick = [this] { commands.invokeDirectly (CommandIDs::stopSelected, true); };
+
+    fadeOutButton.setButtonText (ko ("페이드아웃 (F)"));
+    styleButton (fadeOutButton, Palette::fadingOut);
+    fadeOutButton.onClick = [this] { commands.invokeDirectly (CommandIDs::fadeOutSelected, true); };
+
+    stopAllButton.setButtonText (ko ("전체 정지 (Esc)"));
+    styleButton (stopAllButton, Palette::stopButton.darker (0.3f));
+    stopAllButton.onClick = [this] { commands.invokeDirectly (CommandIDs::stopAll, true); };
+
+    standbyTitle.setText (ko ("다음 큐"), juce::dontSendNotification);
+    standbyTitle.setColour (juce::Label::textColourId, Palette::dimText);
+    standbyTitle.setFont (juce::Font (juce::FontOptions (13.0f)));
+    addAndMakeVisible (standbyTitle);
+
+    cueNumber.setFont (juce::Font (juce::FontOptions (30.0f, juce::Font::bold)));
+    cueNumber.setColour (juce::Label::textColourId, Palette::standby);
+    cueNumber.setJustificationType (juce::Justification::centredLeft);
+    addAndMakeVisible (cueNumber);
+
+    cueName.setFont (juce::Font (juce::FontOptions (22.0f, juce::Font::bold)));
+    cueName.setColour (juce::Label::textColourId, Palette::text);
+    addAndMakeVisible (cueName);
+
+    cueFile.setFont (juce::Font (juce::FontOptions (13.0f)));
+    cueFile.setColour (juce::Label::textColourId, Palette::dimText);
+    addAndMakeVisible (cueFile);
+
+    cueMeta.setFont (juce::Font (juce::FontOptions (13.0f)));
+    cueMeta.setColour (juce::Label::textColourId, Palette::dimText);
+    addAndMakeVisible (cueMeta);
+
+    playingLabel.setFont (juce::Font (juce::FontOptions (14.0f, juce::Font::bold)));
+    playingLabel.setColour (juce::Label::textColourId, Palette::dimText);
+    playingLabel.setJustificationType (juce::Justification::centredRight);
+    addAndMakeVisible (playingLabel);
+
+    statusLabel.setFont (juce::Font (juce::FontOptions (13.0f)));
+    statusLabel.setJustificationType (juce::Justification::centredRight);
+    addAndMakeVisible (statusLabel);
+
+    setStandbyCue (-1, nullptr);
+    setPlayingCount (0);
+}
+
+void TransportBar::styleButton (juce::TextButton& button, juce::Colour colour)
+{
+    button.setColour (juce::TextButton::buttonColourId, colour);
+    button.setColour (juce::TextButton::textColourOffId, juce::Colours::white);
+    button.setWantsKeyboardFocus (false);
+    addAndMakeVisible (button);
+}
+
+void TransportBar::setStandbyCue (int index, const Cue* cue)
+{
+    if (cue == nullptr)
+    {
+        cueNumber.setText ("--", juce::dontSendNotification);
+        cueName.setText (ko ("선택된 큐 없음"), juce::dontSendNotification);
+        cueFile.setText ("", juce::dontSendNotification);
+        cueMeta.setText ("", juce::dontSendNotification);
+        return;
+    }
+
+    cueNumber.setText (juce::String (index + 1), juce::dontSendNotification);
+    cueName.setText (cue->name.isNotEmpty() ? cue->name : ko ("(이름 없음)"), juce::dontSendNotification);
+
+    if (cue->file == juce::File())
+        cueFile.setText (ko ("파일 없음"), juce::dontSendNotification);
+    else
+        cueFile.setText (cue->file.getFileName(), juce::dontSendNotification);
+
+    cueFile.setColour (juce::Label::textColourId, cue->fileMissing ? Palette::missing : Palette::dimText);
+
+    juce::String meta;
+    meta << ko ("길이 ") << formatSeconds (cue->durationSeconds)
+         << "   " << ko ("페이드인 ") << cue->fadeInMs << " ms"
+         << "   " << ko ("페이드아웃 ") << cue->fadeOutMs << " ms"
+         << "   " << ko ("게인 ") << juce::String (cue->gainDb, 1) << " dB";
+    cueMeta.setText (meta, juce::dontSendNotification);
+}
+
+void TransportBar::setPlayingCount (int numPlaying)
+{
+    playingLabel.setText (ko ("재생 중 ") + juce::String (numPlaying), juce::dontSendNotification);
+    playingLabel.setColour (juce::Label::textColourId, numPlaying > 0 ? Palette::playing.brighter (0.6f) : Palette::dimText);
+}
+
+void TransportBar::showStatus (const juce::String& message, bool isError)
+{
+    statusLabel.setText (message, juce::dontSendNotification);
+    statusLabel.setColour (juce::Label::textColourId, isError ? Palette::missing : Palette::dimText);
+    startTimer (isError ? 6000 : 3000);
+}
+
+void TransportBar::timerCallback()
+{
+    stopTimer();
+    statusLabel.setText ("", juce::dontSendNotification);
+}
+
+void TransportBar::resized()
+{
+    auto area = getLocalBounds().reduced (10, 8);
+
+    goButton.setBounds (area.removeFromLeft (150));
+    area.removeFromLeft (14);
+
+    auto right = area.removeFromRight (180);
+    auto buttons = right.removeFromBottom (28);
+    stopAllButton.setBounds (buttons);
+    right.removeFromBottom (4);
+    buttons = right.removeFromBottom (28);
+    stopButton.setBounds (buttons.removeFromLeft (buttons.getWidth() / 2 - 2));
+    fadeOutButton.setBounds (buttons.removeFromRight (buttons.getWidth() - 4 + 0));
+    playingLabel.setBounds (right.removeFromTop (22));
+    statusLabel.setBounds (right);
+
+    area.removeFromRight (10);
+
+    standbyTitle.setBounds (area.removeFromTop (16));
+    auto main = area.removeFromTop (36);
+    cueNumber.setBounds (main.removeFromLeft (70));
+    cueName.setBounds (main);
+    cueFile.setBounds (area.removeFromTop (18));
+    cueMeta.setBounds (area.removeFromTop (18));
+}
+
+void TransportBar::paint (juce::Graphics& g)
+{
+    g.fillAll (Palette::panel);
+    g.setColour (Palette::outline);
+    g.drawLine (0.0f, (float) getHeight() - 0.5f, (float) getWidth(), (float) getHeight() - 0.5f);
+}
+
+} // namespace gocue

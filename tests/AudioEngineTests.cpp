@@ -1,0 +1,215 @@
+#include "audio/AudioEngine.h"
+
+#include <juce_audio_formats/juce_audio_formats.h>
+#include <juce_core/juce_core.h>
+
+#include <cmath>
+
+namespace gocue::tests
+{
+
+/** Drives the engine without an audio device: prepare() + renderBlock() in a loop. */
+class AudioEngineTests : public juce::UnitTest
+{
+public:
+    AudioEngineTests() : juce::UnitTest ("AudioEngine (offline)", "GoCue") {}
+
+    static constexpr double sampleRate = 44100.0;
+    static constexpr int blockSize = 512;
+
+    juce::File writeSine (const juce::File& dir, const juce::String& fileName, double seconds, float amplitude, int channels)
+    {
+        const auto file = dir.getChildFile (fileName);
+        juce::WavAudioFormat wav;
+        std::unique_ptr<juce::OutputStream> stream (file.createOutputStream());
+        expect (stream != nullptr);
+
+        if (stream == nullptr)
+            return {};
+
+        auto writer = wav.createWriterFor (stream, juce::AudioFormatWriterOptions()
+                                                       .withSampleRate (sampleRate)
+                                                       .withNumChannels (channels)
+                                                       .withBitsPerSample (16));
+        expect (writer != nullptr);
+
+        if (writer == nullptr)
+            return {};
+
+        const int numSamples = (int) (seconds * sampleRate);
+        juce::AudioBuffer<float> buffer (channels, numSamples);
+
+        for (int ch = 0; ch < channels; ++ch)
+            for (int i = 0; i < numSamples; ++i)
+                buffer.setSample (ch, i, amplitude * (float) std::sin (2.0 * juce::MathConstants<double>::pi * 440.0 * i / sampleRate));
+
+        expect (writer->writeFromAudioSampleBuffer (buffer, 0, numSamples));
+        return file;
+    }
+
+    static void render (AudioEngine& engine, juce::AudioBuffer<float>& out, int blocks)
+    {
+        for (int i = 0; i < blocks; ++i)
+            engine.renderBlock (out, blockSize);
+    }
+
+    static float rms (const juce::AudioBuffer<float>& buffer, int channel = 0)
+    {
+        return buffer.getRMSLevel (channel, 0, buffer.getNumSamples());
+    }
+
+    void runTest() override
+    {
+        const auto dir = juce::File::getSpecialLocation (juce::File::tempDirectory)
+                             .getChildFile ("gocue_engine_" + juce::Uuid().toString());
+        expect (dir.createDirectory().wasOk());
+
+        const auto tone = writeSine (dir, "tone.wav", 1.0, 0.5f, 2);
+        const auto mono = writeSine (dir, "mono.wav", 1.0, 0.5f, 1);
+
+        AudioEngine engine (0);            // synchronous reads: deterministic offline rendering
+        engine.prepare (sampleRate, blockSize);
+        juce::AudioBuffer<float> out (2, blockSize);
+
+        beginTest ("fade-in and cue gain are applied");
+        {
+            Cue cue;
+            cue.name = "tone";
+            cue.file = tone;
+            cue.fadeInMs = 100;
+            cue.fadeOutMs = 50;
+            cue.gainDb = -6.0206;           // x0.5
+
+            juce::String error;
+            expect (engine.play (cue, &error), error);
+            expect (engine.isPlaying (cue.id));
+            expectEquals (engine.getNumPlaying(), 1);
+
+            engine.renderBlock (out, blockSize);
+            expectLessThan (rms (out), 0.06f);                       // still ramping up
+
+            render (engine, out, 15);                                // 8192 samples: past the 4410-sample fade
+            expectWithinAbsoluteError (rms (out, 0), 0.1768f, 0.01f); // 0.5 amp * 0.5 gain / sqrt(2)
+            expectWithinAbsoluteError (rms (out, 1), 0.1768f, 0.01f);
+
+            const auto playing = engine.getPlayingCues();
+            expectEquals ((int) playing.size(), 1);
+            expect (playing[0].id == cue.id);
+            expectWithinAbsoluteError (playing[0].lengthSeconds, 1.0, 1e-3);
+            expectGreaterThan (playing[0].positionSeconds, 0.15);
+            expect (! playing[0].fadingOut);
+
+            beginTest ("fade-out stop reaches silence and the player is reaped");
+            engine.fadeOutAndStop (cue.id);
+            engine.renderBlock (out, blockSize);
+            expect (engine.getPlayingCues()[0].fadingOut);
+
+            render (engine, out, 6);                                 // 50 ms == 2205 samples < 7 blocks
+            expectWithinAbsoluteError (rms (out), 0.0f, 1e-4f);
+            engine.reapFinishedPlayers();
+            expect (! engine.isPlaying (cue.id));
+            expectEquals (engine.getNumPlaying(), 0);
+        }
+
+        beginTest ("a cue finishes by itself at the end of the file");
+        {
+            Cue plain;
+            plain.file = tone;
+            expect (engine.play (plain));
+
+            render (engine, out, 50);                                // 25600 samples
+            engine.reapFinishedPlayers();
+            expect (engine.isPlaying (plain.id));
+
+            render (engine, out, 40);                                // 46080 samples > 44100
+            engine.reapFinishedPlayers();
+            expect (! engine.isPlaying (plain.id));
+            expectEquals (engine.getNumPlaying(), 0);
+        }
+
+        beginTest ("mono files are played on both output channels");
+        {
+            Cue m;
+            m.file = mono;
+            expect (engine.play (m));
+            render (engine, out, 5);
+            expectWithinAbsoluteError (rms (out, 0), 0.3536f, 0.01f);
+            expectWithinAbsoluteError (rms (out, 1), 0.3536f, 0.01f);
+
+            engine.stopAll();
+            render (engine, out, 3);
+            engine.reapFinishedPlayers();
+            expectEquals (engine.getNumPlaying(), 0);
+        }
+
+        beginTest ("cues mix together and stopAll silences everything");
+        {
+            Cue a, b;
+            a.file = tone;
+            b.file = tone;
+            expect (engine.play (a));
+            expect (engine.play (b));
+            expectEquals (engine.getNumPlaying(), 2);
+
+            render (engine, out, 5);
+            expectWithinAbsoluteError (rms (out), 0.7071f, 0.02f);   // two in-phase 0.5 sines
+
+            engine.stopAll();
+            render (engine, out, 3);                                 // 5 ms de-click < 1 block
+            expectWithinAbsoluteError (rms (out), 0.0f, 1e-4f);
+            engine.reapFinishedPlayers();
+            expectEquals (engine.getNumPlaying(), 0);
+
+            beginTest ("re-firing a running cue restarts it as a single instance");
+            expect (engine.play (a));
+            render (engine, out, 10);
+            expect (engine.play (a));
+            render (engine, out, 3);
+            engine.reapFinishedPlayers();
+
+            const auto playing = engine.getPlayingCues();
+            expectEquals ((int) playing.size(), 1);
+            expect (playing[0].id == a.id);
+            expectLessThan (playing[0].positionSeconds, 0.1);
+
+            beginTest ("the most recently started cue is reported, optionally skipping fading cues");
+            b.fadeOutMs = 500;                                       // long enough to observe the fade
+            expect (engine.play (b));
+            expect (engine.getMostRecentlyStartedCue (false) == b.id);
+            engine.fadeOutAndStop (b.id);
+            engine.renderBlock (out, blockSize);
+            expect (engine.getMostRecentlyStartedCue (false) == b.id);
+            expect (engine.getMostRecentlyStartedCue (true) == a.id);
+
+            engine.stopAll();
+            render (engine, out, 3);
+            engine.reapFinishedPlayers();
+            expectEquals (engine.getNumPlaying(), 0);
+            expect (engine.getMostRecentlyStartedCue (false).isNull());
+        }
+
+        beginTest ("missing or unassigned files are rejected with a message");
+        {
+            Cue missing;
+            missing.name = "missing";
+            missing.file = dir.getChildFile ("nope.wav");
+            juce::String message;
+            expect (! engine.play (missing, &message));
+            expect (message.contains ("nope.wav"));
+
+            Cue unassigned;
+            unassigned.name = "empty";
+            message.clear();
+            expect (! engine.play (unassigned, &message));
+            expect (message.isNotEmpty());
+            expectEquals (engine.getNumPlaying(), 0);
+        }
+
+        engine.shutdown();
+        expect (dir.deleteRecursively());
+    }
+};
+
+static AudioEngineTests audioEngineTests;
+
+} // namespace gocue::tests
