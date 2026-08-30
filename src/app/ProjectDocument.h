@@ -34,7 +34,8 @@ public:
 
     void newProject();
     juce::Result load (const juce::File& projectFile, juce::StringArray* warnings = nullptr);
-    juce::Result save (const juce::File& projectFile);
+    /** @param decorate  optional hook that fills in live state (plugin chains) right before writing. */
+    juce::Result save (const juce::File& projectFile, const std::function<void (Project&)>& decorate = {});
 
     void markDirty();
     void markClean();

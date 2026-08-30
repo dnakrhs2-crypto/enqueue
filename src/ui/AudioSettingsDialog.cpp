@@ -39,4 +39,10 @@ void show (juce::AudioDeviceManager& deviceManager, juce::Component* centreAroun
     openDialog = options.launchAsync();
 }
 
+void closeIfOpen()
+{
+    if (openDialog != nullptr)
+        delete openDialog.getComponent();
+}
+
 } // namespace gocue::AudioSettingsDialog

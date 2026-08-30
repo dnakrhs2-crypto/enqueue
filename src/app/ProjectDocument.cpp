@@ -55,12 +55,24 @@ juce::Result ProjectDocument::load (const juce::File& projectFile, juce::StringA
     return juce::Result::ok();
 }
 
-juce::Result ProjectDocument::save (const juce::File& projectFile)
+juce::Result ProjectDocument::save (const juce::File& projectFile, const std::function<void (Project&)>& decorate)
 {
-    const auto result = ProjectSerializer::save (toProject(), projectFile);
+    auto project = toProject();
+
+    if (decorate)
+        decorate (project);
+
+    const auto result = ProjectSerializer::save (project, projectFile);
 
     if (result.failed())
         return result;
+
+    // Keep the in-memory snapshot in sync with what was written (plugin states).
+    masterPlugins = project.masterPlugins;
+
+    for (size_t i = 0; i < project.cues.size() && (int) i < cues.size(); ++i)
+        if (project.cues[i].id == cues.get ((int) i).id)
+            cues.setPluginStatesQuietly ((int) i, project.cues[i].plugins);
 
     file = projectFile;
     markClean();

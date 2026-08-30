@@ -1,6 +1,7 @@
 #pragma once
 
 #include "audio/FadeEnvelope.h"
+#include "audio/PluginChain.h"
 #include "model/Cue.h"
 
 #include <juce_audio_devices/juce_audio_devices.h>
@@ -13,10 +14,12 @@ namespace gocue
 {
 
 /** One playing instance of a cue:
-    file streaming -> resampling to the device rate -> fade envelope -> cue gain.
+    file streaming -> resampling to the device rate -> fade envelope -> cue gain -> cue plugin chain.
 
     Created, prepared and started on the message thread; renderNextBlock() runs on the
-    audio thread. Control requests (stop / fade-out) are passed through atomics. */
+    audio thread. Control requests (stop / fade-out) are passed through atomics.
+    After the file ends (or a fade-out completes) the chain keeps running for its reported
+    tail so reverbs and delays are not cut off; a hard stop skips the tail. */
 class CuePlayer
 {
 public:
@@ -41,10 +44,14 @@ public:
         Call after prepare() and before the player is visible to the audio thread. */
     void start();
 
-    /** De-clicked immediate stop. Any thread. */
+    /** The insert chain this player runs through (may be null). Any thread. */
+    void setChain (PluginChain* newChain) noexcept   { chain.store (newChain, std::memory_order_release); }
+    PluginChain* getChain() const noexcept           { return chain.load (std::memory_order_acquire); }
+
+    /** De-clicked immediate stop, no plugin tail. Any thread. */
     void requestStop() noexcept;
 
-    /** Fade to silence over 'milliseconds', then stop. Any thread. */
+    /** Fade to silence over 'milliseconds', then stop (plugin tail still rings out). Any thread. */
     void requestFadeOut (int milliseconds) noexcept;
 
     /** Audio thread. Overwrites channels 0-1 of buffer[0, numSamples) with this player's output.
@@ -69,13 +76,20 @@ private:
     FadeEnvelope envelope;
     float gainLinear = 1.0f;
     double lengthSeconds = 0.0;
+    double currentSampleRate = 44100.0;
     juce::int64 startOrder = 0;
 
+    std::atomic<PluginChain*> chain { nullptr };
     std::atomic<int> pendingFadeOutMs { -1 };
+    std::atomic<bool> hardStopRequested { false };
     std::atomic<bool> stopRequested { false };
     std::atomic<bool> finished { false };
     std::atomic<bool> fadingOut { false };
     std::atomic<double> positionSeconds { 0.0 };
+
+    // audio-thread state
+    bool inTail = false;
+    juce::int64 tailSamplesLeft = 0;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (CuePlayer)
 };

@@ -53,6 +53,9 @@ void AudioEngine::shutdown()
 
     old.clear();
     readAheadThread.stopThread (3000);
+
+    cueChains.clear();
+    masterChain.clear();
 }
 
 //==============================================================================
@@ -72,13 +75,19 @@ bool AudioEngine::play (const Cue& cue, juce::String* errorMessage)
 
     player->prepare (getSampleRate(), getBlockSize());
     player->setStartOrder (++startCounter);
+    player->setChain (findCueChain (cue.id));
     player->start();
 
     const juce::ScopedLock sl (lock);
 
     for (auto& existing : players)
+    {
         if (existing->getCueId() == cue.id)
+        {
+            existing->setChain (nullptr);     // the chain now belongs to the new instance
             existing->requestStop();
+        }
+    }
 
     players.push_back (std::move (player));
     return true;
@@ -182,18 +191,98 @@ int AudioEngine::getNumPlaying() const
 }
 
 //==============================================================================
+PluginChain& AudioEngine::getCueChain (const juce::Uuid& cueId)
+{
+    auto& slot = cueChains[cueId.toString()];
+
+    if (slot == nullptr)
+    {
+        slot = std::make_unique<PluginChain>();
+        slot->setListener (chainListener);
+        slot->prepare (getSampleRate(), getBlockSize());
+    }
+
+    return *slot;
+}
+
+PluginChain* AudioEngine::findCueChain (const juce::Uuid& cueId) const
+{
+    const auto it = cueChains.find (cueId.toString());
+    return it != cueChains.end() ? it->second.get() : nullptr;
+}
+
+void AudioEngine::removeCueChain (const juce::Uuid& cueId)
+{
+    std::unique_ptr<PluginChain> dead;
+
+    {
+        const juce::ScopedLock sl (lock);
+        const auto it = cueChains.find (cueId.toString());
+
+        if (it == cueChains.end())
+            return;
+
+        for (auto& p : players)
+            if (p->getChain() == it->second.get())
+                p->setChain (nullptr);
+
+        dead = std::move (it->second);
+        cueChains.erase (it);
+    }
+
+    dead.reset();   // plugin instances are released outside the audio lock
+}
+
+void AudioEngine::clearCueChains()
+{
+    std::map<juce::String, std::unique_ptr<PluginChain>> dead;
+
+    {
+        const juce::ScopedLock sl (lock);
+
+        for (auto& p : players)
+            p->setChain (nullptr);
+
+        dead.swap (cueChains);
+    }
+
+    dead.clear();
+}
+
+void AudioEngine::setChainListener (PluginChain::Listener* listener)
+{
+    chainListener = listener;
+    masterChain.setListener (listener);
+
+    for (auto& entry : cueChains)
+        entry.second->setListener (listener);
+}
+
+PluginChain::Factory AudioEngine::makePluginFactory()
+{
+    return pluginHost.makeFactory (getSampleRate(), getBlockSize());
+}
+
+//==============================================================================
 void AudioEngine::prepare (double newSampleRate, int newBlockSize)
 {
     sampleRate.store (newSampleRate > 0.0 ? newSampleRate : 44100.0);
     blockSize.store (juce::jmax (1, newBlockSize));
 
-    const juce::ScopedLock sl (lock);
+    {
+        const juce::ScopedLock sl (lock);
 
-    mixBuffer.setSize (2, blockSize.load(), false, false, true);
-    playerBuffer.setSize (2, blockSize.load(), false, false, true);
+        mixBuffer.setSize (2, blockSize.load(), false, false, true);
+        playerBuffer.setSize (2, blockSize.load(), false, false, true);
 
-    for (auto& p : players)
-        p->prepare (sampleRate.load(), blockSize.load());
+        for (auto& p : players)
+            p->prepare (sampleRate.load(), blockSize.load());
+    }
+
+    masterChain.prepare (sampleRate.load(), blockSize.load());
+
+    for (auto& entry : cueChains)
+        entry.second->prepare (sampleRate.load(), blockSize.load());
 }
 
 void AudioEngine::renderBlock (juce::AudioBuffer<float>& output, int numSamples)
@@ -228,6 +317,8 @@ void AudioEngine::renderBlock (juce::AudioBuffer<float>& output, int numSamples)
                 anyFinished = true;
         }
     }
+
+    masterChain.process (mixBuffer, numSamples);
 
     for (int ch = 0; ch < output.getNumChannels(); ++ch)
     {

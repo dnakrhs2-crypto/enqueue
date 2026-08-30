@@ -34,6 +34,7 @@ public:
             slot.fileOrIdentifier = "C:\\Plugins\\eq.vst3";
             slot.uniqueId = 42;
             slot.stateBase64 = "AAECAw==";
+            slot.descriptionXml = "<PLUGIN name=\"EQ\" format=\"VST3\" uniqueId=\"2a\"/>";
             slot.bypassed = true;
             a.plugins.push_back (slot);
             p.cues.push_back (a);
@@ -67,6 +68,7 @@ public:
             expectEquals (q.cues[0].plugins[0].fileOrIdentifier, juce::String ("C:\\Plugins\\eq.vst3"));
             expectEquals (q.cues[0].plugins[0].uniqueId, 42);
             expectEquals (q.cues[0].plugins[0].stateBase64, juce::String ("AAECAw=="));
+            expectEquals (q.cues[0].plugins[0].descriptionXml, slot.descriptionXml);
             expect (q.cues[0].plugins[0].bypassed);
             expect (q.cues[1].id == b.id);
             expect (q.cues[1].file == juce::File());

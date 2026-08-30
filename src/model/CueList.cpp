@@ -108,6 +108,12 @@ void CueList::update (int index, const std::function<void (Cue&)>& mutator)
     listeners.call ([index] (Listener& l) { l.cueChanged (index); });
 }
 
+void CueList::setPluginStatesQuietly (int index, std::vector<PluginSlotState> states)
+{
+    if (isValidIndex (index))
+        cues[(size_t) index].plugins = std::move (states);
+}
+
 void CueList::setSelectedIndex (int index)
 {
     int newIndex = -1;

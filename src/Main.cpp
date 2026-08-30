@@ -29,6 +29,14 @@ public:
         const auto deviceError = engine->initialise (savedDeviceState.get());
         engine->getDeviceManager().addChangeListener (this);
 
+        auto& host = engine->getPluginHost();
+        host.loadKnownPluginsFromXml (settings->getPluginList().get());
+        host.onKnownPluginsChanged = [this]
+        {
+            if (engine != nullptr && settings != nullptr)
+                settings->setPluginList (engine->getPluginHost().createKnownPluginsXml().get());
+        };
+
         commandManager.registerAllCommandsForTarget (this);
         mainWindow = std::make_unique<MainWindow> (getApplicationName(), *engine, *settings, commandManager);
 

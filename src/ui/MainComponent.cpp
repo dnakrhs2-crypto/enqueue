@@ -3,6 +3,7 @@
 #include "app/Commands.h"
 #include "audio/CueFileInfo.h"
 #include "ui/AudioSettingsDialog.h"
+#include "ui/PluginDialogs.h"
 #include "ui/UiUtils.h"
 
 namespace gocue
@@ -12,7 +13,7 @@ namespace
 {
     constexpr int menuBarHeight = 24;
     constexpr int transportHeight = 112;
-    constexpr int inspectorHeight = 170;
+    constexpr int inspectorHeight = 212;
 }
 
 MainComponent::MainComponent (AudioEngine& e, AppSettings& s, juce::ApplicationCommandManager& cm)
@@ -22,7 +23,7 @@ MainComponent::MainComponent (AudioEngine& e, AppSettings& s, juce::ApplicationC
       menuBar (this),
       transport (cm),
       table (document.cues, e.getFormatManager(), cm),
-      inspector (document.cues, e.getFormatManager(), s)
+      inspector (document.cues, e, s, pluginWindows)
 {
     setWantsKeyboardFocus (true);
 
@@ -32,6 +33,10 @@ MainComponent::MainComponent (AudioEngine& e, AppSettings& s, juce::ApplicationC
     addAndMakeVisible (inspector);
 
     table.onFilesDropped = [this] (const juce::StringArray& files, int insertAt) { addCuesFromFiles (files, insertAt); };
+    inspector.onOpenPluginManager = [this] { showPluginManager(); };
+
+    engine.setChainListener (&pluginWindows);
+    pluginWindows.onChainChanged = [this] (PluginChain&) { document.markDirty(); };
 
     document.cues.addListener (this);
     document.addListener (this);
@@ -41,7 +46,7 @@ MainComponent::MainComponent (AudioEngine& e, AppSettings& s, juce::ApplicationC
     addKeyListener (commands.getKeyMappings());
     setApplicationCommandManagerToWatch (&commands);
 
-    setSize (1100, 720);
+    setSize (1100, 760);
     updateTransportStandby();
     startTimerHz (30);
 }
@@ -49,6 +54,10 @@ MainComponent::MainComponent (AudioEngine& e, AppSettings& s, juce::ApplicationC
 MainComponent::~MainComponent()
 {
     stopTimer();
+    PluginDialogs::closeAll();
+    AudioSettingsDialog::closeIfOpen();
+    pluginWindows.closeAll();
+    engine.setChainListener (nullptr);
     document.removeListener (this);
     document.cues.removeListener (this);
     commands.setFirstCommandTarget (nullptr);
@@ -83,7 +92,7 @@ void MainComponent::getAllCommands (juce::Array<juce::CommandID>& ids)
                     CommandIDs::moveCueUp, CommandIDs::moveCueDown,
                     CommandIDs::newProject, CommandIDs::openProject,
                     CommandIDs::saveProject, CommandIDs::saveProjectAs,
-                    CommandIDs::audioSettings });
+                    CommandIDs::audioSettings, CommandIDs::pluginManager, CommandIDs::masterInserts });
 }
 
 void MainComponent::getCommandInfo (juce::CommandID commandID, juce::ApplicationCommandInfo& result)
@@ -137,7 +146,7 @@ void MainComponent::getCommandInfo (juce::CommandID commandID, juce::Application
             break;
 
         case CommandIDs::duplicateCue:
-            result.setInfo (ko ("큐 복제"), ko ("선택 큐를 바로 아래에 복제"), cueMenu, 0);
+            result.setInfo (ko ("큐 복제"), ko ("선택 큐를 플러그인 체인까지 바로 아래에 복제"), cueMenu, 0);
             result.addDefaultKeypress ('D', ModifierKeys::commandModifier);
             result.setActive (hasSelection);
             break;
@@ -165,7 +174,7 @@ void MainComponent::getCommandInfo (juce::CommandID commandID, juce::Application
             break;
 
         case CommandIDs::saveProject:
-            result.setInfo (ko ("저장"), ko ("프로젝트 저장"), fileMenu, 0);
+            result.setInfo (ko ("저장"), ko ("프로젝트 저장 (플러그인 상태 포함)"), fileMenu, 0);
             result.addDefaultKeypress ('S', ModifierKeys::commandModifier);
             break;
 
@@ -177,6 +186,16 @@ void MainComponent::getCommandInfo (juce::CommandID commandID, juce::Application
         case CommandIDs::audioSettings:
             result.setInfo (ko ("오디오 출력 설정..."), ko ("출력 장치(ASIO / WASAPI) 선택"), audio, 0);
             result.addDefaultKeypress (',', ModifierKeys::commandModifier);
+            break;
+
+        case CommandIDs::pluginManager:
+            result.setInfo (ko ("VST3 플러그인 관리..."), ko ("VST3 플러그인 스캔 / 목록"), audio, 0);
+            result.addDefaultKeypress ('P', ModifierKeys::commandModifier);
+            break;
+
+        case CommandIDs::masterInserts:
+            result.setInfo (ko ("마스터 버스 인서트..."), ko ("모든 큐가 통과하는 마스터 VST3 체인"), audio, 0);
+            result.addDefaultKeypress ('M', ModifierKeys::commandModifier);
             break;
 
         default:
@@ -221,8 +240,7 @@ bool MainComponent::perform (const InvocationInfo& info)
             break;
 
         case CommandIDs::duplicateCue:
-            if (const int index = document.cues.duplicate (selected); index >= 0)
-                document.cues.setSelectedIndex (index);
+            duplicateSelectedCue();
             break;
 
         case CommandIDs::moveCueUp:
@@ -251,6 +269,14 @@ bool MainComponent::perform (const InvocationInfo& info)
 
         case CommandIDs::audioSettings:
             AudioSettingsDialog::show (engine.getDeviceManager(), this);
+            break;
+
+        case CommandIDs::pluginManager:
+            showPluginManager();
+            break;
+
+        case CommandIDs::masterInserts:
+            PluginDialogs::showMasterInserts (engine, pluginWindows, [this] { showPluginManager(); }, this);
             break;
 
         default:
@@ -302,6 +328,9 @@ juce::PopupMenu MainComponent::getMenuForIndex (int topLevelMenuIndex, const juc
 
         case 3:
             menu.addCommandItem (&commands, CommandIDs::audioSettings);
+            menu.addSeparator();
+            menu.addCommandItem (&commands, CommandIDs::pluginManager);
+            menu.addCommandItem (&commands, CommandIDs::masterInserts);
             break;
 
         default:
@@ -412,13 +441,44 @@ void MainComponent::removeSelectedCue()
     if (! document.cues.isValidIndex (index))
         return;
 
-    engine.stop (document.cues.get (index).id);
+    const auto id = document.cues.get (index).id;
+    engine.stop (id);
+    engine.removeCueChain (id);
     document.cues.remove (index);
+}
+
+void MainComponent::duplicateSelectedCue()
+{
+    const int index = document.cues.getSelectedIndex();
+
+    if (! document.cues.isValidIndex (index))
+        return;
+
+    const auto sourceId = document.cues.get (index).id;
+    const int newIndex = document.cues.duplicate (index);
+
+    if (newIndex < 0)
+        return;
+
+    if (auto* source = engine.findCueChain (sourceId); source != nullptr && source->getNumSlots() > 0)
+    {
+        const auto errors = engine.getCueChain (document.cues.get (newIndex).id)
+                                .restore (source->getStates(), engine.makePluginFactory());
+
+        if (! errors.isEmpty())
+            showAlert (ko ("일부 플러그인을 복제하지 못했습니다"), errors.joinIntoString ("\n"), false);
+    }
+
+    document.cues.setSelectedIndex (newIndex);
+    inspector.refreshPlugins();
 }
 
 void MainComponent::newProject()
 {
+    pluginWindows.closeAll();
     engine.stopAll();
+    engine.clearCueChains();
+    engine.getMasterChain().clear();
     document.newProject();
 }
 
@@ -449,7 +509,10 @@ void MainComponent::openProjectViaDialog()
 
 void MainComponent::openProjectFile (const juce::File& file)
 {
+    pluginWindows.closeAll();
     engine.stopAll();
+    engine.clearCueChains();
+    engine.getMasterChain().clear();
 
     juce::StringArray warnings;
     const auto result = document.load (file, &warnings);
@@ -462,10 +525,25 @@ void MainComponent::openProjectFile (const juce::File& file)
 
     settings.setLastProjectFile (file);
     refreshFileInfoForAllCues();
+    restorePluginChainsFromDocument (warnings);
+    document.markClean();
+    inspector.refreshPlugins();
     transport.showStatus (ko ("열림: ") + file.getFileName(), false);
 
     if (! warnings.isEmpty())
         showAlert (ko ("프로젝트를 열었지만 확인이 필요합니다"), warnings.joinIntoString ("\n"), false);
+}
+
+void MainComponent::restorePluginChainsFromDocument (juce::StringArray& errors)
+{
+    const auto factory = engine.makePluginFactory();
+
+    for (const auto& cue : document.cues.getAll())
+        if (! cue.plugins.empty())
+            errors.addArray (engine.getCueChain (cue.id).restore (cue.plugins, factory));
+
+    if (! document.masterPlugins.empty())
+        errors.addArray (engine.getMasterChain().restore (document.masterPlugins, factory));
 }
 
 void MainComponent::openProjectFromCommandLine (const juce::String& commandLine)
@@ -491,7 +569,14 @@ void MainComponent::saveProject (bool saveAs, std::function<void (bool)> then)
         if (! file.hasFileExtension (ProjectSerializer::fileExtension))
             file = file.withFileExtension (ProjectSerializer::fileExtension);
 
-        const auto result = document.save (file);
+        const auto result = document.save (file, [this] (Project& project)
+        {
+            for (auto& cue : project.cues)
+                if (auto* chain = engine.findCueChain (cue.id))
+                    cue.plugins = chain->getStates();
+
+            project.masterPlugins = engine.getMasterChain().getStates();
+        });
 
         if (result.failed())
         {
@@ -601,6 +686,11 @@ void MainComponent::refreshFileInfoForAllCues()
 
     if (! wasDirty)
         document.markClean();
+}
+
+void MainComponent::showPluginManager()
+{
+    PluginDialogs::showPluginManager (engine, settings, this);
 }
 
 void MainComponent::showAlert (const juce::String& title, const juce::String& message, bool isError)

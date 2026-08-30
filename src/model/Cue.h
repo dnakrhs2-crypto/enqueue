@@ -14,6 +14,7 @@ struct PluginSlotState
     juce::String fileOrIdentifier;   // juce::PluginDescription::fileOrIdentifier
     int uniqueId = 0;                // juce::PluginDescription::uniqueId
     juce::String stateBase64;        // AudioProcessor::getStateInformation(), base64
+    juce::String descriptionXml;     // juce::PluginDescription::createXml(), exact reload key
     bool bypassed = false;
 };
 

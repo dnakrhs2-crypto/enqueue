@@ -5,7 +5,9 @@ target_sources(GoCueTests PRIVATE
     FadeEnvelopeTests.cpp
     CueListTests.cpp
     ProjectSerializerTests.cpp
-    AudioEngineTests.cpp)
+    AudioEngineTests.cpp
+    PluginChainTests.cpp
+    RealVst3Tests.cpp)
 
 target_compile_definitions(GoCueTests PRIVATE
     JUCE_APPLICATION_NAME_STRING="GoCueTests"

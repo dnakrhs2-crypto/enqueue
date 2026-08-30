@@ -5,6 +5,7 @@
 #include "audio/AudioEngine.h"
 #include "ui/CueInspector.h"
 #include "ui/CueTable.h"
+#include "ui/PluginWindows.h"
 #include "ui/TransportBar.h"
 
 #include <juce_gui_basics/juce_gui_basics.h>
@@ -16,7 +17,7 @@ namespace gocue
 {
 
 /** The single main window content: menu bar / transport / cue table / inspector.
-    Owns the project document and dispatches every command and shortcut. */
+    Owns the project document, the plugin editor windows and dispatches every command. */
 class MainComponent : public juce::Component,
                       public juce::ApplicationCommandTarget,
                       public juce::MenuBarModel,
@@ -57,10 +58,13 @@ private:
     void addCuesFromFiles (const juce::StringArray& files, int insertAt);
     void addCueViaDialog();
     void removeSelectedCue();
+    void duplicateSelectedCue();
     void newProject();
     void openProjectViaDialog();
     void saveProject (bool saveAs, std::function<void (bool ok)> then = {});
+    void restorePluginChainsFromDocument (juce::StringArray& errors);
     void refreshFileInfoForAllCues();
+    void showPluginManager();
     void showAlert (const juce::String& title, const juce::String& message, bool isError);
     void updateTransportStandby();
 
@@ -74,6 +78,7 @@ private:
     AppSettings& settings;
     juce::ApplicationCommandManager& commands;
     ProjectDocument document;
+    PluginWindowManager pluginWindows;
 
     juce::MenuBarComponent menuBar;
     TransportBar transport;

@@ -6,8 +6,8 @@
 namespace gocue
 {
 
-CueInspector::CueInspector (CueList& c, juce::AudioFormatManager& f, AppSettings& s)
-    : cues (c), formats (f), settings (s)
+CueInspector::CueInspector (CueList& c, AudioEngine& e, AppSettings& s, PluginWindowManager& windows)
+    : cues (c), engine (e), settings (s), chainStrip (e, windows)
 {
     title.setFont (juce::Font (juce::FontOptions (14.0f, juce::Font::bold)));
     title.setColour (juce::Label::textColourId, Palette::dimText);
@@ -60,10 +60,8 @@ CueInspector::CueInspector (CueList& c, juce::AudioFormatManager& f, AppSettings
     gainSlider.onValueChange = [this] { commitGain(); };
     addAndMakeVisible (gainSlider);
 
-    pluginsPlaceholder.setText (ko ("플러그인 슬롯은 다음 단계에서 추가됩니다."), juce::dontSendNotification);
-    pluginsPlaceholder.setColour (juce::Label::textColourId, Palette::dimText);
-    pluginsPlaceholder.setFont (juce::Font (juce::FontOptions (13.0f)));
-    addAndMakeVisible (pluginsPlaceholder);
+    chainStrip.onOpenPluginManager = [this] { if (onOpenPluginManager) onOpenPluginManager(); };
+    addAndMakeVisible (chainStrip);
 
     cues.addListener (this);
     refresh();
@@ -88,6 +86,11 @@ void CueInspector::cueChanged (int index)
         refresh();
 }
 
+void CueInspector::refreshPlugins()
+{
+    chainStrip.refresh();
+}
+
 void CueInspector::refresh()
 {
     const juce::ScopedValueSetter<bool> guard (refreshing, true);
@@ -107,10 +110,12 @@ void CueInspector::refresh()
         fadeInEditor.setText ("", false);
         fadeOutEditor.setText ("", false);
         gainSlider.setValue (0.0, juce::dontSendNotification);
+        chainStrip.setChain (nullptr, {});
         return;
     }
 
-    title.setText (ko ("큐 인스펙터 - #") + juce::String (cues.getSelectedIndex() + 1), juce::dontSendNotification);
+    const auto cueTitle = "#" + juce::String (cues.getSelectedIndex() + 1) + " " + cue->name;
+    title.setText (ko ("큐 인스펙터 - ") + cueTitle, juce::dontSendNotification);
 
     if (! nameEditor.hasKeyboardFocus (true))
         nameEditor.setText (cue->name, false);
@@ -134,6 +139,11 @@ void CueInspector::refresh()
         fadeOutEditor.setText (juce::String (cue->fadeOutMs), false);
 
     gainSlider.setValue (cue->gainDb, juce::dontSendNotification);
+
+    auto* chain = &engine.getCueChain (cue->id);
+
+    if (chainStrip.getChain() != chain)
+        chainStrip.setChain (chain, cueTitle);
 }
 
 void CueInspector::commitName()
@@ -207,7 +217,8 @@ void CueInspector::chooseFile()
     if (const auto* cue = cues.getSelected(); cue->file != juce::File())
         startDir = cue->file.getParentDirectory();
 
-    chooser = std::make_unique<juce::FileChooser> (ko ("오디오 파일 선택"), startDir, formats.getWildcardForAllFormats());
+    chooser = std::make_unique<juce::FileChooser> (ko ("오디오 파일 선택"), startDir,
+                                                   engine.getFormatManager().getWildcardForAllFormats());
 
     const int browseFlags = juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles;
 
@@ -220,8 +231,9 @@ void CueInspector::chooseFile()
             return;
 
         settings.setLastAudioDirectory (file.getParentDirectory());
+        auto& formats = engine.getFormatManager();
 
-        cues.update (cues.getSelectedIndex(), [this, file] (Cue& c)
+        cues.update (cues.getSelectedIndex(), [&formats, file] (Cue& c)
         {
             c.file = file;
 
@@ -263,11 +275,11 @@ void CueInspector::resized()
     row.removeFromLeft (24);
     gainLabel.setBounds (row.removeFromLeft (80));
     gainSlider.setBounds (row.removeFromLeft (juce::jmin (360, row.getWidth())));
-    area.removeFromTop (10);
+    area.removeFromTop (8);
 
-    row = area.removeFromTop (rowHeight);
-    pluginsLabel.setBounds (row.removeFromLeft (labelWidth));
-    pluginsPlaceholder.setBounds (row);
+    row = area.removeFromTop (juce::jmax (54, area.getHeight()));
+    pluginsLabel.setBounds (row.removeFromLeft (labelWidth).withHeight (24));
+    chainStrip.setBounds (row);
 }
 
 void CueInspector::paint (juce::Graphics& g)

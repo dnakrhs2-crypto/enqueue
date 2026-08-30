@@ -47,6 +47,8 @@ public:
     void clear();
     /** Mutates one cue in place and notifies cueChanged(). */
     void update (int index, const std::function<void (Cue&)>& mutator);
+    /** Replaces the saved plugin snapshot without notifying (used after a save). */
+    void setPluginStatesQuietly (int index, std::vector<PluginSlotState> states);
 
     int getSelectedIndex() const noexcept { return selected; }
     const Cue* getSelected() const noexcept { return isValidIndex (selected) ? &cues[(size_t) selected] : nullptr; }

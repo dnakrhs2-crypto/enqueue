@@ -54,8 +54,9 @@ void CuePlayer::prepare (double sampleRate, int blockSize)
     if (! isValid())
         return;
 
-    transport.prepareToPlay (juce::jmax (1, blockSize), sampleRate);
-    envelope.prepare (sampleRate);
+    currentSampleRate = sampleRate > 0.0 ? sampleRate : 44100.0;
+    transport.prepareToPlay (juce::jmax (1, blockSize), currentSampleRate);
+    envelope.prepare (currentSampleRate);
 }
 
 void CuePlayer::start()
@@ -71,6 +72,7 @@ void CuePlayer::start()
 
 void CuePlayer::requestStop() noexcept
 {
+    hardStopRequested.store (true, std::memory_order_relaxed);
     pendingFadeOutMs.store (stopDeclickMs, std::memory_order_relaxed);
 }
 
@@ -96,21 +98,57 @@ bool CuePlayer::renderNextBlock (juce::AudioBuffer<float>& buffer, int numSample
         fadingOut.store (true, std::memory_order_relaxed);
     }
 
+    const bool hardStop = hardStopRequested.load (std::memory_order_relaxed);
+
+    if (inTail && hardStop)
+    {
+        buffer.clear (0, numSamples);
+        finished.store (true, std::memory_order_relaxed);
+        return false;
+    }
+
     juce::AudioSourceChannelInfo info (&buffer, 0, numSamples);
-    transport.getNextAudioBlock (info);
+    transport.getNextAudioBlock (info);          // silence once the stream has ended
 
     envelope.applyToBuffer (buffer, 0, numSamples);
 
     if (gainLinear != 1.0f)
         buffer.applyGain (0, numSamples, gainLinear);
 
+    auto* activeChain = chain.load (std::memory_order_acquire);
+
+    if (activeChain != nullptr)
+        activeChain->process (buffer, numSamples);
+
     positionSeconds.store (transport.getCurrentPosition(), std::memory_order_relaxed);
+
+    if (inTail)
+    {
+        tailSamplesLeft -= numSamples;
+
+        if (tailSamplesLeft <= 0)
+        {
+            finished.store (true, std::memory_order_relaxed);
+            return false;
+        }
+
+        return true;
+    }
 
     const bool stoppedAfterFade = stopRequested.load (std::memory_order_relaxed) && envelope.hasReachedSilence();
     const bool streamEnded = transport.hasStreamFinished() || ! transport.isPlaying();
 
     if (stoppedAfterFade || streamEnded)
     {
+        const double tailSeconds = (hardStop || activeChain == nullptr) ? 0.0 : activeChain->getTailSeconds();
+        tailSamplesLeft = (juce::int64) (tailSeconds * currentSampleRate);
+
+        if (tailSamplesLeft > 0)
+        {
+            inTail = true;
+            return true;
+        }
+
         finished.store (true, std::memory_order_relaxed);
         return false;
     }

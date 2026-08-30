@@ -32,6 +32,12 @@ public:
     /** Writes pending changes to disk now. */
     void flush();
 
+    /** The underlying file, for JUCE components that persist their own settings (plugin scanner). */
+    juce::PropertiesFile* getPropertiesFile() noexcept { return settings; }
+
+    /** File the plugin scanner uses to blacklist plugins that crashed a previous scan. */
+    juce::File getDeadMansPedalFile() const;
+
 private:
     juce::File getFileValue (const char* key) const;
     void setFileValue (const char* key, const juce::File& file);

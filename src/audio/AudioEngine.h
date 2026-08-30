@@ -1,20 +1,24 @@
 #pragma once
 
 #include "audio/CuePlayer.h"
+#include "audio/PluginChain.h"
+#include "audio/PluginHost.h"
 
 #include <juce_audio_devices/juce_audio_devices.h>
 #include <juce_audio_formats/juce_audio_formats.h>
 #include <juce_events/juce_events.h>
 
 #include <atomic>
+#include <map>
 #include <memory>
 #include <vector>
 
 namespace gocue
 {
 
-/** Owns the audio output device, streams cue files and mixes every running cue
-    into the first two output channels. Message-thread API unless stated otherwise. */
+/** Owns the audio output device, streams cue files, runs each cue through its own plugin
+    chain, mixes everything, runs the master chain and writes the first two output channels.
+    Message-thread API unless stated otherwise. */
 class AudioEngine : private juce::AudioIODeviceCallback,
                     private juce::AsyncUpdater
 {
@@ -38,11 +42,15 @@ public:
 
     juce::AudioDeviceManager& getDeviceManager() noexcept { return deviceManager; }
     juce::AudioFormatManager& getFormatManager() noexcept { return formatManager; }
+    PluginHost& getPluginHost() noexcept { return pluginHost; }
+
+    //==========================================================================
+    // Transport
 
     /** Fires a cue. If the same cue is already running it is restarted from the top.
         Returns false (with a message) when the file cannot be opened. */
     bool play (const Cue& cue, juce::String* errorMessage = nullptr);
-    /** De-clicked immediate stop of every instance of this cue. */
+    /** De-clicked immediate stop of every instance of this cue (no plugin tail). */
     void stop (const juce::Uuid& cueId);
     void stopAll();
     /** Fades the cue out over its own fadeOutMs, then stops it. */
@@ -56,13 +64,28 @@ public:
     juce::Uuid getMostRecentlyStartedCue (bool ignoreFadingOut) const;
     int getNumPlaying() const;
 
+    //==========================================================================
+    // Plugin chains (all owned by the engine so they outlive the players that use them)
+
+    PluginChain& getMasterChain() noexcept { return masterChain; }
+    /** The cue's insert chain, created on demand. */
+    PluginChain& getCueChain (const juce::Uuid& cueId);
+    PluginChain* findCueChain (const juce::Uuid& cueId) const;
+    /** Detaches the chain from any running player, then destroys it. */
+    void removeCueChain (const juce::Uuid& cueId);
+    void clearCueChains();
+    /** Listener applied to the master chain and every cue chain (editor windows, dirty tracking). */
+    void setChainListener (PluginChain::Listener* listener);
+    /** Factory bound to the current sample rate / block size, for PluginChain::restore(). */
+    PluginChain::Factory makePluginFactory();
+
     double getSampleRate() const noexcept { return sampleRate.load (std::memory_order_relaxed); }
     int getBlockSize() const noexcept     { return blockSize.load (std::memory_order_relaxed); }
 
     //==========================================================================
     // Normally driven by the device; public so the engine can be exercised offline.
 
-    /** Sets the render sample rate / block size and re-prepares every running player. */
+    /** Sets the render sample rate / block size and re-prepares every player and chain. */
     void prepare (double newSampleRate, int newBlockSize);
 
     /** Renders one block into 'output' (>= 2 channels; extra channels are cleared).
@@ -83,6 +106,7 @@ private:
 
     juce::AudioDeviceManager deviceManager;
     juce::AudioFormatManager formatManager;
+    PluginHost pluginHost;
     juce::TimeSliceThread readAheadThread { "GoCue disk read-ahead" };
     const int readAheadSamples;
     bool callbackAdded = false;
@@ -90,6 +114,10 @@ private:
     mutable juce::CriticalSection lock;               // guards 'players'
     std::vector<std::unique_ptr<CuePlayer>> players;
     juce::int64 startCounter = 0;
+
+    PluginChain masterChain;
+    std::map<juce::String, std::unique_ptr<PluginChain>> cueChains;   // keyed by Uuid string
+    PluginChain::Listener* chainListener = nullptr;
 
     std::atomic<double> sampleRate { 44100.0 };
     std::atomic<int> blockSize { 512 };

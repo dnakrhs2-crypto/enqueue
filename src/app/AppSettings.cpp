@@ -88,6 +88,11 @@ void AppSettings::flush()
     settings->saveIfNeeded();
 }
 
+juce::File AppSettings::getDeadMansPedalFile() const
+{
+    return settings->getFile().getSiblingFile ("RecentlyCrashedPluginsList");
+}
+
 juce::File AppSettings::getFileValue (const char* key) const
 {
     const auto path = settings->getValue (key);

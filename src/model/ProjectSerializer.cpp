@@ -13,6 +13,7 @@ namespace
         obj->setProperty ("fileOrIdentifier", p.fileOrIdentifier);
         obj->setProperty ("uniqueId", p.uniqueId);
         obj->setProperty ("state", p.stateBase64);
+        obj->setProperty ("description", p.descriptionXml);
         obj->setProperty ("bypassed", p.bypassed);
         return juce::var (obj);
     }
@@ -25,6 +26,7 @@ namespace
         p.fileOrIdentifier = v.getProperty ("fileOrIdentifier", "").toString();
         p.uniqueId         = (int) v.getProperty ("uniqueId", 0);
         p.stateBase64      = v.getProperty ("state", "").toString();
+        p.descriptionXml   = v.getProperty ("description", "").toString();
         p.bypassed         = (bool) v.getProperty ("bypassed", false);
         return p;
     }

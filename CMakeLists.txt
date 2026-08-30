@@ -42,7 +42,9 @@ target_sources(GoCueCore INTERFACE
     ${CMAKE_CURRENT_SOURCE_DIR}/src/model/CueList.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/model/ProjectSerializer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/audio/CuePlayer.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/audio/AudioEngine.cpp)
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/audio/AudioEngine.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/audio/PluginChain.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/audio/PluginHost.cpp)
 
 target_include_directories(GoCueCore INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 
@@ -104,7 +106,10 @@ target_sources(GoCue PRIVATE
     src/ui/TransportBar.cpp
     src/ui/CueTable.cpp
     src/ui/CueInspector.cpp
-    src/ui/AudioSettingsDialog.cpp)
+    src/ui/AudioSettingsDialog.cpp
+    src/ui/PluginWindows.cpp
+    src/ui/PluginChainComponent.cpp
+    src/ui/PluginDialogs.cpp)
 
 target_compile_definitions(GoCue PRIVATE
     JUCE_APPLICATION_NAME_STRING="$<TARGET_PROPERTY:GoCue,JUCE_PRODUCT_NAME>"

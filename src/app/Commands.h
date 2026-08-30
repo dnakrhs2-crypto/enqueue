@@ -24,7 +24,9 @@ enum : juce::CommandID
     saveProject,
     saveProjectAs,
 
-    audioSettings
+    audioSettings,
+    pluginManager,
+    masterInserts
 };
 
 } // namespace gocue::CommandIDs

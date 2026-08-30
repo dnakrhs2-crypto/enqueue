@@ -1,23 +1,31 @@
 #pragma once
 
 #include "app/AppSettings.h"
+#include "audio/AudioEngine.h"
 #include "model/CueList.h"
+#include "ui/PluginChainComponent.h"
+#include "ui/PluginWindows.h"
 
-#include <juce_audio_formats/juce_audio_formats.h>
 #include <juce_gui_basics/juce_gui_basics.h>
 
+#include <functional>
 #include <memory>
 
 namespace gocue
 {
 
-/** Bottom panel: edits the standby cue (name, file, fades, gain; plugin slots later). */
+/** Bottom panel: edits the standby cue (name, file, fades, gain) and shows its VST3 insert chain. */
 class CueInspector : public juce::Component,
                      private CueList::Listener
 {
 public:
-    CueInspector (CueList& cues, juce::AudioFormatManager& formats, AppSettings& settings);
+    CueInspector (CueList& cues, AudioEngine& engine, AppSettings& settings, PluginWindowManager& windows);
     ~CueInspector() override;
+
+    /** Rebuilds the plugin strip (after a project load / duplicate). */
+    void refreshPlugins();
+
+    std::function<void()> onOpenPluginManager;
 
     void resized() override;
     void paint (juce::Graphics& g) override;
@@ -35,16 +43,19 @@ private:
     void cueListStructureChanged() override { refresh(); }
 
     CueList& cues;
-    juce::AudioFormatManager& formats;
+    AudioEngine& engine;
     AppSettings& settings;
 
-    juce::Label title, nameLabel, fileLabel, fadeInLabel, fadeOutLabel, gainLabel, pluginsLabel, pluginsPlaceholder;
+    juce::Label title, nameLabel, fileLabel, fadeInLabel, fadeOutLabel, gainLabel, pluginsLabel;
     juce::TextEditor nameEditor, fadeInEditor, fadeOutEditor;
     juce::Label filePathLabel;
     juce::TextButton browseButton;
     juce::Slider gainSlider;
+    PluginChainComponent chainStrip;
     std::unique_ptr<juce::FileChooser> chooser;
     bool refreshing = false;
+
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (CueInspector)
 };
 
 } // namespace gocue
