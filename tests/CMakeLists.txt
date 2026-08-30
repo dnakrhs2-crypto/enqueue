@@ -15,4 +15,6 @@ target_compile_definitions(GoCueTests PRIVATE
 
 target_link_libraries(GoCueTests PRIVATE GoCueCore)
 
+set_property(TARGET GoCueTests PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+
 add_test(NAME GoCueUnitTests COMMAND GoCueTests)

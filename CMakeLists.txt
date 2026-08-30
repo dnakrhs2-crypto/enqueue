@@ -133,6 +133,9 @@ target_compile_definitions(GoCue PRIVATE
 
 target_link_libraries(GoCue PRIVATE GoCueCore)
 
+# Static VC runtime: the installed app must not depend on the VC++ redistributable.
+set_property(TARGET GoCue PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+
 if(GOCUE_HAS_WINSPARKLE)
     target_link_libraries(GoCue PRIVATE gocue::winsparkle)
     add_custom_command(TARGET GoCue POST_BUILD

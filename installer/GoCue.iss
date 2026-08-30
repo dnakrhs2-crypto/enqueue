@@ -60,7 +60,7 @@ Name: "{autodesktop}\{#AppName}"; Filename: "{app}\{#AppExe}"; Tasks: desktopico
 
 [Registry]
 ; .gocue project files open with GoCue (HKA = HKCU for per-user installs, HKLM for all-users)
-Root: HKA; Subkey: "Software\Classes\.gocue"; ValueType: string; ValueName: ""; ValueData: "GoCue.Project"; Flags: uninsdeletevalue
+Root: HKA; Subkey: "Software\Classes\.gocue"; ValueType: string; ValueName: ""; ValueData: "GoCue.Project"; Flags: uninsdeletevalue uninsdeletekeyifempty
 Root: HKA; Subkey: "Software\Classes\GoCue.Project"; ValueType: string; ValueName: ""; ValueData: "GoCue Project"; Flags: uninsdeletekey
 Root: HKA; Subkey: "Software\Classes\GoCue.Project\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: "{app}\{#AppExe},0"
 Root: HKA; Subkey: "Software\Classes\GoCue.Project\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\{#AppExe}"" ""%1"""
