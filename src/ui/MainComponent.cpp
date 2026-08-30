@@ -35,9 +35,15 @@ MainComponent::MainComponent (AudioEngine& e, AppSettings& s, juce::ApplicationC
 
     table.onFilesDropped = [this] (const juce::StringArray& files, int insertAt) { addCuesFromFiles (files, insertAt); };
     inspector.onOpenPluginManager = [this] { showPluginManager(); };
+    inspector.onPanic = [this] { engine.stopAll(); table.focusTable(); };
 
     engine.setChainListener (&pluginWindows);
-    pluginWindows.onChainChanged = [this] (PluginChain&) { document.markDirty(); };
+    pluginWindows.onChainChanged = [this] (PluginChain& chain)
+    {
+        document.markDirty();
+        inspector.pluginChainChanged (&chain);
+        PluginDialogs::chainChanged (&chain);
+    };
 
     document.cues.addListener (this);
     document.addListener (this);
@@ -505,6 +511,7 @@ void MainComponent::newProject()
     engine.clearCueChains();
     engine.getMasterChain().clear();
     document.newProject();
+    engine.consumePluginStateChanges();
 }
 
 void MainComponent::openProjectViaDialog()
@@ -534,13 +541,10 @@ void MainComponent::openProjectViaDialog()
 
 void MainComponent::openProjectFile (const juce::File& file)
 {
-    pluginWindows.closeAll();
-    engine.stopAll();
-    engine.clearCueChains();
-    engine.getMasterChain().clear();
-
+    // Validate first: a broken file must leave the current project (and its plugin chains) untouched.
     juce::StringArray warnings;
-    const auto result = document.load (file, &warnings);
+    Project candidate;
+    const auto result = ProjectDocument::parse (file, candidate, &warnings);
 
     if (result.failed())
     {
@@ -548,9 +552,16 @@ void MainComponent::openProjectFile (const juce::File& file)
         return;
     }
 
+    pluginWindows.closeAll();
+    engine.stopAll();
+    engine.clearCueChains();
+    engine.getMasterChain().clear();
+    document.adopt (std::move (candidate), file);
+
     settings.setLastProjectFile (file);
     refreshFileInfoForAllCues();
     restorePluginChainsFromDocument (warnings);
+    engine.consumePluginStateChanges();   // restoring saved plugin state is not an edit
     document.markClean();
     inspector.refreshPlugins();
     transport.showStatus (ko ("열림: ") + file.getFileName(), false);
@@ -753,6 +764,9 @@ void MainComponent::timerCallback()
     auto playing = engine.getPlayingCues();
     transport.setPlayingCount ((int) playing.size());
     table.setPlayingCues (std::move (playing));
+
+    if (engine.consumePluginStateChanges())   // a knob moved in a plugin editor: the project needs saving
+        document.markDirty();
 }
 
 void MainComponent::cueListStructureChanged()

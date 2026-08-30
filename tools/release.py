@@ -129,7 +129,6 @@ def write_appcast(path, repo, version, installer, signature, notes_html):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--version", default=read_version(), help="release version (default: from CMakeLists.txt)")
     parser.add_argument("--preset", default="local", help="CMake configure preset name (default: local)")
     parser.add_argument("--repo", default=os.environ.get("GOCUE_GITHUB_REPO", ""), help="GitHub owner/repo for release URLs")
     parser.add_argument("--key", default=os.environ.get("GOCUE_EDDSA_PRIVATE_KEY_FILE", ""), help="EdDSA private key file (winsparkle-tool generate-key)")
@@ -143,7 +142,13 @@ def main():
     if not args.repo:
         sys.exit("--repo owner/name (or GOCUE_GITHUB_REPO) is required for the appcast URLs")
 
-    version = args.version
+    # Single source of truth: the exe's VERSIONINFO, the installer name, the appcast and the
+    # GitHub tag must all agree, otherwise the published appcast points at a 404.
+    version = read_version()
+    tag = os.environ.get("GITHUB_REF_NAME", "")
+    if tag and tag != "v" + version:
+        sys.exit("git tag %s does not match project(GoCue VERSION %s) - bump CMakeLists.txt or re-tag" % (tag, version))
+
     source_dir = ROOT / "build" / "vs2022" / "GoCue_artefacts" / "Release"
     output_dir = ROOT / "installer" / "output"
 

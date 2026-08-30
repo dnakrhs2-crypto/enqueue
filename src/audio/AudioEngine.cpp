@@ -263,6 +263,17 @@ PluginChain::Factory AudioEngine::makePluginFactory()
     return pluginHost.makeFactory (getSampleRate(), getBlockSize());
 }
 
+bool AudioEngine::consumePluginStateChanges()
+{
+    bool changed = masterChain.consumeStateChanged();
+
+    for (auto& entry : cueChains)
+        if (entry.second->consumeStateChanged())   // every flag must be cleared, so no short-circuit
+            changed = true;
+
+    return changed;
+}
+
 //==============================================================================
 void AudioEngine::prepare (double newSampleRate, int newBlockSize)
 {

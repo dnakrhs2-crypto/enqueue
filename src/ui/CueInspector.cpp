@@ -31,6 +31,7 @@ CueInspector::CueInspector (CueList& c, AudioEngine& e, AppSettings& s, PluginWi
     nameEditor.setSelectAllWhenFocused (true);
     nameEditor.onReturnKey = [this] { commitName(); nameEditor.giveAwayKeyboardFocus(); };
     nameEditor.onFocusLost = [this] { commitName(); };
+    nameEditor.onEscapeKey = [this] { cancelEditAndPanic(); };
     addAndMakeVisible (nameEditor);
 
     filePathLabel.setColour (juce::Label::textColourId, Palette::text);
@@ -77,7 +78,28 @@ void CueInspector::setupNumberEditor (juce::TextEditor& editor)
     editor.setInputRestrictions (7, "0123456789");
     editor.setJustification (juce::Justification::centredRight);
     editor.setSelectAllWhenFocused (true);
+    editor.onEscapeKey = [this] { cancelEditAndPanic(); };
     addAndMakeVisible (editor);
+}
+
+void CueInspector::cancelEditAndPanic()
+{
+    // Esc must always mean "stop everything", even while typing: drop the edit, then fire the panic.
+    {
+        const juce::ScopedValueSetter<bool> guard (cancellingEdit, true);
+
+        if (onPanic)
+            onPanic();          // moves focus away (focus-lost commits are suppressed by the guard)
+        else
+            giveAwayKeyboardFocus();
+    }
+
+    refresh();
+}
+
+void CueInspector::pluginChainChanged (PluginChain* chain)
+{
+    chainStrip.chainChanged (chain);
 }
 
 void CueInspector::cueChanged (int index)
@@ -148,7 +170,7 @@ void CueInspector::refresh()
 
 void CueInspector::commitName()
 {
-    if (refreshing || cues.getSelected() == nullptr)
+    if (refreshing || cancellingEdit || cues.getSelected() == nullptr)
         return;
 
     const auto newName = nameEditor.getText().trim();
@@ -162,7 +184,7 @@ void CueInspector::commitName()
 
 void CueInspector::commitFade (juce::TextEditor& editor, bool isFadeIn)
 {
-    if (refreshing || cues.getSelected() == nullptr)
+    if (refreshing || cancellingEdit || cues.getSelected() == nullptr)
         return;
 
     const int index = cues.getSelectedIndex();

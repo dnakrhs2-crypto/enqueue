@@ -18,6 +18,9 @@ void showPluginManager (AudioEngine& engine, AppSettings& settings, juce::Compon
 void showMasterInserts (AudioEngine& engine, PluginWindowManager& windows,
                         std::function<void()> onOpenPluginManager, juce::Component* centreAround);
 
+/** Forward chain changes so an open master-inserts dialog stays in sync. */
+void chainChanged (PluginChain* chain);
+
 /** Closes both dialogs if they are open (call before the engine goes away). */
 void closeAll();
 

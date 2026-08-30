@@ -33,6 +33,11 @@ public:
     juce::String getWindowTitle() const;
 
     void newProject();
+    /** Parses a project file without touching this document (validate first, then adopt()). */
+    static juce::Result parse (const juce::File& projectFile, Project& out, juce::StringArray* warnings = nullptr);
+    /** Replaces the document's content with a parsed project. */
+    void adopt (Project project, const juce::File& projectFile);
+    /** parse() + adopt() in one step. */
     juce::Result load (const juce::File& projectFile, juce::StringArray* warnings = nullptr);
     /** @param decorate  optional hook that fills in live state (plugin chains) right before writing. */
     juce::Result save (const juce::File& projectFile, const std::function<void (Project&)>& decorate = {});

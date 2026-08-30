@@ -123,6 +123,7 @@ PluginChainComponent::PluginChainComponent (AudioEngine& e, PluginWindowManager&
 
 PluginChainComponent::~PluginChainComponent()
 {
+    cancelPendingUpdate();
     viewport.setViewedComponent (nullptr, false);
 }
 
@@ -131,6 +132,12 @@ void PluginChainComponent::setChain (PluginChain* newChain, const juce::String& 
     chain = newChain;
     ownerName = newOwnerName;
     refresh();
+}
+
+void PluginChainComponent::chainChanged (PluginChain* changed)
+{
+    if (changed != nullptr && changed == chain)
+        triggerAsyncUpdate();   // deferred: the change may originate from a button inside a slot view
 }
 
 void PluginChainComponent::refresh()
@@ -251,11 +258,19 @@ void PluginChainComponent::removeSlot (int index)
 {
     // Deferred: the click arrives from a button inside the slot view we are about to destroy.
     juce::Component::SafePointer<PluginChainComponent> safeThis (this);
+    auto* expectedChain = chain;
+    const int expectedCount = chain != nullptr ? chain->getNumSlots() : 0;
 
-    juce::MessageManager::callAsync ([safeThis, index]
+    juce::MessageManager::callAsync ([safeThis, expectedChain, expectedCount, index]
     {
-        if (safeThis == nullptr || safeThis->chain == nullptr)
+        if (safeThis == nullptr || safeThis->chain == nullptr || safeThis->chain != expectedChain)
             return;
+
+        if (safeThis->chain->getNumSlots() != expectedCount)   // the chain changed underneath us: do not guess
+        {
+            safeThis->refresh();
+            return;
+        }
 
         safeThis->chain->removePlugin (index);
         safeThis->refresh();

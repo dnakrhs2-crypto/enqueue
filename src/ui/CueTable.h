@@ -66,10 +66,16 @@ private:
     const AudioEngine::PlayingCue* findPlaying (const juce::Uuid& id) const;
     void syncSelectionFromModel();
 
+    /** juce::ListBox eats Up/Down regardless of modifiers; let Ctrl/Alt combinations reach the command shortcuts. */
+    struct TableBox : public juce::TableListBox
+    {
+        bool keyPressed (const juce::KeyPress& key) override;
+    };
+
     CueList& cues;
     juce::AudioFormatManager& formats;
     juce::ApplicationCommandManager& commands;
-    juce::TableListBox table;
+    TableBox table;
     std::vector<AudioEngine::PlayingCue> playing;
     bool dragOver = false;
     bool syncingSelection = false;

@@ -27,8 +27,11 @@ Windows용 오디오 큐 플레이어. QLab의 오디오 기능 부분집합을 
 
 재생 동작 규칙:
 - 같은 큐에 GO를 다시 누르면 처음부터 재시작(이전 인스턴스는 5 ms 디클릭 정지). 서로 다른 큐는 동시에 재생된다.
-- 모든 정지는 5 ms 램프로 클릭 노이즈를 막는다. 파일이 끝나거나 페이드아웃이 끝나면 플러그인이 보고한 테일(리버브 등, 최대 10 s)만큼 체인을 더 돌린다. `S`/`Esc`의 즉시 정지는 테일을 건너뛴다.
+- 모든 정지는 5 ms 램프로 클릭 노이즈를 막는다. 파일이 끝나거나 페이드아웃이 끝나면 체인의 플러그인들이 보고한 테일의 합(직렬 연결이므로, 최대 10 s)만큼 체인을 더 돌린다. `S`/`Esc`의 즉시 정지는 테일을 건너뛴다.
+- `Esc`는 인스펙터의 입력창을 편집하는 중에도 동작한다(편집 취소 + 전체 정지).
+- 바이패스(`B`)된 플러그인도 계속 돌아가되 출력만 버린다(딜레이·리버브가 다시 켤 때 옛 소리를 뱉지 않도록).
 - 모노 파일은 양쪽 채널로, 3채널 이상은 앞 2채널만 출력한다. 출력은 장치의 첫 스테레오 페어(설정 창에서 선택).
+- 플러그인 에디터에서 노브를 움직이면 프로젝트가 수정됨(`*`)으로 표시되어 저장을 묻는다.
 
 ## 빌드
 
@@ -90,6 +93,7 @@ ctest --preset vs2022-release        :: 단위 테스트 (VST3가 설치돼 있�
 python tools\release.py --repo <owner>/<repo> --key C:\keys\eddsa_priv.pem --notes notes.html --publish
 ```
 `release.py`는 Release 빌드 → 테스트 → `installer\output\GoCue-Setup-x.y.z.exe` → `winsparkle-tool sign` → `appcast.xml` 생성 → `gh release create vx.y.z`(설치 파일 + appcast 업로드)까지 수행한다.
+버전은 오직 `CMakeLists.txt`의 `project(GoCue VERSION x.y.z)`에서 읽으며, CI에서는 태그 `vx.y.z`와 다르면 중단한다(appcast가 404를 가리키는 사고 방지).
 앱은 시작 시(하루 1회) 조용히 appcast를 확인하고, 새 버전이 있으면 WinSparkle 창으로 안내한 뒤 설치 파일을 받아 실행한다. 저장하지 않은 변경이 있으면 앱을 닫지 않는다.
 
 `.github/workflows/release.yml`은 `v*` 태그를 푸시하면 같은 과정을 GitHub Actions에서 수행한다(저장소 secret `GOCUE_EDDSA_PRIVATE_KEY` 필요). 이 워크플로는 아직 실제 저장소에서 돌려 보지 않았다.

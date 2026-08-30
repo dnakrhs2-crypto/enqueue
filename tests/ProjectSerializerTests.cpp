@@ -120,6 +120,19 @@ public:
             expectEquals (warnings.size(), 1);
         }
 
+        beginTest ("duplicate cue ids are replaced so cues never share a player or chain");
+        {
+            Project q;
+            juce::StringArray warnings;
+            const juce::String json = "{\"cues\":[{\"id\":\"1b4e28ba2fa14d0180b0f55d9ef3b8c4\",\"name\":\"a\"},"
+                                      "{\"id\":\"1b4e28ba2fa14d0180b0f55d9ef3b8c4\",\"name\":\"b\"}]}";
+            expect (ProjectSerializer::fromJson (json, q, &warnings).wasOk());
+            expectEquals ((int) q.cues.size(), 2);
+            expect (q.cues[0].id != q.cues[1].id);
+            expectEquals (q.cues[0].id.toString(), juce::String ("1b4e28ba2fa14d0180b0f55d9ef3b8c4"));
+            expectEquals (warnings.size(), 1);
+        }
+
         beginTest ("out-of-range values are sanitised");
         {
             Project q;

@@ -16,8 +16,9 @@ namespace gocue
 
     Editing happens on the message thread; process() runs on the audio thread and only
     takes a short lock around the slot list, so instances are created / prepared before
-    they are inserted and destroyed after they have been removed. */
-class PluginChain
+    they are inserted and destroyed after they have been removed. Each plugin is called
+    under its own callback lock and skipped while it is suspended, as JUCE's own hosts do. */
+class PluginChain : private juce::AudioProcessorListener
 {
 public:
     struct Slot
@@ -25,7 +26,7 @@ public:
         std::unique_ptr<juce::AudioPluginInstance> plugin;   // null when the plugin could not be created
         PluginSlotState state;                               // saved description + state (kept for missing plugins)
         std::atomic<bool> bypassed { false };
-        juce::AudioBuffer<float> scratch;                    // used when the plugin needs more than 2 channels
+        juce::AudioBuffer<float> scratch;                    // used for bypass and for plugins that need > 2 channels
         int numScratchChannels = 2;
 
         bool isMissing() const noexcept { return plugin == nullptr; }
@@ -46,7 +47,7 @@ public:
     static constexpr double maxTailSeconds = 10.0;
 
     PluginChain() = default;
-    ~PluginChain();
+    ~PluginChain() override;
 
     void setListener (Listener* newListener) noexcept { listener = newListener; }
 
@@ -67,6 +68,7 @@ public:
     void addMissingSlot (const PluginSlotState& state, int insertAt = -1);
     void removePlugin (int index);
     bool movePlugin (int from, int to);
+    /** Bypassed plugins still run (so delays / reverbs keep time) but their output is discarded. */
     void setBypassed (int index, bool shouldBypass);
     void clear();
 
@@ -77,8 +79,12 @@ public:
         missing. Returns one message per failure. */
     juce::StringArray restore (const std::vector<PluginSlotState>& states, const Factory& factory);
 
-    /** Longest tail of the active (non-bypassed) plugins, clamped to [0, maxTailSeconds]. Any thread. */
+    /** Sum of the tails of the active (non-bypassed) plugins in series, clamped to [0, maxTailSeconds]. Any thread. */
     double getTailSeconds() const;
+
+    /** True once (since the previous call) when any hosted plugin reported a parameter / state change,
+        e.g. the user turned a knob in an editor. Any thread. Used for dirty tracking. */
+    bool consumeStateChanged() noexcept { return stateChanged.exchange (false, std::memory_order_acq_rel); }
 
     /** Audio thread: processes channels 0-1 of buffer[0, numSamples) in place. */
     void process (juce::AudioBuffer<float>& buffer, int numSamples);
@@ -86,7 +92,11 @@ public:
 private:
     void prepareSlot (Slot& slot);
     void insertSlot (std::unique_ptr<Slot> slot, int insertAt);
+    void destroySlot (std::unique_ptr<Slot> slot);
     void notifyChanged();
+
+    void audioProcessorParameterChanged (juce::AudioProcessor*, int, float) override;
+    void audioProcessorChanged (juce::AudioProcessor*, const ChangeDetails&) override;
 
     mutable juce::CriticalSection lock;      // guards 'slots' between the audio thread and edits
     std::vector<std::unique_ptr<Slot>> slots;
@@ -94,6 +104,7 @@ private:
     double sampleRate = 44100.0;
     int blockSize = 512;
     Listener* listener = nullptr;
+    std::atomic<bool> stateChanged { false };
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (PluginChain)
 };

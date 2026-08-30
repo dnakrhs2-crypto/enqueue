@@ -42,10 +42,17 @@ namespace
             g.fillAll (Palette::panel);
         }
 
+        void chainChanged (PluginChain* chain)
+        {
+            strip.chainChanged (chain);
+        }
+
     private:
         juce::Label title;
         PluginChainComponent strip;
     };
+
+    juce::Component::SafePointer<MasterInsertsContent> masterContent;
 
     juce::DialogWindow* launch (juce::Component* content, const juce::String& title, juce::Component* centreAround, bool resizable)
     {
@@ -87,7 +94,14 @@ void showMasterInserts (AudioEngine& engine, PluginWindowManager& windows,
     }
 
     auto* content = new MasterInsertsContent (engine, windows, std::move (onOpenPluginManager));
+    masterContent = content;
     masterDialog = launch (content, ko ("마스터 버스 인서트"), centreAround, false);
+}
+
+void chainChanged (PluginChain* chain)
+{
+    if (masterContent != nullptr)
+        masterContent->chainChanged (chain);
 }
 
 void closeAll()

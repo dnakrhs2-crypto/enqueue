@@ -40,18 +40,28 @@ void ProjectDocument::newProject()
     markClean();
 }
 
-juce::Result ProjectDocument::load (const juce::File& projectFile, juce::StringArray* warnings)
+juce::Result ProjectDocument::parse (const juce::File& projectFile, Project& out, juce::StringArray* warnings)
 {
-    Project project;
-    const auto result = ProjectSerializer::load (projectFile, project, warnings);
+    return ProjectSerializer::load (projectFile, out, warnings);
+}
 
-    if (result.failed())
-        return result;
-
+void ProjectDocument::adopt (Project project, const juce::File& projectFile)
+{
     cues.replaceAll (std::move (project.cues));
     masterPlugins = std::move (project.masterPlugins);
     file = projectFile;
     markClean();
+}
+
+juce::Result ProjectDocument::load (const juce::File& projectFile, juce::StringArray* warnings)
+{
+    Project project;
+    const auto result = parse (projectFile, project, warnings);
+
+    if (result.failed())
+        return result;
+
+    adopt (std::move (project), projectFile);
     return juce::Result::ok();
 }
 

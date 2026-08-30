@@ -75,6 +75,21 @@ void PluginChain::insertSlot (std::unique_ptr<Slot> slot, int insertAt)
     notifyChanged();
 }
 
+void PluginChain::destroySlot (std::unique_ptr<Slot> slot)
+{
+    if (slot->plugin != nullptr)
+    {
+        slot->plugin->removeListener (this);
+
+        if (listener != nullptr)
+            listener->pluginAboutToBeRemoved (*this, *slot->plugin);
+
+        slot->plugin->releaseResources();
+    }
+
+    slot.reset();
+}
+
 void PluginChain::addPlugin (std::unique_ptr<juce::AudioPluginInstance> plugin, const PluginSlotState& initialState, int insertAt)
 {
     if (plugin == nullptr)
@@ -94,6 +109,7 @@ void PluginChain::addPlugin (std::unique_ptr<juce::AudioPluginInstance> plugin, 
 
     slot->plugin = std::move (plugin);
     prepareSlot (*slot);
+    slot->plugin->addListener (this);   // after restore + prepare: only real user edits count as changes
     insertSlot (std::move (slot), insertAt);
 }
 
@@ -119,15 +135,7 @@ void PluginChain::removePlugin (int index)
         slots.erase (slots.begin() + index);
     }
 
-    if (dead->plugin != nullptr)
-    {
-        if (listener != nullptr)
-            listener->pluginAboutToBeRemoved (*this, *dead->plugin);
-
-        dead->plugin->releaseResources();
-    }
-
-    dead.reset();
+    destroySlot (std::move (dead));
     notifyChanged();
 }
 
@@ -177,17 +185,8 @@ void PluginChain::clear()
         return;
 
     for (auto& slot : dead)
-    {
-        if (slot->plugin != nullptr)
-        {
-            if (listener != nullptr)
-                listener->pluginAboutToBeRemoved (*this, *slot->plugin);
+        destroySlot (std::move (slot));
 
-            slot->plugin->releaseResources();
-        }
-    }
-
-    dead.clear();
     notifyChanged();
 }
 
@@ -264,7 +263,8 @@ double PluginChain::getTailSeconds() const
         if (! std::isfinite (t))
             return maxTailSeconds;
 
-        tail = juce::jmax (tail, t);
+        // Plugins run in series: a reverb tail feeding a delay rings for the sum of both.
+        tail = juce::jmin (maxTailSeconds, tail + juce::jmax (0.0, t));
     }
 
     return juce::jlimit (0.0, maxTailSeconds, tail);
@@ -276,26 +276,29 @@ void PluginChain::process (juce::AudioBuffer<float>& buffer, int numSamples)
 
     for (auto& slot : slots)
     {
-        if (slot->plugin == nullptr || slot->bypassed.load (std::memory_order_relaxed))
+        if (slot->plugin == nullptr)
             continue;
 
         auto& plugin = *slot->plugin;
+        const bool bypassed = slot->bypassed.load (std::memory_order_relaxed);
         const int ins = plugin.getTotalNumInputChannels();
         const int outs = plugin.getTotalNumOutputChannels();
+        auto& scratch = slot->scratch;
+
+        if (scratch.getNumSamples() < numSamples)
+            scratch.setSize (slot->numScratchChannels, numSamples, false, false, true);
+
         midi.clear();
 
-        if (slot->numScratchChannels == 2 && ins <= 2 && outs <= 2)
-        {
-            juce::AudioBuffer<float> view (buffer.getArrayOfWritePointers(), 2, 0, numSamples);
-            plugin.processBlock (view, midi);
-        }
-        else
-        {
-            auto& scratch = slot->scratch;
+        // Same contract as juce::AudioProcessorPlayer: hold the plugin's callback lock while it runs,
+        // and leave it alone (dry pass) while it has suspended itself, e.g. to load a preset.
+        const juce::ScopedLock callbackLock (plugin.getCallbackLock());
 
-            if (scratch.getNumSamples() < numSamples)
-                scratch.setSize (slot->numScratchChannels, numSamples, false, false, true);
+        if (plugin.isSuspended())
+            continue;
 
+        if (bypassed || slot->numScratchChannels != 2 || ins > 2 || outs > 2)
+        {
             scratch.clear (0, numSamples);
 
             for (int ch = 0; ch < 2 && ch < scratch.getNumChannels(); ++ch)
@@ -304,8 +307,16 @@ void PluginChain::process (juce::AudioBuffer<float>& buffer, int numSamples)
             juce::AudioBuffer<float> view (scratch.getArrayOfWritePointers(), slot->numScratchChannels, 0, numSamples);
             plugin.processBlock (view, midi);
 
+            if (bypassed)
+                continue;   // the plugin kept time (delay lines, reverb tails stay current); output discarded
+
             for (int ch = 0; ch < 2 && ch < scratch.getNumChannels(); ++ch)
                 buffer.copyFrom (ch, 0, scratch, ch, 0, numSamples);
+        }
+        else
+        {
+            juce::AudioBuffer<float> view (buffer.getArrayOfWritePointers(), 2, 0, numSamples);
+            plugin.processBlock (view, midi);
         }
 
         if (outs == 1)
@@ -317,6 +328,16 @@ void PluginChain::notifyChanged()
 {
     if (listener != nullptr)
         listener->chainChanged (*this);
+}
+
+void PluginChain::audioProcessorParameterChanged (juce::AudioProcessor*, int, float)
+{
+    stateChanged.store (true, std::memory_order_release);
+}
+
+void PluginChain::audioProcessorChanged (juce::AudioProcessor*, const ChangeDetails&)
+{
+    stateChanged.store (true, std::memory_order_release);
 }
 
 } // namespace gocue

@@ -7,6 +7,16 @@
 namespace gocue
 {
 
+bool CueTable::TableBox::keyPressed (const juce::KeyPress& key)
+{
+    const auto mods = key.getModifiers();
+
+    if (mods.isCommandDown() || mods.isCtrlDown() || mods.isAltDown())
+        return false;   // e.g. Ctrl+Up/Down = move cue, handled by the application commands
+
+    return juce::TableListBox::keyPressed (key);
+}
+
 CueTable::CueTable (CueList& c, juce::AudioFormatManager& f, juce::ApplicationCommandManager& cm)
     : cues (c), formats (f), commands (cm)
 {

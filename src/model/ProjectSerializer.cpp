@@ -176,12 +176,31 @@ juce::Result fromJson (const juce::String& json, Project& out, juce::StringArray
 
     if (const auto* cues = root.getProperty ("cues", juce::var()).getArray())
     {
+        juce::StringArray seenIds;
+
         for (const auto& item : *cues)
         {
-            if (item.getDynamicObject() != nullptr)
-                project.cues.push_back (cueFromVar (item, projectDir, warnings));
-            else if (warnings != nullptr)
-                warnings->add ("Skipped a malformed cue entry");
+            if (item.getDynamicObject() == nullptr)
+            {
+                if (warnings != nullptr)
+                    warnings->add ("Skipped a malformed cue entry");
+
+                continue;
+            }
+
+            auto cue = cueFromVar (item, projectDir, warnings);
+
+            // Two cues must never share an id: they would share one player and one plugin chain.
+            if (seenIds.contains (cue.id.toString()))
+            {
+                cue.id = juce::Uuid();
+
+                if (warnings != nullptr)
+                    warnings->add ("Duplicate cue id for \"" + cue.name + "\" - assigned a new one");
+            }
+
+            seenIds.add (cue.id.toString());
+            project.cues.push_back (std::move (cue));
         }
     }
 

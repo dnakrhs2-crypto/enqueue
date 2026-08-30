@@ -15,7 +15,8 @@ namespace gocue
 
 /** A horizontal strip of insert slots for one chain:
     [ name / bypass / edit / remove ] x N  ...  [+ add] [manage]. */
-class PluginChainComponent : public juce::Component
+class PluginChainComponent : public juce::Component,
+                             private juce::AsyncUpdater
 {
 public:
     PluginChainComponent (AudioEngine& engine, PluginWindowManager& windows);
@@ -28,6 +29,9 @@ public:
     /** Rebuilds the slot views from the chain. */
     void refresh();
 
+    /** Call when any chain changed (project switch, restore, edits elsewhere): refreshes if it is ours. */
+    void chainChanged (PluginChain* changed);
+
     std::function<void()> onOpenPluginManager;
 
     void resized() override;
@@ -36,6 +40,7 @@ public:
 private:
     class SlotView;
 
+    void handleAsyncUpdate() override { refresh(); }
     void showAddMenu();
     void addPlugin (const juce::PluginDescription& description);
     void openEditor (int index);

@@ -101,10 +101,32 @@ public:
             expectEquals (first->lastNumSamples, 512);
 
             chain.setBypassed (1, true);
+            const int bypassedCallsBefore = second->processCount;
+            fill (buffer, 1.0f);
+            chain.process (buffer, 512);
+            expectWithinAbsoluteError (buffer.getSample (0, 10), 0.5f, 1e-6f);   // output of the bypassed plugin is discarded
+            expect (chain.getSlot (1).bypassed.load());
+            expectEquals (second->processCount, bypassedCallsBefore + 1);        // ...but it keeps running (time advances)
+
+            beginTest ("a suspended plugin is skipped with a dry pass");
+            second->suspendProcessing (true);
+            chain.setBypassed (1, false);
+            const int suspendedCallsBefore = second->processCount;
             fill (buffer, 1.0f);
             chain.process (buffer, 512);
             expectWithinAbsoluteError (buffer.getSample (0, 10), 0.5f, 1e-6f);
-            expect (chain.getSlot (1).bypassed.load());
+            expectEquals (second->processCount, suspendedCallsBefore);
+            second->suspendProcessing (false);
+            fill (buffer, 1.0f);
+            chain.process (buffer, 512);
+            expectWithinAbsoluteError (buffer.getSample (0, 10), 0.25f, 1e-6f);
+            chain.setBypassed (1, true);
+
+            beginTest ("plugin parameter / state changes are flagged for dirty tracking");
+            expect (! chain.consumeStateChanged());
+            first->updateHostDisplay();
+            expect (chain.consumeStateChanged());
+            expect (! chain.consumeStateChanged());
 
             // partial blocks only touch the requested samples
             fill (buffer, 1.0f);
@@ -187,16 +209,18 @@ public:
             expectWithinAbsoluteError (buffer.getSample (0, 5), 1.0f, 1e-6f);   // missing slots pass audio through
         }
 
-        beginTest ("tail is the longest active tail, capped at maxTailSeconds");
+        beginTest ("tail is the sum of the active tails in series, capped at maxTailSeconds");
         {
             PluginChain chain;
             chain.prepare (44100.0, 512);
             expectWithinAbsoluteError (chain.getTailSeconds(), 0.0, 1e-12);
             chain.addPlugin (std::make_unique<TestGainPlugin> (1.0f, 0.5));
+            chain.addPlugin (std::make_unique<TestGainPlugin> (1.0f, 0.25));
+            expectWithinAbsoluteError (chain.getTailSeconds(), 0.75, 1e-12);     // reverb into delay rings for both
             chain.addPlugin (std::make_unique<TestGainPlugin> (1.0f, 99.0));
             expectWithinAbsoluteError (chain.getTailSeconds(), PluginChain::maxTailSeconds, 1e-12);
-            chain.setBypassed (1, true);
-            expectWithinAbsoluteError (chain.getTailSeconds(), 0.5, 1e-12);
+            chain.setBypassed (2, true);
+            expectWithinAbsoluteError (chain.getTailSeconds(), 0.75, 1e-12);
             chain.addPlugin (std::make_unique<TestGainPlugin> (1.0f, std::numeric_limits<double>::infinity()));
             expectWithinAbsoluteError (chain.getTailSeconds(), PluginChain::maxTailSeconds, 1e-12);
         }

@@ -78,6 +78,8 @@ public:
     void setChainListener (PluginChain::Listener* listener);
     /** Factory bound to the current sample rate / block size, for PluginChain::restore(). */
     PluginChain::Factory makePluginFactory();
+    /** True when any chain's plugin reported a parameter / state change since the previous call. */
+    bool consumePluginStateChanges();
 
     double getSampleRate() const noexcept { return sampleRate.load (std::memory_order_relaxed); }
     int getBlockSize() const noexcept     { return blockSize.load (std::memory_order_relaxed); }
