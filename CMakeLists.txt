@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.22)
 
-project(GoCue VERSION 0.1.0 LANGUAGES C CXX)
+project(GoCue VERSION 0.1.1 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -109,6 +109,19 @@ juce_add_gui_app(GoCue
     ICON_SMALL "${CMAKE_CURRENT_SOURCE_DIR}/assets/icon_512.png"
     NEEDS_WEB_BROWSER FALSE
     NEEDS_CURL FALSE)
+
+# JUCE regenerates GoCue_resources.rc (VERSIONINFO) only when the icon changes, so on an
+# incremental build a version bump would ship with the old file version. Drop a stale one here.
+get_target_property(_gocue_generated_dir GoCue JUCE_GENERATED_SOURCES_DIRECTORY)
+set(_gocue_rc_file "${_gocue_generated_dir}/GoCue_resources.rc")
+if(EXISTS "${_gocue_rc_file}")
+    file(READ "${_gocue_rc_file}" _gocue_rc_text)
+    string(REPLACE "." "," _gocue_version_commas "${PROJECT_VERSION}")
+    if(NOT _gocue_rc_text MATCHES "FILEVERSION[ \t]+${_gocue_version_commas},0")
+        file(REMOVE "${_gocue_rc_file}")
+        message(STATUS "GoCue: version resource was stale -> regenerating for ${PROJECT_VERSION}")
+    endif()
+endif()
 
 target_sources(GoCue PRIVATE
     src/Main.cpp
