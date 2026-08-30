@@ -1,4 +1,5 @@
 #include "app/AppSettings.h"
+#include "app/Updater.h"
 #include "audio/AudioEngine.h"
 #include "ui/MainComponent.h"
 #include "ui/UiUtils.h"
@@ -51,10 +52,27 @@ public:
         }
 
         mainWindow->getMainComponent().openProjectFromCommandLine (commandLine);
+
+        Updater::Callbacks updaterCallbacks;
+        updaterCallbacks.canShutdown = [this]
+        {
+            return mainWindow == nullptr || ! mainWindow->getMainComponent().hasUnsavedChanges();
+        };
+        updaterCallbacks.requestShutdown = []
+        {
+            juce::MessageManager::callAsync ([]
+            {
+                if (auto* app = juce::JUCEApplication::getInstance())
+                    app->systemRequestedQuit();
+            });
+        };
+        Updater::initialise ("GoCue", getApplicationName(), getApplicationVersion(), std::move (updaterCallbacks));
     }
 
     void shutdown() override
     {
+        Updater::shutdown();
+
         if (engine != nullptr)
             engine->getDeviceManager().removeChangeListener (this);
 

@@ -1,6 +1,7 @@
 #include "ui/MainComponent.h"
 
 #include "app/Commands.h"
+#include "app/Updater.h"
 #include "audio/CueFileInfo.h"
 #include "ui/AudioSettingsDialog.h"
 #include "ui/PluginDialogs.h"
@@ -92,7 +93,8 @@ void MainComponent::getAllCommands (juce::Array<juce::CommandID>& ids)
                     CommandIDs::moveCueUp, CommandIDs::moveCueDown,
                     CommandIDs::newProject, CommandIDs::openProject,
                     CommandIDs::saveProject, CommandIDs::saveProjectAs,
-                    CommandIDs::audioSettings, CommandIDs::pluginManager, CommandIDs::masterInserts });
+                    CommandIDs::audioSettings, CommandIDs::pluginManager, CommandIDs::masterInserts,
+                    CommandIDs::checkForUpdates, CommandIDs::about });
 }
 
 void MainComponent::getCommandInfo (juce::CommandID commandID, juce::ApplicationCommandInfo& result)
@@ -198,6 +200,15 @@ void MainComponent::getCommandInfo (juce::CommandID commandID, juce::Application
             result.addDefaultKeypress ('M', ModifierKeys::commandModifier);
             break;
 
+        case CommandIDs::checkForUpdates:
+            result.setInfo (ko ("업데이트 확인..."), ko ("GitHub Releases에서 새 버전 확인"), ko ("도움말"), 0);
+            result.setActive (Updater::isAvailable());
+            break;
+
+        case CommandIDs::about:
+            result.setInfo (ko ("GoCue 정보"), ko ("버전 정보"), ko ("도움말"), 0);
+            break;
+
         default:
             break;
     }
@@ -279,6 +290,14 @@ bool MainComponent::perform (const InvocationInfo& info)
             PluginDialogs::showMasterInserts (engine, pluginWindows, [this] { showPluginManager(); }, this);
             break;
 
+        case CommandIDs::checkForUpdates:
+            Updater::checkForUpdatesWithUI();
+            break;
+
+        case CommandIDs::about:
+            showAbout();
+            break;
+
         default:
             return false;
     }
@@ -289,7 +308,7 @@ bool MainComponent::perform (const InvocationInfo& info)
 //==============================================================================
 juce::StringArray MainComponent::getMenuBarNames()
 {
-    return { ko ("파일"), ko ("큐"), ko ("재생"), ko ("오디오") };
+    return { ko ("파일"), ko ("큐"), ko ("재생"), ko ("오디오"), ko ("도움말") };
 }
 
 juce::PopupMenu MainComponent::getMenuForIndex (int topLevelMenuIndex, const juce::String&)
@@ -331,6 +350,12 @@ juce::PopupMenu MainComponent::getMenuForIndex (int topLevelMenuIndex, const juc
             menu.addSeparator();
             menu.addCommandItem (&commands, CommandIDs::pluginManager);
             menu.addCommandItem (&commands, CommandIDs::masterInserts);
+            break;
+
+        case 4:
+            menu.addCommandItem (&commands, CommandIDs::checkForUpdates);
+            menu.addSeparator();
+            menu.addCommandItem (&commands, CommandIDs::about);
             break;
 
         default:
@@ -693,6 +718,18 @@ void MainComponent::showPluginManager()
     PluginDialogs::showPluginManager (engine, settings, this);
 }
 
+void MainComponent::showAbout()
+{
+    juce::String text;
+    text << "GoCue " << juce::JUCEApplication::getInstance()->getApplicationVersion() << "\n"
+         << ko ("Windows용 오디오 큐 플레이어 (QLab 오디오 기능 부분집합)") << "\n\n"
+         << "JUCE " << JUCE_MAJOR_VERSION << "." << JUCE_MINOR_VERSION << "." << JUCE_BUILDNUMBER << "\n"
+         << ko ("ASIO: ") << (JUCE_ASIO ? ko ("지원") : ko ("미포함 (WASAPI 전용)")) << "\n"
+         << ko ("자동 업데이트: ") << (Updater::isAvailable() ? Updater::getAppcastUrl() : ko ("비활성 (빌드 시 appcast 미설정)"));
+
+    showAlert (ko ("GoCue 정보"), text, false);
+}
+
 void MainComponent::showAlert (const juce::String& title, const juce::String& message, bool isError)
 {
     juce::AlertWindow::showAsync (juce::MessageBoxOptions()
@@ -738,6 +775,8 @@ void MainComponent::cueSelectionChanged (int)
 
 void MainComponent::documentStateChanged()
 {
+    unsavedChanges.store (document.isDirty(), std::memory_order_relaxed);
+
     if (onWindowTitleChanged)
         onWindowTitleChanged (document.getWindowTitle());
 }

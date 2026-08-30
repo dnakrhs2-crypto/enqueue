@@ -32,6 +32,16 @@ FetchContent_MakeAvailable(JUCE)
 include(cmake/AsioSdk.cmake)
 
 # ---------------------------------------------------------------------------
+# WinSparkle auto-update (optional, downloaded separately)
+#   -DWINSPARKLE_DIR=C:/path/to/WinSparkle-0.9.4
+#   -DGOCUE_APPCAST_URL=https://github.com/<owner>/<repo>/releases/latest/download/appcast.xml
+#   -DGOCUE_EDDSA_PUBLIC_KEY=<base64 public key from winsparkle-tool>
+# ---------------------------------------------------------------------------
+include(cmake/WinSparkle.cmake)
+set(GOCUE_APPCAST_URL "" CACHE STRING "WinSparkle appcast URL (empty disables update checks)")
+set(GOCUE_EDDSA_PUBLIC_KEY "" CACHE STRING "Base64 EdDSA public key that verifies signed updates")
+
+# ---------------------------------------------------------------------------
 # Shared core: cue model + audio engine. An INTERFACE target so the sources
 # (and the JUCE modules) are compiled into both the app and the test runner.
 # ---------------------------------------------------------------------------
@@ -95,6 +105,8 @@ juce_add_gui_app(GoCue
     PRODUCT_NAME "GoCue"
     COMPANY_NAME "GoCue"
     VERSION ${PROJECT_VERSION}
+    ICON_BIG "${CMAKE_CURRENT_SOURCE_DIR}/assets/icon_512.png"
+    ICON_SMALL "${CMAKE_CURRENT_SOURCE_DIR}/assets/icon_512.png"
     NEEDS_WEB_BROWSER FALSE
     NEEDS_CURL FALSE)
 
@@ -102,6 +114,7 @@ target_sources(GoCue PRIVATE
     src/Main.cpp
     src/app/AppSettings.cpp
     src/app/ProjectDocument.cpp
+    src/app/Updater.cpp
     src/ui/MainComponent.cpp
     src/ui/TransportBar.cpp
     src/ui/CueTable.cpp
@@ -113,9 +126,19 @@ target_sources(GoCue PRIVATE
 
 target_compile_definitions(GoCue PRIVATE
     JUCE_APPLICATION_NAME_STRING="$<TARGET_PROPERTY:GoCue,JUCE_PRODUCT_NAME>"
-    JUCE_APPLICATION_VERSION_STRING="$<TARGET_PROPERTY:GoCue,JUCE_VERSION>")
+    JUCE_APPLICATION_VERSION_STRING="$<TARGET_PROPERTY:GoCue,JUCE_VERSION>"
+    GOCUE_HAS_WINSPARKLE=${GOCUE_HAS_WINSPARKLE}
+    GOCUE_APPCAST_URL="${GOCUE_APPCAST_URL}"
+    GOCUE_EDDSA_PUBLIC_KEY="${GOCUE_EDDSA_PUBLIC_KEY}")
 
 target_link_libraries(GoCue PRIVATE GoCueCore)
+
+if(GOCUE_HAS_WINSPARKLE)
+    target_link_libraries(GoCue PRIVATE gocue::winsparkle)
+    add_custom_command(TARGET GoCue POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different "${GOCUE_WINSPARKLE_DLL}" "$<TARGET_FILE_DIR:GoCue>"
+        COMMENT "Copying WinSparkle.dll next to GoCue.exe")
+endif()
 
 set_property(DIRECTORY PROPERTY VS_STARTUP_PROJECT GoCue)
 

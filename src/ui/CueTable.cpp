@@ -165,7 +165,17 @@ void CueTable::paintCell (juce::Graphics& g, int rowNumber, int columnId, int wi
             break;
 
         case colDuration:
-            text = formatSeconds (cue.durationSeconds);
+            if (const auto* running = findPlaying (cue.id); running != nullptr && running->lengthSeconds > 0.0)
+            {
+                // while running: time remaining, counting down
+                text = "-" + formatSeconds (juce::jmax (0.0, running->lengthSeconds - running->positionSeconds));
+                colour = juce::Colours::white;
+            }
+            else
+            {
+                text = formatSeconds (cue.durationSeconds);
+            }
+
             justification = juce::Justification::centredRight;
             break;
 

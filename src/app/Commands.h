@@ -26,7 +26,10 @@ enum : juce::CommandID
 
     audioSettings,
     pluginManager,
-    masterInserts
+    masterInserts,
+
+    checkForUpdates,
+    about
 };
 
 } // namespace gocue::CommandIDs

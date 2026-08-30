@@ -10,6 +10,7 @@
 
 #include <juce_gui_basics/juce_gui_basics.h>
 
+#include <atomic>
 #include <functional>
 #include <memory>
 
@@ -50,6 +51,9 @@ public:
     /** Runs 'action' immediately, or once the user has saved / discarded unsaved changes. */
     void confirmDiscardChangesThen (std::function<void()> action);
 
+    /** Thread-safe snapshot of the dirty flag (the updater asks from a background thread). */
+    bool hasUnsavedChanges() const noexcept { return unsavedChanges.load (std::memory_order_relaxed); }
+
     std::function<void (const juce::String& title)> onWindowTitleChanged;
 
 private:
@@ -65,6 +69,7 @@ private:
     void restorePluginChainsFromDocument (juce::StringArray& errors);
     void refreshFileInfoForAllCues();
     void showPluginManager();
+    void showAbout();
     void showAlert (const juce::String& title, const juce::String& message, bool isError);
     void updateTransportStandby();
 
@@ -79,6 +84,7 @@ private:
     juce::ApplicationCommandManager& commands;
     ProjectDocument document;
     PluginWindowManager pluginWindows;
+    std::atomic<bool> unsavedChanges { false };
 
     juce::MenuBarComponent menuBar;
     TransportBar transport;

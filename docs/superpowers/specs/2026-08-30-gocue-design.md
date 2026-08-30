@@ -7,27 +7,32 @@ gom이 준 요구사항을 그대로 옮기고, 결정이 필요했던 부분은
 - JUCE 8.0.15 + CMake 3.22+, Visual Studio 2022(Build Tools 가능), C++17.
 - JUCE는 `FetchContent`(태그 고정)로 받고, 로컬 체크아웃은 `FETCHCONTENT_SOURCE_DIR_JUCE`로 지정.
 - ASIO SDK는 별도 다운로드 → `ASIO_SDK_DIR` → `JUCE_ASIO=1`. 없으면 WASAPI 전용 빌드(경고).
+- WinSparkle 0.9.4 바이너리 패키지는 별도 다운로드 → `WINSPARKLE_DIR`. 없으면 업데이트 없이 빌드.
 - 결정: 작업명 **GoCue**, 저장소 `C:\Users\claude\gocue`.
 
 ## 2. 오디오
 - `AudioDeviceManager`(0 in / 2 out) — ASIO + WASAPI. 장치 상태는 앱 설정(XML)에 저장.
 - 포맷: wav / aiff / flac / mp3(JUCE 내장 디코더) / ogg. `registerBasicFormats`.
-- 신호 경로(큐 1개): 파일 → `AudioTransportSource`(디스크 read-ahead, 장치 SR로 리샘플) → `FadeEnvelope`(선형 진폭) → 큐 게인 → [큐 VST3 체인] → 믹스 버퍼.
-- 믹스 → [마스터 VST3 체인] → 출력 ch1-2 (나머지 채널은 무음).
+- 신호 경로(큐 1개): 파일 → `AudioTransportSource`(디스크 read-ahead, 장치 SR로 리샘플) → `FadeEnvelope`(선형 진폭) → 큐 게인 → 큐 VST3 체인 → 믹스 버퍼.
+- 믹스 → 마스터 VST3 체인 → 출력 ch1-2 (나머지 채널은 무음).
 - 페이드 인/아웃은 ms 단위, 샘플 단위로 정확히 램프. 모든 정지는 5 ms 디클릭 램프.
-- 결정: 큐 하나당 재생 인스턴스 1개. 같은 큐에 GO를 다시 누르면 처음부터 재시작(이전 인스턴스는 디클릭 정지). 서로 다른 큐는 동시 재생.
+- 결정: 큐 하나당 재생 인스턴스 1개. 같은 큐에 GO를 다시 누르면 처음부터 재시작(이전 인스턴스는 디클릭 정지, 체인은 새 인스턴스가 넘겨받음). 서로 다른 큐는 동시 재생.
 - 결정: 모노 파일은 양쪽 채널로, 3채널 이상은 앞 2채널만.
+- 결정: 파일 끝/페이드아웃 완료 후 체인의 테일(`getTailLengthSeconds`, 최대 10 s)만큼 무음을 계속 흘려 리버브 꼬리를 살린다. 즉시 정지(S/Esc)는 테일을 건너뛴다.
 - 스레드: 메시지 스레드가 플레이어를 만들고(파일 열기 포함) `CriticalSection`으로 보호된 벡터에 추가. 오디오 콜백은 락을 잡고 렌더만 한다(파일 IO·할당 없음). 끝난 플레이어는 `AsyncUpdater`로 메시지 스레드에서 파괴.
 
-## 3. VST3 (2단계)
-- `AudioPluginFormatManager` + `KnownPluginList`, 스캔 결과는 앱 설정에 저장.
-- 큐마다 독립 인서트 체인(`PluginChain`), 마스터 버스에 하나 더.
-- 에디터 창(`DocumentWindow`) 열기, `getStateInformation`/`setStateInformation`을 base64로 프로젝트에 저장/복원.
+## 3. VST3
+- `PluginHost`: `AudioPluginFormatManager` + `VST3PluginFormat`, `KnownPluginList`(앱 설정 XML에 저장), 저장된 슬롯을 다시 만드는 팩토리(description XML 우선, 없으면 파일+uid, 알려진 목록에 같은 uid가 있으면 그 경로 우선).
+- `PluginChain`: 슬롯 벡터(락 보호), 스테레오 in/out 레이아웃을 강제하고 실패하면 플러그인이 원하는 레이아웃 + 스크래치 버퍼로 대응. 바이패스, 순서 변경, 없는 플러그인은 `[없음]` 슬롯으로 유지(재저장 시 상태 보존).
+- 체인 소유: 엔진이 마스터 체인과 큐별 체인(`Uuid` 키)을 소유해 플레이어보다 오래 산다. 큐 삭제 시 플레이어에서 떼어낸 뒤 파괴.
+- 에디터 창: `PluginEditorWindow`(플러그인 에디터 또는 JUCE 제네릭 에디터), `PluginWindowManager`가 인스턴스 파괴 직전에 창을 닫는다(체인 리스너).
+- 스캔 UI: `juce::PluginListComponent` 다이얼로그(`Ctrl+P`). 인스펙터 슬롯 스트립·마스터 인서트 다이얼로그(`Ctrl+M`)는 같은 `PluginChainComponent`.
+- 저장: `getStateInformation` base64 + `PluginDescription::createXml()` 문자열을 `.gocue`에 기록, 로드 시 복원.
 
 ## 4. 큐 리스트
 - `Space` GO(선택 큐 재생 → 다음 큐 선택), `S` 정지, `Esc` 전체 정지, `F` 페이드아웃 정지, `Shift+F` 전체 페이드아웃.
 - 결정: `S`/`F`는 선택 큐가 재생 중이면 그 큐, 아니면 **가장 최근에 시작한 재생 큐**에 적용(GO 직후 선택이 다음 큐로 넘어가는 문제 해결).
-- 추가(`Insert`, 파일 선택) / 삭제(`Delete`) / 복제(`Ctrl+D`) / 순서 변경(`Ctrl+↑↓`), 파일 드래그앤드롭(놓은 위치에 삽입).
+- 추가(`Insert`, 파일 선택) / 삭제(`Delete`) / 복제(`Ctrl+D`, 플러그인 체인 포함) / 순서 변경(`Ctrl+↑↓`), 파일 드래그앤드롭(놓은 위치에 삽입).
 - 결정: 번호는 행 순서(1,2,3…)로 자동. 이름만 편집.
 
 ## 5. 프로젝트 파일 (`.gocue`, JSON)
@@ -35,27 +40,35 @@ gom이 준 요구사항을 그대로 옮기고, 결정이 필요했던 부분은
 { "app": "GoCue", "version": 1, "name": "...",
   "cues": [ { "id": "uuid", "name": "", "file": "절대경로", "fileRelative": "프로젝트 기준 상대경로",
               "fadeInMs": 0, "fadeOutMs": 0, "gainDb": 0.0, "durationSeconds": 0.0,
-              "plugins": [ { "format": "VST3", "name": "", "fileOrIdentifier": "", "uniqueId": 0, "state": "base64", "bypassed": false } ] } ],
+              "plugins": [ { "format": "VST3", "name": "", "fileOrIdentifier": "", "uniqueId": 0,
+                             "description": "<PLUGIN .../>", "state": "base64", "bypassed": false } ] } ],
   "master": { "plugins": [] } }
 ```
 - 누락 필드는 기본값, 모르는 필드는 무시, `version`이 더 크면 경고만 내고 읽는다.
 - 파일 경로는 절대경로 우선, 없으면 프로젝트 폴더 기준 상대경로로 재시도, 그래도 없으면 `fileMissing` 표시.
+- 저장 직전에 엔진의 체인 상태를 프로젝트에 채워 넣는다(`ProjectDocument::save`의 decorate 훅).
 
 ## 6. UI (단일 창)
 - 상단 `TransportBar`: 다음 큐 번호·이름·파일·메타 + 큰 GO 버튼 + 정지/페이드아웃/전체 정지 버튼 + 재생 중 개수/상태 메시지.
-- 중앙 `CueTable`: 번호·이름·파일·페이드인·페이드아웃·길이. 재생 중 행은 초록(페이드아웃 중 주황) + 진행바, 선택(스탠바이) 행은 파란 테두리, 파일 없음은 빨강.
-- 하단 `CueInspector`: 이름·파일(찾아보기)·페이드인/아웃·게인 슬라이더·플러그인 슬롯(2단계).
-- 메뉴바: 파일 / 큐 / 재생 / 오디오.
-- 한국어 UI, 기본 서체 Malgun Gothic.
+- 중앙 `CueTable`: 번호·이름·파일·페이드인·페이드아웃·길이. 재생 중 행은 초록(페이드아웃 중 주황) + 진행바 + 길이 칸에 남은 시간 카운트다운, 선택(스탠바이) 행은 파란 테두리, 파일 없음은 빨강.
+- 하단 `CueInspector`: 이름·파일(찾아보기)·페이드인/아웃·게인 슬라이더·VST3 인서트 스트립(슬롯: 이름 / B 바이패스 / 편집 / x, `+ 플러그인`, `관리...`).
+- 메뉴바: 파일 / 큐 / 재생 / 오디오 / 도움말(업데이트 확인, GoCue 정보).
+- 한국어 UI, 기본 서체 Malgun Gothic. 앱 아이콘 `assets/icon_512.png`(tools/make_icon.py로 생성).
 
-## 7. 배포/업데이트 (4단계)
-- Inno Setup 인스톨러, WinSparkle + GitHub Releases appcast 기반 자동 업데이트.
+## 7. 배포/업데이트
+- Inno Setup 스크립트 `installer/GoCue.iss`: 기본 사용자별 설치(`PrivilegesRequired=lowest`, 대화상자로 전체 사용자 선택 가능 → 업데이트 시 UAC 없음), `.gocue` 파일 연결, 한국어/영어 언어, 아이콘.
+- WinSparkle: `Updater`(앱 계층)가 `win_sparkle_set_appcast_url` / `set_app_details` / `set_eddsa_public_key` / 종료 콜백 / 자동 확인 ON / `init`. 종료 콜백은 저장하지 않은 변경이 있으면 거절.
+- 서명: EdDSA 필수(WinSparkle 0.9). 개인키는 저장소 밖(이 PC: `C:\Users\claude\SDKs\gocue_release\eddsa_priv.pem`), 공개키는 `CMakePresets.json`.
+- 릴리스 파이프라인 `tools/release.py`: Release 빌드 → 테스트 → ISCC → `winsparkle-tool sign` → `appcast.xml` → `gh release create`. appcast URL = `https://github.com/<owner>/<repo>/releases/latest/download/appcast.xml`.
+- `.github/workflows/release.yml`: `v*` 태그에서 같은 파이프라인(미검증).
+- 결정: GitHub 저장소(owner/repo)는 아직 정해지지 않아 `GOCUE_APPCAST_URL`은 비워 둔다(비어 있으면 업데이트 기능 비활성).
 
 ## 8. 테스트
-- `tests/` 콘솔 타깃(JUCE UnitTest): FadeEnvelope 수학, CueList 조작/선택, ProjectSerializer 왕복·하위호환·상대경로, AudioEngine 오프라인 렌더(페이드/게인/EOF/믹스/재시작/정지).
+- `tests/` 콘솔 타깃(JUCE UnitTest): FadeEnvelope 수학, CueList 조작/선택, ProjectSerializer 왕복·하위호환·상대경로, AudioEngine 오프라인 렌더(페이드/게인/EOF/믹스/재시작/정지), PluginChain(스텁 플러그인으로 순서·바이패스·상태 왕복·테일·엔진 통합), 설치된 실물 VST3 검사(없으면 건너뜀).
+- GUI는 데모 프로젝트를 열어 화면 자동화(클릭·키 입력·스크린샷)로 확인: 프로젝트 로드, 플러그인 슬롯 복원, 에디터 창, GO/Esc.
 
 ## 9. 진행 순서
-1. 오디오 재생 + 큐 리스트 + 프로젝트 파일 (이 문서 기준선)
-2. VST3 (큐 체인 / 마스터 체인 / 에디터 / 상태 저장)
-3. UI 마감 (플러그인 슬롯, 진행바 다듬기, 테이블 내 드래그 정렬 등)
-4. Inno Setup + WinSparkle
+1. 오디오 재생 + 큐 리스트 + 프로젝트 파일 — 완료
+2. VST3 (큐 체인 / 마스터 체인 / 에디터 / 상태 저장) — 완료
+3. UI 마감 (플러그인 슬롯, 남은 시간, 아이콘) — 완료
+4. Inno Setup + WinSparkle — 코드/스크립트 완료, GitHub 저장소 연결은 대기

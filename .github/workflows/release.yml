@@ -1,0 +1,64 @@
+# Builds, signs and publishes a GoCue release when a v* tag is pushed.
+# Needs: repository secret GOCUE_EDDSA_PRIVATE_KEY (contents of the winsparkle-tool private key file).
+# The matching public key is baked in through CMakePresets.json (GOCUE_EDDSA_PUBLIC_KEY).
+name: release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download ASIO SDK and WinSparkle
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force sdk | Out-Null
+          Invoke-WebRequest -Uri https://www.steinberg.net/asiosdk -OutFile sdk/asiosdk.zip
+          Expand-Archive sdk/asiosdk.zip -DestinationPath sdk
+          Invoke-WebRequest -Uri https://github.com/vslavik/winsparkle/releases/download/v0.9.4/WinSparkle-0.9.4.zip -OutFile sdk/winsparkle.zip
+          Expand-Archive sdk/winsparkle.zip -DestinationPath sdk
+          Get-ChildItem sdk
+
+      - name: Configure
+        shell: pwsh
+        run: |
+          cmake --preset vs2022 `
+            -DASIO_SDK_DIR="${{ github.workspace }}/sdk/ASIOSDK" `
+            -DWINSPARKLE_DIR="${{ github.workspace }}/sdk/WinSparkle-0.9.4" `
+            -DGOCUE_APPCAST_URL="https://github.com/${{ github.repository }}/releases/latest/download/appcast.xml"
+
+      - name: Build (Release)
+        run: cmake --build --preset vs2022-release -- -m -v:m -nologo
+
+      - name: Unit tests
+        run: ctest --preset vs2022-release
+
+      - name: Install Inno Setup
+        run: choco install innosetup --no-progress -y
+
+      - name: Installer, signature, appcast
+        shell: pwsh
+        env:
+          GOCUE_EDDSA_PRIVATE_KEY: ${{ secrets.GOCUE_EDDSA_PRIVATE_KEY }}
+        run: |
+          Set-Content -Path eddsa_priv.pem -Value $env:GOCUE_EDDSA_PRIVATE_KEY -NoNewline
+          python tools/release.py --preset vs2022 --skip-build --skip-tests `
+            --repo "${{ github.repository }}" --key eddsa_priv.pem `
+            --winsparkle-dir "${{ github.workspace }}/sdk/WinSparkle-0.9.4"
+          Remove-Item eddsa_priv.pem
+
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: pwsh
+        run: |
+          $installer = Get-ChildItem installer/output/GoCue-Setup-*.exe | Select-Object -First 1
+          gh release create "${{ github.ref_name }}" $installer.FullName installer/output/appcast.xml `
+            --title "GoCue ${{ github.ref_name }}" --generate-notes

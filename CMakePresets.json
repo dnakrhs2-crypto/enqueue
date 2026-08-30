@@ -9,7 +9,8 @@
       "architecture": { "value": "x64", "strategy": "set" },
       "binaryDir": "${sourceDir}/build/vs2022",
       "cacheVariables": {
-        "CMAKE_CONFIGURATION_TYPES": "Debug;Release"
+        "CMAKE_CONFIGURATION_TYPES": "Debug;Release",
+        "GOCUE_EDDSA_PUBLIC_KEY": "YsXFr0R7JSs32dQi/r5DKlHkvg7NPKb82e5eTFvF9o8="
       }
     }
   ],

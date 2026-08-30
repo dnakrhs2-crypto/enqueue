@@ -115,6 +115,7 @@ PluginChainComponent::PluginChainComponent (AudioEngine& e, PluginWindowManager&
 
     emptyLabel.setColour (juce::Label::textColourId, Palette::dimText);
     emptyLabel.setFont (juce::Font (juce::FontOptions (13.0f)));
+    emptyLabel.setInterceptsMouseClicks (false, false);   // it overlays the strip; never swallow slot clicks
     addAndMakeVisible (emptyLabel);
 
     setChain (nullptr, {});
@@ -155,11 +156,13 @@ void PluginChainComponent::refresh()
         strip.setSize (juce::jmax (1, numSlots * (slotWidth + slotGap)), slotHeight);
         emptyLabel.setText (numSlots == 0 ? ko ("인서트 없음 - [+ 플러그인]으로 VST3를 추가하세요") : juce::String(),
                             juce::dontSendNotification);
+        emptyLabel.setVisible (numSlots == 0);
     }
     else
     {
         strip.setSize (1, slotHeight);
         emptyLabel.setText (ko ("선택된 큐 없음"), juce::dontSendNotification);
+        emptyLabel.setVisible (true);
     }
 
     resized();
