@@ -50,6 +50,9 @@ public:
     std::function<void()> onPanic;
     std::function<void()> onPreview;
     std::function<void()> onResetCue;
+    /** Called after a tab switch (click or cue-type rebuild) stole the keyboard focus into a panel field;
+        the owner puts it back on the cue table so Space still means GO. */
+    std::function<void()> onReturnFocus;
 
     void resized() override;
     void paint (juce::Graphics& g) override;
@@ -80,7 +83,17 @@ private:
     juce::AudioThumbnailCache thumbnailCache { 64 };
 
     juce::Label title;
-    juce::TabbedComponent tabs { juce::TabbedButtonBar::TabsAtTop };
+    /** juce::TabbedComponent brings the new panel to the front *with* focus, which lands on the panel's first text
+        field; a cue player must not swallow the next Space into a number box, so the owner is told to move it back. */
+    class InspectorTabs : public juce::TabbedComponent
+    {
+    public:
+        using juce::TabbedComponent::TabbedComponent;
+        std::function<void()> onTabShown;
+        void currentTabChanged (int, const juce::String&) override { if (onTabShown) onTabShown(); }
+    };
+
+    InspectorTabs tabs { juce::TabbedButtonBar::TabsAtTop };
     std::unique_ptr<BasicsPanel> basicsPanel;
     std::unique_ptr<TimeLoopsPanel> timeLoopsPanel;
     std::unique_ptr<LevelsPanel> levelsPanel;

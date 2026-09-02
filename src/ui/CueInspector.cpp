@@ -2331,6 +2331,14 @@ CueInspector::CueInspector (ProjectDocument& doc, AudioEngine& e, AppSettings& s
     tabs.setTabBarDepth (26);
     tabs.setOutline (0);
     tabs.setColour (juce::TabbedComponent::backgroundColourId, Palette::panel);
+    tabs.onTabShown = [this]
+    {
+        auto* focused = juce::Component::getCurrentlyFocusedComponent();
+
+        if (focused != nullptr && tabs.isParentOf (focused) && onReturnFocus)
+            onReturnFocus();
+    };
+
     rebuildTabs (0);
     addAndMakeVisible (tabs);
 

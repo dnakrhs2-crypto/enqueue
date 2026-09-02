@@ -99,6 +99,7 @@ MainComponent::MainComponent (AudioEngine& e, AppSettings& s, juce::ApplicationC
 
     inspector.onOpenPluginManager = [this] { showPluginManager(); };
     inspector.onPanic = [this] { controller.panicAll(); table.focusTable(); };
+    inspector.onReturnFocus = [this] { table.focusTable(); };
     inspector.onPreview = [this] { controller.preview(); };
     inspector.onResetCue = [this] { controller.resetSelected(); };
 
