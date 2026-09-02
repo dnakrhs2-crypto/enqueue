@@ -16,13 +16,13 @@ public:
         ProjectSnapshot s;
         Cue c;
         c.name = cueName;
-        s.project.cues.push_back (c);
+        s.project.cues().push_back (c);
         return s;
     }
 
     static juce::String firstName (const ProjectSnapshot& s)
     {
-        return s.project.cues.empty() ? juce::String() : s.project.cues[0].name;
+        return s.project.cues().empty() ? juce::String() : s.project.cues()[0].name;
     }
 
     void runTest() override

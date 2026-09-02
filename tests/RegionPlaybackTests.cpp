@@ -631,12 +631,12 @@ public:
             expectEquals (messy.audio.firstSliceCount, -1);
 
             Project p;
-            p.cues.push_back (messy);
+            p.cues().push_back (messy);
             Project q;
             expect (ProjectSerializer::fromJson (ProjectSerializer::toJson (p), q, nullptr).wasOk());
-            expectEquals ((int) q.cues[0].audio.slices.size(), 3);
-            expectEquals (q.cues[0].audio.slices[2].playCount, 5);
-            expectEquals (q.cues[0].audio.firstSliceCount, -1);
+            expectEquals ((int) q.cues()[0].audio.slices.size(), 3);
+            expectEquals (q.cues()[0].audio.slices[2].playCount, 5);
+            expectEquals (q.cues()[0].audio.firstSliceCount, -1);
         }
 
         beginTest ("devamp with stop ends an endless loop at the pass boundary; without stop the file runs on");

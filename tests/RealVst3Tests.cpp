@@ -228,12 +228,12 @@ public:
             withPlugin.audio.envelope = Envelope::fromFadeIn (0.3);
             withPlugin.fadeOutMs = 800;
             withPlugin.plugins = states;
-            project.cues.push_back (withPlugin);
+            project.cues().push_back (withPlugin);
 
             Cue plain;
             plain.name = "plain tone";
             plain.file = demoTone;
-            project.cues.push_back (plain);
+            project.cues().push_back (plain);
 
             project.masterPlugins = states;
 

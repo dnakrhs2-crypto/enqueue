@@ -676,6 +676,52 @@ namespace
 
 } // namespace
 
+void CueContainer::sanitise()
+{
+    cartRows = juce::jlimit (1, maxGrid, cartRows);
+    cartCols = juce::jlimit (1, maxGrid, cartCols);
+
+    if (id.isNull())
+        id = juce::Uuid();
+
+    if (name.isEmpty())
+        name = juce::String::fromUTF8 (isCart ? "\xEC\xB9\xB4\xED\x8A\xB8" : "\xED\x81\x90 \xEB\xA6\xAC\xEC\x8A\xA4\xED\x8A\xB8");   // 카트 / 큐 리스트
+}
+
+CueContainer& Project::ensureMainList()
+{
+    if (lists.empty())
+    {
+        CueContainer main;
+        main.name = juce::String::fromUTF8 ("\xEB\xA9\x94\xEC\x9D\xB8 \xED\x81\x90 \xEB\xA6\xAC\xEC\x8A\xA4\xED\x8A\xB8");   // 메인 큐 리스트
+        lists.push_back (std::move (main));
+    }
+
+    activeList = juce::jlimit (0, (int) lists.size() - 1, activeList);
+    return lists.front();
+}
+
+std::vector<Cue>& Project::cues()
+{
+    return ensureMainList().cues;
+}
+
+const std::vector<Cue>& Project::cues() const
+{
+    static const std::vector<Cue> none;
+    return lists.empty() ? none : lists.front().cues;
+}
+
+const Cue* Project::findCue (const juce::Uuid& id) const noexcept
+{
+    for (const auto& list : lists)
+        for (const auto& c : list.cues)
+            if (c.id == id)
+                return &c;
+
+    return nullptr;
+}
+
 AudioPatch& Project::ensureDefaultPatch()
 {
     if (patches.empty())
@@ -711,12 +757,35 @@ juce::var toVar (const Project& project, const juce::File& projectDir)
     root->setProperty ("version", currentVersion);
     root->setProperty ("name", project.name);
 
+    // "cues" stays the main list (older builds read that); "lists" carries every list / cart
     juce::Array<juce::var> cues;
 
-    for (const auto& c : project.cues)
+    for (const auto& c : project.cues())
         cues.add (cueToVar (c, projectDir));
 
     root->setProperty ("cues", juce::var (cues));
+
+    juce::Array<juce::var> lists;
+
+    for (const auto& list : project.lists)
+    {
+        auto* obj = new juce::DynamicObject();
+        obj->setProperty ("id", list.id.toString());
+        obj->setProperty ("name", list.name);
+        obj->setProperty ("cart", list.isCart);
+        obj->setProperty ("rows", list.cartRows);
+        obj->setProperty ("cols", list.cartCols);
+        juce::Array<juce::var> listCues;
+
+        for (const auto& c : list.cues)
+            listCues.add (cueToVar (c, projectDir));
+
+        obj->setProperty ("cues", juce::var (listCues));
+        lists.add (juce::var (obj));
+    }
+
+    root->setProperty ("lists", juce::var (lists));
+    root->setProperty ("activeList", project.activeList);
 
     juce::Array<juce::var> patches;
 
@@ -760,9 +829,13 @@ juce::Result fromJson (const juce::String& json, Project& out, juce::StringArray
     Project project;
     project.name = root.getProperty ("name", "").toString();
 
-    if (const auto* cues = root.getProperty ("cues", juce::var()).getArray())
+    juce::StringArray seenIds;   // a cue id is unique across every list: they would share one player and one plugin chain
+    auto readCues = [&] (const juce::var& array, std::vector<Cue>& into)
     {
-        juce::StringArray seenIds;
+        const auto* cues = array.getArray();
+
+        if (cues == nullptr)
+            return;
 
         for (const auto& item : *cues)
         {
@@ -776,7 +849,6 @@ juce::Result fromJson (const juce::String& json, Project& out, juce::StringArray
 
             auto cue = cueFromVar (item, projectDir, warnings);
 
-            // Two cues must never share an id: they would share one player and one plugin chain.
             if (seenIds.contains (cue.id.toString()))
             {
                 cue.id = juce::Uuid();
@@ -786,7 +858,47 @@ juce::Result fromJson (const juce::String& json, Project& out, juce::StringArray
             }
 
             seenIds.add (cue.id.toString());
-            project.cues.push_back (std::move (cue));
+            into.push_back (std::move (cue));
+        }
+    };
+
+    if (const auto* lists = root.getProperty ("lists", juce::var()).getArray())
+    {
+        for (const auto& item : *lists)
+        {
+            if (item.getDynamicObject() == nullptr)
+                continue;
+
+            CueContainer list;
+            const auto idText = item.getProperty ("id", "").toString();
+            list.id = idText.isNotEmpty() ? juce::Uuid (idText) : juce::Uuid();
+            list.name = item.getProperty ("name", "").toString();
+            list.isCart = (bool) item.getProperty ("cart", false);
+            list.cartRows = intProperty (item, "rows", 4);
+            list.cartCols = intProperty (item, "cols", 4);
+            readCues (item.getProperty ("cues", juce::var()), list.cues);
+            list.sanitise();
+            project.lists.push_back (std::move (list));
+        }
+    }
+    else
+    {
+        // version <= 4: one flat cue list
+        readCues (root.getProperty ("cues", juce::var()), project.ensureMainList().cues);
+    }
+
+    project.ensureMainList();
+    project.activeList = juce::jlimit (0, (int) project.lists.size() - 1, intProperty (root, "activeList", 0));
+
+    {
+        std::set<juce::String> listIds;
+
+        for (auto& list : project.lists)
+        {
+            if (list.id.isNull() || listIds.count (list.id.toString()) != 0)
+                list.id = juce::Uuid();
+
+            listIds.insert (list.id.toString());
         }
     }
 

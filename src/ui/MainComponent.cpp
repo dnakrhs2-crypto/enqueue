@@ -2133,9 +2133,10 @@ void MainComponent::captureLivePluginStates (Project& project)
     for (auto& patch : project.patches)
         engine.capturePatchInsertStates (patch);
 
-    for (auto& cue : project.cues)
-        if (auto* chain = engine.findCueChain (cue.id))
-            cue.plugins = chain->getStates();
+    for (auto& list : project.lists)
+        for (auto& cue : list.cues)
+            if (auto* chain = engine.findCueChain (cue.id))
+                cue.plugins = chain->getStates();
 
     project.masterPlugins = engine.getMasterChain().getStates();
 }

@@ -18,6 +18,17 @@ public:
         virtual ~Listener() = default;
         /** File, name, dirty state or undo history changed (title bar / menu refresh). */
         virtual void documentStateChanged() = 0;
+        /** Lists / carts were added, removed, renamed, reconfigured, or another one became active. */
+        virtual void containersChanged() {}
+    };
+
+    /** What the document knows about one list / cart besides its cues. */
+    struct ContainerInfo
+    {
+        juce::Uuid id;
+        juce::String name;
+        bool isCart = false;
+        int cartRows = 4, cartCols = 4;
     };
 
     struct EditOptions
@@ -29,8 +40,32 @@ public:
     ProjectDocument();
     ~ProjectDocument() override;
 
-    CueList cues;
+    CueList cues;   // the *active* list / cart: the table, inspector and GO work on this one
     std::vector<PluginSlotState> masterPlugins;
+
+    //==========================================================================
+    // Cue lists and carts. The inactive ones keep their cues (and cursors) aside; switching swaps them into 'cues'.
+
+    int getNumContainers() const noexcept { return (int) containers.size(); }
+    int getActiveContainer() const noexcept { return active; }
+    ContainerInfo getContainerInfo (int index) const;
+    bool isActiveCart() const noexcept;
+    /** Makes another list / cart the active one (its cues move into 'cues'). Not an undo step by itself. */
+    void setActiveContainer (int index);
+    /** Appends a list or cart (not activated). Returns its index. */
+    int addContainer (const juce::String& name, bool isCart);
+    /** Removes a list / cart (the last one cannot go; removing the active one activates its neighbour). */
+    bool removeContainer (int index);
+    void renameContainer (int index, const juce::String& name);
+    void setContainerCart (int index, bool isCart, int rows, int cols);
+    /** The list a cue lives in (the active one is checked first), or nullptr. 'indexOut' gets the cue's index. */
+    CueList* listContaining (const juce::Uuid& id, int* indexOut = nullptr) noexcept;
+    const CueList* listContaining (const juce::Uuid& id, int* indexOut = nullptr) const noexcept;
+    /** Container index of the list a cue lives in, -1 when unknown. */
+    int containerOf (const juce::Uuid& id) const noexcept;
+    const Cue* findCueAnywhere (const juce::Uuid& id) const noexcept;
+    /** Every list (the active one first), for scans (hotkeys, wall clock). */
+    void forEachList (const std::function<void (CueList&)>& fn);
     std::vector<AudioPatch> patches;   // never empty; patches[0] is the default
     WorkspaceSettings settings;
 
@@ -97,9 +132,22 @@ public:
     void removeListener (Listener* l) { listeners.remove (l); }
 
 private:
-    void cueListStructureChanged() override { markDirty(); }
+    void cueListStructureChanged() override { if (! switching) markDirty(); }
     void cueChanged (int) override { markDirty(); }
     void notify();
+    void notifyContainers();
+    /** Puts 'cues' aside into the active container and takes container 'index' into 'cues'. */
+    void swapActive (int index);
+
+    struct Container
+    {
+        ContainerInfo info;
+        CueList list;   // the cues while the container is inactive (empty for the active one)
+    };
+
+    std::vector<std::unique_ptr<Container>> containers;   // never empty
+    int active = 0;
+    bool switching = false;
 
     juce::File file;
     bool dirty = false;
