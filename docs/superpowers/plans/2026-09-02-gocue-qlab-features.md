@@ -336,7 +336,7 @@ class Scheduler { public: using Clock = std::function<double()>;   // 초
 - [x] 창 비율: 인스펙터 높이·활성 큐 패널 너비를 분할 영역의 비율로(SplitLayout.h, 테스트 16개), 구분선(SplitDivider) 드래그로 크기 조절 + 화살표/더블클릭으로 접기, Ctrl+I 인스펙터 접기, Ctrl+L 활성 큐 접기, AppSettings에 저장. GO 버튼은 높이×1.7 고정 너비. 창 최소 높이 640.
 - [x] 메뉴 글자: GoCueLookAndFeel(15pt, 단축키 글자 항목과 같은 크기).
 - [x] 도움말 > 사용 설명서(Ctrl+F1): ManualWindow, 8개 탭.
-- [x] 코덱스 리뷰(codex_review_qa1) → 반영 후 0.8.2 릴리스.
+- [x] 코덱스 리뷰(codex_review_qa1, 5건) 전부 반영: 종료 시 패치 편집기 창 먼저 닫기 / moveSlot이 슬롯 객체 주소까지 검증 / LookAndFeel 해제 전 dismissAllActiveMenus / 슬롯 이름 더블클릭이 에디터를 열도록 라벨 클릭 통과 / 설명서 쇼 모드 설명 수정. 추가로 마이크 큐 단축키 Ctrl+M 충돌(마스터 버스 인서트) → Ctrl+6. 테스트 3727개. → 0.8.2 릴리스.
 
 ## 최종
 - [ ] 코덱스 전체 리뷰(전체 소스, 성능·스레드 안전·메모리) → 반영 → 전체 테스트·GUI 스모크 → 릴리스 → gom 보고(무엇이 바뀌었는지, 남은 한계: 장치 1개, CAF 없음, MIDI/타임코드/원격 제외).
