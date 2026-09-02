@@ -450,6 +450,65 @@ public:
             buffered.shutdown();
         }
 
+        beginTest ("pitch preserved at 2x: the length halves and 440 Hz stays; varispeed moves it to 880 Hz");
+        {
+            const auto twoSeconds = writeSine (dir, "two.wav", 2.0, 0.5f);
+
+            auto goertzel = [] (const juce::AudioBuffer<float>& b, double hz)
+            {
+                const double k = 2.0 * std::cos (2.0 * juce::MathConstants<double>::pi * hz / sampleRate);
+                double s0 = 0.0, s1 = 0.0, s2 = 0.0;
+
+                for (int i = 0; i < b.getNumSamples(); ++i)
+                {
+                    s0 = b.getSample (0, i) + k * s1 - s2;
+                    s2 = s1;
+                    s1 = s0;
+                }
+
+                return s1 * s1 + s2 * s2 - k * s1 * s2;
+            };
+
+            auto measure = [&] (bool preservePitch, double& seconds, double& e440, double& e880)
+            {
+                Cue cue;
+                cue.file = twoSeconds;
+                cue.audio.rate = 2.0;
+                cue.audio.preservePitch = preservePitch;
+                expect (engine.play (cue));
+                int rendered = 0;
+                e440 = e880 = 0.0;
+
+                for (int i = 0; i < 400; ++i)
+                {
+                    engine.renderBlock (out, blockSize);
+                    ++rendered;
+
+                    if (i >= 20 && i < 60)   // steady state, away from the start / end
+                    {
+                        e440 += goertzel (out, 440.0);
+                        e880 += goertzel (out, 880.0);
+                    }
+
+                    engine.reapFinishedPlayers();
+
+                    if (! engine.isPlaying (cue.id))
+                        break;
+                }
+
+                seconds = blocksToSeconds (rendered);
+            };
+
+            double seconds = 0.0, e440 = 0.0, e880 = 0.0;
+            measure (true, seconds, e440, e880);
+            expectWithinAbsoluteError (seconds, 1.0, 0.12);   // 2 s file at 2x (+ a little stretcher latency)
+            expect (e440 > 4.0 * e880);                       // the pitch stayed at 440
+
+            measure (false, seconds, e440, e880);
+            expectWithinAbsoluteError (seconds, 1.0, 0.05);
+            expect (e880 > 4.0 * e440);                       // plain varispeed: an octave up
+        }
+
         beginTest ("slices: play counts per slice, skipped slices, total length");
         {
             // three 0.2 s sections at different levels: 0.5 / 0.25 / 0.125
@@ -577,6 +636,64 @@ public:
             expectEquals ((int) q.cues[0].audio.slices.size(), 3);
             expectEquals (q.cues[0].audio.slices[2].playCount, 5);
             expectEquals (q.cues[0].audio.firstSliceCount, -1);
+        }
+
+        beginTest ("devamp with stop ends an endless loop at the pass boundary; without stop the file runs on");
+        {
+            // 0.5 s loop region of a 2 s file: [0, 0.5) forever
+            const auto two = writeSine (dir, "two2.wav", 2.0, 0.5f);
+            Cue loop;
+            loop.file = two;
+            loop.durationSeconds = 2.0;
+            loop.audio.endSeconds = 0.5;
+            loop.audio.infiniteLoop = true;
+            expect (engine.play (loop));
+
+            const int blocksPerPass = (int) (0.5 * sampleRate / blockSize);   // ~43
+            for (int i = 0; i < blocksPerPass + 5; ++i)                       // into the second pass
+                engine.renderBlock (out, blockSize);
+
+            const double toEnd = engine.getSecondsToPassEnd (loop.id);
+            expect (toEnd > 0.0 && toEnd < 0.5);
+            engine.finishCurrentPass (loop.id, true);   // devamp + stop: the cue ends at the end of this pass
+            int rendered = 0;
+
+            for (int i = 0; i < 200; ++i)
+            {
+                engine.renderBlock (out, blockSize);
+                ++rendered;
+                engine.reapFinishedPlayers();
+
+                if (! engine.isPlaying (loop.id))
+                    break;
+            }
+
+            expect (! engine.isPlaying (loop.id));
+            expectWithinAbsoluteError (blocksToSeconds (rendered), toEnd, 0.03);
+
+            // without stop on a one-slice endless loop there is nothing after the loop, so it also ends there
+            Cue loop2 = loop;
+            loop2.id = juce::Uuid();
+            expect (engine.play (loop2));
+
+            for (int i = 0; i < 10; ++i)
+                engine.renderBlock (out, blockSize);
+
+            engine.finishCurrentPass (loop2.id, false);
+            rendered = 0;
+
+            for (int i = 0; i < 200; ++i)
+            {
+                engine.renderBlock (out, blockSize);
+                ++rendered;
+                engine.reapFinishedPlayers();
+
+                if (! engine.isPlaying (loop2.id))
+                    break;
+            }
+
+            expect (! engine.isPlaying (loop2.id));
+            expect (blocksToSeconds (rendered) < 0.5);
         }
 
         beginTest ("an empty region is refused with a message");

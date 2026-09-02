@@ -185,6 +185,9 @@ void RegionLoopSource::rebuildLayout()
         if (index < (int) resolvedCounts.size() && resolvedCounts[(size_t) index] >= 0)
             count = resolvedCounts[(size_t) index];   // fixed by a devamp
 
+        if (stopAfterRun >= 0 && index > stopAfterRun)
+            count = 0;                                 // devamp with stop: nothing after the loop point
+
         l.runs[index] = { from, to - from, count };
         ++l.numRuns;
     };
@@ -239,7 +242,7 @@ void RegionLoopSource::setSlices (const std::vector<SliceMarker>& markers, int f
     rebuildLayout();
 }
 
-void RegionLoopSource::finishCurrentPass (juce::int64 virtualPosition) noexcept
+void RegionLoopSource::finishCurrentPass (juce::int64 virtualPosition, bool stopAfterThisPass) noexcept
 {
     const auto l = snapshot();
     const auto loc = l.locate (virtualPosition);
@@ -247,20 +250,31 @@ void RegionLoopSource::finishCurrentPass (juce::int64 virtualPosition) noexcept
     if (loc.beyondEnd || loc.run >= l.numRuns)
         return;
 
+    if ((int) resolvedCounts.size() < l.numRuns)
+        resolvedCounts.resize ((size_t) l.numRuns, -1);
+
     if (l.runs[loc.run].count < 0)
     {
-        if ((int) resolvedCounts.size() < l.numRuns)
-            resolvedCounts.resize ((size_t) l.numRuns, -1);
-
         resolvedCounts[(size_t) loc.run] = loc.pass + 1;
     }
     else if (l.sequenceCount < 0)
     {
         resolvedSequenceCount = loc.sequencePass + 1;
     }
-    else
+    else if (! stopAfterThisPass)
     {
         return;   // nothing endless to finish
+    }
+    else
+    {
+        resolvedCounts[(size_t) loc.run] = loc.pass + 1;   // finite loop: still end after this pass
+        resolvedSequenceCount = loc.sequencePass + 1;
+    }
+
+    if (stopAfterThisPass)
+    {
+        stopAfterRun = loc.run;
+        resolvedSequenceCount = loc.sequencePass + 1;
     }
 
     rebuildLayout();
@@ -308,6 +322,12 @@ bool RegionLoopSource::isInfinite() const noexcept
 RegionLoopSource::Location RegionLoopSource::locate (juce::int64 virtualPosition) const noexcept
 {
     return snapshot().locate (virtualPosition);
+}
+
+juce::int64 RegionLoopSource::getRunLength (int index) const noexcept
+{
+    const auto l = snapshot();
+    return index >= 0 && index < l.numRuns ? l.runs[index].length : 0;
 }
 
 juce::int64 RegionLoopSource::getOffsetFor (juce::int64 position) const noexcept

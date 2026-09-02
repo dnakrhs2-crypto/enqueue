@@ -127,6 +127,9 @@ double Cue::passLength() const noexcept
     if (type == CueType::fade)
         return fade.durationSeconds;
 
+    if (type == CueType::devamp)
+        return 0.0;
+
     const double seq = audio.sliceSequenceSeconds (regionStart(), regionEnd());
 
     if (seq < 0.0)
@@ -225,6 +228,9 @@ double Cue::effectiveLength() const noexcept
 {
     if (type == CueType::fade)
         return fade.durationSeconds;
+
+    if (type == CueType::devamp)
+        return 0.0;
 
     if (audio.infiniteLoop || audio.hasEndlessSlice())
         return -1.0;

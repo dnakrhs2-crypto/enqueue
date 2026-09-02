@@ -90,8 +90,10 @@ public:
     void pauseAll();
     void resumeAll();
     bool isPaused (const juce::Uuid& cueId) const;
-    /** Lets a looping cue finish the pass that is audible now, then end (devamp). */
-    void finishCurrentPass (const juce::Uuid& cueId);
+    /** Lets a looping cue finish the pass that is audible now, then go on (or stop when 'stopAfter'). */
+    void finishCurrentPass (const juce::Uuid& cueId, bool stopAfter = false);
+    /** Seconds (at the current rate) until the running cue reaches the end of its current pass; -1 when none. */
+    double getSecondsToPassEnd (const juce::Uuid& cueId) const;
     /** Live trim / rate for a running cue (the inspector while it plays). */
     void setLiveRegion (const juce::Uuid& cueId, double startSeconds, double endSeconds);
     void setLiveRate (const juce::Uuid& cueId, double rate);

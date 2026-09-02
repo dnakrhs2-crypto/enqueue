@@ -87,9 +87,8 @@ TimeLoopsPanel::TimeLoopsPanel (ProjectDocument& doc, AudioEngine& e, juce::Audi
         updateSelected (ko ("엔벨로프 잠금"), [on] (Cue& c) { c.audio.envelope.setLockToTrim (on, c.regionLength()); });
     };
 
-    setupToggle (pitchToggle, "피치 유지 (준비 중)");
-    pitchToggle.setTooltip (ko ("타임스트레치는 다음 단계에서 들어갑니다. 지금은 속도를 바꾸면 음높이도 함께 바뀝니다"));
-    pitchToggle.setEnabled (false);
+    setupToggle (pitchToggle, "피치 유지");
+    pitchToggle.setTooltip (ko ("타임스트레치(Signalsmith Stretch): 속도를 바꿔도 음높이가 그대로 (0.25~4배 범위). 다음 재생부터 적용"));
     pitchToggle.onClick = [this]
     {
         const bool on = pitchToggle.getToggleState();

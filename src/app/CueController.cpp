@@ -137,6 +137,42 @@ CueController::GoResult CueController::trigger (const Cue& cue, bool audition)
         return GoResult::started;
     }
 
+    if (cue.isDevamp())
+    {
+        const auto targetId = cue.devamp.targetId;
+
+        if (targetId.isNull() || document.cues.findById (targetId) == nullptr)
+        {
+            status (ko ("디밴프 큐에 대상이 없습니다: ") + cueLabel (index, cue), true);
+            return GoResult::failed;
+        }
+
+        if (! engine.isPlaying (targetId))
+        {
+            status (ko ("디밴프 대상이 재생 중이 아닙니다: ") + cueLabel (index, cue), true);
+            return GoResult::failed;
+        }
+
+        engine.finishCurrentPass (targetId, cue.devamp.stopTarget);
+        status (ko ("디밴프: ") + cueLabel (index, cue));
+
+        if (cue.devamp.startNextCue)
+        {
+            // the cue after this one starts the moment the target reaches its loop point
+            const auto nextId = document.cues.isValidIndex (index + 1) ? document.cues.get (index + 1).id : juce::Uuid::null();
+            const double at = clock() + juce::jmax (0.0, engine.getSecondsToPassEnd (targetId));
+
+            if (! nextId.isNull())
+                track (scheduler.schedule (at, [this, nextId, audition]
+                                          {
+                                              if (const int nextIndex = document.cues.indexOf (nextId); nextIndex >= 0)
+                                                  fireSequence (nextIndex, audition);
+                                          }), cue.id);
+        }
+
+        return GoResult::started;
+    }
+
     // a normal GO on a cue that is auditioning restarts it with the real output (QLab)
     if (engine.isPlaying (cue.id) && ! (engine.isAuditioning (cue.id) && ! auditionNow))
     {
@@ -397,9 +433,9 @@ CueController::GoResult CueController::go (bool audition)
     }
 
     const int after = fireSequence (index, audition);
-    const bool anyStarted = isCueActive (copy.id) || getNumPending() > 0 || copy.isFade();
+    const bool anyStarted = isCueActive (copy.id) || getNumPending() > 0 || copy.isFade() || copy.isDevamp();
 
-    if (copy.armed && copy.preWaitSeconds <= 0.0 && ! copy.isFade() && ! engine.isPlaying (copy.id))
+    if (copy.armed && copy.preWaitSeconds <= 0.0 && ! copy.isFade() && ! copy.isDevamp() && ! engine.isPlaying (copy.id))
     {
         // the first cue could not be started (missing file ...): trigger() already reported it
         document.cues.setPlayheadIndex (juce::jmin (after, document.cues.size() - 1));

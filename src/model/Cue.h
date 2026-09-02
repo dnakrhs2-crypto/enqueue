@@ -68,7 +68,16 @@ struct DuckSettings
 };
 
 /** What a cue is. Only the fields that belong to its type are used / saved. */
-enum class CueType { audio, fade };
+enum class CueType { audio, fade, devamp };
+
+/** Settings of a devamp cue (QLab "Devamp"): lets the target finish its current loop pass (or endless slice)
+    and then either continues into what follows or stops; the next cue can be started at that moment. */
+struct DevampCueData
+{
+    juce::Uuid targetId = juce::Uuid::null();
+    bool startNextCue = true;       // fire the cue after this one when the target reaches the loop point
+    bool stopTarget = false;        // stop the target at the loop point instead of letting it run on
+};
 
 /** One VST3 parameter a fade cue drives on the target's insert chain. */
 struct ParamFade
@@ -182,10 +191,15 @@ struct Cue
     AudioCueData audio;
     CueType type = CueType::audio;
     FadeCueData fade;                // used when type == fade
+    DevampCueData devamp;            // used when type == devamp
     SecondTriggerAction secondTrigger = SecondTriggerAction::hardStopRestart;
 
-    bool isAudio() const noexcept { return type == CueType::audio; }
-    bool isFade() const noexcept  { return type == CueType::fade; }
+    bool isAudio() const noexcept  { return type == CueType::audio; }
+    bool isFade() const noexcept   { return type == CueType::fade; }
+    bool isDevamp() const noexcept { return type == CueType::devamp; }
+    /** Fade / devamp cues point at another cue. */
+    juce::Uuid targetId() const noexcept { return isFade() ? fade.targetId : isDevamp() ? devamp.targetId : juce::Uuid::null(); }
+    void setTargetId (const juce::Uuid& newTarget) noexcept { if (isFade()) fade.targetId = newTarget; else if (isDevamp()) devamp.targetId = newTarget; }
 
     static constexpr int maxFadeMs = 600000;     // 10 minutes
     static constexpr double minGainDb = -60.0;   // treated as silence

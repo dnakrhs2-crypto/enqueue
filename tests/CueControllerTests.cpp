@@ -729,6 +729,39 @@ public:
             document.cues.setSelectedIndex (0);
         }
 
+        beginTest ("a devamp cue ends the target's loop and starts the next cue at the loop point");
+        {
+            document.cues.update (0, [] (Cue& c) { c.audio.endSeconds = 0.5; c.audio.infiniteLoop = true; });
+            Cue devamp;
+            devamp.type = CueType::devamp;
+            devamp.name = "devamp";
+            devamp.devamp.targetId = a.id;
+            devamp.devamp.startNextCue = true;
+            devamp.devamp.stopTarget = true;
+            document.cues.add (devamp, 1);   // a, devamp, b
+
+            document.cues.setPlayheadIndex (0);
+            expect (controller.go() == CueController::GoResult::started);   // a loops forever
+            controller.goKeyReleased();
+            render (engine, scheduler, now, out, 10);
+            expect (engine.isPlaying (a.id));
+
+            expect (controller.go() == CueController::GoResult::started);   // devamp fires
+            controller.goKeyReleased();
+            expect (! engine.isPlaying (b.id));                              // not yet: b waits for the loop point
+            expectEquals (controller.getNumPending(), 1);
+            render (engine, scheduler, now, out, 60);                        // past the end of the pass (0.5 s)
+            expect (! engine.isPlaying (a.id));                              // stopped at the loop point
+            expect (engine.isPlaying (b.id));                                // and b started there
+            stopEverything();
+
+            // no target playing: the devamp fails with a message
+            expect (controller.trigger (document.cues.get (1)) == CueController::GoResult::failed);
+            expect (statuses[statuses.size() - 1].isNotEmpty());
+            document.cues.remove (document.cues.indexOf (devamp.id));
+            document.cues.update (0, [] (Cue& c) { c.audio.endSeconds = -1.0; c.audio.infiniteLoop = false; });
+        }
+
         beginTest ("played cues are remembered for the second colour until reset");
         {
             controller.resetAll();

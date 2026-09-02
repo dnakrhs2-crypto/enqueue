@@ -391,12 +391,24 @@ namespace
 
         if (! c.patchId.isNull())
             obj->setProperty ("patch", c.patchId.toString());
-        obj->setProperty ("type", c.type == CueType::fade ? "fade" : "audio");
+        obj->setProperty ("type", c.type == CueType::fade ? "fade" : c.type == CueType::devamp ? "devamp" : "audio");
 
         if (c.type == CueType::fade)
+        {
             obj->setProperty ("fade", fadeToVar (c.fade));
+        }
+        else if (c.type == CueType::devamp)
+        {
+            auto* d = new juce::DynamicObject();
+            d->setProperty ("target", c.devamp.targetId.isNull() ? juce::String() : c.devamp.targetId.toString());
+            d->setProperty ("startNextCue", c.devamp.startNextCue);
+            d->setProperty ("stopTarget", c.devamp.stopTarget);
+            obj->setProperty ("devamp", juce::var (d));
+        }
         else
+        {
             obj->setProperty ("audio", audioToVar (c.audio));
+        }
 
         obj->setProperty ("secondTrigger", secondTriggerToText (c.secondTrigger));
         obj->setProperty ("plugins", pluginsToVar (c.plugins));
@@ -490,8 +502,18 @@ namespace
         c.patchId         = juce::Uuid (v.getProperty ("patch", "").toString());
         c.plugins         = pluginsFromVar (v.getProperty ("plugins", juce::var()));
         c.secondTrigger   = secondTriggerFromText (v.getProperty ("secondTrigger", "hardStopRestart").toString());
-        c.type            = v.getProperty ("type", "audio").toString() == "fade" ? CueType::fade : CueType::audio;
+        {
+            const auto typeText = v.getProperty ("type", "audio").toString();
+            c.type = typeText == "fade" ? CueType::fade : typeText == "devamp" ? CueType::devamp : CueType::audio;
+        }
         c.fade            = fadeFromVar (v.getProperty ("fade", juce::var()));
+
+        if (const auto d = v.getProperty ("devamp", juce::var()); d.getDynamicObject() != nullptr)
+        {
+            c.devamp.targetId = juce::Uuid (d.getProperty ("target", "").toString());
+            c.devamp.startNextCue = (bool) d.getProperty ("startNextCue", true);
+            c.devamp.stopTarget = (bool) d.getProperty ("stopTarget", false);
+        }
 
         const auto audio = v.getProperty ("audio", juce::var());
 

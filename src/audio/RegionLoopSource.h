@@ -65,7 +65,7 @@ public:
     void setSlices (const std::vector<SliceMarker>& markers, int firstSliceCount = 1);
     /** Ends the endless run (or the endless sequence) that 'virtualPosition' is in after its current pass
         (devamp: "finish this loop"). Message thread. */
-    void finishCurrentPass (juce::int64 virtualPosition) noexcept;
+    void finishCurrentPass (juce::int64 virtualPosition, bool stopAfterThisPass = false) noexcept;
     /** Compatibility: ends run 0 after the given 0-based pass. */
     void setEndAfterPass (int pass) noexcept;
     /** Set before playback starts; not read live. */
@@ -78,6 +78,8 @@ public:
     /** True while the timeline has no end yet (an unresolved endless run or sequence). */
     bool isInfinite() const noexcept;
     Location locate (juce::int64 virtualPosition) const noexcept;
+    /** Length in file samples of one pass of run 'index' (0 when out of range). */
+    juce::int64 getRunLength (int index) const noexcept;
     /** Pass index (within its run) of a virtual position. */
     int getPassIndexFor (juce::int64 position) const noexcept { return locate (position).pass; }
     /** File offset from the region start of a virtual position. */
@@ -137,6 +139,7 @@ private:
     int editFirstSliceCount = 1;
     std::vector<int> resolvedCounts;   // per run: a count fixed by finishCurrentPass (-1 = untouched)
     int resolvedSequenceCount = -1;
+    int stopAfterRun = -1;             // devamp with stop: every run after this one is skipped
 
     // published layout (seqlock)
     Layout published;

@@ -66,9 +66,13 @@ target_sources(GoCueCore INTERFACE
     ${CMAKE_CURRENT_SOURCE_DIR}/src/audio/AudioEngine.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/audio/PluginChain.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/audio/PluginHost.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/audio/MediaFoundationAudioFormat.cpp)
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/audio/MediaFoundationAudioFormat.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/audio/StretchSource.cpp)
 
-target_include_directories(GoCueCore INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_include_directories(GoCueCore INTERFACE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+    ${CMAKE_CURRENT_SOURCE_DIR}/third_party/signalsmith-stretch/include   # time-stretch (MIT, vendored headers)
+    ${CMAKE_CURRENT_SOURCE_DIR}/third_party/signalsmith-linear/include)
 
 target_compile_definitions(GoCueCore INTERFACE
     JUCE_WEB_BROWSER=0

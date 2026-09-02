@@ -677,13 +677,13 @@ bool AudioEngine::isPaused (const juce::Uuid& cueId) const
     return false;
 }
 
-void AudioEngine::finishCurrentPass (const juce::Uuid& cueId)
+void AudioEngine::finishCurrentPass (const juce::Uuid& cueId, bool stopAfter)
 {
     const juce::ScopedLock sl (lock);
 
     for (auto& p : players)
         if (p->getCueId() == cueId && ! p->hasFinished())
-            p->requestFinishCurrentPass();
+            p->requestFinishCurrentPass (stopAfter);
 }
 
 void AudioEngine::setLiveRegion (const juce::Uuid& cueId, double startSeconds, double endSeconds)
@@ -711,6 +711,27 @@ void AudioEngine::setLiveGainDb (const juce::Uuid& cueId, double gainDb)
     for (auto& p : players)
         if (p->getCueId() == cueId && ! p->hasFinished())
             p->setLiveGainDb (gainDb);
+}
+
+double AudioEngine::getSecondsToPassEnd (const juce::Uuid& cueId) const
+{
+    const juce::ScopedLock sl (lock);
+
+    for (auto& p : players)
+    {
+        if (p->getCueId() != cueId || p->hasFinished() || p->isLoadedNotStarted())
+            continue;
+
+        const auto end = p->getCurrentPassEnd();
+
+        if (end < 0)
+            return -1.0;
+
+        const double left = (double) end - p->getVirtualPosition();
+        return juce::jmax (0.0, left) / p->getFileSampleRate() / juce::jmax (AudioCueData::minRate, p->getLiveRate());
+    }
+
+    return -1.0;
 }
 
 void AudioEngine::setLiveSlices (const juce::Uuid& cueId, const std::vector<Slice>& slices, int firstSliceCount)

@@ -3,6 +3,7 @@
 #include "audio/FadeEnvelope.h"
 #include "audio/PluginChain.h"
 #include "audio/RegionLoopSource.h"
+#include "audio/StretchSource.h"
 #include "model/Cue.h"
 
 #include <juce_audio_devices/juce_audio_devices.h>
@@ -70,8 +71,10 @@ public:
     /** De-clicked pause: the position freezes; plugins keep running on silence. Any thread. */
     void requestPause() noexcept;
     void requestResume() noexcept;
-    /** Finish the pass that is audible now, then end (devamp of a looping cue). Message thread. */
-    void requestFinishCurrentPass() noexcept;
+    /** Finish the pass that is audible now, then go on with what follows (or stop there). Message thread. */
+    void requestFinishCurrentPass (bool stopAfter = false) noexcept;
+    /** Virtual position (file samples on the timeline) where the current pass ends; -1 when unknown. Message thread. */
+    juce::int64 getCurrentPassEnd() const noexcept;
 
     /** Live trim from the inspector. The audible file position is kept (the pass / offset are
         re-derived from the new region); a new end before that position ends the cue at once (with the
@@ -123,6 +126,8 @@ public:
     /** Absolute position inside the file (for the waveform playhead). */
     double getFilePositionSeconds() const noexcept { return filePositionSeconds.load (std::memory_order_relaxed); }
     int getPassIndex() const noexcept             { return passIndex.load (std::memory_order_relaxed); }
+    double getVirtualPosition() const noexcept    { return virtualPosition.load (std::memory_order_relaxed); }
+    double getFileSampleRate() const noexcept     { return fileSampleRate; }
 
     juce::int64 getStartOrder() const noexcept    { return startOrder; }
     void setStartOrder (juce::int64 order) noexcept { startOrder = order; }
@@ -136,7 +141,13 @@ public:
 
 private:
     void updatePositionInfo (double rate) noexcept;
-    double ratioFor (double rate) const noexcept { return fileSampleRate * rate / currentSampleRate; }
+    /** Resampler ratio: with pitch preserved the stretcher takes the rate, the resampler only the sample-rate change. */
+    double ratioFor (double rate) const noexcept { return fileSampleRate * (stretch != nullptr ? 1.0 : rate) / currentSampleRate; }
+    /** File samples consumed per output sample at 'rate'. */
+    double advanceFor (double rate) const noexcept { return fileSampleRate * effectiveRate (rate) / currentSampleRate; }
+    double effectiveRate (double rate) const noexcept { return stretch != nullptr ? juce::jlimit (StretchSource::minRate, StretchSource::maxRate, rate) : rate; }
+    /** Moves the whole chain (read-ahead, stretcher, source) to a virtual position; adopted by the audio thread. */
+    void jumpTo (juce::int64 newPosition) noexcept;
     void computeGains (const LevelMatrix& levels, const TrimLevels& trim, std::vector<float>& out) const;
     void processChain (PluginChain& chain, juce::AudioBuffer<float>& fullBuffer, int numSamples) noexcept;
     /** Copies newly published gains into targetGains (seqlock read; keeps the old ones on a torn read). */
@@ -154,6 +165,7 @@ private:
     juce::String errorMessage;
     std::unique_ptr<RegionLoopSource> source;
     std::unique_ptr<juce::BufferingAudioSource> readAhead;     // null on the synchronous (test) path
+    std::unique_ptr<StretchSource> stretch;                    // only when the cue preserves pitch
     std::unique_ptr<juce::ResamplingAudioSource> resampler;
     FadeEnvelope envelope;        // stop fades and de-clicks
     FadeEnvelope pauseGate;       // pause / resume ramps
