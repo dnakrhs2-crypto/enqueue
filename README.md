@@ -14,7 +14,7 @@ Windows용 오디오 큐 플레이어. QLab의 오디오 기능을 단계적으�
 - **마이크 큐**: 장치 입력 채널을 레벨 매트릭스·인서트·패치로 보냄(정지할 때까지). 프로젝트에 마이크 큐가 있으면 필요한 입력을 자동으로 엶
 - 큐마다: 파형 위 **트림(시작/끝)**, **재생 횟수 / 무한 루프**, **속도**, **통합 페이드 엔벨로프**(파형 위에 점을 찍어 그리는 페이드), 정지 페이드(ms), 게인(dB, 재생 중에도 즉시 반영), 2차 트리거 규칙
 - 여러 큐 동시 재생(믹서), 큐마다 독립 VST3 인서트 체인 + 마스터 버스 체인, 플러그인 에디터 창, 상태 저장/복원
-- 일시정지/재개, 전체 페이드 정지(기본 2초), 더블 GO 방지, 실행 취소/다시 실행(200단계)
+- 일시정지/재개, 전체 페이드 정지(기본 1초), 더블 GO 방지, 실행 취소/다시 실행(200단계)
 - **큐 리스트**(QLab식): 상태 아이콘 · 번호 · 이름 · 파일 · 프리웨이트 · 길이 · 포스트웨이트 · 진행 열, 큐 색, 깃발, 아밍(비활성이면 건너뛰기), 자동 로드, 메모. 다중 선택·드래그 순서 변경·셀 바로 편집·우클릭 메뉴·행 크기
 - **진행(시퀀스)**: 프리웨이트/포스트웨이트, 자동 계속 / 자동 팔로우, 플레이헤드(선택과 분리 또는 잠금). **트리거**: 큐 핫키, 시간(벽시계) 트리거, 시작 시 다른 큐 페이드 정지, 덕(-dB)
 - 로드(L) / 시간으로 로드(Ctrl+T), 활성 큐 패널(Ctrl+L: 일시정지·스크럽·페이드 정지), 쇼 모드(편집 잠금), 경고 목록 + 없어진 파일 다시 찾기
@@ -211,9 +211,9 @@ tools        release.py (릴리스 파이프라인), make_icon.py (아이콘)
               "plugins": [ { "format": "VST3", "name": "3 Band EQ", "fileOrIdentifier": "C:/.../3BandEQ.vst3",
                              "uniqueId": 1662645128, "description": "<PLUGIN .../>", "state": "base64", "bypassed": false } ] } ],
   "master": { "plugins": [] },
-  "patches": [ { "id": "patch-uuid", "name": "기본 패치", "cueOutputs": 8, "cueOutputNames": ["", "..."], "routing": [[0, "-inf"], ["-inf", 0]],
+  "patches": [ { "id": "patch-uuid", "name": "기본 패치", "cueOutputs": 16, "cueOutputNames": ["", "..."], "routing": [[0, "-inf"], ["-inf", 0]],
                  "mainDb": 0, "stereoPairs": [false, "..."], "cueOutputInserts": [[], "..."], "deviceOutputInserts": [] } ],
-  "settings": { "doubleGoSeconds": 0, "requireKeyUp": false, "panicSeconds": 2, "autoNumber": true, "numberIncrement": 1,
+  "settings": { "doubleGoSeconds": 0, "requireKeyUp": false, "panicSeconds": 1, "autoNumber": true, "numberIncrement": 1,
                 "lockPlayheadToSelection": true, "startOnOpen": false, "startOnCloseCue": "", "rowSize": 1,
                 "hasCueTemplate": false, "cueTemplate": { "...": "큐 객체" },
                 "autoBackup": true, "backupIntervalSeconds": 60, "...": "..." } }

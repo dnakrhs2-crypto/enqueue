@@ -23,6 +23,8 @@ namespace gocue
 
 namespace
 {
+    void focusAlertEditor (juce::AlertWindow& alert, const juce::String& editorName);   // defined further down
+
     constexpr int menuBarHeight = 30;   // 17 pt menu titles
     constexpr int transportHeight = 148;
     constexpr int footerHeight = 30;
@@ -132,7 +134,7 @@ MainComponent::MainComponent (AudioEngine& e, AppSettings& s, juce::ApplicationC
     cart.onFilesDropped = [this] (const juce::StringArray& files, int slot) { addCuesFromFiles (files, slot); };
     cart.onStop = [this] (const juce::Uuid& id) { controller.stopCue (id, true); };   // pending follows go too
     table.isNumberTaken = [this] (const juce::String& number, const juce::Uuid& exceptId) { return document.isNumberTaken (number, exceptId); };
-    document.onBeforeContainerSwitch = [this] { table.finishEditing(); };   // a half-typed cell belongs to the list that is leaving
+    document.onBeforeContainerSwitch = [this] { table.finishEditing(); inspector.finishEditing(); };   // a half-typed field belongs to the list that is leaving
     table.onEditCues = [this] (const std::vector<int>& rows, const juce::String& name, const std::function<void (Cue&)>& mutator)
     {
         editCues (rows, name, mutator);
@@ -197,13 +199,14 @@ MainComponent::MainComponent (AudioEngine& e, AppSettings& s, juce::ApplicationC
             return;
 
         const double length = cue->regionLength();
-        const double offset = juce::jlimit (0.0, juce::jmax (0.0, length), fileSeconds - cue->regionStart());
+        const double offset = length > 0.0 ? juce::jlimit (0.0, length, fileSeconds - cue->regionStart())
+                                           : juce::jmax (0.0, fileSeconds - cue->regionStart());
         AudioEngine::LiveState live;
 
         if (engine.getLiveState (cue->id, live))
-            engine.seekToFraction (cue->id, length > 0.0 ? offset / length : 0.0);   // running: jump there
+            engine.seekToFileSeconds (cue->id, cue->regionStart() + offset);   // running: jump there, inside the current pass
         else
-            controller.previewFrom (offset);                                          // otherwise play from there
+            controller.previewFrom (offset);                                   // otherwise play from there
     };
     inspector.onResetCue = [this] { controller.resetSelected(); };
 
@@ -322,6 +325,7 @@ void MainComponent::showPanicSecondsMenu (juce::Point<int> screenPosition)
             if (safeThis != nullptr && r == 1)
                 safeThis->applyPanicSeconds (alert->getTextEditorContents ("seconds").getDoubleValue());
         }), true);
+        focusAlertEditor (*alert, "seconds");
     });
 }
 

@@ -584,6 +584,9 @@ bool AudioEngine::play (const Cue& cue, const PlayOptions& options, juce::String
                     }
                 }
 
+                if (options.startSeconds > 0.0)
+                    existing->seekToFileSeconds (cue.regionStart() + options.startSeconds);   // an explicit start place wins over the loaded one
+
                 existing->setStartOrder (++startCounter);
                 existing->start();
                 return true;
@@ -980,6 +983,15 @@ void AudioEngine::seekToFraction (const juce::Uuid& cueId, double fraction)
     for (auto& p : players)
         if (p->getCueId() == cueId && ! p->hasFinished() && ! p->isLoadedNotStarted())
             p->seekToFraction (fraction);
+}
+
+void AudioEngine::seekToFileSeconds (const juce::Uuid& cueId, double fileSeconds)
+{
+    const juce::ScopedLock sl (lock);
+
+    for (auto& p : players)
+        if (p->getCueId() == cueId && ! p->hasFinished() && ! p->isLoadedNotStarted())
+            p->seekToFileSeconds (fileSeconds);
 }
 
 void AudioEngine::setDuckDb (const juce::Uuid& cueId, double duckDb, double rampSeconds)

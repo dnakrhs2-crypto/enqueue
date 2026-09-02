@@ -422,7 +422,9 @@ void LevelMatrixComponent::mouseDown (const juce::MouseEvent& e)
 
     if (activeMode && e.mods.isAltDown())
     {
-        toggleActive (cell);
+        if (e.getNumberOfClicks() == 1)   // the second click of a double-click must not toggle it back
+            toggleActive (cell);
+
         return;
     }
 
@@ -492,6 +494,10 @@ void LevelMatrixComponent::mouseDoubleClick (const juce::MouseEvent& e)
         return;
 
     selected = cell;
+
+    if (activeMode && e.mods.isAltDown())
+        return;   // Alt + click already toggled the active state: no level change in this matrix
+
     const bool unity = e.mods.isAltDown();   // Alt: 0 dB whatever the default (a crosspoint's default may be silence)
     forEachInGang (cell, [this, unity] (const CellRef& c) { setValue (c, unity ? 0.0 : defaultValue (c)); });   // a gang resets together
     repaint();

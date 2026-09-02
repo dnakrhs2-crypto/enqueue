@@ -94,6 +94,9 @@ public:
     void setLiveRegion (double startSeconds, double endSeconds) noexcept;
     /** Jumps to a fraction (0..1) of the cue's total length (scrubbing in the active-cues panel). Message thread. */
     void seekToFraction (double fraction) noexcept;
+    /** Jumps to a file position (seconds from the file start) inside the current pass: loops and slices keep their
+        place, an endless loop works too. False when the position is not played by this cue. */
+    bool seekToFileSeconds (double fileSeconds) noexcept;
     /** Live slice edit: the audible file position is kept. Message thread. */
     void setLiveSlices (const std::vector<Slice>& slices, int firstSliceCount) noexcept;
     /** Live playback rate (varispeed). Any thread. */

@@ -135,6 +135,8 @@ public:
     juce::int64 getStartOrder (const juce::Uuid& cueId) const;
     /** Scrub: jump to a fraction (0..1) of the cue's total length. */
     void seekToFraction (const juce::Uuid& cueId, double fraction);
+    /** Jumps the running instances of a cue to a file position (seconds from the file start), inside their current pass. */
+    void seekToFileSeconds (const juce::Uuid& cueId, double fileSeconds);
     /** Duck / boost (dB on top of the cue gain) reached over 'rampSeconds'; 0 = none. */
     void setDuckDb (const juce::Uuid& cueId, double duckDb, double rampSeconds);
     double getDuckDb (const juce::Uuid& cueId) const;

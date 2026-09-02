@@ -101,7 +101,15 @@ CuePlayer::CuePlayer (const Cue& c, juce::AudioFormatManager& formats,
     }
 
     startOffsetSeconds = std::max (0.0, startOffset);
-    startOffsetSamples = std::max<juce::int64> (0, (juce::int64) std::llround (startOffsetSeconds * fileSampleRate));
+
+    {
+        // 'startOffset' is file seconds after the region start: place it in the first pass of the layout
+        // (slices / a skipped first slice make virtual and file positions differ)
+        const auto fileSample = (juce::int64) std::llround ((cue.regionStart() + startOffsetSeconds) * fileSampleRate);
+        const auto virtualPos = regionSource->virtualPositionFor (fileSample, RegionLoopSource::Location{});
+        startOffsetSamples = std::max<juce::int64> (0, virtualPos);
+    }
+
     regionSource->setNextReadPosition (startOffsetSamples);
     source = std::move (regionSource);
 
@@ -298,6 +306,25 @@ void CuePlayer::seekToFraction (double fraction) noexcept
     const double elapsedSamples = ((double) newPos / fileSampleRate / rate - startOffsetSeconds) * currentSampleRate;
     pendingElapsedSamples.store (std::max (0.0, elapsedSamples), std::memory_order_relaxed);
     jumpTo (newPos);
+}
+
+bool CuePlayer::seekToFileSeconds (double fileSeconds) noexcept
+{
+    if (source == nullptr || micMode)
+        return false;
+
+    const auto fileSample = (juce::int64) std::llround (juce::jmax (0.0, fileSeconds) * fileSampleRate);
+    const auto where = source->locationFor (controlPosition());          // the pass we are in now
+    const auto newPos = source->virtualPositionFor (fileSample, where);   // that file place inside this pass
+
+    if (newPos < 0)
+        return false;
+
+    const double rate = std::max (AudioCueData::minRate, effectiveRate (liveRate.load (std::memory_order_relaxed)));
+    const double elapsedSamples = ((double) newPos / fileSampleRate / rate - startOffsetSeconds) * currentSampleRate;
+    pendingElapsedSamples.store (std::max (0.0, elapsedSamples), std::memory_order_relaxed);
+    jumpTo (newPos);
+    return true;
 }
 
 void CuePlayer::setLiveRate (double rate) noexcept

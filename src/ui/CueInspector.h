@@ -55,6 +55,9 @@ public:
     /** Called after a tab switch (click or cue-type rebuild) stole the keyboard focus into a panel field;
         the owner puts it back on the cue table so Space still means GO. */
     std::function<void()> onReturnFocus;
+    /** Commits (or drops) whatever field is being edited, synchronously: called before the active list changes so a
+        half-typed number lands on the cue it was typed for. */
+    void finishEditing();
 
     void resized() override;
     void paint (juce::Graphics& g) override;

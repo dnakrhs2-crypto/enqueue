@@ -86,6 +86,8 @@ public:
     juce::int64 getRunLength (int index) const noexcept;
     /** Pass index (within its run) of a virtual position. */
     int getPassIndexFor (juce::int64 position) const noexcept { return locate (position).pass; }
+    /** Where a virtual position falls (run, pass, file sample). */
+    Location locationFor (juce::int64 position) const noexcept { return locate (position); }
     /** File offset from the region start of a virtual position. */
     juce::int64 getOffsetFor (juce::int64 position) const noexcept;
     /** The first virtual position that plays 'fileSample' in the run pass / sequence pass closest to 'where'

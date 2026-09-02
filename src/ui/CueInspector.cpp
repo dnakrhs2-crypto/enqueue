@@ -3145,6 +3145,19 @@ void CueInspector::cueChanged (int index)
         refresh();
 }
 
+void CueInspector::finishEditing()
+{
+    auto* focused = juce::Component::getCurrentlyFocusedComponent();
+
+    if (focused == nullptr || ! isParentOf (focused))
+        return;
+
+    if (onReturnFocus)
+        onReturnFocus();            // the focus-lost commit runs now, while the fields still show this list's cue
+    else
+        focused->giveAwayKeyboardFocus();
+}
+
 void CueInspector::refreshPlugins()
 {
     effects->chainStrip.refresh();

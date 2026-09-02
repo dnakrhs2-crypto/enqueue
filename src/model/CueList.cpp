@@ -567,18 +567,27 @@ int CueList::placeByNumber (int index)
     const int end = parent >= 0 ? subtreeEnd (parent) : size();
     const auto number = cues[(size_t) index].number;
 
-    // in front of the first sibling with a greater number, else after the last sibling
-    int insertIndex = end;
+    // right after the last sibling with a smaller number; without one, in front of the first with a greater number
+    // (siblings the user ordered by hand keep their order: only this cue moves)
+    int lastSmaller = -1, firstGreater = -1;
 
     for (int i = begin; i < end; i = subtreeEnd (i))
-        if (i != index && CueNumbering::compare (cues[(size_t) i].number, number) > 0)
-        {
-            insertIndex = i;
-            break;
-        }
+    {
+        if (i == index)
+            continue;
 
-    if (insertIndex == index || insertIndex == subtreeEnd (index))
-        return index;   // already there
+        const int c = CueNumbering::compare (cues[(size_t) i].number, number);
+
+        if (c < 0)
+            lastSmaller = i;
+        else if (c > 0 && firstGreater < 0)
+            firstGreater = i;
+    }
+
+    const int insertIndex = lastSmaller >= 0 ? subtreeEnd (lastSmaller) : (firstGreater >= 0 ? firstGreater : -1);
+
+    if (insertIndex < 0 || insertIndex == index || insertIndex == subtreeEnd (index))
+        return index;   // nothing to compare with, or already there
 
     const auto block = withSubtrees ({ index });
     int before = 0;

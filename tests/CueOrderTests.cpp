@@ -65,6 +65,26 @@ public:
             expectEquals (numbers (list), juce::String ("0.5,,2.5,3,5"));
         }
 
+        beginTest ("placeByNumber leaves hand-ordered siblings alone and moves only the renumbered cue");
+        {
+            CueList list;
+
+            for (auto n : { "3", "1", "2" })
+                list.add (make (n));
+
+            list.update (2, [] (Cue& c) { c.number = "2.5"; });   // still right after "1", the last smaller sibling
+            expectEquals (list.placeByNumber (2), 2);
+            expectEquals (numbers (list), juce::String ("3,1,2.5"));
+
+            list.update (1, [] (Cue& c) { c.number = "5"; });     // past every sibling: to the end
+            expectEquals (list.placeByNumber (1), 2);
+            expectEquals (numbers (list), juce::String ("3,2.5,5"));
+
+            list.update (2, [] (Cue& c) { c.number = "0.1"; });   // smaller than all: in front of the first greater
+            expectEquals (list.placeByNumber (2), 0);
+            expectEquals (numbers (list), juce::String ("0.1,3,2.5"));
+        }
+
         beginTest ("placeByNumber keeps a child inside its group and moves a group with its children");
         {
             CueList list;
