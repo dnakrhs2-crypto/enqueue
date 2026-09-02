@@ -1,5 +1,7 @@
 #include "audio/AudioEngine.h"
 
+#include "audio/MediaFoundationAudioFormat.h"
+
 namespace gocue
 {
 
@@ -7,6 +9,9 @@ AudioEngine::AudioEngine (int readAhead)
     : readAheadSamples (juce::jmax (0, readAhead))
 {
     formatManager.registerBasicFormats();
+
+    if (MediaFoundationAudioFormat::isAvailable())
+        formatManager.registerFormat (new MediaFoundationAudioFormat(), false);   // AAC / M4A / MP4 audio
 
     mixBuffer.setSize (2, blockSize.load());
     playerBuffer.setSize (CuePlayer::maxChannels, blockSize.load());

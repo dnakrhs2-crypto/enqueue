@@ -63,7 +63,8 @@ target_sources(GoCueCore INTERFACE
     ${CMAKE_CURRENT_SOURCE_DIR}/src/audio/CuePlayer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/audio/AudioEngine.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/audio/PluginChain.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/audio/PluginHost.cpp)
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/audio/PluginHost.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/audio/MediaFoundationAudioFormat.cpp)
 
 target_include_directories(GoCueCore INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 
@@ -105,7 +106,8 @@ target_link_libraries(GoCueCore INTERFACE
     juce::juce_gui_basics
     juce::juce_gui_extra
     juce::juce_recommended_config_flags
-    juce::juce_recommended_warning_flags)
+    juce::juce_recommended_warning_flags
+    mfplat mfreadwrite mfuuid propsys ole32)   # Media Foundation AAC / M4A reader
 
 # ---------------------------------------------------------------------------
 # Application
