@@ -149,12 +149,24 @@ void AudioEngine::forEachPatchChain (Fn&& fn) const
     }
 }
 
-juce::StringArray AudioEngine::setPatches (const std::vector<AudioPatch>& patches)
+juce::StringArray AudioEngine::setPatches (const std::vector<AudioPatch>& patches, bool applySavedStates)
 {
     juce::StringArray errors;
     const auto factory = makePluginFactory();
     std::vector<std::unique_ptr<PatchRuntime>> next;
     std::vector<std::unique_ptr<PatchRuntime>> fresh;   // brand-new runtimes: buffers made outside the lock
+    next.reserve (patches.size());
+    fresh.reserve (patches.size());
+
+    // Chains that a live runtime is missing are built here and only put into its map under the lock:
+    // the audio thread walks those maps.
+    struct PendingChain { PatchRuntime* runtime; bool device; int index; std::unique_ptr<PluginChain> chain; };
+    std::vector<PendingChain> pendingChains;
+
+    // Sanitised copies and routing tables are made outside the lock and swapped in.
+    struct Prepared { AudioPatch patch; std::vector<float> routing; };
+    std::vector<Prepared> prepared;
+    prepared.reserve (patches.size());
 
     // Chains are (re)built outside the audio lock: plugin creation is slow.
     for (const auto& patch : patches)
@@ -171,7 +183,7 @@ juce::StringArray AudioEngine::setPatches (const std::vector<AudioPatch>& patche
             prepareRuntimeBuffers (*target);
         }
 
-        auto restoreChains = [&] (std::map<int, std::unique_ptr<PluginChain>>& chains, const std::vector<std::vector<PluginSlotState>>& saved)
+        auto restoreChains = [&] (std::map<int, std::unique_ptr<PluginChain>>& chains, const std::vector<std::vector<PluginSlotState>>& saved, bool device)
         {
             for (int i = 0; i < (int) saved.size(); ++i)
             {
@@ -186,25 +198,49 @@ juce::StringArray AudioEngine::setPatches (const std::vector<AudioPatch>& patche
                     auto chain = std::make_unique<PluginChain>();
                     chain->setListener (chainListener);
                     chain->prepare (getSampleRate(), getBlockSize());
-                    it = chains.emplace (i, std::move (chain)).first;
+                    errors.addArray (chain->restore (states, factory));
+
+                    if (existing == nullptr)
+                        chains.emplace (i, std::move (chain));                          // not visible to the audio thread yet
+                    else
+                        pendingChains.push_back ({ target, device, i, std::move (chain) });   // inserted under the lock below
+
+                    continue;
                 }
 
                 if (! it->second->matchesStructure (states))
                     errors.addArray (it->second->restore (states, factory));
+                else if (applySavedStates)
+                    it->second->applyStates (states);   // project open: the file's parameters win over the live ones
             }
         };
 
-        restoreChains (target->cueOutputChains, patch.cueOutputInserts);
-        restoreChains (target->deviceOutputChains, patch.deviceOutputInserts);
+        restoreChains (target->cueOutputChains, patch.cueOutputInserts, false);
+        restoreChains (target->deviceOutputChains, patch.deviceOutputInserts, true);
+
+        Prepared p;
+        p.patch = patch;
+        p.patch.sanitise();
+        PatchRuntime scratch;
+        scratch.patch = p.patch;
+        computeRouting (scratch, p.routing);
+        prepared.push_back (std::move (p));
     }
 
     std::vector<std::unique_ptr<PatchRuntime>> dead;
+    dead.reserve (patchRuntimes.size());
+    std::vector<AudioPatch> oldPatches;   // the runtimes' previous patch copies die outside the lock
+    oldPatches.reserve (patches.size());
 
     {
         const juce::ScopedLock sl (lock);
 
-        for (const auto& patch : patches)
+        for (auto& pc : pendingChains)
+            (pc.device ? pc.runtime->deviceOutputChains : pc.runtime->cueOutputChains).emplace (pc.index, std::move (pc.chain));
+
+        for (size_t i = 0; i < patches.size(); ++i)
         {
+            const auto& patch = patches[i];
             std::unique_ptr<PatchRuntime> r;
 
             for (auto& candidate : patchRuntimes)
@@ -220,11 +256,13 @@ juce::StringArray AudioEngine::setPatches (const std::vector<AudioPatch>& patche
                 continue;
 
             const bool resize = r->patch.numCueOutputs != patch.numCueOutputs || r->routingOutputs != juce::jmax (2, getNumDeviceOutputs());
-            r->patch = patch;
-            r->patch.sanitise();
+            std::swap (r->patch, prepared[i].patch);
+            oldPatches.push_back (std::move (prepared[i].patch));
 
             if (resize)
                 prepareRuntimeBuffers (*r);   // rare (output count changed): allocation under the lock is accepted
+            else if (prepared[i].routing.size() == r->targetRouting.size())
+                r->targetRouting.swap (prepared[i].routing);
             else
                 computeRouting (*r, r->targetRouting);
 
@@ -253,6 +291,7 @@ juce::StringArray AudioEngine::setPatches (const std::vector<AudioPatch>& patche
     }
 
     dead.clear();   // removed patches' plugin instances are released outside the audio lock
+    oldPatches.clear();
     return errors;
 }
 
@@ -281,11 +320,13 @@ void AudioEngine::updatePatchLevels (const AudioPatch& patch)
     std::vector<float> routing;
     computeRouting (scratch, routing);
 
-    const juce::ScopedLock sl (lock);
-    r->patch = scratch.patch;
+    {
+        const juce::ScopedLock sl (lock);
+        std::swap (r->patch, scratch.patch);   // O(1): the previous copy is destroyed after the lock
 
-    if (routing.size() == r->targetRouting.size())
-        r->targetRouting = routing;
+        if (routing.size() == r->targetRouting.size())
+            r->targetRouting.swap (routing);
+    }
 }
 
 PluginChain& AudioEngine::getPatchCueOutputChain (const juce::Uuid& patchId, int cueOutput)
@@ -296,18 +337,21 @@ PluginChain& AudioEngine::getPatchCueOutputChain (const juce::Uuid& patchId, int
     if (r == nullptr)
         return masterChain;   // never expected; keeps the reference valid
 
-    auto& slot = r->cueOutputChains[cueOutput];
+    if (const auto it = r->cueOutputChains.find (cueOutput); it != r->cueOutputChains.end())
+        return *it->second;
 
-    if (slot == nullptr)
+    // built outside the lock, put into the map (which the audio thread walks) under it
+    auto chain = std::make_unique<PluginChain>();
+    chain->setListener (chainListener);
+    chain->prepare (getSampleRate(), getBlockSize());
+    PluginChain* raw = chain.get();
+
     {
-        auto chain = std::make_unique<PluginChain>();
-        chain->setListener (chainListener);
-        chain->prepare (getSampleRate(), getBlockSize());
         const juce::ScopedLock sl (lock);
-        slot = std::move (chain);
+        r->cueOutputChains.emplace (cueOutput, std::move (chain));
     }
 
-    return *slot;
+    return *raw;
 }
 
 PluginChain* AudioEngine::findPatchCueOutputChain (const juce::Uuid& patchId, int cueOutput) const
@@ -329,18 +373,20 @@ PluginChain& AudioEngine::getPatchDeviceOutputChain (const juce::Uuid& patchId, 
     if (r == nullptr)
         return masterChain;
 
-    auto& slot = r->deviceOutputChains[deviceOutput];
+    if (const auto it = r->deviceOutputChains.find (deviceOutput); it != r->deviceOutputChains.end())
+        return *it->second;
 
-    if (slot == nullptr)
+    auto chain = std::make_unique<PluginChain>();
+    chain->setListener (chainListener);
+    chain->prepare (getSampleRate(), getBlockSize());
+    PluginChain* raw = chain.get();
+
     {
-        auto chain = std::make_unique<PluginChain>();
-        chain->setListener (chainListener);
-        chain->prepare (getSampleRate(), getBlockSize());
         const juce::ScopedLock sl (lock);
-        slot = std::move (chain);
+        r->deviceOutputChains.emplace (deviceOutput, std::move (chain));
     }
 
-    return *slot;
+    return *raw;
 }
 
 PluginChain* AudioEngine::findPatchDeviceOutputChain (const juce::Uuid& patchId, int deviceOutput) const
@@ -458,8 +504,12 @@ void AudioEngine::renderPatch (PatchRuntime& r, int numSamples) noexcept
 //==============================================================================
 bool AudioEngine::play (const Cue& cue, const PlayOptions& options, juce::String* errorMessage)
 {
+    const bool wantsAudition = options.audition || options.silent || ! options.patchOverride.isNull();
+
+    if (! wantsAudition)
     {
-        // a loaded instance is waiting: start it instead of opening the file again
+        // a loaded instance is waiting: start it instead of opening the file again (an audition needs its own
+        // routing / flag, so it starts a fresh instance and the loaded one is dropped below)
         const juce::ScopedLock sl (lock);
 
         for (auto& existing : players)
@@ -487,8 +537,12 @@ bool AudioEngine::play (const Cue& cue, const PlayOptions& options, juce::String
     if (options.silent)
         runtime = muteRuntime.get();
     else if (! options.patchOverride.isNull())
+    {
         if (auto* alternate = findRuntime (options.patchOverride))
             runtime = alternate;
+        else
+            runtime = muteRuntime.get();   // the alternate patch is gone: an audition must not reach the real outputs
+    }
 
     auto player = std::make_unique<CuePlayer> (cue, formatManager,
                                                readAheadSamples > 0 ? &readAheadThread : nullptr,
@@ -857,12 +911,14 @@ std::vector<AudioEngine::PlayingCue> AudioEngine::getPlayingCues() const
 bool AudioEngine::isAuditioning (const juce::Uuid& cueId) const
 {
     const juce::ScopedLock sl (lock);
+    const CuePlayer* newest = nullptr;
 
     for (auto& p : players)
-        if (p->getCueId() == cueId && ! p->hasFinished() && ! p->isLoadedNotStarted() && p->isAudition())
-            return true;
+        if (p->getCueId() == cueId && ! p->hasFinished() && ! p->isLoadedNotStarted())
+            if (newest == nullptr || p->getStartOrder() > newest->getStartOrder())
+                newest = p.get();   // a restart overlaps the old instance for a few ms: the newest one decides
 
-    return false;
+    return newest != nullptr && newest->isAudition();
 }
 
 juce::Uuid AudioEngine::getMostRecentlyStartedCue (bool ignoreFadingOut) const
@@ -1010,6 +1066,7 @@ void AudioEngine::prepare (double newSampleRate, int newBlockSize, int newNumDev
 
         mixBuffer.setSize (juce::jmax (2, getNumDeviceOutputs()), blockSize.load(), false, false, true);
         playerBuffer.setSize (CuePlayer::maxChannels, blockSize.load(), false, false, true);
+        deviceScratch.setSize (getNumDeviceOutputs() > 32 ? getNumDeviceOutputs() : 1, blockSize.load(), false, false, true);
 
         for (auto& r : patchRuntimes)
             prepareRuntimeBuffers (*r);
@@ -1117,8 +1174,29 @@ void AudioEngine::audioDeviceIOCallbackWithContext (const float* const*, int,
     if (numOutputChannels <= 0 || numSamples <= 0)
         return;
 
-    juce::AudioBuffer<float> output (outputChannelData, numOutputChannels, numSamples);
-    renderBlock (output, numSamples);
+    if (numOutputChannels <= 32)
+    {
+        juce::AudioBuffer<float> output (outputChannelData, numOutputChannels, numSamples);   // uses its inline channel table: no allocation
+        renderBlock (output, numSamples);
+        return;
+    }
+
+    // more channels than juce::AudioBuffer keeps inline: render into the prepared scratch and copy out
+    const int chunk = juce::jmax (1, deviceScratch.getNumSamples());
+
+    for (int offset = 0; offset < numSamples; offset += chunk)
+    {
+        const int n = juce::jmin (chunk, numSamples - offset);
+        renderBlock (deviceScratch, n);
+
+        for (int ch = 0; ch < numOutputChannels; ++ch)
+        {
+            if (ch < deviceScratch.getNumChannels())
+                juce::FloatVectorOperations::copy (outputChannelData[ch] + offset, deviceScratch.getReadPointer (ch), n);
+            else
+                juce::FloatVectorOperations::clear (outputChannelData[ch] + offset, n);
+        }
+    }
 }
 
 void AudioEngine::audioDeviceAboutToStart (juce::AudioIODevice* device)

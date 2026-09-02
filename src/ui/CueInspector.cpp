@@ -1068,10 +1068,15 @@ public:
 
         if (cue == nullptr)
         {
+            shownId = juce::Uuid::null();
             grid.setLevels (0.0, LevelMatrix());
             return;
         }
 
+        if (editing && ! shownId.isNull() && shownId != cue->id && cues.indexOf (shownId) >= 0)
+            return;   // a drag / typing session is still on the previous cue
+
+        shownId = cue->id;
         const auto& patch = document.patchForCue (*cue);
         LevelMatrix m = cue->levels;
         const int inputs = cue->numChannels > 0 ? cue->numChannels : (m.numInputs() > 0 ? m.numInputs() : 2);
@@ -1161,16 +1166,21 @@ private:
 
     void commitLevels (double mainDb, const LevelMatrix& m, bool finished)
     {
-        const auto* cue = cues.getSelected();
+        // the grid keeps showing (and committing to) the cue the edit started on, even if the selection moved
+        // meanwhile (auto-follow, playhead lock); a finished edit releases it
+        const int index = shownId.isNull() ? cues.getSelectedIndex() : cues.indexOf (shownId);
 
-        if (cue == nullptr || refreshing)
+        if (! cues.isValidIndex (index) || refreshing)
             return;
 
-        const auto id = cue->id;
-        edit (ko ("레벨 변경"), [mainDb, m] (Cue& c) { c.gainDb = mainDb; c.levels = m; }, "levels:" + id.toString());
+        const Cue& cue = cues.get (index);
+        const auto id = cue.id;
+        const auto trimCopy = cue.trim;
+        editing = ! finished;
+        document.perform (ko ("레벨 변경"), [this, index, mainDb, m] { cues.update (index, [mainDb, m] (Cue& c) { c.gainDb = mainDb; c.levels = m; }); },
+                          { "levels:" + id.toString(), false });
         engine.setLiveGainDb (id, mainDb);
-        engine.setLiveLevels (id, m, cue->trim);
-        juce::ignoreUnused (finished);
+        engine.setLiveLevels (id, m, trimCopy);
     }
 
     void commitPatch()
@@ -1199,6 +1209,8 @@ private:
     ProjectDocument& document;
     CueList& cues;
     AudioEngine& engine;
+    juce::Uuid shownId = juce::Uuid::null();   // the cue the grid shows / commits to
+    bool editing = false;                       // a drag or typing session is in flight
     juce::Label patchLabel, hint;
     juce::ComboBox patchCombo;
     juce::TextButton defaultsButton, silenceButton;

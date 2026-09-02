@@ -264,8 +264,8 @@ struct Cue
     }
 
     static constexpr int maxFadeMs = 600000;     // 10 minutes
-    static constexpr double minGainDb = -60.0;   // treated as silence
-    static constexpr double maxGainDb = 12.0;
+    static constexpr double minGainDb = -120.0;  // treated as silence (same floor as the level matrix)
+    static constexpr double maxGainDb = 24.0;    // same ceiling as the level matrix
     static constexpr double maxWaitSeconds = 86400.0;
 
     /** Linear gain for gainDb, clamped to [minGainDb, maxGainDb]; minGainDb gives 0. */

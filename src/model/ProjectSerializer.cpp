@@ -795,6 +795,24 @@ juce::Result fromJson (const juce::String& json, Project& out, juce::StringArray
             if (p.getDynamicObject() != nullptr)
                 project.patches.push_back (AudioPatch::fromVar (p));
 
+    {
+        // patch ids must be unique (cues and the audition setting refer to them): the first keeps a duplicate id
+        std::set<juce::String> seen;
+
+        for (auto& p : project.patches)
+        {
+            if (p.id.isNull() || seen.count (p.id.toString()) != 0)
+            {
+                p.id = juce::Uuid();
+
+                if (warnings != nullptr)
+                    warnings->add ("Audio patch '" + p.name + "' had a duplicate or empty id and was given a new one.");
+            }
+
+            seen.insert (p.id.toString());
+        }
+    }
+
     project.ensureDefaultPatch();
 
     const auto master = root.getProperty ("master", juce::var());

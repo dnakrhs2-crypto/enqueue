@@ -83,7 +83,7 @@ public:
             p.masterPlugins.push_back (master);
 
             const auto json = ProjectSerializer::toJson (p);
-            expect (json.contains ("\"version\": 3") || json.contains ("\"version\":3"));
+            expect (json.contains ("\"version\": " + juce::String (ProjectSerializer::currentVersion)) || json.contains ("\"version\":" + juce::String (ProjectSerializer::currentVersion)));
             expect (! json.contains ("fadeInMs"));
 
             Project q;

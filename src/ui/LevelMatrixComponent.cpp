@@ -467,6 +467,23 @@ void LevelMatrixComponent::mouseUp (const juce::MouseEvent&)
     dragStartValues.clear();
 }
 
+void LevelMatrixComponent::forEachInGang (const CellRef& cell, const std::function<void (const CellRef&)>& fn) const
+{
+    const int gang = gangOf (cell);
+
+    if (gang <= 0)
+    {
+        fn (cell);
+        return;
+    }
+
+    forEachCell ([&] (const CellRef& c)
+    {
+        if (c == cell || gangOf (c) == gang)
+            fn (c);
+    });
+}
+
 void LevelMatrixComponent::mouseDoubleClick (const juce::MouseEvent& e)
 {
     const auto cell = cellAt (e.getPosition());
@@ -475,7 +492,7 @@ void LevelMatrixComponent::mouseDoubleClick (const juce::MouseEvent& e)
         return;
 
     selected = cell;
-    setValue (cell, defaultValue (cell));
+    forEachInGang (cell, [this] (const CellRef& c) { setValue (c, defaultValue (c)); });   // a gang resets together
     repaint();
     notify (true);
 }
@@ -537,7 +554,7 @@ bool LevelMatrixComponent::keyPressed (const juce::KeyPress& key)
 
     if (key == juce::KeyPress::deleteKey || key == juce::KeyPress::backspaceKey)
     {
-        setValue (selected, LevelMatrix::silentDb);
+        forEachInGang (selected, [this] (const CellRef& c) { setValue (c, LevelMatrix::silentDb); });   // a gang mutes together
         repaint();
         notify (true);
         return true;
@@ -607,7 +624,8 @@ void LevelMatrixComponent::commitTyping()
             value = -value;   // QLab: a bare number in the matrix means below unity
     }
 
-    setValue (selected, clampLevel (value));
+    const double clamped = clampLevel (value);
+    forEachInGang (selected, [this, clamped] (const CellRef& c) { setValue (c, clamped); });   // a typed value goes to the whole gang
     repaint();
     grabKeyboardFocus();
     notify (true);

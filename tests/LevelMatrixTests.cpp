@@ -139,7 +139,9 @@ public:
 
             expect (LevelMatrix::fromVar (juce::var()) == LevelMatrix());
             expectWithinAbsoluteError (dbFromVar (juce::var ("-INF")), LevelMatrix::silentDb, 1e-12);
-            expectWithinAbsoluteError (dbFromVar (juce::var ("abc"), 5.0), 0.0, 1e-12);   // unparsable string -> 0 (getDoubleValue)
+            expectWithinAbsoluteError (dbFromVar (juce::var ("abc"), 5.0), 5.0, 1e-12);   // unparsable string -> the caller's default, never 0 dB
+            expectWithinAbsoluteError (dbFromVar (juce::var ("-6.5"), 5.0), -6.5, 1e-12);
+            expectWithinAbsoluteError (dbFromVar (juce::var ("3dB"), 5.0), 5.0, 1e-12);
         }
 
         beginTest ("trim levels");

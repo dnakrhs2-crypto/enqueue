@@ -264,7 +264,12 @@ std::vector<PluginSlotState> PluginChain::getStates() const
                 s.descriptionXml = xml->toString (juce::XmlElement::TextFormat().singleLine().withoutHeader());
 
             juce::MemoryBlock block;
-            slot->plugin->getStateInformation (block);
+
+            {
+                const juce::ScopedLock callbackLock (slot->plugin->getCallbackLock());   // not concurrently with processBlock()
+                slot->plugin->getStateInformation (block);
+            }
+
             s.stateBase64 = block.getSize() > 0 ? juce::Base64::toBase64 (block.getData(), block.getSize()) : juce::String();
         }
 

@@ -62,8 +62,8 @@ struct WorkspaceSettings
         fix (doubleGoSeconds, 0.0, maxDoubleGoSeconds, 0.0);
         fix (panicSeconds, 0.0, maxPanicSeconds, 2.0);
         fix (numberIncrement, 0.001, 1000.0, 1.0);
-        fix (maxLevelDb, -30.0, 60.0, 12.0);
-        fix (minLevelDb, -180.0, -40.0, -60.0);
+        fix (maxLevelDb, -30.0, 24.0, 12.0);      // the matrix / main level clamp at +24 and -120 (LevelMatrix::maxDb / silentDb)
+        fix (minLevelDb, -120.0, -40.0, -60.0);
         backupIntervalSeconds = juce::jlimit (5, 600, backupIntervalSeconds);
         rowSize = juce::jlimit (0, 2, rowSize);
         cueTemplate.sanitise();

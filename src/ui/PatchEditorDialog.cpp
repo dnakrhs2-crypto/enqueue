@@ -156,6 +156,9 @@ namespace
 
         ~Content() override
         {
+            if (insertsDialog != nullptr)
+                delete insertsDialog.getComponent();   // it references a runtime chain that may go away with us
+
             patchList.setModel (nullptr);
         }
 
@@ -448,6 +451,18 @@ namespace
         void store (bool structural)
         {
             auto patches = document.patches;   // copy: setPatches replaces the vector
+
+            if (structural)
+            {
+                // the insert windows edit the live chains only: bring those states into the document first, or the
+                // rebuild below would restore stale ones (and close windows that point at chains about to be replaced)
+                if (insertsDialog != nullptr)
+                    delete insertsDialog.getComponent();
+
+                for (auto& p : patches)
+                    engine.capturePatchInsertStates (p);
+            }
+
             document.setPatches (patches);
 
             if (structural)

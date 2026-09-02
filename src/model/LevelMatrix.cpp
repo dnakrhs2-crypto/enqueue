@@ -28,6 +28,9 @@ double dbFromVar (const juce::var& v, double defaultDb)
         if (text.equalsIgnoreCase ("-inf") || text.equalsIgnoreCase ("-infinity"))
             return LevelMatrix::silentDb;
 
+        if (text.isEmpty() || ! text.containsOnly ("+-0123456789.eE") || ! juce::CharacterFunctions::isDigit (text.getLastCharacter()))
+            return defaultDb;   // not a number: the caller's default (a routing default is silence, not unity)
+
         const double parsed = text.getDoubleValue();
         return std::isfinite (parsed) ? parsed : defaultDb;
     }

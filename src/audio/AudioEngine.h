@@ -135,7 +135,9 @@ public:
     /** Installs the project's patches: routing, main levels, output counts and insert chains (restored from
         their saved states where the live chain differs; errors returned). Players keep running; players of a
         removed patch move to the default (first) patch. Without patches the engine mixes straight to outputs 1-2. */
-    juce::StringArray setPatches (const std::vector<AudioPatch>& patches);
+    /** Installs the patch list. Plugin instances of patches that keep their structure survive; with
+        'applySavedStates' (project open) their saved parameter states are pushed in, otherwise the live state stays. */
+    juce::StringArray setPatches (const std::vector<AudioPatch>& patches, bool applySavedStates = false);
     /** Live routing / main level / stereo-pair / name changes of one patch (same output count). */
     void updatePatchLevels (const AudioPatch& patch);
     /** The patch a cue plays through: its own, or the default when the id is null / unknown. Null without patches. */
@@ -239,6 +241,7 @@ private:
     std::atomic<double> sampleRate { 44100.0 };
     std::atomic<int> blockSize { 512 };
     juce::AudioBuffer<float> mixBuffer, playerBuffer;  // audio-thread scratch
+    juce::AudioBuffer<float> deviceScratch;            // >32 device outputs: juce::AudioBuffer would heap-allocate its channel table per callback
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (AudioEngine)
 };

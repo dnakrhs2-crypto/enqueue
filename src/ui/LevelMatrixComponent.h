@@ -86,6 +86,8 @@ private:
     void applyDelta (double deltaDb, bool finished);
     void beginTyping (const juce::String& initial);
     void commitTyping();
+    /** Applies 'fn' to the cell and, when it is ganged, to every cell of the same gang. */
+    void forEachInGang (const CellRef& cell, const std::function<void (const CellRef&)>& fn) const;
     void showGangMenu (const CellRef& c);
     juce::String textFor (double db) const;
     void notify (bool finished);

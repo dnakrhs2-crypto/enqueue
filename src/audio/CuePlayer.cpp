@@ -339,6 +339,14 @@ void CuePlayer::processChain (PluginChain& activeChain, juce::AudioBuffer<float>
 
     juce::AudioBuffer<float> stereo (fullBuffer.getArrayOfWritePointers(), 2, 0, numSamples);
     activeChain.process (stereo, numSamples);
+
+    if (numChannels == 1)
+    {
+        // only channel 0 feeds the matrix: fold the plugins' right channel back in so stereo effects
+        // (ping-pong delays, wideners) are not half lost
+        fullBuffer.addFrom (0, 0, fullBuffer, 1, 0, numSamples);
+        fullBuffer.applyGain (0, 0, numSamples, 0.5f);
+    }
 }
 
 void CuePlayer::computeGains (const LevelMatrix& levels, const TrimLevels& trim, std::vector<float>& out) const

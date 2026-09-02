@@ -149,7 +149,7 @@ MainComponent::MainComponent (AudioEngine& e, AppSettings& s, juce::ApplicationC
 
     setSize (1100, 820);
     updateTransportStandby();
-    engine.setPatches (document.patches);   // the default patch of the empty project
+    engine.setPatches (document.patches, true);   // the default patch of the empty project
     startTimerHz (30);
     scheduler.startTicking (1);   // pre-waits, post-waits, auto-follows
     controller.getFadeRunner().startTicking (10);   // fade cues at 100 Hz
@@ -2021,7 +2021,7 @@ void MainComponent::newProject()
     engine.clearCueChains();
     engine.getMasterChain().clear();
     document.newProject();
-    engine.setPatches (document.patches);
+    engine.setPatches (document.patches, true);
     controller.clearPlayed();
     autoLoadedId = juce::Uuid::null();
     ignorePluginChangesBriefly();
@@ -2110,7 +2110,7 @@ void MainComponent::restorePluginChainsFromDocument (juce::StringArray& errors)
     if (! document.masterPlugins.empty())
         errors.addArray (engine.getMasterChain().restore (document.masterPlugins, factory));
 
-    errors.addArray (engine.setPatches (document.patches));
+    errors.addArray (engine.setPatches (document.patches, true));
 }
 
 void MainComponent::captureLivePluginStates (Project& project)
@@ -2181,6 +2181,7 @@ void MainComponent::reconcileChainsAfterRestore (const ProjectSnapshot& snapshot
 
         const auto& cue = document.cues.get (index);
         engine.setLiveGainDb (p.id, cue.gainDb);
+        engine.setLiveLevels (p.id, cue.levels, cue.trim);
         engine.setLiveRate (p.id, cue.audio.rate);
         engine.setLiveRegion (p.id, cue.audio.startSeconds, cue.audio.endSeconds);
     }

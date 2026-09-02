@@ -36,14 +36,27 @@ namespace
         explicit operator bool() const noexcept { return p != nullptr; }
     };
 
+    /** COM wants every thread that touches its objects initialised: the reader is created on the message
+        thread and read on JUCE's read-ahead thread, so each of them calls this once. */
+    void ensureComOnThisThread()
+    {
+        thread_local bool done = false;
+
+        if (! done)
+        {
+            done = true;
+            CoInitializeEx (nullptr, COINIT_MULTITHREADED);   // S_FALSE / RPC_E_CHANGED_MODE are fine: already initialised
+        }
+    }
+
     bool startMediaFoundation()
     {
         static std::once_flag once;
         static bool ok = false;
+        ensureComOnThisThread();
 
         std::call_once (once, []
         {
-            CoInitializeEx (nullptr, COINIT_MULTITHREADED);   // S_FALSE / RPC_E_CHANGED_MODE are fine: already initialised
             ok = SUCCEEDED (MFStartup (MF_VERSION, MFSTARTUP_LITE));
         });
 
@@ -151,8 +164,16 @@ namespace
                 return false;
             }
 
-            if (startSampleInFile != position)
+            ensureComOnThisThread();
+
+            if (startSampleInFile != position || seekFailed)
                 seekTo (startSampleInFile);
+
+            if (seekFailed)
+            {
+                clearDest (destChannels, numDestChannels, startOffsetInDestBuffer, numSamples);   // never serve audio from the wrong place
+                return false;
+            }
 
             int written = 0;
 
@@ -226,8 +247,25 @@ namespace
             PropVariantClear (&pos);
 
             position = sample;
+            seekFailed = ! ok;
             skipUntil = ok ? target : -1;
             expectedNext = -1;
+            buffersSinceSeek = 0;
+        }
+
+        /** After a media-type change notification: the stream must still be float PCM at the same rate / channels. */
+        bool formatStillMatches()
+        {
+            ComPtr<IMFMediaType> actual;
+
+            if (FAILED (reader->GetCurrentMediaType ((DWORD) MF_SOURCE_READER_FIRST_AUDIO_STREAM, actual.put())))
+                return false;
+
+            UINT32 rate = 0, channels = 0, bits = 0;
+            actual->GetUINT32 (MF_MT_AUDIO_SAMPLES_PER_SECOND, &rate);
+            actual->GetUINT32 (MF_MT_AUDIO_NUM_CHANNELS, &channels);
+            actual->GetUINT32 (MF_MT_AUDIO_BITS_PER_SAMPLE, &bits);
+            return rate == (UINT32) sampleRate && channels == numChannels && bits == 32;
         }
 
         /** Pulls one buffer from the decoder. Returns false at the end of the stream. */
@@ -240,14 +278,20 @@ namespace
                 ComPtr<IMFSample> sample;
 
                 if (FAILED (reader->ReadSample ((DWORD) MF_SOURCE_READER_FIRST_AUDIO_STREAM, 0, nullptr, &flags, &timestamp, sample.put()))
-                    || (flags & MF_SOURCE_READERF_ENDOFSTREAM) != 0)
+                    || (flags & (MF_SOURCE_READERF_ENDOFSTREAM | MF_SOURCE_READERF_ERROR)) != 0)
                 {
-                    endOfStream = true;
+                    endOfStream = true;   // a decoder error ends the stream: silence instead of stale data
+                    return false;
+                }
+
+                if ((flags & MF_SOURCE_READERF_CURRENTMEDIATYPECHANGED) != 0 && ! formatStillMatches())
+                {
+                    endOfStream = true;   // the buffers would no longer be what we assume: stop rather than misread them
                     return false;
                 }
 
                 if (! sample)
-                    continue;
+                    continue;   // a stream tick or gap notification carries no data
 
                 ComPtr<IMFMediaBuffer> buffer;
 
@@ -297,9 +341,9 @@ namespace
                     haveLookahead = true;
                     continue;
                 }
-                else if (next.position <= lookahead.position)
+                else if (next.position <= lookahead.position && buffersSinceSeek == 0)
                 {
-                    std::swap (lookahead, next);   // duplicate timestamp: the earlier buffer was decoder priming
+                    std::swap (lookahead, next);   // duplicate timestamp right after a seek: the earlier buffer was decoder priming
                     continue;
                 }
                 else
@@ -315,6 +359,7 @@ namespace
 
                 expectedNext = pending.position + pending.frames;
                 pendingOffset = 0;
+                ++buffersSinceSeek;
 
                 if (skipUntil >= 0)
                 {
@@ -340,6 +385,8 @@ namespace
         juce::int64 expectedNext = -1;
         DecodedBuffer pending, lookahead;
         bool haveLookahead = false;
+        bool seekFailed = false;
+        int buffersSinceSeek = 0;
         int pendingOffset = 0;
     };
 }

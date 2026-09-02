@@ -30,7 +30,7 @@ namespace ProjectSerializer
 {
     /** 1: cues with fadeInMs / fadeOutMs / gainDb.  2: "audio" object (trim, loops, rate, envelope); fadeInMs migrates to the envelope.
         3: cue list fields (number, colours, waits, continue mode, hotkey, wall clock, fade-stop-others, duck), settings (template, row size). */
-    constexpr int currentVersion = 3;
+    constexpr int currentVersion = 4;   // 4: levels / trim / patches / audition / fade / devamp / slices / groups / control cues
     constexpr const char* fileExtension = ".gocue";
 
     /** @param projectDir  when valid, a project-relative path is stored next to each

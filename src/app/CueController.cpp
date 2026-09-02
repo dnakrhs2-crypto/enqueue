@@ -534,7 +534,12 @@ AudioEngine::PlayOptions CueController::playOptions (bool audition) const
     {
         case WorkspaceSettings::Audition::unchanged:      break;
         case WorkspaceSettings::Audition::none:           options.silent = true; break;
-        case WorkspaceSettings::Audition::alternatePatch: options.patchOverride = document.settings.auditionPatchId; break;
+        case WorkspaceSettings::Audition::alternatePatch:
+            options.patchOverride = document.settings.auditionPatchId;
+
+            if (options.patchOverride.isNull() || document.findPatch (options.patchOverride) == nullptr)
+                options.silent = true;   // the alternate patch was deleted: audition without output rather than for real
+            break;
     }
 
     return options;
