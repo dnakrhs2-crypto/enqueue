@@ -16,8 +16,9 @@
 namespace gocue
 {
 
-/** Bottom panel with tabs for the standby cue: 기본 (name, file, stop fade, gain) /
-    시간·루프 (waveform, trim, loops, envelope) / 이펙트 (VST3 insert chain).
+/** Bottom panel with tabs for the selected cue: 기본 (number, name, colour, file, waits, continue mode,
+    hotkey, flags, stop fade, gain, notes) / 시간·루프 (waveform, trim, loops, envelope) /
+    트리거 (second trigger, wall clock, fade-stop-others, duck) / 이펙트 (VST3 insert chain).
     Every edit goes through ProjectDocument::perform so it is undoable. */
 class CueInspector : public juce::Component,
                      private CueList::Listener
@@ -32,6 +33,12 @@ public:
     void pluginChainChanged (PluginChain* chain);
     /** Live playback state from the UI timer (drives the waveform playhead). */
     void setPlayback (const std::vector<AudioEngine::PlayingCue>& playing);
+    /** Show mode: everything read-only. */
+    void setEditable (bool editable);
+    /** Jumps to the 기본 tab and focuses the notes field. */
+    void showNotes();
+    /** Jumps to the 시간·루프 tab. */
+    void showTimeTab();
 
     std::function<void()> onOpenPluginManager;
     /** Esc inside a text field: the edit is cancelled and this fires (wired to "stop all"). */
@@ -65,6 +72,7 @@ private:
     TimeLoopsPanel* timeLoops = nullptr; // owned by 'tabs'
     TriggersPanel* triggers = nullptr;   // owned by 'tabs'
     EffectsPanel* effects = nullptr;     // owned by 'tabs'
+    bool editable = true;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (CueInspector)
 };

@@ -4,6 +4,7 @@
 #include "app/Commands.h"
 #include "app/Updater.h"
 #include "audio/CueFileInfo.h"
+#include "model/CueNumbering.h"
 #include "ui/AudioSettingsDialog.h"
 #include "ui/PluginDialogs.h"
 #include "ui/UiUtils.h"
@@ -19,7 +20,13 @@ namespace
     constexpr int menuBarHeight = 24;
     constexpr int transportHeight = 112;
     constexpr int inspectorHeight = 330;
+    constexpr int footerHeight = 30;
     constexpr double pluginChangeGraceMs = 1500.0;
+}
+
+bool MainComponent::HotkeyListener::keyPressed (const juce::KeyPress& key, juce::Component*)
+{
+    return owner.controller.handleHotkey (key);
 }
 
 MainComponent::MainComponent (AudioEngine& e, AppSettings& s, juce::ApplicationCommandManager& cm)
@@ -38,15 +45,27 @@ MainComponent::MainComponent (AudioEngine& e, AppSettings& s, juce::ApplicationC
     addAndMakeVisible (transport);
     addAndMakeVisible (table);
     addAndMakeVisible (inspector);
+    addAndMakeVisible (footer);
 
     controller.onStatus = [this] (const juce::String& message, bool isError) { transport.showStatus (message, isError); };
     controller.onGoRejected = [this] { transport.flashGoRejected(); };
 
     table.onFilesDropped = [this] (const juce::StringArray& files, int insertAt) { addCuesFromFiles (files, insertAt); };
+    table.onMoveRows = [this] (const std::vector<int>& rows, int insertIndex) { moveRows (rows, insertIndex); };
+    table.onEditCues = [this] (const std::vector<int>& rows, const juce::String& name, const std::function<void (Cue&)>& mutator)
+    {
+        editCues (rows, name, mutator);
+    };
+    table.onEditNotes = [this] (int) { inspector.showNotes(); };
+    table.onEditDuration = [this] (int) { inspector.showTimeTab(); };
+
     inspector.onOpenPluginManager = [this] { showPluginManager(); };
     inspector.onPanic = [this] { controller.panicAll(); table.focusTable(); };
     inspector.onPreview = [this] { controller.preview(); };
     inspector.onResetCue = [this] { controller.resetSelected(); };
+
+    footer.onShowModeChanged = [this] (bool mode) { setShowMode (mode); };
+    footer.onWarningsClicked = [this] { showWarnings(); };
 
     document.snapshotDecorator = [this] (Project& project) { captureLivePluginStates (project); };
     document.onSnapshotRestored = [this] (const ProjectSnapshot& snapshot) { reconcileChainsAfterRestore (snapshot); };
@@ -64,10 +83,11 @@ MainComponent::MainComponent (AudioEngine& e, AppSettings& s, juce::ApplicationC
 
     commands.registerAllCommandsForTarget (this);
     commands.setFirstCommandTarget (this);
-    addKeyListener (commands.getKeyMappings());
+    addKeyListener (&hotkeyListener);            // cue hotkeys first ...
+    addKeyListener (commands.getKeyMappings());  // ... then the command shortcuts
     setApplicationCommandManagerToWatch (&commands);
 
-    setSize (1100, 780);
+    setSize (1100, 820);
     updateTransportStandby();
     startTimerHz (30);
     scheduler.startTicking (1);   // pre-waits, post-waits, auto-follows
@@ -87,6 +107,7 @@ MainComponent::~MainComponent()
     document.cues.removeListener (this);
     commands.setFirstCommandTarget (nullptr);
     removeKeyListener (commands.getKeyMappings());
+    removeKeyListener (&hotkeyListener);
 }
 
 void MainComponent::resized()
@@ -94,6 +115,7 @@ void MainComponent::resized()
     auto area = getLocalBounds();
     menuBar.setBounds (area.removeFromTop (menuBarHeight));
     transport.setBounds (area.removeFromTop (transportHeight));
+    footer.setBounds (area.removeFromBottom (footerHeight));
     inspector.setBounds (area.removeFromBottom (inspectorHeight));
     table.setBounds (area);
 }
@@ -119,7 +141,7 @@ bool MainComponent::isInterestedInFileDrag (const juce::StringArray& files)
         if (juce::File (path).hasFileExtension (ProjectSerializer::fileExtension))
             return true;
 
-    return containsAudioOrFolder (engine.getFormatManager(), files);
+    return ! showMode && containsAudioOrFolder (engine.getFormatManager(), files);
 }
 
 void MainComponent::fileDragEnter (const juce::StringArray&, int, int)
@@ -150,6 +172,9 @@ void MainComponent::filesDropped (const juce::StringArray& files, int, int)
         }
     }
 
+    if (showMode)
+        return;
+
     const auto audioFiles = collectAudioFiles (engine.getFormatManager(), files);
 
     if (! audioFiles.isEmpty())
@@ -166,12 +191,13 @@ void MainComponent::getAllCommands (juce::Array<juce::CommandID>& ids)
 {
     ids.addArray ({ CommandIDs::go, CommandIDs::pauseToggle, CommandIDs::fadeOutSelected,
                     CommandIDs::panicAll, CommandIDs::hardStopAll, CommandIDs::preview,
-                    CommandIDs::resetCue, CommandIDs::resetAll,
+                    CommandIDs::loadCue, CommandIDs::loadToTime, CommandIDs::resetCue, CommandIDs::resetAll,
                     CommandIDs::addCue, CommandIDs::removeCue, CommandIDs::duplicateCue,
-                    CommandIDs::moveCueUp, CommandIDs::moveCueDown,
+                    CommandIDs::moveCueUp, CommandIDs::moveCueDown, CommandIDs::selectAll,
+                    CommandIDs::renumber, CommandIDs::deleteNumbers, CommandIDs::findMissingFiles,
                     CommandIDs::newProject, CommandIDs::openProject,
                     CommandIDs::saveProject, CommandIDs::saveProjectAs,
-                    CommandIDs::undo, CommandIDs::redo,
+                    CommandIDs::undo, CommandIDs::redo, CommandIDs::toggleShowMode,
                     CommandIDs::audioSettings, CommandIDs::pluginManager, CommandIDs::masterInserts,
                     CommandIDs::workspaceSettings,
                     CommandIDs::checkForUpdates, CommandIDs::about });
@@ -185,14 +211,17 @@ void MainComponent::getCommandInfo (juce::CommandID commandID, juce::Application
     const auto editMenu = ko ("편집");
     const auto audio    = ko ("오디오");
     const bool hasSelection = document.cues.getSelected() != nullptr;
-    const int selected = document.cues.getSelectedIndex();
+    const bool canEdit = ! showMode;
+    const auto& selectedRows = document.cues.getSelectedIndices();
+    const int firstSelected = selectedRows.empty() ? -1 : selectedRows.front();
+    const int lastSelected = selectedRows.empty() ? -1 : selectedRows.back();
     using juce::KeyPress;
     using juce::ModifierKeys;
 
     switch (commandID)
     {
         case CommandIDs::go:
-            result.setInfo ("GO", ko ("선택 큐 재생 후 다음 큐로 이동 (일시정지된 큐가 있으면 재개)"), playback, 0);
+            result.setInfo ("GO", ko ("플레이헤드 큐 재생(시퀀스 포함) 후 다음 큐로 이동 (일시정지된 큐가 있으면 재개)"), playback, 0);
             result.addDefaultKeypress (KeyPress::spaceKey, ModifierKeys::noModifiers);
             result.flags |= juce::ApplicationCommandInfo::wantsKeyUpDownCallbacks;
             break;
@@ -217,8 +246,20 @@ void MainComponent::getCommandInfo (juce::CommandID commandID, juce::Application
             break;
 
         case CommandIDs::preview:
-            result.setInfo (ko ("미리듣기"), ko ("선택 큐를 재생하되 플레이헤드는 그대로 둠"), playback, 0);
+            result.setInfo (ko ("미리듣기"), ko ("선택 큐만 재생 (프리웨이트·시퀀스 없이, 플레이헤드는 그대로)"), playback, 0);
             result.addDefaultKeypress ('V', ModifierKeys::noModifiers);
+            result.setActive (hasSelection);
+            break;
+
+        case CommandIDs::loadCue:
+            result.setInfo (ko ("로드"), ko ("선택 큐를 미리 로드해 GO 지연을 없앰"), playback, 0);
+            result.addDefaultKeypress ('L', ModifierKeys::noModifiers);
+            result.setActive (hasSelection);
+            break;
+
+        case CommandIDs::loadToTime:
+            result.setInfo (ko ("시간으로 로드..."), ko ("선택 큐를 특정 위치에 로드 (음수 = 끝에서부터)"), playback, 0);
+            result.addDefaultKeypress ('T', ModifierKeys::commandModifier);
             result.setActive (hasSelection);
             break;
 
@@ -234,30 +275,54 @@ void MainComponent::getCommandInfo (juce::CommandID commandID, juce::Application
         case CommandIDs::addCue:
             result.setInfo (ko ("큐 추가..."), ko ("오디오 파일을 골라 큐를 추가"), cueMenu, 0);
             result.addDefaultKeypress (KeyPress::insertKey, ModifierKeys::noModifiers);
+            result.setActive (canEdit);
             break;
 
         case CommandIDs::removeCue:
-            result.setInfo (ko ("큐 삭제"), ko ("선택 큐 삭제"), cueMenu, 0);
+            result.setInfo (selectedRows.size() > 1 ? ko ("큐 삭제 (") + juce::String (selectedRows.size()) + ")" : ko ("큐 삭제"),
+                            ko ("선택 큐 삭제"), cueMenu, 0);
             result.addDefaultKeypress (KeyPress::deleteKey, ModifierKeys::noModifiers);
-            result.setActive (hasSelection);
+            result.setActive (canEdit && hasSelection);
             break;
 
         case CommandIDs::duplicateCue:
             result.setInfo (ko ("큐 복제"), ko ("선택 큐를 플러그인 체인까지 바로 아래에 복제"), cueMenu, 0);
             result.addDefaultKeypress ('D', ModifierKeys::commandModifier);
-            result.setActive (hasSelection);
+            result.setActive (canEdit && hasSelection);
             break;
 
         case CommandIDs::moveCueUp:
             result.setInfo (ko ("위로 이동"), ko ("선택 큐를 한 칸 위로"), cueMenu, 0);
             result.addDefaultKeypress (KeyPress::upKey, ModifierKeys::commandModifier);
-            result.setActive (selected > 0);
+            result.setActive (canEdit && firstSelected > 0);
             break;
 
         case CommandIDs::moveCueDown:
             result.setInfo (ko ("아래로 이동"), ko ("선택 큐를 한 칸 아래로"), cueMenu, 0);
             result.addDefaultKeypress (KeyPress::downKey, ModifierKeys::commandModifier);
-            result.setActive (hasSelection && selected < document.cues.size() - 1);
+            result.setActive (canEdit && hasSelection && lastSelected < document.cues.size() - 1);
+            break;
+
+        case CommandIDs::selectAll:
+            result.setInfo (ko ("모두 선택"), ko ("모든 큐 선택"), editMenu, 0);
+            result.addDefaultKeypress ('A', ModifierKeys::commandModifier);
+            result.setActive (! document.cues.isEmpty());
+            break;
+
+        case CommandIDs::renumber:
+            result.setInfo (ko ("선택 큐 재번호..."), ko ("선택한 큐에 순서대로 번호를 매김 (시작·증가·접두·접미)"), cueMenu, 0);
+            result.addDefaultKeypress ('R', ModifierKeys::commandModifier);
+            result.setActive (canEdit && hasSelection);
+            break;
+
+        case CommandIDs::deleteNumbers:
+            result.setInfo (ko ("선택 큐 번호 삭제"), ko ("선택한 큐의 번호를 지움"), cueMenu, 0);
+            result.setActive (canEdit && hasSelection);
+            break;
+
+        case CommandIDs::findMissingFiles:
+            result.setInfo (ko ("없어진 파일 찾기..."), ko ("폴더를 골라 같은 이름의 파일로 다시 연결"), cueMenu, 0);
+            result.setActive (canEdit && countBrokenCues() > 0);
             break;
 
         case CommandIDs::newProject:
@@ -289,7 +354,7 @@ void MainComponent::getCommandInfo (juce::CommandID commandID, juce::Application
             result.setInfo (document.canUndo() ? ko ("실행 취소: ") + document.getUndoName() : ko ("실행 취소"),
                             ko ("마지막 편집을 되돌립니다"), editMenu, 0);
             result.addDefaultKeypress ('Z', ModifierKeys::commandModifier);
-            result.setActive (document.canUndo());
+            result.setActive (canEdit && document.canUndo());
             break;
 
         case CommandIDs::redo:
@@ -297,7 +362,13 @@ void MainComponent::getCommandInfo (juce::CommandID commandID, juce::Application
                             ko ("되돌린 편집을 다시 적용합니다"), editMenu, 0);
             result.addDefaultKeypress ('Y', ModifierKeys::commandModifier);
             result.addDefaultKeypress ('Z', ModifierKeys::commandModifier | ModifierKeys::shiftModifier);
-            result.setActive (document.canRedo());
+            result.setActive (canEdit && document.canRedo());
+            break;
+
+        case CommandIDs::toggleShowMode:
+            result.setInfo (showMode ? ko ("편집 모드로") : ko ("쇼 모드로 (편집 잠금)"),
+                            ko ("쇼 모드에서는 큐 추가·삭제·이동·속성 편집이 잠깁니다 (재생·저장은 그대로)"), editMenu, 0);
+            result.addDefaultKeypress ('M', ModifierKeys::commandModifier | ModifierKeys::shiftModifier);
             break;
 
         case CommandIDs::audioSettings:
@@ -331,8 +402,6 @@ void MainComponent::getCommandInfo (juce::CommandID commandID, juce::Application
 
 bool MainComponent::perform (const InvocationInfo& info)
 {
-    const int selected = document.cues.getSelectedIndex();
-
     switch (info.commandID)
     {
         case CommandIDs::go:
@@ -371,6 +440,14 @@ bool MainComponent::perform (const InvocationInfo& info)
             controller.preview();
             break;
 
+        case CommandIDs::loadCue:
+            controller.loadSelected (0.0);
+            break;
+
+        case CommandIDs::loadToTime:
+            showLoadToTimeDialog();
+            break;
+
         case CommandIDs::resetCue:
             controller.resetSelected();
             break;
@@ -384,7 +461,7 @@ bool MainComponent::perform (const InvocationInfo& info)
             break;
 
         case CommandIDs::removeCue:
-            removeSelectedCue();
+            removeSelectedCues();
             break;
 
         case CommandIDs::duplicateCue:
@@ -392,13 +469,27 @@ bool MainComponent::perform (const InvocationInfo& info)
             break;
 
         case CommandIDs::moveCueUp:
-            if (selected > 0)
-                document.perform (ko ("큐 이동"), [this, selected] { document.cues.move (selected, selected - 1); });
+            moveSelection (-1);
             break;
 
         case CommandIDs::moveCueDown:
-            if (selected >= 0 && selected < document.cues.size() - 1)
-                document.perform (ko ("큐 이동"), [this, selected] { document.cues.move (selected, selected + 1); });
+            moveSelection (1);
+            break;
+
+        case CommandIDs::selectAll:
+            document.cues.selectAll();
+            break;
+
+        case CommandIDs::renumber:
+            showRenumberDialog();
+            break;
+
+        case CommandIDs::deleteNumbers:
+            deleteNumbersOfSelection();
+            break;
+
+        case CommandIDs::findMissingFiles:
+            findMissingFiles();
             break;
 
         case CommandIDs::newProject:
@@ -429,6 +520,10 @@ bool MainComponent::perform (const InvocationInfo& info)
         case CommandIDs::redo:
             if (document.redo())
                 transport.showStatus (ko ("다시 실행"), false);
+            break;
+
+        case CommandIDs::toggleShowMode:
+            setShowMode (! showMode);
             break;
 
         case CommandIDs::audioSettings:
@@ -490,6 +585,10 @@ juce::PopupMenu MainComponent::getMenuForIndex (int topLevelMenuIndex, const juc
         case 1:
             menu.addCommandItem (&commands, CommandIDs::undo);
             menu.addCommandItem (&commands, CommandIDs::redo);
+            menu.addSeparator();
+            menu.addCommandItem (&commands, CommandIDs::selectAll);
+            menu.addSeparator();
+            menu.addCommandItem (&commands, CommandIDs::toggleShowMode);
             break;
 
         case 2:
@@ -499,11 +598,18 @@ juce::PopupMenu MainComponent::getMenuForIndex (int topLevelMenuIndex, const juc
             menu.addSeparator();
             menu.addCommandItem (&commands, CommandIDs::moveCueUp);
             menu.addCommandItem (&commands, CommandIDs::moveCueDown);
+            menu.addSeparator();
+            menu.addCommandItem (&commands, CommandIDs::renumber);
+            menu.addCommandItem (&commands, CommandIDs::deleteNumbers);
+            menu.addSeparator();
+            menu.addCommandItem (&commands, CommandIDs::findMissingFiles);
             break;
 
         case 3:
             menu.addCommandItem (&commands, CommandIDs::go);
             menu.addCommandItem (&commands, CommandIDs::preview);
+            menu.addCommandItem (&commands, CommandIDs::loadCue);
+            menu.addCommandItem (&commands, CommandIDs::loadToTime);
             menu.addCommandItem (&commands, CommandIDs::pauseToggle);
             menu.addCommandItem (&commands, CommandIDs::fadeOutSelected);
             menu.addCommandItem (&commands, CommandIDs::resetCue);
@@ -541,13 +647,17 @@ void MainComponent::menuItemSelected (int, int)
 //==============================================================================
 void MainComponent::addCuesFromFiles (const juce::StringArray& files, int insertAt)
 {
-    if (files.isEmpty())
+    if (files.isEmpty() || showMode)
         return;
 
     const bool copyIn = document.settings.copyFilesIntoProject && document.hasFile();
     const auto projectDir = document.getFile().getParentDirectory();
+    const bool autoNumber = document.settings.autoNumber;
+    const double increment = document.settings.numberIncrement;
+    const bool autoLoad = document.settings.autoLoadNewCues;
 
-    document.perform (files.size() == 1 ? ko ("큐 추가") : ko ("큐 추가 (") + juce::String (files.size()) + ")", [this, files, insertAt, copyIn, projectDir]
+    document.perform (files.size() == 1 ? ko ("큐 추가") : ko ("큐 추가 (") + juce::String (files.size()) + ")",
+                      [this, files, insertAt, copyIn, projectDir, autoNumber, increment, autoLoad]
     {
         int index = insertAt;
         int last = -1;
@@ -559,7 +669,13 @@ void MainComponent::addCuesFromFiles (const juce::StringArray& files, int insert
             Cue cue;
             cue.name = file.getFileNameWithoutExtension();
             cue.file = file;
+            cue.autoLoad = autoLoad;
             refreshCueFileInfo (engine.getFormatManager(), cue);
+
+            const int at = index < 0 ? document.cues.size() : index;
+
+            if (autoNumber)
+                cue.number = CueNumbering::next (document.cues.getAll(), at, increment);
 
             last = document.cues.add (std::move (cue), index);
             index = last + 1;
@@ -574,7 +690,7 @@ void MainComponent::addCuesFromFiles (const juce::StringArray& files, int insert
 
 void MainComponent::addCueViaDialog()
 {
-    if (chooser != nullptr)
+    if (chooser != nullptr || showMode)
         return;
 
     auto startDir = settings.getLastAudioDirectory();
@@ -606,20 +722,27 @@ void MainComponent::addCueViaDialog()
     });
 }
 
-void MainComponent::removeSelectedCue()
+void MainComponent::removeSelectedCues()
 {
-    const int index = document.cues.getSelectedIndex();
+    const auto rows = document.cues.getSelectedIndices();
 
-    if (! document.cues.isValidIndex (index))
+    if (rows.empty() || showMode)
         return;
 
-    const auto id = document.cues.get (index).id;
+    std::vector<juce::Uuid> ids;
 
-    document.perform (ko ("큐 삭제"), [this, index, id]
+    for (int row : rows)
+        ids.push_back (document.cues.get (row).id);
+
+    document.perform (rows.size() == 1 ? ko ("큐 삭제") : ko ("큐 삭제 (") + juce::String (rows.size()) + ")", [this, rows, ids]
     {
-        engine.stop (id);
-        engine.removeCueChain (id);
-        document.cues.remove (index);
+        for (const auto& id : ids)
+        {
+            engine.stop (id);
+            engine.removeCueChain (id);
+        }
+
+        document.cues.removeIndices (rows);
     }, { {}, true });
 }
 
@@ -627,16 +750,29 @@ void MainComponent::duplicateSelectedCue()
 {
     const int index = document.cues.getSelectedIndex();
 
-    if (! document.cues.isValidIndex (index))
+    if (! document.cues.isValidIndex (index) || showMode)
         return;
 
-    document.perform (ko ("큐 복제"), [this, index]
+    const bool autoNumber = document.settings.autoNumber;
+    const double increment = document.settings.numberIncrement;
+
+    document.perform (ko ("큐 복제"), [this, index, autoNumber, increment]
     {
         const auto sourceId = document.cues.get (index).id;
         const int newIndex = document.cues.duplicate (index);
 
         if (newIndex < 0)
             return;
+
+        if (autoNumber)
+        {
+            const auto number = CueNumbering::next (document.cues.getAll(), newIndex, increment);
+            document.cues.update (newIndex, [number] (Cue& c) { c.number = number; });
+        }
+        else
+        {
+            document.cues.update (newIndex, [] (Cue& c) { c.number.clear(); });   // numbers must stay unique
+        }
 
         if (auto* source = engine.findCueChain (sourceId); source != nullptr && source->getNumSlots() > 0)
         {
@@ -652,8 +788,255 @@ void MainComponent::duplicateSelectedCue()
     }, { {}, true });
 }
 
+void MainComponent::moveSelection (int delta)
+{
+    const auto rows = document.cues.getSelectedIndices();
+
+    if (rows.empty() || showMode)
+        return;
+
+    const int first = rows.front();
+    const int last = rows.back();
+    int to;
+
+    if (delta < 0)
+    {
+        if (first <= 0)
+            return;
+
+        to = first - 1;
+    }
+    else
+    {
+        if (last >= document.cues.size() - 1)
+            return;
+
+        to = last + 2 - (int) rows.size();
+    }
+
+    document.perform (ko ("큐 이동"), [this, rows, to] { document.cues.moveIndices (rows, to); });
+}
+
+void MainComponent::moveRows (const std::vector<int>& rows, int insertIndex)
+{
+    if (rows.empty() || showMode)
+        return;
+
+    int to = insertIndex;
+
+    for (int row : rows)
+        if (row < insertIndex)
+            --to;
+
+    document.perform (ko ("큐 이동"), [this, rows, to] { document.cues.moveIndices (rows, to); });
+}
+
+void MainComponent::editCues (const std::vector<int>& rows, const juce::String& name, const std::function<void (Cue&)>& mutator)
+{
+    if (rows.empty() || showMode)
+        return;
+
+    document.perform (name, [this, rows, mutator]
+    {
+        for (int row : rows)
+            document.cues.update (row, mutator);
+    });
+}
+
+void MainComponent::setShowMode (bool shouldBeShowMode)
+{
+    showMode = shouldBeShowMode;
+    table.setEditable (! showMode);
+    inspector.setEditable (! showMode);
+    footer.setShowMode (showMode);
+    commands.commandStatusChanged();
+    transport.showStatus (showMode ? ko ("쇼 모드: 편집 잠김") : ko ("편집 모드"), false);
+    table.focusTable();
+}
+
+void MainComponent::showLoadToTimeDialog()
+{
+    const auto* cue = document.cues.getSelected();
+
+    if (cue == nullptr)
+        return;
+
+    auto* alert = new juce::AlertWindow (ko ("시간으로 로드"),
+                                         ko ("시작 위치 (초 또는 m:ss.mmm, 음수 = 끝에서부터). 로드된 큐는 다음 GO에서 그 위치부터 재생됩니다."),
+                                         juce::MessageBoxIconType::NoIcon, this);
+    alert->addTextEditor ("time", "0:00.000", ko ("시작 위치"));
+    alert->addButton (ko ("로드"), 1, juce::KeyPress (juce::KeyPress::returnKey));
+    alert->addButton (ko ("취소"), 0, juce::KeyPress (juce::KeyPress::escapeKey));
+    alert->setVisible (true);
+
+    juce::Component::SafePointer<MainComponent> safeThis (this);
+    alert->enterModalState (true, juce::ModalCallbackFunction::create ([safeThis, alert] (int result)
+    {
+        if (safeThis == nullptr || result != 1)
+            return;
+
+        const auto text = alert->getTextEditorContents ("time").trim();
+        const bool fromEnd = text.startsWithChar ('-');
+        double seconds = parseTimeText (fromEnd ? text.substring (1) : text);
+
+        if (seconds < 0.0)
+        {
+            safeThis->transport.showStatus (ko ("시간 형식을 읽을 수 없습니다: ") + text, true);
+            return;
+        }
+
+        if (fromEnd)
+        {
+            const auto* c = safeThis->document.cues.getSelected();
+            const double length = c != nullptr ? c->passLength() : 0.0;
+            seconds = juce::jmax (0.0, length - seconds);
+        }
+
+        safeThis->controller.loadSelected (seconds);
+    }), true);
+}
+
+void MainComponent::showRenumberDialog()
+{
+    const auto rows = document.cues.getSelectedIndices();
+
+    if (rows.empty() || showMode)
+        return;
+
+    auto* alert = new juce::AlertWindow (ko ("선택 큐 재번호"), ko ("선택한 큐 ") + juce::String (rows.size()) + ko ("개에 순서대로 번호를 매깁니다."),
+                                         juce::MessageBoxIconType::NoIcon, this);
+    alert->addTextEditor ("start", "1", ko ("시작"));
+    alert->addTextEditor ("increment", juce::String (document.settings.numberIncrement, 2), ko ("증가"));
+    alert->addTextEditor ("prefix", "", ko ("접두"));
+    alert->addTextEditor ("suffix", "", ko ("접미"));
+    alert->addButton (ko ("적용"), 1, juce::KeyPress (juce::KeyPress::returnKey));
+    alert->addButton (ko ("취소"), 0, juce::KeyPress (juce::KeyPress::escapeKey));
+    alert->setVisible (true);
+
+    juce::Component::SafePointer<MainComponent> safeThis (this);
+    alert->enterModalState (true, juce::ModalCallbackFunction::create ([safeThis, alert, rows] (int result)
+    {
+        if (safeThis == nullptr || result != 1)
+            return;
+
+        CueNumbering::RenumberOptions options;
+        options.start = alert->getTextEditorContents ("start").getDoubleValue();
+        options.increment = alert->getTextEditorContents ("increment").getDoubleValue();
+        options.prefix = alert->getTextEditorContents ("prefix").trim();
+        options.suffix = alert->getTextEditorContents ("suffix").trim();
+
+        if (! (options.increment > 0.0))
+            options.increment = 1.0;
+
+        const auto numbers = CueNumbering::generate ((int) rows.size(), options);
+
+        safeThis->document.perform (ko ("재번호"), [safeThis, rows, numbers]
+        {
+            for (size_t i = 0; i < rows.size(); ++i)
+            {
+                const auto number = numbers[i];
+                safeThis->document.cues.update (rows[i], [number] (Cue& c) { c.number = number; });
+            }
+        });
+    }), true);
+}
+
+void MainComponent::deleteNumbersOfSelection()
+{
+    editCues (document.cues.getSelectedIndices(), ko ("번호 삭제"), [] (Cue& c) { c.number.clear(); });
+}
+
+int MainComponent::countBrokenCues() const
+{
+    int count = 0;
+
+    for (const auto& cue : document.cues.getAll())
+        if (cue.file == juce::File() || cue.fileMissing)
+            ++count;
+
+    return count;
+}
+
+void MainComponent::showWarnings()
+{
+    juce::StringArray lines;
+    const auto& cues = document.cues;
+
+    for (int i = 0; i < cues.size(); ++i)
+    {
+        const auto& cue = cues.get (i);
+        const juce::String label = "#" + juce::String (i + 1) + (cue.number.isNotEmpty() ? " [" + cue.number + "]" : juce::String()) + " " + cue.name;
+
+        if (cue.file == juce::File())
+            lines.add (label + ko (" - 파일이 지정되지 않음"));
+        else if (cue.fileMissing)
+            lines.add (label + ko (" - 파일 없음: ") + cue.file.getFullPathName());
+    }
+
+    if (lines.isEmpty())
+        lines.add (ko ("문제 있는 큐가 없습니다."));
+    else
+        lines.add (juce::String() + "\n" + ko ("큐 > 없어진 파일 찾기... 로 다른 폴더에서 같은 이름의 파일을 다시 연결할 수 있습니다."));
+
+    showAlert (ko ("경고 (") + juce::String (countBrokenCues()) + ")", lines.joinIntoString ("\n"), false);
+}
+
+void MainComponent::findMissingFiles()
+{
+    if (chooser != nullptr || showMode)
+        return;
+
+    auto startDir = settings.getLastAudioDirectory();
+
+    if (startDir == juce::File())
+        startDir = juce::File::getSpecialLocation (juce::File::userMusicDirectory);
+
+    chooser = std::make_unique<juce::FileChooser> (ko ("없어진 파일을 찾을 폴더 선택 (하위 폴더까지 검색)"), startDir);
+    const int browseFlags = juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectDirectories;
+
+    chooser->launchAsync (browseFlags, [this] (const juce::FileChooser& fc)
+    {
+        const auto dir = fc.getResult();
+        chooser.reset();
+
+        if (dir == juce::File() || ! dir.isDirectory())
+            return;
+
+        std::vector<std::pair<int, juce::File>> found;
+
+        for (int i = 0; i < document.cues.size(); ++i)
+        {
+            const auto& cue = document.cues.get (i);
+
+            if (! cue.fileMissing || cue.file == juce::File())
+                continue;
+
+            const auto matches = dir.findChildFiles (juce::File::findFiles, true, cue.file.getFileName());
+
+            if (! matches.isEmpty())
+                found.emplace_back (i, matches[0]);
+        }
+
+        if (found.empty())
+        {
+            showAlert (ko ("없어진 파일 찾기"), ko ("이 폴더에서 같은 이름의 파일을 찾지 못했습니다."), false);
+            return;
+        }
+
+        auto& formats = engine.getFormatManager();
+        document.perform (ko ("파일 다시 연결"), [this, found, &formats]
+        {
+            for (const auto& [index, file] : found)
+                document.cues.update (index, [file, &formats] (Cue& c) { c.file = file; refreshCueFileInfo (formats, c); });
+        });
+
+        showAlert (ko ("없어진 파일 찾기"), juce::String (found.size()) + ko ("개 파일을 다시 연결했습니다."), false);
+    });
+}
+
 void MainComponent::newProject()
 {
+    controller.cancelPending();
     pluginWindows.closeAll();
     engine.stopAll();
     engine.clearCueChains();
@@ -700,11 +1083,13 @@ void MainComponent::openProjectFile (const juce::File& file)
         return;
     }
 
+    controller.cancelPending();
     pluginWindows.closeAll();
     engine.stopAll();
     engine.clearCueChains();
     engine.getMasterChain().clear();
     document.adopt (std::move (candidate), file);
+    document.cues.setLockPlayheadToSelection (document.settings.lockPlayheadToSelection);
 
     settings.setLastProjectFile (file);
     refreshFileInfoForAllCues();
@@ -717,6 +1102,21 @@ void MainComponent::openProjectFile (const juce::File& file)
 
     if (! warnings.isEmpty())
         showAlert (ko ("프로젝트를 열었지만 확인이 필요합니다"), warnings.joinIntoString ("\n"), false);
+
+    if (document.settings.startOnOpen && document.settings.startOnOpenCue.isNotEmpty())
+    {
+        const auto number = document.settings.startOnOpenCue;
+
+        for (int i = 0; i < document.cues.size(); ++i)
+        {
+            if (document.cues.get (i).number == number)
+            {
+                controller.fireSequence (i);
+                transport.showStatus (ko ("열 때 시작: ") + number, false);
+                break;
+            }
+        }
+    }
 }
 
 void MainComponent::restorePluginChainsFromDocument (juce::StringArray& errors)
@@ -797,6 +1197,63 @@ void MainComponent::openProjectFromCommandLine (const juce::String& commandLine)
             return;
         }
     }
+}
+
+void MainComponent::backupBeforeSave (const juce::File& file)
+{
+    const auto& s = document.settings;
+
+    if (! s.backupBeforeSave || ! file.existsAsFile())
+        return;
+
+    const double nowMs = juce::Time::getMillisecondCounterHiRes();
+
+    if (nowMs - lastSaveBackupMs < 60 * 1000.0)   // at most one pre-save backup per minute
+        return;
+
+    const auto result = BackupManager::copyToBackups (file, juce::Time::getCurrentTime());
+
+    if (result.failed())
+    {
+        transport.showStatus (ko ("백업 실패: ") + result.getErrorMessage(), true);
+        return;
+    }
+
+    lastSaveBackupMs = nowMs;
+
+    if (s.rotateBackups)
+        BackupManager::rotate (BackupManager::backupDirFor (file), juce::Time::getCurrentTime());
+}
+
+void MainComponent::autoBackupIfDue()
+{
+    const auto& s = document.settings;
+
+    if (! s.autoBackup || ! document.hasFile() || ! document.isDirty())
+        return;
+
+    const double nowMs = juce::Time::getMillisecondCounterHiRes();
+
+    if (nowMs < nextAutoBackupMs)
+        return;
+
+    nextAutoBackupMs = nowMs + s.backupIntervalSeconds * 1000.0;
+
+    // the unsaved state itself goes into the backup folder, so a crash loses at most one interval
+    auto project = document.toProject();
+    captureLivePluginStates (project);
+
+    const auto target = BackupManager::backupFileFor (document.getFile(), juce::Time::getCurrentTime());
+    const auto result = ProjectSerializer::save (project, target);
+
+    if (result.failed())
+    {
+        transport.showStatus (ko ("자동 백업 실패: ") + result.getErrorMessage(), true);
+        return;
+    }
+
+    if (s.rotateBackups)
+        BackupManager::rotate (target.getParentDirectory(), juce::Time::getCurrentTime());
 }
 
 void MainComponent::saveProject (bool saveAs, std::function<void (bool)> then)
@@ -909,63 +1366,6 @@ void MainComponent::confirmDiscardChangesThen (std::function<void()> action)
     }), true);
 }
 
-void MainComponent::backupBeforeSave (const juce::File& file)
-{
-    const auto& s = document.settings;
-
-    if (! s.backupBeforeSave || ! file.existsAsFile())
-        return;
-
-    const double nowMs = juce::Time::getMillisecondCounterHiRes();
-
-    if (nowMs - lastSaveBackupMs < 60 * 1000.0)   // at most one pre-save backup per minute
-        return;
-
-    const auto result = BackupManager::copyToBackups (file, juce::Time::getCurrentTime());
-
-    if (result.failed())
-    {
-        transport.showStatus (ko ("백업 실패: ") + result.getErrorMessage(), true);
-        return;
-    }
-
-    lastSaveBackupMs = nowMs;
-
-    if (s.rotateBackups)
-        BackupManager::rotate (BackupManager::backupDirFor (file), juce::Time::getCurrentTime());
-}
-
-void MainComponent::autoBackupIfDue()
-{
-    const auto& s = document.settings;
-
-    if (! s.autoBackup || ! document.hasFile() || ! document.isDirty())
-        return;
-
-    const double nowMs = juce::Time::getMillisecondCounterHiRes();
-
-    if (nowMs < nextAutoBackupMs)
-        return;
-
-    nextAutoBackupMs = nowMs + s.backupIntervalSeconds * 1000.0;
-
-    // the unsaved state itself goes into the backup folder, so a crash loses at most one interval
-    auto project = document.toProject();
-    captureLivePluginStates (project);
-
-    const auto target = BackupManager::backupFileFor (document.getFile(), juce::Time::getCurrentTime());
-    const auto result = ProjectSerializer::save (project, target);
-
-    if (result.failed())
-    {
-        transport.showStatus (ko ("자동 백업 실패: ") + result.getErrorMessage(), true);
-        return;
-    }
-
-    if (s.rotateBackups)
-        BackupManager::rotate (target.getParentDirectory(), juce::Time::getCurrentTime());
-}
-
 void MainComponent::refreshFileInfoForAllCues()
 {
     const bool wasDirty = document.isDirty();
@@ -1009,23 +1409,33 @@ void MainComponent::showAlert (const juce::String& title, const juce::String& me
 
 void MainComponent::updateTransportStandby()
 {
-    transport.setStandbyCue (document.cues.getSelectedIndex(), document.cues.getSelected());
+    transport.setStandbyCue (document.cues.getPlayheadIndex(), document.cues.getPlayhead());
 }
 
 //==============================================================================
 void MainComponent::timerCallback()
 {
     auto playing = engine.getPlayingCues();
-    int paused = 0;
+    int paused = 0, running = 0;
 
     for (const auto& p : playing)
+    {
+        if (p.loaded)
+            continue;
+
+        ++running;
+
         if (p.paused)
             ++paused;
+    }
 
-    transport.setPlayingCount ((int) playing.size(), paused);
+    transport.setPlayingCount (running, paused);
     transport.setGoLocked (controller.isGoLocked());
     inspector.setPlayback (playing);
     table.setPlayingCues (std::move (playing));
+    footer.setCueCount (document.cues.size());
+    footer.setWarningCount (countBrokenCues());
+    controller.checkWallClock (juce::Time::getCurrentTime());
 
     // a knob moved in a plugin editor: the project needs saving (but not right after a restore)
     const bool changed = engine.consumePluginStateChanges();
@@ -1044,20 +1454,35 @@ void MainComponent::cueListStructureChanged()
 
 void MainComponent::cueChanged (int index)
 {
-    if (index == document.cues.getSelectedIndex())
+    if (index == document.cues.getPlayheadIndex())
         updateTransportStandby();
 }
 
 void MainComponent::cueSelectionChanged (int)
 {
+    commands.commandStatusChanged();
+}
+
+void MainComponent::playheadChanged (int index)
+{
     updateTransportStandby();
     commands.commandStatusChanged();
+
+    // auto-load: the standby cue is prepared as soon as the playhead lands on it
+    if (document.cues.isValidIndex (index))
+    {
+        const auto& cue = document.cues.get (index);
+
+        if (cue.autoLoad && ! cue.fileMissing && cue.file != juce::File() && ! engine.isLoaded (cue.id) && ! engine.isPlaying (cue.id))
+            engine.load (cue, 0.0);
+    }
 }
 
 void MainComponent::documentStateChanged()
 {
     unsavedChanges.store (document.isDirty(), std::memory_order_relaxed);
     commands.commandStatusChanged();   // undo / redo names and availability
+    document.cues.setLockPlayheadToSelection (document.settings.lockPlayheadToSelection);
 
     if (onWindowTitleChanged)
         onWindowTitleChanged (document.getWindowTitle());

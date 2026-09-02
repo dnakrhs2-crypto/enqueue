@@ -7,6 +7,7 @@
 #include "audio/AudioEngine.h"
 #include "ui/CueInspector.h"
 #include "ui/CueTable.h"
+#include "ui/FooterBar.h"
 #include "ui/PluginWindows.h"
 #include "ui/TransportBar.h"
 
@@ -19,11 +20,13 @@
 namespace gocue
 {
 
-/** The single main window content: menu bar / transport / cue table / inspector.
-    Owns the project document, the cue controller, the plugin editor windows and dispatches every command. */
+/** The single main window content: menu bar / transport / cue table / inspector / footer.
+    Owns the project document, the scheduler, the cue controller, the plugin editor windows and
+    dispatches every command. */
 class MainComponent : public juce::Component,
                       public juce::ApplicationCommandTarget,
                       public juce::MenuBarModel,
+                      public juce::DragAndDropContainer,
                       private juce::FileDragAndDropTarget,
                       private juce::Timer,
                       private CueList::Listener,
@@ -61,6 +64,14 @@ public:
     std::function<void (const juce::String& title)> onWindowTitleChanged;
 
 private:
+    /** Cue hotkeys are checked before the command shortcuts. */
+    struct HotkeyListener : public juce::KeyListener
+    {
+        explicit HotkeyListener (MainComponent& o) : owner (o) {}
+        bool keyPressed (const juce::KeyPress& key, juce::Component*) override;
+        MainComponent& owner;
+    };
+
     // FileDragAndDropTarget: audio files / folders dropped anywhere else in the window are appended,
     // a .gocue file is opened.
     bool isInterestedInFileDrag (const juce::StringArray& files) override;
@@ -70,8 +81,18 @@ private:
 
     void addCuesFromFiles (const juce::StringArray& files, int insertAt);
     void addCueViaDialog();
-    void removeSelectedCue();
+    void removeSelectedCues();
     void duplicateSelectedCue();
+    void moveSelection (int delta);
+    void moveRows (const std::vector<int>& rows, int insertIndex);
+    void editCues (const std::vector<int>& rows, const juce::String& name, const std::function<void (Cue&)>& mutator);
+    void setShowMode (bool shouldBeShowMode);
+    void showLoadToTimeDialog();
+    void showRenumberDialog();
+    void deleteNumbersOfSelection();
+    void findMissingFiles();
+    void showWarnings();
+    int countBrokenCues() const;
     void newProject();
     void openProjectViaDialog();
     void saveProject (bool saveAs, std::function<void (bool ok)> then = {});
@@ -96,6 +117,7 @@ private:
     void cueListStructureChanged() override;
     void cueChanged (int index) override;
     void cueSelectionChanged (int index) override;
+    void playheadChanged (int index) override;
     void documentStateChanged() override;
 
     AudioEngine& engine;
@@ -105,15 +127,18 @@ private:
     PluginWindowManager pluginWindows;
     Scheduler scheduler;
     CueController controller;
+    HotkeyListener hotkeyListener { *this };
     std::atomic<bool> unsavedChanges { false };
     double ignorePluginChangesUntilMs = 0.0;
     double lastSaveBackupMs = -1.0e12;
     double nextAutoBackupMs = 0.0;
+    bool showMode = false;
 
     juce::MenuBarComponent menuBar;
     TransportBar transport;
     CueTable table;
     CueInspector inspector;
+    FooterBar footer;
     std::unique_ptr<juce::FileChooser> chooser;
     bool dragOverWindow = false;
 

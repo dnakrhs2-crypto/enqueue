@@ -141,6 +141,7 @@ target_sources(GoCue PRIVATE
     src/ui/TimeLoopsPanel.cpp
     src/ui/AudioSettingsDialog.cpp
     src/ui/WorkspaceSettingsDialog.cpp
+    src/ui/FooterBar.cpp
     src/ui/PluginWindows.cpp
     src/ui/PluginChainComponent.cpp
     src/ui/PluginDialogs.cpp)

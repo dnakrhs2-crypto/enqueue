@@ -13,6 +13,8 @@ enum : juce::CommandID
     panicAll,             // Esc: fade everything out over the panic time (twice = hard stop)
     hardStopAll,
     preview,              // V
+    loadCue,              // L
+    loadToTime,           // Ctrl+T
     resetCue,
     resetAll,
 
@@ -21,6 +23,10 @@ enum : juce::CommandID
     duplicateCue,
     moveCueUp,
     moveCueDown,
+    selectAll,            // Ctrl+A
+    renumber,             // Ctrl+R
+    deleteNumbers,
+    findMissingFiles,
 
     newProject,
     openProject,
@@ -29,6 +35,8 @@ enum : juce::CommandID
 
     undo,
     redo,
+
+    toggleShowMode,       // Ctrl+Shift+M
 
     audioSettings,
     pluginManager,
