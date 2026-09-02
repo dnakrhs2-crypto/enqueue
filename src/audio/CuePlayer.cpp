@@ -101,13 +101,19 @@ CuePlayer::CuePlayer (const Cue& c, juce::AudioFormatManager& formats,
     }
 
     startOffsetSeconds = std::max (0.0, startOffset);
+    startOffsetSamples = 0;   // a plain GO starts the layout at its beginning, whatever the first slice is
 
+    if (startOffsetSeconds > 0.0)
     {
         // 'startOffset' is file seconds after the region start: place it in the first pass of the layout
-        // (slices / a skipped first slice make virtual and file positions differ)
+        // (slices / a skipped first slice make virtual and file positions differ). When that file place is not
+        // played at all (a skipped slice), fall back to the plain offset, clamped inside the layout.
         const auto fileSample = (juce::int64) std::llround ((cue.regionStart() + startOffsetSeconds) * fileSampleRate);
-        const auto virtualPos = regionSource->virtualPositionFor (fileSample, RegionLoopSource::Location{});
-        startOffsetSamples = std::max<juce::int64> (0, virtualPos);
+        const auto mapped = regionSource->virtualPositionFor (fileSample, RegionLoopSource::Location{});
+        const auto check = regionSource->locationFor (mapped);
+        const auto total = regionSource->getTotalLength();
+        const auto plain = juce::jlimit<juce::int64> (0, juce::jmax<juce::int64> (0, total - 1), (juce::int64) std::llround (startOffsetSeconds * fileSampleRate));
+        startOffsetSamples = (! check.beyondEnd && std::abs (check.fileSample - fileSample) <= 1) ? mapped : plain;
     }
 
     regionSource->setNextReadPosition (startOffsetSamples);
@@ -253,8 +259,9 @@ void CuePlayer::setLiveRegion (double startSeconds, double endSeconds) noexcept
 void CuePlayer::jumpTo (juce::int64 newPos) noexcept
 {
     // drop the read-ahead cache: it holds audio of the old layout for the same virtual positions
+    // (the stretcher pre-rolls before the new position: start the refill early enough for that)
     if (readAhead != nullptr)
-        readAhead->invalidate (newPos);
+        readAhead->invalidate (stretch != nullptr ? juce::jmax<juce::int64> (0, newPos - 8192) : newPos);
     else
         source->setNextReadPosition (newPos);
 
@@ -313,12 +320,15 @@ bool CuePlayer::seekToFileSeconds (double fileSeconds) noexcept
     if (source == nullptr || micMode)
         return false;
 
-    const auto fileSample = (juce::int64) std::llround (juce::jmax (0.0, fileSeconds) * fileSampleRate);
+    const auto regionEndSample = (juce::int64) std::llround (cue.regionEnd() * fileSampleRate);
+    const auto fileSample = juce::jlimit<juce::int64> (0, juce::jmax<juce::int64> (0, regionEndSample - 1),
+                                                       (juce::int64) std::llround (juce::jmax (0.0, fileSeconds) * fileSampleRate));
     const auto where = source->locationFor (controlPosition());          // the pass we are in now
     const auto newPos = source->virtualPositionFor (fileSample, where);   // that file place inside this pass
+    const auto check = source->locationFor (newPos);
 
-    if (newPos < 0)
-        return false;
+    if (newPos < 0 || check.beyondEnd || std::abs (check.fileSample - fileSample) > 1)
+        return false;   // a skipped slice / outside the region: nothing to jump to
 
     const double rate = std::max (AudioCueData::minRate, effectiveRate (liveRate.load (std::memory_order_relaxed)));
     const double elapsedSamples = ((double) newPos / fileSampleRate / rate - startOffsetSeconds) * currentSampleRate;

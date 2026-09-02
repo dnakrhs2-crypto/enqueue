@@ -44,6 +44,7 @@ public:
     struct PlayOptions
     {
         double startSeconds = 0.0;          // file seconds after the region start to begin at (pass 0)
+        bool explicitStart = false;         // true: startSeconds was chosen by the user (a waveform click) and wins over a loaded position
         bool audition = false;              // mark the instance as an audition
         bool silent = false;                // audition "출력 없음": plays (timing, sequences) but reaches no output
         juce::Uuid patchOverride = juce::Uuid::null();   // audition "대체 패치": play through this patch instead of the cue own patch

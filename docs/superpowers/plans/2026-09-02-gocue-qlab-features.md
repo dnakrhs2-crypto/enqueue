@@ -341,6 +341,18 @@ class Scheduler { public: using Clock = std::function<double()>;   // 초
 ## gom QA 2차: 디자인 (2026-09-02 밤 → 09-03) → v0.8.3
 - [x] 디자인 시안 20종을 HTML로 앱 레이아웃 그대로 그려 헤드리스 크롬으로 렌더링(`scratchpad/mock/make_mocks.py`, 바탕화면 `GoCue 디자인 시안/` 21장). gom 선택 = **10 큐랩 스타일**.
 - [x] 적용: `Palette` 교체(+header/button/field/selected/playingRow/fadingRow/pausedRow/cornerRadius/buttonGradient), `GoCueLookAndFeel` ColourScheme + colourId 지정 + `drawButtonBackground`(5 px, 그라데이션), GoButton 8 px 그라데이션, 상태 행 색 분리(밝은 상태색 vs 어두운 행색). 코덱스 리뷰(codex_review_theme) → 반영 → 0.8.3.
+- [x] 테마 코덱스 리뷰 11건 반영(대비: 주황/초록 버튼 어두운 글자, 선택 행 밝은 테두리, 재생 행·카트 어두운 상태색 + 하단 진행 막대, 큐 색 틴트 어둡게, 그룹 띠 오버레이 위, 스크롤바·오류색, 포커스 링, 연결 모서리). 메뉴 18pt/막대 17pt(30px).
+
+## gom QA 3차 (2026-09-03 00:00~01:20) → v0.8.3
+- [x] 표 글자 16/15pt·번호 굵게·행 높이 {28,34,42}, 시간 칸 가운데 정렬(헤더 LAF 오버라이드). 두 번째 색 UI 제거. 활성 큐 글자 17/14pt.
+- [x] 번호 바꾸면 자동 정렬: `CueNumbering::compare`, `CueList::placeByNumber`(마지막 작은 형제 뒤/첫 큰 형제 앞), `ProjectDocument::setCueNumber`(perform 1회), 표·인스펙터 경로, `CueInspector::finishEditing`(리스트 전환 전 커밋). 테스트 `CueOrderTests`.
+- [x] 재생 탭: 파형 클릭 → `onSeekPlay` → 재생 중이면 `engine.seekToFileSeconds`(현재 pass 안, `RegionLoopSource::locationFor`+`virtualPositionFor`), 아니면 `controller.previewFrom`(startOffset을 첫 pass 가상 위치로 변환; 로드된 인스턴스도 seek). 미리듣기 버튼 제거, 확대 +/-(Ctrl+휠), 세로 크기 +/-(`zoomVertical`).
+- [x] 전체 페이드 정지 기본 1초 + 톱니바퀴 메뉴(0.5~10초/직접 입력, `applyPanicSeconds`), 버튼에 시간 표시. 레벨 Alt+더블클릭 0 dB(활성 칸 모드 제외). 새 패치 큐 출력 16. 플러그인 메뉴 제조사별.
+- [x] "이펙트"→"플러그인", 슬롯 번호 배지 + 화살표, 활성(초록)/비활성(주황) 토글.
+- [x] 기본값: 파일 복사 켬, 자동 백업 5분, 최근 15개 보관(`BackupManager::rotate` 단순화).
+- [x] **드래그 버그 근본 원인**: 드롭 대상 클래스들이 `FileDragAndDropTarget`/`DragAndDropTarget`을 private 상속 → JUCE `dynamic_cast` 실패 → 파일 드롭·행 드래그 전부 불가. public 상속으로 수정. 검증 = 실제 탐색기 창 드래그(`tools/gocue_explorerdrag.ps1`) — WinForms 시뮬레이터(`gocue_droptest.ps1`)는 프로세스 간 드롭을 못 넘겨 무효였음.
+- [x] 코덱스 리뷰: QA3 9건(1~6,8,9 반영, 7 = 비활성 리스트 커서 스냅샷은 보류), 플러그인 UI 4건 반영, 최종(codex_review_final3) → 0.8.3 릴리스.
+- [ ] exclusive 모드 멀티 출력: JUCE WASAPI가 exclusive에서도 채널 수를 탐색(`queryMaxNumChannels`)하므로 장치 드라이버가 exclusive 다채널 포맷을 거부하는 경우로 추정 — gom 장치 확인 필요, 다채널은 ASIO 권장.
 
 
 ## 최종

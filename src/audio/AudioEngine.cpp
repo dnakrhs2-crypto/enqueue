@@ -584,7 +584,7 @@ bool AudioEngine::play (const Cue& cue, const PlayOptions& options, juce::String
                     }
                 }
 
-                if (options.startSeconds > 0.0)
+                if (options.explicitStart)
                     existing->seekToFileSeconds (cue.regionStart() + options.startSeconds);   // an explicit start place wins over the loaded one
 
                 existing->setStartOrder (++startCounter);

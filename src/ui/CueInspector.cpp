@@ -3152,10 +3152,10 @@ void CueInspector::finishEditing()
     if (focused == nullptr || ! isParentOf (focused))
         return;
 
+    focused->giveAwayKeyboardFocus();   // the focus-lost commit runs now, while the fields still show this list's cue
+
     if (onReturnFocus)
-        onReturnFocus();            // the focus-lost commit runs now, while the fields still show this list's cue
-    else
-        focused->giveAwayKeyboardFocus();
+        onReturnFocus();                // then the list view (table or cart) takes the keys again
 }
 
 void CueInspector::refreshPlugins()

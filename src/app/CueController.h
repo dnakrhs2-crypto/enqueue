@@ -152,6 +152,7 @@ private:
     bool scheduleStart (const juce::Uuid& id, double atSeconds, bool audition);
     AudioEngine::PlayOptions playOptions (bool audition) const;
     double startOffsetForNextPlay = 0.0;   // previewFrom(): seconds into the region the next play begins at
+    bool explicitStartForNextPlay = false;
     /** The cue plus, for a group, everything inside it: spared by its own fade-stop-others / duck. */
     std::set<juce::Uuid> familyOf (const Cue& cue) const;
     void applyFadeStopOthers (const Cue& cue, const std::set<juce::Uuid>& spare);

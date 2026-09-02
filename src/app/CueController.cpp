@@ -589,6 +589,7 @@ AudioEngine::PlayOptions CueController::playOptions (bool audition) const
 {
     AudioEngine::PlayOptions options;
     options.startSeconds = startOffsetForNextPlay;
+    options.explicitStart = explicitStartForNextPlay;
 
     if (! isAuditionRequested (audition))
         return options;
@@ -1328,8 +1329,10 @@ CueController::GoResult CueController::preview (bool audition)
 CueController::GoResult CueController::previewFrom (double regionSeconds)
 {
     startOffsetForNextPlay = juce::jmax (0.0, regionSeconds);
+    explicitStartForNextPlay = true;
     const auto result = preview (false);
     startOffsetForNextPlay = 0.0;
+    explicitStartForNextPlay = false;
     return result;
 }
 
