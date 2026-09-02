@@ -352,7 +352,7 @@ class Scheduler { public: using Clock = std::function<double()>;   // 초
 - [x] 기본값: 파일 복사 켬, 자동 백업 5분, 최근 15개 보관(`BackupManager::rotate` 단순화).
 - [x] **드래그 버그 근본 원인**: 드롭 대상 클래스들이 `FileDragAndDropTarget`/`DragAndDropTarget`을 private 상속 → JUCE `dynamic_cast` 실패 → 파일 드롭·행 드래그 전부 불가. public 상속으로 수정. 검증 = 실제 탐색기 창 드래그(`tools/gocue_explorerdrag.ps1`) — WinForms 시뮬레이터(`gocue_droptest.ps1`)는 프로세스 간 드롭을 못 넘겨 무효였음.
 - [x] 코덱스 리뷰: QA3 9건(1~6,8,9 반영, 7 = 비활성 리스트 커서 스냅샷은 보류), 플러그인 UI 4건 반영, 최종(codex_review_final3) → 0.8.3 릴리스.
-- [ ] exclusive 모드 멀티 출력: JUCE WASAPI가 exclusive에서도 채널 수를 탐색(`queryMaxNumChannels`)하므로 장치 드라이버가 exclusive 다채널 포맷을 거부하는 경우로 추정 — gom 장치 확인 필요, 다채널은 ASIO 권장.
+- [x] exclusive 모드 멀티 출력(gom 선택 3번): JUCE `juce_WASAPI_windows.cpp`의 채널 탐색·열기가 "하위 N비트" 마스크만 시도하던 것을 표준 스피커 마스크(5.1/7.1 등)+0까지 시도하게 패치(로컬 JUCE 커밋 + `tools/juce-patches/0001-…patch`). 이 PC의 HDMI(캡처보드)·S/PDIF는 원래 2ch라 다채널 효과는 gom 인터페이스로 확인 필요, 회귀 없음(probe: 2ch 그대로 열림). `tests/DeviceProbeTests.cpp`(GOCUE_PROBE_DEVICES=1) → **v0.8.4**.
 
 
 ## 최종

@@ -1,0 +1,5 @@
+<h2>GoCue 0.8.4</h2>
+<ul>
+  <li><b>WASAPI exclusive 모드 멀티 채널</b>: 장치의 채널 수를 찾을 때와 열 때 표준 스피커 배치(5.1 = 0x3F/0x60F, 7.1 = 0x63F/0xFF 등)와 "배치 없음" 마스크도 시도합니다. 지금까지는 "앞에서부터 N채널" 마스크만 시도해 exclusive 모드에서 드라이버가 거부하면 스테레오만 나왔습니다. (JUCE 수정: <code>tools/juce-patches/0001-wasapi-exclusive-channel-masks.patch</code>)</li>
+  <li>테스트 실행 파일에 장치 점검 항목(<code>GOCUE_PROBE_DEVICES=1</code>)을 넣어 장치별 채널 수와 열기 결과를 찍어 볼 수 있습니다.</li>
+</ul>
