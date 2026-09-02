@@ -97,9 +97,14 @@ public:
     void systemRequestedQuit() override
     {
         if (mainWindow != nullptr)
-            mainWindow->getMainComponent().confirmDiscardChangesThen ([this] { quit(); });
+        {
+            auto& main = mainWindow->getMainComponent();
+            main.confirmDiscardChangesThen ([this, &main] { main.fireCloseCueThen ([this] { quit(); }); });
+        }
         else
+        {
             quit();
+        }
     }
 
     void anotherInstanceStarted (const juce::String& commandLine) override

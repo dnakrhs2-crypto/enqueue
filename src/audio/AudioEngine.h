@@ -34,6 +34,7 @@ public:
         bool fadingOut = false;
         bool paused = false;
         bool loaded = false;                // prepared but not started yet (QLab "loaded")
+        juce::int64 startOrder = 0;         // increases with every start (ordering the active-cues list)
     };
 
     struct PlayOptions
@@ -88,6 +89,8 @@ public:
     void setLiveRegion (const juce::Uuid& cueId, double startSeconds, double endSeconds);
     void setLiveRate (const juce::Uuid& cueId, double rate);
     void setLiveGainDb (const juce::Uuid& cueId, double gainDb);
+    /** Scrub: jump to a fraction (0..1) of the cue's total length. */
+    void seekToFraction (const juce::Uuid& cueId, double fraction);
     /** Duck / boost (dB on top of the cue gain) reached over 'rampSeconds'; 0 = none. */
     void setDuckDb (const juce::Uuid& cueId, double duckDb, double rampSeconds);
     double getDuckDb (const juce::Uuid& cueId) const;

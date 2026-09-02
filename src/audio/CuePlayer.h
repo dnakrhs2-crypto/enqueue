@@ -72,6 +72,8 @@ public:
         plugin tail). The read-ahead is flushed so the new region is heard after a few milliseconds.
         Message thread. */
     void setLiveRegion (double startSeconds, double endSeconds) noexcept;
+    /** Jumps to a fraction (0..1) of the cue's total length (scrubbing in the active-cues panel). Message thread. */
+    void seekToFraction (double fraction) noexcept;
     /** Live playback rate (varispeed). Any thread. */
     void setLiveRate (double rate) noexcept;
     /** Live cue gain (dB); ramps over one block so the change is click-free. Any thread. */
@@ -140,7 +142,8 @@ private:
     std::atomic<double> filePositionSeconds { 0.0 };
     std::atomic<int> passIndex { 0 };
     std::atomic<double> virtualPosition { 0.0 };        // file samples on the source's virtual timeline (audible); written by the audio thread
-    std::atomic<juce::int64> pendingVirtualPosition { -1 };   // set by setLiveRegion, adopted by the audio thread
+    std::atomic<juce::int64> pendingVirtualPosition { -1 };   // set by setLiveRegion / seek, adopted by the audio thread
+    std::atomic<double> pendingElapsedSamples { -1.0 };       // set by seek, adopted with the position
 
     // audio-thread state
     double elapsedOutputSamples = 0.0;

@@ -52,6 +52,7 @@ target_sources(GoCueCore INTERFACE
     ${CMAKE_CURRENT_SOURCE_DIR}/src/model/CueList.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/model/ProjectSerializer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/model/CueNumbering.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/model/CuePropertyPaste.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/app/ProjectDocument.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/app/CueController.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/app/Scheduler.cpp
@@ -142,6 +143,8 @@ target_sources(GoCue PRIVATE
     src/ui/AudioSettingsDialog.cpp
     src/ui/WorkspaceSettingsDialog.cpp
     src/ui/FooterBar.cpp
+    src/ui/ActiveCuesPanel.cpp
+    src/ui/PastePropertiesDialog.cpp
     src/ui/PluginWindows.cpp
     src/ui/PluginChainComponent.cpp
     src/ui/PluginDialogs.cpp)

@@ -303,6 +303,15 @@ void AudioEngine::setLiveGainDb (const juce::Uuid& cueId, double gainDb)
             p->setLiveGainDb (gainDb);
 }
 
+void AudioEngine::seekToFraction (const juce::Uuid& cueId, double fraction)
+{
+    const juce::ScopedLock sl (lock);
+
+    for (auto& p : players)
+        if (p->getCueId() == cueId && ! p->hasFinished() && ! p->isLoadedNotStarted())
+            p->seekToFraction (fraction);
+}
+
 void AudioEngine::setDuckDb (const juce::Uuid& cueId, double duckDb, double rampSeconds)
 {
     const juce::ScopedLock sl (lock);
@@ -367,6 +376,7 @@ std::vector<AudioEngine::PlayingCue> AudioEngine::getPlayingCues() const
         info.fadingOut = p->isFadingOut();
         info.paused = p->isPaused();
         info.loaded = p->isLoadedNotStarted();
+        info.startOrder = p->getStartOrder();
         result.push_back (info);
     }
 

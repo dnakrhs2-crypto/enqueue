@@ -132,6 +132,19 @@ namespace
             closeEditor = &addNumber (s.startOnCloseCue, "", [] (WorkspaceSettings& w, const juce::String& t) { w.startOnCloseCue = t.trim(); },
                                       [] (const WorkspaceSettings& w) { return w.startOnCloseCue; });
             closeEditor->setJustification (juce::Justification::centredLeft);
+
+            rowSizeLabel = &addLabel (ko ("큐 리스트 행 크기"));
+            rowSizeBox.addItem (ko ("작게"), 1);
+            rowSizeBox.addItem (ko ("보통"), 2);
+            rowSizeBox.addItem (ko ("크게"), 3);
+            rowSizeBox.setSelectedId (juce::jlimit (0, 2, s.rowSize) + 1, juce::dontSendNotification);
+            rowSizeBox.onChange = [this]
+            {
+                auto w = document.settings;
+                w.rowSize = juce::jlimit (0, 2, rowSizeBox.getSelectedId() - 1);
+                document.setSettings (w);
+            };
+            addAndMakeVisible (rowSizeBox);
         }
 
         void resized() override
@@ -170,10 +183,16 @@ namespace
             row = next();
             closeToggle->setBounds (row.take (230));
             closeEditor->setBounds (row.take (100));
+            area.removeFromTop (6);
+
+            row = next();
+            rowSizeLabel->setBounds (row.take (230));
+            rowSizeBox.setBounds (row.take (100));
         }
 
     private:
-        juce::Label *goLabel, *goHint, *panicLabel, *panicHint, *incrementLabel;
+        juce::Label *goLabel, *goHint, *panicLabel, *panicHint, *incrementLabel, *rowSizeLabel;
+        juce::ComboBox rowSizeBox;
         juce::TextEditor *goEditor, *panicEditor, *incrementEditor, *openEditor, *closeEditor;
         juce::ToggleButton *keyUpToggle, *autoNumberToggle, *lockToggle, *openToggle, *closeToggle;
     };

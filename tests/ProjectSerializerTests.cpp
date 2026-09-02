@@ -150,6 +150,46 @@ public:
             expectEquals (warnings.size(), 1);
         }
 
+        beginTest ("workspace settings round trip, including the new-cue template and the row size");
+        {
+            Project p;
+            p.settings.doubleGoSeconds = 1.5;
+            p.settings.panicSeconds = 3.0;
+            p.settings.autoNumber = false;
+            p.settings.rowSize = 2;
+            p.settings.startOnClose = true;
+            p.settings.startOnCloseCue = "99";
+            p.settings.hasCueTemplate = true;
+            p.settings.cueTemplate.gainDb = -4.5;
+            p.settings.cueTemplate.fadeOutMs = 900;
+            p.settings.cueTemplate.color = 6;
+            p.settings.cueTemplate.duck.enabled = true;
+            PluginSlotState templatePlugin;
+            templatePlugin.name = "Comp";
+            p.settings.cueTemplate.plugins.push_back (templatePlugin);
+
+            Project q;
+            expect (ProjectSerializer::fromJson (ProjectSerializer::toJson (p), q, nullptr).wasOk());
+            expectWithinAbsoluteError (q.settings.doubleGoSeconds, 1.5, 1e-9);
+            expectWithinAbsoluteError (q.settings.panicSeconds, 3.0, 1e-9);
+            expect (! q.settings.autoNumber);
+            expectEquals (q.settings.rowSize, 2);
+            expect (q.settings.startOnClose);
+            expectEquals (q.settings.startOnCloseCue, juce::String ("99"));
+            expect (q.settings.hasCueTemplate);
+            expectWithinAbsoluteError (q.settings.cueTemplate.gainDb, -4.5, 1e-9);
+            expectEquals (q.settings.cueTemplate.fadeOutMs, 900);
+            expectEquals (q.settings.cueTemplate.color, 6);
+            expect (q.settings.cueTemplate.duck.enabled);
+            expectEquals ((int) q.settings.cueTemplate.plugins.size(), 1);
+            expectEquals (q.settings.cueTemplate.plugins[0].name, juce::String ("Comp"));
+
+            Project r;
+            expect (ProjectSerializer::fromJson ("{\"cues\":[],\"settings\":{\"rowSize\":7,\"hasCueTemplate\":true}}", r, nullptr).wasOk());
+            expectEquals (r.settings.rowSize, 2);          // clamped
+            expect (! r.settings.hasCueTemplate);          // flag without a template object -> off
+        }
+
         beginTest ("missing fields fall back to defaults");
         {
             Project q;

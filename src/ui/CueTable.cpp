@@ -412,6 +412,8 @@ void CueTable::cellClicked (int rowNumber, int columnId, const juce::MouseEvent&
     if (! cues.isValidIndex (rowNumber))
         return;
 
+    table.grabKeyboardFocus();   // the quick-edit keys (N Q E W C O D) need the table focused
+
     if (e.mods.isPopupMenu())
     {
         if (! cues.isSelected (rowNumber))

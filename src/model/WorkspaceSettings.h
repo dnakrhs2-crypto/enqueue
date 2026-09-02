@@ -1,5 +1,7 @@
 #pragma once
 
+#include "model/Cue.h"
+
 #include <juce_core/juce_core.h>
 
 #include <cmath>
@@ -10,6 +12,10 @@ namespace gocue
 /** Per-project settings (QLab "Workspace Settings"). Saved in the .gocue file. */
 struct WorkspaceSettings
 {
+    // 큐 템플릿: new audio cues copy their settings (not name / number / file) from this cue
+    bool hasCueTemplate = false;
+    Cue cueTemplate;
+    int rowSize = 1;                       // cue list rows: 0 small, 1 medium, 2 large
     // 일반
     double doubleGoSeconds = 0.0;          // minimum time between two GOs; 0 = off
     bool requireKeyUp = false;             // the GO key must be released before it fires again
@@ -53,6 +59,31 @@ struct WorkspaceSettings
         fix (maxLevelDb, -30.0, 60.0, 12.0);
         fix (minLevelDb, -180.0, -40.0, -60.0);
         backupIntervalSeconds = juce::jlimit (5, 600, backupIntervalSeconds);
+        rowSize = juce::jlimit (0, 2, rowSize);
+        cueTemplate.sanitise();
+    }
+
+    /** Copies the template's settings onto a fresh cue (identity, name, number, file and cached facts stay). */
+    void applyTemplate (Cue& cue) const
+    {
+        if (! hasCueTemplate)
+            return;
+
+        const auto id = cue.id;
+        const auto name = cue.name;
+        const auto number = cue.number;
+        const auto file = cue.file;
+        const auto duration = cue.durationSeconds;
+        const bool missing = cue.fileMissing;
+        cue = cueTemplate;
+        cue.id = id;
+        cue.name = name;
+        cue.number = number;
+        cue.file = file;
+        cue.durationSeconds = duration;
+        cue.fileMissing = missing;
+        cue.hotkey.clear();               // a hotkey must stay unique
+        cue.wallClock.enabled = false;
     }
 };
 

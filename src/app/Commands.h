@@ -24,9 +24,17 @@ enum : juce::CommandID
     moveCueUp,
     moveCueDown,
     selectAll,            // Ctrl+A
+    copyCues,             // Ctrl+C
+    cutCues,              // Ctrl+X
+    pasteCues,            // Ctrl+V
+    pasteCueProperties,   // Ctrl+Shift+V
+    find,                 // Ctrl+F
+    findNext,             // F3
     renumber,             // Ctrl+R
     deleteNumbers,
     findMissingFiles,
+    saveCueTemplate,
+    clearCueTemplate,
 
     newProject,
     openProject,
@@ -37,6 +45,7 @@ enum : juce::CommandID
     redo,
 
     toggleShowMode,       // Ctrl+Shift+M
+    toggleActiveCues,     // Ctrl+L
 
     audioSettings,
     pluginManager,

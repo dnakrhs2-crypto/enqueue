@@ -8,6 +8,7 @@
 #include "ui/AudioSettingsDialog.h"
 #include "ui/PluginDialogs.h"
 #include "ui/UiUtils.h"
+#include "ui/PastePropertiesDialog.h"
 #include "ui/WorkspaceSettingsDialog.h"
 
 #include <set>
@@ -37,7 +38,8 @@ MainComponent::MainComponent (AudioEngine& e, AppSettings& s, juce::ApplicationC
       menuBar (this),
       transport (cm),
       table (document.cues, e.getFormatManager(), cm),
-      inspector (document, e, s, pluginWindows)
+      inspector (document, e, s, pluginWindows),
+      activeCues (e, document.cues)
 {
     setWantsKeyboardFocus (true);
 
@@ -45,6 +47,7 @@ MainComponent::MainComponent (AudioEngine& e, AppSettings& s, juce::ApplicationC
     addAndMakeVisible (transport);
     addAndMakeVisible (table);
     addAndMakeVisible (inspector);
+    addAndMakeVisible (activeCues);
     addAndMakeVisible (footer);
 
     controller.onStatus = [this] (const juce::String& message, bool isError) { transport.showStatus (message, isError); };
@@ -117,6 +120,12 @@ void MainComponent::resized()
     transport.setBounds (area.removeFromTop (transportHeight));
     footer.setBounds (area.removeFromBottom (footerHeight));
     inspector.setBounds (area.removeFromBottom (inspectorHeight));
+
+    activeCues.setVisible (activeCuesVisible);
+
+    if (activeCuesVisible)
+        activeCues.setBounds (area.removeFromRight (280));
+
     table.setBounds (area);
 }
 
@@ -194,10 +203,13 @@ void MainComponent::getAllCommands (juce::Array<juce::CommandID>& ids)
                     CommandIDs::loadCue, CommandIDs::loadToTime, CommandIDs::resetCue, CommandIDs::resetAll,
                     CommandIDs::addCue, CommandIDs::removeCue, CommandIDs::duplicateCue,
                     CommandIDs::moveCueUp, CommandIDs::moveCueDown, CommandIDs::selectAll,
+                    CommandIDs::copyCues, CommandIDs::cutCues, CommandIDs::pasteCues, CommandIDs::pasteCueProperties,
+                    CommandIDs::find, CommandIDs::findNext,
                     CommandIDs::renumber, CommandIDs::deleteNumbers, CommandIDs::findMissingFiles,
+                    CommandIDs::saveCueTemplate, CommandIDs::clearCueTemplate,
                     CommandIDs::newProject, CommandIDs::openProject,
                     CommandIDs::saveProject, CommandIDs::saveProjectAs,
-                    CommandIDs::undo, CommandIDs::redo, CommandIDs::toggleShowMode,
+                    CommandIDs::undo, CommandIDs::redo, CommandIDs::toggleShowMode, CommandIDs::toggleActiveCues,
                     CommandIDs::audioSettings, CommandIDs::pluginManager, CommandIDs::masterInserts,
                     CommandIDs::workspaceSettings,
                     CommandIDs::checkForUpdates, CommandIDs::about });
@@ -309,6 +321,55 @@ void MainComponent::getCommandInfo (juce::CommandID commandID, juce::Application
             result.setActive (! document.cues.isEmpty());
             break;
 
+        case CommandIDs::copyCues:
+            result.setInfo (selectedRows.size() > 1 ? ko ("큐 복사 (") + juce::String (selectedRows.size()) + ")" : ko ("큐 복사"),
+                            ko ("선택 큐를 플러그인 체인까지 클립보드에 복사"), editMenu, 0);
+            result.addDefaultKeypress ('C', ModifierKeys::commandModifier);
+            result.setActive (hasSelection);
+            break;
+
+        case CommandIDs::cutCues:
+            result.setInfo (selectedRows.size() > 1 ? ko ("큐 잘라내기 (") + juce::String (selectedRows.size()) + ")" : ko ("큐 잘라내기"),
+                            ko ("선택 큐를 복사한 뒤 삭제"), editMenu, 0);
+            result.addDefaultKeypress ('X', ModifierKeys::commandModifier);
+            result.setActive (canEdit && hasSelection);
+            break;
+
+        case CommandIDs::pasteCues:
+            result.setInfo (clipboard.cues.size() > 1 ? ko ("큐 붙여넣기 (") + juce::String (clipboard.cues.size()) + ")" : ko ("큐 붙여넣기"),
+                            ko ("복사한 큐를 선택 큐 아래에 새 큐로 붙여넣기"), editMenu, 0);
+            result.addDefaultKeypress ('V', ModifierKeys::commandModifier);
+            result.setActive (canEdit && ! clipboard.cues.empty());
+            break;
+
+        case CommandIDs::pasteCueProperties:
+            result.setInfo (ko ("큐 속성 붙여넣기..."), ko ("복사한 큐의 속성(색·시간·트리거·트림·레벨·이펙트)만 선택 큐들에 적용"), editMenu, 0);
+            result.addDefaultKeypress ('V', ModifierKeys::commandModifier | ModifierKeys::shiftModifier);
+            result.setActive (canEdit && hasSelection && ! clipboard.cues.empty());
+            break;
+
+        case CommandIDs::find:
+            result.setInfo (ko ("찾기..."), ko ("번호·이름·파일·메모로 큐 찾기"), editMenu, 0);
+            result.addDefaultKeypress ('F', ModifierKeys::commandModifier);
+            result.setActive (! document.cues.isEmpty());
+            break;
+
+        case CommandIDs::findNext:
+            result.setInfo (ko ("다음 찾기"), ko ("같은 검색어로 다음 큐 찾기"), editMenu, 0);
+            result.addDefaultKeypress (KeyPress::F3Key, ModifierKeys::noModifiers);
+            result.setActive (lastSearch.isNotEmpty() && ! document.cues.isEmpty());
+            break;
+
+        case CommandIDs::saveCueTemplate:
+            result.setInfo (ko ("선택 큐를 새 큐 기본값으로"), ko ("이후 추가하는 큐가 이 큐의 설정(페이드·게인·색·트리거·이펙트 등)을 물려받음 (프로젝트에 저장)"), cueMenu, 0);
+            result.setActive (canEdit && hasSelection);
+            break;
+
+        case CommandIDs::clearCueTemplate:
+            result.setInfo (ko ("새 큐 기본값 초기화"), ko ("새 큐를 다시 기본 설정으로 추가"), cueMenu, 0);
+            result.setActive (canEdit && document.settings.hasCueTemplate);
+            break;
+
         case CommandIDs::renumber:
             result.setInfo (ko ("선택 큐 재번호..."), ko ("선택한 큐에 순서대로 번호를 매김 (시작·증가·접두·접미)"), cueMenu, 0);
             result.addDefaultKeypress ('R', ModifierKeys::commandModifier);
@@ -369,6 +430,12 @@ void MainComponent::getCommandInfo (juce::CommandID commandID, juce::Application
             result.setInfo (showMode ? ko ("편집 모드로") : ko ("쇼 모드로 (편집 잠금)"),
                             ko ("쇼 모드에서는 큐 추가·삭제·이동·속성 편집이 잠깁니다 (재생·저장은 그대로)"), editMenu, 0);
             result.addDefaultKeypress ('M', ModifierKeys::commandModifier | ModifierKeys::shiftModifier);
+            break;
+
+        case CommandIDs::toggleActiveCues:
+            result.setInfo (activeCuesVisible ? ko ("활성 큐 패널 숨기기") : ko ("활성 큐 패널 보이기"),
+                            ko ("재생 중인 큐 목록 (일시정지·스크럽·페이드 정지)"), editMenu, 0);
+            result.addDefaultKeypress ('L', ModifierKeys::commandModifier);
             break;
 
         case CommandIDs::audioSettings:
@@ -480,6 +547,38 @@ bool MainComponent::perform (const InvocationInfo& info)
             document.cues.selectAll();
             break;
 
+        case CommandIDs::copyCues:
+            copySelectedCues();
+            break;
+
+        case CommandIDs::cutCues:
+            cutSelectedCues();
+            break;
+
+        case CommandIDs::pasteCues:
+            pasteCues();
+            break;
+
+        case CommandIDs::pasteCueProperties:
+            pasteCueProperties();
+            break;
+
+        case CommandIDs::find:
+            showFindDialog();
+            break;
+
+        case CommandIDs::findNext:
+            findNext (false);
+            break;
+
+        case CommandIDs::saveCueTemplate:
+            saveCueTemplate();
+            break;
+
+        case CommandIDs::clearCueTemplate:
+            clearCueTemplate();
+            break;
+
         case CommandIDs::renumber:
             showRenumberDialog();
             break;
@@ -524,6 +623,12 @@ bool MainComponent::perform (const InvocationInfo& info)
 
         case CommandIDs::toggleShowMode:
             setShowMode (! showMode);
+            break;
+
+        case CommandIDs::toggleActiveCues:
+            activeCuesVisible = ! activeCuesVisible;
+            resized();
+            commands.commandStatusChanged();
             break;
 
         case CommandIDs::audioSettings:
@@ -586,9 +691,18 @@ juce::PopupMenu MainComponent::getMenuForIndex (int topLevelMenuIndex, const juc
             menu.addCommandItem (&commands, CommandIDs::undo);
             menu.addCommandItem (&commands, CommandIDs::redo);
             menu.addSeparator();
+            menu.addCommandItem (&commands, CommandIDs::cutCues);
+            menu.addCommandItem (&commands, CommandIDs::copyCues);
+            menu.addCommandItem (&commands, CommandIDs::pasteCues);
+            menu.addCommandItem (&commands, CommandIDs::pasteCueProperties);
+            menu.addSeparator();
+            menu.addCommandItem (&commands, CommandIDs::find);
+            menu.addCommandItem (&commands, CommandIDs::findNext);
+            menu.addSeparator();
             menu.addCommandItem (&commands, CommandIDs::selectAll);
             menu.addSeparator();
             menu.addCommandItem (&commands, CommandIDs::toggleShowMode);
+            menu.addCommandItem (&commands, CommandIDs::toggleActiveCues);
             break;
 
         case 2:
@@ -603,6 +717,9 @@ juce::PopupMenu MainComponent::getMenuForIndex (int topLevelMenuIndex, const juc
             menu.addCommandItem (&commands, CommandIDs::deleteNumbers);
             menu.addSeparator();
             menu.addCommandItem (&commands, CommandIDs::findMissingFiles);
+            menu.addSeparator();
+            menu.addCommandItem (&commands, CommandIDs::saveCueTemplate);
+            menu.addCommandItem (&commands, CommandIDs::clearCueTemplate);
             break;
 
         case 3:
@@ -655,12 +772,15 @@ void MainComponent::addCuesFromFiles (const juce::StringArray& files, int insert
     const bool autoNumber = document.settings.autoNumber;
     const double increment = document.settings.numberIncrement;
     const bool autoLoad = document.settings.autoLoadNewCues;
+    const WorkspaceSettings templateSettings = document.settings;   // hasCueTemplate / cueTemplate
+    const bool templateHasPlugins = templateSettings.hasCueTemplate && ! templateSettings.cueTemplate.plugins.empty();
 
     document.perform (files.size() == 1 ? ko ("큐 추가") : ko ("큐 추가 (") + juce::String (files.size()) + ")",
-                      [this, files, insertAt, copyIn, projectDir, autoNumber, increment, autoLoad]
+                      [this, files, insertAt, copyIn, projectDir, autoNumber, increment, autoLoad, templateSettings]
     {
         int index = insertAt;
         int last = -1;
+        std::vector<juce::Uuid> added;
 
         for (const auto& path : files)
         {
@@ -670,6 +790,7 @@ void MainComponent::addCuesFromFiles (const juce::StringArray& files, int insert
             cue.name = file.getFileNameWithoutExtension();
             cue.file = file;
             cue.autoLoad = autoLoad;
+            templateSettings.applyTemplate (cue);          // before the file info so the trim is clamped to this file
             refreshCueFileInfo (engine.getFormatManager(), cue);
 
             const int at = index < 0 ? document.cues.size() : index;
@@ -677,13 +798,16 @@ void MainComponent::addCuesFromFiles (const juce::StringArray& files, int insert
             if (autoNumber)
                 cue.number = CueNumbering::next (document.cues.getAll(), at, increment);
 
+            added.push_back (cue.id);
             last = document.cues.add (std::move (cue), index);
             index = last + 1;
         }
 
         if (last >= 0)
             document.cues.setSelectedIndex (last);
-    });
+
+        restoreChainsForCues (added);
+    }, { {}, templateHasPlugins });
 
     settings.setLastAudioDirectory (juce::File (files[0]).getParentDirectory());
 }
@@ -854,6 +978,18 @@ void MainComponent::setShowMode (bool shouldBeShowMode)
     table.focusTable();
 }
 
+namespace
+{
+    /** An AlertWindow shown with enterModalState() focuses itself, not its text editor: typing would go nowhere. */
+    void focusAlertEditor (juce::AlertWindow& alert, const juce::String& editorName)
+    {
+        alert.toFront (true);
+
+        if (auto* editor = alert.getTextEditor (editorName))
+            editor->grabKeyboardFocus();
+    }
+}
+
 void MainComponent::showLoadToTimeDialog()
 {
     const auto* cue = document.cues.getSelected();
@@ -894,6 +1030,8 @@ void MainComponent::showLoadToTimeDialog()
 
         safeThis->controller.loadSelected (seconds);
     }), true);
+
+    focusAlertEditor (*alert, "time");
 }
 
 void MainComponent::showRenumberDialog()
@@ -939,11 +1077,303 @@ void MainComponent::showRenumberDialog()
             }
         });
     }), true);
+
+    focusAlertEditor (*alert, "start");
 }
 
 void MainComponent::deleteNumbersOfSelection()
 {
     editCues (document.cues.getSelectedIndices(), ko ("번호 삭제"), [] (Cue& c) { c.number.clear(); });
+}
+
+//==============================================================================
+void MainComponent::copySelectedCues()
+{
+    const auto rows = document.cues.getSelectedIndices();
+
+    if (rows.empty())
+        return;
+
+    clipboard.cues.clear();
+    clipboard.plugins.clear();
+
+    for (int row : rows)
+    {
+        const auto& cue = document.cues.get (row);
+        clipboard.cues.push_back (cue);
+
+        if (auto* chain = engine.findCueChain (cue.id))
+            clipboard.plugins.push_back (chain->getStates());
+        else
+            clipboard.plugins.push_back (cue.plugins);
+    }
+
+    commands.commandStatusChanged();
+    transport.showStatus (rows.size() == 1 ? ko ("큐 복사: ") + clipboard.cues.front().name
+                                           : ko ("큐 복사: ") + juce::String (rows.size()) + ko ("개"), false);
+}
+
+void MainComponent::cutSelectedCues()
+{
+    if (showMode || document.cues.getSelectedIndices().empty())
+        return;
+
+    copySelectedCues();
+    removeSelectedCues();
+}
+
+void MainComponent::pasteCues()
+{
+    if (clipboard.cues.empty() || showMode)
+        return;
+
+    const int selected = document.cues.getSelectedIndex();
+    const int insertAt = selected >= 0 ? selected + 1 : document.cues.size();
+    const bool autoNumber = document.settings.autoNumber;
+    const double increment = document.settings.numberIncrement;
+    const auto copies = clipboard.cues;
+    const auto plugins = clipboard.plugins;
+    bool anyPlugins = false;
+
+    for (const auto& p : plugins)
+        anyPlugins = anyPlugins || ! p.empty();
+
+    document.perform (copies.size() == 1 ? ko ("큐 붙여넣기") : ko ("큐 붙여넣기 (") + juce::String (copies.size()) + ")",
+                      [this, copies, plugins, insertAt, autoNumber, increment]
+    {
+        int index = insertAt;
+        int last = -1;
+        juce::StringArray errors;
+
+        for (size_t i = 0; i < copies.size(); ++i)
+        {
+            Cue cue = copies[i];
+            cue.id = juce::Uuid();                 // a new identity: the original may still exist
+            cue.hotkey.clear();                    // hotkeys stay unique
+            cue.plugins = plugins[i];
+
+            if (autoNumber)
+                cue.number = CueNumbering::next (document.cues.getAll(), index, increment);
+            else if (cue.number.isNotEmpty() && findCueIndexByNumber (cue.number) >= 0)
+                cue.number.clear();                // numbers stay unique
+
+            const auto id = cue.id;
+            last = document.cues.add (std::move (cue), index);
+            index = last + 1;
+
+            if (! plugins[i].empty())
+                errors.addArray (engine.getCueChain (id).restore (plugins[i], engine.makePluginFactory()));
+        }
+
+        if (last >= 0)
+            document.cues.setSelectedIndex (last);
+
+        inspector.refreshPlugins();
+
+        if (! errors.isEmpty())
+            showAlert (ko ("일부 플러그인을 붙여넣지 못했습니다"), errors.joinIntoString ("\n"), false);
+    }, { {}, anyPlugins });
+}
+
+void MainComponent::pasteCueProperties()
+{
+    const auto rows = document.cues.getSelectedIndices();
+
+    if (rows.empty() || clipboard.cues.empty() || showMode)
+        return;
+
+    const Cue source = clipboard.cues.front();
+    const auto sourcePlugins = clipboard.plugins.front();
+    juce::Component::SafePointer<MainComponent> safeThis (this);
+
+    PastePropertiesDialog::show (this, source.name, (int) rows.size(),
+                                 [safeThis, source, sourcePlugins] (const PastePropertiesDialog::Selection& sel)
+    {
+        if (safeThis == nullptr || safeThis->showMode)
+            return;
+
+        auto& self = *safeThis;
+        const auto targets = self.document.cues.getSelectedIndices();   // re-read: the list may have changed meanwhile
+
+        if (targets.empty())
+            return;
+
+        self.document.perform (targets.size() == 1 ? ko ("큐 속성 붙여넣기") : ko ("큐 속성 붙여넣기 (") + juce::String (targets.size()) + ")",
+                               [&self, targets, source, sourcePlugins, sel]
+        {
+            juce::StringArray errors;
+
+            for (int row : targets)
+            {
+                self.document.cues.update (row, [&] (Cue& c)
+                {
+                    PastePropertiesDialog::applyProperties (source, c, sel);
+
+                    if (sel.effects)
+                        c.plugins = sourcePlugins;
+                });
+
+                if (sel.effects)
+                    errors.addArray (self.engine.getCueChain (self.document.cues.get (row).id)
+                                         .restore (sourcePlugins, self.engine.makePluginFactory()));
+            }
+
+            if (sel.effects)
+                self.inspector.refreshPlugins();
+
+            if (! errors.isEmpty())
+                self.showAlert (ko ("일부 플러그인을 붙여넣지 못했습니다"), errors.joinIntoString ("\n"), false);
+        }, { {}, sel.effects });
+
+        self.transport.showStatus (ko ("속성 붙여넣기: ") + juce::String (targets.size()) + ko ("개 큐"), false);
+    });
+}
+
+void MainComponent::showFindDialog()
+{
+    if (document.cues.isEmpty())
+        return;
+
+    auto* alert = new juce::AlertWindow (ko ("찾기"), ko ("번호·이름·파일 이름·메모에서 찾습니다 (대소문자 무시). F3 = 다음 찾기"),
+                                         juce::MessageBoxIconType::NoIcon, this);
+    alert->addTextEditor ("text", lastSearch, ko ("찾을 내용"));
+    alert->addButton (ko ("찾기"), 1, juce::KeyPress (juce::KeyPress::returnKey));
+    alert->addButton (ko ("취소"), 0, juce::KeyPress (juce::KeyPress::escapeKey));
+    alert->setVisible (true);
+
+    juce::Component::SafePointer<MainComponent> safeThis (this);
+    alert->enterModalState (true, juce::ModalCallbackFunction::create ([safeThis, alert] (int result)
+    {
+        if (safeThis == nullptr || result != 1)
+            return;
+
+        safeThis->lastSearch = alert->getTextEditorContents ("text").trim();
+        safeThis->commands.commandStatusChanged();
+        safeThis->findNext (true);
+    }), true);
+
+    focusAlertEditor (*alert, "text");
+}
+
+void MainComponent::findNext (bool includeCurrent)
+{
+    const int n = document.cues.size();
+
+    if (lastSearch.isEmpty() || n == 0)
+        return;
+
+    const auto matches = [this] (const Cue& c)
+    {
+        return c.number.containsIgnoreCase (lastSearch) || c.name.containsIgnoreCase (lastSearch)
+            || c.file.getFileName().containsIgnoreCase (lastSearch) || c.notes.containsIgnoreCase (lastSearch);
+    };
+
+    const int current = document.cues.getSelectedIndex();
+    const int begin = current < 0 ? 0 : (includeCurrent ? current : current + 1);
+
+    for (int step = 0; step < n; ++step)
+    {
+        const int i = (begin + step) % n;
+        const auto& c = document.cues.get (i);
+
+        if (! matches (c))
+            continue;
+
+        document.cues.setSelectedIndex (i);
+        table.focusTable();
+        transport.showStatus (ko ("찾음: ") + (c.number.isNotEmpty() ? c.number + " " : juce::String()) + c.name, false);
+        return;
+    }
+
+    transport.showStatus (ko ("찾을 수 없음: ") + lastSearch, true);
+}
+
+void MainComponent::saveCueTemplate()
+{
+    const auto* cue = document.cues.getSelected();
+
+    if (cue == nullptr || showMode)
+        return;
+
+    Cue t = *cue;
+
+    if (auto* chain = engine.findCueChain (cue->id))
+        t.plugins = chain->getStates();
+
+    auto s = document.settings;
+    s.hasCueTemplate = true;
+    s.cueTemplate = t;
+    document.setSettings (s);
+    commands.commandStatusChanged();
+    transport.showStatus (ko ("새 큐 기본값으로 저장: ") + cue->name, false);
+}
+
+void MainComponent::clearCueTemplate()
+{
+    if (showMode || ! document.settings.hasCueTemplate)
+        return;
+
+    auto s = document.settings;
+    s.hasCueTemplate = false;
+    s.cueTemplate = Cue();
+    document.setSettings (s);
+    commands.commandStatusChanged();
+    transport.showStatus (ko ("새 큐 기본값 초기화"), false);
+}
+
+int MainComponent::findCueIndexByNumber (const juce::String& number) const
+{
+    if (number.isEmpty())
+        return -1;
+
+    for (int i = 0; i < document.cues.size(); ++i)
+        if (document.cues.get (i).number == number)
+            return i;
+
+    return -1;
+}
+
+void MainComponent::restoreChainsForCues (const std::vector<juce::Uuid>& ids)
+{
+    juce::StringArray errors;
+
+    for (const auto& id : ids)
+    {
+        const int index = document.cues.indexOf (id);
+
+        if (index < 0)
+            continue;
+
+        const auto& cue = document.cues.get (index);
+
+        if (! cue.plugins.empty())
+            errors.addArray (engine.getCueChain (cue.id).restore (cue.plugins, engine.makePluginFactory()));
+    }
+
+    if (! ids.empty())
+        inspector.refreshPlugins();
+
+    if (! errors.isEmpty())
+        showAlert (ko ("일부 플러그인을 기본값에서 복원하지 못했습니다"), errors.joinIntoString ("\n"), false);
+}
+
+void MainComponent::fireCloseCueThen (std::function<void()> then)
+{
+    if (closeContinuation != nullptr)   // already closing
+        return;
+
+    const int index = document.settings.startOnClose ? findCueIndexByNumber (document.settings.startOnCloseCue) : -1;
+
+    if (index < 0)
+    {
+        then();
+        return;
+    }
+
+    closeContinuation = std::move (then);
+    closeDeadlineMs = juce::Time::getMillisecondCounterHiRes() + 120000.0;
+    controller.fireSequence (index);
+    transport.showStatus (ko ("닫을 때 큐 재생 중: ") + document.settings.startOnCloseCue + ko (" (끝나면 종료)"), false);
 }
 
 int MainComponent::countBrokenCues() const
@@ -1105,18 +1535,12 @@ void MainComponent::openProjectFile (const juce::File& file)
     if (! warnings.isEmpty())
         showAlert (ko ("프로젝트를 열었지만 확인이 필요합니다"), warnings.joinIntoString ("\n"), false);
 
-    if (document.settings.startOnOpen && document.settings.startOnOpenCue.isNotEmpty())
+    if (document.settings.startOnOpen)
     {
-        const auto number = document.settings.startOnOpenCue;
-
-        for (int i = 0; i < document.cues.size(); ++i)
+        if (const int i = findCueIndexByNumber (document.settings.startOnOpenCue); i >= 0)
         {
-            if (document.cues.get (i).number == number)
-            {
-                controller.fireSequence (i);
-                transport.showStatus (ko ("열 때 시작: ") + number, false);
-                break;
-            }
+            controller.fireSequence (i);
+            transport.showStatus (ko ("열 때 시작: ") + document.settings.startOnOpenCue, false);
         }
     }
 }
@@ -1452,6 +1876,24 @@ void MainComponent::timerCallback()
     transport.setPlayingCount (running, paused);
     transport.setGoLocked (controller.isGoLocked());
     inspector.setPlayback (playing);
+
+    if (closeContinuation != nullptr)   // "start on close" cue: quit once it has finished (or after the deadline)
+    {
+        const double now = juce::Time::getMillisecondCounterHiRes();
+        const bool startedLongEnoughAgo = now > closeDeadlineMs - 120000.0 + 1000.0;   // give a pre-wait a second to start
+
+        if ((running == 0 && startedLongEnoughAgo) || now > closeDeadlineMs)
+        {
+            auto then = std::move (closeContinuation);
+            closeContinuation = nullptr;
+            then();
+            return;
+        }
+    }
+
+    if (activeCuesVisible)
+        activeCues.setPlayingCues (playing);
+
     table.setPlayingCues (std::move (playing));
     footer.setCueCount (document.cues.size());
     footer.setWarningCount (countBrokenCues());
@@ -1503,6 +1945,7 @@ void MainComponent::documentStateChanged()
     unsavedChanges.store (document.isDirty(), std::memory_order_relaxed);
     commands.commandStatusChanged();   // undo / redo names and availability
     document.cues.setLockPlayheadToSelection (document.settings.lockPlayheadToSelection);
+    table.setRowSize (document.settings.rowSize);
 
     if (onWindowTitleChanged)
         onWindowTitleChanged (document.getWindowTitle());

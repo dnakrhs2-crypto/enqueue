@@ -1,0 +1,60 @@
+#include "model/CuePropertyPaste.h"
+
+namespace gocue::CuePropertyPaste
+{
+
+void apply (const Cue& source, Cue& target, const Selection& sel)
+{
+    if (sel.basics)
+    {
+        target.color = source.color;
+        target.secondColor = source.secondColor;
+        target.useSecondColor = source.useSecondColor;
+        target.flagged = source.flagged;
+        target.armed = source.armed;
+        target.skipIfDisarmed = source.skipIfDisarmed;
+        target.autoLoad = source.autoLoad;
+        target.notes = source.notes;
+    }
+
+    if (sel.timing)
+    {
+        target.preWaitSeconds = source.preWaitSeconds;
+        target.postWaitSeconds = source.postWaitSeconds;
+        target.continueMode = source.continueMode;
+    }
+
+    if (sel.triggers)
+    {
+        target.secondTrigger = source.secondTrigger;
+        target.wallClock = source.wallClock;
+        target.fadeStopOthers = source.fadeStopOthers;
+        target.duck = source.duck;
+    }
+
+    if (sel.timeLoops)
+    {
+        target.audio = source.audio;
+
+        if (target.file != source.file && target.durationSeconds > 0.0)   // a different file: keep the trim inside it
+        {
+            target.audio.startSeconds = juce::jlimit (0.0, juce::jmax (0.0, target.durationSeconds - 0.01), source.audio.startSeconds);
+
+            if (target.audio.endSeconds > target.durationSeconds || (target.audio.endSeconds >= 0.0 && target.audio.endSeconds <= target.audio.startSeconds))
+                target.audio.endSeconds = -1.0;
+        }
+    }
+
+    if (sel.levels)
+    {
+        target.gainDb = source.gainDb;
+        target.fadeOutMs = source.fadeOutMs;
+    }
+
+    if (sel.effects)
+        target.plugins = source.plugins;
+
+    target.sanitise();
+}
+
+} // namespace gocue::CuePropertyPaste

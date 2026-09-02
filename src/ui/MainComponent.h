@@ -5,6 +5,7 @@
 #include "app/ProjectDocument.h"
 #include "app/Scheduler.h"
 #include "audio/AudioEngine.h"
+#include "ui/ActiveCuesPanel.h"
 #include "ui/CueInspector.h"
 #include "ui/CueTable.h"
 #include "ui/FooterBar.h"
@@ -59,6 +60,9 @@ public:
     /** Runs 'action' immediately, or once the user has saved / discarded unsaved changes. */
     void confirmDiscardChangesThen (std::function<void()> action);
 
+    /** Fires the "start on close" cue (if configured) and runs 'then' once it has finished (or after 2 minutes). */
+    void fireCloseCueThen (std::function<void()> then);
+
     /** Thread-safe snapshot of the dirty flag (the updater asks from a background thread). */
     bool hasUnsavedChanges() const noexcept { return unsavedChanges.load (std::memory_order_relaxed); }
 
@@ -91,6 +95,18 @@ private:
     void showLoadToTimeDialog();
     void showRenumberDialog();
     void deleteNumbersOfSelection();
+    void copySelectedCues();
+    void cutSelectedCues();
+    void pasteCues();
+    void pasteCueProperties();
+    void showFindDialog();
+    /** Selects the next cue whose number / name / file / notes contain the last search text (wraps around). */
+    void findNext (bool includeCurrent);
+    void saveCueTemplate();
+    void clearCueTemplate();
+    int findCueIndexByNumber (const juce::String& number) const;
+    /** After the new-cue template and file info: restores a template plugin chain onto freshly added cues. */
+    void restoreChainsForCues (const std::vector<juce::Uuid>& ids);
     void findMissingFiles();
     void showWarnings();
     int countBrokenCues() const;
@@ -135,13 +151,25 @@ private:
     double nextAutoBackupMs = 0.0;
     bool showMode = false;
 
+    struct CueClipboard
+    {
+        std::vector<Cue> cues;
+        std::vector<std::vector<PluginSlotState>> plugins;   // live chain states, parallel to 'cues'
+    };
+    CueClipboard clipboard;
+    juce::String lastSearch;
+    std::function<void()> closeContinuation;
+    double closeDeadlineMs = 0.0;
+
     juce::MenuBarComponent menuBar;
     TransportBar transport;
     CueTable table;
     CueInspector inspector;
+    ActiveCuesPanel activeCues;
     FooterBar footer;
     std::unique_ptr<juce::FileChooser> chooser;
     bool dragOverWindow = false;
+    bool activeCuesVisible = true;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (MainComponent)
 };
