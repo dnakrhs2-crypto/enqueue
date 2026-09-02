@@ -391,7 +391,25 @@ namespace
 
         if (! c.patchId.isNull())
             obj->setProperty ("patch", c.patchId.toString());
-        obj->setProperty ("type", c.type == CueType::fade ? "fade" : c.type == CueType::devamp ? "devamp" : "audio");
+        obj->setProperty ("type", c.type == CueType::fade ? "fade" : c.type == CueType::devamp ? "devamp" : c.type == CueType::group ? "group" : "audio");
+
+        if (! c.parentId.isNull())
+            obj->setProperty ("parent", c.parentId.toString());
+
+        if (c.type == CueType::group)
+        {
+            auto* gobj = new juce::DynamicObject();
+            gobj->setProperty ("mode", c.group.mode == GroupMode::timeline ? "timeline"
+                                     : c.group.mode == GroupMode::playlist ? "playlist"
+                                     : c.group.mode == GroupMode::startFirstEnter ? "startFirstEnter"
+                                     : c.group.mode == GroupMode::startFirst ? "startFirst" : "random");
+            gobj->setProperty ("collapsed", c.group.collapsed);
+            gobj->setProperty ("shuffle", c.group.shuffle);
+            gobj->setProperty ("loop", c.group.loop);
+            gobj->setProperty ("crossfade", c.group.crossfade);
+            gobj->setProperty ("crossfadeSeconds", c.group.crossfadeSeconds);
+            obj->setProperty ("group", juce::var (gobj));
+        }
 
         if (c.type == CueType::fade)
         {
@@ -504,7 +522,24 @@ namespace
         c.secondTrigger   = secondTriggerFromText (v.getProperty ("secondTrigger", "hardStopRestart").toString());
         {
             const auto typeText = v.getProperty ("type", "audio").toString();
-            c.type = typeText == "fade" ? CueType::fade : typeText == "devamp" ? CueType::devamp : CueType::audio;
+            c.type = typeText == "fade" ? CueType::fade : typeText == "devamp" ? CueType::devamp : typeText == "group" ? CueType::group : CueType::audio;
+        }
+
+        if (const auto parentText = v.getProperty ("parent", "").toString(); parentText.isNotEmpty())
+            c.parentId = juce::Uuid (parentText);
+
+        if (const auto g = v.getProperty ("group", juce::var()); g.getDynamicObject() != nullptr)
+        {
+            const auto mode = g.getProperty ("mode", "timeline").toString();
+            c.group.mode = mode == "playlist" ? GroupMode::playlist
+                         : mode == "startFirstEnter" ? GroupMode::startFirstEnter
+                         : mode == "startFirst" ? GroupMode::startFirst
+                         : mode == "random" ? GroupMode::random : GroupMode::timeline;
+            c.group.collapsed = (bool) g.getProperty ("collapsed", false);
+            c.group.shuffle = (bool) g.getProperty ("shuffle", false);
+            c.group.loop = (bool) g.getProperty ("loop", false);
+            c.group.crossfade = (bool) g.getProperty ("crossfade", false);
+            c.group.crossfadeSeconds = (double) g.getProperty ("crossfadeSeconds", 2.0);
         }
         c.fade            = fadeFromVar (v.getProperty ("fade", juce::var()));
 

@@ -331,6 +331,133 @@ public:
             expect (list.findById (list.get (0).id) == &list.get (0));
             expect (list.findById (juce::Uuid()) == nullptr);
         }
+
+        beginTest ("tree: depth, subtree, children, siblings, visibility");
+        {
+            CueList list;
+            Cue g = make ("G");
+            g.type = CueType::group;
+            list.add (g);                                   // 0 G
+            Cue a = make ("a"); a.parentId = g.id;
+            Cue inner = make ("H"); inner.type = CueType::group; inner.parentId = g.id;
+            Cue b = make ("b"); b.parentId = inner.id;
+            list.add (a);                                   // 1 a (G)
+            list.add (inner);                               // 2 H (G)
+            list.add (b);                                   // 3 b (H)
+            list.add (make ("c"));                          // 4 c
+            expectEquals (list.depthOf (0), 0);
+            expectEquals (list.depthOf (1), 1);
+            expectEquals (list.depthOf (3), 2);
+            expectEquals (list.parentIndexOf (3), 2);
+            expectEquals (list.parentIndexOf (4), -1);
+            expect (list.isDescendantOf (3, g.id));
+            expect (! list.isDescendantOf (4, g.id));
+            expectEquals (list.subtreeEnd (0), 4);
+            expectEquals (list.subtreeEnd (2), 4);
+            expectEquals (list.subtreeEnd (1), 2);
+            expectEquals (indices (list.childrenOf (0)), juce::String ("1,2"));
+            expectEquals (indices (list.descendantsOf (0)), juce::String ("1,2,3"));
+            expectEquals (list.nextSibling (1), 2);
+            expectEquals (list.nextSibling (2), -1);        // H is the last child of G
+            expectEquals (list.nextSibling (0), 4);
+            expectEquals (list.nextSibling (4), -1);
+            expect (list.parentForInsertion (1) == g.id);
+            expect (list.parentForInsertion (4).isNull());
+            expect (list.parentForInsertion (5).isNull());
+
+            // collapse G: its rows disappear from the visible order, the playhead skips them
+            list.setCollapsed (0, true);
+            expect (! list.isRowVisible (1) && ! list.isRowVisible (3) && list.isRowVisible (0) && list.isRowVisible (4));
+            expectEquals (list.nextVisible (0), 4);
+            expectEquals (list.previousVisible (4), 0);
+            list.setPlayheadIndex (0);
+            expect (list.advancePlayhead());
+            expectEquals (list.getPlayheadIndex(), 4);
+            expect (list.retreatPlayhead());
+            expectEquals (list.getPlayheadIndex(), 0);
+            list.setCollapsed (0, false);
+            expect (list.advancePlayhead());
+            expectEquals (list.getPlayheadIndex(), 1);
+
+            // addAfter inserts a sibling after the subtree
+            const int afterA = list.addAfter (make ("a2"), 1);
+            expectEquals (afterA, 2);
+            expect (list.get (2).parentId == g.id);
+            const int afterG = list.addAfter (make ("G2"), 0);
+            expectEquals (afterG, 5);                        // G a a2 H b | G2 c
+            expect (list.get (5).parentId.isNull());
+            expectEquals (list.addAfter (make ("z"), -1), 7);
+        }
+
+        beginTest ("tree: remove / move / duplicate keep subtrees together");
+        {
+            CueList list;
+            Cue g = make ("G"); g.type = CueType::group;
+            list.add (g);
+            Cue a = make ("a"); a.parentId = g.id;
+            Cue b = make ("b"); b.parentId = g.id;
+            list.add (a);
+            list.add (b);
+            list.add (make ("c"));
+            list.add (make ("d"));                          // G a b c d
+
+            // moving c in front of a (inside G's range) makes it G's child
+            expect (list.moveSubtrees ({ 3 }, 1));
+            expectEquals (names (list), juce::String ("G,c,a,b,d"));
+            expect (list.get (1).parentId == g.id);
+
+            // moving the group moves its children; dropping at the end leaves the group at the top level
+            expect (list.moveSubtrees ({ 0 }, 5));
+            expectEquals (names (list), juce::String ("d,G,c,a,b"));
+            expect (list.get (1).parentId.isNull() && list.get (2).parentId == g.id && list.get (4).parentId == g.id);
+
+            // duplicating the group copies the subtree with new ids and re-pointed parents
+            const int copyAt = list.duplicate (1);
+            expectEquals (copyAt, 5);
+            expectEquals (names (list), juce::String ("d,G,c,a,b,G,c,a,b"));
+            expect (list.get (5).id != g.id);
+            expect (list.get (6).parentId == list.get (5).id && list.get (8).parentId == list.get (5).id);
+
+            // removing a group removes its children
+            list.removeIndices ({ 5 });
+            expectEquals (names (list), juce::String ("d,G,c,a,b"));
+            list.remove (1);
+            expectEquals (names (list), juce::String ("d"));
+        }
+
+        beginTest ("tree: broken parent links are nulled on load");
+        {
+            CueList list;
+            Cue g = make ("G"); g.type = CueType::group;
+            Cue a = make ("a"); a.parentId = g.id;
+            Cue x = make ("x");                              // top level between G's children
+            Cue b = make ("b"); b.parentId = g.id;           // no longer directly inside G: detached
+            Cue orphan = make ("o"); orphan.parentId = juce::Uuid();   // unknown parent
+            Cue leafChild = make ("l"); leafChild.parentId = x.id;      // x is not a group
+            list.replaceAll ({ g, a, x, b, orphan, leafChild });
+            expect (list.get (1).parentId == g.id);
+            expect (list.get (3).parentId.isNull());
+            expect (list.get (4).parentId.isNull());
+            expect (list.get (5).parentId.isNull());
+        }
+
+        beginTest ("tree: effective length of groups");
+        {
+            CueList list;
+            Cue g = make ("G"); g.type = CueType::group;
+            list.add (g);
+            Cue a = make ("a"); a.parentId = g.id; a.durationSeconds = 2.0; a.preWaitSeconds = 1.0;
+            Cue b = make ("b"); b.parentId = g.id; b.durationSeconds = 5.0;
+            list.add (a);
+            list.add (b);
+            expectWithinAbsoluteError (list.effectiveLengthOf (0), 5.0, 1e-9);   // timeline: max (1 + 2, 0 + 5)
+            list.update (0, [] (Cue& c) { c.group.mode = GroupMode::playlist; });
+            expectWithinAbsoluteError (list.effectiveLengthOf (0), 8.0, 1e-9);   // playlist: sum
+            list.update (0, [] (Cue& c) { c.group.loop = true; });
+            expectWithinAbsoluteError (list.effectiveLengthOf (0), -1.0, 1e-9);
+            list.update (0, [] (Cue& c) { c.group.loop = false; c.group.mode = GroupMode::random; });
+            expectWithinAbsoluteError (list.effectiveLengthOf (0), 0.0, 1e-9);
+        }
     }
 };
 

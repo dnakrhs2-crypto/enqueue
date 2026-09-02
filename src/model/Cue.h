@@ -68,7 +68,30 @@ struct DuckSettings
 };
 
 /** What a cue is. Only the fields that belong to its type are used / saved. */
-enum class CueType { audio, fade, devamp };
+enum class CueType { audio, fade, devamp, group };
+
+/** How a group cue plays its children (QLab "Group"). */
+enum class GroupMode
+{
+    timeline,        // every child starts at once (each after its own pre-wait); children's continue modes are ignored
+    playlist,        // children one after another (optionally looped / shuffled / crossfaded)
+    startFirstEnter, // starts the first child (and its sequence) and moves the playhead into the group
+    startFirst,      // starts the first child (and its sequence), playhead goes past the group
+    random           // starts one random child (each child once before any repeats)
+};
+
+/** Settings of a group cue. The children are the cues that follow it in the list with parentId == the group. */
+struct GroupCueData
+{
+    GroupMode mode = GroupMode::timeline;
+    bool collapsed = false;         // list view only: the children are hidden
+    bool shuffle = false;           // playlist: random order each round
+    bool loop = false;              // playlist: start over after the last child
+    bool crossfade = false;         // playlist: start the next child early and fade the current one out
+    double crossfadeSeconds = 2.0;
+
+    static constexpr double maxCrossfadeSeconds = 3600.0;
+};
 
 /** Settings of a devamp cue (QLab "Devamp"): lets the target finish its current loop pass (or endless slice)
     and then either continues into what follows or stops; the next cue can be started at that moment. */
@@ -192,11 +215,14 @@ struct Cue
     CueType type = CueType::audio;
     FadeCueData fade;                // used when type == fade
     DevampCueData devamp;            // used when type == devamp
+    GroupCueData group;              // used when type == group
+    juce::Uuid parentId = juce::Uuid::null();   // the group this cue belongs to (null = top level)
     SecondTriggerAction secondTrigger = SecondTriggerAction::hardStopRestart;
 
     bool isAudio() const noexcept  { return type == CueType::audio; }
     bool isFade() const noexcept   { return type == CueType::fade; }
     bool isDevamp() const noexcept { return type == CueType::devamp; }
+    bool isGroup() const noexcept  { return type == CueType::group; }
     /** Fade / devamp cues point at another cue. */
     juce::Uuid targetId() const noexcept { return isFade() ? fade.targetId : isDevamp() ? devamp.targetId : juce::Uuid::null(); }
     void setTargetId (const juce::Uuid& newTarget) noexcept { if (isFade()) fade.targetId = newTarget; else if (isDevamp()) devamp.targetId = newTarget; }

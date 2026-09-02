@@ -1,6 +1,7 @@
 #include "model/CueList.h"
 
 #include <algorithm>
+#include <map>
 
 namespace gocue
 {
@@ -21,6 +22,233 @@ const Cue* CueList::findById (const juce::Uuid& id) const noexcept
 }
 
 //==============================================================================
+int CueList::depthOf (int index) const noexcept
+{
+    int depth = 0;
+
+    for (int p = parentIndexOf (index); p >= 0 && depth < 64; p = parentIndexOf (p))
+        ++depth;
+
+    return depth;
+}
+
+int CueList::parentIndexOf (int index) const noexcept
+{
+    if (! isValidIndex (index) || cues[(size_t) index].parentId.isNull())
+        return -1;
+
+    return indexOf (cues[(size_t) index].parentId);
+}
+
+bool CueList::isDescendantOf (int index, const juce::Uuid& ancestorId) const noexcept
+{
+    if (ancestorId.isNull())
+        return false;
+
+    int guard = 0;
+
+    for (int p = parentIndexOf (index); p >= 0 && guard < 64; p = parentIndexOf (p), ++guard)
+        if (cues[(size_t) p].id == ancestorId)
+            return true;
+
+    return false;
+}
+
+int CueList::subtreeEnd (int index) const noexcept
+{
+    if (! isValidIndex (index))
+        return size();
+
+    const auto id = cues[(size_t) index].id;
+    int end = index + 1;
+
+    while (end < size() && isDescendantOf (end, id))
+        ++end;
+
+    return end;
+}
+
+std::vector<int> CueList::childrenOf (int index) const
+{
+    std::vector<int> result;
+
+    if (! isValidIndex (index))
+        return result;
+
+    const auto id = cues[(size_t) index].id;
+    const int end = subtreeEnd (index);
+
+    for (int i = index + 1; i < end; ++i)
+        if (cues[(size_t) i].parentId == id)
+            result.push_back (i);
+
+    return result;
+}
+
+std::vector<int> CueList::descendantsOf (int index) const
+{
+    std::vector<int> result;
+
+    if (! isValidIndex (index))
+        return result;
+
+    for (int i = index + 1, end = subtreeEnd (index); i < end; ++i)
+        result.push_back (i);
+
+    return result;
+}
+
+int CueList::nextSibling (int index) const noexcept
+{
+    if (! isValidIndex (index))
+        return -1;
+
+    const int next = subtreeEnd (index);
+
+    if (next >= size() || cues[(size_t) next].parentId != cues[(size_t) index].parentId)
+        return -1;
+
+    return next;
+}
+
+bool CueList::isRowVisible (int index) const noexcept
+{
+    int guard = 0;
+
+    for (int p = parentIndexOf (index); p >= 0 && guard < 64; p = parentIndexOf (p), ++guard)
+        if (cues[(size_t) p].group.collapsed)
+            return false;
+
+    return true;
+}
+
+int CueList::nextVisible (int index) const noexcept
+{
+    for (int i = index + 1; i < size(); ++i)
+        if (isRowVisible (i))
+            return i;
+
+    return -1;
+}
+
+int CueList::previousVisible (int index) const noexcept
+{
+    for (int i = std::min (index, size()) - 1; i >= 0; --i)
+        if (isRowVisible (i))
+            return i;
+
+    return -1;
+}
+
+juce::Uuid CueList::parentForInsertion (int insertAt) const noexcept
+{
+    return isValidIndex (insertAt) ? cues[(size_t) insertAt].parentId : juce::Uuid::null();
+}
+
+int CueList::addAfter (Cue cue, int index)
+{
+    if (! isValidIndex (index))
+    {
+        cue.parentId = juce::Uuid::null();
+        return add (std::move (cue), -1);
+    }
+
+    cue.parentId = cues[(size_t) index].parentId;
+    return add (std::move (cue), subtreeEnd (index));
+}
+
+double CueList::effectiveLengthOf (int index) const noexcept
+{
+    if (! isValidIndex (index))
+        return 0.0;
+
+    const auto& cue = cues[(size_t) index];
+
+    if (! cue.isGroup())
+        return cue.effectiveLength();
+
+    double total = 0.0;
+
+    for (int child : childrenOf (index))
+    {
+        const double length = effectiveLengthOf (child);
+
+        if (length < 0.0)
+            return -1.0;
+
+        const auto& c = cues[(size_t) child];
+
+        if (cue.group.mode == GroupMode::timeline)
+            total = std::max (total, c.preWaitSeconds + length);
+        else if (cue.group.mode == GroupMode::playlist)
+            total += c.preWaitSeconds + length;
+        else
+            return 0.0;   // "start first" / random: unknown
+    }
+
+    return cue.group.mode == GroupMode::playlist && cue.group.loop && ! childrenOf (index).empty() ? -1.0 : total;
+}
+
+void CueList::setCollapsed (int index, bool collapsed)
+{
+    if (! isValidIndex (index) || ! cues[(size_t) index].isGroup() || cues[(size_t) index].group.collapsed == collapsed)
+        return;
+
+    cues[(size_t) index].group.collapsed = collapsed;
+    listeners.call ([] (Listener& l) { l.cueListStructureChanged(); });
+}
+
+void CueList::sanitiseTree()
+{
+    std::vector<juce::Uuid> open;   // the chain of groups the previous cue sits in (outermost first)
+
+    for (auto& c : cues)
+    {
+        if (! c.parentId.isNull())
+        {
+            int found = -1;
+
+            for (int i = (int) open.size() - 1; i >= 0; --i)
+                if (open[(size_t) i] == c.parentId)
+                {
+                    found = i;
+                    break;
+                }
+
+            if (found < 0)
+                c.parentId = juce::Uuid::null();   // not directly inside that group (or it is not a group / does not exist)
+
+            open.resize (found < 0 ? 0 : (size_t) found + 1);
+        }
+        else
+        {
+            open.clear();
+        }
+
+        if (c.isGroup())
+            open.push_back (c.id);
+    }
+}
+
+std::vector<int> CueList::withSubtrees (std::vector<int> indices) const
+{
+    std::vector<int> result;
+
+    for (int i : indices)
+    {
+        if (! isValidIndex (i))
+            continue;
+
+        for (int j = i, end = subtreeEnd (i); j < end; ++j)
+            result.push_back (j);
+    }
+
+    std::sort (result.begin(), result.end());
+    result.erase (std::unique (result.begin(), result.end()), result.end());
+    return result;
+}
+
+//==============================================================================
 int CueList::add (Cue cue, int insertAt)
 {
     cue.sanitise();
@@ -29,6 +257,7 @@ int CueList::add (Cue cue, int insertAt)
         insertAt = size();
 
     cues.insert (cues.begin() + insertAt, std::move (cue));
+    sanitiseTree();
 
     for (auto& s : selection)
         if (s >= insertAt)
@@ -58,9 +287,7 @@ void CueList::remove (int index)
 
 void CueList::removeIndices (std::vector<int> indices)
 {
-    std::sort (indices.begin(), indices.end());
-    indices.erase (std::unique (indices.begin(), indices.end()), indices.end());
-    indices.erase (std::remove_if (indices.begin(), indices.end(), [this] (int i) { return ! isValidIndex (i); }), indices.end());
+    indices = withSubtrees (std::move (indices));   // a group goes with its children
 
     if (indices.empty())
         return;
@@ -117,7 +344,39 @@ int CueList::duplicate (int index)
     if (! isValidIndex (index))
         return -1;
 
-    return add (cues[(size_t) index].duplicated(), index + 1);
+    // the whole subtree is copied with fresh ids; the copies' parent links point at the copied groups
+    const int end = subtreeEnd (index);
+    std::vector<Cue> copies;
+    std::map<juce::Uuid, juce::Uuid> newIds;
+
+    for (int i = index; i < end; ++i)
+    {
+        Cue copy = cues[(size_t) i].duplicated();
+        newIds[cues[(size_t) i].id] = copy.id;
+        copies.push_back (std::move (copy));
+    }
+
+    for (size_t i = 1; i < copies.size(); ++i)
+        if (const auto it = newIds.find (copies[i].parentId); it != newIds.end())
+            copies[i].parentId = it->second;
+
+    const int at = end;
+    cues.insert (cues.begin() + at, std::make_move_iterator (copies.begin()), std::make_move_iterator (copies.end()));
+    const int count = end - index;
+
+    for (auto& s : selection)
+        if (s >= at)
+            s += count;
+
+    if (primary >= at)
+        primary += count;
+
+    if (playhead >= at)
+        playhead += count;
+
+    sanitiseTree();
+    notifyStructureChanged();
+    return at;
 }
 
 bool CueList::move (int from, int to)
@@ -125,9 +384,13 @@ bool CueList::move (int from, int to)
     if (! isValidIndex (from) || ! isValidIndex (to) || from == to)
         return false;
 
+    if (const int count = subtreeEnd (from) - from; count > 1)
+        return moveSubtrees ({ from }, to > from ? to + count : to);   // the root ends up at 'to'
+
     Cue moved = std::move (cues[(size_t) from]);
     cues.erase (cues.begin() + from);
     cues.insert (cues.begin() + to, std::move (moved));
+    cues[(size_t) to].parentId = to + 1 < size() ? cues[(size_t) to + 1].parentId : juce::Uuid::null();
 
     auto remap = [from, to] (int i)
     {
@@ -150,8 +413,26 @@ bool CueList::move (int from, int to)
     primary = remap (primary);
     playhead = remap (playhead);
 
+    sanitiseTree();
     notifyStructureChanged();
     return true;
+}
+
+bool CueList::moveSubtrees (std::vector<int> indices, int insertIndex)
+{
+    indices = withSubtrees (std::move (indices));
+
+    if (indices.empty())
+        return false;
+
+    insertIndex = juce::jlimit (0, size(), insertIndex);
+    int before = 0;
+
+    for (int i : indices)
+        if (i < insertIndex)
+            ++before;
+
+    return moveIndices (std::move (indices), insertIndex - before);
 }
 
 bool CueList::moveIndices (std::vector<int> indices, int to)
@@ -180,7 +461,19 @@ bool CueList::moveIndices (std::vector<int> indices, int to)
     }
 
     to = juce::jlimit (0, size(), to);
+    const auto newParent = parentForInsertion (to);
+    std::vector<juce::Uuid> blockIds;
+
+    for (const auto& c : block)
+        blockIds.push_back (c.id);
+
+    // the moved top-level rows join the group at the drop point; their own children keep their parents
+    for (auto& c : block)
+        if (std::find (blockIds.begin(), blockIds.end(), c.parentId) == blockIds.end())
+            c.parentId = newParent;
+
     cues.insert (cues.begin() + to, std::make_move_iterator (block.begin()), std::make_move_iterator (block.end()));
+    sanitiseTree();
 
     selection.clear();
 
@@ -202,6 +495,7 @@ void CueList::replaceAll (std::vector<Cue> newCues)
     for (auto& c : cues)
         c.sanitise();
 
+    sanitiseTree();
     selection.clear();
     primary = cues.empty() ? -1 : 0;
     playhead = primary;
@@ -351,19 +645,29 @@ void CueList::setPlayheadIndex (int index)
 
 bool CueList::advancePlayhead()
 {
-    if (! isValidIndex (playhead) || playhead + 1 >= size())
+    if (! isValidIndex (playhead))
         return false;
 
-    setPlayheadInternal (playhead + 1, true);
+    const int next = nextVisible (playhead);
+
+    if (next < 0)
+        return false;
+
+    setPlayheadInternal (next, true);
     return true;
 }
 
 bool CueList::retreatPlayhead()
 {
-    if (! isValidIndex (playhead) || playhead <= 0)
+    if (! isValidIndex (playhead))
         return false;
 
-    setPlayheadInternal (playhead - 1, true);
+    const int previous = previousVisible (playhead);
+
+    if (previous < 0)
+        return false;
+
+    setPlayheadInternal (previous, true);
     return true;
 }
 

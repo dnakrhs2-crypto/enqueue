@@ -377,6 +377,37 @@ public:
             expect (ProjectSerializer::load (tempRoot.getChildFile ("missing.gocue"), q).failed());
         }
 
+        beginTest ("group cues and parent links round-trip");
+        {
+            Project p;
+            Cue g;
+            g.name = "group";
+            g.type = CueType::group;
+            g.group.mode = GroupMode::playlist;
+            g.group.collapsed = true;
+            g.group.shuffle = true;
+            g.group.loop = true;
+            g.group.crossfade = true;
+            g.group.crossfadeSeconds = 3.5;
+            Cue child;
+            child.name = "child";
+            child.parentId = g.id;
+            p.cues.push_back (g);
+            p.cues.push_back (child);
+
+            const auto projectFile = tempRoot.getChildFile ("group.gocue");
+            expect (ProjectSerializer::save (p, projectFile).wasOk());
+            Project q;
+            expect (ProjectSerializer::load (projectFile, q).wasOk());
+            expectEquals ((int) q.cues.size(), 2);
+            expect (q.cues[0].isGroup());
+            expect (q.cues[0].group.mode == GroupMode::playlist);
+            expect (q.cues[0].group.collapsed && q.cues[0].group.shuffle && q.cues[0].group.loop && q.cues[0].group.crossfade);
+            expectWithinAbsoluteError (q.cues[0].group.crossfadeSeconds, 3.5, 1e-9);
+            expect (q.cues[1].parentId == g.id);
+            expect (q.cues[0].parentId.isNull());
+        }
+
         expect (tempRoot.deleteRecursively());
     }
 };
