@@ -62,11 +62,37 @@ void CueController::cancelPending()
 }
 
 //==============================================================================
-CueController::GoResult CueController::trigger (const Cue& cue)
+bool CueController::isAuditionRequested (bool requested) const noexcept
+{
+    return requested || document.settings.alwaysAudition;
+}
+
+AudioEngine::PlayOptions CueController::playOptions (bool audition) const
+{
+    AudioEngine::PlayOptions options;
+
+    if (! isAuditionRequested (audition))
+        return options;
+
+    options.audition = true;
+
+    switch (document.settings.audition)
+    {
+        case WorkspaceSettings::Audition::unchanged:      break;
+        case WorkspaceSettings::Audition::none:           options.silent = true; break;
+        case WorkspaceSettings::Audition::alternatePatch: options.patchOverride = document.settings.auditionPatchId; break;
+    }
+
+    return options;
+}
+
+CueController::GoResult CueController::trigger (const Cue& cue, bool audition)
 {
     const int index = document.cues.indexOf (cue.id);
+    const bool auditionNow = isAuditionRequested (audition);
 
-    if (engine.isPlaying (cue.id))
+    // a normal GO on a cue that is auditioning restarts it with the real output (QLab)
+    if (engine.isPlaying (cue.id) && ! (engine.isAuditioning (cue.id) && ! auditionNow))
     {
         switch (cue.secondTrigger)
         {
@@ -101,7 +127,7 @@ CueController::GoResult CueController::trigger (const Cue& cue)
 
     juce::String error;
 
-    if (! engine.play (cue, &error))
+    if (! engine.play (cue, playOptions (audition), &error))
     {
         status (error, true);
         return GoResult::failed;
@@ -154,7 +180,7 @@ void CueController::applyDuck (const Cue& cue)
                             }));
 }
 
-void CueController::startById (const juce::Uuid& id)
+void CueController::startById (const juce::Uuid& id, bool audition)
 {
     const auto* cue = document.cues.findById (id);
 
@@ -163,22 +189,22 @@ void CueController::startById (const juce::Uuid& id)
 
     const Cue copy = *cue;
 
-    if (trigger (copy) != GoResult::started)
+    if (trigger (copy, audition) != GoResult::started)
         return;
 
     applyFadeStopOthers (copy);
     applyDuck (copy);
 }
 
-void CueController::scheduleStart (const juce::Uuid& id, double atSeconds)
+void CueController::scheduleStart (const juce::Uuid& id, double atSeconds, bool audition)
 {
     if (atSeconds <= clock())
     {
-        startById (id);
+        startById (id, audition);
         return;
     }
 
-    track (scheduler.schedule (atSeconds, [this, id] { startById (id); }));
+    track (scheduler.schedule (atSeconds, [this, id, audition] { startById (id, audition); }));
 }
 
 int CueController::sequenceEnd (int index) const
@@ -191,7 +217,7 @@ int CueController::sequenceEnd (int index) const
     return juce::jmin (index + 1, cues.size());
 }
 
-int CueController::fireSequence (int index)
+int CueController::fireSequence (int index, bool audition)
 {
     auto& cues = document.cues;
     double t = clock();
@@ -210,7 +236,7 @@ int CueController::fireSequence (int index)
         const double startAt = t + cue.preWaitSeconds;
 
         if (cue.armed)
-            scheduleStart (cue.id, startAt);
+            scheduleStart (cue.id, startAt, audition);
         else
             status (ko ("비활성 큐 건너뜀: ") + cueLabel (i, cue));
 
@@ -230,7 +256,7 @@ int CueController::fireSequence (int index)
         const bool armed = cue.armed;
 
         track (scheduler.watch ([this, id, startAt, armed] { return clock() >= startAt && (! armed || ! engine.isPlaying (id)); },
-                                [this, next] { fireSequence (next); }));
+                                [this, next, audition] { fireSequence (next, audition); }));
 
         return sequenceEnd (index);
     }
@@ -239,7 +265,7 @@ int CueController::fireSequence (int index)
 }
 
 //==============================================================================
-CueController::GoResult CueController::go()
+CueController::GoResult CueController::go (bool audition)
 {
     const auto& settings = document.settings;
     const double now = clock();
@@ -279,14 +305,16 @@ CueController::GoResult CueController::go()
     const Cue copy = *cue;
 
     // a running cue that is fired again follows its second-trigger rule instead of starting a sequence
-    if (engine.isPlaying (copy.id) && copy.secondTrigger != SecondTriggerAction::hardStopRestart)
+    // (unless it is auditioning and this is a normal GO: then it restarts for real)
+    if (engine.isPlaying (copy.id) && copy.secondTrigger != SecondTriggerAction::hardStopRestart
+        && ! (engine.isAuditioning (copy.id) && ! isAuditionRequested (audition)))
     {
-        const auto result = trigger (copy);
+        const auto result = trigger (copy, audition);
         document.cues.advancePlayhead();
         return result;
     }
 
-    const int after = fireSequence (index);
+    const int after = fireSequence (index, audition);
     const bool anyStarted = engine.isPlaying (copy.id) || getNumPending() > 0;
 
     if (copy.armed && copy.preWaitSeconds <= 0.0 && ! engine.isPlaying (copy.id))
@@ -297,7 +325,7 @@ CueController::GoResult CueController::go()
     }
 
     if (anyStarted || ! copy.armed)
-        status (ko ("GO: ") + cueLabel (index, copy));
+        status ((isAuditionRequested (audition) ? ko ("오디션 GO: ") : ko ("GO: ")) + cueLabel (index, copy));
 
     document.cues.setPlayheadIndex (juce::jmin (after, document.cues.size() - 1));
     return GoResult::started;
@@ -377,7 +405,7 @@ bool CueController::loadSelected (double startSeconds)
     return true;
 }
 
-CueController::GoResult CueController::preview()
+CueController::GoResult CueController::preview (bool audition)
 {
     const auto* cue = document.cues.getSelected();
 
@@ -386,10 +414,10 @@ CueController::GoResult CueController::preview()
 
     const int index = document.cues.getSelectedIndex();
     const Cue copy = *cue;
-    const auto result = trigger (copy);
+    const auto result = trigger (copy, audition);
 
     if (result == GoResult::started)
-        status (ko ("미리듣기: ") + cueLabel (index, copy));
+        status ((isAuditionRequested (audition) ? ko ("오디션 미리듣기: ") : ko ("미리듣기: ")) + cueLabel (index, copy));
 
     return result;
 }

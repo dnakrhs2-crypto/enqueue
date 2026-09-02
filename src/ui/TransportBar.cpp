@@ -143,9 +143,19 @@ void TransportBar::flashGoRejected()
     });
 }
 
+void TransportBar::setAuditionMode (bool auditioning)
+{
+    if (auditionMode == auditioning)
+        return;
+
+    auditionMode = auditioning;
+    goButton.setButtonText (auditionMode ? ko ("GO (\xEC\x98\xA4\xEB\x94\x94\xEC\x85\x98)") : juce::String ("GO"));   // GO (오디션)
+    updateGoLook();
+}
+
 void TransportBar::updateGoLook()
 {
-    goButton.setColour (juce::TextButton::buttonColourId, goFlashing ? Palette::stopButton : Palette::goButton);
+    goButton.setColour (juce::TextButton::buttonColourId, goFlashing ? Palette::stopButton : (auditionMode ? Palette::standby : Palette::goButton));
     repaint();
 }
 

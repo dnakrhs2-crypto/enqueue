@@ -31,8 +31,9 @@ public:
     };
 
     /** Space: resumes paused cues if there are any; otherwise fires the playhead cue (and the sequence it
-        heads) and moves the playhead past the sequence. */
-    GoResult go();
+        heads) and moves the playhead past the sequence. 'audition' (Alt+Space) plays the way the workspace
+        audition setting says: unchanged / no output / an alternate patch. */
+    GoResult go (bool audition = false);
     /** The GO key was released (for "require key up before the next GO"). */
     void goKeyReleased();
     /** P: pauses the target cue (the standby cue if it is playing, else the most recently started one);
@@ -44,19 +45,21 @@ public:
         doubleEscSeconds stops at once. */
     void panicAll();
     void hardStopAll();
-    /** V: fires the selected cue alone (no pre-wait, no sequence) without moving the playhead. */
-    GoResult preview();
+    /** V: fires the selected cue alone (no pre-wait, no sequence) without moving the playhead. Alt+V auditions. */
+    GoResult preview (bool audition = false);
     /** Stops the selected cue. */
     void resetSelected();
     /** Hard-stops everything, cancels pending waits and puts the playhead on the first cue. */
     void resetAll();
     /** Fires one cue now, applying its second-trigger rule when it is already running.
-        Does not apply pre-waits or continue modes. */
-    GoResult trigger (const Cue& cue);
+        Does not apply pre-waits or continue modes. A normal GO on an auditioning cue restarts it normally. */
+    GoResult trigger (const Cue& cue, bool audition = false);
 
     /** Fires the cue at 'index' with its pre-wait and the sequence it heads (auto-continue / auto-follow).
         Returns the index of the first cue after the sequence (clamped to the list). */
-    int fireSequence (int index);
+    int fireSequence (int index, bool audition = false);
+    /** True when GO / preview audition right now (requested, or "항상 오디션" in the settings). */
+    bool isAuditionRequested (bool requested) const noexcept;
     /** Index of the first cue after the sequence that starts at 'index'. */
     int sequenceEnd (int index) const;
     /** Cancels scheduled starts, follows and duck restores. */
@@ -87,8 +90,9 @@ private:
     void status (const juce::String& message, bool isError = false);
     static juce::String cueLabel (int index, const Cue& cue);
     /** Fires a cue by id at once (it may have been edited since it was scheduled). */
-    void startById (const juce::Uuid& id);
-    void scheduleStart (const juce::Uuid& id, double atSeconds);
+    void startById (const juce::Uuid& id, bool audition);
+    void scheduleStart (const juce::Uuid& id, double atSeconds, bool audition);
+    AudioEngine::PlayOptions playOptions (bool audition) const;
     void applyFadeStopOthers (const Cue& cue);
     void applyDuck (const Cue& cue);
     void track (int schedulerId);

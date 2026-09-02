@@ -262,6 +262,58 @@ namespace
                                     [] (const WorkspaceSettings& w) { return juce::String (w.minLevelDb, 1); });
             hint = &addLabel (ko ("출력 라우팅·출력 이름·출력 인서트는 오디오 > 오디오 패치... 에서, 장치와 채널 수는 오디오 > 오디오 출력 설정에서 바꿉니다."));
             hint->setFont (juce::Font (juce::FontOptions (11.0f)));
+
+            auditionLabel = &addLabel (ko ("오디션 (Alt+Space / Alt+V) 방식"));
+            auditionBox.addItem (ko ("그대로 재생 (표시만)"), 1);
+            auditionBox.addItem (ko ("출력 없음 (소리 없이 진행)"), 2);
+            auditionBox.addItem (ko ("대체 패치로 재생"), 3);
+            auditionBox.setSelectedId ((int) s.audition + 1, juce::dontSendNotification);
+            auditionBox.onChange = [this]
+            {
+                auto w = document.settings;
+                w.audition = (WorkspaceSettings::Audition) juce::jlimit (0, 2, auditionBox.getSelectedId() - 1);
+                document.setSettings (w);
+                refreshPatchBox();
+            };
+            addAndMakeVisible (auditionBox);
+
+            patchLabel = &addLabel (ko ("대체 패치"));
+            patchBox.onChange = [this]
+            {
+                if (patchBox.getSelectedId() <= 0)
+                    return;
+
+                auto w = document.settings;
+                const int index = patchBox.getSelectedId() - 1;
+                w.auditionPatchId = index >= 0 && index < (int) document.patches.size() ? document.patches[(size_t) index].id : juce::Uuid::null();
+                document.setSettings (w);
+            };
+            addAndMakeVisible (patchBox);
+            refreshPatchBox();
+
+            auditionHint = &addLabel (ko ("재생 메뉴의 \"항상 오디션\"을 켜면 모든 GO / 미리듣기가 이 방식으로 재생됩니다. 오디션 중인 큐에 일반 GO를 하면 실제 출력으로 다시 시작합니다."));
+            auditionHint->setFont (juce::Font (juce::FontOptions (11.0f)));
+        }
+
+        void refreshPatchBox()
+        {
+            patchBox.clear (juce::dontSendNotification);
+            int selected = 0;
+
+            for (int i = 0; i < (int) document.patches.size(); ++i)
+            {
+                const auto& p = document.patches[(size_t) i];
+                patchBox.addItem (p.name, i + 1);
+
+                if (p.id == document.settings.auditionPatchId)
+                    selected = i + 1;
+            }
+
+            if (selected == 0 && ! document.patches.empty())
+                selected = 1;
+
+            patchBox.setSelectedId (selected, juce::dontSendNotification);
+            patchBox.setEnabled (document.settings.audition == WorkspaceSettings::Audition::alternatePatch);
         }
 
         void resized() override
@@ -279,11 +331,22 @@ namespace
             area.removeFromTop (8);
             row = next();
             hint->setBounds (row.take (area.getWidth()));
+            area.removeFromTop (10);
+
+            row = next();
+            auditionLabel->setBounds (row.take (230));
+            auditionBox.setBounds (row.take (220));
+            row = next();
+            patchLabel->setBounds (row.take (230));
+            patchBox.setBounds (row.take (220));
+            row = next();
+            auditionHint->setBounds (row.take (area.getWidth()));
         }
 
     private:
-        juce::Label *maxLabel, *minLabel, *hint;
+        juce::Label *maxLabel, *minLabel, *hint, *auditionLabel, *patchLabel, *auditionHint;
         juce::TextEditor *maxEditor, *minEditor;
+        juce::ComboBox auditionBox, patchBox;
     };
 
     class Content : public juce::Component

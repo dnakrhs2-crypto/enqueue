@@ -14,7 +14,7 @@ namespace gocue
 struct ProjectSnapshot
 {
     Project project;
-    juce::Uuid selectedId;
+    juce::Uuid selectedId = juce::Uuid::null();
     bool pluginStatesCaptured = false;   // 'project' carries the live plugin chain states (taken for structural edits)
 };
 

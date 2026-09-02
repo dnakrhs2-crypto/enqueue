@@ -23,6 +23,8 @@ public:
     void setGoLocked (bool locked);
     /** Brief red flash: a GO was received but refused. */
     void flashGoRejected();
+    /** "항상 오디션": the GO button turns blue and says so. */
+    void setAuditionMode (bool auditioning);
 
     void resized() override;
     void paint (juce::Graphics& g) override;
@@ -39,6 +41,7 @@ private:
     juce::Label standbyTitle, cueNumber, cueName, cueFile, cueMeta, playingLabel, statusLabel;
     bool goLocked = false;
     bool goFlashing = false;
+    bool auditionMode = false;
 };
 
 } // namespace gocue

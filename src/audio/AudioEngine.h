@@ -35,12 +35,16 @@ public:
         bool fadingOut = false;
         bool paused = false;
         bool loaded = false;                // prepared but not started yet (QLab "loaded")
+        bool audition = false;              // started by an audition GO / preview
         juce::int64 startOrder = 0;         // increases with every start (ordering the active-cues list)
     };
 
     struct PlayOptions
     {
         double startSeconds = 0.0;          // file seconds after the region start to begin at (pass 0)
+        bool audition = false;              // mark the instance as an audition
+        bool silent = false;                // audition "출력 없음": plays (timing, sequences) but reaches no output
+        juce::Uuid patchOverride = juce::Uuid::null();   // audition "대체 패치": play through this patch instead of the cue own patch
     };
 
     /** @param readAheadSamples  disk read-ahead per cue; 0 = synchronous reads (offline tests). */
@@ -102,6 +106,8 @@ public:
     std::vector<juce::Uuid> getPausedCues() const;
 
     bool isPlaying (const juce::Uuid& cueId) const;
+    /** True when a running instance of the cue was started as an audition. */
+    bool isAuditioning (const juce::Uuid& cueId) const;
     std::vector<PlayingCue> getPlayingCues() const;
     /** The running cue that was started last (null Uuid if none).
         @param ignoreFadingOut  skip cues that are already fading out. */
@@ -207,6 +213,7 @@ private:
     mutable juce::CriticalSection lock;               // guards 'players' and the patch runtimes' audio state
     std::vector<std::unique_ptr<CuePlayer>> players;
     std::vector<std::unique_ptr<PatchRuntime>> patchRuntimes;   // [0] = default patch; empty = legacy stereo mix
+    std::unique_ptr<PatchRuntime> muteRuntime;                   // audition "출력 없음": a bus that is never routed
     juce::int64 startCounter = 0;
     std::atomic<int> numDeviceOutputs { 2 };
 

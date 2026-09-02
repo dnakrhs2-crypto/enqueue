@@ -203,6 +203,7 @@ void MainComponent::getAllCommands (juce::Array<juce::CommandID>& ids)
 {
     ids.addArray ({ CommandIDs::go, CommandIDs::pauseToggle, CommandIDs::fadeOutSelected,
                     CommandIDs::panicAll, CommandIDs::hardStopAll, CommandIDs::preview,
+                    CommandIDs::auditionGo, CommandIDs::auditionPreview, CommandIDs::toggleAlwaysAudition,
                     CommandIDs::loadCue, CommandIDs::loadToTime, CommandIDs::resetCue, CommandIDs::resetAll,
                     CommandIDs::addCue, CommandIDs::removeCue, CommandIDs::duplicateCue,
                     CommandIDs::moveCueUp, CommandIDs::moveCueDown, CommandIDs::selectAll,
@@ -264,6 +265,22 @@ void MainComponent::getCommandInfo (juce::CommandID commandID, juce::Application
             result.setInfo (ko ("미리듣기"), ko ("선택 큐만 재생 (프리웨이트·시퀀스 없이, 플레이헤드는 그대로)"), playback, 0);
             result.addDefaultKeypress ('V', ModifierKeys::noModifiers);
             result.setActive (hasSelection);
+            break;
+
+        case CommandIDs::auditionGo:
+            result.setInfo (ko ("오디션 GO"), ko ("프로젝트 설정의 오디션 방식(그대로 / 출력 없음 / 대체 패치)으로 GO"), playback, 0);
+            result.addDefaultKeypress (KeyPress::spaceKey, ModifierKeys::altModifier);
+            break;
+
+        case CommandIDs::auditionPreview:
+            result.setInfo (ko ("오디션 미리듣기"), ko ("선택 큐만 오디션 방식으로 재생"), playback, 0);
+            result.addDefaultKeypress ('V', ModifierKeys::altModifier);
+            result.setActive (hasSelection);
+            break;
+
+        case CommandIDs::toggleAlwaysAudition:
+            result.setInfo (ko ("항상 오디션"), ko ("켜면 모든 GO / 미리듣기가 오디션 방식으로 재생됩니다 (GO 버튼이 파랗게)"), playback, 0);
+            result.setTicked (document.settings.alwaysAudition);
             break;
 
         case CommandIDs::loadCue:
@@ -515,6 +532,27 @@ bool MainComponent::perform (const InvocationInfo& info)
             controller.preview();
             break;
 
+        case CommandIDs::auditionGo:
+            controller.go (true);
+            controller.goKeyReleased();
+            table.focusTable();
+            break;
+
+        case CommandIDs::auditionPreview:
+            controller.preview (true);
+            break;
+
+        case CommandIDs::toggleAlwaysAudition:
+        {
+            auto s = document.settings;
+            s.alwaysAudition = ! s.alwaysAudition;
+            document.setSettings (s);
+            transport.setAuditionMode (s.alwaysAudition);
+            commands.commandStatusChanged();
+            transport.showStatus (s.alwaysAudition ? ko ("항상 오디션: 켜짐") : ko ("항상 오디션: 꺼짐"), false);
+            break;
+        }
+
         case CommandIDs::loadCue:
             controller.loadSelected (0.0);
             break;
@@ -737,6 +775,9 @@ juce::PopupMenu MainComponent::getMenuForIndex (int topLevelMenuIndex, const juc
         case 3:
             menu.addCommandItem (&commands, CommandIDs::go);
             menu.addCommandItem (&commands, CommandIDs::preview);
+            menu.addCommandItem (&commands, CommandIDs::auditionGo);
+            menu.addCommandItem (&commands, CommandIDs::auditionPreview);
+            menu.addCommandItem (&commands, CommandIDs::toggleAlwaysAudition);
             menu.addCommandItem (&commands, CommandIDs::loadCue);
             menu.addCommandItem (&commands, CommandIDs::loadToTime);
             menu.addCommandItem (&commands, CommandIDs::pauseToggle);
@@ -1967,6 +2008,7 @@ void MainComponent::documentStateChanged()
     commands.commandStatusChanged();   // undo / redo names and availability
     document.cues.setLockPlayheadToSelection (document.settings.lockPlayheadToSelection);
     table.setRowSize (document.settings.rowSize);
+    transport.setAuditionMode (document.settings.alwaysAudition);
 
     if (onWindowTitleChanged)
         onWindowTitleChanged (document.getWindowTitle());

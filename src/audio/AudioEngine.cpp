@@ -17,6 +17,12 @@ AudioEngine::AudioEngine (int readAhead)
     playerBuffer.setSize (CuePlayer::maxChannels, blockSize.load());
     players.reserve (256);   // push_back under the audio lock must not reallocate
 
+    muteRuntime = std::make_unique<PatchRuntime>();
+    muteRuntime->patch = AudioPatch::makeDefault ("mute");
+    muteRuntime->patch.numCueOutputs = 2;
+    muteRuntime->patch.sanitise();
+    prepareRuntimeBuffers (*muteRuntime);
+
     if (readAheadSamples > 0)
         readAheadThread.startThread();
 }
@@ -235,7 +241,7 @@ juce::StringArray AudioEngine::setPatches (const std::vector<AudioPatch>& patche
 
         for (auto& p : players)
         {
-            bool alive = false;
+            bool alive = p->getBusTag() == muteRuntime.get();
 
             for (const auto& r : patchRuntimes)
                 if (r.get() == p->getBusTag())
@@ -476,7 +482,14 @@ bool AudioEngine::play (const Cue& cue, const PlayOptions& options, juce::String
         }
     }
 
-    auto* runtime = runtimeForCue (cue);
+    PatchRuntime* runtime = runtimeForCue (cue);
+
+    if (options.silent)
+        runtime = muteRuntime.get();
+    else if (! options.patchOverride.isNull())
+        if (auto* alternate = findRuntime (options.patchOverride))
+            runtime = alternate;
+
     auto player = std::make_unique<CuePlayer> (cue, formatManager,
                                                readAheadSamples > 0 ? &readAheadThread : nullptr,
                                                readAheadSamples, options.startSeconds,
@@ -494,6 +507,7 @@ bool AudioEngine::play (const Cue& cue, const PlayOptions& options, juce::String
     player->setStartOrder (++startCounter);
     player->setChain (findCueChain (cue.id));
     player->setBusTag (runtime);
+    player->setAudition (options.audition || options.silent || ! options.patchOverride.isNull());
     player->start();
 
     const juce::ScopedLock sl (lock);
@@ -781,11 +795,23 @@ std::vector<AudioEngine::PlayingCue> AudioEngine::getPlayingCues() const
         info.fadingOut = p->isFadingOut();
         info.paused = p->isPaused();
         info.loaded = p->isLoadedNotStarted();
+        info.audition = p->isAudition();
         info.startOrder = p->getStartOrder();
         result.push_back (info);
     }
 
     return result;
+}
+
+bool AudioEngine::isAuditioning (const juce::Uuid& cueId) const
+{
+    const juce::ScopedLock sl (lock);
+
+    for (auto& p : players)
+        if (p->getCueId() == cueId && ! p->hasFinished() && ! p->isLoadedNotStarted() && p->isAudition())
+            return true;
+
+    return false;
 }
 
 juce::Uuid AudioEngine::getMostRecentlyStartedCue (bool ignoreFadingOut) const
@@ -937,6 +963,9 @@ void AudioEngine::prepare (double newSampleRate, int newBlockSize, int newNumDev
         for (auto& r : patchRuntimes)
             prepareRuntimeBuffers (*r);
 
+        if (muteRuntime != nullptr)
+            prepareRuntimeBuffers (*muteRuntime);
+
         for (auto& p : players)
             p->prepare (sampleRate.load(), blockSize.load());
     }
@@ -969,6 +998,8 @@ void AudioEngine::renderBlock (juce::AudioBuffer<float>& output, int numSamples)
 
             for (auto& r : patchRuntimes)
                 r->bus.clear (0, n);
+
+            muteRuntime->bus.clear (0, n);   // auditions with no output mix in here and go nowhere
 
             for (auto& p : players)
             {

@@ -13,6 +13,9 @@ enum : juce::CommandID
     panicAll,             // Esc: fade everything out over the panic time (twice = hard stop)
     hardStopAll,
     preview,              // V
+    auditionGo,           // Alt+Space
+    auditionPreview,      // Alt+V
+    toggleAlwaysAudition, // 재생 메뉴: 항상 오디션
     loadCue,              // L
     loadToTime,           // Ctrl+T
     resetCue,

@@ -33,6 +33,12 @@ struct WorkspaceSettings
     double maxLevelDb = 12.0;
     double minLevelDb = -60.0;
 
+    // 오디션: how an audition GO (Alt+Space) / audition preview (Alt+V) plays
+    enum class Audition { unchanged, none, alternatePatch };
+    Audition audition = Audition::unchanged;
+    juce::Uuid auditionPatchId = juce::Uuid::null();   // for alternatePatch
+    bool alwaysAudition = false;           // every GO / preview auditions (재생 메뉴 토글)
+
     // 파일
     bool copyFilesIntoProject = false;
     bool autoBackup = true;

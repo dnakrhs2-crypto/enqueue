@@ -108,7 +108,7 @@ struct Cue
     double gainDb = 0.0;             // main level (top-left of the level matrix)
     LevelMatrix levels;              // file channels -> cue outputs (sized from numChannels / the patch)
     TrimLevels trim;                 // fixed offsets after the matrix
-    juce::Uuid patchId;              // audio patch; null = the project's first patch
+    juce::Uuid patchId = juce::Uuid::null();   // audio patch; null = the default (first) patch
     double durationSeconds = 0.0;    // cached from the file header; 0 = unknown
     int numChannels = 0;             // cached from the file header; 0 = unknown
     bool fileMissing = false;        // runtime only, not serialised

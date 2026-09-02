@@ -509,6 +509,68 @@ public:
             expectEquals ((int) engine.getPlayingCues().size(), 0);
         }
 
+        beginTest ("audition: no output while the cue runs, an alternate patch, and a normal GO restarts it for real");
+        {
+            document.cues.setPlayheadIndex (0);
+            document.cues.setSelectedIndex (0);
+            auto s = document.settings;
+            s.audition = WorkspaceSettings::Audition::none;
+            document.setSettings (s);
+
+            expect (controller.go (true) == CueController::GoResult::started);
+            controller.goKeyReleased();
+            expect (engine.isPlaying (a.id));
+            expect (engine.isAuditioning (a.id));
+            render (engine, scheduler, now, out, 4);
+            expectWithinAbsoluteError (out.getRMSLevel (0, 0, blockSize), 0.0f, 1e-6f);   // silent audition
+            expect (statuses[statuses.size() - 1].startsWith (juce::String::fromUTF8 ("\xEC\x98\xA4\xEB\x94\x94\xEC\x85\x98")));   // 오디션
+
+            // a normal GO on the auditioning cue restarts it with real output (the second-trigger rule is skipped)
+            document.cues.setPlayheadIndex (0);
+            expect (controller.go() == CueController::GoResult::started);
+            controller.goKeyReleased();
+            render (engine, scheduler, now, out, 4);
+            expect (! engine.isAuditioning (a.id));
+            expectWithinAbsoluteError (out.getRMSLevel (0, 0, blockSize), 0.3536f, 0.02f);
+            stopEverything();
+
+            // alternate patch: cue output 1 -> device output 2 only
+            auto alt = AudioPatch::makeDefault ("Alt");
+            alt.numCueOutputs = 2;
+            alt.sanitise();
+            alt.setRouting (0, 0, LevelMatrix::silentDb);
+            alt.setRouting (1, 1, LevelMatrix::silentDb);
+            alt.setRouting (0, 1, 0.0);
+            auto patches = document.patches;
+            patches.push_back (alt);
+            document.setPatches (patches);
+            engine.setPatches (document.patches);
+            s = document.settings;
+            s.audition = WorkspaceSettings::Audition::alternatePatch;
+            s.auditionPatchId = alt.id;
+            document.setSettings (s);
+
+            document.cues.setSelectedIndex (0);
+            expect (controller.preview (true) == CueController::GoResult::started);
+            render (engine, scheduler, now, out, 4);
+            expectWithinAbsoluteError (out.getRMSLevel (0, 0, blockSize), 0.0f, 1e-6f);
+            expectWithinAbsoluteError (out.getRMSLevel (1, 0, blockSize), 0.3536f, 0.02f);
+            stopEverything();
+
+            // "always audition" makes a plain GO audition too
+            s.alwaysAudition = true;
+            document.setSettings (s);
+            document.cues.setPlayheadIndex (0);
+            expect (controller.go() == CueController::GoResult::started);
+            controller.goKeyReleased();
+            expect (engine.isAuditioning (a.id));
+            stopEverything();
+            s.alwaysAudition = false;
+            s.audition = WorkspaceSettings::Audition::unchanged;
+            document.setSettings (s);
+            engine.setPatches ({});
+        }
+
         beginTest ("reset all stops everything and puts the playhead on the first cue");
         {
             document.cues.setSelectedIndex (1);

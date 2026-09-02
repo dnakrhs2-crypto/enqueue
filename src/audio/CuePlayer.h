@@ -119,6 +119,9 @@ public:
     /** Opaque tag the engine uses to remember which patch bus this player mixes into. Any thread. */
     void setBusTag (void* tag) noexcept { busTag.store (tag, std::memory_order_release); }
     void* getBusTag() const noexcept    { return busTag.load (std::memory_order_acquire); }
+    /** Started as an audition (silent / alternate patch / marked): a normal GO restarts it normally. */
+    void setAudition (bool shouldBeAudition) noexcept { audition.store (shouldBeAudition, std::memory_order_relaxed); }
+    bool isAudition() const noexcept { return audition.load (std::memory_order_relaxed); }
 
 private:
     void updatePositionInfo (double rate) noexcept;
@@ -150,6 +153,7 @@ private:
 
     std::atomic<PluginChain*> chain { nullptr };
     std::atomic<void*> busTag { nullptr };
+    std::atomic<bool> audition { false };
     std::atomic<int> pendingFadeOutMs { -1 };
     std::atomic<bool> hardStopRequested { false };
     std::atomic<bool> stopRequested { false };

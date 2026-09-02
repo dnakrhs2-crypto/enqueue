@@ -393,6 +393,10 @@ namespace
         obj->setProperty ("backupBeforeSave", s.backupBeforeSave);
         obj->setProperty ("rotateBackups", s.rotateBackups);
         obj->setProperty ("rowSize", s.rowSize);
+        obj->setProperty ("audition", s.audition == WorkspaceSettings::Audition::none ? "none"
+                                     : s.audition == WorkspaceSettings::Audition::alternatePatch ? "alternatePatch" : "unchanged");
+        obj->setProperty ("auditionPatch", s.auditionPatchId.isNull() ? juce::String() : s.auditionPatchId.toString());
+        obj->setProperty ("alwaysAudition", s.alwaysAudition);
         obj->setProperty ("hasCueTemplate", s.hasCueTemplate);
 
         if (s.hasCueTemplate)
@@ -409,6 +413,13 @@ namespace
             return s;
 
         s.rowSize = intProperty (v, "rowSize", s.rowSize);
+        {
+            const auto mode = v.getProperty ("audition", "unchanged").toString();
+            s.audition = mode == "none" ? WorkspaceSettings::Audition::none
+                       : mode == "alternatePatch" ? WorkspaceSettings::Audition::alternatePatch : WorkspaceSettings::Audition::unchanged;
+        }
+        s.auditionPatchId = juce::Uuid (v.getProperty ("auditionPatch", "").toString());
+        s.alwaysAudition = (bool) v.getProperty ("alwaysAudition", false);
         s.hasCueTemplate = (bool) v.getProperty ("hasCueTemplate", false);
 
         if (const auto t = v.getProperty ("cueTemplate", juce::var()); s.hasCueTemplate && t.getDynamicObject() != nullptr)
