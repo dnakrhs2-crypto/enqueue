@@ -92,6 +92,7 @@ MainComponent::MainComponent (AudioEngine& e, AppSettings& s, juce::ApplicationC
 
     setSize (1100, 820);
     updateTransportStandby();
+    engine.setPatches (document.patches);   // the default patch of the empty project
     startTimerHz (30);
     scheduler.startTicking (1);   // pre-waits, post-waits, auto-follows
 }
@@ -1473,6 +1474,7 @@ void MainComponent::newProject()
     engine.clearCueChains();
     engine.getMasterChain().clear();
     document.newProject();
+    engine.setPatches (document.patches);
     ignorePluginChangesBriefly();
 }
 
@@ -1555,10 +1557,15 @@ void MainComponent::restorePluginChainsFromDocument (juce::StringArray& errors)
 
     if (! document.masterPlugins.empty())
         errors.addArray (engine.getMasterChain().restore (document.masterPlugins, factory));
+
+    errors.addArray (engine.setPatches (document.patches));
 }
 
 void MainComponent::captureLivePluginStates (Project& project)
 {
+    for (auto& patch : project.patches)
+        engine.capturePatchInsertStates (patch);
+
     for (auto& cue : project.cues)
         if (auto* chain = engine.findCueChain (cue.id))
             cue.plugins = chain->getStates();

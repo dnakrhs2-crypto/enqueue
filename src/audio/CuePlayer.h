@@ -116,6 +116,10 @@ public:
     juce::int64 getStartOrder() const noexcept    { return startOrder; }
     void setStartOrder (juce::int64 order) noexcept { startOrder = order; }
 
+    /** Opaque tag the engine uses to remember which patch bus this player mixes into. Any thread. */
+    void setBusTag (void* tag) noexcept { busTag.store (tag, std::memory_order_release); }
+    void* getBusTag() const noexcept    { return busTag.load (std::memory_order_acquire); }
+
 private:
     void updatePositionInfo (double rate) noexcept;
     double ratioFor (double rate) const noexcept { return fileSampleRate * rate / currentSampleRate; }
@@ -145,6 +149,7 @@ private:
     juce::int64 startOrder = 0;
 
     std::atomic<PluginChain*> chain { nullptr };
+    std::atomic<void*> busTag { nullptr };
     std::atomic<int> pendingFadeOutMs { -1 };
     std::atomic<bool> hardStopRequested { false };
     std::atomic<bool> stopRequested { false };

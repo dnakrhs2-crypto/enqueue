@@ -3,6 +3,7 @@
 #include "audio/CuePlayer.h"
 #include "audio/PluginChain.h"
 #include "audio/PluginHost.h"
+#include "model/AudioPatch.h"
 
 #include <juce_audio_devices/juce_audio_devices.h>
 #include <juce_audio_formats/juce_audio_formats.h>
@@ -46,9 +47,10 @@ public:
     explicit AudioEngine (int readAheadSamples = 65536);
     ~AudioEngine() override;
 
-    /** Opens the output device (0 in / 2 out) from a saved state or the system default.
+    /** Opens the output device (0 in / up to maxDeviceOutputs out) from a saved state or the system default.
         Returns an error message, or an empty string on success. */
     juce::String initialise (const juce::XmlElement* savedDeviceState);
+    static constexpr int maxDeviceOutputs = 64;
     void shutdown();
 
     juce::AudioDeviceManager& getDeviceManager() noexcept { return deviceManager; }
@@ -107,6 +109,28 @@ public:
     int getNumPlaying() const;
 
     //==========================================================================
+    // Audio patches: cue outputs (level matrix columns) -> inserts -> routing -> device outputs
+
+    /** Installs the project's patches: routing, main levels, output counts and insert chains (restored from
+        their saved states where the live chain differs; errors returned). Players keep running; players of a
+        removed patch move to the default (first) patch. Without patches the engine mixes straight to outputs 1-2. */
+    juce::StringArray setPatches (const std::vector<AudioPatch>& patches);
+    /** Live routing / main level / stereo-pair / name changes of one patch (same output count). */
+    void updatePatchLevels (const AudioPatch& patch);
+    /** The patch a cue plays through: its own, or the default when the id is null / unknown. Null without patches. */
+    const AudioPatch* findPatchForCue (const Cue& cue) const noexcept;
+    const AudioPatch* findPatch (const juce::Uuid& patchId) const noexcept;
+    /** Active device output channels (2 offline / before a device opened). */
+    int getNumDeviceOutputs() const noexcept { return numDeviceOutputs.load (std::memory_order_relaxed); }
+    /** Insert chains of a patch, created on demand. A stereo pair's chain lives on the first output of the pair. */
+    PluginChain& getPatchCueOutputChain (const juce::Uuid& patchId, int cueOutput);
+    PluginChain* findPatchCueOutputChain (const juce::Uuid& patchId, int cueOutput) const;
+    PluginChain& getPatchDeviceOutputChain (const juce::Uuid& patchId, int deviceOutput);
+    PluginChain* findPatchDeviceOutputChain (const juce::Uuid& patchId, int deviceOutput) const;
+    /** Writes the live insert chain states into the patch (for saving). */
+    void capturePatchInsertStates (AudioPatch& patch) const;
+
+    //==========================================================================
     // Plugin chains (all owned by the engine so they outlive the players that use them)
 
     PluginChain& getMasterChain() noexcept { return masterChain; }
@@ -131,10 +155,11 @@ public:
     //==========================================================================
     // Normally driven by the device; public so the engine can be exercised offline.
 
-    /** Sets the render sample rate / block size and re-prepares every player and chain. */
-    void prepare (double newSampleRate, int newBlockSize);
+    /** Sets the render sample rate / block size (and the device output count when >= 1) and re-prepares
+        every player, patch and chain. */
+    void prepare (double newSampleRate, int newBlockSize, int newNumDeviceOutputs = -1);
 
-    /** Renders one block into 'output' (>= 2 channels; extra channels are cleared).
+    /** Renders one block into 'output' (device outputs; channels beyond the prepared count are cleared).
         Audio thread, or the test harness. */
     void renderBlock (juce::AudioBuffer<float>& output, int numSamples);
 
@@ -157,9 +182,33 @@ private:
     const int readAheadSamples;
     bool callbackAdded = false;
 
-    mutable juce::CriticalSection lock;               // guards 'players'
+    /** Runtime state of one patch. Structure changes only on the message thread under 'lock'. */
+    struct PatchRuntime
+    {
+        AudioPatch patch;
+        std::vector<float> currentRouting, targetRouting;   // [cueOutput * routingOutputs + deviceOutput]
+        int routingOutputs = 0;
+        juce::AudioBuffer<float> bus;          // cue outputs (K x block)
+        juce::AudioBuffer<float> routed;       // device outputs after routing (M x block)
+        juce::AudioBuffer<float> pairScratch;  // 2 x block: mono inserts run through the stereo chain
+        std::map<int, std::unique_ptr<PluginChain>> cueOutputChains, deviceOutputChains;
+    };
+
+    PatchRuntime* findRuntime (const juce::Uuid& patchId) const noexcept;
+    PatchRuntime* runtimeForCue (const Cue& cue) const noexcept;
+    /** Sizes buffers / routing tables for the current block size and device outputs (allocates: call under 'lock' or before publishing). */
+    void prepareRuntimeBuffers (PatchRuntime& r);
+    void computeRouting (const PatchRuntime& r, std::vector<float>& out) const;
+    void renderPatch (PatchRuntime& r, int numSamples) noexcept;
+    static void processInsert (PluginChain& chain, juce::AudioBuffer<float>& buffer, int firstChannel, bool stereo,
+                               juce::AudioBuffer<float>& scratch, int numSamples) noexcept;
+    template <typename Fn> void forEachPatchChain (Fn&& fn) const;
+
+    mutable juce::CriticalSection lock;               // guards 'players' and the patch runtimes' audio state
     std::vector<std::unique_ptr<CuePlayer>> players;
+    std::vector<std::unique_ptr<PatchRuntime>> patchRuntimes;   // [0] = default patch; empty = legacy stereo mix
     juce::int64 startCounter = 0;
+    std::atomic<int> numDeviceOutputs { 2 };
 
     PluginChain masterChain;
     std::map<juce::String, std::unique_ptr<PluginChain>> cueChains;   // keyed by Uuid string

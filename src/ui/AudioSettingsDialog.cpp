@@ -1,5 +1,7 @@
 #include "ui/AudioSettingsDialog.h"
 
+#include "audio/AudioEngine.h"
+
 #include "ui/UiUtils.h"
 
 namespace gocue::AudioSettingsDialog
@@ -20,7 +22,7 @@ void show (juce::AudioDeviceManager& deviceManager, juce::Component* centreAroun
 
     auto* selector = new juce::AudioDeviceSelectorComponent (deviceManager,
                                                              0, 0,     // no inputs
-                                                             2, 2,     // exactly one stereo output pair
+                                                             2, AudioEngine::maxDeviceOutputs,   // stereo pairs up to 64 outputs
                                                              false,    // midi inputs
                                                              false,    // midi output
                                                              true,     // stereo pairs

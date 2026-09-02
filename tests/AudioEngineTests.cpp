@@ -1,4 +1,5 @@
 #include "audio/AudioEngine.h"
+#include "TestGainPlugin.h"
 
 #include <juce_audio_formats/juce_audio_formats.h>
 #include <juce_core/juce_core.h>
@@ -217,6 +218,85 @@ public:
             render (engine, out, 3);
             engine.reapFinishedPlayers();
             expectEquals (engine.getNumPlaying(), 0);
+        }
+
+        beginTest ("patch: cue outputs route to device outputs 3-4 with the patch main level");
+        {
+            AudioEngine engine4 (0);
+            engine4.prepare (sampleRate, blockSize, 4);
+            juce::AudioBuffer<float> out4 (4, blockSize);
+
+            auto patch = AudioPatch::makeDefault ("Main");
+            patch.numCueOutputs = 2;
+            patch.sanitise();
+            patch.setRouting (0, 0, LevelMatrix::silentDb);
+            patch.setRouting (1, 1, LevelMatrix::silentDb);
+            patch.setRouting (0, 2, 0.0);
+            patch.setRouting (1, 3, 0.0);
+            patch.mainDb = -6.0;
+            expect (engine4.setPatches ({ patch }).isEmpty());
+            expect (engine4.findPatch (patch.id) != nullptr);
+
+            Cue c;
+            c.file = tone;
+            expect (engine4.play (c));
+            render (engine4, out4, 5);
+            expectWithinAbsoluteError (rms (out4, 0), 0.0f, 1e-4f);
+            expectWithinAbsoluteError (rms (out4, 1), 0.0f, 1e-4f);
+            expectWithinAbsoluteError (rms (out4, 2), 0.3536f * 0.501f, 0.01f);
+            expectWithinAbsoluteError (rms (out4, 3), 0.3536f * 0.501f, 0.01f);
+
+            // live routing change: cue output 1 back to device output 1
+            patch.setRouting (0, 2, LevelMatrix::silentDb);
+            patch.setRouting (0, 0, 0.0);
+            engine4.updatePatchLevels (patch);
+            render (engine4, out4, 3);
+            expectWithinAbsoluteError (rms (out4, 0), 0.3536f * 0.501f, 0.01f);
+            expectWithinAbsoluteError (rms (out4, 2), 0.0f, 1e-4f);
+
+            // a stereo-pair cue output insert halves outputs 1-2; a mono device output insert quarters device output 4
+            patch.cueOutputStereoWithNext[0] = 1;
+            engine4.updatePatchLevels (patch);
+            engine4.getPatchCueOutputChain (patch.id, 0).addPlugin (std::make_unique<TestGainPlugin> (0.5f));
+            engine4.getPatchDeviceOutputChain (patch.id, 3).addPlugin (std::make_unique<TestGainPlugin> (0.25f));
+            render (engine4, out4, 3);
+            expectWithinAbsoluteError (rms (out4, 0), 0.3536f * 0.501f * 0.5f, 0.01f);
+            expectWithinAbsoluteError (rms (out4, 3), 0.3536f * 0.501f * 0.5f * 0.25f, 0.005f);
+
+            AudioPatch captured = patch;
+            engine4.capturePatchInsertStates (captured);
+            expectEquals ((int) captured.cueOutputInserts[0].size(), 1);
+            expectEquals ((int) captured.deviceOutputInserts.size(), 4);
+            expectEquals ((int) captured.deviceOutputInserts[3].size(), 1);
+
+            engine4.stopAll();
+            render (engine4, out4, 3);
+            engine4.reapFinishedPlayers();
+
+            // an unknown patch id plays through the default (first) patch
+            Cue d;
+            d.file = tone;
+            d.patchId = juce::Uuid();
+            expect (engine4.play (d));
+            render (engine4, out4, 5);
+            expectWithinAbsoluteError (rms (out4, 0), 0.3536f * 0.501f * 0.5f, 0.01f);
+
+            // replacing the patch list moves the running player to the new default patch (diagonal, unity)
+            auto other = AudioPatch::makeDefault ("Other");
+            other.numCueOutputs = 2;
+            other.sanitise();
+            expect (engine4.setPatches ({ other }).isEmpty());
+            render (engine4, out4, 3);
+            expectWithinAbsoluteError (rms (out4, 0), 0.3536f, 0.01f);
+            expectWithinAbsoluteError (rms (out4, 1), 0.3536f, 0.01f);
+            expectWithinAbsoluteError (rms (out4, 3), 0.0f, 1e-4f);
+            expect (engine4.findPatch (patch.id) == nullptr);
+
+            engine4.stopAll();
+            render (engine4, out4, 3);
+            engine4.reapFinishedPlayers();
+            expectEquals (engine4.getNumPlaying(), 0);
+            engine4.shutdown();
         }
 
         beginTest ("cues mix together and stopAll silences everything");
