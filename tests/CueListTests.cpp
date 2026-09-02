@@ -457,6 +457,40 @@ public:
             expect (! list.ungroup (0));
         }
 
+        beginTest ("tree: a drop onto a moved row is a no-op; the parent is decided before the move; copies keep inner targets");
+        {
+            CueList list;
+            Cue g = make ("G"); g.type = CueType::group;
+            list.add (g);
+            Cue h = make ("H"); h.type = CueType::group; h.parentId = g.id;
+            list.add (h);
+            Cue x = make ("x"); x.parentId = h.id;
+            list.add (x);
+            list.add (make ("Top"));                        // G H x Top
+            expect (! list.moveSubtrees ({ 1 }, 1));         // H dropped on itself: nothing happens
+            expect (! list.moveSubtrees ({ 1 }, 2));         // ... or inside its own subtree
+            expectEquals (names (list), juce::String ("G,H,x,Top"));
+            expect (list.get (1).parentId == g.id);
+
+            // moving Top in front of x (inside H) makes it H's child, decided before the rows move
+            expect (list.moveSubtrees ({ 3 }, 2));
+            expectEquals (names (list), juce::String ("G,H,Top,x"));
+            expect (list.get (2).parentId == h.id);
+
+            // duplicating a group whose child targets a sibling: the copy targets the copied sibling
+            CueList list2;
+            Cue g2 = make ("G2"); g2.type = CueType::group;
+            list2.add (g2);
+            Cue audio = make ("a"); audio.parentId = g2.id; audio.hotkey = "F5";
+            Cue fade = make ("f"); fade.type = CueType::fade; fade.parentId = g2.id; fade.fade.targetId = audio.id;
+            list2.add (audio);
+            list2.add (fade);
+            const int copyAt = list2.duplicate (0);
+            expectEquals (copyAt, 3);
+            expect (list2.get (5).fade.targetId == list2.get (4).id);   // the copied fade -> the copied audio
+            expect (list2.get (4).hotkey.isEmpty());                    // hotkeys stay unique
+        }
+
         beginTest ("tree: broken parent links are nulled on load");
         {
             CueList list;

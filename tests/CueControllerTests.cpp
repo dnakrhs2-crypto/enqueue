@@ -1118,6 +1118,40 @@ public:
             document.cues.remove (document.cues.indexOf (startY.id));
         }
 
+        beginTest ("a cue that would start itself is refused; a stopped cue releases its duck");
+        {
+            // start control cue A targets start control cue B, which targets A: no stack overflow, a failure message
+            Cue ca, cb;
+            ca.type = CueType::control; ca.control.kind = ControlKind::start; ca.name = "ca";
+            cb.type = CueType::control; cb.control.kind = ControlKind::start; cb.name = "cb";
+            ca.control.targetId = cb.id;
+            cb.control.targetId = ca.id;
+            document.cues.add (ca);
+            document.cues.add (cb);
+            now += 1.0;
+            const int before = statuses.size();
+            expect (controller.trigger (document.cues.get (document.cues.indexOf (ca.id))) == CueController::GoResult::started);   // ca starts cb, cb refuses ca
+            expect (statuses.size() > before);
+            expect (statuses[statuses.size() - 1].isNotEmpty());
+            stopEverything();
+            document.cues.remove (document.cues.indexOf (cb.id));
+            document.cues.remove (document.cues.indexOf (ca.id));
+
+            // a ducking cue that is stopped (pending cancelled) lets the others come back up
+            document.cues.update (1, [] (Cue& c) { c.duck.enabled = true; c.duck.levelDb = -12.0; c.duck.seconds = 0.05; });
+            now += 1.0;
+            expect (controller.fire (a.id) == CueController::GoResult::started);
+            render (engine, scheduler, now, out, 4);
+            expect (controller.fire (b.id) == CueController::GoResult::started);   // b ducks a
+            render (engine, scheduler, now, out, 10);
+            expectWithinAbsoluteError (engine.getDuckDb (a.id), -12.0, 0.01);
+            controller.stopCue (b.id);
+            render (engine, scheduler, now, out, 30);
+            expectWithinAbsoluteError (engine.getDuckDb (a.id), 0.0, 0.01);   // released with the cleanup watch
+            document.cues.update (1, [] (Cue& c) { c.duck.enabled = false; });
+            stopEverything();
+        }
+
         beginTest ("played cues are remembered for the second colour until reset");
         {
             controller.resetAll();
