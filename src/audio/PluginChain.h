@@ -82,6 +82,9 @@ public:
     /** True when the slots (count, plugin identity, bypass) match 'states'; parameter values are not compared.
         Message thread. Used to decide whether an undo step must rebuild this chain. */
     bool matchesStructure (const std::vector<PluginSlotState>& states) const;
+    /** For a chain whose structure matches 'states': pushes each slot's saved state / bypass into the live
+        instance (undo of a preset change without rebuilding the instances). */
+    void applyStates (const std::vector<PluginSlotState>& states);
 
     /** Sum of the tails of the active (non-bypassed) plugins in series, clamped to [0, maxTailSeconds]. Any thread. */
     double getTailSeconds() const;

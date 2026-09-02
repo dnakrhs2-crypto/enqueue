@@ -274,7 +274,7 @@ public:
             now = 50.5;
             scheduler.tick();
             expect (engine.isPlaying (a.id));
-            expectEquals (controller.getNumPending(), 1);   // tracked ids are not pruned until cancelled
+            expectEquals (controller.getNumPending(), 0);   // the start ran: nothing is pending any more
             stopEverything();
 
             document.cues.setSelectedIndex (0);
@@ -518,6 +518,167 @@ public:
             render (engine, scheduler, now, out, 2);
             expectEquals (engine.getNumPlaying(), 0);
             expectEquals (document.cues.getPlayheadIndex(), 0);
+        }
+
+        beginTest ("an auto-follow cue with a pre-wait does not start its follower before it has even started");
+        {
+            document.cues.update (0, [] (Cue& c) { c.preWaitSeconds = 1.0; c.continueMode = ContinueMode::autoFollow; });
+            document.cues.setSelectedIndex (0);
+            now = 100.0;
+            expect (controller.go() == CueController::GoResult::started);
+            controller.goKeyReleased();
+            expect (! engine.isPlaying (a.id));
+            expect (! engine.isPlaying (b.id));
+
+            now = 101.0;
+            scheduler.tick();                      // A starts in this tick; the follow watch must not misread "not playing" as "ended"
+            expect (engine.isPlaying (a.id));
+            expect (! engine.isPlaying (b.id));
+            render (engine, scheduler, now, out, 3);
+            expect (! engine.isPlaying (b.id));
+
+            engine.stop (a.id);
+            render (engine, scheduler, now, out, 3);
+            expect (engine.isPlaying (b.id));    // now A is over: B follows
+            stopEverything();
+            document.cues.update (0, [] (Cue& c) { c.preWaitSeconds = 0.0; c.continueMode = ContinueMode::none; });
+        }
+
+        beginTest ("auto-follow remembers the next cue by id: a cue inserted in between does not steal the follow");
+        {
+            document.cues.update (0, [] (Cue& c) { c.continueMode = ContinueMode::autoFollow; });
+            document.cues.setSelectedIndex (0);
+            now = 110.0;
+            expect (controller.go() == CueController::GoResult::started);
+            controller.goKeyReleased();
+            render (engine, scheduler, now, out, 2);
+
+            Cue inserted;
+            inserted.name = "inserted";
+            inserted.file = tone;
+            document.cues.add (inserted, 1);       // now: a, inserted, b
+            engine.stop (a.id);
+            render (engine, scheduler, now, out, 3);
+            expect (engine.isPlaying (b.id));
+            expect (! engine.isPlaying (inserted.id));
+            stopEverything();
+            document.cues.remove (1);
+            document.cues.update (0, [] (Cue& c) { c.continueMode = ContinueMode::none; });
+        }
+
+        beginTest ("restarting a cue drops its previous follow so the follower fires once");
+        {
+            document.cues.update (0, [] (Cue& c) { c.continueMode = ContinueMode::autoFollow; });
+            document.cues.setSelectedIndex (0);
+            now = 120.0;
+            expect (controller.go() == CueController::GoResult::started);
+            controller.goKeyReleased();
+            render (engine, scheduler, now, out, 2);
+            expectEquals (controller.getNumPending(), 1);
+
+            document.cues.setPlayheadIndex (0);
+            now = 121.0;
+            expect (controller.go() == CueController::GoResult::started);   // hardStopRestart
+            controller.goKeyReleased();
+            render (engine, scheduler, now, out, 2);
+            expectEquals (controller.getNumPending(), 1);   // one follow, not two
+
+            controller.resetSelected();                      // reset cancels the follow entirely
+            document.cues.setSelectedIndex (0);
+            controller.resetSelected();
+            render (engine, scheduler, now, out, 3);
+            expect (! engine.isPlaying (b.id));
+            stopEverything();
+            document.cues.update (0, [] (Cue& c) { c.continueMode = ContinueMode::none; });
+        }
+
+        beginTest ("ducks from several cues add up and each one is removed when its cue ends");
+        {
+            Cue c;
+            c.name = "c";
+            c.file = tone;
+            c.duck.enabled = true;
+            c.duck.levelDb = -12.0;
+            c.duck.seconds = 0.1;
+            document.cues.add (c);
+            document.cues.update (document.cues.indexOf (b.id), [] (Cue& cue) { cue.duck.enabled = true; cue.duck.levelDb = -6.0; cue.duck.seconds = 0.1; });
+
+            expect (engine.play (a));
+            render (engine, scheduler, now, out, 2);
+            controller.fireSequence (document.cues.indexOf (b.id));        // b ducks a by -6
+            expect (engine.isPlaying (b.id));
+            expectWithinAbsoluteError (engine.getDuckDb (a.id), -6.0, 1e-9);
+            controller.fireSequence (document.cues.indexOf (c.id));        // c ducks a by -12 (and b)
+            expect (engine.isPlaying (c.id));
+            expectWithinAbsoluteError (engine.getDuckDb (a.id), -18.0, 1e-9);
+
+            engine.stop (b.id);
+            render (engine, scheduler, now, out, 3);
+            expectWithinAbsoluteError (engine.getDuckDb (a.id), -12.0, 1e-9);   // b's share is gone, c's stays
+            engine.stop (c.id);
+            render (engine, scheduler, now, out, 3);
+            expectWithinAbsoluteError (engine.getDuckDb (a.id), 0.0, 1e-9);
+            stopEverything();
+            document.cues.remove (document.cues.indexOf (c.id));
+            document.cues.update (document.cues.indexOf (b.id), [] (Cue& cue) { cue.duck.enabled = false; });
+        }
+
+        beginTest ("wall-clock triggers are not skipped when a check arrives late");
+        {
+            document.cues.update (1, [] (Cue& cue) { cue.wallClock.enabled = true; cue.wallClock.hour = 9; cue.wallClock.minute = 30; cue.wallClock.second = 0; cue.wallClock.daysMask = 0x7f; });
+            const juce::Time before (2026, 8, 2, 9, 29, 58, 0);   // 2 s before 09:30:00 (a Wednesday in September)
+            controller.checkWallClock (before);
+            expect (! engine.isPlaying (b.id));
+            controller.checkWallClock (before + juce::RelativeTime::seconds (3.0));   // 09:30:01: 09:30:00 fell inside the gap
+            expect (engine.isPlaying (b.id));
+            stopEverything();
+            document.cues.update (1, [] (Cue& cue) { cue.wallClock.enabled = false; });
+        }
+
+        beginTest ("a stop-pending loaded instance is not started by GO; the fresh load is");
+        {
+            document.cues.setSelectedIndex (0);
+            expect (controller.loadSelected (0.0));
+            expect (controller.loadSelected (0.0));   // replaces the first before any audio block ran
+            document.cues.setPlayheadIndex (0);
+            expect (controller.go() == CueController::GoResult::started);
+            controller.goKeyReleased();
+            render (engine, scheduler, now, out, 4);
+            expect (engine.isPlaying (a.id));
+            expectWithinAbsoluteError (out.getRMSLevel (0, 0, blockSize), 0.3536f, 0.02f);   // one instance plays
+            stopEverything();
+        }
+
+        beginTest ("undo restores the whole selection and the playhead");
+        {
+            document.cues.setLockPlayheadToSelection (false);
+            document.cues.setSelection ({ 0, 1 }, 0);
+            document.cues.setPlayheadIndex (1);
+            document.perform ("rename", [&] { document.cues.update (0, [] (Cue& cue) { cue.name = "renamed"; }); });
+            document.cues.setSelectedIndex (1);
+            document.cues.setPlayheadIndex (0);
+            expect (document.undo());
+            expectEquals ((int) document.cues.getSelectedIndices().size(), 2);
+            expectEquals (document.cues.getSelectedIndex(), 0);
+            expectEquals (document.cues.getPlayheadIndex(), 1);
+            expectEquals (document.cues.get (0).name, juce::String ("a"));
+            document.cues.setLockPlayheadToSelection (true);
+            expectEquals (document.cues.getPlayheadIndex(), 0);   // turning the lock on snaps the playhead to the selection
+            document.cues.setSelectedIndex (0);
+        }
+
+        beginTest ("played cues are remembered for the second colour until reset");
+        {
+            controller.resetAll();
+            render (engine, scheduler, now, out, 2);
+            document.cues.setPlayheadIndex (0);
+            expect (! controller.hasPlayed (a.id));
+            expect (controller.go() == CueController::GoResult::started);
+            controller.goKeyReleased();
+            expect (controller.hasPlayed (a.id));
+            controller.resetAll();
+            expect (! controller.hasPlayed (a.id));
+            render (engine, scheduler, now, out, 2);
         }
 
         expect (dir.deleteRecursively());

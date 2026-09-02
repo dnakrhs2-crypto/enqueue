@@ -28,9 +28,12 @@ public:
     void cancel (int id);
     void cancelAll();
 
-    /** Runs everything that is due, in time order. Actions may schedule or cancel entries. */
+    /** Runs everything that is due: timed entries first (in time order), then the watches whose condition
+        holds *after* those ran (re-checked right before each action). Actions may schedule or cancel entries;
+        cancelAll() from an action stops the rest of the tick. */
     void tick();
     int pendingCount() const noexcept { return (int) entries.size(); }
+    bool isPending (int id) const noexcept;
     double now() const { return clock(); }
 
     void startTicking (int intervalMs = 1) { startTimer (intervalMs); }
@@ -52,6 +55,7 @@ private:
     std::set<int> cancelledDuringTick;
     int nextId = 1;
     bool inTick = false;
+    bool cancelAllDuringTick = false;
 };
 
 } // namespace gocue

@@ -18,6 +18,7 @@
 #include <functional>
 #include <map>
 #include <memory>
+#include <set>
 
 namespace gocue
 {
@@ -74,7 +75,9 @@ private:
     {
         explicit HotkeyListener (MainComponent& o) : owner (o) {}
         bool keyPressed (const juce::KeyPress& key, juce::Component*) override;
+        bool keyStateChanged (bool isKeyDown, juce::Component*) override;
         MainComponent& owner;
+        std::set<int> heldKeys;   // OS key repeat must not re-fire a hotkey while it is held
     };
 
     // FileDragAndDropTarget: audio files / folders dropped anywhere else in the window are appended,
@@ -160,6 +163,9 @@ private:
     juce::String lastSearch;
     std::function<void()> closeContinuation;
     double closeDeadlineMs = 0.0;
+    juce::Uuid closeCueId = juce::Uuid::null();
+    juce::Uuid autoLoadedId = juce::Uuid::null();   // the standby cue we loaded automatically (dropped when the playhead moves)
+    juce::Component::SafePointer<juce::AlertWindow> discardDialog;
 
     juce::MenuBarComponent menuBar;
     TransportBar transport;

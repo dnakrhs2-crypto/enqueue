@@ -49,6 +49,8 @@ public:
     HotkeyButton() { setWantsKeyboardFocus (false); }
 
     std::function<void (const juce::String& description)> onHotkeyChanged;
+    /** Returns a reason to refuse the key, or an empty string. */
+    std::function<juce::String (const juce::KeyPress&)> validate;
 
     void setHotkey (const juce::String& description)
     {
@@ -78,6 +80,19 @@ public:
 
         if (key.getModifiers().isAnyModifierKeyDown() && key.getKeyCode() == 0)
             return true;   // a lone modifier
+
+        if (validate)
+        {
+            const auto reason = validate (key);
+
+            if (reason.isNotEmpty())
+            {
+                setButtonText (reason);
+                juce::Component::SafePointer<HotkeyButton> safeThis (this);
+                juce::Timer::callAfterDelay (1500, [safeThis] { if (safeThis != nullptr) safeThis->setHotkey (safeThis->hotkey); });
+                return true;
+            }
+        }
 
         if (onHotkeyChanged)
             onHotkeyChanged (key.getTextDescription());
@@ -196,6 +211,31 @@ public:
         {
             edit (ko ("핫키"), [description] (Cue& c) { c.hotkey = description; });
         };
+        hotkeyButton.validate = [this] (const juce::KeyPress& key) -> juce::String
+        {
+            // keys the app itself uses (GO / pause / fade / panic / preview / load / quick edit / list navigation)
+            static const int reserved[] = { juce::KeyPress::spaceKey, juce::KeyPress::escapeKey, juce::KeyPress::returnKey, juce::KeyPress::tabKey,
+                                            juce::KeyPress::deleteKey, juce::KeyPress::backspaceKey, juce::KeyPress::insertKey,
+                                            juce::KeyPress::upKey, juce::KeyPress::downKey, juce::KeyPress::leftKey, juce::KeyPress::rightKey,
+                                            juce::KeyPress::pageUpKey, juce::KeyPress::pageDownKey, juce::KeyPress::homeKey, juce::KeyPress::endKey,
+                                            'P', 'F', 'V', 'L', 'N', 'Q', 'E', 'W', 'C', 'O', 'D', juce::KeyPress::F3Key };
+
+            if (key.getModifiers().isCommandDown() || key.getModifiers().isAltDown())
+                return ko ("Ctrl / Alt 조합은 메뉴 단축키용입니다");
+
+            for (int code : reserved)
+                if (key.getKeyCode() == code)
+                    return ko ("앱이 쓰는 키입니다: ") + key.getTextDescription();
+
+            const auto description = key.getTextDescription();
+            const auto* selected = cues.getSelected();
+
+            for (const auto& other : cues.getAll())
+                if (other.hotkey == description && (selected == nullptr || other.id != selected->id))
+                    return ko ("이미 쓰는 핫키: ") + other.name;
+
+            return {};
+        };
         addAndMakeVisible (hotkeyButton);
 
         clearHotkeyButton.setButtonText ("x");
@@ -274,6 +314,17 @@ public:
             gainSlider.setValue (0.0, juce::dontSendNotification);
             return;
         }
+
+        // while a field is being edited the panel keeps showing (and later commits to) the cue it started on
+        bool editing = false;
+
+        for (auto* e : { &numberEditor, &nameEditor, &preEditor, &postEditor, &fadeOutEditor, &notesEditor })
+            editing = editing || e->hasKeyboardFocus (true);
+
+        if (editing && ! shownId.isNull() && shownId != cue->id && cues.indexOf (shownId) >= 0)
+            return;
+
+        shownId = cue->id;
 
         auto setIfIdle = [] (juce::TextEditor& e, const juce::String& text) { if (! e.hasKeyboardFocus (true)) e.setText (text, false); };
         setIfIdle (numberEditor, cue->number);
@@ -383,12 +434,16 @@ private:
         if (refreshing || cancellingEdit || ! editable)
             return;
 
-        const int index = cues.getSelectedIndex();
+        // the cue whose values the fields show (a focus-lost commit may arrive after the selection moved on)
+        const int index = shownId.isNull() ? cues.getSelectedIndex() : cues.indexOf (shownId);
 
         if (! cues.isValidIndex (index))
             return;
 
         document.perform (name, [this, index, mutator] { cues.update (index, mutator); }, { coalesceKey, false });
+
+        if (const auto* selected = cues.getSelected(); selected != nullptr && selected->id != shownId)
+            refresh();   // the edit went to the previous cue: show the selected one now
     }
 
     bool isInterestedInFileDrag (const juce::StringArray& files) override
@@ -439,7 +494,8 @@ private:
 
     void commitNumber()
     {
-        const auto* cue = cues.getSelected();
+        const int index = shownId.isNull() ? cues.getSelectedIndex() : cues.indexOf (shownId);
+        const auto* cue = cues.isValidIndex (index) ? &cues.get (index) : nullptr;
 
         if (refreshing || cancellingEdit || cue == nullptr)
             return;
@@ -448,6 +504,13 @@ private:
 
         if (number == cue->number)
             return;
+
+        if (cues.isNumberTaken (number, cue->id))
+        {
+            juce::LookAndFeel::getDefaultLookAndFeel().playAlertSound();   // numbers are unique in the project
+            numberEditor.setText (cue->number, false);
+            return;
+        }
 
         edit (ko ("번호"), [number] (Cue& c) { c.number = number; });
     }
@@ -624,6 +687,7 @@ private:
     juce::Slider gainSlider;
     std::unique_ptr<juce::FileChooser> chooser;
     juce::Rectangle<int> dropArea;
+    juce::Uuid shownId = juce::Uuid::null();   // the cue the fields show
     bool refreshing = false;
     bool cancellingEdit = false;
     bool dragOver = false;
@@ -753,6 +817,18 @@ public:
         const auto* cue = cues.getSelected();
         const bool enabled = cue != nullptr && editable;
 
+        {
+            bool editing = false;
+
+            for (auto* e : { &hourEditor, &minuteEditor, &secondEditor, &fadeStopSecondsEditor, &duckLevelEditor, &duckSecondsEditor })
+                editing = editing || e->hasKeyboardFocus (true);
+
+            if (cue != nullptr && editing && ! shownId.isNull() && shownId != cue->id && cues.indexOf (shownId) >= 0)
+                return;
+
+            shownId = cue != nullptr ? cue->id : juce::Uuid::null();
+        }
+
         for (auto* c : std::initializer_list<juce::Component*> { &secondCombo, &wallToggle, &hourEditor, &minuteEditor, &secondEditor,
                                                                  &fadeStopToggle, &fadeStopSecondsEditor, &fadeStopScopeCombo,
                                                                  &duckToggle, &duckLevelEditor, &duckSecondsEditor })
@@ -839,12 +915,15 @@ private:
         if (refreshing || ! editable)
             return;
 
-        const int index = cues.getSelectedIndex();
+        const int index = shownId.isNull() ? cues.getSelectedIndex() : cues.indexOf (shownId);
 
         if (! cues.isValidIndex (index))
             return;
 
         document.perform (name, [this, index, mutator] { cues.update (index, mutator); });
+
+        if (const auto* selected = cues.getSelected(); selected != nullptr && selected->id != shownId)
+            refresh();
     }
 
     void commitWallClock()
@@ -907,6 +986,7 @@ private:
     juce::ToggleButton wallToggle, fadeStopToggle, duckToggle;
     juce::TextEditor hourEditor, minuteEditor, secondEditor, fadeStopSecondsEditor, duckLevelEditor, duckSecondsEditor;
     std::array<juce::TextButton, 7> dayButtons;
+    juce::Uuid shownId = juce::Uuid::null();
     bool refreshing = false;
     bool editable = true;
 };

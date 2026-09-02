@@ -188,6 +188,23 @@ public:
             expect (engine.getMostRecentlyStartedCue (false).isNull());
         }
 
+        beginTest ("a duck ramp is linear and lands on its target after the requested time");
+        {
+            Cue c;
+            c.file = tone;
+            expect (engine.play (c));
+            render (engine, out, 3);
+            engine.setDuckDb (c.id, -20.0, 0.4);                     // to 0.1 over 0.4 s (the file is 1 s long)
+            const int blocksPerSecond = (int) (sampleRate / blockSize);
+            render (engine, out, blocksPerSecond / 5);               // ~0.2 s: half way
+            expectWithinAbsoluteError (rms (out, 0), 0.3536f * 0.55f, 0.03f);   // linear in gain: 1.0 -> 0.1 is 0.55 at the middle
+            render (engine, out, blocksPerSecond / 5 + 2);           // ~0.42 s: landed
+            expectWithinAbsoluteError (rms (out, 0), 0.3536f * 0.1f, 0.005f);
+            engine.stopAll();
+            render (engine, out, 3);
+            engine.reapFinishedPlayers();
+        }
+
         beginTest ("missing or unassigned files are rejected with a message");
         {
             Cue missing;

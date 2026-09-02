@@ -91,6 +91,10 @@ public:
     bool hasFinished() const noexcept             { return finished.load (std::memory_order_relaxed); }
     bool isFadingOut() const noexcept             { return fadingOut.load (std::memory_order_relaxed); }
     bool isPaused() const noexcept                { return pausedFlag.load (std::memory_order_relaxed); }
+    /** A stop / fade-out has been requested (the instance is on its way out). */
+    bool isStopPending() const noexcept           { return stopRequested.load (std::memory_order_relaxed) || hardStopRequested.load (std::memory_order_relaxed) || pendingFadeOutMs.load (std::memory_order_relaxed) >= 0; }
+    /** 0..1 through the cue's total length (all passes); -1 while looping forever. */
+    double getProgressFraction() const noexcept;
     /** Elapsed wall-clock seconds since the start (paused time excluded) plus the start offset. */
     double getPositionSeconds() const noexcept    { return positionSeconds.load (std::memory_order_relaxed); }
     /** Total wall-clock length of the cue at the current rate and trim; -1 while looping forever. */
@@ -117,6 +121,8 @@ private:
     FadeEnvelope pauseGate;       // pause / resume ramps
     float gainLinear = 1.0f;
     float duckLevel = 1.0f;       // audio thread
+    float duckGoalSeen = 1.0f;    // audio thread: the goal the current linear ramp heads to
+    juce::int64 duckSamplesLeft = 0;
     double fileSampleRate = 44100.0;
     double currentSampleRate = 44100.0;
     double startOffsetSeconds = 0.0;

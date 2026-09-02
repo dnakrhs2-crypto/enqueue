@@ -20,7 +20,7 @@ class CueTable::CellEditor : public juce::TextEditor
 {
 public:
     CellEditor (CueTable& o, int r, ColumnId c, const juce::String& initial)
-        : owner (o), row (r), column (c)
+        : owner (o), row (r), column (c), cueId (o.cues.get (r).id), generation (++o.editGeneration)
     {
         setText (initial, false);
         setSelectAllWhenFocused (true);
@@ -39,17 +39,24 @@ public:
         done = true;
         const auto text = getText();
         juce::Component::SafePointer<CueTable> safeOwner (&owner);
-        const int r = row;
         const ColumnId c = column;
+        const auto id = cueId;
+        const int gen = generation;
 
-        juce::MessageManager::callAsync ([safeOwner, r, c, text]
+        juce::MessageManager::callAsync ([safeOwner, id, gen, c, text]
         {
-            if (safeOwner != nullptr)
-            {
+            if (safeOwner == nullptr)
+                return;
+
+            if (safeOwner->editGeneration == gen)   // still our editor (a newer one may have replaced it)
                 safeOwner->cellEditor.reset();
-                safeOwner->commitCellEdit (r, c, text);
-                safeOwner->focusTable();
-            }
+
+            const int currentRow = safeOwner->cues.indexOf (id);   // the row may have moved meanwhile
+
+            if (currentRow >= 0)
+                safeOwner->commitCellEdit (currentRow, c, text);
+
+            safeOwner->focusTable();
         });
     }
 
@@ -60,13 +67,17 @@ public:
 
         done = true;
         juce::Component::SafePointer<CueTable> safeOwner (&owner);
-        juce::MessageManager::callAsync ([safeOwner]
+        const int gen = generation;
+        juce::MessageManager::callAsync ([safeOwner, gen]
         {
-            if (safeOwner != nullptr)
-            {
+            if (safeOwner == nullptr)
+                return;
+
+            if (safeOwner->editGeneration == gen)
                 safeOwner->cellEditor.reset();
-                safeOwner->focusTable();
-            }
+
+            safeOwner->focusTable();
+            safeOwner->commands.invokeDirectly (CommandIDs::panicAll, true);   // Esc is the panic key, editing or not
         });
     }
 
@@ -74,6 +85,8 @@ private:
     CueTable& owner;
     const int row;
     const ColumnId column;
+    const juce::Uuid cueId;
+    const int generation;
     bool done = false;
 };
 
@@ -215,17 +228,19 @@ void CueTable::paintRowBackground (juce::Graphics& g, int rowNumber, int width, 
 
     juce::Colour background = (rowNumber % 2 == 0) ? Palette::rowEven : Palette::rowOdd;
 
-    if (cue.color > 0)
-        background = background.interpolatedWith (CueColors::get (cue.color), 0.35f);
+    const int colourIndex = cue.useSecondColor && cue.secondColor > 0 && hasPlayed && hasPlayed (cue.id) ? cue.secondColor : cue.color;
+
+    if (colourIndex > 0)
+        background = background.interpolatedWith (CueColors::get (colourIndex), 0.35f);
 
     if (isRunning)
         background = running->paused ? Palette::paused : (running->fadingOut ? Palette::fadingOut : Palette::playing);
 
     g.fillAll (background);
 
-    if (isRunning && running->lengthSeconds > 0.0)
+    if (isRunning && running->progress >= 0.0)
     {
-        const double fraction = juce::jlimit (0.0, 1.0, running->positionSeconds / running->lengthSeconds);
+        const double fraction = juce::jlimit (0.0, 1.0, running->progress);
         g.setColour (juce::Colours::white.withAlpha (0.22f));
         g.fillRect (0, 0, juce::roundToInt (width * fraction), height);
     }
@@ -618,8 +633,16 @@ void CueTable::commitCellEdit (int row, ColumnId column, const juce::String& tex
         {
             const auto number = text.trim();
 
-            if (number != cue.number)
-                onEditCues ({ row }, ko ("번호"), [number] (Cue& c) { c.number = number; });
+            if (number == cue.number)
+                break;
+
+            if (cues.isNumberTaken (number, cue.id))
+            {
+                juce::LookAndFeel::getDefaultLookAndFeel().playAlertSound();   // numbers are unique: refused
+                break;
+            }
+
+            onEditCues ({ row }, ko ("번호"), [number] (Cue& c) { c.number = number; });
             break;
         }
 
