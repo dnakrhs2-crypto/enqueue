@@ -155,16 +155,16 @@ class BackupManager { public: static juce::File backupDirFor (const juce::File& 
 
 ### Task 2.1: 큐 공통 속성 모델 (26·29·30·31·48·59)
 **Files:** `src/model/Cue.*`, serializer, `tests/ProjectSerializerTests.cpp`.
-- [ ] 필드: number(String), notes, color, secondColor, useSecondColor, flagged, armed, skipIfDisarmed, autoLoad, preWaitSeconds, postWaitSeconds, continueMode, hotkey, wallClock, fadeStopOthers, duck. 템플릿 `settings.templates[type]`.
-- [ ] `CueNumbering`: `nextNumber(list, increment)`(마지막 숫자 번호 + 증가), `renumber(ids, start, increment, prefix, suffix)`, 유일성 검사.
-- [ ] 테스트: 왕복, 재번호 "1, 2, 3" / 접두 "A" / 소수 증가 0.5, 중복 거부.
-- [ ] 커밋.
+- [x] 필드: number(String), notes, color, secondColor, useSecondColor, flagged, armed, skipIfDisarmed, autoLoad, preWaitSeconds, postWaitSeconds, continueMode, hotkey, wallClock, fadeStopOthers, duck. 템플릿 `settings.templates[type]`.
+- [x] `CueNumbering`: `nextNumber(list, increment)`(마지막 숫자 번호 + 증가), `renumber(ids, start, increment, prefix, suffix)`, 유일성 검사.
+- [x] 테스트: 왕복, 재번호 "1, 2, 3" / 접두 "A" / 소수 증가 0.5, 중복 거부.
+- [x] 커밋.
 
 ### Task 2.2: CueList 다중 선택 + 플레이헤드 분리 (46·58)
 **Files:** `src/model/CueList.*`, `tests/CueListTests.cpp`.
-- [ ] API: `selection()`(vector<Uuid>), `setSelection`, `addToSelection`, `primarySelected()`, `playhead()`, `setPlayhead`, `movePlayheadNext/Prev`, `movePlayheadToNextSequence`(다음 "수동 진행" 큐), `lockPlayheadToSelection` 반영(선택 이동 시 플레이헤드 동행).
-- [ ] 테스트: 잠금 on/off 동작, 시퀀스 단위 이동(자동 계속 묶음 건너뜀), 삭제 시 선택/플레이헤드 보정.
-- [ ] 커밋.
+- [x] API: `selection()`(vector<Uuid>), `setSelection`, `addToSelection`, `primarySelected()`, `playhead()`, `setPlayhead`, `movePlayheadNext/Prev`, `movePlayheadToNextSequence`(다음 "수동 진행" 큐), `lockPlayheadToSelection` 반영(선택 이동 시 플레이헤드 동행).
+- [x] 테스트: 잠금 on/off 동작, 시퀀스 단위 이동(자동 계속 묶음 건너뜀), 삭제 시 선택/플레이헤드 보정.
+- [x] 커밋.
 
 ### Task 2.3: 스케줄러 + 진행 모드 + 시퀀스 (27·28)
 **Files:** Create `src/app/Scheduler.h/.cpp`; Modify `CueController`; Test `tests/SchedulerTests.cpp`, `tests/CueControllerTests.cpp`.
@@ -173,35 +173,38 @@ class Scheduler { public: using Clock = std::function<double()>;   // 초
     explicit Scheduler (Clock clock); int schedule (double atSeconds, std::function<void()> fn); void cancel (int id); void cancelAll();
     void tick(); /* 1 ms 타이머에서 호출 */ int pendingCount() const; };
 ```
-- [ ] 컨트롤러: GO → 플레이헤드 큐 시작 → 자동 계속(postWait 뒤 다음 큐; 0이면 즉시 같은 호출) / 자동 팔로우(끝나면 다음) / 수동. 프리웨이트는 시작을 스케줄. 시퀀스 전체 시작 후 플레이헤드는 시퀀스 다음 큐로. 미리듣기는 웨이트·진행 무시.
-- [ ] 테스트(가짜 시계): 프리웨이트 1 s 뒤 재생, 자동 계속 postWait 0.5 s 뒤 다음 큐, 자동 팔로우 큐 길이 뒤 다음, 시퀀스 후 플레이헤드 위치, 비활성 큐 건너뛰기(skipIfDisarmed) vs 정지(armed=false: 재생 안 하고 진행).
-- [ ] 커밋.
+- [x] 컨트롤러: GO → 플레이헤드 큐 시작 → 자동 계속(postWait 뒤 다음 큐; 0이면 즉시 같은 호출) / 자동 팔로우(끝나면 다음) / 수동. 프리웨이트는 시작을 스케줄. 시퀀스 전체 시작 후 플레이헤드는 시퀀스 다음 큐로. 미리듣기는 웨이트·진행 무시.
+- [x] 테스트(가짜 시계): 프리웨이트 1 s 뒤 재생, 자동 계속 postWait 0.5 s 뒤 다음 큐, 자동 팔로우 큐 길이 뒤 다음, 시퀀스 후 플레이헤드 위치, 비활성 큐 건너뛰기(skipIfDisarmed) vs 정지(armed=false: 재생 안 하고 진행).
+- [x] 커밋.
 
 ### Task 2.4: 페이드&정지 타인 · 덕/부스트 · 핫키 · 벽시계 (35·36·37·38)
-- [ ] 엔진 `setDuckDb(id, db, seconds)` 램프 + 컨트롤러가 시작 시 같은 리스트의 다른 실행 큐에 적용, 끝나면 복원. fadeStopOthers 범위(peers/list/all) 적용.
-- [ ] 핫키: `KeyListener`가 큐 핫키 맵 조회(입력창 편집 중 제외), 키 뗄 때 2차 트리거. 벽시계: 스케줄러가 매 초 검사.
-- [ ] 테스트: 덕 -6 dB 적용/복원 렌더, fadeStopOthers가 대상만 페이드, 벽시계 요일 마스크.
-- [ ] 커밋.
+- [x] 엔진 `setDuckDb(id, db, seconds)` 램프 + 컨트롤러가 시작 시 같은 리스트의 다른 실행 큐에 적용, 끝나면 복원. fadeStopOthers 범위(peers/list/all) 적용.
+- [x] 핫키: `KeyListener`가 큐 핫키 맵 조회(입력창 편집 중 제외), 키 뗄 때 2차 트리거. 벽시계: 스케줄러가 매 초 검사.
+- [x] 테스트: 덕 -6 dB 적용/복원 렌더, fadeStopOthers가 대상만 페이드, 벽시계 요일 마스크.
+- [x] 커밋.
 
 ### Task 2.5: 로드·시간으로 로드 · 리셋 확장 · 활성 큐 패널 (42·43)
-- [ ] 엔진 `load(cue, seconds)`(준비된 플레이어, 상태 loaded, GO 시 즉시 시작), 컨트롤러 `loadSelected`, `loadToTime` 다이얼로그(초, 음수 허용, 스크럽 슬라이더).
-- [ ] `ActiveCuesPanel`(우측 사이드바, Ctrl+L): 행마다 일시정지/재개 버튼·번호·이름·경과/남은·진행바(초록/노랑)·패닉 버튼·드래그 스크럽(`engine.seek(id, seconds)`), 정렬 방향 설정.
-- [ ] 커밋.
+- [x] 엔진 `load(cue, seconds)`(준비된 플레이어, 상태 loaded, GO 시 즉시 시작), 컨트롤러 `loadSelected`, `loadToTime` 다이얼로그(초, 음수 허용, 스크럽 슬라이더).
+- [x] `ActiveCuesPanel`(우측 사이드바, Ctrl+L): 행마다 일시정지/재개 버튼·번호·이름·경과/남은·진행바(초록/노랑)·패닉 버튼·드래그 스크럽(`engine.seek(id, seconds)`), 정렬 방향 설정.
+- [x] 커밋.
 
 ### Task 2.6: 목록 UI 개편 — CueListView (32·50·63·45·49)
 **Files:** Create `src/ui/CueListView.h/.cpp`(CueTable 대체), `src/ui/StatusIcons.h`, `src/ui/WarningsWindow.*`, `src/ui/FileRelinkDialog.*`; Modify MainComponent.
-- [ ] 열: 상태 아이콘(스탠바이 삼각·재생 초록·일시정지 노란 바·로드 노란 원·테일 노란 경사·깨짐 빨간 X·경고 노란 삼각·깃발·오디션 괄호), 번호, 이름, 대상, 프리웨이트, 길이, 포스트웨이트, 진행(→ / 깃발 화살표). 행 색(큐 색·두 번째 색), 비활성 빗금, 행 크기 소/중/대.
-- [ ] 빠른 편집: N Q O T E D W C, 더블클릭 셀 편집, C는 순환. 다중 선택(Shift/Ctrl 클릭), 내부 드래그로 이동(다중), 파일 드롭 위치 삽입.
-- [ ] 쇼 모드: 편집 잠금(인스펙터 비활성·추가/삭제/이동/붙여넣기 차단, Esc·저장·종료 허용), 푸터 토글(Ctrl+Shift+[ / ]).
-- [ ] 경고 창(Ctrl+B): 깨진 큐 목록(파일 없음·대상 없음·플러그인 없음 등) + "파일 다시 찾기": 폴더 지정 → 같은 이름 파일 재연결.
-- [ ] 커밋.
+- [x] 열: 상태 아이콘(스탠바이 삼각·재생 초록·일시정지 노란 바·로드 노란 원·테일 노란 경사·깨짐 빨간 X·경고 노란 삼각·깃발·오디션 괄호), 번호, 이름, 대상, 프리웨이트, 길이, 포스트웨이트, 진행(→ / 깃발 화살표). 행 색(큐 색·두 번째 색), 비활성 빗금, 행 크기 소/중/대.
+- [x] 빠른 편집: N Q O T E D W C, 더블클릭 셀 편집, C는 순환. 다중 선택(Shift/Ctrl 클릭), 내부 드래그로 이동(다중), 파일 드롭 위치 삽입.
+- [x] 쇼 모드: 편집 잠금(인스펙터 비활성·추가/삭제/이동/붙여넣기 차단, Esc·저장·종료 허용), 푸터 토글(Ctrl+Shift+[ / ]).
+- [x] 경고 창(Ctrl+B): 깨진 큐 목록(파일 없음·대상 없음·플러그인 없음 등) + "파일 다시 찾기": 폴더 지정 → 같은 이름 파일 재연결.
+- [x] 커밋.
 
 ### Task 2.7: 여러 리스트 · 찾기 · 속성 붙여넣기 · 템플릿 UI (55·57·59·60)
-- [ ] `CueContainer` 모델 + 서식 + `ContainerTabs`(리스트 추가/삭제/이름 변경, 리스트별 플레이헤드). 큐 번호 유일성은 워크스페이스 전체.
-- [ ] 찾기(Ctrl+F): 번호·이름·메모·파일 경로 검색, 다음/이전. 대상으로 점프(Ctrl+Shift+J), 관련 큐 강조(도구 메뉴).
-- [ ] 큐 속성 붙여넣기(Ctrl+Shift+V): 카테고리 체크(기본 속성·트리거·시간/루프·레벨·트림·이펙트·페이드 커브) + 프리셋(p=최근), "오디오 레벨 붙여넣기"·"페이드 모양 붙여넣기" 단축 항목.
-- [ ] 큐 템플릿 탭(설정 창): 종류별 기본값 편집 = 인스펙터 재사용.
-- [ ] 커밋.
+
+- [ ] **→ 6단계로 이동(2026-09-02 결정)**: 여러 큐 리스트(`CueContainer`·`ContainerTabs`)는 6단계 카트와 같은 컨테이너 구조라 한 번에 개편. "대상으로 점프·관련 큐 강조"는 대상이 생기는 4단계(페이드 큐)에서.
+- [x] 찾기(Ctrl+F): 번호·이름·파일 이름·메모 검색(대소문자 무시, 선택 다음부터 순환), F3 다음 찾기. AlertWindow 텍스트 필드에 포커스 helper(`focusAlertEditor`: toFront + grabKeyboardFocus — 시간으로 로드·재번호 다이얼로그도 같은 수정).
+- [x] 클립보드: Ctrl+C 복사(플러그인 체인 라이브 상태 포함)·Ctrl+X 잘라내기·Ctrl+V 붙여넣기(새 Uuid, 핫키 제거, 자동 번호 or 중복 번호 제거, 체인 restore). Ctrl+Shift+V 큐 속성 붙여넣기 다이얼로그(기본·시간·트리거·시간루프·레벨·이펙트 체크, `CuePropertyPaste::apply`가 모델 레이어 — 다른 파일이면 트림 클램프). 레벨 매트릭스·페이드 모양 항목은 3·4단계에서 추가.
+- [x] 큐 템플릿: 설정 `hasCueTemplate/cueTemplate`(직렬화 = cueToVar 재사용), 메뉴 큐 > "선택 큐를 새 큐 기본값으로 / 초기화", `WorkspaceSettings::applyTemplate`(id·이름·번호·파일·길이·핫키·시계 제외) → 추가 시 체인 복원(`restoreChainsForCues`). 종류별 템플릿 탭은 큐 종류가 늘어나는 4·6단계에서.
+- [x] 행 크기 설정(일반 탭 콤보) · 닫을 때 큐 시작(`fireCloseCueThen`: 큐 끝나면 종료, 2분 데드라인).
+- [x] 테스트: `CuePropertyPasteTests`(전체/부분/트림 클램프/템플릿), 설정 왕복(템플릿·rowSize·startOnClose). 930 tests. GUI 스모크: 인라인 편집·활성 큐 패널·복사/붙여넣기·속성 붙여넣기(이펙트 포함)·찾기.
+- [x] 커밋 590fddd.
 
 ### Task 2.8: 단계 2 마감 — README, 0.3.0 릴리스, 코덱스 리뷰, 메모리.
 

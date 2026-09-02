@@ -7,6 +7,10 @@ Windows용 오디오 큐 플레이어. QLab의 오디오 기능을 단계적으�
 - 큐마다: 파형 위 **트림(시작/끝)**, **재생 횟수 / 무한 루프**, **속도**, **통합 페이드 엔벨로프**(파형 위에 점을 찍어 그리는 페이드), 정지 페이드(ms), 게인(dB, 재생 중에도 즉시 반영), 2차 트리거 규칙
 - 여러 큐 동시 재생(믹서), 큐마다 독립 VST3 인서트 체인 + 마스터 버스 체인, 플러그인 에디터 창, 상태 저장/복원
 - 일시정지/재개, 전체 페이드 정지(기본 2초), 더블 GO 방지, 실행 취소/다시 실행(200단계)
+- **큐 리스트**(QLab식): 상태 아이콘 · 번호 · 이름 · 파일 · 프리웨이트 · 길이 · 포스트웨이트 · 진행 열, 큐 색/두 번째 색, 깃발, 아밍(비활성이면 건너뛰기), 자동 로드, 메모. 다중 선택·드래그 순서 변경·셀 바로 편집·우클릭 메뉴·행 크기
+- **진행(시퀀스)**: 프리웨이트/포스트웨이트, 자동 계속 / 자동 팔로우, 플레이헤드(선택과 분리 또는 잠금). **트리거**: 큐 핫키, 시간(벽시계) 트리거, 시작 시 다른 큐 페이드 정지, 덕(-dB)
+- 로드(L) / 시간으로 로드(Ctrl+T), 활성 큐 패널(Ctrl+L: 일시정지·스크럽·페이드 정지), 쇼 모드(편집 잠금), 경고 목록 + 없어진 파일 다시 찾기
+- 큐 복사/잘라내기/붙여넣기(플러그인 체인 포함), 큐 속성 붙여넣기(카테고리 선택), 찾기(Ctrl+F), 새 큐 기본값(템플릿), 자동 번호 / 재번호
 - 프로젝트 파일 `.gocue` (JSON v2, v1 파일도 읽음), 자동 백업(`<이름>.gocue.backups`), 파일을 프로젝트 폴더로 복사 옵션
 - 오디오 파일·폴더를 창 어디에나 끌어다 놓으면 큐로 추가(목록 위 = 그 자리에 삽입, 인스펙터 파일칸 = 파일 교체, `.gocue` = 열기)
 - 단일 창 UI(한국어): 상단 GO / 중앙 큐 목록(재생 초록·일시정지 노랑·페이드 주황 + 진행바 + 남은 시간) / 하단 인스펙터 탭(기본 · 시간·루프 · 트리거 · 이펙트)
@@ -20,11 +24,21 @@ Windows용 오디오 큐 플레이어. QLab의 오디오 기능을 단계적으�
 | `P` | 일시정지 / 재개 (선택 큐가 재생 중이 아니면 가장 최근 재생 큐) |
 | `F` | 페이드아웃 정지 (큐의 정지 페이드 시간, 위와 같은 대상 규칙) |
 | `Esc` | 전체 페이드 정지 — 프로젝트 설정의 시간(기본 2초) 동안 페이드아웃 후 정지. **0.5초 안에 두 번 = 즉시 정지**. 입력창을 편집하는 중에도 동작 |
-| `V` | 미리듣기 — 선택 큐를 재생하되 선택(플레이헤드)은 그대로 |
+| `V` | 미리듣기 — 선택 큐를 재생하되 선택(플레이헤드)은 그대로 (프리웨이트·시퀀스 무시) |
+| `L` / `Ctrl+T` | 로드(GO 지연 0) / 시간으로 로드(초 또는 m:ss.mmm, 음수 = 끝에서부터) |
+| `Ctrl+L` | 활성 큐 패널 보이기/숨기기 |
+| `Ctrl+Shift+M` | 쇼 모드 ↔ 편집 모드 (푸터 버튼과 같음) |
+| 큐 핫키 | 트리거 탭에서 지정한 키(F1~F12, 숫자 등)로 그 큐 GO. 입력창 편집 중에는 무시 |
 | `Ctrl+Z` / `Ctrl+Y` | 실행 취소 / 다시 실행 |
 | `Insert` | 큐 추가 (파일 선택) |
 | `Delete` / `Ctrl+D` | 큐 삭제 / 큐 복제(플러그인 체인 포함) |
-| `Ctrl+↑` / `Ctrl+↓` | 큐 순서 변경 |
+| `Ctrl+↑` / `Ctrl+↓` | 큐 순서 변경 (여러 개 선택 시 함께) |
+| `Ctrl+A` / `Shift+클릭` / `Ctrl+클릭` | 모두 선택 / 범위 선택 / 추가 선택 |
+| `Ctrl+C` / `Ctrl+X` / `Ctrl+V` | 큐 복사 / 잘라내기 / 선택 큐 아래에 붙여넣기 (플러그인 체인 포함, 핫키는 제외) |
+| `Ctrl+Shift+V` | 큐 속성 붙여넣기 — 기본 · 시간 · 트리거 · 시간루프 · 레벨 · 이펙트 중 골라서 선택 큐들에 적용 |
+| `Ctrl+F` / `F3` | 찾기(번호·이름·파일 이름·메모) / 다음 찾기 |
+| `Ctrl+R` | 선택 큐 재번호 (시작 · 증가 · 접두 · 접미) |
+| `N` `Q` `E` `W` `C` `O` `D` | 목록에서 바로 편집: 번호 / 이름 / 프리웨이트 / 포스트웨이트 / 진행 모드 순환 / 메모 / 길이(끝 트림). 셀 더블클릭도 같음 |
 | `Ctrl+N` / `Ctrl+O` / `Ctrl+S` / `Ctrl+Shift+S` | 새 프로젝트 / 열기 / 저장 / 다른 이름으로 저장 |
 | `Ctrl+Shift+,` | 프로젝트 설정 (GO 간격, 전체 페이드 정지 시간, 백업 등) |
 | `Ctrl+,` / `Ctrl+P` / `Ctrl+M` | 오디오 출력 설정 / VST3 플러그인 관리(스캔) / 마스터 버스 인서트 |
@@ -51,7 +65,8 @@ Windows용 오디오 큐 플레이어. QLab의 오디오 기능을 단계적으�
 
 ## 프로젝트 설정 (파일 > 프로젝트 설정)
 
-- 일반: GO 사이 최소 시간, 키를 뗀 뒤에만 다시 GO, 전체 페이드 정지 시간(Esc), 자동 번호(다음 단계에서 사용), 플레이헤드 잠금, 열 때/닫을 때 큐 시작(다음 단계에서 사용)
+- 일반: GO 사이 최소 시간, 키를 뗀 뒤에만 다시 GO, 전체 페이드 정지 시간(Esc), 새 큐 자동 번호·증가, 플레이헤드를 선택에 잠금, 열 때/닫을 때 큐 시작(번호로 지정; 닫을 때 큐는 끝난 뒤 종료, 최대 2분), 큐 리스트 행 크기
+- 큐 메뉴 "선택 큐를 새 큐 기본값으로": 이후 추가하는 큐가 그 큐의 설정(페이드·게인·색·웨이트·트리거·이펙트 체인 등)을 물려받는다(이름·번호·파일·핫키·시계 제외). 프로젝트에 저장됨
 - 파일: 큐 추가 시 오디오 파일을 프로젝트 폴더 `audio/`로 복사, 자동 백업(간격 5~600초, 저장한 적 있는 프로젝트만), 저장 전 백업(1분 1회), 오래된 백업 정리(최근 1시간 20개 / 하루 동안 시간별 / 그 뒤 일별)
 - 설정은 프로젝트 파일에 저장되며 실행 취소 대상이 아니다.
 
@@ -130,13 +145,13 @@ appcast의 `sparkle:installerArguments="/SILENT /SP- /NORESTART"` 덕분에 업�
 ## 구조
 
 ```
-src/model    Cue / Envelope / CueList / ProjectSerializer / WorkspaceSettings   데이터와 JSON
+src/model    Cue / Envelope / CueList(선택·플레이헤드) / CueNumbering / CuePropertyPaste / ProjectSerializer / WorkspaceSettings
 src/audio    AudioEngine / CuePlayer / RegionLoopSource / FadeEnvelope         장치, 믹서, 재생 인스턴스
              PluginHost / PluginChain                                          VST3 스캔·인스턴스, 인서트 체인
-src/app      ProjectDocument / ProjectHistory(실행 취소) / CueController(GO·일시정지·패닉 규칙)
+src/app      ProjectDocument / ProjectHistory(실행 취소) / CueController(GO·시퀀스·핫키·벽시계·덕·패닉 규칙) / Scheduler
              BackupManager / AppSettings / Updater / Commands
-src/ui       MainComponent / TransportBar / CueTable / CueInspector(탭) / TimeLoopsPanel / WaveformView
-             WorkspaceSettingsDialog / PluginChainComponent / PluginWindows / PluginDialogs / AudioSettingsDialog
+src/ui       MainComponent / TransportBar / CueTable / CueInspector(탭) / TimeLoopsPanel / WaveformView / ActiveCuesPanel / FooterBar
+             WorkspaceSettingsDialog / PastePropertiesDialog / PluginChainComponent / PluginWindows / PluginDialogs / AudioSettingsDialog
 tests        JUCE UnitTest 콘솔 (오프라인 렌더로 오디오 경로 검증, 컨트롤러 규칙, 직렬화, 백업, 실물 VST3 검사)
 installer    GoCue.iss (Inno Setup)
 tools        release.py (릴리스 파이프라인), make_icon.py (아이콘)
@@ -148,7 +163,10 @@ tools        release.py (릴리스 파이프라인), make_icon.py (아이콘)
 
 ```json
 { "app": "GoCue", "version": 2, "name": "show",
-  "cues": [ { "id": "uuid", "name": "Intro", "file": "C:/audio/intro.wav", "fileRelative": "audio/intro.wav",
+  "cues": [ { "id": "uuid", "number": "1.5", "name": "Intro", "notes": "", "file": "C:/audio/intro.wav", "fileRelative": "audio/intro.wav",
+              "color": 3, "secondColor": 0, "useSecondColor": false, "flagged": false, "armed": true, "skipIfDisarmed": false, "autoLoad": false,
+              "preWait": 0, "postWait": 0, "continueMode": "none", "hotkey": "", "wallClock": { "enabled": false },
+              "fadeStopOthers": { "enabled": false }, "duck": { "enabled": false },
               "fadeOutMs": 1500, "gainDb": -3.0, "durationSeconds": 12.3,
               "audio": { "start": 0.5, "end": -1, "playCount": 1, "infiniteLoop": false, "rate": 1.0, "preservePitch": false,
                          "envelope": { "enabled": true, "linear": false, "lockToTrim": true, "points": [[0, 0], [0.1, 1], [1, 0]] } },
@@ -156,7 +174,10 @@ tools        release.py (릴리스 파이프라인), make_icon.py (아이콘)
               "plugins": [ { "format": "VST3", "name": "3 Band EQ", "fileOrIdentifier": "C:/.../3BandEQ.vst3",
                              "uniqueId": 1662645128, "description": "<PLUGIN .../>", "state": "base64", "bypassed": false } ] } ],
   "master": { "plugins": [] },
-  "settings": { "doubleGoSeconds": 0, "requireKeyUp": false, "panicSeconds": 2, "autoBackup": true, "backupIntervalSeconds": 60, "...": "..." } }
+  "settings": { "doubleGoSeconds": 0, "requireKeyUp": false, "panicSeconds": 2, "autoNumber": true, "numberIncrement": 1,
+                "lockPlayheadToSelection": true, "startOnOpen": false, "startOnCloseCue": "", "rowSize": 1,
+                "hasCueTemplate": false, "cueTemplate": { "...": "큐 객체" },
+                "autoBackup": true, "backupIntervalSeconds": 60, "...": "..." } }
 ```
 - `end: -1`은 파일 끝. 엔벨로프 점의 x는 `lockToTrim`이면 구간의 0~1 비율, 아니면 구간 시작 기준 초.
 - v1 파일의 `fadeInMs`는 읽을 때 엔벨로프(0,0)→(fadeIn,1)로 바뀐다. `fadeOutMs`는 그대로 정지 페이드다.
