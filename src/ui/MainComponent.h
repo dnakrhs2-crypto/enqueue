@@ -13,6 +13,7 @@
 
 #include <atomic>
 #include <functional>
+#include <map>
 #include <memory>
 
 namespace gocue
@@ -105,7 +106,7 @@ private:
     CueController controller;
     std::atomic<bool> unsavedChanges { false };
     double ignorePluginChangesUntilMs = 0.0;
-    double lastSaveBackupMs = -1.0e12;
+    std::map<juce::String, double> lastSaveBackupByPath;
     double nextAutoBackupMs = 0.0;
 
     juce::MenuBarComponent menuBar;

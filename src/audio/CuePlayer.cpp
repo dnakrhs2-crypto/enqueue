@@ -7,7 +7,7 @@ namespace gocue
 
 CuePlayer::CuePlayer (const Cue& c, juce::AudioFormatManager& formats,
                       juce::TimeSliceThread* readAheadThread, int readAheadSamples,
-                      double startOffsetSeconds)
+                      double startOffset)
     : cue (c)
 {
     cue.sanitise();
@@ -54,13 +54,16 @@ CuePlayer::CuePlayer (const Cue& c, juce::AudioFormatManager& formats,
         return;
     }
 
-    startOffsetSamples = std::max<juce::int64> (0, (juce::int64) std::llround (std::max (0.0, startOffsetSeconds) * fileSampleRate));
+    startOffsetSeconds = std::max (0.0, startOffset);
+    startOffsetSamples = std::max<juce::int64> (0, (juce::int64) std::llround (startOffsetSeconds * fileSampleRate));
     regionSource->setNextReadPosition (startOffsetSamples);
     source = std::move (regionSource);
 
     if (readAheadSamples > 0 && readAheadThread != nullptr)
     {
-        readAhead = std::make_unique<juce::BufferingAudioSource> (source.get(), *readAheadThread, false, readAheadSamples, 2, true);
+        // faster playback pulls more file samples per block: size the read-ahead for twice the cue's rate
+        const int scale = juce::jlimit (1, 8, (int) std::ceil (cue.audio.rate * 2.0));
+        readAhead = std::make_unique<juce::BufferingAudioSource> (source.get(), *readAheadThread, false, readAheadSamples * scale, 2, true);
         readAhead->setNextReadPosition (startOffsetSamples);
         resampler = std::make_unique<juce::ResamplingAudioSource> (readAhead.get(), false, 2);
     }
@@ -68,6 +71,9 @@ CuePlayer::CuePlayer (const Cue& c, juce::AudioFormatManager& formats,
     {
         resampler = std::make_unique<juce::ResamplingAudioSource> (source.get(), false, 2);
     }
+
+    virtualPosition.store ((double) startOffsetSamples);
+    updatePositionInfo (liveRate.load());
 }
 
 CuePlayer::~CuePlayer()
@@ -82,9 +88,13 @@ void CuePlayer::prepare (double sampleRate, int blockSize)
         return;
 
     currentSampleRate = sampleRate > 0.0 ? sampleRate : 44100.0;
-    lastRatio = fileSampleRate * liveRate.load() / currentSampleRate;
-    resampler->setResamplingRatio (lastRatio);
+
+    // prepare for the fastest rate first so the resampler never has to grow its buffer on the audio thread
+    resampler->setResamplingRatio (ratioFor (AudioCueData::maxRate));
     resampler->prepareToPlay (juce::jmax (1, blockSize), currentSampleRate);   // also prefills the read-ahead
+    lastRatio = ratioFor (liveRate.load());
+    resampler->setResamplingRatio (lastRatio);
+
     envelope.prepare (currentSampleRate);
     pauseGate.prepare (currentSampleRate);
 }
@@ -94,7 +104,8 @@ void CuePlayer::start()
     if (! isValid())
         return;
 
-    virtualPosition = (double) startOffsetSamples;
+    virtualPosition.store ((double) startOffsetSamples);
+    elapsedOutputSamples = 0.0;
     envelope.setLevel (1.0f);
     pauseGate.setLevel (1.0f);
     updatePositionInfo (liveRate.load());
@@ -126,7 +137,7 @@ void CuePlayer::requestResume() noexcept
 void CuePlayer::requestFinishCurrentPass() noexcept
 {
     if (source != nullptr)
-        source->setEndAfterPass (source->getPassIndexFor ((juce::int64) virtualPosition));
+        source->setEndAfterPass (source->getPassIndexFor ((juce::int64) virtualPosition.load (std::memory_order_relaxed)));
 }
 
 void CuePlayer::setLiveRegion (double startSeconds, double endSeconds) noexcept
@@ -140,7 +151,30 @@ void CuePlayer::setLiveRegion (double startSeconds, double endSeconds) noexcept
     if (endSample - startSample < 1)   // an empty region would divide by zero; ignore the edit until it is valid again
         return;
 
+    // keep the audible file position: re-derive pass / offset against the new region
+    juce::int64 oldStart, oldLen;
+    source->getRegion (oldStart, oldLen);
+    const auto pos = (juce::int64) virtualPosition.load (std::memory_order_relaxed);
+    const juce::int64 pass = oldLen > 0 ? pos / oldLen : 0;
+    const juce::int64 filePos = oldStart + (oldLen > 0 ? pos % oldLen : 0);
+
     source->setRegion (startSample, endSample);
+
+    const auto newLen = source->getRegionLength();
+    const juce::int64 newPos = pass * newLen + juce::jlimit<juce::int64> (0, newLen, filePos - startSample);
+
+    // drop the read-ahead cache: it holds audio of the old region for the same virtual positions
+    if (readAhead != nullptr)
+    {
+        readAhead->setNextReadPosition (RegionLoopSource::infiniteLength);   // outside any cached range: invalidates it
+        readAhead->setNextReadPosition (newPos);
+    }
+    else
+    {
+        source->setNextReadPosition (newPos);
+    }
+
+    pendingVirtualPosition.store (newPos, std::memory_order_release);
 }
 
 void CuePlayer::setLiveRate (double rate) noexcept
@@ -167,10 +201,29 @@ double CuePlayer::getLengthSeconds() const noexcept
     return (double) source->getTotalLength() / fileSampleRate / rate;
 }
 
+double CuePlayer::getRemainingSeconds() const noexcept
+{
+    if (source == nullptr)
+        return 0.0;
+
+    if (source->isInfinite())
+        return -1.0;
+
+    const double rate = std::max (AudioCueData::minRate, liveRate.load (std::memory_order_relaxed));
+    const double left = (double) source->getTotalLength() - virtualPosition.load (std::memory_order_relaxed);
+    return std::max (0.0, left) / fileSampleRate / rate;
+}
+
 void CuePlayer::updatePositionInfo (double rate) noexcept
 {
-    const auto pos = (juce::int64) virtualPosition;
-    positionSeconds.store (virtualPosition / fileSampleRate / std::max (AudioCueData::minRate, rate), std::memory_order_relaxed);
+    juce::ignoreUnused (rate);
+    const auto total = source->getTotalLength();
+    auto pos = (juce::int64) virtualPosition.load (std::memory_order_relaxed);
+
+    if (! source->isInfinite() && total > 0)
+        pos = std::min (pos, total - 1);   // during the plugin tail the playhead stays on the last sample
+
+    positionSeconds.store (startOffsetSeconds + elapsedOutputSamples / currentSampleRate, std::memory_order_relaxed);
     filePositionSeconds.store ((double) (source->getRegionStart() + source->getOffsetFor (pos)) / fileSampleRate, std::memory_order_relaxed);
     passIndex.store (source->getPassIndexFor (pos), std::memory_order_relaxed);
 }
@@ -182,6 +235,9 @@ bool CuePlayer::renderNextBlock (juce::AudioBuffer<float>& buffer, int numSample
         buffer.clear (0, numSamples);
         return false;
     }
+
+    if (const auto seek = pendingVirtualPosition.exchange (-1, std::memory_order_acq_rel); seek >= 0)
+        virtualPosition.store ((double) seek, std::memory_order_relaxed);
 
     const int fadeMs = pendingFadeOutMs.exchange (-1, std::memory_order_relaxed);
 
@@ -216,11 +272,21 @@ bool CuePlayer::renderNextBlock (juce::AudioBuffer<float>& buffer, int numSample
     }
 
     auto* activeChain = chain.load (std::memory_order_acquire);
+    const double rate = liveRate.load (std::memory_order_relaxed);
 
     if (paused && ! inTail)
     {
-        // Frozen: feed silence through the chain so delays / reverbs keep their timing.
-        buffer.clear (0, numSamples);
+        // Frozen and already silent: a stop / fade request or a trim that ended before the position ends it now.
+        const bool ended = virtualPosition.load (std::memory_order_relaxed) >= (double) source->getTotalLength();
+
+        if (stopRequested.load (std::memory_order_relaxed) || hardStop || ended)
+        {
+            buffer.clear (0, numSamples);
+            finished.store (true, std::memory_order_relaxed);
+            return false;
+        }
+
+        buffer.clear (0, numSamples);   // feed silence through the chain so delays / reverbs keep their timing
 
         if (activeChain != nullptr)
             activeChain->process (buffer, numSamples);
@@ -228,8 +294,7 @@ bool CuePlayer::renderNextBlock (juce::AudioBuffer<float>& buffer, int numSample
         return true;
     }
 
-    const double rate = liveRate.load (std::memory_order_relaxed);
-    const double ratio = fileSampleRate * rate / currentSampleRate;
+    const double ratio = ratioFor (rate);
 
     if (! inTail)
     {
@@ -241,7 +306,8 @@ bool CuePlayer::renderNextBlock (juce::AudioBuffer<float>& buffer, int numSample
 
         juce::AudioSourceChannelInfo info (&buffer, 0, numSamples);
         resampler->getNextAudioBlock (info);   // silence once the source is past its end
-        virtualPosition += (double) numSamples * ratio;
+        virtualPosition.store (virtualPosition.load (std::memory_order_relaxed) + (double) numSamples * ratio, std::memory_order_relaxed);
+        elapsedOutputSamples += numSamples;
 
         envelope.applyToBuffer (buffer, 0, numSamples);
         pauseGate.applyToBuffer (buffer, 0, numSamples);
@@ -289,7 +355,7 @@ bool CuePlayer::renderNextBlock (juce::AudioBuffer<float>& buffer, int numSample
     }
 
     const bool stoppedAfterFade = stopRequested.load (std::memory_order_relaxed) && envelope.hasReachedSilence();
-    const bool streamEnded = virtualPosition >= (double) source->getTotalLength();
+    const bool streamEnded = virtualPosition.load (std::memory_order_relaxed) >= (double) source->getTotalLength();
 
     if (stoppedAfterFade || streamEnded)
     {

@@ -10,6 +10,7 @@ AudioEngine::AudioEngine (int readAhead)
 
     mixBuffer.setSize (2, blockSize.load());
     playerBuffer.setSize (2, blockSize.load());
+    players.reserve (256);   // push_back under the audio lock must not reallocate
 
     if (readAheadSamples > 0)
         readAheadThread.startThread();
@@ -256,6 +257,7 @@ bool AudioEngine::isPlaying (const juce::Uuid& cueId) const
 std::vector<AudioEngine::PlayingCue> AudioEngine::getPlayingCues() const
 {
     std::vector<PlayingCue> result;
+    result.reserve (64);   // no allocation while the audio lock is held
     const juce::ScopedLock sl (lock);
 
     for (auto& p : players)
@@ -267,6 +269,7 @@ std::vector<AudioEngine::PlayingCue> AudioEngine::getPlayingCues() const
         info.id = p->getCueId();
         info.positionSeconds = p->getPositionSeconds();
         info.lengthSeconds = p->getLengthSeconds();
+        info.remainingSeconds = p->getRemainingSeconds();
         info.filePositionSeconds = p->getFilePositionSeconds();
         info.passIndex = p->getPassIndex();
         info.fadingOut = p->isFadingOut();
@@ -427,42 +430,43 @@ void AudioEngine::renderBlock (juce::AudioBuffer<float>& output, int numSamples)
     if (numSamples <= 0)
         return;
 
-    if (mixBuffer.getNumSamples() < numSamples)
-    {
-        // Only happens if a driver delivers more samples than it announced.
-        mixBuffer.setSize (2, numSamples, false, false, true);
-        playerBuffer.setSize (2, numSamples, false, false, true);
-    }
-
-    mixBuffer.clear (0, numSamples);
+    // A driver may deliver more samples than it announced: process in prepared-size chunks instead of
+    // growing buffers on the audio thread.
+    const int chunkSize = juce::jmax (1, mixBuffer.getNumSamples());
     bool anyFinished = false;
 
+    for (int offset = 0; offset < numSamples; offset += chunkSize)
     {
-        const juce::ScopedLock sl (lock);
+        const int n = juce::jmin (chunkSize, numSamples - offset);
+        mixBuffer.clear (0, n);
 
-        for (auto& p : players)
         {
-            if (p->hasFinished())
-                continue;
+            const juce::ScopedLock sl (lock);
 
-            const bool stillRunning = p->renderNextBlock (playerBuffer, numSamples);
+            for (auto& p : players)
+            {
+                if (p->hasFinished())
+                    continue;
 
-            for (int ch = 0; ch < 2; ++ch)
-                mixBuffer.addFrom (ch, 0, playerBuffer, ch, 0, numSamples);
+                const bool stillRunning = p->renderNextBlock (playerBuffer, n);
 
-            if (! stillRunning)
-                anyFinished = true;
+                for (int ch = 0; ch < 2; ++ch)
+                    mixBuffer.addFrom (ch, 0, playerBuffer, ch, 0, n);
+
+                if (! stillRunning)
+                    anyFinished = true;
+            }
         }
-    }
 
-    masterChain.process (mixBuffer, numSamples);
+        masterChain.process (mixBuffer, n);
 
-    for (int ch = 0; ch < output.getNumChannels(); ++ch)
-    {
-        if (ch < 2)
-            output.copyFrom (ch, 0, mixBuffer, ch, 0, numSamples);
-        else
-            output.clear (ch, 0, numSamples);
+        for (int ch = 0; ch < output.getNumChannels(); ++ch)
+        {
+            if (ch < 2)
+                output.copyFrom (ch, offset, mixBuffer, ch, 0, n);
+            else
+                output.clear (ch, offset, n);
+        }
     }
 
     if (anyFinished)
@@ -472,6 +476,7 @@ void AudioEngine::renderBlock (juce::AudioBuffer<float>& output, int numSamples)
 void AudioEngine::reapFinishedPlayers()
 {
     std::vector<std::unique_ptr<CuePlayer>> dead;
+    dead.reserve (16);   // no allocation while the audio lock is held
 
     {
         const juce::ScopedLock sl (lock);

@@ -18,13 +18,46 @@ void RegionLoopSource::setRegion (juce::int64 startSample, juce::int64 endSample
 {
     const juce::int64 fileLength = reader != nullptr ? reader->lengthInSamples : 0;
 
-    if (endSample <= 0 || endSample > fileLength)
+    if (endSample < 0 || endSample > fileLength)
         endSample = fileLength;
 
     startSample = std::clamp<juce::int64> (startSample, 0, fileLength);
 
+    regionVersion.fetch_add (1, std::memory_order_acq_rel);          // odd: write in progress
     regionStart.store (startSample, std::memory_order_relaxed);
     regionLength.store (std::max<juce::int64> (0, endSample - startSample), std::memory_order_relaxed);
+    regionVersion.fetch_add (1, std::memory_order_acq_rel);          // even: consistent
+}
+
+void RegionLoopSource::getRegion (juce::int64& startSample, juce::int64& lengthSamples) const noexcept
+{
+    for (;;)
+    {
+        const auto v1 = regionVersion.load (std::memory_order_acquire);
+
+        if ((v1 & 1u) != 0)
+            continue;
+
+        startSample = regionStart.load (std::memory_order_relaxed);
+        lengthSamples = regionLength.load (std::memory_order_relaxed);
+
+        if (regionVersion.load (std::memory_order_acquire) == v1)
+            return;
+    }
+}
+
+juce::int64 RegionLoopSource::getRegionStart() const noexcept
+{
+    juce::int64 s, l;
+    getRegion (s, l);
+    return s;
+}
+
+juce::int64 RegionLoopSource::getRegionLength() const noexcept
+{
+    juce::int64 s, l;
+    getRegion (s, l);
+    return l;
 }
 
 void RegionLoopSource::setPlayCount (int count, bool shouldLoopForever) noexcept
@@ -61,10 +94,8 @@ juce::int64 RegionLoopSource::getOffsetFor (juce::int64 position) const noexcept
     return len > 0 && position > 0 ? position % len : 0;
 }
 
-juce::int64 RegionLoopSource::getTotalLength() const
+juce::int64 RegionLoopSource::totalLengthFor (juce::int64 len) const noexcept
 {
-    const auto len = getRegionLength();
-
     if (len <= 0)
         return 0;
 
@@ -79,6 +110,11 @@ juce::int64 RegionLoopSource::getTotalLength() const
     return (juce::int64) playCount.load (std::memory_order_relaxed) * len;
 }
 
+juce::int64 RegionLoopSource::getTotalLength() const
+{
+    return totalLengthFor (getRegionLength());
+}
+
 void RegionLoopSource::getNextAudioBlock (const juce::AudioSourceChannelInfo& info)
 {
     info.clearActiveBufferRegion();
@@ -86,8 +122,8 @@ void RegionLoopSource::getNextAudioBlock (const juce::AudioSourceChannelInfo& in
     const juce::int64 startPosition = nextPosition.load (std::memory_order_relaxed);
     nextPosition.store (startPosition + info.numSamples, std::memory_order_relaxed);
 
-    const auto len = getRegionLength();
-    const auto start = getRegionStart();
+    juce::int64 start, len;
+    getRegion (start, len);   // one consistent pair for the whole block
 
     if (reader == nullptr || len <= 0 || info.buffer == nullptr)
     {
@@ -95,7 +131,7 @@ void RegionLoopSource::getNextAudioBlock (const juce::AudioSourceChannelInfo& in
         return;
     }
 
-    const auto total = getTotalLength();
+    const auto total = totalLengthFor (len);
     juce::int64 pos = startPosition;
     int dest = info.startSample;
     int remaining = info.numSamples;

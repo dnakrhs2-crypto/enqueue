@@ -303,6 +303,68 @@ public:
             engine.reapFinishedPlayers();
         }
 
+        beginTest ("a paused cue still obeys stop and fade requests");
+        {
+            Cue cue;
+            cue.file = tone;
+            expect (engine.play (cue));
+
+            for (int i = 0; i < 5; ++i)
+                engine.renderBlock (out, blockSize);
+
+            engine.pause (cue.id);
+            engine.renderBlock (out, blockSize);
+            engine.renderBlock (out, blockSize);
+            expect (engine.isPaused (cue.id));
+
+            engine.fadeOutAndStop (cue.id);                        // F while paused
+            engine.renderBlock (out, blockSize);
+            engine.reapFinishedPlayers();
+            expect (! engine.isPlaying (cue.id));
+
+            Cue other;
+            other.file = tone;
+            expect (engine.play (other));
+            engine.renderBlock (out, blockSize);
+            engine.pause (other.id);
+            engine.renderBlock (out, blockSize);
+            engine.renderBlock (out, blockSize);
+            expect (engine.isPaused (other.id));
+            engine.stopAll();                                      // hard stop while paused
+            engine.renderBlock (out, blockSize);
+            engine.reapFinishedPlayers();
+            expect (! engine.isPlaying (other.id));
+        }
+
+        beginTest ("a live trim keeps the audible file position and the elapsed time survives a rate change");
+        {
+            Cue cue;
+            cue.file = tone;
+            cue.audio.infiniteLoop = true;
+            expect (engine.play (cue));
+
+            for (int i = 0; i < 26; ++i)                          // 0.302 s
+                engine.renderBlock (out, blockSize);
+
+            const double filePosBefore = engine.getPlayingCues()[0].filePositionSeconds;
+            expectWithinAbsoluteError (filePosBefore, 0.302, 0.02);
+
+            engine.setLiveRegion (cue.id, 0.1, 0.9);               // start moved after the position: same file position
+            engine.renderBlock (out, blockSize);
+            const auto after = engine.getPlayingCues()[0];
+            expectWithinAbsoluteError (after.filePositionSeconds, filePosBefore + blockSize / sampleRate, 0.02);
+            expectEquals (after.passIndex, 0);
+
+            const double elapsed = after.positionSeconds;
+            engine.setLiveRate (cue.id, 2.0);
+            engine.renderBlock (out, blockSize);
+            expectWithinAbsoluteError (engine.getPlayingCues()[0].positionSeconds, elapsed + blockSize / sampleRate, 1e-3);   // no jump
+
+            engine.stopAll();
+            engine.renderBlock (out, blockSize);
+            engine.reapFinishedPlayers();
+        }
+
         beginTest ("a live trim that ends before the playhead stops the cue at once");
         {
             Cue cue;

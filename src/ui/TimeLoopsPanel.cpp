@@ -75,11 +75,21 @@ TimeLoopsPanel::TimeLoopsPanel (ProjectDocument& doc, AudioEngine& e, juce::Audi
     lockToggle.onClick = [this]
     {
         const bool on = lockToggle.getToggleState();
+        const auto* cue = selected();
+
+        if (cue != nullptr && cue->regionLength() <= 0.0)
+        {
+            // the conversion needs a known length; without one every point would collapse to 0
+            lockToggle.setToggleState (! on, juce::dontSendNotification);
+            return;
+        }
+
         updateSelected (ko ("엔벨로프 잠금"), [on] (Cue& c) { c.audio.envelope.setLockToTrim (on, c.regionLength()); });
     };
 
-    setupToggle (pitchToggle, "피치 유지");
-    pitchToggle.setTooltip (ko ("속도를 바꿔도 음높이를 유지합니다 (타임스트레치)"));
+    setupToggle (pitchToggle, "피치 유지 (준비 중)");
+    pitchToggle.setTooltip (ko ("타임스트레치는 다음 단계에서 들어갑니다. 지금은 속도를 바꾸면 음높이도 함께 바뀝니다"));
+    pitchToggle.setEnabled (false);
     pitchToggle.onClick = [this]
     {
         const bool on = pitchToggle.getToggleState();
@@ -156,8 +166,7 @@ void TimeLoopsPanel::refresh()
                      static_cast<juce::Component*> (&countEditor), static_cast<juce::Component*> (&rateEditor),
                      static_cast<juce::Component*> (&infiniteToggle), static_cast<juce::Component*> (&envelopeToggle),
                      static_cast<juce::Component*> (&linearToggle), static_cast<juce::Component*> (&lockToggle),
-                     static_cast<juce::Component*> (&pitchToggle), static_cast<juce::Component*> (&previewButton),
-                     static_cast<juce::Component*> (&resetButton) })
+                     static_cast<juce::Component*> (&previewButton), static_cast<juce::Component*> (&resetButton) })
         c->setEnabled (enabled);
 
     waveform.setCue (cue);
@@ -256,9 +265,10 @@ void TimeLoopsPanel::commitEnvelope (const Envelope& envelope, bool finished)
     if (cue == nullptr)
         return;
 
+    // every callback of one drag (including the final one) shares the key, so a drag is one undo step
+    juce::ignoreUnused (finished);
     const auto key = "envelope:" + cue->id.toString();
-    updateSelected (ko ("엔벨로프 편집"), [envelope] (Cue& c) { c.audio.envelope = envelope; c.audio.envelope.sanitise(); },
-                    finished ? juce::String() : key);
+    updateSelected (ko ("엔벨로프 편집"), [envelope] (Cue& c) { c.audio.envelope = envelope; c.audio.envelope.sanitise(); }, key);
 }
 
 void TimeLoopsPanel::commitStart()

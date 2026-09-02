@@ -1,10 +1,29 @@
 #include "model/ProjectSerializer.h"
 
+#include <cmath>
+#include <limits>
+
 namespace gocue
 {
 
 namespace
 {
+    /** Reads a JSON number as an int without the undefined float->int overflow of a plain cast. */
+    int intProperty (const juce::var& v, const char* name, int defaultValue)
+    {
+        const auto value = v.getProperty (name, juce::var());
+
+        if (value.isVoid())
+            return defaultValue;
+
+        const double d = (double) value;
+
+        if (! std::isfinite (d))
+            return defaultValue;
+
+        return (int) juce::jlimit ((double) std::numeric_limits<int>::min(), (double) std::numeric_limits<int>::max(), d);
+    }
+
     juce::var pluginToVar (const PluginSlotState& p)
     {
         auto* obj = new juce::DynamicObject();
@@ -24,7 +43,7 @@ namespace
         p.format           = v.getProperty ("format", "VST3").toString();
         p.name             = v.getProperty ("name", "").toString();
         p.fileOrIdentifier = v.getProperty ("fileOrIdentifier", "").toString();
-        p.uniqueId         = (int) v.getProperty ("uniqueId", 0);
+        p.uniqueId         = intProperty (v, "uniqueId", 0);
         p.stateBase64      = v.getProperty ("state", "").toString();
         p.descriptionXml   = v.getProperty ("description", "").toString();
         p.bypassed         = (bool) v.getProperty ("bypassed", false);
@@ -112,7 +131,7 @@ namespace
         AudioCueData a;
         a.startSeconds  = (double) v.getProperty ("start", 0.0);
         a.endSeconds    = (double) v.getProperty ("end", -1.0);
-        a.playCount     = (int) v.getProperty ("playCount", 1);
+        a.playCount     = intProperty (v, "playCount", 1);
         a.infiniteLoop  = (bool) v.getProperty ("infiniteLoop", false);
         a.rate          = (double) v.getProperty ("rate", 1.0);
         a.preservePitch = (bool) v.getProperty ("preservePitch", false);
@@ -191,7 +210,7 @@ namespace
         s.minLevelDb              = (double) v.getProperty ("minLevelDb", s.minLevelDb);
         s.copyFilesIntoProject    = (bool) v.getProperty ("copyFilesIntoProject", s.copyFilesIntoProject);
         s.autoBackup              = (bool) v.getProperty ("autoBackup", s.autoBackup);
-        s.backupIntervalSeconds   = (int) v.getProperty ("backupIntervalSeconds", s.backupIntervalSeconds);
+        s.backupIntervalSeconds   = intProperty (v, "backupIntervalSeconds", s.backupIntervalSeconds);
         s.backupBeforeSave        = (bool) v.getProperty ("backupBeforeSave", s.backupBeforeSave);
         s.rotateBackups           = (bool) v.getProperty ("rotateBackups", s.rotateBackups);
         s.sanitise();
@@ -259,7 +278,7 @@ namespace
                 warnings->add ("File not found: " + c.file.getFullPathName());
         }
 
-        c.fadeOutMs       = (int) v.getProperty ("fadeOutMs", 0);
+        c.fadeOutMs       = intProperty (v, "fadeOutMs", 0);
         c.gainDb          = (double) v.getProperty ("gainDb", 0.0);
         c.durationSeconds = (double) v.getProperty ("durationSeconds", 0.0);
         c.plugins         = pluginsFromVar (v.getProperty ("plugins", juce::var()));
@@ -274,7 +293,7 @@ namespace
         else
         {
             // Version 1: a plain fade-in time becomes the integrated fade envelope.
-            const int fadeInMs = juce::jlimit (0, Cue::maxFadeMs, (int) v.getProperty ("fadeInMs", 0));
+            const int fadeInMs = juce::jlimit (0, Cue::maxFadeMs, intProperty (v, "fadeInMs", 0));
             c.audio.envelope = Envelope::fromFadeIn (fadeInMs / 1000.0);
         }
 
@@ -325,7 +344,7 @@ juce::Result fromJson (const juce::String& json, Project& out, juce::StringArray
     if (root.getDynamicObject() == nullptr)
         return juce::Result::fail ("Invalid project file: top level is not an object");
 
-    const int version = (int) root.getProperty ("version", 1);
+    const int version = intProperty (root, "version", 1);
 
     if (version > currentVersion && warnings != nullptr)
         warnings->add ("This project was saved by a newer GoCue (file version " + juce::String (version)

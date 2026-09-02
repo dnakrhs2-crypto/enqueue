@@ -20,7 +20,7 @@ namespace gocue
     cue plugin chain.
 
     Created, prepared and started on the message thread; renderNextBlock() runs on the audio thread.
-    Control requests (stop / fade-out / pause / rate / trim) are passed through atomics.
+    Control requests (stop / fade-out / pause / rate / gain / trim) are passed through atomics.
     After the last pass ends (or a fade-out completes) the chain keeps running for its reported
     tail so reverbs and delays are not cut off; a hard stop skips the tail. */
 class CuePlayer
@@ -63,8 +63,10 @@ public:
     /** Finish the pass that is audible now, then end (devamp of a looping cue). Message thread. */
     void requestFinishCurrentPass() noexcept;
 
-    /** Live trim from the inspector. A new end before the audible position ends the cue at once
-        (with the plugin tail); a new start applies from the next pass. Message thread. */
+    /** Live trim from the inspector. The audible file position is kept (the pass / offset are
+        re-derived from the new region); a new end before that position ends the cue at once (with the
+        plugin tail). The read-ahead is flushed so the new region is heard after a few milliseconds.
+        Message thread. */
     void setLiveRegion (double startSeconds, double endSeconds) noexcept;
     /** Live playback rate (varispeed). Any thread. */
     void setLiveRate (double rate) noexcept;
@@ -80,10 +82,12 @@ public:
     bool hasFinished() const noexcept             { return finished.load (std::memory_order_relaxed); }
     bool isFadingOut() const noexcept             { return fadingOut.load (std::memory_order_relaxed); }
     bool isPaused() const noexcept                { return pausedFlag.load (std::memory_order_relaxed); }
-    /** Elapsed wall-clock seconds into the cue (all passes, at the current rate). */
+    /** Elapsed wall-clock seconds since the start (paused time excluded) plus the start offset. */
     double getPositionSeconds() const noexcept    { return positionSeconds.load (std::memory_order_relaxed); }
     /** Total wall-clock length of the cue at the current rate and trim; -1 while looping forever. */
     double getLengthSeconds() const noexcept;
+    /** Wall-clock seconds left at the current rate; -1 while looping forever. */
+    double getRemainingSeconds() const noexcept;
     /** Absolute position inside the file (for the waveform playhead). */
     double getFilePositionSeconds() const noexcept { return filePositionSeconds.load (std::memory_order_relaxed); }
     int getPassIndex() const noexcept             { return passIndex.load (std::memory_order_relaxed); }
@@ -93,6 +97,7 @@ public:
 
 private:
     void updatePositionInfo (double rate) noexcept;
+    double ratioFor (double rate) const noexcept { return fileSampleRate * rate / currentSampleRate; }
 
     Cue cue;
     juce::String errorMessage;
@@ -104,6 +109,7 @@ private:
     float gainLinear = 1.0f;
     double fileSampleRate = 44100.0;
     double currentSampleRate = 44100.0;
+    double startOffsetSeconds = 0.0;
     juce::int64 startOffsetSamples = 0;
     juce::int64 startOrder = 0;
 
@@ -121,9 +127,11 @@ private:
     std::atomic<double> positionSeconds { 0.0 };
     std::atomic<double> filePositionSeconds { 0.0 };
     std::atomic<int> passIndex { 0 };
+    std::atomic<double> virtualPosition { 0.0 };        // file samples on the source's virtual timeline (audible); written by the audio thread
+    std::atomic<juce::int64> pendingVirtualPosition { -1 };   // set by setLiveRegion, adopted by the audio thread
 
     // audio-thread state
-    double virtualPosition = 0.0;     // file samples on the source's virtual timeline (audible)
+    double elapsedOutputSamples = 0.0;
     double lastRatio = 0.0;
     bool pausing = false;
     bool paused = false;
