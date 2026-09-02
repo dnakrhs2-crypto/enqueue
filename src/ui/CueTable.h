@@ -18,8 +18,8 @@ namespace gocue
     Running cues are tinted (green / yellow paused / orange fading) with a progress bar. */
 class CueTable : public juce::Component,
                  private juce::TableListBoxModel,
-                 private juce::FileDragAndDropTarget,
-                 private juce::DragAndDropTarget,
+                 public juce::FileDragAndDropTarget,
+                 public juce::DragAndDropTarget,
                  private CueList::Listener
 {
 public:

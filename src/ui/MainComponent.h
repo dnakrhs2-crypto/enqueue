@@ -34,7 +34,7 @@ class MainComponent : public juce::Component,
                       public juce::ApplicationCommandTarget,
                       public juce::MenuBarModel,
                       public juce::DragAndDropContainer,
-                      private juce::FileDragAndDropTarget,
+                      public juce::FileDragAndDropTarget,
                       private juce::Timer,
                       private CueList::Listener,
                       private ProjectDocument::Listener

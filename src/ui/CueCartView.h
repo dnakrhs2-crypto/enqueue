@@ -15,7 +15,7 @@ namespace gocue
     (its second-trigger rule applies while it runs), a running button is tinted with a progress bar, and audio
     files dropped on a slot become cues there. Carts have no playhead and no sequences (QLab cue carts). */
 class CueCartView : public juce::Component,
-                    private juce::FileDragAndDropTarget,
+                    public juce::FileDragAndDropTarget,
                     private CueList::Listener
 {
 public:

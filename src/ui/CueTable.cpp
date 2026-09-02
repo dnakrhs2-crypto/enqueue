@@ -40,7 +40,7 @@ public:
     {
         setText (initial, false);
         setSelectAllWhenFocused (true);
-        setJustification (column == colName || column == colNumber ? juce::Justification::centredLeft : juce::Justification::centredRight);
+        setJustification (column == colName || column == colNumber ? juce::Justification::centredLeft : juce::Justification::centred);   // like the cells
         setFont (juce::Font (juce::FontOptions (16.0f)));
         onReturnKey = [this] { commit(); };
         onEscapeKey = [this] { cancel(); };

@@ -122,7 +122,7 @@ private:
 //==============================================================================
 /** Tab "기본". */
 class CueInspector::BasicsPanel : public juce::Component,
-                                  private juce::FileDragAndDropTarget
+                                  public juce::FileDragAndDropTarget
 {
 public:
     BasicsPanel (ProjectDocument& doc, AudioEngine& e, AppSettings& s)

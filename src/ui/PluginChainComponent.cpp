@@ -208,7 +208,7 @@ void PluginChainComponent::refresh()
         }
 
         strip.numSlots = numSlots;
-        strip.setSize (juce::jmax (1, numSlots * (slotWidth + slotGap)), slotHeight);
+        strip.setSize (juce::jmax (1, numSlots * slotWidth + juce::jmax (0, numSlots - 1) * slotGap), slotHeight);   // no gap after the last slot
         emptyLabel.setText (numSlots == 0 ? ko ("플러그인 없음 - [+ 플러그인]으로 추가하세요 (①→②→③ 순서대로 직렬 처리)") : juce::String(),
                             juce::dontSendNotification);
         emptyLabel.setVisible (numSlots == 0);
