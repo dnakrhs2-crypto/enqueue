@@ -31,6 +31,40 @@ enum class SecondTriggerAction
     devamp            // finish the current loop pass, then end
 };
 
+/** What happens after a cue is fired (QLab "continue mode"). */
+enum class ContinueMode
+{
+    none,           // wait for the next GO
+    autoContinue,   // start the next cue postWaitSeconds after this one starts
+    autoFollow      // start the next cue when this one finishes
+};
+
+enum class FadeStopScope { peers, list, all };
+
+/** Time-of-day trigger. daysMask bit 0 = Sunday ... bit 6 = Saturday. */
+struct WallClockTrigger
+{
+    bool enabled = false;
+    int hour = 0, minute = 0, second = 0;
+    int daysMask = 0x7f;
+};
+
+/** "Fade & stop others when this cue starts". */
+struct FadeStopOthers
+{
+    bool enabled = false;
+    double seconds = 2.0;
+    FadeStopScope scope = FadeStopScope::list;
+};
+
+/** "Duck / boost the other cues in this list while this cue runs". */
+struct DuckSettings
+{
+    bool enabled = false;
+    double levelDb = -12.0;   // negative = duck, positive = boost
+    double seconds = 1.0;
+};
+
 /** Playback settings of an audio cue (QLab "Time & Loops"). */
 struct AudioCueData
 {
@@ -51,7 +85,23 @@ struct AudioCueData
 struct Cue
 {
     juce::Uuid id;                   // stable identity (survives reorder / rename)
+    juce::String number;             // free text, unique in the project when set ("" = none)
     juce::String name;
+    juce::String notes;
+    int color = 0;                   // CueColors index, 0 = none
+    int secondColor = 0;             // shown after the cue has played once (when useSecondColor)
+    bool useSecondColor = false;
+    bool flagged = false;
+    bool armed = true;
+    bool skipIfDisarmed = false;     // a disarmed cue is skipped entirely by GO instead of just staying silent
+    bool autoLoad = false;
+    double preWaitSeconds = 0.0;
+    double postWaitSeconds = 0.0;
+    ContinueMode continueMode = ContinueMode::none;
+    juce::String hotkey;             // juce::KeyPress description, "" = none
+    WallClockTrigger wallClock;
+    FadeStopOthers fadeStopOthers;
+    DuckSettings duck;
     juce::File file;
     int fadeOutMs = 0;               // "stop fade": length of fade-out-and-stop (F); 0 = de-click only
     double gainDb = 0.0;
@@ -64,6 +114,7 @@ struct Cue
     static constexpr int maxFadeMs = 600000;     // 10 minutes
     static constexpr double minGainDb = -60.0;   // treated as silence
     static constexpr double maxGainDb = 12.0;
+    static constexpr double maxWaitSeconds = 86400.0;
 
     /** Linear gain for gainDb, clamped to [minGainDb, maxGainDb]; minGainDb gives 0. */
     float gainLinear() const noexcept;

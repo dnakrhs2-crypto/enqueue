@@ -46,6 +46,30 @@ double Cue::effectiveLength() const noexcept
 
 void Cue::sanitise() noexcept
 {
+    auto fixSeconds = [] (double& v, double hi)
+    {
+        if (! std::isfinite (v) || v < 0.0)
+            v = 0.0;
+
+        v = std::min (v, hi);
+    };
+
+    fixSeconds (preWaitSeconds, maxWaitSeconds);
+    fixSeconds (postWaitSeconds, maxWaitSeconds);
+    color = juce::jlimit (0, 20, color);
+    secondColor = juce::jlimit (0, 20, secondColor);
+    wallClock.hour = juce::jlimit (0, 23, wallClock.hour);
+    wallClock.minute = juce::jlimit (0, 59, wallClock.minute);
+    wallClock.second = juce::jlimit (0, 59, wallClock.second);
+    wallClock.daysMask &= 0x7f;
+    fixSeconds (fadeStopOthers.seconds, 600.0);
+    fixSeconds (duck.seconds, 600.0);
+
+    if (! std::isfinite (duck.levelDb))
+        duck.levelDb = -12.0;
+
+    duck.levelDb = juce::jlimit (minGainDb, maxGainDb, duck.levelDb);
+
     fadeOutMs = juce::jlimit (0, maxFadeMs, fadeOutMs);
 
     if (! std::isfinite (gainDb))

@@ -51,6 +51,7 @@ target_sources(GoCueCore INTERFACE
     ${CMAKE_CURRENT_SOURCE_DIR}/src/model/Cue.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/model/CueList.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/model/ProjectSerializer.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/model/CueNumbering.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/app/ProjectDocument.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/app/CueController.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/app/BackupManager.cpp

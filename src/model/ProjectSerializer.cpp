@@ -145,6 +145,44 @@ namespace
         return SecondTriggerAction::hardStopRestart;
     }
 
+    const char* continueModeToText (ContinueMode m)
+    {
+        switch (m)
+        {
+            case ContinueMode::none:         return "none";
+            case ContinueMode::autoContinue: return "autoContinue";
+            case ContinueMode::autoFollow:   return "autoFollow";
+        }
+
+        return "none";
+    }
+
+    ContinueMode continueModeFromText (const juce::String& text)
+    {
+        if (text == "autoContinue") return ContinueMode::autoContinue;
+        if (text == "autoFollow")   return ContinueMode::autoFollow;
+        return ContinueMode::none;
+    }
+
+    const char* scopeToText (FadeStopScope s)
+    {
+        switch (s)
+        {
+            case FadeStopScope::peers: return "peers";
+            case FadeStopScope::list:  return "list";
+            case FadeStopScope::all:   return "all";
+        }
+
+        return "list";
+    }
+
+    FadeStopScope scopeFromText (const juce::String& text)
+    {
+        if (text == "peers") return FadeStopScope::peers;
+        if (text == "all")   return FadeStopScope::all;
+        return FadeStopScope::list;
+    }
+
     juce::var settingsToVar (const WorkspaceSettings& s)
     {
         auto* obj = new juce::DynamicObject();
@@ -202,7 +240,43 @@ namespace
     {
         auto* obj = new juce::DynamicObject();
         obj->setProperty ("id", c.id.toString());
+        obj->setProperty ("number", c.number);
         obj->setProperty ("name", c.name);
+        obj->setProperty ("notes", c.notes);
+        obj->setProperty ("color", c.color);
+        obj->setProperty ("secondColor", c.secondColor);
+        obj->setProperty ("useSecondColor", c.useSecondColor);
+        obj->setProperty ("flagged", c.flagged);
+        obj->setProperty ("armed", c.armed);
+        obj->setProperty ("skipIfDisarmed", c.skipIfDisarmed);
+        obj->setProperty ("autoLoad", c.autoLoad);
+        obj->setProperty ("preWait", c.preWaitSeconds);
+        obj->setProperty ("postWait", c.postWaitSeconds);
+        obj->setProperty ("continueMode", continueModeToText (c.continueMode));
+        obj->setProperty ("hotkey", c.hotkey);
+
+        {
+            auto* wc = new juce::DynamicObject();
+            wc->setProperty ("enabled", c.wallClock.enabled);
+            wc->setProperty ("hour", c.wallClock.hour);
+            wc->setProperty ("minute", c.wallClock.minute);
+            wc->setProperty ("second", c.wallClock.second);
+            wc->setProperty ("days", c.wallClock.daysMask);
+            obj->setProperty ("wallClock", juce::var (wc));
+
+            auto* fs = new juce::DynamicObject();
+            fs->setProperty ("enabled", c.fadeStopOthers.enabled);
+            fs->setProperty ("seconds", c.fadeStopOthers.seconds);
+            fs->setProperty ("scope", scopeToText (c.fadeStopOthers.scope));
+            obj->setProperty ("fadeStopOthers", juce::var (fs));
+
+            auto* dk = new juce::DynamicObject();
+            dk->setProperty ("enabled", c.duck.enabled);
+            dk->setProperty ("levelDb", c.duck.levelDb);
+            dk->setProperty ("seconds", c.duck.seconds);
+            obj->setProperty ("duck", juce::var (dk));
+        }
+
         obj->setProperty ("file", c.file.getFullPathName());
 
         if (projectDir.isDirectory() && c.file != juce::File())
@@ -231,7 +305,43 @@ namespace
                 c.id = parsed;
         }
 
-        c.name = v.getProperty ("name", "").toString();
+        c.number         = v.getProperty ("number", "").toString();
+        c.name           = v.getProperty ("name", "").toString();
+        c.notes          = v.getProperty ("notes", "").toString();
+        c.color          = (int) v.getProperty ("color", 0);
+        c.secondColor    = (int) v.getProperty ("secondColor", 0);
+        c.useSecondColor = (bool) v.getProperty ("useSecondColor", false);
+        c.flagged        = (bool) v.getProperty ("flagged", false);
+        c.armed          = (bool) v.getProperty ("armed", true);
+        c.skipIfDisarmed = (bool) v.getProperty ("skipIfDisarmed", false);
+        c.autoLoad       = (bool) v.getProperty ("autoLoad", false);
+        c.preWaitSeconds = (double) v.getProperty ("preWait", 0.0);
+        c.postWaitSeconds = (double) v.getProperty ("postWait", 0.0);
+        c.continueMode   = continueModeFromText (v.getProperty ("continueMode", "none").toString());
+        c.hotkey         = v.getProperty ("hotkey", "").toString();
+
+        if (const auto wc = v.getProperty ("wallClock", juce::var()); wc.getDynamicObject() != nullptr)
+        {
+            c.wallClock.enabled  = (bool) wc.getProperty ("enabled", false);
+            c.wallClock.hour     = (int) wc.getProperty ("hour", 0);
+            c.wallClock.minute   = (int) wc.getProperty ("minute", 0);
+            c.wallClock.second   = (int) wc.getProperty ("second", 0);
+            c.wallClock.daysMask = (int) wc.getProperty ("days", 0x7f);
+        }
+
+        if (const auto fs = v.getProperty ("fadeStopOthers", juce::var()); fs.getDynamicObject() != nullptr)
+        {
+            c.fadeStopOthers.enabled = (bool) fs.getProperty ("enabled", false);
+            c.fadeStopOthers.seconds = (double) fs.getProperty ("seconds", 2.0);
+            c.fadeStopOthers.scope   = scopeFromText (fs.getProperty ("scope", "list").toString());
+        }
+
+        if (const auto dk = v.getProperty ("duck", juce::var()); dk.getDynamicObject() != nullptr)
+        {
+            c.duck.enabled = (bool) dk.getProperty ("enabled", false);
+            c.duck.levelDb = (double) dk.getProperty ("levelDb", -12.0);
+            c.duck.seconds = (double) dk.getProperty ("seconds", 1.0);
+        }
 
         const auto path = v.getProperty ("file", "").toString();
 
