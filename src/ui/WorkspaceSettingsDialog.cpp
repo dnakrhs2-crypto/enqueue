@@ -246,6 +246,46 @@ namespace
         juce::TextEditor* intervalEditor;
     };
 
+    class AudioTab : public SettingsTab
+    {
+    public:
+        AudioTab (ProjectDocument& doc) : SettingsTab (doc)
+        {
+            const auto& s = doc.settings;
+            maxLabel = &addLabel (ko ("레벨 상한 (dB, 매트릭스·페이드에서 이 위로 못 올림)"));
+            maxEditor = &addNumber (juce::String (s.maxLevelDb, 1), "-0123456789.",
+                                    [] (WorkspaceSettings& w, const juce::String& t) { w.maxLevelDb = t.getDoubleValue(); },
+                                    [] (const WorkspaceSettings& w) { return juce::String (w.maxLevelDb, 1); });
+            minLabel = &addLabel (ko ("레벨 하한 (dB, 이 아래는 무음 -\xE2\x88\x9E)"));
+            minEditor = &addNumber (juce::String (s.minLevelDb, 1), "-0123456789.",
+                                    [] (WorkspaceSettings& w, const juce::String& t) { w.minLevelDb = t.getDoubleValue(); },
+                                    [] (const WorkspaceSettings& w) { return juce::String (w.minLevelDb, 1); });
+            hint = &addLabel (ko ("출력 라우팅·출력 이름·출력 인서트는 오디오 > 오디오 패치... 에서, 장치와 채널 수는 오디오 > 오디오 출력 설정에서 바꿉니다."));
+            hint->setFont (juce::Font (juce::FontOptions (11.0f)));
+        }
+
+        void resized() override
+        {
+            auto area = getLocalBounds().reduced (16, 12);
+            const int rowHeight = 26;
+            auto next = [&] { auto r = area.removeFromTop (rowHeight); area.removeFromTop (6); return Row { r, 0 }; };
+
+            auto row = next();
+            maxLabel->setBounds (row.take (360));
+            maxEditor->setBounds (row.take (70));
+            row = next();
+            minLabel->setBounds (row.take (360));
+            minEditor->setBounds (row.take (70));
+            area.removeFromTop (8);
+            row = next();
+            hint->setBounds (row.take (area.getWidth()));
+        }
+
+    private:
+        juce::Label *maxLabel, *minLabel, *hint;
+        juce::TextEditor *maxEditor, *minEditor;
+    };
+
     class Content : public juce::Component
     {
     public:
@@ -255,6 +295,7 @@ namespace
             tabs.setOutline (0);
             tabs.addTab (ko ("일반"), Palette::panel, new GeneralTab (document), true);
             tabs.addTab (ko ("파일"), Palette::panel, new FilesTab (document), true);
+            tabs.addTab (ko ("오디오"), Palette::panel, new AudioTab (document), true);
             addAndMakeVisible (tabs);
             setSize (640, 380);
         }

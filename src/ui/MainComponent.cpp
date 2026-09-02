@@ -9,6 +9,7 @@
 #include "ui/PluginDialogs.h"
 #include "ui/UiUtils.h"
 #include "ui/PastePropertiesDialog.h"
+#include "ui/PatchEditorDialog.h"
 #include "ui/WorkspaceSettingsDialog.h"
 
 #include <set>
@@ -79,6 +80,7 @@ MainComponent::MainComponent (AudioEngine& e, AppSettings& s, juce::ApplicationC
         document.markDirty();
         inspector.pluginChainChanged (&chain);
         PluginDialogs::chainChanged (&chain);
+        PatchEditorDialog::chainChanged (&chain);
     };
 
     document.cues.addListener (this);
@@ -211,7 +213,7 @@ void MainComponent::getAllCommands (juce::Array<juce::CommandID>& ids)
                     CommandIDs::newProject, CommandIDs::openProject,
                     CommandIDs::saveProject, CommandIDs::saveProjectAs,
                     CommandIDs::undo, CommandIDs::redo, CommandIDs::toggleShowMode, CommandIDs::toggleActiveCues,
-                    CommandIDs::audioSettings, CommandIDs::pluginManager, CommandIDs::masterInserts,
+                    CommandIDs::audioSettings, CommandIDs::audioPatches, CommandIDs::pluginManager, CommandIDs::masterInserts,
                     CommandIDs::workspaceSettings,
                     CommandIDs::checkForUpdates, CommandIDs::about });
 }
@@ -444,6 +446,11 @@ void MainComponent::getCommandInfo (juce::CommandID commandID, juce::Application
             result.addDefaultKeypress (',', ModifierKeys::commandModifier);
             break;
 
+        case CommandIDs::audioPatches:
+            result.setInfo (ko ("오디오 패치..."), ko ("큐 출력 → 장치 출력 라우팅, 출력 이름, 스테레오 묶기, 출력 인서트"), audio, 0);
+            result.addDefaultKeypress ('P', ModifierKeys::commandModifier | ModifierKeys::shiftModifier);
+            break;
+
         case CommandIDs::pluginManager:
             result.setInfo (ko ("VST3 플러그인 관리..."), ko ("VST3 플러그인 스캔 / 목록"), audio, 0);
             result.addDefaultKeypress ('P', ModifierKeys::commandModifier);
@@ -636,6 +643,10 @@ bool MainComponent::perform (const InvocationInfo& info)
             AudioSettingsDialog::show (engine.getDeviceManager(), this);
             break;
 
+        case CommandIDs::audioPatches:
+            PatchEditorDialog::show (document, engine, pluginWindows, [this] { showPluginManager(); }, this);
+            break;
+
         case CommandIDs::pluginManager:
             showPluginManager();
             break;
@@ -739,6 +750,7 @@ juce::PopupMenu MainComponent::getMenuForIndex (int topLevelMenuIndex, const juc
 
         case 4:
             menu.addCommandItem (&commands, CommandIDs::audioSettings);
+            menu.addCommandItem (&commands, CommandIDs::audioPatches);
             menu.addSeparator();
             menu.addCommandItem (&commands, CommandIDs::pluginManager);
             menu.addCommandItem (&commands, CommandIDs::masterInserts);
@@ -1468,6 +1480,7 @@ void MainComponent::findMissingFiles()
 void MainComponent::newProject()
 {
     WorkspaceSettingsDialog::closeIfOpen();   // it edits the document that is about to be replaced
+    PatchEditorDialog::closeIfOpen();
     controller.cancelPending();
     pluginWindows.closeAll();
     engine.stopAll();
@@ -1517,6 +1530,7 @@ void MainComponent::openProjectFile (const juce::File& file)
     }
 
     WorkspaceSettingsDialog::closeIfOpen();
+    PatchEditorDialog::closeIfOpen();
     controller.cancelPending();
     pluginWindows.closeAll();
     engine.stopAll();

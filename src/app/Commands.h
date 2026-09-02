@@ -48,6 +48,7 @@ enum : juce::CommandID
     toggleActiveCues,     // Ctrl+L
 
     audioSettings,
+    audioPatches,         // 오디오 패치 편집기
     pluginManager,
     masterInserts,
     workspaceSettings,

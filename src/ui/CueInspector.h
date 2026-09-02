@@ -4,6 +4,7 @@
 #include "app/ProjectDocument.h"
 #include "audio/AudioEngine.h"
 #include "model/CueList.h"
+#include "ui/LevelMatrixComponent.h"
 #include "ui/PluginWindows.h"
 #include "ui/TimeLoopsPanel.h"
 
@@ -18,6 +19,7 @@ namespace gocue
 
 /** Bottom panel with tabs for the selected cue: 기본 (number, name, colour, file, waits, continue mode,
     hotkey, flags, stop fade, gain, notes) / 시간·루프 (waveform, trim, loops, envelope) /
+    레벨 (patch, level matrix) / 트림 (fixed offsets) /
     트리거 (second trigger, wall clock, fade-stop-others, duck) / 이펙트 (VST3 insert chain).
     Every edit goes through ProjectDocument::perform so it is undoable. */
 class CueInspector : public juce::Component,
@@ -50,6 +52,8 @@ public:
     void paint (juce::Graphics& g) override;
 
     class BasicsPanel;
+    class LevelsPanel;
+    class TrimPanel;
     class TriggersPanel;
     class EffectsPanel;
 
@@ -70,6 +74,8 @@ private:
     juce::TabbedComponent tabs { juce::TabbedButtonBar::TabsAtTop };
     BasicsPanel* basics = nullptr;       // owned by 'tabs'
     TimeLoopsPanel* timeLoops = nullptr; // owned by 'tabs'
+    LevelsPanel* levels = nullptr;       // owned by 'tabs'
+    TrimPanel* trim = nullptr;           // owned by 'tabs'
     TriggersPanel* triggers = nullptr;   // owned by 'tabs'
     EffectsPanel* effects = nullptr;     // owned by 'tabs'
     bool editable = true;

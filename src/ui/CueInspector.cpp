@@ -913,6 +913,371 @@ private:
 
 //==============================================================================
 /** Tab "이펙트": the cue's VST3 insert chain. */
+//==============================================================================
+/** 레벨 tab: output patch + the level matrix (main / inputs / outputs / crosspoints). */
+class CueInspector::LevelsPanel : public juce::Component
+{
+public:
+    LevelsPanel (ProjectDocument& doc, AudioEngine& e) : document (doc), cues (doc.cues), engine (e)
+    {
+        styleLabel (patchLabel, ko ("패치"));
+        addAndMakeVisible (patchLabel);
+        patchCombo.setWantsKeyboardFocus (false);
+        patchCombo.setTooltip (ko ("이 큐의 출력이 지나가는 오디오 패치 (오디오 > 오디오 패치...)"));
+        patchCombo.onChange = [this] { commitPatch(); };
+        addAndMakeVisible (patchCombo);
+
+        defaultsButton.setButtonText (ko ("기본 레벨로"));
+        defaultsButton.setWantsKeyboardFocus (false);
+        defaultsButton.onClick = [this] { applyToLevels (ko ("기본 레벨로"), [] (Cue& c) { c.gainDb = 0.0; c.levels.setDefaults(); }); };
+        addAndMakeVisible (defaultsButton);
+
+        silenceButton.setButtonText (ko ("전부 무음"));
+        silenceButton.setWantsKeyboardFocus (false);
+        silenceButton.onClick = [this] { applyToLevels (ko ("전부 무음"), [] (Cue& c) { c.levels.silenceCrosspoints(); }); };
+        addAndMakeVisible (silenceButton);
+
+        styleLabel (hint, ko ("드래그 = 레벨 (Shift = 0.1 dB) · 더블클릭 = 기본값 · 숫자 입력 (부호 없으면 음수, 빈칸 = 무음) · 우클릭 = 겡 · 재생 중에도 즉시 반영. 행 = 파일 채널, 열 = 패치의 큐 출력 (귀퉁이 표시 = 장치에 연결 안 됨)"), 11.0f);
+        addAndMakeVisible (hint);
+
+        viewport.setViewedComponent (&grid, false);
+        viewport.setScrollBarsShown (true, true);
+        addAndMakeVisible (viewport);
+
+        grid.onChange = [this] (double mainDb, const LevelMatrix& m, bool finished) { commitLevels (mainDb, m, finished); };
+    }
+
+    void setEditable (bool shouldBeEditable)
+    {
+        editable = shouldBeEditable;
+        refresh();
+    }
+
+    void refresh()
+    {
+        const juce::ScopedValueSetter<bool> guard (refreshing, true);
+        const auto* cue = cues.getSelected();
+        const bool enabled = cue != nullptr && editable;
+
+        patchCombo.clear (juce::dontSendNotification);
+        int selectedPatch = 0;
+
+        for (int i = 0; i < (int) document.patches.size(); ++i)
+        {
+            const auto& p = document.patches[(size_t) i];
+            patchCombo.addItem (p.name + " (" + juce::String (p.numCueOutputs) + ")", i + 1);
+
+            if (cue != nullptr && &document.patchForCue (*cue) == &p)
+                selectedPatch = i + 1;
+        }
+
+        patchCombo.setSelectedId (selectedPatch, juce::dontSendNotification);
+
+        for (auto* c : std::initializer_list<juce::Component*> { &patchCombo, &defaultsButton, &silenceButton })
+            c->setEnabled (enabled);
+
+        grid.setEditable (enabled);
+        grid.setLimits (document.settings.minLevelDb, document.settings.maxLevelDb);
+
+        if (cue == nullptr)
+        {
+            grid.setLevels (0.0, LevelMatrix());
+            return;
+        }
+
+        const auto& patch = document.patchForCue (*cue);
+        LevelMatrix m = cue->levels;
+        const int inputs = cue->numChannels > 0 ? cue->numChannels : (m.numInputs() > 0 ? m.numInputs() : 2);
+        m.resize (inputs, patch.numCueOutputs);
+
+        juce::StringArray inputNames, outputNames;
+
+        for (int i = 0; i < inputs; ++i)
+            inputNames.add (inputs == 1 ? ko ("모노") : ko ("채널 ") + juce::String (i + 1));
+
+        std::vector<bool> connected;
+        const int deviceOutputs = engine.getNumDeviceOutputs();
+
+        for (int k = 0; k < patch.numCueOutputs; ++k)
+        {
+            outputNames.add (patch.cueOutputName (k));
+            bool reaches = false;
+
+            for (int d = 0; d < deviceOutputs && ! reaches; ++d)
+                reaches = patch.routingGain (k, d) > 0.0f;
+
+            connected.push_back (reaches);
+        }
+
+        grid.setLabels (inputNames, outputNames);
+        grid.setLevels (cue->gainDb, m);
+        grid.setOutputConnected (connected);
+    }
+
+    void resized() override
+    {
+        auto area = getLocalBounds().reduced (12, 6);
+        auto row = area.removeFromTop (24);
+        patchLabel.setBounds (row.removeFromLeft (36));
+        patchCombo.setBounds (row.removeFromLeft (220));
+        row.removeFromLeft (12);
+        defaultsButton.setBounds (row.removeFromLeft (100));
+        row.removeFromLeft (6);
+        silenceButton.setBounds (row.removeFromLeft (90));
+        area.removeFromTop (4);
+        hint.setBounds (area.removeFromTop (16));
+        area.removeFromTop (4);
+        viewport.setBounds (area);
+    }
+
+    void paint (juce::Graphics& g) override { g.fillAll (Palette::panel); }
+
+private:
+    void edit (const juce::String& name, const std::function<void (Cue&)>& mutator, const juce::String& coalesceKey = {})
+    {
+        if (refreshing || ! editable)
+            return;
+
+        const int index = cues.getSelectedIndex();
+
+        if (! cues.isValidIndex (index))
+            return;
+
+        document.perform (name, [this, index, mutator] { cues.update (index, mutator); }, { coalesceKey, false });
+    }
+
+    void pushLive (const Cue& cue)
+    {
+        engine.setLiveGainDb (cue.id, cue.gainDb);
+        engine.setLiveLevels (cue.id, cue.levels, cue.trim);
+    }
+
+    void applyToLevels (const juce::String& name, const std::function<void (Cue&)>& mutator)
+    {
+        const auto* cue = cues.getSelected();
+
+        if (cue == nullptr || ! editable)
+            return;
+
+        const int outputs = document.cueOutputsFor (*cue);
+        edit (name, [mutator, outputs] (Cue& c)
+        {
+            if (c.levels.numInputs() > 0)
+                c.levels.resize (c.levels.numInputs(), outputs);
+
+            mutator (c);
+        });
+
+        if (const auto* updated = cues.getSelected())
+            pushLive (*updated);
+    }
+
+    void commitLevels (double mainDb, const LevelMatrix& m, bool finished)
+    {
+        const auto* cue = cues.getSelected();
+
+        if (cue == nullptr || refreshing)
+            return;
+
+        const auto id = cue->id;
+        edit (ko ("레벨 변경"), [mainDb, m] (Cue& c) { c.gainDb = mainDb; c.levels = m; }, "levels:" + id.toString());
+        engine.setLiveGainDb (id, mainDb);
+        engine.setLiveLevels (id, m, cue->trim);
+        juce::ignoreUnused (finished);
+    }
+
+    void commitPatch()
+    {
+        const auto* cue = cues.getSelected();
+
+        if (cue == nullptr || refreshing || patchCombo.getSelectedId() == 0)
+            return;
+
+        const int index = patchCombo.getSelectedId() - 1;
+
+        if (index < 0 || index >= (int) document.patches.size())
+            return;
+
+        const auto id = index == 0 ? juce::Uuid::null() : document.patches[(size_t) index].id;
+        const int outputs = document.patches[(size_t) index].numCueOutputs;
+        edit (ko ("패치 변경"), [id, outputs] (Cue& c)
+        {
+            c.patchId = id;
+
+            if (c.levels.numInputs() > 0)
+                c.levels.resize (c.levels.numInputs(), outputs);
+        });
+    }
+
+    ProjectDocument& document;
+    CueList& cues;
+    AudioEngine& engine;
+    juce::Label patchLabel, hint;
+    juce::ComboBox patchCombo;
+    juce::TextButton defaultsButton, silenceButton;
+    juce::Viewport viewport;
+    LevelMatrixComponent grid;
+    bool refreshing = false;
+    bool editable = true;
+};
+
+//==============================================================================
+/** 트림 tab: fixed offsets (main + per cue output) added after the matrix. */
+class CueInspector::TrimPanel : public juce::Component
+{
+public:
+    TrimPanel (ProjectDocument& doc, AudioEngine& e) : document (doc), cues (doc.cues), engine (e)
+    {
+        styleLabel (hint, ko ("트림은 레벨 매트릭스 뒤에 더해지는 고정 오프셋입니다 (페이드 큐의 영향을 받지 않음). 더블클릭 = 0 dB"), 11.0f);
+        addAndMakeVisible (hint);
+
+        styleLabel (mainLabel, ko ("메인 트림 (dB)"));
+        addAndMakeVisible (mainLabel);
+        styleSlider (mainSlider);
+        mainSlider.onValueChange = [this] { commit (-1, mainSlider.getValue()); };
+        addAndMakeVisible (mainSlider);
+
+        viewport.setViewedComponent (&strip, false);
+        viewport.setScrollBarsShown (false, true);
+        addAndMakeVisible (viewport);
+    }
+
+    void setEditable (bool shouldBeEditable)
+    {
+        editable = shouldBeEditable;
+        refresh();
+    }
+
+    void refresh()
+    {
+        const juce::ScopedValueSetter<bool> guard (refreshing, true);
+        const auto* cue = cues.getSelected();
+        const bool enabled = cue != nullptr && editable;
+        mainSlider.setEnabled (enabled);
+
+        const int outputs = cue != nullptr ? document.cueOutputsFor (*cue) : 0;
+
+        if (outputs != sliders.size())
+        {
+            sliders.clear();
+            labels.clear();
+
+            for (int k = 0; k < outputs; ++k)
+            {
+                auto* s = sliders.add (new juce::Slider());
+                s->setSliderStyle (juce::Slider::LinearVertical);
+                s->setRange (-60.0, LevelMatrix::maxDb, 0.1);
+                s->setTextBoxStyle (juce::Slider::TextBoxBelow, false, 48, 18);
+                s->setDoubleClickReturnValue (true, 0.0);
+                s->setWantsKeyboardFocus (false);
+                s->onValueChange = [this, k, s] { commit (k, s->getValue()); };
+                strip.addAndMakeVisible (s);
+
+                auto* l = labels.add (new juce::Label());
+                l->setJustificationType (juce::Justification::centred);
+                l->setColour (juce::Label::textColourId, Palette::dimText);
+                l->setFont (juce::Font (juce::FontOptions (11.0f)));
+                strip.addAndMakeVisible (l);
+            }
+
+            layoutStrip();
+        }
+
+        if (cue == nullptr)
+        {
+            mainSlider.setValue (0.0, juce::dontSendNotification);
+            return;
+        }
+
+        const auto& patch = document.patchForCue (*cue);
+        TrimLevels t = cue->trim;
+        t.resize (outputs);
+        mainSlider.setValue (t.mainDb, juce::dontSendNotification);
+
+        for (int k = 0; k < outputs; ++k)
+        {
+            sliders[k]->setValue (t.outputDb[(size_t) k], juce::dontSendNotification);
+            sliders[k]->setEnabled (enabled);
+            labels[k]->setText (patch.cueOutputName (k), juce::dontSendNotification);
+        }
+    }
+
+    void resized() override
+    {
+        auto area = getLocalBounds().reduced (12, 6);
+        hint.setBounds (area.removeFromTop (16));
+        area.removeFromTop (6);
+        auto row = area.removeFromTop (24);
+        mainLabel.setBounds (row.removeFromLeft (110));
+        mainSlider.setBounds (row.removeFromLeft (juce::jmin (400, row.getWidth())));
+        area.removeFromTop (6);
+        viewport.setBounds (area);
+        layoutStrip();
+    }
+
+    void paint (juce::Graphics& g) override { g.fillAll (Palette::panel); }
+
+private:
+    static void styleSlider (juce::Slider& s)
+    {
+        s.setSliderStyle (juce::Slider::LinearHorizontal);
+        s.setRange (-60.0, LevelMatrix::maxDb, 0.1);
+        s.setTextBoxStyle (juce::Slider::TextBoxRight, false, 70, 22);
+        s.setTextValueSuffix (" dB");
+        s.setDoubleClickReturnValue (true, 0.0);
+        s.setWantsKeyboardFocus (false);
+    }
+
+    void layoutStrip()
+    {
+        const int w = 52;
+        const int h = juce::jmax (80, viewport.getHeight() - 4);
+        strip.setSize (juce::jmax (viewport.getWidth(), sliders.size() * w), h);
+
+        for (int k = 0; k < sliders.size(); ++k)
+        {
+            juce::Rectangle<int> col (k * w, 0, w, h);
+            labels[k]->setBounds (col.removeFromTop (16));
+            sliders[k]->setBounds (col.reduced (2, 0));
+        }
+    }
+
+    void commit (int output, double value)
+    {
+        const auto* cue = cues.getSelected();
+
+        if (cue == nullptr || refreshing || ! editable)
+            return;
+
+        const int index = cues.getSelectedIndex();
+        const int outputs = document.cueOutputsFor (*cue);
+        const auto id = cue->id;
+        TrimLevels t = cue->trim;
+        t.resize (outputs);
+
+        if (output < 0)
+            t.mainDb = value;
+        else if (output < (int) t.outputDb.size())
+            t.outputDb[(size_t) output] = value;
+
+        document.perform (ko ("트림 변경"), [this, index, t] { cues.update (index, [t] (Cue& c) { c.trim = t; }); },
+                          { "trim:" + id.toString(), false });
+        engine.setLiveLevels (id, cue->levels, t);
+    }
+
+    ProjectDocument& document;
+    CueList& cues;
+    AudioEngine& engine;
+    juce::Label hint, mainLabel;
+    juce::Slider mainSlider;
+    juce::Viewport viewport;
+    juce::Component strip;
+    juce::OwnedArray<juce::Slider> sliders;
+    juce::OwnedArray<juce::Label> labels;
+    bool refreshing = false;
+    bool editable = true;
+};
+
 class CueInspector::EffectsPanel : public juce::Component
 {
 public:
@@ -981,6 +1346,8 @@ CueInspector::CueInspector (ProjectDocument& doc, AudioEngine& e, AppSettings& s
     timeLoops->onPreview = [this] { if (onPreview) onPreview(); };
     timeLoops->onReset = [this] { if (onResetCue) onResetCue(); };
 
+    levels = new LevelsPanel (document, engine);
+    trim = new TrimPanel (document, engine);
     triggers = new TriggersPanel (document);
 
     effects = new EffectsPanel (document, engine, windows);
@@ -991,6 +1358,8 @@ CueInspector::CueInspector (ProjectDocument& doc, AudioEngine& e, AppSettings& s
     tabs.setColour (juce::TabbedComponent::backgroundColourId, Palette::panel);
     tabs.addTab (ko ("기본"), Palette::panel, basics, true);
     tabs.addTab (ko ("시간·루프"), Palette::panel, timeLoops, true);
+    tabs.addTab (ko ("레벨"), Palette::panel, levels, true);
+    tabs.addTab (ko ("트림"), Palette::panel, trim, true);
     tabs.addTab (ko ("트리거"), Palette::panel, triggers, true);
     tabs.addTab (ko ("이펙트"), Palette::panel, effects, true);
     tabs.setCurrentTabIndex (0);
@@ -1039,6 +1408,8 @@ void CueInspector::setEditable (bool shouldBeEditable)
 {
     editable = shouldBeEditable;
     basics->setEditable (editable);
+    levels->setEditable (editable);
+    trim->setEditable (editable);
     triggers->setEditable (editable);
     timeLoops->setEnabled (editable);
     effects->setEnabled (editable);
@@ -1076,6 +1447,8 @@ void CueInspector::refresh()
 
     basics->refresh();
     timeLoops->refresh();
+    levels->refresh();
+    trim->refresh();
     triggers->refresh();
     effects->refresh();
 }
