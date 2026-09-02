@@ -56,6 +56,8 @@ public:
     std::function<void (int row)> onEditNotes;
     /** 'D': the duration lives in the inspector's time tab. */
     std::function<void (int row)> onEditDuration;
+    /** The controller knows which cues have played (for the second colour). */
+    std::function<bool (const juce::Uuid& id)> hasPlayed;
 
     /** Opens the inline editor for a cell (number / name / pre-wait / post-wait). */
     void beginCellEdit (int row, ColumnId column);
@@ -117,6 +119,7 @@ private:
     CueList& cues;
     juce::AudioFormatManager& formats;
     juce::ApplicationCommandManager& commands;
+    int editGeneration = 0;   // bumps for every cell editor so a stale async commit cannot close a newer one
     TableBox table;
     std::vector<AudioEngine::PlayingCue> playing;
     std::unique_ptr<CellEditor> cellEditor;

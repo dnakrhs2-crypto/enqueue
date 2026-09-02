@@ -181,6 +181,18 @@ void TimeLoopsPanel::refresh()
         return;
     }
 
+    {
+        bool editing = false;
+
+        for (auto* e : { &startEditor, &endEditor, &countEditor, &rateEditor })
+            editing = editing || e->hasKeyboardFocus (true);
+
+        if (editing && ! shownId.isNull() && shownId != cue->id && document.cues.indexOf (shownId) >= 0)
+            return;   // keep showing the cue being edited until its commit lands
+
+        shownId = cue->id;
+    }
+
     if (! startEditor.hasKeyboardFocus (true))
         startEditor.setText (formatTimeMs (cue->regionStart()), false);
 
@@ -228,13 +240,16 @@ void TimeLoopsPanel::updateSelected (const juce::String& name, const std::functi
     if (refreshing || cancellingEdit)
         return;
 
-    const int index = document.cues.getSelectedIndex();
+    const int index = shownId.isNull() ? document.cues.getSelectedIndex() : document.cues.indexOf (shownId);
 
     if (! document.cues.isValidIndex (index))
         return;
 
     document.perform (name, [this, index, mutator] { document.cues.update (index, mutator); }, { coalesceKey, false });
     pushLiveRegion();
+
+    if (const auto* selected = document.cues.getSelected(); selected != nullptr && selected->id != shownId)
+        refresh();
 }
 
 void TimeLoopsPanel::pushLiveRegion()

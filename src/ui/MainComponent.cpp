@@ -28,7 +28,30 @@ namespace
 
 bool MainComponent::HotkeyListener::keyPressed (const juce::KeyPress& key, juce::Component*)
 {
-    return owner.controller.handleHotkey (key);
+    const int code = key.getKeyCode();
+
+    if (heldKeys.count (code) != 0)
+        return owner.controller.handleHotkeyRepeat (key);   // auto-repeat of a held hotkey: swallowed
+
+    const bool handled = owner.controller.handleHotkey (key);
+
+    if (handled)
+        heldKeys.insert (code);
+
+    return handled;
+}
+
+bool MainComponent::HotkeyListener::keyStateChanged (bool, juce::Component*)
+{
+    for (auto it = heldKeys.begin(); it != heldKeys.end();)
+    {
+        if (! juce::KeyPress::isKeyCurrentlyDown (*it))
+            it = heldKeys.erase (it);
+        else
+            ++it;
+    }
+
+    return false;
 }
 
 MainComponent::MainComponent (AudioEngine& e, AppSettings& s, juce::ApplicationCommandManager& cm)
@@ -61,6 +84,7 @@ MainComponent::MainComponent (AudioEngine& e, AppSettings& s, juce::ApplicationC
         editCues (rows, name, mutator);
     };
     table.onEditNotes = [this] (int) { inspector.showNotes(); };
+    table.hasPlayed = [this] (const juce::Uuid& id) { return controller.hasPlayed (id); };
     table.onEditDuration = [this] (int) { inspector.showTimeTab(); };
 
     inspector.onOpenPluginManager = [this] { showPluginManager(); };
@@ -1075,14 +1099,33 @@ void MainComponent::showLoadToTimeDialog()
             return;
         }
 
+        const auto* c = safeThis->document.cues.getSelected();
+
+        if (c == nullptr)
+            return;
+
+        // the dialog speaks cue-timeline seconds (rate applied); the engine wants file seconds inside the region
+        const double total = c->effectiveLength();
+
         if (fromEnd)
         {
-            const auto* c = safeThis->document.cues.getSelected();
-            const double length = c != nullptr ? c->passLength() : 0.0;
-            seconds = juce::jmax (0.0, length - seconds);
+            if (total < 0.0)
+            {
+                safeThis->transport.showStatus (ko ("무한 루프 큐는 끝에서부터 로드할 수 없습니다"), true);
+                return;
+            }
+
+            seconds = juce::jmax (0.0, total - seconds);
         }
 
-        safeThis->controller.loadSelected (seconds);
+        if (total >= 0.0 && seconds >= total)
+        {
+            safeThis->transport.showStatus (ko ("큐 길이를 넘는 위치입니다: ") + formatTimeMs (seconds), true);
+            return;
+        }
+
+        const double passSeconds = c->passLength() > 0.0 ? std::fmod (seconds, c->passLength()) : 0.0;   // inside the first pass
+        safeThis->controller.loadSelected (passSeconds * c->audio.rate);
     }), true);
 
     focusAlertEditor (*alert, "time");
@@ -1426,6 +1469,7 @@ void MainComponent::fireCloseCueThen (std::function<void()> then)
 
     closeContinuation = std::move (then);
     closeDeadlineMs = juce::Time::getMillisecondCounterHiRes() + 120000.0;
+    closeCueId = document.cues.get (index).id;
     controller.fireSequence (index);
     transport.showStatus (ko ("닫을 때 큐 재생 중: ") + document.settings.startOnCloseCue + ko (" (끝나면 종료)"), false);
 }
@@ -1529,6 +1573,8 @@ void MainComponent::newProject()
     engine.getMasterChain().clear();
     document.newProject();
     engine.setPatches (document.patches);
+    controller.clearPlayed();
+    autoLoadedId = juce::Uuid::null();
     ignorePluginChangesBriefly();
 }
 
@@ -1578,6 +1624,8 @@ void MainComponent::openProjectFile (const juce::File& file)
     engine.clearCueChains();
     engine.getMasterChain().clear();
     document.adopt (std::move (candidate), file);
+    controller.clearPlayed();
+    autoLoadedId = juce::Uuid::null();
     document.cues.setLockPlayheadToSelection (document.settings.lockPlayheadToSelection);
 
     settings.setLastProjectFile (file);
@@ -1650,9 +1698,12 @@ void MainComponent::reconcileChainsAfterRestore (const ProjectSnapshot& snapshot
             if (! cue.plugins.empty())
                 errors.addArray (engine.getCueChain (cue.id).restore (cue.plugins, factory));
         }
-        else if (snapshot.pluginStatesCaptured && ! chain->matchesStructure (cue.plugins))
+        else if (snapshot.pluginStatesCaptured)
         {
-            errors.addArray (chain->restore (cue.plugins, factory));
+            if (chain->matchesStructure (cue.plugins))
+                chain->applyStates (cue.plugins);   // same plugins, restored preset / parameters
+            else
+                errors.addArray (chain->restore (cue.plugins, factory));
         }
     }
 
@@ -1660,8 +1711,13 @@ void MainComponent::reconcileChainsAfterRestore (const ProjectSnapshot& snapshot
         if (liveIds.count (id.toString()) == 0)
             engine.removeCueChain (id);
 
-    if (snapshot.pluginStatesCaptured && ! engine.getMasterChain().matchesStructure (document.masterPlugins))
-        errors.addArray (engine.getMasterChain().restore (document.masterPlugins, factory));
+    if (snapshot.pluginStatesCaptured)
+    {
+        if (engine.getMasterChain().matchesStructure (document.masterPlugins))
+            engine.getMasterChain().applyStates (document.masterPlugins);
+        else
+            errors.addArray (engine.getMasterChain().restore (document.masterPlugins, factory));
+    }
 
     // running players follow the restored model: orphans stop, the others take the restored live values
     for (const auto& p : engine.getPlayingCues())
@@ -1855,6 +1911,12 @@ void MainComponent::confirmDiscardChangesThen (std::function<void()> action)
         return;
     }
 
+    if (discardDialog != nullptr)   // already asking (a second close request while the dialog is up)
+    {
+        discardDialog->toFront (true);
+        return;
+    }
+
     auto* alert = new juce::AlertWindow (ko ("변경 사항 저장"),
                                          "\"" + document.getDisplayName() + "\"" + ko ("에 저장하지 않은 변경 사항이 있습니다. 저장할까요?"),
                                          juce::MessageBoxIconType::QuestionIcon, this);
@@ -1862,11 +1924,16 @@ void MainComponent::confirmDiscardChangesThen (std::function<void()> action)
     alert->addButton (ko ("저장 안 함"), 2);
     alert->addButton (ko ("취소"), 0, juce::KeyPress (juce::KeyPress::escapeKey));
     alert->setVisible (true);
+    discardDialog = alert;
 
-    alert->enterModalState (true, juce::ModalCallbackFunction::create ([this, action] (int result)
+    juce::Component::SafePointer<MainComponent> safeThis (this);
+    alert->enterModalState (true, juce::ModalCallbackFunction::create ([safeThis, action] (int result)
     {
+        if (safeThis == nullptr)
+            return;
+
         if (result == 1)
-            saveProject (false, [action] (bool ok) { if (ok && action) action(); });
+            safeThis->saveProject (false, [action] (bool ok) { if (ok && action) action(); });
         else if (result == 2 && action)
             action();
     }), true);
@@ -1939,12 +2006,12 @@ void MainComponent::timerCallback()
     transport.setGoLocked (controller.isGoLocked());
     inspector.setPlayback (playing);
 
-    if (closeContinuation != nullptr)   // "start on close" cue: quit once it has finished (or after the deadline)
+    if (closeContinuation != nullptr)   // "start on close" cue: quit once its run has finished (or after the deadline)
     {
         const double now = juce::Time::getMillisecondCounterHiRes();
-        const bool startedLongEnoughAgo = now > closeDeadlineMs - 120000.0 + 1000.0;   // give a pre-wait a second to start
+        const bool runOver = ! engine.isPlaying (closeCueId) && ! controller.hasPendingFor (closeCueId);
 
-        if ((running == 0 && startedLongEnoughAgo) || now > closeDeadlineMs)
+        if (runOver || now > closeDeadlineMs)
         {
             auto then = std::move (closeContinuation);
             closeContinuation = nullptr;
@@ -1980,6 +2047,20 @@ void MainComponent::cueChanged (int index)
 {
     if (index == document.cues.getPlayheadIndex())
         updateTransportStandby();
+
+    // a loaded instance holds a copy of the cue: after an edit it would play the old settings
+    if (document.cues.isValidIndex (index))
+    {
+        const auto& cue = document.cues.get (index);
+
+        if (engine.isLoaded (cue.id))
+        {
+            engine.unload (cue.id);
+
+            if (! cue.fileMissing && cue.file != juce::File())
+                engine.load (cue, 0.0);
+        }
+    }
 }
 
 void MainComponent::cueSelectionChanged (int)
@@ -1992,13 +2073,22 @@ void MainComponent::playheadChanged (int index)
     updateTransportStandby();
     commands.commandStatusChanged();
 
-    // auto-load: the standby cue is prepared as soon as the playhead lands on it
+    // auto-load: the standby cue is prepared as soon as the playhead lands on it; the previous one is let go
+    const juce::Uuid standbyId = document.cues.isValidIndex (index) ? document.cues.get (index).id : juce::Uuid::null();
+
+    if (! autoLoadedId.isNull() && autoLoadedId != standbyId)
+    {
+        engine.unload (autoLoadedId);
+        autoLoadedId = juce::Uuid::null();
+    }
+
     if (document.cues.isValidIndex (index))
     {
         const auto& cue = document.cues.get (index);
 
         if (cue.autoLoad && ! cue.fileMissing && cue.file != juce::File() && ! engine.isLoaded (cue.id) && ! engine.isPlaying (cue.id))
-            engine.load (cue, 0.0);
+            if (engine.load (cue, 0.0))
+                autoLoadedId = cue.id;
     }
 }
 

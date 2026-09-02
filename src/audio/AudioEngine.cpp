@@ -464,7 +464,7 @@ bool AudioEngine::play (const Cue& cue, const PlayOptions& options, juce::String
 
         for (auto& existing : players)
         {
-            if (existing->getCueId() == cue.id && existing->isLoadedNotStarted())
+            if (existing->getCueId() == cue.id && existing->isLoadedNotStarted() && ! existing->hasFinished() && ! existing->isStopPending())
             {
                 for (auto& other : players)
                 {
@@ -561,7 +561,7 @@ bool AudioEngine::isLoaded (const juce::Uuid& cueId) const
     const juce::ScopedLock sl (lock);
 
     for (auto& p : players)
-        if (p->getCueId() == cueId && p->isLoadedNotStarted())
+        if (p->getCueId() == cueId && p->isLoadedNotStarted() && ! p->hasFinished() && ! p->isStopPending())
             return true;
 
     return false;
@@ -816,6 +816,7 @@ std::vector<AudioEngine::PlayingCue> AudioEngine::getPlayingCues() const
         info.paused = p->isPaused();
         info.loaded = p->isLoadedNotStarted();
         info.audition = p->isAudition();
+        info.progress = p->getProgressFraction();
         info.startOrder = p->getStartOrder();
         result.push_back (info);
     }

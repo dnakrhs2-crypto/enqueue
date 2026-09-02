@@ -307,6 +307,20 @@ public:
             expectEquals (list.getPlayheadIndex(), -1);
         }
 
+        beginTest ("isNumberTaken sees other cues' numbers only");
+        {
+            CueList list;
+            Cue x, y;
+            x.number = "1";
+            y.number = "2";
+            list.add (x);
+            list.add (y);
+            expect (list.isNumberTaken ("1", y.id));
+            expect (! list.isNumberTaken ("1", x.id));
+            expect (! list.isNumberTaken ("3", y.id));
+            expect (! list.isNumberTaken ("", y.id));
+        }
+
         beginTest ("indexOf / findById find cues by id");
         {
             CueList list;

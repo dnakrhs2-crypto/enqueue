@@ -207,6 +207,8 @@ class Scheduler { public: using Clock = std::function<double()>;   // 초
 - [x] 커밋 590fddd.
 
 ### Task 2.8: 단계 2 마감 — README, 0.3.0 릴리스, 코덱스 리뷰, 메모리.
+- [x] 코덱스 read-only 리뷰(main→phase2 diff, 29건: 높음 15·중간 10·낮음 4) → **25건 반영**: ① Scheduler tick이 timed 시작을 먼저 돌린 뒤 watch 판정(+action 직전 재확인, cancelAll 중단, isPending) ② auto-follow 다음 큐를 UUID로 기억 ③ 예약 항목을 큐(owner)별로 묶어 재시작/2차 트리거 정지/리셋 시 그 큐 것만 취소(`cancelPendingFor`) ④ Undo 스냅샷에 다중 선택·플레이헤드 저장/복원 ⑤ 닫을 때 큐 = 그 큐의 재생+예약이 끝났을 때 종료 ⑥ stop-pending loaded 인스턴스는 GO/isLoaded 후보에서 제외 ⑦ 편집된 loaded 큐 재로드, 플레이헤드 이동 시 이전 자동 로드 해제 ⑧ 덕 중앙 관리(대상별 기여 합산, 끝난 큐 것만 제거) ⑨ 덕 램프 선형(지정 시간에 정확히 도달) ⑩ Undo 시 구조 같은 체인은 `applyStates`로 프리셋까지 복원 ⑪ 인스펙터/시간루프 패널 focus-lost 커밋은 편집 시작한 큐(shownId)에 적용 ⑫ 셀 편집 비동기 커밋 = cueId+generation ⑬ loaded 큐를 P/F/덕/페이드정지 대상에서 제외 ⑭ 셀 편집 Esc → 패닉 실행 ⑮ 벽시계 = 마지막 확인 이후 구간 검사(최대 5초) ⑰ 시간으로 로드 = 타임라인 초→파일 초 변환, 범위·무한루프 거부 ⑱ seek 시 리샘플러 flush(오디오 스레드에서) ⑲ PlayingCue.progress(가상 위치/총 길이)로 진행바 통일 ⑳ 번호 유일성 검사(인스펙터·셀 편집 거부, 경고음) ㉑ 핫키 검증(앱 예약 키·Ctrl/Alt 조합·중복 거부) + OS 키 반복 억제 ㉒ 플레이헤드 잠금 켤 때 즉시 동기화 ㉓ 파일 스키마 v3 ㉖ 두 번째 색 = 재생한 큐(`hasPlayed`) ㉗ pending 목록 정리 ㉘ tick 중 cancelAll ㉙ 종료 확인 창 단일화 + SafePointer. 회귀 테스트 8건 추가(991 tests).
+- [x] **보류 4건(알려진 한계)**: ⑯ 고정 reserve 한도(플레이어 256·표시 64·수거 16 초과 시 락 안 재할당 — 자동 로드 해제로 누적 원인 제거) ㉔ 패닉 페이드 중 새 GO 허용(큐랩과 같음, 의도) ㉕ getStates()가 플러그인 callback lock 없이 상태 캡처(JUCE 호스트와 동일) ⑳-재번호 충돌 검사(수동 편집만 거부).
 
 ---
 

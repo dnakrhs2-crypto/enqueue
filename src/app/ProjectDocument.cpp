@@ -174,6 +174,13 @@ ProjectSnapshot ProjectDocument::makeSnapshot (bool capturePluginStates) const
     if (const auto* selected = cues.getSelected())
         snapshot.selectedId = selected->id;
 
+    for (int i : cues.getSelectedIndices())
+        if (cues.isValidIndex (i))
+            snapshot.selectedIds.push_back (cues.get (i).id);
+
+    if (const auto* playhead = cues.getPlayhead())
+        snapshot.playheadId = playhead->id;
+
     if (capturePluginStates && snapshotDecorator)
     {
         snapshotDecorator (snapshot.project);
@@ -189,13 +196,21 @@ void ProjectDocument::restoreSnapshot (const ProjectSnapshot& snapshot)
     cues.replaceAll (snapshot.project.cues);
     masterPlugins = snapshot.project.masterPlugins;
 
-    if (! snapshot.selectedId.isNull())
-    {
-        const int index = cues.indexOf (snapshot.selectedId);
+    // selection (all of it), then the playhead: with the lock off they may differ
+    std::vector<int> indices;
 
-        if (index >= 0)
-            cues.setSelectedIndex (index);
-    }
+    for (const auto& id : snapshot.selectedIds)
+        if (const int index = cues.indexOf (id); index >= 0)
+            indices.push_back (index);
+
+    const int primary = snapshot.selectedId.isNull() ? -1 : cues.indexOf (snapshot.selectedId);
+
+    if (! indices.empty() || primary >= 0)
+        cues.setSelection (indices.empty() ? std::vector<int> { primary } : indices, primary);
+
+    if (! snapshot.playheadId.isNull())
+        if (const int index = cues.indexOf (snapshot.playheadId); index >= 0)
+            cues.setPlayheadIndex (index);
 
     dirty = true;
     notify();

@@ -53,8 +53,8 @@ public:
     {
         paused = p.paused;
         fadingOut = p.fadingOut;
-        fraction = p.lengthSeconds > 0.0 ? juce::jlimit (0.0, 1.0, p.positionSeconds / p.lengthSeconds) : 0.0;
-        infinite = p.lengthSeconds < 0.0;
+        fraction = p.progress >= 0.0 ? juce::jlimit (0.0, 1.0, p.progress) : 0.0;
+        infinite = p.progress < 0.0;
         colour = cue != nullptr && cue->color > 0 ? CueColors::get (cue->color) : juce::Colour();
 
         pauseButton.setButtonText (paused ? ko ("재개") : ko ("일시정지"));
