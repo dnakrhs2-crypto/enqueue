@@ -1,18 +1,97 @@
 #pragma once
 
+#include "ui/UiUtils.h"
+
 #include <juce_gui_basics/juce_gui_basics.h>
 
 namespace gocue
 {
 
-/** LookAndFeel_V4 with menus that can be read from the desk: 15 pt items, and the shortcut text drawn at the
-    same size as the item (V4 shrinks it to 75 %, which is unreadable on the dark menu). */
+/** LookAndFeel_V4 in the 큐랩 스타일 palette (see Palette), with 5 px corners and a faint gradient on buttons,
+    and menus that can be read from the desk: 15 pt items, the shortcut text drawn at the same size as the item
+    (V4 shrinks it to 75 %, which is unreadable on a dark menu). */
 class GoCueLookAndFeel : public juce::LookAndFeel_V4
 {
 public:
     GoCueLookAndFeel()
+        : juce::LookAndFeel_V4 (juce::LookAndFeel_V4::ColourScheme (
+              Palette::background, Palette::panel, Palette::panel, Palette::outline, Palette::text,
+              Palette::button, juce::Colours::white, Palette::standby, Palette::text))
     {
         setDefaultSansSerifTypefaceName ("Malgun Gothic");
+
+        setColour (juce::TextButton::buttonColourId, Palette::button);
+        setColour (juce::TextButton::buttonOnColourId, Palette::standby);
+        setColour (juce::TextButton::textColourOffId, Palette::text);
+        setColour (juce::TextButton::textColourOnId, juce::Colours::white);
+        setColour (juce::ComboBox::backgroundColourId, Palette::field);
+        setColour (juce::ComboBox::outlineColourId, Palette::outline);
+        setColour (juce::ComboBox::arrowColourId, Palette::dimText);
+        setColour (juce::ComboBox::textColourId, Palette::text);
+        setColour (juce::ComboBox::focusedOutlineColourId, Palette::standby);
+        setColour (juce::TextEditor::backgroundColourId, Palette::field);
+        setColour (juce::TextEditor::outlineColourId, Palette::outline);
+        setColour (juce::TextEditor::focusedOutlineColourId, Palette::standby);
+        setColour (juce::TextEditor::textColourId, Palette::text);
+        setColour (juce::TextEditor::highlightColourId, Palette::standby.withAlpha (0.45f));
+        setColour (juce::CaretComponent::caretColourId, Palette::text);
+        setColour (juce::Label::textColourId, Palette::text);
+        setColour (juce::ToggleButton::textColourId, Palette::text);
+        setColour (juce::ToggleButton::tickColourId, Palette::standby);
+        setColour (juce::ToggleButton::tickDisabledColourId, Palette::dimText);
+        setColour (juce::TableHeaderComponent::backgroundColourId, Palette::header);
+        setColour (juce::TableHeaderComponent::textColourId, Palette::text);
+        setColour (juce::TableHeaderComponent::outlineColourId, Palette::outline);
+        setColour (juce::TableHeaderComponent::highlightColourId, Palette::standby.withAlpha (0.35f));
+        setColour (juce::ListBox::backgroundColourId, Palette::background);
+        setColour (juce::ListBox::outlineColourId, Palette::outline);
+        setColour (juce::ScrollBar::thumbColourId, juce::Colour (0xff5e5e5e));
+        setColour (juce::ScrollBar::backgroundColourId, Palette::background);
+        setColour (juce::PopupMenu::backgroundColourId, Palette::panel);
+        setColour (juce::PopupMenu::textColourId, Palette::text);
+        setColour (juce::PopupMenu::headerTextColourId, Palette::dimText);
+        setColour (juce::PopupMenu::highlightedBackgroundColourId, Palette::standby);
+        setColour (juce::PopupMenu::highlightedTextColourId, juce::Colours::white);
+        setColour (juce::TabbedButtonBar::tabTextColourId, Palette::dimText);
+        setColour (juce::TabbedButtonBar::frontTextColourId, Palette::text);
+        setColour (juce::TabbedButtonBar::tabOutlineColourId, Palette::outline);
+        setColour (juce::TabbedButtonBar::frontOutlineColourId, Palette::outline);
+        setColour (juce::Slider::thumbColourId, Palette::standby);
+        setColour (juce::Slider::trackColourId, Palette::outline);
+        setColour (juce::Slider::backgroundColourId, Palette::field);
+        setColour (juce::Slider::textBoxBackgroundColourId, Palette::field);
+        setColour (juce::Slider::textBoxTextColourId, Palette::text);
+        setColour (juce::Slider::textBoxOutlineColourId, Palette::outline);
+        setColour (juce::AlertWindow::backgroundColourId, Palette::panel);
+        setColour (juce::AlertWindow::textColourId, Palette::text);
+        setColour (juce::AlertWindow::outlineColourId, Palette::outline);
+        setColour (juce::TooltipWindow::backgroundColourId, Palette::header);
+        setColour (juce::TooltipWindow::textColourId, Palette::text);
+        setColour (juce::TooltipWindow::outlineColourId, Palette::outline);
+        setColour (juce::ResizableWindow::backgroundColourId, Palette::background);
+        setColour (juce::DocumentWindow::textColourId, Palette::text);
+        setColour (juce::GroupComponent::outlineColourId, Palette::outline);
+        setColour (juce::GroupComponent::textColourId, Palette::dimText);
+        setColour (juce::ProgressBar::backgroundColourId, Palette::field);
+        setColour (juce::ProgressBar::foregroundColourId, Palette::standby);
+    }
+
+    /** Buttons: 5 px corners, a faint top-to-bottom gradient, a darker edge (V4 draws them flat with 6 px corners). */
+    void drawButtonBackground (juce::Graphics& g, juce::Button& button, const juce::Colour& backgroundColour,
+                               bool isMouseOverButton, bool isButtonDown) override
+    {
+        const auto bounds = button.getLocalBounds().toFloat().reduced (0.5f, 0.5f);
+        auto base = backgroundColour.withMultipliedAlpha (button.isEnabled() ? 1.0f : 0.5f);
+
+        if (isButtonDown)
+            base = base.darker (0.2f);
+        else if (isMouseOverButton)
+            base = base.brighter (0.08f);
+
+        g.setGradientFill (Palette::buttonGradient (base, bounds));
+        g.fillRoundedRectangle (bounds, Palette::cornerRadius);
+        g.setColour (base.darker (0.4f).withMultipliedAlpha (button.isEnabled() ? 1.0f : 0.5f));
+        g.drawRoundedRectangle (bounds, Palette::cornerRadius, 1.0f);
     }
 
     juce::Font getPopupMenuFont() override

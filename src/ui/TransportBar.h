@@ -2,6 +2,8 @@
 
 #include "model/Cue.h"
 
+#include "ui/UiUtils.h"
+
 #include <juce_gui_basics/juce_gui_basics.h>
 
 namespace gocue
@@ -54,8 +56,11 @@ private:
             else if (isMouseOver)
                 colour = colour.brighter (0.12f);
 
-            g.setColour (colour);
-            g.fillRoundedRectangle (getLocalBounds().toFloat(), 10.0f);
+            const auto bounds = getLocalBounds().toFloat();
+            g.setGradientFill (Palette::buttonGradient (colour, bounds));
+            g.fillRoundedRectangle (bounds, 8.0f);
+            g.setColour (colour.darker (0.4f));
+            g.drawRoundedRectangle (bounds.reduced (0.5f), 8.0f, 1.0f);
             g.setColour (findColour (juce::TextButton::textColourOffId));
             const auto label = getButtonText();
             const float size = juce::jmin ((float) getHeight() * 0.55f, label.length() > 3 ? 30.0f : 64.0f);

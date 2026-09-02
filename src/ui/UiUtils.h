@@ -72,22 +72,38 @@ inline double parseTimeText (juce::String text)
     return seconds >= 0.0 ? seconds : -1.0;
 }
 
+/** The "큐랩 스타일" theme (design pick 10, 2026-09-02): mid greys, blue selection, bootstrap-like status colours,
+    5 px corners and a faint vertical gradient on buttons. */
 namespace Palette
 {
-    const juce::Colour background   { 0xff1b1b1f };
-    const juce::Colour panel        { 0xff24242a };
-    const juce::Colour rowEven      { 0xff2a2a31 };
-    const juce::Colour rowOdd       { 0xff26262c };
-    const juce::Colour standby      { 0xff3d8bfd };
-    const juce::Colour playing      { 0xff1f7a3a };
-    const juce::Colour fadingOut    { 0xffb35f00 };
-    const juce::Colour paused       { 0xff8a7a1c };
-    const juce::Colour missing      { 0xffff6b6b };
-    const juce::Colour text         { 0xffe8e8ea };
-    const juce::Colour dimText      { 0xff9a9aa3 };
-    const juce::Colour goButton     { 0xff2ea043 };
-    const juce::Colour stopButton   { 0xff8b2f2f };
-    const juce::Colour outline      { 0xff3a3a44 };
+    const juce::Colour background   { 0xff2b2b2b };   // window / list / fields
+    const juce::Colour panel        { 0xff333333 };   // transport, inspector, footer, menus
+    const juce::Colour rowEven      { 0xff3a3a3a };
+    const juce::Colour rowOdd       { 0xff363636 };
+    const juce::Colour header       { 0xff404040 };   // table header
+    const juce::Colour button       { 0xff454545 };   // plain buttons
+    const juce::Colour field        { 0xff2b2b2b };   // text fields, combos
+    const juce::Colour standby      { 0xff2f80ed };   // selection, playhead, accent
+    const juce::Colour selected     { 0xff2c4a6e };   // selected row fill
+    const juce::Colour playing      { 0xff5cb85c };   // status colours: icons, progress, labels, cart fills
+    const juce::Colour fadingOut    { 0xffe9902b };
+    const juce::Colour paused       { 0xffe6c84a };
+    const juce::Colour playingRow   { 0xff2f4a2f };   // status colours as row backgrounds
+    const juce::Colour fadingRow    { 0xff4a3520 };
+    const juce::Colour pausedRow    { 0xff4a4020 };
+    const juce::Colour missing      { 0xffe8706a };
+    const juce::Colour text         { 0xfff5f5f5 };
+    const juce::Colour dimText      { 0xffa5a5a5 };
+    const juce::Colour goButton     { 0xff5cb85c };
+    const juce::Colour stopButton   { 0xffd9534f };
+    const juce::Colour outline      { 0xff4d4d4d };
+    constexpr float cornerRadius = 5.0f;
+
+    /** The faint top-to-bottom gradient every button carries. */
+    inline juce::ColourGradient buttonGradient (juce::Colour base, juce::Rectangle<float> bounds)
+    {
+        return juce::ColourGradient (base.brighter (0.10f), 0.0f, bounds.getY(), base.darker (0.12f), 0.0f, bounds.getBottom(), false);
+    }
 }
 
 } // namespace gocue

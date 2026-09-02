@@ -16,7 +16,7 @@ TransportBar::TransportBar (juce::ApplicationCommandManager& cm)
     addAndMakeVisible (goButton);
 
     pauseButton.setButtonText (ko ("일시정지 (P)"));
-    styleButton (pauseButton, Palette::standby.darker (0.4f));
+    styleButton (pauseButton, Palette::standby);
     pauseButton.onClick = [this] { commands.invokeDirectly (CommandIDs::pauseToggle, true); };
 
     fadeOutButton.setButtonText (ko ("페이드아웃 (F)"));
@@ -175,7 +175,7 @@ void TransportBar::setPlayingCount (int numPlaying, int numPaused)
         text << ko ("  (일시정지 ") << numPaused << ")";
 
     playingLabel.setText (text, juce::dontSendNotification);
-    playingLabel.setColour (juce::Label::textColourId, numPlaying > 0 ? Palette::playing.brighter (0.6f) : Palette::dimText);
+    playingLabel.setColour (juce::Label::textColourId, numPlaying > 0 ? Palette::playing : Palette::dimText);
 }
 
 void TransportBar::showStatus (const juce::String& message, bool isError)

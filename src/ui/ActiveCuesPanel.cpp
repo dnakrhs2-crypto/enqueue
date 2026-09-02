@@ -112,7 +112,7 @@ public:
 
         g.setColour (Palette::outline);
         g.fillRect (barArea);
-        g.setColour (paused ? Palette::paused.brighter (0.4f) : (fadingOut ? Palette::fadingOut : Palette::playing.brighter (0.3f)));
+        g.setColour (paused ? Palette::paused : (fadingOut ? Palette::fadingOut : Palette::playing));
 
         if (infinite)
             g.fillRect (barArea.withWidth (barArea.getWidth()));

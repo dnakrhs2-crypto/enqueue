@@ -304,9 +304,9 @@ void CueTable::paintRowBackground (juce::Graphics& g, int rowNumber, int width, 
         background = background.interpolatedWith (CueColors::get (colourIndex), 0.35f);
 
     if (isRunning)
-        background = running->paused ? Palette::paused : (running->fadingOut ? Palette::fadingOut : Palette::playing);
+        background = running->paused ? Palette::pausedRow : (running->fadingOut ? Palette::fadingRow : Palette::playingRow);
     else if (groupRunning)
-        background = background.interpolatedWith (Palette::playing, 0.45f);
+        background = background.interpolatedWith (Palette::playingRow, 0.6f);
 
     g.fillAll (background);
 
@@ -393,7 +393,7 @@ void CueTable::paintCell (juce::Graphics& g, int rowNumber, int columnId, int wi
             {
                 juce::Path tri;
                 tri.addTriangle (x, cy - 6.0f, x, cy + 6.0f, x + 10.0f, cy);
-                g.setColour (running->fadingOut ? juce::Colours::orange : juce::Colours::lightgreen);
+                g.setColour (running->fadingOut ? Palette::fadingOut : Palette::playing);
                 g.fillPath (tri);
             }
         }
