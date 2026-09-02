@@ -96,12 +96,31 @@ public:
 
     juce::Font getPopupMenuFont() override
     {
-        return juce::Font (juce::FontOptions (15.0f));
+        return juce::Font (juce::FontOptions (18.0f));
+    }
+
+    /** Taller items than V4's 1.3 x font: V4 caps the drawn font at item height / 1.3, so without this the 18 pt
+        font would be squeezed back to ~16. */
+    void getIdealPopupMenuItemSize (const juce::String& text, bool isSeparator, int standardMenuItemHeight,
+                                    int& idealWidth, int& idealHeight) override
+    {
+        LookAndFeel_V4::getIdealPopupMenuItemSize (text, isSeparator, standardMenuItemHeight, idealWidth, idealHeight);
+
+        if (! isSeparator)
+        {
+            idealHeight = juce::jmax (idealHeight, juce::roundToInt (getPopupMenuFont().getHeight() * 1.7f));
+            idealWidth += 20;
+        }
     }
 
     juce::Font getMenuBarFont (juce::MenuBarComponent&, int, const juce::String&) override
     {
-        return juce::Font (juce::FontOptions (15.0f));
+        return juce::Font (juce::FontOptions (17.0f));
+    }
+
+    int getDefaultMenuBarHeight() override
+    {
+        return 30;
     }
 
     void drawPopupMenuItem (juce::Graphics& g, const juce::Rectangle<int>& area,

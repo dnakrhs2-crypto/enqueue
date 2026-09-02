@@ -21,7 +21,7 @@ namespace gocue
 
 namespace
 {
-    constexpr int menuBarHeight = 24;
+    constexpr int menuBarHeight = 30;   // 17 pt menu titles
     constexpr int transportHeight = 148;
     constexpr int footerHeight = 30;
     constexpr double pluginChangeGraceMs = 1500.0;
