@@ -32,6 +32,7 @@ enum : juce::CommandID
     addControlCue,        // Ctrl+9
     addWaitCue,
     addMemoCue,
+    toggleSequenceRecording,   // Ctrl+Shift+E
     revertFade,           // Ctrl+Shift+R
     fetchFadeLevels,      // Ctrl+Shift+T
     removeCue,

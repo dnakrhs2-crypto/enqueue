@@ -263,7 +263,7 @@ void MainComponent::getAllCommands (juce::Array<juce::CommandID>& ids)
                     CommandIDs::loadCue, CommandIDs::loadToTime, CommandIDs::resetCue, CommandIDs::resetAll,
                     CommandIDs::addCue, CommandIDs::addFadeCue, CommandIDs::addDevampCue, CommandIDs::addGroupCue, CommandIDs::groupSelectedCues,
                     CommandIDs::ungroupSelected, CommandIDs::collapseAllGroups, CommandIDs::expandAllGroups,
-                    CommandIDs::addControlCue, CommandIDs::addWaitCue, CommandIDs::addMemoCue,
+                    CommandIDs::addControlCue, CommandIDs::addWaitCue, CommandIDs::addMemoCue, CommandIDs::toggleSequenceRecording,
                     CommandIDs::revertFade, CommandIDs::fetchFadeLevels, CommandIDs::removeCue, CommandIDs::duplicateCue,
                     CommandIDs::moveCueUp, CommandIDs::moveCueDown, CommandIDs::selectAll,
                     CommandIDs::copyCues, CommandIDs::cutCues, CommandIDs::pasteCues, CommandIDs::pasteCueProperties,
@@ -417,6 +417,14 @@ void MainComponent::getCommandInfo (juce::CommandID commandID, juce::Application
         case CommandIDs::addMemoCue:
             result.setInfo (ko ("메모 큐 추가"), ko ("아무것도 하지 않는 큐 (목록 안의 메모)"), cueMenu, 0);
             result.setActive (canEdit);
+            break;
+
+        case CommandIDs::toggleSequenceRecording:
+            result.setInfo (controller.isRecording() ? ko ("시퀀스 녹음 정지 (") + juce::String (controller.getNumRecorded()) + ko ("개 기록됨)") : ko ("시퀀스 녹음 시작..."),
+                            ko ("녹음 중 시작되는 큐와 시각을 기록해 정지할 때 타임라인 그룹(시작 큐 + 프리웨이트)으로 만듦"), cueMenu, 0);
+            result.addDefaultKeypress ('E', ModifierKeys::commandModifier | ModifierKeys::shiftModifier);
+            result.setActive (canEdit || controller.isRecording());
+            result.setTicked (controller.isRecording());
             break;
 
         case CommandIDs::expandAllGroups:
@@ -734,6 +742,10 @@ bool MainComponent::perform (const InvocationInfo& info)
             addControlCue (ControlKind::memo);
             break;
 
+        case CommandIDs::toggleSequenceRecording:
+            toggleSequenceRecording();
+            break;
+
         case CommandIDs::expandAllGroups:
             setAllGroupsCollapsed (false);
             break;
@@ -939,6 +951,8 @@ juce::PopupMenu MainComponent::getMenuForIndex (int topLevelMenuIndex, const juc
             menu.addCommandItem (&commands, CommandIDs::addControlCue);
             menu.addCommandItem (&commands, CommandIDs::addWaitCue);
             menu.addCommandItem (&commands, CommandIDs::addMemoCue);
+            menu.addSeparator();
+            menu.addCommandItem (&commands, CommandIDs::toggleSequenceRecording);
             menu.addCommandItem (&commands, CommandIDs::groupSelectedCues);
             menu.addCommandItem (&commands, CommandIDs::ungroupSelected);
             menu.addCommandItem (&commands, CommandIDs::collapseAllGroups);
@@ -1156,6 +1170,67 @@ void MainComponent::addControlCue (ControlKind kind)
 
         const int index = document.cues.addAfter (std::move (control), selected);
         document.cues.setSelectedIndex (index);
+    });
+}
+
+void MainComponent::toggleSequenceRecording()
+{
+    if (! controller.isRecording())
+    {
+        if (showMode)
+            return;
+
+        controller.startRecording();
+        commands.commandStatusChanged();
+        return;
+    }
+
+    const auto starts = controller.stopRecording();
+    commands.commandStatusChanged();
+
+    if (starts.empty())
+    {
+        transport.showStatus (ko ("시퀀스 녹음: 기록된 큐가 없어 그룹을 만들지 않았습니다"), false);
+        return;
+    }
+
+    const int selected = document.cues.getSelectedIndex();
+    const bool autoNumber = document.settings.autoNumber;
+    const double increment = document.settings.numberIncrement;
+
+    document.perform (ko ("시퀀스 녹음 → 타임라인 그룹"), [this, starts, selected, autoNumber, increment]
+    {
+        Cue group;
+        group.type = CueType::group;
+        group.group.mode = GroupMode::timeline;
+        group.name = ko ("녹음한 시퀀스 ") + juce::Time::getCurrentTime().formatted ("%H:%M");
+        const int at = selected >= 0 ? document.cues.subtreeEnd (selected) : document.cues.size();
+
+        if (autoNumber)
+            group.number = CueNumbering::next (document.cues.getAll(), at, increment);
+
+        const auto groupId = group.id;
+        const int groupIndex = document.cues.addAfter (std::move (group), selected);
+        int insertAt = groupIndex + 1;
+
+        for (const auto& s : starts)
+        {
+            const auto* target = document.cues.findById (s.cueId);
+
+            if (target == nullptr)
+                continue;
+
+            Cue start;
+            start.type = CueType::control;
+            start.control.kind = ControlKind::start;
+            start.control.targetId = s.cueId;
+            start.preWaitSeconds = std::round (s.seconds * 1000.0) / 1000.0;
+            start.name = ko ("시작: ") + target->name;
+            start.parentId = groupId;
+            insertAt = document.cues.add (std::move (start), insertAt) + 1;
+        }
+
+        document.cues.setSelectedIndex (groupIndex);
     });
 }
 

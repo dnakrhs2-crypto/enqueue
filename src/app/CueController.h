@@ -110,6 +110,14 @@ public:
     /** Random groups pick a child with this (0 .. count-1); tests inject a deterministic one. */
     std::function<int (int count)> randomChoice;
 
+    /** Sequence recording: while recording, every cue that starts is remembered with the time since the recording
+        began; stopRecording() hands the list over (the app turns it into a timeline group of start cues). */
+    struct RecordedStart { juce::Uuid cueId; double seconds; };
+    void startRecording();
+    std::vector<RecordedStart> stopRecording();
+    bool isRecording() const noexcept { return recording; }
+    int getNumRecorded() const noexcept { return (int) recorded.size(); }
+
     std::function<void (const juce::String& message, bool isError)> onStatus;
     std::function<void()> onGoRejected;
     /** Seconds clock; tests inject a fake one (also used by the scheduler entries this makes). */
@@ -143,6 +151,9 @@ private:
     struct Pending { int id; juce::Uuid owner; };
     std::vector<Pending> pending;
     GoResult triggerControl (const Cue& cue, int index, bool audition);
+    bool recording = false;
+    double recordingStart = 0.0;
+    std::vector<RecordedStart> recorded;
     std::map<juce::Uuid, double> waits;                            // wait cues: id -> end time
     struct PlaylistRun { std::vector<juce::Uuid> order; int position = 0; bool audition = false; juce::Uuid current = juce::Uuid::null(); };
     std::map<juce::Uuid, PlaylistRun> playlists;                  // running playlist groups

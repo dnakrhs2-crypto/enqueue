@@ -1035,6 +1035,29 @@ public:
                 document.cues.remove (document.cues.size() - 1);
         }
 
+        beginTest ("sequence recording remembers the started cues with their times");
+        {
+            now = 100.0;
+            document.cues.setPlayheadIndex (0);
+            controller.startRecording();
+            expect (controller.isRecording());
+            expect (controller.go() == CueController::GoResult::started);   // a at 0
+            controller.goKeyReleased();
+            now = 101.5;
+            expect (controller.go() == CueController::GoResult::started);   // b at 1.5
+            controller.goKeyReleased();
+            expectEquals (controller.getNumRecorded(), 2);
+            const auto starts = controller.stopRecording();
+            expect (! controller.isRecording());
+            expectEquals ((int) starts.size(), 2);
+            expect (starts[0].cueId == a.id);
+            expectWithinAbsoluteError (starts[0].seconds, 0.0, 1e-9);
+            expect (starts[1].cueId == b.id);
+            expectWithinAbsoluteError (starts[1].seconds, 1.5, 1e-9);
+            expectEquals (controller.getNumRecorded(), 0);
+            stopEverything();
+        }
+
         beginTest ("played cues are remembered for the second colour until reset");
         {
             controller.resetAll();

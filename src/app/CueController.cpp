@@ -550,6 +550,26 @@ CueController::GoResult CueController::trigger (const Cue& cue, bool audition)
         firstTriggerResult = result;
     }
 
+    if (recording && result == GoResult::started && ! cue.isGroup())   // a group's children record themselves
+        recorded.push_back ({ cue.id, juce::jmax (0.0, clock() - recordingStart) });
+
+    return result;
+}
+
+void CueController::startRecording()
+{
+    recording = true;
+    recordingStart = clock();
+    recorded.clear();
+    status (ko ("시퀀스 녹음 시작 — 지금부터 시작되는 큐와 시각을 기록합니다"));
+}
+
+std::vector<CueController::RecordedStart> CueController::stopRecording()
+{
+    recording = false;
+    auto result = std::move (recorded);
+    recorded.clear();
+    status (ko ("시퀀스 녹음 정지: ") + juce::String (result.size()) + ko ("개 기록"));
     return result;
 }
 

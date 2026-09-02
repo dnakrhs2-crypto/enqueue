@@ -97,6 +97,8 @@ private:
     void addGroupCue();
     /** Inserts a control cue of 'kind' after the selection (targeting it, when the kind needs a target). */
     void addControlCue (ControlKind kind);
+    /** Starts recording cue starts; stopping turns them into a timeline group of start cues. */
+    void toggleSequenceRecording();
     /** Wraps the selected cues (with their subtrees) in a new group. */
     void groupSelectedCues();
     /** Dissolves the selected group: its children move up one level. */
