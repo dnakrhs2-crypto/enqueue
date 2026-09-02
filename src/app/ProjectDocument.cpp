@@ -11,7 +11,53 @@ ProjectDocument::ProjectDocument()
     auto main = std::make_unique<Container>();
     main->info.id = juce::Uuid();
     main->info.name = juce::String::fromUTF8 ("\xEB\xA9\x94\xEC\x9D\xB8 \xED\x81\x90 \xEB\xA6\xAC\xEC\x8A\xA4\xED\x8A\xB8");   // 메인 큐 리스트
+    main->list.addListener (this);   // edits of an inactive list (control cues arm / retarget) dirty the document too
     containers.push_back (std::move (main));
+}
+
+std::vector<juce::Uuid> ProjectDocument::cueIdsOf (int container) const
+{
+    std::vector<juce::Uuid> ids;
+
+    if (container < 0 || container >= (int) containers.size())
+        return ids;
+
+    const auto& list = container == active ? cues : containers[(size_t) container]->list;
+
+    for (const auto& c : list.getAll())
+        ids.push_back (c.id);
+
+    return ids;
+}
+
+bool ProjectDocument::isNumberTaken (const juce::String& number, const juce::Uuid& exceptId) const
+{
+    if (number.isEmpty())
+        return false;
+
+    if (cues.isNumberTaken (number, exceptId))
+        return true;
+
+    for (const auto& c : containers)
+        if (c->list.isNumberTaken (number, exceptId))
+            return true;
+
+    return false;
+}
+
+bool ProjectDocument::isHotkeyTaken (const juce::String& hotkey, const juce::Uuid& exceptId) const
+{
+    if (hotkey.isEmpty())
+        return false;
+
+    bool taken = false;
+    const_cast<ProjectDocument*> (this)->forEachList ([&] (CueList& list)
+    {
+        for (const auto& c : list.getAll())
+            if (c.hotkey == hotkey && c.id != exceptId)
+                taken = true;
+    });
+    return taken;
 }
 
 //==============================================================================
@@ -30,19 +76,21 @@ bool ProjectDocument::isActiveCart() const noexcept
 
 void ProjectDocument::swapActive (int index)
 {
+    if (onBeforeContainerSwitch)
+        onBeforeContainerSwitch();   // pending cell / field edits belong to the list that is leaving
+
     const juce::ScopedValueSetter<bool> guard (switching, true);
 
     if (active >= 0 && active < (int) containers.size())
     {
         auto& old = containers[(size_t) active]->list;
-        old.replaceAll (cues.getAll());
-        old.restoreCursors (cues.getSelectedIndices(), cues.getSelectedIndex(), cues.getPlayheadIndex());
+        old.replaceAllWithCursors (cues.getAll(), cues.getSelectedIndices(), cues.getSelectedIndex(), cues.getPlayheadIndex());
     }
 
     active = juce::jlimit (0, (int) containers.size() - 1, index);
     auto& next = containers[(size_t) active]->list;
-    cues.replaceAll (next.getAll());
-    cues.restoreCursors (next.getSelectedIndices(), next.getSelectedIndex(), next.getPlayheadIndex());
+    // one round of notifications with the final cursors (no interim "playhead on row 0" that would auto-load)
+    cues.replaceAllWithCursors (next.getAll(), next.getSelectedIndices(), next.getSelectedIndex(), next.getPlayheadIndex());
     next.clear();   // one copy of the cues: they live in 'cues' now
 }
 
@@ -61,6 +109,7 @@ int ProjectDocument::addContainer (const juce::String& name, bool isCart)
     c->info.id = juce::Uuid();
     c->info.name = name.isNotEmpty() ? name : juce::String::fromUTF8 (isCart ? "\xEC\xB9\xB4\xED\x8A\xB8" : "\xED\x81\x90 \xEB\xA6\xAC\xEC\x8A\xA4\xED\x8A\xB8");
     c->info.isCart = isCart;
+    c->list.addListener (this);
     containers.push_back (std::move (c));
     markDirty();
     notifyContainers();
@@ -203,6 +252,7 @@ void ProjectDocument::newProject()
     auto main = std::make_unique<Container>();
     main->info.id = juce::Uuid();
     main->info.name = juce::String::fromUTF8 ("\xEB\xA9\x94\xEC\x9D\xB8 \xED\x81\x90 \xEB\xA6\xAC\xEC\x8A\xA4\xED\x8A\xB8");
+    main->list.addListener (this);
     containers.push_back (std::move (main));
     active = 0;
     cues.clear();
@@ -275,6 +325,7 @@ void ProjectDocument::adopt (Project project, const juce::File& projectFile)
         c->info.cartRows = list.cartRows;
         c->info.cartCols = list.cartCols;
         c->list.replaceAll (std::move (list.cues));
+        c->list.addListener (this);
         containers.push_back (std::move (c));
     }
 
@@ -434,6 +485,7 @@ void ProjectDocument::restoreSnapshot (const ProjectSnapshot& snapshot)
             c->info.cartRows = list.cartRows;
             c->info.cartCols = list.cartCols;
             c->list.replaceAll (list.cues);
+            c->list.addListener (this);
             containers.push_back (std::move (c));
         }
 
@@ -442,6 +494,7 @@ void ProjectDocument::restoreSnapshot (const ProjectSnapshot& snapshot)
             auto main = std::make_unique<Container>();
             main->info.id = juce::Uuid();
             main->info.name = juce::String::fromUTF8 ("\xEB\xA9\x94\xEC\x9D\xB8 \xED\x81\x90 \xEB\xA6\xAC\xEC\x8A\xA4\xED\x8A\xB8");
+            main->list.addListener (this);
             containers.push_back (std::move (main));
         }
 

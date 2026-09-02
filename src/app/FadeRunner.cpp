@@ -98,7 +98,7 @@ bool FadeRunner::start (const Cue& fadeCue, juce::String* error)
 
     const auto& data = fadeCue.fade;
 
-    if (data.targetId.isNull() || document.cues.findById (data.targetId) == nullptr)
+    if (data.targetId.isNull() || document.findCueAnywhere (data.targetId) == nullptr)
     {
         if (error != nullptr)
             *error = ko ("페이드 큐에 대상이 없습니다: ") + fadeCue.name;

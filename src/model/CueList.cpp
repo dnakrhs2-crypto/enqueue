@@ -196,6 +196,44 @@ void CueList::setCollapsed (int index, bool collapsed)
 
     cues[(size_t) index].group.collapsed = collapsed;
     listeners.call ([] (Listener& l) { l.cueListStructureChanged(); });
+
+    // a playhead hidden inside a collapsed group would fire what nobody sees: it moves to the group row
+    if (collapsed && isValidIndex (playhead) && playhead > index && playhead < subtreeEnd (index))
+        setPlayheadInternal (index, true);
+}
+
+void CueList::replaceAllWithCursors (std::vector<Cue> newCues, std::vector<int> selectedIndices, int primaryIndex, int playheadIndex)
+{
+    cues = std::move (newCues);
+
+    for (auto& c : cues)
+        c.sanitise();
+
+    sanitiseTree();
+    selection.clear();
+    primary = -1;
+    playhead = -1;
+
+    std::sort (selectedIndices.begin(), selectedIndices.end());
+    selectedIndices.erase (std::unique (selectedIndices.begin(), selectedIndices.end()), selectedIndices.end());
+    selectedIndices.erase (std::remove_if (selectedIndices.begin(), selectedIndices.end(), [this] (int i) { return ! isValidIndex (i); }), selectedIndices.end());
+    selection = std::move (selectedIndices);
+    primary = isValidIndex (primaryIndex) && std::binary_search (selection.begin(), selection.end(), primaryIndex) ? primaryIndex
+            : (selection.empty() ? -1 : selection.back());
+    playhead = isValidIndex (playheadIndex) ? playheadIndex : primary;
+
+    if (primary < 0 && ! cues.empty())
+    {
+        primary = 0;
+        selection.push_back (0);
+
+        if (playhead < 0)
+            playhead = 0;
+    }
+
+    notifyStructureChanged();
+    notifySelectionChanged();
+    notifyPlayheadChanged();
 }
 
 void CueList::sanitiseTree()
@@ -219,13 +257,19 @@ void CueList::sanitiseTree()
                 c.parentId = juce::Uuid::null();   // not directly inside that group (or it is not a group / does not exist)
 
             open.resize (found < 0 ? 0 : (size_t) found + 1);
+
+            if ((int) open.size() > maxDepth)
+            {
+                c.parentId = juce::Uuid::null();   // too deep: the tree helpers stop searching at this depth
+                open.clear();
+            }
         }
         else
         {
             open.clear();
         }
 
-        if (c.isGroup())
+        if (c.isGroup() && (int) open.size() < maxDepth)
             open.push_back (c.id);
     }
 }
@@ -277,6 +321,7 @@ int CueList::wrapInGroup (std::vector<int> indices, Cue group)
             c.parentId = group.id;   // the top-level rows of the block become the group's children
 
     const auto groupId = group.id;
+    const juce::Uuid playheadId = isValidIndex (playhead) ? cues[(size_t) playhead].id : juce::Uuid::null();
     cues.insert (cues.begin() + first, std::move (group));
     cues.insert (cues.begin() + first + 1, std::make_move_iterator (block.begin()), std::make_move_iterator (block.end()));
     sanitiseTree();
@@ -285,6 +330,14 @@ int CueList::wrapInGroup (std::vector<int> indices, Cue group)
     playhead = -1;
     notifyStructureChanged();
     setSelectedIndex (indexOf (groupId));
+
+    // with the lock off the playhead stays where it was (the group itself when it was on a wrapped row)
+    if (! lockPlayhead && ! playheadId.isNull())
+    {
+        const int kept = indexOf (playheadId);
+        setPlayheadInternal (kept >= 0 && std::find (movedIds.begin(), movedIds.end(), playheadId) == movedIds.end() ? kept : indexOf (groupId), false);
+    }
+
     return indexOf (groupId);
 }
 
@@ -296,6 +349,7 @@ bool CueList::ungroup (int index)
     const auto groupId = cues[(size_t) index].id;
     const auto parent = cues[(size_t) index].parentId;
     const int end = subtreeEnd (index);
+    const juce::Uuid playheadId = isValidIndex (playhead) ? cues[(size_t) playhead].id : juce::Uuid::null();
 
     for (int i = index + 1; i < end; ++i)
         if (cues[(size_t) i].parentId == groupId)
@@ -308,6 +362,13 @@ bool CueList::ungroup (int index)
     playhead = -1;
     notifyStructureChanged();
     setSelectedIndex (juce::jmin (index, size() - 1));
+
+    if (! lockPlayhead && ! playheadId.isNull())
+    {
+        const int kept = indexOf (playheadId);
+        setPlayheadInternal (kept >= 0 ? kept : juce::jmin (index, size() - 1), false);
+    }
+
     return true;
 }
 
@@ -419,9 +480,22 @@ int CueList::duplicate (int index)
         copies.push_back (std::move (copy));
     }
 
-    for (size_t i = 1; i < copies.size(); ++i)
-        if (const auto it = newIds.find (copies[i].parentId); it != newIds.end())
-            copies[i].parentId = it->second;
+    for (size_t i = 0; i < copies.size(); ++i)
+    {
+        auto& copy = copies[i];
+
+        if (const auto it = newIds.find (copy.parentId); i > 0 && it != newIds.end())
+            copy.parentId = it->second;
+
+        // references inside the copied subtree follow the copies; the rest keep pointing outside
+        if (const auto it = newIds.find (copy.targetId()); ! copy.targetId().isNull() && it != newIds.end())
+            copy.setTargetId (it->second);
+
+        if (const auto it = newIds.find (copy.control.secondTargetId); copy.isControl() && it != newIds.end())
+            copy.control.secondTargetId = it->second;
+
+        copy.hotkey.clear();   // a hotkey stays unique
+    }
 
     const int at = end;
     cues.insert (cues.begin() + at, std::make_move_iterator (copies.begin()), std::make_move_iterator (copies.end()));
@@ -489,16 +563,36 @@ bool CueList::moveSubtrees (std::vector<int> indices, int insertIndex)
         return false;
 
     insertIndex = juce::jlimit (0, size(), insertIndex);
+
+    if (std::binary_search (indices.begin(), indices.end(), insertIndex))
+        return false;   // dropped onto one of the moved rows (its own place, or inside its own subtree): nothing to do
+
+    // the group the block joins: that of the first row that is not moving at / after the drop point,
+    // read before anything moves (after the removal the neighbour could be a different row)
+    juce::Uuid newParent = juce::Uuid::null();
+
+    for (int i = insertIndex; i < size(); ++i)
+        if (! std::binary_search (indices.begin(), indices.end(), i))
+        {
+            newParent = cues[(size_t) i].parentId;
+            break;
+        }
+
     int before = 0;
 
     for (int i : indices)
         if (i < insertIndex)
             ++before;
 
-    return moveIndices (std::move (indices), insertIndex - before);
+    return moveIndices (std::move (indices), insertIndex - before, &newParent);
 }
 
 bool CueList::moveIndices (std::vector<int> indices, int to)
+{
+    return moveIndices (std::move (indices), to, nullptr);
+}
+
+bool CueList::moveIndices (std::vector<int> indices, int to, const juce::Uuid* parentForMoved)
 {
     std::sort (indices.begin(), indices.end());
     indices.erase (std::unique (indices.begin(), indices.end()), indices.end());
@@ -524,7 +618,7 @@ bool CueList::moveIndices (std::vector<int> indices, int to)
     }
 
     to = juce::jlimit (0, size(), to);
-    const auto newParent = parentForInsertion (to);
+    const auto newParent = parentForMoved != nullptr ? *parentForMoved : parentForInsertion (to);
     std::vector<juce::Uuid> blockIds;
 
     for (const auto& c : block)

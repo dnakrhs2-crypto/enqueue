@@ -94,8 +94,13 @@ public:
         Raw rows: use moveSubtrees() from the UI so groups travel with their children. */
     bool moveIndices (std::vector<int> indices, int to);
     /** Moves the cues (with their subtrees) so that the block lands in front of the cue currently at 'insertIndex'
-        (size() = the end). The moved top-level rows join the group at that point. */
+        (size() = the end). The moved top-level rows join the group of the row that will follow them (decided
+        before anything moves). Dropping onto one of the moved rows is a no-op. */
     bool moveSubtrees (std::vector<int> indices, int insertIndex);
+    /** Replaces everything and puts the cursors where given, with one round of notifications (list switch). */
+    void replaceAllWithCursors (std::vector<Cue> newCues, std::vector<int> selectedIndices, int primaryIndex, int playheadIndex);
+    /** Nesting deeper than this is flattened by sanitiseTree(). */
+    static constexpr int maxDepth = 32;
     /** Replaces everything (project load). Selection and playhead reset to the first cue. */
     void replaceAll (std::vector<Cue> newCues);
     void clear();
@@ -151,6 +156,7 @@ private:
     void clampCursors();
     /** Nulls parent ids that do not point at a group directly enclosing the cue (keeps the pre-order invariant). */
     void sanitiseTree();
+    bool moveIndices (std::vector<int> indices, int to, const juce::Uuid* parentForMoved);
 
     std::vector<Cue> cues;
     std::vector<int> selection;   // sorted, unique

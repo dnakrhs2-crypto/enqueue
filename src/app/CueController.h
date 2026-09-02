@@ -53,8 +53,12 @@ public:
     /** Stops the selected cue. */
     void resetSelected();
     /** Stops one cue wherever it runs: its pending starts / follows, its fade (a fade cue), the fades aimed at it,
-        its playlist run / children (a group), its wait, and the engine instance. Every UI stop goes through here. */
-    void stopCue (const juce::Uuid& cueId);
+        its playlist run / children (a group), its wait, and the engine instance. Every UI stop goes through here.
+        'fade' = an audio instance fades out over its stop fade instead of stopping at once. */
+    void stopCue (const juce::Uuid& cueId, bool fade = false);
+    /** Fires one cue the way a hotkey / cart button does: the cue alone (no pre-wait, no sequence, no playhead move),
+        with its fade-stop-others and duck. */
+    GoResult fire (const juce::Uuid& cueId, bool audition = false);
     /** Project switch: nothing of the old project's runs may survive (fades, revert history, playlists, waits, ducks, played). */
     void resetForNewProject();
     /** Hard-stops everything, cancels pending waits and puts the playhead on the first cue. */
@@ -141,11 +145,15 @@ private:
     void status (const juce::String& message, bool isError = false);
     static juce::String cueLabel (int index, const Cue& cue);
     /** Fires a cue by id at once (it may have been edited since it was scheduled). */
-    void startById (const juce::Uuid& id, bool audition);
-    void scheduleStart (const juce::Uuid& id, double atSeconds, bool audition);
+    GoResult startById (const juce::Uuid& id, bool audition);
+    /** False when an immediate start failed (a scheduled one is true). */
+    bool scheduleStart (const juce::Uuid& id, double atSeconds, bool audition);
     AudioEngine::PlayOptions playOptions (bool audition) const;
-    void applyFadeStopOthers (const Cue& cue);
-    void applyDuck (const Cue& cue);
+    /** The cue plus, for a group, everything inside it: spared by its own fade-stop-others / duck. */
+    std::set<juce::Uuid> familyOf (const Cue& cue) const;
+    void applyFadeStopOthers (const Cue& cue, const std::set<juce::Uuid>& spare);
+    void applyDuck (const Cue& cue, const std::set<juce::Uuid>& spare);
+    void applyPendingGoto();
     /** Recomputes and applies the ducks of every target after a contribution changed. */
     void refreshDucks (double rampSeconds);
     void track (int schedulerId, const juce::Uuid& owner);
@@ -166,10 +174,23 @@ private:
     double recordingStart = 0.0;
     std::vector<RecordedStart> recorded;
     std::map<juce::Uuid, double> waits;                            // wait cues: id -> end time
-    struct PlaylistRun { std::vector<juce::Uuid> order; int position = 0; bool audition = false; juce::Uuid current = juce::Uuid::null(); };
+    struct PlaylistRun { std::vector<juce::Uuid> order; int position = 0; bool audition = false; juce::Uuid current = juce::Uuid::null(); int failures = 0; };
     std::map<juce::Uuid, PlaylistRun> playlists;                  // running playlist groups
     std::map<juce::Uuid, std::set<juce::Uuid>> randomUsed;        // random groups: children played this round
     int lastGroupEnterIndex = -1;                                 // set by startGroup() for "start first and enter"
+    const CueList* lastGroupEnterList = nullptr;                  // ... and the list that index belongs to
+    /** Cues being triggered right now (outermost first): a cue that starts itself, directly or through others, is refused. */
+    struct Dispatch { juce::Uuid id; bool isControl; };
+    std::vector<Dispatch> dispatchStack;
+    int dispatchDepth = 0;                                        // trigger() and fireSequence() frames on the stack
+    struct PendingGoto { bool set = false; int container = -1; juce::Uuid cueId = juce::Uuid::null(); } pendingGoto;
+    bool gotoApplied = false;                                     // go(): the playhead was placed by a goto, leave it
+    struct DepthGuard
+    {
+        explicit DepthGuard (CueController& c) : owner (c) { ++owner.dispatchDepth; }
+        ~DepthGuard() { if (--owner.dispatchDepth == 0) owner.applyPendingGoto(); }
+        CueController& owner;
+    };
     std::map<juce::Uuid, std::map<juce::Uuid, double>> ducks;   // target -> (ducking cue -> dB)
     std::set<juce::Uuid> played;
     juce::int64 lastWallClockSecond = -1;

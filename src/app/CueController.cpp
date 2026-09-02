@@ -136,17 +136,13 @@ CueController::GoResult CueController::triggerControl (const Cue& cue, int index
             break;
 
         case ControlKind::gotoCue:
-        {
-            // a target in another list / cart brings that one to the front first
-            if (&cues != &document.cues)
-                document.setActiveContainer (document.containerOf (targetCue.id));
-
-            const int activeIndex = document.cues.indexOf (targetCue.id);
-            lastGroupEnterIndex = activeIndex;   // go() puts the playhead here instead of past this cue
-            document.cues.setPlayheadIndex (activeIndex);
+            // applied once the outermost GO / sequence has finished walking its list: switching lists in the
+            // middle of a sequence would pull the rows out from under it
+            pendingGoto.set = true;
+            pendingGoto.container = document.containerOf (targetCue.id);
+            pendingGoto.cueId = targetCue.id;
             status (ko ("이동: ") + targetLabel);
             break;
-        }
 
         case ControlKind::arm:
         case ControlKind::disarm:
@@ -201,6 +197,9 @@ bool CueController::isGroupActive (const CueList& cues, int index) const
 
         if (engine.isPlaying (c.id) || fadeRunner.isRunning (c.id) || hasPendingFor (c.id) || playlists.count (c.id) != 0)
             return true;
+
+        if (const auto w = waits.find (c.id); w != waits.end() && clock() < w->second)
+            return true;   // a wait cue inside the group is still running
     }
 
     return false;
@@ -230,6 +229,7 @@ void CueController::stopGroup (const juce::Uuid& groupId, int fadeMs)
         const auto id = list->get (i).id;
         cancelPendingFor (id);
         playlists.erase (id);
+        waits.erase (id);
         fadeRunner.stop (id);
 
         if (! engine.isPlaying (id))
@@ -252,6 +252,7 @@ int CueController::startGroup (int index, bool audition)
 int CueController::startGroup (CueList& cues, int index, bool audition)
 {
     lastGroupEnterIndex = -1;
+    lastGroupEnterList = &cues;
 
     if (! cues.isValidIndex (index) || ! cues.get (index).isGroup())
         return juce::jmin (index + 1, cues.size());
@@ -401,27 +402,57 @@ void CueController::playlistStep (const juce::Uuid& groupId)
         run.current = childId;
         const double startAt = clock() + child->preWaitSeconds;
         const bool audition = run.audition;
-        scheduleStart (childId, startAt, audition);   // std::map: 'run' stays valid even if a nested playlist registers
 
-        // the next child follows when this one is over (or 'xf' seconds before its end for a crossfade)
-        track (scheduler.watch ([this, childId, startAt, crossfade, xf]
+        if (! scheduleStart (childId, startAt, audition))   // std::map: 'run' stays valid even if a nested playlist registers
+        {
+            // could not start (file missing ...): on to the next, but a list where nothing starts must not spin forever
+            if (++run.failures >= (int) run.order.size())
+                break;
+
+            ++run.position;
+            continue;
+        }
+
+        run.failures = 0;
+
+        // the pre-wait of the child after this one: a crossfade must start that much earlier to land on time
+        double nextPreWait = 0.0;
+
+        {
+            const int nextPos = run.position + 1 < (int) run.order.size() ? run.position + 1 : (loop && ! run.order.empty() ? 0 : -1);
+
+            if (nextPos >= 0)
+                if (const auto* nextChild = document.findCueAnywhere (run.order[(size_t) nextPos]))
+                    nextPreWait = juce::jmax (0.0, nextChild->preWaitSeconds);
+        }
+
+        // the next child follows when this one is over (or 'xf' seconds before its end for a crossfade); a group,
+        // a wait or a fade counts as running as long as the controller says so, not only while the engine plays it
+        track (scheduler.watch ([this, childId, startAt, crossfade, xf, nextPreWait]
                                 {
                                     if (clock() < startAt)
                                         return false;
 
-                                    if (! engine.isPlaying (childId))
+                                    if (! isCueActive (childId))
                                         return true;
 
-                                    if (! crossfade)
+                                    if (! crossfade || ! engine.isPlaying (childId))
                                         return false;
 
                                     const double remaining = remainingSecondsOf (childId);
-                                    return remaining >= 0.0 && remaining <= xf;
+                                    return remaining >= 0.0 && remaining <= xf + nextPreWait;
                                 },
-                                [this, groupId, childId, crossfade, xf]
+                                [this, groupId, childId, crossfade, xf, nextPreWait]
                                 {
                                     if (crossfade && engine.isPlaying (childId))
-                                        engine.fadeOutAndStop (childId, (int) std::lround (xf * 1000.0));
+                                    {
+                                        const int ms = (int) std::lround (xf * 1000.0);
+
+                                        if (nextPreWait > 0.0)   // fade out when the next one actually starts
+                                            track (scheduler.schedule (clock() + nextPreWait, [this, childId, ms] { if (engine.isPlaying (childId)) engine.fadeOutAndStop (childId, ms); }), groupId);
+                                        else
+                                            engine.fadeOutAndStop (childId, ms);
+                                    }
 
                                     if (auto next = playlists.find (groupId); next != playlists.end())
                                     {
@@ -446,14 +477,21 @@ bool CueController::playlistSkip (const juce::Uuid& groupId, int delta)
     cancelPendingFor (groupId);   // the follow watch of the current child
     const auto current = it->second.current;
 
-    if (! current.isNull() && engine.isPlaying (current))
+    if (! current.isNull())
     {
-        cancelPendingFor (current);
+        cancelPendingFor (current);   // still in its pre-wait: it must not come alive later next to the new entry
 
-        if (group != nullptr && group->group.crossfade && group->group.crossfadeSeconds > 0.0)
-            engine.fadeOutAndStop (current, (int) std::lround (group->group.crossfadeSeconds * 1000.0));
+        if (engine.isPlaying (current))
+        {
+            if (group != nullptr && group->group.crossfade && group->group.crossfadeSeconds > 0.0)
+                engine.fadeOutAndStop (current, (int) std::lround (group->group.crossfadeSeconds * 1000.0));
+            else
+                engine.fadeOutAndStop (current);
+        }
         else
-            engine.fadeOutAndStop (current);
+        {
+            stopCue (current);   // a nested group / wait / fade
+        }
     }
 
     it->second.position = juce::jmax (0, it->second.position + delta);
@@ -530,6 +568,15 @@ void CueController::cancelPendingFor (const juce::Uuid& cueId)
             scheduler.cancel (p.id);
 
     pending.erase (std::remove_if (pending.begin(), pending.end(), [&] (const Pending& p) { return p.owner == cueId; }), pending.end());
+
+    // the duck this cue put on the others is released with its cleanup watch (which was just cancelled)
+    bool ducked = false;
+
+    for (auto& target : ducks)
+        ducked = target.second.erase (cueId) > 0 || ducked;
+
+    if (ducked)
+        refreshDucks (0.2);
 }
 
 //==============================================================================
@@ -564,7 +611,24 @@ AudioEngine::PlayOptions CueController::playOptions (bool audition) const
 
 CueController::GoResult CueController::trigger (const Cue& cue, bool audition)
 {
+    // a cue that ends up starting itself (A -> start B -> start A, a group holding its own start cue) is refused
+    for (const auto& d : dispatchStack)
+        if (d.id == cue.id)
+        {
+            status (ko ("순환 참조라서 실행하지 않음: ") + cue.name, true);
+            return GoResult::failed;
+        }
+
+    if (dispatchStack.size() >= 32)
+    {
+        status (ko ("실행 사슬이 너무 깊어서 멈춤: ") + cue.name, true);
+        return GoResult::failed;
+    }
+
+    const DepthGuard depth (*this);
+    dispatchStack.push_back ({ cue.id, cue.isControl() });
     const auto result = triggerImpl (cue, audition);
+    dispatchStack.pop_back();
 
     if (! firstTriggerSeen)
     {
@@ -573,9 +637,34 @@ CueController::GoResult CueController::trigger (const Cue& cue, bool audition)
     }
 
     if (recording && result == GoResult::started && ! cue.isGroup())   // a group's children record themselves
-        recorded.push_back ({ cue.id, juce::jmax (0.0, clock() - recordingStart) });
+    {
+        bool underControl = false;   // a start control cue records itself, not what it starts (else the replay starts it twice)
+
+        for (const auto& d : dispatchStack)
+            underControl = underControl || d.isControl;
+
+        if (! underControl)
+            recorded.push_back ({ cue.id, juce::jmax (0.0, clock() - recordingStart) });
+    }
 
     return result;
+}
+
+void CueController::applyPendingGoto()
+{
+    if (! pendingGoto.set)
+        return;
+
+    pendingGoto.set = false;
+
+    if (pendingGoto.container >= 0 && pendingGoto.container != document.getActiveContainer())
+        document.setActiveContainer (pendingGoto.container);   // a target in another list / cart brings that one to the front
+
+    if (const int index = document.cues.indexOf (pendingGoto.cueId); index >= 0)
+    {
+        document.cues.setPlayheadIndex (index);
+        gotoApplied = true;
+    }
 }
 
 void CueController::startRecording()
@@ -786,7 +875,7 @@ CueController::GoResult CueController::triggerImpl (const Cue& cue, bool auditio
 }
 
 //==============================================================================
-void CueController::applyFadeStopOthers (const Cue& cue)
+void CueController::applyFadeStopOthers (const Cue& cue, const std::set<juce::Uuid>& spare)
 {
     if (! cue.fadeStopOthers.enabled)
         return;
@@ -814,12 +903,12 @@ void CueController::applyFadeStopOthers (const Cue& cue)
 
     // running fade cues are "others" too
     for (const auto& f : fadeRunner.getRunning())
-        if (f.fadeId != cue.id && inScope (f.fadeId))
+        if (spare.count (f.fadeId) == 0 && inScope (f.fadeId))
             fadeRunner.stop (f.fadeId);
 
     for (const auto& p : engine.getPlayingCues())
     {
-        if (p.id == cue.id || p.id == ownTarget || p.loaded)
+        if (spare.count (p.id) != 0 || p.id == ownTarget || p.loaded)
             continue;
 
         if (inScope (p.id))
@@ -849,7 +938,7 @@ void CueController::refreshDucks (double rampSeconds)
     }
 }
 
-void CueController::applyDuck (const Cue& cue)
+void CueController::applyDuck (const Cue& cue, const std::set<juce::Uuid>& spare)
 {
     if (! cue.duck.enabled)
         return;
@@ -858,7 +947,7 @@ void CueController::applyDuck (const Cue& cue)
 
     for (const auto& p : engine.getPlayingCues())
     {
-        if (p.id == cue.id || p.loaded)
+        if (spare.count (p.id) != 0 || p.loaded)
             continue;
 
         ducks[p.id][cue.id] = cue.duck.levelDb;
@@ -883,31 +972,51 @@ void CueController::applyDuck (const Cue& cue)
                             }), id);
 }
 
-void CueController::startById (const juce::Uuid& id, bool audition)
+std::set<juce::Uuid> CueController::familyOf (const Cue& cue) const
+{
+    std::set<juce::Uuid> family { cue.id };
+    int index = -1;
+
+    if (cue.isGroup())
+        if (const auto* list = document.listContaining (cue.id, &index))
+            for (int i : list->descendantsOf (index))
+                family.insert (list->get (i).id);
+
+    return family;
+}
+
+CueController::GoResult CueController::startById (const juce::Uuid& id, bool audition)
 {
     const auto* cue = document.findCueAnywhere (id);
 
     if (cue == nullptr)
-        return;   // deleted while it was waiting
+        return GoResult::failed;   // deleted while it was waiting
 
     const Cue copy = *cue;
+    const auto result = trigger (copy, audition);
 
-    if (trigger (copy, audition) != GoResult::started)
-        return;
+    if (result != GoResult::started)
+        return result;
 
-    applyFadeStopOthers (copy);
-    applyDuck (copy);
+    // a group's own fade-stop-others / duck must not hit the children it just started
+    const auto spare = familyOf (copy);
+    applyFadeStopOthers (copy, spare);
+    applyDuck (copy, spare);
+    return result;
 }
 
-void CueController::scheduleStart (const juce::Uuid& id, double atSeconds, bool audition)
+CueController::GoResult CueController::fire (const juce::Uuid& cueId, bool audition)
+{
+    return startById (cueId, audition);
+}
+
+bool CueController::scheduleStart (const juce::Uuid& id, double atSeconds, bool audition)
 {
     if (atSeconds <= clock())
-    {
-        startById (id, audition);
-        return;
-    }
+        return startById (id, audition) != GoResult::failed;
 
     track (scheduler.schedule (atSeconds, [this, id, audition] { startById (id, audition); }), id);
+    return true;
 }
 
 int CueController::sequenceEnd (int index) const
@@ -948,6 +1057,8 @@ int CueController::fireSequence (CueList& cues, int index, bool audition)
     if (! cues.isValidIndex (index))
         return juce::jmin (juce::jmax (index, 0), cues.size());
 
+    const DepthGuard depth (*this);   // a goto inside the sequence applies once this walk is over
+
     // the sequence walks the siblings of 'index' (a group counts as one cue; its children are its own business)
     const int parent = cues.parentIndexOf (index);
     const int bound = parent >= 0 ? cues.subtreeEnd (parent) : cues.size();
@@ -967,6 +1078,7 @@ int CueController::fireSequence (CueList& cues, int index, bool audition)
 
         const double startAt = t + cue.preWaitSeconds;
         lastGroupEnterIndex = -1;
+        lastGroupEnterList = nullptr;
 
         if (cue.armed)
             scheduleStart (cue.id, startAt, audition);
@@ -975,7 +1087,7 @@ int CueController::fireSequence (CueList& cues, int index, bool audition)
 
         // a devamp that starts the next cue itself is its own continuation: its continue mode is ignored
         if (cue.continueMode == ContinueMode::none || (cue.isDevamp() && cue.devamp.startNextCue))
-            return lastGroupEnterIndex >= 0 ? lastGroupEnterIndex : next;   // "start first and enter": the playhead goes inside
+            return lastGroupEnterIndex >= 0 && lastGroupEnterList == &cues ? lastGroupEnterIndex : next;   // "start first and enter": the playhead goes inside (this list only)
 
         if (cue.continueMode == ContinueMode::autoContinue)
         {
@@ -1061,7 +1173,15 @@ CueController::GoResult CueController::go (bool audition)
 
     firstTriggerSeen = false;
     firstTriggerResult = GoResult::started;
+    gotoApplied = false;
     const int after = fireSequence (index, audition);
+
+    if (gotoApplied)
+    {
+        gotoApplied = false;   // a goto cue in the sequence put the playhead where it wanted (maybe in another list)
+        status (ko ("GO: ") + cueLabel (index, copy));
+        return GoResult::started;
+    }
     const bool targeting = copy.isFade() || copy.isDevamp() || copy.isGroup() || copy.isControl();
     const bool firstFailed = copy.armed && copy.preWaitSeconds <= 0.0
                              && (targeting ? (firstTriggerSeen && firstTriggerResult == GoResult::failed) : ! engine.isPlaying (copy.id));
@@ -1271,7 +1391,7 @@ void CueController::hardStopAll()
     status (ko ("전체 즉시 정지"));
 }
 
-void CueController::stopCue (const juce::Uuid& cueId)
+void CueController::stopCue (const juce::Uuid& cueId, bool fade)
 {
     cancelPendingFor (cueId);   // its pre-wait / follow must not fire afterwards
     waits.erase (cueId);
@@ -1285,7 +1405,9 @@ void CueController::stopCue (const juce::Uuid& cueId)
     const auto* cue = document.findCueAnywhere (cueId);
 
     if (cue != nullptr && cue->isGroup())
-        stopGroup (cueId, 0);
+        stopGroup (cueId, fade ? -1 : 0);
+    else if (fade && engine.isPlaying (cueId))
+        engine.fadeOutAndStop (cueId);
     else
         engine.stop (cueId);
 }
@@ -1312,6 +1434,9 @@ void CueController::resetForNewProject()
     recorded.clear();
     recording = false;
     lastGroupEnterIndex = -1;
+    lastGroupEnterList = nullptr;
+    pendingGoto = {};
+    gotoApplied = false;
 }
 
 void CueController::resetAll()

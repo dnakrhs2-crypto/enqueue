@@ -66,6 +66,13 @@ public:
     const Cue* findCueAnywhere (const juce::Uuid& id) const noexcept;
     /** Every list (the active one first), for scans (hotkeys, wall clock). */
     void forEachList (const std::function<void (CueList&)>& fn);
+    /** Ids of every cue in a container (the active one included). */
+    std::vector<juce::Uuid> cueIdsOf (int container) const;
+    /** Project-wide uniqueness: numbers and hotkeys must not repeat across lists / carts. */
+    bool isNumberTaken (const juce::String& number, const juce::Uuid& exceptId) const;
+    bool isHotkeyTaken (const juce::String& hotkey, const juce::Uuid& exceptId) const;
+    /** Called right before the active list is swapped out (commit pending edits). */
+    std::function<void()> onBeforeContainerSwitch;
     std::vector<AudioPatch> patches;   // never empty; patches[0] is the default
     WorkspaceSettings settings;
 
