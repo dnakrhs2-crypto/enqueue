@@ -120,6 +120,19 @@ AudioEngine::PlayOptions CueController::playOptions (bool audition) const
 
 CueController::GoResult CueController::trigger (const Cue& cue, bool audition)
 {
+    const auto result = triggerImpl (cue, audition);
+
+    if (! firstTriggerSeen)
+    {
+        firstTriggerSeen = true;
+        firstTriggerResult = result;
+    }
+
+    return result;
+}
+
+CueController::GoResult CueController::triggerImpl (const Cue& cue, bool audition)
+{
     const int index = document.cues.indexOf (cue.id);
     const bool auditionNow = isAuditionRequested (audition);
 
@@ -432,12 +445,18 @@ CueController::GoResult CueController::go (bool audition)
         return result;
     }
 
+    firstTriggerSeen = false;
+    firstTriggerResult = GoResult::started;
     const int after = fireSequence (index, audition);
-    const bool anyStarted = isCueActive (copy.id) || getNumPending() > 0 || copy.isFade() || copy.isDevamp();
+    const bool targeting = copy.isFade() || copy.isDevamp();
+    const bool firstFailed = copy.armed && copy.preWaitSeconds <= 0.0
+                             && (targeting ? (firstTriggerSeen && firstTriggerResult == GoResult::failed) : ! engine.isPlaying (copy.id));
+    const bool anyStarted = isCueActive (copy.id) || getNumPending() > 0 || (targeting && ! firstFailed);
 
-    if (copy.armed && copy.preWaitSeconds <= 0.0 && ! copy.isFade() && ! copy.isDevamp() && ! engine.isPlaying (copy.id))
+    if (firstFailed)
     {
-        // the first cue could not be started (missing file ...): trigger() already reported it
+        // the first cue could not be started (missing file, fade / devamp target not playing ...): trigger() already
+        // reported it, and that message must stay visible instead of a "GO:" line
         document.cues.setPlayheadIndex (juce::jmin (after, document.cues.size() - 1));
         return GoResult::failed;
     }

@@ -758,6 +758,15 @@ public:
             // no target playing: the devamp fails with a message
             expect (controller.trigger (document.cues.get (1)) == CueController::GoResult::failed);
             expect (statuses[statuses.size() - 1].isNotEmpty());
+
+            // ... and GO on it fails the same way, keeping the error as the last status (no "GO:" line on top)
+            document.cues.setPlayheadIndex (1);
+            now += 1.0;
+            const int before = statuses.size();
+            expect (controller.go() == CueController::GoResult::failed);
+            expectEquals (statuses.size(), before + 1);
+            expect (statuses[statuses.size() - 1].contains (juce::CharPointer_UTF8 ("\xEC\x9E\xAC\xEC\x83\x9D \xEC\xA4\x91\xEC\x9D\xB4 \xEC\x95\x84\xEB\x8B\x99\xEB\x8B\x88\xEB\x8B\xA4")));   // 재생 중이 아닙니다
+            expectEquals (document.cues.getPlayheadIndex(), 2);                                              // the playhead still moves on
             document.cues.remove (document.cues.indexOf (devamp.id));
             document.cues.update (0, [] (Cue& c) { c.audio.endSeconds = -1.0; c.audio.infiniteLoop = false; });
         }

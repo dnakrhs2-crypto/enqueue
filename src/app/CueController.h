@@ -58,6 +58,10 @@ public:
         Does not apply pre-waits or continue modes. A normal GO on an auditioning cue restarts it normally. */
     GoResult trigger (const Cue& cue, bool audition = false);
 
+    /** Result of the first trigger() since go() started its sequence (a fade / devamp cue leaves nothing playing
+        or pending when it fails, so go() cannot tell from the engine alone). */
+    GoResult getFirstTriggerResult() const noexcept { return firstTriggerResult; }
+
     /** Fires the cue at 'index' with its pre-wait and the sequence it heads (auto-continue / auto-follow).
         Returns the index of the first cue after the sequence (clamped to the list). */
     int fireSequence (int index, bool audition = false);
@@ -119,6 +123,9 @@ private:
     ProjectDocument& document;
     Scheduler& scheduler;
     FadeRunner fadeRunner;
+    GoResult triggerImpl (const Cue& cue, bool audition);
+    GoResult firstTriggerResult = GoResult::started;
+    bool firstTriggerSeen = true;
     struct Pending { int id; juce::Uuid owner; };
     std::vector<Pending> pending;
     std::map<juce::Uuid, std::map<juce::Uuid, double>> ducks;   // target -> (ducking cue -> dB)
