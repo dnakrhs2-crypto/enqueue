@@ -30,6 +30,7 @@ public:
             page->setIndents (14, 12);
             page->setText (ko (section.text), false);
             page->setLineSpacing (1.25f);
+            page->moveCaretToTop (false);   // setText leaves the view scrolled past the first lines
             tabs.addTab (ko (section.title), Palette::panel, page, true);   // the tab owns the page
         }
 
