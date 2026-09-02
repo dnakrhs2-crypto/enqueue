@@ -92,8 +92,9 @@ CuePlayer::CuePlayer (const Cue& c, juce::AudioFormatManager& formats,
     {
         // faster playback pulls more file samples per block: size the read-ahead for twice the cue's rate
         const int scale = juce::jlimit (1, 8, (int) std::ceil (cue.audio.rate * 2.0));
-        readAhead = std::make_unique<juce::BufferingAudioSource> (source.get(), *readAheadThread, false, readAheadSamples * scale, numChannels, true);
-        readAhead->setNextReadPosition (startOffsetSamples);
+        readAhead = std::make_unique<ReadAheadSource> (*source, *readAheadThread, readAheadSamples * scale, numChannels);
+        // the stretcher pre-rolls before the start: have that in the cache too
+        readAhead->setNextReadPosition (cue.audio.preservePitch ? juce::jmax<juce::int64> (0, startOffsetSamples - 8192) : startOffsetSamples);
         tail = readAhead.get();
     }
 
@@ -174,24 +175,22 @@ void CuePlayer::requestResume() noexcept
     resumeRequested.store (true, std::memory_order_relaxed);
 }
 
-void CuePlayer::requestFinishCurrentPass (bool stopAfter) noexcept
-{
-    if (source != nullptr)
-        source->finishCurrentPass ((juce::int64) virtualPosition.load (std::memory_order_relaxed), stopAfter);
-}
-
-juce::int64 CuePlayer::getCurrentPassEnd() const noexcept
+juce::int64 CuePlayer::requestFinishCurrentPass (bool stopAfter) noexcept
 {
     if (source == nullptr)
         return -1;
 
-    const auto pos = (juce::int64) virtualPosition.load (std::memory_order_relaxed);
-    const auto loc = source->locate (pos);
+    const juce::int64 boundary = source->finishCurrentPass (controlPosition(), stopAfter);
 
-    if (loc.beyondEnd)
-        return -1;
+    if (boundary >= 0 && readAhead != nullptr)
+        readAhead->invalidate (controlPosition());   // the cache may hold the next pass of the loop that no longer comes
 
-    return pos - loc.offset + source->getRunLength (loc.run);
+    return boundary;
+}
+
+juce::int64 CuePlayer::getCurrentPassEnd() const noexcept
+{
+    return source != nullptr ? source->passEndFor (controlPosition()) : -1;
 }
 
 void CuePlayer::setLiveRegion (double startSeconds, double endSeconds) noexcept
@@ -206,13 +205,13 @@ void CuePlayer::setLiveRegion (double startSeconds, double endSeconds) noexcept
         return;
 
     // keep the audible file position: find it again in the new layout (same pass if it still exists)
-    const auto pos = (juce::int64) virtualPosition.load (std::memory_order_relaxed);
+    const auto pos = controlPosition();
     const auto where = source->locate (pos);
     const juce::int64 filePos = juce::jlimit (startSample, endSample - 1, where.fileSample);
 
     source->setRegion (startSample, endSample);
 
-    const juce::int64 newPos = source->virtualPositionFor (filePos, where.pass);
+    const juce::int64 newPos = source->virtualPositionFor (filePos, where);
     jumpTo (newPos);
 }
 
@@ -220,14 +219,9 @@ void CuePlayer::jumpTo (juce::int64 newPos) noexcept
 {
     // drop the read-ahead cache: it holds audio of the old layout for the same virtual positions
     if (readAhead != nullptr)
-    {
-        readAhead->setNextReadPosition (RegionLoopSource::infiniteLength);   // outside any cached range: invalidates it
-        readAhead->setNextReadPosition (newPos);
-    }
+        readAhead->invalidate (newPos);
     else
-    {
         source->setNextReadPosition (newPos);
-    }
 
     if (stretch != nullptr)
         stretch->setNextReadPosition (newPos);   // re-seeks with a pre-roll on the audio thread
@@ -240,7 +234,7 @@ void CuePlayer::setLiveSlices (const std::vector<Slice>& slices, int firstSliceC
     if (source == nullptr)
         return;
 
-    const auto pos = (juce::int64) virtualPosition.load (std::memory_order_relaxed);
+    const auto pos = controlPosition();
     const auto where = source->locate (pos);
 
     std::vector<RegionLoopSource::SliceMarker> markers;
@@ -256,7 +250,7 @@ void CuePlayer::setLiveSlices (const std::vector<Slice>& slices, int firstSliceC
         return;
     }
 
-    const juce::int64 newPos = source->virtualPositionFor (where.fileSample, where.pass);
+    const juce::int64 newPos = source->virtualPositionFor (where.fileSample, where);
     jumpTo (newPos);
 }
 

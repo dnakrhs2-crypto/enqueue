@@ -671,21 +671,44 @@ CueController::GoResult CueController::triggerImpl (const Cue& cue, bool auditio
             return GoResult::failed;
         }
 
-        engine.finishCurrentPass (targetId, cue.devamp.stopTarget);
+        const auto instance = engine.getStartOrder (targetId);
+        const double secondsToBoundary = engine.finishCurrentPass (targetId, cue.devamp.stopTarget);
+
+        if (secondsToBoundary < 0.0)
+        {
+            status (ko ("디밴프 대상에 끝낼 반복이 없습니다: ") + cueLabel (index, cue), true);
+            return GoResult::failed;
+        }
+
         status (ko ("디밴프: ") + cueLabel (index, cue));
 
         if (cue.devamp.startNextCue)
         {
-            // the cue after this one starts the moment the target reaches its loop point
+            // the cue after this one starts the moment the target reaches its loop point: watched on the target's own
+            // timeline (a pause or rate change moves the moment; a stop or restart of the target cancels it)
             const auto nextId = document.cues.isValidIndex (index + 1) ? document.cues.get (index + 1).id : juce::Uuid::null();
-            const double at = clock() + juce::jmax (0.0, engine.getSecondsToPassEnd (targetId));
+            const juce::int64 boundary = engine.getVirtualPosition (targetId) < 0 ? -1
+                                       : engine.getVirtualPosition (targetId)
+                                         + (juce::int64) std::llround (secondsToBoundary * juce::jmax (AudioCueData::minRate, engine.getLiveRate (targetId)) * engine.getFileSampleRate (targetId));
+            const double deadline = clock() + secondsToBoundary + 1.0;   // a stalled position (device stopped) must not wait forever
 
-            if (! nextId.isNull())
-                track (scheduler.schedule (at, [this, nextId, audition]
-                                          {
-                                              if (const int nextIndex = document.cues.indexOf (nextId); nextIndex >= 0)
-                                                  fireSequence (nextIndex, audition);
-                                          }), cue.id);
+            if (! nextId.isNull() && boundary >= 0)
+                track (scheduler.watch ([this, targetId, instance, boundary, deadline]
+                                        {
+                                            if (engine.getStartOrder (targetId) != instance)
+                                                return true;   // gone or restarted: the action checks and does nothing
+
+                                            const auto pos = engine.getVirtualPosition (targetId);
+                                            return pos >= boundary - engine.getBlockSize() || clock() >= deadline;
+                                        },
+                                        [this, targetId, instance, nextId, audition]
+                                        {
+                                            if (engine.getStartOrder (targetId) != instance)
+                                                return;
+
+                                            if (const int nextIndex = document.cues.indexOf (nextId); nextIndex >= 0)
+                                                fireSequence (nextIndex, audition);
+                                        }), cue.id);
         }
 
         return GoResult::started;
@@ -926,7 +949,8 @@ int CueController::fireSequence (int index, bool audition)
         else
             status (ko ("비활성 큐 건너뜀: ") + cueLabel (i, cue));
 
-        if (cue.continueMode == ContinueMode::none)
+        // a devamp that starts the next cue itself is its own continuation: its continue mode is ignored
+        if (cue.continueMode == ContinueMode::none || (cue.isDevamp() && cue.devamp.startNextCue))
             return lastGroupEnterIndex >= 0 ? lastGroupEnterIndex : next;   // "start first and enter": the playhead goes inside
 
         if (cue.continueMode == ContinueMode::autoContinue)

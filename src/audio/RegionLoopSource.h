@@ -64,8 +64,12 @@ public:
         'firstSliceCount' is the play count of the slice before the first marker. Message thread. */
     void setSlices (const std::vector<SliceMarker>& markers, int firstSliceCount = 1);
     /** Ends the endless run (or the endless sequence) that 'virtualPosition' is in after its current pass
-        (devamp: "finish this loop"). Message thread. */
-    void finishCurrentPass (juce::int64 virtualPosition, bool stopAfterThisPass = false) noexcept;
+        (devamp: "finish this loop"). Returns the virtual position where that pass ends in the new layout,
+        or -1 when there was nothing endless to finish (and stopAfterThisPass was off). Message thread. */
+    juce::int64 finishCurrentPass (juce::int64 virtualPosition, bool stopAfterThisPass = false) noexcept;
+    /** Where the pass that 'virtualPosition' is in ends (the run's pass, or the sequence pass when the runs are
+        finite but the sequence is endless); -1 beyond the end. What finishCurrentPass() would resolve to. */
+    juce::int64 passEndFor (juce::int64 virtualPosition) const noexcept;
     /** Compatibility: ends run 0 after the given 0-based pass. */
     void setEndAfterPass (int pass) noexcept;
     /** Set before playback starts; not read live. */
@@ -84,8 +88,9 @@ public:
     int getPassIndexFor (juce::int64 position) const noexcept { return locate (position).pass; }
     /** File offset from the region start of a virtual position. */
     juce::int64 getOffsetFor (juce::int64 position) const noexcept;
-    /** The first virtual position that plays 'fileSample' in the pass closest to 'passHint' (live trim / seeks). */
-    juce::int64 virtualPositionFor (juce::int64 fileSample, int passHint) const noexcept;
+    /** The first virtual position that plays 'fileSample' in the run pass / sequence pass closest to 'where'
+        (live trim / slice edits keep the audible place and the pass). */
+    juce::int64 virtualPositionFor (juce::int64 fileSample, const Location& where) const noexcept;
     /** True once a read went past the end of the final pass. */
     bool hasReachedEnd() const noexcept { return reachedEnd.load (std::memory_order_relaxed); }
 
@@ -137,13 +142,16 @@ private:
     bool editLoopForever = false;
     std::vector<SliceMarker> editSlices;
     int editFirstSliceCount = 1;
-    std::vector<int> resolvedCounts;   // per run: a count fixed by finishCurrentPass (-1 = untouched)
+    /** Counts fixed by a devamp, keyed by the run's file start so a marker edit in front does not move them. */
+    struct Resolved { juce::int64 fileStart; int count; };
+    std::vector<Resolved> resolvedRuns;
     int resolvedSequenceCount = -1;
-    int stopAfterRun = -1;             // devamp with stop: every run after this one is skipped
+    juce::int64 stopAfterStart = -1;   // devamp with stop: every run starting after this file position is skipped
 
-    // published layout (seqlock)
+    // published layout: a tiny copy under a spin lock (the writer holds it for a memcpy; readers on the
+    // read-ahead / audio thread wait microseconds at most)
     Layout published;
-    std::atomic<juce::uint32> layoutVersion { 0 };   // odd while a write is in progress
+    mutable juce::SpinLock layoutLock;
 
     std::atomic<juce::int64> nextPosition { 0 };
     std::atomic<bool> reachedEnd { false };

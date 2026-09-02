@@ -731,13 +731,58 @@ bool AudioEngine::isPaused (const juce::Uuid& cueId) const
     return false;
 }
 
-void AudioEngine::finishCurrentPass (const juce::Uuid& cueId, bool stopAfter)
+double AudioEngine::finishCurrentPass (const juce::Uuid& cueId, bool stopAfter)
 {
     const juce::ScopedLock sl (lock);
+    CuePlayer* newest = nullptr;
 
     for (auto& p : players)
-        if (p->getCueId() == cueId && ! p->hasFinished())
-            p->requestFinishCurrentPass (stopAfter);
+        if (p->getCueId() == cueId && ! p->hasFinished() && ! p->isLoadedNotStarted() && ! p->isStopPending())
+            if (newest == nullptr || p->getStartOrder() > newest->getStartOrder())
+                newest = p.get();
+
+    if (newest == nullptr)
+        return -1.0;
+
+    const auto boundary = newest->requestFinishCurrentPass (stopAfter);
+
+    if (boundary < 0)
+        return -1.0;
+
+    const double left = (double) boundary - (double) newest->controlPosition();
+    return juce::jmax (0.0, left) / newest->getFileSampleRate() / juce::jmax (AudioCueData::minRate, newest->getLiveRate());
+}
+
+double AudioEngine::getLiveRate (const juce::Uuid& cueId) const
+{
+    LiveState live;
+    return getLiveState (cueId, live) ? live.rate : 1.0;
+}
+
+double AudioEngine::getFileSampleRate (const juce::Uuid& cueId) const
+{
+    const juce::ScopedLock sl (lock);
+    const CuePlayer* newest = nullptr;
+
+    for (auto& p : players)
+        if (p->getCueId() == cueId && ! p->hasFinished() && ! p->isLoadedNotStarted())
+            if (newest == nullptr || p->getStartOrder() > newest->getStartOrder())
+                newest = p.get();
+
+    return newest != nullptr ? newest->getFileSampleRate() : 44100.0;
+}
+
+juce::int64 AudioEngine::getVirtualPosition (const juce::Uuid& cueId) const
+{
+    const juce::ScopedLock sl (lock);
+    const CuePlayer* newest = nullptr;
+
+    for (auto& p : players)
+        if (p->getCueId() == cueId && ! p->hasFinished() && ! p->isLoadedNotStarted())
+            if (newest == nullptr || p->getStartOrder() > newest->getStartOrder())
+                newest = p.get();
+
+    return newest != nullptr ? (juce::int64) newest->getVirtualPosition() : -1;
 }
 
 void AudioEngine::setLiveRegion (const juce::Uuid& cueId, double startSeconds, double endSeconds)
@@ -770,22 +815,23 @@ void AudioEngine::setLiveGainDb (const juce::Uuid& cueId, double gainDb)
 double AudioEngine::getSecondsToPassEnd (const juce::Uuid& cueId) const
 {
     const juce::ScopedLock sl (lock);
+    const CuePlayer* newest = nullptr;
 
     for (auto& p : players)
-    {
-        if (p->getCueId() != cueId || p->hasFinished() || p->isLoadedNotStarted())
-            continue;
+        if (p->getCueId() == cueId && ! p->hasFinished() && ! p->isLoadedNotStarted() && ! p->isStopPending())
+            if (newest == nullptr || p->getStartOrder() > newest->getStartOrder())
+                newest = p.get();
 
-        const auto end = p->getCurrentPassEnd();
+    if (newest == nullptr)
+        return -1.0;
 
-        if (end < 0)
-            return -1.0;
+    const auto end = newest->getCurrentPassEnd();
 
-        const double left = (double) end - p->getVirtualPosition();
-        return juce::jmax (0.0, left) / p->getFileSampleRate() / juce::jmax (AudioCueData::minRate, p->getLiveRate());
-    }
+    if (end < 0)
+        return -1.0;
 
-    return -1.0;
+    const double left = (double) end - (double) newest->controlPosition();
+    return juce::jmax (0.0, left) / newest->getFileSampleRate() / juce::jmax (AudioCueData::minRate, newest->getLiveRate());
 }
 
 void AudioEngine::setLiveSlices (const juce::Uuid& cueId, const std::vector<Slice>& slices, int firstSliceCount)

@@ -39,9 +39,11 @@ void StretchSource::prepareToPlay (int samplesPerBlockExpected, double sampleRat
     maxBlock = juce::jmax (64, samplesPerBlockExpected);
     const int capacity = (int) std::ceil (maxBlock * maxRate) + 64 + getPreRollSamples();
     inputBuffer.setSize (channels, capacity, false, false, true);
+    spareOutput.setSize (channels, maxBlock, false, false, true);
     upstream.prepareToPlay (maxBlock, sampleRate);
     prepared = true;
     seekTo (position.load (std::memory_order_relaxed));
+    pendingSeek.store (-1, std::memory_order_release);   // the seek just happened: the first block must not redo it
 }
 
 void StretchSource::releaseResources()
@@ -124,7 +126,7 @@ void StretchSource::getNextAudioBlock (const juce::AudioSourceChannelInfo& info)
         {
             for (int c = 0; c < channels; ++c)
                 if (outputPointers[(size_t) c] == nullptr)
-                    outputPointers[(size_t) c] = inputBuffer.getWritePointer (c);   // overwritten after use: fine
+                    outputPointers[(size_t) c] = spareOutput.getWritePointer (c);   // never aliases the input the stretcher still reads
 
             impl->stretch.process (inputPointers.data(), numInput, outputPointers.data(), n);
         }

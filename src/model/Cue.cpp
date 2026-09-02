@@ -67,13 +67,27 @@ void AudioCueData::sanitiseSlices (double fileLengthSeconds) noexcept
     firstSliceCount = juce::jlimit (-1, Slice::maxCount, firstSliceCount);
 }
 
-bool AudioCueData::hasEndlessSlice() const noexcept
+int AudioCueData::firstCountFor (double regionStart) const noexcept
 {
-    if (! slices.empty() && firstSliceCount < 0)
+    int count = slices.empty() ? 1 : firstSliceCount;
+
+    for (const auto& s : slices)   // sorted: the last one at or before the start wins
+        if (s.seconds <= regionStart)
+            count = s.playCount;
+
+    return count;
+}
+
+bool AudioCueData::hasEndlessSlice (double regionStart, double regionEnd) const noexcept
+{
+    if (slices.empty())
+        return false;
+
+    if (firstCountFor (regionStart) < 0)
         return true;
 
     for (const auto& s : slices)
-        if (s.playCount < 0)
+        if (s.seconds > regionStart && s.seconds < regionEnd && s.playCount < 0)
             return true;
 
     return false;
@@ -89,7 +103,7 @@ double AudioCueData::sliceSequenceSeconds (double regionStart, double regionEnd)
 
     double total = 0.0;
     double runStart = regionStart;
-    int runCount = firstSliceCount;
+    int runCount = firstCountFor (regionStart);   // a marker at or before the start owns the first slice
     bool endless = false;
 
     auto addRun = [&] (double from, double to, int count)
@@ -135,7 +149,7 @@ double Cue::passLength() const noexcept
     if (seq < 0.0)
         return -1.0;
 
-    return seq / std::max (AudioCueData::minRate, audio.rate);
+    return seq / std::max (AudioCueData::minRate, audio.effectiveRate());   // the stretcher's range when the pitch is kept
 }
 
 //==============================================================================
@@ -235,7 +249,7 @@ double Cue::effectiveLength() const noexcept
     if (type == CueType::devamp || type == CueType::group)
         return 0.0;   // a group's length depends on its children: CueList::effectiveLengthOf
 
-    if (audio.infiniteLoop || audio.hasEndlessSlice())
+    if (audio.infiniteLoop || audio.hasEndlessSlice (regionStart(), regionEnd()))
         return -1.0;
 
     return passLength() * (double) audio.playCount;

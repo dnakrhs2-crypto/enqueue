@@ -58,6 +58,7 @@ private:
     double inputCarry = 0.0;                        // fractional input samples owed
     int maxBlock = 512;
     juce::AudioBuffer<float> inputBuffer;           // channels x (maxBlock * maxRate + slack)
+    juce::AudioBuffer<float> spareOutput;           // channels the caller's buffer does not have land here
     std::vector<float*> inputPointers, outputPointers;
     bool prepared = false;
 

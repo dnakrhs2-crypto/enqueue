@@ -62,6 +62,7 @@ target_sources(GoCueCore INTERFACE
     ${CMAKE_CURRENT_SOURCE_DIR}/src/app/FadeRunner.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/app/BackupManager.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/audio/RegionLoopSource.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/audio/ReadAheadSource.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/audio/CuePlayer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/audio/AudioEngine.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/audio/PluginChain.cpp

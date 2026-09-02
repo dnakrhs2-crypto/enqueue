@@ -5,6 +5,7 @@
 #include "model/LevelMatrix.h"
 
 #include <juce_core/juce_core.h>
+#include <limits>
 #include <vector>
 
 namespace gocue
@@ -197,13 +198,22 @@ struct AudioCueData
 
     static constexpr double minRate = 0.03;
     static constexpr double maxRate = 33.0;
+    /** With the pitch preserved the time-stretcher only goes this far; the rate the cue actually plays at. */
+    static constexpr double minStretchRate = 0.25;
+    static constexpr double maxStretchRate = 4.0;
     static constexpr int maxPlayCount = 9999;
     static constexpr int maxSlices = 64;
 
+    /** The rate playback really uses: clamped to the stretcher's range when the pitch is preserved. */
+    double effectiveRate() const noexcept { return preservePitch ? juce::jlimit (minStretchRate, maxStretchRate, rate) : rate; }
     /** Sorts / deduplicates the markers (min gap), clamps counts. */
     void sanitiseSlices (double fileLengthSeconds) noexcept;
-    /** True when any slice loops forever. */
-    bool hasEndlessSlice() const noexcept;
+    /** True when any slice that the region [regionStart, regionEnd) plays loops forever. A marker at or before the
+        region start sets the count of the region's first slice (the engine builds its runs the same way). */
+    bool hasEndlessSlice (double regionStart, double regionEnd) const noexcept;
+    bool hasEndlessSlice() const noexcept { return hasEndlessSlice (0.0, std::numeric_limits<double>::max()); }
+    /** Play count of the slice the region starts in: the last marker at or before 'regionStart', else firstSliceCount. */
+    int firstCountFor (double regionStart) const noexcept;
     /** Seconds of one pass of the whole slice sequence inside [start, end) (skips count 0, infinite counted once); -1 when endless. */
     double sliceSequenceSeconds (double regionStart, double regionEnd) const noexcept;
 };

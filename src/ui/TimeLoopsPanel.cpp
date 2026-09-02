@@ -67,7 +67,7 @@ TimeLoopsPanel::TimeLoopsPanel (ProjectDocument& doc, AudioEngine& e, juce::Audi
     linearToggle.onClick = [this]
     {
         const bool on = linearToggle.getToggleState();
-        updateSelected (ko ("엔벨로프 모양"), [on] (Cue& c) { c.audio.envelope.linear = on; });
+        updateSelected (ko ("엔벨로프 모양"), [on] (Cue& c) { c.audio.envelope.linear = on; }, {}, LiveApply::none);
     };
 
     setupToggle (lockToggle, "시작/끝에 잠금");
@@ -92,7 +92,7 @@ TimeLoopsPanel::TimeLoopsPanel (ProjectDocument& doc, AudioEngine& e, juce::Audi
     pitchToggle.onClick = [this]
     {
         const bool on = pitchToggle.getToggleState();
-        updateSelected (ko ("피치 유지"), [on] (Cue& c) { c.audio.preservePitch = on; });
+        updateSelected (ko ("피치 유지"), [on] (Cue& c) { c.audio.preservePitch = on; }, {}, LiveApply::none);   // next start
     };
 
     auto setupButton = [this] (juce::TextButton& button, const char* text, std::function<void()> action)
@@ -217,11 +217,12 @@ void TimeLoopsPanel::refresh()
 
     juce::String length;
     length << ko ("구간 ") << formatTimeMs (cue->regionLength());
+    const double effective = cue->effectiveLength();
 
-    if (cue->audio.infiniteLoop)
-        length << ko ("  · 무한 반복");
-    else if (cue->audio.playCount > 1 || ! juce::approximatelyEqual (cue->audio.rate, 1.0))
-        length << ko ("  · 전체 ") << formatTimeMs (cue->effectiveLength());
+    if (effective < 0.0)
+        length << (cue->audio.infiniteLoop ? ko ("  · 무한 반복") : ko ("  · 무한 슬라이스"));
+    else if (! juce::approximatelyEqual (effective, cue->regionLength()))
+        length << ko ("  · 전체 ") << formatTimeMs (effective);   // slices / play count / rate change the total
 
     lengthLabel.setText (length, juce::dontSendNotification);
 }
@@ -235,7 +236,7 @@ void TimeLoopsPanel::setPlayback (const AudioEngine::PlayingCue* playing)
 }
 
 //==============================================================================
-void TimeLoopsPanel::updateSelected (const juce::String& name, const std::function<void (Cue&)>& mutator, const juce::String& coalesceKey)
+void TimeLoopsPanel::updateSelected (const juce::String& name, const std::function<void (Cue&)>& mutator, const juce::String& coalesceKey, LiveApply apply)
 {
     if (refreshing || cancellingEdit)
         return;
@@ -246,7 +247,17 @@ void TimeLoopsPanel::updateSelected (const juce::String& name, const std::functi
         return;
 
     document.perform (name, [this, index, mutator] { document.cues.update (index, mutator); }, { coalesceKey, false });
-    pushLiveRegion();
+
+    // only what the edit changed reaches a running instance: a trim seeks, a rate change does not, and
+    // next-start properties (pitch mode, envelope shape) leave it alone
+    if (const auto* cue = selected(); cue != nullptr && apply != LiveApply::none && engine.isPlaying (cue->id))
+    {
+        if (apply == LiveApply::region || apply == LiveApply::regionAndRate)
+            engine.setLiveRegion (cue->id, cue->audio.startSeconds, cue->audio.endSeconds);
+
+        if (apply == LiveApply::rate || apply == LiveApply::regionAndRate)
+            engine.setLiveRate (cue->id, cue->audio.rate);
+    }
 
     if (const auto* selected = document.cues.getSelected(); selected != nullptr && selected->id != shownId)
         refresh();
@@ -269,7 +280,7 @@ void TimeLoopsPanel::commitTrim (double start, double end, bool finished)
         return;
 
     const auto key = "trim:" + cue->id.toString();
-    updateSelected (ko ("트림"), [start, end] (Cue& c) { c.audio.startSeconds = start; c.audio.endSeconds = end; }, key);
+    updateSelected (ko ("트림"), [start, end] (Cue& c) { c.audio.startSeconds = start; c.audio.endSeconds = end; }, key, LiveApply::region);
     juce::ignoreUnused (finished);
 }
 
@@ -280,15 +291,14 @@ void TimeLoopsPanel::commitSlices (const std::vector<Slice>& slices, int firstCo
     if (cue == nullptr)
         return;
 
-    juce::ignoreUnused (finished);
-    const auto key = "slices:" + cue->id.toString();
+    const auto key = finished ? juce::String() : "slices:" + cue->id.toString();   // a drag is one undo step; add / delete / count are their own
     const auto id = cue->id;
     updateSelected (ko ("슬라이스"), [slices, firstCount] (Cue& c)
     {
         c.audio.slices = slices;
         c.audio.firstSliceCount = firstCount;
         c.audio.sanitiseSlices (c.durationSeconds);
-    }, key);
+    }, key, LiveApply::none);   // the slice layout goes live below, without a region seek first
 
     if (const auto* updated = selected(); updated != nullptr && updated->id == id && engine.isPlaying (id))
         engine.setLiveSlices (id, updated->audio.slices, updated->audio.firstSliceCount);
@@ -342,7 +352,7 @@ void TimeLoopsPanel::commitEnvelope (const Envelope& envelope, bool finished)
     // every callback of one drag (including the final one) shares the key, so a drag is one undo step
     juce::ignoreUnused (finished);
     const auto key = "envelope:" + cue->id.toString();
-    updateSelected (ko ("엔벨로프 편집"), [envelope] (Cue& c) { c.audio.envelope = envelope; c.audio.envelope.sanitise(); }, key);
+    updateSelected (ko ("엔벨로프 편집"), [envelope] (Cue& c) { c.audio.envelope = envelope; c.audio.envelope.sanitise(); }, key, LiveApply::none);
 }
 
 void TimeLoopsPanel::commitStart()
@@ -362,7 +372,7 @@ void TimeLoopsPanel::commitStart()
 
     const double end = cue->regionEnd();
     const double start = juce::jlimit (0.0, juce::jmax (0.0, end - WaveformView::minRegionSeconds), value);
-    updateSelected (ko ("시작 시간"), [start] (Cue& c) { c.audio.startSeconds = start; });
+    updateSelected (ko ("시작 시간"), [start] (Cue& c) { c.audio.startSeconds = start; }, {}, LiveApply::region);
 }
 
 void TimeLoopsPanel::commitEnd()
@@ -386,7 +396,7 @@ void TimeLoopsPanel::commitEnd()
     if (length > 0.0 && end >= length - 1e-6)
         end = -1.0;
 
-    updateSelected (ko ("끝 시간"), [end] (Cue& c) { c.audio.endSeconds = end; });
+    updateSelected (ko ("끝 시간"), [end] (Cue& c) { c.audio.endSeconds = end; }, {}, LiveApply::region);
 }
 
 void TimeLoopsPanel::commitPlayCount()
@@ -423,7 +433,7 @@ void TimeLoopsPanel::commitRate()
         return;
     }
 
-    updateSelected (ko ("속도"), [value] (Cue& c) { c.audio.rate = value; });
+    updateSelected (ko ("속도"), [value] (Cue& c) { c.audio.rate = value; }, {}, LiveApply::rate);
 }
 
 //==============================================================================

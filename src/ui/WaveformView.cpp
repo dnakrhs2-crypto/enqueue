@@ -582,10 +582,12 @@ void WaveformView::editSliceCount (int index)
         const auto text = alert->getTextEditorContents ("count").trim().toLowerCase();
         int count;
 
-        if (text == "x" || text.startsWith ("inf") || text == juce::String::fromUTF8 ("\xE2\x88\x9E") || text == juce::String::fromUTF8 ("\xEB\xAC\xB4\xED\x95\x9C"))
+        if (text == "x" || text == "-" || text == "-1" || text.startsWith ("inf") || text == juce::String::fromUTF8 ("\xE2\x88\x9E") || text == juce::String::fromUTF8 ("\xEB\xAC\xB4\xED\x95\x9C"))
             count = -1;
-        else
+        else if (text.isNotEmpty() && text.containsOnly ("0123456789"))
             count = juce::jlimit (0, Slice::maxCount, text.getIntValue());
+        else
+            return;   // not a count: the slice keeps what it had
 
         if (index < 0)
             safeThis->cue.audio.firstSliceCount = count;

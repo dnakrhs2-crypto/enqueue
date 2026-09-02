@@ -91,7 +91,14 @@ public:
     void resumeAll();
     bool isPaused (const juce::Uuid& cueId) const;
     /** Lets a looping cue finish the pass that is audible now, then go on (or stop when 'stopAfter'). */
-    void finishCurrentPass (const juce::Uuid& cueId, bool stopAfter = false);
+    /** Devamp on the newest running instance: ends its current loop pass. Returns the seconds until that
+        boundary at the current rate, or -1 when the cue is not running or has no loop pass to finish. */
+    double finishCurrentPass (const juce::Uuid& cueId, bool stopAfter = false);
+    /** Virtual position (file samples on the newest running instance's timeline); -1 when not running. */
+    juce::int64 getVirtualPosition (const juce::Uuid& cueId) const;
+    /** Live rate / file sample rate of the newest running instance (1.0 / 44100 when not running). */
+    double getLiveRate (const juce::Uuid& cueId) const;
+    double getFileSampleRate (const juce::Uuid& cueId) const;
     /** Seconds (at the current rate) until the running cue reaches the end of its current pass; -1 when none. */
     double getSecondsToPassEnd (const juce::Uuid& cueId) const;
     /** Live trim / rate for a running cue (the inspector while it plays). */
