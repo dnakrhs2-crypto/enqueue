@@ -27,7 +27,7 @@ public:
         nothingSelected
     };
 
-    /** Space: resumes paused cues if there are any; otherwise fires the standby cue and moves the selection on. */
+    /** Space: resumes paused cues if there are any; otherwise fires the playhead cue and moves the playhead on. */
     GoResult go();
     /** The GO key was released (for "require key up before the next GO"). */
     void goKeyReleased();

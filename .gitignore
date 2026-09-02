@@ -23,3 +23,6 @@ third_party/asiosdk*/
 # OS noise
 Thumbs.db
 desktop.ini
+
+# local build logs
+*.log

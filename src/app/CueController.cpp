@@ -121,19 +121,19 @@ CueController::GoResult CueController::go()
         return GoResult::resumed;
     }
 
-    const auto* cue = document.cues.getSelected();
+    const auto* cue = document.cues.getPlayhead();
 
     if (cue == nullptr)
         return GoResult::nothingSelected;
 
-    const int index = document.cues.getSelectedIndex();
-    const Cue copy = *cue;   // selectNext() may invalidate the pointer
+    const int index = document.cues.getPlayheadIndex();
+    const Cue copy = *cue;   // advancePlayhead() may invalidate the pointer
     const auto result = trigger (copy);
 
     if (result == GoResult::started)
         status (ko ("GO: ") + cueLabel (index, copy));
 
-    document.cues.selectNext();
+    document.cues.advancePlayhead();
     return result;
 }
 
@@ -235,7 +235,7 @@ void CueController::resetSelected()
 void CueController::resetAll()
 {
     engine.stopAll();
-    document.cues.setSelectedIndex (document.cues.isEmpty() ? -1 : 0);
+    document.cues.setPlayheadIndex (document.cues.isEmpty() ? -1 : 0);
     status (ko ("전체 리셋"));
 }
 
