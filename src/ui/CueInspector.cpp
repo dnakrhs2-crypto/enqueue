@@ -1,6 +1,7 @@
 #include "ui/CueInspector.h"
 
 #include "audio/CueFileInfo.h"
+#include "ui/CueTable.h"
 #include "model/CueColors.h"
 #include "ui/PluginChainComponent.h"
 #include "ui/UiUtils.h"
@@ -2242,6 +2243,376 @@ private:
     bool editable = true;
 };
 
+//==============================================================================
+/** 그룹 tab: mode, playlist options and (for a timeline group) the children's start times as draggable bars. */
+class CueInspector::GroupPanel : public juce::Component
+{
+public:
+    explicit GroupPanel (ProjectDocument& doc) : document (doc), cues (doc.cues), timeline (*this)
+    {
+        styleLabel (modeLabel, ko ("모드"));
+        addAndMakeVisible (modeLabel);
+        modeCombo.addItem (ko ("타임라인 — 자식 전부 동시에 (각자 프리웨이트)"), 1);
+        modeCombo.addItem (ko ("플레이리스트 — 차례로"), 2);
+        modeCombo.addItem (ko ("첫 큐 시작 후 그룹 안으로 진입"), 3);
+        modeCombo.addItem (ko ("첫 큐 시작 (플레이헤드는 그룹 뒤로)"), 4);
+        modeCombo.addItem (ko ("랜덤 — 한 바퀴에 한 번씩"), 5);
+        modeCombo.setWantsKeyboardFocus (false);
+        modeCombo.onChange = [this]
+        {
+            if (refreshing || modeCombo.getSelectedId() <= 0)
+                return;
+
+            const auto mode = (GroupMode) (modeCombo.getSelectedId() - 1);
+            edit (ko ("그룹 모드"), [mode] (Cue& c) { c.group.mode = mode; });
+        };
+        addAndMakeVisible (modeCombo);
+
+        styleToggle (loopToggle, ko ("반복"));
+        loopToggle.setTooltip (ko ("플레이리스트: 마지막 자식 뒤에 처음부터 다시"));
+        loopToggle.onClick = [this] { const bool on = loopToggle.getToggleState(); edit (ko ("플레이리스트 반복"), [on] (Cue& c) { c.group.loop = on; }); };
+        addAndMakeVisible (loopToggle);
+
+        styleToggle (shuffleToggle, ko ("셔플"));
+        shuffleToggle.setTooltip (ko ("플레이리스트: 한 바퀴마다 순서를 섞음"));
+        shuffleToggle.onClick = [this] { const bool on = shuffleToggle.getToggleState(); edit (ko ("플레이리스트 셔플"), [on] (Cue& c) { c.group.shuffle = on; }); };
+        addAndMakeVisible (shuffleToggle);
+
+        styleToggle (crossfadeToggle, ko ("크로스페이드"));
+        crossfadeToggle.setTooltip (ko ("플레이리스트: 다음 자식을 이 시간만큼 먼저 시작하고 현재 자식을 그 시간에 걸쳐 페이드아웃"));
+        crossfadeToggle.onClick = [this] { const bool on = crossfadeToggle.getToggleState(); edit (ko ("크로스페이드"), [on] (Cue& c) { c.group.crossfade = on; }); };
+        addAndMakeVisible (crossfadeToggle);
+
+        crossfadeEditor.setJustification (juce::Justification::centredRight);
+        crossfadeEditor.setSelectAllWhenFocused (true);
+        crossfadeEditor.onReturnKey = [this] { commitCrossfade(); };
+        crossfadeEditor.onFocusLost = [this] { commitCrossfade(); };
+        addAndMakeVisible (crossfadeEditor);
+        styleLabel (crossfadeUnit, ko ("초"));
+        addAndMakeVisible (crossfadeUnit);
+
+        styleLabel (hint, ko ("타임라인: 아래 막대를 끌어 자식의 시작(프리웨이트)을 바꿉니다. 막대 선택 후 Alt+←/→ = 0.1 s, Shift+Alt = 0.01 s. 자식은 그룹 아래로 끌어다 넣거나 Ctrl+G로 묶습니다."), 11.0f);
+        addAndMakeVisible (hint);
+        addAndMakeVisible (timeline);
+    }
+
+    void setEditable (bool shouldBeEditable)
+    {
+        editable = shouldBeEditable;
+        refresh();
+    }
+
+    void refresh()
+    {
+        const juce::ScopedValueSetter<bool> guard (refreshing, true);
+        const auto* cue = cues.getSelected();
+        const bool enabled = cue != nullptr && cue->isGroup() && editable;
+
+        for (auto* c : std::initializer_list<juce::Component*> { &modeCombo, &loopToggle, &shuffleToggle, &crossfadeToggle, &crossfadeEditor })
+            c->setEnabled (enabled);
+
+        if (cue != nullptr && cue->isGroup())
+        {
+            shownId = cue->id;
+            modeCombo.setSelectedId ((int) cue->group.mode + 1, juce::dontSendNotification);
+            loopToggle.setToggleState (cue->group.loop, juce::dontSendNotification);
+            shuffleToggle.setToggleState (cue->group.shuffle, juce::dontSendNotification);
+            crossfadeToggle.setToggleState (cue->group.crossfade, juce::dontSendNotification);
+
+            if (! crossfadeEditor.hasKeyboardFocus (true))
+                crossfadeEditor.setText (juce::String (cue->group.crossfadeSeconds, 2), false);
+
+            const bool playlist = cue->group.mode == GroupMode::playlist;
+
+            for (auto* c : std::initializer_list<juce::Component*> { &loopToggle, &shuffleToggle, &crossfadeToggle, &crossfadeEditor, &crossfadeUnit })
+                c->setVisible (playlist);
+
+            timeline.setVisible (cue->group.mode == GroupMode::timeline);
+        }
+
+        timeline.refresh();
+    }
+
+    void resized() override
+    {
+        auto area = getLocalBounds().reduced (12, 6);
+        auto row = area.removeFromTop (24);
+        modeLabel.setBounds (row.removeFromLeft (40));
+        modeCombo.setBounds (row.removeFromLeft (320));
+        row.removeFromLeft (16);
+        loopToggle.setBounds (row.removeFromLeft (70));
+        shuffleToggle.setBounds (row.removeFromLeft (70));
+        crossfadeToggle.setBounds (row.removeFromLeft (110));
+        crossfadeEditor.setBounds (row.removeFromLeft (60));
+        crossfadeUnit.setBounds (row.removeFromLeft (24));
+        area.removeFromTop (4);
+        hint.setBounds (area.removeFromTop (16));
+        area.removeFromTop (4);
+        timeline.setBounds (area);
+    }
+
+    void paint (juce::Graphics& g) override { g.fillAll (Palette::panel); }
+
+    /** The selected group's index in the list (-1 when none). */
+    int groupIndex() const
+    {
+        const int index = shownId.isNull() ? cues.getSelectedIndex() : cues.indexOf (shownId);
+        return cues.isValidIndex (index) && cues.get (index).isGroup() ? index : -1;
+    }
+
+    /** Changes one child's pre-wait: live (no history) while dragging, an undoable step at the end. */
+    void setChildPreWait (int childIndex, double seconds, bool undoable, double undoFrom)
+    {
+        if (! editable || ! cues.isValidIndex (childIndex))
+            return;
+
+        seconds = juce::jlimit (0.0, Cue::maxWaitSeconds, seconds);
+
+        if (! undoable)
+        {
+            cues.update (childIndex, [seconds] (Cue& c) { c.preWaitSeconds = seconds; });
+            return;
+        }
+
+        cues.update (childIndex, [undoFrom] (Cue& c) { c.preWaitSeconds = undoFrom; });   // the history snapshot starts from the old value
+        document.perform (ko ("타임라인: 시작 시각"), [this, childIndex, seconds] { cues.update (childIndex, [seconds] (Cue& c) { c.preWaitSeconds = seconds; }); });
+    }
+
+private:
+    /** Bars: one per child, from its pre-wait to pre-wait + length, on a shared time axis. */
+    class TimelineEditor : public juce::Component
+    {
+    public:
+        explicit TimelineEditor (GroupPanel& o) : owner (o) { setWantsKeyboardFocus (true); }
+
+        void refresh()
+        {
+            const int index = owner.groupIndex();
+            children = index >= 0 ? owner.cues.childrenOf (index) : std::vector<int>();
+
+            if (selectedChild >= 0 && std::find (children.begin(), children.end(), selectedChild) == children.end())
+                selectedChild = children.empty() ? -1 : children.front();
+
+            repaint();
+        }
+
+        double axisSeconds() const
+        {
+            double longest = 0.0;
+
+            for (int child : children)
+            {
+                const double length = owner.cues.effectiveLengthOf (child);
+                longest = std::max (longest, owner.cues.get (child).preWaitSeconds + (length > 0.0 ? length : 1.0));
+            }
+
+            return std::max (10.0, std::ceil (longest * 1.1));
+        }
+
+        juce::Rectangle<int> barArea() const { return getLocalBounds().withTrimmedLeft (labelWidth).withTrimmedTop (axisHeight).reduced (2, 0); }
+        float xFor (double seconds) const { const auto a = barArea(); return (float) a.getX() + (float) (seconds / axisSeconds()) * (float) a.getWidth(); }
+        double secondsFor (float x) const { const auto a = barArea(); return juce::jmax (0.0, (double) (x - (float) a.getX()) / (double) juce::jmax (1, a.getWidth()) * axisSeconds()); }
+
+        int rowHeight() const { return children.empty() ? 20 : juce::jlimit (16, 26, (getHeight() - axisHeight) / (int) children.size()); }
+
+        void paint (juce::Graphics& g) override
+        {
+            g.fillAll (Palette::background);
+            const auto area = barArea();
+            const double axis = axisSeconds();
+
+            // axis ticks
+            g.setFont (juce::Font (juce::FontOptions (10.0f)));
+            const double step = axis <= 20.0 ? 1.0 : axis <= 60.0 ? 5.0 : axis <= 300.0 ? 30.0 : 60.0;
+
+            for (double t = 0.0; t <= axis + 1e-9; t += step)
+            {
+                const float x = xFor (t);
+                g.setColour (Palette::outline);
+                g.drawVerticalLine ((int) x, (float) axisHeight, (float) getHeight());
+                g.setColour (Palette::dimText);
+                g.drawText (formatSeconds (t), (int) x + 2, 0, 60, axisHeight, juce::Justification::centredLeft);
+            }
+
+            const int h = rowHeight();
+            int y = axisHeight;
+
+            for (int child : children)
+            {
+                const auto& c = owner.cues.get (child);
+                const double length = owner.cues.effectiveLengthOf (child);
+                const bool selected = child == selectedChild;
+                g.setColour (selected ? Palette::text : Palette::dimText);
+                g.setFont (juce::Font (juce::FontOptions (12.0f, selected ? juce::Font::bold : juce::Font::plain)));
+                g.drawText ((c.number.isNotEmpty() ? c.number + " " : juce::String()) + c.name, 4, y, labelWidth - 8, h, juce::Justification::centredLeft, true);
+
+                const float x0 = xFor (c.preWaitSeconds);
+                const float x1 = length < 0.0 ? (float) area.getRight() : xFor (c.preWaitSeconds + juce::jmax (length, 0.05));
+                juce::Rectangle<float> bar (x0, (float) y + 3.0f, juce::jmax (6.0f, x1 - x0), (float) h - 6.0f);
+                auto colour = c.isGroup() ? CueTable::groupModeColour (c.group.mode) : (c.color > 0 ? CueColors::get (c.color) : Palette::standby);
+
+                if (! c.armed)
+                    colour = colour.withAlpha (0.4f);
+
+                g.setColour (colour.withAlpha (selected ? 0.95f : 0.7f));
+                g.fillRoundedRectangle (bar, 3.0f);
+
+                if (selected)
+                {
+                    g.setColour (juce::Colours::white);
+                    g.drawRoundedRectangle (bar, 3.0f, 1.5f);
+                }
+
+                g.setColour (juce::Colours::black.withAlpha (0.8f));
+                g.setFont (juce::Font (juce::FontOptions (11.0f)));
+                g.drawText (formatTimeMs (c.preWaitSeconds), bar.toNearestInt().withTrimmedLeft (4), juce::Justification::centredLeft, true);
+                y += h;
+            }
+
+            if (children.empty())
+            {
+                g.setColour (Palette::dimText);
+                g.setFont (juce::Font (juce::FontOptions (12.0f)));
+                g.drawText (ko ("자식 큐가 없습니다 — 큐를 이 그룹 아래로 끌어다 넣거나, 큐를 선택하고 Ctrl+G로 묶으세요"), getLocalBounds(), juce::Justification::centred);
+            }
+        }
+
+        int childAt (int y) const
+        {
+            if (y < axisHeight || children.empty())
+                return -1;
+
+            const int row = (y - axisHeight) / rowHeight();
+            return row >= 0 && row < (int) children.size() ? children[(size_t) row] : -1;
+        }
+
+        void mouseDown (const juce::MouseEvent& e) override
+        {
+            grabKeyboardFocus();
+            dragging = -1;
+            const int child = childAt (e.y);
+
+            if (child < 0)
+                return;
+
+            selectedChild = child;
+            owner.cues.setSelectedIndex (owner.groupIndex());   // stay on the group in the inspector
+            const auto& c = owner.cues.get (child);
+            dragStartSeconds = c.preWaitSeconds;
+            dragOffset = secondsFor ((float) e.x) - c.preWaitSeconds;
+            dragging = e.x >= barArea().getX() ? child : -1;
+            repaint();
+        }
+
+        void mouseDrag (const juce::MouseEvent& e) override
+        {
+            if (dragging < 0)
+                return;
+
+            double seconds = secondsFor ((float) e.x) - dragOffset;
+
+            if (! e.mods.isShiftDown())
+                seconds = std::round (seconds * 10.0) / 10.0;   // 0.1 s grid; Shift = free
+
+            owner.setChildPreWait (dragging, seconds, false, dragStartSeconds);
+            repaint();
+        }
+
+        void mouseUp (const juce::MouseEvent&) override
+        {
+            if (dragging < 0)
+                return;
+
+            const double final = owner.cues.get (dragging).preWaitSeconds;
+            const int child = dragging;
+            dragging = -1;
+
+            if (! juce::approximatelyEqual (final, dragStartSeconds))
+                owner.setChildPreWait (child, final, true, dragStartSeconds);
+        }
+
+        bool keyPressed (const juce::KeyPress& key) override
+        {
+            if (selectedChild < 0 || ! owner.cues.isValidIndex (selectedChild))
+                return false;
+
+            const bool left = key.isKeyCode (juce::KeyPress::leftKey), right = key.isKeyCode (juce::KeyPress::rightKey);
+
+            if ((left || right) && key.getModifiers().isAltDown())
+            {
+                const double step = key.getModifiers().isShiftDown() ? 0.01 : 0.1;
+                const double from = owner.cues.get (selectedChild).preWaitSeconds;
+                owner.setChildPreWait (selectedChild, from + (right ? step : -step), true, from);
+                return true;
+            }
+
+            if (key.isKeyCode (juce::KeyPress::upKey) || key.isKeyCode (juce::KeyPress::downKey))
+            {
+                const auto it = std::find (children.begin(), children.end(), selectedChild);
+
+                if (it != children.end())
+                {
+                    const int pos = (int) (it - children.begin()) + (key.isKeyCode (juce::KeyPress::downKey) ? 1 : -1);
+
+                    if (pos >= 0 && pos < (int) children.size())
+                    {
+                        selectedChild = children[(size_t) pos];
+                        repaint();
+                    }
+                }
+
+                return true;
+            }
+
+            return false;
+        }
+
+    private:
+        static constexpr int labelWidth = 150;
+        static constexpr int axisHeight = 14;
+        GroupPanel& owner;
+        std::vector<int> children;
+        int selectedChild = -1;
+        int dragging = -1;
+        double dragStartSeconds = 0.0, dragOffset = 0.0;
+    };
+
+    void edit (const juce::String& name, const std::function<void (Cue&)>& mutator)
+    {
+        if (refreshing || ! editable)
+            return;
+
+        const int index = groupIndex();
+
+        if (index < 0)
+            return;
+
+        document.perform (name, [this, index, mutator] { cues.update (index, mutator); });
+    }
+
+    void commitCrossfade()
+    {
+        const double seconds = crossfadeEditor.getText().trim().getDoubleValue();
+        const auto* cue = cues.getSelected();
+
+        if (cue == nullptr || ! cue->isGroup() || juce::approximatelyEqual (seconds, cue->group.crossfadeSeconds))
+            return;
+
+        edit (ko ("크로스페이드 시간"), [seconds] (Cue& c) { c.group.crossfadeSeconds = juce::jlimit (0.0, GroupCueData::maxCrossfadeSeconds, seconds); });
+    }
+
+    ProjectDocument& document;
+    CueList& cues;
+    juce::Label modeLabel, hint, crossfadeUnit;
+    juce::ComboBox modeCombo;
+    juce::ToggleButton loopToggle, shuffleToggle, crossfadeToggle;
+    juce::TextEditor crossfadeEditor;
+    TimelineEditor timeline;
+    juce::Uuid shownId = juce::Uuid::null();
+    bool refreshing = false;
+    bool editable = true;
+};
+
 class CueInspector::EffectsPanel : public juce::Component
 {
 public:
@@ -2327,6 +2698,7 @@ CueInspector::CueInspector (ProjectDocument& doc, AudioEngine& e, AppSettings& s
     curvePanel = std::make_unique<CurvePanel> (document);
     fadeParamsPanel = std::make_unique<FadeParamsPanel> (document, engine);
     devampPanel = std::make_unique<DevampPanel> (document);
+    groupPanel = std::make_unique<GroupPanel> (document);
 
     tabs.setTabBarDepth (26);
     tabs.setOutline (0);
@@ -2394,6 +2766,7 @@ void CueInspector::setEditable (bool shouldBeEditable)
     curvePanel->setEditable (editable);
     fadeParamsPanel->setEditable (editable);
     devampPanel->setEditable (editable);
+    groupPanel->setEditable (editable);
 }
 
 void CueInspector::rebuildTabs (int wanted)
@@ -2404,7 +2777,14 @@ void CueInspector::rebuildTabs (int wanted)
     tabSet = wanted;
     tabs.clearTabs();
 
-    if (wanted == 2)
+    if (wanted == 3)
+    {
+        tabs.addTab (ko ("기본"), Palette::panel, basics, false);
+        tabs.addTab (ko ("그룹"), Palette::panel, groupPanel.get(), false);
+        tabs.addTab (ko ("트리거"), Palette::panel, triggers, false);
+        tabs.setCurrentTabIndex (1);
+    }
+    else if (wanted == 2)
     {
         tabs.addTab (ko ("기본"), Palette::panel, basics, false);
         tabs.addTab (ko ("디밴프"), Palette::panel, devampPanel.get(), false);
@@ -2467,7 +2847,7 @@ void CueInspector::refresh()
         title.setText (text, juce::dontSendNotification);
     }
 
-    rebuildTabs (cue == nullptr ? 0 : cue->isFade() ? 1 : cue->isDevamp() ? 2 : 0);
+    rebuildTabs (cue == nullptr ? 0 : cue->isFade() ? 1 : cue->isDevamp() ? 2 : cue->isGroup() ? 3 : 0);
     basics->refresh();
     timeLoops->refresh();
     levels->refresh();
@@ -2478,6 +2858,7 @@ void CueInspector::refresh()
     curvePanel->refresh();
     fadeParamsPanel->refresh();
     devampPanel->refresh();
+    groupPanel->refresh();
 }
 
 void CueInspector::resized()

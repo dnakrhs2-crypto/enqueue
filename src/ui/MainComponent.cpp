@@ -79,12 +79,32 @@ MainComponent::MainComponent (AudioEngine& e, AppSettings& s, juce::ApplicationC
 
     table.onFilesDropped = [this] (const juce::StringArray& files, int insertAt) { addCuesFromFiles (files, insertAt); };
     table.onMoveRows = [this] (const std::vector<int>& rows, int insertIndex) { moveRows (rows, insertIndex); };
+    table.onToggleCollapse = [this] (int index, bool collapsed) { document.cues.setCollapsed (index, collapsed); };
     table.onEditCues = [this] (const std::vector<int>& rows, const juce::String& name, const std::function<void (Cue&)>& mutator)
     {
         editCues (rows, name, mutator);
     };
     table.onEditNotes = [this] (int) { inspector.showNotes(); };
     table.hasPlayed = [this] (const juce::Uuid& id) { return controller.hasPlayed (id); };
+    transport.describeGroup = [this] (const Cue& groupCue) -> juce::String
+    {
+        const int index = document.cues.indexOf (groupCue.id);
+
+        if (index < 0)
+            return {};
+
+        const int count = (int) document.cues.childrenOf (index).size();
+        const double length = document.cues.effectiveLengthOf (index);
+        juce::String text = ko ("자식 ") + juce::String (count) + ko ("개");
+
+        if (length < 0.0)
+            text << ko ("   길이 ") << juce::String::fromUTF8 ("\xE2\x88\x9E");
+        else if (length > 0.0)
+            text << ko ("   길이 ") << formatSeconds (length);
+
+        return text;
+    };
+
     transport.describeFadeTarget = [this] (const Cue& fadeCue) -> juce::String
     {
         const int index = fadeCue.targetId().isNull() ? -1 : document.cues.indexOf (fadeCue.targetId());
@@ -241,7 +261,9 @@ void MainComponent::getAllCommands (juce::Array<juce::CommandID>& ids)
                     CommandIDs::panicAll, CommandIDs::hardStopAll, CommandIDs::preview,
                     CommandIDs::auditionGo, CommandIDs::auditionPreview, CommandIDs::toggleAlwaysAudition,
                     CommandIDs::loadCue, CommandIDs::loadToTime, CommandIDs::resetCue, CommandIDs::resetAll,
-                    CommandIDs::addCue, CommandIDs::addFadeCue, CommandIDs::addDevampCue, CommandIDs::revertFade, CommandIDs::fetchFadeLevels, CommandIDs::removeCue, CommandIDs::duplicateCue,
+                    CommandIDs::addCue, CommandIDs::addFadeCue, CommandIDs::addDevampCue, CommandIDs::addGroupCue, CommandIDs::groupSelectedCues,
+                    CommandIDs::ungroupSelected, CommandIDs::collapseAllGroups, CommandIDs::expandAllGroups,
+                    CommandIDs::revertFade, CommandIDs::fetchFadeLevels, CommandIDs::removeCue, CommandIDs::duplicateCue,
                     CommandIDs::moveCueUp, CommandIDs::moveCueDown, CommandIDs::selectAll,
                     CommandIDs::copyCues, CommandIDs::cutCues, CommandIDs::pasteCues, CommandIDs::pasteCueProperties,
                     CommandIDs::find, CommandIDs::findNext,
@@ -356,6 +378,32 @@ void MainComponent::getCommandInfo (juce::CommandID commandID, juce::Application
             result.setInfo (ko ("디밴프 큐 추가"), ko ("선택한 오디오 큐를 대상으로: 실행하면 대상이 지금 도는 반복을 마치고 이어가거나 멈추고, 그 순간 다음 큐를 시작"), cueMenu, 0);
             result.addDefaultKeypress ('8', ModifierKeys::commandModifier);
             result.setActive (canEdit);
+            break;
+
+        case CommandIDs::addGroupCue:
+            result.setInfo (ko ("그룹 큐 추가"), ko ("빈 그룹을 선택 뒤에 추가 (자식은 그룹 아래로 끌어다 넣거나 Ctrl+G로 묶기)"), cueMenu, 0);
+            result.addDefaultKeypress ('0', ModifierKeys::commandModifier);
+            result.setActive (canEdit);
+            break;
+
+        case CommandIDs::groupSelectedCues:
+            result.setInfo (ko ("선택한 큐 그룹으로 묶기"), ko ("선택한 큐(하위 포함)를 새 그룹 안에 넣음"), cueMenu, 0);
+            result.addDefaultKeypress ('G', ModifierKeys::commandModifier);
+            result.setActive (canEdit && document.cues.getSelectedIndex() >= 0);
+            break;
+
+        case CommandIDs::ungroupSelected:
+            result.setInfo (ko ("그룹 해제"), ko ("선택한 그룹을 없애고 자식을 한 단계 위로"), cueMenu, 0);
+            result.addDefaultKeypress ('G', ModifierKeys::commandModifier | ModifierKeys::shiftModifier);
+            result.setActive (canEdit && document.cues.getSelected() != nullptr && document.cues.getSelected()->isGroup());
+            break;
+
+        case CommandIDs::collapseAllGroups:
+            result.setInfo (ko ("모든 그룹 접기"), ko ("모든 그룹의 자식을 숨김"), cueMenu, 0);
+            break;
+
+        case CommandIDs::expandAllGroups:
+            result.setInfo (ko ("모든 그룹 펼치기"), ko ("모든 그룹의 자식을 표시"), cueMenu, 0);
             break;
 
         case CommandIDs::revertFade:
@@ -641,6 +689,26 @@ bool MainComponent::perform (const InvocationInfo& info)
             addDevampCue();
             break;
 
+        case CommandIDs::addGroupCue:
+            addGroupCue();
+            break;
+
+        case CommandIDs::groupSelectedCues:
+            groupSelectedCues();
+            break;
+
+        case CommandIDs::ungroupSelected:
+            ungroupSelected();
+            break;
+
+        case CommandIDs::collapseAllGroups:
+            setAllGroupsCollapsed (true);
+            break;
+
+        case CommandIDs::expandAllGroups:
+            setAllGroupsCollapsed (false);
+            break;
+
         case CommandIDs::fetchFadeLevels:
             inspector.fetchFadeLevelsFromTarget();
             break;
@@ -838,6 +906,11 @@ juce::PopupMenu MainComponent::getMenuForIndex (int topLevelMenuIndex, const juc
             menu.addCommandItem (&commands, CommandIDs::addCue);
             menu.addCommandItem (&commands, CommandIDs::addFadeCue);
             menu.addCommandItem (&commands, CommandIDs::addDevampCue);
+            menu.addCommandItem (&commands, CommandIDs::addGroupCue);
+            menu.addCommandItem (&commands, CommandIDs::groupSelectedCues);
+            menu.addCommandItem (&commands, CommandIDs::ungroupSelected);
+            menu.addCommandItem (&commands, CommandIDs::collapseAllGroups);
+            menu.addCommandItem (&commands, CommandIDs::expandAllGroups);
             menu.addCommandItem (&commands, CommandIDs::fetchFadeLevels);
             menu.addCommandItem (&commands, CommandIDs::removeCue);
             menu.addCommandItem (&commands, CommandIDs::duplicateCue);
@@ -932,6 +1005,7 @@ void MainComponent::addCuesFromFiles (const juce::StringArray& files, int insert
             refreshCueFileInfo (engine.getFormatManager(), cue);
 
             const int at = index < 0 ? document.cues.size() : index;
+            cue.parentId = document.cues.parentForInsertion (at);   // dropped between a group's children: joins the group
 
             if (autoNumber)
                 cue.number = CueNumbering::next (document.cues.getAll(), at, increment);
@@ -979,12 +1053,12 @@ void MainComponent::addFadeCue()
             fade.fade.mainActive = true;   // the usual fade: just the main level
         }
 
-        const int at = selected >= 0 ? selected + 1 : document.cues.size();
+        const int at = selected >= 0 ? document.cues.subtreeEnd (selected) : document.cues.size();
 
         if (autoNumber)
             fade.number = CueNumbering::next (document.cues.getAll(), at, increment);
 
-        const int index = document.cues.add (std::move (fade), at);
+        const int index = document.cues.addAfter (std::move (fade), selected);
         document.cues.setSelectedIndex (index);
     });
 }
@@ -1010,14 +1084,84 @@ void MainComponent::addDevampCue()
         if (const auto* t = document.cues.findById (target))
             devamp.name = ko ("디밴프: ") + t->name;
 
-        const int at = selected >= 0 ? selected + 1 : document.cues.size();
+        const int at = selected >= 0 ? document.cues.subtreeEnd (selected) : document.cues.size();
 
         if (autoNumber)
             devamp.number = CueNumbering::next (document.cues.getAll(), at, increment);
 
-        const int index = document.cues.add (std::move (devamp), at);
+        const int index = document.cues.addAfter (std::move (devamp), selected);
         document.cues.setSelectedIndex (index);
     });
+}
+
+void MainComponent::addGroupCue()
+{
+    if (showMode)
+        return;
+
+    const int selected = document.cues.getSelectedIndex();
+    const bool autoNumber = document.settings.autoNumber;
+    const double increment = document.settings.numberIncrement;
+
+    document.perform (ko ("그룹 큐 추가"), [this, selected, autoNumber, increment]
+    {
+        Cue group;
+        group.type = CueType::group;
+        group.name = ko ("그룹");
+        const int at = selected >= 0 ? document.cues.subtreeEnd (selected) : document.cues.size();
+
+        if (autoNumber)
+            group.number = CueNumbering::next (document.cues.getAll(), at, increment);
+
+        const int index = document.cues.addAfter (std::move (group), selected);
+        document.cues.setSelectedIndex (index);
+    });
+}
+
+void MainComponent::groupSelectedCues()
+{
+    const auto rows = document.cues.getSelectedIndices();
+
+    if (rows.empty() || showMode)
+        return;
+
+    const bool autoNumber = document.settings.autoNumber;
+    const double increment = document.settings.numberIncrement;
+
+    document.perform (ko ("그룹으로 묶기"), [this, rows, autoNumber, increment]
+    {
+        Cue group;
+        group.type = CueType::group;
+        group.name = ko ("그룹");
+
+        if (autoNumber)
+            group.number = CueNumbering::next (document.cues.getAll(), rows.front(), increment);
+
+        document.cues.wrapInGroup (rows, std::move (group));
+    });
+}
+
+void MainComponent::ungroupSelected()
+{
+    const int index = document.cues.getSelectedIndex();
+
+    if (! document.cues.isValidIndex (index) || ! document.cues.get (index).isGroup() || showMode)
+        return;
+
+    const auto id = document.cues.get (index).id;
+    controller.stopGroup (id, 0);
+
+    document.perform (ko ("그룹 해제"), [this, index]
+    {
+        document.cues.ungroup (index);
+    });
+}
+
+void MainComponent::setAllGroupsCollapsed (bool collapsed)
+{
+    for (int i = 0; i < document.cues.size(); ++i)
+        if (document.cues.get (i).isGroup())
+            document.cues.setCollapsed (i, collapsed);
 }
 
 void MainComponent::addCueViaDialog()
@@ -1063,8 +1207,12 @@ void MainComponent::removeSelectedCues()
 
     std::vector<juce::Uuid> ids;
 
-    for (int row : rows)
+    for (int row : document.cues.withSubtrees (rows))   // a group takes its children along
         ids.push_back (document.cues.get (row).id);
+
+    for (int row : rows)
+        if (document.cues.get (row).isGroup())
+            controller.stopGroup (document.cues.get (row).id, 0);
 
     document.perform (rows.size() == 1 ? ko ("큐 삭제") : ko ("큐 삭제 (") + juce::String (rows.size()) + ")", [this, rows, ids]
     {
@@ -1127,26 +1275,32 @@ void MainComponent::moveSelection (int delta)
     if (rows.empty() || showMode)
         return;
 
+    const auto& cues = document.cues;
     const int first = rows.front();
     const int last = rows.back();
-    int to;
+    int insertIndex;
 
     if (delta < 0)
     {
-        if (first <= 0)
-            return;
+        // in front of the previous visible row (a group's last child: leaves the group; an open group above: enters it as the last child)
+        insertIndex = cues.previousVisible (first);
 
-        to = first - 1;
+        if (insertIndex < 0)
+            return;
     }
     else
     {
-        if (last >= document.cues.size() - 1)
+        // behind the next visible row (an open group: becomes its first child; a closed one is skipped whole)
+        const int next = cues.subtreeEnd (last);
+
+        if (next >= cues.size())
             return;
 
-        to = last + 2 - (int) rows.size();
+        const auto& nextCue = cues.get (next);
+        insertIndex = nextCue.isGroup() && nextCue.group.collapsed ? cues.subtreeEnd (next) : next + 1;
     }
 
-    document.perform (ko ("큐 이동"), [this, rows, to] { document.cues.moveIndices (rows, to); });
+    document.perform (ko ("큐 이동"), [this, rows, insertIndex] { document.cues.moveSubtrees (rows, insertIndex); });
 }
 
 void MainComponent::moveRows (const std::vector<int>& rows, int insertIndex)
@@ -1154,13 +1308,7 @@ void MainComponent::moveRows (const std::vector<int>& rows, int insertIndex)
     if (rows.empty() || showMode)
         return;
 
-    int to = insertIndex;
-
-    for (int row : rows)
-        if (row < insertIndex)
-            --to;
-
-    document.perform (ko ("큐 이동"), [this, rows, to] { document.cues.moveIndices (rows, to); });
+    document.perform (ko ("큐 이동"), [this, rows, insertIndex] { document.cues.moveSubtrees (rows, insertIndex); });
 }
 
 void MainComponent::editCues (const std::vector<int>& rows, const juce::String& name, const std::function<void (Cue&)>& mutator)
@@ -1324,7 +1472,7 @@ void MainComponent::copySelectedCues()
     clipboard.cues.clear();
     clipboard.plugins.clear();
 
-    for (int row : rows)
+    for (int row : document.cues.withSubtrees (rows))   // a group is copied with its children
     {
         const auto& cue = document.cues.get (row);
         clipboard.cues.push_back (cue);
@@ -1355,7 +1503,7 @@ void MainComponent::pasteCues()
         return;
 
     const int selected = document.cues.getSelectedIndex();
-    const int insertAt = selected >= 0 ? selected + 1 : document.cues.size();
+    const int insertAt = selected >= 0 ? document.cues.subtreeEnd (selected) : document.cues.size();
     const bool autoNumber = document.settings.autoNumber;
     const double increment = document.settings.numberIncrement;
     const auto copies = clipboard.cues;
@@ -1371,11 +1519,17 @@ void MainComponent::pasteCues()
         int index = insertAt;
         int last = -1;
         juce::StringArray errors;
+        const auto parentAtPoint = document.cues.parentForInsertion (insertAt);
+        std::map<juce::Uuid, juce::Uuid> newIds;   // copied groups keep their copied children
+
+        for (const auto& c : copies)
+            newIds[c.id] = juce::Uuid();
 
         for (size_t i = 0; i < copies.size(); ++i)
         {
             Cue cue = copies[i];
-            cue.id = juce::Uuid();                 // a new identity: the original may still exist
+            cue.id = newIds[cue.id];               // a new identity: the original may still exist
+            cue.parentId = newIds.count (cue.parentId) != 0 ? newIds[cue.parentId] : parentAtPoint;
             cue.hotkey.clear();                    // hotkeys stay unique
             cue.plugins = plugins[i];
 

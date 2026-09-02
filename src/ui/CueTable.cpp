@@ -12,6 +12,22 @@ namespace
 {
     const juce::String rowDragDescription ("gocue-rows");
     constexpr int rowHeights[] = { 24, 30, 38 };
+    constexpr int indentPerLevel = 18;
+    constexpr int disclosureWidth = 16;
+}
+
+juce::Colour CueTable::groupModeColour (GroupMode mode)
+{
+    switch (mode)
+    {
+        case GroupMode::timeline:        return juce::Colour (0xff3fa860);
+        case GroupMode::playlist:        return juce::Colour (0xffd8902c);
+        case GroupMode::startFirstEnter:
+        case GroupMode::startFirst:      return juce::Colour (0xff4a86d8);
+        case GroupMode::random:          return juce::Colour (0xffa462d8);
+    }
+
+    return juce::Colours::grey;
 }
 
 //==============================================================================
@@ -131,7 +147,38 @@ CueTable::CueTable (CueList& c, juce::AudioFormatManager& f, juce::ApplicationCo
     addAndMakeVisible (table);
 
     cues.addListener (this);
+    rebuildVisible();
     syncSelectionFromModel();
+}
+
+void CueTable::rebuildVisible()
+{
+    visible.clear();
+
+    for (int i = 0; i < cues.size(); ++i)
+        if (cues.isRowVisible (i))
+            visible.push_back (i);
+}
+
+int CueTable::rowOf (int index) const noexcept
+{
+    const auto it = std::lower_bound (visible.begin(), visible.end(), index);
+    return it != visible.end() && *it == index ? (int) (it - visible.begin()) : -1;
+}
+
+bool CueTable::isGroupRunning (int index) const
+{
+    if (! cues.isValidIndex (index) || ! cues.get (index).isGroup())
+        return false;
+
+    const auto id = cues.get (index).id;
+
+    for (const auto& p : playing)
+        if (! p.loaded)
+            if (const int i = cues.indexOf (p.id); i >= 0 && cues.isDescendantOf (i, id))
+                return true;
+
+    return false;
 }
 
 CueTable::~CueTable()
@@ -203,7 +250,7 @@ void CueTable::paintOverChildren (juce::Graphics& g)
 //==============================================================================
 int CueTable::getNumRows()
 {
-    return cues.size();
+    return (int) visible.size();
 }
 
 const AudioEngine::PlayingCue* CueTable::findPlaying (const juce::Uuid& id) const
@@ -219,12 +266,15 @@ const AudioEngine::PlayingCue* CueTable::findPlaying (const juce::Uuid& id) cons
 
 void CueTable::paintRowBackground (juce::Graphics& g, int rowNumber, int width, int height, bool)
 {
-    if (! cues.isValidIndex (rowNumber))
+    const int index = modelIndex (rowNumber);
+
+    if (! cues.isValidIndex (index))
         return;
 
-    const auto& cue = cues.get (rowNumber);
+    const auto& cue = cues.get (index);
     const auto* running = findPlaying (cue.id);
     const bool isRunning = running != nullptr && ! running->loaded;
+    const bool groupRunning = isGroupRunning (index);
 
     juce::Colour background = (rowNumber % 2 == 0) ? Palette::rowEven : Palette::rowOdd;
 
@@ -235,8 +285,27 @@ void CueTable::paintRowBackground (juce::Graphics& g, int rowNumber, int width, 
 
     if (isRunning)
         background = running->paused ? Palette::paused : (running->fadingOut ? Palette::fadingOut : Palette::playing);
+    else if (groupRunning)
+        background = background.interpolatedWith (Palette::playing, 0.45f);
 
     g.fillAll (background);
+
+    // group rows and their children carry the group's mode colour down the left edge
+    {
+        const int depth = cues.depthOf (index);
+
+        if (cue.isGroup())
+        {
+            g.setColour (groupModeColour (cue.group.mode));
+            g.fillRect (depth * indentPerLevel, 0, 4, height);
+        }
+
+        for (int level = 0, p = cues.parentIndexOf (index); p >= 0 && level < 32; p = cues.parentIndexOf (p), ++level)
+        {
+            g.setColour (groupModeColour (cues.get (p).group.mode).withAlpha (0.55f));
+            g.fillRect (cues.depthOf (p) * indentPerLevel, 0, 4, height);
+        }
+    }
 
     if (isRunning && running->progress >= 0.0)
     {
@@ -253,13 +322,13 @@ void CueTable::paintRowBackground (juce::Graphics& g, int rowNumber, int width, 
             g.drawLine ((float) x, (float) height, (float) (x + height), 0.0f, 2.0f);
     }
 
-    if (cues.isSelected (rowNumber))
+    if (cues.isSelected (index))
     {
         g.setColour (Palette::standby.withAlpha (isRunning ? 0.15f : 0.28f));
         g.fillRect (0, 0, width, height);
     }
 
-    if (rowNumber == cues.getPlayheadIndex())
+    if (index == cues.getPlayheadIndex())
     {
         g.setColour (Palette::standby);
         g.drawRect (0, 0, width, height, 2);
@@ -268,10 +337,12 @@ void CueTable::paintRowBackground (juce::Graphics& g, int rowNumber, int width, 
 
 void CueTable::paintCell (juce::Graphics& g, int rowNumber, int columnId, int width, int height, bool)
 {
-    if (! cues.isValidIndex (rowNumber))
+    const int index = modelIndex (rowNumber);
+
+    if (! cues.isValidIndex (index))
         return;
 
-    const auto& cue = cues.get (rowNumber);
+    const auto& cue = cues.get (index);
     const auto* running = findPlaying (cue.id);
     const bool isRunning = running != nullptr && ! running->loaded;
 
@@ -280,7 +351,7 @@ void CueTable::paintCell (juce::Graphics& g, int rowNumber, int columnId, int wi
         const float cy = height * 0.5f;
         float x = 6.0f;
 
-        if (rowNumber == cues.getPlayheadIndex())
+        if (index == cues.getPlayheadIndex())
         {
             juce::Path playhead;
             playhead.addTriangle (x, cy - 6.0f, x, cy + 6.0f, x + 9.0f, cy);
@@ -333,6 +404,19 @@ void CueTable::paintCell (juce::Graphics& g, int rowNumber, int columnId, int wi
             g.strokePath (arc, juce::PathStrokeType (1.8f));
             g.fillRect (x + 9.0f, cy - 6.0f, 2.0f, 12.0f);
         }
+        else if (cue.isGroup())
+        {
+            // a group: a folder tab in the mode colour (running children = filled)
+            g.setColour (groupModeColour (cue.group.mode));
+            juce::Path folder;
+            folder.addRoundedRectangle (x, cy - 4.0f, 11.0f, 9.0f, 1.5f);
+            folder.addRectangle (x, cy - 6.0f, 5.0f, 3.0f);
+
+            if (isGroupRunning (index))
+                g.fillPath (folder);
+            else
+                g.strokePath (folder, juce::PathStrokeType (1.4f));
+        }
         else if (cue.fileMissing || cue.file == juce::File())
         {
             g.setColour (Palette::missing);
@@ -375,6 +459,7 @@ void CueTable::paintCell (juce::Graphics& g, int rowNumber, int columnId, int wi
     juce::String text;
     auto colour = Palette::text;
     auto justification = juce::Justification::centredLeft;
+    int indent = 0;
 
     switch (columnId)
     {
@@ -385,10 +470,38 @@ void CueTable::paintCell (juce::Graphics& g, int rowNumber, int columnId, int wi
 
         case colName:
             text = cue.name.isNotEmpty() ? cue.name : ko ("(이름 없음)");
+            indent = cues.depthOf (index) * indentPerLevel;
+
+            if (cue.isGroup())
+            {
+                // disclosure triangle: right = collapsed, down = expanded
+                const float cy = height * 0.5f;
+                const float tx = 8.0f + (float) indent;
+                juce::Path tri;
+
+                if (cue.group.collapsed)
+                    tri.addTriangle (tx, cy - 5.0f, tx, cy + 5.0f, tx + 7.0f, cy);
+                else
+                    tri.addTriangle (tx, cy - 3.0f, tx + 9.0f, cy - 3.0f, tx + 4.5f, cy + 4.0f);
+
+                g.setColour (Palette::text);
+                g.fillPath (tri);
+                indent += disclosureWidth;
+            }
             break;
 
         case colFile:
-            if (cue.isFade() || cue.isDevamp())
+            if (cue.isGroup())
+            {
+                const int count = (int) cues.childrenOf (index).size();
+                const char* mode = cue.group.mode == GroupMode::timeline ? "타임라인"
+                                 : cue.group.mode == GroupMode::playlist ? "플레이리스트"
+                                 : cue.group.mode == GroupMode::startFirstEnter ? "첫 큐 시작 후 진입"
+                                 : cue.group.mode == GroupMode::startFirst ? "첫 큐 시작" : "랜덤";
+                text = ko (mode) + ko (" · ") + juce::String (count) + ko ("개");
+                colour = Palette::dimText;
+            }
+            else if (cue.isFade() || cue.isDevamp())
             {
                 const int target = cue.targetId().isNull() ? -1 : cues.indexOf (cue.targetId());
 
@@ -444,7 +557,7 @@ void CueTable::paintCell (juce::Graphics& g, int rowNumber, int columnId, int wi
             }
             else
             {
-                const double effective = cue.effectiveLength();
+                const double effective = cues.effectiveLengthOf (index);
                 text = effective < 0.0 ? juce::String::fromUTF8 ("\xE2\x88\x9E") : formatSeconds (effective > 0.0 ? effective : cue.durationSeconds);
             }
 
@@ -457,34 +570,41 @@ void CueTable::paintCell (juce::Graphics& g, int rowNumber, int columnId, int wi
 
     g.setColour (colour);
     g.setFont (juce::Font (juce::FontOptions (14.0f, columnId == colName ? juce::Font::bold : juce::Font::plain)));
-    g.drawText (text, 8, 0, width - 16, height, justification, true);
+    g.drawText (text, 8 + indent, 0, width - 16 - indent, height, justification, true);
 }
 
 void CueTable::cellClicked (int rowNumber, int columnId, const juce::MouseEvent& e)
 {
-    if (! cues.isValidIndex (rowNumber))
+    const int index = modelIndex (rowNumber);
+
+    if (! cues.isValidIndex (index))
         return;
 
     table.grabKeyboardFocus();   // the quick-edit keys (N Q E W C O D) need the table focused
 
     if (e.mods.isPopupMenu())
     {
-        if (! cues.isSelected (rowNumber))
-            cues.setSelectedIndex (rowNumber);
+        if (! cues.isSelected (index))
+            cues.setSelectedIndex (index);
 
-        showContextMenu (rowNumber, e.getScreenPosition());
+        showContextMenu (index, e.getScreenPosition());
         return;
     }
 
     if (columnId == colStatus)
-        cues.setPlayheadIndex (rowNumber);
+        cues.setPlayheadIndex (index);
     else if (columnId == colContinue && editable)
-        cycleContinueMode (rowNumber);
+        cycleContinueMode (index);
+    else if (columnId == colName && cues.get (index).isGroup() && onToggleCollapse
+             && e.x < 8 + cues.depthOf (index) * indentPerLevel + disclosureWidth)
+        onToggleCollapse (index, ! cues.get (index).group.collapsed);
 }
 
 void CueTable::cellDoubleClicked (int rowNumber, int columnId, const juce::MouseEvent&)
 {
-    if (! editable || ! cues.isValidIndex (rowNumber))
+    const int index = modelIndex (rowNumber);
+
+    if (! editable || ! cues.isValidIndex (index))
         return;
 
     switch (columnId)
@@ -493,12 +613,12 @@ void CueTable::cellDoubleClicked (int rowNumber, int columnId, const juce::Mouse
         case colName:
         case colPreWait:
         case colPostWait:
-            beginCellEdit (rowNumber, (ColumnId) columnId);
+            beginCellEdit (index, (ColumnId) columnId);
             break;
 
         case colDuration:
             if (onEditDuration)
-                onEditDuration (rowNumber);
+                onEditDuration (index);
             break;
 
         default:
@@ -515,7 +635,8 @@ void CueTable::selectedRowsChanged (int lastRowSelected)
     const auto selected = table.getSelectedRows();
 
     for (int i = 0; i < selected.size(); ++i)
-        rows.push_back (selected[i]);
+        if (const int index = modelIndex (selected[i]); index >= 0)
+            rows.push_back (index);
 
     if (rows.empty())
     {
@@ -523,7 +644,7 @@ void CueTable::selectedRowsChanged (int lastRowSelected)
         return;
     }
 
-    cues.setSelection (rows, lastRowSelected);
+    cues.setSelection (rows, modelIndex (lastRowSelected));
 }
 
 void CueTable::deleteKeyPressed (int)
@@ -549,6 +670,7 @@ juce::var CueTable::getDragSourceDescription (const juce::SparseSet<int>& rowsTo
 void CueTable::cueListStructureChanged()
 {
     cellEditor.reset();
+    rebuildVisible();
     table.updateContent();
     syncSelectionFromModel();
     table.repaint();
@@ -556,7 +678,13 @@ void CueTable::cueListStructureChanged()
 
 void CueTable::cueChanged (int index)
 {
-    table.repaintRow (index);
+    if (const int row = rowOf (index); row >= 0)
+        table.repaintRow (row);
+
+    // a child's length / pre-wait changes what its group shows
+    for (int p = cues.parentIndexOf (index), guard = 0; p >= 0 && guard < 32; p = cues.parentIndexOf (p), ++guard)
+        if (const int row = rowOf (p); row >= 0)
+            table.repaintRow (row);
 }
 
 void CueTable::cueSelectionChanged (int)
@@ -568,8 +696,8 @@ void CueTable::playheadChanged (int index)
 {
     table.repaint();
 
-    if (index >= 0)
-        table.scrollToEnsureRowIsOnscreen (index);
+    if (const int row = rowOf (index); row >= 0)
+        table.scrollToEnsureRowIsOnscreen (row);
 }
 
 void CueTable::syncSelectionFromModel()
@@ -578,12 +706,13 @@ void CueTable::syncSelectionFromModel()
     juce::SparseSet<int> rows;
 
     for (int i : cues.getSelectedIndices())
-        rows.addRange ({ i, i + 1 });
+        if (const int row = rowOf (i); row >= 0)
+            rows.addRange ({ row, row + 1 });
 
     table.setSelectedRows (rows, juce::dontSendNotification);
 
-    if (const int primary = cues.getSelectedIndex(); primary >= 0)
-        table.scrollToEnsureRowIsOnscreen (primary);
+    if (const int row = rowOf (cues.getSelectedIndex()); row >= 0)
+        table.scrollToEnsureRowIsOnscreen (row);
 
     table.repaint();
 }
@@ -595,6 +724,22 @@ bool CueTable::handleQuickEditKey (const juce::KeyPress& key)
 
     if (! editable || ! cues.isValidIndex (row) || key.getModifiers().isAnyModifierKeyDown())
         return false;
+
+    if (key.isKeyCode (juce::KeyPress::leftKey) || key.isKeyCode (juce::KeyPress::rightKey))
+    {
+        // Right opens a group, Left closes it (Left on a child goes to its group)
+        const bool open = key.isKeyCode (juce::KeyPress::rightKey);
+        const auto& cue = cues.get (row);
+
+        if (cue.isGroup() && cue.group.collapsed == open && onToggleCollapse)
+            onToggleCollapse (row, ! open);
+        else if (! open && ! cue.isGroup() && cues.parentIndexOf (row) >= 0)
+            cues.setSelectedIndex (cues.parentIndexOf (row));
+        else if (! open && cue.isGroup() && cues.parentIndexOf (row) >= 0)
+            cues.setSelectedIndex (cues.parentIndexOf (row));
+
+        return true;
+    }
 
     if (key.isKeyCode ('N')) { beginCellEdit (row, colNumber); return true; }
     if (key.isKeyCode ('Q')) { beginCellEdit (row, colName); return true; }
@@ -646,8 +791,13 @@ void CueTable::beginCellEdit (int row, ColumnId column)
         default: return;
     }
 
-    table.scrollToEnsureRowIsOnscreen (row);
-    auto cell = table.getCellPosition (column, row, true);
+    const int visibleRow = rowOf (row);
+
+    if (visibleRow < 0)
+        return;   // inside a collapsed group
+
+    table.scrollToEnsureRowIsOnscreen (visibleRow);
+    auto cell = table.getCellPosition (column, visibleRow, true);
 
     if (cell.isEmpty())
         return;
@@ -810,15 +960,22 @@ void CueTable::fileDragExit (const juce::StringArray&)
     repaint();
 }
 
-int CueTable::insertionIndexForY (int y) const
+int CueTable::insertionRowForY (int y) const
 {
     const auto local = table.getLocalPoint (this, juce::Point<int> (0, y));
-    int insertIndex = table.getInsertionIndexForPosition (0, local.y);
+    int row = table.getInsertionIndexForPosition (0, local.y);
 
-    if (insertIndex < 0 || insertIndex > cues.size())
-        insertIndex = cues.size();
+    if (row < 0 || row > (int) visible.size())
+        row = (int) visible.size();
 
-    return insertIndex;
+    return row;
+}
+
+int CueTable::insertionIndexForY (int y) const
+{
+    // between two visible rows: in front of the lower one (model index), or at the end
+    const int row = insertionRowForY (y);
+    return row < (int) visible.size() ? visible[(size_t) row] : cues.size();
 }
 
 void CueTable::filesDropped (const juce::StringArray& files, int, int y)
@@ -842,13 +999,13 @@ bool CueTable::isInterestedInDragSource (const SourceDetails& details)
 void CueTable::itemDragEnter (const SourceDetails& details)
 {
     rowDragOver = true;
-    rowDropIndex = insertionIndexForY (details.localPosition.y);
+    rowDropIndex = insertionRowForY (details.localPosition.y);
     repaint();
 }
 
 void CueTable::itemDragMove (const SourceDetails& details)
 {
-    const int index = insertionIndexForY (details.localPosition.y);
+    const int index = insertionRowForY (details.localPosition.y);
 
     if (index != rowDropIndex)
     {

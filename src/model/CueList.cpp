@@ -248,6 +248,69 @@ std::vector<int> CueList::withSubtrees (std::vector<int> indices) const
     return result;
 }
 
+int CueList::wrapInGroup (std::vector<int> indices, Cue group)
+{
+    indices = withSubtrees (std::move (indices));
+
+    if (indices.empty())
+        return -1;
+
+    group.sanitise();
+    group.type = CueType::group;
+    const int first = indices.front();
+    group.parentId = cues[(size_t) first].parentId;
+    std::vector<juce::Uuid> movedIds;
+
+    for (int i : indices)
+        movedIds.push_back (cues[(size_t) i].id);
+
+    std::vector<Cue> block;
+
+    for (auto it = indices.rbegin(); it != indices.rend(); ++it)
+    {
+        block.insert (block.begin(), std::move (cues[(size_t) *it]));
+        cues.erase (cues.begin() + *it);
+    }
+
+    for (auto& c : block)
+        if (std::find (movedIds.begin(), movedIds.end(), c.parentId) == movedIds.end())
+            c.parentId = group.id;   // the top-level rows of the block become the group's children
+
+    const auto groupId = group.id;
+    cues.insert (cues.begin() + first, std::move (group));
+    cues.insert (cues.begin() + first + 1, std::make_move_iterator (block.begin()), std::make_move_iterator (block.end()));
+    sanitiseTree();
+    selection.clear();
+    primary = -1;
+    playhead = -1;
+    notifyStructureChanged();
+    setSelectedIndex (indexOf (groupId));
+    return indexOf (groupId);
+}
+
+bool CueList::ungroup (int index)
+{
+    if (! isValidIndex (index) || ! cues[(size_t) index].isGroup())
+        return false;
+
+    const auto groupId = cues[(size_t) index].id;
+    const auto parent = cues[(size_t) index].parentId;
+    const int end = subtreeEnd (index);
+
+    for (int i = index + 1; i < end; ++i)
+        if (cues[(size_t) i].parentId == groupId)
+            cues[(size_t) i].parentId = parent;
+
+    cues.erase (cues.begin() + index);
+    sanitiseTree();
+    selection.clear();
+    primary = -1;
+    playhead = -1;
+    notifyStructureChanged();
+    setSelectedIndex (juce::jmin (index, size() - 1));
+    return true;
+}
+
 //==============================================================================
 int CueList::add (Cue cue, int insertAt)
 {

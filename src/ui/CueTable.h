@@ -58,6 +58,11 @@ public:
     std::function<void (int row)> onEditDuration;
     /** The controller knows which cues have played (for the second colour). */
     std::function<bool (const juce::Uuid& id)> hasPlayed;
+    /** The disclosure triangle / Left / Right on a group row. */
+    std::function<void (int index, bool collapsed)> onToggleCollapse;
+
+    /** Border colour of a group mode (timeline green, playlist orange, start-first blue, random purple). */
+    static juce::Colour groupModeColour (GroupMode mode);
 
     /** Opens the inline editor for a cell (number / name / pre-wait / post-wait). */
     void beginCellEdit (int row, ColumnId column);
@@ -100,7 +105,13 @@ private:
     void playheadChanged (int index) override;
 
     const AudioEngine::PlayingCue* findPlaying (const juce::Uuid& id) const;
+    bool isGroupRunning (int index) const;
     void syncSelectionFromModel();
+    /** Rows are the visible cues (collapsed groups hide their subtrees): row <-> model index. */
+    void rebuildVisible();
+    int modelIndex (int row) const noexcept { return row >= 0 && row < (int) visible.size() ? visible[(size_t) row] : -1; }
+    int rowOf (int index) const noexcept;
+    int insertionRowForY (int y) const;
     bool handleQuickEditKey (const juce::KeyPress& key);
     void showContextMenu (int row, juce::Point<int> screenPosition);
     void cycleContinueMode (int row);
@@ -122,6 +133,7 @@ private:
     int editGeneration = 0;   // bumps for every cell editor so a stale async commit cannot close a newer one
     TableBox table;
     std::vector<AudioEngine::PlayingCue> playing;
+    std::vector<int> visible;
     std::unique_ptr<CellEditor> cellEditor;
     bool dragOver = false;
     bool rowDragOver = false;

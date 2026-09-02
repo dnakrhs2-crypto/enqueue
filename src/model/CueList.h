@@ -72,6 +72,14 @@ public:
     double effectiveLengthOf (int index) const noexcept;
     /** Shows / hides the children of a group in the list view (no cueChanged: only the visibility changes). */
     void setCollapsed (int index, bool collapsed);
+    /** Expands indices to whole subtrees (sorted, unique). */
+    std::vector<int> withSubtrees (std::vector<int> indices) const;
+    /** Puts the cues (with their subtrees) into a new group inserted where the first of them was; the group takes the
+        first cue's parent. Returns the group's index (-1 when nothing valid was given). Selects the group. */
+    int wrapInGroup (std::vector<int> indices, Cue group);
+    /** Removes a group cue and hands its children to the group's parent (they stay where they are). Returns false
+        when 'index' is not a group. Selects the first former child (or the row that took the group's place). */
+    bool ungroup (int index);
 
     /** Inserts a cue (insertAt == -1 appends). Returns the index it landed on. */
     int add (Cue cue, int insertAt = -1);
@@ -141,8 +149,6 @@ private:
     void clampCursors();
     /** Nulls parent ids that do not point at a group directly enclosing the cue (keeps the pre-order invariant). */
     void sanitiseTree();
-    /** Expands indices to whole subtrees (sorted, unique). */
-    std::vector<int> withSubtrees (std::vector<int> indices) const;
 
     std::vector<Cue> cues;
     std::vector<int> selection;   // sorted, unique

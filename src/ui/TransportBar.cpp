@@ -84,6 +84,18 @@ void TransportBar::setStandbyCue (int index, const Cue* cue)
     cueNumber.setText (juce::String (index + 1), juce::dontSendNotification);
     cueName.setText (cue->name.isNotEmpty() ? cue->name : ko ("(이름 없음)"), juce::dontSendNotification);
 
+    if (cue->isGroup())
+    {
+        cueFile.setText (describeGroup ? describeGroup (*cue) : ko ("그룹"), juce::dontSendNotification);
+        cueFile.setColour (juce::Label::textColourId, Palette::dimText);
+        cueMeta.setText (ko ("그룹 큐   ") + (cue->group.mode == GroupMode::timeline ? ko ("자식 전부 동시에 시작 (각자 프리웨이트)")
+                                            : cue->group.mode == GroupMode::playlist ? ko ("자식 차례로 재생 (두 번째 GO = 다음 곡)")
+                                            : cue->group.mode == GroupMode::startFirstEnter ? ko ("첫 자식 시작, 플레이헤드는 그룹 안으로")
+                                            : cue->group.mode == GroupMode::startFirst ? ko ("첫 자식 시작, 플레이헤드는 그룹 뒤로")
+                                            : ko ("자식 중 하나를 랜덤으로 (한 바퀴에 한 번씩)")), juce::dontSendNotification);
+        return;
+    }
+
     if (cue->isDevamp())
     {
         const auto target = describeFadeTarget ? describeFadeTarget (*cue) : juce::String();

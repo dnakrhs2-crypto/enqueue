@@ -425,6 +425,38 @@ public:
             expectEquals (names (list), juce::String ("d"));
         }
 
+        beginTest ("tree: wrapInGroup / ungroup");
+        {
+            CueList list;
+            list.add (make ("a"));
+            list.add (make ("b"));
+            list.add (make ("c"));
+            list.add (make ("d"));
+            Cue g = make ("G");
+            const int gi = list.wrapInGroup ({ 1, 2 }, g);
+            expectEquals (gi, 1);
+            expectEquals (names (list), juce::String ("a,G,b,c,d"));
+            expect (list.get (1).isGroup() && list.get (1).parentId.isNull());
+            expect (list.get (2).parentId == list.get (1).id && list.get (3).parentId == list.get (1).id);
+            expect (list.get (4).parentId.isNull());
+            expectEquals (list.getSelectedIndex(), 1);
+
+            // a nested wrap inside the group keeps the outer parent
+            const int inner = list.wrapInGroup ({ 3 }, make ("H"));
+            expectEquals (inner, 3);
+            expect (list.get (3).parentId == list.get (1).id);
+            expect (list.get (4).parentId == list.get (3).id);
+            expectEquals (list.subtreeEnd (1), 5);
+
+            expect (list.ungroup (3));
+            expectEquals (names (list), juce::String ("a,G,b,c,d"));
+            expect (list.get (3).parentId == list.get (1).id);
+            expect (list.ungroup (1));
+            expectEquals (names (list), juce::String ("a,b,c,d"));
+            expect (list.get (1).parentId.isNull() && list.get (2).parentId.isNull());
+            expect (! list.ungroup (0));
+        }
+
         beginTest ("tree: broken parent links are nulled on load");
         {
             CueList list;

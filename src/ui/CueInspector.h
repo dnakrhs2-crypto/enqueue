@@ -66,6 +66,7 @@ public:
     class CurvePanel;
     class FadeParamsPanel;
     class DevampPanel;
+    class GroupPanel;
 
 private:
     void refresh();
@@ -104,6 +105,7 @@ private:
     std::unique_ptr<CurvePanel> curvePanel;
     std::unique_ptr<FadeParamsPanel> fadeParamsPanel;
     std::unique_ptr<DevampPanel> devampPanel;
+    std::unique_ptr<GroupPanel> groupPanel;
     BasicsPanel* basics = nullptr;       // aliases of the panels above
     TimeLoopsPanel* timeLoops = nullptr;
     LevelsPanel* levels = nullptr;

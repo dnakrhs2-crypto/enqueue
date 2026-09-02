@@ -24,6 +24,11 @@ enum : juce::CommandID
     addCue,
     addFadeCue,           // Ctrl+7
     addDevampCue,         // Ctrl+8
+    addGroupCue,          // Ctrl+0
+    groupSelectedCues,    // Ctrl+G
+    ungroupSelected,      // Ctrl+Shift+G
+    collapseAllGroups,
+    expandAllGroups,
     revertFade,           // Ctrl+Shift+R
     fetchFadeLevels,      // Ctrl+Shift+T
     removeCue,

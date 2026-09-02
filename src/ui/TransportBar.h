@@ -18,6 +18,8 @@ public:
     void setStandbyCue (int index, const Cue* cue);
     /** Describes a fade cue's target ("→ 1 Intro"); set by the app, which can look cues up. */
     std::function<juce::String (const Cue& fadeCue)> describeFadeTarget;
+    /** Group cues: "mode · N children · length" for the standby display. */
+    std::function<juce::String (const Cue& groupCue)> describeGroup;
     void setPlayingCount (int numPlaying, int numPaused);
     /** Shows a transient message (errors in red) for a few seconds. */
     void showStatus (const juce::String& message, bool isError);

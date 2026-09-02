@@ -93,6 +93,13 @@ private:
     void addFadeCue();
     /** Inserts a devamp cue after the selection, targeting the selected audio cue. */
     void addDevampCue();
+    /** Inserts an empty group after the selection (a sibling of it). */
+    void addGroupCue();
+    /** Wraps the selected cues (with their subtrees) in a new group. */
+    void groupSelectedCues();
+    /** Dissolves the selected group: its children move up one level. */
+    void ungroupSelected();
+    void setAllGroupsCollapsed (bool collapsed);
     void removeSelectedCues();
     void duplicateSelectedCue();
     void moveSelection (int delta);
