@@ -56,7 +56,9 @@ CuePlayer::CuePlayer (const Cue& c, juce::AudioFormatManager& formats,
 
     startOffsetSamples = std::max<juce::int64> (0, (juce::int64) std::llround (std::max (0.0, startOffsetSeconds) * fileSampleRate));
     regionSource->setNextReadPosition (startOffsetSamples);
+    virtualPosition = (double) startOffsetSamples;
     source = std::move (regionSource);
+    updatePositionInfo (liveRate.load());
 
     if (readAheadSamples > 0 && readAheadThread != nullptr)
     {
@@ -94,10 +96,15 @@ void CuePlayer::start()
     if (! isValid())
         return;
 
-    virtualPosition = (double) startOffsetSamples;
-    envelope.setLevel (1.0f);
-    pauseGate.setLevel (1.0f);
-    updatePositionInfo (liveRate.load());
+    if (! loadedNotStarted.load (std::memory_order_relaxed))
+    {
+        virtualPosition = (double) startOffsetSamples;
+        envelope.setLevel (1.0f);
+        pauseGate.setLevel (1.0f);
+        updatePositionInfo (liveRate.load());
+    }
+
+    loadedNotStarted.store (false, std::memory_order_release);   // a loaded player starts from where it was prepared
 }
 
 void CuePlayer::requestStop() noexcept
@@ -193,6 +200,20 @@ bool CuePlayer::renderNextBlock (juce::AudioBuffer<float>& buffer, int numSample
     }
 
     const int fadeMs = pendingFadeOutMs.exchange (-1, std::memory_order_relaxed);
+
+    if (loadedNotStarted.load (std::memory_order_acquire))
+    {
+        // waiting for start(): silent, no position change; a stop request drops the loaded instance
+        buffer.clear (0, numSamples);
+
+        if (fadeMs >= 0 || hardStopRequested.load (std::memory_order_relaxed))
+        {
+            finished.store (true, std::memory_order_relaxed);
+            return false;
+        }
+
+        return true;
+    }
 
     if (fadeMs >= 0)
     {

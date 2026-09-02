@@ -61,6 +61,30 @@ void AudioEngine::shutdown()
 //==============================================================================
 bool AudioEngine::play (const Cue& cue, const PlayOptions& options, juce::String* errorMessage)
 {
+    {
+        // a loaded instance is waiting: start it instead of opening the file again
+        const juce::ScopedLock sl (lock);
+
+        for (auto& existing : players)
+        {
+            if (existing->getCueId() == cue.id && existing->isLoadedNotStarted())
+            {
+                for (auto& other : players)
+                {
+                    if (other.get() != existing.get() && other->getCueId() == cue.id)
+                    {
+                        other->setChain (nullptr);
+                        other->requestStop();
+                    }
+                }
+
+                existing->setStartOrder (++startCounter);
+                existing->start();
+                return true;
+            }
+        }
+    }
+
     auto player = std::make_unique<CuePlayer> (cue, formatManager,
                                                readAheadSamples > 0 ? &readAheadThread : nullptr,
                                                readAheadSamples, options.startSeconds);
@@ -91,6 +115,54 @@ bool AudioEngine::play (const Cue& cue, const PlayOptions& options, juce::String
 
     players.push_back (std::move (player));
     return true;
+}
+
+bool AudioEngine::load (const Cue& cue, double startSeconds, juce::String* errorMessage)
+{
+    auto player = std::make_unique<CuePlayer> (cue, formatManager,
+                                               readAheadSamples > 0 ? &readAheadThread : nullptr,
+                                               readAheadSamples, startSeconds);
+
+    if (! player->isValid())
+    {
+        if (errorMessage != nullptr)
+            *errorMessage = player->getErrorMessage();
+
+        return false;
+    }
+
+    player->prepare (getSampleRate(), getBlockSize());
+    player->setChain (findCueChain (cue.id));
+    player->armLoaded();
+
+    const juce::ScopedLock sl (lock);
+
+    for (auto& existing : players)
+        if (existing->getCueId() == cue.id && existing->isLoadedNotStarted())
+            existing->requestStop();   // replaced by the new loaded instance
+
+    players.push_back (std::move (player));
+    return true;
+}
+
+bool AudioEngine::isLoaded (const juce::Uuid& cueId) const
+{
+    const juce::ScopedLock sl (lock);
+
+    for (auto& p : players)
+        if (p->getCueId() == cueId && p->isLoadedNotStarted())
+            return true;
+
+    return false;
+}
+
+void AudioEngine::unload (const juce::Uuid& cueId)
+{
+    const juce::ScopedLock sl (lock);
+
+    for (auto& p : players)
+        if (p->isLoadedNotStarted() && (cueId.isNull() || p->getCueId() == cueId))
+            p->requestStop();
 }
 
 void AudioEngine::stop (const juce::Uuid& cueId)
@@ -267,7 +339,7 @@ bool AudioEngine::isPlaying (const juce::Uuid& cueId) const
     const juce::ScopedLock sl (lock);
 
     for (auto& p : players)
-        if (p->getCueId() == cueId && ! p->hasFinished())
+        if (p->getCueId() == cueId && ! p->hasFinished() && ! p->isLoadedNotStarted())
             return true;
 
     return false;
@@ -291,6 +363,7 @@ std::vector<AudioEngine::PlayingCue> AudioEngine::getPlayingCues() const
         info.passIndex = p->getPassIndex();
         info.fadingOut = p->isFadingOut();
         info.paused = p->isPaused();
+        info.loaded = p->isLoadedNotStarted();
         result.push_back (info);
     }
 
@@ -304,7 +377,7 @@ juce::Uuid AudioEngine::getMostRecentlyStartedCue (bool ignoreFadingOut) const
 
     for (auto& p : players)
     {
-        if (p->hasFinished() || (ignoreFadingOut && p->isFadingOut()))
+        if (p->hasFinished() || p->isLoadedNotStarted() || (ignoreFadingOut && p->isFadingOut()))
             continue;
 
         if (best == nullptr || p->getStartOrder() > best->getStartOrder())
@@ -320,7 +393,7 @@ int AudioEngine::getNumPlaying() const
     int count = 0;
 
     for (auto& p : players)
-        if (! p->hasFinished())
+        if (! p->hasFinished() && ! p->isLoadedNotStarted())
             ++count;
 
     return count;

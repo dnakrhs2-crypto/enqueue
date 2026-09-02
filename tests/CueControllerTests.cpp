@@ -426,6 +426,89 @@ public:
             document.cues.update (1, [] (Cue& x) { x.duck.enabled = false; x.audio.endSeconds = -1.0; });
         }
 
+        beginTest ("hotkeys fire cues (with their sequence) without moving the playhead");
+        {
+            document.cues.update (1, [] (Cue& x) { x.hotkey = "F5"; });
+            document.cues.setSelectedIndex (0);
+            now = 120.0;
+
+            expect (controller.handleHotkey (juce::KeyPress::createFromDescription ("F5")));
+            expect (engine.isPlaying (b.id));
+            expect (! engine.isPlaying (a.id));
+            expectEquals (document.cues.getPlayheadIndex(), 0);
+            expect (! controller.handleHotkey (juce::KeyPress::createFromDescription ("F6")));
+            stopEverything();
+            document.cues.update (1, [] (Cue& x) { x.hotkey = ""; });
+        }
+
+        beginTest ("wall-clock triggers fire once for the matching second and day");
+        {
+            document.cues.update (0, [] (Cue& x)
+            {
+                x.wallClock.enabled = true;
+                x.wallClock.hour = 19;
+                x.wallClock.minute = 30;
+                x.wallClock.second = 5;
+                x.wallClock.daysMask = 0x7f;
+            });
+
+            const juce::Time match (2026, 8, 2, 19, 30, 5, 250, true);    // 2026-09-02 19:30:05.250 (a Wednesday)
+            const int before = statuses.size();
+            controller.checkWallClock (match);
+            expect (engine.isPlaying (a.id));
+            controller.checkWallClock (match + juce::RelativeTime::milliseconds (400));   // same second: no second fire
+            controller.checkWallClock (juce::Time (2026, 8, 2, 19, 30, 6, 0, true));    // next second: no match
+            int fired = 0;
+
+            for (int i = before; i < statuses.size(); ++i)
+                if (statuses[i].contains (juce::String::fromUTF8 ("\xEC\x8B\x9C\xEA\xB0\x84 \xED\x8A\xB8\xEB\xA6\xAC\xEA\xB1\xB0")))   // "시간 트리거"
+                    ++fired;
+
+            expectEquals (fired, 1);
+            stopEverything();
+
+            document.cues.update (0, [] (Cue& x) { x.wallClock.daysMask = 1 << 1; });   // Mondays only
+            controller.checkWallClock (juce::Time (2026, 8, 9, 19, 30, 5, 0, true));    // Wednesday again: no
+            expect (! engine.isPlaying (a.id));
+            document.cues.update (0, [] (Cue& x) { x.wallClock.enabled = false; });
+        }
+
+        beginTest ("load prepares a cue silently and the next GO starts it from the loaded position");
+        {
+            document.cues.setSelectedIndex (0);
+            now = 130.0;
+            expect (controller.loadSelected (0.3));
+            expect (engine.isLoaded (a.id));
+            expect (! engine.isPlaying (a.id));
+            expectEquals (engine.getNumPlaying(), 0);
+
+            const auto entries = engine.getPlayingCues();
+            expectEquals ((int) entries.size(), 1);
+            expect (entries[0].loaded);
+            expectWithinAbsoluteError (entries[0].positionSeconds, 0.3, 1e-6);
+
+            render (engine, scheduler, now, out, 3);
+            expectWithinAbsoluteError (out.getRMSLevel (0, 0, blockSize), 0.0f, 1e-6f);   // silent while loaded
+            expect (engine.isLoaded (a.id));
+
+            expect (controller.go() == CueController::GoResult::started);
+            controller.goKeyReleased();
+            expect (engine.isPlaying (a.id));
+            expect (! engine.isLoaded (a.id));
+            render (engine, scheduler, now, out, 1);
+            expectGreaterThan (out.getRMSLevel (0, 0, blockSize), 0.3f);
+            expectWithinAbsoluteError (engine.getPlayingCues()[0].positionSeconds, 0.3 + blockSize / sampleRate, 1e-3);
+            stopEverything();
+
+            document.cues.setSelectedIndex (0);      // the GO above moved the playhead (and selection) to b
+            expect (controller.loadSelected (0.0));
+            expect (engine.isLoaded (a.id));
+            engine.unload (a.id);
+            render (engine, scheduler, now, out, 2);
+            expect (! engine.isLoaded (a.id));
+            expectEquals ((int) engine.getPlayingCues().size(), 0);
+        }
+
         beginTest ("reset all stops everything and puts the playhead on the first cue");
         {
             document.cues.setSelectedIndex (1);

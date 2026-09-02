@@ -32,6 +32,7 @@ public:
         int passIndex = 0;                  // 0-based loop pass
         bool fadingOut = false;
         bool paused = false;
+        bool loaded = false;                // prepared but not started yet (QLab "loaded")
     };
 
     struct PlayOptions
@@ -59,6 +60,12 @@ public:
         Returns false (with a message) when the file cannot be opened. */
     bool play (const Cue& cue, juce::String* errorMessage = nullptr) { return play (cue, PlayOptions(), errorMessage); }
     bool play (const Cue& cue, const PlayOptions& options, juce::String* errorMessage = nullptr);
+    /** Prepares a player at 'startSeconds' without starting it; the next play() of this cue starts it at once.
+        Replaces an earlier loaded instance. */
+    bool load (const Cue& cue, double startSeconds = 0.0, juce::String* errorMessage = nullptr);
+    bool isLoaded (const juce::Uuid& cueId) const;
+    /** Drops loaded (not started) instances of the cue, or of every cue when null. */
+    void unload (const juce::Uuid& cueId = juce::Uuid::null());
     /** De-clicked immediate stop of every instance of this cue (no plugin tail). */
     void stop (const juce::Uuid& cueId);
     void stopAll();

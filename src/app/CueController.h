@@ -64,6 +64,14 @@ public:
     /** Number of scheduled starts / follows still pending (tests). */
     int getNumPending() const;
 
+    /** A key that is not a command shortcut: fires the cues whose hotkey matches (with their sequences,
+        without moving the playhead). Returns true when a cue took it. */
+    bool handleHotkey (const juce::KeyPress& key);
+    /** Fires the cues whose wall-clock trigger matches 'now' (once per matching second). Call ~30x per second. */
+    void checkWallClock (juce::Time now);
+    /** L: pre-loads the selected cue so GO starts it with no disk latency. */
+    bool loadSelected (double startSeconds = 0.0);
+
     /** True while double-GO protection would refuse a GO (drives the red border on the GO button). */
     bool isGoLocked() const;
 
@@ -89,6 +97,7 @@ private:
     ProjectDocument& document;
     Scheduler& scheduler;
     std::vector<int> pending;
+    juce::int64 lastWallClockSecond = -1;
     double lastGoTime = -1.0e9;
     double lastPanicTime = -1.0e9;
     bool goKeyDown = false;

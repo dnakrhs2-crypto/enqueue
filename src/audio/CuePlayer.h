@@ -46,8 +46,11 @@ public:
     void prepare (double sampleRate, int blockSize);
 
     /** Arms playback (from the start offset given to the constructor).
-        Call after prepare() and before the player is visible to the audio thread. */
+        Call after prepare(); may also be called later on a loaded player to start it. */
     void start();
+    /** Marks the player as "loaded": it sits in the engine rendering silence until start(). */
+    void armLoaded() noexcept { loadedNotStarted.store (true, std::memory_order_relaxed); }
+    bool isLoadedNotStarted() const noexcept { return loadedNotStarted.load (std::memory_order_relaxed); }
 
     /** The insert chain this player runs through (may be null). Any thread. */
     void setChain (PluginChain* newChain) noexcept   { chain.store (newChain, std::memory_order_release); }
@@ -119,6 +122,7 @@ private:
     std::atomic<bool> pauseRequested { false };
     std::atomic<bool> resumeRequested { false };
     std::atomic<bool> pausedFlag { false };
+    std::atomic<bool> loadedNotStarted { false };
     std::atomic<double> liveRate { 1.0 };
     std::atomic<float> targetGain { 1.0f };
     std::atomic<float> duckTarget { 1.0f };

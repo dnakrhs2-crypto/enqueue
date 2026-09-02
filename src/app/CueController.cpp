@@ -308,6 +308,75 @@ void CueController::goKeyReleased()
     goKeyDown = false;
 }
 
+bool CueController::handleHotkey (const juce::KeyPress& key)
+{
+    const auto description = key.getTextDescription();
+
+    if (description.isEmpty())
+        return false;
+
+    bool handled = false;
+    const auto& cues = document.cues;
+
+    for (int i = 0; i < cues.size(); ++i)
+    {
+        const auto& cue = cues.get (i);
+
+        if (cue.hotkey.isNotEmpty() && juce::KeyPress::createFromDescription (cue.hotkey) == key)
+        {
+            fireSequence (i);   // hotkeys do not move the playhead
+            status (ko ("핫키: ") + cueLabel (i, cue));
+            handled = true;
+        }
+    }
+
+    return handled;
+}
+
+void CueController::checkWallClock (juce::Time now)
+{
+    const juce::int64 second = now.toMilliseconds() / 1000;
+
+    if (second == lastWallClockSecond)
+        return;
+
+    lastWallClockSecond = second;
+    const int hour = now.getHours(), minute = now.getMinutes(), sec = now.getSeconds();
+    const int dayBit = 1 << now.getDayOfWeek();   // 0 = Sunday
+    const auto& cues = document.cues;
+
+    for (int i = 0; i < cues.size(); ++i)
+    {
+        const auto& wc = cues.get (i).wallClock;
+
+        if (wc.enabled && wc.hour == hour && wc.minute == minute && wc.second == sec && (wc.daysMask & dayBit) != 0)
+        {
+            status (ko ("시간 트리거: ") + cueLabel (i, cues.get (i)));
+            fireSequence (i);
+        }
+    }
+}
+
+bool CueController::loadSelected (double startSeconds)
+{
+    const auto* cue = document.cues.getSelected();
+
+    if (cue == nullptr)
+        return false;
+
+    juce::String error;
+
+    if (! engine.load (*cue, startSeconds, &error))
+    {
+        status (error, true);
+        return false;
+    }
+
+    status (ko ("로드: ") + cueLabel (document.cues.getSelectedIndex(), *cue)
+            + (startSeconds > 0.0 ? " @ " + juce::String (startSeconds, 2) + "s" : juce::String()));
+    return true;
+}
+
 CueController::GoResult CueController::preview()
 {
     const auto* cue = document.cues.getSelected();
