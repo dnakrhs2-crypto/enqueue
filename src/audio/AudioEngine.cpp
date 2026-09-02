@@ -211,6 +211,16 @@ PluginChain* AudioEngine::findCueChain (const juce::Uuid& cueId) const
     return it != cueChains.end() ? it->second.get() : nullptr;
 }
 
+std::vector<juce::Uuid> AudioEngine::getCueChainIds() const
+{
+    std::vector<juce::Uuid> ids;
+
+    for (const auto& entry : cueChains)
+        ids.push_back (juce::Uuid (entry.first));
+
+    return ids;
+}
+
 void AudioEngine::removeCueChain (const juce::Uuid& cueId)
 {
     std::unique_ptr<PluginChain> dead;

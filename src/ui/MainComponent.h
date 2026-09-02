@@ -68,6 +68,10 @@ private:
     void saveProject (bool saveAs, std::function<void (bool ok)> then = {});
     void restorePluginChainsFromDocument (juce::StringArray& errors);
     void refreshFileInfoForAllCues();
+    /** Copies the live plugin chain states into a project (for saving and for undo snapshots). */
+    void captureLivePluginStates (Project& project);
+    /** After undo / redo: makes the engine's plugin chains match the restored project. */
+    void reconcileChainsAfterRestore (const ProjectSnapshot& snapshot);
     void showPluginManager();
     void showAbout();
     void showAlert (const juce::String& title, const juce::String& message, bool isError);

@@ -16,7 +16,7 @@ public:
                                   .getChildFile ("gocue_serializer_" + juce::Uuid().toString());
         expect (tempRoot.createDirectory().wasOk());
 
-        beginTest ("round trip preserves cues, master chain and plugin states");
+        beginTest ("round trip preserves cues, audio settings, master chain and plugin states");
         {
             Project p;
             p.name = "Show";
@@ -24,10 +24,19 @@ public:
             Cue a;
             a.name = "Intro";
             a.file = tempRoot.getChildFile ("intro.wav");
-            a.fadeInMs = 250;
             a.fadeOutMs = 1500;
             a.gainDb = -3.5;
             a.durationSeconds = 12.25;
+            a.audio.startSeconds = 1.5;
+            a.audio.endSeconds = 10.0;
+            a.audio.playCount = 3;
+            a.audio.infiniteLoop = false;
+            a.audio.rate = 1.25;
+            a.audio.preservePitch = true;
+            a.audio.envelope.enabled = true;
+            a.audio.envelope.linear = false;
+            a.audio.envelope.lockToTrim = true;
+            a.audio.envelope.points = { { 0.0, 0.0 }, { 0.1, 1.0 }, { 0.9, 1.0 }, { 1.0, 0.0 } };
 
             PluginSlotState slot;
             slot.name = "EQ";
@@ -41,6 +50,7 @@ public:
 
             Cue b;
             b.name = "Outro";
+            b.audio.infiniteLoop = true;
             p.cues.push_back (b);
 
             PluginSlotState master;
@@ -49,7 +59,8 @@ public:
             p.masterPlugins.push_back (master);
 
             const auto json = ProjectSerializer::toJson (p);
-            expect (json.contains ("\"version\": 1") || json.contains ("\"version\":1"));
+            expect (json.contains ("\"version\": 2") || json.contains ("\"version\":2"));
+            expect (! json.contains ("fadeInMs"));
 
             Project q;
             juce::StringArray warnings;
@@ -59,10 +70,23 @@ public:
             expect (q.cues[0].id == a.id);
             expectEquals (q.cues[0].name, juce::String ("Intro"));
             expect (q.cues[0].file == a.file);
-            expectEquals (q.cues[0].fadeInMs, 250);
             expectEquals (q.cues[0].fadeOutMs, 1500);
             expectWithinAbsoluteError (q.cues[0].gainDb, -3.5, 1e-9);
             expectWithinAbsoluteError (q.cues[0].durationSeconds, 12.25, 1e-9);
+            expectWithinAbsoluteError (q.cues[0].audio.startSeconds, 1.5, 1e-9);
+            expectWithinAbsoluteError (q.cues[0].audio.endSeconds, 10.0, 1e-9);
+            expectEquals (q.cues[0].audio.playCount, 3);
+            expect (! q.cues[0].audio.infiniteLoop);
+            expectWithinAbsoluteError (q.cues[0].audio.rate, 1.25, 1e-9);
+            expect (q.cues[0].audio.preservePitch);
+            expect (q.cues[0].audio.envelope.enabled);
+            expect (! q.cues[0].audio.envelope.linear);
+            expect (q.cues[0].audio.envelope.lockToTrim);
+            expectEquals ((int) q.cues[0].audio.envelope.points.size(), 4);
+            expectWithinAbsoluteError (q.cues[0].audio.envelope.points[1].x, 0.1, 1e-9);
+            expectWithinAbsoluteError (q.cues[0].audio.envelope.points[3].level, 0.0, 1e-9);
+            expectWithinAbsoluteError (q.cues[0].regionLength(), 8.5, 1e-9);
+            expectWithinAbsoluteError (q.cues[0].effectiveLength(), 8.5 / 1.25 * 3.0, 1e-9);
             expectEquals ((int) q.cues[0].plugins.size(), 1);
             expectEquals (q.cues[0].plugins[0].name, juce::String ("EQ"));
             expectEquals (q.cues[0].plugins[0].fileOrIdentifier, juce::String ("C:\\Plugins\\eq.vst3"));
@@ -72,6 +96,8 @@ public:
             expect (q.cues[0].plugins[0].bypassed);
             expect (q.cues[1].id == b.id);
             expect (q.cues[1].file == juce::File());
+            expect (q.cues[1].audio.infiniteLoop);
+            expectWithinAbsoluteError (q.cues[1].effectiveLength(), -1.0, 1e-12);
             expectEquals ((int) q.masterPlugins.size(), 1);
             expectEquals (q.masterPlugins[0].name, juce::String ("Limiter"));
             expectEquals (q.masterPlugins[0].uniqueId, 7);
@@ -90,19 +116,43 @@ public:
             expect (! q.cues[0].id.isNull());
             expect (q.cues[0].file == juce::File());
             expect (! q.cues[0].fileMissing);
-            expectEquals (q.cues[0].fadeInMs, 0);
             expectEquals (q.cues[0].fadeOutMs, 0);
             expectWithinAbsoluteError (q.cues[0].gainDb, 0.0, 1e-12);
+            expect (! q.cues[0].audio.envelope.enabled);
+            expectWithinAbsoluteError (q.cues[0].audio.startSeconds, 0.0, 1e-12);
+            expectWithinAbsoluteError (q.cues[0].audio.endSeconds, -1.0, 1e-12);
+            expectEquals (q.cues[0].audio.playCount, 1);
+            expectWithinAbsoluteError (q.cues[0].audio.rate, 1.0, 1e-12);
             expectEquals ((int) q.cues[0].plugins.size(), 0);
             expectEquals ((int) q.masterPlugins.size(), 0);
             expectEquals (warnings.size(), 0);
+        }
+
+        beginTest ("version-1 fadeInMs migrates to the integrated fade envelope");
+        {
+            Project q;
+            juce::StringArray warnings;
+            expect (ProjectSerializer::fromJson ("{\"version\":1,\"cues\":[{\"name\":\"old\",\"fadeInMs\":250,\"fadeOutMs\":1500,\"gainDb\":-2}]}",
+                                                 q, &warnings).wasOk());
+            expectEquals ((int) q.cues.size(), 1);
+            const auto& c = q.cues[0];
+            expectEquals (c.fadeOutMs, 1500);
+            expectWithinAbsoluteError (c.gainDb, -2.0, 1e-12);
+            expect (c.audio.envelope.enabled && c.audio.envelope.linear && ! c.audio.envelope.lockToTrim);
+            expectWithinAbsoluteError (c.audio.envelope.fadeInSeconds (30.0), 0.25, 1e-9);
+            expectWithinAbsoluteError (c.audio.envelope.levelAt (0.125, 30.0), 0.5f, 1e-6f);
+            expectEquals (warnings.size(), 0);
+
+            Project none;
+            expect (ProjectSerializer::fromJson ("{\"cues\":[{\"fadeInMs\":0}]}", none).wasOk());
+            expect (! none.cues[0].audio.envelope.enabled);
         }
 
         beginTest ("unknown fields are ignored and a newer version only warns");
         {
             Project q;
             juce::StringArray warnings;
-            expect (ProjectSerializer::fromJson ("{\"version\":99,\"future\":true,\"cues\":[{\"name\":\"x\",\"mystery\":[1,2]}]}",
+            expect (ProjectSerializer::fromJson ("{\"version\":99,\"future\":true,\"cues\":[{\"name\":\"x\",\"mystery\":[1,2],\"audio\":{\"later\":1}}]}",
                                                  q, &warnings).wasOk());
             expectEquals ((int) q.cues.size(), 1);
             expectEquals (warnings.size(), 1);
@@ -118,6 +168,12 @@ public:
             expect (ProjectSerializer::fromJson ("{\"cues\":[1,{\"name\":\"ok\"}]}", q, &warnings).wasOk());
             expectEquals ((int) q.cues.size(), 1);
             expectEquals (warnings.size(), 1);
+
+            // an envelope with junk points keeps the valid ones
+            Project e;
+            expect (ProjectSerializer::fromJson ("{\"cues\":[{\"audio\":{\"envelope\":{\"enabled\":true,\"points\":[[0,0],\"junk\",[1],[0.5,2]]}}}]}", e).wasOk());
+            expectEquals ((int) e.cues[0].audio.envelope.points.size(), 2);
+            expectWithinAbsoluteError (e.cues[0].audio.envelope.points[1].level, 1.0, 1e-12);
         }
 
         beginTest ("duplicate cue ids are replaced so cues never share a player or chain");
@@ -136,11 +192,21 @@ public:
         beginTest ("out-of-range values are sanitised");
         {
             Project q;
-            expect (ProjectSerializer::fromJson ("{\"cues\":[{\"fadeInMs\":-100,\"fadeOutMs\":99999999,\"gainDb\":200,\"durationSeconds\":-1}]}", q).wasOk());
-            expectEquals (q.cues[0].fadeInMs, 0);
+            expect (ProjectSerializer::fromJson ("{\"cues\":[{\"fadeInMs\":-100,\"fadeOutMs\":99999999,\"gainDb\":200,\"durationSeconds\":-1,"
+                                                 "\"audio\":{\"start\":-4,\"end\":-9,\"playCount\":0,\"rate\":1000}}]}", q).wasOk());
+            expect (! q.cues[0].audio.envelope.enabled);
             expectEquals (q.cues[0].fadeOutMs, Cue::maxFadeMs);
             expectWithinAbsoluteError (q.cues[0].gainDb, Cue::maxGainDb, 1e-12);
             expectWithinAbsoluteError (q.cues[0].durationSeconds, 0.0, 1e-12);
+            expectWithinAbsoluteError (q.cues[0].audio.startSeconds, 0.0, 1e-12);
+            expectWithinAbsoluteError (q.cues[0].audio.endSeconds, -1.0, 1e-12);
+            expectEquals (q.cues[0].audio.playCount, 1);
+            expectWithinAbsoluteError (q.cues[0].audio.rate, AudioCueData::maxRate, 1e-12);
+
+            Project r;   // an end before the start plays to the end of the file instead of nothing
+            expect (ProjectSerializer::fromJson ("{\"cues\":[{\"durationSeconds\":10,\"audio\":{\"start\":5,\"end\":3}}]}", r).wasOk());
+            expectWithinAbsoluteError (r.cues[0].audio.endSeconds, -1.0, 1e-12);
+            expectWithinAbsoluteError (r.cues[0].regionLength(), 5.0, 1e-12);
         }
 
         beginTest ("a moved project resolves files through the project-relative path");

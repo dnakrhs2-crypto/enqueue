@@ -24,6 +24,9 @@ enum : juce::CommandID
     saveProject,
     saveProjectAs,
 
+    undo,
+    redo,
+
     audioSettings,
     pluginManager,
     masterInserts,

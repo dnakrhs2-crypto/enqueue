@@ -32,6 +32,7 @@ CuePlayer::CuePlayer (const Cue& c, juce::AudioFormatManager& formats,
 
     const double sourceRate = reader->sampleRate;
     lengthSeconds = sourceRate > 0.0 ? (double) reader->lengthInSamples / sourceRate : 0.0;
+    cue.durationSeconds = lengthSeconds;   // the region / envelope maths need the real file length
 
     readerSource = std::make_unique<juce::AudioFormatReaderSource> (reader.release(), true);
 
@@ -65,8 +66,9 @@ void CuePlayer::start()
         return;
 
     transport.setPosition (0.0);
-    envelope.setLevel (cue.fadeInMs > 0 ? 0.0f : 1.0f);
-    envelope.fadeIn (cue.fadeInMs);
+    const double fadeInMs = cue.audio.envelope.fadeInSeconds (cue.regionLength()) * 1000.0;
+    envelope.setLevel (fadeInMs > 0.0 ? 0.0f : 1.0f);
+    envelope.fadeIn (fadeInMs);
     transport.start();
 }
 

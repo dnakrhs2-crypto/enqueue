@@ -71,6 +71,8 @@ public:
     /** The cue's insert chain, created on demand. */
     PluginChain& getCueChain (const juce::Uuid& cueId);
     PluginChain* findCueChain (const juce::Uuid& cueId) const;
+    /** Ids of every cue that currently owns a chain (including empty ones). */
+    std::vector<juce::Uuid> getCueChainIds() const;
     /** Detaches the chain from any running player, then destroys it. */
     void removeCueChain (const juce::Uuid& cueId);
     void clearCueChains();

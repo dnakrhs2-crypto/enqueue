@@ -3,6 +3,8 @@ juce_add_console_app(GoCueTests PRODUCT_NAME "GoCueTests")
 target_sources(GoCueTests PRIVATE
     TestMain.cpp
     FadeEnvelopeTests.cpp
+    EnvelopeTests.cpp
+    ProjectHistoryTests.cpp
     CueListTests.cpp
     ProjectSerializerTests.cpp
     AudioEngineTests.cpp

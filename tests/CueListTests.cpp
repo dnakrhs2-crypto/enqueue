@@ -172,12 +172,12 @@ public:
             list.update (0, [] (Cue& c)
             {
                 c.name = "renamed";
-                c.fadeInMs = -5;
+                c.audio.rate = 100.0;
                 c.gainDb = 100.0;
             });
 
             expectEquals (list.get (0).name, juce::String ("renamed"));
-            expectEquals (list.get (0).fadeInMs, 0);
+            expectWithinAbsoluteError (list.get (0).audio.rate, AudioCueData::maxRate, 1e-12);
             expectEquals (list.get (0).gainDb, Cue::maxGainDb);
             expectEquals (counter.changed, 1);
             expectEquals (counter.lastChanged, 0);

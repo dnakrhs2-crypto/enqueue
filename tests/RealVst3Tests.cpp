@@ -225,7 +225,7 @@ public:
             Cue withPlugin;
             withPlugin.name = "VST3 " + chosen.name;
             withPlugin.file = demoTone;
-            withPlugin.fadeInMs = 300;
+            withPlugin.audio.envelope = Envelope::fromFadeIn (0.3);
             withPlugin.fadeOutMs = 800;
             withPlugin.plugins = states;
             project.cues.push_back (withPlugin);

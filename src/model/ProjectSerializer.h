@@ -18,7 +18,8 @@ struct Project
     defaults, and a file written by a newer version only produces a warning. */
 namespace ProjectSerializer
 {
-    constexpr int currentVersion = 1;
+    /** 1: cues with fadeInMs / fadeOutMs / gainDb.  2: "audio" object (trim, loops, rate, envelope); fadeInMs migrates to the envelope. */
+    constexpr int currentVersion = 2;
     constexpr const char* fileExtension = ".gocue";
 
     /** @param projectDir  when valid, a project-relative path is stored next to each

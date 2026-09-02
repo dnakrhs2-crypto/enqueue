@@ -165,9 +165,17 @@ void CueTable::paintCell (juce::Graphics& g, int rowNumber, int columnId, int wi
             break;
 
         case colFadeIn:
-            text = juce::String (cue.fadeInMs) + " ms";
+        {
+            const double fadeIn = cue.audio.envelope.fadeInSeconds (cue.regionLength());
+
+            if (fadeIn > 0.0)
+                text = juce::String (juce::roundToInt (fadeIn * 1000.0)) + " ms";
+            else
+                text = cue.audio.envelope.isActive() ? ko ("엔벨로프") : "0 ms";
+
             justification = juce::Justification::centredRight;
             break;
+        }
 
         case colFadeOut:
             text = juce::String (cue.fadeOutMs) + " ms";

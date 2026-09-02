@@ -76,7 +76,7 @@ public:
             Cue cue;
             cue.name = "tone";
             cue.file = tone;
-            cue.fadeInMs = 100;
+            cue.audio.envelope = Envelope::fromFadeIn (0.1);
             cue.fadeOutMs = 50;
             cue.gainDb = -6.0206;           // x0.5
 

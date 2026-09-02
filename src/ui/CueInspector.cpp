@@ -6,8 +6,8 @@
 namespace gocue
 {
 
-CueInspector::CueInspector (CueList& c, AudioEngine& e, AppSettings& s, PluginWindowManager& windows)
-    : cues (c), engine (e), settings (s), chainStrip (e, windows)
+CueInspector::CueInspector (ProjectDocument& doc, AudioEngine& e, AppSettings& s, PluginWindowManager& windows)
+    : document (doc), cues (doc.cues), engine (e), settings (s), chainStrip (e, windows)
 {
     title.setFont (juce::Font (juce::FontOptions (14.0f, juce::Font::bold)));
     title.setColour (juce::Label::textColourId, Palette::dimText);
@@ -23,8 +23,7 @@ CueInspector::CueInspector (CueList& c, AudioEngine& e, AppSettings& s, PluginWi
 
     setupLabel (nameLabel, "이름");
     setupLabel (fileLabel, "파일");
-    setupLabel (fadeInLabel, "페이드인 (ms)");
-    setupLabel (fadeOutLabel, "페이드아웃 (ms)");
+    setupLabel (fadeOutLabel, "정지 페이드 (ms)");
     setupLabel (gainLabel, "게인 (dB)");
     setupLabel (pluginsLabel, "VST3 인서트");
 
@@ -44,13 +43,10 @@ CueInspector::CueInspector (CueList& c, AudioEngine& e, AppSettings& s, PluginWi
     browseButton.onClick = [this] { chooseFile(); };
     addAndMakeVisible (browseButton);
 
-    setupNumberEditor (fadeInEditor);
-    fadeInEditor.onReturnKey = [this] { commitFade (fadeInEditor, true); fadeInEditor.giveAwayKeyboardFocus(); };
-    fadeInEditor.onFocusLost = [this] { commitFade (fadeInEditor, true); };
-
     setupNumberEditor (fadeOutEditor);
-    fadeOutEditor.onReturnKey = [this] { commitFade (fadeOutEditor, false); fadeOutEditor.giveAwayKeyboardFocus(); };
-    fadeOutEditor.onFocusLost = [this] { commitFade (fadeOutEditor, false); };
+    fadeOutEditor.setTooltip (ko ("F(페이드아웃 정지)에 걸리는 시간. 0이면 5 ms 디클릭만"));
+    fadeOutEditor.onReturnKey = [this] { commitStopFade(); fadeOutEditor.giveAwayKeyboardFocus(); };
+    fadeOutEditor.onFocusLost = [this] { commitStopFade(); };
 
     gainSlider.setSliderStyle (juce::Slider::LinearHorizontal);
     gainSlider.setRange (Cue::minGainDb, Cue::maxGainDb, 0.1);
@@ -62,6 +58,10 @@ CueInspector::CueInspector (CueList& c, AudioEngine& e, AppSettings& s, PluginWi
     addAndMakeVisible (gainSlider);
 
     chainStrip.onOpenPluginManager = [this] { if (onOpenPluginManager) onOpenPluginManager(); };
+    chainStrip.performEdit = [this] (const juce::String& name, const std::function<void()>& edit)
+    {
+        document.perform (name, edit, { {}, true });
+    };
     addAndMakeVisible (chainStrip);
 
     cues.addListener (this);
@@ -119,9 +119,8 @@ void CueInspector::refresh()
     const auto* cue = cues.getSelected();
     const bool enabled = cue != nullptr;
 
-    for (auto* c : { static_cast<juce::Component*> (&nameEditor), static_cast<juce::Component*> (&fadeInEditor),
-                     static_cast<juce::Component*> (&fadeOutEditor), static_cast<juce::Component*> (&gainSlider),
-                     static_cast<juce::Component*> (&browseButton) })
+    for (auto* c : { static_cast<juce::Component*> (&nameEditor), static_cast<juce::Component*> (&fadeOutEditor),
+                     static_cast<juce::Component*> (&gainSlider), static_cast<juce::Component*> (&browseButton) })
         c->setEnabled (enabled);
 
     if (cue == nullptr)
@@ -129,7 +128,6 @@ void CueInspector::refresh()
         title.setText (ko ("큐 인스펙터 - 선택된 큐 없음"), juce::dontSendNotification);
         nameEditor.setText ("", false);
         filePathLabel.setText ("", juce::dontSendNotification);
-        fadeInEditor.setText ("", false);
         fadeOutEditor.setText ("", false);
         gainSlider.setValue (0.0, juce::dontSendNotification);
         chainStrip.setChain (nullptr, {});
@@ -154,9 +152,6 @@ void CueInspector::refresh()
         filePathLabel.setColour (juce::Label::textColourId, cue->fileMissing ? Palette::missing : Palette::text);
     }
 
-    if (! fadeInEditor.hasKeyboardFocus (true))
-        fadeInEditor.setText (juce::String (cue->fadeInMs), false);
-
     if (! fadeOutEditor.hasKeyboardFocus (true))
         fadeOutEditor.setText (juce::String (cue->fadeOutMs), false);
 
@@ -179,22 +174,24 @@ void CueInspector::commitName()
     if (cues.get (index).name == newName)
         return;
 
-    cues.update (index, [newName] (Cue& c) { c.name = newName; });
+    document.perform (ko ("이름 변경"), [this, index, newName]
+    {
+        cues.update (index, [newName] (Cue& c) { c.name = newName; });
+    });
 }
 
-void CueInspector::commitFade (juce::TextEditor& editor, bool isFadeIn)
+void CueInspector::commitStopFade()
 {
     if (refreshing || cancellingEdit || cues.getSelected() == nullptr)
         return;
 
     const int index = cues.getSelectedIndex();
-    const auto& cue = cues.get (index);
-    const int current = isFadeIn ? cue.fadeInMs : cue.fadeOutMs;
-    const auto text = editor.getText().trim();
+    const int current = cues.get (index).fadeOutMs;
+    const auto text = fadeOutEditor.getText().trim();
 
     if (text.isEmpty())
     {
-        editor.setText (juce::String (current), false);
+        fadeOutEditor.setText (juce::String (current), false);
         return;
     }
 
@@ -202,16 +199,13 @@ void CueInspector::commitFade (juce::TextEditor& editor, bool isFadeIn)
 
     if (value == current)
     {
-        editor.setText (juce::String (current), false);
+        fadeOutEditor.setText (juce::String (current), false);
         return;
     }
 
-    cues.update (index, [value, isFadeIn] (Cue& c)
+    document.perform (ko ("정지 페이드 변경"), [this, index, value]
     {
-        if (isFadeIn)
-            c.fadeInMs = value;
-        else
-            c.fadeOutMs = value;
+        cues.update (index, [value] (Cue& c) { c.fadeOutMs = value; });
     });
 }
 
@@ -226,7 +220,12 @@ void CueInspector::commitGain()
     if (juce::approximatelyEqual (cues.get (index).gainDb, value))
         return;
 
-    cues.update (index, [value] (Cue& c) { c.gainDb = value; });
+    const auto key = "gain:" + cues.get (index).id.toString();
+
+    document.perform (ko ("게인 변경"), [this, index, value]
+    {
+        cues.update (index, [value] (Cue& c) { c.gainDb = value; });
+    }, { key, false });
 }
 
 void CueInspector::chooseFile()
@@ -254,15 +253,19 @@ void CueInspector::chooseFile()
 
         settings.setLastAudioDirectory (file.getParentDirectory());
         auto& formats = engine.getFormatManager();
+        const int index = cues.getSelectedIndex();
 
-        cues.update (cues.getSelectedIndex(), [&formats, file] (Cue& c)
+        document.perform (ko ("파일 교체"), [this, index, file, &formats]
         {
-            c.file = file;
+            cues.update (index, [&formats, file] (Cue& c)
+            {
+                c.file = file;
 
-            if (c.name.isEmpty())
-                c.name = file.getFileNameWithoutExtension();
+                if (c.name.isEmpty())
+                    c.name = file.getFileNameWithoutExtension();
 
-            refreshCueFileInfo (formats, c);
+                refreshCueFileInfo (formats, c);
+            });
         });
     });
 }
@@ -289,9 +292,6 @@ void CueInspector::resized()
     area.removeFromTop (6);
 
     row = area.removeFromTop (rowHeight);
-    fadeInLabel.setBounds (row.removeFromLeft (labelWidth));
-    fadeInEditor.setBounds (row.removeFromLeft (90));
-    row.removeFromLeft (24);
     fadeOutLabel.setBounds (row.removeFromLeft (labelWidth));
     fadeOutEditor.setBounds (row.removeFromLeft (90));
     row.removeFromLeft (24);

@@ -14,7 +14,8 @@ namespace
     class MasterInsertsContent : public juce::Component
     {
     public:
-        MasterInsertsContent (AudioEngine& engine, PluginWindowManager& windows, std::function<void()> onOpenPluginManager)
+        MasterInsertsContent (AudioEngine& engine, PluginWindowManager& windows, std::function<void()> onOpenPluginManager,
+                              PerformEdit performEdit)
             : strip (engine, windows)
         {
             title.setText (ko ("마스터 버스 인서트 - 모든 큐가 믹스된 뒤 마지막으로 통과합니다"), juce::dontSendNotification);
@@ -23,6 +24,7 @@ namespace
             addAndMakeVisible (title);
 
             strip.onOpenPluginManager = std::move (onOpenPluginManager);
+            strip.performEdit = std::move (performEdit);
             strip.setChain (&engine.getMasterChain(), ko ("마스터"));
             addAndMakeVisible (strip);
 
@@ -85,7 +87,8 @@ void showPluginManager (AudioEngine& engine, AppSettings& settings, juce::Compon
 }
 
 void showMasterInserts (AudioEngine& engine, PluginWindowManager& windows,
-                        std::function<void()> onOpenPluginManager, juce::Component* centreAround)
+                        std::function<void()> onOpenPluginManager, PerformEdit performEdit,
+                        juce::Component* centreAround)
 {
     if (masterDialog != nullptr)
     {
@@ -93,7 +96,7 @@ void showMasterInserts (AudioEngine& engine, PluginWindowManager& windows,
         return;
     }
 
-    auto* content = new MasterInsertsContent (engine, windows, std::move (onOpenPluginManager));
+    auto* content = new MasterInsertsContent (engine, windows, std::move (onOpenPluginManager), std::move (performEdit));
     masterContent = content;
     masterDialog = launch (content, ko ("마스터 버스 인서트"), centreAround, false);
 }

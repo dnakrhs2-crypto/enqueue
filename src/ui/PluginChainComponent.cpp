@@ -238,9 +238,20 @@ void PluginChainComponent::addPlugin (const juce::PluginDescription& description
         return;
     }
 
-    chain->addPlugin (std::move (instance));
+    // std::function needs a copyable callable, so the instance travels in a shared holder and is moved out once.
+    auto* target = chain;
+    auto holder = std::make_shared<std::unique_ptr<juce::AudioPluginInstance>> (std::move (instance));
+    runEdit (ko ("플러그인 추가"), [target, holder] { target->addPlugin (std::move (*holder)); });
     refresh();
     openEditor (chain->getNumSlots() - 1);
+}
+
+void PluginChainComponent::runEdit (const juce::String& name, const std::function<void()>& edit)
+{
+    if (performEdit)
+        performEdit (name, edit);
+    else
+        edit();
 }
 
 void PluginChainComponent::openEditor (int index)
@@ -272,7 +283,8 @@ void PluginChainComponent::removeSlot (int index)
             return;
         }
 
-        safeThis->chain->removePlugin (index);
+        auto* target = safeThis->chain;
+        safeThis->runEdit (ko ("플러그인 삭제"), [target, index] { target->removePlugin (index); });
         safeThis->refresh();
     });
 }
@@ -282,7 +294,9 @@ void PluginChainComponent::toggleBypass (int index)
     if (chain == nullptr || index < 0 || index >= chain->getNumSlots())
         return;
 
-    chain->setBypassed (index, ! chain->getSlot (index).bypassed.load());
+    auto* target = chain;
+    const bool bypass = ! chain->getSlot (index).bypassed.load();
+    runEdit (bypass ? ko ("바이패스") : ko ("바이패스 해제"), [target, index, bypass] { target->setBypassed (index, bypass); });
 }
 
 void PluginChainComponent::resized()

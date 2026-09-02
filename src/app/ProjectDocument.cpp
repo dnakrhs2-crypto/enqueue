@@ -5,6 +5,7 @@ namespace gocue
 
 ProjectDocument::ProjectDocument()
 {
+    clock = [] { return juce::Time::getMillisecondCounterHiRes(); };
     cues.addListener (this);
 }
 
@@ -34,6 +35,7 @@ juce::String ProjectDocument::getWindowTitle() const
 
 void ProjectDocument::newProject()
 {
+    history.clear();
     cues.clear();
     masterPlugins.clear();
     file = juce::File();
@@ -47,6 +49,7 @@ juce::Result ProjectDocument::parse (const juce::File& projectFile, Project& out
 
 void ProjectDocument::adopt (Project project, const juce::File& projectFile)
 {
+    history.clear();
     cues.replaceAll (std::move (project.cues));
     masterPlugins = std::move (project.masterPlugins);
     file = projectFile;
@@ -111,6 +114,76 @@ Project ProjectDocument::toProject() const
     project.cues = cues.getAll();
     project.masterPlugins = masterPlugins;
     return project;
+}
+
+//==============================================================================
+ProjectSnapshot ProjectDocument::makeSnapshot (bool capturePluginStates) const
+{
+    ProjectSnapshot snapshot;
+    snapshot.project = toProject();
+
+    if (const auto* selected = cues.getSelected())
+        snapshot.selectedId = selected->id;
+
+    if (capturePluginStates && snapshotDecorator)
+    {
+        snapshotDecorator (snapshot.project);
+        snapshot.pluginStatesCaptured = true;
+    }
+
+    return snapshot;
+}
+
+void ProjectDocument::restoreSnapshot (const ProjectSnapshot& snapshot)
+{
+    cues.replaceAll (snapshot.project.cues);
+    masterPlugins = snapshot.project.masterPlugins;
+
+    if (! snapshot.selectedId.isNull())
+    {
+        const int index = cues.indexOf (snapshot.selectedId);
+
+        if (index >= 0)
+            cues.setSelectedIndex (index);
+    }
+
+    dirty = true;
+    notify();
+
+    if (onSnapshotRestored)
+        onSnapshotRestored (snapshot);
+}
+
+void ProjectDocument::perform (const juce::String& name, const std::function<void()>& edit, const EditOptions& options)
+{
+    history.push (makeSnapshot (options.capturePluginStates), name, options.coalesceKey, clock ? clock() : 0.0);
+
+    if (edit)
+        edit();
+
+    notify();
+}
+
+bool ProjectDocument::undo()
+{
+    auto restored = history.undo ([this] (bool capture) { return makeSnapshot (capture); });
+
+    if (! restored.has_value())
+        return false;
+
+    restoreSnapshot (*restored);
+    return true;
+}
+
+bool ProjectDocument::redo()
+{
+    auto restored = history.redo ([this] (bool capture) { return makeSnapshot (capture); });
+
+    if (! restored.has_value())
+        return false;
+
+    restoreSnapshot (*restored);
+    return true;
 }
 
 void ProjectDocument::notify()

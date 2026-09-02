@@ -190,6 +190,35 @@ void PluginChain::clear()
     notifyChanged();
 }
 
+bool PluginChain::matchesStructure (const std::vector<PluginSlotState>& states) const
+{
+    if (slots.size() != states.size())
+        return false;
+
+    for (size_t i = 0; i < slots.size(); ++i)
+    {
+        const auto& slot = *slots[i];
+        const auto& s = states[i];
+
+        if (slot.bypassed.load() != s.bypassed)
+            return false;
+
+        if (slot.plugin != nullptr)
+        {
+            const auto description = slot.plugin->getPluginDescription();
+
+            if (description.uniqueId != s.uniqueId || description.fileOrIdentifier != s.fileOrIdentifier)
+                return false;
+        }
+        else if (slot.state.uniqueId != s.uniqueId || slot.state.fileOrIdentifier != s.fileOrIdentifier)
+        {
+            return false;
+        }
+    }
+
+    return true;
+}
+
 std::vector<PluginSlotState> PluginChain::getStates() const
 {
     std::vector<PluginSlotState> result;

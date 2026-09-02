@@ -53,6 +53,73 @@ namespace
         return result;
     }
 
+    juce::var envelopeToVar (const Envelope& e)
+    {
+        auto* obj = new juce::DynamicObject();
+        obj->setProperty ("enabled", e.enabled);
+        obj->setProperty ("linear", e.linear);
+        obj->setProperty ("lockToTrim", e.lockToTrim);
+
+        juce::Array<juce::var> points;
+
+        for (const auto& p : e.points)
+        {
+            juce::Array<juce::var> pair;
+            pair.add (p.x);
+            pair.add (p.level);
+            points.add (juce::var (pair));
+        }
+
+        obj->setProperty ("points", juce::var (points));
+        return juce::var (obj);
+    }
+
+    Envelope envelopeFromVar (const juce::var& v)
+    {
+        Envelope e;
+
+        if (v.getDynamicObject() == nullptr)
+            return e;
+
+        e.enabled    = (bool) v.getProperty ("enabled", false);
+        e.linear     = (bool) v.getProperty ("linear", false);
+        e.lockToTrim = (bool) v.getProperty ("lockToTrim", true);
+
+        if (const auto* arr = v.getProperty ("points", juce::var()).getArray())
+            for (const auto& item : *arr)
+                if (const auto* pair = item.getArray(); pair != nullptr && pair->size() >= 2)
+                    e.points.push_back ({ (double) (*pair)[0], (double) (*pair)[1] });
+
+        e.sanitise();
+        return e;
+    }
+
+    juce::var audioToVar (const AudioCueData& a)
+    {
+        auto* obj = new juce::DynamicObject();
+        obj->setProperty ("start", a.startSeconds);
+        obj->setProperty ("end", a.endSeconds);
+        obj->setProperty ("playCount", a.playCount);
+        obj->setProperty ("infiniteLoop", a.infiniteLoop);
+        obj->setProperty ("rate", a.rate);
+        obj->setProperty ("preservePitch", a.preservePitch);
+        obj->setProperty ("envelope", envelopeToVar (a.envelope));
+        return juce::var (obj);
+    }
+
+    AudioCueData audioFromVar (const juce::var& v)
+    {
+        AudioCueData a;
+        a.startSeconds  = (double) v.getProperty ("start", 0.0);
+        a.endSeconds    = (double) v.getProperty ("end", -1.0);
+        a.playCount     = (int) v.getProperty ("playCount", 1);
+        a.infiniteLoop  = (bool) v.getProperty ("infiniteLoop", false);
+        a.rate          = (double) v.getProperty ("rate", 1.0);
+        a.preservePitch = (bool) v.getProperty ("preservePitch", false);
+        a.envelope      = envelopeFromVar (v.getProperty ("envelope", juce::var()));
+        return a;
+    }
+
     juce::var cueToVar (const Cue& c, const juce::File& projectDir)
     {
         auto* obj = new juce::DynamicObject();
@@ -63,10 +130,10 @@ namespace
         if (projectDir.isDirectory() && c.file != juce::File())
             obj->setProperty ("fileRelative", c.file.getRelativePathFrom (projectDir));
 
-        obj->setProperty ("fadeInMs", c.fadeInMs);
         obj->setProperty ("fadeOutMs", c.fadeOutMs);
         obj->setProperty ("gainDb", c.gainDb);
         obj->setProperty ("durationSeconds", c.durationSeconds);
+        obj->setProperty ("audio", audioToVar (c.audio));
         obj->setProperty ("plugins", pluginsToVar (c.plugins));
         return juce::var (obj);
     }
@@ -113,11 +180,24 @@ namespace
                 warnings->add ("File not found: " + c.file.getFullPathName());
         }
 
-        c.fadeInMs        = (int) v.getProperty ("fadeInMs", 0);
         c.fadeOutMs       = (int) v.getProperty ("fadeOutMs", 0);
         c.gainDb          = (double) v.getProperty ("gainDb", 0.0);
         c.durationSeconds = (double) v.getProperty ("durationSeconds", 0.0);
         c.plugins         = pluginsFromVar (v.getProperty ("plugins", juce::var()));
+
+        const auto audio = v.getProperty ("audio", juce::var());
+
+        if (audio.getDynamicObject() != nullptr)
+        {
+            c.audio = audioFromVar (audio);
+        }
+        else
+        {
+            // Version 1: a plain fade-in time becomes the integrated fade envelope.
+            const int fadeInMs = juce::jlimit (0, Cue::maxFadeMs, (int) v.getProperty ("fadeInMs", 0));
+            c.audio.envelope = Envelope::fromFadeIn (fadeInMs / 1000.0);
+        }
+
         c.sanitise();
         return c;
     }

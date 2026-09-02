@@ -79,6 +79,10 @@ public:
         missing. Returns one message per failure. */
     juce::StringArray restore (const std::vector<PluginSlotState>& states, const Factory& factory);
 
+    /** True when the slots (count, plugin identity, bypass) match 'states'; parameter values are not compared.
+        Message thread. Used to decide whether an undo step must rebuild this chain. */
+    bool matchesStructure (const std::vector<PluginSlotState>& states) const;
+
     /** Sum of the tails of the active (non-bypassed) plugins in series, clamped to [0, maxTailSeconds]. Any thread. */
     double getTailSeconds() const;
 

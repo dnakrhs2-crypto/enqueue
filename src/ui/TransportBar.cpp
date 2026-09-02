@@ -93,8 +93,8 @@ void TransportBar::setStandbyCue (int index, const Cue* cue)
 
     juce::String meta;
     meta << ko ("길이 ") << formatSeconds (cue->durationSeconds)
-         << "   " << ko ("페이드인 ") << cue->fadeInMs << " ms"
-         << "   " << ko ("페이드아웃 ") << cue->fadeOutMs << " ms"
+         << "   " << ko ("페이드인 ") << juce::roundToInt (cue->audio.envelope.fadeInSeconds (cue->regionLength()) * 1000.0) << " ms"
+         << "   " << ko ("정지 페이드 ") << cue->fadeOutMs << " ms"
          << "   " << ko ("게인 ") << juce::String (cue->gainDb, 1) << " dB";
     cueMeta.setText (meta, juce::dontSendNotification);
 }

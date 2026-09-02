@@ -1,6 +1,7 @@
 #pragma once
 
 #include "app/AppSettings.h"
+#include "app/ProjectDocument.h"
 #include "audio/AudioEngine.h"
 #include "model/CueList.h"
 #include "ui/PluginChainComponent.h"
@@ -14,15 +15,16 @@
 namespace gocue
 {
 
-/** Bottom panel: edits the standby cue (name, file, fades, gain) and shows its VST3 insert chain. */
+/** Bottom panel: edits the standby cue (name, file, stop fade, gain) and shows its VST3 insert chain.
+    Every edit goes through ProjectDocument::perform so it is undoable. */
 class CueInspector : public juce::Component,
                      private CueList::Listener
 {
 public:
-    CueInspector (CueList& cues, AudioEngine& engine, AppSettings& settings, PluginWindowManager& windows);
+    CueInspector (ProjectDocument& document, AudioEngine& engine, AppSettings& settings, PluginWindowManager& windows);
     ~CueInspector() override;
 
-    /** Rebuilds the plugin strip (after a project load / duplicate). */
+    /** Rebuilds the plugin strip (after a project load / duplicate / undo). */
     void refreshPlugins();
     /** Forwarded chain-change notifications (keeps the strip in sync with edits made elsewhere). */
     void pluginChainChanged (PluginChain* chain);
@@ -37,7 +39,7 @@ public:
 private:
     void refresh();
     void commitName();
-    void commitFade (juce::TextEditor& editor, bool isFadeIn);
+    void commitStopFade();
     void commitGain();
     void chooseFile();
     void setupNumberEditor (juce::TextEditor& editor);
@@ -47,12 +49,13 @@ private:
     void cueChanged (int index) override;
     void cueListStructureChanged() override { refresh(); }
 
+    ProjectDocument& document;
     CueList& cues;
     AudioEngine& engine;
     AppSettings& settings;
 
-    juce::Label title, nameLabel, fileLabel, fadeInLabel, fadeOutLabel, gainLabel, pluginsLabel;
-    juce::TextEditor nameEditor, fadeInEditor, fadeOutEditor;
+    juce::Label title, nameLabel, fileLabel, fadeOutLabel, gainLabel, pluginsLabel;
+    juce::TextEditor nameEditor, fadeOutEditor;
     juce::Label filePathLabel;
     juce::TextButton browseButton;
     juce::Slider gainSlider;

@@ -7,6 +7,8 @@
 #include "ui/PluginDialogs.h"
 #include "ui/UiUtils.h"
 
+#include <set>
+
 namespace gocue
 {
 
@@ -24,7 +26,7 @@ MainComponent::MainComponent (AudioEngine& e, AppSettings& s, juce::ApplicationC
       menuBar (this),
       transport (cm),
       table (document.cues, e.getFormatManager(), cm),
-      inspector (document.cues, e, s, pluginWindows)
+      inspector (document, e, s, pluginWindows)
 {
     setWantsKeyboardFocus (true);
 
@@ -36,6 +38,9 @@ MainComponent::MainComponent (AudioEngine& e, AppSettings& s, juce::ApplicationC
     table.onFilesDropped = [this] (const juce::StringArray& files, int insertAt) { addCuesFromFiles (files, insertAt); };
     inspector.onOpenPluginManager = [this] { showPluginManager(); };
     inspector.onPanic = [this] { engine.stopAll(); table.focusTable(); };
+
+    document.snapshotDecorator = [this] (Project& project) { captureLivePluginStates (project); };
+    document.onSnapshotRestored = [this] (const ProjectSnapshot& snapshot) { reconcileChainsAfterRestore (snapshot); };
 
     engine.setChainListener (&pluginWindows);
     pluginWindows.onChainChanged = [this] (PluginChain& chain)
@@ -99,6 +104,7 @@ void MainComponent::getAllCommands (juce::Array<juce::CommandID>& ids)
                     CommandIDs::moveCueUp, CommandIDs::moveCueDown,
                     CommandIDs::newProject, CommandIDs::openProject,
                     CommandIDs::saveProject, CommandIDs::saveProjectAs,
+                    CommandIDs::undo, CommandIDs::redo,
                     CommandIDs::audioSettings, CommandIDs::pluginManager, CommandIDs::masterInserts,
                     CommandIDs::checkForUpdates, CommandIDs::about });
 }
@@ -108,6 +114,7 @@ void MainComponent::getCommandInfo (juce::CommandID commandID, juce::Application
     const auto playback = ko ("재생");
     const auto cueMenu  = ko ("큐");
     const auto fileMenu = ko ("파일");
+    const auto editMenu = ko ("편집");
     const auto audio    = ko ("오디오");
     const bool hasSelection = document.cues.getSelected() != nullptr;
     const int selected = document.cues.getSelectedIndex();
@@ -191,6 +198,21 @@ void MainComponent::getCommandInfo (juce::CommandID commandID, juce::Application
             result.addDefaultKeypress ('S', ModifierKeys::commandModifier | ModifierKeys::shiftModifier);
             break;
 
+        case CommandIDs::undo:
+            result.setInfo (document.canUndo() ? ko ("실행 취소: ") + document.getUndoName() : ko ("실행 취소"),
+                            ko ("마지막 편집을 되돌립니다"), editMenu, 0);
+            result.addDefaultKeypress ('Z', ModifierKeys::commandModifier);
+            result.setActive (document.canUndo());
+            break;
+
+        case CommandIDs::redo:
+            result.setInfo (document.canRedo() ? ko ("다시 실행: ") + document.getRedoName() : ko ("다시 실행"),
+                            ko ("되돌린 편집을 다시 적용합니다"), editMenu, 0);
+            result.addDefaultKeypress ('Y', ModifierKeys::commandModifier);
+            result.addDefaultKeypress ('Z', ModifierKeys::commandModifier | ModifierKeys::shiftModifier);
+            result.setActive (document.canRedo());
+            break;
+
         case CommandIDs::audioSettings:
             result.setInfo (ko ("오디오 출력 설정..."), ko ("출력 장치(ASIO / WASAPI) 선택"), audio, 0);
             result.addDefaultKeypress (',', ModifierKeys::commandModifier);
@@ -261,11 +283,13 @@ bool MainComponent::perform (const InvocationInfo& info)
             break;
 
         case CommandIDs::moveCueUp:
-            document.cues.move (selected, selected - 1);
+            if (selected > 0)
+                document.perform (ko ("큐 이동"), [this, selected] { document.cues.move (selected, selected - 1); });
             break;
 
         case CommandIDs::moveCueDown:
-            document.cues.move (selected, selected + 1);
+            if (selected >= 0 && selected < document.cues.size() - 1)
+                document.perform (ko ("큐 이동"), [this, selected] { document.cues.move (selected, selected + 1); });
             break;
 
         case CommandIDs::newProject:
@@ -284,6 +308,16 @@ bool MainComponent::perform (const InvocationInfo& info)
             saveProject (true);
             break;
 
+        case CommandIDs::undo:
+            if (document.undo())
+                transport.showStatus (ko ("실행 취소"), false);
+            break;
+
+        case CommandIDs::redo:
+            if (document.redo())
+                transport.showStatus (ko ("다시 실행"), false);
+            break;
+
         case CommandIDs::audioSettings:
             AudioSettingsDialog::show (engine.getDeviceManager(), this);
             break;
@@ -293,7 +327,12 @@ bool MainComponent::perform (const InvocationInfo& info)
             break;
 
         case CommandIDs::masterInserts:
-            PluginDialogs::showMasterInserts (engine, pluginWindows, [this] { showPluginManager(); }, this);
+            PluginDialogs::showMasterInserts (engine, pluginWindows, [this] { showPluginManager(); },
+                                              [this] (const juce::String& name, const std::function<void()>& edit)
+                                              {
+                                                  document.perform (name, edit, { {}, true });
+                                              },
+                                              this);
             break;
 
         case CommandIDs::checkForUpdates:
@@ -314,7 +353,7 @@ bool MainComponent::perform (const InvocationInfo& info)
 //==============================================================================
 juce::StringArray MainComponent::getMenuBarNames()
 {
-    return { ko ("파일"), ko ("큐"), ko ("재생"), ko ("오디오"), ko ("도움말") };
+    return { ko ("파일"), ko ("편집"), ko ("큐"), ko ("재생"), ko ("오디오"), ko ("도움말") };
 }
 
 juce::PopupMenu MainComponent::getMenuForIndex (int topLevelMenuIndex, const juce::String&)
@@ -334,6 +373,11 @@ juce::PopupMenu MainComponent::getMenuForIndex (int topLevelMenuIndex, const juc
             break;
 
         case 1:
+            menu.addCommandItem (&commands, CommandIDs::undo);
+            menu.addCommandItem (&commands, CommandIDs::redo);
+            break;
+
+        case 2:
             menu.addCommandItem (&commands, CommandIDs::addCue);
             menu.addCommandItem (&commands, CommandIDs::removeCue);
             menu.addCommandItem (&commands, CommandIDs::duplicateCue);
@@ -342,7 +386,7 @@ juce::PopupMenu MainComponent::getMenuForIndex (int topLevelMenuIndex, const juc
             menu.addCommandItem (&commands, CommandIDs::moveCueDown);
             break;
 
-        case 2:
+        case 3:
             menu.addCommandItem (&commands, CommandIDs::go);
             menu.addCommandItem (&commands, CommandIDs::stopSelected);
             menu.addCommandItem (&commands, CommandIDs::fadeOutSelected);
@@ -351,14 +395,14 @@ juce::PopupMenu MainComponent::getMenuForIndex (int topLevelMenuIndex, const juc
             menu.addCommandItem (&commands, CommandIDs::fadeOutAll);
             break;
 
-        case 3:
+        case 4:
             menu.addCommandItem (&commands, CommandIDs::audioSettings);
             menu.addSeparator();
             menu.addCommandItem (&commands, CommandIDs::pluginManager);
             menu.addCommandItem (&commands, CommandIDs::masterInserts);
             break;
 
-        case 4:
+        case 5:
             menu.addCommandItem (&commands, CommandIDs::checkForUpdates);
             menu.addSeparator();
             menu.addCommandItem (&commands, CommandIDs::about);
@@ -408,27 +452,32 @@ juce::Uuid MainComponent::resolveTargetCue (bool ignoreFadingOut) const
 
 void MainComponent::addCuesFromFiles (const juce::StringArray& files, int insertAt)
 {
-    int index = insertAt;
-    int last = -1;
+    if (files.isEmpty())
+        return;
 
-    for (const auto& path : files)
+    document.perform (files.size() == 1 ? ko ("큐 추가") : ko ("큐 추가 (") + juce::String (files.size()) + ")", [this, files, insertAt]
     {
-        const juce::File file (path);
+        int index = insertAt;
+        int last = -1;
 
-        Cue cue;
-        cue.name = file.getFileNameWithoutExtension();
-        cue.file = file;
-        refreshCueFileInfo (engine.getFormatManager(), cue);
+        for (const auto& path : files)
+        {
+            const juce::File file (path);
 
-        last = document.cues.add (std::move (cue), index);
-        index = last + 1;
-    }
+            Cue cue;
+            cue.name = file.getFileNameWithoutExtension();
+            cue.file = file;
+            refreshCueFileInfo (engine.getFormatManager(), cue);
 
-    if (last >= 0)
-    {
-        document.cues.setSelectedIndex (last);
-        settings.setLastAudioDirectory (juce::File (files[0]).getParentDirectory());
-    }
+            last = document.cues.add (std::move (cue), index);
+            index = last + 1;
+        }
+
+        if (last >= 0)
+            document.cues.setSelectedIndex (last);
+    });
+
+    settings.setLastAudioDirectory (juce::File (files[0]).getParentDirectory());
 }
 
 void MainComponent::addCueViaDialog()
@@ -473,9 +522,13 @@ void MainComponent::removeSelectedCue()
         return;
 
     const auto id = document.cues.get (index).id;
-    engine.stop (id);
-    engine.removeCueChain (id);
-    document.cues.remove (index);
+
+    document.perform (ko ("큐 삭제"), [this, index, id]
+    {
+        engine.stop (id);
+        engine.removeCueChain (id);
+        document.cues.remove (index);
+    }, { {}, true });
 }
 
 void MainComponent::duplicateSelectedCue()
@@ -485,23 +538,26 @@ void MainComponent::duplicateSelectedCue()
     if (! document.cues.isValidIndex (index))
         return;
 
-    const auto sourceId = document.cues.get (index).id;
-    const int newIndex = document.cues.duplicate (index);
-
-    if (newIndex < 0)
-        return;
-
-    if (auto* source = engine.findCueChain (sourceId); source != nullptr && source->getNumSlots() > 0)
+    document.perform (ko ("큐 복제"), [this, index]
     {
-        const auto errors = engine.getCueChain (document.cues.get (newIndex).id)
-                                .restore (source->getStates(), engine.makePluginFactory());
+        const auto sourceId = document.cues.get (index).id;
+        const int newIndex = document.cues.duplicate (index);
 
-        if (! errors.isEmpty())
-            showAlert (ko ("일부 플러그인을 복제하지 못했습니다"), errors.joinIntoString ("\n"), false);
-    }
+        if (newIndex < 0)
+            return;
 
-    document.cues.setSelectedIndex (newIndex);
-    inspector.refreshPlugins();
+        if (auto* source = engine.findCueChain (sourceId); source != nullptr && source->getNumSlots() > 0)
+        {
+            const auto errors = engine.getCueChain (document.cues.get (newIndex).id)
+                                    .restore (source->getStates(), engine.makePluginFactory());
+
+            if (! errors.isEmpty())
+                showAlert (ko ("일부 플러그인을 복제하지 못했습니다"), errors.joinIntoString ("\n"), false);
+        }
+
+        document.cues.setSelectedIndex (newIndex);
+        inspector.refreshPlugins();
+    }, { {}, true });
 }
 
 void MainComponent::newProject()
@@ -582,6 +638,52 @@ void MainComponent::restorePluginChainsFromDocument (juce::StringArray& errors)
         errors.addArray (engine.getMasterChain().restore (document.masterPlugins, factory));
 }
 
+void MainComponent::captureLivePluginStates (Project& project)
+{
+    for (auto& cue : project.cues)
+        if (auto* chain = engine.findCueChain (cue.id))
+            cue.plugins = chain->getStates();
+
+    project.masterPlugins = engine.getMasterChain().getStates();
+}
+
+void MainComponent::reconcileChainsAfterRestore (const ProjectSnapshot& snapshot)
+{
+    const auto factory = engine.makePluginFactory();
+    juce::StringArray errors;
+    std::set<juce::String> liveIds;
+
+    for (const auto& cue : document.cues.getAll())
+    {
+        liveIds.insert (cue.id.toString());
+        auto* chain = engine.findCueChain (cue.id);
+
+        if (chain == nullptr)
+        {
+            if (! cue.plugins.empty())
+                errors.addArray (engine.getCueChain (cue.id).restore (cue.plugins, factory));
+        }
+        else if (snapshot.pluginStatesCaptured && ! chain->matchesStructure (cue.plugins))
+        {
+            errors.addArray (chain->restore (cue.plugins, factory));
+        }
+    }
+
+    for (const auto& id : engine.getCueChainIds())
+        if (liveIds.count (id.toString()) == 0)
+            engine.removeCueChain (id);
+
+    if (snapshot.pluginStatesCaptured && ! engine.getMasterChain().matchesStructure (document.masterPlugins))
+        errors.addArray (engine.getMasterChain().restore (document.masterPlugins, factory));
+
+    engine.consumePluginStateChanges();   // replaying saved state is not a new edit
+    inspector.refreshPlugins();
+    PluginDialogs::chainChanged (&engine.getMasterChain());
+
+    if (! errors.isEmpty())
+        showAlert (ko ("일부 플러그인을 되돌리지 못했습니다"), errors.joinIntoString ("\n"), false);
+}
+
 void MainComponent::openProjectFromCommandLine (const juce::String& commandLine)
 {
     const juce::ArgumentList args ("GoCue", commandLine);
@@ -605,14 +707,7 @@ void MainComponent::saveProject (bool saveAs, std::function<void (bool)> then)
         if (! file.hasFileExtension (ProjectSerializer::fileExtension))
             file = file.withFileExtension (ProjectSerializer::fileExtension);
 
-        const auto result = document.save (file, [this] (Project& project)
-        {
-            for (auto& cue : project.cues)
-                if (auto* chain = engine.findCueChain (cue.id))
-                    cue.plugins = chain->getStates();
-
-            project.masterPlugins = engine.getMasterChain().getStates();
-        });
+        const auto result = document.save (file, [this] (Project& project) { captureLivePluginStates (project); });
 
         if (result.failed())
         {
@@ -790,6 +885,7 @@ void MainComponent::cueSelectionChanged (int)
 void MainComponent::documentStateChanged()
 {
     unsavedChanges.store (document.isDirty(), std::memory_order_relaxed);
+    commands.commandStatusChanged();   // undo / redo names and availability
 
     if (onWindowTitleChanged)
         onWindowTitleChanged (document.getWindowTitle());

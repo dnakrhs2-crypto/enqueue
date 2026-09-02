@@ -51,6 +51,7 @@ target_sources(GoCueCore INTERFACE
     ${CMAKE_CURRENT_SOURCE_DIR}/src/model/Cue.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/model/CueList.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/model/ProjectSerializer.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/app/ProjectDocument.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/audio/CuePlayer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/audio/AudioEngine.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/audio/PluginChain.cpp
@@ -126,7 +127,6 @@ endif()
 target_sources(GoCue PRIVATE
     src/Main.cpp
     src/app/AppSettings.cpp
-    src/app/ProjectDocument.cpp
     src/app/Updater.cpp
     src/ui/MainComponent.cpp
     src/ui/TransportBar.cpp
