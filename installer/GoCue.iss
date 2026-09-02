@@ -37,7 +37,8 @@ ArchitecturesInstallIn64BitMode=x64compatible
 ; Per-user install by default (no UAC, so WinSparkle can run updates unattended);
 ; the user may still choose "all users" in the dialog.
 PrivilegesRequired=lowest
-PrivilegesRequiredOverridesAllowed=dialog commandline
+; per-user install only, no "all users / current user" question (an /ALLUSERS switch is still honoured)
+PrivilegesRequiredOverridesAllowed=commandline
 ChangesAssociations=yes
 CloseApplications=yes
 RestartApplications=no

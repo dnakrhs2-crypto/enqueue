@@ -338,5 +338,10 @@ class Scheduler { public: using Clock = std::function<double()>;   // 초
 - [x] 도움말 > 사용 설명서(Ctrl+F1): ManualWindow, 8개 탭.
 - [x] 코덱스 리뷰(codex_review_qa1, 5건) 전부 반영: 종료 시 패치 편집기 창 먼저 닫기 / moveSlot이 슬롯 객체 주소까지 검증 / LookAndFeel 해제 전 dismissAllActiveMenus / 슬롯 이름 더블클릭이 에디터를 열도록 라벨 클릭 통과 / 설명서 쇼 모드 설명 수정. 추가로 마이크 큐 단축키 Ctrl+M 충돌(마스터 버스 인서트) → Ctrl+6. 테스트 3727개. → 0.8.2 릴리스.
 
+## gom QA 2차: 디자인 (2026-09-02 밤 → 09-03) → v0.8.3
+- [x] 디자인 시안 20종을 HTML로 앱 레이아웃 그대로 그려 헤드리스 크롬으로 렌더링(`scratchpad/mock/make_mocks.py`, 바탕화면 `GoCue 디자인 시안/` 21장). gom 선택 = **10 큐랩 스타일**.
+- [x] 적용: `Palette` 교체(+header/button/field/selected/playingRow/fadingRow/pausedRow/cornerRadius/buttonGradient), `GoCueLookAndFeel` ColourScheme + colourId 지정 + `drawButtonBackground`(5 px, 그라데이션), GoButton 8 px 그라데이션, 상태 행 색 분리(밝은 상태색 vs 어두운 행색). 코덱스 리뷰(codex_review_theme) → 반영 → 0.8.3.
+
+
 ## 최종
 - [ ] 코덱스 전체 리뷰(전체 소스, 성능·스레드 안전·메모리) → 반영 → 전체 테스트·GUI 스모크 → 릴리스 → gom 보고(무엇이 바뀌었는지, 남은 한계: 장치 1개, CAF 없음, MIDI/타임코드/원격 제외).
