@@ -15,6 +15,25 @@ CuePlayer::CuePlayer (const Cue& c, juce::AudioFormatManager& formats,
     targetGain.store (gainLinear);
     liveRate.store (cue.audio.rate);
 
+    if (cue.isMic())
+    {
+        // live input: no file, no timeline; the rows are device input channels
+        micMode = true;
+        numChannels = juce::jlimit (1, maxChannels, cue.mic.numInputs);
+        cue.numChannels = numChannels;
+        cue.levels.resize (numChannels, numOutputs);
+        cue.trim.resize (numOutputs);
+        cue.sanitise();
+        currentGains.assign ((size_t) (numChannels * numOutputs), 0.0f);
+        computeGains (cue.levels, cue.trim, currentGains);
+        targetGains = currentGains;
+        publishedGains = currentGains;
+        liveGainDb = cue.gainDb;
+        liveLevels = cue.levels;
+        liveTrim = cue.trim;
+        return;
+    }
+
     if (cue.file == juce::File())
     {
         errorMessage = "No audio file assigned to cue \"" + cue.name + "\"";
@@ -124,6 +143,14 @@ void CuePlayer::prepare (double sampleRate, int blockSize)
         return;
 
     currentSampleRate = sampleRate > 0.0 ? sampleRate : 44100.0;
+
+    if (micMode)
+    {
+        envelope.prepare (currentSampleRate);
+        pauseGate.prepare (currentSampleRate);
+        juce::ignoreUnused (blockSize);
+        return;
+    }
 
     // prepare for the fastest rate first so the resampler never has to grow its buffer on the audio thread
     resampler->setResamplingRatio (ratioFor (AudioCueData::maxRate));
@@ -298,6 +325,9 @@ void CuePlayer::setDuckDb (double db, double rampSeconds) noexcept
 
 double CuePlayer::getLengthSeconds() const noexcept
 {
+    if (micMode)
+        return -1.0;   // until stopped
+
     if (source == nullptr)
         return 0.0;
 
@@ -310,6 +340,9 @@ double CuePlayer::getLengthSeconds() const noexcept
 
 double CuePlayer::getRemainingSeconds() const noexcept
 {
+    if (micMode)
+        return -1.0;
+
     if (source == nullptr)
         return 0.0;
 
@@ -426,8 +459,8 @@ void CuePlayer::mixIntoBus (juce::AudioBuffer<float>& bus, const juce::AudioBuff
 
 double CuePlayer::getProgressFraction() const noexcept
 {
-    if (! isValid())
-        return 0.0;
+    if (! isValid() || micMode)
+        return micMode ? -1.0 : 0.0;
 
     const auto total = source->getTotalLength();
 
@@ -440,6 +473,13 @@ double CuePlayer::getProgressFraction() const noexcept
 void CuePlayer::updatePositionInfo (double rate) noexcept
 {
     juce::ignoreUnused (rate);
+
+    if (source == nullptr)
+    {
+        positionSeconds.store (elapsedOutputSamples / currentSampleRate, std::memory_order_relaxed);   // a mic cue: elapsed time only
+        return;
+    }
+
     const auto total = source->getTotalLength();
     auto pos = (juce::int64) virtualPosition.load (std::memory_order_relaxed);
 
@@ -541,22 +581,39 @@ bool CuePlayer::renderNextBlock (juce::AudioBuffer<float>& fullBuffer, int numSa
         return true;
     }
 
-    const double ratio = ratioFor (rate);
+    const double ratio = micMode ? 1.0 : ratioFor (rate);
 
     if (! inTail)
     {
-        if (! juce::approximatelyEqual (ratio, lastRatio))
+        if (micMode)
         {
-            resampler->setResamplingRatio (ratio);
-            lastRatio = ratio;
+            // the rows are device input channels (silence for channels the device does not provide)
+            for (int ch = 0; ch < numChannels; ++ch)
+            {
+                const int input = cue.mic.firstInput + ch;
+
+                if (inputData != nullptr && input < inputChannels && inputData[input] != nullptr)
+                    buffer.copyFrom (ch, 0, inputData[input] + inputOffset, numSamples);
+                else
+                    buffer.clear (ch, 0, numSamples);
+            }
+        }
+        else
+        {
+            if (! juce::approximatelyEqual (ratio, lastRatio))
+            {
+                resampler->setResamplingRatio (ratio);
+                lastRatio = ratio;
+            }
+
+            if (stretch != nullptr)
+                stretch->setRate (rate);
+
+            juce::AudioSourceChannelInfo info (&buffer, 0, numSamples);
+            resampler->getNextAudioBlock (info);   // silence once the source is past its end
+            virtualPosition.store (virtualPosition.load (std::memory_order_relaxed) + (double) numSamples * advanceFor (rate), std::memory_order_relaxed);
         }
 
-        if (stretch != nullptr)
-            stretch->setRate (rate);
-
-        juce::AudioSourceChannelInfo info (&buffer, 0, numSamples);
-        resampler->getNextAudioBlock (info);   // silence once the source is past its end
-        virtualPosition.store (virtualPosition.load (std::memory_order_relaxed) + (double) numSamples * advanceFor (rate), std::memory_order_relaxed);
         elapsedOutputSamples += numSamples;
 
         envelope.applyToBuffer (buffer, 0, numSamples);
@@ -627,7 +684,7 @@ bool CuePlayer::renderNextBlock (juce::AudioBuffer<float>& fullBuffer, int numSa
     }
 
     const bool stoppedAfterFade = stopRequested.load (std::memory_order_relaxed) && envelope.hasReachedSilence();
-    const bool streamEnded = virtualPosition.load (std::memory_order_relaxed) >= (double) source->getTotalLength();
+    const bool streamEnded = ! micMode && virtualPosition.load (std::memory_order_relaxed) >= (double) source->getTotalLength();
 
     if (stoppedAfterFade || streamEnded)
     {

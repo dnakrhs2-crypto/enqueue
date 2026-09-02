@@ -246,6 +246,9 @@ double Cue::effectiveLength() const noexcept
     if (type == CueType::control)
         return control.kind == ControlKind::wait ? control.seconds : 0.0;
 
+    if (type == CueType::mic)
+        return -1.0;   // until stopped
+
     if (type == CueType::devamp || type == CueType::group)
         return 0.0;   // a group's length depends on its children: CueList::effectiveLengthOf
 
@@ -266,6 +269,12 @@ void Cue::sanitise() noexcept
 
     if (! std::isfinite (control.seconds) || control.seconds < 0.0)
         control.seconds = 0.0;
+
+    mic.firstInput = juce::jlimit (0, 63, mic.firstInput);
+    mic.numInputs = juce::jlimit (1, LevelMatrix::maxInputs, mic.numInputs);
+
+    if (type == CueType::mic)
+        numChannels = mic.numInputs;   // the level matrix rows
 
     control.seconds = std::min (control.seconds, maxWaitSeconds);
 

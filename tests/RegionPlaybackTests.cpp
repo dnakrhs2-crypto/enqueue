@@ -835,6 +835,48 @@ public:
             thread.stopThread (2000);
         }
 
+        beginTest ("a mic cue routes the device inputs through its matrix until it is stopped");
+        {
+            Cue mic;
+            mic.type = CueType::mic;
+            mic.name = "mic";
+            mic.mic.firstInput = 1;   // device inputs 2-3
+            mic.mic.numInputs = 2;
+            mic.fadeOutMs = 0;
+            expect (mic.effectiveLength() < 0.0);
+            expect (engine.play (mic));
+            expect (engine.isPlaying (mic.id));
+
+            // device input block: channel 1 = 0.25, channel 2 = -0.5, channel 0 = 1.0 (not used)
+            juce::AudioBuffer<float> inputs (3, blockSize);
+            inputs.clear();
+            juce::FloatVectorOperations::fill (inputs.getWritePointer (0), 1.0f, blockSize);
+            juce::FloatVectorOperations::fill (inputs.getWritePointer (1), 0.25f, blockSize);
+            juce::FloatVectorOperations::fill (inputs.getWritePointer (2), -0.5f, blockSize);
+
+            for (int i = 0; i < 20; ++i)   // through the de-click / level ramps
+                engine.renderBlock (out, blockSize, inputs.getArrayOfReadPointers(), 3);
+
+            expectWithinAbsoluteError (out.getSample (0, blockSize - 1), 0.25f, 0.01f);   // row 1 -> output 1
+            expectWithinAbsoluteError (out.getSample (1, blockSize - 1), -0.5f, 0.01f);   // row 2 -> output 2
+            expect (engine.getPlayingCues().front().lengthSeconds < 0.0);                // endless
+
+            // without an input block the mic renders silence, and it keeps running
+            engine.renderBlock (out, blockSize);
+            expectWithinAbsoluteError (out.getSample (0, blockSize - 1), 0.0f, 0.001f);
+            expect (engine.isPlaying (mic.id));
+
+            engine.stop (mic.id);
+
+            for (int i = 0; i < 5; ++i)
+            {
+                engine.renderBlock (out, blockSize);
+                engine.reapFinishedPlayers();
+            }
+
+            expect (! engine.isPlaying (mic.id));
+        }
+
         beginTest ("an empty region is refused with a message");
         {
             Cue cue;

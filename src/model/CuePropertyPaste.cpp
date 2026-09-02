@@ -75,6 +75,9 @@ void apply (const Cue& source, Cue& target, const Selection& sel)
         target.control.targetId = keepTarget;
     }
 
+    if (sel.fade && source.isMic() && target.isMic())
+        target.mic = source.mic;
+
     if (sel.fade && source.isGroup() && target.isGroup())
     {
         const bool keepCollapsed = target.group.collapsed;

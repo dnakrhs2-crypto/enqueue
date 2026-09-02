@@ -392,7 +392,15 @@ namespace
         if (! c.patchId.isNull())
             obj->setProperty ("patch", c.patchId.toString());
         obj->setProperty ("type", c.type == CueType::fade ? "fade" : c.type == CueType::devamp ? "devamp" : c.type == CueType::group ? "group"
-                                : c.type == CueType::control ? "control" : "audio");
+                                : c.type == CueType::control ? "control" : c.type == CueType::mic ? "mic" : "audio");
+
+        if (c.type == CueType::mic)
+        {
+            auto* mobj = new juce::DynamicObject();
+            mobj->setProperty ("firstInput", c.mic.firstInput);
+            mobj->setProperty ("numInputs", c.mic.numInputs);
+            obj->setProperty ("mic", juce::var (mobj));
+        }
 
         if (c.type == CueType::control)
         {
@@ -535,7 +543,13 @@ namespace
         {
             const auto typeText = v.getProperty ("type", "audio").toString();
             c.type = typeText == "fade" ? CueType::fade : typeText == "devamp" ? CueType::devamp : typeText == "group" ? CueType::group
-                   : typeText == "control" ? CueType::control : CueType::audio;
+                   : typeText == "control" ? CueType::control : typeText == "mic" ? CueType::mic : CueType::audio;
+        }
+
+        if (const auto m = v.getProperty ("mic", juce::var()); m.getDynamicObject() != nullptr)
+        {
+            c.mic.firstInput = intProperty (m, "firstInput", 0);
+            c.mic.numInputs = intProperty (m, "numInputs", 2);
         }
 
         if (const auto ctl = v.getProperty ("control", juce::var()); ctl.getDynamicObject() != nullptr)

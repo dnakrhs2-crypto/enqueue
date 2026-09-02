@@ -99,6 +99,10 @@ private:
     void addGroupCue();
     /** Inserts a control cue of 'kind' after the selection (targeting it, when the kind needs a target). */
     void addControlCue (ControlKind kind);
+    /** Inserts a mic cue (device inputs 1-2) after the selection. */
+    void addMicCue();
+    /** Opens as many device inputs as the project's mic cues need. */
+    void updateInputsWanted();
     /** Starts recording cue starts; stopping turns them into a timeline group of start cues. */
     void toggleSequenceRecording();
     /** Cue lists / carts (the tabs above the list). */

@@ -47,7 +47,16 @@ public:
     /** Cue outputs (bus channels) this player mixes into; the level matrix columns. */
     int getNumOutputs() const noexcept  { return numOutputs; }
 
-    bool isValid() const noexcept                        { return resampler != nullptr; }
+    bool isValid() const noexcept                        { return resampler != nullptr || micMode; }
+    /** A mic cue: the rows come from the device input instead of a file. */
+    bool isMic() const noexcept                          { return micMode; }
+    /** Audio thread, before renderNextBlock(): the device input block (null / 0 = silence) for mic players. */
+    void setInputBlock (const float* const* data, int numInputChannels, int offset) noexcept
+    {
+        inputData = data;
+        inputChannels = numInputChannels;
+        inputOffset = offset;
+    }
     const juce::String& getErrorMessage() const noexcept { return errorMessage; }
 
     /** Must be called before the first render and again whenever the device settings change.
@@ -210,6 +219,12 @@ private:
     std::atomic<double> virtualPosition { 0.0 };        // file samples on the source's virtual timeline (audible); written by the audio thread
     std::atomic<juce::int64> pendingVirtualPosition { -1 };   // set by setLiveRegion / seek, adopted by the audio thread
     std::atomic<double> pendingElapsedSamples { -1.0 };       // set by seek, adopted with the position
+
+    // mic cues
+    bool micMode = false;
+    const float* const* inputData = nullptr;   // audio thread: the device input block for this render
+    int inputChannels = 0;
+    int inputOffset = 0;
 
     // audio-thread state
     double elapsedOutputSamples = 0.0;

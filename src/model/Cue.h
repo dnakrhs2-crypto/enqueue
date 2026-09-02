@@ -69,7 +69,14 @@ struct DuckSettings
 };
 
 /** What a cue is. Only the fields that belong to its type are used / saved. */
-enum class CueType { audio, fade, devamp, group, control };
+enum class CueType { audio, fade, devamp, group, control, mic };
+
+/** A mic cue (QLab "Mic"): live device input channels through the cue's level matrix, inserts and patch until stopped. */
+struct MicCueData
+{
+    int firstInput = 0;    // 0-based device input channel of the cue's first row
+    int numInputs = 2;     // rows of the level matrix
+};
 
 /** What a control cue does when it fires (QLab's Start / Stop / Pause / Load / Reset / GoTo / Wait / Memo / Arm /
     Disarm / Target cues, folded into one type with a kind). */
@@ -255,6 +262,7 @@ struct Cue
     DevampCueData devamp;            // used when type == devamp
     GroupCueData group;              // used when type == group
     ControlCueData control;          // used when type == control
+    MicCueData mic;                  // used when type == mic
     juce::Uuid parentId = juce::Uuid::null();   // the group this cue belongs to (null = top level)
     SecondTriggerAction secondTrigger = SecondTriggerAction::hardStopRestart;
 
@@ -263,6 +271,9 @@ struct Cue
     bool isDevamp() const noexcept { return type == CueType::devamp; }
     bool isGroup() const noexcept  { return type == CueType::group; }
     bool isControl() const noexcept { return type == CueType::control; }
+    bool isMic() const noexcept { return type == CueType::mic; }
+    /** Plays sound (a file or live input): has levels, a stop fade, inserts. */
+    bool makesSound() const noexcept { return isAudio() || isMic(); }
     /** Fade / devamp / control cues point at another cue (a wait / memo control cue has none). */
     bool hasTarget() const noexcept { return isFade() || isDevamp() || (isControl() && control.needsTarget()); }
     juce::Uuid targetId() const noexcept { return isFade() ? fade.targetId : isDevamp() ? devamp.targetId : isControl() ? control.targetId : juce::Uuid::null(); }

@@ -433,6 +433,17 @@ void CueTable::paintCell (juce::Graphics& g, int rowNumber, int columnId, int wi
                                            g.drawLine (x - 2.0f, cy, x + 12.0f, cy, 1.0f); break;
             }
         }
+        else if (cue.isMic())
+        {
+            // a mic: a capsule on a stand
+            g.setColour (Palette::dimText);
+            g.fillRoundedRectangle (x + 2.5f, cy - 7.0f, 5.0f, 9.0f, 2.5f);
+            juce::Path stand;
+            stand.addCentredArc (x + 5.0f, cy, 4.5f, 4.5f, 0.0f, 1.6f, 4.7f, true);
+            g.strokePath (stand, juce::PathStrokeType (1.4f));
+            g.drawLine (x + 5.0f, cy + 4.5f, x + 5.0f, cy + 7.0f, 1.4f);
+            g.drawLine (x + 2.0f, cy + 7.0f, x + 8.0f, cy + 7.0f, 1.4f);
+        }
         else if (cue.isGroup())
         {
             // a group: a folder tab in the mode colour (running children = filled)
@@ -528,6 +539,11 @@ void CueTable::paintCell (juce::Graphics& g, int rowNumber, int columnId, int wi
                                  : cue.group.mode == GroupMode::startFirstEnter ? "첫 큐 시작 후 진입"
                                  : cue.group.mode == GroupMode::startFirst ? "첫 큐 시작" : "랜덤";
                 text = ko (mode) + ko (" · ") + juce::String (count) + ko ("개");
+                colour = Palette::dimText;
+            }
+            else if (cue.isMic())
+            {
+                text = ko ("입력 ") + juce::String (cue.mic.firstInput + 1) + (cue.mic.numInputs > 1 ? "-" + juce::String (cue.mic.firstInput + cue.mic.numInputs) : juce::String());
                 colour = Palette::dimText;
             }
             else if (cue.isControl() && ! cue.control.needsTarget())

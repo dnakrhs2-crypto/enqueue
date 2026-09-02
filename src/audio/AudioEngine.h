@@ -56,6 +56,12 @@ public:
         Returns an error message, or an empty string on success. */
     juce::String initialise (const juce::XmlElement* savedDeviceState);
     static constexpr int maxDeviceOutputs = 64;
+    static constexpr int maxDeviceInputs = 32;
+    /** Mic cues need device inputs: opens (at least) the first 'channels' input channels; 0 leaves the device as is.
+        Restarts the device when more inputs are needed than are open, so call it while nothing plays if possible. */
+    void setInputsWanted (int channels);
+    /** Input channels the open device delivers (0 offline). */
+    int getNumDeviceInputs() const noexcept { return numDeviceInputs.load (std::memory_order_relaxed); }
     void shutdown();
 
     juce::AudioDeviceManager& getDeviceManager() noexcept { return deviceManager; }
@@ -193,8 +199,8 @@ public:
     void prepare (double newSampleRate, int newBlockSize, int newNumDeviceOutputs = -1);
 
     /** Renders one block into 'output' (device outputs; channels beyond the prepared count are cleared).
-        Audio thread, or the test harness. */
-    void renderBlock (juce::AudioBuffer<float>& output, int numSamples);
+        'inputs' (device input channels, may be null) feed the mic cues. Audio thread, or the test harness. */
+    void renderBlock (juce::AudioBuffer<float>& output, int numSamples, const float* const* inputs = nullptr, int numInputs = 0);
 
     /** Destroys players that have finished. Called automatically on the message thread. */
     void reapFinishedPlayers();
@@ -243,6 +249,7 @@ private:
     std::unique_ptr<PatchRuntime> muteRuntime;                   // audition "출력 없음": a bus that is never routed
     juce::int64 startCounter = 0;
     std::atomic<int> numDeviceOutputs { 2 };
+    std::atomic<int> numDeviceInputs { 0 };
 
     PluginChain masterChain;
     std::map<juce::String, std::unique_ptr<PluginChain>> cueChains;   // keyed by Uuid string

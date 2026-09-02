@@ -96,6 +96,14 @@ void TransportBar::setStandbyCue (int index, const Cue* cue)
         return;
     }
 
+    if (cue->isMic())
+    {
+        cueFile.setText (ko ("장치 입력 ") + juce::String (cue->mic.firstInput + 1) + (cue->mic.numInputs > 1 ? "-" + juce::String (cue->mic.firstInput + cue->mic.numInputs) : juce::String()), juce::dontSendNotification);
+        cueFile.setColour (juce::Label::textColourId, Palette::dimText);
+        cueMeta.setText (ko ("마이크 큐   정지할 때까지   정지 페이드 ") + juce::String (cue->fadeOutMs) + ko (" ms   게인 ") + juce::String (cue->gainDb, 1) + " dB", juce::dontSendNotification);
+        return;
+    }
+
     if (cue->isControl())
     {
         static const char* const names[] = { "시작", "정지", "일시정지", "로드", "리셋", "이동", "대기", "메모", "활성화", "비활성화", "대상 변경" };

@@ -33,6 +33,7 @@ enum : juce::CommandID
     addWaitCue,
     addMemoCue,
     toggleSequenceRecording,   // Ctrl+Shift+E
+    addMicCue,                 // Ctrl+M
     addCueList,                // 큐 리스트 추가
     addCart,                   // 카트 추가
     nextContainer,             // Ctrl+PageDown

@@ -68,6 +68,7 @@ public:
     class DevampPanel;
     class GroupPanel;
     class ControlPanel;
+    class MicPanel;
 
 private:
     void refresh();
@@ -108,6 +109,7 @@ private:
     std::unique_ptr<DevampPanel> devampPanel;
     std::unique_ptr<GroupPanel> groupPanel;
     std::unique_ptr<ControlPanel> controlPanel;
+    std::unique_ptr<MicPanel> micPanel;
     BasicsPanel* basics = nullptr;       // aliases of the panels above
     TimeLoopsPanel* timeLoops = nullptr;
     LevelsPanel* levels = nullptr;

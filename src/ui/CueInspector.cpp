@@ -348,10 +348,13 @@ public:
         gainSlider.setValue (cue->gainDb, juce::dontSendNotification);
 
         const bool audio = cue->isAudio();
+        const bool sound = cue->makesSound();   // a mic cue has a gain and a stop fade, but no file
 
-        for (auto* c : std::initializer_list<juce::Component*> { &fileLabel, &filePathLabel, &browseButton, &fadeOutLabel, &fadeOutEditor,
-                                                                 &gainLabel, &gainSlider, &autoLoadToggle })
+        for (auto* c : std::initializer_list<juce::Component*> { &fileLabel, &filePathLabel, &browseButton, &autoLoadToggle })
             c->setVisible (audio);
+
+        for (auto* c : std::initializer_list<juce::Component*> { &fadeOutLabel, &fadeOutEditor, &gainLabel, &gainSlider })
+            c->setVisible (sound);
 
         if (cue->file == juce::File())
         {
@@ -1493,7 +1496,7 @@ public:
         {
             const auto& c = cues.get (i);
 
-            if (! c.isAudio())
+            if (! c.makesSound())
                 continue;
 
             targetIds.push_back (c.id);
@@ -2231,7 +2234,7 @@ public:
         {
             const auto& c = cues.get (i);
 
-            if (! c.isAudio())
+            if (! c.makesSound())
                 continue;
 
             targetIds.push_back (c.id);
@@ -2304,6 +2307,126 @@ private:
     juce::ComboBox targetCombo;
     std::vector<juce::Uuid> targetIds;
     juce::ToggleButton startNextToggle, stopToggle;
+    juce::Uuid shownId = juce::Uuid::null();
+    bool refreshing = false;
+    bool editable = true;
+};
+
+//==============================================================================
+/** 입력 tab: which device inputs a mic cue takes. */
+class CueInspector::MicPanel : public juce::Component
+{
+public:
+    MicPanel (ProjectDocument& doc, AudioEngine& e) : document (doc), cues (doc.cues), engine (e)
+    {
+        styleLabel (firstLabel, ko ("첫 입력 채널"));
+        addAndMakeVisible (firstLabel);
+        firstEditor.setJustification (juce::Justification::centredRight);
+        firstEditor.setSelectAllWhenFocused (true);
+        firstEditor.setInputRestrictions (3, "0123456789");
+        firstEditor.onReturnKey = [this] { commit(); };
+        firstEditor.onFocusLost = [this] { commit(); };
+        addAndMakeVisible (firstEditor);
+
+        styleLabel (countLabel, ko ("채널 수"));
+        addAndMakeVisible (countLabel);
+        countEditor.setJustification (juce::Justification::centredRight);
+        countEditor.setSelectAllWhenFocused (true);
+        countEditor.setInputRestrictions (2, "0123456789");
+        countEditor.onReturnKey = [this] { commit(); };
+        countEditor.onFocusLost = [this] { commit(); };
+        addAndMakeVisible (countEditor);
+
+        styleLabel (deviceLabel, "", 12.0f);
+        addAndMakeVisible (deviceLabel);
+        styleLabel (hint, ko ("장치 입력이 레벨 탭의 행이 됩니다 (마이크 큐는 정지할 때까지 재생). 입력 채널은 오디오 > 오디오 설정에서 켭니다 — 프로젝트에 마이크 큐가 있으면 필요한 만큼 자동으로 켭니다."), 11.0f);
+        addAndMakeVisible (hint);
+    }
+
+    void setEditable (bool shouldBeEditable)
+    {
+        editable = shouldBeEditable;
+        refresh();
+    }
+
+    void refresh()
+    {
+        const juce::ScopedValueSetter<bool> guard (refreshing, true);
+        const auto* cue = cues.getSelected();
+        const bool enabled = cue != nullptr && cue->isMic() && editable;
+        firstEditor.setEnabled (enabled);
+        countEditor.setEnabled (enabled);
+
+        if (cue == nullptr || ! cue->isMic())
+            return;
+
+        shownId = cue->id;
+
+        if (! firstEditor.hasKeyboardFocus (true))
+            firstEditor.setText (juce::String (cue->mic.firstInput + 1), false);
+
+        if (! countEditor.hasKeyboardFocus (true))
+            countEditor.setText (juce::String (cue->mic.numInputs), false);
+
+        const int available = engine.getNumDeviceInputs();
+        const int needed = cue->mic.firstInput + cue->mic.numInputs;
+        deviceLabel.setText (available <= 0 ? ko ("장치 입력이 열려 있지 않습니다")
+                             : needed > available ? ko ("장치 입력 ") + juce::String (available) + ko ("개 열림 — 이 큐는 ") + juce::String (needed) + ko ("개까지 필요 (없는 채널은 무음)")
+                             : ko ("장치 입력 ") + juce::String (available) + ko ("개 열림"), juce::dontSendNotification);
+        deviceLabel.setColour (juce::Label::textColourId, available <= 0 || needed > available ? Palette::missing : Palette::dimText);
+    }
+
+    void resized() override
+    {
+        auto area = getLocalBounds().reduced (12, 6);
+        auto row = area.removeFromTop (24);
+        firstLabel.setBounds (row.removeFromLeft (80));
+        firstEditor.setBounds (row.removeFromLeft (60));
+        row.removeFromLeft (16);
+        countLabel.setBounds (row.removeFromLeft (56));
+        countEditor.setBounds (row.removeFromLeft (50));
+        row.removeFromLeft (16);
+        deviceLabel.setBounds (row);
+        area.removeFromTop (6);
+        hint.setBounds (area.removeFromTop (16));
+    }
+
+    void paint (juce::Graphics& g) override { g.fillAll (Palette::panel); }
+
+private:
+    void commit()
+    {
+        if (refreshing || ! editable)
+            return;
+
+        const int index = shownId.isNull() ? cues.getSelectedIndex() : cues.indexOf (shownId);
+
+        if (! cues.isValidIndex (index) || ! cues.get (index).isMic())
+            return;
+
+        const auto& cue = cues.get (index);
+        const int first = juce::jlimit (1, 64, firstEditor.getText().getIntValue()) - 1;
+        const int count = juce::jlimit (1, LevelMatrix::maxInputs, countEditor.getText().getIntValue());
+
+        if (first == cue.mic.firstInput && count == cue.mic.numInputs)
+            return;
+
+        document.perform (ko ("마이크 입력"), [this, index, first, count]
+        {
+            cues.update (index, [first, count] (Cue& c)
+            {
+                c.mic.firstInput = first;
+                c.mic.numInputs = count;
+                c.levels.resize (count, c.levels.numOutputs() > 0 ? c.levels.numOutputs() : 2);
+            });
+        });
+    }
+
+    ProjectDocument& document;
+    CueList& cues;
+    AudioEngine& engine;
+    juce::Label firstLabel, countLabel, deviceLabel, hint;
+    juce::TextEditor firstEditor, countEditor;
     juce::Uuid shownId = juce::Uuid::null();
     bool refreshing = false;
     bool editable = true;
@@ -2963,6 +3086,7 @@ CueInspector::CueInspector (ProjectDocument& doc, AudioEngine& e, AppSettings& s
     devampPanel = std::make_unique<DevampPanel> (document);
     groupPanel = std::make_unique<GroupPanel> (document);
     controlPanel = std::make_unique<ControlPanel> (document);
+    micPanel = std::make_unique<MicPanel> (document, engine);
 
     tabs.setTabBarDepth (26);
     tabs.setOutline (0);
@@ -3032,6 +3156,7 @@ void CueInspector::setEditable (bool shouldBeEditable)
     devampPanel->setEditable (editable);
     groupPanel->setEditable (editable);
     controlPanel->setEditable (editable);
+    micPanel->setEditable (editable);
 }
 
 void CueInspector::rebuildTabs (int wanted)
@@ -3042,7 +3167,17 @@ void CueInspector::rebuildTabs (int wanted)
     tabSet = wanted;
     tabs.clearTabs();
 
-    if (wanted == 4)
+    if (wanted == 5)
+    {
+        tabs.addTab (ko ("기본"), Palette::panel, basics, false);
+        tabs.addTab (ko ("입력"), Palette::panel, micPanel.get(), false);
+        tabs.addTab (ko ("레벨"), Palette::panel, levels, false);
+        tabs.addTab (ko ("트림"), Palette::panel, trim, false);
+        tabs.addTab (ko ("트리거"), Palette::panel, triggers, false);
+        tabs.addTab (ko ("이펙트"), Palette::panel, effects, false);
+        tabs.setCurrentTabIndex (1);
+    }
+    else if (wanted == 4)
     {
         tabs.addTab (ko ("기본"), Palette::panel, basics, false);
         tabs.addTab (ko ("동작"), Palette::panel, controlPanel.get(), false);
@@ -3119,7 +3254,7 @@ void CueInspector::refresh()
         title.setText (text, juce::dontSendNotification);
     }
 
-    rebuildTabs (cue == nullptr ? 0 : cue->isFade() ? 1 : cue->isDevamp() ? 2 : cue->isGroup() ? 3 : cue->isControl() ? 4 : 0);
+    rebuildTabs (cue == nullptr ? 0 : cue->isFade() ? 1 : cue->isDevamp() ? 2 : cue->isGroup() ? 3 : cue->isControl() ? 4 : cue->isMic() ? 5 : 0);
     basics->refresh();
     timeLoops->refresh();
     levels->refresh();
@@ -3132,6 +3267,7 @@ void CueInspector::refresh()
     devampPanel->refresh();
     groupPanel->refresh();
     controlPanel->refresh();
+    micPanel->refresh();
 }
 
 void CueInspector::resized()

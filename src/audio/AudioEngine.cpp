@@ -45,6 +45,32 @@ juce::String AudioEngine::initialise (const juce::XmlElement* savedDeviceState)
     return error;
 }
 
+void AudioEngine::setInputsWanted (int channels)
+{
+    channels = juce::jlimit (0, maxDeviceInputs, channels);
+
+    if (channels <= 0)
+        return;
+
+    auto setup = deviceManager.getAudioDeviceSetup();
+    const int open = setup.inputChannels.countNumberOfSetBits();
+
+    if (open >= channels && ! setup.useDefaultInputChannels)
+        return;
+
+    auto* device = deviceManager.getCurrentAudioDevice();
+    const int available = device != nullptr ? device->getInputChannelNames().size() : channels;
+    const int wanted = juce::jmin (channels, juce::jmax (available, 0));
+
+    if (wanted <= 0 || open >= wanted)
+        return;
+
+    setup.useDefaultInputChannels = false;
+    setup.inputChannels.clear();
+    setup.inputChannels.setRange (0, wanted, true);
+    deviceManager.setAudioDeviceSetup (setup, true);   // restarts the device with the inputs open
+}
+
 void AudioEngine::shutdown()
 {
     if (callbackAdded)
@@ -1144,7 +1170,7 @@ void AudioEngine::prepare (double newSampleRate, int newBlockSize, int newNumDev
     forEachPatchChain ([this] (PluginChain& chain) { chain.prepare (sampleRate.load(), blockSize.load()); });
 }
 
-void AudioEngine::renderBlock (juce::AudioBuffer<float>& output, int numSamples)
+void AudioEngine::renderBlock (juce::AudioBuffer<float>& output, int numSamples, const float* const* inputs, int numInputs)
 {
     if (numSamples <= 0)
         return;
@@ -1171,6 +1197,9 @@ void AudioEngine::renderBlock (juce::AudioBuffer<float>& output, int numSamples)
             {
                 if (p->hasFinished())
                     continue;
+
+                if (p->isMic())
+                    p->setInputBlock (inputs, numInputs, offset);
 
                 const bool stillRunning = p->renderNextBlock (playerBuffer, n);
                 auto* r = static_cast<PatchRuntime*> (p->getBusTag());
@@ -1225,7 +1254,7 @@ void AudioEngine::reapFinishedPlayers()
 }
 
 //==============================================================================
-void AudioEngine::audioDeviceIOCallbackWithContext (const float* const*, int,
+void AudioEngine::audioDeviceIOCallbackWithContext (const float* const* inputChannelData, int numInputChannels,
                                                     float* const* outputChannelData, int numOutputChannels,
                                                     int numSamples, const juce::AudioIODeviceCallbackContext&)
 {
@@ -1235,7 +1264,7 @@ void AudioEngine::audioDeviceIOCallbackWithContext (const float* const*, int,
     if (numOutputChannels <= 32)
     {
         juce::AudioBuffer<float> output (outputChannelData, numOutputChannels, numSamples);   // uses its inline channel table: no allocation
-        renderBlock (output, numSamples);
+        renderBlock (output, numSamples, inputChannelData, numInputChannels);
         return;
     }
 
@@ -1245,7 +1274,9 @@ void AudioEngine::audioDeviceIOCallbackWithContext (const float* const*, int,
     for (int offset = 0; offset < numSamples; offset += chunk)
     {
         const int n = juce::jmin (chunk, numSamples - offset);
-        renderBlock (deviceScratch, n);
+        // the mic players index the input block themselves: hand them the pointers shifted by 'offset'
+        juce::AudioBuffer<float> inputView (const_cast<float**> (inputChannelData), juce::jmin (32, numInputChannels), offset, n);
+        renderBlock (deviceScratch, n, numInputChannels > 0 ? inputView.getArrayOfReadPointers() : nullptr, inputView.getNumChannels());
 
         for (int ch = 0; ch < numOutputChannels; ++ch)
         {
@@ -1259,6 +1290,7 @@ void AudioEngine::audioDeviceIOCallbackWithContext (const float* const*, int,
 
 void AudioEngine::audioDeviceAboutToStart (juce::AudioIODevice* device)
 {
+    numDeviceInputs.store (device->getActiveInputChannels().countNumberOfSetBits(), std::memory_order_relaxed);
     prepare (device->getCurrentSampleRate(), device->getCurrentBufferSizeSamples(),
              juce::jmax (1, device->getActiveOutputChannels().countNumberOfSetBits()));
 }

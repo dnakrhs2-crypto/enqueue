@@ -301,7 +301,7 @@ void MainComponent::getAllCommands (juce::Array<juce::CommandID>& ids)
                     CommandIDs::loadCue, CommandIDs::loadToTime, CommandIDs::resetCue, CommandIDs::resetAll,
                     CommandIDs::addCue, CommandIDs::addFadeCue, CommandIDs::addDevampCue, CommandIDs::addGroupCue, CommandIDs::groupSelectedCues,
                     CommandIDs::ungroupSelected, CommandIDs::collapseAllGroups, CommandIDs::expandAllGroups,
-                    CommandIDs::addControlCue, CommandIDs::addWaitCue, CommandIDs::addMemoCue, CommandIDs::toggleSequenceRecording,
+                    CommandIDs::addControlCue, CommandIDs::addWaitCue, CommandIDs::addMemoCue, CommandIDs::addMicCue, CommandIDs::toggleSequenceRecording,
                     CommandIDs::addCueList, CommandIDs::addCart, CommandIDs::nextContainer, CommandIDs::previousContainer,
                     CommandIDs::renameContainer, CommandIDs::removeContainer,
                     CommandIDs::revertFade, CommandIDs::fetchFadeLevels, CommandIDs::removeCue, CommandIDs::duplicateCue,
@@ -451,6 +451,12 @@ void MainComponent::getCommandInfo (juce::CommandID commandID, juce::Application
 
         case CommandIDs::addWaitCue:
             result.setInfo (ko ("대기 큐 추가"), ko ("정해진 시간 동안 아무것도 하지 않는 큐 (자동 팔로우 앞에 시간을 둘 때)"), cueMenu, 0);
+            result.setActive (canEdit);
+            break;
+
+        case CommandIDs::addMicCue:
+            result.setInfo (ko ("마이크 큐 추가"), ko ("장치 입력을 레벨 매트릭스·인서트·패치로 보내는 큐 (정지할 때까지)"), cueMenu, 0);
+            result.addDefaultKeypress ('M', ModifierKeys::commandModifier);
             result.setActive (canEdit);
             break;
 
@@ -810,6 +816,10 @@ bool MainComponent::perform (const InvocationInfo& info)
             addControlCue (ControlKind::wait);
             break;
 
+        case CommandIDs::addMicCue:
+            addMicCue();
+            break;
+
         case CommandIDs::addMemoCue:
             addControlCue (ControlKind::memo);
             break;
@@ -1047,6 +1057,7 @@ juce::PopupMenu MainComponent::getMenuForIndex (int topLevelMenuIndex, const juc
             menu.addCommandItem (&commands, CommandIDs::addControlCue);
             menu.addCommandItem (&commands, CommandIDs::addWaitCue);
             menu.addCommandItem (&commands, CommandIDs::addMemoCue);
+            menu.addCommandItem (&commands, CommandIDs::addMicCue);
             menu.addSeparator();
             menu.addCommandItem (&commands, CommandIDs::toggleSequenceRecording);
             menu.addSeparator();
@@ -1226,7 +1237,7 @@ void MainComponent::addDevampCue()
     const auto* selectedCue = document.cues.getSelected();
     const bool autoNumber = document.settings.autoNumber;
     const double increment = document.settings.numberIncrement;
-    const juce::Uuid target = selectedCue != nullptr ? (selectedCue->isAudio() ? selectedCue->id : selectedCue->targetId()) : juce::Uuid::null();
+    const juce::Uuid target = selectedCue != nullptr ? (selectedCue->makesSound() ? selectedCue->id : selectedCue->targetId()) : juce::Uuid::null();
 
     document.perform (ko ("디밴프 큐 추가"), [this, selected, target, autoNumber, increment]
     {
@@ -1340,6 +1351,47 @@ void MainComponent::toggleSequenceRecording()
 
         document.cues.setSelectedIndex (groupIndex);
     });
+}
+
+void MainComponent::addMicCue()
+{
+    if (showMode)
+        return;
+
+    const int selected = document.cues.getSelectedIndex();
+    const bool autoNumber = document.settings.autoNumber;
+    const double increment = document.settings.numberIncrement;
+
+    document.perform (ko ("마이크 큐 추가"), [this, selected, autoNumber, increment]
+    {
+        Cue mic;
+        mic.type = CueType::mic;
+        mic.name = ko ("마이크");
+        mic.mic.firstInput = 0;
+        mic.mic.numInputs = 2;
+        mic.fadeOutMs = 100;
+        const int at = selected >= 0 ? document.cues.subtreeEnd (selected) : document.cues.size();
+
+        if (autoNumber)
+            mic.number = CueNumbering::next (document.cues.getAll(), at, increment);
+
+        const int index = document.cues.addAfter (std::move (mic), selected);
+        document.cues.setSelectedIndex (index);
+    });
+}
+
+void MainComponent::updateInputsWanted()
+{
+    int wanted = 0;
+
+    document.forEachList ([&wanted] (CueList& list)
+    {
+        for (const auto& c : list.getAll())
+            if (c.isMic())
+                wanted = juce::jmax (wanted, c.mic.firstInput + c.mic.numInputs);
+    });
+
+    engine.setInputsWanted (wanted);   // no-op when enough inputs are open (or none are needed)
 }
 
 void MainComponent::addGroupCue()
@@ -2024,6 +2076,14 @@ int MainComponent::countBrokenCues() const
         if (cue.isGroup() || (cue.isControl() && ! cue.control.needsTarget()))
             continue;   // no file, no target
 
+        if (cue.isMic())
+        {
+            if (cue.mic.firstInput + cue.mic.numInputs > engine.getNumDeviceInputs())
+                ++count;
+
+            continue;
+        }
+
         if (cue.isFade() || cue.isDevamp() || cue.isControl())
         {
             if (cue.targetId().isNull() || document.cues.indexOf (cue.targetId()) < 0)
@@ -2050,6 +2110,15 @@ void MainComponent::showWarnings()
 
         if (cue.isGroup() || (cue.isControl() && ! cue.control.needsTarget()))
             continue;
+
+        if (cue.isMic())
+        {
+            if (cue.mic.firstInput + cue.mic.numInputs > engine.getNumDeviceInputs())
+                lines.add (label + ko (" - 장치 입력이 ") + juce::String (cue.mic.firstInput + cue.mic.numInputs) + ko ("개 필요한데 ")
+                           + juce::String (engine.getNumDeviceInputs()) + ko ("개만 열려 있음 (오디오 설정)"));
+
+            continue;
+        }
 
         if (cue.isFade() || cue.isDevamp() || cue.isControl())
         {
@@ -2800,6 +2869,7 @@ void MainComponent::containersChanged()
 void MainComponent::documentStateChanged()
 {
     unsavedChanges.store (document.isDirty(), std::memory_order_relaxed);
+    updateInputsWanted();
     commands.commandStatusChanged();   // undo / redo names and availability
     document.cues.setLockPlayheadToSelection (document.settings.lockPlayheadToSelection);
     table.setRowSize (document.settings.rowSize);
