@@ -6,6 +6,8 @@
 
 #include <juce_gui_basics/juce_gui_basics.h>
 
+#include <cmath>
+
 namespace gocue
 {
 
@@ -22,6 +24,10 @@ public:
     std::function<juce::String (const Cue& fadeCue)> describeFadeTarget;
     /** Group cues: "mode · N children · length" for the standby display. */
     std::function<juce::String (const Cue& groupCue)> describeGroup;
+    /** The gear next to the panic button: open the fade time menu at this screen position. */
+    std::function<void (juce::Point<int> screenPosition)> onPanicSettings;
+    /** Shows the panic fade time on the button. */
+    void setPanicSeconds (double seconds);
     void setPlayingCount (int numPlaying, int numPaused);
     /** Shows a transient message (errors in red) for a few seconds. */
     void showStatus (const juce::String& message, bool isError);
@@ -69,7 +75,44 @@ private:
         }
     };
 
+    /** The gear button: a ring with teeth, drawn like the other buttons. */
+    struct GearButton : public juce::Button
+    {
+        GearButton() : juce::Button ("panicSettings") {}
+
+        void paintButton (juce::Graphics& g, bool isMouseOver, bool isButtonDown) override
+        {
+            auto colour = Palette::button;
+
+            if (isButtonDown)
+                colour = colour.darker (0.2f);
+            else if (isMouseOver)
+                colour = colour.brighter (0.08f);
+
+            const auto bounds = getLocalBounds().toFloat().reduced (0.5f);
+            g.setGradientFill (Palette::buttonGradient (colour, bounds));
+            g.fillRoundedRectangle (bounds, Palette::cornerRadius);
+            g.setColour (colour.darker (0.4f));
+            g.drawRoundedRectangle (bounds, Palette::cornerRadius, 1.0f);
+
+            const auto c = bounds.getCentre();
+            const float r = juce::jmin (bounds.getWidth(), bounds.getHeight()) * 0.26f;
+            g.setColour (Palette::text);
+            g.drawEllipse (c.x - r, c.y - r, 2.0f * r, 2.0f * r, 2.2f);
+            g.fillEllipse (c.x - r * 0.3f, c.y - r * 0.3f, r * 0.6f, r * 0.6f);
+
+            for (int i = 0; i < 8; ++i)
+            {
+                const float a = juce::MathConstants<float>::twoPi * (float) i / 8.0f;
+                g.drawLine (c.x + std::cos (a) * r, c.y + std::sin (a) * r,
+                            c.x + std::cos (a) * (r + 3.5f), c.y + std::sin (a) * (r + 3.5f), 2.4f);
+            }
+        }
+    };
+
     GoButton goButton { "GO" };
+    GearButton panicSettingsButton;
+    double panicSeconds = 1.0;
     juce::TextButton pauseButton, fadeOutButton, panicButton;
     juce::Label standbyTitle, cueNumber, cueName, cueFile, cueMeta, playingLabel, statusLabel;
     bool goLocked = false;

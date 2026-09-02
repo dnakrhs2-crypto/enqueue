@@ -83,6 +83,9 @@ public:
 
     /** Inserts a cue (insertAt == -1 appends). Returns the index it landed on. */
     int add (Cue cue, int insertAt = -1);
+    /** Moves the cue (with its subtree) to where its number belongs among its siblings (ascending CueNumbering::compare):
+        a renumbered cue finds its place. Returns the cue's new index; an empty number stays put. */
+    int placeByNumber (int index);
     void remove (int index);
     /** Removes several cues at once (indices in any order). */
     void removeIndices (std::vector<int> indices);

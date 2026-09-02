@@ -1,4 +1,5 @@
 #include "model/CueList.h"
+#include "model/CueNumbering.h"
 
 #include <algorithm>
 #include <map>
@@ -553,6 +554,42 @@ bool CueList::move (int from, int to)
     sanitiseTree();
     notifyStructureChanged();
     return true;
+}
+
+int CueList::placeByNumber (int index)
+{
+    if (! isValidIndex (index) || cues[(size_t) index].number.isEmpty())
+        return index;
+
+    const juce::Uuid id = cues[(size_t) index].id;
+    const int parent = parentIndexOf (index);
+    const int begin = parent >= 0 ? parent + 1 : 0;
+    const int end = parent >= 0 ? subtreeEnd (parent) : size();
+    const auto number = cues[(size_t) index].number;
+
+    // in front of the first sibling with a greater number, else after the last sibling
+    int insertIndex = end;
+
+    for (int i = begin; i < end; i = subtreeEnd (i))
+        if (i != index && CueNumbering::compare (cues[(size_t) i].number, number) > 0)
+        {
+            insertIndex = i;
+            break;
+        }
+
+    if (insertIndex == index || insertIndex == subtreeEnd (index))
+        return index;   // already there
+
+    const auto block = withSubtrees ({ index });
+    int before = 0;
+
+    for (int i : block)
+        if (i < insertIndex)
+            ++before;
+
+    const juce::Uuid parentId = parent >= 0 ? cues[(size_t) parent].id : juce::Uuid::null();
+    moveIndices (block, insertIndex - before, &parentId);
+    return indexOf (id);
 }
 
 bool CueList::moveSubtrees (std::vector<int> indices, int insertIndex)

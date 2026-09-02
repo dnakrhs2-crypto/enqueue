@@ -22,7 +22,8 @@ TimeLoopsPanel::TimeLoopsPanel (ProjectDocument& doc, AudioEngine& e, juce::Audi
     setupLabel (countLabel, "재생 횟수");
     setupLabel (rateLabel, "속도");
     setupLabel (envelopeLabel, "페이드 엔벨로프");
-    setupLabel (zoomLabel, "줌");
+    setupLabel (zoomLabel, "확대");
+    setupLabel (sizeLabel, "크기");
 
     setupEditor (startEditor, "0123456789:.", 12);
     startEditor.onReturnKey = [this] { commitStart(); startEditor.giveAwayKeyboardFocus(); };
@@ -103,19 +104,22 @@ TimeLoopsPanel::TimeLoopsPanel (ProjectDocument& doc, AudioEngine& e, juce::Audi
         addAndMakeVisible (button);
     };
 
-    setupButton (previewButton, "미리듣기 (V)", [this] { if (onPreview) onPreview(); });
-    previewButton.setTooltip (ko ("플레이헤드를 옮기지 않고 이 큐를 재생합니다"));
     setupButton (resetButton, "리셋", [this] { if (onReset) onReset(); });
     resetButton.setTooltip (ko ("이 큐를 정지하고 처음 상태로 되돌립니다"));
     setupButton (zoomInButton, "+", [this] { waveform.zoomIn(); });
+    zoomInButton.setTooltip (ko ("시간축 확대 (Ctrl+휠도 됩니다). 전체 보기 / 구간에 맞춰 줌은 파형 우클릭"));
     setupButton (zoomOutButton, "-", [this] { waveform.zoomOut(); });
-    setupButton (zoomFitButton, "전체", [this] { waveform.zoomToFit(); });
-    setupButton (zoomRegionButton, "구간", [this] { waveform.zoomToRegion(); });
+    zoomOutButton.setTooltip (ko ("시간축 축소 (Ctrl+휠도 됩니다)"));
+    setupButton (sizeUpButton, "+", [this] { waveform.zoomVertical (1.5f); });
+    sizeUpButton.setTooltip (ko ("파형을 세로로 크게 (작은 소리를 보기 쉽게)"));
+    setupButton (sizeDownButton, "-", [this] { waveform.zoomVertical (1.0f / 1.5f); });
+    sizeDownButton.setTooltip (ko ("파형을 세로로 작게"));
 
     waveform.onTrimChanged = [this] (double start, double end, bool finished) { commitTrim (start, end, finished); };
     waveform.onEnvelopeChanged = [this] (const Envelope& envelope, bool finished) { commitEnvelope (envelope, finished); };
     waveform.onContextMenu = [this] (juce::Point<int> screenPosition) { showContextMenu (screenPosition); };
     waveform.onSlicesChanged = [this] (const std::vector<Slice>& slices, int firstCount, bool finished) { commitSlices (slices, firstCount, finished); };
+    waveform.onSeekPlay = [this] (double fileSeconds) { if (onSeekPlay) onSeekPlay (fileSeconds); };
     addAndMakeVisible (waveform);
 
     refresh();
@@ -166,7 +170,7 @@ void TimeLoopsPanel::refresh()
                      static_cast<juce::Component*> (&countEditor), static_cast<juce::Component*> (&rateEditor),
                      static_cast<juce::Component*> (&infiniteToggle), static_cast<juce::Component*> (&envelopeToggle),
                      static_cast<juce::Component*> (&linearToggle), static_cast<juce::Component*> (&lockToggle),
-                     static_cast<juce::Component*> (&previewButton), static_cast<juce::Component*> (&resetButton) })
+                     static_cast<juce::Component*> (&resetButton) })
         c->setEnabled (enabled);
 
     waveform.setCue (cue);
@@ -527,19 +531,19 @@ void TimeLoopsPanel::resized()
     linearToggle.setBounds (row.removeFromLeft (140));
     lockToggle.setBounds (row.removeFromLeft (130));
     row.removeFromLeft (12);
-    previewButton.setBounds (row.removeFromLeft (100));
-    row.removeFromLeft (6);
     resetButton.setBounds (row.removeFromLeft (60));
 
-    zoomRegionButton.setBounds (row.removeFromRight (44));
-    row.removeFromRight (4);
-    zoomFitButton.setBounds (row.removeFromRight (44));
-    row.removeFromRight (4);
     zoomOutButton.setBounds (row.removeFromRight (28));
     row.removeFromRight (4);
     zoomInButton.setBounds (row.removeFromRight (28));
     row.removeFromRight (4);
-    zoomLabel.setBounds (row.removeFromRight (30));
+    zoomLabel.setBounds (row.removeFromRight (34));
+    row.removeFromRight (12);
+    sizeDownButton.setBounds (row.removeFromRight (28));
+    row.removeFromRight (4);
+    sizeUpButton.setBounds (row.removeFromRight (28));
+    row.removeFromRight (4);
+    sizeLabel.setBounds (row.removeFromRight (34));
 
     area.removeFromTop (6);
     waveform.setBounds (area);

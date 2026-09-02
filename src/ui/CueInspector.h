@@ -49,6 +49,8 @@ public:
     /** Esc inside a text field: the edit is cancelled and this fires (wired to "stop all"). */
     std::function<void()> onPanic;
     std::function<void()> onPreview;
+    /** A click on the waveform: play the selected cue from that file position (a running one jumps there). */
+    std::function<void (double fileSeconds)> onSeekPlay;
     std::function<void()> onResetCue;
     /** Called after a tab switch (click or cue-type rebuild) stole the keyboard focus into a panel field;
         the owner puts it back on the cue table so Space still means GO. */

@@ -265,6 +265,21 @@ void ProjectDocument::newProject()
     notifyContainers();
 }
 
+void ProjectDocument::setCueNumber (const juce::Uuid& id, const juce::String& number)
+{
+    perform (juce::String (juce::CharPointer_UTF8 ("\xEB\xB2\x88\xED\x98\xB8")), [this, id, number]   // "번호"
+    {
+        int index = -1;
+        auto* list = listContaining (id, &index);
+
+        if (list == nullptr)
+            return;
+
+        list->update (index, [number] (Cue& c) { c.number = number; });
+        list->placeByNumber (index);   // the row follows its number
+    });
+}
+
 void ProjectDocument::setSettings (const WorkspaceSettings& newSettings)
 {
     settings = newSettings;

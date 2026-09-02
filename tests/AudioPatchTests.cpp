@@ -13,17 +13,18 @@ public:
 
     void runTest() override
     {
-        beginTest ("default patch: 8 cue outputs routed diagonally, unit gain");
+        beginTest ("default patch: 16 cue outputs routed diagonally, unit gain");
         {
             const auto p = AudioPatch::makeDefault();
             expect (! p.id.isNull());
             expect (p.name.isNotEmpty());
-            expectEquals (p.numCueOutputs, 8);
+            expectEquals (p.numCueOutputs, 16);
             expectWithinAbsoluteError (p.routingGain (0, 0), 1.0f, 1e-6f);
             expectWithinAbsoluteError (p.routingGain (3, 3), 1.0f, 1e-6f);
             expectWithinAbsoluteError (p.routingGain (0, 1), 0.0f, 1e-6f);
             expectWithinAbsoluteError (p.routingGain (7, 9), 0.0f, 1e-6f);   // beyond stored columns: default (silent)
-            expectWithinAbsoluteError (p.routingGain (9, 9), 0.0f, 1e-6f);   // no such cue output
+            expectWithinAbsoluteError (p.routingGain (9, 9), 1.0f, 1e-6f);   // still diagonal inside the 16
+            expectWithinAbsoluteError (p.routingGain (16, 16), 0.0f, 1e-6f);  // no such cue output
             expectEquals (p.cueOutputName (2), juce::String::fromUTF8 ("\xEC\xB6\x9C\xEB\xA0\xA5 3"));
         }
 

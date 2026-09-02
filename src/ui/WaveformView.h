@@ -36,6 +36,9 @@ public:
     void zoomOut();
     void zoomToFit();
     void zoomToRegion();
+    /** Vertical size of the wave drawing (1 = a full-scale signal fills the height); multiplied by 'factor', kept 0.25..16. */
+    void zoomVertical (float factor);
+    float getVerticalZoom() const noexcept { return verticalZoom; }
     /** The click cursor, in file seconds (used by Shift+I / Shift+O / M). */
     double getCursorSeconds() const noexcept { return cursor; }
 
@@ -45,6 +48,8 @@ public:
     std::function<void (const Envelope& envelope, bool finished)> onEnvelopeChanged;
     /** Right-click. The owner shows the menu (it knows about editors / the explorer). */
     std::function<void (juce::Point<int> screenPosition)> onContextMenu;
+    /** A plain click on the wave or the ruler (nothing else under the mouse): play from there. File seconds. */
+    std::function<void (double fileSeconds)> onSeekPlay;
     /** Slice markers / counts edited (M adds one at the cursor, drag moves, double-click edits the count,
         Delete removes). 'finished' is false while a drag is in progress. */
     std::function<void (const std::vector<Slice>& slices, int firstSliceCount, bool finished)> onSlicesChanged;
@@ -110,6 +115,7 @@ private:
     juce::File loadedFile;
     double viewStart = 0.0, viewEnd = 1.0;
     double cursor = 0.0;
+    float verticalZoom = 1.0f;
     double playhead = -1.0;
     bool playing = false;
     int viewChannel = -1;

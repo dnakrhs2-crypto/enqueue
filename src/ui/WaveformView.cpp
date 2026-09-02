@@ -235,6 +235,12 @@ void WaveformView::zoomToRegion()
     }
 }
 
+void WaveformView::zoomVertical (float factor)
+{
+    verticalZoom = juce::jlimit (0.25f, 16.0f, verticalZoom * factor);
+    repaint();
+}
+
 void WaveformView::scrollBarMoved (juce::ScrollBar*, double newRangeStart)
 {
     const double span = viewEnd - viewStart;
@@ -289,12 +295,12 @@ void WaveformView::paint (juce::Graphics& g)
 
             if (viewChannel >= 0 && viewChannel < numChannels)
             {
-                thumbnail.drawChannel (g, waveArea, viewStart, viewEnd, viewChannel, 1.0f);
+                thumbnail.drawChannel (g, waveArea, viewStart, viewEnd, viewChannel, verticalZoom);
             }
             else
             {
                 for (int ch = 0; ch < numChannels; ++ch)
-                    thumbnail.drawChannel (g, waveArea, viewStart, viewEnd, ch, 1.0f);
+                    thumbnail.drawChannel (g, waveArea, viewStart, viewEnd, ch, verticalZoom);
             }
         };
 
@@ -761,6 +767,9 @@ void WaveformView::mouseDown (const juce::MouseEvent& e)
 
     cursor = juce::jlimit (0.0, fileLength(), timeForX (e.position.x));
     selectedPoint = -1;
+
+    if (onSeekPlay)
+        onSeekPlay (cursor);   // a plain click plays from here (a running cue jumps)
     selectedSlice = -1;
     repaint();
 }

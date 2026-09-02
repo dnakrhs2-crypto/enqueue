@@ -52,6 +52,8 @@ public:
     std::function<void (const std::vector<int>& rows, int insertIndex)> onMoveRows;
     /** An undoable edit of one or more cues. */
     std::function<void (const std::vector<int>& rows, const juce::String& editName, const std::function<void (Cue&)>& mutator)> onEditCues;
+    /** A number typed into the 번호 cell: the document renumbers the cue and moves it into numeric order. */
+    std::function<void (const juce::Uuid& id, const juce::String& number)> onSetNumber;
     /** 'O': edit the notes of a row (in the inspector). */
     std::function<void (int row)> onEditNotes;
     /** 'D': the duration lives in the inspector's time tab. */

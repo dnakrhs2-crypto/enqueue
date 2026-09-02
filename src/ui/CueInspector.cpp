@@ -530,7 +530,8 @@ private:
             return;
         }
 
-        edit (ko ("번호"), [number] (Cue& c) { c.number = number; });
+        if (! refreshing && ! cancellingEdit && editable)
+            document.setCueNumber (cue->id, number);   // renumbers and moves the row into numeric order (one undo step)
     }
 
     void commitName()
@@ -3090,6 +3091,7 @@ CueInspector::CueInspector (ProjectDocument& doc, AudioEngine& e, AppSettings& s
     timeLoops = timeLoopsPanel.get();
     timeLoops->onPanic = [this] { if (onPanic) onPanic(); };
     timeLoops->onPreview = [this] { if (onPreview) onPreview(); };
+    timeLoops->onSeekPlay = [this] (double fileSeconds) { if (onSeekPlay) onSeekPlay (fileSeconds); };
     timeLoops->onReset = [this] { if (onResetCue) onResetCue(); };
 
     levelsPanel = std::make_unique<LevelsPanel> (document, engine);

@@ -216,6 +216,8 @@ private:
     SplitDivider inspectorDivider { SplitDivider::Orientation::horizontal }, activeCuesDivider { SplitDivider::Orientation::vertical };
 
     void ensureInspectorShown();
+    void showPanicSecondsMenu (juce::Point<int> screenPosition);
+    void applyPanicSeconds (double seconds);
     std::unique_ptr<ManualWindow> manualWindow;   // made on first use, hidden on close
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (MainComponent)

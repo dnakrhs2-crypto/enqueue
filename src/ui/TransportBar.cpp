@@ -26,6 +26,16 @@ TransportBar::TransportBar (juce::ApplicationCommandManager& cm)
     panicButton.setButtonText (ko ("전체 페이드 정지 (Esc)"));
     styleButton (panicButton, Palette::stopButton);
     panicButton.onClick = [this] { commands.invokeDirectly (CommandIDs::panicAll, true); };
+    setPanicSeconds (panicSeconds);
+
+    panicSettingsButton.setTooltip (ko ("전체 페이드 정지의 페이드아웃 시간 설정"));
+    panicSettingsButton.setWantsKeyboardFocus (false);
+    panicSettingsButton.onClick = [this]
+    {
+        if (onPanicSettings)
+            onPanicSettings (panicSettingsButton.getScreenBounds().getBottomLeft());
+    };
+    addAndMakeVisible (panicSettingsButton);
 
     standbyTitle.setText (ko ("다음 큐"), juce::dontSendNotification);
     standbyTitle.setColour (juce::Label::textColourId, Palette::dimText);
@@ -232,6 +242,13 @@ void TransportBar::timerCallback()
     statusLabel.setText ("", juce::dontSendNotification);
 }
 
+void TransportBar::setPanicSeconds (double seconds)
+{
+    panicSeconds = seconds;
+    const bool whole = std::abs (seconds - std::round (seconds)) < 0.001;
+    panicButton.setButtonText (ko ("전체 페이드 정지 (Esc) ") + juce::String (seconds, whole ? 0 : 1) + ko ("초"));
+}
+
 void TransportBar::resized()
 {
     auto area = getLocalBounds().reduced (10, 8);
@@ -241,6 +258,8 @@ void TransportBar::resized()
 
     auto right = area.removeFromRight (230);
     auto buttons = right.removeFromBottom (28);
+    panicSettingsButton.setBounds (buttons.removeFromRight (30));
+    buttons.removeFromRight (4);
     panicButton.setBounds (buttons);
     right.removeFromBottom (4);
     buttons = right.removeFromBottom (28);

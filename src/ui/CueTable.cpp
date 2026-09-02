@@ -11,7 +11,7 @@ namespace gocue
 namespace
 {
     const juce::String rowDragDescription ("gocue-rows");
-    constexpr int rowHeights[] = { 24, 30, 38 };
+    constexpr int rowHeights[] = { 28, 34, 42 };
     constexpr int indentPerLevel = 18;
     constexpr int disclosureWidth = 16;
 }
@@ -41,7 +41,7 @@ public:
         setText (initial, false);
         setSelectAllWhenFocused (true);
         setJustification (column == colName || column == colNumber ? juce::Justification::centredLeft : juce::Justification::centredRight);
-        setFont (juce::Font (juce::FontOptions (14.0f)));
+        setFont (juce::Font (juce::FontOptions (16.0f)));
         onReturnKey = [this] { commit(); };
         onEscapeKey = [this] { cancel(); };
         onFocusLost = [this] { commit(); };
@@ -524,8 +524,7 @@ void CueTable::paintCell (juce::Graphics& g, int rowNumber, int columnId, int wi
     {
         case colNumber:
             text = cue.number;
-            colour = Palette::dimText;
-            break;
+            break;   // the number reads as strongly as the name
 
         case colName:
             text = cue.name.isNotEmpty() ? cue.name : ko ("(이름 없음)");
@@ -638,7 +637,8 @@ void CueTable::paintCell (juce::Graphics& g, int rowNumber, int columnId, int wi
     }
 
     g.setColour (colour);
-    g.setFont (juce::Font (juce::FontOptions (14.0f, columnId == colName ? juce::Font::bold : juce::Font::plain)));
+    const bool strong = columnId == colName || columnId == colNumber;
+    g.setFont (juce::Font (juce::FontOptions (strong ? 16.0f : 15.0f, strong ? juce::Font::bold : juce::Font::plain)));
     g.drawText (text, 8 + indent, 0, width - 16 - indent, height, justification, true);
 }
 
@@ -899,7 +899,11 @@ void CueTable::commitCellEdit (int row, ColumnId column, const juce::String& tex
                 break;
             }
 
-            onEditCues ({ row }, ko ("번호"), [number] (Cue& c) { c.number = number; });
+            if (onSetNumber)
+                onSetNumber (cue.id, number);   // the document renumbers and moves the row into numeric order
+            else
+                onEditCues ({ row }, ko ("번호"), [number] (Cue& c) { c.number = number; });
+
             break;
         }
 

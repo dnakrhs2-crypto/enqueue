@@ -25,6 +25,8 @@ public:
     void setPlayback (const AudioEngine::PlayingCue* playing);
 
     std::function<void()> onPreview;
+    /** A click on the waveform: play the cue from that file position (a running one jumps there). */
+    std::function<void (double fileSeconds)> onSeekPlay;
     std::function<void()> onReset;
     /** Esc inside a text field: cancel the edit and fire this (wired to "stop all"). */
     std::function<void()> onPanic;
@@ -57,10 +59,10 @@ private:
     AudioEngine& engine;
     WaveformView waveform;
 
-    juce::Label startLabel, endLabel, lengthLabel, countLabel, rateLabel, envelopeLabel, zoomLabel;
+    juce::Label startLabel, endLabel, lengthLabel, countLabel, rateLabel, envelopeLabel, zoomLabel, sizeLabel;
     juce::TextEditor startEditor, endEditor, countEditor, rateEditor;
     juce::ToggleButton infiniteToggle, envelopeToggle, linearToggle, lockToggle, pitchToggle;
-    juce::TextButton previewButton, resetButton, zoomInButton, zoomOutButton, zoomFitButton, zoomRegionButton;
+    juce::TextButton resetButton, zoomInButton, zoomOutButton, sizeUpButton, sizeDownButton;
     bool refreshing = false;
     juce::Uuid shownId = juce::Uuid::null();   // the cue the fields show (focus-lost commits go there)
     bool cancellingEdit = false;

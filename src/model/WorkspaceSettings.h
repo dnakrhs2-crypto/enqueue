@@ -19,7 +19,7 @@ struct WorkspaceSettings
     // 일반
     double doubleGoSeconds = 0.0;          // minimum time between two GOs; 0 = off
     bool requireKeyUp = false;             // the GO key must be released before it fires again
-    double panicSeconds = 2.0;             // Esc: fade everything out over this, then stop
+    double panicSeconds = 1.0;             // Esc: fade everything out over this, then stop
     bool autoNumber = true;
     double numberIncrement = 1.0;
     bool autoLoadNewCues = false;
@@ -60,7 +60,7 @@ struct WorkspaceSettings
         };
 
         fix (doubleGoSeconds, 0.0, maxDoubleGoSeconds, 0.0);
-        fix (panicSeconds, 0.0, maxPanicSeconds, 2.0);
+        fix (panicSeconds, 0.0, maxPanicSeconds, 1.0);
         fix (numberIncrement, 0.001, 1000.0, 1.0);
         fix (maxLevelDb, -30.0, 24.0, 12.0);      // the matrix / main level clamp at +24 and -120 (LevelMatrix::maxDb / silentDb)
         fix (minLevelDb, -120.0, -40.0, -60.0);

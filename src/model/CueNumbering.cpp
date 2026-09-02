@@ -95,4 +95,15 @@ std::vector<juce::String> generate (int count, const RenumberOptions& options)
     return result;
 }
 
+int compare (const juce::String& a, const juce::String& b)
+{
+    if (isNumeric (a) && isNumeric (b))
+    {
+        const double x = a.getDoubleValue(), y = b.getDoubleValue();
+        return x < y ? -1 : (x > y ? 1 : 0);
+    }
+
+    return a.compareNatural (b);
+}
+
 } // namespace gocue::CueNumbering

@@ -588,6 +588,7 @@ bool CueController::isAuditionRequested (bool requested) const noexcept
 AudioEngine::PlayOptions CueController::playOptions (bool audition) const
 {
     AudioEngine::PlayOptions options;
+    options.startSeconds = startOffsetForNextPlay;
 
     if (! isAuditionRequested (audition))
         return options;
@@ -1321,6 +1322,14 @@ CueController::GoResult CueController::preview (bool audition)
     if (result == GoResult::started)
         status ((isAuditionRequested (audition) ? ko ("오디션 미리듣기: ") : ko ("미리듣기: ")) + cueLabel (index, copy));
 
+    return result;
+}
+
+CueController::GoResult CueController::previewFrom (double regionSeconds)
+{
+    startOffsetForNextPlay = juce::jmax (0.0, regionSeconds);
+    const auto result = preview (false);
+    startOffsetForNextPlay = 0.0;
     return result;
 }
 

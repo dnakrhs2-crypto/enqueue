@@ -78,6 +78,8 @@ public:
 
     /** Replaces the settings (not an undo step: like QLab, settings sit outside the undo history). */
     void setSettings (const WorkspaceSettings& newSettings);
+    /** Renumbers a cue (in whichever list holds it) and moves it to where the number belongs among its siblings. One undo step. */
+    void setCueNumber (const juce::Uuid& id, const juce::String& number);
     /** Replaces the audio patches (not an undo step either). An empty list gets the default patch. */
     void setPatches (std::vector<AudioPatch> newPatches);
     const AudioPatch* findPatch (const juce::Uuid& id) const noexcept;

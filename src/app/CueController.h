@@ -50,6 +50,8 @@ public:
     void hardStopAll();
     /** V: fires the selected cue alone (no pre-wait, no sequence) without moving the playhead. Alt+V auditions. */
     GoResult preview (bool audition = false);
+    /** Preview starting 'regionSeconds' into the selected cue's region (a click on the waveform). */
+    GoResult previewFrom (double regionSeconds);
     /** Stops the selected cue. */
     void resetSelected();
     /** Stops one cue wherever it runs: its pending starts / follows, its fade (a fade cue), the fades aimed at it,
@@ -149,6 +151,7 @@ private:
     /** False when an immediate start failed (a scheduled one is true). */
     bool scheduleStart (const juce::Uuid& id, double atSeconds, bool audition);
     AudioEngine::PlayOptions playOptions (bool audition) const;
+    double startOffsetForNextPlay = 0.0;   // previewFrom(): seconds into the region the next play begins at
     /** The cue plus, for a group, everything inside it: spared by its own fade-stop-others / duck. */
     std::set<juce::Uuid> familyOf (const Cue& cue) const;
     void applyFadeStopOthers (const Cue& cue, const std::set<juce::Uuid>& spare);

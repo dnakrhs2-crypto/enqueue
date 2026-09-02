@@ -21,6 +21,10 @@ bool isUnique (const std::vector<Cue>& cues, const juce::String& number, const j
     increment itself. Bumped by the increment until it is unique. Empty when increment <= 0. */
 juce::String next (const std::vector<Cue>& cues, int insertIndex, double increment);
 
+/** Orders two cue numbers: numerically when both are plain numbers ("2" < "12"), naturally otherwise ("A2" < "A10").
+    Negative / zero / positive like strcmp. */
+int compare (const juce::String& a, const juce::String& b);
+
 struct RenumberOptions
 {
     double start = 1.0;

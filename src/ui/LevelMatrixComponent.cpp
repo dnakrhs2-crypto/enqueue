@@ -492,7 +492,8 @@ void LevelMatrixComponent::mouseDoubleClick (const juce::MouseEvent& e)
         return;
 
     selected = cell;
-    forEachInGang (cell, [this] (const CellRef& c) { setValue (c, defaultValue (c)); });   // a gang resets together
+    const bool unity = e.mods.isAltDown();   // Alt: 0 dB whatever the default (a crosspoint's default may be silence)
+    forEachInGang (cell, [this, unity] (const CellRef& c) { setValue (c, unity ? 0.0 : defaultValue (c)); });   // a gang resets together
     repaint();
     notify (true);
 }

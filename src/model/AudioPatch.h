@@ -17,7 +17,7 @@ namespace gocue
 struct AudioPatch
 {
     static constexpr int maxCueOutputs = LevelMatrix::maxOutputs;   // 128
-    static constexpr int defaultCueOutputs = 8;
+    static constexpr int defaultCueOutputs = 16;
 
     juce::Uuid id;
     juce::String name;

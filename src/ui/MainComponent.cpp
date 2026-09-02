@@ -2,6 +2,8 @@
 
 #include "ui/SplitLayout.h"
 
+#include <array>
+
 #include "app/BackupManager.h"
 #include "app/Commands.h"
 #include "app/Updater.h"
@@ -135,6 +137,11 @@ MainComponent::MainComponent (AudioEngine& e, AppSettings& s, juce::ApplicationC
     {
         editCues (rows, name, mutator);
     };
+    table.onSetNumber = [this] (const juce::Uuid& id, const juce::String& number)
+    {
+        if (! showMode)
+            document.setCueNumber (id, number);
+    };
     table.onEditNotes = [this] (int) { ensureInspectorShown(); inspector.showNotes(); };
     table.hasPlayed = [this] (const juce::Uuid& id) { return controller.hasPlayed (id); };
     transport.describeGroup = [this] (const Cue& groupCue) -> juce::String
@@ -179,7 +186,24 @@ MainComponent::MainComponent (AudioEngine& e, AppSettings& s, juce::ApplicationC
         else
             controller.stopCue (id);
     };
+    transport.onPanicSettings = [this] (juce::Point<int> screenPosition) { showPanicSecondsMenu (screenPosition); };
     inspector.onPreview = [this] { controller.preview(); };
+    inspector.onSeekPlay = [this] (double fileSeconds)
+    {
+        const auto* cue = document.cues.getSelected();
+
+        if (cue == nullptr || ! cue->isAudio())
+            return;
+
+        const double length = cue->regionLength();
+        const double offset = juce::jlimit (0.0, juce::jmax (0.0, length), fileSeconds - cue->regionStart());
+        AudioEngine::LiveState live;
+
+        if (engine.getLiveState (cue->id, live))
+            engine.seekToFraction (cue->id, length > 0.0 ? offset / length : 0.0);   // running: jump there
+        else
+            controller.previewFrom (offset);                                          // otherwise play from there
+    };
     inspector.onResetCue = [this] { controller.resetSelected(); };
 
     footer.onShowModeChanged = [this] (bool mode) { setShowMode (mode); };
@@ -258,6 +282,55 @@ void MainComponent::resized()
     containerTabs.setBounds (area.removeFromTop (ContainerTabs::height));
     table.setBounds (area);
     cart.setBounds (area);
+}
+
+void MainComponent::showPanicSecondsMenu (juce::Point<int> screenPosition)
+{
+    const double current = document.settings.panicSeconds;
+    const std::array<double, 6> presets { 0.5, 1.0, 2.0, 3.0, 5.0, 10.0 };
+    juce::PopupMenu menu;
+    menu.addSectionHeader (ko ("전체 페이드 정지 (Esc): 페이드아웃 시간"));
+
+    for (size_t i = 0; i < presets.size(); ++i)
+        menu.addItem ((int) i + 1, juce::String (presets[i], presets[i] < 1.0 ? 1 : 0) + ko ("초"), true, std::abs (current - presets[i]) < 0.001);
+
+    menu.addSeparator();
+    menu.addItem (100, ko ("직접 입력... (지금 ") + juce::String (current, 1) + ko ("초)"));
+
+    juce::Component::SafePointer<MainComponent> safeThis (this);
+    menu.showMenuAsync (juce::PopupMenu::Options().withTargetScreenArea ({ screenPosition.x, screenPosition.y, 1, 1 }),
+                        [safeThis, presets, current] (int result)
+    {
+        if (safeThis == nullptr || result == 0)
+            return;
+
+        if (result >= 1 && result <= (int) presets.size())
+        {
+            safeThis->applyPanicSeconds (presets[(size_t) result - 1]);
+            return;
+        }
+
+        auto* alert = new juce::AlertWindow (ko ("전체 페이드 정지 시간"),
+                                             ko ("Esc를 눌렀을 때 재생 중인 모든 큐가 페이드아웃되는 시간 (초, 0 = 즉시 정지)"),
+                                             juce::MessageBoxIconType::NoIcon);
+        alert->addTextEditor ("seconds", juce::String (current, 1), ko ("초"));
+        alert->addButton (ko ("확인"), 1, juce::KeyPress (juce::KeyPress::returnKey));
+        alert->addButton (ko ("취소"), 0, juce::KeyPress (juce::KeyPress::escapeKey));
+        alert->enterModalState (true, juce::ModalCallbackFunction::create ([safeThis, alert] (int r)
+        {
+            if (safeThis != nullptr && r == 1)
+                safeThis->applyPanicSeconds (alert->getTextEditorContents ("seconds").getDoubleValue());
+        }), true);
+    });
+}
+
+void MainComponent::applyPanicSeconds (double seconds)
+{
+    auto updated = document.settings;
+    updated.panicSeconds = juce::jlimit (0.0, WorkspaceSettings::maxPanicSeconds, seconds);
+    document.setSettings (updated);
+    transport.setPanicSeconds (updated.panicSeconds);
+    transport.showStatus (ko ("전체 페이드 정지 시간: ") + juce::String (updated.panicSeconds, 1) + ko ("초"), false);
 }
 
 void MainComponent::ensureInspectorShown()
@@ -2974,6 +3047,7 @@ void MainComponent::documentStateChanged()
     commands.commandStatusChanged();   // undo / redo names and availability
     document.cues.setLockPlayheadToSelection (document.settings.lockPlayheadToSelection);
     table.setRowSize (document.settings.rowSize);
+    transport.setPanicSeconds (document.settings.panicSeconds);
     transport.setAuditionMode (document.settings.alwaysAudition);
 
     if (onWindowTitleChanged)

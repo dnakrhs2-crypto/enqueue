@@ -212,7 +212,7 @@ void PluginChainComponent::showAddMenu()
     }
     else
     {
-        juce::KnownPluginList::addToMenu (menu, types, juce::KnownPluginList::sortAlphabetically);
+        juce::KnownPluginList::addToMenu (menu, types, juce::KnownPluginList::sortByManufacturer);   // one submenu per maker
         menu.addSeparator();
         menu.addItem (1, ko ("플러그인 관리 (스캔)..."));
     }
