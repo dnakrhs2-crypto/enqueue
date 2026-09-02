@@ -139,9 +139,9 @@ class BackupManager { public: static juce::File backupDirFor (const juce::File& 
     static void rotate (const juce::File& dir, juce::Time now);  // 최근 1시간 20개, 24시간 시간별, 그 뒤 일별
     static juce::File copyIntoProject (const juce::File& audio, const juce::File& projectDir);  // <dir>/audio/<name>(중복 시 이름 뒤 번호) };
 ```
-- [ ] 테스트: backupNow 파일명 형식 `show (Backup 2026-09-02_143000).gocue`, 저장 전 1분 1회 제한, rotate 규칙, copyIntoProject 중복 처리.
-- [ ] 주기 백업 타이머(설정 간격, dirty이고 파일 있을 때만, 파일 미저장 프로젝트는 백업 없음 — 큐랩과 동일).
-- [ ] 커밋 `feat: automatic project backups and copy-into-project`.
+- [x] 테스트(`tests/BackupManagerTests.cpp`): 파일명 형식 `show (Backup 2026-09-02_143000).gocue`, 같은 초 충돌 시 " 2", rotate 규칙(20/시간별/일별, 비백업 파일 보존), copyIntoProject(복사·"(2)" 충돌·프로젝트 안 파일은 그대로).
+- [x] 주기 백업(`MainComponent::autoBackupIfDue`, 30 Hz 타이머에서 간격 검사, dirty+파일 있을 때만, 미저장 상태를 백업 폴더에 직렬화) + 저장 전 백업(1분 1회) + 추가 시 복사.
+- [x] 커밋 `feat: automatic project backups and copy-into-project`.
 
 ### Task 1.9: 단계 1 마감
 - [ ] README(단축키·기능) 갱신, `CMakeLists.txt` 0.2.0, 전체 테스트, GUI 스모크(열기·GO·트림·엔벨로프·드롭·일시정지·패닉·실행 취소), 릴리스 `python tools\release.py ... --publish`, 설치 업데이트 확인.

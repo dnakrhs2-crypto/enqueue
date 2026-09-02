@@ -1,37 +1,59 @@
 # GoCue
 
-Windows용 오디오 큐 플레이어. QLab의 오디오 기능 부분집합을 구현한다.
+Windows용 오디오 큐 플레이어. QLab의 오디오 기능을 단계적으로 옮기고 있다 (진행 계획: `docs/superpowers/plans/2026-09-02-gocue-qlab-features.md`).
 
 - 출력 장치: ASIO / WASAPI (`juce::AudioDeviceManager`, 메뉴 `오디오 > 오디오 출력 설정`)
 - 재생 포맷: WAV / AIFF / FLAC / MP3 / OGG
-- 큐별 페이드 인/아웃(ms), 페이드아웃 정지, 큐별 게인(dB), 여러 큐 동시 재생(믹서)
-- 큐마다 독립 VST3 인서트 체인 + 마스터 버스 체인, 플러그인 에디터 창, 상태 저장/복원
-- 프로젝트 파일 `.gocue` (JSON, `version` 필드, 누락 필드는 기본값으로 읽는 하위 호환)
-- 단일 창 UI: 상단 GO / 중앙 큐 테이블(재생 중 색상 + 진행바 + 남은 시간) / 하단 인스펙터
+- 큐마다: 파형 위 **트림(시작/끝)**, **재생 횟수 / 무한 루프**, **속도**, **통합 페이드 엔벨로프**(파형 위에 점을 찍어 그리는 페이드), 정지 페이드(ms), 게인(dB, 재생 중에도 즉시 반영), 2차 트리거 규칙
+- 여러 큐 동시 재생(믹서), 큐마다 독립 VST3 인서트 체인 + 마스터 버스 체인, 플러그인 에디터 창, 상태 저장/복원
+- 일시정지/재개, 전체 페이드 정지(기본 2초), 더블 GO 방지, 실행 취소/다시 실행(200단계)
+- 프로젝트 파일 `.gocue` (JSON v2, v1 파일도 읽음), 자동 백업(`<이름>.gocue.backups`), 파일을 프로젝트 폴더로 복사 옵션
+- 오디오 파일·폴더를 창 어디에나 끌어다 놓으면 큐로 추가(목록 위 = 그 자리에 삽입, 인스펙터 파일칸 = 파일 교체, `.gocue` = 열기)
+- 단일 창 UI(한국어): 상단 GO / 중앙 큐 목록(재생 초록·일시정지 노랑·페이드 주황 + 진행바 + 남은 시간) / 하단 인스펙터 탭(기본 · 시간·루프 · 트리거 · 이펙트)
 - Inno Setup 인스톨러 + WinSparkle 자동 업데이트 (GitHub Releases의 `appcast.xml`)
 
 ## 단축키
 
 | 키 | 동작 |
 |---|---|
-| `Space` | GO — 선택 큐 재생 후 다음 큐 선택 |
-| `S` | 정지 (선택 큐가 재생 중이 아니면 가장 최근 재생 큐) |
-| `F` | 페이드아웃 정지 (위와 같은 대상 규칙) |
-| `Shift+F` | 전체 페이드아웃 정지 |
-| `Esc` | 전체 정지 |
-| `Insert` | 큐 추가 (파일 선택). 오디오 파일을 테이블에 끌어다 놓아도 추가된다 |
+| `Space` | GO — 선택 큐 재생 후 다음 큐 선택. **일시정지된 큐가 있으면 그 큐를 재개** |
+| `P` | 일시정지 / 재개 (선택 큐가 재생 중이 아니면 가장 최근 재생 큐) |
+| `F` | 페이드아웃 정지 (큐의 정지 페이드 시간, 위와 같은 대상 규칙) |
+| `Esc` | 전체 페이드 정지 — 프로젝트 설정의 시간(기본 2초) 동안 페이드아웃 후 정지. **0.5초 안에 두 번 = 즉시 정지**. 입력창을 편집하는 중에도 동작 |
+| `V` | 미리듣기 — 선택 큐를 재생하되 선택(플레이헤드)은 그대로 |
+| `Ctrl+Z` / `Ctrl+Y` | 실행 취소 / 다시 실행 |
+| `Insert` | 큐 추가 (파일 선택) |
 | `Delete` / `Ctrl+D` | 큐 삭제 / 큐 복제(플러그인 체인 포함) |
 | `Ctrl+↑` / `Ctrl+↓` | 큐 순서 변경 |
 | `Ctrl+N` / `Ctrl+O` / `Ctrl+S` / `Ctrl+Shift+S` | 새 프로젝트 / 열기 / 저장 / 다른 이름으로 저장 |
+| `Ctrl+Shift+,` | 프로젝트 설정 (GO 간격, 전체 페이드 정지 시간, 백업 등) |
 | `Ctrl+,` / `Ctrl+P` / `Ctrl+M` | 오디오 출력 설정 / VST3 플러그인 관리(스캔) / 마스터 버스 인서트 |
 
+파형(시간·루프 탭)에서:
+
+| 키 / 마우스 | 동작 |
+|---|---|
+| 아래쪽 회색 삼각 핸들 드래그 | 시작 / 끝 트림 (재생 중이면 즉시 반영, 끝이 재생 위치보다 앞이면 바로 끝남) |
+| 클릭 | 커서 위치 지정 |
+| `Shift+I` / `Shift+O` | 커서를 시작 / 끝으로 |
+| 노란 엔벨로프 선 클릭 | 점 추가. 점 드래그 = 이동, `←`/`→` = 점 선택, `Alt+화살표` = 이동(`Shift` 더하면 미세), `Delete` = 점 삭제 |
+| `Alt+휠` / `Ctrl+=` / `Ctrl+-` | 줌 (휠 = 스크롤) |
+| 우클릭 | 외부 편집기로 열기 · 탐색기에서 보기 · 표시 채널 · 줌 |
+
 재생 동작 규칙:
-- 같은 큐에 GO를 다시 누르면 처음부터 재시작(이전 인스턴스는 5 ms 디클릭 정지). 서로 다른 큐는 동시에 재생된다.
-- 모든 정지는 5 ms 램프로 클릭 노이즈를 막는다. 파일이 끝나거나 페이드아웃이 끝나면 체인의 플러그인들이 보고한 테일의 합(직렬 연결이므로, 최대 10 s)만큼 체인을 더 돌린다. `S`/`Esc`의 즉시 정지는 테일을 건너뛴다.
-- `Esc`는 인스펙터의 입력창을 편집하는 중에도 동작한다(편집 취소 + 전체 정지).
-- 바이패스(`B`)된 플러그인도 계속 돌아가되 출력만 버린다(딜레이·리버브가 다시 켤 때 옛 소리를 뱉지 않도록).
+- 같은 큐에 다시 GO가 오면 큐의 **2차 트리거** 설정대로: 무시 / 전체 페이드 정지 시간으로 페이드 정지 / 정지 페이드로 정지 / 즉시 정지 / 즉시 정지 후 재시작(기본) / 이번 반복만 마치고 끝(루프 큐). 서로 다른 큐는 동시에 재생된다.
+- 프로젝트 설정의 "GO 사이 최소 시간"을 켜면 그 안에 들어온 GO는 무시되고 GO 버튼에 빨간 테두리가 깜빡인다. "키를 뗀 뒤에만 다시 GO"는 키를 누르고 있는 동안의 반복을 막는다.
+- 모든 정지·일시정지는 5 ms 램프로 클릭 노이즈를 막는다. 파일이 끝나거나 페이드아웃이 끝나면 체인의 플러그인들이 보고한 테일의 합(최대 10 s)만큼 체인을 더 돌린다. 즉시 정지는 테일을 건너뛴다.
+- 일시정지 중에도 플러그인은 무음을 계속 처리한다(딜레이·리버브 시간 유지). 재개하면 멈춘 자리에서 이어진다.
+- 엔벨로프는 트림 구간 기준이며 반복(루프)마다 다시 적용된다. "시작/끝에 잠금"을 켜면 구간을 바꿔도 모양이 따라 늘어나고, 끄면 초 단위로 고정된다. 엔벨로프 편집은 다음 재생부터 반영된다(트림·속도·게인은 즉시).
+- 바이패스(`B`)된 플러그인도 계속 돌아가되 출력만 버린다. 플러그인 에디터에서 노브를 움직이면 프로젝트가 수정됨(`*`)으로 표시된다.
 - 모노 파일은 양쪽 채널로, 3채널 이상은 앞 2채널만 출력한다. 출력은 장치의 첫 스테레오 페어(설정 창에서 선택).
-- 플러그인 에디터에서 노브를 움직이면 프로젝트가 수정됨(`*`)으로 표시되어 저장을 묻는다.
+
+## 프로젝트 설정 (파일 > 프로젝트 설정)
+
+- 일반: GO 사이 최소 시간, 키를 뗀 뒤에만 다시 GO, 전체 페이드 정지 시간(Esc), 자동 번호(다음 단계에서 사용), 플레이헤드 잠금, 열 때/닫을 때 큐 시작(다음 단계에서 사용)
+- 파일: 큐 추가 시 오디오 파일을 프로젝트 폴더 `audio/`로 복사, 자동 백업(간격 5~600초, 저장한 적 있는 프로젝트만), 저장 전 백업(1분 1회), 오래된 백업 정리(최근 1시간 20개 / 하루 동안 시간별 / 그 뒤 일별)
+- 설정은 프로젝트 파일에 저장되며 실행 취소 대상이 아니다.
 
 ## 빌드
 
@@ -70,12 +92,14 @@ ctest --preset vs2022-release        :: 단위 테스트 (VST3가 설치돼 있�
 `GOCUE_APPCAST_URL`이 비어 있으면 앱은 업데이트 확인을 하지 않는다(메뉴 항목 비활성).
 `GOCUE_EDDSA_PUBLIC_KEY`(업데이트 서명 검증용 공개키)는 `CMakePresets.json`에 들어 있다.
 
+GUI 스모크 테스트 도우미: `C:\Users\claude\tools\gocue_uitest.ps1` (launch / shot / click / drag / keys / hotkey / close). Ctrl+글자 단축키는 스캔코드를 넣는 `hotkey` 액션으로만 확인할 수 있다(`keys`의 SendKeys는 제어 문자로 들어가 JUCE 단축키에 안 잡힌다).
+
 ## VST3 플러그인
 
 `오디오 > VST3 플러그인 관리`의 `Options > Scan for new or updated VST3 plug-ins`로 스캔한다.
 기본 검색 경로는 `C:\Program Files\Common Files\VST3`와 `%LOCALAPPDATA%\Programs\Common\VST3`.
 스캔 결과는 사용자 설정(`%APPDATA%\GoCue\GoCue.settings`)에 저장된다.
-인스펙터의 `+ 플러그인`으로 큐 체인에 추가하고, 슬롯의 `편집`(또는 더블클릭)으로 에디터 창을 연다. `B`는 바이패스.
+인스펙터 이펙트 탭의 `+ 플러그인`으로 큐 체인에 추가하고, 슬롯의 `편집`(또는 더블클릭)으로 에디터 창을 연다. `B`는 바이패스. 슬롯 추가/삭제/바이패스는 실행 취소된다(플러그인 안의 노브 값은 제외).
 프로젝트를 저장하면 각 플러그인의 상태(`getStateInformation`)가 base64로 `.gocue`에 들어간다.
 플러그인이 없는 PC에서 열면 슬롯이 `[없음]`으로 남고 다시 저장해도 상태는 보존된다.
 
@@ -106,27 +130,34 @@ appcast의 `sparkle:installerArguments="/SILENT /SP- /NORESTART"` 덕분에 업�
 ## 구조
 
 ```
-src/model    Cue / CueList / ProjectSerializer            데이터와 JSON
-src/audio    AudioEngine / CuePlayer / FadeEnvelope       장치, 믹서, 재생 인스턴스
-             PluginHost / PluginChain                      VST3 스캔·인스턴스, 인서트 체인
-src/app      ProjectDocument / AppSettings / Updater / Commands
-src/ui       MainComponent / TransportBar / CueTable / CueInspector
-             PluginChainComponent / PluginWindows / PluginDialogs / AudioSettingsDialog
-tests        JUCE UnitTest 콘솔 (오프라인 렌더로 오디오 경로 검증, 스텁 플러그인, 설치된 실물 VST3 검사)
+src/model    Cue / Envelope / CueList / ProjectSerializer / WorkspaceSettings   데이터와 JSON
+src/audio    AudioEngine / CuePlayer / RegionLoopSource / FadeEnvelope         장치, 믹서, 재생 인스턴스
+             PluginHost / PluginChain                                          VST3 스캔·인스턴스, 인서트 체인
+src/app      ProjectDocument / ProjectHistory(실행 취소) / CueController(GO·일시정지·패닉 규칙)
+             BackupManager / AppSettings / Updater / Commands
+src/ui       MainComponent / TransportBar / CueTable / CueInspector(탭) / TimeLoopsPanel / WaveformView
+             WorkspaceSettingsDialog / PluginChainComponent / PluginWindows / PluginDialogs / AudioSettingsDialog
+tests        JUCE UnitTest 콘솔 (오프라인 렌더로 오디오 경로 검증, 컨트롤러 규칙, 직렬화, 백업, 실물 VST3 검사)
 installer    GoCue.iss (Inno Setup)
 tools        release.py (릴리스 파이프라인), make_icon.py (아이콘)
 ```
 
-신호 경로: 파일 → 리샘플(장치 SR) → 페이드 → 큐 게인 → 큐 VST3 체인 → 믹스 → 마스터 VST3 체인 → 출력 ch1-2
+신호 경로: 파일 → 구간/루프/엔벨로프(`RegionLoopSource`, 파일 시간축) → 디스크 선독 → 리샘플(장치 SR × 속도) → 정지 페이드·일시정지 게이트 → 큐 게인 → 큐 VST3 체인 → 믹스 → 마스터 VST3 체인 → 출력 ch1-2
 
-## 프로젝트 파일 형식 (`.gocue`)
+## 프로젝트 파일 형식 (`.gocue`, v2)
 
 ```json
-{ "app": "GoCue", "version": 1, "name": "show",
+{ "app": "GoCue", "version": 2, "name": "show",
   "cues": [ { "id": "uuid", "name": "Intro", "file": "C:/audio/intro.wav", "fileRelative": "audio/intro.wav",
-              "fadeInMs": 250, "fadeOutMs": 1500, "gainDb": -3.0, "durationSeconds": 12.3,
+              "fadeOutMs": 1500, "gainDb": -3.0, "durationSeconds": 12.3,
+              "audio": { "start": 0.5, "end": -1, "playCount": 1, "infiniteLoop": false, "rate": 1.0, "preservePitch": false,
+                         "envelope": { "enabled": true, "linear": false, "lockToTrim": true, "points": [[0, 0], [0.1, 1], [1, 0]] } },
+              "secondTrigger": "hardStopRestart",
               "plugins": [ { "format": "VST3", "name": "3 Band EQ", "fileOrIdentifier": "C:/.../3BandEQ.vst3",
                              "uniqueId": 1662645128, "description": "<PLUGIN .../>", "state": "base64", "bypassed": false } ] } ],
-  "master": { "plugins": [] } }
+  "master": { "plugins": [] },
+  "settings": { "doubleGoSeconds": 0, "requireKeyUp": false, "panicSeconds": 2, "autoBackup": true, "backupIntervalSeconds": 60, "...": "..." } }
 ```
-절대 경로가 없으면 프로젝트 폴더 기준 `fileRelative`로 다시 찾는다. 모르는 필드는 무시하고, 더 높은 `version`은 경고만 낸 뒤 읽는다.
+- `end: -1`은 파일 끝. 엔벨로프 점의 x는 `lockToTrim`이면 구간의 0~1 비율, 아니면 구간 시작 기준 초.
+- v1 파일의 `fadeInMs`는 읽을 때 엔벨로프(0,0)→(fadeIn,1)로 바뀐다. `fadeOutMs`는 그대로 정지 페이드다.
+- 절대 경로가 없으면 프로젝트 폴더 기준 `fileRelative`로 다시 찾는다. 모르는 필드는 무시하고, 더 높은 `version`은 경고만 낸 뒤 읽는다.
