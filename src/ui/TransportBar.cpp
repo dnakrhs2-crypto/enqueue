@@ -81,7 +81,7 @@ void TransportBar::setStandbyCue (int index, const Cue* cue)
         return;
     }
 
-    cueNumber.setText (juce::String (index + 1), juce::dontSendNotification);
+    cueNumber.setText (cue->number.isNotEmpty() ? cue->number : "#" + juce::String (index + 1), juce::dontSendNotification);   // the cue number; the row position when it has none
     cueName.setText (cue->name.isNotEmpty() ? cue->name : ko ("(이름 없음)"), juce::dontSendNotification);
 
     if (cue->isGroup())

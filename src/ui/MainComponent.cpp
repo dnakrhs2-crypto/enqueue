@@ -1764,6 +1764,9 @@ int MainComponent::countBrokenCues() const
 
     for (const auto& cue : document.cues.getAll())
     {
+        if (cue.isGroup())
+            continue;   // a group has no file
+
         if (cue.isFade() || cue.isDevamp())
         {
             if (cue.targetId().isNull() || document.cues.indexOf (cue.targetId()) < 0)
@@ -1787,6 +1790,9 @@ void MainComponent::showWarnings()
     {
         const auto& cue = cues.get (i);
         const juce::String label = "#" + juce::String (i + 1) + (cue.number.isNotEmpty() ? " [" + cue.number + "]" : juce::String()) + " " + cue.name;
+
+        if (cue.isGroup())
+            continue;
 
         if (cue.isFade() || cue.isDevamp())
         {
