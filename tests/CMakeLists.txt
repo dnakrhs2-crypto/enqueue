@@ -8,6 +8,7 @@ target_sources(GoCueTests PRIVATE
     CueListTests.cpp
     CueNumberingTests.cpp
     CuePropertyPasteTests.cpp
+    LevelMatrixTests.cpp
     SchedulerTests.cpp
     ProjectSerializerTests.cpp
     AudioEngineTests.cpp

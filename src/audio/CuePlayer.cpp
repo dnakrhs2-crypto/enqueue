@@ -7,8 +7,8 @@ namespace gocue
 
 CuePlayer::CuePlayer (const Cue& c, juce::AudioFormatManager& formats,
                       juce::TimeSliceThread* readAheadThread, int readAheadSamples,
-                      double startOffset)
-    : cue (c)
+                      double startOffset, int busOutputs)
+    : cue (c), numOutputs (juce::jlimit (1, LevelMatrix::maxOutputs, busOutputs))
 {
     cue.sanitise();
     gainLinear = cue.gainLinear();
@@ -37,7 +37,16 @@ CuePlayer::CuePlayer (const Cue& c, juce::AudioFormatManager& formats,
 
     fileSampleRate = reader->sampleRate > 0.0 ? reader->sampleRate : 44100.0;
     cue.durationSeconds = (double) reader->lengthInSamples / fileSampleRate;   // the region maths need the real length
+    numChannels = juce::jlimit (1, maxChannels, (int) reader->numChannels);
+    cue.numChannels = numChannels;
+    cue.levels.resize (numChannels, numOutputs);
+    cue.trim.resize (numOutputs);
     cue.sanitise();
+
+    currentGains.assign ((size_t) (numChannels * numOutputs), 0.0f);
+    computeGains (cue.levels, cue.trim, currentGains);
+    targetGains = currentGains;
+    publishedGains = currentGains;
 
     auto regionSource = std::make_unique<RegionLoopSource> (std::move (reader));
 
@@ -63,13 +72,13 @@ CuePlayer::CuePlayer (const Cue& c, juce::AudioFormatManager& formats,
     {
         // faster playback pulls more file samples per block: size the read-ahead for twice the cue's rate
         const int scale = juce::jlimit (1, 8, (int) std::ceil (cue.audio.rate * 2.0));
-        readAhead = std::make_unique<juce::BufferingAudioSource> (source.get(), *readAheadThread, false, readAheadSamples * scale, 2, true);
+        readAhead = std::make_unique<juce::BufferingAudioSource> (source.get(), *readAheadThread, false, readAheadSamples * scale, numChannels, true);
         readAhead->setNextReadPosition (startOffsetSamples);
-        resampler = std::make_unique<juce::ResamplingAudioSource> (readAhead.get(), false, 2);
+        resampler = std::make_unique<juce::ResamplingAudioSource> (readAhead.get(), false, numChannels);
     }
     else
     {
-        resampler = std::make_unique<juce::ResamplingAudioSource> (source.get(), false, 2);
+        resampler = std::make_unique<juce::ResamplingAudioSource> (source.get(), false, numChannels);
     }
 
     virtualPosition.store ((double) startOffsetSamples);
@@ -257,6 +266,99 @@ double CuePlayer::getRemainingSeconds() const noexcept
     return std::max (0.0, left) / fileSampleRate / rate;
 }
 
+void CuePlayer::processChain (PluginChain& activeChain, juce::AudioBuffer<float>& fullBuffer, int numSamples) noexcept
+{
+    // The chain is stereo: a mono cue is duplicated into channel 1 for the plugins and channel 0 is kept
+    // afterwards; cues with more channels run channels 0-1 through the chain, the rest pass untouched.
+    if (fullBuffer.getNumChannels() < 2)
+        return;
+
+    if (numChannels == 1)
+        fullBuffer.copyFrom (1, 0, fullBuffer, 0, 0, numSamples);
+
+    juce::AudioBuffer<float> stereo (fullBuffer.getArrayOfWritePointers(), 2, 0, numSamples);
+    activeChain.process (stereo, numSamples);
+}
+
+void CuePlayer::computeGains (const LevelMatrix& levels, const TrimLevels& trim, std::vector<float>& out) const
+{
+    out.resize ((size_t) (numChannels * numOutputs));
+
+    for (int in = 0; in < numChannels; ++in)
+        for (int o = 0; o < numOutputs; ++o)
+            out[(size_t) (in * numOutputs + o)] = levels.gainFor (in, o) * trim.gainForOutput (o);
+}
+
+void CuePlayer::setLiveLevels (const LevelMatrix& levels, const TrimLevels& trim)
+{
+    if (! isValid())
+        return;
+
+    LevelMatrix sized = levels;
+    sized.resize (numChannels, numOutputs);
+    TrimLevels sizedTrim = trim;
+    sizedTrim.resize (numOutputs);
+
+    std::vector<float> gains;
+    computeGains (sized, sizedTrim, gains);
+
+    gainsVersion.fetch_add (1, std::memory_order_acq_rel);   // odd: writing
+    std::copy (gains.begin(), gains.end(), publishedGains.begin());
+    gainsVersion.fetch_add (1, std::memory_order_acq_rel);   // even: stable
+}
+
+void CuePlayer::adoptPublishedGains() noexcept
+{
+    for (int attempt = 0; attempt < 3; ++attempt)
+    {
+        const auto v1 = gainsVersion.load (std::memory_order_acquire);
+
+        if (v1 == adoptedGainsVersion || (v1 & 1u) != 0)
+            return;   // nothing new, or the writer is mid-update: try again next block
+
+        std::copy (publishedGains.begin(), publishedGains.end(), targetGains.begin());
+
+        if (gainsVersion.load (std::memory_order_acquire) == v1)
+        {
+            adoptedGainsVersion = v1;
+            return;
+        }
+    }
+}
+
+void CuePlayer::mixIntoBus (juce::AudioBuffer<float>& bus, const juce::AudioBuffer<float>& rendered, int numSamples) noexcept
+{
+    if (! isValid() || numSamples <= 0)
+        return;
+
+    adoptPublishedGains();
+
+    const int ins = juce::jmin (numChannels, rendered.getNumChannels());
+    const int outs = juce::jmin (numOutputs, bus.getNumChannels());
+    const float alpha = (float) juce::jmin (1.0, (double) numSamples / (0.010 * currentSampleRate));   // ~10 ms level ramps
+
+    for (int in = 0; in < ins; ++in)
+    {
+        const float* src = rendered.getReadPointer (in);
+
+        for (int o = 0; o < outs; ++o)
+        {
+            const size_t idx = (size_t) (in * numOutputs + o);
+            const float g0 = currentGains[idx];
+            const float goal = targetGains[idx];
+            float g1 = g0 + (goal - g0) * alpha;
+
+            if (std::abs (g1 - goal) < 1.0e-5f)
+                g1 = goal;
+
+            if (g0 != 0.0f || g1 != 0.0f)
+                bus.addFromWithRamp (o, 0, src, numSamples, g0, g1);
+
+            currentGains[idx] = g1;
+        }
+    }
+}
+
 void CuePlayer::updatePositionInfo (double rate) noexcept
 {
     juce::ignoreUnused (rate);
@@ -271,8 +373,11 @@ void CuePlayer::updatePositionInfo (double rate) noexcept
     passIndex.store (source->getPassIndexFor (pos), std::memory_order_relaxed);
 }
 
-bool CuePlayer::renderNextBlock (juce::AudioBuffer<float>& buffer, int numSamples)
+bool CuePlayer::renderNextBlock (juce::AudioBuffer<float>& fullBuffer, int numSamples)
 {
+    // the player's channels only (no allocation: the channel-pointer array lives inside the view)
+    juce::AudioBuffer<float> buffer (fullBuffer.getArrayOfWritePointers(), juce::jmin (numChannels, fullBuffer.getNumChannels()), 0, numSamples);
+
     if (finished.load (std::memory_order_relaxed) || ! isValid())
     {
         buffer.clear (0, numSamples);
@@ -351,7 +456,7 @@ bool CuePlayer::renderNextBlock (juce::AudioBuffer<float>& buffer, int numSample
         buffer.clear (0, numSamples);   // feed silence through the chain so delays / reverbs keep their timing
 
         if (activeChain != nullptr)
-            activeChain->process (buffer, numSamples);
+            processChain (*activeChain, fullBuffer, numSamples);
 
         return true;
     }
@@ -414,7 +519,7 @@ bool CuePlayer::renderNextBlock (juce::AudioBuffer<float>& buffer, int numSample
     }
 
     if (activeChain != nullptr)
-        activeChain->process (buffer, numSamples);
+        processChain (*activeChain, fullBuffer, numSamples);
 
     updatePositionInfo (rate);
 

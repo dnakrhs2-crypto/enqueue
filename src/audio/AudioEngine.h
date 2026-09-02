@@ -89,6 +89,8 @@ public:
     void setLiveRegion (const juce::Uuid& cueId, double startSeconds, double endSeconds);
     void setLiveRate (const juce::Uuid& cueId, double rate);
     void setLiveGainDb (const juce::Uuid& cueId, double gainDb);
+    /** Live level matrix / trim for a running cue (ramped over ~10 ms). */
+    void setLiveLevels (const juce::Uuid& cueId, const LevelMatrix& levels, const TrimLevels& trim);
     /** Scrub: jump to a fraction (0..1) of the cue's total length. */
     void seekToFraction (const juce::Uuid& cueId, double fraction);
     /** Duck / boost (dB on top of the cue gain) reached over 'rampSeconds'; 0 = none. */

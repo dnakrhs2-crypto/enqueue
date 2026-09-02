@@ -156,7 +156,21 @@ void RegionLoopSource::getNextAudioBlock (const juce::AudioSourceChannelInfo& in
         const juce::int64 offset = pos % len;
         const int chunk = (int) std::min<juce::int64> ({ (juce::int64) remaining, len - offset, total - pos });
 
-        reader->read (info.buffer, dest, chunk, start + offset, true, true);
+        {
+            // every file channel into its own buffer channel (no stereo duplication: the level matrix routes)
+            constexpr int maxChannels = 32;
+            float* dests[maxChannels];
+            const int numCh = std::min ({ (int) reader->numChannels, info.buffer->getNumChannels(), maxChannels });
+
+            for (int ch = 0; ch < numCh; ++ch)
+                dests[ch] = info.buffer->getWritePointer (ch, dest);
+
+            reader->read (reinterpret_cast<int* const*> (dests), numCh, start + offset, chunk, false);
+
+            if (! reader->usesFloatingPointData)
+                for (int ch = 0; ch < numCh; ++ch)
+                    juce::FloatVectorOperations::convertFixedToFloat (dests[ch], reinterpret_cast<const int*> (dests[ch]), 1.0f / 0x7fffffff, chunk);
+        }
 
         if (envelope.isActive())
             applyEnvelope (*info.buffer, dest, chunk, offset, len);

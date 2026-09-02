@@ -36,8 +36,14 @@ public:
         @param startOffsetSeconds where to begin, in file seconds after the region start (pass 0). */
     CuePlayer (const Cue& cue, juce::AudioFormatManager& formats,
                juce::TimeSliceThread* readAheadThread, int readAheadSamples,
-               double startOffsetSeconds = 0.0);
+               double startOffsetSeconds = 0.0, int numOutputs = 2);
     ~CuePlayer();
+
+    /** File channels rendered (1..maxChannels); the level matrix rows. */
+    static constexpr int maxChannels = LevelMatrix::maxInputs;
+    int getNumChannels() const noexcept { return numChannels; }
+    /** Cue outputs (bus channels) this player mixes into; the level matrix columns. */
+    int getNumOutputs() const noexcept  { return numOutputs; }
 
     bool isValid() const noexcept                        { return resampler != nullptr; }
     const juce::String& getErrorMessage() const noexcept { return errorMessage; }
@@ -81,10 +87,16 @@ public:
     /** Duck / boost applied on top of the cue gain, reached over 'rampSeconds'. 0 dB = none. Any thread. */
     void setDuckDb (double duckDb, double rampSeconds) noexcept;
     double getDuckDb() const noexcept { return duckDb.load (std::memory_order_relaxed); }
+    /** Live level matrix / trim from the inspector; the audio thread ramps to the new gains over ~10 ms. Message thread. */
+    void setLiveLevels (const LevelMatrix& levels, const TrimLevels& trim);
 
-    /** Audio thread. Overwrites channels 0-1 of buffer[0, numSamples) with this player's output.
+    /** Audio thread. Overwrites channels 0..getNumChannels()-1 of buffer[0, numSamples) with this player's
+        output (before the level matrix). 'buffer' needs at least max (2, getNumChannels()) channels.
         Returns false once the player has finished; the block still contains its final audio. */
     bool renderNextBlock (juce::AudioBuffer<float>& buffer, int numSamples);
+    /** Audio thread. Adds the block just rendered into bus channels 0..getNumOutputs()-1 through the
+        level matrix and trim (input + crosspoint + output + trim; the main level was applied in renderNextBlock). */
+    void mixIntoBus (juce::AudioBuffer<float>& bus, const juce::AudioBuffer<float>& rendered, int numSamples) noexcept;
 
     const juce::Uuid& getCueId() const noexcept   { return cue.id; }
     const Cue& getCue() const noexcept            { return cue; }
@@ -107,8 +119,17 @@ public:
 private:
     void updatePositionInfo (double rate) noexcept;
     double ratioFor (double rate) const noexcept { return fileSampleRate * rate / currentSampleRate; }
+    void computeGains (const LevelMatrix& levels, const TrimLevels& trim, std::vector<float>& out) const;
+    void processChain (PluginChain& chain, juce::AudioBuffer<float>& fullBuffer, int numSamples) noexcept;
+    /** Copies newly published gains into targetGains (seqlock read; keeps the old ones on a torn read). */
+    void adoptPublishedGains() noexcept;
 
     Cue cue;
+    int numChannels = 2;
+    int numOutputs = 2;
+    std::vector<float> currentGains, targetGains, publishedGains;   // [input * numOutputs + output]
+    std::atomic<unsigned int> gainsVersion { 0 };                   // even = stable, odd = being written
+    unsigned int adoptedGainsVersion = 0;
     juce::String errorMessage;
     std::unique_ptr<RegionLoopSource> source;
     std::unique_ptr<juce::BufferingAudioSource> readAhead;     // null on the synchronous (test) path

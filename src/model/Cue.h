@@ -1,6 +1,7 @@
 #pragma once
 
 #include "model/Envelope.h"
+#include "model/LevelMatrix.h"
 
 #include <juce_core/juce_core.h>
 #include <vector>
@@ -104,8 +105,12 @@ struct Cue
     DuckSettings duck;
     juce::File file;
     int fadeOutMs = 0;               // "stop fade": length of fade-out-and-stop (F); 0 = de-click only
-    double gainDb = 0.0;
+    double gainDb = 0.0;             // main level (top-left of the level matrix)
+    LevelMatrix levels;              // file channels -> cue outputs (sized from numChannels / the patch)
+    TrimLevels trim;                 // fixed offsets after the matrix
+    juce::Uuid patchId;              // audio patch; null = the project's first patch
     double durationSeconds = 0.0;    // cached from the file header; 0 = unknown
+    int numChannels = 0;             // cached from the file header; 0 = unknown
     bool fileMissing = false;        // runtime only, not serialised
     std::vector<PluginSlotState> plugins;
     AudioCueData audio;

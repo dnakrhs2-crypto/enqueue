@@ -9,7 +9,7 @@ AudioEngine::AudioEngine (int readAhead)
     formatManager.registerBasicFormats();
 
     mixBuffer.setSize (2, blockSize.load());
-    playerBuffer.setSize (2, blockSize.load());
+    playerBuffer.setSize (CuePlayer::maxChannels, blockSize.load());
     players.reserve (256);   // push_back under the audio lock must not reallocate
 
     if (readAheadSamples > 0)
@@ -303,6 +303,15 @@ void AudioEngine::setLiveGainDb (const juce::Uuid& cueId, double gainDb)
             p->setLiveGainDb (gainDb);
 }
 
+void AudioEngine::setLiveLevels (const juce::Uuid& cueId, const LevelMatrix& levels, const TrimLevels& trim)
+{
+    const juce::ScopedLock sl (lock);
+
+    for (auto& p : players)
+        if (p->getCueId() == cueId && ! p->hasFinished())
+            p->setLiveLevels (levels, trim);
+}
+
 void AudioEngine::seekToFraction (const juce::Uuid& cueId, double fraction)
 {
     const juce::ScopedLock sl (lock);
@@ -516,7 +525,7 @@ void AudioEngine::prepare (double newSampleRate, int newBlockSize)
         const juce::ScopedLock sl (lock);
 
         mixBuffer.setSize (2, blockSize.load(), false, false, true);
-        playerBuffer.setSize (2, blockSize.load(), false, false, true);
+        playerBuffer.setSize (CuePlayer::maxChannels, blockSize.load(), false, false, true);
 
         for (auto& p : players)
             p->prepare (sampleRate.load(), blockSize.load());
@@ -552,9 +561,7 @@ void AudioEngine::renderBlock (juce::AudioBuffer<float>& output, int numSamples)
                     continue;
 
                 const bool stillRunning = p->renderNextBlock (playerBuffer, n);
-
-                for (int ch = 0; ch < 2; ++ch)
-                    mixBuffer.addFrom (ch, 0, playerBuffer, ch, 0, n);
+                p->mixIntoBus (mixBuffer, playerBuffer, n);
 
                 if (! stillRunning)
                     anyFinished = true;

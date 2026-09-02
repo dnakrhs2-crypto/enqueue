@@ -75,6 +75,10 @@ void Cue::sanitise() noexcept
     if (! std::isfinite (gainDb))
         gainDb = 0.0;
 
+    numChannels = juce::jlimit (0, LevelMatrix::maxInputs, numChannels);
+    levels.sanitise();
+    trim.sanitise();
+
     gainDb = juce::jlimit (minGainDb, maxGainDb, gainDb);
 
     if (! std::isfinite (durationSeconds) || durationSeconds < 0.0)

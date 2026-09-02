@@ -66,6 +66,7 @@ public:
 
         const auto tone = writeSine (dir, "tone.wav", 1.0, 0.5f, 2);
         const auto mono = writeSine (dir, "mono.wav", 1.0, 0.5f, 1);
+        const auto quad = writeSine (dir, "quad.wav", 1.0, 0.5f, 4);
 
         AudioEngine engine (0);            // synchronous reads: deterministic offline rendering
         engine.prepare (sampleRate, blockSize);
@@ -136,6 +137,82 @@ public:
             expectWithinAbsoluteError (rms (out, 0), 0.3536f, 0.01f);
             expectWithinAbsoluteError (rms (out, 1), 0.3536f, 0.01f);
 
+            engine.stopAll();
+            render (engine, out, 3);
+            engine.reapFinishedPlayers();
+            expectEquals (engine.getNumPlaying(), 0);
+        }
+
+        beginTest ("level matrix: crosspoints, input / output levels and trim shape the output");
+        {
+            const float full = 0.3536f;   // rms of the 0.5 sine
+            Cue c;
+            c.file = tone;
+            c.levels.resize (2, 2);
+            c.levels.crosspointDb[0][0] = -6.0;                     // L -> out 1 at -6 dB
+            c.levels.crosspointDb[1][1] = LevelMatrix::silentDb;   // R -> out 2 silent
+            expect (engine.play (c));
+            render (engine, out, 5);
+            expectWithinAbsoluteError (rms (out, 0), full * 0.501f, 0.01f);
+            expectWithinAbsoluteError (rms (out, 1), 0.0f, 1e-4f);
+            engine.stopAll();
+            render (engine, out, 3);
+            engine.reapFinishedPlayers();
+
+            Cue d;
+            d.file = tone;
+            d.levels.resize (2, 2);
+            d.levels.inputDb[1] = LevelMatrix::silentDb;   // silent input row
+            d.levels.outputDb[0] = 6.0;                    // hot output column
+            d.trim.resize (2);
+            d.trim.mainDb = -6.0;                          // trim cancels the output boost
+            expect (engine.play (d));
+            render (engine, out, 5);
+            expectWithinAbsoluteError (rms (out, 0), full, 0.01f);
+            expectWithinAbsoluteError (rms (out, 1), 0.0f, 1e-4f);
+            engine.stopAll();
+            render (engine, out, 3);
+            engine.reapFinishedPlayers();
+        }
+
+        beginTest ("live level changes ramp to the new matrix while the cue plays");
+        {
+            Cue c;
+            c.file = tone;
+            expect (engine.play (c));
+            render (engine, out, 3);
+            expectWithinAbsoluteError (rms (out, 0), 0.3536f, 0.01f);
+
+            LevelMatrix m;
+            m.resize (2, 2);
+            m.crosspointDb[0][0] = LevelMatrix::silentDb;
+            m.outputDb[1] = -6.0;
+            engine.setLiveLevels (c.id, m, TrimLevels());
+            render (engine, out, 3);    // ~35 ms: past the 10 ms ramp
+            expectWithinAbsoluteError (rms (out, 0), 0.0f, 1e-4f);
+            expectWithinAbsoluteError (rms (out, 1), 0.3536f * 0.501f, 0.01f);
+            engine.stopAll();
+            render (engine, out, 3);
+            engine.reapFinishedPlayers();
+        }
+
+        beginTest ("a four-channel file: channels 3-4 are read and routed by the matrix");
+        {
+            Cue c;
+            c.file = quad;
+            expect (engine.play (c));                  // default: ch1 -> out1, ch2 -> out2, ch3/4 silent
+            render (engine, out, 5);
+            expectWithinAbsoluteError (rms (out, 0), 0.3536f, 0.01f);
+            expectWithinAbsoluteError (rms (out, 1), 0.3536f, 0.01f);
+
+            LevelMatrix m;
+            m.resize (4, 2);
+            m.crosspointDb[2][0] = 0.0;                // ch3 also to out1: the identical sines add up
+            m.crosspointDb[3][1] = 0.0;                // ch4 also to out2
+            engine.setLiveLevels (c.id, m, TrimLevels());
+            render (engine, out, 3);
+            expectWithinAbsoluteError (rms (out, 0), 0.7071f, 0.01f);
+            expectWithinAbsoluteError (rms (out, 1), 0.7071f, 0.01f);
             engine.stopAll();
             render (engine, out, 3);
             engine.reapFinishedPlayers();

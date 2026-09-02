@@ -251,6 +251,16 @@ namespace
         obj->setProperty ("fadeOutMs", c.fadeOutMs);
         obj->setProperty ("gainDb", c.gainDb);
         obj->setProperty ("durationSeconds", c.durationSeconds);
+        obj->setProperty ("channels", c.numChannels);
+
+        if (c.levels.numInputs() > 0 || c.levels.numOutputs() > 0)
+            obj->setProperty ("levels", c.levels.toVar());
+
+        if (c.trim.mainDb != 0.0 || ! c.trim.outputDb.empty())
+            obj->setProperty ("trim", c.trim.toVar());
+
+        if (! c.patchId.isNull())
+            obj->setProperty ("patch", c.patchId.toString());
         obj->setProperty ("audio", audioToVar (c.audio));
         obj->setProperty ("secondTrigger", secondTriggerToText (c.secondTrigger));
         obj->setProperty ("plugins", pluginsToVar (c.plugins));
@@ -338,6 +348,10 @@ namespace
         c.fadeOutMs       = intProperty (v, "fadeOutMs", 0);
         c.gainDb          = (double) v.getProperty ("gainDb", 0.0);
         c.durationSeconds = (double) v.getProperty ("durationSeconds", 0.0);
+        c.numChannels     = intProperty (v, "channels", 0);
+        c.levels          = LevelMatrix::fromVar (v.getProperty ("levels", juce::var()));
+        c.trim            = TrimLevels::fromVar (v.getProperty ("trim", juce::var()));
+        c.patchId         = juce::Uuid (v.getProperty ("patch", "").toString());
         c.plugins         = pluginsFromVar (v.getProperty ("plugins", juce::var()));
         c.secondTrigger   = secondTriggerFromText (v.getProperty ("secondTrigger", "hardStopRestart").toString());
 

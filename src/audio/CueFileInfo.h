@@ -21,9 +21,15 @@ inline void refreshCueFileInfo (juce::AudioFormatManager& formats, Cue& cue)
     std::unique_ptr<juce::AudioFormatReader> reader (formats.createReaderFor (cue.file));
 
     if (reader != nullptr && reader->sampleRate > 0.0)
+    {
         cue.durationSeconds = (double) reader->lengthInSamples / reader->sampleRate;
+        cue.numChannels = juce::jlimit (0, LevelMatrix::maxInputs, (int) reader->numChannels);
+        cue.levels.resize (cue.numChannels, juce::jmax (2, cue.levels.numOutputs()));   // the patch decides the outputs later
+    }
     else
+    {
         cue.durationSeconds = 0.0;
+    }
 }
 
 /** True when the file extension matches one of the registered audio formats. */
