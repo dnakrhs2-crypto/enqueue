@@ -26,13 +26,13 @@ bool CueController::isCueActive (const juce::Uuid& id) const
     if (const auto w = waits.find (id); w != waits.end() && clock() < w->second)
         return true;
 
-    const int index = document.cues.indexOf (id);
-    return index >= 0 && document.cues.get (index).isGroup() && isGroupActive (index);
+    int index = -1;
+    const auto* list = document.listContaining (id, &index);
+    return list != nullptr && list->get (index).isGroup() && isGroupActive (*list, index);
 }
 
 CueController::GoResult CueController::triggerControl (const Cue& cue, int index, bool audition)
 {
-    auto& cues = document.cues;
     const auto& ctl = cue.control;
 
     if (ctl.kind == ControlKind::wait)
@@ -49,14 +49,16 @@ CueController::GoResult CueController::triggerControl (const Cue& cue, int index
         return GoResult::started;
     }
 
-    const int target = ctl.targetId.isNull() ? -1 : cues.indexOf (ctl.targetId);
+    int target = -1;
+    CueList* targetList = ctl.targetId.isNull() ? nullptr : document.listContaining (ctl.targetId, &target);
 
-    if (target < 0)
+    if (targetList == nullptr)
     {
         status (ko ("제어 큐에 대상이 없습니다: ") + cueLabel (index, cue), true);
         return GoResult::failed;
     }
 
+    auto& cues = *targetList;   // the list the target lives in (not necessarily the active one)
     const Cue targetCue = cues.get (target);
     const auto targetLabel = cueLabel (target, targetCue);
 
@@ -70,7 +72,7 @@ CueController::GoResult CueController::triggerControl (const Cue& cue, int index
             }
             else
             {
-                fireSequence (target, audition);   // like a GO on the target, without moving the playhead
+                fireSequence (cues, target, audition);   // like a GO on the target, without moving the playhead
                 status (ko ("시작: ") + targetLabel);
             }
             break;
@@ -134,10 +136,17 @@ CueController::GoResult CueController::triggerControl (const Cue& cue, int index
             break;
 
         case ControlKind::gotoCue:
-            lastGroupEnterIndex = target;   // go() puts the playhead here instead of past this cue
-            cues.setPlayheadIndex (target);
+        {
+            // a target in another list / cart brings that one to the front first
+            if (&cues != &document.cues)
+                document.setActiveContainer (document.containerOf (targetCue.id));
+
+            const int activeIndex = document.cues.indexOf (targetCue.id);
+            lastGroupEnterIndex = activeIndex;   // go() puts the playhead here instead of past this cue
+            document.cues.setPlayheadIndex (activeIndex);
             status (ko ("이동: ") + targetLabel);
             break;
+        }
 
         case ControlKind::arm:
         case ControlKind::disarm:
@@ -173,8 +182,11 @@ CueController::GoResult CueController::triggerControl (const Cue& cue, int index
 
 bool CueController::isGroupActive (int index) const
 {
-    const auto& cues = document.cues;
+    return isGroupActive (document.cues, index);
+}
 
+bool CueController::isGroupActive (const CueList& cues, int index) const
+{
     if (! cues.isValidIndex (index))
         return false;
 
@@ -207,14 +219,15 @@ void CueController::stopGroup (const juce::Uuid& groupId, int fadeMs)
 {
     cancelPendingFor (groupId);
     playlists.erase (groupId);
-    const int index = document.cues.indexOf (groupId);
+    int index = -1;
+    auto* list = document.listContaining (groupId, &index);
 
-    if (index < 0)
+    if (list == nullptr)
         return;
 
-    for (int i : document.cues.descendantsOf (index))
+    for (int i : list->descendantsOf (index))
     {
-        const auto id = document.cues.get (i).id;
+        const auto id = list->get (i).id;
         cancelPendingFor (id);
         playlists.erase (id);
         fadeRunner.stop (id);
@@ -233,7 +246,11 @@ void CueController::stopGroup (const juce::Uuid& groupId, int fadeMs)
 
 int CueController::startGroup (int index, bool audition)
 {
-    auto& cues = document.cues;
+    return startGroup (document.cues, index, audition);
+}
+
+int CueController::startGroup (CueList& cues, int index, bool audition)
+{
     lastGroupEnterIndex = -1;
 
     if (! cues.isValidIndex (index) || ! cues.get (index).isGroup())
@@ -293,13 +310,13 @@ int CueController::startGroup (int index, bool audition)
 
         case GroupMode::startFirstEnter:
         {
-            const int after = fireSequence (children.front(), audition);
+            const int after = fireSequence (cues, children.front(), audition);
             lastGroupEnterIndex = after < end ? after : end;
             break;
         }
 
         case GroupMode::startFirst:
-            fireSequence (children.front(), audition);
+            fireSequence (cues, children.front(), audition);
             break;
 
         case GroupMode::random:
@@ -329,7 +346,7 @@ int CueController::startGroup (int index, bool audition)
 
             const int chosen = candidates[(size_t) juce::jlimit (0, (int) candidates.size() - 1, randomChoice ((int) candidates.size()))];
             used.insert (cues.get (chosen).id);
-            fireSequence (chosen, audition);
+            fireSequence (cues, chosen, audition);
             break;
         }
     }
@@ -344,7 +361,7 @@ void CueController::playlistStep (const juce::Uuid& groupId)
     if (it == playlists.end())
         return;
 
-    const auto* group = document.cues.findById (groupId);
+    const auto* group = document.findCueAnywhere (groupId);
 
     if (group == nullptr || ! group->isGroup())
     {
@@ -373,7 +390,7 @@ void CueController::playlistStep (const juce::Uuid& groupId)
         }
 
         const auto childId = run.order[(size_t) run.position];
-        const auto* child = document.cues.findById (childId);
+        const auto* child = document.findCueAnywhere (childId);
 
         if (child == nullptr || ! child->armed)
         {
@@ -425,7 +442,7 @@ bool CueController::playlistSkip (const juce::Uuid& groupId, int delta)
     if (it == playlists.end())
         return false;
 
-    const auto* group = document.cues.findById (groupId);
+    const auto* group = document.findCueAnywhere (groupId);
     cancelPendingFor (groupId);   // the follow watch of the current child
     const auto current = it->second.current;
 
@@ -580,7 +597,9 @@ std::vector<CueController::RecordedStart> CueController::stopRecording()
 
 CueController::GoResult CueController::triggerImpl (const Cue& cue, bool audition)
 {
-    const int index = document.cues.indexOf (cue.id);
+    int index = -1;
+    CueList* listPtr = document.listContaining (cue.id, &index);
+    CueList& cues = listPtr != nullptr ? *listPtr : document.cues;   // the list the cue lives in (any list / cart)
     const bool auditionNow = isAuditionRequested (audition);
 
     if (cue.isControl())
@@ -591,7 +610,7 @@ CueController::GoResult CueController::triggerImpl (const Cue& cue, bool auditio
         if (index < 0)
             return GoResult::failed;
 
-        if (isGroupActive (index))
+        if (isGroupActive (cues, index))
         {
             if (cue.group.mode == GroupMode::playlist && playlists.count (cue.id) != 0)
             {
@@ -622,9 +641,9 @@ CueController::GoResult CueController::triggerImpl (const Cue& cue, bool auditio
                     return GoResult::ignored;
 
                 case SecondTriggerAction::devamp:
-                    for (int i : document.cues.descendantsOf (index))
-                        if (engine.isPlaying (document.cues.get (i).id))
-                            engine.finishCurrentPass (document.cues.get (i).id);
+                    for (int i : cues.descendantsOf (index))
+                        if (engine.isPlaying (cues.get (i).id))
+                            engine.finishCurrentPass (cues.get (i).id);
 
                     status (ko ("이번 반복까지만: ") + cueLabel (index, cue));
                     return GoResult::ignored;
@@ -635,7 +654,7 @@ CueController::GoResult CueController::triggerImpl (const Cue& cue, bool auditio
             }
         }
 
-        startGroup (index, audition);
+        startGroup (cues, index, audition);
         played.insert (cue.id);
         return GoResult::started;
     }
@@ -659,7 +678,7 @@ CueController::GoResult CueController::triggerImpl (const Cue& cue, bool auditio
     {
         const auto targetId = cue.devamp.targetId;
 
-        if (targetId.isNull() || document.cues.findById (targetId) == nullptr)
+        if (targetId.isNull() || document.findCueAnywhere (targetId) == nullptr)
         {
             status (ko ("디밴프 큐에 대상이 없습니다: ") + cueLabel (index, cue), true);
             return GoResult::failed;
@@ -686,7 +705,7 @@ CueController::GoResult CueController::triggerImpl (const Cue& cue, bool auditio
         {
             // the cue after this one starts the moment the target reaches its loop point: watched on the target's own
             // timeline (a pause or rate change moves the moment; a stop or restart of the target cancels it)
-            const auto nextId = document.cues.isValidIndex (index + 1) ? document.cues.get (index + 1).id : juce::Uuid::null();
+            const auto nextId = cues.isValidIndex (index + 1) ? cues.get (index + 1).id : juce::Uuid::null();
             const juce::int64 boundary = engine.getVirtualPosition (targetId) < 0 ? -1
                                        : engine.getVirtualPosition (targetId)
                                          + (juce::int64) std::llround (secondsToBoundary * juce::jmax (AudioCueData::minRate, engine.getLiveRate (targetId)) * engine.getFileSampleRate (targetId));
@@ -706,8 +725,10 @@ CueController::GoResult CueController::triggerImpl (const Cue& cue, bool auditio
                                             if (engine.getStartOrder (targetId) != instance)
                                                 return;
 
-                                            if (const int nextIndex = document.cues.indexOf (nextId); nextIndex >= 0)
-                                                fireSequence (nextIndex, audition);
+                                            int nextIndex = -1;
+
+                                            if (auto* nextList = document.listContaining (nextId, &nextIndex))
+                                                fireSequence (*nextList, nextIndex, audition);
                                         }), cue.id);
         }
 
@@ -771,41 +792,38 @@ void CueController::applyFadeStopOthers (const Cue& cue)
         return;
 
     const int ms = (int) std::lround (cue.fadeStopOthers.seconds * 1000.0);
-    const bool peersOnly = cue.fadeStopOthers.scope == FadeStopScope::peers;
+    const auto scope = cue.fadeStopOthers.scope;
     const auto ownTarget = cue.targetId();   // a fade / devamp / control cue must not fade its own target out
+    const int ownContainer = document.containerOf (cue.id);
+
+    // peers = same parent in the same list; list = the cue's own list / cart; all = every list
+    auto inScope = [&] (const juce::Uuid& otherId)
+    {
+        if (scope == FadeStopScope::all)
+            return true;
+
+        if (document.containerOf (otherId) != ownContainer)
+            return false;
+
+        if (scope == FadeStopScope::list)
+            return true;
+
+        const auto* other = document.findCueAnywhere (otherId);
+        return other == nullptr || other->parentId == cue.parentId;
+    };
 
     // running fade cues are "others" too
     for (const auto& f : fadeRunner.getRunning())
-    {
-        if (f.fadeId == cue.id)
-            continue;
-
-        if (peersOnly)
-        {
-            const auto* other = document.cues.findById (f.fadeId);
-
-            if (other != nullptr && other->parentId != cue.parentId)
-                continue;
-        }
-
-        fadeRunner.stop (f.fadeId);
-    }
+        if (f.fadeId != cue.id && inScope (f.fadeId))
+            fadeRunner.stop (f.fadeId);
 
     for (const auto& p : engine.getPlayingCues())
     {
         if (p.id == cue.id || p.id == ownTarget || p.loaded)
             continue;
 
-        if (peersOnly)
-        {
-            // peers = the cues with the same parent (inside the same group / at the top level)
-            const auto* other = document.cues.findById (p.id);
-
-            if (other != nullptr && other->parentId != cue.parentId)
-                continue;
-        }
-
-        engine.fadeOutAndStop (p.id, ms);   // list / all coincide while there is one cue list
+        if (inScope (p.id))
+            engine.fadeOutAndStop (p.id, ms);
     }
 }
 
@@ -867,7 +885,7 @@ void CueController::applyDuck (const Cue& cue)
 
 void CueController::startById (const juce::Uuid& id, bool audition)
 {
-    const auto* cue = document.cues.findById (id);
+    const auto* cue = document.findCueAnywhere (id);
 
     if (cue == nullptr)
         return;   // deleted while it was waiting
@@ -894,9 +912,12 @@ void CueController::scheduleStart (const juce::Uuid& id, double atSeconds, bool 
 
 int CueController::sequenceEnd (int index) const
 {
-    // a sequence runs along siblings: the chain stops at the end of the enclosing group
-    const auto& cues = document.cues;
+    return sequenceEnd (document.cues, index);
+}
 
+int CueController::sequenceEnd (const CueList& cues, int index) const
+{
+    // a sequence runs along siblings: the chain stops at the end of the enclosing group
     if (! cues.isValidIndex (index))
         return juce::jmin (juce::jmax (index, 0), cues.size());
 
@@ -919,8 +940,11 @@ int CueController::sequenceEnd (int index) const
 
 int CueController::fireSequence (int index, bool audition)
 {
-    auto& cues = document.cues;
+    return fireSequence (document.cues, index, audition);
+}
 
+int CueController::fireSequence (CueList& cues, int index, bool audition)
+{
     if (! cues.isValidIndex (index))
         return juce::jmin (juce::jmax (index, 0), cues.size());
 
@@ -970,11 +994,13 @@ int CueController::fireSequence (int index, bool audition)
             track (scheduler.watch ([this, id, startAt, armed] { return clock() >= startAt && (! armed || ! isCueActive (id)); },
                                     [this, nextId, audition]
                                     {
-                                        if (const int nextIndex = document.cues.indexOf (nextId); nextIndex >= 0)
-                                            fireSequence (nextIndex, audition);
+                                        int nextIndex = -1;
+
+                                        if (auto* nextList = document.listContaining (nextId, &nextIndex))
+                                            fireSequence (*nextList, nextIndex, audition);
                                     }), id);
 
-        return sequenceEnd (index);
+        return sequenceEnd (cues, index);
     }
 
     return juce::jmin (juce::jmax (i, 0), cues.size());
@@ -1011,6 +1037,9 @@ CueController::GoResult CueController::go (bool audition)
         status (ko ("재개"));
         return GoResult::resumed;
     }
+
+    if (document.isActiveCart())
+        return GoResult::nothingSelected;   // a cart has no playhead: its buttons fire cues
 
     const auto* cue = document.cues.getPlayhead();
 
@@ -1066,33 +1095,37 @@ bool CueController::handleHotkey (const juce::KeyPress& key)
         return false;
 
     bool handled = false;
-    const auto& cues = document.cues;
 
-    for (int i = 0; i < cues.size(); ++i)
+    document.forEachList ([&] (CueList& cues)   // hotkeys reach into every list and cart
     {
-        const auto& cue = cues.get (i);
-
-        if (cue.hotkey.isNotEmpty() && juce::KeyPress::createFromDescription (cue.hotkey) == key)
+        for (int i = 0; i < cues.size(); ++i)
         {
-            fireSequence (i);   // hotkeys do not move the playhead
-            status (ko ("핫키: ") + cueLabel (i, cue));
-            handled = true;
+            const auto& cue = cues.get (i);
+
+            if (cue.hotkey.isNotEmpty() && juce::KeyPress::createFromDescription (cue.hotkey) == key)
+            {
+                fireSequence (cues, i, false);   // hotkeys do not move the playhead
+                status (ko ("핫키: ") + cueLabel (i, cue));
+                handled = true;
+            }
         }
-    }
+    });
 
     return handled;
 }
 
 bool CueController::handleHotkeyRepeat (const juce::KeyPress& key) const
 {
-    const auto description = key.getTextDescription();
+    bool found = false;
 
-    for (const auto& cue : document.cues.getAll())
-        if (cue.hotkey.isNotEmpty() && juce::KeyPress::createFromDescription (cue.hotkey) == key)
-            return true;
+    document.forEachList ([&] (CueList& cues)
+    {
+        for (const auto& cue : cues.getAll())
+            if (cue.hotkey.isNotEmpty() && juce::KeyPress::createFromDescription (cue.hotkey) == key)
+                found = true;
+    });
 
-    juce::ignoreUnused (description);
-    return false;
+    return found;
 }
 
 void CueController::checkWallClock (juce::Time now)
@@ -1106,7 +1139,6 @@ void CueController::checkWallClock (juce::Time now)
     // after a long gap (sleep, clock change) only the current second counts
     juce::int64 from = lastWallClockSecond < 0 || second - lastWallClockSecond > 5 || second < lastWallClockSecond ? second : lastWallClockSecond + 1;
     lastWallClockSecond = second;
-    const auto& cues = document.cues;
 
     for (juce::int64 s = from; s <= second; ++s)
     {
@@ -1114,16 +1146,19 @@ void CueController::checkWallClock (juce::Time now)
         const int hour = t.getHours(), minute = t.getMinutes(), sec = t.getSeconds();
         const int dayBit = 1 << t.getDayOfWeek();   // 0 = Sunday
 
-        for (int i = 0; i < cues.size(); ++i)
+        document.forEachList ([&] (CueList& cues)   // every list and cart
         {
-            const auto& wc = cues.get (i).wallClock;
-
-            if (wc.enabled && wc.hour == hour && wc.minute == minute && wc.second == sec && (wc.daysMask & dayBit) != 0)
+            for (int i = 0; i < cues.size(); ++i)
             {
-                status (ko ("시간 트리거: ") + cueLabel (i, cues.get (i)));
-                fireSequence (i);
+                const auto& wc = cues.get (i).wallClock;
+
+                if (wc.enabled && wc.hour == hour && wc.minute == minute && wc.second == sec && (wc.daysMask & dayBit) != 0)
+                {
+                    status (ko ("시간 트리거: ") + cueLabel (i, cues.get (i)));
+                    fireSequence (cues, i, false);
+                }
             }
-        }
+        });
     }
 }
 
@@ -1247,9 +1282,9 @@ void CueController::stopCue (const juce::Uuid& cueId)
         if (f.targetId == cueId)
             fadeRunner.stop (f.fadeId);
 
-    const int index = document.cues.indexOf (cueId);
+    const auto* cue = document.findCueAnywhere (cueId);
 
-    if (index >= 0 && document.cues.get (index).isGroup())
+    if (cue != nullptr && cue->isGroup())
         stopGroup (cueId, 0);
     else
         engine.stop (cueId);

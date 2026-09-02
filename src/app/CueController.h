@@ -67,13 +67,17 @@ public:
         or pending when it fails, so go() cannot tell from the engine alone). */
     GoResult getFirstTriggerResult() const noexcept { return firstTriggerResult; }
 
-    /** Fires the cue at 'index' with its pre-wait and the sequence it heads (auto-continue / auto-follow).
-        Returns the index of the first cue after the sequence (clamped to the list). */
+    /** Fires the cue at 'index' of the active list with its pre-wait and the sequence it heads (auto-continue /
+        auto-follow). Returns the index of the first cue after the sequence (clamped to the list). */
     int fireSequence (int index, bool audition = false);
+    /** The same on any list / cart (sequences started by hotkeys, wall clocks, follows and control cues may live
+        in an inactive list). */
+    int fireSequence (CueList& list, int index, bool audition);
     /** True when GO / preview audition right now (requested, or "항상 오디션" in the settings). */
     bool isAuditionRequested (bool requested) const noexcept;
     /** Index of the first cue after the sequence that starts at 'index'. */
     int sequenceEnd (int index) const;
+    int sequenceEnd (const CueList& list, int index) const;
     /** Cancels scheduled starts, follows and duck restores. */
     void cancelPending();
     /** Cancels the pending starts / follows / duck restores that belong to one cue's run. */
@@ -106,7 +110,9 @@ public:
     /** Group cues. startGroup() fires the children the way the group mode says and returns the index the
         playhead goes to (after the group; inside it for "start first and enter"). */
     int startGroup (int index, bool audition);
+    int startGroup (CueList& list, int index, bool audition);
     bool isGroupActive (int index) const;
+    bool isGroupActive (const CueList& list, int index) const;
     /** Stops everything inside a group (pending starts, playlist run, running children).
         fadeMs: 0 = at once, < 0 = each child's own stop fade, > 0 = that fade. */
     void stopGroup (const juce::Uuid& groupId, int fadeMs);
