@@ -144,9 +144,10 @@ class BackupManager { public: static juce::File backupDirFor (const juce::File& 
 - [x] 커밋 `feat: automatic project backups and copy-into-project`.
 
 ### Task 1.9: 단계 1 마감
-- [ ] README(단축키·기능) 갱신, `CMakeLists.txt` 0.2.0, 전체 테스트, GUI 스모크(열기·GO·트림·엔벨로프·드롭·일시정지·패닉·실행 취소), 릴리스 `python tools\release.py ... --publish`, 설치 업데이트 확인.
-- [ ] 코덱스 read-only 리뷰(범위: 단계 1 diff) → 지적 반영 → 재테스트 → 커밋 `Apply Codex review findings (phase 1)`.
-- [ ] 메모리 `project_gocue.md` 현황 갱신.
+- [x] README(단축키·기능) 갱신, `CMakeLists.txt` 0.2.0, 전체 테스트, GUI 스모크(열기·GO·트림·엔벨로프·드롭·일시정지·패닉·실행 취소).
+- [x] 코덱스 read-only 리뷰(26건: 높음 7) → 19건 반영(일시정지 중 정지/페이드 무시, 실행 취소 후 재생 중 플레이어 미반영, 속도 상승 시 오디오 스레드 할당·큰 블록 재할당, 라이브 트림 위치 점프+선독 캐시, 구간 atomic 찢김(seqlock), 경과시간 속도 점프, 테일 중 플레이헤드 튐, 엔벨로프 no-op undo, JSON int 좁힘 UB, 백업 파일명/회전, 저장 전 백업 파일별 제한, 설정 창 프로젝트 전환, 피치 유지 토글 비활성, 잠금 토글 길이 0 방어, formatTimeMs int64, 뷰 span 경계, 락 안 할당 제거, restore 체인 통째 swap) → 커밋.
+- [ ] **보류한 코덱스 지적(알려진 한계, 나중 단계에서)**: ① 오디오 콜백이 전역 CriticalSection을 잡는 구조(lock-free 커맨드 큐로 개편 — 3단계 패치 버스 작업 때 같이) ② BufferingAudioSource가 디스크 읽기와 같은 락 사용(JUCE 설계) ③ 일시정지 램프 끝난 뒤 블록 나머지만큼 재개 위치 늦음(최대 1블록) ④ 로드 직후 1.5초 플러그인 변경 무시 ⑤ 자동 백업이 재생 중 getStateInformation 호출(DAW도 동일) ⑥ 플러그인 예외 경계 없음 ⑦ 동일 플러그인 두 개 순서 바꿈은 undo가 못 알아봄(이동 UI 없음) ⑧ 저장 상태로 되돌려도 dirty.
+- [ ] 릴리스 `python tools\release.py ... --publish`, 설치 업데이트 확인, 메모리 `project_gocue.md` 현황 갱신.
 
 ---
 

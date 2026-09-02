@@ -44,7 +44,9 @@ public:
             juce::File second;
             expect (BackupManager::copyToBackups (project, now, &second).wasOk());
             expect (second != made);
-            expect (second.getFileName().contains (" 2.gocue"));
+            expectEquals (second.getFileName(), juce::String ("show (Backup 2026-09-02_143000-2).gocue"));
+            expectEquals (BackupManager::timestampOf (second).toMilliseconds(), now.toMilliseconds());   // still rotates
+            expectEquals (BackupManager::timestampOf (root.getChildFile ("x (Backup 2026-09-02_143000-x).gocue")).toMilliseconds(), (juce::int64) 0);
 
             expect (BackupManager::copyToBackups (root.getChildFile ("missing.gocue"), now).failed());
         }

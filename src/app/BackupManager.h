@@ -11,7 +11,11 @@ juce::File backupDirFor (const juce::File& project);
 /** The backup file for 'now': "<dir>/<name> (Backup yyyy-MM-dd_HHmmss).gocue". */
 juce::File backupFileFor (const juce::File& project, juce::Time now);
 
-/** Timestamp parsed from a backup file name, or an invalid (0) Time when the name is not a backup. */
+/** backupFileFor(), or "<name> (Backup yyyy-MM-dd_HHmmss-2).gocue", -3 ... when that already exists. */
+juce::File makeUniqueBackupFile (const juce::File& project, juce::Time now);
+
+/** Timestamp parsed from a backup file name (with or without the "-n" suffix), or an invalid (0) Time
+    when the name is not a backup. */
 juce::Time timestampOf (const juce::File& backup);
 
 /** Copies the saved project file into the backup folder (used right before it is overwritten by a save).

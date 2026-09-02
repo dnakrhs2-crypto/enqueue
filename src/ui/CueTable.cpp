@@ -385,7 +385,7 @@ void CueTable::paintCell (juce::Graphics& g, int rowNumber, int columnId, int wi
                 if (running->lengthSeconds < 0.0)
                     text = juce::String::fromUTF8 ("\xE2\x88\x9E ") + formatSeconds (running->positionSeconds);
                 else
-                    text = "-" + formatSeconds (juce::jmax (0.0, running->lengthSeconds - running->positionSeconds));
+                    text = "-" + formatSeconds (juce::jmax (0.0, running->remainingSeconds));
 
                 colour = juce::Colours::white;
             }

@@ -26,8 +26,9 @@ public:
     struct PlayingCue
     {
         juce::Uuid id;
-        double positionSeconds = 0.0;       // elapsed wall-clock seconds into the cue (all passes)
+        double positionSeconds = 0.0;       // elapsed wall-clock seconds into the cue (all passes, paused time excluded)
         double lengthSeconds = 0.0;         // total wall-clock length at the current rate / trim; -1 = looping forever
+        double remainingSeconds = 0.0;      // wall-clock seconds left at the current rate; -1 = looping forever
         double filePositionSeconds = 0.0;   // audible position inside the file (waveform playhead)
         int passIndex = 0;                  // 0-based loop pass
         bool fadingOut = false;

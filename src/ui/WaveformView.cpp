@@ -203,7 +203,8 @@ float WaveformView::distanceToEnvelope (juce::Point<float> position) const noexc
 void WaveformView::setView (double start, double end)
 {
     const double length = juce::jmax (0.001, fileLength());
-    double span = juce::jlimit (0.02, length, end - start);
+    const double minSpan = juce::jmin (0.02, length);
+    double span = juce::jlimit (minSpan, length, end - start);
     start = juce::jlimit (0.0, length - span, start);
     viewStart = start;
     viewEnd = start + span;
@@ -547,6 +548,7 @@ void WaveformView::mouseDown (const juce::MouseEvent& e)
                     selectedPoint = i;
 
             drag = Drag::envelopePoint;
+            envelopeDirty = true;
             commitEnvelope (false);
             return;
         }
@@ -599,6 +601,7 @@ void WaveformView::mouseDrag (const juce::MouseEvent& e)
 
         p.x = x;
         p.level = levelForY (e.position.y);
+        envelopeDirty = true;
         commitEnvelope (false);
     }
 
@@ -612,11 +615,12 @@ void WaveformView::mouseUp (const juce::MouseEvent&)
         if (onTrimChanged)
             onTrimChanged (cue.audio.startSeconds, cue.audio.endSeconds, true);
     }
-    else if (drag == Drag::envelopePoint)
+    else if (drag == Drag::envelopePoint && envelopeDirty)   // a plain click on a point is not an edit
     {
         commitEnvelope (true);
     }
 
+    envelopeDirty = false;
     drag = Drag::none;
     repaint();
 }

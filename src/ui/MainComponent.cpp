@@ -1036,6 +1036,7 @@ void MainComponent::findMissingFiles()
 
 void MainComponent::newProject()
 {
+    WorkspaceSettingsDialog::closeIfOpen();   // it edits the document that is about to be replaced
     controller.cancelPending();
     pluginWindows.closeAll();
     engine.stopAll();
@@ -1083,6 +1084,7 @@ void MainComponent::openProjectFile (const juce::File& file)
         return;
     }
 
+    WorkspaceSettingsDialog::closeIfOpen();
     controller.cancelPending();
     pluginWindows.closeAll();
     engine.stopAll();
@@ -1175,6 +1177,23 @@ void MainComponent::reconcileChainsAfterRestore (const ProjectSnapshot& snapshot
     if (snapshot.pluginStatesCaptured && ! engine.getMasterChain().matchesStructure (document.masterPlugins))
         errors.addArray (engine.getMasterChain().restore (document.masterPlugins, factory));
 
+    // running players follow the restored model: orphans stop, the others take the restored live values
+    for (const auto& p : engine.getPlayingCues())
+    {
+        const int index = document.cues.indexOf (p.id);
+
+        if (index < 0)
+        {
+            engine.stop (p.id);
+            continue;
+        }
+
+        const auto& cue = document.cues.get (index);
+        engine.setLiveGainDb (p.id, cue.gainDb);
+        engine.setLiveRate (p.id, cue.audio.rate);
+        engine.setLiveRegion (p.id, cue.audio.startSeconds, cue.audio.endSeconds);
+    }
+
     ignorePluginChangesBriefly();   // replaying saved state is not a new edit
     inspector.refreshPlugins();
     PluginDialogs::chainChanged (&engine.getMasterChain());
@@ -1207,9 +1226,10 @@ void MainComponent::backupBeforeSave (const juce::File& file)
         return;
 
     const double nowMs = juce::Time::getMillisecondCounterHiRes();
+    const auto key = file.getFullPathName();
 
-    if (nowMs - lastSaveBackupMs < 60 * 1000.0)   // at most one pre-save backup per minute
-        return;
+    if (const auto it = lastSaveBackupByPath.find (key); it != lastSaveBackupByPath.end() && nowMs - it->second < 60 * 1000.0)
+        return;   // at most one pre-save backup per minute for this file
 
     const auto result = BackupManager::copyToBackups (file, juce::Time::getCurrentTime());
 
@@ -1219,7 +1239,7 @@ void MainComponent::backupBeforeSave (const juce::File& file)
         return;
     }
 
-    lastSaveBackupMs = nowMs;
+    lastSaveBackupByPath[key] = nowMs;
 
     if (s.rotateBackups)
         BackupManager::rotate (BackupManager::backupDirFor (file), juce::Time::getCurrentTime());
@@ -1243,7 +1263,7 @@ void MainComponent::autoBackupIfDue()
     auto project = document.toProject();
     captureLivePluginStates (project);
 
-    const auto target = BackupManager::backupFileFor (document.getFile(), juce::Time::getCurrentTime());
+    const auto target = BackupManager::makeUniqueBackupFile (document.getFile(), juce::Time::getCurrentTime());
     const auto result = ProjectSerializer::save (project, target);
 
     if (result.failed())

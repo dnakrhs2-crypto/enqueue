@@ -33,15 +33,15 @@ inline juce::String formatTimeMs (double seconds, bool withMillis = true)
     if (! (seconds > 0.0))
         seconds = 0.0;
 
-    const int totalMs = (int) std::llround (seconds * 1000.0);
-    const int minutes = totalMs / 60000;
-    const int secs = (totalMs / 1000) % 60;
-    const int millis = totalMs % 1000;
+    const juce::int64 totalMs = (juce::int64) std::llround (seconds * 1000.0);
+    const juce::int64 minutes = totalMs / 60000;
+    const int secs = (int) ((totalMs / 1000) % 60);
+    const int millis = (int) (totalMs % 1000);
 
     if (withMillis)
-        return juce::String::formatted ("%d:%02d.%03d", minutes, secs, millis);
+        return juce::String (minutes) + juce::String::formatted (":%02d.%03d", secs, millis);
 
-    return juce::String::formatted ("%d:%02d", minutes, secs);
+    return juce::String (minutes) + juce::String::formatted (":%02d", secs);
 }
 
 /** Parses "12.5", "1:02.250", "1:02" or "0:00:05" into seconds. Returns -1 when unparsable. */

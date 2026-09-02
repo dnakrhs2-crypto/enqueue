@@ -12,6 +12,7 @@ namespace
     const juce::String backupMarker (" (Backup ");
     const juce::String extension (".gocue");
     const juce::String stampFormat ("%Y-%m-%d_%H%M%S");
+    constexpr int stampLength = 17;   // yyyy-MM-dd_HHmmss
 }
 
 juce::File backupDirFor (const juce::File& project)
@@ -25,6 +26,26 @@ juce::File backupFileFor (const juce::File& project, juce::Time now)
                                                  + now.formatted (stampFormat) + ")" + extension);
 }
 
+juce::File makeUniqueBackupFile (const juce::File& project, juce::Time now)
+{
+    const auto base = backupFileFor (project, now);
+
+    if (! base.existsAsFile())
+        return base;
+
+    const auto stem = project.getFileNameWithoutExtension() + backupMarker + now.formatted (stampFormat);
+
+    for (int n = 2; n < 1000; ++n)
+    {
+        const auto candidate = base.getSiblingFile (stem + "-" + juce::String (n) + ")" + extension);
+
+        if (! candidate.existsAsFile())
+            return candidate;
+    }
+
+    return base.getSiblingFile (stem + "-" + juce::String (juce::Time::currentTimeMillis()) + ")" + extension);
+}
+
 juce::Time timestampOf (const juce::File& backup)
 {
     const auto name = backup.getFileNameWithoutExtension();
@@ -33,9 +54,18 @@ juce::Time timestampOf (const juce::File& backup)
     if (start < 0 || ! name.endsWithChar (')'))
         return juce::Time();
 
-    const auto stamp = name.substring (start + backupMarker.length(), name.length() - 1);   // yyyy-MM-dd_HHmmss
+    const auto inner = name.substring (start + backupMarker.length(), name.length() - 1);   // stamp[-n]
 
-    if (stamp.length() != 17)
+    if (inner.length() < stampLength)
+        return juce::Time();
+
+    const auto stamp = inner.substring (0, stampLength);
+    const auto suffix = inner.substring (stampLength);
+
+    if (suffix.isNotEmpty() && ! (suffix.startsWithChar ('-') && suffix.substring (1).containsOnly ("0123456789") && suffix.length() > 1))
+        return juce::Time();
+
+    if (stamp[4] != '-' || stamp[7] != '-' || stamp[10] != '_')
         return juce::Time();
 
     const int year   = stamp.substring (0, 4).getIntValue();
@@ -45,7 +75,7 @@ juce::Time timestampOf (const juce::File& backup)
     const int minute = stamp.substring (13, 15).getIntValue();
     const int second = stamp.substring (15, 17).getIntValue();
 
-    if (year < 2000 || month < 1 || month > 12 || day < 1 || day > 31)
+    if (year < 2000 || month < 1 || month > 12 || day < 1 || day > 31 || hour > 23 || minute > 59 || second > 59)
         return juce::Time();
 
     return juce::Time (year, month - 1, day, hour, minute, second, 0, true);
@@ -66,10 +96,7 @@ juce::Result copyToBackups (const juce::File& project, juce::Time now, juce::Fil
             return created;
     }
 
-    auto target = backupFileFor (project, now);
-
-    for (int n = 2; target.existsAsFile() && n < 100; ++n)   // same second: never overwrite an earlier backup
-        target = target.getSiblingFile (target.getFileNameWithoutExtension() + " " + juce::String (n) + extension);
+    const auto target = makeUniqueBackupFile (project, now);
 
     if (! project.copyFileTo (target))
         return juce::Result::fail ("Could not write " + target.getFullPathName());
@@ -93,7 +120,14 @@ void rotate (const juce::File& dir, juce::Time now)
             backups.push_back ({ file, time });
     }
 
-    std::sort (backups.begin(), backups.end(), [] (const Entry& a, const Entry& b) { return a.time > b.time; });   // newest first
+    // newest first; same second: the plain name before its "-n" siblings so the first written survives
+    std::sort (backups.begin(), backups.end(), [] (const Entry& a, const Entry& b)
+    {
+        if (a.time != b.time)
+            return a.time > b.time;
+
+        return a.file.getFileName().length() < b.file.getFileName().length();
+    });
 
     constexpr juce::int64 hour = 60 * 60 * 1000;
     constexpr juce::int64 day = 24 * hour;

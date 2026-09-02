@@ -252,8 +252,10 @@ std::vector<PluginSlotState> PluginChain::getStates() const
 
 juce::StringArray PluginChain::restore (const std::vector<PluginSlotState>& states, const Factory& factory)
 {
+    // Build every new slot first (plugin creation can take a while), then swap the whole list under
+    // the lock so a running cue is never heard dry or half-chained meanwhile.
     juce::StringArray errors;
-    clear();
+    std::vector<std::unique_ptr<Slot>> fresh;
 
     for (const auto& state : states)
     {
@@ -263,17 +265,44 @@ juce::StringArray PluginChain::restore (const std::vector<PluginSlotState>& stat
         if (factory)
             instance = factory (state, error);
 
+        auto slot = std::make_unique<Slot>();
+        slot->state = state;
+        slot->bypassed.store (state.bypassed);
+
         if (instance != nullptr)
         {
-            addPlugin (std::move (instance), state);
+            if (state.stateBase64.isNotEmpty())
+            {
+                juce::MemoryOutputStream decoded;
+
+                if (juce::Base64::convertFromBase64 (decoded, state.stateBase64) && decoded.getDataSize() > 0)
+                    instance->setStateInformation (decoded.getData(), (int) decoded.getDataSize());
+            }
+
+            slot->plugin = std::move (instance);
+            prepareSlot (*slot);
+            slot->plugin->addListener (this);   // after restore + prepare: only real user edits count as changes
         }
         else
         {
-            addMissingSlot (state);
             errors.add (state.name + ": " + (error.isNotEmpty() ? error : juce::String ("plugin not available")));
         }
+
+        fresh.push_back (std::move (slot));
     }
 
+    std::vector<std::unique_ptr<Slot>> old;
+
+    {
+        const juce::ScopedLock sl (lock);
+        old.swap (slots);
+        slots.swap (fresh);
+    }
+
+    for (auto& slot : old)
+        destroySlot (std::move (slot));
+
+    notifyChanged();
     return errors;
 }
 

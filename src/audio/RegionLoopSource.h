@@ -15,7 +15,8 @@ namespace gocue
     integrated fade envelope applied in file time on every pass.
 
     Positions live on a virtual timeline in file samples: pass * regionLength + offset. Region and
-    loop settings may change while playing (live trim); they are plain atomics read per chunk.
+    loop settings may change while playing (live trim); the region pair is published with a
+    sequence counter so a reader never sees a torn start / length combination.
     The envelope is fixed for the life of the source (QLab: envelope edits apply on the next start).
 
     Reads happen on whichever thread pulls audio: the disk read-ahead thread in the app, or the
@@ -31,7 +32,7 @@ public:
     juce::int64 getFileLength() const noexcept { return reader->lengthInSamples; }
     int getFileNumChannels() const noexcept { return (int) reader->numChannels; }
 
-    /** Region in file samples. endSample <= 0 or beyond the file means the file end. Any thread. */
+    /** Region in file samples. endSample < 0 or beyond the file means the file end. Any thread. */
     void setRegion (juce::int64 startSample, juce::int64 endSample) noexcept;
     void setPlayCount (int count, bool shouldLoopForever) noexcept;
     /** Ends playback once the given 0-based pass has completed (devamp: "finish this loop"). Any thread. */
@@ -39,8 +40,10 @@ public:
     /** Set before playback starts; not read live. */
     void setEnvelope (const Envelope& newEnvelope);
 
-    juce::int64 getRegionStart() const noexcept  { return regionStart.load (std::memory_order_relaxed); }
-    juce::int64 getRegionLength() const noexcept { return regionLength.load (std::memory_order_relaxed); }
+    /** Consistent snapshot of the region (start, length) in file samples. Any thread. */
+    void getRegion (juce::int64& startSample, juce::int64& lengthSamples) const noexcept;
+    juce::int64 getRegionStart() const noexcept;
+    juce::int64 getRegionLength() const noexcept;
     bool isInfinite() const noexcept;
     int getPassIndexFor (juce::int64 position) const noexcept;
     juce::int64 getOffsetFor (juce::int64 position) const noexcept;
@@ -62,11 +65,13 @@ public:
     bool isLooping() const override { return false; }   // looping is handled internally
 
 private:
+    juce::int64 totalLengthFor (juce::int64 regionLen) const noexcept;
     void applyEnvelope (juce::AudioBuffer<float>& buffer, int startSample, int numSamples,
                         juce::int64 offsetInRegion, juce::int64 regionLen) const;
 
     std::unique_ptr<juce::AudioFormatReader> reader;
     std::atomic<juce::int64> regionStart { 0 }, regionLength { 0 }, nextPosition { 0 };
+    std::atomic<juce::uint32> regionVersion { 0 };   // seqlock: odd while a write is in progress
     std::atomic<int> playCount { 1 }, endAfterPass { -1 };
     std::atomic<bool> loopForever { false }, reachedEnd { false };
     Envelope envelope;
