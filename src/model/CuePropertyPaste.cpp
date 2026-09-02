@@ -54,6 +54,13 @@ void apply (const Cue& source, Cue& target, const Selection& sel)
     if (sel.effects)
         target.plugins = source.plugins;
 
+    if (sel.fade && source.isFade() && target.isFade())
+    {
+        const auto keepTarget = target.fade.targetId;
+        target.fade = source.fade;
+        target.fade.targetId = keepTarget;
+    }
+
     target.sanitise();
 }
 

@@ -33,6 +33,7 @@ namespace
             setup (timeLoops, "시간·루프 (트림·반복·속도·엔벨로프)", true);
             setup (levels, "레벨 (게인·정지 페이드)", true);
             setup (effects, "이펙트 (VST3 인서트 체인)", false);
+            setup (fade, "페이드 (시간·상대·정지·레벨 목표·활성 칸·커브·파라미터 — 대상은 제외)", true);
 
             applyButton.setButtonText (ko ("붙여넣기"));
             applyButton.onClick = [this]
@@ -44,6 +45,7 @@ namespace
                 s.timeLoops = timeLoops.getToggleState();
                 s.levels = levels.getToggleState();
                 s.effects = effects.getToggleState();
+                s.fade = fade.getToggleState();
 
                 if (onApply)
                     onApply (s);
@@ -56,7 +58,7 @@ namespace
             cancelButton.onClick = [this] { closeDialog(); };
             addAndMakeVisible (cancelButton);
 
-            setSize (460, 300);
+            setSize (520, 330);
         }
 
         void resized() override
@@ -65,7 +67,7 @@ namespace
             info.setBounds (area.removeFromTop (22));
             area.removeFromTop (6);
 
-            for (auto* t : { &basics, &timing, &triggers, &timeLoops, &levels, &effects })
+            for (auto* t : { &basics, &timing, &triggers, &timeLoops, &levels, &effects, &fade })
             {
                 t->setBounds (area.removeFromTop (26));
                 area.removeFromTop (2);
@@ -88,7 +90,7 @@ namespace
 
         std::function<void (const Selection&)> onApply;
         juce::Label info;
-        juce::ToggleButton basics, timing, triggers, timeLoops, levels, effects;
+        juce::ToggleButton basics, timing, triggers, timeLoops, levels, effects, fade;
         juce::TextButton applyButton, cancelButton;
     };
 }

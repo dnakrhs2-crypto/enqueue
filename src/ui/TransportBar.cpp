@@ -84,6 +84,22 @@ void TransportBar::setStandbyCue (int index, const Cue* cue)
     cueNumber.setText (juce::String (index + 1), juce::dontSendNotification);
     cueName.setText (cue->name.isNotEmpty() ? cue->name : ko ("(이름 없음)"), juce::dontSendNotification);
 
+    if (cue->isFade())
+    {
+        const auto target = describeFadeTarget ? describeFadeTarget (*cue) : juce::String();
+        cueFile.setText (target.isNotEmpty() ? target : ko ("페이드 대상 없음"), juce::dontSendNotification);
+        cueFile.setColour (juce::Label::textColourId, target.isNotEmpty() ? Palette::dimText : Palette::missing);
+
+        juce::String meta;
+        meta << ko ("페이드 ") << formatSeconds (cue->fade.durationSeconds)
+             << (cue->fade.relative ? ko ("   상대") : ko ("   절대"))
+             << (cue->fade.fadeLevels ? ko ("   레벨") : juce::String())
+             << (cue->fade.fadeRate ? ko ("   속도 → ") + juce::String (cue->fade.rate, 2) : juce::String())
+             << (cue->fade.stopTargetWhenDone ? ko ("   완료 시 정지") : juce::String());
+        cueMeta.setText (meta, juce::dontSendNotification);
+        return;
+    }
+
     if (cue->file == juce::File())
         cueFile.setText (ko ("파일 없음"), juce::dontSendNotification);
     else

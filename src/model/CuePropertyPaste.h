@@ -14,6 +14,7 @@ struct Selection
     bool timeLoops = true;  // trim, loops, rate, envelope
     bool levels = true;     // gain, stop fade
     bool effects = false;   // VST3 chain (the saved slot states; the caller restores the live chain)
+    bool fade = true;       // fade cue settings (duration, mode, goals, active cells, curve, parameters) — never the target
 };
 
 /** Copies the selected groups from 'source' onto 'target'. Identity, number, name, file and cached file facts stay.

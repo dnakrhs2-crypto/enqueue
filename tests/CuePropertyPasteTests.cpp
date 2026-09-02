@@ -133,6 +133,33 @@ public:
             expectEquals ((int) target.plugins.size(), 0);
         }
 
+        beginTest ("fade settings paste between fade cues without touching the target");
+        {
+            Cue from;
+            from.type = CueType::fade;
+            from.fade.targetId = juce::Uuid();
+            from.fade.durationSeconds = 3.0;
+            from.fade.relative = true;
+            from.fade.curve.shape = CurveShape::linear;
+            Cue to;
+            to.type = CueType::fade;
+            const auto keep = juce::Uuid();
+            to.fade.targetId = keep;
+
+            CuePropertyPaste::Selection onlyFade;
+            onlyFade.basics = onlyFade.timing = onlyFade.triggers = onlyFade.timeLoops = onlyFade.levels = false;
+            CuePropertyPaste::apply (from, to, onlyFade);
+            expectWithinAbsoluteError (to.fade.durationSeconds, 3.0, 1e-12);
+            expect (to.fade.relative);
+            expect (to.fade.curve.shape == CurveShape::linear);
+            expect (to.fade.targetId == keep);
+
+            Cue audio;   // an audio target is left alone by the fade group
+            CuePropertyPaste::apply (from, audio, onlyFade);
+            expect (audio.isAudio());
+            expectWithinAbsoluteError (audio.fade.durationSeconds, 5.0, 1e-12);
+        }
+
         beginTest ("the new-cue template copies settings but not identity, name, number, file, hotkey or wall clock");
         {
             WorkspaceSettings settings;

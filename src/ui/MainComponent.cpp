@@ -85,6 +85,16 @@ MainComponent::MainComponent (AudioEngine& e, AppSettings& s, juce::ApplicationC
     };
     table.onEditNotes = [this] (int) { inspector.showNotes(); };
     table.hasPlayed = [this] (const juce::Uuid& id) { return controller.hasPlayed (id); };
+    transport.describeFadeTarget = [this] (const Cue& fadeCue) -> juce::String
+    {
+        const int index = fadeCue.fade.targetId.isNull() ? -1 : document.cues.indexOf (fadeCue.fade.targetId);
+
+        if (index < 0)
+            return {};
+
+        const auto& t = document.cues.get (index);
+        return juce::String::fromUTF8 ("\xE2\x86\x92 ") + (t.number.isNotEmpty() ? t.number + " " : "#" + juce::String (index + 1) + " ") + t.name;
+    };
     table.onEditDuration = [this] (int) { inspector.showTimeTab(); };
 
     inspector.onOpenPluginManager = [this] { showPluginManager(); };
