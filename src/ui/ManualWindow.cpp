@@ -34,7 +34,7 @@ public:
         }
 
         addAndMakeVisible (tabs);
-        setSize (900, 700);
+        setSize (960, 720);
     }
 
     void showSection (int index)
@@ -54,7 +54,7 @@ public:
     }
 
 private:
-    juce::TabbedComponent tabs { juce::TabbedButtonBar::TabsAtLeft };
+    juce::TabbedComponent tabs { juce::TabbedButtonBar::TabsAtTop };   // Korean tab names stay horizontal
 };
 
 //==============================================================================
@@ -193,7 +193,7 @@ R"(큐 종류 — 모두 큐 메뉴(또는 단축키)로 추가합니다
   시작 · 정지 · 일시정지 · 로드 · 리셋 · 이동(goto: 플레이헤드를 다른 큐로) · 대기(초) · 메모 · 활성화 · 비활성화 · 대상 변경.
   대상은 어느 리스트·카트의 큐라도 됩니다. 자기 자신을 되돌아 부르는 순환은 실행하지 않습니다.
 
-■ 마이크 큐 (Ctrl+M)
+■ 마이크 큐 (Ctrl+6)
   장치 입력 채널(입력 탭: 첫 입력 1~32, 채널 수)을 레벨 매트릭스 · 인서트 · 패치로 보냅니다. 정지할 때까지 계속.
   프로젝트에 마이크 큐가 있으면 필요한 입력 채널을 자동으로 엽니다. 재생 중에 입력 채널을 바꾸면 다음 시작부터 적용.
 
@@ -287,7 +287,7 @@ R"(출력 · 패치 · 플러그인
   순서: 큐 인서트 → 레벨 매트릭스 → 큐 출력 인서트 → 라우팅 + 패치 메인 → 장치 출력 인서트 → 마스터 버스 인서트(장치 1-2) → 장치.
   라우팅 변경은 재생 중에도 즉시(10 ms 램프) 반영됩니다. 재생 중인 큐의 패치 변경은 다음 시작부터.
 
-■ 마스터 버스 인서트 (Ctrl+M 메뉴 항목 "마스터 버스 인서트")
+■ 마스터 버스 인서트 (Ctrl+M, 오디오 메뉴)
   장치 출력 1-2에 걸리는 마지막 VST3 체인.
 
 ■ VST3 플러그인 관리 (Ctrl+P)
@@ -333,7 +333,7 @@ R"(단축키 한눈에
 
 큐 추가
   Insert 오디오 큐 · Ctrl+7 페이드 큐 · Ctrl+8 디밴프 큐 · Ctrl+0 그룹 큐 · Ctrl+G 선택 묶기 · Ctrl+Shift+G 그룹 해제
-  Ctrl+9 제어 큐 · Ctrl+M 마이크 큐 · Ctrl+Shift+E 시퀀스 녹음 시작/정지
+  Ctrl+9 제어 큐 · Ctrl+6 마이크 큐 · Ctrl+Shift+E 시퀀스 녹음 시작/정지
 
 편집
   Ctrl+Z / Ctrl+Y 실행 취소 / 다시 실행 · Delete 삭제 · Ctrl+D 복제 · Ctrl+↑/↓ 순서 · Ctrl+A 모두 선택

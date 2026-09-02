@@ -500,7 +500,7 @@ void MainComponent::getCommandInfo (juce::CommandID commandID, juce::Application
 
         case CommandIDs::addMicCue:
             result.setInfo (ko ("마이크 큐 추가"), ko ("장치 입력을 레벨 매트릭스·인서트·패치로 보내는 큐 (정지할 때까지)"), cueMenu, 0);
-            result.addDefaultKeypress ('M', ModifierKeys::commandModifier);
+            result.addDefaultKeypress ('6', ModifierKeys::commandModifier);   // Ctrl+M is the master bus inserts
             result.setActive (canEdit);
             break;
 
