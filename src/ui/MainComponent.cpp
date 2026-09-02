@@ -692,7 +692,7 @@ void MainComponent::getCommandInfo (juce::CommandID commandID, juce::Application
             break;
 
         case CommandIDs::pasteCueProperties:
-            result.setInfo (ko ("큐 속성 붙여넣기..."), ko ("복사한 큐의 속성(색·시간·트리거·트림·레벨·이펙트)만 선택 큐들에 적용"), editMenu, 0);
+            result.setInfo (ko ("큐 속성 붙여넣기..."), ko ("복사한 큐의 속성(색·시간·트리거·트림·레벨·플러그인)만 선택 큐들에 적용"), editMenu, 0);
             result.addDefaultKeypress ('V', ModifierKeys::commandModifier | ModifierKeys::shiftModifier);
             result.setActive (canEdit && hasSelection && ! clipboard.cues.empty());
             break;
@@ -710,7 +710,7 @@ void MainComponent::getCommandInfo (juce::CommandID commandID, juce::Application
             break;
 
         case CommandIDs::saveCueTemplate:
-            result.setInfo (ko ("선택 큐를 새 큐 기본값으로"), ko ("이후 추가하는 큐가 이 큐의 설정(페이드·게인·색·트리거·이펙트 등)을 물려받음 (프로젝트에 저장)"), cueMenu, 0);
+            result.setInfo (ko ("선택 큐를 새 큐 기본값으로"), ko ("이후 추가하는 큐가 이 큐의 설정(페이드·게인·색·트리거·플러그인 등)을 물려받음 (프로젝트에 저장)"), cueMenu, 0);
             result.setActive (canEdit && hasSelection);
             break;
 

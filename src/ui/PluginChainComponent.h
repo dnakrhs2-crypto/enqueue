@@ -58,7 +58,14 @@ private:
     juce::String ownerName;
 
     juce::Viewport viewport;
-    juce::Component strip;
+    /** Holds the slot views and paints the arrows between them (the processing order). */
+    struct Strip : public juce::Component
+    {
+        int numSlots = 0;
+        void paint (juce::Graphics& g) override;
+    };
+
+    Strip strip;
     std::vector<std::unique_ptr<SlotView>> slotViews;
     juce::TextButton addButton, manageButton;
     juce::Label emptyLabel;

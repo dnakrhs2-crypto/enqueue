@@ -1013,7 +1013,7 @@ private:
 };
 
 //==============================================================================
-/** Tab "이펙트": the cue's VST3 insert chain. */
+/** Tab "플러그인": the cue's VST3 insert chain. */
 //==============================================================================
 /** 레벨 tab: output patch + the level matrix (main / inputs / outputs / crosspoints). */
 class CueInspector::LevelsPanel : public juce::Component
@@ -1990,7 +1990,7 @@ public:
 
         if (chain == nullptr || chain->getNumSlots() == 0)
         {
-            hint.setText (ko ("대상 큐에 VST3 인서트가 없습니다 (대상의 이펙트 탭에서 추가)"), juce::dontSendNotification);
+            hint.setText (ko ("대상 큐에 VST3 인서트가 없습니다 (대상의 플러그인 탭에서 추가)"), juce::dontSendNotification);
             layoutRows();
             return;
         }
@@ -3029,7 +3029,7 @@ public:
     EffectsPanel (ProjectDocument& doc, AudioEngine& e, PluginWindowManager& windows)
         : document (doc), cues (doc.cues), engine (e), chainStrip (e, windows)
     {
-        styleLabel (hint, ko ("이 큐만 통과하는 VST3 인서트, 번호 순서대로 직렬 처리 (1번을 거친 소리가 2번으로). < > 로 순서 변경. 신호 흐름: 파일 → 페이드 → 게인 → 인서트 → 믹스"), 12.0f);
+        styleLabel (hint, ko ("이 큐만 통과하는 VST3 플러그인 — ①→②→③ 순서대로 직렬 처리(1번을 거친 소리가 2번으로). < > 로 순서 변경, 활성/비활성으로 켜고 끔. 신호 흐름: 파일 → 페이드 → 게인 → 플러그인 → 믹스"), 12.0f);
         addAndMakeVisible (hint);
 
         chainStrip.performEdit = [this] (const juce::String& name, const std::function<void()>& edit)
@@ -3199,7 +3199,7 @@ void CueInspector::rebuildTabs (int wanted)
         tabs.addTab (ko ("레벨"), Palette::panel, levels, false);
         tabs.addTab (ko ("트림"), Palette::panel, trim, false);
         tabs.addTab (ko ("트리거"), Palette::panel, triggers, false);
-        tabs.addTab (ko ("이펙트"), Palette::panel, effects, false);
+        tabs.addTab (ko ("플러그인"), Palette::panel, effects, false);
         tabs.setCurrentTabIndex (1);
     }
     else if (wanted == 4)
@@ -3239,7 +3239,7 @@ void CueInspector::rebuildTabs (int wanted)
         tabs.addTab (ko ("레벨"), Palette::panel, levels, false);
         tabs.addTab (ko ("트림"), Palette::panel, trim, false);
         tabs.addTab (ko ("트리거"), Palette::panel, triggers, false);
-        tabs.addTab (ko ("이펙트"), Palette::panel, effects, false);
+        tabs.addTab (ko ("플러그인"), Palette::panel, effects, false);
         tabs.setCurrentTabIndex (0);
     }
 }

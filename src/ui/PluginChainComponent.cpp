@@ -8,7 +8,7 @@ namespace gocue
 namespace
 {
     constexpr int slotWidth = 172;
-    constexpr int slotGap = 6;
+    constexpr int slotGap = 26;   // room for the arrow between slots
     constexpr int slotHeight = 54;
 }
 
@@ -28,7 +28,7 @@ public:
         if (missing)
             title = ko ("[없음] ") + title;
 
-        name.setText (juce::String (slotIndex + 1) + ko ("번 ") + title, juce::dontSendNotification);
+        name.setText (title, juce::dontSendNotification);   // the number sits in the badge on the left
         name.setFont (juce::Font (juce::FontOptions (13.0f, juce::Font::bold)));
         name.setColour (juce::Label::textColourId, missing ? Palette::missing : Palette::text);
         name.setMinimumHorizontalScale (0.8f);
@@ -51,11 +51,12 @@ public:
         later.onClick = [this] { owner.moveSlot (index, index + 1); };
         addAndMakeVisible (later);
 
-        bypass.setButtonText ("B");
-        bypass.setTooltip (ko ("바이패스"));
-        bypass.setClickingTogglesState (true);
-        bypass.setToggleState (slot.bypassed.load(), juce::dontSendNotification);
-        bypass.setColour (juce::TextButton::buttonOnColourId, Palette::fadingOut);
+        // 활성 (green) / 비활성 (orange): the state is the label and the colour
+        const bool bypassed = slot.bypassed.load();
+        bypass.setButtonText (bypassed ? ko ("비활성") : ko ("활성"));
+        bypass.setTooltip (ko ("누르면 활성 ↔ 비활성 (비활성 = 소리가 이 플러그인을 건너뜀)"));
+        bypass.setColour (juce::TextButton::buttonColourId, bypassed ? Palette::fadingOut : Palette::playing);
+        bypass.setColour (juce::TextButton::textColourOffId, juce::Colours::white);
         bypass.setWantsKeyboardFocus (false);
         bypass.onClick = [this] { owner.toggleBypass (index); };
         addAndMakeVisible (bypass);
@@ -84,9 +85,10 @@ public:
         top.removeFromRight (2);
         earlier.setBounds (top.removeFromRight (22));
         top.removeFromRight (4);
+        top.removeFromLeft (24);   // the number badge
         name.setBounds (top);
         area.removeFromTop (2);
-        bypass.setBounds (area.removeFromLeft (28));
+        bypass.setBounds (area.removeFromLeft (54));
         area.removeFromLeft (4);
         remove.setBounds (area.removeFromRight (28));
         area.removeFromRight (4);
@@ -99,6 +101,14 @@ public:
         g.fillRoundedRectangle (getLocalBounds().toFloat(), 4.0f);
         g.setColour (Palette::outline);
         g.drawRoundedRectangle (getLocalBounds().toFloat().reduced (0.5f), 4.0f, 1.0f);
+
+        // the processing order: a numbered badge
+        const auto badge = juce::Rectangle<float> (5.0f, 5.0f, 18.0f, 18.0f);
+        g.setColour (missing ? Palette::missing : Palette::standby);
+        g.fillEllipse (badge);
+        g.setColour (juce::Colours::white);
+        g.setFont (juce::Font (juce::FontOptions (12.0f, juce::Font::bold)));
+        g.drawText (juce::String (index + 1), badge, juce::Justification::centred, false);
     }
 
     void mouseDoubleClick (const juce::MouseEvent&) override
@@ -116,6 +126,21 @@ private:
 };
 
 //==============================================================================
+void PluginChainComponent::Strip::paint (juce::Graphics& g)
+{
+    // an arrow in every gap: the sound leaves slot n and enters slot n + 1
+    g.setColour (Palette::dimText);
+
+    for (int i = 1; i < numSlots; ++i)
+    {
+        const float x = (float) (i * slotWidth + (i - 1) * slotGap) + (float) slotGap * 0.5f;
+        const float y = (float) slotHeight * 0.5f;
+        juce::Path arrow;
+        arrow.addTriangle (x - 5.0f, y - 6.0f, x + 5.0f, y, x - 5.0f, y + 6.0f);
+        g.fillPath (arrow);
+    }
+}
+
 PluginChainComponent::PluginChainComponent (AudioEngine& e, PluginWindowManager& w)
     : engine (e), windows (w)
 {
@@ -182,8 +207,9 @@ void PluginChainComponent::refresh()
             slotViews.push_back (std::move (view));
         }
 
+        strip.numSlots = numSlots;
         strip.setSize (juce::jmax (1, numSlots * (slotWidth + slotGap)), slotHeight);
-        emptyLabel.setText (numSlots == 0 ? ko ("인서트 없음 - [+ 플러그인]으로 VST3를 추가하세요") : juce::String(),
+        emptyLabel.setText (numSlots == 0 ? ko ("플러그인 없음 - [+ 플러그인]으로 추가하세요 (①→②→③ 순서대로 직렬 처리)") : juce::String(),
                             juce::dontSendNotification);
         emptyLabel.setVisible (numSlots == 0);
     }
@@ -335,7 +361,7 @@ void PluginChainComponent::moveSlot (int from, int to)
         }
 
         auto* target = safeThis->chain;
-        safeThis->runEdit (ko ("이펙트 순서 변경"), [target, from, to] { target->movePlugin (from, to); });
+        safeThis->runEdit (ko ("플러그인 순서 변경"), [target, from, to] { target->movePlugin (from, to); });
         safeThis->refresh();
     });
 }
