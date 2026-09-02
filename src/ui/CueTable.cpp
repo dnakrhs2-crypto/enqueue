@@ -183,15 +183,20 @@ void CueTable::paintCell (juce::Graphics& g, int rowNumber, int columnId, int wi
             break;
 
         case colDuration:
-            if (const auto* running = findPlaying (cue.id); running != nullptr && running->lengthSeconds > 0.0)
+            if (const auto* running = findPlaying (cue.id); running != nullptr && running->lengthSeconds != 0.0)
             {
-                // while running: time remaining, counting down
-                text = "-" + formatSeconds (juce::jmax (0.0, running->lengthSeconds - running->positionSeconds));
+                // while running: time remaining, counting down (or elapsed while looping forever)
+                if (running->lengthSeconds < 0.0)
+                    text = juce::String::fromUTF8 ("\xE2\x88\x9E ") + formatSeconds (running->positionSeconds);
+                else
+                    text = "-" + formatSeconds (juce::jmax (0.0, running->lengthSeconds - running->positionSeconds));
+
                 colour = juce::Colours::white;
             }
             else
             {
-                text = formatSeconds (cue.durationSeconds);
+                const double effective = cue.effectiveLength();
+                text = effective < 0.0 ? juce::String::fromUTF8 ("\xE2\x88\x9E") : formatSeconds (effective > 0.0 ? effective : cue.durationSeconds);
             }
 
             justification = juce::Justification::centredRight;

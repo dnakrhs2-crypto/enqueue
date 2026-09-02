@@ -2,6 +2,7 @@
 
 #include "audio/FadeEnvelope.h"
 #include "audio/PluginChain.h"
+#include "audio/RegionLoopSource.h"
 #include "model/Cue.h"
 
 #include <juce_audio_devices/juce_audio_devices.h>
@@ -14,33 +15,37 @@ namespace gocue
 {
 
 /** One playing instance of a cue:
-    file streaming -> resampling to the device rate -> fade envelope -> cue gain -> cue plugin chain.
+    file region / loops / integrated envelope (RegionLoopSource, file time) -> disk read-ahead ->
+    resampling to the device rate at the cue's playback rate -> stop-fade / pause gates -> cue gain ->
+    cue plugin chain.
 
-    Created, prepared and started on the message thread; renderNextBlock() runs on the
-    audio thread. Control requests (stop / fade-out) are passed through atomics.
-    After the file ends (or a fade-out completes) the chain keeps running for its reported
+    Created, prepared and started on the message thread; renderNextBlock() runs on the audio thread.
+    Control requests (stop / fade-out / pause / rate / trim) are passed through atomics.
+    After the last pass ends (or a fade-out completes) the chain keeps running for its reported
     tail so reverbs and delays are not cut off; a hard stop skips the tail. */
 class CuePlayer
 {
 public:
-    /** Every stop is de-clicked with a ramp of at least this length. */
+    /** Every stop / pause is de-clicked with a ramp of at least this length. */
     static constexpr int stopDeclickMs = 5;
 
     /** Opens the cue's file; check isValid() afterwards.
-        @param readAheadThread   thread used for disk read-ahead; ignored when readAheadSamples == 0
-                                 (synchronous reads, used by the offline tests). */
+        @param readAheadThread    thread used for disk read-ahead; ignored when readAheadSamples == 0
+                                  (synchronous reads, used by the offline tests).
+        @param startOffsetSeconds where to begin, in file seconds after the region start (pass 0). */
     CuePlayer (const Cue& cue, juce::AudioFormatManager& formats,
-               juce::TimeSliceThread* readAheadThread, int readAheadSamples);
+               juce::TimeSliceThread* readAheadThread, int readAheadSamples,
+               double startOffsetSeconds = 0.0);
     ~CuePlayer();
 
-    bool isValid() const noexcept                      { return readerSource != nullptr; }
+    bool isValid() const noexcept                        { return resampler != nullptr; }
     const juce::String& getErrorMessage() const noexcept { return errorMessage; }
 
     /** Must be called before the first render and again whenever the device settings change.
         Not audio-thread safe. */
     void prepare (double sampleRate, int blockSize);
 
-    /** Arms playback from the beginning with the cue's fade-in.
+    /** Arms playback (from the start offset given to the constructor).
         Call after prepare() and before the player is visible to the audio thread. */
     void start();
 
@@ -50,9 +55,19 @@ public:
 
     /** De-clicked immediate stop, no plugin tail. Any thread. */
     void requestStop() noexcept;
-
     /** Fade to silence over 'milliseconds', then stop (plugin tail still rings out). Any thread. */
     void requestFadeOut (int milliseconds) noexcept;
+    /** De-clicked pause: the position freezes; plugins keep running on silence. Any thread. */
+    void requestPause() noexcept;
+    void requestResume() noexcept;
+    /** Finish the pass that is audible now, then end (devamp of a looping cue). Message thread. */
+    void requestFinishCurrentPass() noexcept;
+
+    /** Live trim from the inspector. A new end before the audible position ends the cue at once
+        (with the plugin tail); a new start applies from the next pass. Message thread. */
+    void setLiveRegion (double startSeconds, double endSeconds) noexcept;
+    /** Live playback rate (varispeed). Any thread. */
+    void setLiveRate (double rate) noexcept;
 
     /** Audio thread. Overwrites channels 0-1 of buffer[0, numSamples) with this player's output.
         Returns false once the player has finished; the block still contains its final audio. */
@@ -62,21 +77,32 @@ public:
     const Cue& getCue() const noexcept            { return cue; }
     bool hasFinished() const noexcept             { return finished.load (std::memory_order_relaxed); }
     bool isFadingOut() const noexcept             { return fadingOut.load (std::memory_order_relaxed); }
+    bool isPaused() const noexcept                { return pausedFlag.load (std::memory_order_relaxed); }
+    /** Elapsed wall-clock seconds into the cue (all passes, at the current rate). */
     double getPositionSeconds() const noexcept    { return positionSeconds.load (std::memory_order_relaxed); }
-    double getLengthSeconds() const noexcept      { return lengthSeconds; }
+    /** Total wall-clock length of the cue at the current rate and trim; -1 while looping forever. */
+    double getLengthSeconds() const noexcept;
+    /** Absolute position inside the file (for the waveform playhead). */
+    double getFilePositionSeconds() const noexcept { return filePositionSeconds.load (std::memory_order_relaxed); }
+    int getPassIndex() const noexcept             { return passIndex.load (std::memory_order_relaxed); }
 
     juce::int64 getStartOrder() const noexcept    { return startOrder; }
     void setStartOrder (juce::int64 order) noexcept { startOrder = order; }
 
 private:
+    void updatePositionInfo (double rate) noexcept;
+
     Cue cue;
     juce::String errorMessage;
-    std::unique_ptr<juce::AudioFormatReaderSource> readerSource;
-    juce::AudioTransportSource transport;
-    FadeEnvelope envelope;
+    std::unique_ptr<RegionLoopSource> source;
+    std::unique_ptr<juce::BufferingAudioSource> readAhead;     // null on the synchronous (test) path
+    std::unique_ptr<juce::ResamplingAudioSource> resampler;
+    FadeEnvelope envelope;        // stop fades and de-clicks
+    FadeEnvelope pauseGate;       // pause / resume ramps
     float gainLinear = 1.0f;
-    double lengthSeconds = 0.0;
+    double fileSampleRate = 44100.0;
     double currentSampleRate = 44100.0;
+    juce::int64 startOffsetSamples = 0;
     juce::int64 startOrder = 0;
 
     std::atomic<PluginChain*> chain { nullptr };
@@ -85,9 +111,19 @@ private:
     std::atomic<bool> stopRequested { false };
     std::atomic<bool> finished { false };
     std::atomic<bool> fadingOut { false };
+    std::atomic<bool> pauseRequested { false };
+    std::atomic<bool> resumeRequested { false };
+    std::atomic<bool> pausedFlag { false };
+    std::atomic<double> liveRate { 1.0 };
     std::atomic<double> positionSeconds { 0.0 };
+    std::atomic<double> filePositionSeconds { 0.0 };
+    std::atomic<int> passIndex { 0 };
 
     // audio-thread state
+    double virtualPosition = 0.0;     // file samples on the source's virtual timeline (audible)
+    double lastRatio = 0.0;
+    bool pausing = false;
+    bool paused = false;
     bool inTail = false;
     juce::int64 tailSamplesLeft = 0;
 

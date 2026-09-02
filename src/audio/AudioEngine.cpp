@@ -59,11 +59,11 @@ void AudioEngine::shutdown()
 }
 
 //==============================================================================
-bool AudioEngine::play (const Cue& cue, juce::String* errorMessage)
+bool AudioEngine::play (const Cue& cue, const PlayOptions& options, juce::String* errorMessage)
 {
     auto player = std::make_unique<CuePlayer> (cue, formatManager,
                                                readAheadSamples > 0 ? &readAheadThread : nullptr,
-                                               readAheadSamples);
+                                               readAheadSamples, options.startSeconds);
 
     if (! player->isValid())
     {
@@ -129,6 +129,98 @@ void AudioEngine::fadeOutAndStopAll()
             p->requestFadeOut (p->getCue().fadeOutMs);
 }
 
+void AudioEngine::fadeOutAndStop (const juce::Uuid& cueId, int milliseconds)
+{
+    const juce::ScopedLock sl (lock);
+
+    for (auto& p : players)
+        if (p->getCueId() == cueId && ! p->hasFinished())
+            p->requestFadeOut (milliseconds);
+}
+
+void AudioEngine::fadeOutAndStopAll (int milliseconds)
+{
+    const juce::ScopedLock sl (lock);
+
+    for (auto& p : players)
+        if (! p->hasFinished())
+            p->requestFadeOut (milliseconds);
+}
+
+void AudioEngine::pause (const juce::Uuid& cueId)
+{
+    const juce::ScopedLock sl (lock);
+
+    for (auto& p : players)
+        if (p->getCueId() == cueId && ! p->hasFinished())
+            p->requestPause();
+}
+
+void AudioEngine::resume (const juce::Uuid& cueId)
+{
+    const juce::ScopedLock sl (lock);
+
+    for (auto& p : players)
+        if (p->getCueId() == cueId && ! p->hasFinished())
+            p->requestResume();
+}
+
+void AudioEngine::pauseAll()
+{
+    const juce::ScopedLock sl (lock);
+
+    for (auto& p : players)
+        if (! p->hasFinished())
+            p->requestPause();
+}
+
+void AudioEngine::resumeAll()
+{
+    const juce::ScopedLock sl (lock);
+
+    for (auto& p : players)
+        if (! p->hasFinished())
+            p->requestResume();
+}
+
+bool AudioEngine::isPaused (const juce::Uuid& cueId) const
+{
+    const juce::ScopedLock sl (lock);
+
+    for (auto& p : players)
+        if (p->getCueId() == cueId && ! p->hasFinished() && p->isPaused())
+            return true;
+
+    return false;
+}
+
+void AudioEngine::finishCurrentPass (const juce::Uuid& cueId)
+{
+    const juce::ScopedLock sl (lock);
+
+    for (auto& p : players)
+        if (p->getCueId() == cueId && ! p->hasFinished())
+            p->requestFinishCurrentPass();
+}
+
+void AudioEngine::setLiveRegion (const juce::Uuid& cueId, double startSeconds, double endSeconds)
+{
+    const juce::ScopedLock sl (lock);
+
+    for (auto& p : players)
+        if (p->getCueId() == cueId && ! p->hasFinished())
+            p->setLiveRegion (startSeconds, endSeconds);
+}
+
+void AudioEngine::setLiveRate (const juce::Uuid& cueId, double rate)
+{
+    const juce::ScopedLock sl (lock);
+
+    for (auto& p : players)
+        if (p->getCueId() == cueId && ! p->hasFinished())
+            p->setLiveRate (rate);
+}
+
 bool AudioEngine::isPlaying (const juce::Uuid& cueId) const
 {
     const juce::ScopedLock sl (lock);
@@ -154,7 +246,10 @@ std::vector<AudioEngine::PlayingCue> AudioEngine::getPlayingCues() const
         info.id = p->getCueId();
         info.positionSeconds = p->getPositionSeconds();
         info.lengthSeconds = p->getLengthSeconds();
+        info.filePositionSeconds = p->getFilePositionSeconds();
+        info.passIndex = p->getPassIndex();
         info.fadingOut = p->isFadingOut();
+        info.paused = p->isPaused();
         result.push_back (info);
     }
 

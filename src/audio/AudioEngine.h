@@ -26,9 +26,17 @@ public:
     struct PlayingCue
     {
         juce::Uuid id;
-        double positionSeconds = 0.0;
-        double lengthSeconds = 0.0;
+        double positionSeconds = 0.0;       // elapsed wall-clock seconds into the cue (all passes)
+        double lengthSeconds = 0.0;         // total wall-clock length at the current rate / trim; -1 = looping forever
+        double filePositionSeconds = 0.0;   // audible position inside the file (waveform playhead)
+        int passIndex = 0;                  // 0-based loop pass
         bool fadingOut = false;
+        bool paused = false;
+    };
+
+    struct PlayOptions
+    {
+        double startSeconds = 0.0;          // file seconds after the region start to begin at (pass 0)
     };
 
     /** @param readAheadSamples  disk read-ahead per cue; 0 = synchronous reads (offline tests). */
@@ -49,13 +57,28 @@ public:
 
     /** Fires a cue. If the same cue is already running it is restarted from the top.
         Returns false (with a message) when the file cannot be opened. */
-    bool play (const Cue& cue, juce::String* errorMessage = nullptr);
+    bool play (const Cue& cue, juce::String* errorMessage = nullptr) { return play (cue, PlayOptions(), errorMessage); }
+    bool play (const Cue& cue, const PlayOptions& options, juce::String* errorMessage = nullptr);
     /** De-clicked immediate stop of every instance of this cue (no plugin tail). */
     void stop (const juce::Uuid& cueId);
     void stopAll();
     /** Fades the cue out over its own fadeOutMs, then stops it. */
     void fadeOutAndStop (const juce::Uuid& cueId);
     void fadeOutAndStopAll();
+    /** Fades the cue out over 'milliseconds', then stops it (panic). */
+    void fadeOutAndStop (const juce::Uuid& cueId, int milliseconds);
+    void fadeOutAndStopAll (int milliseconds);
+    /** De-clicked pause / resume. */
+    void pause (const juce::Uuid& cueId);
+    void resume (const juce::Uuid& cueId);
+    void pauseAll();
+    void resumeAll();
+    bool isPaused (const juce::Uuid& cueId) const;
+    /** Lets a looping cue finish the pass that is audible now, then end (devamp). */
+    void finishCurrentPass (const juce::Uuid& cueId);
+    /** Live trim / rate for a running cue (the inspector while it plays). */
+    void setLiveRegion (const juce::Uuid& cueId, double startSeconds, double endSeconds);
+    void setLiveRate (const juce::Uuid& cueId, double rate);
 
     bool isPlaying (const juce::Uuid& cueId) const;
     std::vector<PlayingCue> getPlayingCues() const;

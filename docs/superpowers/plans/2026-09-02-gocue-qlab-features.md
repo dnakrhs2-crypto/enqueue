@@ -37,10 +37,10 @@ class ProjectHistory { public:
 void perform (const juce::String& name, const std::function<void (Project&)>& edit, const juce::String& coalesceKey = {});
 bool undo(); bool redo();  ProjectHistory history;
 ```
-- [ ] 테스트: push→undo→redo 왕복, 200개 상한, coalesce(같은 key 700 ms 내 두 번 push는 하나), undo 후 새 편집이 redo 스택을 비움.
-- [ ] 구현 + `ProjectDocument::perform`은 `toProject()` 스냅샷 → edit → `adopt`가 아닌 in-place 반영(`cues.replaceAll` + master) → dirty.
-- [ ] MainComponent: 이름 편집·페이드·게인·추가·삭제·복제·이동·드롭·플러그인 슬롯 추가/삭제/이동/바이패스 전부 `perform`으로. 편집 메뉴 "실행 취소 (Ctrl+Z)/다시 실행 (Ctrl+Y)"에 동작 이름 표시.
-- [ ] 빌드·테스트·커밋 `feat: undo/redo via project snapshots`.
+- [x] 테스트: push→undo→redo 왕복, 200개 상한, coalesce(같은 key 700 ms 내 두 번 push는 하나), undo 후 새 편집이 redo 스택을 비움.
+- [x] 구현 + `ProjectDocument::perform`은 `toProject()` 스냅샷 → edit → `adopt`가 아닌 in-place 반영(`cues.replaceAll` + master) → dirty.
+- [x] MainComponent: 이름 편집·페이드·게인·추가·삭제·복제·이동·드롭·플러그인 슬롯 추가/삭제/이동/바이패스 전부 `perform`으로. 편집 메뉴 "실행 취소 (Ctrl+Z)/다시 실행 (Ctrl+Y)"에 동작 이름 표시.
+- [x] 빌드·테스트·커밋 `feat: undo/redo via project snapshots`. (2026-09-02, 469 tests)
 
 ### Task 1.2: 모델 확장 1차 + 파일 형식 v2 (트림·루프·엔벨로프·정지 페이드)
 **Files:** Modify `src/model/Cue.h/.cpp`, `src/model/ProjectSerializer.h/.cpp`; Create `src/model/Envelope.h`; Test `tests/ProjectSerializerTests.cpp`, `tests/EnvelopeTests.cpp`.
@@ -56,9 +56,9 @@ struct AudioCueData { double startSeconds = 0; double endSeconds = -1; int playC
 double Cue::regionLength() const;      // end(-1이면 duration) - start, 최소 0
 double Cue::effectiveLength() const;   // regionLength / rate * playCount (무한이면 -1)
 ```
-- [ ] 테스트: v1 JSON(fadeInMs 250, fadeOutMs 1500) 로드 → envelope 4점(0,0)(0.25,1)(L-1.5,1)(L,0), v2 왕복(start/end/playCount/infinite/rate/envelope 점), `levelAt` 선형·부드러운(코사인) 보간·lockToTrim 늘림.
-- [ ] 구현: `currentVersion = 2`, 저장 시 `audio{}` 객체, 로드 시 v1 필드 변환.
-- [ ] 빌드·테스트·커밋 `feat: audio cue trim/loop/envelope model, project v2`.
+- [x] 테스트: v1 JSON(fadeInMs 250) 로드 → 페이드인 엔벨로프 2점(0,0)(0.25,1) (fadeOutMs는 정지 페이드로 유지 — v1에서도 파일 끝 페이드가 아니라 F키 페이드였음), v2 왕복, `levelAt` 선형·부드러운 보간·lockToTrim 늘림.
+- [x] 구현: `currentVersion = 2`, 저장 시 `audio{}` 객체, 로드 시 v1 필드 변환.
+- [x] 빌드·테스트·커밋 (1.1과 함께 커밋).
 
 ### Task 1.3: 엔진 — RegionLoopSource + 새 플레이어 경로 (1~4 기반)
 **Files:** Create `src/audio/RegionLoopSource.h/.cpp`; Modify `src/audio/CuePlayer.h/.cpp`, `src/audio/AudioEngine.h/.cpp`; Test `tests/RegionLoopSourceTests.cpp`, `tests/AudioEngineTests.cpp`.
@@ -76,9 +76,9 @@ public:  RegionLoopSource (std::unique_ptr<juce::AudioFormatReader> reader);
 struct PlayOptions { double startSeconds = 0; bool isPreview = false; };
 bool AudioEngine::play (const Cue&, PlayOptions = {}, juce::String* error = nullptr);
 ```
-- [ ] 테스트(오프라인 렌더): 트림 [0.2, 0.5]s만 재생되고 끝남(길이 0.3 s ± 1블록), playCount 3 → 총 길이 0.9 s, infinite → 5 s 렌더해도 안 끝남 + devamp(wholeCue) 후 회차 끝에서 종료, 엔벨로프 (0,0)(0.1,1)(0.2,1)(0.3,0) 진폭 궤적, rate 2.0 → 길이 절반, 모노→스테레오 유지, 기존 테스트 전부 통과.
-- [ ] 구현: 회차 경계 seek는 블록 안에서 처리(무음 틈 없음). `ResamplingAudioSource` 비율은 `std::atomic<double>`을 블록 시작에 반영(속도 페이드 대비).
-- [ ] 빌드·테스트·커밋 `feat: region/loop/envelope playback path`.
+- [x] 테스트(오프라인 렌더, `tests/RegionPlaybackTests.cpp`): 트림, playCount, infinite + finishCurrentPass(devamp), 엔벨로프 궤적, rate(라이브 변경 포함), pause/resume, 라이브 트림(끝이 앞으로 오면 즉시 종료), 시작 오프셋, 빈 구간 거부, 읽기선행 경로.
+- [x] 구현: `RegionLoopSource`(가상 타임라인 pass*L+offset, 회차 경계 블록 안 처리) → BufferingAudioSource → ResamplingAudioSource(비율 블록 시작에 반영) → 정지 FadeEnvelope + pauseGate → 게인 → 체인. 엔진 API: PlayOptions.startSeconds, pause/resume(All), finishCurrentPass, setLiveRegion/Rate, fadeOutAndStop(ms), PlayingCue.filePosition/passIndex/paused.
+- [x] 빌드·테스트·커밋 `feat: region/loop/envelope playback path`. (530 tests)
 
 ### Task 1.4: 파형 뷰 + 시간·루프 인스펙터 + 미리듣기/리셋 + 우클릭 (1·2·3·4·7·8)
 **Files:** Create `src/ui/WaveformView.h/.cpp`, `src/ui/TimeLoopsPanel.h/.cpp`; Modify `src/ui/CueInspector.*`, `src/ui/MainComponent.*`, `src/app/Commands.h`.
