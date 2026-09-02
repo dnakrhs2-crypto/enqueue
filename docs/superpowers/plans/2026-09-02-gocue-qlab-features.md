@@ -95,18 +95,18 @@ public: WaveformView (juce::AudioFormatManager&, juce::AudioThumbnailCache&);
     bool keyPressed (const juce::KeyPress&) override;  // Shift+I/O, ←→ 점 선택, Alt+화살표 이동, Shift+Alt 미세, Delete 점 삭제
 };
 ```
-- [ ] 파형: `juce::AudioThumbnail`(cache 64) 채널 합/개별, 회색 트림 핸들 드래그(재생 중이면 `onTrimChanged` 즉시 → 엔진 `setLiveRegion` 반영), 노란 엔벨로프(사용 체크 시) 클릭=점 추가, 드래그=이동, 곡선/직선 토글, "시작/끝에 잠금" 체크, Alt+휠 줌, 재생 위치선.
-- [ ] TimeLoopsPanel: 시작/끝 시간 텍스트(`m:ss.mmm`), 재생 횟수/무한, 속도(0.03~33)·피치 유지(6번 자리표시, 피치 유지는 5단계에서 활성), 엔벨로프 체크·곡선/직선·잠금, 미리듣기(V)·리셋 버튼, 줌 버튼.
-- [ ] 우클릭: 외부 편집기로 열기(`File::startAsProcess`), 탐색기에서 보기(`revealToUser`), 표시 채널.
-- [ ] 명령 `preview`(V: 플레이헤드 유지·프리웨이트 무시), `resetCue`. 인스펙터가 탭(`juce::TabbedComponent`: 기본 / 시간·루프 / 이펙트)으로 바뀜.
-- [ ] GUI 스모크(`tools/gocue_uitest.ps1`): 데모 프로젝트 열고 시간·루프 탭 스크린샷, 핸들 드래그 후 값 변경 확인.
-- [ ] 커밋 `feat: waveform view with trim handles, fade envelope, loops, preview`.
+- [x] 파형: `juce::AudioThumbnail`(cache 64) 채널 합/개별, 회색 트림 핸들 드래그(재생 중이면 `onTrimChanged` 즉시 → 엔진 `setLiveRegion` 반영), 노란 엔벨로프(사용 체크 시) 클릭=점 추가, 드래그=이동, 곡선/직선 토글, "시작/끝에 잠금" 체크, Alt+휠 줌, 재생 위치선.
+- [x] TimeLoopsPanel: 시작/끝 시간 텍스트(`m:ss.mmm`), 재생 횟수/무한, 속도(0.03~33)·피치 유지(6번 자리표시, 피치 유지는 5단계에서 활성), 엔벨로프 체크·곡선/직선·잠금, 미리듣기(V)·리셋 버튼, 줌 버튼.
+- [x] 우클릭: 외부 편집기로 열기(`File::startAsProcess`), 탐색기에서 보기(`revealToUser`), 표시 채널.
+- [x] 명령 `preview`(V: 플레이헤드 유지·프리웨이트 무시), `resetCue`. 인스펙터가 탭(`juce::TabbedComponent`: 기본 / 시간·루프 / 트리거 / 이펙트)으로 바뀜.
+- [x] GUI 스모크(`tools/gocue_uitest.ps1` — drag/hotkey 액션 추가, ★키 자동화는 스캔코드 포함 `hotkey`만 Ctrl+글자 조합에 신뢰 가능): 트림 드래그·엔벨로프 점 추가·미리듣기 플레이헤드·Ctrl+Z 확인.
+- [x] 커밋 (1.5~1.7과 함께).
 
 ### Task 1.5: 드래그앤드롭 전면
 **Files:** Modify `src/ui/MainComponent.*`(FileDragAndDropTarget), `src/ui/CueInspector.*`(파일칸 드롭=교체), `src/ui/CueTable.*`(기존 유지); Test `tests/CueListTests.cpp`(드롭 삽입 인덱스 계산은 순수 함수로 분리해 테스트).
-- [ ] `MainComponent::isInterestedInFileDrag`: 오디오 확장자 또는 `.gocue`. 드롭: `.gocue` 1개면 열기(확인 후), 오디오면 맨 뒤 추가(목록 위는 CueTable이 먼저 받음). 인스펙터 파일 라벨 위 드롭 = 선택 큐 파일 교체(`perform("파일 교체")`).
-- [ ] 드롭 중 테두리 강조(전체 창 파란 테두리). 폴더 드롭 시 안의 오디오 파일을 이름순으로 추가.
-- [ ] 커밋 `feat: drop audio files anywhere in the window`.
+- [x] `MainComponent::isInterestedInFileDrag`: 오디오 확장자 또는 `.gocue`. 드롭: `.gocue` 1개면 열기(확인 후), 오디오면 맨 뒤 추가(목록 위는 CueTable이 먼저 받음). 인스펙터 파일 라벨 위 드롭 = 선택 큐 파일 교체(`perform("파일 교체")`).
+- [x] 드롭 중 테두리 강조(전체 창 파란 테두리). 폴더 드롭 시 안의 오디오 파일을 이름순으로 추가(`collectAudioFiles`).
+- [x] 커밋 (외부 OLE 드롭은 자동화 불가 — 코드 경로만 확인, gom QA에서 실물 확인 필요).
 
 ### Task 1.6: 워크스페이스 설정(일반) + 더블 GO/키업 + 2차 트리거 (33·34)
 **Files:** Create `src/model/WorkspaceSettings.h`, `src/ui/WorkspaceSettingsDialog.h/.cpp`, `src/app/CueController.h/.cpp`; Modify serializer(settings 저장), `Cue`(secondTrigger, secondTriggerOnRelease), 인스펙터(트리거 탭), MainComponent(GO 경로를 컨트롤러로), TransportBar(더블 GO 빨간 테두리·깜빡임).
@@ -121,15 +121,15 @@ class CueController : private juce::Timer { public:
     void pauseResumeSelected(); void pauseAll(); void resumeAll(); void resetAll();
     std::function<void()> onGoRejected; };
 ```
-- [ ] 테스트 `tests/CueControllerTests.cpp`(가짜 시계 주입): doubleGoSeconds 0.5 → 0.3 s 뒤 go는 거부·0.6 s 뒤 허용, requireKeyUp → 키업 전 두 번째 go 거부, 2차 트리거 nothing=무시/stop=페이드 정지/hardStop=즉시/hardStopRestart=재시작/panic=패닉 시간 페이드.
-- [ ] 설정 창(일반 탭): GO 최소 간격(초), 키업 필요, 패닉 시간(초), 자동 번호(2단계에서 사용), 새 큐 자동 로드, 플레이헤드 잠금, 열 때/닫을 때 큐. 파일 탭: 프로젝트 폴더로 복사, 자동 백업·간격·저장 전 백업·회전.
-- [ ] 커밋 `feat: workspace settings, double-GO protection, second-trigger actions`.
+- [x] 테스트 `tests/CueControllerTests.cpp`(가짜 시계 주입): doubleGo 거부/허용, requireKeyUp, P 일시정지 + Space 재개, Esc 페이드/더블 Esc 즉시, 2차 트리거 nothing/hardStopRestart/devamp/hardStop, 전체 리셋.
+- [x] 설정 창(일반 탭): GO 최소 간격(초), 키업 필요, 전체 페이드 정지 시간(초, 기본 2), 자동 번호(2단계에서 사용), 플레이헤드 잠금, 열 때/닫을 때 큐. 파일 탭: 프로젝트 폴더로 복사, 자동 백업·간격·저장 전 백업·회전. (설정은 실행 취소 대상 아님)
+- [x] 커밋. **★gom 결정(9/2)으로 키 체계 변경**: Space=GO(일시정지된 큐 있으면 재개), P=일시정지/재개, F=선택 큐 정지 페이드, Esc=전체 페이드 정지(기본 2초, 0.5초 안 두 번=즉시), S·Shift+F·"전체 정지" 버튼 제거. 2차 트리거 기본값=즉시 정지 후 재시작(기존 동작 유지).
 
 ### Task 1.7: 패닉/S/F 정리 + 일시정지/재개 + 리셋 (39·40·41·44)
 **Files:** Modify `src/audio/CuePlayer.*`(pause/resume 램프, `panic(seconds)`), `src/audio/AudioEngine.*`, `CueController`, `Commands.h`, MainComponent(메뉴 재생), TransportBar(버튼: GO · 일시정지 · 패닉 · 전체 패닉), CueTable(일시정지 노란 표시); Test `tests/AudioEngineTests.cpp`.
-- [ ] 엔진 테스트: pause → 출력 무음 + 위치 정지, resume → 이어서 재생, 5 ms 램프, panic(1.0 s) → 1 s 페이드 후 종료, 두 번째 panic → 즉시.
-- [ ] 키: Esc=전체 패닉(패닉 시간), Esc 두 번(500 ms 내)=전체 하드 정지, S=선택(또는 최근 재생) 패닉, S 두 번=하드 정지, F/Shift+F=기존 큐별 정지 페이드 유지, P=선택 일시정지/재개, [ ]=전체, 리셋=메뉴·사이드 버튼(전체 하드 정지+플레이헤드 첫 큐).
-- [ ] 커밋 `feat: panic/hard-stop semantics, pause/resume, reset`.
+- [x] 엔진 테스트: pause → 출력 무음 + 위치 정지, resume → 이어서 재생, 5 ms 램프(RegionPlaybackTests), panic/더블 Esc(CueControllerTests). ★게인 실시간 반영(gom 지적 "게인값 안 먹는 버그" = 재생 중 인스턴스에 반영 안 되던 것) → `setLiveGainDb` 램프 + 테스트.
+- [x] 키: 위 1.6 항목의 gom 체계. 전체 즉시 정지·전체 리셋은 재생 메뉴에만(키 없음). 표에서 일시정지 행은 노란색.
+- [x] 커밋.
 
 ### Task 1.8: 자동 백업 + 프로젝트 폴더 복사 (62)
 **Files:** Create `src/app/BackupManager.h/.cpp`; Modify `ProjectDocument`(save 훅), MainComponent(추가 시 복사); Test `tests/BackupManagerTests.cpp`(임시 폴더).

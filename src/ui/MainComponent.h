@@ -76,6 +76,10 @@ private:
     void saveProject (bool saveAs, std::function<void (bool ok)> then = {});
     void restorePluginChainsFromDocument (juce::StringArray& errors);
     void refreshFileInfoForAllCues();
+    /** Copies the file that is about to be overwritten into the backup folder (settings permitting, once a minute). */
+    void backupBeforeSave (const juce::File& file);
+    /** Writes the unsaved state into the backup folder every backupIntervalSeconds while the project is dirty. */
+    void autoBackupIfDue();
     /** Copies the live plugin chain states into a project (for saving and for undo snapshots). */
     void captureLivePluginStates (Project& project);
     /** After undo / redo: makes the engine's plugin chains match the restored project. */
@@ -101,6 +105,8 @@ private:
     CueController controller;
     std::atomic<bool> unsavedChanges { false };
     double ignorePluginChangesUntilMs = 0.0;
+    double lastSaveBackupMs = -1.0e12;
+    double nextAutoBackupMs = 0.0;
 
     juce::MenuBarComponent menuBar;
     TransportBar transport;

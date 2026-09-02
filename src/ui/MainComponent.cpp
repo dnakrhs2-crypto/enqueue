@@ -1,5 +1,6 @@
 #include "ui/MainComponent.h"
 
+#include "app/BackupManager.h"
 #include "app/Commands.h"
 #include "app/Updater.h"
 #include "audio/CueFileInfo.h"
@@ -540,14 +541,17 @@ void MainComponent::addCuesFromFiles (const juce::StringArray& files, int insert
     if (files.isEmpty())
         return;
 
-    document.perform (files.size() == 1 ? ko ("큐 추가") : ko ("큐 추가 (") + juce::String (files.size()) + ")", [this, files, insertAt]
+    const bool copyIn = document.settings.copyFilesIntoProject && document.hasFile();
+    const auto projectDir = document.getFile().getParentDirectory();
+
+    document.perform (files.size() == 1 ? ko ("큐 추가") : ko ("큐 추가 (") + juce::String (files.size()) + ")", [this, files, insertAt, copyIn, projectDir]
     {
         int index = insertAt;
         int last = -1;
 
         for (const auto& path : files)
         {
-            const juce::File file (path);
+            const juce::File file = copyIn ? BackupManager::copyIntoProject (juce::File (path), projectDir) : juce::File (path);
 
             Cue cue;
             cue.name = file.getFileNameWithoutExtension();
@@ -704,6 +708,7 @@ void MainComponent::openProjectFile (const juce::File& file)
     restorePluginChainsFromDocument (warnings);
     ignorePluginChangesBriefly();   // restoring saved plugin state is not an edit
     document.markClean();
+    nextAutoBackupMs = juce::Time::getMillisecondCounterHiRes() + document.settings.backupIntervalSeconds * 1000.0;
     inspector.refreshPlugins();
     transport.showStatus (ko ("열림: ") + file.getFileName(), false);
 
@@ -798,7 +803,10 @@ void MainComponent::saveProject (bool saveAs, std::function<void (bool)> then)
         if (! file.hasFileExtension (ProjectSerializer::fileExtension))
             file = file.withFileExtension (ProjectSerializer::fileExtension);
 
+        backupBeforeSave (file);
+
         const auto result = document.save (file, [this] (Project& project) { captureLivePluginStates (project); });
+        nextAutoBackupMs = juce::Time::getMillisecondCounterHiRes() + document.settings.backupIntervalSeconds * 1000.0;
 
         if (result.failed())
         {
@@ -898,6 +906,63 @@ void MainComponent::confirmDiscardChangesThen (std::function<void()> action)
     }), true);
 }
 
+void MainComponent::backupBeforeSave (const juce::File& file)
+{
+    const auto& s = document.settings;
+
+    if (! s.backupBeforeSave || ! file.existsAsFile())
+        return;
+
+    const double nowMs = juce::Time::getMillisecondCounterHiRes();
+
+    if (nowMs - lastSaveBackupMs < 60 * 1000.0)   // at most one pre-save backup per minute
+        return;
+
+    const auto result = BackupManager::copyToBackups (file, juce::Time::getCurrentTime());
+
+    if (result.failed())
+    {
+        transport.showStatus (ko ("백업 실패: ") + result.getErrorMessage(), true);
+        return;
+    }
+
+    lastSaveBackupMs = nowMs;
+
+    if (s.rotateBackups)
+        BackupManager::rotate (BackupManager::backupDirFor (file), juce::Time::getCurrentTime());
+}
+
+void MainComponent::autoBackupIfDue()
+{
+    const auto& s = document.settings;
+
+    if (! s.autoBackup || ! document.hasFile() || ! document.isDirty())
+        return;
+
+    const double nowMs = juce::Time::getMillisecondCounterHiRes();
+
+    if (nowMs < nextAutoBackupMs)
+        return;
+
+    nextAutoBackupMs = nowMs + s.backupIntervalSeconds * 1000.0;
+
+    // the unsaved state itself goes into the backup folder, so a crash loses at most one interval
+    auto project = document.toProject();
+    captureLivePluginStates (project);
+
+    const auto target = BackupManager::backupFileFor (document.getFile(), juce::Time::getCurrentTime());
+    const auto result = ProjectSerializer::save (project, target);
+
+    if (result.failed())
+    {
+        transport.showStatus (ko ("자동 백업 실패: ") + result.getErrorMessage(), true);
+        return;
+    }
+
+    if (s.rotateBackups)
+        BackupManager::rotate (target.getParentDirectory(), juce::Time::getCurrentTime());
+}
+
 void MainComponent::refreshFileInfoForAllCues()
 {
     const bool wasDirty = document.isDirty();
@@ -964,6 +1029,8 @@ void MainComponent::timerCallback()
 
     if (changed && juce::Time::getMillisecondCounterHiRes() >= ignorePluginChangesUntilMs)
         document.markDirty();
+
+    autoBackupIfDue();
 }
 
 void MainComponent::cueListStructureChanged()

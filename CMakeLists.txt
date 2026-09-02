@@ -53,6 +53,7 @@ target_sources(GoCueCore INTERFACE
     ${CMAKE_CURRENT_SOURCE_DIR}/src/model/ProjectSerializer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/app/ProjectDocument.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/app/CueController.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/app/BackupManager.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/audio/RegionLoopSource.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/audio/CuePlayer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/audio/AudioEngine.cpp
