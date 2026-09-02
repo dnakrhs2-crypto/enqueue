@@ -68,6 +68,8 @@ public:
     void setLiveRegion (double startSeconds, double endSeconds) noexcept;
     /** Live playback rate (varispeed). Any thread. */
     void setLiveRate (double rate) noexcept;
+    /** Live cue gain (dB); ramps over one block so the change is click-free. Any thread. */
+    void setLiveGainDb (double gainDb) noexcept;
 
     /** Audio thread. Overwrites channels 0-1 of buffer[0, numSamples) with this player's output.
         Returns false once the player has finished; the block still contains its final audio. */
@@ -115,6 +117,7 @@ private:
     std::atomic<bool> resumeRequested { false };
     std::atomic<bool> pausedFlag { false };
     std::atomic<double> liveRate { 1.0 };
+    std::atomic<float> targetGain { 1.0f };
     std::atomic<double> positionSeconds { 0.0 };
     std::atomic<double> filePositionSeconds { 0.0 };
     std::atomic<int> passIndex { 0 };

@@ -12,6 +12,7 @@ CuePlayer::CuePlayer (const Cue& c, juce::AudioFormatManager& formats,
 {
     cue.sanitise();
     gainLinear = cue.gainLinear();
+    targetGain.store (gainLinear);
     liveRate.store (cue.audio.rate);
 
     if (cue.file == juce::File())
@@ -147,6 +148,13 @@ void CuePlayer::setLiveRate (double rate) noexcept
     liveRate.store (juce::jlimit (AudioCueData::minRate, AudioCueData::maxRate, rate), std::memory_order_relaxed);
 }
 
+void CuePlayer::setLiveGainDb (double gainDb) noexcept
+{
+    Cue tmp;
+    tmp.gainDb = gainDb;
+    targetGain.store (tmp.gainLinear(), std::memory_order_relaxed);
+}
+
 double CuePlayer::getLengthSeconds() const noexcept
 {
     if (source == nullptr)
@@ -245,8 +253,17 @@ bool CuePlayer::renderNextBlock (juce::AudioBuffer<float>& buffer, int numSample
             pausedFlag.store (true, std::memory_order_relaxed);
         }
 
-        if (gainLinear != 1.0f)
+        const float newGain = targetGain.load (std::memory_order_relaxed);
+
+        if (! juce::approximatelyEqual (newGain, gainLinear))
+        {
+            buffer.applyGainRamp (0, numSamples, gainLinear, newGain);   // live gain change, click-free
+            gainLinear = newGain;
+        }
+        else if (gainLinear != 1.0f)
+        {
             buffer.applyGain (0, numSamples, gainLinear);
+        }
     }
     else
     {

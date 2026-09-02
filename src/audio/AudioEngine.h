@@ -79,6 +79,9 @@ public:
     /** Live trim / rate for a running cue (the inspector while it plays). */
     void setLiveRegion (const juce::Uuid& cueId, double startSeconds, double endSeconds);
     void setLiveRate (const juce::Uuid& cueId, double rate);
+    void setLiveGainDb (const juce::Uuid& cueId, double gainDb);
+    /** Ids of the cues that are paused right now. */
+    std::vector<juce::Uuid> getPausedCues() const;
 
     bool isPlaying (const juce::Uuid& cueId) const;
     std::vector<PlayingCue> getPlayingCues() const;

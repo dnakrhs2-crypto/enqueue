@@ -120,6 +120,84 @@ namespace
         return a;
     }
 
+    const char* secondTriggerToText (SecondTriggerAction a)
+    {
+        switch (a)
+        {
+            case SecondTriggerAction::nothing:         return "nothing";
+            case SecondTriggerAction::panic:           return "panic";
+            case SecondTriggerAction::stop:            return "stop";
+            case SecondTriggerAction::hardStop:        return "hardStop";
+            case SecondTriggerAction::hardStopRestart: return "hardStopRestart";
+            case SecondTriggerAction::devamp:          return "devamp";
+        }
+
+        return "hardStopRestart";
+    }
+
+    SecondTriggerAction secondTriggerFromText (const juce::String& text)
+    {
+        if (text == "nothing")  return SecondTriggerAction::nothing;
+        if (text == "panic")    return SecondTriggerAction::panic;
+        if (text == "stop")     return SecondTriggerAction::stop;
+        if (text == "hardStop") return SecondTriggerAction::hardStop;
+        if (text == "devamp")   return SecondTriggerAction::devamp;
+        return SecondTriggerAction::hardStopRestart;
+    }
+
+    juce::var settingsToVar (const WorkspaceSettings& s)
+    {
+        auto* obj = new juce::DynamicObject();
+        obj->setProperty ("doubleGoSeconds", s.doubleGoSeconds);
+        obj->setProperty ("requireKeyUp", s.requireKeyUp);
+        obj->setProperty ("panicSeconds", s.panicSeconds);
+        obj->setProperty ("autoNumber", s.autoNumber);
+        obj->setProperty ("numberIncrement", s.numberIncrement);
+        obj->setProperty ("autoLoadNewCues", s.autoLoadNewCues);
+        obj->setProperty ("lockPlayheadToSelection", s.lockPlayheadToSelection);
+        obj->setProperty ("startOnOpen", s.startOnOpen);
+        obj->setProperty ("startOnOpenCue", s.startOnOpenCue);
+        obj->setProperty ("startOnClose", s.startOnClose);
+        obj->setProperty ("startOnCloseCue", s.startOnCloseCue);
+        obj->setProperty ("maxLevelDb", s.maxLevelDb);
+        obj->setProperty ("minLevelDb", s.minLevelDb);
+        obj->setProperty ("copyFilesIntoProject", s.copyFilesIntoProject);
+        obj->setProperty ("autoBackup", s.autoBackup);
+        obj->setProperty ("backupIntervalSeconds", s.backupIntervalSeconds);
+        obj->setProperty ("backupBeforeSave", s.backupBeforeSave);
+        obj->setProperty ("rotateBackups", s.rotateBackups);
+        return juce::var (obj);
+    }
+
+    WorkspaceSettings settingsFromVar (const juce::var& v)
+    {
+        WorkspaceSettings s;
+
+        if (v.getDynamicObject() == nullptr)
+            return s;
+
+        s.doubleGoSeconds         = (double) v.getProperty ("doubleGoSeconds", s.doubleGoSeconds);
+        s.requireKeyUp            = (bool) v.getProperty ("requireKeyUp", s.requireKeyUp);
+        s.panicSeconds            = (double) v.getProperty ("panicSeconds", s.panicSeconds);
+        s.autoNumber              = (bool) v.getProperty ("autoNumber", s.autoNumber);
+        s.numberIncrement         = (double) v.getProperty ("numberIncrement", s.numberIncrement);
+        s.autoLoadNewCues         = (bool) v.getProperty ("autoLoadNewCues", s.autoLoadNewCues);
+        s.lockPlayheadToSelection = (bool) v.getProperty ("lockPlayheadToSelection", s.lockPlayheadToSelection);
+        s.startOnOpen             = (bool) v.getProperty ("startOnOpen", s.startOnOpen);
+        s.startOnOpenCue          = v.getProperty ("startOnOpenCue", s.startOnOpenCue).toString();
+        s.startOnClose            = (bool) v.getProperty ("startOnClose", s.startOnClose);
+        s.startOnCloseCue         = v.getProperty ("startOnCloseCue", s.startOnCloseCue).toString();
+        s.maxLevelDb              = (double) v.getProperty ("maxLevelDb", s.maxLevelDb);
+        s.minLevelDb              = (double) v.getProperty ("minLevelDb", s.minLevelDb);
+        s.copyFilesIntoProject    = (bool) v.getProperty ("copyFilesIntoProject", s.copyFilesIntoProject);
+        s.autoBackup              = (bool) v.getProperty ("autoBackup", s.autoBackup);
+        s.backupIntervalSeconds   = (int) v.getProperty ("backupIntervalSeconds", s.backupIntervalSeconds);
+        s.backupBeforeSave        = (bool) v.getProperty ("backupBeforeSave", s.backupBeforeSave);
+        s.rotateBackups           = (bool) v.getProperty ("rotateBackups", s.rotateBackups);
+        s.sanitise();
+        return s;
+    }
+
     juce::var cueToVar (const Cue& c, const juce::File& projectDir)
     {
         auto* obj = new juce::DynamicObject();
@@ -134,6 +212,7 @@ namespace
         obj->setProperty ("gainDb", c.gainDb);
         obj->setProperty ("durationSeconds", c.durationSeconds);
         obj->setProperty ("audio", audioToVar (c.audio));
+        obj->setProperty ("secondTrigger", secondTriggerToText (c.secondTrigger));
         obj->setProperty ("plugins", pluginsToVar (c.plugins));
         return juce::var (obj);
     }
@@ -184,6 +263,7 @@ namespace
         c.gainDb          = (double) v.getProperty ("gainDb", 0.0);
         c.durationSeconds = (double) v.getProperty ("durationSeconds", 0.0);
         c.plugins         = pluginsFromVar (v.getProperty ("plugins", juce::var()));
+        c.secondTrigger   = secondTriggerFromText (v.getProperty ("secondTrigger", "hardStopRestart").toString());
 
         const auto audio = v.getProperty ("audio", juce::var());
 
@@ -223,6 +303,7 @@ juce::var toVar (const Project& project, const juce::File& projectDir)
     auto* master = new juce::DynamicObject();
     master->setProperty ("plugins", pluginsToVar (project.masterPlugins));
     root->setProperty ("master", juce::var (master));
+    root->setProperty ("settings", settingsToVar (project.settings));
 
     return juce::var (root);
 }
@@ -288,6 +369,8 @@ juce::Result fromJson (const juce::String& json, Project& out, juce::StringArray
 
     if (master.getDynamicObject() != nullptr)
         project.masterPlugins = pluginsFromVar (master.getProperty ("plugins", juce::var()));
+
+    project.settings = settingsFromVar (root.getProperty ("settings", juce::var()));
 
     out = std::move (project);
     return juce::Result::ok();

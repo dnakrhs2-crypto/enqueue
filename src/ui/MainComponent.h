@@ -1,6 +1,7 @@
 #pragma once
 
 #include "app/AppSettings.h"
+#include "app/CueController.h"
 #include "app/ProjectDocument.h"
 #include "audio/AudioEngine.h"
 #include "ui/CueInspector.h"
@@ -18,10 +19,11 @@ namespace gocue
 {
 
 /** The single main window content: menu bar / transport / cue table / inspector.
-    Owns the project document, the plugin editor windows and dispatches every command. */
+    Owns the project document, the cue controller, the plugin editor windows and dispatches every command. */
 class MainComponent : public juce::Component,
                       public juce::ApplicationCommandTarget,
                       public juce::MenuBarModel,
+                      private juce::FileDragAndDropTarget,
                       private juce::Timer,
                       private CueList::Listener,
                       private ProjectDocument::Listener
@@ -32,6 +34,7 @@ public:
 
     void resized() override;
     void paint (juce::Graphics& g) override;
+    void paintOverChildren (juce::Graphics& g) override;
 
     // ApplicationCommandTarget
     juce::ApplicationCommandTarget* getNextCommandTarget() override;
@@ -57,8 +60,13 @@ public:
     std::function<void (const juce::String& title)> onWindowTitleChanged;
 
 private:
-    void go();
-    juce::Uuid resolveTargetCue (bool ignoreFadingOut) const;
+    // FileDragAndDropTarget: audio files / folders dropped anywhere else in the window are appended,
+    // a .gocue file is opened.
+    bool isInterestedInFileDrag (const juce::StringArray& files) override;
+    void fileDragEnter (const juce::StringArray& files, int x, int y) override;
+    void fileDragExit (const juce::StringArray& files) override;
+    void filesDropped (const juce::StringArray& files, int x, int y) override;
+
     void addCuesFromFiles (const juce::StringArray& files, int insertAt);
     void addCueViaDialog();
     void removeSelectedCue();
@@ -72,6 +80,8 @@ private:
     void captureLivePluginStates (Project& project);
     /** After undo / redo: makes the engine's plugin chains match the restored project. */
     void reconcileChainsAfterRestore (const ProjectSnapshot& snapshot);
+    /** Plugins may report state changes right after their state was restored; ignore those for a moment. */
+    void ignorePluginChangesBriefly();
     void showPluginManager();
     void showAbout();
     void showAlert (const juce::String& title, const juce::String& message, bool isError);
@@ -88,13 +98,16 @@ private:
     juce::ApplicationCommandManager& commands;
     ProjectDocument document;
     PluginWindowManager pluginWindows;
+    CueController controller;
     std::atomic<bool> unsavedChanges { false };
+    double ignorePluginChangesUntilMs = 0.0;
 
     juce::MenuBarComponent menuBar;
     TransportBar transport;
     CueTable table;
     CueInspector inspector;
     std::unique_ptr<juce::FileChooser> chooser;
+    bool dragOverWindow = false;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (MainComponent)
 };

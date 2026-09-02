@@ -15,17 +15,17 @@ TransportBar::TransportBar (juce::ApplicationCommandManager& cm)
     goButton.onClick = [this] { commands.invokeDirectly (CommandIDs::go, true); };
     addAndMakeVisible (goButton);
 
-    stopButton.setButtonText (ko ("정지 (S)"));
-    styleButton (stopButton, Palette::stopButton);
-    stopButton.onClick = [this] { commands.invokeDirectly (CommandIDs::stopSelected, true); };
+    pauseButton.setButtonText (ko ("일시정지 (P)"));
+    styleButton (pauseButton, Palette::standby.darker (0.4f));
+    pauseButton.onClick = [this] { commands.invokeDirectly (CommandIDs::pauseToggle, true); };
 
     fadeOutButton.setButtonText (ko ("페이드아웃 (F)"));
     styleButton (fadeOutButton, Palette::fadingOut);
     fadeOutButton.onClick = [this] { commands.invokeDirectly (CommandIDs::fadeOutSelected, true); };
 
-    stopAllButton.setButtonText (ko ("전체 정지 (Esc)"));
-    styleButton (stopAllButton, Palette::stopButton.darker (0.3f));
-    stopAllButton.onClick = [this] { commands.invokeDirectly (CommandIDs::stopAll, true); };
+    panicButton.setButtonText (ko ("전체 페이드 정지 (Esc)"));
+    styleButton (panicButton, Palette::stopButton);
+    panicButton.onClick = [this] { commands.invokeDirectly (CommandIDs::panicAll, true); };
 
     standbyTitle.setText (ko ("다음 큐"), juce::dontSendNotification);
     standbyTitle.setColour (juce::Label::textColourId, Palette::dimText);
@@ -59,7 +59,7 @@ TransportBar::TransportBar (juce::ApplicationCommandManager& cm)
     addAndMakeVisible (statusLabel);
 
     setStandbyCue (-1, nullptr);
-    setPlayingCount (0);
+    setPlayingCount (0, 0);
 }
 
 void TransportBar::styleButton (juce::TextButton& button, juce::Colour colour)
@@ -92,16 +92,22 @@ void TransportBar::setStandbyCue (int index, const Cue* cue)
     cueFile.setColour (juce::Label::textColourId, cue->fileMissing ? Palette::missing : Palette::dimText);
 
     juce::String meta;
-    meta << ko ("길이 ") << formatSeconds (cue->durationSeconds)
+    const double effective = cue->effectiveLength();
+    meta << ko ("길이 ") << (effective < 0.0 ? juce::String::fromUTF8 ("\xE2\x88\x9E") : formatSeconds (effective > 0.0 ? effective : cue->durationSeconds))
          << "   " << ko ("페이드인 ") << juce::roundToInt (cue->audio.envelope.fadeInSeconds (cue->regionLength()) * 1000.0) << " ms"
          << "   " << ko ("정지 페이드 ") << cue->fadeOutMs << " ms"
          << "   " << ko ("게인 ") << juce::String (cue->gainDb, 1) << " dB";
     cueMeta.setText (meta, juce::dontSendNotification);
 }
 
-void TransportBar::setPlayingCount (int numPlaying)
+void TransportBar::setPlayingCount (int numPlaying, int numPaused)
 {
-    playingLabel.setText (ko ("재생 중 ") + juce::String (numPlaying), juce::dontSendNotification);
+    juce::String text = ko ("재생 중 ") + juce::String (numPlaying);
+
+    if (numPaused > 0)
+        text << ko ("  (일시정지 ") << numPaused << ")";
+
+    playingLabel.setText (text, juce::dontSendNotification);
     playingLabel.setColour (juce::Label::textColourId, numPlaying > 0 ? Palette::playing.brighter (0.6f) : Palette::dimText);
 }
 
@@ -110,6 +116,37 @@ void TransportBar::showStatus (const juce::String& message, bool isError)
     statusLabel.setText (message, juce::dontSendNotification);
     statusLabel.setColour (juce::Label::textColourId, isError ? Palette::missing : Palette::dimText);
     startTimer (isError ? 6000 : 3000);
+}
+
+void TransportBar::setGoLocked (bool locked)
+{
+    if (goLocked == locked)
+        return;
+
+    goLocked = locked;
+    updateGoLook();
+}
+
+void TransportBar::flashGoRejected()
+{
+    goFlashing = true;
+    updateGoLook();
+
+    juce::Component::SafePointer<TransportBar> safeThis (this);
+    juce::Timer::callAfterDelay (180, [safeThis]
+    {
+        if (safeThis != nullptr)
+        {
+            safeThis->goFlashing = false;
+            safeThis->updateGoLook();
+        }
+    });
+}
+
+void TransportBar::updateGoLook()
+{
+    goButton.setColour (juce::TextButton::buttonColourId, goFlashing ? Palette::stopButton : Palette::goButton);
+    repaint();
 }
 
 void TransportBar::timerCallback()
@@ -125,13 +162,14 @@ void TransportBar::resized()
     goButton.setBounds (area.removeFromLeft (150));
     area.removeFromLeft (14);
 
-    auto right = area.removeFromRight (180);
+    auto right = area.removeFromRight (230);
     auto buttons = right.removeFromBottom (28);
-    stopAllButton.setBounds (buttons);
+    panicButton.setBounds (buttons);
     right.removeFromBottom (4);
     buttons = right.removeFromBottom (28);
-    stopButton.setBounds (buttons.removeFromLeft (buttons.getWidth() / 2 - 2));
-    fadeOutButton.setBounds (buttons.removeFromRight (buttons.getWidth() - 4 + 0));
+    pauseButton.setBounds (buttons.removeFromLeft (buttons.getWidth() / 2 - 2));
+    buttons.removeFromLeft (4);
+    fadeOutButton.setBounds (buttons);
     playingLabel.setBounds (right.removeFromTop (22));
     statusLabel.setBounds (right);
 
@@ -150,6 +188,12 @@ void TransportBar::paint (juce::Graphics& g)
     g.fillAll (Palette::panel);
     g.setColour (Palette::outline);
     g.drawLine (0.0f, (float) getHeight() - 0.5f, (float) getWidth(), (float) getHeight() - 0.5f);
+
+    if (goLocked || goFlashing)
+    {
+        g.setColour (goFlashing ? Palette::missing : Palette::stopButton.brighter (0.4f));
+        g.drawRect (goButton.getBounds().expanded (3), 3);
+    }
 }
 
 } // namespace gocue

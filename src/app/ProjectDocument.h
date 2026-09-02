@@ -31,6 +31,10 @@ public:
 
     CueList cues;
     std::vector<PluginSlotState> masterPlugins;
+    WorkspaceSettings settings;
+
+    /** Replaces the settings (not an undo step: like QLab, settings sit outside the undo history). */
+    void setSettings (const WorkspaceSettings& newSettings);
 
     const juce::File& getFile() const noexcept { return file; }
     bool hasFile() const noexcept { return file != juce::File(); }

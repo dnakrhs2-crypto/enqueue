@@ -6,6 +6,7 @@
 #include "ui/AudioSettingsDialog.h"
 #include "ui/PluginDialogs.h"
 #include "ui/UiUtils.h"
+#include "ui/WorkspaceSettingsDialog.h"
 
 #include <set>
 
@@ -16,13 +17,15 @@ namespace
 {
     constexpr int menuBarHeight = 24;
     constexpr int transportHeight = 112;
-    constexpr int inspectorHeight = 212;
+    constexpr int inspectorHeight = 330;
+    constexpr double pluginChangeGraceMs = 1500.0;
 }
 
 MainComponent::MainComponent (AudioEngine& e, AppSettings& s, juce::ApplicationCommandManager& cm)
     : engine (e),
       settings (s),
       commands (cm),
+      controller (e, document),
       menuBar (this),
       transport (cm),
       table (document.cues, e.getFormatManager(), cm),
@@ -35,9 +38,14 @@ MainComponent::MainComponent (AudioEngine& e, AppSettings& s, juce::ApplicationC
     addAndMakeVisible (table);
     addAndMakeVisible (inspector);
 
+    controller.onStatus = [this] (const juce::String& message, bool isError) { transport.showStatus (message, isError); };
+    controller.onGoRejected = [this] { transport.flashGoRejected(); };
+
     table.onFilesDropped = [this] (const juce::StringArray& files, int insertAt) { addCuesFromFiles (files, insertAt); };
     inspector.onOpenPluginManager = [this] { showPluginManager(); };
-    inspector.onPanic = [this] { engine.stopAll(); table.focusTable(); };
+    inspector.onPanic = [this] { controller.panicAll(); table.focusTable(); };
+    inspector.onPreview = [this] { controller.preview(); };
+    inspector.onResetCue = [this] { controller.resetSelected(); };
 
     document.snapshotDecorator = [this] (Project& project) { captureLivePluginStates (project); };
     document.onSnapshotRestored = [this] (const ProjectSnapshot& snapshot) { reconcileChainsAfterRestore (snapshot); };
@@ -58,7 +66,7 @@ MainComponent::MainComponent (AudioEngine& e, AppSettings& s, juce::ApplicationC
     addKeyListener (commands.getKeyMappings());
     setApplicationCommandManagerToWatch (&commands);
 
-    setSize (1100, 760);
+    setSize (1100, 780);
     updateTransportStandby();
     startTimerHz (30);
 }
@@ -67,6 +75,7 @@ MainComponent::~MainComponent()
 {
     stopTimer();
     PluginDialogs::closeAll();
+    WorkspaceSettingsDialog::closeIfOpen();
     AudioSettingsDialog::closeIfOpen();
     pluginWindows.closeAll();
     engine.setChainListener (nullptr);
@@ -90,6 +99,59 @@ void MainComponent::paint (juce::Graphics& g)
     g.fillAll (Palette::background);
 }
 
+void MainComponent::paintOverChildren (juce::Graphics& g)
+{
+    if (dragOverWindow)
+    {
+        g.setColour (Palette::standby);
+        g.drawRect (getLocalBounds(), 3);
+    }
+}
+
+//==============================================================================
+bool MainComponent::isInterestedInFileDrag (const juce::StringArray& files)
+{
+    for (const auto& path : files)
+        if (juce::File (path).hasFileExtension (ProjectSerializer::fileExtension))
+            return true;
+
+    return containsAudioOrFolder (engine.getFormatManager(), files);
+}
+
+void MainComponent::fileDragEnter (const juce::StringArray&, int, int)
+{
+    dragOverWindow = true;
+    repaint();
+}
+
+void MainComponent::fileDragExit (const juce::StringArray&)
+{
+    dragOverWindow = false;
+    repaint();
+}
+
+void MainComponent::filesDropped (const juce::StringArray& files, int, int)
+{
+    dragOverWindow = false;
+    repaint();
+
+    for (const auto& path : files)
+    {
+        const juce::File file (path);
+
+        if (file.existsAsFile() && file.hasFileExtension (ProjectSerializer::fileExtension))
+        {
+            confirmDiscardChangesThen ([this, file] { openProjectFile (file); });
+            return;
+        }
+    }
+
+    const auto audioFiles = collectAudioFiles (engine.getFormatManager(), files);
+
+    if (! audioFiles.isEmpty())
+        addCuesFromFiles (audioFiles, -1);
+}
+
 //==============================================================================
 juce::ApplicationCommandTarget* MainComponent::getNextCommandTarget()
 {
@@ -98,14 +160,16 @@ juce::ApplicationCommandTarget* MainComponent::getNextCommandTarget()
 
 void MainComponent::getAllCommands (juce::Array<juce::CommandID>& ids)
 {
-    ids.addArray ({ CommandIDs::go, CommandIDs::stopSelected, CommandIDs::stopAll,
-                    CommandIDs::fadeOutSelected, CommandIDs::fadeOutAll,
+    ids.addArray ({ CommandIDs::go, CommandIDs::pauseToggle, CommandIDs::fadeOutSelected,
+                    CommandIDs::panicAll, CommandIDs::hardStopAll, CommandIDs::preview,
+                    CommandIDs::resetCue, CommandIDs::resetAll,
                     CommandIDs::addCue, CommandIDs::removeCue, CommandIDs::duplicateCue,
                     CommandIDs::moveCueUp, CommandIDs::moveCueDown,
                     CommandIDs::newProject, CommandIDs::openProject,
                     CommandIDs::saveProject, CommandIDs::saveProjectAs,
                     CommandIDs::undo, CommandIDs::redo,
                     CommandIDs::audioSettings, CommandIDs::pluginManager, CommandIDs::masterInserts,
+                    CommandIDs::workspaceSettings,
                     CommandIDs::checkForUpdates, CommandIDs::about });
 }
 
@@ -124,29 +188,43 @@ void MainComponent::getCommandInfo (juce::CommandID commandID, juce::Application
     switch (commandID)
     {
         case CommandIDs::go:
-            result.setInfo ("GO", ko ("선택 큐 재생 후 다음 큐로 이동"), playback, 0);
+            result.setInfo ("GO", ko ("선택 큐 재생 후 다음 큐로 이동 (일시정지된 큐가 있으면 재개)"), playback, 0);
             result.addDefaultKeypress (KeyPress::spaceKey, ModifierKeys::noModifiers);
-            result.setActive (hasSelection);
+            result.flags |= juce::ApplicationCommandInfo::wantsKeyUpDownCallbacks;
             break;
 
-        case CommandIDs::stopSelected:
-            result.setInfo (ko ("정지"), ko ("선택 큐(재생 중이 아니면 가장 최근 재생 큐) 즉시 정지"), playback, 0);
-            result.addDefaultKeypress ('S', ModifierKeys::noModifiers);
-            break;
-
-        case CommandIDs::stopAll:
-            result.setInfo (ko ("전체 정지"), ko ("재생 중인 모든 큐 즉시 정지"), playback, 0);
-            result.addDefaultKeypress (KeyPress::escapeKey, ModifierKeys::noModifiers);
+        case CommandIDs::pauseToggle:
+            result.setInfo (ko ("일시정지 / 재개"), ko ("선택 큐(재생 중이 아니면 가장 최근 재생 큐)를 일시정지하거나 재개"), playback, 0);
+            result.addDefaultKeypress ('P', ModifierKeys::noModifiers);
             break;
 
         case CommandIDs::fadeOutSelected:
-            result.setInfo (ko ("페이드아웃 정지"), ko ("선택 큐(재생 중이 아니면 가장 최근 재생 큐)를 페이드아웃 후 정지"), playback, 0);
+            result.setInfo (ko ("페이드아웃 정지"), ko ("선택 큐(재생 중이 아니면 가장 최근 재생 큐)를 정지 페이드로 정지"), playback, 0);
             result.addDefaultKeypress ('F', ModifierKeys::noModifiers);
             break;
 
-        case CommandIDs::fadeOutAll:
-            result.setInfo (ko ("전체 페이드아웃 정지"), ko ("재생 중인 모든 큐를 각자의 페이드아웃 시간으로 정지"), playback, 0);
-            result.addDefaultKeypress ('F', ModifierKeys::shiftModifier);
+        case CommandIDs::panicAll:
+            result.setInfo (ko ("전체 페이드 정지"), ko ("재생 중인 모든 큐를 설정된 시간(기본 2초) 동안 페이드아웃 후 정지. 0.5초 안에 두 번 누르면 즉시 정지"), playback, 0);
+            result.addDefaultKeypress (KeyPress::escapeKey, ModifierKeys::noModifiers);
+            break;
+
+        case CommandIDs::hardStopAll:
+            result.setInfo (ko ("전체 즉시 정지"), ko ("페이드 없이 모든 큐를 바로 정지"), playback, 0);
+            break;
+
+        case CommandIDs::preview:
+            result.setInfo (ko ("미리듣기"), ko ("선택 큐를 재생하되 플레이헤드는 그대로 둠"), playback, 0);
+            result.addDefaultKeypress ('V', ModifierKeys::noModifiers);
+            result.setActive (hasSelection);
+            break;
+
+        case CommandIDs::resetCue:
+            result.setInfo (ko ("큐 리셋"), ko ("선택 큐를 정지하고 처음 상태로"), playback, 0);
+            result.setActive (hasSelection);
+            break;
+
+        case CommandIDs::resetAll:
+            result.setInfo (ko ("전체 리셋"), ko ("모든 큐를 즉시 정지하고 플레이헤드를 첫 큐로"), playback, 0);
             break;
 
         case CommandIDs::addCue:
@@ -196,6 +274,11 @@ void MainComponent::getCommandInfo (juce::CommandID commandID, juce::Application
         case CommandIDs::saveProjectAs:
             result.setInfo (ko ("다른 이름으로 저장..."), ko ("프로젝트를 새 파일로 저장"), fileMenu, 0);
             result.addDefaultKeypress ('S', ModifierKeys::commandModifier | ModifierKeys::shiftModifier);
+            break;
+
+        case CommandIDs::workspaceSettings:
+            result.setInfo (ko ("프로젝트 설정..."), ko ("GO 간격, 전체 페이드 정지 시간, 자동 번호, 백업 등"), fileMenu, 0);
+            result.addDefaultKeypress (',', ModifierKeys::commandModifier | ModifierKeys::shiftModifier);
             break;
 
         case CommandIDs::undo:
@@ -249,25 +332,47 @@ bool MainComponent::perform (const InvocationInfo& info)
     switch (info.commandID)
     {
         case CommandIDs::go:
-            go();
+            if (info.invocationMethod == InvocationInfo::fromKeyPress && ! info.isKeyDown)
+            {
+                controller.goKeyReleased();
+            }
+            else
+            {
+                controller.go();
+                table.focusTable();
+
+                if (info.invocationMethod != InvocationInfo::fromKeyPress)
+                    controller.goKeyReleased();   // a button click has no key to release
+            }
             break;
 
-        case CommandIDs::stopSelected:
-            if (const auto id = resolveTargetCue (false); ! id.isNull())
-                engine.stop (id);
-            break;
-
-        case CommandIDs::stopAll:
-            engine.stopAll();
+        case CommandIDs::pauseToggle:
+            if (! controller.togglePause())
+                transport.showStatus (ko ("재생 중인 큐가 없습니다"), false);
             break;
 
         case CommandIDs::fadeOutSelected:
-            if (const auto id = resolveTargetCue (true); ! id.isNull())
-                engine.fadeOutAndStop (id);
+            controller.fadeOutTarget();
             break;
 
-        case CommandIDs::fadeOutAll:
-            engine.fadeOutAndStopAll();
+        case CommandIDs::panicAll:
+            controller.panicAll();
+            break;
+
+        case CommandIDs::hardStopAll:
+            controller.hardStopAll();
+            break;
+
+        case CommandIDs::preview:
+            controller.preview();
+            break;
+
+        case CommandIDs::resetCue:
+            controller.resetSelected();
+            break;
+
+        case CommandIDs::resetAll:
+            controller.resetAll();
             break;
 
         case CommandIDs::addCue:
@@ -306,6 +411,10 @@ bool MainComponent::perform (const InvocationInfo& info)
 
         case CommandIDs::saveProjectAs:
             saveProject (true);
+            break;
+
+        case CommandIDs::workspaceSettings:
+            WorkspaceSettingsDialog::show (document, this);
             break;
 
         case CommandIDs::undo:
@@ -369,6 +478,8 @@ juce::PopupMenu MainComponent::getMenuForIndex (int topLevelMenuIndex, const juc
             menu.addCommandItem (&commands, CommandIDs::saveProject);
             menu.addCommandItem (&commands, CommandIDs::saveProjectAs);
             menu.addSeparator();
+            menu.addCommandItem (&commands, CommandIDs::workspaceSettings);
+            menu.addSeparator();
             menu.addCommandItem (&commands, juce::StandardApplicationCommandIDs::quit);
             break;
 
@@ -388,11 +499,14 @@ juce::PopupMenu MainComponent::getMenuForIndex (int topLevelMenuIndex, const juc
 
         case 3:
             menu.addCommandItem (&commands, CommandIDs::go);
-            menu.addCommandItem (&commands, CommandIDs::stopSelected);
+            menu.addCommandItem (&commands, CommandIDs::preview);
+            menu.addCommandItem (&commands, CommandIDs::pauseToggle);
             menu.addCommandItem (&commands, CommandIDs::fadeOutSelected);
+            menu.addCommandItem (&commands, CommandIDs::resetCue);
             menu.addSeparator();
-            menu.addCommandItem (&commands, CommandIDs::stopAll);
-            menu.addCommandItem (&commands, CommandIDs::fadeOutAll);
+            menu.addCommandItem (&commands, CommandIDs::panicAll);
+            menu.addCommandItem (&commands, CommandIDs::hardStopAll);
+            menu.addCommandItem (&commands, CommandIDs::resetAll);
             break;
 
         case 4:
@@ -421,35 +535,6 @@ void MainComponent::menuItemSelected (int, int)
 }
 
 //==============================================================================
-void MainComponent::go()
-{
-    const int index = document.cues.getSelectedIndex();
-    const auto* cue = document.cues.getSelected();
-
-    if (cue == nullptr)
-        return;
-
-    juce::String error;
-
-    if (engine.play (*cue, &error))
-        transport.showStatus (ko ("GO: #") + juce::String (index + 1) + " " + cue->name, false);
-    else
-        transport.showStatus (error, true);
-
-    document.cues.selectNext();
-    table.focusTable();
-}
-
-juce::Uuid MainComponent::resolveTargetCue (bool ignoreFadingOut) const
-{
-    if (const auto* selected = document.cues.getSelected())
-        for (const auto& p : engine.getPlayingCues())
-            if (p.id == selected->id && ! (ignoreFadingOut && p.fadingOut))
-                return p.id;
-
-    return engine.getMostRecentlyStartedCue (ignoreFadingOut);
-}
-
 void MainComponent::addCuesFromFiles (const juce::StringArray& files, int insertAt)
 {
     if (files.isEmpty())
@@ -567,7 +652,7 @@ void MainComponent::newProject()
     engine.clearCueChains();
     engine.getMasterChain().clear();
     document.newProject();
-    engine.consumePluginStateChanges();
+    ignorePluginChangesBriefly();
 }
 
 void MainComponent::openProjectViaDialog()
@@ -617,7 +702,7 @@ void MainComponent::openProjectFile (const juce::File& file)
     settings.setLastProjectFile (file);
     refreshFileInfoForAllCues();
     restorePluginChainsFromDocument (warnings);
-    engine.consumePluginStateChanges();   // restoring saved plugin state is not an edit
+    ignorePluginChangesBriefly();   // restoring saved plugin state is not an edit
     document.markClean();
     inspector.refreshPlugins();
     transport.showStatus (ko ("열림: ") + file.getFileName(), false);
@@ -645,6 +730,12 @@ void MainComponent::captureLivePluginStates (Project& project)
             cue.plugins = chain->getStates();
 
     project.masterPlugins = engine.getMasterChain().getStates();
+}
+
+void MainComponent::ignorePluginChangesBriefly()
+{
+    engine.consumePluginStateChanges();
+    ignorePluginChangesUntilMs = juce::Time::getMillisecondCounterHiRes() + pluginChangeGraceMs;
 }
 
 void MainComponent::reconcileChainsAfterRestore (const ProjectSnapshot& snapshot)
@@ -676,7 +767,7 @@ void MainComponent::reconcileChainsAfterRestore (const ProjectSnapshot& snapshot
     if (snapshot.pluginStatesCaptured && ! engine.getMasterChain().matchesStructure (document.masterPlugins))
         errors.addArray (engine.getMasterChain().restore (document.masterPlugins, factory));
 
-    engine.consumePluginStateChanges();   // replaying saved state is not a new edit
+    ignorePluginChangesBriefly();   // replaying saved state is not a new edit
     inspector.refreshPlugins();
     PluginDialogs::chainChanged (&engine.getMasterChain());
 
@@ -857,10 +948,21 @@ void MainComponent::updateTransportStandby()
 void MainComponent::timerCallback()
 {
     auto playing = engine.getPlayingCues();
-    transport.setPlayingCount ((int) playing.size());
+    int paused = 0;
+
+    for (const auto& p : playing)
+        if (p.paused)
+            ++paused;
+
+    transport.setPlayingCount ((int) playing.size(), paused);
+    transport.setGoLocked (controller.isGoLocked());
+    inspector.setPlayback (playing);
     table.setPlayingCues (std::move (playing));
 
-    if (engine.consumePluginStateChanges())   // a knob moved in a plugin editor: the project needs saving
+    // a knob moved in a plugin editor: the project needs saving (but not right after a restore)
+    const bool changed = engine.consumePluginStateChanges();
+
+    if (changed && juce::Time::getMillisecondCounterHiRes() >= ignorePluginChangesUntilMs)
         document.markDirty();
 }
 

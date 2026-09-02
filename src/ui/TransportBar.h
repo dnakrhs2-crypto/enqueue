@@ -7,7 +7,7 @@
 namespace gocue
 {
 
-/** Top strip: the standby cue's details, the big GO button and the stop / fade buttons. */
+/** Top strip: the standby cue's details, the big GO button and the pause / fade / panic buttons. */
 class TransportBar : public juce::Component,
                      private juce::Timer
 {
@@ -16,9 +16,13 @@ public:
 
     /** index is 0-based; cue may be null when nothing is selected. */
     void setStandbyCue (int index, const Cue* cue);
-    void setPlayingCount (int numPlaying);
+    void setPlayingCount (int numPlaying, int numPaused);
     /** Shows a transient message (errors in red) for a few seconds. */
     void showStatus (const juce::String& message, bool isError);
+    /** Red border on GO while double-GO protection refuses GOs. */
+    void setGoLocked (bool locked);
+    /** Brief red flash: a GO was received but refused. */
+    void flashGoRejected();
 
     void resized() override;
     void paint (juce::Graphics& g) override;
@@ -26,12 +30,15 @@ public:
 private:
     void timerCallback() override;
     void styleButton (juce::TextButton& button, juce::Colour colour);
+    void updateGoLook();
 
     juce::ApplicationCommandManager& commands;
 
     juce::TextButton goButton { "GO" };
-    juce::TextButton stopButton, fadeOutButton, stopAllButton;
+    juce::TextButton pauseButton, fadeOutButton, panicButton;
     juce::Label standbyTitle, cueNumber, cueName, cueFile, cueMeta, playingLabel, statusLabel;
+    bool goLocked = false;
+    bool goFlashing = false;
 };
 
 } // namespace gocue

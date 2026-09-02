@@ -104,7 +104,7 @@ void CueTable::paintRowBackground (juce::Graphics& g, int rowNumber, int width, 
     juce::Colour background = (rowNumber % 2 == 0) ? Palette::rowEven : Palette::rowOdd;
 
     if (running != nullptr)
-        background = running->fadingOut ? Palette::fadingOut : Palette::playing;
+        background = running->paused ? Palette::paused : (running->fadingOut ? Palette::fadingOut : Palette::playing);
 
     g.fillAll (background);
 
@@ -233,11 +233,7 @@ void CueTable::backgroundClicked (const juce::MouseEvent&)
 //==============================================================================
 bool CueTable::isInterestedInFileDrag (const juce::StringArray& files)
 {
-    for (const auto& path : files)
-        if (isSupportedAudioFile (formats, juce::File (path)))
-            return true;
-
-    return false;
+    return containsAudioOrFolder (formats, files);
 }
 
 void CueTable::fileDragEnter (const juce::StringArray&, int, int)
@@ -257,11 +253,7 @@ void CueTable::filesDropped (const juce::StringArray& files, int x, int y)
     dragOver = false;
     repaint();
 
-    juce::StringArray audioFiles;
-
-    for (const auto& path : files)
-        if (isSupportedAudioFile (formats, juce::File (path)))
-            audioFiles.add (path);
+    const auto audioFiles = collectAudioFiles (formats, files);
 
     if (audioFiles.isEmpty() || ! onFilesDropped)
         return;

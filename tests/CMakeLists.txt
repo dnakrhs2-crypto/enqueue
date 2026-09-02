@@ -9,6 +9,7 @@ target_sources(GoCueTests PRIVATE
     ProjectSerializerTests.cpp
     AudioEngineTests.cpp
     RegionPlaybackTests.cpp
+    CueControllerTests.cpp
     PluginChainTests.cpp
     RealVst3Tests.cpp)
 

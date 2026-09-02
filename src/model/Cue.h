@@ -20,6 +20,17 @@ struct PluginSlotState
     bool bypassed = false;
 };
 
+/** What a running cue does when it is triggered again (QLab "second trigger"). */
+enum class SecondTriggerAction
+{
+    nothing,          // ignore
+    panic,            // fade out over the workspace panic time, then stop
+    stop,             // fade out over the cue's stop fade, then stop
+    hardStop,         // stop at once (de-clicked)
+    hardStopRestart,  // stop and start again from the top
+    devamp            // finish the current loop pass, then end
+};
+
 /** Playback settings of an audio cue (QLab "Time & Loops"). */
 struct AudioCueData
 {
@@ -48,6 +59,7 @@ struct Cue
     bool fileMissing = false;        // runtime only, not serialised
     std::vector<PluginSlotState> plugins;
     AudioCueData audio;
+    SecondTriggerAction secondTrigger = SecondTriggerAction::hardStopRestart;
 
     static constexpr int maxFadeMs = 600000;     // 10 minutes
     static constexpr double minGainDb = -60.0;   // treated as silence

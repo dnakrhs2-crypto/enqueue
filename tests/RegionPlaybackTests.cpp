@@ -269,6 +269,40 @@ public:
             engine.reapFinishedPlayers();
         }
 
+        beginTest ("gain changes apply to a running cue");
+        {
+            Cue cue;
+            cue.file = tone;
+            cue.gainDb = 0.0;
+            expect (engine.play (cue));
+
+            const float full = 0.5f / std::sqrt (2.0f);
+            for (int i = 0; i < 3; ++i)
+                engine.renderBlock (out, blockSize);
+
+            expectWithinAbsoluteError (rms (out), full, 0.02f);
+
+            engine.setLiveGainDb (cue.id, -6.0206);                // half
+            engine.renderBlock (out, blockSize);                   // ramp block
+            engine.renderBlock (out, blockSize);
+            expectWithinAbsoluteError (rms (out), full * 0.5f, 0.02f);
+
+            engine.setLiveGainDb (cue.id, Cue::minGainDb);         // silence
+            engine.renderBlock (out, blockSize);
+            engine.renderBlock (out, blockSize);
+            expectWithinAbsoluteError (rms (out), 0.0f, 1e-4f);
+            expect (engine.isPlaying (cue.id));                    // still running, just silent
+
+            engine.setLiveGainDb (cue.id, 0.0);
+            engine.renderBlock (out, blockSize);
+            engine.renderBlock (out, blockSize);
+            expectWithinAbsoluteError (rms (out), full, 0.02f);
+
+            engine.stopAll();
+            engine.renderBlock (out, blockSize);
+            engine.reapFinishedPlayers();
+        }
+
         beginTest ("a live trim that ends before the playhead stops the cue at once");
         {
             Cue cue;

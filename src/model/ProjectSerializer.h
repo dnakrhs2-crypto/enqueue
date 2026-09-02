@@ -1,6 +1,7 @@
 #pragma once
 
 #include "model/Cue.h"
+#include "model/WorkspaceSettings.h"
 
 namespace gocue
 {
@@ -11,6 +12,7 @@ struct Project
     juce::String name;
     std::vector<Cue> cues;
     std::vector<PluginSlotState> masterPlugins;
+    WorkspaceSettings settings;
 };
 
 /** JSON <-> Project.

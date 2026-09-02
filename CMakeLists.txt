@@ -52,6 +52,7 @@ target_sources(GoCueCore INTERFACE
     ${CMAKE_CURRENT_SOURCE_DIR}/src/model/CueList.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/model/ProjectSerializer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/app/ProjectDocument.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/app/CueController.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/audio/RegionLoopSource.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/audio/CuePlayer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/audio/AudioEngine.cpp
@@ -133,7 +134,10 @@ target_sources(GoCue PRIVATE
     src/ui/TransportBar.cpp
     src/ui/CueTable.cpp
     src/ui/CueInspector.cpp
+    src/ui/WaveformView.cpp
+    src/ui/TimeLoopsPanel.cpp
     src/ui/AudioSettingsDialog.cpp
+    src/ui/WorkspaceSettingsDialog.cpp
     src/ui/PluginWindows.cpp
     src/ui/PluginChainComponent.cpp
     src/ui/PluginDialogs.cpp)

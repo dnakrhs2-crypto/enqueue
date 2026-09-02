@@ -7,11 +7,14 @@ namespace gocue::CommandIDs
 
 enum : juce::CommandID
 {
-    go = 0x2001,
-    stopSelected,
-    stopAll,
-    fadeOutSelected,
-    fadeOutAll,
+    go = 0x2001,          // Space: GO (or resume paused cues)
+    pauseToggle,          // P
+    fadeOutSelected,      // F
+    panicAll,             // Esc: fade everything out over the panic time (twice = hard stop)
+    hardStopAll,
+    preview,              // V
+    resetCue,
+    resetAll,
 
     addCue,
     removeCue,
@@ -30,6 +33,7 @@ enum : juce::CommandID
     audioSettings,
     pluginManager,
     masterInserts,
+    workspaceSettings,
 
     checkForUpdates,
     about

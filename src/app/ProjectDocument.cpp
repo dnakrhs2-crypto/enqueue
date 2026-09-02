@@ -38,8 +38,17 @@ void ProjectDocument::newProject()
     history.clear();
     cues.clear();
     masterPlugins.clear();
+    settings = WorkspaceSettings();
     file = juce::File();
     markClean();
+}
+
+void ProjectDocument::setSettings (const WorkspaceSettings& newSettings)
+{
+    settings = newSettings;
+    settings.sanitise();
+    dirty = true;
+    notify();
 }
 
 juce::Result ProjectDocument::parse (const juce::File& projectFile, Project& out, juce::StringArray* warnings)
@@ -52,6 +61,8 @@ void ProjectDocument::adopt (Project project, const juce::File& projectFile)
     history.clear();
     cues.replaceAll (std::move (project.cues));
     masterPlugins = std::move (project.masterPlugins);
+    settings = project.settings;
+    settings.sanitise();
     file = projectFile;
     markClean();
 }
@@ -113,6 +124,7 @@ Project ProjectDocument::toProject() const
     project.name = getDisplayName();
     project.cues = cues.getAll();
     project.masterPlugins = masterPlugins;
+    project.settings = settings;
     return project;
 }
 
@@ -136,6 +148,7 @@ ProjectSnapshot ProjectDocument::makeSnapshot (bool capturePluginStates) const
 
 void ProjectDocument::restoreSnapshot (const ProjectSnapshot& snapshot)
 {
+    // settings are deliberately left alone: they are not part of the undo history
     cues.replaceAll (snapshot.project.cues);
     masterPlugins = snapshot.project.masterPlugins;
 
