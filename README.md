@@ -3,7 +3,8 @@
 Windows용 오디오 큐 플레이어. QLab의 오디오 기능을 단계적으로 옮기고 있다 (진행 계획: `docs/superpowers/plans/2026-09-02-gocue-qlab-features.md`).
 
 - 출력 장치: ASIO / WASAPI (`juce::AudioDeviceManager`, 메뉴 `오디오 > 오디오 출력 설정`)
-- 재생 포맷: WAV / AIFF / FLAC / MP3 / OGG
+- 재생 포맷: WAV / AIFF / FLAC / MP3 / OGG / AAC·M4A·MP4(Media Foundation), 최대 24채널 파일
+- **레벨 매트릭스**(파일 채널 × 큐 출력, 겡, 트림) + **오디오 패치**(큐 출력 → 장치 출력 라우팅, 출력 인서트, 최대 64채널 장치) + **오디션**(Alt+Space / Alt+V: 소리 없이 또는 대체 패치로)
 - 큐마다: 파형 위 **트림(시작/끝)**, **재생 횟수 / 무한 루프**, **속도**, **통합 페이드 엔벨로프**(파형 위에 점을 찍어 그리는 페이드), 정지 페이드(ms), 게인(dB, 재생 중에도 즉시 반영), 2차 트리거 규칙
 - 여러 큐 동시 재생(믹서), 큐마다 독립 VST3 인서트 체인 + 마스터 버스 체인, 플러그인 에디터 창, 상태 저장/복원
 - 일시정지/재개, 전체 페이드 정지(기본 2초), 더블 GO 방지, 실행 취소/다시 실행(200단계)
@@ -25,6 +26,7 @@ Windows용 오디오 큐 플레이어. QLab의 오디오 기능을 단계적으�
 | `F` | 페이드아웃 정지 (큐의 정지 페이드 시간, 위와 같은 대상 규칙) |
 | `Esc` | 전체 페이드 정지 — 프로젝트 설정의 시간(기본 2초) 동안 페이드아웃 후 정지. **0.5초 안에 두 번 = 즉시 정지**. 입력창을 편집하는 중에도 동작 |
 | `V` | 미리듣기 — 선택 큐를 재생하되 선택(플레이헤드)은 그대로 (프리웨이트·시퀀스 무시) |
+| `Alt+Space` / `Alt+V` | 오디션 GO / 오디션 미리듣기 — 프로젝트 설정 > 오디오의 방식(그대로 / 출력 없음 / 대체 패치)으로. 재생 메뉴 "항상 오디션" |
 | `L` / `Ctrl+T` | 로드(GO 지연 0) / 시간으로 로드(초 또는 m:ss.mmm, 음수 = 끝에서부터) |
 | `Ctrl+L` | 활성 큐 패널 보이기/숨기기 |
 | `Ctrl+Shift+M` | 쇼 모드 ↔ 편집 모드 (푸터 버튼과 같음) |
@@ -42,6 +44,17 @@ Windows용 오디오 큐 플레이어. QLab의 오디오 기능을 단계적으�
 | `Ctrl+N` / `Ctrl+O` / `Ctrl+S` / `Ctrl+Shift+S` | 새 프로젝트 / 열기 / 저장 / 다른 이름으로 저장 |
 | `Ctrl+Shift+,` | 프로젝트 설정 (GO 간격, 전체 페이드 정지 시간, 백업 등) |
 | `Ctrl+,` / `Ctrl+P` / `Ctrl+M` | 오디오 출력 설정 / VST3 플러그인 관리(스캔) / 마스터 버스 인서트 |
+| `Ctrl+Shift+P` | 오디오 패치 편집기 |
+
+레벨 매트릭스(인스펙터 "레벨" 탭 / 패치 편집기 "패치 라우팅" 탭):
+
+| 조작 | 동작 |
+|---|---|
+| 셀 세로 드래그 | 레벨 변경 (`Shift` = 0.1 dB 단위). 무음(-∞) 셀은 위로 끌어야 살아남 |
+| 더블클릭 | 기본값 (메인·입력·출력 = 0 dB, 크로스포인트 = 기본 라우팅) |
+| 숫자 입력 후 `Enter` | 부호 없이 쓰면 음수(예: `6` = -6 dB), 빈칸 또는 `-inf` = 무음. `Delete` = 무음 |
+| 우클릭 | 겡 1~8 지정 (같은 겡의 셀은 함께 움직임) · 기본값 · 무음 |
+| 화살표 | 셀 이동 |
 
 파형(시간·루프 탭)에서:
 
@@ -61,14 +74,18 @@ Windows용 오디오 큐 플레이어. QLab의 오디오 기능을 단계적으�
 - 일시정지 중에도 플러그인은 무음을 계속 처리한다(딜레이·리버브 시간 유지). 재개하면 멈춘 자리에서 이어진다.
 - 엔벨로프는 트림 구간 기준이며 반복(루프)마다 다시 적용된다. "시작/끝에 잠금"을 켜면 구간을 바꿔도 모양이 따라 늘어나고, 끄면 초 단위로 고정된다. 엔벨로프 편집은 다음 재생부터 반영된다(트림·속도·게인은 즉시).
 - 바이패스(`B`)된 플러그인도 계속 돌아가되 출력만 버린다. 플러그인 에디터에서 노브를 움직이면 프로젝트가 수정됨(`*`)으로 표시된다.
-- 모노 파일은 양쪽 채널로, 3채널 이상은 앞 2채널만 출력한다. 출력은 장치의 첫 스테레오 페어(설정 창에서 선택).
+- 파일의 모든 채널(최대 24)이 레벨 매트릭스의 행이 된다. 기본 라우팅: 모노 → 큐 출력 1·2, 그 외 채널 n → 큐 출력 n. VST3 큐 인서트는 스테레오(모노는 복제, 3채널 이상은 앞 2채널만 통과).
+- 큐 출력(패치당 기본 8개, 1~128)은 패치의 라우팅 매트릭스로 장치 출력(최대 64채널, 오디오 출력 설정에서 채널 수 선택)에 보내진다. 큐 출력 인서트 → 라우팅 + 패치 메인 → 장치 출력 인서트 → 마스터 버스 인서트(장치 1-2) 순서.
+- 매트릭스·트림·라우팅 변경은 재생 중에도 약 10 ms 램프로 즉시 반영된다.
+- AAC/M4A는 Windows Media Foundation 디코더로 읽는다(인코더 프라이밍 프레임 제거, 샘플 정확한 시크 — 트림·루프 위치가 파형과 맞는다).
 
 ## 프로젝트 설정 (파일 > 프로젝트 설정)
 
 - 일반: GO 사이 최소 시간, 키를 뗀 뒤에만 다시 GO, 전체 페이드 정지 시간(Esc), 새 큐 자동 번호·증가, 플레이헤드를 선택에 잠금, 열 때/닫을 때 큐 시작(번호로 지정; 닫을 때 큐는 끝난 뒤 종료, 최대 2분), 큐 리스트 행 크기
 - 큐 메뉴 "선택 큐를 새 큐 기본값으로": 이후 추가하는 큐가 그 큐의 설정(페이드·게인·색·웨이트·트리거·이펙트 체인 등)을 물려받는다(이름·번호·파일·핫키·시계 제외). 프로젝트에 저장됨
 - 파일: 큐 추가 시 오디오 파일을 프로젝트 폴더 `audio/`로 복사, 자동 백업(간격 5~600초, 저장한 적 있는 프로젝트만), 저장 전 백업(1분 1회), 오래된 백업 정리(최근 1시간 20개 / 하루 동안 시간별 / 그 뒤 일별)
-- 설정은 프로젝트 파일에 저장되며 실행 취소 대상이 아니다.
+- 오디오: 레벨 상한/하한(dB), 오디션 방식(그대로 / 출력 없음 / 대체 패치)과 대체 패치.
+- 설정과 오디오 패치는 프로젝트 파일에 저장되며 실행 취소 대상이 아니다.
 
 ## 빌드
 
@@ -145,19 +162,21 @@ appcast의 `sparkle:installerArguments="/SILENT /SP- /NORESTART"` 덕분에 업�
 ## 구조
 
 ```
-src/model    Cue / Envelope / CueList(선택·플레이헤드) / CueNumbering / CuePropertyPaste / ProjectSerializer / WorkspaceSettings
-src/audio    AudioEngine / CuePlayer / RegionLoopSource / FadeEnvelope         장치, 믹서, 재생 인스턴스
-             PluginHost / PluginChain                                          VST3 스캔·인스턴스, 인서트 체인
+src/model    Cue / Envelope / LevelMatrix(+TrimLevels) / AudioPatch / CueList(선택·플레이헤드) / CueNumbering / CuePropertyPaste
+             ProjectSerializer / WorkspaceSettings
+src/audio    AudioEngine(패치 버스) / CuePlayer(N채널·매트릭스) / RegionLoopSource / FadeEnvelope   장치, 믹서, 재생 인스턴스
+             PluginHost / PluginChain / MediaFoundationAudioFormat(AAC)                       VST3, 인서트 체인, AAC 리더
 src/app      ProjectDocument / ProjectHistory(실행 취소) / CueController(GO·시퀀스·핫키·벽시계·덕·패닉 규칙) / Scheduler
              BackupManager / AppSettings / Updater / Commands
 src/ui       MainComponent / TransportBar / CueTable / CueInspector(탭) / TimeLoopsPanel / WaveformView / ActiveCuesPanel / FooterBar
-             WorkspaceSettingsDialog / PastePropertiesDialog / PluginChainComponent / PluginWindows / PluginDialogs / AudioSettingsDialog
+             LevelMatrixComponent / PatchEditorDialog / WorkspaceSettingsDialog / PastePropertiesDialog
+             PluginChainComponent / PluginWindows / PluginDialogs / AudioSettingsDialog
 tests        JUCE UnitTest 콘솔 (오프라인 렌더로 오디오 경로 검증, 컨트롤러 규칙, 직렬화, 백업, 실물 VST3 검사)
 installer    GoCue.iss (Inno Setup)
 tools        release.py (릴리스 파이프라인), make_icon.py (아이콘)
 ```
 
-신호 경로: 파일 → 구간/루프/엔벨로프(`RegionLoopSource`, 파일 시간축) → 디스크 선독 → 리샘플(장치 SR × 속도) → 정지 페이드·일시정지 게이트 → 큐 게인 → 큐 VST3 체인 → 믹스 → 마스터 VST3 체인 → 출력 ch1-2
+신호 경로: 파일(N ch) → 구간/루프/엔벨로프(`RegionLoopSource`, 파일 시간축) → 디스크 선독 → 리샘플(장치 SR × 속도) → 정지 페이드·일시정지 게이트 → 큐 게인(메인)·덕 → 큐 VST3 체인(스테레오) → 레벨 매트릭스(N→K)·트림 → 패치 버스(K) → 큐 출력 인서트 → 라우팅(K→M)·패치 메인 → 장치 출력 인서트 → 마스터 VST3 체인(ch1-2) → 장치 출력(M)
 
 ## 프로젝트 파일 형식 (`.gocue`, v2)
 
@@ -167,18 +186,23 @@ tools        release.py (릴리스 파이프라인), make_icon.py (아이콘)
               "color": 3, "secondColor": 0, "useSecondColor": false, "flagged": false, "armed": true, "skipIfDisarmed": false, "autoLoad": false,
               "preWait": 0, "postWait": 0, "continueMode": "none", "hotkey": "", "wallClock": { "enabled": false },
               "fadeStopOthers": { "enabled": false }, "duck": { "enabled": false },
-              "fadeOutMs": 1500, "gainDb": -3.0, "durationSeconds": 12.3,
+              "fadeOutMs": 1500, "gainDb": -3.0, "durationSeconds": 12.3, "channels": 2, "patch": "patch-uuid",
+              "levels": { "inputs": [0, 0], "outputs": [0, 0, 0, 0, 0, 0, 0, 0], "crosspoints": [[0, "-inf", "..."], ["-inf", 0, "..."]] },
+              "trim": { "main": 0, "outputs": [0, 0] },
               "audio": { "start": 0.5, "end": -1, "playCount": 1, "infiniteLoop": false, "rate": 1.0, "preservePitch": false,
                          "envelope": { "enabled": true, "linear": false, "lockToTrim": true, "points": [[0, 0], [0.1, 1], [1, 0]] } },
               "secondTrigger": "hardStopRestart",
               "plugins": [ { "format": "VST3", "name": "3 Band EQ", "fileOrIdentifier": "C:/.../3BandEQ.vst3",
                              "uniqueId": 1662645128, "description": "<PLUGIN .../>", "state": "base64", "bypassed": false } ] } ],
   "master": { "plugins": [] },
+  "patches": [ { "id": "patch-uuid", "name": "기본 패치", "cueOutputs": 8, "cueOutputNames": ["", "..."], "routing": [[0, "-inf"], ["-inf", 0]],
+                 "mainDb": 0, "stereoPairs": [false, "..."], "cueOutputInserts": [[], "..."], "deviceOutputInserts": [] } ],
   "settings": { "doubleGoSeconds": 0, "requireKeyUp": false, "panicSeconds": 2, "autoNumber": true, "numberIncrement": 1,
                 "lockPlayheadToSelection": true, "startOnOpen": false, "startOnCloseCue": "", "rowSize": 1,
                 "hasCueTemplate": false, "cueTemplate": { "...": "큐 객체" },
                 "autoBackup": true, "backupIntervalSeconds": 60, "...": "..." } }
 ```
 - `end: -1`은 파일 끝. 엔벨로프 점의 x는 `lockToTrim`이면 구간의 0~1 비율, 아니면 구간 시작 기준 초.
+- dB 값은 숫자 또는 `"-inf"`(무음). `patch`가 없거나 모르는 id면 첫 패치(기본). `patches`가 없는 파일은 기본 패치 하나를 만든다.
 - v1 파일의 `fadeInMs`는 읽을 때 엔벨로프(0,0)→(fadeIn,1)로 바뀐다. `fadeOutMs`는 그대로 정지 페이드다.
 - 절대 경로가 없으면 프로젝트 폴더 기준 `fileRelative`로 다시 찾는다. 모르는 필드는 무시하고, 더 높은 `version`은 경고만 낸 뒤 읽는다.

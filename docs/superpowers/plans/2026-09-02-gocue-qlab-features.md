@@ -213,33 +213,38 @@ class Scheduler { public: using Clock = std::function<double()>;   // 초
 ## 단계 3 — v0.4.0: 레벨 매트릭스 · 패치 · 멀티채널/포맷 · 오디션
 
 ### Task 3.1: LevelMatrix/TrimLevels 모델 + 엔진 매트릭스 (9·11·12·15)
-- [ ] 모델(설계 1.4) + 직렬화("-inf") + 테스트(gainFor 합산, 무음 전파, resize 기본 대각선, 모노 파일 양쪽).
-- [ ] 엔진: 플레이어 출력이 K채널 큐 출력 버스로, 10 ms 램프 레벨 스무딩, `setLiveLevels`. 레벨 한계(max/min)는 UI·페이드에서 클램프.
-- [ ] 테스트: 2ch 파일 → 크로스포인트 대각선 -6 dB → 출력 RMS, 입력 -inf → 무음, 트림 +3 dB 후단 적용.
-- [ ] 커밋.
+- [x] 모델 `src/model/LevelMatrix.*`(inputs/outputs/crosspoints + 겡, "-inf" 직렬화, `gainFor` = input+cross+output, resize 기본 라우팅: 모노→1-2, 그 외 대각선) + `TrimLevels`. **설계 편차: 메인 레벨은 기존 `Cue::gainDb`를 그대로 씀**(52곳 이름 바꾸기 회피, 플레이어의 기존 램프 경로가 메인 담당). `LevelMatrixTests`.
+- [x] 엔진: `RegionLoopSource`가 파일 채널 전부 읽음(`reader->read` 다채널 변형 + int→float 변환), `CuePlayer` N채널(≤24) 렌더 → 스테레오 체인(모노는 ch1로 복제, 3ch+는 앞 2ch만) → `mixIntoBus`(매트릭스×트림, ~10 ms 램프, seqlock으로 새 게인 수신) → 버스. `AudioEngine::setLiveLevels`.
+- [x] 테스트(AudioEngineTests): 크로스포인트 -6 dB / 무음 행 / 출력 +6·트림 -6 상쇄 / 라이브 변경 램프 / 4ch 파일 3-4채널 라우팅. 1000 tests.
+- [x] 커밋 b537be5.
 
 ### Task 3.2: 패치 모델 + 패치 버스 렌더 + 장치 M채널 (13·14)
-- [ ] `AudioPatch` + 직렬화 + 기본 패치 이관. 엔진 `renderBlock`이 장치 출력 M채널을 쓰고, 패치별로 큐 출력 인서트 → 라우팅 → 장치 출력 인서트, 마스터 체인은 1-2에 유지.
-- [ ] 테스트: 큐 출력 2 → 라우팅으로 장치 3-4에 보냄, 패치 메인 -6 dB, 큐 출력 인서트 스텁 플러그인(TestGainPlugin) 적용.
-- [ ] 커밋.
+- [x] `src/model/AudioPatch.*`(id·이름·큐 출력 수 기본 8·출력 이름·라우팅 K×M 지연 확장·메인·큐/장치 출력 인서트·스테레오 묶기) + `Project::patches`(항상 ≥1, [0]=기본) + 직렬화 + `ProjectDocument::setPatches/patchForCue/cueOutputsFor`(실행 취소 밖). `AudioPatchTests`, 직렬화 왕복 테스트.
+- [x] 엔진 `PatchRuntime`(버스 K×block, routed M×block, 큐/장치 출력 체인 map, 라우팅 게인 램프): `setPatches`(체인은 락 밖에서 restore, 사라진 패치의 플레이어는 기본 패치로), `updatePatchLevels`, `getPatch*Chain`, `capturePatchInsertStates`, 장치 출력 `initialise(0, 64)` + `prepare(sr, block, M)` + 설정 창 최대 64채널. 플레이어는 `busTag`로 자기 버스를 앎. 마스터 체인은 장치 1-2에 유지.
+- [x] 테스트: 3-4채널 라우팅·패치 메인·라이브 라우팅 변경·스테레오 묶음 인서트·장치 출력 인서트·상태 캡처·미지 패치 → 기본·패치 교체 시 플레이어 이동. 1075 tests. MainComponent: 열기/새 프로젝트/저장 시 `setPatches`·`capturePatchInsertStates`.
+- [x] 커밋 8e917f9, 05bf63d.
 
 ### Task 3.3: LevelMatrixComponent + 레벨/트림 탭 + 겡 (9·10·11·12)
-- [ ] 그리드: 좌상 메인, 행 입력 레벨, 열 출력 레벨(장치에 연결된 출력=노란 핸들, 아니면 회색), 크로스포인트, 드래그(0 dB 상한)·타이핑(부호 없으면 음수, 빈칸 -inf), 겡 색 배경, 도그이어 표시, "기본 레벨로"·"전부 무음"·"입력 이름"·"겡 지정" 버튼. 재생 중 즉시 반영.
-- [ ] 트림 탭: 메인·출력별 오프셋.
-- [ ] 커밋.
+- [x] `src/ui/LevelMatrixComponent.*`: 메인/입력/출력/크로스포인트 셀, 세로 드래그(Shift=0.1 dB, 무음은 아래로 끌어도 무음), 더블클릭 기본값, 숫자 타이핑(부호 없으면 음수, 빈칸/-inf=무음), 화살표 이동, Delete=무음, 우클릭 겡 1~8(색 배경, 같은 겡은 같이 움직임), 장치에 안 닿는 출력 열은 흐리게+귀퉁이 표시, 레벨 한계(설정) 클램프. 입력 이름 편집은 생략(채널 번호 표시).
+- [x] 인스펙터 **레벨** 탭(패치 콤보 + 기본 레벨로 / 전부 무음 + 그리드, 재생 중 즉시 반영, coalesce "levels:id") · **트림** 탭(메인 + 출력별 세로 슬라이더).
+- [x] 커밋 e1d5f49. (GUI 스모크는 gom 사용 중이라 보류 — 유휴 확인 후 실행)
 
 ### Task 3.4: 패치 편집기 다이얼로그 (13·14)
-- [ ] 이름·큐 출력 개수(1~128)·장치 표시, 탭: 큐 출력(이름·인서트 추가·스테레오 묶기) / 패치 라우팅(매트릭스, 메인) / 장치 출력(인서트). "다른 패치에서 복사/기본값". 설정 창 오디오 탭: 패치 목록(추가·삭제·복제·순서), 레벨 한계.
-- [ ] 큐 I/O: 인스펙터 기본 탭에 출력 패치 선택.
-- [ ] 커밋.
+- [x] `src/ui/PatchEditorDialog.*`(오디오 > 오디오 패치..., Ctrl+Shift+P): 패치 목록(추가·복제·삭제, ★=기본), 이름, 큐 출력 개수, 장치 채널 수 표시, 탭 큐 출력(이름·다음과 스테레오·인서트 창) / 패치 라우팅(`LevelMatrixComponent` 재사용: 행=큐 출력, 열=장치 출력, 메인, 가장자리 레벨 숨김 `setEdgeLevelsVisible`) / 장치 출력(인서트 창). "기본 라우팅으로". 인서트 편집은 실행 취소 밖(markDirty). "다른 패치에서 복사"는 생략(복제로 대체).
+- [x] 설정 창 **오디오** 탭: 레벨 상한/하한. 패치 선택은 인스펙터 **레벨** 탭 상단 콤보(기본 탭이 아니라 레벨 탭 — 자리 문제).
+- [x] 커밋 e1d5f49.
 
 ### Task 3.5: 멀티채널 + Media Foundation 포맷 (16)
-- [ ] `CuePlayer` N채널(≤24) 경로, VST 체인 N채널 시도 후 실패 시 앞 2ch, 매트릭스 N행. `MediaFoundationAudioFormat`(m4a/aac/mp4/alac/wma 확장자, `IMFSourceReader`, 44.1k float PCM 변환, 길이 `MF_PD_DURATION`) 등록. 테스트: 4ch WAV 재생 라우팅, m4a 파일 리더 생성(테스트 자산 `tests/assets/tone.m4a`, 없으면 건너뜀).
-- [ ] 커밋.
+- [x] N채널 경로는 3.1에서. **VST 체인 N채널 시도는 보류**(체인은 스테레오 고정: 모노 복제, 3ch+는 앞 2ch) — 4단계 이후 필요 시.
+- [x] `src/audio/MediaFoundationAudioFormat.*`(.m4a/.aac/.mp4/.m4b; .wma는 JUCE WindowsMedia 포맷 유지): `IMFSourceReader` → float PCM(원본 SR/채널), 길이 `MF_PD_DURATION`, **시크 = 2프레임 프리롤 후 타임스탬프로 폐기**(첫 프레임은 overlap-add 없어 틀림), **프라이밍 프레임(ts 중복) 1버퍼 lookahead로 폐기** → ffmpeg 디코드와 샘플 정렬(상관 1.0000, lag 0), 시크=순차와 max diff 0. CMake: mfplat/mfreadwrite/mfuuid/propsys 링크. 엔진 ctor에서 등록.
+- [x] 테스트 `MediaFoundationTests`(자산 `tests/assets/sweep.m4a` + `sweep_ref.wav`, ffmpeg 생성; 백색소음은 AAC PNS 때문에 비교 불가라 스윕 사용). 1095 tests.
+- [x] 커밋 9c964d3.
 
 ### Task 3.6: 오디션 (47)
-- [ ] 설정 오디션 탭(그대로/출력 없음/대체 패치), Alt+Space 오디션 GO(플레이헤드 이동), Alt+V 오디션 미리듣기, "항상 오디션" 도구 메뉴 토글(GO 버튼 파란 "오디션" 라벨). 오디션 중 일반 재생 명령 → 즉시 일반 출력으로 재시작.
-- [ ] 커밋. 단계 3 마감(README, 0.4.0, 코덱스, 메모리).
+- [x] 설정 오디오 탭에 오디션 방식(그대로 / 출력 없음 / 대체 패치 + 패치 콤보), `PlayOptions{audition, silent, patchOverride}`(silent = 엔진의 `muteRuntime` 버스로), `CueController::go/preview/fireSequence/trigger(audition)` + `playOptions()`, 재생 메뉴 오디션 GO(Alt+Space)·오디션 미리듣기(Alt+V)·항상 오디션(체크, GO 버튼 파란 "GO (오디션)"). 오디션 중 일반 GO = 2차 트리거 규칙 건너뛰고 실제 출력으로 재시작(`engine.isAuditioning`).
+- [x] ★버그 수정: `juce::Uuid` 기본 생성자는 난수 → 선택적 id(`Cue::patchId`, `PlayOptions::patchOverride`, `auditionPatchId`, `ProjectSnapshot::selectedId`)를 `Uuid::null()`로 초기화(안 하면 모든 재생이 오디션으로 표시되던 사고).
+- [x] 테스트 CueControllerTests(출력 없음 / 일반 GO 재시작 / 대체 패치 라우팅 / 항상 오디션). 1111 tests. 커밋 f7fefca.
+- [ ] 단계 3 마감: README·릴리스 노트 0.4.0(작성됨), GUI 스모크(레벨 탭·패치 편집기·오디션 — 유휴 시), 코덱스 리뷰(2단계 리뷰 끝난 뒤), 릴리스, 메모리.
 
 ---
 
