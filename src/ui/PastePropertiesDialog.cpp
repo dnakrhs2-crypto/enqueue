@@ -30,7 +30,7 @@ namespace
             setup (basics, "기본 (색·깃발·아밍·건너뛰기·자동 로드·메모)", true);
             setup (timing, "시간 (프리웨이트·포스트웨이트·진행 모드)", true);
             setup (triggers, "트리거 (2차 트리거·시간 트리거·다른 큐 페이드 정지·덕)", true);
-            setup (timeLoops, "시간·루프 (트림·반복·속도·엔벨로프)", true);
+            setup (timeLoops, "재생 (트림·반복·속도·엔벨로프)", true);
             setup (levels, "레벨 (게인·정지 페이드)", true);
             setup (effects, "이펙트 (VST3 인서트 체인)", false);
             setup (fade, "페이드 / 디밴프 / 그룹 설정 (시간·상대·정지·레벨 목표·커브·파라미터·그룹 모드 — 대상은 제외)", true);

@@ -11,7 +11,7 @@
 namespace gocue
 {
 
-/** Inspector tab "시간·루프": trim, play count / loop, rate, integrated fade envelope, the waveform.
+/** Inspector tab "재생": trim, play count / loop, rate, integrated fade envelope, the waveform.
     Writes edits to the document (undoable) and pushes trim / rate to a running player. */
 class TimeLoopsPanel : public juce::Component
 {

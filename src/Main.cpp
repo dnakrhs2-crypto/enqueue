@@ -1,6 +1,7 @@
 #include "app/AppSettings.h"
 #include "app/Updater.h"
 #include "audio/AudioEngine.h"
+#include "ui/GoCueLookAndFeel.h"
 #include "ui/MainComponent.h"
 #include "ui/UiUtils.h"
 
@@ -21,7 +22,8 @@ public:
 
     void initialise (const juce::String& commandLine) override
     {
-        juce::LookAndFeel::getDefaultLookAndFeel().setDefaultSansSerifTypefaceName ("Malgun Gothic");
+        lookAndFeel = std::make_unique<GoCueLookAndFeel>();
+        juce::LookAndFeel::setDefaultLookAndFeel (lookAndFeel.get());
 
         settings = std::make_unique<AppSettings>();
         engine = std::make_unique<AudioEngine>();
@@ -92,6 +94,9 @@ public:
             settings->flush();
 
         settings = nullptr;
+
+        juce::LookAndFeel::setDefaultLookAndFeel (nullptr);   // after every window is gone
+        lookAndFeel = nullptr;
     }
 
     void systemRequestedQuit() override
@@ -143,7 +148,7 @@ private:
             mainComponent = content;
 
             setResizable (true, false);
-            setResizeLimits (860, 560, 10000, 10000);
+            setResizeLimits (860, 640, 10000, 10000);   // room for the transport, a few rows and the inspector's minimum
 
             const auto state = settings.getWindowState();
 
@@ -168,6 +173,7 @@ private:
     };
 
     juce::ApplicationCommandManager commandManager;
+    std::unique_ptr<GoCueLookAndFeel> lookAndFeel;
     std::unique_ptr<AppSettings> settings;
     std::unique_ptr<AudioEngine> engine;
     std::unique_ptr<MainWindow> mainWindow;

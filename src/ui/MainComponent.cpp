@@ -1,5 +1,7 @@
 #include "ui/MainComponent.h"
 
+#include "ui/SplitLayout.h"
+
 #include "app/BackupManager.h"
 #include "app/Commands.h"
 #include "app/Updater.h"
@@ -21,7 +23,6 @@ namespace
 {
     constexpr int menuBarHeight = 24;
     constexpr int transportHeight = 148;
-    constexpr int inspectorHeight = 330;
     constexpr int footerHeight = 30;
     constexpr double pluginChangeGraceMs = 1500.0;
 }
@@ -76,6 +77,31 @@ MainComponent::MainComponent (AudioEngine& e, AppSettings& s, juce::ApplicationC
     addAndMakeVisible (activeCues);
     addAndMakeVisible (footer);
 
+    inspectorFraction = settings.getInspectorFraction();
+    inspectorCollapsed = settings.getInspectorCollapsed();
+    activeCuesFraction = settings.getActiveCuesFraction();
+    activeCuesVisible = ! settings.getActiveCuesCollapsed();
+
+    inspectorDivider.onDragStart = [this] { dragStartSize = inspector.getHeight(); };
+    inspectorDivider.onDrag = [this] (int delta)
+    {
+        inspectorFraction = SplitLayout::fractionFor (dragStartSize - delta, splitHeight, inspectorFraction);   // dragging up = taller inspector
+        resized();
+    };
+    inspectorDivider.onDragEnd = [this] { settings.setInspectorFraction (inspectorFraction); };
+    inspectorDivider.onToggle = [this] { commands.invokeDirectly (CommandIDs::toggleInspector, true); };
+    addAndMakeVisible (inspectorDivider);
+
+    activeCuesDivider.onDragStart = [this] { dragStartSize = activeCues.getWidth(); };
+    activeCuesDivider.onDrag = [this] (int delta)
+    {
+        activeCuesFraction = SplitLayout::fractionFor (dragStartSize - delta, splitWidth, activeCuesFraction);   // dragging left = wider panel
+        resized();
+    };
+    activeCuesDivider.onDragEnd = [this] { settings.setActiveCuesFraction (activeCuesFraction); };
+    activeCuesDivider.onToggle = [this] { commands.invokeDirectly (CommandIDs::toggleActiveCues, true); };
+    addAndMakeVisible (activeCuesDivider);
+
     controller.onStatus = [this] (const juce::String& message, bool isError) { transport.showStatus (message, isError); };
     controller.onGoRejected = [this] { transport.flashGoRejected(); };
 
@@ -109,7 +135,7 @@ MainComponent::MainComponent (AudioEngine& e, AppSettings& s, juce::ApplicationC
     {
         editCues (rows, name, mutator);
     };
-    table.onEditNotes = [this] (int) { inspector.showNotes(); };
+    table.onEditNotes = [this] (int) { ensureInspectorShown(); inspector.showNotes(); };
     table.hasPlayed = [this] (const juce::Uuid& id) { return controller.hasPlayed (id); };
     transport.describeGroup = [this] (const Cue& groupCue) -> juce::String
     {
@@ -140,7 +166,7 @@ MainComponent::MainComponent (AudioEngine& e, AppSettings& s, juce::ApplicationC
         const auto& t = document.cues.get (index);
         return juce::String::fromUTF8 ("\xE2\x86\x92 ") + (t.number.isNotEmpty() ? t.number + " " : "#" + juce::String (index + 1) + " ") + t.name;
     };
-    table.onEditDuration = [this] (int) { inspector.showTimeTab(); };
+    table.onEditDuration = [this] (int) { ensureInspectorShown(); inspector.showTimeTab(); };
 
     inspector.onOpenPluginManager = [this] { showPluginManager(); };
     inspector.onPanic = [this] { controller.panicAll(); table.focusTable(); };
@@ -211,16 +237,37 @@ void MainComponent::resized()
     menuBar.setBounds (area.removeFromTop (menuBarHeight));
     transport.setBounds (area.removeFromTop (transportHeight));
     footer.setBounds (area.removeFromBottom (footerHeight));
-    inspector.setBounds (area.removeFromBottom (inspectorHeight));
 
+    // below the transport: [ cue list | active cues ] over a divider over the inspector. The two secondary panes
+    // take a share of the area (not a fixed size), so a resized window keeps the proportions.
+    splitHeight = area.getHeight();
+    const int inspectorH = SplitLayout::inspectorHeight (splitHeight, inspectorFraction, inspectorCollapsed, SplitDivider::thickness);
+    inspector.setVisible (! inspectorCollapsed);
+    inspector.setBounds (area.removeFromBottom (inspectorH));
+    inspectorDivider.setCollapsed (inspectorCollapsed);
+    inspectorDivider.setBounds (area.removeFromBottom (SplitDivider::thickness));
+
+    splitWidth = area.getWidth();
+    const int activeW = SplitLayout::activeCuesWidth (splitWidth, activeCuesFraction, ! activeCuesVisible, SplitDivider::thickness);
     activeCues.setVisible (activeCuesVisible);
-
-    if (activeCuesVisible)
-        activeCues.setBounds (area.removeFromRight (280));
+    activeCues.setBounds (area.removeFromRight (activeW));
+    activeCuesDivider.setCollapsed (! activeCuesVisible);
+    activeCuesDivider.setBounds (area.removeFromRight (SplitDivider::thickness));
 
     containerTabs.setBounds (area.removeFromTop (ContainerTabs::height));
     table.setBounds (area);
     cart.setBounds (area);
+}
+
+void MainComponent::ensureInspectorShown()
+{
+    if (! inspectorCollapsed)
+        return;
+
+    inspectorCollapsed = false;
+    settings.setInspectorCollapsed (false);
+    resized();
+    commands.commandStatusChanged();
 }
 
 void MainComponent::paint (juce::Graphics& g)
@@ -309,10 +356,10 @@ void MainComponent::getAllCommands (juce::Array<juce::CommandID>& ids)
                     CommandIDs::saveCueTemplate, CommandIDs::clearCueTemplate,
                     CommandIDs::newProject, CommandIDs::openProject,
                     CommandIDs::saveProject, CommandIDs::saveProjectAs,
-                    CommandIDs::undo, CommandIDs::redo, CommandIDs::toggleShowMode, CommandIDs::toggleActiveCues,
+                    CommandIDs::undo, CommandIDs::redo, CommandIDs::toggleShowMode, CommandIDs::toggleActiveCues, CommandIDs::toggleInspector,
                     CommandIDs::audioSettings, CommandIDs::audioPatches, CommandIDs::pluginManager, CommandIDs::masterInserts,
                     CommandIDs::workspaceSettings,
-                    CommandIDs::checkForUpdates, CommandIDs::about });
+                    CommandIDs::checkForUpdates, CommandIDs::showManual, CommandIDs::about });
 }
 
 void MainComponent::getCommandInfo (juce::CommandID commandID, juce::ApplicationCommandInfo& result)
@@ -661,9 +708,15 @@ void MainComponent::getCommandInfo (juce::CommandID commandID, juce::Application
             break;
 
         case CommandIDs::toggleActiveCues:
-            result.setInfo (activeCuesVisible ? ko ("활성 큐 패널 숨기기") : ko ("활성 큐 패널 보이기"),
-                            ko ("재생 중인 큐 목록 (일시정지·스크럽·페이드 정지)"), editMenu, 0);
+            result.setInfo (activeCuesVisible ? ko ("활성 큐 패널 접기") : ko ("활성 큐 패널 펴기"),
+                            ko ("재생 중인 큐 목록 (일시정지·스크럽·페이드 정지). 구분선을 끌면 너비가 바뀝니다"), editMenu, 0);
             result.addDefaultKeypress ('L', ModifierKeys::commandModifier);
+            break;
+
+        case CommandIDs::toggleInspector:
+            result.setInfo (inspectorCollapsed ? ko ("인스펙터 펴기") : ko ("인스펙터 접기"),
+                            ko ("아래 인스펙터 패널 접기 / 펴기. 구분선을 끌면 높이가 바뀝니다"), editMenu, 0);
+            result.addDefaultKeypress ('I', ModifierKeys::commandModifier);
             break;
 
         case CommandIDs::audioSettings:
@@ -689,6 +742,11 @@ void MainComponent::getCommandInfo (juce::CommandID commandID, juce::Application
         case CommandIDs::checkForUpdates:
             result.setInfo (ko ("업데이트 확인..."), ko ("GitHub Releases에서 새 버전 확인"), ko ("도움말"), 0);
             result.setActive (Updater::isAvailable());
+            break;
+
+        case CommandIDs::showManual:
+            result.setInfo (ko ("사용 설명서..."), ko ("기능 설명과 단축키"), ko ("도움말"), 0);
+            result.addDefaultKeypress (juce::KeyPress::F1Key, ModifierKeys::commandModifier);
             break;
 
         case CommandIDs::about:
@@ -964,6 +1022,14 @@ bool MainComponent::perform (const InvocationInfo& info)
 
         case CommandIDs::toggleActiveCues:
             activeCuesVisible = ! activeCuesVisible;
+            settings.setActiveCuesCollapsed (! activeCuesVisible);
+            resized();
+            commands.commandStatusChanged();
+            break;
+
+        case CommandIDs::toggleInspector:
+            inspectorCollapsed = ! inspectorCollapsed;
+            settings.setInspectorCollapsed (inspectorCollapsed);
             resized();
             commands.commandStatusChanged();
             break;
@@ -991,6 +1057,13 @@ bool MainComponent::perform (const InvocationInfo& info)
 
         case CommandIDs::checkForUpdates:
             Updater::checkForUpdatesWithUI();
+            break;
+
+        case CommandIDs::showManual:
+            if (manualWindow == nullptr)
+                manualWindow = std::make_unique<ManualWindow>();
+
+            manualWindow->open();
             break;
 
         case CommandIDs::about:
@@ -1044,6 +1117,7 @@ juce::PopupMenu MainComponent::getMenuForIndex (int topLevelMenuIndex, const juc
             menu.addSeparator();
             menu.addCommandItem (&commands, CommandIDs::toggleShowMode);
             menu.addCommandItem (&commands, CommandIDs::toggleActiveCues);
+            menu.addCommandItem (&commands, CommandIDs::toggleInspector);
             break;
 
         case 2:
@@ -1117,6 +1191,7 @@ juce::PopupMenu MainComponent::getMenuForIndex (int topLevelMenuIndex, const juc
             break;
 
         case 5:
+            menu.addCommandItem (&commands, CommandIDs::showManual);
             menu.addCommandItem (&commands, CommandIDs::checkForUpdates);
             menu.addSeparator();
             menu.addCommandItem (&commands, CommandIDs::about);

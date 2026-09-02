@@ -49,6 +49,7 @@ private:
     void addPlugin (const juce::PluginDescription& description);
     void openEditor (int index);
     void removeSlot (int index);
+    void moveSlot (int from, int to);
     void toggleBypass (int index);
 
     AudioEngine& engine;

@@ -6,6 +6,7 @@ target_sources(GoCueTests PRIVATE
     EnvelopeTests.cpp
     ProjectHistoryTests.cpp
     ProjectDocumentTests.cpp
+    SplitLayoutTests.cpp
     CueListTests.cpp
     CueNumberingTests.cpp
     CuePropertyPasteTests.cpp

@@ -29,6 +29,17 @@ public:
     juce::String getWindowState() const;
     void setWindowState (const juce::String& state);
 
+    /** Layout: the inspector's share of the height below the transport, the active-cues panel's share of the
+        width, and whether each is folded away. */
+    double getInspectorFraction() const;
+    void setInspectorFraction (double fraction);
+    bool getInspectorCollapsed() const;
+    void setInspectorCollapsed (bool collapsed);
+    double getActiveCuesFraction() const;
+    void setActiveCuesFraction (double fraction);
+    bool getActiveCuesCollapsed() const;
+    void setActiveCuesCollapsed (bool collapsed);
+
     /** Writes pending changes to disk now. */
     void flush();
 

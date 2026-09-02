@@ -69,6 +69,7 @@ enum : juce::CommandID
 
     toggleShowMode,       // Ctrl+Shift+M
     toggleActiveCues,     // Ctrl+L
+    toggleInspector,      // Ctrl+I
 
     audioSettings,
     audioPatches,         // 오디오 패치 편집기
@@ -77,6 +78,7 @@ enum : juce::CommandID
     workspaceSettings,
 
     checkForUpdates,
+    showManual,           // Ctrl+F1
     about
 };
 

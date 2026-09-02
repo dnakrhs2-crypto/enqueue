@@ -10,6 +10,10 @@ namespace Keys
     constexpr const char* lastProjectFile   = "lastProjectFile";
     constexpr const char* lastAudioDir      = "lastAudioDirectory";
     constexpr const char* windowState       = "windowState";
+    constexpr const char* inspectorFraction = "inspectorFraction";
+    constexpr const char* inspectorFolded   = "inspectorCollapsed";
+    constexpr const char* activeCuesFraction = "activeCuesFraction";
+    constexpr const char* activeCuesFolded  = "activeCuesCollapsed";
 }
 
 AppSettings::AppSettings()
@@ -81,6 +85,46 @@ juce::String AppSettings::getWindowState() const
 void AppSettings::setWindowState (const juce::String& state)
 {
     settings->setValue (Keys::windowState, state);
+}
+
+double AppSettings::getInspectorFraction() const
+{
+    return settings->getDoubleValue (Keys::inspectorFraction, 0.45);
+}
+
+void AppSettings::setInspectorFraction (double fraction)
+{
+    settings->setValue (Keys::inspectorFraction, fraction);
+}
+
+bool AppSettings::getInspectorCollapsed() const
+{
+    return settings->getBoolValue (Keys::inspectorFolded, false);
+}
+
+void AppSettings::setInspectorCollapsed (bool collapsed)
+{
+    settings->setValue (Keys::inspectorFolded, collapsed);
+}
+
+double AppSettings::getActiveCuesFraction() const
+{
+    return settings->getDoubleValue (Keys::activeCuesFraction, 0.24);
+}
+
+void AppSettings::setActiveCuesFraction (double fraction)
+{
+    settings->setValue (Keys::activeCuesFraction, fraction);
+}
+
+bool AppSettings::getActiveCuesCollapsed() const
+{
+    return settings->getBoolValue (Keys::activeCuesFolded, false);
+}
+
+void AppSettings::setActiveCuesCollapsed (bool collapsed)
+{
+    settings->setValue (Keys::activeCuesFolded, collapsed);
 }
 
 void AppSettings::flush()

@@ -3028,7 +3028,7 @@ public:
     EffectsPanel (ProjectDocument& doc, AudioEngine& e, PluginWindowManager& windows)
         : document (doc), cues (doc.cues), engine (e), chainStrip (e, windows)
     {
-        styleLabel (hint, ko ("이 큐만 통과하는 VST3 인서트 (파일 → 페이드 → 게인 → 인서트 → 믹스)"), 12.0f);
+        styleLabel (hint, ko ("이 큐만 통과하는 VST3 인서트, 번호 순서대로 직렬 처리 (1번을 거친 소리가 2번으로). < > 로 순서 변경. 신호 흐름: 파일 → 페이드 → 게인 → 인서트 → 믹스"), 12.0f);
         addAndMakeVisible (hint);
 
         chainStrip.performEdit = [this] (const juce::String& name, const std::function<void()>& edit)
@@ -3233,7 +3233,7 @@ void CueInspector::rebuildTabs (int wanted)
     else
     {
         tabs.addTab (ko ("기본"), Palette::panel, basics, false);
-        tabs.addTab (ko ("시간·루프"), Palette::panel, timeLoops, false);
+        tabs.addTab (ko ("재생"), Palette::panel, timeLoops, false);
         tabs.addTab (ko ("레벨"), Palette::panel, levels, false);
         tabs.addTab (ko ("트림"), Palette::panel, trim, false);
         tabs.addTab (ko ("트리거"), Palette::panel, triggers, false);
@@ -3250,7 +3250,7 @@ void CueInspector::showNotes()
 
 void CueInspector::showTimeTab()
 {
-    tabs.setCurrentTabIndex (1);   // 시간·루프 for audio cues, 페이드 for fade cues
+    tabs.setCurrentTabIndex (1);   // 재생 for audio cues, 페이드 for fade cues
 }
 
 void CueInspector::fetchFadeLevelsFromTarget()

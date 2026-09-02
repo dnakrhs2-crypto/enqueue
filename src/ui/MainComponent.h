@@ -9,6 +9,8 @@
 #include "ui/ContainerTabs.h"
 #include "ui/CueCartView.h"
 #include "ui/CueInspector.h"
+#include "ui/SplitDivider.h"
+#include "ui/ManualWindow.h"
 #include "ui/CueTable.h"
 #include "ui/FooterBar.h"
 #include "ui/PluginWindows.h"
@@ -208,6 +210,13 @@ private:
     std::unique_ptr<juce::FileChooser> chooser;
     bool dragOverWindow = false;
     bool activeCuesVisible = true;
+    bool inspectorCollapsed = false;
+    double inspectorFraction = 0.45, activeCuesFraction = 0.24;   // shares of the split areas: kept across window resizes
+    int splitHeight = 0, splitWidth = 0, dragStartSize = 0;
+    SplitDivider inspectorDivider { SplitDivider::Orientation::horizontal }, activeCuesDivider { SplitDivider::Orientation::vertical };
+
+    void ensureInspectorShown();
+    std::unique_ptr<ManualWindow> manualWindow;   // made on first use, hidden on close
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (MainComponent)
 };

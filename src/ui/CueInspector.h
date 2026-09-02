@@ -19,7 +19,7 @@ namespace gocue
 {
 
 /** Bottom panel with tabs for the selected cue: 기본 (number, name, colour, file, waits, continue mode,
-    hotkey, flags, stop fade, gain, notes) / 시간·루프 (waveform, trim, loops, envelope) /
+    hotkey, flags, stop fade, gain, notes) / 재생 (waveform, trim, loops, envelope) /
     레벨 (patch, level matrix) / 트림 (fixed offsets) /
     트리거 (second trigger, wall clock, fade-stop-others, duck) / 이펙트 (VST3 insert chain).
     Every edit goes through ProjectDocument::perform so it is undoable. */
@@ -40,7 +40,7 @@ public:
     void setEditable (bool editable);
     /** Jumps to the 기본 tab and focuses the notes field. */
     void showNotes();
-    /** Jumps to the 시간·루프 tab (or the 페이드 tab of a fade cue). */
+    /** Jumps to the 재생 tab (or the 페이드 tab of a fade cue). */
     void showTimeTab();
     /** Fade cue: copies the target's current levels into the fade's goals (Ctrl+Shift+T). */
     void fetchFadeLevelsFromTarget();

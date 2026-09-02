@@ -16,7 +16,7 @@ namespace
 class PluginChainComponent::SlotView : public juce::Component
 {
 public:
-    SlotView (PluginChainComponent& o, int slotIndex, const PluginChain::Slot& slot)
+    SlotView (PluginChainComponent& o, int slotIndex, int slotCount, const PluginChain::Slot& slot)
         : owner (o), index (slotIndex), missing (slot.isMissing())
     {
         juce::String title = slot.plugin != nullptr ? slot.plugin->getName() : slot.state.name;
@@ -27,12 +27,27 @@ public:
         if (missing)
             title = ko ("[없음] ") + title;
 
-        name.setText (juce::String (slotIndex + 1) + ". " + title, juce::dontSendNotification);
+        name.setText (juce::String (slotIndex + 1) + ko ("번 ") + title, juce::dontSendNotification);
         name.setFont (juce::Font (juce::FontOptions (13.0f, juce::Font::bold)));
         name.setColour (juce::Label::textColourId, missing ? Palette::missing : Palette::text);
         name.setMinimumHorizontalScale (0.8f);
         name.setTooltip (slot.state.fileOrIdentifier);
         addAndMakeVisible (name);
+
+        // order = processing order: the sound leaves slot 1 and enters slot 2
+        earlier.setButtonText ("<");
+        earlier.setTooltip (ko ("앞으로 (먼저 처리)"));
+        earlier.setEnabled (slotIndex > 0);
+        earlier.setWantsKeyboardFocus (false);
+        earlier.onClick = [this] { owner.moveSlot (index, index - 1); };
+        addAndMakeVisible (earlier);
+
+        later.setButtonText (">");
+        later.setTooltip (ko ("뒤로 (나중에 처리)"));
+        later.setEnabled (slotIndex < slotCount - 1);
+        later.setWantsKeyboardFocus (false);
+        later.onClick = [this] { owner.moveSlot (index, index + 1); };
+        addAndMakeVisible (later);
 
         bypass.setButtonText ("B");
         bypass.setTooltip (ko ("바이패스"));
@@ -62,7 +77,12 @@ public:
     void resized() override
     {
         auto area = getLocalBounds().reduced (4);
-        name.setBounds (area.removeFromTop (20));
+        auto top = area.removeFromTop (20);
+        later.setBounds (top.removeFromRight (22));
+        top.removeFromRight (2);
+        earlier.setBounds (top.removeFromRight (22));
+        top.removeFromRight (4);
+        name.setBounds (top);
         area.removeFromTop (2);
         bypass.setBounds (area.removeFromLeft (28));
         area.removeFromLeft (4);
@@ -90,7 +110,7 @@ private:
     const int index;
     const bool missing;
     juce::Label name;
-    juce::TextButton bypass, edit, remove;
+    juce::TextButton earlier, later, bypass, edit, remove;
 };
 
 //==============================================================================
@@ -154,7 +174,7 @@ void PluginChainComponent::refresh()
 
         for (int i = 0; i < numSlots; ++i)
         {
-            auto view = std::make_unique<SlotView> (*this, i, chain->getSlot (i));
+            auto view = std::make_unique<SlotView> (*this, i, numSlots, chain->getSlot (i));
             view->setTopLeftPosition (i * (slotWidth + slotGap), 0);
             strip.addAndMakeVisible (*view);
             slotViews.push_back (std::move (view));
@@ -285,6 +305,30 @@ void PluginChainComponent::removeSlot (int index)
 
         auto* target = safeThis->chain;
         safeThis->runEdit (ko ("플러그인 삭제"), [target, index] { target->removePlugin (index); });
+        safeThis->refresh();
+    });
+}
+
+void PluginChainComponent::moveSlot (int from, int to)
+{
+    // Deferred: the click arrives from a button inside a slot view that refresh() destroys.
+    juce::Component::SafePointer<PluginChainComponent> safeThis (this);
+    auto* expectedChain = chain;
+    const int expectedCount = chain != nullptr ? chain->getNumSlots() : 0;
+
+    juce::MessageManager::callAsync ([safeThis, expectedChain, expectedCount, from, to]
+    {
+        if (safeThis == nullptr || safeThis->chain == nullptr || safeThis->chain != expectedChain)
+            return;
+
+        if (safeThis->chain->getNumSlots() != expectedCount || to < 0 || to >= expectedCount)
+        {
+            safeThis->refresh();   // the chain changed underneath us: do not guess
+            return;
+        }
+
+        auto* target = safeThis->chain;
+        safeThis->runEdit (ko ("이펙트 순서 변경"), [target, from, to] { target->movePlugin (from, to); });
         safeThis->refresh();
     });
 }
