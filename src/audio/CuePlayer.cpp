@@ -564,7 +564,7 @@ bool CuePlayer::renderNextBlock (juce::AudioBuffer<float>& fullBuffer, int numSa
     if (paused && ! inTail)
     {
         // Frozen and already silent: a stop / fade request or a trim that ended before the position ends it now.
-        const bool ended = virtualPosition.load (std::memory_order_relaxed) >= (double) source->getTotalLength();
+        const bool ended = ! micMode && source != nullptr && virtualPosition.load (std::memory_order_relaxed) >= (double) source->getTotalLength();
 
         if (stopRequested.load (std::memory_order_relaxed) || hardStop || ended)
         {

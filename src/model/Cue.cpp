@@ -270,8 +270,8 @@ void Cue::sanitise() noexcept
     if (! std::isfinite (control.seconds) || control.seconds < 0.0)
         control.seconds = 0.0;
 
-    mic.firstInput = juce::jlimit (0, 63, mic.firstInput);
-    mic.numInputs = juce::jlimit (1, LevelMatrix::maxInputs, mic.numInputs);
+    mic.firstInput = juce::jlimit (0, 31, mic.firstInput);                                             // the engine opens up to 32 inputs
+    mic.numInputs = juce::jlimit (1, juce::jmin (LevelMatrix::maxInputs, 32 - mic.firstInput), mic.numInputs);
 
     if (type == CueType::mic)
         numChannels = mic.numInputs;   // the level matrix rows

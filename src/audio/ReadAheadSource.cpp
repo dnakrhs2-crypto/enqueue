@@ -8,7 +8,7 @@ namespace gocue
 namespace
 {
     constexpr int chunkSamples = 2048;   // one background read
-    constexpr int keepBehind = 512;      // samples kept before the play position (a tiny backwards seek stays cached)
+    constexpr int keepBehind = 8192;     // samples kept before the play position: the block being copied out is never overwritten
 }
 
 ReadAheadSource::ReadAheadSource (juce::PositionableAudioSource& u, juce::TimeSliceThread& t, int numSamplesToBuffer, int channels)
@@ -79,9 +79,8 @@ void ReadAheadSource::invalidate (juce::int64 fromPosition)
         playPos.store (fromPosition, std::memory_order_relaxed);
     }
 
-    if (prepared.load (std::memory_order_acquire))
-        fillChunk();   // the first chunk right now: no silent gap at the jump
-
+    // the refill is the read-ahead thread's job: the callers hold the engine lock, and a disk read here would
+    // make the audio callback wait for it (a few milliseconds of silence at the jump instead)
     thread.moveToFrontOfQueue (this);
 }
 
@@ -99,14 +98,16 @@ void ReadAheadSource::getNextAudioBlock (const juce::AudioSourceChannelInfo& inf
         pos = playPos.load (std::memory_order_relaxed);
         vStart = validStart;
         vEnd = validEnd;
-        playPos.store (pos + info.numSamples, std::memory_order_relaxed);
     }
 
     const juce::int64 from = juce::jmax (pos, vStart);
     const juce::int64 to = juce::jmin (pos + (juce::int64) info.numSamples, vEnd);
 
     if (to <= from || ring.getNumSamples() == 0)
+    {
+        playPos.store (pos + info.numSamples, std::memory_order_relaxed);
         return;   // nothing cached for this block: silence (the thread is behind)
+    }
 
     const int offset = (int) (from - pos);
     int remaining = (int) (to - from);
@@ -125,6 +126,10 @@ void ReadAheadSource::getNextAudioBlock (const juce::AudioSourceChannelInfo& inf
         dest += n;
         remaining -= n;
     }
+
+    // the play position moves on only after the copy: the producer keeps 'keepBehind' behind it, so what
+    // we were copying was never a write target meanwhile
+    playPos.store (pos + info.numSamples, std::memory_order_relaxed);
 }
 
 void ReadAheadSource::readIntoRing (juce::int64 start, int length)

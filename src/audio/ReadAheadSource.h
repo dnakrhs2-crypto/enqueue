@@ -32,8 +32,8 @@ public:
     juce::int64 getTotalLength() const override { return upstream.getTotalLength(); }
     bool isLooping() const override { return false; }
 
-    /** The upstream's content changed: forgets everything cached and refills from 'fromPosition' right away
-        (on the calling thread, one chunk) so playback continues without a gap. */
+    /** The upstream's content changed: forgets everything cached; the read-ahead thread refills from
+        'fromPosition' at once (never a disk read on the calling thread). */
     void invalidate (juce::int64 fromPosition);
 
     /** Samples cached and playable from the current play position (tests). */

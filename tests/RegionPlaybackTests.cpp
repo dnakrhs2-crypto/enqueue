@@ -818,9 +818,14 @@ public:
                 ahead.getNextAudioBlock (info);
                 expectWithinAbsoluteError (block.getSample (0, 0), 1512.0f, 0.01f);   // continues from the cache
 
-                // the upstream's content changes: invalidate() must serve the new content from the new position immediately
+                // the upstream's content changes: after invalidate() nothing old is served; the thread refills from the new position
                 ramp.epoch = 1;
                 ahead.invalidate (5000);
+
+                for (int tries = 0; tries < 200 && ahead.getNumSamplesReady() < 512; ++tries)
+                    juce::Thread::sleep (5);
+
+                expect (ahead.getNumSamplesReady() >= 512);
                 ahead.getNextAudioBlock (info);
                 expectWithinAbsoluteError (block.getSample (0, 0), 1005000.0f, 0.5f);
                 expectWithinAbsoluteError (block.getSample (0, 511), 1005511.0f, 0.5f);

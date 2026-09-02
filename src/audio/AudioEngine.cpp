@@ -45,30 +45,53 @@ juce::String AudioEngine::initialise (const juce::XmlElement* savedDeviceState)
     return error;
 }
 
-void AudioEngine::setInputsWanted (int channels)
+juce::String AudioEngine::setInputsWanted (int channels)
 {
     channels = juce::jlimit (0, maxDeviceInputs, channels);
 
     if (channels <= 0)
-        return;
-
-    auto setup = deviceManager.getAudioDeviceSetup();
-    const int open = setup.inputChannels.countNumberOfSetBits();
-
-    if (open >= channels && ! setup.useDefaultInputChannels)
-        return;
+        return {};
 
     auto* device = deviceManager.getCurrentAudioDevice();
-    const int available = device != nullptr ? device->getInputChannelNames().size() : channels;
+
+    if (device == nullptr)
+        return {};   // no device open: nothing to reconfigure (the mic cues will render silence)
+
+    const int available = device->getInputChannelNames().size();
     const int wanted = juce::jmin (channels, juce::jmax (available, 0));
 
-    if (wanted <= 0 || open >= wanted)
-        return;
+    if (wanted <= 0)
+        return {};
 
+    // the mic cue rows are the first open inputs in device order: inputs 1..wanted must all be open, not just
+    // "enough" of them (JUCE packs the active channels, so an open 9-10 would arrive as rows 1-2)
+    auto setup = deviceManager.getAudioDeviceSetup();
+    bool prefixOpen = ! setup.useDefaultInputChannels;
+
+    for (int i = 0; i < wanted && prefixOpen; ++i)
+        prefixOpen = setup.inputChannels[i];
+
+    if (prefixOpen)
+        return {};
+
+    const auto previous = setup;
     setup.useDefaultInputChannels = false;
-    setup.inputChannels.clear();
-    setup.inputChannels.setRange (0, wanted, true);
-    deviceManager.setAudioDeviceSetup (setup, true);   // restarts the device with the inputs open
+    setup.inputChannels.setRange (0, wanted, true);   // keeps any other inputs the user opened
+    const auto error = deviceManager.setAudioDeviceSetup (setup, true);   // restarts the device with the inputs open
+
+    if (error.isNotEmpty())
+    {
+        deviceManager.setAudioDeviceSetup (previous, true);   // never leave the outputs dead because an input failed
+        return error;
+    }
+
+    return {};
+}
+
+void AudioEngine::reapIfNeeded()
+{
+    if (reapNeeded.exchange (false, std::memory_order_acq_rel))
+        reapFinishedPlayers();
 }
 
 void AudioEngine::shutdown()
@@ -186,8 +209,8 @@ juce::StringArray AudioEngine::setPatches (const std::vector<AudioPatch>& patche
 
     // Chains that a live runtime is missing are built here and only put into its map under the lock:
     // the audio thread walks those maps.
-    struct PendingChain { PatchRuntime* runtime; bool device; int index; std::unique_ptr<PluginChain> chain; };
-    std::vector<PendingChain> pendingChains;
+    struct PendingChain { PatchRuntime* runtime; bool device; std::map<int, std::unique_ptr<PluginChain>> node; };   // the map node is made here, linked under the lock
+    std::list<PendingChain> pendingChains;   // a list: no reallocation moves of the map nodes
 
     // Sanitised copies and routing tables are made outside the lock and swapped in.
     struct Prepared { AudioPatch patch; std::vector<float> routing; };
@@ -227,9 +250,15 @@ juce::StringArray AudioEngine::setPatches (const std::vector<AudioPatch>& patche
                     errors.addArray (chain->restore (states, factory));
 
                     if (existing == nullptr)
+                    {
                         chains.emplace (i, std::move (chain));                          // not visible to the audio thread yet
+                    }
                     else
-                        pendingChains.push_back ({ target, device, i, std::move (chain) });   // inserted under the lock below
+                    {
+                        PendingChain pc { target, device, {} };
+                        pc.node.emplace (i, std::move (chain));                         // linked under the lock below, no allocation there
+                        pendingChains.push_back (std::move (pc));
+                    }
 
                     continue;
                 }
@@ -262,7 +291,7 @@ juce::StringArray AudioEngine::setPatches (const std::vector<AudioPatch>& patche
         const juce::ScopedLock sl (lock);
 
         for (auto& pc : pendingChains)
-            (pc.device ? pc.runtime->deviceOutputChains : pc.runtime->cueOutputChains).emplace (pc.index, std::move (pc.chain));
+            (pc.device ? pc.runtime->deviceOutputChains : pc.runtime->cueOutputChains).insert (pc.node.extract (pc.node.begin()));
 
         for (size_t i = 0; i < patches.size(); ++i)
         {
@@ -366,15 +395,17 @@ PluginChain& AudioEngine::getPatchCueOutputChain (const juce::Uuid& patchId, int
     if (const auto it = r->cueOutputChains.find (cueOutput); it != r->cueOutputChains.end())
         return *it->second;
 
-    // built outside the lock, put into the map (which the audio thread walks) under it
+    // built (and its map node allocated) outside the lock, linked into the map the audio thread walks under it
     auto chain = std::make_unique<PluginChain>();
     chain->setListener (chainListener);
     chain->prepare (getSampleRate(), getBlockSize());
     PluginChain* raw = chain.get();
+    std::map<int, std::unique_ptr<PluginChain>> node;
+    node.emplace (cueOutput, std::move (chain));
 
     {
         const juce::ScopedLock sl (lock);
-        r->cueOutputChains.emplace (cueOutput, std::move (chain));
+        r->cueOutputChains.insert (node.extract (node.begin()));   // node handle: no allocation here
     }
 
     return *raw;
@@ -406,10 +437,12 @@ PluginChain& AudioEngine::getPatchDeviceOutputChain (const juce::Uuid& patchId, 
     chain->setListener (chainListener);
     chain->prepare (getSampleRate(), getBlockSize());
     PluginChain* raw = chain.get();
+    std::map<int, std::unique_ptr<PluginChain>> node;
+    node.emplace (deviceOutput, std::move (chain));
 
     {
         const juce::ScopedLock sl (lock);
-        r->deviceOutputChains.emplace (deviceOutput, std::move (chain));
+        r->deviceOutputChains.insert (node.extract (node.begin()));
     }
 
     return *raw;
@@ -813,11 +846,19 @@ juce::int64 AudioEngine::getVirtualPosition (const juce::Uuid& cueId) const
 
 void AudioEngine::setLiveRegion (const juce::Uuid& cueId, double startSeconds, double endSeconds)
 {
-    const juce::ScopedLock sl (lock);
+    CuePlayer* found[16];
+    int count = 0;
 
-    for (auto& p : players)
-        if (p->getCueId() == cueId && ! p->hasFinished())
-            p->setLiveRegion (startSeconds, endSeconds);
+    {
+        const juce::ScopedLock sl (lock);
+
+        for (auto& p : players)
+            if (p->getCueId() == cueId && ! p->hasFinished() && count < 16)
+                found[count++] = p.get();
+    }
+
+    for (int i = 0; i < count; ++i)
+        found[i]->setLiveRegion (startSeconds, endSeconds);
 }
 
 void AudioEngine::setLiveRate (const juce::Uuid& cueId, double rate)
@@ -862,20 +903,38 @@ double AudioEngine::getSecondsToPassEnd (const juce::Uuid& cueId) const
 
 void AudioEngine::setLiveSlices (const juce::Uuid& cueId, const std::vector<Slice>& slices, int firstSliceCount)
 {
-    const juce::ScopedLock sl (lock);
+    CuePlayer* found[16];
+    int count = 0;
 
-    for (auto& p : players)
-        if (p->getCueId() == cueId && ! p->hasFinished())
-            p->setLiveSlices (slices, firstSliceCount);
+    {
+        const juce::ScopedLock sl (lock);
+
+        for (auto& p : players)
+            if (p->getCueId() == cueId && ! p->hasFinished() && count < 16)
+                found[count++] = p.get();
+    }
+
+    for (int i = 0; i < count; ++i)
+        found[i]->setLiveSlices (slices, firstSliceCount);   // layout rebuild + read-ahead invalidate outside the lock
 }
 
 void AudioEngine::setLiveLevels (const juce::Uuid& cueId, const LevelMatrix& levels, const TrimLevels& trim)
 {
-    const juce::ScopedLock sl (lock);
+    // the matrix copies and gain tables allocate: done outside the lock the audio callback shares
+    // (players are only destroyed on this thread, so the pointers stay valid)
+    CuePlayer* found[16];
+    int count = 0;
 
-    for (auto& p : players)
-        if (p->getCueId() == cueId && ! p->hasFinished())
-            p->setLiveLevels (levels, trim);
+    {
+        const juce::ScopedLock sl (lock);
+
+        for (auto& p : players)
+            if (p->getCueId() == cueId && ! p->hasFinished() && count < 16)
+                found[count++] = p.get();
+    }
+
+    for (int i = 0; i < count; ++i)
+        found[i]->setLiveLevels (levels, trim);
 }
 
 juce::int64 AudioEngine::getStartOrder (const juce::Uuid& cueId) const
@@ -892,17 +951,21 @@ juce::int64 AudioEngine::getStartOrder (const juce::Uuid& cueId) const
 
 bool AudioEngine::getLiveState (const juce::Uuid& cueId, LiveState& out) const
 {
-    const juce::ScopedLock sl (lock);
     const CuePlayer* best = nullptr;
 
-    for (auto& p : players)
-        if (p->getCueId() == cueId && ! p->hasFinished() && ! p->isLoadedNotStarted())
-            if (best == nullptr || p->getStartOrder() > best->getStartOrder())
-                best = p.get();
+    {
+        const juce::ScopedLock sl (lock);
+
+        for (auto& p : players)
+            if (p->getCueId() == cueId && ! p->hasFinished() && ! p->isLoadedNotStarted())
+                if (best == nullptr || p->getStartOrder() > best->getStartOrder())
+                    best = p.get();
+    }
 
     if (best == nullptr)
         return false;
 
+    // the matrix copy allocates: outside the lock (the player lives until this thread reaps it)
     out.gainDb = best->getLiveGainDb();
     out.levels = best->getLiveLevels();
     out.trim = best->getLiveTrim();
@@ -1150,7 +1213,7 @@ void AudioEngine::prepare (double newSampleRate, int newBlockSize, int newNumDev
 
         mixBuffer.setSize (juce::jmax (2, getNumDeviceOutputs()), blockSize.load(), false, false, true);
         playerBuffer.setSize (CuePlayer::maxChannels, blockSize.load(), false, false, true);
-        deviceScratch.setSize (getNumDeviceOutputs() > 32 ? getNumDeviceOutputs() : 1, blockSize.load(), false, false, true);
+        deviceScratch.setSize (getNumDeviceOutputs() >= 32 ? getNumDeviceOutputs() : 1, blockSize.load(), false, false, true);
 
         for (auto& r : patchRuntimes)
             prepareRuntimeBuffers (*r);
@@ -1225,7 +1288,7 @@ void AudioEngine::renderBlock (juce::AudioBuffer<float>& output, int numSamples,
     }
 
     if (anyFinished)
-        triggerAsyncUpdate();
+        reapNeeded.store (true, std::memory_order_release);   // the UI timer reaps: no message posting from the audio thread
 }
 
 void AudioEngine::reapFinishedPlayers()
@@ -1261,22 +1324,26 @@ void AudioEngine::audioDeviceIOCallbackWithContext (const float* const* inputCha
     if (numOutputChannels <= 0 || numSamples <= 0)
         return;
 
-    if (numOutputChannels <= 32)
+    if (numOutputChannels < 32)   // juce::AudioBuffer keeps its channel table inline below 32 channels: no allocation
     {
-        juce::AudioBuffer<float> output (outputChannelData, numOutputChannels, numSamples);   // uses its inline channel table: no allocation
+        juce::AudioBuffer<float> output (outputChannelData, numOutputChannels, numSamples);
         renderBlock (output, numSamples, inputChannelData, numInputChannels);
         return;
     }
 
-    // more channels than juce::AudioBuffer keeps inline: render into the prepared scratch and copy out
+    // 32 channels or more: render into the prepared scratch and copy out
     const int chunk = juce::jmax (1, deviceScratch.getNumSamples());
+    const int inputs = juce::jmin (numInputChannels, (int) inputPointers.size());
 
     for (int offset = 0; offset < numSamples; offset += chunk)
     {
         const int n = juce::jmin (chunk, numSamples - offset);
-        // the mic players index the input block themselves: hand them the pointers shifted by 'offset'
-        juce::AudioBuffer<float> inputView (const_cast<float**> (inputChannelData), juce::jmin (32, numInputChannels), offset, n);
-        renderBlock (deviceScratch, n, numInputChannels > 0 ? inputView.getArrayOfReadPointers() : nullptr, inputView.getNumChannels());
+
+        // the mic players index the input block themselves: hand them the pointers shifted by 'offset' (fixed array, no allocation)
+        for (int ch = 0; ch < inputs; ++ch)
+            inputPointers[(size_t) ch] = inputChannelData[ch] != nullptr ? inputChannelData[ch] + offset : nullptr;
+
+        renderBlock (deviceScratch, n, inputs > 0 ? inputPointers.data() : nullptr, inputs);
 
         for (int ch = 0; ch < numOutputChannels; ++ch)
         {
@@ -1297,6 +1364,7 @@ void AudioEngine::audioDeviceAboutToStart (juce::AudioIODevice* device)
 
 void AudioEngine::audioDeviceStopped()
 {
+    numDeviceInputs.store (0, std::memory_order_relaxed);   // until a device starts again there are no inputs
 }
 
 void AudioEngine::audioDeviceError (const juce::String& errorMessage)

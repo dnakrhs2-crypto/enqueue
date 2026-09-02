@@ -1195,7 +1195,7 @@ void MainComponent::addFadeCue()
     const auto* selectedCue = document.cues.getSelected();
     const bool autoNumber = document.settings.autoNumber;
     const double increment = document.settings.numberIncrement;
-    const juce::Uuid target = selectedCue != nullptr && selectedCue->isAudio() ? selectedCue->id
+    const juce::Uuid target = selectedCue != nullptr && selectedCue->makesSound() ? selectedCue->id
                             : selectedCue != nullptr && selectedCue->isFade() ? selectedCue->fade.targetId : juce::Uuid::null();
 
     document.perform (ko ("페이드 큐 추가"), [this, selected, target, autoNumber, increment]
@@ -1388,7 +1388,10 @@ void MainComponent::updateInputsWanted()
                 wanted = juce::jmax (wanted, c.mic.firstInput + c.mic.numInputs);
     });
 
-    engine.setInputsWanted (wanted);   // no-op when enough inputs are open (or none are needed)
+    const auto error = engine.setInputsWanted (wanted);   // no-op when the first 'wanted' inputs are open (or none are needed)
+
+    if (error.isNotEmpty())
+        transport.showStatus (ko ("장치 입력을 열지 못했습니다: ") + error, true);
 }
 
 void MainComponent::addGroupCue()
@@ -2081,7 +2084,10 @@ int MainComponent::countBrokenCues() const
 {
     int count = 0;
 
-    for (const auto& cue : document.cues.getAll())
+    std::vector<Cue> everyCue;   // every list / cart (a read-only walk: forEachList is non-const only because it hands out the lists)
+    const_cast<ProjectDocument&> (document).forEachList ([&everyCue] (CueList& list) { for (const auto& c : list.getAll()) everyCue.push_back (c); });
+
+    for (const auto& cue : everyCue)
     {
         if (cue.isGroup() || (cue.isControl() && ! cue.control.needsTarget()))
             continue;   // no file, no target
@@ -2645,6 +2651,8 @@ void MainComponent::updateTransportStandby()
 //==============================================================================
 void MainComponent::timerCallback()
 {
+    engine.reapIfNeeded();   // finished players are destroyed here, never from the audio thread's callback
+
     if (! juce::Process::isForegroundProcess())
         hotkeyListener.heldKeys.clear();   // key-ups missed while another app had the focus must not look like auto-repeat
 
@@ -2733,7 +2741,7 @@ void MainComponent::cueChanged (int index)
         {
             engine.unload (cue.id);
 
-            if (! cue.fileMissing && cue.file != juce::File())
+            if (cue.makesSound() && ! cue.fileMissing && (cue.isMic() || cue.file != juce::File()))
                 engine.load (cue, 0.0);
         }
     }

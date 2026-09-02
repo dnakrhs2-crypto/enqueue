@@ -9,6 +9,7 @@
 #include <juce_audio_formats/juce_audio_formats.h>
 #include <juce_events/juce_events.h>
 
+#include <array>
 #include <atomic>
 #include <map>
 #include <memory>
@@ -57,9 +58,13 @@ public:
     juce::String initialise (const juce::XmlElement* savedDeviceState);
     static constexpr int maxDeviceOutputs = 64;
     static constexpr int maxDeviceInputs = 32;
-    /** Mic cues need device inputs: opens (at least) the first 'channels' input channels; 0 leaves the device as is.
-        Restarts the device when more inputs are needed than are open, so call it while nothing plays if possible. */
-    void setInputsWanted (int channels);
+    /** Mic cues need device inputs: opens the first 'channels' input channels (the mic cue rows are the *first*
+        open inputs, so inputs 1..N must be the ones open); 0 leaves the device as is. Restarts the device when it
+        has to open more, so call it while nothing plays if possible. Returns an error message when the device
+        could not be reconfigured (the previous setup is restored). */
+    juce::String setInputsWanted (int channels);
+    /** The engine noticed finished players: called from the UI timer (never from the audio thread). */
+    void reapIfNeeded();
     /** Input channels the open device delivers (0 offline). */
     int getNumDeviceInputs() const noexcept { return numDeviceInputs.load (std::memory_order_relaxed); }
     void shutdown();
@@ -250,6 +255,8 @@ private:
     juce::int64 startCounter = 0;
     std::atomic<int> numDeviceOutputs { 2 };
     std::atomic<int> numDeviceInputs { 0 };
+    std::atomic<bool> reapNeeded { false };
+    std::array<const float*, maxDeviceInputs> inputPointers {};   // >=32-output path: input block pointers, no allocation
 
     PluginChain masterChain;
     std::map<juce::String, std::unique_ptr<PluginChain>> cueChains;   // keyed by Uuid string

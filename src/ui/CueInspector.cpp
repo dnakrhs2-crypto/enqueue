@@ -1551,7 +1551,7 @@ public:
         previewToggle.setToggleState (previewing, juce::dontSendNotification);
 
         // the grid is sized like the target (channels x its patch's outputs)
-        const auto* target = cues.findById (f.targetId);
+        const auto* target = document.findCueAnywhere (f.targetId);
         int inputs = f.levels.numInputs() > 0 ? f.levels.numInputs() : 2;
         int outputs = f.levels.numOutputs() > 0 ? f.levels.numOutputs() : 2;
         juce::StringArray inputNames, outputNames;
@@ -1622,7 +1622,7 @@ public:
         if (cue == nullptr || ! cue->isFade() || ! editable)
             return;
 
-        const auto* target = cues.findById (cue->fade.targetId);
+        const auto* target = document.findCueAnywhere (cue->fade.targetId);
 
         if (target == nullptr)
             return;
@@ -1682,7 +1682,7 @@ private:
         if (previewing)
             togglePreview (false);   // the preview belongs to the old target: put it back before switching
 
-        const auto* target = cues.findById (id);
+        const auto* target = document.findCueAnywhere (id);
         const int inputs = target != nullptr && target->numChannels > 0 ? target->numChannels : 2;
         const int outputs = target != nullptr ? document.cueOutputsFor (*target) : 2;
         edit (ko ("페이드 대상"), [id, inputs, outputs] (Cue& c)
@@ -2251,7 +2251,7 @@ public:
             {
                 const auto& c = list.get (i);
 
-                if (! c.makesSound())
+                if (! c.isAudio())   // a mic cue has no loop pass to finish
                     continue;
 
                 targetIds.push_back (c.id);
@@ -2357,7 +2357,7 @@ public:
 
         styleLabel (deviceLabel, "", 12.0f);
         addAndMakeVisible (deviceLabel);
-        styleLabel (hint, ko ("장치 입력이 레벨 탭의 행이 됩니다 (마이크 큐는 정지할 때까지 재생). 입력 채널은 오디오 > 오디오 설정에서 켭니다 — 프로젝트에 마이크 큐가 있으면 필요한 만큼 자동으로 켭니다."), 11.0f);
+        styleLabel (hint, ko ("장치 입력이 레벨 탭의 행이 됩니다 (마이크 큐는 정지할 때까지 재생, 입력 1~32). 마이크 큐가 있으면 필요한 입력을 자동으로 엽니다. 재생 중에 바꾼 입력 채널은 다음 시작부터 적용됩니다."), 11.0f);
         addAndMakeVisible (hint);
     }
 
@@ -2423,8 +2423,8 @@ private:
             return;
 
         const auto& cue = cues.get (index);
-        const int first = juce::jlimit (1, 64, firstEditor.getText().getIntValue()) - 1;
-        const int count = juce::jlimit (1, LevelMatrix::maxInputs, countEditor.getText().getIntValue());
+        const int first = juce::jlimit (1, 32, firstEditor.getText().getIntValue()) - 1;
+        const int count = juce::jlimit (1, juce::jmin (LevelMatrix::maxInputs, 32 - first), countEditor.getText().getIntValue());
 
         if (first == cue.mic.firstInput && count == cue.mic.numInputs)
             return;

@@ -111,7 +111,7 @@ CueController::GoResult CueController::triggerControl (const Cue& cue, int index
         {
             juce::String error;
 
-            if (targetCue.isAudio() && ! engine.load (targetCue, ctl.seconds, &error))
+            if (targetCue.makesSound() && ! engine.load (targetCue, targetCue.isMic() ? 0.0 : ctl.seconds, &error))
             {
                 status (error, true);
                 return GoResult::failed;
@@ -852,7 +852,12 @@ CueController::GoResult CueController::triggerImpl (const Cue& cue, bool auditio
                 return GoResult::ignored;
 
             case SecondTriggerAction::devamp:
-                engine.finishCurrentPass (cue.id);
+                if (cue.isMic() || engine.finishCurrentPass (cue.id) < 0.0)
+                {
+                    status (ko ("끝낼 반복이 없습니다: ") + cueLabel (index, cue), true);   // a mic cue, or no loop pass
+                    return GoResult::ignored;
+                }
+
                 status (ko ("이번 반복까지만: ") + cueLabel (index, cue));
                 return GoResult::ignored;
 
