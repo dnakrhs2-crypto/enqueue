@@ -95,8 +95,20 @@ public:
 
     /** Fade cues run here; the app starts its 100 Hz timer, tests call tick(). */
     FadeRunner& getFadeRunner() noexcept { return fadeRunner; }
-    /** Running as audio (engine) or as a fade. */
+    /** Running as audio (engine), as a fade, or as a group with something running / pending inside. */
     bool isCueActive (const juce::Uuid& id) const;
+
+    /** Group cues. startGroup() fires the children the way the group mode says and returns the index the
+        playhead goes to (after the group; inside it for "start first and enter"). */
+    int startGroup (int index, bool audition);
+    bool isGroupActive (int index) const;
+    /** Stops everything inside a group (pending starts, playlist run, running children).
+        fadeMs: 0 = at once, < 0 = each child's own stop fade, > 0 = that fade. */
+    void stopGroup (const juce::Uuid& groupId, int fadeMs);
+    /** Playlist groups: fades the current child out and starts the next (delta 1) / previous (-1) one. */
+    bool playlistSkip (const juce::Uuid& groupId, int delta);
+    /** Random groups pick a child with this (0 .. count-1); tests inject a deterministic one. */
+    std::function<int (int count)> randomChoice;
 
     std::function<void (const juce::String& message, bool isError)> onStatus;
     std::function<void()> onGoRejected;
@@ -118,6 +130,8 @@ private:
     /** Recomputes and applies the ducks of every target after a contribution changed. */
     void refreshDucks (double rampSeconds);
     void track (int schedulerId, const juce::Uuid& owner);
+    void playlistStep (const juce::Uuid& groupId);
+    double remainingSecondsOf (const juce::Uuid& id) const;
 
     AudioEngine& engine;
     ProjectDocument& document;
@@ -128,6 +142,10 @@ private:
     bool firstTriggerSeen = true;
     struct Pending { int id; juce::Uuid owner; };
     std::vector<Pending> pending;
+    struct PlaylistRun { std::vector<juce::Uuid> order; int position = 0; bool audition = false; juce::Uuid current = juce::Uuid::null(); };
+    std::map<juce::Uuid, PlaylistRun> playlists;                  // running playlist groups
+    std::map<juce::Uuid, std::set<juce::Uuid>> randomUsed;        // random groups: children played this round
+    int lastGroupEnterIndex = -1;                                 // set by startGroup() for "start first and enter"
     std::map<juce::Uuid, std::map<juce::Uuid, double>> ducks;   // target -> (ducking cue -> dB)
     std::set<juce::Uuid> played;
     juce::int64 lastWallClockSecond = -1;

@@ -771,6 +771,156 @@ public:
             document.cues.update (0, [] (Cue& c) { c.audio.endSeconds = -1.0; c.audio.infiniteLoop = false; });
         }
 
+        beginTest ("timeline group: every child starts at its own pre-wait, playhead goes past the group");
+        {
+            Cue g;
+            g.name = "G";
+            g.type = CueType::group;
+            const int gi = document.cues.add (g);
+            Cue x, y;
+            x.name = "x"; x.file = tone; x.parentId = g.id;
+            y.name = "y"; y.file = tone; y.parentId = g.id; y.preWaitSeconds = 0.3;
+            document.cues.add (x);
+            document.cues.add (y);
+            Cue after;
+            after.name = "after"; after.file = tone;
+            document.cues.add (after);
+            now += 1.0;
+            document.cues.setPlayheadIndex (gi);
+            expect (controller.go() == CueController::GoResult::started);
+            controller.goKeyReleased();
+            expect (engine.isPlaying (x.id));
+            expect (! engine.isPlaying (y.id));
+            expectEquals (document.cues.getPlayheadIndex(), document.cues.indexOf (after.id));
+            expect (controller.isCueActive (g.id));
+            render (engine, scheduler, now, out, 30);   // 0.35 s
+            expect (engine.isPlaying (y.id));
+
+            // stopping the group stops both children and the group is no longer active
+            controller.stopGroup (g.id, 0);
+            render (engine, scheduler, now, out, 2);
+            expect (! engine.isPlaying (x.id) && ! engine.isPlaying (y.id));
+            expect (! controller.isCueActive (g.id));
+            stopEverything();
+            document.cues.removeIndices ({ document.cues.indexOf (g.id), document.cues.indexOf (after.id) });
+        }
+
+        beginTest ("playlist group: children one after another, second GO skips, loop starts over");
+        {
+            Cue g;
+            g.name = "P";
+            g.type = CueType::group;
+            g.group.mode = GroupMode::playlist;
+            const int gi = document.cues.add (g);
+            Cue x, y;
+            x.name = "x"; x.file = tone; x.parentId = g.id;
+            y.name = "y"; y.file = tone; y.parentId = g.id;
+            document.cues.add (x);
+            document.cues.add (y);
+            now += 1.0;
+            document.cues.setPlayheadIndex (gi);
+            expect (controller.go() == CueController::GoResult::started);
+            controller.goKeyReleased();
+            expect (engine.isPlaying (x.id) && ! engine.isPlaying (y.id));
+
+            // x ends -> y follows
+            engine.stop (x.id);
+            render (engine, scheduler, now, out, 2);
+            expect (engine.isPlaying (y.id));
+
+            // y ends -> the list is over (no loop)
+            engine.stop (y.id);
+            render (engine, scheduler, now, out, 2);
+            expect (! engine.isPlaying (x.id) && ! engine.isPlaying (y.id));
+            expect (! controller.isCueActive (g.id));
+
+            // with loop: after y comes x again; a second trigger on the running group skips to the next child
+            document.cues.update (gi, [] (Cue& c) { c.group.loop = true; });
+            now += 1.0;
+            expect (controller.trigger (document.cues.get (gi)) == CueController::GoResult::started);
+            expect (engine.isPlaying (x.id));
+            expect (controller.trigger (document.cues.get (gi)) == CueController::GoResult::ignored);   // skip
+            render (engine, scheduler, now, out, 2);
+            expect (engine.isPlaying (y.id));
+            engine.stop (x.id);
+            engine.stop (y.id);
+            render (engine, scheduler, now, out, 2);
+            expect (engine.isPlaying (x.id));   // looped
+            stopEverything();
+            expect (! controller.isCueActive (g.id));
+            document.cues.remove (document.cues.indexOf (g.id));
+        }
+
+        beginTest ("playlist crossfade: the next child starts before the current one ends");
+        {
+            Cue g;
+            g.name = "X";
+            g.type = CueType::group;
+            g.group.mode = GroupMode::playlist;
+            g.group.crossfade = true;
+            g.group.crossfadeSeconds = 0.5;
+            const int gi = document.cues.add (g);
+            Cue x, y;
+            x.name = "x"; x.file = tone; x.parentId = g.id;   // 2 s
+            y.name = "y"; y.file = tone; y.parentId = g.id;
+            document.cues.add (x);
+            document.cues.add (y);
+            now += 1.0;
+            expect (controller.trigger (document.cues.get (gi)) == CueController::GoResult::started);
+            render (engine, scheduler, now, out, 100);   // 1.16 s: still only x
+            expect (engine.isPlaying (x.id) && ! engine.isPlaying (y.id));
+            render (engine, scheduler, now, out, 40);    // 1.62 s: inside the last 0.5 s of x
+            expect (engine.isPlaying (y.id));
+            expect (engine.isPlaying (x.id));            // fading out, still audible
+            stopEverything();
+            document.cues.remove (document.cues.indexOf (g.id));
+        }
+
+        beginTest ("start-first groups: enter moves the playhead inside, random takes every child once per round");
+        {
+            Cue g;
+            g.name = "S";
+            g.type = CueType::group;
+            g.group.mode = GroupMode::startFirstEnter;
+            const int gi = document.cues.add (g);
+            Cue x, y;
+            x.name = "x"; x.file = tone; x.parentId = g.id;
+            y.name = "y"; y.file = tone; y.parentId = g.id;
+            document.cues.add (x);
+            document.cues.add (y);
+            now += 1.0;
+            document.cues.setPlayheadIndex (gi);
+            expect (controller.go() == CueController::GoResult::started);
+            controller.goKeyReleased();
+            expect (engine.isPlaying (x.id) && ! engine.isPlaying (y.id));
+            expectEquals (document.cues.getPlayheadIndex(), document.cues.indexOf (y.id));   // entered the group
+            stopEverything();
+
+            document.cues.update (gi, [] (Cue& c) { c.group.mode = GroupMode::startFirst; });
+            now += 1.0;
+            document.cues.setPlayheadIndex (gi);
+            expect (controller.go() == CueController::GoResult::started);
+            controller.goKeyReleased();
+            expect (engine.isPlaying (x.id));
+            expectEquals (document.cues.getPlayheadIndex(), juce::jmin (document.cues.subtreeEnd (gi), document.cues.size() - 1));
+            stopEverything();
+
+            document.cues.update (gi, [] (Cue& c) { c.group.mode = GroupMode::random; });
+            controller.randomChoice = [] (int) { return 0; };   // always the first candidate
+            juce::StringArray order;
+
+            for (int round = 0; round < 3; ++round)
+            {
+                now += 1.0;
+                expect (controller.trigger (document.cues.get (gi)) == CueController::GoResult::started);
+                order.add (engine.isPlaying (x.id) ? "x" : engine.isPlaying (y.id) ? "y" : "-");
+                stopEverything();
+            }
+
+            expectEquals (order.joinIntoString (","), juce::String ("x,y,x"));   // x, then the only unplayed y, then a new round
+            document.cues.remove (document.cues.indexOf (g.id));
+        }
+
         beginTest ("played cues are remembered for the second colour until reset");
         {
             controller.resetAll();
