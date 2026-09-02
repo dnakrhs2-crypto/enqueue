@@ -97,6 +97,16 @@ public:
     void setLiveGainDb (const juce::Uuid& cueId, double gainDb);
     /** Live level matrix / trim for a running cue (ramped over ~10 ms). */
     void setLiveLevels (const juce::Uuid& cueId, const LevelMatrix& levels, const TrimLevels& trim);
+
+    struct LiveState
+    {
+        double gainDb = 0.0;
+        LevelMatrix levels;
+        TrimLevels trim;
+        double rate = 1.0;
+    };
+    /** Current live values of the most recently started running instance of the cue (fade cues start from here). */
+    bool getLiveState (const juce::Uuid& cueId, LiveState& out) const;
     /** Scrub: jump to a fraction (0..1) of the cue's total length. */
     void seekToFraction (const juce::Uuid& cueId, double fraction);
     /** Duck / boost (dB on top of the cue gain) reached over 'rampSeconds'; 0 = none. */

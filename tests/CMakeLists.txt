@@ -11,6 +11,8 @@ target_sources(GoCueTests PRIVATE
     LevelMatrixTests.cpp
     AudioPatchTests.cpp
     MediaFoundationTests.cpp
+    FadeCurveTests.cpp
+    FadeRunnerTests.cpp
     SchedulerTests.cpp
     ProjectSerializerTests.cpp
     AudioEngineTests.cpp

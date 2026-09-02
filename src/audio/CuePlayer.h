@@ -89,6 +89,11 @@ public:
     double getDuckDb() const noexcept { return duckDb.load (std::memory_order_relaxed); }
     /** Live level matrix / trim from the inspector; the audio thread ramps to the new gains over ~10 ms. Message thread. */
     void setLiveLevels (const LevelMatrix& levels, const TrimLevels& trim);
+    /** The values last given to setLiveGainDb / setLiveLevels (or the cue's own at start). Message thread. */
+    double getLiveGainDb() const noexcept          { return liveGainDb; }
+    const LevelMatrix& getLiveLevels() const noexcept { return liveLevels; }
+    const TrimLevels& getLiveTrim() const noexcept    { return liveTrim; }
+    double getLiveRate() const noexcept            { return liveRate.load (std::memory_order_relaxed); }
 
     /** Audio thread. Overwrites channels 0..getNumChannels()-1 of buffer[0, numSamples) with this player's
         output (before the level matrix). 'buffer' needs at least max (2, getNumChannels()) channels.
@@ -134,6 +139,9 @@ private:
     Cue cue;
     int numChannels = 2;
     int numOutputs = 2;
+    double liveGainDb = 0.0;          // message-thread mirrors of the live levels (for fade cues)
+    LevelMatrix liveLevels;
+    TrimLevels liveTrim;
     std::vector<float> currentGains, targetGains, publishedGains;   // [input * numOutputs + output]
     std::atomic<unsigned int> gainsVersion { 0 };                   // even = stable, odd = being written
     unsigned int adoptedGainsVersion = 0;

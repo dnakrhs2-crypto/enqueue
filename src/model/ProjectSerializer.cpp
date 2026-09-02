@@ -139,6 +139,113 @@ namespace
         return a;
     }
 
+    juce::var flagsToVar (const std::vector<char>& flags)
+    {
+        juce::Array<juce::var> arr;
+
+        for (char f : flags)
+            arr.add (f != 0);
+
+        return juce::var (arr);
+    }
+
+    std::vector<char> flagsFromVar (const juce::var& v)
+    {
+        std::vector<char> result;
+
+        if (const auto* arr = v.getArray())
+            for (const auto& item : *arr)
+                result.push_back ((bool) item ? 1 : 0);
+
+        return result;
+    }
+
+    juce::var fadeToVar (const FadeCueData& f)
+    {
+        auto* obj = new juce::DynamicObject();
+        obj->setProperty ("target", f.targetId.isNull() ? juce::String() : f.targetId.toString());
+        obj->setProperty ("duration", f.durationSeconds);
+        obj->setProperty ("relative", f.relative);
+        obj->setProperty ("stopTargetWhenDone", f.stopTargetWhenDone);
+        obj->setProperty ("fadeLevels", f.fadeLevels);
+        obj->setProperty ("mainDb", dbToVar (f.mainDb));
+        obj->setProperty ("levels", f.levels.toVar());
+        obj->setProperty ("mainActive", f.mainActive);
+        obj->setProperty ("inputActive", flagsToVar (f.inputActive));
+        obj->setProperty ("outputActive", flagsToVar (f.outputActive));
+
+        juce::Array<juce::var> rows;
+
+        for (const auto& row : f.crosspointActive)
+            rows.add (flagsToVar (row));
+
+        obj->setProperty ("crosspointActive", juce::var (rows));
+        obj->setProperty ("fadeRate", f.fadeRate);
+        obj->setProperty ("rate", f.rate);
+
+        juce::Array<juce::var> params;
+
+        for (const auto& p : f.params)
+        {
+            auto* po = new juce::DynamicObject();
+            po->setProperty ("slot", p.slot);
+            po->setProperty ("parameter", p.parameter);
+            po->setProperty ("value", p.value);
+            po->setProperty ("active", p.active);
+            params.add (juce::var (po));
+        }
+
+        obj->setProperty ("params", juce::var (params));
+        obj->setProperty ("curve", f.curve.toVar());
+        return juce::var (obj);
+    }
+
+    FadeCueData fadeFromVar (const juce::var& v)
+    {
+        FadeCueData f;
+
+        if (v.getDynamicObject() == nullptr)
+            return f;
+
+        f.targetId = juce::Uuid (v.getProperty ("target", "").toString());
+        f.durationSeconds = (double) v.getProperty ("duration", 5.0);
+        f.relative = (bool) v.getProperty ("relative", false);
+        f.stopTargetWhenDone = (bool) v.getProperty ("stopTargetWhenDone", false);
+        f.fadeLevels = (bool) v.getProperty ("fadeLevels", true);
+        f.mainDb = dbFromVar (v.getProperty ("mainDb", 0.0), 0.0);
+        f.levels = LevelMatrix::fromVar (v.getProperty ("levels", juce::var()));
+        f.mainActive = (bool) v.getProperty ("mainActive", true);
+        f.inputActive = flagsFromVar (v.getProperty ("inputActive", juce::var()));
+        f.outputActive = flagsFromVar (v.getProperty ("outputActive", juce::var()));
+
+        if (const auto* rows = v.getProperty ("crosspointActive", juce::var()).getArray())
+            for (const auto& row : *rows)
+                f.crosspointActive.push_back (flagsFromVar (row));
+
+        f.fadeRate = (bool) v.getProperty ("fadeRate", false);
+        f.rate = (double) v.getProperty ("rate", 1.0);
+
+        if (const auto* params = v.getProperty ("params", juce::var()).getArray())
+        {
+            for (const auto& pv : *params)
+            {
+                if (pv.getDynamicObject() == nullptr)
+                    continue;
+
+                ParamFade p;
+                p.slot = intProperty (pv, "slot", 0);
+                p.parameter = intProperty (pv, "parameter", 0);
+                p.value = (float) (double) pv.getProperty ("value", 0.0);
+                p.active = (bool) pv.getProperty ("active", true);
+                f.params.push_back (p);
+            }
+        }
+
+        f.curve = FadeCurve::fromVar (v.getProperty ("curve", juce::var()));
+        f.sanitise();
+        return f;
+    }
+
     const char* secondTriggerToText (SecondTriggerAction a)
     {
         switch (a)
@@ -261,7 +368,13 @@ namespace
 
         if (! c.patchId.isNull())
             obj->setProperty ("patch", c.patchId.toString());
-        obj->setProperty ("audio", audioToVar (c.audio));
+        obj->setProperty ("type", c.type == CueType::fade ? "fade" : "audio");
+
+        if (c.type == CueType::fade)
+            obj->setProperty ("fade", fadeToVar (c.fade));
+        else
+            obj->setProperty ("audio", audioToVar (c.audio));
+
         obj->setProperty ("secondTrigger", secondTriggerToText (c.secondTrigger));
         obj->setProperty ("plugins", pluginsToVar (c.plugins));
         return juce::var (obj);
@@ -354,6 +467,8 @@ namespace
         c.patchId         = juce::Uuid (v.getProperty ("patch", "").toString());
         c.plugins         = pluginsFromVar (v.getProperty ("plugins", juce::var()));
         c.secondTrigger   = secondTriggerFromText (v.getProperty ("secondTrigger", "hardStopRestart").toString());
+        c.type            = v.getProperty ("type", "audio").toString() == "fade" ? CueType::fade : CueType::audio;
+        c.fade            = fadeFromVar (v.getProperty ("fade", juce::var()));
 
         const auto audio = v.getProperty ("audio", juce::var());
 

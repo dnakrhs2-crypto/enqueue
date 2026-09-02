@@ -11,9 +11,15 @@ namespace
 }
 
 CueController::CueController (AudioEngine& e, ProjectDocument& d, Scheduler& s)
-    : engine (e), document (d), scheduler (s)
+    : engine (e), document (d), scheduler (s), fadeRunner (e, d)
 {
     clock = [this] { return scheduler.now(); };
+    fadeRunner.clock = [this] { return clock(); };
+}
+
+bool CueController::isCueActive (const juce::Uuid& id) const
+{
+    return engine.isPlaying (id) || fadeRunner.isRunning (id);
 }
 
 void CueController::status (const juce::String& message, bool isError)
@@ -90,6 +96,20 @@ CueController::GoResult CueController::trigger (const Cue& cue, bool audition)
 {
     const int index = document.cues.indexOf (cue.id);
     const bool auditionNow = isAuditionRequested (audition);
+
+    if (cue.isFade())
+    {
+        // a running fade fired again restarts from where its target is now
+        juce::String error;
+
+        if (! fadeRunner.start (cue, &error))
+        {
+            status (error, true);
+            return GoResult::failed;
+        }
+
+        return GoResult::started;
+    }
 
     // a normal GO on a cue that is auditioning restarts it with the real output (QLab)
     if (engine.isPlaying (cue.id) && ! (engine.isAuditioning (cue.id) && ! auditionNow))
@@ -172,7 +192,7 @@ void CueController::applyDuck (const Cue& cue)
     const double ramp = cue.duck.seconds;
 
     // restore the others when this cue is over (or stopped)
-    track (scheduler.watch ([this, id] { return ! engine.isPlaying (id); },
+    track (scheduler.watch ([this, id] { return ! isCueActive (id); },
                             [this, ducked, ramp]
                             {
                                 for (const auto& other : ducked)
@@ -255,7 +275,7 @@ int CueController::fireSequence (int index, bool audition)
         const auto id = cue.id;
         const bool armed = cue.armed;
 
-        track (scheduler.watch ([this, id, startAt, armed] { return clock() >= startAt && (! armed || ! engine.isPlaying (id)); },
+        track (scheduler.watch ([this, id, startAt, armed] { return clock() >= startAt && (! armed || ! isCueActive (id)); },
                                 [this, next, audition] { fireSequence (next, audition); }));
 
         return sequenceEnd (index);
@@ -315,9 +335,9 @@ CueController::GoResult CueController::go (bool audition)
     }
 
     const int after = fireSequence (index, audition);
-    const bool anyStarted = engine.isPlaying (copy.id) || getNumPending() > 0;
+    const bool anyStarted = isCueActive (copy.id) || getNumPending() > 0 || copy.isFade();
 
-    if (copy.armed && copy.preWaitSeconds <= 0.0 && ! engine.isPlaying (copy.id))
+    if (copy.armed && copy.preWaitSeconds <= 0.0 && ! copy.isFade() && ! engine.isPlaying (copy.id))
     {
         // the first cue could not be started (missing file ...): trigger() already reported it
         document.cues.setPlayheadIndex (juce::jmin (after, document.cues.size() - 1));
@@ -463,6 +483,7 @@ bool CueController::fadeOutTarget()
 
 void CueController::panicAll()
 {
+    fadeRunner.stopAll();
     const double now = clock();
     cancelPending();
 
@@ -483,6 +504,7 @@ void CueController::panicAll()
 
 void CueController::hardStopAll()
 {
+    fadeRunner.stopAll();
     cancelPending();
     engine.stopAll();
     status (ko ("전체 즉시 정지"));
@@ -499,6 +521,7 @@ void CueController::resetSelected()
 
 void CueController::resetAll()
 {
+    fadeRunner.stopAll();
     cancelPending();
     engine.stopAll();
     document.cues.setPlayheadIndex (document.cues.isEmpty() ? -1 : 0);

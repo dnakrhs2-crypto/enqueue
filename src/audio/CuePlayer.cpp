@@ -47,6 +47,9 @@ CuePlayer::CuePlayer (const Cue& c, juce::AudioFormatManager& formats,
     computeGains (cue.levels, cue.trim, currentGains);
     targetGains = currentGains;
     publishedGains = currentGains;
+    liveGainDb = cue.gainDb;
+    liveLevels = cue.levels;
+    liveTrim = cue.trim;
 
     auto regionSource = std::make_unique<RegionLoopSource> (std::move (reader));
 
@@ -229,6 +232,8 @@ void CuePlayer::setLiveGainDb (double gainDb) noexcept
 {
     Cue tmp;
     tmp.gainDb = gainDb;
+    tmp.sanitise();
+    liveGainDb = tmp.gainDb;
     targetGain.store (tmp.gainLinear(), std::memory_order_relaxed);
 }
 
@@ -298,6 +303,8 @@ void CuePlayer::setLiveLevels (const LevelMatrix& levels, const TrimLevels& trim
     sized.resize (numChannels, numOutputs);
     TrimLevels sizedTrim = trim;
     sizedTrim.resize (numOutputs);
+    liveLevels = sized;
+    liveTrim = sizedTrim;
 
     std::vector<float> gains;
     computeGains (sized, sizedTrim, gains);

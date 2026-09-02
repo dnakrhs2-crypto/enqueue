@@ -1,5 +1,6 @@
 #pragma once
 
+#include "app/FadeRunner.h"
 #include "app/ProjectDocument.h"
 #include "app/Scheduler.h"
 #include "audio/AudioEngine.h"
@@ -78,6 +79,11 @@ public:
     /** True while double-GO protection would refuse a GO (drives the red border on the GO button). */
     bool isGoLocked() const;
 
+    /** Fade cues run here; the app starts its 100 Hz timer, tests call tick(). */
+    FadeRunner& getFadeRunner() noexcept { return fadeRunner; }
+    /** Running as audio (engine) or as a fade. */
+    bool isCueActive (const juce::Uuid& id) const;
+
     std::function<void (const juce::String& message, bool isError)> onStatus;
     std::function<void()> onGoRejected;
     /** Seconds clock; tests inject a fake one (also used by the scheduler entries this makes). */
@@ -100,6 +106,7 @@ private:
     AudioEngine& engine;
     ProjectDocument& document;
     Scheduler& scheduler;
+    FadeRunner fadeRunner;
     std::vector<int> pending;
     juce::int64 lastWallClockSecond = -1;
     double lastGoTime = -1.0e9;

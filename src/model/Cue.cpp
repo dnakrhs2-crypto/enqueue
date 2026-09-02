@@ -36,16 +36,110 @@ double Cue::regionLength() const noexcept
 
 double Cue::passLength() const noexcept
 {
+    if (type == CueType::fade)
+        return fade.durationSeconds;
+
     return regionLength() / std::max (AudioCueData::minRate, audio.rate);
+}
+
+//==============================================================================
+void FadeCueData::resizeActive (int inputs, int outputs)
+{
+    inputs = juce::jlimit (0, LevelMatrix::maxInputs, inputs);
+    outputs = juce::jlimit (0, LevelMatrix::maxOutputs, outputs);
+    inputActive.resize ((size_t) inputs, 0);
+    outputActive.resize ((size_t) outputs, 0);
+    crosspointActive.resize ((size_t) inputs);
+
+    for (auto& row : crosspointActive)
+        row.resize ((size_t) outputs, 0);
+}
+
+bool FadeCueData::isInputActive (int i) const noexcept
+{
+    return i >= 0 && i < (int) inputActive.size() && inputActive[(size_t) i] != 0;
+}
+
+bool FadeCueData::isOutputActive (int o) const noexcept
+{
+    return o >= 0 && o < (int) outputActive.size() && outputActive[(size_t) o] != 0;
+}
+
+bool FadeCueData::isCrosspointActive (int i, int o) const noexcept
+{
+    return i >= 0 && i < (int) crosspointActive.size() && o >= 0 && o < (int) crosspointActive[(size_t) i].size()
+        && crosspointActive[(size_t) i][(size_t) o] != 0;
+}
+
+void FadeCueData::setInputActive (int i, bool on)
+{
+    if (i >= 0 && i < (int) inputActive.size())
+        inputActive[(size_t) i] = on ? 1 : 0;
+}
+
+void FadeCueData::setOutputActive (int o, bool on)
+{
+    if (o >= 0 && o < (int) outputActive.size())
+        outputActive[(size_t) o] = on ? 1 : 0;
+}
+
+void FadeCueData::setCrosspointActive (int i, int o, bool on)
+{
+    if (i >= 0 && i < (int) crosspointActive.size() && o >= 0 && o < (int) crosspointActive[(size_t) i].size())
+        crosspointActive[(size_t) i][(size_t) o] = on ? 1 : 0;
+}
+
+void FadeCueData::setAllActive (bool on)
+{
+    mainActive = on;
+    std::fill (inputActive.begin(), inputActive.end(), (char) (on ? 1 : 0));
+    std::fill (outputActive.begin(), outputActive.end(), (char) (on ? 1 : 0));
+
+    for (auto& row : crosspointActive)
+        std::fill (row.begin(), row.end(), (char) (on ? 1 : 0));
+}
+
+void FadeCueData::sanitise() noexcept
+{
+    if (! std::isfinite (durationSeconds) || durationSeconds < 0.0)
+        durationSeconds = 0.0;
+
+    durationSeconds = std::min (durationSeconds, maxDurationSeconds);
+
+    if (! std::isfinite (mainDb))
+        mainDb = 0.0;
+
+    mainDb = LevelMatrix::clampDb (mainDb);
+    levels.sanitise();
+    resizeActive (levels.numInputs(), levels.numOutputs());
+
+    if (! std::isfinite (rate) || rate <= 0.0)
+        rate = 1.0;
+
+    rate = juce::jlimit (AudioCueData::minRate, AudioCueData::maxRate, rate);
+
+    for (auto& p : params)
+    {
+        p.slot = std::max (0, p.slot);
+        p.parameter = std::max (0, p.parameter);
+        p.value = std::isfinite (p.value) ? juce::jlimit (0.0f, 1.0f, p.value) : 0.0f;
+    }
+
+    curve.sanitise();
 }
 
 double Cue::effectiveLength() const noexcept
 {
+    if (type == CueType::fade)
+        return fade.durationSeconds;
+
     return audio.infiniteLoop ? -1.0 : passLength() * (double) audio.playCount;
 }
 
 void Cue::sanitise() noexcept
 {
+    fade.sanitise();
+
     auto fixSeconds = [] (double& v, double hi)
     {
         if (! std::isfinite (v) || v < 0.0)

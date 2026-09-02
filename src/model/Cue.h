@@ -1,6 +1,7 @@
 #pragma once
 
 #include "model/Envelope.h"
+#include "model/FadeCurve.h"
 #include "model/LevelMatrix.h"
 
 #include <juce_core/juce_core.h>
@@ -66,6 +67,51 @@ struct DuckSettings
     double seconds = 1.0;
 };
 
+/** What a cue is. Only the fields that belong to its type are used / saved. */
+enum class CueType { audio, fade };
+
+/** One VST3 parameter a fade cue drives on the target's insert chain. */
+struct ParamFade
+{
+    int slot = 0;            // index in the target cue's chain
+    int parameter = 0;       // AudioProcessor parameter index
+    float value = 0.0f;      // normalised 0..1 goal
+    bool active = true;
+};
+
+/** Settings of a fade cue (QLab "Fade"): changes the *running instance* of the target audio cue over time. */
+struct FadeCueData
+{
+    juce::Uuid targetId = juce::Uuid::null();
+    double durationSeconds = 5.0;
+    bool relative = false;                 // goals are offsets from the target's current levels
+    bool stopTargetWhenDone = false;
+    bool fadeLevels = true;                // apply the level goals below
+    double mainDb = 0.0;                   // goal (or offset) for the target's main level
+    LevelMatrix levels;                    // goals per input / output / crosspoint
+    bool mainActive = true;                // which cells the fade touches (QLab "active" cells)
+    std::vector<char> inputActive, outputActive;
+    std::vector<std::vector<char>> crosspointActive;
+    bool fadeRate = false;
+    double rate = 1.0;                     // goal playback rate (absolute) or multiplier (relative)
+    std::vector<ParamFade> params;         // VST3 parameter goals
+    FadeCurve curve;
+
+    static constexpr double maxDurationSeconds = 86400.0;
+
+    /** Sizes the active tables like 'levels' (new cells inactive), keeps existing flags. */
+    void resizeActive (int inputs, int outputs);
+    bool isInputActive (int i) const noexcept;
+    bool isOutputActive (int o) const noexcept;
+    bool isCrosspointActive (int i, int o) const noexcept;
+    void setInputActive (int i, bool on);
+    void setOutputActive (int o, bool on);
+    void setCrosspointActive (int i, int o, bool on);
+    /** Every cell active / inactive. */
+    void setAllActive (bool on);
+    void sanitise() noexcept;
+};
+
 /** Playback settings of an audio cue (QLab "Time & Loops"). */
 struct AudioCueData
 {
@@ -114,7 +160,12 @@ struct Cue
     bool fileMissing = false;        // runtime only, not serialised
     std::vector<PluginSlotState> plugins;
     AudioCueData audio;
+    CueType type = CueType::audio;
+    FadeCueData fade;                // used when type == fade
     SecondTriggerAction secondTrigger = SecondTriggerAction::hardStopRestart;
+
+    bool isAudio() const noexcept { return type == CueType::audio; }
+    bool isFade() const noexcept  { return type == CueType::fade; }
 
     static constexpr int maxFadeMs = 600000;     // 10 minutes
     static constexpr double minGainDb = -60.0;   // treated as silence

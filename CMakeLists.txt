@@ -55,9 +55,11 @@ target_sources(GoCueCore INTERFACE
     ${CMAKE_CURRENT_SOURCE_DIR}/src/model/CuePropertyPaste.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/model/LevelMatrix.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/model/AudioPatch.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/model/FadeCurve.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/app/ProjectDocument.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/app/CueController.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/app/Scheduler.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/app/FadeRunner.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/app/BackupManager.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/audio/RegionLoopSource.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/audio/CuePlayer.cpp

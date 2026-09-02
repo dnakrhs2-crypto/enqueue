@@ -722,6 +722,26 @@ void AudioEngine::setLiveLevels (const juce::Uuid& cueId, const LevelMatrix& lev
             p->setLiveLevels (levels, trim);
 }
 
+bool AudioEngine::getLiveState (const juce::Uuid& cueId, LiveState& out) const
+{
+    const juce::ScopedLock sl (lock);
+    const CuePlayer* best = nullptr;
+
+    for (auto& p : players)
+        if (p->getCueId() == cueId && ! p->hasFinished() && ! p->isLoadedNotStarted())
+            if (best == nullptr || p->getStartOrder() > best->getStartOrder())
+                best = p.get();
+
+    if (best == nullptr)
+        return false;
+
+    out.gainDb = best->getLiveGainDb();
+    out.levels = best->getLiveLevels();
+    out.trim = best->getLiveTrim();
+    out.rate = best->getLiveRate();
+    return true;
+}
+
 void AudioEngine::seekToFraction (const juce::Uuid& cueId, double fraction)
 {
     const juce::ScopedLock sl (lock);
