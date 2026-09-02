@@ -244,7 +244,8 @@ class Scheduler { public: using Clock = std::function<double()>;   // 초
 - [x] 설정 오디오 탭에 오디션 방식(그대로 / 출력 없음 / 대체 패치 + 패치 콤보), `PlayOptions{audition, silent, patchOverride}`(silent = 엔진의 `muteRuntime` 버스로), `CueController::go/preview/fireSequence/trigger(audition)` + `playOptions()`, 재생 메뉴 오디션 GO(Alt+Space)·오디션 미리듣기(Alt+V)·항상 오디션(체크, GO 버튼 파란 "GO (오디션)"). 오디션 중 일반 GO = 2차 트리거 규칙 건너뛰고 실제 출력으로 재시작(`engine.isAuditioning`).
 - [x] ★버그 수정: `juce::Uuid` 기본 생성자는 난수 → 선택적 id(`Cue::patchId`, `PlayOptions::patchOverride`, `auditionPatchId`, `ProjectSnapshot::selectedId`)를 `Uuid::null()`로 초기화(안 하면 모든 재생이 오디션으로 표시되던 사고).
 - [x] 테스트 CueControllerTests(출력 없음 / 일반 GO 재시작 / 대체 패치 라우팅 / 항상 오디션). 1111 tests. 커밋 f7fefca.
-- [ ] 단계 3 마감: README·릴리스 노트 0.4.0(작성됨), GUI 스모크(레벨 탭·패치 편집기·오디션 — 유휴 시), 코덱스 리뷰(2단계 리뷰 끝난 뒤), 릴리스, 메모리.
+- [x] GUI 스모크(2026-09-02 15:45): 레벨 탭(2×8, 귀퉁이 표시), 트림 탭, 패치 편집기 3탭, 라우팅 매트릭스, 크로스포인트 드래그(-∞→-50 dB), Alt+Space 오디션 GO 상태 표시 확인.
+- [ ] 단계 3 마감: README·릴리스 노트 0.4.0(작성됨), 코덱스 리뷰(2단계 리뷰 끝난 뒤), 릴리스, 메모리.
 
 ---
 
