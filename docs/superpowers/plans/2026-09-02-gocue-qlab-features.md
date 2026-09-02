@@ -299,24 +299,23 @@ class Scheduler { public: using Clock = std::function<double()>;   // 초
 ## 단계 6 — v0.7.0: 그룹 · 카트 · 트랜스포트 계열 큐 · 시퀀스 녹음
 
 ### Task 6.1: 그룹 큐 (51)
-- [ ] `GroupCueData{mode, playlist{shuffle, loop, crossfadeEnabled, crossfadeSeconds, fadeOutCurve, fadeInCurve}}`, 트리 편집(CueList id API), 목록 접기/펼치기(> <), 그룹 테두리 색(타임라인 초록·플레이리스트 주황·start-first 파랑·랜덤 보라).
-- [ ] 컨트롤러: 타임라인(전부 동시, 자식 프리웨이트), 플레이리스트(순차·크로스페이드=다음 큐 미리 시작+두 페이드·루프·셔플·2차 트리거 다음/이전), 첫 큐 시작 후 진입, 첫 큐 시작, 랜덤(라운드로빈 메모리). 그룹 정지/패닉은 자식 전체.
-- [ ] 타임라인 탭: 자식 프리웨이트를 막대 드래그·nudge(Alt+←→ 0.1 s, Shift+Alt 0.01 s)로 편집.
-- [ ] 테스트: 각 모드 진행 순서(가짜 시계), 크로스페이드 중 두 큐 동시 재생, 라운드로빈 반복 없이 전부 한 번씩.
-- [ ] 커밋.
+- [x] `CueType::group` + `GroupCueData{mode(timeline/playlist/startFirstEnter/startFirst/random), collapsed, shuffle, loop, crossfade, crossfadeSeconds}`(크로스페이드 커브는 생략 — 현재 자식의 정지 페이드 + 다음 자식의 자기 페이드인). 트리 = `Cue::parentId` + pre-order 연속성(CueList: depthOf/subtreeEnd/childrenOf/nextSibling/isRowVisible/nextVisible/addAfter/wrapInGroup/ungroup/moveSubtrees, remove/duplicate/move가 서브트리 단위, sanitiseTree). 표: 들여쓰기·삼각형(클릭/←→)·모드 색 막대(타임라인 초록·플레이리스트 주황·첫큐 파랑·랜덤 보라)·접기. 직렬화 "parent"/"group".
+- [x] 컨트롤러: 타임라인(자식 전부 각자 프리웨이트로 동시), 플레이리스트(순차 watch·크로스페이드=남은 시간 ≤ xf에 다음 시작+현재 페이드아웃·반복·셔플·두 번째 GO = 다음), 첫 큐 시작 후 진입(플레이헤드가 그룹 안으로), 첫 큐 시작, 랜덤(한 바퀴 한 번씩). stopGroup/패닉은 자식 전체. 시퀀스는 형제 범위로 제한.
+- [x] 그룹 탭 타임라인 막대 편집기: 드래그(0.1 s 격자, Shift = 자유), Alt+←/→ 0.1 s, Shift+Alt 0.01 s, ↑↓ 자식 선택. 명령: Ctrl+0 그룹 추가, Ctrl+G 묶기, Ctrl+Shift+G 해제, 모두 접기/펼치기.
+- [x] 테스트(CueListTests 트리 5건, CueControllerTests 4건: 타임라인 프리웨이트, 플레이리스트 순차/skip/반복, 크로스페이드 겹침, 첫큐 진입/랜덤 라운드로빈). 커밋 ee9ffe3·a12358c·758ab0b·3b2e72a.
 
-### Task 6.2: 카트 (52)
-- [ ] `CueContainer.isCart` + `CueCartView`(격자 1×1~15×15, 버튼: 번호·이름·색·재생 진행, 클릭=트리거(2차 트리거 규칙), 우상단 미리듣기), 카트 시작 시 전체 로드, 카트엔 그룹/자동 진행 없음(인스펙터에서 숨김), 설정 격자 크기 탭, 버튼 크기 소/중/대.
-- [ ] 커밋.
+### Task 6.2: 카트 + 여러 큐 리스트 (52 + 2단계에서 이월)
+- [x] 모델: `CueContainer{id,name,isCart,cartRows,cartCols,cues}`, `Project::lists/activeList`(`cues()` = 메인 리스트 접근자), 파일 버전 5("lists"+"activeList", "cues"는 호환용 메인 리스트, v4 이하 = 단일 리스트). 문서: 비활성 리스트는 자기 CueList에 큐+커서 보관, 활성 리스트는 `document.cues`로 swap(setActiveContainer — dirty 아님), add/remove/rename/setContainerCart(undo는 perform으로), listContaining/containerOf/findCueAnywhere/forEachList, 스냅샷에 전 리스트. 컨트롤러 id 경로 전부 리스트 횡단(핫키·벽시계·팔로우·제어 대상·goto는 리스트 전환), 카트에서 GO 없음, fadeStopOthers 범위 = peers/list/all 실제 의미.
+- [x] UI: ContainerTabs(탭·+ 메뉴·우클릭 이름/카트 전환/격자 크기/삭제), CueCartView(격자 1×1~15×15, 버튼 번호·이름·색·진행·남은 시간, 클릭 = 트리거(2차 트리거 규칙), 우클릭 = 정지, 슬롯에 파일 드롭), Ctrl+PageUp/PageDown. **생략**: 카트 진입 시 전체 로드(디스크 부담, 필요하면 로드 큐로), 버튼 크기 소/중/대(격자 크기로 대신), 카트에서 인스펙터 숨김(그대로 둠 — 진행 모드는 카트에서 무시).
+- [x] 테스트: ProjectSerializer(리스트/카트 왕복, v4 레거시), ProjectDocumentTests 5건, CueControllerTests 리스트 횡단 1건. GUI 스모크(탭 전환·카트 버튼 재생·Esc). 커밋 98fd95c·7fe1d90·dd80509·7590050.
 
 ### Task 6.3: 트랜스포트·goto·wait·memo·arm/disarm·target 큐 (54)
-- [ ] 종류별 실행: start(재개 포함)/stop/pause/load(loadTime)/reset(대상 정지+임시값 초기화)/goto(플레이헤드 이동)/wait(길이만)/memo(아무것도 안 함)/arm·disarm(대상 armed 토글)/target(대상의 대상 교체). 대상 선택 UI 공통(`TargetPicker`), 대상 없으면 깨짐.
-- [ ] 테스트: 각 종류 1개씩 동작(가짜 시계·엔진 오프라인).
-- [ ] 커밋.
+- [x] 한 종류 `CueType::control` + `ControlCueData{kind, targetId, secondTargetId, seconds}`(11 kind): start(일시정지면 재개, 아니면 대상 시퀀스)/stop/pause/load(초)/reset/goto(플레이헤드, 다른 리스트면 전환)/wait(초 동안 active)/memo/arm/disarm/target(대상의 대상 교체). 동작 탭(종류·대상·새 대상·시간), 표 글리프 11종, 트랜스포트 정보, 경고(대상 없음), 속성 붙여넣기. 명령 Ctrl+9(시작), 대기 큐/메모 큐 메뉴.
+- [x] 테스트 CueControllerTests 1건(11종 전부 + 대상 없음 실패). 커밋 b59089b.
 
 ### Task 6.4: 시퀀스 녹음 (61)
-- [ ] 도구 메뉴 "시퀀스 녹음…": 녹음 시작 후 큐 시작 시각을 기록 → 정지 시 타임라인 그룹(자식=start 큐, 프리웨이트=상대 시각) 생성.
-- [ ] 커밋. 단계 6 마감(0.7.0, 코덱스, 메모리).
+- [x] 큐 메뉴 "시퀀스 녹음 시작/정지"(Ctrl+Shift+E, 체크 표시 + 기록 수): 녹음 중 시작된 큐와 시각 → 정지 시 선택 뒤에 타임라인 그룹(자식 = 시작 제어 큐, 프리웨이트 = 상대 시각). 테스트 1건. 커밋 49b33c0.
+- [ ] 단계 6 마감: 코덱스 리뷰(phase5→phase6, 실행 중) → 반영, README·0.7.0 노트, 릴리스(3~6단계 합본), 메모리.
 
 ---
 
