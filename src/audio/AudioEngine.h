@@ -80,6 +80,9 @@ public:
     void setLiveRegion (const juce::Uuid& cueId, double startSeconds, double endSeconds);
     void setLiveRate (const juce::Uuid& cueId, double rate);
     void setLiveGainDb (const juce::Uuid& cueId, double gainDb);
+    /** Duck / boost (dB on top of the cue gain) reached over 'rampSeconds'; 0 = none. */
+    void setDuckDb (const juce::Uuid& cueId, double duckDb, double rampSeconds);
+    double getDuckDb (const juce::Uuid& cueId) const;
     /** Ids of the cues that are paused right now. */
     std::vector<juce::Uuid> getPausedCues() const;
 

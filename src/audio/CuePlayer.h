@@ -70,6 +70,9 @@ public:
     void setLiveRate (double rate) noexcept;
     /** Live cue gain (dB); ramps over one block so the change is click-free. Any thread. */
     void setLiveGainDb (double gainDb) noexcept;
+    /** Duck / boost applied on top of the cue gain, reached over 'rampSeconds'. 0 dB = none. Any thread. */
+    void setDuckDb (double duckDb, double rampSeconds) noexcept;
+    double getDuckDb() const noexcept { return duckDb.load (std::memory_order_relaxed); }
 
     /** Audio thread. Overwrites channels 0-1 of buffer[0, numSamples) with this player's output.
         Returns false once the player has finished; the block still contains its final audio. */
@@ -118,6 +121,10 @@ private:
     std::atomic<bool> pausedFlag { false };
     std::atomic<double> liveRate { 1.0 };
     std::atomic<float> targetGain { 1.0f };
+    std::atomic<float> duckTarget { 1.0f };
+    std::atomic<double> duckRampSeconds { 0.0 };
+    std::atomic<double> duckDb { 0.0 };
+    float duckLevel = 1.0f;       // audio thread
     std::atomic<double> positionSeconds { 0.0 };
     std::atomic<double> filePositionSeconds { 0.0 };
     std::atomic<int> passIndex { 0 };

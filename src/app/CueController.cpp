@@ -1,5 +1,7 @@
 #include "app/CueController.h"
 
+#include <algorithm>
+
 namespace gocue
 {
 
@@ -8,10 +10,10 @@ namespace
     juce::String ko (const char* utf8) { return juce::String::fromUTF8 (utf8); }
 }
 
-CueController::CueController (AudioEngine& e, ProjectDocument& d)
-    : engine (e), document (d)
+CueController::CueController (AudioEngine& e, ProjectDocument& d, Scheduler& s)
+    : engine (e), document (d), scheduler (s)
 {
-    clock = [] { return juce::Time::getMillisecondCounterHiRes() * 0.001; };
+    clock = [this] { return scheduler.now(); };
 }
 
 void CueController::status (const juce::String& message, bool isError)
@@ -39,6 +41,24 @@ bool CueController::isGoLocked() const
 {
     const double window = document.settings.doubleGoSeconds;
     return window > 0.0 && clock() - lastGoTime < window;
+}
+
+void CueController::track (int schedulerId)
+{
+    pending.push_back (schedulerId);
+}
+
+int CueController::getNumPending() const
+{
+    return (int) pending.size();
+}
+
+void CueController::cancelPending()
+{
+    for (int id : pending)
+        scheduler.cancel (id);
+
+    pending.clear();
 }
 
 //==============================================================================
@@ -90,6 +110,135 @@ CueController::GoResult CueController::trigger (const Cue& cue)
     return GoResult::started;
 }
 
+//==============================================================================
+void CueController::applyFadeStopOthers (const Cue& cue)
+{
+    if (! cue.fadeStopOthers.enabled)
+        return;
+
+    const int ms = (int) std::lround (cue.fadeStopOthers.seconds * 1000.0);
+
+    for (const auto& p : engine.getPlayingCues())
+        if (p.id != cue.id)
+            engine.fadeOutAndStop (p.id, ms);   // one list for now: peers / list / all coincide
+}
+
+void CueController::applyDuck (const Cue& cue)
+{
+    if (! cue.duck.enabled)
+        return;
+
+    std::vector<juce::Uuid> ducked;
+
+    for (const auto& p : engine.getPlayingCues())
+    {
+        if (p.id == cue.id)
+            continue;
+
+        engine.setDuckDb (p.id, cue.duck.levelDb, cue.duck.seconds);
+        ducked.push_back (p.id);
+    }
+
+    if (ducked.empty())
+        return;
+
+    const auto id = cue.id;
+    const double ramp = cue.duck.seconds;
+
+    // restore the others when this cue is over (or stopped)
+    track (scheduler.watch ([this, id] { return ! engine.isPlaying (id); },
+                            [this, ducked, ramp]
+                            {
+                                for (const auto& other : ducked)
+                                    engine.setDuckDb (other, 0.0, ramp);
+                            }));
+}
+
+void CueController::startById (const juce::Uuid& id)
+{
+    const auto* cue = document.cues.findById (id);
+
+    if (cue == nullptr)
+        return;   // deleted while it was waiting
+
+    const Cue copy = *cue;
+
+    if (trigger (copy) != GoResult::started)
+        return;
+
+    applyFadeStopOthers (copy);
+    applyDuck (copy);
+}
+
+void CueController::scheduleStart (const juce::Uuid& id, double atSeconds)
+{
+    if (atSeconds <= clock())
+    {
+        startById (id);
+        return;
+    }
+
+    track (scheduler.schedule (atSeconds, [this, id] { startById (id); }));
+}
+
+int CueController::sequenceEnd (int index) const
+{
+    const auto& cues = document.cues;
+
+    while (cues.isValidIndex (index) && cues.get (index).continueMode != ContinueMode::none)
+        ++index;
+
+    return juce::jmin (index + 1, cues.size());
+}
+
+int CueController::fireSequence (int index)
+{
+    auto& cues = document.cues;
+    double t = clock();
+    int i = index;
+
+    while (cues.isValidIndex (i))
+    {
+        const Cue cue = cues.get (i);   // copy: starting a cue may not change the list, but be safe
+
+        if (! cue.armed && cue.skipIfDisarmed)
+        {
+            ++i;
+            continue;
+        }
+
+        const double startAt = t + cue.preWaitSeconds;
+
+        if (cue.armed)
+            scheduleStart (cue.id, startAt);
+        else
+            status (ko ("비활성 큐 건너뜀: ") + cueLabel (i, cue));
+
+        if (cue.continueMode == ContinueMode::none)
+            return i + 1;
+
+        if (cue.continueMode == ContinueMode::autoContinue)
+        {
+            t = startAt + cue.postWaitSeconds;
+            ++i;
+            continue;
+        }
+
+        // auto-follow: the rest of the chain starts when this cue has finished (a disarmed cue is over at once)
+        const int next = i + 1;
+        const auto id = cue.id;
+        const bool armed = cue.armed;
+
+        track (scheduler.watch ([this, id, startAt, armed] { return clock() >= startAt && (! armed || ! engine.isPlaying (id)); },
+                                [this, next] { fireSequence (next); }));
+
+        return sequenceEnd (index);
+    }
+
+    return juce::jmin (i, cues.size());
+}
+
+//==============================================================================
 CueController::GoResult CueController::go()
 {
     const auto& settings = document.settings;
@@ -127,14 +276,31 @@ CueController::GoResult CueController::go()
         return GoResult::nothingSelected;
 
     const int index = document.cues.getPlayheadIndex();
-    const Cue copy = *cue;   // advancePlayhead() may invalidate the pointer
-    const auto result = trigger (copy);
+    const Cue copy = *cue;
 
-    if (result == GoResult::started)
+    // a running cue that is fired again follows its second-trigger rule instead of starting a sequence
+    if (engine.isPlaying (copy.id) && copy.secondTrigger != SecondTriggerAction::hardStopRestart)
+    {
+        const auto result = trigger (copy);
+        document.cues.advancePlayhead();
+        return result;
+    }
+
+    const int after = fireSequence (index);
+    const bool anyStarted = engine.isPlaying (copy.id) || getNumPending() > 0;
+
+    if (copy.armed && copy.preWaitSeconds <= 0.0 && ! engine.isPlaying (copy.id))
+    {
+        // the first cue could not be started (missing file ...): trigger() already reported it
+        document.cues.setPlayheadIndex (juce::jmin (after, document.cues.size() - 1));
+        return GoResult::failed;
+    }
+
+    if (anyStarted || ! copy.armed)
         status (ko ("GO: ") + cueLabel (index, copy));
 
-    document.cues.advancePlayhead();
-    return result;
+    document.cues.setPlayheadIndex (juce::jmin (after, document.cues.size() - 1));
+    return GoResult::started;
 }
 
 void CueController::goKeyReleased()
@@ -201,6 +367,7 @@ bool CueController::fadeOutTarget()
 void CueController::panicAll()
 {
     const double now = clock();
+    cancelPending();
 
     if (now - lastPanicTime <= doubleEscSeconds)
     {
@@ -219,6 +386,7 @@ void CueController::panicAll()
 
 void CueController::hardStopAll()
 {
+    cancelPending();
     engine.stopAll();
     status (ko ("전체 즉시 정지"));
 }
@@ -234,6 +402,7 @@ void CueController::resetSelected()
 
 void CueController::resetAll()
 {
+    cancelPending();
     engine.stopAll();
     document.cues.setPlayheadIndex (document.cues.isEmpty() ? -1 : 0);
     status (ko ("전체 리셋"));

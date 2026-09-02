@@ -26,7 +26,7 @@ MainComponent::MainComponent (AudioEngine& e, AppSettings& s, juce::ApplicationC
     : engine (e),
       settings (s),
       commands (cm),
-      controller (e, document),
+      controller (e, document, scheduler),
       menuBar (this),
       transport (cm),
       table (document.cues, e.getFormatManager(), cm),
@@ -70,10 +70,13 @@ MainComponent::MainComponent (AudioEngine& e, AppSettings& s, juce::ApplicationC
     setSize (1100, 780);
     updateTransportStandby();
     startTimerHz (30);
+    scheduler.startTicking (1);   // pre-waits, post-waits, auto-follows
 }
 
 MainComponent::~MainComponent()
 {
+    scheduler.stopTicking();
+    controller.cancelPending();
     stopTimer();
     PluginDialogs::closeAll();
     WorkspaceSettingsDialog::closeIfOpen();

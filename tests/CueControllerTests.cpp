@@ -43,12 +43,16 @@ public:
         return file;
     }
 
-    static void render (AudioEngine& engine, juce::AudioBuffer<float>& out, int blocks)
+    /** Renders 'blocks' blocks, advancing the fake clock and ticking the scheduler after each. */
+    static void render (AudioEngine& engine, Scheduler& scheduler, double& now, juce::AudioBuffer<float>& out, int blocks)
     {
         for (int i = 0; i < blocks; ++i)
+        {
             engine.renderBlock (out, blockSize);
-
-        engine.reapFinishedPlayers();
+            now += blockSize / sampleRate;
+            engine.reapFinishedPlayers();
+            scheduler.tick();
+        }
     }
 
     void runTest() override
@@ -70,23 +74,30 @@ public:
         document.cues.add (b);
         document.cues.setSelectedIndex (0);
 
-        CueController controller (engine, document);
         double now = 0.0;
-        controller.clock = [&now] { return now; };
+        Scheduler scheduler ([&now] { return now; });
+        CueController controller (engine, document, scheduler);
         int rejected = 0;
         controller.onGoRejected = [&rejected] { ++rejected; };
         juce::StringArray statuses;
         controller.onStatus = [&statuses] (const juce::String& message, bool) { statuses.add (message); };
 
-        beginTest ("GO fires the standby cue and moves the selection on");
+        auto stopEverything = [&]
+        {
+            controller.hardStopAll();
+            render (engine, scheduler, now, out, 2);
+            expectEquals (engine.getNumPlaying(), 0);
+        };
+
+        beginTest ("GO fires the playhead cue and moves the playhead on");
         {
             expect (controller.go() == CueController::GoResult::started);
             expect (engine.isPlaying (a.id));
-            expectEquals (document.cues.getSelectedIndex(), 1);
+            expectEquals (document.cues.getPlayheadIndex(), 1);
+            expectEquals (document.cues.getSelectedIndex(), 1);   // locked to the playhead
             expect (statuses[statuses.size() - 1].startsWith ("GO"));
             controller.goKeyReleased();
-            engine.stopAll();
-            render (engine, out, 2);
+            stopEverything();
         }
 
         beginTest ("double-GO protection refuses a GO inside the window");
@@ -105,7 +116,7 @@ public:
             expect (controller.go() == CueController::GoResult::rejectedDoubleGo);
             expect (! engine.isPlaying (b.id));
             expectEquals (rejected, 1);
-            expectEquals (document.cues.getSelectedIndex(), 1);
+            expectEquals (document.cues.getPlayheadIndex(), 1);
 
             now = 10.6;
             expect (! controller.isGoLocked());
@@ -115,8 +126,7 @@ public:
 
             settings.doubleGoSeconds = 0.0;
             document.setSettings (settings);
-            engine.stopAll();
-            render (engine, out, 2);
+            stopEverything();
         }
 
         beginTest ("require key up blocks a repeated GO until the key is released");
@@ -138,8 +148,7 @@ public:
 
             settings.requireKeyUp = false;
             document.setSettings (settings);
-            engine.stopAll();
-            render (engine, out, 2);
+            stopEverything();
         }
 
         beginTest ("P pauses the target and Space resumes it instead of firing the next cue");
@@ -148,31 +157,30 @@ public:
             now = 30.0;
             expect (controller.go() == CueController::GoResult::started);
             controller.goKeyReleased();
-            render (engine, out, 4);
+            render (engine, scheduler, now, out, 4);
 
             expect (controller.togglePause());
-            render (engine, out, 2);
+            render (engine, scheduler, now, out, 2);
             expect (engine.isPaused (a.id));
 
             now = 31.0;
             expect (controller.go() == CueController::GoResult::resumed);
             controller.goKeyReleased();
-            render (engine, out, 2);
+            render (engine, scheduler, now, out, 2);
             expect (! engine.isPaused (a.id));
             expect (engine.isPlaying (a.id));
             expect (! engine.isPlaying (b.id));
-            expectEquals (document.cues.getSelectedIndex(), 1);   // unchanged by the resume
+            expectEquals (document.cues.getPlayheadIndex(), 1);   // unchanged by the resume
 
-            expect (controller.togglePause());                     // pause again ...
-            render (engine, out, 2);
+            expect (controller.togglePause());
+            render (engine, scheduler, now, out, 2);
             expect (engine.isPaused (a.id));
-            expect (controller.togglePause());                     // ... and P resumes too
-            render (engine, out, 2);
+            expect (controller.togglePause());
+            render (engine, scheduler, now, out, 2);
             expect (! engine.isPaused (a.id));
 
-            engine.stopAll();
-            render (engine, out, 2);
-            expect (! controller.togglePause());                   // nothing playing
+            stopEverything();
+            expect (! controller.togglePause());
         }
 
         beginTest ("Esc fades everything over the panic time and a second Esc stops at once");
@@ -187,25 +195,25 @@ public:
             now = 40.1;
             controller.go();
             controller.goKeyReleased();
-            render (engine, out, 2);
+            render (engine, scheduler, now, out, 2);
             expectEquals (engine.getNumPlaying(), 2);
 
             now = 41.0;
             controller.panicAll();
-            render (engine, out, 2);
+            render (engine, scheduler, now, out, 2);
             expect (engine.getPlayingCues()[0].fadingOut);
-            expectEquals (engine.getNumPlaying(), 2);              // still fading
+            expectEquals (engine.getNumPlaying(), 2);
 
             now = 41.2;
-            controller.panicAll();                                 // double Esc
-            render (engine, out, 2);
+            controller.panicAll();
+            render (engine, scheduler, now, out, 2);
             expectEquals (engine.getNumPlaying(), 0);
 
             settings.panicSeconds = 2.0;
             document.setSettings (settings);
         }
 
-        beginTest ("second-trigger rules: ignore, restart, devamp");
+        beginTest ("second-trigger rules: ignore, restart, devamp, hard stop");
         {
             Cue loop;
             loop.name = "loop";
@@ -217,44 +225,216 @@ public:
             document.cues.setSelectedIndex (index);
 
             expect (controller.preview() == CueController::GoResult::started);
-            render (engine, out, 10);
+            render (engine, scheduler, now, out, 10);
             const double before = engine.getPlayingCues()[0].positionSeconds;
             expect (controller.preview() == CueController::GoResult::ignored);
-            render (engine, out, 1);
-            expectGreaterThan (engine.getPlayingCues()[0].positionSeconds, before);   // not restarted
+            render (engine, scheduler, now, out, 1);
+            expectGreaterThan (engine.getPlayingCues()[0].positionSeconds, before);
 
             document.cues.update (index, [] (Cue& c) { c.secondTrigger = SecondTriggerAction::hardStopRestart; });
             expect (controller.preview() == CueController::GoResult::started);
-            render (engine, out, 1);
-            expectLessThan (engine.getPlayingCues()[0].positionSeconds, 0.05);     // restarted from the top
+            render (engine, scheduler, now, out, 1);
+            expectLessThan (engine.getPlayingCues()[0].positionSeconds, 0.05);
 
             document.cues.update (index, [] (Cue& c) { c.secondTrigger = SecondTriggerAction::devamp; });
-            render (engine, out, 30);                                                // well into the loop
+            render (engine, scheduler, now, out, 30);
             expect (controller.preview() == CueController::GoResult::ignored);
-            expectGreaterThan (engine.getPlayingCues()[0].lengthSeconds, 0.0);       // no longer infinite
+            expectGreaterThan (engine.getPlayingCues()[0].lengthSeconds, 0.0);
 
             for (int i = 0; i < 60 && engine.isPlaying (loop.id); ++i)
-                render (engine, out, 1);
+                render (engine, scheduler, now, out, 1);
 
             expect (! engine.isPlaying (loop.id));
 
             document.cues.update (index, [] (Cue& c) { c.secondTrigger = SecondTriggerAction::hardStop; });
             controller.preview();
-            render (engine, out, 2);
+            render (engine, scheduler, now, out, 2);
             expect (controller.preview() == CueController::GoResult::ignored);
-            render (engine, out, 2);
+            render (engine, scheduler, now, out, 2);
             expect (! engine.isPlaying (loop.id));
+
+            document.cues.remove (index);
         }
 
-        beginTest ("reset all stops everything and selects the first cue");
+        beginTest ("a pre-wait delays the start and Esc cancels it");
+        {
+            document.cues.update (0, [] (Cue& c) { c.preWaitSeconds = 0.5; });
+            document.cues.setSelectedIndex (0);
+            now = 50.0;
+
+            expect (controller.go() == CueController::GoResult::started);
+            controller.goKeyReleased();
+            expect (! engine.isPlaying (a.id));
+            expectEquals (controller.getNumPending(), 1);
+            expectEquals (document.cues.getPlayheadIndex(), 1);
+
+            now = 50.4;
+            scheduler.tick();
+            expect (! engine.isPlaying (a.id));
+            now = 50.5;
+            scheduler.tick();
+            expect (engine.isPlaying (a.id));
+            expectEquals (controller.getNumPending(), 1);   // tracked ids are not pruned until cancelled
+            stopEverything();
+
+            document.cues.setSelectedIndex (0);
+            now = 60.0;
+            controller.go();
+            controller.goKeyReleased();
+            controller.panicAll();
+            expectEquals (controller.getNumPending(), 0);
+            now = 61.0;
+            scheduler.tick();
+            expect (! engine.isPlaying (a.id));
+
+            document.cues.update (0, [] (Cue& c) { c.preWaitSeconds = 0.0; });
+        }
+
+        beginTest ("auto-continue starts the next cue after the post-wait and the playhead skips the sequence");
+        {
+            Cue c;
+            c.name = "c";
+            c.file = tone;
+            document.cues.add (c);   // a, b, c
+            document.cues.update (0, [] (Cue& x) { x.continueMode = ContinueMode::autoContinue; x.postWaitSeconds = 0.3; });
+            document.cues.setSelectedIndex (0);
+            now = 70.0;
+
+            expectEquals (controller.sequenceEnd (0), 2);
+            expect (controller.go() == CueController::GoResult::started);
+            controller.goKeyReleased();
+            expect (engine.isPlaying (a.id));
+            expect (! engine.isPlaying (b.id));
+            expectEquals (document.cues.getPlayheadIndex(), 2);
+
+            now = 70.29;
+            scheduler.tick();
+            expect (! engine.isPlaying (b.id));
+            now = 70.3;
+            scheduler.tick();
+            expect (engine.isPlaying (b.id));
+            expect (! engine.isPlaying (c.id));
+            stopEverything();
+
+            // zero post-wait: both start in the same GO
+            document.cues.update (0, [] (Cue& x) { x.postWaitSeconds = 0.0; });
+            document.cues.setSelectedIndex (0);
+            expect (controller.go() == CueController::GoResult::started);
+            controller.goKeyReleased();
+            expect (engine.isPlaying (a.id) && engine.isPlaying (b.id));
+            stopEverything();
+            document.cues.update (0, [] (Cue& x) { x.continueMode = ContinueMode::none; });
+        }
+
+        beginTest ("auto-follow starts the next cue when the first one finishes");
+        {
+            document.cues.update (0, [] (Cue& x) { x.continueMode = ContinueMode::autoFollow; x.audio.endSeconds = 0.2; });
+            document.cues.setSelectedIndex (0);
+            now = 80.0;
+
+            expect (controller.go() == CueController::GoResult::started);
+            controller.goKeyReleased();
+            expect (engine.isPlaying (a.id));
+            expect (! engine.isPlaying (b.id));
+            expectEquals (document.cues.getPlayheadIndex(), 2);
+
+            render (engine, scheduler, now, out, 10);              // 0.116 s: still playing
+            expect (! engine.isPlaying (b.id));
+
+            for (int i = 0; i < 40 && ! engine.isPlaying (b.id); ++i)
+                render (engine, scheduler, now, out, 1);
+
+            expect (! engine.isPlaying (a.id));
+            expect (engine.isPlaying (b.id));
+            stopEverything();
+            document.cues.update (0, [] (Cue& x) { x.continueMode = ContinueMode::none; x.audio.endSeconds = -1.0; });
+        }
+
+        beginTest ("disarmed cues: skipped entirely, or silent but still continuing");
+        {
+            document.cues.update (0, [] (Cue& x) { x.armed = false; x.skipIfDisarmed = true; });
+            document.cues.setSelectedIndex (0);
+            now = 90.0;
+            expect (controller.go() == CueController::GoResult::started);
+            controller.goKeyReleased();
+            expect (! engine.isPlaying (a.id));
+            expect (engine.isPlaying (b.id));
+            expectEquals (document.cues.getPlayheadIndex(), 2);
+            stopEverything();
+
+            document.cues.update (0, [] (Cue& x) { x.skipIfDisarmed = false; x.continueMode = ContinueMode::autoContinue; x.postWaitSeconds = 0.2; });
+            document.cues.setSelectedIndex (0);
+            now = 91.0;
+            expect (controller.go() == CueController::GoResult::started);
+            controller.goKeyReleased();
+            expect (! engine.isPlaying (a.id));
+            expect (! engine.isPlaying (b.id));
+            now = 91.2;
+            scheduler.tick();
+            expect (engine.isPlaying (b.id));
+            expect (! engine.isPlaying (a.id));
+            stopEverything();
+            document.cues.update (0, [] (Cue& x) { x.armed = true; x.continueMode = ContinueMode::none; x.postWaitSeconds = 0.0; });
+        }
+
+        beginTest ("fade-stop-others fades the running cues when the cue starts");
+        {
+            document.cues.setSelectedIndex (0);
+            controller.preview();                                    // a runs
+            render (engine, scheduler, now, out, 2);
+            document.cues.update (1, [] (Cue& x) { x.fadeStopOthers.enabled = true; x.fadeStopOthers.seconds = 0.1; });
+            document.cues.setSelectedIndex (1);
+            now = 100.0;
+            expect (controller.go() == CueController::GoResult::started);
+            controller.goKeyReleased();
+            render (engine, scheduler, now, out, 1);
+
+            bool aFading = false;
+            for (const auto& p : engine.getPlayingCues())
+                if (p.id == a.id)
+                    aFading = p.fadingOut;
+
+            expect (aFading);
+            expect (engine.isPlaying (b.id));
+            render (engine, scheduler, now, out, 12);              // 0.14 s > 0.1 s fade
+            expect (! engine.isPlaying (a.id));
+            expect (engine.isPlaying (b.id));
+            stopEverything();
+            document.cues.update (1, [] (Cue& x) { x.fadeStopOthers.enabled = false; });
+        }
+
+        beginTest ("ducking lowers the other cues while the cue runs and restores them afterwards");
+        {
+            document.cues.setSelectedIndex (0);
+            controller.preview();                                    // a runs (2 s)
+            render (engine, scheduler, now, out, 2);
+            document.cues.update (1, [] (Cue& x) { x.duck.enabled = true; x.duck.levelDb = -20.0; x.duck.seconds = 0.01; x.audio.endSeconds = 0.1; });
+            document.cues.setSelectedIndex (1);
+            now = 110.0;
+            expect (controller.go() == CueController::GoResult::started);
+            controller.goKeyReleased();
+            expectWithinAbsoluteError (engine.getDuckDb (a.id), -20.0, 1e-9);
+
+            for (int i = 0; i < 40 && engine.isPlaying (b.id); ++i)
+                render (engine, scheduler, now, out, 1);
+
+            render (engine, scheduler, now, out, 1);
+            expect (! engine.isPlaying (b.id));
+            expect (engine.isPlaying (a.id));
+            expectWithinAbsoluteError (engine.getDuckDb (a.id), 0.0, 1e-9);   // restored
+            stopEverything();
+            document.cues.update (1, [] (Cue& x) { x.duck.enabled = false; x.audio.endSeconds = -1.0; });
+        }
+
+        beginTest ("reset all stops everything and puts the playhead on the first cue");
         {
             document.cues.setSelectedIndex (1);
             controller.preview();
-            render (engine, out, 2);
+            render (engine, scheduler, now, out, 2);
             controller.resetAll();
-            render (engine, out, 2);
+            render (engine, scheduler, now, out, 2);
             expectEquals (engine.getNumPlaying(), 0);
-            expectEquals (document.cues.getSelectedIndex(), 0);
+            expectEquals (document.cues.getPlayheadIndex(), 0);
         }
 
         expect (dir.deleteRecursively());

@@ -3,6 +3,7 @@
 #include "app/AppSettings.h"
 #include "app/CueController.h"
 #include "app/ProjectDocument.h"
+#include "app/Scheduler.h"
 #include "audio/AudioEngine.h"
 #include "ui/CueInspector.h"
 #include "ui/CueTable.h"
@@ -102,6 +103,7 @@ private:
     juce::ApplicationCommandManager& commands;
     ProjectDocument document;
     PluginWindowManager pluginWindows;
+    Scheduler scheduler;
     CueController controller;
     std::atomic<bool> unsavedChanges { false };
     double ignorePluginChangesUntilMs = 0.0;

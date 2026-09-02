@@ -230,6 +230,26 @@ void AudioEngine::setLiveGainDb (const juce::Uuid& cueId, double gainDb)
             p->setLiveGainDb (gainDb);
 }
 
+void AudioEngine::setDuckDb (const juce::Uuid& cueId, double duckDb, double rampSeconds)
+{
+    const juce::ScopedLock sl (lock);
+
+    for (auto& p : players)
+        if (p->getCueId() == cueId && ! p->hasFinished())
+            p->setDuckDb (duckDb, rampSeconds);
+}
+
+double AudioEngine::getDuckDb (const juce::Uuid& cueId) const
+{
+    const juce::ScopedLock sl (lock);
+
+    for (auto& p : players)
+        if (p->getCueId() == cueId && ! p->hasFinished())
+            return p->getDuckDb();
+
+    return 0.0;
+}
+
 std::vector<juce::Uuid> AudioEngine::getPausedCues() const
 {
     std::vector<juce::Uuid> result;

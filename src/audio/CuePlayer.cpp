@@ -155,6 +155,15 @@ void CuePlayer::setLiveGainDb (double gainDb) noexcept
     targetGain.store (tmp.gainLinear(), std::memory_order_relaxed);
 }
 
+void CuePlayer::setDuckDb (double db, double rampSeconds) noexcept
+{
+    Cue tmp;
+    tmp.gainDb = db;
+    duckDb.store (db, std::memory_order_relaxed);
+    duckRampSeconds.store (std::max (0.0, rampSeconds), std::memory_order_relaxed);
+    duckTarget.store (tmp.gainLinear(), std::memory_order_relaxed);
+}
+
 double CuePlayer::getLengthSeconds() const noexcept
 {
     if (source == nullptr)
@@ -263,6 +272,21 @@ bool CuePlayer::renderNextBlock (juce::AudioBuffer<float>& buffer, int numSample
         else if (gainLinear != 1.0f)
         {
             buffer.applyGain (0, numSamples, gainLinear);
+        }
+
+        const float duckGoal = duckTarget.load (std::memory_order_relaxed);
+
+        if (! juce::approximatelyEqual (duckGoal, duckLevel))
+        {
+            const double rampSamples = duckRampSeconds.load (std::memory_order_relaxed) * currentSampleRate;
+            const float fraction = rampSamples > 0.0 ? (float) juce::jmin (1.0, (double) numSamples / rampSamples) : 1.0f;
+            const float next = duckLevel + (duckGoal - duckLevel) * fraction;
+            buffer.applyGainRamp (0, numSamples, duckLevel, next);
+            duckLevel = std::abs (next - duckGoal) < 1.0e-4f ? duckGoal : next;
+        }
+        else if (duckLevel != 1.0f)
+        {
+            buffer.applyGain (0, numSamples, duckLevel);
         }
     }
     else
