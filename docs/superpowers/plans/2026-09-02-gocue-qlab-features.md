@@ -274,20 +274,20 @@ class Scheduler { public: using Clock = std::function<double()>;   // 초
 ## 단계 5 — v0.6.0: 슬라이스 · 속도/피치 · devamp
 
 ### Task 5.1: 슬라이스 모델 + 소스 (5)
-- [ ] `Slice{seconds, playCount}` (0=건너뜀, -1=무한), 최소 간격 0.05 s, WAV/AIFF 큐 마커 가져오기(`AudioFormatReader::metadataValues` "Cue" 항목). `RegionLoopSource`가 슬라이스 단위 회차 처리(devamp 슬라이스 = 현재 슬라이스 회차 끝에서 다음 슬라이스로).
-- [ ] 테스트: 슬라이스 3개 [0,0.2)(×2) [0.2,0.4)(×0 건너뜀) [0.4,0.6)(×1) → 총 길이 0.6, 무한 슬라이스 + devamp 후 다음 슬라이스로, 모든 슬라이스 0 → 깨진 큐.
-- [ ] 파형 뷰: M키 마커, 초록 핸들 드래그, 횟수 더블클릭 편집(글자=무한, 0=건너뜀), Delete/위로 드래그 삭제, "전부 삭제", 마커 가져오기.
-- [ ] 커밋.
+- [x] `Slice{seconds, playCount}` + `AudioCueData::slices/firstSliceCount`(정렬·0.05 s 간격·클램프, 직렬화 "slices"/"firstSliceCount"), `sliceSequenceSeconds`, effectiveLength(무한 슬라이스 → -1). `RegionLoopSource` 재작성: run(파일 구간×횟수) 배열 = 가상 타임라인(seqlock 발행), 무한 run은 "끈끈이"(그 안에서 순환) → `finishCurrentPass(pos, stopAfter)`가 회차 해소 후 다음 run으로(또는 stopAfter면 이후 run 전부 건너뜀), `locate`/`virtualPositionFor`로 라이브 트림·시크가 파일 위치 유지. 플레이어 `setLiveSlices`, 엔진 `setLiveSlices`, 모든 슬라이스 0 = 재생 거부.
+- [x] 테스트(RegionPlaybackTests): [0,0.2)×2·건너뜀·[0.4,0.6)×1 → 0.6 s 레벨 순서 확인, 무한 슬라이스 + devamp → 다음 슬라이스, 전부 0 거부, 정리·직렬화. 기존 3327 테스트 전부 유지.
+- [x] 파형 뷰: M = 커서에 마커, 초록 마커선 + 상단 삼각 + 횟수 배지(첫 슬라이스는 구간 시작 배지), 드래그 이동(이웃·간격 제한), 더블클릭 = 횟수 입력(0 = 건너뜀, x/inf = 무한), Delete 삭제, 우클릭 메뉴: 마커 추가 / 전부 삭제 / **파일 큐 마커 가져오기**(WAV/AIFF NumCuePoints·CueNOffset). 커밋 588e332.
 
 ### Task 5.2: 속도 + 피치 유지 (6·22)
-- [ ] `ResamplingAudioSource` 비율 실시간(이미 원자적), `signalsmith-stretch`(FetchContent, MIT) 경로: 피치 유지 시 스트레치 비율 1/rate, 레이턴시 보정. 속도 페이드는 4.2의 `setLiveRate` 램프.
-- [ ] 테스트: rate 0.5 → 길이 2배, 피치 유지 rate 2.0 → 440 Hz 유지(FFT 피크), 길이 절반 ±5 %.
-- [ ] 커밋.
+- [x] `third_party/signalsmith-stretch`(1.3.2, MIT) + `signalsmith-linear`(0.3.1) **헤더 벤더링**(FetchContent 대신 — 네트워크 없이 빌드). `src/audio/StretchSource`: 읽기선행 뒤·리샘플러 앞에서 파일 샘플 단위로 rate배 입력을 당겨 시간 신장, 위치 변경 시 `outputSeek` 프리롤(정렬), 라이브 rate 원자적, 범위 0.25~4배(초과는 가장자리). CuePlayer: `preservePitch`면 체인에 삽입(리샘플러는 SR 변환만), `advanceFor`(가상 위치 진행 = 실효 rate). 시간·루프 탭 "피치 유지" 토글 활성(다음 재생부터).
+- [x] 테스트: 2 s 파일 rate 2.0 — 피치 유지: 길이 ≈1.0 s + 440 Hz 에너지 ≫ 880 (Goertzel) / 바리스피드: 880 ≫ 440. 3365 tests.
+- [x] 커밋 f0633cd.
 
 ### Task 5.3: devamp 큐 (53)
-- [ ] 큐 종류 devamp{bySlice, startNext, stopTarget} + 컨트롤러: 대상의 현재 회차 끝 시각을 엔진에서 받아(`getPassEndTime`) 그 순간 다음 큐 시작/대상 정지 스케줄(샘플 정확: 엔진 콜백에서 이벤트 큐로 알림).
-- [ ] 테스트: 무한 루프 0.5 s 큐 + devamp(startNext, stopTarget) → 회차 경계에서 정지 + 다음 큐 시작(오프라인 렌더로 경계 샘플 확인).
-- [ ] 커밋. 단계 5 마감(0.6.0, 코덱스, 메모리).
+- [x] `CueType::devamp` + `DevampCueData{targetId, startNextCue, stopTarget}`(직렬화 "devamp"). 엔진 `finishCurrentPass(id, stopAfter)`(소스가 무한 run 해소 + stopAfter면 이후 run 건너뜀 → 회차 경계에서 정지) + `getSecondsToPassEnd`(플레이어 `getCurrentPassEnd` = 회차 끝 가상 위치). 컨트롤러 `trigger`: 대상 없음/재생 안 함 → failed 상태, 아니면 finishCurrentPass + startNextCue면 **스케줄러 1 ms 타이머**로 회차 끝 시각에 다음 큐 fireSequence(설계의 "엔진 콜백 이벤트 큐" 대신 — 정확도 ≈ 1 ms + 오디오 블록, 실사용엔 충분). "bySlice"는 소스가 무한 슬라이스 안이면 슬라이스 회차, 아니면 전체 회차로 자동 처리.
+- [x] UI: 큐 > 디밴프 큐 추가(Ctrl+8, 선택 오디오 큐 대상), 인스펙터 탭 세트(기본/**디밴프**/트리거: 대상 콤보·다음 큐 시작·대상 정지), 표 아이콘(루프 호 + 막대, 대상 없으면 빨강)·"→ 대상" 열, 트랜스포트 대기 정보, 경고 창, 속성 붙여넣기 그룹.
+- [x] 테스트: 0.5 s 무한 루프 + devamp(stop) → 회차 끝(getSecondsToPassEnd)에 정지(±0.03 s), stop 없이 단일 구간 → 역시 끝, 컨트롤러: 디밴프 GO → 회차 끝에서 대상 정지 + 다음 큐 시작, 대상 없음 실패. 3385 tests. 커밋 f0633cd.
+- [ ] 단계 5 마감: README·릴리스 노트 0.6.0(작성됨), GUI 스모크, 코덱스 리뷰, 릴리스, 메모리.
 
 ---
 

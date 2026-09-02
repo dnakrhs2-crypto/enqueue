@@ -84,6 +84,16 @@ void TransportBar::setStandbyCue (int index, const Cue* cue)
     cueNumber.setText (juce::String (index + 1), juce::dontSendNotification);
     cueName.setText (cue->name.isNotEmpty() ? cue->name : ko ("(이름 없음)"), juce::dontSendNotification);
 
+    if (cue->isDevamp())
+    {
+        const auto target = describeFadeTarget ? describeFadeTarget (*cue) : juce::String();
+        cueFile.setText (target.isNotEmpty() ? target : ko ("디밴프 대상 없음"), juce::dontSendNotification);
+        cueFile.setColour (juce::Label::textColourId, target.isNotEmpty() ? Palette::dimText : Palette::missing);
+        cueMeta.setText (ko ("디밴프") + (cue->devamp.stopTarget ? ko ("   반복 끝에서 대상 정지") : ko ("   반복 끝에서 이어감"))
+                         + (cue->devamp.startNextCue ? ko ("   그 순간 다음 큐 시작") : juce::String()), juce::dontSendNotification);
+        return;
+    }
+
     if (cue->isFade())
     {
         const auto target = describeFadeTarget ? describeFadeTarget (*cue) : juce::String();

@@ -62,11 +62,12 @@ public:
     class FadePanel;
     class CurvePanel;
     class FadeParamsPanel;
+    class DevampPanel;
 
 private:
     void refresh();
-    /** Installs the tab set for the selected cue's type (audio / fade). */
-    void rebuildTabs (bool forFade);
+    /** Installs the tab set for the selected cue's type (0 audio / 1 fade / 2 devamp). */
+    void rebuildTabs (int wanted);
 
     void cueSelectionChanged (int) override { refresh(); }
     void cueChanged (int index) override;
@@ -89,6 +90,7 @@ private:
     std::unique_ptr<FadePanel> fadePanel;
     std::unique_ptr<CurvePanel> curvePanel;
     std::unique_ptr<FadeParamsPanel> fadeParamsPanel;
+    std::unique_ptr<DevampPanel> devampPanel;
     BasicsPanel* basics = nullptr;       // aliases of the panels above
     TimeLoopsPanel* timeLoops = nullptr;
     LevelsPanel* levels = nullptr;

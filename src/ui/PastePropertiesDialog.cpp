@@ -33,7 +33,7 @@ namespace
             setup (timeLoops, "시간·루프 (트림·반복·속도·엔벨로프)", true);
             setup (levels, "레벨 (게인·정지 페이드)", true);
             setup (effects, "이펙트 (VST3 인서트 체인)", false);
-            setup (fade, "페이드 (시간·상대·정지·레벨 목표·활성 칸·커브·파라미터 — 대상은 제외)", true);
+            setup (fade, "페이드 / 디밴프 설정 (시간·상대·정지·레벨 목표·커브·파라미터 — 대상은 제외)", true);
 
             applyButton.setButtonText (ko ("붙여넣기"));
             applyButton.onClick = [this]

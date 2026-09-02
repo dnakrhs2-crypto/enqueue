@@ -323,6 +323,16 @@ void CueTable::paintCell (juce::Graphics& g, int rowNumber, int columnId, int wi
             slope.closeSubPath();
             g.fillPath (slope);
         }
+        else if (cue.isDevamp())
+        {
+            // a devamp: a loop arc with a bar (the loop point)
+            const bool broken = cue.devamp.targetId.isNull() || cues.indexOf (cue.devamp.targetId) < 0;
+            g.setColour (broken ? Palette::missing : Palette::dimText);
+            juce::Path arc;
+            arc.addCentredArc (x + 5.0f, cy, 4.5f, 4.5f, 0.0f, 0.4f, 5.9f, true);
+            g.strokePath (arc, juce::PathStrokeType (1.8f));
+            g.fillRect (x + 9.0f, cy - 6.0f, 2.0f, 12.0f);
+        }
         else if (cue.fileMissing || cue.file == juce::File())
         {
             g.setColour (Palette::missing);
@@ -378,9 +388,9 @@ void CueTable::paintCell (juce::Graphics& g, int rowNumber, int columnId, int wi
             break;
 
         case colFile:
-            if (cue.isFade())
+            if (cue.isFade() || cue.isDevamp())
             {
-                const int target = cue.fade.targetId.isNull() ? -1 : cues.indexOf (cue.fade.targetId);
+                const int target = cue.targetId().isNull() ? -1 : cues.indexOf (cue.targetId());
 
                 if (target < 0)
                 {

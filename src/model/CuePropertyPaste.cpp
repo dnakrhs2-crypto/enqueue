@@ -61,6 +61,13 @@ void apply (const Cue& source, Cue& target, const Selection& sel)
         target.fade.targetId = keepTarget;
     }
 
+    if (sel.fade && source.isDevamp() && target.isDevamp())
+    {
+        const auto keepTarget = target.devamp.targetId;
+        target.devamp = source.devamp;
+        target.devamp.targetId = keepTarget;
+    }
+
     target.sanitise();
 }
 

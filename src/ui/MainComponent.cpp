@@ -87,7 +87,7 @@ MainComponent::MainComponent (AudioEngine& e, AppSettings& s, juce::ApplicationC
     table.hasPlayed = [this] (const juce::Uuid& id) { return controller.hasPlayed (id); };
     transport.describeFadeTarget = [this] (const Cue& fadeCue) -> juce::String
     {
-        const int index = fadeCue.fade.targetId.isNull() ? -1 : document.cues.indexOf (fadeCue.fade.targetId);
+        const int index = fadeCue.targetId().isNull() ? -1 : document.cues.indexOf (fadeCue.targetId());
 
         if (index < 0)
             return {};
@@ -240,7 +240,7 @@ void MainComponent::getAllCommands (juce::Array<juce::CommandID>& ids)
                     CommandIDs::panicAll, CommandIDs::hardStopAll, CommandIDs::preview,
                     CommandIDs::auditionGo, CommandIDs::auditionPreview, CommandIDs::toggleAlwaysAudition,
                     CommandIDs::loadCue, CommandIDs::loadToTime, CommandIDs::resetCue, CommandIDs::resetAll,
-                    CommandIDs::addCue, CommandIDs::addFadeCue, CommandIDs::revertFade, CommandIDs::fetchFadeLevels, CommandIDs::removeCue, CommandIDs::duplicateCue,
+                    CommandIDs::addCue, CommandIDs::addFadeCue, CommandIDs::addDevampCue, CommandIDs::revertFade, CommandIDs::fetchFadeLevels, CommandIDs::removeCue, CommandIDs::duplicateCue,
                     CommandIDs::moveCueUp, CommandIDs::moveCueDown, CommandIDs::selectAll,
                     CommandIDs::copyCues, CommandIDs::cutCues, CommandIDs::pasteCues, CommandIDs::pasteCueProperties,
                     CommandIDs::find, CommandIDs::findNext,
@@ -348,6 +348,12 @@ void MainComponent::getCommandInfo (juce::CommandID commandID, juce::Application
         case CommandIDs::addFadeCue:
             result.setInfo (ko ("페이드 큐 추가"), ko ("선택한 오디오 큐를 대상으로 하는 페이드 큐를 아래에 추가 (레벨·속도·플러그인 파라미터를 시간에 걸쳐 변경)"), cueMenu, 0);
             result.addDefaultKeypress ('7', ModifierKeys::commandModifier);
+            result.setActive (canEdit);
+            break;
+
+        case CommandIDs::addDevampCue:
+            result.setInfo (ko ("디밴프 큐 추가"), ko ("선택한 오디오 큐를 대상으로: 실행하면 대상이 지금 도는 반복을 마치고 이어가거나 멈추고, 그 순간 다음 큐를 시작"), cueMenu, 0);
+            result.addDefaultKeypress ('8', ModifierKeys::commandModifier);
             result.setActive (canEdit);
             break;
 
@@ -630,6 +636,10 @@ bool MainComponent::perform (const InvocationInfo& info)
             addFadeCue();
             break;
 
+        case CommandIDs::addDevampCue:
+            addDevampCue();
+            break;
+
         case CommandIDs::fetchFadeLevels:
             inspector.fetchFadeLevelsFromTarget();
             break;
@@ -826,6 +836,7 @@ juce::PopupMenu MainComponent::getMenuForIndex (int topLevelMenuIndex, const juc
         case 2:
             menu.addCommandItem (&commands, CommandIDs::addCue);
             menu.addCommandItem (&commands, CommandIDs::addFadeCue);
+            menu.addCommandItem (&commands, CommandIDs::addDevampCue);
             menu.addCommandItem (&commands, CommandIDs::fetchFadeLevels);
             menu.addCommandItem (&commands, CommandIDs::removeCue);
             menu.addCommandItem (&commands, CommandIDs::duplicateCue);
@@ -973,6 +984,37 @@ void MainComponent::addFadeCue()
             fade.number = CueNumbering::next (document.cues.getAll(), at, increment);
 
         const int index = document.cues.add (std::move (fade), at);
+        document.cues.setSelectedIndex (index);
+    });
+}
+
+void MainComponent::addDevampCue()
+{
+    if (showMode)
+        return;
+
+    const int selected = document.cues.getSelectedIndex();
+    const auto* selectedCue = document.cues.getSelected();
+    const bool autoNumber = document.settings.autoNumber;
+    const double increment = document.settings.numberIncrement;
+    const juce::Uuid target = selectedCue != nullptr ? (selectedCue->isAudio() ? selectedCue->id : selectedCue->targetId()) : juce::Uuid::null();
+
+    document.perform (ko ("디밴프 큐 추가"), [this, selected, target, autoNumber, increment]
+    {
+        Cue devamp;
+        devamp.type = CueType::devamp;
+        devamp.devamp.targetId = target;
+        devamp.name = ko ("디밴프");
+
+        if (const auto* t = document.cues.findById (target))
+            devamp.name = ko ("디밴프: ") + t->name;
+
+        const int at = selected >= 0 ? selected + 1 : document.cues.size();
+
+        if (autoNumber)
+            devamp.number = CueNumbering::next (document.cues.getAll(), at, increment);
+
+        const int index = document.cues.add (std::move (devamp), at);
         document.cues.setSelectedIndex (index);
     });
 }
@@ -1567,9 +1609,9 @@ int MainComponent::countBrokenCues() const
 
     for (const auto& cue : document.cues.getAll())
     {
-        if (cue.isFade())
+        if (cue.isFade() || cue.isDevamp())
         {
-            if (cue.fade.targetId.isNull() || document.cues.indexOf (cue.fade.targetId) < 0)
+            if (cue.targetId().isNull() || document.cues.indexOf (cue.targetId()) < 0)
                 ++count;
         }
         else if (cue.file == juce::File() || cue.fileMissing)
@@ -1591,12 +1633,12 @@ void MainComponent::showWarnings()
         const auto& cue = cues.get (i);
         const juce::String label = "#" + juce::String (i + 1) + (cue.number.isNotEmpty() ? " [" + cue.number + "]" : juce::String()) + " " + cue.name;
 
-        if (cue.isFade())
+        if (cue.isFade() || cue.isDevamp())
         {
-            if (cue.fade.targetId.isNull())
-                lines.add (label + ko (" - 페이드 대상이 지정되지 않음"));
-            else if (document.cues.indexOf (cue.fade.targetId) < 0)
-                lines.add (label + ko (" - 페이드 대상 큐가 없음 (삭제됨)"));
+            if (cue.targetId().isNull())
+                lines.add (label + ko (" - 대상 큐가 지정되지 않음"));
+            else if (document.cues.indexOf (cue.targetId()) < 0)
+                lines.add (label + ko (" - 대상 큐가 없음 (삭제됨)"));
 
             continue;
         }

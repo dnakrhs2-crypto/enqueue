@@ -91,6 +91,8 @@ private:
     void addCueViaDialog();
     /** Inserts a fade cue after the selection, targeting the selected audio cue. */
     void addFadeCue();
+    /** Inserts a devamp cue after the selection, targeting the selected audio cue. */
+    void addDevampCue();
     void removeSelectedCues();
     void duplicateSelectedCue();
     void moveSelection (int delta);

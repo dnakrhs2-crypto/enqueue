@@ -2115,6 +2115,133 @@ private:
     bool editable = true;
 };
 
+//==============================================================================
+/** 디밴프 tab: target and what happens at the loop point. */
+class CueInspector::DevampPanel : public juce::Component
+{
+public:
+    explicit DevampPanel (ProjectDocument& doc) : document (doc), cues (doc.cues)
+    {
+        styleLabel (targetLabel, ko ("대상 큐"));
+        addAndMakeVisible (targetLabel);
+        targetCombo.setWantsKeyboardFocus (false);
+        targetCombo.onChange = [this] { commitTarget(); };
+        addAndMakeVisible (targetCombo);
+
+        styleToggle (startNextToggle, ko ("반복 끝에서 다음 큐 시작"));
+        startNextToggle.setTooltip (ko ("대상이 지금 도는 반복(또는 무한 슬라이스)을 마치는 순간, 이 큐 다음 큐를 시작합니다"));
+        startNextToggle.onClick = [this] { const bool on = startNextToggle.getToggleState(); edit (ko ("디밴프: 다음 큐"), [on] (Cue& c) { c.devamp.startNextCue = on; }); };
+        addAndMakeVisible (startNextToggle);
+
+        styleToggle (stopToggle, ko ("반복 끝에서 대상 정지"));
+        stopToggle.setTooltip (ko ("켜면 반복 끝에서 대상을 멈춥니다. 끄면 반복을 빠져나와 다음 슬라이스 / 나머지 구간을 이어서 재생합니다"));
+        stopToggle.onClick = [this] { const bool on = stopToggle.getToggleState(); edit (ko ("디밴프: 대상 정지"), [on] (Cue& c) { c.devamp.stopTarget = on; }); };
+        addAndMakeVisible (stopToggle);
+
+        styleLabel (hint, ko ("디밴프 = 루프 중인 큐를 음악적으로 끝내기. 실행 시점에 대상이 재생 중이어야 합니다 (아니면 실패 상태 메시지)."), 11.0f);
+        addAndMakeVisible (hint);
+    }
+
+    void setEditable (bool shouldBeEditable)
+    {
+        editable = shouldBeEditable;
+        refresh();
+    }
+
+    void refresh()
+    {
+        const juce::ScopedValueSetter<bool> guard (refreshing, true);
+        const auto* cue = cues.getSelected();
+        const bool enabled = cue != nullptr && cue->isDevamp() && editable;
+
+        targetCombo.clear (juce::dontSendNotification);
+        targetCombo.addItem (ko ("(없음)"), 1);
+        targetIds.clear();
+        targetIds.push_back (juce::Uuid::null());
+        int selectedTarget = 1;
+
+        for (int i = 0; i < cues.size(); ++i)
+        {
+            const auto& c = cues.get (i);
+
+            if (! c.isAudio())
+                continue;
+
+            targetIds.push_back (c.id);
+            targetCombo.addItem ((c.number.isNotEmpty() ? c.number + " " : "#" + juce::String (i + 1) + " ") + c.name, (int) targetIds.size());
+
+            if (cue != nullptr && cue->devamp.targetId == c.id)
+                selectedTarget = (int) targetIds.size();
+        }
+
+        targetCombo.setSelectedId (selectedTarget, juce::dontSendNotification);
+
+        for (auto* c : std::initializer_list<juce::Component*> { &targetCombo, &startNextToggle, &stopToggle })
+            c->setEnabled (enabled);
+
+        if (cue != nullptr && cue->isDevamp())
+        {
+            shownId = cue->id;
+            startNextToggle.setToggleState (cue->devamp.startNextCue, juce::dontSendNotification);
+            stopToggle.setToggleState (cue->devamp.stopTarget, juce::dontSendNotification);
+        }
+    }
+
+    void resized() override
+    {
+        auto area = getLocalBounds().reduced (12, 6);
+        auto row = area.removeFromTop (24);
+        targetLabel.setBounds (row.removeFromLeft (48));
+        targetCombo.setBounds (row.removeFromLeft (260));
+        area.removeFromTop (6);
+        row = area.removeFromTop (24);
+        startNextToggle.setBounds (row.removeFromLeft (200));
+        stopToggle.setBounds (row.removeFromLeft (200));
+        area.removeFromTop (6);
+        hint.setBounds (area.removeFromTop (16));
+    }
+
+    void paint (juce::Graphics& g) override { g.fillAll (Palette::panel); }
+
+private:
+    void edit (const juce::String& name, const std::function<void (Cue&)>& mutator)
+    {
+        if (refreshing || ! editable)
+            return;
+
+        const int index = shownId.isNull() ? cues.getSelectedIndex() : cues.indexOf (shownId);
+
+        if (! cues.isValidIndex (index) || ! cues.get (index).isDevamp())
+            return;
+
+        document.perform (name, [this, index, mutator] { cues.update (index, mutator); });
+    }
+
+    void commitTarget()
+    {
+        if (refreshing || targetCombo.getSelectedId() <= 0)
+            return;
+
+        const int index = targetCombo.getSelectedId() - 1;
+
+        if (index < 0 || index >= (int) targetIds.size())
+            return;
+
+        const auto id = targetIds[(size_t) index];
+        edit (ko ("디밴프 대상"), [id] (Cue& c) { c.devamp.targetId = id; });
+    }
+
+    ProjectDocument& document;
+    CueList& cues;
+    juce::Label targetLabel, hint;
+    juce::ComboBox targetCombo;
+    std::vector<juce::Uuid> targetIds;
+    juce::ToggleButton startNextToggle, stopToggle;
+    juce::Uuid shownId = juce::Uuid::null();
+    bool refreshing = false;
+    bool editable = true;
+};
+
 class CueInspector::EffectsPanel : public juce::Component
 {
 public:
@@ -2199,11 +2326,12 @@ CueInspector::CueInspector (ProjectDocument& doc, AudioEngine& e, AppSettings& s
     fadePanel = std::make_unique<FadePanel> (document, engine);
     curvePanel = std::make_unique<CurvePanel> (document);
     fadeParamsPanel = std::make_unique<FadeParamsPanel> (document, engine);
+    devampPanel = std::make_unique<DevampPanel> (document);
 
     tabs.setTabBarDepth (26);
     tabs.setOutline (0);
     tabs.setColour (juce::TabbedComponent::backgroundColourId, Palette::panel);
-    rebuildTabs (false);
+    rebuildTabs (0);
     addAndMakeVisible (tabs);
 
     cues.addListener (this);
@@ -2257,19 +2385,25 @@ void CueInspector::setEditable (bool shouldBeEditable)
     fadePanel->setEditable (editable);
     curvePanel->setEditable (editable);
     fadeParamsPanel->setEditable (editable);
+    devampPanel->setEditable (editable);
 }
 
-void CueInspector::rebuildTabs (bool forFade)
+void CueInspector::rebuildTabs (int wanted)
 {
-    const int wanted = forFade ? 1 : 0;
-
     if (tabSet == wanted)
         return;
 
     tabSet = wanted;
     tabs.clearTabs();
 
-    if (forFade)
+    if (wanted == 2)
+    {
+        tabs.addTab (ko ("기본"), Palette::panel, basics, false);
+        tabs.addTab (ko ("디밴프"), Palette::panel, devampPanel.get(), false);
+        tabs.addTab (ko ("트리거"), Palette::panel, triggers, false);
+        tabs.setCurrentTabIndex (1);
+    }
+    else if (wanted == 1)
     {
         tabs.addTab (ko ("기본"), Palette::panel, basics, false);
         tabs.addTab (ko ("페이드"), Palette::panel, fadePanel.get(), false);
@@ -2325,7 +2459,7 @@ void CueInspector::refresh()
         title.setText (text, juce::dontSendNotification);
     }
 
-    rebuildTabs (cue != nullptr && cue->isFade());
+    rebuildTabs (cue == nullptr ? 0 : cue->isFade() ? 1 : cue->isDevamp() ? 2 : 0);
     basics->refresh();
     timeLoops->refresh();
     levels->refresh();
@@ -2335,6 +2469,7 @@ void CueInspector::refresh()
     fadePanel->refresh();
     curvePanel->refresh();
     fadeParamsPanel->refresh();
+    devampPanel->refresh();
 }
 
 void CueInspector::resized()

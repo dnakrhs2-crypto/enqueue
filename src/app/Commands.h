@@ -23,6 +23,7 @@ enum : juce::CommandID
 
     addCue,
     addFadeCue,           // Ctrl+7
+    addDevampCue,         // Ctrl+8
     revertFade,           // Ctrl+Shift+R
     fetchFadeLevels,      // Ctrl+Shift+T
     removeCue,
