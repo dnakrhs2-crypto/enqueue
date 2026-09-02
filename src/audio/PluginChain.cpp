@@ -236,7 +236,12 @@ void PluginChain::applyStates (const std::vector<PluginSlotState>& states)
             juce::MemoryOutputStream decoded;
 
             if (juce::Base64::convertFromBase64 (decoded, s.stateBase64) && decoded.getDataSize() > 0)
+            {
+                // the same order process() takes: chain lock, then the plugin's own callback lock
+                const juce::ScopedLock sl (lock);
+                const juce::ScopedLock callbackLock (slot.plugin->getCallbackLock());
                 slot.plugin->setStateInformation (decoded.getData(), (int) decoded.getDataSize());
+            }
         }
     }
 

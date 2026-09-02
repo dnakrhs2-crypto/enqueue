@@ -95,19 +95,16 @@ MainComponent::MainComponent (AudioEngine& e, AppSettings& s, juce::ApplicationC
     containerTabs.onGridSize = [this] (int index) { setContainerGrid (index); };
     cart.onTrigger = [this] (const Cue& cue)
     {
-        const auto result = controller.trigger (cue);
+        const Cue copy = cue;   // the model row may move / vanish while the cue starts (a goto, a list switch)
+        const auto result = controller.fire (copy.id);   // like a hotkey: the cue alone, with its fade-stop-others and duck
 
         if (result == CueController::GoResult::started)
-            transport.showStatus (ko ("카트: ") + cue.name, false);
+            transport.showStatus (ko ("카트: ") + copy.name, false);
     };
     cart.onFilesDropped = [this] (const juce::StringArray& files, int slot) { addCuesFromFiles (files, slot); };
-    cart.onStop = [this] (const juce::Uuid& id)
-    {
-        if (engine.isPlaying (id))
-            engine.fadeOutAndStop (id);
-        else
-            controller.stopCue (id);
-    };
+    cart.onStop = [this] (const juce::Uuid& id) { controller.stopCue (id, true); };   // pending follows go too
+    table.isNumberTaken = [this] (const juce::String& number, const juce::Uuid& exceptId) { return document.isNumberTaken (number, exceptId); };
+    document.onBeforeContainerSwitch = [this] { table.finishEditing(); };   // a half-typed cell belongs to the list that is leaving
     table.onEditCues = [this] (const std::vector<int>& rows, const juce::String& name, const std::function<void (Cue&)>& mutator)
     {
         editCues (rows, name, mutator);
@@ -1334,7 +1331,7 @@ void MainComponent::toggleSequenceRecording()
 
         for (const auto& s : starts)
         {
-            const auto* target = document.cues.findById (s.cueId);
+            const auto* target = document.findCueAnywhere (s.cueId);
 
             if (target == nullptr)
                 continue;
@@ -1538,30 +1535,43 @@ void MainComponent::duplicateSelectedCue()
 
     document.perform (ko ("큐 복제"), [this, index, autoNumber, increment]
     {
-        const auto sourceId = document.cues.get (index).id;
+        // the originals of the whole subtree, in order: the copies come out in the same order
+        std::vector<juce::Uuid> originals;
+
+        for (int i = index, end = document.cues.subtreeEnd (index); i < end; ++i)
+            originals.push_back (document.cues.get (i).id);
+
         const int newIndex = document.cues.duplicate (index);
 
         if (newIndex < 0)
             return;
 
-        if (autoNumber)
+        juce::StringArray errors;
+
+        for (size_t k = 0; k < originals.size(); ++k)
         {
-            const auto number = CueNumbering::next (document.cues.getAll(), newIndex, increment);
-            document.cues.update (newIndex, [number] (Cue& c) { c.number = number; });
-        }
-        else
-        {
-            document.cues.update (newIndex, [] (Cue& c) { c.number.clear(); });   // numbers must stay unique
+            const int row = newIndex + (int) k;
+
+            if (! document.cues.isValidIndex (row))
+                break;
+
+            if (autoNumber)
+            {
+                const auto number = CueNumbering::next (document.cues.getAll(), row, increment);
+                document.cues.update (row, [number] (Cue& c) { c.number = number; });
+            }
+            else
+            {
+                document.cues.update (row, [] (Cue& c) { c.number.clear(); });   // numbers must stay unique
+            }
+
+            // the live plugin chain of every copied row (a group's children included)
+            if (auto* source = engine.findCueChain (originals[k]); source != nullptr && source->getNumSlots() > 0)
+                errors.addArray (engine.getCueChain (document.cues.get (row).id).restore (source->getStates(), engine.makePluginFactory()));
         }
 
-        if (auto* source = engine.findCueChain (sourceId); source != nullptr && source->getNumSlots() > 0)
-        {
-            const auto errors = engine.getCueChain (document.cues.get (newIndex).id)
-                                    .restore (source->getStates(), engine.makePluginFactory());
-
-            if (! errors.isEmpty())
-                showAlert (ko ("일부 플러그인을 복제하지 못했습니다"), errors.joinIntoString ("\n"), false);
-        }
+        if (! errors.isEmpty())
+            showAlert (ko ("일부 플러그인을 복제하지 못했습니다"), errors.joinIntoString ("\n"), false);
 
         document.cues.setSelectedIndex (newIndex);
         inspector.refreshPlugins();
@@ -2086,7 +2096,7 @@ int MainComponent::countBrokenCues() const
 
         if (cue.isFade() || cue.isDevamp() || cue.isControl())
         {
-            if (cue.targetId().isNull() || document.cues.indexOf (cue.targetId()) < 0)
+            if (cue.targetId().isNull() || document.findCueAnywhere (cue.targetId()) == nullptr)
                 ++count;
         }
         else if (cue.file == juce::File() || cue.fileMissing)
@@ -2124,7 +2134,7 @@ void MainComponent::showWarnings()
         {
             if (cue.targetId().isNull())
                 lines.add (label + ko (" - 대상 큐가 지정되지 않음"));
-            else if (document.cues.indexOf (cue.targetId()) < 0)
+            else if (document.findCueAnywhere (cue.targetId()) == nullptr)
                 lines.add (label + ko (" - 대상 큐가 없음 (삭제됨)"));
 
             continue;
@@ -2289,9 +2299,12 @@ void MainComponent::restorePluginChainsFromDocument (juce::StringArray& errors)
 {
     const auto factory = engine.makePluginFactory();
 
-    for (const auto& cue : document.cues.getAll())
-        if (! cue.plugins.empty())
-            errors.addArray (engine.getCueChain (cue.id).restore (cue.plugins, factory));
+    document.forEachList ([&] (CueList& list)   // every list / cart: an inactive list's cues play from hotkeys too
+    {
+        for (const auto& cue : list.getAll())
+            if (! cue.plugins.empty())
+                errors.addArray (engine.getCueChain (cue.id).restore (cue.plugins, factory));
+    });
 
     if (! document.masterPlugins.empty())
         errors.addArray (engine.getMasterChain().restore (document.masterPlugins, factory));
@@ -2324,7 +2337,10 @@ void MainComponent::reconcileChainsAfterRestore (const ProjectSnapshot& snapshot
     juce::StringArray errors;
     std::set<juce::String> liveIds;
 
-    for (const auto& cue : document.cues.getAll())
+    std::vector<Cue> allCues;   // every list / cart, not only the active one
+    document.forEachList ([&allCues] (CueList& list) { for (const auto& c : list.getAll()) allCues.push_back (c); });
+
+    for (const auto& cue : allCues)
     {
         liveIds.insert (cue.id.toString());
         auto* chain = engine.findCueChain (cue.id);
@@ -2358,15 +2374,15 @@ void MainComponent::reconcileChainsAfterRestore (const ProjectSnapshot& snapshot
     // running players follow the restored model: orphans stop, the others take the restored live values
     for (const auto& p : engine.getPlayingCues())
     {
-        const int index = document.cues.indexOf (p.id);
+        const auto* cuePtr = document.findCueAnywhere (p.id);
 
-        if (index < 0)
+        if (cuePtr == nullptr)
         {
             engine.stop (p.id);
             continue;
         }
 
-        const auto& cue = document.cues.get (index);
+        const auto& cue = *cuePtr;
         engine.setLiveGainDb (p.id, cue.gainDb);
         engine.setLiveLevels (p.id, cue.levels, cue.trim);
         engine.setLiveRate (p.id, cue.audio.rate);
@@ -2582,8 +2598,11 @@ void MainComponent::refreshFileInfoForAllCues()
     const bool wasDirty = document.isDirty();
     auto& formats = engine.getFormatManager();
 
-    for (int i = 0; i < document.cues.size(); ++i)
-        document.cues.update (i, [&formats] (Cue& c) { refreshCueFileInfo (formats, c); });
+    document.forEachList ([&formats] (CueList& list)
+    {
+        for (int i = 0; i < list.size(); ++i)
+            list.update (i, [&formats] (Cue& c) { refreshCueFileInfo (formats, c); });
+    });
 
     if (! wasDirty)
         document.markClean();
@@ -2792,14 +2811,13 @@ void MainComponent::removeContainer (int index)
         return;
 
     const auto info = document.getContainerInfo (index);
-    std::vector<juce::Uuid> ids;
-
-    if (index == document.getActiveContainer())
-        for (const auto& c : document.cues.getAll())
-            ids.push_back (c.id);
+    const auto ids = document.cueIdsOf (index);   // active or not: hotkeys / control cues may have started them
 
     for (const auto& id : ids)
+    {
         controller.stopCue (id);
+        engine.removeCueChain (id);
+    }
 
     document.perform (ko ("리스트/카트 삭제: ") + info.name, [this, index] { document.removeContainer (index); }, { {}, true });
 }
@@ -2852,7 +2870,6 @@ void MainComponent::updateContainerView()
     cart.setVisible (isCart);
     table.setVisible (! isCart);
     containerTabs.refresh();
-    autoLoadedId = juce::Uuid::null();
     commands.commandStatusChanged();
 
     if (isCart)

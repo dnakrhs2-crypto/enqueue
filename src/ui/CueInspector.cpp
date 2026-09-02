@@ -231,9 +231,17 @@ public:
             const auto description = key.getTextDescription();
             const auto* selected = cues.getSelected();
 
-            for (const auto& other : cues.getAll())
-                if (other.hotkey == description && (selected == nullptr || other.id != selected->id))
-                    return ko ("이미 쓰는 핫키: ") + other.name;
+            if (document.isHotkeyTaken (description, selected != nullptr ? selected->id : juce::Uuid::null()))   // every list / cart
+            {
+                juce::String owner;
+                document.forEachList ([&] (CueList& list)
+                {
+                    for (const auto& other : list.getAll())
+                        if (other.hotkey == description && (selected == nullptr || other.id != selected->id))
+                            owner = other.name;
+                });
+                return ko ("이미 쓰는 핫키: ") + owner;
+            }
 
             return {};
         };
@@ -515,9 +523,9 @@ private:
         if (number == cue->number)
             return;
 
-        if (cues.isNumberTaken (number, cue->id))
+        if (document.isNumberTaken (number, cue->id))
         {
-            juce::LookAndFeel::getDefaultLookAndFeel().playAlertSound();   // numbers are unique in the project
+            juce::LookAndFeel::getDefaultLookAndFeel().playAlertSound();   // numbers are unique in the project (every list / cart)
             numberEditor.setText (cue->number, false);
             return;
         }
@@ -1492,19 +1500,24 @@ public:
         targetIds.push_back (juce::Uuid::null());
         int selectedTarget = 1;
 
-        for (int i = 0; i < cues.size(); ++i)
+        document.forEachList ([&] (CueList& list)   // a target may live in another list / cart
         {
-            const auto& c = cues.get (i);
+            const auto prefix = &list == &cues ? juce::String() : document.getContainerInfo (document.containerOf (list.isEmpty() ? juce::Uuid::null() : list.get (0).id)).name + " / ";
 
-            if (! c.makesSound())
-                continue;
+            for (int i = 0; i < list.size(); ++i)
+            {
+                const auto& c = list.get (i);
 
-            targetIds.push_back (c.id);
-            targetCombo.addItem ((c.number.isNotEmpty() ? c.number + " " : "#" + juce::String (i + 1) + " ") + c.name, (int) targetIds.size());
+                if (! c.makesSound())
+                    continue;
 
-            if (cue != nullptr && cue->fade.targetId == c.id)
-                selectedTarget = (int) targetIds.size();
-        }
+                targetIds.push_back (c.id);
+                targetCombo.addItem (prefix + (c.number.isNotEmpty() ? c.number + " " : "#" + juce::String (i + 1) + " ") + c.name, (int) targetIds.size());
+
+                if (cue != nullptr && cue->fade.targetId == c.id)
+                    selectedTarget = (int) targetIds.size();
+            }
+        });
 
         targetCombo.setSelectedId (selectedTarget, juce::dontSendNotification);
 
@@ -2230,19 +2243,24 @@ public:
         targetIds.push_back (juce::Uuid::null());
         int selectedTarget = 1;
 
-        for (int i = 0; i < cues.size(); ++i)
+        document.forEachList ([&] (CueList& list)
         {
-            const auto& c = cues.get (i);
+            const auto prefix = &list == &cues ? juce::String() : document.getContainerInfo (document.containerOf (list.isEmpty() ? juce::Uuid::null() : list.get (0).id)).name + " / ";
 
-            if (! c.makesSound())
-                continue;
+            for (int i = 0; i < list.size(); ++i)
+            {
+                const auto& c = list.get (i);
 
-            targetIds.push_back (c.id);
-            targetCombo.addItem ((c.number.isNotEmpty() ? c.number + " " : "#" + juce::String (i + 1) + " ") + c.name, (int) targetIds.size());
+                if (! c.makesSound())
+                    continue;
 
-            if (cue != nullptr && cue->devamp.targetId == c.id)
-                selectedTarget = (int) targetIds.size();
-        }
+                targetIds.push_back (c.id);
+                targetCombo.addItem (prefix + (c.number.isNotEmpty() ? c.number + " " : "#" + juce::String (i + 1) + " ") + c.name, (int) targetIds.size());
+
+                if (cue != nullptr && cue->devamp.targetId == c.id)
+                    selectedTarget = (int) targetIds.size();
+            }
+        });
 
         targetCombo.setSelectedId (selectedTarget, juce::dontSendNotification);
 
@@ -2563,19 +2581,24 @@ private:
         ids.push_back (juce::Uuid::null());
         int selectedId = 1;
 
-        for (int i = 0; i < cues.size(); ++i)
+        document.forEachList ([&] (CueList& list)
         {
-            const auto& c = cues.get (i);
+            const auto prefix = &list == &cues ? juce::String() : document.getContainerInfo (document.containerOf (list.isEmpty() ? juce::Uuid::null() : list.get (0).id)).name + " / ";
 
-            if (c.id == selfId || (onlyTargeting && ! c.hasTarget()))
-                continue;
+            for (int i = 0; i < list.size(); ++i)
+            {
+                const auto& c = list.get (i);
 
-            ids.push_back (c.id);
-            combo.addItem ((c.number.isNotEmpty() ? c.number + " " : "#" + juce::String (i + 1) + " ") + c.name, (int) ids.size());
+                if (c.id == selfId || (onlyTargeting && ! c.hasTarget()))
+                    continue;
 
-            if (current == c.id)
-                selectedId = (int) ids.size();
-        }
+                ids.push_back (c.id);
+                combo.addItem (prefix + (c.number.isNotEmpty() ? c.number + " " : "#" + juce::String (i + 1) + " ") + c.name, (int) ids.size());
+
+                if (current == c.id)
+                    selectedId = (int) ids.size();
+            }
+        });
 
         combo.setSelectedId (selectedId, juce::dontSendNotification);
     }

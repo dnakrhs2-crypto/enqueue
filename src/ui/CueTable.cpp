@@ -77,6 +77,10 @@ public:
         });
     }
 
+    const juce::Uuid& getCueId() const noexcept { return cueId; }
+    ColumnId getColumn() const noexcept { return column; }
+    void markDone() noexcept { done = true; }
+
     void cancel()
     {
         if (done)
@@ -216,6 +220,21 @@ void CueTable::setRowSize (int size)
 void CueTable::focusTable()
 {
     table.grabKeyboardFocus();
+}
+
+void CueTable::finishEditing()
+{
+    if (cellEditor == nullptr)
+        return;
+
+    const auto text = cellEditor->getText();
+    const auto id = cellEditor->getCueId();
+    const auto column = cellEditor->getColumn();
+    cellEditor->markDone();   // its own async commit / cancel must not run afterwards
+    cellEditor.reset();
+
+    if (const int row = cues.indexOf (id); row >= 0)
+        commitCellEdit (row, column, text);
 }
 
 void CueTable::resized()
@@ -874,7 +893,7 @@ void CueTable::commitCellEdit (int row, ColumnId column, const juce::String& tex
             if (number == cue.number)
                 break;
 
-            if (cues.isNumberTaken (number, cue.id))
+            if (isNumberTaken ? isNumberTaken (number, cue.id) : cues.isNumberTaken (number, cue.id))
             {
                 juce::LookAndFeel::getDefaultLookAndFeel().playAlertSound();   // numbers are unique: refused
                 break;

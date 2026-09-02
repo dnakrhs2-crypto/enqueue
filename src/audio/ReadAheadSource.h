@@ -53,6 +53,7 @@ private:
     juce::CriticalSection rangeLock;   // validStart / validEnd / playPos consistency
     juce::CriticalSection readLock;    // one upstream read at a time
     juce::int64 validStart = 0, validEnd = 0;   // absolute positions cached in the ring
+    juce::uint32 generation = 0;                 // bumped by invalidate(): a fill from before it is thrown away
     std::atomic<juce::int64> playPos { 0 };
     std::atomic<bool> prepared { false };
 

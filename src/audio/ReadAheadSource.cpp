@@ -75,6 +75,7 @@ void ReadAheadSource::invalidate (juce::int64 fromPosition)
     {
         const juce::ScopedLock sl (rangeLock);
         validStart = validEnd = 0;   // nothing in the ring describes the new content
+        ++generation;                // a background fill that is still reading the old content will not publish
         playPos.store (fromPosition, std::memory_order_relaxed);
     }
 
@@ -152,9 +153,11 @@ bool ReadAheadSource::fillChunk()
 
     juce::int64 readStart = 0, readEnd = 0;
     bool restart = false;
+    juce::uint32 startedIn = 0;
 
     {
         const juce::ScopedLock sl (rangeLock);
+        startedIn = generation;
         const auto pos = juce::jmax ((juce::int64) 0, playPos.load (std::memory_order_relaxed));
         const juce::int64 targetEnd = pos + (juce::int64) ringSize - keepBehind - 4;
 
@@ -183,6 +186,10 @@ bool ReadAheadSource::fillChunk()
 
     {
         const juce::ScopedLock sl (rangeLock);
+
+        if (generation != startedIn)
+            return true;   // invalidated meanwhile: what we read describes the old content
+
         const auto pos = playPos.load (std::memory_order_relaxed);
 
         if (restart)

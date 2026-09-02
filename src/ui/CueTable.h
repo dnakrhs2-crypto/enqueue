@@ -60,6 +60,11 @@ public:
     std::function<bool (const juce::Uuid& id)> hasPlayed;
     /** The disclosure triangle / Left / Right on a group row. */
     std::function<void (int index, bool collapsed)> onToggleCollapse;
+    /** Numbers are unique across every list / cart: the owner checks the whole project (default: this list). */
+    std::function<bool (const juce::String& number, const juce::Uuid& exceptId)> isNumberTaken;
+
+    /** Commits a cell edit in progress right now (before the list is swapped for another one). */
+    void finishEditing();
 
     /** Border colour of a group mode (timeline green, playlist orange, start-first blue, random purple). */
     static juce::Colour groupModeColour (GroupMode mode);
