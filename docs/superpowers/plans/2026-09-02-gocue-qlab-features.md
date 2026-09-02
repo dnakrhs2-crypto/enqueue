@@ -325,5 +325,10 @@ class Scheduler { public: using Clock = std::function<double()>;   // 초
 - [x] `CueType::mic` + `MicCueData{firstInput, numInputs}`; `CuePlayer` 마이크 모드(파일 대신 엔진이 블록마다 넘겨주는 장치 입력 포인터 `setInputBlock`; 엔벨로프·일시정지·게인·덕·체인·매트릭스 그대로, 길이 ∞); `AudioEngine::renderBlock(output, n, inputs, numInputs)` + 콜백이 입력 전달, `setInputsWanted(n)`(프로젝트의 마이크 큐가 필요로 하는 만큼 장치 입력을 열고 재시작 — `documentStateChanged`마다 no-op 검사), `getNumDeviceInputs`, 오디오 설정 창에 입력 채널(최대 32). 인스펙터 입력 탭(첫 채널·채널 수·장치 입력 상태), 표 마이크 글리프/"입력 1-2"/∞, 트랜스포트, 경고(입력 부족), Ctrl+M, 페이드/디밴프 대상 콤보에 마이크 큐 포함. 테스트: 오프라인 입력 버퍼 주입 → 행별 출력 라우팅·무입력 시 무음·정지. GUI 스모크(입력 없는 장치에서 경고 1 + 무음 재생 확인). 커밋 b9f9986.
 - [x] 단계 7 마감: 0.8.0에 포함(마이크 큐), 최종 리뷰는 0.8.1로.
 
+## 최종 코덱스 리뷰(범위 좁힌 재실행: 오디오 스레드 + 마이크 큐) → v0.8.1
+- [x] 15건 중 13건 반영: (1) 마이크 큐 일시정지 시 source 널 참조 크래시 (2) 읽기선행 링: 재생 위치를 복사 후에 발행 + 여유 8192 샘플 (3) invalidate가 호출 스레드(엔진 락 안)에서 디스크를 읽지 않음 — 읽기선행 스레드가 즉시 채움 (4) setInputsWanted: 이전 설정 보존·실패 시 복원·오류 보고, audioDeviceStopped에서 입력 수 0 (5) 입력 1..N 접두 마스크 검사(개수 아님) (6) 콜백 인라인 경로 `< 32`, 32ch 이상은 scratch + 고정 입력 포인터 배열 (7) setLiveLevels/getLiveState/setLiveSlices/setLiveRegion: 락 안에서 플레이어만 찾고 작업은 밖에서 (8) 오디오 스레드의 triggerAsyncUpdate → 원자 플래그 + UI 타이머 `reapIfNeeded` (9) 플러그인 체인 map 노드는 밖에서 만들고 락 안에서 extract/insert (10) 마이크 firstInput ≤ 31, first+num ≤ 32(sanitise·MicPanel) (11) 편집 후 재로드는 makesSound(마이크 포함), Load 제어 큐도 마이크 로드 (13) 디밴프 대상 콤보에서 마이크 제외 + 두 번째 GO 디밴프가 반복 없으면 안내 (14) FadePanel 대상 조회 findCueAnywhere, 마이크 선택 후 페이드 추가 시 대상 지정 (15) 경고 수는 전 리스트 합산.
+- [x] 수용(보류) 2건: (12) 재생 중 마이크 입력 변경은 다음 시작부터(MicPanel 힌트로 안내) (15의 상세) 경고 목록 상세 행은 활성 리스트 기준(수는 전체) — 컨테이너 이름 표기는 다음 릴리스.
+- [x] 테스트 3711개 통과, 마이크 큐 GO→P→P→Esc 스모크 통과. → **v0.8.1 릴리스**.
+
 ## 최종
 - [ ] 코덱스 전체 리뷰(전체 소스, 성능·스레드 안전·메모리) → 반영 → 전체 테스트·GUI 스모크 → 릴리스 → gom 보고(무엇이 바뀌었는지, 남은 한계: 장치 1개, CAF 없음, MIDI/타임코드/원격 제외).
