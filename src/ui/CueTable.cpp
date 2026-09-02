@@ -604,13 +604,13 @@ void CueTable::paintCell (juce::Graphics& g, int rowNumber, int columnId, int wi
 
         case colPreWait:
             text = cue.preWaitSeconds > 0.0 ? formatTimeMs (cue.preWaitSeconds) : juce::String();
-            justification = juce::Justification::centredRight;
+            justification = juce::Justification::centred;   // centred like its header
             break;
 
         case colPostWait:
             text = cue.postWaitSeconds > 0.0 ? formatTimeMs (cue.postWaitSeconds) : juce::String();
             colour = cue.continueMode == ContinueMode::autoContinue ? Palette::text : Palette::dimText;
-            justification = juce::Justification::centredRight;
+            justification = juce::Justification::centred;   // centred like its header
             break;
 
         case colDuration:
@@ -629,7 +629,7 @@ void CueTable::paintCell (juce::Graphics& g, int rowNumber, int columnId, int wi
                 text = effective < 0.0 ? juce::String::fromUTF8 ("\xE2\x88\x9E") : formatSeconds (effective > 0.0 ? effective : cue.durationSeconds);
             }
 
-            justification = juce::Justification::centredRight;
+            justification = juce::Justification::centred;   // centred like its header
             break;
 
         default:

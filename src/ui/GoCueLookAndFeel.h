@@ -76,6 +76,44 @@ public:
         setColour (juce::ProgressBar::foregroundColourId, Palette::standby);
     }
 
+    /** Table headers: the time columns (프리웨이트 · 길이 · 포스트웨이트 · 진행) are centred like their cells; the rest left. */
+    void drawTableHeaderColumn (juce::Graphics& g, juce::TableHeaderComponent& header, const juce::String& columnName,
+                                int columnId, int width, int height, bool isMouseOver, bool isMouseDown, int columnFlags) override
+    {
+        static const juce::StringArray centredColumns { juce::String::fromUTF8 ("\xED\x94\x84\xEB\xA6\xAC\xEC\x9B\xA8\xEC\x9D\xB4\xED\x8A\xB8"),   // 프리웨이트
+                                                        juce::String::fromUTF8 ("\xEA\xB8\xB8\xEC\x9D\xB4"),                                         // 길이
+                                                        juce::String::fromUTF8 ("\xED\x8F\xAC\xEC\x8A\xA4\xED\x8A\xB8\xEC\x9B\xA8\xEC\x9D\xB4\xED\x8A\xB8"),   // 포스트웨이트
+                                                        juce::String::fromUTF8 ("\xEC\xA7\x84\xED\x96\x89") };                                       // 진행
+
+        if (! centredColumns.contains (columnName))
+        {
+            LookAndFeel_V4::drawTableHeaderColumn (g, header, columnName, columnId, width, height, isMouseOver, isMouseDown, columnFlags);
+            return;
+        }
+
+        auto highlightColour = header.findColour (juce::TableHeaderComponent::highlightColourId);
+
+        if (isMouseDown)
+            g.fillAll (highlightColour);
+        else if (isMouseOver)
+            g.fillAll (highlightColour.withMultipliedAlpha (0.625f));
+
+        juce::Rectangle<int> area (width, height);
+        area.reduce (4, 0);
+
+        if ((columnFlags & (juce::TableHeaderComponent::sortedForwards | juce::TableHeaderComponent::sortedBackwards)) != 0)
+        {
+            juce::Path sortArrow;
+            sortArrow.addTriangle (0.0f, 0.0f, 0.5f, (columnFlags & juce::TableHeaderComponent::sortedForwards) != 0 ? -0.8f : 0.8f, 1.0f, 0.0f);
+            g.setColour (juce::Colour (0x99000000));
+            g.fillPath (sortArrow, sortArrow.getTransformToScaleToFit (area.removeFromRight (height / 2).reduced (2).toFloat(), true));
+        }
+
+        g.setColour (header.findColour (juce::TableHeaderComponent::textColourId));
+        g.setFont (juce::Font (juce::FontOptions ((float) height * 0.6f, juce::Font::bold)));
+        g.drawFittedText (columnName, area, juce::Justification::centred, 1);
+    }
+
     /** Buttons: 5 px corners, a faint top-to-bottom gradient, a darker edge (V4 draws them flat with 6 px corners). */
     void drawButtonBackground (juce::Graphics& g, juce::Button& button, const juce::Colour& backgroundColour,
                                bool isMouseOverButton, bool isButtonDown) override

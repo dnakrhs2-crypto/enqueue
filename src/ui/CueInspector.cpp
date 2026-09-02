@@ -175,12 +175,11 @@ public:
             const bool on = secondColourToggle.getToggleState();
             edit (ko ("두 번째 색"), [on] (Cue& c) { c.useSecondColor = on; });
         };
-        addAndMakeVisible (secondColourToggle);
+        // (the second colour is not offered: gom, 2026-09-03 — the field stays in the model for old projects)
 
         fillColourCombo (secondColourCombo);
         secondColourCombo.setWantsKeyboardFocus (false);
         secondColourCombo.onChange = [this] { commitColour (true); };
-        addAndMakeVisible (secondColourCombo);
 
         filePathLabel.setColour (juce::Label::textColourId, Palette::text);
         filePathLabel.setFont (juce::Font (juce::FontOptions (13.0f)));
@@ -392,8 +391,6 @@ public:
         colourLabel.setBounds (row.removeFromLeft (24));
         colourCombo.setBounds (row.removeFromLeft (110));
         row.removeFromLeft (8);
-        secondColourToggle.setBounds (row.removeFromLeft (96));
-        secondColourCombo.setBounds (row.removeFromLeft (110));
 
         row = nextRow();
         fileLabel.setBounds (row.removeFromLeft (36));
