@@ -236,8 +236,8 @@ void TransportBar::resized()
 {
     auto area = getLocalBounds().reduced (10, 8);
 
-    goButton.setBounds (area.removeFromLeft (150));
-    area.removeFromLeft (14);
+    goButton.setBounds (area.removeFromLeft (juce::jlimit (200, 320, getWidth() / 5)));   // the GO button is the biggest thing on screen
+    area.removeFromLeft (16);
 
     auto right = area.removeFromRight (230);
     auto buttons = right.removeFromBottom (28);

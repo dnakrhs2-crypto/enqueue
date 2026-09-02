@@ -40,7 +40,31 @@ private:
 
     juce::ApplicationCommandManager& commands;
 
-    juce::TextButton goButton { "GO" };
+    /** The big GO button: fills its area and draws its text large (a plain TextButton keeps a small font). */
+    struct GoButton : public juce::TextButton
+    {
+        using juce::TextButton::TextButton;
+
+        void paintButton (juce::Graphics& g, bool isMouseOver, bool isButtonDown) override
+        {
+            auto colour = findColour (juce::TextButton::buttonColourId);
+
+            if (isButtonDown)
+                colour = colour.darker (0.25f);
+            else if (isMouseOver)
+                colour = colour.brighter (0.12f);
+
+            g.setColour (colour);
+            g.fillRoundedRectangle (getLocalBounds().toFloat(), 10.0f);
+            g.setColour (findColour (juce::TextButton::textColourOffId));
+            const auto label = getButtonText();
+            const float size = juce::jmin ((float) getHeight() * 0.55f, label.length() > 3 ? 30.0f : 64.0f);
+            g.setFont (juce::Font (juce::FontOptions (size, juce::Font::bold)));
+            g.drawText (label, getLocalBounds(), juce::Justification::centred, false);
+        }
+    };
+
+    GoButton goButton { "GO" };
     juce::TextButton pauseButton, fadeOutButton, panicButton;
     juce::Label standbyTitle, cueNumber, cueName, cueFile, cueMeta, playingLabel, statusLabel;
     bool goLocked = false;
