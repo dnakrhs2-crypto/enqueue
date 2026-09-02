@@ -107,7 +107,7 @@ juce::Result copyToBackups (const juce::File& project, juce::Time now, juce::Fil
     return juce::Result::ok();
 }
 
-void rotate (const juce::File& dir, juce::Time now)
+void rotate (const juce::File& dir, juce::Time)
 {
     struct Entry { juce::File file; juce::Time time; };
     std::vector<Entry> backups;
@@ -129,35 +129,13 @@ void rotate (const juce::File& dir, juce::Time now)
         return a.file.getFileName().length() < b.file.getFileName().length();
     });
 
-    constexpr juce::int64 hour = 60 * 60 * 1000;
-    constexpr juce::int64 day = 24 * hour;
-    int recentKept = 0;
-    std::map<juce::int64, bool> hourBuckets, dayBuckets;
+    int kept = 0;
 
     for (const auto& entry : backups)
     {
-        const juce::int64 age = now.toMilliseconds() - entry.time.toMilliseconds();
-        bool keep = false;
-
-        if (age < hour)
-        {
-            keep = recentKept < keepRecent;
-            recentKept += keep ? 1 : 0;
-        }
-        else if (age < day)
-        {
-            const auto bucket = age / hour;
-            keep = ! hourBuckets[bucket];
-            hourBuckets[bucket] = true;
-        }
+        if (kept < keepRecent)
+            ++kept;
         else
-        {
-            const auto bucket = age / day;
-            keep = ! dayBuckets[bucket];
-            dayBuckets[bucket] = true;
-        }
-
-        if (! keep)
             entry.file.deleteFile();
     }
 }

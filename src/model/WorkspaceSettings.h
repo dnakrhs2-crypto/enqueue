@@ -40,9 +40,9 @@ struct WorkspaceSettings
     bool alwaysAudition = false;           // every GO / preview auditions (재생 메뉴 토글)
 
     // 파일
-    bool copyFilesIntoProject = false;
+    bool copyFilesIntoProject = true;    // gom (2026-09-03): a project folder that travels
     bool autoBackup = true;
-    int backupIntervalSeconds = 60;
+    int backupIntervalSeconds = 300;     // every 5 minutes
     bool backupBeforeSave = true;
     bool rotateBackups = true;
 

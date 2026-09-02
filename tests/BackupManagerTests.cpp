@@ -51,7 +51,7 @@ public:
             expect (BackupManager::copyToBackups (root.getChildFile ("missing.gocue"), now).failed());
         }
 
-        beginTest ("rotate keeps 20 recent, one per hour for a day, one per day beyond");
+        beginTest ("rotate keeps the 15 newest backups whatever their age");
         {
             const auto dir = root.getChildFile ("rot.gocue.backups");
             expect (dir.createDirectory().wasOk());
@@ -72,7 +72,7 @@ public:
             BackupManager::rotate (dir, now);
 
             const auto remaining = dir.findChildFiles (juce::File::findFiles, false, "*.gocue");
-            expectEquals (remaining.size(), 20 + 1 + 1 + 1);
+            expectEquals (remaining.size(), 15);
             expect (dir.getChildFile ("keep-me.txt").existsAsFile());
 
             int recent = 0;
@@ -80,7 +80,7 @@ public:
                 if (now.toMilliseconds() - BackupManager::timestampOf (f).toMilliseconds() < 60 * 60 * 1000)
                     ++recent;
 
-            expectEquals (recent, 20);
+            expectEquals (recent, 15);   // the 15 newest all come from the last hour
             expect (dir.getChildFile ("rot (Backup " + now.formatted ("%Y-%m-%d_%H%M%S") + ").gocue").existsAsFile());   // newest survives
         }
 

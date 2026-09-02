@@ -213,7 +213,7 @@ namespace
                                          [] (const WorkspaceSettings& w) { return juce::String (w.backupIntervalSeconds); });
             beforeSaveToggle = &addToggle (ko ("저장하기 전에 이전 파일 백업"), s.backupBeforeSave,
                                            [] (WorkspaceSettings& w, bool v) { w.backupBeforeSave = v; });
-            rotateToggle = &addToggle (ko ("오래된 백업 정리 (최근 1시간 20개, 하루 동안 시간별, 그 뒤 일별)"), s.rotateBackups,
+            rotateToggle = &addToggle (ko ("오래된 백업 정리 (최근 15개만 보관)"), s.rotateBackups,
                                        [] (WorkspaceSettings& w, bool v) { w.rotateBackups = v; });
             hint = &addLabel (ko ("백업은 프로젝트 파일 옆 \"<이름>.gocue.backups\" 폴더에 쌓입니다. 저장한 적 없는 프로젝트는 백업하지 않습니다."));
             hint->setFont (juce::Font (juce::FontOptions (11.0f)));

@@ -22,8 +22,8 @@ juce::Time timestampOf (const juce::File& backup);
     Returns the failure or ok; 'backupOut' receives the new file. */
 juce::Result copyToBackups (const juce::File& project, juce::Time now, juce::File* backupOut = nullptr);
 
-/** Thins out old backups: the 20 newest from the last hour, one per hour for the last day, one per day
-    beyond that. Files that are not backups are left alone. */
+/** Thins out old backups: only the 'keepRecent' newest stay, whatever their age. Files that are not backups
+    are left alone. */
 void rotate (const juce::File& dir, juce::Time now);
 
 /** Copies an audio file into "<projectDir>/audio" (renaming on collision: "name (2).wav"). Returns the
@@ -31,6 +31,6 @@ void rotate (const juce::File& dir, juce::Time now);
     the copy failed. */
 juce::File copyIntoProject (const juce::File& audio, const juce::File& projectDir);
 
-constexpr int keepRecent = 20;
+constexpr int keepRecent = 15;
 
 } // namespace gocue::BackupManager
