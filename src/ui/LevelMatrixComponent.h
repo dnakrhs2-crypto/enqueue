@@ -27,6 +27,12 @@ public:
     void setOutputConnected (const std::vector<bool>& connected);
     void setLimits (double minDb, double maxDb);
     void setMainVisible (bool visible);
+    /** Fade-cue mode: every cell carries an active flag (inactive = the fade leaves it alone). Alt+click or the
+        right-click menu toggles it; inactive cells are drawn hatched. Pass nullptr to leave the mode. */
+    void setActiveFlags (const bool* mainActive, const std::vector<char>* inputs, const std::vector<char>* outputs,
+                         const std::vector<std::vector<char>>* crosspoints);
+    /** Fired when an active flag is toggled: kind 0 = main, 1 = input, 2 = output, 3 = crosspoint. */
+    std::function<void (int kind, int input, int output, bool active)> onActiveToggled;
     /** Hides the input / output level cells (a patch's routing has only crosspoints and a main). */
     void setEdgeLevelsVisible (bool visible);
     void setEditable (bool editable);
@@ -91,6 +97,12 @@ private:
     double minDb = -60.0, maxDb = 12.0;
     bool mainVisible = true;
     bool edgeLevelsVisible = true;
+    bool activeMode = false;
+    bool mainActive = true;
+    std::vector<char> inputActive, outputActive;
+    std::vector<std::vector<char>> crosspointActive;
+    bool isActive (const CellRef& c) const noexcept;
+    void toggleActive (const CellRef& c);
     bool editable = true;
 
     CellRef selected, dragCell;

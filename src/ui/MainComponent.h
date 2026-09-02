@@ -89,6 +89,8 @@ private:
 
     void addCuesFromFiles (const juce::StringArray& files, int insertAt);
     void addCueViaDialog();
+    /** Inserts a fade cue after the selection, targeting the selected audio cue. */
+    void addFadeCue();
     void removeSelectedCues();
     void duplicateSelectedCue();
     void moveSelection (int delta);

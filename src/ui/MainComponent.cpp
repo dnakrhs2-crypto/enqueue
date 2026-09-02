@@ -121,6 +121,7 @@ MainComponent::MainComponent (AudioEngine& e, AppSettings& s, juce::ApplicationC
     engine.setPatches (document.patches);   // the default patch of the empty project
     startTimerHz (30);
     scheduler.startTicking (1);   // pre-waits, post-waits, auto-follows
+    controller.getFadeRunner().startTicking (10);   // fade cues at 100 Hz
 }
 
 MainComponent::~MainComponent()
@@ -229,7 +230,7 @@ void MainComponent::getAllCommands (juce::Array<juce::CommandID>& ids)
                     CommandIDs::panicAll, CommandIDs::hardStopAll, CommandIDs::preview,
                     CommandIDs::auditionGo, CommandIDs::auditionPreview, CommandIDs::toggleAlwaysAudition,
                     CommandIDs::loadCue, CommandIDs::loadToTime, CommandIDs::resetCue, CommandIDs::resetAll,
-                    CommandIDs::addCue, CommandIDs::removeCue, CommandIDs::duplicateCue,
+                    CommandIDs::addCue, CommandIDs::addFadeCue, CommandIDs::revertFade, CommandIDs::removeCue, CommandIDs::duplicateCue,
                     CommandIDs::moveCueUp, CommandIDs::moveCueDown, CommandIDs::selectAll,
                     CommandIDs::copyCues, CommandIDs::cutCues, CommandIDs::pasteCues, CommandIDs::pasteCueProperties,
                     CommandIDs::find, CommandIDs::findNext,
@@ -332,6 +333,18 @@ void MainComponent::getCommandInfo (juce::CommandID commandID, juce::Application
             result.setInfo (ko ("큐 추가..."), ko ("오디오 파일을 골라 큐를 추가"), cueMenu, 0);
             result.addDefaultKeypress (KeyPress::insertKey, ModifierKeys::noModifiers);
             result.setActive (canEdit);
+            break;
+
+        case CommandIDs::addFadeCue:
+            result.setInfo (ko ("페이드 큐 추가"), ko ("선택한 오디오 큐를 대상으로 하는 페이드 큐를 아래에 추가 (레벨·속도·플러그인 파라미터를 시간에 걸쳐 변경)"), cueMenu, 0);
+            result.addDefaultKeypress ('7', ModifierKeys::commandModifier);
+            result.setActive (canEdit);
+            break;
+
+        case CommandIDs::revertFade:
+            result.setInfo (ko ("페이드 되돌리기"), ko ("가장 최근 페이드의 대상을 페이드 전 레벨로 되돌림"), playback, 0);
+            result.addDefaultKeypress ('R', ModifierKeys::commandModifier | ModifierKeys::shiftModifier);
+            result.setActive (controller.getFadeRunner().canRevert());
             break;
 
         case CommandIDs::removeCue:
@@ -597,6 +610,17 @@ bool MainComponent::perform (const InvocationInfo& info)
             addCueViaDialog();
             break;
 
+        case CommandIDs::addFadeCue:
+            addFadeCue();
+            break;
+
+        case CommandIDs::revertFade:
+            if (controller.getFadeRunner().revertLast())
+                transport.showStatus (ko ("페이드 되돌림"), false);
+            else
+                transport.showStatus (ko ("되돌릴 페이드가 없습니다 (대상이 재생 중이어야 합니다)"), true);
+            break;
+
         case CommandIDs::removeCue:
             removeSelectedCues();
             break;
@@ -781,6 +805,7 @@ juce::PopupMenu MainComponent::getMenuForIndex (int topLevelMenuIndex, const juc
 
         case 2:
             menu.addCommandItem (&commands, CommandIDs::addCue);
+            menu.addCommandItem (&commands, CommandIDs::addFadeCue);
             menu.addCommandItem (&commands, CommandIDs::removeCue);
             menu.addCommandItem (&commands, CommandIDs::duplicateCue);
             menu.addSeparator();
@@ -811,6 +836,8 @@ juce::PopupMenu MainComponent::getMenuForIndex (int topLevelMenuIndex, const juc
             menu.addCommandItem (&commands, CommandIDs::panicAll);
             menu.addCommandItem (&commands, CommandIDs::hardStopAll);
             menu.addCommandItem (&commands, CommandIDs::resetAll);
+            menu.addSeparator();
+            menu.addCommandItem (&commands, CommandIDs::revertFade);
             break;
 
         case 4:
@@ -888,6 +915,45 @@ void MainComponent::addCuesFromFiles (const juce::StringArray& files, int insert
     }, { {}, templateHasPlugins });
 
     settings.setLastAudioDirectory (juce::File (files[0]).getParentDirectory());
+}
+
+void MainComponent::addFadeCue()
+{
+    if (showMode)
+        return;
+
+    const int selected = document.cues.getSelectedIndex();
+    const auto* selectedCue = document.cues.getSelected();
+    const bool autoNumber = document.settings.autoNumber;
+    const double increment = document.settings.numberIncrement;
+    const juce::Uuid target = selectedCue != nullptr && selectedCue->isAudio() ? selectedCue->id
+                            : selectedCue != nullptr && selectedCue->isFade() ? selectedCue->fade.targetId : juce::Uuid::null();
+
+    document.perform (ko ("페이드 큐 추가"), [this, selected, target, autoNumber, increment]
+    {
+        Cue fade;
+        fade.type = CueType::fade;
+        fade.fade.targetId = target;
+        fade.name = ko ("페이드");
+
+        if (const auto* t = document.cues.findById (target))
+        {
+            fade.name = ko ("페이드: ") + t->name;
+            fade.fade.levels = t->levels;
+            fade.fade.mainDb = t->gainDb;
+            fade.fade.levels.resize (t->numChannels > 0 ? t->numChannels : 2, document.cueOutputsFor (*t));
+            fade.fade.resizeActive (fade.fade.levels.numInputs(), fade.fade.levels.numOutputs());
+            fade.fade.mainActive = true;   // the usual fade: just the main level
+        }
+
+        const int at = selected >= 0 ? selected + 1 : document.cues.size();
+
+        if (autoNumber)
+            fade.number = CueNumbering::next (document.cues.getAll(), at, increment);
+
+        const int index = document.cues.add (std::move (fade), at);
+        document.cues.setSelectedIndex (index);
+    });
 }
 
 void MainComponent::addCueViaDialog()
@@ -1479,8 +1545,17 @@ int MainComponent::countBrokenCues() const
     int count = 0;
 
     for (const auto& cue : document.cues.getAll())
-        if (cue.file == juce::File() || cue.fileMissing)
+    {
+        if (cue.isFade())
+        {
+            if (cue.fade.targetId.isNull() || document.cues.indexOf (cue.fade.targetId) < 0)
+                ++count;
+        }
+        else if (cue.file == juce::File() || cue.fileMissing)
+        {
             ++count;
+        }
+    }
 
     return count;
 }
@@ -1494,6 +1569,16 @@ void MainComponent::showWarnings()
     {
         const auto& cue = cues.get (i);
         const juce::String label = "#" + juce::String (i + 1) + (cue.number.isNotEmpty() ? " [" + cue.number + "]" : juce::String()) + " " + cue.name;
+
+        if (cue.isFade())
+        {
+            if (cue.fade.targetId.isNull())
+                lines.add (label + ko (" - 페이드 대상이 지정되지 않음"));
+            else if (document.cues.indexOf (cue.fade.targetId) < 0)
+                lines.add (label + ko (" - 페이드 대상 큐가 없음 (삭제됨)"));
+
+            continue;
+        }
 
         if (cue.file == juce::File())
             lines.add (label + ko (" - 파일이 지정되지 않음"));
@@ -1989,6 +2074,19 @@ void MainComponent::updateTransportStandby()
 void MainComponent::timerCallback()
 {
     auto playing = engine.getPlayingCues();
+
+    for (const auto& fade : controller.getFadeRunner().getRunning())
+    {
+        AudioEngine::PlayingCue p;
+        p.id = fade.fadeId;
+        p.positionSeconds = fade.elapsedSeconds;
+        p.lengthSeconds = fade.durationSeconds;
+        p.remainingSeconds = juce::jmax (0.0, fade.durationSeconds - fade.elapsedSeconds);
+        p.progress = fade.durationSeconds > 0.0 ? juce::jlimit (0.0, 1.0, fade.elapsedSeconds / fade.durationSeconds) : 1.0;
+        p.startOrder = std::numeric_limits<juce::int64>::max() / 2;   // after the audio cues
+        playing.push_back (p);
+    }
+
     int paused = 0, running = 0;
 
     for (const auto& p : playing)

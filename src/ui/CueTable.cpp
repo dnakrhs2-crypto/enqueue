@@ -311,6 +311,18 @@ void CueTable::paintCell (juce::Graphics& g, int rowNumber, int columnId, int wi
             g.setColour (juce::Colours::yellow.withAlpha (0.85f));
             g.fillEllipse (x, cy - 5.0f, 10.0f, 10.0f);
         }
+        else if (cue.isFade())
+        {
+            // a fade: a slope; red when the target is missing
+            const bool broken = cue.fade.targetId.isNull() || cues.indexOf (cue.fade.targetId) < 0;
+            g.setColour (broken ? Palette::missing : Palette::dimText);
+            juce::Path slope;
+            slope.startNewSubPath (x, cy + 5.0f);
+            slope.lineTo (x + 10.0f, cy - 5.0f);
+            slope.lineTo (x + 10.0f, cy + 5.0f);
+            slope.closeSubPath();
+            g.fillPath (slope);
+        }
         else if (cue.fileMissing || cue.file == juce::File())
         {
             g.setColour (Palette::missing);
@@ -366,7 +378,23 @@ void CueTable::paintCell (juce::Graphics& g, int rowNumber, int columnId, int wi
             break;
 
         case colFile:
-            if (cue.file == juce::File())
+            if (cue.isFade())
+            {
+                const int target = cue.fade.targetId.isNull() ? -1 : cues.indexOf (cue.fade.targetId);
+
+                if (target < 0)
+                {
+                    text = ko ("대상 없음");
+                    colour = Palette::missing;
+                }
+                else
+                {
+                    const auto& t = cues.get (target);
+                    text = juce::String::fromUTF8 ("\xE2\x86\x92 ") + (t.number.isNotEmpty() ? t.number + " " : juce::String()) + t.name;   // → target
+                    colour = Palette::dimText;
+                }
+            }
+            else if (cue.file == juce::File())
             {
                 text = ko ("파일 없음");
                 colour = Palette::missing;

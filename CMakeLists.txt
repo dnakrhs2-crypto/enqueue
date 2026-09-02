@@ -153,6 +153,7 @@ target_sources(GoCue PRIVATE
     src/ui/PastePropertiesDialog.cpp
     src/ui/LevelMatrixComponent.cpp
     src/ui/PatchEditorDialog.cpp
+    src/ui/CurveEditor.cpp
     src/ui/PluginWindows.cpp
     src/ui/PluginChainComponent.cpp
     src/ui/PluginDialogs.cpp)

@@ -72,6 +72,62 @@ void LevelMatrixComponent::setMainVisible (bool visible)
     repaint();
 }
 
+void LevelMatrixComponent::setActiveFlags (const bool* main, const std::vector<char>* inputs, const std::vector<char>* outputs,
+                                           const std::vector<std::vector<char>>* crosspoints)
+{
+    activeMode = main != nullptr;
+
+    if (activeMode)
+    {
+        mainActive = *main;
+        inputActive = inputs != nullptr ? *inputs : std::vector<char>();
+        outputActive = outputs != nullptr ? *outputs : std::vector<char>();
+        crosspointActive = crosspoints != nullptr ? *crosspoints : std::vector<std::vector<char>>();
+    }
+
+    repaint();
+}
+
+bool LevelMatrixComponent::isActive (const CellRef& c) const noexcept
+{
+    if (! activeMode)
+        return true;
+
+    switch (c.kind)
+    {
+        case Kind::main:   return mainActive;
+        case Kind::input:  return c.in >= 0 && c.in < (int) inputActive.size() && inputActive[(size_t) c.in] != 0;
+        case Kind::output: return c.out >= 0 && c.out < (int) outputActive.size() && outputActive[(size_t) c.out] != 0;
+        case Kind::cross:  return c.in >= 0 && c.in < (int) crosspointActive.size() && c.out >= 0
+                               && c.out < (int) crosspointActive[(size_t) c.in].size() && crosspointActive[(size_t) c.in][(size_t) c.out] != 0;
+        case Kind::none:   break;
+    }
+
+    return false;
+}
+
+void LevelMatrixComponent::toggleActive (const CellRef& c)
+{
+    if (! activeMode || ! c.isValid())
+        return;
+
+    const bool on = ! isActive (c);
+
+    switch (c.kind)
+    {
+        case Kind::main:   mainActive = on; break;
+        case Kind::input:  if (c.in < (int) inputActive.size()) inputActive[(size_t) c.in] = on ? 1 : 0; break;
+        case Kind::output: if (c.out < (int) outputActive.size()) outputActive[(size_t) c.out] = on ? 1 : 0; break;
+        case Kind::cross:  if (c.in < (int) crosspointActive.size() && c.out < (int) crosspointActive[(size_t) c.in].size()) crosspointActive[(size_t) c.in][(size_t) c.out] = on ? 1 : 0; break;
+        case Kind::none:   break;
+    }
+
+    repaint();
+
+    if (onActiveToggled)
+        onActiveToggled (c.kind == Kind::main ? 0 : c.kind == Kind::input ? 1 : c.kind == Kind::output ? 2 : 3, c.in, c.out, on);
+}
+
 void LevelMatrixComponent::setEdgeLevelsVisible (bool visible)
 {
     edgeLevelsVisible = visible;
@@ -307,8 +363,26 @@ void LevelMatrixComponent::paint (juce::Graphics& g)
         if (! editable)
             fill = fill.withAlpha (0.5f);
 
+        const bool active = isActive (c);
+
+        if (! active)
+            fill = fill.withAlpha (0.35f);
+
         g.setColour (fill);
         g.fillRoundedRectangle (r.toFloat(), 3.0f);
+
+        if (! active)   // hatched: this cell is not part of the fade
+        {
+            g.setColour (Palette::dimText.withAlpha (0.35f));
+
+            for (int hx = r.getX() - r.getHeight(); hx < r.getRight(); hx += 6)
+                g.drawLine ((float) hx, (float) r.getBottom(), (float) hx + (float) r.getHeight(), (float) r.getY(), 1.0f);
+        }
+        else if (activeMode)
+        {
+            g.setColour (juce::Colours::yellow.withAlpha (0.8f));
+            g.fillRect (r.getX() + 2, r.getY() + 2, 4, 4);
+        }
 
         if (c == selected)
         {
@@ -343,6 +417,12 @@ void LevelMatrixComponent::mouseDown (const juce::MouseEvent& e)
     if (e.mods.isPopupMenu())
     {
         showGangMenu (cell);
+        return;
+    }
+
+    if (activeMode && e.mods.isAltDown())
+    {
+        toggleActive (cell);
         return;
     }
 
@@ -547,6 +627,12 @@ void LevelMatrixComponent::showGangMenu (const CellRef& cell)
     menu.addItem (200, ko ("기본값으로 (더블클릭)"));
     menu.addItem (201, ko ("무음 (-\xE2\x88\x9E)"));
 
+    if (activeMode)
+    {
+        menu.addSeparator();
+        menu.addItem (300, isActive (cell) ? ko ("이 칸 비활성 (페이드에서 제외)") : ko ("이 칸 활성 (페이드에 포함)  — Alt+클릭"));
+    }
+
     juce::Component::SafePointer<LevelMatrixComponent> safeThis (this);
     menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (this).withTargetScreenArea (localAreaToGlobal (boundsOf (cell))),
                         [safeThis, cell] (int result)
@@ -560,6 +646,11 @@ void LevelMatrixComponent::showGangMenu (const CellRef& cell)
             safeThis->setValue (cell, safeThis->defaultValue (cell));
         else if (result == 201)
             safeThis->setValue (cell, LevelMatrix::silentDb);
+        else if (result == 300)
+        {
+            safeThis->toggleActive (cell);
+            return;
+        }
 
         safeThis->repaint();
         safeThis->notify (true);
