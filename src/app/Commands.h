@@ -24,6 +24,7 @@ enum : juce::CommandID
     addCue,
     addFadeCue,           // Ctrl+7
     revertFade,           // Ctrl+Shift+R
+    fetchFadeLevels,      // Ctrl+Shift+T
     removeCue,
     duplicateCue,
     moveCueUp,

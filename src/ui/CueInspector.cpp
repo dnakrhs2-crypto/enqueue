@@ -346,6 +346,12 @@ public:
         autoLoadToggle.setToggleState (cue->autoLoad, juce::dontSendNotification);
         gainSlider.setValue (cue->gainDb, juce::dontSendNotification);
 
+        const bool audio = cue->isAudio();
+
+        for (auto* c : std::initializer_list<juce::Component*> { &fileLabel, &filePathLabel, &browseButton, &fadeOutLabel, &fadeOutEditor,
+                                                                 &gainLabel, &gainSlider, &autoLoadToggle })
+            c->setVisible (audio);
+
         if (cue->file == juce::File())
         {
             filePathLabel.setText (ko ("파일 없음"), juce::dontSendNotification);
@@ -1358,6 +1364,757 @@ private:
     bool editable = true;
 };
 
+//==============================================================================
+/** 페이드 tab: target, duration, mode, level goals with active cells, rate goal, live preview. */
+class CueInspector::FadePanel : public juce::Component
+{
+public:
+    FadePanel (ProjectDocument& doc, AudioEngine& e) : document (doc), cues (doc.cues), engine (e)
+    {
+        styleLabel (targetLabel, ko ("대상 큐"));
+        addAndMakeVisible (targetLabel);
+        targetCombo.setWantsKeyboardFocus (false);
+        targetCombo.setTooltip (ko ("이 페이드가 움직이는 오디오 큐 (재생 중인 인스턴스의 레벨을 바꿉니다)"));
+        targetCombo.onChange = [this] { commitTarget(); };
+        addAndMakeVisible (targetCombo);
+
+        styleLabel (durationLabel, ko ("시간"));
+        addAndMakeVisible (durationLabel);
+        styleNumberEditor (durationEditor, "0123456789:.", 12);
+        durationEditor.onReturnKey = [this] { commitDuration(); durationEditor.giveAwayKeyboardFocus(); };
+        durationEditor.onFocusLost = [this] { commitDuration(); };
+        addAndMakeVisible (durationEditor);
+
+        auto toggle = [this] (juce::ToggleButton& t, const char* text, const char* editName, std::function<void (Cue&, bool)> apply)
+        {
+            styleToggle (t, ko (text));
+            t.onClick = [this, &t, editName, apply]
+            {
+                const bool on = t.getToggleState();
+                edit (ko (editName), [apply, on] (Cue& c) { apply (c, on); });
+                refresh();
+                applyPreview();
+            };
+            addAndMakeVisible (t);
+        };
+
+        toggle (relativeToggle, "상대 (현재값에 ±)", "상대 페이드", [] (Cue& c, bool v) { c.fade.relative = v; });
+        toggle (stopToggle, "완료 시 대상 정지", "완료 시 정지", [] (Cue& c, bool v) { c.fade.stopTargetWhenDone = v; });
+        toggle (levelsToggle, "레벨 페이드", "레벨 페이드", [] (Cue& c, bool v) { c.fade.fadeLevels = v; });
+        toggle (rateToggle, "속도 페이드", "속도 페이드", [] (Cue& c, bool v) { c.fade.fadeRate = v; });
+        relativeToggle.setTooltip (ko ("켜면 값이 목표가 아니라 현재값에 더하는 양(dB)이 됩니다"));
+
+        styleLabel (rateLabel, ko ("목표 속도"));
+        addAndMakeVisible (rateLabel);
+        styleNumberEditor (rateEditor, "0123456789.", 6);
+        rateEditor.onReturnKey = [this] { commitRate(); rateEditor.giveAwayKeyboardFocus(); };
+        rateEditor.onFocusLost = [this] { commitRate(); };
+        addAndMakeVisible (rateEditor);
+
+        auto button = [this] (juce::TextButton& b, const char* text, std::function<void()> fn)
+        {
+            b.setButtonText (ko (text));
+            b.setWantsKeyboardFocus (false);
+            b.onClick = std::move (fn);
+            addAndMakeVisible (b);
+        };
+
+        button (fetchButton, "대상에서 레벨 가져오기", [this] { fetchFromTarget(); });
+        button (allOnButton, "전부 활성", [this] { setAllActive (true); });
+        button (allOffButton, "전부 비활성", [this] { setAllActive (false); });
+        fetchButton.setTooltip (ko ("대상 큐의 현재 레벨(재생 중이면 실시간 값)을 목표로 복사 (Ctrl+Shift+T)"));
+
+        styleToggle (previewToggle, ko ("라이브 미리보기"));
+        previewToggle.setTooltip (ko ("켜면 편집하는 목표값이 재생 중인 대상에 바로 반영되고, 끄면 원래대로 돌아갑니다"));
+        previewToggle.onClick = [this] { togglePreview (previewToggle.getToggleState()); };
+        addAndMakeVisible (previewToggle);
+
+        styleLabel (hint, ko ("노란 점 = 활성 칸(페이드가 바꾸는 값), 빗금 = 제외. Alt+클릭 또는 우클릭으로 활성/비활성. 값 편집은 레벨 탭과 같음"), 11.0f);
+        addAndMakeVisible (hint);
+
+        viewport.setViewedComponent (&grid, false);
+        viewport.setScrollBarsShown (true, true);
+        addAndMakeVisible (viewport);
+        grid.onChange = [this] (double mainDb, const LevelMatrix& m, bool) { commitLevels (mainDb, m); };
+        grid.onActiveToggled = [this] (int kind, int in, int out, bool on) { commitActive (kind, in, out, on); };
+    }
+
+    ~FadePanel() override
+    {
+        if (previewing)
+            togglePreview (false);
+    }
+
+    void setEditable (bool shouldBeEditable)
+    {
+        editable = shouldBeEditable;
+        refresh();
+    }
+
+    void refresh()
+    {
+        const juce::ScopedValueSetter<bool> guard (refreshing, true);
+        const auto* cue = cues.getSelected();
+        const bool enabled = cue != nullptr && cue->isFade() && editable;
+
+        if (cue != nullptr && cue->isFade())
+        {
+            bool editing = durationEditor.hasKeyboardFocus (true) || rateEditor.hasKeyboardFocus (true);
+
+            if (! (editing && ! shownId.isNull() && shownId != cue->id && cues.indexOf (shownId) >= 0))
+                shownId = cue->id;
+        }
+
+        if (previewing && (cue == nullptr || cue->id != previewCueId))
+            togglePreview (false);
+
+        targetCombo.clear (juce::dontSendNotification);
+        targetCombo.addItem (ko ("(없음)"), 1);
+        targetIds.clear();
+        targetIds.push_back (juce::Uuid::null());
+        int selectedTarget = 1;
+
+        for (int i = 0; i < cues.size(); ++i)
+        {
+            const auto& c = cues.get (i);
+
+            if (! c.isAudio())
+                continue;
+
+            targetIds.push_back (c.id);
+            targetCombo.addItem ((c.number.isNotEmpty() ? c.number + " " : "#" + juce::String (i + 1) + " ") + c.name, (int) targetIds.size());
+
+            if (cue != nullptr && cue->fade.targetId == c.id)
+                selectedTarget = (int) targetIds.size();
+        }
+
+        targetCombo.setSelectedId (selectedTarget, juce::dontSendNotification);
+
+        for (auto* c : std::initializer_list<juce::Component*> { &targetCombo, &durationEditor, &relativeToggle, &stopToggle, &levelsToggle,
+                                                                 &rateToggle, &rateEditor, &fetchButton, &allOnButton, &allOffButton, &previewToggle })
+            c->setEnabled (enabled);
+
+        grid.setEditable (enabled);
+        grid.setLimits (document.settings.minLevelDb, document.settings.maxLevelDb);
+
+        if (cue == nullptr || ! cue->isFade())
+        {
+            grid.setActiveFlags (nullptr, nullptr, nullptr, nullptr);
+            grid.setLevels (0.0, LevelMatrix());
+            return;
+        }
+
+        const auto& f = cue->fade;
+
+        if (! durationEditor.hasKeyboardFocus (true))
+            durationEditor.setText (formatTimeMs (f.durationSeconds), false);
+
+        if (! rateEditor.hasKeyboardFocus (true))
+            rateEditor.setText (juce::String (f.rate, 2), false);
+
+        relativeToggle.setToggleState (f.relative, juce::dontSendNotification);
+        stopToggle.setToggleState (f.stopTargetWhenDone, juce::dontSendNotification);
+        levelsToggle.setToggleState (f.fadeLevels, juce::dontSendNotification);
+        rateToggle.setToggleState (f.fadeRate, juce::dontSendNotification);
+        rateEditor.setEnabled (enabled && f.fadeRate);
+        previewToggle.setToggleState (previewing, juce::dontSendNotification);
+
+        // the grid is sized like the target (channels x its patch's outputs)
+        const auto* target = cues.findById (f.targetId);
+        int inputs = f.levels.numInputs() > 0 ? f.levels.numInputs() : 2;
+        int outputs = f.levels.numOutputs() > 0 ? f.levels.numOutputs() : 2;
+        juce::StringArray inputNames, outputNames;
+
+        if (target != nullptr)
+        {
+            inputs = target->numChannels > 0 ? target->numChannels : inputs;
+            outputs = document.cueOutputsFor (*target);
+            const auto& patch = document.patchForCue (*target);
+
+            for (int k = 0; k < outputs; ++k)
+                outputNames.add (patch.cueOutputName (k));
+        }
+
+        for (int i = 0; i < inputs; ++i)
+            inputNames.add (inputs == 1 ? ko ("모노") : ko ("채널 ") + juce::String (i + 1));
+
+        LevelMatrix goals = f.levels;
+        goals.resize (inputs, outputs);
+        FadeCueData sized = f;
+        sized.resizeActive (inputs, outputs);
+        grid.setLabels (inputNames, outputNames);
+        grid.setLevels (f.mainDb, goals);
+        grid.setActiveFlags (&sized.mainActive, &sized.inputActive, &sized.outputActive, &sized.crosspointActive);
+        grid.setEditable (enabled && f.fadeLevels);
+    }
+
+    void resized() override
+    {
+        auto area = getLocalBounds().reduced (12, 6);
+        auto row = area.removeFromTop (24);
+        targetLabel.setBounds (row.removeFromLeft (48));
+        targetCombo.setBounds (row.removeFromLeft (240));
+        row.removeFromLeft (12);
+        durationLabel.setBounds (row.removeFromLeft (32));
+        durationEditor.setBounds (row.removeFromLeft (84));
+        row.removeFromLeft (12);
+        relativeToggle.setBounds (row.removeFromLeft (150));
+        stopToggle.setBounds (row.removeFromLeft (140));
+        area.removeFromTop (4);
+
+        row = area.removeFromTop (24);
+        levelsToggle.setBounds (row.removeFromLeft (100));
+        fetchButton.setBounds (row.removeFromLeft (160));
+        row.removeFromLeft (6);
+        allOnButton.setBounds (row.removeFromLeft (80));
+        row.removeFromLeft (4);
+        allOffButton.setBounds (row.removeFromLeft (90));
+        row.removeFromLeft (12);
+        rateToggle.setBounds (row.removeFromLeft (100));
+        rateLabel.setBounds (row.removeFromLeft (64));
+        rateEditor.setBounds (row.removeFromLeft (60));
+        row.removeFromLeft (12);
+        previewToggle.setBounds (row.removeFromLeft (130));
+        area.removeFromTop (4);
+        hint.setBounds (area.removeFromTop (16));
+        area.removeFromTop (4);
+        viewport.setBounds (area);
+    }
+
+    void paint (juce::Graphics& g) override { g.fillAll (Palette::panel); }
+
+    /** Ctrl+Shift+T from the app. */
+    void fetchFromTarget()
+    {
+        const auto* cue = cues.getSelected();
+
+        if (cue == nullptr || ! cue->isFade() || ! editable)
+            return;
+
+        const auto* target = cues.findById (cue->fade.targetId);
+
+        if (target == nullptr)
+            return;
+
+        double mainDb = target->gainDb;
+        LevelMatrix fetched = target->levels;
+        AudioEngine::LiveState live;
+
+        if (engine.getLiveState (target->id, live))   // the running instance wins over the stored cue
+        {
+            mainDb = live.gainDb;
+            fetched = live.levels;
+        }
+
+        const int inputs = target->numChannels > 0 ? target->numChannels : juce::jmax (1, fetched.numInputs());
+        const int outputs = document.cueOutputsFor (*target);
+        fetched.resize (inputs, outputs);
+        edit (ko ("대상에서 레벨 가져오기"), [mainDb, fetched] (Cue& c)
+        {
+            c.fade.mainDb = mainDb;
+            c.fade.levels = fetched;
+            c.fade.resizeActive (fetched.numInputs(), fetched.numOutputs());
+        });
+        refresh();
+        applyPreview();
+    }
+
+private:
+    void edit (const juce::String& name, const std::function<void (Cue&)>& mutator, const juce::String& coalesceKey = {})
+    {
+        if (refreshing || ! editable)
+            return;
+
+        const int index = shownId.isNull() ? cues.getSelectedIndex() : cues.indexOf (shownId);
+
+        if (! cues.isValidIndex (index) || ! cues.get (index).isFade())
+            return;
+
+        document.perform (name, [this, index, mutator] { cues.update (index, mutator); }, { coalesceKey, false });
+
+        if (const auto* selected = cues.getSelected(); selected != nullptr && selected->id != shownId)
+            refresh();
+    }
+
+    void commitTarget()
+    {
+        if (refreshing || targetCombo.getSelectedId() <= 0)
+            return;
+
+        const int index = targetCombo.getSelectedId() - 1;
+
+        if (index < 0 || index >= (int) targetIds.size())
+            return;
+
+        const auto id = targetIds[(size_t) index];
+        const auto* target = cues.findById (id);
+        const int inputs = target != nullptr && target->numChannels > 0 ? target->numChannels : 2;
+        const int outputs = target != nullptr ? document.cueOutputsFor (*target) : 2;
+        edit (ko ("페이드 대상"), [id, inputs, outputs] (Cue& c)
+        {
+            c.fade.targetId = id;
+            c.fade.levels.resize (inputs, outputs);
+            c.fade.resizeActive (inputs, outputs);
+        });
+        refresh();
+    }
+
+    void commitDuration()
+    {
+        if (refreshing)
+            return;
+
+        const double seconds = parseTimeText (durationEditor.getText());
+
+        if (seconds < 0.0)
+        {
+            refresh();
+            return;
+        }
+
+        edit (ko ("페이드 시간"), [seconds] (Cue& c) { c.fade.durationSeconds = seconds; });
+    }
+
+    void commitRate()
+    {
+        if (refreshing)
+            return;
+
+        const double rate = juce::jlimit (AudioCueData::minRate, AudioCueData::maxRate, rateEditor.getText().getDoubleValue());
+        edit (ko ("페이드 목표 속도"), [rate] (Cue& c) { c.fade.rate = rate; });
+        refresh();
+    }
+
+    void commitLevels (double mainDb, const LevelMatrix& m)
+    {
+        const auto* cue = cues.getSelected();
+
+        if (cue == nullptr || refreshing)
+            return;
+
+        edit (ko ("페이드 레벨"), [mainDb, m] (Cue& c)
+        {
+            c.fade.mainDb = mainDb;
+            c.fade.levels = m;
+            c.fade.resizeActive (m.numInputs(), m.numOutputs());
+        }, "fadelevels:" + cue->id.toString());
+        applyPreview();
+    }
+
+    void commitActive (int kind, int in, int out, bool on)
+    {
+        if (refreshing)
+            return;
+
+        edit (ko ("페이드 활성 칸"), [kind, in, out, on] (Cue& c)
+        {
+            c.fade.resizeActive (juce::jmax (c.fade.levels.numInputs(), in + 1), juce::jmax (c.fade.levels.numOutputs(), out + 1));
+
+            switch (kind)
+            {
+                case 0: c.fade.mainActive = on; break;
+                case 1: c.fade.setInputActive (in, on); break;
+                case 2: c.fade.setOutputActive (out, on); break;
+                default: c.fade.setCrosspointActive (in, out, on); break;
+            }
+        });
+        applyPreview();
+    }
+
+    void setAllActive (bool on)
+    {
+        edit (on ? ko ("전부 활성") : ko ("전부 비활성"), [on] (Cue& c)
+        {
+            c.fade.resizeActive (c.fade.levels.numInputs(), c.fade.levels.numOutputs());
+            c.fade.setAllActive (on);
+        });
+        refresh();
+        applyPreview();
+    }
+
+    //==========================================================================
+    void togglePreview (bool on)
+    {
+        const auto* cue = cues.getSelected();
+
+        if (on)
+        {
+            if (cue == nullptr || ! cue->isFade() || ! engine.getLiveState (cue->fade.targetId, previewBackup))
+            {
+                previewToggle.setToggleState (false, juce::dontSendNotification);
+                previewing = false;
+                return;
+            }
+
+            previewing = true;
+            previewCueId = cue->id;
+            previewTargetId = cue->fade.targetId;
+            applyPreview();
+            return;
+        }
+
+        if (previewing)
+        {
+            previewing = false;
+
+            if (engine.isPlaying (previewTargetId))
+            {
+                engine.setLiveGainDb (previewTargetId, previewBackup.gainDb);
+                engine.setLiveLevels (previewTargetId, previewBackup.levels, previewBackup.trim);
+            }
+        }
+
+        previewToggle.setToggleState (false, juce::dontSendNotification);
+    }
+
+    /** With the preview on: the goals of the active cells are pushed onto the running target at once. */
+    void applyPreview()
+    {
+        if (! previewing)
+            return;
+
+        const auto* cue = cues.findById (previewCueId);
+
+        if (cue == nullptr || ! cue->isFade() || ! cue->fade.fadeLevels)
+            return;
+
+        AudioEngine::LiveState live;
+
+        if (! engine.getLiveState (previewTargetId, live))
+            return;
+
+        const auto& f = cue->fade;
+        const double minDb = document.settings.minLevelDb, maxDb = document.settings.maxLevelDb;
+        auto goal = [&] (double from, double value)
+        {
+            if (f.relative)
+                return LevelMatrix::isSilent (from) ? from : juce::jlimit (minDb, maxDb, from + value);
+
+            return LevelMatrix::isSilent (value) || value < minDb ? LevelMatrix::silentDb : juce::jmin (maxDb, value);
+        };
+
+        LevelMatrix goals = f.levels;
+        goals.resize (live.levels.numInputs(), live.levels.numOutputs());
+
+        if (f.mainActive)
+            live.gainDb = f.relative ? juce::jlimit (Cue::minGainDb, Cue::maxGainDb, previewBackup.gainDb + f.mainDb) : f.mainDb;
+
+        for (int i = 0; i < live.levels.numInputs(); ++i)
+        {
+            if (f.isInputActive (i))
+                live.levels.inputDb[(size_t) i] = goal (previewBackup.levels.numInputs() > i ? previewBackup.levels.inputDb[(size_t) i] : 0.0, goals.inputDb[(size_t) i]);
+
+            for (int o = 0; o < live.levels.numOutputs(); ++o)
+                if (f.isCrosspointActive (i, o))
+                {
+                    const double from = previewBackup.levels.numInputs() > i && previewBackup.levels.numOutputs() > o ? previewBackup.levels.crosspointDb[(size_t) i][(size_t) o] : 0.0;
+                    live.levels.crosspointDb[(size_t) i][(size_t) o] = goal (from, goals.crosspointDb[(size_t) i][(size_t) o]);
+                }
+        }
+
+        for (int o = 0; o < live.levels.numOutputs(); ++o)
+            if (f.isOutputActive (o))
+                live.levels.outputDb[(size_t) o] = goal (previewBackup.levels.numOutputs() > o ? previewBackup.levels.outputDb[(size_t) o] : 0.0, goals.outputDb[(size_t) o]);
+
+        engine.setLiveGainDb (previewTargetId, live.gainDb);
+        engine.setLiveLevels (previewTargetId, live.levels, live.trim);
+    }
+
+    ProjectDocument& document;
+    CueList& cues;
+    AudioEngine& engine;
+    juce::Label targetLabel, durationLabel, rateLabel, hint;
+    juce::ComboBox targetCombo;
+    std::vector<juce::Uuid> targetIds;
+    juce::TextEditor durationEditor, rateEditor;
+    juce::ToggleButton relativeToggle, stopToggle, levelsToggle, rateToggle, previewToggle;
+    juce::TextButton fetchButton, allOnButton, allOffButton;
+    juce::Viewport viewport;
+    LevelMatrixComponent grid;
+    juce::Uuid shownId = juce::Uuid::null();
+    bool previewing = false;
+    juce::Uuid previewCueId = juce::Uuid::null(), previewTargetId = juce::Uuid::null();
+    AudioEngine::LiveState previewBackup;
+    bool refreshing = false;
+    bool editable = true;
+};
+
+//==============================================================================
+/** 커브 tab: the fade's curve shape / domain. */
+class CueInspector::CurvePanel : public juce::Component
+{
+public:
+    explicit CurvePanel (ProjectDocument& doc) : document (doc), cues (doc.cues)
+    {
+        editor.onChange = [this] (const FadeCurve& curve, bool finished) { commit (curve, finished); };
+        addAndMakeVisible (editor);
+    }
+
+    void setEditable (bool shouldBeEditable)
+    {
+        editable = shouldBeEditable;
+        refresh();
+    }
+
+    void refresh()
+    {
+        const juce::ScopedValueSetter<bool> guard (refreshing, true);
+        const auto* cue = cues.getSelected();
+        const bool enabled = cue != nullptr && cue->isFade() && editable;
+        editor.setEditable (enabled);
+
+        if (cue != nullptr && cue->isFade())
+        {
+            shownId = cue->id;
+            editor.setCurve (cue->fade.curve);
+        }
+    }
+
+    void resized() override { editor.setBounds (getLocalBounds()); }
+    void paint (juce::Graphics& g) override { g.fillAll (Palette::panel); }
+
+private:
+    void commit (const FadeCurve& curve, bool finished)
+    {
+        if (refreshing || ! editable)
+            return;
+
+        const int index = shownId.isNull() ? cues.getSelectedIndex() : cues.indexOf (shownId);
+
+        if (! cues.isValidIndex (index) || ! cues.get (index).isFade())
+            return;
+
+        document.perform (ko ("페이드 커브"), [this, index, curve] { cues.update (index, [curve] (Cue& c) { c.fade.curve = curve; }); },
+                          { finished ? juce::String() : "curve:" + shownId.toString(), false });
+    }
+
+    ProjectDocument& document;
+    CueList& cues;
+    CurveEditor editor;
+    juce::Uuid shownId = juce::Uuid::null();
+    bool refreshing = false;
+    bool editable = true;
+};
+
+//==============================================================================
+/** 파라미터 tab of a fade cue: the target's VST3 parameters this fade drives. */
+class CueInspector::FadeParamsPanel : public juce::Component
+{
+public:
+    FadeParamsPanel (ProjectDocument& doc, AudioEngine& e) : document (doc), cues (doc.cues), engine (e)
+    {
+        styleLabel (hint, ko ("대상 큐의 VST3 인서트 파라미터. 체크한 파라미터가 페이드 시간 동안 현재값에서 목표값으로 움직입니다 (큐 출력·장치 출력 인서트는 불가)"), 11.0f);
+        addAndMakeVisible (hint);
+        viewport.setViewedComponent (&strip, false);
+        viewport.setScrollBarsShown (true, false);
+        addAndMakeVisible (viewport);
+    }
+
+    void setEditable (bool shouldBeEditable)
+    {
+        editable = shouldBeEditable;
+        refresh();
+    }
+
+    void refresh()
+    {
+        const juce::ScopedValueSetter<bool> guard (refreshing, true);
+        const auto* cue = cues.getSelected();
+        rows.clear();
+
+        if (cue == nullptr || ! cue->isFade())
+        {
+            hint.setText (ko ("페이드 큐를 선택하세요"), juce::dontSendNotification);
+            layoutRows();
+            return;
+        }
+
+        shownId = cue->id;
+        auto* chain = engine.findCueChain (cue->fade.targetId);
+
+        if (chain == nullptr || chain->getNumSlots() == 0)
+        {
+            hint.setText (ko ("대상 큐에 VST3 인서트가 없습니다 (대상의 이펙트 탭에서 추가)"), juce::dontSendNotification);
+            layoutRows();
+            return;
+        }
+
+        hint.setText (ko ("대상 큐의 VST3 인서트 파라미터. 체크한 파라미터가 페이드 시간 동안 현재값에서 목표값으로 움직입니다"), juce::dontSendNotification);
+
+        for (int slot = 0; slot < chain->getNumSlots(); ++slot)
+        {
+            auto* plugin = chain->getSlot (slot).plugin.get();
+
+            if (plugin == nullptr)
+                continue;
+
+            const auto& parameters = plugin->getParameters();
+            const int shown = juce::jmin (parameters.size(), maxParamsPerPlugin);
+
+            for (int p = 0; p < shown; ++p)
+            {
+                auto* param = parameters[p];
+
+                if (param == nullptr)
+                    continue;
+
+                auto* r = rows.add (new Row());
+                r->slot = slot;
+                r->parameter = p;
+                const auto* entry = findEntry (cue->fade, slot, p);
+
+                r->active.setButtonText (juce::String (slot + 1) + ". " + plugin->getName() + " · " + param->getName (40));
+                r->active.setColour (juce::ToggleButton::textColourId, Palette::text);
+                r->active.setColour (juce::ToggleButton::tickColourId, Palette::standby);
+                r->active.setWantsKeyboardFocus (false);
+                r->active.setToggleState (entry != nullptr && entry->active, juce::dontSendNotification);
+                r->active.setEnabled (editable);
+                r->active.onClick = [this, slot, p, r] { setActive (slot, p, r->active.getToggleState()); };
+                strip.addAndMakeVisible (r->active);
+
+                r->value.setSliderStyle (juce::Slider::LinearHorizontal);
+                r->value.setRange (0.0, 1.0, 0.001);
+                r->value.setTextBoxStyle (juce::Slider::NoTextBox, false, 0, 0);
+                r->value.setWantsKeyboardFocus (false);
+                r->value.setValue (entry != nullptr ? entry->value : param->getValue(), juce::dontSendNotification);
+                r->value.setEnabled (editable && entry != nullptr && entry->active);
+                r->value.onValueChange = [this, slot, p, r] { setValue (slot, p, (float) r->value.getValue()); };
+                strip.addAndMakeVisible (r->value);
+
+                r->text.setColour (juce::Label::textColourId, Palette::dimText);
+                r->text.setFont (juce::Font (juce::FontOptions (12.0f)));
+                r->text.setJustificationType (juce::Justification::centredRight);
+                r->text.setText (param->getText ((float) r->value.getValue(), 24), juce::dontSendNotification);
+                strip.addAndMakeVisible (r->text);
+                r->param = param;
+            }
+        }
+
+        layoutRows();
+    }
+
+    void resized() override
+    {
+        auto area = getLocalBounds().reduced (12, 6);
+        hint.setBounds (area.removeFromTop (16));
+        area.removeFromTop (4);
+        viewport.setBounds (area);
+        layoutRows();
+    }
+
+    void paint (juce::Graphics& g) override { g.fillAll (Palette::panel); }
+
+private:
+    static constexpr int maxParamsPerPlugin = 96;
+
+    struct Row
+    {
+        int slot = 0, parameter = 0;
+        juce::ToggleButton active;
+        juce::Slider value;
+        juce::Label text;
+        juce::AudioProcessorParameter* param = nullptr;
+    };
+
+    static const ParamFade* findEntry (const FadeCueData& f, int slot, int parameter)
+    {
+        for (const auto& p : f.params)
+            if (p.slot == slot && p.parameter == parameter)
+                return &p;
+
+        return nullptr;
+    }
+
+    void layoutRows()
+    {
+        const int rowH = 26;
+        strip.setSize (juce::jmax (100, viewport.getWidth() - 14), juce::jmax (viewport.getHeight(), rows.size() * rowH));
+
+        for (int i = 0; i < rows.size(); ++i)
+        {
+            auto* r = rows[i];
+            auto row = juce::Rectangle<int> (0, i * rowH, strip.getWidth(), rowH).reduced (0, 2);
+            r->active.setBounds (row.removeFromLeft (juce::jmax (200, row.getWidth() / 2)));
+            r->text.setBounds (row.removeFromRight (110));
+            r->value.setBounds (row.reduced (6, 0));
+        }
+    }
+
+    void edit (const juce::String& name, const std::function<void (Cue&)>& mutator, const juce::String& coalesceKey = {})
+    {
+        if (refreshing || ! editable)
+            return;
+
+        const int index = shownId.isNull() ? cues.getSelectedIndex() : cues.indexOf (shownId);
+
+        if (! cues.isValidIndex (index) || ! cues.get (index).isFade())
+            return;
+
+        document.perform (name, [this, index, mutator] { cues.update (index, mutator); }, { coalesceKey, false });
+    }
+
+    void setActive (int slot, int parameter, bool on)
+    {
+        float current = 0.0f;
+
+        for (auto* r : rows)
+            if (r->slot == slot && r->parameter == parameter)
+                current = (float) r->value.getValue();
+
+        edit (ko ("파라미터 페이드"), [slot, parameter, on, current] (Cue& c)
+        {
+            for (auto& p : c.fade.params)
+                if (p.slot == slot && p.parameter == parameter)
+                {
+                    p.active = on;
+                    return;
+                }
+
+            ParamFade p;
+            p.slot = slot;
+            p.parameter = parameter;
+            p.value = current;
+            p.active = on;
+            c.fade.params.push_back (p);
+        });
+        refresh();
+    }
+
+    void setValue (int slot, int parameter, float value)
+    {
+        for (auto* r : rows)
+            if (r->slot == slot && r->parameter == parameter && r->param != nullptr)
+                r->text.setText (r->param->getText (value, 24), juce::dontSendNotification);
+
+        edit (ko ("파라미터 목표"), [slot, parameter, value] (Cue& c)
+        {
+            for (auto& p : c.fade.params)
+                if (p.slot == slot && p.parameter == parameter)
+                {
+                    p.value = value;
+                    return;
+                }
+
+            ParamFade p;
+            p.slot = slot;
+            p.parameter = parameter;
+            p.value = value;
+            c.fade.params.push_back (p);
+        }, "fadeparam:" + shownId.toString() + ":" + juce::String (slot) + ":" + juce::String (parameter));
+    }
+
+    ProjectDocument& document;
+    CueList& cues;
+    AudioEngine& engine;
+    juce::Label hint;
+    juce::Viewport viewport;
+    juce::Component strip;
+    juce::OwnedArray<Row> rows;
+    juce::Uuid shownId = juce::Uuid::null();
+    bool refreshing = false;
+    bool editable = true;
+};
+
 class CueInspector::EffectsPanel : public juce::Component
 {
 public:
@@ -1418,31 +2175,35 @@ CueInspector::CueInspector (ProjectDocument& doc, AudioEngine& e, AppSettings& s
     title.setColour (juce::Label::textColourId, Palette::dimText);
     addAndMakeVisible (title);
 
-    basics = new BasicsPanel (document, engine, settings);
+    basicsPanel = std::make_unique<BasicsPanel> (document, engine, settings);
+    basics = basicsPanel.get();
     basics->onPanic = [this] { if (onPanic) onPanic(); };
 
-    timeLoops = new TimeLoopsPanel (document, engine, thumbnailCache);
+    timeLoopsPanel = std::make_unique<TimeLoopsPanel> (document, engine, thumbnailCache);
+    timeLoops = timeLoopsPanel.get();
     timeLoops->onPanic = [this] { if (onPanic) onPanic(); };
     timeLoops->onPreview = [this] { if (onPreview) onPreview(); };
     timeLoops->onReset = [this] { if (onResetCue) onResetCue(); };
 
-    levels = new LevelsPanel (document, engine);
-    trim = new TrimPanel (document, engine);
-    triggers = new TriggersPanel (document);
+    levelsPanel = std::make_unique<LevelsPanel> (document, engine);
+    levels = levelsPanel.get();
+    trimPanel = std::make_unique<TrimPanel> (document, engine);
+    trim = trimPanel.get();
+    triggersPanel = std::make_unique<TriggersPanel> (document);
+    triggers = triggersPanel.get();
 
-    effects = new EffectsPanel (document, engine, windows);
+    effectsPanel = std::make_unique<EffectsPanel> (document, engine, windows);
+    effects = effectsPanel.get();
     effects->chainStrip.onOpenPluginManager = [this] { if (onOpenPluginManager) onOpenPluginManager(); };
+
+    fadePanel = std::make_unique<FadePanel> (document, engine);
+    curvePanel = std::make_unique<CurvePanel> (document);
+    fadeParamsPanel = std::make_unique<FadeParamsPanel> (document, engine);
 
     tabs.setTabBarDepth (26);
     tabs.setOutline (0);
     tabs.setColour (juce::TabbedComponent::backgroundColourId, Palette::panel);
-    tabs.addTab (ko ("기본"), Palette::panel, basics, true);
-    tabs.addTab (ko ("시간·루프"), Palette::panel, timeLoops, true);
-    tabs.addTab (ko ("레벨"), Palette::panel, levels, true);
-    tabs.addTab (ko ("트림"), Palette::panel, trim, true);
-    tabs.addTab (ko ("트리거"), Palette::panel, triggers, true);
-    tabs.addTab (ko ("이펙트"), Palette::panel, effects, true);
-    tabs.setCurrentTabIndex (0);
+    rebuildTabs (false);
     addAndMakeVisible (tabs);
 
     cues.addListener (this);
@@ -1493,6 +2254,40 @@ void CueInspector::setEditable (bool shouldBeEditable)
     triggers->setEditable (editable);
     timeLoops->setEnabled (editable);
     effects->setEnabled (editable);
+    fadePanel->setEditable (editable);
+    curvePanel->setEditable (editable);
+    fadeParamsPanel->setEditable (editable);
+}
+
+void CueInspector::rebuildTabs (bool forFade)
+{
+    const int wanted = forFade ? 1 : 0;
+
+    if (tabSet == wanted)
+        return;
+
+    tabSet = wanted;
+    tabs.clearTabs();
+
+    if (forFade)
+    {
+        tabs.addTab (ko ("기본"), Palette::panel, basics, false);
+        tabs.addTab (ko ("페이드"), Palette::panel, fadePanel.get(), false);
+        tabs.addTab (ko ("커브"), Palette::panel, curvePanel.get(), false);
+        tabs.addTab (ko ("트리거"), Palette::panel, triggers, false);
+        tabs.addTab (ko ("파라미터"), Palette::panel, fadeParamsPanel.get(), false);
+        tabs.setCurrentTabIndex (1);
+    }
+    else
+    {
+        tabs.addTab (ko ("기본"), Palette::panel, basics, false);
+        tabs.addTab (ko ("시간·루프"), Palette::panel, timeLoops, false);
+        tabs.addTab (ko ("레벨"), Palette::panel, levels, false);
+        tabs.addTab (ko ("트림"), Palette::panel, trim, false);
+        tabs.addTab (ko ("트리거"), Palette::panel, triggers, false);
+        tabs.addTab (ko ("이펙트"), Palette::panel, effects, false);
+        tabs.setCurrentTabIndex (0);
+    }
 }
 
 void CueInspector::showNotes()
@@ -1503,7 +2298,12 @@ void CueInspector::showNotes()
 
 void CueInspector::showTimeTab()
 {
-    tabs.setCurrentTabIndex (1);
+    tabs.setCurrentTabIndex (1);   // 시간·루프 for audio cues, 페이드 for fade cues
+}
+
+void CueInspector::fetchFadeLevelsFromTarget()
+{
+    fadePanel->fetchFromTarget();
 }
 
 void CueInspector::refresh()
@@ -1525,12 +2325,16 @@ void CueInspector::refresh()
         title.setText (text, juce::dontSendNotification);
     }
 
+    rebuildTabs (cue != nullptr && cue->isFade());
     basics->refresh();
     timeLoops->refresh();
     levels->refresh();
     trim->refresh();
     triggers->refresh();
     effects->refresh();
+    fadePanel->refresh();
+    curvePanel->refresh();
+    fadeParamsPanel->refresh();
 }
 
 void CueInspector::resized()

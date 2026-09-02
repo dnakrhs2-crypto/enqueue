@@ -230,7 +230,7 @@ void MainComponent::getAllCommands (juce::Array<juce::CommandID>& ids)
                     CommandIDs::panicAll, CommandIDs::hardStopAll, CommandIDs::preview,
                     CommandIDs::auditionGo, CommandIDs::auditionPreview, CommandIDs::toggleAlwaysAudition,
                     CommandIDs::loadCue, CommandIDs::loadToTime, CommandIDs::resetCue, CommandIDs::resetAll,
-                    CommandIDs::addCue, CommandIDs::addFadeCue, CommandIDs::revertFade, CommandIDs::removeCue, CommandIDs::duplicateCue,
+                    CommandIDs::addCue, CommandIDs::addFadeCue, CommandIDs::revertFade, CommandIDs::fetchFadeLevels, CommandIDs::removeCue, CommandIDs::duplicateCue,
                     CommandIDs::moveCueUp, CommandIDs::moveCueDown, CommandIDs::selectAll,
                     CommandIDs::copyCues, CommandIDs::cutCues, CommandIDs::pasteCues, CommandIDs::pasteCueProperties,
                     CommandIDs::find, CommandIDs::findNext,
@@ -345,6 +345,12 @@ void MainComponent::getCommandInfo (juce::CommandID commandID, juce::Application
             result.setInfo (ko ("페이드 되돌리기"), ko ("가장 최근 페이드의 대상을 페이드 전 레벨로 되돌림"), playback, 0);
             result.addDefaultKeypress ('R', ModifierKeys::commandModifier | ModifierKeys::shiftModifier);
             result.setActive (controller.getFadeRunner().canRevert());
+            break;
+
+        case CommandIDs::fetchFadeLevels:
+            result.setInfo (ko ("대상에서 레벨 가져오기"), ko ("선택한 페이드 큐의 목표 레벨을 대상 큐의 현재 레벨로"), cueMenu, 0);
+            result.addDefaultKeypress ('T', ModifierKeys::commandModifier | ModifierKeys::shiftModifier);
+            result.setActive (canEdit && hasSelection && document.cues.getSelected()->isFade());
             break;
 
         case CommandIDs::removeCue:
@@ -614,6 +620,10 @@ bool MainComponent::perform (const InvocationInfo& info)
             addFadeCue();
             break;
 
+        case CommandIDs::fetchFadeLevels:
+            inspector.fetchFadeLevelsFromTarget();
+            break;
+
         case CommandIDs::revertFade:
             if (controller.getFadeRunner().revertLast())
                 transport.showStatus (ko ("페이드 되돌림"), false);
@@ -806,6 +816,7 @@ juce::PopupMenu MainComponent::getMenuForIndex (int topLevelMenuIndex, const juc
         case 2:
             menu.addCommandItem (&commands, CommandIDs::addCue);
             menu.addCommandItem (&commands, CommandIDs::addFadeCue);
+            menu.addCommandItem (&commands, CommandIDs::fetchFadeLevels);
             menu.addCommandItem (&commands, CommandIDs::removeCue);
             menu.addCommandItem (&commands, CommandIDs::duplicateCue);
             menu.addSeparator();

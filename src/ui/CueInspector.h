@@ -4,6 +4,7 @@
 #include "app/ProjectDocument.h"
 #include "audio/AudioEngine.h"
 #include "model/CueList.h"
+#include "ui/CurveEditor.h"
 #include "ui/LevelMatrixComponent.h"
 #include "ui/PluginWindows.h"
 #include "ui/TimeLoopsPanel.h"
@@ -39,8 +40,10 @@ public:
     void setEditable (bool editable);
     /** Jumps to the 기본 tab and focuses the notes field. */
     void showNotes();
-    /** Jumps to the 시간·루프 tab. */
+    /** Jumps to the 시간·루프 tab (or the 페이드 tab of a fade cue). */
     void showTimeTab();
+    /** Fade cue: copies the target's current levels into the fade's goals (Ctrl+Shift+T). */
+    void fetchFadeLevelsFromTarget();
 
     std::function<void()> onOpenPluginManager;
     /** Esc inside a text field: the edit is cancelled and this fires (wired to "stop all"). */
@@ -56,9 +59,14 @@ public:
     class TrimPanel;
     class TriggersPanel;
     class EffectsPanel;
+    class FadePanel;
+    class CurvePanel;
+    class FadeParamsPanel;
 
 private:
     void refresh();
+    /** Installs the tab set for the selected cue's type (audio / fade). */
+    void rebuildTabs (bool forFade);
 
     void cueSelectionChanged (int) override { refresh(); }
     void cueChanged (int index) override;
@@ -72,12 +80,22 @@ private:
 
     juce::Label title;
     juce::TabbedComponent tabs { juce::TabbedButtonBar::TabsAtTop };
-    BasicsPanel* basics = nullptr;       // owned by 'tabs'
-    TimeLoopsPanel* timeLoops = nullptr; // owned by 'tabs'
-    LevelsPanel* levels = nullptr;       // owned by 'tabs'
-    TrimPanel* trim = nullptr;           // owned by 'tabs'
-    TriggersPanel* triggers = nullptr;   // owned by 'tabs'
-    EffectsPanel* effects = nullptr;     // owned by 'tabs'
+    std::unique_ptr<BasicsPanel> basicsPanel;
+    std::unique_ptr<TimeLoopsPanel> timeLoopsPanel;
+    std::unique_ptr<LevelsPanel> levelsPanel;
+    std::unique_ptr<TrimPanel> trimPanel;
+    std::unique_ptr<TriggersPanel> triggersPanel;
+    std::unique_ptr<EffectsPanel> effectsPanel;
+    std::unique_ptr<FadePanel> fadePanel;
+    std::unique_ptr<CurvePanel> curvePanel;
+    std::unique_ptr<FadeParamsPanel> fadeParamsPanel;
+    BasicsPanel* basics = nullptr;       // aliases of the panels above
+    TimeLoopsPanel* timeLoops = nullptr;
+    LevelsPanel* levels = nullptr;
+    TrimPanel* trim = nullptr;
+    TriggersPanel* triggers = nullptr;
+    EffectsPanel* effects = nullptr;
+    int tabSet = -1;                     // 0 = audio, 1 = fade
     bool editable = true;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (CueInspector)
