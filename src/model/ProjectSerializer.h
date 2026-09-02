@@ -1,5 +1,6 @@
 #pragma once
 
+#include "model/AudioPatch.h"
 #include "model/Cue.h"
 #include "model/WorkspaceSettings.h"
 
@@ -12,7 +13,14 @@ struct Project
     juce::String name;
     std::vector<Cue> cues;
     std::vector<PluginSlotState> masterPlugins;
+    std::vector<AudioPatch> patches;   // never empty after fromJson / ensureDefaultPatch: the first one is the default
     WorkspaceSettings settings;
+
+    /** Adds the default patch when the list is empty. Returns the default (first) patch. */
+    AudioPatch& ensureDefaultPatch();
+    const AudioPatch* findPatch (const juce::Uuid& id) const noexcept;
+    /** The cue's patch, or the default patch when the cue's id is null / unknown. Null only while 'patches' is empty. */
+    const AudioPatch* patchForCue (const Cue& cue) const noexcept;
 };
 
 /** JSON <-> Project.

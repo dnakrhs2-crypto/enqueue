@@ -440,6 +440,31 @@ namespace
 
 } // namespace
 
+AudioPatch& Project::ensureDefaultPatch()
+{
+    if (patches.empty())
+        patches.push_back (AudioPatch::makeDefault());
+
+    return patches.front();
+}
+
+const AudioPatch* Project::findPatch (const juce::Uuid& id) const noexcept
+{
+    for (const auto& p : patches)
+        if (p.id == id)
+            return &p;
+
+    return nullptr;
+}
+
+const AudioPatch* Project::patchForCue (const Cue& cue) const noexcept
+{
+    if (const auto* p = findPatch (cue.patchId))
+        return p;
+
+    return patches.empty() ? nullptr : &patches.front();
+}
+
 namespace ProjectSerializer
 {
 
@@ -456,6 +481,13 @@ juce::var toVar (const Project& project, const juce::File& projectDir)
         cues.add (cueToVar (c, projectDir));
 
     root->setProperty ("cues", juce::var (cues));
+
+    juce::Array<juce::var> patches;
+
+    for (const auto& patch : project.patches)
+        patches.add (patch.toVar());
+
+    root->setProperty ("patches", juce::var (patches));
 
     auto* master = new juce::DynamicObject();
     master->setProperty ("plugins", pluginsToVar (project.masterPlugins));
@@ -521,6 +553,13 @@ juce::Result fromJson (const juce::String& json, Project& out, juce::StringArray
             project.cues.push_back (std::move (cue));
         }
     }
+
+    if (const auto* patches = root.getProperty ("patches", juce::var()).getArray())
+        for (const auto& p : *patches)
+            if (p.getDynamicObject() != nullptr)
+                project.patches.push_back (AudioPatch::fromVar (p));
+
+    project.ensureDefaultPatch();
 
     const auto master = root.getProperty ("master", juce::var());
 

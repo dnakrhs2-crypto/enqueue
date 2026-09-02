@@ -38,6 +38,8 @@ void ProjectDocument::newProject()
     history.clear();
     cues.clear();
     masterPlugins.clear();
+    patches.clear();
+    patches.push_back (AudioPatch::makeDefault());
     settings = WorkspaceSettings();
     file = juce::File();
     markClean();
@@ -51,6 +53,38 @@ void ProjectDocument::setSettings (const WorkspaceSettings& newSettings)
     notify();
 }
 
+void ProjectDocument::setPatches (std::vector<AudioPatch> newPatches)
+{
+    patches = std::move (newPatches);
+
+    for (auto& p : patches)
+        p.sanitise();
+
+    if (patches.empty())
+        patches.push_back (AudioPatch::makeDefault());
+
+    dirty = true;
+    notify();
+}
+
+const AudioPatch* ProjectDocument::findPatch (const juce::Uuid& id) const noexcept
+{
+    for (const auto& p : patches)
+        if (p.id == id)
+            return &p;
+
+    return nullptr;
+}
+
+const AudioPatch& ProjectDocument::patchForCue (const Cue& cue) const noexcept
+{
+    if (const auto* p = findPatch (cue.patchId))
+        return *p;
+
+    static const AudioPatch fallback = AudioPatch::makeDefault();
+    return patches.empty() ? fallback : patches.front();
+}
+
 juce::Result ProjectDocument::parse (const juce::File& projectFile, Project& out, juce::StringArray* warnings)
 {
     return ProjectSerializer::load (projectFile, out, warnings);
@@ -61,6 +95,8 @@ void ProjectDocument::adopt (Project project, const juce::File& projectFile)
     history.clear();
     cues.replaceAll (std::move (project.cues));
     masterPlugins = std::move (project.masterPlugins);
+    project.ensureDefaultPatch();
+    patches = std::move (project.patches);
     settings = project.settings;
     settings.sanitise();
     file = projectFile;
@@ -124,6 +160,7 @@ Project ProjectDocument::toProject() const
     project.name = getDisplayName();
     project.cues = cues.getAll();
     project.masterPlugins = masterPlugins;
+    project.patches = patches;
     project.settings = settings;
     return project;
 }

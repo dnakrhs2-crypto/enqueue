@@ -54,6 +54,7 @@ target_sources(GoCueCore INTERFACE
     ${CMAKE_CURRENT_SOURCE_DIR}/src/model/CueNumbering.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/model/CuePropertyPaste.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/model/LevelMatrix.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/model/AudioPatch.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/app/ProjectDocument.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/app/CueController.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/app/Scheduler.cpp

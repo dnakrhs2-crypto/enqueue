@@ -31,10 +31,18 @@ public:
 
     CueList cues;
     std::vector<PluginSlotState> masterPlugins;
+    std::vector<AudioPatch> patches;   // never empty; patches[0] is the default
     WorkspaceSettings settings;
 
     /** Replaces the settings (not an undo step: like QLab, settings sit outside the undo history). */
     void setSettings (const WorkspaceSettings& newSettings);
+    /** Replaces the audio patches (not an undo step either). An empty list gets the default patch. */
+    void setPatches (std::vector<AudioPatch> newPatches);
+    const AudioPatch* findPatch (const juce::Uuid& id) const noexcept;
+    /** The cue's patch, falling back to the default patch. */
+    const AudioPatch& patchForCue (const Cue& cue) const noexcept;
+    /** Number of cue outputs of the cue's patch (the level matrix columns). */
+    int cueOutputsFor (const Cue& cue) const noexcept { return patchForCue (cue).numCueOutputs; }
 
     const juce::File& getFile() const noexcept { return file; }
     bool hasFile() const noexcept { return file != juce::File(); }

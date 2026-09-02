@@ -190,6 +190,46 @@ public:
             expect (! r.settings.hasCueTemplate);          // flag without a template object -> off
         }
 
+        beginTest ("patches round trip and a file without patches gets the default patch");
+        {
+            Project p;
+            auto main = AudioPatch::makeDefault ("Main");
+            main.numCueOutputs = 4;
+            main.sanitise();
+            main.setRouting (2, 3, -6.0);
+            auto alt = AudioPatch::makeDefault ("Alt");
+            alt.numCueOutputs = 2;
+            alt.sanitise();
+            p.patches = { main, alt };
+
+            Cue c;
+            c.patchId = alt.id;
+            c.levels.resize (2, 2);
+            c.levels.crosspointDb[0][1] = -9.0;
+            c.trim.resize (2);
+            c.trim.outputDb[1] = 1.5;
+            c.numChannels = 2;
+            p.cues.push_back (c);
+
+            Project q;
+            expect (ProjectSerializer::fromJson (ProjectSerializer::toJson (p), q, nullptr).wasOk());
+            expectEquals ((int) q.patches.size(), 2);
+            expect (q.patches[0] == main);
+            expect (q.patches[1] == alt);
+            expect (q.cues[0].patchId == alt.id);
+            expect (q.patchForCue (q.cues[0]) == &q.patches[1]);
+            expectWithinAbsoluteError (q.cues[0].levels.crosspointDb[0][1], -9.0, 1e-12);
+            expectWithinAbsoluteError (q.cues[0].trim.outputDb[1], 1.5, 1e-12);
+            expectEquals (q.cues[0].numChannels, 2);
+
+            Project r;
+            expect (ProjectSerializer::fromJson ("{\"cues\":[{\"name\":\"x\"}]}", r, nullptr).wasOk());
+            expectEquals ((int) r.patches.size(), 1);
+            expectEquals (r.patches[0].numCueOutputs, AudioPatch::defaultCueOutputs);
+            expect (r.patchForCue (r.cues[0]) == &r.patches[0]);   // null patch id -> default
+            expect (r.cues[0].levels.numInputs() == 0);           // sized later from the file
+        }
+
         beginTest ("missing fields fall back to defaults");
         {
             Project q;
