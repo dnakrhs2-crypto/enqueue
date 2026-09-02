@@ -173,7 +173,7 @@ appcast의 `sparkle:installerArguments="/SILENT /SP- /NORESTART"` 덕분에 업�
 
 현재 저장소: https://github.com/dnakrhs2-crypto/gocue (릴리스: https://github.com/dnakrhs2-crypto/gocue/releases)
 
-`.github/workflows/release.yml`은 `v*` 태그를 푸시하면 같은 과정을 GitHub Actions에서 수행한다(저장소 secret `GOCUE_EDDSA_PRIVATE_KEY` 필요). 이 워크플로는 아직 실제 저장소에서 돌려 보지 않았다.
+`.github/workflows/release.yml`은 같은 과정을 GitHub Actions에서 수행하려던 것인데(저장소 secret `GOCUE_EDDSA_PRIVATE_KEY` 필요) 호스트 러너에서 Visual Studio 생성기를 못 찾아 한 번도 성공하지 못했다. 태그마다 실패 메일이 와서 수동 실행(`workflow_dispatch`)으로만 남겨 두었다. 릴리스는 로컬 `tools/release.py`로 한다.
 
 인스톨러는 사용자별 설치(`%LOCALAPPDATA%\Programs\GoCue`, UAC 없음)만 한다 — 설치 모드를 묻지 않는다(명령줄 `/ALLUSERS`로만 전체 사용자 설치). `.gocue` 파일 연결을 등록한다.
 

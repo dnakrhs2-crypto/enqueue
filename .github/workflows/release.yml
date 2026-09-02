@@ -3,9 +3,11 @@
 # The matching public key is baked in through CMakePresets.json (GOCUE_EDDSA_PUBLIC_KEY).
 name: release
 
+# Releases are made locally with tools/release.py (it builds, signs and publishes). This workflow is kept for a
+# future CI release but is NOT run on tag pushes: it never succeeded on the hosted runner (the Visual Studio 17
+# generator is not found there) and every tag produced a failure mail.
 on:
-  push:
-    tags: ['v*']
+  workflow_dispatch:
 
 permissions:
   contents: write
