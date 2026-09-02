@@ -120,6 +120,14 @@ MainComponent::MainComponent (AudioEngine& e, AppSettings& s, juce::ApplicationC
     inspector.onOpenPluginManager = [this] { showPluginManager(); };
     inspector.onPanic = [this] { controller.panicAll(); table.focusTable(); };
     inspector.onReturnFocus = [this] { table.focusTable(); };
+    activeCues.onStopRequested = [this] (const juce::Uuid& id)
+    {
+        // an audio cue fades out over its stop fade; anything else (fade / group / wait) is stopped by the controller
+        if (engine.isPlaying (id))
+            engine.fadeOutAndStop (id);
+        else
+            controller.stopCue (id);
+    };
     inspector.onPreview = [this] { controller.preview(); };
     inspector.onResetCue = [this] { controller.resetSelected(); };
 
@@ -1358,7 +1366,7 @@ void MainComponent::removeSelectedCues()
     {
         for (const auto& id : ids)
         {
-            engine.stop (id);
+            controller.stopCue (id);   // fades / groups / waits included
             engine.removeCueChain (id);
         }
 
@@ -1670,6 +1678,13 @@ void MainComponent::pasteCues()
             Cue cue = copies[i];
             cue.id = newIds[cue.id];               // a new identity: the original may still exist
             cue.parentId = newIds.count (cue.parentId) != 0 ? newIds[cue.parentId] : parentAtPoint;
+
+            // references inside the pasted set follow the copies (a fade pasted with its target fades the copy)
+            if (const auto target = cue.targetId(); ! target.isNull() && newIds.count (target) != 0)
+                cue.setTargetId (newIds[target]);
+
+            if (cue.isControl() && newIds.count (cue.control.secondTargetId) != 0)
+                cue.control.secondTargetId = newIds[cue.control.secondTargetId];
             cue.hotkey.clear();                    // hotkeys stay unique
             cue.plugins = plugins[i];
 
@@ -2015,7 +2030,7 @@ void MainComponent::newProject()
 {
     WorkspaceSettingsDialog::closeIfOpen();   // it edits the document that is about to be replaced
     PatchEditorDialog::closeIfOpen();
-    controller.cancelPending();
+    controller.resetForNewProject();   // fades, revert history, playlists, waits: nothing of this project survives
     pluginWindows.closeAll();
     engine.stopAll();
     engine.clearCueChains();
@@ -2067,7 +2082,7 @@ void MainComponent::openProjectFile (const juce::File& file)
 
     WorkspaceSettingsDialog::closeIfOpen();
     PatchEditorDialog::closeIfOpen();
-    controller.cancelPending();
+    controller.resetForNewProject();   // fades, revert history, playlists, waits: nothing of this project survives
     pluginWindows.closeAll();
     engine.stopAll();
     engine.clearCueChains();
@@ -2438,6 +2453,9 @@ void MainComponent::updateTransportStandby()
 //==============================================================================
 void MainComponent::timerCallback()
 {
+    if (! juce::Process::isForegroundProcess())
+        hotkeyListener.heldKeys.clear();   // key-ups missed while another app had the focus must not look like auto-repeat
+
     auto playing = engine.getPlayingCues();
 
     for (const auto& fade : controller.getFadeRunner().getRunning())
@@ -2472,7 +2490,7 @@ void MainComponent::timerCallback()
     if (closeContinuation != nullptr)   // "start on close" cue: quit once its run has finished (or after the deadline)
     {
         const double now = juce::Time::getMillisecondCounterHiRes();
-        const bool runOver = ! engine.isPlaying (closeCueId) && ! controller.hasPendingFor (closeCueId);
+        const bool runOver = ! controller.isCueActive (closeCueId) && ! controller.hasPendingFor (closeCueId);   // a fade / group counts too
 
         if (runOver || now > closeDeadlineMs)
         {

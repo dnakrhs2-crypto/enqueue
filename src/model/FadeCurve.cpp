@@ -178,7 +178,7 @@ void FadeCurve::movePoint (int index, double x, double y)
     else if (index == (int) points.size() - 1)
         p.x = 1.0;
     else
-        p.x = juce::jlimit (points[(size_t) index - 1].x, points[(size_t) index + 1].x, x);
+        p.x = juce::jlimit (points[(size_t) index - 1].x + minPointGap, points[(size_t) index + 1].x - minPointGap, x);   // never onto a neighbour
 
     sanitise();
 }
@@ -199,6 +199,22 @@ void FadeCurve::sanitise()
     }
 
     std::stable_sort (points.begin(), points.end(), [] (const CurvePoint& a, const CurvePoint& b) { return a.x < b.x; });
+
+    // one point per time: a second point at the same x (or at the ends) would make the completion jump
+    if (points.size() >= 2)
+    {
+        std::vector<CurvePoint> unique;
+        unique.push_back (points.front());
+
+        for (size_t i = 1; i < points.size(); ++i)
+            if (points[i].x - unique.back().x >= minPointGap - 1.0e-9)
+                unique.push_back (points[i]);
+            else if (i == points.size() - 1)
+                unique.back() = points[i];   // keep the end point
+
+        points = std::move (unique);
+        points.erase (std::remove_if (points.begin() + 1, points.end() - 1, [] (const CurvePoint& p) { return p.x < minPointGap || p.x > 1.0 - minPointGap; }), points.end() - 1);
+    }
 
     if (points.size() < 2)
         setDefaultPoints();

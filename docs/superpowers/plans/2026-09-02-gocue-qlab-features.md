@@ -247,7 +247,9 @@ class Scheduler { public: using Clock = std::function<double()>;   // 초
 - [x] ★버그 수정: `juce::Uuid` 기본 생성자는 난수 → 선택적 id(`Cue::patchId`, `PlayOptions::patchOverride`, `auditionPatchId`, `ProjectSnapshot::selectedId`)를 `Uuid::null()`로 초기화(안 하면 모든 재생이 오디션으로 표시되던 사고).
 - [x] 테스트 CueControllerTests(출력 없음 / 일반 GO 재시작 / 대체 패치 라우팅 / 항상 오디션). 1111 tests. 커밋 f7fefca.
 - [x] GUI 스모크(2026-09-02 15:45): 레벨 탭(2×8, 귀퉁이 표시), 트림 탭, 패치 편집기 3탭, 라우팅 매트릭스, 크로스포인트 드래그(-∞→-50 dB), Alt+Space 오디션 GO 상태 표시 확인.
-- [ ] 단계 3 마감: README·릴리스 노트 0.4.0(작성됨), 코덱스 리뷰(2단계 리뷰 끝난 뒤), 릴리스, 메모리.
+- [x] 코덱스 read-only 리뷰(main→phase3, 25건: 치명 1·높음 8·중간 10·낮음 6) → **21건 반영**(phase6 워크트리에서, 커밋 bdae847): ① 패치 체인 map은 오디오 락 안에서만 삽입(getPatch*Chain·setPatches 대기 체인) ② setPatches/updatePatchLevels 락 안 복사·할당 제거(사전 sanitise+라우팅 계산 후 swap, 이전 값은 락 밖에서 파괴) ③ 33ch+ 장치 콜백은 사전 할당 scratch로(JUCE AudioBuffer 채널표 힙 할당 회피) ④ 오디션은 loaded 인스턴스 재사용 안 함 ⑤ 대체 패치가 사라지면 무음 오디션(엔진+컨트롤러) ⑥ 인서트 창은 구조 변경/편집기 종료 시 닫고, 구조 변경 전 인서트 상태를 문서에 캡처 ⑦ 플러그인 상태 캡처는 callback lock 안에서 ⑧ 프로젝트 열기/새로 만들기는 저장된 플러그인 상태 적용(applySavedStates) ⑨ 실행 취소가 레벨/트림도 라이브 반영 ⑩ 모노 큐 체인 뒤 L+R 합산(스테레오 이펙트 R 유실 방지) ⑪ MF: 스레드별 COM 초기화, 시크 실패 = 무음, ERROR/미디어타입 변경 플래그 처리, 프라이밍 중복 제거는 시크 직후만 ⑫ 레벨 한계 통일(+24/−120, 설정도 그 범위) ⑬ 파일 버전 4 ⑭ 패치 id 중복 시 재발급 ⑮ dB 문자열 엄격 파싱(쓰레기 = 기본값) ⑯ 겡: 더블클릭 리셋·Delete 무음·숫자 입력도 겡 전체 ⑰ 레벨 편집 커밋은 편집 시작한 큐(shownId)에, 편집 중 선택 변경 무시 ⑱ isAuditioning은 최신 인스턴스 기준.
+- [ ] **보류(알려진 한계)**: ⑨ 재생 중 큐의 패치 변경은 다음 시작부터(런타임/폭 고정) ⑬ 10 ms 램프가 블록 단위 지수 수렴(청감 차이 없음) ⑳ seqlock payload는 전역 락 덕에 안전(락 제거 시 재설계) ㉕ MF_PD_DURATION 없는 파일 거부.
+- [x] **릴리스 결정(2026-09-02)**: 0.4.0/0.5.0/0.6.0 중간 릴리스는 생략하고 3~6단계 + 코덱스 반영을 합쳐 **0.7.0 하나로 릴리스**(gom 요구는 "다 만들고 코덱스 검증"; 중간 설치 3회는 gom 시간만 씀). 릴리스 노트 0.4/0.5/0.6 문서는 0.7.0 노트에 합침.
 
 ---
 

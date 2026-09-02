@@ -22,6 +22,8 @@ public:
 
     /** Fed from the UI timer. */
     void setPlayingCues (const std::vector<AudioEngine::PlayingCue>& playing);
+    /** The row's stop button: the owner stops the cue wherever it runs (fade cues live outside the engine). */
+    std::function<void (const juce::Uuid& cueId)> onStopRequested;
     void setNewestFirst (bool newestFirst);
 
     void resized() override;

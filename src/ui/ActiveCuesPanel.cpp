@@ -17,7 +17,7 @@ namespace
 class ActiveCuesPanel::Row : public juce::Component
 {
 public:
-    Row (AudioEngine& e, const juce::Uuid& cueId) : engine (e), id (cueId)
+    Row (ActiveCuesPanel& o, AudioEngine& e, const juce::Uuid& cueId) : owner (o), engine (e), id (cueId)
     {
         pauseButton.setWantsKeyboardFocus (false);
         pauseButton.onClick = [this]
@@ -33,7 +33,13 @@ public:
         panicButton.setTooltip (ko ("이 큐 페이드 정지"));
         panicButton.setColour (juce::TextButton::buttonColourId, Palette::stopButton);
         panicButton.setWantsKeyboardFocus (false);
-        panicButton.onClick = [this] { engine.fadeOutAndStop (id); };
+        panicButton.onClick = [this]
+        {
+            if (owner.onStopRequested)
+                owner.onStopRequested (id);
+            else
+                engine.fadeOutAndStop (id);
+        };
         addAndMakeVisible (panicButton);
 
         nameLabel.setFont (juce::Font (juce::FontOptions (13.0f, juce::Font::bold)));
@@ -127,6 +133,7 @@ private:
         engine.seekToFraction (id, f);
     }
 
+    ActiveCuesPanel& owner;
     AudioEngine& engine;
     const juce::Uuid id;
     juce::TextButton pauseButton, panicButton;
@@ -193,7 +200,7 @@ void ActiveCuesPanel::setPlayingCues (const std::vector<AudioEngine::PlayingCue>
 
         if (row == nullptr)
         {
-            row = std::make_unique<Row> (engine, p->id);
+            row = std::make_unique<Row> (*this, engine, p->id);
             content.addAndMakeVisible (*row);
         }
 

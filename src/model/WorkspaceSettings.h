@@ -72,10 +72,11 @@ struct WorkspaceSettings
     /** Copies the template's settings onto a fresh cue (identity, name, number, file and cached facts stay). */
     void applyTemplate (Cue& cue) const
     {
-        if (! hasCueTemplate)
-            return;
+        if (! hasCueTemplate || ! cueTemplate.isAudio() || ! cue.isAudio())
+            return;   // a fade / group / control cue is no template for a new file cue
 
         const auto id = cue.id;
+        const auto parent = cue.parentId;
         const auto name = cue.name;
         const auto number = cue.number;
         const auto file = cue.file;
@@ -88,6 +89,7 @@ struct WorkspaceSettings
         cue.file = file;
         cue.durationSeconds = duration;
         cue.fileMissing = missing;
+        cue.parentId = parent;
         cue.hotkey.clear();               // a hotkey must stay unique
         cue.wallClock.enabled = false;
     }

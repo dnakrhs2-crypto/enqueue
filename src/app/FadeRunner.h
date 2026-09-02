@@ -27,7 +27,7 @@ public:
 
     struct Info
     {
-        juce::Uuid fadeId, targetId;
+        juce::Uuid fadeId = juce::Uuid::null(), targetId = juce::Uuid::null();
         double elapsedSeconds = 0.0, durationSeconds = 0.0;
     };
 
@@ -43,9 +43,12 @@ public:
     int getNumRunning() const noexcept { return (int) fades.size(); }
     std::vector<Info> getRunning() const;
 
-    /** Puts the most recently faded target back to its pre-fade state (if it is still running). */
+    /** Puts the most recently faded target back to its pre-fade state (if that instance is still running):
+        only the lanes that fade owned (its active cells, rate, parameters) are restored. */
     bool revertLast();
     bool canRevert() const noexcept { return ! revertStack.empty(); }
+    /** Project switch: drops every running fade and the revert history (the cue ids may recur in the next file). */
+    void resetSession();
 
     void startTicking (int intervalMs = 10) { startTimer (intervalMs); }
     void stopTicking() { stopTimer(); }
@@ -64,21 +67,34 @@ private:
 
     struct Active
     {
-        juce::Uuid fadeId, targetId;
+        juce::Uuid fadeId = juce::Uuid::null(), targetId = juce::Uuid::null();
+        juce::int64 instance = -1;   // the target's start order when the fade began: a restart ends the fade
         double startTime = 0.0, duration = 0.0;
         FadeCueData data;
         State from, to;
     };
 
+    struct RevertEntry
+    {
+        juce::Uuid targetId = juce::Uuid::null();
+        juce::int64 instance = -1;
+        FadeCueData data;   // which lanes the fade owned
+        State from;
+    };
+
     bool readState (const juce::Uuid& targetId, const FadeCueData& data, State& out) const;
     void writeState (const juce::Uuid& targetId, const FadeCueData& data, const State& state, bool levels, bool rate, bool params);
     void apply (Active& a, double completionTime);
+    /** Takes the lanes 'winner' drives away from 'other' (a newer fade on the same cells owns them). True when
+        'other' has nothing left to do. */
+    static bool takeLanes (const FadeCueData& winner, FadeCueData& other);
+    static bool hasAnyLane (const FadeCueData& data);
     void timerCallback() override { tick(); }
 
     AudioEngine& engine;
     ProjectDocument& document;
     std::vector<Active> fades;
-    std::vector<std::pair<juce::Uuid, State>> revertStack;
+    std::vector<RevertEntry> revertStack;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (FadeRunner)
 };

@@ -109,8 +109,13 @@ public:
             c.addPoint (0.6, 0.4);
             expectEquals ((int) c.points.size(), 4);
             expectWithinAbsoluteError (c.points[2].x, 0.6, 1e-12);
-            c.movePoint (2, 0.1, 0.5);            // cannot cross its neighbour on the left (0.2)
-            expectWithinAbsoluteError (c.points[2].x, 0.2, 1e-12);
+            c.movePoint (2, 0.1, 0.5);            // cannot cross (or land on) its neighbour on the left (0.2)
+            expectWithinAbsoluteError (c.points[2].x, 0.2 + FadeCurve::minPointGap, 1e-12);
+            expectEquals ((int) c.points.size(), 4);
+            FadeCurve twin = c;
+            twin.points = { { 0.0, 0.0 }, { 0.5, 0.2 }, { 0.5, 0.8 }, { 1.0, 1.0 } };
+            twin.sanitise();
+            expectEquals ((int) twin.points.size(), 3);   // two points at one time: the completion may not jump
             c.movePoint (0, 0.4, 0.4);            // end points do not move in x, y is forced back to 0
             expectWithinAbsoluteError (c.points[0].x, 0.0, 1e-12);
             expectWithinAbsoluteError (c.points[0].y, 0.0, 1e-12);

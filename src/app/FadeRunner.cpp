@@ -109,11 +109,12 @@ bool FadeRunner::start (const Cue& fadeCue, juce::String* error)
     Active a;
     a.fadeId = fadeCue.id;
     a.targetId = data.targetId;
+    a.instance = engine.getStartOrder (data.targetId);
     a.startTime = clock();
     a.duration = juce::jmax (0.0, data.durationSeconds);
     a.data = data;
 
-    if (! readState (a.targetId, a.data, a.from))
+    if (a.instance < 0 || ! readState (a.targetId, a.data, a.from))
     {
         if (error != nullptr)
             *error = ko ("페이드 대상이 재생 중이 아닙니다: ") + fadeCue.name;
@@ -173,7 +174,20 @@ bool FadeRunner::start (const Cue& fadeCue, juce::String* error)
     // a fade that is already running restarts from where the target is now
     fades.erase (std::remove_if (fades.begin(), fades.end(), [&] (const Active& f) { return f.fadeId == a.fadeId; }), fades.end());
 
-    revertStack.push_back ({ a.targetId, a.from });
+    // the cells this fade drives now belong to it: an older fade on the same target lets go of them (otherwise it
+    // would take them back the moment this one ends, with a jump)
+    for (auto& other : fades)
+        if (other.targetId == a.targetId && takeLanes (a.data, other.data))
+            other.duration = -1.0;   // nothing left for it to do
+
+    fades.erase (std::remove_if (fades.begin(), fades.end(), [] (const Active& f) { return f.duration < 0.0; }), fades.end());
+
+    RevertEntry entry;
+    entry.targetId = a.targetId;
+    entry.instance = a.instance;
+    entry.data = a.data;
+    entry.from = a.from;
+    revertStack.push_back (std::move (entry));
 
     if ((int) revertStack.size() > maxRevertStates)
         revertStack.erase (revertStack.begin());
@@ -181,6 +195,81 @@ bool FadeRunner::start (const Cue& fadeCue, juce::String* error)
     fades.push_back (std::move (a));
     tick();   // apply the first step at once
     return true;
+}
+
+bool FadeRunner::hasAnyLane (const FadeCueData& data)
+{
+    if (data.fadeLevels)
+    {
+        if (data.mainActive)
+            return true;
+
+        for (int i = 0; i < data.levels.numInputs(); ++i)
+        {
+            if (data.isInputActive (i))
+                return true;
+
+            for (int o = 0; o < data.levels.numOutputs(); ++o)
+                if (data.isCrosspointActive (i, o))
+                    return true;
+        }
+
+        for (int o = 0; o < data.levels.numOutputs(); ++o)
+            if (data.isOutputActive (o))
+                return true;
+    }
+
+    if (data.fadeRate)
+        return true;
+
+    for (const auto& p : data.params)
+        if (p.active)
+            return true;
+
+    return false;
+}
+
+bool FadeRunner::takeLanes (const FadeCueData& winner, FadeCueData& other)
+{
+    if (winner.fadeLevels && other.fadeLevels)
+    {
+        if (winner.mainActive)
+            other.mainActive = false;
+
+        const int inputs = juce::jmin (winner.levels.numInputs(), other.levels.numInputs());
+        const int outputs = juce::jmin (winner.levels.numOutputs(), other.levels.numOutputs());
+
+        for (int i = 0; i < inputs; ++i)
+        {
+            if (winner.isInputActive (i))
+                other.setInputActive (i, false);
+
+            for (int o = 0; o < outputs; ++o)
+                if (winner.isCrosspointActive (i, o))
+                    other.setCrosspointActive (i, o, false);
+        }
+
+        for (int o = 0; o < outputs; ++o)
+            if (winner.isOutputActive (o))
+                other.setOutputActive (o, false);
+    }
+
+    if (winner.fadeRate && other.fadeRate)
+        other.fadeRate = false;
+
+    for (const auto& wp : winner.params)
+        if (wp.active)
+            for (auto& op : other.params)
+                if (op.slot == wp.slot && op.parameter == wp.parameter)
+                    op.active = false;
+
+    return ! hasAnyLane (other);
+}
+
+void FadeRunner::resetSession()
+{
+    fades.clear();
+    revertStack.clear();
 }
 
 void FadeRunner::apply (Active& a, double t)
@@ -243,6 +332,12 @@ void FadeRunner::tick()
 
     for (auto& a : fades)
     {
+        if (engine.getStartOrder (a.targetId) != a.instance)
+        {
+            a.duration = -1.0;   // the target stopped or was restarted: this fade belonged to the old instance
+            continue;
+        }
+
         const double t = a.duration > 0.0 ? juce::jlimit (0.0, 1.0, (now - a.startTime) / a.duration) : 1.0;
         apply (a, t);
 
@@ -254,6 +349,12 @@ void FadeRunner::tick()
             a.duration = -1.0;   // mark done
         }
     }
+
+    // a fade that stops its target takes every other fade on that target with it
+    for (const auto& id : stopTargets)
+        for (auto& a : fades)
+            if (a.targetId == id)
+                a.duration = -1.0;
 
     fades.erase (std::remove_if (fades.begin(), fades.end(), [] (const Active& f) { return f.duration < 0.0; }), fades.end());
 
@@ -298,14 +399,51 @@ bool FadeRunner::revertLast()
         auto entry = revertStack.back();
         revertStack.pop_back();
 
-        if (! engine.isPlaying (entry.first))
-            continue;   // that target is over: try the one before
+        if (engine.getStartOrder (entry.targetId) != entry.instance)
+            continue;   // that instance is over (or the cue restarted): try the one before
 
-        // any fade still running on that target is cancelled first
-        fades.erase (std::remove_if (fades.begin(), fades.end(), [&] (const Active& f) { return f.targetId == entry.first; }), fades.end());
+        // the fades still running on that target are cancelled first
+        fades.erase (std::remove_if (fades.begin(), fades.end(), [&] (const Active& f) { return f.targetId == entry.targetId; }), fades.end());
 
-        FadeCueData none;   // parameters are restored only when a fade cue described them; levels / rate always
-        writeState (entry.first, none, entry.second, true, true, false);
+        // only what the fade owned goes back: its active cells, its rate, its parameters
+        State cur;
+
+        if (! readState (entry.targetId, entry.data, cur))
+            continue;
+
+        const auto& d = entry.data;
+
+        if (d.fadeLevels)
+        {
+            if (d.mainActive)
+                cur.mainDb = entry.from.mainDb;
+
+            const int inputs = juce::jmin (cur.levels.numInputs(), entry.from.levels.numInputs());
+            const int outputs = juce::jmin (cur.levels.numOutputs(), entry.from.levels.numOutputs());
+
+            for (int i = 0; i < inputs; ++i)
+            {
+                if (d.isInputActive (i))
+                    cur.levels.inputDb[(size_t) i] = entry.from.levels.inputDb[(size_t) i];
+
+                for (int o = 0; o < outputs; ++o)
+                    if (d.isCrosspointActive (i, o))
+                        cur.levels.crosspointDb[(size_t) i][(size_t) o] = entry.from.levels.crosspointDb[(size_t) i][(size_t) o];
+            }
+
+            for (int o = 0; o < outputs; ++o)
+                if (d.isOutputActive (o))
+                    cur.levels.outputDb[(size_t) o] = entry.from.levels.outputDb[(size_t) o];
+        }
+
+        if (d.fadeRate)
+            cur.rate = entry.from.rate;
+
+        for (size_t i = 0; i < d.params.size() && i < cur.params.size() && i < entry.from.params.size(); ++i)
+            if (d.params[i].active)
+                cur.params[i] = entry.from.params[i];
+
+        writeState (entry.targetId, d, cur, d.fadeLevels, d.fadeRate, ! d.params.empty());
         return true;
     }
 

@@ -31,6 +31,8 @@ struct FadeCurve
     AudioDomain domain = AudioDomain::slider;
 
     static constexpr double minIntensity = 0.1;
+
+    static constexpr double minPointGap = 0.001;   // custom points: one per time, at least this far apart
     static constexpr double maxIntensity = 10.0;
 
     /** 0..1 -> 0..1; completion (0) = 0 and completion (1) = 1 for every shape. */

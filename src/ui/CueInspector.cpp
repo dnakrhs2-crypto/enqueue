@@ -524,7 +524,7 @@ private:
 
     void commitName()
     {
-        const auto* cue = cues.getSelected();
+        const auto* cue = shownCue();   // the cue this edit started on, even if the selection moved meanwhile
 
         if (refreshing || cancellingEdit || cue == nullptr)
             return;
@@ -539,7 +539,7 @@ private:
 
     void commitNotes()
     {
-        const auto* cue = cues.getSelected();
+        const auto* cue = shownCue();   // the cue this edit started on, even if the selection moved meanwhile
 
         if (refreshing || cancellingEdit || cue == nullptr)
             return;
@@ -554,7 +554,7 @@ private:
 
     void commitWait (bool pre)
     {
-        const auto* cue = cues.getSelected();
+        const auto* cue = shownCue();   // the cue this edit started on, even if the selection moved meanwhile
 
         if (refreshing || cancellingEdit || cue == nullptr)
             return;
@@ -597,7 +597,7 @@ private:
 
     void commitStopFade()
     {
-        const auto* cue = cues.getSelected();
+        const auto* cue = shownCue();   // the cue this edit started on, even if the selection moved meanwhile
 
         if (refreshing || cancellingEdit || cue == nullptr)
             return;
@@ -623,7 +623,7 @@ private:
 
     void commitGain()
     {
-        const auto* cue = cues.getSelected();
+        const auto* cue = shownCue();
 
         if (refreshing || cue == nullptr)
             return;
@@ -695,6 +695,8 @@ private:
     std::unique_ptr<juce::FileChooser> chooser;
     juce::Rectangle<int> dropArea;
     juce::Uuid shownId = juce::Uuid::null();   // the cue the fields show
+
+    const Cue* shownCue() const { return shownId.isNull() ? cues.getSelected() : cues.findById (shownId); }
     bool refreshing = false;
     bool cancellingEdit = false;
     bool dragOver = false;
@@ -1660,6 +1662,10 @@ private:
             return;
 
         const auto id = targetIds[(size_t) index];
+
+        if (previewing)
+            togglePreview (false);   // the preview belongs to the old target: put it back before switching
+
         const auto* target = cues.findById (id);
         const int inputs = target != nullptr && target->numChannels > 0 ? target->numChannels : 2;
         const int outputs = target != nullptr ? document.cueOutputsFor (*target) : 2;
@@ -1931,6 +1937,26 @@ public:
 
     void refresh()
     {
+        if (selfEditing)
+        {
+            // a row's own slider / toggle is calling back: rebuilding would delete the control mid-callback
+            if (! refreshQueued)
+            {
+                refreshQueued = true;
+                juce::Component::SafePointer<FadeParamsPanel> safeThis (this);
+                juce::MessageManager::callAsync ([safeThis]
+                {
+                    if (safeThis != nullptr)
+                    {
+                        safeThis->refreshQueued = false;
+                        safeThis->refresh();
+                    }
+                });
+            }
+
+            return;
+        }
+
         const juce::ScopedValueSetter<bool> guard (refreshing, true);
         const auto* cue = cues.getSelected();
         rows.clear();
@@ -1999,7 +2025,6 @@ public:
                 r->text.setJustificationType (juce::Justification::centredRight);
                 r->text.setText (param->getText ((float) r->value.getValue(), 24), juce::dontSendNotification);
                 strip.addAndMakeVisible (r->text);
-                r->param = param;
             }
         }
 
@@ -2026,8 +2051,29 @@ private:
         juce::ToggleButton active;
         juce::Slider value;
         juce::Label text;
-        juce::AudioProcessorParameter* param = nullptr;
     };
+
+    /** The parameter behind a row, looked up afresh (the chain may have been rebuilt by an undo meanwhile). */
+    juce::AudioProcessorParameter* resolveParameter (int slot, int parameter) const
+    {
+        const auto* cue = shownId.isNull() ? cues.getSelected() : cues.findById (shownId);
+
+        if (cue == nullptr || ! cue->isFade())
+            return nullptr;
+
+        auto* chain = engine.findCueChain (cue->fade.targetId);
+
+        if (chain == nullptr || slot < 0 || slot >= chain->getNumSlots())
+            return nullptr;
+
+        auto* plugin = chain->getSlot (slot).plugin.get();
+
+        if (plugin == nullptr)
+            return nullptr;
+
+        const auto& parameters = plugin->getParameters();
+        return parameter >= 0 && parameter < parameters.size() ? parameters[parameter] : nullptr;
+    }
 
     static const ParamFade* findEntry (const FadeCueData& f, int slot, int parameter)
     {
@@ -2068,11 +2114,15 @@ private:
 
     void setActive (int slot, int parameter, bool on)
     {
+        const juce::ScopedValueSetter<bool> guard (selfEditing, true);
         float current = 0.0f;
 
         for (auto* r : rows)
             if (r->slot == slot && r->parameter == parameter)
+            {
                 current = (float) r->value.getValue();
+                r->value.setEnabled (editable && on);
+            }
 
         edit (ko ("파라미터 페이드"), [slot, parameter, on, current] (Cue& c)
         {
@@ -2090,14 +2140,16 @@ private:
             p.active = on;
             c.fade.params.push_back (p);
         });
-        refresh();
     }
 
     void setValue (int slot, int parameter, float value)
     {
-        for (auto* r : rows)
-            if (r->slot == slot && r->parameter == parameter && r->param != nullptr)
-                r->text.setText (r->param->getText (value, 24), juce::dontSendNotification);
+        const juce::ScopedValueSetter<bool> guard (selfEditing, true);
+
+        if (auto* param = resolveParameter (slot, parameter))
+            for (auto* r : rows)
+                if (r->slot == slot && r->parameter == parameter)
+                    r->text.setText (param->getText (value, 24), juce::dontSendNotification);
 
         edit (ko ("파라미터 목표"), [slot, parameter, value] (Cue& c)
         {
@@ -2125,6 +2177,8 @@ private:
     juce::OwnedArray<Row> rows;
     juce::Uuid shownId = juce::Uuid::null();
     bool refreshing = false;
+    bool selfEditing = false;    // a row's control is in its callback
+    bool refreshQueued = false;
     bool editable = true;
 };
 

@@ -806,6 +806,18 @@ void AudioEngine::setLiveLevels (const juce::Uuid& cueId, const LevelMatrix& lev
             p->setLiveLevels (levels, trim);
 }
 
+juce::int64 AudioEngine::getStartOrder (const juce::Uuid& cueId) const
+{
+    const juce::ScopedLock sl (lock);
+    juce::int64 best = -1;
+
+    for (auto& p : players)
+        if (p->getCueId() == cueId && ! p->hasFinished() && ! p->isLoadedNotStarted())
+            best = juce::jmax (best, p->getStartOrder());
+
+    return best;
+}
+
 bool AudioEngine::getLiveState (const juce::Uuid& cueId, LiveState& out) const
 {
     const juce::ScopedLock sl (lock);

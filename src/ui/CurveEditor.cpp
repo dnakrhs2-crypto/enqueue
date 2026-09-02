@@ -254,11 +254,17 @@ void CurveEditor::Canvas::mouseDown (const juce::MouseEvent& e)
 
     const auto p = e.position;
     selected = hitPoint (p);
+    changed = false;
 
     if (selected < 0 && ! e.mods.isPopupMenu())
     {
-        const auto c = toCurve (p);
+        auto c = toCurve (p);
+
+        if (owner.curve.mirror && c.x > 0.5)
+            c = { 1.0 - c.x, 1.0 - c.y };   // with the mirror lock the left half is the master: add the twin there
+
         owner.curve.addPoint (c.x, c.y);
+        changed = true;
 
         // find the point we just added (sanitise may have re-sorted / mirrored)
         selected = hitPoint (p);
@@ -268,13 +274,30 @@ void CurveEditor::Canvas::mouseDown (const juce::MouseEvent& e)
     repaint();
 }
 
+int CurveEditor::Canvas::masterIndex (int index) const
+{
+    // mirror lock: a point on the right half is edited through its twin on the left
+    const auto& points = owner.curve.points;
+
+    if (owner.curve.mirror && index > 0 && index < (int) points.size() - 1 && points[(size_t) index].x > 0.5 + 1.0e-9)
+        return (int) points.size() - 1 - index;
+
+    return index;
+}
+
 void CurveEditor::Canvas::mouseDrag (const juce::MouseEvent& e)
 {
     if (! dragging || ! isEnabled())
         return;
 
-    const auto c = toCurve (e.position);
-    owner.curve.movePoint (selected, c.x, c.y);
+    auto c = toCurve (e.position);
+    const int master = masterIndex (selected);
+
+    if (master != selected)
+        c = { 1.0 - c.x, 1.0 - c.y };
+
+    owner.curve.movePoint (master, c.x, c.y);
+    changed = true;
     selected = hitPoint (e.position) >= 0 ? hitPoint (e.position) : selected;
     repaint();
     owner.notify (false);
@@ -286,7 +309,11 @@ void CurveEditor::Canvas::mouseUp (const juce::MouseEvent&)
         return;
 
     dragging = false;
-    owner.notify (true);
+
+    if (changed)   // a click that moved nothing is not an undo step
+        owner.notify (true);
+
+    changed = false;
 }
 
 void CurveEditor::Canvas::mouseDoubleClick (const juce::MouseEvent& e)
@@ -298,8 +325,9 @@ void CurveEditor::Canvas::mouseDoubleClick (const juce::MouseEvent& e)
 
     if (hit > 0 && hit < (int) owner.curve.points.size() - 1)
     {
-        owner.curve.removePoint (hit);
+        owner.curve.removePoint (masterIndex (hit));
         selected = -1;
+        changed = false;
         repaint();
         owner.notify (true);
     }
@@ -312,7 +340,7 @@ bool CurveEditor::Canvas::keyPressed (const juce::KeyPress& key)
 
     if (key == juce::KeyPress::deleteKey || key == juce::KeyPress::backspaceKey)
     {
-        owner.curve.removePoint (selected);
+        owner.curve.removePoint (masterIndex (selected));
         selected = -1;
         repaint();
         owner.notify (true);

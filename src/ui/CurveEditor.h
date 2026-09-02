@@ -46,6 +46,8 @@ private:
         CurveEditor& owner;
         int selected = -1;
         bool dragging = false;
+        bool changed = false;   // something moved / was added during this gesture
+        int masterIndex (int index) const;
     };
 
     void updateControls();

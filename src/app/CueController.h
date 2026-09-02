@@ -52,6 +52,11 @@ public:
     GoResult preview (bool audition = false);
     /** Stops the selected cue. */
     void resetSelected();
+    /** Stops one cue wherever it runs: its pending starts / follows, its fade (a fade cue), the fades aimed at it,
+        its playlist run / children (a group), its wait, and the engine instance. Every UI stop goes through here. */
+    void stopCue (const juce::Uuid& cueId);
+    /** Project switch: nothing of the old project's runs may survive (fades, revert history, playlists, waits, ducks, played). */
+    void resetForNewProject();
     /** Hard-stops everything, cancels pending waits and puts the playhead on the first cue. */
     void resetAll();
     /** Fires one cue now, applying its second-trigger rule when it is already running.

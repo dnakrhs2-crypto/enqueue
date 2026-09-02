@@ -112,6 +112,9 @@ public:
     };
     /** Current live values of the most recently started running instance of the cue (fade cues start from here). */
     bool getLiveState (const juce::Uuid& cueId, LiveState& out) const;
+    /** Start order of the most recently started running (not loaded, not finished) instance; -1 when none.
+        A fade / devamp remembers it so a restart of the same cue is a different instance to them. */
+    juce::int64 getStartOrder (const juce::Uuid& cueId) const;
     /** Scrub: jump to a fraction (0..1) of the cue's total length. */
     void seekToFraction (const juce::Uuid& cueId, double fraction);
     /** Duck / boost (dB on top of the cue gain) reached over 'rampSeconds'; 0 = none. */

@@ -635,6 +635,12 @@ void CueList::setSelectionInternal (std::vector<int> indices, int primaryIndex, 
         setPlayheadInternal (primary, false);
 }
 
+void CueList::restoreCursors (std::vector<int> selectedIndices, int primaryIndex, int playheadIndex)
+{
+    setSelectionInternal (std::move (selectedIndices), primaryIndex, false);
+    setPlayheadInternal (playheadIndex, false);
+}
+
 void CueList::setLockPlayheadToSelection (bool shouldLock)
 {
     const bool wasLocked = lockPlayhead;

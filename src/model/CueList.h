@@ -133,6 +133,8 @@ public:
 
     /** Turning the lock on snaps the playhead to the current primary selection. */
     void setLockPlayheadToSelection (bool shouldLock);
+    /** Undo: puts the selection (all of it) and the playhead back as they were, without the lock collapsing one onto the other. */
+    void restoreCursors (std::vector<int> selectedIndices, int primaryIndex, int playheadIndex);
     /** True when another cue (not 'exceptId') already carries this non-empty number. */
     bool isNumberTaken (const juce::String& number, const juce::Uuid& exceptId) const noexcept;
     bool isPlayheadLockedToSelection() const noexcept { return lockPlayhead; }

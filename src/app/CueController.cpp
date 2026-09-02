@@ -651,6 +651,7 @@ CueController::GoResult CueController::triggerImpl (const Cue& cue, bool auditio
             return GoResult::failed;
         }
 
+        played.insert (cue.id);   // the second colour applies to fades too
         return GoResult::started;
     }
 
@@ -748,10 +749,28 @@ void CueController::applyFadeStopOthers (const Cue& cue)
 
     const int ms = (int) std::lround (cue.fadeStopOthers.seconds * 1000.0);
     const bool peersOnly = cue.fadeStopOthers.scope == FadeStopScope::peers;
+    const auto ownTarget = cue.targetId();   // a fade / devamp / control cue must not fade its own target out
+
+    // running fade cues are "others" too
+    for (const auto& f : fadeRunner.getRunning())
+    {
+        if (f.fadeId == cue.id)
+            continue;
+
+        if (peersOnly)
+        {
+            const auto* other = document.cues.findById (f.fadeId);
+
+            if (other != nullptr && other->parentId != cue.parentId)
+                continue;
+        }
+
+        fadeRunner.stop (f.fadeId);
+    }
 
     for (const auto& p : engine.getPlayingCues())
     {
-        if (p.id == cue.id || p.loaded)
+        if (p.id == cue.id || p.id == ownTarget || p.loaded)
             continue;
 
         if (peersOnly)
@@ -1193,20 +1212,47 @@ void CueController::hardStopAll()
     status (ko ("전체 즉시 정지"));
 }
 
+void CueController::stopCue (const juce::Uuid& cueId)
+{
+    cancelPendingFor (cueId);   // its pre-wait / follow must not fire afterwards
+    waits.erase (cueId);
+    playlists.erase (cueId);
+    fadeRunner.stop (cueId);    // a fade cue
+
+    for (const auto& f : fadeRunner.getRunning())   // fades aimed at this cue
+        if (f.targetId == cueId)
+            fadeRunner.stop (f.fadeId);
+
+    const int index = document.cues.indexOf (cueId);
+
+    if (index >= 0 && document.cues.get (index).isGroup())
+        stopGroup (cueId, 0);
+    else
+        engine.stop (cueId);
+}
+
 void CueController::resetSelected()
 {
     if (const auto* cue = document.cues.getSelected())
     {
-        cancelPendingFor (cue->id);   // its pre-wait / follow must not fire after a reset
-
-        if (cue->isGroup())
-            stopGroup (cue->id, 0);
-        else
-            engine.stop (cue->id);
-
+        stopCue (cue->id);
         played.erase (cue->id);
         status (ko ("리셋: ") + cueLabel (document.cues.getSelectedIndex(), *cue));
     }
+}
+
+void CueController::resetForNewProject()
+{
+    fadeRunner.resetSession();
+    cancelPending();
+    playlists.clear();
+    randomUsed.clear();
+    waits.clear();
+    ducks.clear();
+    played.clear();
+    recorded.clear();
+    recording = false;
+    lastGroupEnterIndex = -1;
 }
 
 void CueController::resetAll()

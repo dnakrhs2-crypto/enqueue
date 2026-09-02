@@ -72,7 +72,8 @@ public:
             if (currentRow >= 0)
                 safeOwner->commitCellEdit (currentRow, c, text);
 
-            safeOwner->focusTable();
+            if (safeOwner->editGeneration == gen)   // a newer editor keeps its focus
+                safeOwner->focusTable();
         });
     }
 

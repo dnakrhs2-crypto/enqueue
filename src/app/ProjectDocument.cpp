@@ -204,13 +204,13 @@ void ProjectDocument::restoreSnapshot (const ProjectSnapshot& snapshot)
             indices.push_back (index);
 
     const int primary = snapshot.selectedId.isNull() ? -1 : cues.indexOf (snapshot.selectedId);
+    const int playhead = snapshot.playheadId.isNull() ? -1 : cues.indexOf (snapshot.playheadId);
 
-    if (! indices.empty() || primary >= 0)
-        cues.setSelection (indices.empty() ? std::vector<int> { primary } : indices, primary);
+    if (indices.empty() && primary >= 0)
+        indices.push_back (primary);
 
-    if (! snapshot.playheadId.isNull())
-        if (const int index = cues.indexOf (snapshot.playheadId); index >= 0)
-            cues.setPlayheadIndex (index);
+    // both cursors exactly as they were: a multi-selection survives the playhead lock
+    cues.restoreCursors (indices, primary, playhead >= 0 ? playhead : cues.getPlayheadIndex());
 
     dirty = true;
     notify();
