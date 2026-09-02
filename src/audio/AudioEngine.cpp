@@ -713,6 +713,15 @@ void AudioEngine::setLiveGainDb (const juce::Uuid& cueId, double gainDb)
             p->setLiveGainDb (gainDb);
 }
 
+void AudioEngine::setLiveSlices (const juce::Uuid& cueId, const std::vector<Slice>& slices, int firstSliceCount)
+{
+    const juce::ScopedLock sl (lock);
+
+    for (auto& p : players)
+        if (p->getCueId() == cueId && ! p->hasFinished())
+            p->setLiveSlices (slices, firstSliceCount);
+}
+
 void AudioEngine::setLiveLevels (const juce::Uuid& cueId, const LevelMatrix& levels, const TrimLevels& trim)
 {
     const juce::ScopedLock sl (lock);

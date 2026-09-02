@@ -112,6 +112,16 @@ struct FadeCueData
     void sanitise() noexcept;
 };
 
+/** A slice marker (QLab "slices"): the slice that starts here plays 'playCount' times (0 = skipped, -1 = forever). */
+struct Slice
+{
+    double seconds = 0.0;   // absolute file time
+    int playCount = 1;
+
+    static constexpr double minGapSeconds = 0.05;
+    static constexpr int maxCount = 9999;
+};
+
 /** Playback settings of an audio cue (QLab "Time & Loops"). */
 struct AudioCueData
 {
@@ -119,6 +129,8 @@ struct AudioCueData
     double endSeconds = -1.0;       // trim out; -1 = end of file
     int playCount = 1;              // ignored while infiniteLoop is set
     bool infiniteLoop = false;
+    std::vector<Slice> slices;      // markers inside the trim, sorted; each starts a slice with its own play count
+    int firstSliceCount = 1;        // play count of the slice before the first marker (0 = skip, -1 = forever)
     double rate = 1.0;              // playback speed, minRate .. maxRate
     bool preservePitch = false;     // time-stretch instead of varispeed
     Envelope envelope;              // integrated fade drawn over the waveform
@@ -126,6 +138,14 @@ struct AudioCueData
     static constexpr double minRate = 0.03;
     static constexpr double maxRate = 33.0;
     static constexpr int maxPlayCount = 9999;
+    static constexpr int maxSlices = 64;
+
+    /** Sorts / deduplicates the markers (min gap), clamps counts. */
+    void sanitiseSlices (double fileLengthSeconds) noexcept;
+    /** True when any slice loops forever. */
+    bool hasEndlessSlice() const noexcept;
+    /** Seconds of one pass of the whole slice sequence inside [start, end) (skips count 0, infinite counted once); -1 when endless. */
+    double sliceSequenceSeconds (double regionStart, double regionEnd) const noexcept;
 };
 
 /** One audio cue. Plain data: the audio engine takes a copy when the cue is fired. */

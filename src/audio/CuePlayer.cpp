@@ -60,9 +60,24 @@ CuePlayer::CuePlayer (const Cue& c, juce::AudioFormatManager& formats,
     regionSource->setPlayCount (cue.audio.playCount, cue.audio.infiniteLoop);
     regionSource->setEnvelope (cue.audio.envelope);
 
+    {
+        std::vector<RegionLoopSource::SliceMarker> markers;
+
+        for (const auto& s : cue.audio.slices)
+            markers.push_back ({ (juce::int64) std::llround (s.seconds * fileSampleRate), s.playCount });
+
+        regionSource->setSlices (markers, cue.audio.firstSliceCount);
+    }
+
     if (regionSource->getRegionLength() <= 0)
     {
         errorMessage = "The trimmed region of cue \"" + cue.name + "\" is empty";
+        return;
+    }
+
+    if (regionSource->getTotalLength() <= 0)
+    {
+        errorMessage = "Every slice of cue \"" + cue.name + "\" is skipped (play count 0)";
         return;
     }
 
@@ -154,7 +169,7 @@ void CuePlayer::requestResume() noexcept
 void CuePlayer::requestFinishCurrentPass() noexcept
 {
     if (source != nullptr)
-        source->setEndAfterPass (source->getPassIndexFor ((juce::int64) virtualPosition.load (std::memory_order_relaxed)));
+        source->finishCurrentPass ((juce::int64) virtualPosition.load (std::memory_order_relaxed));
 }
 
 void CuePlayer::setLiveRegion (double startSeconds, double endSeconds) noexcept
@@ -168,22 +183,55 @@ void CuePlayer::setLiveRegion (double startSeconds, double endSeconds) noexcept
     if (endSample - startSample < 1)   // an empty region would divide by zero; ignore the edit until it is valid again
         return;
 
-    // keep the audible file position: re-derive pass / offset against the new region
-    juce::int64 oldStart, oldLen;
-    source->getRegion (oldStart, oldLen);
+    // keep the audible file position: find it again in the new layout (same pass if it still exists)
     const auto pos = (juce::int64) virtualPosition.load (std::memory_order_relaxed);
-    const juce::int64 pass = oldLen > 0 ? pos / oldLen : 0;
-    const juce::int64 filePos = oldStart + (oldLen > 0 ? pos % oldLen : 0);
+    const auto where = source->locate (pos);
+    const juce::int64 filePos = juce::jlimit (startSample, endSample - 1, where.fileSample);
 
     source->setRegion (startSample, endSample);
 
-    const auto newLen = source->getRegionLength();
-    const juce::int64 newPos = pass * newLen + juce::jlimit<juce::int64> (0, newLen, filePos - startSample);
+    const juce::int64 newPos = source->virtualPositionFor (filePos, where.pass);
 
     // drop the read-ahead cache: it holds audio of the old region for the same virtual positions
     if (readAhead != nullptr)
     {
         readAhead->setNextReadPosition (RegionLoopSource::infiniteLength);   // outside any cached range: invalidates it
+        readAhead->setNextReadPosition (newPos);
+    }
+    else
+    {
+        source->setNextReadPosition (newPos);
+    }
+
+    pendingVirtualPosition.store (newPos, std::memory_order_release);
+}
+
+void CuePlayer::setLiveSlices (const std::vector<Slice>& slices, int firstSliceCount) noexcept
+{
+    if (source == nullptr)
+        return;
+
+    const auto pos = (juce::int64) virtualPosition.load (std::memory_order_relaxed);
+    const auto where = source->locate (pos);
+
+    std::vector<RegionLoopSource::SliceMarker> markers;
+
+    for (const auto& s : slices)
+        markers.push_back ({ (juce::int64) std::llround (s.seconds * fileSampleRate), s.playCount });
+
+    source->setSlices (markers, firstSliceCount);
+
+    if (source->getTotalLength() <= 0)
+    {
+        requestStop();   // every slice skipped: nothing left to play
+        return;
+    }
+
+    const juce::int64 newPos = source->virtualPositionFor (where.fileSample, where.pass);
+
+    if (readAhead != nullptr)
+    {
+        readAhead->setNextReadPosition (RegionLoopSource::infiniteLength);
         readAhead->setNextReadPosition (newPos);
     }
     else

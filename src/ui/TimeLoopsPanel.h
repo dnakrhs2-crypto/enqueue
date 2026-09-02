@@ -28,6 +28,7 @@ public:
     std::function<void()> onReset;
     /** Esc inside a text field: cancel the edit and fire this (wired to "stop all"). */
     std::function<void()> onPanic;
+    std::function<void (const juce::String& message, bool isError)> onStatus;
 
     void resized() override;
     void paint (juce::Graphics& g) override;
@@ -35,6 +36,8 @@ public:
 private:
     const Cue* selected() const { return document.cues.getSelected(); }
     void updateSelected (const juce::String& name, const std::function<void (Cue&)>& mutator, const juce::String& coalesceKey = {});
+    void commitSlices (const std::vector<Slice>& slices, int firstCount, bool finished);
+    void importSliceMarkers();
     void pushLiveRegion();
     void commitTrim (double start, double end, bool finished);
     void commitEnvelope (const Envelope& envelope, bool finished);

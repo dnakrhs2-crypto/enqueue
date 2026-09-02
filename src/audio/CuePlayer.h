@@ -80,6 +80,8 @@ public:
     void setLiveRegion (double startSeconds, double endSeconds) noexcept;
     /** Jumps to a fraction (0..1) of the cue's total length (scrubbing in the active-cues panel). Message thread. */
     void seekToFraction (double fraction) noexcept;
+    /** Live slice edit: the audible file position is kept. Message thread. */
+    void setLiveSlices (const std::vector<Slice>& slices, int firstSliceCount) noexcept;
     /** Live playback rate (varispeed). Any thread. */
     void setLiveRate (double rate) noexcept;
     /** Live cue gain (dB); ramps over one block so the change is click-free. Any thread. */

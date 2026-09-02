@@ -116,6 +116,7 @@ TimeLoopsPanel::TimeLoopsPanel (ProjectDocument& doc, AudioEngine& e, juce::Audi
     waveform.onTrimChanged = [this] (double start, double end, bool finished) { commitTrim (start, end, finished); };
     waveform.onEnvelopeChanged = [this] (const Envelope& envelope, bool finished) { commitEnvelope (envelope, finished); };
     waveform.onContextMenu = [this] (juce::Point<int> screenPosition) { showContextMenu (screenPosition); };
+    waveform.onSlicesChanged = [this] (const std::vector<Slice>& slices, int firstCount, bool finished) { commitSlices (slices, firstCount, finished); };
     addAndMakeVisible (waveform);
 
     refresh();
@@ -273,6 +274,65 @@ void TimeLoopsPanel::commitTrim (double start, double end, bool finished)
     juce::ignoreUnused (finished);
 }
 
+void TimeLoopsPanel::commitSlices (const std::vector<Slice>& slices, int firstCount, bool finished)
+{
+    const auto* cue = selected();
+
+    if (cue == nullptr)
+        return;
+
+    juce::ignoreUnused (finished);
+    const auto key = "slices:" + cue->id.toString();
+    const auto id = cue->id;
+    updateSelected (ko ("슬라이스"), [slices, firstCount] (Cue& c)
+    {
+        c.audio.slices = slices;
+        c.audio.firstSliceCount = firstCount;
+        c.audio.sanitiseSlices (c.durationSeconds);
+    }, key);
+
+    if (const auto* updated = selected(); updated != nullptr && updated->id == id && engine.isPlaying (id))
+        engine.setLiveSlices (id, updated->audio.slices, updated->audio.firstSliceCount);
+}
+
+void TimeLoopsPanel::importSliceMarkers()
+{
+    const auto* cue = selected();
+
+    if (cue == nullptr || ! cue->file.existsAsFile())
+        return;
+
+    std::unique_ptr<juce::AudioFormatReader> reader (engine.getFormatManager().createReaderFor (cue->file));
+
+    if (reader == nullptr || reader->sampleRate <= 0.0)
+        return;
+
+    // WAV / AIFF cue points ("NumCuePoints", "CueNOffset") become slice markers
+    std::vector<Slice> slices;
+    const int numCues = reader->metadataValues.getValue ("NumCuePoints", "0").getIntValue();
+
+    for (int i = 0; i < numCues; ++i)
+    {
+        const auto offset = reader->metadataValues.getValue ("Cue" + juce::String (i) + "Offset", "");
+
+        if (offset.isEmpty())
+            continue;
+
+        slices.push_back ({ offset.getDoubleValue() / reader->sampleRate, 1 });
+    }
+
+    if (slices.empty())
+    {
+        if (onStatus)
+            onStatus (ko ("파일에 큐 마커가 없습니다"), true);
+
+        return;
+    }
+
+    commitSlices (slices, 1, true);
+    refresh();
+}
+
 void TimeLoopsPanel::commitEnvelope (const Envelope& envelope, bool finished)
 {
     const auto* cue = selected();
@@ -393,6 +453,10 @@ void TimeLoopsPanel::showContextMenu (juce::Point<int> screenPosition)
     menu.addSeparator();
     menu.addItem (3, ko ("구간에 맞춰 줌"));
     menu.addItem (4, ko ("전체 보기"));
+    menu.addSeparator();
+    menu.addItem (5, ko ("커서에 슬라이스 마커 추가 (M)"));
+    menu.addItem (6, ko ("슬라이스 마커 전부 삭제"), ! cue->audio.slices.empty());
+    menu.addItem (7, ko ("파일의 큐 마커를 슬라이스로 가져오기"), hasFile);
 
     juce::Component::SafePointer<TimeLoopsPanel> safeThis (this);
     menu.showMenuAsync (juce::PopupMenu::Options().withTargetScreenArea ({ screenPosition.x, screenPosition.y, 1, 1 }),
@@ -409,6 +473,12 @@ void TimeLoopsPanel::showContextMenu (juce::Point<int> screenPosition)
             safeThis->waveform.zoomToRegion();
         else if (result == 4)
             safeThis->waveform.zoomToFit();
+        else if (result == 5)
+            safeThis->waveform.addSliceAtCursor();
+        else if (result == 6)
+            safeThis->waveform.clearSlices();
+        else if (result == 7)
+            safeThis->importSliceMarkers();
         else if (result == 100)
             safeThis->waveform.setViewChannel (-1);
         else if (result > 100)

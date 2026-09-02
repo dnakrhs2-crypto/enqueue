@@ -45,6 +45,15 @@ public:
     std::function<void (const Envelope& envelope, bool finished)> onEnvelopeChanged;
     /** Right-click. The owner shows the menu (it knows about editors / the explorer). */
     std::function<void (juce::Point<int> screenPosition)> onContextMenu;
+    /** Slice markers / counts edited (M adds one at the cursor, drag moves, double-click edits the count,
+        Delete removes). 'finished' is false while a drag is in progress. */
+    std::function<void (const std::vector<Slice>& slices, int firstSliceCount, bool finished)> onSlicesChanged;
+
+    /** Adds a slice marker at the cursor (M). */
+    void addSliceAtCursor();
+    void clearSlices();
+    /** Asks for the play count of the slice 'index' (-1 = the first slice) with a small dialog. */
+    void editSliceCount (int index);
 
     void paint (juce::Graphics& g) override;
     void resized() override;
@@ -53,13 +62,14 @@ public:
     void mouseUp (const juce::MouseEvent& e) override;
     void mouseMove (const juce::MouseEvent& e) override;
     void mouseExit (const juce::MouseEvent& e) override;
+    void mouseDoubleClick (const juce::MouseEvent& e) override;
     void mouseWheelMove (const juce::MouseEvent& e, const juce::MouseWheelDetails& wheel) override;
     bool keyPressed (const juce::KeyPress& key) override;
 
     static constexpr double minRegionSeconds = 0.01;
 
 private:
-    enum class Drag { none, startHandle, endHandle, envelopePoint };
+    enum class Drag { none, startHandle, endHandle, envelopePoint, sliceMarker };
 
     void changeListenerCallback (juce::ChangeBroadcaster*) override;
     void scrollBarMoved (juce::ScrollBar*, double newRangeStart) override;
@@ -84,6 +94,12 @@ private:
     void drawRuler (juce::Graphics& g) const;
     void drawEnvelope (juce::Graphics& g) const;
     void drawHandles (juce::Graphics& g) const;
+    void drawSlices (juce::Graphics& g) const;
+    /** Marker index under the position (its line or badge), -2 = the first-slice badge, -1 = none. */
+    int findSliceNear (juce::Point<float> position) const noexcept;
+    juce::Rectangle<float> sliceBadge (double seconds, int count) const noexcept;
+    void commitSlices (bool finished);
+    static juce::String countText (int count);
 
     juce::AudioFormatManager& formats;
     juce::AudioThumbnail thumbnail;
@@ -100,6 +116,9 @@ private:
 
     Drag drag = Drag::none;
     int selectedPoint = -1;
+    int selectedSlice = -1;   // marker index; -2 = the first slice's badge
+    int hoverSlice = -1;
+    bool sliceDirty = false;
     int hoverPoint = -1;
     bool hoverStart = false, hoverEnd = false;
     bool envelopeDirty = false;

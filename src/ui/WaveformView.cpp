@@ -21,6 +21,7 @@ namespace
     const juce::Colour handleCol    { 0xffb0b0b8 };
     const juce::Colour cursorCol    { 0xffd0d0d8 };
     const juce::Colour playheadCol  { 0xffff5555 };
+    const juce::Colour sliceCol     { 0xff5fd36b };
 
     double niceTickInterval (double secondsPerPixel, int minPixels)
     {
@@ -324,6 +325,7 @@ void WaveformView::paint (juce::Graphics& g)
     }
 
     drawEnvelope (g);
+    drawSlices (g);
     drawHandles (g);
 
     // playhead
@@ -428,6 +430,188 @@ void WaveformView::drawEnvelope (juce::Graphics& g) const
     }
 }
 
+juce::String WaveformView::countText (int count)
+{
+    if (count < 0)
+        return juce::String::fromUTF8 ("\xE2\x88\x9E");   // ∞
+
+    if (count == 0)
+        return ko ("건너뜀");
+
+    return "x" + juce::String (count);
+}
+
+juce::Rectangle<float> WaveformView::sliceBadge (double seconds, int count) const noexcept
+{
+    const float x = xForTime (seconds);
+    const float w = count == 0 ? 44.0f : 30.0f;
+    return { x + 2.0f, (float) waveArea.getY() + 2.0f, w, 14.0f };
+}
+
+void WaveformView::drawSlices (juce::Graphics& g) const
+{
+    if (! hasCue || cue.audio.slices.empty())
+        return;
+
+    g.setFont (juce::Font (juce::FontOptions (11.0f)));
+
+    auto drawBadge = [&] (double seconds, int count, bool selected, bool hovered)
+    {
+        const auto r = sliceBadge (seconds, count);
+
+        if (r.getRight() < (float) waveArea.getX() || r.getX() > (float) waveArea.getRight())
+            return;
+
+        g.setColour (selected ? juce::Colours::white : (hovered ? sliceCol.brighter (0.4f) : sliceCol));
+        g.fillRoundedRectangle (r, 3.0f);
+        g.setColour (juce::Colours::black);
+        g.drawFittedText (countText (count), r.toNearestInt(), juce::Justification::centred, 1);
+    };
+
+    // the first slice's count sits at the region start
+    drawBadge (regionStart(), cue.audio.firstSliceCount, selectedSlice == -2, hoverSlice == -2);
+
+    for (int i = 0; i < (int) cue.audio.slices.size(); ++i)
+    {
+        const auto& s = cue.audio.slices[(size_t) i];
+        const float x = xForTime (s.seconds);
+
+        if (x < (float) waveArea.getX() || x > (float) waveArea.getRight())
+            continue;
+
+        const bool selected = selectedSlice == i;
+        const bool hovered = hoverSlice == i;
+        g.setColour (selected ? juce::Colours::white : (hovered ? sliceCol.brighter (0.4f) : sliceCol.withAlpha (0.85f)));
+        g.drawLine (x, (float) waveArea.getY(), x, (float) waveArea.getBottom(), selected || hovered ? 2.0f : 1.0f);
+
+        juce::Path top;   // a small downward triangle at the top of the marker
+        top.addTriangle (x - 5.0f, (float) waveArea.getY(), x + 5.0f, (float) waveArea.getY(), x, (float) waveArea.getY() + 7.0f);
+        g.fillPath (top);
+        drawBadge (s.seconds, s.playCount, selected, hovered);
+    }
+}
+
+int WaveformView::findSliceNear (juce::Point<float> position) const noexcept
+{
+    if (! hasCue || cue.audio.slices.empty())
+        return -1;
+
+    for (int i = 0; i < (int) cue.audio.slices.size(); ++i)
+    {
+        const auto& s = cue.audio.slices[(size_t) i];
+
+        if (sliceBadge (s.seconds, s.playCount).expanded (2.0f).contains (position))
+            return i;
+
+        if (std::abs (xForTime (s.seconds) - position.x) <= hitRadius && position.y < (float) waveArea.getY() + 24.0f)
+            return i;
+    }
+
+    if (sliceBadge (regionStart(), cue.audio.firstSliceCount).expanded (2.0f).contains (position))
+        return -2;
+
+    return -1;
+}
+
+void WaveformView::commitSlices (bool finished)
+{
+    if (onSlicesChanged)
+        onSlicesChanged (cue.audio.slices, cue.audio.firstSliceCount, finished);
+}
+
+void WaveformView::addSliceAtCursor()
+{
+    if (! hasCue)
+        return;
+
+    const double t = juce::jlimit (regionStart(), regionEnd(), cursor);
+
+    if (t <= regionStart() + Slice::minGapSeconds || t >= regionEnd() - Slice::minGapSeconds)
+        return;
+
+    for (const auto& s : cue.audio.slices)
+        if (std::abs (s.seconds - t) < Slice::minGapSeconds)
+            return;
+
+    if ((int) cue.audio.slices.size() >= AudioCueData::maxSlices)
+        return;
+
+    cue.audio.slices.push_back ({ t, 1 });
+    cue.audio.sanitiseSlices (fileLength());
+
+    for (int i = 0; i < (int) cue.audio.slices.size(); ++i)
+        if (juce::approximatelyEqual (cue.audio.slices[(size_t) i].seconds, t))
+            selectedSlice = i;
+
+    commitSlices (true);
+    repaint();
+}
+
+void WaveformView::clearSlices()
+{
+    if (! hasCue || cue.audio.slices.empty())
+        return;
+
+    cue.audio.slices.clear();
+    cue.audio.firstSliceCount = 1;
+    selectedSlice = -1;
+    commitSlices (true);
+    repaint();
+}
+
+void WaveformView::editSliceCount (int index)
+{
+    if (! hasCue || (index >= 0 && index >= (int) cue.audio.slices.size()))
+        return;
+
+    const int current = index < 0 ? cue.audio.firstSliceCount : cue.audio.slices[(size_t) index].playCount;
+    auto* alert = new juce::AlertWindow (ko ("슬라이스 재생 횟수"),
+                                         ko ("이 슬라이스를 몇 번 재생할까요? (0 = 건너뜀, x 또는 inf = 무한)"),
+                                         juce::MessageBoxIconType::NoIcon, this);
+    alert->addTextEditor ("count", current < 0 ? "x" : juce::String (current), ko ("횟수"));
+    alert->addButton (ko ("적용"), 1, juce::KeyPress (juce::KeyPress::returnKey));
+    alert->addButton (ko ("취소"), 0, juce::KeyPress (juce::KeyPress::escapeKey));
+    alert->setVisible (true);
+
+    juce::Component::SafePointer<WaveformView> safeThis (this);
+    alert->enterModalState (true, juce::ModalCallbackFunction::create ([safeThis, alert, index] (int result)
+    {
+        if (safeThis == nullptr || result != 1 || ! safeThis->hasCue)
+            return;
+
+        const auto text = alert->getTextEditorContents ("count").trim().toLowerCase();
+        int count;
+
+        if (text == "x" || text.startsWith ("inf") || text == juce::String::fromUTF8 ("\xE2\x88\x9E") || text == juce::String::fromUTF8 ("\xEB\xAC\xB4\xED\x95\x9C"))
+            count = -1;
+        else
+            count = juce::jlimit (0, Slice::maxCount, text.getIntValue());
+
+        if (index < 0)
+            safeThis->cue.audio.firstSliceCount = count;
+        else if (index < (int) safeThis->cue.audio.slices.size())
+            safeThis->cue.audio.slices[(size_t) index].playCount = count;
+
+        safeThis->commitSlices (true);
+        safeThis->repaint();
+    }), true);
+    alert->toFront (true);
+
+    if (auto* editor = alert->getTextEditor ("count"))
+        editor->grabKeyboardFocus();
+}
+
+void WaveformView::mouseDoubleClick (const juce::MouseEvent& e)
+{
+    if (! hasCue)
+        return;
+
+    const int hit = findSliceNear (e.position);
+
+    if (hit == -2 || hit >= 0)
+        editSliceCount (hit == -2 ? -1 : hit);
+}
+
 void WaveformView::drawHandles (juce::Graphics& g) const
 {
     if (! hasCue)
@@ -458,6 +642,16 @@ void WaveformView::drawHandles (juce::Graphics& g) const
 //==============================================================================
 void WaveformView::mouseMove (const juce::MouseEvent& e)
 {
+    {
+        const int slice = hasCue ? findSliceNear (e.position) : -1;
+
+        if (slice != hoverSlice)
+        {
+            hoverSlice = slice;
+            repaint();
+        }
+    }
+
     if (! hasCue)
         return;
 
@@ -509,6 +703,15 @@ void WaveformView::mouseDown (const juce::MouseEvent& e)
 
     mouseMove (e);
 
+    if (const int slice = findSliceNear (e.position); slice == -2 || slice >= 0)
+    {
+        selectedSlice = slice;
+        selectedPoint = -1;
+        drag = slice >= 0 ? Drag::sliceMarker : Drag::none;
+        repaint();
+        return;
+    }
+
     if (hoverStart)
     {
         drag = Drag::startHandle;
@@ -556,6 +759,7 @@ void WaveformView::mouseDown (const juce::MouseEvent& e)
 
     cursor = juce::jlimit (0.0, fileLength(), timeForX (e.position.x));
     selectedPoint = -1;
+    selectedSlice = -1;
     repaint();
 }
 
@@ -582,6 +786,19 @@ void WaveformView::mouseDrag (const juce::MouseEvent& e)
 
         if (onTrimChanged)
             onTrimChanged (cue.audio.startSeconds, cue.audio.endSeconds, false);
+    }
+    else if (drag == Drag::sliceMarker && selectedSlice >= 0 && selectedSlice < (int) cue.audio.slices.size())
+    {
+        // dragged well above the waveform: the marker is removed on release
+        auto& s = cue.audio.slices[(size_t) selectedSlice];
+        const double lo = selectedSlice > 0 ? cue.audio.slices[(size_t) selectedSlice - 1].seconds + Slice::minGapSeconds : regionStart() + Slice::minGapSeconds;
+        const double hi = selectedSlice + 1 < (int) cue.audio.slices.size() ? cue.audio.slices[(size_t) selectedSlice + 1].seconds - Slice::minGapSeconds : regionEnd() - Slice::minGapSeconds;
+
+        if (hi > lo)
+            s.seconds = juce::jlimit (lo, hi, t);
+
+        sliceDirty = true;
+        commitSlices (false);
     }
     else if (drag == Drag::envelopePoint && selectedPoint >= 0)
     {
@@ -619,8 +836,13 @@ void WaveformView::mouseUp (const juce::MouseEvent&)
     {
         commitEnvelope (true);
     }
+    else if (drag == Drag::sliceMarker && sliceDirty)
+    {
+        commitSlices (true);
+    }
 
     envelopeDirty = false;
+    sliceDirty = false;
     drag = Drag::none;
     repaint();
 }
@@ -702,6 +924,22 @@ bool WaveformView::keyPressed (const juce::KeyPress& key)
         if (onTrimChanged)
             onTrimChanged (cue.audio.startSeconds, cue.audio.endSeconds, true);
 
+        repaint();
+        return true;
+    }
+
+    if (key.isKeyCode ('M') && ! mods.isAnyModifierKeyDown())
+    {
+        addSliceAtCursor();
+        return true;
+    }
+
+    if ((key.isKeyCode (juce::KeyPress::deleteKey) || key.isKeyCode (juce::KeyPress::backspaceKey)) && selectedSlice >= 0
+        && selectedSlice < (int) cue.audio.slices.size())
+    {
+        cue.audio.slices.erase (cue.audio.slices.begin() + selectedSlice);
+        selectedSlice = -1;
+        commitSlices (true);
         repaint();
         return true;
     }

@@ -120,6 +120,22 @@ namespace
         obj->setProperty ("end", a.endSeconds);
         obj->setProperty ("playCount", a.playCount);
         obj->setProperty ("infiniteLoop", a.infiniteLoop);
+
+        if (! a.slices.empty())
+        {
+            juce::Array<juce::var> slices;
+
+            for (const auto& s : a.slices)
+            {
+                juce::Array<juce::var> pair;
+                pair.add (s.seconds);
+                pair.add (s.playCount);
+                slices.add (juce::var (pair));
+            }
+
+            obj->setProperty ("slices", juce::var (slices));
+            obj->setProperty ("firstSliceCount", a.firstSliceCount);
+        }
         obj->setProperty ("rate", a.rate);
         obj->setProperty ("preservePitch", a.preservePitch);
         obj->setProperty ("envelope", envelopeToVar (a.envelope));
@@ -133,6 +149,13 @@ namespace
         a.endSeconds    = (double) v.getProperty ("end", -1.0);
         a.playCount     = intProperty (v, "playCount", 1);
         a.infiniteLoop  = (bool) v.getProperty ("infiniteLoop", false);
+
+        if (const auto* slices = v.getProperty ("slices", juce::var()).getArray())
+            for (const auto& item : *slices)
+                if (const auto* pair = item.getArray(); pair != nullptr && pair->size() >= 2)
+                    a.slices.push_back ({ (double) (*pair)[0], (int) (*pair)[1] });
+
+        a.firstSliceCount = intProperty (v, "firstSliceCount", 1);
         a.rate          = (double) v.getProperty ("rate", 1.0);
         a.preservePitch = (bool) v.getProperty ("preservePitch", false);
         a.envelope      = envelopeFromVar (v.getProperty ("envelope", juce::var()));

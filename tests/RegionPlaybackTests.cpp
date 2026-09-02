@@ -1,4 +1,5 @@
 #include "audio/AudioEngine.h"
+#include "model/ProjectSerializer.h"
 
 #include <juce_audio_formats/juce_audio_formats.h>
 #include <juce_core/juce_core.h>
@@ -447,6 +448,135 @@ public:
             expect (! buffered.isPlaying (cue.id));
             expectWithinAbsoluteError (blocksToSeconds (loud), 0.6, blocksToSeconds (3));
             buffered.shutdown();
+        }
+
+        beginTest ("slices: play counts per slice, skipped slices, total length");
+        {
+            // three 0.2 s sections at different levels: 0.5 / 0.25 / 0.125
+            const auto sliced = dir.getChildFile ("sliced.wav");
+            {
+                juce::WavAudioFormat wav;
+                std::unique_ptr<juce::OutputStream> stream (sliced.createOutputStream());
+                auto writer = wav.createWriterFor (stream, juce::AudioFormatWriterOptions().withSampleRate (sampleRate).withNumChannels (2).withBitsPerSample (16));
+                expect (writer != nullptr);
+                const int n = (int) (0.6 * sampleRate);
+                juce::AudioBuffer<float> buffer (2, n);
+
+                for (int ch = 0; ch < 2; ++ch)
+                    for (int i = 0; i < n; ++i)
+                    {
+                        const float amp = i < 0.2 * sampleRate ? 0.5f : i < 0.4 * sampleRate ? 0.25f : 0.125f;
+                        buffer.setSample (ch, i, amp * (float) std::sin (2.0 * juce::MathConstants<double>::pi * 440.0 * i / sampleRate));
+                    }
+
+                expect (writer->writeFromAudioSampleBuffer (buffer, 0, n));
+            }
+
+            Cue cue;
+            cue.file = sliced;
+            cue.durationSeconds = 0.6;
+            cue.audio.firstSliceCount = 2;                 // [0, 0.2) twice
+            cue.audio.slices = { { 0.2, 0 }, { 0.4, 1 } };  // [0.2, 0.4) skipped, [0.4, 0.6) once
+            cue.sanitise();
+            expectWithinAbsoluteError (cue.effectiveLength(), 0.6, 1e-9);
+
+            expect (engine.play (cue));
+            const auto info = engine.getPlayingCues();
+            expectEquals ((int) info.size(), 1);
+            expectWithinAbsoluteError (info[0].lengthSeconds, 0.6, 0.001);
+
+            // 0.4 s of the loud section (rms 0.354), then 0.2 s of the quiet one (0.088), then nothing
+            std::vector<float> levels;
+            int rendered = 0;
+
+            for (int i = 0; i < 80; ++i)
+            {
+                engine.renderBlock (out, blockSize);
+                ++rendered;
+                levels.push_back (rms (out));
+                engine.reapFinishedPlayers();
+
+                if (! engine.isPlaying (cue.id))
+                    break;
+            }
+
+            const int loudBlocks = (int) (0.4 * sampleRate / blockSize);
+            expectWithinAbsoluteError (levels[(size_t) (loudBlocks / 2)], 0.3536f, 0.02f);
+            expectWithinAbsoluteError (levels[(size_t) (loudBlocks + 8)], 0.0884f, 0.01f);
+            expectWithinAbsoluteError (blocksToSeconds (rendered), 0.6, 0.05);
+            expect (! engine.isPlaying (cue.id));
+
+            beginTest ("slices: an endless slice loops until devamp, then the next slice follows");
+            Cue endless;
+            endless.file = sliced;
+            endless.durationSeconds = 0.6;
+            endless.audio.firstSliceCount = 1;
+            endless.audio.slices = { { 0.2, -1 }, { 0.4, 1 } };
+            endless.sanitise();
+            expectWithinAbsoluteError (endless.effectiveLength(), -1.0, 1e-9);
+            expect (engine.play (endless));
+            expect (engine.getPlayingCues()[0].lengthSeconds < 0.0);
+
+            for (int i = 0; i < (int) (1.0 * sampleRate / blockSize); ++i)   // 1 s: well inside the endless middle section
+                engine.renderBlock (out, blockSize);
+
+            expectWithinAbsoluteError (rms (out), 0.1768f, 0.02f);
+            expect (engine.isPlaying (endless.id));
+            engine.finishCurrentPass (endless.id);   // devamp: finish this pass of the middle slice, then the last slice
+
+            levels.clear();
+            rendered = 0;
+
+            for (int i = 0; i < 80; ++i)
+            {
+                engine.renderBlock (out, blockSize);
+                ++rendered;
+                levels.push_back (rms (out));
+                engine.reapFinishedPlayers();
+
+                if (! engine.isPlaying (endless.id))
+                    break;
+            }
+
+            expect (! engine.isPlaying (endless.id));
+            expect (blocksToSeconds (rendered) < 0.45);   // at most the rest of the pass (< 0.2 s) + the last slice (0.2 s)
+            bool sawQuiet = false;
+
+            for (float l : levels)
+                if (std::abs (l - 0.0884f) < 0.012f)
+                    sawQuiet = true;
+
+            expect (sawQuiet);   // the last slice was played after the devamp
+
+            beginTest ("slices: every slice skipped is refused with a message");
+            Cue none;
+            none.file = sliced;
+            none.audio.firstSliceCount = 0;
+            none.audio.slices = { { 0.3, 0 } };
+            juce::String error;
+            expect (! engine.play (none, &error));
+            expect (error.isNotEmpty());
+
+            beginTest ("slice markers sanitise: sorted, min gap, clamped counts, serialised");
+            Cue messy;
+            messy.file = sliced;
+            messy.durationSeconds = 0.6;
+            messy.audio.slices = { { 0.5, 5 }, { 0.1, -3 }, { 0.12, 2 }, { 0.3, 20000 } };
+            messy.audio.firstSliceCount = -7;
+            messy.sanitise();
+            expectEquals ((int) messy.audio.slices.size(), 3);   // 0.12 collapsed into 0.1
+            expectWithinAbsoluteError (messy.audio.slices[0].seconds, 0.1, 1e-9);
+            expectEquals (messy.audio.slices[0].playCount, -1);
+            expectEquals (messy.audio.slices[1].playCount, Slice::maxCount);
+            expectEquals (messy.audio.firstSliceCount, -1);
+
+            Project p;
+            p.cues.push_back (messy);
+            Project q;
+            expect (ProjectSerializer::fromJson (ProjectSerializer::toJson (p), q, nullptr).wasOk());
+            expectEquals ((int) q.cues[0].audio.slices.size(), 3);
+            expectEquals (q.cues[0].audio.slices[2].playCount, 5);
+            expectEquals (q.cues[0].audio.firstSliceCount, -1);
         }
 
         beginTest ("an empty region is refused with a message");

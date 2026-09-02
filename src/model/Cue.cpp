@@ -34,12 +34,105 @@ double Cue::regionLength() const noexcept
     return std::max (0.0, regionEnd() - regionStart());
 }
 
+void AudioCueData::sanitiseSlices (double fileLengthSeconds) noexcept
+{
+    for (auto& s : slices)
+    {
+        if (! std::isfinite (s.seconds) || s.seconds < 0.0)
+            s.seconds = 0.0;
+
+        if (fileLengthSeconds > 0.0)
+            s.seconds = std::min (s.seconds, fileLengthSeconds);
+
+        s.playCount = juce::jlimit (-1, Slice::maxCount, s.playCount);
+    }
+
+    std::sort (slices.begin(), slices.end(), [] (const Slice& a, const Slice& b) { return a.seconds < b.seconds; });
+
+    // markers closer than the minimum gap collapse into the earlier one
+    std::vector<Slice> kept;
+
+    for (const auto& s : slices)
+    {
+        if (! kept.empty() && s.seconds - kept.back().seconds < Slice::minGapSeconds)
+            continue;
+
+        kept.push_back (s);
+    }
+
+    if ((int) kept.size() > maxSlices)
+        kept.resize ((size_t) maxSlices);
+
+    slices = std::move (kept);
+    firstSliceCount = juce::jlimit (-1, Slice::maxCount, firstSliceCount);
+}
+
+bool AudioCueData::hasEndlessSlice() const noexcept
+{
+    if (! slices.empty() && firstSliceCount < 0)
+        return true;
+
+    for (const auto& s : slices)
+        if (s.playCount < 0)
+            return true;
+
+    return false;
+}
+
+double AudioCueData::sliceSequenceSeconds (double regionStart, double regionEnd) const noexcept
+{
+    if (regionEnd <= regionStart)
+        return 0.0;
+
+    if (slices.empty())
+        return regionEnd - regionStart;
+
+    double total = 0.0;
+    double runStart = regionStart;
+    int runCount = firstSliceCount;
+    bool endless = false;
+
+    auto addRun = [&] (double from, double to, int count)
+    {
+        if (to <= from)
+            return;
+
+        if (count < 0)
+        {
+            endless = true;
+            total += to - from;
+        }
+        else
+        {
+            total += (to - from) * count;
+        }
+    };
+
+    for (const auto& s : slices)
+    {
+        if (s.seconds <= regionStart || s.seconds >= regionEnd)
+            continue;
+
+        addRun (runStart, s.seconds, runCount);
+        runStart = s.seconds;
+        runCount = s.playCount;
+    }
+
+    addRun (runStart, regionEnd, runCount);
+    return endless ? -1.0 : total;
+}
+
 double Cue::passLength() const noexcept
 {
     if (type == CueType::fade)
         return fade.durationSeconds;
 
-    return regionLength() / std::max (AudioCueData::minRate, audio.rate);
+    const double seq = audio.sliceSequenceSeconds (regionStart(), regionEnd());
+
+    if (seq < 0.0)
+        return -1.0;
+
+    return seq / std::max (AudioCueData::minRate, audio.rate);
 }
 
 //==============================================================================
@@ -133,7 +226,10 @@ double Cue::effectiveLength() const noexcept
     if (type == CueType::fade)
         return fade.durationSeconds;
 
-    return audio.infiniteLoop ? -1.0 : passLength() * (double) audio.playCount;
+    if (audio.infiniteLoop || audio.hasEndlessSlice())
+        return -1.0;
+
+    return passLength() * (double) audio.playCount;
 }
 
 void Cue::sanitise() noexcept
@@ -199,6 +295,7 @@ void Cue::sanitise() noexcept
 
     a.rate = juce::jlimit (AudioCueData::minRate, AudioCueData::maxRate, a.rate);
     a.envelope.sanitise();
+    a.sanitiseSlices (durationSeconds);
 }
 
 } // namespace gocue

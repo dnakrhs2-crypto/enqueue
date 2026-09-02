@@ -5,70 +5,274 @@
 namespace gocue
 {
 
+//==============================================================================
+juce::int64 RegionLoopSource::Layout::sequenceLength() const noexcept
+{
+    juce::int64 total = 0;
+
+    for (int i = 0; i < numRuns; ++i)
+        if (runs[i].count > 0)
+            total += runs[i].length * (juce::int64) runs[i].count;
+
+    return total;
+}
+
+bool RegionLoopSource::Layout::hasEndlessRun() const noexcept
+{
+    for (int i = 0; i < numRuns; ++i)
+        if (runs[i].count < 0)
+            return true;
+
+    return false;
+}
+
+juce::int64 RegionLoopSource::Layout::totalLength() const noexcept
+{
+    if (numRuns == 0 || regionLength <= 0)
+        return 0;
+
+    if (hasEndlessRun() || sequenceCount < 0)
+        return infiniteLength;
+
+    return sequenceLength() * (juce::int64) sequenceCount;
+}
+
+RegionLoopSource::Location RegionLoopSource::Layout::locate (juce::int64 pos) const noexcept
+{
+    Location loc;
+    loc.fileSample = regionStart;
+
+    if (numRuns == 0 || regionLength <= 0)
+    {
+        loc.beyondEnd = true;
+        return loc;
+    }
+
+    pos = std::max<juce::int64> (0, pos);
+    const bool endless = hasEndlessRun();
+    const juce::int64 seqLen = sequenceLength();
+    juce::int64 rem = pos;
+
+    if (! endless)
+    {
+        if (seqLen <= 0)
+        {
+            loc.beyondEnd = true;
+            return loc;
+        }
+
+        loc.sequencePass = (int) std::min<juce::int64> (pos / seqLen, std::numeric_limits<int>::max());
+        rem = pos % seqLen;
+
+        if (sequenceCount >= 0 && loc.sequencePass >= sequenceCount)
+        {
+            // past the end: park on the last sample of the last run
+            loc.sequencePass = std::max (0, sequenceCount - 1);
+            loc.beyondEnd = true;
+            rem = seqLen - 1;
+        }
+    }
+
+    for (int i = 0; i < numRuns; ++i)
+    {
+        const auto& r = runs[i];
+
+        if (r.count == 0 || r.length <= 0)
+            continue;
+
+        if (r.count < 0)   // endless: everything from here cycles inside this run
+        {
+            loc.run = i;
+            loc.pass = (int) std::min<juce::int64> (rem / r.length, std::numeric_limits<int>::max());
+            loc.offset = rem % r.length;
+            loc.fileSample = r.fileStart + loc.offset;
+            return loc;
+        }
+
+        const juce::int64 block = r.length * (juce::int64) r.count;
+
+        if (rem < block)
+        {
+            loc.run = i;
+            loc.pass = (int) (rem / r.length);
+            loc.offset = rem % r.length;
+            loc.fileSample = r.fileStart + loc.offset;
+            return loc;
+        }
+
+        rem -= block;
+        loc.run = i;
+        loc.pass = r.count - 1;
+        loc.offset = r.length - 1;
+        loc.fileSample = r.fileStart + loc.offset;
+    }
+
+    loc.beyondEnd = true;   // ran out of runs (only when the sequence is exhausted)
+    return loc;
+}
+
+//==============================================================================
 RegionLoopSource::RegionLoopSource (std::unique_ptr<juce::AudioFormatReader> readerToUse)
     : reader (std::move (readerToUse))
 {
     jassert (reader != nullptr);
-    setRegion (0, reader != nullptr ? reader->lengthInSamples : 0);
+    editRegionEnd = reader != nullptr ? reader->lengthInSamples : 0;
+    rebuildLayout();
 }
 
 RegionLoopSource::~RegionLoopSource() = default;
 
-void RegionLoopSource::setRegion (juce::int64 startSample, juce::int64 endSample) noexcept
+void RegionLoopSource::publish (const Layout& l) noexcept
 {
-    const juce::int64 fileLength = reader != nullptr ? reader->lengthInSamples : 0;
-
-    if (endSample < 0 || endSample > fileLength)
-        endSample = fileLength;
-
-    startSample = std::clamp<juce::int64> (startSample, 0, fileLength);
-
-    regionVersion.fetch_add (1, std::memory_order_acq_rel);          // odd: write in progress
-    regionStart.store (startSample, std::memory_order_relaxed);
-    regionLength.store (std::max<juce::int64> (0, endSample - startSample), std::memory_order_relaxed);
-    regionVersion.fetch_add (1, std::memory_order_acq_rel);          // even: consistent
+    layoutVersion.fetch_add (1, std::memory_order_acq_rel);   // odd: write in progress
+    published = l;
+    layoutVersion.fetch_add (1, std::memory_order_acq_rel);   // even: consistent
 }
 
-void RegionLoopSource::getRegion (juce::int64& startSample, juce::int64& lengthSamples) const noexcept
+RegionLoopSource::Layout RegionLoopSource::snapshot() const noexcept
 {
+    Layout copy;
+
     for (;;)
     {
-        const auto v1 = regionVersion.load (std::memory_order_acquire);
+        const auto v1 = layoutVersion.load (std::memory_order_acquire);
 
         if ((v1 & 1u) != 0)
             continue;
 
-        startSample = regionStart.load (std::memory_order_relaxed);
-        lengthSamples = regionLength.load (std::memory_order_relaxed);
+        copy = published;
 
-        if (regionVersion.load (std::memory_order_acquire) == v1)
-            return;
+        if (layoutVersion.load (std::memory_order_acquire) == v1)
+            return copy;
     }
 }
 
-juce::int64 RegionLoopSource::getRegionStart() const noexcept
+void RegionLoopSource::rebuildLayout()
 {
-    juce::int64 s, l;
-    getRegion (s, l);
-    return s;
+    const juce::int64 fileLength = reader != nullptr ? reader->lengthInSamples : 0;
+    juce::int64 start = std::clamp<juce::int64> (editRegionStart, 0, fileLength);
+    juce::int64 end = editRegionEnd < 0 || editRegionEnd > fileLength ? fileLength : editRegionEnd;
+    end = std::max (start, end);
+
+    Layout l;
+    l.regionStart = start;
+    l.regionLength = end - start;
+    l.sequenceCount = resolvedSequenceCount >= 0 ? resolvedSequenceCount : (editLoopForever ? -1 : std::max (1, editPlayCount));
+
+    // slice boundaries inside the region, sorted, unique
+    std::vector<SliceMarker> markers;
+
+    for (const auto& m : editSlices)
+        if (m.fileSample > start && m.fileSample < end)
+            markers.push_back (m);
+
+    std::sort (markers.begin(), markers.end(), [] (const SliceMarker& a, const SliceMarker& b) { return a.fileSample < b.fileSample; });
+    markers.erase (std::unique (markers.begin(), markers.end(), [] (const SliceMarker& a, const SliceMarker& b) { return a.fileSample == b.fileSample; }), markers.end());
+
+    if ((int) markers.size() > maxRuns - 2)
+        markers.resize ((size_t) (maxRuns - 2));
+
+    // run i starts at marker i-1 (or the region start) and plays that slice's count
+    juce::int64 runStart = start;
+    int runCount = markers.empty() ? 1 : editFirstSliceCount;
+    auto pushRun = [&] (juce::int64 from, juce::int64 to, int count)
+    {
+        if (to <= from || l.numRuns >= maxRuns)
+            return;
+
+        const int index = l.numRuns;
+
+        if (index < (int) resolvedCounts.size() && resolvedCounts[(size_t) index] >= 0)
+            count = resolvedCounts[(size_t) index];   // fixed by a devamp
+
+        l.runs[index] = { from, to - from, count };
+        ++l.numRuns;
+    };
+
+    if (markers.empty())
+    {
+        // one slice: the classic region loop. Its count is the sequence count (keeps run 0 semantics for devamp).
+        pushRun (start, end, 1);
+    }
+    else
+    {
+        for (const auto& m : markers)
+        {
+            pushRun (runStart, m.fileSample, runCount);
+            runStart = m.fileSample;
+            runCount = m.playCount;
+        }
+
+        pushRun (runStart, end, runCount);
+    }
+
+    if (markers.empty() && l.numRuns == 1)
+    {
+        // no slices: fold the sequence count into the single run so the old pass semantics hold
+        if (l.runs[0].count == 1 && ! (resolvedCounts.size() > 0 && resolvedCounts[0] >= 0))
+            l.runs[0].count = l.sequenceCount;
+
+        l.sequenceCount = 1;
+    }
+
+    publish (l);
 }
 
-juce::int64 RegionLoopSource::getRegionLength() const noexcept
+void RegionLoopSource::setRegion (juce::int64 startSample, juce::int64 endSample) noexcept
 {
-    juce::int64 s, l;
-    getRegion (s, l);
-    return l;
+    editRegionStart = startSample;
+    editRegionEnd = endSample;
+    rebuildLayout();
 }
 
 void RegionLoopSource::setPlayCount (int count, bool shouldLoopForever) noexcept
 {
-    playCount.store (std::max (1, count), std::memory_order_relaxed);
-    loopForever.store (shouldLoopForever, std::memory_order_relaxed);
+    editPlayCount = std::max (1, count);
+    editLoopForever = shouldLoopForever;
+    rebuildLayout();
+}
+
+void RegionLoopSource::setSlices (const std::vector<SliceMarker>& markers, int firstSliceCount)
+{
+    editSlices = markers;
+    editFirstSliceCount = std::max (-1, firstSliceCount);
+    rebuildLayout();
+}
+
+void RegionLoopSource::finishCurrentPass (juce::int64 virtualPosition) noexcept
+{
+    const auto l = snapshot();
+    const auto loc = l.locate (virtualPosition);
+
+    if (loc.beyondEnd || loc.run >= l.numRuns)
+        return;
+
+    if (l.runs[loc.run].count < 0)
+    {
+        if ((int) resolvedCounts.size() < l.numRuns)
+            resolvedCounts.resize ((size_t) l.numRuns, -1);
+
+        resolvedCounts[(size_t) loc.run] = loc.pass + 1;
+    }
+    else if (l.sequenceCount < 0)
+    {
+        resolvedSequenceCount = loc.sequencePass + 1;
+    }
+    else
+    {
+        return;   // nothing endless to finish
+    }
+
+    rebuildLayout();
 }
 
 void RegionLoopSource::setEndAfterPass (int pass) noexcept
 {
-    endAfterPass.store (std::max (0, pass), std::memory_order_relaxed);
+    if (resolvedCounts.empty())
+        resolvedCounts.assign (1, -1);
+
+    resolvedCounts[0] = std::max (0, pass) + 1;
+    rebuildLayout();
 }
 
 void RegionLoopSource::setEnvelope (const Envelope& newEnvelope)
@@ -77,44 +281,75 @@ void RegionLoopSource::setEnvelope (const Envelope& newEnvelope)
     envelope.sanitise();
 }
 
-bool RegionLoopSource::isInfinite() const noexcept
+//==============================================================================
+void RegionLoopSource::getRegion (juce::int64& startSample, juce::int64& lengthSamples) const noexcept
 {
-    return loopForever.load (std::memory_order_relaxed) && endAfterPass.load (std::memory_order_relaxed) < 0;
+    const auto l = snapshot();
+    startSample = l.regionStart;
+    lengthSamples = l.regionLength;
 }
 
-int RegionLoopSource::getPassIndexFor (juce::int64 position) const noexcept
+juce::int64 RegionLoopSource::getRegionStart() const noexcept
 {
-    const auto len = getRegionLength();
-    return len > 0 && position > 0 ? (int) (position / len) : 0;
+    return snapshot().regionStart;
+}
+
+juce::int64 RegionLoopSource::getRegionLength() const noexcept
+{
+    return snapshot().regionLength;
+}
+
+bool RegionLoopSource::isInfinite() const noexcept
+{
+    const auto l = snapshot();
+    return l.hasEndlessRun() || l.sequenceCount < 0;
+}
+
+RegionLoopSource::Location RegionLoopSource::locate (juce::int64 virtualPosition) const noexcept
+{
+    return snapshot().locate (virtualPosition);
 }
 
 juce::int64 RegionLoopSource::getOffsetFor (juce::int64 position) const noexcept
 {
-    const auto len = getRegionLength();
-    return len > 0 && position > 0 ? position % len : 0;
+    const auto l = snapshot();
+    const auto loc = l.locate (position);
+    return std::max<juce::int64> (0, loc.fileSample - l.regionStart);
 }
 
-juce::int64 RegionLoopSource::totalLengthFor (juce::int64 len) const noexcept
+juce::int64 RegionLoopSource::virtualPositionFor (juce::int64 fileSample, int passHint) const noexcept
 {
-    if (len <= 0)
-        return 0;
+    const auto l = snapshot();
+    juce::int64 base = 0;
 
-    const int lastPass = endAfterPass.load (std::memory_order_relaxed);
+    for (int i = 0; i < l.numRuns; ++i)
+    {
+        const auto& r = l.runs[i];
 
-    if (lastPass >= 0)
-        return ((juce::int64) lastPass + 1) * len;
+        if (r.count == 0 || r.length <= 0)
+            continue;
 
-    if (loopForever.load (std::memory_order_relaxed))
-        return infiniteLength;
+        if (fileSample >= r.fileStart && fileSample < r.fileStart + r.length)
+        {
+            const int pass = r.count < 0 ? std::max (0, passHint) : std::clamp (passHint, 0, r.count - 1);
+            return base + (juce::int64) pass * r.length + (fileSample - r.fileStart);
+        }
 
-    return (juce::int64) playCount.load (std::memory_order_relaxed) * len;
+        if (r.count < 0)
+            return base;   // an endless run before the sample: the sample is unreachable, start of the run
+
+        base += r.length * (juce::int64) r.count;
+    }
+
+    return std::max<juce::int64> (0, std::min (base, std::max<juce::int64> (0, l.totalLength() - 1)));
 }
 
 juce::int64 RegionLoopSource::getTotalLength() const
 {
-    return totalLengthFor (getRegionLength());
+    return snapshot().totalLength();
 }
 
+//==============================================================================
 void RegionLoopSource::getNextAudioBlock (const juce::AudioSourceChannelInfo& info)
 {
     info.clearActiveBufferRegion();
@@ -122,16 +357,15 @@ void RegionLoopSource::getNextAudioBlock (const juce::AudioSourceChannelInfo& in
     const juce::int64 startPosition = nextPosition.load (std::memory_order_relaxed);
     nextPosition.store (startPosition + info.numSamples, std::memory_order_relaxed);
 
-    juce::int64 start, len;
-    getRegion (start, len);   // one consistent pair for the whole block
+    const auto l = snapshot();   // one consistent layout for the whole block
 
-    if (reader == nullptr || len <= 0 || info.buffer == nullptr)
+    if (reader == nullptr || l.regionLength <= 0 || l.numRuns == 0 || info.buffer == nullptr)
     {
         reachedEnd.store (true, std::memory_order_relaxed);
         return;
     }
 
-    const auto total = totalLengthFor (len);
+    const auto total = l.totalLength();
     juce::int64 pos = startPosition;
     int dest = info.startSample;
     int remaining = info.numSamples;
@@ -153,8 +387,22 @@ void RegionLoopSource::getNextAudioBlock (const juce::AudioSourceChannelInfo& in
             continue;
         }
 
-        const juce::int64 offset = pos % len;
-        const int chunk = (int) std::min<juce::int64> ({ (juce::int64) remaining, len - offset, total - pos });
+        const auto loc = l.locate (pos);
+
+        if (loc.beyondEnd)
+        {
+            reachedEnd.store (true, std::memory_order_relaxed);
+            break;
+        }
+
+        const auto& run = l.runs[loc.run];
+        const int chunk = (int) std::min<juce::int64> ({ (juce::int64) remaining, run.length - loc.offset, total - pos });
+
+        if (chunk <= 0)
+        {
+            reachedEnd.store (true, std::memory_order_relaxed);
+            break;
+        }
 
         {
             // every file channel into its own buffer channel (no stereo duplication: the level matrix routes)
@@ -165,7 +413,7 @@ void RegionLoopSource::getNextAudioBlock (const juce::AudioSourceChannelInfo& in
             for (int ch = 0; ch < numCh; ++ch)
                 dests[ch] = info.buffer->getWritePointer (ch, dest);
 
-            reader->read (reinterpret_cast<int* const*> (dests), numCh, start + offset, chunk, false);
+            reader->read (reinterpret_cast<int* const*> (dests), numCh, loc.fileSample, chunk, false);
 
             if (! reader->usesFloatingPointData)
                 for (int ch = 0; ch < numCh; ++ch)
@@ -173,7 +421,7 @@ void RegionLoopSource::getNextAudioBlock (const juce::AudioSourceChannelInfo& in
         }
 
         if (envelope.isActive())
-            applyEnvelope (*info.buffer, dest, chunk, offset, len);
+            applyEnvelope (*info.buffer, dest, chunk, loc.fileSample - l.regionStart, l.regionLength);
 
         pos += chunk;
         dest += chunk;

@@ -95,6 +95,8 @@ public:
     /** Live trim / rate for a running cue (the inspector while it plays). */
     void setLiveRegion (const juce::Uuid& cueId, double startSeconds, double endSeconds);
     void setLiveRate (const juce::Uuid& cueId, double rate);
+    /** Live slice markers for a running cue. */
+    void setLiveSlices (const juce::Uuid& cueId, const std::vector<Slice>& slices, int firstSliceCount);
     void setLiveGainDb (const juce::Uuid& cueId, double gainDb);
     /** Live level matrix / trim for a running cue (ramped over ~10 ms). */
     void setLiveLevels (const juce::Uuid& cueId, const LevelMatrix& levels, const TrimLevels& trim);
