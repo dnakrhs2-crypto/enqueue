@@ -13,7 +13,8 @@ namespace
 }
 
 //==============================================================================
-class PluginChainComponent::SlotView : public juce::Component
+class PluginChainComponent::SlotView : public juce::Component,
+                                       public juce::SettableTooltipClient
 {
 public:
     SlotView (PluginChainComponent& o, int slotIndex, int slotCount, const PluginChain::Slot& slot)
@@ -31,7 +32,8 @@ public:
         name.setFont (juce::Font (juce::FontOptions (13.0f, juce::Font::bold)));
         name.setColour (juce::Label::textColourId, missing ? Palette::missing : Palette::text);
         name.setMinimumHorizontalScale (0.8f);
-        name.setTooltip (slot.state.fileOrIdentifier);
+        name.setInterceptsMouseClicks (false, false);   // a double-click on the name reaches mouseDoubleClick() below
+        setTooltip (slot.state.fileOrIdentifier);
         addAndMakeVisible (name);
 
         // order = processing order: the sound leaves slot 1 and enters slot 2
@@ -311,19 +313,24 @@ void PluginChainComponent::removeSlot (int index)
 
 void PluginChainComponent::moveSlot (int from, int to)
 {
+    if (chain == nullptr || from < 0 || from >= chain->getNumSlots())
+        return;
+
     // Deferred: the click arrives from a button inside a slot view that refresh() destroys.
     juce::Component::SafePointer<PluginChainComponent> safeThis (this);
     auto* expectedChain = chain;
-    const int expectedCount = chain != nullptr ? chain->getNumSlots() : 0;
+    const int expectedCount = chain->getNumSlots();
+    const PluginChain::Slot* expectedSlot = &chain->getSlot (from);   // the slot objects keep their address across moves
 
-    juce::MessageManager::callAsync ([safeThis, expectedChain, expectedCount, from, to]
+    juce::MessageManager::callAsync ([safeThis, expectedChain, expectedCount, expectedSlot, from, to]
     {
         if (safeThis == nullptr || safeThis->chain == nullptr || safeThis->chain != expectedChain)
             return;
 
-        if (safeThis->chain->getNumSlots() != expectedCount || to < 0 || to >= expectedCount)
+        if (safeThis->chain->getNumSlots() != expectedCount || to < 0 || to >= expectedCount
+            || &safeThis->chain->getSlot (from) != expectedSlot)
         {
-            safeThis->refresh();   // the chain changed underneath us: do not guess
+            safeThis->refresh();   // the chain changed underneath us (another move, an edit elsewhere): do not guess
             return;
         }
 

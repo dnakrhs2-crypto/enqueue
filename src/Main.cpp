@@ -95,6 +95,7 @@ public:
 
         settings = nullptr;
 
+        juce::PopupMenu::dismissAllActiveMenus();             // a menu open at shutdown still references the look and feel
         juce::LookAndFeel::setDefaultLookAndFeel (nullptr);   // after every window is gone
         lookAndFeel = nullptr;
     }

@@ -222,6 +222,7 @@ MainComponent::~MainComponent()
     PluginDialogs::closeAll();
     WorkspaceSettingsDialog::closeIfOpen();
     AudioSettingsDialog::closeIfOpen();
+    PatchEditorDialog::closeIfOpen();   // references the document, engine and plugin windows: before they go
     pluginWindows.closeAll();
     engine.setChainListener (nullptr);
     document.removeListener (this);
