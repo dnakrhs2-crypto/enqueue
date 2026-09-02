@@ -1058,6 +1058,66 @@ public:
             stopEverything();
         }
 
+        beginTest ("cues in an inactive list: hotkeys, control targets and follows reach them; goto switches the list");
+        {
+            // a second list with y (hotkey F9) and z following it
+            document.addContainer ("second", false);
+            document.setActiveContainer (1);
+            Cue y, z;
+            y.name = "y"; y.file = tone; y.hotkey = juce::KeyPress (juce::KeyPress::F9Key).getTextDescription(); y.continueMode = ContinueMode::autoFollow;
+            z.name = "z"; z.file = tone;
+            document.cues.add (y);
+            document.cues.add (z);
+            document.setActiveContainer (0);
+            expectEquals (document.getActiveContainer(), 0);
+            expect (document.cues.indexOf (y.id) < 0);
+
+            now += 1.0;
+            expect (controller.handleHotkey (juce::KeyPress (juce::KeyPress::F9Key)));
+            expect (engine.isPlaying (y.id));
+            engine.stop (y.id);
+            render (engine, scheduler, now, out, 2);
+            expect (engine.isPlaying (z.id));   // the auto-follow ran inside the inactive list
+            stopEverything();
+
+            // a control cue in the active list starting a cue of the other list
+            Cue startY;
+            startY.type = CueType::control;
+            startY.control.kind = ControlKind::start;
+            startY.control.targetId = y.id;
+            startY.name = "start y";
+            document.cues.add (startY);
+            now += 1.0;
+            expect (controller.trigger (startY) == CueController::GoResult::started);
+            expect (engine.isPlaying (y.id));
+            stopEverything();
+
+            // goto across lists brings the other list to the front with the playhead on the target
+            Cue gotoZ;
+            gotoZ.type = CueType::control;
+            gotoZ.control.kind = ControlKind::gotoCue;
+            gotoZ.control.targetId = z.id;
+            gotoZ.name = "goto z";
+            const int gi = document.cues.add (gotoZ);
+            now += 1.0;
+            document.cues.setPlayheadIndex (gi);
+            expect (controller.go() == CueController::GoResult::started);
+            controller.goKeyReleased();
+            expectEquals (document.getActiveContainer(), 1);
+            expectEquals (document.cues.getPlayheadIndex(), document.cues.indexOf (z.id));
+
+            // a cart has no GO
+            document.setContainerCart (1, true, 2, 2);
+            now += 1.0;
+            expect (controller.go() == CueController::GoResult::nothingSelected);
+            document.setContainerCart (1, false, 2, 2);
+            document.setActiveContainer (0);
+            document.removeContainer (1);
+            stopEverything();
+            document.cues.remove (document.cues.indexOf (gotoZ.id));
+            document.cues.remove (document.cues.indexOf (startY.id));
+        }
+
         beginTest ("played cues are remembered for the second colour until reset");
         {
             controller.resetAll();
