@@ -23,6 +23,7 @@ FooterBar::FooterBar()
     showButton.onClick = [this] { if (onShowModeChanged) onShowModeChanged (true); };
     warningsButton.onClick = [this] { if (onWarningsClicked) onWarningsClicked(); };
     warningsButton.setColour (juce::TextButton::buttonColourId, Palette::fadingOut);
+    warningsButton.setColour (juce::TextButton::textColourOffId, Palette::onBright);
     warningsButton.setVisible (false);
 
     countLabel.setColour (juce::Label::textColourId, Palette::dimText);

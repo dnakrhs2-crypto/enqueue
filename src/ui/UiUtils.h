@@ -91,12 +91,14 @@ namespace Palette
     const juce::Colour playingRow   { 0xff2f4a2f };   // status colours as row backgrounds
     const juce::Colour fadingRow    { 0xff4a3520 };
     const juce::Colour pausedRow    { 0xff4a4020 };
-    const juce::Colour missing      { 0xffe8706a };
+    const juce::Colour missing      { 0xfff47f79 };   // error text: 4.4:1 on a row
     const juce::Colour text         { 0xfff5f5f5 };
     const juce::Colour dimText      { 0xffa5a5a5 };
-    const juce::Colour goButton     { 0xff5cb85c };
+    const juce::Colour onBright     { 0xff1b1b1b };   // text on the bright status colours (orange / green / yellow buttons)
+    const juce::Colour goButton     { 0xff429b42 };   // white "GO" reads on it (>= 3:1 with the gradient)
     const juce::Colour stopButton   { 0xffd9534f };
     const juce::Colour outline      { 0xff4d4d4d };
+    const juce::Colour selectionRing { 0xff8fbdf7 };  // the 2 px ring around selected rows: reads on every row colour
     constexpr float cornerRadius = 5.0f;
 
     /** The faint top-to-bottom gradient every button carries. */

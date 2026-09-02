@@ -16,15 +16,16 @@ TransportBar::TransportBar (juce::ApplicationCommandManager& cm)
     addAndMakeVisible (goButton);
 
     pauseButton.setButtonText (ko ("일시정지 (P)"));
-    styleButton (pauseButton, Palette::standby);
+    styleButton (pauseButton, Palette::standby.darker (0.15f));   // white text 4:1
     pauseButton.onClick = [this] { commands.invokeDirectly (CommandIDs::pauseToggle, true); };
 
     fadeOutButton.setButtonText (ko ("페이드아웃 (F)"));
     styleButton (fadeOutButton, Palette::fadingOut);
+    fadeOutButton.setColour (juce::TextButton::textColourOffId, Palette::onBright);   // dark text on orange
     fadeOutButton.onClick = [this] { commands.invokeDirectly (CommandIDs::fadeOutSelected, true); };
 
     panicButton.setButtonText (ko ("전체 페이드 정지 (Esc)"));
-    styleButton (panicButton, Palette::stopButton);
+    styleButton (panicButton, Palette::stopButton.darker (0.12f));   // white text 4:1
     panicButton.onClick = [this] { commands.invokeDirectly (CommandIDs::panicAll, true); };
     setPanicSeconds (panicSeconds);
 

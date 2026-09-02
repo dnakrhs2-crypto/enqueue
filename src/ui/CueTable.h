@@ -54,6 +54,8 @@ public:
     std::function<void (const std::vector<int>& rows, const juce::String& editName, const std::function<void (Cue&)>& mutator)> onEditCues;
     /** A number typed into the 번호 cell: the document renumbers the cue and moves it into numeric order. */
     std::function<void (const juce::Uuid& id, const juce::String& number)> onSetNumber;
+    /** Drag diagnostics for the status line: what the table saw (row drag started / files entered / dropped). */
+    std::function<void (const juce::String& message)> onStatus;
     /** 'O': edit the notes of a row (in the inspector). */
     std::function<void (int row)> onEditNotes;
     /** 'D': the duration lives in the inspector's time tab. */

@@ -56,7 +56,7 @@ public:
         bypass.setButtonText (bypassed ? ko ("비활성") : ko ("활성"));
         bypass.setTooltip (ko ("누르면 활성 ↔ 비활성 (비활성 = 소리가 이 플러그인을 건너뜀)"));
         bypass.setColour (juce::TextButton::buttonColourId, bypassed ? Palette::fadingOut : Palette::playing);
-        bypass.setColour (juce::TextButton::textColourOffId, juce::Colours::white);
+        bypass.setColour (juce::TextButton::textColourOffId, Palette::onBright);   // dark text reads on both
         bypass.setWantsKeyboardFocus (false);
         bypass.onClick = [this] { owner.toggleBypass (index); };
         addAndMakeVisible (bypass);
@@ -69,7 +69,7 @@ public:
 
         remove.setButtonText ("x");
         remove.setTooltip (ko ("삭제"));
-        remove.setColour (juce::TextButton::buttonColourId, Palette::stopButton);
+        remove.setColour (juce::TextButton::buttonColourId, Palette::stopButton.darker (0.12f));
         remove.setWantsKeyboardFocus (false);
         remove.onClick = [this] { owner.removeSlot (index); };
         addAndMakeVisible (remove);

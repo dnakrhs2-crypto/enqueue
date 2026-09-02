@@ -301,7 +301,7 @@ void CueTable::paintRowBackground (juce::Graphics& g, int rowNumber, int width, 
     const int colourIndex = cue.useSecondColor && cue.secondColor > 0 && hasPlayed && hasPlayed (cue.id) ? cue.secondColor : cue.color;
 
     if (colourIndex > 0)
-        background = background.interpolatedWith (CueColors::get (colourIndex), 0.35f);
+        background = background.interpolatedWith (CueColors::get (colourIndex).darker (1.5f), 0.35f);   // a tint the grey text still reads on
 
     if (isRunning)
         background = running->paused ? Palette::pausedRow : (running->fadingOut ? Palette::fadingRow : Palette::playingRow);
@@ -310,28 +310,15 @@ void CueTable::paintRowBackground (juce::Graphics& g, int rowNumber, int width, 
 
     g.fillAll (background);
 
-    // group rows and their children carry the group's mode colour down the left edge
-    {
-        const int depth = cues.depthOf (index);
-
-        if (cue.isGroup())
-        {
-            g.setColour (groupModeColour (cue.group.mode));
-            g.fillRect (depth * indentPerLevel, 0, 4, height);
-        }
-
-        for (int level = 0, p = cues.parentIndexOf (index); p >= 0 && level < 32; p = cues.parentIndexOf (p), ++level)
-        {
-            g.setColour (groupModeColour (cues.get (p).group.mode).withAlpha (0.55f));
-            g.fillRect (cues.depthOf (p) * indentPerLevel, 0, 4, height);
-        }
-    }
-
     if (isRunning && running->progress >= 0.0)
     {
+        // a faint fill plus a bright bar along the bottom edge: the bar stays visible on every row colour
         const double fraction = juce::jlimit (0.0, 1.0, running->progress);
-        g.setColour (juce::Colours::white.withAlpha (0.22f));
-        g.fillRect (0, 0, juce::roundToInt (width * fraction), height);
+        const int reached = juce::roundToInt (width * fraction);
+        g.setColour (juce::Colours::white.withAlpha (0.16f));
+        g.fillRect (0, 0, reached, height);
+        g.setColour (running->paused ? Palette::paused : (running->fadingOut ? Palette::fadingOut : Palette::playing));
+        g.fillRect (0, height - 3, reached, 3);
     }
 
     if (! cue.armed)
@@ -348,7 +335,36 @@ void CueTable::paintRowBackground (juce::Graphics& g, int rowNumber, int width, 
         g.fillRect (0, 0, width, height);
     }
 
-    if (index == cues.getPlayheadIndex())
+    // group rows and their children carry the group's mode colour down the left edge: over the overlays, with a dark
+    // edge so the colour reads on any background
+    {
+        const int depth = cues.depthOf (index);
+
+        auto bar = [&] (int x, juce::Colour colour)
+        {
+            g.setColour (juce::Colours::black.withAlpha (0.6f));
+            g.fillRect (x, 0, 5, height);
+            g.setColour (colour);
+            g.fillRect (x + 1, 0, 4, height);
+        };
+
+        if (cue.isGroup())
+            bar (depth * indentPerLevel, groupModeColour (cue.group.mode));
+
+        for (int level = 0, p = cues.parentIndexOf (index); p >= 0 && level < 32; p = cues.parentIndexOf (p), ++level)
+            bar (cues.depthOf (p) * indentPerLevel, groupModeColour (cues.get (p).group.mode).withAlpha (0.7f));
+    }
+
+    const bool isPlayhead = index == cues.getPlayheadIndex();
+
+    if (cues.isSelected (index))
+    {
+        // a light ring (inside the playhead's when both apply) that reads on running / coloured rows too
+        g.setColour (Palette::selectionRing);
+        g.drawRect (isPlayhead ? juce::Rectangle<int> (2, 2, width - 4, height - 4) : juce::Rectangle<int> (0, 0, width, height), 2);
+    }
+
+    if (isPlayhead)
     {
         g.setColour (Palette::standby);
         g.drawRect (0, 0, width, height, 2);
@@ -732,6 +748,9 @@ juce::var CueTable::getDragSourceDescription (const juce::SparseSet<int>& rowsTo
     if (! editable || rowsToDescribe.isEmpty())
         return {};
 
+    if (onStatus)
+        onStatus (ko ("행 드래그 시작: ") + juce::String (rowsToDescribe.size()) + ko ("개 (놓을 자리에 선이 표시됩니다)"));
+
     return rowDragDescription;
 }
 
@@ -1021,10 +1040,13 @@ bool CueTable::isInterestedInFileDrag (const juce::StringArray& files)
     return editable && containsAudioOrFolder (formats, files);
 }
 
-void CueTable::fileDragEnter (const juce::StringArray&, int, int)
+void CueTable::fileDragEnter (const juce::StringArray& files, int, int)
 {
     dragOver = true;
     repaint();
+
+    if (onStatus)
+        onStatus (ko ("파일 드래그 감지: ") + juce::String (files.size()) + ko ("개 - 놓으면 큐로 추가"));
 }
 
 void CueTable::fileDragExit (const juce::StringArray&)
@@ -1057,6 +1079,9 @@ void CueTable::filesDropped (const juce::StringArray& files, int, int y)
     repaint();
 
     const auto audioFiles = collectAudioFiles (formats, files);
+
+    if (onStatus)
+        onStatus (ko ("드롭: 오디오 ") + juce::String (audioFiles.size()) + " / " + juce::String (files.size()) + ko ("개"));
 
     if (audioFiles.isEmpty() || ! onFilesDropped)
         return;
@@ -1100,6 +1125,9 @@ void CueTable::itemDropped (const SourceDetails& details)
     const int index = insertionIndexForY (details.localPosition.y);
     rowDropIndex = -1;
     repaint();
+
+    if (onStatus)
+        onStatus (ko ("행 이동: ") + juce::String (index) + ko ("번째 자리로"));
 
     if (onMoveRows)
         onMoveRows (cues.getSelectedIndices(), index);

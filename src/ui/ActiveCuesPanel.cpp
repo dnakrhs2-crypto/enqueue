@@ -10,7 +10,7 @@ namespace gocue
 
 namespace
 {
-    constexpr int rowHeight = 58;
+    constexpr int rowHeight = 76;
 }
 
 //==============================================================================
@@ -31,7 +31,7 @@ public:
 
         panicButton.setButtonText ("x");
         panicButton.setTooltip (ko ("이 큐 페이드 정지"));
-        panicButton.setColour (juce::TextButton::buttonColourId, Palette::stopButton);
+        panicButton.setColour (juce::TextButton::buttonColourId, Palette::stopButton.darker (0.12f));
         panicButton.setWantsKeyboardFocus (false);
         panicButton.onClick = [this]
         {
@@ -42,12 +42,12 @@ public:
         };
         addAndMakeVisible (panicButton);
 
-        nameLabel.setFont (juce::Font (juce::FontOptions (13.0f, juce::Font::bold)));
+        nameLabel.setFont (juce::Font (juce::FontOptions (17.0f, juce::Font::bold)));
         nameLabel.setColour (juce::Label::textColourId, Palette::text);
         nameLabel.setMinimumHorizontalScale (0.7f);
         addAndMakeVisible (nameLabel);
 
-        timeLabel.setFont (juce::Font (juce::FontOptions (12.0f)));
+        timeLabel.setFont (juce::Font (juce::FontOptions (14.0f)));
         timeLabel.setColour (juce::Label::textColourId, Palette::dimText);
         timeLabel.setJustificationType (juce::Justification::centredRight);
         addAndMakeVisible (timeLabel);
@@ -88,15 +88,15 @@ public:
     void resized() override
     {
         auto area = getLocalBounds().reduced (6, 4);
-        auto top = area.removeFromTop (22);
-        pauseButton.setBounds (top.removeFromLeft (64));
-        top.removeFromLeft (6);
-        panicButton.setBounds (top.removeFromRight (26));
+        auto top = area.removeFromTop (28);
+        pauseButton.setBounds (top.removeFromLeft (80));
+        top.removeFromLeft (8);
+        panicButton.setBounds (top.removeFromRight (30));
         top.removeFromRight (6);
         nameLabel.setBounds (top);
         area.removeFromTop (2);
-        timeLabel.setBounds (area.removeFromTop (16));
-        barArea = area.removeFromTop (10);
+        timeLabel.setBounds (area.removeFromTop (20));
+        barArea = area.removeFromTop (12);
     }
 
     void paint (juce::Graphics& g) override
@@ -148,12 +148,12 @@ private:
 ActiveCuesPanel::ActiveCuesPanel (AudioEngine& e, CueList& c) : engine (e), cues (c)
 {
     title.setText (ko ("활성 큐"), juce::dontSendNotification);
-    title.setFont (juce::Font (juce::FontOptions (13.0f, juce::Font::bold)));
+    title.setFont (juce::Font (juce::FontOptions (15.0f, juce::Font::bold)));
     title.setColour (juce::Label::textColourId, Palette::dimText);
     addAndMakeVisible (title);
 
     emptyLabel.setText (ko ("재생 중인 큐 없음"), juce::dontSendNotification);
-    emptyLabel.setFont (juce::Font (juce::FontOptions (12.0f)));
+    emptyLabel.setFont (juce::Font (juce::FontOptions (14.0f)));
     emptyLabel.setColour (juce::Label::textColourId, Palette::dimText);
     emptyLabel.setJustificationType (juce::Justification::centred);
     addAndMakeVisible (emptyLabel);

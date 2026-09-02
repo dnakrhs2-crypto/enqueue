@@ -45,12 +45,12 @@ public:
         setColour (juce::TableHeaderComponent::highlightColourId, Palette::standby.withAlpha (0.35f));
         setColour (juce::ListBox::backgroundColourId, Palette::background);
         setColour (juce::ListBox::outlineColourId, Palette::outline);
-        setColour (juce::ScrollBar::thumbColourId, juce::Colour (0xff5e5e5e));
+        setColour (juce::ScrollBar::thumbColourId, juce::Colour (0xff858585));   // 3.4:1 on the panel
         setColour (juce::ScrollBar::backgroundColourId, Palette::background);
         setColour (juce::PopupMenu::backgroundColourId, Palette::panel);
         setColour (juce::PopupMenu::textColourId, Palette::text);
         setColour (juce::PopupMenu::headerTextColourId, Palette::dimText);
-        setColour (juce::PopupMenu::highlightedBackgroundColourId, Palette::standby);
+        setColour (juce::PopupMenu::highlightedBackgroundColourId, Palette::standby.darker (0.25f));   // white text 5:1
         setColour (juce::PopupMenu::highlightedTextColourId, juce::Colours::white);
         setColour (juce::TabbedButtonBar::tabTextColourId, Palette::dimText);
         setColour (juce::TabbedButtonBar::frontTextColourId, Palette::text);
@@ -126,10 +126,27 @@ public:
         else if (isMouseOverButton)
             base = base.brighter (0.08f);
 
+        // buttons glued to a neighbour (a plugin's generic editor, the plugin manager's path row) keep that side square
+        const auto flags = button.getConnectedEdgeFlags();
+        const bool flatOnLeft   = (flags & juce::Button::ConnectedOnLeft) != 0;
+        const bool flatOnRight  = (flags & juce::Button::ConnectedOnRight) != 0;
+        const bool flatOnTop    = (flags & juce::Button::ConnectedOnTop) != 0;
+        const bool flatOnBottom = (flags & juce::Button::ConnectedOnBottom) != 0;
+
+        juce::Path shape;
+        shape.addRoundedRectangle (bounds.getX(), bounds.getY(), bounds.getWidth(), bounds.getHeight(), Palette::cornerRadius, Palette::cornerRadius,
+                                   ! (flatOnLeft || flatOnTop), ! (flatOnRight || flatOnTop), ! (flatOnLeft || flatOnBottom), ! (flatOnRight || flatOnBottom));
+
         g.setGradientFill (Palette::buttonGradient (base, bounds));
-        g.fillRoundedRectangle (bounds, Palette::cornerRadius);
+        g.fillPath (shape);
         g.setColour (base.darker (0.4f).withMultipliedAlpha (button.isEnabled() ? 1.0f : 0.5f));
-        g.drawRoundedRectangle (bounds, Palette::cornerRadius, 1.0f);
+        g.strokePath (shape, juce::PathStrokeType (1.0f));
+
+        if (button.hasKeyboardFocus (true))   // the dialogs' buttons take focus: show which one Tab landed on
+        {
+            g.setColour (Palette::selectionRing);
+            g.strokePath (shape, juce::PathStrokeType (2.0f));
+        }
     }
 
     juce::Font getPopupMenuFont() override

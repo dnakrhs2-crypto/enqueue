@@ -97,10 +97,10 @@ void CueCartView::paint (juce::Graphics& g)
         juce::Colour fill = Palette::rowEven;
 
         if (cue.color > 0)
-            fill = fill.interpolatedWith (CueColors::get (cue.color), 0.55f);
+            fill = fill.interpolatedWith (CueColors::get (cue.color).darker (2.0f), 0.55f);   // the text keeps reading
 
         if (isRunning)
-            fill = running->paused ? Palette::paused : (running->fadingOut ? Palette::fadingOut : Palette::playing);
+            fill = running->paused ? Palette::pausedRow : (running->fadingOut ? Palette::fadingRow : Palette::playingRow);
 
         if (slot == pressedSlot)
             fill = fill.brighter (0.3f);
@@ -110,8 +110,11 @@ void CueCartView::paint (juce::Graphics& g)
 
         if (isRunning && running->progress >= 0.0)
         {
-            g.setColour (juce::Colours::white.withAlpha (0.2f));
-            g.fillRoundedRectangle (r.toFloat().withWidth ((float) r.getWidth() * (float) juce::jlimit (0.0, 1.0, running->progress)), 6.0f);
+            const float reached = (float) r.getWidth() * (float) juce::jlimit (0.0, 1.0, running->progress);
+            g.setColour (juce::Colours::white.withAlpha (0.16f));
+            g.fillRoundedRectangle (r.toFloat().withWidth (reached), 6.0f);
+            g.setColour (running->paused ? Palette::paused : (running->fadingOut ? Palette::fadingOut : Palette::playing));
+            g.fillRect (r.toFloat().removeFromBottom (4.0f).withWidth (reached));
         }
 
         if (! cue.armed)
@@ -124,8 +127,8 @@ void CueCartView::paint (juce::Graphics& g)
         g.drawRoundedRectangle (r.toFloat().reduced (0.5f), 6.0f, cues.isSelected (slot) ? 2.0f : 1.0f);
 
         auto inner = r.reduced (8, 6);
-        g.setColour (Palette::dimText);
-        g.setFont (juce::Font (juce::FontOptions (11.0f)));
+        g.setColour (Palette::text);
+        g.setFont (juce::Font (juce::FontOptions (12.0f, juce::Font::bold)));
         g.drawText (cue.number, inner.removeFromTop (14), juce::Justification::topLeft, true);
 
         if (isRunning)

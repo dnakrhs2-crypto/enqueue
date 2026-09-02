@@ -142,6 +142,7 @@ MainComponent::MainComponent (AudioEngine& e, AppSettings& s, juce::ApplicationC
         if (! showMode)
             document.setCueNumber (id, number);
     };
+    table.onStatus = [this] (const juce::String& message) { transport.showStatus (message, false); };
     table.onEditNotes = [this] (int) { ensureInspectorShown(); inspector.showNotes(); };
     table.hasPlayed = [this] (const juce::Uuid& id) { return controller.hasPlayed (id); };
     transport.describeGroup = [this] (const Cue& groupCue) -> juce::String
@@ -368,10 +369,11 @@ bool MainComponent::isInterestedInFileDrag (const juce::StringArray& files)
     return ! showMode && containsAudioOrFolder (engine.getFormatManager(), files);
 }
 
-void MainComponent::fileDragEnter (const juce::StringArray&, int, int)
+void MainComponent::fileDragEnter (const juce::StringArray& files, int, int)
 {
     dragOverWindow = true;
     repaint();
+    transport.showStatus (ko ("파일 드래그 감지 (창): ") + juce::String (files.size()) + ko ("개"), false);
 }
 
 void MainComponent::fileDragExit (const juce::StringArray&)
