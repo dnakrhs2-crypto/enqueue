@@ -155,6 +155,8 @@ target_sources(GoCue PRIVATE
     src/ui/WorkspaceSettingsDialog.cpp
     src/ui/FooterBar.cpp
     src/ui/ActiveCuesPanel.cpp
+    src/ui/ContainerTabs.cpp
+    src/ui/CueCartView.cpp
     src/ui/PastePropertiesDialog.cpp
     src/ui/LevelMatrixComponent.cpp
     src/ui/PatchEditorDialog.cpp

@@ -6,6 +6,8 @@
 #include "app/Scheduler.h"
 #include "audio/AudioEngine.h"
 #include "ui/ActiveCuesPanel.h"
+#include "ui/ContainerTabs.h"
+#include "ui/CueCartView.h"
 #include "ui/CueInspector.h"
 #include "ui/CueTable.h"
 #include "ui/FooterBar.h"
@@ -99,6 +101,15 @@ private:
     void addControlCue (ControlKind kind);
     /** Starts recording cue starts; stopping turns them into a timeline group of start cues. */
     void toggleSequenceRecording();
+    /** Cue lists / carts (the tabs above the list). */
+    void addContainer (bool cart);
+    void renameContainer (int index);
+    void removeContainer (int index);
+    void setContainerGrid (int index);
+    void toggleContainerCart (int index);
+    /** Shows the table or the cart for the active container and refreshes the tabs. */
+    void updateContainerView();
+    void containersChanged() override;
     /** Wraps the selected cues (with their subtrees) in a new group. */
     void groupSelectedCues();
     /** Dissolves the selected group: its children move up one level. */
@@ -184,7 +195,9 @@ private:
 
     juce::MenuBarComponent menuBar;
     TransportBar transport;
+    ContainerTabs containerTabs;
     CueTable table;
+    CueCartView cart;
     CueInspector inspector;
     ActiveCuesPanel activeCues;
     FooterBar footer;

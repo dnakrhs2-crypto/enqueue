@@ -63,7 +63,9 @@ MainComponent::MainComponent (AudioEngine& e, AppSettings& s, juce::ApplicationC
       transport (cm),
       table (document.cues, e.getFormatManager(), cm),
       inspector (document, e, s, pluginWindows),
-      activeCues (e, document.cues)
+      activeCues (e, document.cues),
+      containerTabs (document),
+      cart (document.cues, e.getFormatManager())
 {
     setWantsKeyboardFocus (true);
 
@@ -80,6 +82,32 @@ MainComponent::MainComponent (AudioEngine& e, AppSettings& s, juce::ApplicationC
     table.onFilesDropped = [this] (const juce::StringArray& files, int insertAt) { addCuesFromFiles (files, insertAt); };
     table.onMoveRows = [this] (const std::vector<int>& rows, int insertIndex) { moveRows (rows, insertIndex); };
     table.onToggleCollapse = [this] (int index, bool collapsed) { document.cues.setCollapsed (index, collapsed); };
+
+    // cue lists / carts
+    addAndMakeVisible (containerTabs);
+    addChildComponent (cart);
+    containerTabs.onSelect = [this] (int index) { document.setActiveContainer (index); };
+    containerTabs.onAddList = [this] { addContainer (false); };
+    containerTabs.onAddCart = [this] { addContainer (true); };
+    containerTabs.onRename = [this] (int index) { renameContainer (index); };
+    containerTabs.onRemove = [this] (int index) { removeContainer (index); };
+    containerTabs.onToggleCart = [this] (int index) { toggleContainerCart (index); };
+    containerTabs.onGridSize = [this] (int index) { setContainerGrid (index); };
+    cart.onTrigger = [this] (const Cue& cue)
+    {
+        const auto result = controller.trigger (cue);
+
+        if (result == CueController::GoResult::started)
+            transport.showStatus (ko ("카트: ") + cue.name, false);
+    };
+    cart.onFilesDropped = [this] (const juce::StringArray& files, int slot) { addCuesFromFiles (files, slot); };
+    cart.onStop = [this] (const juce::Uuid& id)
+    {
+        if (engine.isPlaying (id))
+            engine.fadeOutAndStop (id);
+        else
+            controller.stopCue (id);
+    };
     table.onEditCues = [this] (const std::vector<int>& rows, const juce::String& name, const std::function<void (Cue&)>& mutator)
     {
         editCues (rows, name, mutator);
@@ -193,7 +221,9 @@ void MainComponent::resized()
     if (activeCuesVisible)
         activeCues.setBounds (area.removeFromRight (280));
 
+    containerTabs.setBounds (area.removeFromTop (ContainerTabs::height));
     table.setBounds (area);
+    cart.setBounds (area);
 }
 
 void MainComponent::paint (juce::Graphics& g)
@@ -272,6 +302,8 @@ void MainComponent::getAllCommands (juce::Array<juce::CommandID>& ids)
                     CommandIDs::addCue, CommandIDs::addFadeCue, CommandIDs::addDevampCue, CommandIDs::addGroupCue, CommandIDs::groupSelectedCues,
                     CommandIDs::ungroupSelected, CommandIDs::collapseAllGroups, CommandIDs::expandAllGroups,
                     CommandIDs::addControlCue, CommandIDs::addWaitCue, CommandIDs::addMemoCue, CommandIDs::toggleSequenceRecording,
+                    CommandIDs::addCueList, CommandIDs::addCart, CommandIDs::nextContainer, CommandIDs::previousContainer,
+                    CommandIDs::renameContainer, CommandIDs::removeContainer,
                     CommandIDs::revertFade, CommandIDs::fetchFadeLevels, CommandIDs::removeCue, CommandIDs::duplicateCue,
                     CommandIDs::moveCueUp, CommandIDs::moveCueDown, CommandIDs::selectAll,
                     CommandIDs::copyCues, CommandIDs::cutCues, CommandIDs::pasteCues, CommandIDs::pasteCueProperties,
@@ -425,6 +457,38 @@ void MainComponent::getCommandInfo (juce::CommandID commandID, juce::Application
         case CommandIDs::addMemoCue:
             result.setInfo (ko ("메모 큐 추가"), ko ("아무것도 하지 않는 큐 (목록 안의 메모)"), cueMenu, 0);
             result.setActive (canEdit);
+            break;
+
+        case CommandIDs::addCueList:
+            result.setInfo (ko ("새 큐 리스트"), ko ("큐 리스트를 하나 더 추가 (위 탭)"), cueMenu, 0);
+            result.setActive (canEdit);
+            break;
+
+        case CommandIDs::addCart:
+            result.setInfo (ko ("새 카트"), ko ("버튼 격자 카트를 추가 — 클릭하면 바로 재생, 플레이헤드/자동 진행 없음"), cueMenu, 0);
+            result.setActive (canEdit);
+            break;
+
+        case CommandIDs::nextContainer:
+            result.setInfo (ko ("다음 리스트/카트"), ko ("오른쪽 탭으로"), cueMenu, 0);
+            result.addDefaultKeypress (juce::KeyPress::pageDownKey, ModifierKeys::commandModifier);
+            result.setActive (document.getNumContainers() > 1);
+            break;
+
+        case CommandIDs::previousContainer:
+            result.setInfo (ko ("이전 리스트/카트"), ko ("왼쪽 탭으로"), cueMenu, 0);
+            result.addDefaultKeypress (juce::KeyPress::pageUpKey, ModifierKeys::commandModifier);
+            result.setActive (document.getNumContainers() > 1);
+            break;
+
+        case CommandIDs::renameContainer:
+            result.setInfo (ko ("리스트/카트 이름 바꾸기..."), ko ("현재 탭의 이름"), cueMenu, 0);
+            result.setActive (canEdit);
+            break;
+
+        case CommandIDs::removeContainer:
+            result.setInfo (ko ("리스트/카트 삭제"), ko ("현재 탭을 큐와 함께 삭제 (실행 취소 가능)"), cueMenu, 0);
+            result.setActive (canEdit && document.getNumContainers() > 1);
             break;
 
         case CommandIDs::toggleSequenceRecording:
@@ -754,6 +818,30 @@ bool MainComponent::perform (const InvocationInfo& info)
             toggleSequenceRecording();
             break;
 
+        case CommandIDs::addCueList:
+            addContainer (false);
+            break;
+
+        case CommandIDs::addCart:
+            addContainer (true);
+            break;
+
+        case CommandIDs::nextContainer:
+            document.setActiveContainer ((document.getActiveContainer() + 1) % juce::jmax (1, document.getNumContainers()));
+            break;
+
+        case CommandIDs::previousContainer:
+            document.setActiveContainer ((document.getActiveContainer() + document.getNumContainers() - 1) % juce::jmax (1, document.getNumContainers()));
+            break;
+
+        case CommandIDs::renameContainer:
+            renameContainer (document.getActiveContainer());
+            break;
+
+        case CommandIDs::removeContainer:
+            removeContainer (document.getActiveContainer());
+            break;
+
         case CommandIDs::expandAllGroups:
             setAllGroupsCollapsed (false);
             break;
@@ -961,6 +1049,18 @@ juce::PopupMenu MainComponent::getMenuForIndex (int topLevelMenuIndex, const juc
             menu.addCommandItem (&commands, CommandIDs::addMemoCue);
             menu.addSeparator();
             menu.addCommandItem (&commands, CommandIDs::toggleSequenceRecording);
+            menu.addSeparator();
+
+            {
+                juce::PopupMenu lists;
+                lists.addCommandItem (&commands, CommandIDs::addCueList);
+                lists.addCommandItem (&commands, CommandIDs::addCart);
+                lists.addCommandItem (&commands, CommandIDs::nextContainer);
+                lists.addCommandItem (&commands, CommandIDs::previousContainer);
+                lists.addCommandItem (&commands, CommandIDs::renameContainer);
+                lists.addCommandItem (&commands, CommandIDs::removeContainer);
+                menu.addSubMenu (ko ("큐 리스트 / 카트"), lists);
+            }
             menu.addCommandItem (&commands, CommandIDs::groupSelectedCues);
             menu.addCommandItem (&commands, CommandIDs::ungroupSelected);
             menu.addCommandItem (&commands, CommandIDs::collapseAllGroups);
@@ -1475,6 +1575,8 @@ void MainComponent::setShowMode (bool shouldBeShowMode)
 {
     showMode = shouldBeShowMode;
     table.setEditable (! showMode);
+    cart.setEditable (! showMode);
+    containerTabs.setEditable (! showMode);
     inspector.setEditable (! showMode);
     footer.setShowMode (showMode);
     commands.commandStatusChanged();
@@ -2506,6 +2608,9 @@ void MainComponent::timerCallback()
     if (activeCuesVisible)
         activeCues.setPlayingCues (playing);
 
+    if (cart.isVisible())
+        cart.setPlayingCues (playing);
+
     table.setPlayingCues (std::move (playing));
     footer.setCueCount (document.cues.size());
     footer.setWarningCount (countBrokenCues());
@@ -2573,6 +2678,123 @@ void MainComponent::playheadChanged (int index)
             if (engine.load (cue, 0.0))
                 autoLoadedId = cue.id;
     }
+}
+
+void MainComponent::addContainer (bool isCart)
+{
+    if (showMode)
+        return;
+
+    const juce::String name = (isCart ? ko ("카트 ") : ko ("큐 리스트 ")) + juce::String (document.getNumContainers() + 1);
+    document.perform (isCart ? ko ("카트 추가") : ko ("큐 리스트 추가"), [this, name, isCart]
+    {
+        document.setActiveContainer (document.addContainer (name, isCart));
+    });
+}
+
+void MainComponent::renameContainer (int index)
+{
+    if (showMode || index < 0 || index >= document.getNumContainers())
+        return;
+
+    auto* alert = new juce::AlertWindow (ko ("이름 바꾸기"), ko ("리스트 / 카트 이름"), juce::MessageBoxIconType::NoIcon, this);
+    alert->addTextEditor ("name", document.getContainerInfo (index).name);
+    alert->addButton (ko ("확인"), 1, juce::KeyPress (juce::KeyPress::returnKey));
+    alert->addButton (ko ("취소"), 0, juce::KeyPress (juce::KeyPress::escapeKey));
+    juce::Component::SafePointer<MainComponent> safeThis (this);
+    alert->enterModalState (true, juce::ModalCallbackFunction::create ([safeThis, alert, index] (int result)
+    {
+        if (safeThis == nullptr || result != 1)
+            return;
+
+        const auto name = alert->getTextEditorContents ("name").trim();
+
+        if (name.isEmpty() || index >= safeThis->document.getNumContainers())
+            return;
+
+        safeThis->document.perform (ko ("이름 바꾸기"), [safeThis, index, name] { safeThis->document.renameContainer (index, name); });
+    }), true);
+    focusAlertEditor (*alert, "name");
+}
+
+void MainComponent::removeContainer (int index)
+{
+    if (showMode || index < 0 || index >= document.getNumContainers() || document.getNumContainers() <= 1)
+        return;
+
+    const auto info = document.getContainerInfo (index);
+    std::vector<juce::Uuid> ids;
+
+    if (index == document.getActiveContainer())
+        for (const auto& c : document.cues.getAll())
+            ids.push_back (c.id);
+
+    for (const auto& id : ids)
+        controller.stopCue (id);
+
+    document.perform (ko ("리스트/카트 삭제: ") + info.name, [this, index] { document.removeContainer (index); }, { {}, true });
+}
+
+void MainComponent::toggleContainerCart (int index)
+{
+    if (showMode || index < 0 || index >= document.getNumContainers())
+        return;
+
+    const auto info = document.getContainerInfo (index);
+    document.perform (info.isCart ? ko ("큐 리스트로 전환") : ko ("카트로 전환"), [this, index, info]
+    {
+        document.setContainerCart (index, ! info.isCart, info.cartRows, info.cartCols);
+    });
+}
+
+void MainComponent::setContainerGrid (int index)
+{
+    if (showMode || index < 0 || index >= document.getNumContainers())
+        return;
+
+    const auto info = document.getContainerInfo (index);
+    auto* alert = new juce::AlertWindow (ko ("카트 격자 크기"), ko ("행 x 열 (1~15)"), juce::MessageBoxIconType::NoIcon, this);
+    alert->addTextEditor ("rows", juce::String (info.cartRows), ko ("행"));
+    alert->addTextEditor ("cols", juce::String (info.cartCols), ko ("열"));
+    alert->addButton (ko ("확인"), 1, juce::KeyPress (juce::KeyPress::returnKey));
+    alert->addButton (ko ("취소"), 0, juce::KeyPress (juce::KeyPress::escapeKey));
+    juce::Component::SafePointer<MainComponent> safeThis (this);
+    alert->enterModalState (true, juce::ModalCallbackFunction::create ([safeThis, alert, index] (int result)
+    {
+        if (safeThis == nullptr || result != 1 || index >= safeThis->document.getNumContainers())
+            return;
+
+        const int rows = juce::jlimit (1, CueContainer::maxGrid, alert->getTextEditorContents ("rows").getIntValue());
+        const int cols = juce::jlimit (1, CueContainer::maxGrid, alert->getTextEditorContents ("cols").getIntValue());
+        const auto current = safeThis->document.getContainerInfo (index);
+        safeThis->document.perform (ko ("카트 격자 크기"), [safeThis, index, current, rows, cols]
+        {
+            safeThis->document.setContainerCart (index, current.isCart, rows, cols);
+        });
+    }), true);
+    focusAlertEditor (*alert, "rows");
+}
+
+void MainComponent::updateContainerView()
+{
+    const bool isCart = document.isActiveCart();
+    const auto info = document.getContainerInfo (document.getActiveContainer());
+    cart.setGrid (info.cartRows, info.cartCols);
+    cart.setVisible (isCart);
+    table.setVisible (! isCart);
+    containerTabs.refresh();
+    autoLoadedId = juce::Uuid::null();
+    commands.commandStatusChanged();
+
+    if (isCart)
+        cart.grabKeyboardFocus();
+    else
+        table.focusTable();
+}
+
+void MainComponent::containersChanged()
+{
+    updateContainerView();
 }
 
 void MainComponent::documentStateChanged()
