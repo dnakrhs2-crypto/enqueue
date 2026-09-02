@@ -56,6 +56,7 @@ private:
     juce::ToggleButton infiniteToggle, envelopeToggle, linearToggle, lockToggle, pitchToggle;
     juce::TextButton previewButton, resetButton, zoomInButton, zoomOutButton, zoomFitButton, zoomRegionButton;
     bool refreshing = false;
+    juce::Uuid shownId = juce::Uuid::null();   // the cue the fields show (focus-lost commits go there)
     bool cancellingEdit = false;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (TimeLoopsPanel)

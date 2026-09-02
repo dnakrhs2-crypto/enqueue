@@ -5,6 +5,8 @@
 #include "audio/AudioEngine.h"
 
 #include <functional>
+#include <map>
+#include <set>
 #include <vector>
 
 namespace gocue
@@ -64,12 +66,20 @@ public:
     int sequenceEnd (int index) const;
     /** Cancels scheduled starts, follows and duck restores. */
     void cancelPending();
+    /** Cancels the pending starts / follows / duck restores that belong to one cue's run. */
+    void cancelPendingFor (const juce::Uuid& cueId);
     /** Number of scheduled starts / follows still pending (tests). */
     int getNumPending() const;
+    bool hasPendingFor (const juce::Uuid& cueId) const;
+    /** Cues that have been started at least once since the last reset (drives the "second colour"). */
+    bool hasPlayed (const juce::Uuid& cueId) const { return played.count (cueId) != 0; }
+    void clearPlayed() { played.clear(); }
 
     /** A key that is not a command shortcut: fires the cues whose hotkey matches (with their sequences,
         without moving the playhead). Returns true when a cue took it. */
     bool handleHotkey (const juce::KeyPress& key);
+    /** An auto-repeat of a held hotkey: swallowed when the key is a cue hotkey (true), else passed on (false). */
+    bool handleHotkeyRepeat (const juce::KeyPress& key) const;
     /** Fires the cues whose wall-clock trigger matches 'now' (once per matching second). Call ~30x per second. */
     void checkWallClock (juce::Time now);
     /** L: pre-loads the selected cue so GO starts it with no disk latency. */
@@ -95,12 +105,17 @@ private:
     AudioEngine::PlayOptions playOptions (bool audition) const;
     void applyFadeStopOthers (const Cue& cue);
     void applyDuck (const Cue& cue);
-    void track (int schedulerId);
+    /** Recomputes and applies the ducks of every target after a contribution changed. */
+    void refreshDucks (double rampSeconds);
+    void track (int schedulerId, const juce::Uuid& owner);
 
     AudioEngine& engine;
     ProjectDocument& document;
     Scheduler& scheduler;
-    std::vector<int> pending;
+    struct Pending { int id; juce::Uuid owner; };
+    std::vector<Pending> pending;
+    std::map<juce::Uuid, std::map<juce::Uuid, double>> ducks;   // target -> (ducking cue -> dB)
+    std::set<juce::Uuid> played;
     juce::int64 lastWallClockSecond = -1;
     double lastGoTime = -1.0e9;
     double lastPanicTime = -1.0e9;

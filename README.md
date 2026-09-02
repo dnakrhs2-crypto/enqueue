@@ -12,7 +12,7 @@ Windows용 오디오 큐 플레이어. QLab의 오디오 기능을 단계적으�
 - **진행(시퀀스)**: 프리웨이트/포스트웨이트, 자동 계속 / 자동 팔로우, 플레이헤드(선택과 분리 또는 잠금). **트리거**: 큐 핫키, 시간(벽시계) 트리거, 시작 시 다른 큐 페이드 정지, 덕(-dB)
 - 로드(L) / 시간으로 로드(Ctrl+T), 활성 큐 패널(Ctrl+L: 일시정지·스크럽·페이드 정지), 쇼 모드(편집 잠금), 경고 목록 + 없어진 파일 다시 찾기
 - 큐 복사/잘라내기/붙여넣기(플러그인 체인 포함), 큐 속성 붙여넣기(카테고리 선택), 찾기(Ctrl+F), 새 큐 기본값(템플릿), 자동 번호 / 재번호
-- 프로젝트 파일 `.gocue` (JSON v2, v1 파일도 읽음), 자동 백업(`<이름>.gocue.backups`), 파일을 프로젝트 폴더로 복사 옵션
+- 프로젝트 파일 `.gocue` (JSON v3, v1·v2 파일도 읽음), 자동 백업(`<이름>.gocue.backups`), 파일을 프로젝트 폴더로 복사 옵션
 - 오디오 파일·폴더를 창 어디에나 끌어다 놓으면 큐로 추가(목록 위 = 그 자리에 삽입, 인스펙터 파일칸 = 파일 교체, `.gocue` = 열기)
 - 단일 창 UI(한국어): 상단 GO / 중앙 큐 목록(재생 초록·일시정지 노랑·페이드 주황 + 진행바 + 남은 시간) / 하단 인스펙터 탭(기본 · 시간·루프 · 트리거 · 이펙트)
 - Inno Setup 인스톨러 + WinSparkle 자동 업데이트 (GitHub Releases의 `appcast.xml`)
@@ -178,10 +178,10 @@ tools        release.py (릴리스 파이프라인), make_icon.py (아이콘)
 
 신호 경로: 파일(N ch) → 구간/루프/엔벨로프(`RegionLoopSource`, 파일 시간축) → 디스크 선독 → 리샘플(장치 SR × 속도) → 정지 페이드·일시정지 게이트 → 큐 게인(메인)·덕 → 큐 VST3 체인(스테레오) → 레벨 매트릭스(N→K)·트림 → 패치 버스(K) → 큐 출력 인서트 → 라우팅(K→M)·패치 메인 → 장치 출력 인서트 → 마스터 VST3 체인(ch1-2) → 장치 출력(M)
 
-## 프로젝트 파일 형식 (`.gocue`, v2)
+## 프로젝트 파일 형식 (`.gocue`, v3)
 
 ```json
-{ "app": "GoCue", "version": 2, "name": "show",
+{ "app": "GoCue", "version": 3, "name": "show",
   "cues": [ { "id": "uuid", "number": "1.5", "name": "Intro", "notes": "", "file": "C:/audio/intro.wav", "fileRelative": "audio/intro.wav",
               "color": 3, "secondColor": 0, "useSecondColor": false, "flagged": false, "armed": true, "skipIfDisarmed": false, "autoLoad": false,
               "preWait": 0, "postWait": 0, "continueMode": "none", "hotkey": "", "wallClock": { "enabled": false },

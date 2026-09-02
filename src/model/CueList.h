@@ -88,7 +88,10 @@ public:
     /** Moves the playhead to the previous cue. */
     bool retreatPlayhead();
 
-    void setLockPlayheadToSelection (bool shouldLock) noexcept { lockPlayhead = shouldLock; }
+    /** Turning the lock on snaps the playhead to the current primary selection. */
+    void setLockPlayheadToSelection (bool shouldLock);
+    /** True when another cue (not 'exceptId') already carries this non-empty number. */
+    bool isNumberTaken (const juce::String& number, const juce::Uuid& exceptId) const noexcept;
     bool isPlayheadLockedToSelection() const noexcept { return lockPlayhead; }
 
     void addListener (Listener* l) { listeners.add (l); }

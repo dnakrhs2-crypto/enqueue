@@ -278,6 +278,27 @@ void CueList::setSelectionInternal (std::vector<int> indices, int primaryIndex, 
         setPlayheadInternal (primary, false);
 }
 
+void CueList::setLockPlayheadToSelection (bool shouldLock)
+{
+    const bool wasLocked = lockPlayhead;
+    lockPlayhead = shouldLock;
+
+    if (shouldLock && ! wasLocked && isValidIndex (primary) && playhead != primary)
+        setPlayheadInternal (primary, false);
+}
+
+bool CueList::isNumberTaken (const juce::String& number, const juce::Uuid& exceptId) const noexcept
+{
+    if (number.isEmpty())
+        return false;
+
+    for (const auto& c : cues)
+        if (c.number == number && c.id != exceptId)
+            return true;
+
+    return false;
+}
+
 void CueList::setSelectedIndex (int index)
 {
     int newIndex = -1;

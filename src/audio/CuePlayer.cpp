@@ -359,6 +359,19 @@ void CuePlayer::mixIntoBus (juce::AudioBuffer<float>& bus, const juce::AudioBuff
     }
 }
 
+double CuePlayer::getProgressFraction() const noexcept
+{
+    if (! isValid())
+        return 0.0;
+
+    const auto total = source->getTotalLength();
+
+    if (total <= 0 || total >= RegionLoopSource::infiniteLength / 2)
+        return -1.0;
+
+    return juce::jlimit (0.0, 1.0, virtualPosition.load (std::memory_order_relaxed) / (double) total);
+}
+
 void CuePlayer::updatePositionInfo (double rate) noexcept
 {
     juce::ignoreUnused (rate);
@@ -390,6 +403,8 @@ bool CuePlayer::renderNextBlock (juce::AudioBuffer<float>& fullBuffer, int numSa
 
         if (const double elapsed = pendingElapsedSamples.exchange (-1.0, std::memory_order_relaxed); elapsed >= 0.0)
             elapsedOutputSamples = elapsed;
+
+        resampler->flushBuffers();   // drop the interpolator's history so the old position is not heard after the jump
     }
 
     const int fadeMs = pendingFadeOutMs.exchange (-1, std::memory_order_relaxed);
@@ -500,13 +515,20 @@ bool CuePlayer::renderNextBlock (juce::AudioBuffer<float>& fullBuffer, int numSa
 
         const float duckGoal = duckTarget.load (std::memory_order_relaxed);
 
+        if (! juce::approximatelyEqual (duckGoal, duckGoalSeen))
+        {
+            // a new goal: a linear ramp that lands exactly after the requested time
+            duckGoalSeen = duckGoal;
+            duckSamplesLeft = (juce::int64) std::llround (duckRampSeconds.load (std::memory_order_relaxed) * currentSampleRate);
+        }
+
         if (! juce::approximatelyEqual (duckGoal, duckLevel))
         {
-            const double rampSamples = duckRampSeconds.load (std::memory_order_relaxed) * currentSampleRate;
-            const float fraction = rampSamples > 0.0 ? (float) juce::jmin (1.0, (double) numSamples / rampSamples) : 1.0f;
-            const float next = duckLevel + (duckGoal - duckLevel) * fraction;
+            const int step = (int) juce::jmin<juce::int64> (numSamples, juce::jmax<juce::int64> (0, duckSamplesLeft));
+            const float next = step > 0 && duckSamplesLeft > 0 ? duckLevel + (duckGoal - duckLevel) * (float) ((double) step / (double) duckSamplesLeft) : duckGoal;
             buffer.applyGainRamp (0, numSamples, duckLevel, next);
-            duckLevel = std::abs (next - duckGoal) < 1.0e-4f ? duckGoal : next;
+            duckSamplesLeft -= step;
+            duckLevel = (duckSamplesLeft <= 0 || std::abs (next - duckGoal) < 1.0e-5f) ? duckGoal : next;
         }
         else if (duckLevel != 1.0f)
         {

@@ -92,6 +92,36 @@ public:
             log.clear();
         }
 
+        beginTest ("timed starts run before watches are judged, and a watch re-checks its condition");
+        {
+            now = 0.0;
+            bool started = false;
+            int followed = 0;
+            scheduler.watch ([&started] { return ! started; }, [&followed] { ++followed; });   // "A has ended" naively
+            scheduler.schedule (1.0, [&started] { started = true; });
+            now = 1.0;
+            scheduler.tick();
+            expect (started);
+            expectEquals (followed, 0);   // the timed start ran first, so the watch saw A running
+            expectEquals (scheduler.pendingCount(), 1);
+            started = false;
+            scheduler.tick();
+            expectEquals (followed, 1);
+            expectEquals (scheduler.pendingCount(), 0);
+
+            // cancelAll from an action stops the rest of the tick
+            int ran = 0;
+            scheduler.schedule (2.0, [&] { ++ran; scheduler.cancelAll(); });
+            scheduler.schedule (2.0, [&] { ++ran; });
+            const int watched = scheduler.watch ([] { return true; }, [&] { ++ran; });
+            expect (scheduler.isPending (watched));
+            now = 2.0;
+            scheduler.tick();
+            expectEquals (ran, 1);
+            expect (! scheduler.isPending (watched));
+            expectEquals (scheduler.pendingCount(), 0);
+        }
+
         beginTest ("cancelAll clears everything");
         {
             scheduler.schedule (100.0, [&log] { log.add ("x"); });

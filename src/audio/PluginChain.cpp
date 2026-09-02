@@ -219,6 +219,30 @@ bool PluginChain::matchesStructure (const std::vector<PluginSlotState>& states) 
     return true;
 }
 
+void PluginChain::applyStates (const std::vector<PluginSlotState>& states)
+{
+    if (! matchesStructure (states))
+        return;
+
+    for (size_t i = 0; i < slots.size(); ++i)
+    {
+        auto& slot = *slots[i];
+        const auto& s = states[i];
+        slot.state = s;
+        slot.bypassed.store (s.bypassed);
+
+        if (slot.plugin != nullptr && s.stateBase64.isNotEmpty())
+        {
+            juce::MemoryOutputStream decoded;
+
+            if (juce::Base64::convertFromBase64 (decoded, s.stateBase64) && decoded.getDataSize() > 0)
+                slot.plugin->setStateInformation (decoded.getData(), (int) decoded.getDataSize());
+        }
+    }
+
+    notifyChanged();
+}
+
 std::vector<PluginSlotState> PluginChain::getStates() const
 {
     std::vector<PluginSlotState> result;

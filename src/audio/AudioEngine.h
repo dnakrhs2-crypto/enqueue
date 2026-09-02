@@ -36,6 +36,7 @@ public:
         bool paused = false;
         bool loaded = false;                // prepared but not started yet (QLab "loaded")
         bool audition = false;              // started by an audition GO / preview
+        double progress = 0.0;              // 0..1 through the total length (all passes); -1 while looping forever
         juce::int64 startOrder = 0;         // increases with every start (ordering the active-cues list)
     };
 
