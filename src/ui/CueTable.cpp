@@ -404,6 +404,34 @@ void CueTable::paintCell (juce::Graphics& g, int rowNumber, int columnId, int wi
             g.strokePath (arc, juce::PathStrokeType (1.8f));
             g.fillRect (x + 9.0f, cy - 6.0f, 2.0f, 12.0f);
         }
+        else if (cue.isControl())
+        {
+            // control cues: one small glyph per kind; red when a needed target is missing
+            const bool broken = cue.control.needsTarget() && (cue.control.targetId.isNull() || cues.indexOf (cue.control.targetId) < 0);
+            g.setColour (broken ? Palette::missing : Palette::dimText);
+            juce::Path p;
+
+            switch (cue.control.kind)
+            {
+                case ControlKind::start:   p.addTriangle (x, cy - 5.0f, x, cy + 5.0f, x + 9.0f, cy); g.strokePath (p, juce::PathStrokeType (1.5f)); break;
+                case ControlKind::stop:    g.drawRect (x, cy - 4.5f, 9.0f, 9.0f, 1.5f); break;
+                case ControlKind::pause:   g.drawRect (x, cy - 5.0f, 3.0f, 10.0f, 1.5f); g.drawRect (x + 5.5f, cy - 5.0f, 3.0f, 10.0f, 1.5f); break;
+                case ControlKind::load:    g.drawEllipse (x, cy - 4.5f, 9.0f, 9.0f, 1.5f); g.fillEllipse (x + 3.0f, cy - 1.5f, 3.0f, 3.0f); break;
+                case ControlKind::reset:   p.addCentredArc (x + 5.0f, cy, 4.5f, 4.5f, 0.0f, 0.9f, 6.0f, true); g.strokePath (p, juce::PathStrokeType (1.5f));
+                                           g.fillRect (x + 8.0f, cy - 6.5f, 3.0f, 3.0f); break;
+                case ControlKind::gotoCue: g.drawLine (x, cy - 5.0f, x, cy + 2.0f, 1.5f); g.drawLine (x, cy + 2.0f, x + 8.0f, cy + 2.0f, 1.5f);
+                                           p.addTriangle (x + 7.0f, cy - 2.0f, x + 7.0f, cy + 6.0f, x + 11.0f, cy + 2.0f); g.fillPath (p); break;
+                case ControlKind::wait:    g.drawEllipse (x, cy - 5.0f, 10.0f, 10.0f, 1.5f); g.drawLine (x + 5.0f, cy - 3.0f, x + 5.0f, cy, 1.5f);
+                                           g.drawLine (x + 5.0f, cy, x + 7.5f, cy + 1.5f, 1.5f); break;
+                case ControlKind::memo:    g.drawRect (x, cy - 5.0f, 9.0f, 10.0f, 1.2f); g.drawLine (x + 2.0f, cy - 2.0f, x + 7.0f, cy - 2.0f, 1.0f);
+                                           g.drawLine (x + 2.0f, cy + 0.5f, x + 7.0f, cy + 0.5f, 1.0f); g.drawLine (x + 2.0f, cy + 3.0f, x + 5.0f, cy + 3.0f, 1.0f); break;
+                case ControlKind::arm:     g.drawLine (x, cy - 6.0f, x, cy + 6.0f, 1.5f); p.addTriangle (x, cy - 6.0f, x + 8.0f, cy - 3.0f, x, cy); g.fillPath (p); break;
+                case ControlKind::disarm:  g.drawLine (x, cy - 6.0f, x, cy + 6.0f, 1.5f); p.addTriangle (x, cy - 6.0f, x + 8.0f, cy - 3.0f, x, cy); g.strokePath (p, juce::PathStrokeType (1.2f));
+                                           g.drawLine (x - 1.0f, cy + 6.0f, x + 10.0f, cy - 7.0f, 1.5f); break;
+                case ControlKind::target:  g.drawEllipse (x, cy - 5.0f, 10.0f, 10.0f, 1.5f); g.drawLine (x + 5.0f, cy - 7.0f, x + 5.0f, cy + 7.0f, 1.0f);
+                                           g.drawLine (x - 2.0f, cy, x + 12.0f, cy, 1.0f); break;
+            }
+        }
         else if (cue.isGroup())
         {
             // a group: a folder tab in the mode colour (running children = filled)
@@ -501,7 +529,12 @@ void CueTable::paintCell (juce::Graphics& g, int rowNumber, int columnId, int wi
                 text = ko (mode) + ko (" · ") + juce::String (count) + ko ("개");
                 colour = Palette::dimText;
             }
-            else if (cue.isFade() || cue.isDevamp())
+            else if (cue.isControl() && ! cue.control.needsTarget())
+            {
+                text = cue.control.kind == ControlKind::wait ? ko ("대기 ") + formatTimeMs (cue.control.seconds) : ko ("메모");
+                colour = Palette::dimText;
+            }
+            else if (cue.isFade() || cue.isDevamp() || cue.isControl())
             {
                 const int target = cue.targetId().isNull() ? -1 : cues.indexOf (cue.targetId());
 

@@ -229,6 +229,9 @@ double Cue::effectiveLength() const noexcept
     if (type == CueType::fade)
         return fade.durationSeconds;
 
+    if (type == CueType::control)
+        return control.kind == ControlKind::wait ? control.seconds : 0.0;
+
     if (type == CueType::devamp || type == CueType::group)
         return 0.0;   // a group's length depends on its children: CueList::effectiveLengthOf
 
@@ -246,6 +249,11 @@ void Cue::sanitise() noexcept
         group.crossfadeSeconds = 0.0;
 
     group.crossfadeSeconds = std::min (group.crossfadeSeconds, GroupCueData::maxCrossfadeSeconds);
+
+    if (! std::isfinite (control.seconds) || control.seconds < 0.0)
+        control.seconds = 0.0;
+
+    control.seconds = std::min (control.seconds, maxWaitSeconds);
 
     auto fixSeconds = [] (double& v, double hi)
     {

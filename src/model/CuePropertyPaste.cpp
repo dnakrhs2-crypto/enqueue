@@ -68,6 +68,13 @@ void apply (const Cue& source, Cue& target, const Selection& sel)
         target.devamp.targetId = keepTarget;
     }
 
+    if (sel.fade && source.isControl() && target.isControl())
+    {
+        const auto keepTarget = target.control.targetId;
+        target.control = source.control;
+        target.control.targetId = keepTarget;
+    }
+
     if (sel.fade && source.isGroup() && target.isGroup())
     {
         const bool keepCollapsed = target.group.collapsed;

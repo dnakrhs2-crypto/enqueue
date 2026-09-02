@@ -391,7 +391,19 @@ namespace
 
         if (! c.patchId.isNull())
             obj->setProperty ("patch", c.patchId.toString());
-        obj->setProperty ("type", c.type == CueType::fade ? "fade" : c.type == CueType::devamp ? "devamp" : c.type == CueType::group ? "group" : "audio");
+        obj->setProperty ("type", c.type == CueType::fade ? "fade" : c.type == CueType::devamp ? "devamp" : c.type == CueType::group ? "group"
+                                : c.type == CueType::control ? "control" : "audio");
+
+        if (c.type == CueType::control)
+        {
+            static const char* const kinds[] = { "start", "stop", "pause", "load", "reset", "goto", "wait", "memo", "arm", "disarm", "target" };
+            auto* cobj = new juce::DynamicObject();
+            cobj->setProperty ("kind", kinds[juce::jlimit (0, 10, (int) c.control.kind)]);
+            cobj->setProperty ("target", c.control.targetId.isNull() ? juce::String() : c.control.targetId.toString());
+            cobj->setProperty ("secondTarget", c.control.secondTargetId.isNull() ? juce::String() : c.control.secondTargetId.toString());
+            cobj->setProperty ("seconds", c.control.seconds);
+            obj->setProperty ("control", juce::var (cobj));
+        }
 
         if (! c.parentId.isNull())
             obj->setProperty ("parent", c.parentId.toString());
@@ -522,7 +534,25 @@ namespace
         c.secondTrigger   = secondTriggerFromText (v.getProperty ("secondTrigger", "hardStopRestart").toString());
         {
             const auto typeText = v.getProperty ("type", "audio").toString();
-            c.type = typeText == "fade" ? CueType::fade : typeText == "devamp" ? CueType::devamp : typeText == "group" ? CueType::group : CueType::audio;
+            c.type = typeText == "fade" ? CueType::fade : typeText == "devamp" ? CueType::devamp : typeText == "group" ? CueType::group
+                   : typeText == "control" ? CueType::control : CueType::audio;
+        }
+
+        if (const auto ctl = v.getProperty ("control", juce::var()); ctl.getDynamicObject() != nullptr)
+        {
+            static const char* const kinds[] = { "start", "stop", "pause", "load", "reset", "goto", "wait", "memo", "arm", "disarm", "target" };
+            const auto kindText = ctl.getProperty ("kind", "start").toString();
+            c.control.kind = ControlKind::start;
+
+            for (int k = 0; k < 11; ++k)
+                if (kindText == kinds[k])
+                    c.control.kind = (ControlKind) k;
+
+            const auto targetText = ctl.getProperty ("target", "").toString();
+            const auto secondText = ctl.getProperty ("secondTarget", "").toString();
+            c.control.targetId = targetText.isNotEmpty() ? juce::Uuid (targetText) : juce::Uuid::null();
+            c.control.secondTargetId = secondText.isNotEmpty() ? juce::Uuid (secondText) : juce::Uuid::null();
+            c.control.seconds = (double) ctl.getProperty ("seconds", 0.0);
         }
 
         if (const auto parentText = v.getProperty ("parent", "").toString(); parentText.isNotEmpty())

@@ -95,6 +95,8 @@ private:
     void addDevampCue();
     /** Inserts an empty group after the selection (a sibling of it). */
     void addGroupCue();
+    /** Inserts a control cue of 'kind' after the selection (targeting it, when the kind needs a target). */
+    void addControlCue (ControlKind kind);
     /** Wraps the selected cues (with their subtrees) in a new group. */
     void groupSelectedCues();
     /** Dissolves the selected group: its children move up one level. */

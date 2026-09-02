@@ -29,6 +29,9 @@ enum : juce::CommandID
     ungroupSelected,      // Ctrl+Shift+G
     collapseAllGroups,
     expandAllGroups,
+    addControlCue,        // Ctrl+9
+    addWaitCue,
+    addMemoCue,
     revertFade,           // Ctrl+Shift+R
     fetchFadeLevels,      // Ctrl+Shift+T
     removeCue,

@@ -2244,6 +2244,203 @@ private:
 };
 
 //==============================================================================
+/** 동작 tab: what a control cue does, to which cue, with which time / new target. */
+class CueInspector::ControlPanel : public juce::Component
+{
+public:
+    explicit ControlPanel (ProjectDocument& doc) : document (doc), cues (doc.cues)
+    {
+        styleLabel (kindLabel, ko ("동작"));
+        addAndMakeVisible (kindLabel);
+        kindCombo.addItem (ko ("시작 — 대상을 GO처럼 시작 (플레이헤드는 그대로), 일시정지 중이면 재개"), 1);
+        kindCombo.addItem (ko ("정지 — 대상을 바로 정지"), 2);
+        kindCombo.addItem (ko ("일시정지 — 대상을 멈춤 (시작 큐로 재개)"), 3);
+        kindCombo.addItem (ko ("로드 — 대상을 지정 시각에 미리 로드"), 4);
+        kindCombo.addItem (ko ("리셋 — 대상 정지 + 예약 취소 + 재생 기록 지움"), 5);
+        kindCombo.addItem (ko ("이동 — 플레이헤드를 대상으로"), 6);
+        kindCombo.addItem (ko ("대기 — 정해진 시간 동안 아무것도 안 함"), 7);
+        kindCombo.addItem (ko ("메모 — 아무것도 안 함"), 8);
+        kindCombo.addItem (ko ("활성화 — 대상을 아밍"), 9);
+        kindCombo.addItem (ko ("비활성화 — 대상의 아밍 해제"), 10);
+        kindCombo.addItem (ko ("대상 변경 — 대상(페이드/디밴프/제어 큐)의 대상을 바꿈"), 11);
+        kindCombo.setWantsKeyboardFocus (false);
+        kindCombo.onChange = [this]
+        {
+            if (refreshing || kindCombo.getSelectedId() <= 0)
+                return;
+
+            const auto kind = (ControlKind) (kindCombo.getSelectedId() - 1);
+            edit (ko ("제어 큐 동작"), [kind] (Cue& c) { c.control.kind = kind; });
+        };
+        addAndMakeVisible (kindCombo);
+
+        styleLabel (targetLabel, ko ("대상 큐"));
+        addAndMakeVisible (targetLabel);
+        targetCombo.setWantsKeyboardFocus (false);
+        targetCombo.onChange = [this] { commitTarget (targetCombo, targetIds, false); };
+        addAndMakeVisible (targetCombo);
+
+        styleLabel (secondLabel, ko ("새 대상"));
+        addAndMakeVisible (secondLabel);
+        secondCombo.setWantsKeyboardFocus (false);
+        secondCombo.onChange = [this] { commitTarget (secondCombo, secondIds, true); };
+        addAndMakeVisible (secondCombo);
+
+        styleLabel (secondsLabel, ko ("시간"));
+        addAndMakeVisible (secondsLabel);
+        secondsEditor.setJustification (juce::Justification::centredRight);
+        secondsEditor.setSelectAllWhenFocused (true);
+        secondsEditor.onReturnKey = [this] { commitSeconds(); };
+        secondsEditor.onFocusLost = [this] { commitSeconds(); };
+        addAndMakeVisible (secondsEditor);
+        styleLabel (secondsUnit, ko ("초"));
+        addAndMakeVisible (secondsUnit);
+
+        styleLabel (hint, ko ("제어 큐는 실행되는 순간 한 번 동작합니다. 대기 큐 뒤에 자동 팔로우를 걸면 그 시간 뒤에 다음 큐가 시작됩니다."), 11.0f);
+        addAndMakeVisible (hint);
+    }
+
+    void setEditable (bool shouldBeEditable)
+    {
+        editable = shouldBeEditable;
+        refresh();
+    }
+
+    void refresh()
+    {
+        const juce::ScopedValueSetter<bool> guard (refreshing, true);
+        const auto* cue = cues.getSelected();
+        const bool enabled = cue != nullptr && cue->isControl() && editable;
+
+        for (auto* c : std::initializer_list<juce::Component*> { &kindCombo, &targetCombo, &secondCombo, &secondsEditor })
+            c->setEnabled (enabled);
+
+        if (cue == nullptr || ! cue->isControl())
+            return;
+
+        shownId = cue->id;
+        kindCombo.setSelectedId ((int) cue->control.kind + 1, juce::dontSendNotification);
+        fillTargets (targetCombo, targetIds, cue->control.targetId, cue->id, false);
+        fillTargets (secondCombo, secondIds, cue->control.secondTargetId, cue->id, true);
+
+        const bool needsTarget = cue->control.needsTarget();
+        const bool isTarget = cue->control.kind == ControlKind::target;
+        const bool hasSeconds = cue->control.kind == ControlKind::wait || cue->control.kind == ControlKind::load;
+
+        for (auto* c : std::initializer_list<juce::Component*> { &targetLabel, &targetCombo })
+            c->setVisible (needsTarget);
+
+        for (auto* c : std::initializer_list<juce::Component*> { &secondLabel, &secondCombo })
+            c->setVisible (isTarget);
+
+        for (auto* c : std::initializer_list<juce::Component*> { &secondsLabel, &secondsEditor, &secondsUnit })
+            c->setVisible (hasSeconds);
+
+        secondsLabel.setText (cue->control.kind == ControlKind::load ? ko ("로드 시각") : ko ("대기 시간"), juce::dontSendNotification);
+
+        if (! secondsEditor.hasKeyboardFocus (true))
+            secondsEditor.setText (juce::String (cue->control.seconds, 2), false);
+    }
+
+    void resized() override
+    {
+        auto area = getLocalBounds().reduced (12, 6);
+        auto row = area.removeFromTop (24);
+        kindLabel.setBounds (row.removeFromLeft (48));
+        kindCombo.setBounds (row.removeFromLeft (420));
+        area.removeFromTop (6);
+        row = area.removeFromTop (24);
+        targetLabel.setBounds (row.removeFromLeft (48));
+        targetCombo.setBounds (row.removeFromLeft (260));
+        row.removeFromLeft (12);
+        secondLabel.setBounds (row.removeFromLeft (48));
+        secondCombo.setBounds (row.removeFromLeft (260));
+        row.removeFromLeft (12);
+        secondsLabel.setBounds (row.removeFromLeft (60));
+        secondsEditor.setBounds (row.removeFromLeft (70));
+        secondsUnit.setBounds (row.removeFromLeft (24));
+        area.removeFromTop (6);
+        hint.setBounds (area.removeFromTop (16));
+    }
+
+    void paint (juce::Graphics& g) override { g.fillAll (Palette::panel); }
+
+private:
+    void fillTargets (juce::ComboBox& combo, std::vector<juce::Uuid>& ids, const juce::Uuid& current, const juce::Uuid& selfId, bool onlyTargeting)
+    {
+        combo.clear (juce::dontSendNotification);
+        combo.addItem (ko ("(없음)"), 1);
+        ids.clear();
+        ids.push_back (juce::Uuid::null());
+        int selectedId = 1;
+
+        for (int i = 0; i < cues.size(); ++i)
+        {
+            const auto& c = cues.get (i);
+
+            if (c.id == selfId || (onlyTargeting && ! c.hasTarget()))
+                continue;
+
+            ids.push_back (c.id);
+            combo.addItem ((c.number.isNotEmpty() ? c.number + " " : "#" + juce::String (i + 1) + " ") + c.name, (int) ids.size());
+
+            if (current == c.id)
+                selectedId = (int) ids.size();
+        }
+
+        combo.setSelectedId (selectedId, juce::dontSendNotification);
+    }
+
+    void edit (const juce::String& name, const std::function<void (Cue&)>& mutator)
+    {
+        if (refreshing || ! editable)
+            return;
+
+        const int index = shownId.isNull() ? cues.getSelectedIndex() : cues.indexOf (shownId);
+
+        if (! cues.isValidIndex (index) || ! cues.get (index).isControl())
+            return;
+
+        document.perform (name, [this, index, mutator] { cues.update (index, mutator); });
+    }
+
+    void commitTarget (juce::ComboBox& combo, const std::vector<juce::Uuid>& ids, bool second)
+    {
+        if (refreshing || combo.getSelectedId() <= 0)
+            return;
+
+        const int index = combo.getSelectedId() - 1;
+
+        if (index < 0 || index >= (int) ids.size())
+            return;
+
+        const auto id = ids[(size_t) index];
+        edit (second ? ko ("제어 큐 새 대상") : ko ("제어 큐 대상"), [id, second] (Cue& c) { (second ? c.control.secondTargetId : c.control.targetId) = id; });
+    }
+
+    void commitSeconds()
+    {
+        const double seconds = secondsEditor.getText().trim().getDoubleValue();
+        const auto* cue = cues.getSelected();
+
+        if (cue == nullptr || ! cue->isControl() || juce::approximatelyEqual (seconds, cue->control.seconds))
+            return;
+
+        edit (ko ("제어 큐 시간"), [seconds] (Cue& c) { c.control.seconds = juce::jlimit (0.0, Cue::maxWaitSeconds, seconds); });
+    }
+
+    ProjectDocument& document;
+    CueList& cues;
+    juce::Label kindLabel, targetLabel, secondLabel, secondsLabel, secondsUnit, hint;
+    juce::ComboBox kindCombo, targetCombo, secondCombo;
+    juce::TextEditor secondsEditor;
+    std::vector<juce::Uuid> targetIds, secondIds;
+    juce::Uuid shownId = juce::Uuid::null();
+    bool refreshing = false;
+    bool editable = true;
+};
+
+//==============================================================================
 /** 그룹 tab: mode, playlist options and (for a timeline group) the children's start times as draggable bars. */
 class CueInspector::GroupPanel : public juce::Component
 {
@@ -2699,6 +2896,7 @@ CueInspector::CueInspector (ProjectDocument& doc, AudioEngine& e, AppSettings& s
     fadeParamsPanel = std::make_unique<FadeParamsPanel> (document, engine);
     devampPanel = std::make_unique<DevampPanel> (document);
     groupPanel = std::make_unique<GroupPanel> (document);
+    controlPanel = std::make_unique<ControlPanel> (document);
 
     tabs.setTabBarDepth (26);
     tabs.setOutline (0);
@@ -2767,6 +2965,7 @@ void CueInspector::setEditable (bool shouldBeEditable)
     fadeParamsPanel->setEditable (editable);
     devampPanel->setEditable (editable);
     groupPanel->setEditable (editable);
+    controlPanel->setEditable (editable);
 }
 
 void CueInspector::rebuildTabs (int wanted)
@@ -2777,7 +2976,14 @@ void CueInspector::rebuildTabs (int wanted)
     tabSet = wanted;
     tabs.clearTabs();
 
-    if (wanted == 3)
+    if (wanted == 4)
+    {
+        tabs.addTab (ko ("기본"), Palette::panel, basics, false);
+        tabs.addTab (ko ("동작"), Palette::panel, controlPanel.get(), false);
+        tabs.addTab (ko ("트리거"), Palette::panel, triggers, false);
+        tabs.setCurrentTabIndex (1);
+    }
+    else if (wanted == 3)
     {
         tabs.addTab (ko ("기본"), Palette::panel, basics, false);
         tabs.addTab (ko ("그룹"), Palette::panel, groupPanel.get(), false);
@@ -2847,7 +3053,7 @@ void CueInspector::refresh()
         title.setText (text, juce::dontSendNotification);
     }
 
-    rebuildTabs (cue == nullptr ? 0 : cue->isFade() ? 1 : cue->isDevamp() ? 2 : cue->isGroup() ? 3 : 0);
+    rebuildTabs (cue == nullptr ? 0 : cue->isFade() ? 1 : cue->isDevamp() ? 2 : cue->isGroup() ? 3 : cue->isControl() ? 4 : 0);
     basics->refresh();
     timeLoops->refresh();
     levels->refresh();
@@ -2859,6 +3065,7 @@ void CueInspector::refresh()
     fadeParamsPanel->refresh();
     devampPanel->refresh();
     groupPanel->refresh();
+    controlPanel->refresh();
 }
 
 void CueInspector::resized()

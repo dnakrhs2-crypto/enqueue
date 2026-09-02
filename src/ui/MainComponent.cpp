@@ -263,6 +263,7 @@ void MainComponent::getAllCommands (juce::Array<juce::CommandID>& ids)
                     CommandIDs::loadCue, CommandIDs::loadToTime, CommandIDs::resetCue, CommandIDs::resetAll,
                     CommandIDs::addCue, CommandIDs::addFadeCue, CommandIDs::addDevampCue, CommandIDs::addGroupCue, CommandIDs::groupSelectedCues,
                     CommandIDs::ungroupSelected, CommandIDs::collapseAllGroups, CommandIDs::expandAllGroups,
+                    CommandIDs::addControlCue, CommandIDs::addWaitCue, CommandIDs::addMemoCue,
                     CommandIDs::revertFade, CommandIDs::fetchFadeLevels, CommandIDs::removeCue, CommandIDs::duplicateCue,
                     CommandIDs::moveCueUp, CommandIDs::moveCueDown, CommandIDs::selectAll,
                     CommandIDs::copyCues, CommandIDs::cutCues, CommandIDs::pasteCues, CommandIDs::pasteCueProperties,
@@ -400,6 +401,22 @@ void MainComponent::getCommandInfo (juce::CommandID commandID, juce::Application
 
         case CommandIDs::collapseAllGroups:
             result.setInfo (ko ("모든 그룹 접기"), ko ("모든 그룹의 자식을 숨김"), cueMenu, 0);
+            break;
+
+        case CommandIDs::addControlCue:
+            result.setInfo (ko ("제어 큐 추가"), ko ("선택한 큐를 대상으로 하는 제어 큐 (시작/정지/일시정지/로드/리셋/이동/활성화/비활성화/대상 변경 — 종류는 인스펙터에서)"), cueMenu, 0);
+            result.addDefaultKeypress ('9', ModifierKeys::commandModifier);
+            result.setActive (canEdit);
+            break;
+
+        case CommandIDs::addWaitCue:
+            result.setInfo (ko ("대기 큐 추가"), ko ("정해진 시간 동안 아무것도 하지 않는 큐 (자동 팔로우 앞에 시간을 둘 때)"), cueMenu, 0);
+            result.setActive (canEdit);
+            break;
+
+        case CommandIDs::addMemoCue:
+            result.setInfo (ko ("메모 큐 추가"), ko ("아무것도 하지 않는 큐 (목록 안의 메모)"), cueMenu, 0);
+            result.setActive (canEdit);
             break;
 
         case CommandIDs::expandAllGroups:
@@ -705,6 +722,18 @@ bool MainComponent::perform (const InvocationInfo& info)
             setAllGroupsCollapsed (true);
             break;
 
+        case CommandIDs::addControlCue:
+            addControlCue (ControlKind::start);
+            break;
+
+        case CommandIDs::addWaitCue:
+            addControlCue (ControlKind::wait);
+            break;
+
+        case CommandIDs::addMemoCue:
+            addControlCue (ControlKind::memo);
+            break;
+
         case CommandIDs::expandAllGroups:
             setAllGroupsCollapsed (false);
             break;
@@ -907,6 +936,9 @@ juce::PopupMenu MainComponent::getMenuForIndex (int topLevelMenuIndex, const juc
             menu.addCommandItem (&commands, CommandIDs::addFadeCue);
             menu.addCommandItem (&commands, CommandIDs::addDevampCue);
             menu.addCommandItem (&commands, CommandIDs::addGroupCue);
+            menu.addCommandItem (&commands, CommandIDs::addControlCue);
+            menu.addCommandItem (&commands, CommandIDs::addWaitCue);
+            menu.addCommandItem (&commands, CommandIDs::addMemoCue);
             menu.addCommandItem (&commands, CommandIDs::groupSelectedCues);
             menu.addCommandItem (&commands, CommandIDs::ungroupSelected);
             menu.addCommandItem (&commands, CommandIDs::collapseAllGroups);
@@ -1090,6 +1122,39 @@ void MainComponent::addDevampCue()
             devamp.number = CueNumbering::next (document.cues.getAll(), at, increment);
 
         const int index = document.cues.addAfter (std::move (devamp), selected);
+        document.cues.setSelectedIndex (index);
+    });
+}
+
+void MainComponent::addControlCue (ControlKind kind)
+{
+    if (showMode)
+        return;
+
+    const int selected = document.cues.getSelectedIndex();
+    const auto* selectedCue = document.cues.getSelected();
+    const bool autoNumber = document.settings.autoNumber;
+    const double increment = document.settings.numberIncrement;
+    const juce::Uuid target = selectedCue != nullptr && kind != ControlKind::wait && kind != ControlKind::memo ? selectedCue->id : juce::Uuid::null();
+
+    document.perform (ko ("제어 큐 추가"), [this, selected, target, kind, autoNumber, increment]
+    {
+        Cue control;
+        control.type = CueType::control;
+        control.control.kind = kind;
+        control.control.targetId = target;
+        control.control.seconds = kind == ControlKind::wait ? 5.0 : 0.0;
+        control.name = kind == ControlKind::wait ? ko ("대기") : kind == ControlKind::memo ? ko ("메모") : ko ("시작");
+
+        if (const auto* t = document.cues.findById (target))
+            control.name = ko ("시작: ") + t->name;
+
+        const int at = selected >= 0 ? document.cues.subtreeEnd (selected) : document.cues.size();
+
+        if (autoNumber)
+            control.number = CueNumbering::next (document.cues.getAll(), at, increment);
+
+        const int index = document.cues.addAfter (std::move (control), selected);
         document.cues.setSelectedIndex (index);
     });
 }
@@ -1764,10 +1829,10 @@ int MainComponent::countBrokenCues() const
 
     for (const auto& cue : document.cues.getAll())
     {
-        if (cue.isGroup())
-            continue;   // a group has no file
+        if (cue.isGroup() || (cue.isControl() && ! cue.control.needsTarget()))
+            continue;   // no file, no target
 
-        if (cue.isFade() || cue.isDevamp())
+        if (cue.isFade() || cue.isDevamp() || cue.isControl())
         {
             if (cue.targetId().isNull() || document.cues.indexOf (cue.targetId()) < 0)
                 ++count;
@@ -1791,10 +1856,10 @@ void MainComponent::showWarnings()
         const auto& cue = cues.get (i);
         const juce::String label = "#" + juce::String (i + 1) + (cue.number.isNotEmpty() ? " [" + cue.number + "]" : juce::String()) + " " + cue.name;
 
-        if (cue.isGroup())
+        if (cue.isGroup() || (cue.isControl() && ! cue.control.needsTarget()))
             continue;
 
-        if (cue.isFade() || cue.isDevamp())
+        if (cue.isFade() || cue.isDevamp() || cue.isControl())
         {
             if (cue.targetId().isNull())
                 lines.add (label + ko (" - 대상 큐가 지정되지 않음"));

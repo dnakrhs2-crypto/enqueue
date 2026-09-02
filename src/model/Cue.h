@@ -68,7 +68,35 @@ struct DuckSettings
 };
 
 /** What a cue is. Only the fields that belong to its type are used / saved. */
-enum class CueType { audio, fade, devamp, group };
+enum class CueType { audio, fade, devamp, group, control };
+
+/** What a control cue does when it fires (QLab's Start / Stop / Pause / Load / Reset / GoTo / Wait / Memo / Arm /
+    Disarm / Target cues, folded into one type with a kind). */
+enum class ControlKind
+{
+    start,     // fires the target (with its sequence) without moving the playhead
+    stop,      // stops the target at once (de-clicked)
+    pause,     // pauses the target (a start cue resumes it)
+    load,      // pre-loads the target at 'seconds'
+    reset,     // stops the target, cancels its pending starts / follows, clears its fades
+    gotoCue,   // moves the playhead to the target
+    wait,      // does nothing for 'seconds' (a sequence's auto-follow waits for it)
+    memo,      // does nothing (a note in the list)
+    arm,       // arms the target
+    disarm,    // disarms the target
+    target     // points the target (a fade / devamp / control cue) at 'secondTargetId'
+};
+
+struct ControlCueData
+{
+    ControlKind kind = ControlKind::start;
+    juce::Uuid targetId = juce::Uuid::null();
+    juce::Uuid secondTargetId = juce::Uuid::null();   // target kind: the new target
+    double seconds = 0.0;                              // wait: length; load: file time
+
+    /** Kinds that act on a target cue. */
+    bool needsTarget() const noexcept { return kind != ControlKind::wait && kind != ControlKind::memo; }
+};
 
 /** How a group cue plays its children (QLab "Group"). */
 enum class GroupMode
@@ -216,6 +244,7 @@ struct Cue
     FadeCueData fade;                // used when type == fade
     DevampCueData devamp;            // used when type == devamp
     GroupCueData group;              // used when type == group
+    ControlCueData control;          // used when type == control
     juce::Uuid parentId = juce::Uuid::null();   // the group this cue belongs to (null = top level)
     SecondTriggerAction secondTrigger = SecondTriggerAction::hardStopRestart;
 
@@ -223,9 +252,16 @@ struct Cue
     bool isFade() const noexcept   { return type == CueType::fade; }
     bool isDevamp() const noexcept { return type == CueType::devamp; }
     bool isGroup() const noexcept  { return type == CueType::group; }
-    /** Fade / devamp cues point at another cue. */
-    juce::Uuid targetId() const noexcept { return isFade() ? fade.targetId : isDevamp() ? devamp.targetId : juce::Uuid::null(); }
-    void setTargetId (const juce::Uuid& newTarget) noexcept { if (isFade()) fade.targetId = newTarget; else if (isDevamp()) devamp.targetId = newTarget; }
+    bool isControl() const noexcept { return type == CueType::control; }
+    /** Fade / devamp / control cues point at another cue (a wait / memo control cue has none). */
+    bool hasTarget() const noexcept { return isFade() || isDevamp() || (isControl() && control.needsTarget()); }
+    juce::Uuid targetId() const noexcept { return isFade() ? fade.targetId : isDevamp() ? devamp.targetId : isControl() ? control.targetId : juce::Uuid::null(); }
+    void setTargetId (const juce::Uuid& newTarget) noexcept
+    {
+        if (isFade()) fade.targetId = newTarget;
+        else if (isDevamp()) devamp.targetId = newTarget;
+        else if (isControl()) control.targetId = newTarget;
+    }
 
     static constexpr int maxFadeMs = 600000;     // 10 minutes
     static constexpr double minGainDb = -60.0;   // treated as silence

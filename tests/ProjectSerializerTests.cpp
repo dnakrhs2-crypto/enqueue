@@ -408,6 +408,32 @@ public:
             expect (q.cues[0].parentId.isNull());
         }
 
+        beginTest ("control cues round-trip");
+        {
+            Project p;
+            Cue a;
+            a.name = "a";
+            Cue ctl;
+            ctl.name = "ctl";
+            ctl.type = CueType::control;
+            ctl.control.kind = ControlKind::target;
+            ctl.control.targetId = a.id;
+            ctl.control.secondTargetId = ctl.id;
+            ctl.control.seconds = 1.25;
+            p.cues.push_back (a);
+            p.cues.push_back (ctl);
+            const auto projectFile = tempRoot.getChildFile ("control.gocue");
+            expect (ProjectSerializer::save (p, projectFile).wasOk());
+            Project q;
+            expect (ProjectSerializer::load (projectFile, q).wasOk());
+            expectEquals ((int) q.cues.size(), 2);
+            expect (q.cues[1].isControl());
+            expect (q.cues[1].control.kind == ControlKind::target);
+            expect (q.cues[1].control.targetId == a.id);
+            expect (q.cues[1].control.secondTargetId == ctl.id);
+            expectWithinAbsoluteError (q.cues[1].control.seconds, 1.25, 1e-9);
+        }
+
         expect (tempRoot.deleteRecursively());
     }
 };

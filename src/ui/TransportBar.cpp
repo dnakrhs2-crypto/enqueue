@@ -96,6 +96,27 @@ void TransportBar::setStandbyCue (int index, const Cue* cue)
         return;
     }
 
+    if (cue->isControl())
+    {
+        static const char* const names[] = { "시작", "정지", "일시정지", "로드", "리셋", "이동", "대기", "메모", "활성화", "비활성화", "대상 변경" };
+        const auto kindName = ko (names[juce::jlimit (0, 10, (int) cue->control.kind)]);
+
+        if (cue->control.needsTarget())
+        {
+            const auto target = describeFadeTarget ? describeFadeTarget (*cue) : juce::String();
+            cueFile.setText (target.isNotEmpty() ? target : ko ("대상 없음"), juce::dontSendNotification);
+            cueFile.setColour (juce::Label::textColourId, target.isNotEmpty() ? Palette::dimText : Palette::missing);
+        }
+        else
+        {
+            cueFile.setText (cue->control.kind == ControlKind::wait ? ko ("대기 ") + juce::String (cue->control.seconds, 2) + ko ("초") : ko ("메모"), juce::dontSendNotification);
+            cueFile.setColour (juce::Label::textColourId, Palette::dimText);
+        }
+
+        cueMeta.setText (ko ("제어 큐: ") + kindName, juce::dontSendNotification);
+        return;
+    }
+
     if (cue->isDevamp())
     {
         const auto target = describeFadeTarget ? describeFadeTarget (*cue) : juce::String();

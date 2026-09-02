@@ -921,6 +921,120 @@ public:
             document.cues.remove (document.cues.indexOf (g.id));
         }
 
+        beginTest ("control cues: start / pause / stop / load / reset / goto / arm / target / wait / memo");
+        {
+            Cue x;
+            x.name = "x"; x.file = tone;
+            const int xi = document.cues.add (x);
+            auto makeControl = [&] (ControlKind kind, const juce::Uuid& target, double seconds = 0.0)
+            {
+                Cue c;
+                c.type = CueType::control;
+                c.control.kind = kind;
+                c.control.targetId = target;
+                c.control.seconds = seconds;
+                c.name = "ctl";
+                return c;
+            };
+
+            now += 1.0;
+            Cue startCue = makeControl (ControlKind::start, x.id);
+            document.cues.add (startCue);
+            expect (controller.trigger (startCue) == CueController::GoResult::started);
+            expect (engine.isPlaying (x.id));
+            render (engine, scheduler, now, out, 4);
+
+            Cue pauseCue = makeControl (ControlKind::pause, x.id);
+            document.cues.add (pauseCue);
+            expect (controller.trigger (pauseCue) == CueController::GoResult::started);
+            render (engine, scheduler, now, out, 2);
+            expect (engine.isPaused (x.id));
+            expect (controller.trigger (startCue) == CueController::GoResult::started);   // start resumes a paused target
+            render (engine, scheduler, now, out, 2);
+            expect (! engine.isPaused (x.id) && engine.isPlaying (x.id));
+
+            Cue stopCue = makeControl (ControlKind::stop, x.id);
+            document.cues.add (stopCue);
+            expect (controller.trigger (stopCue) == CueController::GoResult::started);
+            render (engine, scheduler, now, out, 2);
+            expect (! engine.isPlaying (x.id));
+
+            Cue loadCue = makeControl (ControlKind::load, x.id, 0.5);
+            document.cues.add (loadCue);
+            expect (controller.trigger (loadCue) == CueController::GoResult::started);
+            expect (engine.isLoaded (x.id));
+
+            Cue resetCue = makeControl (ControlKind::reset, x.id);
+            document.cues.add (resetCue);
+            expect (controller.trigger (startCue) == CueController::GoResult::started);
+            expect (controller.hasPlayed (x.id));
+            expect (controller.trigger (resetCue) == CueController::GoResult::started);
+            render (engine, scheduler, now, out, 2);
+            expect (! engine.isPlaying (x.id));
+            expect (! controller.hasPlayed (x.id));
+
+            // goto: GO on it leaves the playhead on the target instead of the next row
+            Cue gotoCue = makeControl (ControlKind::gotoCue, x.id);
+            const int gi = document.cues.add (gotoCue);
+            now += 1.0;
+            document.cues.setPlayheadIndex (gi);
+            expect (controller.go() == CueController::GoResult::started);
+            controller.goKeyReleased();
+            expectEquals (document.cues.getPlayheadIndex(), xi);
+
+            // arm / disarm change the target's armed flag; target re-points a fade cue
+            Cue disarmCue = makeControl (ControlKind::disarm, x.id);
+            document.cues.add (disarmCue);
+            expect (controller.trigger (disarmCue) == CueController::GoResult::started);
+            expect (! document.cues.get (xi).armed);
+            Cue armCue = makeControl (ControlKind::arm, x.id);
+            document.cues.add (armCue);
+            expect (controller.trigger (armCue) == CueController::GoResult::started);
+            expect (document.cues.get (xi).armed);
+
+            Cue fadeCue;
+            fadeCue.type = CueType::fade;
+            fadeCue.name = "fade";
+            fadeCue.fade.targetId = x.id;
+            document.cues.add (fadeCue);
+            Cue targetCue = makeControl (ControlKind::target, fadeCue.id);
+            targetCue.control.secondTargetId = a.id;
+            document.cues.add (targetCue);
+            expect (controller.trigger (targetCue) == CueController::GoResult::started);
+            expect (document.cues.findById (fadeCue.id)->fade.targetId == a.id);
+
+            // wait: active for its length, so an auto-follow behind it waits; memo does nothing
+            Cue waitCue = makeControl (ControlKind::wait, juce::Uuid::null(), 0.4);
+            waitCue.continueMode = ContinueMode::autoFollow;
+            const int wi = document.cues.add (waitCue);
+            Cue afterWait;
+            afterWait.name = "afterWait"; afterWait.file = tone;
+            document.cues.add (afterWait, wi + 1);
+            now += 1.0;
+            controller.fireSequence (wi);
+            expect (controller.isCueActive (waitCue.id));
+            expect (! engine.isPlaying (afterWait.id));
+            render (engine, scheduler, now, out, 20);    // 0.23 s
+            expect (! engine.isPlaying (afterWait.id));
+            render (engine, scheduler, now, out, 20);    // 0.46 s: the wait is over
+            expect (engine.isPlaying (afterWait.id));
+            expect (! controller.isCueActive (waitCue.id));
+
+            Cue memoCue = makeControl (ControlKind::memo, juce::Uuid::null());
+            document.cues.add (memoCue);
+            expect (controller.trigger (memoCue) == CueController::GoResult::started);
+            expect (controller.hasPlayed (memoCue.id));
+
+            // a control cue without its target fails with a message
+            Cue broken = makeControl (ControlKind::stop, juce::Uuid::null());
+            document.cues.add (broken);
+            expect (controller.trigger (broken) == CueController::GoResult::failed);
+            stopEverything();
+
+            while (document.cues.size() > 2)
+                document.cues.remove (document.cues.size() - 1);
+        }
+
         beginTest ("played cues are remembered for the second colour until reset");
         {
             controller.resetAll();

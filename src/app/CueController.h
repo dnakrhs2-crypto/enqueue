@@ -142,6 +142,8 @@ private:
     bool firstTriggerSeen = true;
     struct Pending { int id; juce::Uuid owner; };
     std::vector<Pending> pending;
+    GoResult triggerControl (const Cue& cue, int index, bool audition);
+    std::map<juce::Uuid, double> waits;                            // wait cues: id -> end time
     struct PlaylistRun { std::vector<juce::Uuid> order; int position = 0; bool audition = false; juce::Uuid current = juce::Uuid::null(); };
     std::map<juce::Uuid, PlaylistRun> playlists;                  // running playlist groups
     std::map<juce::Uuid, std::set<juce::Uuid>> randomUsed;        // random groups: children played this round

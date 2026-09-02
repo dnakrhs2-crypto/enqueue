@@ -23,8 +23,152 @@ bool CueController::isCueActive (const juce::Uuid& id) const
     if (engine.isPlaying (id) || fadeRunner.isRunning (id))
         return true;
 
+    if (const auto w = waits.find (id); w != waits.end() && clock() < w->second)
+        return true;
+
     const int index = document.cues.indexOf (id);
     return index >= 0 && document.cues.get (index).isGroup() && isGroupActive (index);
+}
+
+CueController::GoResult CueController::triggerControl (const Cue& cue, int index, bool audition)
+{
+    auto& cues = document.cues;
+    const auto& ctl = cue.control;
+
+    if (ctl.kind == ControlKind::wait)
+    {
+        waits[cue.id] = clock() + ctl.seconds;
+        status (ko ("대기 ") + juce::String (ctl.seconds, 2) + ko ("초: ") + cueLabel (index, cue));
+        played.insert (cue.id);
+        return GoResult::started;
+    }
+
+    if (ctl.kind == ControlKind::memo)
+    {
+        played.insert (cue.id);
+        return GoResult::started;
+    }
+
+    const int target = ctl.targetId.isNull() ? -1 : cues.indexOf (ctl.targetId);
+
+    if (target < 0)
+    {
+        status (ko ("제어 큐에 대상이 없습니다: ") + cueLabel (index, cue), true);
+        return GoResult::failed;
+    }
+
+    const Cue targetCue = cues.get (target);
+    const auto targetLabel = cueLabel (target, targetCue);
+
+    switch (ctl.kind)
+    {
+        case ControlKind::start:
+            if (engine.isPaused (targetCue.id))
+            {
+                engine.resume (targetCue.id);
+                status (ko ("재개: ") + targetLabel);
+            }
+            else
+            {
+                fireSequence (target, audition);   // like a GO on the target, without moving the playhead
+                status (ko ("시작: ") + targetLabel);
+            }
+            break;
+
+        case ControlKind::stop:
+            cancelPendingFor (targetCue.id);
+            waits.erase (targetCue.id);
+
+            if (targetCue.isGroup())
+                stopGroup (targetCue.id, 0);
+            else
+            {
+                fadeRunner.stop (targetCue.id);
+                engine.stop (targetCue.id);
+            }
+
+            status (ko ("정지: ") + targetLabel);
+            break;
+
+        case ControlKind::pause:
+            if (targetCue.isGroup())
+            {
+                for (int i : cues.descendantsOf (target))
+                    if (engine.isPlaying (cues.get (i).id) && ! engine.isPaused (cues.get (i).id))
+                        engine.pause (cues.get (i).id);
+            }
+            else if (engine.isPlaying (targetCue.id) && ! engine.isPaused (targetCue.id))
+            {
+                engine.pause (targetCue.id);
+            }
+
+            status (ko ("일시정지: ") + targetLabel);
+            break;
+
+        case ControlKind::load:
+        {
+            juce::String error;
+
+            if (targetCue.isAudio() && ! engine.load (targetCue, ctl.seconds, &error))
+            {
+                status (error, true);
+                return GoResult::failed;
+            }
+
+            status (ko ("로드: ") + targetLabel);
+            break;
+        }
+
+        case ControlKind::reset:
+            cancelPendingFor (targetCue.id);
+            waits.erase (targetCue.id);
+            fadeRunner.stop (targetCue.id);
+
+            if (targetCue.isGroup())
+                stopGroup (targetCue.id, 0);
+            else
+                engine.stop (targetCue.id);
+
+            played.erase (targetCue.id);
+            status (ko ("리셋: ") + targetLabel);
+            break;
+
+        case ControlKind::gotoCue:
+            lastGroupEnterIndex = target;   // go() puts the playhead here instead of past this cue
+            cues.setPlayheadIndex (target);
+            status (ko ("이동: ") + targetLabel);
+            break;
+
+        case ControlKind::arm:
+        case ControlKind::disarm:
+        {
+            const bool arm = ctl.kind == ControlKind::arm;
+            cues.update (target, [arm] (Cue& c) { c.armed = arm; });
+            status ((arm ? ko ("활성화: ") : ko ("비활성화: ")) + targetLabel);
+            break;
+        }
+
+        case ControlKind::target:
+        {
+            if (! targetCue.hasTarget())
+            {
+                status (ko ("대상 큐가 대상을 가질 수 없는 종류입니다: ") + targetLabel, true);
+                return GoResult::failed;
+            }
+
+            const auto newTarget = ctl.secondTargetId;
+            cues.update (target, [newTarget] (Cue& c) { c.setTargetId (newTarget); });
+            status (ko ("대상 변경: ") + targetLabel);
+            break;
+        }
+
+        case ControlKind::wait:
+        case ControlKind::memo:
+            break;
+    }
+
+    played.insert (cue.id);
+    return GoResult::started;
 }
 
 bool CueController::isGroupActive (int index) const
@@ -413,6 +557,9 @@ CueController::GoResult CueController::triggerImpl (const Cue& cue, bool auditio
 {
     const int index = document.cues.indexOf (cue.id);
     const bool auditionNow = isAuditionRequested (audition);
+
+    if (cue.isControl())
+        return triggerControl (cue, index, audition);
 
     if (cue.isGroup())
     {
@@ -818,7 +965,7 @@ CueController::GoResult CueController::go (bool audition)
     firstTriggerSeen = false;
     firstTriggerResult = GoResult::started;
     const int after = fireSequence (index, audition);
-    const bool targeting = copy.isFade() || copy.isDevamp() || copy.isGroup();
+    const bool targeting = copy.isFade() || copy.isDevamp() || copy.isGroup() || copy.isControl();
     const bool firstFailed = copy.armed && copy.preWaitSeconds <= 0.0
                              && (targeting ? (firstTriggerSeen && firstTriggerResult == GoResult::failed) : ! engine.isPlaying (copy.id));
     const bool anyStarted = isCueActive (copy.id) || getNumPending() > 0 || (targeting && ! firstFailed);
@@ -994,6 +1141,7 @@ void CueController::panicAll()
     const double now = clock();
     cancelPending();
     playlists.clear();
+    waits.clear();
 
     if (now - lastPanicTime <= doubleEscSeconds)
     {
@@ -1015,6 +1163,7 @@ void CueController::hardStopAll()
     fadeRunner.stopAll();
     cancelPending();
     playlists.clear();
+    waits.clear();
     engine.stopAll();
     status (ko ("전체 즉시 정지"));
 }
@@ -1041,6 +1190,7 @@ void CueController::resetAll()
     cancelPending();
     playlists.clear();
     randomUsed.clear();
+    waits.clear();
     ducks.clear();
     played.clear();
     engine.stopAll();
