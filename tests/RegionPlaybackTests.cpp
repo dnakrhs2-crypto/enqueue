@@ -1,4 +1,5 @@
 #include "audio/AudioEngine.h"
+#include "audio/ReadAheadSource.h"
 #include "model/ProjectSerializer.h"
 
 #include <juce_audio_formats/juce_audio_formats.h>
@@ -694,6 +695,144 @@ public:
 
             expect (! engine.isPlaying (loop2.id));
             expect (blocksToSeconds (rendered) < 0.5);
+        }
+
+        beginTest ("a marker at or before the trim start owns the first slice (model and engine agree)");
+        {
+            // 2 s file trimmed to [0.6, 1.0); a marker at 0.3 s (before the trim) says "forever": the region loops
+            const auto two = writeSine (dir, "two3.wav", 2.0, 0.5f);
+            Cue cue;
+            cue.file = two;
+            cue.durationSeconds = 2.0;
+            cue.audio.startSeconds = 0.6;
+            cue.audio.endSeconds = 1.0;
+            cue.audio.slices = { { 0.3, -1 } };
+            cue.audio.firstSliceCount = 1;
+            expect (cue.audio.firstCountFor (0.6) == -1);
+            expect (cue.audio.hasEndlessSlice (0.6, 1.0));
+            expect (cue.effectiveLength() < 0.0);
+            expect (engine.play (cue));
+
+            for (int i = 0; i < (int) (1.5 * sampleRate / blockSize); ++i)   // well past the 0.4 s region
+            {
+                engine.renderBlock (out, blockSize);
+                engine.reapFinishedPlayers();
+            }
+
+            expect (engine.isPlaying (cue.id));   // still looping
+            engine.stopAll();
+            engine.renderBlock (out, blockSize);
+            engine.reapFinishedPlayers();
+
+            // a marker exactly at the start with count 0 skips the region's first slice: nothing to play
+            Cue skipped = cue;
+            skipped.id = juce::Uuid();
+            skipped.audio.slices = { { 0.6, 0 } };
+            expect (skipped.audio.firstCountFor (0.6) == 0);
+            expect (! engine.play (skipped));
+        }
+
+        beginTest ("devamp on finite slices with an endless sequence ends at the sequence pass boundary");
+        {
+            // two slices of 0.25 s each, the whole sequence forever: devamp must finish the *sequence* pass
+            const auto two = writeSine (dir, "two4.wav", 2.0, 0.5f);
+            Cue cue;
+            cue.file = two;
+            cue.durationSeconds = 2.0;
+            cue.audio.endSeconds = 0.5;
+            cue.audio.slices = { { 0.25, 1 } };
+            cue.audio.infiniteLoop = true;
+            expect (engine.play (cue));
+
+            for (int i = 0; i < 5; ++i)   // inside the first slice of the first sequence pass
+                engine.renderBlock (out, blockSize);
+
+            const double toEnd = engine.getSecondsToPassEnd (cue.id);
+            expect (toEnd > 0.3 && toEnd < 0.5);                       // the sequence pass (0.5 s), not the slice (0.25 s)
+            const double reported = engine.finishCurrentPass (cue.id, true);
+            expectWithinAbsoluteError (reported, toEnd, 0.02);
+            int rendered = 0;
+
+            for (int i = 0; i < 200; ++i)
+            {
+                engine.renderBlock (out, blockSize);
+                ++rendered;
+                engine.reapFinishedPlayers();
+
+                if (! engine.isPlaying (cue.id))
+                    break;
+            }
+
+            expect (! engine.isPlaying (cue.id));
+            expectWithinAbsoluteError (blocksToSeconds (rendered), toEnd, 0.03);
+
+            // nothing endless and no stop: the devamp reports failure
+            Cue once = cue;
+            once.id = juce::Uuid();
+            once.audio.infiniteLoop = false;
+            expect (engine.play (once));
+            engine.renderBlock (out, blockSize);
+            expect (engine.finishCurrentPass (once.id, false) < 0.0);
+            engine.stopAll();
+            engine.renderBlock (out, blockSize);
+            engine.reapFinishedPlayers();
+        }
+
+        beginTest ("read-ahead serves cached audio and invalidate() refills from the new position at once");
+        {
+            struct RampSource : public juce::PositionableAudioSource
+            {
+                juce::int64 pos = 0;
+                int epoch = 0;   // "content" version: a layout change in the real source
+
+                void prepareToPlay (int, double) override {}
+                void releaseResources() override {}
+                void getNextAudioBlock (const juce::AudioSourceChannelInfo& info) override
+                {
+                    for (int i = 0; i < info.numSamples; ++i)
+                        info.buffer->setSample (0, info.startSample + i, (float) (pos + i + (juce::int64) epoch * 1000000));
+
+                    pos += info.numSamples;
+                }
+                void setNextReadPosition (juce::int64 p) override { pos = p; }
+                juce::int64 getNextReadPosition() const override { return pos; }
+                juce::int64 getTotalLength() const override { return 1 << 30; }
+                bool isLooping() const override { return false; }
+            };
+
+            juce::TimeSliceThread thread ("read-ahead test");
+            thread.startThread();
+
+            {
+                RampSource ramp;
+                ReadAheadSource ahead (ramp, thread, 16384, 1);
+                ahead.setNextReadPosition (1000);
+                ahead.prepareToPlay (512, 44100.0);
+                expect (ahead.getNumSamplesReady() >= 512);
+
+                juce::AudioBuffer<float> block (1, 512);
+                juce::AudioSourceChannelInfo info (&block, 0, 512);
+                ahead.getNextAudioBlock (info);
+                expectWithinAbsoluteError (block.getSample (0, 0), 1000.0f, 0.01f);
+                expectWithinAbsoluteError (block.getSample (0, 511), 1511.0f, 0.01f);
+                ahead.getNextAudioBlock (info);
+                expectWithinAbsoluteError (block.getSample (0, 0), 1512.0f, 0.01f);   // continues from the cache
+
+                // the upstream's content changes: invalidate() must serve the new content from the new position immediately
+                ramp.epoch = 1;
+                ahead.invalidate (5000);
+                ahead.getNextAudioBlock (info);
+                expectWithinAbsoluteError (block.getSample (0, 0), 1005000.0f, 0.5f);
+                expectWithinAbsoluteError (block.getSample (0, 511), 1005511.0f, 0.5f);
+
+                // a plain position move inside the cached range keeps serving the cache (old content is fine there)
+                ahead.setNextReadPosition (5100);
+                ahead.getNextAudioBlock (info);
+                expectWithinAbsoluteError (block.getSample (0, 0), 1005100.0f, 0.5f);
+                ahead.releaseResources();
+            }
+
+            thread.stopThread (2000);
         }
 
         beginTest ("an empty region is refused with a message");

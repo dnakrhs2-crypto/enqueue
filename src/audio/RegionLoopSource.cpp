@@ -275,16 +275,23 @@ juce::int64 RegionLoopSource::finishCurrentPass (juce::int64 virtualPosition, bo
         resolvedRuns.push_back ({ fileStart, count });
     };
 
+    // the boundary is what passEndFor() reports: the endless run's pass, else the endless sequence's pass
     juce::int64 boundary;
 
     if (run.count < 0)
     {
         resolve (run.fileStart, loc.pass + 1);
         boundary = virtualPosition - loc.offset + run.length;
+
+        if (stopAfterThisPass)
+        {
+            stopAfterStart = run.fileStart;            // nothing after the loop point
+            resolvedSequenceCount = loc.sequencePass + 1;
+        }
     }
     else if (l.sequenceCount < 0)
     {
-        resolvedSequenceCount = loc.sequencePass + 1;
+        resolvedSequenceCount = loc.sequencePass + 1;  // this sequence pass is the last: with stop it simply ends there
         boundary = (juce::int64) (loc.sequencePass + 1) * l.sequenceLength();
     }
     else if (! stopAfterThisPass)
@@ -293,20 +300,10 @@ juce::int64 RegionLoopSource::finishCurrentPass (juce::int64 virtualPosition, bo
     }
     else
     {
-        resolve (run.fileStart, loc.pass + 1);   // finite loop: still end after this pass
+        resolve (run.fileStart, loc.pass + 1);         // finite loop: still end after this pass, skip the rest
         resolvedSequenceCount = loc.sequencePass + 1;
-        boundary = virtualPosition - loc.offset + run.length;
-    }
-
-    if (stopAfterThisPass)
-    {
         stopAfterStart = run.fileStart;
-        resolvedSequenceCount = loc.sequencePass + 1;
-
-        if (run.count >= 0 || l.sequenceCount >= 0)
-            resolve (run.fileStart, loc.pass + 1);
-
-        boundary = virtualPosition - loc.offset + run.length;   // with the later runs skipped the pass end is the end
+        boundary = virtualPosition - loc.offset + run.length;
     }
 
     rebuildLayout();
