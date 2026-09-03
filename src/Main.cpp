@@ -18,7 +18,7 @@ public:
 
     const juce::String getApplicationName() override       { return JUCE_APPLICATION_NAME_STRING; }
     const juce::String getApplicationVersion() override    { return JUCE_APPLICATION_VERSION_STRING; }
-    bool moreThanOneInstanceAllowed() override             { return true; }
+    bool moreThanOneInstanceAllowed() override             { return false; }   // a .gocue opened from Explorer lands in the running window
 
     void initialise (const juce::String& commandLine) override
     {
@@ -136,8 +136,13 @@ public:
 
     void anotherInstanceStarted (const juce::String& commandLine) override
     {
-        if (mainWindow != nullptr)
-            mainWindow->getMainComponent().openProjectFromCommandLine (commandLine);
+        if (mainWindow == nullptr)
+            return;
+
+        // the running window takes the file (with the usual unsaved-changes question) and comes to the front
+        mainWindow->setMinimised (false);
+        mainWindow->toFront (true);
+        mainWindow->getMainComponent().openProjectFromCommandLine (commandLine);
     }
 
 private:
