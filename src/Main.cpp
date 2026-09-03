@@ -148,6 +148,9 @@ public:
 private:
     void changeListenerCallback (juce::ChangeBroadcaster*) override
     {
+        if (engine != nullptr)
+            engine->enforceOutputLimit();   // a non-ASIO type never keeps more than outputs 1-2
+
         saveDeviceState();
     }
 

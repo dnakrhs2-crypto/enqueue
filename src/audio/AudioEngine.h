@@ -58,6 +58,14 @@ public:
         Returns an error message, or an empty string on success. */
     juce::String initialise (const juce::XmlElement* savedDeviceState);
     static constexpr int maxDeviceOutputs = 64;
+    /** Outputs beyond a stereo pair are for ASIO only (gom, 2026-09-03): the Windows Audio modes stay at 1-2. */
+    static constexpr int stereoOnlyOutputs = 2;
+    /** True when the current device type may open more than two outputs (ASIO). */
+    bool currentTypeAllowsMultichannel() const;
+    /** How many outputs the current device type may open: maxDeviceOutputs on ASIO, 2 elsewhere. */
+    int outputLimitForCurrentType() const { return currentTypeAllowsMultichannel() ? maxDeviceOutputs : stereoOnlyOutputs; }
+    /** Trims the open outputs to that limit (a saved 8-channel WASAPI setup comes back as 1-2). Message thread. */
+    void enforceOutputLimit();
     static constexpr int maxDeviceInputs = 32;
     /** Mic cues need device inputs: opens the first 'channels' input channels (the mic cue rows are the *first*
         open inputs, so inputs 1..N must be the ones open); 0 leaves the device as is. Restarts the device when it

@@ -35,6 +35,7 @@ AudioEngine::~AudioEngine()
 juce::String AudioEngine::initialise (const juce::XmlElement* savedDeviceState)
 {
     const auto error = deviceManager.initialise (0, maxDeviceOutputs, savedDeviceState, true);
+    enforceOutputLimit();
 
     if (! callbackAdded)
     {
@@ -43,6 +44,36 @@ juce::String AudioEngine::initialise (const juce::XmlElement* savedDeviceState)
     }
 
     return error;
+}
+
+bool AudioEngine::currentTypeAllowsMultichannel() const
+{
+    if (auto* type = deviceManager.getCurrentDeviceTypeObject())
+        return type->getTypeName().containsIgnoreCase ("ASIO");
+
+    return false;
+}
+
+void AudioEngine::enforceOutputLimit()
+{
+    if (currentTypeAllowsMultichannel())
+        return;
+
+    auto* device = deviceManager.getCurrentAudioDevice();
+
+    if (device == nullptr)
+        return;
+
+    const auto active = device->getActiveOutputChannels();
+
+    if (active.getHighestBit() < stereoOnlyOutputs)
+        return;   // already within 1-2
+
+    auto setup = deviceManager.getAudioDeviceSetup();
+    setup.useDefaultOutputChannels = false;
+    setup.outputChannels.clear();
+    setup.outputChannels.setRange (0, stereoOnlyOutputs, true);
+    deviceManager.setAudioDeviceSetup (setup, true);   // the change callback runs again and finds nothing to do
 }
 
 juce::String AudioEngine::setInputsWanted (int channels)

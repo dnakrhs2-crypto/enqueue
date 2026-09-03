@@ -2,7 +2,7 @@
 
 Windows용 오디오 큐 플레이어. QLab의 오디오 기능을 단계적으로 옮기고 있다 (진행 계획: `docs/superpowers/plans/2026-09-02-gocue-qlab-features.md`).
 
-- 출력 장치: ASIO / WASAPI (`juce::AudioDeviceManager`, 메뉴 `오디오 > 오디오 출력 설정`)
+- 출력 장치: ASIO / WASAPI (`juce::AudioDeviceManager`, 메뉴 `오디오 > 오디오 출력 설정`). 다채널 출력은 ASIO에서만, 다른 모드는 출력 1-2로 제한
 - 재생 포맷: WAV / AIFF / FLAC / MP3 / OGG / AAC·M4A·MP4(Media Foundation), 최대 24채널 파일
 - **레벨 매트릭스**(파일 채널 × 큐 출력, 겡, 트림) + **오디오 패치**(큐 출력 → 장치 출력 라우팅, 출력 인서트, 최대 64채널 장치) + **오디션**(Alt+Space / Alt+V: 소리 없이 또는 대체 패치로)
 - **페이드 큐**: 재생 중인 대상 큐의 메인·매트릭스·속도·VST3 파라미터를 시간에 걸쳐 변경(절대/상대, 활성 칸, 완료 시 정지, S커브/파라메트릭/직선/커스텀 + 오디오 도메인, 라이브 미리보기, 되돌리기)
