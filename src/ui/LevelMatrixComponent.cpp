@@ -310,7 +310,7 @@ juce::String LevelMatrixComponent::textFor (double db) const
 void LevelMatrixComponent::paint (juce::Graphics& g)
 {
     g.fillAll (Palette::panel);
-    g.setFont (juce::Font (juce::FontOptions (12.0f)));
+    g.setFont (juce::Font (juce::FontOptions (14.0f)));
 
     const int x0 = headerWidth + gap;
     const int y0 = headerHeight + gap;
@@ -324,8 +324,10 @@ void LevelMatrixComponent::paint (juce::Graphics& g)
         const auto name = o < outputNames.size() && outputNames[o].isNotEmpty() ? outputNames[o] : juce::String (o + 1);
         g.drawFittedText (name, r, juce::Justification::centred, 1);
 
-        if (! connected)   // "dog ear": this cue output reaches no device output
+        if (! connected)   // this cue output reaches no device output (Windows Audio: 1-2 only): struck through, "dog ear"
         {
+            g.setColour (Palette::fadingOut.withAlpha (0.8f));
+            g.drawLine ((float) r.getX() + 10.0f, (float) r.getCentreY(), (float) r.getRight() - 12.0f, (float) r.getCentreY(), 1.5f);
             juce::Path ear;
             ear.addTriangle ((float) r.getRight() - 8.0f, (float) r.getY() + 2.0f, (float) r.getRight() - 1.0f, (float) r.getY() + 2.0f, (float) r.getRight() - 1.0f, (float) r.getY() + 9.0f);
             g.setColour (Palette::fadingOut);
@@ -363,6 +365,13 @@ void LevelMatrixComponent::paint (juce::Graphics& g)
         if (! editable)
             fill = fill.withAlpha (0.5f);
 
+        // a whole column goes grey when its cue output reaches no device output: the value is kept (it counts
+        // again on a wider device) but it does nothing right now
+        const bool dead = c.out >= 0 && c.out < (int) outputConnected.size() && ! outputConnected[(size_t) c.out];
+
+        if (dead)
+            fill = fill.withAlpha (0.12f);
+
         const bool active = isActive (c);
 
         if (! active)
@@ -390,7 +399,7 @@ void LevelMatrixComponent::paint (juce::Graphics& g)
             g.drawRoundedRectangle (r.toFloat().reduced (0.5f), 3.0f, 1.5f);
         }
 
-        g.setColour (silent ? Palette::dimText : Palette::text);
+        g.setColour (dead ? Palette::dimText.withAlpha (0.35f) : (silent ? Palette::dimText : Palette::text));
         g.drawFittedText (textFor (value), r.reduced (3, 0), juce::Justification::centred, 1);
     });
 }

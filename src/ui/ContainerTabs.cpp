@@ -37,7 +37,7 @@ void ContainerTabs::refresh()
 
 void ContainerTabs::resized()
 {
-    juce::Font font (juce::FontOptions (13.0f));
+    juce::Font font (juce::FontOptions (15.0f));
     int x = 4;
 
     for (auto& t : tabs)
@@ -84,7 +84,7 @@ void ContainerTabs::paint (juce::Graphics& g)
         }
 
         g.setColour (t.active ? Palette::text : Palette::dimText);
-        g.setFont (juce::Font (juce::FontOptions (13.0f, t.active ? juce::Font::bold : juce::Font::plain)));
+        g.setFont (juce::Font (juce::FontOptions (15.0f, t.active ? juce::Font::bold : juce::Font::plain)));
         g.drawText (t.name, textX, r.getY(), r.getRight() - textX - 6, r.getHeight(), juce::Justification::centredLeft, true);
     }
 

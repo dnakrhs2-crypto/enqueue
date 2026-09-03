@@ -57,10 +57,10 @@ public:
     void focusLost (FocusChangeType) override;
 
     static constexpr int cellWidth = 58;
-    static constexpr int cellHeight = 22;
+    static constexpr int cellHeight = 24;
     static constexpr int gap = 3;
     static constexpr int headerWidth = 64;
-    static constexpr int headerHeight = 20;
+    static constexpr int headerHeight = 22;
 
 private:
     enum class Kind { none, main, input, output, cross };

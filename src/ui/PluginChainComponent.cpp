@@ -29,7 +29,7 @@ public:
             title = ko ("[없음] ") + title;
 
         name.setText (title, juce::dontSendNotification);   // the number sits in the badge on the left
-        name.setFont (juce::Font (juce::FontOptions (13.0f, juce::Font::bold)));
+        name.setFont (juce::Font (juce::FontOptions (15.0f, juce::Font::bold)));
         name.setColour (juce::Label::textColourId, missing ? Palette::missing : Palette::text);
         name.setMinimumHorizontalScale (0.8f);
         name.setInterceptsMouseClicks (false, false);   // a double-click on the name reaches mouseDoubleClick() below
@@ -107,7 +107,7 @@ public:
         g.setColour (missing ? Palette::missing : Palette::standby);
         g.fillEllipse (badge);
         g.setColour (juce::Colours::white);
-        g.setFont (juce::Font (juce::FontOptions (12.0f, juce::Font::bold)));
+        g.setFont (juce::Font (juce::FontOptions (13.0f, juce::Font::bold)));
         g.drawText (juce::String (index + 1), badge, juce::Justification::centred, false);
     }
 
@@ -161,7 +161,7 @@ PluginChainComponent::PluginChainComponent (AudioEngine& e, PluginWindowManager&
     addAndMakeVisible (manageButton);
 
     emptyLabel.setColour (juce::Label::textColourId, Palette::dimText);
-    emptyLabel.setFont (juce::Font (juce::FontOptions (13.0f)));
+    emptyLabel.setFont (juce::Font (juce::FontOptions (15.0f)));
     emptyLabel.setInterceptsMouseClicks (false, false);   // it overlays the strip; never swallow slot clicks
     addAndMakeVisible (emptyLabel);
 

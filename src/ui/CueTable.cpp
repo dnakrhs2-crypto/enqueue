@@ -11,7 +11,7 @@ namespace gocue
 namespace
 {
     const juce::String rowDragDescription ("gocue-rows");
-    constexpr int rowHeights[] = { 28, 34, 42 };
+    constexpr int rowHeights[] = { 32, 38, 46 };   // 18 pt text (gom: bigger, 2026-09-03)
     constexpr int indentPerLevel = 18;
     constexpr int disclosureWidth = 16;
 }
@@ -41,7 +41,7 @@ public:
         setText (initial, false);
         setSelectAllWhenFocused (true);
         setJustification (column == colName || column == colNumber ? juce::Justification::centredLeft : juce::Justification::centred);   // like the cells
-        setFont (juce::Font (juce::FontOptions (16.0f)));
+        setFont (juce::Font (juce::FontOptions (18.0f)));
         onReturnKey = [this] { commit(); };
         onEscapeKey = [this] { cancel(); };
         onFocusLost = [this] { commit(); };
@@ -654,7 +654,7 @@ void CueTable::paintCell (juce::Graphics& g, int rowNumber, int columnId, int wi
 
     g.setColour (colour);
     const bool strong = columnId == colName || columnId == colNumber;
-    g.setFont (juce::Font (juce::FontOptions (strong ? 16.0f : 15.0f, strong ? juce::Font::bold : juce::Font::plain)));
+    g.setFont (juce::Font (juce::FontOptions (strong ? 18.0f : 17.0f, strong ? juce::Font::bold : juce::Font::plain)));
     g.drawText (text, 8 + indent, 0, width - 16 - indent, height, justification, true);
 }
 

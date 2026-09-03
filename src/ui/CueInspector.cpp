@@ -11,7 +11,7 @@ namespace gocue
 
 namespace
 {
-    void styleLabel (juce::Label& label, const juce::String& text, float size = 13.0f)
+    void styleLabel (juce::Label& label, const juce::String& text, float size = 15.0f)
     {
         label.setText (text, juce::dontSendNotification);
         label.setColour (juce::Label::textColourId, Palette::dimText);
@@ -182,7 +182,7 @@ public:
         secondColourCombo.onChange = [this] { commitColour (true); };
 
         filePathLabel.setColour (juce::Label::textColourId, Palette::text);
-        filePathLabel.setFont (juce::Font (juce::FontOptions (13.0f)));
+        filePathLabel.setFont (juce::Font (juce::FontOptions (15.0f)));
         filePathLabel.setMinimumHorizontalScale (1.0f);
         filePathLabel.setTooltip (ko ("파일을 여기에 끌어다 놓으면 교체됩니다"));
         addAndMakeVisible (filePathLabel);
@@ -378,7 +378,7 @@ public:
     void resized() override
     {
         auto area = getLocalBounds().reduced (12, 6);
-        const int rowHeight = 24;
+        const int rowHeight = 26;
         auto nextRow = [&] { auto r = area.removeFromTop (rowHeight); area.removeFromTop (5); return r; };
 
         auto row = nextRow();
@@ -883,7 +883,7 @@ public:
     void resized() override
     {
         auto area = getLocalBounds().reduced (12, 6);
-        const int rowHeight = 24;
+        const int rowHeight = 26;
         auto nextRow = [&] { auto r = area.removeFromTop (rowHeight); area.removeFromTop (6); return r; };
 
         auto row = nextRow();
@@ -1120,7 +1120,7 @@ public:
     void resized() override
     {
         auto area = getLocalBounds().reduced (12, 6);
-        auto row = area.removeFromTop (24);
+        auto row = area.removeFromTop (26);
         patchLabel.setBounds (row.removeFromLeft (36));
         patchCombo.setBounds (row.removeFromLeft (220));
         row.removeFromLeft (12);
@@ -1128,7 +1128,7 @@ public:
         row.removeFromLeft (6);
         silenceButton.setBounds (row.removeFromLeft (90));
         area.removeFromTop (4);
-        hint.setBounds (area.removeFromTop (16));
+        hint.setBounds (area.removeFromTop (18));
         area.removeFromTop (4);
         viewport.setBounds (area);
     }
@@ -1286,7 +1286,7 @@ public:
                 auto* l = labels.add (new juce::Label());
                 l->setJustificationType (juce::Justification::centred);
                 l->setColour (juce::Label::textColourId, Palette::dimText);
-                l->setFont (juce::Font (juce::FontOptions (11.0f)));
+                l->setFont (juce::Font (juce::FontOptions (13.0f)));
                 strip.addAndMakeVisible (l);
             }
 
@@ -1315,9 +1315,9 @@ public:
     void resized() override
     {
         auto area = getLocalBounds().reduced (12, 6);
-        hint.setBounds (area.removeFromTop (16));
+        hint.setBounds (area.removeFromTop (18));
         area.removeFromTop (6);
-        auto row = area.removeFromTop (24);
+        auto row = area.removeFromTop (26);
         mainLabel.setBounds (row.removeFromLeft (110));
         mainSlider.setBounds (row.removeFromLeft (juce::jmin (400, row.getWidth())));
         area.removeFromTop (6);
@@ -1347,7 +1347,7 @@ private:
         for (int k = 0; k < sliders.size(); ++k)
         {
             juce::Rectangle<int> col (k * w, 0, w, h);
-            labels[k]->setBounds (col.removeFromTop (16));
+            labels[k]->setBounds (col.removeFromTop (18));
             sliders[k]->setBounds (col.reduced (2, 0));
         }
     }
@@ -1580,7 +1580,7 @@ public:
     void resized() override
     {
         auto area = getLocalBounds().reduced (12, 6);
-        auto row = area.removeFromTop (24);
+        auto row = area.removeFromTop (26);
         targetLabel.setBounds (row.removeFromLeft (48));
         targetCombo.setBounds (row.removeFromLeft (240));
         row.removeFromLeft (12);
@@ -1591,7 +1591,7 @@ public:
         stopToggle.setBounds (row.removeFromLeft (140));
         area.removeFromTop (4);
 
-        row = area.removeFromTop (24);
+        row = area.removeFromTop (26);
         levelsToggle.setBounds (row.removeFromLeft (100));
         fetchButton.setBounds (row.removeFromLeft (160));
         row.removeFromLeft (6);
@@ -1605,7 +1605,7 @@ public:
         row.removeFromLeft (12);
         previewToggle.setBounds (row.removeFromLeft (130));
         area.removeFromTop (4);
-        hint.setBounds (area.removeFromTop (16));
+        hint.setBounds (area.removeFromTop (18));
         area.removeFromTop (4);
         viewport.setBounds (area);
     }
@@ -2035,7 +2035,7 @@ public:
                 strip.addAndMakeVisible (r->value);
 
                 r->text.setColour (juce::Label::textColourId, Palette::dimText);
-                r->text.setFont (juce::Font (juce::FontOptions (12.0f)));
+                r->text.setFont (juce::Font (juce::FontOptions (14.0f)));
                 r->text.setJustificationType (juce::Justification::centredRight);
                 r->text.setText (param->getText ((float) r->value.getValue(), 24), juce::dontSendNotification);
                 strip.addAndMakeVisible (r->text);
@@ -2048,7 +2048,7 @@ public:
     void resized() override
     {
         auto area = getLocalBounds().reduced (12, 6);
-        hint.setBounds (area.removeFromTop (16));
+        hint.setBounds (area.removeFromTop (18));
         area.removeFromTop (4);
         viewport.setBounds (area);
         layoutRows();
@@ -2276,15 +2276,15 @@ public:
     void resized() override
     {
         auto area = getLocalBounds().reduced (12, 6);
-        auto row = area.removeFromTop (24);
+        auto row = area.removeFromTop (26);
         targetLabel.setBounds (row.removeFromLeft (48));
         targetCombo.setBounds (row.removeFromLeft (260));
         area.removeFromTop (6);
-        row = area.removeFromTop (24);
+        row = area.removeFromTop (26);
         startNextToggle.setBounds (row.removeFromLeft (200));
         stopToggle.setBounds (row.removeFromLeft (200));
         area.removeFromTop (6);
-        hint.setBounds (area.removeFromTop (16));
+        hint.setBounds (area.removeFromTop (18));
     }
 
     void paint (juce::Graphics& g) override { g.fillAll (Palette::panel); }
@@ -2395,7 +2395,7 @@ public:
     void resized() override
     {
         auto area = getLocalBounds().reduced (12, 6);
-        auto row = area.removeFromTop (24);
+        auto row = area.removeFromTop (26);
         firstLabel.setBounds (row.removeFromLeft (80));
         firstEditor.setBounds (row.removeFromLeft (60));
         row.removeFromLeft (16);
@@ -2404,7 +2404,7 @@ public:
         row.removeFromLeft (16);
         deviceLabel.setBounds (row);
         area.removeFromTop (6);
-        hint.setBounds (area.removeFromTop (16));
+        hint.setBounds (area.removeFromTop (18));
     }
 
     void paint (juce::Graphics& g) override { g.fillAll (Palette::panel); }
@@ -2550,11 +2550,11 @@ public:
     void resized() override
     {
         auto area = getLocalBounds().reduced (12, 6);
-        auto row = area.removeFromTop (24);
+        auto row = area.removeFromTop (26);
         kindLabel.setBounds (row.removeFromLeft (48));
         kindCombo.setBounds (row.removeFromLeft (420));
         area.removeFromTop (6);
-        row = area.removeFromTop (24);
+        row = area.removeFromTop (26);
         targetLabel.setBounds (row.removeFromLeft (48));
         targetCombo.setBounds (row.removeFromLeft (260));
         row.removeFromLeft (12);
@@ -2565,7 +2565,7 @@ public:
         secondsEditor.setBounds (row.removeFromLeft (70));
         secondsUnit.setBounds (row.removeFromLeft (24));
         area.removeFromTop (6);
-        hint.setBounds (area.removeFromTop (16));
+        hint.setBounds (area.removeFromTop (18));
     }
 
     void paint (juce::Graphics& g) override { g.fillAll (Palette::panel); }
@@ -2743,7 +2743,7 @@ public:
     void resized() override
     {
         auto area = getLocalBounds().reduced (12, 6);
-        auto row = area.removeFromTop (24);
+        auto row = area.removeFromTop (26);
         modeLabel.setBounds (row.removeFromLeft (40));
         modeCombo.setBounds (row.removeFromLeft (320));
         row.removeFromLeft (16);
@@ -2753,7 +2753,7 @@ public:
         crossfadeEditor.setBounds (row.removeFromLeft (60));
         crossfadeUnit.setBounds (row.removeFromLeft (24));
         area.removeFromTop (4);
-        hint.setBounds (area.removeFromTop (16));
+        hint.setBounds (area.removeFromTop (18));
         area.removeFromTop (4);
         timeline.setBounds (area);
     }
@@ -2829,7 +2829,7 @@ private:
             const double axis = axisSeconds();
 
             // axis ticks
-            g.setFont (juce::Font (juce::FontOptions (10.0f)));
+            g.setFont (juce::Font (juce::FontOptions (12.0f)));
             const double step = axis <= 20.0 ? 1.0 : axis <= 60.0 ? 5.0 : axis <= 300.0 ? 30.0 : 60.0;
 
             for (double t = 0.0; t <= axis + 1e-9; t += step)
@@ -2850,7 +2850,7 @@ private:
                 const double length = owner.cues.effectiveLengthOf (child);
                 const bool selected = child == selectedChild;
                 g.setColour (selected ? Palette::text : Palette::dimText);
-                g.setFont (juce::Font (juce::FontOptions (12.0f, selected ? juce::Font::bold : juce::Font::plain)));
+                g.setFont (juce::Font (juce::FontOptions (14.0f, selected ? juce::Font::bold : juce::Font::plain)));
                 g.drawText ((c.number.isNotEmpty() ? c.number + " " : juce::String()) + c.name, 4, y, labelWidth - 8, h, juce::Justification::centredLeft, true);
 
                 const float x0 = xFor (c.preWaitSeconds);
@@ -2871,7 +2871,7 @@ private:
                 }
 
                 g.setColour (juce::Colours::black.withAlpha (0.8f));
-                g.setFont (juce::Font (juce::FontOptions (11.0f)));
+                g.setFont (juce::Font (juce::FontOptions (13.0f)));
                 g.drawText (formatTimeMs (c.preWaitSeconds), bar.toNearestInt().withTrimmedLeft (4), juce::Justification::centredLeft, true);
                 y += h;
             }
@@ -2879,7 +2879,7 @@ private:
             if (children.empty())
             {
                 g.setColour (Palette::dimText);
-                g.setFont (juce::Font (juce::FontOptions (12.0f)));
+                g.setFont (juce::Font (juce::FontOptions (14.0f)));
                 g.drawText (ko ("자식 큐가 없습니다 — 큐를 이 그룹 아래로 끌어다 넣거나, 큐를 선택하고 Ctrl+G로 묶으세요"), getLocalBounds(), juce::Justification::centred);
             }
         }
@@ -3076,7 +3076,7 @@ private:
 CueInspector::CueInspector (ProjectDocument& doc, AudioEngine& e, AppSettings& s, PluginWindowManager& windows)
     : document (doc), cues (doc.cues), engine (e), settings (s)
 {
-    title.setFont (juce::Font (juce::FontOptions (14.0f, juce::Font::bold)));
+    title.setFont (juce::Font (juce::FontOptions (16.0f, juce::Font::bold)));
     title.setColour (juce::Label::textColourId, Palette::dimText);
     addAndMakeVisible (title);
 
@@ -3110,7 +3110,7 @@ CueInspector::CueInspector (ProjectDocument& doc, AudioEngine& e, AppSettings& s
     controlPanel = std::make_unique<ControlPanel> (document);
     micPanel = std::make_unique<MicPanel> (document, engine);
 
-    tabs.setTabBarDepth (26);
+    tabs.setTabBarDepth (28);
     tabs.setOutline (0);
     tabs.setColour (juce::TabbedComponent::backgroundColourId, Palette::panel);
     tabs.onTabShown = [this]

@@ -12,7 +12,7 @@ TimeLoopsPanel::TimeLoopsPanel (ProjectDocument& doc, AudioEngine& e, juce::Audi
     {
         label.setText (ko (text), juce::dontSendNotification);
         label.setColour (juce::Label::textColourId, Palette::dimText);
-        label.setFont (juce::Font (juce::FontOptions (13.0f)));
+        label.setFont (juce::Font (juce::FontOptions (15.0f)));
         addAndMakeVisible (label);
     };
 
