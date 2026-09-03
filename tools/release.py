@@ -97,6 +97,15 @@ def sign(tool, key_file, installer):
     return signature
 
 
+def wrap_notes_for_feed(fragment):
+    """The update window (WinSparkle) renders the notes in an embedded browser that takes the dialog's dark-mode
+    background but keeps the default black text: give the page explicit colours so it reads in both modes."""
+    return ("<html><head><meta charset=\"utf-8\"><style>"
+            "body{background:#ffffff;color:#151515;font-family:'Malgun Gothic',sans-serif;font-size:13px;margin:8px 12px;}"
+            "h2{font-size:17px;margin:4px 0 8px;} li{margin:4px 0;} code{background:#f0f0f0;padding:0 3px;}"
+            "</style></head><body>%s</body></html>" % fragment)
+
+
 def write_appcast(path, repo, version, installer, signature, notes_html):
     url = "https://github.com/%s/releases/download/v%s/%s" % (repo, version, installer.name)
     appcast_url = "https://github.com/%s/releases/latest/download/appcast.xml" % repo
@@ -175,6 +184,7 @@ def main():
     notes_html = "<p>GoCue %s</p>" % escape(version)
     if args.notes:
         notes_html = pathlib.Path(args.notes).read_text(encoding="utf-8")
+    notes_html = wrap_notes_for_feed(notes_html)
 
     appcast = output_dir / "appcast.xml"
     url, appcast_url = write_appcast(appcast, args.repo, version, installer, signature, notes_html)
