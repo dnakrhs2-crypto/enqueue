@@ -154,6 +154,12 @@ def version_key(name):
     return tuple(int(p) for p in re.findall(r"\d+", name))
 
 
+def read_feedback_link():
+    """The beta feedback room from src/app/Links.h: the app's help menu and the website show the same link."""
+    match = re.search(r'feedbackChat\s*=\s*"([^"]*)"', (ROOT / "src" / "app" / "Links.h").read_text(encoding="utf-8"))
+    return match.group(1) if match else ""
+
+
 def build_notes_page(site_dir):
     """notes.html: all release notes, newest first, in the site's style."""
     notes_dir = ROOT / "docs" / "release-notes"
@@ -233,7 +239,8 @@ def latest_from_github(gh, repo):
     if installer is None:
         sys.exit("the latest release has no GoCue-Setup-x.y.z.exe asset")
     return {"version": version, "tag": info["tagName"], "url": installer["url"], "size": installer["size"],
-            "date": info["publishedAt"], "latest_url": "https://github.com/%s/releases/latest/download/%s" % (repo, FIXED_INSTALLER_NAME)}
+            "date": info["publishedAt"], "latest_url": "https://github.com/%s/releases/latest/download/%s" % (repo, FIXED_INSTALLER_NAME),
+            "feedback": read_feedback_link()}
 
 
 def main():
@@ -316,7 +323,8 @@ def main():
             deploy_site(args.repo, {
                 "version": version, "tag": "v" + version, "url": url, "size": installer.stat().st_size,
                 "date": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-                "latest_url": "https://github.com/%s/releases/latest/download/%s" % (args.repo, FIXED_INSTALLER_NAME)})
+                "latest_url": "https://github.com/%s/releases/latest/download/%s" % (args.repo, FIXED_INSTALLER_NAME),
+                "feedback": read_feedback_link()})
     else:
         print("not published (add --publish to create the GitHub release)")
 
