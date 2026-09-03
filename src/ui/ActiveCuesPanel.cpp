@@ -10,7 +10,7 @@ namespace gocue
 
 namespace
 {
-    constexpr int rowHeight = 76;
+    constexpr int rowHeight = 124;   // the big card (design pick 01, 2026-09-03)
 }
 
 //==============================================================================
@@ -42,15 +42,20 @@ public:
         };
         addAndMakeVisible (panicButton);
 
-        nameLabel.setFont (juce::Font (juce::FontOptions (17.0f, juce::Font::bold)));
+        nameLabel.setFont (juce::Font (juce::FontOptions (22.0f, juce::Font::bold)));
         nameLabel.setColour (juce::Label::textColourId, Palette::text);
         nameLabel.setMinimumHorizontalScale (0.7f);
         addAndMakeVisible (nameLabel);
 
-        timeLabel.setFont (juce::Font (juce::FontOptions (14.0f)));
+        timeLabel.setFont (juce::Font (juce::FontOptions (15.0f)));   // "position / length"
         timeLabel.setColour (juce::Label::textColourId, Palette::dimText);
-        timeLabel.setJustificationType (juce::Justification::centredRight);
+        timeLabel.setJustificationType (juce::Justification::centredLeft);
         addAndMakeVisible (timeLabel);
+
+        remainingLabel.setFont (juce::Font (juce::FontOptions (30.0f, juce::Font::bold)));   // the number the operator watches
+        remainingLabel.setJustificationType (juce::Justification::centredRight);
+        remainingLabel.setMinimumHorizontalScale (0.8f);
+        addAndMakeVisible (remainingLabel);
     }
 
     const juce::Uuid& getId() const noexcept { return id; }
@@ -74,50 +79,67 @@ public:
 
         nameLabel.setText (name, juce::dontSendNotification);
 
-        juce::String time = formatSeconds (p.positionSeconds);
-
-        if (infinite)
-            time << "  " << juce::String::fromUTF8 ("\xE2\x88\x9E");
-        else
-            time << "  -" << formatSeconds (juce::jmax (0.0, p.remainingSeconds));
-
-        timeLabel.setText (time, juce::dontSendNotification);
+        const auto infinity = juce::String::fromUTF8 ("\xE2\x88\x9E");
+        timeLabel.setText (formatSeconds (p.positionSeconds) + " / " + (infinite ? infinity : formatSeconds (juce::jmax (0.0, p.lengthSeconds))),
+                           juce::dontSendNotification);
+        remainingLabel.setText (infinite ? infinity : "-" + formatSeconds (juce::jmax (0.0, p.remainingSeconds)), juce::dontSendNotification);
+        remainingLabel.setColour (juce::Label::textColourId, stateColour());
         repaint();
+    }
+
+    juce::Colour stateColour() const noexcept
+    {
+        return paused ? Palette::paused : (fadingOut ? Palette::fadingOut : Palette::playing);
     }
 
     void resized() override
     {
-        auto area = getLocalBounds().reduced (6, 4);
-        auto top = area.removeFromTop (28);
-        pauseButton.setBounds (top.removeFromLeft (80));
-        top.removeFromLeft (8);
+        // [ 상태 띠 8 ] [ pill | name ............ x ]
+        //                [ pos / length          -remaining ]
+        //                [ ==== progress ==== ]
+        auto area = getLocalBounds().reduced (12, 10);
+        area.removeFromLeft (10);   // the state stripe
+        auto top = area.removeFromTop (32);
+        pauseButton.setBounds (top.removeFromLeft (96));
+        top.removeFromLeft (10);
         panicButton.setBounds (top.removeFromRight (30));
-        top.removeFromRight (6);
+        top.removeFromRight (8);
         nameLabel.setBounds (top);
-        area.removeFromTop (2);
-        timeLabel.setBounds (area.removeFromTop (20));
-        barArea = area.removeFromTop (12);
+        area.removeFromTop (6);
+        auto middle = area.removeFromTop (36);
+        remainingLabel.setBounds (middle.removeFromRight (150));
+        timeLabel.setBounds (middle);
+        area.removeFromTop (6);
+        barArea = area.removeFromTop (14);
     }
 
     void paint (juce::Graphics& g) override
     {
-        g.setColour (Palette::rowEven);
-        g.fillRoundedRectangle (getLocalBounds().toFloat().reduced (1.0f), 4.0f);
+        const auto card = getLocalBounds().toFloat().reduced (1.0f);
+        g.setColour (Palette::panel);
+        g.fillRoundedRectangle (card, Palette::cornerRadius);
+        g.setColour (Palette::outline);
+        g.drawRoundedRectangle (card, Palette::cornerRadius, 1.0f);
 
-        if (colour.getAlpha() > 0)
+        // the state stripe down the left edge (green playing / yellow paused / orange fading)
         {
-            g.setColour (colour);
-            g.fillRect (2, 2, 4, getHeight() - 4);
+            juce::Graphics::ScopedSaveState state (g);
+            g.reduceClipRegion (card.withWidth (9.0f).getSmallestIntegerContainer());
+            g.setColour (stateColour());
+            g.fillRoundedRectangle (card, Palette::cornerRadius);
         }
 
-        g.setColour (Palette::outline);
-        g.fillRect (barArea);
-        g.setColour (paused ? Palette::paused : (fadingOut ? Palette::fadingOut : Palette::playing));
+        if (colour.getAlpha() > 0)   // the cue's own colour as a thin stripe next to it
+        {
+            g.setColour (colour);
+            g.fillRect (11, 8, 4, getHeight() - 16);
+        }
 
-        if (infinite)
-            g.fillRect (barArea.withWidth (barArea.getWidth()));
-        else
-            g.fillRect (barArea.withWidth (juce::roundToInt (barArea.getWidth() * fraction)));
+        const auto track = barArea.toFloat();
+        g.setColour (Palette::outline);
+        g.fillRoundedRectangle (track, track.getHeight() * 0.5f);
+        g.setColour (stateColour());
+        g.fillRoundedRectangle (track.withWidth (infinite ? track.getWidth() : (float) track.getWidth() * (float) fraction), track.getHeight() * 0.5f);
     }
 
     void mouseDown (const juce::MouseEvent& e) override { scrub (e); }
@@ -137,7 +159,7 @@ private:
     AudioEngine& engine;
     const juce::Uuid id;
     juce::TextButton pauseButton, panicButton;
-    juce::Label nameLabel, timeLabel;
+    juce::Label nameLabel, timeLabel, remainingLabel;
     juce::Rectangle<int> barArea;
     juce::Colour colour;
     double fraction = 0.0;

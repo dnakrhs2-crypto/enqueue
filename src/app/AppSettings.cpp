@@ -110,7 +110,7 @@ void AppSettings::setInspectorCollapsed (bool collapsed)
 
 double AppSettings::getActiveCuesFraction() const
 {
-    return settings->getDoubleValue (Keys::activeCuesFraction, 0.24);
+    return settings->getDoubleValue (Keys::activeCuesFraction, 0.27);
 }
 
 void AppSettings::setActiveCuesFraction (double fraction)
