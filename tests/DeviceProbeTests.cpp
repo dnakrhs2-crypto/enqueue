@@ -32,18 +32,18 @@ public:
 
             type->scanForDevices();
 
-            for (const auto& name : type->getDeviceNames (false))
+            for (const auto& deviceName : type->getDeviceNames (false))
             {
-                std::unique_ptr<juce::AudioIODevice> device (type->createDevice (name, {}));
+                std::unique_ptr<juce::AudioIODevice> device (type->createDevice (deviceName, {}));
 
                 if (device == nullptr)
                 {
-                    logMessage ("[" + typeName + "] " + name + ": createDevice failed");
+                    logMessage ("[" + typeName + "] " + deviceName + ": createDevice failed");
                     continue;
                 }
 
                 const int outs = device->getOutputChannelNames().size();
-                juce::String line = "[" + typeName + "] " + name + ": outputs=" + juce::String (outs)
+                juce::String line = "[" + typeName + "] " + deviceName + ": outputs=" + juce::String (outs)
                                     + " rates=" + juce::String (device->getAvailableSampleRates().size());
 
                 if (outs > 0)

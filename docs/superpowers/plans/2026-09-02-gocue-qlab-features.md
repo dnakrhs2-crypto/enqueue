@@ -357,3 +357,6 @@ class Scheduler { public: using Clock = std::function<double()>;   // 초
 
 ## 최종
 - [ ] 코덱스 전체 리뷰(전체 소스, 성능·스레드 안전·메모리) → 반영 → 전체 테스트·GUI 스모크 → 릴리스 → gom 보고(무엇이 바뀌었는지, 남은 한계: 장치 1개, CAF 없음, MIDI/타임코드/원격 제외).
+
+## v0.8.5 — 업데이트 안내 (2026-09-03 새벽, gom "업데이트 된 건지 안 된 건지 헷갈림")
+- [x] 창 제목에 버전("GoCue 0.8.5 - 프로젝트"), 새 버전 첫 실행 시 안내창(`announceVersionChange`, AppSettings lastRunVersion), 설치기 [Run]에서 skipifsilent 제거(자동 업데이트 후 자동 재실행) + `/NORUN=1`로 스크립트 설치는 재실행 안 함.

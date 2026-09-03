@@ -29,6 +29,10 @@ public:
     juce::String getWindowState() const;
     void setWindowState (const juce::String& state);
 
+    /** The app version that ran last time (empty on a fresh install): a change means an update just landed. */
+    juce::String getLastRunVersion() const;
+    void setLastRunVersion (const juce::String& version);
+
     /** Layout: the inspector's share of the height below the transport, the active-cues panel's share of the
         width, and whether each is folded away. */
     double getInspectorFraction() const;

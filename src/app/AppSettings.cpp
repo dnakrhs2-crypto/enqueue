@@ -10,6 +10,7 @@ namespace Keys
     constexpr const char* lastProjectFile   = "lastProjectFile";
     constexpr const char* lastAudioDir      = "lastAudioDirectory";
     constexpr const char* windowState       = "windowState";
+    constexpr const char* lastRunVersion    = "lastRunVersion";
     constexpr const char* inspectorFraction = "inspectorFraction";
     constexpr const char* inspectorFolded   = "inspectorCollapsed";
     constexpr const char* activeCuesFraction = "activeCuesFraction";
@@ -125,6 +126,16 @@ bool AppSettings::getActiveCuesCollapsed() const
 void AppSettings::setActiveCuesCollapsed (bool collapsed)
 {
     settings->setValue (Keys::activeCuesFolded, collapsed);
+}
+
+juce::String AppSettings::getLastRunVersion() const
+{
+    return settings->getValue (Keys::lastRunVersion);
+}
+
+void AppSettings::setLastRunVersion (const juce::String& version)
+{
+    settings->setValue (Keys::lastRunVersion, version);
 }
 
 void AppSettings::flush()

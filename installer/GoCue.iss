@@ -67,4 +67,12 @@ Root: HKA; Subkey: "Software\Classes\GoCue.Project\DefaultIcon"; ValueType: stri
 Root: HKA; Subkey: "Software\Classes\GoCue.Project\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\{#AppExe}"" ""%1"""
 
 [Run]
-Filename: "{app}\{#AppExe}"; Description: "{cm:LaunchProgram,{#StringChange(AppName, '&', '&&')}}"; Flags: nowait postinstall skipifsilent
+; also after a silent auto-update (WinSparkle runs Setup with /SILENT): the app comes back by itself and announces
+; the new version. Scripted installs pass /NORUN=1 to keep it closed.
+Filename: "{app}\{#AppExe}"; Description: "{cm:LaunchProgram,{#StringChange(AppName, '&', '&&')}}"; Flags: nowait postinstall; Check: not NoRunRequested
+
+[Code]
+function NoRunRequested: Boolean;
+begin
+  Result := ExpandConstant('{param:NORUN|0}') = '1';
+end;
