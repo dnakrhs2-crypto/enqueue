@@ -73,14 +73,15 @@ public:
                 engine.renderBlock (out, blockSize);
 
             expect (engine.isPlaying (cue.id));
-            const double before = engine.getPlayingCues()[0].positionSeconds;
+            const double before = engine.getPlayingCues()[0].filePositionSeconds;
 
             engine.setLivePlayCount (cue.id, 1, true);   // the toggle, while playing
 
             engine.renderBlock (out, blockSize);
-            const double after = engine.getPlayingCues().empty() ? -1.0 : engine.getPlayingCues()[0].positionSeconds;
+            const double after = engine.getPlayingCues().empty() ? -1.0 : engine.getPlayingCues()[0].filePositionSeconds;
             expect (after >= before, "the audible place is kept: " + juce::String (before) + " -> " + juce::String (after));
-            expectLessThan (after - before, 0.1);   // no jump back to the start
+            expectLessThan (after - before, 0.05);   // one block on: no jump back to the start, no skip ahead
+            expectLessThan (engine.getPlayingCues()[0].lengthSeconds, 0.0);   // reported as endless now
 
             for (int i = 0; i < pass * 3; ++i)   // three more pass lengths: a single pass would have ended long ago
                 engine.renderBlock (out, blockSize);
@@ -102,6 +103,46 @@ public:
             expect (! engine.isPlaying (cue.id), "stopped after the pass");
             expectLessThan (blocks, pass + 4);   // within one pass length (plus the read-ahead refill slack)
             expectGreaterThan (blocks, 1);       // but not at once: the pass was finished first
+        }
+
+        beginTest ("a sliced cue: infinite on and off again keeps the slice sequence and finishes the current pass");
+        {
+            AudioEngine engine (0);
+            engine.prepare (sampleRate, blockSize);
+            juce::AudioBuffer<float> out (2, blockSize);
+
+            Cue cue;
+            cue.name = "sliced";
+            cue.file = tone;
+            cue.audio.playCount = 1;
+            cue.audio.slices.push_back ({ 0.25, 2 });   // second slice plays twice: sequence = 0.25 + 2 x 0.25 s
+            cue.audio.firstSliceCount = 1;
+
+            juce::String error;
+            expect (engine.play (cue, &error), error);
+
+            for (int i = 0; i < pass / 4; ++i)   // inside the first slice
+                engine.renderBlock (out, blockSize);
+
+            engine.setLivePlayCount (cue.id, 1, true);
+
+            for (int i = 0; i < pass * 4; ++i)   // well past one sequence (0.75 s = 65 blocks)
+                engine.renderBlock (out, blockSize);
+
+            expect (engine.isPlaying (cue.id), "endless sequence keeps going");
+
+            engine.setLivePlayCount (cue.id, 1, false);
+            int blocks = 0;
+
+            while (engine.isPlaying (cue.id) && blocks < pass * 4)
+            {
+                engine.renderBlock (out, blockSize);
+                engine.reapFinishedPlayers();
+                ++blocks;
+            }
+
+            expect (! engine.isPlaying (cue.id));
+            expectLessThan (blocks, blocksPerPass (0.75) + 4);   // at most the rest of the current sequence pass
         }
 
         beginTest ("a bigger play count while playing adds passes without restarting");

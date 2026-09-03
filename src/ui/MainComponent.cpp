@@ -2562,6 +2562,7 @@ void MainComponent::reconcileChainsAfterRestore (const ProjectSnapshot& snapshot
         engine.setLiveRate (p.id, cue.audio.rate);
         engine.setLiveRegion (p.id, cue.audio.startSeconds, cue.audio.endSeconds);
         engine.setLiveSlices (p.id, cue.audio.slices, cue.audio.firstSliceCount);
+        engine.setLivePlayCount (p.id, cue.audio.playCount, cue.audio.infiniteLoop);
     }
 
     ignorePluginChangesBriefly();   // replaying saved state is not a new edit

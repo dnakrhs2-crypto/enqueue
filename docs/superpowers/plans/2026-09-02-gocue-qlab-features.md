@@ -402,3 +402,6 @@ class Scheduler { public: using Clock = std::function<double()>;   // 초
 - [x] CueTable 18/17pt·행 {32,38,46}, CueInspector 캡션 15·힌트 13-14·행 26·탭 28, TimeLoops/PluginChain/ContainerTabs/CurveEditor 동반, LevelMatrix 14pt·셀 24. `minInspectorHeight` 236.
 - [x] LevelMatrixComponent: `outputConnected` false 열 = 헤더 취소선 + 칸 12% 알파(마지막에 적용). FadePanel도 계산. 장치 변경(ChangeListener)·패치 변경(`ProjectDocument::onPatchesChanged`) → `CueInspector::refreshDeviceDependent()`(AsyncUpdater로 합쳐 레벨·페이드 패널만). `audioDeviceStopped` → numDeviceOutputs 2.
 - [x] 코덱스 1차 9건·2차 2건 반영. 배포 0.9.2.
+
+## v0.9.3 — 무한 루프/재생 횟수 실시간 반영 (2026-09-03)
+- [x] gom 버그: 재생 중 무한 루프 토글이 정지 후에야 적용됨 → `CuePlayer::setLivePlayCount`(locate → setPlayCount → virtualPositionFor → jumpTo), `AudioEngine::setLivePlayCount`(락 밖 적용), `TimeLoopsPanel LiveApply::loop`. 코덱스 6건 반영(실행 취소 복원 경로, 편집 대상 큐로 라이브 적용, 스트레치 프리롤 `getPreRollSamples`, 락 밖 적용, 표시 갱신 제거, 테스트 강화). 테스트 `tests/LiveLoopTests.cpp` 4케이스.

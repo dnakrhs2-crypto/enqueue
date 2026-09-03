@@ -1019,11 +1019,19 @@ void AudioEngine::setLiveRate (const juce::Uuid& cueId, double rate)
 
 void AudioEngine::setLivePlayCount (const juce::Uuid& cueId, int playCount, bool infiniteLoop)
 {
-    const juce::ScopedLock sl (lock);
+    CuePlayer* found[16];
+    int count = 0;
 
-    for (auto& p : players)
-        if (p->getCueId() == cueId && ! p->hasFinished())
-            p->setLivePlayCount (playCount, infiniteLoop);
+    {
+        const juce::ScopedLock sl (lock);   // collect only: the layout rebuild must not hold up the audio callback
+
+        for (auto& p : players)
+            if (p->getCueId() == cueId && ! p->hasFinished() && count < 16)
+                found[count++] = p.get();
+    }
+
+    for (int i = 0; i < count; ++i)
+        found[i]->setLivePlayCount (playCount, infiniteLoop);
 }
 
 void AudioEngine::setLiveGainDb (const juce::Uuid& cueId, double gainDb)

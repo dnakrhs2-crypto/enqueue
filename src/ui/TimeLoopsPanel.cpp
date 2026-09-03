@@ -254,7 +254,9 @@ void TimeLoopsPanel::updateSelected (const juce::String& name, const std::functi
 
     // only what the edit changed reaches a running instance: a trim seeks, a rate change does not, and
     // next-start properties (pitch mode, envelope shape) leave it alone
-    if (const auto* cue = selected(); cue != nullptr && apply != LiveApply::none && engine.isPlaying (cue->id))
+    // the edited cue (a focus-lost commit may land after the selection moved on), never the selection
+    if (const auto* cue = document.cues.isValidIndex (index) ? &document.cues.get (index) : nullptr;
+        cue != nullptr && apply != LiveApply::none && engine.isPlaying (cue->id))
     {
         if (apply == LiveApply::region || apply == LiveApply::regionAndRate)
             engine.setLiveRegion (cue->id, cue->audio.startSeconds, cue->audio.endSeconds);

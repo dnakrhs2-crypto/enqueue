@@ -127,7 +127,7 @@ CuePlayer::CuePlayer (const Cue& c, juce::AudioFormatManager& formats,
         const int scale = juce::jlimit (1, 8, (int) std::ceil (cue.audio.rate * 2.0));
         readAhead = std::make_unique<ReadAheadSource> (*source, *readAheadThread, readAheadSamples * scale, numChannels);
         // the stretcher pre-rolls before the start: have that in the cache too
-        readAhead->setNextReadPosition (cue.audio.preservePitch ? juce::jmax<juce::int64> (0, startOffsetSamples - 8192) : startOffsetSamples);
+        readAhead->setNextReadPosition (cue.audio.preservePitch ? juce::jmax<juce::int64> (0, startOffsetSamples - (stretch != nullptr ? stretch->getPreRollSamples() : 8192)) : startOffsetSamples);
         tail = readAhead.get();
     }
 
@@ -263,7 +263,7 @@ void CuePlayer::jumpTo (juce::int64 newPos) noexcept
     // drop the read-ahead cache: it holds audio of the old layout for the same virtual positions
     // (the stretcher pre-rolls before the new position: start the refill early enough for that)
     if (readAhead != nullptr)
-        readAhead->invalidate (stretch != nullptr ? juce::jmax<juce::int64> (0, newPos - 8192) : newPos);
+        readAhead->invalidate (stretch != nullptr ? juce::jmax<juce::int64> (0, newPos - stretch->getPreRollSamples()) : newPos);
     else
         source->setNextReadPosition (newPos);
 
@@ -286,8 +286,7 @@ void CuePlayer::setLivePlayCount (int playCount, bool infiniteLoop) noexcept
     // the same file sample in the same pass (clamped to the last pass when the sequence is finite now); the
     // read-ahead is dropped either way: it may hold the old layout's end (silence) or the old loop-back
     const juce::int64 newPos = source->virtualPositionFor (where.fileSample, where);
-    jumpTo (newPos);
-    updatePositionInfo (liveRate.load());
+    jumpTo (newPos);   // the next block reports the new position / length
 }
 
 void CuePlayer::setLiveSlices (const std::vector<Slice>& slices, int firstSliceCount) noexcept
