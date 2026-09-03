@@ -37,7 +37,14 @@ public:
 
     /** Opens the saved ASIO device (or the first ASIO device) with every input and output. "" on success. */
     juce::String initialise (const juce::XmlElement* savedDeviceState);
-    /** After a device change: every input and output of the device is enabled. */
+    /** Opens an ASIO device by name (an empty name keeps the current one) with an optional rate / buffer and every
+        channel, and registers the callback. On failure the device that was running is restored; the message says
+        what failed (and whether the rollback did too). Message thread. */
+    juce::String openDevice (const juce::String& name, double sampleRate = 0.0, int bufferSize = 0);
+    /** A new buffer size on the running device (every channel kept). */
+    juce::String setBufferSize (int samples);
+    /** After a device change: every input and output of the device is enabled. A refused widening goes back to the
+        channels that worked (JUCE closes the device on a failed reconfiguration). */
     juce::String openAllChannels();
     /** Opens the device a session was saved with (name, rate, buffer, every channel) when it is not the one running.
         "" when it runs (or the session names none); otherwise why not - the device that was running is kept then. */
@@ -149,6 +156,8 @@ private:
     void audioDeviceStopped() override;
     void audioDeviceError (const juce::String& errorMessage) override;
 
+    juce::AudioIODeviceType* findAsioType();
+    void ensureCallback();
     ChannelNode* findChannel (const juce::Uuid& id) const noexcept;
     FxNode* findFx (const juce::Uuid& id) const noexcept;
     static void applyOutput (const MixOutput& output, std::atomic<bool>& toMaster, std::atomic<bool>& direct, std::atomic<int>& directFirst);

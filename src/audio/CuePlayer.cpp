@@ -203,7 +203,7 @@ void CuePlayer::requestStop() noexcept
 
 void CuePlayer::requestFadeOut (int milliseconds) noexcept
 {
-    pendingFadeOutMs.store (juce::jmax (stopDeclickMs, milliseconds), std::memory_order_relaxed);
+    pendingFadeOutMs.store (juce::jmax (stopDeclickMs, milliseconds), std::memory_order_release);   // after skipTailOnStop: whoever sees the time sees the flag
 }
 
 void CuePlayer::requestPanicFadeOut (int milliseconds) noexcept
@@ -612,7 +612,7 @@ bool CuePlayer::renderNextBlock (juce::AudioBuffer<float>& fullBuffer, int numSa
         return false;
     }
 
-    const int fadeMs = pendingFadeOutMs.exchange (-1, std::memory_order_relaxed);
+    const int fadeMs = pendingFadeOutMs.exchange (-1, std::memory_order_acq_rel);
 
     if (loadedNotStarted.load (std::memory_order_acquire))
     {
@@ -633,6 +633,9 @@ bool CuePlayer::renderNextBlock (juce::AudioBuffer<float>& fullBuffer, int numSa
         envelope.fadeOut (fadeMs);
         stopRequested.store (true, std::memory_order_relaxed);
         fadingOut.store (true, std::memory_order_relaxed);
+
+        if (! inTail && skipTailOnStop.load (std::memory_order_acquire))
+            panicFadeSamplesLeft = (juce::int64) (fadeMs * currentSampleRate / 1000.0);   // a soft panic: remembered in case the source ends first
     }
 
     const bool hardStop = hardStopRequested.load (std::memory_order_relaxed);
@@ -725,6 +728,9 @@ bool CuePlayer::renderNextBlock (juce::AudioBuffer<float>& fullBuffer, int numSa
 
         elapsedOutputSamples += numSamples;
 
+        if (panicFadeSamplesLeft >= 0)
+            panicFadeSamplesLeft -= numSamples;
+
         envelope.applyToBuffer (buffer, 0, numSamples);
         pauseGate.applyToBuffer (buffer, 0, numSamples);
 
@@ -805,6 +811,8 @@ bool CuePlayer::renderNextBlock (juce::AudioBuffer<float>& fullBuffer, int numSa
                 finished.store (true, std::memory_order_relaxed);
                 return false;
             }
+
+            return true;   // the panic fade decides when this instance ends, not the declared tail
         }
 
         tailSamplesLeft -= numSamples;
@@ -825,6 +833,17 @@ bool CuePlayer::renderNextBlock (juce::AudioBuffer<float>& fullBuffer, int numSa
     {
         if (streamEnded && ! stoppedAfterFade)
             endedNaturally.store (true, std::memory_order_relaxed);
+
+        if (! hardStop && panicFadeSamplesLeft > 0 && activeChain != nullptr && skipTailOnStop.load (std::memory_order_acquire))
+        {
+            // the source ended while a soft panic fades: the chain rings on through the rest of the panic time, fading
+            // after the chain from here to zero (no cut while the output gate is still open)
+            inTail = true;
+            tailSamplesLeft = panicFadeSamplesLeft;
+            tailFadeSamplesLeft = panicFadeSamplesLeft;
+            tailFadeGain = 1.0f;
+            return true;
+        }
 
         const double tailSeconds = (hardStop || skipTailOnStop.load (std::memory_order_relaxed) || activeChain == nullptr) ? 0.0 : activeChain->getTailSeconds();
         tailSamplesLeft = (juce::int64) (tailSeconds * currentSampleRate);

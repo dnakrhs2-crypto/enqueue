@@ -171,6 +171,9 @@ ChainDrawer::ChainDrawer (MixDocument& doc, PluginWindowManager& w) : document (
 
 void ChainDrawer::setChain (PluginChain* newChain, const juce::String& newTitle)
 {
+    if (newChain != chain)
+        ++revision;
+
     chain = newChain;
     ownerTitle = newTitle;
     title.setText (newTitle + " · " + ko ("VST3 체인"), juce::dontSendNotification);
@@ -223,9 +226,10 @@ void ChainDrawer::showAddMenu (juce::Component* anchor)
     }
 
     juce::Component::SafePointer<ChainDrawer> safeThis (this);
-    menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (anchor), [safeThis, types] (int result)
+    const int forRevision = revision;
+    menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (anchor), [safeThis, types, forRevision] (int result)
     {
-        if (safeThis == nullptr || result == 0)
+        if (safeThis == nullptr || result == 0 || safeThis->revision != forRevision)
             return;
 
         if (result == 1)
@@ -288,9 +292,10 @@ void ChainDrawer::removeSlot (int index)
 {
     // deferred: the click comes from a button inside the row about to go
     juce::Component::SafePointer<ChainDrawer> safeThis (this);
-    juce::MessageManager::callAsync ([safeThis, index]
+    const int forRevision = revision;
+    juce::MessageManager::callAsync ([safeThis, index, forRevision]
     {
-        if (safeThis == nullptr || safeThis->chain == nullptr || index >= safeThis->chain->getNumSlots())
+        if (safeThis == nullptr || safeThis->chain == nullptr || safeThis->revision != forRevision || index >= safeThis->chain->getNumSlots())
             return;
 
         safeThis->chain->removePlugin (index);
@@ -306,9 +311,10 @@ void ChainDrawer::moveSlot (int from, int to)
 {
     // deferred: the drag ends inside a row that the refresh would destroy under it (the chain's listener refreshes the views)
     juce::Component::SafePointer<ChainDrawer> safeThis (this);
-    juce::MessageManager::callAsync ([safeThis, from, to]
+    const int forRevision = revision;
+    juce::MessageManager::callAsync ([safeThis, from, to, forRevision]
     {
-        if (safeThis == nullptr || safeThis->chain == nullptr)
+        if (safeThis == nullptr || safeThis->chain == nullptr || safeThis->revision != forRevision)
             return;
 
         if (safeThis->chain->movePlugin (from, to))
@@ -327,9 +333,10 @@ void ChainDrawer::toggleBypass (int index)
 {
     // deferred for the same reason: the switch that was clicked sits in a row the refresh replaces
     juce::Component::SafePointer<ChainDrawer> safeThis (this);
-    juce::MessageManager::callAsync ([safeThis, index]
+    const int forRevision = revision;
+    juce::MessageManager::callAsync ([safeThis, index, forRevision]
     {
-        if (safeThis == nullptr || safeThis->chain == nullptr || index < 0 || index >= safeThis->chain->getNumSlots())
+        if (safeThis == nullptr || safeThis->chain == nullptr || safeThis->revision != forRevision || index < 0 || index >= safeThis->chain->getNumSlots())
             return;
 
         safeThis->chain->setBypassed (index, ! safeThis->chain->getSlot (index).bypassed.load());

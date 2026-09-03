@@ -3,6 +3,7 @@
 #include "MixEngine.h"
 #include "MixModel.h"
 
+#include <atomic>
 #include <functional>
 
 namespace gocue::livemix
@@ -22,12 +23,13 @@ public:
 
     const juce::File& getFile() const noexcept { return file; }
     bool hasFile() const noexcept { return file != juce::File(); }
-    bool isDirty() const noexcept { return dirty; }
+    bool isDirty() const noexcept { return dirty.load (std::memory_order_acquire); }   // any thread (the updater asks from its own)
     juce::String getDisplayName() const;
 
     /** A blank session (one mic channel, one FX channel). */
     void newSession();
-    juce::Result load (const juce::File& file, juce::StringArray* warnings = nullptr);
+    /** 'warnings' gets what the parser had to skip; plugin restore errors go to 'pluginErrors' (or to 'warnings' when null). */
+    juce::Result load (const juce::File& file, juce::StringArray* warnings = nullptr, juce::StringArray* pluginErrors = nullptr);
     juce::Result save (const juce::File& file);
     juce::Result saveIfPossible();   // to the current file (no-op without one)
 
@@ -54,6 +56,9 @@ public:
     /** A plugin chain was edited live (the engine is the truth): the file is out of date. 'refreshViews' false is for
         a parameter turned in a plugin editor: the views need no refresh, only the dirty state (announced once). */
     void markDirty (bool refreshViews = true);
+    /** Asks every chain whether a plugin reported a parameter / state change since the last poll; true (and dirty)
+        when one did. The timer polls; anything that decides on the dirty state asks first. */
+    bool pollPluginEdits();
 
     std::function<void()> onStructureChanged;
     std::function<void()> onValueChanged;
@@ -67,7 +72,7 @@ private:
     MixEngine& engine;
     MixSession session;
     juce::File file;
-    bool dirty = false;
+    std::atomic<bool> dirty { false };
 };
 
 } // namespace gocue::livemix

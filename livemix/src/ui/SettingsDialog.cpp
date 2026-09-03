@@ -131,17 +131,9 @@ namespace
             if (refreshing || deviceCombo.getSelectedId() <= 0)
                 return;
 
-            auto& dm = engine.getDeviceManager();
-            auto setup = dm.getAudioDeviceSetup();
-            setup.inputDeviceName = setup.outputDeviceName = deviceCombo.getText();
-            setup.useDefaultInputChannels = setup.useDefaultOutputChannels = true;
-            const auto error = dm.setAudioDeviceSetup (setup, true);
-
-            if (error.isNotEmpty())
+            // through the engine: the ASIO type, every channel and the callback (safe mode never opened anything)
+            if (const auto error = engine.openDevice (deviceCombo.getText()); error.isNotEmpty())
                 juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon, ko ("장치를 열지 못했습니다"), error, ko ("확인"));
-
-            if (const auto widened = engine.openAllChannels(); widened.isNotEmpty())
-                juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon, ko ("일부 채널을 열지 못했습니다"), widened, ko ("확인"));
 
             refreshDevices();
 
@@ -154,16 +146,8 @@ namespace
             if (refreshing || bufferCombo.getSelectedId() <= 0)
                 return;
 
-            auto& dm = engine.getDeviceManager();
-            auto setup = dm.getAudioDeviceSetup();
-            setup.bufferSize = bufferCombo.getSelectedId();
-            const auto error = dm.setAudioDeviceSetup (setup, true);
-
-            if (error.isNotEmpty())
+            if (const auto error = engine.setBufferSize (bufferCombo.getSelectedId()); error.isNotEmpty())
                 juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon, ko ("버퍼 크기를 바꾸지 못했습니다"), error, ko ("확인"));
-
-            if (const auto widened = engine.openAllChannels(); widened.isNotEmpty())
-                juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon, ko ("일부 채널을 열지 못했습니다"), widened, ko ("확인"));
 
             refreshDevices();
 

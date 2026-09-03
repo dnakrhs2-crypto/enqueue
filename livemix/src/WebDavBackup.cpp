@@ -78,8 +78,55 @@ juce::String WebDavBackup::validateBaseUrl (const juce::String& baseUrl)
     if (rest.isEmpty() || rest.startsWithChar ('/') || rest.startsWithChar (':'))
         return juce::String::fromUTF8 ("백업 주소에 서버 이름이 없습니다 (예: https://서버:5006)");
 
-    if (rest.containsChar ('/') || rest.containsAnyOf ("?#@ "))
+    if (rest.containsChar ('/') || rest.containsChar ('\\') || rest.containsAnyOf ("?#@ \t\r\n"))
         return juce::String::fromUTF8 ("백업 주소는 https://서버:포트 까지만 적습니다 (폴더는 '폴더' 칸에)");
+
+    // host[:port]: a name / IPv4, or a bracketed IPv6; the port numeric, 1..65535
+    juce::String host = rest, port;
+
+    if (rest.startsWithChar ('['))
+    {
+        const int close = rest.indexOfChar (']');
+
+        if (close < 0)
+            return juce::String::fromUTF8 ("백업 주소의 IPv6 주소는 [ ] 로 감쌉니다");
+
+        host = rest.substring (1, close);
+        port = rest.substring (close + 1);
+
+        for (auto c : host)
+            if (! juce::String ("0123456789abcdefABCDEF:.").containsChar (c))
+                return juce::String::fromUTF8 ("백업 주소의 IPv6 주소가 올바르지 않습니다");
+
+        if (host.isEmpty())
+            return juce::String::fromUTF8 ("백업 주소에 서버 이름이 없습니다 (예: https://서버:5006)");
+    }
+    else
+    {
+        if (rest.containsChar (':'))
+        {
+            host = rest.upToFirstOccurrenceOf (":", false, false);
+            port = rest.substring (host.length());
+        }
+
+        for (auto c : host)
+            if (! (juce::CharacterFunctions::isLetterOrDigit (c) || c == '-' || c == '.'))
+                return juce::String::fromUTF8 ("백업 주소의 서버 이름에 쓸 수 없는 글자가 있습니다: ") + juce::String::charToString (c);
+
+        if (host.isEmpty() || host.startsWithChar ('.') || host.endsWithChar ('.') || host.contains (".."))
+            return juce::String::fromUTF8 ("백업 주소의 서버 이름이 올바르지 않습니다");
+    }
+
+    if (port.isNotEmpty())
+    {
+        if (! port.startsWithChar (':'))
+            return juce::String::fromUTF8 ("백업 주소는 https://서버:포트 형식입니다");
+
+        const auto digits = port.substring (1);
+
+        if (digits.isEmpty() || ! digits.containsOnly ("0123456789") || digits.length() > 5 || digits.getIntValue() < 1 || digits.getIntValue() > 65535)
+            return juce::String::fromUTF8 ("백업 주소의 포트는 1~65535 사이의 숫자여야 합니다 (예: 5006)");
+    }
 
     return {};
 }
@@ -110,7 +157,15 @@ juce::Result WebDavBackup::start (const Target& t, const juce::File& localFile, 
     remotePath = path;
     data = std::move (bytes);
     done = std::move (onDone);
-    startThread();
+
+    if (! startThread())
+    {
+        done = nullptr;
+        data.reset();
+        target = {};
+        return juce::Result::fail (juce::String::fromUTF8 ("백업 스레드를 시작하지 못했습니다"));
+    }
+
     return juce::Result::ok();
 }
 
@@ -125,7 +180,7 @@ void WebDavBackup::cancel()
             active->cancel();
     }
 
-    stopThread (10000);
+    stopThread (30000);   // a cancelled request returns at once; the wait is only for a response already on its way
 }
 
 int WebDavBackup::request (const juce::String& method, const juce::String& path, const juce::MemoryBlock* body,
@@ -146,7 +201,16 @@ int WebDavBackup::request (const juce::String& method, const juce::String& path,
     stream->withCustomRequestCommand (method).withExtraHeaders (headers).withConnectionTimeout (20000).withNumRedirectsToFollow (0);
 
     {
+        // published under the lock cancel() takes: either cancel() sees this request, or this request sees the exit
+        // flag before it connects - never a 20 s connect that nobody can abort
         const juce::ScopedLock sl (activeLock);
+
+        if (threadShouldExit())
+        {
+            error = juce::String::fromUTF8 ("백업이 취소되었습니다");
+            return 0;
+        }
+
         active = stream.get();
     }
 

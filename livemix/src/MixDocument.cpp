@@ -29,7 +29,7 @@ void MixDocument::newSession()
     notifyStructure();
 }
 
-juce::Result MixDocument::load (const juce::File& newFile, juce::StringArray* warnings)
+juce::Result MixDocument::load (const juce::File& newFile, juce::StringArray* warnings, juce::StringArray* pluginErrors)
 {
     MixSession loaded;
     const auto result = MixSession::load (newFile, loaded, warnings);
@@ -40,11 +40,13 @@ juce::Result MixDocument::load (const juce::File& newFile, juce::StringArray* wa
     session = std::move (loaded);
     file = newFile;
     dirty = false;
-    juce::StringArray pluginErrors;
-    engine.applySession (session, &pluginErrors, true);
+    juce::StringArray restoreErrors;
+    engine.applySession (session, &restoreErrors, true);
 
-    if (warnings != nullptr)
-        warnings->addArray (pluginErrors);
+    if (pluginErrors != nullptr)
+        pluginErrors->addArray (restoreErrors);
+    else if (warnings != nullptr)
+        warnings->addArray (restoreErrors);
 
     notifyStructure();
     return juce::Result::ok();
@@ -53,6 +55,7 @@ juce::Result MixDocument::load (const juce::File& newFile, juce::StringArray* wa
 juce::Result MixDocument::save (const juce::File& newFile)
 {
     engine.captureLivePluginStates (session);
+    engine.forEachChain ([] (PluginChain& chain) { chain.consumeStateChanged(); });   // what was captured is in the file: not an edit any more
     session.sanitise();
     const auto result = session.save (newFile);
 
@@ -233,11 +236,21 @@ void MixDocument::setDeviceInfo (const juce::String& name, int bufferSize, doubl
 
 void MixDocument::markDirty (bool refreshViews)
 {
-    const bool wasDirty = dirty;
-    dirty = true;
+    const bool wasDirty = dirty.exchange (true, std::memory_order_acq_rel);
 
     if (refreshViews || ! wasDirty)
         notifyValue();
+}
+
+bool MixDocument::pollPluginEdits()
+{
+    bool edited = false;
+    engine.forEachChain ([&edited] (PluginChain& chain) { if (chain.consumeStateChanged()) edited = true; });
+
+    if (edited)
+        markDirty (false);
+
+    return edited;
 }
 
 void MixDocument::structureChanged()

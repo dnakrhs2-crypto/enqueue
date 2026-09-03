@@ -225,6 +225,9 @@ private:
     double lastPanicKeyMs = -1.0e9;        // when the main window last handled an Esc press (the hook skips that press)
     double lastQuietEscMs = -1.0e9;        // an Esc with nothing playing: a second one within 0.5 s hard-closes the gate
     bool autoStartOnOpenAllowed = true;
+    juce::String pendingStartOnOpenCue;        // "열 때 시작" waiting for the previous project's stop (its chain reset) to settle
+    double pendingStartOnOpenDeadlineMs = 0.0;
+    void tryPendingStartOnOpen();
     void attachOperationalKeysToWindows();
     void installEscapePolicy (juce::Component& root);
 

@@ -397,27 +397,17 @@ void MainComponent::updateDeviceNames()
 
 void MainComponent::chooseDevice (const juce::String& name)
 {
-    auto& dm = engine.getDeviceManager();
-    auto setup = dm.getAudioDeviceSetup();
-
-    if (setup.outputDeviceName == name && setup.inputDeviceName == name)
+    if (auto* device = engine.getDeviceManager().getCurrentAudioDevice(); device != nullptr && device->getName() == name && engine.isDeviceRunning())
         return;
 
-    setup.outputDeviceName = name;
-    setup.inputDeviceName = name;
-    setup.useDefaultInputChannels = true;
-    setup.useDefaultOutputChannels = true;
-    const auto error = dm.setAudioDeviceSetup (setup, true);
+    const auto error = engine.openDevice (name);   // the ASIO type, every channel and the callback, whatever ran before (safe mode included)
 
     if (error.isNotEmpty())
     {
-        showStatus (ko ("장치를 열지 못했습니다: ") + error, true);
+        showStatus (error, true);
         updateDeviceNames();
         return;
     }
-
-    if (const auto widened = engine.openAllChannels(); widened.isNotEmpty())
-        showStatus (ko ("일부 채널을 열지 못했습니다: ") + widened, true);
 
     deviceChosen();
 }
@@ -469,14 +459,8 @@ void MainComponent::timerCallback()
                             juce::dontSendNotification);
 
     // a knob turned in a plugin editor: the file is out of date (the views need no refresh for that)
-    bool pluginEdited = false;
-    engine.forEachChain ([&pluginEdited] (PluginChain& chain) { if (chain.consumeStateChanged()) pluginEdited = true; });
-
-    if (pluginEdited)
-    {
-        document.markDirty (false);
+    if (document.pollPluginEdits())
         lastChangeMs = now;
-    }
 
     // autosave: a while after the last change, when the session has a file
     if (document.isDirty() && document.hasFile() && lastChangeMs > 0.0 && now - lastChangeMs > settings.getAutosaveSeconds() * 1000.0)
@@ -523,6 +507,8 @@ juce::File MainComponent::defaultSessionFolder() const
 
 void MainComponent::withSessionSecured (std::function<void()> action)
 {
+    document.pollPluginEdits();   // a knob turned since the last timer tick counts
+
     if (! document.isDirty())
     {
         action();
@@ -595,8 +581,8 @@ void MainComponent::openSession (const juce::File& file)
 
 void MainComponent::loadSession (const juce::File& file)
 {
-    juce::StringArray warnings;
-    const auto result = document.load (file, &warnings);
+    juce::StringArray warnings, pluginErrors;
+    const auto result = document.load (file, &warnings, &pluginErrors);
 
     if (result.failed())
     {
@@ -610,11 +596,13 @@ void MainComponent::loadSession (const juce::File& file)
 
     if (safeMode)
     {
-        warnings.clear();
-        warnings.add (ko ("안전 모드: 플러그인과 세션의 장치를 불러오지 않았습니다 (설정은 세션에 그대로 남습니다)"));
+        if (! pluginErrors.isEmpty())   // the parser's own warnings (skipped entries) stay: they are data the operator must know about
+            warnings.add (ko ("안전 모드: 플러그인과 세션의 장치를 불러오지 않았습니다 (설정은 세션에 그대로 남습니다)"));
     }
     else
     {
+        warnings.addArray (pluginErrors);
+
         // the device the session was saved with: a show saved for interface B must not run on A without a word
         const auto deviceWarning = engine.openSessionDevice (document.getSession().device);
 
@@ -830,6 +818,8 @@ void MainComponent::showBackupDialog()
         });
         return;
     }
+
+    document.pollPluginEdits();
 
     if (! autosaveNow())
     {

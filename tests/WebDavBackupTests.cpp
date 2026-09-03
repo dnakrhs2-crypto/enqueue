@@ -35,6 +35,15 @@ public:
             expect (WebDavBackup::validateBaseUrl ("https://").isNotEmpty());
             expect (WebDavBackup::validateBaseUrl ("https://nas.local:5006/LiveMix").isNotEmpty());   // the folder goes in its own field
             expect (WebDavBackup::validateBaseUrl ("").isNotEmpty());
+            expect (WebDavBackup::validateBaseUrl ("https://nas:").isNotEmpty());              // an empty port
+            expect (WebDavBackup::validateBaseUrl ("https://nas:abc").isNotEmpty());           // not a number
+            expect (WebDavBackup::validateBaseUrl ("https://nas:70000").isNotEmpty());         // out of range
+            expect (WebDavBackup::validateBaseUrl ("https://nas:5006:1").isNotEmpty());        // two colons
+            expect (WebDavBackup::validateBaseUrl ("https://na s:5006").isNotEmpty());         // whitespace inside
+            expect (WebDavBackup::validateBaseUrl ("https://nas\\x:5006").isNotEmpty());      // a backslash
+            expect (WebDavBackup::validateBaseUrl ("https://192.168.0.10:5006").isEmpty());
+            expect (WebDavBackup::validateBaseUrl ("https://[fe80::1]:5006").isEmpty());
+            expect (WebDavBackup::validateBaseUrl ("https://[fe80::1").isNotEmpty());
 
             expectEquals (WebDavBackup::credentialKeyFor ("https://Parkdoomin.synology.me:5006/", " gom "), juce::String ("LiveMix/WebDAV/parkdoomin.synology.me:5006/gom"));
             expect (WebDavBackup::credentialKeyFor ("https://a.example:5006", "gom") != WebDavBackup::credentialKeyFor ("https://b.example:5006", "gom"));

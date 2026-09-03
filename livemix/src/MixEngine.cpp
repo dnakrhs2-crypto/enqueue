@@ -19,11 +19,7 @@ MixEngine::~MixEngine()
 juce::String MixEngine::initialise (const juce::XmlElement* savedDeviceState)
 {
     // ASIO only: the other types are never listed, never opened
-    juce::AudioIODeviceType* asio = nullptr;
-
-    for (auto* type : deviceManager.getAvailableDeviceTypes())
-        if (type->getTypeName().containsIgnoreCase ("ASIO"))
-            asio = type;
+    auto* asio = findAsioType();
 
     if (asio == nullptr)
         return juce::String::fromUTF8 ("ASIO 장치 타입을 쓸 수 없습니다 (ASIO 드라이버가 설치된 오디오 인터페이스가 필요합니다).");
@@ -54,14 +50,28 @@ juce::String MixEngine::initialise (const juce::XmlElement* savedDeviceState)
         return error.isNotEmpty() ? error : juce::String::fromUTF8 ("ASIO 장치를 열지 못했습니다.");
 
     const auto widened = openAllChannels();
+    ensureCallback();
+    return widened;
+}
 
+juce::AudioIODeviceType* MixEngine::findAsioType()
+{
+    juce::AudioIODeviceType* asio = nullptr;
+
+    for (auto* type : deviceManager.getAvailableDeviceTypes())
+        if (type->getTypeName().containsIgnoreCase ("ASIO"))
+            asio = type;
+
+    return asio;
+}
+
+void MixEngine::ensureCallback()
+{
     if (! callbackAdded)
     {
         deviceManager.addAudioCallback (this);
         callbackAdded = true;
     }
-
-    return widened;
 }
 
 juce::String MixEngine::openAllChannels()
@@ -81,11 +91,115 @@ juce::String MixEngine::openAllChannels()
     if (setup.inputChannels == allIn && setup.outputChannels == allOut && ! setup.useDefaultInputChannels && ! setup.useDefaultOutputChannels)
         return {};
 
+    const auto previous = setup;
     setup.useDefaultInputChannels = false;
     setup.useDefaultOutputChannels = false;
     setup.inputChannels = allIn;
     setup.outputChannels = allOut;
-    return deviceManager.setAudioDeviceSetup (setup, true);
+    const auto error = deviceManager.setAudioDeviceSetup (setup, true);
+
+    if (error.isEmpty())
+        return {};
+
+    // JUCE closed the device on the refusal: back to the channels that worked
+    const auto rollback = deviceManager.setAudioDeviceSetup (previous, true);
+    return juce::String::fromUTF8 ("모든 채널을 열지 못했습니다: ") + error
+           + (rollback.isNotEmpty() ? juce::String::fromUTF8 (" (이전 채널 구성으로 되돌리기도 실패: ") + rollback + ")"
+                                    : juce::String::fromUTF8 (" (이전 채널 구성을 유지합니다)"));
+}
+
+juce::String MixEngine::openDevice (const juce::String& name, double newSampleRate, int newBufferSize)
+{
+    auto* asio = findAsioType();
+
+    if (asio == nullptr)
+        return juce::String::fromUTF8 ("ASIO 장치 타입을 쓸 수 없습니다 (ASIO 드라이버가 설치된 오디오 인터페이스가 필요합니다).");
+
+    asio->scanForDevices();
+
+    if (name.isNotEmpty() && ! asio->getDeviceNames (false).contains (name))
+        return juce::String::fromUTF8 ("ASIO 장치 '") + name + juce::String::fromUTF8 ("'가 이 PC에 없습니다.");
+
+    // what runs now, to come back to when the new setup fails (JUCE closes a device whose reconfiguration is refused)
+    const bool hadDevice = deviceManager.getCurrentAudioDevice() != nullptr;
+    const auto previousType = deviceManager.getCurrentAudioDeviceType();
+    const auto previous = deviceManager.getAudioDeviceSetup();
+
+    if (deviceManager.getCurrentAudioDeviceType() != asio->getTypeName())
+        deviceManager.setCurrentAudioDeviceType (asio->getTypeName(), false);
+
+    auto setup = deviceManager.getAudioDeviceSetup();
+
+    if (name.isNotEmpty())
+        setup.inputDeviceName = setup.outputDeviceName = name;
+
+    if (setup.outputDeviceName.isEmpty())
+        return juce::String::fromUTF8 ("열 ASIO 장치가 없습니다.");
+
+    if (newSampleRate > 0.0)
+        setup.sampleRate = newSampleRate;
+
+    if (newBufferSize > 0)
+        setup.bufferSize = newBufferSize;
+
+    setup.useDefaultInputChannels = setup.useDefaultOutputChannels = true;
+    auto error = deviceManager.setAudioDeviceSetup (setup, true);
+
+    if (error.isEmpty())
+        error = openAllChannels();
+
+    if (error.isNotEmpty())
+    {
+        juce::String rollback;
+
+        if (hadDevice)
+        {
+            if (previousType != asio->getTypeName())
+                deviceManager.setCurrentAudioDeviceType (previousType, false);
+
+            rollback = deviceManager.setAudioDeviceSetup (previous, true);
+        }
+
+        ensureCallback();
+        return juce::String::fromUTF8 ("ASIO 장치 '") + setup.outputDeviceName + juce::String::fromUTF8 ("'를 열지 못했습니다: ") + error
+               + (! hadDevice ? juce::String()
+                  : rollback.isNotEmpty() ? juce::String::fromUTF8 (" (이전 장치로 되돌리기도 실패: ") + rollback + ")"
+                                          : juce::String::fromUTF8 (" (이전 장치로 되돌렸습니다)"));
+    }
+
+    ensureCallback();
+    return {};
+}
+
+juce::String MixEngine::setBufferSize (int samples)
+{
+    auto* device = deviceManager.getCurrentAudioDevice();
+
+    if (device == nullptr)
+        return juce::String::fromUTF8 ("열린 ASIO 장치가 없습니다.");
+
+    if (samples <= 0 || device->getCurrentBufferSizeSamples() == samples)
+        return {};
+
+    const auto previous = deviceManager.getAudioDeviceSetup();
+    auto setup = previous;
+    setup.bufferSize = samples;
+    auto error = deviceManager.setAudioDeviceSetup (setup, true);
+
+    if (error.isEmpty())
+        error = openAllChannels();
+
+    if (error.isNotEmpty())
+    {
+        const auto rollback = deviceManager.setAudioDeviceSetup (previous, true);
+        ensureCallback();
+        return juce::String::fromUTF8 ("버퍼 크기를 바꾸지 못했습니다: ") + error
+               + (rollback.isNotEmpty() ? juce::String::fromUTF8 (" (이전 설정으로 되돌리기도 실패: ") + rollback + ")"
+                                        : juce::String::fromUTF8 (" (이전 설정으로 되돌렸습니다)"));
+    }
+
+    ensureCallback();
+    return {};
 }
 
 juce::String MixEngine::openSessionDevice (const MixDevice& device)
@@ -98,50 +212,14 @@ juce::String MixEngine::openSessionDevice (const MixDevice& device)
 
     if (sameDevice && (device.bufferSize <= 0 || current->getCurrentBufferSizeSamples() == device.bufferSize)
         && (device.sampleRate <= 0.0 || juce::approximatelyEqual (current->getCurrentSampleRate(), device.sampleRate)))
-        return openAllChannels();
-
-    juce::AudioIODeviceType* asio = nullptr;
-
-    for (auto* type : deviceManager.getAvailableDeviceTypes())
-        if (type->getTypeName().containsIgnoreCase ("ASIO"))
-            asio = type;
-
-    if (asio == nullptr)
-        return juce::String::fromUTF8 ("ASIO 장치 타입을 쓸 수 없습니다 (ASIO 드라이버가 설치된 오디오 인터페이스가 필요합니다).");
-
-    asio->scanForDevices();
-
-    if (! asio->getDeviceNames (false).contains (device.name))
-        return juce::String::fromUTF8 ("세션의 ASIO 장치 '") + device.name + juce::String::fromUTF8 ("'가 이 PC에 없습니다")
-               + (current != nullptr ? juce::String::fromUTF8 (" - 지금 열린 장치: ") + current->getName() : juce::String::fromUTF8 (" - 열린 장치 없음"));
-
-    const auto previous = deviceManager.getAudioDeviceSetup();
-    deviceManager.setCurrentAudioDeviceType (asio->getTypeName(), false);
-    juce::AudioDeviceManager::AudioDeviceSetup setup;
-    setup.inputDeviceName = setup.outputDeviceName = device.name;
-    setup.sampleRate = device.sampleRate > 0.0 ? device.sampleRate : 0.0;
-    setup.bufferSize = device.bufferSize > 0 ? device.bufferSize : 0;
-    setup.useDefaultInputChannels = setup.useDefaultOutputChannels = true;
-    auto error = deviceManager.setAudioDeviceSetup (setup, true);
-
-    if (error.isEmpty())
-        error = openAllChannels();
-
-    if (error.isNotEmpty())
     {
-        if (current != nullptr)
-            deviceManager.setAudioDeviceSetup (previous, true);   // back to what worked
-
-        return juce::String::fromUTF8 ("세션의 ASIO 장치 '") + device.name + juce::String::fromUTF8 ("'를 열지 못했습니다: ") + error;
+        const auto widened = openAllChannels();
+        ensureCallback();
+        return widened.isEmpty() ? juce::String() : juce::String::fromUTF8 ("세션의 장치는 열려 있지만 ") + widened;
     }
 
-    if (! callbackAdded)
-    {
-        deviceManager.addAudioCallback (this);
-        callbackAdded = true;
-    }
-
-    return {};
+    const auto error = openDevice (device.name, device.sampleRate, device.bufferSize);
+    return error.isEmpty() ? juce::String() : juce::String::fromUTF8 ("세션의 ") + error;
 }
 
 void MixEngine::shutdown()

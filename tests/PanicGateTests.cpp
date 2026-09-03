@@ -419,6 +419,103 @@ public:
             expectEquals (engine.getNumPlaying(), 0);   // the tail fade ended the instance
         }
 
+        beginTest ("the panic fade outlasts a shorter declared tail and reaches zero; a source that ends mid-panic keeps fading after the chain");
+        {
+            struct ShortTailGenerator : public TestGainPlugin
+            {
+                ShortTailGenerator() : TestGainPlugin (1.0f, 0.1) {}   // 100 ms of declared tail, and it keeps generating
+
+                void processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer&) override
+                {
+                    for (int ch = 0; ch < buffer.getNumChannels(); ++ch)
+                        juce::FloatVectorOperations::fill (buffer.getWritePointer (ch), 0.5f, buffer.getNumSamples());
+                }
+            };
+
+            const auto shortTone = writeShortTone (dir);
+            const int fadeBlocks = (int) std::ceil (0.2 * sampleRate / blockSize);   // 200 ms
+
+            // (a) in the tail, with only 100 ms of declared tail left: the 200 ms panic fade still runs to zero
+            {
+                AudioEngine engine (0);
+                engine.prepare (sampleRate, blockSize);
+                juce::AudioBuffer<float> out (2, blockSize);
+                Cue cue;
+                cue.name = "short";
+                cue.file = shortTone;
+                engine.getCueChain (cue.id).addPlugin (std::make_unique<ShortTailGenerator>());
+                juce::String error;
+                expect (engine.play (cue, &error), error);
+
+                for (int i = 0; i < 60; ++i)   // until the stream is over (the tail then has ~100 ms left)
+                {
+                    engine.renderBlock (out, blockSize);
+                    const auto playing = engine.getPlayingCues();
+
+                    if (playing.size() == 1 && playing[0].progress >= 0.999)
+                        break;
+                }
+
+                expectEquals (engine.getNumPlaying(), 1);
+                engine.fadeOutAndStopAll (200);
+                float lastLevel = 1.0f;
+
+                for (int i = 0; i < fadeBlocks - 1; ++i)
+                {
+                    engine.renderBlock (out, blockSize);
+                    engine.reapIfNeeded();
+                    lastLevel = out.getSample (0, blockSize - 1);
+                }
+
+                expectEquals (engine.getNumPlaying(), 1);        // alive past the declared 100 ms tail: the fade is in charge
+                expectGreaterThan (lastLevel, 0.001f);            // and still on its way down, not cut
+                expectLessThan (lastLevel, 0.1f);
+
+                for (int i = 0; i < 3; ++i)
+                {
+                    engine.renderBlock (out, blockSize);
+                    engine.reapIfNeeded();
+                }
+
+                expectEquals (engine.getNumPlaying(), 0);
+            }
+
+            // (b) the panic arrives while the source still streams and the source ends during the fade: the chain keeps
+            //     ringing through the rest of the panic time, fading after the chain, instead of cutting at the file's end
+            {
+                AudioEngine engine (0);
+                engine.prepare (sampleRate, blockSize);
+                juce::AudioBuffer<float> out (2, blockSize);
+                Cue cue;
+                cue.name = "short";
+                cue.file = shortTone;
+                engine.getCueChain (cue.id).addPlugin (std::make_unique<ShortTailGenerator>());
+                juce::String error;
+                expect (engine.play (cue, &error), error);
+                engine.renderBlock (out, blockSize);   // 11 ms in: the 50 ms file is still streaming
+
+                engine.fadeOutAndStopAll (200);
+
+                for (int i = 0; i < 8; ++i)   // 93 ms: the file ended (at ~50 ms) inside the fade
+                {
+                    engine.renderBlock (out, blockSize);
+                    engine.reapIfNeeded();
+                }
+
+                expectEquals (engine.getNumPlaying(), 1);                          // not cut when the file ended
+                expectGreaterThan (out.getMagnitude (0, 0, blockSize), 0.15f);     // the chain still rings, fading (about half way)
+                expectLessThan (out.getMagnitude (0, 0, blockSize), 0.45f);
+
+                for (int i = 0; i < fadeBlocks; ++i)
+                {
+                    engine.renderBlock (out, blockSize);
+                    engine.reapIfNeeded();
+                }
+
+                expectEquals (engine.getNumPlaying(), 0);   // gone once the 200 ms are over
+            }
+        }
+
         dir.deleteRecursively();
     }
 };

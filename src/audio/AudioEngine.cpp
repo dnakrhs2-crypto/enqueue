@@ -1080,9 +1080,19 @@ void AudioEngine::settlePendingChainReset()
 {
     bool pending = chainResetPending.exchange (false, std::memory_order_acq_rel);
 
-    // a stopped device never brings the gate down: the armed reset would refuse every start once the device is back
+    // a stopped device never brings the gate down: the armed reset would refuse every start once the device is back.
+    // The players cannot fade without a callback either: they end here, so the device's return plays none of their remains.
     if (! pending && isResetOutstanding() && deviceExpected && ! deviceRunning.load (std::memory_order_acquire))
     {
+        {
+            const juce::ScopedLock sl (lock);
+
+            for (auto& p : players)
+                if (! p->hasFinished() && ! p->isLoadedNotStarted())
+                    p->abandon();
+        }
+
+        reapFinishedPlayers();
         resetChainsWhenClosed.store (false, std::memory_order_relaxed);
         pending = true;
     }

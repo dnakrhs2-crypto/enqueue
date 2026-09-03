@@ -102,6 +102,7 @@ public:
 
 private:
     void prepareSlot (Slot& slot);
+    void clearSlots (bool notify);   // the destructor clears without chainChanged (pluginAboutToBeRemoved still closes editors)
     void insertSlot (std::unique_ptr<Slot> slot, int insertAt);
     void destroySlot (std::unique_ptr<Slot> slot);
     void notifyChanged();

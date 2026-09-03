@@ -56,6 +56,7 @@ private:
     juce::Component rowsHolder;
     std::vector<std::unique_ptr<Row>> rows;
     int dragFrom = -1, dragTarget = -1;
+    int revision = 0;   // bumped by setChain(): deferred work posted for another chain is dropped
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (ChainDrawer)
 };

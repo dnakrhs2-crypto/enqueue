@@ -7,7 +7,7 @@ namespace gocue
 
 PluginChain::~PluginChain()
 {
-    clear();
+    clearSlots (false);   // an owner being torn down must not be told about it (a retired chain is not an edit)
 }
 
 void PluginChain::prepare (double newSampleRate, int newBlockSize)
@@ -174,6 +174,11 @@ void PluginChain::setBypassed (int index, bool shouldBypass)
 
 void PluginChain::clear()
 {
+    clearSlots (true);
+}
+
+void PluginChain::clearSlots (bool notify)
+{
     std::vector<std::unique_ptr<Slot>> dead;
 
     {
@@ -187,7 +192,8 @@ void PluginChain::clear()
     for (auto& slot : dead)
         destroySlot (std::move (slot));
 
-    notifyChanged();
+    if (notify)
+        notifyChanged();
 }
 
 bool PluginChain::matchesStructure (const std::vector<PluginSlotState>& states) const

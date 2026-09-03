@@ -1,4 +1,5 @@
 #include "MixDocument.h"
+#include "TestGainPlugin.h"
 
 #include <juce_core/juce_core.h>
 
@@ -62,6 +63,35 @@ public:
             doc.newSession();
             expect (! doc.isDirty());
             expect (! doc.hasFile());
+            expect (dir.deleteRecursively());
+        }
+
+        beginTest ("a plugin's own state change is picked up on demand and settled by a save");
+        {
+            MixEngine engine;
+            engine.prepare (48000.0, 256);
+            MixDocument doc (engine);
+            auto* chain = engine.getChannelChain (doc.getSession().channels[0].id);
+            expect (chain != nullptr);
+            auto* plugin = new TestGainPlugin (0.5f);
+            chain->addPlugin (std::unique_ptr<juce::AudioPluginInstance> (plugin));
+            expect (! doc.pollPluginEdits());   // adding is a chain edit (markDirty by the UI), not a plugin state change
+
+            const auto dir = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("livemix_doc2_" + juce::Uuid().toString());
+            expect (dir.createDirectory().wasOk());
+            expect (doc.save (dir.getChildFile ("p.livemix")).wasOk());
+            expect (! doc.isDirty());
+
+            plugin->updateHostDisplay();      // what a knob turned in the editor does
+            expect (doc.pollPluginEdits());   // asked before the timer got there: dirty now
+            expect (doc.isDirty());
+            expect (! doc.pollPluginEdits());
+
+            plugin->updateHostDisplay();
+            expect (doc.saveIfPossible().wasOk());   // the save captured that state
+            expect (! doc.isDirty());
+            expect (! doc.pollPluginEdits());        // and settled the flag: the next tick does not dirty a saved file
+            expect (! doc.isDirty());
             expect (dir.deleteRecursively());
         }
     }

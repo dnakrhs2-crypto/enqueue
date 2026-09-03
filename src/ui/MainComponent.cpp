@@ -2457,6 +2457,7 @@ void MainComponent::newProject()
 {
     WorkspaceSettingsDialog::closeIfOpen();   // it edits the document that is about to be replaced
     PatchEditorDialog::closeIfOpen();
+    pendingStartOnOpenCue.clear();
     controller.resetForNewProject();   // fades, revert history, playlists, waits: nothing of this project survives
     pluginWindows.closeAll();
     engine.stopAll();
@@ -2509,6 +2510,7 @@ void MainComponent::openProjectFile (const juce::File& file, bool allowAutoStart
 
     WorkspaceSettingsDialog::closeIfOpen();
     PatchEditorDialog::closeIfOpen();
+    pendingStartOnOpenCue.clear();
     controller.resetForNewProject();   // fades, revert history, playlists, waits: nothing of this project survives
     pluginWindows.closeAll();
     engine.stopAll();
@@ -2533,13 +2535,43 @@ void MainComponent::openProjectFile (const juce::File& file, bool allowAutoStart
 
     // never after a warning (a missing file, a cleared hotkey: the operator reads that first), never on a launch that
     // must stay quiet (safe mode, an update restart, a fallback device)
-    if (document.settings.startOnOpen && allowAutoStart && autoStartOnOpenAllowed && warnings.isEmpty())
+    pendingStartOnOpenCue.clear();
+
+    if (document.settings.startOnOpen && allowAutoStart && autoStartOnOpenAllowed && warnings.isEmpty()
+        && findCueIndexByNumber (document.settings.startOnOpenCue) >= 0)
     {
-        if (const int i = findCueIndexByNumber (document.settings.startOnOpenCue); i >= 0)
-        {
-            controller.fireSequence (i);
-            transport.showStatus (ko ("열 때 시작: ") + document.settings.startOnOpenCue, false);
-        }
+        // the stop of the previous project owes a chain reset until the audio callback has closed the gate (a large
+        // buffer makes that later than this line): the start waits for it in the timer instead of being refused
+        pendingStartOnOpenCue = document.settings.startOnOpenCue;
+        pendingStartOnOpenDeadlineMs = juce::Time::getMillisecondCounterHiRes() + 3000.0;
+        tryPendingStartOnOpen();
+    }
+}
+
+void MainComponent::tryPendingStartOnOpen()
+{
+    if (pendingStartOnOpenCue.isEmpty())
+        return;
+
+    engine.reapIfNeeded();   // runs the owed reset as soon as the gate is closed
+
+    if (engine.isResetOutstanding())
+    {
+        if (juce::Time::getMillisecondCounterHiRes() < pendingStartOnOpenDeadlineMs)
+            return;   // the timer tries again
+
+        pendingStartOnOpenCue.clear();
+        transport.showStatus (ko ("열 때 시작 취소: 이전 정지 처리가 끝나지 않았습니다 (오디오 장치를 확인하세요)"), true);
+        return;
+    }
+
+    const auto number = pendingStartOnOpenCue;
+    pendingStartOnOpenCue.clear();
+
+    if (const int i = findCueIndexByNumber (number); i >= 0)
+    {
+        controller.fireSequence (i);
+        transport.showStatus (ko ("열 때 시작: ") + number, false);
     }
 }
 
@@ -3040,6 +3072,7 @@ void MainComponent::timerCallback()
     }
 
     engine.reapIfNeeded();   // finished players are destroyed here, never from the audio thread's callback
+    tryPendingStartOnOpen();
 
     if (! juce::Process::isForegroundProcess())
     {
