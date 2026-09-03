@@ -249,8 +249,9 @@ void MainComponent::resized()
     statusRight.setBounds (status.reduced (16, 0).removeFromRight (status.getWidth() / 2));
 
     const int drawerW = juce::jmin (440, juce::jmax (320, getWidth() / 3));
-    chainDrawer.setBounds (area.removeFromRight (drawer == Drawer::chain ? drawerW : 0).withRight (getWidth()).withWidth (drawerW));
-    fxDrawer.setBounds (chainDrawer.getBounds());
+    const auto drawerArea = area.withLeft (getWidth() - drawerW);   // the right edge, over the cards and the master
+    chainDrawer.setBounds (drawerArea);
+    fxDrawer.setBounds (drawerArea);
     chainDrawer.setVisible (drawer == Drawer::chain);
     fxDrawer.setVisible (drawer == Drawer::fx);
 
@@ -350,9 +351,12 @@ void MainComponent::updateDeviceNames()
 
     if (auto* device = engine.getDeviceManager().getCurrentAudioDevice())
     {
-        current = device->getName();
-        inputNames = device->getInputChannelNames();
-        outputNames = device->getOutputChannelNames();
+        if (device->getTypeName().containsIgnoreCase ("ASIO"))   // another type's device (never opened by us) stays out of the pickers
+        {
+            current = device->getName();
+            inputNames = device->getInputChannelNames();
+            outputNames = device->getOutputChannelNames();
+        }
     }
 
     topBar.setDevices (asio, current);

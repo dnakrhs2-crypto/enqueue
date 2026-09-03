@@ -8,7 +8,7 @@ struct ChainDrawer::Row : public juce::Component
 {
     Row (ChainDrawer& o, int idx) : owner (o), index (idx)
     {
-        grip.setText ("\xE2\x89\xA1", juce::dontSendNotification);   // ≡
+        grip.setText (juce::String::fromUTF8 ("\xE2\x89\xA1"), juce::dontSendNotification);   // ≡
         grip.setFont (juce::Font (juce::FontOptions (18.0f)));
         grip.setColour (juce::Label::textColourId, Palette::dimText);
         grip.setJustificationType (juce::Justification::centred);
@@ -39,7 +39,7 @@ struct ChainDrawer::Row : public juce::Component
         open.onClick = [this] { owner.openEditor (index); };
         addAndMakeVisible (open);
 
-        remove.setButtonText ("\xE2\x9C\x95");
+        remove.setButtonText (juce::String::fromUTF8 ("\xE2\x9C\x95"));
         remove.setWantsKeyboardFocus (false);
         remove.setTooltip (ko ("체인에서 빼기"));
         remove.onClick = [this] { owner.removeSlot (index); };

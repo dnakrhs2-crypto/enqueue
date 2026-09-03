@@ -59,7 +59,7 @@ private:
 
     juce::Label number;
     NameLabel name;
-    juce::TextButton menuButton { "\xE2\x8B\xAF" };   // ···
+    juce::TextButton menuButton { juce::String::fromUTF8 ("\xE2\x8B\xAF") };   // ···
     LampButton micButton;
     juce::Label inputCaption, chainCaption, fxCaption, outputCaption, meterCaption;
     juce::ComboBox inputCombo;

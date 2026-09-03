@@ -46,7 +46,7 @@ private:
     juce::StringArray outputNames;
 
     juce::Label title, chainCaption, returnCaption, returnValue, outputCaption, meterCaption, sendersCaption, note;
-    juce::TextButton closeButton { "\xE2\x9C\x95" };
+    juce::TextButton closeButton { juce::String::fromUTF8 ("\xE2\x9C\x95") };
     std::vector<std::unique_ptr<juce::TextButton>> tabs;
     juce::TextButton addFxButton, removeFxButton;
     NameLabel name;

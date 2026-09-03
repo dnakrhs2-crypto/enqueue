@@ -50,7 +50,7 @@ private:
     juce::String ownerTitle;
 
     juce::Label title, note, legend;
-    juce::TextButton closeButton { "\xE2\x9C\x95" };   // ✕
+    juce::TextButton closeButton { juce::String::fromUTF8 ("\xE2\x9C\x95") };   // ✕
     juce::TextButton addButton;
     juce::Viewport viewport;
     juce::Component rowsHolder;
