@@ -37,11 +37,11 @@ void HighQualityResampler::setDeviceRate (double rate)
         return;
 
     inChunk = inputChunk;
-    const double ratio = deviceRate / sourceRate;
-    const int maxOut = (int) std::ceil (inChunk * std::max (1.0, ratio)) * 2 + 1024;   // a burst after the latency never overflows
 
     for (int ch = 0; ch < numChannels; ++ch)
         converters.push_back (std::make_unique<r8b::CDSPResampler> (sourceRate, deviceRate, inChunk, transitionBand, attenuation, r8b::fprLinearPhase));
+
+    const int maxOut = juce::jmax (1, converters.front()->getMaxOutLen (inChunk));   // the library's own bound for one chunk
 
     inBuffer.setSize (numChannels, inChunk, false, true, true);
     inDouble.assign ((size_t) numChannels, std::vector<double> ((size_t) inChunk, 0.0));
@@ -53,6 +53,10 @@ void HighQualityResampler::prepareToPlay (int samplesPerBlockExpected, double)
     // the upstream runs at the file rate; it gets a block sized for the input chunk
     upstream.prepareToPlay (bypass ? juce::jmax (1, samplesPerBlockExpected) : inChunk, sourceRate);
     reset();
+
+    // prime on this (message) thread: the filter's start-up pulls land here, not in the first audio callback
+    for (int i = 0; i < 16 && ! bypass && fifoFilled == 0; ++i)
+        pullChunk();
 }
 
 void HighQualityResampler::releaseResources()
@@ -87,6 +91,7 @@ void HighQualityResampler::pullChunk()
         double* out = nullptr;
         const int n = converters[(size_t) ch]->process (d.data(), inChunk, out);   // the same count for every channel
         auto& f = fifo[(size_t) ch];
+        jassert (n <= (int) f.size());   // sized from getMaxOutLen(): a larger burst would be a library contract break
         const int fit = juce::jmin (n, (int) f.size());
 
         if (fit > 0)
@@ -109,15 +114,21 @@ void HighQualityResampler::getNextAudioBlock (const juce::AudioSourceChannelInfo
 
     info.clearActiveBufferRegion();
     int written = 0;
+    int emptyPulls = 0;   // only a run of pulls that yield nothing ends the loop (the filter start-up takes a few)
 
-    for (int guard = 0; written < info.numSamples && guard < 64; ++guard)
+    while (written < info.numSamples)
     {
         if (fifoFilled == 0)
         {
-            pullChunk();   // the first calls after a reset yield nothing until the filter has enough history
+            pullChunk();
+
+            if (fifoFilled == 0 && ++emptyPulls > 16)
+                break;   // never: the upstream returns silence past its end, and silence still converts
+
             continue;
         }
 
+        emptyPulls = 0;
         const int take = juce::jmin (info.numSamples - written, fifoFilled);
 
         for (int ch = 0; ch < juce::jmin (numChannels, info.buffer->getNumChannels()); ++ch)

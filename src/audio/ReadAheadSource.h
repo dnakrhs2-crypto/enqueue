@@ -35,6 +35,9 @@ public:
     /** The upstream's content changed: forgets everything cached; the read-ahead thread refills from
         'fromPosition' at once (never a disk read on the calling thread). */
     void invalidate (juce::int64 fromPosition);
+    /** The upstream's content changed but the position did not (a live envelope edit): the cache is dropped and
+        refilled from wherever playback is, atomically with respect to the audio thread. */
+    void invalidateCurrent();
 
     /** Samples cached and playable from the current play position (tests). */
     int getNumSamplesReady() const;

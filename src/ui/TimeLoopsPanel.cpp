@@ -61,7 +61,7 @@ TimeLoopsPanel::TimeLoopsPanel (ProjectDocument& doc, AudioEngine& e, juce::Audi
                 c.audio.envelope.lockToTrim = true;
                 c.audio.envelope.points = { { 0.0, 1.0 }, { 1.0, 1.0 } };   // a flat line to click on
             }
-        });
+        }, {}, LiveApply::envelope);
     };
 
     setupToggle (linearToggle, "직선 (끄면 곡선)");
@@ -85,7 +85,7 @@ TimeLoopsPanel::TimeLoopsPanel (ProjectDocument& doc, AudioEngine& e, juce::Audi
             return;
         }
 
-        updateSelected (ko ("엔벨로프 잠금"), [on] (Cue& c) { c.audio.envelope.setLockToTrim (on, c.regionLength()); });
+        updateSelected (ko ("엔벨로프 잠금"), [on] (Cue& c) { c.audio.envelope.setLockToTrim (on, c.regionLength()); }, {}, LiveApply::envelope);
     };
 
     setupToggle (pitchToggle, "피치 유지");
@@ -262,7 +262,7 @@ void TimeLoopsPanel::updateSelected (const juce::String& name, const std::functi
         if (apply == LiveApply::rate || apply == LiveApply::regionAndRate)
             engine.setLiveRate (cue->id, cue->audio.rate);
 
-        if (apply == LiveApply::envelope || apply == LiveApply::regionAndRate)
+        if (apply == LiveApply::envelope)
             engine.setLiveEnvelope (cue->id, cue->audio.envelope);   // the fade points / toggles are heard at once
     }
 
@@ -356,10 +356,17 @@ void TimeLoopsPanel::commitEnvelope (const Envelope& envelope, bool finished)
     if (cue == nullptr)
         return;
 
-    // every callback of one drag (including the final one) shares the key, so a drag is one undo step
-    juce::ignoreUnused (finished);
+    // every callback of one drag (including the final one) shares the key, so a drag is one undo step.
+    // The live push (which drops the read-ahead cache) is throttled during the drag; the final one always goes.
+    const auto now = juce::Time::getMillisecondCounter();
+    const bool pushLive = finished || now - lastLiveEnvelopePush >= 40;
+
+    if (pushLive)
+        lastLiveEnvelopePush = now;
+
     const auto key = "envelope:" + cue->id.toString();
-    updateSelected (ko ("엔벨로프 편집"), [envelope] (Cue& c) { c.audio.envelope = envelope; c.audio.envelope.sanitise(); }, key, LiveApply::envelope);
+    updateSelected (ko ("엔벨로프 편집"), [envelope] (Cue& c) { c.audio.envelope = envelope; c.audio.envelope.sanitise(); }, key,
+                    pushLive ? LiveApply::envelope : LiveApply::none);
 }
 
 void TimeLoopsPanel::commitStart()

@@ -64,6 +64,7 @@ private:
     juce::ToggleButton infiniteToggle, envelopeToggle, linearToggle, lockToggle, pitchToggle;
     juce::TextButton resetButton, zoomInButton, zoomOutButton, sizeUpButton, sizeDownButton;
     bool refreshing = false;
+    juce::uint32 lastLiveEnvelopePush = 0;   // commitEnvelope throttle
     juce::Uuid shownId = juce::Uuid::null();   // the cue the fields show (focus-lost commits go there)
     bool cancellingEdit = false;
 

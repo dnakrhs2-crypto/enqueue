@@ -84,6 +84,17 @@ void ReadAheadSource::invalidate (juce::int64 fromPosition)
     thread.moveToFrontOfQueue (this);
 }
 
+void ReadAheadSource::invalidateCurrent()
+{
+    {
+        const juce::ScopedLock sl (rangeLock);
+        validStart = validEnd = 0;
+        ++generation;              // playPos untouched: the audio thread keeps its place
+    }
+
+    thread.moveToFrontOfQueue (this);
+}
+
 void ReadAheadSource::getNextAudioBlock (const juce::AudioSourceChannelInfo& info)
 {
     info.clearActiveBufferRegion();

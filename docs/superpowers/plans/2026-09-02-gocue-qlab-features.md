@@ -367,4 +367,4 @@ class Scheduler { public: using Clock = std::function<double()>;   // 초
 ## v0.8.7 — 고품질 리샘플러 + 실시간 엔벨로프 (2026-09-03 오전)
 - [x] `src/audio/HighQualityResampler.*`: r8brain(`third_party/r8brain`, MIT, 헤더 온리) 고정 비율 SRC(파일→장치). 체인 = RegionLoop → ReadAhead → (Stretch) → HQ SRC → JUCE 리샘플러(속도만, `ratioFor = stretch ? 1 : rate`). 같은 레이트면 바이패스. 시크 시 `reset()`. 테스트 `tests/ResamplerTests.cpp`(48↔44.1k 음정·레벨 유지, 바이패스).
 - [x] 엔벨로프 실시간: `RegionLoopSource::setLiveEnvelope`(SpinLock swap), `CuePlayer::setLiveEnvelope`(+읽기선행 캐시 즉시 갱신), `AudioEngine::setLiveEnvelope`, `TimeLoopsPanel` LiveApply::envelope(+regionAndRate에서도 전송). 테스트 추가.
-- [ ] 코덱스 리뷰(codex_review_hq) → 반영 → 0.8.7 릴리스.
+- [x] 코덱스 리뷰(codex_review_hq, 9건): 반영 = 루프 상한 제거(무진행 pull만 제한, 큰 버퍼·고속 재생 무음 방지), FIFO 크기 `getMaxOutLen`+assert, prepare에서 프라임(첫 콜백 스파이크 방지), `ReadAheadSource::invalidateCurrent`(위치 유지, 되감기 경쟁 제거), 엔벨로프 토글 `LiveApply::envelope` 명시(불필요한 시크 제거), 드래그 중 라이브 푸시 40 ms 스로틀, 큰 요청·연속성 테스트. 수용 = SRC/속도 단계에 남은 ≤512 입력 샘플 분량의 옛 엔벨로프(≤ 46 ms), seek 직후 SRC 워밍업 무음(수십 ms, 기존 읽기선행 갭과 같은 급), 스타트업 구간 impulse 테스트 없음. → 0.8.7 릴리스.

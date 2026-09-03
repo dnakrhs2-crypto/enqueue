@@ -348,7 +348,7 @@ void CuePlayer::setLiveEnvelope (const Envelope& cueEnvelope) noexcept
 
     // the read-ahead holds audio shaped by the old envelope: refill it from where playback is (a few ms)
     if (readAhead != nullptr)
-        readAhead->invalidate (readAhead->getNextReadPosition());
+        readAhead->invalidateCurrent();
 }
 
 void CuePlayer::setLiveRate (double rate) noexcept

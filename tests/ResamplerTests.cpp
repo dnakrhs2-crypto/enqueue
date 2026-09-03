@@ -103,6 +103,32 @@ public:
             expectWithinAbsoluteError (out.getRMSLevel (0, from, to - from), 0.25f / std::sqrt (2.0f), 0.005f);
         }
 
+        beginTest ("a large request at a steep ratio is filled completely and without clicks");
+        {
+            SineSource sine (96000.0, 2000.0, 0.5f);
+            HighQualityResampler r (sine, 2, 96000.0);
+            r.setDeviceRate (44100.0);
+            r.prepareToPlay (8192, 44100.0);
+
+            juce::AudioBuffer<float> out (2, 8192 * 3);
+            out.clear();
+
+            for (int pos = 0; pos < out.getNumSamples(); pos += 8192)   // 8192 output samples need ~17.8 k input = 35 chunks
+            {
+                juce::AudioSourceChannelInfo info (&out, pos, 8192);
+                r.getNextAudioBlock (info);
+            }
+
+            // the last block is full level to its very end (no silent tail from an exhausted loop)
+            expectWithinAbsoluteError (out.getRMSLevel (0, out.getNumSamples() - 512, 512), 0.5f / std::sqrt (2.0f), 0.01f);
+
+            // continuity: a 2 kHz sine at 44.1 k moves at most ~0.14 per sample; a click would jump further
+            float maxStep = 0.0f;
+            for (int i = 4096; i < out.getNumSamples(); ++i)
+                maxStep = juce::jmax (maxStep, std::abs (out.getSample (0, i) - out.getSample (0, i - 1)));
+            expectLessThan (maxStep, 0.16f);
+        }
+
         beginTest ("equal rates pass straight through");
         {
             SineSource sine (48000.0, 1000.0, 0.5f);
