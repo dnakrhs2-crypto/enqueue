@@ -55,7 +55,13 @@
   .qa .q:before{content:"Q";color:var(--blue);font-weight:800}
   .qa .a{margin:6px 0 0 22px;color:var(--sub);font-size:15.5px}
   .close{margin-top:32px;background:var(--grey);border-radius:16px;padding:16px 18px;color:var(--sub);font-size:15px;text-align:center;font-weight:500}
-  @media (max-width:360px){ h1{font-size:25px} .money .v{font-size:30px} }
+  .contact{margin-top:40px}
+  .kakao{display:flex;align-items:center;gap:16px;background:#FEE500;color:#191919;border-radius:18px;padding:20px 22px;text-decoration:none;border:1px solid #E6CF00}
+  .kakao:hover{filter:brightness(1.03)}
+  .kakao svg{width:64px;height:64px;fill:#191919;flex:none}
+  .kakao b{display:block;font-size:20px;font-weight:800;letter-spacing:-.02em;line-height:1.25}
+  .kakao small{display:block;font-size:14px;color:#3A3A2A;margin-top:4px;font-weight:500}
+  @media (max-width:360px){ h1{font-size:25px} .money .v{font-size:30px} .kakao b{font-size:18px} }
 </style>
 <script defer src="https://static.cloudflareinsights.com/beacon.min.js" data-cf-beacon='{"token": "ba5c97d4030f4886a543055e34721a3b"}'></script>
 </head>
@@ -136,7 +142,14 @@
     </div>
   </section>
 
-  <div class="close">그 외 궁금하신 점은 편하게 질문 주세요!</div>
+  <section class="contact">
+    <h2>문의하기</h2>
+    <p class="lead" style="margin:0 0 14px">그 외 궁금하신 점은 카카오톡 오픈채팅으로 편하게 질문 주세요!</p>
+    <a class="kakao" href="https://open.kakao.com/o/sq0CQA3b">
+      <svg viewBox="0 0 48 48" aria-hidden="true"><path d="M24 6C12.4 6 3 13.3 3 22.3c0 5.8 3.9 10.9 9.8 13.8-.4 1.4-1.5 5.3-1.7 6.1-.3 1 .4 1 .8.7.3-.2 5.1-3.4 7.2-4.8 1.6.2 3.2.4 4.9.4 11.6 0 21-7.3 21-16.2S35.6 6 24 6z"/></svg>
+      <span><b>카카오톡 오픈채팅으로 문의하기</b><small>flyout 크리에이터 문의 · 바로 답변</small></span>
+    </a>
+  </section>
 </div>
 </body>
 </html>
