@@ -22,7 +22,8 @@ enum : juce::CommandID
     resetAll,
 
     addCue,
-    addFadeCue,           // Ctrl+7
+    addFadeCue,           // Ctrl+7 (페이드 인)
+    addFadeOutCue,        // Ctrl+Shift+7
     addDevampCue,         // Ctrl+8
     addGroupCue,          // Ctrl+0
     groupSelectedCues,    // Ctrl+G

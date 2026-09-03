@@ -191,6 +191,7 @@ namespace
         auto* obj = new juce::DynamicObject();
         obj->setProperty ("target", f.targetId.isNull() ? juce::String() : f.targetId.toString());
         obj->setProperty ("duration", f.durationSeconds);
+        obj->setProperty ("mode", f.mode == FadeMode::fadeIn ? "in" : f.mode == FadeMode::fadeOut ? "out" : "custom");
         obj->setProperty ("relative", f.relative);
         obj->setProperty ("stopTargetWhenDone", f.stopTargetWhenDone);
         obj->setProperty ("fadeLevels", f.fadeLevels);
@@ -235,6 +236,8 @@ namespace
 
         f.targetId = juce::Uuid (v.getProperty ("target", "").toString());
         f.durationSeconds = (double) v.getProperty ("duration", 5.0);
+        const auto mode = v.getProperty ("mode", "custom").toString();   // files before 0.9.4: the general fade
+        f.mode = mode == "in" ? FadeMode::fadeIn : mode == "out" ? FadeMode::fadeOut : FadeMode::custom;
         f.relative = (bool) v.getProperty ("relative", false);
         f.stopTargetWhenDone = (bool) v.getProperty ("stopTargetWhenDone", false);
         f.fadeLevels = (bool) v.getProperty ("fadeLevels", true);

@@ -74,6 +74,7 @@ public:
     class TriggersPanel;
     class EffectsPanel;
     class FadePanel;
+    class FadeInOutPanel;
     class CurvePanel;
     class FadeParamsPanel;
     class DevampPanel;
@@ -117,6 +118,7 @@ private:
     std::unique_ptr<TriggersPanel> triggersPanel;
     std::unique_ptr<EffectsPanel> effectsPanel;
     std::unique_ptr<FadePanel> fadePanel;
+    std::unique_ptr<FadeInOutPanel> fadeInOutPanel;
     std::unique_ptr<CurvePanel> curvePanel;
     std::unique_ptr<FadeParamsPanel> fadeParamsPanel;
     std::unique_ptr<DevampPanel> devampPanel;

@@ -119,10 +119,13 @@ private:
     void fileDragExit (const juce::StringArray& files) override;
     void filesDropped (const juce::StringArray& files, int x, int y) override;
 
-    void addCuesFromFiles (const juce::StringArray& files, int insertAt);
+    /** Inserts audio cues at 'insertAt', or as the last children of the group at 'intoGroup' when that is a group. */
+    void addCuesFromFiles (const juce::StringArray& files, int insertAt, int intoGroup = -1);
     void addCueViaDialog();
-    /** Inserts a fade cue after the selection, targeting the selected audio cue. */
+    /** Inserts a 페이드 인 / 페이드 아웃 cue after the selection, targeting the selected sound cue. */
     void addFadeCue();
+    void addFadeOutCue();
+    void addFadeCueOfMode (FadeMode mode);
     /** Inserts a devamp cue after the selection, targeting the selected audio cue. */
     void addDevampCue();
     /** Inserts an empty group after the selection (a sibling of it). */

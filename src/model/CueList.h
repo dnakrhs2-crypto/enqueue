@@ -83,6 +83,8 @@ public:
 
     /** Inserts a cue (insertAt == -1 appends). Returns the index it landed on. */
     int add (Cue cue, int insertAt = -1);
+    /** Inserts a cue as the last child of the group at 'groupIndex' (a plain add at the end when it is not a group). */
+    int addIntoGroup (Cue cue, int groupIndex);
     /** Moves the cue (with its subtree) to where its number belongs among its siblings (ascending CueNumbering::compare):
         a renumbered cue finds its place. Returns the cue's new index; an empty number stays put. */
     int placeByNumber (int index);

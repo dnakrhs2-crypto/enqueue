@@ -205,6 +205,8 @@ private:
     double lastGoTime = -1.0e9;
     double lastPanicTime = -1.0e9;
     double panicLatchUntil = -1.0e9;   // until then every start (GO, hotkey, wall clock, auto-continue) is refused
+    bool startNextAtLevel = false;     // set by a fade-in cue around the start of its target
+    double startNextLevelDb = 0.0;
     bool goKeyDown = false;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (CueController)

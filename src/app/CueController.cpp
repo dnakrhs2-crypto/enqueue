@@ -279,12 +279,7 @@ int CueController::startGroup (CueList& cues, int index, bool audition)
                 const Cue c = cues.get (child);
 
                 if (! c.armed)
-                {
-                    if (! c.skipIfDisarmed)
-                        status (ko ("비활성 큐 건너뜀: ") + cueLabel (child, c));
-
-                    continue;
-                }
+                    continue;   // 비활성화
 
                 scheduleStart (c.id, t + c.preWaitSeconds, audition);
             }
@@ -758,9 +753,29 @@ CueController::GoResult CueController::triggerImpl (const Cue& cue, bool auditio
 
     if (cue.isFade())
     {
-        // a running fade fired again restarts from where its target is now
         juce::String error;
 
+        if (cue.fade.mode == FadeMode::fadeIn)
+        {
+            const auto* target = document.findCueAnywhere (cue.fade.targetId);
+
+            if (target != nullptr && ! engine.isPlaying (target->id))
+            {
+                // 페이드 인: the target starts at the fade floor and the fade lifts it to its own level
+                startNextAtLevel = true;
+                startNextLevelDb = document.settings.minLevelDb;
+                const auto started = startById (target->id, audition);
+                startNextAtLevel = false;
+
+                if (started != GoResult::started)
+                {
+                    status (ko ("페이드 인 대상을 시작하지 못함: ") + cueLabel (index, cue), true);
+                    return GoResult::failed;
+                }
+            }
+        }
+
+        // a running fade fired again restarts from where its target is now
         if (! fadeRunner.start (cue, &error))
         {
             status (error, true);
@@ -877,7 +892,16 @@ CueController::GoResult CueController::triggerImpl (const Cue& cue, bool auditio
 
     juce::String error;
 
-    if (! engine.play (cue, playOptions (audition), &error))
+    auto options = playOptions (audition);
+
+    if (startNextAtLevel)   // a fade-in cue starts its target at the fade floor
+    {
+        options.hasStartGain = true;
+        options.startGainDb = startNextLevelDb;
+        startNextAtLevel = false;
+    }
+
+    if (! engine.play (cue, options, &error))
     {
         status (error, true);
         return GoResult::failed;
@@ -1089,7 +1113,7 @@ int CueController::fireSequence (CueList& cues, int index, bool audition)
         const Cue cue = cues.get (i);   // copy: starting a cue may not change the list, but be safe
         const int next = cues.subtreeEnd (i);
 
-        if (! cue.armed && cue.skipIfDisarmed)
+        if (! cue.armed)   // 비활성화: the playhead passes over it
         {
             i = next;
             continue;

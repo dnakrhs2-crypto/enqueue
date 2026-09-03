@@ -425,6 +425,27 @@ public:
             expectEquals (names (list), juce::String ("d"));
         }
 
+        beginTest ("tree: addIntoGroup appends a new last child (files dropped onto a group)");
+        {
+            CueList list;
+            list.add (make ("a"));
+            Cue g = make ("G");
+            g.type = CueType::group;
+            list.add (g);
+            list.add (make ("b"));
+            const int gi = 1;
+            const int c1 = list.addIntoGroup (make ("c1"), gi);
+            const int c2 = list.addIntoGroup (make ("c2"), gi);
+            expectEquals (c1, 2);
+            expectEquals (c2, 3);
+            expect (list.get (c1).parentId == list.get (gi).id && list.get (c2).parentId == list.get (gi).id);
+            expectEquals ((int) list.childrenOf (gi).size(), 2);
+            expectEquals (list.subtreeEnd (gi), 4);
+            expect (list.get (4).parentId.isNull());   // b stays outside the group
+            expectEquals (list.addIntoGroup (make ("x"), 0), 5);   // not a group: appended at the end, top level
+            expect (list.get (5).parentId.isNull());
+        }
+
         beginTest ("tree: wrapInGroup / ungroup");
         {
             CueList list;

@@ -374,6 +374,15 @@ bool CueList::ungroup (int index)
 }
 
 //==============================================================================
+int CueList::addIntoGroup (Cue cue, int groupIndex)
+{
+    if (! isValidIndex (groupIndex) || ! get (groupIndex).isGroup())
+        return add (std::move (cue), -1);
+
+    cue.parentId = get (groupIndex).id;                       // right after the group's subtree: its new last child
+    return add (std::move (cue), subtreeEnd (groupIndex));
+}
+
 int CueList::add (Cue cue, int insertAt)
 {
     cue.sanitise();

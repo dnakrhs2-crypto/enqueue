@@ -47,7 +47,8 @@ public:
     void setRowSize (int size);
 
     /** Invoked with the dropped audio files and the row index they should be inserted at. */
-    std::function<void (const juce::StringArray& files, int insertIndex)> onFilesDropped;
+    /** Audio files dropped on the list: inserted at 'insertIndex', or as the last children of the group 'intoGroup' (-1 = none). */
+    std::function<void (const juce::StringArray& files, int insertIndex, int intoGroup)> onFilesDropped;
     /** Rows dragged inside the table: move them so the block starts at insertIndex (index before removal). */
     std::function<void (const std::vector<int>& rows, int insertIndex)> onMoveRows;
     /** An undoable edit of one or more cues. */
@@ -98,6 +99,7 @@ private:
     // FileDragAndDropTarget
     bool isInterestedInFileDrag (const juce::StringArray& files) override;
     void fileDragEnter (const juce::StringArray& files, int x, int y) override;
+    void fileDragMove (const juce::StringArray& files, int x, int y) override;
     void fileDragExit (const juce::StringArray& files) override;
     void filesDropped (const juce::StringArray& files, int x, int y) override;
 
@@ -124,6 +126,10 @@ private:
     int insertionRowForY (int y) const;
     bool handleQuickEditKey (const juce::KeyPress& key);
     void showContextMenu (int row, juce::Point<int> screenPosition);
+    void showAddMenu (juce::Point<int> screenPosition);
+    void addCueItems (juce::PopupMenu& menu);
+    /** The group cue under a drag position (its middle band), -1 when the drop goes between rows. */
+    int groupAtY (int y) const;
     void cycleContinueMode (int row);
     int insertionIndexForY (int y) const;
     void commitCellEdit (int row, ColumnId column, const juce::String& text);
@@ -146,6 +152,7 @@ private:
     std::vector<int> visible;
     std::unique_ptr<CellEditor> cellEditor;
     bool dragOver = false;
+    int dropGroupIndex = -1;   // a file drag hovering a group row: the files join that group
     bool rowDragOver = false;
     int rowDropIndex = -1;
     bool syncingSelection = false;

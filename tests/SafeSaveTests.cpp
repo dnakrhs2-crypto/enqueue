@@ -143,6 +143,37 @@ public:
             expect (! r.cues()[0].fileMissing);
         }
 
+        beginTest ("a fade cue's mode round-trips; a file without the key loads as the older general fade");
+        {
+            Project p;
+            Cue f;
+            f.type = CueType::fade;
+            f.name = "out";
+            f.fade.mode = FadeMode::fadeOut;
+            f.fade.durationSeconds = 2.5;
+            p.cues().push_back (f);
+            Cue i = f;
+            i.id = juce::Uuid();
+            i.name = "in";
+            i.fade.mode = FadeMode::fadeIn;
+            p.cues().push_back (i);
+
+            const auto file = root.getChildFile ("fades.enqueue");
+            expect (ProjectSerializer::save (p, file).wasOk());
+            Project q;
+            expect (ProjectSerializer::load (file, q).wasOk());
+            expect (q.cues()[0].fade.mode == FadeMode::fadeOut);
+            expect (q.cues()[1].fade.mode == FadeMode::fadeIn);
+            expectWithinAbsoluteError (q.cues()[0].fade.durationSeconds, 2.5, 1e-9);
+
+            Project r;
+            expect (ProjectSerializer::fromJson ("{\"app\": \"Enqueue\", \"version\": 5, \"cues\": [{\"type\": \"fade\", \"name\": \"old\", \"fade\": {\"duration\": 4}}]}", r).wasOk());
+            expectEquals ((int) r.cues().size(), 1);
+            expect (r.cues()[0].isFade());
+            expect (r.cues()[0].fade.mode == FadeMode::custom);
+            expectWithinAbsoluteError (r.cues()[0].fade.durationSeconds, 4.0, 1e-9);
+        }
+
         root.deleteRecursively();
     }
 };

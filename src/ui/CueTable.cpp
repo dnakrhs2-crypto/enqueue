@@ -1,5 +1,7 @@
 #include "ui/CueTable.h"
 
+#include <algorithm>
+
 #include "app/Commands.h"
 #include "audio/CueFileInfo.h"
 #include "model/CueColors.h"
@@ -256,6 +258,18 @@ void CueTable::paint (juce::Graphics& g)
 
 void CueTable::paintOverChildren (juce::Graphics& g)
 {
+    if (dropGroupIndex >= 0)   // files hovering a group: the whole row lights up
+    {
+        const auto it = std::find (visible.begin(), visible.end(), dropGroupIndex);
+
+        if (it != visible.end())
+        {
+            const auto r = table.getRowPosition ((int) (it - visible.begin()), true).translated (table.getX(), table.getY());
+            g.setColour (Palette::standby);
+            g.drawRoundedRectangle (r.toFloat().reduced (1.5f), 4.0f, 2.0f);
+        }
+    }
+
     if (! rowDragOver || rowDropIndex < 0)
         return;
 
@@ -424,9 +438,20 @@ void CueTable::paintCell (juce::Graphics& g, int rowNumber, int columnId, int wi
             const bool broken = cue.fade.targetId.isNull() || cues.indexOf (cue.fade.targetId) < 0;
             g.setColour (broken ? Palette::missing : Palette::dimText);
             juce::Path slope;
-            slope.startNewSubPath (x, cy + 5.0f);
-            slope.lineTo (x + 10.0f, cy - 5.0f);
-            slope.lineTo (x + 10.0f, cy + 5.0f);
+
+            if (cue.fade.mode == FadeMode::fadeOut)
+            {
+                slope.startNewSubPath (x, cy - 5.0f);
+                slope.lineTo (x + 10.0f, cy + 5.0f);
+                slope.lineTo (x, cy + 5.0f);
+            }
+            else
+            {
+                slope.startNewSubPath (x, cy + 5.0f);
+                slope.lineTo (x + 10.0f, cy - 5.0f);
+                slope.lineTo (x + 10.0f, cy + 5.0f);
+            }
+
             slope.closeSubPath();
             g.fillPath (slope);
         }
@@ -738,9 +763,26 @@ void CueTable::deleteKeyPressed (int)
         commands.invokeDirectly (CommandIDs::removeCue, true);
 }
 
-void CueTable::backgroundClicked (const juce::MouseEvent&)
+void CueTable::backgroundClicked (const juce::MouseEvent& e)
 {
     syncSelectionFromModel();
+
+    if (e.mods.isPopupMenu())
+        showAddMenu (e.getScreenPosition());   // empty space: the add-cue items
+}
+
+void CueTable::addCueItems (juce::PopupMenu& menu)
+{
+    for (auto id : { CommandIDs::addCue, CommandIDs::addFadeCue, CommandIDs::addFadeOutCue, CommandIDs::addDevampCue, CommandIDs::addGroupCue,
+                     CommandIDs::addControlCue, CommandIDs::addWaitCue, CommandIDs::addMemoCue, CommandIDs::addMicCue })
+        menu.addCommandItem (&commands, id);
+}
+
+void CueTable::showAddMenu (juce::Point<int> screenPosition)
+{
+    juce::PopupMenu menu;
+    addCueItems (menu);
+    menu.showMenuAsync (juce::PopupMenu::Options().withTargetScreenArea ({ screenPosition.x, screenPosition.y, 1, 1 }));
 }
 
 juce::var CueTable::getDragSourceDescription (const juce::SparseSet<int>& rowsToDescribe)
@@ -971,6 +1013,8 @@ void CueTable::showContextMenu (int row, juce::Point<int> screenPosition)
     const auto rows = rowsForEdit (row);
     const auto& cue = cues.get (row);
     juce::PopupMenu menu;
+    addCueItems (menu);   // the same items as the 큐 menu (they insert after the selection)
+    menu.addSeparator();
 
     juce::PopupMenu colours;
     colours.addItem (100, ko ("없음"), true, cue.color == 0);
@@ -980,7 +1024,7 @@ void CueTable::showContextMenu (int row, juce::Point<int> screenPosition)
 
     menu.addSubMenu (ko ("색상"), colours, editable);
     menu.addItem (1, cue.flagged ? ko ("깃발 해제") : ko ("깃발"), editable);
-    menu.addItem (2, cue.armed ? ko ("비활성화 (아밍 해제)") : ko ("활성화 (아밍)"), editable);
+    menu.addItem (2, cue.armed ? ko ("비활성화") : ko ("활성화"), editable);
 
     juce::PopupMenu continueMenu;
     continueMenu.addItem (10, ko ("계속 안 함"), true, cue.continueMode == ContinueMode::none);
@@ -1049,10 +1093,41 @@ void CueTable::fileDragEnter (const juce::StringArray& files, int, int)
         onStatus (ko ("파일 드래그 감지: ") + juce::String (files.size()) + ko ("개 - 놓으면 큐로 추가"));
 }
 
+void CueTable::fileDragMove (const juce::StringArray&, int, int y)
+{
+    const int group = groupAtY (y);
+
+    if (group != dropGroupIndex)
+    {
+        dropGroupIndex = group;
+        repaint();
+    }
+}
+
 void CueTable::fileDragExit (const juce::StringArray&)
 {
     dragOver = false;
+    dropGroupIndex = -1;
     repaint();
+}
+
+int CueTable::groupAtY (int y) const
+{
+    const auto local = table.getLocalPoint (this, juce::Point<int> (0, y));
+    const int row = table.getRowContainingPosition (0, local.y);
+
+    if (row < 0 || row >= (int) visible.size())
+        return -1;
+
+    const int index = visible[(size_t) row];
+
+    if (! cues.get (index).isGroup())
+        return -1;
+
+    // the middle half of the row means "into the group"; the edges keep the between-rows insertion
+    const auto rowArea = table.getRowPosition (row, true);
+    const int inset = rowArea.getHeight() / 4;
+    return local.y >= rowArea.getY() + inset && local.y < rowArea.getBottom() - inset ? index : -1;
 }
 
 int CueTable::insertionRowForY (int y) const
@@ -1076,6 +1151,8 @@ int CueTable::insertionIndexForY (int y) const
 void CueTable::filesDropped (const juce::StringArray& files, int, int y)
 {
     dragOver = false;
+    const int intoGroup = dropGroupIndex;
+    dropGroupIndex = -1;
     repaint();
 
     const auto audioFiles = collectAudioFiles (formats, files);
@@ -1086,7 +1163,7 @@ void CueTable::filesDropped (const juce::StringArray& files, int, int y)
     if (audioFiles.isEmpty() || ! onFilesDropped)
         return;
 
-    onFilesDropped (audioFiles, insertionIndexForY (y));
+    onFilesDropped (audioFiles, insertionIndexForY (y), intoGroup);
 }
 
 bool CueTable::isInterestedInDragSource (const SourceDetails& details)

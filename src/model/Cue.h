@@ -148,9 +148,15 @@ struct ParamFade
 };
 
 /** Settings of a fade cue (QLab "Fade"): changes the *running instance* of the target audio cue over time. */
+/** What a fade cue does. 페이드 인 starts its target from the fade floor and lifts it to the cue's own level; 페이드 아웃
+    takes it to silence and stops it. 'custom' is the older general fade (level / rate / parameter goals), kept so that
+    files from before 0.9.4 still play the same. */
+enum class FadeMode { fadeIn, fadeOut, custom };
+
 struct FadeCueData
 {
     juce::Uuid targetId = juce::Uuid::null();
+    FadeMode mode = FadeMode::custom;
     double durationSeconds = 5.0;
     bool relative = false;                 // goals are offsets from the target's current levels
     bool stopTargetWhenDone = false;

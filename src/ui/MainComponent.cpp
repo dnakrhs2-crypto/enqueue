@@ -110,7 +110,7 @@ MainComponent::MainComponent (AudioEngine& e, AppSettings& s, juce::ApplicationC
     controller.onStatus = [this] (const juce::String& message, bool isError) { transport.showStatus (message, isError); };
     controller.onGoRejected = [this] { transport.flashGoRejected(); };
 
-    table.onFilesDropped = [this] (const juce::StringArray& files, int insertAt) { addCuesFromFiles (files, insertAt); };
+    table.onFilesDropped = [this] (const juce::StringArray& files, int insertAt, int intoGroup) { addCuesFromFiles (files, insertAt, intoGroup); };
     table.onMoveRows = [this] (const std::vector<int>& rows, int insertIndex) { moveRows (rows, insertIndex); };
     table.onToggleCollapse = [this] (int index, bool collapsed) { document.cues.setCollapsed (index, collapsed); };
 
@@ -425,7 +425,7 @@ void MainComponent::getAllCommands (juce::Array<juce::CommandID>& ids)
                     CommandIDs::panicAll, CommandIDs::hardStopAll, CommandIDs::preview,
                     CommandIDs::auditionGo, CommandIDs::auditionPreview, CommandIDs::toggleAlwaysAudition,
                     CommandIDs::loadCue, CommandIDs::loadToTime, CommandIDs::resetCue, CommandIDs::resetAll,
-                    CommandIDs::addCue, CommandIDs::addFadeCue, CommandIDs::addDevampCue, CommandIDs::addGroupCue, CommandIDs::groupSelectedCues,
+                    CommandIDs::addCue, CommandIDs::addFadeCue, CommandIDs::addFadeOutCue, CommandIDs::addDevampCue, CommandIDs::addGroupCue, CommandIDs::groupSelectedCues,
                     CommandIDs::ungroupSelected, CommandIDs::collapseAllGroups, CommandIDs::expandAllGroups,
                     CommandIDs::addControlCue, CommandIDs::addWaitCue, CommandIDs::addMemoCue, CommandIDs::addMicCue, CommandIDs::toggleSequenceRecording,
                     CommandIDs::addCueList, CommandIDs::addCart, CommandIDs::nextContainer, CommandIDs::previousContainer,
@@ -537,8 +537,14 @@ void MainComponent::getCommandInfo (juce::CommandID commandID, juce::Application
             break;
 
         case CommandIDs::addFadeCue:
-            result.setInfo (ko ("페이드 큐 추가"), ko ("선택한 오디오 큐를 대상으로 하는 페이드 큐를 아래에 추가 (레벨·속도·플러그인 파라미터를 시간에 걸쳐 변경)"), cueMenu, 0);
+            result.setInfo (ko ("페이드 인 큐 추가"), ko ("선택한 소리 큐를 대상으로: 실행하면 대상을 무음에서 시작해 설정 시간 동안 원래 레벨까지 올립니다"), cueMenu, 0);
             result.addDefaultKeypress ('7', ModifierKeys::commandModifier);
+            result.setActive (canEdit);
+            break;
+
+        case CommandIDs::addFadeOutCue:
+            result.setInfo (ko ("페이드 아웃 큐 추가"), ko ("선택한 소리 큐를 대상으로: 실행하면 대상을 설정 시간 동안 무음까지 내리고 정지합니다"), cueMenu, 0);
+            result.addDefaultKeypress ('7', ModifierKeys::commandModifier | ModifierKeys::shiftModifier);
             result.setActive (canEdit);
             break;
 
@@ -953,6 +959,10 @@ bool MainComponent::perform (const InvocationInfo& info)
             addFadeCue();
             break;
 
+        case CommandIDs::addFadeOutCue:
+            addFadeOutCue();
+            break;
+
         case CommandIDs::addDevampCue:
             addDevampCue();
             break;
@@ -1244,6 +1254,7 @@ juce::PopupMenu MainComponent::getMenuForIndex (int topLevelMenuIndex, const juc
         case 2:
             menu.addCommandItem (&commands, CommandIDs::addCue);
             menu.addCommandItem (&commands, CommandIDs::addFadeCue);
+            menu.addCommandItem (&commands, CommandIDs::addFadeOutCue);
             menu.addCommandItem (&commands, CommandIDs::addDevampCue);
             menu.addCommandItem (&commands, CommandIDs::addGroupCue);
             menu.addCommandItem (&commands, CommandIDs::addControlCue);
@@ -1332,7 +1343,7 @@ void MainComponent::menuItemSelected (int, int)
 }
 
 //==============================================================================
-void MainComponent::addCuesFromFiles (const juce::StringArray& files, int insertAt)
+void MainComponent::addCuesFromFiles (const juce::StringArray& files, int insertAt, int intoGroup)
 {
     if (files.isEmpty() || showMode)
         return;
@@ -1346,9 +1357,11 @@ void MainComponent::addCuesFromFiles (const juce::StringArray& files, int insert
     const bool templateHasPlugins = templateSettings.hasCueTemplate && ! templateSettings.cueTemplate.plugins.empty();
 
     document.perform (files.size() == 1 ? ko ("큐 추가") : ko ("큐 추가 (") + juce::String (files.size()) + ")",
-                      [this, files, insertAt, copyIn, projectDir, autoNumber, increment, autoLoad, templateSettings]
+                      [this, files, insertAt, intoGroup, copyIn, projectDir, autoNumber, increment, autoLoad, templateSettings]
     {
-        int index = insertAt;
+        const bool intoAGroup = document.cues.isValidIndex (intoGroup) && document.cues.get (intoGroup).isGroup();
+        const juce::Uuid groupId = intoAGroup ? document.cues.get (intoGroup).id : juce::Uuid::null();
+        int index = intoAGroup ? document.cues.subtreeEnd (intoGroup) : insertAt;
         int last = -1;
         std::vector<juce::Uuid> added;
 
@@ -1364,7 +1377,7 @@ void MainComponent::addCuesFromFiles (const juce::StringArray& files, int insert
             refreshCueFileInfo (engine.getFormatManager(), cue);
 
             const int at = index < 0 ? document.cues.size() : index;
-            cue.parentId = document.cues.parentForInsertion (at);   // dropped between a group's children: joins the group
+            cue.parentId = intoAGroup ? groupId : document.cues.parentForInsertion (at);   // dropped between a group's children (or onto a group): joins it
 
             if (autoNumber)
                 cue.number = CueNumbering::next (document.cues.getAll(), at, increment);
@@ -1373,6 +1386,9 @@ void MainComponent::addCuesFromFiles (const juce::StringArray& files, int insert
             last = document.cues.add (std::move (cue), index);
             index = last + 1;
         }
+
+        if (intoAGroup)
+            document.cues.setCollapsed (intoGroup, false);   // show what just went in
 
         if (last >= 0)
             document.cues.setSelectedIndex (last);
@@ -1385,6 +1401,16 @@ void MainComponent::addCuesFromFiles (const juce::StringArray& files, int insert
 
 void MainComponent::addFadeCue()
 {
+    addFadeCueOfMode (FadeMode::fadeIn);
+}
+
+void MainComponent::addFadeOutCue()
+{
+    addFadeCueOfMode (FadeMode::fadeOut);
+}
+
+void MainComponent::addFadeCueOfMode (FadeMode mode)
+{
     if (showMode)
         return;
 
@@ -1394,23 +1420,19 @@ void MainComponent::addFadeCue()
     const double increment = document.settings.numberIncrement;
     const juce::Uuid target = selectedCue != nullptr && selectedCue->makesSound() ? selectedCue->id
                             : selectedCue != nullptr && selectedCue->isFade() ? selectedCue->fade.targetId : juce::Uuid::null();
+    const auto kind = mode == FadeMode::fadeIn ? ko ("페이드 인") : ko ("페이드 아웃");
 
-    document.perform (ko ("페이드 큐 추가"), [this, selected, target, autoNumber, increment]
+    document.perform (kind + ko (" 큐 추가"), [this, selected, target, autoNumber, increment, mode, kind]
     {
         Cue fade;
         fade.type = CueType::fade;
+        fade.fade.mode = mode;
         fade.fade.targetId = target;
-        fade.name = ko ("페이드");
+        fade.fade.durationSeconds = mode == FadeMode::fadeIn ? 3.0 : 5.0;
+        fade.name = kind;
 
         if (const auto* t = document.cues.findById (target))
-        {
-            fade.name = ko ("페이드: ") + t->name;
-            fade.fade.levels = t->levels;
-            fade.fade.mainDb = t->gainDb;
-            fade.fade.levels.resize (t->numChannels > 0 ? t->numChannels : 2, document.cueOutputsFor (*t));
-            fade.fade.resizeActive (fade.fade.levels.numInputs(), fade.fade.levels.numOutputs());
-            fade.fade.mainActive = true;   // the usual fade: just the main level
-        }
+            fade.name = kind + ": " + t->name;
 
         const int at = selected >= 0 ? document.cues.subtreeEnd (selected) : document.cues.size();
 

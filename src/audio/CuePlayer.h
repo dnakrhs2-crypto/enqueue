@@ -109,6 +109,8 @@ public:
     void setLiveRate (double rate) noexcept;
     /** Live cue gain (dB); ramps over one block so the change is click-free. Any thread. */
     void setLiveGainDb (double gainDb) noexcept;
+    /** Before start(): the level the instance begins at (a fade-in starts at the fade floor). Message thread. */
+    void setInitialGainDb (double gainDb) noexcept;
     /** Duck / boost applied on top of the cue gain, reached over 'rampSeconds'. 0 dB = none. Any thread. */
     void setDuckDb (double duckDb, double rampSeconds) noexcept;
     double getDuckDb() const noexcept { return duckDb.load (std::memory_order_relaxed); }

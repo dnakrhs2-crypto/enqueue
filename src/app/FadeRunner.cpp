@@ -91,20 +91,52 @@ void FadeRunner::writeState (const juce::Uuid& targetId, const FadeCueData& data
     }
 }
 
+namespace
+{
+    /** 페이드 인 / 페이드 아웃: the goals come from the mode alone, whatever the level fields hold. */
+    void applyFadeMode (FadeCueData& d, const Cue& target)
+    {
+        if (d.mode == FadeMode::custom)
+            return;
+
+        d.relative = false;
+        d.fadeLevels = true;
+        d.fadeRate = false;
+        d.params.clear();
+        d.setAllActive (false);
+        d.mainActive = true;   // the main level only: the matrix stays as the cue has it
+
+        if (d.mode == FadeMode::fadeOut)
+        {
+            d.mainDb = LevelMatrix::silentDb;
+            d.stopTargetWhenDone = true;
+        }
+        else
+        {
+            d.mainDb = target.gainDb;   // up to the cue's own level
+            d.stopTargetWhenDone = false;
+        }
+    }
+}
+
 bool FadeRunner::start (const Cue& fadeCue, juce::String* error)
 {
     if (! fadeCue.isFade())
         return false;
 
-    const auto& data = fadeCue.fade;
+    const auto* targetCue = fadeCue.fade.targetId.isNull() ? nullptr : document.findCueAnywhere (fadeCue.fade.targetId);
 
-    if (data.targetId.isNull() || document.findCueAnywhere (data.targetId) == nullptr)
+    if (targetCue == nullptr)
     {
         if (error != nullptr)
             *error = ko ("페이드 큐에 대상이 없습니다: ") + fadeCue.name;
 
         return false;
     }
+
+    FadeCueData effective = fadeCue.fade;
+    applyFadeMode (effective, *targetCue);
+    const auto& data = effective;
 
     Active a;
     a.fadeId = fadeCue.id;

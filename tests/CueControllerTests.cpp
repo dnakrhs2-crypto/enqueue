@@ -358,7 +358,7 @@ public:
             document.cues.update (0, [] (Cue& x) { x.continueMode = ContinueMode::none; x.audio.endSeconds = -1.0; });
         }
 
-        beginTest ("disarmed cues: skipped entirely, or silent but still continuing");
+        beginTest ("a disabled cue is passed over by GO, whatever the old skip flag says");
         {
             document.cues.update (0, [] (Cue& x) { x.armed = false; x.skipIfDisarmed = true; });
             document.cues.setSelectedIndex (0);
@@ -370,19 +370,19 @@ public:
             expectEquals (document.cues.getPlayheadIndex(), 2);
             stopEverything();
 
+            // the older "silent but continuing" flag no longer matters: one 비활성화 switch, one behaviour
             document.cues.update (0, [] (Cue& x) { x.skipIfDisarmed = false; x.continueMode = ContinueMode::autoContinue; x.postWaitSeconds = 0.2; });
             document.cues.setSelectedIndex (0);
             now = 91.0;
             expect (controller.go() == CueController::GoResult::started);
             controller.goKeyReleased();
             expect (! engine.isPlaying (a.id));
-            expect (! engine.isPlaying (b.id));
-            now = 91.2;
-            scheduler.tick();
             expect (engine.isPlaying (b.id));
+            now = 91.3;
+            scheduler.tick();
             expect (! engine.isPlaying (a.id));
             stopEverything();
-            document.cues.update (0, [] (Cue& x) { x.armed = true; x.continueMode = ContinueMode::none; x.postWaitSeconds = 0.0; });
+            document.cues.update (0, [] (Cue& x) { x.armed = true; x.skipIfDisarmed = true; x.continueMode = ContinueMode::none; x.postWaitSeconds = 0.0; });
         }
 
         beginTest ("fade-stop-others fades the running cues when the cue starts");

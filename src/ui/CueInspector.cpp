@@ -257,10 +257,9 @@ public:
         };
 
         toggle (flagToggle, "깃발", "깃발", [] (Cue& c, bool v) { c.flagged = v; });
-        toggle (armedToggle, "아밍 (활성)", "아밍", [] (Cue& c, bool v) { c.armed = v; });
-        toggle (skipToggle, "비활성이면 건너뛰기", "건너뛰기", [] (Cue& c, bool v) { c.skipIfDisarmed = v; });
+        toggle (armedToggle, "비활성화", "비활성화", [] (Cue& c, bool v) { c.armed = ! v; c.skipIfDisarmed = true; });
         toggle (autoLoadToggle, "자동 로드", "자동 로드", [] (Cue& c, bool v) { c.autoLoad = v; });
-        skipToggle.setTooltip (ko ("켜면 비활성 큐를 시퀀스에서 아예 건너뜁니다. 끄면 소리만 안 나고 진행 모드는 그대로 적용됩니다"));
+        armedToggle.setTooltip (ko ("켜면 이 큐는 재생되지 않고 GO와 시퀀스가 그냥 지나갑니다"));
         autoLoadToggle.setTooltip (ko ("플레이헤드가 이 큐에 오면 미리 로드해 GO 지연을 없앱니다"));
 
         gainSlider.setSliderStyle (juce::Slider::LinearHorizontal);
@@ -298,7 +297,7 @@ public:
 
         for (auto* c : std::initializer_list<juce::Component*> { &numberEditor, &nameEditor, &colourCombo, &secondColourToggle, &secondColourCombo,
                                                                  &preEditor, &postEditor, &continueCombo, &hotkeyButton, &clearHotkeyButton,
-                                                                 &flagToggle, &armedToggle, &skipToggle, &autoLoadToggle,
+                                                                 &flagToggle, &armedToggle, &autoLoadToggle,
                                                                  &fadeOutEditor, &gainSlider, &browseButton, &notesEditor })
             c->setEnabled (enabled);
 
@@ -342,8 +341,7 @@ public:
         continueCombo.setSelectedId ((int) cue->continueMode + 1, juce::dontSendNotification);
         hotkeyButton.setHotkey (cue->hotkey);
         flagToggle.setToggleState (cue->flagged, juce::dontSendNotification);
-        armedToggle.setToggleState (cue->armed, juce::dontSendNotification);
-        skipToggle.setToggleState (cue->skipIfDisarmed, juce::dontSendNotification);
+        armedToggle.setToggleState (! cue->armed, juce::dontSendNotification);
         autoLoadToggle.setToggleState (cue->autoLoad, juce::dontSendNotification);
         gainSlider.setValue (cue->gainDb, juce::dontSendNotification);
 
@@ -409,7 +407,6 @@ public:
         row = nextRow();
         flagToggle.setBounds (row.removeFromLeft (64));
         armedToggle.setBounds (row.removeFromLeft (104));
-        skipToggle.setBounds (row.removeFromLeft (156));
         autoLoadToggle.setBounds (row.removeFromLeft (92));
         row.removeFromLeft (10);
         fadeOutLabel.setBounds (row.removeFromLeft (104));
@@ -690,7 +687,7 @@ private:
     juce::Label numberLabel, nameLabel, colourLabel, fileLabel, preLabel, postLabel, continueLabel, fadeOutLabel, gainLabel, notesLabel, filePathLabel;
     juce::TextEditor numberEditor, nameEditor, preEditor, postEditor, fadeOutEditor, notesEditor;
     juce::ComboBox colourCombo, secondColourCombo, continueCombo;
-    juce::ToggleButton secondColourToggle, flagToggle, armedToggle, skipToggle, autoLoadToggle;
+    juce::ToggleButton secondColourToggle, flagToggle, armedToggle, autoLoadToggle;
     HotkeyButton hotkeyButton;
     juce::TextButton clearHotkeyButton, browseButton;
     juce::Slider gainSlider;
@@ -1889,6 +1886,182 @@ private:
 };
 
 //==============================================================================
+/** 페이드 tab of a fade cue: target, 페이드 인 / 페이드 아웃, time. The shape lives in the 커브 tab. */
+class CueInspector::FadeInOutPanel : public juce::Component
+{
+public:
+    explicit FadeInOutPanel (ProjectDocument& doc) : document (doc), cues (doc.cues)
+    {
+        styleLabel (targetLabel, ko ("대상 큐"));
+        addAndMakeVisible (targetLabel);
+        targetCombo.setWantsKeyboardFocus (false);
+        targetCombo.setTooltip (ko ("이 페이드가 움직이는 소리 큐"));
+        targetCombo.onChange = [this] { commitTarget(); };
+        addAndMakeVisible (targetCombo);
+
+        styleLabel (modeLabel, ko ("종류"));
+        addAndMakeVisible (modeLabel);
+        modeCombo.setWantsKeyboardFocus (false);
+        modeCombo.onChange = [this] { commitMode(); };
+        addAndMakeVisible (modeCombo);
+
+        styleLabel (durationLabel, ko ("시간"));
+        addAndMakeVisible (durationLabel);
+        styleNumberEditor (durationEditor, "0123456789:.", 12);
+        durationEditor.setTooltip (ko ("페이드에 걸리는 시간 (초, 또는 분:초)"));
+        durationEditor.onReturnKey = [this] { commitDuration(); durationEditor.giveAwayKeyboardFocus(); };
+        durationEditor.onFocusLost = [this] { commitDuration(); };
+        addAndMakeVisible (durationEditor);
+
+        styleLabel (hint, ko ("페이드 인: 실행하면 대상을 무음에서 시작해 이 시간 동안 원래 레벨까지 올립니다 (이미 재생 중이면 지금 레벨에서). "
+                              "페이드 아웃: 대상을 이 시간 동안 무음까지 내리고 정지합니다. 모양은 커브 탭에서."), 13.0f);
+        addAndMakeVisible (hint);
+    }
+
+    void setEditable (bool shouldBeEditable)
+    {
+        editable = shouldBeEditable;
+        refresh();
+    }
+
+    void refresh()
+    {
+        const juce::ScopedValueSetter<bool> guard (refreshing, true);
+        const auto* cue = cues.getSelected();
+        const bool enabled = cue != nullptr && cue->isFade() && editable;
+
+        targetCombo.clear (juce::dontSendNotification);
+        targetCombo.addItem (ko ("(없음)"), 1);
+        targetIds.clear();
+        targetIds.push_back (juce::Uuid::null());
+        int selectedTarget = 1;
+
+        document.forEachList ([&] (CueList& list)
+        {
+            const auto prefix = &list == &cues ? juce::String() : document.getContainerInfo (document.containerOf (list.isEmpty() ? juce::Uuid::null() : list.get (0).id)).name + " / ";
+
+            for (int i = 0; i < list.size(); ++i)
+            {
+                const auto& c = list.get (i);
+
+                if (! c.makesSound())
+                    continue;
+
+                targetIds.push_back (c.id);
+                targetCombo.addItem (prefix + (c.number.isNotEmpty() ? c.number + " " : "#" + juce::String (i + 1) + " ") + c.name, (int) targetIds.size());
+
+                if (cue != nullptr && cue->fade.targetId == c.id)
+                    selectedTarget = (int) targetIds.size();
+            }
+        });
+
+        targetCombo.setSelectedId (selectedTarget, juce::dontSendNotification);
+
+        modeCombo.clear (juce::dontSendNotification);
+        modeCombo.addItem (ko ("페이드 인 (무음에서 올리기)"), 1);
+        modeCombo.addItem (ko ("페이드 아웃 (무음까지 내리고 정지)"), 2);
+
+        if (cue != nullptr && cue->isFade() && cue->fade.mode == FadeMode::custom)
+            modeCombo.addItem (ko ("사용자 지정 (이전 버전의 레벨·속도·파라미터 페이드)"), 3);
+
+        for (auto* c : std::initializer_list<juce::Component*> { &targetCombo, &modeCombo, &durationEditor })
+            c->setEnabled (enabled);
+
+        if (cue != nullptr && cue->isFade())
+        {
+            shownId = cue->id;
+            modeCombo.setSelectedId (cue->fade.mode == FadeMode::fadeIn ? 1 : cue->fade.mode == FadeMode::fadeOut ? 2 : 3, juce::dontSendNotification);
+            durationEditor.setText (formatTimeMs (cue->fade.durationSeconds), false);
+        }
+    }
+
+    void resized() override
+    {
+        auto area = getLocalBounds().reduced (12, 6);
+        auto row = area.removeFromTop (26);
+        targetLabel.setBounds (row.removeFromLeft (48));
+        targetCombo.setBounds (row.removeFromLeft (juce::jlimit (240, 560, row.getWidth() - 8)));   // a long cue name gets the width
+        area.removeFromTop (6);
+        row = area.removeFromTop (26);
+        modeLabel.setBounds (row.removeFromLeft (48));
+        modeCombo.setBounds (row.removeFromLeft (300));
+        row.removeFromLeft (16);
+        durationLabel.setBounds (row.removeFromLeft (40));
+        durationEditor.setBounds (row.removeFromLeft (84));
+        area.removeFromTop (8);
+        hint.setBounds (area.removeFromTop (40));
+    }
+
+    void paint (juce::Graphics& g) override { g.fillAll (Palette::panel); }
+
+private:
+    void edit (const juce::String& name, const std::function<void (Cue&)>& mutator)
+    {
+        if (refreshing || ! editable)
+            return;
+
+        const int index = shownId.isNull() ? cues.getSelectedIndex() : cues.indexOf (shownId);
+
+        if (! cues.isValidIndex (index) || ! cues.get (index).isFade())
+            return;
+
+        document.perform (name, [this, index, mutator] { cues.update (index, mutator); });
+    }
+
+    void commitTarget()
+    {
+        if (refreshing || targetCombo.getSelectedId() <= 0)
+            return;
+
+        const int index = targetCombo.getSelectedId() - 1;
+
+        if (index < 0 || index >= (int) targetIds.size())
+            return;
+
+        const auto id = targetIds[(size_t) index];
+        edit (ko ("페이드 대상"), [id] (Cue& c) { c.fade.targetId = id; });
+    }
+
+    void commitMode()
+    {
+        if (refreshing)
+            return;
+
+        const int id = modeCombo.getSelectedId();
+        const FadeMode mode = id == 1 ? FadeMode::fadeIn : id == 2 ? FadeMode::fadeOut : FadeMode::custom;
+        edit (ko ("페이드 종류"), [mode] (Cue& c) { c.fade.mode = mode; });
+        refresh();
+    }
+
+    void commitDuration()
+    {
+        if (refreshing)
+            return;
+
+        const double seconds = parseTimeText (durationEditor.getText());
+
+        if (seconds < 0.0)
+        {
+            refresh();
+            return;
+        }
+
+        const double clamped = juce::jlimit (0.0, FadeCueData::maxDurationSeconds, seconds);
+        edit (ko ("페이드 시간"), [clamped] (Cue& c) { c.fade.durationSeconds = clamped; });
+        refresh();
+    }
+
+    ProjectDocument& document;
+    CueList& cues;
+    juce::Label targetLabel, modeLabel, durationLabel, hint;
+    juce::ComboBox targetCombo, modeCombo;
+    std::vector<juce::Uuid> targetIds;
+    juce::TextEditor durationEditor;
+    juce::Uuid shownId = juce::Uuid::null();
+    bool refreshing = false;
+    bool editable = true;
+};
+
 /** 커브 tab: the fade's curve shape / domain. */
 class CueInspector::CurvePanel : public juce::Component
 {
@@ -2481,8 +2654,8 @@ public:
         kindCombo.addItem (ko ("이동 — 플레이헤드를 대상으로"), 6);
         kindCombo.addItem (ko ("대기 — 정해진 시간 동안 아무것도 안 함"), 7);
         kindCombo.addItem (ko ("메모 — 아무것도 안 함"), 8);
-        kindCombo.addItem (ko ("활성화 — 대상을 아밍"), 9);
-        kindCombo.addItem (ko ("비활성화 — 대상의 아밍 해제"), 10);
+        kindCombo.addItem (ko ("활성화 — 대상을 다시 켬"), 9);
+        kindCombo.addItem (ko ("비활성화 — 대상을 끔 (재생되지 않고 지나침)"), 10);
         kindCombo.addItem (ko ("대상 변경 — 대상(페이드/디밴프/제어 큐)의 대상을 바꿈"), 11);
         kindCombo.setWantsKeyboardFocus (false);
         kindCombo.onChange = [this]
@@ -3122,6 +3295,7 @@ CueInspector::CueInspector (ProjectDocument& doc, AudioEngine& e, AppSettings& s
     effects->chainStrip.onOpenPluginManager = [this] { if (onOpenPluginManager) onOpenPluginManager(); };
 
     fadePanel = std::make_unique<FadePanel> (document, engine);
+    fadeInOutPanel = std::make_unique<FadeInOutPanel> (document);
     curvePanel = std::make_unique<CurvePanel> (document);
     fadeParamsPanel = std::make_unique<FadeParamsPanel> (document, engine);
     devampPanel = std::make_unique<DevampPanel> (document);
@@ -3164,6 +3338,7 @@ void CueInspector::handleAsyncUpdate()
 
     if (fadePanel != nullptr)
         fadePanel->refresh();
+        fadeInOutPanel->refresh();
 }
 
 void CueInspector::pluginChainChanged (PluginChain* chain)
@@ -3224,6 +3399,7 @@ void CueInspector::setEditable (bool shouldBeEditable)
     timeLoops->setEnabled (editable);
     effects->setEnabled (editable);
     fadePanel->setEditable (editable);
+    fadeInOutPanel->setEditable (editable);
     curvePanel->setEditable (editable);
     fadeParamsPanel->setEditable (editable);
     devampPanel->setEditable (editable);
@@ -3274,10 +3450,8 @@ void CueInspector::rebuildTabs (int wanted)
     else if (wanted == 1)
     {
         tabs.addTab (ko ("기본"), Palette::panel, basics, false);
-        tabs.addTab (ko ("페이드"), Palette::panel, fadePanel.get(), false);
+        tabs.addTab (ko ("페이드"), Palette::panel, fadeInOutPanel.get(), false);
         tabs.addTab (ko ("커브"), Palette::panel, curvePanel.get(), false);
-        tabs.addTab (ko ("트리거"), Palette::panel, triggers, false);
-        tabs.addTab (ko ("파라미터"), Palette::panel, fadeParamsPanel.get(), false);
         tabs.setCurrentTabIndex (1);
     }
     else
@@ -3335,6 +3509,7 @@ void CueInspector::refresh()
     triggers->refresh();
     effects->refresh();
     fadePanel->refresh();
+    fadeInOutPanel->refresh();
     curvePanel->refresh();
     fadeParamsPanel->refresh();
     devampPanel->refresh();

@@ -723,6 +723,9 @@ bool AudioEngine::play (const Cue& cue, const PlayOptions& options, juce::String
                 if (options.explicitStart)
                     existing->seekToFileSeconds (cue.regionStart() + options.startSeconds);   // an explicit start place wins over the loaded one
 
+                if (options.hasStartGain)
+                    existing->setInitialGainDb (options.startGainDb);
+
                 existing->setStartOrder (++startCounter);
                 existing->start();
                 openOutputGate();   // the loaded cue plays now: a closed panic gate reopens
@@ -757,6 +760,9 @@ bool AudioEngine::play (const Cue& cue, const PlayOptions& options, juce::String
     }
 
     player->prepare (getSampleRate(), getBlockSize());
+    if (options.hasStartGain)
+        player->setInitialGainDb (options.startGainDb);
+
     player->setStartOrder (++startCounter);
     player->setChain (findCueChain (cue.id));
     player->setBusTag (runtime);

@@ -198,6 +198,48 @@ public:
             expect (! engine.isPlaying (a.id));   // stopped when the fade finished
         }
 
+        beginTest ("페이드 아웃 takes the target to silence and stops it; 페이드 인 lifts an instance from the floor to the cue's level");
+        {
+            expect (engine.play (a));
+            run (0.1);
+            auto fadeOut = makeFade (1.0);
+            fadeOut.fade.mode = FadeMode::fadeOut;
+            fadeOut.fade.mainDb = 6.0;   // ignored: the mode decides the goal
+            fadeOut.fade.stopTargetWhenDone = false;   // ignored too: a fade-out always stops
+            expect (fadeRunner.start (fadeOut));
+            run (0.5);
+            AudioEngine::LiveState live;
+            expect (engine.getLiveState (a.id, live));
+            expect (live.gainDb < -1.0 && live.gainDb > -119.0);   // on its way down
+            run (0.7);
+            expect (! fadeRunner.isRunning (fadeOut.id));
+            run (0.2);
+            expect (! engine.isPlaying (a.id));   // stopped when done
+
+            AudioEngine::PlayOptions options;   // what a fade-in cue asks the engine for: the instance starts at the floor
+            options.hasStartGain = true;
+            options.startGainDb = document.settings.minLevelDb;
+            expect (engine.play (a, options));
+            run (0.05);
+            expectLessThan (rms (out, 0), 0.01f);   // (near) silence at the floor
+            auto fadeIn = makeFade (1.0);
+            fadeIn.fade.mode = FadeMode::fadeIn;
+            fadeIn.fade.mainDb = -30.0;   // ignored: up to the cue's own level
+            expect (fadeRunner.start (fadeIn));
+            run (0.5);
+            expect (engine.getLiveState (a.id, live));
+            expect (live.gainDb > document.settings.minLevelDb + 1.0 && live.gainDb < -1.0);   // on its way up
+            run (0.7);
+            expect (! fadeRunner.isRunning (fadeIn.id));
+            expect (engine.getLiveState (a.id, live));
+            expectWithinAbsoluteError (live.gainDb, 0.0, 1e-6);
+            run (0.1);
+            expectWithinAbsoluteError (rms (out, 0), 0.3536f, 0.01f);
+            expect (engine.isPlaying (a.id));   // a fade-in never stops its target
+            engine.stopAll();
+            run (0.1);
+        }
+
         beginTest ("stopAll / stop end fades where they are; a fade cue round-trips through the project file");
         {
             expect (engine.play (a));
@@ -311,6 +353,34 @@ public:
             expect (controller.trigger (fade) == CueController::GoResult::started);
             controller.panicAll();
             expect (! controller.isCueActive (fade.id));
+            controller.hardStopAll();
+            step (0.1);
+
+            // a 페이드 인 cue starts a target that is not playing, at the floor, and lifts it to its level
+            Cue fadeIn = makeFade (0.5);
+            fadeIn.fade.mode = FadeMode::fadeIn;
+            doc.cues.add (fadeIn);
+            step (0.6);   // past the panic latch of the Esc above
+            expect (! engine.isPlaying (target.id));
+            expect (controller.trigger (fadeIn) == CueController::GoResult::started);
+            expect (engine.isPlaying (target.id));
+            expect (engine.getLiveState (target.id, live));
+            expect (live.gainDb <= doc.settings.minLevelDb + 0.01);   // started at the floor
+            expect (controller.isCueActive (fadeIn.id));
+            step (0.7);
+            expect (! controller.isCueActive (fadeIn.id));
+            expect (engine.getLiveState (target.id, live));
+            expectWithinAbsoluteError (live.gainDb, 0.0, 1e-6);
+            expect (engine.isPlaying (target.id));
+
+            // a 페이드 아웃 cue on that running target: down and stopped
+            Cue fadeOut = makeFade (0.5);
+            fadeOut.fade.mode = FadeMode::fadeOut;
+            doc.cues.add (fadeOut);
+            expect (controller.trigger (fadeOut) == CueController::GoResult::started);
+            step (0.8);
+            expect (! controller.isCueActive (fadeOut.id));
+            expect (! engine.isPlaying (target.id));
             controller.hardStopAll();
             step (0.1);
         }

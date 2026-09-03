@@ -372,6 +372,15 @@ void CuePlayer::setLiveRate (double rate) noexcept
     liveRate.store (juce::jlimit (AudioCueData::minRate, AudioCueData::maxRate, rate), std::memory_order_relaxed);
 }
 
+void CuePlayer::setInitialGainDb (double gainDb) noexcept
+{
+    // the instance is not rendering yet (or renders silence as a loaded instance): the smoothed gain starts here too
+    liveGainDb = juce::jlimit (Cue::minGainDb, Cue::maxGainDb, gainDb);
+    const float linear = juce::Decibels::decibelsToGain ((float) liveGainDb, (float) Cue::minGainDb);
+    targetGain.store (linear, std::memory_order_relaxed);
+    gainLinear = linear;
+}
+
 void CuePlayer::setLiveGainDb (double gainDb) noexcept
 {
     // no Cue temporary here: this runs under the engine lock at fade rate, and Cue::sanitise() allocates
