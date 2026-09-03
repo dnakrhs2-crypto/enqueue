@@ -394,3 +394,6 @@ class Scheduler { public: using Clock = std::function<double()>;   // 초
 - [x] 설치: `installer/Enqueue.iss`(UTF-8 BOM, 게시자 곰튀김, AppId 동일 → 제자리 업그레이드, GoCue.exe·옛 바로가기 삭제, .enqueue/.gocue 연결, 옛 ProgId 삭제). 이 PC에서 GoCue 0.8.9 → Enqueue 0.9.0 조용한 업그레이드 확인.
 - [x] release.py 이름/경로, 사이트 표기, README, 아이콘 생성기 시안 10종(`바탕화면\앤큐 아이콘 시안`).
 - [x] 코덱스 리뷰 10건 중 9건 반영(보류: 옛 '모든 사용자' 설치). 저장소 이름 enqueue로 변경, 도메인 곰튀김.com 연결(HTTPS), 사이트에 카카오톡 오픈채팅 큰 버튼. **0.9.0 배포 완료(2026-09-03 15:15)**.
+
+## v0.9.1 — 활성 큐 이름 찌그러짐, 초록 꽉 찬 아이콘, 설치 체크박스 기본값 (2026-09-03)
+- [x] `ActiveCuesPanel` 카드: 이름이 첫 줄 전체(가로 압축 없음, 긴 이름은 말줄임), 일시정지 버튼은 시간 줄 왼쪽. 아이콘 `make_icon.py` go 변형 = 테두리 없이 초록 타일. 설치: desktopicon 기본 체크, 쿠팡 문구 gom 지정.
