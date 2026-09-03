@@ -371,3 +371,8 @@ class Scheduler { public: using Clock = std::function<double()>;   // 초
 
 ## v0.8.8 — 단일 인스턴스 (2026-09-03)
 - [x] gom "세션 파일을 열면 기존 창은 닫히고 세션 창만": `moreThanOneInstanceAllowed()=false` + `anotherInstanceStarted`가 창을 앞으로 올리고 `openProjectFromCommandLine`. 검증: 두 번 실행 → 프로세스 1개, 제목이 두 번째 파일로 바뀜.
+
+## v0.8.9 — 다채널 출력은 ASIO에서만 (2026-09-03)
+- [x] gom "멀티채널 지원은 ASIO만, 다른 모드일 땐 투트랙만": `AudioEngine::enforceOutputLimit()`이 ASIO가 아닌 장치 타입(Windows Audio 공유/독점/저지연, DirectSound)의 활성 출력을 1-2로 되돌림 — `initialise()` 직후와 장치 변경 콜백(Main.cpp)마다. 저장돼 있던 8채널 WASAPI 설정도 1-2로 열림.
+- [x] 오디오 출력 설정: `SelectorHost`가 장치 타입 변경 시 selector를 다시 만듦 — ASIO는 스테레오 쌍 최대 64, 그 밖은 출력 목록 숨김(min=max=64) + 안내 문구.
+- [x] 테스트 `tests/OutputLimitTests.cpp`: 가짜 장치 타입(하드웨어 없음)으로 비ASIO 8채널 → 2, ASIO 8채널 → 8, 저장 상태 두 경우, 3-4 선택 후 강제 복귀, 재열기 없음, 장치 없음.
