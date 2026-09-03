@@ -70,7 +70,8 @@ public:
         expect (reader->read (&buffer, 0, 44100, 22050, true, true));   // the middle second
 
         const float rms = buffer.getRMSLevel (0, 0, 44100);
-        expectGreaterThan (rms, 0.2f);   // ffmpeg's sine is full scale-ish: rms ~ 0.7, lossy but far from silent
+        expectGreaterThan (rms, 0.04f);   // ffmpeg's sine source is quiet (about -24 dBFS rms as measured with astats): audible, not silence
+        expectLessThan (rms, 0.5f);
 
         int crossings = 0;
         const float* s = buffer.getReadPointer (0);
