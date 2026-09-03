@@ -137,6 +137,8 @@ public:
     /** Live fade-envelope edit for the running instances of a cue. */
     void setLiveEnvelope (const juce::Uuid& cueId, const Envelope& envelope);
     void setLiveRate (const juce::Uuid& cueId, double rate);
+    /** Play count / infinite loop of every running instance of the cue, applied at once (message thread). */
+    void setLivePlayCount (const juce::Uuid& cueId, int playCount, bool infiniteLoop);
     /** Live slice markers for a running cue. */
     void setLiveSlices (const juce::Uuid& cueId, const std::vector<Slice>& slices, int firstSliceCount);
     void setLiveGainDb (const juce::Uuid& cueId, double gainDb);

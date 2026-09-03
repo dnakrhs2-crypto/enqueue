@@ -1017,6 +1017,15 @@ void AudioEngine::setLiveRate (const juce::Uuid& cueId, double rate)
             p->setLiveRate (rate);
 }
 
+void AudioEngine::setLivePlayCount (const juce::Uuid& cueId, int playCount, bool infiniteLoop)
+{
+    const juce::ScopedLock sl (lock);
+
+    for (auto& p : players)
+        if (p->getCueId() == cueId && ! p->hasFinished())
+            p->setLivePlayCount (playCount, infiniteLoop);
+}
+
 void AudioEngine::setLiveGainDb (const juce::Uuid& cueId, double gainDb)
 {
     const juce::ScopedLock sl (lock);

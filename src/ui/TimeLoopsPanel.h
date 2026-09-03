@@ -38,7 +38,7 @@ public:
 private:
     const Cue* selected() const { return document.cues.getSelected(); }
     /** What a running instance is told after the edit: region (trim), rate, both, or nothing (next start only). */
-    enum class LiveApply { none, region, rate, regionAndRate, envelope };
+    enum class LiveApply { none, region, rate, regionAndRate, envelope, loop };
     void updateSelected (const juce::String& name, const std::function<void (Cue&)>& mutator, const juce::String& coalesceKey = {},
                          LiveApply apply = LiveApply::regionAndRate);
     void commitSlices (const std::vector<Slice>& slices, int firstCount, bool finished);

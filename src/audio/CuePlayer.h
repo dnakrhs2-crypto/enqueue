@@ -100,6 +100,9 @@ public:
     bool seekToFileSeconds (double fileSeconds) noexcept;
     /** Live slice edit: the audible file position is kept. Message thread. */
     void setLiveSlices (const std::vector<Slice>& slices, int firstSliceCount) noexcept;
+    /** Whole-sequence play count / infinite loop while playing: the audible place and the current pass are kept.
+        Finite after endless = this pass plays to its end, then the remaining passes (if any) or the stop. */
+    void setLivePlayCount (int playCount, bool infiniteLoop) noexcept;
     /** Live fade-envelope edit (the 재생 tab's points): heard from the next block. Message thread. */
     void setLiveEnvelope (const Envelope& cueEnvelope) noexcept;
     /** Live playback rate (varispeed). Any thread. */

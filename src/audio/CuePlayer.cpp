@@ -273,6 +273,23 @@ void CuePlayer::jumpTo (juce::int64 newPos) noexcept
     pendingVirtualPosition.store (newPos, std::memory_order_release);
 }
 
+void CuePlayer::setLivePlayCount (int playCount, bool infiniteLoop) noexcept
+{
+    if (source == nullptr)
+        return;
+
+    const auto pos = controlPosition();
+    const auto where = source->locate (pos);
+
+    source->setPlayCount (playCount, infiniteLoop);
+
+    // the same file sample in the same pass (clamped to the last pass when the sequence is finite now); the
+    // read-ahead is dropped either way: it may hold the old layout's end (silence) or the old loop-back
+    const juce::int64 newPos = source->virtualPositionFor (where.fileSample, where);
+    jumpTo (newPos);
+    updatePositionInfo (liveRate.load());
+}
+
 void CuePlayer::setLiveSlices (const std::vector<Slice>& slices, int firstSliceCount) noexcept
 {
     if (source == nullptr)

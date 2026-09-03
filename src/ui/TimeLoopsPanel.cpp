@@ -45,7 +45,7 @@ TimeLoopsPanel::TimeLoopsPanel (ProjectDocument& doc, AudioEngine& e, juce::Audi
     infiniteToggle.onClick = [this]
     {
         const bool on = infiniteToggle.getToggleState();
-        updateSelected (on ? ko ("무한 루프 켜기") : ko ("무한 루프 끄기"), [on] (Cue& c) { c.audio.infiniteLoop = on; });
+        updateSelected (on ? ko ("무한 루프 켜기") : ko ("무한 루프 끄기"), [on] (Cue& c) { c.audio.infiniteLoop = on; }, {}, LiveApply::loop);   // heard at once
     };
 
     setupToggle (envelopeToggle, "사용");
@@ -264,6 +264,9 @@ void TimeLoopsPanel::updateSelected (const juce::String& name, const std::functi
 
         if (apply == LiveApply::envelope)
             engine.setLiveEnvelope (cue->id, cue->audio.envelope);   // the fade points / toggles are heard at once
+
+        if (apply == LiveApply::loop)
+            engine.setLivePlayCount (cue->id, cue->audio.playCount, cue->audio.infiniteLoop);   // the loop follows the toggle at once
     }
 
     if (const auto* selected = document.cues.getSelected(); selected != nullptr && selected->id != shownId)
@@ -428,7 +431,7 @@ void TimeLoopsPanel::commitPlayCount()
         return;
     }
 
-    updateSelected (ko ("재생 횟수"), [value] (Cue& c) { c.audio.playCount = value; });
+    updateSelected (ko ("재생 횟수"), [value] (Cue& c) { c.audio.playCount = value; }, {}, LiveApply::loop);
 }
 
 void TimeLoopsPanel::commitRate()
