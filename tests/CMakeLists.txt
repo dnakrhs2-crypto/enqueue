@@ -9,6 +9,7 @@ target_sources(GoCueTests PRIVATE
     SplitLayoutTests.cpp
     CueOrderTests.cpp
     DeviceProbeTests.cpp
+    ResamplerTests.cpp
     CueListTests.cpp
     CueNumberingTests.cpp
     CuePropertyPasteTests.cpp

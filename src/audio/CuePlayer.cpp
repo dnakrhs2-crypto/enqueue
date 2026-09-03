@@ -139,7 +139,8 @@ CuePlayer::CuePlayer (const Cue& c, juce::AudioFormatManager& formats,
         tail = stretch.get();
     }
 
-    resampler = std::make_unique<juce::ResamplingAudioSource> (tail, false, numChannels);
+    srcConverter = std::make_unique<HighQualityResampler> (*tail, numChannels, fileSampleRate);
+    resampler = std::make_unique<juce::ResamplingAudioSource> (srcConverter.get(), false, numChannels);
 
     virtualPosition.store ((double) startOffsetSamples);
     updatePositionInfo (liveRate.load());
@@ -167,6 +168,7 @@ void CuePlayer::prepare (double sampleRate, int blockSize)
     }
 
     // prepare for the fastest rate first so the resampler never has to grow its buffer on the audio thread
+    srcConverter->setDeviceRate (currentSampleRate);   // before the chain prepares (the speed stage passes a scaled rate down)
     resampler->setResamplingRatio (ratioFor (AudioCueData::maxRate));
     resampler->prepareToPlay (juce::jmax (1, blockSize), currentSampleRate);   // also prefills the read-ahead
     lastRatio = ratioFor (liveRate.load());
@@ -335,6 +337,12 @@ bool CuePlayer::seekToFileSeconds (double fileSeconds) noexcept
     pendingElapsedSamples.store (std::max (0.0, elapsedSamples), std::memory_order_relaxed);
     jumpTo (newPos);
     return true;
+}
+
+void CuePlayer::setLiveEnvelope (const Envelope& cueEnvelope) noexcept
+{
+    if (source != nullptr)
+        source->setLiveEnvelope (cueEnvelope);
 }
 
 void CuePlayer::setLiveRate (double rate) noexcept
@@ -547,6 +555,7 @@ bool CuePlayer::renderNextBlock (juce::AudioBuffer<float>& fullBuffer, int numSa
             elapsedOutputSamples = elapsed;
 
         resampler->flushBuffers();   // drop the interpolator's history so the old position is not heard after the jump
+        srcConverter->reset();
     }
 
     const int fadeMs = pendingFadeOutMs.exchange (-1, std::memory_order_relaxed);

@@ -847,6 +847,23 @@ juce::int64 AudioEngine::getVirtualPosition (const juce::Uuid& cueId) const
     return newest != nullptr ? (juce::int64) newest->getVirtualPosition() : -1;
 }
 
+void AudioEngine::setLiveEnvelope (const juce::Uuid& cueId, const Envelope& envelope)
+{
+    CuePlayer* found[16];
+    int count = 0;
+
+    {
+        const juce::ScopedLock sl (lock);
+
+        for (auto& p : players)
+            if (p->getCueId() == cueId && ! p->hasFinished() && count < 16)
+                found[count++] = p.get();
+    }
+
+    for (int i = 0; i < count; ++i)
+        found[i]->setLiveEnvelope (envelope);   // the copy + sanitise allocate: outside the audio lock
+}
+
 void AudioEngine::setLiveRegion (const juce::Uuid& cueId, double startSeconds, double endSeconds)
 {
     CuePlayer* found[16];

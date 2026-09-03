@@ -331,8 +331,17 @@ void RegionLoopSource::setEndAfterPass (int pass) noexcept
 
 void RegionLoopSource::setEnvelope (const Envelope& newEnvelope)
 {
-    envelope = newEnvelope;
-    envelope.sanitise();
+    setLiveEnvelope (newEnvelope);
+}
+
+void RegionLoopSource::setLiveEnvelope (Envelope newEnvelope)
+{
+    newEnvelope.sanitise();
+
+    {
+        const juce::SpinLock::ScopedLockType sl (envelopeLock);
+        std::swap (envelope, newEnvelope);   // no allocation under the lock; the old one dies here, after it
+    }
 }
 
 //==============================================================================
@@ -489,8 +498,12 @@ void RegionLoopSource::getNextAudioBlock (const juce::AudioSourceChannelInfo& in
                     juce::FloatVectorOperations::convertFixedToFloat (dests[ch], reinterpret_cast<const int*> (dests[ch]), 1.0f / 0x7fffffff, chunk);
         }
 
-        if (envelope.isActive())
-            applyEnvelope (*info.buffer, dest, chunk, loc.fileSample - l.regionStart, l.regionLength);
+        {
+            const juce::SpinLock::ScopedLockType sl (envelopeLock);   // a live edit swaps it between chunks
+
+            if (envelope.isActive())
+                applyEnvelope (*info.buffer, dest, chunk, loc.fileSample - l.regionStart, l.regionLength);
+        }
 
         pos += chunk;
         dest += chunk;

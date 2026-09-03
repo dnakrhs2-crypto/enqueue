@@ -1,6 +1,7 @@
 #pragma once
 
 #include "audio/FadeEnvelope.h"
+#include "audio/HighQualityResampler.h"
 #include "audio/PluginChain.h"
 #include "audio/ReadAheadSource.h"
 #include "audio/RegionLoopSource.h"
@@ -99,6 +100,8 @@ public:
     bool seekToFileSeconds (double fileSeconds) noexcept;
     /** Live slice edit: the audible file position is kept. Message thread. */
     void setLiveSlices (const std::vector<Slice>& slices, int firstSliceCount) noexcept;
+    /** Live fade-envelope edit (the 재생 tab's points): heard from the next block. Message thread. */
+    void setLiveEnvelope (const Envelope& cueEnvelope) noexcept;
     /** Live playback rate (varispeed). Any thread. */
     void setLiveRate (double rate) noexcept;
     /** Live cue gain (dB); ramps over one block so the change is click-free. Any thread. */
@@ -162,7 +165,8 @@ public:
 private:
     void updatePositionInfo (double rate) noexcept;
     /** Resampler ratio: with pitch preserved the stretcher takes the rate, the resampler only the sample-rate change. */
-    double ratioFor (double rate) const noexcept { return fileSampleRate * (stretch != nullptr ? 1.0 : rate) / currentSampleRate; }
+    /** The speed stage's ratio: the sample-rate change is done by srcConverter, so this is just the rate (1 with the stretcher). */
+    double ratioFor (double rate) const noexcept { return stretch != nullptr ? 1.0 : rate; }
     /** File samples consumed per output sample at 'rate'. */
     double advanceFor (double rate) const noexcept { return fileSampleRate * effectiveRate (rate) / currentSampleRate; }
     double effectiveRate (double rate) const noexcept { return stretch != nullptr ? juce::jlimit (AudioCueData::minStretchRate, AudioCueData::maxStretchRate, rate) : rate; }
@@ -186,7 +190,8 @@ private:
     std::unique_ptr<RegionLoopSource> source;
     std::unique_ptr<ReadAheadSource> readAhead;                // null on the synchronous (test) path
     std::unique_ptr<StretchSource> stretch;                    // only when the cue preserves pitch
-    std::unique_ptr<juce::ResamplingAudioSource> resampler;
+    std::unique_ptr<HighQualityResampler> srcConverter;        // file rate -> device rate (windowed sinc)
+    std::unique_ptr<juce::ResamplingAudioSource> resampler;    // the playback speed only (1:1 at normal speed = untouched)
     FadeEnvelope envelope;        // stop fades and de-clicks
     FadeEnvelope pauseGate;       // pause / resume ramps
     float gainLinear = 1.0f;

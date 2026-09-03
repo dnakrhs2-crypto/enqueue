@@ -21,7 +21,7 @@ namespace gocue
     beyond its start cycle through it) until finishCurrentPass() resolves it to "this pass is the last", after
     which the later runs follow. The layout (region, runs, counts) may change while playing (live trim, devamp);
     it is published with a sequence counter so a reader never sees a torn layout.
-    The envelope is fixed for the life of the source (QLab: envelope edits apply on the next start).
+    The envelope can be replaced while playing (setLiveEnvelope): a live edit is heard at once.
 
     Reads happen on whichever thread pulls audio: the disk read-ahead thread in the app, or the caller in
     offline tests. Only that thread touches the reader. */
@@ -72,8 +72,10 @@ public:
     juce::int64 passEndFor (juce::int64 virtualPosition) const noexcept;
     /** Compatibility: ends run 0 after the given 0-based pass. */
     void setEndAfterPass (int pass) noexcept;
-    /** Set before playback starts; not read live. */
+    /** Set before playback starts. */
     void setEnvelope (const Envelope& newEnvelope);
+    /** Live envelope edit: swapped in under a spin lock, heard from the next block. Message thread. */
+    void setLiveEnvelope (Envelope newEnvelope);
 
     /** Consistent snapshot of the region (start, length) in file samples. Any thread. */
     void getRegion (juce::int64& startSample, juce::int64& lengthSamples) const noexcept;
@@ -157,7 +159,8 @@ private:
 
     std::atomic<juce::int64> nextPosition { 0 };
     std::atomic<bool> reachedEnd { false };
-    Envelope envelope;
+    Envelope envelope;                    // read on the audio thread under envelopeLock
+    mutable juce::SpinLock envelopeLock;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (RegionLoopSource)
 };

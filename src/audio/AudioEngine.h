@@ -115,6 +115,8 @@ public:
     double getSecondsToPassEnd (const juce::Uuid& cueId) const;
     /** Live trim / rate for a running cue (the inspector while it plays). */
     void setLiveRegion (const juce::Uuid& cueId, double startSeconds, double endSeconds);
+    /** Live fade-envelope edit for the running instances of a cue. */
+    void setLiveEnvelope (const juce::Uuid& cueId, const Envelope& envelope);
     void setLiveRate (const juce::Uuid& cueId, double rate);
     /** Live slice markers for a running cue. */
     void setLiveSlices (const juce::Uuid& cueId, const std::vector<Slice>& slices, int firstSliceCount);

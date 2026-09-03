@@ -68,7 +68,7 @@ TimeLoopsPanel::TimeLoopsPanel (ProjectDocument& doc, AudioEngine& e, juce::Audi
     linearToggle.onClick = [this]
     {
         const bool on = linearToggle.getToggleState();
-        updateSelected (ko ("엔벨로프 모양"), [on] (Cue& c) { c.audio.envelope.linear = on; }, {}, LiveApply::none);
+        updateSelected (ko ("엔벨로프 모양"), [on] (Cue& c) { c.audio.envelope.linear = on; }, {}, LiveApply::envelope);
     };
 
     setupToggle (lockToggle, "시작/끝에 잠금");
@@ -261,6 +261,9 @@ void TimeLoopsPanel::updateSelected (const juce::String& name, const std::functi
 
         if (apply == LiveApply::rate || apply == LiveApply::regionAndRate)
             engine.setLiveRate (cue->id, cue->audio.rate);
+
+        if (apply == LiveApply::envelope || apply == LiveApply::regionAndRate)
+            engine.setLiveEnvelope (cue->id, cue->audio.envelope);   // the fade points / toggles are heard at once
     }
 
     if (const auto* selected = document.cues.getSelected(); selected != nullptr && selected->id != shownId)
@@ -356,7 +359,7 @@ void TimeLoopsPanel::commitEnvelope (const Envelope& envelope, bool finished)
     // every callback of one drag (including the final one) shares the key, so a drag is one undo step
     juce::ignoreUnused (finished);
     const auto key = "envelope:" + cue->id.toString();
-    updateSelected (ko ("엔벨로프 편집"), [envelope] (Cue& c) { c.audio.envelope = envelope; c.audio.envelope.sanitise(); }, key, LiveApply::none);
+    updateSelected (ko ("엔벨로프 편집"), [envelope] (Cue& c) { c.audio.envelope = envelope; c.audio.envelope.sanitise(); }, key, LiveApply::envelope);
 }
 
 void TimeLoopsPanel::commitStart()

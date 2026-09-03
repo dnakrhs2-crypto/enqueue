@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.22)
 
-project(GoCue VERSION 0.8.6 LANGUAGES C CXX)
+project(GoCue VERSION 0.8.7 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -64,6 +64,7 @@ target_sources(GoCueCore INTERFACE
     ${CMAKE_CURRENT_SOURCE_DIR}/src/audio/RegionLoopSource.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/audio/ReadAheadSource.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/audio/CuePlayer.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/audio/HighQualityResampler.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/audio/AudioEngine.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/audio/PluginChain.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/audio/PluginHost.cpp
@@ -73,7 +74,8 @@ target_sources(GoCueCore INTERFACE
 target_include_directories(GoCueCore INTERFACE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
     ${CMAKE_CURRENT_SOURCE_DIR}/third_party/signalsmith-stretch/include   # time-stretch (MIT, vendored headers)
-    ${CMAKE_CURRENT_SOURCE_DIR}/third_party/signalsmith-linear/include)
+    ${CMAKE_CURRENT_SOURCE_DIR}/third_party/signalsmith-linear/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/third_party/r8brain)   # sample-rate conversion (MIT, vendored headers)
 
 target_compile_definitions(GoCueCore INTERFACE
     JUCE_WEB_BROWSER=0
