@@ -341,8 +341,14 @@ bool CuePlayer::seekToFileSeconds (double fileSeconds) noexcept
 
 void CuePlayer::setLiveEnvelope (const Envelope& cueEnvelope) noexcept
 {
-    if (source != nullptr)
-        source->setLiveEnvelope (cueEnvelope);
+    if (source == nullptr)
+        return;
+
+    source->setLiveEnvelope (cueEnvelope);
+
+    // the read-ahead holds audio shaped by the old envelope: refill it from where playback is (a few ms)
+    if (readAhead != nullptr)
+        readAhead->invalidate (readAhead->getNextReadPosition());
 }
 
 void CuePlayer::setLiveRate (double rate) noexcept

@@ -205,6 +205,42 @@ public:
             engine.reapFinishedPlayers();
         }
 
+        beginTest ("a live envelope edit is heard on the very next block");
+        {
+            Cue cue;
+            cue.file = tone;
+            cue.audio.endSeconds = 0.4;   // no envelope to begin with
+            expect (engine.play (cue));
+
+            const float full = 0.5f / std::sqrt (2.0f);
+
+            for (int i = 0; i < 8; ++i)
+                engine.renderBlock (out, blockSize);
+
+            expectWithinAbsoluteError (rms (out), full, 0.02f);
+
+            Envelope silent;
+            silent.enabled = true;
+            silent.linear = true;
+            silent.lockToTrim = false;
+            silent.points = { { 0.0, 0.0 }, { 0.4, 0.0 } };
+            engine.setLiveEnvelope (cue.id, silent);
+            engine.renderBlock (out, blockSize);   // the speed stage holds a few pre-read samples: nearly silent already
+            expectLessThan (rms (out), full * 0.12f);
+            engine.renderBlock (out, blockSize);
+            expectLessThan (rms (out), full * 0.01f);
+
+            Envelope off;
+            off.enabled = false;
+            engine.setLiveEnvelope (cue.id, off);
+            engine.renderBlock (out, blockSize);
+            expectWithinAbsoluteError (rms (out), full, 0.02f);
+
+            engine.stopAll();
+            engine.renderBlock (out, blockSize);
+            engine.reapFinishedPlayers();
+        }
+
         beginTest ("rate scales the length and can change while playing");
         {
             Cue cue;
