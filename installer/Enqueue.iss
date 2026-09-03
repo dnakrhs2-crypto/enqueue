@@ -54,7 +54,7 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 #include "Enqueue.messages.iss"
 
 [Tasks]
-Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
+Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"
 ; Coupang Partners desktop shortcut: an affiliate link, offered with the disclosure and the way to remove it
 ; (the consent the Korean network act asks for). Checked by default like Bandizip's; the shortcut file is written
 ; by [Code] so a silent auto-update never recreates one the user deleted.
