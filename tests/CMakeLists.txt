@@ -15,6 +15,7 @@ target_sources(EnqueueTests PRIVATE
     LiveLoopTests.cpp
     WmaDecodeTests.cpp
     PanicGateTests.cpp
+    HotkeyLoadTests.cpp
     ResamplerTests.cpp
     CueListTests.cpp
     CueNumberingTests.cpp

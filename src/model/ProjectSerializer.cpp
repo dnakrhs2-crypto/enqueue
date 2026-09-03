@@ -1,3 +1,4 @@
+#include "model/Hotkeys.h"
 #include "model/ProjectSerializer.h"
 
 #include <cmath>
@@ -844,6 +845,7 @@ juce::Result fromJson (const juce::String& json, Project& out, juce::StringArray
     project.name = root.getProperty ("name", "").toString();
 
     juce::StringArray seenIds;   // a cue id is unique across every list: they would share one player and one plugin chain
+    juce::StringArray seenHotkeys;   // a hotkey fires one cue; a reserved key (Space, Esc, ...) would fire next to GO / panic
     auto readCues = [&] (const juce::var& array, std::vector<Cue>& into)
     {
         const auto* cues = array.getArray();
@@ -872,6 +874,27 @@ juce::Result fromJson (const juce::String& json, Project& out, juce::StringArray
             }
 
             seenIds.add (cue.id.toString());
+
+            if (cue.hotkey.isNotEmpty())
+            {
+                if (Hotkeys::isReservedDescription (cue.hotkey))
+                {
+                    if (warnings != nullptr)
+                        warnings->add ("Hotkey \"" + cue.hotkey + "\" of \"" + cue.name + "\" is a key the app uses - cleared");
+
+                    cue.hotkey.clear();
+                }
+                else if (seenHotkeys.contains (cue.hotkey))
+                {
+                    if (warnings != nullptr)
+                        warnings->add ("Hotkey \"" + cue.hotkey + "\" of \"" + cue.name + "\" is already used by another cue - cleared");
+
+                    cue.hotkey.clear();
+                }
+                else
+                    seenHotkeys.add (cue.hotkey);
+            }
+
             into.push_back (std::move (cue));
         }
     };

@@ -16,6 +16,7 @@ namespace Keys
     constexpr const char* inspectorFolded   = "inspectorCollapsed";
     constexpr const char* activeCuesFraction = "activeCuesFraction";
     constexpr const char* activeCuesFolded  = "activeCuesCollapsed";
+    constexpr const char* reopenAfterUpdate = "reopenProjectAfterUpdate";
 }
 
 AppSettings::AppSettings()
@@ -70,6 +71,16 @@ juce::File AppSettings::getLastProjectFile() const
 void AppSettings::setLastProjectFile (const juce::File& file)
 {
     setFileValue (Keys::lastProjectFile, file);
+}
+
+juce::File AppSettings::getReopenProjectAfterUpdate() const
+{
+    return getFileValue (Keys::reopenAfterUpdate);
+}
+
+void AppSettings::setReopenProjectAfterUpdate (const juce::File& file)
+{
+    setFileValue (Keys::reopenAfterUpdate, file);
 }
 
 juce::File AppSettings::getLastAudioDirectory() const

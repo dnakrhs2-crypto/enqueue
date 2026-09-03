@@ -204,6 +204,14 @@ public:
             expect (engine.getPlayingCues()[0].fadingOut);
             expectEquals (engine.getNumPlaying(), 2);
 
+            // a GO during the panic fade is refused: nothing may outlive the panic
+            expect (controller.isPanicLatched());
+            controller.go();
+            controller.goKeyReleased();
+            render (engine, scheduler, now, out, 2);
+            expectEquals (engine.getNumPlaying(), 2);   // still just the two fading cues
+            expect (! controller.handleHotkey (juce::KeyPress::createFromDescription ("F5")) || engine.getNumPlaying() == 2);
+
             now = 41.2;
             controller.panicAll();
             render (engine, scheduler, now, out, 2);
@@ -437,6 +445,19 @@ public:
             expect (! engine.isPlaying (a.id));
             expectEquals (document.cues.getPlayheadIndex(), 0);
             expect (! controller.handleHotkey (juce::KeyPress::createFromDescription ("F6")));
+
+            // two cues on one key (a live edit race; the loader clears duplicates): one key fires one cue
+            document.cues.update (0, [] (Cue& x) { x.hotkey = "F5"; });
+            const int hotkeyStatusesBefore = statuses.size();
+            expect (controller.handleHotkey (juce::KeyPress::createFromDescription ("F5")));
+            int hotkeyFires = 0;
+
+            for (int i = hotkeyStatusesBefore; i < statuses.size(); ++i)
+                if (statuses[i].startsWith (juce::String::fromUTF8 ("\xED\x95\xAB\xED\x82\xA4")))   // "핫키"
+                    ++hotkeyFires;
+
+            expectEquals (hotkeyFires, 1);
+            document.cues.update (0, [] (Cue& x) { x.hotkey = ""; });
             stopEverything();
             document.cues.update (1, [] (Cue& x) { x.hotkey = ""; });
         }

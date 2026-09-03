@@ -1064,6 +1064,12 @@ int CueController::fireSequence (CueList& cues, int index, bool audition)
     if (! cues.isValidIndex (index))
         return juce::jmin (juce::jmax (index, 0), cues.size());
 
+    if (isPanicLatched())
+    {
+        status (ko ("전체 정지 진행 중: 시작하지 않음"));   // GO / hotkey / wall clock: nothing starts until the panic is over
+        return index;
+    }
+
     const DepthGuard depth (*this);   // a goto inside the sequence applies once this walk is over
 
     // the sequence walks the siblings of 'index' (a group counts as one cue; its children are its own business)
@@ -1225,6 +1231,9 @@ bool CueController::handleHotkey (const juce::KeyPress& key)
 
     document.forEachList ([&] (CueList& cues)   // hotkeys reach into every list and cart
     {
+        if (handled)
+            return;   // one key fires one cue (the loader clears duplicates; this guards a live edit race)
+
         for (int i = 0; i < cues.size(); ++i)
         {
             const auto& cue = cues.get (i);
@@ -1234,6 +1243,7 @@ bool CueController::handleHotkey (const juce::KeyPress& key)
                 fireSequence (cues, i, false);   // hotkeys do not move the playhead
                 status (ko ("핫키: ") + cueLabel (i, cue));
                 handled = true;
+                return;
             }
         }
     });
@@ -1386,16 +1396,23 @@ void CueController::panicAll()
     if (now - lastPanicTime <= doubleEscSeconds)
     {
         engine.stopAll();
+        panicLatchUntil = -1.0e9;   // silent at once: nothing is left to protect
         status (ko ("전체 즉시 정지"));
     }
     else
     {
         const double seconds = document.settings.panicSeconds;
         engine.fadeOutAndStopAll ((int) std::lround (seconds * 1000.0));
+        panicLatchUntil = now + seconds;   // a GO during the fade would keep playing after it: refused until it is over
         status (ko ("전체 페이드 정지 (") + juce::String (seconds, 1) + ko ("초)"));
     }
 
     lastPanicTime = now;
+}
+
+bool CueController::isPanicLatched() const
+{
+    return clock() < panicLatchUntil;
 }
 
 void CueController::hardStopAll()
@@ -1405,6 +1422,7 @@ void CueController::hardStopAll()
     playlists.clear();
     waits.clear();
     engine.stopAll();
+    panicLatchUntil = -1.0e9;   // a reset (new / open project), not a panic: the next start is welcome
     status (ko ("전체 즉시 정지"));
 }
 

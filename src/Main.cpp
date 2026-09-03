@@ -1,6 +1,7 @@
 #include "app/AppSettings.h"
 #include "app/Updater.h"
 #include "audio/AudioEngine.h"
+#include "audio/PluginHost.h"
 #include "ui/GoCueLookAndFeel.h"
 #include "ui/MainComponent.h"
 #include "ui/UiUtils.h"
@@ -29,8 +30,15 @@ public:
         settings = std::make_unique<AppSettings>();
         engine = std::make_unique<AudioEngine>();
 
-        const auto savedDeviceState = settings->getAudioDeviceState();
+        // safe mode (Shift held at launch, or --safe-mode): the saved device is not opened (a hung driver would keep
+        // the window from ever appearing) and plugins are not instantiated; the operator picks a device by hand
+        safeMode = commandLine.containsIgnoreCase ("--safe-mode") || juce::ModifierKeys::getCurrentModifiersRealtime().isShiftDown();
+        PluginHost::setSafeMode (safeMode);
+
+        const auto savedDeviceState = safeMode ? nullptr : settings->getAudioDeviceState();
         const auto deviceError = engine->initialise (savedDeviceState.get());
+        const auto savedOutputName = savedDeviceState != nullptr ? savedDeviceState->getStringAttribute ("audioOutputDeviceName") : juce::String();
+        const auto openedOutputName = engine->getDeviceManager().getAudioDeviceSetup().outputDeviceName;
         engine->getDeviceManager().addChangeListener (this);
 
         auto& host = engine->getPluginHost();
@@ -57,6 +65,22 @@ public:
 
         mainWindow->getMainComponent().openProjectFromCommandLine (commandLine);
 
+        if (const auto reopen = settings->getReopenProjectAfterUpdate(); reopen != juce::File())
+        {
+            settings->setReopenProjectAfterUpdate ({});   // once
+
+            if (! mainWindow->getMainComponent().getProjectFile().existsAsFile() && reopen.existsAsFile())
+                mainWindow->getMainComponent().openProjectFile (reopen);   // the show that was open when the update closed the app
+        }
+
+        if (safeMode)
+            juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::InfoIcon, ko ("안전 모드"),
+                                                    ko ("Shift를 누른 채 실행해 안전 모드로 시작했습니다. 저장된 오디오 장치와 플러그인을 불러오지 않았습니다.\n메뉴 [오디오 > 오디오 출력 설정]에서 장치를 고르세요."), ko ("확인"));
+        else if (savedOutputName.isNotEmpty() && savedOutputName != openedOutputName)
+            juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon, ko ("저장된 오디오 장치를 열지 못했습니다"),
+                                                    ko ("저장된 출력 장치: ") + savedOutputName + "\n" + ko ("지금 열린 장치: ") + (openedOutputName.isNotEmpty() ? openedOutputName : ko ("없음"))
+                                                        + "\n\n" + ko ("공연 전에 [오디오 > 오디오 출력 설정]에서 장치를 확인하세요."), ko ("확인"));
+
         Updater::Callbacks updaterCallbacks;
         updaterCallbacks.canShutdown = [this]
         {
@@ -64,10 +88,13 @@ public:
             return mainWindow == nullptr
                 || (! mainWindow->getMainComponent().hasUnsavedChanges() && mainWindow->getMainComponent().isIdleForInterruptions());
         };
-        updaterCallbacks.requestShutdown = []
+        updaterCallbacks.requestShutdown = [this]
         {
-            juce::MessageManager::callAsync ([]
+            juce::MessageManager::callAsync ([this]
             {
+                if (mainWindow != nullptr && settings != nullptr)
+                    settings->setReopenProjectAfterUpdate (mainWindow->getMainComponent().getProjectFile());   // back after the update
+
                 if (auto* app = juce::JUCEApplication::getInstance())
                     app->systemRequestedQuit();
             });
@@ -132,7 +159,7 @@ public:
         if (mainWindow != nullptr)
         {
             auto& main = mainWindow->getMainComponent();
-            main.confirmDiscardChangesThen ([this, &main] { main.fireCloseCueThen ([this] { quit(); }); });
+            main.confirmReplaceProjectThen ([this, &main] { main.fireCloseCueThen ([this] { quit(); }); }, ko ("종료할까요?"));   // a running show is never closed by one click
         }
         else
         {
@@ -243,6 +270,7 @@ private:
     juce::ApplicationCommandManager commandManager;
     std::unique_ptr<GoCueLookAndFeel> lookAndFeel;
     juce::Time launchedAt, lastQuietCheck;
+    bool safeMode = false;
     std::unique_ptr<AppSettings> settings;
     std::unique_ptr<AudioEngine> engine;
     std::unique_ptr<MainWindow> mainWindow;

@@ -23,6 +23,10 @@ public:
     juce::File getLastProjectFile() const;
     void setLastProjectFile (const juce::File& file);
 
+    /** The project that was open when an update closed the app: opened again once, right after the update. */
+    juce::File getReopenProjectAfterUpdate() const;
+    void setReopenProjectAfterUpdate (const juce::File& file);
+
     juce::File getLastAudioDirectory() const;
     void setLastAudioDirectory (const juce::File& directory);
 

@@ -745,11 +745,13 @@ void MainComponent::getCommandInfo (juce::CommandID commandID, juce::Application
 
         case CommandIDs::newProject:
             result.setInfo (ko ("새 프로젝트"), ko ("빈 큐 리스트로 시작"), fileMenu, 0);
+            result.setActive (canEdit);   // show mode: the project, devices, patches, plugins and updates are locked
             result.addDefaultKeypress ('N', ModifierKeys::commandModifier);
             break;
 
         case CommandIDs::openProject:
             result.setInfo (ko ("열기..."), ko ("프로젝트 열기 (.enqueue, .gocue)"), fileMenu, 0);
+            result.setActive (canEdit);   // show mode: the project, devices, patches, plugins and updates are locked
             result.addDefaultKeypress ('O', ModifierKeys::commandModifier);
             break;
 
@@ -765,6 +767,7 @@ void MainComponent::getCommandInfo (juce::CommandID commandID, juce::Application
 
         case CommandIDs::workspaceSettings:
             result.setInfo (ko ("프로젝트 설정..."), ko ("GO 간격, 전체 페이드 정지 시간, 자동 번호, 백업 등"), fileMenu, 0);
+            result.setActive (canEdit);   // show mode: the project, devices, patches, plugins and updates are locked
             result.addDefaultKeypress (',', ModifierKeys::commandModifier | ModifierKeys::shiftModifier);
             break;
 
@@ -803,26 +806,31 @@ void MainComponent::getCommandInfo (juce::CommandID commandID, juce::Application
 
         case CommandIDs::audioSettings:
             result.setInfo (ko ("오디오 출력 설정..."), ko ("출력 장치(ASIO / WASAPI) 선택"), audio, 0);
+            result.setActive (canEdit);   // show mode: the project, devices, patches, plugins and updates are locked
             result.addDefaultKeypress (',', ModifierKeys::commandModifier);
             break;
 
         case CommandIDs::audioPatches:
             result.setInfo (ko ("오디오 패치..."), ko ("큐 출력 → 장치 출력 라우팅, 출력 이름, 스테레오 묶기, 출력 인서트"), audio, 0);
+            result.setActive (canEdit);   // show mode: the project, devices, patches, plugins and updates are locked
             result.addDefaultKeypress ('P', ModifierKeys::commandModifier | ModifierKeys::shiftModifier);
             break;
 
         case CommandIDs::pluginManager:
             result.setInfo (ko ("VST3 플러그인 관리..."), ko ("VST3 플러그인 스캔 / 목록"), audio, 0);
+            result.setActive (canEdit);   // show mode: the project, devices, patches, plugins and updates are locked
             result.addDefaultKeypress ('P', ModifierKeys::commandModifier);
             break;
 
         case CommandIDs::masterInserts:
             result.setInfo (ko ("마스터 버스 인서트..."), ko ("모든 큐가 통과하는 마스터 VST3 체인"), audio, 0);
+            result.setActive (canEdit);   // show mode: the project, devices, patches, plugins and updates are locked
             result.addDefaultKeypress ('M', ModifierKeys::commandModifier);
             break;
 
         case CommandIDs::checkForUpdates:
             result.setInfo (ko ("업데이트 확인..."), ko ("GitHub Releases에서 새 버전 확인"), ko ("도움말"), 0);
+            result.setActive (canEdit);   // show mode: the project, devices, patches, plugins and updates are locked
             result.setActive (Updater::isAvailable());
             break;
 
@@ -1807,6 +1815,8 @@ void MainComponent::editCues (const std::vector<int>& rows, const juce::String& 
 void MainComponent::setShowMode (bool shouldBeShowMode)
 {
     showMode = shouldBeShowMode;
+    showModeFlag.store (shouldBeShowMode, std::memory_order_release);
+    activeCues.setScrubEnabled (! showMode);   // a stray click on a progress bar must not move a running cue
     table.setEditable (! showMode);
     cart.setEditable (! showMode);
     containerTabs.setEditable (! showMode);
@@ -2628,6 +2638,11 @@ void MainComponent::autoBackupIfDue()
     if (nowMs < nextAutoBackupMs)
         return;
 
+    // not while cues play or the show mode is on: capturing plugin states holds the callback lock, and the disk write
+    // sits on the message thread. It runs at the next idle tick instead.
+    if (engine.getNumPlaying() > 0 || showMode)
+        return;
+
     nextAutoBackupMs = nowMs + s.backupIntervalSeconds * 1000.0;
 
     // the unsaved state itself goes into the backup folder, so a crash loses at most one interval
@@ -2649,6 +2664,9 @@ void MainComponent::autoBackupIfDue()
 
 void MainComponent::saveProject (bool saveAs, std::function<void (bool)> then)
 {
+    table.finishEditing();       // what is being typed is what gets saved
+    inspector.finishEditing();
+
     auto writeTo = [this, then] (juce::File file)
     {
         if (! file.hasFileExtension (ProjectSerializer::openableExtensions))
@@ -2730,22 +2748,26 @@ void MainComponent::saveProject (bool saveAs, std::function<void (bool)> then)
     });
 }
 
-void MainComponent::confirmReplaceProjectThen (std::function<void()> action)
+void MainComponent::confirmReplaceProjectThen (std::function<void()> action, const juce::String& question)
 {
     const int playing = engine.getNumPlaying();
 
-    if (playing == 0)
+    if (playing == 0 && ! showMode)
     {
         confirmDiscardChangesThen (std::move (action));
         return;
     }
 
+    const auto what = question.isNotEmpty() ? question : ko ("다른 프로젝트를 열까요?");
+    const auto message = playing > 0 ? ko ("재생 중인 큐 ") + juce::String (playing) + ko ("개가 모두 멈춥니다. ") + what
+                                     : ko ("쇼 모드입니다. ") + what;
+
     juce::Component::SafePointer<MainComponent> safeThis (this);
     juce::AlertWindow::showAsync (juce::MessageBoxOptions()
                                       .withIconType (juce::MessageBoxIconType::WarningIcon)
-                                      .withTitle (ko ("재생 중인 큐가 있습니다"))
-                                      .withMessage (ko ("재생 중인 큐 ") + juce::String (playing) + ko ("개가 모두 멈춥니다. 다른 프로젝트를 열까요?"))
-                                      .withButton (ko ("모두 멈추고 열기"))
+                                      .withTitle (playing > 0 ? ko ("재생 중인 큐가 있습니다") : ko ("쇼 모드"))
+                                      .withMessage (message)
+                                      .withButton (playing > 0 ? ko ("모두 멈추고 계속") : ko ("계속"))
                                       .withButton (ko ("취소"))
                                       .withAssociatedComponent (this),
                                   [safeThis, action] (int result)
@@ -2843,8 +2865,87 @@ void MainComponent::updateTransportStandby()
 }
 
 //==============================================================================
+bool MainComponent::OperationalKeys::keyPressed (const juce::KeyPress& key, juce::Component* origin)
+{
+    if (key.getModifiers().isAnyModifierKeyDown())
+        return false;
+
+    if (key.getKeyCode() == juce::KeyPress::escapeKey)
+    {
+        owner.commands.invokeDirectly (CommandIDs::panicAll, false);   // panic from anywhere
+        return true;
+    }
+
+    if (key.getKeyCode() == juce::KeyPress::spaceKey)
+    {
+        // a text field that did not consume Space is not being typed into; anything else means GO
+        if (origin != nullptr && (dynamic_cast<juce::TextEditor*> (origin) != nullptr || origin->findParentComponentOfClass<juce::TextEditor>() != nullptr))
+            return false;
+
+        owner.commands.invokeDirectly (CommandIDs::go, false);
+        return true;
+    }
+
+    return false;
+}
+
+void MainComponent::attachOperationalKeysToWindows()
+{
+    keyedWindows.erase (std::remove_if (keyedWindows.begin(), keyedWindows.end(), [] (const auto& w) { return w == nullptr; }), keyedWindows.end());
+
+    auto* ownWindow = getTopLevelComponent();
+
+    for (int i = 0; i < juce::TopLevelWindow::getNumTopLevelWindows(); ++i)
+    {
+        auto* window = juce::TopLevelWindow::getTopLevelWindow (i);
+
+        if (window == nullptr || window == ownWindow)
+            continue;
+
+        const bool known = std::any_of (keyedWindows.begin(), keyedWindows.end(), [window] (const auto& w) { return w.getComponent() == window; });
+
+        if (known)
+            continue;
+
+        window->addKeyListener (&operationalKeys);
+        keyedWindows.emplace_back (window);
+    }
+}
+
+void MainComponent::installEscapePolicy (juce::Component& root)
+{
+    // every text field cancels its edit on Esc and passes the panic on (the inspector's own panels do this already;
+    // this catches the rest, and fields created later)
+    for (auto* child : root.getChildren())
+    {
+        if (auto* editor = dynamic_cast<juce::TextEditor*> (child))
+        {
+            if (! editor->onEscapeKey)
+            {
+                juce::Component::SafePointer<juce::TextEditor> safeEditor (editor);
+                editor->onEscapeKey = [this, safeEditor]
+                {
+                    if (safeEditor != nullptr)
+                        safeEditor->giveAwayKeyboardFocus();
+
+                    commands.invokeDirectly (CommandIDs::panicAll, false);
+                };
+            }
+        }
+        else if (child != nullptr)
+            installEscapePolicy (*child);
+    }
+}
+
 void MainComponent::timerCallback()
 {
+    if (--windowScanCountdown <= 0)
+    {
+        windowScanCountdown = 30;   // once a second
+        attachOperationalKeysToWindows();
+        installEscapePolicy (inspector);
+    }
+
     engine.reapIfNeeded();   // finished players are destroyed here, never from the audio thread's callback
 
     if (! juce::Process::isForegroundProcess())

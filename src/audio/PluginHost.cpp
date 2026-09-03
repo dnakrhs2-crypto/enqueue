@@ -50,6 +50,12 @@ juce::Array<juce::PluginDescription> PluginHost::getEffectTypes() const
 std::unique_ptr<juce::AudioPluginInstance> PluginHost::createInstance (const juce::PluginDescription& description,
                                                                        double sampleRate, int blockSize, juce::String& error)
 {
+    if (safeMode)
+    {
+        error = juce::String::fromUTF8 ("안전 모드: 플러그인을 불러오지 않습니다 (") + description.name + ")";
+        return nullptr;
+    }
+
     auto instance = formatManager.createPluginInstance (description, sampleRate, blockSize, error);
 
     if (instance == nullptr && error.isEmpty())

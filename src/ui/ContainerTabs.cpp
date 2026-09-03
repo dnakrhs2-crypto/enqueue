@@ -116,7 +116,7 @@ void ContainerTabs::mouseDown (const juce::MouseEvent& e)
 
     if (tab >= 0)
     {
-        if (onSelect)
+        if (onSelect && editable)   // show mode: the GO target list does not change by a click
             onSelect (tab);
 
         return;

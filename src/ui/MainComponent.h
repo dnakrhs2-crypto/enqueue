@@ -61,14 +61,15 @@ public:
     /** Opens a project file (.enqueue / .gocue) passed on the command line (file association / drag onto the exe). */
     void openProjectFromCommandLine (const juce::String& commandLine);
     void openProjectFile (const juce::File& file);
+    juce::File getProjectFile() const noexcept { return document.getFile(); }
 
     /** Runs 'action' immediately, or once the user has saved / discarded unsaved changes. */
     void confirmDiscardChangesThen (std::function<void()> action);
     /** Replacing the whole project while cues play is asked about first (a double-clicked file must not end a
         running show by accident), then confirmDiscardChangesThen() runs 'action'. */
-    void confirmReplaceProjectThen (std::function<void()> action);
+    void confirmReplaceProjectThen (std::function<void()> action, const juce::String& question = {});
     /** Nothing plays and show mode is off: the moment for anything that may put a window up (update checks). */
-    bool isIdleForInterruptions() const noexcept { return engine.getNumPlaying() == 0 && ! showMode; }
+    bool isIdleForInterruptions() const noexcept { return engine.getNumPlaying() == 0 && ! showModeFlag.load (std::memory_order_acquire); }
 
     /** Fires the "start on close" cue (if configured) and runs 'then' once it has finished (or after 2 minutes). */
     void fireCloseCueThen (std::function<void()> then);
@@ -77,6 +78,18 @@ public:
     bool hasUnsavedChanges() const noexcept { return unsavedChanges.load (std::memory_order_relaxed); }
 
     std::function<void (const juce::String& title)> onWindowTitleChanged;
+
+    /** Esc (panic) and Space (GO) reach the show from every window the app owns: plugin editors, the manual, the
+        settings dialogs. Attached to each top-level window by the timer; text fields keep Space for typing. */
+    class OperationalKeys : public juce::KeyListener
+    {
+    public:
+        explicit OperationalKeys (MainComponent& o) : owner (o) {}
+        bool keyPressed (const juce::KeyPress& key, juce::Component* origin) override;
+        bool keyStateChanged (bool, juce::Component*) override { return false; }
+    private:
+        MainComponent& owner;
+    };
 
 private:
     /** Cue hotkeys are checked before the command shortcuts. */
@@ -190,6 +203,12 @@ private:
     std::map<juce::String, double> lastSaveBackupByPath;
     double nextAutoBackupMs = 0.0;
     bool showMode = false;
+    std::atomic<bool> showModeFlag { false };   // the same, for readers off the message thread (the updater's callbacks)
+    OperationalKeys operationalKeys { *this };
+    std::vector<juce::Component::SafePointer<juce::Component>> keyedWindows;   // top-level windows that carry operationalKeys
+    int windowScanCountdown = 0;
+    void attachOperationalKeysToWindows();
+    void installEscapePolicy (juce::Component& root);
 
     struct CueClipboard
     {

@@ -149,7 +149,7 @@ public:
 private:
     void scrub (const juce::MouseEvent& e)
     {
-        if (infinite || ! barArea.expanded (0, 6).contains (e.getPosition()))
+        if (infinite || ! owner.isScrubEnabled() || ! barArea.expanded (0, 6).contains (e.getPosition()))
             return;
 
         const double f = juce::jlimit (0.0, 1.0, (double) (e.x - barArea.getX()) / (double) juce::jmax (1, barArea.getWidth()));

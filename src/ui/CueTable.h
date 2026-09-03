@@ -84,6 +84,7 @@ private:
     class CellEditor;
 
     // TableListBoxModel
+    bool mayDragToExternalWindows() const override { return false; }   // an external drag window steals the focus: Esc/Space must stay with the show
     int getNumRows() override;
     void paintRowBackground (juce::Graphics&, int rowNumber, int width, int height, bool rowIsSelected) override;
     void paintCell (juce::Graphics&, int rowNumber, int columnId, int width, int height, bool rowIsSelected) override;

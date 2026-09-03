@@ -141,6 +141,8 @@ public:
     std::function<double()> clock;
 
     static constexpr double doubleEscSeconds = 0.5;
+    /** True while a panic fade (or the 0.5 s after a hard stop) runs: nothing may start. */
+    bool isPanicLatched() const;
 
 private:
     juce::Uuid resolveTarget (bool ignoreFadingOut) const;
@@ -200,6 +202,7 @@ private:
     juce::int64 lastWallClockSecond = -1;
     double lastGoTime = -1.0e9;
     double lastPanicTime = -1.0e9;
+    double panicLatchUntil = -1.0e9;   // until then every start (GO, hotkey, wall clock, auto-continue) is refused
     bool goKeyDown = false;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (CueController)

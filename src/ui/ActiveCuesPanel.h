@@ -25,6 +25,9 @@ public:
     /** The row's stop button: the owner stops the cue wherever it runs (fade cues live outside the engine). */
     std::function<void (const juce::Uuid& cueId)> onStopRequested;
     void setNewestFirst (bool newestFirst);
+    /** Off in show mode: clicking a progress bar must not seek a running cue. */
+    void setScrubEnabled (bool enabled) noexcept { scrubEnabled = enabled; }
+    bool isScrubEnabled() const noexcept { return scrubEnabled; }
 
     void resized() override;
     void paint (juce::Graphics& g) override;
@@ -39,6 +42,7 @@ private:
     std::vector<std::unique_ptr<Row>> rows;
     juce::Label title, emptyLabel;
     bool newestFirst = false;
+    bool scrubEnabled = true;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (ActiveCuesPanel)
 };

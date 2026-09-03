@@ -18,6 +18,10 @@ public:
     PluginHost();
     ~PluginHost() override;
 
+    /** Safe mode (Shift at launch / --safe-mode): no plugin is instantiated; slots stay empty with an error. */
+    static void setSafeMode (bool enabled) noexcept { safeMode = enabled; }
+    static bool isSafeMode() noexcept { return safeMode; }
+
     juce::AudioPluginFormatManager& getFormatManager() noexcept { return formatManager; }
     juce::KnownPluginList& getKnownPlugins() noexcept { return knownPlugins; }
     juce::AudioPluginFormat* getVST3Format() const;
@@ -42,6 +46,8 @@ public:
     std::function<void()> onKnownPluginsChanged;
 
 private:
+    static inline bool safeMode = false;
+
     void changeListenerCallback (juce::ChangeBroadcaster*) override;
 
     juce::AudioPluginFormatManager formatManager;
