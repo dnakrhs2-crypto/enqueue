@@ -511,7 +511,8 @@ namespace
         if (path.isNotEmpty() && juce::File::isAbsolutePath (path))
             c.file = juce::File (path);
 
-        if (! c.file.existsAsFile())
+        // the copy that travelled with the project wins: a show folder copied to another disk (or PC) must play the
+        // media next to it, not the original that may still exist at the absolute path (and be edited or removed)
         {
             const auto relative = v.getProperty ("fileRelative", "").toString();
 
@@ -824,6 +825,9 @@ juce::String toJson (const Project& project, const juce::File& projectDir)
 
 juce::Result fromJson (const juce::String& json, Project& out, juce::StringArray* warnings, const juce::File& projectDir)
 {
+    if (json.trim().isEmpty())
+        return juce::Result::fail ("Invalid project file: the file is empty");
+
     juce::var root;
     const auto parsed = juce::JSON::parse (json, root);
 
@@ -833,6 +837,11 @@ juce::Result fromJson (const juce::String& json, Project& out, juce::StringArray
     // Note: var::isObject() is also true for arrays, so check for a real JSON object.
     if (root.getDynamicObject() == nullptr)
         return juce::Result::fail ("Invalid project file: top level is not an object");
+
+    // a JSON object that is not a project at all (another app's file, a truncated one that still parses): it would
+    // load as an empty show and a save would overwrite the original with that
+    if (! root.hasProperty ("version") && ! root.hasProperty ("cues") && ! root.hasProperty ("lists"))
+        return juce::Result::fail ("Invalid project file: not an Enqueue project (no version, cues or lists)");
 
     const int version = intProperty (root, "version", 1);
 
@@ -989,8 +998,64 @@ juce::Result save (const Project& project, const juce::File& file)
 
     const auto json = toJson (project, dir);
 
-    if (! file.replaceWithText (json))
-        return juce::Result::fail ("Could not write " + file.getFullPathName());
+    // written next to the target, verified, then swapped in: a full disk, a dropped network share or a crash
+    // mid-write leaves the previous file intact (replaceWithText would have truncated it first)
+    const auto temp = file.getSiblingFile (file.getFileName() + ".saving~");
+    temp.deleteFile();
+
+    {
+        juce::FileOutputStream stream (temp);
+
+        if (stream.failedToOpen())
+        {
+            temp.deleteFile();
+            return juce::Result::fail ("Could not write " + temp.getFullPathName() + ": " + stream.getStatus().getErrorMessage());
+        }
+
+        const auto utf8 = json.toRawUTF8();
+        const auto bytes = (size_t) juce::CharPointer_UTF8 (utf8).sizeInBytes() - 1;
+
+        if (! stream.write (utf8, bytes))
+        {
+            temp.deleteFile();
+            return juce::Result::fail ("Could not write " + temp.getFullPathName() + ": " + stream.getStatus().getErrorMessage());
+        }
+
+        stream.flush();
+
+        if (stream.getStatus().failed())
+        {
+            temp.deleteFile();
+            return juce::Result::fail ("Could not write " + temp.getFullPathName() + ": " + stream.getStatus().getErrorMessage());
+        }
+    }
+
+    const auto expected = (juce::int64) juce::CharPointer_UTF8 (json.toRawUTF8()).sizeInBytes() - 1;
+
+    if (temp.getSize() != expected)
+    {
+        temp.deleteFile();
+        return juce::Result::fail ("Could not write " + file.getFullPathName() + ": the file on disk is incomplete ("
+                                   + juce::String (temp.getSize()) + " of " + juce::String (expected) + " bytes)");
+    }
+
+    // read back: what was written must parse to a project again before it replaces the old file
+    {
+        Project check;
+        const auto parsed = fromJson (temp.loadFileAsString(), check, nullptr, dir);
+
+        if (parsed.failed())
+        {
+            temp.deleteFile();
+            return juce::Result::fail ("Could not write " + file.getFullPathName() + ": the written file does not read back (" + parsed.getErrorMessage() + ")");
+        }
+    }
+
+    if (! temp.replaceFileIn (file))
+    {
+        temp.deleteFile();
+        return juce::Result::fail ("Could not replace " + file.getFullPathName());
+    }
 
     return juce::Result::ok();
 }

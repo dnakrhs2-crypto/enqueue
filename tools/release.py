@@ -296,6 +296,7 @@ def main():
     parser.add_argument("--publish", action="store_true", help="create the GitHub release with gh and upload installer + appcast")
     parser.add_argument("--site-only", action="store_true", help="only redeploy the website from the latest GitHub release")
     parser.add_argument("--skip-site", action="store_true", help="publish without touching the website")
+    parser.add_argument("--allow-dirty", action="store_true", help="release from a working tree with uncommitted changes (not for real releases)")
     args = parser.parse_args()
 
     if not args.repo:
@@ -308,6 +309,20 @@ def main():
     # Single source of truth: the exe's VERSIONINFO, the installer name, the appcast and the
     # GitHub tag must all agree, otherwise the published appcast points at a 404.
     version = read_version()
+
+    # what ships must be what is committed: a stray local edit would be in the installer but in no git history
+    if not args.allow_dirty:
+        dirty = run(["git", "status", "--porcelain", "--untracked-files=no"], cwd=ROOT, capture=True)
+        if dirty.strip():
+            sys.exit("the working tree has uncommitted changes - commit first (or --allow-dirty for a test build):\n" + dirty)
+
+    # a tag that already exists must be this commit: a second "v0.9.4" on another commit would ship two different builds under one version
+    if run(["git", "tag", "--list", "v" + version], cwd=ROOT, capture=True).strip():
+        head = run(["git", "rev-parse", "HEAD"], cwd=ROOT, capture=True).strip()
+        tagged = run(["git", "rev-list", "-n", "1", "v" + version], cwd=ROOT, capture=True).strip()
+        if head != tagged:
+            sys.exit("tag v%s already exists on another commit (%s, HEAD is %s) - bump the version in CMakeLists.txt" % (version, tagged[:10], head[:10]))
+
     tag = os.environ.get("GITHUB_REF_NAME", "")
     if tag and tag != "v" + version:
         sys.exit("git tag %s does not match project(Enqueue VERSION %s) - bump CMakeLists.txt or re-tag" % (tag, version))

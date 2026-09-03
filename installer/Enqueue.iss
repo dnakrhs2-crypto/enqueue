@@ -34,6 +34,8 @@ SolidCompression=yes
 WizardStyle=modern
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
+; Windows 10 or later: the build (JUCE 8, Media Foundation, WinSparkle) is not tested on anything older
+MinVersion=10.0
 ; Per-user install by default (no UAC, so WinSparkle can run updates unattended);
 ; the user may still choose "all users" in the dialog.
 PrivilegesRequired=lowest

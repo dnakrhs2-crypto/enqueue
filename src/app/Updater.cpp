@@ -63,7 +63,13 @@ void Updater::initialise (const juce::String& companyName, const juce::String& a
     win_sparkle_set_appcast_url (GOCUE_APPCAST_URL);
     win_sparkle_set_registry_path ("Software\\GoCue\\GoCue\\WinSparkle");   // the path of the GoCue days: the settings survive the rename
     win_sparkle_set_app_details (companyName.toWideCharPointer(), appName.toWideCharPointer(), version.toWideCharPointer());
-    win_sparkle_set_eddsa_public_key (GOCUE_EDDSA_PUBLIC_KEY);
+    if (win_sparkle_set_eddsa_public_key (GOCUE_EDDSA_PUBLIC_KEY) != 1)
+    {
+        // without a key WinSparkle would accept an unsigned appcast: no updates at all is the safe answer
+        juce::Logger::writeToLog ("Updater disabled: the EdDSA public key was not accepted");
+        return;
+    }
+
     win_sparkle_set_can_shutdown_callback (canShutdownThunk);
     win_sparkle_set_shutdown_request_callback (shutdownRequestThunk);
     win_sparkle_set_automatic_check_for_updates (0);   // no built-in timer: the app checks at idle moments (Main.cpp), never during a show
