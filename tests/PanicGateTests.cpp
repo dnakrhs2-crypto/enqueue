@@ -1,4 +1,5 @@
 #include "audio/AudioEngine.h"
+#include "TestGainPlugin.h"
 
 #include <juce_audio_formats/juce_audio_formats.h>
 #include <juce_core/juce_core.h>
@@ -135,6 +136,69 @@ public:
             cue.file = tone;
             juce::String error;
             expect (engine.play (cue, &error), error);   // never initialised: no device expected
+        }
+
+        beginTest ("a self-generating master plugin: exact silence once the ramp is over, closed stays closed, the next cue reopens");
+        {
+            struct Generator : public TestGainPlugin
+            {
+                Generator() : TestGainPlugin (1.0f) {}
+
+                void processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer&) override
+                {
+                    for (int ch = 0; ch < buffer.getNumChannels(); ++ch)
+                        juce::FloatVectorOperations::fill (buffer.getWritePointer (ch), 0.5f, buffer.getNumSamples());
+                }
+            };
+
+            AudioEngine engine (0);
+            engine.prepare (sampleRate, blockSize);
+            engine.getMasterChain().addPlugin (std::make_unique<Generator>());
+            juce::AudioBuffer<float> out (2, blockSize);
+
+            engine.renderBlock (out, blockSize);
+            expectWithinAbsoluteError (out.getSample (0, blockSize - 1), 0.5f, 0.001f);   // the generator reaches the output
+
+            engine.stopAll();   // hard panic: a 5 ms (220 sample) ramp, then exact zero whatever still generates behind the gate
+            engine.renderBlock (out, blockSize);
+            expectGreaterThan (out.getSample (0, 0), 0.4f);              // the ramp starts from the open gate
+            expectEquals (out.getSample (0, 300), 0.0f);                 // and is over well inside the block
+            expectEquals (out.getSample (1, blockSize - 1), 0.0f);
+            engine.renderBlock (out, blockSize);
+            expectEquals (out.getMagnitude (0, 0, blockSize), 0.0f);
+
+            engine.fadeOutAndStopAll (100);   // a second panic on a closed gate: it stays closed
+
+            for (int i = 0; i < 20; ++i)
+                engine.renderBlock (out, blockSize);
+
+            expectEquals (out.getMagnitude (0, 0, blockSize), 0.0f);
+
+            Cue cue;
+            cue.name = "tone";
+            cue.file = tone;
+            juce::String error;
+            expect (engine.play (cue, &error), error);
+            engine.renderBlock (out, blockSize);
+            expectGreaterThan (out.getMagnitude (0, 0, blockSize), 0.4f);   // reopened at once for the new cue
+
+            // a soft panic: the fade time, then the 200 ms close ramp, then exact zero
+            engine.fadeOutAndStopAll (100);
+            const int blocks = (int) std::ceil (0.3 * sampleRate / blockSize) + 2;
+
+            for (int i = 0; i < blocks; ++i)
+                engine.renderBlock (out, blockSize);
+
+            expectEquals (out.getMagnitude (0, 0, blockSize), 0.0f);
+            expectEquals (out.getMagnitude (1, 0, blockSize), 0.0f);
+
+            // a refused start (no such file) leaves the gate shut
+            Cue missing;
+            missing.name = "missing";
+            missing.file = dir.getChildFile ("nope.wav");
+            expect (! engine.play (missing, &error));
+            engine.renderBlock (out, blockSize);
+            expectEquals (out.getMagnitude (0, 0, blockSize), 0.0f);
         }
 
         dir.deleteRecursively();

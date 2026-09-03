@@ -347,7 +347,7 @@ double PluginChain::getTailSeconds() const
 
     for (auto& slot : slots)
     {
-        if (slot->plugin == nullptr || slot->bypassed.load())
+        if (slot->plugin == nullptr || slot->bypassed.load() || slot->faulted.load (std::memory_order_relaxed))
             continue;
 
         const double t = slot->plugin->getTailLengthSeconds();
@@ -419,6 +419,10 @@ void PluginChain::process (juce::AudioBuffer<float>& buffer, int numSamples)
         }
         else
         {
+            // the dry input is kept in scratch: a plugin that throws half-way must not leave its partial block behind
+            for (int ch = 0; ch < 2 && ch < scratch.getNumChannels(); ++ch)
+                scratch.copyFrom (ch, 0, buffer, ch, 0, numSamples);
+
             juce::AudioBuffer<float> view (buffer.getArrayOfWritePointers(), 2, 0, numSamples);
 
             try
@@ -428,7 +432,11 @@ void PluginChain::process (juce::AudioBuffer<float>& buffer, int numSamples)
             catch (...)
             {
                 slot->faulted.store (true, std::memory_order_relaxed);
-                continue;   // the input passes through untouched
+
+                for (int ch = 0; ch < 2 && ch < scratch.getNumChannels(); ++ch)
+                    buffer.copyFrom (ch, 0, scratch, ch, 0, numSamples);   // the input passes through untouched
+
+                continue;
             }
         }
 
@@ -439,28 +447,26 @@ void PluginChain::process (juce::AudioBuffer<float>& buffer, int numSamples)
 
 void PluginChain::resetProcessing() noexcept
 {
-    const juce::ScopedTryLock sl (lock);
-
-    if (! sl.isLocked())
-        return;
+    // message thread (the panic gate has closed): reset() may allocate or block, so it never runs in the callback
+    const juce::ScopedLock sl (lock);
 
     for (auto& slot : slots)
     {
-        if (slot->plugin == nullptr)
+        if (slot->plugin == nullptr || slot->faulted.load (std::memory_order_relaxed))
             continue;
 
-        const juce::ScopedTryLock callbackLock (slot->plugin->getCallbackLock());
+        const juce::ScopedLock callbackLock (slot->plugin->getCallbackLock());
 
-        if (callbackLock.isLocked() && ! slot->plugin->isSuspended())
+        if (slot->plugin->isSuspended())
+            continue;
+
+        try
         {
-            try
-            {
-                slot->plugin->reset();
-            }
-            catch (...)
-            {
-                slot->faulted.store (true, std::memory_order_relaxed);
-            }
+            slot->plugin->reset();
+        }
+        catch (...)
+        {
+            slot->faulted.store (true, std::memory_order_relaxed);
         }
 
         slot->scratch.clear();

@@ -627,6 +627,12 @@ CueController::GoResult CueController::trigger (const Cue& cue, bool audition)
         return GoResult::failed;
     }
 
+    if (isPanicLatched())   // every start passes here: GO, hotkey, cart button, preview, wall clock, follow, control cue
+    {
+        status (ko ("전체 정지 진행 중: 시작하지 않음: ") + cue.name);
+        return GoResult::failed;
+    }
+
     const DepthGuard depth (*this);
     dispatchStack.push_back ({ cue.id, cue.isControl() });
     const auto result = triggerImpl (cue, audition);
@@ -1145,6 +1151,12 @@ CueController::GoResult CueController::go (bool audition)
         return GoResult::rejectedKeyUp;
     }
 
+    if (isPanicLatched())
+    {
+        status (ko ("전체 정지 진행 중: 시작하지 않음"));   // neither a start nor a resume during the panic
+        return GoResult::failed;
+    }
+
     if (settings.doubleGoSeconds > 0.0 && now - lastGoTime < settings.doubleGoSeconds)
     {
         if (onGoRejected)
@@ -1356,6 +1368,12 @@ bool CueController::togglePause()
     const int index = document.cues.indexOf (id);
     const juce::String label = index >= 0 ? cueLabel (index, document.cues.get (index)) : juce::String();
 
+    if (isPanicLatched())
+    {
+        status (ko ("전체 정지 진행 중: 재개하지 않음"));
+        return false;
+    }
+
     if (engine.isPaused (id))
     {
         engine.resume (id);
@@ -1403,7 +1421,7 @@ void CueController::panicAll()
     {
         const double seconds = document.settings.panicSeconds;
         engine.fadeOutAndStopAll ((int) std::lround (seconds * 1000.0));
-        panicLatchUntil = now + seconds;   // a GO during the fade would keep playing after it: refused until it is over
+        panicLatchUntil = now + seconds + 0.25;   // the fade, then the gate's 200 ms close: nothing starts until both are over
         status (ko ("전체 페이드 정지 (") + juce::String (seconds, 1) + ko ("초)"));
     }
 

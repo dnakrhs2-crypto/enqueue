@@ -131,6 +131,10 @@ public:
     const juce::Uuid& getCueId() const noexcept   { return cue.id; }
     const Cue& getCue() const noexcept            { return cue; }
     bool hasFinished() const noexcept             { return finished.load (std::memory_order_relaxed); }
+    /** The stream ran out (not a stop): a live edit that adds material may revive the player. */
+    bool hasEndedNaturally() const noexcept       { return endedNaturally.load (std::memory_order_relaxed); }
+    /** A live edit published a seek that the audio thread has not consumed yet. */
+    bool hasPendingLiveEdit() const noexcept      { return pendingVirtualPosition.load (std::memory_order_relaxed) >= 0.0; }
     bool isFadingOut() const noexcept             { return fadingOut.load (std::memory_order_relaxed); }
     bool isPaused() const noexcept                { return pausedFlag.load (std::memory_order_relaxed); }
     /** A stop / fade-out has been requested (the instance is on its way out). */

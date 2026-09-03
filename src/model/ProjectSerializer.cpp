@@ -1,6 +1,8 @@
 #include "model/Hotkeys.h"
 #include "model/ProjectSerializer.h"
 
+#include <cstring>
+
 #include <cmath>
 #include <limits>
 
@@ -828,6 +830,9 @@ juce::Result fromJson (const juce::String& json, Project& out, juce::StringArray
     if (json.trim().isEmpty())
         return juce::Result::fail ("Invalid project file: the file is empty");
 
+    if (! json.trimEnd().endsWithChar ('}'))
+        return juce::Result::fail ("Invalid project file: data after the end of the project");
+
     juce::var root;
     const auto parsed = juce::JSON::parse (json, root);
 
@@ -840,15 +845,15 @@ juce::Result fromJson (const juce::String& json, Project& out, juce::StringArray
 
     // a JSON object that is not a project at all (another app's file, a truncated one that still parses): it would
     // load as an empty show and a save would overwrite the original with that
-    if (! root.hasProperty ("version") && ! root.hasProperty ("cues") && ! root.hasProperty ("lists"))
-        return juce::Result::fail ("Invalid project file: not an Enqueue project (no version, cues or lists)");
+    if (! root.getProperty ("cues", juce::var()).isArray() && ! root.getProperty ("lists", juce::var()).isArray())
+        return juce::Result::fail ("Invalid project file: not an Enqueue project (no cue list)");
 
     const int version = intProperty (root, "version", 1);
 
-    if (version > currentVersion && warnings != nullptr)
-        warnings->add ("This project was saved by a newer Enqueue (file version " + juce::String (version)
-                       + ", this build reads version " + juce::String (currentVersion)
-                       + "). Unknown settings were ignored.");
+    // a file from a newer Enqueue is not opened: what this build cannot read would be dropped by the next save
+    if (version > currentVersion)
+        return juce::Result::fail ("This project was saved by a newer Enqueue (file version " + juce::String (version)
+                                   + ", this build reads version " + juce::String (currentVersion) + "). Update Enqueue to open it.");
 
     Project project;
     project.name = root.getProperty ("name", "").toString();
@@ -998,66 +1003,43 @@ juce::Result save (const Project& project, const juce::File& file)
 
     const auto json = toJson (project, dir);
 
-    // written next to the target, verified, then swapped in: a full disk, a dropped network share or a crash
-    // mid-write leaves the previous file intact (replaceWithText would have truncated it first)
-    const auto temp = file.getSiblingFile (file.getFileName() + ".saving~");
-    temp.deleteFile();
+    // written to a uniquely named sibling, verified byte for byte, then swapped in (with retries): a full disk, a
+    // dropped network share or a crash mid-write leaves the previous file intact
+    juce::TemporaryFile temp (file);
+    const juce::CharPointer_UTF8 utf8 = json.toUTF8();
+    const auto bytes = (size_t) utf8.sizeInBytes() - 1;
 
     {
-        juce::FileOutputStream stream (temp);
+        juce::FileOutputStream stream (temp.getFile());
 
         if (stream.failedToOpen())
-        {
-            temp.deleteFile();
-            return juce::Result::fail ("Could not write " + temp.getFullPathName() + ": " + stream.getStatus().getErrorMessage());
-        }
+            return juce::Result::fail ("Could not write " + temp.getFile().getFullPathName() + ": " + stream.getStatus().getErrorMessage());
 
-        const auto utf8 = json.toRawUTF8();
-        const auto bytes = (size_t) juce::CharPointer_UTF8 (utf8).sizeInBytes() - 1;
-
-        if (! stream.write (utf8, bytes))
-        {
-            temp.deleteFile();
-            return juce::Result::fail ("Could not write " + temp.getFullPathName() + ": " + stream.getStatus().getErrorMessage());
-        }
+        if (! stream.write (utf8.getAddress(), bytes))
+            return juce::Result::fail ("Could not write " + temp.getFile().getFullPathName() + ": " + stream.getStatus().getErrorMessage());
 
         stream.flush();
 
         if (stream.getStatus().failed())
-        {
-            temp.deleteFile();
-            return juce::Result::fail ("Could not write " + temp.getFullPathName() + ": " + stream.getStatus().getErrorMessage());
-        }
+            return juce::Result::fail ("Could not write " + temp.getFile().getFullPathName() + ": " + stream.getStatus().getErrorMessage());
     }
 
-    const auto expected = (juce::int64) juce::CharPointer_UTF8 (json.toRawUTF8()).sizeInBytes() - 1;
+    juce::MemoryBlock written;
 
-    if (temp.getSize() != expected)
-    {
-        temp.deleteFile();
-        return juce::Result::fail ("Could not write " + file.getFullPathName() + ": the file on disk is incomplete ("
-                                   + juce::String (temp.getSize()) + " of " + juce::String (expected) + " bytes)");
-    }
+    if (! temp.getFile().loadFileAsData (written) || written.getSize() != bytes || std::memcmp (written.getData(), utf8.getAddress(), bytes) != 0)
+        return juce::Result::fail ("Could not write " + file.getFullPathName() + ": the file on disk does not match what was written ("
+                                   + juce::String ((juce::int64) written.getSize()) + " of " + juce::String ((juce::int64) bytes) + " bytes)");
 
-    // read back: what was written must parse to a project object again before it replaces the old file
-    // (a plain parse: resolving every media path again would stat hundreds of files on a network share)
     {
         juce::var check;
-        const auto parsed = juce::JSON::parse (temp.loadFileAsString(), check);
+        const auto parsed = juce::JSON::parse (temp.getFile().loadFileAsString(), check);
 
         if (parsed.failed() || check.getDynamicObject() == nullptr || ! check.hasProperty ("version"))
-        {
-            temp.deleteFile();
-            return juce::Result::fail ("Could not write " + file.getFullPathName() + ": the written file does not read back"
-                                       + (parsed.failed() ? " (" + parsed.getErrorMessage() + ")" : juce::String()));
-        }
+            return juce::Result::fail ("Could not write " + file.getFullPathName() + ": the written file does not read back");
     }
 
-    if (! temp.replaceFileIn (file))
-    {
-        temp.deleteFile();
+    if (! temp.overwriteTargetFileWithTemporary())   // ReplaceFile / rename, retried a few times (an antivirus scan holds the file briefly)
         return juce::Result::fail ("Could not replace " + file.getFullPathName());
-    }
 
     return juce::Result::ok();
 }

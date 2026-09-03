@@ -149,6 +149,14 @@ public:
         }
     }
 
+    /** A combo box shows a long entry (a cue name) cut with an ellipsis, never with squashed glyphs. */
+    juce::Label* createComboBoxTextBox (juce::ComboBox& box) override
+    {
+        auto* label = juce::LookAndFeel_V4::createComboBoxTextBox (box);
+        label->setMinimumHorizontalScale (1.0f);
+        return label;
+    }
+
     juce::Font getPopupMenuFont() override
     {
         return juce::Font (juce::FontOptions (18.0f));

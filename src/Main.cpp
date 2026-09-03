@@ -8,8 +8,29 @@
 
 #include <juce_gui_extra/juce_gui_extra.h>
 
+#if JUCE_WINDOWS
+ #include <windows.h>
+#endif
+
 namespace gocue
 {
+
+#if JUCE_WINDOWS
+namespace
+{
+    std::function<void()> escapeHandler;
+    HHOOK escapeHook = nullptr;
+
+    LRESULT CALLBACK escapeHookProc (int code, WPARAM wParam, LPARAM lParam)
+    {
+        // a key-down that is not an auto-repeat (bit 30: previous state, bit 31: transition)
+        if (code == HC_ACTION && wParam == VK_ESCAPE && (lParam & 0xC0000000) == 0)
+            juce::MessageManager::callAsync ([] { if (escapeHandler) escapeHandler(); });
+
+        return CallNextHookEx (nullptr, code, wParam, lParam);
+    }
+}
+#endif
 
 class GoCueApplication : public juce::JUCEApplication,
                          private juce::ChangeListener,
@@ -32,7 +53,8 @@ public:
 
         // safe mode (Shift held at launch, or --safe-mode): the saved device is not opened (a hung driver would keep
         // the window from ever appearing) and plugins are not instantiated; the operator picks a device by hand
-        safeMode = commandLine.containsIgnoreCase ("--safe-mode") || juce::ModifierKeys::getCurrentModifiersRealtime().isShiftDown();
+        safeMode = juce::ArgumentList ("Enqueue", commandLine).containsOption ("--safe-mode")
+                   || juce::ModifierKeys::getCurrentModifiersRealtime().isShiftDown();
         PluginHost::setSafeMode (safeMode);
 
         const auto savedDeviceState = safeMode ? nullptr : settings->getAudioDeviceState();
@@ -63,6 +85,10 @@ public:
                                           [] (int) {});
         }
 
+        const bool deviceFallback = savedOutputName.isNotEmpty() && savedOutputName != openedOutputName;
+        mainWindow->getMainComponent().setAutoStartOnOpenAllowed (! safeMode && ! deviceFallback);   // a quiet launch: nothing starts by itself
+        installEscapeHook();
+
         mainWindow->getMainComponent().openProjectFromCommandLine (commandLine);
 
         if (const auto reopen = settings->getReopenProjectAfterUpdate(); reopen != juce::File())
@@ -70,13 +96,13 @@ public:
             settings->setReopenProjectAfterUpdate ({});   // once
 
             if (! mainWindow->getMainComponent().getProjectFile().existsAsFile() && reopen.existsAsFile())
-                mainWindow->getMainComponent().openProjectFile (reopen);   // the show that was open when the update closed the app
+                mainWindow->getMainComponent().openProjectFile (reopen, false);   // the show that was open when the update closed the app, without its auto-start
         }
 
         if (safeMode)
             juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::InfoIcon, ko ("안전 모드"),
                                                     ko ("Shift를 누른 채 실행해 안전 모드로 시작했습니다. 저장된 오디오 장치와 플러그인을 불러오지 않았습니다.\n메뉴 [오디오 > 오디오 출력 설정]에서 장치를 고르세요."), ko ("확인"));
-        else if (savedOutputName.isNotEmpty() && savedOutputName != openedOutputName)
+        else if (deviceFallback)
             juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon, ko ("저장된 오디오 장치를 열지 못했습니다"),
                                                     ko ("저장된 출력 장치: ") + savedOutputName + "\n" + ko ("지금 열린 장치: ") + (openedOutputName.isNotEmpty() ? openedOutputName : ko ("없음"))
                                                         + "\n\n" + ko ("공연 전에 [오디오 > 오디오 출력 설정]에서 장치를 확인하세요."), ko ("확인"));
@@ -126,6 +152,7 @@ public:
 
     void shutdown() override
     {
+        removeEscapeHook();
         stopTimer();
         Updater::shutdown();
 
@@ -271,6 +298,35 @@ private:
     std::unique_ptr<GoCueLookAndFeel> lookAndFeel;
     juce::Time launchedAt, lastQuietCheck;
     bool safeMode = false;
+
+    // Esc from anywhere: a plugin editor's own window takes the keyboard and JUCE never sees the key, so a
+    // thread-local keyboard hook watches every window of this thread. The press is not consumed (a dialog still
+    // cancels), the panic itself runs from the message queue.
+    void installEscapeHook()
+    {
+       #if JUCE_WINDOWS
+        escapeHandler = [this]
+        {
+            if (mainWindow != nullptr)
+                mainWindow->getMainComponent().panicFromAnywhere();
+        };
+
+        escapeHook = SetWindowsHookExW (WH_KEYBOARD, escapeHookProc, nullptr, GetCurrentThreadId());
+       #endif
+    }
+
+    void removeEscapeHook()
+    {
+       #if JUCE_WINDOWS
+        if (escapeHook != nullptr)
+        {
+            UnhookWindowsHookEx (escapeHook);
+            escapeHook = nullptr;
+        }
+
+        escapeHandler = nullptr;
+       #endif
+    }
     std::unique_ptr<AppSettings> settings;
     std::unique_ptr<AudioEngine> engine;
     std::unique_ptr<MainWindow> mainWindow;

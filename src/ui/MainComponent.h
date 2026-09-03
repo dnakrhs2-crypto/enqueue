@@ -60,7 +60,7 @@ public:
 
     /** Opens a project file (.enqueue / .gocue) passed on the command line (file association / drag onto the exe). */
     void openProjectFromCommandLine (const juce::String& commandLine);
-    void openProjectFile (const juce::File& file);
+    void openProjectFile (const juce::File& file, bool allowAutoStart = true);
     juce::File getProjectFile() const noexcept { return document.getFile(); }
 
     /** Runs 'action' immediately, or once the user has saved / discarded unsaved changes. */
@@ -69,7 +69,16 @@ public:
         running show by accident), then confirmDiscardChangesThen() runs 'action'. */
     void confirmReplaceProjectThen (std::function<void()> action, const juce::String& question = {});
     /** Nothing plays and show mode is off: the moment for anything that may put a window up (update checks). */
-    bool isIdleForInterruptions() const noexcept { return engine.getNumPlaying() == 0 && ! showModeFlag.load (std::memory_order_acquire); }
+    bool isIdleForInterruptions() const noexcept
+    {
+        return engine.getNumPlaying() == 0 && ! showModeFlag.load (std::memory_order_acquire) && ! controller.hasPendingStarts();
+    }
+
+    /** The keyboard hook (Main.cpp) saw an Esc press anywhere in the app, native plugin editors included: a panic when
+        something plays, is about to start, or show mode is on. A press the main window handled itself is not repeated. */
+    void panicFromAnywhere();
+    /** Off for a launch that must not start cues by itself (safe mode, an update restart, a fallback device). */
+    void setAutoStartOnOpenAllowed (bool allowed) noexcept { autoStartOnOpenAllowed = allowed; }
 
     /** Fires the "start on close" cue (if configured) and runs 'then' once it has finished (or after 2 minutes). */
     void fireCloseCueThen (std::function<void()> then);
@@ -86,9 +95,10 @@ public:
     public:
         explicit OperationalKeys (MainComponent& o) : owner (o) {}
         bool keyPressed (const juce::KeyPress& key, juce::Component* origin) override;
-        bool keyStateChanged (bool, juce::Component*) override { return false; }
+        bool keyStateChanged (bool isKeyDown, juce::Component*) override;
     private:
         MainComponent& owner;
+        bool spaceHeld = false;   // auto-repeat of a held Space is one GO, not many
     };
 
 private:
@@ -207,6 +217,9 @@ private:
     OperationalKeys operationalKeys { *this };
     std::vector<juce::Component::SafePointer<juce::Component>> keyedWindows;   // top-level windows that carry operationalKeys
     int windowScanCountdown = 0;
+    bool escHeld = false;                  // the Esc mapping fires on the down edge only (a held key must not hard-cut)
+    double lastPanicKeyMs = -1.0e9;        // when the main window last handled an Esc press (the hook skips that press)
+    bool autoStartOnOpenAllowed = true;
     void attachOperationalKeysToWindows();
     void installEscapePolicy (juce::Component& root);
 

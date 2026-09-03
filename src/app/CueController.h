@@ -91,6 +91,8 @@ public:
     /** Number of scheduled starts / follows still pending (tests). */
     int getNumPending() const;
     bool hasPendingFor (const juce::Uuid& cueId) const;
+    /** Scheduled starts / follows, running wait cues or playlist groups: something would still start. */
+    bool hasPendingStarts() const noexcept { return ! pending.empty() || ! waits.empty() || ! playlists.empty(); }
     /** Cues that have been started at least once since the last reset (drives the "second colour"). */
     bool hasPlayed (const juce::Uuid& cueId) const { return played.count (cueId) != 0; }
     void clearPlayed() { played.clear(); }

@@ -312,7 +312,7 @@ def main():
 
     # what ships must be what is committed: a stray local edit would be in the installer but in no git history
     if not args.allow_dirty:
-        dirty = run(["git", "status", "--porcelain", "--untracked-files=no"], cwd=ROOT, capture=True)
+        dirty = run(["git", "status", "--porcelain"], cwd=ROOT, capture=True)
         if dirty.strip():
             sys.exit("the working tree has uncommitted changes - commit first (or --allow-dirty for a test build):\n" + dirty)
 
@@ -363,9 +363,20 @@ def main():
     print("feed      :", appcast_url)
 
     if args.publish:
+        # the release is tied to one commit: an annotated tag at HEAD, pushed, and gh refuses to create the tag itself
+        tag_name = "v" + version
+        head = run(["git", "rev-parse", "HEAD"], cwd=ROOT, capture=True).strip()
+        if run(["git", "tag", "--list", tag_name], cwd=ROOT, capture=True).strip():
+            tagged = run(["git", "rev-list", "-n", "1", tag_name], cwd=ROOT, capture=True).strip()
+            if tagged != head:
+                sys.exit("tag %s is on %s, HEAD is %s - bump the version" % (tag_name, tagged[:10], head[:10]))
+        else:
+            run(["git", "tag", "-a", tag_name, "-m", "Enqueue " + version], cwd=ROOT)
+        run(["git", "push", "origin", tag_name], cwd=ROOT)
+
         gh = find_gh()
-        cmd = [gh, "release", "create", "v" + version, str(installer), str(appcast),
-               "--repo", args.repo, "--title", "Enqueue " + version]
+        cmd = [gh, "release", "create", tag_name, str(installer), str(appcast),
+               "--repo", args.repo, "--title", "Enqueue " + version, "--verify-tag"]
         cmd += ["--notes-file", args.notes] if args.notes else ["--generate-notes"]
         run(cmd)
         print("published :", "https://github.com/%s/releases/tag/v%s" % (args.repo, version))

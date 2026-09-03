@@ -273,15 +273,22 @@ public:
             expect (! none.cues()[0].audio.envelope.enabled);
         }
 
-        beginTest ("unknown fields are ignored and a newer version only warns");
+        beginTest ("unknown fields are ignored; a file from a newer Enqueue is refused");
         {
             Project q;
             juce::StringArray warnings;
-            expect (ProjectSerializer::fromJson ("{\"version\":99,\"future\":true,\"cues\":[{\"name\":\"x\",\"mystery\":[1,2],\"audio\":{\"later\":1}}]}",
+            expect (ProjectSerializer::fromJson ("{\"version\":" + juce::String (ProjectSerializer::currentVersion)
+                                                     + ",\"future\":true,\"cues\":[{\"name\":\"x\",\"mystery\":[1,2],\"audio\":{\"later\":1}}]}",
                                                  q, &warnings).wasOk());
             expectEquals ((int) q.cues().size(), 1);
-            expectEquals (warnings.size(), 1);
-            expect (warnings[0].contains ("99"));
+            expectEquals (warnings.size(), 0);
+
+            // a newer file version: what this build cannot read would be dropped by the next save, so it does not open
+            Project future;
+            const auto result = ProjectSerializer::fromJson ("{\"version\":99,\"cues\":[{\"name\":\"x\"}]}", future, &warnings);
+            expect (result.failed());
+            expect (result.getErrorMessage().contains ("99"));
+            expect (result.getErrorMessage().contains ("newer"));
         }
 
         beginTest ("malformed input fails cleanly");

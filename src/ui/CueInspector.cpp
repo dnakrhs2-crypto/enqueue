@@ -1598,7 +1598,7 @@ public:
         auto area = getLocalBounds().reduced (12, 6);
         auto row = area.removeFromTop (26);
         targetLabel.setBounds (row.removeFromLeft (48));
-        targetCombo.setBounds (row.removeFromLeft (240));
+        targetCombo.setBounds (row.removeFromLeft (juce::jlimit (240, 560, row.getWidth() - 430)));   // a long cue name gets the spare width
         row.removeFromLeft (12);
         durationLabel.setBounds (row.removeFromLeft (32));
         durationEditor.setBounds (row.removeFromLeft (84));
@@ -3184,7 +3184,13 @@ void CueInspector::finishEditing()
     if (focused == nullptr || ! isParentOf (focused))
         return;
 
-    focused->giveAwayKeyboardFocus();   // the focus-lost commit runs now, while the fields still show this list's cue
+    // JUCE delivers a text editor's focus-loss callback asynchronously: a save right after this call would still see
+    // the previous value. The commit runs here, now; the later callback finds nothing left to change.
+    if (auto* editor = dynamic_cast<juce::TextEditor*> (focused))
+        if (editor->onFocusLost)
+            editor->onFocusLost();
+
+    focused->giveAwayKeyboardFocus();   // while the fields still show this list's cue
 
     if (onReturnFocus)
         onReturnFocus();                // then the list view (table or cart) takes the keys again

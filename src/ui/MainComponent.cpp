@@ -480,6 +480,7 @@ void MainComponent::getCommandInfo (juce::CommandID commandID, juce::Application
         case CommandIDs::panicAll:
             result.setInfo (ko ("전체 페이드 정지"), ko ("재생 중인 모든 큐를 설정된 시간(기본 2초) 동안 페이드아웃 후 정지. 0.5초 안에 두 번 누르면 즉시 정지"), playback, 0);
             result.addDefaultKeypress (KeyPress::escapeKey, ModifierKeys::noModifiers);
+            result.flags |= juce::ApplicationCommandInfo::wantsKeyUpDownCallbacks;   // the down edge only: a held Esc is one press
             break;
 
         case CommandIDs::hardStopAll:
@@ -604,13 +605,13 @@ void MainComponent::getCommandInfo (juce::CommandID commandID, juce::Application
         case CommandIDs::nextContainer:
             result.setInfo (ko ("다음 리스트/카트"), ko ("오른쪽 탭으로"), cueMenu, 0);
             result.addDefaultKeypress (juce::KeyPress::pageDownKey, ModifierKeys::commandModifier);
-            result.setActive (document.getNumContainers() > 1);
+            result.setActive (document.getNumContainers() > 1 && canEdit);   // show mode: the GO target list stays
             break;
 
         case CommandIDs::previousContainer:
             result.setInfo (ko ("이전 리스트/카트"), ko ("왼쪽 탭으로"), cueMenu, 0);
             result.addDefaultKeypress (juce::KeyPress::pageUpKey, ModifierKeys::commandModifier);
-            result.setActive (document.getNumContainers() > 1);
+            result.setActive (document.getNumContainers() > 1 && canEdit);   // show mode: the GO target list stays
             break;
 
         case CommandIDs::renameContainer:
@@ -830,8 +831,7 @@ void MainComponent::getCommandInfo (juce::CommandID commandID, juce::Application
 
         case CommandIDs::checkForUpdates:
             result.setInfo (ko ("업데이트 확인..."), ko ("GitHub Releases에서 새 버전 확인"), ko ("도움말"), 0);
-            result.setActive (canEdit);   // show mode: the project, devices, patches, plugins and updates are locked
-            result.setActive (Updater::isAvailable());
+            result.setActive (canEdit && Updater::isAvailable());   // show mode: no update UI during a show
             break;
 
         case CommandIDs::showManual:
@@ -882,6 +882,21 @@ bool MainComponent::perform (const InvocationInfo& info)
             break;
 
         case CommandIDs::panicAll:
+            if (info.invocationMethod == InvocationInfo::fromKeyPress)
+            {
+                if (! info.isKeyDown)
+                {
+                    escHeld = false;
+                    break;
+                }
+
+                if (escHeld)
+                    break;   // auto-repeat of a held Esc: not a second press (that would turn the fade into a hard cut)
+
+                escHeld = true;
+                lastPanicKeyMs = juce::Time::getMillisecondCounterHiRes();
+            }
+
             controller.panicAll();
             break;
 
@@ -987,10 +1002,16 @@ bool MainComponent::perform (const InvocationInfo& info)
             break;
 
         case CommandIDs::nextContainer:
+            if (showMode)
+                break;   // the GO target does not change during a show
+
             document.setActiveContainer ((document.getActiveContainer() + 1) % juce::jmax (1, document.getNumContainers()));
             break;
 
         case CommandIDs::previousContainer:
+            if (showMode)
+                break;   // the GO target does not change during a show
+
             document.setActiveContainer ((document.getActiveContainer() + document.getNumContainers() - 1) % juce::jmax (1, document.getNumContainers()));
             break;
 
@@ -2432,7 +2453,7 @@ void MainComponent::openProjectViaDialog()
     });
 }
 
-void MainComponent::openProjectFile (const juce::File& file)
+void MainComponent::openProjectFile (const juce::File& file, bool allowAutoStart)
 {
     // Validate first: a broken file must leave the current project (and its plugin chains) untouched.
     juce::StringArray warnings;
@@ -2469,7 +2490,9 @@ void MainComponent::openProjectFile (const juce::File& file)
     if (! warnings.isEmpty())
         showAlert (ko ("프로젝트를 열었지만 확인이 필요합니다"), warnings.joinIntoString ("\n"), false);
 
-    if (document.settings.startOnOpen)
+    // never after a warning (a missing file, a cleared hotkey: the operator reads that first), never on a launch that
+    // must stay quiet (safe mode, an update restart, a fallback device)
+    if (document.settings.startOnOpen && allowAutoStart && autoStartOnOpenAllowed && warnings.isEmpty())
     {
         if (const int i = findCueIndexByNumber (document.settings.startOnOpenCue); i >= 0)
         {
@@ -2752,7 +2775,9 @@ void MainComponent::confirmReplaceProjectThen (std::function<void()> action, con
 {
     const int playing = engine.getNumPlaying();
 
-    if (playing == 0 && ! showMode)
+    const bool pendingStarts = controller.hasPendingStarts();
+
+    if (playing == 0 && ! showMode && ! pendingStarts)
     {
         confirmDiscardChangesThen (std::move (action));
         return;
@@ -2760,7 +2785,8 @@ void MainComponent::confirmReplaceProjectThen (std::function<void()> action, con
 
     const auto what = question.isNotEmpty() ? question : ko ("다른 프로젝트를 열까요?");
     const auto message = playing > 0 ? ko ("재생 중인 큐 ") + juce::String (playing) + ko ("개가 모두 멈춥니다. ") + what
-                                     : ko ("쇼 모드입니다. ") + what;
+                       : pendingStarts ? ko ("예약된 시작(대기·자동 진행)이 취소됩니다. ") + what
+                                       : ko ("쇼 모드입니다. ") + what;
 
     juce::Component::SafePointer<MainComponent> safeThis (this);
     juce::AlertWindow::showAsync (juce::MessageBoxOptions()
@@ -2867,31 +2893,42 @@ void MainComponent::updateTransportStandby()
 //==============================================================================
 bool MainComponent::OperationalKeys::keyPressed (const juce::KeyPress& key, juce::Component* origin)
 {
-    if (key.getModifiers().isAnyModifierKeyDown())
+    // Esc is the keyboard hook's business (Main.cpp): it sees every window, native plugin editors included.
+    if (key.getModifiers().isAnyModifierKeyDown() || key.getKeyCode() != juce::KeyPress::spaceKey)
         return false;
 
-    if (key.getKeyCode() == juce::KeyPress::escapeKey)
-    {
-        // the panic from anywhere, but only when there is something to stop: an Esc that merely closes a dialog
-        // while nothing plays must not print "전체 페이드 정지". The key is not consumed: the dialog or alert still
-        // sees its Esc (cancel / close), so a show and an edit session both get what they expect.
-        if (owner.engine.getNumPlaying() > 0 || owner.showMode)
-            owner.commands.invokeDirectly (CommandIDs::panicAll, false);
-
+    // a text field that did not consume Space is not being typed into; anything else means GO
+    if (origin != nullptr && (dynamic_cast<juce::TextEditor*> (origin) != nullptr || origin->findParentComponentOfClass<juce::TextEditor>() != nullptr))
         return false;
-    }
 
-    if (key.getKeyCode() == juce::KeyPress::spaceKey)
-    {
-        // a text field that did not consume Space is not being typed into; anything else means GO
-        if (origin != nullptr && (dynamic_cast<juce::TextEditor*> (origin) != nullptr || origin->findParentComponentOfClass<juce::TextEditor>() != nullptr))
-            return false;
+    if (spaceHeld)
+        return true;   // auto-repeat: the key is still down, one GO already went out
 
-        owner.commands.invokeDirectly (CommandIDs::go, false);
-        return true;
-    }
+    spaceHeld = true;
+    owner.commands.invokeDirectly (CommandIDs::go, false);
+    return true;
+}
+
+bool MainComponent::OperationalKeys::keyStateChanged (bool, juce::Component*)
+{
+    if (spaceHeld && ! juce::KeyPress::isKeyCurrentlyDown (juce::KeyPress::spaceKey))
+        spaceHeld = false;
 
     return false;
+}
+
+void MainComponent::panicFromAnywhere()
+{
+    const double now = juce::Time::getMillisecondCounterHiRes();
+
+    if (now - lastPanicKeyMs < 50.0)
+        return;   // this very press: the main window's own Esc mapping already handled it
+
+    if (engine.getNumPlaying() > 0 || showMode || controller.hasPendingStarts())
+    {
+        lastPanicKeyMs = now;
+        controller.panicAll();
+    }
 }
 
 void MainComponent::attachOperationalKeysToWindows()

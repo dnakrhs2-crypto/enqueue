@@ -699,8 +699,6 @@ bool AudioEngine::play (const Cue& cue, const PlayOptions& options, juce::String
         return false;
     }
 
-    openOutputGate();   // a new cue always plays: a panic gate that was closed reopens
-
     const bool wantsAudition = options.audition || options.silent || ! options.patchOverride.isNull();
 
     if (! wantsAudition)
@@ -727,6 +725,7 @@ bool AudioEngine::play (const Cue& cue, const PlayOptions& options, juce::String
 
                 existing->setStartOrder (++startCounter);
                 existing->start();
+                openOutputGate();   // the loaded cue plays now: a closed panic gate reopens
                 return true;
             }
         }
@@ -784,6 +783,7 @@ bool AudioEngine::play (const Cue& cue, const PlayOptions& options, juce::String
     }
 
     players.push_back (std::move (player));
+    openOutputGate();   // a cue is committed: a panic gate that was closed reopens (a refused start leaves it shut)
     return true;
 }
 
@@ -809,6 +809,14 @@ bool AudioEngine::load (const Cue& cue, double startSeconds, juce::String* error
     player->armLoaded();
 
     const juce::ScopedLock sl (lock);
+
+    if (players.size() >= maxPlayers)
+    {
+        if (errorMessage != nullptr)
+            *errorMessage = juce::String::fromUTF8 ("동시 재생 한도(") + juce::String (maxPlayers) + juce::String::fromUTF8 ("개)를 넘었습니다.");
+
+        return false;   // the vector must never grow under the audio lock
+    }
 
     for (auto& existing : players)
         if (existing->getCueId() == cue.id && existing->isLoadedNotStarted())
@@ -940,56 +948,74 @@ void AudioEngine::applyOutputGate (juce::AudioBuffer<float>& output, int numSamp
             outputGateCloseCountdown.store (countdown, std::memory_order_relaxed);
     }
 
-    const float target = (float) outputGateTarget.load (std::memory_order_acquire);
+    const int target = outputGateTarget.load (std::memory_order_acquire);
+    const float targetGain = (float) target;
 
-    if (outputGateSnapOpen.exchange (false, std::memory_order_acq_rel) && target > 0.0f && outputGateGain <= 0.0f)
-        outputGateGain = 1.0f;   // silence behind the gate: open instantly (a fading gate keeps its ramp)
-
-    if (juce::exactlyEqual (outputGateGain, target))
+    if (outputGateSnapOpen.exchange (false, std::memory_order_acq_rel) && target > 0 && outputGateGain <= 0.0f)
     {
-        if (target <= 0.0f)
-        {
-            output.clear (0, numSamples);
-
-            if (resetChainsWhenClosed.exchange (false, std::memory_order_acq_rel))
-                resetAllChainsForPanic();
-        }
-
-        return;
+        outputGateGain = 1.0f;   // silence behind the gate: open instantly (a fading gate keeps its ramp)
+        outputGateSeenTarget = target;
+        outputGateRemaining = 0;
     }
 
-    const float step = (target - outputGateGain) / (float) juce::jmax (1, outputGateRampSamples.load (std::memory_order_relaxed));
-    const float start = outputGateGain;
-    float end = start + step * (float) numSamples;
+    if (target != outputGateSeenTarget)
+    {
+        // a new destination: a linear ramp from the current gain, over exactly rampSamples samples
+        outputGateSeenTarget = target;
+        outputGateRemaining = juce::exactlyEqual (outputGateGain, targetGain) ? 0
+                                                                              : juce::jmax (1, outputGateRampSamples.load (std::memory_order_relaxed));
+    }
 
-    if ((step > 0.0f && end >= target) || (step < 0.0f && end <= target))
-        end = target;
+    if (outputGateRemaining > 0)
+    {
+        const int rampNow = juce::jmin (numSamples, outputGateRemaining);
+        const float start = outputGateGain;
+        const float end = rampNow == outputGateRemaining ? targetGain
+                                                         : start + (targetGain - start) * (float) rampNow / (float) outputGateRemaining;
+        output.applyGainRamp (0, rampNow, start, end);
+        outputGateGain = end;
+        outputGateRemaining -= rampNow;
 
-    output.applyGainRamp (0, numSamples, start, end);
-    outputGateGain = end;
+        if (rampNow < numSamples)   // the ramp ended inside this block: the rest sits at the target
+        {
+            if (targetGain <= 0.0f)
+                output.clear (rampNow, numSamples - rampNow);
+            else if (! juce::exactlyEqual (targetGain, 1.0f))
+                output.applyGain (rampNow, numSamples - rampNow, targetGain);
+        }
+    }
+    else
+    {
+        outputGateGain = targetGain;
+
+        if (targetGain <= 0.0f)
+            output.clear (0, numSamples);
+        else if (! juce::exactlyEqual (targetGain, 1.0f))
+            output.applyGain (0, numSamples, targetGain);
+    }
+
+    // closed after a panic: the plugin chains are reset on the message thread (reset() may allocate or block)
+    if (outputGateGain <= 0.0f && outputGateRemaining == 0 && resetChainsWhenClosed.exchange (false, std::memory_order_acq_rel))
+    {
+        chainResetPending.store (true, std::memory_order_release);
+        triggerAsyncUpdate();
+    }
 }
 
-void AudioEngine::resetAllChainsForPanic() noexcept
+void AudioEngine::resetAllChainsForPanic()
 {
-    // audio thread: the plugins' own reset() clears delay lines and reverb tails; a busy engine lock means the
-    // message thread is rebuilding something, and the reset is taken up again next block
-    const juce::ScopedTryLock sl (lock);
-
-    if (! sl.isLocked())
-    {
-        resetChainsWhenClosed.store (true, std::memory_order_relaxed);
-        return;
-    }
+    // message thread, after the gate closed on a panic: the plugins' reset() clears delay lines and reverb tails.
+    // A cue that started meanwhile keeps its chains as they are: the new cue matters more than a stale tail.
+    const juce::ScopedLock sl (lock);
 
     for (auto& p : players)
-        if (auto* chain = p->getChain())
-            chain->resetProcessing();
-
-    masterChain.resetProcessing();
+        if (! p->hasFinished())
+            return;
 
     for (auto& entry : cueChains)
         entry.second->resetProcessing();
 
+    masterChain.resetProcessing();
     forEachPatchChain ([] (PluginChain& chain) { chain.resetProcessing(); });
 }
 
@@ -1004,12 +1030,21 @@ void AudioEngine::pause (const juce::Uuid& cueId)
 
 void AudioEngine::resume (const juce::Uuid& cueId)
 {
-    openOutputGate();
-    const juce::ScopedLock sl (lock);
+    bool resumed = false;
 
-    for (auto& p : players)
-        if (p->getCueId() == cueId && ! p->hasFinished())
-            p->requestResume();
+    {
+        const juce::ScopedLock sl (lock);
+
+        for (auto& p : players)
+            if (p->getCueId() == cueId && ! p->hasFinished())
+            {
+                p->requestResume();
+                resumed = true;
+            }
+    }
+
+    if (resumed)
+        openOutputGate();   // something plays again: a closed panic gate reopens
 }
 
 void AudioEngine::pauseAll()
@@ -1023,11 +1058,21 @@ void AudioEngine::pauseAll()
 
 void AudioEngine::resumeAll()
 {
-    const juce::ScopedLock sl (lock);
+    bool resumed = false;
 
-    for (auto& p : players)
-        if (! p->hasFinished())
-            p->requestResume();
+    {
+        const juce::ScopedLock sl (lock);
+
+        for (auto& p : players)
+            if (! p->hasFinished())
+            {
+                p->requestResume();
+                resumed = true;
+            }
+    }
+
+    if (resumed)
+        openOutputGate();
 }
 
 bool AudioEngine::isPaused (const juce::Uuid& cueId) const
@@ -1121,7 +1166,7 @@ void AudioEngine::setLiveRegion (const juce::Uuid& cueId, double startSeconds, d
         const juce::ScopedLock sl (lock);
 
         for (auto& p : players)
-            if (p->getCueId() == cueId && ! p->hasFinished() && count < 16)
+            if (p->getCueId() == cueId && (! p->hasFinished() || p->hasEndedNaturally()) && count < 16)
                 found[count++] = p.get();
     }
 
@@ -1147,7 +1192,7 @@ void AudioEngine::setLivePlayCount (const juce::Uuid& cueId, int playCount, bool
         const juce::ScopedLock sl (lock);   // collect only: the layout rebuild must not hold up the audio callback
 
         for (auto& p : players)
-            if (p->getCueId() == cueId && ! p->hasFinished() && count < 16)
+            if (p->getCueId() == cueId && (! p->hasFinished() || p->hasEndedNaturally()) && count < 16)
                 found[count++] = p.get();
     }
 
@@ -1195,7 +1240,7 @@ void AudioEngine::setLiveSlices (const juce::Uuid& cueId, const std::vector<Slic
         const juce::ScopedLock sl (lock);
 
         for (auto& p : players)
-            if (p->getCueId() == cueId && ! p->hasFinished() && count < 16)
+            if (p->getCueId() == cueId && (! p->hasFinished() || p->hasEndedNaturally()) && count < 16)
                 found[count++] = p.get();
     }
 
@@ -1568,8 +1613,8 @@ void AudioEngine::renderBlock (juce::AudioBuffer<float>& output, int numSamples,
 
             for (auto& p : players)
             {
-                if (p->hasFinished())
-                    continue;
+                if (p->hasFinished() && ! p->hasPendingLiveEdit())
+                    continue;   // a live edit that arrived after the natural end revives the player in renderNextBlock
 
                 if (p->isMic())
                     p->setInputBlock (inputs, numInputs, offset);
@@ -1612,7 +1657,7 @@ void AudioEngine::reapFinishedPlayers()
 
         for (auto it = players.begin(); it != players.end();)
         {
-            if ((*it)->hasFinished())
+            if ((*it)->hasFinished() && ! (*it)->hasPendingLiveEdit())
             {
                 dead.push_back (std::move (*it));
                 it = players.erase (it);
@@ -1644,6 +1689,8 @@ void AudioEngine::audioDeviceIOCallbackWithContext (const float* const* inputCha
                 juce::FloatVectorOperations::clear (outputChannelData[ch], numSamples);
 
         outputGateGain = 0.0f;
+        outputGateRemaining = 0;
+        outputGateSeenTarget = 0;
         return;
     }
 
@@ -1719,6 +1766,9 @@ void AudioEngine::audioDeviceError (const juce::String& errorMessage)
 
 void AudioEngine::handleAsyncUpdate()
 {
+    if (chainResetPending.exchange (false, std::memory_order_acq_rel))
+        resetAllChainsForPanic();
+
     reapFinishedPlayers();
 }
 

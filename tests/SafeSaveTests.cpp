@@ -41,8 +41,7 @@ public:
             const auto file = root.getChildFile ("show.enqueue");
             expect (ProjectSerializer::save (p, file).wasOk());
             expect (file.existsAsFile());
-            expect (! file.getSiblingFile ("show.enqueue.saving~").exists());
-            expectEquals (root.getNumberOfChildFiles (juce::File::findFiles), 1);
+            expectEquals (root.getNumberOfChildFiles (juce::File::findFiles), 1);   // no temp file stays behind
 
             Project q;
             expect (ProjectSerializer::load (file, q).wasOk());
@@ -50,7 +49,6 @@ public:
 
             p.name = "Second";
             expect (ProjectSerializer::save (p, file).wasOk());   // replaces the existing file
-            expect (! file.getSiblingFile ("show.enqueue.saving~").exists());
             expectEquals (root.getNumberOfChildFiles (juce::File::findFiles), 1);
 
             Project r;
@@ -93,6 +91,24 @@ public:
             const auto truncated = root.getChildFile ("truncated.enqueue");
             expect (truncated.replaceWithText ("{\"app\": \"Enqueue\", \"version\": 3, \"cues\": ["));
             expect (ProjectSerializer::load (truncated, q).failed());
+
+            const auto versionOnly = root.getChildFile ("versionOnly.enqueue");   // an object with a version but no cue list is not a show
+            expect (versionOnly.replaceWithText ("{\"version\": 999}"));
+            expect (ProjectSerializer::load (versionOnly, q).failed());
+
+            const auto trailing = root.getChildFile ("trailing.enqueue");
+            expect (trailing.replaceWithText ("{\"app\": \"Enqueue\", \"version\": 3, \"cues\": []} garbage"));
+            expect (ProjectSerializer::load (trailing, q).failed());
+
+            const auto future = root.getChildFile ("future.enqueue");   // saved by a newer Enqueue: refused, not silently downgraded
+            expect (future.replaceWithText ("{\"app\": \"Enqueue\", \"version\": 9999, \"cues\": []}"));
+            const auto futureResult = ProjectSerializer::load (future, q);
+            expect (futureResult.failed());
+            expect (futureResult.getErrorMessage().contains ("newer"));
+
+            const auto minimal = root.getChildFile ("minimal.enqueue");   // an empty cue list is a (blank) show
+            expect (minimal.replaceWithText ("{\"app\": \"Enqueue\", \"version\": 3, \"cues\": []}"));
+            expect (ProjectSerializer::load (minimal, q).wasOk());
         }
 
         beginTest ("a show folder copied elsewhere plays the media that travelled with it, even if the original still exists");
