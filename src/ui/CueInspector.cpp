@@ -819,7 +819,7 @@ public:
         duckSecondsEditor.onFocusLost = [this] { commitDuck(); };
         addAndMakeVisible (duckSecondsEditor);
 
-        styleLabel (hint, ko ("GO 사이 최소 시간(더블 GO 방지)과 전체 페이드 정지 시간은 파일 > 프로젝트 설정에 있습니다"), 11.0f);
+        styleLabel (hint, ko ("GO 사이 최소 시간(더블 GO 방지)과 전체 페이드 정지 시간은 파일 > 프로젝트 설정에 있습니다"), 13.0f);
         addAndMakeVisible (hint);
     }
 
@@ -1035,7 +1035,7 @@ public:
         silenceButton.onClick = [this] { applyToLevels (ko ("전부 무음"), [] (Cue& c) { c.levels.silenceCrosspoints(); }); };
         addAndMakeVisible (silenceButton);
 
-        styleLabel (hint, ko ("드래그 = 레벨 (Shift = 0.1 dB) · 더블클릭 = 기본값 · 숫자 입력 (부호 없으면 음수, 빈칸 = 무음) · 우클릭 = 겡 · 재생 중에도 즉시 반영. 행 = 파일 채널, 열 = 패치의 큐 출력 (귀퉁이 표시 = 장치에 연결 안 됨)"), 11.0f);
+        styleLabel (hint, ko ("드래그 = 레벨 (Shift = 0.1 dB) · 더블클릭 = 기본값 · 숫자 입력 (부호 없으면 음수, 빈칸 = 무음) · 우클릭 = 겡 · 재생 중에도 즉시 반영. 행 = 파일 채널, 열 = 패치의 큐 출력 (귀퉁이 표시 = 장치에 연결 안 됨)"), 13.0f);
         addAndMakeVisible (hint);
 
         viewport.setViewedComponent (&grid, false);
@@ -1238,7 +1238,7 @@ class CueInspector::TrimPanel : public juce::Component
 public:
     TrimPanel (ProjectDocument& doc, AudioEngine& e) : document (doc), cues (doc.cues), engine (e)
     {
-        styleLabel (hint, ko ("트림은 레벨 매트릭스 뒤에 더해지는 고정 오프셋입니다 (페이드 큐의 영향을 받지 않음). 더블클릭 = 0 dB"), 11.0f);
+        styleLabel (hint, ko ("트림은 레벨 매트릭스 뒤에 더해지는 고정 오프셋입니다 (페이드 큐의 영향을 받지 않음). 더블클릭 = 0 dB"), 13.0f);
         addAndMakeVisible (hint);
 
         styleLabel (mainLabel, ko ("메인 트림 (dB)"));
@@ -1453,7 +1453,7 @@ public:
         previewToggle.onClick = [this] { togglePreview (previewToggle.getToggleState()); };
         addAndMakeVisible (previewToggle);
 
-        styleLabel (hint, ko ("노란 점 = 활성 칸(페이드가 바꾸는 값), 빗금 = 제외. Alt+클릭 또는 우클릭으로 활성/비활성. 값 편집은 레벨 탭과 같음"), 11.0f);
+        styleLabel (hint, ko ("노란 점 = 활성 칸(페이드가 바꾸는 값), 빗금 = 제외. Alt+클릭 또는 우클릭으로 활성/비활성. 값 편집은 레벨 탭과 같음"), 13.0f);
         addAndMakeVisible (hint);
 
         viewport.setViewedComponent (&grid, false);
@@ -1573,6 +1573,29 @@ public:
         sized.resizeActive (inputs, outputs);
         grid.setLabels (inputNames, outputNames);
         grid.setLevels (f.mainDb, goals);
+
+        {
+            // the target's cue outputs that reach no device output (Windows Audio: 1-2 only) show as dead here as well
+            std::vector<bool> connected;
+
+            if (target)
+            {
+                const auto& patch = document.patchForCue (*target);
+                const int deviceOutputs = engine.getNumDeviceOutputs();
+
+                for (int k = 0; k < outputs; ++k)
+                {
+                    bool reaches = false;
+
+                    for (int d = 0; d < deviceOutputs && ! reaches; ++d)
+                        reaches = patch.routingGain (k, d) > 0.0f;
+
+                    connected.push_back (reaches);
+                }
+            }
+
+            grid.setOutputConnected (connected);
+        }
         grid.setActiveFlags (&sized.mainActive, &sized.inputActive, &sized.outputActive, &sized.crosspointActive);
         grid.setEditable (enabled && f.fadeLevels);
     }
@@ -1936,7 +1959,7 @@ class CueInspector::FadeParamsPanel : public juce::Component
 public:
     FadeParamsPanel (ProjectDocument& doc, AudioEngine& e) : document (doc), cues (doc.cues), engine (e)
     {
-        styleLabel (hint, ko ("대상 큐의 VST3 인서트 파라미터. 체크한 파라미터가 페이드 시간 동안 현재값에서 목표값으로 움직입니다 (큐 출력·장치 출력 인서트는 불가)"), 11.0f);
+        styleLabel (hint, ko ("대상 큐의 VST3 인서트 파라미터. 체크한 파라미터가 페이드 시간 동안 현재값에서 목표값으로 움직입니다 (큐 출력·장치 출력 인서트는 불가)"), 13.0f);
         addAndMakeVisible (hint);
         viewport.setViewedComponent (&strip, false);
         viewport.setScrollBarsShown (true, false);
@@ -2219,7 +2242,7 @@ public:
         stopToggle.onClick = [this] { const bool on = stopToggle.getToggleState(); edit (ko ("디밴프: 대상 정지"), [on] (Cue& c) { c.devamp.stopTarget = on; }); };
         addAndMakeVisible (stopToggle);
 
-        styleLabel (hint, ko ("디밴프 = 루프 중인 큐를 음악적으로 끝내기. 실행 시점에 대상이 재생 중이어야 합니다 (아니면 실패 상태 메시지)."), 11.0f);
+        styleLabel (hint, ko ("디밴프 = 루프 중인 큐를 음악적으로 끝내기. 실행 시점에 대상이 재생 중이어야 합니다 (아니면 실패 상태 메시지)."), 13.0f);
         addAndMakeVisible (hint);
     }
 
@@ -2353,9 +2376,9 @@ public:
         countEditor.onFocusLost = [this] { commit(); };
         addAndMakeVisible (countEditor);
 
-        styleLabel (deviceLabel, "", 12.0f);
+        styleLabel (deviceLabel, "", 14.0f);
         addAndMakeVisible (deviceLabel);
-        styleLabel (hint, ko ("장치 입력이 레벨 탭의 행이 됩니다 (마이크 큐는 정지할 때까지 재생, 입력 1~32). 마이크 큐가 있으면 필요한 입력을 자동으로 엽니다. 재생 중에 바꾼 입력 채널은 다음 시작부터 적용됩니다."), 11.0f);
+        styleLabel (hint, ko ("장치 입력이 레벨 탭의 행이 됩니다 (마이크 큐는 정지할 때까지 재생, 입력 1~32). 마이크 큐가 있으면 필요한 입력을 자동으로 엽니다. 재생 중에 바꾼 입력 채널은 다음 시작부터 적용됩니다."), 13.0f);
         addAndMakeVisible (hint);
     }
 
@@ -2501,7 +2524,7 @@ public:
         styleLabel (secondsUnit, ko ("초"));
         addAndMakeVisible (secondsUnit);
 
-        styleLabel (hint, ko ("제어 큐는 실행되는 순간 한 번 동작합니다. 대기 큐 뒤에 자동 팔로우를 걸면 그 시간 뒤에 다음 큐가 시작됩니다."), 11.0f);
+        styleLabel (hint, ko ("제어 큐는 실행되는 순간 한 번 동작합니다. 대기 큐 뒤에 자동 팔로우를 걸면 그 시간 뒤에 다음 큐가 시작됩니다."), 13.0f);
         addAndMakeVisible (hint);
     }
 
@@ -2698,7 +2721,7 @@ public:
         styleLabel (crossfadeUnit, ko ("초"));
         addAndMakeVisible (crossfadeUnit);
 
-        styleLabel (hint, ko ("타임라인: 아래 막대를 끌어 자식의 시작(프리웨이트)을 바꿉니다. 막대 선택 후 Alt+←/→ = 0.1 s, Shift+Alt = 0.01 s. 자식은 그룹 아래로 끌어다 넣거나 Ctrl+G로 묶습니다."), 11.0f);
+        styleLabel (hint, ko ("타임라인: 아래 막대를 끌어 자식의 시작(프리웨이트)을 바꿉니다. 막대 선택 후 Alt+←/→ = 0.1 s, Shift+Alt = 0.01 s. 자식은 그룹 아래로 끌어다 넣거나 Ctrl+G로 묶습니다."), 13.0f);
         addAndMakeVisible (hint);
         addAndMakeVisible (timeline);
     }
@@ -2871,8 +2894,9 @@ private:
                 }
 
                 g.setColour (juce::Colours::black.withAlpha (0.8f));
-                g.setFont (juce::Font (juce::FontOptions (13.0f)));
-                g.drawText (formatTimeMs (c.preWaitSeconds), bar.toNearestInt().withTrimmedLeft (4), juce::Justification::centredLeft, true);
+                g.setFont (juce::Font (juce::FontOptions (h < 20 ? 11.0f : 13.0f)));   // the text spans the row, not the bar
+                g.drawText (formatTimeMs (c.preWaitSeconds), juce::Rectangle<int> ((int) bar.getX() + 4, y, juce::jmax (0, (int) bar.getWidth() - 4), h),
+                            juce::Justification::centredLeft, true);
                 y += h;
             }
 
@@ -3026,7 +3050,7 @@ public:
     EffectsPanel (ProjectDocument& doc, AudioEngine& e, PluginWindowManager& windows)
         : document (doc), cues (doc.cues), engine (e), chainStrip (e, windows)
     {
-        styleLabel (hint, ko ("이 큐만 통과하는 VST3 플러그인 — ①→②→③ 순서대로 직렬 처리(1번을 거친 소리가 2번으로). < > 로 순서 변경, 활성/비활성으로 켜고 끔. 신호 흐름: 파일 → 페이드 → 게인 → 플러그인 → 믹스"), 12.0f);
+        styleLabel (hint, ko ("이 큐만 통과하는 VST3 플러그인 — ①→②→③ 순서대로 직렬 처리(1번을 거친 소리가 2번으로). < > 로 순서 변경, 활성/비활성으로 켜고 끔. 신호 흐름: 파일 → 페이드 → 게인 → 플러그인 → 믹스"), 14.0f);
         addAndMakeVisible (hint);
 
         chainStrip.performEdit = [this] (const juce::String& name, const std::function<void()>& edit)
@@ -3076,6 +3100,8 @@ private:
 CueInspector::CueInspector (ProjectDocument& doc, AudioEngine& e, AppSettings& s, PluginWindowManager& windows)
     : document (doc), cues (doc.cues), engine (e), settings (s)
 {
+    engine.getDeviceManager().addChangeListener (this);   // dead output columns follow the device
+
     title.setFont (juce::Font (juce::FontOptions (16.0f, juce::Font::bold)));
     title.setColour (juce::Label::textColourId, Palette::dimText);
     addAndMakeVisible (title);
@@ -3130,6 +3156,8 @@ CueInspector::CueInspector (ProjectDocument& doc, AudioEngine& e, AppSettings& s
 
 CueInspector::~CueInspector()
 {
+    engine.getDeviceManager().removeChangeListener (this);
+
     cues.removeListener (this);
     tabs.clearTabs();
 }

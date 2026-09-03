@@ -6,7 +6,7 @@
 
 namespace gocue::SplitLayout
 {
-    constexpr int minInspectorHeight = 220;
+    constexpr int minInspectorHeight = 236;   // 26 px rows (2026-09-03)
     constexpr int minTableHeight = 140;
     constexpr int minActiveCuesWidth = 260;
     constexpr int minTableWidth = 420;

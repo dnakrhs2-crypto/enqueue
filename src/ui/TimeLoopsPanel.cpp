@@ -516,23 +516,24 @@ void TimeLoopsPanel::resized()
     const int rowHeight = 24;
 
     auto row = area.removeFromTop (rowHeight);
+    // 834 px in total: fits the 840 px inside the minimum window width
     startLabel.setBounds (row.removeFromLeft (34));
     startEditor.setBounds (row.removeFromLeft (84));
-    row.removeFromLeft (12);
+    row.removeFromLeft (8);
     endLabel.setBounds (row.removeFromLeft (24));
     endEditor.setBounds (row.removeFromLeft (84));
-    row.removeFromLeft (12);
-    lengthLabel.setBounds (row.removeFromLeft (260));
+    row.removeFromLeft (8);
+    lengthLabel.setBounds (row.removeFromLeft (190));
     row.removeFromLeft (8);
     countLabel.setBounds (row.removeFromLeft (64));
     countEditor.setBounds (row.removeFromLeft (52));
     row.removeFromLeft (6);
-    infiniteToggle.setBounds (row.removeFromLeft (92));
+    infiniteToggle.setBounds (row.removeFromLeft (84));
     row.removeFromLeft (8);
     rateLabel.setBounds (row.removeFromLeft (34));
     rateEditor.setBounds (row.removeFromLeft (56));
     row.removeFromLeft (6);
-    pitchToggle.setBounds (row.removeFromLeft (90));
+    pitchToggle.setBounds (row.removeFromLeft (84));
 
     area.removeFromTop (4);
     row = area.removeFromTop (rowHeight);

@@ -24,6 +24,7 @@ namespace gocue
     트리거 (second trigger, wall clock, fade-stop-others, duck) / 플러그인 (VST3 insert chain).
     Every edit goes through ProjectDocument::perform so it is undoable. */
 class CueInspector : public juce::Component,
+                     private juce::ChangeListener,
                      private CueList::Listener
 {
 public:
@@ -59,6 +60,9 @@ public:
         half-typed number lands on the cue it was typed for. */
     void finishEditing();
 
+    /** The audio device or the patches changed: the level/fade matrices recompute which outputs are dead. */
+    void refreshDeviceDependent() { refresh(); }
+
     void resized() override;
     void paint (juce::Graphics& g) override;
 
@@ -80,6 +84,7 @@ private:
     /** Installs the tab set for the selected cue's type (0 audio / 1 fade / 2 devamp). */
     void rebuildTabs (int wanted);
 
+    void changeListenerCallback (juce::ChangeBroadcaster*) override { refresh(); }   // the device manager: a new device or channel set
     void cueSelectionChanged (int) override { refresh(); }
     void cueChanged (int index) override;
     void cueListStructureChanged() override { refresh(); }

@@ -13,7 +13,7 @@ CurveEditor::CurveEditor()
     {
         l.setText (ko (text), juce::dontSendNotification);
         l.setColour (juce::Label::textColourId, Palette::dimText);
-        l.setFont (juce::Font (juce::FontOptions (13.0f)));
+        l.setFont (juce::Font (juce::FontOptions (15.0f)));
         addAndMakeVisible (l);
     };
 
@@ -21,7 +21,7 @@ CurveEditor::CurveEditor()
     label (intensityLabel, "강도");
     label (domainLabel, "오디오 도메인");
     label (hint, "S커브 = 부드러운 시작·끝 · 파라메트릭 = 강도(1 = 직선, 클수록 늦게 출발; 대칭 켜면 양끝 완만) · 커스텀 = 캔버스 클릭으로 점 추가, 드래그 이동, 더블클릭/Delete 삭제. 이퀄파워 = 파라메트릭 0.5 + 리니어, 이퀄게인 = 직선 + 리니어");
-    hint.setFont (juce::Font (juce::FontOptions (11.0f)));
+    hint.setFont (juce::Font (juce::FontOptions (13.0f)));
 
     shapeBox.addItem (ko ("S커브"), 1);
     shapeBox.addItem (ko ("파라메트릭"), 2);
@@ -146,7 +146,7 @@ void CurveEditor::notify (bool finished)
 void CurveEditor::resized()
 {
     auto area = getLocalBounds().reduced (12, 6);
-    auto row = area.removeFromTop (24);
+    auto row = area.removeFromTop (26);
     shapeLabel.setBounds (row.removeFromLeft (36));
     shapeBox.setBounds (row.removeFromLeft (120));
     row.removeFromLeft (12);
@@ -160,7 +160,7 @@ void CurveEditor::resized()
     row.removeFromLeft (12);
     resetButton.setBounds (row.removeFromLeft (110));
     area.removeFromTop (4);
-    hint.setBounds (area.removeFromTop (16));
+    hint.setBounds (area.removeFromTop (18));
     area.removeFromTop (4);
     canvas.setBounds (area);
 }
@@ -240,7 +240,7 @@ void CurveEditor::Canvas::paint (juce::Graphics& g)
     }
 
     g.setColour (Palette::dimText);
-    g.setFont (juce::Font (juce::FontOptions (11.0f)));
+    g.setFont (juce::Font (juce::FontOptions (13.0f)));
     g.drawText (ko ("시간 →"), r.withTrimmedTop (r.getHeight() - 14.0f).withTrimmedLeft (r.getWidth() - 50.0f).toNearestInt(), juce::Justification::centredRight, false);
     g.drawText (ko ("완료 ↑"), juce::Rectangle<int> ((int) r.getX() + 2, (int) r.getY() + 2, 44, 14), juce::Justification::centredLeft, false);
 }

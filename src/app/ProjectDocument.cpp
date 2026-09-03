@@ -300,6 +300,9 @@ void ProjectDocument::setPatches (std::vector<AudioPatch> newPatches)
 
     dirty = true;
     notify();
+
+    if (onPatchesChanged)
+        onPatchesChanged();
 }
 
 const AudioPatch* ProjectDocument::findPatch (const juce::Uuid& id) const noexcept

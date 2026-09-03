@@ -7,7 +7,7 @@ namespace gocue
 
 namespace
 {
-    constexpr int slotWidth = 172;
+    constexpr int slotWidth = 196;
     constexpr int slotGap = 26;   // room for the arrow between slots
     constexpr int slotHeight = 54;
 }

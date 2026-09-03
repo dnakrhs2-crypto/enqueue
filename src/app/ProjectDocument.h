@@ -82,6 +82,8 @@ public:
     void setCueNumber (const juce::Uuid& id, const juce::String& number);
     /** Replaces the audio patches (not an undo step either). An empty list gets the default patch. */
     void setPatches (std::vector<AudioPatch> newPatches);
+    /** Called after setPatches() (the inspector recomputes which cue outputs reach the device). */
+    std::function<void()> onPatchesChanged;
     const AudioPatch* findPatch (const juce::Uuid& id) const noexcept;
     /** The cue's patch, falling back to the default patch. */
     const AudioPatch& patchForCue (const Cue& cue) const noexcept;

@@ -365,17 +365,17 @@ void LevelMatrixComponent::paint (juce::Graphics& g)
         if (! editable)
             fill = fill.withAlpha (0.5f);
 
-        // a whole column goes grey when its cue output reaches no device output: the value is kept (it counts
-        // again on a wider device) but it does nothing right now
-        const bool dead = c.out >= 0 && c.out < (int) outputConnected.size() && ! outputConnected[(size_t) c.out];
-
-        if (dead)
-            fill = fill.withAlpha (0.12f);
-
         const bool active = isActive (c);
 
         if (! active)
             fill = fill.withAlpha (0.35f);
+
+        // a whole column goes grey when its cue output reaches no device output: the value is kept (it counts
+        // again on a wider device) but it does nothing right now. Applied last so nothing lifts it again.
+        const bool dead = c.out >= 0 && c.out < (int) outputConnected.size() && ! outputConnected[(size_t) c.out];
+
+        if (dead)
+            fill = fill.withAlpha (0.12f);
 
         g.setColour (fill);
         g.fillRoundedRectangle (r.toFloat(), 3.0f);
