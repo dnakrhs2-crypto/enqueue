@@ -11,7 +11,7 @@ AudioEngine::AudioEngine (int readAhead)
     formatManager.registerBasicFormats();
 
     if (MediaFoundationAudioFormat::isAvailable())
-        formatManager.registerFormat (new MediaFoundationAudioFormat(), false);   // AAC / M4A / MP4 audio
+        formatManager.registerFormat (new MediaFoundationAudioFormat(), false);   // AAC / M4A / MP4 / WMA audio
 
     mixBuffer.setSize (2, blockSize.load());
     playerBuffer.setSize (CuePlayer::maxChannels, blockSize.load());

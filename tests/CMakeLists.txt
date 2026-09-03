@@ -13,6 +13,7 @@ target_sources(EnqueueTests PRIVATE
     SettingsMigrationTests.cpp
     ProjectFileExtensionTests.cpp
     LiveLoopTests.cpp
+    WmaDecodeTests.cpp
     ResamplerTests.cpp
     CueListTests.cpp
     CueNumberingTests.cpp

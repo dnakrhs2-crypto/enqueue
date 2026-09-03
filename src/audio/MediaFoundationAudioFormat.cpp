@@ -393,7 +393,7 @@ namespace
 
 //==============================================================================
 MediaFoundationAudioFormat::MediaFoundationAudioFormat()
-    : juce::AudioFormat ("AAC/M4A (Media Foundation)", { ".m4a", ".aac", ".mp4", ".m4b" })
+    : juce::AudioFormat ("AAC/M4A/WMA (Media Foundation)", { ".m4a", ".aac", ".mp4", ".m4b", ".wma" })   // WMA decodes through the same Windows codecs
 {
 }
 
