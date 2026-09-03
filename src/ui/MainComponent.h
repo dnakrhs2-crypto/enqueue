@@ -64,6 +64,11 @@ public:
 
     /** Runs 'action' immediately, or once the user has saved / discarded unsaved changes. */
     void confirmDiscardChangesThen (std::function<void()> action);
+    /** Replacing the whole project while cues play is asked about first (a double-clicked file must not end a
+        running show by accident), then confirmDiscardChangesThen() runs 'action'. */
+    void confirmReplaceProjectThen (std::function<void()> action);
+    /** Nothing plays and show mode is off: the moment for anything that may put a window up (update checks). */
+    bool isIdleForInterruptions() const noexcept { return engine.getNumPlaying() == 0 && ! showMode; }
 
     /** Fires the "start on close" cue (if configured) and runs 'then' once it has finished (or after 2 minutes). */
     void fireCloseCueThen (std::function<void()> then);

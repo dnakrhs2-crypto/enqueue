@@ -399,7 +399,7 @@ void MainComponent::filesDropped (const juce::StringArray& files, int, int)
 
         if (file.existsAsFile() && file.hasFileExtension (ProjectSerializer::openableExtensions))
         {
-            confirmDiscardChangesThen ([this, file] { openProjectFile (file); });
+            confirmReplaceProjectThen ([this, file] { openProjectFile (file); });
             return;
         }
     }
@@ -1074,11 +1074,11 @@ bool MainComponent::perform (const InvocationInfo& info)
             break;
 
         case CommandIDs::newProject:
-            confirmDiscardChangesThen ([this] { newProject(); });
+            confirmReplaceProjectThen ([this] { newProject(); });
             break;
 
         case CommandIDs::openProject:
-            confirmDiscardChangesThen ([this] { openProjectViaDialog(); });
+            confirmReplaceProjectThen ([this] { openProjectViaDialog(); });
             break;
 
         case CommandIDs::saveProject:
@@ -2583,7 +2583,7 @@ void MainComponent::openProjectFromCommandLine (const juce::String& commandLine)
 
         if (file.existsAsFile() && file.hasFileExtension (ProjectSerializer::openableExtensions))
         {
-            openProjectFile (file);
+            confirmReplaceProjectThen ([this, file] { openProjectFile (file); });   // never silently over a running show
             return;
         }
     }
@@ -2728,6 +2728,31 @@ void MainComponent::saveProject (bool saveAs, std::function<void (bool)> then)
 
         writeTo (file);
     });
+}
+
+void MainComponent::confirmReplaceProjectThen (std::function<void()> action)
+{
+    const int playing = engine.getNumPlaying();
+
+    if (playing == 0)
+    {
+        confirmDiscardChangesThen (std::move (action));
+        return;
+    }
+
+    juce::Component::SafePointer<MainComponent> safeThis (this);
+    juce::AlertWindow::showAsync (juce::MessageBoxOptions()
+                                      .withIconType (juce::MessageBoxIconType::WarningIcon)
+                                      .withTitle (ko ("재생 중인 큐가 있습니다"))
+                                      .withMessage (ko ("재생 중인 큐 ") + juce::String (playing) + ko ("개가 모두 멈춥니다. 다른 프로젝트를 열까요?"))
+                                      .withButton (ko ("모두 멈추고 열기"))
+                                      .withButton (ko ("취소"))
+                                      .withAssociatedComponent (this),
+                                  [safeThis, action] (int result)
+                                  {
+                                      if (safeThis != nullptr && result == 1)
+                                          safeThis->confirmDiscardChangesThen (action);
+                                  });
 }
 
 void MainComponent::confirmDiscardChangesThen (std::function<void()> action)

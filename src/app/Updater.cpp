@@ -66,7 +66,7 @@ void Updater::initialise (const juce::String& companyName, const juce::String& a
     win_sparkle_set_eddsa_public_key (GOCUE_EDDSA_PUBLIC_KEY);
     win_sparkle_set_can_shutdown_callback (canShutdownThunk);
     win_sparkle_set_shutdown_request_callback (shutdownRequestThunk);
-    win_sparkle_set_automatic_check_for_updates (1);   // silent background check; UI only when an update exists
+    win_sparkle_set_automatic_check_for_updates (0);   // no built-in timer: the app checks at idle moments (Main.cpp), never during a show
     win_sparkle_init();
     initialised = true;
    #else
@@ -79,6 +79,14 @@ void Updater::checkForUpdatesWithUI()
    #if GOCUE_HAS_WINSPARKLE
     if (initialised)
         win_sparkle_check_update_with_ui();
+   #endif
+}
+
+void Updater::checkQuietly()
+{
+   #if GOCUE_HAS_WINSPARKLE
+    if (initialised)
+        win_sparkle_check_update_without_ui();
    #endif
 }
 

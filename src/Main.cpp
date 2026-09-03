@@ -11,7 +11,8 @@ namespace gocue
 {
 
 class GoCueApplication : public juce::JUCEApplication,
-                         private juce::ChangeListener
+                         private juce::ChangeListener,
+                         private juce::Timer
 {
 public:
     GoCueApplication() = default;
@@ -59,7 +60,9 @@ public:
         Updater::Callbacks updaterCallbacks;
         updaterCallbacks.canShutdown = [this]
         {
-            return mainWindow == nullptr || ! mainWindow->getMainComponent().hasUnsavedChanges();
+            // the installer must never close a running show or unsaved work
+            return mainWindow == nullptr
+                || (! mainWindow->getMainComponent().hasUnsavedChanges() && mainWindow->getMainComponent().isIdleForInterruptions());
         };
         updaterCallbacks.requestShutdown = []
         {
@@ -70,6 +73,8 @@ public:
             });
         };
         Updater::initialise ("Gomtwigim", getApplicationName(), getApplicationVersion(), std::move (updaterCallbacks));
+        launchedAt = juce::Time::getCurrentTime();
+        startTimer (30 * 1000);   // update checks at idle moments only (see timerCallback)
     }
 
     /** First run of a new version: say so (the silent auto-update shows nothing else). A fresh install stays quiet. */
@@ -94,6 +99,7 @@ public:
 
     void shutdown() override
     {
+        stopTimer();
         Updater::shutdown();
 
         if (engine != nullptr)
@@ -146,6 +152,25 @@ public:
     }
 
 private:
+    /** An update check runs 20 s after launch and then once a day, but only while nothing plays and show mode is
+        off: the update dialog must not appear in the middle of a show. */
+    void timerCallback() override
+    {
+        if (mainWindow == nullptr || ! Updater::isAvailable() || ! mainWindow->getMainComponent().isIdleForInterruptions())
+            return;
+
+        const auto now = juce::Time::getCurrentTime();
+
+        if ((now - launchedAt).inSeconds() < 20.0)
+            return;
+
+        if (lastQuietCheck != juce::Time() && (now - lastQuietCheck).inHours() < 24.0)
+            return;
+
+        lastQuietCheck = now;
+        Updater::checkQuietly();
+    }
+
     void changeListenerCallback (juce::ChangeBroadcaster*) override
     {
         if (engine != nullptr)
@@ -217,6 +242,7 @@ private:
 
     juce::ApplicationCommandManager commandManager;
     std::unique_ptr<GoCueLookAndFeel> lookAndFeel;
+    juce::Time launchedAt, lastQuietCheck;
     std::unique_ptr<AppSettings> settings;
     std::unique_ptr<AudioEngine> engine;
     std::unique_ptr<MainWindow> mainWindow;

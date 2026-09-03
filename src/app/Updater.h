@@ -31,6 +31,9 @@ public:
 
     /** Manual check with WinSparkle's own UI (menu item). */
     static void checkForUpdatesWithUI();
+    /** Checks in the background; a dialog appears only when an update exists. The app calls this at idle moments
+        (nothing playing, show mode off) instead of WinSparkle's own timer, so no window pops up during a show. */
+    static void checkQuietly();
 
     /** Call before the main window goes away. */
     static void shutdown();
