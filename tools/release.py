@@ -2,7 +2,11 @@
 """GoCue release helper (Windows).
 
 Pipeline:  build (Release) -> unit tests -> Inno Setup installer -> EdDSA signature
-           -> appcast.xml -> (optional) GitHub Release upload via gh.
+           -> appcast.xml -> (optional) GitHub Release upload via gh -> website (gh-pages).
+
+The website (site/) is deployed to the gh-pages branch with latest.json (installer URL, size, date) and
+notes.html (every docs/release-notes/*.html, newest first).  `--site-only` redeploys it from the latest
+GitHub release without building anything.
 
 Typical use on the release machine:
 
@@ -14,11 +18,14 @@ The version comes from project(GoCue VERSION x.y.z) in CMakeLists.txt.
 import argparse
 import datetime
 import email.utils
+import json
 import os
 import pathlib
 import re
+import shutil
 import subprocess
 import sys
+import tempfile
 from xml.sax.saxutils import escape
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -137,6 +144,98 @@ def write_appcast(path, repo, version, installer, signature, notes_html):
     return url, appcast_url
 
 
+# ---------------------------------------------------------------------------------------------------------------------
+# website (GitHub Pages, branch gh-pages)
+
+FIXED_INSTALLER_NAME = "GoCue-Setup.exe"   # uploaded next to the versioned installer: /releases/latest/download/GoCue-Setup.exe
+
+
+def version_key(name):
+    return tuple(int(p) for p in re.findall(r"\d+", name))
+
+
+def build_notes_page(site_dir):
+    """notes.html: all release notes, newest first, in the site's style."""
+    notes_dir = ROOT / "docs" / "release-notes"
+    files = sorted(notes_dir.glob("*.html"), key=lambda p: version_key(p.stem), reverse=True)
+    parts = []
+    for f in files:
+        fragment = f.read_text(encoding="utf-8").strip()
+        parts.append('<article class="notes">%s</article>' % fragment)
+    page = """<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GoCue 바뀐 점</title>
+<link rel="icon" href="assets/icon.png">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;700&display=swap">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="wrap top">
+  <a class="brand" href="./"><img src="assets/icon.png" alt="" width="36" height="36">GoCue</a>
+  <nav class="nav"><a href="./">다운로드</a><a href="https://github.com/%s/releases">GitHub</a></nav>
+</header>
+<main class="wrap">
+  <h1 style="font-size:28px;margin-top:12px">바뀐 점</h1>
+  <p class="meta" style="margin-top:6px">버전별 변경 사항. 최신 버전이 맨 위입니다.</p>
+  %s
+</main>
+<footer class="wrap"><div>GoCue</div></footer>
+</body>
+</html>
+""" % (REPO_FOR_SITE, "\n  ".join(parts))
+    (site_dir / "notes.html").write_text(page, encoding="utf-8")
+
+
+REPO_FOR_SITE = ""
+
+
+def deploy_site(repo, latest):
+    """Copy site/ plus latest.json and notes.html onto the gh-pages branch and push it."""
+    global REPO_FOR_SITE
+    REPO_FOR_SITE = repo
+    site_src = ROOT / "site"
+    if not site_src.is_dir():
+        sys.exit("site/ is missing")
+    work = pathlib.Path(tempfile.mkdtemp(prefix="gocue-site-"))
+    try:
+        remote = "https://github.com/%s.git" % repo
+        run(["git", "clone", "--quiet", "--branch", "gh-pages", "--depth", "1", remote, str(work / "pages")], cwd=work)
+        pages = work / "pages"
+        for item in pages.iterdir():
+            if item.name != ".git":
+                shutil.rmtree(item) if item.is_dir() else item.unlink()
+        shutil.copytree(site_src, pages, dirs_exist_ok=True)
+        (pages / ".nojekyll").write_text("", encoding="utf-8")
+        (pages / "latest.json").write_text(json.dumps(latest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        build_notes_page(pages)
+        run(["git", "add", "-A"], cwd=pages)
+        status = run(["git", "status", "--porcelain"], cwd=pages, capture=True)
+        if not status.strip():
+            print("site      : unchanged")
+            return
+        run(["git", "-c", "user.name=GoCue release", "-c", "user.email=release@gocue.invalid",
+             "commit", "--quiet", "-m", "site: GoCue %s" % latest.get("version", "")], cwd=pages)
+        run(["git", "push", "--quiet", "origin", "gh-pages"], cwd=pages)
+        print("site      : https://%s.github.io/%s/" % tuple(repo.split("/", 1)))
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+
+
+def latest_from_github(gh, repo):
+    """latest.json content for --site-only: read from the newest GitHub release."""
+    out = run([gh, "release", "view", "--repo", repo, "--json", "tagName,publishedAt,assets"], capture=True)
+    info = json.loads(out)
+    version = info["tagName"].lstrip("v")
+    installer = next((a for a in info["assets"] if re.match(r"GoCue-Setup-[0-9.]+\.exe$", a["name"])), None)
+    if installer is None:
+        sys.exit("the latest release has no GoCue-Setup-x.y.z.exe asset")
+    return {"version": version, "tag": info["tagName"], "url": installer["url"], "size": installer["size"],
+            "date": info["publishedAt"], "latest_url": "https://github.com/%s/releases/latest/download/%s" % (repo, FIXED_INSTALLER_NAME)}
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--preset", default="local", help="CMake configure preset name (default: local)")
@@ -147,10 +246,16 @@ def main():
     parser.add_argument("--skip-build", action="store_true")
     parser.add_argument("--skip-tests", action="store_true")
     parser.add_argument("--publish", action="store_true", help="create the GitHub release with gh and upload installer + appcast")
+    parser.add_argument("--site-only", action="store_true", help="only redeploy the website from the latest GitHub release")
+    parser.add_argument("--skip-site", action="store_true", help="publish without touching the website")
     args = parser.parse_args()
 
     if not args.repo:
         sys.exit("--repo owner/name (or GOCUE_GITHUB_REPO) is required for the appcast URLs")
+
+    if args.site_only:
+        deploy_site(args.repo, latest_from_github(find_gh(), args.repo))
+        return
 
     # Single source of truth: the exe's VERSIONINFO, the installer name, the appcast and the
     # GitHub tag must all agree, otherwise the published appcast points at a 404.
@@ -201,6 +306,17 @@ def main():
         cmd += ["--notes-file", args.notes] if args.notes else ["--generate-notes"]
         run(cmd)
         print("published :", "https://github.com/%s/releases/tag/v%s" % (args.repo, version))
+
+        # the same installer under a fixed name: /releases/latest/download/GoCue-Setup.exe always gives the newest
+        fixed = output_dir / FIXED_INSTALLER_NAME
+        shutil.copyfile(installer, fixed)
+        run([gh, "release", "upload", "v" + version, str(fixed), "--repo", args.repo, "--clobber"])
+
+        if not args.skip_site:
+            deploy_site(args.repo, {
+                "version": version, "tag": "v" + version, "url": url, "size": installer.stat().st_size,
+                "date": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                "latest_url": "https://github.com/%s/releases/latest/download/%s" % (args.repo, FIXED_INSTALLER_NAME)})
     else:
         print("not published (add --publish to create the GitHub release)")
 
