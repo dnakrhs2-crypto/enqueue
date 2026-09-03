@@ -121,6 +121,10 @@ section h2 { font-size: 22px; margin-bottom: 14px; }
 .card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 16px 18px; }
 .card h3 { font-size: 16px; margin-bottom: 6px; }
 .card p { color: var(--dim); font-size: 15px; }
+.card.program { display: flex; gap: 14px; align-items: flex-start; text-decoration: none; color: inherit; }
+.card.program img { flex: none; border-radius: 10px; }
+.card.program .more { display: inline-block; margin-top: 10px; font-size: 14px; font-weight: 600; color: var(--text); }
+.card.program:hover { border-color: var(--text); }
 
 .list { margin: 0; padding-left: 1.2em; }
 .list li { margin: 4px 0; }
