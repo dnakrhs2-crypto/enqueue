@@ -44,7 +44,7 @@ public:
 
         nameLabel.setFont (juce::Font (juce::FontOptions (22.0f, juce::Font::bold)));
         nameLabel.setColour (juce::Label::textColourId, Palette::text);
-        nameLabel.setMinimumHorizontalScale (0.7f);
+        nameLabel.setMinimumHorizontalScale (1.0f);   // never squash the glyphs: a long name is cut with an ellipsis instead
         addAndMakeVisible (nameLabel);
 
         timeLabel.setFont (juce::Font (juce::FontOptions (15.0f)));   // "position / length"
@@ -94,19 +94,20 @@ public:
 
     void resized() override
     {
-        // [ 상태 띠 8 ] [ pill | name ............ x ]
-        //                [ pos / length          -remaining ]
+        // [ 상태 띠 8 ] [ name ...................... x ]
+        //                [ pause | pos / length   -remaining ]
         //                [ ==== progress ==== ]
+        // The name gets the whole first line (it was squeezed beside the pause button before).
         auto area = getLocalBounds().reduced (12, 10);
         area.removeFromLeft (10);   // the state stripe
         auto top = area.removeFromTop (32);
-        pauseButton.setBounds (top.removeFromLeft (96));
-        top.removeFromLeft (10);
         panicButton.setBounds (top.removeFromRight (30));
         top.removeFromRight (8);
         nameLabel.setBounds (top);
         area.removeFromTop (6);
         auto middle = area.removeFromTop (36);
+        pauseButton.setBounds (middle.removeFromLeft (96).reduced (0, 3));
+        middle.removeFromLeft (10);
         remainingLabel.setBounds (middle.removeFromRight (150));
         timeLabel.setBounds (middle);
         area.removeFromTop (6);
