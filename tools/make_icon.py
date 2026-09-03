@@ -87,16 +87,20 @@ def render(size, variant=DEFAULT_VARIANT):
     img = Image.new("RGBA", (size, size), (0, 0, 0, 0))
     draw = ImageDraw.Draw(img)
     radius = int(96 * scale)
-    draw.rounded_rectangle((0, 0, size - 1, size - 1), radius=radius, fill=BG)
 
-    inset = int(56 * scale)
-    if tile is not None:
-        draw.rounded_rectangle((inset, inset, size - 1 - inset, size - 1 - inset), radius=int(64 * scale), fill=tile)
+    if variant == "go":
+        # the shipped mark: the green tile fills the whole icon, no dark frame (gom, 2026-09-03)
+        draw.rounded_rectangle((0, 0, size - 1, size - 1), radius=radius, fill=tile)
+    else:
+        draw.rounded_rectangle((0, 0, size - 1, size - 1), radius=radius, fill=BG)
+        inset = int(56 * scale)
+        if tile is not None:
+            draw.rounded_rectangle((inset, inset, size - 1 - inset, size - 1 - inset), radius=int(64 * scale), fill=tile)
 
     base = variant.split("_")[0]
 
     if base == "go":
-        draw_text_centred(draw, "GO", find_font(int(210 * scale)), mark, size, dy=-int(8 * scale))
+        draw_text_centred(draw, "GO", find_font(int(250 * scale)), mark, size, dy=-int(10 * scale))
     elif base == "playq":
         draw_play_and_q(draw, size, scale, mark)
     elif base == "q":
