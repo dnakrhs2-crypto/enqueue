@@ -2872,8 +2872,13 @@ bool MainComponent::OperationalKeys::keyPressed (const juce::KeyPress& key, juce
 
     if (key.getKeyCode() == juce::KeyPress::escapeKey)
     {
-        owner.commands.invokeDirectly (CommandIDs::panicAll, false);   // panic from anywhere
-        return true;
+        // the panic from anywhere, but only when there is something to stop: an Esc that merely closes a dialog
+        // while nothing plays must not print "전체 페이드 정지". The key is not consumed: the dialog or alert still
+        // sees its Esc (cancel / close), so a show and an edit session both get what they expect.
+        if (owner.engine.getNumPlaying() > 0 || owner.showMode)
+            owner.commands.invokeDirectly (CommandIDs::panicAll, false);
+
+        return false;
     }
 
     if (key.getKeyCode() == juce::KeyPress::spaceKey)

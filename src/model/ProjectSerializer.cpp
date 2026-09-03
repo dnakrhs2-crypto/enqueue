@@ -1039,15 +1039,17 @@ juce::Result save (const Project& project, const juce::File& file)
                                    + juce::String (temp.getSize()) + " of " + juce::String (expected) + " bytes)");
     }
 
-    // read back: what was written must parse to a project again before it replaces the old file
+    // read back: what was written must parse to a project object again before it replaces the old file
+    // (a plain parse: resolving every media path again would stat hundreds of files on a network share)
     {
-        Project check;
-        const auto parsed = fromJson (temp.loadFileAsString(), check, nullptr, dir);
+        juce::var check;
+        const auto parsed = juce::JSON::parse (temp.loadFileAsString(), check);
 
-        if (parsed.failed())
+        if (parsed.failed() || check.getDynamicObject() == nullptr || ! check.hasProperty ("version"))
         {
             temp.deleteFile();
-            return juce::Result::fail ("Could not write " + file.getFullPathName() + ": the written file does not read back (" + parsed.getErrorMessage() + ")");
+            return juce::Result::fail ("Could not write " + file.getFullPathName() + ": the written file does not read back"
+                                       + (parsed.failed() ? " (" + parsed.getErrorMessage() + ")" : juce::String()));
         }
     }
 

@@ -405,3 +405,10 @@ class Scheduler { public: using Clock = std::function<double()>;   // 초
 
 ## v0.9.3 — 무한 루프/재생 횟수 실시간 반영 (2026-09-03)
 - [x] gom 버그: 재생 중 무한 루프 토글이 정지 후에야 적용됨 → `CuePlayer::setLivePlayCount`(locate → setPlayCount → virtualPositionFor → jumpTo), `AudioEngine::setLivePlayCount`(락 밖 적용), `TimeLoopsPanel LiveApply::loop`. 코덱스 6건 반영(실행 취소 복원 경로, 편집 대상 큐로 라이브 적용, 스트레치 프리롤 `getPreRollSamples`, 락 밖 적용, 표시 갱신 제거, 테스트 강화). 테스트 `tests/LiveLoopTests.cpp` 4케이스.
+
+## v0.9.4 — 공연 안전성 감사 반영 (2026-09-03)
+- [x] gom 요청 "안전성 문제될 거 없는지 코덱스랑 검토" → 코덱스 읽기 전용 감사 4건(오디오 A / 데이터 B / UI·운용 C / 플랫폼 D, 각 ~40분) + 내 검토. 치명·높음 항목을 세 묶음으로 수정, 코덱스 재리뷰 후 배포.
+- [x] 엔진: 마스터 체인 뒤 최종 출력 게이트(`applyOutputGate`, 하드 정지 5 ms·페이드 정지 후 200 ms 램프, 다음 play/resume에서 열림, 완전히 닫혔으면 즉시), `stopAll()`이 락 전에 `hardPanicRequested`를 올려 콜백이 락 없이 즉시 무음, `PluginChain::process` try/catch → `faulted` 슬롯 우회 + `resetProcessing()`, `CuePlayer` 레벨 전달 `gainsLock`(SpinLock, 오디오 스레드 try-lock), `setLiveGainDb` 무할당, 종료 뒤 라이브 편집 시 `endedNaturally` 복구, 장치 없으면 `play()` 거부(`deviceExpected/deviceRunning`), 256개 한도·reserve, mfplat/mfreadwrite 지연 로드+LoadLibrary 프로브. `tests/PanicGateTests.cpp`.
+- [x] 운용: `CueController` 패닉 페이드 중 모든 시작 거부(`panicLatchUntil`, 하드 정지·hardStopAll이 해제), 핫키 한 키 한 큐, `src/model/Hotkeys.h` 예약 키 공유 + 로더가 예약·중복 핫키 제거(경고), 쇼 모드 잠금 확대(새/열기/프로젝트 설정/오디오 설정/패치/플러그인/업데이트/탭 전환/스크럽), 재생 중·쇼 모드 종료·교체 확인, `MainComponent::OperationalKeys`(KeyListener를 다른 TopLevelWindow에 1초마다 부착: Esc=패닉, Space=GO), `installEscapePolicy`(인스펙터 TextEditor Esc), 자동 백업은 한가할 때, 저장 전 finishEditing, 안전 모드(Shift/--safe-mode: 장치 상태·플러그인 생략, `PluginHost::setSafeMode`), 폴백 장치 경고, 업데이트 후 프로젝트 재오픈(`AppSettings::setReopenProjectAfterUpdate`). `tests/HotkeyLoadTests.cpp` + CueControllerTests 추가.
+- [x] 데이터: `ProjectSerializer::save` = `<name>.saving~`에 쓰고 상태·크기·역파싱 검증 후 `replaceFileIn`, 빈 파일·비프로젝트 JSON 거부, 상대 경로(fileRelative) 우선, `Updater` 키 미승인 시 init 안 함, 설치 `MinVersion=10.0`, release.py 더티 트리·태그 충돌 게이트(`--allow-dirty`). `tests/SafeSaveTests.cpp`. 전체 4046 통과.
+- [ ] 보류(설계 변경 필요, 메모리에 기록): 워커 스레드 프리로드, 오디오 클록 기반 페이드 큐, 플러그인 프로세스 격리, 무제목 프로젝트 복구 저널, NAS 동시 편집, PDC, 루프 크로스페이드, 코드 서명(인증서), 옛 '모든 사용자' 설치.
