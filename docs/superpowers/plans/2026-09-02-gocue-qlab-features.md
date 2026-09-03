@@ -360,3 +360,11 @@ class Scheduler { public: using Clock = std::function<double()>;   // 초
 
 ## v0.8.5 — 업데이트 안내 (2026-09-03 새벽, gom "업데이트 된 건지 안 된 건지 헷갈림")
 - [x] 창 제목에 버전("GoCue 0.8.5 - 프로젝트"), 새 버전 첫 실행 시 안내창(`announceVersionChange`, AppSettings lastRunVersion), 설치기 [Run]에서 skipifsilent 제거(자동 업데이트 후 자동 재실행) + `/NORUN=1`로 스크립트 설치는 재실행 안 함.
+
+## v0.8.6 — 활성 큐 큰 카드 (2026-09-03 10:19)
+- [x] gom 선택 시안 01: `ActiveCuesPanel` Row 124px, 이름 22pt, 남은 시간 30pt 상태색, 위치/길이, 14px 진행 막대, 왼쪽 상태 띠. 패널 기본 비율 0.27, 최소 260.
+
+## v0.8.7 — 고품질 리샘플러 + 실시간 엔벨로프 (2026-09-03 오전)
+- [x] `src/audio/HighQualityResampler.*`: r8brain(`third_party/r8brain`, MIT, 헤더 온리) 고정 비율 SRC(파일→장치). 체인 = RegionLoop → ReadAhead → (Stretch) → HQ SRC → JUCE 리샘플러(속도만, `ratioFor = stretch ? 1 : rate`). 같은 레이트면 바이패스. 시크 시 `reset()`. 테스트 `tests/ResamplerTests.cpp`(48↔44.1k 음정·레벨 유지, 바이패스).
+- [x] 엔벨로프 실시간: `RegionLoopSource::setLiveEnvelope`(SpinLock swap), `CuePlayer::setLiveEnvelope`(+읽기선행 캐시 즉시 갱신), `AudioEngine::setLiveEnvelope`, `TimeLoopsPanel` LiveApply::envelope(+regionAndRate에서도 전송). 테스트 추가.
+- [ ] 코덱스 리뷰(codex_review_hq) → 반영 → 0.8.7 릴리스.
