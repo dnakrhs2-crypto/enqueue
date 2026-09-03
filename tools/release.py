@@ -160,10 +160,11 @@ def read_feedback_link():
     return match.group(1) if match else ""
 
 
-def build_notes_page(site_dir):
-    """notes.html: all release notes, newest first, in the site's style."""
+def build_notes_page(site_dir, latest_version):
+    """notes.html: the release notes up to the published version, newest first, in the site's style."""
     notes_dir = ROOT / "docs" / "release-notes"
-    files = sorted(notes_dir.glob("*.html"), key=lambda p: version_key(p.stem), reverse=True)
+    files = sorted((f for f in notes_dir.glob("*.html") if version_key(f.stem) <= version_key(latest_version)),
+                   key=lambda p: version_key(p.stem), reverse=True)
     parts = []
     for f in files:
         fragment = f.read_text(encoding="utf-8").strip()
@@ -216,7 +217,7 @@ def deploy_site(repo, latest):
         shutil.copytree(site_src, pages, dirs_exist_ok=True)
         (pages / ".nojekyll").write_text("", encoding="utf-8")
         (pages / "latest.json").write_text(json.dumps(latest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-        build_notes_page(pages)
+        build_notes_page(pages, latest.get("version", "0.0.0"))
         run(["git", "add", "-A"], cwd=pages)
         status = run(["git", "status", "--porcelain"], cwd=pages, capture=True)
         if not status.strip():
