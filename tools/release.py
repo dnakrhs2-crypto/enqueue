@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""GoCue release helper (Windows).
+"""Enqueue release helper (Windows).
 
 Pipeline:  build (Release) -> unit tests -> Inno Setup installer -> EdDSA signature
            -> appcast.xml -> (optional) GitHub Release upload via gh -> website (gh-pages).
@@ -13,7 +13,7 @@ Typical use on the release machine:
     python tools/release.py --repo owner/gocue --key C:/keys/gocue_eddsa_priv.pem --publish
 
 Environment fallbacks: GOCUE_GITHUB_REPO, GOCUE_EDDSA_PRIVATE_KEY_FILE, WINSPARKLE_DIR, ISCC, GH.
-The version comes from project(GoCue VERSION x.y.z) in CMakeLists.txt.
+The version comes from project(Enqueue VERSION x.y.z) in CMakeLists.txt.
 """
 import argparse
 import datetime
@@ -33,9 +33,9 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 
 def read_version():
     text = (ROOT / "CMakeLists.txt").read_text(encoding="utf-8")
-    match = re.search(r"project\(GoCue\s+VERSION\s+([0-9]+\.[0-9]+\.[0-9]+)", text)
+    match = re.search(r"project\(Enqueue\s+VERSION\s+([0-9]+\.[0-9]+\.[0-9]+)", text)
     if not match:
-        sys.exit("could not find project(GoCue VERSION x.y.z) in CMakeLists.txt")
+        sys.exit("could not find project(Enqueue VERSION x.y.z) in CMakeLists.txt")
     return match.group(1)
 
 
@@ -88,8 +88,8 @@ def build(preset, skip_tests):
 def make_installer(iscc, version, source_dir, output_dir):
     output_dir.mkdir(parents=True, exist_ok=True)
     run([iscc, "/Q", "/DAppVersion=" + version, "/DSourceDir=" + str(source_dir),
-         "/DOutputDir=" + str(output_dir), str(ROOT / "installer" / "GoCue.iss")])
-    installer = output_dir / ("GoCue-Setup-%s.exe" % version)
+         "/DOutputDir=" + str(output_dir), str(ROOT / "installer" / "Enqueue.iss")])
+    installer = output_dir / ("Enqueue-Setup-%s.exe" % version)
     if not installer.is_file():
         sys.exit("installer was not produced: %s" % installer)
     return installer
@@ -121,12 +121,12 @@ def write_appcast(path, repo, version, installer, signature, notes_html):
     xml = """<?xml version="1.0" encoding="utf-8"?>
 <rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" xmlns:dc="http://purl.org/dc/elements/1.1/">
   <channel>
-    <title>GoCue updates</title>
+    <title>Enqueue updates</title>
     <link>%s</link>
-    <description>GoCue release feed</description>
+    <description>Enqueue release feed</description>
     <language>ko</language>
     <item>
-      <title>GoCue %s</title>
+      <title>Enqueue %s</title>
       <pubDate>%s</pubDate>
       <description><![CDATA[%s]]></description>
       <enclosure url="%s"
@@ -147,7 +147,7 @@ def write_appcast(path, repo, version, installer, signature, notes_html):
 # ---------------------------------------------------------------------------------------------------------------------
 # website (GitHub Pages, branch gh-pages)
 
-FIXED_INSTALLER_NAME = "GoCue-Setup.exe"   # uploaded next to the versioned installer: /releases/latest/download/GoCue-Setup.exe
+FIXED_INSTALLER_NAME = "Enqueue-Setup.exe"   # uploaded next to the versioned installer: /releases/latest/download/Enqueue-Setup.exe
 
 
 def version_key(name):
@@ -173,14 +173,14 @@ def build_notes_page(site_dir):
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>GoCue 바뀐 점</title>
+<title>Enqueue 바뀐 점</title>
 <link rel="icon" href="assets/icon.png">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;700&display=swap">
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
 <header class="wrap top">
-  <a class="brand" href="./"><img src="assets/icon.png" alt="" width="36" height="36">GoCue</a>
+  <a class="brand" href="./"><img src="assets/icon.png" alt="" width="36" height="36">Enqueue</a>
   <nav class="nav"><a href="./">다운로드</a><a href="https://github.com/%s/releases">GitHub</a></nav>
 </header>
 <main class="wrap">
@@ -188,7 +188,7 @@ def build_notes_page(site_dir):
   <p class="meta" style="margin-top:6px">버전별 변경 사항. 최신 버전이 맨 위입니다.</p>
   %s
 </main>
-<footer class="wrap"><div>GoCue</div></footer>
+<footer class="wrap"><div>Enqueue · 곰튀김</div></footer>
 </body>
 </html>
 """ % (REPO_FOR_SITE, "\n  ".join(parts))
@@ -222,8 +222,8 @@ def deploy_site(repo, latest):
         if not status.strip():
             print("site      : unchanged")
             return
-        run(["git", "-c", "user.name=GoCue release", "-c", "user.email=release@gocue.invalid",
-             "commit", "--quiet", "-m", "site: GoCue %s" % latest.get("version", "")], cwd=pages)
+        run(["git", "-c", "user.name=Enqueue release", "-c", "user.email=release@gocue.invalid",
+             "commit", "--quiet", "-m", "site: Enqueue %s" % latest.get("version", "")], cwd=pages)
         run(["git", "push", "--quiet", "origin", "gh-pages"], cwd=pages)
         print("site      : https://%s.github.io/%s/" % tuple(repo.split("/", 1)))
     finally:
@@ -235,9 +235,9 @@ def latest_from_github(gh, repo):
     out = run([gh, "release", "view", "--repo", repo, "--json", "tagName,publishedAt,assets"], capture=True)
     info = json.loads(out)
     version = info["tagName"].lstrip("v")
-    installer = next((a for a in info["assets"] if re.match(r"GoCue-Setup-[0-9.]+\.exe$", a["name"])), None)
+    installer = next((a for a in info["assets"] if re.match(r"(Enqueue|GoCue)-Setup-[0-9.]+\.exe$", a["name"])), None)
     if installer is None:
-        sys.exit("the latest release has no GoCue-Setup-x.y.z.exe asset")
+        sys.exit("the latest release has no Enqueue-Setup-x.y.z.exe asset")
     return {"version": version, "tag": info["tagName"], "url": installer["url"], "size": installer["size"],
             "date": info["publishedAt"], "latest_url": "https://github.com/%s/releases/latest/download/%s" % (repo, FIXED_INSTALLER_NAME),
             "feedback": read_feedback_link()}
@@ -271,13 +271,13 @@ def main():
     if tag and tag != "v" + version:
         sys.exit("git tag %s does not match project(GoCue VERSION %s) - bump CMakeLists.txt or re-tag" % (tag, version))
 
-    source_dir = ROOT / "build" / "vs2022" / "GoCue_artefacts" / "Release"
+    source_dir = ROOT / "build" / "vs2022" / "Enqueue_artefacts" / "Release"
     output_dir = ROOT / "installer" / "output"
 
     if not args.skip_build:
         build(args.preset, args.skip_tests)
 
-    for required in ("GoCue.exe", "WinSparkle.dll"):
+    for required in ("Enqueue.exe", "WinSparkle.dll"):
         if not (source_dir / required).is_file():
             sys.exit("missing %s in %s (build Release with WINSPARKLE_DIR set)" % (required, source_dir))
 
@@ -309,7 +309,7 @@ def main():
     if args.publish:
         gh = find_gh()
         cmd = [gh, "release", "create", "v" + version, str(installer), str(appcast),
-               "--repo", args.repo, "--title", "GoCue " + version]
+               "--repo", args.repo, "--title", "Enqueue " + version]
         cmd += ["--notes-file", args.notes] if args.notes else ["--generate-notes"]
         run(cmd)
         print("published :", "https://github.com/%s/releases/tag/v%s" % (args.repo, version))

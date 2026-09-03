@@ -60,7 +60,7 @@ std::unique_ptr<juce::XmlElement> AudioEngine::normaliseDeviceState (const juce:
 
     if (type.isEmpty())
     {
-        // not a state GoCue writes, but cheap to honour: the type that lists the saved output device
+        // not a state Enqueue writes, but cheap to honour: the type that lists the saved output device
         const auto name = xml->getStringAttribute ("audioOutputDeviceName");
 
         if (name.isNotEmpty())

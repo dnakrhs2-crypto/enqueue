@@ -8,7 +8,7 @@ namespace gocue::tests
 class CueListTests : public juce::UnitTest
 {
 public:
-    CueListTests() : juce::UnitTest ("CueList", "GoCue") {}
+    CueListTests() : juce::UnitTest ("CueList", "Enqueue") {}
 
     struct Counter : public CueList::Listener
     {

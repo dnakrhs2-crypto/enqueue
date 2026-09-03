@@ -8,7 +8,7 @@ namespace gocue::tests
 class FadeEnvelopeTests : public juce::UnitTest
 {
 public:
-    FadeEnvelopeTests() : juce::UnitTest ("FadeEnvelope", "GoCue") {}
+    FadeEnvelopeTests() : juce::UnitTest ("FadeEnvelope", "Enqueue") {}
 
     static void fill (juce::AudioBuffer<float>& buffer, float value)
     {

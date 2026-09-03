@@ -3,15 +3,15 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>GoCue</title>
-<meta name="description" content="GoCue: Windows용 오디오 큐 플레이어">
+<title>Enqueue</title>
+<meta name="description" content="Enqueue(앤큐): Windows용 오디오 큐 플레이어">
 <link rel="icon" href="assets/icon.png">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;700&display=swap">
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
 <header class="wrap top">
-  <a class="brand" href="./"><img src="assets/icon.png" alt="" width="36" height="36">GoCue</a>
+  <a class="brand" href="./"><img src="assets/icon.png" alt="" width="36" height="36">Enqueue</a>
   <nav class="nav">
     <a href="#features">기능</a>
     <a href="#requirements">요구 사항</a>
@@ -24,7 +24,7 @@
 <main class="wrap">
   <section class="hero">
     <div>
-      <h1>Windows용 쇼 큐 플레이어</h1>
+      <h1>앤큐 · Windows용 쇼 큐 플레이어</h1>
       <div class="download">
         <a class="btn" id="download" href="https://github.com/dnakrhs2-crypto/gocue/releases/latest">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3a1 1 0 0 1 1 1v9.6l3.3-3.3a1 1 0 1 1 1.4 1.4l-5 5a1 1 0 0 1-1.4 0l-5-5a1 1 0 1 1 1.4-1.4L11 13.6V4a1 1 0 0 1 1-1zM4 18a1 1 0 0 1 1 1v1h14v-1a1 1 0 1 1 2 0v2a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1v-2a1 1 0 0 1 1-1z"/></svg>
@@ -34,7 +34,7 @@
       </div>
       <p class="notice">설치 파일에 아직 코드 서명이 없어서 Windows가 "알 수 없는 게시자" 경고를 띄울 수 있습니다. 경고 창에서 <b>추가 정보</b> → <b>실행</b>을 누르면 설치가 진행됩니다.</p>
     </div>
-    <figure class="shot"><img src="assets/screenshot.png" alt="GoCue 화면: 왼쪽 위 GO 버튼, 다음 큐 정보, 큐 리스트(그룹·파일·프리웨이트·길이), 오른쪽 활성 큐 패널" width="1260" height="449"></figure>
+    <figure class="shot"><img src="assets/screenshot.png" alt="앤큐 화면: 왼쪽 위 GO 버튼, 다음 큐 정보, 큐 리스트(그룹·파일·프리웨이트·길이), 오른쪽 활성 큐 패널" width="1260" height="449"></figure>
   </section>
 
   <section id="features">
@@ -47,7 +47,7 @@
       <div class="card"><h3>VST3 플러그인</h3><p>큐별, 출력 패치별, 마스터 버스에 플러그인 체인을 걸 수 있습니다. 제조사별 메뉴, 순서 바꾸기, 활성·비활성 전환.</p></div>
       <div class="card"><h3>고품질 리샘플링</h3><p>곡 샘플레이트가 장치와 달라도 r8brain 리샘플러가 정확한 피치와 음질로 변환합니다.</p></div>
       <div class="card"><h3>마이크 큐</h3><p>오디오 인터페이스 입력을 큐로 올려 방송·행사 진행에 쓸 수 있습니다.</p></div>
-      <div class="card"><h3>세션과 백업</h3><p>세션은 .gocue 파일 하나. 음원은 프로젝트 폴더로 복사되고, 5분마다 자동 백업이 15개까지 남습니다. 자동 업데이트를 지원합니다.</p></div>
+      <div class="card"><h3>세션과 백업</h3><p>세션은 .enqueue 파일 하나. 음원은 프로젝트 폴더로 복사되고, 5분마다 자동 백업이 15개까지 남습니다. 자동 업데이트를 지원합니다.</p></div>
     </div>
   </section>
 
@@ -70,7 +70,7 @@
 </main>
 
 <footer class="wrap">
-  <div>GoCue</div>
+  <div>Enqueue · 곰튀김</div>
   <div class="links">
     <a href="https://github.com/dnakrhs2-crypto/gocue/releases">GitHub 릴리스</a>
     <a href="notes.html">바뀐 점</a>
@@ -86,7 +86,7 @@
       if (!info || !info.url) return;
       var btn = document.getElementById('download');
       btn.href = info.url;
-      document.getElementById('download-label').textContent = 'GoCue ' + info.version + ' 다운로드';
+      document.getElementById('download-label').textContent = 'Enqueue ' + info.version + ' 다운로드';
       var mb = info.size ? (info.size / 1048576).toFixed(1) + ' MB · ' : '';
       var date = info.date ? info.date.slice(0, 10) + ' · ' : '';
       document.getElementById('download-meta').innerHTML =

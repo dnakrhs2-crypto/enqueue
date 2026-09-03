@@ -5,13 +5,13 @@
 namespace gocue::BackupManager
 {
 
-/** "<project>.gocue.backups" next to the project file. */
+/** "<project>.enqueue.backups" next to the project file (the project's own extension is kept). */
 juce::File backupDirFor (const juce::File& project);
 
-/** The backup file for 'now': "<dir>/<name> (Backup yyyy-MM-dd_HHmmss).gocue". */
+/** The backup file for 'now': "<dir>/<name> (Backup yyyy-MM-dd_HHmmss).enqueue". */
 juce::File backupFileFor (const juce::File& project, juce::Time now);
 
-/** backupFileFor(), or "<name> (Backup yyyy-MM-dd_HHmmss-2).gocue", -3 ... when that already exists. */
+/** backupFileFor(), or "<name> (Backup yyyy-MM-dd_HHmmss-2).enqueue", -3 ... when that already exists. */
 juce::File makeUniqueBackupFile (const juce::File& project, juce::Time now);
 
 /** Timestamp parsed from a backup file name (with or without the "-n" suffix), or an invalid (0) Time

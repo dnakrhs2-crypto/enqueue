@@ -10,7 +10,7 @@ namespace gocue
 class SplitLayoutTests : public juce::UnitTest
 {
 public:
-    SplitLayoutTests() : juce::UnitTest ("SplitLayout", "GoCue") {}
+    SplitLayoutTests() : juce::UnitTest ("SplitLayout", "Enqueue") {}
 
     void runTest() override
     {

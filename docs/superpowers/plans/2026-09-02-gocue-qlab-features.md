@@ -386,3 +386,11 @@ class Scheduler { public: using Clock = std::function<double()>;   // 초
 - [x] 검증: ISCC 컴파일 OK, `/VERYSILENT /TASKS=coupang` 설치 → `쿠팡.url`(URL·IconFile·IconIndex) 생성, 제거 → 삭제, 0.8.9 재설치(/TASKS 없음) → 생성 안 됨.
 - [x] 도움말 > "커뮤니티" 메뉴 = 카카오톡 오픈채팅 https://open.kakao.com/o/pST4IRLi (`src/app/Links.h`의 `feedbackChat`; 사이트 latest.json에도 같은 링크).
 - [ ] 코드 서명(인증서 필요), 베타 버전 0.9.0 배포.
+
+## v0.9.0 — 이름 변경 GoCue → Enqueue(앤큐), 회사 곰튀김 (2026-09-03, 미배포)
+- [x] gom 결정: 프로그램 이름 Enqueue(한글 앤큐), 회사/브랜드 곰튀김, 사이트 도메인 곰튀김.com(구매 예정), 아이콘은 기존 GO 유지.
+- [x] CMake project/타깃 Enqueue(EnqueueTests), 창 제목·정보 창·메뉴·설명서 문구, ProjectDocument 제목, WinSparkle 회사명 Gomtwigim.
+- [x] 설정 폴더 `%APPDATA%\Enqueue` + 첫 실행 이전(`src/app/SettingsMigration.cpp`, 테스트 3개). 프로젝트 확장자 `.enqueue`, 열기는 `.enqueue;.gocue`, 옛 파일 저장 시 확장자 유지, 백업은 프로젝트 확장자 따라감.
+- [x] 설치: `installer/Enqueue.iss`(UTF-8 BOM, 게시자 곰튀김, AppId 동일 → 제자리 업그레이드, GoCue.exe·옛 바로가기 삭제, .enqueue/.gocue 연결, 옛 ProgId 삭제). 이 PC에서 GoCue 0.8.9 → Enqueue 0.9.0 조용한 업그레이드 확인.
+- [x] release.py 이름/경로, 사이트 표기, README, 아이콘 생성기 시안 10종(`바탕화면\앤큐 아이콘 시안`).
+- [ ] 코덱스 리뷰(누락·오류 점검) → 0.9.0 배포.

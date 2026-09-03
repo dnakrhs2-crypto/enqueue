@@ -12,11 +12,11 @@ namespace gocue::tests
 class MediaFoundationTests : public juce::UnitTest
 {
 public:
-    MediaFoundationTests() : juce::UnitTest ("MediaFoundation reader", "GoCue") {}
+    MediaFoundationTests() : juce::UnitTest ("MediaFoundation reader", "Enqueue") {}
 
     static juce::File findAssetDir()
     {
-        // the test binary lives in build/vs2022/tests/GoCueTests_artefacts/<config>/; walk up to the repo
+        // the test binary lives in build/vs2022/tests/EnqueueTests_artefacts/<config>/; walk up to the repo
         auto dir = juce::File::getSpecialLocation (juce::File::currentExecutableFile).getParentDirectory();
 
         for (int i = 0; i < 8; ++i)

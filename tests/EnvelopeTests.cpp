@@ -8,7 +8,7 @@ namespace gocue::tests
 class EnvelopeTests : public juce::UnitTest
 {
 public:
-    EnvelopeTests() : juce::UnitTest ("Envelope", "GoCue") {}
+    EnvelopeTests() : juce::UnitTest ("Envelope", "Enqueue") {}
 
     void runTest() override
     {

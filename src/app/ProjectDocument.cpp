@@ -236,7 +236,7 @@ juce::String ProjectDocument::getDisplayName() const
 
 juce::String ProjectDocument::getWindowTitle() const
 {
-    juce::String title ("GoCue - ");
+    juce::String title ("Enqueue - ");
     title << getDisplayName();
 
     if (dirty)

@@ -767,7 +767,7 @@ namespace ProjectSerializer
 juce::var toVar (const Project& project, const juce::File& projectDir)
 {
     auto* root = new juce::DynamicObject();
-    root->setProperty ("app", "GoCue");
+    root->setProperty ("app", "Enqueue");
     root->setProperty ("version", currentVersion);
     root->setProperty ("name", project.name);
 
@@ -836,7 +836,7 @@ juce::Result fromJson (const juce::String& json, Project& out, juce::StringArray
     const int version = intProperty (root, "version", 1);
 
     if (version > currentVersion && warnings != nullptr)
-        warnings->add ("This project was saved by a newer GoCue (file version " + juce::String (version)
+        warnings->add ("This project was saved by a newer Enqueue (file version " + juce::String (version)
                        + ", this build reads version " + juce::String (currentVersion)
                        + "). Unknown settings were ignored.");
 

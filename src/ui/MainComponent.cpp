@@ -368,7 +368,7 @@ void MainComponent::paintOverChildren (juce::Graphics& g)
 bool MainComponent::isInterestedInFileDrag (const juce::StringArray& files)
 {
     for (const auto& path : files)
-        if (juce::File (path).hasFileExtension (ProjectSerializer::fileExtension))
+        if (juce::File (path).hasFileExtension (ProjectSerializer::openableExtensions))
             return true;
 
     return ! showMode && containsAudioOrFolder (engine.getFormatManager(), files);
@@ -396,7 +396,7 @@ void MainComponent::filesDropped (const juce::StringArray& files, int, int)
     {
         const juce::File file (path);
 
-        if (file.existsAsFile() && file.hasFileExtension (ProjectSerializer::fileExtension))
+        if (file.existsAsFile() && file.hasFileExtension (ProjectSerializer::openableExtensions))
         {
             confirmDiscardChangesThen ([this, file] { openProjectFile (file); });
             return;
@@ -748,7 +748,7 @@ void MainComponent::getCommandInfo (juce::CommandID commandID, juce::Application
             break;
 
         case CommandIDs::openProject:
-            result.setInfo (ko ("열기..."), ko (".gocue 프로젝트 열기"), fileMenu, 0);
+            result.setInfo (ko ("열기..."), ko ("프로젝트 열기 (.enqueue, .gocue)"), fileMenu, 0);
             result.addDefaultKeypress ('O', ModifierKeys::commandModifier);
             break;
 
@@ -836,7 +836,7 @@ void MainComponent::getCommandInfo (juce::CommandID commandID, juce::Application
             break;
 
         case CommandIDs::about:
-            result.setInfo (ko ("GoCue 정보"), ko ("버전 정보"), ko ("도움말"), 0);
+            result.setInfo (ko ("앤큐 정보"), ko ("버전 정보"), ko ("도움말"), 0);
             break;
 
         default:
@@ -2407,7 +2407,7 @@ void MainComponent::openProjectViaDialog()
         startDir = juce::File::getSpecialLocation (juce::File::userDocumentsDirectory);
 
     chooser = std::make_unique<juce::FileChooser> (ko ("프로젝트 열기"), startDir,
-                                                   "*" + juce::String (ProjectSerializer::fileExtension));
+                                                   "*" + juce::String (ProjectSerializer::fileExtension) + ";*.gocue");
 
     const int browseFlags = juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles;
 
@@ -2573,13 +2573,13 @@ void MainComponent::reconcileChainsAfterRestore (const ProjectSnapshot& snapshot
 
 void MainComponent::openProjectFromCommandLine (const juce::String& commandLine)
 {
-    const juce::ArgumentList args ("GoCue", commandLine);
+    const juce::ArgumentList args ("Enqueue", commandLine);
 
     for (const auto& arg : args.arguments)
     {
         const auto file = arg.resolveAsFile();
 
-        if (file.existsAsFile() && file.hasFileExtension (ProjectSerializer::fileExtension))
+        if (file.existsAsFile() && file.hasFileExtension (ProjectSerializer::openableExtensions))
         {
             openProjectFile (file);
             return;
@@ -2649,7 +2649,7 @@ void MainComponent::saveProject (bool saveAs, std::function<void (bool)> then)
 {
     auto writeTo = [this, then] (juce::File file)
     {
-        if (! file.hasFileExtension (ProjectSerializer::fileExtension))
+        if (! file.hasFileExtension (ProjectSerializer::openableExtensions))
             file = file.withFileExtension (ProjectSerializer::fileExtension);
 
         backupBeforeSave (file);
@@ -2789,13 +2789,13 @@ void MainComponent::showPluginManager()
 void MainComponent::showAbout()
 {
     juce::String text;
-    text << "GoCue " << juce::JUCEApplication::getInstance()->getApplicationVersion() << "\n"
+    text << "Enqueue " << juce::JUCEApplication::getInstance()->getApplicationVersion() << ko (" (앤큐)") << "\n"
          << ko ("Windows용 오디오 큐 플레이어") << "\n\n"
          << "JUCE " << JUCE_MAJOR_VERSION << "." << JUCE_MINOR_VERSION << "." << JUCE_BUILDNUMBER << "\n"
          << ko ("ASIO: ") << (JUCE_ASIO ? ko ("지원") : ko ("미포함 (WASAPI 전용)")) << "\n"
          << ko ("자동 업데이트: ") << (Updater::isAvailable() ? Updater::getAppcastUrl() : ko ("비활성 (빌드 시 appcast 미설정)"));
 
-    showAlert (ko ("GoCue 정보"), text, false);
+    showAlert (ko ("앤큐 정보"), text, false);
 }
 
 void MainComponent::showAlert (const juce::String& title, const juce::String& message, bool isError)

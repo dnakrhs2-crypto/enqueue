@@ -1,20 +1,20 @@
-; GoCue installer (Inno Setup 6.3+ / 7).  Compile with tools/release.py or:
-;   ISCC.exe /DAppVersion=0.1.0 /DSourceDir=..\build\vs2022\GoCue_artefacts\Release installer\GoCue.iss
-; Keep this file pure ASCII; user-facing text comes from the Inno language files.
+﻿; Enqueue installer (Inno Setup 6.3+ / 7).  Compile with tools/release.py or:
+;   ISCC.exe /DAppVersion=0.1.0 /DSourceDir=..\build\vs2022\Enqueue_artefacts\Release installer\Enqueue.iss
+; UTF-8 with BOM (Inno Setup 6+): the publisher name is Korean. Other user-facing text comes from the Inno language files.
 
 #ifndef AppVersion
   #define AppVersion "0.0.0"
 #endif
 #ifndef SourceDir
-  #define SourceDir "..\build\vs2022\GoCue_artefacts\Release"
+  #define SourceDir "..\build\vs2022\Enqueue_artefacts\Release"
 #endif
 #ifndef OutputDir
   #define OutputDir "output"
 #endif
 
-#define AppName "GoCue"
-#define AppExe "GoCue.exe"
-#define AppPublisher "GoCue"
+#define AppName "Enqueue"
+#define AppExe "Enqueue.exe"
+#define AppPublisher "곰튀김"
 
 [Setup]
 AppId={{B7E3F2C1-6C5D-4C3E-9C2B-7F1E9D2A5C10}
@@ -27,8 +27,8 @@ DefaultDirName={autopf}\{#AppName}
 DefaultGroupName={#AppName}
 UninstallDisplayIcon={app}\{#AppExe}
 OutputDir={#OutputDir}
-OutputBaseFilename=GoCue-Setup-{#AppVersion}
-SetupIconFile=..\assets\GoCue.ico
+OutputBaseFilename=Enqueue-Setup-{#AppVersion}
+SetupIconFile=..\assets\Enqueue.ico
 Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
@@ -49,7 +49,7 @@ Name: "korean"; MessagesFile: "compiler:Languages\Korean.isl"
 Name: "english"; MessagesFile: "compiler:Default.isl"
 
 ; localised strings of our own (UTF-8 with BOM); this file itself stays ASCII
-#include "GoCue.messages.iss"
+#include "Enqueue.messages.iss"
 
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
@@ -68,11 +68,20 @@ Name: "{group}\{#AppName}"; Filename: "{app}\{#AppExe}"
 Name: "{autodesktop}\{#AppName}"; Filename: "{app}\{#AppExe}"; Tasks: desktopicon
 
 [Registry]
-; .gocue project files open with GoCue (HKA = HKCU for per-user installs, HKLM for all-users)
-Root: HKA; Subkey: "Software\Classes\.gocue"; ValueType: string; ValueName: ""; ValueData: "GoCue.Project"; Flags: uninsdeletevalue uninsdeletekeyifempty
-Root: HKA; Subkey: "Software\Classes\GoCue.Project"; ValueType: string; ValueName: ""; ValueData: "GoCue Project"; Flags: uninsdeletekey
-Root: HKA; Subkey: "Software\Classes\GoCue.Project\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: "{app}\{#AppExe},0"
-Root: HKA; Subkey: "Software\Classes\GoCue.Project\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\{#AppExe}"" ""%1"""
+; .enqueue project files (and the old .gocue) open with Enqueue (HKA = HKCU for per-user installs, HKLM for all-users)
+Root: HKA; Subkey: "Software\Classes\.enqueue"; ValueType: string; ValueName: ""; ValueData: "Enqueue.Project"; Flags: uninsdeletevalue uninsdeletekeyifempty
+Root: HKA; Subkey: "Software\Classes\.gocue"; ValueType: string; ValueName: ""; ValueData: "Enqueue.Project"; Flags: uninsdeletevalue uninsdeletekeyifempty
+; the ProgId of the GoCue days goes away
+Root: HKA; Subkey: "Software\Classes\GoCue.Project"; Flags: deletekey
+Root: HKA; Subkey: "Software\Classes\Enqueue.Project"; ValueType: string; ValueName: ""; ValueData: "Enqueue Project"; Flags: uninsdeletekey
+Root: HKA; Subkey: "Software\Classes\Enqueue.Project\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: "{app}\{#AppExe},0"
+Root: HKA; Subkey: "Software\Classes\Enqueue.Project\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\{#AppExe}"" ""%1"""
+
+[InstallDelete]
+; an upgrade from GoCue (same AppId): the old exe and the shortcuts that pointed at it
+Type: files; Name: "{app}\GoCue.exe"
+Type: files; Name: "{group}\GoCue.lnk"
+Type: files; Name: "{autodesktop}\GoCue.lnk"
 
 [Run]
 ; also after a silent auto-update (WinSparkle runs Setup with /SILENT): the app comes back by itself and announces

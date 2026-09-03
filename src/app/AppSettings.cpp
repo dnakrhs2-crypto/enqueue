@@ -1,3 +1,4 @@
+#include "app/SettingsMigration.h"
 #include "app/AppSettings.h"
 
 namespace gocue
@@ -20,14 +21,15 @@ namespace Keys
 AppSettings::AppSettings()
 {
     juce::PropertiesFile::Options options;
-    options.applicationName = "GoCue";
+    options.applicationName = "Enqueue";
     options.filenameSuffix = "settings";
-    options.folderName = "GoCue";
+    options.folderName = "Enqueue";
     options.osxLibrarySubFolder = "Application Support";
     options.commonToAllUsers = false;
     options.storageFormat = juce::PropertiesFile::storeAsXML;
     options.millisecondsBeforeSaving = 1000;
 
+    migrateSettingsFolder (options, "GoCue");
     properties.setStorageParameters (options);
     settings = properties.getUserSettings();
 }

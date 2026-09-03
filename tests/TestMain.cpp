@@ -24,7 +24,7 @@ int main (int, char**)
     ConsoleRunner runner;
     runner.setAssertOnFailure (false);
     runner.setPassesAreLogged (false);
-    runner.runTestsInCategory ("GoCue");
+    runner.runTestsInCategory ("Enqueue");
 
     int passes = 0;
     int failures = 0;
@@ -36,6 +36,6 @@ int main (int, char**)
         failures += result->failures;
     }
 
-    std::cout << "\n==== GoCue tests: " << passes << " passed, " << failures << " failed ====" << std::endl;
+    std::cout << "\n==== Enqueue tests: " << passes << " passed, " << failures << " failed ====" << std::endl;
     return failures == 0 ? 0 : 1;
 }

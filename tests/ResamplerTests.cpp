@@ -34,7 +34,7 @@ struct SineSource : public juce::AudioSource
 class ResamplerTests : public juce::UnitTest
 {
 public:
-    ResamplerTests() : juce::UnitTest ("HighQualityResampler", "GoCue") {}
+    ResamplerTests() : juce::UnitTest ("HighQualityResampler", "Enqueue") {}
 
     static int zeroCrossings (const juce::AudioBuffer<float>& b, int from, int to)
     {

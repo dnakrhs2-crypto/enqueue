@@ -10,7 +10,13 @@ namespace gocue::BackupManager
 namespace
 {
     const juce::String backupMarker (" (Backup ");
-    const juce::String extension (".gocue");
+    const juce::String defaultExtension (".enqueue");   // a project without an extension (never in practice)
+
+    juce::String extensionOf (const juce::File& project)
+    {
+        const auto ext = project.getFileExtension();
+        return ext.isNotEmpty() ? ext : defaultExtension;   // a .gocue project keeps .gocue backups
+    }
     const juce::String stampFormat ("%Y-%m-%d_%H%M%S");
     constexpr int stampLength = 17;   // yyyy-MM-dd_HHmmss
 }
@@ -23,7 +29,7 @@ juce::File backupDirFor (const juce::File& project)
 juce::File backupFileFor (const juce::File& project, juce::Time now)
 {
     return backupDirFor (project).getChildFile (project.getFileNameWithoutExtension() + backupMarker
-                                                 + now.formatted (stampFormat) + ")" + extension);
+                                                 + now.formatted (stampFormat) + ")" + extensionOf (project));
 }
 
 juce::File makeUniqueBackupFile (const juce::File& project, juce::Time now)
@@ -37,13 +43,13 @@ juce::File makeUniqueBackupFile (const juce::File& project, juce::Time now)
 
     for (int n = 2; n < 1000; ++n)
     {
-        const auto candidate = base.getSiblingFile (stem + "-" + juce::String (n) + ")" + extension);
+        const auto candidate = base.getSiblingFile (stem + "-" + juce::String (n) + ")" + extensionOf (project));
 
         if (! candidate.existsAsFile())
             return candidate;
     }
 
-    return base.getSiblingFile (stem + "-" + juce::String (juce::Time::currentTimeMillis()) + ")" + extension);
+    return base.getSiblingFile (stem + "-" + juce::String (juce::Time::currentTimeMillis()) + ")" + extensionOf (project));
 }
 
 juce::Time timestampOf (const juce::File& backup)
@@ -112,7 +118,7 @@ void rotate (const juce::File& dir, juce::Time)
     struct Entry { juce::File file; juce::Time time; };
     std::vector<Entry> backups;
 
-    for (const auto& file : dir.findChildFiles (juce::File::findFiles, false, "*" + extension))
+    for (const auto& file : dir.findChildFiles (juce::File::findFiles, false, "*.enqueue;*.gocue"))   // backups of both eras rotate together
     {
         const auto time = timestampOf (file);
 

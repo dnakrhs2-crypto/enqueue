@@ -94,7 +94,7 @@ public:
 
     /** File name without extension, or a placeholder for unsaved projects. */
     juce::String getDisplayName() const;
-    /** e.g. "GoCue - show.gocue*" */
+    /** e.g. "Enqueue - show.enqueue*" */
     juce::String getWindowTitle() const;
 
     void newProject();

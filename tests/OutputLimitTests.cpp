@@ -121,7 +121,7 @@ public:
 class OutputLimitTests : public juce::UnitTest
 {
 public:
-    OutputLimitTests() : juce::UnitTest ("Output limit (ASIO only multichannel)", "GoCue") {}
+    OutputLimitTests() : juce::UnitTest ("Output limit (ASIO only multichannel)", "Enqueue") {}
 
     static FakeDevice* currentFake (AudioEngine& engine)
     {

@@ -18,7 +18,7 @@ public:
 
     const juce::String getApplicationName() override       { return JUCE_APPLICATION_NAME_STRING; }
     const juce::String getApplicationVersion() override    { return JUCE_APPLICATION_VERSION_STRING; }
-    bool moreThanOneInstanceAllowed() override             { return false; }   // a .gocue opened from Explorer lands in the running window
+    bool moreThanOneInstanceAllowed() override             { return false; }   // a project file opened from Explorer lands in the running window
 
     void initialise (const juce::String& commandLine) override
     {
@@ -69,7 +69,7 @@ public:
                     app->systemRequestedQuit();
             });
         };
-        Updater::initialise ("GoCue", getApplicationName(), getApplicationVersion(), std::move (updaterCallbacks));
+        Updater::initialise ("Gomtwigim", getApplicationName(), getApplicationVersion(), std::move (updaterCallbacks));
     }
 
     /** First run of a new version: say so (the silent auto-update shows nothing else). A fresh install stays quiet. */
@@ -88,7 +88,7 @@ public:
 
         juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::InfoIcon,
                                                 ko ("업데이트 완료"),
-                                                ko ("GoCue가 ") + previous + " → " + current + ko ("(으)로 업데이트되었습니다.\n바뀐 점은 도움말 > 사용 설명서와 GitHub 릴리스 노트에 있습니다."),
+                                                ko ("앤큐가 ") + previous + " → " + current + ko ("(으)로 업데이트되었습니다.\n바뀐 점은 도움말 > 사용 설명서와 GitHub 릴리스 노트에 있습니다."),
                                                 ko ("확인"));
     }
 
@@ -184,8 +184,8 @@ private:
             auto* content = new MainComponent (engine, settings, commands);
             content->onWindowTitleChanged = [this] (const juce::String& title)
             {
-                // "GoCue 0.8.5 - show": the version is always in sight, so an update is never in doubt
-                setName (title.startsWith ("GoCue") ? "GoCue " + JUCEApplication::getInstance()->getApplicationVersion() + title.substring (5) : title);
+                // "Enqueue 0.9.0 - show": the version is always in sight, so an update is never in doubt
+                setName (title.startsWith ("Enqueue") ? "Enqueue " + JUCEApplication::getInstance()->getApplicationVersion() + title.substring (7) : title);
             };
             setContentOwned (content, true);
             mainComponent = content;
@@ -198,7 +198,7 @@ private:
             if (state.isEmpty() || ! restoreWindowStateFromString (state))
                 centreWithSize (1100, 720);
 
-            setName ("GoCue " + JUCEApplication::getInstance()->getApplicationVersion() + " - " + ko ("제목 없음"));
+            setName ("Enqueue " + JUCEApplication::getInstance()->getApplicationVersion() + " - " + ko ("제목 없음"));
             setVisible (true);
         }
 

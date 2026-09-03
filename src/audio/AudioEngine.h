@@ -246,7 +246,7 @@ private:
     juce::AudioDeviceManager deviceManager;
     juce::AudioFormatManager formatManager;
     PluginHost pluginHost;
-    juce::TimeSliceThread readAheadThread { "GoCue disk read-ahead" };
+    juce::TimeSliceThread readAheadThread { "Enqueue disk read-ahead" };
     const int readAheadSamples;
     bool callbackAdded = false;
 

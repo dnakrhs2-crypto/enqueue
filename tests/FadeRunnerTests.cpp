@@ -13,7 +13,7 @@ namespace gocue::tests
 class FadeRunnerTests : public juce::UnitTest
 {
 public:
-    FadeRunnerTests() : juce::UnitTest ("FadeRunner", "GoCue") {}
+    FadeRunnerTests() : juce::UnitTest ("FadeRunner", "Enqueue") {}
 
     static constexpr double sampleRate = 44100.0;
     static constexpr int blockSize = 512;

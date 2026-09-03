@@ -8,7 +8,7 @@ namespace gocue::tests
 class ProjectSerializerTests : public juce::UnitTest
 {
 public:
-    ProjectSerializerTests() : juce::UnitTest ("ProjectSerializer", "GoCue") {}
+    ProjectSerializerTests() : juce::UnitTest ("ProjectSerializer", "Enqueue") {}
 
     void runTest() override
     {
@@ -367,7 +367,7 @@ public:
 
             const auto text = projectFile.loadFileAsString();
             expect (text.contains ("\"fileRelative\""));
-            expect (text.contains ("\"app\": \"GoCue\"") || text.contains ("\"app\":\"GoCue\""));
+            expect (text.contains ("\"app\": \"Enqueue\"") || text.contains ("\"app\":\"Enqueue\""));
 
             Project q;
             juce::StringArray warnings;

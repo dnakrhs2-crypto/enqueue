@@ -11,7 +11,7 @@ namespace gocue::tests
 class FadeCurveTests : public juce::UnitTest
 {
 public:
-    FadeCurveTests() : juce::UnitTest ("FadeCurve", "GoCue") {}
+    FadeCurveTests() : juce::UnitTest ("FadeCurve", "Enqueue") {}
 
     void expectMonotone (const FadeCurve& c, const juce::String& label)
     {

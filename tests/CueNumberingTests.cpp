@@ -8,7 +8,7 @@ namespace gocue::tests
 class CueNumberingTests : public juce::UnitTest
 {
 public:
-    CueNumberingTests() : juce::UnitTest ("CueNumbering", "GoCue") {}
+    CueNumberingTests() : juce::UnitTest ("CueNumbering", "Enqueue") {}
 
     static Cue numbered (const juce::String& number)
     {

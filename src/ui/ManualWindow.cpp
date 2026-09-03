@@ -60,7 +60,7 @@ private:
 
 //==============================================================================
 ManualWindow::ManualWindow()
-    : DocumentWindow (ko ("GoCue 사용 설명서"), Palette::background, DocumentWindow::allButtons)
+    : DocumentWindow (ko ("앤큐 사용 설명서"), Palette::background, DocumentWindow::allButtons)
 {
     setUsingNativeTitleBar (true);
     auto* c = new Content();
@@ -95,9 +95,9 @@ std::vector<ManualWindow::Section> ManualWindow::sections()
 {
     return {
         { "시작하기",
-R"(GoCue 사용 설명서 — 화면 구성
+R"(앤큐 사용 설명서 — 화면 구성
 
-GoCue는 한 창으로 동작합니다.
+앤큐(Enqueue)는 한 창으로 동작합니다.
 
 ■ 위: 트랜스포트
   · 큰 GO 버튼(Space). 오른쪽에 다음에 실행될 큐(대기 큐)의 번호·이름·파일·길이·페이드·게인이 보입니다.
@@ -125,7 +125,7 @@ GoCue는 한 창으로 동작합니다.
 
 ■ 파일 끌어다 놓기
   · 오디오 파일이나 폴더를 창 어디에나 놓으면 큐로 추가됩니다. 큐 목록의 행 사이에 놓으면 그 자리에 삽입, 인스펙터의 파일 칸에 놓으면 파일 교체, 카트의 슬롯에 놓으면 그 슬롯에 들어갑니다.
-  · .gocue 파일을 놓으면 그 프로젝트를 엽니다.
+  · .enqueue(또는 예전 .gocue) 파일을 놓으면 그 프로젝트를 엽니다.
 
 ■ 실행 취소
   · 거의 모든 편집이 Ctrl+Z / Ctrl+Y로 되돌려집니다(200단계). 플러그인 안의 노브 값과 프로젝트 설정·오디오 패치는 제외.
@@ -297,7 +297,7 @@ R"(출력 · 패치 · 플러그인
 
 ■ VST3 플러그인 관리 (Ctrl+P)
   Options > Scan for new or updated VST3 plug-ins 로 스캔. 기본 경로: C:\Program Files\Common Files\VST3, %LOCALAPPDATA%\Programs\Common\VST3.
-  스캔 결과는 사용자 설정(%APPDATA%\GoCue\GoCue.settings)에 저장됩니다.
+  스캔 결과는 사용자 설정(%APPDATA%\Enqueue\Enqueue.settings)에 저장됩니다.
   플러그인 상태는 프로젝트에 저장되고, 플러그인이 없는 PC에서 열면 슬롯이 [없음]으로 남되 다시 저장해도 상태는 보존됩니다.
   플러그인 에디터에서 노브를 움직이면 프로젝트가 수정됨(*)으로 표시됩니다. 바이패스된 플러그인도 계속 돌아가되 출력만 버립니다(딜레이·리버브 시간 유지).
 

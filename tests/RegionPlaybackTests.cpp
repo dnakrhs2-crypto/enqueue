@@ -14,7 +14,7 @@ namespace gocue::tests
 class RegionPlaybackTests : public juce::UnitTest
 {
 public:
-    RegionPlaybackTests() : juce::UnitTest ("RegionPlayback (offline)", "GoCue") {}
+    RegionPlaybackTests() : juce::UnitTest ("RegionPlayback (offline)", "Enqueue") {}
 
     static constexpr double sampleRate = 44100.0;
     static constexpr int blockSize = 512;

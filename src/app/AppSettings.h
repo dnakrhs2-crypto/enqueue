@@ -7,7 +7,7 @@
 namespace gocue
 {
 
-/** Per-user application settings (%APPDATA%\GoCue\GoCue.settings):
+/** Per-user application settings (%APPDATA%\Enqueue\Enqueue.settings):
     audio device state, plugin list, last used paths and the window state. */
 class AppSettings
 {
@@ -49,7 +49,6 @@ public:
 
     /** The underlying file, for JUCE components that persist their own settings (plugin scanner). */
     juce::PropertiesFile* getPropertiesFile() noexcept { return settings; }
-
     /** File the plugin scanner uses to blacklist plugins that crashed a previous scan. */
     juce::File getDeadMansPedalFile() const;
 

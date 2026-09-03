@@ -11,7 +11,7 @@ namespace gocue::tests
 class LevelMatrixTests : public juce::UnitTest
 {
 public:
-    LevelMatrixTests() : juce::UnitTest ("LevelMatrix", "GoCue") {}
+    LevelMatrixTests() : juce::UnitTest ("LevelMatrix", "Enqueue") {}
 
     void runTest() override
     {

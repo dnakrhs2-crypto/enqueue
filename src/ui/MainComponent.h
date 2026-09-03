@@ -58,7 +58,7 @@ public:
     juce::PopupMenu getMenuForIndex (int topLevelMenuIndex, const juce::String& menuName) override;
     void menuItemSelected (int menuItemID, int topLevelMenuIndex) override;
 
-    /** Opens a .gocue file passed on the command line (file association / drag onto the exe). */
+    /** Opens a project file (.enqueue / .gocue) passed on the command line (file association / drag onto the exe). */
     void openProjectFromCommandLine (const juce::String& commandLine);
     void openProjectFile (const juce::File& file);
 

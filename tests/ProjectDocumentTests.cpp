@@ -9,7 +9,7 @@ namespace gocue::tests
 class ProjectDocumentTests : public juce::UnitTest
 {
 public:
-    ProjectDocumentTests() : juce::UnitTest ("ProjectDocument", "GoCue") {}
+    ProjectDocumentTests() : juce::UnitTest ("ProjectDocument", "Enqueue") {}
 
     static Cue make (const juce::String& name)
     {

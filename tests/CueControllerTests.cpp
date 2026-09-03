@@ -11,7 +11,7 @@ namespace gocue::tests
 class CueControllerTests : public juce::UnitTest
 {
 public:
-    CueControllerTests() : juce::UnitTest ("CueController", "GoCue") {}
+    CueControllerTests() : juce::UnitTest ("CueController", "Enqueue") {}
 
     static constexpr double sampleRate = 44100.0;
     static constexpr int blockSize = 512;

@@ -1,6 +1,6 @@
-juce_add_console_app(GoCueTests PRODUCT_NAME "GoCueTests")
+juce_add_console_app(EnqueueTests PRODUCT_NAME "EnqueueTests")
 
-target_sources(GoCueTests PRIVATE
+target_sources(EnqueueTests PRIVATE
     TestMain.cpp
     FadeEnvelopeTests.cpp
     EnvelopeTests.cpp
@@ -10,6 +10,7 @@ target_sources(GoCueTests PRIVATE
     CueOrderTests.cpp
     DeviceProbeTests.cpp
     OutputLimitTests.cpp
+    SettingsMigrationTests.cpp
     ResamplerTests.cpp
     CueListTests.cpp
     CueNumberingTests.cpp
@@ -28,12 +29,12 @@ target_sources(GoCueTests PRIVATE
     PluginChainTests.cpp
     RealVst3Tests.cpp)
 
-target_compile_definitions(GoCueTests PRIVATE
-    JUCE_APPLICATION_NAME_STRING="GoCueTests"
+target_compile_definitions(EnqueueTests PRIVATE
+    JUCE_APPLICATION_NAME_STRING="EnqueueTests"
     JUCE_APPLICATION_VERSION_STRING="${PROJECT_VERSION}")
 
-target_link_libraries(GoCueTests PRIVATE GoCueCore)
+target_link_libraries(EnqueueTests PRIVATE GoCueCore)
 
-set_property(TARGET GoCueTests PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+set_property(TARGET EnqueueTests PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 
-add_test(NAME GoCueUnitTests COMMAND GoCueTests)
+add_test(NAME EnqueueUnitTests COMMAND EnqueueTests)

@@ -13,7 +13,7 @@ namespace gocue::tests
 class PluginChainTests : public juce::UnitTest
 {
 public:
-    PluginChainTests() : juce::UnitTest ("PluginChain", "GoCue") {}
+    PluginChainTests() : juce::UnitTest ("PluginChain", "Enqueue") {}
 
     struct RecordingListener : public PluginChain::Listener
     {

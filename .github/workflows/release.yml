@@ -1,4 +1,4 @@
-# Builds, signs and publishes a GoCue release when a v* tag is pushed.
+# Builds, signs and publishes a Enqueue release when a v* tag is pushed.
 # Needs: repository secret GOCUE_EDDSA_PRIVATE_KEY (contents of the winsparkle-tool private key file).
 # The matching public key is baked in through CMakePresets.json (GOCUE_EDDSA_PUBLIC_KEY).
 name: release
@@ -61,6 +61,6 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         shell: pwsh
         run: |
-          $installer = Get-ChildItem installer/output/GoCue-Setup-*.exe | Select-Object -First 1
+          $installer = Get-ChildItem installer/output/Enqueue-Setup-*.exe | Select-Object -First 1
           gh release create "${{ github.ref_name }}" $installer.FullName installer/output/appcast.xml `
-            --title "GoCue ${{ github.ref_name }}" --generate-notes
+            --title "Enqueue ${{ github.ref_name }}" --generate-notes

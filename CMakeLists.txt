@@ -1,13 +1,13 @@
 cmake_minimum_required(VERSION 3.22)
 
-project(GoCue VERSION 0.8.9 LANGUAGES C CXX)
+project(Enqueue VERSION 0.9.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
 if(NOT WIN32)
-    message(FATAL_ERROR "GoCue targets Windows only (ASIO / WASAPI output).")
+    message(FATAL_ERROR "Enqueue targets Windows only (ASIO / WASAPI output).")
 endif()
 
 set_property(GLOBAL PROPERTY USE_FOLDERS ON)
@@ -61,6 +61,7 @@ target_sources(GoCueCore INTERFACE
     ${CMAKE_CURRENT_SOURCE_DIR}/src/app/Scheduler.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/app/FadeRunner.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/app/BackupManager.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/app/SettingsMigration.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/audio/RegionLoopSource.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/audio/ReadAheadSource.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/audio/CuePlayer.cpp
@@ -121,9 +122,9 @@ target_link_libraries(GoCueCore INTERFACE
 # ---------------------------------------------------------------------------
 # Application
 # ---------------------------------------------------------------------------
-juce_add_gui_app(GoCue
-    PRODUCT_NAME "GoCue"
-    COMPANY_NAME "GoCue"
+juce_add_gui_app(Enqueue
+    PRODUCT_NAME "Enqueue"
+    COMPANY_NAME "Gomtwigim"
     VERSION ${PROJECT_VERSION}
     ICON_BIG "${CMAKE_CURRENT_SOURCE_DIR}/assets/icon_512.png"
     ICON_SMALL "${CMAKE_CURRENT_SOURCE_DIR}/assets/icon_512.png"
@@ -132,18 +133,18 @@ juce_add_gui_app(GoCue
 
 # JUCE regenerates GoCue_resources.rc (VERSIONINFO) only when the icon changes, so on an
 # incremental build a version bump would ship with the old file version. Drop a stale one here.
-get_target_property(_gocue_generated_dir GoCue JUCE_GENERATED_SOURCES_DIRECTORY)
+get_target_property(_gocue_generated_dir Enqueue JUCE_GENERATED_SOURCES_DIRECTORY)
 set(_gocue_rc_file "${_gocue_generated_dir}/GoCue_resources.rc")
 if(EXISTS "${_gocue_rc_file}")
     file(READ "${_gocue_rc_file}" _gocue_rc_text)
     string(REPLACE "." "," _gocue_version_commas "${PROJECT_VERSION}")
     if(NOT _gocue_rc_text MATCHES "FILEVERSION[ \t]+${_gocue_version_commas},0")
         file(REMOVE "${_gocue_rc_file}")
-        message(STATUS "GoCue: version resource was stale -> regenerating for ${PROJECT_VERSION}")
+        message(STATUS "Enqueue: version resource was stale -> regenerating for ${PROJECT_VERSION}")
     endif()
 endif()
 
-target_sources(GoCue PRIVATE
+target_sources(Enqueue PRIVATE
     src/Main.cpp
     src/app/AppSettings.cpp
     src/app/Updater.cpp
@@ -169,26 +170,26 @@ target_sources(GoCue PRIVATE
     src/ui/PluginChainComponent.cpp
     src/ui/PluginDialogs.cpp)
 
-target_compile_definitions(GoCue PRIVATE
-    JUCE_APPLICATION_NAME_STRING="$<TARGET_PROPERTY:GoCue,JUCE_PRODUCT_NAME>"
-    JUCE_APPLICATION_VERSION_STRING="$<TARGET_PROPERTY:GoCue,JUCE_VERSION>"
+target_compile_definitions(Enqueue PRIVATE
+    JUCE_APPLICATION_NAME_STRING="$<TARGET_PROPERTY:Enqueue,JUCE_PRODUCT_NAME>"
+    JUCE_APPLICATION_VERSION_STRING="$<TARGET_PROPERTY:Enqueue,JUCE_VERSION>"
     GOCUE_HAS_WINSPARKLE=${GOCUE_HAS_WINSPARKLE}
     GOCUE_APPCAST_URL="${GOCUE_APPCAST_URL}"
     GOCUE_EDDSA_PUBLIC_KEY="${GOCUE_EDDSA_PUBLIC_KEY}")
 
-target_link_libraries(GoCue PRIVATE GoCueCore)
+target_link_libraries(Enqueue PRIVATE GoCueCore)
 
 # Static VC runtime: the installed app must not depend on the VC++ redistributable.
-set_property(TARGET GoCue PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+set_property(TARGET Enqueue PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 
 if(GOCUE_HAS_WINSPARKLE)
-    target_link_libraries(GoCue PRIVATE gocue::winsparkle)
-    add_custom_command(TARGET GoCue POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different "${GOCUE_WINSPARKLE_DLL}" "$<TARGET_FILE_DIR:GoCue>"
-        COMMENT "Copying WinSparkle.dll next to GoCue.exe")
+    target_link_libraries(Enqueue PRIVATE gocue::winsparkle)
+    add_custom_command(TARGET Enqueue POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different "${GOCUE_WINSPARKLE_DLL}" "$<TARGET_FILE_DIR:Enqueue>"
+        COMMENT "Copying WinSparkle.dll next to Enqueue.exe")
 endif()
 
-set_property(DIRECTORY PROPERTY VS_STARTUP_PROJECT GoCue)
+set_property(DIRECTORY PROPERTY VS_STARTUP_PROJECT Enqueue)
 
 # ---------------------------------------------------------------------------
 # Tests

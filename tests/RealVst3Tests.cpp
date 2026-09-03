@@ -20,7 +20,7 @@ namespace gocue::tests
 class RealVst3Tests : public juce::UnitTest
 {
 public:
-    RealVst3Tests() : juce::UnitTest ("Real VST3 plugins (optional)", "GoCue") {}
+    RealVst3Tests() : juce::UnitTest ("Real VST3 plugins (optional)", "Enqueue") {}
 
     static constexpr double sampleRate = 44100.0;
     static constexpr int blockSize = 512;

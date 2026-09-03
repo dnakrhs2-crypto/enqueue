@@ -8,7 +8,7 @@ namespace gocue::tests
 class SchedulerTests : public juce::UnitTest
 {
 public:
-    SchedulerTests() : juce::UnitTest ("Scheduler", "GoCue") {}
+    SchedulerTests() : juce::UnitTest ("Scheduler", "Enqueue") {}
 
     void runTest() override
     {

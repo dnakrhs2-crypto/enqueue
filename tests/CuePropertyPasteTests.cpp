@@ -9,7 +9,7 @@ namespace gocue::tests
 class CuePropertyPasteTests : public juce::UnitTest
 {
 public:
-    CuePropertyPasteTests() : juce::UnitTest ("CuePropertyPaste", "GoCue") {}
+    CuePropertyPasteTests() : juce::UnitTest ("CuePropertyPaste", "Enqueue") {}
 
     static Cue makeSource()
     {

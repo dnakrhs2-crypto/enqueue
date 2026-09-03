@@ -9,7 +9,7 @@ namespace gocue::tests
 class ProjectHistoryTests : public juce::UnitTest
 {
 public:
-    ProjectHistoryTests() : juce::UnitTest ("ProjectHistory", "GoCue") {}
+    ProjectHistoryTests() : juce::UnitTest ("ProjectHistory", "Enqueue") {}
 
     static ProjectSnapshot snapshotNamed (const juce::String& cueName)
     {

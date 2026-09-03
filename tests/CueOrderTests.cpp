@@ -9,7 +9,7 @@ namespace gocue::tests
 class CueOrderTests : public juce::UnitTest
 {
 public:
-    CueOrderTests() : juce::UnitTest ("CueOrder", "GoCue") {}
+    CueOrderTests() : juce::UnitTest ("CueOrder", "Enqueue") {}
 
     static Cue make (const juce::String& number)
     {

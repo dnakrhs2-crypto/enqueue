@@ -8,7 +8,7 @@ namespace gocue::tests
 class BackupManagerTests : public juce::UnitTest
 {
 public:
-    BackupManagerTests() : juce::UnitTest ("BackupManager", "GoCue") {}
+    BackupManagerTests() : juce::UnitTest ("BackupManager", "Enqueue") {}
 
     void runTest() override
     {

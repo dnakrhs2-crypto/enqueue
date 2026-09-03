@@ -13,7 +13,7 @@ namespace gocue::tests
 class AudioEngineTests : public juce::UnitTest
 {
 public:
-    AudioEngineTests() : juce::UnitTest ("AudioEngine (offline)", "GoCue") {}
+    AudioEngineTests() : juce::UnitTest ("AudioEngine (offline)", "Enqueue") {}
 
     static constexpr double sampleRate = 44100.0;
     static constexpr int blockSize = 512;

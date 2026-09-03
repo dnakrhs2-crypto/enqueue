@@ -3,13 +3,13 @@
 namespace gocue::tests
 {
 
-/** Not a test of GoCue: a probe of this machine's audio devices, run only with GOCUE_PROBE_DEVICES=1.
+/** Not a test of Enqueue: a probe of this machine's audio devices, run only with GOCUE_PROBE_DEVICES=1.
     Prints, per device type, every output device with its channel count, and tries to open the WASAPI
     devices with all their channels (the exclusive-mode multichannel check). */
 class DeviceProbeTests : public juce::UnitTest
 {
 public:
-    DeviceProbeTests() : juce::UnitTest ("DeviceProbe", "GoCue") {}
+    DeviceProbeTests() : juce::UnitTest ("DeviceProbe", "Enqueue") {}
 
     void runTest() override
     {

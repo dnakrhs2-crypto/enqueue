@@ -9,7 +9,7 @@ namespace gocue::tests
 class AudioPatchTests : public juce::UnitTest
 {
 public:
-    AudioPatchTests() : juce::UnitTest ("AudioPatch", "GoCue") {}
+    AudioPatchTests() : juce::UnitTest ("AudioPatch", "Enqueue") {}
 
     void runTest() override
     {
