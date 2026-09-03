@@ -7,5 +7,5 @@ namespace gocue::Links
 
     /** Desktop shortcut target offered by the installer: our redirect page, which forwards to the Coupang Partners link
         (the page can be repointed without touching installed shortcuts). */
-    inline constexpr const char* coupangShortcut = "https://dnakrhs2-crypto.github.io/gocue/coupang/";
+    inline constexpr const char* coupangShortcut = "https://xn--jb0byyo90f.com/coupang/";   // 곰튀김.com
 }

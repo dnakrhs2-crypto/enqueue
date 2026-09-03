@@ -98,7 +98,7 @@ Filename: "{app}\{#AppExe}"; Description: "{cm:LaunchProgram,{#StringChange(AppN
 
 [Code]
 const
-  CoupangShortcutUrl = 'https://dnakrhs2-crypto.github.io/gocue/coupang/';
+  CoupangShortcutUrl = 'https://xn--jb0byyo90f.com/coupang/';   { 곰튀김.com }
 
 function NoRunRequested: Boolean;
 begin
