@@ -149,7 +149,16 @@ private:
     void changeListenerCallback (juce::ChangeBroadcaster*) override
     {
         if (engine != nullptr)
-            engine->enforceOutputLimit();   // a non-ASIO type never keeps more than outputs 1-2
+        {
+            const auto error = engine->enforceOutputLimit();   // a non-ASIO type never keeps more than outputs 1-2
+
+            if (error.isNotEmpty())
+                juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon,
+                                                        ko ("오디오 출력"),
+                                                        ko ("장치를 출력 1-2로 다시 열지 못했습니다.\n") + error
+                                                            + "\n\n" + ko ("메뉴 [오디오 > 오디오 출력 설정]에서 장치를 다시 선택하세요."),
+                                                        ko ("확인"));
+        }
 
         saveDeviceState();
     }

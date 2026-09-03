@@ -60,12 +60,22 @@ public:
     static constexpr int maxDeviceOutputs = 64;
     /** Outputs beyond a stereo pair are for ASIO only (gom, 2026-09-03): the Windows Audio modes stay at 1-2. */
     static constexpr int stereoOnlyOutputs = 2;
+    /** True for a device type that may open more than two outputs (ASIO). */
+    static bool typeAllowsMultichannel (const juce::String& deviceTypeName) { return deviceTypeName.containsIgnoreCase ("ASIO"); }
     /** True when the current device type may open more than two outputs (ASIO). */
     bool currentTypeAllowsMultichannel() const;
     /** How many outputs the current device type may open: maxDeviceOutputs on ASIO, 2 elsewhere. */
     int outputLimitForCurrentType() const { return currentTypeAllowsMultichannel() ? maxDeviceOutputs : stereoOnlyOutputs; }
-    /** Trims the open outputs to that limit (a saved 8-channel WASAPI setup comes back as 1-2). Message thread. */
-    void enforceOutputLimit();
+    /** Applies the policy to the open device: a non-ASIO device is trimmed to outputs 1-2; an ASIO device whose channels
+        were never chosen is widened back to everything it has (JUCE keeps the last explicit count as its default, so
+        after a trim elsewhere it would open ASIO with 1-2 only). Returns the device error when the reopen failed (the
+        device is closed then). Message thread. */
+    juce::String enforceOutputLimit();
+    /** The saved device state with the policy applied before the first open: a non-ASIO type asks for 1-2 straight
+        away instead of opening wide and being trimmed (an exclusive-mode device may refuse the wide request). */
+    static std::unique_ptr<juce::XmlElement> normaliseDeviceState (const juce::XmlElement* saved);
+    /** What the running device may carry: channels at or beyond this index are silenced in the callback. */
+    int getOutputChannelLimit() const noexcept { return outputChannelLimit.load (std::memory_order_relaxed); }
     static constexpr int maxDeviceInputs = 32;
     /** Mic cues need device inputs: opens the first 'channels' input channels (the mic cue rows are the *first*
         open inputs, so inputs 1..N must be the ones open); 0 leaves the device as is. Restarts the device when it
@@ -267,6 +277,10 @@ private:
     std::unique_ptr<PatchRuntime> muteRuntime;                   // audition "출력 없음": a bus that is never routed
     juce::int64 startCounter = 0;
     std::atomic<int> numDeviceOutputs { 2 };
+    std::atomic<int> outputChannelLimit { maxDeviceOutputs };   // set when a device starts, read by the callback
+    bool formatPrepared = false;                                // prepare() ran once: a restart at the same format keeps the players' state
+    double previousSampleRate = 0.0;
+    int previousBlockSize = 0;
     std::atomic<int> numDeviceInputs { 0 };
     std::atomic<bool> reapNeeded { false };
     std::array<const float*, maxDeviceInputs> inputPointers {};   // >=32-output path: input block pointers, no allocation
