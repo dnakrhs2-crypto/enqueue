@@ -26,11 +26,15 @@ public:
         std::unique_ptr<juce::AudioPluginInstance> plugin;   // null when the plugin could not be created
         PluginSlotState state;                               // saved description + state (kept for missing plugins)
         std::atomic<bool> bypassed { false };
+        std::atomic<bool> faulted { false };    // threw inside processBlock: bypassed from then on (a hung plugin cannot be helped in-process)
         juce::AudioBuffer<float> scratch;                    // used for bypass and for plugins that need > 2 channels
         int numScratchChannels = 2;
 
         bool isMissing() const noexcept { return plugin == nullptr; }
     };
+
+    /** Clears every plugin's delay lines / tails (AudioProcessor::reset), from the audio thread after a panic. */
+    void resetProcessing() noexcept;
 
     struct Listener
     {

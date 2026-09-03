@@ -57,6 +57,14 @@ namespace
 
         std::call_once (once, []
         {
+            // the DLLs are delay-loaded: on a Windows N edition without the Media Feature Pack they are absent, and
+            // calling MFStartup would raise a loader exception; probing first keeps the app alive without AAC/WMA
+            if (LoadLibraryW (L"mfplat.dll") == nullptr || LoadLibraryW (L"mfreadwrite.dll") == nullptr)
+            {
+                ok = false;
+                return;
+            }
+
             ok = SUCCEEDED (MFStartup (MF_VERSION, MFSTARTUP_LITE));
         });
 

@@ -58,6 +58,7 @@ public:
         Returns an error message, or an empty string on success. */
     juce::String initialise (const juce::XmlElement* savedDeviceState);
     static constexpr int maxDeviceOutputs = 64;
+    static constexpr int maxPlayers = 256;   // simultaneous instances; play() refuses beyond it (no growth under the audio lock)
     /** Outputs beyond a stereo pair are for ASIO only (gom, 2026-09-03): the Windows Audio modes stay at 1-2. */
     static constexpr int stereoOnlyOutputs = 2;
     /** True for a device type that may open more than two outputs (ASIO). */
@@ -109,6 +110,10 @@ public:
     /** De-clicked immediate stop of every instance of this cue (no plugin tail). */
     void stop (const juce::Uuid& cueId);
     void stopAll();
+    /** The final output gate: closes over 'rampMilliseconds' and clears the plugin chains once silent; play()/resume() reopen it. */
+    void closeOutputGate (int rampMilliseconds, bool resetChains);
+    void openOutputGate();
+    bool isDeviceRunning() const noexcept { return deviceRunning.load (std::memory_order_relaxed); }
     /** Fades the cue out over its own fadeOutMs, then stops it. */
     void fadeOutAndStop (const juce::Uuid& cueId);
     void fadeOutAndStopAll();
@@ -280,6 +285,18 @@ private:
     std::unique_ptr<PatchRuntime> muteRuntime;                   // audition "출력 없음": a bus that is never routed
     juce::int64 startCounter = 0;
     std::atomic<int> numDeviceOutputs { 2 };
+    // --- the final output gate: whatever the players and plugin chains do, a closed gate means silence at the device
+    std::atomic<bool> hardPanicRequested { false };    // set before the lock is taken: the callback mutes at once, even while the lock is busy
+    std::atomic<int> outputGateTarget { 1 };            // 1 open, 0 closed
+    std::atomic<int> outputGateRampSamples { 220 };     // ramp length of the next move (5 ms at 44.1 k by default)
+    std::atomic<juce::int64> outputGateCloseCountdown { -1 };   // samples until a scheduled close (soft panic), -1 = none
+    std::atomic<bool> resetChainsWhenClosed { false };  // plugin tails are cleared once the gate reaches silence
+    std::atomic<bool> outputGateSnapOpen { false };     // a closed gate reopens at once for a new cue (nothing audible is behind it)
+    float outputGateGain = 1.0f;                        // audio thread only
+    std::atomic<bool> deviceRunning { false };
+    bool deviceExpected = false;                        // initialise() ran: a stopped device refuses new cues (offline tests never initialise)
+    void applyOutputGate (juce::AudioBuffer<float>& output, int numSamples) noexcept;
+    void resetAllChainsForPanic() noexcept;
     std::atomic<int> outputChannelLimit { maxDeviceOutputs };   // set when a device starts, read by the callback
     std::atomic<bool> outputMaskOutOfRange { false };           // a non-ASIO device runs on channels past the limit: nothing goes out until the trim
     juce::String lastPolicyType;                                // device type seen by the last enforceOutputLimit(): a switch that lost its device gets a stereo retry

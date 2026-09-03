@@ -374,11 +374,9 @@ void CuePlayer::setLiveRate (double rate) noexcept
 
 void CuePlayer::setLiveGainDb (double gainDb) noexcept
 {
-    Cue tmp;
-    tmp.gainDb = gainDb;
-    tmp.sanitise();
-    liveGainDb = tmp.gainDb;
-    targetGain.store (tmp.gainLinear(), std::memory_order_relaxed);
+    // no Cue temporary here: this runs under the engine lock at fade rate, and Cue::sanitise() allocates
+    liveGainDb = juce::jlimit (Cue::minGainDb, Cue::maxGainDb, gainDb);   // the same clamp as Cue::gainLinear
+    targetGain.store (juce::Decibels::decibelsToGain ((float) liveGainDb, (float) Cue::minGainDb), std::memory_order_relaxed);
 }
 
 void CuePlayer::setDuckDb (double db, double rampSeconds) noexcept
@@ -467,28 +465,27 @@ void CuePlayer::setLiveLevels (const LevelMatrix& levels, const TrimLevels& trim
     std::vector<float> gains;
     computeGains (sized, sizedTrim, gains);
 
-    gainsVersion.fetch_add (1, std::memory_order_acq_rel);   // odd: writing
-    std::copy (gains.begin(), gains.end(), publishedGains.begin());
-    gainsVersion.fetch_add (1, std::memory_order_acq_rel);   // even: stable
+    {
+        const juce::SpinLock::ScopedLockType sl (gainsLock);   // a few microseconds; the audio thread only try-locks
+        std::copy (gains.begin(), gains.end(), publishedGains.begin());
+        gainsVersion.fetch_add (2, std::memory_order_acq_rel);
+    }
 }
 
 void CuePlayer::adoptPublishedGains() noexcept
 {
-    for (int attempt = 0; attempt < 3; ++attempt)
-    {
-        const auto v1 = gainsVersion.load (std::memory_order_acquire);
+    const auto v = gainsVersion.load (std::memory_order_acquire);
 
-        if (v1 == adoptedGainsVersion || (v1 & 1u) != 0)
-            return;   // nothing new, or the writer is mid-update: try again next block
+    if (v == adoptedGainsVersion)
+        return;   // nothing new
 
-        std::copy (publishedGains.begin(), publishedGains.end(), targetGains.begin());
+    const juce::SpinLock::ScopedTryLockType sl (gainsLock);
 
-        if (gainsVersion.load (std::memory_order_acquire) == v1)
-        {
-            adoptedGainsVersion = v1;
-            return;
-        }
-    }
+    if (! sl.isLocked())
+        return;   // the writer is mid-update: the old gains stay for one more block
+
+    std::copy (publishedGains.begin(), publishedGains.end(), targetGains.begin());
+    adoptedGainsVersion = gainsVersion.load (std::memory_order_acquire);
 }
 
 void CuePlayer::mixIntoBus (juce::AudioBuffer<float>& bus, const juce::AudioBuffer<float>& rendered, int numSamples) noexcept
@@ -563,7 +560,7 @@ bool CuePlayer::renderNextBlock (juce::AudioBuffer<float>& fullBuffer, int numSa
     // the player's channels only (no allocation: the channel-pointer array lives inside the view)
     juce::AudioBuffer<float> buffer (fullBuffer.getArrayOfWritePointers(), juce::jmin (numChannels, fullBuffer.getNumChannels()), 0, numSamples);
 
-    if (finished.load (std::memory_order_relaxed) || ! isValid())
+    if (! isValid())
     {
         buffer.clear (0, numSamples);
         return false;
@@ -571,6 +568,14 @@ bool CuePlayer::renderNextBlock (juce::AudioBuffer<float>& fullBuffer, int numSa
 
     if (const auto seek = pendingVirtualPosition.exchange (-1, std::memory_order_acq_rel); seek >= 0)
     {
+        if (endedNaturally.exchange (false, std::memory_order_acq_rel))
+        {
+            // a live edit landed after the stream had ended (longer region, more passes, endless loop): it goes on
+            finished.store (false, std::memory_order_relaxed);
+            inTail = false;
+            tailSamplesLeft = 0;
+        }
+
         virtualPosition.store ((double) seek, std::memory_order_relaxed);
 
         if (const double elapsed = pendingElapsedSamples.exchange (-1.0, std::memory_order_relaxed); elapsed >= 0.0)
@@ -578,6 +583,12 @@ bool CuePlayer::renderNextBlock (juce::AudioBuffer<float>& fullBuffer, int numSa
 
         resampler->flushBuffers();   // drop the interpolator's history so the old position is not heard after the jump
         srcConverter->reset();
+    }
+
+    if (finished.load (std::memory_order_relaxed))
+    {
+        buffer.clear (0, numSamples);
+        return false;
     }
 
     const int fadeMs = pendingFadeOutMs.exchange (-1, std::memory_order_relaxed);
@@ -756,6 +767,9 @@ bool CuePlayer::renderNextBlock (juce::AudioBuffer<float>& fullBuffer, int numSa
 
     if (stoppedAfterFade || streamEnded)
     {
+        if (streamEnded && ! stoppedAfterFade)
+            endedNaturally.store (true, std::memory_order_relaxed);
+
         const double tailSeconds = (hardStop || activeChain == nullptr) ? 0.0 : activeChain->getTailSeconds();
         tailSamplesLeft = (juce::int64) (tailSeconds * currentSampleRate);
 

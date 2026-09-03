@@ -117,7 +117,11 @@ target_link_libraries(GoCueCore INTERFACE
     juce::juce_gui_extra
     juce::juce_recommended_config_flags
     juce::juce_recommended_warning_flags
-    mfplat mfreadwrite mfuuid propsys ole32)   # Media Foundation AAC / M4A reader
+    mfplat mfreadwrite mfuuid propsys ole32 delayimp)   # Media Foundation AAC / M4A / WMA reader (delay-loaded: optional on Windows N)
+
+# mfplat / mfreadwrite are missing on Windows N editions without the Media Feature Pack: delay-load them so the app
+# still starts (MediaFoundationAudioFormat::isAvailable() probes the DLLs before touching them)
+target_link_options(GoCueCore INTERFACE $<$<CXX_COMPILER_ID:MSVC>:/DELAYLOAD:mfplat.dll> $<$<CXX_COMPILER_ID:MSVC>:/DELAYLOAD:mfreadwrite.dll>)
 
 # ---------------------------------------------------------------------------
 # Application

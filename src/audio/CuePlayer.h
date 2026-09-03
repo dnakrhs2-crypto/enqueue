@@ -189,6 +189,7 @@ private:
     std::vector<float> currentGains, targetGains, publishedGains;   // [input * numOutputs + output]
     std::atomic<unsigned int> gainsVersion { 0 };                   // even = stable, odd = being written
     unsigned int adoptedGainsVersion = 0;
+    juce::SpinLock gainsLock;   // guards publishedGains between the message thread (writer) and the audio thread (reader)
     juce::String errorMessage;
     std::unique_ptr<RegionLoopSource> source;
     std::unique_ptr<ReadAheadSource> readAhead;                // null on the synchronous (test) path
@@ -214,6 +215,7 @@ private:
     std::atomic<bool> hardStopRequested { false };
     std::atomic<bool> stopRequested { false };
     std::atomic<bool> finished { false };
+    std::atomic<bool> endedNaturally { false };   // finished because the stream ended (a live edit that adds material undoes it)
     std::atomic<bool> fadingOut { false };
     std::atomic<bool> pauseRequested { false };
     std::atomic<bool> resumeRequested { false };

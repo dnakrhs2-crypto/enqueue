@@ -15,7 +15,7 @@ AudioEngine::AudioEngine (int readAhead)
 
     mixBuffer.setSize (2, blockSize.load());
     playerBuffer.setSize (CuePlayer::maxChannels, blockSize.load());
-    players.reserve (256);   // push_back under the audio lock must not reallocate
+    players.reserve (maxPlayers);   // push_back under the audio lock must not reallocate (play() refuses beyond this)
 
     muteRuntime = std::make_unique<PatchRuntime>();
     muteRuntime->patch = AudioPatch::makeDefault ("mute");
@@ -35,6 +35,7 @@ AudioEngine::~AudioEngine()
 juce::String AudioEngine::initialise (const juce::XmlElement* savedDeviceState)
 {
     const auto normalised = normaliseDeviceState (savedDeviceState);
+    deviceExpected = true;
     auto error = deviceManager.initialise (0, maxDeviceOutputs, normalised.get(), true);
     const auto policyError = enforceOutputLimit();   // includes the stereo retry for a non-ASIO type left without a device
 
@@ -690,6 +691,16 @@ void AudioEngine::renderPatch (PatchRuntime& r, int numSamples) noexcept
 //==============================================================================
 bool AudioEngine::play (const Cue& cue, const PlayOptions& options, juce::String* errorMessage)
 {
+    if (deviceExpected && ! deviceRunning.load (std::memory_order_acquire))
+    {
+        if (errorMessage != nullptr)
+            *errorMessage = juce::String::fromUTF8 ("오디오 장치가 열려 있지 않습니다. 메뉴 [오디오 > 오디오 출력 설정]에서 장치를 확인하세요.");
+
+        return false;
+    }
+
+    openOutputGate();   // a new cue always plays: a panic gate that was closed reopens
+
     const bool wantsAudition = options.audition || options.silent || ! options.patchOverride.isNull();
 
     if (! wantsAudition)
@@ -754,6 +765,14 @@ bool AudioEngine::play (const Cue& cue, const PlayOptions& options, juce::String
     player->start();
 
     const juce::ScopedLock sl (lock);
+
+    if (players.size() >= maxPlayers)
+    {
+        if (errorMessage != nullptr)
+            *errorMessage = juce::String::fromUTF8 ("동시 재생 한도(") + juce::String (maxPlayers) + juce::String::fromUTF8 ("개)를 넘었습니다.");
+
+        return false;   // the vector must never grow under the audio lock
+    }
 
     for (auto& existing : players)
     {
@@ -830,11 +849,18 @@ void AudioEngine::stop (const juce::Uuid& cueId)
 
 void AudioEngine::stopAll()
 {
-    const juce::ScopedLock sl (lock);
+    hardPanicRequested.store (true, std::memory_order_release);   // the next callback is silent before anything else happens
 
-    for (auto& p : players)
-        if (! p->hasFinished())
-            p->requestStop();
+    {
+        const juce::ScopedLock sl (lock);
+
+        for (auto& p : players)
+            if (! p->hasFinished())
+                p->requestStop();
+    }
+
+    closeOutputGate (5, true);
+    hardPanicRequested.store (false, std::memory_order_release);   // the players are stopping: normal processing behind a closed gate
 }
 
 void AudioEngine::fadeOutAndStop (const juce::Uuid& cueId)
@@ -866,11 +892,105 @@ void AudioEngine::fadeOutAndStop (const juce::Uuid& cueId, int milliseconds)
 
 void AudioEngine::fadeOutAndStopAll (int milliseconds)
 {
-    const juce::ScopedLock sl (lock);
+    {
+        const juce::ScopedLock sl (lock);
+
+        for (auto& p : players)
+            if (! p->hasFinished())
+                p->requestFadeOut (milliseconds);
+    }
+
+    // once the fade is over the gate closes over 200 ms and every plugin tail (patch, master, cue inserts) is cleared:
+    // "전체 페이드 정지" ends in silence, whatever a reverb or a self-oscillating plugin would do
+    resetChainsWhenClosed.store (true, std::memory_order_relaxed);
+    outputGateCloseCountdown.store ((juce::int64) (juce::jmax (0, milliseconds) * sampleRate.load() / 1000.0), std::memory_order_release);
+}
+
+void AudioEngine::closeOutputGate (int rampMilliseconds, bool resetChains)
+{
+    outputGateCloseCountdown.store (-1, std::memory_order_relaxed);
+    resetChainsWhenClosed.store (resetChains, std::memory_order_relaxed);
+    outputGateRampSamples.store (juce::jmax (1, (int) (rampMilliseconds * sampleRate.load() / 1000.0)), std::memory_order_relaxed);
+    outputGateTarget.store (0, std::memory_order_release);
+}
+
+void AudioEngine::openOutputGate()
+{
+    outputGateCloseCountdown.store (-1, std::memory_order_relaxed);
+    resetChainsWhenClosed.store (false, std::memory_order_relaxed);
+    outputGateSnapOpen.store (true, std::memory_order_relaxed);   // fully closed: nothing to ramp, the new cue starts at full level
+    outputGateRampSamples.store (juce::jmax (1, (int) (5.0 * sampleRate.load() / 1000.0)), std::memory_order_relaxed);
+    outputGateTarget.store (1, std::memory_order_release);
+}
+
+void AudioEngine::applyOutputGate (juce::AudioBuffer<float>& output, int numSamples) noexcept
+{
+    // a scheduled close (soft panic) counts down in samples
+    if (auto countdown = outputGateCloseCountdown.load (std::memory_order_acquire); countdown >= 0)
+    {
+        countdown -= numSamples;
+
+        if (countdown <= 0)
+        {
+            outputGateCloseCountdown.store (-1, std::memory_order_relaxed);
+            outputGateRampSamples.store (juce::jmax (1, (int) (0.2 * sampleRate.load())), std::memory_order_relaxed);
+            outputGateTarget.store (0, std::memory_order_release);
+        }
+        else
+            outputGateCloseCountdown.store (countdown, std::memory_order_relaxed);
+    }
+
+    const float target = (float) outputGateTarget.load (std::memory_order_acquire);
+
+    if (outputGateSnapOpen.exchange (false, std::memory_order_acq_rel) && target > 0.0f && outputGateGain <= 0.0f)
+        outputGateGain = 1.0f;   // silence behind the gate: open instantly (a fading gate keeps its ramp)
+
+    if (juce::exactlyEqual (outputGateGain, target))
+    {
+        if (target <= 0.0f)
+        {
+            output.clear (0, numSamples);
+
+            if (resetChainsWhenClosed.exchange (false, std::memory_order_acq_rel))
+                resetAllChainsForPanic();
+        }
+
+        return;
+    }
+
+    const float step = (target - outputGateGain) / (float) juce::jmax (1, outputGateRampSamples.load (std::memory_order_relaxed));
+    const float start = outputGateGain;
+    float end = start + step * (float) numSamples;
+
+    if ((step > 0.0f && end >= target) || (step < 0.0f && end <= target))
+        end = target;
+
+    output.applyGainRamp (0, numSamples, start, end);
+    outputGateGain = end;
+}
+
+void AudioEngine::resetAllChainsForPanic() noexcept
+{
+    // audio thread: the plugins' own reset() clears delay lines and reverb tails; a busy engine lock means the
+    // message thread is rebuilding something, and the reset is taken up again next block
+    const juce::ScopedTryLock sl (lock);
+
+    if (! sl.isLocked())
+    {
+        resetChainsWhenClosed.store (true, std::memory_order_relaxed);
+        return;
+    }
 
     for (auto& p : players)
-        if (! p->hasFinished())
-            p->requestFadeOut (milliseconds);
+        if (auto* chain = p->getChain())
+            chain->resetProcessing();
+
+    masterChain.resetProcessing();
+
+    for (auto& entry : cueChains)
+        entry.second->resetProcessing();
+
+    forEachPatchChain ([] (PluginChain& chain) { chain.resetProcessing(); });
 }
 
 void AudioEngine::pause (const juce::Uuid& cueId)
@@ -884,6 +1004,7 @@ void AudioEngine::pause (const juce::Uuid& cueId)
 
 void AudioEngine::resume (const juce::Uuid& cueId)
 {
+    openOutputGate();
     const juce::ScopedLock sl (lock);
 
     for (auto& p : players)
@@ -1466,6 +1587,7 @@ void AudioEngine::renderBlock (juce::AudioBuffer<float>& output, int numSamples,
         }
 
         masterChain.process (mixBuffer, n);   // legacy master inserts on device outputs 1-2
+        applyOutputGate (mixBuffer, n);       // the panic gate: closed = silence, whatever the chains still ring with
 
         for (int ch = 0; ch < output.getNumChannels(); ++ch)
         {
@@ -1483,7 +1605,7 @@ void AudioEngine::renderBlock (juce::AudioBuffer<float>& output, int numSamples,
 void AudioEngine::reapFinishedPlayers()
 {
     std::vector<std::unique_ptr<CuePlayer>> dead;
-    dead.reserve (16);   // no allocation while the audio lock is held
+    dead.reserve (maxPlayers);   // no allocation while the audio lock is held, whatever finishes at once
 
     {
         const juce::ScopedLock sl (lock);
@@ -1512,6 +1634,18 @@ void AudioEngine::audioDeviceIOCallbackWithContext (const float* const* inputCha
 {
     if (numOutputChannels <= 0 || numSamples <= 0)
         return;
+
+    if (hardPanicRequested.load (std::memory_order_acquire))
+    {
+        // hard panic: silence right now, without waiting for the engine lock (a busy message thread or a slow plugin
+        // must not delay the stop); the players are stopped by stopAll() meanwhile
+        for (int ch = 0; ch < numOutputChannels; ++ch)
+            if (outputChannelData[ch] != nullptr)
+                juce::FloatVectorOperations::clear (outputChannelData[ch], numSamples);
+
+        outputGateGain = 0.0f;
+        return;
+    }
 
     // A non-ASIO device may run wide for a moment (a type switch starts it before the trim lands): channels beyond the
     // limit carry silence. JUCE packs the active channels' pointers from index 0, so a set reaching past the limit
@@ -1559,6 +1693,7 @@ void AudioEngine::audioDeviceIOCallbackWithContext (const float* const* inputCha
 
 void AudioEngine::audioDeviceAboutToStart (juce::AudioIODevice* device)
 {
+    deviceRunning.store (true, std::memory_order_release);
     const bool multichannel = typeAllowsMultichannel (device->getTypeName());
     const int limit = multichannel ? maxDeviceOutputs : stereoOnlyOutputs;
     const auto active = device->getActiveOutputChannels();
@@ -1571,6 +1706,7 @@ void AudioEngine::audioDeviceAboutToStart (juce::AudioIODevice* device)
 
 void AudioEngine::audioDeviceStopped()
 {
+    deviceRunning.store (false, std::memory_order_release);
     numDeviceInputs.store (0, std::memory_order_relaxed);   // until a device starts again there are no inputs
     numDeviceOutputs.store (stereoOnlyOutputs, std::memory_order_relaxed);   // and the outputs fall back to the offline default (a vanished 16-out device must not keep 3-16 alive in the UI)
 }

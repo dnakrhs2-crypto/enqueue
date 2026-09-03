@@ -371,6 +371,9 @@ void PluginChain::process (juce::AudioBuffer<float>& buffer, int numSamples)
         if (slot->plugin == nullptr)
             continue;
 
+        if (slot->faulted.load (std::memory_order_relaxed))
+            continue;   // dry pass: it threw once, it is not trusted with the audio again
+
         auto& plugin = *slot->plugin;
         const bool bypassed = slot->bypassed.load (std::memory_order_relaxed);
         const int ins = plugin.getTotalNumInputChannels();
@@ -397,7 +400,16 @@ void PluginChain::process (juce::AudioBuffer<float>& buffer, int numSamples)
                 scratch.copyFrom (ch, 0, buffer, ch, 0, numSamples);
 
             juce::AudioBuffer<float> view (scratch.getArrayOfWritePointers(), slot->numScratchChannels, 0, numSamples);
-            plugin.processBlock (view, midi);
+
+            try
+            {
+                plugin.processBlock (view, midi);
+            }
+            catch (...)
+            {
+                slot->faulted.store (true, std::memory_order_relaxed);   // the show goes on without this plugin
+                continue;
+            }
 
             if (bypassed)
                 continue;   // the plugin kept time (delay lines, reverb tails stay current); output discarded
@@ -408,11 +420,50 @@ void PluginChain::process (juce::AudioBuffer<float>& buffer, int numSamples)
         else
         {
             juce::AudioBuffer<float> view (buffer.getArrayOfWritePointers(), 2, 0, numSamples);
-            plugin.processBlock (view, midi);
+
+            try
+            {
+                plugin.processBlock (view, midi);
+            }
+            catch (...)
+            {
+                slot->faulted.store (true, std::memory_order_relaxed);
+                continue;   // the input passes through untouched
+            }
         }
 
         if (outs == 1)
             buffer.copyFrom (1, 0, buffer, 0, 0, numSamples);   // mono-out plugin: mirror to the right channel
+    }
+}
+
+void PluginChain::resetProcessing() noexcept
+{
+    const juce::ScopedTryLock sl (lock);
+
+    if (! sl.isLocked())
+        return;
+
+    for (auto& slot : slots)
+    {
+        if (slot->plugin == nullptr)
+            continue;
+
+        const juce::ScopedTryLock callbackLock (slot->plugin->getCallbackLock());
+
+        if (callbackLock.isLocked() && ! slot->plugin->isSuspended())
+        {
+            try
+            {
+                slot->plugin->reset();
+            }
+            catch (...)
+            {
+                slot->faulted.store (true, std::memory_order_relaxed);
+            }
+        }
+
+        slot->scratch.clear();
     }
 }
 

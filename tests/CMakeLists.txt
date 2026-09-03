@@ -14,6 +14,7 @@ target_sources(EnqueueTests PRIVATE
     ProjectFileExtensionTests.cpp
     LiveLoopTests.cpp
     WmaDecodeTests.cpp
+    PanicGateTests.cpp
     ResamplerTests.cpp
     CueListTests.cpp
     CueNumberingTests.cpp
