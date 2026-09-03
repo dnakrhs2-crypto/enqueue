@@ -228,6 +228,7 @@ public:
             }
 
             expectEquals (engine.getNumPlaying(), 0);   // not held for five seconds by the tail
+            expect (! engine.mayBePlaying());           // the conservative flag follows the reap
             expectEquals (out.getMagnitude (0, 0, blockSize), 0.0f);
             expectGreaterThan (master->resetCount, 0);   // the chain was reset behind the closed gate
         }

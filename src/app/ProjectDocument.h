@@ -143,7 +143,21 @@ public:
     void removeListener (Listener* l) { listeners.remove (l); }
 
 private:
-    void cueListStructureChanged() override { if (! switching) markDirty(); }
+    void cueListStructureChanged() override
+    {
+        if (switching)
+            return;
+
+        // a paste, a recording, a drop into the active cart: it stays flat (the flatten notifies again, guarded)
+        if (! flattening && isActiveCart())
+        {
+            const juce::ScopedValueSetter<bool> guard (flattening, true);
+            cues.flattenGroups();
+        }
+
+        markDirty();
+    }
+    bool flattening = false;
     void cueChanged (int) override { markDirty(); }
     void notify();
     void notifyContainers();

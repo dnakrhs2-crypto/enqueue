@@ -118,6 +118,10 @@ public:
             expect (futureResult.failed());
             expect (futureResult.getErrorMessage().contains ("newer"));
 
+            const auto unmarked = root.getChildFile ("unmarked.enqueue");   // a current-format file must name its app
+            expect (unmarked.replaceWithText ("{\"version\": 6, \"cues\": []}"));
+            expect (ProjectSerializer::load (unmarked, q).failed());
+
             const auto minimal = root.getChildFile ("minimal.enqueue");   // an empty cue list is a (blank) show
             expect (minimal.replaceWithText ("{\"app\": \"Enqueue\", \"version\": 3, \"cues\": []}"));
             expect (ProjectSerializer::load (minimal, q).wasOk());

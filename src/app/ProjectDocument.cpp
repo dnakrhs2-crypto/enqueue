@@ -156,10 +156,7 @@ void ProjectDocument::setContainerCart (int index, bool isCart, int rows, int co
     {
         // a cart is a flat grid: groups are dissolved (the children stay where they are)
         auto& list = index == active ? cues : containers[(size_t) index]->list;
-
-        for (int i = list.size() - 1; i >= 0; --i)
-            if (list.get (i).isGroup())
-                list.ungroup (i);
+        list.flattenGroups();
     }
 
     info.isCart = isCart;
@@ -354,6 +351,10 @@ void ProjectDocument::adopt (Project project, const juce::File& projectFile)
         c->info.cartRows = list.cartRows;
         c->info.cartCols = list.cartCols;
         c->list.replaceAll (std::move (list.cues));
+
+        if (c->info.isCart)
+            c->list.flattenGroups();   // a cart is a flat grid, whatever the file says
+
         c->list.addListener (this);
         containers.push_back (std::move (c));
     }

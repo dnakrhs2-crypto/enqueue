@@ -494,6 +494,7 @@ void MainComponent::getCommandInfo (juce::CommandID commandID, juce::Application
             result.setInfo (ko ("전체 페이드 정지 (Esc)"), ko ("재생 중인 모든 큐를 설정된 시간(기본 2초) 동안 페이드아웃 후 정지. 0.5초 안에 두 번 누르면 즉시 정지"), playback, 0);
            #if ! JUCE_WINDOWS
             result.addDefaultKeypress (KeyPress::escapeKey, ModifierKeys::noModifiers);   // on Windows the keyboard hook is the one Esc source
+            result.flags |= juce::ApplicationCommandInfo::wantsKeyUpDownCallbacks;   // the down edge only: a held Esc is one press
            #endif
             break;
 
@@ -902,6 +903,22 @@ bool MainComponent::perform (const InvocationInfo& info)
             break;
 
         case CommandIDs::panicAll:
+           #if ! JUCE_WINDOWS
+            if (info.invocationMethod == InvocationInfo::fromKeyPress)
+            {
+                if (! info.isKeyDown)
+                {
+                    escHeld = false;
+                    break;
+                }
+
+                if (escHeld)
+                    break;   // auto-repeat of a held Esc: not a second press (that would turn the fade into a hard cut)
+
+                escHeld = true;
+            }
+           #endif
+
             controller.panicAll();
             break;
 
@@ -2945,10 +2962,22 @@ void MainComponent::panicFromAnywhere()
 {
     // the one Esc source on Windows (the keyboard hook, every window, native plugin editors included). Nothing here
     // waits for the engine lock: a stuck plugin must not delay the decision.
-    if (engine.getNumPlayingLockFree() > 0 || showMode || controller.hasPendingStarts() || controller.getFadeRunner().getNumRunning() > 0)
+    if (engine.mayBePlaying() || showMode || controller.hasPendingStarts() || controller.getFadeRunner().getNumRunning() > 0)
+    {
         controller.panicAll();
+        return;
+    }
+
+    // no cue at all: a self-generating plugin is muted at the gate, without the show latch; a second Esc within
+    // 0.5 s cuts at once instead of the 200 ms ramp (the same gesture as the hard panic)
+    const double now = juce::Time::getMillisecondCounterHiRes();
+
+    if (now - lastQuietEscMs < 500.0)
+        engine.stopAll();
     else
-        engine.silenceOutput();   // no cue at all: a self-generating plugin is muted at the gate, without the show latch
+        engine.silenceOutput();
+
+    lastQuietEscMs = now;
 }
 
 void MainComponent::attachOperationalKeysToWindows()
@@ -2990,7 +3019,9 @@ void MainComponent::installEscapePolicy (juce::Component& root)
                     if (safeEditor != nullptr)
                         safeEditor->giveAwayKeyboardFocus();
 
-                    commands.invokeDirectly (CommandIDs::panicAll, false);
+                   #if ! JUCE_WINDOWS
+                    commands.invokeDirectly (CommandIDs::panicAll, false);   // Windows: the keyboard hook already did
+                   #endif
                 };
             }
         }

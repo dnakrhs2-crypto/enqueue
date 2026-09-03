@@ -1,0 +1,24 @@
+#pragma once
+
+#include "LiveMixSettings.h"
+#include "MixEngine.h"
+
+#include <juce_gui_basics/juce_gui_basics.h>
+
+#include <functional>
+
+namespace gocue::livemix
+{
+
+/** 설정: ASIO device and buffer size (the driver's own panel), tray behaviour, start with Windows, autosave,
+    the online backup target. Non-modal, single instance. */
+namespace SettingsDialog
+{
+    void show (MixEngine& engine, LiveMixSettings& settings, juce::Component* centreAround, std::function<void()> onDeviceChanged);
+    void closeIfOpen();
+
+    /** The Windows "start with Windows" Run entry for this exe. */
+    void setStartWithWindows (bool on);
+}
+
+} // namespace gocue::livemix

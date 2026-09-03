@@ -69,6 +69,10 @@ namespace ProjectSerializer
                            const juce::File& projectDir = {});
 
     juce::Result save (const Project& project, const juce::File& file);
+
+    /** Plugin slot lists as JSON (shared with LiveMix sessions). */
+    juce::var pluginSlotsToVar (const std::vector<PluginSlotState>& plugins);
+    std::vector<PluginSlotState> pluginSlotsFromVar (const juce::var& v);
     juce::Result load (const juce::File& file, Project& out, juce::StringArray* warnings = nullptr);
 }
 

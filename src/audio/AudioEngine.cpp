@@ -703,6 +703,7 @@ bool AudioEngine::play (const Cue& cue, const PlayOptions& options, juce::String
     }
 
     const bool wantsAudition = options.audition || options.silent || ! options.patchOverride.isNull();
+    settlePendingChainReset();   // the tails of the panic are cleared before this cue reopens the gate
 
     if (! wantsAudition)
     {
@@ -731,6 +732,7 @@ bool AudioEngine::play (const Cue& cue, const PlayOptions& options, juce::String
 
                 existing->setStartOrder (++startCounter);
                 existing->start();
+                committedRunning.store (true, std::memory_order_release);
                 openOutputGate();   // the loaded cue plays now: a closed panic gate reopens
                 return true;
             }
@@ -792,7 +794,7 @@ bool AudioEngine::play (const Cue& cue, const PlayOptions& options, juce::String
     }
 
     players.push_back (std::move (player));
-    chainResetPending.store (false, std::memory_order_relaxed);   // the chains are in use again
+    committedRunning.store (true, std::memory_order_release);
     openOutputGate();   // a cue is committed: a panic gate that was closed reopens (a refused start leaves it shut)
     return true;
 }
@@ -910,18 +912,17 @@ void AudioEngine::fadeOutAndStop (const juce::Uuid& cueId, int milliseconds)
 
 void AudioEngine::fadeOutAndStopAll (int milliseconds)
 {
-    {
-        const juce::ScopedLock sl (lock);
-
-        for (auto& p : players)
-            if (! p->hasFinished())
-                p->requestPanicFadeOut (milliseconds);   // no plugin tail afterwards: the chains are reset instead
-    }
-
-    // once the fade is over the gate closes over 200 ms and every plugin tail (patch, master, cue inserts) is cleared:
-    // "전체 페이드 정지" ends in silence, whatever a reverb or a self-oscillating plugin would do
+    // the gate is armed first, without waiting for the lock: once the fade time is over it closes over 200 ms and
+    // every plugin tail (patch, master, cue inserts) is cleared - "전체 페이드 정지" ends in silence whatever a reverb
+    // or a self-oscillating plugin would do, even if a slow plugin holds the engine lock right now
     resetChainsWhenClosed.store (true, std::memory_order_relaxed);
     outputGateCloseCountdown.store ((juce::int64) (juce::jmax (0, milliseconds) * sampleRate.load() / 1000.0), std::memory_order_release);
+
+    const juce::ScopedLock sl (lock);
+
+    for (auto& p : players)
+        if (! p->hasFinished())
+            p->requestPanicFadeOut (milliseconds);   // no plugin tail afterwards: the chains are reset instead
 }
 
 void AudioEngine::closeOutputGate (int rampMilliseconds, bool resetChains)
@@ -1039,14 +1040,14 @@ bool AudioEngine::resetAllChainsForPanic()
 
         for (auto& p : players)
         {
-            if (! p->hasFinished())
-            {
-                // a pre-panic instance still on its way out: try again next tick; a fresh cue that started meanwhile
-                // owns the chains now, the stale reset is moot
-                done = ! p->isStopPending();
-                resetInProgress.store (false, std::memory_order_release);
-                return done;
-            }
+            if (p->hasFinished() || p->isLoadedNotStarted())
+                continue;   // a loaded instance has not touched the chains
+
+            // a pre-panic instance still on its way out: try again next tick; a fresh cue that started meanwhile
+            // owns the chains now, the stale reset is moot
+            done = ! p->isStopPending();
+            resetInProgress.store (false, std::memory_order_release);
+            return done;
         }
 
         for (auto& entry : cueChains)
@@ -1060,15 +1061,29 @@ bool AudioEngine::resetAllChainsForPanic()
     return done;
 }
 
+void AudioEngine::settlePendingChainReset()
+{
+    if (chainResetPending.load (std::memory_order_acquire) && resetAllChainsForPanic())
+        chainResetPending.store (false, std::memory_order_release);
+}
+
 bool AudioEngine::isStopping (const juce::Uuid& cueId) const
 {
     const juce::ScopedLock sl (lock);
+    bool anyStopping = false;
 
     for (auto& p : players)
-        if (p->getCueId() == cueId && ! p->hasFinished() && ! p->isLoadedNotStarted())
-            return p->isStopPending();
+    {
+        if (p->getCueId() != cueId || p->hasFinished() || p->isLoadedNotStarted())
+            continue;
 
-    return false;
+        if (! p->isStopPending())
+            return false;   // a running instance: not stopping
+
+        anyStopping = true;
+    }
+
+    return anyStopping;
 }
 
 void AudioEngine::pause (const juce::Uuid& cueId)
@@ -1082,6 +1097,7 @@ void AudioEngine::pause (const juce::Uuid& cueId)
 
 void AudioEngine::resume (const juce::Uuid& cueId)
 {
+    settlePendingChainReset();
     bool resumed = false;
 
     {
@@ -1110,6 +1126,7 @@ void AudioEngine::pauseAll()
 
 void AudioEngine::resumeAll()
 {
+    settlePendingChainReset();
     bool resumed = false;
 
     {
@@ -1726,6 +1743,14 @@ void AudioEngine::reapFinishedPlayers()
                 ++it;
             }
         }
+
+        bool anyRunning = false;
+
+        for (auto& p : players)
+            if (! p->hasFinished() && ! p->isLoadedNotStarted())
+                anyRunning = true;
+
+        committedRunning.store (anyRunning, std::memory_order_release);
     }
 
     dead.clear();   // file handles are released outside the audio lock

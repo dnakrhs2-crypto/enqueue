@@ -419,6 +419,36 @@ void CueList::remove (int index)
     removeIndices ({ index });
 }
 
+bool CueList::flattenGroups()
+{
+    std::vector<int> groups;
+    bool anyParent = false;
+
+    for (int i = 0; i < size(); ++i)
+    {
+        if (cues[(size_t) i].isGroup())
+            groups.push_back (i);
+
+        anyParent = anyParent || ! cues[(size_t) i].parentId.isNull();
+    }
+
+    if (groups.empty() && ! anyParent)
+        return false;
+
+    for (auto& c : cues)
+        c.parentId = juce::Uuid::null();   // the children step out first: the group rows then go alone
+
+    if (! groups.empty())
+        removeIndices (groups);
+    else
+    {
+        sanitiseTree();
+        notifyStructureChanged();
+    }
+
+    return true;
+}
+
 void CueList::removeIndices (std::vector<int> indices)
 {
     indices = withSubtrees (std::move (indices));   // a group goes with its children

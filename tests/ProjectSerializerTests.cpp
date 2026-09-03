@@ -277,7 +277,7 @@ public:
         {
             Project q;
             juce::StringArray warnings;
-            expect (ProjectSerializer::fromJson ("{\"version\":" + juce::String (ProjectSerializer::currentVersion)
+            expect (ProjectSerializer::fromJson ("{\"app\":\"Enqueue\",\"version\":" + juce::String (ProjectSerializer::currentVersion)
                                                      + ",\"future\":true,\"cues\":[{\"name\":\"x\",\"mystery\":[1,2],\"audio\":{\"later\":1}}]}",
                                                  q, &warnings).wasOk());
             expectEquals ((int) q.cues().size(), 1);
@@ -285,7 +285,7 @@ public:
 
             // a newer file version: what this build cannot read would be dropped by the next save, so it does not open
             Project future;
-            const auto result = ProjectSerializer::fromJson ("{\"version\":99,\"cues\":[{\"name\":\"x\"}]}", future, &warnings);
+            const auto result = ProjectSerializer::fromJson ("{\"app\":\"Enqueue\",\"version\":99,\"cues\":[{\"name\":\"x\"}]}", future, &warnings);
             expect (result.failed());
             expect (result.getErrorMessage().contains ("99"));
             expect (result.getErrorMessage().contains ("newer"));

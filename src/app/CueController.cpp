@@ -765,10 +765,16 @@ CueController::GoResult CueController::triggerImpl (const Cue& cue, bool auditio
 
     if (cue.isFade())
     {
-        if (audition)
+        if (auditionNow)
         {
             // a fade acts on the live instance of its target: an audition would alter (or stop) the real show
             status (ko ("페이드 큐는 미리듣기할 수 없습니다: ") + cueLabel (index, cue), true);
+            return GoResult::failed;
+        }
+
+        if (const auto* fadeTarget = document.findCueAnywhere (cue.fade.targetId); fadeTarget != nullptr && engine.isAuditioning (fadeTarget->id))
+        {
+            status (ko ("대상이 미리듣기 중이라 페이드하지 않습니다: ") + cueLabel (index, cue), true);
             return GoResult::failed;
         }
 
@@ -888,8 +894,9 @@ CueController::GoResult CueController::triggerImpl (const Cue& cue, bool auditio
         return GoResult::started;
     }
 
-    // a normal GO on a cue that is auditioning restarts it with the real output (QLab)
-    if (engine.isPlaying (cue.id) && ! (engine.isAuditioning (cue.id) && ! auditionNow))
+    // a normal GO on a cue that is auditioning restarts it with the real output (QLab); a fade-in's floor request
+    // means a fresh instance whatever the second-trigger rule says
+    if (engine.isPlaying (cue.id) && startNextAtLevelFor != cue.id && ! (engine.isAuditioning (cue.id) && ! auditionNow))
     {
         switch (cue.secondTrigger)
         {

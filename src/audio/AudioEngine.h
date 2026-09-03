@@ -119,6 +119,8 @@ public:
     void silenceOutput() { closeOutputGate (200, true); }
     /** Lock-free: instances that rendered as running in the last block (loaded-not-started ones excluded). */
     int getNumPlayingLockFree() const noexcept { return runningPlayers.load (std::memory_order_relaxed); }
+    /** Lock-free and conservative: true from a committed start until a reap found nothing running. */
+    bool mayBePlaying() const noexcept { return runningPlayers.load (std::memory_order_relaxed) > 0 || committedRunning.load (std::memory_order_relaxed); }
     /** True while an instance of the cue is on its way out (a stop or fade-out was requested). */
     bool isStopping (const juce::Uuid& cueId) const;
     bool isDeviceRunning() const noexcept { return deviceRunning.load (std::memory_order_relaxed); }
@@ -306,6 +308,8 @@ private:
     std::atomic<bool> chainResetPending { false };   // set by the audio thread once the gate closed after a panic; the UI timer polls it
     std::atomic<bool> resetInProgress { false };     // the message thread runs the plugins' reset(): the callback outputs silence meanwhile
     std::atomic<int> runningPlayers { 0 };           // written by the audio thread each block
+    std::atomic<bool> committedRunning { false };     // set when a start is committed, cleared by a reap that finds nothing running
+    void settlePendingChainReset();                  // message thread: a pending post-panic reset runs before a start reopens the gate
     std::atomic<bool> deviceRunning { false };
     bool deviceExpected = false;                        // initialise() ran: a stopped device refuses new cues (offline tests never initialise)
     void applyOutputGate (juce::AudioBuffer<float>& output, int numSamples) noexcept;

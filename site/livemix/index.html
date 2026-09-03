@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LiveMix</title>
+<meta name="description" content="LiveMix(라이브믹스): 방송용 라이브 마이크 VST3 호스트. DAW 없이 ASIO 인터페이스에 VST3 플러그인을 걸어 씁니다.">
+<link rel="icon" href="assets/icon.png">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;700&display=swap">
+<link rel="stylesheet" href="../style.css">
+<script defer src="https://static.cloudflareinsights.com/beacon.min.js" data-cf-beacon='{"token": "__CF_BEACON_TOKEN__"}'></script>
+</head>
+<body>
+<header class="wrap top">
+  <a class="brand" href="./"><img src="assets/icon.png" alt="" width="36" height="36">LiveMix</a>
+  <nav class="nav">
+    <a href="../">Enqueue</a>
+    <a href="#features">기능</a>
+    <a href="#requirements">요구 사항</a>
+    <a href="notes.html">바뀐 점</a>
+    <a href="#beta">커뮤니티</a>
+    <a href="https://github.com/dnakrhs2-crypto/livemix/releases">GitHub</a>
+  </nav>
+</header>
+
+<main class="wrap">
+  <section class="hero">
+    <div>
+      <h1>라이브믹스 · 방송용 마이크 VST3 호스트</h1>
+      <p class="lead">DAW 없이, ASIO 오디오 인터페이스의 마이크 입력에 VST3 플러그인을 걸어 바로 내보냅니다. 마이크 채널·FX 채널·마스터, 세션 저장, 트레이에서 계속 동작.</p>
+      <div class="download">
+        <a class="btn" id="download" href="__DOWNLOAD_URL__">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3a1 1 0 0 1 1 1v9.6l3.3-3.3a1 1 0 1 1 1.4 1.4l-5 5a1 1 0 0 1-1.4 0l-5-5a1 1 0 1 1 1.4-1.4L11 13.6V4a1 1 0 0 1 1-1zM4 18a1 1 0 0 1 1 1v1h14v-1a1 1 0 1 1 2 0v2a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1v-2a1 1 0 0 1 1-1z"/></svg>
+          <span id="download-label">__DOWNLOAD_LABEL__</span>
+        </a>
+        <p class="meta" id="download-meta">Windows 10/11 64비트 · 설치 파일은 <a href="https://github.com/dnakrhs2-crypto/livemix/releases">GitHub 릴리스</a>에서 받습니다.</p>
+      </div>
+      <p class="notice">설치 파일에 아직 코드 서명이 없어서 Windows가 "알 수 없는 게시자" 경고를 띄울 수 있습니다. 경고 창에서 <b>추가 정보</b> → <b>실행</b>을 누르면 설치가 진행됩니다.</p>
+    </div>
+    <figure class="shot"><img src="assets/screenshot.png" alt="LiveMix 화면: 마이크 채널 카드(마이크 ON/OFF, VST3 체인, 이펙터 샌드, 출력, 미터), 아래에 마스터" width="1440" height="900"></figure>
+  </section>
+
+  <section id="features">
+    <h2>기능</h2>
+    <div class="grid">
+      <div class="card"><h3>마이크 채널 (최대 8개)</h3><p>ASIO 입력 하나(또는 스테레오 쌍)에 VST3 체인을 걸고, 마이크 ON/OFF 불로 켜고 끕니다. 게인·페이더 없이 항상 0 dB.</p></div>
+      <div class="card"><h3>VST3 체인</h3><p>순서대로 통과. 체인 패널에서 드래그로 순서 변경, 켜짐/바이패스, 플러그인 창 열기. 제조사별 메뉴로 추가.</p></div>
+      <div class="card"><h3>FX 채널</h3><p>리버브·딜레이 같은 공간계는 FX 채널로. 채널마다 보내는 양(%)과 프리/포스트를 큰 페이더로.</p></div>
+      <div class="card"><h3>출력 라우팅</h3><p>채널을 마스터로, 장치 출력 쌍으로 직접, 또는 둘 다. OBS에서 따로 받기 좋습니다.</p></div>
+      <div class="card"><h3>세션</h3><p>플러그인 상태까지 .livemix 파일로 저장, 자동 저장, 다음 실행 때 마지막 세션과 오디오가 바로 켜집니다.</p></div>
+      <div class="card"><h3>트레이 · 온라인 백업</h3><p>최소화해도 트레이에서 계속 동작. 크리에이터 이름만 넣으면 세션을 NAS(WebDAV)로 백업.</p></div>
+    </div>
+  </section>
+
+  <section id="requirements">
+    <h2>요구 사항</h2>
+    <dl class="req">
+      <dt>운영체제</dt><dd>Windows 10 (1607) / 11, 64비트</dd>
+      <dt>오디오</dt><dd>ASIO 드라이버가 있는 오디오 인터페이스 (ASIO만 지원)</dd>
+      <dt>플러그인</dt><dd>VST3</dd>
+      <dt>설치</dt><dd>사용자 계정에 설치(관리자 권한 불필요). 업데이트는 프로그램 안에서 자동으로 확인합니다.</dd>
+    </dl>
+  </section>
+
+  <section id="beta">
+    <h2>커뮤니티 · 베타 참여</h2>
+    <p>문제나 의견, 질문은 카카오톡 오픈채팅으로 보내 주세요. 프로그램 안 <b>? → 커뮤니티</b> 메뉴에서도 열립니다.</p>
+    <a class="kakao" id="feedback-button" href="https://open.kakao.com/o/pST4IRLi">
+      <svg viewBox="0 0 48 48" aria-hidden="true"><path d="M24 6C12.4 6 3 13.3 3 22.3c0 5.8 3.9 10.9 9.8 13.8-.4 1.4-1.5 5.3-1.7 6.1-.3 1 .4 1 .8.7.3-.2 5.1-3.4 7.2-4.8 1.6.2 3.2.4 4.9.4 11.6 0 21-7.3 21-16.2S35.6 6 24 6z"/></svg>
+      <span class="kakao-text"><b>카카오톡 오픈채팅 바로가기</b><small>곰튀김 커뮤니티 · 문의 · 피드백</small></span>
+    </a>
+  </section>
+</main>
+
+<footer class="wrap">
+  <div>LiveMix · 곰튀김 · VST is a trademark of Steinberg Media Technologies GmbH.</div>
+  <div class="links">
+    <a href="https://github.com/dnakrhs2-crypto/livemix/releases">GitHub 릴리스</a>
+    <a href="notes.html">바뀐 점</a>
+    <a href="../">Enqueue</a>
+  </div>
+</footer>
+
+<script>
+(function () {
+  fetch('latest.json?rev=__SITE_REV__', { cache: 'no-cache' })
+    .then(function (r) { return r.ok ? r.json() : null; })
+    .then(function (info) {
+      if (!info || !info.url || info.url.indexOf('/releases/download/') < 0) return;
+      var btn = document.getElementById('download');
+      btn.href = info.url;
+      document.getElementById('download-label').textContent = 'LiveMix ' + info.version + ' 다운로드';
+      var mb = info.size ? (info.size / 1048576).toFixed(1) + ' MB · ' : '';
+      var date = info.date ? info.date.slice(0, 10) + ' · ' : '';
+      document.getElementById('download-meta').innerHTML =
+        'Windows 10/11 64비트 · ' + mb + date + '<a href="https://github.com/dnakrhs2-crypto/livemix/releases">이전 버전과 릴리스 노트</a>';
+      if (info.feedback)
+        document.getElementById('feedback-button').href = info.feedback;
+    })
+    .catch(function () {});
+})();
+</script>
+</body>
+</html>

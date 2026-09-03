@@ -1,0 +1,43 @@
+#pragma once
+
+#include "MixDocument.h"
+#include "Widgets.h"
+
+#include <juce_gui_basics/juce_gui_basics.h>
+
+namespace gocue::livemix
+{
+
+/** The master: chain summary, latency, main output pair, L/R meter. Docked under the channel list. */
+class MasterCard : public juce::Component
+{
+public:
+    explicit MasterCard (MixDocument& document);
+
+    void refresh();
+    void setDeviceChannels (const juce::StringArray& outputNames);
+    void setLatency (double ms, int bufferSize, double sampleRate);
+    void pushMeter (MixEngine::Meter meter) { meter_.push (meter); }
+
+    std::function<void()> onOpenChain;
+    std::function<void()> onAddPlugin;
+    std::function<void (int slotIndex)> onOpenPluginEditor;
+
+    void resized() override;
+    void paint (juce::Graphics& g) override;
+
+private:
+    struct Chip;
+    void rebuildChain();
+
+    MixDocument& document;
+    juce::StringArray outputNames;
+    juce::Label badge, title, note, chainCaption, latencyCaption, latencyValue, latencyNote, outputCaption, meterCaption;
+    std::vector<std::unique_ptr<juce::TextButton>> chips;
+    juce::TextButton openChainButton, addPluginButton;
+    juce::ComboBox outputCombo;
+    MeterBar meter_ { true };
+    bool refreshing = false;
+};
+
+} // namespace gocue::livemix

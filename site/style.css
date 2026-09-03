@@ -71,6 +71,7 @@ code { font-family: Consolas, "Cascadia Mono", monospace; background: var(--pane
 .nav { display: flex; gap: 18px; font-size: 15px; }
 .nav a { color: var(--dim); }
 .nav a:hover { color: var(--text); }
+.nav a.tab { color: var(--text); background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 4px 10px; }
 
 .hero { display: grid; gap: 28px; padding: 28px 0 8px; }
 .hero h1 { font-size: clamp(30px, 4.6vw, 44px); font-weight: 700; }

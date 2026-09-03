@@ -11,6 +11,7 @@
       "cacheVariables": {
         "CMAKE_CONFIGURATION_TYPES": "Debug;Release",
         "GOCUE_APPCAST_URL": "https://github.com/dnakrhs2-crypto/enqueue/releases/latest/download/appcast.xml",
+        "LIVEMIX_APPCAST_URL": "https://github.com/dnakrhs2-crypto/livemix/releases/latest/download/appcast.xml",
         "GOCUE_EDDSA_PUBLIC_KEY": "YsXFr0R7JSs32dQi/r5DKlHkvg7NPKb82e5eTFvF9o8="
       }
     }

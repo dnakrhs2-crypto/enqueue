@@ -27,7 +27,8 @@ public:
 
     /** Call once the main window is visible. Starts the automatic (daily) background check. */
     static void initialise (const juce::String& companyName, const juce::String& appName,
-                            const juce::String& version, Callbacks callbacks);
+                            const juce::String& version, Callbacks callbacks,
+                            const juce::String& registryPath = "Software\\GoCue\\GoCue\\WinSparkle");
 
     /** Manual check with WinSparkle's own UI (menu item). */
     static void checkForUpdatesWithUI();

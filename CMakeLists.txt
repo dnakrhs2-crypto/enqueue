@@ -51,6 +51,7 @@ target_sources(GoCueCore INTERFACE
     ${CMAKE_CURRENT_SOURCE_DIR}/src/model/Cue.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/model/CueList.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/model/ProjectSerializer.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/model/SafeFileWrite.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/model/CueNumbering.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/model/CuePropertyPaste.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/model/LevelMatrix.cpp
@@ -199,4 +200,68 @@ set_property(DIRECTORY PROPERTY VS_STARTUP_PROJECT Enqueue)
 # Tests
 # ---------------------------------------------------------------------------
 enable_testing()
+# LiveMix (the live mic VST3 host) shares the core: its model and engine are a second interface library
+add_library(LiveMixCore INTERFACE)
+target_sources(LiveMixCore INTERFACE
+    ${CMAKE_CURRENT_SOURCE_DIR}/livemix/src/MixModel.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/livemix/src/MixEngine.cpp)
+target_include_directories(LiveMixCore INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/livemix/src)
+target_link_libraries(LiveMixCore INTERFACE GoCueCore)
+target_sources(LiveMixCore INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/livemix/src/WebDavBackup.cpp)
+
+set(LIVEMIX_VERSION "0.1.0" CACHE STRING "LiveMix version (the Enqueue version is the project version)")
+set(LIVEMIX_APPCAST_URL "" CACHE STRING "LiveMix WinSparkle appcast URL (empty disables update checks)")
+
+juce_add_gui_app(LiveMix
+    PRODUCT_NAME "LiveMix"
+    COMPANY_NAME "Gomtwigim"
+    VERSION ${LIVEMIX_VERSION}
+    ICON_BIG "${CMAKE_CURRENT_SOURCE_DIR}/livemix/assets/icon_512.png"
+    ICON_SMALL "${CMAKE_CURRENT_SOURCE_DIR}/livemix/assets/icon_512.png"
+    NEEDS_WEB_BROWSER FALSE
+    NEEDS_CURL FALSE)
+
+get_target_property(_livemix_generated_dir LiveMix JUCE_GENERATED_SOURCES_DIRECTORY)
+set(_livemix_rc_file "${_livemix_generated_dir}/LiveMix_resources.rc")
+if(EXISTS "${_livemix_rc_file}")
+    file(READ "${_livemix_rc_file}" _livemix_rc_text)
+    string(REPLACE "." "," _livemix_version_commas "${LIVEMIX_VERSION}")
+    if(NOT _livemix_rc_text MATCHES "FILEVERSION[ \t]+${_livemix_version_commas},0")
+        message(STATUS "LiveMix: version resource was stale -> regenerating for ${LIVEMIX_VERSION}")
+        file(REMOVE "${_livemix_rc_file}")
+    endif()
+endif()
+
+target_sources(LiveMix PRIVATE
+    livemix/src/Main.cpp
+    livemix/src/LiveMixSettings.cpp
+    livemix/src/MixDocument.cpp
+    livemix/src/ui/MainComponent.cpp
+    livemix/src/ui/TopBar.cpp
+    livemix/src/ui/ChannelCard.cpp
+    livemix/src/ui/MasterCard.cpp
+    livemix/src/ui/ChainDrawer.cpp
+    livemix/src/ui/FxDrawer.cpp
+    livemix/src/ui/SettingsDialog.cpp
+    livemix/src/ui/BackupDialog.cpp
+    src/app/Updater.cpp
+    src/ui/PluginWindows.cpp)
+
+target_include_directories(LiveMix PRIVATE livemix/src livemix/src/ui)
+target_compile_definitions(LiveMix PRIVATE
+    JUCE_APPLICATION_NAME_STRING="$<TARGET_PROPERTY:LiveMix,JUCE_PRODUCT_NAME>"
+    JUCE_APPLICATION_VERSION_STRING="$<TARGET_PROPERTY:LiveMix,JUCE_VERSION>"
+    GOCUE_HAS_WINSPARKLE=${GOCUE_HAS_WINSPARKLE}
+    GOCUE_APPCAST_URL="${LIVEMIX_APPCAST_URL}"
+    GOCUE_EDDSA_PUBLIC_KEY="${GOCUE_EDDSA_PUBLIC_KEY}")
+target_link_libraries(LiveMix PRIVATE LiveMixCore)
+set_property(TARGET LiveMix PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+
+if(GOCUE_HAS_WINSPARKLE)
+    target_link_libraries(LiveMix PRIVATE gocue::winsparkle)
+    add_custom_command(TARGET LiveMix POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different "${GOCUE_WINSPARKLE_DLL}" "$<TARGET_FILE_DIR:LiveMix>"
+        COMMENT "Copying WinSparkle.dll next to LiveMix.exe")
+endif()
+
 add_subdirectory(tests)

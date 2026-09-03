@@ -1,0 +1,266 @@
+#include "SettingsDialog.h"
+
+#include "Widgets.h"
+
+namespace gocue::livemix
+{
+
+namespace
+{
+    class SettingsContent : public juce::Component
+    {
+    public:
+        SettingsContent (MixEngine& e, LiveMixSettings& s, std::function<void()> deviceChanged)
+            : engine (e), settings (s), onDeviceChanged (std::move (deviceChanged))
+        {
+            styleCaption (deviceCaption, ko ("ASIO 장치"));
+            addAndMakeVisible (deviceCaption);
+            deviceCombo.setWantsKeyboardFocus (false);
+            deviceCombo.onChange = [this] { applyDevice(); };
+            addAndMakeVisible (deviceCombo);
+            panelButton.setButtonText (ko ("ASIO 제어판 (버퍼 크기)..."));
+            panelButton.onClick = [this]
+            {
+                if (auto* device = engine.getDeviceManager().getCurrentAudioDevice())
+                    if (device->hasControlPanel())
+                        device->showControlPanel();
+            };
+            addAndMakeVisible (panelButton);
+            styleCaption (bufferCaption, ko ("버퍼 크기"));
+            addAndMakeVisible (bufferCaption);
+            bufferCombo.setWantsKeyboardFocus (false);
+            bufferCombo.onChange = [this] { applyBuffer(); };
+            addAndMakeVisible (bufferCombo);
+            styleCaption (deviceNote, ko ("ASIO 장치만 씁니다. 버퍼가 작을수록 지연이 짧고 끊길 위험이 큽니다 (128~256 권장)."));
+            deviceNote.setFont (bodyFont (12.5f));
+            addAndMakeVisible (deviceNote);
+
+            auto toggle = [this] (juce::ToggleButton& t, const juce::String& text, bool value, std::function<void (bool)> apply)
+            {
+                t.setButtonText (text);
+                t.setToggleState (value, juce::dontSendNotification);
+                t.onClick = [&t, apply] { apply (t.getToggleState()); };
+                addAndMakeVisible (t);
+            };
+
+            toggle (minimiseToTray, ko ("최소화하면 트레이로 (창은 사라지고 소리는 계속)"), settings.getMinimiseToTray(), [this] (bool on) { settings.setMinimiseToTray (on); });
+            toggle (closeToTray, ko ("닫기 버튼도 트레이로 (종료는 트레이 메뉴에서)"), settings.getCloseToTray(), [this] (bool on) { settings.setCloseToTray (on); });
+            toggle (startWithWindows, ko ("Windows 시작할 때 LiveMix 실행"), settings.getStartWithWindows(), [this] (bool on)
+            {
+                settings.setStartWithWindows (on);
+                SettingsDialog::setStartWithWindows (on);
+            });
+
+            styleCaption (autosaveCaption, ko ("자동 저장 (초)"));
+            addAndMakeVisible (autosaveCaption);
+            autosaveEditor.setInputRestrictions (4, "0123456789");
+            autosaveEditor.setText (juce::String (settings.getAutosaveSeconds()));
+            autosaveEditor.onFocusLost = [this] { settings.setAutosaveSeconds (autosaveEditor.getText().getIntValue()); };
+            autosaveEditor.onReturnKey = [this] { settings.setAutosaveSeconds (autosaveEditor.getText().getIntValue()); };
+            addAndMakeVisible (autosaveEditor);
+
+            styleCaption (backupCaption, ko ("온라인 백업 (WebDAV)"));
+            addAndMakeVisible (backupCaption);
+            auto field = [this] (juce::Label& label, juce::TextEditor& editor, const juce::String& caption, const juce::String& value, std::function<void (const juce::String&)> apply)
+            {
+                styleCaption (label, caption);
+                addAndMakeVisible (label);
+                editor.setText (value);
+                editor.onFocusLost = [&editor, apply] { apply (editor.getText()); };
+                editor.onReturnKey = [&editor, apply] { apply (editor.getText()); };
+                addAndMakeVisible (editor);
+            };
+            field (urlLabel, urlEditor, ko ("주소 (https://서버:포트)"), settings.getBackupUrl(), [this] (const juce::String& v) { settings.setBackupUrl (v); });
+            field (folderLabel, folderEditor, ko ("폴더"), settings.getBackupFolder(), [this] (const juce::String& v) { settings.setBackupFolder (v); });
+            field (userLabel, userEditor, ko ("사용자"), settings.getBackupUser(), [this] (const juce::String& v) { settings.setBackupUser (v); });
+            toggle (rememberPassword, ko ("비밀번호 기억 (Windows 자격 증명 관리자에 저장)"), settings.getBackupRememberPassword(), [this] (bool on)
+            {
+                settings.setBackupRememberPassword (on);
+
+                if (! on)
+                    settings.setBackupPassword ({});
+            });
+            styleCaption (backupNote, ko ("시놀로지: WebDAV Server 패키지의 HTTPS 포트(기본 5006). 백업 파일은 폴더/PC이름/크리에이터_날짜시간.livemix"));
+            backupNote.setFont (bodyFont (12.5f));
+            addAndMakeVisible (backupNote);
+
+            refreshDevices();
+            setSize (560, 620);
+        }
+
+        void refreshDevices()
+        {
+            const juce::ScopedValueSetter<bool> guard (refreshing, true);
+            deviceCombo.clear (juce::dontSendNotification);
+            names.clear();
+
+            for (auto* type : engine.getDeviceManager().getAvailableDeviceTypes())
+            {
+                if (! type->getTypeName().containsIgnoreCase ("ASIO"))
+                    continue;
+
+                type->scanForDevices();
+                names = type->getDeviceNames (false);
+            }
+
+            for (int i = 0; i < names.size(); ++i)
+                deviceCombo.addItem (names[i], i + 1);
+
+            bufferCombo.clear (juce::dontSendNotification);
+
+            if (auto* device = engine.getDeviceManager().getCurrentAudioDevice())
+            {
+                deviceCombo.setSelectedId (names.indexOf (device->getName()) + 1, juce::dontSendNotification);
+                const auto sizes = device->getAvailableBufferSizes();
+
+                for (int i = 0; i < sizes.size(); ++i)
+                    bufferCombo.addItem (juce::String (sizes[i]) + ko (" 샘플") + "  (" + juce::String (1000.0 * sizes[i] / juce::jmax (1.0, device->getCurrentSampleRate()), 1) + " ms)", sizes[i]);
+
+                bufferCombo.setSelectedId (device->getCurrentBufferSizeSamples(), juce::dontSendNotification);
+                panelButton.setEnabled (device->hasControlPanel());
+            }
+            else
+            {
+                deviceCombo.setTextWhenNothingSelected (ko ("ASIO 장치 없음"));
+                panelButton.setEnabled (false);
+            }
+        }
+
+        void applyDevice()
+        {
+            if (refreshing || deviceCombo.getSelectedId() <= 0)
+                return;
+
+            auto& dm = engine.getDeviceManager();
+            auto setup = dm.getAudioDeviceSetup();
+            setup.inputDeviceName = setup.outputDeviceName = deviceCombo.getText();
+            setup.useDefaultInputChannels = setup.useDefaultOutputChannels = true;
+            const auto error = dm.setAudioDeviceSetup (setup, true);
+
+            if (error.isNotEmpty())
+                juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon, ko ("장치를 열지 못했습니다"), error, ko ("확인"));
+
+            engine.openAllChannels();
+            refreshDevices();
+
+            if (onDeviceChanged)
+                onDeviceChanged();
+        }
+
+        void applyBuffer()
+        {
+            if (refreshing || bufferCombo.getSelectedId() <= 0)
+                return;
+
+            auto& dm = engine.getDeviceManager();
+            auto setup = dm.getAudioDeviceSetup();
+            setup.bufferSize = bufferCombo.getSelectedId();
+            const auto error = dm.setAudioDeviceSetup (setup, true);
+
+            if (error.isNotEmpty())
+                juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon, ko ("버퍼 크기를 바꾸지 못했습니다"), error, ko ("확인"));
+
+            engine.openAllChannels();
+            refreshDevices();
+
+            if (onDeviceChanged)
+                onDeviceChanged();
+        }
+
+        void resized() override
+        {
+            auto area = getLocalBounds().reduced (20, 16);
+            deviceCaption.setBounds (area.removeFromTop (20));
+            auto row = area.removeFromTop (30);
+            panelButton.setBounds (row.removeFromRight (200));
+            row.removeFromRight (8);
+            deviceCombo.setBounds (row);
+            area.removeFromTop (8);
+            bufferCaption.setBounds (area.removeFromTop (20));
+            bufferCombo.setBounds (area.removeFromTop (30).withWidth (260));
+            area.removeFromTop (4);
+            deviceNote.setBounds (area.removeFromTop (36));
+            area.removeFromTop (12);
+            minimiseToTray.setBounds (area.removeFromTop (28));
+            closeToTray.setBounds (area.removeFromTop (28));
+            startWithWindows.setBounds (area.removeFromTop (28));
+            area.removeFromTop (8);
+            row = area.removeFromTop (30);
+            autosaveCaption.setBounds (row.removeFromLeft (110));
+            autosaveEditor.setBounds (row.removeFromLeft (70));
+            area.removeFromTop (16);
+            backupCaption.setBounds (area.removeFromTop (20));
+            auto twoCol = [&area] (juce::Label& l, juce::TextEditor& e)
+            {
+                auto r = area.removeFromTop (30);
+                l.setBounds (r.removeFromLeft (150));
+                e.setBounds (r);
+                area.removeFromTop (6);
+            };
+            twoCol (urlLabel, urlEditor);
+            twoCol (folderLabel, folderEditor);
+            twoCol (userLabel, userEditor);
+            rememberPassword.setBounds (area.removeFromTop (28));
+            backupNote.setBounds (area.removeFromTop (40));
+        }
+
+        void paint (juce::Graphics& g) override { g.fillAll (Palette::card); }
+
+    private:
+        MixEngine& engine;
+        LiveMixSettings& settings;
+        std::function<void()> onDeviceChanged;
+        juce::StringArray names;
+        juce::Label deviceCaption, bufferCaption, deviceNote, autosaveCaption, backupCaption, urlLabel, folderLabel, userLabel, backupNote;
+        juce::ComboBox deviceCombo, bufferCombo;
+        juce::TextButton panelButton;
+        juce::ToggleButton minimiseToTray, closeToTray, startWithWindows, rememberPassword;
+        juce::TextEditor autosaveEditor, urlEditor, folderEditor, userEditor;
+        bool refreshing = false;
+    };
+
+    juce::Component::SafePointer<juce::DialogWindow> openDialog;
+}
+
+void SettingsDialog::show (MixEngine& engine, LiveMixSettings& settings, juce::Component* centreAround, std::function<void()> onDeviceChanged)
+{
+    if (openDialog != nullptr)
+    {
+        openDialog->toFront (true);
+        return;
+    }
+
+    juce::DialogWindow::LaunchOptions options;
+    options.content.setOwned (new SettingsContent (engine, settings, std::move (onDeviceChanged)));
+    options.dialogTitle = ko ("설정");
+    options.dialogBackgroundColour = Palette::card;
+    options.escapeKeyTriggersCloseButton = true;
+    options.useNativeTitleBar = true;
+    options.resizable = false;
+    options.componentToCentreAround = centreAround;
+    openDialog = options.launchAsync();
+}
+
+void SettingsDialog::closeIfOpen()
+{
+    if (openDialog != nullptr)
+        openDialog->exitModalState (0);
+
+    openDialog.deleteAndZero();
+}
+
+void SettingsDialog::setStartWithWindows (bool on)
+{
+   #if JUCE_WINDOWS
+    const juce::String key = "HKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\Run\\LiveMix";
+
+    if (on)
+        juce::WindowsRegistry::setValue (key, "\"" + juce::File::getSpecialLocation (juce::File::currentExecutableFile).getFullPathName() + "\"");
+    else
+        juce::WindowsRegistry::deleteValue (key);
+   #else
+    juce::ignoreUnused (on);
+   #endif
+}
+
+} // namespace gocue::livemix

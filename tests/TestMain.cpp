@@ -24,7 +24,13 @@ int main (int, char**)
     ConsoleRunner runner;
     runner.setAssertOnFailure (false);
     runner.setPassesAreLogged (false);
-    runner.runTestsInCategory ("Enqueue");
+    juce::Array<juce::UnitTest*> tests;   // both apps in one run: one result list, one summary
+
+    for (auto* test : juce::UnitTest::getAllTests())
+        if (test->getCategory() == "Enqueue" || test->getCategory() == "LiveMix")
+            tests.add (test);
+
+    runner.runTests (tests);
 
     int passes = 0;
     int failures = 0;

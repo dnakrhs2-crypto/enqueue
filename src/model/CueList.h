@@ -80,6 +80,8 @@ public:
     /** Removes a group cue and hands its children to the group's parent (they stay where they are). Returns false
         when 'index' is not a group. Selects the first former child (or the row that took the group's place). */
     bool ungroup (int index);
+    /** Dissolves every group in one pass (children stay where they are, group rows go). True when anything changed. */
+    bool flattenGroups();
 
     /** Inserts a cue (insertAt == -1 appends). Returns the index it landed on. */
     int add (Cue cue, int insertAt = -1);

@@ -583,7 +583,10 @@ bool CuePlayer::renderNextBlock (juce::AudioBuffer<float>& fullBuffer, int numSa
 
     if (const auto seek = pendingVirtualPosition.exchange (-1, std::memory_order_acq_rel); seek >= 0)
     {
-        if (endedNaturally.exchange (false, std::memory_order_acq_rel))
+        const bool stopping = stopRequested.load (std::memory_order_relaxed) || hardStopRequested.load (std::memory_order_relaxed)
+                              || skipTailOnStop.load (std::memory_order_relaxed);
+
+        if (endedNaturally.exchange (false, std::memory_order_acq_rel) && ! stopping)   // never past a stop or a panic
         {
             // a live edit landed after the stream had ended (longer region, more passes, endless loop): it goes on
             finished.store (false, std::memory_order_relaxed);
@@ -631,7 +634,7 @@ bool CuePlayer::renderNextBlock (juce::AudioBuffer<float>& fullBuffer, int numSa
 
     const bool hardStop = hardStopRequested.load (std::memory_order_relaxed);
 
-    if (inTail && hardStop)
+    if (inTail && (hardStop || skipTailOnStop.load (std::memory_order_relaxed)))   // a panic ends a ringing tail at once
     {
         buffer.clear (0, numSamples);
         finished.store (true, std::memory_order_relaxed);

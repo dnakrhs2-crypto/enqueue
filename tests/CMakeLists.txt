@@ -17,6 +17,9 @@ target_sources(EnqueueTests PRIVATE
     PanicGateTests.cpp
     HotkeyLoadTests.cpp
     SafeSaveTests.cpp
+    MixSessionTests.cpp
+    MixEngineTests.cpp
+    WebDavBackupTests.cpp
     ResamplerTests.cpp
     CueListTests.cpp
     CueNumberingTests.cpp
@@ -39,7 +42,7 @@ target_compile_definitions(EnqueueTests PRIVATE
     JUCE_APPLICATION_NAME_STRING="EnqueueTests"
     JUCE_APPLICATION_VERSION_STRING="${PROJECT_VERSION}")
 
-target_link_libraries(EnqueueTests PRIVATE GoCueCore)
+target_link_libraries(EnqueueTests PRIVATE GoCueCore LiveMixCore)
 
 set_property(TARGET EnqueueTests PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 

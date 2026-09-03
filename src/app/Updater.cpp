@@ -52,7 +52,7 @@ juce::String Updater::getAppcastUrl()
 }
 
 void Updater::initialise (const juce::String& companyName, const juce::String& appName,
-                          const juce::String& version, Callbacks callbacks)
+                          const juce::String& version, Callbacks callbacks, const juce::String& registryPath)
 {
    #if GOCUE_HAS_WINSPARKLE
     if (initialised || ! isConfigured())
@@ -61,7 +61,7 @@ void Updater::initialise (const juce::String& companyName, const juce::String& a
     storedCallbacks = std::move (callbacks);
 
     win_sparkle_set_appcast_url (GOCUE_APPCAST_URL);
-    win_sparkle_set_registry_path ("Software\\GoCue\\GoCue\\WinSparkle");   // the path of the GoCue days: the settings survive the rename
+    win_sparkle_set_registry_path (registryPath.toRawUTF8());   // Enqueue keeps the path of the GoCue days: the settings survive the rename
     win_sparkle_set_app_details (companyName.toWideCharPointer(), appName.toWideCharPointer(), version.toWideCharPointer());
     if (win_sparkle_set_eddsa_public_key (GOCUE_EDDSA_PUBLIC_KEY) != 1)
     {

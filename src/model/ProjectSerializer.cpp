@@ -1,5 +1,6 @@
 #include "model/Hotkeys.h"
 #include "model/ProjectSerializer.h"
+#include "model/SafeFileWrite.h"
 
 #include <cstring>
 
@@ -227,7 +228,7 @@ namespace
         return juce::var (obj);
     }
 
-    FadeCueData fadeFromVar (const juce::var& v)
+    FadeCueData fadeFromVar (const juce::var& v, juce::StringArray* warnings = nullptr)
     {
         FadeCueData f;
 
@@ -238,6 +239,9 @@ namespace
         f.durationSeconds = (double) v.getProperty ("duration", 5.0);
         const auto mode = v.getProperty ("mode", "custom").toString();   // files before 0.9.4: the general fade
         f.mode = mode == "in" ? FadeMode::fadeIn : mode == "out" ? FadeMode::fadeOut : FadeMode::custom;
+
+        if (warnings != nullptr && mode != "in" && mode != "out" && mode != "custom")
+            warnings->add ("Unknown fade mode \"" + mode + "\" - treated as a custom fade");
         f.relative = (bool) v.getProperty ("relative", false);
         f.stopTargetWhenDone = (bool) v.getProperty ("stopTargetWhenDone", false);
         f.fadeLevels = (bool) v.getProperty ("fadeLevels", true);
@@ -592,7 +596,7 @@ namespace
             c.group.crossfade = (bool) g.getProperty ("crossfade", false);
             c.group.crossfadeSeconds = (double) g.getProperty ("crossfadeSeconds", 2.0);
         }
-        c.fade            = fadeFromVar (v.getProperty ("fade", juce::var()));
+        c.fade            = fadeFromVar (v.getProperty ("fade", juce::var()), warnings);
 
         if (const auto d = v.getProperty ("devamp", juce::var()); d.getDynamicObject() != nullptr)
         {
@@ -895,6 +899,8 @@ juce::Result fromJson (const juce::String& json, Project& out, juce::StringArray
     // a file that names its app must be ours (GoCue: the name before 0.9.0)
     if (const auto app = root.getProperty ("app", "").toString(); app.isNotEmpty() && app != "Enqueue" && app != "GoCue")
         return juce::Result::fail ("Invalid project file: written by \"" + app + "\", not Enqueue");
+    else if (app.isEmpty() && intProperty (root, "version", 1) >= 6)
+        return juce::Result::fail ("Invalid project file: no application marker (a current Enqueue file names itself)");
 
     const int version = intProperty (root, "version", 1);
 
@@ -1039,57 +1045,30 @@ juce::Result fromJson (const juce::String& json, Project& out, juce::StringArray
 
 juce::Result save (const Project& project, const juce::File& file)
 {
-    const auto dir = file.getParentDirectory();
+    const auto json = toJson (project, file.getParentDirectory());
 
-    if (! dir.exists())
-    {
-        const auto created = dir.createDirectory();
-
-        if (created.failed())
-            return created;
-    }
-
-    const auto json = toJson (project, dir);
-
-    // written to a uniquely named sibling, verified byte for byte, then swapped in (with retries): a full disk, a
-    // dropped network share or a crash mid-write leaves the previous file intact
-    juce::TemporaryFile temp (file);
-    const juce::CharPointer_UTF8 utf8 = json.toUTF8();
-    const auto bytes = (size_t) utf8.sizeInBytes() - 1;
-
-    {
-        juce::FileOutputStream stream (temp.getFile());
-
-        if (stream.failedToOpen())
-            return juce::Result::fail ("Could not write " + temp.getFile().getFullPathName() + ": " + stream.getStatus().getErrorMessage());
-
-        if (! stream.write (utf8.getAddress(), bytes))
-            return juce::Result::fail ("Could not write " + temp.getFile().getFullPathName() + ": " + stream.getStatus().getErrorMessage());
-
-        stream.flush();
-
-        if (stream.getStatus().failed())
-            return juce::Result::fail ("Could not write " + temp.getFile().getFullPathName() + ": " + stream.getStatus().getErrorMessage());
-    }
-
-    juce::MemoryBlock written;
-
-    if (! temp.getFile().loadFileAsData (written) || written.getSize() != bytes || std::memcmp (written.getData(), utf8.getAddress(), bytes) != 0)
-        return juce::Result::fail ("Could not write " + file.getFullPathName() + ": the file on disk does not match what was written ("
-                                   + juce::String ((juce::int64) written.getSize()) + " of " + juce::String ((juce::int64) bytes) + " bytes)");
-
+    // written to a sibling, verified byte for byte and as JSON, then swapped in (SafeFileWrite): a full disk, a
+    // dropped share or a crash mid-write leaves the previous file intact
+    return SafeFileWrite::writeTextVerified (file, json, [] (const juce::String& readBack) -> juce::Result
     {
         juce::var check;
-        const auto parsed = juce::JSON::parse (temp.getFile().loadFileAsString(), check);
+        const auto parsed = juce::JSON::parse (readBack, check);
 
         if (parsed.failed() || check.getDynamicObject() == nullptr || ! check.hasProperty ("version"))
-            return juce::Result::fail ("Could not write " + file.getFullPathName() + ": the written file does not read back");
-    }
+            return juce::Result::fail ("the written file does not read back" + (parsed.failed() ? " (" + parsed.getErrorMessage() + ")" : juce::String()));
 
-    if (! temp.overwriteTargetFileWithTemporary())   // ReplaceFile / rename, retried a few times (an antivirus scan holds the file briefly)
-        return juce::Result::fail ("Could not replace " + file.getFullPathName());
+        return juce::Result::ok();
+    });
+}
 
-    return juce::Result::ok();
+juce::var pluginSlotsToVar (const std::vector<PluginSlotState>& plugins)
+{
+    return pluginsToVar (plugins);
+}
+
+std::vector<PluginSlotState> pluginSlotsFromVar (const juce::var& v)
+{
+    return pluginsFromVar (v);
 }
 
 juce::Result load (const juce::File& file, Project& out, juce::StringArray* warnings)
