@@ -17,7 +17,7 @@
     <a href="#requirements">요구 사항</a>
     <a href="notes.html">바뀐 점</a>
     <a href="#beta">베타 참여</a>
-    <a href="https://github.com/dnakrhs2-crypto/gocue/releases">GitHub</a>
+    <a href="https://github.com/dnakrhs2-crypto/enqueue/releases">GitHub</a>
   </nav>
 </header>
 
@@ -26,11 +26,11 @@
     <div>
       <h1>앤큐 · Windows용 쇼 큐 플레이어</h1>
       <div class="download">
-        <a class="btn" id="download" href="https://github.com/dnakrhs2-crypto/gocue/releases/latest">
+        <a class="btn" id="download" href="https://github.com/dnakrhs2-crypto/enqueue/releases/latest">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3a1 1 0 0 1 1 1v9.6l3.3-3.3a1 1 0 1 1 1.4 1.4l-5 5a1 1 0 0 1-1.4 0l-5-5a1 1 0 1 1 1.4-1.4L11 13.6V4a1 1 0 0 1 1-1zM4 18a1 1 0 0 1 1 1v1h14v-1a1 1 0 1 1 2 0v2a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1v-2a1 1 0 0 1 1-1z"/></svg>
           <span id="download-label">최신 버전 다운로드</span>
         </a>
-        <p class="meta" id="download-meta">Windows 10/11 64비트 · 설치 파일은 <a href="https://github.com/dnakrhs2-crypto/gocue/releases">GitHub 릴리스</a>에서 받습니다.</p>
+        <p class="meta" id="download-meta">Windows 10/11 64비트 · 설치 파일은 <a href="https://github.com/dnakrhs2-crypto/enqueue/releases">GitHub 릴리스</a>에서 받습니다.</p>
       </div>
       <p class="notice">설치 파일에 아직 코드 서명이 없어서 Windows가 "알 수 없는 게시자" 경고를 띄울 수 있습니다. 경고 창에서 <b>추가 정보</b> → <b>실행</b>을 누르면 설치가 진행됩니다.</p>
     </div>
@@ -72,7 +72,7 @@
 <footer class="wrap">
   <div>Enqueue · 곰튀김</div>
   <div class="links">
-    <a href="https://github.com/dnakrhs2-crypto/gocue/releases">GitHub 릴리스</a>
+    <a href="https://github.com/dnakrhs2-crypto/enqueue/releases">GitHub 릴리스</a>
     <a href="notes.html">바뀐 점</a>
   </div>
 </footer>
@@ -90,7 +90,7 @@
       var mb = info.size ? (info.size / 1048576).toFixed(1) + ' MB · ' : '';
       var date = info.date ? info.date.slice(0, 10) + ' · ' : '';
       document.getElementById('download-meta').innerHTML =
-        'Windows 10/11 64비트 · ' + mb + date + '<a href="https://github.com/dnakrhs2-crypto/gocue/releases">이전 버전과 릴리스 노트</a>';
+        'Windows 10/11 64비트 · ' + mb + date + '<a href="https://github.com/dnakrhs2-crypto/enqueue/releases">이전 버전과 릴리스 노트</a>';
       if (info.feedback) {
         var line = document.getElementById('feedback-line');
         line.innerHTML = '<a href="' + info.feedback + '">카카오톡 오픈채팅 열기</a>';
