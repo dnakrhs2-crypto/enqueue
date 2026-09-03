@@ -1,0 +1,127 @@
+/* GoCue website: dark like the app, readable in light mode too. Tokens first, components through tokens only. */
+:root {
+  color-scheme: light dark;
+  --bg: #f4f4f1;
+  --panel: #ffffff;
+  --panel-2: #ebebe7;
+  --line: #d6d6d0;
+  --text: #1c1c1c;
+  --dim: #5f5f5c;
+  --accent: #2f8a3c;
+  --accent-text: #ffffff;
+  --link: #2664c7;
+  --warn-bg: #fff4dc;
+  --warn-line: #e6c477;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #161719;
+    --panel: #202226;
+    --panel-2: #2a2d32;
+    --line: #35393f;
+    --text: #ececec;
+    --dim: #a5a5a5;
+    --accent: #46a552;
+    --accent-text: #ffffff;
+    --link: #6ea8ff;
+    --warn-bg: #2c2618;
+    --warn-line: #7a6330;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #161719;
+  --panel: #202226;
+  --panel-2: #2a2d32;
+  --line: #35393f;
+  --text: #ececec;
+  --dim: #a5a5a5;
+  --accent: #46a552;
+  --accent-text: #ffffff;
+  --link: #6ea8ff;
+  --warn-bg: #2c2618;
+  --warn-line: #7a6330;
+}
+
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: "Noto Sans KR", "Malgun Gothic", "Apple SD Gothic Neo", system-ui, sans-serif;
+  font-size: 16px;
+  line-height: 1.6;
+}
+a { color: var(--link); text-decoration: none; }
+a:hover, a:focus-visible { text-decoration: underline; }
+:focus-visible { outline: 2px solid var(--link); outline-offset: 2px; }
+img { max-width: 100%; height: auto; display: block; }
+h1, h2, h3 { line-height: 1.25; text-wrap: balance; margin: 0; }
+p { margin: 0; }
+code { font-family: Consolas, "Cascadia Mono", monospace; background: var(--panel-2); padding: 0 .35em; border-radius: 3px; font-size: .92em; }
+
+.wrap { max-width: 1040px; margin: 0 auto; padding: 0 20px; }
+
+.top {
+  display: flex; align-items: center; justify-content: space-between; gap: 16px;
+  padding: 18px 0;
+}
+.brand { display: flex; align-items: center; gap: 12px; color: var(--text); font-weight: 700; font-size: 20px; }
+.brand img { width: 36px; height: 36px; border-radius: 8px; }
+.nav { display: flex; gap: 18px; font-size: 15px; }
+.nav a { color: var(--dim); }
+.nav a:hover { color: var(--text); }
+
+.hero { display: grid; gap: 28px; padding: 28px 0 8px; }
+.hero h1 { font-size: clamp(30px, 4.6vw, 44px); font-weight: 700; }
+.hero .lead { font-size: 18px; color: var(--dim); max-width: 40em; margin-top: 12px; }
+
+.download {
+  display: grid; gap: 10px; justify-items: start; margin-top: 22px;
+}
+.btn {
+  display: inline-flex; align-items: center; gap: 10px;
+  background: var(--accent); color: var(--accent-text);
+  font-weight: 700; font-size: 18px; padding: 14px 24px; border-radius: 10px;
+  border: 0; cursor: pointer;
+}
+.btn:hover, .btn:focus-visible { text-decoration: none; filter: brightness(1.08); }
+.btn svg { width: 20px; height: 20px; fill: currentColor; }
+.meta { color: var(--dim); font-size: 14px; font-variant-numeric: tabular-nums; }
+.meta a { color: var(--dim); text-decoration: underline; }
+
+.shot { border: 1px solid var(--line); border-radius: 12px; overflow: hidden; background: var(--panel); }
+
+.notice {
+  background: var(--warn-bg); border: 1px solid var(--warn-line); border-radius: 10px;
+  padding: 12px 16px; font-size: 15px; margin-top: 8px;
+}
+
+section { padding: 36px 0 0; }
+section h2 { font-size: 22px; margin-bottom: 14px; }
+.grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 14px; }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 16px 18px; }
+.card h3 { font-size: 16px; margin-bottom: 6px; }
+.card p { color: var(--dim); font-size: 15px; }
+
+.list { margin: 0; padding-left: 1.2em; }
+.list li { margin: 4px 0; }
+.kv { display: grid; grid-template-columns: max-content 1fr; gap: 6px 18px; font-size: 15px; }
+.kv dt { color: var(--dim); }
+.kv dd { margin: 0; }
+
+.notes h2 { font-size: 20px; margin: 28px 0 8px; }
+.notes ul { margin: 0; padding-left: 1.2em; }
+.notes li { margin: 5px 0; }
+.notes .stamp { color: var(--dim); font-size: 14px; }
+
+footer { margin-top: 48px; padding: 22px 0 40px; border-top: 1px solid var(--line); color: var(--dim); font-size: 14px; }
+footer .links { display: flex; flex-wrap: wrap; gap: 16px; margin-top: 6px; }
+
+@media (max-width: 640px) {
+  .nav { display: none; }
+  .btn { width: 100%; justify-content: center; }
+}
+@media (prefers-reduced-motion: no-preference) {
+  .btn { transition: filter .15s ease; }
+}
