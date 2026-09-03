@@ -1,0 +1,142 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>flyout 크리에이터 안내</title>
+<meta name="robots" content="noindex">
+<meta name="description" content="flyout 통화 크리에이터 모집 안내: 통화한 만큼 분당 1,000원, 주급 정산">
+<link rel="stylesheet" as="style" crossorigin href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css">
+<style>
+  :root{
+    --bg:#FFFFFF; --grey:#F2F4F6; --grey2:#E5E8EB; --ink:#191F28; --sub:#4E5968; --dim:#8B95A1;
+    --blue:#3182F6; --blue-soft:#E8F3FF; --blue-ink:#1B64DA;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;background:var(--bg);color:var(--ink);font-family:"Pretendard Variable",Pretendard,-apple-system,BlinkMacSystemFont,"Apple SD Gothic Neo","Malgun Gothic",sans-serif;font-size:16px;line-height:1.6;-webkit-font-smoothing:antialiased;word-break:keep-all}
+  .wrap{max-width:560px;margin:0 auto;padding:20px 20px 40px}
+  .top{display:flex;align-items:center;justify-content:space-between;padding:4px 0 26px}
+  .brand{font-weight:800;font-size:20px;letter-spacing:-.02em}
+  .brand i{display:inline-block;width:22px;height:22px;border-radius:7px;background:var(--blue);vertical-align:-5px;margin-right:8px}
+  .badge{font-size:13px;font-weight:600;color:var(--blue-ink);background:var(--blue-soft);padding:6px 10px;border-radius:8px}
+  .hello{color:var(--dim);font-size:15px;margin:0 0 8px;font-weight:500}
+  h1{font-size:28px;line-height:1.35;font-weight:800;letter-spacing:-.03em;margin:0;text-wrap:balance}
+  h1 span{color:var(--blue)}
+  .lead{margin:12px 0 0;color:var(--sub);font-size:16px}
+  .money{margin-top:24px;background:var(--grey);border-radius:20px;padding:22px 20px}
+  .money .l{font-size:14px;color:var(--dim);font-weight:500}
+  .money .v{font-size:34px;font-weight:800;letter-spacing:-.03em;margin:2px 0 0;font-variant-numeric:tabular-nums;line-height:1.2}
+  .money .v small{font-size:16px;font-weight:600;color:var(--sub);margin-left:6px;letter-spacing:0}
+  .money .rows{margin-top:16px;padding-top:14px;border-top:1px solid var(--grey2);display:grid;gap:10px}
+  .money .r{display:flex;justify-content:space-between;align-items:baseline;font-size:15px;color:var(--sub)}
+  .money .r b{color:var(--ink);font-size:17px;font-variant-numeric:tabular-nums;font-weight:700}
+  section{margin-top:40px}
+  h2{font-size:21px;font-weight:800;letter-spacing:-.02em;margin:0 0 16px}
+  .steps{display:grid;gap:14px}
+  .step{display:flex;gap:14px;align-items:flex-start}
+  .ico{flex:none;width:40px;height:40px;border-radius:12px;background:var(--blue-soft);display:grid;place-items:center}
+  .ico svg{width:20px;height:20px;stroke:var(--blue);fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+  .step b{display:block;font-size:16px;font-weight:700}
+  .step p{margin:2px 0 0;color:var(--sub);font-size:15px}
+  .list{display:grid;gap:10px;margin:0;padding:0;list-style:none}
+  .list li{display:flex;gap:10px;align-items:flex-start;color:var(--sub)}
+  .list li:before{content:"";flex:none;width:18px;height:18px;margin-top:4px;border-radius:50%;background:var(--blue) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='white' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M5 12l5 5L20 7'/%3E%3C/svg%3E") center/11px no-repeat}
+  .kv{display:grid;gap:0;border-top:1px solid var(--grey);margin-top:4px}
+  .kv .r{display:flex;justify-content:space-between;align-items:baseline;padding:14px 0;border-bottom:1px solid var(--grey);color:var(--sub)}
+  .kv .r b{color:var(--ink);font-size:18px;font-weight:700;font-variant-numeric:tabular-nums}
+  .kv .r small{display:block;color:var(--dim);font-size:13px;margin-top:2px}
+  .callout{margin-top:40px;background:var(--blue);color:#fff;border-radius:20px;padding:22px 20px}
+  .callout .l{font-size:14px;opacity:.85;font-weight:500}
+  .callout p{margin:6px 0 0;font-size:20px;font-weight:800;line-height:1.4;letter-spacing:-.02em}
+  .faq{display:grid;gap:0}
+  .qa{padding:16px 0;border-bottom:1px solid var(--grey)}
+  .qa:last-child{border-bottom:0}
+  .qa .q{font-weight:700;font-size:16px;display:flex;gap:8px}
+  .qa .q:before{content:"Q";color:var(--blue);font-weight:800}
+  .qa .a{margin:6px 0 0 22px;color:var(--sub);font-size:15.5px}
+  .close{margin-top:32px;background:var(--grey);border-radius:16px;padding:16px 18px;color:var(--sub);font-size:15px;text-align:center;font-weight:500}
+  @media (max-width:360px){ h1{font-size:25px} .money .v{font-size:30px} }
+</style>
+<script defer src="https://static.cloudflareinsights.com/beacon.min.js" data-cf-beacon='{"token": "ba5c97d4030f4886a543055e34721a3b"}'></script>
+</head>
+<body>
+<div class="wrap">
+  <div class="top"><div class="brand"><i></i>flyout</div><div class="badge">크리에이터 모집</div></div>
+
+  <p class="hello">안녕하세요! 문의 주셔서 감사합니다 :)</p>
+  <h1>통화한 만큼<br><span>분당 1,000원</span> 정산됩니다</h1>
+  <p class="lead">출근 없음, 대기시간 없음. 딱 통화한 시간만큼만 정산됩니다.</p>
+
+  <div class="money">
+    <div class="l">통화 1분</div>
+    <div class="v">1,000원<small>시급 환산 6만원</small></div>
+    <div class="rows">
+      <div class="r"><span>30분</span><b>30,000원</b></div>
+      <div class="r"><span>1시간</span><b>60,000원</b></div>
+      <div class="r"><span>주 최대 (그 이상도 협의 후 지급 가능)</span><b>240,000원</b></div>
+      <div class="r"><span>지급일</span><b>매주 목요일</b></div>
+    </div>
+  </div>
+
+  <section>
+    <h2>어떤 일인가요?</h2>
+    <div class="steps">
+      <div class="step">
+        <div class="ico"><svg viewBox="0 0 24 24"><rect x="4" y="3" width="16" height="18" rx="3"/><circle cx="12" cy="10" r="3"/><path d="M7 19c1-3 9-3 10 0"/></svg></div>
+        <div><b>사진으로 프로필을 꾸미면</b><p>인스타처럼 피드에 사진을 올려 프로필을 꾸미면, 유저가 먼저 메시지를 보내옵니다.</p></div>
+      </div>
+      <div class="step">
+        <div class="ico"><svg viewBox="0 0 24 24"><path d="M4 5h16v11H9l-5 4z"/></svg></div>
+        <div><b>잠깐 메시지를 나누고</b><p>메시지를 잠깐 주고받은 뒤, 앱에서 통화를 진행하시면 됩니다.</p></div>
+      </div>
+      <div class="step">
+        <div class="ico"><svg viewBox="0 0 24 24"><path d="M5 4h4l2 5-2.5 1.5a11 11 0 0 0 5 5L15 13l5 2v4a2 2 0 0 1-2 2A16 16 0 0 1 3 6a2 2 0 0 1 2-2z"/></svg></div>
+        <div><b>통화한 시간만큼 정산</b><p>딱 통화한 시간만큼만 정산됩니다.</p></div>
+      </div>
+    </div>
+    <ul class="list" style="margin-top:18px">
+      <li>출근 없음, 대기시간 없음</li>
+      <li>통화 전 유저와 잠깐 메시지 나누는 시간만 있으면 OK</li>
+      <li>딱 통화한 시간만큼만 정산</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>페이</h2>
+    <div class="kv">
+      <div class="r"><span>통화 1분<small>시급 환산 6만원</small></span><b>1,000원</b></div>
+      <div class="r"><span>30분</span><b>3만원</b></div>
+      <div class="r"><span>1시간</span><b>6만원</b></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>한도 &amp; 지급일</h2>
+    <ul class="list">
+      <li>주 최대 24만원 (그 이상도 협의 후 지급 가능)</li>
+      <li>매주 목요일 주급 지급</li>
+    </ul>
+  </section>
+
+  <div class="callout">
+    <div class="l">한 줄 요약</div>
+    <p>통화한 만큼 분당 1,000원.<br>하루 30분씩만 해도 일주일에 20만원 넘게 가능합니다.</p>
+  </div>
+
+  <section>
+    <h2>자주 묻는 질문</h2>
+    <div class="faq">
+      <div class="qa"><div class="q">가입할 때 돈을 내야 하나요?</div><div class="a">아니요. 돈을 요구하는 알바는 사기입니다.</div></div>
+      <div class="qa"><div class="q">유저가 많이 있나요?</div><div class="a">외부 광고로 유저는 충분히 확보된 상태이고, 오히려 크리에이터가 부족한 상황입니다.</div></div>
+      <div class="qa"><div class="q">통화는 어떤 내용으로 진행하나요?</div><div class="a">정해진 건 없습니다. 메시지로 먼저 이야기를 나눈 뒤 통화하기 때문에 유저 성향에 따라 다르고, 스몰토크나 일상 이야기가 대부분입니다.</div></div>
+      <div class="qa"><div class="q">반드시 19금으로 해야 하나요?</div><div class="a">아닙니다! 수위가 높으신 분들이 계시긴 하지만 반드시 그렇게 할 필요는 없습니다.</div></div>
+      <div class="qa"><div class="q">계약서가 있나요?</div><div class="a">활동을 원하시면 비용 지급 관련 계약서를 이메일로 보내드립니다. 독소 조항이나 강제성은 전혀 없고, 순수하게 비용 지급 내용만 담겨 있습니다.</div></div>
+      <div class="qa"><div class="q">사무실에 방문해야 하나요?</div><div class="a">아니요. 100% 비대면이며, 계약서도 이메일로 작성합니다.</div></div>
+      <div class="qa"><div class="q">플랫폼 이름이 무엇인가요?</div><div class="a">"flyout" 입니다. (앱스토어 / 플레이스토어에서 검색 가능)</div></div>
+    </div>
+  </section>
+
+  <div class="close">그 외 궁금하신 점은 편하게 질문 주세요!</div>
+</div>
+</body>
+</html>
