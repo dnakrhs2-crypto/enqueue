@@ -29,7 +29,9 @@ AppSettings::AppSettings()
     options.storageFormat = juce::PropertiesFile::storeAsXML;
     options.millisecondsBeforeSaving = 1000;
 
-    migrateSettingsFolder (options, "GoCue");
+    const auto migrated = migrateSettingsFolder (options, "GoCue");   // 0.9.0: the GoCue settings come over once
+    jassert (migrated.wasOk());
+    juce::ignoreUnused (migrated);
     properties.setStorageParameters (options);
     settings = properties.getUserSettings();
 }

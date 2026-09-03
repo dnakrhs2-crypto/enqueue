@@ -21,7 +21,7 @@ Windows용 오디오 큐 플레이어. QLab의 오디오 기능을 단계적으�
 - **진행(시퀀스)**: 프리웨이트/포스트웨이트, 자동 계속 / 자동 팔로우, 플레이헤드(선택과 분리 또는 잠금). **트리거**: 큐 핫키, 시간(벽시계) 트리거, 시작 시 다른 큐 페이드 정지, 덕(-dB)
 - 로드(L) / 시간으로 로드(Ctrl+T), 활성 큐 패널(Ctrl+L: 일시정지·스크럽·페이드 정지), 쇼 모드(편집 잠금), 경고 목록 + 없어진 파일 다시 찾기
 - 큐 복사/잘라내기/붙여넣기(플러그인 체인 포함), 큐 속성 붙여넣기(카테고리 선택), 찾기(Ctrl+F), 새 큐 기본값(템플릿), 자동 번호 / 재번호
-- 프로젝트 파일 `.gocue` (JSON v3, v1·v2 파일도 읽음), 자동 백업(`<이름>.gocue.backups`), 파일을 프로젝트 폴더로 복사 옵션
+- 프로젝트 파일 `.enqueue` (JSON v3, v1·v2와 예전 `.gocue` 파일도 읽음), 자동 백업(`<이름>.enqueue.backups`), 파일을 프로젝트 폴더로 복사 옵션
 - 오디오 파일·폴더를 창 어디에나 끌어다 놓으면 큐로 추가(목록 위 = 그 자리에 삽입, 인스펙터 파일칸 = 파일 교체, `.gocue` = 열기)
 - 단일 창 UI(한국어): 상단 GO / 중앙 큐 목록(재생 초록·일시정지 노랑·페이드 주황 + 진행바 + 남은 시간) / 하단 인스펙터 탭(기본 · 재생 · 트리거 · 플러그인)
 - Inno Setup 인스톨러 + WinSparkle 자동 업데이트 (GitHub Releases의 `appcast.xml`)
@@ -116,7 +116,7 @@ cmake --build --preset vs2022-release
 ctest --preset vs2022-release        :: 단위 테스트 (VST3가 설치돼 있으면 실물 플러그인 검사도 수행)
 ```
 
-결과물: `build\vs2022\GoCue_artefacts\Release\Enqueue.exe` (+ `WinSparkle.dll`)
+결과물: `build\vs2022\Enqueue_artefacts\Release\Enqueue.exe` (+ `WinSparkle.dll`)
 
 ### 별도로 받아야 하는 SDK (저장소에 포함하지 않음)
 
@@ -152,7 +152,7 @@ GUI 스모크 테스트 도우미: `C:\Users\claude\tools\gocue_uitest.ps1` (lau
 기본 검색 경로는 `C:\Program Files\Common Files\VST3`와 `%LOCALAPPDATA%\Programs\Common\VST3`.
 스캔 결과는 사용자 설정(`%APPDATA%\Enqueue\Enqueue.settings`)에 저장된다.
 인스펙터 플러그인 탭의 `+ 플러그인`으로 큐 체인에 추가하고, 슬롯의 `편집`(또는 더블클릭)으로 에디터 창을 연다. `활성`(초록) / `비활성`(주황) 버튼이 현재 상태이자 토글. 슬롯 추가/삭제/바이패스는 실행 취소된다(플러그인 안의 노브 값은 제외).
-프로젝트를 저장하면 각 플러그인의 상태(`getStateInformation`)가 base64로 `.gocue`에 들어간다.
+프로젝트를 저장하면 각 플러그인의 상태(`getStateInformation`)가 base64로 `.enqueue`에 들어간다.
 플러그인이 없는 PC에서 열면 슬롯이 `[없음]`으로 남고 다시 저장해도 상태는 보존된다.
 
 ## 릴리스 (인스톨러 + 자동 업데이트)
@@ -198,7 +198,7 @@ tools        release.py (릴리스 파이프라인), make_icon.py (아이콘)
 
 신호 경로: 파일(N ch) → 구간/루프/엔벨로프(`RegionLoopSource`, 파일 시간축) → 디스크 선독 → 고품질 리샘플(r8brain, 파일 SR → 장치 SR) → 속도 리샘플(속도 1이면 무변환) → 정지 페이드·일시정지 게이트 → 큐 게인(메인)·덕 → 큐 VST3 체인(스테레오) → 레벨 매트릭스(N→K)·트림 → 패치 버스(K) → 큐 출력 인서트 → 라우팅(K→M)·패치 메인 → 장치 출력 인서트 → 마스터 VST3 체인(ch1-2) → 장치 출력(M)
 
-## 프로젝트 파일 형식 (`.gocue`, v3)
+## 프로젝트 파일 형식 (`.enqueue`, v3 — 예전 `.gocue`도 같은 형식)
 
 ```json
 { "app": "Enqueue", "version": 3, "name": "show",

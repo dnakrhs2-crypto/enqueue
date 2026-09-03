@@ -238,9 +238,11 @@ def latest_from_github(gh, repo):
     installer = next((a for a in info["assets"] if re.match(r"(Enqueue|GoCue)-Setup-[0-9.]+\.exe$", a["name"])), None)
     if installer is None:
         sys.exit("the latest release has no Enqueue-Setup-x.y.z.exe asset")
+    # the fixed-name link only exists when that asset is on the latest release (GoCue-Setup.exe before the rename)
+    fixed = next((a for a in info["assets"] if a["name"] in (FIXED_INSTALLER_NAME, "GoCue-Setup.exe")), None)
+    latest_url = ("https://github.com/%s/releases/latest/download/%s" % (repo, fixed["name"])) if fixed else installer["url"]
     return {"version": version, "tag": info["tagName"], "url": installer["url"], "size": installer["size"],
-            "date": info["publishedAt"], "latest_url": "https://github.com/%s/releases/latest/download/%s" % (repo, FIXED_INSTALLER_NAME),
-            "feedback": read_feedback_link()}
+            "date": info["publishedAt"], "latest_url": latest_url, "feedback": read_feedback_link()}
 
 
 def main():
@@ -269,7 +271,7 @@ def main():
     version = read_version()
     tag = os.environ.get("GITHUB_REF_NAME", "")
     if tag and tag != "v" + version:
-        sys.exit("git tag %s does not match project(GoCue VERSION %s) - bump CMakeLists.txt or re-tag" % (tag, version))
+        sys.exit("git tag %s does not match project(Enqueue VERSION %s) - bump CMakeLists.txt or re-tag" % (tag, version))
 
     source_dir = ROOT / "build" / "vs2022" / "Enqueue_artefacts" / "Release"
     output_dir = ROOT / "installer" / "output"
@@ -293,7 +295,7 @@ def main():
         sys.exit("EdDSA private key file not found (--key / GOCUE_EDDSA_PRIVATE_KEY_FILE)")
     signature = sign(tool, args.key, installer)
 
-    notes_html = "<p>GoCue %s</p>" % escape(version)
+    notes_html = "<p>Enqueue %s</p>" % escape(version)
     if args.notes:
         notes_html = pathlib.Path(args.notes).read_text(encoding="utf-8")
     notes_html = wrap_notes_for_feed(notes_html)
@@ -314,7 +316,7 @@ def main():
         run(cmd)
         print("published :", "https://github.com/%s/releases/tag/v%s" % (args.repo, version))
 
-        # the same installer under a fixed name: /releases/latest/download/GoCue-Setup.exe always gives the newest
+        # the same installer under a fixed name: /releases/latest/download/Enqueue-Setup.exe always gives the newest
         fixed = output_dir / FIXED_INSTALLER_NAME
         shutil.copyfile(installer, fixed)
         run([gh, "release", "upload", "v" + version, str(fixed), "--repo", args.repo, "--clobber"])

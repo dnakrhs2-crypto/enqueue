@@ -134,7 +134,7 @@ juce_add_gui_app(Enqueue
 # JUCE regenerates GoCue_resources.rc (VERSIONINFO) only when the icon changes, so on an
 # incremental build a version bump would ship with the old file version. Drop a stale one here.
 get_target_property(_gocue_generated_dir Enqueue JUCE_GENERATED_SOURCES_DIRECTORY)
-set(_gocue_rc_file "${_gocue_generated_dir}/GoCue_resources.rc")
+set(_gocue_rc_file "${_gocue_generated_dir}/Enqueue_resources.rc")
 if(EXISTS "${_gocue_rc_file}")
     file(READ "${_gocue_rc_file}" _gocue_rc_text)
     string(REPLACE "." "," _gocue_version_commas "${PROJECT_VERSION}")

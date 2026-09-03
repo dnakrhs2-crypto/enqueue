@@ -30,28 +30,30 @@ public:
         beginTest ("the old folder's files come over, renamed after the app");
         {
             expect (oldFolder.createDirectory().wasOk());
-            expect (oldFolder.getChildFile ("GoCue.settings").replaceWithText ("<settings/>"));
+            expect (oldFolder.getChildFile (oldName + ".settings").replaceWithText ("<settings/>"));   // "GoCue.settings" in real life
             expect (oldFolder.getChildFile ("plugins.xml").replaceWithText ("<plugins/>"));
+            expect (oldFolder.getChildFile ("GoCueNotes.txt").replaceWithText ("keep my name"));
 
-            migrateSettingsFolder (options, oldName);
+            expect (migrateSettingsFolder (options, oldName).wasOk());
 
             expect (newFolder.getChildFile ("Enqueue.settings").existsAsFile());
             expectEquals (newFolder.getChildFile ("Enqueue.settings").loadFileAsString(), juce::String ("<settings/>"));
             expect (newFolder.getChildFile ("plugins.xml").existsAsFile());
-            expect (oldFolder.getChildFile ("GoCue.settings").existsAsFile());   // the old folder is left alone
+            expect (newFolder.getChildFile ("GoCueNotes.txt").existsAsFile());   // only the settings file is renamed
+            expect (oldFolder.getChildFile (oldName + ".settings").existsAsFile());   // the old folder is left alone
         }
 
         beginTest ("an existing new settings file is never overwritten");
         {
             expect (newFolder.getChildFile ("Enqueue.settings").replaceWithText ("<settings changed='1'/>"));
-            migrateSettingsFolder (options, oldName);
+            expect (migrateSettingsFolder (options, oldName).wasOk());
             expectEquals (newFolder.getChildFile ("Enqueue.settings").loadFileAsString(), juce::String ("<settings changed='1'/>"));
         }
 
         beginTest ("no old folder: nothing happens");
         {
             newFolder.deleteRecursively();
-            migrateSettingsFolder (options, "EnqueueTestMissing-" + stamp);
+            expect (migrateSettingsFolder (options, "EnqueueTestMissing-" + stamp).wasOk());
             expect (! newFolder.exists());
         }
 

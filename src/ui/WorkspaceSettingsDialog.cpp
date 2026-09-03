@@ -215,7 +215,7 @@ namespace
                                            [] (WorkspaceSettings& w, bool v) { w.backupBeforeSave = v; });
             rotateToggle = &addToggle (ko ("오래된 백업 정리 (최근 15개만 보관)"), s.rotateBackups,
                                        [] (WorkspaceSettings& w, bool v) { w.rotateBackups = v; });
-            hint = &addLabel (ko ("백업은 프로젝트 파일 옆 \"<이름>.gocue.backups\" 폴더에 쌓입니다. 저장한 적 없는 프로젝트는 백업하지 않습니다."));
+            hint = &addLabel (ko ("백업은 프로젝트 파일 옆 \"<이름>.enqueue.backups\" 폴더에 쌓입니다. 저장한 적 없는 프로젝트는 백업하지 않습니다."));
             hint->setFont (juce::Font (juce::FontOptions (11.0f)));
         }
 

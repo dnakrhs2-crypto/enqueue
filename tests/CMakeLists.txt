@@ -11,6 +11,7 @@ target_sources(EnqueueTests PRIVATE
     DeviceProbeTests.cpp
     OutputLimitTests.cpp
     SettingsMigrationTests.cpp
+    ProjectFileExtensionTests.cpp
     ResamplerTests.cpp
     CueListTests.cpp
     CueNumberingTests.cpp

@@ -43,6 +43,8 @@ ChangesAssociations=yes
 CloseApplications=yes
 RestartApplications=no
 DisableProgramGroupPage=yes
+; the Start Menu group is always "Enqueue": an upgrade from GoCue must not keep writing into the "GoCue" group
+UsePreviousGroup=no
 
 [Languages]
 Name: "korean"; MessagesFile: "compiler:Languages\Korean.isl"
@@ -71,8 +73,11 @@ Name: "{autodesktop}\{#AppName}"; Filename: "{app}\{#AppExe}"; Tasks: desktopico
 ; .enqueue project files (and the old .gocue) open with Enqueue (HKA = HKCU for per-user installs, HKLM for all-users)
 Root: HKA; Subkey: "Software\Classes\.enqueue"; ValueType: string; ValueName: ""; ValueData: "Enqueue.Project"; Flags: uninsdeletevalue uninsdeletekeyifempty
 Root: HKA; Subkey: "Software\Classes\.gocue"; ValueType: string; ValueName: ""; ValueData: "Enqueue.Project"; Flags: uninsdeletevalue uninsdeletekeyifempty
-; the ProgId of the GoCue days goes away
-Root: HKA; Subkey: "Software\Classes\GoCue.Project"; Flags: deletekey
+; a user who once picked GoCue in "Open with" has UserChoice = GoCue.Project: that ProgId stays, pointing at Enqueue
+Root: HKA; Subkey: "Software\Classes\.gocue\OpenWithProgids"; ValueType: string; ValueName: "Enqueue.Project"; ValueData: ""; Flags: uninsdeletevalue uninsdeletekeyifempty
+Root: HKA; Subkey: "Software\Classes\GoCue.Project"; ValueType: string; ValueName: ""; ValueData: "Enqueue Project"; Flags: uninsdeletekey
+Root: HKA; Subkey: "Software\Classes\GoCue.Project\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: "{app}\{#AppExe},0"
+Root: HKA; Subkey: "Software\Classes\GoCue.Project\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\{#AppExe}"" ""%1"""
 Root: HKA; Subkey: "Software\Classes\Enqueue.Project"; ValueType: string; ValueName: ""; ValueData: "Enqueue Project"; Flags: uninsdeletekey
 Root: HKA; Subkey: "Software\Classes\Enqueue.Project\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: "{app}\{#AppExe},0"
 Root: HKA; Subkey: "Software\Classes\Enqueue.Project\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\{#AppExe}"" ""%1"""
@@ -82,6 +87,9 @@ Root: HKA; Subkey: "Software\Classes\Enqueue.Project\shell\open\command"; ValueT
 Type: files; Name: "{app}\GoCue.exe"
 Type: files; Name: "{group}\GoCue.lnk"
 Type: files; Name: "{autodesktop}\GoCue.lnk"
+Type: files; Name: "{autoprograms}\GoCue\GoCue.lnk"
+Type: files; Name: "{autoprograms}\GoCue\Enqueue.lnk"
+Type: dirifempty; Name: "{autoprograms}\GoCue"
 
 [Run]
 ; also after a silent auto-update (WinSparkle runs Setup with /SILENT): the app comes back by itself and announces
