@@ -200,6 +200,20 @@ def build_notes_page(site_dir, latest_version):
 REPO_FOR_SITE = ""
 
 
+def apply_release_links(pages, latest):
+    """The landing page gets the current installer's direct URL baked in (index.html placeholders), so the button
+    is a real, counted download even before latest.json is fetched; the JSON fetch carries the version as a cache key."""
+    url = latest.get("url", "")
+    if "/releases/download/" not in url:
+        sys.exit("latest url is not a direct asset link: %s" % url)
+    page = pages / "index.html"
+    text = page.read_text(encoding="utf-8")
+    text = (text.replace("__DOWNLOAD_URL__", url)
+                .replace("__DOWNLOAD_LABEL__", "Enqueue %s 다운로드" % latest.get("version", ""))
+                .replace("__SITE_REV__", latest.get("version", "0")))
+    page.write_text(text, encoding="utf-8")
+
+
 def apply_analytics(pages):
     """Cloudflare Web Analytics: site/cf-beacon-token.txt holds the beacon token (public, it sits in the page anyway).
     Empty or missing = the beacon line is dropped from every page."""
@@ -238,6 +252,7 @@ def deploy_site(repo, latest):
         (pages / ".nojekyll").write_text("", encoding="utf-8")
         (pages / "latest.json").write_text(json.dumps(latest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
         build_notes_page(pages, latest.get("version", "0.0.0"))
+        apply_release_links(pages, latest)
         apply_analytics(pages)
         run(["git", "add", "-A"], cwd=pages)
         status = run(["git", "status", "--porcelain"], cwd=pages, capture=True)
@@ -260,6 +275,8 @@ def latest_from_github(gh, repo):
     installer = next((a for a in info["assets"] if re.match(r"(Enqueue|GoCue)-Setup-[0-9.]+\.exe$", a["name"])), None)
     if installer is None:
         sys.exit("the latest release has no Enqueue-Setup-x.y.z.exe asset")
+    if "/releases/download/" not in installer["url"]:
+        sys.exit("asset url is not a browser download link: %s" % installer["url"])
     # the fixed-name link only exists when that asset is on the latest release (GoCue-Setup.exe before the rename)
     fixed = next((a for a in info["assets"] if a["name"] in (FIXED_INSTALLER_NAME, "GoCue-Setup.exe")), None)
     latest_url = ("https://github.com/%s/releases/latest/download/%s" % (repo, fixed["name"])) if fixed else installer["url"]
