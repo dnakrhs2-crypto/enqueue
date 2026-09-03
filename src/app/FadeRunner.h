@@ -33,7 +33,7 @@ public:
 
     /** Starts (or restarts) 'fadeCue' on its target. False with a message when there is no target or the
         target is not running. */
-    bool start (const Cue& fadeCue, juce::String* error = nullptr);
+    bool start (const Cue& fadeCue, juce::String* error = nullptr, bool targetAutoStarted = false);
     /** Advances every running fade; finished fades are removed (stopping their target when asked). */
     void tick();
     /** Ends the fade where it is. */
@@ -78,6 +78,7 @@ private:
     {
         juce::Uuid targetId = juce::Uuid::null();
         juce::int64 instance = -1;
+        bool stopOnRevert = false;   // the fade-in started this instance itself: reverting stops it again
         FadeCueData data;   // which lanes the fade owned
         State from;
     };

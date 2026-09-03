@@ -151,6 +151,17 @@ void ProjectDocument::setContainerCart (int index, bool isCart, int rows, int co
         return;
 
     auto& info = containers[(size_t) index]->info;
+
+    if (isCart && ! info.isCart)
+    {
+        // a cart is a flat grid: groups are dissolved (the children stay where they are)
+        auto& list = index == active ? cues : containers[(size_t) index]->list;
+
+        for (int i = list.size() - 1; i >= 0; --i)
+            if (list.get (i).isGroup())
+                list.ungroup (i);
+    }
+
     info.isCart = isCart;
     info.cartRows = juce::jlimit (1, CueContainer::maxGrid, rows);
     info.cartCols = juce::jlimit (1, CueContainer::maxGrid, cols);

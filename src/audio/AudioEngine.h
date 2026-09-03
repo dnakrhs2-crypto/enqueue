@@ -115,6 +115,12 @@ public:
     /** The final output gate: closes over 'rampMilliseconds' and clears the plugin chains once silent; play()/resume() reopen it. */
     void closeOutputGate (int rampMilliseconds, bool resetChains);
     void openOutputGate();
+    /** Esc with no cue at all: the gate closes and the chains reset, so a self-generating plugin goes quiet. */
+    void silenceOutput() { closeOutputGate (200, true); }
+    /** Lock-free: instances that rendered as running in the last block (loaded-not-started ones excluded). */
+    int getNumPlayingLockFree() const noexcept { return runningPlayers.load (std::memory_order_relaxed); }
+    /** True while an instance of the cue is on its way out (a stop or fade-out was requested). */
+    bool isStopping (const juce::Uuid& cueId) const;
     bool isDeviceRunning() const noexcept { return deviceRunning.load (std::memory_order_relaxed); }
     /** Fades the cue out over its own fadeOutMs, then stops it. */
     void fadeOutAndStop (const juce::Uuid& cueId);
@@ -297,11 +303,14 @@ private:
     float outputGateGain = 1.0f;                        // audio thread only
     int outputGateRemaining = 0;                 // audio thread: samples left in the current ramp
     int outputGateSeenTarget = 1;                // audio thread: the target the current ramp heads for
-    std::atomic<bool> chainResetPending { false };   // set by the audio thread once the gate closed after a panic
+    std::atomic<bool> chainResetPending { false };   // set by the audio thread once the gate closed after a panic; the UI timer polls it
+    std::atomic<bool> resetInProgress { false };     // the message thread runs the plugins' reset(): the callback outputs silence meanwhile
+    std::atomic<int> runningPlayers { 0 };           // written by the audio thread each block
     std::atomic<bool> deviceRunning { false };
     bool deviceExpected = false;                        // initialise() ran: a stopped device refuses new cues (offline tests never initialise)
     void applyOutputGate (juce::AudioBuffer<float>& output, int numSamples) noexcept;
-    void resetAllChainsForPanic();   // message thread
+    void applyGateRange (juce::AudioBuffer<float>& output, int start, int numSamples) noexcept;
+    bool resetAllChainsForPanic();   // message thread; false = a pre-panic instance still rings, try again
     std::atomic<int> outputChannelLimit { maxDeviceOutputs };   // set when a device starts, read by the callback
     std::atomic<bool> outputMaskOutOfRange { false };           // a non-ASIO device runs on channels past the limit: nothing goes out until the trim
     juce::String lastPolicyType;                                // device type seen by the last enforceOutputLimit(): a switch that lost its device gets a stereo retry

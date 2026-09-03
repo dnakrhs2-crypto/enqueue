@@ -231,6 +231,7 @@ public:
             loop.secondTrigger = SecondTriggerAction::nothing;
             const int index = document.cues.add (loop);
             document.cues.setSelectedIndex (index);
+            now += 0.2;   // past the short latch a hard stop leaves behind (the 5 ms gate close, with margin)
 
             expect (controller.preview() == CueController::GoResult::started);
             render (engine, scheduler, now, out, 10);
@@ -363,6 +364,8 @@ public:
             document.cues.update (0, [] (Cue& x) { x.armed = false; x.skipIfDisarmed = true; });
             document.cues.setSelectedIndex (0);
             now = 90.0;
+            expect (controller.preview (false) == CueController::GoResult::failed);   // a preview / cart button: refused too
+            expect (! engine.isPlaying (a.id));
             expect (controller.go() == CueController::GoResult::started);
             controller.goKeyReleased();
             expect (! engine.isPlaying (a.id));

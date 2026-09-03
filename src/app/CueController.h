@@ -42,6 +42,9 @@ public:
     /** P: pauses the target cue (the standby cue if it is playing, else the most recently started one);
         resumes it when it is already paused. Returns false when nothing is playing. */
     bool togglePause();
+    /** The active-cues panel's pause / resume: a resume goes through the panic latch. */
+    bool resumeCue (const juce::Uuid& id);
+    void pauseCue (const juce::Uuid& id);
     /** F: fades the target cue out over its own stop fade. */
     bool fadeOutTarget();
     /** Esc: fades everything out over the panic time and cancels pending waits; a second Esc within
@@ -205,7 +208,7 @@ private:
     double lastGoTime = -1.0e9;
     double lastPanicTime = -1.0e9;
     double panicLatchUntil = -1.0e9;   // until then every start (GO, hotkey, wall clock, auto-continue) is refused
-    bool startNextAtLevel = false;     // set by a fade-in cue around the start of its target
+    juce::Uuid startNextAtLevelFor = juce::Uuid::null();   // a fade-in cue starts this target at startNextLevelDb (nothing else)
     double startNextLevelDb = 0.0;
     bool goKeyDown = false;
 

@@ -1969,6 +1969,9 @@ public:
 
         if (cue != nullptr && cue->isFade())
         {
+            if (durationEditor.hasKeyboardFocus (true))
+                return;   // typing: the field (and the cue it belongs to) stays as it is until the commit
+
             shownId = cue->id;
             modeCombo.setSelectedId (cue->fade.mode == FadeMode::fadeIn ? 1 : cue->fade.mode == FadeMode::fadeOut ? 2 : 3, juce::dontSendNotification);
             durationEditor.setText (formatTimeMs (cue->fade.durationSeconds), false);
@@ -2047,8 +2050,12 @@ private:
         }
 
         const double clamped = juce::jlimit (0.0, FadeCueData::maxDurationSeconds, seconds);
+        const int index = shownId.isNull() ? cues.getSelectedIndex() : cues.indexOf (shownId);
+
+        if (cues.isValidIndex (index) && cues.get (index).isFade() && juce::approximatelyEqual (cues.get (index).fade.durationSeconds, clamped))
+            return;   // Enter then focus loss: the second call changes nothing (no second undo step, no dirty flag)
+
         edit (ko ("페이드 시간"), [clamped] (Cue& c) { c.fade.durationSeconds = clamped; });
-        refresh();
     }
 
     ProjectDocument& document;

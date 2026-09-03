@@ -302,6 +302,9 @@ def main():
     if not args.repo:
         sys.exit("--repo owner/name (or GOCUE_GITHUB_REPO) is required for the appcast URLs")
 
+    if args.publish and (args.allow_dirty or args.skip_build or args.skip_tests):
+        sys.exit("--publish builds and tests what is committed: --allow-dirty / --skip-build / --skip-tests are for local test builds only")
+
     if args.site_only:
         deploy_site(args.repo, latest_from_github(find_gh(), args.repo))
         return
@@ -370,6 +373,8 @@ def main():
             tagged = run(["git", "rev-list", "-n", "1", tag_name], cwd=ROOT, capture=True).strip()
             if tagged != head:
                 sys.exit("tag %s is on %s, HEAD is %s - bump the version" % (tag_name, tagged[:10], head[:10]))
+            if run(["git", "cat-file", "-t", "refs/tags/" + tag_name], cwd=ROOT, capture=True).strip() != "tag":
+                sys.exit("tag %s is a lightweight tag - delete it and let the script create the annotated one" % tag_name)
         else:
             run(["git", "tag", "-a", tag_name, "-m", "Enqueue " + version], cwd=ROOT)
         run(["git", "push", "origin", tag_name], cwd=ROOT)

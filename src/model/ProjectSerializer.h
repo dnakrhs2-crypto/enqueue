@@ -53,7 +53,7 @@ namespace ProjectSerializer
 {
     /** 1: cues with fadeInMs / fadeOutMs / gainDb.  2: "audio" object (trim, loops, rate, envelope); fadeInMs migrates to the envelope.
         3: cue list fields (number, colours, waits, continue mode, hotkey, wall clock, fade-stop-others, duck), settings (template, row size). */
-    constexpr int currentVersion = 5;   // 4: levels / trim / patches / audition / fade / devamp / slices / groups / control cues. 5: cue lists / carts ("lists")
+    constexpr int currentVersion = 6;   // 4: levels / trim / patches / audition / fade / devamp / slices / groups / control cues. 5: cue lists / carts ("lists"). 6: fade mode (in / out / custom)
     constexpr const char* fileExtension = ".enqueue";          // 0.9.0: the app was renamed from GoCue
     constexpr const char* openableExtensions = ".enqueue;.gocue";   // projects from before the rename still open
 

@@ -206,6 +206,12 @@ void CuePlayer::requestFadeOut (int milliseconds) noexcept
     pendingFadeOutMs.store (juce::jmax (stopDeclickMs, milliseconds), std::memory_order_relaxed);
 }
 
+void CuePlayer::requestPanicFadeOut (int milliseconds) noexcept
+{
+    skipTailOnStop.store (true, std::memory_order_relaxed);
+    requestFadeOut (milliseconds);
+}
+
 void CuePlayer::requestPause() noexcept
 {
     resumeRequested.store (false, std::memory_order_relaxed);
@@ -779,7 +785,7 @@ bool CuePlayer::renderNextBlock (juce::AudioBuffer<float>& fullBuffer, int numSa
         if (streamEnded && ! stoppedAfterFade)
             endedNaturally.store (true, std::memory_order_relaxed);
 
-        const double tailSeconds = (hardStop || activeChain == nullptr) ? 0.0 : activeChain->getTailSeconds();
+        const double tailSeconds = (hardStop || skipTailOnStop.load (std::memory_order_relaxed) || activeChain == nullptr) ? 0.0 : activeChain->getTailSeconds();
         tailSamplesLeft = (juce::int64) (tailSeconds * currentSampleRate);
 
         if (tailSamplesLeft > 0)

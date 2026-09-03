@@ -22,7 +22,9 @@ public:
         pauseButton.setWantsKeyboardFocus (false);
         pauseButton.onClick = [this]
         {
-            if (paused)
+            if (owner.onPauseRequested)
+                owner.onPauseRequested (id, paused);
+            else if (paused)
                 engine.resume (id);
             else
                 engine.pause (id);

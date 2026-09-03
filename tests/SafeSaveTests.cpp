@@ -100,6 +100,18 @@ public:
             expect (trailing.replaceWithText ("{\"app\": \"Enqueue\", \"version\": 3, \"cues\": []} garbage"));
             expect (ProjectSerializer::load (trailing, q).failed());
 
+            const auto trailingBrace = root.getChildFile ("trailingBrace.enqueue");   // ends with a brace, still not one object
+            expect (trailingBrace.replaceWithText ("{\"app\": \"Enqueue\", \"version\": 3, \"cues\": []} garbage }"));
+            expect (ProjectSerializer::load (trailingBrace, q).failed());
+
+            const auto otherApp = root.getChildFile ("otherApp.enqueue");
+            expect (otherApp.replaceWithText ("{\"app\": \"SomethingElse\", \"version\": 3, \"cues\": []}"));
+            expect (ProjectSerializer::load (otherApp, q).failed());
+
+            const auto braceInString = root.getChildFile ("braceInString.enqueue");   // a brace inside a name is fine
+            expect (braceInString.replaceWithText ("{\"app\": \"Enqueue\", \"version\": 3, \"cues\": [{\"name\": \"a } b\"}]}  \n"));
+            expect (ProjectSerializer::load (braceInString, q).wasOk());
+
             const auto future = root.getChildFile ("future.enqueue");   // saved by a newer Enqueue: refused, not silently downgraded
             expect (future.replaceWithText ("{\"app\": \"Enqueue\", \"version\": 9999, \"cues\": []}"));
             const auto futureResult = ProjectSerializer::load (future, q);

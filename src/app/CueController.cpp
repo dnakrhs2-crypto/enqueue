@@ -65,6 +65,12 @@ CueController::GoResult CueController::triggerControl (const Cue& cue, int index
     switch (ctl.kind)
     {
         case ControlKind::start:
+            if (! targetCue.armed)
+            {
+                status (ko ("비활성 큐: 시작하지 않음: ") + targetLabel);
+                break;
+            }
+
             if (engine.isPaused (targetCue.id))
             {
                 engine.resume (targetCue.id);
@@ -148,7 +154,7 @@ CueController::GoResult CueController::triggerControl (const Cue& cue, int index
         case ControlKind::disarm:
         {
             const bool arm = ctl.kind == ControlKind::arm;
-            cues.update (target, [arm] (Cue& c) { c.armed = arm; });
+            cues.update (target, [arm] (Cue& c) { c.armed = arm; if (! arm) c.skipIfDisarmed = true; });   // older readers skip it too
             status ((arm ? ko ("활성화: ") : ko ("비활성화: ")) + targetLabel);
             break;
         }
@@ -628,6 +634,12 @@ CueController::GoResult CueController::trigger (const Cue& cue, bool audition)
         return GoResult::failed;
     }
 
+    if (! cue.armed)   // 비활성화: not from a cart button, a preview, a scheduled start or a control cue either
+    {
+        status (ko ("비활성 큐: 시작하지 않음: ") + cue.name);
+        return GoResult::failed;
+    }
+
     const DepthGuard depth (*this);
     dispatchStack.push_back ({ cue.id, cue.isControl() });
     const auto result = triggerImpl (cue, audition);
@@ -753,30 +765,59 @@ CueController::GoResult CueController::triggerImpl (const Cue& cue, bool auditio
 
     if (cue.isFade())
     {
+        if (audition)
+        {
+            // a fade acts on the live instance of its target: an audition would alter (or stop) the real show
+            status (ko ("페이드 큐는 미리듣기할 수 없습니다: ") + cueLabel (index, cue), true);
+            return GoResult::failed;
+        }
+
         juce::String error;
+        bool targetAutoStarted = false;
 
         if (cue.fade.mode == FadeMode::fadeIn)
         {
             const auto* target = document.findCueAnywhere (cue.fade.targetId);
 
-            if (target != nullptr && ! engine.isPlaying (target->id))
+            if (target != nullptr && ! target->makesSound())
             {
-                // 페이드 인: the target starts at the fade floor and the fade lifts it to its own level
-                startNextAtLevel = true;
-                startNextLevelDb = document.settings.minLevelDb;
-                const auto started = startById (target->id, audition);
-                startNextAtLevel = false;
+                status (ko ("페이드 인 대상은 소리 큐여야 합니다: ") + cueLabel (index, cue), true);
+                return GoResult::failed;
+            }
 
-                if (started != GoResult::started)
+            if (target != nullptr)
+            {
+                const double floorDb = document.settings.minLevelDb;
+
+                if (engine.isPaused (target->id))
                 {
-                    status (ko ("페이드 인 대상을 시작하지 못함: ") + cueLabel (index, cue), true);
-                    return GoResult::failed;
+                    // paused: it comes back at the floor and the fade lifts it
+                    engine.setLiveGainDb (target->id, floorDb);
+                    engine.resume (target->id);
                 }
+                else if (! engine.isPlaying (target->id) || engine.isStopping (target->id))
+                {
+                    // not playing (or on its way out): a fresh instance starts at the floor; the request is keyed to this
+                    // target so that nothing a control cue starts in between can take it
+                    startNextAtLevelFor = target->id;
+                    startNextLevelDb = floorDb;
+                    const auto started = startById (target->id, false);
+                    startNextAtLevelFor = juce::Uuid::null();
+
+                    if (started != GoResult::started)
+                    {
+                        status (ko ("페이드 인 대상을 시작하지 못함: ") + cueLabel (index, cue), true);
+                        return GoResult::failed;
+                    }
+
+                    targetAutoStarted = true;
+                }
+                // already running: the fade lifts it from where it is
             }
         }
 
         // a running fade fired again restarts from where its target is now
-        if (! fadeRunner.start (cue, &error))
+        if (! fadeRunner.start (cue, &error, targetAutoStarted))
         {
             status (error, true);
             return GoResult::failed;
@@ -894,11 +935,11 @@ CueController::GoResult CueController::triggerImpl (const Cue& cue, bool auditio
 
     auto options = playOptions (audition);
 
-    if (startNextAtLevel)   // a fade-in cue starts its target at the fade floor
+    if (startNextAtLevelFor == cue.id)   // a fade-in cue starts this target at the fade floor
     {
         options.hasStartGain = true;
         options.startGainDb = startNextLevelDb;
-        startNextAtLevel = false;
+        startNextAtLevelFor = juce::Uuid::null();
     }
 
     if (! engine.play (cue, options, &error))
@@ -1412,6 +1453,30 @@ bool CueController::togglePause()
     return true;
 }
 
+bool CueController::resumeCue (const juce::Uuid& id)
+{
+    if (id.isNull())
+        return false;
+
+    if (isPanicLatched())
+    {
+        status (ko ("전체 정지 진행 중: 재개하지 않음"));
+        return false;
+    }
+
+    if (! engine.isPaused (id))
+        return false;
+
+    engine.resume (id);
+    return true;
+}
+
+void CueController::pauseCue (const juce::Uuid& id)
+{
+    if (! id.isNull())
+        engine.pause (id);
+}
+
 bool CueController::fadeOutTarget()
 {
     const auto id = resolveTarget (true);
@@ -1438,7 +1503,7 @@ void CueController::panicAll()
     if (now - lastPanicTime <= doubleEscSeconds)
     {
         engine.stopAll();
-        panicLatchUntil = -1.0e9;   // silent at once: nothing is left to protect
+        panicLatchUntil = now + 0.1;   // the 5 ms gate close, with margin: nothing starts on top of the stop
         status (ko ("전체 즉시 정지"));
     }
     else

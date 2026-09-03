@@ -96,6 +96,7 @@ public:
         explicit OperationalKeys (MainComponent& o) : owner (o) {}
         bool keyPressed (const juce::KeyPress& key, juce::Component* origin) override;
         bool keyStateChanged (bool isKeyDown, juce::Component*) override;
+        void reset() noexcept { spaceHeld = false; }   // a key-up missed while another app had the focus
     private:
         MainComponent& owner;
         bool spaceHeld = false;   // auto-repeat of a held Space is one GO, not many

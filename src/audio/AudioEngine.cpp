@@ -220,6 +220,9 @@ void AudioEngine::reapIfNeeded()
 {
     if (reapNeeded.exchange (false, std::memory_order_acq_rel))
         reapFinishedPlayers();
+
+    if (chainResetPending.load (std::memory_order_acquire) && resetAllChainsForPanic())
+        chainResetPending.store (false, std::memory_order_release);
 }
 
 void AudioEngine::shutdown()
@@ -789,6 +792,7 @@ bool AudioEngine::play (const Cue& cue, const PlayOptions& options, juce::String
     }
 
     players.push_back (std::move (player));
+    chainResetPending.store (false, std::memory_order_relaxed);   // the chains are in use again
     openOutputGate();   // a cue is committed: a panic gate that was closed reopens (a refused start leaves it shut)
     return true;
 }
@@ -911,7 +915,7 @@ void AudioEngine::fadeOutAndStopAll (int milliseconds)
 
         for (auto& p : players)
             if (! p->hasFinished())
-                p->requestFadeOut (milliseconds);
+                p->requestPanicFadeOut (milliseconds);   // no plugin tail afterwards: the chains are reset instead
     }
 
     // once the fade is over the gate closes over 200 ms and every plugin tail (patch, master, cue inserts) is cleared:
@@ -939,20 +943,42 @@ void AudioEngine::openOutputGate()
 
 void AudioEngine::applyOutputGate (juce::AudioBuffer<float>& output, int numSamples) noexcept
 {
-    // a scheduled close (soft panic) counts down in samples
+    // a scheduled close (soft panic) counts down in samples and begins at its exact sample, not at the block start
     if (auto countdown = outputGateCloseCountdown.load (std::memory_order_acquire); countdown >= 0)
     {
-        countdown -= numSamples;
-
-        if (countdown <= 0)
+        if (countdown >= numSamples)
         {
-            outputGateCloseCountdown.store (-1, std::memory_order_relaxed);
-            outputGateRampSamples.store (juce::jmax (1, (int) (0.2 * sampleRate.load())), std::memory_order_relaxed);
-            outputGateTarget.store (0, std::memory_order_release);
+            outputGateCloseCountdown.store (countdown - numSamples, std::memory_order_relaxed);
+            applyGateRange (output, 0, numSamples);
         }
         else
-            outputGateCloseCountdown.store (countdown, std::memory_order_relaxed);
+        {
+            outputGateCloseCountdown.store (-1, std::memory_order_relaxed);
+            const int prefix = (int) countdown;
+
+            if (prefix > 0)
+                applyGateRange (output, 0, prefix);
+
+            outputGateRampSamples.store (juce::jmax (1, (int) (0.2 * sampleRate.load())), std::memory_order_relaxed);
+            outputGateTarget.store (0, std::memory_order_release);
+            applyGateRange (output, prefix, numSamples - prefix);
+        }
     }
+    else
+    {
+        applyGateRange (output, 0, numSamples);
+    }
+
+    // closed after a panic: the plugin chains are reset on the message thread (reset() may allocate or block); the
+    // UI timer polls the flag - nothing is posted from here
+    if (outputGateGain <= 0.0f && outputGateRemaining == 0 && resetChainsWhenClosed.exchange (false, std::memory_order_acq_rel))
+        chainResetPending.store (true, std::memory_order_release);
+}
+
+void AudioEngine::applyGateRange (juce::AudioBuffer<float>& output, int start, int numSamples) noexcept
+{
+    if (numSamples <= 0)
+        return;
 
     const int target = outputGateTarget.load (std::memory_order_acquire);
     const float targetGain = (float) target;
@@ -975,19 +1001,19 @@ void AudioEngine::applyOutputGate (juce::AudioBuffer<float>& output, int numSamp
     if (outputGateRemaining > 0)
     {
         const int rampNow = juce::jmin (numSamples, outputGateRemaining);
-        const float start = outputGateGain;
-        const float end = rampNow == outputGateRemaining ? targetGain
-                                                         : start + (targetGain - start) * (float) rampNow / (float) outputGateRemaining;
-        output.applyGainRamp (0, rampNow, start, end);
-        outputGateGain = end;
+        const float from = outputGateGain;
+        const float to = rampNow == outputGateRemaining ? targetGain
+                                                        : from + (targetGain - from) * (float) rampNow / (float) outputGateRemaining;
+        output.applyGainRamp (start, rampNow, from, to);
+        outputGateGain = to;
         outputGateRemaining -= rampNow;
 
-        if (rampNow < numSamples)   // the ramp ended inside this block: the rest sits at the target
+        if (rampNow < numSamples)   // the ramp ended inside this range: the rest sits at the target
         {
             if (targetGain <= 0.0f)
-                output.clear (rampNow, numSamples - rampNow);
+                output.clear (start + rampNow, numSamples - rampNow);
             else if (! juce::exactlyEqual (targetGain, 1.0f))
-                output.applyGain (rampNow, numSamples - rampNow, targetGain);
+                output.applyGain (start + rampNow, numSamples - rampNow, targetGain);
         }
     }
     else
@@ -995,34 +1021,54 @@ void AudioEngine::applyOutputGate (juce::AudioBuffer<float>& output, int numSamp
         outputGateGain = targetGain;
 
         if (targetGain <= 0.0f)
-            output.clear (0, numSamples);
+            output.clear (start, numSamples);
         else if (! juce::exactlyEqual (targetGain, 1.0f))
-            output.applyGain (0, numSamples, targetGain);
-    }
-
-    // closed after a panic: the plugin chains are reset on the message thread (reset() may allocate or block)
-    if (outputGateGain <= 0.0f && outputGateRemaining == 0 && resetChainsWhenClosed.exchange (false, std::memory_order_acq_rel))
-    {
-        chainResetPending.store (true, std::memory_order_release);
-        triggerAsyncUpdate();
+            output.applyGain (start, numSamples, targetGain);
     }
 }
 
-void AudioEngine::resetAllChainsForPanic()
+bool AudioEngine::resetAllChainsForPanic()
 {
     // message thread, after the gate closed on a panic: the plugins' reset() clears delay lines and reverb tails.
-    // A cue that started meanwhile keeps its chains as they are: the new cue matters more than a stale tail.
+    // The callback outputs silence meanwhile (resetInProgress) instead of waiting for the lock behind a plugin's reset.
+    resetInProgress.store (true, std::memory_order_release);
+    bool done = true;
+
+    {
+        const juce::ScopedLock sl (lock);
+
+        for (auto& p : players)
+        {
+            if (! p->hasFinished())
+            {
+                // a pre-panic instance still on its way out: try again next tick; a fresh cue that started meanwhile
+                // owns the chains now, the stale reset is moot
+                done = ! p->isStopPending();
+                resetInProgress.store (false, std::memory_order_release);
+                return done;
+            }
+        }
+
+        for (auto& entry : cueChains)
+            entry.second->resetProcessing();
+
+        masterChain.resetProcessing();
+        forEachPatchChain ([] (PluginChain& chain) { chain.resetProcessing(); });
+    }
+
+    resetInProgress.store (false, std::memory_order_release);
+    return done;
+}
+
+bool AudioEngine::isStopping (const juce::Uuid& cueId) const
+{
     const juce::ScopedLock sl (lock);
 
     for (auto& p : players)
-        if (! p->hasFinished())
-            return;
+        if (p->getCueId() == cueId && ! p->hasFinished() && ! p->isLoadedNotStarted())
+            return p->isStopPending();
 
-    for (auto& entry : cueChains)
-        entry.second->resetProcessing();
-
-    masterChain.resetProcessing();
-    forEachPatchChain ([] (PluginChain& chain) { chain.resetProcessing(); });
+    return false;
 }
 
 void AudioEngine::pause (const juce::Uuid& cueId)
@@ -1350,6 +1396,7 @@ double AudioEngine::getDuckDb (const juce::Uuid& cueId) const
 std::vector<juce::Uuid> AudioEngine::getPausedCues() const
 {
     std::vector<juce::Uuid> result;
+    result.reserve (maxPlayers);
     const juce::ScopedLock sl (lock);
 
     for (auto& p : players)
@@ -1373,7 +1420,7 @@ bool AudioEngine::isPlaying (const juce::Uuid& cueId) const
 std::vector<AudioEngine::PlayingCue> AudioEngine::getPlayingCues() const
 {
     std::vector<PlayingCue> result;
-    result.reserve (64);   // no allocation while the audio lock is held
+    result.reserve (maxPlayers);   // no allocation while the audio lock is held
     const juce::ScopedLock sl (lock);
 
     for (auto& p : players)
@@ -1617,6 +1664,8 @@ void AudioEngine::renderBlock (juce::AudioBuffer<float>& output, int numSamples,
 
             muteRuntime->bus.clear (0, n);   // auditions with no output mix in here and go nowhere
 
+            int running = 0;
+
             for (auto& p : players)
             {
                 if (p->hasFinished() && ! p->hasPendingLiveEdit())
@@ -1631,7 +1680,11 @@ void AudioEngine::renderBlock (juce::AudioBuffer<float>& output, int numSamples,
 
                 if (! stillRunning)
                     anyFinished = true;
+                else if (! p->isLoadedNotStarted())
+                    ++running;
             }
+
+            runningPlayers.store (running, std::memory_order_relaxed);
 
             for (auto& r : patchRuntimes)
                 renderPatch (*r, n);
@@ -1686,9 +1739,9 @@ void AudioEngine::audioDeviceIOCallbackWithContext (const float* const* inputCha
     if (numOutputChannels <= 0 || numSamples <= 0)
         return;
 
-    if (hardPanicRequested.load (std::memory_order_acquire))
+    if (hardPanicRequested.load (std::memory_order_acquire) || resetInProgress.load (std::memory_order_acquire))
     {
-        // hard panic: silence right now, without waiting for the engine lock (a busy message thread or a slow plugin
+        // hard panic (or the post-panic chain reset on the message thread): silence right now, without waiting for the engine lock (a busy message thread or a slow plugin
         // must not delay the stop); the players are stopped by stopAll() meanwhile
         for (int ch = 0; ch < numOutputChannels; ++ch)
             if (outputChannelData[ch] != nullptr)
@@ -1772,9 +1825,6 @@ void AudioEngine::audioDeviceError (const juce::String& errorMessage)
 
 void AudioEngine::handleAsyncUpdate()
 {
-    if (chainResetPending.exchange (false, std::memory_order_acq_rel))
-        resetAllChainsForPanic();
-
     reapFinishedPlayers();
 }
 

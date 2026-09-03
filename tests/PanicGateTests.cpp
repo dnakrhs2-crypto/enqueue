@@ -201,6 +201,37 @@ public:
             expectEquals (out.getMagnitude (0, 0, blockSize), 0.0f);
         }
 
+        beginTest ("a soft panic ends every instance without waiting for a declared plugin tail, and the chains are reset once the gate is closed");
+        {
+            AudioEngine engine (0);
+            engine.prepare (sampleRate, blockSize);
+            auto* master = new TestGainPlugin (1.0f, 5.0);   // five seconds of declared tail
+            engine.getMasterChain().addPlugin (std::unique_ptr<juce::AudioPluginInstance> (master));
+            juce::AudioBuffer<float> out (2, blockSize);
+
+            Cue cue;
+            cue.name = "tone";
+            cue.file = tone;
+            juce::String error;
+            expect (engine.play (cue, &error), error);
+
+            for (int i = 0; i < 10; ++i)
+                engine.renderBlock (out, blockSize);
+
+            engine.fadeOutAndStopAll (100);
+            const int blocks = (int) std::ceil (0.5 * sampleRate / blockSize);   // fade 100 ms + gate close 200 ms, with margin
+
+            for (int i = 0; i < blocks; ++i)
+            {
+                engine.renderBlock (out, blockSize);
+                engine.reapIfNeeded();   // the timer's job: reaping and the polled chain reset
+            }
+
+            expectEquals (engine.getNumPlaying(), 0);   // not held for five seconds by the tail
+            expectEquals (out.getMagnitude (0, 0, blockSize), 0.0f);
+            expectGreaterThan (master->resetCount, 0);   // the chain was reset behind the closed gate
+        }
+
         dir.deleteRecursively();
     }
 };

@@ -79,6 +79,8 @@ public:
     void requestStop() noexcept;
     /** Fade to silence over 'milliseconds', then stop (plugin tail still rings out). Any thread. */
     void requestFadeOut (int milliseconds) noexcept;
+    /** A panic: the fade-out, then finished at once (no plugin tail: the chains are reset behind the closed gate). */
+    void requestPanicFadeOut (int milliseconds) noexcept;
     /** De-clicked pause: the position freezes; plugins keep running on silence. Any thread. */
     void requestPause() noexcept;
     void requestResume() noexcept;
@@ -219,6 +221,7 @@ private:
     std::atomic<bool> audition { false };
     std::atomic<int> pendingFadeOutMs { -1 };
     std::atomic<bool> hardStopRequested { false };
+    std::atomic<bool> skipTailOnStop { false };
     std::atomic<bool> stopRequested { false };
     std::atomic<bool> finished { false };
     std::atomic<bool> endedNaturally { false };   // finished because the stream ended (a live edit that adds material undoes it)

@@ -100,7 +100,9 @@ public:
                 safeOwner->cellEditor.reset();
 
             safeOwner->focusTable();
-            safeOwner->commands.invokeDirectly (CommandIDs::panicAll, true);   // Esc is the panic key, editing or not
+           #if ! JUCE_WINDOWS
+            safeOwner->commands.invokeDirectly (CommandIDs::panicAll, true);   // Esc is the panic key, editing or not (Windows: the keyboard hook does it)
+           #endif
         });
     }
 
@@ -1064,7 +1066,7 @@ void CueTable::showContextMenu (int row, juce::Point<int> screenPosition)
         else if (result == 2)
         {
             const bool armed = ! self.cues.get (row).armed;
-            self.onEditCues (rows, armed ? ko ("활성화") : ko ("비활성화"), [armed] (Cue& c) { c.armed = armed; });
+            self.onEditCues (rows, armed ? ko ("활성화") : ko ("비활성화"), [armed] (Cue& c) { c.armed = armed; if (! armed) c.skipIfDisarmed = true; });   // older readers skip it too
         }
         else if (result >= 10 && result <= 12)
         {
@@ -1087,6 +1089,7 @@ bool CueTable::isInterestedInFileDrag (const juce::StringArray& files)
 void CueTable::fileDragEnter (const juce::StringArray& files, int, int)
 {
     dragOver = true;
+    dropGroupIndex = -1;
     repaint();
 
     if (onStatus)
@@ -1151,7 +1154,7 @@ int CueTable::insertionIndexForY (int y) const
 void CueTable::filesDropped (const juce::StringArray& files, int, int y)
 {
     dragOver = false;
-    const int intoGroup = dropGroupIndex;
+    const int intoGroup = groupAtY (y);   // the drop position itself, not the last hover
     dropGroupIndex = -1;
     repaint();
 

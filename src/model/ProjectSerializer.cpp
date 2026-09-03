@@ -828,12 +828,53 @@ juce::String toJson (const Project& project, const juce::File& projectDir)
     return juce::JSON::toString (toVar (project, projectDir), false);
 }
 
+namespace
+{
+    /** JUCE's parser stops after the first object: anything but whitespace after it is a broken file. */
+    bool hasTrailingData (const juce::String& json)
+    {
+        auto t = json.getCharPointer();
+        int depth = 0;
+        bool inString = false, escaped = false, seenObject = false;
+
+        for (auto c = t.getAndAdvance(); c != 0; c = t.getAndAdvance())
+        {
+            if (inString)
+            {
+                if (escaped)            escaped = false;
+                else if (c == '\\')     escaped = true;
+                else if (c == '"')      inString = false;
+
+                continue;
+            }
+
+            if (seenObject)
+            {
+                if (! juce::CharacterFunctions::isWhitespace (c))
+                    return true;
+
+                continue;
+            }
+
+            if (c == '"')       inString = true;
+            else if (c == '{')  ++depth;
+            else if (c == '}')
+            {
+                if (--depth == 0)
+                    seenObject = true;
+            }
+        }
+
+        return false;
+    }
+}
+
 juce::Result fromJson (const juce::String& json, Project& out, juce::StringArray* warnings, const juce::File& projectDir)
 {
     if (json.trim().isEmpty())
         return juce::Result::fail ("Invalid project file: the file is empty");
 
-    if (! json.trimEnd().endsWithChar ('}'))
+    if (! json.trimEnd().endsWithChar ('}') || hasTrailingData (json))
         return juce::Result::fail ("Invalid project file: data after the end of the project");
 
     juce::var root;
@@ -850,6 +891,10 @@ juce::Result fromJson (const juce::String& json, Project& out, juce::StringArray
     // load as an empty show and a save would overwrite the original with that
     if (! root.getProperty ("cues", juce::var()).isArray() && ! root.getProperty ("lists", juce::var()).isArray())
         return juce::Result::fail ("Invalid project file: not an Enqueue project (no cue list)");
+
+    // a file that names its app must be ours (GoCue: the name before 0.9.0)
+    if (const auto app = root.getProperty ("app", "").toString(); app.isNotEmpty() && app != "Enqueue" && app != "GoCue")
+        return juce::Result::fail ("Invalid project file: written by \"" + app + "\", not Enqueue");
 
     const int version = intProperty (root, "version", 1);
 

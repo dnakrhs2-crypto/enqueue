@@ -119,7 +119,7 @@ namespace
     }
 }
 
-bool FadeRunner::start (const Cue& fadeCue, juce::String* error)
+bool FadeRunner::start (const Cue& fadeCue, juce::String* error, bool targetAutoStarted)
 {
     if (! fadeCue.isFade())
         return false;
@@ -217,6 +217,7 @@ bool FadeRunner::start (const Cue& fadeCue, juce::String* error)
     RevertEntry entry;
     entry.targetId = a.targetId;
     entry.instance = a.instance;
+    entry.stopOnRevert = targetAutoStarted;
     entry.data = a.data;
     entry.from = a.from;
     revertStack.push_back (std::move (entry));
@@ -436,6 +437,12 @@ bool FadeRunner::revertLast()
 
         // the fades still running on that target are cancelled first
         fades.erase (std::remove_if (fades.begin(), fades.end(), [&] (const Active& f) { return f.targetId == entry.targetId; }), fades.end());
+
+        if (entry.stopOnRevert)
+        {
+            engine.stop (entry.targetId);   // the fade-in started it: before the fade there was nothing playing
+            return true;
+        }
 
         // only what the fade owned goes back: its active cells, its rate, its parameters
         State cur;

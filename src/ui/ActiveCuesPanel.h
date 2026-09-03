@@ -24,6 +24,8 @@ public:
     void setPlayingCues (const std::vector<AudioEngine::PlayingCue>& playing);
     /** The row's stop button: the owner stops the cue wherever it runs (fade cues live outside the engine). */
     std::function<void (const juce::Uuid& cueId)> onStopRequested;
+    /** The row's pause button: resume = true asks for a resume (the owner applies the panic latch). */
+    std::function<void (const juce::Uuid& cueId, bool resume)> onPauseRequested;
     void setNewestFirst (bool newestFirst);
     /** Off in show mode: clicking a progress bar must not seek a running cue. */
     void setScrubEnabled (bool enabled) noexcept { scrubEnabled = enabled; }

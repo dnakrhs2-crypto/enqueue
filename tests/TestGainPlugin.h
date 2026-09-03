@@ -32,6 +32,7 @@ public:
     }
 
     double getTailLengthSeconds() const override { return tail; }
+    void reset() override { ++resetCount; }
     bool acceptsMidi() const override { return false; }
     bool producesMidi() const override { return false; }
     juce::AudioProcessorEditor* createEditor() override { return nullptr; }
@@ -70,6 +71,7 @@ public:
     int preparedBlockSize = 0;
     int prepareCount = 0;
     int releaseCount = 0;
+    int resetCount = 0;
     int processCount = 0;
     int lastNumChannels = 0;
     int lastNumSamples = 0;

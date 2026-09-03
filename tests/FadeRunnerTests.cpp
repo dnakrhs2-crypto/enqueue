@@ -347,6 +347,14 @@ public:
             expect (controller.trigger (fade) == CueController::GoResult::failed);
             expect (statuses[statuses.size() - 1].isNotEmpty());
 
+            // an auditioned fade is refused: it would act on the live instance of its target
+            expect (engine.play (target));
+            step (0.1);
+            expect (controller.trigger (fade, true) == CueController::GoResult::failed);
+            expect (! controller.isCueActive (fade.id));
+            engine.stopAll();
+            step (0.1);
+
             // Esc cancels a running fade
             expect (engine.play (target));
             step (0.1);

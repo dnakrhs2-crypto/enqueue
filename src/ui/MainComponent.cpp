@@ -181,8 +181,21 @@ MainComponent::MainComponent (AudioEngine& e, AppSettings& s, juce::ApplicationC
     table.onEditDuration = [this] (int) { ensureInspectorShown(); inspector.showTimeTab(); };
 
     inspector.onOpenPluginManager = [this] { showPluginManager(); };
-    inspector.onPanic = [this] { controller.panicAll(); table.focusTable(); };
+    inspector.onPanic = [this]
+    {
+       #if ! JUCE_WINDOWS
+        controller.panicAll();
+       #endif
+        table.focusTable();   // on Windows the keyboard hook already turned this Esc into the panic
+    };
     inspector.onReturnFocus = [this] { table.focusTable(); };
+    activeCues.onPauseRequested = [this] (const juce::Uuid& id, bool resume)
+    {
+        if (resume)
+            controller.resumeCue (id);   // through the panic latch
+        else
+            controller.pauseCue (id);
+    };
     activeCues.onStopRequested = [this] (const juce::Uuid& id)
     {
         // an audio cue fades out over its stop fade; anything else (fade / group / wait) is stopped by the controller
@@ -478,9 +491,10 @@ void MainComponent::getCommandInfo (juce::CommandID commandID, juce::Application
             break;
 
         case CommandIDs::panicAll:
-            result.setInfo (ko ("전체 페이드 정지"), ko ("재생 중인 모든 큐를 설정된 시간(기본 2초) 동안 페이드아웃 후 정지. 0.5초 안에 두 번 누르면 즉시 정지"), playback, 0);
-            result.addDefaultKeypress (KeyPress::escapeKey, ModifierKeys::noModifiers);
-            result.flags |= juce::ApplicationCommandInfo::wantsKeyUpDownCallbacks;   // the down edge only: a held Esc is one press
+            result.setInfo (ko ("전체 페이드 정지 (Esc)"), ko ("재생 중인 모든 큐를 설정된 시간(기본 2초) 동안 페이드아웃 후 정지. 0.5초 안에 두 번 누르면 즉시 정지"), playback, 0);
+           #if ! JUCE_WINDOWS
+            result.addDefaultKeypress (KeyPress::escapeKey, ModifierKeys::noModifiers);   // on Windows the keyboard hook is the one Esc source
+           #endif
             break;
 
         case CommandIDs::hardStopAll:
@@ -557,13 +571,13 @@ void MainComponent::getCommandInfo (juce::CommandID commandID, juce::Application
         case CommandIDs::addGroupCue:
             result.setInfo (ko ("그룹 큐 추가"), ko ("빈 그룹을 선택 뒤에 추가 (자식은 그룹 아래로 끌어다 넣거나 Ctrl+G로 묶기)"), cueMenu, 0);
             result.addDefaultKeypress ('0', ModifierKeys::commandModifier);
-            result.setActive (canEdit);
+            result.setActive (canEdit && ! document.isActiveCart());   // a cart is flat
             break;
 
         case CommandIDs::groupSelectedCues:
             result.setInfo (ko ("선택한 큐 그룹으로 묶기"), ko ("선택한 큐(하위 포함)를 새 그룹 안에 넣음"), cueMenu, 0);
             result.addDefaultKeypress ('G', ModifierKeys::commandModifier);
-            result.setActive (canEdit && document.cues.getSelectedIndex() >= 0);
+            result.setActive (canEdit && document.cues.getSelectedIndex() >= 0 && ! document.isActiveCart());
             break;
 
         case CommandIDs::ungroupSelected:
@@ -888,21 +902,6 @@ bool MainComponent::perform (const InvocationInfo& info)
             break;
 
         case CommandIDs::panicAll:
-            if (info.invocationMethod == InvocationInfo::fromKeyPress)
-            {
-                if (! info.isKeyDown)
-                {
-                    escHeld = false;
-                    break;
-                }
-
-                if (escHeld)
-                    break;   // auto-repeat of a held Esc: not a second press (that would turn the fade into a hard cut)
-
-                escHeld = true;
-                lastPanicKeyMs = juce::Time::getMillisecondCounterHiRes();
-            }
-
             controller.panicAll();
             break;
 
@@ -968,11 +967,13 @@ bool MainComponent::perform (const InvocationInfo& info)
             break;
 
         case CommandIDs::addGroupCue:
-            addGroupCue();
+            if (! document.isActiveCart())
+                addGroupCue();
             break;
 
         case CommandIDs::groupSelectedCues:
-            groupSelectedCues();
+            if (! document.isActiveCart())
+                groupSelectedCues();
             break;
 
         case CommandIDs::ungroupSelected:
@@ -1359,7 +1360,8 @@ void MainComponent::addCuesFromFiles (const juce::StringArray& files, int insert
     document.perform (files.size() == 1 ? ko ("큐 추가") : ko ("큐 추가 (") + juce::String (files.size()) + ")",
                       [this, files, insertAt, intoGroup, copyIn, projectDir, autoNumber, increment, autoLoad, templateSettings]
     {
-        const bool intoAGroup = document.cues.isValidIndex (intoGroup) && document.cues.get (intoGroup).isGroup();
+        const bool inCart = document.isActiveCart();   // a cart is flat: no parent, no drop into a group
+        const bool intoAGroup = ! inCart && document.cues.isValidIndex (intoGroup) && document.cues.get (intoGroup).isGroup();
         const juce::Uuid groupId = intoAGroup ? document.cues.get (intoGroup).id : juce::Uuid::null();
         int index = intoAGroup ? document.cues.subtreeEnd (intoGroup) : insertAt;
         int last = -1;
@@ -1377,7 +1379,7 @@ void MainComponent::addCuesFromFiles (const juce::StringArray& files, int insert
             refreshCueFileInfo (engine.getFormatManager(), cue);
 
             const int at = index < 0 ? document.cues.size() : index;
-            cue.parentId = intoAGroup ? groupId : document.cues.parentForInsertion (at);   // dropped between a group's children (or onto a group): joins it
+            cue.parentId = intoAGroup ? groupId : inCart ? juce::Uuid::null() : document.cues.parentForInsertion (at);   // dropped between a group's children (or onto a group): joins it
 
             if (autoNumber)
                 cue.number = CueNumbering::next (document.cues.getAll(), at, increment);
@@ -2941,16 +2943,12 @@ bool MainComponent::OperationalKeys::keyStateChanged (bool, juce::Component*)
 
 void MainComponent::panicFromAnywhere()
 {
-    const double now = juce::Time::getMillisecondCounterHiRes();
-
-    if (now - lastPanicKeyMs < 50.0)
-        return;   // this very press: the main window's own Esc mapping already handled it
-
-    if (engine.getNumPlaying() > 0 || showMode || controller.hasPendingStarts())
-    {
-        lastPanicKeyMs = now;
+    // the one Esc source on Windows (the keyboard hook, every window, native plugin editors included). Nothing here
+    // waits for the engine lock: a stuck plugin must not delay the decision.
+    if (engine.getNumPlayingLockFree() > 0 || showMode || controller.hasPendingStarts() || controller.getFadeRunner().getNumRunning() > 0)
         controller.panicAll();
-    }
+    else
+        engine.silenceOutput();   // no cue at all: a self-generating plugin is muted at the gate, without the show latch
 }
 
 void MainComponent::attachOperationalKeysToWindows()
@@ -3013,7 +3011,12 @@ void MainComponent::timerCallback()
     engine.reapIfNeeded();   // finished players are destroyed here, never from the audio thread's callback
 
     if (! juce::Process::isForegroundProcess())
+    {
         hotkeyListener.heldKeys.clear();   // key-ups missed while another app had the focus must not look like auto-repeat
+        operationalKeys.reset();
+        escHeld = false;
+        controller.goKeyReleased();
+    }
 
     auto playing = engine.getPlayingCues();
 
