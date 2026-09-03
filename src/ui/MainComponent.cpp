@@ -2566,15 +2566,26 @@ void MainComponent::tryPendingStartOnOpen()
     }
 
     const auto number = pendingStartOnOpenCue;
-    pendingStartOnOpenCue.clear();
+    const int index = findCueIndexByNumber (number);
 
-    if (const int i = findCueIndexByNumber (number); i >= 0)
+    if (index < 0)
     {
-        controller.fireSequence (i);
-
-        if (engine.mayBePlaying() || controller.hasPendingStarts())
-            transport.showStatus (ko ("열 때 시작: ") + number, false);   // otherwise the controller's own message (why it did not start) stays
+        pendingStartOnOpenCue.clear();
+        return;
     }
+
+    controller.fireSequence (index);
+
+    if (engine.mayBePlaying() || controller.hasPendingStarts())
+    {
+        pendingStartOnOpenCue.clear();
+        transport.showStatus (ko ("열 때 시작: ") + number, false);
+    }
+    else if (engine.isDeviceRunning() && ! engine.isResetOutstanding() && ! controller.isPanicLatched())
+    {
+        pendingStartOnOpenCue.clear();   // nothing started for a reason of its own: the controller's message says why
+    }
+    // else: the device dropped (or a panic landed) between the check and the start - the timer tries again until the deadline
 }
 
 void MainComponent::restorePluginChainsFromDocument (juce::StringArray& errors)

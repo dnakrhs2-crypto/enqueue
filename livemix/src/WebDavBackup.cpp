@@ -57,7 +57,7 @@ namespace
                 return false;
 
             for (const auto& q : quad)
-                if (q.isEmpty() || q.length() > 3 || ! q.containsOnly ("0123456789") || q.getIntValue() > 255)
+                if (q.isEmpty() || q.length() > 3 || ! q.containsOnly ("0123456789") || q.getIntValue() > 255 || (q.length() > 1 && q.startsWithChar ('0')))
                     return false;
 
             const auto head = s.upToLastOccurrenceOf (":", true, false);   // up to and including the ':' before the tail

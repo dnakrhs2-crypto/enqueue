@@ -54,6 +54,7 @@ public:
             expect (WebDavBackup::validateBaseUrl ("https://[12345::1]").isNotEmpty());            // a group too long
             expect (WebDavBackup::validateBaseUrl ("https://[g::1]").isNotEmpty());                // not hex
             expect (WebDavBackup::validateBaseUrl ("https://[1::2::3]").isNotEmpty());             // two compressions
+            expect (WebDavBackup::validateBaseUrl ("https://[::ffff:192.168.001.1]:5006").isNotEmpty());   // a leading zero is not an octet
 
             expectEquals (WebDavBackup::credentialKeyFor ("https://Parkdoomin.synology.me:5006/", " gom "), juce::String ("LiveMix/WebDAV/parkdoomin.synology.me:5006/gom"));
             expect (WebDavBackup::credentialKeyFor ("https://a.example:5006", "gom") != WebDavBackup::credentialKeyFor ("https://b.example:5006", "gom"));

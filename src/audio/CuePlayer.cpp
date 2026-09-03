@@ -587,7 +587,8 @@ bool CuePlayer::renderNextBlock (juce::AudioBuffer<float>& fullBuffer, int numSa
     if (const auto seek = pendingVirtualPosition.exchange (-1, std::memory_order_acq_rel); seek >= 0)
     {
         const bool stopping = stopRequested.load (std::memory_order_relaxed) || hardStopRequested.load (std::memory_order_relaxed)
-                              || skipTailOnStop.load (std::memory_order_relaxed);
+                              || skipTailOnStop.load (std::memory_order_relaxed)
+                              || pendingFadeOutMs.load (std::memory_order_acquire) >= 0;   // a fade request not consumed yet counts too
 
         if (endedNaturally.exchange (false, std::memory_order_acq_rel) && ! stopping)   // never past a stop or a panic
         {
