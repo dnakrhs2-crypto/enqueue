@@ -20,6 +20,7 @@ target_sources(EnqueueTests PRIVATE
     MixSessionTests.cpp
     MixEngineTests.cpp
     WebDavBackupTests.cpp
+    MixDocumentTests.cpp
     ResamplerTests.cpp
     CueListTests.cpp
     CueNumberingTests.cpp

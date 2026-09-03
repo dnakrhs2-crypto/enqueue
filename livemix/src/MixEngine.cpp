@@ -88,6 +88,62 @@ juce::String MixEngine::openAllChannels()
     return deviceManager.setAudioDeviceSetup (setup, true);
 }
 
+juce::String MixEngine::openSessionDevice (const MixDevice& device)
+{
+    if (device.name.isEmpty())
+        return {};
+
+    auto* current = deviceManager.getCurrentAudioDevice();
+    const bool sameDevice = current != nullptr && current->getName() == device.name;
+
+    if (sameDevice && (device.bufferSize <= 0 || current->getCurrentBufferSizeSamples() == device.bufferSize)
+        && (device.sampleRate <= 0.0 || juce::approximatelyEqual (current->getCurrentSampleRate(), device.sampleRate)))
+        return openAllChannels();
+
+    juce::AudioIODeviceType* asio = nullptr;
+
+    for (auto* type : deviceManager.getAvailableDeviceTypes())
+        if (type->getTypeName().containsIgnoreCase ("ASIO"))
+            asio = type;
+
+    if (asio == nullptr)
+        return juce::String::fromUTF8 ("ASIO 장치 타입을 쓸 수 없습니다 (ASIO 드라이버가 설치된 오디오 인터페이스가 필요합니다).");
+
+    asio->scanForDevices();
+
+    if (! asio->getDeviceNames (false).contains (device.name))
+        return juce::String::fromUTF8 ("세션의 ASIO 장치 '") + device.name + juce::String::fromUTF8 ("'가 이 PC에 없습니다")
+               + (current != nullptr ? juce::String::fromUTF8 (" - 지금 열린 장치: ") + current->getName() : juce::String::fromUTF8 (" - 열린 장치 없음"));
+
+    const auto previous = deviceManager.getAudioDeviceSetup();
+    deviceManager.setCurrentAudioDeviceType (asio->getTypeName(), false);
+    juce::AudioDeviceManager::AudioDeviceSetup setup;
+    setup.inputDeviceName = setup.outputDeviceName = device.name;
+    setup.sampleRate = device.sampleRate > 0.0 ? device.sampleRate : 0.0;
+    setup.bufferSize = device.bufferSize > 0 ? device.bufferSize : 0;
+    setup.useDefaultInputChannels = setup.useDefaultOutputChannels = true;
+    auto error = deviceManager.setAudioDeviceSetup (setup, true);
+
+    if (error.isEmpty())
+        error = openAllChannels();
+
+    if (error.isNotEmpty())
+    {
+        if (current != nullptr)
+            deviceManager.setAudioDeviceSetup (previous, true);   // back to what worked
+
+        return juce::String::fromUTF8 ("세션의 ASIO 장치 '") + device.name + juce::String::fromUTF8 ("'를 열지 못했습니다: ") + error;
+    }
+
+    if (! callbackAdded)
+    {
+        deviceManager.addAudioCallback (this);
+        callbackAdded = true;
+    }
+
+    return {};
+}
+
 void MixEngine::shutdown()
 {
     if (callbackAdded)
@@ -164,7 +220,7 @@ void MixEngine::renderBlock (const float* const* inputs, int numInputs, float* c
     {
         const int n = juce::jmin (chunkSize, numSamples - offset);
         masterBus.clear (0, n);
-        const int numFx = (int) fxNodes.size();
+        const int numFx = juce::jmin (maxFx, (int) fxNodes.size());
 
         for (int f = 0; f < numFx; ++f)
             fxBus[(size_t) f].clear (0, n);
@@ -194,11 +250,17 @@ void MixEngine::renderBlock (const float* const* inputs, int numInputs, float* c
                 chBuf.copyFrom (1, 0, chBuf, 0, 0, n);
             }
 
+            // the sends, read once per block: the pre tap and the routing below see the same amounts and pre / post flags
+            float sendAmount[(size_t) maxFx] = {};
+            bool sendPre[(size_t) maxFx] = {};
             bool anyPre = false;
 
             for (int f = 0; f < numFx; ++f)
-                if (node->sends[(size_t) f].pre.load (std::memory_order_relaxed) && node->sends[(size_t) f].amount.load (std::memory_order_relaxed) > 0.0f)
-                    anyPre = true;
+            {
+                sendAmount[(size_t) f] = node->sends[(size_t) f].amount.load (std::memory_order_relaxed);
+                sendPre[(size_t) f] = node->sends[(size_t) f].pre.load (std::memory_order_relaxed);
+                anyPre = anyPre || (sendPre[(size_t) f] && sendAmount[(size_t) f] > 0.0f);
+            }
 
             if (anyPre)
             {
@@ -235,13 +297,12 @@ void MixEngine::renderBlock (const float* const* inputs, int numInputs, float* c
 
             for (int f = 0; f < numFx; ++f)
             {
-                const auto& send = node->sends[(size_t) f];
-                const float amount = send.amount.load (std::memory_order_relaxed);
+                const float amount = sendAmount[(size_t) f];
 
                 if (amount <= 0.0f)
                     continue;
 
-                const auto& source = send.pre.load (std::memory_order_relaxed) ? preBuf : chBuf;
+                const auto& source = sendPre[(size_t) f] ? preBuf : chBuf;
                 fxBus[(size_t) f].addFrom (0, 0, source, 0, 0, n, amount);
                 fxBus[(size_t) f].addFrom (1, 0, source, 1, 0, n, amount);
             }
@@ -361,19 +422,18 @@ void MixEngine::applySession (const MixSession& session, juce::StringArray* erro
             errors->addArray (chainErrors);
     };
 
-    // new nodes are built (plugins and all) outside the lock; existing ones are reused by id
+    // Everything the callback will see is built here, outside the lock. With 'restoreChains' (a file opened) every
+    // node and the master chain are new and their plugins are restored before the graph knows them: the callback runs
+    // the old graph until the one swap below, never a mix of the two, and no plugin restore happens under the graph
+    // lock. A structural edit keeps the existing nodes (their live chains untouched) and builds only what was added.
     std::vector<std::unique_ptr<FxNode>> freshFx;
     std::vector<std::unique_ptr<ChannelNode>> freshChannels;
+    std::unique_ptr<PluginChain> freshMaster;
 
     for (const auto& f : session.fx)
     {
-        if (auto* existing = findFx (f.id))
-        {
-            if (restoreChains)
-                restore (*existing->chain, f.chain);
-
+        if (! restoreChains && findFx (f.id) != nullptr)
             continue;
-        }
 
         auto node = std::make_unique<FxNode>();
         node->id = f.id;
@@ -383,13 +443,8 @@ void MixEngine::applySession (const MixSession& session, juce::StringArray* erro
 
     for (const auto& c : session.channels)
     {
-        if (auto* existing = findChannel (c.id))
-        {
-            if (restoreChains)
-                restore (*existing->chain, c.chain);
-
+        if (! restoreChains && findChannel (c.id) != nullptr)
             continue;
-        }
 
         auto node = std::make_unique<ChannelNode>();
         node->id = c.id;
@@ -398,30 +453,37 @@ void MixEngine::applySession (const MixSession& session, juce::StringArray* erro
         freshChannels.push_back (std::move (node));
     }
 
-    if (restoreChains || master.chain->getNumSlots() == 0)
-        restore (*master.chain, session.master.chain);
+    if (restoreChains)
+    {
+        freshMaster = std::make_unique<PluginChain>();
+        restore (*freshMaster, session.master.chain);
+    }
 
-    std::vector<std::unique_ptr<FxNode>> retiredFx;
-    std::vector<std::unique_ptr<ChannelNode>> retiredChannels;
+    // the lists the graph switches to, sized now: the swap allocates nothing under the lock
+    std::vector<std::unique_ptr<FxNode>> newFx, retiredFx;
+    std::vector<std::unique_ptr<ChannelNode>> newChannels, retiredChannels;
+    std::unique_ptr<PluginChain> retiredMaster;
+    newFx.reserve (session.fx.size());
+    newChannels.reserve (session.channels.size());
+    retiredFx.reserve (fxNodes.size() + freshFx.size());
+    retiredChannels.reserve (channels.size() + freshChannels.size());
 
     {
         const juce::ScopedLock sl (lock);
 
         // FX first: the channels' sends are indexed by FX position
-        std::vector<std::unique_ptr<FxNode>> newFx;
-
         for (const auto& f : session.fx)
         {
             std::unique_ptr<FxNode> node;
 
-            for (auto& old : fxNodes)
-                if (old != nullptr && old->id == f.id)
-                    node = std::move (old);
+            for (auto& fresh : freshFx)
+                if (fresh != nullptr && fresh->id == f.id)
+                    node = std::move (fresh);
 
             if (node == nullptr)
-                for (auto& fresh : freshFx)
-                    if (fresh != nullptr && fresh->id == f.id)
-                        node = std::move (fresh);
+                for (auto& old : fxNodes)
+                    if (old != nullptr && old->id == f.id)
+                        node = std::move (old);
 
             if (node == nullptr)
                 continue;   // beyond the limit (the session is sanitised, so this does not happen)
@@ -434,20 +496,18 @@ void MixEngine::applySession (const MixSession& session, juce::StringArray* erro
                 break;
         }
 
-        std::vector<std::unique_ptr<ChannelNode>> newChannels;
-
         for (const auto& c : session.channels)
         {
             std::unique_ptr<ChannelNode> node;
 
-            for (auto& old : channels)
-                if (old != nullptr && old->id == c.id)
-                    node = std::move (old);
+            for (auto& fresh : freshChannels)
+                if (fresh != nullptr && fresh->id == c.id)
+                    node = std::move (fresh);
 
             if (node == nullptr)
-                for (auto& fresh : freshChannels)
-                    if (fresh != nullptr && fresh->id == c.id)
-                        node = std::move (fresh);
+                for (auto& old : channels)
+                    if (old != nullptr && old->id == c.id)
+                        node = std::move (old);
 
             if (node == nullptr)
                 continue;
@@ -482,23 +542,34 @@ void MixEngine::applySession (const MixSession& session, juce::StringArray* erro
 
         master.outputFirst.store (juce::jlimit (0, maxDeviceChannels - 2, session.master.outputFirst), std::memory_order_relaxed);
 
+        if (freshMaster != nullptr)
+        {
+            retiredMaster = std::move (master.chain);
+            master.chain = std::move (freshMaster);
+        }
+
         // whatever was not moved over is retired (destroyed after the lock: plugin teardown is slow)
         for (auto& old : fxNodes)
             if (old != nullptr)
                 retiredFx.push_back (std::move (old));
 
+        for (auto& fresh : freshFx)
+            if (fresh != nullptr)
+                retiredFx.push_back (std::move (fresh));
+
         for (auto& old : channels)
             if (old != nullptr)
                 retiredChannels.push_back (std::move (old));
+
+        for (auto& fresh : freshChannels)
+            if (fresh != nullptr)
+                retiredChannels.push_back (std::move (fresh));
 
         fxNodes.swap (newFx);
         channels.swap (newChannels);
     }
 
-    retiredFx.clear();
-    retiredChannels.clear();
-    freshFx.clear();
-    freshChannels.clear();
+    // the retired nodes, their chains and the old master chain are destroyed here, outside the lock
 }
 
 void MixEngine::captureLivePluginStates (MixSession& session) const

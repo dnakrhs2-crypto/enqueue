@@ -25,6 +25,21 @@ public:
             expectEquals (WebDavBackup::sanitiseName ("  "), juce::String ("session"));
             expectEquals (WebDavBackup::sanitiseName ("a/b\\c|d"), juce::String ("a_b_c_d"));
         }
+
+        beginTest ("the backup address must be https://server[:port]; passwords are keyed by server and user");
+        {
+            expect (WebDavBackup::validateBaseUrl ("https://parkdoomin.synology.me:5006").isEmpty());
+            expect (WebDavBackup::validateBaseUrl (" https://nas.local:5006/ ").isEmpty());
+            expect (WebDavBackup::validateBaseUrl ("http://parkdoomin.synology.me:5005").isNotEmpty());   // no TLS: the password would travel in the clear
+            expect (WebDavBackup::validateBaseUrl ("parkdoomin.synology.me:5006").isNotEmpty());
+            expect (WebDavBackup::validateBaseUrl ("https://").isNotEmpty());
+            expect (WebDavBackup::validateBaseUrl ("https://nas.local:5006/LiveMix").isNotEmpty());   // the folder goes in its own field
+            expect (WebDavBackup::validateBaseUrl ("").isNotEmpty());
+
+            expectEquals (WebDavBackup::credentialKeyFor ("https://Parkdoomin.synology.me:5006/", " gom "), juce::String ("LiveMix/WebDAV/parkdoomin.synology.me:5006/gom"));
+            expect (WebDavBackup::credentialKeyFor ("https://a.example:5006", "gom") != WebDavBackup::credentialKeyFor ("https://b.example:5006", "gom"));
+            expect (WebDavBackup::credentialKeyFor ("https://a.example:5006", "gom") != WebDavBackup::credentialKeyFor ("https://a.example:5006", "lanna"));
+        }
     }
 };
 

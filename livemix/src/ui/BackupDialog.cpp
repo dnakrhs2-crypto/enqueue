@@ -1,17 +1,28 @@
 #include "BackupDialog.h"
 
-#include "WebDavBackup.h"
 #include "Widgets.h"
 
 namespace gocue::livemix
 {
 
-void BackupDialog::show (MixDocument& document, LiveMixSettings& settings, juce::Component* centreAround,
+void BackupDialog::show (MixDocument& document, LiveMixSettings& settings, WebDavBackup& backup, juce::Component* centreAround,
                          std::function<void (const juce::String&, bool)> status)
 {
     if (settings.getBackupUrl().isEmpty() || settings.getBackupUser().isEmpty())
     {
         status (ko ("설정에서 온라인 백업 주소와 사용자를 먼저 넣으세요"), true);
+        return;
+    }
+
+    if (const auto bad = WebDavBackup::validateBaseUrl (settings.getBackupUrl()); bad.isNotEmpty())
+    {
+        status (bad + ko (" - 설정에서 주소를 고치세요"), true);
+        return;
+    }
+
+    if (backup.isBusy())
+    {
+        status (ko ("백업 업로드가 아직 진행 중입니다"), true);
         return;
     }
 
@@ -27,9 +38,8 @@ void BackupDialog::show (MixDocument& document, LiveMixSettings& settings, juce:
 
     alert->addButton (ko ("백업"), 1, juce::KeyPress (juce::KeyPress::returnKey));
     alert->addButton (ko ("취소"), 0, juce::KeyPress (juce::KeyPress::escapeKey));
-    juce::Component::SafePointer<juce::Component> safeCentre (centreAround);
 
-    alert->enterModalState (true, juce::ModalCallbackFunction::create ([alert, &document, &settings, status, needPassword] (int result)
+    alert->enterModalState (true, juce::ModalCallbackFunction::create ([alert, &document, &settings, &backup, status, needPassword] (int result)
     {
         if (result != 1)
             return;
@@ -53,8 +63,15 @@ void BackupDialog::show (MixDocument& document, LiveMixSettings& settings, juce:
             settings.setBackupPassword (target.password);
 
         const auto remotePath = WebDavBackup::remotePathFor (target.folder, juce::SystemStats::getComputerName(), creator, juce::Time::getCurrentTime());
+        const auto started = backup.start (target, document.getFile(), remotePath, [status] (bool ok, const juce::String& message) { status (message, ! ok); });
+
+        if (started.failed())
+        {
+            status (started.getErrorMessage(), true);
+            return;
+        }
+
         status (ko ("백업 중... ") + remotePath, false);
-        WebDavBackup::upload (target, document.getFile(), remotePath, [status] (bool ok, const juce::String& message) { status (message, ! ok); });
     }), true);
 }
 

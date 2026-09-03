@@ -208,7 +208,10 @@ void CuePlayer::requestFadeOut (int milliseconds) noexcept
 
 void CuePlayer::requestPanicFadeOut (int milliseconds) noexcept
 {
-    skipTailOnStop.store (true, std::memory_order_relaxed);
+    // an instance already in its insert tail fades that tail over the same time (published before the flag, which is
+    // read with acquire: whoever sees the flag sees the time)
+    pendingTailFadeMs.store (juce::jmax (0, milliseconds), std::memory_order_relaxed);
+    skipTailOnStop.store (true, std::memory_order_release);
     requestFadeOut (milliseconds);
 }
 
@@ -634,11 +637,20 @@ bool CuePlayer::renderNextBlock (juce::AudioBuffer<float>& fullBuffer, int numSa
 
     const bool hardStop = hardStopRequested.load (std::memory_order_relaxed);
 
-    if (inTail && (hardStop || skipTailOnStop.load (std::memory_order_relaxed)))   // a panic ends a ringing tail at once
+    if (inTail && hardStop)   // a hard stop ends a ringing tail at once
     {
         buffer.clear (0, numSamples);
         finished.store (true, std::memory_order_relaxed);
         return false;
+    }
+
+    if (inTail && tailFadeSamplesLeft < 0 && skipTailOnStop.load (std::memory_order_acquire))
+    {
+        // a soft panic while the insert tail rings: the tail fades over the panic time (after the chain, below)
+        // instead of cutting to silence while the output gate is still open
+        const int ms = juce::jmax (0, pendingTailFadeMs.exchange (-1, std::memory_order_relaxed));
+        tailFadeSamplesLeft = (juce::int64) (ms * currentSampleRate / 1000.0);
+        tailFadeGain = 1.0f;
     }
 
     if (pauseRequested.exchange (false, std::memory_order_relaxed) && ! paused && ! pausing)
@@ -769,6 +781,32 @@ bool CuePlayer::renderNextBlock (juce::AudioBuffer<float>& fullBuffer, int numSa
 
     if (inTail)
     {
+        if (tailFadeSamplesLeft >= 0)
+        {
+            // the panic fade of a ringing tail: a linear ramp that lands on zero exactly when the panic time is over
+            const int step = (int) juce::jmin<juce::int64> ((juce::int64) numSamples, tailFadeSamplesLeft);
+            const float next = step < tailFadeSamplesLeft ? tailFadeGain * (float) (1.0 - (double) step / (double) tailFadeSamplesLeft) : 0.0f;
+
+            // through fullBuffer, per channel: the 'buffer' view was cleared above, and JUCE skips gain changes on a
+            // buffer object it believes is still clear (the chain wrote through other views)
+            for (int ch = 0; ch < buffer.getNumChannels(); ++ch)
+            {
+                fullBuffer.applyGainRamp (ch, 0, step, tailFadeGain, next);
+
+                if (step < numSamples)
+                    fullBuffer.clear (ch, step, numSamples - step);
+            }
+
+            tailFadeGain = next;
+            tailFadeSamplesLeft -= step;
+
+            if (tailFadeSamplesLeft <= 0)
+            {
+                finished.store (true, std::memory_order_relaxed);
+                return false;
+            }
+        }
+
         tailSamplesLeft -= numSamples;
 
         if (tailSamplesLeft <= 0)

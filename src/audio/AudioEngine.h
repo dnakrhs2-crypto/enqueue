@@ -123,6 +123,9 @@ public:
     bool mayBePlaying() const noexcept { return runningPlayers.load (std::memory_order_relaxed) > 0 || committedRunning.load (std::memory_order_relaxed); }
     /** True while an instance of the cue is on its way out (a stop or fade-out was requested). */
     bool isStopping (const juce::Uuid& cueId) const;
+    /** True from a panic that armed a chain reset until that reset ran (message thread): play() and resume() refuse
+        meanwhile, so the gate never reopens over tails the reset has not cleared. */
+    bool isResetOutstanding() const noexcept { return resetGeneration.load (std::memory_order_acquire) != resetAcknowledged.load (std::memory_order_acquire); }
     bool isDeviceRunning() const noexcept { return deviceRunning.load (std::memory_order_relaxed); }
     /** Fades the cue out over its own fadeOutMs, then stops it. */
     void fadeOutAndStop (const juce::Uuid& cueId);
@@ -307,6 +310,8 @@ private:
     int outputGateSeenTarget = 1;                // audio thread: the target the current ramp heads for
     std::atomic<bool> chainResetPending { false };   // set by the audio thread once the gate closed after a panic; the UI timer polls it
     std::atomic<bool> resetInProgress { false };     // the message thread runs the plugins' reset(): the callback outputs silence meanwhile
+    std::atomic<int> resetGeneration { 0 };          // bumped by every panic that arms a chain reset (message thread)
+    std::atomic<int> resetAcknowledged { 0 };        // the generation whose reset ran: starts are refused while the two differ
     std::atomic<int> runningPlayers { 0 };           // written by the audio thread each block
     std::atomic<bool> committedRunning { false };     // set when a start is committed, cleared by a reap that finds nothing running
     void settlePendingChainReset();                  // message thread: a pending post-panic reset runs before a start reopens the gate

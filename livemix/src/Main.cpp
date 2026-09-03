@@ -80,8 +80,15 @@ public:
                 settings->setPluginList (engine->getPluginHost().createKnownPluginsXml().get());
         };
 
-        const auto savedDevice = settings->getAudioDeviceState();
-        const auto deviceError = engine->initialise (savedDevice.get());
+        // safe mode (Shift held at launch, or --safe-mode): the saved device is not opened (a hung driver would keep the
+        // window from ever appearing) and plugins are not instantiated (a plugin that crashes on load would otherwise
+        // take every launch down with it); the session's plugin settings survive untouched
+        safeMode = juce::ArgumentList ("LiveMix", commandLine).containsOption ("--safe-mode")
+                   || juce::ModifierKeys::getCurrentModifiersRealtime().isShiftDown();
+        PluginHost::setSafeMode (safeMode);
+
+        const std::unique_ptr<juce::XmlElement> savedDevice = safeMode ? nullptr : settings->getAudioDeviceState();
+        const auto deviceError = safeMode ? juce::String() : engine->initialise (savedDevice.get());
         engine->getDeviceManager().addChangeListener (this);
 
         document = std::make_unique<MixDocument> (*engine);
@@ -89,6 +96,7 @@ public:
         tray = std::make_unique<TrayIcon> ([this] (int item) { trayMenu (item); });
 
         auto& main = mainWindow->getMainComponent();
+        main.setSafeMode (safeMode);
         main.openFromCommandLine (commandLine);
 
         if (! document->hasFile())
@@ -101,12 +109,20 @@ public:
                 createDefaultSession (main);
         }
 
-        if (deviceError.isNotEmpty())
+        if (safeMode)
+            juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::InfoIcon, ko ("안전 모드"),
+                                                    ko ("Shift를 누른 채 실행해 안전 모드로 시작했습니다. 저장된 ASIO 장치와 플러그인을 불러오지 않았습니다 (플러그인 설정은 세션에 그대로 남습니다).\n설정에서 장치를 고르세요."), ko ("확인"));
+        else if (deviceError.isNotEmpty())
             juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon, ko ("ASIO 장치를 열지 못했습니다"),
                                                     deviceError + "\n\n" + ko ("설정에서 장치를 고르거나 오디오 인터페이스 연결을 확인하세요."), ko ("확인"));
 
         Updater::Callbacks callbacks;
-        callbacks.canShutdown = [] { return true; };
+        callbacks.canShutdown = [this]
+        {
+            // the installer must not close unsaved work or cut a backup upload
+            return document == nullptr
+                || (! document->isDirty() && (mainWindow == nullptr || ! mainWindow->getMainComponent().isUploadingBackup()));
+        };
         callbacks.requestShutdown = [this]
         {
             juce::MessageManager::callAsync ([this]
@@ -175,7 +191,16 @@ public:
 
     void systemRequestedQuit() override
     {
-        quit();
+        if (mainWindow == nullptr || document == nullptr)
+        {
+            quit();
+            return;
+        }
+
+        if (document->isDirty())
+            showWindow();   // the question below must be seen, also from the tray
+
+        mainWindow->getMainComponent().withSessionSecured ([this] { quit(); });
     }
 
     void anotherInstanceStarted (const juce::String& commandLine) override
@@ -292,6 +317,7 @@ private:
     std::unique_ptr<MainWindow> mainWindow;
     std::unique_ptr<TrayIcon> tray;
     juce::Time launchedAt, lastQuietCheck;
+    bool safeMode = false;
 };
 
 } // namespace gocue::livemix

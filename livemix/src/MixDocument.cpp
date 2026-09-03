@@ -26,7 +26,7 @@ void MixDocument::newSession()
     file = juce::File();
     dirty = false;
     engine.applySession (session, nullptr, true);
-    structureChanged();
+    notifyStructure();
 }
 
 juce::Result MixDocument::load (const juce::File& newFile, juce::StringArray* warnings)
@@ -46,7 +46,7 @@ juce::Result MixDocument::load (const juce::File& newFile, juce::StringArray* wa
     if (warnings != nullptr)
         warnings->addArray (pluginErrors);
 
-    structureChanged();
+    notifyStructure();
     return juce::Result::ok();
 }
 
@@ -61,7 +61,7 @@ juce::Result MixDocument::save (const juce::File& newFile)
 
     file = newFile;
     dirty = false;
-    valueChanged();
+    notifyValue();   // the title and the views: clean now
     return juce::Result::ok();
 }
 
@@ -231,26 +231,35 @@ void MixDocument::setDeviceInfo (const juce::String& name, int bufferSize, doubl
     valueChanged();
 }
 
-void MixDocument::markDirty()
+void MixDocument::markDirty (bool refreshViews)
 {
+    const bool wasDirty = dirty;
     dirty = true;
 
-    if (onValueChanged)
-        onValueChanged();
+    if (refreshViews || ! wasDirty)
+        notifyValue();
 }
 
 void MixDocument::structureChanged()
 {
-    dirty = dirty || hasFile() || ! session.channels.empty();
-
-    if (onStructureChanged)
-        onStructureChanged();
+    dirty = true;
+    notifyStructure();
 }
 
 void MixDocument::valueChanged()
 {
     dirty = true;
+    notifyValue();
+}
 
+void MixDocument::notifyStructure()
+{
+    if (onStructureChanged)
+        onStructureChanged();
+}
+
+void MixDocument::notifyValue()
+{
     if (onValueChanged)
         onValueChanged();
 }

@@ -39,6 +39,9 @@ public:
     juce::String initialise (const juce::XmlElement* savedDeviceState);
     /** After a device change: every input and output of the device is enabled. */
     juce::String openAllChannels();
+    /** Opens the device a session was saved with (name, rate, buffer, every channel) when it is not the one running.
+        "" when it runs (or the session names none); otherwise why not - the device that was running is kept then. */
+    juce::String openSessionDevice (const MixDevice& device);
     void shutdown();
     juce::AudioDeviceManager& getDeviceManager() noexcept { return deviceManager; }
     PluginHost& getPluginHost() noexcept { return pluginHost; }
@@ -59,9 +62,10 @@ public:
         the graph refers to (those refer to silence / go nowhere). */
     void renderBlock (const float* const* inputs, int numInputs, float* const* outputs, int numOutputs, int numSamples);
 
-    /** Makes the graph match the session: nodes are reused by id (their live chains untouched unless
-        'restoreChains' is set, as on loading a file), new ones created (plugins restored through the host),
-        removed ones destroyed. Plugin errors go to 'errors'. */
+    /** Makes the graph match the session. Without 'restoreChains' (a structural edit) existing nodes are reused by id
+        with their live chains untouched and only added nodes are built. With it (a file opened) every node and the
+        master chain are rebuilt with their saved plugins, off the graph, and published in one swap: the callback
+        never runs a mix of old and new. Plugin errors go to 'errors'. */
     void applySession (const MixSession& session, juce::StringArray* errors = nullptr, bool restoreChains = false);
     /** Copies the live plugin states / order into the session's chain fields (before a save). */
     void captureLivePluginStates (MixSession& session) const;

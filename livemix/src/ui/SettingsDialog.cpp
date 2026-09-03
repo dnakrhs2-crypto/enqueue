@@ -140,7 +140,9 @@ namespace
             if (error.isNotEmpty())
                 juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon, ko ("장치를 열지 못했습니다"), error, ko ("확인"));
 
-            engine.openAllChannels();
+            if (const auto widened = engine.openAllChannels(); widened.isNotEmpty())
+                juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon, ko ("일부 채널을 열지 못했습니다"), widened, ko ("확인"));
+
             refreshDevices();
 
             if (onDeviceChanged)
@@ -160,7 +162,9 @@ namespace
             if (error.isNotEmpty())
                 juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon, ko ("버퍼 크기를 바꾸지 못했습니다"), error, ko ("확인"));
 
-            engine.openAllChannels();
+            if (const auto widened = engine.openAllChannels(); widened.isNotEmpty())
+                juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon, ko ("일부 채널을 열지 못했습니다"), widened, ko ("확인"));
+
             refreshDevices();
 
             if (onDeviceChanged)

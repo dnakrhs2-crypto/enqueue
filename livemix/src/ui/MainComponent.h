@@ -7,6 +7,7 @@
 #include "MasterCard.h"
 #include "MixDocument.h"
 #include "TopBar.h"
+#include "WebDavBackup.h"
 #include "ui/PluginWindows.h"
 
 #include <juce_gui_basics/juce_gui_basics.h>
@@ -26,15 +27,23 @@ public:
     MainComponent (MixDocument& document, LiveMixSettings& settings);
     ~MainComponent() override;
 
-    /** Session files. */
+    /** Session files. new / open first secure what is open (see withSessionSecured). */
     void newSession();
     void openSession (const juce::File& file);
     void openSessionDialog();
     bool saveSession();          // to the current file, or "save as" without one
-    void saveSessionAs();
+    /** The save dialog; 'then (saved)' runs when it is over (false: cancelled or failed). */
+    void saveSessionAs (std::function<void (bool saved)> then = nullptr);
     void openFromCommandLine (const juce::String& commandLine);
-    /** Saves a dirty session with a file (autosave / quit). */
-    void autosaveNow();
+    /** Saves a dirty session that has a file (autosave / quit). True when nothing is lost: nothing to save, or saved. */
+    bool autosaveNow();
+    /** Runs 'action' once the open session is safe to leave: a dirty session with a file is saved first (a failed save
+        asks whether to go on without it), a dirty session without a file asks to save it, drop it, or stay. */
+    void withSessionSecured (std::function<void()> action);
+    /** A backup upload is running (a quit would cut it). */
+    bool isUploadingBackup() const noexcept { return backup.isBusy(); }
+    /** Safe mode (Shift / --safe-mode): a session's device is not opened and plugins are not loaded. */
+    void setSafeMode (bool on) noexcept { safeMode = on; }
 
     /** The ASIO device list changed (settings / hot-plug): refresh names and pickers. */
     void deviceChanged();
@@ -61,6 +70,9 @@ private:
     void showSettingsDialog();
     void showPluginManager();
     void chooseDevice (const juce::String& name);
+    void deviceChosen();   // the operator picked a device / buffer: the session remembers it
+    void loadSession (const juce::File& file);
+    juce::String titleForChainOwner() const;
     void updateDeviceNames();
     juce::File defaultSessionFolder() const;
     void showStatus (const juce::String& text, bool error = false);
@@ -70,6 +82,9 @@ private:
     LiveMixSettings& settings;
     MixEngine& engine;
     PluginWindowManager windows;
+    WebDavBackup backup;
+    juce::Component::SafePointer<juce::DialogWindow> pluginManagerDialog;
+    bool safeMode = false;
 
     TopBar topBar;
     juce::Viewport viewport;

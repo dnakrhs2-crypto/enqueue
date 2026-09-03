@@ -221,8 +221,7 @@ void AudioEngine::reapIfNeeded()
     if (reapNeeded.exchange (false, std::memory_order_acq_rel))
         reapFinishedPlayers();
 
-    if (chainResetPending.load (std::memory_order_acquire) && resetAllChainsForPanic())
-        chainResetPending.store (false, std::memory_order_release);
+    settlePendingChainReset();
 }
 
 void AudioEngine::shutdown()
@@ -705,6 +704,15 @@ bool AudioEngine::play (const Cue& cue, const PlayOptions& options, juce::String
     const bool wantsAudition = options.audition || options.silent || ! options.patchOverride.isNull();
     settlePendingChainReset();   // the tails of the panic are cleared before this cue reopens the gate
 
+    if (isResetOutstanding())
+    {
+        // the gate is on its way shut (or shut with tails behind it) and the reset has not run: nothing starts on top of that
+        if (errorMessage != nullptr)
+            *errorMessage = juce::String::fromUTF8 ("전체 정지가 아직 끝나지 않았습니다. 잠시 후 다시 실행하세요.");
+
+        return false;
+    }
+
     if (! wantsAudition)
     {
         // a loaded instance is waiting: start it instead of opening the file again (an audition needs its own
@@ -915,6 +923,7 @@ void AudioEngine::fadeOutAndStopAll (int milliseconds)
     // the gate is armed first, without waiting for the lock: once the fade time is over it closes over 200 ms and
     // every plugin tail (patch, master, cue inserts) is cleared - "전체 페이드 정지" ends in silence whatever a reverb
     // or a self-oscillating plugin would do, even if a slow plugin holds the engine lock right now
+    resetGeneration.fetch_add (1, std::memory_order_acq_rel);   // owed until settlePendingChainReset() has run it: no start reopens the gate before
     resetChainsWhenClosed.store (true, std::memory_order_relaxed);
     outputGateCloseCountdown.store ((juce::int64) (juce::jmax (0, milliseconds) * sampleRate.load() / 1000.0), std::memory_order_release);
 
@@ -929,12 +938,18 @@ void AudioEngine::closeOutputGate (int rampMilliseconds, bool resetChains)
 {
     outputGateCloseCountdown.store (-1, std::memory_order_relaxed);
     resetChainsWhenClosed.store (resetChains, std::memory_order_relaxed);
+
+    if (resetChains)
+        resetGeneration.fetch_add (1, std::memory_order_acq_rel);   // owed until settlePendingChainReset() has run it
     outputGateRampSamples.store (juce::jmax (1, (int) (rampMilliseconds * sampleRate.load() / 1000.0)), std::memory_order_relaxed);
     outputGateTarget.store (0, std::memory_order_release);
 }
 
 void AudioEngine::openOutputGate()
 {
+    if (isResetOutstanding())
+        return;   // a panic's chain reset has not run: the gate stays on its way shut (a start that gets here was refused)
+
     outputGateCloseCountdown.store (-1, std::memory_order_relaxed);
     resetChainsWhenClosed.store (false, std::memory_order_relaxed);
     outputGateSnapOpen.store (true, std::memory_order_relaxed);   // fully closed: nothing to ramp, the new cue starts at full level
@@ -1063,8 +1078,24 @@ bool AudioEngine::resetAllChainsForPanic()
 
 void AudioEngine::settlePendingChainReset()
 {
-    if (chainResetPending.load (std::memory_order_acquire) && resetAllChainsForPanic())
-        chainResetPending.store (false, std::memory_order_release);
+    bool pending = chainResetPending.exchange (false, std::memory_order_acq_rel);
+
+    // a stopped device never brings the gate down: the armed reset would refuse every start once the device is back
+    if (! pending && isResetOutstanding() && deviceExpected && ! deviceRunning.load (std::memory_order_acquire))
+    {
+        resetChainsWhenClosed.store (false, std::memory_order_relaxed);
+        pending = true;
+    }
+
+    if (! pending)
+        return;
+
+    const int generation = resetGeneration.load (std::memory_order_acquire);   // a panic that lands during the reset stays owed
+
+    if (resetAllChainsForPanic())
+        resetAcknowledged.store (generation, std::memory_order_release);
+    else
+        chainResetPending.store (true, std::memory_order_release);   // a pre-panic instance still rings: the next tick tries again
 }
 
 bool AudioEngine::isStopping (const juce::Uuid& cueId) const
@@ -1098,6 +1129,10 @@ void AudioEngine::pause (const juce::Uuid& cueId)
 void AudioEngine::resume (const juce::Uuid& cueId)
 {
     settlePendingChainReset();
+
+    if (isResetOutstanding())
+        return;   // nothing resumes over a panic whose reset has not run
+
     bool resumed = false;
 
     {
@@ -1127,6 +1162,10 @@ void AudioEngine::pauseAll()
 void AudioEngine::resumeAll()
 {
     settlePendingChainReset();
+
+    if (isResetOutstanding())
+        return;   // nothing resumes over a panic whose reset has not run
+
     bool resumed = false;
 
     {

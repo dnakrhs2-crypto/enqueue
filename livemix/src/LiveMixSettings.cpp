@@ -1,5 +1,7 @@
 #include "LiveMixSettings.h"
 
+#include "WebDavBackup.h"
+
 #if JUCE_WINDOWS
  #include <windows.h>
  #include <wincred.h>
@@ -26,7 +28,6 @@ namespace Keys
     constexpr const char* backupCreator = "backupCreator";
     constexpr const char* backupRemember = "backupRememberPassword";
     constexpr const char* lastRunVersion = "lastRunVersion";
-    constexpr const wchar_t* credentialTarget = L"LiveMix/WebDAV";
 }
 
 LiveMixSettings::LiveMixSettings()
@@ -113,8 +114,9 @@ juce::String LiveMixSettings::getBackupPassword() const
 {
    #if JUCE_WINDOWS
     PCREDENTIALW cred = nullptr;
+    const auto target = WebDavBackup::credentialKeyFor (getBackupUrl(), getBackupUser());   // one entry per server + user
 
-    if (CredReadW (Keys::credentialTarget, CRED_TYPE_GENERIC, 0, &cred) && cred != nullptr)
+    if (CredReadW (target.toWideCharPointer(), CRED_TYPE_GENERIC, 0, &cred) && cred != nullptr)
     {
         const juce::String password = juce::String::fromUTF8 ((const char*) cred->CredentialBlob, (int) cred->CredentialBlobSize);
         CredFree (cred);
@@ -128,16 +130,18 @@ juce::String LiveMixSettings::getBackupPassword() const
 void LiveMixSettings::setBackupPassword (const juce::String& password)
 {
    #if JUCE_WINDOWS
+    const auto target = WebDavBackup::credentialKeyFor (getBackupUrl(), getBackupUser());
+
     if (password.isEmpty())
     {
-        CredDeleteW (Keys::credentialTarget, CRED_TYPE_GENERIC, 0);
+        CredDeleteW (target.toWideCharPointer(), CRED_TYPE_GENERIC, 0);
         return;
     }
 
     const auto utf8 = password.toUTF8();
     CREDENTIALW cred = {};
     cred.Type = CRED_TYPE_GENERIC;
-    cred.TargetName = const_cast<LPWSTR> (Keys::credentialTarget);
+    cred.TargetName = const_cast<LPWSTR> (target.toWideCharPointer());
     cred.CredentialBlobSize = (DWORD) (utf8.sizeInBytes() - 1);
     cred.CredentialBlob = (LPBYTE) utf8.getAddress();
     cred.Persist = CRED_PERSIST_LOCAL_MACHINE;

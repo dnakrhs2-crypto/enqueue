@@ -477,6 +477,8 @@ public:
             // a version-4 file (no "lists") reads into one main list
             Project legacy;
             expect (ProjectSerializer::fromJson ("{\"app\":\"GoCue\",\"version\":4,\"cues\":[{\"name\":\"old\"}]}", legacy).wasOk());
+            Project fake;
+            expect (ProjectSerializer::fromJson ("{\"app\":\"GoCue\",\"version\":6,\"cues\":[{\"name\":\"old\"}]}", fake).failed());   // GoCue never wrote version 6
             expectEquals ((int) legacy.lists.size(), 1);
             expectEquals ((int) legacy.cues().size(), 1);
             expectEquals (legacy.cues()[0].name, juce::String ("old"));

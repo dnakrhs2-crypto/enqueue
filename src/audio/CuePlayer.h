@@ -222,6 +222,7 @@ private:
     std::atomic<int> pendingFadeOutMs { -1 };
     std::atomic<bool> hardStopRequested { false };
     std::atomic<bool> skipTailOnStop { false };
+    std::atomic<int> pendingTailFadeMs { -1 };    // a soft panic while the insert tail rings: the tail fades over this time (ms)
     std::atomic<bool> stopRequested { false };
     std::atomic<bool> finished { false };
     std::atomic<bool> endedNaturally { false };   // finished because the stream ended (a live edit that adds material undoes it)
@@ -255,6 +256,8 @@ private:
     bool paused = false;
     bool inTail = false;
     juce::int64 tailSamplesLeft = 0;
+    float tailFadeGain = 1.0f;              // audio thread: the post-chain fade of a ringing tail on a soft panic
+    juce::int64 tailFadeSamplesLeft = -1;   // -1 = no tail fade running
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (CuePlayer)
 };

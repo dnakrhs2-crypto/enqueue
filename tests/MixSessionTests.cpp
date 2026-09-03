@@ -148,6 +148,8 @@ public:
             expect (MixSession::fromJson ("{\"app\": \"Enqueue\", \"version\": 1}", q).failed());
             expect (MixSession::fromJson ("{\"app\": \"LiveMix\", \"version\": 99}", q).failed());
             expect (MixSession::fromJson ("{\"app\": \"LiveMix\", \"version\": 1}", q).wasOk());   // an empty session is fine
+            expect (MixSession::fromJson ("{\"app\": \"LiveMix\", \"version\": 1} trailing", q).failed());   // corruption behind the object is not hidden
+            expect (MixSession::fromJson ("{\"app\": \"LiveMix\", \"version\": 1}{\"x\": 1}", q).failed());
 
             const auto dir = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("livemix_session_" + juce::Uuid().toString());
             expect (dir.createDirectory().wasOk());

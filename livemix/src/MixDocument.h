@@ -51,15 +51,18 @@ public:
     void setSessionName (const juce::String& name);
     void setDeviceInfo (const juce::String& name, int bufferSize, double sampleRate);
 
-    /** A plugin chain was edited live (the engine is the truth): the file is out of date. */
-    void markDirty();
+    /** A plugin chain was edited live (the engine is the truth): the file is out of date. 'refreshViews' false is for
+        a parameter turned in a plugin editor: the views need no refresh, only the dirty state (announced once). */
+    void markDirty (bool refreshViews = true);
 
     std::function<void()> onStructureChanged;
     std::function<void()> onValueChanged;
 
 private:
-    void structureChanged();
+    void structureChanged();   // an edit: dirty, then announced
     void valueChanged();
+    void notifyStructure();    // announced only (a load / a new session are clean)
+    void notifyValue();
 
     MixEngine& engine;
     MixSession session;

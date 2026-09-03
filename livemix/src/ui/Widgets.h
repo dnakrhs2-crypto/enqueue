@@ -222,10 +222,10 @@ public:
 
     juce::TextEditor* createEditorComponent() override
     {
-        auto* editor = juce::Label::createEditorComponent();
-        editor->setFont (titleFont());
-        editor->setSelectAllWhenFocused (true);
-        return editor;
+        auto* textEditor = juce::Label::createEditorComponent();
+        textEditor->setFont (titleFont());
+        textEditor->setSelectAllWhenFocused (true);
+        return textEditor;
     }
 };
 

@@ -873,6 +873,11 @@ namespace
     }
 }
 
+bool hasTrailingJsonData (const juce::String& json)
+{
+    return hasTrailingData (json);
+}
+
 juce::Result fromJson (const juce::String& json, Project& out, juce::StringArray* warnings, const juce::File& projectDir)
 {
     if (json.trim().isEmpty())
@@ -896,13 +901,16 @@ juce::Result fromJson (const juce::String& json, Project& out, juce::StringArray
     if (! root.getProperty ("cues", juce::var()).isArray() && ! root.getProperty ("lists", juce::var()).isArray())
         return juce::Result::fail ("Invalid project file: not an Enqueue project (no cue list)");
 
-    // a file that names its app must be ours (GoCue: the name before 0.9.0)
-    if (const auto app = root.getProperty ("app", "").toString(); app.isNotEmpty() && app != "Enqueue" && app != "GoCue")
-        return juce::Result::fail ("Invalid project file: written by \"" + app + "\", not Enqueue");
-    else if (app.isEmpty() && intProperty (root, "version", 1) >= 6)
-        return juce::Result::fail ("Invalid project file: no application marker (a current Enqueue file names itself)");
-
     const int version = intProperty (root, "version", 1);
+    const auto app = root.getProperty ("app", "").toString();
+
+    // a file that names its app must be ours; from file version 6 on it names Enqueue (GoCue, the name before 0.9.0,
+    // only ever wrote versions up to 5: a version 6 file that says GoCue was written by neither)
+    if (app.isNotEmpty() && app != "Enqueue" && ! (app == "GoCue" && version < 6))
+        return juce::Result::fail ("Invalid project file: written by \"" + app + "\", not Enqueue");
+
+    if (app.isEmpty() && version >= 6)
+        return juce::Result::fail ("Invalid project file: no application marker (a current Enqueue file names itself)");
 
     // a file from a newer Enqueue is not opened: what this build cannot read would be dropped by the next save
     if (version > currentVersion)

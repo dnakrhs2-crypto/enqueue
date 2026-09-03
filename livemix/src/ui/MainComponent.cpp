@@ -85,12 +85,16 @@ MainComponent::MainComponent (MixDocument& doc, LiveMixSettings& s)
     {
         engine.forEachChain ([this] (PluginChain& chain) { chain.setListener (&windows); });
         rebuildCards();
-        lastChangeMs = juce::Time::getMillisecondCounterHiRes();
+
+        if (document.isDirty())   // a load announces too: that must not arm the autosave
+            lastChangeMs = juce::Time::getMillisecondCounterHiRes();
     };
     document.onValueChanged = [this]
     {
         refreshValues();
-        lastChangeMs = juce::Time::getMillisecondCounterHiRes();
+
+        if (document.isDirty())   // a save announces too
+            lastChangeMs = juce::Time::getMillisecondCounterHiRes();
     };
 
     updateDeviceNames();
@@ -101,7 +105,12 @@ MainComponent::MainComponent (MixDocument& doc, LiveMixSettings& s)
 MainComponent::~MainComponent()
 {
     stopTimer();
+    backup.cancel();
+    SettingsDialog::closeIfOpen();
+    pluginManagerDialog.deleteAndZero();
+    juce::ModalComponentManager::getInstance()->cancelAllModalComponents();   // open alerts refer to this window and its document
     windows.closeAll();
+    engine.forEachChain ([] (PluginChain& chain) { chain.setListener (nullptr); });   // the window manager dies here: no chain may call it afterwards
     document.onStructureChanged = nullptr;
     document.onValueChanged = nullptr;
 }
@@ -178,7 +187,7 @@ void MainComponent::rebuildCards()
         if (chain == nullptr)
             showDrawer (Drawer::none);
         else if (chain != chainDrawer.getChain())
-            chainDrawer.setChain (chain, chainDrawer.getChain() != nullptr ? juce::String() : juce::String());
+            chainDrawer.setChain (chain, titleForChainOwner());   // the same owner, a rebuilt chain (a file was opened)
         else
             chainDrawer.refresh();
     }
@@ -305,6 +314,24 @@ void MainComponent::openChainFor (PluginChain* chain, const juce::String& title)
     showDrawer (Drawer::chain);
 }
 
+juce::String MainComponent::titleForChainOwner() const
+{
+    if (chainOwnerId.isNull())
+        return ko ("마스터");
+
+    if (chainIsFx)
+    {
+        if (const auto* f = document.getSession().findFx (chainOwnerId))
+            return "FX " + f->name;
+    }
+    else if (const auto* ch = document.getSession().findChannel (chainOwnerId))
+    {
+        return ch->name;
+    }
+
+    return {};
+}
+
 void MainComponent::addPluginTo (PluginChain* chain, const juce::String& title, juce::Component* anchor)
 {
     if (chain == nullptr)
@@ -316,6 +343,12 @@ void MainComponent::addPluginTo (PluginChain* chain, const juce::String& title, 
 
 void MainComponent::showPluginManager()
 {
+    if (pluginManagerDialog != nullptr)
+    {
+        pluginManagerDialog->toFront (true);
+        return;
+    }
+
     auto& host = engine.getPluginHost();
     auto* list = new juce::PluginListComponent (host.getFormatManager(), host.getKnownPlugins(),
                                                 juce::File::getSpecialLocation (juce::File::userApplicationDataDirectory).getChildFile ("LiveMix").getChildFile ("scan.crashed"),
@@ -329,7 +362,7 @@ void MainComponent::showPluginManager()
     options.useNativeTitleBar = true;
     options.resizable = true;
     options.componentToCentreAround = this;
-    options.launchAsync();
+    pluginManagerDialog = options.launchAsync();   // closed with this component: it refers to the engine's plugin list
 }
 
 //==============================================================================
@@ -383,18 +416,28 @@ void MainComponent::chooseDevice (const juce::String& name)
         return;
     }
 
-    engine.openAllChannels();
-    deviceChanged();
+    if (const auto widened = engine.openAllChannels(); widened.isNotEmpty())
+        showStatus (ko ("일부 채널을 열지 못했습니다: ") + widened, true);
+
+    deviceChosen();
 }
 
 void MainComponent::deviceChanged()
 {
+    // any change of the device manager (a pick, a fallback, a hot-plug): names, pickers, the saved state - not the
+    // session, which keeps asking for the device it was saved with until the operator picks another one
     settings.setAudioDeviceState (engine.getDeviceManager().createStateXml().get());
     updateDeviceNames();
     rebuildCards();
+}
+
+void MainComponent::deviceChosen()
+{
+    deviceChanged();
 
     if (auto* device = engine.getDeviceManager().getCurrentAudioDevice())
-        document.setDeviceInfo (device->getName(), device->getCurrentBufferSizeSamples(), device->getCurrentSampleRate());
+        if (device->getTypeName().containsIgnoreCase ("ASIO"))
+            document.setDeviceInfo (device->getName(), device->getCurrentBufferSizeSamples(), device->getCurrentSampleRate());
 }
 
 //==============================================================================
@@ -425,25 +468,41 @@ void MainComponent::timerCallback()
         statusLeft.setText ((running ? ko ("오디오 동작 중") : ko ("오디오 멈춤 - 설정에서 ASIO 장치를 확인하세요")) + "   " + ko ("끊김 ") + juce::String (engine.getXRunCount()) + ko ("회"),
                             juce::dontSendNotification);
 
+    // a knob turned in a plugin editor: the file is out of date (the views need no refresh for that)
+    bool pluginEdited = false;
+    engine.forEachChain ([&pluginEdited] (PluginChain& chain) { if (chain.consumeStateChanged()) pluginEdited = true; });
+
+    if (pluginEdited)
+    {
+        document.markDirty (false);
+        lastChangeMs = now;
+    }
+
     // autosave: a while after the last change, when the session has a file
     if (document.isDirty() && document.hasFile() && lastChangeMs > 0.0 && now - lastChangeMs > settings.getAutosaveSeconds() * 1000.0)
     {
         lastChangeMs = -1.0;
-        autosaveNow();
+
+        if (! autosaveNow())
+            lastChangeMs = now;   // a failed write is tried again after another interval (the status line says why)
     }
 }
 
-void MainComponent::autosaveNow()
+bool MainComponent::autosaveNow()
 {
     if (! document.isDirty() || ! document.hasFile())
-        return;
+        return true;   // nothing to write
 
     const auto result = document.saveIfPossible();
 
     if (result.failed())
+    {
         showStatus (ko ("자동 저장 실패: ") + result.getErrorMessage(), true);
-    else
-        topBar.refresh();
+        return false;
+    }
+
+    topBar.refresh();
+    return true;
 }
 
 void MainComponent::showStatus (const juce::String& text, bool error)
@@ -462,16 +521,80 @@ juce::File MainComponent::defaultSessionFolder() const
     return folder;
 }
 
+void MainComponent::withSessionSecured (std::function<void()> action)
+{
+    if (! document.isDirty())
+    {
+        action();
+        return;
+    }
+
+    juce::Component::SafePointer<MainComponent> safeThis (this);
+
+    if (document.hasFile())
+    {
+        const auto result = document.saveIfPossible();
+
+        if (result.wasOk())
+        {
+            topBar.refresh();
+            action();
+            return;
+        }
+
+        auto* alert = new juce::AlertWindow (ko ("저장 실패"),
+                                             ko ("세션을 저장하지 못했습니다:\n") + result.getErrorMessage() + ko ("\n\n저장하지 않은 변경을 버리고 계속할까요?"),
+                                             juce::MessageBoxIconType::WarningIcon, this);
+        alert->addButton (ko ("버리고 계속"), 1);
+        alert->addButton (ko ("취소"), 0, juce::KeyPress (juce::KeyPress::escapeKey));
+        alert->enterModalState (true, juce::ModalCallbackFunction::create ([safeThis, action] (int r)
+        {
+            if (safeThis != nullptr && r == 1)
+                action();
+        }), true);
+        return;
+    }
+
+    auto* alert = new juce::AlertWindow (ko ("저장하지 않은 세션"), ko ("이 세션은 아직 파일로 저장되지 않았습니다. 저장할까요?"),
+                                         juce::MessageBoxIconType::QuestionIcon, this);
+    alert->addButton (ko ("저장"), 1, juce::KeyPress (juce::KeyPress::returnKey));
+    alert->addButton (ko ("저장 안 함"), 2);
+    alert->addButton (ko ("취소"), 0, juce::KeyPress (juce::KeyPress::escapeKey));
+    alert->enterModalState (true, juce::ModalCallbackFunction::create ([safeThis, action] (int r)
+    {
+        if (safeThis == nullptr || r == 0)
+            return;
+
+        if (r == 2)
+        {
+            action();
+            return;
+        }
+
+        safeThis->saveSessionAs ([safeThis, action] (bool saved)
+        {
+            if (safeThis != nullptr && saved)
+                action();
+        });
+    }), true);
+}
+
 void MainComponent::newSession()
 {
-    autosaveNow();
-    document.newSession();
-    showStatus (ko ("새 세션"));
+    withSessionSecured ([this]
+    {
+        document.newSession();
+        showStatus (ko ("새 세션"));
+    });
 }
 
 void MainComponent::openSession (const juce::File& file)
 {
-    autosaveNow();
+    withSessionSecured ([this, file] { loadSession (file); });
+}
+
+void MainComponent::loadSession (const juce::File& file)
+{
     juce::StringArray warnings;
     const auto result = document.load (file, &warnings);
 
@@ -484,6 +607,27 @@ void MainComponent::openSession (const juce::File& file)
     settings.setLastSessionFile (file);
     settings.addRecentSession (file);
     showStatus (ko ("열림: ") + file.getFileName());
+
+    if (safeMode)
+    {
+        warnings.clear();
+        warnings.add (ko ("안전 모드: 플러그인과 세션의 장치를 불러오지 않았습니다 (설정은 세션에 그대로 남습니다)"));
+    }
+    else
+    {
+        // the device the session was saved with: a show saved for interface B must not run on A without a word
+        const auto deviceWarning = engine.openSessionDevice (document.getSession().device);
+
+        if (deviceWarning.isNotEmpty())
+        {
+            warnings.insert (0, deviceWarning);
+            deviceChanged();
+        }
+        else
+        {
+            deviceChosen();   // the buffer / rate the device really runs at
+        }
+    }
 
     if (! warnings.isEmpty())
         juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon, ko ("세션을 열었지만 확인이 필요합니다"), warnings.joinIntoString ("\n"), ko ("확인"));
@@ -523,36 +667,53 @@ bool MainComponent::saveSession()
     return true;
 }
 
-void MainComponent::saveSessionAs()
+void MainComponent::saveSessionAs (std::function<void (bool)> then)
 {
     const auto suggested = (document.hasFile() ? document.getFile().getParentDirectory() : defaultSessionFolder())
                                .getChildFile ((document.getSession().name.isNotEmpty() ? document.getSession().name : ko ("세션")) + MixSession::fileExtension);
     chooser = std::make_unique<juce::FileChooser> (ko ("세션 저장"), suggested, "*.livemix");
+    juce::Component::SafePointer<MainComponent> safeThis (this);
     chooser->launchAsync (juce::FileBrowserComponent::saveMode | juce::FileBrowserComponent::canSelectFiles | juce::FileBrowserComponent::warnAboutOverwriting,
-                          [this] (const juce::FileChooser& fc)
+                          [safeThis, then] (const juce::FileChooser& fc)
     {
+        if (safeThis == nullptr)
+            return;
+
+        auto& self = *safeThis;
         auto file = fc.getResult();
 
         if (file == juce::File())
+        {
+            if (then)
+                then (false);
+
             return;
+        }
 
         if (! file.hasFileExtension (MixSession::fileExtension))
             file = file.withFileExtension (MixSession::fileExtension);
 
-        if (document.getSession().name.isEmpty() || document.getSession().name == ko ("새 세션"))
-            document.setSessionName (file.getFileNameWithoutExtension());
+        if (self.document.getSession().name.isEmpty() || self.document.getSession().name == ko ("새 세션"))
+            self.document.setSessionName (file.getFileNameWithoutExtension());
 
-        const auto result = document.save (file);
+        const auto result = self.document.save (file);
 
         if (result.failed())
         {
             juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon, ko ("저장 실패"), result.getErrorMessage(), ko ("확인"));
+
+            if (then)
+                then (false);
+
             return;
         }
 
-        settings.setLastSessionFile (file);
-        settings.addRecentSession (file);
-        showStatus (ko ("저장됨: ") + file.getFileName());
+        self.settings.setLastSessionFile (file);
+        self.settings.addRecentSession (file);
+        self.showStatus (ko ("저장됨: ") + file.getFileName());
+
+        if (then)
+            then (true);
     });
 }
 
@@ -657,20 +818,35 @@ void MainComponent::showHelpMenu (juce::Component* anchor)
 
 void MainComponent::showBackupDialog()
 {
+    juce::Component::SafePointer<MainComponent> safeThis (this);
+
     if (! document.hasFile())
     {
         showStatus (ko ("먼저 세션을 저장하세요 (세션 > 저장)"), true);
-        saveSessionAs();
+        saveSessionAs ([safeThis] (bool saved)
+        {
+            if (safeThis != nullptr && saved)
+                safeThis->showBackupDialog();
+        });
         return;
     }
 
-    autosaveNow();
-    BackupDialog::show (document, settings, this, [this] (const juce::String& message, bool error) { showStatus (message, error); });
+    if (! autosaveNow())
+    {
+        showStatus (ko ("세션을 저장하지 못해 백업을 시작하지 않았습니다"), true);   // an upload of the stale file would pass for a backup
+        return;
+    }
+
+    BackupDialog::show (document, settings, backup, this, [safeThis] (const juce::String& message, bool error)
+    {
+        if (safeThis != nullptr)
+            safeThis->showStatus (message, error);
+    });
 }
 
 void MainComponent::showSettingsDialog()
 {
-    SettingsDialog::show (engine, settings, this, [this] { deviceChanged(); });
+    SettingsDialog::show (engine, settings, this, [this] { deviceChosen(); });
 }
 
 } // namespace gocue::livemix

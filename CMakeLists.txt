@@ -204,7 +204,8 @@ enable_testing()
 add_library(LiveMixCore INTERFACE)
 target_sources(LiveMixCore INTERFACE
     ${CMAKE_CURRENT_SOURCE_DIR}/livemix/src/MixModel.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/livemix/src/MixEngine.cpp)
+    ${CMAKE_CURRENT_SOURCE_DIR}/livemix/src/MixEngine.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/livemix/src/MixDocument.cpp)
 target_include_directories(LiveMixCore INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/livemix/src)
 target_link_libraries(LiveMixCore INTERFACE GoCueCore)
 target_sources(LiveMixCore INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/livemix/src/WebDavBackup.cpp)
@@ -235,7 +236,6 @@ endif()
 target_sources(LiveMix PRIVATE
     livemix/src/Main.cpp
     livemix/src/LiveMixSettings.cpp
-    livemix/src/MixDocument.cpp
     livemix/src/ui/MainComponent.cpp
     livemix/src/ui/TopBar.cpp
     livemix/src/ui/ChannelCard.cpp

@@ -72,6 +72,8 @@ namespace ProjectSerializer
 
     /** Plugin slot lists as JSON (shared with LiveMix sessions). */
     juce::var pluginSlotsToVar (const std::vector<PluginSlotState>& plugins);
+    /** True when anything but whitespace follows the first JSON object (JUCE's parser would stop there and hide it). */
+    bool hasTrailingJsonData (const juce::String& json);
     std::vector<PluginSlotState> pluginSlotsFromVar (const juce::var& v);
     juce::Result load (const juce::File& file, Project& out, juce::StringArray* warnings = nullptr);
 }

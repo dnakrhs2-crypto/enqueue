@@ -173,12 +173,13 @@ public:
             expectWithinAbsoluteError (master.left, 0.25f, 1e-6f);
         }
 
+        MixSession next = s;
+
         beginTest ("applySession keeps existing nodes (their live chains included) and drops removed ones");
         {
             auto* chainBefore = engine.getChannelChain (s.channels[0].id);
             expectEquals (chainBefore->getNumSlots(), 1);   // the gain plugin added live
 
-            MixSession next = s;
             next.removeChannel (s.channels[1].id);
             next.addChannel ("C");
             next.channels[1].inputFirst = 3;
@@ -196,6 +197,40 @@ public:
             engine.captureLivePluginStates (captured);
             expectEquals ((int) captured.channels[0].chain.size(), 1);
             expectEquals (captured.channels[0].chain[0].name, juce::String ("TestGain"));
+        }
+
+        beginTest ("a master plugin removed live stays removed through a structural edit (the stale model does not bring it back)");
+        {
+            engine.getMasterChain().addPlugin (std::unique_ptr<juce::AudioPluginInstance> (new TestGainPlugin (0.5f)));
+            MixSession saved = next;
+            engine.captureLivePluginStates (saved);   // the model now remembers the master plugin
+            expectEquals ((int) saved.master.chain.size(), 1);
+
+            engine.getMasterChain().removePlugin (0);   // removed live: the model is stale until the next save
+            saved.addChannel ("D");                     // a structural edit with that stale master state in the model
+            engine.applySession (saved);
+            expectEquals (engine.getMasterChain().getNumSlots(), 0);
+            next = saved;
+        }
+
+        beginTest ("opening a file rebuilds every node and chain off the graph: new chain objects, the old plugins gone");
+        {
+            auto* channelChainBefore = engine.getChannelChain (next.channels[0].id);
+            auto* masterBefore = &engine.getMasterChain();
+            expectGreaterThan (TestGainPlugin::liveInstances, 0);
+
+            juce::StringArray loadErrors;
+            engine.applySession (next, &loadErrors, true);   // like a load: the real host cannot recreate TestGain, the slot stays as "missing"
+            expect (engine.getChannelChain (next.channels[0].id) != channelChainBefore);
+            expect (&engine.getMasterChain() != masterBefore);
+            expectEquals (engine.getChannelChain (next.channels[0].id)->getNumSlots(), 1);
+            expect (engine.getChannelChain (next.channels[0].id)->getSlot (0).isMissing());
+            expectEquals (engine.getMasterChain().getNumSlots(), 1);   // the saved (stale) master slot, as a load must
+            expectEquals (TestGainPlugin::liveInstances, 0);            // the old instances were destroyed after the swap
+            expectGreaterThan (loadErrors.size(), 0);
+
+            render (engine, io, 3);   // the new graph runs: A (input 0 = 0.5, a missing slot passes the signal) + C (input 3 = 0.2); D has no input
+            expectWithinAbsoluteError (io.last (0), 0.7f, 1e-6f);
         }
     }
 };

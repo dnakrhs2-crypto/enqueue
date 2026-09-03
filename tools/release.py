@@ -34,10 +34,10 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 APPS = {
     "enqueue": dict(name="Enqueue", exe="Enqueue.exe", iss="Enqueue.iss", artefacts="Enqueue_artefacts", target="Enqueue",
                     fixed="Enqueue-Setup.exe", notes_dir="docs/release-notes", site_dir="", tag_prefix="v",
-                    repo="dnakrhs2-crypto/enqueue"),
+                    repo="dnakrhs2-crypto/enqueue", remote="origin"),
     "livemix": dict(name="LiveMix", exe="LiveMix.exe", iss="LiveMix.iss", artefacts="LiveMix_artefacts", target="LiveMix",
                     fixed="LiveMix-Setup.exe", notes_dir="docs/release-notes/livemix", site_dir="livemix", tag_prefix="livemix-v",
-                    repo="dnakrhs2-crypto/livemix"),
+                    repo="dnakrhs2-crypto/livemix", remote="livemix"),
 }
 SITE_REPO = "dnakrhs2-crypto/enqueue"   # 곰튀김.com lives on this repo's gh-pages, both apps included
 APP = APPS["enqueue"]
@@ -311,11 +311,12 @@ def latest_from_github(gh, repo, app=None, allow_missing=False):
     app = app or APP
     try:
         out = run([gh, "release", "view", "--repo", repo, "--json", "tagName,publishedAt,assets"], capture=True)
-    except subprocess.CalledProcessError:
-        if allow_missing:
+    except subprocess.CalledProcessError as e:
+        stderr = (e.stderr or "").strip()
+        if allow_missing and "release not found" in stderr.lower():
             print("no release yet on", repo)
             return None
-        raise
+        sys.exit("gh release view failed for %s (%s) - the site was not touched" % (repo, stderr or e))
     info = json.loads(out)
     version = info["tagName"]
     if version.startswith(app["tag_prefix"]):
@@ -337,7 +338,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--app", default="enqueue", choices=sorted(APPS), help="which app to release (default: enqueue)")
     parser.add_argument("--preset", default="local", help="CMake configure preset name (default: local)")
-    parser.add_argument("--repo", default=os.environ.get("GOCUE_GITHUB_REPO", ""), help="GitHub owner/repo for release URLs")
+    parser.add_argument("--repo", default="", help="GitHub owner/repo for the release (default: the app's own; GOCUE_GITHUB_REPO applies to Enqueue only)")
     parser.add_argument("--key", default=os.environ.get("GOCUE_EDDSA_PRIVATE_KEY_FILE", ""), help="EdDSA private key file (winsparkle-tool generate-key)")
     parser.add_argument("--winsparkle-dir", default="", help="WinSparkle package dir (default: WINSPARKLE_DIR)")
     parser.add_argument("--notes", default="", help="release notes file (HTML or plain text)")
@@ -352,7 +353,8 @@ def main():
     APP = APPS[args.app]
 
     if not args.repo:
-        args.repo = APP["repo"]
+        # the env fallback belongs to Enqueue: with --app livemix it would push to one repo and publish in another
+        args.repo = (os.environ.get("GOCUE_GITHUB_REPO", "") if args.app == "enqueue" else "") or APP["repo"]
 
     if args.publish and (args.allow_dirty or args.skip_build or args.skip_tests):
         sys.exit("--publish builds and tests what is committed: --allow-dirty / --skip-build / --skip-tests are for local test builds only")
@@ -379,8 +381,9 @@ def main():
             sys.exit("tag %s%s already exists on another commit (%s, HEAD is %s) - bump the version in CMakeLists.txt" % (APP["tag_prefix"], version, tagged[:10], head[:10]))
 
     tag = os.environ.get("GITHUB_REF_NAME", "")
-    if tag and tag != "v" + version:
-        sys.exit("git tag %s does not match project(Enqueue VERSION %s) - bump CMakeLists.txt or re-tag" % (tag, version))
+    if tag and tag != APP["tag_prefix"] + version:
+        sys.exit("git tag %s does not match the %s version %s (expected %s%s) - bump CMakeLists.txt or re-tag"
+                 % (tag, APP["name"], version, APP["tag_prefix"], version))
 
     source_dir = ROOT / "build" / "vs2022" / APP["artefacts"] / "Release"
     output_dir = ROOT / "installer" / "output"
@@ -429,8 +432,9 @@ def main():
                 sys.exit("tag %s is a lightweight tag - delete it and let the script create the annotated one" % tag_name)
         else:
             run(["git", "tag", "-a", tag_name, "-m", APP["name"] + " " + version], cwd=ROOT)
-        # the release lives in the app's repo: LiveMix's is a mirror of this one (remote "livemix")
-        remote = "origin" if APP["name"] == "Enqueue" else "livemix"
+        # the release lives in the app's repo: LiveMix's is a mirror of this one (remote "livemix"); an overridden
+        # --repo is pushed to by URL so the tag and the release land in the same place
+        remote = APP["remote"] if args.repo == APP["repo"] else "https://github.com/%s.git" % args.repo
         run(["git", "push", remote, "HEAD:main"], cwd=ROOT)
         run(["git", "push", remote, tag_name], cwd=ROOT)
 

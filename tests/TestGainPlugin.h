@@ -17,7 +17,10 @@ public:
                                                       .withOutput ("Out", juce::AudioChannelSet::stereo(), true)),
           gain (initialGain), tail (tailSeconds)
     {
+        ++liveInstances;
     }
+
+    ~TestGainPlugin() override { --liveInstances; }
 
     const juce::String getName() const override { return "TestGain"; }
     void prepareToPlay (double sr, int bs) override { preparedSampleRate = sr; preparedBlockSize = bs; ++prepareCount; }
@@ -75,6 +78,7 @@ public:
     int processCount = 0;
     int lastNumChannels = 0;
     int lastNumSamples = 0;
+    static inline int liveInstances = 0;   // instances alive right now (a chain rebuild must destroy the old ones)
 };
 
 } // namespace gocue::tests

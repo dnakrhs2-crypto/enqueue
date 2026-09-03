@@ -304,28 +304,42 @@ void ChainDrawer::removeSlot (int index)
 
 void ChainDrawer::moveSlot (int from, int to)
 {
-    if (chain != nullptr && chain->movePlugin (from, to))
+    // deferred: the drag ends inside a row that the refresh would destroy under it (the chain's listener refreshes the views)
+    juce::Component::SafePointer<ChainDrawer> safeThis (this);
+    juce::MessageManager::callAsync ([safeThis, from, to]
     {
-        document.markDirty();
+        if (safeThis == nullptr || safeThis->chain == nullptr)
+            return;
 
-        if (onChainEdited)
-            onChainEdited();
-    }
+        if (safeThis->chain->movePlugin (from, to))
+        {
+            safeThis->document.markDirty();
 
-    refresh();
+            if (safeThis->onChainEdited)
+                safeThis->onChainEdited();
+        }
+
+        safeThis->refresh();
+    });
 }
 
 void ChainDrawer::toggleBypass (int index)
 {
-    if (chain == nullptr || index < 0 || index >= chain->getNumSlots())
-        return;
+    // deferred for the same reason: the switch that was clicked sits in a row the refresh replaces
+    juce::Component::SafePointer<ChainDrawer> safeThis (this);
+    juce::MessageManager::callAsync ([safeThis, index]
+    {
+        if (safeThis == nullptr || safeThis->chain == nullptr || index < 0 || index >= safeThis->chain->getNumSlots())
+            return;
 
-    chain->setBypassed (index, ! chain->getSlot (index).bypassed.load());
-    rows[(size_t) index]->set (chain->getSlot (index));
-    document.markDirty();
+        safeThis->chain->setBypassed (index, ! safeThis->chain->getSlot (index).bypassed.load());
+        safeThis->document.markDirty();
 
-    if (onChainEdited)
-        onChainEdited();
+        if (safeThis->onChainEdited)
+            safeThis->onChainEdited();
+
+        safeThis->refresh();
+    });
 }
 
 void ChainDrawer::resized()

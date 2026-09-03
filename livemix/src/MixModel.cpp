@@ -285,6 +285,10 @@ juce::Result MixSession::fromJson (const juce::String& json, MixSession& out, ju
     if (json.trim().isEmpty())
         return juce::Result::fail ("Invalid session file: the file is empty");
 
+    // JUCE's parser stops after the first object: corruption behind it would be read as a good file and then written over
+    if (! json.trimEnd().endsWithChar ('}') || ProjectSerializer::hasTrailingJsonData (json))
+        return juce::Result::fail ("Invalid session file: data after the end of the session");
+
     juce::var root;
     const auto parsed = juce::JSON::parse (json, root);
 
