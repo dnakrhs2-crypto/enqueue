@@ -384,5 +384,5 @@ class Scheduler { public: using Clock = std::function<double()>;   // 초
 - [x] 리다이렉트 페이지: GitHub Pages `gh-pages` 브랜치 → https://dnakrhs2-crypto.github.io/gocue/coupang/ (meta refresh + JS → 파트너스 간편링크 `link.coupang.com/a/gJIOd2FuJU`, 대가성 문구 표시). letsplax 도메인은 회사 주소라 쓰지 않음(gom).
 - [x] `installer/GoCue.iss`: [Tasks] `coupang`(기본 체크, GroupDescription = 대가성 문구 + 삭제 방법), `coupang.ico`(쿠팡 로고, gom "그대로 써도 됨") 설치, [Code]가 `{userdesktop}\쿠팡.url` 작성 — 대화형 설치이거나 `/TASKS=coupang`일 때만(자동 업데이트 `/SILENT`는 지운 바로가기를 되살리지 않음), 제거 시 삭제. 문자열은 `installer/GoCue.messages.iss`(UTF-8 BOM, `#include`) — GoCue.iss 자체는 ASCII 유지.
 - [x] 검증: ISCC 컴파일 OK, `/VERYSILENT /TASKS=coupang` 설치 → `쿠팡.url`(URL·IconFile·IconIndex) 생성, 제거 → 삭제, 0.8.9 재설치(/TASKS 없음) → 생성 안 됨.
-- [x] 도움말 > "베타 피드백 (오픈채팅)..." 메뉴 (`src/app/Links.h`의 `feedbackChat`, 링크 비어 있으면 비활성) — gom이 오픈카톡 링크 주면 채움.
+- [x] 도움말 > "커뮤니티" 메뉴 = 카카오톡 오픈채팅 https://open.kakao.com/o/pST4IRLi (`src/app/Links.h`의 `feedbackChat`; 사이트 latest.json에도 같은 링크).
 - [ ] 코드 서명(인증서 필요), 베타 버전 0.9.0 배포.

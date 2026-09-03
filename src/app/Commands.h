@@ -79,7 +79,7 @@ enum : juce::CommandID
 
     checkForUpdates,
     showManual,           // Ctrl+F1
-    feedbackChat,         // beta feedback room (open chat)
+    feedbackChat,         // Help > 커뮤니티: the open-chat room
     about
 };
 

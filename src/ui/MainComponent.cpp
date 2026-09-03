@@ -831,7 +831,7 @@ void MainComponent::getCommandInfo (juce::CommandID commandID, juce::Application
             break;
 
         case CommandIDs::feedbackChat:
-            result.setInfo (ko ("베타 피드백 (오픈채팅)..."), ko ("카카오톡 오픈채팅으로 의견 보내기"), ko ("도움말"), 0);
+            result.setInfo (ko ("커뮤니티"), ko ("카카오톡 오픈채팅 열기"), ko ("도움말"), 0);
             result.setActive (juce::String (Links::feedbackChat).isNotEmpty());
             break;
 
