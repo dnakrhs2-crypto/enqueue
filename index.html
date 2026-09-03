@@ -27,9 +27,9 @@
     <div>
       <h1>앤큐 · Windows용 쇼 큐 플레이어</h1>
       <div class="download">
-        <a class="btn" id="download" href="https://github.com/dnakrhs2-crypto/enqueue/releases/latest">
+        <a class="btn" id="download" href="https://github.com/dnakrhs2-crypto/enqueue/releases/download/v0.9.3/Enqueue-Setup-0.9.3.exe">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3a1 1 0 0 1 1 1v9.6l3.3-3.3a1 1 0 1 1 1.4 1.4l-5 5a1 1 0 0 1-1.4 0l-5-5a1 1 0 1 1 1.4-1.4L11 13.6V4a1 1 0 0 1 1-1zM4 18a1 1 0 0 1 1 1v1h14v-1a1 1 0 1 1 2 0v2a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1v-2a1 1 0 0 1 1-1z"/></svg>
-          <span id="download-label">최신 버전 다운로드</span>
+          <span id="download-label">Enqueue 0.9.3 다운로드</span>
         </a>
         <p class="meta" id="download-meta">Windows 10/11 64비트 · 설치 파일은 <a href="https://github.com/dnakrhs2-crypto/enqueue/releases">GitHub 릴리스</a>에서 받습니다.</p>
       </div>
@@ -84,10 +84,10 @@
 <script>
 (function () {
   // latest.json is written by tools/release.py at every release: exact installer URL, size and date.
-  fetch('latest.json', { cache: 'no-cache' })
+  fetch('latest.json?rev=0.9.3', { cache: 'no-cache' })
     .then(function (r) { return r.ok ? r.json() : null; })
     .then(function (info) {
-      if (!info || !info.url) return;
+      if (!info || !info.url || info.url.indexOf('/releases/download/') < 0) return;   // only a direct asset link counts as a download
       var btn = document.getElementById('download');
       btn.href = info.url;
       document.getElementById('download-label').textContent = 'Enqueue ' + info.version + ' 다운로드';
