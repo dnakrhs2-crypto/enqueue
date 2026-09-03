@@ -34,6 +34,71 @@ namespace
     {
         return juce::String::fromUTF8 ("로그인이 거부되었습니다 (사용자 이름 / 비밀번호 확인).");
     }
+
+    bool isHexGroup (const juce::String& group)
+    {
+        return group.isNotEmpty() && group.length() <= 4 && group.containsOnly ("0123456789abcdefABCDEF");
+    }
+
+    /** RFC 4291 text form: up to 8 hex groups, one "::" compression, an optional dotted IPv4 tail. */
+    bool looksLikeIPv6 (const juce::String& text)
+    {
+        auto s = text;
+        int groups = 0;
+
+        if (s.containsChar ('.'))
+        {
+            // an embedded IPv4 (::ffff:192.168.0.1) stands for the last two groups
+            const auto tail = s.fromLastOccurrenceOf (":", false, false);
+            juce::StringArray quad;
+            quad.addTokens (tail, ".", "");
+
+            if (quad.size() != 4)
+                return false;
+
+            for (const auto& q : quad)
+                if (q.isEmpty() || q.length() > 3 || ! q.containsOnly ("0123456789") || q.getIntValue() > 255)
+                    return false;
+
+            const auto head = s.upToLastOccurrenceOf (":", true, false);   // up to and including the ':' before the tail
+            s = head.endsWith ("::") ? head : head.dropLastCharacters (1);   // "::1.2.3.4" keeps its compression
+            groups = 2;
+        }
+
+        const int compress = s.indexOf ("::");
+
+        if (compress >= 0 && s.indexOf (compress + 2, "::") >= 0)
+            return false;   // at most one "::"
+
+        auto countSide = [&groups] (const juce::String& side) -> bool
+        {
+            if (side.isEmpty())
+                return true;
+
+            juce::StringArray parts;
+            parts.addTokens (side, ":", "");
+
+            for (const auto& g : parts)
+                if (! isHexGroup (g))
+                    return false;
+
+            groups += parts.size();
+            return true;
+        };
+
+        if (compress >= 0)
+        {
+            if (! countSide (s.substring (0, compress)) || ! countSide (s.substring (compress + 2)))
+                return false;
+
+            return groups <= 7;
+        }
+
+        if (! countSide (s))
+            return false;
+
+        return groups == 8;
+    }
 }
 
 WebDavBackup::WebDavBackup() : juce::Thread ("LiveMix backup") {}
@@ -94,12 +159,8 @@ juce::String WebDavBackup::validateBaseUrl (const juce::String& baseUrl)
         host = rest.substring (1, close);
         port = rest.substring (close + 1);
 
-        for (auto c : host)
-            if (! juce::String ("0123456789abcdefABCDEF:.").containsChar (c))
-                return juce::String::fromUTF8 ("백업 주소의 IPv6 주소가 올바르지 않습니다");
-
-        if (host.isEmpty())
-            return juce::String::fromUTF8 ("백업 주소에 서버 이름이 없습니다 (예: https://서버:5006)");
+        if (! looksLikeIPv6 (host))
+            return juce::String::fromUTF8 ("백업 주소의 IPv6 주소가 올바르지 않습니다");
     }
     else
     {

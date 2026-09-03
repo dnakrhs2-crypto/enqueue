@@ -92,6 +92,10 @@ public:
             expect (! doc.isDirty());
             expect (! doc.pollPluginEdits());        // and settled the flag: the next tick does not dirty a saved file
             expect (! doc.isDirty());
+
+            plugin->updateHostDisplay();
+            expect (doc.save (dir).failed());        // a write that cannot succeed (the target is a directory)
+            expect (doc.isDirty());                  // keeps the edit on record
             expect (dir.deleteRecursively());
         }
     }

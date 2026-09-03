@@ -44,6 +44,16 @@ public:
             expect (WebDavBackup::validateBaseUrl ("https://192.168.0.10:5006").isEmpty());
             expect (WebDavBackup::validateBaseUrl ("https://[fe80::1]:5006").isEmpty());
             expect (WebDavBackup::validateBaseUrl ("https://[fe80::1").isNotEmpty());
+            expect (WebDavBackup::validateBaseUrl ("https://[::1]:5006").isEmpty());
+            expect (WebDavBackup::validateBaseUrl ("https://[2001:db8::ff00:42:8329]").isEmpty());
+            expect (WebDavBackup::validateBaseUrl ("https://[1:2:3:4:5:6:7:8]:5006").isEmpty());
+            expect (WebDavBackup::validateBaseUrl ("https://[::ffff:192.168.0.1]:5006").isEmpty());
+            expect (WebDavBackup::validateBaseUrl ("https://[::::]:5006").isNotEmpty());          // not an address
+            expect (WebDavBackup::validateBaseUrl ("https://[1.2.3.4]:5006").isNotEmpty());        // IPv4 does not go in brackets
+            expect (WebDavBackup::validateBaseUrl ("https://[1:2:3:4:5:6:7:8:9]").isNotEmpty());   // too many groups
+            expect (WebDavBackup::validateBaseUrl ("https://[12345::1]").isNotEmpty());            // a group too long
+            expect (WebDavBackup::validateBaseUrl ("https://[g::1]").isNotEmpty());                // not hex
+            expect (WebDavBackup::validateBaseUrl ("https://[1::2::3]").isNotEmpty());             // two compressions
 
             expectEquals (WebDavBackup::credentialKeyFor ("https://Parkdoomin.synology.me:5006/", " gom "), juce::String ("LiveMix/WebDAV/parkdoomin.synology.me:5006/gom"));
             expect (WebDavBackup::credentialKeyFor ("https://a.example:5006", "gom") != WebDavBackup::credentialKeyFor ("https://b.example:5006", "gom"));

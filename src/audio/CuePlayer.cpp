@@ -677,20 +677,31 @@ bool CuePlayer::renderNextBlock (juce::AudioBuffer<float>& fullBuffer, int numSa
     {
         // Frozen and already silent: a stop / fade request or a trim that ended before the position ends it now.
         const bool ended = ! micMode && source != nullptr && virtualPosition.load (std::memory_order_relaxed) >= (double) source->getTotalLength();
+        const bool stopping = stopRequested.load (std::memory_order_relaxed);
 
-        if (stopRequested.load (std::memory_order_relaxed) || hardStop || ended)
+        if (stopping && ! hardStop && ! ended && activeChain != nullptr && skipTailOnStop.load (std::memory_order_acquire))
+        {
+            // a soft panic: the insert may still ring (or generate) - it fades after the chain over the panic time,
+            // like a ringing tail (the tail branch below takes over from here)
+            inTail = true;
+            tailSamplesLeft = tailFadeSamplesLeft = juce::jmax<juce::int64> ((juce::int64) (0.2 * currentSampleRate), panicFadeSamplesLeft);
+            tailFadeGain = 1.0f;
+        }
+        else if (stopping || hardStop || ended)
         {
             buffer.clear (0, numSamples);
             finished.store (true, std::memory_order_relaxed);
             return false;
         }
+        else
+        {
+            buffer.clear (0, numSamples);   // feed silence through the chain so delays / reverbs keep their timing
 
-        buffer.clear (0, numSamples);   // feed silence through the chain so delays / reverbs keep their timing
+            if (activeChain != nullptr)
+                processChain (*activeChain, fullBuffer, numSamples);
 
-        if (activeChain != nullptr)
-            processChain (*activeChain, fullBuffer, numSamples);
-
-        return true;
+            return true;
+        }
     }
 
     const double ratio = micMode ? 1.0 : ratioFor (rate);
@@ -834,13 +845,13 @@ bool CuePlayer::renderNextBlock (juce::AudioBuffer<float>& fullBuffer, int numSa
         if (streamEnded && ! stoppedAfterFade)
             endedNaturally.store (true, std::memory_order_relaxed);
 
-        if (! hardStop && panicFadeSamplesLeft > 0 && activeChain != nullptr && skipTailOnStop.load (std::memory_order_acquire))
+        if (! hardStop && activeChain != nullptr && skipTailOnStop.load (std::memory_order_acquire))
         {
-            // the source ended while a soft panic fades: the chain rings on through the rest of the panic time, fading
-            // after the chain from here to zero (no cut while the output gate is still open)
+            // a soft panic: the insert rings on and fades after itself - over what is left of the panic time when the
+            // source ended early, else over the output gate's own close ramp (the envelope took the whole panic time):
+            // the chain's output is never cut while the gate is still open
             inTail = true;
-            tailSamplesLeft = panicFadeSamplesLeft;
-            tailFadeSamplesLeft = panicFadeSamplesLeft;
+            tailSamplesLeft = tailFadeSamplesLeft = panicFadeSamplesLeft > 0 ? panicFadeSamplesLeft : (juce::int64) (0.2 * currentSampleRate);
             tailFadeGain = 1.0f;
             return true;
         }

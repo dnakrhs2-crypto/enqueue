@@ -54,8 +54,8 @@ juce::Result MixDocument::load (const juce::File& newFile, juce::StringArray* wa
 
 juce::Result MixDocument::save (const juce::File& newFile)
 {
+    pollPluginEdits();   // edits reported so far are captured below (and keep the document dirty should the write fail)
     engine.captureLivePluginStates (session);
-    engine.forEachChain ([] (PluginChain& chain) { chain.consumeStateChanged(); });   // what was captured is in the file: not an edit any more
     session.sanitise();
     const auto result = session.save (newFile);
 
@@ -64,7 +64,8 @@ juce::Result MixDocument::save (const juce::File& newFile)
 
     file = newFile;
     dirty = false;
-    notifyValue();   // the title and the views: clean now
+    pollPluginEdits();   // an edit that arrived during the capture / write is not in the file: dirty again
+    notifyValue();       // the title and the views
     return juce::Result::ok();
 }
 

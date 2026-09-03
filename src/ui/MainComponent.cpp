@@ -2555,13 +2555,13 @@ void MainComponent::tryPendingStartOnOpen()
 
     engine.reapIfNeeded();   // runs the owed reset as soon as the gate is closed
 
-    if (engine.isResetOutstanding())
+    if (engine.isResetOutstanding() || ! engine.isDeviceRunning() || controller.isPanicLatched())
     {
         if (juce::Time::getMillisecondCounterHiRes() < pendingStartOnOpenDeadlineMs)
-            return;   // the timer tries again
+            return;   // the timer tries again (the device may still be opening)
 
         pendingStartOnOpenCue.clear();
-        transport.showStatus (ko ("열 때 시작 취소: 이전 정지 처리가 끝나지 않았습니다 (오디오 장치를 확인하세요)"), true);
+        transport.showStatus (ko ("열 때 시작 취소: 오디오 장치가 준비되지 않았거나 이전 정지 처리가 끝나지 않았습니다"), true);
         return;
     }
 
@@ -2571,7 +2571,9 @@ void MainComponent::tryPendingStartOnOpen()
     if (const int i = findCueIndexByNumber (number); i >= 0)
     {
         controller.fireSequence (i);
-        transport.showStatus (ko ("열 때 시작: ") + number, false);
+
+        if (engine.mayBePlaying() || controller.hasPendingStarts())
+            transport.showStatus (ko ("열 때 시작: ") + number, false);   // otherwise the controller's own message (why it did not start) stays
     }
 }
 

@@ -871,7 +871,7 @@ void AudioEngine::stop (const juce::Uuid& cueId)
     const juce::ScopedLock sl (lock);
 
     for (auto& p : players)
-        if (p->getCueId() == cueId && ! p->hasFinished())
+        if (p->getCueId() == cueId && (! p->hasFinished() || p->hasPendingLiveEdit()))   // a live edit could revive a finished one
             p->requestStop();
 }
 
@@ -883,7 +883,7 @@ void AudioEngine::stopAll()
         const juce::ScopedLock sl (lock);
 
         for (auto& p : players)
-            if (! p->hasFinished())
+            if (! p->hasFinished() || p->hasPendingLiveEdit())
                 p->requestStop();
     }
 
@@ -914,7 +914,7 @@ void AudioEngine::fadeOutAndStop (const juce::Uuid& cueId, int milliseconds)
     const juce::ScopedLock sl (lock);
 
     for (auto& p : players)
-        if (p->getCueId() == cueId && ! p->hasFinished())
+        if (p->getCueId() == cueId && (! p->hasFinished() || p->hasPendingLiveEdit()))
             p->requestFadeOut (milliseconds);
 }
 
@@ -930,7 +930,7 @@ void AudioEngine::fadeOutAndStopAll (int milliseconds)
     const juce::ScopedLock sl (lock);
 
     for (auto& p : players)
-        if (! p->hasFinished())
+        if (! p->hasFinished() || p->hasPendingLiveEdit())
             p->requestPanicFadeOut (milliseconds);   // no plugin tail afterwards: the chains are reset instead
 }
 
@@ -1081,14 +1081,15 @@ void AudioEngine::settlePendingChainReset()
     bool pending = chainResetPending.exchange (false, std::memory_order_acq_rel);
 
     // a stopped device never brings the gate down: the armed reset would refuse every start once the device is back.
-    // The players cannot fade without a callback either: they end here, so the device's return plays none of their remains.
-    if (! pending && isResetOutstanding() && deviceExpected && ! deviceRunning.load (std::memory_order_acquire))
+    // The players cannot fade without a callback either: whatever the panic left behind ends here (a finished one with
+    // a live edit on its way included), so the device's return plays none of their remains.
+    if (isResetOutstanding() && deviceExpected && ! deviceRunning.load (std::memory_order_acquire))
     {
         {
             const juce::ScopedLock sl (lock);
 
             for (auto& p : players)
-                if (! p->hasFinished() && ! p->isLoadedNotStarted())
+                if ((! p->hasFinished() || p->hasPendingLiveEdit()) && (! p->isLoadedNotStarted() || p->isStopPending()))
                     p->abandon();
         }
 

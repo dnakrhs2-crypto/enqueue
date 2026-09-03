@@ -81,8 +81,14 @@ public:
     void requestFadeOut (int milliseconds) noexcept;
     /** A panic: the fade-out, then finished at once (no plugin tail: the chains are reset behind the closed gate). */
     void requestPanicFadeOut (int milliseconds) noexcept;
-    /** Ends the instance at once without rendering anything (the device is gone: there is nothing to fade). */
-    void abandon() noexcept { finished.store (true, std::memory_order_release); }
+    /** Ends the instance at once without rendering anything (the device is gone: there is nothing to fade). Terminal:
+        a live edit that was on its way cannot revive it. */
+    void abandon() noexcept
+    {
+        pendingVirtualPosition.store (-1, std::memory_order_relaxed);
+        endedNaturally.store (false, std::memory_order_relaxed);
+        finished.store (true, std::memory_order_release);
+    }
     /** De-clicked pause: the position freezes; plugins keep running on silence. Any thread. */
     void requestPause() noexcept;
     void requestResume() noexcept;

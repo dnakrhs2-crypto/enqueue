@@ -171,9 +171,7 @@ ChainDrawer::ChainDrawer (MixDocument& doc, PluginWindowManager& w) : document (
 
 void ChainDrawer::setChain (PluginChain* newChain, const juce::String& newTitle)
 {
-    if (newChain != chain)
-        ++revision;
-
+    ++revision;   // every rebind: deferred work posted for the previous binding is dropped, whatever the pointer
     chain = newChain;
     ownerTitle = newTitle;
     title.setText (newTitle + " · " + ko ("VST3 체인"), juce::dontSendNotification);

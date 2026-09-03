@@ -287,6 +287,9 @@ void MainComponent::paint (juce::Graphics& g)
 //==============================================================================
 void MainComponent::showDrawer (Drawer which)
 {
+    if (which != Drawer::chain && chainDrawer.getChain() != nullptr)
+        chainDrawer.setChain (nullptr, {});   // a closed drawer keeps no chain: nothing deferred may reach one that is gone
+
     drawer = which;
     resized();
 }

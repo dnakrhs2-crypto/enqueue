@@ -516,6 +516,98 @@ public:
             }
         }
 
+        beginTest ("a soft panic lets the insert of a streaming cue ring out after the envelope fade, and a paused cue's insert too");
+        {
+            struct Generator : public TestGainPlugin
+            {
+                Generator() : TestGainPlugin (1.0f, 3.0) {}
+
+                void processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer&) override
+                {
+                    for (int ch = 0; ch < buffer.getNumChannels(); ++ch)
+                        juce::FloatVectorOperations::fill (buffer.getWritePointer (ch), 0.5f, buffer.getNumSamples());
+                }
+            };
+
+            const int fadeBlocks = (int) std::ceil (0.2 * sampleRate / blockSize);   // 200 ms
+
+            // streaming: the envelope fade takes the panic time, then the insert fades after itself over the gate's close
+            {
+                AudioEngine engine (0);
+                engine.prepare (sampleRate, blockSize);
+                juce::AudioBuffer<float> out (2, blockSize);
+                Cue cue;
+                cue.name = "tone";
+                cue.file = tone;
+                engine.getCueChain (cue.id).addPlugin (std::make_unique<Generator>());
+                juce::String error;
+                expect (engine.play (cue, &error), error);
+
+                for (int i = 0; i < 5; ++i)
+                    engine.renderBlock (out, blockSize);
+
+                engine.fadeOutAndStopAll (200);
+
+                for (int i = 0; i < fadeBlocks + 1; ++i)   // the envelope fade is over
+                {
+                    engine.renderBlock (out, blockSize);
+                    engine.reapIfNeeded();
+                }
+
+                expectEquals (engine.getNumPlaying(), 1);                        // not cut: the insert rings on, fading
+                expectGreaterThan (out.getMagnitude (0, 0, blockSize), 0.05f);
+
+                for (int i = 0; i < fadeBlocks + 2; ++i)
+                {
+                    engine.renderBlock (out, blockSize);
+                    engine.reapIfNeeded();
+                }
+
+                expectEquals (engine.getNumPlaying(), 0);   // gone with the gate
+            }
+
+            // paused: the insert of a paused cue fades after the chain over the panic time instead of ending at once
+            {
+                AudioEngine engine (0);
+                engine.prepare (sampleRate, blockSize);
+                juce::AudioBuffer<float> out (2, blockSize);
+                Cue cue;
+                cue.name = "tone";
+                cue.file = tone;
+                engine.getCueChain (cue.id).addPlugin (std::make_unique<Generator>());
+                juce::String error;
+                expect (engine.play (cue, &error), error);
+
+                for (int i = 0; i < 5; ++i)
+                    engine.renderBlock (out, blockSize);
+
+                engine.pause (cue.id);
+
+                for (int i = 0; i < 3; ++i)   // the pause de-click
+                    engine.renderBlock (out, blockSize);
+
+                expect (engine.isPaused (cue.id));
+                engine.fadeOutAndStopAll (200);
+
+                for (int i = 0; i < 3; ++i)
+                {
+                    engine.renderBlock (out, blockSize);
+                    engine.reapIfNeeded();
+                }
+
+                expectEquals (engine.getNumPlaying(), 1);                        // alive: fading after the chain
+                expectGreaterThan (out.getMagnitude (0, 0, blockSize), 0.2f);
+
+                for (int i = 0; i < fadeBlocks + 2; ++i)
+                {
+                    engine.renderBlock (out, blockSize);
+                    engine.reapIfNeeded();
+                }
+
+                expectEquals (engine.getNumPlaying(), 0);
+            }
+        }
+
         dir.deleteRecursively();
     }
 };

@@ -159,6 +159,10 @@ juce::String MixEngine::openDevice (const juce::String& name, double newSampleRa
 
             rollback = deviceManager.setAudioDeviceSetup (previous, true);
         }
+        else
+        {
+            deviceManager.closeAudioDevice();   // nothing ran before: a half-opened device (default channels only) must not stay
+        }
 
         ensureCallback();
         return juce::String::fromUTF8 ("ASIO 장치 '") + setup.outputDeviceName + juce::String::fromUTF8 ("'를 열지 못했습니다: ") + error
