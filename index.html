@@ -62,10 +62,13 @@
   </section>
 
   <section id="beta">
-    <h2>베타 참여</h2>
-    <p>지금은 베타 기간입니다. 문제나 의견은 오픈채팅으로 보내 주세요. 프로그램 안 <b>도움말 → 커뮤니티</b> 메뉴에서도 열립니다.</p>
-    <p class="meta" id="feedback-line" style="margin-top:8px">오픈채팅 주소는 곧 공개됩니다.</p>
-    <p style="margin-top:12px">사용 설명서는 프로그램 안 <b>도움말 → 사용 설명서</b>(Ctrl+F1)에 있습니다.</p>
+    <h2>커뮤니티 · 베타 참여</h2>
+    <p>지금은 베타 기간입니다. 문제나 의견, 질문은 카카오톡 오픈채팅으로 보내 주세요. 프로그램 안 <b>도움말 → 커뮤니티</b> 메뉴에서도 열립니다.</p>
+    <a class="kakao" id="feedback-button" href="https://open.kakao.com/o/pST4IRLi">
+      <svg viewBox="0 0 48 48" aria-hidden="true"><path d="M24 6C12.4 6 3 13.3 3 22.3c0 5.8 3.9 10.9 9.8 13.8-.4 1.4-1.5 5.3-1.7 6.1-.3 1 .4 1 .8.7.3-.2 5.1-3.4 7.2-4.8 1.6.2 3.2.4 4.9.4 11.6 0 21-7.3 21-16.2S35.6 6 24 6z"/></svg>
+      <span class="kakao-text"><b>카카오톡 오픈채팅 바로가기</b><small>앤큐 커뮤니티 · 문의 · 피드백</small></span>
+    </a>
+    <p style="margin-top:14px">사용 설명서는 프로그램 안 <b>도움말 → 사용 설명서</b>(Ctrl+F1)에 있습니다.</p>
   </section>
 </main>
 
@@ -91,10 +94,8 @@
       var date = info.date ? info.date.slice(0, 10) + ' · ' : '';
       document.getElementById('download-meta').innerHTML =
         'Windows 10/11 64비트 · ' + mb + date + '<a href="https://github.com/dnakrhs2-crypto/enqueue/releases">이전 버전과 릴리스 노트</a>';
-      if (info.feedback) {
-        var line = document.getElementById('feedback-line');
-        line.innerHTML = '<a href="' + info.feedback + '">카카오톡 오픈채팅 열기</a>';
-      }
+      if (info.feedback)
+        document.getElementById('feedback-button').href = info.feedback;   // the room the app links to (Links.h)
     })
     .catch(function () {});
 })();

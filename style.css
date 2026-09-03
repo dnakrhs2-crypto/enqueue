@@ -92,6 +92,23 @@ code { font-family: Consolas, "Cascadia Mono", monospace; background: var(--pane
 
 .shot { border: 1px solid var(--line); border-radius: 12px; overflow: hidden; background: var(--panel); }
 
+/* KakaoTalk open-chat button: Kakao's yellow with the black speech bubble */
+.kakao {
+  display: inline-flex; align-items: center; gap: 16px;
+  background: #fee500; color: #191919; border-radius: 14px;
+  padding: 18px 26px; margin-top: 18px; max-width: 100%;
+  border: 1px solid #e6cf00;
+}
+.kakao:hover, .kakao:focus-visible { text-decoration: none; filter: brightness(1.04); }
+.kakao svg { width: 56px; height: 56px; fill: #191919; flex: none; }
+.kakao-text { display: grid; gap: 2px; }
+.kakao-text b { font-size: 22px; line-height: 1.2; }
+.kakao-text small { font-size: 14px; color: #3a3a2a; }
+@media (max-width: 640px) {
+  .kakao { width: 100%; }
+  .kakao-text b { font-size: 19px; }
+}
+
 .notice {
   background: var(--warn-bg); border: 1px solid var(--warn-line); border-radius: 10px;
   padding: 12px 16px; font-size: 15px; margin-top: 8px;
