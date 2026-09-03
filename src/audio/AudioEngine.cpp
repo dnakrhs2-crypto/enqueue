@@ -36,39 +36,10 @@ juce::String AudioEngine::initialise (const juce::XmlElement* savedDeviceState)
 {
     const auto normalised = normaliseDeviceState (savedDeviceState);
     auto error = deviceManager.initialise (0, maxDeviceOutputs, normalised.get(), true);
+    const auto policyError = enforceOutputLimit();   // includes the stereo retry for a non-ASIO type left without a device
 
-    // A non-ASIO device that refused the wide default request (no saved state, or the saved device was gone and JUCE
-    // fell back to the default one): ask for the stereo pair only, which is all it gets anyway.
-    if (error.isNotEmpty() && deviceManager.getCurrentAudioDevice() == nullptr && ! currentTypeAllowsMultichannel())
-    {
-        if (auto* type = deviceManager.getCurrentDeviceTypeObject())
-        {
-            auto setup = deviceManager.getAudioDeviceSetup();   // JUCE clears the names when an open fails: take the type's default
-
-            if (setup.outputDeviceName.isEmpty())
-            {
-                const auto names = type->getDeviceNames (false);
-                const int index = type->getDefaultDeviceIndex (false);
-                setup.outputDeviceName = juce::isPositiveAndBelow (index, names.size()) ? names[index] : juce::String();
-            }
-
-            if (setup.outputDeviceName.isNotEmpty())
-            {
-                setup.useDefaultOutputChannels = false;
-                setup.outputChannels.clear();
-                setup.outputChannels.setRange (0, stereoOnlyOutputs, true);
-                deviceManager.setAudioDeviceSetup (setup, false);
-
-                if (deviceManager.getCurrentAudioDevice() != nullptr)
-                    error.clear();
-            }
-        }
-    }
-
-    const auto limitError = enforceOutputLimit();
-
-    if (error.isEmpty())
-        error = limitError;
+    if (deviceManager.getCurrentAudioDevice() != nullptr || error.isEmpty())
+        error = policyError;   // a device is running: whatever failed before the policy stepped in is moot
 
     if (! callbackAdded)
     {
@@ -85,7 +56,25 @@ std::unique_ptr<juce::XmlElement> AudioEngine::normaliseDeviceState (const juce:
         return nullptr;
 
     auto xml = std::make_unique<juce::XmlElement> (*saved);
-    const auto type = xml->getStringAttribute ("deviceType");
+    auto type = xml->getStringAttribute ("deviceType");
+
+    if (type.isEmpty())
+    {
+        // not a state GoCue writes, but cheap to honour: the type that lists the saved output device
+        const auto name = xml->getStringAttribute ("audioOutputDeviceName");
+
+        if (name.isNotEmpty())
+        {
+            for (auto* t : deviceManager.getAvailableDeviceTypes())
+            {
+                if (t->getDeviceNames (false).contains (name))
+                {
+                    type = t->getTypeName();
+                    break;
+                }
+            }
+        }
+    }
 
     if (type.isNotEmpty() && ! typeAllowsMultichannel (type))
         xml->setAttribute ("audioDeviceOutChans", "11");   // bits 0-1 in JUCE's base-2 notation: an explicit 1-2
@@ -101,17 +90,52 @@ bool AudioEngine::currentTypeAllowsMultichannel() const
     return false;
 }
 
+juce::String AudioEngine::openStereoDefault()
+{
+    auto* type = deviceManager.getCurrentDeviceTypeObject();
+
+    if (type == nullptr)
+        return {};
+
+    auto setup = deviceManager.getAudioDeviceSetup();   // JUCE clears the names when an open fails: the type's default then
+
+    if (setup.outputDeviceName.isEmpty())
+    {
+        const auto names = type->getDeviceNames (false);
+        const int index = type->getDefaultDeviceIndex (false);
+
+        if (! juce::isPositiveAndBelow (index, names.size()))
+            return {};   // a type without devices: nothing to open, nothing to report
+
+        setup.outputDeviceName = names[index];
+    }
+
+    setup.useDefaultOutputChannels = false;
+    setup.outputChannels.clear();
+    setup.outputChannels.setRange (0, stereoOnlyOutputs, true);
+    return deviceManager.setAudioDeviceSetup (setup, false);
+}
+
 juce::String AudioEngine::enforceOutputLimit()
 {
+    const auto typeName = deviceManager.getCurrentAudioDeviceType();
+    const bool typeChanged = typeName != lastPolicyType;
+    lastPolicyType = typeName;
+
     auto* device = deviceManager.getCurrentAudioDevice();
 
     if (device == nullptr)
-        return {};
+    {
+        // A type switch whose wide default open failed leaves no device, and JUCE drops that error (a start from the
+        // saved state reports it but ends the same way): a non-ASIO type then gets its default device with the stereo
+        // pair, all it may use anyway. Without a type change the user set the output to none, and none it stays.
+        return typeChanged && ! typeAllowsMultichannel (typeName) ? openStereoDefault() : juce::String();
+    }
 
     const auto active = device->getActiveOutputChannels();
-    auto setup = deviceManager.getAudioDeviceSetup();
+    const auto setup = deviceManager.getAudioDeviceSetup();
 
-    if (currentTypeAllowsMultichannel())
+    if (typeAllowsMultichannel (typeName))
     {
         if (! setup.useDefaultOutputChannels)
             return {};   // the user chose these channels
@@ -121,19 +145,31 @@ juce::String AudioEngine::enforceOutputLimit()
         if (active.countNumberOfSetBits() >= available)
             return {};
 
-        setup.useDefaultOutputChannels = false;
-        setup.outputChannels.clear();
-        setup.outputChannels.setRange (0, available, true);
-        return deviceManager.setAudioDeviceSetup (setup, false);   // not "chosen": the saved state keeps the user's own pick
+        auto widened = setup;
+        widened.useDefaultOutputChannels = false;
+        widened.outputChannels.clear();
+        widened.outputChannels.setRange (0, available, true);
+        const auto error = deviceManager.setAudioDeviceSetup (widened, false);   // not "chosen": the saved state keeps the user's own pick
+
+        if (error.isEmpty())
+            return {};
+
+        // the driver names more channels than it opens together: back to the set that was running (explicit now, so
+        // this is not tried again)
+        auto rollback = setup;
+        rollback.useDefaultOutputChannels = false;
+        rollback.outputChannels = active;
+        return deviceManager.setAudioDeviceSetup (rollback, false).isEmpty() ? juce::String() : error;
     }
 
     if (active.getHighestBit() < stereoOnlyOutputs)
         return {};   // already within 1-2
 
-    setup.useDefaultOutputChannels = false;
-    setup.outputChannels.clear();
-    setup.outputChannels.setRange (0, stereoOnlyOutputs, true);
-    return deviceManager.setAudioDeviceSetup (setup, false);   // the change callback runs again and finds nothing to do
+    auto trimmed = setup;
+    trimmed.useDefaultOutputChannels = false;
+    trimmed.outputChannels.clear();
+    trimmed.outputChannels.setRange (0, stereoOnlyOutputs, true);
+    return deviceManager.setAudioDeviceSetup (trimmed, false);   // the change callback runs again and finds nothing to do
 }
 
 juce::String AudioEngine::setInputsWanted (int channels)
@@ -1460,24 +1496,27 @@ void AudioEngine::audioDeviceIOCallbackWithContext (const float* const* inputCha
     if (numOutputChannels <= 0 || numSamples <= 0)
         return;
 
-    // A non-ASIO device may run wide for a moment (a type switch starts it before the trim lands): those channels
-    // carry silence. The mix itself never targets them either (numDeviceOutputs is limited the same way).
+    // A non-ASIO device may run wide for a moment (a type switch starts it before the trim lands): channels beyond the
+    // limit carry silence. JUCE packs the active channels' pointers from index 0, so a set reaching past the limit
+    // (physical 3-4 alone) cannot be mapped onto 1-2 at all: then nothing goes out until the trim reopens the device.
     const int limit = outputChannelLimit.load (std::memory_order_relaxed);
+    const int channelsToRender = outputMaskOutOfRange.load (std::memory_order_relaxed)
+                                     ? 0
+                                     : juce::jmin (numOutputChannels, juce::jmax (1, limit));
 
-    for (int ch = limit; ch < numOutputChannels; ++ch)
+    for (int ch = channelsToRender; ch < numOutputChannels; ++ch)
         if (outputChannelData[ch] != nullptr)
             juce::FloatVectorOperations::clear (outputChannelData[ch], numSamples);
 
-    const int channelsToRender = juce::jmin (numOutputChannels, juce::jmax (1, limit));
-
-    if (channelsToRender < 32)   // juce::AudioBuffer keeps its channel table inline below 32 channels: no allocation
+    if (channelsToRender > 0 && channelsToRender < 32)   // juce::AudioBuffer keeps its channel table inline below 32 channels: no allocation
     {
         juce::AudioBuffer<float> output (outputChannelData, channelsToRender, numSamples);
         renderBlock (output, numSamples, inputChannelData, numInputChannels);
         return;
     }
 
-    // 32 channels or more: render into the prepared scratch and copy out
+    // 32 channels or more, or a device the engine may not drive yet: render into the prepared scratch (the cues keep
+    // running either way) and copy out what is allowed
     const int chunk = juce::jmax (1, deviceScratch.getNumSamples());
     const int inputs = juce::jmin (numInputChannels, (int) inputPointers.size());
 
@@ -1503,11 +1542,14 @@ void AudioEngine::audioDeviceIOCallbackWithContext (const float* const* inputCha
 
 void AudioEngine::audioDeviceAboutToStart (juce::AudioIODevice* device)
 {
-    const int limit = typeAllowsMultichannel (device->getTypeName()) ? maxDeviceOutputs : stereoOnlyOutputs;
+    const bool multichannel = typeAllowsMultichannel (device->getTypeName());
+    const int limit = multichannel ? maxDeviceOutputs : stereoOnlyOutputs;
+    const auto active = device->getActiveOutputChannels();
     outputChannelLimit.store (limit, std::memory_order_relaxed);
+    outputMaskOutOfRange.store (! multichannel && active.getHighestBit() >= limit, std::memory_order_relaxed);
     numDeviceInputs.store (device->getActiveInputChannels().countNumberOfSetBits(), std::memory_order_relaxed);
     prepare (device->getCurrentSampleRate(), device->getCurrentBufferSizeSamples(),
-             juce::jmax (1, juce::jmin (limit, device->getActiveOutputChannels().countNumberOfSetBits())));
+             juce::jmax (1, juce::jmin (limit, active.countNumberOfSetBits())));
 }
 
 void AudioEngine::audioDeviceStopped()

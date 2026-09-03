@@ -72,8 +72,9 @@ public:
         device is closed then). Message thread. */
     juce::String enforceOutputLimit();
     /** The saved device state with the policy applied before the first open: a non-ASIO type asks for 1-2 straight
-        away instead of opening wide and being trimmed (an exclusive-mode device may refuse the wide request). */
-    static std::unique_ptr<juce::XmlElement> normaliseDeviceState (const juce::XmlElement* saved);
+        away instead of opening wide and being trimmed (an exclusive-mode device may refuse the wide request). A state
+        without a type is judged by the type that lists its output device. */
+    std::unique_ptr<juce::XmlElement> normaliseDeviceState (const juce::XmlElement* saved);
     /** What the running device may carry: channels at or beyond this index are silenced in the callback. */
     int getOutputChannelLimit() const noexcept { return outputChannelLimit.load (std::memory_order_relaxed); }
     static constexpr int maxDeviceInputs = 32;
@@ -278,6 +279,10 @@ private:
     juce::int64 startCounter = 0;
     std::atomic<int> numDeviceOutputs { 2 };
     std::atomic<int> outputChannelLimit { maxDeviceOutputs };   // set when a device starts, read by the callback
+    std::atomic<bool> outputMaskOutOfRange { false };           // a non-ASIO device runs on channels past the limit: nothing goes out until the trim
+    juce::String lastPolicyType;                                // device type seen by the last enforceOutputLimit(): a switch that lost its device gets a stereo retry
+    /** Opens the current type's device (the setup's, else the type's default) with outputs 1-2 only. */
+    juce::String openStereoDefault();
     bool formatPrepared = false;                                // prepare() ran once: a restart at the same format keeps the players' state
     double previousSampleRate = 0.0;
     int previousBlockSize = 0;

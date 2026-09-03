@@ -1,7 +1,9 @@
 #include "audio/AudioEngine.h"
 
 #include <juce_audio_devices/juce_audio_devices.h>
+#include <juce_audio_formats/juce_audio_formats.h>
 
+#include <cmath>
 #include <vector>
 
 namespace gocue::tests
@@ -112,7 +114,7 @@ public:
     juce::String deviceName() const                               { return "Fake " + getTypeName(); }
 
     int outputs;
-    int rejectAbove;
+    int rejectAbove;                // devices created from now on refuse more channels than this (0 = never)
     std::vector<int> openHistory;   // channel count of every open request, in order (outlives the devices)
 };
 
@@ -162,6 +164,38 @@ public:
             s << n << ' ';
 
         return s.trim();
+    }
+
+    /** A 48 kHz sine file (the fake device's rate). */
+    juce::File writeSine (const juce::File& dir, const juce::String& fileName, double seconds, float amplitude, int channels)
+    {
+        const double rate = 48000.0;
+        const auto file = dir.getChildFile (fileName);
+        juce::WavAudioFormat wav;
+        std::unique_ptr<juce::OutputStream> stream (file.createOutputStream());
+        expect (stream != nullptr);
+
+        if (stream == nullptr)
+            return {};
+
+        auto writer = wav.createWriterFor (stream, juce::AudioFormatWriterOptions()
+                                                       .withSampleRate (rate)
+                                                       .withNumChannels (channels)
+                                                       .withBitsPerSample (16));
+        expect (writer != nullptr);
+
+        if (writer == nullptr)
+            return {};
+
+        const int numSamples = (int) (seconds * rate);
+        juce::AudioBuffer<float> buffer (channels, numSamples);
+
+        for (int ch = 0; ch < channels; ++ch)
+            for (int i = 0; i < numSamples; ++i)
+                buffer.setSample (ch, i, amplitude * (float) std::sin (2.0 * juce::MathConstants<double>::pi * 440.0 * i / rate));
+
+        expect (writer->writeFromAudioSampleBuffer (buffer, 0, numSamples));
+        return file;
     }
 
     void runTest() override
@@ -339,6 +373,64 @@ public:
             expectEquals ((int) asioOpens.size(), (int) before);
         }
 
+        beginTest ("switching to a non-ASIO type whose wide open fails still ends on a stereo device; 'none' stays none");
+        {
+            AudioEngine engine;
+            auto asio = std::make_unique<FakeType> ("ASIO", 8);
+            auto exclusive = std::make_unique<FakeType> ("Windows Audio (Exclusive Mode)", 8, 2);
+            auto& exclusiveOpens = exclusive->openHistory;
+            engine.getDeviceManager().addAudioDeviceType (std::move (asio));
+            engine.getDeviceManager().addAudioDeviceType (std::move (exclusive));
+            expect (engine.initialise (nullptr).isEmpty());
+            expectEquals (activeOutputs (engine), 8);
+
+            engine.getDeviceManager().setCurrentAudioDeviceType ("Windows Audio (Exclusive Mode)", true);   // JUCE drops the open error
+            expect (currentFake (engine) == nullptr);
+
+            expect (engine.enforceOutputLimit().isEmpty());   // the change callback: a stereo retry on the type's default device
+            auto* device = currentFake (engine);
+            expect (device != nullptr && device->getTypeName() == "Windows Audio (Exclusive Mode)");
+            expect (firstPairOnly (engine));
+            expectEquals (history (exclusiveOpens), juce::String ("8 2"));
+
+            // the "none" choice within a type is respected: no device, no retry
+            auto none = engine.getDeviceManager().getAudioDeviceSetup();
+            none.outputDeviceName.clear();
+            none.inputDeviceName.clear();
+            expect (engine.getDeviceManager().setAudioDeviceSetup (none, true).isEmpty());
+            expect (currentFake (engine) == nullptr);
+            expect (engine.enforceOutputLimit().isEmpty());
+            expect (currentFake (engine) == nullptr);
+            expectEquals (history (exclusiveOpens), juce::String ("8 2"));
+        }
+
+        beginTest ("an ASIO widening the driver refuses rolls back to the channels that were running");
+        {
+            AudioEngine engine;
+            auto asio = std::make_unique<FakeType> ("ASIO", 8);
+            auto wasapi = std::make_unique<FakeType> ("Windows Audio", 8);
+            auto* asioType = asio.get();
+            auto& asioOpens = asio->openHistory;
+            engine.getDeviceManager().addAudioDeviceType (std::move (asio));
+            engine.getDeviceManager().addAudioDeviceType (std::move (wasapi));
+            expect (engine.initialise (nullptr).isEmpty());
+
+            engine.getDeviceManager().setCurrentAudioDeviceType ("Windows Audio", true);
+            expect (engine.enforceOutputLimit().isEmpty());   // JUCE's default count is 2 from here on
+
+            asioType->rejectAbove = 2;                          // from now on the ASIO "driver" opens two channels at most
+            engine.getDeviceManager().setCurrentAudioDeviceType ("ASIO", true);
+            expectEquals (activeOutputs (engine), 2);
+            expect (engine.enforceOutputLimit().isEmpty());     // the widening fails, the rollback restores 1-2
+            expect (firstPairOnly (engine));
+            expect (currentFake (engine) != nullptr && currentFake (engine)->getTypeName() == "ASIO");
+            expectEquals (history (asioOpens), juce::String ("8 2 8 2"));
+
+            const auto before = asioOpens.size();               // explicit now: not tried again
+            expect (engine.enforceOutputLimit().isEmpty());
+            expectEquals ((int) asioOpens.size(), (int) before);
+        }
+
         beginTest ("a wide non-ASIO device gets silence beyond 1-2 from the callback (64 channels: scratch path)");
         {
             AudioEngine engine;
@@ -371,6 +463,74 @@ public:
                 expectEquals (maxBeyond, 0.0f);
                 expectEquals (out.getMagnitude (0, 0, numSamples), 0.0f);   // nothing plays: 1-2 are rendered silence, not the fill
             }
+        }
+
+        beginTest ("a non-ASIO device left on physical 3-4 stays silent while a cue runs, and plays after the trim");
+        {
+            const auto dir = juce::File::getSpecialLocation (juce::File::tempDirectory)
+                                 .getChildFile ("gocue_outputlimit_" + juce::Uuid().toString());
+            expect (dir.createDirectory().wasOk());
+            const auto tone = writeSine (dir, "tone.wav", 2.0, 0.5f, 2);
+
+            {
+                AudioEngine engine (0);   // synchronous reads: deterministic
+                engine.getDeviceManager().addAudioDeviceType (std::make_unique<FakeType> ("Windows Audio", 8));
+                expect (engine.initialise (nullptr).isEmpty());
+
+                // a set the policy never produces (a hand-edited state): physical 3-4 only, put in behind the enforcement
+                auto setup = engine.getDeviceManager().getAudioDeviceSetup();
+                setup.useDefaultOutputChannels = false;
+                setup.outputChannels.clear();
+                setup.outputChannels.setRange (2, 2, true);
+                expect (engine.getDeviceManager().setAudioDeviceSetup (setup, true).isEmpty());
+
+                auto* device = currentFake (engine);
+                expect (device != nullptr && device->callback != nullptr && device->getActiveOutputChannels()[2]);
+
+                Cue cue;
+                cue.name = "tone";
+                cue.file = tone;
+                juce::String error;
+                expect (engine.play (cue, &error), error);
+
+                if (device != nullptr && device->callback != nullptr)
+                {
+                    const int numSamples = 512;
+                    juce::AudioBuffer<float> out (2, numSamples);   // JUCE packs the two active channels to index 0-1
+                    juce::AudioIODeviceCallbackContext context;
+
+                    auto drive = [&]
+                    {
+                        for (int ch = 0; ch < 2; ++ch)
+                            juce::FloatVectorOperations::fill (out.getWritePointer (ch), 1.0f, numSamples);
+
+                        device->callback->audioDeviceIOCallbackWithContext (nullptr, 0, out.getArrayOfWritePointers(), 2, numSamples, context);
+                    };
+
+                    for (int i = 0; i < 10; ++i)
+                        drive();
+
+                    expectEquals (out.getMagnitude (0, 0, numSamples), 0.0f);   // nothing reaches physical 3-4...
+                    expectEquals (out.getMagnitude (1, 0, numSamples), 0.0f);
+                    const auto playing = engine.getPlayingCues();
+                    expect (! playing.empty() && playing[0].positionSeconds > 0.05);   // ...but the cue keeps running
+
+                    expect (engine.enforceOutputLimit().isEmpty());   // the change callback's trim: the device restarts on 1-2
+                    device = currentFake (engine);
+                    expect (device != nullptr && device->callback != nullptr && firstPairOnly (engine));
+
+                    if (device != nullptr && device->callback != nullptr)
+                    {
+                        for (int i = 0; i < 4; ++i)
+                            drive();
+
+                        expectGreaterThan (out.getRMSLevel (0, 0, numSamples), 0.2f);   // 0.5 amp sine: rms 0.35
+                        expectGreaterThan (out.getRMSLevel (1, 0, numSamples), 0.2f);
+                    }
+                }
+            }
+
+            dir.deleteRecursively();
         }
 
         beginTest ("the saved state after a trim reopens once at 1-2 on the next start");
@@ -426,21 +586,31 @@ public:
             expect (! engine.currentTypeAllowsMultichannel());
         }
 
-        beginTest ("normaliseDeviceState: non-ASIO gets an explicit 1-2, ASIO and unknown types are untouched");
+        beginTest ("normaliseDeviceState: non-ASIO gets an explicit 1-2, ASIO is untouched, an untyped state goes by its device");
         {
-            const auto wasapi = AudioEngine::normaliseDeviceState (savedState ("Windows Audio", "X", "11111111").get());
+            AudioEngine engine;
+            engine.getDeviceManager().addAudioDeviceType (std::make_unique<FakeType> ("ASIO", 8));
+            engine.getDeviceManager().addAudioDeviceType (std::make_unique<FakeType> ("Windows Audio", 8));
+
+            const auto wasapi = engine.normaliseDeviceState (savedState ("Windows Audio", "X", "11111111").get());
             expect (wasapi != nullptr && wasapi->getStringAttribute ("audioDeviceOutChans") == "11");
 
-            const auto exclusive = AudioEngine::normaliseDeviceState (savedState ("Windows Audio (Exclusive Mode)", "X", {}).get());
+            const auto exclusive = engine.normaliseDeviceState (savedState ("Windows Audio (Exclusive Mode)", "X", {}).get());
             expect (exclusive != nullptr && exclusive->getStringAttribute ("audioDeviceOutChans") == "11");
 
-            const auto asio = AudioEngine::normaliseDeviceState (savedState ("ASIO", "X", "11111111").get());
+            const auto asio = engine.normaliseDeviceState (savedState ("ASIO", "X", "11111111").get());
             expect (asio != nullptr && asio->getStringAttribute ("audioDeviceOutChans") == "11111111");
 
-            const auto untyped = AudioEngine::normaliseDeviceState (savedState ({}, "X", "1111").get());
-            expect (untyped != nullptr && untyped->getStringAttribute ("audioDeviceOutChans") == "1111");
+            const auto untypedWasapi = engine.normaliseDeviceState (savedState ({}, "Fake Windows Audio", "1111").get());
+            expect (untypedWasapi != nullptr && untypedWasapi->getStringAttribute ("audioDeviceOutChans") == "11");
 
-            expect (AudioEngine::normaliseDeviceState (nullptr) == nullptr);
+            const auto untypedAsio = engine.normaliseDeviceState (savedState ({}, "Fake ASIO", "1111").get());
+            expect (untypedAsio != nullptr && untypedAsio->getStringAttribute ("audioDeviceOutChans") == "1111");
+
+            const auto unknown = engine.normaliseDeviceState (savedState ({}, "X", "1111").get());
+            expect (unknown != nullptr && unknown->getStringAttribute ("audioDeviceOutChans") == "1111");
+
+            expect (engine.normaliseDeviceState (nullptr) == nullptr);
         }
     }
 };
