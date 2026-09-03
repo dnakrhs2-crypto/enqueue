@@ -160,7 +160,7 @@ GUI 스모크 테스트 도우미: `C:\Users\claude\tools\gocue_uitest.ps1` (lau
 한 번만 준비:
 1. `winsparkle-tool generate-key --file eddsa_priv.pem` — 개인키는 저장소 밖에 보관하고 백업한다. 잃어버리면 기존 사용자에게 업데이트를 보낼 수 없다.
    공개키(`winsparkle-tool public-key -f eddsa_priv.pem`)를 `CMakePresets.json`의 `GOCUE_EDDSA_PUBLIC_KEY`에 넣는다.
-2. GitHub 저장소(공개 — WinSparkle이 로그인 없이 받아야 한다)를 만들고 `GOCUE_APPCAST_URL`을 `https://github.com/<owner>/<repo>/releases/latest/download/appcast.xml`로 빌드한다. (현재 `CMakePresets.json`에 `dnakrhs2-crypto/gocue`로 고정)
+2. GitHub 저장소(공개 — WinSparkle이 로그인 없이 받아야 한다)를 만들고 `GOCUE_APPCAST_URL`을 `https://github.com/<owner>/<repo>/releases/latest/download/appcast.xml`로 빌드한다. (현재 `CMakePresets.json`에 `dnakrhs2-crypto/enqueue`로 고정)
 3. Inno Setup 6.3+ 설치 (`ISCC.exe`). 한국어 언어 파일(`Languages\Korean.isl`) 포함.
 
 릴리스마다:
@@ -173,7 +173,7 @@ python tools\release.py --repo <owner>/<repo> --key C:\keys\eddsa_priv.pem --not
 앱은 시작 시(하루 1회) 조용히 appcast를 확인하고, 새 버전이 있으면 WinSparkle 창으로 안내한 뒤 설치 파일을 받아 실행한다. 저장하지 않은 변경이 있으면 앱을 닫지 않는다.
 appcast의 `sparkle:installerArguments="/SILENT /SP- /NORESTART"` 덕분에 업데이트 설치는 진행 표시만 보이고 클릭 없이 끝난다(기본 사용자별 설치 기준).
 
-현재 저장소: https://github.com/dnakrhs2-crypto/gocue (릴리스: https://github.com/dnakrhs2-crypto/gocue/releases)
+현재 저장소: https://github.com/dnakrhs2-crypto/enqueue (릴리스: https://github.com/dnakrhs2-crypto/enqueue/releases)
 
 `.github/workflows/release.yml`은 같은 과정을 GitHub Actions에서 수행하려던 것인데(저장소 secret `GOCUE_EDDSA_PRIVATE_KEY` 필요) 호스트 러너에서 Visual Studio 생성기를 못 찾아 한 번도 성공하지 못했다. 태그마다 실패 메일이 와서 수동 실행(`workflow_dispatch`)으로만 남겨 두었다. 릴리스는 로컬 `tools/release.py`로 한다.
 

@@ -10,7 +10,7 @@ GitHub release without building anything.
 
 Typical use on the release machine:
 
-    python tools/release.py --repo owner/gocue --key C:/keys/gocue_eddsa_priv.pem --publish
+    python tools/release.py --repo owner/enqueue --key C:/keys/gocue_eddsa_priv.pem --publish
 
 Environment fallbacks: GOCUE_GITHUB_REPO, GOCUE_EDDSA_PRIVATE_KEY_FILE, WINSPARKLE_DIR, ISCC, GH.
 The version comes from project(Enqueue VERSION x.y.z) in CMakeLists.txt.
