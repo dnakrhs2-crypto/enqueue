@@ -3156,10 +3156,21 @@ CueInspector::CueInspector (ProjectDocument& doc, AudioEngine& e, AppSettings& s
 
 CueInspector::~CueInspector()
 {
+    cancelPendingUpdate();
     engine.getDeviceManager().removeChangeListener (this);
 
     cues.removeListener (this);
     tabs.clearTabs();
+}
+
+void CueInspector::handleAsyncUpdate()
+{
+    // only the matrices care which outputs reach the device; the other panels keep their state (and the focus)
+    if (levels != nullptr)
+        levels->refresh();
+
+    if (fadePanel != nullptr)
+        fadePanel->refresh();
 }
 
 void CueInspector::pluginChainChanged (PluginChain* chain)

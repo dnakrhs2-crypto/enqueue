@@ -25,6 +25,7 @@ namespace gocue
     Every edit goes through ProjectDocument::perform so it is undoable. */
 class CueInspector : public juce::Component,
                      private juce::ChangeListener,
+                     private juce::AsyncUpdater,
                      private CueList::Listener
 {
 public:
@@ -60,8 +61,9 @@ public:
         half-typed number lands on the cue it was typed for. */
     void finishEditing();
 
-    /** The audio device or the patches changed: the level/fade matrices recompute which outputs are dead. */
-    void refreshDeviceDependent() { refresh(); }
+    /** The audio device or the patches changed: the level/fade matrices recompute which outputs are dead.
+        Coalesced (a routing drag calls this on every mouse move) and limited to those two panels. */
+    void refreshDeviceDependent() { triggerAsyncUpdate(); }
 
     void resized() override;
     void paint (juce::Graphics& g) override;
@@ -84,7 +86,8 @@ private:
     /** Installs the tab set for the selected cue's type (0 audio / 1 fade / 2 devamp). */
     void rebuildTabs (int wanted);
 
-    void changeListenerCallback (juce::ChangeBroadcaster*) override { refresh(); }   // the device manager: a new device or channel set
+    void changeListenerCallback (juce::ChangeBroadcaster*) override { triggerAsyncUpdate(); }   // the device manager: a new device or channel set
+    void handleAsyncUpdate() override;
     void cueSelectionChanged (int) override { refresh(); }
     void cueChanged (int index) override;
     void cueListStructureChanged() override { refresh(); }

@@ -1555,6 +1555,7 @@ void AudioEngine::audioDeviceAboutToStart (juce::AudioIODevice* device)
 void AudioEngine::audioDeviceStopped()
 {
     numDeviceInputs.store (0, std::memory_order_relaxed);   // until a device starts again there are no inputs
+    numDeviceOutputs.store (stereoOnlyOutputs, std::memory_order_relaxed);   // and the outputs fall back to the offline default (a vanished 16-out device must not keep 3-16 alive in the UI)
 }
 
 void AudioEngine::audioDeviceError (const juce::String& errorMessage)

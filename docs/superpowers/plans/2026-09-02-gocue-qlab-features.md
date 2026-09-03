@@ -397,3 +397,8 @@ class Scheduler { public: using Clock = std::function<double()>;   // 초
 
 ## v0.9.1 — 활성 큐 이름 찌그러짐, 초록 꽉 찬 아이콘, 설치 체크박스 기본값 (2026-09-03)
 - [x] `ActiveCuesPanel` 카드: 이름이 첫 줄 전체(가로 압축 없음, 긴 이름은 말줄임), 일시정지 버튼은 시간 줄 왼쪽. 아이콘 `make_icon.py` go 변형 = 테두리 없이 초록 타일. 설치: desktopicon 기본 체크, 쿠팡 문구 gom 지정.
+
+## v0.9.2 — 글씨 키우기, 장치에 없는 출력 열 죽이기 (2026-09-03)
+- [x] CueTable 18/17pt·행 {32,38,46}, CueInspector 캡션 15·힌트 13-14·행 26·탭 28, TimeLoops/PluginChain/ContainerTabs/CurveEditor 동반, LevelMatrix 14pt·셀 24. `minInspectorHeight` 236.
+- [x] LevelMatrixComponent: `outputConnected` false 열 = 헤더 취소선 + 칸 12% 알파(마지막에 적용). FadePanel도 계산. 장치 변경(ChangeListener)·패치 변경(`ProjectDocument::onPatchesChanged`) → `CueInspector::refreshDeviceDependent()`(AsyncUpdater로 합쳐 레벨·페이드 패널만). `audioDeviceStopped` → numDeviceOutputs 2.
+- [x] 코덱스 1차 9건·2차 2건 반영. 배포 0.9.2.
