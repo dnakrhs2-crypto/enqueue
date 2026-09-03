@@ -1,3 +1,4 @@
+#include "app/Links.h"
 #include "ui/MainComponent.h"
 
 #include "ui/SplitLayout.h"
@@ -439,7 +440,7 @@ void MainComponent::getAllCommands (juce::Array<juce::CommandID>& ids)
                     CommandIDs::undo, CommandIDs::redo, CommandIDs::toggleShowMode, CommandIDs::toggleActiveCues, CommandIDs::toggleInspector,
                     CommandIDs::audioSettings, CommandIDs::audioPatches, CommandIDs::pluginManager, CommandIDs::masterInserts,
                     CommandIDs::workspaceSettings,
-                    CommandIDs::checkForUpdates, CommandIDs::showManual, CommandIDs::about });
+                    CommandIDs::checkForUpdates, CommandIDs::showManual, CommandIDs::feedbackChat, CommandIDs::about });
 }
 
 void MainComponent::getCommandInfo (juce::CommandID commandID, juce::ApplicationCommandInfo& result)
@@ -829,6 +830,11 @@ void MainComponent::getCommandInfo (juce::CommandID commandID, juce::Application
             result.addDefaultKeypress (juce::KeyPress::F1Key, ModifierKeys::commandModifier);
             break;
 
+        case CommandIDs::feedbackChat:
+            result.setInfo (ko ("베타 피드백 (오픈채팅)..."), ko ("카카오톡 오픈채팅으로 의견 보내기"), ko ("도움말"), 0);
+            result.setActive (juce::String (Links::feedbackChat).isNotEmpty());
+            break;
+
         case CommandIDs::about:
             result.setInfo (ko ("GoCue 정보"), ko ("버전 정보"), ko ("도움말"), 0);
             break;
@@ -1146,6 +1152,11 @@ bool MainComponent::perform (const InvocationInfo& info)
             manualWindow->open();
             break;
 
+        case CommandIDs::feedbackChat:
+            if (juce::String (Links::feedbackChat).isNotEmpty())
+                juce::URL (Links::feedbackChat).launchInDefaultBrowser();
+            break;
+
         case CommandIDs::about:
             showAbout();
             break;
@@ -1272,6 +1283,7 @@ juce::PopupMenu MainComponent::getMenuForIndex (int topLevelMenuIndex, const juc
 
         case 5:
             menu.addCommandItem (&commands, CommandIDs::showManual);
+            menu.addCommandItem (&commands, CommandIDs::feedbackChat);
             menu.addCommandItem (&commands, CommandIDs::checkForUpdates);
             menu.addSeparator();
             menu.addCommandItem (&commands, CommandIDs::about);

@@ -48,12 +48,20 @@ DisableProgramGroupPage=yes
 Name: "korean"; MessagesFile: "compiler:Languages\Korean.isl"
 Name: "english"; MessagesFile: "compiler:Default.isl"
 
+; localised strings of our own (UTF-8 with BOM); this file itself stays ASCII
+#include "GoCue.messages.iss"
+
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
+; Coupang Partners desktop shortcut: an affiliate link, offered with the disclosure and the way to remove it
+; (the consent the Korean network act asks for). Checked by default like Bandizip's; the shortcut file is written
+; by [Code] so a silent auto-update never recreates one the user deleted.
+Name: "coupang"; Description: "{cm:CoupangTask}"; GroupDescription: "{cm:CoupangGroup}"
 
 [Files]
 Source: "{#SourceDir}\{#AppExe}"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#SourceDir}\WinSparkle.dll"; DestDir: "{app}"; Flags: ignoreversion skipifsourcedoesntexist
+Source: "coupang.ico"; DestDir: "{app}"; Flags: ignoreversion; Tasks: coupang
 
 [Icons]
 Name: "{group}\{#AppName}"; Filename: "{app}\{#AppExe}"
@@ -72,7 +80,42 @@ Root: HKA; Subkey: "Software\Classes\GoCue.Project\shell\open\command"; ValueTyp
 Filename: "{app}\{#AppExe}"; Description: "{cm:LaunchProgram,{#StringChange(AppName, '&', '&&')}}"; Flags: nowait postinstall; Check: not NoRunRequested
 
 [Code]
+const
+  CoupangShortcutUrl = 'https://dnakrhs2-crypto.github.io/gocue/coupang/';
+
 function NoRunRequested: Boolean;
 begin
   Result := ExpandConstant('{param:NORUN|0}') = '1';
+end;
+
+function CoupangShortcutPath: String;
+begin
+  Result := ExpandConstant('{userdesktop}\') + CustomMessage('CoupangShortcutName') + '.url';
+end;
+
+{ The shortcut is written when the user saw the checkbox (an interactive install) or asked for it on the command
+  line (/TASKS=coupang). A silent auto-update remembers the task but must not bring back a deleted shortcut. }
+function CoupangShortcutWanted: Boolean;
+begin
+  Result := WizardIsTaskSelected('coupang')
+    and ((not WizardSilent) or (Pos('coupang', Lowercase(ExpandConstant('{param:TASKS|}'))) > 0));
+end;
+
+procedure CurStepChanged(CurStep: TSetupStep);
+var
+  Path: String;
+begin
+  if (CurStep = ssPostInstall) and CoupangShortcutWanted then
+  begin
+    Path := CoupangShortcutPath;
+    SetIniString('InternetShortcut', 'URL', CoupangShortcutUrl, Path);
+    SetIniString('InternetShortcut', 'IconFile', ExpandConstant('{app}\coupang.ico'), Path);
+    SetIniString('InternetShortcut', 'IconIndex', '0', Path);
+  end;
+end;
+
+procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
+begin
+  if CurUninstallStep = usPostUninstall then
+    DeleteFile(CoupangShortcutPath);
 end;

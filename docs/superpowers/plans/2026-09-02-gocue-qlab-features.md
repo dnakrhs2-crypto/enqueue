@@ -378,3 +378,11 @@ class Scheduler { public: using Clock = std::function<double()>;   // 초
 - [x] 테스트 `tests/OutputLimitTests.cpp`: 가짜 장치 타입(하드웨어 없음)으로 비ASIO 8채널 → 2, ASIO 8채널 → 8, 저장 상태 두 경우, 3-4 선택 후 강제 복귀, 재열기 없음, 장치 없음.
 - [x] 코덱스 1차 리뷰 반영: ①타입 전환 직후 트림 전 블록이 3-8로 나가는 틈 → `audioDeviceAboutToStart`가 타입명으로 `outputChannelLimit` 설정, 콜백이 한도 밖 채널 clear + `numDeviceOutputs`도 한도로. ②비ASIO가 64채널로 먼저 열려야 트림됨(거부 장치는 실패) → `normaliseDeviceState()`가 저장 XML 비ASIO 타입에 `audioDeviceOutChans="11"` → 첫 open부터 1-2, 그래도 실패하면 기본 장치명으로 1-2 재시도. ③재열기 오류 무시 → `enforceOutputLimit()` String 반환, initialise 합침, Main 콜백 AlertWindow. ④재생 중 재-prepare가 SRC 재프라임으로 수십 ms 건너뜀 → `AudioEngine::prepare` 같은 포맷이면 플레이어/체인 prepare 생략. ⑤JUCE `numOutputChansNeeded`가 트림으로 2가 되어 ASIO 복귀 시 2채널 → ASIO+useDefault면 전체 채널로 넓힘. 보류: fallback 후 낡은 XML(인터페이스 잠깐 빠졌을 때 ASIO 선택을 지키는 쪽이 낫다고 판단, `treatAsChosenDevice=false`). 테스트 16개(open 이력·거부 모드·타입 전환·64채널 콜백·XML 라운드트립).
 - [x] 코덱스 2차 리뷰 반영: ①JUCE는 활성 채널 포인터만 0번부터 압축해 넘기므로 비ASIO가 물리 3-4로만 열린 순간엔 1-2로 매핑 불가 → `outputMaskOutOfRange`면 콜백이 전부 무음(큐는 계속 진행), 트림 후 정상. ②타입 전환의 넓은 open 실패는 JUCE가 오류를 버려 장치가 조용히 사라짐 → `enforceOutputLimit`가 타입이 바뀌었는데 장치가 없으면 기본 장치를 1-2로 재시도(같은 타입에서 '없음' 선택은 존중). ③ASIO 넓히기 실패 시 원래 채널로 롤백. ④타입 없는 XML은 장치명으로 타입 판별. 테스트 19개.
+
+## 베타 준비 — 쿠팡 바로가기 설치 옵션 + 피드백 메뉴 (2026-09-03, 미배포)
+- [x] gom 수익화 안: 설치 시 쿠팡 파트너스 바로가기(반디집식 체크박스). 앱 내 광고·광고 제거 9,900원은 반대해서 보류.
+- [x] 리다이렉트 페이지: GitHub Pages `gh-pages` 브랜치 → https://dnakrhs2-crypto.github.io/gocue/coupang/ (meta refresh + JS → 파트너스 간편링크 `link.coupang.com/a/gJIOd2FuJU`, 대가성 문구 표시). letsplax 도메인은 회사 주소라 쓰지 않음(gom).
+- [x] `installer/GoCue.iss`: [Tasks] `coupang`(기본 체크, GroupDescription = 대가성 문구 + 삭제 방법), `coupang.ico`(쿠팡 로고, gom "그대로 써도 됨") 설치, [Code]가 `{userdesktop}\쿠팡.url` 작성 — 대화형 설치이거나 `/TASKS=coupang`일 때만(자동 업데이트 `/SILENT`는 지운 바로가기를 되살리지 않음), 제거 시 삭제. 문자열은 `installer/GoCue.messages.iss`(UTF-8 BOM, `#include`) — GoCue.iss 자체는 ASCII 유지.
+- [x] 검증: ISCC 컴파일 OK, `/VERYSILENT /TASKS=coupang` 설치 → `쿠팡.url`(URL·IconFile·IconIndex) 생성, 제거 → 삭제, 0.8.9 재설치(/TASKS 없음) → 생성 안 됨.
+- [x] 도움말 > "베타 피드백 (오픈채팅)..." 메뉴 (`src/app/Links.h`의 `feedbackChat`, 링크 비어 있으면 비활성) — gom이 오픈카톡 링크 주면 채움.
+- [ ] 코드 서명(인증서 필요), 베타 버전 0.9.0 배포.
