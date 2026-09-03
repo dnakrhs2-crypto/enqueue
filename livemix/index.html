@@ -29,9 +29,9 @@
       <h1>라이브믹스 · 방송용 마이크 VST3 호스트</h1>
       <p class="lead">DAW 없이, ASIO 오디오 인터페이스의 마이크 입력에 VST3 플러그인을 걸어 바로 내보냅니다. 마이크 채널·FX 채널·마스터, 세션 저장, 트레이에서 계속 동작.</p>
       <div class="download">
-        <a class="btn" id="download" href="https://github.com/dnakrhs2-crypto/livemix/releases">
+        <a class="btn" id="download" href="https://github.com/dnakrhs2-crypto/livemix/releases/download/livemix-v0.1.0/LiveMix-Setup-0.1.0.exe">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3a1 1 0 0 1 1 1v9.6l3.3-3.3a1 1 0 1 1 1.4 1.4l-5 5a1 1 0 0 1-1.4 0l-5-5a1 1 0 1 1 1.4-1.4L11 13.6V4a1 1 0 0 1 1-1zM4 18a1 1 0 0 1 1 1v1h14v-1a1 1 0 1 1 2 0v2a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1v-2a1 1 0 0 1 1-1z"/></svg>
-          <span id="download-label">LiveMix 다운로드 (곧 공개)</span>
+          <span id="download-label">LiveMix 0.1.0 다운로드</span>
         </a>
         <p class="meta" id="download-meta">Windows 10/11 64비트 · 설치 파일은 <a href="https://github.com/dnakrhs2-crypto/livemix/releases">GitHub 릴리스</a>에서 받습니다.</p>
       </div>
@@ -83,7 +83,7 @@
 
 <script>
 (function () {
-  fetch('latest.json?rev=0', { cache: 'no-cache' })
+  fetch('latest.json?rev=0.1.0', { cache: 'no-cache' })
     .then(function (r) { return r.ok ? r.json() : null; })
     .then(function (info) {
       if (!info || !info.url || info.url.indexOf('/releases/download/') < 0) return;
