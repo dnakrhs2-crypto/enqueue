@@ -178,6 +178,7 @@ def build_notes_page(site_dir, latest_version):
 <link rel="icon" href="assets/icon.png">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;700&display=swap">
 <link rel="stylesheet" href="style.css">
+<script defer src="https://static.cloudflareinsights.com/beacon.min.js" data-cf-beacon='{"token": "__CF_BEACON_TOKEN__"}'></script>
 </head>
 <body>
 <header class="wrap top">
@@ -199,6 +200,25 @@ def build_notes_page(site_dir, latest_version):
 REPO_FOR_SITE = ""
 
 
+def apply_analytics(pages):
+    """Cloudflare Web Analytics: site/cf-beacon-token.txt holds the beacon token (public, it sits in the page anyway).
+    Empty or missing = the beacon line is dropped from every page."""
+    token_file = ROOT / "site" / "cf-beacon-token.txt"
+    token = token_file.read_text(encoding="utf-8").strip() if token_file.is_file() else ""
+    for page in pages.rglob("*.html"):
+        text = page.read_text(encoding="utf-8")
+        if "__CF_BEACON_TOKEN__" not in text:
+            continue
+        if token:
+            text = text.replace("__CF_BEACON_TOKEN__", token)
+        else:
+            text = "\n".join(line for line in text.split("\n") if "__CF_BEACON_TOKEN__" not in line)
+        page.write_text(text, encoding="utf-8")
+    token_copy = pages / "cf-beacon-token.txt"
+    if token_copy.exists():
+        token_copy.unlink()
+
+
 def deploy_site(repo, latest):
     """Copy site/ plus latest.json and notes.html onto the gh-pages branch and push it."""
     global REPO_FOR_SITE
@@ -218,6 +238,7 @@ def deploy_site(repo, latest):
         (pages / ".nojekyll").write_text("", encoding="utf-8")
         (pages / "latest.json").write_text(json.dumps(latest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
         build_notes_page(pages, latest.get("version", "0.0.0"))
+        apply_analytics(pages)
         run(["git", "add", "-A"], cwd=pages)
         status = run(["git", "status", "--porcelain"], cwd=pages, capture=True)
         if not status.strip():
