@@ -2790,7 +2790,7 @@ void MainComponent::showAbout()
 {
     juce::String text;
     text << "GoCue " << juce::JUCEApplication::getInstance()->getApplicationVersion() << "\n"
-         << ko ("Windows용 오디오 큐 플레이어 (QLab 오디오 기능 부분집합)") << "\n\n"
+         << ko ("Windows용 오디오 큐 플레이어") << "\n\n"
          << "JUCE " << JUCE_MAJOR_VERSION << "." << JUCE_MINOR_VERSION << "." << JUCE_BUILDNUMBER << "\n"
          << ko ("ASIO: ") << (JUCE_ASIO ? ko ("지원") : ko ("미포함 (WASAPI 전용)")) << "\n"
          << ko ("자동 업데이트: ") << (Updater::isAvailable() ? Updater::getAppcastUrl() : ko ("비활성 (빌드 시 appcast 미설정)"));
