@@ -48,12 +48,14 @@ public:
 
     /** The ASIO device list changed (settings / hot-plug): refresh names and pickers. */
     void deviceChanged();
-    /** A message shown in a bar under the top bar, with a close button - never a modal dialog: a modal alert freezes
-        the whole window (no resizing, no mic buttons) until it is dismissed, which is wrong for a live tool. */
-    void showNotice (const juce::String& text, bool error);
+    /** The notice bar under the top bar, with a close button - never a modal dialog: a modal alert freezes the whole
+        window (no resizing, no mic buttons) until it is dismissed, which is wrong for a live tool. Three lines that
+        come and go on their own: the session note (the last open: its failure, or its warnings), the startup note
+        (the ASIO error until a device runs, or the safe-mode note), the save-failure note (until a save succeeds).
+        The close button clears them all. An empty text clears that line. */
+    void setSessionNote (const juce::String& text, bool error);
+    void setStartupNote (const juce::String& text, bool error, bool safeModeNote);
     void hideNotice();
-    /** Adds a line to the notice that is showing (or shows a new one): a startup note must not replace a session warning. */
-    void addNotice (const juce::String& text, bool error);
     void refreshAll();
 
     std::function<void()> onQuitRequested;
@@ -84,7 +86,8 @@ private:
     void updateDeviceNames();
     juce::File defaultSessionFolder() const;
     void showStatus (const juce::String& text, bool error = false);
-    void hideNoticeIf (const juce::String& prefix);   // closes the notice when it is the one that starts so
+    void setSaveError (const juce::String& message);   // the save-failure line (empty = cleared)
+    void refreshNotice();
     CardLayout layoutForWidth (int width) const;
 
     MixDocument& document;
@@ -111,6 +114,9 @@ private:
     std::unique_ptr<juce::ResizableCornerComponent> cornerGrip;   // a visible handle: the frame's own edge is thin (and hard to hit over remote desktop)
     juce::TextButton noticeClose { juce::String::fromUTF8 ("\xE2\x9C\x95") };
     bool noticeVisible = false, noticeIsError = false;
+    juce::String sessionNote, startupNote, saveErrorNote;   // the three lines of the bar (see setSessionNote)
+    bool sessionNoteIsError = false, startupNoteIsError = false, startupNoteIsSafeMode = false;
+    juce::File pendingCommandLineFile;   // a session named while a question was open: opened once the question is answered
     juce::StringArray inputNames, outputNames;
     juce::String statusText;
     double statusUntilMs = 0.0;

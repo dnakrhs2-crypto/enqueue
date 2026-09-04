@@ -484,6 +484,9 @@ void MainComponent::deviceChosen()
 {
     deviceChanged();
 
+    if (startupNote.isNotEmpty() && ! startupNoteIsSafeMode && engine.isDeviceRunning())
+        setStartupNote ({}, false, false);   // the startup "ASIO 장치를 열지 못했습니다" is over: a device runs
+
     if (auto* device = engine.getDeviceManager().getCurrentAudioDevice())
         if (device->getTypeName().containsIgnoreCase ("ASIO"))
             document.setDeviceInfo (device->getName(), device->getCurrentBufferSizeSamples(), device->getCurrentSampleRate());
@@ -521,6 +524,14 @@ void MainComponent::timerCallback()
     if (document.pollPluginEdits())
         lastChangeMs = now;
 
+    // a session named on the command line while a question was open: now that it is answered
+    if (pendingCommandLineFile != juce::File() && juce::Component::getCurrentlyModalComponent() == nullptr)
+    {
+        const auto file = pendingCommandLineFile;
+        pendingCommandLineFile = juce::File();
+        openSession (file);
+    }
+
     // autosave: a while after the last change, when the session has a file
     if (document.isDirty() && document.hasFile() && lastChangeMs > 0.0 && now - lastChangeMs > settings.getAutosaveSeconds() * 1000.0)
     {
@@ -541,34 +552,59 @@ bool MainComponent::autosaveNow()
     if (result.failed())
     {
         showStatus (ko ("자동 저장 실패: ") + result.getErrorMessage(), true);
+        setSaveError (ko ("자동 저장 실패: ") + result.getErrorMessage());
         return false;
     }
 
+    setSaveError ({});
     topBar.refresh();
     return true;
 }
 
-void MainComponent::showNotice (const juce::String& text, bool error)
+void MainComponent::setSessionNote (const juce::String& text, bool error)
 {
-    noticeVisible = true;
-    noticeIsError = error;
-    noticeText.setText (text, false);
+    sessionNote = text;
+    sessionNoteIsError = error;
+    refreshNotice();
+}
+
+void MainComponent::setStartupNote (const juce::String& text, bool error, bool safeModeNote)
+{
+    startupNote = text;
+    startupNoteIsError = error;
+    startupNoteIsSafeMode = safeModeNote;
+    refreshNotice();
+}
+
+void MainComponent::setSaveError (const juce::String& message)
+{
+    if (saveErrorNote == message)
+        return;
+
+    saveErrorNote = message;
+    refreshNotice();
+}
+
+void MainComponent::refreshNotice()
+{
+    juce::StringArray lines;
+
+    if (sessionNote.isNotEmpty())
+        lines.add (sessionNote);
+
+    if (startupNote.isNotEmpty())
+        lines.add (startupNote);
+
+    if (saveErrorNote.isNotEmpty())
+        lines.add (saveErrorNote);
+
+    noticeVisible = ! lines.isEmpty();
+    noticeIsError = (sessionNote.isNotEmpty() && sessionNoteIsError)
+                    || (startupNote.isNotEmpty() && startupNoteIsError)
+                    || saveErrorNote.isNotEmpty();
+    noticeText.setText (lines.joinIntoString ("\n"), false);
     resized();
     repaint();
-}
-
-void MainComponent::addNotice (const juce::String& text, bool error)
-{
-    if (noticeVisible)
-        showNotice (noticeText.getText() + "\n" + text, noticeIsError || error);
-    else
-        showNotice (text, error);
-}
-
-void MainComponent::hideNoticeIf (const juce::String& prefix)
-{
-    if (noticeVisible && noticeText.getText().startsWith (prefix))
-        hideNotice();
 }
 
 void MainComponent::parentHierarchyChanged()
@@ -589,12 +625,11 @@ void MainComponent::parentHierarchyChanged()
 
 void MainComponent::hideNotice()
 {
-    if (! noticeVisible)
-        return;
-
-    noticeVisible = false;
-    resized();
-    repaint();
+    // the close button: every line goes
+    sessionNote.clear();
+    startupNote.clear();
+    saveErrorNote.clear();
+    refreshNotice();
 }
 
 void MainComponent::showStatus (const juce::String& text, bool error)
@@ -631,6 +666,7 @@ void MainComponent::withSessionSecured (std::function<void()> action)
 
         if (result.wasOk())
         {
+            setSaveError ({});
             topBar.refresh();
             action();
             return;
@@ -678,6 +714,8 @@ void MainComponent::newSession()
     withSessionSecured ([this]
     {
         document.newSession();
+        setSessionNote ({}, false);   // the old session's notes do not describe the new one
+        setSaveError ({});
         showStatus (ko ("새 세션"));
     });
 }
@@ -694,11 +732,12 @@ void MainComponent::loadSession (const juce::File& file)
 
     if (result.failed())
     {
-        showNotice (ko ("세션 열기 실패: ") + result.getErrorMessage(), true);
+        setSessionNote (ko ("세션 열기 실패: ") + result.getErrorMessage(), true);
         return;
     }
 
-    hideNotice();
+    setSessionNote ({}, false);   // the previous session's notes; the startup note stays until a device runs
+    setSaveError ({});
     settings.setLastSessionFile (file);
     settings.addRecentSession (file);
     showStatus (ko ("열림: ") + file.getFileName());
@@ -727,7 +766,7 @@ void MainComponent::loadSession (const juce::File& file)
     }
 
     if (! warnings.isEmpty())
-        showNotice (ko ("세션을 열었지만 확인이 필요합니다: ") + warnings.joinIntoString ("\n"), true);
+        setSessionNote (ko ("세션을 열었지만 확인이 필요합니다: ") + warnings.joinIntoString ("\n"), true);
 }
 
 void MainComponent::openSessionDialog()
@@ -754,11 +793,11 @@ bool MainComponent::saveSession()
 
     if (result.failed())
     {
-        showNotice (ko ("저장 실패: ") + result.getErrorMessage(), true);
+        setSaveError (ko ("저장 실패: ") + result.getErrorMessage());
         return false;
     }
 
-    hideNoticeIf (ko ("저장 실패"));
+    setSaveError ({});
     settings.setLastSessionFile (document.getFile());
     settings.addRecentSession (document.getFile());
     showStatus (ko ("저장됨: ") + document.getFile().getFileName());
@@ -798,7 +837,7 @@ void MainComponent::saveSessionAs (std::function<void (bool)> then)
 
         if (result.failed())
         {
-            self.showNotice (ko ("저장 실패: ") + result.getErrorMessage(), true);
+            self.setSaveError (ko ("저장 실패: ") + result.getErrorMessage());
 
             if (then)
                 then (false);
@@ -806,7 +845,7 @@ void MainComponent::saveSessionAs (std::function<void (bool)> then)
             return;
         }
 
-        self.hideNoticeIf (ko ("저장 실패"));
+        self.setSaveError ({});
         self.settings.setLastSessionFile (file);
         self.settings.addRecentSession (file);
         self.showStatus (ko ("저장됨: ") + file.getFileName());
@@ -824,11 +863,16 @@ bool MainComponent::openFromCommandLine (const juce::String& commandLine)
     {
         const auto file = arg.resolveAsFile();
 
-        if (file.existsAsFile() && file.hasFileExtension (MixSession::fileExtension))
-        {
+        if (! file.hasFileExtension (MixSession::fileExtension))
+            continue;
+
+        // a missing file is still the named session: its "파일이 없습니다" notice shows instead of a silent fallback
+        if (juce::Component::getCurrentlyModalComponent() != nullptr)
+            pendingCommandLineFile = file;   // a question (rename, save?) is open: answered first, then the file (timer)
+        else
             openSession (file);
-            return true;
-        }
+
+        return true;
     }
 
     return false;
