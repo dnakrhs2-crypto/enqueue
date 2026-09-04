@@ -88,7 +88,6 @@ target_compile_definitions(GoCueCore INTERFACE
     JUCE_WASAPI=1
     JUCE_DIRECTSOUND=0
     JUCE_USE_MP3AUDIOFORMAT=1
-    JUCE_USE_LAME_AUDIO_FORMAT=1   # the mp3 of a YouTube download is written through the bundled lame.exe
     JUCE_USE_FLAC=1
     JUCE_USE_OGGVORBIS=1
     JUCE_USE_WINDOWS_MEDIA_FORMAT=1

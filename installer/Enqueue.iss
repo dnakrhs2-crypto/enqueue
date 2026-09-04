@@ -70,7 +70,7 @@ Name: "coupang"; Description: "{cm:CoupangTask}"; GroupDescription: "{cm:Coupang
 Source: "{#SourceDir}\{#AppExe}"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#SourceDir}\WinSparkle.dll"; DestDir: "{app}"; Flags: ignoreversion skipifsourcedoesntexist
 Source: "coupang.ico"; DestDir: "{app}"; Flags: ignoreversion; Tasks: coupang
-Source: "{#ToolsDir}\*"; DestDir: "{app}\tools"; Flags: ignoreversion skipifsourcedoesntexist
+Source: "{#ToolsDir}\*"; DestDir: "{app}\tools"; Flags: ignoreversion
 
 [Icons]
 Name: "{group}\{#AppName}"; Filename: "{app}\{#AppExe}"

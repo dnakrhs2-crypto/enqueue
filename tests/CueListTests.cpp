@@ -478,6 +478,35 @@ public:
             expectEquals (names (list), juce::String ("b,H,G,c,a"));
         }
 
+        beginTest ("tree: a move that would nest deeper than maxDepth is refused");
+        {
+            CueList list;
+            int parent = -1;
+
+            for (int i = 0; i < CueList::maxDepth; ++i)   // g0 > g1 > ... > g31: depths 0..31
+            {
+                Cue g = make ("g" + juce::String (i));
+                g.type = CueType::group;
+                parent = parent < 0 ? list.add (g) : list.addIntoGroup (g, parent);
+            }
+
+            expectEquals (list.depthOf (parent), CueList::maxDepth - 1);
+
+            Cue h = make ("H");
+            h.type = CueType::group;
+            const int hi = list.add (h);                    // top level, after the chain
+            const int ci = list.addIntoGroup (make ("c"), hi);
+            expectEquals (list.subtreeDepthBelow (hi), 1);
+            expectEquals (list.subtreeDepthBelow (ci), 0);
+
+            expect (! list.moveSubtreesInto ({ hi }, parent));   // H would sit at 32 and c at 33: refused
+            expect (list.get (hi).parentId.isNull());
+            expect (list.moveSubtreesInto ({ ci }, parent));     // c alone at 32: the limit itself is fine
+            expectEquals (list.depthOf (parent + 1), CueList::maxDepth);   // c sits right after g31, at the limit
+
+            expect (! list.moveSubtrees ({ hi }, parent + 1));   // between-rows into the deepest group: the same limit
+        }
+
         beginTest ("tree: wrapInGroup / ungroup");
         {
             CueList list;

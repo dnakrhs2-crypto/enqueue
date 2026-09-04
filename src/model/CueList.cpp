@@ -33,6 +33,20 @@ int CueList::depthOf (int index) const noexcept
     return depth;
 }
 
+int CueList::subtreeDepthBelow (int root) const noexcept
+{
+    if (! isValidIndex (root))
+        return 0;
+
+    const int base = depthOf (root);
+    int deepest = 0;
+
+    for (int j = root + 1, end = subtreeEnd (root); j < end; ++j)
+        deepest = juce::jmax (deepest, depthOf (j) - base);
+
+    return deepest;
+}
+
 int CueList::parentIndexOf (int index) const noexcept
 {
     if (! isValidIndex (index) || cues[(size_t) index].parentId.isNull())
@@ -663,6 +677,15 @@ bool CueList::moveSubtrees (std::vector<int> indices, int insertIndex)
             break;
         }
 
+    // nothing may end up deeper than maxDepth (sanitiseTree would flatten it, taking neighbours with it)
+    const int parentIndex = newParent.isNull() ? -1 : indexOf (newParent);
+    const int targetDepth = parentIndex < 0 ? 0 : depthOf (parentIndex) + 1;
+
+    for (int i : indices)
+        if (! std::binary_search (indices.begin(), indices.end(), parentIndexOf (i)))   // a root of the moved block
+            if (targetDepth + subtreeDepthBelow (i) > maxDepth)
+                return false;
+
     int before = 0;
 
     for (int i : indices)
@@ -687,6 +710,13 @@ bool CueList::moveSubtreesInto (std::vector<int> indices, int groupIndex)
     for (int i : indices)
         if (i == groupIndex || isDescendantOf (groupIndex, cues[(size_t) i].id))
             return false;   // the group itself, or a group it sits in, cannot go inside it
+
+    const int targetDepth = depthOf (groupIndex) + 1;
+
+    for (int i : indices)
+        if (! std::binary_search (indices.begin(), indices.end(), parentIndexOf (i)))   // a root of the moved block
+            if (targetDepth + subtreeDepthBelow (i) > maxDepth)
+                return false;   // it would nest deeper than the list allows
 
     const int end = subtreeEnd (groupIndex);   // right after the group's last descendant
     int before = 0;

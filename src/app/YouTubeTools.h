@@ -2,8 +2,33 @@
 
 #include <juce_core/juce_core.h>
 
+#include <atomic>
+#include <functional>
+
 namespace gocue
 {
+
+/** Runs a command-line tool with its output read line by line, a deadline and a cancel flag: the tool is ended
+    (TerminateProcess) when the deadline passes or the flag is set, so a caller waiting on it never hangs. The
+    output is stdout and stderr together, utf-8, one callback per line. Windows only (the app is). */
+class ToolProcess
+{
+public:
+    struct Result
+    {
+        bool started = false;      // the program could be launched
+        bool finished = false;     // it ended by itself (exitCode is its own)
+        bool cancelled = false;    // ended by the cancel flag
+        bool timedOut = false;     // ended by the deadline
+        int exitCode = -1;
+    };
+
+    static Result run (const juce::StringArray& arguments, int timeoutMs, const std::atomic<bool>* cancel,
+                       const std::function<void (const juce::String& line)>& onLine);
+
+    /** One argument as it goes on a Windows command line (CommandLineToArgvW rules); unit-tested. */
+    static juce::String quoteArgument (const juce::String& argument);
+};
 
 /** The command-line tools the YouTube download runs on this PC: yt-dlp (fetches the audio), QuickJS (the
     JavaScript runtime yt-dlp needs for YouTube) and LAME (the mp3 encoder). The installer puts them in
@@ -29,11 +54,11 @@ public:
     static juce::String prepare (Paths& paths, const juce::String& appVersion);
 
     /** "2026.08.19" from `yt-dlp --version`; empty when the program cannot run. */
-    static juce::String ytDlpVersion (const juce::File& exe);
+    static juce::String ytDlpVersion (const juce::File& exe, const std::atomic<bool>* cancel = nullptr);
 
     /** Runs yt-dlp's own updater (it replaces its executable). At most once an hour: a later call within the
         hour does nothing. True when the version changed; 'note' says what happened, for the log. */
-    static bool selfUpdateYtDlp (const juce::File& exe, juce::String& note);
+    static bool selfUpdateYtDlp (const juce::File& exe, juce::String& note, const std::atomic<bool>* cancel = nullptr);
 
     static constexpr juce::int64 selfUpdateMinIntervalMs = 60 * 60 * 1000;
 

@@ -792,6 +792,12 @@ juce::var CueTable::getDragSourceDescription (const juce::SparseSet<int>& rowsTo
     if (! editable || rowsToDescribe.isEmpty())
         return {};
 
+    draggedIds.clear();   // what moves is what the drag started with, not the selection at the drop
+
+    for (int i = 0; i < rowsToDescribe.size(); ++i)
+        if (const int index = modelIndex (rowsToDescribe[i]); cues.isValidIndex (index))
+            draggedIds.push_back (cues.get (index).id);
+
     if (onStatus)
         onStatus (ko ("행 드래그 시작: ") + juce::String (rowsToDescribe.size()) + ko ("개 (놓을 자리에 선이 표시됩니다)"));
 
@@ -1174,6 +1180,17 @@ bool CueTable::isInterestedInDragSource (const SourceDetails& details)
     return editable && details.description == rowDragDescription;
 }
 
+std::vector<int> CueTable::draggedIndices() const
+{
+    std::vector<int> rows;
+
+    for (const auto& id : draggedIds)
+        if (const int index = cues.indexOf (id); index >= 0)
+            rows.push_back (index);
+
+    return rows;
+}
+
 int CueTable::rowDragGroupAtY (int y) const
 {
     const int group = groupAtY (y);
@@ -1181,7 +1198,7 @@ int CueTable::rowDragGroupAtY (int y) const
     if (group < 0)
         return -1;
 
-    for (int s : cues.getSelectedIndices())
+    for (int s : draggedIndices())
         if (s == group || cues.isDescendantOf (group, cues.get (s).id))
             return -1;
 
@@ -1226,9 +1243,14 @@ void CueTable::itemDropped (const SourceDetails& details)
     rowDragOver = false;
     const int group = rowDragGroupAtY (details.localPosition.y);   // the drop position itself, not the last hover
     const int index = insertionIndexForY (details.localPosition.y);
+    const auto rows = draggedIndices();
     rowDropIndex = -1;
     dropGroupIndex = -1;
+    draggedIds.clear();
     repaint();
+
+    if (rows.empty())
+        return;   // the dragged cues are gone (the list changed under the drag)
 
     if (group >= 0)
     {
@@ -1236,7 +1258,7 @@ void CueTable::itemDropped (const SourceDetails& details)
             onStatus (ko ("행 이동: 그룹 '") + cues.get (group).name + ko ("' 안으로"));
 
         if (onMoveRowsInto)
-            onMoveRowsInto (cues.getSelectedIndices(), group);
+            onMoveRowsInto (rows, group);
 
         return;
     }
@@ -1245,7 +1267,7 @@ void CueTable::itemDropped (const SourceDetails& details)
         onStatus (ko ("행 이동: ") + juce::String (index) + ko ("번째 자리로"));
 
     if (onMoveRows)
-        onMoveRows (cues.getSelectedIndices(), index);
+        onMoveRows (rows, index);
 }
 
 } // namespace gocue

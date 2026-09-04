@@ -11,8 +11,14 @@ namespace
 {
     juce::String k (const char* utf8) { return juce::String::fromUTF8 (utf8); }
 
-    constexpr int maxKeptLines = 200;         // of yt-dlp's output, for the log
+    constexpr int maxKeptLines = 200;              // of yt-dlp's output, for the log
     constexpr int ytDlpTimeoutMs = 30 * 60 * 1000;
+    constexpr int lameTimeoutMs = 20 * 60 * 1000;
+
+    bool isVideoId (const juce::String& s)
+    {
+        return s.length() >= 8 && s.length() <= 16 && s.containsOnly ("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-");
+    }
 }
 
 //==============================================================================
@@ -24,7 +30,7 @@ YouTubeDownloader::YouTubeDownloader (juce::String version)
 YouTubeDownloader::~YouTubeDownloader()
 {
     cancel();
-    stopThread (20000);
+    stopThread (30000);   // the tool running at that moment is ended by the cancel flag, so the thread returns soon
     cancelPendingUpdate();
 }
 
@@ -33,7 +39,8 @@ bool YouTubeDownloader::start (const juce::String& url, const juce::File& dir)
     if (busy.exchange (true))
         return false;
 
-    stopThread (20000);   // the previous job's thread has finished its work: this only joins it
+    stopThread (30000);   // the previous job's thread has finished its work: this only joins it
+    cancelRequested.store (false);
     videoUrl = url;
     directory = dir;
     startThread();
@@ -42,13 +49,9 @@ bool YouTubeDownloader::start (const juce::String& url, const juce::File& dir)
 
 void YouTubeDownloader::cancel()
 {
+    cancelRequested.store (true);
     signalThreadShouldExit();
     notify();
-
-    const juce::ScopedLock sl (lock);
-
-    if (activeProcess != nullptr)
-        activeProcess->kill();
 }
 
 //==============================================================================
@@ -86,16 +89,22 @@ void YouTubeDownloader::handleAsyncUpdate()
 juce::StringArray YouTubeDownloader::ytDlpArguments (const YouTubeTools::Paths& tools, const juce::String& url, const juce::File& outputDirectory)
 {
     return { tools.ytDlp.getFullPathName(),
+             "--ignore-config",                                                            // no yt-dlp.conf of the user's changing what we expect
              "--no-js-runtimes", "--js-runtimes", "quickjs:" + tools.qjs.getFullPathName(),   // the bundled runtime, not a system one
-             "--no-playlist",
+             "--no-playlist", "--playlist-items", "1",                                       // one video, whatever the link also names
              "--encoding", "utf-8",
              "--newline", "--progress",
              "--socket-timeout", "30", "--retries", "3",
              "--windows-filenames", "--trim-filenames", "150",
-             "-f", "bestaudio[ext=m4a]/bestaudio[acodec^=mp4a]/bestaudio",
+             "-f", "bestaudio[ext=m4a]/bestaudio[acodec^=mp4a]",                             // AAC only: what the app can decode
              "-o", outputDirectory.getChildFile ("%(title)s.%(ext)s").getFullPathName(),
-             "--print", "after_move:filepath",   // the last line: where the file ended up
+             "--print", "after_move:filepath",                                                // the last line: where the file ended up
              url };
+}
+
+juce::StringArray YouTubeDownloader::lameArguments (const juce::File& lame, const juce::File& wav, const juce::File& mp3)
+{
+    return { lame.getFullPathName(), "--quiet", "--cbr", "-b", "320", wav.getFullPathName(), mp3.getFullPathName() };
 }
 
 double YouTubeDownloader::parseProgress (const juce::String& line)
@@ -125,40 +134,50 @@ YouTubeDownloader::Failure YouTubeDownloader::classifyFailure (const juce::Strin
 
     const auto all = lines.joinIntoString ("\n");
 
-    struct Known { const char* needle; const char* message; bool aboutTheVideo; };
+    struct Known { const char* needle; const char* message; Failure::Kind kind; };
     static const Known known[] = {
-        { "Sign in to confirm",          "유튜브가 로그인(봇 확인)을 요구합니다. 잠시 뒤 다시 하거나 다른 네트워크에서 시도해 주세요.", false },
-        { "Private video",               "비공개 영상입니다.", true },
-        { "Video unavailable",           "볼 수 없는 영상입니다 (삭제되었거나 이 지역에서 막혀 있습니다).", true },
-        { "This video is not available", "볼 수 없는 영상입니다 (삭제되었거나 이 지역에서 막혀 있습니다).", true },
-        { "members-only",                "멤버십 전용 영상입니다.", true },
-        { "age",                         "연령 확인이 필요한 영상이라 받을 수 없습니다.", true },
-        { "Requested format is not available", "받을 수 있는 오디오 형식이 없는 영상입니다.", true },
-        { "is not a valid URL",          "올바른 주소가 아닙니다.", true },
-        { "Unsupported URL",             "지원하지 않는 주소입니다.", true },
-        { "is a live event",             "아직 시작하지 않은 실시간 방송입니다.", true },
-        { "No supported JavaScript runtime", "다운로드 도구(JS 런타임)가 없거나 손상되었습니다.", false },
-        { "getaddrinfo failed",          "인터넷에 연결할 수 없습니다.", false },
-        { "Unable to download webpage",  "유튜브에 연결하지 못했습니다. 인터넷 연결을 확인해 주세요.", false },
+        { "Sign in to confirm",                     "유튜브가 로그인(봇 확인)을 요구합니다. 잠시 뒤 다시 하거나 다른 네트워크에서 시도해 주세요.", Failure::Kind::tool },
+        { "Private video",                          "비공개 영상입니다.", Failure::Kind::video },
+        { "Video unavailable",                      "볼 수 없는 영상입니다 (삭제되었거나 이 지역에서 막혀 있습니다).", Failure::Kind::video },
+        { "This video is not available",            "볼 수 없는 영상입니다 (삭제되었거나 이 지역에서 막혀 있습니다).", Failure::Kind::video },
+        { "members-only",                           "멤버십 전용 영상입니다.", Failure::Kind::video },
+        { "Requested format is not available",      "받을 수 있는 오디오(AAC) 형식이 없는 영상입니다.", Failure::Kind::video },
+        { "is not a valid URL",                     "올바른 주소가 아닙니다.", Failure::Kind::video },
+        { "Unsupported URL",                        "지원하지 않는 주소입니다.", Failure::Kind::video },
+        { "is a live event",                        "아직 시작하지 않은 실시간 방송입니다.", Failure::Kind::video },
+        { "No supported JavaScript runtime",        "다운로드 도구(JS 런타임)가 없거나 손상되었습니다.", Failure::Kind::tool },
+        { "getaddrinfo failed",                     "인터넷에 연결할 수 없습니다.", Failure::Kind::network },
+        { "Temporary failure in name resolution",   "인터넷에 연결할 수 없습니다.", Failure::Kind::network },
+        { "Network is unreachable",                 "인터넷에 연결할 수 없습니다.", Failure::Kind::network },
+        { "Errno 11001",                            "인터넷에 연결할 수 없습니다.", Failure::Kind::network },
+        { "Unable to download webpage",             "유튜브에 연결하지 못했습니다. 인터넷 연결을 확인해 주세요.", Failure::Kind::network },
+        { "Unable to download API page",            "유튜브에 연결하지 못했습니다. 인터넷 연결을 확인해 주세요.", Failure::Kind::network },
+        { "timed out",                              "유튜브 응답이 없습니다 (시간 초과). 인터넷 연결을 확인해 주세요.", Failure::Kind::network },
+        { "Connection reset",                       "유튜브와 연결이 끊겼습니다. 다시 시도해 주세요.", Failure::Kind::network },
+        { "Remote end closed connection",           "유튜브와 연결이 끊겼습니다. 다시 시도해 주세요.", Failure::Kind::network },
     };
 
     for (const auto& item : known)
     {
-        // "age" alone is too short to search for anywhere: only in an ERROR line, as a word
-        const bool ageCase = juce::String (item.needle) == "age";
-        const bool hit = ageCase ? (lastError.containsIgnoreCase ("age-restricted") || lastError.containsIgnoreCase ("age verification") || lastError.containsIgnoreCase ("confirm your age"))
-                                 : all.containsIgnoreCase (item.needle);
-
-        if (hit)
+        if (all.containsIgnoreCase (item.needle))
         {
             f.message = k (item.message);
-            f.aboutTheVideo = item.aboutTheVideo;
+            f.kind = item.kind;
             return f;
         }
     }
 
+    // an age check reads differently across versions: only an ERROR line about it counts
+    if (lastError.containsIgnoreCase ("age-restricted") || lastError.containsIgnoreCase ("age verification") || lastError.containsIgnoreCase ("confirm your age"))
+    {
+        f.message = k ("연령 확인이 필요한 영상이라 받을 수 없습니다.");
+        f.kind = Failure::Kind::video;
+        return f;
+    }
+
     f.message = lastError.isNotEmpty() ? k ("유튜브에서 받지 못했습니다: ") + lastError.fromFirstOccurrenceOf ("ERROR:", false, false).trim()
                                        : k ("유튜브에서 받지 못했습니다.");
+    f.kind = Failure::Kind::tool;
     return f;
 }
 
@@ -175,47 +194,52 @@ juce::String YouTubeDownloader::normaliseUrl (const juce::String& text)
     if (! (url.startsWithIgnoreCase ("https://") || url.startsWithIgnoreCase ("http://")))
         return {};
 
-    const auto host = juce::URL (url).getDomain().toLowerCase();
-    const bool youtube = host == "youtube.com" || host.endsWith (".youtube.com")
-                      || host == "youtu.be" || host.endsWith (".youtu.be");
+    const juce::URL parsed (url);
+    const auto host = parsed.getDomain().toLowerCase();
+    const bool youtube = host == "youtube.com" || host.endsWith (".youtube.com");
+    const bool shortHost = host == "youtu.be" || host.endsWith (".youtu.be");
 
-    return youtube ? url : juce::String();
+    if (! youtube && ! shortHost)
+        return {};
+
+    // one video: a watch link with v=, youtu.be/<id>, or /shorts|live|embed|v/<id> - not a playlist or a channel
+    const auto path = parsed.getSubPath (false);
+    const auto segments = juce::StringArray::fromTokens (path, "/", {});
+    juce::StringArray parts;
+
+    for (const auto& s : segments)
+        if (s.isNotEmpty())
+            parts.add (s);
+
+    if (shortHost)
+        return parts.size() >= 1 && isVideoId (parts[0].upToFirstOccurrenceOf ("?", false, false)) ? url : juce::String();
+
+    if (parts.size() >= 1 && parts[0].startsWithIgnoreCase ("watch"))
+    {
+        const auto names = parsed.getParameterNames();
+        const auto values = parsed.getParameterValues();
+        const int v = names.indexOf ("v");
+        return v >= 0 && isVideoId (values[v]) ? url : juce::String();
+    }
+
+    if (parts.size() >= 2)
+    {
+        const auto kind = parts[0].toLowerCase();
+
+        if (kind == "shorts" || kind == "live" || kind == "embed" || kind == "v")
+            return isVideoId (parts[1].upToFirstOccurrenceOf ("?", false, false)) ? url : juce::String();
+    }
+
+    return {};
 }
 
 //==============================================================================
-juce::File YouTubeDownloader::runYtDlp (const YouTubeTools::Paths& tools, const juce::File& workDirectory, int& exitCode, juce::StringArray& lines)
+juce::File YouTubeDownloader::runYtDlp (const YouTubeTools::Paths& tools, const juce::File& workDirectory, ToolProcess::Result& outcome, juce::StringArray& lines)
 {
-    exitCode = -1;
     lines.clear();
-    juce::ChildProcess process;
-
-    {
-        const juce::ScopedLock sl (lock);
-
-        if (threadShouldExit())
-            return {};
-
-        activeProcess = &process;
-    }
-
-    struct Unregister
-    {
-        YouTubeDownloader& owner;
-        ~Unregister() { const juce::ScopedLock sl (owner.lock); owner.activeProcess = nullptr; }
-    } unregister { *this };
-
-    if (! process.start (ytDlpArguments (tools, videoUrl, workDirectory), juce::ChildProcess::wantStdOut | juce::ChildProcess::wantStdErr))
-    {
-        lines.add ("ERROR: could not start yt-dlp");
-        return {};
-    }
-
-    juce::MemoryBlock partial;
-    const auto deadline = juce::Time::currentTimeMillis() + ytDlpTimeoutMs;
-    char buffer[4096];
     juce::File lastFile;
 
-    const auto takeLine = [&] (const juce::String& raw)
+    outcome = ToolProcess::run (ytDlpArguments (tools, videoUrl, workDirectory), ytDlpTimeoutMs, &cancelRequested, [&] (const juce::String& raw)
     {
         const auto line = raw.trim();
 
@@ -232,54 +256,12 @@ juce::File YouTubeDownloader::runYtDlp (const YouTubeTools::Paths& tools, const 
 
         if (juce::File::isAbsolutePath (line) && juce::File (line).existsAsFile())
             lastFile = juce::File (line);   // --print after_move:filepath
-    };
+    });
 
-    for (;;)
-    {
-        const int n = process.readProcessOutput (buffer, (int) sizeof (buffer));
+    if (! outcome.started)
+        lines.add ("ERROR: could not start yt-dlp");
 
-        if (n > 0)
-        {
-            partial.append (buffer, (size_t) n);
-
-            // whole lines out of the accumulated bytes (utf-8; a line may arrive in pieces)
-            for (;;)
-            {
-                const auto* data = (const char*) partial.getData();
-                const auto size = partial.getSize();
-                size_t cut = 0;
-
-                while (cut < size && data[cut] != '\n' && data[cut] != '\r')
-                    ++cut;
-
-                if (cut >= size)
-                    break;
-
-                takeLine (juce::String::fromUTF8 (data, (int) cut));
-                partial.removeSection (0, cut + 1);
-            }
-        }
-        else if (! process.isRunning())
-        {
-            break;
-        }
-        else
-        {
-            juce::Thread::sleep (30);
-        }
-
-        if (threadShouldExit() || juce::Time::currentTimeMillis() > deadline)
-        {
-            process.kill();
-            break;
-        }
-    }
-
-    if (partial.getSize() > 0)
-        takeLine (juce::String::fromUTF8 ((const char*) partial.getData(), (int) partial.getSize()));
-
-    exitCode = (int) process.getExitCode();
-    return lastFile;
+    return outcome.finished && outcome.exitCode == 0 ? lastFile : juce::File();
 }
 
 juce::String YouTubeDownloader::convertToMp3 (const juce::File& source, const juce::File& target, const juce::File& lame)
@@ -295,65 +277,86 @@ juce::String YouTubeDownloader::convertToMp3 (const juce::File& source, const ju
     if (reader == nullptr)
         return k ("받은 오디오를 읽을 수 없습니다 (") + source.getFileExtension() + ")";
 
-    juce::LAMEEncoderAudioFormat encoder (lame);
-    const int quality = encoder.getQualityOptions().indexOf ("320 Kb/s CBR");
+    if (reader->numChannels < 1 || reader->numChannels > 2)
+        return k ("채널이 ") + juce::String ((int) reader->numChannels) + k ("개인 오디오는 지원하지 않습니다 (모노·스테레오만).");
 
-    if (quality < 0)
-        return k ("mp3 인코더 설정을 찾지 못했습니다.");
+    if (reader->lengthInSamples <= 0)
+        return k ("받은 오디오가 비어 있습니다.");
 
-    const int channels = juce::jlimit (1, 2, (int) reader->numChannels);
+    // 1. the decoded audio as a 16-bit WAV next to the source (the work folder, deleted afterwards)
+    const auto wav = source.getSiblingFile (source.getFileNameWithoutExtension() + ".decoded.wav");
+    wav.deleteFile();
+    const int channels = (int) reader->numChannels;
+
+    {
+        auto stream = std::make_unique<juce::FileOutputStream> (wav);
+
+        if (! stream->openedOk())
+            return k ("임시 파일을 쓸 수 없습니다: ") + wav.getFullPathName();
+
+        juce::WavAudioFormat wavFormat;
+        std::unique_ptr<juce::OutputStream> out = std::move (stream);
+        auto writer = wavFormat.createWriterFor (out, juce::AudioFormatWriterOptions().withSampleRate (reader->sampleRate)
+                                                                                     .withNumChannels (channels)
+                                                                                     .withBitsPerSample (16));
+
+        if (writer == nullptr)
+            return k ("임시 WAV를 만들지 못했습니다.");
+
+        const juce::int64 total = reader->lengthInSamples;
+        juce::AudioBuffer<float> block (channels, 16384);
+        juce::int64 position = 0;
+
+        while (position < total)
+        {
+            if (cancelRequested.load())
+                return k ("취소");
+
+            const int n = (int) juce::jmin ((juce::int64) block.getNumSamples(), total - position);
+
+            if (! reader->read (&block, 0, n, position, true, true))
+                return k ("받은 오디오를 끝까지 읽지 못했습니다 (파일이 손상되었을 수 있습니다).");
+
+            if (! writer->writeFromAudioSampleBuffer (block, 0, n))
+                return k ("임시 WAV를 쓰는 중 오류가 났습니다.");
+
+            position += n;
+            report (Stage::converting, 0.5 * (double) position / (double) total, k ("디코딩 중 ") + juce::String ((int) (50 * position / total)) + "%");
+        }
+
+        writer->flush();
+    }
+
+    // 2. LAME: cancellable like yt-dlp, the mp3 into a .part file first
+    const auto part = target.getSiblingFile (target.getFileName() + ".part");
+    part.deleteFile();
+    report (Stage::converting, 0.5, k ("mp3(320 kbps)로 변환 중..."));
+    const auto outcome = ToolProcess::run (lameArguments (lame, wav, part), lameTimeoutMs, &cancelRequested, nullptr);
+    wav.deleteFile();
+
+    if (outcome.cancelled)
+    {
+        part.deleteFile();
+        return k ("취소");
+    }
+
+    if (! outcome.started || ! outcome.finished || outcome.exitCode != 0 || ! part.existsAsFile() || part.getSize() < 1024)
+    {
+        part.deleteFile();
+        return ! outcome.started ? k ("mp3 인코더(lame.exe)를 실행할 수 없습니다: ") + lame.getFullPathName()
+             : outcome.timedOut ? k ("mp3 변환이 너무 오래 걸려 중단했습니다.")
+                                : k ("mp3 변환에 실패했습니다 (LAME 오류 ") + juce::String (outcome.exitCode) + ").";
+    }
+
     target.deleteFile();
-    auto fileStream = std::make_unique<juce::FileOutputStream> (target);
 
-    if (! fileStream->openedOk())
-        return k ("파일을 쓸 수 없습니다: ") + target.getFullPathName();
-
-    std::unique_ptr<juce::OutputStream> out = std::move (fileStream);
-    auto writer = encoder.createWriterFor (out, juce::AudioFormatWriterOptions().withSampleRate (reader->sampleRate)
-                                                                                    .withNumChannels (channels)
-                                                                                    .withBitsPerSample (16)
-                                                                                    .withQualityOptionIndex (quality));
-
-    if (writer == nullptr)
-        return k ("mp3 인코더를 시작하지 못했습니다: ") + lame.getFullPathName();
-
-    const juce::int64 total = juce::jmax ((juce::int64) 1, reader->lengthInSamples);
-    juce::AudioBuffer<float> block (channels, 16384);
-    juce::int64 position = 0;
-
-    while (position < reader->lengthInSamples)
+    if (! part.moveFileTo (target))
     {
-        if (threadShouldExit())
-        {
-            writer.reset();
-            target.deleteFile();
-            return k ("취소");
-        }
-
-        const int n = (int) juce::jmin ((juce::int64) block.getNumSamples(), reader->lengthInSamples - position);
-
-        if (! reader->read (&block, 0, n, position, true, true))
-            break;
-
-        if (! writer->writeFromAudioSampleBuffer (block, 0, n))
-        {
-            writer.reset();
-            target.deleteFile();
-            return k ("mp3를 쓰는 중 오류가 났습니다.");
-        }
-
-        position += n;
-        report (Stage::converting, (double) position / (double) total, k ("mp3(320 kbps)로 변환 중 ") + juce::String ((int) (100 * position / total)) + "%");
+        part.deleteFile();
+        return k ("파일을 저장하지 못했습니다: ") + target.getFullPathName();
     }
 
-    writer.reset();   // runs LAME on the decoded audio and writes the mp3 into the file
-
-    if (! target.existsAsFile() || target.getSize() < 1024)
-    {
-        target.deleteFile();
-        return k ("mp3 변환에 실패했습니다 (LAME 실행 실패).");
-    }
-
+    report (Stage::converting, 1.0, k ("변환 완료"));
     return {};
 }
 
@@ -386,7 +389,10 @@ void YouTubeDownloader::run()
         return;
     }
 
-    // 2. yt-dlp, with one more try after a self-update when the tool (not the video) is the problem
+    if (cancelRequested.load())
+        return cancelled();
+
+    // 2. yt-dlp, with one more try after a self-update when the tool (not the video, not the network) is the problem
     const auto work = juce::File::getSpecialLocation (juce::File::tempDirectory)
                           .getChildFile ("Enqueue-youtube").getChildFile (juce::String::toHexString (juce::Random::getSystemRandom().nextInt64()));
     work.createDirectory();
@@ -403,23 +409,30 @@ void YouTubeDownloader::run()
     for (int attempt = 0; attempt < 2; ++attempt)
     {
         report (Stage::fetching, -1.0, k ("유튜브에서 받는 중..."));
-        int exitCode = -1;
-        audio = runYtDlp (tools, work, exitCode, lines);
+        ToolProcess::Result outcome;
+        audio = runYtDlp (tools, work, outcome, lines);
 
-        if (threadShouldExit())
+        if (outcome.cancelled || cancelRequested.load())
             return cancelled();
 
-        if (exitCode == 0 && audio.existsAsFile())
+        if (audio.existsAsFile())
             break;
 
         audio = {};
+
+        if (outcome.timedOut)
+        {
+            fail (k ("유튜브에서 받는 데 너무 오래 걸려 중단했습니다 (30분)."));
+            return;
+        }
+
         const auto failure = classifyFailure (lines);
         juce::StringArray tail;   // yt-dlp's last words, for the log
 
         for (int i = juce::jmax (0, lines.size() - 8); i < lines.size(); ++i)
             tail.add (lines[i]);
 
-        if (attempt == 1 || failure.aboutTheVideo)
+        if (attempt == 1 || failure.kind != Failure::Kind::tool)
         {
             fail (failure.message, tail.joinIntoString ("\n"));
             return;
@@ -427,36 +440,31 @@ void YouTubeDownloader::run()
 
         report (Stage::updatingTool, -1.0, k ("유튜브 쪽이 바뀌었을 수 있어 yt-dlp를 갱신하는 중..."));
         juce::String note;
+        const bool updated = YouTubeTools::selfUpdateYtDlp (tools.ytDlp, note, &cancelRequested);
 
-        if (! YouTubeTools::selfUpdateYtDlp (tools.ytDlp, note))
+        if (cancelRequested.load())
+            return cancelled();
+
+        if (! updated)
         {
             fail (failure.message, tail.joinIntoString ("\n") + "\n" + note);
             return;
         }
 
         lines.clear();
-
-        if (threadShouldExit())
-            return cancelled();
     }
 
     // 3. the mp3
     const auto target = directory.getChildFile (audio.getFileNameWithoutExtension() + ".mp3").getNonexistentSibling (true);
-    report (Stage::converting, 0.0, k ("mp3(320 kbps)로 변환 중..."));
+    report (Stage::converting, 0.0, k ("변환 준비 중..."));
 
     if (const auto error = convertToMp3 (audio, target, tools.lame); error.isNotEmpty())
     {
-        if (threadShouldExit())
+        if (cancelRequested.load())
             return cancelled();
 
         fail (error);
         return;
-    }
-
-    if (threadShouldExit())
-    {
-        target.deleteFile();
-        return cancelled();
     }
 
     report (Stage::done, 1.0, k ("완료: ") + target.getFileName(), {}, target);

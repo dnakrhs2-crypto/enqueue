@@ -158,6 +158,8 @@ private:
     std::unique_ptr<CellEditor> cellEditor;
     bool dragOver = false;
     int dropGroupIndex = -1;   // a file or row drag hovering a group row: what is dropped joins that group
+    std::vector<juce::Uuid> draggedIds;   // the rows a row drag started with (the selection may change under it)
+    std::vector<int> draggedIndices() const;
     bool rowDragOver = false;
     int rowDropIndex = -1;
     bool syncingSelection = false;

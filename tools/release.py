@@ -402,6 +402,13 @@ def main():
     iscc = find_iscc()
     if iscc is None:
         sys.exit("ISCC.exe not found (install Inno Setup or set ISCC)")
+    if APP["name"] == "Enqueue":
+        # the YouTube download runs on the bundled tools: an installer without them would ship a dead feature
+        required = ["yt-dlp.exe", "qjs.exe", "lame.exe", "libsndfile-1.dll", "LICENSES.txt"]
+        missing = [f for f in required if not os.path.isfile(os.path.join(args.tools_dir, f))]
+        if missing:
+            sys.exit("Enqueue needs the YouTube download tools in --tools-dir (%s): missing %s" % (args.tools_dir, ", ".join(missing)))
+
     installer = make_installer(iscc, version, source_dir, output_dir, args.tools_dir if APP["name"] == "Enqueue" else "")
 
     tool = find_winsparkle_tool(args.winsparkle_dir)

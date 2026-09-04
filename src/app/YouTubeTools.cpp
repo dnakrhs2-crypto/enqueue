@@ -1,5 +1,12 @@
 #include "app/YouTubeTools.h"
 
+#include <string>
+#include <vector>
+
+#if JUCE_WINDOWS
+ #include <windows.h>
+#endif
+
 namespace gocue
 {
 
@@ -9,50 +16,195 @@ namespace
 
     const char* const toolNames[] = { "yt-dlp.exe", "qjs.exe", "lame.exe", "libsndfile-1.dll" };   // lame needs the dll
 
-    /** Runs a program and returns its output (stdout + stderr), waiting at most 'timeoutMs'. */
-    juce::String runAndRead (const juce::StringArray& args, int timeoutMs, bool* finished = nullptr)
+    /** Splits the bytes collected so far into whole lines (\\n or \\r), keeping the unfinished tail. */
+    void takeLines (juce::MemoryBlock& partial, bool flushTail, const std::function<void (const juce::String&)>& onLine)
     {
-        juce::ChildProcess process;
-
-        if (! process.start (args, juce::ChildProcess::wantStdOut | juce::ChildProcess::wantStdErr))
-        {
-            if (finished != nullptr)
-                *finished = false;
-
-            return {};
-        }
-
-        juce::MemoryOutputStream collected;
-        const auto deadline = juce::Time::currentTimeMillis() + timeoutMs;
-        char buffer[4096];
-
         for (;;)
         {
-            const int n = process.readProcessOutput (buffer, (int) sizeof (buffer));
+            const auto* data = (const char*) partial.getData();
+            const auto size = partial.getSize();
+            size_t cut = 0;
 
-            if (n > 0)
-                collected.write (buffer, (size_t) n);
-            else if (! process.isRunning())
+            while (cut < size && data[cut] != '\n' && data[cut] != '\r')
+                ++cut;
+
+            if (cut >= size)
                 break;
-            else
-                juce::Thread::sleep (20);
 
-            if (juce::Time::currentTimeMillis() > deadline)
+            if (cut > 0 && onLine)
+                onLine (juce::String::fromUTF8 (data, (int) cut));
+
+            partial.removeSection (0, cut + 1);
+        }
+
+        if (flushTail && partial.getSize() > 0)
+        {
+            if (onLine)
+                onLine (juce::String::fromUTF8 ((const char*) partial.getData(), (int) partial.getSize()));
+
+            partial.reset();
+        }
+    }
+
+    /** Runs a tool and returns its whole output; 'finished' says whether it ended by itself. */
+    juce::String runAndRead (const juce::StringArray& args, int timeoutMs, const std::atomic<bool>* cancel, bool* finished = nullptr)
+    {
+        juce::String collected;
+        const auto result = ToolProcess::run (args, timeoutMs, cancel, [&collected] (const juce::String& line) { collected << line << '\n'; });
+
+        if (finished != nullptr)
+            *finished = result.finished;
+
+        return collected;
+    }
+}
+
+//==============================================================================
+juce::String ToolProcess::quoteArgument (const juce::String& argument)
+{
+    if (argument.isNotEmpty() && ! argument.containsAnyOf (" \t\""))
+        return argument;
+
+    juce::String out ("\"");
+    int backslashes = 0;
+
+    for (auto c : argument)
+    {
+        if (c == '\\')
+        {
+            ++backslashes;
+            continue;
+        }
+
+        if (c == '"')
+        {
+            out << juce::String::repeatedString ("\\", backslashes * 2 + 1) << '"';   // the backslashes before a quote double, the quote escapes
+            backslashes = 0;
+            continue;
+        }
+
+        out << juce::String::repeatedString ("\\", backslashes) << juce::String::charToString (c);
+        backslashes = 0;
+    }
+
+    out << juce::String::repeatedString ("\\", backslashes * 2) << '"';   // backslashes before the closing quote double
+    return out;
+}
+
+ToolProcess::Result ToolProcess::run (const juce::StringArray& arguments, int timeoutMs, const std::atomic<bool>* cancel,
+                                      const std::function<void (const juce::String&)>& onLine)
+{
+    Result result;
+
+   #if JUCE_WINDOWS
+    juce::String commandLine;
+
+    for (int i = 0; i < arguments.size(); ++i)
+    {
+        if (i > 0)
+            commandLine << ' ';
+
+        commandLine << quoteArgument (arguments[i]);
+    }
+
+    SECURITY_ATTRIBUTES inheritable = {};
+    inheritable.nLength = sizeof (inheritable);
+    inheritable.bInheritHandle = TRUE;
+
+    HANDLE readPipe = nullptr, writePipe = nullptr;
+
+    if (! CreatePipe (&readPipe, &writePipe, &inheritable, 0))
+        return result;
+
+    SetHandleInformation (readPipe, HANDLE_FLAG_INHERIT, 0);   // the child gets the write end only
+    HANDLE nul = CreateFileW (L"NUL", GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, &inheritable, OPEN_EXISTING, 0, nullptr);
+
+    STARTUPINFOW startup = {};
+    startup.cb = sizeof (startup);
+    startup.dwFlags = STARTF_USESTDHANDLES;
+    startup.hStdInput = nul;
+    startup.hStdOutput = writePipe;
+    startup.hStdError = writePipe;
+    PROCESS_INFORMATION process = {};
+
+    std::wstring wide (commandLine.toWideCharPointer());
+    std::vector<wchar_t> command (wide.begin(), wide.end());
+    command.push_back (0);
+
+    const BOOL created = CreateProcessW (nullptr, command.data(), nullptr, nullptr, TRUE,
+                                         CREATE_NO_WINDOW | CREATE_UNICODE_ENVIRONMENT, nullptr, nullptr, &startup, &process);
+    CloseHandle (writePipe);   // the parent's copy: the pipe breaks when the child is gone
+
+    if (nul != INVALID_HANDLE_VALUE)
+        CloseHandle (nul);
+
+    if (! created)
+    {
+        CloseHandle (readPipe);
+        return result;
+    }
+
+    result.started = true;
+    CloseHandle (process.hThread);
+
+    const auto deadline = juce::Time::currentTimeMillis() + (juce::int64) timeoutMs;
+    juce::MemoryBlock partial;
+    char buffer[4096];
+    bool running = true;
+
+    for (;;)
+    {
+        DWORD available = 0;
+
+        if (PeekNamedPipe (readPipe, nullptr, 0, nullptr, &available, nullptr) && available > 0)
+        {
+            DWORD n = 0;
+
+            if (ReadFile (readPipe, buffer, (DWORD) juce::jmin ((DWORD) sizeof (buffer), available), &n, nullptr) && n > 0)
             {
-                process.kill();
-
-                if (finished != nullptr)
-                    *finished = false;
-
-                return juce::String::fromUTF8 ((const char*) collected.getData(), (int) collected.getDataSize());
+                partial.append (buffer, (size_t) n);
+                takeLines (partial, false, onLine);
+                continue;
             }
         }
 
-        if (finished != nullptr)
-            *finished = true;
+        if (! running)
+            break;   // the child ended and its output is drained
 
-        return juce::String::fromUTF8 ((const char*) collected.getData(), (int) collected.getDataSize());
+        if (WaitForSingleObject (process.hProcess, 30) == WAIT_OBJECT_0)
+        {
+            running = false;   // drain what is left, then leave
+            continue;
+        }
+
+        const bool cancelled = cancel != nullptr && cancel->load();
+        const bool late = juce::Time::currentTimeMillis() > deadline;
+
+        if (cancelled || late)
+        {
+            TerminateProcess (process.hProcess, 1);
+            WaitForSingleObject (process.hProcess, 5000);
+            result.cancelled = cancelled;
+            result.timedOut = ! cancelled;
+            running = false;
+        }
     }
+
+    takeLines (partial, true, onLine);
+
+    DWORD code = 0;
+
+    if (GetExitCodeProcess (process.hProcess, &code))
+        result.exitCode = (int) code;
+
+    result.finished = ! result.cancelled && ! result.timedOut;
+    CloseHandle (process.hProcess);
+    CloseHandle (readPipe);
+   #else
+    juce::ignoreUnused (arguments, timeoutMs, cancel, onLine);
+   #endif
+
+    return result;
 }
 
 //==============================================================================
@@ -111,7 +263,7 @@ juce::String YouTubeTools::prepare (Paths& paths, const juce::String& appVersion
         }
 
         if (replace && ! source.copyFileTo (target))
-            return k ("도구를 복사하지 못했습니다: ") + target.getFullPathName();
+            return k ("도구를 복사하지 못했습니다 (다른 다운로드가 쓰는 중일 수 있습니다): ") + target.getFullPathName();
     }
 
     if (freshVersion)
@@ -139,12 +291,12 @@ juce::String YouTubeTools::versionFromOutput (const juce::String& output)
     return {};
 }
 
-juce::String YouTubeTools::ytDlpVersion (const juce::File& exe)
+juce::String YouTubeTools::ytDlpVersion (const juce::File& exe, const std::atomic<bool>* cancel)
 {
     if (! exe.existsAsFile())
         return {};
 
-    return versionFromOutput (runAndRead ({ exe.getFullPathName(), "--version" }, 30000));
+    return versionFromOutput (runAndRead ({ exe.getFullPathName(), "--ignore-config", "--version" }, 30000, cancel));
 }
 
 bool YouTubeTools::shouldReplaceWithBundled (const juce::String& userVersion, const juce::String& bundledVersion)
@@ -163,7 +315,7 @@ bool YouTubeTools::isRateLimited (juce::int64 lastAttemptMs, juce::int64 nowMs, 
     return lastAttemptMs > 0 && nowMs >= lastAttemptMs && nowMs - lastAttemptMs < minIntervalMs;
 }
 
-bool YouTubeTools::selfUpdateYtDlp (const juce::File& exe, juce::String& note)
+bool YouTubeTools::selfUpdateYtDlp (const juce::File& exe, juce::String& note, const std::atomic<bool>* cancel)
 {
     const auto stamp = lastUpdateFile (exe.getParentDirectory());
     const auto now = juce::Time::currentTimeMillis();
@@ -176,17 +328,17 @@ bool YouTubeTools::selfUpdateYtDlp (const juce::File& exe, juce::String& note)
     }
 
     stamp.replaceWithText (juce::String (now));
-    const auto before = ytDlpVersion (exe);
+    const auto before = ytDlpVersion (exe, cancel);
     bool finished = false;
-    const auto output = runAndRead ({ exe.getFullPathName(), "-U" }, 180000, &finished);
+    runAndRead ({ exe.getFullPathName(), "--ignore-config", "-U" }, 180000, cancel, &finished);
 
     if (! finished)
     {
-        note = k ("yt-dlp 갱신이 끝나지 않았습니다 (시간 초과).");
+        note = k ("yt-dlp 갱신이 끝나지 않았습니다 (시간 초과 또는 취소).");
         return false;
     }
 
-    const auto after = ytDlpVersion (exe);
+    const auto after = ytDlpVersion (exe, cancel);
 
     if (after.isNotEmpty() && after != before)
     {

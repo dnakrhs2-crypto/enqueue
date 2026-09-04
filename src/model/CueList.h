@@ -50,6 +50,8 @@ public:
     int depthOf (int index) const noexcept;
     /** Index of the cue's group, -1 at the top level. */
     int parentIndexOf (int index) const noexcept;
+    /** How far the subtree of 'root' reaches below it: 0 for a leaf, 1 for a group of leaves ... */
+    int subtreeDepthBelow (int root) const noexcept;
     bool isDescendantOf (int index, const juce::Uuid& ancestorId) const noexcept;
     /** First index after 'index' that is not inside its subtree (index + 1 for a leaf). */
     int subtreeEnd (int index) const noexcept;
