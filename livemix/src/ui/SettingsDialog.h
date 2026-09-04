@@ -15,7 +15,7 @@ namespace gocue::livemix
 namespace SettingsDialog
 {
     void show (MixEngine& engine, LiveMixSettings& settings, juce::Component* centreAround, std::function<void()> onDeviceChanged,
-               std::function<void()> onHotkeysChanged);
+               std::function<void()> onHotkeysChanged, std::function<void (bool capturing)> onHotkeyCapture);
     void closeIfOpen();
 
     /** The Windows "start with Windows" Run entry for this exe. */

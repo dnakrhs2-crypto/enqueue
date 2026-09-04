@@ -114,7 +114,7 @@ public:
             expectWithinAbsoluteError (buffer.getSample (0, 100), 0.25f, 1e-6f);
             expectWithinAbsoluteError (buffer.getSample (1, 511), 0.25f, 1e-6f);
             expectEquals (first->lastNumChannels, 2);
-            expectEquals (first->lastNumSamples, 512);
+            expectEquals (first->lastNumSamples, 256);   // a 512 block arrives in two pieces: a plugin never sees more than it was prepared for
 
             chain.setBypassed (1, true);
             const int bypassedCallsBefore = second->processCount;
@@ -122,7 +122,7 @@ public:
             chain.process (buffer, 512);
             expectWithinAbsoluteError (buffer.getSample (0, 10), 0.5f, 1e-6f);   // output of the bypassed plugin is discarded
             expect (chain.getSlot (1).bypassed.load());
-            expectEquals (second->processCount, bypassedCallsBefore + 1);        // ...but it keeps running (time advances)
+            expectEquals (second->processCount, bypassedCallsBefore + 2);        // ...but it keeps running (time advances): two pieces of 256
 
             beginTest ("a suspended plugin is skipped with a dry pass");
             second->suspendProcessing (true);

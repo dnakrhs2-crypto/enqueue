@@ -16,7 +16,8 @@ namespace gocue::livemix
 {
 
 /** The tray icon: the red ON tile. Left click / double click brings the window back, right click opens the menu. */
-class TrayIcon : public juce::SystemTrayIconComponent
+class TrayIcon : public juce::SystemTrayIconComponent,
+                 private juce::Timer
 {
 public:
     explicit TrayIcon (std::function<void (int)> onMenu) : menuHandler (std::move (onMenu))
@@ -39,6 +40,7 @@ public:
         setIconImage (image, image);
         setIconTooltip ("LiveMix");
         useExecutableIcon();
+        startTimer (15000);   // an Explorer restart makes JUCE re-add its own (black) picture: ours goes back within a few seconds
     }
 
     ~TrayIcon() override
@@ -76,6 +78,22 @@ public:
         }
 
         shellIcon = smallIcon;
+       #endif
+    }
+
+    void timerCallback() override
+    {
+       #if JUCE_WINDOWS
+        if (shellIcon == nullptr)
+            return;
+
+        NOTIFYICONDATA data = {};
+        data.cbSize = sizeof (data);
+        data.hWnd = (HWND) getWindowHandle();
+        data.uID = (UINT) (juce::pointer_sized_int) data.hWnd;
+        data.uFlags = NIF_ICON;
+        data.hIcon = shellIcon;
+        Shell_NotifyIcon (NIM_MODIFY, &data);   // idempotent
        #endif
     }
 
@@ -170,6 +188,9 @@ public:
             else
                 createDefaultSession (main);
         }
+
+        if (! document->hasAppliedGraph())
+            document->applyToEngine();   // every path above failed to bring a session in: the in-memory default runs (its notice stays)
 
         // in the window, not a modal alert: a modal would freeze the frame (no resizing) and the mic buttons until
         // dismissed. Its own line under a session warning, never replacing it.
@@ -308,7 +329,7 @@ public:
         {
             setUsingNativeTitleBar (true);
             setResizable (true, false);
-            setResizeLimits (420, 560, 10000, 10000);   // before the content: its corner grip takes this constrainer. 420: a tall, narrow (portrait) window
+            setResizeLimits (420, 720, 10000, 10000);   // before the content: its corner grip takes this constrainer. 420 wide: a tall (portrait) window; 720 high: the stacked master leaves room for the mics
             auto* content = new MainComponent (document, settings);
             mainComponent = content;
             setContentOwned (content, true);

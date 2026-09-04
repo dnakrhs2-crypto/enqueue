@@ -128,17 +128,25 @@ void TopBar::setFxCount (int count)
 
 void TopBar::setMuteGroups (bool micMuted, bool fxMuted)
 {
+    const int before = preferredHeight (getWidth());
     micMuteBadge.setVisible (micMuted);
     fxMuteBadge.setVisible (fxMuted);
-    resized();
+
+    if (preferredHeight (getWidth()) != before && onHeightChanged)
+        onHeightChanged();   // the owner gives the bar its new height (and lays everything out)
+    else
+        resized();
 }
 
-TopBar::Mode TopBar::modeFor (int width) noexcept
+TopBar::Mode TopBar::modeFor (int width) const noexcept
 {
-    return width >= 1000 ? Mode::wide : width >= 700 ? Mode::compact : Mode::narrow;
+    // one row: the logo (130), the buttons (438), status (up to 230), device (160+), ASIO (56) and a session name of
+    // at least 160 - about 1180; a mute badge takes another 100
+    const int badges = (micMuteBadge.isVisible() ? 1 : 0) + (fxMuteBadge.isVisible() ? 1 : 0);
+    return width >= 1180 + 100 * badges ? Mode::wide : width >= 700 ? Mode::compact : Mode::narrow;
 }
 
-int TopBar::preferredHeight (int width) noexcept
+int TopBar::preferredHeight (int width) const noexcept
 {
     switch (modeFor (width))
     {

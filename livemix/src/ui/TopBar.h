@@ -18,8 +18,10 @@ public:
     /** One row in a wide window; two below 1000 px (the device row folds under); three below 700 px (the buttons
         take a row of their own) - the portrait mode of a tall, narrow window. */
     enum class Mode { wide, compact, narrow };
-    static Mode modeFor (int width) noexcept;
-    static int preferredHeight (int width) noexcept;
+    Mode modeFor (int width) const noexcept;        // the single row needs more room while a mute badge shows
+    int preferredHeight (int width) const noexcept;
+    /** The bar's height changed with its content (a badge came or went): the owner lays out again. */
+    std::function<void()> onHeightChanged;
 
     void refresh();                                   // session name / dirty flag / device
     void setDevices (const juce::StringArray& asioDeviceNames, const juce::String& current);

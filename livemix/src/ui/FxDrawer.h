@@ -36,8 +36,11 @@ public:
 
     void resized() override;
     void paint (juce::Graphics& g) override;
+    /** The height the drawer's content takes at 'width' (a long chain, many mics): the owner scrolls it. */
+    int getPreferredHeight (int width);
 
 private:
+    int layout (int width, bool apply);   // places everything (apply) or only measures; returns the height used
     void rebuildTabs();
     void rebuildChain();
     void rebuildSenders();

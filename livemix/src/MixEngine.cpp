@@ -307,7 +307,13 @@ void MixEngine::renderBlock (const float* const* inputs, int numInputs, float* c
     if (numSamples <= 0)
         return;
 
-    const juce::ScopedLock sl (lock);
+    // the graph is swapped on the message thread under this lock (a structural edit, a session): the callback never
+    // waits for it - this block stays silent (the outputs are cleared above) rather than stalling the driver
+    const juce::ScopedTryLock sl (lock);
+
+    if (! sl.isLocked())
+        return;
+
     const int chunkSize = juce::jmax (1, masterBus.getNumSamples());   // a driver may deliver more than announced: chunk, never grow
     const double sr = sampleRate.load (std::memory_order_relaxed);
     const float rampStepPerSample = (float) (1.0 / juce::jmax (1.0, onOffRampSeconds * sr));
@@ -364,6 +370,10 @@ void MixEngine::renderBlock (const float* const* inputs, int numInputs, float* c
             if (fullyOff && skipChainWhenOff.load (std::memory_order_relaxed))
             {
                 node->meter.push (chBuf.getMagnitude (0, 0, n), chBuf.getMagnitude (1, 0, n));   // the mic itself: it is alive
+
+                for (int f = 0; f < numFx; ++f)   // a send fader moved while off: no ramp from a stale level when the mic returns
+                    node->sends[(size_t) f].current = node->sends[(size_t) f].amount.load (std::memory_order_relaxed);
+
                 continue;
             }
 
@@ -392,7 +402,12 @@ void MixEngine::renderBlock (const float* const* inputs, int numInputs, float* c
             node->meter.push (chBuf.getMagnitude (0, 0, n), chBuf.getMagnitude (1, 0, n));   // what the chain delivers, before the switch
 
             if (fullyOff)
+            {
+                for (int f = 0; f < numFx; ++f)   // the sends follow their faders silently while the mic is off
+                    node->sends[(size_t) f].current = sendAmount[(size_t) f];
+
                 continue;   // off (the chain kept running, as asked): nothing reaches the buses, the sends included
+            }
 
             if (! juce::approximatelyEqual (start, 1.0f) || ! juce::approximatelyEqual (end, 1.0f))
             {
@@ -532,6 +547,11 @@ void MixEngine::applySession (const MixSession& session, juce::StringArray* erro
     const double sr = getSampleRate();
     const int bs = getBlockSize();
     const auto factory = pluginHost.makeFactory (sr, bs);
+    std::vector<juce::Uuid> oldFxOrder;   // the send ramps are indexed by FX position: a changed order snaps them
+
+    for (const auto& old : fxNodes)
+        if (old != nullptr)
+            oldFxOrder.push_back (old->id);
 
     auto restore = [&] (PluginChain& chain, const std::vector<PluginSlotState>& states)
     {
@@ -621,6 +641,11 @@ void MixEngine::applySession (const MixSession& session, juce::StringArray* erro
                 break;
         }
 
+        bool fxOrderChanged = oldFxOrder.size() != newFx.size();
+
+        for (size_t i = 0; ! fxOrderChanged && i < newFx.size(); ++i)
+            fxOrderChanged = newFx[i]->id != oldFxOrder[i];
+
         for (const auto& c : session.channels)
         {
             std::unique_ptr<ChannelNode> node;
@@ -658,8 +683,8 @@ void MixEngine::applySession (const MixSession& session, juce::StringArray* erro
                 node->sends[(size_t) f].amount.store (amount, std::memory_order_relaxed);
                 node->sends[(size_t) f].pre.store (pre, std::memory_order_relaxed);
 
-                if (restoreChains)
-                    node->sends[(size_t) f].current = amount;   // a fresh node (not in the graph yet) starts at its level
+                if (restoreChains || fxOrderChanged)
+                    node->sends[(size_t) f].current = amount;   // a fresh node starts at its level; a reordered FX list must not ramp from another FX's level
             }
 
             newChannels.push_back (std::move (node));
@@ -700,17 +725,20 @@ void MixEngine::applySession (const MixSession& session, juce::StringArray* erro
     // the retired nodes, their chains and the old master chain are destroyed here, outside the lock
 }
 
-void MixEngine::captureLivePluginStates (MixSession& session) const
+bool MixEngine::captureLivePluginStates (MixSession& session) const
 {
+    bool complete = true;
+
     for (auto& c : session.channels)
         if (auto* node = findChannel (c.id))
-            c.chain = node->chain->getStates();
+            c.chain = node->chain->getStates (&complete);
 
     for (auto& f : session.fx)
         if (auto* node = findFx (f.id))
-            f.chain = node->chain->getStates();
+            f.chain = node->chain->getStates (&complete);
 
-    session.master.chain = master.chain->getStates();
+    session.master.chain = master.chain->getStates (&complete);
+    return complete;
 }
 
 //==============================================================================

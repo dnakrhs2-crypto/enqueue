@@ -83,7 +83,8 @@ public:
         never runs a mix of old and new. Plugin errors go to 'errors'. */
     void applySession (const MixSession& session, juce::StringArray* errors = nullptr, bool restoreChains = false);
     /** Copies the live plugin states / order into the session's chain fields (before a save). */
-    void captureLivePluginStates (MixSession& session) const;
+    /** False when a plugin could not report its state: the session is not a faithful copy, do not save it as one. */
+    bool captureLivePluginStates (MixSession& session) const;
 
     void setChannelOn (const juce::Uuid& id, bool on);
     /** The mic mute group: a muted channel is silent (the same ramp as OFF) whatever its own switch says. */

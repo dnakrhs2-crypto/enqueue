@@ -255,6 +255,18 @@ void ChainDrawer::addPlugin (const juce::PluginDescription& description)
     if (chain == nullptr)
         return;
 
+    if (chain->getNumSlots() >= MixSession::maxChainSlots)
+    {
+        // the session keeps 16 per chain: a seventeenth would be dropped on save
+        juce::AlertWindow::showAsync (juce::MessageBoxOptions()
+                                          .withIconType (juce::MessageBoxIconType::InfoIcon)
+                                          .withTitle (ko ("체인이 가득 찼습니다"))
+                                          .withMessage (ko ("한 체인에는 플러그인을 ") + juce::String (MixSession::maxChainSlots) + ko ("개까지 넣을 수 있습니다."))
+                                          .withButton (ko ("확인")),
+                                      [] (int) {});
+        return;
+    }
+
     auto& engine = document.getEngine();
     juce::String error;
     auto instance = engine.getPluginHost().createInstance (description, engine.getSampleRate(), engine.getBlockSize(), error);

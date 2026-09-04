@@ -416,8 +416,9 @@ namespace
 
                 if (const auto check = MixSession::load (file, probe, &warnings); check.failed())
                 {
-                    file.deleteFile();
-                    report (juce::String::fromUTF8 ("내려받은 파일이 세션 파일이 아닙니다: ") + check.getErrorMessage(), true);
+                    // kept: the copy on the server is all there is of it, and a newer LiveMix may open it
+                    report (juce::String::fromUTF8 ("내려받은 파일을 세션으로 열 수 없습니다: ") + check.getErrorMessage()
+                                + juce::String::fromUTF8 (" (파일은 남겨 두었습니다: ") + file.getFullPathName() + ")", true);
                     return;
                 }
 

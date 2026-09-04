@@ -28,6 +28,8 @@ public:
         std::atomic<bool> bypassed { false };
         std::atomic<bool> faulted { false };    // threw (or produced NaN / Inf) in processBlock, or threw while preparing / loading state: dry from then on
         bool faultReported = false;             // message thread: the operator has been told
+        std::atomic<int> busyBlocks { 0 };      // audio thread: blocks in a row its callback lock was busy (a dry pass each)
+        bool stallReported = false;             // message thread: the operator has been told about the dry passes
         juce::AudioBuffer<float> scratch;                    // used for bypass and for plugins that need > 2 channels
         int numScratchChannels = 2;
 
@@ -50,6 +52,8 @@ public:
     using Factory = std::function<std::unique_ptr<juce::AudioPluginInstance> (const PluginSlotState&, juce::String& error)>;
 
     static constexpr double maxTailSeconds = 10.0;
+    static constexpr int maxScratchChannels = 32;   // past this JUCE allocates a channel table per block: such a plugin is refused
+    static constexpr int stallBlocks = 200;         // dry passes in a row before the operator hears of a plugin that does not answer
 
     PluginChain() = default;
     ~PluginChain() override;
@@ -78,7 +82,9 @@ public:
     void clear();
 
     /** Captures every slot's description + getStateInformation() as PluginSlotState. Message thread. */
-    std::vector<PluginSlotState> getStates() const;
+    /** 'complete' (when given) is cleared when a plugin could not report its state: the caller must not treat the
+        result as a faithful save. A state that was read updates the slot's cached state. */
+    std::vector<PluginSlotState> getStates (bool* complete = nullptr) const;
 
     /** Replaces the chain from saved states, instantiating through 'factory'. Failed slots are kept as
         missing. Returns one message per failure. */
@@ -99,6 +105,8 @@ public:
     bool consumeStateChanged() noexcept { return stateChanged.exchange (false, std::memory_order_acq_rel); }
     /** The names of the plugins that faulted since the previous call (message thread): the operator is told once. */
     juce::StringArray takeNewFaults();
+    /** Plugins whose callback lock has been busy for stallBlocks blocks in a row (passed dry meanwhile), once each. */
+    juce::StringArray takeNewStalls();
     /** The latency the live, non-bypassed plugins add, in samples (message thread). */
     int getLatencySamples() const;
 
@@ -106,7 +114,9 @@ public:
     void process (juce::AudioBuffer<float>& buffer, int numSamples);
 
 private:
-    void prepareSlot (Slot& slot);
+    bool prepareSlot (Slot& slot);   // false when the plugin threw (or wants too many channels): the slot is faulted
+    void processLocked (juce::AudioBuffer<float>& buffer, int numSamples);   // one block of at most the prepared size, the lock held
+    void updateTailCache();          // message thread: the tail the callback reads without asking any plugin
     void markFaulted (Slot& slot) noexcept;
     static bool isFinite (const juce::AudioBuffer<float>& buffer, int numSamples) noexcept;
     void clearSlots (bool notify);   // the destructor clears without chainChanged (pluginAboutToBeRemoved still closes editors)
@@ -125,6 +135,8 @@ private:
     Listener* listener = nullptr;
     std::atomic<bool> stateChanged { false };
     std::atomic<bool> faultRaised { false };   // a slot faulted since takeNewFaults()
+    std::atomic<bool> stallRaised { false };   // a slot crossed stallBlocks since takeNewStalls()
+    std::atomic<float> tailSecondsCache { 0.0f };   // getTailSeconds() for the audio thread
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (PluginChain)
 };

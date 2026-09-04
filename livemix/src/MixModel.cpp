@@ -405,7 +405,18 @@ juce::Result MixSession::fromJson (const juce::String& json, MixSession& out, ju
 
     const auto channelsBefore = s.channels.size();
     const auto fxBefore = s.fx.size();
+    bool chainOverLimit = (int) s.master.chain.size() > maxChainSlots;
+
+    for (const auto& c : s.channels)
+        chainOverLimit = chainOverLimit || (int) c.chain.size() > maxChainSlots;
+
+    for (const auto& f : s.fx)
+        chainOverLimit = chainOverLimit || (int) f.chain.size() > maxChainSlots;
+
     s.sanitise();
+
+    if (warnings != nullptr && chainOverLimit)
+        warnings->add (juce::String::fromUTF8 ("체인에 플러그인이 16개보다 많아 뒤의 것은 뺐습니다"));
 
     if (warnings != nullptr && (s.channels.size() != channelsBefore || s.fx.size() != fxBefore))
         warnings->add ("The session had more channels than LiveMix supports: the extra ones were dropped");
@@ -416,7 +427,14 @@ juce::Result MixSession::fromJson (const juce::String& json, MixSession& out, ju
 
 juce::Result MixSession::save (const juce::File& file) const
 {
-    return SafeFileWrite::writeTextVerified (file, toJson(), [] (const juce::String& readBack) -> juce::Result
+    const auto json = toJson();
+    const auto bytes = (juce::int64) json.getNumBytesAsUTF8();
+
+    if (bytes > maxFileBytes)   // what load() refuses must not be written: the file would never open again
+        return juce::Result::fail (juce::String::fromUTF8 ("세션이 너무 커서 저장하지 않았습니다 (") + juce::File::descriptionOfSizeInBytes (bytes)
+                                   + juce::String::fromUTF8 ("): 플러그인 설정이 LiveMix가 다시 열 수 있는 크기(32 MB)를 넘습니다"));
+
+    return SafeFileWrite::writeTextVerified (file, json, [] (const juce::String& readBack) -> juce::Result
     {
         MixSession check;
         return fromJson (readBack, check);

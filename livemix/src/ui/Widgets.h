@@ -264,7 +264,8 @@ namespace ChipFlow
     inline int width (const juce::String& text, int padding, int available)
     {
         const int wanted = padding + juce::roundToInt (juce::GlyphArrangement::getStringWidth (font(), text));
-        return juce::jlimit (minWidth, juce::jmax (minWidth, available), wanted);
+        const int lo = juce::jmax (1, juce::jmin (minWidth, available));   // a sliver of a column: chips shrink into it rather than overflow
+        return juce::jlimit (lo, juce::jmax (lo, available), wanted);
     }
 
     /** Places the chips in 'area' when 'apply' is set; returns the number of rows they take (at least one). */
@@ -303,6 +304,11 @@ public:
     std::function<void (const juce::String& description)> onHotkeyChanged;
     /** A reason to refuse the key, or an empty string. */
     std::function<juce::String (const juce::KeyPress&)> validate;
+    /** The capture began (true) / ended (false): the owner suspends the live hotkeys meanwhile, or the key being
+        chosen would fire the group it is already bound to. */
+    std::function<void (bool capturing)> onCaptureChanged;
+
+    bool isCapturing() const noexcept { return capturing; }
 
     void setHotkey (const juce::String& description)
     {
@@ -316,10 +322,16 @@ public:
 
     void clicked() override
     {
+        if (capturing)
+            return;
+
         capturing = true;
         setWantsKeyboardFocus (true);
         grabKeyboardFocus();
         setButtonText (ko ("키를 누르세요... (Esc 취소)"));
+
+        if (onCaptureChanged)
+            onCaptureChanged (true);
     }
 
     bool keyPressed (const juce::KeyPress& key) override
@@ -364,6 +376,9 @@ private:
         capturing = false;
         setWantsKeyboardFocus (false);
         setHotkey (hotkey);
+
+        if (onCaptureChanged)
+            onCaptureChanged (false);
     }
 
     juce::String hotkey;

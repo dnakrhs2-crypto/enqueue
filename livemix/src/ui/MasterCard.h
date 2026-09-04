@@ -29,7 +29,7 @@ public:
     /** The height the card needs at 'width': its usual height, more when the chips take more than two rows; the
         stacked (portrait) layout's height below narrowBelow. */
     int getPreferredHeight (int width) const;
-    static constexpr int narrowBelow = 760;   // narrower than this: head, chain, latency and output stack up
+    static constexpr int narrowBelow = 1000;   // narrower than this: head, chain, latency and output stack up (the columns leave the chain no room below it)
     void paint (juce::Graphics& g) override;
 
 private:

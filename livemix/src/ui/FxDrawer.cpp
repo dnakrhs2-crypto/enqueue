@@ -281,56 +281,69 @@ void FxDrawer::removeSelected()
 
 void FxDrawer::resized()
 {
-    auto area = getLocalBounds().reduced (18, 16);
+    layout (getWidth(), true);
+}
+
+int FxDrawer::getPreferredHeight (int width)
+{
+    return layout (width, false);
+}
+
+int FxDrawer::layout (int width, bool apply)
+{
+    // one flow for the placing and the measuring, so the two never disagree
+    auto place = [apply] (juce::Component& c, juce::Rectangle<int> r) { if (apply) c.setBounds (r); };
+
+    auto area = juce::Rectangle<int> (0, 0, width, 100000).reduced (18, 16);
     auto head = area.removeFromTop (34);
-    closeButton.setBounds (head.removeFromRight (34).reduced (0, 3));
+    place (closeButton, head.removeFromRight (34).reduced (0, 3));
     head.removeFromRight (8);
-    title.setBounds (head);
+    place (title, head);
     area.removeFromTop (10);
 
     auto tabRow = area.removeFromTop (32);
-    addFxButton.setBounds (tabRow.removeFromRight (90));
+    place (addFxButton, tabRow.removeFromRight (90));
     tabRow.removeFromRight (6);
 
     for (auto& tab : tabs)
     {
         const int w = juce::jmin (150, juce::jmax (80, tabRow.getWidth() / juce::jmax (1, (int) tabs.size())));
-        tab->setBounds (tabRow.removeFromLeft (w));
+        place (*tab, tabRow.removeFromLeft (w));
         tabRow.removeFromLeft (6);
     }
 
     area.removeFromTop (12);
     auto nameRow = area.removeFromTop (30);
-    removeFxButton.setBounds (nameRow.removeFromRight (90));
+    place (removeFxButton, nameRow.removeFromRight (90));
     nameRow.removeFromRight (8);
-    name.setBounds (nameRow);
+    place (name, nameRow);
     area.removeFromTop (12);
 
-    chainCaption.setBounds (area.removeFromTop (20));
-    const int chipRows = ChipFlow::layout (chips, area, 30, true);
+    place (chainCaption, area.removeFromTop (20));
+    const int chipRows = ChipFlow::layout (chips, area, 30, apply);
     area.removeFromTop (chips.empty() ? 0 : chipRows * ChipFlow::rowStep);
     auto buttons = area.removeFromTop (30);
-    openChainButton.setBounds (buttons.removeFromLeft (92));
+    place (openChainButton, buttons.removeFromLeft (92));
     buttons.removeFromLeft (8);
-    addPluginButton.setBounds (buttons.removeFromLeft (76));
+    place (addPluginButton, buttons.removeFromLeft (76));
     area.removeFromTop (14);
 
-    returnCaption.setBounds (area.removeFromTop (20));
+    place (returnCaption, area.removeFromTop (20));
     auto ret = area.removeFromTop (34);
-    returnValue.setBounds (ret.removeFromRight (64));
+    place (returnValue, ret.removeFromRight (64));
     ret.removeFromRight (8);
-    returnSlider.setBounds (ret);
+    place (returnSlider, ret);
     area.removeFromTop (12);
 
     auto outputRow = area.removeFromTop (26);
-    muteGroupChip.setBounds (outputRow.removeFromRight (100).reduced (0, 1));   // next to the output caption
-    outputCaption.setBounds (outputRow);
+    place (muteGroupChip, outputRow.removeFromRight (100).reduced (0, 1));   // next to the output caption
+    place (outputCaption, outputRow);
     auto out = area.removeFromTop (34);
-    masterChip.setBounds (out.removeFromLeft (72));
+    place (masterChip, out.removeFromLeft (72));
     out.removeFromLeft (8);
-    directChip.setBounds (out.removeFromLeft (84));
+    place (directChip, out.removeFromLeft (84));
     out.removeFromLeft (6);
-    monoChip.setBounds (out.removeFromLeft (58));
+    place (monoChip, out.removeFromLeft (58));
     out.removeFromLeft (6);
 
     if (out.getWidth() < 110)
@@ -338,29 +351,30 @@ void FxDrawer::resized()
         // the narrow drawer: the pair selector takes its own row instead of a sliver next to the chips
         area.removeFromTop (6);
         const auto row = area.removeFromTop (34);
-        directCombo.setBounds (row.withHeight (30).withY (row.getY() + 2));
+        place (directCombo, row.withHeight (30).withY (row.getY() + 2));
     }
     else
     {
-        directCombo.setBounds (out.withHeight (30).withY (out.getY() + 2));
+        place (directCombo, out.withHeight (30).withY (out.getY() + 2));
     }
 
     area.removeFromTop (12);
 
-    meterCaption.setBounds (area.removeFromTop (18));
-    meter_.setBounds (area.removeFromTop (44));
+    place (meterCaption, area.removeFromTop (18));
+    place (meter_, area.removeFromTop (44));
     area.removeFromTop (12);
 
-    sendersCaption.setBounds (area.removeFromTop (20));
+    place (sendersCaption, area.removeFromTop (20));
 
     for (auto& s : senders)
     {
-        s->setBounds (area.removeFromTop (30).reduced (0, 1));
+        place (*s, area.removeFromTop (30).reduced (0, 1));
         area.removeFromTop (4);
     }
 
     area.removeFromTop (4);
-    note.setBounds (area.removeFromTop (36));
+    place (note, area.removeFromTop (36));
+    return area.getY() + 16;   // the bottom margin
 }
 
 void FxDrawer::paint (juce::Graphics& g)

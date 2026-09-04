@@ -87,6 +87,7 @@ private:
     void showBackupDialog();
     void showSettingsDialog();
     void registerHotkeys();      // from the settings; a refused key goes to the status line
+    void layoutFxDrawer();       // the drawer's size inside its viewport
     void muteGroupsChanged();    // badges, cards, drawer
     void showPluginManager();
     void chooseDevice (const juce::String& name);
@@ -109,6 +110,7 @@ private:
     WebDavBackup backup;
     juce::Component::SafePointer<juce::DialogWindow> pluginManagerDialog;
     bool safeMode = false;
+    juce::StringArray faultedPlugins, stalledPlugins;   // told once each, kept in the notice until the session changes
 
     TopBar topBar;
     juce::Viewport viewport;
@@ -118,6 +120,7 @@ private:
     MasterCard masterCard;
     ChainDrawer chainDrawer;
     FxDrawer fxDrawer;
+    juce::Viewport fxDrawerViewport;   // the FX drawer scrolls when its content is taller than the window
     Drawer drawer = Drawer::none;
     juce::Uuid chainOwnerId = juce::Uuid::null();   // the channel / FX whose chain the drawer shows (null = master)
     bool chainIsFx = false;

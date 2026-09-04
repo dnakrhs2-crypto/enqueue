@@ -16,16 +16,22 @@ void PluginChain::prepare (double newSampleRate, int newBlockSize)
     blockSize = juce::jmax (1, newBlockSize);
     midi.ensureSize (4096);   // an effect that emits MIDI must not make the buffer grow on the audio thread
 
-    const juce::ScopedLock sl (lock);
+    {
+        const juce::ScopedLock sl (lock);
 
-    for (auto& slot : slots)
-        if (slot->plugin != nullptr)
-            prepareSlot (*slot);
+        for (auto& slot : slots)
+            if (slot->plugin != nullptr)
+                prepareSlot (*slot);
+    }
+
+    updateTailCache();
 }
 
-void PluginChain::prepareSlot (Slot& slot)
+bool PluginChain::prepareSlot (Slot& slot)
 {
     auto& plugin = *slot.plugin;
+    bool ok = true;
+    int wanted = 2;
 
     try
     {
@@ -43,14 +49,23 @@ void PluginChain::prepareSlot (Slot& slot)
 
         plugin.setRateAndBufferSizeDetails (sampleRate, blockSize);
         plugin.prepareToPlay (sampleRate, blockSize);
+        wanted = juce::jmax (2, plugin.getTotalNumInputChannels(), plugin.getTotalNumOutputChannels());
     }
     catch (...)
     {
         markFaulted (slot);   // it threw while getting ready: it never runs
+        ok = false;
     }
 
-    slot.numScratchChannels = juce::jmax (2, plugin.getTotalNumInputChannels(), plugin.getTotalNumOutputChannels());
+    if (wanted > maxScratchChannels)
+    {
+        markFaulted (slot);   // a buffer view over that many channels makes JUCE allocate on the audio thread
+        ok = false;
+    }
+
+    slot.numScratchChannels = juce::jmin (maxScratchChannels, wanted);
     slot.scratch.setSize (slot.numScratchChannels, blockSize, false, false, true);
+    return ok;
 }
 
 void PluginChain::markFaulted (Slot& slot) noexcept
@@ -168,7 +183,19 @@ void PluginChain::addPlugin (std::unique_ptr<juce::AudioPluginInstance> plugin, 
     }
 
     slot->plugin = std::move (plugin);
-    prepareSlot (*slot);
+    const bool ready = prepareSlot (*slot) && ! slot->faulted.load (std::memory_order_relaxed);
+
+    if (! ready)
+    {
+        // it threw on its saved state or while getting ready: not trusted with anything more. The slot stays, empty
+        // and marked, with the saved state kept, so the operator sees it and can put the plugin back
+        try { slot->state.name = slot->plugin->getName(); } catch (...) {}
+        auto dead = std::move (slot->plugin);
+        try { dead.reset(); } catch (...) {}
+        insertSlot (std::move (slot), insertAt);
+        return;
+    }
+
     slot->plugin->addListener (this);   // after restore + prepare: only real user edits count as changes
     insertSlot (std::move (slot), insertAt);
 }
@@ -322,7 +349,7 @@ void PluginChain::applyStates (const std::vector<PluginSlotState>& states)
     notifyChanged();
 }
 
-std::vector<PluginSlotState> PluginChain::getStates() const
+std::vector<PluginSlotState> PluginChain::getStates (bool* complete) const
 {
     std::vector<PluginSlotState> result;
 
@@ -333,33 +360,37 @@ std::vector<PluginSlotState> PluginChain::getStates() const
 
         if (slot->plugin != nullptr)
         {
-            const auto description = slot->plugin->getPluginDescription();
-            s.format = description.pluginFormatName;
-            s.name = description.name;
-            s.fileOrIdentifier = description.fileOrIdentifier;
-            s.uniqueId = description.uniqueId;
-
-            if (const auto xml = description.createXml())
-                s.descriptionXml = xml->toString (juce::XmlElement::TextFormat().singleLine().withoutHeader());
-
-            juce::MemoryBlock block;
             bool captured = true;
 
+            try
             {
-                const juce::ScopedLock callbackLock (slot->plugin->getCallbackLock());   // not concurrently with processBlock()
+                const auto description = slot->plugin->getPluginDescription();
+                s.format = description.pluginFormatName;
+                s.name = description.name;
+                s.fileOrIdentifier = description.fileOrIdentifier;
+                s.uniqueId = description.uniqueId;
 
-                try
+                if (const auto xml = description.createXml())
+                    s.descriptionXml = xml->toString (juce::XmlElement::TextFormat().singleLine().withoutHeader());
+
+                juce::MemoryBlock block;
+
                 {
+                    const juce::ScopedLock callbackLock (slot->plugin->getCallbackLock());   // not concurrently with processBlock()
                     slot->plugin->getStateInformation (block);
                 }
-                catch (...)
-                {
-                    captured = false;   // the state it was loaded with stays in the file
-                }
+
+                s.stateBase64 = block.getSize() > 0 ? juce::Base64::toBase64 (block.getData(), block.getSize()) : juce::String();
+            }
+            catch (...)
+            {
+                captured = false;   // the last state that was read stays in 's' (the slot's cache): the caller is told
             }
 
             if (captured)
-                s.stateBase64 = block.getSize() > 0 ? juce::Base64::toBase64 (block.getData(), block.getSize()) : juce::String();
+                slot->state = s;   // the last good state, should a later read fail
+            else if (complete != nullptr)
+                *complete = false;
         }
 
         result.push_back (std::move (s));
@@ -407,8 +438,18 @@ juce::StringArray PluginChain::restore (const std::vector<PluginSlotState>& stat
             }
 
             slot->plugin = std::move (instance);
-            prepareSlot (*slot);
-            slot->plugin->addListener (this);   // after restore + prepare: only real user edits count as changes
+
+            if (prepareSlot (*slot) && ! slot->faulted.load (std::memory_order_relaxed))
+            {
+                slot->plugin->addListener (this);   // after restore + prepare: only real user edits count as changes
+            }
+            else
+            {
+                // it threw on its saved state or while getting ready: the slot stays empty and marked, the state kept
+                auto dead = std::move (slot->plugin);
+                try { dead.reset(); } catch (...) {}
+                errors.add (state.name + ": " + juce::String::fromUTF8 ("플러그인이 준비 중 오류를 내 비워 두었습니다 (저장된 설정은 그대로 둡니다)"));
+            }
         }
         else
         {
@@ -435,6 +476,12 @@ juce::StringArray PluginChain::restore (const std::vector<PluginSlotState>& stat
 
 double PluginChain::getTailSeconds() const
 {
+    // the audio thread asks: the value was worked out on the message thread (no lock, no plugin call here)
+    return (double) tailSecondsCache.load (std::memory_order_relaxed);
+}
+
+void PluginChain::updateTailCache()
+{
     const juce::ScopedLock sl (lock);
     double tail = 0.0;
 
@@ -443,16 +490,25 @@ double PluginChain::getTailSeconds() const
         if (slot->plugin == nullptr || slot->bypassed.load() || slot->faulted.load (std::memory_order_relaxed))
             continue;
 
-        const double t = slot->plugin->getTailLengthSeconds();
+        double t = maxTailSeconds;
+
+        try
+        {
+            t = slot->plugin->getTailLengthSeconds();
+        }
+        catch (...) {}   // a plugin that throws here counts as the longest tail
 
         if (! std::isfinite (t))
-            return maxTailSeconds;
+        {
+            tail = maxTailSeconds;
+            break;
+        }
 
         // Plugins run in series: a reverb tail feeding a delay rings for the sum of both.
         tail = juce::jmin (maxTailSeconds, tail + juce::jmax (0.0, t));
     }
 
-    return juce::jlimit (0.0, maxTailSeconds, tail);
+    tailSecondsCache.store ((float) juce::jlimit (0.0, maxTailSeconds, tail), std::memory_order_relaxed);
 }
 
 bool PluginChain::isFinite (const juce::AudioBuffer<float>& buffer, int numSamples) noexcept
@@ -471,8 +527,32 @@ bool PluginChain::isFinite (const juce::AudioBuffer<float>& buffer, int numSampl
 
 void PluginChain::process (juce::AudioBuffer<float>& buffer, int numSamples)
 {
-    const juce::ScopedLock sl (lock);
+    // the slot list is edited on the message thread under this lock (an add, a swap, a state restore that can take a
+    // while): the callback never waits for it - this block passes dry instead
+    const juce::ScopedTryLock sl (lock);
 
+    if (! sl.isLocked())
+        return;
+
+    // a block larger than the chain was prepared for goes through in pieces: the scratch buffers never grow here
+    const int chunk = juce::jmax (1, blockSize);
+
+    if (numSamples <= chunk)
+    {
+        processLocked (buffer, numSamples);
+        return;
+    }
+
+    for (int offset = 0; offset < numSamples; offset += chunk)
+    {
+        const int n = juce::jmin (chunk, numSamples - offset);
+        juce::AudioBuffer<float> part (buffer.getArrayOfWritePointers(), buffer.getNumChannels(), offset, n);   // a view: no allocation
+        processLocked (part, n);
+    }
+}
+
+void PluginChain::processLocked (juce::AudioBuffer<float>& buffer, int numSamples)
+{
     for (auto& slot : slots)
     {
         if (slot->plugin == nullptr)
@@ -488,7 +568,7 @@ void PluginChain::process (juce::AudioBuffer<float>& buffer, int numSamples)
         auto& scratch = slot->scratch;
 
         if (scratch.getNumSamples() < numSamples)
-            scratch.setSize (slot->numScratchChannels, numSamples, false, false, true);
+            continue;   // a block larger than prepared for: the owner chunks its blocks, so this does not happen - and never allocates here
 
         midi.clear();
 
@@ -498,7 +578,14 @@ void PluginChain::process (juce::AudioBuffer<float>& buffer, int numSamples)
         const juce::ScopedTryLock callbackLock (plugin.getCallbackLock());
 
         if (! callbackLock.isLocked() || plugin.isSuspended())
+        {
+            if (slot->busyBlocks.fetch_add (1, std::memory_order_relaxed) + 1 == stallBlocks)
+                stallRaised.store (true, std::memory_order_release);   // a second or two of dry passes: the operator hears of it
+
             continue;
+        }
+
+        slot->busyBlocks.store (0, std::memory_order_relaxed);
 
         if (bypassed || slot->numScratchChannels != 2 || ins > 2 || outs > 2)
         {
@@ -590,7 +677,7 @@ void PluginChain::resetProcessing() noexcept
         }
         catch (...)
         {
-            slot->faulted.store (true, std::memory_order_relaxed);
+            markFaulted (*slot);   // and the operator hears of it, like any other fault
         }
 
         slot->scratch.clear();
@@ -599,8 +686,31 @@ void PluginChain::resetProcessing() noexcept
 
 void PluginChain::notifyChanged()
 {
+    updateTailCache();   // slots added, removed, moved, bypassed: what the callback reads is current before anyone is told
+
     if (listener != nullptr)
         listener->chainChanged (*this);
+}
+
+juce::StringArray PluginChain::takeNewStalls()
+{
+    juce::StringArray names;
+
+    if (! stallRaised.exchange (false, std::memory_order_acq_rel))
+        return names;
+
+    const juce::ScopedLock sl (lock);
+
+    for (auto& slot : slots)
+    {
+        if (slot->plugin != nullptr && ! slot->stallReported && slot->busyBlocks.load (std::memory_order_relaxed) >= stallBlocks)
+        {
+            slot->stallReported = true;
+            names.add (slot->plugin->getName());
+        }
+    }
+
+    return names;
 }
 
 void PluginChain::audioProcessorParameterChanged (juce::AudioProcessor*, int, float)

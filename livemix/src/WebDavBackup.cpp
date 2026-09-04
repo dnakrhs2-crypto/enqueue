@@ -617,7 +617,7 @@ void WebDavBackup::cancel()
             active->cancel();
     }
 
-    stopThread (8000);   // a cancelled request returns at once; the wait is only for a response already on its way
+    stopThread (30000);   // a cancelled request returns at once; the wait is for a response already on its way (JUCE kills the thread only after that)
 }
 
 //==============================================================================
@@ -674,12 +674,25 @@ int WebDavBackup::request (const juce::String& method, const juce::String& path,
                 return 0;
             }
 
-            const auto got = (juce::int64) stream->readIntoMemoryBlock (*response, (juce::ssize_t) maxResponseBytes);
+            const auto got = (juce::int64) stream->readIntoMemoryBlock (*response, (juce::ssize_t) maxResponseBytes + 1);   // one past the cap tells a body that is too long
+
+            if (got > maxResponseBytes)
+            {
+                {
+                    const juce::ScopedLock sl (activeLock);
+                    active = nullptr;
+                }
+
+                error = juce::String::fromUTF8 ("서버의 응답이 너무 큽니다: ") + path;
+                return 0;
+            }
+
             truncated = expected >= 0 && got != expected;
         }
         else
         {
-            stream->readEntireStreamAsString();   // drain the (small) response
+            juce::MemoryBlock drain;
+            stream->readIntoMemoryBlock (drain, (juce::ssize_t) maxResponseBytes);   // drain, bounded: the body of a PUT / MOVE / MKCOL answer is not used
         }
     }
 

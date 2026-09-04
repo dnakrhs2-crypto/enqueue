@@ -25,6 +25,8 @@ MixDocument::MixDocument (MixEngine& e) : engine (e)
 void MixDocument::applyToEngine()
 {
     engine.applySession (session, nullptr, true);
+    graphApplied = true;
+    notifyStructure();   // the views (and the chain listeners that close a removed plugin's editor) learn of the graph
 }
 
 juce::String MixDocument::getDisplayName() const
@@ -41,6 +43,7 @@ void MixDocument::newSession()
     file = juce::File();
     dirty = false;
     engine.applySession (session, nullptr, true);
+    graphApplied = true;
     notifyStructure();
     notifyValue();   // the window title and the values shown
 }
@@ -58,6 +61,7 @@ juce::Result MixDocument::load (const juce::File& newFile, juce::StringArray* wa
     dirty = false;
     juce::StringArray restoreErrors;
     engine.applySession (session, &restoreErrors, true);
+    graphApplied = true;
 
     if (pluginErrors != nullptr)
         pluginErrors->addArray (restoreErrors);
@@ -74,7 +78,10 @@ juce::Result MixDocument::save (const juce::File& newFile)
     for (int attempt = 0;; ++attempt)
     {
         pollPluginEdits();   // edits reported so far are captured below (and keep the document dirty should the write fail)
-        engine.captureLivePluginStates (session);
+
+        if (! engine.captureLivePluginStates (session))
+            return juce::Result::fail (juce::String::fromUTF8 ("플러그인 설정을 읽지 못해 저장하지 않았습니다 (플러그인이 오류를 냈습니다). 다시 시도하거나 그 플러그인을 체인에서 빼세요."));
+
         session.sanitise();
         const auto result = session.save (newFile);
 
@@ -86,8 +93,16 @@ juce::Result MixDocument::save (const juce::File& newFile)
 
         // an edit that arrived during the capture / write is not in the file: written again, twice at most (a knob
         // being turned right now keeps the document dirty, and the title says so)
-        if (! pollPluginEdits() || attempt >= 2)
+        if (! pollPluginEdits())
             break;
+
+        if (attempt >= 2)
+        {
+            // three writes and a knob is still moving: the file is a moment behind, and the document says so
+            dirty = true;
+            notifyValue();
+            return juce::Result::fail (juce::String::fromUTF8 ("저장하는 동안 플러그인 값이 계속 바뀌어 마지막 변경이 파일에 없습니다. 잠시 뒤 다시 저장해 주세요."));
+        }
     }
 
     notifyValue();   // the title and the views

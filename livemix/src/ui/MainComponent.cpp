@@ -45,7 +45,9 @@ MainComponent::MainComponent (MixDocument& doc, LiveMixSettings& s)
     chainDrawer.onClose = [this] { showDrawer (Drawer::none); };
     chainDrawer.onOpenPluginManager = [this] { showPluginManager(); };
     chainDrawer.onChainEdited = [this] { refreshValues(); };
-    addChildComponent (fxDrawer);
+    fxDrawerViewport.setViewedComponent (&fxDrawer, false);
+    fxDrawerViewport.setScrollBarsShown (true, false);
+    addChildComponent (fxDrawerViewport);
     fxDrawer.onClose = [this] { showDrawer (Drawer::none); };
     fxDrawer.onOpenChain = [this] (const juce::Uuid& id)
     {
@@ -70,6 +72,7 @@ MainComponent::MainComponent (MixDocument& doc, LiveMixSettings& s)
     topBar.onBackup = [this] { showBackupDialog(); };
     topBar.onSettings = [this] { showSettingsDialog(); };
     topBar.onHelpMenu = [this] (juce::Component* anchor) { showHelpMenu (anchor); };
+    topBar.onHeightChanged = [this] { resized(); };
 
     statusLeft.setFont (bodyFont (12.5f));
     statusLeft.setColour (juce::Label::textColourId, Palette::dimText);
@@ -220,7 +223,12 @@ void MainComponent::refreshValues()
         card->refresh();
 
     masterCard.refresh();
+
+    if (masterCard.getHeight() != masterCard.getPreferredHeight (masterCard.getWidth()))
+        resized();   // more or fewer chip rows: the master's height, and the room above it
+
     fxDrawer.refresh();
+    layoutFxDrawer();
     topBar.refresh();
     topBar.setFxCount ((int) document.getSession().fx.size());
 
@@ -271,7 +279,7 @@ void MainComponent::layoutCards()
 void MainComponent::resized()
 {
     auto area = getLocalBounds();
-    topBar.setBounds (area.removeFromTop (TopBar::preferredHeight (getWidth())));   // two or three rows in a narrow window
+    topBar.setBounds (area.removeFromTop (topBar.preferredHeight (getWidth())));   // two or three rows in a narrow window
 
     if (noticeVisible)
     {
@@ -311,15 +319,16 @@ void MainComponent::resized()
     const int drawerW = getWidth() < 700 ? getWidth() : juce::jmin (440, juce::jmax (320, getWidth() / 3));   // portrait: the whole width
     const auto drawerArea = area.withLeft (getWidth() - drawerW);   // the right edge, over the cards and the master
     chainDrawer.setBounds (drawerArea);
-    fxDrawer.setBounds (drawerArea);
+    fxDrawerViewport.setBounds (drawerArea);
+    layoutFxDrawer();
     chainDrawer.setVisible (drawer == Drawer::chain);
-    fxDrawer.setVisible (drawer == Drawer::fx);
+    fxDrawerViewport.setVisible (drawer == Drawer::fx);
 
     if (drawer != Drawer::none)
         area.setRight (getWidth() - drawerW);
 
     const int masterH = masterCard.getPreferredHeight (area.getWidth() - 32);   // grows with its chip rows
-    masterCard.setBounds (area.removeFromBottom (masterH).reduced (16, 8));
+    masterCard.setBounds (area.removeFromBottom (masterH + 16).reduced (16, 8));   // the 8 px above and below are the layout's, not the card's
     viewport.setBounds (area.reduced (16, 12));
     layoutCards();
 }
@@ -341,7 +350,7 @@ void MainComponent::paint (juce::Graphics& g)
     g.fillRect (status);
     g.setColour (Palette::line);
     g.fillRect (status.removeFromTop (1));
-    g.fillRect (juce::Rectangle<int> (0, getHeight() - 30 - 176 - 8, getWidth() - (drawer == Drawer::none ? 0 : juce::jmin (440, juce::jmax (320, getWidth() / 3))), 1));
+    g.fillRect (juce::Rectangle<int> (0, masterCard.getY() - 8, masterCard.getRight() + 16, 1));   // above the master, whatever its height
 }
 
 //==============================================================================
@@ -533,13 +542,35 @@ void MainComponent::timerCallback()
     document.pollPluginEdits();   // a knob turned in a plugin editor: the title shows the session as changed
 
     // a plugin that faulted (threw, or produced NaN / Inf): dry from then on, and the operator is told once
-    juce::StringArray faulted;
-    engine.forEachChain ([&faulted] (PluginChain& chain) { faulted.addArray (chain.takeNewFaults()); });
+    juce::StringArray faulted, stalled;
+    engine.forEachChain ([&] (PluginChain& chain) { faulted.addArray (chain.takeNewFaults()); stalled.addArray (chain.takeNewStalls()); });
+    bool noteChanged = false;
 
-    if (! faulted.isEmpty())
+    for (const auto& name : faulted)
+        if (! faultedPlugins.contains (name))
+        {
+            faultedPlugins.add (name);
+            noteChanged = true;
+        }
+
+    for (const auto& name : stalled)
+        if (! stalledPlugins.contains (name))
+        {
+            stalledPlugins.add (name);
+            noteChanged = true;
+        }
+
+    if (noteChanged)
     {
-        pluginNote = ko ("플러그인 오류로 꺼짐: ") + faulted.joinIntoString (", ")
-                     + ko (" - 그 자리는 소리를 그대로 통과시킵니다. 체인에서 빼거나 다시 넣으세요.");
+        // every plugin told of so far stays in the line (a later fault must not push an earlier one out)
+        pluginNote.clear();
+
+        if (! faultedPlugins.isEmpty())
+            pluginNote << ko ("플러그인 오류로 꺼짐: ") << faultedPlugins.joinIntoString (", ") << ko (" - 그 자리는 소리를 그대로 통과시킵니다. 체인에서 빼거나 다시 넣으세요.");
+
+        if (! stalledPlugins.isEmpty())
+            pluginNote << (pluginNote.isEmpty() ? "" : "\n") << ko ("응답이 없어 건너뛰는 중: ") << stalledPlugins.joinIntoString (", ") << ko (" - 그 플러그인이 다시 답하면 소리가 돌아옵니다.");
+
         refreshNotice();
     }
 
@@ -799,6 +830,9 @@ void MainComponent::newSession()
     {
         document.newSession();
         muteGroups.reset();           // a session starts with its groups released
+        faultedPlugins.clear();
+        stalledPlugins.clear();
+        pluginNote.clear();
         setSessionNote ({}, false);   // the old session's notes do not describe the new one
         setSaveError ({});
         showStatus (ko ("새 세션"));
@@ -812,7 +846,6 @@ void MainComponent::openSession (const juce::File& file)
 
 void MainComponent::loadSession (const juce::File& file)
 {
-    muteGroups.reset();   // the opened session starts with its groups released
     juce::StringArray warnings, pluginErrors;
     const auto result = document.load (file, &warnings, &pluginErrors);
 
@@ -822,6 +855,10 @@ void MainComponent::loadSession (const juce::File& file)
         return;
     }
 
+    muteGroups.reset();   // the opened session starts with its groups released (only now: the old mix played on while it loaded)
+    faultedPlugins.clear();
+    stalledPlugins.clear();
+    pluginNote.clear();
     setSessionNote ({}, false);   // the previous session's notes; the startup note stays until a device runs
     setSaveError ({});
     settings.setLastSessionFile (file);
@@ -1114,6 +1151,16 @@ void MainComponent::registerHotkeys()
     apply (2, settings.getFxMuteHotkey(), ko ("FX 뮤트그룹"));
 }
 
+void MainComponent::layoutFxDrawer()
+{
+    // the drawer is as tall as its content (a long chain, many mics): the viewport scrolls it
+    const int width = fxDrawerViewport.getWidth();
+    const int bar = fxDrawerViewport.getScrollBarThickness();
+    const bool scrolls = fxDrawer.getPreferredHeight (width - bar) > fxDrawerViewport.getHeight();
+    const int contentWidth = juce::jmax (1, width - (scrolls ? bar : 0));
+    fxDrawer.setSize (contentWidth, juce::jmax (fxDrawerViewport.getHeight(), fxDrawer.getPreferredHeight (contentWidth)));
+}
+
 void MainComponent::muteGroupsChanged()
 {
     const bool mic = muteGroups.isMuted (MuteGroups::Group::mic);
@@ -1129,7 +1176,18 @@ void MainComponent::muteGroupsChanged()
 
 void MainComponent::showSettingsDialog()
 {
-    SettingsDialog::show (engine, settings, this, [this] { deviceChosen(); }, [this] { registerHotkeys(); });
+    SettingsDialog::show (engine, settings, this, [this] { deviceChosen(); }, [this] { registerHotkeys(); },
+                          [this] (bool capturing)
+                          {
+                              // the key being chosen must not fire the group it is bound to right now
+                              if (capturing)
+                              {
+                                  hotkeys.clear (1);
+                                  hotkeys.clear (2);
+                              }
+                              else
+                                  registerHotkeys();
+                          });
 }
 
 } // namespace gocue::livemix

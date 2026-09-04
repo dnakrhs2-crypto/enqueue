@@ -13,8 +13,10 @@ namespace
     class SettingsContent : public juce::Component
     {
     public:
-        SettingsContent (MixEngine& e, LiveMixSettings& s, std::function<void()> deviceChanged, std::function<void()> hotkeysChanged)
-            : engine (e), settings (s), onDeviceChanged (std::move (deviceChanged)), onHotkeysChanged (std::move (hotkeysChanged))
+        SettingsContent (MixEngine& e, LiveMixSettings& s, std::function<void()> deviceChanged, std::function<void()> hotkeysChanged,
+                         std::function<void (bool)> hotkeyCapture)
+            : engine (e), settings (s), onDeviceChanged (std::move (deviceChanged)), onHotkeysChanged (std::move (hotkeysChanged)),
+              onHotkeyCapture (std::move (hotkeyCapture))
         {
             styleCaption (deviceCaption, ko ("ASIO 장치"));
             addAndMakeVisible (deviceCaption);
@@ -97,6 +99,7 @@ namespace
 
                     return juce::String();
                 };
+                button.onCaptureChanged = [this] (bool capturing) { if (onHotkeyCapture) onHotkeyCapture (capturing); };
                 button.onHotkeyChanged = [this, set, &button] (const juce::String& description)
                 {
                     (settings.*set) (description);
@@ -198,6 +201,12 @@ namespace
                 onDeviceChanged();
         }
 
+        ~SettingsContent() override
+        {
+            if ((micHotkey.isCapturing() || fxHotkey.isCapturing()) && onHotkeyCapture)
+                onHotkeyCapture (false);   // the dialog went away mid-capture: the hotkeys come back
+        }
+
         void resized() override
         {
             auto area = getLocalBounds().reduced (20, 16);
@@ -242,6 +251,7 @@ namespace
         MixEngine& engine;
         LiveMixSettings& settings;
         std::function<void()> onDeviceChanged, onHotkeysChanged;
+        std::function<void (bool)> onHotkeyCapture;
         juce::StringArray names;
         juce::Label deviceCaption, bufferCaption, deviceNote, backupCaption, backupNote, hotkeyCaption, hotkeyNote, micHotkeyLabel, fxHotkeyLabel;
         HotkeyButton micHotkey, fxHotkey;
@@ -256,7 +266,7 @@ namespace
 }
 
 void SettingsDialog::show (MixEngine& engine, LiveMixSettings& settings, juce::Component* centreAround, std::function<void()> onDeviceChanged,
-                           std::function<void()> onHotkeysChanged)
+                           std::function<void()> onHotkeysChanged, std::function<void (bool capturing)> onHotkeyCapture)
 {
     if (openDialog != nullptr)
     {
@@ -265,7 +275,7 @@ void SettingsDialog::show (MixEngine& engine, LiveMixSettings& settings, juce::C
     }
 
     juce::DialogWindow::LaunchOptions options;
-    options.content.setOwned (new SettingsContent (engine, settings, std::move (onDeviceChanged), std::move (onHotkeysChanged)));
+    options.content.setOwned (new SettingsContent (engine, settings, std::move (onDeviceChanged), std::move (onHotkeysChanged), std::move (onHotkeyCapture)));
     options.dialogTitle = ko ("설정");
     options.dialogBackgroundColour = Palette::card;
     options.escapeKeyTriggersCloseButton = true;

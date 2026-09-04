@@ -31,6 +31,8 @@ public:
     /** Puts the session into the engine's graph. The constructor does not: nothing reaches the outputs until the
         saved session (or a new one) is really in. */
     void applyToEngine();
+    /** A session went into the engine at least once (a startup whose every load failed still needs one). */
+    bool hasAppliedGraph() const noexcept { return graphApplied; }
     /** 'warnings' gets what the parser had to skip; plugin restore errors go to 'pluginErrors' (or to 'warnings' when null). */
     juce::Result load (const juce::File& file, juce::StringArray* warnings = nullptr, juce::StringArray* pluginErrors = nullptr);
     juce::Result save (const juce::File& file);
@@ -79,6 +81,7 @@ private:
     MixSession session;
     juce::File file;
     std::atomic<bool> dirty { false };
+    bool graphApplied = false;
 };
 
 } // namespace gocue::livemix
