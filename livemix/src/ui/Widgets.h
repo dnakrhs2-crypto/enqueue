@@ -229,6 +229,49 @@ public:
     }
 };
 
+/** The plugin chips of a chain: each as wide as its text (within limits), flowing left to right and wrapping.
+    The rows they take are counted by the same flow that places them - a count guessed from the number of chips is
+    wrong as soon as two wide chips no longer fit side by side. */
+namespace ChipFlow
+{
+    constexpr int height = 32, gap = 6, rowStep = height + gap, minWidth = 110;
+
+    inline juce::Font font() { return juce::Font (juce::FontOptions (pt (13.5f), juce::Font::bold)); }
+
+    /** One chip's width: its text plus 'padding', at least minWidth, at most 'available' (when that is wider). */
+    inline int width (const juce::String& text, int padding, int available)
+    {
+        const int wanted = padding + juce::roundToInt (juce::GlyphArrangement::getStringWidth (font(), text));
+        return juce::jlimit (minWidth, juce::jmax (minWidth, available), wanted);
+    }
+
+    /** Places the chips in 'area' when 'apply' is set; returns the number of rows they take (at least one). */
+    template <typename Chips>
+    int layout (const Chips& chips, juce::Rectangle<int> area, int padding, bool apply)
+    {
+        int x = area.getX(), y = area.getY(), rows = 1;
+
+        for (const auto& chip : chips)
+        {
+            const int w = width (chip->getButtonText(), padding, area.getWidth());
+
+            if (x + w > area.getRight() && x > area.getX())
+            {
+                x = area.getX();
+                y += rowStep;
+                ++rows;
+            }
+
+            if (apply)
+                chip->setBounds (x, y, w, height);
+
+            x += w + gap;
+        }
+
+        return rows;
+    }
+}
+
 /** A device input / output picker filled from the device's channel names. */
 inline void fillChannelCombo (juce::ComboBox& combo, const juce::StringArray& names, bool pairs, int fallbackCount)
 {

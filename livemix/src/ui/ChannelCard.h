@@ -30,7 +30,8 @@ public:
     void setDeviceChannels (const juce::StringArray& inputNames, const juce::StringArray& outputNames);
     void setLayout (CardLayout layout);
     /** The height this card wants for the layout. */
-    int getPreferredHeight() const;
+    /** The height the card needs at 'width' in its current layout (the chip rows depend on the width). */
+    int getPreferredHeight (int width) const;
     void pushMeter (MixEngine::Meter meter) { meter_.push (meter); }
 
     std::function<void (const juce::Uuid&)> onOpenChain;      // "체인 열기"
@@ -47,6 +48,7 @@ private:
     struct SendRow;
     struct ChainChip;
 
+    int chainRowsForWidth (int width) const;
     void rebuildSends();
     void rebuildChain();
     void commitInput();

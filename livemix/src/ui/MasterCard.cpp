@@ -94,6 +94,15 @@ void MasterCard::rebuildChain()
     }
 }
 
+int MasterCard::getPreferredHeight (int width) const
+{
+    // the chain column's width in resized() at this card width, then the rows the chips take in it
+    const int afterHeadAndOut = width - 28 - 230 - 18 - 250 - 18;
+    const int chainW = afterHeadAndOut - juce::jlimit (160, 300, afterHeadAndOut / 3) - 18;
+    const int rows = ChipFlow::layout (chips, juce::Rectangle<int> (0, 0, juce::jmax (1, chainW), 1), 30, false);
+    return juce::jmax (176, 24 + 22 + rows * ChipFlow::rowStep + 6 + 30);   // margins, caption, chips, gap, buttons
+}
+
 void MasterCard::resized()
 {
     auto area = getLocalBounds().reduced (14, 12);
@@ -117,21 +126,7 @@ void MasterCard::resized()
     buttons.removeFromLeft (8);
     addPluginButton.setBounds (buttons.removeFromLeft (76));
     area.removeFromBottom (6);
-    int x = area.getX(), y = area.getY();
-
-    for (auto& chip : chips)
-    {
-        const int w = juce::jlimit (110, area.getWidth(), 30 + juce::roundToInt (juce::GlyphArrangement::getStringWidth (juce::Font (juce::FontOptions (pt (13.5f), juce::Font::bold)), chip->getButtonText())));
-
-        if (x + w > area.getRight() && x > area.getX())
-        {
-            x = area.getX();
-            y += 38;
-        }
-
-        chip->setBounds (x, y, w, 32);
-        x += w + 6;
-    }
+    ChipFlow::layout (chips, area, 30, true);
 
     latencyCaption.setBounds (lat.removeFromTop (22));
     latencyValue.setBounds (lat.removeFromTop (34));

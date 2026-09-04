@@ -30,6 +30,8 @@ public:
     std::function<void()> onChainEdited;   // after every edit (the document marks itself dirty)
 
     void showAddMenu (juce::Component* anchor);
+    /** The same menu, next to an area of the screen (a button's bounds captured before a layout moved it). */
+    void showAddMenu (juce::Rectangle<int> screenArea);
     void addPlugin (const juce::PluginDescription& description);
     void openEditor (int index);
 

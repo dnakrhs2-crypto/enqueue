@@ -26,6 +26,8 @@ public:
     std::function<void (int slotIndex)> onOpenPluginEditor;
 
     void resized() override;
+    /** The height the card needs at 'width': its usual height, more when the chips take more than two rows. */
+    int getPreferredHeight (int width) const;
     void paint (juce::Graphics& g) override;
 
 private:

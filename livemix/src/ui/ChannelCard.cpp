@@ -342,13 +342,32 @@ void ChannelCard::setLayout (CardLayout newLayout)
     }
 }
 
-int ChannelCard::getPreferredHeight() const
+int ChannelCard::chainRowsForWidth (int width) const
+{
+    // the width the chain column gets in resized() at this card width, then the rows the chips take in it
+    const int inner = width - 28;
+    int chainW = inner;
+
+    if (layout == CardLayout::wide)
+    {
+        const int afterHeadAndOut = inner - 230 - 18 - 250 - 18;
+        chainW = afterHeadAndOut - juce::jlimit (300, 430, afterHeadAndOut / 2) - 18;
+    }
+    else if (layout == CardLayout::medium)
+    {
+        chainW = inner - juce::jmax (230, inner * 2 / 5) - 18;
+    }
+
+    return ChipFlow::layout (chips, juce::Rectangle<int> (0, 0, juce::jmax (1, chainW), 1), 44, false);
+}
+
+int ChannelCard::getPreferredHeight (int width) const
 {
     const int sendRows = juce::jmax (1, (int) sends.size());
     const int fxH = 22 + sendRows * 34 + 4;
     const int headH = 34 + 8 + 40 + 8 + 30 + 8;
-    const int chainRows = juce::jmax (1, ((int) chips.size() + 2) / 3);
-    const int chainH = 22 + chainRows * 38 + 36;
+    const int chainRows = chainRowsForWidth (width);
+    const int chainH = 22 + chainRows * ChipFlow::rowStep + 36;
     const int outH = 22 + 34 + 12 + 18 + 40;
 
     switch (layout)
@@ -392,23 +411,8 @@ void ChannelCard::resized()
         addPluginButton.setBounds (buttons.removeFromLeft (76));
         r.removeFromBottom (6);
 
-        // chips flow left to right, wrapping
-        int x = r.getX(), y = r.getY();
-        const int h = 32, gap = 6;
-
-        for (auto& chip : chips)
-        {
-            const int w = juce::jlimit (110, r.getWidth(), 44 + juce::roundToInt (juce::GlyphArrangement::getStringWidth (juce::Font (juce::FontOptions (pt (13.5f), juce::Font::bold)), chip->getButtonText())));
-
-            if (x + w > r.getRight() && x > r.getX())
-            {
-                x = r.getX();
-                y += h + gap;
-            }
-
-            chip->setBounds (x, y, w, h);
-            x += w + gap;
-        }
+        // chips flow left to right, wrapping (the same flow counts the rows for the height)
+        ChipFlow::layout (chips, r, 44, true);
     };
 
     auto layoutFx = [this] (juce::Rectangle<int> r)
@@ -451,7 +455,7 @@ void ChannelCard::resized()
     }
     else if (layout == CardLayout::medium)
     {
-        const int topH = juce::jmax (34 + 8 + 40 + 8 + 30, 22 + juce::jmax (1, ((int) chips.size() + 2) / 3) * 38 + 36);
+        const int topH = juce::jmax (34 + 8 + 40 + 8 + 30, 22 + chainRowsForWidth (getWidth()) * ChipFlow::rowStep + 36);
         auto top = area.removeFromTop (topH);
         area.removeFromTop (16);
         auto head = top.removeFromLeft (juce::jmax (230, top.getWidth() * 2 / 5));
@@ -467,7 +471,7 @@ void ChannelCard::resized()
     {
         layoutHead (area.removeFromTop (34 + 8 + 40 + 8 + 30));
         area.removeFromTop (14);
-        const int chainH = 22 + juce::jmax (1, ((int) chips.size() + 2) / 3) * 38 + 36;
+        const int chainH = 22 + chainRowsForWidth (getWidth()) * ChipFlow::rowStep + 36;
         layoutChain (area.removeFromTop (chainH));
         area.removeFromTop (14);
         layoutFx (area.removeFromTop (22 + juce::jmax (1, (int) sends.size()) * 34 + 4));

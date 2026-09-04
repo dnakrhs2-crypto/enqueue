@@ -64,6 +64,26 @@ public:
     juce::Font getComboBoxFont (juce::ComboBox&) override { return juce::Font (juce::FontOptions (pt (14.5f))); }
     juce::Font getLabelFont (juce::Label& label) override { return label.getFont(); }
 
+    void drawToggleButton (juce::Graphics& g, juce::ToggleButton& button, bool isMouseOverButton, bool isButtonDown) override
+    {
+        // LookAndFeel_V4's drawing with the text in the scaled size (V4 hard-codes 15 px)
+        const float fontSize = juce::jmin (pt (15.0f), (float) button.getHeight() * 0.75f);
+        const float tickWidth = fontSize * 1.1f;
+
+        drawTickBox (g, button, 4.0f, ((float) button.getHeight() - tickWidth) * 0.5f, tickWidth, tickWidth,
+                     button.getToggleState(), button.isEnabled(), isMouseOverButton, isButtonDown);
+
+        g.setColour (button.findColour (juce::ToggleButton::textColourId));
+        g.setFont (juce::Font (juce::FontOptions (fontSize)));
+
+        if (! button.isEnabled())
+            g.setOpacity (0.5f);
+
+        g.drawFittedText (button.getButtonText(),
+                          button.getLocalBounds().withTrimmedLeft (juce::roundToInt (tickWidth) + 10).withTrimmedRight (2),
+                          juce::Justification::centredLeft, 10);
+    }
+
     void drawCornerResizer (juce::Graphics& g, int w, int h, bool isMouseOver, bool isMouseDragging) override
     {
         // three short diagonals in the corner: the window's resize handle

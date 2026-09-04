@@ -208,6 +208,11 @@ void ChainDrawer::layoutRows()
 
 void ChainDrawer::showAddMenu (juce::Component* anchor)
 {
+    showAddMenu (anchor != nullptr ? anchor->getScreenBounds() : getScreenBounds());
+}
+
+void ChainDrawer::showAddMenu (juce::Rectangle<int> screenArea)
+{
     if (chain == nullptr)
         return;
 
@@ -225,7 +230,7 @@ void ChainDrawer::showAddMenu (juce::Component* anchor)
 
     juce::Component::SafePointer<ChainDrawer> safeThis (this);
     const int forRevision = revision;
-    menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (anchor), [safeThis, types, forRevision] (int result)
+    menu.showMenuAsync (juce::PopupMenu::Options().withTargetScreenArea (screenArea), [safeThis, types, forRevision] (int result)
     {
         if (safeThis == nullptr || result == 0 || safeThis->revision != forRevision)
             return;

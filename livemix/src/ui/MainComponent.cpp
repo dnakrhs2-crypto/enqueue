@@ -249,7 +249,7 @@ void MainComponent::layoutCards()
     for (auto& card : cards)
     {
         card->setLayout (mode);
-        const int h = card->getPreferredHeight();
+        const int h = card->getPreferredHeight (width);
         card->setBounds (0, y, width, h);
         y += h + gap;
     }
@@ -306,7 +306,7 @@ void MainComponent::resized()
     if (drawer != Drawer::none)
         area.setRight (getWidth() - drawerW);
 
-    const int masterH = 176;
+    const int masterH = masterCard.getPreferredHeight (area.getWidth() - 32);   // grows with its chip rows
     masterCard.setBounds (area.removeFromBottom (masterH).reduced (16, 8));
     viewport.setBounds (area.reduced (16, 12));
     layoutCards();
@@ -388,8 +388,10 @@ void MainComponent::addPluginTo (PluginChain* chain, const juce::String& title, 
     if (chain == nullptr)
         return;
 
+    // where the button is now: opening the drawer narrows the cards and may move it (or hide it, in the FX drawer)
+    const auto anchorArea = anchor != nullptr ? anchor->getScreenBounds() : juce::Rectangle<int>();
     openChainFor (chain, title);
-    chainDrawer.showAddMenu (anchor != nullptr ? anchor : &chainDrawer);
+    chainDrawer.showAddMenu (anchorArea.isEmpty() ? chainDrawer.getScreenBounds() : anchorArea);
 }
 
 void MainComponent::showPluginManager()
@@ -633,6 +635,16 @@ void MainComponent::refreshNotice()
     repaint();
 }
 
+static void commitPendingRename()
+{
+    // a name still being typed in a card (a Label's editor) goes into the document before the session is saved
+    // or replaced - the editor commits on its own only when it loses the focus, and that arrives later
+    if (auto* focused = juce::Component::getCurrentlyFocusedComponent())
+        if (auto* label = dynamic_cast<juce::Label*> (focused->getParentComponent()))
+            if (label->isBeingEdited())
+                label->hideEditor (false);
+}
+
 bool MainComponent::keyPressed (const juce::KeyPress& key, juce::Component*)
 {
     // the session shortcuts, wherever the focus is in the window (a text field lets them through)
@@ -645,6 +657,8 @@ bool MainComponent::keyPressed (const juce::KeyPress& key, juce::Component*)
 
     if (code == 'S' || code == 's')
     {
+        commitPendingRename();
+
         if (mods.isShiftDown())
             saveSessionAs();
         else
@@ -655,6 +669,7 @@ bool MainComponent::keyPressed (const juce::KeyPress& key, juce::Component*)
 
     if ((code == 'N' || code == 'n') && ! mods.isShiftDown())
     {
+        commitPendingRename();
         newSession();
         return true;
     }

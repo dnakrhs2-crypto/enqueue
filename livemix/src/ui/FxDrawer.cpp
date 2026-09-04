@@ -168,7 +168,7 @@ void FxDrawer::rebuildTabs()
         const auto& f = session.fx[i];
         const auto badge = "FX" + juce::String ((int) i + 1);
         const bool defaultName = f.name.trim() == "FX " + juce::String ((int) i + 1);   // the default name says no more than the badge
-        auto tab = std::make_unique<juce::TextButton> (defaultName ? f.name.trim() : badge + "  " + f.name);
+        auto tab = std::make_unique<juce::TextButton> (defaultName ? badge : badge + "  " + f.name);
         tab->setWantsKeyboardFocus (false);
         tab->setToggleState (f.id == selected, juce::dontSendNotification);
         tab->setColour (juce::TextButton::buttonOnColourId, Palette::accent);
@@ -288,24 +288,8 @@ void FxDrawer::resized()
     area.removeFromTop (12);
 
     chainCaption.setBounds (area.removeFromTop (20));
-    int x = area.getX(), y = area.getY();
-    const int chipRows = juce::jmax (1, ((int) chips.size() + 1) / 2);
-
-    for (auto& chip : chips)
-    {
-        const int w = juce::jlimit (110, area.getWidth(), 30 + juce::roundToInt (juce::GlyphArrangement::getStringWidth (juce::Font (juce::FontOptions (pt (13.5f), juce::Font::bold)), chip->getButtonText())));
-
-        if (x + w > area.getRight() && x > area.getX())
-        {
-            x = area.getX();
-            y += 38;
-        }
-
-        chip->setBounds (x, y, w, 32);
-        x += w + 6;
-    }
-
-    area.removeFromTop (chips.empty() ? 0 : chipRows * 38);
+    const int chipRows = ChipFlow::layout (chips, area, 30, true);
+    area.removeFromTop (chips.empty() ? 0 : chipRows * ChipFlow::rowStep);
     auto buttons = area.removeFromTop (30);
     openChainButton.setBounds (buttons.removeFromLeft (92));
     buttons.removeFromLeft (8);
