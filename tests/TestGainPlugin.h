@@ -3,6 +3,8 @@
 #include <juce_audio_processors/juce_audio_processors.h>
 
 #include <cstring>
+#include <limits>
+#include <stdexcept>
 
 namespace gocue::tests
 {
@@ -23,7 +25,15 @@ public:
     ~TestGainPlugin() override { --liveInstances; }
 
     const juce::String getName() const override { return "TestGain"; }
-    void prepareToPlay (double sr, int bs) override { preparedSampleRate = sr; preparedBlockSize = bs; ++prepareCount; }
+    void prepareToPlay (double sr, int bs) override
+    {
+        preparedSampleRate = sr;
+        preparedBlockSize = bs;
+        ++prepareCount;
+
+        if (throwOnPrepare)
+            throw std::runtime_error ("prepare failed");
+    }
     void releaseResources() override { ++releaseCount; }
 
     void processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer&) override
@@ -32,6 +42,9 @@ public:
         lastNumSamples = buffer.getNumSamples();
         ++processCount;
         buffer.applyGain (gain);
+
+        if (emitNaN && buffer.getNumSamples() > 0)
+            buffer.setSample (0, 0, std::numeric_limits<float>::quiet_NaN());   // a broken plugin: poison in the output
     }
 
     double getTailLengthSeconds() const override { return tail; }
@@ -78,6 +91,8 @@ public:
     int processCount = 0;
     int lastNumChannels = 0;
     int lastNumSamples = 0;
+    bool emitNaN = false;          // writes a NaN into the first sample of every block
+    bool throwOnPrepare = false;   // prepareToPlay throws
     static inline int liveInstances = 0;   // instances alive right now (a chain rebuild must destroy the old ones)
 };
 

@@ -144,6 +144,20 @@ void MixSession::sanitise()
     if ((int) fx.size() > maxFx)
         fx.resize ((size_t) maxFx);
 
+    auto capChain = [] (std::vector<PluginSlotState>& chain)
+    {
+        if ((int) chain.size() > maxChainSlots)
+            chain.resize ((size_t) maxChainSlots);
+    };
+
+    for (auto& c : channels)
+        capChain (c.chain);
+
+    for (auto& f : fx)
+        capChain (f.chain);
+
+    capChain (master.chain);
+
     std::set<juce::String> seen;
 
     auto uniqueId = [&seen] (juce::Uuid& id)
@@ -405,10 +419,22 @@ juce::Result MixSession::save (const juce::File& file) const
     });
 }
 
+juce::Result MixSession::checkFileSize (juce::int64 bytes)
+{
+    if (bytes > maxFileBytes)
+        return juce::Result::fail (juce::String::fromUTF8 ("세션 파일이 너무 큽니다 (") + juce::File::descriptionOfSizeInBytes (bytes)
+                                   + juce::String::fromUTF8 ("): 세션 파일이 아닙니다"));
+
+    return juce::Result::ok();
+}
+
 juce::Result MixSession::load (const juce::File& file, MixSession& out, juce::StringArray* warnings)
 {
     if (! file.existsAsFile())
         return juce::Result::fail (juce::String::fromUTF8 ("파일이 없습니다: ") + file.getFullPathName());
+
+    if (const auto size = checkFileSize (file.getSize()); size.failed())
+        return size;   // not read into memory at all
 
     return fromJson (file.loadFileAsString(), out, warnings);
 }

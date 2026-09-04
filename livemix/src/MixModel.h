@@ -70,6 +70,8 @@ struct MixSession
     static constexpr int maxChannels = 8;
     static constexpr int maxFx = 4;
     static constexpr int maxDeviceChannels = 64;
+    static constexpr int maxChainSlots = 16;                        // plugins per chain
+    static constexpr juce::int64 maxFileBytes = 32 * 1024 * 1024;   // a session file beyond this is not a session
     static constexpr const char* fileExtension = ".livemix";
 
     juce::String name;
@@ -103,6 +105,8 @@ struct MixSession
     /** Verified atomic save (SafeFileWrite) / load. */
     juce::Result save (const juce::File& file) const;
     static juce::Result load (const juce::File& file, MixSession& out, juce::StringArray* warnings = nullptr);
+    /** "" when a file of that size may be read as a session. */
+    static juce::Result checkFileSize (juce::int64 bytes);
 };
 
 } // namespace gocue::livemix

@@ -11,6 +11,7 @@ namespace gocue::livemix
 namespace
 {
     constexpr int passwordRounds = 20000;
+    constexpr juce::int64 maxResponseBytes = 64 * 1024 * 1024;   // a listing or a session is far smaller; nothing bigger is read into memory
 
     juce::String encodePath (const juce::String& path)
     {
@@ -616,7 +617,7 @@ void WebDavBackup::cancel()
             active->cancel();
     }
 
-    stopThread (30000);   // a cancelled request returns at once; the wait is only for a response already on its way
+    stopThread (8000);   // a cancelled request returns at once; the wait is only for a response already on its way
 }
 
 //==============================================================================
@@ -661,7 +662,19 @@ int WebDavBackup::request (const juce::String& method, const juce::String& path,
         {
             response->reset();
             const auto expected = stream->getTotalLength();   // -1 when the server did not say
-            const auto got = (juce::int64) stream->readIntoMemoryBlock (*response);
+
+            if (expected > maxResponseBytes)
+            {
+                {
+                    const juce::ScopedLock sl (activeLock);
+                    active = nullptr;
+                }
+
+                error = juce::String::fromUTF8 ("서버의 응답이 너무 큽니다: ") + path;
+                return 0;
+            }
+
+            const auto got = (juce::int64) stream->readIntoMemoryBlock (*response, (juce::ssize_t) maxResponseBytes);
             truncated = expected >= 0 && got != expected;
         }
         else

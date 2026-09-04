@@ -73,6 +73,22 @@ public:
     {
         juce::AudioBuffer<float> buffer (2, 512);
 
+        beginTest ("a plugin that throws while preparing is faulted, not run; a throwing release does not escape");
+        {
+            PluginChain chain;
+            chain.prepare (48000.0, 64);
+            auto* bad = new TestGainPlugin (2.0f);
+            bad->throwOnPrepare = true;
+            chain.addPlugin (std::unique_ptr<juce::AudioPluginInstance> (bad));
+            juce::AudioBuffer<float> dry (2, 64);
+            dry.clear();
+            dry.setSample (0, 0, 0.5f);
+            chain.process (dry, 64);
+            expectWithinAbsoluteError (dry.getSample (0, 0), 0.5f, 1e-6f);   // dry: never run
+            expectEquals (chain.takeNewFaults().joinIntoString (","), juce::String ("TestGain"));
+            chain.clear();
+        }
+
         beginTest ("plugins are prepared, processed in order and can be bypassed");
         {
             PluginChain chain;

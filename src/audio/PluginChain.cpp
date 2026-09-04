@@ -14,6 +14,7 @@ void PluginChain::prepare (double newSampleRate, int newBlockSize)
 {
     sampleRate = newSampleRate > 0.0 ? newSampleRate : 44100.0;
     blockSize = juce::jmax (1, newBlockSize);
+    midi.ensureSize (4096);   // an effect that emits MIDI must not make the buffer grow on the audio thread
 
     const juce::ScopedLock sl (lock);
 
@@ -26,23 +27,69 @@ void PluginChain::prepareSlot (Slot& slot)
 {
     auto& plugin = *slot.plugin;
 
-    // Stereo in / stereo out on the main buses, every other bus disabled.
-    juce::AudioProcessor::BusesLayout layout;
+    try
+    {
+        // Stereo in / stereo out on the main buses, every other bus disabled.
+        juce::AudioProcessor::BusesLayout layout;
 
-    for (int i = 0; i < plugin.getBusCount (true); ++i)
-        layout.inputBuses.add (i == 0 ? juce::AudioChannelSet::stereo() : juce::AudioChannelSet::disabled());
+        for (int i = 0; i < plugin.getBusCount (true); ++i)
+            layout.inputBuses.add (i == 0 ? juce::AudioChannelSet::stereo() : juce::AudioChannelSet::disabled());
 
-    for (int i = 0; i < plugin.getBusCount (false); ++i)
-        layout.outputBuses.add (i == 0 ? juce::AudioChannelSet::stereo() : juce::AudioChannelSet::disabled());
+        for (int i = 0; i < plugin.getBusCount (false); ++i)
+            layout.outputBuses.add (i == 0 ? juce::AudioChannelSet::stereo() : juce::AudioChannelSet::disabled());
 
-    if (! plugin.setBusesLayout (layout))
-        plugin.enableAllBuses();   // fall back to whatever the plugin insists on; scratch buffers adapt
+        if (! plugin.setBusesLayout (layout))
+            plugin.enableAllBuses();   // fall back to whatever the plugin insists on; scratch buffers adapt
 
-    plugin.setRateAndBufferSizeDetails (sampleRate, blockSize);
-    plugin.prepareToPlay (sampleRate, blockSize);
+        plugin.setRateAndBufferSizeDetails (sampleRate, blockSize);
+        plugin.prepareToPlay (sampleRate, blockSize);
+    }
+    catch (...)
+    {
+        markFaulted (slot);   // it threw while getting ready: it never runs
+    }
 
     slot.numScratchChannels = juce::jmax (2, plugin.getTotalNumInputChannels(), plugin.getTotalNumOutputChannels());
     slot.scratch.setSize (slot.numScratchChannels, blockSize, false, false, true);
+}
+
+void PluginChain::markFaulted (Slot& slot) noexcept
+{
+    slot.faulted.store (true, std::memory_order_relaxed);
+    faultRaised.store (true, std::memory_order_release);
+}
+
+juce::StringArray PluginChain::takeNewFaults()
+{
+    juce::StringArray names;
+
+    if (! faultRaised.exchange (false, std::memory_order_acq_rel))
+        return names;
+
+    const juce::ScopedLock sl (lock);
+
+    for (auto& slot : slots)
+    {
+        if (slot->faulted.load (std::memory_order_relaxed) && ! slot->faultReported)
+        {
+            slot->faultReported = true;
+            names.add (slot->plugin != nullptr ? slot->plugin->getName() : slot->state.name);
+        }
+    }
+
+    return names;
+}
+
+int PluginChain::getLatencySamples() const
+{
+    const juce::ScopedLock sl (lock);
+    int total = 0;
+
+    for (auto& slot : slots)
+        if (slot->plugin != nullptr && ! slot->bypassed.load (std::memory_order_relaxed) && ! slot->faulted.load (std::memory_order_relaxed))
+            total += juce::jmax (0, slot->plugin->getLatencySamples());
+
+    return total;
 }
 
 int PluginChain::getNumSlots() const
@@ -84,7 +131,11 @@ void PluginChain::destroySlot (std::unique_ptr<Slot> slot)
         if (listener != nullptr)
             listener->pluginAboutToBeRemoved (*this, *slot->plugin);
 
-        slot->plugin->releaseResources();
+        try
+        {
+            slot->plugin->releaseResources();
+        }
+        catch (...) {}   // a plugin that throws on its way out must not take the app with it
     }
 
     slot.reset();
@@ -104,7 +155,16 @@ void PluginChain::addPlugin (std::unique_ptr<juce::AudioPluginInstance> plugin, 
         juce::MemoryOutputStream decoded;
 
         if (juce::Base64::convertFromBase64 (decoded, initialState.stateBase64) && decoded.getDataSize() > 0)
-            plugin->setStateInformation (decoded.getData(), (int) decoded.getDataSize());
+        {
+            try
+            {
+                plugin->setStateInformation (decoded.getData(), (int) decoded.getDataSize());
+            }
+            catch (...)
+            {
+                markFaulted (*slot);   // it threw on its saved state: not trusted with the audio
+            }
+        }
     }
 
     slot->plugin = std::move (plugin);
@@ -246,7 +306,15 @@ void PluginChain::applyStates (const std::vector<PluginSlotState>& states)
                 // the same order process() takes: chain lock, then the plugin's own callback lock
                 const juce::ScopedLock sl (lock);
                 const juce::ScopedLock callbackLock (slot.plugin->getCallbackLock());
-                slot.plugin->setStateInformation (decoded.getData(), (int) decoded.getDataSize());
+
+                try
+                {
+                    slot.plugin->setStateInformation (decoded.getData(), (int) decoded.getDataSize());
+                }
+                catch (...)
+                {
+                    markFaulted (slot);
+                }
             }
         }
     }
@@ -275,13 +343,23 @@ std::vector<PluginSlotState> PluginChain::getStates() const
                 s.descriptionXml = xml->toString (juce::XmlElement::TextFormat().singleLine().withoutHeader());
 
             juce::MemoryBlock block;
+            bool captured = true;
 
             {
                 const juce::ScopedLock callbackLock (slot->plugin->getCallbackLock());   // not concurrently with processBlock()
-                slot->plugin->getStateInformation (block);
+
+                try
+                {
+                    slot->plugin->getStateInformation (block);
+                }
+                catch (...)
+                {
+                    captured = false;   // the state it was loaded with stays in the file
+                }
             }
 
-            s.stateBase64 = block.getSize() > 0 ? juce::Base64::toBase64 (block.getData(), block.getSize()) : juce::String();
+            if (captured)
+                s.stateBase64 = block.getSize() > 0 ? juce::Base64::toBase64 (block.getData(), block.getSize()) : juce::String();
         }
 
         result.push_back (std::move (s));
@@ -316,7 +394,16 @@ juce::StringArray PluginChain::restore (const std::vector<PluginSlotState>& stat
                 juce::MemoryOutputStream decoded;
 
                 if (juce::Base64::convertFromBase64 (decoded, state.stateBase64) && decoded.getDataSize() > 0)
-                    instance->setStateInformation (decoded.getData(), (int) decoded.getDataSize());
+                {
+                    try
+                    {
+                        instance->setStateInformation (decoded.getData(), (int) decoded.getDataSize());
+                    }
+                    catch (...)
+                    {
+                        markFaulted (*slot);
+                    }
+                }
             }
 
             slot->plugin = std::move (instance);
@@ -368,6 +455,20 @@ double PluginChain::getTailSeconds() const
     return juce::jlimit (0.0, maxTailSeconds, tail);
 }
 
+bool PluginChain::isFinite (const juce::AudioBuffer<float>& buffer, int numSamples) noexcept
+{
+    for (int ch = 0; ch < 2 && ch < buffer.getNumChannels(); ++ch)
+    {
+        const float* data = buffer.getReadPointer (ch);
+
+        for (int i = 0; i < numSamples; ++i)
+            if (! std::isfinite (data[i]))
+                return false;
+    }
+
+    return true;
+}
+
 void PluginChain::process (juce::AudioBuffer<float>& buffer, int numSamples)
 {
     const juce::ScopedLock sl (lock);
@@ -391,11 +492,12 @@ void PluginChain::process (juce::AudioBuffer<float>& buffer, int numSamples)
 
         midi.clear();
 
-        // Same contract as juce::AudioProcessorPlayer: hold the plugin's callback lock while it runs,
-        // and leave it alone (dry pass) while it has suspended itself, e.g. to load a preset.
-        const juce::ScopedLock callbackLock (plugin.getCallbackLock());
+        // The plugin's callback lock is held while it runs (as juce::AudioProcessorPlayer does) - but never waited
+        // for: the message thread holds it while it captures state for a save, and a slow plugin there must not stall
+        // every channel. Busy, or suspended (loading a preset): a dry pass for this block.
+        const juce::ScopedTryLock callbackLock (plugin.getCallbackLock());
 
-        if (plugin.isSuspended())
+        if (! callbackLock.isLocked() || plugin.isSuspended())
             continue;
 
         if (bypassed || slot->numScratchChannels != 2 || ins > 2 || outs > 2)
@@ -413,12 +515,18 @@ void PluginChain::process (juce::AudioBuffer<float>& buffer, int numSamples)
             }
             catch (...)
             {
-                slot->faulted.store (true, std::memory_order_relaxed);   // the show goes on without this plugin
+                markFaulted (*slot);   // the show goes on without this plugin
                 continue;
             }
 
             if (bypassed)
                 continue;   // the plugin kept time (delay lines, reverb tails stay current); output discarded
+
+            if (! isFinite (view, numSamples))
+            {
+                markFaulted (*slot);   // NaN / Inf would poison the buses: the dry input stays in 'buffer'
+                continue;
+            }
 
             for (int ch = 0; ch < 2 && ch < scratch.getNumChannels(); ++ch)
                 buffer.copyFrom (ch, 0, scratch, ch, 0, numSamples);
@@ -437,10 +545,20 @@ void PluginChain::process (juce::AudioBuffer<float>& buffer, int numSamples)
             }
             catch (...)
             {
-                slot->faulted.store (true, std::memory_order_relaxed);
+                markFaulted (*slot);
 
                 for (int ch = 0; ch < 2 && ch < scratch.getNumChannels(); ++ch)
                     buffer.copyFrom (ch, 0, scratch, ch, 0, numSamples);   // the input passes through untouched
+
+                continue;
+            }
+
+            if (! isFinite (view, numSamples))
+            {
+                markFaulted (*slot);   // NaN / Inf: the dry input goes on instead
+
+                for (int ch = 0; ch < 2 && ch < scratch.getNumChannels(); ++ch)
+                    buffer.copyFrom (ch, 0, scratch, ch, 0, numSamples);
 
                 continue;
             }

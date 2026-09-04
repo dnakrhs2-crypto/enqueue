@@ -1,6 +1,11 @@
 #include "MixEngine.h"
 #include "TestGainPlugin.h"
 
+#include <atomic>
+#include <chrono>
+#include <cmath>
+#include <thread>
+
 #include <juce_core/juce_core.h>
 
 #include <array>
@@ -153,6 +158,70 @@ public:
             render (engine, io, 2);
             expectEquals (chainGain->processCount, beforeOn + 2);   // on again: every block
             expectWithinAbsoluteError (io.last (0), 0.25f, 1e-6f);  // back through the chain (0.5 * 0.5)
+        }
+
+        beginTest ("a plugin that produces NaN is quarantined: its block passes dry, the slot is faulted, the operator hears of it once");
+        {
+            auto* poison = new TestGainPlugin (0.5f);
+            poison->emitNaN = true;
+            engine.getChannelChain (s.channels[1].id)->addPlugin (std::unique_ptr<juce::AudioPluginInstance> (poison));   // B -> direct 2-3
+            render (engine, io, 2);
+            expect (std::isfinite (io.last (2)) && std::isfinite (io.first (2)));
+            expectWithinAbsoluteError (io.last (2), 0.25f, 1e-6f);   // B's input (0.25) untouched: the plugin's output was thrown away
+            juce::StringArray faults;
+            engine.forEachChain ([&faults] (PluginChain& chain) { faults.addArray (chain.takeNewFaults()); });
+            expectEquals (faults.joinIntoString (","), juce::String ("TestGain"));
+            faults.clear();
+            engine.forEachChain ([&faults] (PluginChain& chain) { faults.addArray (chain.takeNewFaults()); });
+            expect (faults.isEmpty());   // told once
+            const auto meter = engine.readChannelMeter (s.channels[1].id);
+            expect (std::isfinite (meter.left));
+            engine.getChannelChain (s.channels[1].id)->removePlugin (0);
+        }
+
+        beginTest ("a plugin whose callback lock is busy (a save capturing its state) is passed dry, never waited for");
+        {
+            expect (chainGain != nullptr);
+            std::atomic<bool> release { false }, holding { false };
+            std::thread holder ([&]
+            {
+                const juce::ScopedLock sl (chainGain->getCallbackLock());
+                holding.store (true);
+
+                while (! release.load())
+                    std::this_thread::sleep_for (std::chrono::milliseconds (1));
+            });
+
+            while (! holding.load())
+                std::this_thread::sleep_for (std::chrono::milliseconds (1));
+
+            const auto t0 = juce::Time::getMillisecondCounterHiRes();
+            render (engine, io, 2);
+            const auto elapsed = juce::Time::getMillisecondCounterHiRes() - t0;
+            expectWithinAbsoluteError (io.last (0), 0.5f, 1e-6f);   // A dry: the 0.5 gain plugin was skipped
+            expectLessThan (elapsed, 200.0);                          // and nobody waited for the lock
+            release.store (true);
+            holder.join();
+            render (engine, io, 2);
+            expectWithinAbsoluteError (io.last (0), 0.25f, 1e-6f);   // back through the chain
+        }
+
+        beginTest ("a moved send or return fader ramps across the block instead of stepping");
+        {
+            engine.setSend (s.channels[0].id, s.fx[0].id, 1.0, false);   // post: 0.25 into the FX (bypass chain), back to the master
+            render (engine, io);
+            expectWithinAbsoluteError (io.first (0), 0.25f, 0.01f);              // the block starts where the last one ended (no send)
+            expectWithinAbsoluteError (io.last (0), 0.25f + 0.25f, 0.01f);       // and ends at the new level
+            render (engine, io);
+            expectWithinAbsoluteError (io.first (0), 0.5f, 1e-6f);               // steady from then on
+            engine.setFxReturn (s.fx[0].id, 0.0);
+            render (engine, io);
+            expectGreaterThan (io.first (0), 0.45f);                             // the return ramps down across the block
+            expectWithinAbsoluteError (io.last (0), 0.25f, 0.01f);
+            engine.setSend (s.channels[0].id, s.fx[0].id, 0.0, false);
+            engine.setFxReturn (s.fx[0].id, 1.0);
+            render (engine, io, 3);
+            expectWithinAbsoluteError (io.last (0), 0.25f, 1e-6f);
         }
 
         beginTest ("the FX channel can go to a direct pair instead of the master; the master chain shapes the main outputs");

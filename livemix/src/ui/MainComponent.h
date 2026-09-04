@@ -118,8 +118,11 @@ private:
     std::unique_ptr<juce::ResizableCornerComponent> cornerGrip;   // a visible handle: the frame's own edge is thin (and hard to hit over remote desktop)
     juce::TextButton noticeClose { juce::String::fromUTF8 ("\xE2\x9C\x95") };
     bool noticeVisible = false, noticeIsError = false;
-    juce::String sessionNote, startupNote, saveErrorNote;   // the three lines of the bar (see setSessionNote)
+    juce::String sessionNote, startupNote, saveErrorNote;   // the lines of the bar (see setSessionNote)
+    juce::String pluginNote;    // plugins that faulted (dry from then on), accumulated until the bar is closed
+    juce::String latencyNote;   // a plugin with latency in a mic chain
     bool sessionNoteIsError = false, startupNoteIsError = false, startupNoteIsSafeMode = false;
+    int ticksUntilLatencyCheck = 0;
     juce::File pendingCommandLineFile;   // a session named while a question was open: opened once the question is answered
     juce::StringArray inputNames, outputNames;
     juce::String statusText;

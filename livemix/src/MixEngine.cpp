@@ -206,13 +206,26 @@ juce::String MixEngine::setBufferSize (int samples)
     return {};
 }
 
+juce::String MixEngine::restartDevice()
+{
+    deviceManager.closeAudioDevice();
+    deviceManager.restartLastAudioDevice();
+
+    if (deviceManager.getCurrentAudioDevice() == nullptr || ! deviceManager.getCurrentAudioDevice()->isOpen())
+        return juce::String::fromUTF8 ("장치를 다시 열지 못했습니다. 설정에서 장치를 다시 고르세요.");
+
+    const auto widened = openAllChannels();
+    ensureCallback();
+    return widened;
+}
+
 juce::String MixEngine::openSessionDevice (const MixDevice& device)
 {
     if (device.name.isEmpty())
         return {};
 
     auto* current = deviceManager.getCurrentAudioDevice();
-    const bool sameDevice = current != nullptr && current->getName() == device.name;
+    const bool sameDevice = current != nullptr && current->isOpen() && current->getName() == device.name;   // a device object that failed to reopen is not "the same device running"
 
     if (sameDevice && (device.bufferSize <= 0 || current->getCurrentBufferSizeSamples() == device.bufferSize)
         && (device.sampleRate <= 0.0 || juce::approximatelyEqual (current->getCurrentSampleRate(), device.sampleRate)))
@@ -354,16 +367,19 @@ void MixEngine::renderBlock (const float* const* inputs, int numInputs, float* c
                 continue;
             }
 
-            // the sends, read once per block: the pre tap and the routing below see the same amounts and pre / post flags
+            // the sends, read once per block: the pre tap and the routing below see the same amounts and pre / post
+            // flags. A moved fader ramps from the level the last block ended on (no zipper click).
             float sendAmount[(size_t) maxFx] = {};
+            float sendFrom[(size_t) maxFx] = {};
             bool sendPre[(size_t) maxFx] = {};
             bool anyPre = false;
 
             for (int f = 0; f < numFx; ++f)
             {
                 sendAmount[(size_t) f] = node->sends[(size_t) f].amount.load (std::memory_order_relaxed);
+                sendFrom[(size_t) f] = node->sends[(size_t) f].current;
                 sendPre[(size_t) f] = node->sends[(size_t) f].pre.load (std::memory_order_relaxed);
-                anyPre = anyPre || (sendPre[(size_t) f] && sendAmount[(size_t) f] > 0.0f);
+                anyPre = anyPre || (sendPre[(size_t) f] && (sendAmount[(size_t) f] > 0.0f || sendFrom[(size_t) f] > 0.0f));
             }
 
             if (anyPre)
@@ -389,13 +405,15 @@ void MixEngine::renderBlock (const float* const* inputs, int numInputs, float* c
             for (int f = 0; f < numFx; ++f)
             {
                 const float amount = sendAmount[(size_t) f];
+                const float from = sendFrom[(size_t) f];
+                node->sends[(size_t) f].current = amount;
 
-                if (amount <= 0.0f)
+                if (amount <= 0.0f && from <= 0.0f)
                     continue;
 
                 const auto& source = sendPre[(size_t) f] ? preBuf : chBuf;
-                fxBus[(size_t) f].addFrom (0, 0, source, 0, 0, n, amount);
-                fxBus[(size_t) f].addFrom (1, 0, source, 1, 0, n, amount);
+                fxBus[(size_t) f].addFromWithRamp (0, 0, source.getReadPointer (0), n, from, amount);
+                fxBus[(size_t) f].addFromWithRamp (1, 0, source.getReadPointer (1), n, from, amount);
             }
 
             if (node->toMaster.load (std::memory_order_relaxed))
@@ -414,9 +432,11 @@ void MixEngine::renderBlock (const float* const* inputs, int numInputs, float* c
             auto& bus = fxBus[(size_t) f];
             fx.chain->process (bus, n);
             const float ret = fx.returnAmount.load (std::memory_order_relaxed);
+            const float retFrom = fx.returnCurrent;
+            fx.returnCurrent = ret;
 
-            if (! juce::approximatelyEqual (ret, 1.0f))
-                bus.applyGain (0, n, ret);
+            if (! juce::approximatelyEqual (ret, 1.0f) || ! juce::approximatelyEqual (retFrom, 1.0f))
+                bus.applyGainRamp (0, n, retFrom, ret);   // a moved return fader ramps across the block
 
             if (fx.mono.load (std::memory_order_relaxed))
             {
@@ -466,7 +486,7 @@ void MixEngine::audioDeviceAboutToStart (juce::AudioIODevice* device)
     numDeviceOutputs.store (device->getActiveOutputChannels().countNumberOfSetBits(), std::memory_order_relaxed);
     inputLatencyMs.store (1000.0 * device->getInputLatencyInSamples() / juce::jmax (1.0, sr), std::memory_order_relaxed);
     outputLatencyMs.store (1000.0 * device->getOutputLatencyInSamples() / juce::jmax (1.0, sr), std::memory_order_relaxed);
-    deviceRunning.store (true, std::memory_order_release);
+    deviceRunning.store (device->isOpen(), std::memory_order_release);   // JUCE's ASIO reset starts the callback even when the reopen failed
 }
 
 void MixEngine::audioDeviceStopped()
@@ -477,6 +497,7 @@ void MixEngine::audioDeviceStopped()
 
 void MixEngine::audioDeviceError (const juce::String& errorMessage)
 {
+    deviceRunning.store (false, std::memory_order_release);   // the status line says "오디오 멈춤" instead of pretending
     juce::Logger::writeToLog ("LiveMix audio device error: " + errorMessage);
 }
 
@@ -588,6 +609,10 @@ void MixEngine::applySession (const MixSession& session, juce::StringArray* erro
                 continue;   // beyond the limit (the session is sanitised, so this does not happen)
 
             node->returnAmount.store ((float) juce::jlimit (0.0, 1.0, f.returnAmount), std::memory_order_relaxed);
+
+            if (restoreChains)
+                node->returnCurrent = (float) juce::jlimit (0.0, 1.0, f.returnAmount);   // fresh: starts at its level
+
             node->mono.store (f.mono, std::memory_order_relaxed);
             applyOutput (f.output, node->toMaster, node->direct, node->directFirst);
             newFx.push_back (std::move (node));
@@ -632,6 +657,9 @@ void MixEngine::applySession (const MixSession& session, juce::StringArray* erro
 
                 node->sends[(size_t) f].amount.store (amount, std::memory_order_relaxed);
                 node->sends[(size_t) f].pre.store (pre, std::memory_order_relaxed);
+
+                if (restoreChains)
+                    node->sends[(size_t) f].current = amount;   // a fresh node (not in the graph yet) starts at its level
             }
 
             newChannels.push_back (std::move (node));

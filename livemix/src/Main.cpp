@@ -211,6 +211,7 @@ public:
         }
 
         document->setSessionName (ko ("기본 세션"));
+        document->applyToEngine();   // the constructor left the graph empty on purpose
 
         if (document->save (file).wasOk())
         {

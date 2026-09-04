@@ -14,6 +14,20 @@ public:
 
     void runTest() override
     {
+        beginTest ("a file beyond the size limit is refused before it is read; a chain is capped at 16 plugins");
+        {
+            expect (MixSession::checkFileSize (MixSession::maxFileBytes).wasOk());
+            expect (MixSession::checkFileSize (MixSession::maxFileBytes + 1).failed());
+            MixSession big;
+            big.addChannel ("A");
+
+            for (int i = 0; i < 20; ++i)
+                big.channels[0].chain.push_back ({});
+
+            big.sanitise();
+            expectEquals ((int) big.channels[0].chain.size(), MixSession::maxChainSlots);
+        }
+
         beginTest ("channels and FX are added with names, inputs and one send per FX");
         {
             MixSession s;

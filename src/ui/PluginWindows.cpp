@@ -13,7 +13,17 @@ PluginEditorWindow::PluginEditorWindow (juce::AudioPluginInstance& p, const juce
 {
     setUsingNativeTitleBar (true);
 
-    juce::AudioProcessorEditor* editor = plugin.hasEditor() ? plugin.createEditorAndMakeActive() : nullptr;
+    juce::AudioProcessorEditor* editor = nullptr;
+
+    try
+    {
+        if (plugin.hasEditor())
+            editor = plugin.createEditorAndMakeActive();
+    }
+    catch (...)
+    {
+        editor = nullptr;   // a plugin whose editor throws still gets a generic one
+    }
 
     if (editor == nullptr)
         editor = new juce::GenericAudioProcessorEditor (plugin);

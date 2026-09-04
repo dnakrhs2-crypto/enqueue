@@ -7,6 +7,7 @@
 #include <juce_audio_devices/juce_audio_devices.h>
 
 #include <array>
+#include <cmath>
 #include <atomic>
 #include <functional>
 #include <memory>
@@ -43,6 +44,8 @@ public:
     juce::String openDevice (const juce::String& name, double sampleRate = 0.0, int bufferSize = 0);
     /** A new buffer size on the running device (every channel kept). */
     juce::String setBufferSize (int samples);
+    /** Closes and reopens the current device (the driver's control panel asked for a restart). "" on success. */
+    juce::String restartDevice();
     /** After a device change: every input and output of the device is enabled. A refused widening goes back to the
         channels that worked (JUCE closes the device on a failed reconfiguration). */
     juce::String openAllChannels();
@@ -109,6 +112,8 @@ private:
 
         void push (float l, float r) noexcept
         {
+            if (! std::isfinite (l)) l = 0.0f;   // a NaN would sit in the hold for ever
+            if (! std::isfinite (r)) r = 0.0f;
             float cur = left.load (std::memory_order_relaxed);
             while (l > cur && ! left.compare_exchange_weak (cur, l, std::memory_order_relaxed)) {}
             cur = right.load (std::memory_order_relaxed);
@@ -122,6 +127,7 @@ private:
     {
         std::atomic<float> amount { 0.0f };
         std::atomic<bool> pre { false };
+        float current = 0.0f;   // audio thread: the level the last block ended on (a change ramps across the block)
     };
 
     struct ChannelNode
@@ -142,6 +148,7 @@ private:
     {
         juce::Uuid id;
         std::atomic<float> returnAmount { 1.0f };
+        float returnCurrent = 1.0f;   // audio thread: the level the last block ended on
         std::atomic<bool> mono { false };
         std::atomic<bool> toMaster { true }, direct { false };
         std::atomic<int> directFirst { 2 };

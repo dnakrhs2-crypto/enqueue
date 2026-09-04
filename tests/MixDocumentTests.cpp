@@ -16,6 +16,17 @@ public:
 
     void runTest() override
     {
+        beginTest ("the graph stays empty until the document applies a session (no raw mic before the saved session is in)");
+        {
+            MixEngine quiet;
+            quiet.prepare (48000.0, 256);
+            MixDocument fresh (quiet);
+            expect (fresh.getSession().channels.size() == 1);
+            expect (quiet.getChannelChain (fresh.getSession().channels[0].id) == nullptr);   // not in the graph yet
+            fresh.applyToEngine();
+            expect (quiet.getChannelChain (fresh.getSession().channels[0].id) != nullptr);
+        }
+
         beginTest ("new, load and save leave the document clean; edits, chain edits and plugin tweaks make it dirty");
         {
             MixEngine engine;
@@ -71,6 +82,7 @@ public:
             MixEngine engine;
             engine.prepare (48000.0, 256);
             MixDocument doc (engine);
+            doc.applyToEngine();   // the constructor leaves the graph empty (see the first test)
             auto* chain = engine.getChannelChain (doc.getSession().channels[0].id);
             expect (chain != nullptr);
             auto* plugin = new TestGainPlugin (0.5f);

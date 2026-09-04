@@ -26,7 +26,8 @@ public:
         std::unique_ptr<juce::AudioPluginInstance> plugin;   // null when the plugin could not be created
         PluginSlotState state;                               // saved description + state (kept for missing plugins)
         std::atomic<bool> bypassed { false };
-        std::atomic<bool> faulted { false };    // threw inside processBlock: bypassed from then on (a hung plugin cannot be helped in-process)
+        std::atomic<bool> faulted { false };    // threw (or produced NaN / Inf) in processBlock, or threw while preparing / loading state: dry from then on
+        bool faultReported = false;             // message thread: the operator has been told
         juce::AudioBuffer<float> scratch;                    // used for bypass and for plugins that need > 2 channels
         int numScratchChannels = 2;
 
@@ -96,12 +97,18 @@ public:
     /** True once (since the previous call) when any hosted plugin reported a parameter / state change,
         e.g. the user turned a knob in an editor. Any thread. Used for dirty tracking. */
     bool consumeStateChanged() noexcept { return stateChanged.exchange (false, std::memory_order_acq_rel); }
+    /** The names of the plugins that faulted since the previous call (message thread): the operator is told once. */
+    juce::StringArray takeNewFaults();
+    /** The latency the live, non-bypassed plugins add, in samples (message thread). */
+    int getLatencySamples() const;
 
     /** Audio thread: processes channels 0-1 of buffer[0, numSamples) in place. */
     void process (juce::AudioBuffer<float>& buffer, int numSamples);
 
 private:
     void prepareSlot (Slot& slot);
+    void markFaulted (Slot& slot) noexcept;
+    static bool isFinite (const juce::AudioBuffer<float>& buffer, int numSamples) noexcept;
     void clearSlots (bool notify);   // the destructor clears without chainChanged (pluginAboutToBeRemoved still closes editors)
     void insertSlot (std::unique_ptr<Slot> slot, int insertAt);
     void destroySlot (std::unique_ptr<Slot> slot);
@@ -117,6 +124,7 @@ private:
     int blockSize = 512;
     Listener* listener = nullptr;
     std::atomic<bool> stateChanged { false };
+    std::atomic<bool> faultRaised { false };   // a slot faulted since takeNewFaults()
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (PluginChain)
 };

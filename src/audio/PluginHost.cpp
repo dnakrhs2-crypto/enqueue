@@ -56,7 +56,17 @@ std::unique_ptr<juce::AudioPluginInstance> PluginHost::createInstance (const juc
         return nullptr;
     }
 
-    auto instance = formatManager.createPluginInstance (description, sampleRate, blockSize, error);
+    std::unique_ptr<juce::AudioPluginInstance> instance;
+
+    try
+    {
+        instance = formatManager.createPluginInstance (description, sampleRate, blockSize, error);
+    }
+    catch (...)
+    {
+        instance = nullptr;
+        error = juce::String::fromUTF8 ("플러그인을 만드는 중 오류가 났습니다: ") + description.name;
+    }
 
     if (instance == nullptr && error.isEmpty())
         error = "Could not create plugin \"" + description.name + "\"";

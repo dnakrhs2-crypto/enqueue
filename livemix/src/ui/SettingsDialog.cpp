@@ -21,9 +21,23 @@ namespace
             panelButton.setButtonText (ko ("ASIO 제어판 (버퍼 크기)..."));
             panelButton.onClick = [this]
             {
-                if (auto* device = engine.getDeviceManager().getCurrentAudioDevice())
-                    if (device->hasControlPanel())
-                        device->showControlPanel();
+                auto* device = engine.getDeviceManager().getCurrentAudioDevice();
+
+                if (device == nullptr || ! device->hasControlPanel())
+                    return;
+
+                if (device->showControlPanel())   // the driver asks for a restart (its buffer / rate changed)
+                {
+                    const auto error = engine.restartDevice();
+
+                    if (error.isNotEmpty())
+                        juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon, ko ("장치를 다시 열지 못했습니다"), error, ko ("확인"));
+                }
+
+                refreshDevices();
+
+                if (onDeviceChanged)
+                    onDeviceChanged();
             };
             addAndMakeVisible (panelButton);
             styleCaption (bufferCaption, ko ("버퍼 크기"));

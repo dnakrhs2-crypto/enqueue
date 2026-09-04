@@ -3,9 +3,28 @@
 namespace gocue::livemix
 {
 
+namespace
+{
+    MixSession defaultSession()
+    {
+        MixSession fresh;
+        fresh.name = juce::String::fromUTF8 ("새 세션");
+        fresh.addFx (juce::String::fromUTF8 ("리버브"));
+        fresh.addChannel();
+        return fresh;
+    }
+}
+
 MixDocument::MixDocument (MixEngine& e) : engine (e)
 {
-    newSession();
+    // the model only: the graph stays empty until a session is applied, so no raw microphone reaches the outputs
+    // while the saved session (and its plugins) is still loading
+    session = defaultSession();
+}
+
+void MixDocument::applyToEngine()
+{
+    engine.applySession (session, nullptr, true);
 }
 
 juce::String MixDocument::getDisplayName() const
@@ -18,11 +37,7 @@ juce::String MixDocument::getDisplayName() const
 
 void MixDocument::newSession()
 {
-    MixSession fresh;
-    fresh.name = juce::String::fromUTF8 ("새 세션");
-    fresh.addFx (juce::String::fromUTF8 ("리버브"));
-    fresh.addChannel();
-    session = std::move (fresh);
+    session = defaultSession();
     file = juce::File();
     dirty = false;
     engine.applySession (session, nullptr, true);
@@ -56,18 +71,26 @@ juce::Result MixDocument::load (const juce::File& newFile, juce::StringArray* wa
 
 juce::Result MixDocument::save (const juce::File& newFile)
 {
-    pollPluginEdits();   // edits reported so far are captured below (and keep the document dirty should the write fail)
-    engine.captureLivePluginStates (session);
-    session.sanitise();
-    const auto result = session.save (newFile);
+    for (int attempt = 0;; ++attempt)
+    {
+        pollPluginEdits();   // edits reported so far are captured below (and keep the document dirty should the write fail)
+        engine.captureLivePluginStates (session);
+        session.sanitise();
+        const auto result = session.save (newFile);
 
-    if (result.failed())
-        return result;
+        if (result.failed())
+            return result;
 
-    file = newFile;
-    dirty = false;
-    pollPluginEdits();   // an edit that arrived during the capture / write is not in the file: dirty again
-    notifyValue();       // the title and the views
+        file = newFile;
+        dirty = false;
+
+        // an edit that arrived during the capture / write is not in the file: written again, twice at most (a knob
+        // being turned right now keeps the document dirty, and the title says so)
+        if (! pollPluginEdits() || attempt >= 2)
+            break;
+    }
+
+    notifyValue();   // the title and the views
     return juce::Result::ok();
 }
 

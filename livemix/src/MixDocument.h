@@ -28,6 +28,9 @@ public:
 
     /** A blank session (one mic channel, one FX channel). */
     void newSession();
+    /** Puts the session into the engine's graph. The constructor does not: nothing reaches the outputs until the
+        saved session (or a new one) is really in. */
+    void applyToEngine();
     /** 'warnings' gets what the parser had to skip; plugin restore errors go to 'pluginErrors' (or to 'warnings' when null). */
     juce::Result load (const juce::File& file, juce::StringArray* warnings = nullptr, juce::StringArray* pluginErrors = nullptr);
     juce::Result save (const juce::File& file);

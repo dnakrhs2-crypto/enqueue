@@ -417,6 +417,8 @@ void MainComponent::showPluginManager()
 }
 
 //==============================================================================
+static constexpr int maxDeviceChannelsShown = MixSession::maxDeviceChannels;
+
 void MainComponent::updateDeviceNames()
 {
     inputNames.clear();
@@ -440,6 +442,8 @@ void MainComponent::updateDeviceNames()
             current = device->getName();
             inputNames = device->getInputChannelNames();
             outputNames = device->getOutputChannelNames();
+            inputNames.removeRange (maxDeviceChannelsShown, inputNames.size());     // the graph opens 64 at most: no picker beyond them
+            outputNames.removeRange (maxDeviceChannelsShown, outputNames.size());
         }
     }
 
@@ -514,6 +518,40 @@ void MainComponent::timerCallback()
 
     document.pollPluginEdits();   // a knob turned in a plugin editor: the title shows the session as changed
 
+    // a plugin that faulted (threw, or produced NaN / Inf): dry from then on, and the operator is told once
+    juce::StringArray faulted;
+    engine.forEachChain ([&faulted] (PluginChain& chain) { faulted.addArray (chain.takeNewFaults()); });
+
+    if (! faulted.isEmpty())
+    {
+        pluginNote = ko ("플러그인 오류로 꺼짐: ") + faulted.joinIntoString (", ")
+                     + ko (" - 그 자리는 소리를 그대로 통과시킵니다. 체인에서 빼거나 다시 넣으세요.");
+        refreshNotice();
+    }
+
+    // a plugin with latency inside a mic chain: its pre-fader send and its direct output no longer line up with the
+    // master (checked once a second; the line comes and goes with the chains)
+    if (--ticksUntilLatencyCheck <= 0)
+    {
+        ticksUntilLatencyCheck = 30;
+        int worst = 0;
+
+        for (const auto& c : document.getSession().channels)
+            if (auto* chain = engine.getChannelChain (c.id))
+                worst = juce::jmax (worst, chain->getLatencySamples());
+
+        const auto sr = juce::jmax (1.0, engine.getSampleRate());
+        const juce::String text = worst > 0 ? ko ("마이크 체인에 지연이 있는 플러그인이 있습니다 (") + juce::String (1000.0 * worst / sr, 1)
+                                                  + ko (" ms). 프리 센드나 직접 출력을 마스터와 같이 쓰면 위상이 어긋날 수 있습니다.")
+                                            : juce::String();
+
+        if (text != latencyNote)
+        {
+            latencyNote = text;
+            refreshNotice();
+        }
+    }
+
     // a session named on the command line while a question was open: now that it is answered
     if (pendingCommandLineFile != juce::File() && juce::Component::getCurrentlyModalComponent() == nullptr)
     {
@@ -576,12 +614,19 @@ void MainComponent::refreshNotice()
     if (startupNote.isNotEmpty())
         lines.add (startupNote);
 
+    if (pluginNote.isNotEmpty())
+        lines.add (pluginNote);
+
+    if (latencyNote.isNotEmpty())
+        lines.add (latencyNote);
+
     if (saveErrorNote.isNotEmpty())
         lines.add (saveErrorNote);
 
     noticeVisible = ! lines.isEmpty();
     noticeIsError = (sessionNote.isNotEmpty() && sessionNoteIsError)
                     || (startupNote.isNotEmpty() && startupNoteIsError)
+                    || pluginNote.isNotEmpty()
                     || saveErrorNote.isNotEmpty();
     noticeText.setText (lines.joinIntoString ("\n"), false);
     resized();
@@ -638,6 +683,8 @@ void MainComponent::hideNotice()
     // the close button: every line goes
     sessionNote.clear();
     startupNote.clear();
+    pluginNote.clear();
+    latencyNote.clear();
     saveErrorNote.clear();
     refreshNotice();
 }
