@@ -672,6 +672,32 @@ bool CueList::moveSubtrees (std::vector<int> indices, int insertIndex)
     return moveIndices (std::move (indices), insertIndex - before, &newParent);
 }
 
+bool CueList::moveSubtreesInto (std::vector<int> indices, int groupIndex)
+{
+    if (! isValidIndex (groupIndex) || ! cues[(size_t) groupIndex].isGroup())
+        return false;
+
+    indices = withSubtrees (std::move (indices));
+
+    if (indices.empty())
+        return false;
+
+    const juce::Uuid groupId = cues[(size_t) groupIndex].id;
+
+    for (int i : indices)
+        if (i == groupIndex || isDescendantOf (groupIndex, cues[(size_t) i].id))
+            return false;   // the group itself, or a group it sits in, cannot go inside it
+
+    const int end = subtreeEnd (groupIndex);   // right after the group's last descendant
+    int before = 0;
+
+    for (int i : indices)
+        if (i < end)
+            ++before;
+
+    return moveIndices (std::move (indices), end - before, &groupId);
+}
+
 bool CueList::moveIndices (std::vector<int> indices, int to)
 {
     return moveIndices (std::move (indices), to, nullptr);

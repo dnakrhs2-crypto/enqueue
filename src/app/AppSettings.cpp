@@ -17,6 +17,7 @@ namespace Keys
     constexpr const char* activeCuesFraction = "activeCuesFraction";
     constexpr const char* activeCuesFolded  = "activeCuesCollapsed";
     constexpr const char* reopenAfterUpdate = "reopenProjectAfterUpdate";
+    constexpr const char* youtubeAddToQueue = "youtubeAddToQueue";
 }
 
 AppSettings::AppSettings()
@@ -111,6 +112,16 @@ double AppSettings::getInspectorFraction() const
 void AppSettings::setInspectorFraction (double fraction)
 {
     settings->setValue (Keys::inspectorFraction, fraction);
+}
+
+bool AppSettings::getYouTubeAddToQueue() const
+{
+    return settings->getBoolValue (Keys::youtubeAddToQueue, true);
+}
+
+void AppSettings::setYouTubeAddToQueue (bool add)
+{
+    settings->setValue (Keys::youtubeAddToQueue, add);
 }
 
 bool AppSettings::getInspectorCollapsed() const

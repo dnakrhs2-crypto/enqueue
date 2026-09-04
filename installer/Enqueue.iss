@@ -11,6 +11,10 @@
 #ifndef OutputDir
   #define OutputDir "output"
 #endif
+#ifndef ToolsDir
+  ; yt-dlp.exe, qjs.exe, lame.exe (+ libsndfile-1.dll), LICENSES.txt for the YouTube download - kept outside the repository
+  #define ToolsDir "..\tools_bundle"
+#endif
 
 #define AppName "Enqueue"
 #define AppExe "Enqueue.exe"
@@ -66,6 +70,7 @@ Name: "coupang"; Description: "{cm:CoupangTask}"; GroupDescription: "{cm:Coupang
 Source: "{#SourceDir}\{#AppExe}"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#SourceDir}\WinSparkle.dll"; DestDir: "{app}"; Flags: ignoreversion skipifsourcedoesntexist
 Source: "coupang.ico"; DestDir: "{app}"; Flags: ignoreversion; Tasks: coupang
+Source: "{#ToolsDir}\*"; DestDir: "{app}\tools"; Flags: ignoreversion skipifsourcedoesntexist
 
 [Icons]
 Name: "{group}\{#AppName}"; Filename: "{app}\{#AppExe}"
@@ -138,3 +143,7 @@ begin
   if CurUninstallStep = usPostUninstall then
     DeleteFile(CoupangShortcutPath);
 end;
+
+[UninstallDelete]
+; the per-user working copies of the download tools (yt-dlp updates itself there)
+Type: filesandordirs; Name: "{localappdata}\Enqueue\tools"

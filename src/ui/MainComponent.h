@@ -11,6 +11,7 @@
 #include "ui/CueInspector.h"
 #include "ui/SplitDivider.h"
 #include "ui/ManualWindow.h"
+#include "ui/YouTubeWindow.h"
 #include "ui/CueTable.h"
 #include "ui/FooterBar.h"
 #include "ui/PluginWindows.h"
@@ -157,6 +158,7 @@ private:
     void duplicateSelectedCue();
     void moveSelection (int delta);
     void moveRows (const std::vector<int>& rows, int insertIndex);
+    void moveRowsInto (const std::vector<int>& rows, int groupIndex);
     void editCues (const std::vector<int>& rows, const juce::String& name, const std::function<void (Cue&)>& mutator);
     void setShowMode (bool shouldBeShowMode);
     void showLoadToTimeDialog();
@@ -194,6 +196,7 @@ private:
     void ignorePluginChangesBriefly();
     void showPluginManager();
     void showAbout();
+    void showYouTubeWindow();
     void showAlert (const juce::String& title, const juce::String& message, bool isError);
     void updateTransportStandby();
 
@@ -264,6 +267,7 @@ private:
     void showPanicSecondsMenu (juce::Point<int> screenPosition);
     void applyPanicSeconds (double seconds);
     std::unique_ptr<ManualWindow> manualWindow;   // made on first use, hidden on close
+    std::unique_ptr<YouTubeWindow> youtubeWindow;   // the same
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (MainComponent)
 };

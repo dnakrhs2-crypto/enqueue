@@ -104,6 +104,10 @@ public:
         (size() = the end). The moved top-level rows join the group of the row that will follow them (decided
         before anything moves). Dropping onto one of the moved rows is a no-op. */
     bool moveSubtrees (std::vector<int> indices, int insertIndex);
+    /** Moves the cues (with their subtrees) into the group at 'groupIndex' as its last children (rows dropped onto a
+        group row). Nothing happens when 'groupIndex' is not a group, or when the group itself or a group around it
+        is among the moved rows. */
+    bool moveSubtreesInto (std::vector<int> indices, int groupIndex);
     /** Replaces everything and puts the cursors where given, with one round of notifications (list switch). */
     void replaceAllWithCursors (std::vector<Cue> newCues, std::vector<int> selectedIndices, int primaryIndex, int playheadIndex);
     /** Nesting deeper than this is flattened by sanitiseTree(). */

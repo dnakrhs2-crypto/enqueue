@@ -446,6 +446,38 @@ public:
             expect (list.get (5).parentId.isNull());
         }
 
+        beginTest ("tree: moveSubtreesInto puts rows at the end of a group (rows dropped onto a group row)");
+        {
+            CueList list;
+            Cue g = make ("G"); g.type = CueType::group;
+            list.add (g);
+            Cue a = make ("a"); a.parentId = g.id;
+            list.add (a);
+            list.add (make ("b"));
+            list.add (make ("c"));
+            Cue h = make ("H"); h.type = CueType::group;
+            list.add (h);                                    // G a | b c H
+
+            expect (list.moveSubtreesInto ({ 3 }, 0));       // c into G, from after it
+            expectEquals (names (list), juce::String ("G,a,c,b,H"));
+            expect (list.get (2).parentId == g.id);
+            expectEquals (list.subtreeEnd (0), 3);
+
+            expect (list.moveSubtreesInto ({ 1 }, 0));       // a, already inside, goes to the end of G
+            expectEquals (names (list), juce::String ("G,c,a,b,H"));
+            expect (list.get (2).parentId == g.id);
+
+            expect (list.moveSubtreesInto ({ 0 }, 4));       // the group G (with its children) into H, from before it
+            expectEquals (names (list), juce::String ("b,H,G,c,a"));
+            expect (list.get (2).parentId == list.get (1).id && list.get (3).parentId == g.id && list.get (4).parentId == g.id);
+            expectEquals (list.depthOf (4), 2);
+
+            expect (! list.moveSubtreesInto ({ 1 }, 1));     // H onto itself
+            expect (! list.moveSubtreesInto ({ 1 }, 2));     // H into G, which sits inside H
+            expect (! list.moveSubtreesInto ({ 0 }, 0));     // b is not a group
+            expectEquals (names (list), juce::String ("b,H,G,c,a"));
+        }
+
         beginTest ("tree: wrapInGroup / ungroup");
         {
             CueList list;

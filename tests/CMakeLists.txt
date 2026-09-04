@@ -23,6 +23,7 @@ target_sources(EnqueueTests PRIVATE
     MixDocumentTests.cpp
     ResamplerTests.cpp
     CueListTests.cpp
+    YouTubeDownloaderTests.cpp
     CueNumberingTests.cpp
     CuePropertyPasteTests.cpp
     LevelMatrixTests.cpp

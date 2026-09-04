@@ -48,6 +48,10 @@ public:
     bool getActiveCuesCollapsed() const;
     void setActiveCuesCollapsed (bool collapsed);
 
+    /** 유튜브 다운로드: put the downloaded file into the cue list right away (on by default). */
+    bool getYouTubeAddToQueue() const;
+    void setYouTubeAddToQueue (bool add);
+
     /** Writes pending changes to disk now. */
     void flush();
 

@@ -260,7 +260,7 @@ void CueTable::paint (juce::Graphics& g)
 
 void CueTable::paintOverChildren (juce::Graphics& g)
 {
-    if (dropGroupIndex >= 0)   // files hovering a group: the whole row lights up
+    if (dropGroupIndex >= 0)   // files or rows hovering a group: the whole row lights up
     {
         const auto it = std::find (visible.begin(), visible.end(), dropGroupIndex);
 
@@ -1174,37 +1174,72 @@ bool CueTable::isInterestedInDragSource (const SourceDetails& details)
     return editable && details.description == rowDragDescription;
 }
 
+int CueTable::rowDragGroupAtY (int y) const
+{
+    const int group = groupAtY (y);
+
+    if (group < 0)
+        return -1;
+
+    for (int s : cues.getSelectedIndices())
+        if (s == group || cues.isDescendantOf (group, cues.get (s).id))
+            return -1;
+
+    return group;
+}
+
+void CueTable::updateRowDragTarget (int y)
+{
+    // over a group's middle band the rows go into the group (the row lights up); elsewhere between rows (a line)
+    const int group = rowDragGroupAtY (y);
+    const int index = group >= 0 ? -1 : insertionRowForY (y);
+
+    if (group != dropGroupIndex || index != rowDropIndex)
+    {
+        dropGroupIndex = group;
+        rowDropIndex = index;
+        repaint();
+    }
+}
+
 void CueTable::itemDragEnter (const SourceDetails& details)
 {
     rowDragOver = true;
-    rowDropIndex = insertionRowForY (details.localPosition.y);
-    repaint();
+    updateRowDragTarget (details.localPosition.y);
 }
 
 void CueTable::itemDragMove (const SourceDetails& details)
 {
-    const int index = insertionRowForY (details.localPosition.y);
-
-    if (index != rowDropIndex)
-    {
-        rowDropIndex = index;
-        repaint();
-    }
+    updateRowDragTarget (details.localPosition.y);
 }
 
 void CueTable::itemDragExit (const SourceDetails&)
 {
     rowDragOver = false;
     rowDropIndex = -1;
+    dropGroupIndex = -1;
     repaint();
 }
 
 void CueTable::itemDropped (const SourceDetails& details)
 {
     rowDragOver = false;
+    const int group = rowDragGroupAtY (details.localPosition.y);   // the drop position itself, not the last hover
     const int index = insertionIndexForY (details.localPosition.y);
     rowDropIndex = -1;
+    dropGroupIndex = -1;
     repaint();
+
+    if (group >= 0)
+    {
+        if (onStatus)
+            onStatus (ko ("행 이동: 그룹 '") + cues.get (group).name + ko ("' 안으로"));
+
+        if (onMoveRowsInto)
+            onMoveRowsInto (cues.getSelectedIndices(), group);
+
+        return;
+    }
 
     if (onStatus)
         onStatus (ko ("행 이동: ") + juce::String (index) + ko ("번째 자리로"));

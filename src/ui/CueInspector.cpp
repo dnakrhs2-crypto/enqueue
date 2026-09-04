@@ -2894,8 +2894,6 @@ public:
         styleLabel (crossfadeUnit, ko ("초"));
         addAndMakeVisible (crossfadeUnit);
 
-        styleLabel (hint, ko ("타임라인: 아래 막대를 끌어 자식의 시작(프리웨이트)을 바꿉니다. 막대 선택 후 Alt+←/→ = 0.1 s, Shift+Alt = 0.01 s. 자식은 그룹 아래로 끌어다 넣거나 Ctrl+G로 묶습니다."), 13.0f);
-        addAndMakeVisible (hint);
         addAndMakeVisible (timeline);
     }
 
@@ -2948,9 +2946,7 @@ public:
         crossfadeToggle.setBounds (row.removeFromLeft (110));
         crossfadeEditor.setBounds (row.removeFromLeft (60));
         crossfadeUnit.setBounds (row.removeFromLeft (24));
-        area.removeFromTop (4);
-        hint.setBounds (area.removeFromTop (18));
-        area.removeFromTop (4);
+        area.removeFromTop (8);
         timeline.setBounds (area);
     }
 
@@ -3207,7 +3203,7 @@ private:
 
     ProjectDocument& document;
     CueList& cues;
-    juce::Label modeLabel, hint, crossfadeUnit;
+    juce::Label modeLabel, crossfadeUnit;
     juce::ComboBox modeCombo;
     juce::ToggleButton loopToggle, shuffleToggle, crossfadeToggle;
     juce::TextEditor crossfadeEditor;

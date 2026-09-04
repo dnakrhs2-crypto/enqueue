@@ -81,7 +81,8 @@ enum : juce::CommandID
     checkForUpdates,
     showManual,           // Ctrl+F1
     feedbackChat,         // Help > 커뮤니티: the open-chat room
-    about
+    about,
+    youtubeDownload       // 유튜브다운 > 유튜브 다운로드...: the site makes an mp3 out of a YouTube link, the app fetches it
 };
 
 } // namespace gocue::CommandIDs

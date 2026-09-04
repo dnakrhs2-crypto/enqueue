@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.22)
 
-project(Enqueue VERSION 0.9.4 LANGUAGES C CXX)
+project(Enqueue VERSION 0.9.5 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -63,6 +63,8 @@ target_sources(GoCueCore INTERFACE
     ${CMAKE_CURRENT_SOURCE_DIR}/src/app/FadeRunner.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/app/BackupManager.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/app/SettingsMigration.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/app/YouTubeDownloader.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/app/YouTubeTools.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/audio/RegionLoopSource.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/audio/ReadAheadSource.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/audio/CuePlayer.cpp
@@ -86,6 +88,7 @@ target_compile_definitions(GoCueCore INTERFACE
     JUCE_WASAPI=1
     JUCE_DIRECTSOUND=0
     JUCE_USE_MP3AUDIOFORMAT=1
+    JUCE_USE_LAME_AUDIO_FORMAT=1   # the mp3 of a YouTube download is written through the bundled lame.exe
     JUCE_USE_FLAC=1
     JUCE_USE_OGGVORBIS=1
     JUCE_USE_WINDOWS_MEDIA_FORMAT=1
@@ -167,6 +170,7 @@ target_sources(Enqueue PRIVATE
     src/ui/ContainerTabs.cpp
     src/ui/SplitDivider.cpp
     src/ui/ManualWindow.cpp
+    src/ui/YouTubeWindow.cpp
     src/ui/CueCartView.cpp
     src/ui/PastePropertiesDialog.cpp
     src/ui/LevelMatrixComponent.cpp

@@ -102,10 +102,12 @@ def build(preset, skip_tests):
         run(["ctest", "--preset", preset + "-release"])
 
 
-def make_installer(iscc, version, source_dir, output_dir):
+def make_installer(iscc, version, source_dir, output_dir, tools_dir=""):
     output_dir.mkdir(parents=True, exist_ok=True)
-    run([iscc, "/Q", "/DAppVersion=" + version, "/DSourceDir=" + str(source_dir),
-         "/DOutputDir=" + str(output_dir), str(ROOT / "installer" / APP["iss"])])
+    defines = ["/DAppVersion=" + version, "/DSourceDir=" + str(source_dir), "/DOutputDir=" + str(output_dir)]
+    if tools_dir and os.path.isdir(tools_dir):
+        defines.append("/DToolsDir=" + str(tools_dir))   # Enqueue: the YouTube download tools go into {app}\tools
+    run([iscc, "/Q"] + defines + [str(ROOT / "installer" / APP["iss"])])
     installer = output_dir / ("%s-Setup-%s.exe" % (APP["name"], version))
     if not installer.is_file():
         sys.exit("installer was not produced: %s" % installer)
@@ -342,6 +344,8 @@ def main():
     parser.add_argument("--key", default=os.environ.get("GOCUE_EDDSA_PRIVATE_KEY_FILE", ""), help="EdDSA private key file (winsparkle-tool generate-key)")
     parser.add_argument("--winsparkle-dir", default="", help="WinSparkle package dir (default: WINSPARKLE_DIR)")
     parser.add_argument("--notes", default="", help="release notes file (HTML or plain text)")
+    parser.add_argument("--tools-dir", default=os.environ.get("ENQUEUE_TOOLS_DIR", "C:/Users/claude/SDKs/gocue_release/enqueue_tools"),
+                        help="folder with yt-dlp.exe, qjs.exe, lame.exe (+ libsndfile-1.dll) bundled into the Enqueue installer (default: ENQUEUE_TOOLS_DIR)")
     parser.add_argument("--skip-build", action="store_true")
     parser.add_argument("--skip-tests", action="store_true")
     parser.add_argument("--publish", action="store_true", help="create the GitHub release with gh and upload installer + appcast")
@@ -398,7 +402,7 @@ def main():
     iscc = find_iscc()
     if iscc is None:
         sys.exit("ISCC.exe not found (install Inno Setup or set ISCC)")
-    installer = make_installer(iscc, version, source_dir, output_dir)
+    installer = make_installer(iscc, version, source_dir, output_dir, args.tools_dir if APP["name"] == "Enqueue" else "")
 
     tool = find_winsparkle_tool(args.winsparkle_dir)
     if tool is None:

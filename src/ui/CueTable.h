@@ -51,6 +51,8 @@ public:
     std::function<void (const juce::StringArray& files, int insertIndex, int intoGroup)> onFilesDropped;
     /** Rows dragged inside the table: move them so the block starts at insertIndex (index before removal). */
     std::function<void (const std::vector<int>& rows, int insertIndex)> onMoveRows;
+    /** Rows dropped onto a group row (its middle band): move them into that group as its last children. */
+    std::function<void (const std::vector<int>& rows, int groupIndex)> onMoveRowsInto;
     /** An undoable edit of one or more cues. */
     std::function<void (const std::vector<int>& rows, const juce::String& editName, const std::function<void (Cue&)>& mutator)> onEditCues;
     /** A number typed into the 번호 cell: the document renumbers the cue and moves it into numeric order. */
@@ -130,6 +132,9 @@ private:
     void addCueItems (juce::PopupMenu& menu);
     /** The group cue under a drag position (its middle band), -1 when the drop goes between rows. */
     int groupAtY (int y) const;
+    /** groupAtY for the rows being dragged: -1 as well when the group is one of them or sits inside one of them. */
+    int rowDragGroupAtY (int y) const;
+    void updateRowDragTarget (int y);
     void cycleContinueMode (int row);
     int insertionIndexForY (int y) const;
     void commitCellEdit (int row, ColumnId column, const juce::String& text);
@@ -152,7 +157,7 @@ private:
     std::vector<int> visible;
     std::unique_ptr<CellEditor> cellEditor;
     bool dragOver = false;
-    int dropGroupIndex = -1;   // a file drag hovering a group row: the files join that group
+    int dropGroupIndex = -1;   // a file or row drag hovering a group row: what is dropped joins that group
     bool rowDragOver = false;
     int rowDropIndex = -1;
     bool syncingSelection = false;

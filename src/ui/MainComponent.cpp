@@ -112,6 +112,7 @@ MainComponent::MainComponent (AudioEngine& e, AppSettings& s, juce::ApplicationC
 
     table.onFilesDropped = [this] (const juce::StringArray& files, int insertAt, int intoGroup) { addCuesFromFiles (files, insertAt, intoGroup); };
     table.onMoveRows = [this] (const std::vector<int>& rows, int insertIndex) { moveRows (rows, insertIndex); };
+    table.onMoveRowsInto = [this] (const std::vector<int>& rows, int group) { moveRowsInto (rows, group); };
     table.onToggleCollapse = [this] (int index, bool collapsed) { document.cues.setCollapsed (index, collapsed); };
 
     // cue lists / carts
@@ -454,7 +455,8 @@ void MainComponent::getAllCommands (juce::Array<juce::CommandID>& ids)
                     CommandIDs::undo, CommandIDs::redo, CommandIDs::toggleShowMode, CommandIDs::toggleActiveCues, CommandIDs::toggleInspector,
                     CommandIDs::audioSettings, CommandIDs::audioPatches, CommandIDs::pluginManager, CommandIDs::masterInserts,
                     CommandIDs::workspaceSettings,
-                    CommandIDs::checkForUpdates, CommandIDs::showManual, CommandIDs::feedbackChat, CommandIDs::about });
+                    CommandIDs::checkForUpdates, CommandIDs::showManual, CommandIDs::feedbackChat, CommandIDs::about,
+                    CommandIDs::youtubeDownload });
 }
 
 void MainComponent::getCommandInfo (juce::CommandID commandID, juce::ApplicationCommandInfo& result)
@@ -869,6 +871,10 @@ void MainComponent::getCommandInfo (juce::CommandID commandID, juce::Application
             result.setInfo (ko ("앤큐 정보"), ko ("버전 정보"), ko ("도움말"), 0);
             break;
 
+        case CommandIDs::youtubeDownload:
+            result.setInfo (ko ("유튜브 다운로드..."), ko ("유튜브 링크의 소리를 mp3로 받아 큐에 넣기"), ko ("유튜브다운"), 0);
+            break;
+
         default:
             break;
     }
@@ -1219,6 +1225,10 @@ bool MainComponent::perform (const InvocationInfo& info)
             showAbout();
             break;
 
+        case CommandIDs::youtubeDownload:
+            showYouTubeWindow();
+            break;
+
         default:
             return false;
     }
@@ -1229,7 +1239,7 @@ bool MainComponent::perform (const InvocationInfo& info)
 //==============================================================================
 juce::StringArray MainComponent::getMenuBarNames()
 {
-    return { ko ("파일"), ko ("편집"), ko ("큐"), ko ("재생"), ko ("오디오"), ko ("도움말") };
+    return { ko ("파일"), ko ("편집"), ko ("큐"), ko ("재생"), ko ("오디오"), ko ("유튜브다운"), ko ("도움말") };
 }
 
 juce::PopupMenu MainComponent::getMenuForIndex (int topLevelMenuIndex, const juce::String&)
@@ -1341,6 +1351,10 @@ juce::PopupMenu MainComponent::getMenuForIndex (int topLevelMenuIndex, const juc
             break;
 
         case 5:
+            menu.addCommandItem (&commands, CommandIDs::youtubeDownload);
+            break;
+
+        case 6:
             menu.addCommandItem (&commands, CommandIDs::showManual);
             menu.addCommandItem (&commands, CommandIDs::feedbackChat);
             menu.addCommandItem (&commands, CommandIDs::checkForUpdates);
@@ -1860,6 +1874,20 @@ void MainComponent::moveRows (const std::vector<int>& rows, int insertIndex)
         return;
 
     document.perform (ko ("큐 이동"), [this, rows, insertIndex] { document.cues.moveSubtrees (rows, insertIndex); });
+}
+
+void MainComponent::moveRowsInto (const std::vector<int>& rows, int groupIndex)
+{
+    if (rows.empty() || showMode || ! document.cues.isValidIndex (groupIndex))
+        return;
+
+    const juce::Uuid groupId = document.cues.get (groupIndex).id;
+
+    document.perform (ko ("그룹으로 이동"), [this, rows, groupId]
+    {
+        if (document.cues.moveSubtreesInto (rows, document.cues.indexOf (groupId)))
+            document.cues.setCollapsed (document.cues.indexOf (groupId), false);   // show what just went in
+    });
 }
 
 void MainComponent::editCues (const std::vector<int>& rows, const juce::String& name, const std::function<void (Cue&)>& mutator)
@@ -2945,6 +2973,24 @@ void MainComponent::refreshFileInfoForAllCues()
 void MainComponent::showPluginManager()
 {
     PluginDialogs::showPluginManager (engine, settings, this);
+}
+
+void MainComponent::showYouTubeWindow()
+{
+    if (youtubeWindow == nullptr)
+    {
+        youtubeWindow = std::make_unique<YouTubeWindow> (settings, juce::JUCEApplication::getInstance()->getApplicationVersion());
+        youtubeWindow->onAddToQueue = [this] (const juce::File& file)
+        {
+            if (showMode)
+                return false;   // editing is locked: the file stays in the folder
+
+            addCuesFromFiles (juce::StringArray (file.getFullPathName()), -1);   // the end of the list (or cart)
+            return true;
+        };
+    }
+
+    youtubeWindow->open();
 }
 
 void MainComponent::showAbout()
