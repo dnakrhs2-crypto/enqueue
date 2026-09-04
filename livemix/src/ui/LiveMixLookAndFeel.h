@@ -59,9 +59,9 @@ public:
         setColour (juce::DocumentWindow::textColourId, Palette::text);
     }
 
-    juce::Font getPopupMenuFont() override { return juce::Font (juce::FontOptions (16.0f)); }
-    juce::Font getTextButtonFont (juce::TextButton&, int buttonHeight) override { return juce::Font (juce::FontOptions (juce::jmin (15.0f, (float) buttonHeight * 0.55f), juce::Font::bold)); }
-    juce::Font getComboBoxFont (juce::ComboBox&) override { return juce::Font (juce::FontOptions (14.5f)); }
+    juce::Font getPopupMenuFont() override { return juce::Font (juce::FontOptions (pt (16.0f))); }
+    juce::Font getTextButtonFont (juce::TextButton&, int buttonHeight) override { return juce::Font (juce::FontOptions (juce::jmin (pt (15.0f), (float) buttonHeight * 0.6f), juce::Font::bold)); }
+    juce::Font getComboBoxFont (juce::ComboBox&) override { return juce::Font (juce::FontOptions (pt (14.5f))); }
     juce::Font getLabelFont (juce::Label& label) override { return label.getFont(); }
 
     void drawCornerResizer (juce::Graphics& g, int w, int h, bool isMouseOver, bool isMouseDragging) override

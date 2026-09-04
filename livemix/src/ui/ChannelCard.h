@@ -35,6 +35,8 @@ public:
 
     std::function<void (const juce::Uuid&)> onOpenChain;      // "체인 열기"
     std::function<void (const juce::Uuid&)> onAddPlugin;      // "+ 추가"
+    /** The '+ 추가' button: the plugin menu opens next to it. */
+    juce::Component& getAddPluginButton() noexcept { return addPluginButton; }
     std::function<void (const juce::Uuid&)> onRemove;         // the ··· menu
     std::function<void (const juce::Uuid&, int slotIndex)> onOpenPluginEditor;   // a chain chip
 

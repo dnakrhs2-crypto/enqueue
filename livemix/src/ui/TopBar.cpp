@@ -16,16 +16,16 @@ void TopBar::DspMeter::paint (juce::Graphics& g)
 TopBar::TopBar (MixDocument& doc) : document (doc)
 {
     logoMark.setText ("ON", juce::dontSendNotification);
-    logoMark.setFont (juce::Font (juce::FontOptions (12.0f, juce::Font::bold)));
+    logoMark.setFont (juce::Font (juce::FontOptions (pt (12.0f), juce::Font::bold)));
     logoMark.setJustificationType (juce::Justification::centred);
     logoMark.setColour (juce::Label::backgroundColourId, Palette::brand);
     logoMark.setColour (juce::Label::textColourId, juce::Colours::white);
     addAndMakeVisible (logoMark);
     logoText.setText ("LiveMix", juce::dontSendNotification);
-    logoText.setFont (juce::Font (juce::FontOptions (20.0f, juce::Font::bold)));
+    logoText.setFont (juce::Font (juce::FontOptions (pt (20.0f), juce::Font::bold)));
     addAndMakeVisible (logoText);
 
-    sessionName.setFont (juce::Font (juce::FontOptions (15.0f, juce::Font::bold)));
+    sessionName.setFont (juce::Font (juce::FontOptions (pt (15.0f), juce::Font::bold)));
     sessionName.setJustificationType (juce::Justification::centredLeft);
     sessionName.setMinimumHorizontalScale (1.0f);
     sessionName.setColour (juce::Label::backgroundColourId, Palette::card2);
@@ -52,7 +52,7 @@ TopBar::TopBar (MixDocument& doc) : document (doc)
     statusLabel.setColour (juce::Label::backgroundColourId, Palette::card2);
     statusLabel.setColour (juce::Label::outlineColourId, Palette::line);
     addAndMakeVisible (statusLabel);
-    styleCaption (dspLabel, "DSP");
+    styleCaption (dspLabel, "CPU");
     addAndMakeVisible (dspLabel);
     addAndMakeVisible (dspMeter);
 
@@ -70,7 +70,7 @@ TopBar::TopBar (MixDocument& doc) : document (doc)
     backupButton.setColour (juce::TextButton::buttonColourId, Palette::accent);
     backupButton.setColour (juce::TextButton::textColourOffId, juce::Colours::white);
     button (settingsButton, ko ("설정"), [this] { if (onSettings) onSettings(); });
-    button (helpButton, "?", [this] { if (onHelpMenu) onHelpMenu (&helpButton); });
+    button (helpButton, ko ("정보"), [this] { if (onHelpMenu) onHelpMenu (&helpButton); });
     helpButton.setTooltip (ko ("커뮤니티 · 업데이트 확인 · 정보"));
 
     refresh();
@@ -105,7 +105,7 @@ void TopBar::setStatus (double sampleRate, int bufferSize, double latencyMs, dou
 
     statusLabel.setColour (juce::Label::textColourId, running ? Palette::text : Palette::danger);
     dspMeter.load = dspLoad;
-    dspLabel.setText ("DSP " + juce::String ((int) std::lround (dspLoad * 100.0)) + "%", juce::dontSendNotification);
+    dspLabel.setText ("CPU " + juce::String ((int) std::lround (dspLoad * 100.0)) + "%", juce::dontSendNotification);
     dspMeter.repaint();
 }
 
@@ -127,7 +127,7 @@ void TopBar::resized()
 
     settingsButton.setBounds (row.removeFromRight (64));
     row.removeFromRight (8);
-    helpButton.setBounds (row.removeFromRight (36));
+    helpButton.setBounds (row.removeFromRight (64));
     row.removeFromRight (8);
     backupButton.setBounds (row.removeFromRight (100));
     row.removeFromRight (8);

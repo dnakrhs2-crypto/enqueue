@@ -6,7 +6,7 @@ namespace gocue::livemix
 MasterCard::MasterCard (MixDocument& doc) : document (doc)
 {
     badge.setText ("M", juce::dontSendNotification);
-    badge.setFont (juce::Font (juce::FontOptions (14.0f, juce::Font::bold)));
+    badge.setFont (juce::Font (juce::FontOptions (pt (14.0f), juce::Font::bold)));
     badge.setJustificationType (juce::Justification::centred);
     badge.setColour (juce::Label::backgroundColourId, Palette::text);
     badge.setColour (juce::Label::textColourId, Palette::background);
@@ -31,7 +31,7 @@ MasterCard::MasterCard (MixDocument& doc) : document (doc)
 
     styleCaption (latencyCaption, ko ("지연"));
     addAndMakeVisible (latencyCaption);
-    latencyValue.setFont (juce::Font (juce::FontOptions (26.0f, juce::Font::bold)));
+    latencyValue.setFont (juce::Font (juce::FontOptions (pt (26.0f), juce::Font::bold)));
     latencyValue.setText ("-", juce::dontSendNotification);
     addAndMakeVisible (latencyValue);
     styleCaption (latencyNote, "");
@@ -121,7 +121,7 @@ void MasterCard::resized()
 
     for (auto& chip : chips)
     {
-        const int w = juce::jlimit (110, area.getWidth(), 30 + juce::roundToInt (juce::GlyphArrangement::getStringWidth (juce::Font (juce::FontOptions (13.5f, juce::Font::bold)), chip->getButtonText())));
+        const int w = juce::jlimit (110, area.getWidth(), 30 + juce::roundToInt (juce::GlyphArrangement::getStringWidth (juce::Font (juce::FontOptions (pt (13.5f), juce::Font::bold)), chip->getButtonText())));
 
         if (x + w > area.getRight() && x > area.getX())
         {

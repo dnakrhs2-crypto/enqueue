@@ -9,21 +9,21 @@ struct ChainDrawer::Row : public juce::Component
     Row (ChainDrawer& o, int idx) : owner (o), index (idx)
     {
         grip.setText (juce::String::fromUTF8 ("\xE2\x89\xA1"), juce::dontSendNotification);   // ≡
-        grip.setFont (juce::Font (juce::FontOptions (18.0f)));
+        grip.setFont (juce::Font (juce::FontOptions (pt (18.0f))));
         grip.setColour (juce::Label::textColourId, Palette::dimText);
         grip.setJustificationType (juce::Justification::centred);
         grip.setMouseCursor (juce::MouseCursor::UpDownResizeCursor);
         grip.setInterceptsMouseClicks (false, false);
         addAndMakeVisible (grip);
 
-        number.setFont (juce::Font (juce::FontOptions (12.0f, juce::Font::bold)));
+        number.setFont (juce::Font (juce::FontOptions (pt (12.0f), juce::Font::bold)));
         number.setJustificationType (juce::Justification::centred);
         number.setColour (juce::Label::backgroundColourId, Palette::accent);
         number.setColour (juce::Label::textColourId, juce::Colours::white);
         number.setInterceptsMouseClicks (false, false);
         addAndMakeVisible (number);
 
-        name.setFont (juce::Font (juce::FontOptions (14.5f, juce::Font::bold)));
+        name.setFont (juce::Font (juce::FontOptions (pt (14.5f), juce::Font::bold)));
         name.setMinimumHorizontalScale (1.0f);
         name.setInterceptsMouseClicks (false, false);
         addAndMakeVisible (name);

@@ -16,12 +16,20 @@ class TrayIcon : public juce::SystemTrayIconComponent
 public:
     explicit TrayIcon (std::function<void (int)> onMenu) : menuHandler (std::move (onMenu))
     {
-        juce::Image image (juce::Image::ARGB, 64, 64, true);
+        // drawn at the size the notification area shows (16 px at 100 %, 24 at 150 %, ...): a larger icon is
+        // scaled down by the shell and comes out as a black tile (its transparency is lost on the way)
+        double scale = 1.0;
+
+        if (auto* display = juce::Desktop::getInstance().getDisplays().getPrimaryDisplay())
+            scale = display->scale;
+
+        const int size = juce::jlimit (16, 64, juce::roundToInt (16.0 * scale));
+        juce::Image image (juce::Image::ARGB, size, size, true);
         juce::Graphics g (image);
         g.setColour (Palette::brand);
-        g.fillRoundedRectangle (juce::Rectangle<float> (0.0f, 0.0f, 64.0f, 64.0f), 12.0f);
+        g.fillRoundedRectangle (juce::Rectangle<float> (0.0f, 0.0f, (float) size, (float) size), (float) size * 0.19f);
         g.setColour (juce::Colours::white);
-        g.setFont (juce::Font (juce::FontOptions (30.0f, juce::Font::bold)));
+        g.setFont (juce::Font (juce::FontOptions ((float) size * 0.5f, juce::Font::bold)));
         g.drawText ("ON", image.getBounds(), juce::Justification::centred, false);
         setIconImage (image, image);
         setIconTooltip ("LiveMix");
@@ -253,6 +261,7 @@ public:
             auto* content = new MainComponent (document, settings);
             mainComponent = content;
             setContentOwned (content, true);
+            addKeyListener (content);   // Ctrl+S / Ctrl+Shift+S / Ctrl+N from anywhere in the window
 
             if (! restoreWindowStateFromString (settings.getWindowState()))
                 centreWithSize (1440, 900);
@@ -266,6 +275,12 @@ public:
                 setName ("LiveMix - " + document.getDisplayName() + (document.isDirty() ? " *" : ""));
             };
             setName ("LiveMix - " + document.getDisplayName());
+        }
+
+        ~MainWindow() override
+        {
+            if (mainComponent != nullptr)
+                removeKeyListener (mainComponent);   // before the content goes
         }
 
         MainComponent& getMainComponent() { return *mainComponent; }
@@ -284,6 +299,18 @@ public:
                 app.hideToTray();
             else
                 setMinimised (true);
+        }
+
+        void minimisationStateChanged (bool isNowMinimised) override
+        {
+            // the native title bar's minimise button never reaches minimiseButtonPressed(): the window is already
+            // minimised when this arrives, so it goes to the tray from here (not inside the peer's callback)
+            if (isNowMinimised && prefs.getMinimiseToTray())
+                juce::MessageManager::callAsync ([safe = juce::Component::SafePointer<MainWindow> (this)]
+                {
+                    if (safe != nullptr && safe->isMinimised())
+                        safe->app.hideToTray();
+                });
         }
 
     private:

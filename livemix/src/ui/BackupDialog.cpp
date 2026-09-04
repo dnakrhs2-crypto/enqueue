@@ -62,8 +62,8 @@ namespace
             addAndMakeVisible (createButton);
 
             table.setModel (this);
-            table.setHeaderHeight (28);
-            table.setRowHeight (28);
+            table.setHeaderHeight (30);
+            table.setRowHeight (30);
             table.setColour (juce::ListBox::backgroundColourId, Palette::card);
             table.setColour (juce::ListBox::outlineColourId, Palette::line);
             table.setOutlineThickness (1);

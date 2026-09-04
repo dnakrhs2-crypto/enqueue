@@ -21,6 +21,7 @@ namespace gocue::livemix
 /** The window's content: top bar, the scrolling channel cards, the docked master, the drawers, the status bar.
     Everything the operator does goes through the document; the timer feeds the meters. */
 class MainComponent : public juce::Component,
+                      public juce::KeyListener,   // Ctrl+S / Ctrl+Shift+S / Ctrl+N, registered on the window
                       private juce::Timer
 {
 public:
@@ -64,6 +65,8 @@ public:
     void resized() override;
     void paint (juce::Graphics& g) override;
     void parentHierarchyChanged() override;
+    using juce::Component::keyPressed;
+    bool keyPressed (const juce::KeyPress& key, juce::Component* origin) override;
 
 private:
     enum class Drawer { none, chain, fx };

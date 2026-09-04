@@ -8,12 +8,12 @@ struct ChannelCard::SendRow : public juce::Component
 {
     SendRow (ChannelCard& o, const juce::Uuid& fx) : owner (o), fxId (fx)
     {
-        badge.setFont (juce::Font (juce::FontOptions (11.0f, juce::Font::bold)));
+        badge.setFont (juce::Font (juce::FontOptions (pt (11.0f), juce::Font::bold)));
         badge.setColour (juce::Label::textColourId, juce::Colours::white);
         badge.setColour (juce::Label::backgroundColourId, Palette::accent);
         badge.setJustificationType (juce::Justification::centred);
         addAndMakeVisible (badge);
-        fxName.setFont (juce::Font (juce::FontOptions (13.0f, juce::Font::bold)));
+        fxName.setFont (juce::Font (juce::FontOptions (pt (13.0f), juce::Font::bold)));
         fxName.setMinimumHorizontalScale (1.0f);
         addAndMakeVisible (fxName);
 
@@ -30,7 +30,7 @@ struct ChannelCard::SendRow : public juce::Component
         };
         addAndMakeVisible (fader);
 
-        value.setFont (juce::Font (juce::FontOptions (20.0f, juce::Font::bold)));
+        value.setFont (juce::Font (juce::FontOptions (pt (20.0f), juce::Font::bold)));
         value.setJustificationType (juce::Justification::centredRight);
         value.setMinimumHorizontalScale (1.0f);
         addAndMakeVisible (value);
@@ -51,7 +51,7 @@ struct ChannelCard::SendRow : public juce::Component
     void refresh (const MixFx& fx, int index, const MixSend& send)
     {
         badge.setText ("FX" + juce::String (index + 1), juce::dontSendNotification);
-        fxName.setText (fx.name, juce::dontSendNotification);
+        fxName.setText (fx.name.trim() == "FX " + juce::String (index + 1) ? juce::String() : fx.name, juce::dontSendNotification);   // the default name repeats the badge
         fader.setValue (send.amount * 100.0, juce::dontSendNotification);
         value.setText (juce::String ((int) std::lround (send.amount * 100.0)) + "%", juce::dontSendNotification);
         preToggle.setToggleState (send.pre, juce::dontSendNotification);
@@ -99,11 +99,11 @@ struct ChannelCard::ChainChip : public juce::TextButton
         g.setColour (off ? Palette::lampOff : Palette::accent);
         g.fillRoundedRectangle (idx, 6.0f);
         g.setColour (juce::Colours::white);
-        g.setFont (juce::Font (juce::FontOptions (12.0f, juce::Font::bold)));
+        g.setFont (juce::Font (juce::FontOptions (pt (12.0f), juce::Font::bold)));
         g.drawText (juce::String (index + 1), idx.toNearestInt(), juce::Justification::centred, false);
 
         g.setColour (off ? Palette::dimText : Palette::text);
-        g.setFont (juce::Font (juce::FontOptions (13.5f, juce::Font::bold)));
+        g.setFont (juce::Font (juce::FontOptions (pt (13.5f), juce::Font::bold)));
         g.drawText (getButtonText(), getLocalBounds().withTrimmedLeft (32).withTrimmedRight (8), juce::Justification::centredLeft, true);
     }
 
@@ -118,7 +118,7 @@ ChannelCard::ChannelCard (MixDocument& doc, const juce::Uuid& id) : document (do
 {
     masterChip.setButtonText (ko ("마스터"));
     directChip.setButtonText (ko ("직접 출력"));
-    number.setFont (juce::Font (juce::FontOptions (14.0f, juce::Font::bold)));
+    number.setFont (juce::Font (juce::FontOptions (pt (14.0f), juce::Font::bold)));
     number.setJustificationType (juce::Justification::centred);
     number.setColour (juce::Label::backgroundColourId, Palette::card2);
     number.setColour (juce::Label::outlineColourId, Palette::line);
@@ -398,7 +398,7 @@ void ChannelCard::resized()
 
         for (auto& chip : chips)
         {
-            const int w = juce::jlimit (110, r.getWidth(), 44 + juce::roundToInt (juce::GlyphArrangement::getStringWidth (juce::Font (juce::FontOptions (13.5f, juce::Font::bold)), chip->getButtonText())));
+            const int w = juce::jlimit (110, r.getWidth(), 44 + juce::roundToInt (juce::GlyphArrangement::getStringWidth (juce::Font (juce::FontOptions (pt (13.5f), juce::Font::bold)), chip->getButtonText())));
 
             if (x + w > r.getRight() && x > r.getX())
             {

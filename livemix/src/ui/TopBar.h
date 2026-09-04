@@ -8,7 +8,7 @@
 namespace gocue::livemix
 {
 
-/** The bar under the title: logo, session name and state, ASIO device, rate / buffer / latency, DSP load,
+/** The bar under the title: logo, session name and state, ASIO device, rate / buffer / latency, CPU load,
     and the buttons (세션, FX 채널, 온라인 백업, 설정, 도움말). */
 class TopBar : public juce::Component
 {

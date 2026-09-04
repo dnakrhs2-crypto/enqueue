@@ -32,7 +32,7 @@ MainComponent::MainComponent (MixDocument& doc, LiveMixSettings& s)
 
     addAndMakeVisible (masterCard);
     masterCard.onOpenChain = [this] { openChainFor (&engine.getMasterChain(), ko ("마스터")); };
-    masterCard.onAddPlugin = [this] { addPluginTo (&engine.getMasterChain(), ko ("마스터"), &masterCard); };
+    masterCard.onAddPlugin = [this] { addPluginTo (&engine.getMasterChain(), ko ("마스터"), &masterCard.getAddPluginButton()); };
     masterCard.onOpenPluginEditor = [this] (int slot)
     {
         auto& chain = engine.getMasterChain();
@@ -55,7 +55,7 @@ MainComponent::MainComponent (MixDocument& doc, LiveMixSettings& s)
     fxDrawer.onAddPlugin = [this] (const juce::Uuid& id)
     {
         if (const auto* f = document.getSession().findFx (id))
-            addPluginTo (engine.getFxChain (id), "FX " + f->name, &fxDrawer);
+            addPluginTo (engine.getFxChain (id), "FX " + f->name, &fxDrawer.getAddPluginButton());
     };
     fxDrawer.onOpenPluginEditor = [this] (const juce::Uuid& id, int slot)
     {
@@ -148,10 +148,10 @@ void MainComponent::rebuildCards()
                 if (const auto* ch = document.getSession().findChannel (id))
                     openChainFor (engine.getChannelChain (id), ch->name);
             };
-            card->onAddPlugin = [this] (const juce::Uuid& id)
+            card->onAddPlugin = [this, anchor = card.get()] (const juce::Uuid& id)
             {
                 if (const auto* ch = document.getSession().findChannel (id))
-                    addPluginTo (engine.getChannelChain (id), ch->name, nullptr);
+                    addPluginTo (engine.getChannelChain (id), ch->name, &anchor->getAddPluginButton());   // the menu next to the button
             };
             card->onRemove = [this] (const juce::Uuid& id)
             {
@@ -270,7 +270,7 @@ void MainComponent::resized()
         // the height the text really takes at this width (measured by the editor itself, no scrollbar), up to about
         // five lines; a longer notice scrolls. The close button sits on the right.
         const int textWidth = juce::jmax (100, area.getWidth() - 32 - 44);
-        const int maxTextHeight = 112;
+        const int maxTextHeight = 128;   // about five lines
         noticeText.setScrollbarsShown (false);
         noticeText.setBounds (16, area.getY() + 7, textWidth, 1);   // lays the text out at this width
         const int needed = noticeText.getTextHeight() + 6;
@@ -588,6 +588,35 @@ void MainComponent::refreshNotice()
     repaint();
 }
 
+bool MainComponent::keyPressed (const juce::KeyPress& key, juce::Component*)
+{
+    // the session shortcuts, wherever the focus is in the window (a text field lets them through)
+    const auto mods = key.getModifiers();
+
+    if (! mods.isCtrlDown() || mods.isAltDown())
+        return false;
+
+    const auto code = key.getKeyCode();
+
+    if (code == 'S' || code == 's')
+    {
+        if (mods.isShiftDown())
+            saveSessionAs();
+        else
+            saveSession();
+
+        return true;
+    }
+
+    if ((code == 'N' || code == 'n') && ! mods.isShiftDown())
+    {
+        newSession();
+        return true;
+    }
+
+    return false;
+}
+
 void MainComponent::parentHierarchyChanged()
 {
     // the grip resizes the window itself; the window's constrainer keeps the minimum size (MainWindow sets its limits
@@ -862,10 +891,17 @@ bool MainComponent::openFromCommandLine (const juce::String& commandLine)
 void MainComponent::showSessionMenu (juce::Component* anchor)
 {
     juce::PopupMenu menu;
-    menu.addItem (1, ko ("새 세션"));
+    auto withShortcut = [] (int id, const juce::String& text, const juce::String& shortcut)
+    {
+        juce::PopupMenu::Item item (text);
+        item.itemID = id;
+        item.shortcutKeyDescription = shortcut;
+        return item;
+    };
+    menu.addItem (withShortcut (1, ko ("새 세션"), "Ctrl+N"));
     menu.addItem (2, ko ("열기..."));
-    menu.addItem (3, ko ("저장"));
-    menu.addItem (4, ko ("다른 이름으로 저장..."));
+    menu.addItem (withShortcut (3, ko ("저장"), "Ctrl+S"));
+    menu.addItem (withShortcut (4, ko ("다른 이름으로 저장..."), "Ctrl+Shift+S"));
     menu.addSeparator();
     menu.addItem (5, ko ("세션 이름 바꾸기..."));
 

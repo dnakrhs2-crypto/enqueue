@@ -21,6 +21,8 @@ public:
 
     std::function<void()> onOpenChain;
     std::function<void()> onAddPlugin;
+    /** The '+ 추가' button: the plugin menu opens next to it. */
+    juce::Component& getAddPluginButton() noexcept { return addPluginButton; }
     std::function<void (int slotIndex)> onOpenPluginEditor;
 
     void resized() override;

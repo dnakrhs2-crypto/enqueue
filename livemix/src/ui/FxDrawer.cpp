@@ -60,7 +60,7 @@ FxDrawer::FxDrawer (MixDocument& doc) : document (doc)
             document.setFxReturn (selected, returnSlider.getValue() / 100.0);
     };
     addAndMakeVisible (returnSlider);
-    returnValue.setFont (juce::Font (juce::FontOptions (22.0f, juce::Font::bold)));
+    returnValue.setFont (juce::Font (juce::FontOptions (pt (22.0f), juce::Font::bold)));
     returnValue.setJustificationType (juce::Justification::centredRight);
     addAndMakeVisible (returnValue);
 
@@ -166,7 +166,9 @@ void FxDrawer::rebuildTabs()
     for (size_t i = 0; i < session.fx.size(); ++i)
     {
         const auto& f = session.fx[i];
-        auto tab = std::make_unique<juce::TextButton> ("FX" + juce::String ((int) i + 1) + "  " + f.name);
+        const auto badge = "FX" + juce::String ((int) i + 1);
+        const bool defaultName = f.name.trim() == "FX " + juce::String ((int) i + 1);   // the default name says no more than the badge
+        auto tab = std::make_unique<juce::TextButton> (defaultName ? f.name.trim() : badge + "  " + f.name);
         tab->setWantsKeyboardFocus (false);
         tab->setToggleState (f.id == selected, juce::dontSendNotification);
         tab->setColour (juce::TextButton::buttonOnColourId, Palette::accent);
@@ -216,7 +218,7 @@ void FxDrawer::rebuildSenders()
         auto label = std::make_unique<juce::Label>();
         const auto amount = juce::String ((int) std::lround (send.amount * 100.0)) + "%";
         label->setText (juce::String ((int) i + 1) + "  " + c.name + "     " + amount + (send.amount > 0.0 ? (send.pre ? ko (" · 프리") : ko (" · 포스트")) : juce::String()), juce::dontSendNotification);
-        label->setFont (juce::Font (juce::FontOptions (14.0f, juce::Font::bold)));
+        label->setFont (juce::Font (juce::FontOptions (pt (14.0f), juce::Font::bold)));
         label->setColour (juce::Label::textColourId, send.amount > 0.0 && c.on ? Palette::text : Palette::dimText);
         label->setColour (juce::Label::backgroundColourId, Palette::card2);
         label->setColour (juce::Label::outlineColourId, Palette::line);
@@ -291,7 +293,7 @@ void FxDrawer::resized()
 
     for (auto& chip : chips)
     {
-        const int w = juce::jlimit (110, area.getWidth(), 30 + juce::roundToInt (juce::GlyphArrangement::getStringWidth (juce::Font (juce::FontOptions (13.5f, juce::Font::bold)), chip->getButtonText())));
+        const int w = juce::jlimit (110, area.getWidth(), 30 + juce::roundToInt (juce::GlyphArrangement::getStringWidth (juce::Font (juce::FontOptions (pt (13.5f), juce::Font::bold)), chip->getButtonText())));
 
         if (x + w > area.getRight() && x > area.getX())
         {

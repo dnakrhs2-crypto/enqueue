@@ -9,9 +9,9 @@
 namespace gocue::livemix
 {
 
-inline juce::Font captionFont() { return juce::Font (juce::FontOptions (12.5f, juce::Font::bold)); }
-inline juce::Font bodyFont (float size = 14.5f) { return juce::Font (juce::FontOptions (size)); }
-inline juce::Font titleFont (float size = 17.0f) { return juce::Font (juce::FontOptions (size, juce::Font::bold)); }
+inline juce::Font captionFont() { return juce::Font (juce::FontOptions (pt (12.5f), juce::Font::bold)); }
+inline juce::Font bodyFont (float size = 14.5f) { return juce::Font (juce::FontOptions (pt (size))); }
+inline juce::Font titleFont (float size = 17.0f) { return juce::Font (juce::FontOptions (pt (size), juce::Font::bold)); }
 
 inline void styleCaption (juce::Label& label, const juce::String& text)
 {
@@ -73,7 +73,7 @@ public:
         }
 
         g.setColour (Palette::dimText);
-        g.setFont (juce::Font (juce::FontOptions (10.5f)));
+        g.setFont (juce::Font (juce::FontOptions (pt (10.5f))));
         const char* marks[] = { "-40", "-20", "-10", "-6", "0" };
         const float dbs[] = { -40.0f, -20.0f, -10.0f, -6.0f, 0.0f };
 
@@ -160,7 +160,7 @@ public:
         g.fillEllipse (juce::Rectangle<float> (lampR * 2.0f, lampR * 2.0f).withCentre (centre));
 
         g.setColour (on ? Palette::text : Palette::dimText);
-        g.setFont (juce::Font (juce::FontOptions (15.0f, juce::Font::bold)));
+        g.setFont (juce::Font (juce::FontOptions (pt (15.0f), juce::Font::bold)));
         g.drawText (on ? ko ("마이크 ON") : ko ("마이크 OFF"), getLocalBounds().withTrimmedLeft (36), juce::Justification::centredLeft, false);
     }
 
@@ -194,7 +194,7 @@ public:
         g.setColour (getToggleState() ? Palette::accent : Palette::line);
         g.drawRoundedRectangle (bounds, Palette::controlRadius, getToggleState() ? 2.0f : 1.0f);
         g.setColour (getToggleState() ? Palette::text : Palette::dimText);
-        g.setFont (juce::Font (juce::FontOptions (13.0f, juce::Font::bold)));
+        g.setFont (juce::Font (juce::FontOptions (pt (13.0f), juce::Font::bold)));
         g.drawText (getButtonText(), getLocalBounds(), juce::Justification::centred, false);
     }
 };

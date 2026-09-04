@@ -30,3 +30,10 @@ constexpr float cardRadius = 14.0f;
 constexpr float controlRadius = 9.0f;
 
 } // namespace gocue::livemix::Palette
+
+namespace gocue::livemix
+{
+/** Every text size in the app goes through this: gom (2026-09-04) wanted the whole UI's text larger. */
+constexpr float textScale = 1.2f;
+inline float pt (float size) noexcept { return size * textScale; }
+} // namespace gocue::livemix

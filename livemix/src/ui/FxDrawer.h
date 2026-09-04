@@ -28,6 +28,8 @@ public:
     std::function<void()> onClose;
     std::function<void (const juce::Uuid&)> onOpenChain;
     std::function<void (const juce::Uuid&)> onAddPlugin;
+    /** The '+ 추가' button: the plugin menu opens next to it. */
+    juce::Component& getAddPluginButton() noexcept { return addPluginButton; }
     std::function<void (const juce::Uuid&, int slotIndex)> onOpenPluginEditor;
 
     void resized() override;
