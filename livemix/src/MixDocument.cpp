@@ -72,7 +72,7 @@ juce::Result MixDocument::save (const juce::File& newFile)
 juce::Result MixDocument::saveIfPossible()
 {
     if (! hasFile())
-        return juce::Result::fail ("no file");
+        return juce::Result::fail (juce::String::fromUTF8 ("저장할 파일이 정해지지 않았습니다"));
 
     return save (file);
 }

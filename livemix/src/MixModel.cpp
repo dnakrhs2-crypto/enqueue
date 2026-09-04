@@ -284,31 +284,32 @@ juce::String MixSession::toJson() const
 juce::Result MixSession::fromJson (const juce::String& json, MixSession& out, juce::StringArray* warnings)
 {
     if (json.trim().isEmpty())
-        return juce::Result::fail ("Invalid session file: the file is empty");
+        return juce::Result::fail (juce::String::fromUTF8 ("세션 파일이 비어 있습니다"));
 
     // JUCE's parser stops after the first object: corruption behind it would be read as a good file and then written over
     if (! json.trimEnd().endsWithChar ('}') || ProjectSerializer::hasTrailingJsonData (json))
-        return juce::Result::fail ("Invalid session file: data after the end of the session");
+        return juce::Result::fail (juce::String::fromUTF8 ("세션 파일이 손상됐습니다 (세션이 끝난 뒤에 데이터가 더 있습니다)"));
 
     juce::var root;
     const auto parsed = juce::JSON::parse (json, root);
 
     if (parsed.failed())
-        return juce::Result::fail ("Invalid session file (JSON): " + parsed.getErrorMessage());
+        return juce::Result::fail (juce::String::fromUTF8 ("세션 파일을 읽을 수 없습니다 (JSON): ") + parsed.getErrorMessage());
 
     if (root.getDynamicObject() == nullptr)
-        return juce::Result::fail ("Invalid session file: top level is not an object");
+        return juce::Result::fail (juce::String::fromUTF8 ("세션 파일 형식이 아닙니다 (최상위가 객체가 아닙니다)"));
 
     const auto app = root.getProperty ("app", "").toString();
 
     if (app != "LiveMix")
-        return juce::Result::fail (app.isEmpty() ? "Invalid session file: not a LiveMix session" : "Invalid session file: written by \"" + app + "\", not LiveMix");
+        return juce::Result::fail (app.isEmpty() ? juce::String::fromUTF8 ("LiveMix 세션 파일이 아닙니다")
+                                                 : juce::String::fromUTF8 ("다른 프로그램(\"") + app + juce::String::fromUTF8 ("\")이 쓴 파일입니다. LiveMix 세션이 아닙니다"));
 
     const int version = (int) root.getProperty ("version", 1);
 
     if (version > currentVersion)
-        return juce::Result::fail ("This session was saved by a newer LiveMix (file version " + juce::String (version)
-                                   + ", this build reads version " + juce::String (currentVersion) + "). Update LiveMix to open it.");
+        return juce::Result::fail (juce::String::fromUTF8 ("더 새로운 LiveMix로 저장한 세션입니다 (파일 버전 ") + juce::String (version)
+                                   + juce::String::fromUTF8 (", 이 버전은 ") + juce::String (currentVersion) + juce::String::fromUTF8 ("까지 읽습니다). LiveMix를 업데이트하세요."));
 
     MixSession s;
     s.name = root.getProperty ("name", "").toString();
@@ -407,7 +408,7 @@ juce::Result MixSession::save (const juce::File& file) const
 juce::Result MixSession::load (const juce::File& file, MixSession& out, juce::StringArray* warnings)
 {
     if (! file.existsAsFile())
-        return juce::Result::fail ("File not found: " + file.getFullPathName());
+        return juce::Result::fail (juce::String::fromUTF8 ("파일이 없습니다: ") + file.getFullPathName());
 
     return fromJson (file.loadFileAsString(), out, warnings);
 }
