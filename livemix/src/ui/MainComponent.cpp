@@ -5,6 +5,8 @@
 #include "app/Links.h"
 #include "app/Updater.h"
 
+#include <cmath>
+
 namespace gocue::livemix
 {
 
@@ -77,6 +79,15 @@ MainComponent::MainComponent (MixDocument& doc, LiveMixSettings& s)
     statusRight.setJustificationType (juce::Justification::centredRight);
     statusRight.setText (ko ("최소화하면 트레이에서 계속 동작합니다"), juce::dontSendNotification);
     addAndMakeVisible (statusRight);
+
+    noticeLabel.setFont (bodyFont (14.0f));
+    noticeLabel.setJustificationType (juce::Justification::centredLeft);
+    noticeLabel.setMinimumHorizontalScale (1.0f);
+    addChildComponent (noticeLabel);
+    noticeClose.setWantsKeyboardFocus (false);
+    noticeClose.setTooltip (ko ("닫기"));
+    noticeClose.onClick = [this] { hideNotice(); };
+    addChildComponent (noticeClose);
 
     windows.onChainChanged = [this] (PluginChain&) { document.markDirty(); };
     engine.forEachChain ([this] (PluginChain& chain) { chain.setListener (&windows); });
@@ -253,6 +264,20 @@ void MainComponent::resized()
 {
     auto area = getLocalBounds();
     topBar.setBounds (area.removeFromTop (64));
+
+    if (noticeVisible)
+    {
+        // as many lines as the text needs (up to five), the close button on the right
+        const int textWidth = juce::jmax (100, area.getWidth() - 32 - 44);
+        const int lines = juce::jlimit (1, 5, (int) std::ceil (juce::GlyphArrangement::getStringWidth (noticeLabel.getFont(), noticeLabel.getText()) / (float) textWidth)
+                                             + noticeLabel.getText().length() - noticeLabel.getText().replace ("\n", "").length());
+        auto bar = area.removeFromTop (14 + lines * 20);
+        noticeClose.setBounds (bar.removeFromRight (44).reduced (8, (bar.getHeight() - 28) / 2));
+        noticeLabel.setBounds (bar.reduced (16, 4));
+    }
+
+    noticeLabel.setVisible (noticeVisible);
+    noticeClose.setVisible (noticeVisible);
     auto status = area.removeFromBottom (30);
     statusLeft.setBounds (status.reduced (16, 0).removeFromLeft (status.getWidth() / 2));
     statusRight.setBounds (status.reduced (16, 0).removeFromRight (status.getWidth() / 2));
@@ -276,6 +301,15 @@ void MainComponent::resized()
 void MainComponent::paint (juce::Graphics& g)
 {
     g.fillAll (Palette::background);
+
+    if (noticeVisible)
+    {
+        auto bar = noticeLabel.getBounds().getUnion (noticeClose.getBounds()).expanded (16, 4).withX (0).withWidth (getWidth());
+        g.setColour (noticeIsError ? Palette::danger.withAlpha (0.18f) : Palette::accent.withAlpha (0.18f));
+        g.fillRect (bar);
+        g.setColour (noticeIsError ? Palette::danger : Palette::accent);
+        g.fillRect (bar.removeFromLeft (4));
+    }
     auto status = getLocalBounds().removeFromBottom (30);
     g.setColour (Palette::bar);
     g.fillRect (status);
@@ -492,6 +526,26 @@ bool MainComponent::autosaveNow()
     return true;
 }
 
+void MainComponent::showNotice (const juce::String& text, bool error)
+{
+    noticeVisible = true;
+    noticeIsError = error;
+    noticeLabel.setText (text, juce::dontSendNotification);
+    noticeLabel.setColour (juce::Label::textColourId, Palette::text);
+    resized();
+    repaint();
+}
+
+void MainComponent::hideNotice()
+{
+    if (! noticeVisible)
+        return;
+
+    noticeVisible = false;
+    resized();
+    repaint();
+}
+
 void MainComponent::showStatus (const juce::String& text, bool error)
 {
     statusText = text;
@@ -589,10 +643,11 @@ void MainComponent::loadSession (const juce::File& file)
 
     if (result.failed())
     {
-        juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon, ko ("세션 열기 실패"), result.getErrorMessage(), ko ("확인"));
+        showNotice (ko ("세션 열기 실패: ") + result.getErrorMessage(), true);
         return;
     }
 
+    hideNotice();
     settings.setLastSessionFile (file);
     settings.addRecentSession (file);
     showStatus (ko ("열림: ") + file.getFileName());
@@ -621,7 +676,7 @@ void MainComponent::loadSession (const juce::File& file)
     }
 
     if (! warnings.isEmpty())
-        juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon, ko ("세션을 열었지만 확인이 필요합니다"), warnings.joinIntoString ("\n"), ko ("확인"));
+        showNotice (ko ("세션을 열었지만 확인이 필요합니다: ") + warnings.joinIntoString ("\n"), true);
 }
 
 void MainComponent::openSessionDialog()

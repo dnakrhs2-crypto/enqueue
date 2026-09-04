@@ -109,12 +109,11 @@ public:
                 createDefaultSession (main);
         }
 
+        // in the window, not a modal alert: a modal would freeze the frame (no resizing) and the mic buttons until dismissed
         if (safeMode)
-            juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::InfoIcon, ko ("안전 모드"),
-                                                    ko ("Shift를 누른 채 실행해 안전 모드로 시작했습니다. 저장된 ASIO 장치와 플러그인을 불러오지 않았습니다 (플러그인 설정은 세션에 그대로 남습니다).\n설정에서 장치를 고르세요."), ko ("확인"));
+            main.showNotice (ko ("안전 모드로 시작했습니다 (Shift): 저장된 ASIO 장치와 플러그인을 불러오지 않았습니다. 플러그인 설정은 세션에 그대로 남습니다. 설정에서 장치를 고르세요."), false);
         else if (deviceError.isNotEmpty())
-            juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon, ko ("ASIO 장치를 열지 못했습니다"),
-                                                    deviceError + "\n\n" + ko ("설정에서 장치를 고르거나 오디오 인터페이스 연결을 확인하세요."), ko ("확인"));
+            main.showNotice (ko ("ASIO 장치를 열지 못했습니다: ") + deviceError + " " + ko ("설정에서 장치를 고르거나 오디오 인터페이스 연결을 확인하세요."), true);
 
         Updater::Callbacks callbacks;
         callbacks.canShutdown = [this]

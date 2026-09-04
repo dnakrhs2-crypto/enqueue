@@ -47,6 +47,10 @@ public:
 
     /** The ASIO device list changed (settings / hot-plug): refresh names and pickers. */
     void deviceChanged();
+    /** A message shown in a bar under the top bar, with a close button - never a modal dialog: a modal alert freezes
+        the whole window (no resizing, no mic buttons) until it is dismissed, which is wrong for a live tool. */
+    void showNotice (const juce::String& text, bool error);
+    void hideNotice();
     void refreshAll();
 
     std::function<void()> onQuitRequested;
@@ -98,6 +102,9 @@ private:
     juce::Uuid chainOwnerId = juce::Uuid::null();   // the channel / FX whose chain the drawer shows (null = master)
     bool chainIsFx = false;
     juce::Label statusLeft, statusRight;
+    juce::Label noticeLabel;
+    juce::TextButton noticeClose { juce::String::fromUTF8 ("\xE2\x9C\x95") };
+    bool noticeVisible = false, noticeIsError = false;
     juce::StringArray inputNames, outputNames;
     juce::String statusText;
     double statusUntilMs = 0.0;
