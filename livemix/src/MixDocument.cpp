@@ -27,6 +27,7 @@ void MixDocument::newSession()
     dirty = false;
     engine.applySession (session, nullptr, true);
     notifyStructure();
+    notifyValue();   // the window title and the values shown
 }
 
 juce::Result MixDocument::load (const juce::File& newFile, juce::StringArray* warnings, juce::StringArray* pluginErrors)
@@ -49,6 +50,7 @@ juce::Result MixDocument::load (const juce::File& newFile, juce::StringArray* wa
         warnings->addArray (restoreErrors);
 
     notifyStructure();
+    notifyValue();   // the window title (it listens to value changes only) and the values shown
     return juce::Result::ok();
 }
 
