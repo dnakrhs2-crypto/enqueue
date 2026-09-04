@@ -325,7 +325,19 @@ void FxDrawer::resized()
     out.removeFromLeft (6);
     monoChip.setBounds (out.removeFromLeft (58));
     out.removeFromLeft (6);
-    directCombo.setBounds (out.withHeight (30).withY (out.getY() + 2));
+
+    if (out.getWidth() < 110)
+    {
+        // the narrow drawer: the pair selector takes its own row instead of a sliver next to the chips
+        area.removeFromTop (6);
+        const auto row = area.removeFromTop (34);
+        directCombo.setBounds (row.withHeight (30).withY (row.getY() + 2));
+    }
+    else
+    {
+        directCombo.setBounds (out.withHeight (30).withY (out.getY() + 2));
+    }
+
     area.removeFromTop (12);
 
     meterCaption.setBounds (area.removeFromTop (18));

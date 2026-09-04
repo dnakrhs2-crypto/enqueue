@@ -286,6 +286,7 @@ void MixEngine::addToOutputs (float* const* outputs, int numOutputs, int first, 
 
 void MixEngine::renderBlock (const float* const* inputs, int numInputs, float* const* outputs, int numOutputs, int numSamples)
 {
+    const juce::ScopedNoDenormals noDenormals;   // a decaying tail must not slide into subnormal arithmetic on the callback
     for (int ch = 0; ch < numOutputs; ++ch)
         if (outputs[ch] != nullptr)
             juce::FloatVectorOperations::clear (outputs[ch], numSamples);

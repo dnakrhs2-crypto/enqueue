@@ -1713,6 +1713,8 @@ void AudioEngine::renderBlock (juce::AudioBuffer<float>& output, int numSamples,
     if (numSamples <= 0)
         return;
 
+    const juce::ScopedNoDenormals noDenormals;   // fades and plugin tails decay towards zero: no subnormal slowdown on the callback
+
     // A driver may deliver more samples than it announced: process in prepared-size chunks instead of
     // growing buffers on the audio thread.
     const int chunkSize = juce::jmax (1, mixBuffer.getNumSamples());
