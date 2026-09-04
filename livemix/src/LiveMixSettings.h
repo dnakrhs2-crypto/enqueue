@@ -37,6 +37,12 @@ public:
     bool getSkipPluginsWhenOff() const;
     void setSkipPluginsWhenOff (bool on);
 
+    /** The mute-group hotkeys as KeyPress descriptions ("F9", "ctrl + alt + M"); empty = none. */
+    juce::String getMicMuteHotkey() const;
+    void setMicMuteHotkey (const juce::String& description);
+    juce::String getFxMuteHotkey() const;
+    void setFxMuteHotkey (const juce::String& description);
+
     juce::String getBackupUrl() const;       // WebDAV base, e.g. https://parkdoomin.synology.me:5006
     void setBackupUrl (const juce::String& url);
     juce::String getBackupFolder() const;    // e.g. /LiveMix 백업

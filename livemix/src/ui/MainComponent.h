@@ -3,9 +3,11 @@
 #include "ChainDrawer.h"
 #include "ChannelCard.h"
 #include "FxDrawer.h"
+#include "GlobalHotkeys.h"
 #include "LiveMixSettings.h"
 #include "MasterCard.h"
 #include "MixDocument.h"
+#include "MuteGroups.h"
 #include "TopBar.h"
 #include "WebDavBackup.h"
 #include "ui/PluginWindows.h"
@@ -50,6 +52,8 @@ public:
 
     /** The ASIO device list changed (settings / hot-plug): refresh names and pickers. */
     void deviceChanged();
+    /** The two mute groups (the tray menu toggles them too). */
+    MuteGroups& getMuteGroups() noexcept { return muteGroups; }
     /** The notice bar under the top bar, with a close button - never a modal dialog: a modal alert freezes the whole
         window (no resizing, no mic buttons) until it is dismissed, which is wrong for a live tool. Three lines that
         come and go on their own: the session note (the last open: its failure, or its warnings), the startup note
@@ -82,6 +86,8 @@ private:
     void showHelpMenu (juce::Component* anchor);
     void showBackupDialog();
     void showSettingsDialog();
+    void registerHotkeys();      // from the settings; a refused key goes to the status line
+    void muteGroupsChanged();    // badges, cards, drawer
     void showPluginManager();
     void chooseDevice (const juce::String& name);
     void deviceChosen();   // the operator picked a device / buffer: the session remembers it
@@ -97,6 +103,8 @@ private:
     MixDocument& document;
     LiveMixSettings& settings;
     MixEngine& engine;
+    MuteGroups muteGroups { document };
+    GlobalHotkeys hotkeys;
     PluginWindowManager windows;
     WebDavBackup backup;
     juce::Component::SafePointer<juce::DialogWindow> pluginManagerDialog;

@@ -1,6 +1,9 @@
 #include "SettingsDialog.h"
 
+#include "GlobalHotkeys.h"
 #include "Widgets.h"
+
+#include <tuple>
 
 namespace gocue::livemix
 {
@@ -10,8 +13,8 @@ namespace
     class SettingsContent : public juce::Component
     {
     public:
-        SettingsContent (MixEngine& e, LiveMixSettings& s, std::function<void()> deviceChanged)
-            : engine (e), settings (s), onDeviceChanged (std::move (deviceChanged))
+        SettingsContent (MixEngine& e, LiveMixSettings& s, std::function<void()> deviceChanged, std::function<void()> hotkeysChanged)
+            : engine (e), settings (s), onDeviceChanged (std::move (deviceChanged)), onHotkeysChanged (std::move (hotkeysChanged))
         {
             styleCaption (deviceCaption, ko ("ASIO 장치"));
             addAndMakeVisible (deviceCaption);
@@ -70,6 +73,54 @@ namespace
                 engine.setSkipChainWhenOff (on);
             });
 
+            styleCaption (hotkeyCaption, ko ("뮤트그룹 핫키"));
+            addAndMakeVisible (hotkeyCaption);
+            styleCaption (hotkeyNote, ko ("LiveMix가 최소화·트레이 상태여도 듣는 전역 핫키입니다. 그동안 다른 프로그램은 그 키를 받지 못하니 F 키(F9 등)나 Ctrl+Alt 조합을 권합니다. 대상은 각 마이크 카드와 FX의 '뮤트그룹' 칩으로 고릅니다."));
+            hotkeyNote.setFont (bodyFont (12.5f));
+            addAndMakeVisible (hotkeyNote);
+
+            auto hotkeyRow = [this] (juce::Label& label, const juce::String& text, HotkeyButton& button, juce::TextButton& clear,
+                                     juce::String (LiveMixSettings::*get)() const, void (LiveMixSettings::*set) (const juce::String&), HotkeyButton& other)
+            {
+                label.setText (text, juce::dontSendNotification);
+                label.setFont (bodyFont (14.0f));
+                label.setColour (juce::Label::textColourId, Palette::text);
+                addAndMakeVisible (label);
+                button.setHotkey ((settings.*get)());
+                button.validate = [&other] (const juce::KeyPress& key)
+                {
+                    if (const auto why = GlobalHotkeys::reasonToRefuse (key); why.isNotEmpty())
+                        return why;
+
+                    if (other.getHotkey().isNotEmpty() && key.getTextDescription() == other.getHotkey())
+                        return ko ("다른 뮤트그룹이 쓰는 키입니다.");
+
+                    return juce::String();
+                };
+                button.onHotkeyChanged = [this, set, &button] (const juce::String& description)
+                {
+                    (settings.*set) (description);
+                    button.setHotkey (description);
+
+                    if (onHotkeysChanged)
+                        onHotkeysChanged();
+                };
+                addAndMakeVisible (button);
+                clear.setTooltip (ko ("핫키 지우기"));
+                clear.onClick = [this, set, &button]
+                {
+                    (settings.*set) ({});
+                    button.setHotkey ({});
+
+                    if (onHotkeysChanged)
+                        onHotkeysChanged();
+                };
+                addAndMakeVisible (clear);
+            };
+
+            hotkeyRow (micHotkeyLabel, ko ("마이크 뮤트그룹"), micHotkey, micHotkeyClear, &LiveMixSettings::getMicMuteHotkey, &LiveMixSettings::setMicMuteHotkey, fxHotkey);
+            hotkeyRow (fxHotkeyLabel, ko ("FX 뮤트그룹"), fxHotkey, fxHotkeyClear, &LiveMixSettings::getFxMuteHotkey, &LiveMixSettings::setFxMuteHotkey, micHotkey);
+
             styleCaption (backupCaption, ko ("온라인 백업"));
             addAndMakeVisible (backupCaption);
             styleCaption (backupNote, ko ("위쪽 '온라인 백업' 버튼의 창에서 계정을 만들고 로그인합니다. 백업은 그 계정의 것만 보이고, 올리기·불러오기도 그 계정으로만 됩니다."));
@@ -77,7 +128,7 @@ namespace
             addAndMakeVisible (backupNote);
 
             refreshDevices();
-            setSize (560, 430);
+            setSize (560, 610);
         }
 
         void refreshDevices()
@@ -166,6 +217,21 @@ namespace
             startWithWindows.setBounds (area.removeFromTop (28));
             skipWhenOff.setBounds (area.removeFromTop (28));
             area.removeFromTop (16);
+            hotkeyCaption.setBounds (area.removeFromTop (20));
+            hotkeyNote.setBounds (area.removeFromTop (54));
+            area.removeFromTop (4);
+
+            for (auto parts : { std::make_tuple (&micHotkeyLabel, &micHotkey, &micHotkeyClear), std::make_tuple (&fxHotkeyLabel, &fxHotkey, &fxHotkeyClear) })
+            {
+                auto r = area.removeFromTop (30);
+                std::get<0> (parts)->setBounds (r.removeFromLeft (130));
+                std::get<2> (parts)->setBounds (r.removeFromRight (34));
+                r.removeFromRight (6);
+                std::get<1> (parts)->setBounds (r);
+                area.removeFromTop (6);
+            }
+
+            area.removeFromTop (10);
             backupCaption.setBounds (area.removeFromTop (20));
             backupNote.setBounds (area.removeFromTop (56));
         }
@@ -175,9 +241,11 @@ namespace
     private:
         MixEngine& engine;
         LiveMixSettings& settings;
-        std::function<void()> onDeviceChanged;
+        std::function<void()> onDeviceChanged, onHotkeysChanged;
         juce::StringArray names;
-        juce::Label deviceCaption, bufferCaption, deviceNote, backupCaption, backupNote;
+        juce::Label deviceCaption, bufferCaption, deviceNote, backupCaption, backupNote, hotkeyCaption, hotkeyNote, micHotkeyLabel, fxHotkeyLabel;
+        HotkeyButton micHotkey, fxHotkey;
+        juce::TextButton micHotkeyClear { "x" }, fxHotkeyClear { "x" };
         juce::ComboBox deviceCombo, bufferCombo;
         juce::TextButton panelButton;
         juce::ToggleButton minimiseToTray, closeToTray, startWithWindows, skipWhenOff;
@@ -187,7 +255,8 @@ namespace
     juce::Component::SafePointer<juce::DialogWindow> openDialog;
 }
 
-void SettingsDialog::show (MixEngine& engine, LiveMixSettings& settings, juce::Component* centreAround, std::function<void()> onDeviceChanged)
+void SettingsDialog::show (MixEngine& engine, LiveMixSettings& settings, juce::Component* centreAround, std::function<void()> onDeviceChanged,
+                           std::function<void()> onHotkeysChanged)
 {
     if (openDialog != nullptr)
     {
@@ -196,7 +265,7 @@ void SettingsDialog::show (MixEngine& engine, LiveMixSettings& settings, juce::C
     }
 
     juce::DialogWindow::LaunchOptions options;
-    options.content.setOwned (new SettingsContent (engine, settings, std::move (onDeviceChanged)));
+    options.content.setOwned (new SettingsContent (engine, settings, std::move (onDeviceChanged), std::move (onHotkeysChanged)));
     options.dialogTitle = ko ("설정");
     options.dialogBackgroundColour = Palette::card;
     options.escapeKeyTriggersCloseButton = true;

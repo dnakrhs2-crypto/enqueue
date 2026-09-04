@@ -26,8 +26,10 @@ public:
     std::function<void (int slotIndex)> onOpenPluginEditor;
 
     void resized() override;
-    /** The height the card needs at 'width': its usual height, more when the chips take more than two rows. */
+    /** The height the card needs at 'width': its usual height, more when the chips take more than two rows; the
+        stacked (portrait) layout's height below narrowBelow. */
     int getPreferredHeight (int width) const;
+    static constexpr int narrowBelow = 760;   // narrower than this: head, chain, latency and output stack up
     void paint (juce::Graphics& g) override;
 
 private:

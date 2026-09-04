@@ -96,6 +96,13 @@ void MasterCard::rebuildChain()
 
 int MasterCard::getPreferredHeight (int width) const
 {
+    if (width < narrowBelow)
+    {
+        // stacked: head, chain, latency, output
+        const int rows = ChipFlow::layout (chips, juce::Rectangle<int> (0, 0, juce::jmax (1, width - 28), 1), 30, false);
+        return 24 + 34 + 6 + 20 + 12 + (22 + rows * ChipFlow::rowStep + 6 + 30) + 12 + (22 + 34) + 12 + (22 + 30 + 10 + 18 + 46);
+    }
+
     // the chain column's width in resized() at this card width, then the rows the chips take in it
     const int afterHeadAndOut = width - 28 - 230 - 18 - 250 - 18;
     const int chainW = afterHeadAndOut - juce::jlimit (160, 300, afterHeadAndOut / 3) - 18;
@@ -106,6 +113,42 @@ int MasterCard::getPreferredHeight (int width) const
 void MasterCard::resized()
 {
     auto area = getLocalBounds().reduced (14, 12);
+
+    if (getWidth() < narrowBelow)
+    {
+        // a tall, narrow window: the four blocks stack
+        auto headRow = area.removeFromTop (34);
+        badge.setBounds (headRow.removeFromLeft (32).reduced (0, 2));
+        headRow.removeFromLeft (10);
+        title.setBounds (headRow);
+        area.removeFromTop (6);
+        note.setBounds (area.removeFromTop (20));
+        area.removeFromTop (12);
+
+        chainCaption.setBounds (area.removeFromTop (22));
+        const int rows = ChipFlow::layout (chips, area, 30, true);
+        area.removeFromTop (rows * ChipFlow::rowStep + 6);
+        auto buttons = area.removeFromTop (30);
+        openChainButton.setBounds (buttons.removeFromLeft (92));
+        buttons.removeFromLeft (8);
+        addPluginButton.setBounds (buttons.removeFromLeft (76));
+        area.removeFromTop (12);
+
+        latencyCaption.setBounds (area.removeFromTop (22));
+        auto lat = area.removeFromTop (34);
+        latencyValue.setBounds (lat.removeFromLeft (juce::jmin (140, lat.getWidth() / 2)));
+        lat.removeFromLeft (10);
+        latencyNote.setBounds (lat);
+        area.removeFromTop (12);
+
+        outputCaption.setBounds (area.removeFromTop (22));
+        outputCombo.setBounds (area.removeFromTop (30).withWidth (juce::jmin (220, area.getWidth())));
+        area.removeFromTop (10);
+        meterCaption.setBounds (area.removeFromTop (18));
+        meter_.setBounds (area.removeFromTop (juce::jmin (46, juce::jmax (0, area.getHeight()))));
+        return;
+    }
+
     auto head = area.removeFromLeft (230);
     auto row = head.removeFromTop (34);
     badge.setBounds (row.removeFromLeft (32).reduced (0, 2));

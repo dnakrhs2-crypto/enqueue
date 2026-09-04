@@ -172,6 +172,13 @@ ChannelCard::ChannelCard (MixDocument& doc, const juce::Uuid& id) : document (do
     directCombo.setWantsKeyboardFocus (false);
     directCombo.onChange = [this] { commitOutput(); };
     addAndMakeVisible (directCombo);
+    muteGroupChip.setTooltip (ko ("켜 두면 마이크 뮤트그룹 핫키가 이 마이크를 함께 뮤트합니다 (핫키는 설정에서)"));
+    muteGroupChip.onClick = [this]
+    {
+        if (! refreshing)
+            document.setChannelMuteGroup (channelId, muteGroupChip.getToggleState());
+    };
+    addAndMakeVisible (muteGroupChip);
 
     styleCaption (meterCaption, ko ("입력 미터"));
     addAndMakeVisible (meterCaption);
@@ -224,11 +231,21 @@ void ChannelCard::refresh()
     fillChannelCombo (directCombo, outputNames, true, MixSession::maxDeviceChannels);
     directCombo.setSelectedId (c->output.directFirst + 1, juce::dontSendNotification);
     directCombo.setEnabled (c->output.direct);
+    muteGroupChip.setToggleState (c->muteGroup, juce::dontSendNotification);
+    micButton.setMuted (groupMuted && c->muteGroup);
     meter_.setStereo (c->stereo);
 
     rebuildChain();
     rebuildSends();
     resized();
+}
+
+void ChannelCard::setGroupMuted (bool muted)
+{
+    groupMuted = muted;
+
+    if (const auto* c = channel())
+        micButton.setMuted (groupMuted && c->muteGroup);
 }
 
 void ChannelCard::rebuildChain()
@@ -368,7 +385,7 @@ int ChannelCard::getPreferredHeight (int width) const
     const int headH = 34 + 8 + 40 + 8 + 30 + 8;
     const int chainRows = chainRowsForWidth (width);
     const int chainH = 22 + chainRows * ChipFlow::rowStep + 36;
-    const int outH = 22 + 34 + 12 + 18 + 40;
+    const int outH = 26 + 34 + 12 + 18 + 40;
 
     switch (layout)
     {
@@ -428,7 +445,9 @@ void ChannelCard::resized()
 
     auto layoutOut = [this] (juce::Rectangle<int> r)
     {
-        outputCaption.setBounds (r.removeFromTop (22));
+        auto captionRow = r.removeFromTop (26);
+        muteGroupChip.setBounds (captionRow.removeFromRight (100).reduced (0, 1));   // next to the output caption
+        outputCaption.setBounds (captionRow);
         auto chipsRow = r.removeFromTop (34);
         masterChip.setBounds (chipsRow.removeFromLeft (72));
         chipsRow.removeFromLeft (8);

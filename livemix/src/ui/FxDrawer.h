@@ -23,6 +23,8 @@ public:
     void setDeviceChannels (const juce::StringArray& outputNames);
     void pushMeter (const juce::Uuid& fxId, MixEngine::Meter meter);
     juce::Uuid getSelectedFx() const noexcept { return selected; }
+    /** The FX mute group's state: a member shows its return muted while it is on. */
+    void setGroupMuted (bool muted);
     void selectFx (const juce::Uuid& id);
 
     std::function<void()> onClose;
@@ -55,7 +57,8 @@ private:
     std::vector<std::unique_ptr<juce::TextButton>> chips;
     juce::TextButton openChainButton, addPluginButton;
     juce::Slider returnSlider;
-    Chip masterChip, directChip, monoChip;
+    Chip masterChip, directChip, monoChip, muteGroupChip { ko ("뮤트그룹") };
+    bool groupMuted = false;
     juce::ComboBox directCombo;
     MeterBar meter_ { true };
     std::vector<std::unique_ptr<juce::Label>> senders;

@@ -32,6 +32,7 @@ struct MixChannel
     juce::Uuid id;
     juce::String name;
     bool on = true;
+    bool muteGroup = false;   // in the mic mute group: the group's hotkey mutes it (its own switch stays)
     int inputFirst = 0;    // 0-based device input; a stereo channel takes inputFirst and inputFirst + 1
     bool stereo = false;
     std::vector<PluginSlotState> chain;
@@ -47,6 +48,7 @@ struct MixFx
     std::vector<PluginSlotState> chain;
     double returnAmount = 1.0;   // 0..1
     bool mono = false;           // the FX output summed to mono (L+R)/2 on both sides
+    bool muteGroup = false;      // in the FX mute group: the group's hotkey silences its return
     MixOutput output;
 };
 

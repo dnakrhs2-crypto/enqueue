@@ -132,6 +132,16 @@ public:
 
     bool isOn() const noexcept { return on; }
 
+    /** Muted by the mic mute group: drawn red, whatever the switch says (the switch is kept). */
+    void setMuted (bool shouldBeMuted)
+    {
+        if (muted != shouldBeMuted)
+        {
+            muted = shouldBeMuted;
+            repaint();
+        }
+    }
+
     void paintButton (juce::Graphics& g, bool isMouseOverButton, bool isButtonDown) override
     {
         auto bounds = getLocalBounds().toFloat().reduced (0.5f);
@@ -144,8 +154,20 @@ public:
 
         g.setColour (fill);
         g.fillRoundedRectangle (bounds, 11.0f);
-        g.setColour (on ? Palette::lampOn : Palette::line);
-        g.drawRoundedRectangle (bounds, 11.0f, 1.0f);
+        g.setColour (muted ? Palette::danger : on ? Palette::lampOn : Palette::line);
+        g.drawRoundedRectangle (bounds, 11.0f, muted ? 2.0f : 1.0f);
+
+        if (muted)
+        {
+            const float lampR = 8.0f;
+            const juce::Point<float> centre (bounds.getX() + 18.0f, bounds.getCentreY());
+            g.setColour (Palette::danger);
+            g.fillEllipse (juce::Rectangle<float> (lampR * 2.0f, lampR * 2.0f).withCentre (centre));
+            g.setColour (Palette::danger);
+            g.setFont (juce::Font (juce::FontOptions (pt (15.0f), juce::Font::bold)));
+            g.drawText (ko ("뮤트그룹 - 뮤트 중"), getLocalBounds().withTrimmedLeft (36), juce::Justification::centredLeft, false);
+            return;
+        }
 
         const float lampR = 8.0f;
         const juce::Point<float> centre (bounds.getX() + 18.0f, bounds.getCentreY());
@@ -165,7 +187,7 @@ public:
     }
 
 private:
-    bool on = true;
+    bool on = true, muted = false;
 };
 
 /** A toggle chip (마스터 / 직접 출력): outlined in the accent colour when on. */
@@ -271,6 +293,82 @@ namespace ChipFlow
         return rows;
     }
 }
+
+/** A button that captures a key press for a hotkey: click, press the key (Esc cancels). */
+class HotkeyButton : public juce::TextButton
+{
+public:
+    HotkeyButton() { setWantsKeyboardFocus (false); }
+
+    std::function<void (const juce::String& description)> onHotkeyChanged;
+    /** A reason to refuse the key, or an empty string. */
+    std::function<juce::String (const juce::KeyPress&)> validate;
+
+    void setHotkey (const juce::String& description)
+    {
+        hotkey = description;
+
+        if (! capturing)
+            setButtonText (hotkey.isEmpty() ? ko ("없음 (눌러서 지정)") : hotkey);
+    }
+
+    const juce::String& getHotkey() const noexcept { return hotkey; }
+
+    void clicked() override
+    {
+        capturing = true;
+        setWantsKeyboardFocus (true);
+        grabKeyboardFocus();
+        setButtonText (ko ("키를 누르세요... (Esc 취소)"));
+    }
+
+    bool keyPressed (const juce::KeyPress& key) override
+    {
+        if (! capturing)
+            return false;
+
+        if (key.getModifiers().isAnyModifierKeyDown() && key.getKeyCode() == 0)
+            return true;   // a lone modifier: keep waiting for the key
+
+        finishCapture();
+
+        if (key.isKeyCode (juce::KeyPress::escapeKey))
+            return true;
+
+        if (validate)
+        {
+            if (const auto reason = validate (key); reason.isNotEmpty())
+            {
+                setButtonText (reason);
+                juce::Component::SafePointer<HotkeyButton> safeThis (this);
+                juce::Timer::callAfterDelay (2500, [safeThis] { if (safeThis != nullptr) safeThis->setHotkey (safeThis->hotkey); });
+                return true;
+            }
+        }
+
+        if (onHotkeyChanged)
+            onHotkeyChanged (key.getTextDescription());
+
+        return true;
+    }
+
+    void focusLost (FocusChangeType) override
+    {
+        if (capturing)
+            finishCapture();
+    }
+
+private:
+    void finishCapture()
+    {
+        capturing = false;
+        setWantsKeyboardFocus (false);
+        setHotkey (hotkey);
+    }
+
+    juce::String hotkey;
+    bool capturing = false;
+};
 
 /** A device input / output picker filled from the device's channel names. */
 inline void fillChannelCombo (juce::ComboBox& combo, const juce::StringArray& names, bool pairs, int fallbackCount)

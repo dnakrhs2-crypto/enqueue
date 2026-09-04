@@ -348,7 +348,7 @@ void MixEngine::renderBlock (const float* const* inputs, int numInputs, float* c
 
             // mic ON/OFF: a short linear ramp (applied below, to the sends as well). Worked out first: a mic that is
             // fully off skips its chain when asked to - no plugin CPU for a mic nobody hears, like an archived track
-            const float target = node->on.load (std::memory_order_relaxed) ? 1.0f : 0.0f;
+            const float target = node->on.load (std::memory_order_relaxed) && ! node->muted.load (std::memory_order_relaxed) ? 1.0f : 0.0f;
             const float start = node->onGain;
             float end = start;
 
@@ -431,7 +431,7 @@ void MixEngine::renderBlock (const float* const* inputs, int numInputs, float* c
             auto& fx = *fxNodes[(size_t) f];
             auto& bus = fxBus[(size_t) f];
             fx.chain->process (bus, n);
-            const float ret = fx.returnAmount.load (std::memory_order_relaxed);
+            const float ret = fx.muted.load (std::memory_order_relaxed) ? 0.0f : fx.returnAmount.load (std::memory_order_relaxed);
             const float retFrom = fx.returnCurrent;
             fx.returnCurrent = ret;
 
@@ -720,6 +720,12 @@ void MixEngine::setChannelOn (const juce::Uuid& id, bool on)
         node->on.store (on, std::memory_order_relaxed);
 }
 
+void MixEngine::setChannelMuted (const juce::Uuid& id, bool muted)
+{
+    if (auto* node = findChannel (id))
+        node->muted.store (muted, std::memory_order_relaxed);
+}
+
 void MixEngine::setChannelInput (const juce::Uuid& id, int first, bool stereo)
 {
     if (auto* node = findChannel (id))
@@ -762,6 +768,12 @@ void MixEngine::setFxMono (const juce::Uuid& fxId, bool mono)
 {
     if (auto* node = findFx (fxId))
         node->mono.store (mono, std::memory_order_relaxed);
+}
+
+void MixEngine::setFxMuted (const juce::Uuid& fxId, bool muted)
+{
+    if (auto* node = findFx (fxId))
+        node->muted.store (muted, std::memory_order_relaxed);
 }
 
 void MixEngine::setFxOutput (const juce::Uuid& fxId, const MixOutput& output)

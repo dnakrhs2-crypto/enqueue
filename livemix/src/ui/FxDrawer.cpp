@@ -80,6 +80,13 @@ FxDrawer::FxDrawer (MixDocument& doc) : document (doc)
             document.setFxMono (selected, monoChip.getToggleState());
     };
     addAndMakeVisible (monoChip);
+    muteGroupChip.setTooltip (ko ("켜 두면 FX 뮤트그룹 핫키가 이 FX의 리턴을 함께 뮤트합니다 (핫키는 설정에서)"));
+    muteGroupChip.onClick = [this]
+    {
+        if (! refreshing && ! selected.isNull())
+            document.setFxMuteGroup (selected, muteGroupChip.getToggleState());
+    };
+    addAndMakeVisible (muteGroupChip);
 
     styleCaption (meterCaption, ko ("미터"));
     addAndMakeVisible (meterCaption);
@@ -92,6 +99,15 @@ FxDrawer::FxDrawer (MixDocument& doc) : document (doc)
     addAndMakeVisible (note);
 
     refresh();
+}
+
+void FxDrawer::setGroupMuted (bool muted)
+{
+    if (groupMuted != muted)
+    {
+        groupMuted = muted;
+        refresh();
+    }
 }
 
 const MixFx* FxDrawer::fx() const
@@ -129,7 +145,7 @@ void FxDrawer::refresh()
     const auto* f = fx();
     const bool have = f != nullptr;
 
-    for (auto* c : std::initializer_list<juce::Component*> { &name, &openChainButton, &addPluginButton, &returnSlider, &masterChip, &directChip, &monoChip, &directCombo, &removeFxButton })
+    for (auto* c : std::initializer_list<juce::Component*> { &name, &openChainButton, &addPluginButton, &returnSlider, &masterChip, &directChip, &monoChip, &muteGroupChip, &directCombo, &removeFxButton })
         c->setEnabled (have);
 
     addFxButton.setEnabled ((int) session.fx.size() < MixSession::maxFx);
@@ -140,13 +156,16 @@ void FxDrawer::refresh()
             name.setText (f->name, juce::dontSendNotification);
 
         returnSlider.setValue (f->returnAmount * 100.0, juce::dontSendNotification);
-        returnValue.setText (juce::String ((int) std::lround (f->returnAmount * 100.0)) + "%", juce::dontSendNotification);
+        const bool mutedNow = groupMuted && f->muteGroup;
+        returnValue.setText (mutedNow ? ko ("뮤트") : juce::String ((int) std::lround (f->returnAmount * 100.0)) + "%", juce::dontSendNotification);
+        returnValue.setColour (juce::Label::textColourId, mutedNow ? Palette::danger : Palette::text);
         masterChip.setToggleState (f->output.master, juce::dontSendNotification);
         directChip.setToggleState (f->output.direct, juce::dontSendNotification);
         fillChannelCombo (directCombo, outputNames, true, MixSession::maxDeviceChannels);
         directCombo.setSelectedId (f->output.directFirst + 1, juce::dontSendNotification);
         directCombo.setEnabled (f->output.direct);
         monoChip.setToggleState (f->mono, juce::dontSendNotification);
+        muteGroupChip.setToggleState (f->muteGroup, juce::dontSendNotification);
     }
     else
     {
@@ -303,7 +322,9 @@ void FxDrawer::resized()
     returnSlider.setBounds (ret);
     area.removeFromTop (12);
 
-    outputCaption.setBounds (area.removeFromTop (20));
+    auto outputRow = area.removeFromTop (26);
+    muteGroupChip.setBounds (outputRow.removeFromRight (100).reduced (0, 1));   // next to the output caption
+    outputCaption.setBounds (outputRow);
     auto out = area.removeFromTop (34);
     masterChip.setBounds (out.removeFromLeft (72));
     out.removeFromLeft (8);

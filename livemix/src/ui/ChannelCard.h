@@ -33,6 +33,8 @@ public:
     /** The height the card needs at 'width' in its current layout (the chip rows depend on the width). */
     int getPreferredHeight (int width) const;
     void pushMeter (MixEngine::Meter meter) { meter_.push (meter); }
+    /** The mic mute group's state: a member shows itself muted while it is on. */
+    void setGroupMuted (bool muted);
 
     std::function<void (const juce::Uuid&)> onOpenChain;      // "체인 열기"
     std::function<void (const juce::Uuid&)> onAddPlugin;      // "+ 추가"
@@ -72,10 +74,11 @@ private:
     juce::Label chainArrows;
     juce::TextButton openChainButton, addPluginButton;
     std::vector<std::unique_ptr<SendRow>> sends;
-    Chip masterChip, directChip;
+    Chip masterChip, directChip, muteGroupChip { ko ("뮤트그룹") };
     juce::ComboBox directCombo;
     MeterBar meter_;
     bool refreshing = false;
+    bool groupMuted = false;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (ChannelCard)
 };

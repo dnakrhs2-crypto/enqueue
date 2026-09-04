@@ -104,8 +104,13 @@ MainComponent::MainComponent (MixDocument& doc, LiveMixSettings& s)
     {
         engine.forEachChain ([this] (PluginChain& chain) { chain.setListener (&windows); });
         rebuildCards();
+        muteGroups.apply();   // rebuilt nodes start unmuted: the groups' state goes back in
     };
     document.onValueChanged = [this] { refreshValues(); };
+
+    muteGroups.onChanged = [this] { muteGroupsChanged(); };
+    hotkeys.onHotkey = [this] (int id) { muteGroups.toggle (id == 1 ? MuteGroups::Group::mic : MuteGroups::Group::fx); };
+    registerHotkeys();
 
     updateDeviceNames();
     rebuildCards();
@@ -175,6 +180,7 @@ void MainComponent::rebuildCards()
                         if (const auto* ch = document.getSession().findChannel (id))
                             windows.open (*chain->getSlot (slot).plugin, ch->name + " - " + chain->getSlot (slot).plugin->getName());
             };
+            card->setGroupMuted (muteGroups.isMuted (MuteGroups::Group::mic));
             cardsHolder.addAndMakeVisible (*card);
         }
 
@@ -208,6 +214,8 @@ void MainComponent::rebuildCards()
 
 void MainComponent::refreshValues()
 {
+    muteGroups.apply();   // a '뮤트그룹' chip may have changed while its group is muted
+
     for (auto& card : cards)
         card->refresh();
 
@@ -263,7 +271,7 @@ void MainComponent::layoutCards()
 void MainComponent::resized()
 {
     auto area = getLocalBounds();
-    topBar.setBounds (area.removeFromTop (64));
+    topBar.setBounds (area.removeFromTop (TopBar::preferredHeight (getWidth())));   // two or three rows in a narrow window
 
     if (noticeVisible)
     {
@@ -284,10 +292,14 @@ void MainComponent::resized()
     noticeText.setVisible (noticeVisible);
     noticeClose.setVisible (noticeVisible);
     auto status = area.removeFromBottom (30);
-    statusLeft.setBounds (status.reduced (16, 0).removeFromLeft (status.getWidth() / 2));
+    const bool narrowStatus = getWidth() < 700;   // portrait: the left text takes the whole line, the tray hint goes
+    statusRight.setVisible (! narrowStatus);
     auto statusR = status.reduced (16, 0);
     statusR.removeFromRight (18);   // room for the grip
-    statusRight.setBounds (statusR.removeFromRight (statusR.getWidth() / 2));
+    statusLeft.setBounds (narrowStatus ? statusR : statusR.removeFromLeft (statusR.getWidth() / 2));
+
+    if (! narrowStatus)
+        statusRight.setBounds (statusR);
 
     if (cornerGrip != nullptr)
     {
@@ -296,7 +308,7 @@ void MainComponent::resized()
         cornerGrip->setBounds (getLocalBounds().removeFromBottom (18).removeFromRight (18));
     }
 
-    const int drawerW = juce::jmin (440, juce::jmax (320, getWidth() / 3));
+    const int drawerW = getWidth() < 700 ? getWidth() : juce::jmin (440, juce::jmax (320, getWidth() / 3));   // portrait: the whole width
     const auto drawerArea = area.withLeft (getWidth() - drawerW);   // the right edge, over the cards and the master
     chainDrawer.setBounds (drawerArea);
     fxDrawer.setBounds (drawerArea);
@@ -786,6 +798,7 @@ void MainComponent::newSession()
     withSessionSecured ([this]
     {
         document.newSession();
+        muteGroups.reset();           // a session starts with its groups released
         setSessionNote ({}, false);   // the old session's notes do not describe the new one
         setSaveError ({});
         showStatus (ko ("새 세션"));
@@ -799,6 +812,7 @@ void MainComponent::openSession (const juce::File& file)
 
 void MainComponent::loadSession (const juce::File& file)
 {
+    muteGroups.reset();   // the opened session starts with its groups released
     juce::StringArray warnings, pluginErrors;
     const auto result = document.load (file, &warnings, &pluginErrors);
 
@@ -1080,9 +1094,42 @@ void MainComponent::showBackupDialog()
     BackupDialog::show (document, settings, backup, this, std::move (callbacks));
 }
 
+void MainComponent::registerHotkeys()
+{
+    const auto apply = [this] (int id, const juce::String& description, const juce::String& what)
+    {
+        if (description.isEmpty())
+        {
+            hotkeys.clear (id);
+            return;
+        }
+
+        juce::String error;
+
+        if (! hotkeys.set (id, juce::KeyPress::createFromDescription (description), error))
+            showStatus (what + ko (" 핫키(") + description + ko (") 등록 실패: ") + error, true);
+    };
+
+    apply (1, settings.getMicMuteHotkey(), ko ("마이크 뮤트그룹"));
+    apply (2, settings.getFxMuteHotkey(), ko ("FX 뮤트그룹"));
+}
+
+void MainComponent::muteGroupsChanged()
+{
+    const bool mic = muteGroups.isMuted (MuteGroups::Group::mic);
+    const bool fx = muteGroups.isMuted (MuteGroups::Group::fx);
+    topBar.setMuteGroups (mic, fx);
+
+    for (auto& card : cards)
+        card->setGroupMuted (mic);
+
+    fxDrawer.setGroupMuted (fx);
+    showStatus (mic && fx ? ko ("마이크·FX 뮤트그룹 뮤트 중") : mic ? ko ("마이크 뮤트그룹 뮤트 중") : fx ? ko ("FX 뮤트그룹 뮤트 중") : ko ("뮤트그룹 해제"));
+}
+
 void MainComponent::showSettingsDialog()
 {
-    SettingsDialog::show (engine, settings, this, [this] { deviceChosen(); });
+    SettingsDialog::show (engine, settings, this, [this] { deviceChosen(); }, [this] { registerHotkeys(); });
 }
 
 } // namespace gocue::livemix

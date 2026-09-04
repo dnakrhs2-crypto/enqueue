@@ -53,6 +53,18 @@ TopBar::TopBar (MixDocument& doc) : document (doc)
     statusLabel.setColour (juce::Label::outlineColourId, Palette::line);
     addAndMakeVisible (statusLabel);
     styleCaption (dspLabel, "CPU");
+
+    for (auto* badge : { &micMuteBadge, &fxMuteBadge })
+    {
+        badge->setFont (juce::Font (juce::FontOptions (pt (12.5f), juce::Font::bold)));
+        badge->setJustificationType (juce::Justification::centred);
+        badge->setColour (juce::Label::textColourId, juce::Colours::white);
+        badge->setColour (juce::Label::backgroundColourId, Palette::danger);
+        addChildComponent (*badge);   // shown while its group is muted
+    }
+
+    micMuteBadge.setText (ko ("마이크 뮤트"), juce::dontSendNotification);
+    fxMuteBadge.setText (ko ("FX 뮤트"), juce::dontSendNotification);
     addAndMakeVisible (dspLabel);
     addAndMakeVisible (dspMeter);
 
@@ -114,48 +126,118 @@ void TopBar::setFxCount (int count)
     fxButton.setButtonText (ko ("FX 채널") + (count > 0 ? "  " + juce::String (count) : juce::String()));
 }
 
-void TopBar::resized()
+void TopBar::setMuteGroups (bool micMuted, bool fxMuted)
 {
-    auto area = getLocalBounds().reduced (16, 0);
-    const int h = 34;
-    auto row = area.withSizeKeepingCentre (area.getWidth(), h);
+    micMuteBadge.setVisible (micMuted);
+    fxMuteBadge.setVisible (fxMuted);
+    resized();
+}
 
-    logoMark.setBounds (row.removeFromLeft (28).reduced (0, 3));
-    row.removeFromLeft (8);
-    logoText.setBounds (row.removeFromLeft (84));
-    row.removeFromLeft (10);
+TopBar::Mode TopBar::modeFor (int width) noexcept
+{
+    return width >= 1000 ? Mode::wide : width >= 700 ? Mode::compact : Mode::narrow;
+}
 
-    settingsButton.setBounds (row.removeFromRight (64));
-    row.removeFromRight (8);
-    helpButton.setBounds (row.removeFromRight (64));
-    row.removeFromRight (8);
-    backupButton.setBounds (row.removeFromRight (100));
-    row.removeFromRight (8);
-    fxButton.setBounds (row.removeFromRight (100));
-    row.removeFromRight (8);
-    sessionButton.setBounds (row.removeFromRight (64));
-    row.removeFromRight (14);
-
-    const bool wide = row.getWidth() > 900;
-    dspMeter.setVisible (wide);
-    dspLabel.setVisible (wide);
-
-    if (wide)
+int TopBar::preferredHeight (int width) noexcept
+{
+    switch (modeFor (width))
     {
-        dspMeter.setBounds (row.removeFromRight (70));
-        row.removeFromRight (6);
-        dspLabel.setBounds (row.removeFromRight (62));
-        row.removeFromRight (10);
+        case Mode::wide:    return 64;
+        case Mode::compact: return 64 + 42;
+        case Mode::narrow:  return 64 + 42 * 2;
     }
 
-    statusLabel.setBounds (row.removeFromRight (juce::jmin (230, row.getWidth() / 3)));
-    row.removeFromRight (8);
-    deviceCombo.setBounds (row.removeFromRight (juce::jlimit (160, 260, row.getWidth() / 3)));
-    row.removeFromRight (6);
-    asioLabel.setBounds (row.removeFromRight (40));
-    row.removeFromRight (10);
+    return 64;
+}
 
-    auto session = row.removeFromLeft (juce::jlimit (160, 320, row.getWidth()));
+void TopBar::resized()
+{
+    const auto mode = modeFor (getWidth());
+    const int h = 34, gap = 8;
+    const int rows = mode == Mode::wide ? 1 : mode == Mode::compact ? 2 : 3;
+    auto area = getLocalBounds().reduced (16, 0);
+    auto column = area.withSizeKeepingCentre (area.getWidth(), rows * h + (rows - 1) * gap);
+    auto row1 = column.removeFromTop (h);
+    column.removeFromTop (gap);
+    auto row2 = rows >= 2 ? column.removeFromTop (h) : juce::Rectangle<int>();
+    column.removeFromTop (gap);
+    auto row3 = rows >= 3 ? column.removeFromTop (h) : juce::Rectangle<int>();
+
+    logoMark.setBounds (row1.removeFromLeft (28).reduced (0, 3));
+    row1.removeFromLeft (8);
+    logoText.setBounds (row1.removeFromLeft (84));
+    row1.removeFromLeft (10);
+
+    if (mode == Mode::narrow)
+    {
+        // the five buttons share their own row
+        auto r = row2;
+        const int w = juce::jmax (40, (r.getWidth() - 4 * 6) / 5);
+
+        for (auto* b : { &sessionButton, &fxButton, &backupButton, &settingsButton, &helpButton })
+        {
+            b->setBounds (r.removeFromLeft (w));
+            r.removeFromLeft (6);
+        }
+    }
+    else
+    {
+        // the right end of the first row
+        settingsButton.setBounds (row1.removeFromRight (64));
+        row1.removeFromRight (8);
+        helpButton.setBounds (row1.removeFromRight (64));
+        row1.removeFromRight (8);
+        backupButton.setBounds (row1.removeFromRight (100));
+        row1.removeFromRight (8);
+        fxButton.setBounds (row1.removeFromRight (100));
+        row1.removeFromRight (8);
+        sessionButton.setBounds (row1.removeFromRight (64));
+        row1.removeFromRight (14);
+    }
+
+    // the device / status part: the same row in the wide bar, its own row below
+    auto& statusRow = mode == Mode::wide ? row1 : mode == Mode::compact ? row2 : row3;
+    const bool showCpu = mode == Mode::wide ? statusRow.getWidth() > 900 : mode == Mode::compact;
+    dspMeter.setVisible (showCpu);
+    dspLabel.setVisible (showCpu);
+
+    if (showCpu)
+    {
+        dspMeter.setBounds (statusRow.removeFromRight (70));
+        statusRow.removeFromRight (6);
+        dspLabel.setBounds (statusRow.removeFromRight (62));
+        statusRow.removeFromRight (10);
+    }
+
+    for (auto* badge : { &fxMuteBadge, &micMuteBadge })
+        if (badge->isVisible())
+        {
+            badge->setBounds (statusRow.removeFromRight (mode == Mode::narrow ? 76 : 92).reduced (0, 5));
+            statusRow.removeFromRight (8);
+        }
+
+    if (mode == Mode::wide)
+    {
+        asioLabel.setJustificationType (juce::Justification::centredRight);
+        statusLabel.setBounds (statusRow.removeFromRight (juce::jmin (230, statusRow.getWidth() / 3)));
+        statusRow.removeFromRight (8);
+        deviceCombo.setBounds (statusRow.removeFromRight (juce::jlimit (160, 260, statusRow.getWidth() / 3)));
+        statusRow.removeFromRight (6);
+        asioLabel.setBounds (statusRow.removeFromRight (40));
+        statusRow.removeFromRight (10);
+    }
+    else
+    {
+        asioLabel.setJustificationType (juce::Justification::centredLeft);
+        asioLabel.setBounds (statusRow.removeFromLeft (40));
+        statusRow.removeFromLeft (6);
+        statusLabel.setBounds (statusRow.removeFromRight (juce::jlimit (120, 230, statusRow.getWidth() * 2 / 5)));
+        statusRow.removeFromRight (8);
+        deviceCombo.setBounds (statusRow);
+    }
+
+    // the session name and state take what is left of the first row
+    auto session = mode == Mode::wide ? row1.removeFromLeft (juce::jlimit (160, 320, row1.getWidth())) : row1;
     sessionName.setBounds (session.removeFromLeft (juce::jmax (100, session.getWidth() - 90)));
     session.removeFromLeft (8);
     sessionState.setBounds (session);

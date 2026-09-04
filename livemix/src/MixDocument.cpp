@@ -235,6 +235,24 @@ void MixDocument::setFxMono (const juce::Uuid& id, bool mono)
     }
 }
 
+void MixDocument::setChannelMuteGroup (const juce::Uuid& id, bool inGroup)
+{
+    if (auto* c = session.findChannel (id))
+    {
+        c->muteGroup = inGroup;
+        valueChanged();
+    }
+}
+
+void MixDocument::setFxMuteGroup (const juce::Uuid& id, bool inGroup)
+{
+    if (auto* f = session.findFx (id))
+    {
+        f->muteGroup = inGroup;
+        valueChanged();
+    }
+}
+
 void MixDocument::setFxOutput (const juce::Uuid& id, const MixOutput& output)
 {
     if (auto* f = session.findFx (id))

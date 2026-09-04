@@ -89,6 +89,9 @@ public:
             menu.addItem (2, ko ("마이크 전부 ON"));
             menu.addItem (3, ko ("마이크 전부 OFF"));
             menu.addSeparator();
+            menu.addItem (5, ko ("마이크 뮤트그룹 뮤트/해제"));
+            menu.addItem (6, ko ("FX 뮤트그룹 뮤트/해제"));
+            menu.addSeparator();
             menu.addItem (4, ko ("종료"));
             menu.showMenuAsync (juce::PopupMenu::Options(), [this] (int result) { if (result != 0 && menuHandler) menuHandler (result); });
         }
@@ -305,7 +308,7 @@ public:
         {
             setUsingNativeTitleBar (true);
             setResizable (true, false);
-            setResizeLimits (720, 560, 10000, 10000);   // before the content: its corner grip takes this constrainer
+            setResizeLimits (420, 560, 10000, 10000);   // before the content: its corner grip takes this constrainer. 420: a tall, narrow (portrait) window
             auto* content = new MainComponent (document, settings);
             mainComponent = content;
             setContentOwned (content, true);
@@ -375,6 +378,8 @@ private:
             case 1: showWindow(); break;
             case 2: if (document != nullptr) document->setAllChannelsOn (true); break;
             case 3: if (document != nullptr) document->setAllChannelsOn (false); break;
+            case 5: if (mainWindow != nullptr) mainWindow->getMainComponent().getMuteGroups().toggle (MuteGroups::Group::mic); break;
+            case 6: if (mainWindow != nullptr) mainWindow->getMainComponent().getMuteGroups().toggle (MuteGroups::Group::fx); break;
             case 4: systemRequestedQuit(); break;
             default: break;
         }

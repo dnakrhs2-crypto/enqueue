@@ -247,6 +247,7 @@ juce::String MixSession::toJson() const
         obj->setProperty ("id", idText (c.id));
         obj->setProperty ("name", c.name);
         obj->setProperty ("on", c.on);
+        obj->setProperty ("muteGroup", c.muteGroup);
         auto* input = new juce::DynamicObject();
         input->setProperty ("first", c.inputFirst);
         input->setProperty ("stereo", c.stereo);
@@ -281,6 +282,7 @@ juce::String MixSession::toJson() const
         obj->setProperty ("chain", ProjectSerializer::pluginSlotsToVar (f.chain));
         obj->setProperty ("returnAmount", f.returnAmount);
         obj->setProperty ("mono", f.mono);
+        obj->setProperty ("muteGroup", f.muteGroup);
         obj->setProperty ("output", outputToVar (f.output));
         fxArray.add (obj);
     }
@@ -353,6 +355,7 @@ juce::Result MixSession::fromJson (const juce::String& json, MixSession& out, ju
             f.chain = ProjectSerializer::pluginSlotsFromVar (item.getProperty ("chain", juce::var()));
             f.returnAmount = (double) item.getProperty ("returnAmount", 1.0);
             f.mono = (bool) item.getProperty ("mono", false);
+            f.muteGroup = (bool) item.getProperty ("muteGroup", false);
             f.output = outputFromVar (item.getProperty ("output", juce::var()), MixOutput());
             s.fx.push_back (std::move (f));
         }
@@ -374,6 +377,7 @@ juce::Result MixSession::fromJson (const juce::String& json, MixSession& out, ju
             c.id = juce::Uuid (item.getProperty ("id", "").toString());
             c.name = item.getProperty ("name", "").toString();
             c.on = (bool) item.getProperty ("on", true);
+            c.muteGroup = (bool) item.getProperty ("muteGroup", false);
 
             if (const auto input = item.getProperty ("input", juce::var()); input.getDynamicObject() != nullptr)
             {

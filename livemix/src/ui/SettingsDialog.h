@@ -10,11 +10,12 @@
 namespace gocue::livemix
 {
 
-/** 설정: ASIO device and buffer size (the driver's own panel), tray behaviour, start with Windows,
-    the online backup target. Non-modal, single instance. */
+/** 설정: ASIO device and buffer size (the driver's own panel), tray behaviour, start with Windows, the mute-group
+    hotkeys, the online backup note. Non-modal, single instance. */
 namespace SettingsDialog
 {
-    void show (MixEngine& engine, LiveMixSettings& settings, juce::Component* centreAround, std::function<void()> onDeviceChanged);
+    void show (MixEngine& engine, LiveMixSettings& settings, juce::Component* centreAround, std::function<void()> onDeviceChanged,
+               std::function<void()> onHotkeysChanged);
     void closeIfOpen();
 
     /** The Windows "start with Windows" Run entry for this exe. */

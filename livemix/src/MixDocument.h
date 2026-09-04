@@ -46,12 +46,14 @@ public:
     void renameChannel (const juce::Uuid& id, const juce::String& name);
     void setChannelOn (const juce::Uuid& id, bool on);
     void setAllChannelsOn (bool on);
+    void setChannelMuteGroup (const juce::Uuid& id, bool inGroup);   // the mark; MuteGroups applies the state
     void setChannelInput (const juce::Uuid& id, int first, bool stereo);
     void setChannelOutput (const juce::Uuid& id, const MixOutput& output);
     void setSend (const juce::Uuid& channelId, const juce::Uuid& fxId, double amount, bool pre);
     void renameFx (const juce::Uuid& id, const juce::String& name);
     void setFxReturn (const juce::Uuid& id, double amount);
     void setFxMono (const juce::Uuid& id, bool mono);
+    void setFxMuteGroup (const juce::Uuid& id, bool inGroup);
     void setFxOutput (const juce::Uuid& id, const MixOutput& output);
     void setMasterOutput (int first);
     void setSessionName (const juce::String& name);

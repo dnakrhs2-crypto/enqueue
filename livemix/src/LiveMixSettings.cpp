@@ -28,6 +28,8 @@ namespace Keys
     constexpr const char* backupCreator = "backupCreator";
     constexpr const char* backupRemember = "backupRememberPassword";
     constexpr const char* lastRunVersion = "lastRunVersion";
+    constexpr const char* micMuteHotkey = "micMuteHotkey";
+    constexpr const char* fxMuteHotkey = "fxMuteHotkey";
 }
 
 LiveMixSettings::LiveMixSettings()
@@ -98,6 +100,11 @@ bool LiveMixSettings::getStartWithWindows() const { return settings->getBoolValu
 void LiveMixSettings::setStartWithWindows (bool on) { settings->setValue (Keys::startWithWindows, on); }
 bool LiveMixSettings::getSkipPluginsWhenOff() const { return settings->getBoolValue (Keys::skipPluginsWhenOff, true); }
 void LiveMixSettings::setSkipPluginsWhenOff (bool on) { settings->setValue (Keys::skipPluginsWhenOff, on); }
+
+juce::String LiveMixSettings::getMicMuteHotkey() const { return settings->getValue (Keys::micMuteHotkey); }
+void LiveMixSettings::setMicMuteHotkey (const juce::String& description) { settings->setValue (Keys::micMuteHotkey, description.trim()); }
+juce::String LiveMixSettings::getFxMuteHotkey() const { return settings->getValue (Keys::fxMuteHotkey); }
+void LiveMixSettings::setFxMuteHotkey (const juce::String& description) { settings->setValue (Keys::fxMuteHotkey, description.trim()); }
 
 juce::String LiveMixSettings::getBackupUrl() const { return settings->getValue (Keys::backupUrl, "https://parkdoomin.synology.me:5006"); }   // the credential key's server part (the server itself is built in)
 void LiveMixSettings::setBackupUrl (const juce::String& url) { settings->setValue (Keys::backupUrl, url.trim()); }

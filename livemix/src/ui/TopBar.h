@@ -15,10 +15,18 @@ class TopBar : public juce::Component
 public:
     explicit TopBar (MixDocument& document);
 
+    /** One row in a wide window; two below 1000 px (the device row folds under); three below 700 px (the buttons
+        take a row of their own) - the portrait mode of a tall, narrow window. */
+    enum class Mode { wide, compact, narrow };
+    static Mode modeFor (int width) noexcept;
+    static int preferredHeight (int width) noexcept;
+
     void refresh();                                   // session name / dirty flag / device
     void setDevices (const juce::StringArray& asioDeviceNames, const juce::String& current);
     void setStatus (double sampleRate, int bufferSize, double latencyMs, double dspLoad, bool running);
     void setFxCount (int count);
+    /** The mute groups' state: a red badge each while one is muted. */
+    void setMuteGroups (bool micMuted, bool fxMuted);
 
     std::function<void (const juce::String& deviceName)> onDeviceChosen;
     std::function<void (juce::Component* anchor)> onSessionMenu;
@@ -38,7 +46,7 @@ private:
     };
 
     MixDocument& document;
-    juce::Label logoMark, logoText, sessionName, sessionState, asioLabel, statusLabel, dspLabel;
+    juce::Label logoMark, logoText, sessionName, sessionState, asioLabel, statusLabel, dspLabel, micMuteBadge, fxMuteBadge;
     juce::ComboBox deviceCombo;
     DspMeter dspMeter;
     juce::TextButton sessionButton, fxButton, backupButton, settingsButton, helpButton;

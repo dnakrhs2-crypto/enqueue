@@ -86,11 +86,15 @@ public:
     void captureLivePluginStates (MixSession& session) const;
 
     void setChannelOn (const juce::Uuid& id, bool on);
+    /** The mic mute group: a muted channel is silent (the same ramp as OFF) whatever its own switch says. */
+    void setChannelMuted (const juce::Uuid& id, bool muted);
     void setChannelInput (const juce::Uuid& id, int first, bool stereo);
     void setChannelOutput (const juce::Uuid& id, const MixOutput& output);
     void setSend (const juce::Uuid& channelId, const juce::Uuid& fxId, double amount, bool pre);
     void setFxReturn (const juce::Uuid& fxId, double amount);
     void setFxMono (const juce::Uuid& fxId, bool mono);
+    /** The FX mute group: a muted FX's return ramps to silence, its return amount kept. */
+    void setFxMuted (const juce::Uuid& fxId, bool muted);
     void setFxOutput (const juce::Uuid& fxId, const MixOutput& output);
     void setMasterOutput (int first);
 
@@ -134,6 +138,7 @@ private:
     {
         juce::Uuid id;
         std::atomic<bool> on { true };
+        std::atomic<bool> muted { false };   // by the mic mute group: silent like OFF, the switch untouched
         std::atomic<int> inputFirst { 0 };
         std::atomic<bool> stereo { false };
         std::atomic<bool> toMaster { true }, direct { false };
@@ -148,6 +153,7 @@ private:
     {
         juce::Uuid id;
         std::atomic<float> returnAmount { 1.0f };
+        std::atomic<bool> muted { false };   // by the FX mute group: the return ramps to silence, the amount kept
         float returnCurrent = 1.0f;   // audio thread: the level the last block ended on
         std::atomic<bool> mono { false };
         std::atomic<bool> toMaster { true }, direct { false };
