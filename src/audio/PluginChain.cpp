@@ -325,7 +325,7 @@ juce::StringArray PluginChain::restore (const std::vector<PluginSlotState>& stat
         }
         else
         {
-            errors.add (state.name + ": " + (error.isNotEmpty() ? error : juce::String ("plugin not available")));
+            errors.add (state.name + ": " + (error.isNotEmpty() ? error : juce::String::fromUTF8 ("이 PC에 없는 플러그인입니다 (자리는 비워 두고 저장된 설정은 그대로 둡니다)")));
         }
 
         fresh.push_back (std::move (slot));

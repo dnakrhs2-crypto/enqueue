@@ -72,15 +72,7 @@ namespace
             };
             field (urlLabel, urlEditor, ko ("주소 (https://서버:포트)"), settings.getBackupUrl(), [this] (const juce::String& v) { settings.setBackupUrl (v); });
             field (folderLabel, folderEditor, ko ("폴더"), settings.getBackupFolder(), [this] (const juce::String& v) { settings.setBackupFolder (v); });
-            field (userLabel, userEditor, ko ("사용자"), settings.getBackupUser(), [this] (const juce::String& v) { settings.setBackupUser (v); });
-            toggle (rememberPassword, ko ("비밀번호 기억 (Windows 자격 증명 관리자에 저장)"), settings.getBackupRememberPassword(), [this] (bool on)
-            {
-                settings.setBackupRememberPassword (on);
-
-                if (! on)
-                    settings.setBackupPassword ({});
-            });
-            styleCaption (backupNote, ko ("시놀로지: WebDAV Server 패키지의 HTTPS 포트(기본 5006). 백업 파일은 폴더/PC이름/크리에이터_날짜시간.livemix"));
+            styleCaption (backupNote, ko ("시놀로지: WebDAV Server 패키지의 HTTPS 포트(기본 5006). 아이디와 비밀번호는 백업 창에서 넣습니다. 백업 파일은 그 계정의 홈 폴더 안 폴더/PC이름/크리에이터_날짜시간.livemix"));
             backupNote.setFont (bodyFont (12.5f));
             addAndMakeVisible (backupNote);
 
@@ -187,9 +179,7 @@ namespace
             };
             twoCol (urlLabel, urlEditor);
             twoCol (folderLabel, folderEditor);
-            twoCol (userLabel, userEditor);
-            rememberPassword.setBounds (area.removeFromTop (28));
-            backupNote.setBounds (area.removeFromTop (40));
+            backupNote.setBounds (area.removeFromTop (56));
         }
 
         void paint (juce::Graphics& g) override { g.fillAll (Palette::card); }
@@ -199,11 +189,11 @@ namespace
         LiveMixSettings& settings;
         std::function<void()> onDeviceChanged;
         juce::StringArray names;
-        juce::Label deviceCaption, bufferCaption, deviceNote, autosaveCaption, backupCaption, urlLabel, folderLabel, userLabel, backupNote;
+        juce::Label deviceCaption, bufferCaption, deviceNote, autosaveCaption, backupCaption, urlLabel, folderLabel, backupNote;
         juce::ComboBox deviceCombo, bufferCombo;
         juce::TextButton panelButton;
-        juce::ToggleButton minimiseToTray, closeToTray, startWithWindows, rememberPassword;
-        juce::TextEditor autosaveEditor, urlEditor, folderEditor, userEditor;
+        juce::ToggleButton minimiseToTray, closeToTray, startWithWindows;
+        juce::TextEditor autosaveEditor, urlEditor, folderEditor;
         bool refreshing = false;
     };
 

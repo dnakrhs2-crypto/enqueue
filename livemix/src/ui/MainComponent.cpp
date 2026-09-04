@@ -126,6 +126,7 @@ MainComponent::~MainComponent()
     stopTimer();
     backup.cancel();
     SettingsDialog::closeIfOpen();
+    BackupDialog::closeIfOpen();   // its content refers to the document and the backup thread
     pluginManagerDialog.deleteAndZero();
     juce::ModalComponentManager::getInstance()->cancelAllModalComponents();   // open alerts refer to this window and its document
     windows.closeAll();
@@ -964,31 +965,41 @@ void MainComponent::showHelpMenu (juce::Component* anchor)
 void MainComponent::showBackupDialog()
 {
     juce::Component::SafePointer<MainComponent> safeThis (this);
-
-    if (! document.hasFile())
-    {
-        showStatus (ko ("먼저 세션을 저장하세요 (세션 > 저장)"), true);
-        saveSessionAs ([safeThis] (bool saved)
-        {
-            if (safeThis != nullptr && saved)
-                safeThis->showBackupDialog();
-        });
-        return;
-    }
-
-    document.pollPluginEdits();
-
-    if (! autosaveNow())
-    {
-        showStatus (ko ("세션을 저장하지 못해 백업을 시작하지 않았습니다"), true);   // an upload of the stale file would pass for a backup
-        return;
-    }
-
-    BackupDialog::show (document, settings, backup, this, [safeThis] (const juce::String& message, bool error)
+    BackupDialog::Callbacks callbacks;
+    callbacks.status = [safeThis] (const juce::String& message, bool error)
     {
         if (safeThis != nullptr)
             safeThis->showStatus (message, error);
-    });
+    };
+    callbacks.saveBeforeUpload = [safeThis]() -> bool
+    {
+        if (safeThis == nullptr)
+            return false;
+
+        auto& self = *safeThis;
+
+        if (! self.document.hasFile())
+        {
+            self.showStatus (ko ("먼저 세션을 저장하세요 (세션 > 저장)"), true);
+            return false;
+        }
+
+        self.document.pollPluginEdits();
+
+        if (! self.autosaveNow())
+        {
+            self.showStatus (ko ("세션을 저장하지 못해 백업을 시작하지 않았습니다"), true);   // an upload of the stale file would pass for a backup
+            return false;
+        }
+
+        return true;
+    };
+    callbacks.restore = [safeThis] (const juce::File& file)
+    {
+        if (safeThis != nullptr)
+            safeThis->openSession (file);
+    };
+    BackupDialog::show (document, settings, backup, this, std::move (callbacks));
 }
 
 void MainComponent::showSettingsDialog()

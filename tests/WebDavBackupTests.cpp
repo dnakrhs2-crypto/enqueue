@@ -58,6 +58,78 @@ public:
 
             expectEquals (WebDavBackup::credentialKeyFor ("https://Parkdoomin.synology.me:5006/", " gom "), juce::String ("LiveMix/WebDAV/parkdoomin.synology.me:5006/gom"));
             expect (WebDavBackup::credentialKeyFor ("https://a.example:5006", "gom") != WebDavBackup::credentialKeyFor ("https://b.example:5006", "gom"));
+        }
+
+        beginTest ("every account keeps its backups in its own home folder; an administrator reads the others' homes");
+        {
+            expectEquals (WebDavBackup::homeFolder (juce::String::fromUTF8 ("/LiveMix 백업")), juce::String::fromUTF8 ("/home/LiveMix 백업"));
+            expectEquals (WebDavBackup::homeFolder (juce::String::fromUTF8 (" LiveMix 백업/ ")), juce::String::fromUTF8 ("/home/LiveMix 백업"));
+            expectEquals (WebDavBackup::homeFolderOf ("fkvmfls", "/backups"), juce::String ("/homes/fkvmfls/backups"));
+            expectEquals (WebDavBackup::remotePathFor (WebDavBackup::homeFolder ("/b"), "PC", "a", juce::Time (2026, 8, 4, 15, 30, 0, 0, false)).upToLastOccurrenceOf ("/", true, false),
+                          juce::String ("/home/b/PC/"));
+        }
+
+        beginTest ("the WebDAV date form parses to UTC");
+        {
+            const auto t = WebDavBackup::parseHttpDate ("Fri, 17 Jul 2026 02:32:05 GMT");
+            expectEquals (t.toISO8601 (true), juce::Time (2026, 6, 17, 2, 32, 5, 0, false).toISO8601 (true));
+            expectEquals (WebDavBackup::parseHttpDate ("17 Jul 2026 02:32:05").toISO8601 (true), t.toISO8601 (true));   // without the weekday / zone
+            expect (WebDavBackup::parseHttpDate ("2026-07-17T02:32:05Z") == juce::Time());   // not that form
+            expect (WebDavBackup::parseHttpDate ("") == juce::Time());
+            expect (WebDavBackup::parseHttpDate ("Fri, 40 Jul 2026 02:32:05 GMT") == juce::Time());
+        }
+
+        beginTest ("a multistatus answer lists folders and files under any namespace prefix, the asked folder itself left out");
+        {
+            // Synology (Apache mod_dav): D: on the frame, lp1: on the properties, percent-encoded Korean, the folder itself first
+            const juce::String synology = juce::String::fromUTF8 (
+                "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n"
+                "<D:multistatus xmlns:D=\"DAV:\">\n"
+                "<D:response xmlns:lp2=\"http://apache.org/dav/props/\" xmlns:lp1=\"DAV:\">\n"
+                "<D:href>/home/LiveMix%20%EB%B0%B1%EC%97%85/</D:href>\n"
+                "<D:propstat><D:prop><lp1:resourcetype><D:collection/></lp1:resourcetype>"
+                "<lp1:getlastmodified>Fri, 17 Jul 2026 02:32:05 GMT</lp1:getlastmodified></D:prop><D:status>HTTP/1.1 200 OK</D:status></D:propstat>\n"
+                "</D:response>\n"
+                "<D:response xmlns:lp1=\"DAV:\"><D:href>/home/LiveMix%20%EB%B0%B1%EC%97%85/STUDIO-PC/</D:href>\n"
+                "<D:propstat><D:prop><lp1:resourcetype><D:collection/></lp1:resourcetype>"
+                "<lp1:getlastmodified>Thu, 04 Sep 2026 06:31:18 GMT</lp1:getlastmodified></D:prop><D:status>HTTP/1.1 200 OK</D:status></D:propstat>\n"
+                "</D:response>\n"
+                "<D:response xmlns:lp1=\"DAV:\"><D:href>https://nas.example:5006/home/LiveMix%20%EB%B0%B1%EC%97%85/STUDIO-PC/%EA%B0%80%EC%9D%84_2026-09-04_153000.livemix</D:href>\n"
+                "<D:propstat><D:prop><lp1:resourcetype/><lp1:getcontentlength>2468</lp1:getcontentlength>"
+                "<lp1:getlastmodified>Thu, 04 Sep 2026 06:31:18 GMT</lp1:getlastmodified></D:prop><D:status>HTTP/1.1 200 OK</D:status></D:propstat>\n"
+                "</D:response>\n"
+                "</D:multistatus>\n");
+
+            const auto items = WebDavBackup::parseMultistatus (synology, "/home/LiveMix%20%EB%B0%B1%EC%97%85/");
+            expectEquals ((int) items.size(), 2);
+
+            if (items.size() == 2)
+            {
+                expectEquals (items[0].path, juce::String::fromUTF8 ("/home/LiveMix 백업/STUDIO-PC"));
+                expect (items[0].collection);
+                expectEquals (items[0].name(), juce::String ("STUDIO-PC"));
+                expectEquals (items[1].path, juce::String::fromUTF8 ("/home/LiveMix 백업/STUDIO-PC/가을_2026-09-04_153000.livemix"));   // an absolute href: the path only
+                expect (! items[1].collection);
+                expectEquals (items[1].name(), juce::String::fromUTF8 ("가을_2026-09-04_153000.livemix"));
+                expectEquals (items[1].size, (juce::int64) 2468);
+                expectEquals (items[1].modified.toISO8601 (true), juce::Time (2026, 8, 4, 6, 31, 18, 0, false).toISO8601 (true));
+            }
+
+            // no prefix at all (a default namespace), the asked path given without the trailing slash
+            const juce::String plain = "<multistatus xmlns=\"DAV:\"><response><href>/homes/</href><propstat><prop><resourcetype><collection/></resourcetype></prop></propstat></response>"
+                                       "<response><href>/homes/fkvmfls/</href><propstat><prop><resourcetype><collection/></resourcetype></prop></propstat></response>"
+                                       "<response><href>/homes/note.lnk</href><propstat><prop><resourcetype/><getcontentlength>12</getcontentlength></prop></propstat></response></multistatus>";
+            const auto homes = WebDavBackup::parseMultistatus (plain, "/homes");
+            expectEquals ((int) homes.size(), 2);
+
+            if (homes.size() == 2)
+            {
+                expect (homes[0].collection && homes[0].name() == "fkvmfls");
+                expect (! homes[1].collection && homes[1].name() == "note.lnk" && homes[1].size == 12);
+            }
+
+            expect (WebDavBackup::parseMultistatus ("<html>not dav</html>", "/x").empty());
+            expect (WebDavBackup::parseMultistatus ("", "/x").empty());
             expect (WebDavBackup::credentialKeyFor ("https://a.example:5006", "gom") != WebDavBackup::credentialKeyFor ("https://a.example:5006", "lanna"));
         }
     }

@@ -41,7 +41,7 @@ public:
     /** Runs 'action' once the open session is safe to leave: a dirty session with a file is saved first (a failed save
         asks whether to go on without it), a dirty session without a file asks to save it, drop it, or stay. */
     void withSessionSecured (std::function<void()> action);
-    /** A backup upload is running (a quit would cut it). */
+    /** A backup job (an upload, a listing, a download) is running: a quit would cut it. */
     bool isUploadingBackup() const noexcept { return backup.isBusy(); }
     /** Safe mode (Shift / --safe-mode): a session's device is not opened and plugins are not loaded. */
     void setSafeMode (bool on) noexcept { safeMode = on; }
