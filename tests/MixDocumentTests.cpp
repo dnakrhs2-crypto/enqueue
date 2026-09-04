@@ -8,7 +8,7 @@ namespace gocue::tests
 
 using namespace gocue::livemix;
 
-/** The document's dirty state: clean after new / load / save, dirty after any edit, so autosave writes only what changed. */
+/** The document's dirty state: clean after new / load / save, dirty after any edit, so the title and the save on quit see only what changed. */
 class MixDocumentTests : public juce::UnitTest
 {
 public:

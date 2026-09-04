@@ -104,17 +104,8 @@ MainComponent::MainComponent (MixDocument& doc, LiveMixSettings& s)
     {
         engine.forEachChain ([this] (PluginChain& chain) { chain.setListener (&windows); });
         rebuildCards();
-
-        if (document.isDirty())   // a load announces too: that must not arm the autosave
-            lastChangeMs = juce::Time::getMillisecondCounterHiRes();
     };
-    document.onValueChanged = [this]
-    {
-        refreshValues();
-
-        if (document.isDirty())   // a save announces too
-            lastChangeMs = juce::Time::getMillisecondCounterHiRes();
-    };
+    document.onValueChanged = [this] { refreshValues(); };
 
     updateDeviceNames();
     rebuildCards();
@@ -521,9 +512,7 @@ void MainComponent::timerCallback()
         statusLeft.setText ((running ? ko ("오디오 동작 중") : ko ("오디오 멈춤 - 설정에서 ASIO 장치를 확인하세요")) + "   " + ko ("끊김 ") + juce::String (engine.getXRunCount()) + ko ("회"),
                             juce::dontSendNotification);
 
-    // a knob turned in a plugin editor: the file is out of date (the views need no refresh for that)
-    if (document.pollPluginEdits())
-        lastChangeMs = now;
+    document.pollPluginEdits();   // a knob turned in a plugin editor: the title shows the session as changed
 
     // a session named on the command line while a question was open: now that it is answered
     if (pendingCommandLineFile != juce::File() && juce::Component::getCurrentlyModalComponent() == nullptr)
@@ -532,18 +521,9 @@ void MainComponent::timerCallback()
         pendingCommandLineFile = juce::File();
         openSession (file);
     }
-
-    // autosave: a while after the last change, when the session has a file
-    if (document.isDirty() && document.hasFile() && lastChangeMs > 0.0 && now - lastChangeMs > settings.getAutosaveSeconds() * 1000.0)
-    {
-        lastChangeMs = -1.0;
-
-        if (! autosaveNow())
-            lastChangeMs = now;   // a failed write is tried again after another interval (the status line says why)
-    }
 }
 
-bool MainComponent::autosaveNow()
+bool MainComponent::saveIfDirty()
 {
     if (! document.isDirty() || ! document.hasFile())
         return true;   // nothing to write
@@ -552,8 +532,8 @@ bool MainComponent::autosaveNow()
 
     if (result.failed())
     {
-        showStatus (ko ("자동 저장 실패: ") + result.getErrorMessage(), true);
-        setSaveError (ko ("자동 저장 실패: ") + result.getErrorMessage());
+        showStatus (ko ("저장 실패: ") + result.getErrorMessage(), true);
+        setSaveError (ko ("저장 실패: ") + result.getErrorMessage());
         return false;
     }
 
@@ -986,7 +966,7 @@ void MainComponent::showBackupDialog()
 
         self.document.pollPluginEdits();
 
-        if (! self.autosaveNow())
+        if (! self.saveIfDirty())
         {
             self.showStatus (ko ("세션을 저장하지 못해 백업을 시작하지 않았습니다"), true);   // an upload of the stale file would pass for a backup
             return false;

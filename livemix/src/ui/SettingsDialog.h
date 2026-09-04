@@ -10,7 +10,7 @@
 namespace gocue::livemix
 {
 
-/** 설정: ASIO device and buffer size (the driver's own panel), tray behaviour, start with Windows, autosave,
+/** 설정: ASIO device and buffer size (the driver's own panel), tray behaviour, start with Windows,
     the online backup target. Non-modal, single instance. */
 namespace SettingsDialog
 {

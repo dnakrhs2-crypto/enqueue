@@ -19,7 +19,7 @@ namespace gocue::livemix
 {
 
 /** The window's content: top bar, the scrolling channel cards, the docked master, the drawers, the status bar.
-    Everything the operator does goes through the document; the timer feeds meters and autosave. */
+    Everything the operator does goes through the document; the timer feeds the meters. */
 class MainComponent : public juce::Component,
                       private juce::Timer
 {
@@ -36,8 +36,9 @@ public:
     void saveSessionAs (std::function<void (bool saved)> then = nullptr);
     /** Opens a session file named on the command line. True when one was named (opened, or refused with a notice). */
     bool openFromCommandLine (const juce::String& commandLine);
-    /** Saves a dirty session that has a file (autosave / quit). True when nothing is lost: nothing to save, or saved. */
-    bool autosaveNow();
+    /** Saves a dirty session that has a file (quitting, and right before a backup). True when nothing is lost:
+        nothing to save, or saved. There is no timed autosave: a session is set up once and saved by hand. */
+    bool saveIfDirty();
     /** Runs 'action' once the open session is safe to leave: a dirty session with a file is saved first (a failed save
         asks whether to go on without it), a dirty session without a file asks to save it, drop it, or stay. */
     void withSessionSecured (std::function<void()> action);
@@ -120,8 +121,6 @@ private:
     juce::StringArray inputNames, outputNames;
     juce::String statusText;
     double statusUntilMs = 0.0;
-    double lastChangeMs = -1.0;
-    bool autosavePending = false;
     std::unique_ptr<juce::FileChooser> chooser;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (MainComponent)

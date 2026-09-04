@@ -179,7 +179,7 @@ public:
         if (mainWindow != nullptr)
         {
             settings->setWindowState (mainWindow->getWindowStateAsString());
-            mainWindow->getMainComponent().autosaveNow();
+            mainWindow->getMainComponent().saveIfDirty();
         }
 
         mainWindow = nullptr;

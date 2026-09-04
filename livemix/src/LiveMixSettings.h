@@ -33,8 +33,6 @@ public:
     void setCloseToTray (bool on);
     bool getStartWithWindows() const;
     void setStartWithWindows (bool on);
-    int getAutosaveSeconds() const;
-    void setAutosaveSeconds (int seconds);
     /** A mic that is OFF skips its plugins (see MixEngine::setSkipChainWhenOff). */
     bool getSkipPluginsWhenOff() const;
     void setSkipPluginsWhenOff (bool on);

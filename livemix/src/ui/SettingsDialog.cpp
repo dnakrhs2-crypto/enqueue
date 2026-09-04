@@ -56,14 +56,6 @@ namespace
                 engine.setSkipChainWhenOff (on);
             });
 
-            styleCaption (autosaveCaption, ko ("자동 저장 (초)"));
-            addAndMakeVisible (autosaveCaption);
-            autosaveEditor.setInputRestrictions (4, "0123456789");
-            autosaveEditor.setText (juce::String (settings.getAutosaveSeconds()));
-            autosaveEditor.onFocusLost = [this] { settings.setAutosaveSeconds (autosaveEditor.getText().getIntValue()); };
-            autosaveEditor.onReturnKey = [this] { settings.setAutosaveSeconds (autosaveEditor.getText().getIntValue()); };
-            addAndMakeVisible (autosaveEditor);
-
             styleCaption (backupCaption, ko ("온라인 백업"));
             addAndMakeVisible (backupCaption);
             styleCaption (backupNote, ko ("위쪽 '온라인 백업' 버튼의 창에서 계정을 만들고 로그인합니다. 백업은 그 계정의 것만 보이고, 올리기·불러오기도 그 계정으로만 됩니다."));
@@ -71,7 +63,7 @@ namespace
             addAndMakeVisible (backupNote);
 
             refreshDevices();
-            setSize (560, 470);
+            setSize (560, 430);
         }
 
         void refreshDevices()
@@ -159,10 +151,6 @@ namespace
             closeToTray.setBounds (area.removeFromTop (28));
             startWithWindows.setBounds (area.removeFromTop (28));
             skipWhenOff.setBounds (area.removeFromTop (28));
-            area.removeFromTop (8);
-            row = area.removeFromTop (30);
-            autosaveCaption.setBounds (row.removeFromLeft (110));
-            autosaveEditor.setBounds (row.removeFromLeft (70));
             area.removeFromTop (16);
             backupCaption.setBounds (area.removeFromTop (20));
             backupNote.setBounds (area.removeFromTop (56));
@@ -175,11 +163,10 @@ namespace
         LiveMixSettings& settings;
         std::function<void()> onDeviceChanged;
         juce::StringArray names;
-        juce::Label deviceCaption, bufferCaption, deviceNote, autosaveCaption, backupCaption, backupNote;
+        juce::Label deviceCaption, bufferCaption, deviceNote, backupCaption, backupNote;
         juce::ComboBox deviceCombo, bufferCombo;
         juce::TextButton panelButton;
         juce::ToggleButton minimiseToTray, closeToTray, startWithWindows, skipWhenOff;
-        juce::TextEditor autosaveEditor;
         bool refreshing = false;
     };
 
