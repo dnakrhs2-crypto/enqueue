@@ -82,6 +82,7 @@ public:
     void setChannelOutput (const juce::Uuid& id, const MixOutput& output);
     void setSend (const juce::Uuid& channelId, const juce::Uuid& fxId, double amount, bool pre);
     void setFxReturn (const juce::Uuid& fxId, double amount);
+    void setFxMono (const juce::Uuid& fxId, bool mono);
     void setFxOutput (const juce::Uuid& fxId, const MixOutput& output);
     void setMasterOutput (int first);
 
@@ -136,6 +137,7 @@ private:
     {
         juce::Uuid id;
         std::atomic<float> returnAmount { 1.0f };
+        std::atomic<bool> mono { false };
         std::atomic<bool> toMaster { true }, direct { false };
         std::atomic<int> directFirst { 2 };
         std::unique_ptr<PluginChain> chain = std::make_unique<PluginChain>();

@@ -409,6 +409,14 @@ void MixEngine::renderBlock (const float* const* inputs, int numInputs, float* c
             if (! juce::approximatelyEqual (ret, 1.0f))
                 bus.applyGain (0, n, ret);
 
+            if (fx.mono.load (std::memory_order_relaxed))
+            {
+                // mono: the two sides summed at half level on both outputs (an identical pair keeps its level)
+                bus.addFrom (0, 0, bus, 1, 0, n);
+                bus.applyGain (0, 0, n, 0.5f);
+                bus.copyFrom (1, 0, bus, 0, 0, n);
+            }
+
             fx.meter.push (bus.getMagnitude (0, 0, n), bus.getMagnitude (1, 0, n));
 
             if (fx.toMaster.load (std::memory_order_relaxed))
@@ -571,6 +579,7 @@ void MixEngine::applySession (const MixSession& session, juce::StringArray* erro
                 continue;   // beyond the limit (the session is sanitised, so this does not happen)
 
             node->returnAmount.store ((float) juce::jlimit (0.0, 1.0, f.returnAmount), std::memory_order_relaxed);
+            node->mono.store (f.mono, std::memory_order_relaxed);
             applyOutput (f.output, node->toMaster, node->direct, node->directFirst);
             newFx.push_back (std::move (node));
 
@@ -710,6 +719,12 @@ void MixEngine::setFxReturn (const juce::Uuid& fxId, double amount)
 {
     if (auto* node = findFx (fxId))
         node->returnAmount.store ((float) juce::jlimit (0.0, 1.0, amount), std::memory_order_relaxed);
+}
+
+void MixEngine::setFxMono (const juce::Uuid& fxId, bool mono)
+{
+    if (auto* node = findFx (fxId))
+        node->mono.store (mono, std::memory_order_relaxed);
 }
 
 void MixEngine::setFxOutput (const juce::Uuid& fxId, const MixOutput& output)

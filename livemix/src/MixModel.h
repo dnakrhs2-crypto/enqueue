@@ -46,6 +46,7 @@ struct MixFx
     juce::String name;
     std::vector<PluginSlotState> chain;
     double returnAmount = 1.0;   // 0..1
+    bool mono = false;           // the FX output summed to mono (L+R)/2 on both sides
     MixOutput output;
 };
 

@@ -48,6 +48,7 @@ public:
     void setSend (const juce::Uuid& channelId, const juce::Uuid& fxId, double amount, bool pre);
     void renameFx (const juce::Uuid& id, const juce::String& name);
     void setFxReturn (const juce::Uuid& id, double amount);
+    void setFxMono (const juce::Uuid& id, bool mono);
     void setFxOutput (const juce::Uuid& id, const MixOutput& output);
     void setMasterOutput (int first);
     void setSessionName (const juce::String& name);

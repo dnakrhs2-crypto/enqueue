@@ -9,6 +9,7 @@ FxDrawer::FxDrawer (MixDocument& doc) : document (doc)
 {
     masterChip.setButtonText (ko ("마스터"));
     directChip.setButtonText (ko ("직접 출력"));
+    monoChip.setButtonText (ko ("모노"));
     title.setText (ko ("FX 채널"), juce::dontSendNotification);
     title.setFont (titleFont (17.0f));
     addAndMakeVisible (title);
@@ -72,6 +73,13 @@ FxDrawer::FxDrawer (MixDocument& doc) : document (doc)
     directCombo.setWantsKeyboardFocus (false);
     directCombo.onChange = [this] { commitOutput(); };
     addAndMakeVisible (directCombo);
+    monoChip.setTooltip (ko ("켜면 이 FX의 소리를 좌우 합쳐 양쪽에 똑같이 내보냅니다"));
+    monoChip.onClick = [this]
+    {
+        if (! refreshing && ! selected.isNull())
+            document.setFxMono (selected, monoChip.getToggleState());
+    };
+    addAndMakeVisible (monoChip);
 
     styleCaption (meterCaption, ko ("미터"));
     addAndMakeVisible (meterCaption);
@@ -121,7 +129,7 @@ void FxDrawer::refresh()
     const auto* f = fx();
     const bool have = f != nullptr;
 
-    for (auto* c : std::initializer_list<juce::Component*> { &name, &openChainButton, &addPluginButton, &returnSlider, &masterChip, &directChip, &directCombo, &removeFxButton })
+    for (auto* c : std::initializer_list<juce::Component*> { &name, &openChainButton, &addPluginButton, &returnSlider, &masterChip, &directChip, &monoChip, &directCombo, &removeFxButton })
         c->setEnabled (have);
 
     addFxButton.setEnabled ((int) session.fx.size() < MixSession::maxFx);
@@ -138,6 +146,7 @@ void FxDrawer::refresh()
         fillChannelCombo (directCombo, outputNames, true, MixSession::maxDeviceChannels);
         directCombo.setSelectedId (f->output.directFirst + 1, juce::dontSendNotification);
         directCombo.setEnabled (f->output.direct);
+        monoChip.setToggleState (f->mono, juce::dontSendNotification);
     }
     else
     {
@@ -313,6 +322,8 @@ void FxDrawer::resized()
     masterChip.setBounds (out.removeFromLeft (72));
     out.removeFromLeft (8);
     directChip.setBounds (out.removeFromLeft (84));
+    out.removeFromLeft (6);
+    monoChip.setBounds (out.removeFromLeft (58));
     out.removeFromLeft (6);
     directCombo.setBounds (out.withHeight (30).withY (out.getY() + 2));
     area.removeFromTop (12);

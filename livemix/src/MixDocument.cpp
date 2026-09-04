@@ -200,6 +200,16 @@ void MixDocument::setFxReturn (const juce::Uuid& id, double amount)
     }
 }
 
+void MixDocument::setFxMono (const juce::Uuid& id, bool mono)
+{
+    if (auto* f = session.findFx (id))
+    {
+        f->mono = mono;
+        engine.setFxMono (id, mono);
+        valueChanged();
+    }
+}
+
 void MixDocument::setFxOutput (const juce::Uuid& id, const MixOutput& output)
 {
     if (auto* f = session.findFx (id))

@@ -266,6 +266,7 @@ juce::String MixSession::toJson() const
         obj->setProperty ("name", f.name);
         obj->setProperty ("chain", ProjectSerializer::pluginSlotsToVar (f.chain));
         obj->setProperty ("returnAmount", f.returnAmount);
+        obj->setProperty ("mono", f.mono);
         obj->setProperty ("output", outputToVar (f.output));
         fxArray.add (obj);
     }
@@ -336,6 +337,7 @@ juce::Result MixSession::fromJson (const juce::String& json, MixSession& out, ju
             f.name = item.getProperty ("name", "").toString();
             f.chain = ProjectSerializer::pluginSlotsFromVar (item.getProperty ("chain", juce::var()));
             f.returnAmount = (double) item.getProperty ("returnAmount", 1.0);
+            f.mono = (bool) item.getProperty ("mono", false);
             f.output = outputFromVar (item.getProperty ("output", juce::var()), MixOutput());
             s.fx.push_back (std::move (f));
         }

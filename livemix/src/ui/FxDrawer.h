@@ -53,7 +53,7 @@ private:
     std::vector<std::unique_ptr<juce::TextButton>> chips;
     juce::TextButton openChainButton, addPluginButton;
     juce::Slider returnSlider;
-    Chip masterChip, directChip;
+    Chip masterChip, directChip, monoChip;
     juce::ComboBox directCombo;
     MeterBar meter_ { true };
     std::vector<std::unique_ptr<juce::Label>> senders;

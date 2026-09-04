@@ -97,6 +97,7 @@ public:
             slot.bypassed = true;
             c.chain.push_back (slot);
             s.fx[0].returnAmount = 0.5;
+            s.fx[0].mono = true;
             s.fx[0].output.direct = true;
             s.fx[0].output.directFirst = 6;
             s.fx[0].chain.push_back (slot);
@@ -118,6 +119,7 @@ public:
             expectEquals ((int) q.fx.size(), 1);
             expect (q.channels[0].id == c.id);
             expect (q.fx[0].id == s.fx[0].id);
+            expect (q.fx[0].mono);
             expectEquals (q.channels[0].name, c.name);
             expect (! q.channels[0].on);
             expectEquals (q.channels[0].inputFirst, 3);

@@ -146,6 +146,42 @@ public:
             engine.setFxOutput (s.fx[0].id, fxOut);
         }
 
+        beginTest ("an FX channel's mono switch sums its two sides at half level onto both outputs");
+        {
+            MixEngine fresh;
+            fresh.prepare (sampleRate, blockSize);
+            MixSession m;
+            m.addFx ("verb");
+            m.addChannel ("S");
+            m.channels[0].inputFirst = 2;                   // inputs 2 (0.1) and 3 (0.2)
+            m.channels[0].stereo = true;
+            m.channels[0].output.master = false;            // the mic itself goes nowhere: only the FX is heard
+            m.sendFor (m.channels[0], m.fx[0].id) = { m.fx[0].id, 1.0, true };
+            m.fx[0].output.master = false;
+            m.fx[0].output.direct = true;
+            m.fx[0].output.directFirst = 4;
+            fresh.applySession (m, nullptr, true);
+
+            Io stereoIo;
+            stereoIo.setInput (2, 0.1f);
+            stereoIo.setInput (3, 0.2f);
+            render (fresh, stereoIo, 2);
+            expectWithinAbsoluteError (stereoIo.last (4), 0.1f, 1e-6f);   // stereo: each side as it came
+            expectWithinAbsoluteError (stereoIo.last (5), 0.2f, 1e-6f);
+
+            fresh.setFxMono (m.fx[0].id, true);
+            render (fresh, stereoIo, 2);
+            expectWithinAbsoluteError (stereoIo.last (4), 0.15f, 1e-6f);  // mono: (0.1 + 0.2) / 2 on both sides
+            expectWithinAbsoluteError (stereoIo.last (5), 0.15f, 1e-6f);
+
+            m.fx[0].mono = true;                            // and it comes back from a session
+            MixEngine again;
+            again.prepare (sampleRate, blockSize);
+            again.applySession (m, nullptr, true);
+            render (again, stereoIo, 2);
+            expectWithinAbsoluteError (stereoIo.last (4), 0.15f, 1e-6f);
+        }
+
         beginTest ("a stereo channel takes an input pair; the main output pair can move; meters report the chain's output");
         {
             io.setInput (2, 0.1f);
