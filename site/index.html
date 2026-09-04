@@ -4,87 +4,72 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Enqueue</title>
-<meta name="description" content="Enqueue(앤큐): Windows용 오디오 큐 플레이어">
+<meta name="description" content="Enqueue(앤큐): 큐 순서대로 소리를 내보내는 Windows용 프로그램">
 <link rel="icon" href="assets/icon.png">
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;700&display=swap">
 <link rel="stylesheet" href="style.css">
 <script defer src="https://static.cloudflareinsights.com/beacon.min.js" data-cf-beacon='{"token": "__CF_BEACON_TOKEN__"}'></script>
 </head>
 <body>
-<div class="apps">
-  <div class="wrap apps-bar">
-    <span class="company">곰튀김</span>
-    <a class="app active" href="./" aria-current="page"><img src="assets/icon.png" alt="" width="28" height="28"><span>Enqueue<small>앤큐 · 쇼 큐 플레이어</small></span></a>
-    <a class="app" href="livemix/"><img src="livemix/assets/icon.png" alt="" width="28" height="28"><span>LiveMix<small>라이브믹스 · 라이브 마이크 VST3 호스트</small></span></a>
-  </div>
-</div>
-<header class="wrap top">
-  <a class="brand" href="./"><img src="assets/icon.png" alt="" width="36" height="36">Enqueue</a>
-  <nav class="nav">
-    <a href="#features">주요기능</a>
-    <a href="#requirements">요구 사항</a>
-    <a href="notes.html">바뀐 점</a>
-    <a href="#beta">베타 참여</a>
-    <a href="https://github.com/dnakrhs2-crypto/enqueue/releases">GitHub</a>
+<header class="site-header">
+  <nav class="tabs">
+    <a class="brand" href="./">곰튀김</a><i>|</i>
+    <span aria-current="page">Enqueue</span><i>|</i>
+    <a href="livemix/">LiveMix</a>
   </nav>
 </header>
 
-<main class="wrap">
-  <section class="hero">
-    <div>
-      <h1>앤큐 · Windows용 쇼 큐 플레이어</h1>
-      <div class="download">
-        <a class="btn" id="download" href="__DOWNLOAD_URL__">
-          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3a1 1 0 0 1 1 1v9.6l3.3-3.3a1 1 0 1 1 1.4 1.4l-5 5a1 1 0 0 1-1.4 0l-5-5a1 1 0 1 1 1.4-1.4L11 13.6V4a1 1 0 0 1 1-1zM4 18a1 1 0 0 1 1 1v1h14v-1a1 1 0 1 1 2 0v2a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1v-2a1 1 0 0 1 1-1z"/></svg>
-          <span id="download-label">__DOWNLOAD_LABEL__</span>
-        </a>
-        <p class="meta" id="download-meta">Windows 10/11 64비트 · 설치 파일은 <a href="https://github.com/dnakrhs2-crypto/enqueue/releases">GitHub 릴리스</a>에서 받습니다.</p>
+<main>
+  <article>
+    <header class="product-head">
+      <img class="app-icon" src="assets/icon.png" width="82" height="82" alt="">
+      <div>
+        <h1>Enqueue <small>앤큐</small></h1>
+        <p class="tagline">큐 순서대로 소리를 내보내는 프로그램</p>
       </div>
-      <p class="notice">설치 파일에 아직 코드 서명이 없어서 Windows가 "알 수 없는 게시자" 경고를 띄울 수 있습니다. 경고 창에서 <b>추가 정보</b> → <b>실행</b>을 누르면 설치가 진행됩니다.</p>
-    </div>
-    <figure class="shot"><img src="assets/screenshot.png" alt="앤큐 화면: 왼쪽 위 GO 버튼, 다음 큐 정보, 큐 리스트(그룹·파일·프리웨이트·길이), 오른쪽 활성 큐 패널" width="1260" height="449"></figure>
-  </section>
+    </header>
 
-  <section id="features">
-    <h2>주요기능</h2>
-    <ul class="plain">
-      <li>ASIO 지원</li>
-      <li>오디오 멀티채널 지원 (ASIO 에서만 활성화)</li>
-      <li>모든 큐에 별도로 VST3 인서트 가능</li>
-      <li>마스터 채널에 별도 VST3 인서트 가능</li>
-      <li>실시간으로 파형에서 페이드 조절가능</li>
-      <li>폴더 큐 리스트 지원</li>
-    </ul>
-    <p class="price">비용 : 완전 무료</p>
-  </section>
+    <section class="download-row">
+      <a class="download-button" id="download" href="__DOWNLOAD_URL__">
+        <strong id="download-label">__DOWNLOAD_LABEL__</strong>
+        <span id="download-meta">Windows 10 / 11 (64비트)</span>
+      </a>
+      <dl class="requirements">
+        <dt>요구 사항</dt><dd>Windows 10 / 11 (64비트)</dd>
+        <dt>기타</dt><dd><a href="notes.html">바뀐 점</a> · <a href="https://github.com/dnakrhs2-crypto/enqueue/releases">GitHub 릴리스</a></dd>
+      </dl>
+    </section>
 
-  <section id="requirements">
-    <h2>요구 사항</h2>
-    <dl class="kv">
-      <dt>운영체제</dt><dd>Windows 10 / 11 (64비트)</dd>
-      <dt>오디오 장치</dt><dd>ASIO 인터페이스 권장. 다채널 출력은 ASIO에서만 됩니다. Windows Audio(공유/독점/저지연)와 DirectSound는 출력 1-2.</dd>
-      <dt>플러그인</dt><dd>VST3</dd>
-      <dt>설치</dt><dd>사용자 계정에 설치(관리자 권한 불필요). 업데이트는 프로그램 안에서 자동으로 확인합니다.</dd>
-    </dl>
-  </section>
-
-  <section id="beta">
-    <h2>커뮤니티 · 베타 참여</h2>
-    <p>지금은 베타 기간입니다. 문제나 의견, 질문은 카카오톡 오픈채팅으로 보내 주세요. 프로그램 안 <b>도움말 → 커뮤니티</b> 메뉴에서도 열립니다.</p>
     <a class="kakao" id="feedback-button" href="https://open.kakao.com/o/pST4IRLi">
       <svg viewBox="0 0 48 48" aria-hidden="true"><path d="M24 6C12.4 6 3 13.3 3 22.3c0 5.8 3.9 10.9 9.8 13.8-.4 1.4-1.5 5.3-1.7 6.1-.3 1 .4 1 .8.7.3-.2 5.1-3.4 7.2-4.8 1.6.2 3.2.4 4.9.4 11.6 0 21-7.3 21-16.2S35.6 6 24 6z"/></svg>
-      <span class="kakao-text"><b>카카오톡 오픈채팅 바로가기</b><small>앤큐 커뮤니티 · 문의 · 피드백</small></span>
+      <span><b>카카오톡 오픈채팅 바로가기</b><small>문의 · 커뮤니티</small></span>
     </a>
-    <p style="margin-top:14px">사용 설명서는 프로그램 안 <b>도움말 → 사용 설명서</b>(Ctrl+F1)에 있습니다.</p>
-  </section>
+
+    <section class="body-section">
+      <h2>주요기능</h2>
+      <ul class="features">
+        <li>ASIO 지원</li>
+        <li>오디오 멀티채널 지원 (ASIO 에서만 활성화)</li>
+        <li>모든 큐에 별도로 VST3 인서트 가능</li>
+        <li>마스터 채널에 별도 VST3 인서트 가능</li>
+        <li>실시간으로 파형에서 페이드 조절가능</li>
+        <li>폴더 큐 리스트 지원</li>
+      </ul>
+      <p class="cost">비용 : 완전 무료</p>
+
+      <figure class="screen">
+        <img src="assets/screenshot.png" width="1260" height="425" alt="Enqueue 화면">
+      </figure>
+      <p class="notice">설치할 때 Windows가 ‘알 수 없는 게시자’ 경고를 띄웁니다. 추가 정보 → 실행을 누르면 됩니다. 아직 코드 서명을 하지 않아서 그렇습니다.</p>
+    </section>
+  </article>
 </main>
 
-<footer class="wrap">
-  <div>Enqueue · 곰튀김</div>
-  <div class="links">
-    <a href="https://github.com/dnakrhs2-crypto/enqueue/releases">GitHub 릴리스</a>
-    <a href="notes.html">바뀐 점</a>
-    <a href="livemix/">LiveMix</a>
+<footer>
+  <div class="footer-inner">
+    <span>곰튀김</span><span>·</span>
+    <a href="https://open.kakao.com/o/pST4IRLi">오픈채팅 문의</a><span>·</span>
+    <a href="notes.html">바뀐 점</a><span>·</span>
+    <a href="https://github.com/dnakrhs2-crypto/enqueue/releases">GitHub</a>
   </div>
 </footer>
 
@@ -95,15 +80,13 @@
     .then(function (r) { return r.ok ? r.json() : null; })
     .then(function (info) {
       if (!info || !info.url || info.url.indexOf('/releases/download/') < 0) return;   // only a direct asset link counts as a download
-      var btn = document.getElementById('download');
-      btn.href = info.url;
+      document.getElementById('download').href = info.url;
       document.getElementById('download-label').textContent = 'Enqueue ' + info.version + ' 다운로드';
-      var mb = info.size ? (info.size / 1048576).toFixed(1) + ' MB · ' : '';
-      var date = info.date ? info.date.slice(0, 10) + ' · ' : '';
-      document.getElementById('download-meta').innerHTML =
-        'Windows 10/11 64비트 · ' + mb + date + '<a href="https://github.com/dnakrhs2-crypto/enqueue/releases">이전 버전과 릴리스 노트</a>';
+      var mb = info.size ? (info.size / 1048576).toFixed(1) + ' MB' : '';
+      var date = info.date ? info.date.slice(0, 10) : '';
+      document.getElementById('download-meta').textContent = ['버전 ' + info.version, mb, date, 'Windows 10 / 11 (64비트)'].filter(Boolean).join(' · ');
       if (info.feedback)
-        document.getElementById('feedback-button').href = info.feedback;   // the room the app links to (Links.h)
+        document.getElementById('feedback-button').href = info.feedback;
     })
     .catch(function () {});
 })();
