@@ -97,9 +97,12 @@ public:
 
         auto& main = mainWindow->getMainComponent();
         main.setSafeMode (safeMode);
-        main.openFromCommandLine (commandLine);
 
-        if (! document->hasFile())
+        // a session named on the command line that could not be opened keeps its notice: loading the last session
+        // instead would look as if the double-clicked file had opened
+        const bool sessionNamed = main.openFromCommandLine (commandLine);
+
+        if (! sessionNamed && ! document->hasFile())
         {
             const auto last = settings->getLastSessionFile();
 
@@ -109,11 +112,12 @@ public:
                 createDefaultSession (main);
         }
 
-        // in the window, not a modal alert: a modal would freeze the frame (no resizing) and the mic buttons until dismissed
+        // in the window, not a modal alert: a modal would freeze the frame (no resizing) and the mic buttons until
+        // dismissed. Added to a session warning that is already showing, never replacing it.
         if (safeMode)
-            main.showNotice (ko ("안전 모드로 시작했습니다 (Shift): 저장된 ASIO 장치와 플러그인을 불러오지 않았습니다. 플러그인 설정은 세션에 그대로 남습니다. 설정에서 장치를 고르세요."), false);
+            main.addNotice (ko ("안전 모드로 시작했습니다 (Shift): 저장된 ASIO 장치와 플러그인을 불러오지 않았습니다. 플러그인 설정은 세션에 그대로 남습니다. 설정에서 장치를 고르세요."), false);
         else if (deviceError.isNotEmpty())
-            main.showNotice (ko ("ASIO 장치를 열지 못했습니다: ") + deviceError + " " + ko ("설정에서 장치를 고르거나 오디오 인터페이스 연결을 확인하세요."), true);
+            main.addNotice (ko ("ASIO 장치를 열지 못했습니다: ") + deviceError + " " + ko ("설정에서 장치를 고르거나 오디오 인터페이스 연결을 확인하세요."), true);
 
         Updater::Callbacks callbacks;
         callbacks.canShutdown = [this]
@@ -162,6 +166,12 @@ public:
     void shutdown() override
     {
         stopTimer();
+
+        // a second instance: initialise() never ran (JUCE handed its command line to the running instance and quits
+        // through here) - there is nothing to close, and settings is null
+        if (settings == nullptr)
+            return;
+
         Updater::shutdown();
         tray = nullptr;
 
@@ -208,6 +218,9 @@ public:
         {
             showWindow();
             mainWindow->getMainComponent().openFromCommandLine (commandLine);
+
+            if (auto* modal = juce::Component::getCurrentlyModalComponent())
+                modal->toFront (true);   // a question that was open stays in front of the window that just came forward
         }
     }
 
@@ -234,11 +247,11 @@ public:
             : DocumentWindow ("LiveMix", Palette::background, DocumentWindow::allButtons), app (a), prefs (settings)
         {
             setUsingNativeTitleBar (true);
+            setResizable (true, false);
+            setResizeLimits (720, 560, 10000, 10000);   // before the content: its corner grip takes this constrainer
             auto* content = new MainComponent (document, settings);
             mainComponent = content;
             setContentOwned (content, true);
-            setResizable (true, false);
-            setResizeLimits (720, 560, 10000, 10000);
 
             if (! restoreWindowStateFromString (settings.getWindowState()))
                 centreWithSize (1440, 900);

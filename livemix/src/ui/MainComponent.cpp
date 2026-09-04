@@ -80,10 +80,18 @@ MainComponent::MainComponent (MixDocument& doc, LiveMixSettings& s)
     statusRight.setText (ko ("최소화하면 트레이에서 계속 동작합니다"), juce::dontSendNotification);
     addAndMakeVisible (statusRight);
 
-    noticeLabel.setFont (bodyFont (14.0f));
-    noticeLabel.setJustificationType (juce::Justification::centredLeft);
-    noticeLabel.setMinimumHorizontalScale (1.0f);
-    addChildComponent (noticeLabel);
+    noticeText.setMultiLine (true, true);
+    noticeText.setReadOnly (true);
+    noticeText.setCaretVisible (false);
+    noticeText.setScrollbarsShown (true);
+    noticeText.setPopupMenuEnabled (true);   // the text can be copied (a driver's error, a path)
+    noticeText.setFont (bodyFont (14.0f));
+    noticeText.setColour (juce::TextEditor::backgroundColourId, juce::Colours::transparentBlack);
+    noticeText.setColour (juce::TextEditor::outlineColourId, juce::Colours::transparentBlack);
+    noticeText.setColour (juce::TextEditor::focusedOutlineColourId, juce::Colours::transparentBlack);
+    noticeText.setColour (juce::TextEditor::shadowColourId, juce::Colours::transparentBlack);
+    noticeText.setColour (juce::TextEditor::textColourId, Palette::text);
+    addChildComponent (noticeText);
     noticeClose.setWantsKeyboardFocus (false);
     noticeClose.setTooltip (ko ("닫기"));
     noticeClose.onClick = [this] { hideNotice(); };
@@ -267,20 +275,34 @@ void MainComponent::resized()
 
     if (noticeVisible)
     {
-        // as many lines as the text needs (up to five), the close button on the right
+        // the height the text really takes at this width (measured by the editor itself, no scrollbar), up to about
+        // five lines; a longer notice scrolls. The close button sits on the right.
         const int textWidth = juce::jmax (100, area.getWidth() - 32 - 44);
-        const int lines = juce::jlimit (1, 5, (int) std::ceil (juce::GlyphArrangement::getStringWidth (noticeLabel.getFont(), noticeLabel.getText()) / (float) textWidth)
-                                             + noticeLabel.getText().length() - noticeLabel.getText().replace ("\n", "").length());
-        auto bar = area.removeFromTop (14 + lines * 20);
-        noticeClose.setBounds (bar.removeFromRight (44).reduced (8, (bar.getHeight() - 28) / 2));
-        noticeLabel.setBounds (bar.reduced (16, 4));
+        const int maxTextHeight = 112;
+        noticeText.setScrollbarsShown (false);
+        noticeText.setBounds (16, area.getY() + 7, textWidth, 1);   // lays the text out at this width
+        const int needed = noticeText.getTextHeight() + 6;
+        const int textHeight = juce::jlimit (26, maxTextHeight, needed);
+        noticeText.setScrollbarsShown (needed > maxTextHeight);
+        auto bar = area.removeFromTop (textHeight + 14);
+        noticeClose.setBounds (bar.removeFromRight (44).reduced (8, juce::jmax (0, (bar.getHeight() - 28) / 2)));
+        noticeText.setBounds (bar.reduced (16, 7));
     }
 
-    noticeLabel.setVisible (noticeVisible);
+    noticeText.setVisible (noticeVisible);
     noticeClose.setVisible (noticeVisible);
     auto status = area.removeFromBottom (30);
     statusLeft.setBounds (status.reduced (16, 0).removeFromLeft (status.getWidth() / 2));
-    statusRight.setBounds (status.reduced (16, 0).removeFromRight (status.getWidth() / 2));
+    auto statusR = status.reduced (16, 0);
+    statusR.removeFromRight (18);   // room for the grip
+    statusRight.setBounds (statusR.removeFromRight (statusR.getWidth() / 2));
+
+    if (cornerGrip != nullptr)
+    {
+        auto* window = findParentComponentOfClass<juce::ResizableWindow>();
+        cornerGrip->setVisible (window != nullptr && ! window->isFullScreen());   // a maximised window is not dragged
+        cornerGrip->setBounds (getLocalBounds().removeFromBottom (18).removeFromRight (18));
+    }
 
     const int drawerW = juce::jmin (440, juce::jmax (320, getWidth() / 3));
     const auto drawerArea = area.withLeft (getWidth() - drawerW);   // the right edge, over the cards and the master
@@ -304,7 +326,7 @@ void MainComponent::paint (juce::Graphics& g)
 
     if (noticeVisible)
     {
-        auto bar = noticeLabel.getBounds().getUnion (noticeClose.getBounds()).expanded (16, 4).withX (0).withWidth (getWidth());
+        auto bar = noticeText.getBounds().getUnion (noticeClose.getBounds()).expanded (16, 7).withX (0).withWidth (getWidth());
         g.setColour (noticeIsError ? Palette::danger.withAlpha (0.18f) : Palette::accent.withAlpha (0.18f));
         g.fillRect (bar);
         g.setColour (noticeIsError ? Palette::danger : Palette::accent);
@@ -530,10 +552,39 @@ void MainComponent::showNotice (const juce::String& text, bool error)
 {
     noticeVisible = true;
     noticeIsError = error;
-    noticeLabel.setText (text, juce::dontSendNotification);
-    noticeLabel.setColour (juce::Label::textColourId, Palette::text);
+    noticeText.setText (text, false);
     resized();
     repaint();
+}
+
+void MainComponent::addNotice (const juce::String& text, bool error)
+{
+    if (noticeVisible)
+        showNotice (noticeText.getText() + "\n" + text, noticeIsError || error);
+    else
+        showNotice (text, error);
+}
+
+void MainComponent::hideNoticeIf (const juce::String& prefix)
+{
+    if (noticeVisible && noticeText.getText().startsWith (prefix))
+        hideNotice();
+}
+
+void MainComponent::parentHierarchyChanged()
+{
+    // the grip resizes the window itself; the window's constrainer keeps the minimum size (MainWindow sets its limits
+    // before the content goes in)
+    if (cornerGrip == nullptr)
+    {
+        if (auto* window = findParentComponentOfClass<juce::ResizableWindow>())
+        {
+            cornerGrip = std::make_unique<juce::ResizableCornerComponent> (window, window->getConstrainer());
+            cornerGrip->setAlwaysOnTop (true);
+            addAndMakeVisible (*cornerGrip);
+            resized();
+        }
+    }
 }
 
 void MainComponent::hideNotice()
@@ -703,10 +754,11 @@ bool MainComponent::saveSession()
 
     if (result.failed())
     {
-        juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon, ko ("저장 실패"), result.getErrorMessage(), ko ("확인"));
+        showNotice (ko ("저장 실패: ") + result.getErrorMessage(), true);
         return false;
     }
 
+    hideNoticeIf (ko ("저장 실패"));
     settings.setLastSessionFile (document.getFile());
     settings.addRecentSession (document.getFile());
     showStatus (ko ("저장됨: ") + document.getFile().getFileName());
@@ -746,7 +798,7 @@ void MainComponent::saveSessionAs (std::function<void (bool)> then)
 
         if (result.failed())
         {
-            juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon, ko ("저장 실패"), result.getErrorMessage(), ko ("확인"));
+            self.showNotice (ko ("저장 실패: ") + result.getErrorMessage(), true);
 
             if (then)
                 then (false);
@@ -754,6 +806,7 @@ void MainComponent::saveSessionAs (std::function<void (bool)> then)
             return;
         }
 
+        self.hideNoticeIf (ko ("저장 실패"));
         self.settings.setLastSessionFile (file);
         self.settings.addRecentSession (file);
         self.showStatus (ko ("저장됨: ") + file.getFileName());
@@ -763,7 +816,7 @@ void MainComponent::saveSessionAs (std::function<void (bool)> then)
     });
 }
 
-void MainComponent::openFromCommandLine (const juce::String& commandLine)
+bool MainComponent::openFromCommandLine (const juce::String& commandLine)
 {
     const juce::ArgumentList args ("LiveMix", commandLine);
 
@@ -774,9 +827,11 @@ void MainComponent::openFromCommandLine (const juce::String& commandLine)
         if (file.existsAsFile() && file.hasFileExtension (MixSession::fileExtension))
         {
             openSession (file);
-            return;
+            return true;
         }
     }
+
+    return false;
 }
 
 void MainComponent::showSessionMenu (juce::Component* anchor)

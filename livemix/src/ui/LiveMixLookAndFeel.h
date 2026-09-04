@@ -64,6 +64,18 @@ public:
     juce::Font getComboBoxFont (juce::ComboBox&) override { return juce::Font (juce::FontOptions (14.5f)); }
     juce::Font getLabelFont (juce::Label& label) override { return label.getFont(); }
 
+    void drawCornerResizer (juce::Graphics& g, int w, int h, bool isMouseOver, bool isMouseDragging) override
+    {
+        // three short diagonals in the corner: the window's resize handle
+        g.setColour (isMouseOver || isMouseDragging ? Palette::text : Palette::dimText);
+
+        for (int i = 0; i < 3; ++i)
+        {
+            const float offset = 4.0f + 4.5f * (float) i;
+            g.drawLine ((float) w - 3.0f - offset, (float) h - 3.0f, (float) w - 3.0f, (float) h - 3.0f - offset, 1.4f);
+        }
+    }
+
     void drawButtonBackground (juce::Graphics& g, juce::Button& button, const juce::Colour& backgroundColour,
                                bool isMouseOverButton, bool isButtonDown) override
     {

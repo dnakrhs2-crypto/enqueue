@@ -34,7 +34,8 @@ public:
     bool saveSession();          // to the current file, or "save as" without one
     /** The save dialog; 'then (saved)' runs when it is over (false: cancelled or failed). */
     void saveSessionAs (std::function<void (bool saved)> then = nullptr);
-    void openFromCommandLine (const juce::String& commandLine);
+    /** Opens a session file named on the command line. True when one was named (opened, or refused with a notice). */
+    bool openFromCommandLine (const juce::String& commandLine);
     /** Saves a dirty session that has a file (autosave / quit). True when nothing is lost: nothing to save, or saved. */
     bool autosaveNow();
     /** Runs 'action' once the open session is safe to leave: a dirty session with a file is saved first (a failed save
@@ -51,12 +52,15 @@ public:
         the whole window (no resizing, no mic buttons) until it is dismissed, which is wrong for a live tool. */
     void showNotice (const juce::String& text, bool error);
     void hideNotice();
+    /** Adds a line to the notice that is showing (or shows a new one): a startup note must not replace a session warning. */
+    void addNotice (const juce::String& text, bool error);
     void refreshAll();
 
     std::function<void()> onQuitRequested;
 
     void resized() override;
     void paint (juce::Graphics& g) override;
+    void parentHierarchyChanged() override;
 
 private:
     enum class Drawer { none, chain, fx };
@@ -80,6 +84,7 @@ private:
     void updateDeviceNames();
     juce::File defaultSessionFolder() const;
     void showStatus (const juce::String& text, bool error = false);
+    void hideNoticeIf (const juce::String& prefix);   // closes the notice when it is the one that starts so
     CardLayout layoutForWidth (int width) const;
 
     MixDocument& document;
@@ -102,7 +107,8 @@ private:
     juce::Uuid chainOwnerId = juce::Uuid::null();   // the channel / FX whose chain the drawer shows (null = master)
     bool chainIsFx = false;
     juce::Label statusLeft, statusRight;
-    juce::Label noticeLabel;
+    juce::TextEditor noticeText;   // read-only: wraps by word, breaks a long token, scrolls when long
+    std::unique_ptr<juce::ResizableCornerComponent> cornerGrip;   // a visible handle: the frame's own edge is thin (and hard to hit over remote desktop)
     juce::TextButton noticeClose { juce::String::fromUTF8 ("\xE2\x9C\x95") };
     bool noticeVisible = false, noticeIsError = false;
     juce::StringArray inputNames, outputNames;
