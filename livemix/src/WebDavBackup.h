@@ -67,8 +67,9 @@ public:
     /** The credential store key for one server + user: a changed address or user asks for the password again
         instead of sending the remembered one somewhere else. */
     static juce::String credentialKeyFor (const juce::String& baseUrl, const juce::String& user);
-    /** The items of a multistatus answer, the requested folder itself left out. Any namespace prefixes. */
-    static std::vector<DavItem> parseMultistatus (const juce::String& xml, const juce::String& requestedPath);
+    /** The items of a multistatus answer, the requested folder itself left out. Any namespace prefixes. 'parsedOk'
+        (when given) tells an unreadable answer from an empty folder. */
+    static std::vector<DavItem> parseMultistatus (const juce::String& xml, const juce::String& requestedPath, bool* parsedOk = nullptr);
     /** "Fri, 17 Jul 2026 02:32:05 GMT" (RFC 1123, the WebDAV getlastmodified form) -> UTC time; Time() when not that. */
     static juce::Time parseHttpDate (const juce::String& text);
 

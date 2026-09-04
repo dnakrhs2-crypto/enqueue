@@ -32,17 +32,39 @@ namespace
         return base;
     }
 
+    /** "/folder" without a trailing slash; "" for no folder at all (the home itself). */
     juce::String normalisedFolder (const juce::String& folder)
     {
         auto base = folder.trim();
 
-        if (! base.startsWithChar ('/'))
-            base = "/" + base;
-
-        while (base.endsWithChar ('/') && base.length() > 1)
+        while (base.endsWithChar ('/'))
             base = base.dropLastCharacters (1);
 
-        return base;
+        if (base.isEmpty())
+            return {};
+
+        return base.startsWithChar ('/') ? base : "/" + base;
+    }
+
+    juce::String withTrailingSlash (const juce::String& path)
+    {
+        return path.endsWithChar ('/') ? path : path + "/";
+    }
+
+    /** Percent-decoding of a URL path: a literal '+' stays a '+' (JUCE's decoder would make it a space). */
+    juce::String decodePath (const juce::String& encoded)
+    {
+        return juce::URL::removeEscapeChars (encoded.replace ("+", "%2B"));
+    }
+
+    juce::String unreadableAnswer (const juce::String& path)
+    {
+        return juce::String::fromUTF8 ("서버의 목록 응답을 읽을 수 없습니다: ") + path;
+    }
+
+    bool nothingThere (int status)
+    {
+        return status == 403 || status == 404 || status == 405;   // no such folder, or not this account's to read
     }
 
     juce::String loginRefused()
@@ -295,15 +317,23 @@ juce::Time WebDavBackup::parseHttpDate (const juce::String& text)
     return juce::Time (year, month, day, clock[0].getIntValue(), clock[1].getIntValue(), clock[2].getIntValue(), 0, false);
 }
 
-std::vector<WebDavBackup::DavItem> WebDavBackup::parseMultistatus (const juce::String& xml, const juce::String& requestedPath)
+std::vector<WebDavBackup::DavItem> WebDavBackup::parseMultistatus (const juce::String& xml, const juce::String& requestedPath, bool* parsedOk)
 {
     std::vector<DavItem> items;
     const auto root = juce::XmlDocument::parse (xml);
 
     if (root == nullptr || root->getTagNameWithoutNamespace() != "multistatus")
-        return items;
+    {
+        if (parsedOk != nullptr)
+            *parsedOk = false;
 
-    const auto requested = stripTrailingSlash (juce::URL::removeEscapeChars (requestedPath));
+        return items;
+    }
+
+    if (parsedOk != nullptr)
+        *parsedOk = true;
+
+    const auto requested = stripTrailingSlash (decodePath (requestedPath));
 
     for (auto* response : root->getChildIterator())
     {
@@ -322,7 +352,7 @@ std::vector<WebDavBackup::DavItem> WebDavBackup::parseMultistatus (const juce::S
             raw = raw.fromFirstOccurrenceOf ("://", false, false).fromFirstOccurrenceOf ("/", true, false);
 
         DavItem item;
-        item.path = stripTrailingSlash (juce::URL::removeEscapeChars (raw));
+        item.path = stripTrailingSlash (decodePath (raw));
 
         if (item.path.isEmpty() || item.path == requested)
             continue;
@@ -473,13 +503,16 @@ int WebDavBackup::request (const juce::String& method, const juce::String& path,
 
     const bool connected = stream->connect (nullptr);
     const int status = stream->getStatusCode();
+    bool truncated = false;
 
     if (connected)
     {
         if (response != nullptr)
         {
             response->reset();
-            stream->readIntoMemoryBlock (*response);
+            const auto expected = stream->getTotalLength();   // -1 when the server did not say
+            const auto got = (juce::int64) stream->readIntoMemoryBlock (*response);
+            truncated = expected >= 0 && got != expected;
         }
         else
         {
@@ -496,6 +529,13 @@ int WebDavBackup::request (const juce::String& method, const juce::String& path,
     {
         error = threadShouldExit() ? juce::String::fromUTF8 ("백업 작업이 취소되었습니다")
                                    : juce::String::fromUTF8 ("서버에 연결하지 못했습니다: ") + base;
+        return 0;
+    }
+
+    if (truncated)
+    {
+        error = threadShouldExit() ? juce::String::fromUTF8 ("백업 작업이 취소되었습니다")
+                                   : juce::String::fromUTF8 ("서버의 응답이 중간에 끊겼습니다: ") + path;
         return 0;
     }
 
@@ -607,7 +647,7 @@ bool WebDavBackup::collectBackups (const juce::String& owner, const juce::String
 {
     juce::String error;
     juce::MemoryBlock xml;
-    const int status = request ("PROPFIND", root + "/", nullptr, "Depth: 1\r\n", error, &xml);
+    const int status = request ("PROPFIND", withTrailingSlash (root), nullptr, "Depth: 1\r\n", error, &xml);
 
     if (status == 0)
     {
@@ -621,10 +661,25 @@ bool WebDavBackup::collectBackups (const juce::String& owner, const juce::String
         return false;
     }
 
-    if (status != 207)
-        return true;   // no backups there yet (404), or a home this account may not read (403): nothing to show
+    if (nothingThere (status))
+        return true;   // no backups there yet, or a home this account may not read: nothing to show
 
-    for (const auto& pcFolder : parseMultistatus (xml.toString(), root))
+    if (status != 207)
+    {
+        message = httpRefused (status, root);   // a redirect, a server error: not "no backups"
+        return false;
+    }
+
+    bool parsed = false;
+    const auto pcFolders = parseMultistatus (xml.toString(), root, &parsed);
+
+    if (! parsed)
+    {
+        message = unreadableAnswer (root);
+        return false;
+    }
+
+    for (const auto& pcFolder : pcFolders)
     {
         if (threadShouldExit())
             return false;
@@ -633,7 +688,7 @@ bool WebDavBackup::collectBackups (const juce::String& owner, const juce::String
             continue;
 
         juce::MemoryBlock files;
-        const int inner = request ("PROPFIND", pcFolder.path + "/", nullptr, "Depth: 1\r\n", error, &files);
+        const int inner = request ("PROPFIND", withTrailingSlash (pcFolder.path), nullptr, "Depth: 1\r\n", error, &files);
 
         if (inner == 0)
         {
@@ -641,10 +696,31 @@ bool WebDavBackup::collectBackups (const juce::String& owner, const juce::String
             return false;
         }
 
-        if (inner != 207)
+        if (inner == 401)
+        {
+            message = loginRefused();
+            return false;
+        }
+
+        if (nothingThere (inner))
             continue;
 
-        for (auto& file : parseMultistatus (files.toString(), pcFolder.path))
+        if (inner != 207)
+        {
+            message = httpRefused (inner, pcFolder.path);
+            return false;
+        }
+
+        bool innerParsed = false;
+        const auto found = parseMultistatus (files.toString(), pcFolder.path, &innerParsed);
+
+        if (! innerParsed)
+        {
+            message = unreadableAnswer (pcFolder.path);
+            return false;
+        }
+
+        for (auto& file : found)
         {
             if (file.collection || ! file.name().endsWithIgnoreCase (".livemix"))
                 continue;
@@ -686,8 +762,16 @@ void WebDavBackup::runList (bool& ok, juce::String& message, std::vector<Entry>&
     if (homes == 207)
     {
         everyone = true;
+        bool parsed = false;
+        const auto homeFolders = parseMultistatus (xml.toString(), "/homes", &parsed);
 
-        for (const auto& home : parseMultistatus (xml.toString(), "/homes"))
+        if (! parsed)
+        {
+            message = unreadableAnswer ("/homes");
+            return;
+        }
+
+        for (const auto& home : homeFolders)
         {
             if (threadShouldExit())
                 return;
@@ -699,11 +783,16 @@ void WebDavBackup::runList (bool& ok, juce::String& message, std::vector<Entry>&
                 return;
         }
     }
-    else
+    else if (nothingThere (homes))
     {
         // the account's own home: 403 / 404 on homes is the normal answer for a non-administrator
         if (! collectBackups ({}, homeFolder (target.folder), entries, message))
             return;
+    }
+    else
+    {
+        message = httpRefused (homes, "/homes");   // a redirect, a server error
+        return;
     }
 
     std::stable_sort (entries.begin(), entries.end(), [] (const Entry& a, const Entry& b) { return a.modified > b.modified; });
@@ -724,9 +813,15 @@ void WebDavBackup::runDownload (bool& ok, juce::String& message)
         return;
     }
 
-    if (status == 401 || status == 403)
+    if (status == 401)
     {
         message = loginRefused();
+        return;
+    }
+
+    if (status == 403)
+    {
+        message = juce::String::fromUTF8 ("이 계정은 그 백업을 읽을 수 없습니다: ") + remotePath;
         return;
     }
 

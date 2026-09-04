@@ -7,6 +7,18 @@ namespace gocue::livemix
 
 namespace
 {
+    class BackupWindow;
+    juce::Component::SafePointer<BackupWindow> openWindow;
+    juce::Component* currentWindow();   // the open window as a Component (BackupWindow is defined below)
+
+    /** The account worked: keep what the operator asked to keep - also when the window is already gone. */
+    void persistAccount (LiveMixSettings& settings, const WebDavBackup::Target& target, bool remember)
+    {
+        settings.setBackupUser (target.user);
+        settings.setBackupRememberPassword (remember);
+        settings.setBackupPassword (remember ? target.password : juce::String());
+    }
+
     class BackupContent : public juce::Component,
                           private juce::TableListBoxModel
     {
@@ -162,14 +174,6 @@ namespace
             return true;
         }
 
-        /** The account worked (a listing, an upload or a download went through): keep what the operator asked to keep. */
-        void rememberAccount (const WebDavBackup::Target& target)
-        {
-            settings.setBackupUser (target.user);
-            settings.setBackupRememberPassword (remember.getToggleState());
-            settings.setBackupPassword (remember.getToggleState() ? target.password : juce::String());
-        }
-
         void setBusy (bool busy)
         {
             listButton.setEnabled (! busy);
@@ -192,10 +196,15 @@ namespace
 
             const auto target = currentTarget();
             juce::Component::SafePointer<BackupContent> safe (this);
-            const auto started = backup.startList (target, [safe, target] (bool ok, const juce::String& message, std::vector<WebDavBackup::Entry> found, bool everyone)
+            auto* prefs = &settings;   // outlives every window (the application's)
+            const bool keep = remember.getToggleState();
+            const auto started = backup.startList (target, [safe, target, prefs, keep] (bool ok, const juce::String& message, std::vector<WebDavBackup::Entry> found, bool everyone)
             {
+                if (ok)
+                    persistAccount (*prefs, target, keep);
+
                 if (safe != nullptr)
-                    safe->listFinished (ok, message, std::move (found), everyone, target);
+                    safe->listFinished (ok, message, std::move (found), everyone);
             });
 
             if (started.failed())
@@ -208,7 +217,7 @@ namespace
             setStatus (ko ("목록 가져오는 중..."), false);
         }
 
-        void listFinished (bool ok, const juce::String& message, std::vector<WebDavBackup::Entry> found, bool everyone, const WebDavBackup::Target& target)
+        void listFinished (bool ok, const juce::String& message, std::vector<WebDavBackup::Entry> found, bool everyone)
         {
             setBusy (false);
 
@@ -228,7 +237,6 @@ namespace
             table.updateContent();
             table.repaint();
             restoreButton.setEnabled (false);
-            rememberAccount (target);
             setStatus (message, false);
         }
 
@@ -256,8 +264,13 @@ namespace
             const auto remotePath = WebDavBackup::remotePathFor (WebDavBackup::homeFolder (target.folder), juce::SystemStats::getComputerName(), creator, juce::Time::getCurrentTime());
             juce::Component::SafePointer<BackupContent> safe (this);
             auto status = callbacks.status;
-            const auto started = backup.start (target, document.getFile(), remotePath, [safe, target, status] (bool ok, const juce::String& message)
+            auto* prefs = &settings;
+            const bool keep = remember.getToggleState();
+            const auto started = backup.start (target, document.getFile(), remotePath, [safe, target, status, prefs, keep] (bool ok, const juce::String& message)
             {
+                if (ok)
+                    persistAccount (*prefs, target, keep);
+
                 if (status)
                     status (message, ! ok);   // the main window hears the result even when this window is gone
 
@@ -267,11 +280,8 @@ namespace
                 safe->setBusy (false);
                 safe->setStatus (message, ! ok);
 
-                if (ok)
-                {
-                    safe->rememberAccount (target);
-                    safe->refreshList();   // the new backup in the list
-                }
+                if (ok)   // the new backup in the list - once the worker thread is fully gone (its result arrives from inside run())
+                    juce::Timer::callAfterDelay (80, [safe] { if (safe != nullptr) safe->refreshList(); });
             });
 
             if (started.failed())
@@ -307,29 +317,54 @@ namespace
 
             const auto target = currentTarget();
             juce::Component::SafePointer<BackupContent> safe (this);
+            juce::Component::SafePointer<juce::Component> mine (getTopLevelComponent());   // this window, not a later one
             auto status = callbacks.status;
             auto restore = callbacks.restore;
-            const auto started = backup.startDownload (target, entry.path, file, [safe, target, file, status, restore] (bool ok, const juce::String& message)
+            auto* prefs = &settings;
+            const bool keep = remember.getToggleState();
+            const auto started = backup.startDownload (target, entry.path, file, [safe, mine, target, file, status, restore, prefs, keep] (bool ok, const juce::String& message)
             {
-                if (status)
-                    status (message, ! ok);
-
-                if (safe != nullptr)
+                auto report = [&] (const juce::String& text, bool error)
                 {
-                    safe->setBusy (false);
-                    safe->setStatus (message, ! ok);
+                    if (status)
+                        status (text, error);
 
-                    if (ok)
-                        safe->rememberAccount (target);
-                }
+                    if (safe != nullptr)
+                    {
+                        safe->setBusy (false);
+                        safe->setStatus (text, error);
+                    }
+                };
 
                 if (! ok)
+                {
+                    report (message, true);
                     return;
+                }
+
+                persistAccount (*prefs, target, keep);
+
+                // whatever came down must be a session before it is opened as one
+                MixSession probe;
+                juce::StringArray warnings;
+
+                if (const auto check = MixSession::load (file, probe, &warnings); check.failed())
+                {
+                    file.deleteFile();
+                    report (juce::String::fromUTF8 ("내려받은 파일이 세션 파일이 아닙니다: ") + check.getErrorMessage(), true);
+                    return;
+                }
+
+                report (message, false);
 
                 if (restore)
                     restore (file);   // the session opens (after the usual unsaved-changes question)
 
-                juce::MessageManager::callAsync ([] { BackupDialog::closeIfOpen(); });
+                juce::MessageManager::callAsync ([mine]
+                {
+                    if (mine != nullptr && mine.getComponent() == currentWindow())
+                        delete mine.getComponent();
+                });
             });
 
             if (started.failed())
@@ -415,7 +450,10 @@ namespace
         }
     };
 
-    juce::Component::SafePointer<BackupWindow> openWindow;
+    juce::Component* currentWindow()
+    {
+        return openWindow.getComponent();
+    }
 }
 
 void BackupDialog::show (MixDocument& document, LiveMixSettings& settings, WebDavBackup& backup, juce::Component* centreAround, Callbacks callbacks)

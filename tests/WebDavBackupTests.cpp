@@ -65,6 +65,9 @@ public:
             expectEquals (WebDavBackup::homeFolder (juce::String::fromUTF8 ("/LiveMix 백업")), juce::String::fromUTF8 ("/home/LiveMix 백업"));
             expectEquals (WebDavBackup::homeFolder (juce::String::fromUTF8 (" LiveMix 백업/ ")), juce::String::fromUTF8 ("/home/LiveMix 백업"));
             expectEquals (WebDavBackup::homeFolderOf ("fkvmfls", "/backups"), juce::String ("/homes/fkvmfls/backups"));
+            expectEquals (WebDavBackup::homeFolder (""), juce::String ("/home"));    // no folder: the home itself, never "/home//"
+            expectEquals (WebDavBackup::homeFolder (" / "), juce::String ("/home"));
+            expectEquals (WebDavBackup::remotePathFor ("", "PC", "a", juce::Time (2026, 8, 4, 15, 30, 0, 0, false)).upToLastOccurrenceOf ("/", true, false), juce::String ("/PC/"));
             expectEquals (WebDavBackup::remotePathFor (WebDavBackup::homeFolder ("/b"), "PC", "a", juce::Time (2026, 8, 4, 15, 30, 0, 0, false)).upToLastOccurrenceOf ("/", true, false),
                           juce::String ("/home/b/PC/"));
         }
@@ -128,8 +131,23 @@ public:
                 expect (! homes[1].collection && homes[1].name() == "note.lnk" && homes[1].size == 12);
             }
 
-            expect (WebDavBackup::parseMultistatus ("<html>not dav</html>", "/x").empty());
-            expect (WebDavBackup::parseMultistatus ("", "/x").empty());
+            bool parsed = true;
+            expect (WebDavBackup::parseMultistatus ("<html>not dav</html>", "/x", &parsed).empty());
+            expect (! parsed);   // an unreadable answer is not an empty folder
+            parsed = true;
+            expect (WebDavBackup::parseMultistatus ("", "/x", &parsed).empty());
+            expect (! parsed);
+            parsed = false;
+            expect (WebDavBackup::parseMultistatus ("<D:multistatus xmlns:D=\"DAV:\"></D:multistatus>", "/x", &parsed).empty());
+            expect (parsed);   // an empty folder reads fine
+
+            // a literal '+' in a name is a '+' (JUCE's decoder would make it a space), a real space comes encoded
+            const auto plus = WebDavBackup::parseMultistatus ("<D:multistatus xmlns:D=\"DAV:\"><D:response><D:href>/home/b/take+1%20final.livemix</D:href>"
+                                                             "<D:propstat><D:prop><D:resourcetype/></D:prop></D:propstat></D:response></D:multistatus>", "/home/b");
+            expectEquals ((int) plus.size(), 1);
+
+            if (plus.size() == 1)
+                expectEquals (plus[0].name(), juce::String ("take+1 final.livemix"));
             expect (WebDavBackup::credentialKeyFor ("https://a.example:5006", "gom") != WebDavBackup::credentialKeyFor ("https://a.example:5006", "lanna"));
         }
     }
