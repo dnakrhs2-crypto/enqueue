@@ -99,7 +99,7 @@ void LiveMixSettings::setStartWithWindows (bool on) { settings->setValue (Keys::
 int LiveMixSettings::getAutosaveSeconds() const { return juce::jlimit (3, 600, settings->getIntValue (Keys::autosaveSeconds, 10)); }
 void LiveMixSettings::setAutosaveSeconds (int seconds) { settings->setValue (Keys::autosaveSeconds, juce::jlimit (3, 600, seconds)); }
 
-juce::String LiveMixSettings::getBackupUrl() const { return settings->getValue (Keys::backupUrl, "https://parkdoomin.synology.me:5006"); }
+juce::String LiveMixSettings::getBackupUrl() const { return settings->getValue (Keys::backupUrl, "https://parkdoomin.synology.me:5006"); }   // the credential key's server part (the server itself is built in)
 void LiveMixSettings::setBackupUrl (const juce::String& url) { settings->setValue (Keys::backupUrl, url.trim()); }
 juce::String LiveMixSettings::getBackupFolder() const { return settings->getValue (Keys::backupFolder, juce::String::fromUTF8 ("/LiveMix 백업")); }
 void LiveMixSettings::setBackupFolder (const juce::String& folder) { settings->setValue (Keys::backupFolder, folder.trim()); }

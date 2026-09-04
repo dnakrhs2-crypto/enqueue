@@ -1,5 +1,6 @@
 #include "BackupDialog.h"
 
+#include "BackupServer.h"
 #include "Widgets.h"
 
 namespace gocue::livemix
@@ -14,9 +15,9 @@ namespace
     /** The account worked: keep what the operator asked to keep - also when the window is already gone. */
     void persistAccount (LiveMixSettings& settings, const WebDavBackup::Target& target, bool remember)
     {
-        settings.setBackupUser (target.user);
+        settings.setBackupUser (target.accountId);
         settings.setBackupRememberPassword (remember);
-        settings.setBackupPassword (remember ? target.password : juce::String());
+        settings.setBackupPassword (remember ? target.accountPassword : juce::String());
     }
 
     class BackupContent : public juce::Component,
@@ -30,14 +31,14 @@ namespace
             addAndMakeVisible (idCaption);
             idEditor.setFont (bodyFont());
             idEditor.setText (settings.getBackupUser(), false);
-            idEditor.onReturnKey = [this] { refreshList(); };
+            idEditor.onReturnKey = [this] { signIn(); };
             addAndMakeVisible (idEditor);
 
             styleCaption (passwordCaption, ko ("비밀번호"));
             addAndMakeVisible (passwordCaption);
             passwordEditor.setFont (bodyFont());
             passwordEditor.setPasswordCharacter (0x2022);
-            passwordEditor.onReturnKey = [this] { refreshList(); };
+            passwordEditor.onReturnKey = [this] { signIn(); };
             addAndMakeVisible (passwordEditor);
 
             remember.setButtonText (ko ("이 PC에 기억"));
@@ -48,10 +49,17 @@ namespace
             if (remember.getToggleState())
                 passwordEditor.setText (settings.getBackupPassword(), false);
 
-            listButton.setButtonText (ko ("목록 보기"));
-            listButton.setWantsKeyboardFocus (false);
-            listButton.onClick = [this] { refreshList(); };
-            addAndMakeVisible (listButton);
+            signInButton.setButtonText (ko ("로그인"));
+            signInButton.setWantsKeyboardFocus (false);
+            signInButton.setColour (juce::TextButton::buttonColourId, Palette::accent);
+            signInButton.setColour (juce::TextButton::textColourOffId, juce::Colours::white);
+            signInButton.onClick = [this] { signIn(); };
+            addAndMakeVisible (signInButton);
+
+            createButton.setButtonText (ko ("계정 만들기"));
+            createButton.setWantsKeyboardFocus (false);
+            createButton.onClick = [this] { createAccount(); };
+            addAndMakeVisible (createButton);
 
             table.setModel (this);
             table.setHeaderHeight (28);
@@ -66,19 +74,13 @@ namespace
             header.setColour (juce::TableHeaderComponent::highlightColourId, Palette::card2);
             const int columnFlags = juce::TableHeaderComponent::visible | juce::TableHeaderComponent::resizable;
             header.addColumn (ko ("계정"), columnOwner, 120, 60, 300, columnFlags);
-            header.addColumn ("PC", columnPc, 140, 60, 400, columnFlags);
-            header.addColumn (ko ("파일"), columnName, 300, 120, 800, columnFlags);
+            header.addColumn ("PC", columnPc, 150, 60, 400, columnFlags);
+            header.addColumn (ko ("파일"), columnName, 280, 120, 800, columnFlags);
             header.addColumn (ko ("날짜"), columnDate, 140, 100, 200, columnFlags);
             header.addColumn (ko ("크기"), columnSize, 80, 50, 120, columnFlags);
             header.setStretchToFitActive (true);
             header.setColumnVisible (columnOwner, false);
             addAndMakeVisible (table);
-
-            styleCaption (creatorCaption, ko ("크리에이터 이름"));
-            addAndMakeVisible (creatorCaption);
-            creatorEditor.setFont (bodyFont());
-            creatorEditor.setText (settings.getBackupCreator(), false);
-            addAndMakeVisible (creatorEditor);
 
             uploadButton.setButtonText (ko ("지금 세션 백업"));
             uploadButton.setWantsKeyboardFocus (false);
@@ -93,17 +95,24 @@ namespace
             restoreButton.onClick = [this] { restoreSelected(); };
             addAndMakeVisible (restoreButton);
 
+            styleCaption (hint, ko ("백업은 로그인한 계정의 것만 보이고, 올리기와 불러오기도 그 계정의 아이디·비밀번호로만 됩니다. 처음이면 아이디와 비밀번호를 정해 '계정 만들기'를 누르세요."));
+            hint.setFont (bodyFont (12.5f));
+            hint.setMinimumHorizontalScale (1.0f);
+            addAndMakeVisible (hint);
+
             statusLabel.setFont (bodyFont (13.0f));
             statusLabel.setColour (juce::Label::textColourId, Palette::dimText);
             statusLabel.setMinimumHorizontalScale (1.0f);
             addAndMakeVisible (statusLabel);
 
-            setSize (820, 560);
+            setSize (820, 580);
 
-            if (idEditor.getText().trim().isNotEmpty() && passwordEditor.getText().isNotEmpty())
-                refreshList();   // a remembered account: the list comes up at once
+            if (! BackupServer::isConfigured())
+                setStatus (ko ("이 프로그램에는 백업 서버가 설정되어 있지 않습니다"), true);
+            else if (idEditor.getText().trim().isNotEmpty() && passwordEditor.getText().isNotEmpty())
+                signIn();   // a remembered account: the list comes up at once
             else
-                setStatus (ko ("아이디와 비밀번호를 넣고 목록 보기를 누르세요"), false);
+                setStatus (ko ("아이디와 비밀번호를 넣고 로그인을 누르세요"), false);
         }
 
         void resized() override
@@ -111,15 +120,19 @@ namespace
             auto area = getLocalBounds().reduced (20, 16);
             auto row = area.removeFromTop (30);
             idCaption.setBounds (row.removeFromLeft (52));
-            idEditor.setBounds (row.removeFromLeft (170));
-            row.removeFromLeft (14);
+            idEditor.setBounds (row.removeFromLeft (150));
+            row.removeFromLeft (12);
             passwordCaption.setBounds (row.removeFromLeft (64));
-            passwordEditor.setBounds (row.removeFromLeft (170));
-            row.removeFromLeft (14);
-            listButton.setBounds (row.removeFromRight (100));
+            passwordEditor.setBounds (row.removeFromLeft (150));
+            row.removeFromLeft (12);
+            createButton.setBounds (row.removeFromRight (100));
             row.removeFromRight (8);
-            remember.setBounds (row.removeFromLeft (juce::jmin (140, row.getWidth())));
-            area.removeFromTop (12);
+            signInButton.setBounds (row.removeFromRight (90));
+            row.removeFromRight (8);
+            remember.setBounds (row.removeFromLeft (juce::jmin (130, juce::jmax (0, row.getWidth()))));
+            area.removeFromTop (6);
+            hint.setBounds (area.removeFromTop (34));
+            area.removeFromTop (8);
 
             auto bottom = area.removeFromBottom (30);
             statusLabel.setBounds (bottom);
@@ -128,9 +141,6 @@ namespace
             restoreButton.setBounds (row.removeFromRight (190));
             row.removeFromRight (14);
             uploadButton.setBounds (row.removeFromRight (150));
-            row.removeFromRight (8);
-            creatorCaption.setBounds (row.removeFromLeft (110));
-            creatorEditor.setBounds (row.removeFromLeft (juce::jmax (100, juce::jmin (220, row.getWidth()))));
             area.removeFromBottom (12);
 
             table.setBounds (area);
@@ -143,31 +153,32 @@ namespace
 
         WebDavBackup::Target currentTarget() const
         {
-            WebDavBackup::Target target;
-            target.baseUrl = settings.getBackupUrl();
-            target.folder = settings.getBackupFolder();
-            target.user = idEditor.getText().trim();
-            target.password = passwordEditor.getText();
-            return target;
+            return BackupServer::target (idEditor.getText(), passwordEditor.getText());
         }
 
-        bool checkReady()
+        bool checkReady (bool creating = false)
         {
+            if (! BackupServer::isConfigured())
+            {
+                setStatus (ko ("이 프로그램에는 백업 서버가 설정되어 있지 않습니다"), true);
+                return false;
+            }
+
             if (backup.isBusy())
             {
                 setStatus (ko ("앞의 작업이 끝날 때까지 기다리세요"), true);
                 return false;
             }
 
-            if (const auto bad = WebDavBackup::validateBaseUrl (settings.getBackupUrl()); bad.isNotEmpty())
+            if (const auto bad = WebDavBackup::validateAccountId (idEditor.getText()); bad.isNotEmpty())
             {
-                setStatus (bad + ko (" - 설정에서 주소를 고치세요"), true);
+                setStatus (bad, true);
                 return false;
             }
 
-            if (idEditor.getText().trim().isEmpty() || passwordEditor.getText().isEmpty())
+            if (passwordEditor.getText().isEmpty() || (creating && passwordEditor.getText().length() < 4))
             {
-                setStatus (ko ("아이디와 비밀번호를 넣으세요"), true);
+                setStatus (creating ? ko ("비밀번호는 4자 이상으로 정하세요") : ko ("비밀번호를 넣으세요"), true);
                 return false;
             }
 
@@ -176,7 +187,8 @@ namespace
 
         void setBusy (bool busy)
         {
-            listButton.setEnabled (! busy);
+            signInButton.setEnabled (! busy);
+            createButton.setEnabled (! busy);
             uploadButton.setEnabled (! busy);
             restoreButton.setEnabled (! busy && table.getSelectedRow() >= 0);
             idEditor.setEnabled (! busy);
@@ -189,7 +201,43 @@ namespace
             statusLabel.setText (text, juce::dontSendNotification);
         }
 
-        void refreshList()
+        /** Runs 'next' once the worker thread is really idle. A job's result is posted from inside its run(), so
+            the thread can still count as running for a moment; the controls stay busy meanwhile. */
+        void whenIdle (std::function<void()> next, int attempt = 0)
+        {
+            if (! backup.isBusy())
+            {
+                next();
+                return;
+            }
+
+            if (attempt > 200)   // ~6 s: something is wrong, give the controls back
+            {
+                setBusy (false);
+                setStatus (ko ("앞의 작업이 끝나지 않았습니다. 잠시 후 다시 시도하세요."), true);
+                return;
+            }
+
+            juce::Component::SafePointer<BackupContent> safe (this);
+            juce::Timer::callAfterDelay (30, [safe, next, attempt]
+            {
+                if (safe != nullptr)
+                    safe->whenIdle (next, attempt + 1);
+            });
+        }
+
+        void showEntries (std::vector<WebDavBackup::Entry> found, bool everyone)
+        {
+            entries = std::move (found);
+            everyoneMode = everyone;
+            table.getHeader().setColumnVisible (columnOwner, everyone);
+            table.deselectAllRows();
+            table.updateContent();
+            table.repaint();
+            restoreButton.setEnabled (false);
+        }
+
+        void signIn()
         {
             if (! checkReady())
                 return;
@@ -198,13 +246,22 @@ namespace
             juce::Component::SafePointer<BackupContent> safe (this);
             auto* prefs = &settings;   // outlives every window (the application's)
             const bool keep = remember.getToggleState();
-            const auto started = backup.startList (target, [safe, target, prefs, keep] (bool ok, const juce::String& message, std::vector<WebDavBackup::Entry> found, bool everyone)
+            const auto started = backup.signIn (target, [safe, target, prefs, keep] (bool ok, const juce::String& message, std::vector<WebDavBackup::Entry> found, bool everyone)
             {
                 if (ok)
                     persistAccount (*prefs, target, keep);
 
-                if (safe != nullptr)
-                    safe->listFinished (ok, message, std::move (found), everyone);
+                if (safe == nullptr)
+                    return;
+
+                safe->setBusy (false);
+
+                if (ok)
+                    safe->showEntries (std::move (found), everyone);
+                else
+                    safe->showEntries ({}, false);
+
+                safe->setStatus (message, ! ok);
             });
 
             if (started.failed())
@@ -214,30 +271,46 @@ namespace
             }
 
             setBusy (true);
-            setStatus (ko ("목록 가져오는 중..."), false);
+            setStatus (ko ("로그인 중..."), false);
         }
 
-        void listFinished (bool ok, const juce::String& message, std::vector<WebDavBackup::Entry> found, bool everyone)
+        void createAccount()
         {
-            setBusy (false);
+            if (! checkReady (true))
+                return;
 
-            if (! ok)
+            const auto target = currentTarget();
+            juce::Component::SafePointer<BackupContent> safe (this);
+            auto status = callbacks.status;
+            auto* prefs = &settings;
+            const bool keep = remember.getToggleState();
+            const auto started = backup.createAccount (target, [safe, target, status, prefs, keep] (bool ok, const juce::String& message)
             {
-                entries.clear();
-                table.updateContent();
-                table.repaint();
-                restoreButton.setEnabled (false);
-                setStatus (message, true);
+                if (ok)
+                    persistAccount (*prefs, target, keep);   // the account exists: remembered even when the window is gone
+
+                if (status)
+                    status (message, ! ok);
+
+                if (safe == nullptr)
+                    return;
+
+                safe->setStatus (message, ! ok);
+
+                if (ok)
+                    safe->whenIdle ([safe] { if (safe != nullptr) safe->signIn(); });   // and straight in
+                else
+                    safe->setBusy (false);
+            });
+
+            if (started.failed())
+            {
+                setStatus (started.getErrorMessage(), true);
                 return;
             }
 
-            entries = std::move (found);
-            table.getHeader().setColumnVisible (columnOwner, everyone);
-            table.deselectAllRows();
-            table.updateContent();
-            table.repaint();
-            restoreButton.setEnabled (false);
-            setStatus (message, false);
+            setBusy (true);
+            setStatus (ko ("계정 만드는 중..."), false);
         }
 
         void upload()
@@ -245,23 +318,14 @@ namespace
             if (! checkReady())
                 return;
 
-            const auto creator = creatorEditor.getText().trim();
-
-            if (creator.isEmpty())
-            {
-                setStatus (ko ("크리에이터 이름을 넣으세요"), true);
-                return;
-            }
-
             if (! callbacks.saveBeforeUpload || ! callbacks.saveBeforeUpload())
             {
                 setStatus (ko ("먼저 세션을 저장하세요 (세션 > 저장)"), true);
                 return;
             }
 
-            settings.setBackupCreator (creator);
             const auto target = currentTarget();
-            const auto remotePath = WebDavBackup::remotePathFor (WebDavBackup::homeFolder (target.folder), juce::SystemStats::getComputerName(), creator, juce::Time::getCurrentTime());
+            const auto remotePath = WebDavBackup::backupPathFor (target.share, target.accountId, juce::SystemStats::getComputerName(), juce::Time::getCurrentTime());
             juce::Component::SafePointer<BackupContent> safe (this);
             auto status = callbacks.status;
             auto* prefs = &settings;
@@ -277,11 +341,12 @@ namespace
                 if (safe == nullptr)
                     return;
 
-                safe->setBusy (false);
                 safe->setStatus (message, ! ok);
 
-                if (ok)   // the new backup in the list - once the worker thread is fully gone (its result arrives from inside run())
-                    juce::Timer::callAfterDelay (80, [safe] { if (safe != nullptr) safe->refreshList(); });
+                if (ok)
+                    safe->whenIdle ([safe] { if (safe != nullptr) safe->signIn(); });   // the new backup in the list
+                else
+                    safe->setBusy (false);
             });
 
             if (started.failed())
@@ -291,7 +356,7 @@ namespace
             }
 
             setBusy (true);
-            setStatus (ko ("백업 중... ") + remotePath, false);
+            setStatus (ko ("백업 중... ") + remotePath.fromLastOccurrenceOf ("/", false, false), false);
         }
 
         void restoreSelected()
@@ -310,7 +375,8 @@ namespace
             const auto entry = entries[(size_t) row];
             auto folder = juce::File::getSpecialLocation (juce::File::userDocumentsDirectory).getChildFile ("LiveMix");
             folder.createDirectory();
-            auto file = folder.getChildFile (WebDavBackup::sanitiseName (entry.name));
+            const auto localName = (everyoneMode && entry.owner != idEditor.getText().trim() ? entry.owner + "_" : juce::String()) + entry.name;
+            auto file = folder.getChildFile (WebDavBackup::sanitiseName (localName));
 
             if (file.existsAsFile())
                 file = file.getNonexistentSibling();   // an earlier restore of the same backup keeps its file
@@ -424,11 +490,12 @@ namespace
         WebDavBackup& backup;
         BackupDialog::Callbacks callbacks;
         std::vector<WebDavBackup::Entry> entries;
+        bool everyoneMode = false;
 
-        juce::Label idCaption, passwordCaption, creatorCaption, statusLabel;
-        juce::TextEditor idEditor, passwordEditor, creatorEditor;
+        juce::Label idCaption, passwordCaption, hint, statusLabel;
+        juce::TextEditor idEditor, passwordEditor;
         juce::ToggleButton remember;
-        juce::TextButton listButton, uploadButton, restoreButton;
+        juce::TextButton signInButton, createButton, uploadButton, restoreButton;
         juce::TableListBox table;
 
         JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (BackupContent)
@@ -441,7 +508,7 @@ namespace
         {
             setUsingNativeTitleBar (true);
             setResizable (true, false);
-            setResizeLimits (680, 420, 3000, 2000);
+            setResizeLimits (700, 440, 3000, 2000);
         }
 
         void closeButtonPressed() override

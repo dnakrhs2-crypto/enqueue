@@ -14,14 +14,55 @@ public:
 
     void runTest() override
     {
-        beginTest ("the remote path is folder/PC/creator_date.livemix with file-safe names");
+        beginTest ("LiveMix accounts: ids, password hashes, the account file, the paths on the share");
         {
-            const juce::Time when (2026, 8, 4, 1, 2, 3, 0, true);   // 2026-09-04 01:02:03
-            const auto path = WebDavBackup::remotePathFor (juce::String::fromUTF8 ("/LiveMix 백업/"), "STUDIO-PC", juce::String::fromUTF8 ("곰: 테스트?"), when);
-            expectEquals (path, juce::String::fromUTF8 ("/LiveMix 백업/STUDIO-PC/곰_ 테스트__2026-09-04_010203.livemix"));
+            expect (WebDavBackup::validateAccountId ("alice").isEmpty());
+            expect (WebDavBackup::validateAccountId (juce::String::fromUTF8 (" 가을_01 ")).isEmpty());
+            expect (WebDavBackup::validateAccountId ("a").isNotEmpty());                      // too short
+            expect (WebDavBackup::validateAccountId ("abcdefghijklmnopqrstu").isNotEmpty());  // too long
+            expect (WebDavBackup::validateAccountId ("a b").isNotEmpty());                    // a space
+            expect (WebDavBackup::validateAccountId ("a/b").isNotEmpty());                    // a path character
+            expect (WebDavBackup::validateAccountId ("accounts").isNotEmpty());               // the accounts folder's name
+            expect (WebDavBackup::validateAccountId ("-x").isNotEmpty());
 
-            const auto noSlash = WebDavBackup::remotePathFor ("backups", "pc", "a", when);
-            expect (noSlash.startsWith ("/backups/pc/a_"));
+            const auto salt = WebDavBackup::newSalt();
+            expect (salt.length() >= 32 && salt != WebDavBackup::newSalt());
+            const auto hash = WebDavBackup::hashPassword ("secret", salt);
+            expectEquals (hash.length(), 64);
+            expect (hash.containsOnly ("0123456789abcdef"));
+            expectEquals (hash, WebDavBackup::hashPassword ("secret", salt));       // the same again
+            expect (hash != WebDavBackup::hashPassword ("Secret", salt));          // the password matters
+            expect (hash != WebDavBackup::hashPassword ("secret", salt + "x"));    // the salt matters
+
+            const auto json = WebDavBackup::accountJson ("alice", salt, hash, "STUDIO-PC", juce::Time (2026, 8, 4, 15, 30, 0, 0, true));
+            juce::String salt2, hash2;
+            expect (WebDavBackup::parseAccount (json, salt2, hash2));
+            expectEquals (salt2, salt);
+            expectEquals (hash2, hash);
+            expect (! WebDavBackup::parseAccount ("{\"id\": \"alice\"}", salt2, hash2));   // no hash
+            expect (! WebDavBackup::parseAccount ("not json", salt2, hash2));
+            expect (! WebDavBackup::parseAccount ("[]", salt2, hash2));
+
+            expectEquals (WebDavBackup::parseAdminList ("alice\n# a comment\n\n  bob  \n").joinIntoString (","), juce::String ("alice,bob"));
+            expect (WebDavBackup::parseAdminList ("").isEmpty());
+
+            expectEquals (WebDavBackup::accountsFolder ("/backups/"), juce::String ("/backups/accounts"));
+            expectEquals (WebDavBackup::accountPath ("backups", " alice "), juce::String ("/backups/accounts/alice.json"));
+            expectEquals (WebDavBackup::adminListPath ("/backups"), juce::String ("/backups/accounts/admins.txt"));
+            expectEquals (WebDavBackup::accountFolder ("/backups", "alice"), juce::String ("/backups/alice"));
+            expectEquals (WebDavBackup::backupPathFor ("/backups", "alice", "STUDIO:PC", juce::Time (2026, 8, 4, 15, 30, 0, 0, true)),
+                          juce::String ("/backups/alice/STUDIO_PC_2026-09-04_153000.livemix"));
+
+            // a backup path is exactly <share>/<owner>/<file>.livemix - nothing a server could resolve elsewhere
+            juce::String owner;
+            expect (WebDavBackup::parseBackupPath ("/backups", "/backups/alice/STUDIO_PC_2026-09-04_153000.livemix", owner) && owner == "alice");
+            expect (! WebDavBackup::parseBackupPath ("/backups", "/backups/alice/../bob/x.livemix", owner));     // a dot segment
+            expect (! WebDavBackup::parseBackupPath ("/backups", "/backups/alice//x.livemix", owner));           // an empty segment
+            expect (! WebDavBackup::parseBackupPath ("/backups", "/backups/alice/sub/x.livemix", owner));        // too deep
+            expect (! WebDavBackup::parseBackupPath ("/backups", "/backups/alice/x.txt", owner));                // not a session
+            expect (! WebDavBackup::parseBackupPath ("/backups", "/backups/accounts/x.livemix", owner));         // the accounts folder
+            expect (! WebDavBackup::parseBackupPath ("/backups", "/other/alice/x.livemix", owner));              // another share
+            expect (! WebDavBackup::parseBackupPath ("/backups", "/backupsX/alice/x.livemix", owner));           // a share that is a prefix
             expectEquals (WebDavBackup::sanitiseName ("  "), juce::String ("session"));
             expectEquals (WebDavBackup::sanitiseName ("a/b\\c|d"), juce::String ("a_b_c_d"));
         }
@@ -58,18 +99,6 @@ public:
 
             expectEquals (WebDavBackup::credentialKeyFor ("https://Parkdoomin.synology.me:5006/", " gom "), juce::String ("LiveMix/WebDAV/parkdoomin.synology.me:5006/gom"));
             expect (WebDavBackup::credentialKeyFor ("https://a.example:5006", "gom") != WebDavBackup::credentialKeyFor ("https://b.example:5006", "gom"));
-        }
-
-        beginTest ("every account keeps its backups in its own home folder; an administrator reads the others' homes");
-        {
-            expectEquals (WebDavBackup::homeFolder (juce::String::fromUTF8 ("/LiveMix 백업")), juce::String::fromUTF8 ("/home/LiveMix 백업"));
-            expectEquals (WebDavBackup::homeFolder (juce::String::fromUTF8 (" LiveMix 백업/ ")), juce::String::fromUTF8 ("/home/LiveMix 백업"));
-            expectEquals (WebDavBackup::homeFolderOf ("fkvmfls", "/backups"), juce::String ("/homes/fkvmfls/backups"));
-            expectEquals (WebDavBackup::homeFolder (""), juce::String ("/home"));    // no folder: the home itself, never "/home//"
-            expectEquals (WebDavBackup::homeFolder (" / "), juce::String ("/home"));
-            expectEquals (WebDavBackup::remotePathFor ("", "PC", "a", juce::Time (2026, 8, 4, 15, 30, 0, 0, false)).upToLastOccurrenceOf ("/", true, false), juce::String ("/PC/"));
-            expectEquals (WebDavBackup::remotePathFor (WebDavBackup::homeFolder ("/b"), "PC", "a", juce::Time (2026, 8, 4, 15, 30, 0, 0, false)).upToLastOccurrenceOf ("/", true, false),
-                          juce::String ("/home/b/PC/"));
         }
 
         beginTest ("the WebDAV date form parses to UTC");

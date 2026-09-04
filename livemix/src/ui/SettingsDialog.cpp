@@ -59,25 +59,14 @@ namespace
             autosaveEditor.onReturnKey = [this] { settings.setAutosaveSeconds (autosaveEditor.getText().getIntValue()); };
             addAndMakeVisible (autosaveEditor);
 
-            styleCaption (backupCaption, ko ("온라인 백업 (WebDAV)"));
+            styleCaption (backupCaption, ko ("온라인 백업"));
             addAndMakeVisible (backupCaption);
-            auto field = [this] (juce::Label& label, juce::TextEditor& editor, const juce::String& caption, const juce::String& value, std::function<void (const juce::String&)> apply)
-            {
-                styleCaption (label, caption);
-                addAndMakeVisible (label);
-                editor.setText (value);
-                editor.onFocusLost = [&editor, apply] { apply (editor.getText()); };
-                editor.onReturnKey = [&editor, apply] { apply (editor.getText()); };
-                addAndMakeVisible (editor);
-            };
-            field (urlLabel, urlEditor, ko ("주소 (https://서버:포트)"), settings.getBackupUrl(), [this] (const juce::String& v) { settings.setBackupUrl (v); });
-            field (folderLabel, folderEditor, ko ("폴더"), settings.getBackupFolder(), [this] (const juce::String& v) { settings.setBackupFolder (v); });
-            styleCaption (backupNote, ko ("시놀로지: WebDAV Server 패키지의 HTTPS 포트(기본 5006). 아이디와 비밀번호는 백업 창에서 넣습니다. 백업 파일은 그 계정의 홈 폴더 안 폴더/PC이름/크리에이터_날짜시간.livemix"));
+            styleCaption (backupNote, ko ("위쪽 '온라인 백업' 버튼의 창에서 계정을 만들고 로그인합니다. 백업은 그 계정의 것만 보이고, 올리기·불러오기도 그 계정으로만 됩니다."));
             backupNote.setFont (bodyFont (12.5f));
             addAndMakeVisible (backupNote);
 
             refreshDevices();
-            setSize (560, 620);
+            setSize (560, 540);
         }
 
         void refreshDevices()
@@ -170,15 +159,6 @@ namespace
             autosaveEditor.setBounds (row.removeFromLeft (70));
             area.removeFromTop (16);
             backupCaption.setBounds (area.removeFromTop (20));
-            auto twoCol = [&area] (juce::Label& l, juce::TextEditor& e)
-            {
-                auto r = area.removeFromTop (30);
-                l.setBounds (r.removeFromLeft (150));
-                e.setBounds (r);
-                area.removeFromTop (6);
-            };
-            twoCol (urlLabel, urlEditor);
-            twoCol (folderLabel, folderEditor);
             backupNote.setBounds (area.removeFromTop (56));
         }
 
@@ -189,11 +169,11 @@ namespace
         LiveMixSettings& settings;
         std::function<void()> onDeviceChanged;
         juce::StringArray names;
-        juce::Label deviceCaption, bufferCaption, deviceNote, autosaveCaption, backupCaption, urlLabel, folderLabel, backupNote;
+        juce::Label deviceCaption, bufferCaption, deviceNote, autosaveCaption, backupCaption, backupNote;
         juce::ComboBox deviceCombo, bufferCombo;
         juce::TextButton panelButton;
         juce::ToggleButton minimiseToTray, closeToTray, startWithWindows;
-        juce::TextEditor autosaveEditor, urlEditor, folderEditor;
+        juce::TextEditor autosaveEditor;
         bool refreshing = false;
     };
 

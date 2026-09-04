@@ -111,6 +111,7 @@ target_link_libraries(GoCueCore INTERFACE
     juce::juce_audio_processors
     juce::juce_audio_utils
     juce::juce_core
+    juce::juce_cryptography
     juce::juce_data_structures
     juce::juce_events
     juce::juce_graphics
@@ -210,8 +211,31 @@ target_include_directories(LiveMixCore INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/liv
 target_link_libraries(LiveMixCore INTERFACE GoCueCore)
 target_sources(LiveMixCore INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/livemix/src/WebDavBackup.cpp)
 
-set(LIVEMIX_VERSION "0.1.3")   # LiveMix version (the Enqueue version is the project version); not a cache variable: a bump must reach existing build trees
+set(LIVEMIX_VERSION "0.1.4")   # LiveMix version (the Enqueue version is the project version); not a cache variable: a bump must reach existing build trees
 set(LIVEMIX_APPCAST_URL "" CACHE STRING "LiveMix WinSparkle appcast URL (empty disables update checks)")
+
+# The online backup's server account is built into the app from a JSON file that lives outside the repository
+# ({"url": "https://server:port", "share": "/backups", "user": ..., "password": ...}); without it the build has
+# no online backup. The password goes in as hex so it is not a plain string in the binary.
+set(LIVEMIX_BACKUP_ACCOUNT_FILE "C:/Users/claude/SDKs/gocue_release/livemix_backup.json" CACHE FILEPATH "JSON with the backup server account built into LiveMix (not in the repository)")
+set(_livemix_backup_defs "")
+if(EXISTS "${LIVEMIX_BACKUP_ACCOUNT_FILE}")
+    file(READ "${LIVEMIX_BACKUP_ACCOUNT_FILE}" _livemix_backup_json)
+    string(JSON _livemix_backup_url GET "${_livemix_backup_json}" url)
+    string(JSON _livemix_backup_share GET "${_livemix_backup_json}" share)
+    string(JSON _livemix_backup_user GET "${_livemix_backup_json}" user)
+    string(JSON _livemix_backup_password GET "${_livemix_backup_json}" password)
+    string(HEX "${_livemix_backup_password}" _livemix_backup_password_hex)
+    set(_livemix_backup_defs
+        LIVEMIX_BACKUP_URL="${_livemix_backup_url}"
+        LIVEMIX_BACKUP_SHARE="${_livemix_backup_share}"
+        LIVEMIX_BACKUP_USER="${_livemix_backup_user}"
+        LIVEMIX_BACKUP_PASSWORD_HEX="${_livemix_backup_password_hex}")
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${LIVEMIX_BACKUP_ACCOUNT_FILE}")
+    message(STATUS "LiveMix: backup server account from ${LIVEMIX_BACKUP_ACCOUNT_FILE} (${_livemix_backup_url}${_livemix_backup_share}, ${_livemix_backup_user})")
+else()
+    message(STATUS "LiveMix: no backup server account file (${LIVEMIX_BACKUP_ACCOUNT_FILE}) - the online backup is off in this build")
+endif()
 
 juce_add_gui_app(LiveMix
     PRODUCT_NAME "LiveMix"
@@ -253,7 +277,8 @@ target_compile_definitions(LiveMix PRIVATE
     JUCE_APPLICATION_VERSION_STRING="$<TARGET_PROPERTY:LiveMix,JUCE_VERSION>"
     GOCUE_HAS_WINSPARKLE=${GOCUE_HAS_WINSPARKLE}
     GOCUE_APPCAST_URL="${LIVEMIX_APPCAST_URL}"
-    GOCUE_EDDSA_PUBLIC_KEY="${GOCUE_EDDSA_PUBLIC_KEY}")
+    GOCUE_EDDSA_PUBLIC_KEY="${GOCUE_EDDSA_PUBLIC_KEY}"
+    ${_livemix_backup_defs})
 target_link_libraries(LiveMix PRIVATE LiveMixCore)
 set_property(TARGET LiveMix PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 
