@@ -50,7 +50,7 @@ namespace
                 settings.setStartWithWindows (on);
                 SettingsDialog::setStartWithWindows (on);
             });
-            toggle (skipWhenOff, ko ("OFF인 마이크는 플러그인 계산도 멈춤 (CPU 절약. 켤 때 딜레이·리버브 같은 플러그인은 잠깐 옛 소리가 날 수 있음)"), settings.getSkipPluginsWhenOff(), [this] (bool on)
+            toggle (skipWhenOff, ko ("OFF시 플러그인 OFF"), settings.getSkipPluginsWhenOff(), [this] (bool on)
             {
                 settings.setSkipPluginsWhenOff (on);
                 engine.setSkipChainWhenOff (on);
