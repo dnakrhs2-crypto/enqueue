@@ -11,16 +11,21 @@
 <script defer src="https://static.cloudflareinsights.com/beacon.min.js" data-cf-beacon='{"token": "__CF_BEACON_TOKEN__"}'></script>
 </head>
 <body>
+<div class="apps">
+  <div class="wrap apps-bar">
+    <span class="company">곰튀김</span>
+    <a class="app active" href="./" aria-current="page"><img src="assets/icon.png" alt="" width="28" height="28"><span>Enqueue<small>앤큐 · 쇼 큐 플레이어</small></span></a>
+    <a class="app" href="livemix/"><img src="livemix/assets/icon.png" alt="" width="28" height="28"><span>LiveMix<small>라이브믹스 · 라이브 마이크 VST3 호스트</small></span></a>
+  </div>
+</div>
 <header class="wrap top">
   <a class="brand" href="./"><img src="assets/icon.png" alt="" width="36" height="36">Enqueue</a>
   <nav class="nav">
-    <a href="#programs">프로그램</a>
     <a href="#features">기능</a>
     <a href="#requirements">요구 사항</a>
     <a href="notes.html">바뀐 점</a>
     <a href="#beta">베타 참여</a>
     <a href="https://github.com/dnakrhs2-crypto/enqueue/releases">GitHub</a>
-    <a href="livemix/" class="tab">LiveMix</a>
   </nav>
 </header>
 
@@ -38,20 +43,6 @@
       <p class="notice">설치 파일에 아직 코드 서명이 없어서 Windows가 "알 수 없는 게시자" 경고를 띄울 수 있습니다. 경고 창에서 <b>추가 정보</b> → <b>실행</b>을 누르면 설치가 진행됩니다.</p>
     </div>
     <figure class="shot"><img src="assets/screenshot.png" alt="앤큐 화면: 왼쪽 위 GO 버튼, 다음 큐 정보, 큐 리스트(그룹·파일·프리웨이트·길이), 오른쪽 활성 큐 패널" width="1260" height="449"></figure>
-  </section>
-
-  <section id="programs">
-    <h2>곰튀김의 프로그램</h2>
-    <div class="grid">
-      <a class="card program" href="./">
-        <img src="assets/icon.png" alt="" width="44" height="44">
-        <div><h3>Enqueue · 앤큐</h3><p>Windows용 쇼 큐 플레이어. 공연·행사에서 큐 순서대로 소리를 냅니다.</p><span class="more" id="enqueue-more">이 페이지</span></div>
-      </a>
-      <a class="card program" href="livemix/">
-        <img src="livemix/assets/icon.png" alt="" width="44" height="44">
-        <div><h3>LiveMix · 라이브믹스</h3><p>방송용 라이브 마이크 VST3 호스트. DAW 없이 ASIO 인터페이스의 마이크에 플러그인을 걸어 방송에 씁니다.</p><span class="more" id="livemix-more">LiveMix 페이지 · 다운로드 →</span></div>
-      </a>
-    </div>
   </section>
 
   <section id="features">
@@ -100,14 +91,6 @@
 
 <script>
 (function () {
-  // the LiveMix card shows the version its own latest.json carries
-  fetch('livemix/latest.json', { cache: 'no-cache' })
-    .then(function (r) { return r.ok ? r.json() : null; })
-    .then(function (info) {
-      if (info && info.version)
-        document.getElementById('livemix-more').textContent = 'LiveMix ' + info.version + ' 페이지 · 다운로드 →';
-    })
-    .catch(function () {});
   // latest.json is written by tools/release.py at every release: exact installer URL, size and date.
   fetch('latest.json?rev=__SITE_REV__', { cache: 'no-cache' })
     .then(function (r) { return r.ok ? r.json() : null; })
