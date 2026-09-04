@@ -157,3 +157,8 @@ footer .links { display: flex; flex-wrap: wrap; gap: 16px; margin-top: 6px; }
 @media (max-width: 640px) {
   .apps .app small { display: none; }   /* after the .apps rules: the same specificity, the later one wins */
 }
+
+/* the feature list as gom wrote it: plain lines, nothing else */
+.plain { padding-left: 1.2em; margin: 0; font-size: 16px; }
+.plain li { margin: 6px 0; }
+.price { margin: 16px 0 0; font-weight: 600; font-size: 16px; }
