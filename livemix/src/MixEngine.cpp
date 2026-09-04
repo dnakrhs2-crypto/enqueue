@@ -333,6 +333,27 @@ void MixEngine::renderBlock (const float* const* inputs, int numInputs, float* c
                 chBuf.copyFrom (1, 0, chBuf, 0, 0, n);
             }
 
+            // mic ON/OFF: a short linear ramp (applied below, to the sends as well). Worked out first: a mic that is
+            // fully off skips its chain when asked to - no plugin CPU for a mic nobody hears, like an archived track
+            const float target = node->on.load (std::memory_order_relaxed) ? 1.0f : 0.0f;
+            const float start = node->onGain;
+            float end = start;
+
+            if (! juce::approximatelyEqual (start, target))
+            {
+                const float step = rampStepPerSample * (float) n;
+                end = start < target ? juce::jmin (target, start + step) : juce::jmax (target, start - step);
+            }
+
+            node->onGain = end;
+            const bool fullyOff = start <= 0.0f && end <= 0.0f;
+
+            if (fullyOff && skipChainWhenOff.load (std::memory_order_relaxed))
+            {
+                node->meter.push (chBuf.getMagnitude (0, 0, n), chBuf.getMagnitude (1, 0, n));   // the mic itself: it is alive
+                continue;
+            }
+
             // the sends, read once per block: the pre tap and the routing below see the same amounts and pre / post flags
             float sendAmount[(size_t) maxFx] = {};
             bool sendPre[(size_t) maxFx] = {};
@@ -354,21 +375,8 @@ void MixEngine::renderBlock (const float* const* inputs, int numInputs, float* c
             node->chain->process (chBuf, n);
             node->meter.push (chBuf.getMagnitude (0, 0, n), chBuf.getMagnitude (1, 0, n));   // what the chain delivers, before the switch
 
-            // mic ON/OFF: a short linear ramp, applied to the sends as well
-            const float target = node->on.load (std::memory_order_relaxed) ? 1.0f : 0.0f;
-            const float start = node->onGain;
-            float end = start;
-
-            if (! juce::approximatelyEqual (start, target))
-            {
-                const float step = rampStepPerSample * (float) n;
-                end = start < target ? juce::jmin (target, start + step) : juce::jmax (target, start - step);
-            }
-
-            node->onGain = end;
-
-            if (start <= 0.0f && end <= 0.0f)
-                continue;   // off: nothing reaches the buses, the sends included
+            if (fullyOff)
+                continue;   // off (the chain kept running, as asked): nothing reaches the buses, the sends included
 
             if (! juce::approximatelyEqual (start, 1.0f) || ! juce::approximatelyEqual (end, 1.0f))
             {

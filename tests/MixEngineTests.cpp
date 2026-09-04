@@ -90,9 +90,12 @@ public:
             expectWithinAbsoluteError (io.last (0), 0.5f, 1e-6f);
         }
 
+        TestGainPlugin* chainGain = nullptr;   // channel A's plugin, kept for the OFF test below
+
         beginTest ("sends: post takes the chain's output, pre the raw input; OFF cuts the send; the return amount scales it");
         {
             auto* gain = new TestGainPlugin (0.5f);
+            chainGain = gain;
             engine.getChannelChain (s.channels[0].id)->addPlugin (std::unique_ptr<juce::AudioPluginInstance> (gain));
             render (engine, io, 2);
             expectWithinAbsoluteError (io.last (0), 0.25f, 1e-6f);   // A through its chain
@@ -119,6 +122,37 @@ public:
             engine.setFxReturn (s.fx[0].id, 1.0);
             render (engine, io, 3);
             expectWithinAbsoluteError (io.last (0), 0.25f, 1e-6f);
+        }
+
+        beginTest ("a mic that is OFF skips its plugins when asked to (no CPU), keeps the mic meter alive, and runs them again when ON");
+        {
+            expect (chainGain != nullptr);
+            expect (engine.getSkipChainWhenOff());   // the default
+            render (engine, io);
+            const int whileOn = chainGain->processCount;
+            render (engine, io, 2);
+            expectEquals (chainGain->processCount, whileOn + 2);   // on: every block
+
+            engine.setChannelOn (s.channels[0].id, false);
+            render (engine, io, 2);   // the ramp-down block still runs the chain; then the mic is fully off
+            const int afterOff = chainGain->processCount;
+            (void) engine.readChannelMeter (s.channels[0].id);
+            render (engine, io, 3);
+            expectEquals (chainGain->processCount, afterOff);   // off: not one call
+            expectWithinAbsoluteError (io.last (0), 0.0f, 1e-6f);
+            expectGreaterThan (engine.readChannelMeter (s.channels[0].id).left, 0.4f);   // the meter shows the mic itself (0.5)
+
+            engine.setSkipChainWhenOff (false);
+            render (engine, io, 2);
+            expectEquals (chainGain->processCount, afterOff + 2);   // not asked to skip: the chain keeps running while off
+            expectWithinAbsoluteError (io.last (0), 0.0f, 1e-6f);
+            engine.setSkipChainWhenOff (true);
+
+            engine.setChannelOn (s.channels[0].id, true);
+            const int beforeOn = chainGain->processCount;
+            render (engine, io, 2);
+            expectEquals (chainGain->processCount, beforeOn + 2);   // on again: every block
+            expectWithinAbsoluteError (io.last (0), 0.25f, 1e-6f);  // back through the chain (0.5 * 0.5)
         }
 
         beginTest ("the FX channel can go to a direct pair instead of the master; the master chain shapes the main outputs");

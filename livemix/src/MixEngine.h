@@ -61,6 +61,11 @@ public:
     double getLatencyMs() const;
     /** Share of the block time the last callbacks needed (0..1+, smoothed). */
     double getDspLoad() const noexcept { return dspLoad.load (std::memory_order_relaxed); }
+    /** A mic that is OFF (its ramp finished) skips its plugin chain: no CPU for it, like a DAW's archived track. The
+        plugins keep their state from before the switch, so a delay or reverb inside a mic chain can let a little of
+        the old sound out when the mic comes back on - the reason this can be turned off. */
+    void setSkipChainWhenOff (bool skip) noexcept { skipChainWhenOff.store (skip, std::memory_order_relaxed); }
+    bool getSkipChainWhenOff() const noexcept { return skipChainWhenOff.load (std::memory_order_relaxed); }
     int getXRunCount() const;
 
     /** Offline preparation (the callback does the same when the device starts). */
@@ -179,6 +184,7 @@ private:
     std::atomic<double> sampleRate { 48000.0 };
     std::atomic<int> blockSize { 256 };
     std::atomic<bool> deviceRunning { false };
+    std::atomic<bool> skipChainWhenOff { true };
     std::atomic<int> numDeviceInputs { 0 }, numDeviceOutputs { 0 };
     std::atomic<double> dspLoad { 0.0 };
     std::atomic<double> inputLatencyMs { 0.0 }, outputLatencyMs { 0.0 };

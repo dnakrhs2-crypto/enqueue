@@ -22,6 +22,7 @@ namespace Keys
     constexpr const char* closeToTray = "closeToTray";
     constexpr const char* startWithWindows = "startWithWindows";
     constexpr const char* autosaveSeconds = "autosaveSeconds";
+    constexpr const char* skipPluginsWhenOff = "skipPluginsWhenOff";
     constexpr const char* backupUrl = "backupUrl";
     constexpr const char* backupFolder = "backupFolder";
     constexpr const char* backupUser = "backupUser";
@@ -98,6 +99,8 @@ bool LiveMixSettings::getStartWithWindows() const { return settings->getBoolValu
 void LiveMixSettings::setStartWithWindows (bool on) { settings->setValue (Keys::startWithWindows, on); }
 int LiveMixSettings::getAutosaveSeconds() const { return juce::jlimit (3, 600, settings->getIntValue (Keys::autosaveSeconds, 10)); }
 void LiveMixSettings::setAutosaveSeconds (int seconds) { settings->setValue (Keys::autosaveSeconds, juce::jlimit (3, 600, seconds)); }
+bool LiveMixSettings::getSkipPluginsWhenOff() const { return settings->getBoolValue (Keys::skipPluginsWhenOff, true); }
+void LiveMixSettings::setSkipPluginsWhenOff (bool on) { settings->setValue (Keys::skipPluginsWhenOff, on); }
 
 juce::String LiveMixSettings::getBackupUrl() const { return settings->getValue (Keys::backupUrl, "https://parkdoomin.synology.me:5006"); }   // the credential key's server part (the server itself is built in)
 void LiveMixSettings::setBackupUrl (const juce::String& url) { settings->setValue (Keys::backupUrl, url.trim()); }

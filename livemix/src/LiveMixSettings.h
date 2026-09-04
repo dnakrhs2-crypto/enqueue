@@ -35,6 +35,9 @@ public:
     void setStartWithWindows (bool on);
     int getAutosaveSeconds() const;
     void setAutosaveSeconds (int seconds);
+    /** A mic that is OFF skips its plugins (see MixEngine::setSkipChainWhenOff). */
+    bool getSkipPluginsWhenOff() const;
+    void setSkipPluginsWhenOff (bool on);
 
     juce::String getBackupUrl() const;       // WebDAV base, e.g. https://parkdoomin.synology.me:5006
     void setBackupUrl (const juce::String& url);

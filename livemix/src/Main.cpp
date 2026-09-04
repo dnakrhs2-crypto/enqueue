@@ -72,6 +72,7 @@ public:
 
         settings = std::make_unique<LiveMixSettings>();
         engine = std::make_unique<MixEngine>();
+        engine->setSkipChainWhenOff (settings->getSkipPluginsWhenOff());
         auto& host = engine->getPluginHost();
         host.loadKnownPluginsFromXml (settings->getPluginList().get());
         host.onKnownPluginsChanged = [this]

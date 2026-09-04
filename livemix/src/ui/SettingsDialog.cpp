@@ -50,6 +50,11 @@ namespace
                 settings.setStartWithWindows (on);
                 SettingsDialog::setStartWithWindows (on);
             });
+            toggle (skipWhenOff, ko ("OFF인 마이크는 플러그인 계산도 멈춤 (CPU 절약. 켤 때 딜레이·리버브 같은 플러그인은 잠깐 옛 소리가 날 수 있음)"), settings.getSkipPluginsWhenOff(), [this] (bool on)
+            {
+                settings.setSkipPluginsWhenOff (on);
+                engine.setSkipChainWhenOff (on);
+            });
 
             styleCaption (autosaveCaption, ko ("자동 저장 (초)"));
             addAndMakeVisible (autosaveCaption);
@@ -66,7 +71,7 @@ namespace
             addAndMakeVisible (backupNote);
 
             refreshDevices();
-            setSize (560, 540);
+            setSize (560, 470);
         }
 
         void refreshDevices()
@@ -153,6 +158,7 @@ namespace
             minimiseToTray.setBounds (area.removeFromTop (28));
             closeToTray.setBounds (area.removeFromTop (28));
             startWithWindows.setBounds (area.removeFromTop (28));
+            skipWhenOff.setBounds (area.removeFromTop (28));
             area.removeFromTop (8);
             row = area.removeFromTop (30);
             autosaveCaption.setBounds (row.removeFromLeft (110));
@@ -172,7 +178,7 @@ namespace
         juce::Label deviceCaption, bufferCaption, deviceNote, autosaveCaption, backupCaption, backupNote;
         juce::ComboBox deviceCombo, bufferCombo;
         juce::TextButton panelButton;
-        juce::ToggleButton minimiseToTray, closeToTray, startWithWindows;
+        juce::ToggleButton minimiseToTray, closeToTray, startWithWindows, skipWhenOff;
         juce::TextEditor autosaveEditor;
         bool refreshing = false;
     };
