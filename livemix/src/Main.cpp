@@ -7,6 +7,11 @@
 
 #include <juce_gui_extra/juce_gui_extra.h>
 
+#if JUCE_WINDOWS
+ #include <windows.h>
+ #include <shellapi.h>
+#endif
+
 namespace gocue::livemix
 {
 
@@ -33,6 +38,45 @@ public:
         g.drawText ("ON", image.getBounds(), juce::Justification::centred, false);
         setIconImage (image, image);
         setIconTooltip ("LiveMix");
+        useExecutableIcon();
+    }
+
+    ~TrayIcon() override
+    {
+       #if JUCE_WINDOWS
+        if (shellIcon != nullptr)
+            DestroyIcon (shellIcon);
+       #endif
+    }
+
+    /** Windows 11's notification area draws an icon made from a bitmap in memory (JUCE's HICON) as a black square;
+        the app's own icon resource, extracted the way the shell does it, is drawn right. JUCE's tray entry is kept -
+        this only swaps its picture for the executable's small icon. */
+    void useExecutableIcon()
+    {
+       #if JUCE_WINDOWS
+        HICON smallIcon = nullptr;
+        const auto exe = juce::File::getSpecialLocation (juce::File::currentExecutableFile).getFullPathName();
+        ExtractIconExW (exe.toWideCharPointer(), 0, nullptr, &smallIcon, 1);
+
+        if (smallIcon == nullptr)
+            return;
+
+        NOTIFYICONDATA data = {};
+        data.cbSize = sizeof (data);
+        data.hWnd = (HWND) getWindowHandle();
+        data.uID = (UINT) (juce::pointer_sized_int) data.hWnd;   // the id JUCE registered the entry under
+        data.uFlags = NIF_ICON;
+        data.hIcon = smallIcon;
+
+        if (! Shell_NotifyIcon (NIM_MODIFY, &data))
+        {
+            DestroyIcon (smallIcon);
+            return;
+        }
+
+        shellIcon = smallIcon;
+       #endif
     }
 
     void mouseDown (const juce::MouseEvent& e) override
@@ -62,6 +106,9 @@ public:
 
 private:
     std::function<void (int)> menuHandler;
+   #if JUCE_WINDOWS
+    HICON shellIcon = nullptr;
+   #endif
 };
 
 class LiveMixApplication : public juce::JUCEApplication,
