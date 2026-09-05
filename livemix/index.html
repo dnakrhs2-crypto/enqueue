@@ -29,8 +29,8 @@
     </header>
 
     <section class="download-row">
-      <a class="download-button" id="download" href="https://github.com/dnakrhs2-crypto/livemix/releases/download/livemix-v0.3.0/LiveMix-Setup-0.3.0.exe">
-        <strong id="download-label">LiveMix 0.3.0 다운로드</strong>
+      <a class="download-button" id="download" href="https://github.com/dnakrhs2-crypto/livemix/releases/download/livemix-v0.3.1/LiveMix-Setup-0.3.1.exe">
+        <strong id="download-label">LiveMix 0.3.1 다운로드</strong>
         <span id="download-meta">Windows 10 / 11 (64비트)</span>
       </a>
       <dl class="requirements">
@@ -75,7 +75,7 @@
 
 <script>
 (function () {
-  fetch('latest.json?rev=0.3.0', { cache: 'no-cache' })
+  fetch('latest.json?rev=0.3.1', { cache: 'no-cache' })
     .then(function (r) { return r.ok ? r.json() : null; })
     .then(function (info) {
       if (!info || !info.url || info.url.indexOf('/releases/download/') < 0) return;
