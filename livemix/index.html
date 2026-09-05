@@ -29,8 +29,8 @@
     </header>
 
     <section class="download-row">
-      <a class="download-button" id="download" href="https://github.com/dnakrhs2-crypto/livemix/releases/download/livemix-v0.3.1/LiveMix-Setup-0.3.1.exe">
-        <strong id="download-label">LiveMix 0.3.1 다운로드</strong>
+      <a class="download-button" id="download" href="https://github.com/dnakrhs2-crypto/livemix/releases/download/livemix-v0.4.0/LiveMix-Setup-0.4.0.exe">
+        <strong id="download-label">LiveMix 0.4.0 다운로드</strong>
         <span id="download-meta">Windows 10 / 11 (64비트)</span>
       </a>
       <dl class="requirements">
@@ -52,6 +52,8 @@
         <li>FX 채널 최대 4개의 사용 가능 (프리페이더,포스트페이더 지원)</li>
         <li>라이브 방송에 최적화되어 어떤 DAW보다 가볍고 안정적인 시스템</li>
         <li>직관적인 마이크 ON/OFF 버튼과 샌드 조절 버튼</li>
+        <li>VST3 (옵션으로 VST2) 플러그인 체인, 플러그인 프리셋, 검색이 되는 플러그인 관리</li>
+        <li>마스터 출력 LUFS 미터 (ITU-R BS.1770-4 / EBU R128: 순간·단기·통합·범위·트루 피크, 목표 대비 표시)</li>
       </ul>
       <p class="cost">비용 : 완전 무료</p>
 
@@ -75,7 +77,7 @@
 
 <script>
 (function () {
-  fetch('latest.json?rev=0.3.1', { cache: 'no-cache' })
+  fetch('latest.json?rev=0.4.0', { cache: 'no-cache' })
     .then(function (r) { return r.ok ? r.json() : null; })
     .then(function (info) {
       if (!info || !info.url || info.url.indexOf('/releases/download/') < 0) return;
