@@ -1,9 +1,10 @@
 :root { color-scheme: dark; font-family: "Segoe UI", "Malgun Gothic", sans-serif; font-size: 12px; color: #e5e8ed; background: #2d2d2d; }
 body { margin: 14px; }
+[hidden] { display: none !important; }
 label { display: grid; grid-template-columns: 85px minmax(0,1fr); align-items: center; gap: 8px; margin: 14px 0; }
 input, select { min-width: 0; padding: 6px; border: 1px solid #646464; border-radius: 3px; background: #383838; color: #fff; }
 input:focus-visible, select:focus-visible { outline: 2px solid #4c8dff; }
 select:disabled { color: #bbc1cb; }
 .checkbox { grid-template-columns: 18px minmax(0,1fr); }
 .checkbox input { margin: 0; }
-#status { line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; }
+#status, #note { line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; }

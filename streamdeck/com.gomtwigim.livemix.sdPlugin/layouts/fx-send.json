@@ -1,0 +1,11 @@
+{
+  "$schema": "https://schemas.elgato.com/streamdeck/plugins/layout.json",
+  "id": "livemix-fx-send",
+  "items": [
+    { "key": "name", "type": "text", "rect": [4, 0, 192, 24], "alignment": "left", "font": { "size": 15 }, "text-overflow": "ellipsis", "value": "LiveMix" },
+    { "key": "amount", "type": "text", "rect": [4, 24, 116, 38], "alignment": "left", "font": { "size": 32, "weight": 600 }, "value": "—" },
+    { "key": "mode", "type": "text", "rect": [124, 24, 72, 38], "font": { "size": 18 }, "value": "" },
+    { "key": "level", "type": "bar", "rect": [4, 66, 192, 10], "range": { "min": 0, "max": 100 }, "value": 0, "enabled": false, "subtype": 0, "bar_bg_c": "#3A3F47", "bar_fill_c": "#4C8DFF", "border_w": 0 },
+    { "key": "status", "type": "text", "rect": [4, 80, 192, 20], "alignment": "left", "font": { "size": 13 }, "text-overflow": "ellipsis", "value": "" }
+  ]
+}

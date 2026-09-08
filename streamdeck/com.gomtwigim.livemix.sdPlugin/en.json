@@ -12,6 +12,83 @@
       }
     ]
   },
+  "com.gomtwigim.livemix.all-mics": {
+    "Name": "All Microphones",
+    "Tooltip": "Toggle all microphone switches, or turn them all on or off.",
+    "States": [
+      {
+        "Name": "All OFF"
+      },
+      {
+        "Name": "All ON"
+      }
+    ]
+  },
+  "com.gomtwigim.livemix.mic-mute-group": {
+    "Name": "Microphone Mute Group",
+    "Tooltip": "Mute or unmute the microphones assigned to LiveMix's mute group.",
+    "States": [
+      {
+        "Name": "Unmuted"
+      },
+      {
+        "Name": "Muted"
+      }
+    ]
+  },
+  "com.gomtwigim.livemix.fx-mute-group": {
+    "Name": "FX Mute Group",
+    "Tooltip": "Mute or unmute the FX assigned to LiveMix's mute group.",
+    "States": [
+      {
+        "Name": "Unmuted"
+      },
+      {
+        "Name": "Muted"
+      }
+    ]
+  },
+  "com.gomtwigim.livemix.plugin-group": {
+    "Name": "Plugin Group",
+    "Tooltip": "Toggle an existing numbered plugin group on a microphone.",
+    "States": [
+      {
+        "Name": "OFF"
+      },
+      {
+        "Name": "ON"
+      }
+    ]
+  },
+  "com.gomtwigim.livemix.fx-send": {
+    "Name": "FX Send Amount",
+    "Tooltip": "Rotate to adjust the send amount; short press and release to toggle pre/post.",
+    "States": [
+      {
+        "Name": "FX Send Amount"
+      }
+    ],
+    "Encoder": {
+      "TriggerDescription": {
+        "Push": "Short press and release: toggle pre/post (when enabled).",
+        "Rotate": "Adjust FX send amount; also while pressed.",
+        "Touch": "Display status only.",
+        "LongTouch": "Display status only."
+      }
+    }
+  },
+  "com.gomtwigim.livemix.status": {
+    "Name": "Status",
+    "Tooltip": "Display connection, session or audio status. Press to refresh state.",
+    "States": [
+      {
+        "Name": "LiveMix offline"
+      },
+      {
+        "Name": "Connected"
+      }
+    ]
+  },
   "Localization": {
     "action": "Microphone On/Off",
     "tooltip": "Toggle a LiveMix microphone or explicitly set it on or off.",
@@ -34,8 +111,59 @@
     "choose": "Select a microphone",
     "offlineHelp": "Start LiveMix and enable Settings → External control (Stream Deck).",
     "disabledHelp": "In LiveMix, enable Settings → External control (Stream Deck).",
-    "failure": "The command failed. Check the connection and selected microphone.",
+    "failure": "The command failed. Check the connection and selected target.",
     "delayed": "Input delayed",
-    "invalidSettings": "Select the microphone and mode again."
+    "invalidSettings": "Check the action settings.",
+    "allMics": "All Microphones",
+    "allMicsTooltip": "Toggle all microphone switches, or turn them all on or off.",
+    "micMuteGroup": "Microphone Mute Group",
+    "micMuteGroupTooltip": "Mute or unmute the microphones assigned to LiveMix's mute group.",
+    "fxMuteGroup": "FX Mute Group",
+    "fxMuteGroupTooltip": "Mute or unmute the FX assigned to LiveMix's mute group.",
+    "pluginGroup": "Plugin Group",
+    "pluginGroupTooltip": "Toggle an existing numbered plugin group on a microphone.",
+    "fxSend": "FX Send Amount",
+    "fxSendTooltip": "Rotate to adjust the send amount; short press and release to toggle pre/post.",
+    "statusAction": "Status",
+    "statusTooltip": "Display connection, session or audio status. Press to refresh state.",
+    "allOn": "All ON",
+    "allOff": "All OFF",
+    "someOn": "Some ON",
+    "noMics": "No microphones",
+    "setAllOn": "All microphones ON",
+    "setAllOff": "All microphones OFF",
+    "mute": "Mute",
+    "unmute": "Unmute",
+    "muteState": "Muted",
+    "unmuteState": "Unmuted",
+    "targets": "Targets: {count}",
+    "membershipNote": "Assign members in LiveMix's mute groups.",
+    "group": "Group",
+    "missingGroup": "Group missing",
+    "groupNote": "Groups are numbered slots. Deleting a group shifts later numbers; check your selection after editing groups.",
+    "fxChannel": "FX channel",
+    "chooseFx": "Select an FX channel",
+    "missingFx": "FX channel missing",
+    "step": "Step",
+    "press": "Press",
+    "prePost": "Pre / Post",
+    "pressNone": "Disabled",
+    "pre": "Pre",
+    "post": "Post",
+    "muteApplied": "Mute group applied",
+    "display": "Display",
+    "connection": "Connection",
+    "session": "Session",
+    "audio": "Audio",
+    "audioRunning": "Audio running",
+    "pushTrigger": "Short press and release: toggle pre/post (when enabled).",
+    "rotateTrigger": "Adjust FX send amount; also while pressed.",
+    "touchTrigger": "Display status only.",
+    "longTouchTrigger": "Display status only.",
+    "dialNote": "Rotate to adjust amount. Release within 600 ms without rotating to toggle pre/post. Touch displays status only.",
+    "on": "ON",
+    "off": "OFF",
+    "conflict": "State changed elsewhere. Try again.",
+    "unsupported": "Update LiveMix to use this action."
   }
 }

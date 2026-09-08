@@ -19,7 +19,7 @@ export class FakeLiveMix extends EventEmitter {
   publication = Promise.resolve();
   discoveryState = "ready";
   token = randomBytes(32).toString("base64url");
-  behavior = { omitState: false, omitAck: false, omitPong: false, holdCommands: false, holdHello: false, split: false, version: 1, rejectAuth: false, helloInstance: "" };
+  behavior = { omitState: false, omitDelta: false, omitAck: false, omitPong: false, holdCommands: false, holdHello: false, split: false, version: 1, rejectAuth: false, helloInstance: "" };
   async start() {
     this.appdata = await mkdtemp(join(tmpdir(), "livemix-sd-"));
     this.directory = join(this.appdata, "LiveMix", "control");
@@ -78,15 +78,47 @@ export class FakeLiveMix extends EventEmitter {
     }
     if (m.sessionId !== this.snapshot.sessionId) { this.error(client, m.id, "SESSION_CHANGED"); return; }
     if (m.ifRevision !== undefined && m.ifRevision !== this.snapshot.revision) { this.error(client, m.id, "REVISION_CONFLICT"); return; }
-    const channel = this.snapshot.state.channels.find(c => c.id === m.args.channelId);
-    if (!channel) { this.error(client, m.id, "CHANNEL_NOT_FOUND"); return; }
-    assert.ok(m.command === "toggleChannel" || m.command === "setChannelOn");
-    if (m.command === "setChannelOn") assert.equal(typeof m.args.on, "boolean");
-    const on = m.command === "toggleChannel" ? !channel.on : m.args.on;
-    const changed = on !== channel.on;
-    if (changed) { channel.on = on; this.snapshot.revision++; }
-    if (!this.behavior.omitAck) this.send(client, { ...this.ordering[2], ...this.context(), id: m.id, changed, result: { on } });
-    if (changed) this.publishDelta();
+    const state = this.snapshot.state, channel = state.channels.find(c => c.id === m.args.channelId), a = m.args;
+    const before = JSON.stringify(state);
+    let result;
+    if (m.command === "setAllChannelsOn") {
+      assert.equal(typeof a.on, "boolean");
+      for (const c of state.channels) c.on = a.on;
+      result = { on: a.on, count: state.channels.length };
+    } else if (m.command === "toggleMuteGroup" || m.command === "setMuteGroup") {
+      assert.ok(a.group === "mic" || a.group === "fx");
+      if (m.command === "setMuteGroup") assert.equal(typeof a.muted, "boolean");
+      state.muteGroups[a.group] = m.command === "toggleMuteGroup" ? !state.muteGroups[a.group] : a.muted;
+      result = { group: a.group, muted: state.muteGroups[a.group] };
+    } else {
+      if (!channel) { this.error(client, m.id, "CHANNEL_NOT_FOUND"); return; }
+      if (m.command === "toggleChannel" || m.command === "setChannelOn") {
+        if (m.command === "setChannelOn") assert.equal(typeof a.on, "boolean");
+        channel.on = m.command === "toggleChannel" ? !channel.on : a.on;
+        result = { on: channel.on };
+      } else if (m.command === "setPluginGroupOff") {
+        assert.ok(Number.isInteger(a.index) && a.index >= 1 && a.index <= 5); assert.equal(typeof a.off, "boolean");
+        const group = channel.pluginGroups.find(g => g.index === a.index);
+        if (!group) { this.error(client, m.id, "PLUGIN_GROUP_NOT_FOUND"); return; }
+        group.off = a.off; result = { index: a.index, off: a.off };
+      } else if (m.command === "setSend") {
+        if (!state.fx.some(f => f.id === a.fxId)) { this.error(client, m.id, "FX_NOT_FOUND"); return; }
+        assert.ok(a.amount !== undefined || a.pre !== undefined);
+        if (a.amount !== undefined) assert.ok(Number.isFinite(a.amount) && a.amount >= 0 && a.amount <= 1);
+        if (a.pre !== undefined) assert.equal(typeof a.pre, "boolean");
+        const send = channel.sends.find(s => s.fxId === a.fxId) ?? { fxId: a.fxId, amount: 0, pre: false };
+        const amount = a.amount ?? send.amount, pre = a.pre ?? send.pre;
+        if (amount !== send.amount || pre !== send.pre) {
+          if (!channel.sends.includes(send)) channel.sends.push(send);
+          send.amount = amount; send.pre = pre;
+        }
+        result = { amount, pre };
+      } else assert.fail("Unknown command");
+    }
+    const changed = JSON.stringify(state) !== before;
+    if (changed) this.snapshot.revision++;
+    if (!this.behavior.omitAck) this.send(client, { ...this.ordering[2], ...this.context(), id: m.id, changed, result });
+    if (changed && !this.behavior.omitDelta) this.publishDelta();
     this.emit("command", m);
   }
   context() { return { instanceId: this.snapshot.instanceId, sessionId: this.snapshot.sessionId, revision: this.snapshot.revision }; }
@@ -113,6 +145,8 @@ export class FakeLiveMix extends EventEmitter {
       const changes = {};
       const channels = this.snapshot.state.channels.filter(ch => JSON.stringify(ch) !== JSON.stringify(c.published.state.channels.find(old => old.id === ch.id)));
       if (channels.length) changes.channels = channels;
+      const fx = this.snapshot.state.fx.filter(fx => JSON.stringify(fx) !== JSON.stringify(c.published.state.fx.find(old => old.id === fx.id)));
+      if (fx.length) changes.fx = fx;
       for (const key of ["audio", "session", "muteGroups"]) if (JSON.stringify(c.published.state[key]) !== JSON.stringify(this.snapshot.state[key])) changes[key] = this.snapshot.state[key];
       this.send(c, { ...this.ordering[4], ...this.context(), baseRevision: c.published.revision, changes });
       c.published = structuredClone(this.snapshot);

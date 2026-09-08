@@ -50,6 +50,30 @@ export function keyImage(lamp: Lamp, language: Language, audioStopped = false): 
   return url;
 }
 
+export type ActionLamp = "all-on" | "all-off" | "mixed" | "group-muted" | "group-clear" | "plugin-on" | "plugin-off" | "status-on" | "status-off";
+/** Only bounded state/count/index combinations are cached; user names remain host titles. */
+export function actionImage(lamp: ActionLamp, language: Language, count = 0, total = 0, audioStopped = false): string {
+  count = Math.max(0, Math.min(8, Math.trunc(count))); total = Math.max(0, Math.min(8, Math.trunc(total)));
+  const cacheKey = `${lamp}/${language}/${count}/${total}/${audioStopped}`, cached = images.get(cacheKey);
+  if (cached) return cached;
+  const t = translator(language), muted = lamp === "group-muted", off = lamp.endsWith("off");
+  const color = muted || lamp === "plugin-off" ? "#FF5A5F" : lamp === "mixed" ? "#FFB454" : lamp === "plugin-on" ? "#4C8DFF" : off ? "#3A3F47" : "#35D07F";
+  let shape = `<circle cx="72" cy="35" r="23" fill="${color}" stroke="#AEB6C2" stroke-width="2"/>`;
+  let label: string = t(off ? "off" : "on"), detail = "";
+  if (lamp.startsWith("all") || lamp === "mixed") {
+    shape = [0, 1, 2].map(i => `<circle cx="${36 + i * 36}" cy="35" r="14" fill="${lamp === "mixed" && i === 2 ? "#3A3F47" : color}" stroke="#AEB6C2" stroke-width="2"/>`).join("");
+    label = t(lamp === "mixed" ? "someOn" : off ? "allOff" : "allOn"); detail = `${count}/${total}`;
+  } else if (lamp.startsWith("group")) {
+    shape = `<rect x="43" y="12" width="58" height="46" rx="10" fill="${color}" stroke="#AEB6C2" stroke-width="2"/>`
+      + (muted ? '<path d="m50 18 44 34" stroke="#FFFFFF" stroke-width="5"/>' : '<path d="m54 34 12 12 23-23" fill="none" stroke="#FFFFFF" stroke-width="4"/>');
+    label = t(muted ? "muteState" : "unmuteState"); detail = t("targets").replace("{count}", String(count));
+  } else if (lamp.startsWith("plugin")) shape += `<text x="72" y="45" font-size="28" fill="#FFFFFF">${count}</text>`;
+  else label = t(off ? "audioStopped" : "connected");
+  const pause = audioStopped ? `<path d="M122 8v14m9-14v14" stroke="#FFB454" stroke-width="4"><title>${xml(t("audioStopped"))}</title></path>` : "";
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="144" height="144" viewBox="0 0 144 144"><rect width="144" height="144" rx="12" fill="#15171B"/><g text-anchor="middle" font-family="Malgun Gothic,Segoe UI,sans-serif">${shape}${pause}<text x="72" y="79" font-size="16" fill="#FFFFFF">${xml(label)}</text><text x="72" y="98" font-size="14" fill="#FFFFFF">${xml(detail)}</text></g></svg>`;
+  const url = "data:image/svg+xml;base64," + Buffer.from(svg).toString("base64"); images.set(cacheKey, url); return url;
+}
+
 /** A coalesced update is sent state → image → title. The 10/s budget includes showAlert. */
 export class KeyRenderer {
   private desired: KeyVisual | undefined;

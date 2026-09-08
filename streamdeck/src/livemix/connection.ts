@@ -4,7 +4,7 @@ import { open } from "node:fs/promises";
 import { join, dirname } from "node:path";
 import { createConnection, type Socket } from "node:net";
 import { performance } from "node:perf_hooks";
-import { isObject, isRevision, isUuid, NdjsonDecoder, parseJson, ProtocolError, validateServerMessage, type Ack, type Command, type HelloAck, type ServerMessage } from "./protocol.js";
+import { isObject, isUuid, isRevision, NdjsonDecoder, parseJson, ProtocolError, validAck, validateServerMessage, type Ack, type Command, type HelloAck, type ServerMessage } from "./protocol.js";
 import { StateStore } from "./state-store.js";
 
 export type ConnectionStatus = "disconnected" | "connecting" | "checking" | "ready" | "disabled" | "version";
@@ -224,14 +224,14 @@ export class LiveMixConnection extends EventEmitter {
     if (m.type === "error") {
       request.reject(new ConnectionError(m.code));
       if (["CONTROL_DISABLED", "SERVER_STOPPING", "INSTANCE_CHANGED"].includes(m.code)) this.close(m.code, m.code === "CONTROL_DISABLED" ? "disabled" : "disconnected");
-      else if (["SESSION_CHANGED", "REVISION_CONFLICT", "CHANNEL_NOT_FOUND", "INTERNAL_ERROR"].includes(m.code)) {
+      else if (["SESSION_CHANGED", "REVISION_CONFLICT", "CHANNEL_NOT_FOUND", "FX_NOT_FOUND", "PLUGIN_GROUP_NOT_FOUND", "INTERNAL_ERROR"].includes(m.code)) {
         if (m.code === "SESSION_CHANGED") { this.cancelPending(m.code); this.store.reset(); }
         this.requestState();
       } else if (request.command.command === "requestState") this.close(m.code);
       return;
     }
     if ((request.sessionId && m.sessionId !== request.sessionId)
-      || (request.command.command === "requestState" ? !isRevision(m.result.snapshotRevision) || m.result.snapshotRevision !== m.revision || m.changed : typeof m.result.on !== "boolean")) {
+      || !validAck(request.command, m)) {
       request.reject(new ConnectionError("INVALID_ACK")); throw new ProtocolError("INVALID_ACK");
     }
     request.resolve(m); // Deliberately do not patch the state store from this result.

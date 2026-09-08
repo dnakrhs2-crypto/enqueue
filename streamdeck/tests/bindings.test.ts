@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { MicBinding, migrateSettings } from "../src/livemix/bindings.js";
+import { MicBinding, FxBinding, migrateSettings, actionSettings } from "../src/livemix/bindings.js";
 import { validateServerMessage, type Snapshot } from "../src/livemix/protocol.js";
 import { fixture } from "./helpers.mjs";
 
@@ -15,6 +15,35 @@ test("legacy settings migrate to settingsVersion:1; repeated migration is a no-o
   assert.equal(first.valid, true); assert.equal(first.changed, true); assert.equal(first.settings.settingsVersion, 1);
   assert.equal(first.settings.mode, "toggle"); assert.equal(first.settings.nameFallback, true);
   assert.equal(migrateSettings(first.settings).changed, false);
+});
+
+test("FX binding uses independent UUID/name resolution and preserves deletion boundaries and origin", async () => {
+  const s = await state(), saved = { fxId: other, fxName: "리버브", nameFallback: true }, binding = new FxBinding(saved);
+  assert.equal(binding.resolve(s).status, "bound");
+  s.state.fx[0]!.id = third;
+  assert.equal(binding.resolve(s).status, "missing");
+  const next = nextSession(s), result = binding.resolve(next);
+  assert.equal(result.status === "bound" && result.fx.id, third); assert.equal(saved.fxId, other);
+  next.state.fx[0]!.name = "Temporary"; assert.equal(binding.resolve(next).status, "bound");
+  assert.equal(binding.resolve({ ...next, sessionId: "dddddddddddd4ddd8ddddddddddddddd" }).status, "missing");
+});
+
+test("FX duplicate names require reselection, while original rename updates future fallback", async () => {
+  const s = await state(), settings = { fxId: other, fxName: "리버브", nameFallback: true }, binding = new FxBinding(settings);
+  s.state.fx[0]!.name = "새 리버브";
+  const renamed = binding.resolve(s); assert.equal(renamed.status === "bound" && renamed.renamedOrigin, "새 리버브");
+  s.state.fx[0]!.id = third; assert.equal(binding.resolve(nextSession(s)).status, "bound");
+  s.state.fx.push({ ...s.state.fx[0]!, id: origin });
+  assert.equal(new FxBinding({ ...settings, fxName: "새 리버브" }).resolve(s).status, "duplicate");
+});
+
+test("Round 3 settings validate action-specific enum/index/step bounds and supply safe defaults", () => {
+  for (const [kind, bad] of [["plugin-group", { groupIndex: 0 }], ["fx-send", { stepPercent: 2 }], ["fx-send", { pressMode: "reset" }],
+    ["status", { display: "start" }], ["mic-mute-group", { mode: "on" }], ["fx-mute-group", { mode: "off" }], ["all-mics", { mode: "mute" }]] as const) {
+    assert.equal(actionSettings(kind, bad).valid, false);
+  }
+  const defaults = actionSettings("fx-send", {}); assert.equal(defaults.settings.stepPercent, 1); assert.equal(defaults.settings.pressMode, "pre-post");
+  assert.equal(actionSettings("fx-send", defaults.settings).changed, false); assert.equal(actionSettings("status", {}).settings.display, "connection");
 });
 test("invalid enum/future settings versions disable input; malformed UUID does not select a channel", () => {
   for (const raw of [{ mode: "TOGGLE" }, { settingsVersion: 2 }, { nameFallback: "true" }]) assert.equal(migrateSettings(raw).valid, false);

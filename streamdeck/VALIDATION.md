@@ -1,3 +1,96 @@
+# Round 3 (3A + 3B) validation — 2026-09-08
+
+Implemented in `streamdeck/` on `livemix-streamdeck`, using the installed SDK
+2.1.2 and CLI 1.9.0. No dependency installation ran. All commands below ran in
+`C:\Users\claude\gocue-sd\streamdeck`. PowerShell blocks the `npm.ps1` shim,
+so the same npm scripts were invoked with `npm.cmd`.
+
+| Exact command | Actual final result |
+|---|---|
+| `npm.cmd run typecheck` | Exit 0; source and test TypeScript checks passed. |
+| `npm.cmd run build` | Exit 0; generated assets/localizations and Rollup bundle; Rollup reported 3 s. |
+| `npm.cmd test` | Exit 0; build and test compilation followed by **95 tests, 95 passed, 0 failed, 0 cancelled, 0 skipped, 0 todo** in **101110.049 ms**. Includes all 52 existing tests and 43 new tests. |
+| `npm.cmd run validate` | Exit 0; `Validation successful`. |
+| `npm.cmd run pack` | Exit 0; `Successfully packaged plugin`; **58 files**, **195.9 KiB unpacked**. |
+
+Package: **`dist/com.gomtwigim.livemix.streamDeckPlugin`**, version **0.9.0.1**,
+**85,353 bytes (83.4 KiB)**. The ZIP was independently opened after packaging:
+58 files, seven manifest actions and the FX-send layout are present; development
+directories, logs, source maps and discovery files are absent.
+
+## Action behavior verified
+
+| Action | Result |
+|---|---|
+| Microphone On/Off | Existing toggle/ON/OFF behavior and all prior fake-host/connection/binding tests remain green. |
+| All Microphones | Any ON → all OFF; all OFF → all ON. Explicit all ON/OFF modes. All/some/none labels and counts, zero-channel inhibition, shared-target serialization and revision-conflict recomputation. Mute latches stay unchanged. |
+| Microphone Mute Group | Toggle/mute/unmute; state 1 is red/muted, state 0 unmuted. Live member count, including an operable zero-member latch. |
+| FX Mute Group | Same latch behavior with FX membership; send amount/pre and other groups are preserved. |
+| Plugin Group | Existing numbered channel slot; toggle/ON/OFF; state is inverse of wire `off`. Accent ON/red OFF, channel/group title, live slot lists and missing-group rendering. |
+| FX Send Amount | Encoder only. Rotate adds ticks × 1% (default) or 5%, clamped to 0–100%, using amount-only CAS. Down records a press; release within 600 ms without any intervening rotation toggles pre only when enabled. Press+rotate changes amount only. Long press, tap and long touch send no command. |
+| Status | Connection/session+dirty marker/audio display; key down only requests state, at most once per two seconds per key, including hide/show. |
+
+All keypad releases are inert. Every new key action uses the mic lifecycle
+pattern, shared connection/state/bindings/queue and budgeted key renderer.
+Computed key intentions wait for ACK plus canonical state, retain at most two
+unsent intentions for 500 ms, and visibly fail displaced/expired input.
+
+Dial tests run the built plugin via the real SDK, real fake-host WebSocket and
+fake-LiveMix TCP server. `fake-plus` uses installed `DeviceType.StreamDeckPlus`
+(7). Tests cover signed ticks, saturation/no-op ACKs, both steps, independent
+amount/pre preservation, coalescing across encoders, both sides of the ACK/state
+barrier, 50 absolute unsent ticks/500 ms limits, up to two explicit conflict
+retries, non-retried press conflicts, input cancellation on timeout/EOF/session
+change/disappearance, simultaneous channel/FX renames and session fallback,
+offline em dash/disabled bar, mute/audio statuses and rolling feedback budget.
+
+The shipped PI script is executed for all seven action views in Korean and
+English. Tests verify relevant fields, live channel/FX/slot/count lists, duplicate
+name labels, safe text nodes, stale/context rejection, notes, immediate saves and
+offline selection retention. Manifest/controller/state/trigger translations,
+1x/2x asset references, exact 200×100 layout rectangles and key/encoder rendering
+budgets are also checked. All fake-host ≤10-call assertions remain active.
+
+## Files changed
+
+- Added `src/actions/{all-mics,mic-mute-group,fx-mute-group,plugin-group,fx-send,status}.ts`,
+  with shared `base.ts` and `mute-group.ts`; registered all seven in `src/plugin.ts`.
+- Extended `src/livemix/{protocol,connection,bindings,command-queue}.ts` for typed
+  commands/ACKs, independent FX binding, computed intentions and dial accumulation.
+  Retained the shared state store and the existing mic action.
+- Extended `src/ui/key-renderer.ts`; added `src/ui/feedback.ts`; regenerated
+  `src/ui/strings.ts` from the expanded `tools/locales.mjs`.
+- Updated the plugin manifest, ko/en JSON, `ui/{inspector.html,inspector.js,inspector.css,strings.js}`;
+  added `layouts/fx-send.json` and 38 placeholder SVG assets under the six new
+  `imgs/actions/` directories.
+- Extended `tools/generate-assets.mjs`; added the shared `tools/actions.mjs` catalogue.
+- Added `tests/{action-helpers,actions,dial,status}.ts`; extended fake host/server,
+  binding, connection, rendering and inspector tests. Updated `README.md` and this report.
+
+## Implementation choices and validation limits
+
+No requested scope was deferred. The six new actions share the mic's lifecycle
+pattern through a base class, and the two mute actions share a small helper.
+Computed keys, like dial amounts, retry only explicit revision conflicts, at
+most twice; pre/post presses never retry. Rotational limits count absolute ticks
+so opposite-direction events cannot create an unbounded unsent backlog.
+
+The fake host now fences key/PI disappearance with WebSocket ping/pong before
+enforcing no further output. This permits messages already in transit while
+still rejecting output after the plugin has processed disappearance. Initial
+expanded-run failures were title-update timing and these teardown races; no
+budget, deadline or closed-context assertion was removed.
+
+The lockfile SHA-256 remains
+`6062a47265ac17f33ac578f2cb4e0943e181ad1600ad89fa00ce50decf4f718e`, matching
+Round 2A and the committed blob. Changes are confined to `streamdeck/`; no
+node_modules, C++, CMake, installer, site or Git metadata changes were made.
+The package contains placeholder artwork as requested. Round 3 was verified
+against the fake LiveMix server; real LiveMix, Stream Deck App installation and
+physical Stream Deck + dial/touch testing remain for the client/maintainer.
+
+---
+
 # Round 2A follow-up validation — 2026-09-08
 
 Environment: Windows, Node `v24.13.0`, npm `11.6.2`, installed

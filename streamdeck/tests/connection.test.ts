@@ -2,7 +2,7 @@ import test, { type TestContext } from "node:test";
 import assert from "node:assert/strict";
 import { writeFile, unlink } from "node:fs/promises";
 import { LiveMixConnection, DiscoveryLease, readDiscovery, reconnectDelay, validateDiscovery } from "../src/livemix/connection.js";
-import { NdjsonDecoder, parseJson, validateServerMessage, type Snapshot, type Delta } from "../src/livemix/protocol.js";
+import { NdjsonDecoder, parseJson, validAck, validateServerMessage, type Snapshot, type Delta, type Ack, type Command } from "../src/livemix/protocol.js";
 import { StateStore } from "../src/livemix/state-store.js";
 import { CommandQueue } from "../src/livemix/command-queue.js";
 import { FakeLiveMix } from "./fake-livemix-server.mjs";
@@ -24,6 +24,18 @@ test("hello token, v1, instance and complete snapshot gate readiness", async t =
   assert.equal(server.received[0].token, server.token); assert.deepEqual(server.received[0].supportedVersions, [1]);
   server.broadcastState("initial"); await ready();
   assert.equal(connection.store.snapshot?.instanceId, server.snapshot.instanceId);
+});
+
+test("ACK validation follows each command result and rejects malformed group/send responses", async () => {
+  const snapshot = await fixture("initial-state");
+  const ack: Ack = { v: 1, type: "ack", id: "2", instanceId: snapshot.instanceId, sessionId: snapshot.sessionId, revision: 2, changed: true, result: {} };
+  const cases: { command: Command; result: Record<string, unknown>; bad: Record<string, unknown> }[] = [
+    { command: { command: "setAllChannelsOn", args: { on: true } }, result: { on: true, count: 3 }, bad: { on: true, count: -1 } },
+    { command: { command: "toggleMuteGroup", args: { group: "mic" } }, result: { group: "mic", muted: true }, bad: { group: "fx", muted: true } },
+    { command: { command: "setPluginGroupOff", args: { channelId: snapshot.state.channels[0].id, index: 2, off: false } }, result: { index: 2, off: false }, bad: { index: 1, off: false } },
+    { command: { command: "setSend", args: { channelId: snapshot.state.channels[0].id, fxId: snapshot.state.fx[0].id, amount: 0.35 } }, result: { amount: 0.35, pre: false }, bad: { amount: 1.5, pre: false } }
+  ];
+  for (const c of cases) { assert.equal(validAck(c.command, { ...ack, result: c.result }), true); assert.equal(validAck(c.command, { ...ack, result: c.bad }), false); assert.equal(validAck(c.command, ack), false); }
 });
 test("UTF-8 byte splitting, coalesced messages, CRLF and framing limits", async () => {
   const source = await fixture("initial-state"), bytes = Buffer.from(JSON.stringify(source) + "\r\n");

@@ -4,30 +4,231 @@
   "Name": "LiveMix",
   "Author": "Gomtwigim",
   "Version": "0.9.0.1",
-  "Description": "Control LiveMix microphones on this Windows PC.",
+  "Description": "Control LiveMix microphones, mute groups, plugin groups and FX sends on this Windows PC.",
   "Category": "LiveMix",
   "CategoryIcon": "imgs/category",
   "Icon": "imgs/plugin",
   "CodePath": "bin/plugin.js",
   "SDKVersion": 3,
-  "Nodejs": { "Version": "24" },
-  "Software": { "MinimumVersion": "7.1" },
-  "OS": [{ "Platform": "windows", "MinimumVersion": "10" }],
-  "Actions": [{
-    "UUID": "com.gomtwigim.livemix.mic",
-    "Name": "Microphone On/Off",
-    "Tooltip": "Toggle a LiveMix microphone or explicitly set it on or off.",
-    "Icon": "imgs/actions/mic/icon",
-    "PropertyInspectorPath": "ui/inspector.html",
-    "Controllers": ["Keypad"],
-    "DisableAutomaticStates": true,
-    "DisableCaching": true,
-    "UserTitleEnabled": false,
-    "SupportedInMultiActions": false,
-    "SupportedInKeyLogicActions": false,
-    "States": [
-      { "Name": "Off", "Image": "imgs/actions/mic/off", "TitleAlignment": "bottom", "FontSize": 12 },
-      { "Name": "On", "Image": "imgs/actions/mic/on", "TitleAlignment": "bottom", "FontSize": 12 }
-    ]
-  }]
+  "Nodejs": {
+    "Version": "24"
+  },
+  "Software": {
+    "MinimumVersion": "7.1"
+  },
+  "OS": [
+    {
+      "Platform": "windows",
+      "MinimumVersion": "10"
+    }
+  ],
+  "Actions": [
+    {
+      "UUID": "com.gomtwigim.livemix.mic",
+      "Name": "Microphone On/Off",
+      "Tooltip": "Toggle a LiveMix microphone or explicitly set it on or off.",
+      "Icon": "imgs/actions/mic/icon",
+      "PropertyInspectorPath": "ui/inspector.html",
+      "Controllers": [
+        "Keypad"
+      ],
+      "DisableAutomaticStates": true,
+      "DisableCaching": true,
+      "UserTitleEnabled": false,
+      "SupportedInMultiActions": false,
+      "SupportedInKeyLogicActions": false,
+      "States": [
+        {
+          "Name": "OFF",
+          "Image": "imgs/actions/mic/off",
+          "TitleAlignment": "bottom",
+          "FontSize": 12
+        },
+        {
+          "Name": "ON",
+          "Image": "imgs/actions/mic/on",
+          "TitleAlignment": "bottom",
+          "FontSize": 12
+        }
+      ]
+    },
+    {
+      "UUID": "com.gomtwigim.livemix.all-mics",
+      "Name": "All Microphones",
+      "Tooltip": "Toggle all microphone switches, or turn them all on or off.",
+      "Icon": "imgs/actions/all-mics/icon",
+      "PropertyInspectorPath": "ui/inspector.html",
+      "Controllers": [
+        "Keypad"
+      ],
+      "DisableAutomaticStates": true,
+      "DisableCaching": true,
+      "UserTitleEnabled": false,
+      "SupportedInMultiActions": false,
+      "SupportedInKeyLogicActions": false,
+      "States": [
+        {
+          "Name": "All OFF",
+          "Image": "imgs/actions/all-mics/off",
+          "TitleAlignment": "bottom",
+          "FontSize": 12
+        },
+        {
+          "Name": "All ON",
+          "Image": "imgs/actions/all-mics/on",
+          "TitleAlignment": "bottom",
+          "FontSize": 12
+        }
+      ]
+    },
+    {
+      "UUID": "com.gomtwigim.livemix.mic-mute-group",
+      "Name": "Microphone Mute Group",
+      "Tooltip": "Mute or unmute the microphones assigned to LiveMix's mute group.",
+      "Icon": "imgs/actions/mic-mute-group/icon",
+      "PropertyInspectorPath": "ui/inspector.html",
+      "Controllers": [
+        "Keypad"
+      ],
+      "DisableAutomaticStates": true,
+      "DisableCaching": true,
+      "UserTitleEnabled": false,
+      "SupportedInMultiActions": false,
+      "SupportedInKeyLogicActions": false,
+      "States": [
+        {
+          "Name": "Unmuted",
+          "Image": "imgs/actions/mic-mute-group/off",
+          "TitleAlignment": "bottom",
+          "FontSize": 12
+        },
+        {
+          "Name": "Muted",
+          "Image": "imgs/actions/mic-mute-group/on",
+          "TitleAlignment": "bottom",
+          "FontSize": 12
+        }
+      ]
+    },
+    {
+      "UUID": "com.gomtwigim.livemix.fx-mute-group",
+      "Name": "FX Mute Group",
+      "Tooltip": "Mute or unmute the FX assigned to LiveMix's mute group.",
+      "Icon": "imgs/actions/fx-mute-group/icon",
+      "PropertyInspectorPath": "ui/inspector.html",
+      "Controllers": [
+        "Keypad"
+      ],
+      "DisableAutomaticStates": true,
+      "DisableCaching": true,
+      "UserTitleEnabled": false,
+      "SupportedInMultiActions": false,
+      "SupportedInKeyLogicActions": false,
+      "States": [
+        {
+          "Name": "Unmuted",
+          "Image": "imgs/actions/fx-mute-group/off",
+          "TitleAlignment": "bottom",
+          "FontSize": 12
+        },
+        {
+          "Name": "Muted",
+          "Image": "imgs/actions/fx-mute-group/on",
+          "TitleAlignment": "bottom",
+          "FontSize": 12
+        }
+      ]
+    },
+    {
+      "UUID": "com.gomtwigim.livemix.plugin-group",
+      "Name": "Plugin Group",
+      "Tooltip": "Toggle an existing numbered plugin group on a microphone.",
+      "Icon": "imgs/actions/plugin-group/icon",
+      "PropertyInspectorPath": "ui/inspector.html",
+      "Controllers": [
+        "Keypad"
+      ],
+      "DisableAutomaticStates": true,
+      "DisableCaching": true,
+      "UserTitleEnabled": false,
+      "SupportedInMultiActions": false,
+      "SupportedInKeyLogicActions": false,
+      "States": [
+        {
+          "Name": "OFF",
+          "Image": "imgs/actions/plugin-group/off",
+          "TitleAlignment": "bottom",
+          "FontSize": 12
+        },
+        {
+          "Name": "ON",
+          "Image": "imgs/actions/plugin-group/on",
+          "TitleAlignment": "bottom",
+          "FontSize": 12
+        }
+      ]
+    },
+    {
+      "UUID": "com.gomtwigim.livemix.fx-send",
+      "Name": "FX Send Amount",
+      "Tooltip": "Rotate to adjust the send amount; short press and release to toggle pre/post.",
+      "Icon": "imgs/actions/fx-send/icon",
+      "PropertyInspectorPath": "ui/inspector.html",
+      "Controllers": [
+        "Encoder"
+      ],
+      "DisableAutomaticStates": true,
+      "DisableCaching": true,
+      "UserTitleEnabled": false,
+      "SupportedInMultiActions": false,
+      "SupportedInKeyLogicActions": false,
+      "States": [
+        {
+          "Name": "FX Send Amount",
+          "Image": "imgs/actions/fx-send/off",
+          "TitleAlignment": "bottom",
+          "FontSize": 12
+        }
+      ],
+      "Encoder": {
+        "layout": "layouts/fx-send.json",
+        "Icon": "imgs/actions/fx-send/encoder",
+        "TriggerDescription": {
+          "Push": "Short press and release: toggle pre/post (when enabled).",
+          "Rotate": "Adjust FX send amount; also while pressed.",
+          "Touch": "Display status only.",
+          "LongTouch": "Display status only."
+        }
+      }
+    },
+    {
+      "UUID": "com.gomtwigim.livemix.status",
+      "Name": "Status",
+      "Tooltip": "Display connection, session or audio status. Press to refresh state.",
+      "Icon": "imgs/actions/status/icon",
+      "PropertyInspectorPath": "ui/inspector.html",
+      "Controllers": [
+        "Keypad"
+      ],
+      "DisableAutomaticStates": true,
+      "DisableCaching": true,
+      "UserTitleEnabled": false,
+      "SupportedInMultiActions": false,
+      "SupportedInKeyLogicActions": false,
+      "States": [
+        {
+          "Name": "LiveMix offline",
+          "Image": "imgs/actions/status/off",
+          "TitleAlignment": "bottom",
+          "FontSize": 12
+        },
+        {
+          "Name": "Connected",
+          "Image": "imgs/actions/status/on",
+          "TitleAlignment": "bottom",
+          "FontSize": 12
+        }
+      ]
+    }
+  ]
 }

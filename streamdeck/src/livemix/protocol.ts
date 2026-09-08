@@ -56,7 +56,33 @@ export type ServerMessage = Snapshot | Delta | Ack | WireError | HelloAck
   | (Context & { v: 1; type: "unknown"; wireType: string });
 export type MicCommand = { command: "toggleChannel"; args: { channelId: string } }
   | { command: "setChannelOn"; args: { channelId: string; on: boolean } };
-export type Command = MicCommand | { command: "requestState"; args: Record<string, never> };
+export type EditCommand = MicCommand
+  | { command: "setAllChannelsOn"; args: { on: boolean } }
+  | { command: "toggleMuteGroup"; args: { group: "mic" | "fx" } }
+  | { command: "setMuteGroup"; args: { group: "mic" | "fx"; muted: boolean } }
+  | { command: "setPluginGroupOff"; args: { channelId: string; index: number; off: boolean } }
+  | { command: "setSend"; args: { channelId: string; fxId: string } & ({ amount: number; pre?: never } | { pre: boolean; amount?: never }) };
+export type Command = EditCommand | { command: "requestState"; args: Record<string, never> };
+
+/** Validate the result for the actual request; never use it to patch canonical state. */
+export function validAck(command: Command, ack: Ack): boolean {
+  const r = ack.result;
+  switch (command.command) {
+    case "requestState": return isRevision(r.snapshotRevision) && r.snapshotRevision === ack.revision && !ack.changed;
+    case "toggleChannel": case "setChannelOn": return typeof r.on === "boolean";
+    case "setAllChannelsOn": return typeof r.on === "boolean" && isRevision(r.count) && r.count <= 8;
+    case "toggleMuteGroup": case "setMuteGroup": return r.group === command.args.group && typeof r.muted === "boolean";
+    case "setPluginGroupOff": return r.index === command.args.index && typeof r.off === "boolean";
+    case "setSend": return typeof r.amount === "number" && Number.isFinite(r.amount) && r.amount >= 0 && r.amount <= 1 && typeof r.pre === "boolean";
+  }
+}
+
+export function sendTarget(snapshot: Snapshot, channelId: string, fxId: string): { channel: Channel; fx: Fx; send: Send } | undefined {
+  const channel = snapshot.state.channels.find(c => c.id === channelId), fx = snapshot.state.fx.find(f => f.id === fxId);
+  if (!channel || !fx) return undefined;
+  // LiveMix's absent send has the same defaults as MixSend.
+  return { channel, fx, send: channel.sends.find(s => s.fxId === fxId) ?? { fxId, amount: 0, pre: false } };
+}
 
 function groups(v: unknown): PluginGroup[] {
   return list(v, 5, value => {
