@@ -1,3 +1,96 @@
+# Round 4 / 1.0.0 validation — 2026-09-08
+
+Implemented in this worktree on `livemix-streamdeck`. Plugin/package versions:
+**1.0.0.0 / 1.0.0**; runtime hello: **1.0.0**. Installed Node **24.13.0**,
+SDK **2.1.2** and CLI **1.9.0** were reused. Commands ran from
+`C:\Users\claude\gocue-sd\streamdeck` using the Windows `npm.cmd` shim.
+
+| Exact command | Actual result |
+|---|---|
+| `npm.cmd run typecheck` | Exit 0; source and test TypeScript checks passed. |
+| `npm.cmd run build` | Exit 0; generated release assets/localizations and Rollup bundle; Rollup reported **2.5 s** for the final standalone build. |
+| `npm.cmd test` | Exit 0; **118 tests, 118 passed, 0 failed, 0 cancelled, 0 skipped, 0 todo**, **143592.4581 ms**. Builds the distributable before testing. |
+| `npm.cmd run validate` | Exit 0; asset verifier passed, then Elgato **Validation successful**. |
+| `npm.cmd run pack -- -f` | Exit 0; **Successfully packaged plugin**, **128 files**, **267.7 KiB unpacked**. |
+| `npm.cmd run media` | Exit 0; five standalone HTML compositions generated. |
+
+Package: **[dist/com.gomtwigim.livemix.streamDeckPlugin](dist/com.gomtwigim.livemix.streamDeckPlugin)**,
+**150,369 bytes (146.8 KiB)**. SHA-256:
+`42faada79cd9a8f35965e002e79dcc960a2b032f29c2fa13dabe177bbfd5a909`.
+The ZIP was reopened after packing: version 1.0.0.0, eight actions,
+and **every archived file byte-matches its tested build input**. Development
+directories, design sources, tests, maps, logs and discovery files are absent.
+The installed CLI's normal packaging/DRM preparation path was retained.
+
+## Assets, rendering and translations
+
+- **25 manifest image references / 50 files** exist in both required sizes:
+  plugin PNG 256/512; category SVG 28/56; eight action-list SVGs 20/40;
+  fourteen state-image references 72/144; encoder SVG 72/144.
+- **118 packaged images** byte-match generated sources in `design/`, including
+  mixed, muted, group 1–5, send and connection variants. All category/action-list
+  graphics use only white/none with transparent backgrounds and a 24-unit
+  viewBox. Key/encoder graphics use a 144-unit viewBox.
+- The red #E5302D ON brand and the app's #35D07F / #3A3F47 / #FF5A5F /
+  #15171B / #4C8DFF palette are shared by generated and runtime artwork.
+  The PNG logo was visually inspected. The geometric PNG generator and
+  256/512 HTML/SVG alternatives require no added dependencies.
+- Existing renderer assertions now also check distinct mic/FX group images and
+  exact static/runtime SVG agreement. Original ON/OFF under mute, localized
+  labels, missing/unknown feedback and every existing rolling ≤10 calls/s
+  assertion remain green. No action command semantics changed.
+- ko/en translation keys, nonempty values, action/state names and encoder
+  trigger descriptions remain complete. The plugin PI continues to use only
+  bundled files and its local host WebSocket; no external URLs were added.
+
+## Marketplace materials
+
+The [submission package](../docs/marketplace/livemix-streamdeck/README.md)
+contains English/Korean listings, 1.0.0 notes, all eight reviewer action tests,
+the Korean Maker Console checklist, media export instructions and five HTMLs.
+The English description is **1,039 characters** (within 250–1,500);
+the Korean description is **625 characters**. Support is the requested
+`https://곰튀김.com/livemix/#streamdeck-support`.
+
+Chromium opened all five HTMLs at DPR 1: app icon **288×288**; thumbnail and
+three galleries **1920×960**. Checked canvas dimensions, self-contained
+resources, English captions, SVG text bounds, page bounds and footer overlap;
+all passed. Thumbnail and gallery QA captures were visually inspected.
+QA captures and the layout report stay in ignored `.test-build/`; submission
+deliverables are HTML for Claude's final PNG exports. Initial Chromium QA
+needed a local `--no-sandbox` browser flag because renderer initialization
+timed out in this managed environment; it opened only these local compositions.
+This does not alter plugin runtime or packaging.
+
+## Validation boundaries and handoff
+
+The client reports **0.9.1 + real LiveMix 0.6.0 on Stream Deck Mobile works**.
+That report is accepted as prior real-device evidence, not represented as
+new physical 1.0.0 testing. Remaining client/Claude release checks:
+
+- Final PNG export and 1.0.0 icon/font inspection in actual Stream Deck/Mobile.
+- Real Stream Deck + dial/touch verification and a **1920×1080 MP4**
+  demonstration with English captions (below 250 MB, internal target ≤50 MB).
+- Claude's public installation/support sections, with an English support contact.
+  The GitHub releases URL could not be fetched by this environment's web tool;
+  public 0.6.0 installer availability is included in the client checklist.
+- Maker organization spelling matching Author **Gomtwigim**, available Console
+  tags, Maker Agreement, submission with **automatic publication disabled**,
+  and a Marketplace-processed package install/upgrade check before manual publication.
+
+No account action, Marketplace submission or publication was performed.
+Changes are confined to `streamdeck/` and
+`docs/marketplace/livemix-streamdeck/`. No dependency installation or changes
+to node_modules, C++, CMake, installer, site or Git metadata were made.
+The lockfile SHA-256 is unchanged:
+`6062a47265ac17f33ac578f2cb4e0943e181ad1600ad89fa00ce50decf4f718e`.
+Its preview root version metadata is retained per the explicit no-lockfile-edit
+constraint; the release manifests and runtime use 1.0.0.
+
+Earlier validation records follow and describe their respective preview builds.
+
+---
+
 # Round 3C validation — 2026-09-08
 
 Added `com.gomtwigim.livemix.fx-send-step` for Keypad devices, including

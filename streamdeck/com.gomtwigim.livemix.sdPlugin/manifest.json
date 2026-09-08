@@ -3,7 +3,7 @@
   "UUID": "com.gomtwigim.livemix",
   "Name": "LiveMix",
   "Author": "Gomtwigim",
-  "Version": "0.9.1.0",
+  "Version": "1.0.0.0",
   "Description": "Control LiveMix microphones, mute groups, plugin groups and FX sends on this Windows PC.",
   "Category": "LiveMix",
   "CategoryIcon": "imgs/category",

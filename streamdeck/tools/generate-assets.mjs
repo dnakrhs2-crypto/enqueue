@@ -1,60 +1,63 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile, copyFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { resolve, dirname } from "node:path";
-import { deflateSync } from "node:zlib";
 import { locales } from "./locales.mjs";
 import { actions, triggers } from "./actions.mjs";
+import { brandPng } from "./brand-png.mjs";
+import { brandSvg, categorySvg, glyph, svgDocument, micSvg, actionSvg, sendSvg, encoderSvg, palette } from "../src/ui/artwork.ts";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 const plugin = resolve(root, "com.gomtwigim.livemix.sdPlugin");
+const design = resolve(root, "design");
 async function write(path, data) { await mkdir(dirname(path), { recursive: true }); await writeFile(path, data); }
-function crc32(bytes) {
-  let crc = 0xffffffff;
-  for (const byte of bytes) { crc ^= byte; for (let n = 0; n < 8; n++) crc = (crc >>> 1) ^ ((crc & 1) ? 0xedb88320 : 0); }
-  return (crc ^ 0xffffffff) >>> 0;
+async function asset(path, data) {
+  const source = resolve(design, path);
+  await write(source, data);
+  const destination = resolve(plugin, "imgs", path);
+  await mkdir(dirname(destination), { recursive: true });
+  await copyFile(source, destination);
 }
-function chunk(type, bytes) {
-  const name = Buffer.from(type), len = Buffer.alloc(4), crc = Buffer.alloc(4);
-  len.writeUInt32BE(bytes.length); crc.writeUInt32BE(crc32(Buffer.concat([name, bytes])));
-  return Buffer.concat([len, name, bytes, crc]);
-}
-// Pure Node PNG encoder: placeholder circles only; no native image library or downloaded artwork.
-function png(size) {
-  const header = Buffer.alloc(13); header.writeUInt32BE(size, 0); header.writeUInt32BE(size, 4); header[8] = 8; header[9] = 6;
-  const pixels = Buffer.alloc((size * 4 + 1) * size);
-  for (let y = 0; y < size; y++) for (let x = 0; x < size; x++) {
-    const p = y * (size * 4 + 1) + 1 + x * 4;
-    const lamp = Math.hypot(x - size / 2, y - size / 2) < size * 0.3;
-    pixels.set(lamp ? [255, 90, 95, 255] : [21, 23, 27, 255], p);
+const en = locales.en;
+const emptySend = (kind, size) => svgDocument(size, '<rect width="144" height="144" rx="12" fill="' + palette.background + '"/><g transform="translate(48 10) scale(2)">' + glyph(kind, palette.dimText) + '</g><text x="72" y="99" text-anchor="middle" font-family="Segoe UI,sans-serif" font-size="30" fill="' + palette.text + '">—</text>');
+function states(id, size) {
+  switch (id) {
+    case "mic": return { off: micSvg("off", en, false, false, size), on: micSvg("on", en, false, false, size),
+      "muted-on": micSvg("muted-on", en, false, false, size), "muted-off": micSvg("muted-off", en, false, false, size) };
+    case "all-mics": return { off: actionSvg("all-off", en, 0, 3, false, "mic", size), on: actionSvg("all-on", en, 3, 3, false, "mic", size),
+      mixed: actionSvg("mixed", en, 2, 3, false, "mic", size) };
+    case "mic-mute-group":
+    case "fx-mute-group": return Object.fromEntries([["off", "group-clear"], ["on", "group-muted"]].map(([name, state]) => [name, actionSvg(state, en, 2, 0, false, id.startsWith("fx") ? "fx" : "mic", size)]));
+    case "plugin-group": return Object.fromEntries([["off", "plugin-off"], ["on", "plugin-on"]].flatMap(([name, state]) => [
+      [name, actionSvg(state, en, 1, 0, false, "mic", size)],
+      ...[1, 2, 3, 4, 5].map(index => ["group-" + index + "-" + name, actionSvg(state, en, index, 0, false, "mic", size)])
+    ]));
+    case "fx-send": return { off: emptySend(id, size), on: svgDocument(size, '<rect width="144" height="144" rx="12" fill="' + palette.background + '"/><g transform="translate(48 8) scale(2)">' + glyph(id, palette.accent) + '</g><text x="72" y="98" text-anchor="middle" font-family="Segoe UI,sans-serif" font-size="25" fill="' + palette.text + '">35%</text>') };
+    case "fx-send-step": return { off: emptySend(id, size), on: sendSvg(35, "+5", en, false, false, size),
+      increase: sendSvg(35, "+5", en, false, false, size), decrease: sendSvg(35, "−5", en, false, false, size),
+      set: sendSvg(50, "=50", en, false, false, size), zero: sendSvg(0, "+5", en, false, false, size),
+      muted: sendSvg(35, "+5", en, true, false, size) };
+    case "status": return { off: micSvg("disconnected", en, false, false, size), on: actionSvg("status-on", en, 0, 0, false, "mic", size),
+      "audio-stopped": actionSvg("status-off", en, 0, 0, true, "mic", size) };
   }
-  return Buffer.concat([Buffer.from([137,80,78,71,13,10,26,10]), chunk("IHDR", header), chunk("IDAT", deflateSync(pixels)), chunk("IEND", Buffer.alloc(0))]);
 }
-const svg = (size, body) => `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}" viewBox="0 0 144 144">${body}</svg>\n`;
 for (const scale of [1, 2]) {
-  const suffix = scale === 2 ? "@2x" : "";
-  await write(resolve(plugin, `imgs/plugin${suffix}.png`), png(256 * scale));
-  for (const [path, size] of [["category", 28], ["actions/mic/icon", 20]]) {
-    await write(resolve(plugin, `imgs/${path}${suffix}.svg`), svg(size * scale, '<g fill="none" stroke="#FFFFFF" stroke-width="12"><rect x="51" y="16" width="42" height="72" rx="21"/><path d="M34 68v6a38 38 0 0 0 76 0v-6M72 112v18M46 130h52"/></g>'));
+  const suffix = scale === 2 ? "@2x" : "", size = 72 * scale;
+  // Plugin preferences require PNG; the geometric PNG is generated from the same brand shapes.
+  await write(resolve(design, "plugin" + suffix + ".svg"), brandSvg(256 * scale) + "\n");
+  await asset("plugin" + suffix + ".png", brandPng(256 * scale));
+  await asset("category" + suffix + ".svg", categorySvg(28 * scale) + "\n");
+  for (const a of actions) {
+    const directory = "actions/" + a.id + "/";
+    await asset(directory + "icon" + suffix + ".svg", svgDocument(20 * scale, glyph(a.id), 24) + "\n");
+    for (const [name, body] of Object.entries(states(a.id, size))) await asset(directory + name + suffix + ".svg", body + "\n");
+    await asset(directory + "disconnected" + suffix + ".svg", micSvg("disconnected", en, false, a.id.startsWith("fx-send"), size) + "\n");
+    if (a.id === "fx-send") await asset(directory + "encoder" + suffix + ".svg", encoderSvg(size) + "\n");
   }
-  // Both manifest states start offline to avoid an old green lamp before the first snapshot.
-  for (const state of ["on", "off"]) await write(resolve(plugin, `imgs/actions/mic/${state}${suffix}.svg`), svg(72 * scale, '<rect width="144" height="144" rx="16" fill="#15171B"/><g fill="none" stroke="#AEB6C2" stroke-width="7"><path d="M30 26v28h25l12 12m47 52V90H89L77 78M52 38l-8 16m61 36l-9 16"/><path stroke="#FF5A5F" d="m70 43 10 10m-25 26 10 10"/></g>'));
-  const shapes = {
-    "all-mics": '<circle cx="30" cy="72" r="19"/><circle cx="72" cy="72" r="19"/><circle cx="114" cy="72" r="19"/>',
-    "mic-mute-group": '<rect x="22" y="30" width="100" height="84" rx="12"/><path d="m25 32 94 80M72 45v28m-18 0a18 18 0 0 0 36 0"/>',
-    "fx-mute-group": '<rect x="22" y="30" width="100" height="84" rx="12"/><path d="m25 32 94 80M47 91V53h24m-24 18h20m12-18 23 38m0-38L79 91"/>',
-    "plugin-group": '<rect x="25" y="25" width="94" height="94" rx="14"/><path d="M56 57 72 43v58m-19 0h38"/>',
-    "fx-send": '<circle cx="72" cy="72" r="44"/><path d="M72 72V32m28 53 17 3-2-18"/>',
-    "fx-send-step": '<rect x="22" y="94" width="100" height="20" rx="6"/><path d="M24 51h42M45 30v42m38-21h38"/>',
-    status: '<circle cx="72" cy="72" r="46"/><path d="M72 65v37m0-59v8"/>'
-  };
-  for (const a of actions.filter(a => a.id !== "mic")) {
-    const body = `<g fill="none" stroke="#FFFFFF" stroke-width="8">${shapes[a.id]}</g>`;
-    await write(resolve(plugin, `imgs/actions/${a.id}/icon${suffix}.svg`), svg(20 * scale, body));
-    for (const state of ["off", "on"]) await write(resolve(plugin, `imgs/actions/${a.id}/${state}${suffix}.svg`), svg(72 * scale,
-      `<rect width="144" height="144" rx="12" fill="#15171B"/>${body}<path d="m30 120 84-96" stroke="#FF5A5F" stroke-width="8"/>`));
-    if (a.id === "fx-send") await write(resolve(plugin, `imgs/actions/fx-send/encoder${suffix}.svg`), svg(72 * scale, body));
-  }
+  for (const lamp of ["disabled", "checking", "version", "missing", "duplicate"]) await asset("status/" + lamp + suffix + ".svg", micSvg(lamp, en, false, false, size) + "\n");
 }
+for (const size of [256, 512]) await write(resolve(design, "plugin-" + size + ".html"),
+  '<!doctype html>\n<html lang="en"><meta charset="utf-8"><meta name="canvas" content="' + size + 'x' + size + '"><title>LiveMix plugin icon</title><style>html,body{margin:0;width:' + size + 'px;height:' + size + 'px;overflow:hidden}svg{display:block}</style>' + brandSvg(size) + '</html>\n');
+
 for (const [language, strings] of Object.entries(locales)) await write(resolve(plugin, `${language}.json`), JSON.stringify({
   Name: "LiveMix", ...Object.fromEntries(actions.map(a => [`com.gomtwigim.livemix.${a.id}`, {
     Name: strings[a.name], Tooltip: strings[a.tooltip], States: a.states.map(state => ({ Name: strings[state] })),
@@ -71,4 +74,4 @@ manifest.Actions = actions.map(a => ({ UUID: `com.gomtwigim.livemix.${a.id}`, Na
 await write(resolve(plugin, "manifest.json"), JSON.stringify(manifest, null, 2) + "\n");
 await write(resolve(root, "src/ui/strings.ts"), `// Generated by tools/generate-assets.mjs; edit tools/locales.mjs.\nexport const strings = ${JSON.stringify(locales, null, 2)} as const;\n`);
 await write(resolve(plugin, "ui/strings.js"), `// Generated by tools/generate-assets.mjs.\nwindow.LiveMixStrings = ${JSON.stringify(locales, null, 2)};\n`);
-console.log("Generated placeholder icons (1x/2x) and ko/en strings.");
+console.log("Generated LiveMix release icons (1x/2x), design sources and ko/en strings.");

@@ -14,7 +14,7 @@ export class MuteGroupAction extends LiveMixAction {
   }
   protected override draw(c: ActionContext, s: Snapshot): void {
     const muted = s.state.muteGroups[this.group], count = (this.group === "mic" ? s.state.channels : s.state.fx).filter(item => item.muteGroup).length;
-    c.key!.render({ state: muted ? 1 : 0, image: actionImage(muted ? "group-muted" : "group-clear", this.language, count, 0, !s.state.audio.running),
+    c.key!.render({ state: muted ? 1 : 0, image: actionImage(muted ? "group-muted" : "group-clear", this.language, count, 0, !s.state.audio.running, this.group),
       title: displayName(c.settings.shortTitle || this.t(this.group === "mic" ? "micMuteGroup" : "fxMuteGroup")) });
   }
 }

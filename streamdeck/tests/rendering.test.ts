@@ -5,6 +5,7 @@ import { performance } from "node:perf_hooks";
 import { KeyRenderer, keyImage, actionImage, xml, type KeyOutput, type KeyVisual } from "../src/ui/key-renderer.js";
 import { FeedbackRenderer } from "../src/ui/feedback.js";
 import { strings } from "../src/ui/strings.js";
+import { micSvg, actionSvg, sendSvg } from "../src/ui/artwork.js";
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { until, pluginRoot } from "./helpers.mjs";
@@ -27,7 +28,7 @@ test("renderer sends only changed values in state/image/title order and shares i
   assert.equal(keyImage("on", "ko"), on.image); assert.equal(xml('<&"\''), "&lt;&amp;&quot;&apos;");
 });
 
-test("Round 3 images have localized labels, mixed/count and independent mute/plugin state colors", () => {
+test("release images have localized labels, distinct group shapes and independent state colors", () => {
   for (const language of ["ko", "en"] as const) {
     const t = strings[language];
     for (const [lamp, label, color] of [["mixed", t.someOn, "#FFB454"], ["group-muted", t.muteState, "#FF5A5F"],
@@ -37,12 +38,21 @@ test("Round 3 images have localized labels, mixed/count and independent mute/plu
       if (lamp === "mixed") assert.ok(svg.includes("2/3"));
       assert.equal(actionImage(lamp, language, 2, 3, true), image);
     }
+    assert.notEqual(actionImage("group-muted", language, 2, 0, false, "mic"), actionImage("group-muted", language, 2, 0, false, "fx"));
   }
 });
 
 test("eight manifest actions have required controllers/states, translated triggers and all assets", async () => {
   const manifest = JSON.parse(await readFile(resolve(pluginRoot, "manifest.json"), "utf8"));
-  assert.equal(manifest.Version, "0.9.1.0");
+  assert.equal(manifest.Version, "1.0.0.0");
+  // The actual static previews and runtime rendering share the same geometry.
+  const samples = [
+    ["mic/on", micSvg("on", strings.en)],
+    ["all-mics/mixed", actionSvg("mixed", strings.en, 2, 3)],
+    ["fx-mute-group/on", actionSvg("group-muted", strings.en, 2, 0, false, "fx")],
+    ["fx-send-step/increase", sendSvg(35, "+5", strings.en)]
+  ];
+  for (const [path, expected] of samples) assert.equal((await readFile(resolve(pluginRoot, "imgs/actions/" + path + "@2x.svg"), "utf8")).trim(), expected);
   assert.equal(manifest.Actions.length, 8); assert.equal(new Set(manifest.Actions.map((a: any) => a.UUID)).size, 8);
   const ko = JSON.parse(await readFile(resolve(pluginRoot, "ko.json"), "utf8")), en = JSON.parse(await readFile(resolve(pluginRoot, "en.json"), "utf8"));
   assert.deepEqual(Object.keys(ko.Localization).sort(), Object.keys(en.Localization).sort());

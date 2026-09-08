@@ -1,14 +1,15 @@
 {
   "name": "livemix-streamdeck",
-  "version": "0.9.1-0",
+  "version": "1.0.0",
   "private": true,
   "type": "module",
   "engines": { "node": ">=24.13.0" },
   "scripts": {
     "typecheck": "tsc --noEmit && tsc -p tsconfig.test.json --noEmit",
     "build": "node tools/generate-assets.mjs && rollup -c",
+    "media": "node tools/generate-marketplace.mjs",
     "test": "npm run build && tsc -p tsconfig.test.json && node --test --test-concurrency=1 .test-build/tests/*.test.js",
-    "validate": "streamdeck validate com.gomtwigim.livemix.sdPlugin",
+    "validate": "node tools/verify-assets.mjs && streamdeck validate com.gomtwigim.livemix.sdPlugin",
     "pack": "streamdeck pack com.gomtwigim.livemix.sdPlugin --output dist"
   },
   "dependencies": {

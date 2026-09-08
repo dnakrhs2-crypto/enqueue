@@ -1,6 +1,7 @@
-# LiveMix Stream Deck — Round 3 (3A + 3B)
+# LiveMix Stream Deck 1.0.0
 
-Windows-only prerelease `com.gomtwigim.livemix`, manifest version `0.9.1.0`.
+Windows release `com.gomtwigim.livemix`, manifest version `1.0.0.0`
+(npm package `1.0.0`). Requires LiveMix 0.6.0+ on Windows 10/11 x64.
 This package implements eight actions, a shared LiveMix connection and a
 hardware-free test harness. Node 24 and Stream Deck 7.1+ are the runtime baseline.
 It does not install, launch or change LiveMix or Stream Deck profiles.
@@ -14,11 +15,14 @@ npm.cmd run typecheck
 npm.cmd run build
 npm.cmd test
 npm.cmd run validate
-npm.cmd run pack
+npm.cmd run pack -- -f
 ```
 
 The dependencies in this worktree are already installed; retain them and the
-existing lockfile. All direct dependencies use exact versions.
+existing lockfile. Do not run npm install or rewrite package-lock.json for
+this release. Its preview package metadata is intentionally retained under that
+constraint; package.json, manifest and runtime hello advertise 1.0.0.
+All direct dependencies use exact versions.
 The test script builds the actual distributable first, compiles the TypeScript
 tests with `tsconfig.test.json`, then runs `node:test` serially. No physical Stream
 Deck, Stream Deck application or LiveMix executable is needed by the fake tests.
@@ -30,9 +34,25 @@ npm.cmd run validate -- --no-update-check
 ```
 
 See [VALIDATION.md](VALIDATION.md) for actual command results and the remaining
-physical-device validation. `npm.cmd run pack` creates the testable plugin in
-`dist/`. Open the `.streamDeckPlugin` file on a Windows PC with Stream Deck 7.1+
-and enable LiveMix's Settings → External control (Stream Deck).
+physical-device validation. `npm.cmd run pack -- -f` replaces
+`dist/com.gomtwigim.livemix.streamDeckPlugin` with the validated package.
+
+## Install / 설치
+
+1. Install LiveMix 0.6.0+ and Stream Deck 7.1+ on the same Windows 10/11 x64 PC,
+   and run them as the same Windows user.
+2. Open `dist/com.gomtwigim.livemix.streamDeckPlugin` and complete Stream Deck's
+   installation dialog. Use the same UUID to upgrade an existing 0.9.1 installation.
+3. In LiveMix, choose 설정 → 설정... (Settings). Under 외부 제어 (Stream Deck),
+   enable 외부 제어 사용. External Control is off by default.
+4. Expand LiveMix in the Stream Deck action list, place keys and select channels
+   in the property inspector. For Mobile, pair it with the Windows desktop app.
+   FX Send Amount goes on a Stream Deck + dial; FX Send ± goes on keys.
+
+LiveMix's own interface is Korean; the plugin supports Korean and English.
+ASIO is needed for sound, but all controls can be tested while audio is stopped.
+The client reported successful 0.9.1 use with real LiveMix 0.6.0 on Mobile;
+the new artwork and physical Stream Deck + remain separate visual/device checks.
 
 ## Actions
 
@@ -65,11 +85,20 @@ selected channel/FX/slot values while offline. Offline send keys and encoders sh
 - `src/ui/`: finite SVG templates, safe display text, bundled ko/en strings and a
   shared rolling call history per key/encoder. The 10/s budget includes `showAlert`.
 - `com.gomtwigim.livemix.sdPlugin/`: manifest, local PI, local translations and
-  reproducible placeholder icons. `bin/plugin.js` and its module marker are Rollup
+  release icons. `bin/plugin.js` and its module marker are Rollup
   build outputs. The PI only uses its host WebSocket; names use text nodes.
-- `tools/generate-assets.mjs`, `tools/actions.mjs`, `tools/locales.mjs`: pure Node PNG/SVG placeholders
-  in every required 1x/2x size, plus the single translation source. Final artwork
-  belongs to Round 4. Generated icons, JSON and string source are committed inputs.
+- `src/ui/artwork.ts`: shared vector geometry and exact LiveMix colors for
+  runtime keys, static images and media. `design/` contains generated SVG/PNG
+  sources and 256/512 PNG-ready brand HTML.
+- `tools/generate-assets.mjs`, `tools/actions.mjs`, `tools/locales.mjs`:
+  reproducible 1x/2x icons and complete ko/en strings. `tools/brand-png.mjs`
+  exports the geometric ON logo without extra dependencies.
+- `tools/verify-assets.mjs`: checks every manifest image in both sizes,
+  white monochrome menu icons, design/output equality and locale completeness;
+  `npm run validate` runs it before the Elgato CLI.
+- `tools/generate-marketplace.mjs`: `npm.cmd run media` writes five standalone
+  HTML compositions to [the submission folder](../docs/marketplace/livemix-streamdeck/README.md).
+  Claude exports those HTMLs as PNG with Chromium. Release history is in [CHANGELOG.md](CHANGELOG.md).
 - `tests/fake-host.mjs`: actual `ws` server and built SDK child process, official
   registration arguments, Mobile and Stream Deck + device/key/dial/settings events, context output recording,
   separate PI registration and relay, deadlines and cleanup.
@@ -117,6 +146,9 @@ Computed key toggles and dial amounts retry an explicit revision conflict at mos
 twice against refreshed state. FX Send ± keys retry once and share the dial's
 send-target queue. A pre/post press never retries a conflict.
 
-Final icons and Marketplace/site assets remain Round 4 work.
+The [Marketplace package](../docs/marketplace/livemix-streamdeck/README.md)
+contains copy, reviewer instructions, media and the client's submission checklist.
+Keep automatic publication disabled until the Marketplace-processed package,
+real dial demonstration and public support page have been checked.
 Fake tests do not establish physical key readability,
 Chromium font/layout correctness or actual Stream Deck application installation.

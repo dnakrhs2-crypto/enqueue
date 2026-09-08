@@ -1,4 +1,4 @@
-// Manifest, localization and placeholder assets use the same action catalogue.
+// Manifest, localization and release assets use the same action catalogue.
 export const actions = [
   { id: "mic", name: "action", tooltip: "tooltip", states: ["off", "on"] },
   { id: "all-mics", name: "allMics", tooltip: "allMicsTooltip", states: ["allOff", "allOn"] },
