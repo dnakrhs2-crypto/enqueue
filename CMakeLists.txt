@@ -232,6 +232,8 @@ target_sources(LiveMixCore INTERFACE
     ${CMAKE_CURRENT_SOURCE_DIR}/livemix/src/ControlDiscovery.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/livemix/src/ControlSocket.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/livemix/src/ControlServer.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/livemix/src/ControlLog.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/livemix/src/LiveMixSettings.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/livemix/src/GlobalHotkeys.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/livemix/src/PluginPreset.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/livemix/src/LoudnessMeter.cpp)
@@ -288,22 +290,24 @@ if(EXISTS "${_livemix_rc_file}")
     endif()
 endif()
 
-target_sources(LiveMix PRIVATE
-    livemix/src/Main.cpp
-    livemix/src/LiveMixSettings.cpp
-    livemix/src/ui/MainComponent.cpp
-    livemix/src/ui/TopBar.cpp
-    livemix/src/ui/ChannelCard.cpp
-    livemix/src/ui/MasterCard.cpp
-    livemix/src/ui/ChainDrawer.cpp
-    livemix/src/ui/FxDrawer.cpp
-    livemix/src/ui/SettingsDialog.cpp
-    livemix/src/ui/PluginManagerWindow.cpp
-    livemix/src/ui/LoudnessWindow.cpp
-    livemix/src/ui/PluginGroupsWindow.cpp
-    livemix/src/ui/BackupDialog.cpp
-    src/app/Updater.cpp
-    src/ui/PluginWindows.cpp)
+# Wiring tests use the production MainComponent and its single-slot callbacks.
+add_library(LiveMixUI INTERFACE)
+target_sources(LiveMixUI INTERFACE
+    ${CMAKE_CURRENT_SOURCE_DIR}/livemix/src/ui/MainComponent.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/livemix/src/ui/TopBar.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/livemix/src/ui/ChannelCard.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/livemix/src/ui/MasterCard.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/livemix/src/ui/ChainDrawer.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/livemix/src/ui/FxDrawer.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/livemix/src/ui/SettingsDialog.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/livemix/src/ui/PluginManagerWindow.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/livemix/src/ui/LoudnessWindow.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/livemix/src/ui/PluginGroupsWindow.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/livemix/src/ui/BackupDialog.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/app/Updater.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/PluginWindows.cpp)
+target_link_libraries(LiveMixUI INTERFACE LiveMixCore)
+target_sources(LiveMix PRIVATE livemix/src/Main.cpp)
 
 target_include_directories(LiveMix PRIVATE livemix/src livemix/src/ui)
 target_compile_definitions(LiveMix PRIVATE
@@ -313,7 +317,7 @@ target_compile_definitions(LiveMix PRIVATE
     GOCUE_APPCAST_URL="${LIVEMIX_APPCAST_URL}"
     GOCUE_EDDSA_PUBLIC_KEY="${GOCUE_EDDSA_PUBLIC_KEY}"
     ${_livemix_backup_defs})
-target_link_libraries(LiveMix PRIVATE LiveMixCore)
+target_link_libraries(LiveMix PRIVATE LiveMixUI)
 set_property(TARGET LiveMix PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 
 if(GOCUE_HAS_WINSPARKLE)

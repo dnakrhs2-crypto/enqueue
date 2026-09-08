@@ -1,4 +1,5 @@
 #include "ControlSocket.h"
+#include "ControlLog.h"
 
 #include <algorithm>
 #include <array>
@@ -95,10 +96,12 @@ namespace
     }
 }
 
-ControlSocket::Connection::Connection (std::unique_ptr<juce::StreamingSocket> stream) : socket (std::move (stream)) {}
+ControlSocket::Connection::Connection (std::unique_ptr<juce::StreamingSocket> stream, std::shared_ptr<ControlLog> logger)
+    : socket (std::move (stream)), log (std::move (logger)) {}
 ControlSocket::Connection::~Connection() { cancel(); join(); }
 void ControlSocket::Connection::join() { if (worker.joinable()) worker.join(); }
 void ControlSocket::Connection::validInput() { lastInput = now(); }
+void ControlSocket::Connection::failure (const char* code) { if (log) log->failure (code); }
 
 void ControlSocket::Connection::launch (Receive onReceive, std::function<void()> onClosed)
 {
@@ -116,6 +119,7 @@ bool ControlSocket::Connection::send (const Messages& messages)
         const auto cost = reservation (message);
         if (cost > maxOutgoingBytes && (std::holds_alternative<P::State> (message) || std::holds_alternative<P::StateDelta> (message)))
         {
+            failure ("STATE_TOO_LARGE");
             send (P::ErrorResponse { { P::ErrorCode::stateTooLarge, {} }, isAuthenticated() ? stateContext (message) : std::nullopt, {}, {} });
             closeAfterFlush();
             return false;
@@ -127,6 +131,7 @@ bool ControlSocket::Connection::send (const Messages& messages)
         if (! isOpen()) return false;
         if (bytes > maxOutgoingBytes - outgoingBytes || outgoing.size() + messages.size() > 256)
         {
+            failure ("OUTPUT_QUEUE_OVERFLOW");
             cancelled = true;
             wake.signal();
             return false;
@@ -159,7 +164,7 @@ void ControlSocket::Connection::run()
     std::array<char, 4096> input {};
     std::string frame;
     size_t offset = 0, cost = 0;
-    if (! nonblocking (*socket)) cancelled = true;
+    if (! nonblocking (*socket)) { failure ("SOCKET_FAILED"); cancelled = true; }
     try
     {
         while (! cancelled)
@@ -168,10 +173,11 @@ void ControlSocket::Connection::run()
             if (closing && time >= closeDeadline) break;
             if (! closing && ! receivedHello && time - acceptedAt >= 3000)
             {
+                failure ("HANDSHAKE_TIMEOUT");
                 send (P::ErrorResponse { { P::ErrorCode::handshakeTimeout, {} }, {}, {}, {} });
                 closeAfterFlush();
             }
-            if (! closing && time - lastInput >= 20000) break;
+            if (! closing && time - lastInput >= 20000) { failure ("INPUT_TIMEOUT"); break; }
 
             if (frame.empty())
             {
@@ -186,6 +192,7 @@ void ControlSocket::Connection::run()
                     auto encoded = P::encode (next->message);
                     if (const auto* error = std::get_if<P::Error> (&encoded))
                     {
+                        failure (P::errorCode (error->code));
                         encoded = P::encode (P::ErrorResponse { *error, isAuthenticated() ? stateContext (next->message) : std::nullopt, {}, {} });
                         closeAfterFlush();
                     }
@@ -203,9 +210,9 @@ void ControlSocket::Connection::run()
             bool progressed = false;
             if (! frame.empty())
             {
-                if (time - lastProgress >= 2000) break;
+                if (time - lastProgress >= 2000) { failure ("SLOW_CLIENT"); break; }
                 const auto ready = socket->waitUntilReady (false, 0);
-                if (ready < 0) break;
+                if (ready < 0) { failure ("WRITE_FAILED"); break; }
                 if (ready > 0)
                 {
                     const auto count = socket->write (frame.data() + offset, (int) std::min<size_t> (4096, frame.size() - offset));
@@ -221,19 +228,20 @@ void ControlSocket::Connection::run()
                             outgoingBytes -= cost;
                         }
                     }
-                    else if (count == 0 || ! wouldBlock()) break;
+                    else if (count == 0 || ! wouldBlock()) { failure ("WRITE_FAILED"); break; }
                 }
             }
 
             if (! closing)
             {
                 const auto ready = socket->waitUntilReady (true, progressed ? 0 : 10);
-                if (ready < 0) break;
+                if (ready < 0) { failure ("READ_FAILED"); break; }
                 if (ready > 0)
                 {
                     const auto count = socket->read (input.data(), (int) input.size(), false);
                     if (count <= 0)
                     {
+                        if (log) log->info ("reconnect reason=PEER_EOF");
                         if (const auto error = decoder.finish()) { if (receive) receive (*error); }
                         closeAfterFlush();
                     }
@@ -251,7 +259,7 @@ void ControlSocket::Connection::run()
             if (! progressed) wake.wait (10);
         }
     }
-    catch (...) { /* A transport failure terminates only this connection. Never expose exception text. */ }
+    catch (...) { failure ("TRANSPORT_FAILED"); }
     socket->close();
     cancelled = true;
     if (closed) closed();
@@ -261,7 +269,7 @@ void ControlSocket::Connection::run()
     finished = true;
 }
 
-ControlSocket::ControlSocket()
+ControlSocket::ControlSocket (std::shared_ptr<ControlLog> logger) : log (std::move (logger))
 {
     // In this JUCE checkout the options constructor skips initSockets(). Its default constructor performs
     // the one-time Winsock initialisation, before we construct our listener with explicit buffer options.
@@ -290,6 +298,7 @@ int ControlSocket::start (int preferred, Connected handler)
 }
 
 void ControlSocket::allowConnections() { accepting = true; wake.signal(); }
+void ControlSocket::stopAccepting() { accepting = false; }
 void ControlSocket::beginStop() { stopping = true; accepting = false; wake.signal(); }
 void ControlSocket::stop()
 {
@@ -321,12 +330,13 @@ void ControlSocket::run()
         if (! stream) continue;
         reap(); // a client may have finished while we were in the listener readiness wait
         const auto unauthenticated = std::count_if (clients.begin(), clients.end(), [] (const auto& c) { return ! c->isAuthenticated(); });
-        if (stopping || clients.size() >= maxClients || unauthenticated >= maxUnauthenticated)
+        if (stopping || ! accepting || clients.size() >= maxClients || unauthenticated >= maxUnauthenticated)
         {
+            if (log && ! stopping && accepting) log->failure ("CLIENT_LIMIT");
             stream->close();
             continue;
         }
-        auto client = Connection::Ptr (new Connection (std::move (stream)));
+        auto client = Connection::Ptr (new Connection (std::move (stream), log));
         clients.push_back (client);
         auto handler = connected (client);
         client->launch (std::move (handler.receive), std::move (handler.closed));

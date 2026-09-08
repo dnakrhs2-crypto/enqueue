@@ -10,13 +10,16 @@ namespace gocue::livemix
 
 namespace
 {
-    class SettingsContent : public juce::Component
+    class SettingsContent : public juce::Component,
+                            private juce::Timer
     {
     public:
         SettingsContent (MixEngine& e, LiveMixSettings& s, std::function<void()> deviceChanged, std::function<void()> hotkeysChanged,
-                         std::function<void (bool)> hotkeyCapture)
+                         std::function<void (bool)> hotkeyCapture, std::function<ControlServer::Status()> controlStatus,
+                         std::function<void (bool)> controlEnabled)
             : engine (e), settings (s), onDeviceChanged (std::move (deviceChanged)), onHotkeysChanged (std::move (hotkeysChanged)),
-              onHotkeyCapture (std::move (hotkeyCapture))
+              onHotkeyCapture (std::move (hotkeyCapture)), getControlStatus (std::move (controlStatus)),
+              onControlEnabled (std::move (controlEnabled))
         {
             styleCaption (deviceCaption, ko ("ASIO 장치"));
             addAndMakeVisible (deviceCaption);
@@ -125,6 +128,29 @@ namespace
             hotkeyRow (micHotkeyLabel, ko ("마이크 뮤트그룹"), micHotkey, micHotkeyClear, &LiveMixSettings::getMicMuteHotkey, &LiveMixSettings::setMicMuteHotkey, fxHotkey);
             hotkeyRow (fxHotkeyLabel, ko ("FX 뮤트그룹"), fxHotkey, fxHotkeyClear, &LiveMixSettings::getFxMuteHotkey, &LiveMixSettings::setFxMuteHotkey, micHotkey);
 
+            styleCaption (controlCaption, ko ("외부 제어 (Stream Deck)"));
+            addAndMakeVisible (controlCaption);
+            toggle (externalControl, ko ("외부 제어 사용"), settings.getExternalControlEnabled(), [this] (bool on)
+            {
+                if (onControlEnabled) onControlEnabled (on);
+                refreshControlStatus();   // the bound address is visible on the very first click
+            });
+            styleCaption (controlNote, ko ("이 PC의 Stream Deck 등에서 마이크와 FX를 조절합니다."));
+            controlNote.setFont (bodyFont (12.5f));
+            addAndMakeVisible (controlNote);
+            for (auto* label : { &controlAddress, &controlState })
+            {
+                label->setFont (bodyFont (14.0f));
+                label->setMinimumHorizontalScale (1.0f);
+                label->setEditable (false, false, false);
+                addAndMakeVisible (*label);
+            }
+            controlHelp.setButtonText (ko ("설치 방법"));
+            controlHelp.setColour (juce::HyperlinkButton::textColourId, Palette::accent);
+            controlHelp.setFont (bodyFont (12.5f), false, juce::Justification::centredLeft);
+            controlHelp.onClick = [] { juce::URL (ko ("https://곰튀김.com/livemix/#streamdeck")).launchInDefaultBrowser(); };
+            addAndMakeVisible (controlHelp);
+
             styleCaption (backupCaption, ko ("온라인 백업"));
             addAndMakeVisible (backupCaption);
             styleCaption (backupNote, ko ("위쪽 '온라인 백업' 버튼의 창에서 계정을 만들고 로그인합니다. 백업은 그 계정의 것만 보이고, 올리기·불러오기도 그 계정으로만 됩니다."));
@@ -132,7 +158,9 @@ namespace
             addAndMakeVisible (backupNote);
 
             refreshDevices();
-            setSize (560, 610);
+            refreshControlStatus();
+            setSize (560, 768);
+            startTimer (500);
         }
 
         void refreshDevices()
@@ -204,6 +232,7 @@ namespace
 
         ~SettingsContent() override
         {
+            stopTimer();   // no timer can refer to the labels once SettingsWindow deletes this content
             if ((micHotkey.isCapturing() || fxHotkey.isCapturing()) && onHotkeyCapture)
                 onHotkeyCapture (false);   // the dialog went away mid-capture: the hotkeys come back
         }
@@ -243,6 +272,14 @@ namespace
             }
 
             area.removeFromTop (10);
+            controlCaption.setBounds (area.removeFromTop (20));
+            externalControl.setBounds (area.removeFromTop (28));
+            controlNote.setBounds (area.removeFromTop (36));
+            auto controlRow = area.removeFromTop (30);
+            controlAddress.setBounds (controlRow.removeFromLeft (185));
+            controlState.setBounds (controlRow);
+            controlHelp.setBounds (area.removeFromTop (28).withWidth (100));
+            area.removeFromTop (16);
             backupCaption.setBounds (area.removeFromTop (20));
             backupNote.setBounds (area.removeFromTop (56));
         }
@@ -250,17 +287,37 @@ namespace
         void paint (juce::Graphics& g) override { g.fillAll (Palette::card); }
 
     private:
+        void timerCallback() override { refreshControlStatus(); }
+
+        void refreshControlStatus()
+        {
+            const auto status = getControlStatus ? getControlStatus() : ControlServer::Status {};
+            externalControl.setToggleState (status.enabled, juce::dontSendNotification);
+            controlAddress.setText (status.enabled ? status.address() : ko ("사용 안 함"), juce::dontSendNotification);
+            const auto text = ! status.enabled ? ko ("꺼짐")
+                : status.error.isNotEmpty() ? ko ("연결 오류 — 다시 켜 보세요")
+                : status.starting ? ko ("시작 중")
+                : status.connectedCount == 0 ? ko ("연결 대기 중")
+                : ko ("연결됨 ") + juce::String (status.connectedCount) + ko ("개");
+            controlState.setText (text, juce::dontSendNotification);
+            controlState.setColour (juce::Label::textColourId, status.error.isNotEmpty() ? Palette::danger : Palette::dimText);
+        }
+
         MixEngine& engine;
         LiveMixSettings& settings;
         std::function<void()> onDeviceChanged, onHotkeysChanged;
         std::function<void (bool)> onHotkeyCapture;
+        std::function<ControlServer::Status()> getControlStatus;
+        std::function<void (bool)> onControlEnabled;
         juce::StringArray names;
         juce::Label deviceCaption, bufferCaption, deviceNote, backupCaption, backupNote, hotkeyCaption, hotkeyNote, micHotkeyLabel, fxHotkeyLabel;
+        juce::Label controlCaption, controlNote, controlAddress, controlState;
+        juce::HyperlinkButton controlHelp;
         HotkeyButton micHotkey, fxHotkey;
         juce::TextButton micHotkeyClear { "x" }, fxHotkeyClear { "x" };
         juce::ComboBox deviceCombo, bufferCombo;
         juce::TextButton panelButton;
-        juce::ToggleButton minimiseToTray, closeAsk, closeToTray, startWithWindows, skipWhenOff;
+        juce::ToggleButton minimiseToTray, closeAsk, closeToTray, startWithWindows, skipWhenOff, externalControl;
         bool refreshing = false;
     };
 
@@ -294,7 +351,8 @@ namespace
 }
 
 void SettingsDialog::show (MixEngine& engine, LiveMixSettings& settings, juce::Component* centreAround, std::function<void()> onDeviceChanged,
-                           std::function<void()> onHotkeysChanged, std::function<void (bool capturing)> onHotkeyCapture)
+                           std::function<void()> onHotkeysChanged, std::function<void (bool capturing)> onHotkeyCapture,
+                           std::function<ControlServer::Status()> controlStatus, std::function<void (bool)> controlEnabled)
 {
     if (openDialog != nullptr)
     {
@@ -302,7 +360,8 @@ void SettingsDialog::show (MixEngine& engine, LiveMixSettings& settings, juce::C
         return;
     }
 
-    auto* content = new SettingsContent (engine, settings, std::move (onDeviceChanged), std::move (onHotkeysChanged), std::move (onHotkeyCapture));
+    auto* content = new SettingsContent (engine, settings, std::move (onDeviceChanged), std::move (onHotkeysChanged), std::move (onHotkeyCapture),
+                                         std::move (controlStatus), std::move (controlEnabled));
     auto* scroller = new juce::Viewport();
     scroller->setViewedComponent (content, true);
     scroller->setScrollBarsShown (true, true);   // sideways only when a narrow display squeezed the window under the content's width

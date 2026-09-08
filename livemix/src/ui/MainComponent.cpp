@@ -109,11 +109,30 @@ MainComponent::MainComponent (MixDocument& doc, LiveMixSettings& s)
     {
         engine.forEachChain ([this] (PluginChain& chain) { chain.setListener (&windows); });
         rebuildCards();
-        muteGroups.apply();   // rebuilt nodes start unmuted: the groups' state goes back in
-    };
-    document.onValueChanged = [this] { refreshValues(); };
+        if (sessionGeneration != document.getSessionGeneration())
+        {
+            sessionGeneration = document.getSessionGeneration();
+            muteGroups.reset();   // a new session is observed only after its runtime groups have been released
+        }
+        else
+            muteGroups.apply();   // rebuilt nodes start unmuted: the groups' state goes back in
 
-    muteGroups.onChanged = [this] { muteGroupsChanged(); };
+        if (controlServer != nullptr)
+            controlServer->documentChanged (ControlServer::ChangeKind::structure);
+    };
+    document.onValueChanged = [this]
+    {
+        refreshValues();
+        if (controlServer != nullptr)
+            controlServer->documentChanged (ControlServer::ChangeKind::values);
+    };
+
+    muteGroups.onChanged = [this]
+    {
+        muteGroupsChanged();
+        if (controlServer != nullptr)
+            controlServer->muteGroupsChanged();
+    };
     hotkeys.onHotkey = [this] (int id) { muteGroups.toggle (id == 1 ? MuteGroups::Group::mic : MuteGroups::Group::fx); };
     registerHotkeys();
 
@@ -125,6 +144,7 @@ MainComponent::MainComponent (MixDocument& doc, LiveMixSettings& s)
 MainComponent::~MainComponent()
 {
     stopTimer();
+    detachControlServer();   // also covers a window destroyed independently of the app's normal shutdown
     backup.cancel();
     SettingsDialog::closeIfOpen();
     BackupDialog::closeIfOpen();   // its content refers to the document and the backup thread
@@ -136,6 +156,29 @@ MainComponent::~MainComponent()
     engine.forEachChain ([] (PluginChain& chain) { chain.setListener (nullptr); });   // the window manager dies here: no chain may call it afterwards
     document.onStructureChanged = nullptr;
     document.onValueChanged = nullptr;
+}
+
+void MainComponent::attachControlServer (ControlServer* server)
+{
+    if (controlServer == server)
+        return;
+
+    detachControlServer();
+    controlServer = server;
+}
+
+void MainComponent::detachControlServer()
+{
+    if (controlServer != nullptr)
+        controlServer->stop();   // joins workers and invalidates queued message callbacks before MuteGroups dies
+
+    controlServer = nullptr;
+    onExternalControlEnabled = nullptr;
+}
+
+ControlServer::Status MainComponent::getExternalControlStatus() const
+{
+    return controlServer != nullptr ? controlServer->getStatus() : ControlServer::Status {};
 }
 
 //==============================================================================
@@ -940,7 +983,6 @@ void MainComponent::newSession()
     withSessionSecured ([this]
     {
         document.newSession();
-        muteGroups.reset();           // a session starts with its groups released
         faultedPlugins.clear();
         stalledPlugins.clear();
         pluginNote.clear();
@@ -966,7 +1008,6 @@ void MainComponent::loadSession (const juce::File& file)
         return;
     }
 
-    muteGroups.reset();   // the opened session starts with its groups released (only now: the old mix played on while it loaded)
     faultedPlugins.clear();
     stalledPlugins.clear();
     pluginNote.clear();
@@ -1361,17 +1402,26 @@ void MainComponent::muteGroupsChanged()
 
 void MainComponent::showSettingsDialog()
 {
-    SettingsDialog::show (engine, settings, this, [this] { deviceChosen(); }, [this] { registerHotkeys(); },
-                          [this] (bool capturing)
+    juce::Component::SafePointer<MainComponent> safe (this);
+    SettingsDialog::show (engine, settings, this, [safe] { if (safe != nullptr) safe->deviceChosen(); },
+                          [safe] { if (safe != nullptr) safe->registerHotkeys(); },
+                          [safe] (bool capturing)
                           {
+                              if (safe == nullptr) return;
                               // the key being chosen must not fire the group it is bound to right now
                               if (capturing)
                               {
-                                  hotkeys.clear (1);
-                                  hotkeys.clear (2);
+                                  safe->hotkeys.clear (1);
+                                  safe->hotkeys.clear (2);
                               }
                               else
-                                  registerHotkeys();
+                                  safe->registerHotkeys();
+                          },
+                          [safe] { return safe != nullptr ? safe->getExternalControlStatus() : ControlServer::Status {}; },
+                          [safe] (bool on)
+                          {
+                              if (safe != nullptr && safe->onExternalControlEnabled)
+                                  safe->onExternalControlEnabled (on);
                           });
 }
 

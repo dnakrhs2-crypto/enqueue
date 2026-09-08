@@ -50,9 +50,10 @@ target_sources(EnqueueTests PRIVATE
 
 target_compile_definitions(EnqueueTests PRIVATE
     JUCE_APPLICATION_NAME_STRING="EnqueueTests"
+    GOCUE_HAS_WINSPARKLE=0
     JUCE_APPLICATION_VERSION_STRING="${PROJECT_VERSION}")
 
-target_link_libraries(EnqueueTests PRIVATE GoCueCore LiveMixCore)
+target_link_libraries(EnqueueTests PRIVATE GoCueCore LiveMixUI)
 
 set_property(TARGET EnqueueTests PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 

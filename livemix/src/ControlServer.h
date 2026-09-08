@@ -21,12 +21,16 @@ public:
         int preferredPort = ControlSocket::preferredPort;
         juce::String appVersion;       // empty uses this target's application version
         juce::File discoveryDirectory; // empty -> %APPDATA%/LiveMix/control; otherwise the exact directory
+        juce::File logDirectory;       // empty -> %APPDATA%/LiveMix/logs; tests use an isolated directory
     };
     struct Status
     {
         bool enabled = false;
         int port = 0, connectedCount = 0; // only completed hellos count
         juce::String error;              // stable diagnostic code, never a path, token or raw request
+        bool starting = false;
+        juce::String host = "127.0.0.1";
+        juce::String address() const { return port > 0 ? host + ":" + juce::String (port) : juce::String(); }
     };
     using ChangeKind = ControlState::ChangeKind;
 

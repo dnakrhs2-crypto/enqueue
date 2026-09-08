@@ -1,6 +1,7 @@
 #include "ControlServer.h"
 #include "ControlDiscovery.h"
 #include "ControlDispatcher.h"
+#include "ControlLog.h"
 
 #include <juce_cryptography/juce_cryptography.h>
 #include <juce_events/juce_events.h>
@@ -105,6 +106,7 @@ struct ControlServer::Impl : private juce::Timer
         const uint64_t generation;
         const juce::Uuid instance;
         const juce::String token, appVersion;
+        const std::shared_ptr<ControlLog> log;
         std::mutex mutex;
         bool active = true, scheduled = false;
         std::vector<std::shared_ptr<Client>> clients;
@@ -112,8 +114,10 @@ struct ControlServer::Impl : private juce::Timer
         Bucket commands { 120, 40 }, requests { 8, 8 }, auxiliary { 16, 16 };
         P::Context context;
 
-        Ingress (std::shared_ptr<Gate> g, uint64_t gen, juce::Uuid id, juce::String secret, juce::String version)
-            : gate (std::move (g)), generation (gen), instance (id), token (std::move (secret)), appVersion (std::move (version)) {}
+        Ingress (std::shared_ptr<Gate> g, uint64_t gen, juce::Uuid id, juce::String secret, juce::String version,
+                 std::shared_ptr<ControlLog> logger)
+            : gate (std::move (g)), generation (gen), instance (id), token (std::move (secret)), appVersion (std::move (version)),
+              log (std::move (logger)) {}
         ControlSocket::Handler connect (ControlSocket::Connection::Ptr);
         void receive (const std::shared_ptr<Client>&, const P::DecodedLine&);
         void remove (const std::shared_ptr<Client>&);
@@ -121,6 +125,7 @@ struct ControlServer::Impl : private juce::Timer
         bool permitLocked (Client&, const P::ClientMessage&, double receivedAt);
         void rejectLocked (Client&, P::Error, const std::shared_ptr<Record>& = {}, bool close = false);
         bool enqueueLocked (Client&, Work);
+        int connectedCountLocked() const;
     };
 
     Impl (MixDocument& doc, MuteGroups& mute, std::function<bool()> running)
@@ -152,11 +157,12 @@ struct ControlServer::Impl : private juce::Timer
     std::function<bool()> audioRunning;
     std::shared_ptr<Gate> gate;
     Options options;
-    bool started = false, enabled = false, shuttingDown = false, startingWritten = false, captureScheduled = false;
+    bool started = false, enabled = false, shuttingDown = false, ready = false, disablePending = false, captureScheduled = false;
     int port = 0;
     juce::String error;
     double lastPoll = 0;
     ControlDiscovery::Status discoveryStatus;
+    std::shared_ptr<ControlLog> log;
     std::unique_ptr<ControlDiscovery> discovery;
     std::unique_ptr<ControlSocket> socket;
     std::shared_ptr<Ingress> ingress;
@@ -185,6 +191,14 @@ void ControlServer::Impl::Ingress::remove (const std::shared_ptr<Client>& client
     client->pending.clear();
     client->pendingBytes = 0;
     clients.erase (std::remove (clients.begin(), clients.end(), client), clients.end());
+    if (client->connection->isAuthenticated())
+        log->info ("client_disconnected clients=" + juce::String (connectedCountLocked()));
+}
+
+int ControlServer::Impl::Ingress::connectedCountLocked() const
+{
+    return (int) std::count_if (clients.begin(), clients.end(), [] (const auto& client)
+    { return client->connection->isOpen() && client->connection->isAuthenticated(); });
 }
 
 void ControlServer::Impl::Ingress::scheduleLocked()
@@ -197,12 +211,14 @@ void ControlServer::Impl::Ingress::scheduleLocked()
     }))
     {
         scheduled = false;
+        log->failure ("MESSAGE_QUEUE_FAILED");
         for (const auto& client : clients) client->connection->cancel();
     }
 }
 
 void ControlServer::Impl::Ingress::rejectLocked (Client& client, P::Error failure, const std::shared_ptr<Record>& record, bool close)
 {
+    log->failure (P::errorCode (failure.code));
     P::ErrorResponse response { failure, {}, {}, {} };
     if (client.connection->isAuthenticated()) response.context = context;
     if (failure.code == Code::unsupportedVersion) response.supportedVersions = { 1 };
@@ -220,6 +236,7 @@ bool ControlServer::Impl::Ingress::enqueueLocked (Client& client, Work work)
         || client.pendingBytes + work.bytes > 16 * P::maxLineBytes || pendingBytes + work.bytes > 64 * P::maxLineBytes)
     {
         // A replay that cannot be queued must not overwrite the original cached completion.
+        log->failure ("INPUT_QUEUE_OVERFLOW");
         rejectLocked (client, { Code::serverBusy, juce::String (work.record->id) },
                       std::holds_alternative<Replay> (work.request) ? nullptr : work.record);
         return false;
@@ -253,7 +270,10 @@ void ControlServer::Impl::Ingress::receive (const std::shared_ptr<Client>& clien
         ? (*json)["id"].toString() : juce::String();
     const auto digest = id.isNotEmpty() ? fingerprint (*json) : juce::String();
     std::lock_guard<std::mutex> lock (mutex);
-    if (! active || ! client->connection->isOpen()) { client->connection->cancel(); return; }
+    // Shutdown may have queued errors/serverStatus while this receive was waiting for the ingress mutex.
+    // Preserve that final FIFO instead of cancelling the connection and dropping its queued notices.
+    if (! active) { client->connection->closeAfterFlush(); return; }
+    if (! client->connection->isOpen()) return;
 
     std::shared_ptr<Record> record;
     if (id.isNotEmpty())
@@ -321,9 +341,13 @@ void ControlServer::Impl::start (Options settings)
     stop();
     options = std::move (settings);
     if (options.appVersion.isEmpty()) options.appVersion = JUCE_APPLICATION_VERSION_STRING;
+    log = std::make_shared<ControlLog> (options.logDirectory);
+    log->info ("start app=" + options.appVersion + " protocol=1");
     started = true;
     shuttingDown = false;
     enabled = options.enabled;
+    ready = disablePending = false;
+    log->info (enabled ? "enable" : "disable");
     error.clear();
     ++gate->generation;
     discoveryStatus = {};
@@ -339,6 +363,7 @@ void ControlServer::Impl::start (Options settings)
                     lifetime->owner->discoveryPublished (status, success);
             });
         });
+    if (enabled) openListener();   // bind now so the settings row immediately has the real port
     startTimer (20);
 }
 
@@ -358,40 +383,48 @@ void ControlServer::Impl::discoveryPublished (const ControlDiscovery::Status& st
     if (! success)
     {
         if (error != "DISCOVERY_FAILED") fail ("DISCOVERY_FAILED");
+        else log->failure ("DISCOVERY_FAILED");
         return;
     }
     if (status.state == ControlDiscovery::State::starting)
     {
-        startingWritten = true;
-        if (! socket || socket->isStopped()) openListener();
+        if (socket && port > 0) publishDiscovery (ControlDiscovery::State::ready);
     }
     else if (status.state == ControlDiscovery::State::ready && socket && ingress)
+    {
+        if (! ready) log->info ("listening host=127.0.0.1 port=" + juce::String (port));
+        ready = true;
         socket->allowConnections();
+    }
 }
 
 void ControlServer::Impl::openListener()
 {
-    if (! enabled || shuttingDown || ! startingWritten || error.isNotEmpty()) return;
-    startingWritten = false;
-    socket.reset(); // any previous accept/connection workers have already finished
+    if (! enabled || shuttingDown || error.isNotEmpty()) return;
+    // OFF closes asynchronously; a rapid ON finishes that bounded flush before rebinding. Acceptance still
+    // waits for both starting and ready discovery writes, so a disk failure never exposes command dispatch.
+    socket.reset();
     const auto token = ControlDiscovery::createToken();
     if (token.isEmpty()) { fail ("RANDOM_FAILED"); return; }
     state = std::make_unique<ControlState> (ControlState::capture (document, groups, audioRunning()));
-    ingress = std::make_shared<Ingress> (gate, gate->generation, discoveryStatus.instanceId, token, options.appVersion);
+    ingress = std::make_shared<Ingress> (gate, gate->generation, discoveryStatus.instanceId, token, options.appVersion, log);
     ingress->context = { ingress->instance, state->getCurrent().sessionId, state->getCurrent().revision };
     dispatcher = std::make_unique<ControlDispatcher> (document, groups, *state, ingress->instance, audioRunning);
-    socket = std::make_unique<ControlSocket>();
+    socket = std::make_unique<ControlSocket> (log);
     port = socket->start (options.preferredPort, [queue = ingress] (auto connection) { return queue->connect (std::move (connection)); });
     if (port == 0) { fail ("BIND_FAILED"); return; }
     discoveryStatus.token = token;
-    publishDiscovery (ControlDiscovery::State::ready);
     lastPoll = now();
 }
 
 void ControlServer::Impl::quiesce (P::StatusReason reason)
 {
+    if (socket) socket->stopAccepting();
     ++gate->generation; // invalidate queued drains/captures before any socket or document teardown
-    captureScheduled = startingWritten = false;
+    captureScheduled = ready = disablePending = false;
+    if (log)
+        log->info (reason == P::StatusReason::controlDisabled ? "reconnect reason=CONTROL_DISABLED"
+                    : reason == P::StatusReason::shutdown ? "reconnect reason=SHUTDOWN" : "reconnect reason=RESTART");
     if (ingress)
     {
         std::lock_guard<std::mutex> lock (ingress->mutex);
@@ -405,6 +438,7 @@ void ControlServer::Impl::quiesce (P::StatusReason reason)
             client->pendingBytes = 0;
             if (client->connection->isAuthenticated())
                 client->connection->send (P::ServerStatus { ingress->instance, disabled ? P::Status::disabled : P::Status::stopping, reason });
+            client->connection->closeAfterFlush();
         }
         ingress->pending = ingress->pendingBytes = 0;
         ingress->scheduled = false;
@@ -422,8 +456,15 @@ void ControlServer::Impl::setEnabled (bool value)
     quiesce (P::StatusReason::controlDisabled);
     enabled = value;
     error.clear();
-    if (enabled) discoveryStatus.instanceId = juce::Uuid();
-    publishDiscovery (enabled ? ControlDiscovery::State::starting : ControlDiscovery::State::disabled);
+    log->info (enabled ? "enable" : "disable");
+    if (enabled)
+    {
+        discoveryStatus.instanceId = juce::Uuid();
+        publishDiscovery (ControlDiscovery::State::starting);
+        openListener();
+    }
+    else
+        disablePending = true;   // publish disabled only after workers have sent serverStatus and closed
 }
 
 void ControlServer::Impl::beginShutdown()
@@ -448,12 +489,15 @@ void ControlServer::Impl::stop()
         discovery->stop (discoveryStatus);
         discovery.reset();
     }
+    if (started && log) log->info ("stop");
+    log.reset();
     started = enabled = false;
     port = 0;
 }
 
 void ControlServer::Impl::fail (const juce::String& code)
 {
+    if (log) log->failure (code);
     quiesce (P::StatusReason::restart);
     error = code;
     publishDiscovery (ControlDiscovery::State::error);
@@ -466,8 +510,10 @@ bool ControlServer::Impl::capture()
     {
         // A new instance is required if the JSON-safe revision space is exhausted; never wrap revisions.
         quiesce (P::StatusReason::restart);
+        log->failure ("REVISION_EXHAUSTED");
         discoveryStatus.instanceId = juce::Uuid();
         publishDiscovery (ControlDiscovery::State::starting);
+        openListener();
         return false;
     }
     std::lock_guard<std::mutex> lock (ingress->mutex);
@@ -495,7 +541,14 @@ void ControlServer::Impl::finish (const std::shared_ptr<Client>& client, const s
     std::lock_guard<std::mutex> lock (ingress->mutex);
     if (! ingress->active || ! client->connection->isOpen()) return;
     if (! client->connection->send (reply.messages)) return;
-    if (initial) client->connection->authenticated(); // receive sees this before it can process a post-hello request
+    if (initial)
+    {
+        client->connection->authenticated(); // receive sees this before it can process a post-hello request
+        log->info ("client_connected clients=" + juce::String (ingress->connectedCountLocked()));
+    }
+    for (const auto& message : reply.messages)
+        if (const auto* failure = std::get_if<P::ErrorResponse> (&message))
+            log->failure (P::errorCode (failure->error.code));
     if (reply.published) { client->published = reply.published; client->publishedAt = now(); }
     record->reply = std::make_shared<const Reply> (std::move (reply));
 }
@@ -570,7 +623,11 @@ void ControlServer::Impl::drain()
 
 void ControlServer::Impl::timerCallback()
 {
-    if (startingWritten && (! socket || socket->isStopped())) openListener();
+    if (disablePending && (! socket || socket->isStopped()))
+    {
+        disablePending = false;
+        publishDiscovery (ControlDiscovery::State::disabled);
+    }
     if (! enabled || shuttingDown || ! state) return;
     if (socket && socket->isStopped()) { fail ("SOCKET_FAILED"); return; }
     const auto time = now();
@@ -600,12 +657,11 @@ ControlServer::Status ControlServer::Impl::getStatus() const
 {
     messageThread();
     Status result { enabled && ! shuttingDown, port, 0, error };
+    result.starting = result.enabled && ! ready && error.isEmpty();
     if (ingress)
     {
         std::lock_guard<std::mutex> lock (ingress->mutex);
-        if (ingress->active)
-            for (const auto& client : ingress->clients)
-                if (client->connection->isOpen() && client->connection->isAuthenticated()) ++result.connectedCount;
+        if (ingress->active) result.connectedCount = ingress->connectedCountLocked();
     }
     return result;
 }

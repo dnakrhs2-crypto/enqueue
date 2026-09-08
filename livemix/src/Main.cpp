@@ -1,4 +1,5 @@
 #include "LiveMixSettings.h"
+#include "ControlServer.h"
 #include "MixDocument.h"
 #include "MixEngine.h"
 #include "app/Updater.h"
@@ -194,6 +195,26 @@ public:
         if (! document->hasAppliedGraph())
             document->applyToEngine();   // every path above failed to bring a session in: the in-memory default runs (its notice stays)
 
+        // The first snapshot sees the restored session and its applied graph. This getter is called only on
+        // the message thread, and the server is stopped before either the window or engine can be destroyed.
+        controlServer = std::make_unique<ControlServer> (*document, main.getMuteGroups(), [mixEngine = engine.get()]
+        {
+            jassert (juce::MessageManager::getInstance()->isThisTheMessageThread());
+            return mixEngine->isDeviceRunning();
+        });
+        main.attachControlServer (controlServer.get());
+        main.onExternalControlEnabled = [this] (bool on)
+        {
+            settings->setExternalControlEnabled (on);
+            controlServer->setEnabled (on);
+        };
+        ControlServer::Options controlOptions;
+        controlOptions.enabled = settings->getExternalControlEnabled();
+        controlOptions.appVersion = getApplicationVersion();
+        controlOptions.discoveryDirectory = juce::File::getSpecialLocation (juce::File::userApplicationDataDirectory)
+                                                .getChildFile ("LiveMix/control");
+        controlServer->start (std::move (controlOptions));
+
         // in the window, not a modal alert: a modal would freeze the frame (no resizing) and the mic buttons until
         // dismissed. Its own line under a session warning, never replacing it.
         if (safeMode)
@@ -258,12 +279,20 @@ public:
         Updater::shutdown();
         tray = nullptr;
 
+        if (controlServer != nullptr)
+            controlServer->beginShutdown();   // also protects an OS-forced shutdown, before the final save
+
         if (mainWindow != nullptr)
         {
             settings->setWindowState (mainWindow->getWindowStateAsString());
             mainWindow->getMainComponent().saveIfDirty();
         }
 
+        if (controlServer != nullptr)
+            controlServer->stop();
+        if (mainWindow != nullptr)
+            mainWindow->getMainComponent().detachControlServer();
+        controlServer = nullptr;
         mainWindow = nullptr;
 
         if (engine != nullptr)
@@ -292,7 +321,17 @@ public:
         if (document->isDirty())
             showWindow();   // the question below must be seen, also from the tray
 
-        mainWindow->getMainComponent().withSessionSecured ([this] { quit(); });
+        mainWindow->getMainComponent().withSessionSecured ([]
+        {
+            // This continuation runs only after any save/quit question has succeeded. Cancellation leaves
+            // control live. No remote edit can slip between confirmed quit and shutdown's final save.
+            if (auto* app = dynamic_cast<LiveMixApplication*> (juce::JUCEApplication::getInstance()))
+            {
+                if (app->controlServer != nullptr)
+                    app->controlServer->beginShutdown();
+                app->quit();
+            }
+        });
     }
 
     void anotherInstanceStarted (const juce::String& commandLine) override
@@ -477,6 +516,7 @@ private:
     std::unique_ptr<MixEngine> engine;
     std::unique_ptr<MixDocument> document;
     std::unique_ptr<MainWindow> mainWindow;
+    std::unique_ptr<ControlServer> controlServer;
     std::unique_ptr<TrayIcon> tray;
     juce::Time launchedAt, lastQuietCheck;
     bool safeMode = false;

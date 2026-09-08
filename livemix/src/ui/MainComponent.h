@@ -2,6 +2,7 @@
 
 #include "ChainDrawer.h"
 #include "ChannelCard.h"
+#include "ControlServer.h"
 #include "FxDrawer.h"
 #include "GlobalHotkeys.h"
 #include "LiveMixSettings.h"
@@ -59,6 +60,11 @@ public:
     void deviceChanged();
     /** The two mute groups (the tray menu toggles them too). */
     MuteGroups& getMuteGroups() noexcept { return muteGroups; }
+    /** The app owns the server. Detach stops it before this component's mute groups can be destroyed. */
+    void attachControlServer (ControlServer*);
+    void detachControlServer();
+    ControlServer::Status getExternalControlStatus() const;
+    std::function<void (bool)> onExternalControlEnabled;
     /** The notice bar under the top bar, with a close button - never a modal dialog: a modal alert freezes the whole
         window (no resizing, no mic buttons) until it is dismissed, which is wrong for a live tool. Three lines that
         come and go on their own: the session note (the last open: its failure, or its warnings), the startup note
@@ -117,6 +123,8 @@ private:
     LiveMixSettings& settings;
     MixEngine& engine;
     MuteGroups muteGroups { document };
+    ControlServer* controlServer = nullptr;
+    juce::Uuid sessionGeneration = document.getSessionGeneration();
     GlobalHotkeys hotkeys;
     PluginWindowManager windows;
     WebDavBackup backup;

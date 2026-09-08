@@ -1,7 +1,10 @@
 #include "ControlServer.h"
 #include "ControlDiscovery.h"
+#include "ControlLog.h"
+#include "LiveMixSettings.h"
 #include "MixDocument.h"
 #include "MuteGroups.h"
+#include "../livemix/src/ui/MainComponent.h"
 
 #include <juce_events/juce_events.h>
 
@@ -180,6 +183,7 @@ namespace
                 if (server) server->muteGroupsChanged();
             };
             options.enabled = true; options.preferredPort = 0; options.appVersion = "0.5.3"; options.discoveryDirectory = directory;
+            options.logDirectory = directory.getChildFile ("logs");
             makeServer();
         }
         ~Fixture()
@@ -198,6 +202,64 @@ namespace
         }
         void start() { server->start (options); }
     };
+
+    struct WiringFixture
+    {
+        juce::File directory = juce::File::getSpecialLocation (juce::File::tempDirectory)
+            .getChildFile ("livemix-wiring-" + juce::Uuid().toString());
+        LiveMixSettings settings { directory.getChildFile ("settings") };
+        MixEngine engine;
+        MixDocument document { engine };
+        std::unique_ptr<MainComponent> main;
+        std::unique_ptr<ControlServer> server;
+        ControlServer::Options options;
+        int titleRefreshes = 0;
+        bool titleDirty = false, allOnMessageThread = true;
+
+        WiringFixture()
+        {
+            engine.prepare (48000.0, 256);
+            document.applyToEngine();
+            main = std::make_unique<MainComponent> (document, settings);
+            main->setSize (900, 800);
+            // The same wrapper as MainWindow: the production callback must remain installed underneath it.
+            document.onValueChanged = [this, original = document.onValueChanged]
+            {
+                if (original) original();
+                ++titleRefreshes;
+                titleDirty = document.isDirty();
+            };
+            server = std::make_unique<ControlServer> (document, main->getMuteGroups(), [this]
+            {
+                allOnMessageThread = allOnMessageThread && juce::MessageManager::getInstance()->isThisTheMessageThread();
+                return engine.isDeviceRunning();
+            });
+            main->attachControlServer (server.get());
+            main->onExternalControlEnabled = [this] (bool on)
+            {
+                settings.setExternalControlEnabled (on);
+                server->setEnabled (on);
+            };
+            options.enabled = settings.getExternalControlEnabled();
+            options.preferredPort = 0;
+            options.appVersion = "0.5.3";
+            options.discoveryDirectory = directory.getChildFile ("control");
+            options.logDirectory = directory.getChildFile ("logs");
+        }
+        ~WiringFixture()
+        {
+            if (main) main->detachControlServer();
+            server.reset();
+            main.reset();
+            settings.saveIfNeeded();
+            directory.deleteRecursively();
+        }
+        bool ready()
+        {
+            return until ([&] { return server->getStatus().port > 0 && ! server->getStatus().starting
+                && readDiscovery (options.discoveryDirectory)["state"].toString() == "ready"; });
+        }
+    };
 }
 
 class ControlServerTests : public juce::UnitTest
@@ -211,18 +273,19 @@ public:
         expect (ready, "Loopback/discovery startup failed: " + f.server->getStatus().error);
         return ready;
     }
-    bool authenticate (Fixture& f, Client& c, size_t chunk = 4096)
+    template <typename Host>
+    bool authenticate (Host& f, Client& c, size_t chunk = 4096)
     {
         const auto connected = c.open (f.server->getStatus().port);
         expect (connected, "127.0.0.1 connection failed");
         if (! connected) return false;
-        expect (c.send (wire (c.hello (readDiscovery (f.directory)["token"].toString(), { 2, 1 })), chunk));
+        expect (c.send (wire (c.hello (readDiscovery (f.options.discoveryDirectory)["token"].toString(), { 2, 1 })), chunk));
         const auto hello = c.take ("helloAck", "1");
         expectEquals (hello["type"].toString(), juce::String ("helloAck"));
         c.initial = c.take ("state");
         expectEquals (c.initial["reason"].toString(), juce::String ("initial"));
         c.instance = hello["instanceId"].toString(); c.session = c.initial["sessionId"].toString();
-        expectEquals (c.instance, readDiscovery (f.directory)["instanceId"].toString());
+        expectEquals (c.instance, readDiscovery (f.options.discoveryDirectory)["instanceId"].toString());
         expect (! c.malformed);
         return hello.isObject() && c.initial.isObject();
     }
@@ -242,7 +305,12 @@ public:
         framingAndSlowReader();
         discoveryAndPorts();
         lifecycle();
+        settingsAndWiring();
+        logging();
     }
+
+    void settingsAndWiring();
+    void logging();
 
     void handshake()
     {
@@ -902,6 +970,274 @@ void ControlServerTests::lifecycle()
         expect (third.send (third.toggle (2, f.channel())));
         expectEquals (third.take ("ack", "2")["type"].toString(), juce::String ("ack"));
         expectEquals (f.values, 1); expect (! f.on()); expect (f.allOnMessageThread);
+    }
+}
+
+void ControlServerTests::settingsAndWiring()
+{
+    beginTest ("external control defaults OFF and only its enabled preference round-trips through LiveMix.settings");
+    {
+        WiringFixture f;
+        expect (! f.settings.getExternalControlEnabled());
+        f.settings.setExternalControlEnabled (true);
+        f.settings.saveIfNeeded();
+        const auto folder = f.directory.getChildFile ("settings");
+        {
+            LiveMixSettings reopened (folder);
+            expect (reopened.getExternalControlEnabled());
+            reopened.setExternalControlEnabled (false);
+            reopened.saveIfNeeded();
+        }
+        LiveMixSettings reopened (folder);
+        expect (! reopened.getExternalControlEnabled());
+        const auto xml = juce::XmlDocument::parse (folder.getChildFile ("LiveMix.settings"));
+        expect (xml != nullptr);
+        if (xml)
+        {
+            expectEquals (xml->getNumChildElements(), 1);
+            expectEquals (xml->getChildElement (0)->getStringAttribute ("name"), juce::String ("externalControlEnabled"));
+        }
+    }
+
+    beginTest ("settings enable shows the real fallback address immediately; disable rejects queued input, closes, then publishes disabled");
+    {
+        WiringFixture f;
+        juce::StreamingSocket occupied;
+        occupied.createListener (ControlSocket::preferredPort, "127.0.0.1");
+        f.options.preferredPort = ControlSocket::preferredPort;
+        f.server->start (f.options);
+        expect (until ([&] { return readDiscovery (f.options.discoveryDirectory)["state"].toString() == "disabled"; }));
+        expect (! f.main->getExternalControlStatus().enabled);
+        f.main->onExternalControlEnabled (true);
+        const auto immediate = f.main->getExternalControlStatus();
+        expect (immediate.enabled && immediate.starting);
+        expect (immediate.port > 0 && immediate.port != ControlSocket::preferredPort);
+        expectEquals (immediate.address(), "127.0.0.1:" + juce::String (immediate.port));
+        expect (f.settings.getExternalControlEnabled());
+        expect (f.ready());
+        const auto original = readDiscovery (f.options.discoveryDirectory);
+        expectEquals ((int) original["port"], immediate.port);
+        Client c;
+        if (! authenticate (f, c)) return;
+        expectEquals (f.main->getExternalControlStatus().connectedCount, 1);
+        const auto channel = f.document.getSession().channels[0].id;
+        expect (c.send (c.toggle (2, channel)));
+        juce::Thread::sleep (60);   // queue a real command without running its message callback
+        const auto titleRefreshes = f.titleRefreshes;
+        f.main->onExternalControlEnabled (false);
+        expect (! f.settings.getExternalControlEnabled());
+        expect (! f.main->getExternalControlStatus().enabled);
+        code (c.take ("error", "2"), "CONTROL_DISABLED");
+        expectEquals (c.take ("serverStatus")["status"].toString(), juce::String ("disabled"));
+        expect (c.closed());
+        expectEquals (f.titleRefreshes, titleRefreshes);
+        expect (f.document.getSession().channels[0].on);
+        expect (until ([&] { return readDiscovery (f.options.discoveryDirectory)["state"].toString() == "disabled"; }));
+        const auto disabled = readDiscovery (f.options.discoveryDirectory);
+        expect (! disabled.hasProperty ("token") && ! disabled.hasProperty ("port"));
+        expectEquals (f.main->getExternalControlStatus().connectedCount, 0);
+
+        // Rapid clicks cannot resurrect the old discovery generation or leave the address waiting for a timer.
+        f.main->onExternalControlEnabled (true);
+        expect (f.main->getExternalControlStatus().port > 0);
+        f.main->onExternalControlEnabled (false);
+        f.main->onExternalControlEnabled (true);
+        expect (f.main->getExternalControlStatus().port > 0);
+        expect (f.ready());
+        const auto next = readDiscovery (f.options.discoveryDirectory);
+        expect (next["token"].toString() != original["token"].toString());
+        expect (next["instanceId"].toString() != original["instanceId"].toString());
+        Client racing;
+        if (! authenticate (f, racing)) return;
+        std::string batch;
+        for (int id = 2; id < 18; ++id) batch += wire (racing.toggle (id, channel));
+        expect (racing.send (batch));
+        f.main->onExternalControlEnabled (false);   // receive may still be in flight when input is locked
+        expectEquals (racing.take ("serverStatus")["status"].toString(), juce::String ("disabled"));
+        expect (racing.closed());
+        expect (f.document.getSession().channels[0].on);
+        expect (f.allOnMessageThread);
+    }
+
+    beginTest ("production MainComponent forwards one revision per value/structure edit and preserves MainWindow's dirty wrapper");
+    {
+        WiringFixture f;
+        f.options.enabled = true;
+        f.server->start (f.options);
+        expect (f.ready());
+        Client c;
+        if (! authenticate (f, c)) return;
+        const auto initialRevision = (juce::int64) c.initial["revision"];
+        const auto channel = f.document.getSession().channels[0].id;
+        f.document.setChannelOn (channel, false);
+        const auto value = c.take ("stateDelta");
+        expectEquals ((juce::int64) value["revision"], initialRevision + 1);
+        expectEquals ((juce::int64) value["baseRevision"], initialRevision);
+        expect (! (bool) value["changes"]["channels"][0]["on"]);
+        expectEquals (f.titleRefreshes, 1);
+        expect (f.titleDirty);
+        const auto added = f.document.addChannel();
+        expect (! added.isNull());
+        const auto structure = c.take ("state");
+        expectEquals (structure["reason"].toString(), juce::String ("structureChanged"));
+        expectEquals ((juce::int64) structure["revision"], initialRevision + 2);
+        expectEquals (structure["state"]["channels"].size(), 2);
+        pumpFor (250);
+        expect (c.send (c.ping (2)));
+        expectEquals ((juce::int64) c.take ("pong", "2")["revision"], initialRevision + 2);
+        c.collect();
+        expect (c.incoming.empty(), "One UI edit must not produce a duplicate state/delta");
+
+        f.main->setVisible (false);   // hiding the content keeps its owned groups and listener live
+        expect (c.send (c.toggle (3, channel)));
+        expectEquals (c.take ("ack", "3")["type"].toString(), juce::String ("ack"));
+        expect (f.document.getSession().channels[0].on);
+        expectEquals (f.titleRefreshes, 2);
+        expect (f.allOnMessageThread);
+    }
+
+    beginTest ("a session generation change publishes one full state after production muteGroups.reset and both document callbacks");
+    {
+        WiringFixture f;
+        f.options.enabled = true;
+        f.server->start (f.options);
+        expect (f.ready());
+        Client c;
+        if (! authenticate (f, c)) return;
+        f.main->getMuteGroups().set (MuteGroups::Group::mic, true);
+        f.main->getMuteGroups().set (MuteGroups::Group::fx, true);
+        const auto muted = c.take ("stateDelta");
+        expect ((bool) muted["changes"]["muteGroups"]["mic"]);
+        expect ((bool) muted["changes"]["muteGroups"]["fx"]);
+        f.main->newSession();   // clean document: this takes the real new-session path without a prompt
+        expect (! f.main->getMuteGroups().isMuted (MuteGroups::Group::mic));
+        expect (! f.main->getMuteGroups().isMuted (MuteGroups::Group::fx));
+        const auto state = c.take ("state");
+        expectEquals (state["reason"].toString(), juce::String ("sessionChanged"));
+        expect (state["sessionId"].toString() != c.session);
+        expectEquals ((juce::int64) state["revision"], (juce::int64) muted["revision"] + 1);
+        expect (! (bool) state["state"]["muteGroups"]["mic"]);
+        expect (! (bool) state["state"]["muteGroups"]["fx"]);
+        expectEquals (f.titleRefreshes, 1);
+        expect (! f.titleDirty);
+        pumpFor (250);
+        c.collect();
+        expect (c.incoming.empty(), "No snapshot may retain the previous session's mute flags");
+    }
+
+    beginTest ("destroying a connected MainComponent stops control before its mute groups die and gates queued drains/captures");
+    {
+        WiringFixture f;
+        f.options.enabled = true;
+        f.server->start (f.options);
+        expect (f.ready());
+        Client c;
+        if (! authenticate (f, c)) return;
+        const auto channel = f.document.getSession().channels[0].id;
+        expect (c.send (c.toggle (2, channel)));
+        juce::Thread::sleep (60);
+        f.document.renameChannel (channel, "Queued capture");
+        f.main.reset();   // the app-owned server deliberately outlives its former MuteGroups
+        expect (c.closed());
+        expectEquals (c.take ("serverStatus")["status"].toString(), juce::String ("stopping"));
+        code (c.take ("error", "2"), "SERVER_STOPPING");
+        pumpFor (150);
+        expect (f.document.getSession().channels[0].on);
+        expect (! f.server->getStatus().enabled);
+        expect (! f.document.onValueChanged && ! f.document.onStructureChanged);
+        f.server.reset();
+        pumpFor (50);   // no owner remains for any delayed discovery publication
+    }
+}
+
+void ControlServerTests::logging()
+{
+    beginTest ("control log reports lifecycle, real port, counts and errors without tokens, JSON, names or session paths");
+    {
+        WiringFixture f;
+        f.document.setSessionName ("NeverLogSessionName");
+        f.document.renameChannel (f.document.getSession().channels[0].id, "NeverLogChannelName");
+        expect (f.document.save (f.directory.getChildFile ("NeverLogPath.livemix")).wasOk());
+        f.server->start (f.options);
+        f.main->onExternalControlEnabled (true);
+        expect (f.ready());
+        const auto port = f.server->getStatus().port;
+        const auto token = readDiscovery (f.options.discoveryDirectory)["token"].toString();
+        Client c;
+        if (! authenticate (f, c)) return;
+        Client bad;
+        expect (bad.open (port));
+        const auto raw = wire (bad.hello (token + "invalid"));
+        expect (bad.send (raw));
+        code (bad.take ("error"), "AUTH_FAILED");
+        expect (bad.closed());
+        f.main->onExternalControlEnabled (false);
+        expect (c.closed());
+        f.server->stop();   // flush and join the log worker as in the application
+        const auto log = f.options.logDirectory.getChildFile ("control.log").loadFileAsString();
+        for (const auto* event : { "INFO start app=0.5.3 protocol=1", "INFO enable", "INFO disable", "INFO stop",
+                                  "client_connected clients=1", "client_disconnected clients=0", "code=AUTH_FAILED count=1",
+                                  "reconnect reason=CONTROL_DISABLED" })
+            expect (log.contains (event), juce::String ("Missing log event: ") + event);
+        expect (log.contains ("host=127.0.0.1 port=" + juce::String (port)));
+        for (const auto& secret : { token, juce::String (raw), juce::String ("NeverLogSessionName"), juce::String ("NeverLogChannelName"),
+                                  juce::String ("NeverLogPath"), f.directory.getFullPathName(), juce::String::fromUTF8 ("곰 Stream Deck") })
+            expect (! log.contains (secret), "Private control/session data must not be logged");
+    }
+
+    beginTest ("identical failures have counted summaries at most once per 30 seconds, including a trailing quiet summary");
+    {
+        WiringFixture f;
+        const auto file = f.options.logDirectory.getChildFile ("control.log");
+        auto time = std::make_shared<std::atomic<double>> (0.0);
+        ControlLog log (f.options.logDirectory, [time] { return time->load(); });
+        log.failure ("RATE_LIMITED");
+        expect (until ([&] { return file.loadFileAsString().contains ("code=RATE_LIMITED count=1"); }));
+        for (int i = 0; i < 7; ++i) log.failure ("RATE_LIMITED");
+        *time = 29999;
+        log.info ("before_interval");
+        expect (until ([&] { return file.loadFileAsString().contains ("before_interval"); }));
+        expect (! file.loadFileAsString().contains ("count=7"));
+        *time = 30000;
+        expect (until ([&] { return file.loadFileAsString().contains ("code=RATE_LIMITED count=7"); }));
+        juce::StringArray lines;
+        lines.addLines (file.loadFileAsString());
+        int summaries = 0;
+        for (const auto& line : lines) if (line.contains ("code=RATE_LIMITED")) ++summaries;
+        expectEquals (summaries, 2);
+    }
+
+    beginTest ("control log rotates at 2 MiB into exactly three files");
+    {
+        WiringFixture f;
+        const auto folder = f.options.logDirectory;
+        expect (folder.createDirectory().wasOk());
+        expect (folder.getChildFile ("control.1.log").replaceWithText ("previous"));
+        expect (folder.getChildFile ("control.2.log").replaceWithText ("oldest"));
+        expect (folder.getChildFile ("control.log").replaceWithText (juce::String::repeatedString ("x", (int) ControlLog::maxFileBytes - 2)));
+        { ControlLog log (folder); log.info ("rotated"); }
+        expect (folder.getChildFile ("control.log").loadFileAsString().contains ("INFO rotated"));
+        expectEquals (folder.getChildFile ("control.1.log").getSize(), ControlLog::maxFileBytes - 2);
+        expectEquals (folder.getChildFile ("control.2.log").loadFileAsString(), juce::String ("previous"));
+        expectEquals (folder.findChildFiles (juce::File::findFiles, false, "*.log").size(), 3);
+        for (const auto& file : folder.findChildFiles (juce::File::findFiles, false, "*.log"))
+            expect (file.getSize() <= ControlLog::maxFileBytes);
+    }
+    beginTest ("a log disk failure leaves authenticated control working");
+    {
+        WiringFixture f;
+        f.options.logDirectory = f.directory.getChildFile ("blocked-log");
+        expect (f.directory.createDirectory().wasOk());
+        expect (f.options.logDirectory.replaceWithText ("a file cannot be a log directory"));
+        f.options.enabled = true;
+        f.server->start (f.options);
+        expect (f.ready());
+        Client c;
+        if (! authenticate (f, c)) return;
+        expect (c.send (c.toggle (2, f.document.getSession().channels[0].id)));
+        expectEquals (c.take ("ack", "2")["type"].toString(), juce::String ("ack"));
+        expect (f.server->getStatus().error.isEmpty());
+        expect (! f.document.getSession().channels[0].on);
     }
 }
 

@@ -12,7 +12,8 @@ namespace gocue::livemix
 class LiveMixSettings
 {
 public:
-    LiveMixSettings();
+    /** An empty directory uses the normal per-user location; tests can use an isolated directory. */
+    explicit LiveMixSettings (const juce::File& directory = {});
 
     std::unique_ptr<juce::XmlElement> getAudioDeviceState() const;
     void setAudioDeviceState (const juce::XmlElement* xml);
@@ -40,6 +41,10 @@ public:
     /** A mic that is OFF skips its plugins (see MixEngine::setSkipChainWhenOff). */
     bool getSkipPluginsWhenOff() const;
     void setSkipPluginsWhenOff (bool on);
+
+    /** Local Stream Deck / external control is opt-in. Only this preference is persisted. */
+    bool getExternalControlEnabled() const;
+    void setExternalControlEnabled (bool on);
 
     /** The mute-group hotkeys as KeyPress descriptions ("F9", "ctrl + alt + M"); empty = none. */
     juce::String getMicMuteHotkey() const;
