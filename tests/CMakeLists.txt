@@ -22,6 +22,9 @@ target_sources(EnqueueTests PRIVATE
     WebDavBackupTests.cpp
     MixDocumentTests.cpp
     MuteGroupsTests.cpp
+    ControlProtocolTests.cpp
+    ControlDispatcherTests.cpp
+    ControlStateTests.cpp
     PluginPresetTests.cpp
     PluginSearchTests.cpp
     LoudnessMeterTests.cpp

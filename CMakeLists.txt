@@ -226,6 +226,9 @@ target_sources(LiveMixCore INTERFACE
     ${CMAKE_CURRENT_SOURCE_DIR}/livemix/src/MixEngine.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/livemix/src/MixDocument.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/livemix/src/MuteGroups.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/livemix/src/ControlProtocol.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/livemix/src/ControlState.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/livemix/src/ControlDispatcher.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/livemix/src/GlobalHotkeys.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/livemix/src/PluginPreset.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/livemix/src/LoudnessMeter.cpp)

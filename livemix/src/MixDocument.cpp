@@ -42,6 +42,7 @@ juce::String MixDocument::getDisplayName() const
 void MixDocument::newSession()
 {
     session = defaultSession();
+    sessionGeneration = juce::Uuid();
     file = juce::File();
     dirty = false;
     engine.applySession (session, nullptr, true);
@@ -59,6 +60,7 @@ juce::Result MixDocument::load (const juce::File& newFile, juce::StringArray* wa
         return result;
 
     session = std::move (loaded);
+    sessionGeneration = juce::Uuid();
     file = newFile;
     dirty = false;
     juce::StringArray restoreErrors;

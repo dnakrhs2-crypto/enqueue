@@ -25,6 +25,8 @@ public:
     bool hasFile() const noexcept { return file != juce::File(); }
     bool isDirty() const noexcept { return dirty.load (std::memory_order_acquire); }   // any thread (the updater asks from its own)
     juce::String getDisplayName() const;
+    /** Runtime identity of this opening of the session. Message thread only; never written to the session file. */
+    juce::Uuid getSessionGeneration() const noexcept { return sessionGeneration; }
 
     /** A blank session (one mic channel, one FX channel). */
     void newSession();
@@ -94,6 +96,7 @@ private:
 
     MixEngine& engine;
     MixSession session;
+    juce::Uuid sessionGeneration;   // Uuid's default constructor creates a fresh non-null identity
     juce::File file;
     std::atomic<bool> dirty { false };
     bool graphApplied = false;
