@@ -76,6 +76,7 @@ public:
     void refreshAll();
 
     std::function<void()> onQuitRequested;
+    std::function<void()> onToggleWindow;
 
     void resized() override;
     void paint (juce::Graphics& g) override;

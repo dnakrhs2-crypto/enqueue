@@ -73,12 +73,16 @@ struct ChannelCard::SendRow : public juce::Component
         auto r = getLocalBounds();
         badge.setBounds (r.removeFromLeft (34).reduced (0, 6));
         r.removeFromLeft (6);
-        fxName.setBounds (r.removeFromLeft (editingName ? juce::jmax (120, r.getWidth() / 2) : juce::jmin (70, r.getWidth() / 4)));   // wider while its editor is open
-        r.removeFromLeft (6);
+        const int nameWidth = editingName ? juce::jmax (120, r.getWidth() / 2) : juce::jmin (70, r.getWidth() / 4);
         preToggle.setBounds (r.removeFromRight (58).reduced (0, 5));
         r.removeFromRight (8);
-        value.setBounds (r.removeFromRight (54));
+        value.setBounds (r.removeFromRight (labelWidthForText (value, "100%")));
         r.removeFromRight (6);
+        // Even a 300 px FX column keeps a 100 px fader; the name gives up room first - except while its editor is
+        // open, when typing needs the room and the fader may shrink for that moment (review finding, 0.5.4).
+        const int faderReserve = editingName ? 0 : 100;
+        fxName.setBounds (r.removeFromLeft (juce::jmin (nameWidth, juce::jmax (0, r.getWidth() - 6 - faderReserve))));
+        r.removeFromLeft (6);
         fader.setBounds (r);
     }
 

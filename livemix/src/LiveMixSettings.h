@@ -46,11 +46,13 @@ public:
     bool getExternalControlEnabled() const;
     void setExternalControlEnabled (bool on);
 
-    /** The mute-group hotkeys as KeyPress descriptions ("F9", "ctrl + alt + M"); empty = none. */
+    /** The global hotkeys as KeyPress descriptions ("F9", "ctrl + alt + M"); empty = none. */
     juce::String getMicMuteHotkey() const;
     void setMicMuteHotkey (const juce::String& description);
     juce::String getFxMuteHotkey() const;
     void setFxMuteHotkey (const juce::String& description);
+    juce::String getWindowHotkey() const;
+    void setWindowHotkey (const juce::String& description);
 
     /** VST2 plugins offered and used (off unless the operator switched it on). */
     bool getVst2Enabled() const;

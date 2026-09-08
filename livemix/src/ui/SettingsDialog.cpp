@@ -79,27 +79,29 @@ namespace
                 engine.setSkipChainWhenOff (on);
             });
 
-            styleCaption (hotkeyCaption, ko ("뮤트그룹 핫키"));
+            styleCaption (hotkeyCaption, ko ("전역 핫키"));
             addAndMakeVisible (hotkeyCaption);
-            styleCaption (hotkeyNote, ko ("LiveMix가 최소화·트레이 상태여도 듣는 전역 핫키입니다. 그동안 다른 프로그램은 그 키를 받지 못하니 F 키(F9 등)나 Ctrl+Alt 조합을 권합니다. 대상은 각 마이크 카드와 FX의 '뮤트그룹' 칩으로 고릅니다."));
+            styleCaption (hotkeyNote, ko ("LiveMix가 최소화·트레이 상태여도 듣는 전역 핫키입니다. 그동안 다른 프로그램은 그 키를 받지 못하니 F 키(F9 등)나 Ctrl+Alt 조합을 권합니다. 뮤트 대상은 각 마이크 카드와 FX의 '뮤트그룹' 칩으로 고릅니다. 세 번째 핫키는 창을 트레이로 숨기거나 다시 불러옵니다."));
             hotkeyNote.setFont (bodyFont (12.5f));
             addAndMakeVisible (hotkeyNote);
 
             auto hotkeyRow = [this] (juce::Label& label, const juce::String& text, HotkeyButton& button, juce::TextButton& clear,
-                                     juce::String (LiveMixSettings::*get)() const, void (LiveMixSettings::*set) (const juce::String&), HotkeyButton& other)
+                                     juce::String (LiveMixSettings::*get)() const, void (LiveMixSettings::*set) (const juce::String&))
             {
                 label.setText (text, juce::dontSendNotification);
                 label.setFont (bodyFont (14.0f));
                 label.setColour (juce::Label::textColourId, Palette::text);
                 addAndMakeVisible (label);
                 button.setHotkey ((settings.*get)());
-                button.validate = [&other] (const juce::KeyPress& key)
+                button.validate = [this, &button] (const juce::KeyPress& key)
                 {
                     if (const auto why = GlobalHotkeys::reasonToRefuse (key); why.isNotEmpty())
                         return why;
 
-                    if (other.getHotkey().isNotEmpty() && key.getTextDescription() == other.getHotkey())
-                        return ko ("다른 뮤트그룹이 쓰는 키입니다.");
+                    for (auto* other : { &micHotkey, &fxHotkey, &windowHotkey })
+                        if (other != &button && other->getHotkey().isNotEmpty()
+                            && key == juce::KeyPress::createFromDescription (other->getHotkey()))
+                            return ko ("다른 핫키가 쓰는 키입니다.");
 
                     return juce::String();
                 };
@@ -125,8 +127,9 @@ namespace
                 addAndMakeVisible (clear);
             };
 
-            hotkeyRow (micHotkeyLabel, ko ("마이크 뮤트그룹"), micHotkey, micHotkeyClear, &LiveMixSettings::getMicMuteHotkey, &LiveMixSettings::setMicMuteHotkey, fxHotkey);
-            hotkeyRow (fxHotkeyLabel, ko ("FX 뮤트그룹"), fxHotkey, fxHotkeyClear, &LiveMixSettings::getFxMuteHotkey, &LiveMixSettings::setFxMuteHotkey, micHotkey);
+            hotkeyRow (micHotkeyLabel, ko ("마이크 뮤트그룹"), micHotkey, micHotkeyClear, &LiveMixSettings::getMicMuteHotkey, &LiveMixSettings::setMicMuteHotkey);
+            hotkeyRow (fxHotkeyLabel, ko ("FX 뮤트그룹"), fxHotkey, fxHotkeyClear, &LiveMixSettings::getFxMuteHotkey, &LiveMixSettings::setFxMuteHotkey);
+            hotkeyRow (windowHotkeyLabel, ko ("창 숨기기/불러오기"), windowHotkey, windowHotkeyClear, &LiveMixSettings::getWindowHotkey, &LiveMixSettings::setWindowHotkey);
 
             styleCaption (controlCaption, ko ("외부 제어 (Stream Deck)"));
             addAndMakeVisible (controlCaption);
@@ -159,7 +162,7 @@ namespace
 
             refreshDevices();
             refreshControlStatus();
-            setSize (560, 768);
+            setSize (560, 848);
             startTimer (500);
         }
 
@@ -233,7 +236,7 @@ namespace
         ~SettingsContent() override
         {
             stopTimer();   // no timer can refer to the labels once SettingsWindow deletes this content
-            if ((micHotkey.isCapturing() || fxHotkey.isCapturing()) && onHotkeyCapture)
+            if ((micHotkey.isCapturing() || fxHotkey.isCapturing() || windowHotkey.isCapturing()) && onHotkeyCapture)
                 onHotkeyCapture (false);   // the dialog went away mid-capture: the hotkeys come back
         }
 
@@ -258,13 +261,18 @@ namespace
             skipWhenOff.setBounds (area.removeFromTop (28));
             area.removeFromTop (16);
             hotkeyCaption.setBounds (area.removeFromTop (20));
-            hotkeyNote.setBounds (area.removeFromTop (54));
+            hotkeyNote.setBounds (area.removeFromTop (90));
             area.removeFromTop (4);
 
-            for (auto parts : { std::make_tuple (&micHotkeyLabel, &micHotkey, &micHotkeyClear), std::make_tuple (&fxHotkeyLabel, &fxHotkey, &fxHotkeyClear) })
+            const int labelWidth = juce::jmax (labelWidthForText (micHotkeyLabel, micHotkeyLabel.getText()),
+                                              labelWidthForText (fxHotkeyLabel, fxHotkeyLabel.getText()),
+                                              labelWidthForText (windowHotkeyLabel, windowHotkeyLabel.getText()));
+
+            for (auto parts : { std::make_tuple (&micHotkeyLabel, &micHotkey, &micHotkeyClear), std::make_tuple (&fxHotkeyLabel, &fxHotkey, &fxHotkeyClear),
+                                std::make_tuple (&windowHotkeyLabel, &windowHotkey, &windowHotkeyClear) })
             {
                 auto r = area.removeFromTop (30);
-                std::get<0> (parts)->setBounds (r.removeFromLeft (130));
+                std::get<0> (parts)->setBounds (r.removeFromLeft (labelWidth));
                 std::get<2> (parts)->setBounds (r.removeFromRight (34));
                 r.removeFromRight (6);
                 std::get<1> (parts)->setBounds (r);
@@ -310,11 +318,11 @@ namespace
         std::function<ControlServer::Status()> getControlStatus;
         std::function<void (bool)> onControlEnabled;
         juce::StringArray names;
-        juce::Label deviceCaption, bufferCaption, deviceNote, backupCaption, backupNote, hotkeyCaption, hotkeyNote, micHotkeyLabel, fxHotkeyLabel;
+        juce::Label deviceCaption, bufferCaption, deviceNote, backupCaption, backupNote, hotkeyCaption, hotkeyNote, micHotkeyLabel, fxHotkeyLabel, windowHotkeyLabel;
         juce::Label controlCaption, controlNote, controlAddress, controlState;
         juce::HyperlinkButton controlHelp;
-        HotkeyButton micHotkey, fxHotkey;
-        juce::TextButton micHotkeyClear { "x" }, fxHotkeyClear { "x" };
+        HotkeyButton micHotkey, fxHotkey, windowHotkey;
+        juce::TextButton micHotkeyClear { "x" }, fxHotkeyClear { "x" }, windowHotkeyClear { "x" };
         juce::ComboBox deviceCombo, bufferCombo;
         juce::TextButton panelButton;
         juce::ToggleButton minimiseToTray, closeAsk, closeToTray, startWithWindows, skipWhenOff, externalControl;

@@ -3,6 +3,28 @@
 namespace gocue::livemix
 {
 
+/** Keep the amount and pre/post text visible when a mic's name is long. The outer label draws the row's frame. */
+struct FxDrawer::SenderRow : public juce::Label
+{
+    SenderRow()
+    {
+        setFont (juce::Font (juce::FontOptions (pt (14.0f), juce::Font::bold)));
+        value.setFont (getFont());
+        value.setJustificationType (juce::Justification::centredRight);
+        value.setMinimumHorizontalScale (1.0f);
+        addAndMakeVisible (value);
+    }
+
+    void resized() override
+    {
+        const int valueWidth = labelWidthForText (value, "100%" + ko (" · 포스트"));
+        setBorderSize (juce::BorderSize<int> (1, 5, 1, valueWidth + 5));
+        value.setBounds (getLocalBounds().removeFromRight (valueWidth));
+    }
+
+    juce::Label value;
+};
+
 FxDrawer::~FxDrawer() = default;
 
 FxDrawer::FxDrawer (MixDocument& doc) : document (doc)
@@ -63,6 +85,7 @@ FxDrawer::FxDrawer (MixDocument& doc) : document (doc)
     addAndMakeVisible (returnSlider);
     returnValue.setFont (juce::Font (juce::FontOptions (pt (22.0f), juce::Font::bold)));
     returnValue.setJustificationType (juce::Justification::centredRight);
+    returnValue.setMinimumHorizontalScale (1.0f);
     addAndMakeVisible (returnValue);
 
     styleCaption (outputCaption, ko ("출력"));
@@ -254,11 +277,13 @@ void FxDrawer::rebuildSenders()
             if (s.fx == selected)
                 send = s;
 
-        auto label = std::make_unique<juce::Label>();
+        auto label = std::make_unique<SenderRow>();
         const auto amount = juce::String ((int) std::lround (send.amount * 100.0)) + "%";
-        label->setText (juce::String ((int) i + 1) + "  " + c.name + "     " + amount + (send.amount > 0.0 ? (send.pre ? ko (" · 프리") : ko (" · 포스트")) : juce::String()), juce::dontSendNotification);
-        label->setFont (juce::Font (juce::FontOptions (pt (14.0f), juce::Font::bold)));
+        label->setText (juce::String ((int) i + 1) + "  " + c.name, juce::dontSendNotification);
+        label->value.setText (amount + (send.amount > 0.0 ? (send.pre ? ko (" · 프리") : ko (" · 포스트")) : juce::String()), juce::dontSendNotification);
         label->setColour (juce::Label::textColourId, send.amount > 0.0 && c.on ? Palette::text : Palette::dimText);
+        label->value.setColour (juce::Label::textColourId, label->findColour (juce::Label::textColourId));
+        label->setTooltip (label->getText() + "     " + label->value.getText());
         label->setColour (juce::Label::backgroundColourId, Palette::card2);
         label->setColour (juce::Label::outlineColourId, Palette::line);
         label->setMinimumHorizontalScale (1.0f);
@@ -357,7 +382,7 @@ int FxDrawer::layout (int width, bool apply)
 
     place (returnCaption, area.removeFromTop (20));
     auto ret = area.removeFromTop (34);
-    place (returnValue, ret.removeFromRight (64));
+    place (returnValue, ret.removeFromRight (juce::jmax (labelWidthForText (returnValue, "100%"), labelWidthForText (returnValue, ko ("뮤트")))));
     ret.removeFromRight (8);
     place (returnSlider, ret);
     area.removeFromTop (12);

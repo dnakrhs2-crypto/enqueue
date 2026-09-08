@@ -11,7 +11,7 @@
 namespace gocue::livemix
 {
 
-/** 설정: ASIO device and buffer size (the driver's own panel), tray behaviour, start with Windows, the mute-group
+/** 설정: ASIO device and buffer size (the driver's own panel), tray behaviour, start with Windows, the global
     hotkeys, external control, the online backup note. Non-modal, single instance. */
 namespace SettingsDialog
 {
