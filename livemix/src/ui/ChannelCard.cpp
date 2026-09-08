@@ -78,8 +78,10 @@ struct ChannelCard::SendRow : public juce::Component
         r.removeFromRight (8);
         value.setBounds (r.removeFromRight (labelWidthForText (value, "100%")));
         r.removeFromRight (6);
-        // Even a 300 px FX column (and a name being edited) keeps a 100 px fader; the name gives up room first.
-        fxName.setBounds (r.removeFromLeft (juce::jmin (nameWidth, juce::jmax (0, r.getWidth() - 6 - 100))));
+        // Even a 300 px FX column keeps a 100 px fader; the name gives up room first - except while its editor is
+        // open, when typing needs the room and the fader may shrink for that moment (review finding, 0.5.4).
+        const int faderReserve = editingName ? 0 : 100;
+        fxName.setBounds (r.removeFromLeft (juce::jmin (nameWidth, juce::jmax (0, r.getWidth() - 6 - faderReserve))));
         r.removeFromLeft (6);
         fader.setBounds (r);
     }
