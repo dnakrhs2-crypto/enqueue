@@ -19,7 +19,7 @@ namespace gocue::livemix
 
 /** The live graph on one ASIO device:
 
-        input(s) -> [pre tap] -> channel VST3 chain -> [post tap] -> mic ON/OFF ramp -> master bus / direct output pair
+        input(s) -> [pre tap] -> channel VST3 chain -> [post tap] -> mic ON/OFF ramp -> pan -> master bus / direct output pair
         FX channel: sum of sends -> FX chain -> return amount -> master bus / direct output pair
         master bus -> master chain -> main output pair
 
@@ -33,6 +33,7 @@ public:
     static constexpr int maxFx = MixSession::maxFx;
     static constexpr int maxDeviceChannels = MixSession::maxDeviceChannels;
     static constexpr double onOffRampSeconds = 0.005;
+    static constexpr double panRampSeconds = 0.010;
 
     MixEngine();
     ~MixEngine() override;
@@ -92,6 +93,7 @@ public:
     void setChannelMuted (const juce::Uuid& id, bool muted);
     void setChannelInput (const juce::Uuid& id, int first, bool stereo);
     void setChannelOutput (const juce::Uuid& id, const MixOutput& output);
+    void setChannelPan (const juce::Uuid& id, double pan);
     void setSend (const juce::Uuid& channelId, const juce::Uuid& fxId, double amount, bool pre);
     void setFxReturn (const juce::Uuid& fxId, double amount);
     void setFxMono (const juce::Uuid& fxId, bool mono);
@@ -145,11 +147,14 @@ private:
         std::atomic<bool> muted { false };   // by the mic mute group: silent like OFF, the switch untouched
         std::atomic<int> inputFirst { 0 };
         std::atomic<bool> stereo { false };
+        std::atomic<float> pan { 0.0f };
         std::atomic<bool> toMaster { true }, direct { false };
         std::atomic<int> directFirst { 2 };
         std::unique_ptr<PluginChain> chain = std::make_unique<PluginChain>();
         std::array<Send, (size_t) maxFx> sends;
         float onGain = 1.0f;   // audio thread
+        std::array<float, 2> panCurrent { 1.0f, 1.0f }, panTarget { 1.0f, 1.0f };   // audio thread: gain ramps continue across blocks
+        int panRemaining = 0;   // samples left in the 10 ms ramp
         MeterCell meter;
     };
 

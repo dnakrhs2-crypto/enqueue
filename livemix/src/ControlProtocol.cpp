@@ -444,7 +444,7 @@ std::optional<ControlProtocol::Error> ControlProtocol::Decoder::finish()
 }
 
 void ControlProtocol::Decoder::reset() { pending.clear(); failed = false; }
-bool ControlProtocol::ChannelChanges::empty() const { return ! name && ! on && ! muteGroup && ! pluginGroups && ! sends; }
+bool ControlProtocol::ChannelChanges::empty() const { return ! name && ! on && ! muteGroup && ! pluginGroups && ! sends && ! pan; }
 bool ControlProtocol::FxChanges::empty() const { return ! name && ! muteGroup && ! returnAmount; }
 bool ControlProtocol::Changes::empty() const
 {
@@ -463,6 +463,7 @@ juce::var ControlProtocol::toVar (const Projection& p)
         auto item = object();
         put (item, "id", c.id.toString()); put (item, "name", c.name); put (item, "on", c.on); put (item, "muteGroup", c.muteGroup);
         put (item, "pluginGroups", pluginGroups (c.pluginGroups)); put (item, "sends", sends (c.sends));
+        put (item, "pan", c.pan);
         channels.add (item);
     }
     for (const auto& f : p.fx)
@@ -496,6 +497,7 @@ juce::var ControlProtocol::toVar (const Changes& p)
             putOptional (item, "name", c.name); putOptional (item, "on", c.on); putOptional (item, "muteGroup", c.muteGroup);
             if (c.pluginGroups) put (item, "pluginGroups", pluginGroups (*c.pluginGroups));
             if (c.sends) put (item, "sends", sends (*c.sends));
+            putOptional (item, "pan", c.pan);
             values.add (item);
         }
         put (v, "channels", values);

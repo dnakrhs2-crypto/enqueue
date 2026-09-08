@@ -221,6 +221,21 @@ ChannelCard::ChannelCard (MixDocument& doc, const juce::Uuid& id) : document (do
     };
     addAndMakeVisible (muteGroupChip);
 
+    styleCaption (panCaption, ko ("팬"));
+    addAndMakeVisible (panCaption);
+    panSlider.onValueChange = [this]
+    {
+        panValue.setText (panSlider.getTextFromValue (panSlider.getValue()), juce::dontSendNotification);
+
+        if (! refreshing)
+            document.setChannelPan (channelId, panSlider.getValue());
+    };
+    addAndMakeVisible (panSlider);
+    panValue.setFont (juce::Font (juce::FontOptions (pt (20.0f), juce::Font::bold)));
+    panValue.setJustificationType (juce::Justification::centredRight);
+    panValue.setMinimumHorizontalScale (1.0f);
+    addAndMakeVisible (panValue);
+
     styleCaption (meterCaption, ko ("입력 미터"));
     addAndMakeVisible (meterCaption);
     addAndMakeVisible (meter_);
@@ -275,6 +290,10 @@ void ChannelCard::refresh()
     muteGroupChip.setToggleState (c->muteGroup, juce::dontSendNotification);
     micButton.setMuted (groupMuted && c->muteGroup);
     meter_.setStereo (c->stereo);
+    panSlider.setValue (c->pan, juce::dontSendNotification);
+    panValue.setText (panSlider.getTextFromValue (c->pan), juce::dontSendNotification);
+    panSlider.setTooltip (ko ("팬: 왼쪽/오른쪽 배치. 더블클릭하면 가운데")
+                          + (c->stereo ? ko (". 스테레오 채널은 좌우 균형") : juce::String()));
 
     for (int i = 0; i < MixSession::maxPluginGroups; ++i)
     {
@@ -445,13 +464,13 @@ int ChannelCard::getPreferredHeight (int width) const
     const int headH = 34 + 8 + 40 + 8 + 30 + 8;
     const int chainRows = chainRowsForWidth (width);
     const int chainH = 22 + chainRows * ChipFlow::rowStep + chainFooter;
-    const int outH = 26 + 34 + 12 + 18 + 40;
+    const int outH = 26 + 34 + (stackOutputControls (width) ? 40 : 0) + 6 + 34 + 12 + 18 + 40;
 
     switch (layout)
     {
         case CardLayout::wide:   return juce::jmax (juce::jmax (headH, chainH), juce::jmax (fxH, outH)) + 28;
         case CardLayout::medium: return juce::jmax (headH, chainH) + juce::jmax (fxH, outH) + 40;
-        case CardLayout::narrow: return headH + chainH + fxH + outH + 52;
+        case CardLayout::narrow: return headH + chainH + fxH + outH + 58;   // 24 px outer padding + three 14 px gaps, less the head's 8 px allowance
     }
 
     return 200;
@@ -523,11 +542,26 @@ void ChannelCard::resized()
         muteGroupChip.setBounds (captionRow.removeFromRight (100).reduced (0, 1));   // next to the output caption
         outputCaption.setBounds (captionRow);
         auto chipsRow = r.removeFromTop (34);
-        masterChip.setBounds (chipsRow.removeFromLeft (72));
-        chipsRow.removeFromLeft (8);
+        if (stackOutputControls (getWidth()))
+        {
+            masterChip.setBounds (chipsRow);
+            r.removeFromTop (6);
+            chipsRow = r.removeFromTop (34);
+        }
+        else
+        {
+            masterChip.setBounds (chipsRow.removeFromLeft (72));
+            chipsRow.removeFromLeft (8);
+        }
         directChip.setBounds (chipsRow.removeFromLeft (84));
         chipsRow.removeFromLeft (6);
         directCombo.setBounds (chipsRow.withHeight (30).withY (chipsRow.getY() + 2));
+        r.removeFromTop (6);
+        auto panRow = r.removeFromTop (34);
+        panCaption.setBounds (panRow.removeFromLeft (34));
+        panValue.setBounds (panRow.removeFromRight (labelWidthForText (panValue, "R100")));
+        panRow.removeFromRight (6);
+        panSlider.setBounds (panRow);
         r.removeFromTop (12);
         meterCaption.setBounds (r.removeFromTop (18));
         meter_.setBounds (r.removeFromTop (juce::jmin (40, r.getHeight())));

@@ -16,7 +16,7 @@ namespace gocue::livemix
 enum class CardLayout { wide, medium, narrow };   // 4 columns / 2 rows / 1 column
 
 /** One mic channel: name (double-click edits), mic ON/OFF, input, VST3 chain summary, sends (one row per FX),
-    outputs, meter. Edits go through the document; the meter is pushed by the owner's timer. */
+    outputs, pan, meter. Edits go through the document; the meter is pushed by the owner's timer. */
 class ChannelCard : public juce::Component
 {
 public:
@@ -25,7 +25,7 @@ public:
 
     const juce::Uuid& getChannelId() const noexcept { return channelId; }
 
-    /** Re-reads the model (names, switch, input, sends, outputs, chain summary). */
+    /** Re-reads the model (names, switch, input, sends, outputs, pan, chain summary). */
     void refresh();
     /** Device channel names for the input / output pickers (empty = numbers only). */
     void setDeviceChannels (const juce::StringArray& inputNames, const juce::StringArray& outputNames);
@@ -53,6 +53,7 @@ private:
     struct ChainChip;
 
     int chainRowsForWidth (int width) const;
+    bool stackOutputControls (int width) const { return layout == CardLayout::narrow && width <= 420; }
     void rebuildSends();
     void rebuildChain();
     void commitInput();
@@ -69,7 +70,8 @@ private:
     NameLabel name;
     juce::TextButton menuButton { juce::String::fromUTF8 ("\xE2\x8B\xAF") };   // ···
     LampButton micButton;
-    juce::Label inputCaption, chainCaption, fxCaption, outputCaption, meterCaption;
+    juce::Label inputCaption, chainCaption, fxCaption, outputCaption, panCaption, panValue, meterCaption;
+    PanSlider panSlider;
     juce::ComboBox inputCombo;
     juce::ToggleButton stereoToggle;
     std::vector<std::unique_ptr<ChainChip>> chips;

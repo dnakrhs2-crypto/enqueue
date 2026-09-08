@@ -22,7 +22,7 @@ ControlState::Snapshot ControlState::capture (const MixDocument& document, const
     const auto& session = document.getSession();
     for (const auto& c : session.channels)
     {
-        ControlProtocol::Channel channel { c.id, c.name, c.on, c.muteGroup, {}, {} };
+        ControlProtocol::Channel channel { c.id, c.name, c.on, c.muteGroup, {}, {}, c.pan };
         for (size_t i = 0; i < c.pluginGroups.size(); ++i)
             channel.pluginGroups.push_back ({ (int) i + 1, c.pluginGroups[i].off });
         // Project actual FX in UI order. Never call the mutating sendFor() from a read path; a missing send has
@@ -112,6 +112,7 @@ ControlState::Difference ControlState::diff (const Snapshot& published, const Sn
         if (x.muteGroup != y.muteGroup) c.muteGroup = y.muteGroup;
         if (x.pluginGroups != y.pluginGroups) c.pluginGroups = y.pluginGroups;
         if (x.sends != y.sends) c.sends = y.sends;
+        if (x.pan != y.pan) c.pan = y.pan;
         if (! c.empty()) changes.channels.push_back (std::move (c));
     }
     for (size_t i = 0; i < a.fx.size(); ++i)

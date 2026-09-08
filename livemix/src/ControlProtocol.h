@@ -117,10 +117,11 @@ public:
         bool on = false, muteGroup = false;
         std::vector<PluginGroup> pluginGroups;
         std::vector<Send> sends;
+        double pan = 0.0;   // additive v1 field (-1..1): older clients may ignore it; absent on older servers means centre
         bool operator== (const Channel& o) const
         {
-            return std::tie (id, name, on, muteGroup, pluginGroups, sends)
-                == std::tie (o.id, o.name, o.on, o.muteGroup, o.pluginGroups, o.sends);
+            return std::tie (id, name, on, muteGroup, pluginGroups, sends, pan)
+                == std::tie (o.id, o.name, o.on, o.muteGroup, o.pluginGroups, o.sends, o.pan);
         }
     };
     struct Fx
@@ -154,6 +155,7 @@ public:
         std::optional<bool> on, muteGroup;
         std::optional<std::vector<PluginGroup>> pluginGroups;
         std::optional<std::vector<Send>> sends;
+        std::optional<double> pan;
         bool empty() const;
     };
     struct FxChanges

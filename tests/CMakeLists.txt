@@ -21,6 +21,7 @@ target_sources(EnqueueTests PRIVATE
     MixEngineTests.cpp
     WebDavBackupTests.cpp
     MixDocumentTests.cpp
+    ChannelCardTests.cpp
     MuteGroupsTests.cpp
     ControlProtocolTests.cpp
     ControlDispatcherTests.cpp

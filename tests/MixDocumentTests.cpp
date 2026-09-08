@@ -77,6 +77,50 @@ public:
             expect (dir.deleteRecursively());
         }
 
+        beginTest ("pan edits clamp, dirty and notify once, ignore equal values and unknown ids, and reach the engine");
+        {
+            MixEngine engine;
+            MixDocument doc (engine);
+            doc.applyToEngine();
+            const auto id = doc.getSession().channels[0].id;
+            int values = 0, structures = 0;
+            doc.onValueChanged = [&] { ++values; };
+            doc.onStructureChanged = [&] { ++structures; };
+            doc.setChannelPan (id, 0.0);
+            doc.setChannelPan (juce::Uuid(), 1.0);
+            expect (! doc.isDirty());
+            expectEquals (values, 0);
+
+            doc.setChannelPan (id, 0.3);
+            expect (doc.isDirty());
+            expectEquals (values, 1);
+            expectWithinAbsoluteError (doc.getSession().channels[0].pan, 0.3, 1e-12);
+            doc.discardUnsavedChanges();
+            doc.setChannelPan (id, 0.3);
+            expect (! doc.isDirty());
+            expectEquals (values, 1);
+
+            doc.setChannelPan (id, 8.0);
+            expectWithinAbsoluteError (doc.getSession().channels[0].pan, 1.0, 1e-12);
+            doc.discardUnsavedChanges();
+            doc.setChannelPan (id, 2.0);   // equal after clamping is also a no-op
+            expect (! doc.isDirty());
+            expectEquals (values, 2);
+            juce::AudioBuffer<float> input (1, 256), output (2, 256);
+            juce::FloatVectorOperations::fill (input.getWritePointer (0), 0.5f, 256);
+            for (int i = 0; i < 3; ++i)
+                engine.renderBlock (input.getArrayOfReadPointers(), 1, output.getArrayOfWritePointers(), 2, 256);
+            expectWithinAbsoluteError (output.getSample (0, 255), 0.0f, 1e-6f);
+            expectWithinAbsoluteError (output.getSample (1, 255), std::sqrt (0.5f), 1e-6f);
+
+            doc.setChannelPan (id, -8.0);
+            expectWithinAbsoluteError (doc.getSession().channels[0].pan, -1.0, 1e-12);
+            doc.setChannelPan (id, std::numeric_limits<double>::quiet_NaN());
+            expectWithinAbsoluteError (doc.getSession().channels[0].pan, 0.0, 1e-12);
+            expectEquals (values, 4);
+            expectEquals (structures, 0);
+        }
+
         beginTest ("plugin groups: members switch off together, a removed plugin drops out, five groups at most, the file keeps them");
         {
             MixEngine engine;
@@ -148,7 +192,7 @@ public:
             expect (back.channels[0].chain[0].slotId == chain->getSlot (0).state.slotId);
             expect (back.channels[0].pluginGroups[0].off);
             expectEquals ((int) back.channels[0].pluginGroups[0].slots.size(), 1);   // the removed member is not in the file, the remaining one is
-            expect (copy.toJson().contains ("\"version\": 2"));   // the format of 0.5.0: a 0.4 LiveMix refuses it instead of losing the groups
+            expect (copy.toJson().contains ("\"version\": 3"));   // older LiveMix refuses it instead of losing the saved pan
         }
 
         beginTest ("a plugin's own state change is picked up on demand and settled by a save");

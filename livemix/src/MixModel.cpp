@@ -197,6 +197,7 @@ void MixSession::sanitise()
             c.pluginGroups.resize ((size_t) maxPluginGroups);
 
         c.inputFirst = juce::jlimit (0, maxDeviceChannels - 1, c.inputFirst);
+        c.pan = juce::jlimit (-1.0, 1.0, finiteOr (c.pan, 0.0));
 
         if (c.stereo && c.inputFirst > maxDeviceChannels - 2)
             c.inputFirst = maxDeviceChannels - 2;
@@ -251,6 +252,7 @@ juce::String MixSession::toJson() const
         obj->setProperty ("name", c.name);
         obj->setProperty ("on", c.on);
         obj->setProperty ("muteGroup", c.muteGroup);
+        obj->setProperty ("pan", c.pan);
         auto* input = new juce::DynamicObject();
         input->setProperty ("first", c.inputFirst);
         input->setProperty ("stereo", c.stereo);
@@ -398,6 +400,7 @@ juce::Result MixSession::fromJson (const juce::String& json, MixSession& out, ju
             c.name = item.getProperty ("name", "").toString();
             c.on = (bool) item.getProperty ("on", true);
             c.muteGroup = (bool) item.getProperty ("muteGroup", false);
+            c.pan = version >= 3 ? (double) item.getProperty ("pan", 0.0) : 0.0;
 
             if (const auto input = item.getProperty ("input", juce::var()); input.getDynamicObject() != nullptr)
             {

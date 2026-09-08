@@ -1,6 +1,7 @@
 #include "MixModel.h"
 
 #include <juce_core/juce_core.h>
+#include <limits>
 
 namespace gocue::tests
 {
@@ -37,6 +38,7 @@ public:
             expectEquals (s.channels[0].name, juce::String::fromUTF8 ("마이크 1"));
             expectEquals (s.channels[1].name, juce::String::fromUTF8 ("마이크 2"));
             expectEquals (s.channels[1].inputFirst, 1);   // the next free input
+            expectWithinAbsoluteError (s.channels[0].pan, 0.0, 1e-12);
             expectEquals (s.fx[0].name, juce::String ("FX 1"));
             expectEquals ((int) s.channels[0].sends.size(), 1);
             expect (s.channels[0].sends[0].fx == s.fx[0].id);
@@ -71,6 +73,8 @@ public:
             s.channels[0].sends[0].amount = 4.0;
             s.channels[1].sends.clear();
             s.channels[1].inputFirst = 999;
+            s.channels[0].pan = -4.0;
+            s.channels[1].pan = 4.0;
             s.fx[0].returnAmount = -1.0;
             s.master.outputFirst = 500;
             s.sanitise();
@@ -81,8 +85,17 @@ public:
             expectEquals ((int) s.channels[1].sends.size(), 1);
             expect (s.channels[1].sends[0].fx == s.fx[0].id);
             expectEquals (s.channels[1].inputFirst, MixSession::maxDeviceChannels - 1);
+            expectWithinAbsoluteError (s.channels[0].pan, -1.0, 1e-12);
+            expectWithinAbsoluteError (s.channels[1].pan, 1.0, 1e-12);
             expectWithinAbsoluteError (s.fx[0].returnAmount, 0.0, 1e-12);
             expectEquals (s.master.outputFirst, MixSession::maxDeviceChannels - 2);
+
+            for (const double invalid : { std::numeric_limits<double>::quiet_NaN(), std::numeric_limits<double>::infinity() })
+            {
+                s.channels[0].pan = invalid;
+                s.sanitise();
+                expectWithinAbsoluteError (s.channels[0].pan, 0.0, 1e-12);
+            }
         }
 
         beginTest ("JSON round trip keeps every field");
@@ -98,6 +111,7 @@ public:
             c.on = false;
             c.inputFirst = 3;
             c.stereo = true;
+            c.pan = -0.3;
             c.sends[0].amount = 0.35;
             c.sends[0].pre = true;
             c.output.master = false;
@@ -120,6 +134,8 @@ public:
             s.master.outputFirst = 2;
 
             const auto json = s.toJson();
+            expectEquals ((int) juce::JSON::parse (json)["version"], 3);
+            expectWithinAbsoluteError ((double) juce::JSON::parse (json)["channels"][0]["pan"], -0.3, 1e-12);
             expect (json.contains ("\"app\": \"LiveMix\"") || json.contains ("\"app\":\"LiveMix\""));
 
             MixSession q;
@@ -139,6 +155,7 @@ public:
             expect (! q.channels[0].on);
             expectEquals (q.channels[0].inputFirst, 3);
             expect (q.channels[0].stereo);
+            expectWithinAbsoluteError (q.channels[0].pan, -0.3, 1e-12);
             expectWithinAbsoluteError (q.channels[0].sends[0].amount, 0.35, 1e-12);
             expect (q.channels[0].sends[0].pre);
             expect (q.channels[0].sends[0].fx == s.fx[0].id);
@@ -159,6 +176,23 @@ public:
             expectEquals ((int) q.fx[0].chain.size(), 1);
             expectEquals ((int) q.master.chain.size(), 1);
             expectEquals (q.master.outputFirst, 2);
+        }
+
+        beginTest ("legacy sessions load at centre; v3 pan is optional and clamped; newer files are refused without replacing the session");
+        {
+            for (int version : { 1, 2, 3 })
+            {
+                MixSession s;
+                const auto prefix = "{\"app\":\"LiveMix\",\"version\":" + juce::String (version);
+                expect (MixSession::fromJson (prefix + ",\"channels\":[{}]}", s).wasOk());
+                expectWithinAbsoluteError (s.channels[0].pan, 0.0, 1e-12);
+                expect (MixSession::fromJson (prefix + ",\"channels\":[{\"pan\":-9},{\"pan\":9}]}", s).wasOk());
+                expectWithinAbsoluteError (s.channels[0].pan, version >= 3 ? -1.0 : 0.0, 1e-12);
+                expectWithinAbsoluteError (s.channels[1].pan, version >= 3 ? 1.0 : 0.0, 1e-12);
+                const auto before = s.toJson();
+                expect (MixSession::fromJson ("{\"app\":\"LiveMix\",\"version\":4}", s).failed());
+                expectEquals (s.toJson(), before);
+            }
         }
 
         beginTest ("plugin groups: at most five a channel, a member once and only of a slot the chain has; a fresh slot has an id of its own");

@@ -75,6 +75,7 @@ public:
             f.document.renameChannel (f.channel(), "Mic A"); f.document.renameChannel (second, "Mic B");
             f.document.renameFx (f.fx(), "Reverb"); f.document.renameFx (secondFx, "Delay");
             f.document.setChannelOn (f.channel(), false); f.document.setChannelMuteGroup (f.channel(), true);
+            f.document.setChannelPan (f.channel(), -0.3);
             f.document.addPluginGroup (f.channel()); f.document.addPluginGroup (f.channel());
             f.document.setPluginGroupOff (f.channel(), 1, true);
             f.document.setSend (f.channel(), f.fx(), 0.35, true); f.document.setSend (f.channel(), secondFx, 0.7, false);
@@ -97,7 +98,11 @@ public:
             expectWithinAbsoluteError (p.fx[0].returnAmount, 0.8, 1.0e-12);
             const auto json = P::toVar (p);
             expectEquals (json.getDynamicObject()->getProperties().size(), 5);
-            expectEquals (json["channels"][0].getDynamicObject()->getProperties().size(), 6);
+            expectEquals (json["channels"][0].getDynamicObject()->getProperties().size(), 7);
+            expect (json["channels"][0]["pan"].isDouble());
+            expectWithinAbsoluteError ((double) json["channels"][0]["pan"], -0.3, 1e-12);
+            expectWithinAbsoluteError (p.channels[0].pan, -0.3, 1e-12);
+            expectWithinAbsoluteError (p.channels[1].pan, 0.0, 1e-12);
             expectEquals (json["fx"][0].getDynamicObject()->getProperties().size(), 4);
             expect (! json.hasProperty ("file") && ! json.hasProperty ("device") && ! json.hasProperty ("master"));
             expect (! json["channels"][0].hasProperty ("chain"));
@@ -147,6 +152,35 @@ public:
             const auto clean = P::toVar (ControlState::diff (cleanBase, state.getCurrent()).changes);
             expect (clean["session"]["dirty"].isBool() && ! (bool) clean["session"]["dirty"]);
             expect (! clean["session"].hasProperty ("name")); expect (! clean.hasProperty ("channels"));
+        }
+
+        beginTest ("pan alone advances the value revision and merges through v1 deltas, including reset to zero");
+        {
+            Fixture f;
+            f.document.markDirty();   // isolate pan from the dirty flag
+            ControlState state (f.capture());
+            for (const double pan : { -0.3, 1.0, 0.0 })
+            {
+                const auto published = state.getCurrent();
+                f.document.setChannelPan (f.channel(), pan);
+                expect (state.update (f.capture()));
+                const auto delta = ControlState::diff (published, state.getCurrent());
+                expect (delta.kind == ControlState::ChangeKind::values && ! delta.needsFullState());
+                expectEquals (delta.revision, published.revision + 1);
+                expectEquals ((int) delta.changes.channels.size(), 1);
+                if (! delta.changes.channels.empty())
+                    expect (delta.changes.channels[0].pan == std::optional<double> (pan));
+                const auto changes = P::toVar (delta.changes);
+                expectEquals (changes["channels"][0].getDynamicObject()->getProperties().size(), 2);   // id + pan only
+                expectWithinAbsoluteError ((double) changes["channels"][0]["pan"], pan, 1e-12);
+                auto client = P::toVar (published.projection);
+                merge (client, changes);
+                expectEquals (juce::JSON::toString (client, true), juce::JSON::toString (P::toVar (state.getCurrent().projection), true));
+                const auto same = state.getCurrent();
+                f.document.setChannelPan (f.channel(), pan);
+                expect (state.update (f.capture()));
+                expect (ControlState::diff (same, state.getCurrent()).kind == ControlState::ChangeKind::none);
+            }
         }
 
         beginTest ("same projection is silent, polls catch audio/dirty without callbacks, unrelated fields do not advance revision");
@@ -245,7 +279,7 @@ public:
             }
         }
 
-        beginTest ("constructor/new/every successful reload have fresh generations, save/failed loads retain them and version remains 2");
+        beginTest ("constructor/new/every successful reload have fresh generations, save/failed loads retain them and session version is 3");
         {
             Fixture f;
             Fixture other;
@@ -268,7 +302,7 @@ public:
             expect (state.update (f.capture()));
             expect (ControlState::diff (dirty, state.getCurrent()).changes.sessionDirty == std::optional<bool> (false));
             const auto fileJson = juce::JSON::parse (file.loadFileAsString());
-            expectEquals ((int) fileJson["version"], 2);
+            expectEquals ((int) fileJson["version"], 3);
             expect (! fileJson.hasProperty ("sessionGeneration") && ! fileJson.hasProperty ("sessionId"));
             const auto channel = f.channel();
             for (int i = 0; i < 2; ++i)

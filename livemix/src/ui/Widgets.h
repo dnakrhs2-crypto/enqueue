@@ -42,6 +42,29 @@ inline void styleCaption (juce::Label& label, const juce::String& text)
     label.setMinimumHorizontalScale (1.0f);
 }
 
+/** A bipolar fader: dragging within five percent of centre snaps to it; a double-click resets it. */
+class PanSlider : public juce::Slider
+{
+public:
+    PanSlider()
+    {
+        setName (ko ("팬"));
+        setSliderStyle (juce::Slider::LinearHorizontal);
+        setRange (-1.0, 1.0, 0.01);
+        setTextBoxStyle (juce::Slider::NoTextBox, true, 0, 0);
+        setDoubleClickReturnValue (true, 0.0);
+        setWantsKeyboardFocus (false);
+        setScrollWheelEnabled (false);   // the wheel scrolls the cards
+        textFromValueFunction = [] (double value)
+        {
+            const int percent = (int) std::lround (std::abs (value) * 100.0);
+            return percent == 0 ? juce::String ("C") : juce::String (value < 0.0 ? "L" : "R") + juce::String (percent);
+        };
+    }
+
+    double snapValue (double attempted, DragMode) override { return std::abs (attempted) <= 0.05 ? 0.0 : attempted; }
+};
+
 /** A horizontal peak meter with hold and decay, fed from MixEngine::Meter values (max since the last read). */
 class MeterBar : public juce::Component
 {

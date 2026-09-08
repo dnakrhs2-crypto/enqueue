@@ -1,6 +1,7 @@
 #include "MixDocument.h"
 
 #include <algorithm>
+#include <cmath>
 
 namespace gocue::livemix
 {
@@ -209,6 +210,21 @@ void MixDocument::setChannelOutput (const juce::Uuid& id, const MixOutput& outpu
         c->output = output;
         c->output.directFirst = juce::jlimit (0, MixSession::maxDeviceChannels - 2, output.directFirst);
         engine.setChannelOutput (id, c->output);
+        valueChanged();
+    }
+}
+
+void MixDocument::setChannelPan (const juce::Uuid& id, double pan)
+{
+    if (auto* c = session.findChannel (id))
+    {
+        pan = juce::jlimit (-1.0, 1.0, std::isfinite (pan) ? pan : 0.0);
+
+        if (c->pan == pan)
+            return;
+
+        c->pan = pan;
+        engine.setChannelPan (id, pan);
         valueChanged();
     }
 }

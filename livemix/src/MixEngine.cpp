@@ -5,6 +5,33 @@
 namespace gocue::livemix
 {
 
+namespace
+{
+    float clampedPan (double pan) noexcept
+    {
+        return (float) juce::jlimit (-1.0, 1.0, std::isfinite (pan) ? pan : 0.0);
+    }
+
+    std::array<float, 2> channelPanGains (float pan, bool stereo) noexcept
+    {
+        if (pan == 0.0f)
+            return { 1.0f, 1.0f };   // exactly the old centre sound, including stereo produced by a mono mic's chain
+
+        if (stereo)
+        {
+            const float attenuated = std::abs (pan) >= 1.0f ? 0.0f : (float) std::cos ((double) pan * juce::MathConstants<double>::halfPi);
+            return pan < 0.0f ? std::array<float, 2> { 1.0f, attenuated } : std::array<float, 2> { attenuated, 1.0f };
+        }
+
+        // Mono already enters the chain at unity on BOTH sides. Constant power with sqrt(2) compensation keeps
+        // that centre level: L = sqrt(2) cos(theta), R = sqrt(2) sin(theta), theta = (pan + 1) pi/4.
+        const double theta = ((double) pan + 1.0) * juce::MathConstants<double>::pi / 4.0;
+        const double gain = std::sqrt (2.0);
+        return { pan >= 1.0f ? 0.0f : (float) (gain * std::cos (theta)),
+                 pan <= -1.0f ? 0.0f : (float) (gain * std::sin (theta)) };
+    }
+}
+
 MixEngine::MixEngine()
 {
     prepare (48000.0, 256);
@@ -318,6 +345,7 @@ void MixEngine::renderBlock (const float* const* inputs, int numInputs, float* c
     const int chunkSize = juce::jmax (1, masterBus.getNumSamples());   // a driver may deliver more than announced: chunk, never grow
     const double sr = sampleRate.load (std::memory_order_relaxed);
     const float rampStepPerSample = (float) (1.0 / juce::jmax (1.0, onOffRampSeconds * sr));
+    const int panRampSamples = juce::jmax (1, juce::roundToInt (panRampSeconds * sr));
 
     for (int offset = 0; offset < numSamples; offset += chunkSize)
     {
@@ -367,6 +395,20 @@ void MixEngine::renderBlock (const float* const* inputs, int numInputs, float* c
 
             node->onGain = end;
             const bool fullyOff = start <= 0.0f && end <= 0.0f;
+
+            const auto panTarget = channelPanGains (node->pan.load (std::memory_order_relaxed), stereo);
+
+            if (panTarget != node->panTarget)
+            {
+                node->panTarget = panTarget;
+                node->panRemaining = panRampSamples;   // retarget from the gain the preceding block reached
+            }
+
+            if (fullyOff)
+            {
+                node->panCurrent = panTarget;   // a pan moved while off must not start from a stale position on unmute
+                node->panRemaining = 0;
+            }
 
             if (fullyOff && skipChainWhenOff.load (std::memory_order_relaxed))
             {
@@ -431,6 +473,29 @@ void MixEngine::renderBlock (const float* const* inputs, int numInputs, float* c
                 fxBus[(size_t) f].addFromWithRamp (0, 0, source.getReadPointer (0), n, from, amount);
                 fxBus[(size_t) f].addFromWithRamp (1, 0, source.getReadPointer (1), n, from, amount);
             }
+
+            // The sends above keep their pre/post-chain stereo image. Only the pair routed to the master and
+            // direct outputs is panned, after the chain and ON/OFF ramp. No allocation or extra lock here.
+            const int panSamples = juce::jmin (n, node->panRemaining);
+
+            for (int side = 0; side < 2; ++side)
+            {
+                const float to = panTarget[(size_t) side];
+
+                if (panSamples > 0)
+                {
+                    const float from = node->panCurrent[(size_t) side];
+                    const float next = panSamples == node->panRemaining ? to
+                        : from + (to - from) * (float) panSamples / (float) node->panRemaining;
+                    chBuf.applyGainRamp (side, 0, panSamples, from, next);
+                    node->panCurrent[(size_t) side] = next;
+                }
+
+                if (n > panSamples && to != 1.0f)
+                    chBuf.applyGain (side, panSamples, n - panSamples, to);
+            }
+
+            node->panRemaining -= panSamples;
 
             if (node->toMaster.load (std::memory_order_relaxed))
             {
@@ -591,6 +656,7 @@ void MixEngine::applySession (const MixSession& session, juce::StringArray* erro
         auto node = std::make_unique<ChannelNode>();
         node->id = c.id;
         node->onGain = c.on ? 1.0f : 0.0f;
+        node->panCurrent = node->panTarget = channelPanGains (clampedPan (c.pan), c.stereo);
         restore (*node->chain, c.chain);
         freshChannels.push_back (std::move (node));
     }
@@ -667,6 +733,7 @@ void MixEngine::applySession (const MixSession& session, juce::StringArray* erro
             node->on.store (c.on, std::memory_order_relaxed);
             node->inputFirst.store (juce::jlimit (0, maxDeviceChannels - 1, c.inputFirst), std::memory_order_relaxed);
             node->stereo.store (c.stereo, std::memory_order_relaxed);
+            node->pan.store (clampedPan (c.pan), std::memory_order_relaxed);
             applyOutput (c.output, node->toMaster, node->direct, node->directFirst);
 
             for (int f = 0; f < maxFx; ++f)
@@ -769,6 +836,12 @@ void MixEngine::setChannelOutput (const juce::Uuid& id, const MixOutput& output)
 {
     if (auto* node = findChannel (id))
         applyOutput (output, node->toMaster, node->direct, node->directFirst);
+}
+
+void MixEngine::setChannelPan (const juce::Uuid& id, double pan)
+{
+    if (auto* node = findChannel (id))
+        node->pan.store (clampedPan (pan), std::memory_order_relaxed);
 }
 
 void MixEngine::setSend (const juce::Uuid& channelId, const juce::Uuid& fxId, double amount, bool pre)

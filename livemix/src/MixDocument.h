@@ -53,6 +53,7 @@ public:
     void setChannelMuteGroup (const juce::Uuid& id, bool inGroup);   // the mark; MuteGroups applies the state
     void setChannelInput (const juce::Uuid& id, int first, bool stereo);
     void setChannelOutput (const juce::Uuid& id, const MixOutput& output);
+    void setChannelPan (const juce::Uuid& id, double pan);
     void setSend (const juce::Uuid& channelId, const juce::Uuid& fxId, double amount, bool pre);
     void renameFx (const juce::Uuid& id, const juce::String& name);
     void setFxReturn (const juce::Uuid& id, double amount);

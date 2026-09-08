@@ -371,6 +371,181 @@ public:
             render (engine, io, 3);   // the new graph runs: A (input 0 = 0.5, a missing slot passes the signal) + C (input 3 = 0.2); D has no input
             expectWithinAbsoluteError (io.last (0), 0.7f, 1e-6f);
         }
+
+        runPanTests();
+    }
+
+    void runPanTests()
+    {
+        beginTest ("mono constant-power pan keeps centre at unity on both sides; stereo balance leaves the favoured side untouched");
+        for (const bool stereo : { false, true })
+        {
+            MixEngine engine;
+            MixSession s;
+            s.addChannel ("Pan");
+            auto& c = s.channels[0];
+            c.stereo = stereo;
+            c.output.direct = true;   // the same pair goes to master 1-2 and direct 3-4
+            engine.applySession (s, nullptr, true);
+            Io io;
+            io.in.clear();
+            io.setInput (0, 0.5f);
+            io.setInput (1, 0.25f);
+            const float rightInput = stereo ? 0.25f : 0.5f;
+            struct Position { double pan; float left, right; };
+            const Position mono[] { { 0.0, 1.0f, 1.0f }, { -1.0, std::sqrt (2.0f), 0.0f }, { 1.0, 0.0f, std::sqrt (2.0f) },
+                                    { -0.5, 1.306562965f, 0.541196100f }, { 0.5, 0.541196100f, 1.306562965f } };
+            const Position balance[] { { 0.0, 1.0f, 1.0f }, { -1.0, 1.0f, 0.0f }, { 1.0, 0.0f, 1.0f },
+                                       { -0.5, 1.0f, 0.707106781f }, { 0.5, 0.707106781f, 1.0f } };
+            for (const auto& p : stereo ? balance : mono)
+            {
+                engine.setChannelPan (c.id, p.pan);
+                render (engine, io, 3);
+                for (int pair : { 0, 2 })
+                {
+                    expectWithinAbsoluteError (io.first (pair), 0.5f * p.left, 1e-6f);
+                    expectWithinAbsoluteError (io.last (pair), 0.5f * p.left, 1e-6f);
+                    expectWithinAbsoluteError (io.last (pair + 1), rightInput * p.right, 1e-6f);
+                }
+                if (! stereo)
+                    expectWithinAbsoluteError (io.last (0) * io.last (0) + io.last (1) * io.last (1), 0.5f, 1e-6f);
+            }
+
+            c.pan = -1.0;
+            engine.applySession (s, nullptr, true);   // a loaded pan starts at its saved position, with no centre transient
+            render (engine, io);
+            expectWithinAbsoluteError (io.first (0), stereo ? 0.5f : std::sqrt (0.5f), 1e-6f);
+            expectWithinAbsoluteError (io.first (1), 0.0f, 1e-6f);
+            engine.setChannelPan (c.id, 9.0);   // the engine API also clamps callers
+            render (engine, io, 3);
+            expectWithinAbsoluteError (io.last (0), 0.0f, 1e-6f);
+            expectWithinAbsoluteError (io.last (1), rightInput * (stereo ? 1.0f : std::sqrt (2.0f)), 1e-6f);
+        }
+
+        beginTest ("pan ramps are continuous for short, long and oversized blocks at different rates and finish after 10 ms");
+        for (const double rate : { 44100.0, 48000.0, 96000.0 })
+        for (const int block : { 16, 64, 256, 1024 })
+        for (const bool stereo : { false, true })
+        {
+            MixEngine engine;
+            engine.prepare (rate, block);
+            MixSession s;
+            s.addChannel ("Ramp");
+            s.channels[0].pan = -1.0;
+            s.channels[0].stereo = stereo;
+            s.channels[0].output.direct = true;
+            engine.applySession (s, nullptr, true);
+            const int request = block * 3 + 7;   // crosses internal chunks and has a short final chunk
+            juce::AudioBuffer<float> input (2, request), output (4, request);
+            for (int side = 0; side < 2; ++side)
+                juce::FloatVectorOperations::fill (input.getWritePointer (side), 0.25f, request);
+            const float hard = 0.25f * (stereo ? 1.0f : std::sqrt (2.0f));
+            const int ramp = juce::roundToInt (rate * MixEngine::panRampSeconds);
+            const float tolerance = 5e-6f;   // JUCE's float gain accumulator rounds across up to 960 ramp samples
+            std::array<float, 2> previous { hard, 0.0f };
+            float maxJump = 0.0f, maxError = 0.0f, pairError = 0.0f;
+            engine.setChannelPan (s.channels[0].id, 1.0);
+            int elapsed = 0;
+            while (elapsed <= ramp + request)
+            {
+                engine.renderBlock (input.getArrayOfReadPointers(), 2, output.getArrayOfWritePointers(), 4, request);
+                for (int i = 0; i < request; ++i)
+                {
+                    const float fraction = juce::jmin (1.0f, (float) (elapsed + i) / (float) ramp);
+                    const float expected[] { hard * (1.0f - fraction), hard * fraction };
+                    for (int side = 0; side < 2; ++side)
+                    {
+                        const float sample = output.getSample (side, i);
+                        maxJump = juce::jmax (maxJump, std::abs (sample - previous[(size_t) side]));
+                        maxError = juce::jmax (maxError, std::abs (sample - expected[side]));
+                        pairError = juce::jmax (pairError, std::abs (sample - output.getSample (side + 2, i)));
+                        previous[(size_t) side] = sample;
+                    }
+                }
+                elapsed += request;
+            }
+            expectLessThan (maxJump, hard / (float) ramp + tolerance);
+            expectLessThan (maxError, tolerance);
+            expectLessThan (pairError, 1e-7f);
+
+            // Reverse the target while a ramp is still moving; a structural edit reuses the node and its progress.
+            for (const double pan : { -1.0, 1.0, 0.0 })
+            {
+                s.channels[0].pan = pan;
+                engine.setChannelPan (s.channels[0].id, pan);
+                engine.applySession (s);
+                engine.renderBlock (input.getArrayOfReadPointers(), 2, output.getArrayOfWritePointers(), 4, 16);
+                for (int side = 0; side < 2; ++side)
+                {
+                    expectLessThan (std::abs (output.getSample (side, 0) - previous[(size_t) side]), hard / (float) ramp + tolerance);
+                    previous[(size_t) side] = output.getSample (side, 15);
+                }
+            }
+        }
+
+        beginTest ("pan is after the chain and switch; pre/post sends and the channel meter keep their stereo image during a pan ramp");
+        for (const bool stereo : { false, true })
+        for (const bool pre : { false, true })
+        {
+            MixEngine engine;
+            MixSession s;
+            s.addFx();
+            s.addChannel();
+            auto& c = s.channels[0];
+            c.stereo = stereo;
+            c.output.direct = true;
+            s.fx[0].output = { false, true, 4 };
+            c.sends[0].amount = 0.4;
+            c.sends[0].pre = pre;
+            engine.applySession (s, nullptr, true);
+            engine.getChannelChain (c.id)->addPlugin (std::make_unique<TestGainPlugin> (0.5f));
+            Io io;
+            io.in.clear();
+            io.setInput (0, 0.5f);
+            io.setInput (1, 0.25f);
+            const float right = stereo ? 0.25f : 0.5f;
+            render (engine, io);
+            for (const double pan : { -1.0, 1.0, 0.0 })
+            {
+                engine.setChannelPan (c.id, pan);
+                for (int b = 0; b < 3; ++b)
+                {
+                    engine.readChannelMeter (c.id);
+                    render (engine, io);
+                    float error = 0.0f;
+                    for (int i = 0; i < blockSize; ++i)
+                    {
+                        error = juce::jmax (error, std::abs (io.out.getSample (4, i) - 0.5f * (pre ? 0.4f : 0.2f)),
+                                                  std::abs (io.out.getSample (5, i) - right * (pre ? 0.4f : 0.2f)));
+                    }
+                    expectLessThan (error, 1e-6f);
+                    const auto meter = engine.readChannelMeter (c.id);
+                    expectWithinAbsoluteError (meter.left, 0.25f, 1e-6f);
+                    expectWithinAbsoluteError (meter.right, right * 0.5f, 1e-6f);
+                }
+                if (pan < 0.0)
+                {
+                    expectWithinAbsoluteError (io.last (0), stereo ? 0.25f : 0.25f * std::sqrt (2.0f), 1e-6f);
+                    expectWithinAbsoluteError (io.last (3), 0.0f, 1e-6f);
+                }
+            }
+            for (const bool skip : { false, true })
+            {
+                engine.setSkipChainWhenOff (skip);
+                engine.setChannelOn (c.id, false);
+                render (engine, io, 3);
+                engine.setChannelPan (c.id, 1.0);
+                render (engine, io);
+                expectWithinAbsoluteError (io.out.getMagnitude (0, blockSize), 0.0f, 1e-6f);   // all outputs, sends included
+                engine.setChannelOn (c.id, true);
+                render (engine, io);
+                expectWithinAbsoluteError (io.out.getMagnitude (0, 0, blockSize), 0.0f, 1e-6f);   // no stale left pan on unmute
+                render (engine, io, 2);
+                expectWithinAbsoluteError (io.last (3), right * 0.5f * (stereo ? 1.0f : std::sqrt (2.0f)), 1e-6f);
+                engine.setChannelPan (c.id, 0.0);
+                render (engine, io, 3);
+            }
+        }
     }
 };
 

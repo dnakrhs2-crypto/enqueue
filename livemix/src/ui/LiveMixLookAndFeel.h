@@ -140,7 +140,7 @@ public:
     void drawLinearSlider (juce::Graphics& g, int x, int y, int width, int height, float sliderPos, float, float,
                            juce::Slider::SliderStyle, juce::Slider& slider) override
     {
-        // the send / return fader: a thick rounded track, a filled part and a big white knob
+        // Send / return / pan faders share the track and knob; bipolar pan fills outwards from a centre mark.
         const float trackH = juce::jmin (16.0f, (float) height * 0.6f);
         const auto track = juce::Rectangle<float> ((float) x, (float) y + ((float) height - trackH) * 0.5f, (float) width, trackH);
         g.setColour (Palette::slotBg);
@@ -148,12 +148,21 @@ public:
         g.setColour (Palette::line);
         g.drawRoundedRectangle (track, trackH * 0.5f, 1.0f);
 
-        const float fillW = juce::jlimit (0.0f, (float) width, sliderPos - (float) x);
+        const bool bipolar = slider.getMinimum() == -1.0 && slider.getMaximum() == 1.0;
+        const float fillStart = bipolar ? juce::jmin (track.getCentreX(), sliderPos) : (float) x;
+        const float fillW = bipolar ? std::abs (sliderPos - track.getCentreX())
+                                   : juce::jlimit (0.0f, (float) width, sliderPos - (float) x);
 
         if (fillW > 1.0f)
         {
             g.setColour (slider.isEnabled() ? Palette::accent : Palette::dimText);
-            g.fillRoundedRectangle (track.withWidth (fillW), trackH * 0.5f);
+            g.fillRoundedRectangle (track.withX (fillStart).withWidth (fillW), trackH * 0.5f);
+        }
+
+        if (bipolar)
+        {
+            g.setColour (Palette::dimText);
+            g.drawVerticalLine (juce::roundToInt (track.getCentreX()), (float) y - 1.0f, (float) (y + height) + 1.0f);
         }
 
         const float knobR = juce::jmin (15.0f, (float) height * 0.5f);

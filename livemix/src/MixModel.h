@@ -35,7 +35,7 @@ struct MixPluginGroup
 };
 
 /** A mic channel: one ASIO input (or a stereo pair) through a VST3 chain, a mic ON/OFF switch, sends and outputs.
-    No gain, no fader: the channel is unity. */
+    No gain fader: the channel is unity at centre pan. */
 struct MixChannel
 {
     juce::Uuid id;
@@ -44,6 +44,7 @@ struct MixChannel
     bool muteGroup = false;   // in the mic mute group: the group's hotkey mutes it (its own switch stays)
     int inputFirst = 0;    // 0-based device input; a stereo channel takes inputFirst and inputFirst + 1
     bool stereo = false;
+    double pan = 0.0;      // -1..1: left / centre / right (stereo channels use balance)
     std::vector<PluginSlotState> chain;
     std::vector<MixSend> sends;   // one per FX channel after sanitise()
     MixOutput output;
@@ -78,7 +79,7 @@ struct MixDevice
 /** The session file (.livemix): everything the app needs to come back exactly as it was. */
 struct MixSession
 {
-    static constexpr int currentVersion = 2;   // 2 (0.5.0): pluginGroups and the slots' ids - a 0.4 LiveMix refuses the file rather than losing them on save
+    static constexpr int currentVersion = 3;   // 3 (0.7.0): pan - older LiveMix refuses the file rather than losing it on save
     static constexpr int maxChannels = 8;
     static constexpr int maxFx = 4;
     static constexpr int maxDeviceChannels = 64;
