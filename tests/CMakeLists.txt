@@ -25,6 +25,7 @@ target_sources(EnqueueTests PRIVATE
     ControlProtocolTests.cpp
     ControlDispatcherTests.cpp
     ControlStateTests.cpp
+    ControlServerTests.cpp
     PluginPresetTests.cpp
     PluginSearchTests.cpp
     LoudnessMeterTests.cpp

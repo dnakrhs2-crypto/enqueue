@@ -229,11 +229,17 @@ target_sources(LiveMixCore INTERFACE
     ${CMAKE_CURRENT_SOURCE_DIR}/livemix/src/ControlProtocol.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/livemix/src/ControlState.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/livemix/src/ControlDispatcher.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/livemix/src/ControlDiscovery.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/livemix/src/ControlSocket.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/livemix/src/ControlServer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/livemix/src/GlobalHotkeys.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/livemix/src/PluginPreset.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/livemix/src/LoudnessMeter.cpp)
 target_include_directories(LiveMixCore INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/livemix/src)
 target_link_libraries(LiveMixCore INTERFACE GoCueCore)
+if(WIN32)
+    target_link_libraries(LiveMixCore INTERFACE bcrypt)
+endif()
 target_sources(LiveMixCore INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/livemix/src/WebDavBackup.cpp)
 
 set(LIVEMIX_VERSION "0.5.3")   # LiveMix version (the Enqueue version is the project version); not a cache variable: a bump must reach existing build trees
