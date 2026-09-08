@@ -82,25 +82,30 @@ export class FxBinding {
   }
 }
 
-export type ActionKind = "all-mics" | "mic-mute-group" | "fx-mute-group" | "plugin-group" | "fx-send" | "status";
+export type ActionKind = "all-mics" | "mic-mute-group" | "fx-mute-group" | "plugin-group" | "fx-send" | "fx-send-step" | "status";
 export type ActionSettings = Omit<MicSettings, "mode"> & {
-  mode: "toggle" | "on" | "off" | "mute" | "unmute";
+  mode: "toggle" | "on" | "off" | "mute" | "unmute" | "up" | "down" | "set";
   fxId: string; fxName: string; groupIndex: number;
-  stepPercent: 1 | 5; pressMode: "pre-post" | "none"; display: "connection" | "session" | "audio";
+  stepPercent: 1 | 5 | 10; targetPercent: number; pressMode: "pre-post" | "none"; display: "connection" | "session" | "audio";
 };
 export function actionSettings(kind: ActionKind, value: unknown): { settings: ActionSettings; valid: boolean; changed: boolean } {
-  const o = isObject(value) ? value : {}, mute = kind.endsWith("mute-group");
-  const modes = mute ? ["toggle", "mute", "unmute"] : ["toggle", "on", "off"];
+  const o = isObject(value) ? value : {}, mute = kind.endsWith("mute-group"), sendStep = kind === "fx-send-step";
+  const modes = sendStep ? ["up", "down", "set"] : mute ? ["toggle", "mute", "unmute"] : ["toggle", "on", "off"];
+  const steps = sendStep ? [1, 5, 10] : [1, 5];
+  const validTarget = typeof o.targetPercent === "number" && Number.isInteger(o.targetPercent) && o.targetPercent >= 0 && o.targetPercent <= 100;
   const base = migrateSettings({ ...o, mode: "toggle" });
   const valid = base.valid && (o.mode === undefined || modes.includes(String(o.mode)))
     && (kind !== "plugin-group" || o.groupIndex === undefined || (Number.isInteger(o.groupIndex) && Number(o.groupIndex) >= 1 && Number(o.groupIndex) <= 5))
-    && (kind !== "fx-send" || ((o.stepPercent === undefined || o.stepPercent === 1 || o.stepPercent === 5) && (o.pressMode === undefined || o.pressMode === "pre-post" || o.pressMode === "none")))
+    && (!(kind === "fx-send" || sendStep) || o.stepPercent === undefined || steps.includes(o.stepPercent as number))
+    && (kind !== "fx-send" || o.pressMode === undefined || o.pressMode === "pre-post" || o.pressMode === "none")
+    && (!sendStep || o.targetPercent === undefined || validTarget)
     && (kind !== "status" || o.display === undefined || ["connection", "session", "audio"].includes(String(o.display)));
   const settings: ActionSettings = { ...base.settings,
-    mode: modes.includes(String(o.mode)) ? o.mode as ActionSettings["mode"] : "toggle",
+    mode: modes.includes(String(o.mode)) ? o.mode as ActionSettings["mode"] : sendStep ? "up" : "toggle",
     fxId: isUuid(o.fxId) ? o.fxId : "", fxName: typeof o.fxName === "string" ? o.fxName : "",
     groupIndex: Number.isInteger(o.groupIndex) && Number(o.groupIndex) >= 1 && Number(o.groupIndex) <= 5 ? Number(o.groupIndex) : 1,
-    stepPercent: o.stepPercent === 5 ? 5 : 1, pressMode: o.pressMode === "none" ? "none" : "pre-post",
+    stepPercent: steps.includes(o.stepPercent as number) ? o.stepPercent as ActionSettings["stepPercent"] : sendStep ? 5 : 1,
+    targetPercent: validTarget ? o.targetPercent as number : 50, pressMode: o.pressMode === "none" ? "none" : "pre-post",
     display: o.display === "session" || o.display === "audio" ? o.display : "connection" };
   return { settings, valid, changed: valid && Object.entries(settings).some(([k, v]) => o[k] !== v) };
 }

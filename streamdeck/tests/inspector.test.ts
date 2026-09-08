@@ -29,7 +29,7 @@ test("shipped PI script: text-only names, offline preservation, auto-save, stale
   const [strings, script, html] = await Promise.all(["strings.js", "inspector.js", "inspector.html"].map(file => readFile(resolve(pluginRoot, "ui", file), "utf8")));
   assert.ok(!html!.includes("https://"));
   for (const language of ["ko", "en", "fr"]) {
-    const ids = [...["channel", "fx", "group", "mode", "step", "press", "display", "fallback", "title"].flatMap(id => [id, `${id}-row`, `${id}-label`]), "short-title", "status", "note"];
+    const ids = [...["channel", "fx", "group", "mode", "step", "target", "press", "display", "fallback", "title"].flatMap(id => [id, `${id}-row`, `${id}-label`]), "short-title", "status", "note"];
     const elements = Object.fromEntries(ids.map(id => [id, new Element()])); elements.mode!.append(new Element());
     const document = { documentElement: new Element(), getElementById: (id: string) => elements[id], createElement: () => new Element() };
     const window: Record<string, any> = { addEventListener() {} };
@@ -56,10 +56,10 @@ test("shipped PI script: text-only names, offline preservation, auto-save, stale
   }
 });
 
-test("all seven shipped PI views expose only relevant fields, localized modes/notes and instant offline-safe settings", async () => {
+test("all eight shipped PI views expose only relevant fields, localized modes/notes and instant offline-safe settings", async () => {
   const [strings, script] = await Promise.all(["strings.js", "inspector.js"].map(file => readFile(resolve(pluginRoot, "ui", file), "utf8")));
-  for (const language of ["ko", "en"]) for (const kind of ["mic", "all-mics", "mic-mute-group", "fx-mute-group", "plugin-group", "fx-send", "status"]) {
-    const fields = ["channel", "fx", "group", "mode", "step", "press", "display", "fallback", "title"];
+  for (const language of ["ko", "en"]) for (const kind of ["mic", "all-mics", "mic-mute-group", "fx-mute-group", "plugin-group", "fx-send", "fx-send-step", "status"]) {
+    const fields = ["channel", "fx", "group", "mode", "step", "target", "press", "display", "fallback", "title"];
     const elements = Object.fromEntries([...fields.flatMap(id => [id, `${id}-row`, `${id}-label`]), "short-title", "status", "note"].map(id => [id, new Element()]));
     const document = { documentElement: new Element(), getElementById: (id: string) => elements[id], createElement: () => new Element() };
     const window: Record<string, any> = { addEventListener() {} }, environment = { window, document, WebSocket: Socket };
@@ -71,11 +71,19 @@ test("all seven shipped PI views expose only relevant fields, localized modes/no
       mic: ["channel", "mode", "fallback", "title"], "all-mics": ["mode", "title"],
       "mic-mute-group": ["mode", "title"], "fx-mute-group": ["mode", "title"],
       "plugin-group": ["channel", "group", "mode", "fallback", "title"],
-      "fx-send": ["channel", "fx", "step", "press", "fallback"], status: ["display"] };
+      "fx-send": ["channel", "fx", "step", "press", "fallback"],
+      "fx-send-step": ["channel", "fx", "mode", "step", "fallback"], status: ["display"] };
     assert.deepEqual(fields.filter(id => !elements[`${id}-row`]!.hidden), expected[kind], kind);
     for (const id of fields) assert.ok(elements[`${id}-label`]!.textContent);
     if (kind === "all-mics") assert.deepEqual(elements.mode!.children.map(c => c.textContent), [locale.toggle, locale.setAllOn, locale.setAllOff]);
     if (kind.endsWith("mute-group")) assert.deepEqual(elements.mode!.children.map(c => c.textContent), [locale.toggle, locale.mute, locale.unmute]);
+    if (kind === "fx-send") assert.deepEqual(elements.step!.children.map(c => c.value), ["1", "5"]);
+    if (kind === "fx-send-step") {
+      assert.deepEqual(elements.mode!.children.map(c => c.value), ["up", "down", "set"]);
+      assert.deepEqual(elements.mode!.children.map(c => c.textContent), language === "ko" ? ["올리기", "내리기", "값으로 설정"] : ["Increase", "Decrease", "Set value"]);
+      assert.deepEqual(elements.step!.children.map(c => c.textContent), ["1%", "5%", "10%"]);
+      assert.equal(elements.mode!.value, "up"); assert.equal(elements.step!.value, "5"); assert.equal(elements.target!.value, "50");
+    }
     const live = { op: "options", context: "key", requestId: "pi1", sequence: 1, connection: "ready", instanceId: "i", sessionId: "s", revision: 2,
       message: locale.connected, channels: [{ id: "channel", name: settings.channelName, groupIndices: [1, 2] }],
       fx: [{ id: "fx", name: settings.fxName }, { id: "fx2", name: settings.fxName }], groupIndices: [1, 2], muteGroupCounts: { mic: 2, fx: 1 } };
@@ -94,7 +102,7 @@ test("all seven shipped PI views expose only relevant fields, localized modes/no
     for (const id of ["channel", "fx", "group"]) assert.equal(elements[id]!.disabled, true);
     assert.equal(elements.fx!.value, settings.fxId); assert.equal(elements.channel!.value, settings.channelId);
     const control = kind === "fx-send" ? "step" : kind === "status" ? "display" : "mode";
-    elements[control]!.value = control === "step" ? "5" : control === "display" ? "audio" : kind.endsWith("mute-group") ? "mute" : "on";
+    elements[control]!.value = control === "step" ? "5" : control === "display" ? "audio" : kind === "fx-send-step" ? "set" : kind.endsWith("mute-group") ? "mute" : "on";
     elements[control]!.listeners.get("change")!();
     const saved = socket.sent.at(-1)!;
     assert.equal(saved.event, "setSettings"); assert.equal(saved.payload.channelId, settings.channelId); assert.equal(saved.payload.fxId, settings.fxId);
@@ -102,6 +110,20 @@ test("all seven shipped PI views expose only relevant fields, localized modes/no
     const count = socket.sent.length; socket.receive({ event: "didReceiveSettings", context: "pi", payload: { settings: saved.payload } }); assert.equal(socket.sent.length, count);
     if (kind === "fx-send") {
       elements.press!.value = "none"; elements.press!.listeners.get("change")!(); assert.equal(socket.sent.at(-1)!.payload.pressMode, "none");
+    }
+    if (kind === "fx-send-step") {
+      assert.equal(elements["target-row"]!.hidden, false); assert.equal(elements["step-row"]!.hidden, true);
+      for (const [value, expected] of [["72", 72], ["-10", 0], ["110", 100]] as const) {
+        elements.target!.value = value; elements.target!.listeners.get("change")!();
+        assert.equal(socket.sent.at(-1)!.payload.targetPercent, expected); assert.equal(elements.target!.value, String(expected));
+      }
+      const count = socket.sent.length;
+      elements.target!.value = ""; elements.target!.listeners.get("change")!();
+      assert.equal(socket.sent.length, count); assert.equal(elements.target!.value, "100");
+      elements.mode!.value = "down"; elements.mode!.listeners.get("change")!();
+      assert.equal(elements["target-row"]!.hidden, true); assert.equal(elements["step-row"]!.hidden, false);
+      elements.step!.value = "10"; elements.step!.listeners.get("change")!(); assert.equal(socket.sent.at(-1)!.payload.stepPercent, 10);
+      elements.mode!.value = "set"; elements.mode!.listeners.get("change")!(); assert.equal(elements.target!.value, "100");
     }
     socket.close(); assert.equal(elements.status!.textContent, locale.offlineHelp); assert.equal(elements.fx!.value, settings.fxId);
   }

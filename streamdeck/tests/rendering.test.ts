@@ -40,15 +40,17 @@ test("Round 3 images have localized labels, mixed/count and independent mute/plu
   }
 });
 
-test("seven manifest actions have required controllers, two key states, translated triggers and all assets", async () => {
+test("eight manifest actions have required controllers/states, translated triggers and all assets", async () => {
   const manifest = JSON.parse(await readFile(resolve(pluginRoot, "manifest.json"), "utf8"));
-  assert.equal(manifest.Actions.length, 7); assert.equal(new Set(manifest.Actions.map((a: any) => a.UUID)).size, 7);
+  assert.equal(manifest.Version, "0.9.1.0");
+  assert.equal(manifest.Actions.length, 8); assert.equal(new Set(manifest.Actions.map((a: any) => a.UUID)).size, 8);
   const ko = JSON.parse(await readFile(resolve(pluginRoot, "ko.json"), "utf8")), en = JSON.parse(await readFile(resolve(pluginRoot, "en.json"), "utf8"));
   assert.deepEqual(Object.keys(ko.Localization).sort(), Object.keys(en.Localization).sort());
   for (const a of manifest.Actions) {
-    const dial = a.UUID.endsWith(".fx-send");
+    const dial = a.UUID.endsWith(".fx-send"), sendStep = a.UUID.endsWith(".fx-send-step");
     assert.deepEqual(a.Controllers, [dial ? "Encoder" : "Keypad"]);
-    assert.equal(a.States.length, dial ? 1 : 2);
+    assert.equal(a.States.length, dial || sendStep ? 1 : 2);
+    if (sendStep) { assert.equal(a.Name, "FX Send ±"); assert.equal(ko[a.UUID].Name, "FX 보내는 양 ±"); }
     for (const property of ["DisableAutomaticStates", "DisableCaching"]) assert.equal(a[property], true);
     for (const property of ["UserTitleEnabled", "SupportedInMultiActions", "SupportedInKeyLogicActions"]) assert.equal(a[property], false);
     for (const locale of [ko, en]) { assert.ok(locale[a.UUID].Name); assert.ok(locale[a.UUID].Tooltip); assert.ok(locale[a.UUID].States.every((s: any) => s.Name)); }

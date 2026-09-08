@@ -77,6 +77,15 @@
       }
     }
   },
+  "com.gomtwigim.livemix.fx-send-step": {
+    "Name": "FX 보내는 양 ±",
+    "Tooltip": "키를 눌러 FX 보내는 양을 올리거나 내리거나 지정한 값으로 설정합니다.",
+    "States": [
+      {
+        "Name": "FX 보내는 양 ±"
+      }
+    ]
+  },
   "com.gomtwigim.livemix.status": {
     "Name": "상태",
     "Tooltip": "연결, 세션, 오디오 상태를 표시합니다. 누르면 상태를 새로 조회합니다.",
@@ -124,6 +133,12 @@
     "pluginGroupTooltip": "마이크의 기존 번호 슬롯에 해당하는 플러그인 그룹을 토글합니다.",
     "fxSend": "FX 보내는 양",
     "fxSendTooltip": "회전으로 보내는 양을 조절하고 짧게 눌렀다 떼어 프리/포스트를 바꿉니다.",
+    "fxSendStep": "FX 보내는 양 ±",
+    "fxSendStepTooltip": "키를 눌러 FX 보내는 양을 올리거나 내리거나 지정한 값으로 설정합니다.",
+    "increase": "올리기",
+    "decrease": "내리기",
+    "setValue": "값으로 설정",
+    "targetValue": "설정값 (%)",
     "statusAction": "상태",
     "statusTooltip": "연결, 세션, 오디오 상태를 표시합니다. 누르면 상태를 새로 조회합니다.",
     "allOn": "모두 ON",

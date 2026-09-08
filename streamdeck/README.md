@@ -1,7 +1,7 @@
 # LiveMix Stream Deck — Round 3 (3A + 3B)
 
-Windows-only prerelease `com.gomtwigim.livemix`, manifest version `0.9.0.1`.
-This package implements all seven actions, a shared LiveMix connection and a
+Windows-only prerelease `com.gomtwigim.livemix`, manifest version `0.9.1.0`.
+This package implements eight actions, a shared LiveMix connection and a
 hardware-free test harness. Node 24 and Stream Deck 7.1+ are the runtime baseline.
 It does not install, launch or change LiveMix or Stream Deck profiles.
 
@@ -43,15 +43,16 @@ and enable LiveMix's Settings → External control (Stream Deck).
 | Microphone / FX Mute Group | Toggle / Mute / Unmute the LiveMix latch. Shows membership count; a zero-member group remains operable. Membership is edited in LiveMix. |
 | Plugin Group | Toggle / ON / OFF an existing numbered slot. Deleted slots show Group missing. Deleting earlier groups shifts later numbers. |
 | FX Send Amount (Encoder only) | Rotate adjusts amount by 1% (default) or 5% per tick, clamped to 0–100%. Down only records the press; release within 600 ms without rotation toggles pre/post when enabled. Rotating while pressed changes amount only. Long press, tap and long touch issue no command. |
+| FX Send ± / FX 보내는 양 ± (Keypad, including Mobile) | Key down increases (default), decreases or sets the send amount. Steps: 1%, 5% (default), 10%; set target: 0–100% (default 50%). Amount-only CAS preserves pre/post, clamps to 0–100%, and recomputes once on an explicit conflict. Shows the current percentage, channel → FX title and +5 / −5 / =50 mode badge. |
 | Status | Connection / session and dirty `*` / audio display. Key down only requests a snapshot, at most once per two seconds per key. |
 
 All keypad releases are inert. The PI saves changes immediately and preserves
-selected channel/FX/slot values while offline. Offline encoders show `—` and a
-disabled bar. Amount and pre/post commands update only their respective fields.
+selected channel/FX/slot values while offline. Offline send keys and encoders show
+`—`; encoders also disable the bar. Amount and pre/post commands update only their respective fields.
 
 ## Package structure
 
-- `src/plugin.ts`: registers seven actions and makes one SDK connection; owns one
+- `src/plugin.ts`: registers eight actions and makes one SDK connection; owns one
   LiveMix TCP connection and one command queue for every visible key/device/PI.
 - `src/livemix/`: bounded discovery reads, lease validation, loopback NDJSON,
   handshake/heartbeat/reconnect, strict wire validation, state reducer, bindings
@@ -59,7 +60,7 @@ disabled bar. Amount and pre/post commands update only their respective fields.
 - `src/actions/mic.ts`: microphone toggle/ON/OFF, context lifecycle, settings
   migration and PI bridge using the SDK 2.x `ui.action` and
   `ui.sendToPropertyInspector` APIs. Key release sends no command.
-- `src/actions/base.ts`: the mic lifecycle/PI/binding pattern shared by the six
+- `src/actions/base.ts`: the mic lifecycle/PI/binding pattern shared by the seven
   additional actions. `mute-group.ts` shares the microphone/FX latch behavior.
 - `src/ui/`: finite SVG templates, safe display text, bundled ko/en strings and a
   shared rolling call history per key/encoder. The 10/s budget includes `showAlert`.
@@ -113,7 +114,8 @@ state to reach its ack revision. Computed values carry `ifRevision`. Disconnect,
 timeout and session changes discard old input; reconnect only negotiates and
 receives state. Runtime logs contain no token, raw JSON or channel names.
 Computed key toggles and dial amounts retry an explicit revision conflict at most
-twice against refreshed state. A pre/post press never retries a conflict.
+twice against refreshed state. FX Send ± keys retry once and share the dial's
+send-target queue. A pre/post press never retries a conflict.
 
 Final icons and Marketplace/site assets remain Round 4 work.
 Fake tests do not establish physical key readability,

@@ -3,7 +3,7 @@
   "UUID": "com.gomtwigim.livemix",
   "Name": "LiveMix",
   "Author": "Gomtwigim",
-  "Version": "0.9.0.1",
+  "Version": "0.9.1.0",
   "Description": "Control LiveMix microphones, mute groups, plugin groups and FX sends on this Windows PC.",
   "Category": "LiveMix",
   "CategoryIcon": "imgs/category",
@@ -200,6 +200,29 @@
           "LongTouch": "Display status only."
         }
       }
+    },
+    {
+      "UUID": "com.gomtwigim.livemix.fx-send-step",
+      "Name": "FX Send ±",
+      "Tooltip": "Press a key to increase, decrease or set the FX send amount.",
+      "Icon": "imgs/actions/fx-send-step/icon",
+      "PropertyInspectorPath": "ui/inspector.html",
+      "Controllers": [
+        "Keypad"
+      ],
+      "DisableAutomaticStates": true,
+      "DisableCaching": true,
+      "UserTitleEnabled": false,
+      "SupportedInMultiActions": false,
+      "SupportedInKeyLogicActions": false,
+      "States": [
+        {
+          "Name": "FX Send ±",
+          "Image": "imgs/actions/fx-send-step/off",
+          "TitleAlignment": "bottom",
+          "FontSize": 12
+        }
+      ]
     },
     {
       "UUID": "com.gomtwigim.livemix.status",

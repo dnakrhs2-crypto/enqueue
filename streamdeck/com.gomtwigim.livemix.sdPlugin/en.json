@@ -77,6 +77,15 @@
       }
     }
   },
+  "com.gomtwigim.livemix.fx-send-step": {
+    "Name": "FX Send ±",
+    "Tooltip": "Press a key to increase, decrease or set the FX send amount.",
+    "States": [
+      {
+        "Name": "FX Send ±"
+      }
+    ]
+  },
   "com.gomtwigim.livemix.status": {
     "Name": "Status",
     "Tooltip": "Display connection, session or audio status. Press to refresh state.",
@@ -124,6 +133,12 @@
     "pluginGroupTooltip": "Toggle an existing numbered plugin group on a microphone.",
     "fxSend": "FX Send Amount",
     "fxSendTooltip": "Rotate to adjust the send amount; short press and release to toggle pre/post.",
+    "fxSendStep": "FX Send ±",
+    "fxSendStepTooltip": "Press a key to increase, decrease or set the FX send amount.",
+    "increase": "Increase",
+    "decrease": "Decrease",
+    "setValue": "Set value",
+    "targetValue": "Target (%)",
     "statusAction": "Status",
     "statusTooltip": "Display connection, session or audio status. Press to refresh state.",
     "allOn": "All ON",

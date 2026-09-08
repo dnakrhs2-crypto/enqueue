@@ -23,7 +23,7 @@ export class FakeHost extends EventEmitter {
     devicePixelRatio: 2,
     devices: [{ id: "fake-mobile", name: "Fake Mobile", size: { columns: 3, rows: 2 }, type: DeviceType.StreamDeckMobile },
       { id: "fake-plus", name: "Fake Stream Deck +", size: { columns: 4, rows: 2 }, type: DeviceType.StreamDeckPlus }],
-    plugin: { uuid: "com.gomtwigim.livemix", version: "0.9.0.1" }
+    plugin: { uuid: "com.gomtwigim.livemix", version: "0.9.1.0" }
   };
   async start(appdata, language = "ko") {
     this.info.application.language = language;

@@ -44,6 +44,7 @@ for (const scale of [1, 2]) {
     "fx-mute-group": '<rect x="22" y="30" width="100" height="84" rx="12"/><path d="m25 32 94 80M47 91V53h24m-24 18h20m12-18 23 38m0-38L79 91"/>',
     "plugin-group": '<rect x="25" y="25" width="94" height="94" rx="14"/><path d="M56 57 72 43v58m-19 0h38"/>',
     "fx-send": '<circle cx="72" cy="72" r="44"/><path d="M72 72V32m28 53 17 3-2-18"/>',
+    "fx-send-step": '<rect x="22" y="94" width="100" height="20" rx="6"/><path d="M24 51h42M45 30v42m38-21h38"/>',
     status: '<circle cx="72" cy="72" r="46"/><path d="M72 65v37m0-59v8"/>'
   };
   for (const a of actions.filter(a => a.id !== "mic")) {

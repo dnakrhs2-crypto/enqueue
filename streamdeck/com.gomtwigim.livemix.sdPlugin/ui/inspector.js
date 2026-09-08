@@ -6,14 +6,18 @@
   let request = 0, requestId = "", sequence = -1, session, revision = -1, ready = false;
   let t = window.LiveMixStrings.en;
   const isMute = () => kind.endsWith("mute-group");
+  const isSendStep = () => kind === "fx-send-step";
   function send(event, payload) { if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ event, context: uuid, payload })); }
   function option(value, text) { const el = document.createElement("option"); el.value = String(value); el.textContent = text; return el; }
   function choices(id, values) { const el = byId(id); el.replaceChildren(); for (const [value, label] of values) el.append(option(value, label)); }
   function showSettings() {
-    byId("mode").value = (isMute() ? ["mute", "unmute"] : ["on", "off"]).includes(settings.mode) ? settings.mode : "toggle";
+    byId("mode").value = (isSendStep() ? ["up", "down", "set"] : isMute() ? ["mute", "unmute"] : ["on", "off"]).includes(settings.mode) ? settings.mode : isSendStep() ? "up" : "toggle";
     byId("fallback").checked = settings.nameFallback !== false;
     byId("short-title").value = typeof settings.shortTitle === "string" ? settings.shortTitle : "";
-    byId("step").value = settings.stepPercent === 5 ? "5" : "1";
+    byId("step").value = String((isSendStep() ? [1, 5, 10] : [1, 5]).includes(settings.stepPercent) ? settings.stepPercent : isSendStep() ? 5 : 1);
+    byId("target").value = String(Number.isInteger(settings.targetPercent) && settings.targetPercent >= 0 && settings.targetPercent <= 100 ? settings.targetPercent : 50);
+    byId("target-row").hidden = !isSendStep() || byId("mode").value !== "set";
+    byId("step-row").hidden = kind !== "fx-send" && (!isSendStep() || byId("mode").value === "set");
     byId("press").value = settings.pressMode === "none" ? "none" : "pre-post";
     byId("display").value = ["session", "audio"].includes(settings.display) ? settings.display : "connection";
   }
@@ -53,8 +57,13 @@
     if (selected) save({ fxId: selected.id, fxName: selected.name });
   });
   byId("group").addEventListener("change", () => save({ groupIndex: Number(byId("group").value) }));
-  byId("mode").addEventListener("change", () => save({ mode: byId("mode").value }));
+  byId("mode").addEventListener("change", () => { save({ mode: byId("mode").value }); showSettings(); });
   byId("step").addEventListener("change", () => save({ stepPercent: Number(byId("step").value) }));
+  byId("target").addEventListener("change", () => {
+    const value = byId("target").value, amount = Number(value);
+    if (value.trim() && Number.isFinite(amount)) save({ targetPercent: Math.max(0, Math.min(100, Math.round(amount))) });
+    showSettings();
+  });
   byId("press").addEventListener("change", () => save({ pressMode: byId("press").value }));
   byId("display").addEventListener("change", () => save({ display: byId("display").value }));
   byId("fallback").addEventListener("change", () => save({ nameFallback: byId("fallback").checked }));
@@ -65,12 +74,14 @@
     kind = action.action.split(".").at(-1);
     t = window.LiveMixStrings[info.application.language === "ko" ? "ko" : "en"];
     document.documentElement.lang = info.application.language === "ko" ? "ko" : "en";
-    for (const [id, key] of [["channel", "microphone"], ["fx", "fxChannel"], ["group", "group"], ["mode", "mode"], ["step", "step"], ["press", "press"], ["display", "display"], ["fallback", "fallback"], ["title", "shortTitle"]]) byId(id + "-label").textContent = t[key];
-    const bound = ["mic", "plugin-group", "fx-send"].includes(kind);
-    for (const [id, visible] of [["channel", bound], ["fx", kind === "fx-send"], ["group", kind === "plugin-group"],
+    for (const [id, key] of [["channel", "microphone"], ["fx", "fxChannel"], ["group", "group"], ["mode", "mode"], ["step", "step"], ["target", "targetValue"], ["press", "press"], ["display", "display"], ["fallback", "fallback"], ["title", "shortTitle"]]) byId(id + "-label").textContent = t[key];
+    const bound = ["mic", "plugin-group", "fx-send", "fx-send-step"].includes(kind);
+    for (const [id, visible] of [["channel", bound], ["fx", kind === "fx-send" || isSendStep()], ["group", kind === "plugin-group"],
       ["mode", !["fx-send", "status"].includes(kind)], ["step", kind === "fx-send"], ["press", kind === "fx-send"],
-      ["display", kind === "status"], ["fallback", bound], ["title", !["fx-send", "status"].includes(kind)]]) byId(id + "-row").hidden = !visible;
-    choices("mode", [["toggle", t.toggle], ...(isMute() ? [["mute", t.mute], ["unmute", t.unmute]] : [["on", kind === "all-mics" ? t.setAllOn : t.on], ["off", kind === "all-mics" ? t.setAllOff : t.off]])]);
+      ["display", kind === "status"], ["fallback", bound], ["title", !["fx-send", "fx-send-step", "status"].includes(kind)]]) byId(id + "-row").hidden = !visible;
+    choices("mode", isSendStep() ? [["up", t.increase], ["down", t.decrease], ["set", t.setValue]]
+      : [["toggle", t.toggle], ...(isMute() ? [["mute", t.mute], ["unmute", t.unmute]] : [["on", kind === "all-mics" ? t.setAllOn : t.on], ["off", kind === "all-mics" ? t.setAllOff : t.off]])]);
+    choices("step", (isSendStep() ? [1, 5, 10] : [1, 5]).map(value => [value, value + "%"]));
     choices("press", [["pre-post", t.prePost], ["none", t.pressNone]]);
     choices("display", [["connection", t.connection], ["session", t.session], ["audio", t.audio]]);
     byId("note").hidden = !isMute() && !["plugin-group", "fx-send"].includes(kind);

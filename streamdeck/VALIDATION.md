@@ -1,3 +1,70 @@
+# Round 3C validation — 2026-09-08
+
+Added `com.gomtwigim.livemix.fx-send-step` for Keypad devices, including
+Stream Deck Mobile. Plugin/package versions are **0.9.1.0 / 0.9.1-0**.
+The existing installed dependencies were used. Commands ran from
+`C:\Users\claude\gocue-sd\streamdeck` with the Windows `npm.cmd` shim.
+
+| Exact command | Actual final result |
+|---|---|
+| `npm.cmd run typecheck` | Exit 0; both source and test TypeScript checks passed. |
+| `npm.cmd run build` | Exit 0; generated assets/localizations and Rollup bundle; Rollup reported 3.3 s. |
+| `npm.cmd test` | Exit 0; **118 tests, 118 passed, 0 failed, 0 cancelled, 0 skipped, 0 todo**, **143770.9465 ms**. Includes 22 new SDK/fake-host/fake-LiveMix tests and one settings-validation test; existing action/PI/manifest coverage also includes the new action. |
+| `npm.cmd run validate` | Exit 0; `Validation successful`. |
+| `npm.cmd run pack -- -f` | Exit 0; `Successfully packaged plugin`; **64 files**, **204.2 KiB unpacked**. |
+
+Package: **`dist/com.gomtwigim.livemix.streamDeckPlugin`**, **90,213 bytes
+(88.1 KiB)**. SHA-256:
+`66b180e3942d2fa23a300622079f69c1f2b6c7e5d7c96a98690bcfff29185651`.
+The archive was reopened: version 0.9.1.0, eight actions, a single Keypad state
+for the new action, and a bundle identical to the tested build. Development
+directories, logs, source maps and discovery files are absent.
+
+Key down increases (default), decreases or sets the selected channel/FX send.
+Increase/decrease use 1%, 5% (default) or 10%; set uses an integer 0–100% target
+(default 50%). Values are computed from canonical state at dispatch, clamped to
+0–1 and sent as `setSend { channelId, fxId, amount }` with `ifRevision`.
+`pre` is never sent. One explicit revision conflict permits one recomputation;
+a second conflict alerts without another retry. Key release is inert.
+
+Keys and dials share the same session/channel/FX queue: one active command,
+ACK plus canonical-state barrier, at most two waiting key intents, and 500 ms
+waiting-intent expiry. Displaced/expired inputs alert; disconnect clears input
+without replay. Tests verify both key/key and key/dial synchronization.
+
+The key shows the current percentage, a send lamp/bar, a +5 / −5 / =50 mode
+badge, and the selected channel → FX title. Offline/missing states show `—`
+with the existing status icons/titles, never a zero-percent substitute. Mute
+and stopped-audio cues remain visible. The shared renderer retains its rolling
+10-call/key/second budget, including alerts and reappearance.
+
+The ko/en PI shares live channel/FX lists with the dial. It exposes the three
+localized modes and steps only as applicable; the target field appears only
+in set mode. Tests execute all eight shipped PI views and verify defaults,
+field visibility, saves, target bounds and offline selection retention.
+
+Files changed:
+
+- Added `src/actions/fx-send-step.ts`; extended `src/actions/base.ts`,
+  `src/livemix/bindings.ts`, `src/ui/key-renderer.ts` and `src/plugin.ts`.
+  Updated only the hello client version in `src/livemix/connection.ts`.
+- Updated `tools/{actions,generate-assets,locales}.mjs`; regenerated
+  `src/ui/strings.ts`, the plugin manifest, `ko.json`, `en.json`, `ui/strings.js`,
+  and six new 1x/2x placeholder SVGs in `imgs/actions/fx-send-step/`.
+- Updated plugin `ui/{inspector.html,inspector.js}` and `package.json`.
+- Added `tests/fx-send-step.test.ts`; extended `tests/{actions,bindings,inspector,rendering}.test.ts`
+  and updated the fake host's version in `tests/fake-host.mjs`.
+- Updated `README.md` and this report. Build/package outputs were regenerated.
+
+All edits are under `streamdeck/`. The lockfile SHA-256 remains
+`6062a47265ac17f33ac578f2cb4e0943e181ad1600ad89fa00ce50decf4f718e`.
+No dependency installation or edits to node_modules, C++, CMake, installer,
+site or Git metadata were performed. Verification uses the built SDK plugin,
+fake Mobile host and fake LiveMix TCP server; no new physical-device result is
+claimed for this build.
+
+---
+
 # Round 3 (3A + 3B) validation — 2026-09-08
 
 Implemented in `streamdeck/` on `livemix-streamdeck`, using the installed SDK

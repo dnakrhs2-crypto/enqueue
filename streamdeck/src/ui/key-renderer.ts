@@ -26,8 +26,8 @@ export function statusTitle(title: string): string {
 }
 export const xml = (s: string): string => s.replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&apos;" })[c]!);
 const images = new Map<string, string>();
-export function keyImage(lamp: Lamp, language: Language, audioStopped = false): string {
-  const key = `${lamp}/${language}/${audioStopped}`;
+export function keyImage(lamp: Lamp, language: Language, audioStopped = false, unknownValue = false): string {
+  const key = `${lamp}/${language}/${audioStopped}/${unknownValue}`;
   const cached = images.get(key); if (cached) return cached;
   const t = translator(language), on = lamp === "on" || lamp === "muted-on", muted = lamp.startsWith("muted-");
   let shape: string, label: string;
@@ -37,17 +37,28 @@ export function keyImage(lamp: Lamp, language: Language, audioStopped = false): 
     label = muted ? t(on ? "originalOn" : "originalOff") : on ? "ON" : "OFF";
     if (muted) shape += `<rect x="14" y="70" width="116" height="19" rx="6" fill="#FF5A5F"/><text x="72" y="84" font-size="13" fill="#15171B">${xml(t("muted"))}</text>`;
   } else {
-    label = "";
+    label = unknownValue ? "—" : "";
     if (lamp === "disconnected") shape = '<path d="M27 19v24h29l10 10m51 23V55H88L78 45M42 31l-7 12m73 12-7 12" stroke="#AEB6C2" stroke-width="7" fill="none"/><path d="m71 22 10 10m-26 33 10 10" stroke="#FF5A5F" stroke-width="5"/>';
     else if (lamp === "disabled") shape = '<rect x="43" y="40" width="58" height="40" rx="6" fill="#3A3F47" stroke="#AEB6C2" stroke-width="4"/><path d="M54 40V29a18 18 0 0 1 36 0v11" fill="none" stroke="#AEB6C2" stroke-width="5"/>';
     else if (lamp === "missing" || lamp === "duplicate") shape = '<circle cx="72" cy="44" r="30" fill="none" stroke="#FFB454" stroke-width="4" stroke-dasharray="7 5"/><text x="72" y="57" font-size="36" fill="#FFB454">?</text>';
     else shape = '<circle cx="72" cy="44" r="27" fill="none" stroke="#4C8DFF" stroke-width="5"/><text x="72" y="56" fill="#FFFFFF" font-size="34">!</text>';
   }
   const pause = audioStopped ? `<path d="M122 8v14m9-14v14" stroke="#FFB454" stroke-width="4"><title>${xml(t("audioStopped"))}</title></path>` : "";
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="144" height="144" viewBox="0 0 144 144"><rect width="144" height="144" rx="12" fill="#15171B"/><g text-anchor="middle" font-family="Malgun Gothic,Segoe UI,sans-serif">${shape}${pause}<text x="72" y="${muted ? 105 : 87}" font-size="${muted ? 13 : 17}" fill="#FFFFFF">${xml(label)}</text></g></svg>`;
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="144" height="144" viewBox="0 0 144 144"><rect width="144" height="144" rx="12" fill="#15171B"/><g text-anchor="middle" font-family="Malgun Gothic,Segoe UI,sans-serif">${shape}${pause}<text x="72" y="${unknownValue ? 102 : muted ? 105 : 87}" font-size="${unknownValue ? 32 : muted ? 13 : 17}" fill="#FFFFFF">${xml(label)}</text></g></svg>`;
   const url = "data:image/svg+xml;base64," + Buffer.from(svg).toString("base64");
-  images.set(key, url); // Only Lamp × language × audio (44 possible entries), never user names.
+  images.set(key, url); // Only Lamp × language × audio × unknown-value, never user names.
   return url;
+}
+
+/** Amount/badge combinations are generated without caching; KeyRenderer deduplicates output. */
+export function sendImage(percent: number, badge: string, language: Language, muted = false, audioStopped = false): string {
+  percent = Math.max(0, Math.min(100, Math.round(percent)));
+  const t = translator(language), color = muted ? "#FF5A5F" : percent > 0 ? "#35D07F" : "#3A3F47";
+  const lamp = `<circle cx="24" cy="24" r="10" fill="${color}" stroke="#AEB6C2" stroke-width="2"/>`
+    + (muted ? `<path d="m17 17 14 14" stroke="#FFFFFF" stroke-width="3"/><text x="53" y="28" font-size="9" fill="#FF5A5F">${xml(t("muted"))}</text>` : "");
+  const pause = audioStopped ? `<path d="M6 5v10m6-10v10" stroke="#FFB454" stroke-width="3"><title>${xml(t("audioStopped"))}</title></path>` : "";
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="144" height="144" viewBox="0 0 144 144"><rect width="144" height="144" rx="12" fill="#15171B"/><g text-anchor="middle" font-family="Malgun Gothic,Segoe UI,sans-serif">${lamp}${pause}<rect x="82" y="12" width="50" height="24" rx="6" fill="#3A3F47"/><text x="107" y="29" font-size="16" fill="#FFFFFF">${xml(badge)}</text><text x="72" y="75" font-size="36" fill="#FFFFFF">${percent}%</text><rect x="18" y="87" width="108" height="9" rx="4" fill="#3A3F47"/><rect x="18" y="87" width="${percent * 1.08}" height="9" rx="4" fill="${color}"/></g></svg>`;
+  return "data:image/svg+xml;base64," + Buffer.from(svg).toString("base64");
 }
 
 export type ActionLamp = "all-on" | "all-off" | "mixed" | "group-muted" | "group-clear" | "plugin-on" | "plugin-off" | "status-on" | "status-off";

@@ -49,6 +49,21 @@ test("invalid enum/future settings versions disable input; malformed UUID does n
   for (const raw of [{ mode: "TOGGLE" }, { settingsVersion: 2 }, { nameFallback: "true" }]) assert.equal(migrateSettings(raw).valid, false);
   assert.equal(migrateSettings({ channelId: "../session" }).settings.channelId, "");
 });
+
+test("send key settings default to up/5/50 and reject invalid modes, steps and target percentages", () => {
+  const defaults = actionSettings("fx-send-step", {});
+  assert.equal(defaults.valid, true); assert.equal(defaults.settings.mode, "up");
+  assert.equal(defaults.settings.stepPercent, 5); assert.equal(defaults.settings.targetPercent, 50);
+  assert.equal(actionSettings("fx-send-step", defaults.settings).changed, false);
+  for (const mode of ["up", "down", "set"]) for (const stepPercent of [1, 5, 10]) for (const targetPercent of [0, 50, 100]) {
+    assert.equal(actionSettings("fx-send-step", { mode, stepPercent, targetPercent }).valid, true);
+  }
+  for (const bad of [{ mode: "toggle" }, { stepPercent: 2 }, { stepPercent: "5" }, { targetPercent: -1 }, { targetPercent: 101 },
+    { targetPercent: 12.5 }, { targetPercent: "50" }, { targetPercent: NaN }, { targetPercent: Infinity }]) {
+    assert.equal(actionSettings("fx-send-step", bad).valid, false);
+  }
+  assert.equal(actionSettings("fx-send", { stepPercent: 10 }).valid, false);
+});
 test("UUID wins over duplicate names and misleading short titles", async () => {
   const s = await state(), binding = new MicBinding(settings({ shortTitle: "another mic" }));
   s.state.channels.push({ ...s.state.channels[0]!, id: other }); assert.equal(boundId(binding, s), origin);

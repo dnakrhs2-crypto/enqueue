@@ -113,9 +113,10 @@ export abstract class LiveMixAction extends SingletonAction<ActionSettings> {
   private fail(c: ActionContext, error: unknown): void {
     c.error = this.t(this.errorKey(error)); this.render(c); c.key?.alert(); c.feedback?.alert(); this.sendOptions();
   }
+  protected problemImage(lamp: Lamp): string { return keyImage(lamp, this.language); }
   private problem(c: ActionContext, title: string, lamp: Lamp): void {
     c.problem = title;
-    c.key?.render({ state: 0, image: keyImage(lamp, this.language), title: statusTitle(title) });
+    c.key?.render({ state: 0, image: this.problemImage(lamp), title: statusTitle(title) });
     c.feedback?.render({ name: "LiveMix", amount: "—", mode: "", level: { value: 0, enabled: false }, status: { value: title, font: { size: 16 } } });
   }
   protected render(c: ActionContext): void {

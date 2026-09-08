@@ -6,6 +6,7 @@ export const actions = [
   { id: "fx-mute-group", name: "fxMuteGroup", tooltip: "fxMuteGroupTooltip", states: ["unmuteState", "muteState"] },
   { id: "plugin-group", name: "pluginGroup", tooltip: "pluginGroupTooltip", states: ["off", "on"] },
   { id: "fx-send", name: "fxSend", tooltip: "fxSendTooltip", states: ["fxSend"] },
+  { id: "fx-send-step", name: "fxSendStep", tooltip: "fxSendStepTooltip", states: ["fxSendStep"] },
   { id: "status", name: "statusAction", tooltip: "statusTooltip", states: ["disconnected", "connected"] }
 ];
 export const triggers = strings => ({ Push: strings.pushTrigger, Rotate: strings.rotateTrigger, Touch: strings.touchTrigger, LongTouch: strings.longTouchTrigger });

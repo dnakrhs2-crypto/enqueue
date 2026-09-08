@@ -167,7 +167,7 @@ export class LiveMixConnection extends EventEmitter {
     this.deadline = setTimeout(() => this.close("HANDSHAKE_TIMEOUT"), this.timing.hello);
     socket.on("connect", () => {
       if (this.socket !== socket) return;
-      this.send({ v: 1, type: "hello", id: this.nextId(), supportedVersions: [1], token: d.token, client: { name: "LiveMix Stream Deck", version: "0.9.0.1" } });
+      this.send({ v: 1, type: "hello", id: this.nextId(), supportedVersions: [1], token: d.token, client: { name: "LiveMix Stream Deck", version: "0.9.1.0" } });
     });
     socket.on("data", bytes => {
       if (this.socket !== socket) return;
