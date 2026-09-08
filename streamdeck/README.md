@@ -1,0 +1,100 @@
+# LiveMix Stream Deck — Round 2A
+
+Windows-only prerelease `com.gomtwigim.livemix`, manifest version `0.9.0.1`.
+This package implements the microphone action, shared LiveMix connection and a
+hardware-free test harness. Node 24 and Stream Deck 7.1+ are the runtime baseline.
+It does not install, launch or change LiveMix or Stream Deck profiles.
+
+## Build and test
+
+From this directory (use `npm.cmd` in PowerShell when `.ps1` shims are blocked):
+
+```powershell
+npm.cmd install
+npm.cmd run typecheck
+npm.cmd run build
+npm.cmd test
+npm.cmd run validate
+npm.cmd run pack
+```
+
+After the initial install generates `package-lock.json`, retain that lockfile and
+use `npm.cmd ci` for subsequent builds. All direct dependencies use exact versions.
+The test script builds the actual distributable first, compiles the TypeScript
+tests with `tsconfig.test.json`, then runs `node:test` serially. No physical Stream
+Deck, Stream Deck application or LiveMix executable is needed by the fake tests.
+
+If the CLI cannot check online schemas, its documented offline validation option is:
+
+```powershell
+npm.cmd run validate -- --no-update-check
+```
+
+See [VALIDATION.md](VALIDATION.md) for the actual results and remaining installation
+blocker in the implementation sandbox. The full SDK bundle and subprocess tests
+are **not yet verified** in that environment.
+
+## Package structure
+
+- `src/plugin.ts`: registers one action and makes one SDK connection; owns one
+  LiveMix TCP connection and one command queue for every visible key/device/PI.
+- `src/livemix/`: bounded discovery reads, lease validation, loopback NDJSON,
+  handshake/heartbeat/reconnect, strict wire validation, state reducer, bindings
+  and per-target command serialization. Ack results never patch the state cache.
+- `src/actions/mic.ts`: microphone toggle/ON/OFF, context lifecycle, settings
+  migration and PI bridge using the SDK 2.x `ui.action` and
+  `ui.sendToPropertyInspector` APIs. Key release sends no command.
+- `src/ui/`: finite SVG templates, safe display text, bundled ko/en strings and a
+  shared rolling call history per key. The 10/s budget includes `showAlert`.
+- `com.gomtwigim.livemix.sdPlugin/`: manifest, local PI, local translations and
+  reproducible placeholder icons. `bin/plugin.js` and its module marker are Rollup
+  build outputs. The PI only uses its host WebSocket; names use text nodes.
+- `tools/generate-assets.mjs`, `tools/locales.mjs`: pure Node PNG/SVG placeholders
+  in every required 1x/2x size, plus the single translation source. Final artwork
+  belongs to Round 4. Generated icons, JSON and string source are committed inputs.
+- `tests/fake-host.mjs`: actual `ws` server and built SDK child process, official
+  registration arguments, device/key/settings events, context output recording,
+  separate PI registration and relay, deadlines and cleanup.
+- `tests/fake-livemix-server.mjs`: actual TCP server and atomic discovery in a
+  temporary APPDATA directory. Only the SDK child receives the APPDATA override;
+  in-process connection tests inject the discovery path through the constructor.
+- `tests/fixtures/control/`: normalized C++ transcripts with precise source notes.
+  The C++ tests construct JSON objects dynamically; their generated envelopes are
+  transcribed with fixed test UUIDs/token, not claimed as literal copied captures.
+
+The authoritative wire implementation is `../livemix/src/ControlProtocol.{h,cpp}`
+and `ControlServer.cpp`; the design is
+`../docs/superpowers/specs/2026-09-08-livemix-streamdeck-design.md`.
+Structure and Rollup plugin order follow the locally installed CLI 1.9.0 template.
+The SDK 2.x API review also used Elgato's
+[upgrade guide](https://docs.elgato.com/streamdeck/sdk/releases/upgrading/v2/),
+[current source](https://github.com/elgatosf/streamdeck/tree/main/packages/plugin/src/plugin)
+and [host WebSocket contract](https://docs.elgato.com/streamdeck/sdk/references/websocket/plugin/).
+
+## Behavior and boundaries
+
+Discovery is always `%APPDATA%\LiveMix\control\discovery.json`, at most 8 KiB,
+with no configurable remote endpoint. The parent is watched and disconnected or
+disabled states are polled each second. A one-second lease recheck also runs while
+connected: it expires unchanged heartbeats and handles lost/coalesced Windows
+watch notifications without trusting an indefinitely cached ready/disabled file.
+Stale/future timestamps require a newly observed heartbeat. HelloAck must match
+the discovery instance, and a full snapshot must follow before any key can act.
+
+Original UUIDs stay in action settings. Exact, unique name fallback resolves only
+at an initial/new instance/session boundary; it does not overwrite the UUID.
+Deleting a resolved target keeps it missing until a new boundary or an explicit
+target selection. This also holds across profile hide/show and reconnects to the
+same session. An origin rename updates the saved fallback name; a temporary
+fallback rename does not. The display alias is never a fallback name.
+
+Pending user intents are limited to two unsent intents per target and expire at
+500 ms. Each target has at most one command in flight and waits for canonical
+state to reach its ack revision. Computed values carry `ifRevision`. Disconnect,
+timeout and session changes discard old input; reconnect only negotiates and
+receives state. Runtime logs contain no token, raw JSON or channel names.
+
+Round 2B's LiveMix test build/integration script, other actions, dial layouts,
+final icons and Marketplace/site assets are intentionally outside this package's
+current implementation. Fake tests do not establish physical key readability,
+Chromium font/layout correctness or actual Stream Deck application installation.

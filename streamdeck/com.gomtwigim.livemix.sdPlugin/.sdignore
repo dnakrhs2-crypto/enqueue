@@ -1,0 +1,6 @@
+**/*.map
+logs/**
+**/*.log
+tests/**
+tools/**
+.DS_Store

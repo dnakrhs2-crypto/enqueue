@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; connect-src ws://127.0.0.1:*; script-src 'self'; style-src 'self'; img-src 'self' data:">
+  <title>LiveMix</title>
+  <link rel="stylesheet" href="inspector.css">
+  <script src="strings.js" defer></script>
+  <script src="inspector.js" defer></script>
+</head>
+<body>
+  <p id="status" role="status" aria-live="polite"></p>
+  <label><span id="channel-label">Microphone</span><select id="channel" disabled></select></label>
+  <label><span id="mode-label">Mode</span><select id="mode"><option value="toggle">Toggle</option><option value="on">ON</option><option value="off">OFF</option></select></label>
+  <label class="checkbox"><input id="fallback" type="checkbox" checked><span id="fallback-label">Match the same name when changing sessions</span></label>
+  <label><span id="title-label">Display name</span><input id="short-title" type="text" maxlength="64"></label>
+</body>
+</html>

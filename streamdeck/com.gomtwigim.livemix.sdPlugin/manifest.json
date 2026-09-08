@@ -1,0 +1,33 @@
+{
+  "$schema": "https://schemas.elgato.com/streamdeck/plugins/manifest.json",
+  "UUID": "com.gomtwigim.livemix",
+  "Name": "LiveMix",
+  "Author": "Gomtwigim",
+  "Version": "0.9.0.1",
+  "Description": "Control LiveMix microphones on this Windows PC.",
+  "Category": "LiveMix",
+  "CategoryIcon": "imgs/category",
+  "Icon": "imgs/plugin",
+  "CodePath": "bin/plugin.js",
+  "SDKVersion": 3,
+  "Nodejs": { "Version": "24" },
+  "Software": { "MinimumVersion": "7.1" },
+  "OS": [{ "Platform": "windows", "MinimumVersion": "10" }],
+  "Actions": [{
+    "UUID": "com.gomtwigim.livemix.mic",
+    "Name": "Microphone On/Off",
+    "Tooltip": "Toggle a LiveMix microphone or explicitly set it on or off.",
+    "Icon": "imgs/actions/mic/icon",
+    "PropertyInspectorPath": "ui/inspector.html",
+    "Controllers": ["Keypad"],
+    "DisableAutomaticStates": true,
+    "DisableCaching": true,
+    "UserTitleEnabled": false,
+    "SupportedInMultiActions": false,
+    "SupportedInKeyLogicActions": false,
+    "States": [
+      { "Name": "Off", "Image": "imgs/actions/mic/off", "TitleAlignment": "bottom", "FontSize": 12 },
+      { "Name": "On", "Image": "imgs/actions/mic/on", "TitleAlignment": "bottom", "FontSize": 12 }
+    ]
+  }]
+}

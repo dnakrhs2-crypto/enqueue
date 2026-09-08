@@ -1,0 +1,41 @@
+{
+  "Name": "LiveMix",
+  "com.gomtwigim.livemix.mic": {
+    "Name": "Microphone On/Off",
+    "Tooltip": "Toggle a LiveMix microphone or explicitly set it on or off.",
+    "States": [
+      {
+        "Name": "OFF"
+      },
+      {
+        "Name": "ON"
+      }
+    ]
+  },
+  "Localization": {
+    "action": "Microphone On/Off",
+    "tooltip": "Toggle a LiveMix microphone or explicitly set it on or off.",
+    "connected": "Connected",
+    "disconnected": "LiveMix offline",
+    "disabled": "Control disabled",
+    "checking": "Checking connection",
+    "version": "Update required",
+    "missing": "Channel missing",
+    "duplicate": "Duplicate name — select again",
+    "audioStopped": "Audio stopped",
+    "muted": "Mute group",
+    "originalOn": "Originally ON",
+    "originalOff": "Originally OFF",
+    "microphone": "Microphone",
+    "mode": "Mode",
+    "toggle": "Toggle",
+    "fallback": "Match the same name when changing sessions",
+    "shortTitle": "Display name",
+    "choose": "Select a microphone",
+    "offlineHelp": "Start LiveMix and enable Settings → External control (Stream Deck).",
+    "disabledHelp": "In LiveMix, enable Settings → External control (Stream Deck).",
+    "failure": "The command failed. Check the connection and selected microphone.",
+    "delayed": "Input delayed",
+    "invalidSettings": "Select the microphone and mode again."
+  }
+}

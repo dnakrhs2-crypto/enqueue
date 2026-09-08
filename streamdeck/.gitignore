@@ -1,0 +1,6 @@
+node_modules/
+.npm-cache/
+.test-build/
+dist/
+com.gomtwigim.livemix.sdPlugin/bin/
+com.gomtwigim.livemix.sdPlugin/logs/

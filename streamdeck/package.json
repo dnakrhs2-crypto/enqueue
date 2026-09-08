@@ -1,0 +1,30 @@
+{
+  "name": "livemix-streamdeck",
+  "version": "0.9.0-1",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=24.13.0" },
+  "scripts": {
+    "typecheck": "tsc --noEmit && tsc -p tsconfig.test.json --noEmit",
+    "build": "node tools/generate-assets.mjs && rollup -c",
+    "test": "npm run build && tsc -p tsconfig.test.json && node --test --test-concurrency=1 .test-build/tests/*.test.js",
+    "validate": "streamdeck validate com.gomtwigim.livemix.sdPlugin",
+    "pack": "streamdeck pack com.gomtwigim.livemix.sdPlugin --output dist"
+  },
+  "dependencies": {
+    "@elgato/streamdeck": "2.1.2"
+  },
+  "devDependencies": {
+    "@elgato/cli": "1.9.0",
+    "@rollup/plugin-commonjs": "29.0.2",
+    "@rollup/plugin-node-resolve": "15.3.1",
+    "@rollup/plugin-terser": "1.0.0",
+    "@rollup/plugin-typescript": "12.3.0",
+    "@tsconfig/node20": "20.1.8",
+    "@types/node": "24.1.0",
+    "rollup": "4.59.0",
+    "tslib": "2.8.1",
+    "typescript": "5.9.3",
+    "ws": "8.21.3"
+  }
+}

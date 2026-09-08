@@ -1,0 +1,1 @@
+{"v":1,"type":"helloAck","id":"1","instanceId":"aaaaaaaaaaaa4aaa8aaaaaaaaaaaaaaa","server":{"name":"LiveMix","version":"0.5.3"},"capabilities":["stateDelta","mic","muteGroups","pluginGroups","sends"],"eventIntervalMs":100,"heartbeatIntervalMs":5000}
