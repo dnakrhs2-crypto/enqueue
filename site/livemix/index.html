@@ -63,6 +63,28 @@
       </figure>
       <p class="notice">설치할 때 Windows가 ‘알 수 없는 게시자’ 경고를 띄웁니다. 추가 정보 → 실행을 누르면 됩니다. 아직 코드 서명을 하지 않아서 그렇습니다.</p>
     </section>
+
+    <section class="body-section" id="streamdeck">
+      <h2>Stream Deck 연동</h2>
+      <p>LiveMix 0.6.0부터 Elgato Stream Deck(하드웨어, Stream Deck +, 휴대폰의 Stream Deck Mobile)에서 마이크 ON/OFF, 전체 마이크, 마이크·FX 뮤트그룹, 플러그인 그룹을 키로 조작하고 Stream Deck +의 다이얼로 FX 보내는 양을 조절할 수 있습니다.</p>
+      <a class="download-button" id="streamdeck-download" href="https://github.com/dnakrhs2-crypto/livemix/releases/download/streamdeck-v0.9.0/com.gomtwigim.livemix.streamDeckPlugin">
+        <strong>Stream Deck 플러그인 0.9.0 다운로드</strong>
+        <span>테스트판 · Stream Deck 앱 7.1 이상 · Windows 전용 · 파일을 열면 Stream Deck 앱이 설치를 안내합니다</span>
+      </a>
+      <ul class="features">
+        <li>LiveMix 0.6.0 이상 설치 → 설정 → <b>외부 제어 (Stream Deck)</b> → ‘외부 제어 사용’ 켜기 (주소와 ‘연결 대기 중’이 표시됩니다)</li>
+        <li>위 플러그인 파일을 열어 설치 → Stream Deck 앱의 <b>LiveMix</b> 항목에서 키를 끌어다 놓고, 키 설정에서 마이크·FX를 고릅니다</li>
+        <li>휴대폰: Stream Deck Mobile(무료 6키)을 같은 와이파이의 PC Stream Deck 앱에 연결하면 같은 키를 쓸 수 있습니다</li>
+        <li>제어는 이 PC 안에서만 통합니다(127.0.0.1). 외부 제어를 끄면 아무것도 달라지지 않습니다</li>
+      </ul>
+      <h3 id="streamdeck-support">문제가 생기면</h3>
+      <ul class="features">
+        <li>키에 ‘LiveMix 미연결’: LiveMix가 꺼져 있거나 아직 연결 중입니다. LiveMix를 실행하면 자동으로 이어집니다</li>
+        <li>키에 ‘제어 꺼짐’: LiveMix 설정에서 ‘외부 제어 사용’이 꺼져 있습니다</li>
+        <li>키에 ‘채널 없음’: 세션이 바뀌어 고른 마이크가 없어졌습니다. 키 설정에서 다시 고르세요 (같은 이름이 하나뿐이면 자동으로 이어집니다)</li>
+        <li>기록: <code>%APPDATA%\LiveMix\logs\control.log</code> (토큰·세션 내용은 기록되지 않습니다). 문의는 위 카카오톡 오픈채팅으로</li>
+      </ul>
+    </section>
   </article>
 </main>
 
