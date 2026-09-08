@@ -114,7 +114,16 @@ MainComponent::MainComponent (MixDocument& doc, LiveMixSettings& s)
     document.onValueChanged = [this] { refreshValues(); };
 
     muteGroups.onChanged = [this] { muteGroupsChanged(); };
-    hotkeys.onHotkey = [this] (int id) { muteGroups.toggle (id == 1 ? MuteGroups::Group::mic : MuteGroups::Group::fx); };
+    hotkeys.onHotkey = [this] (int id)
+    {
+        switch (id)
+        {
+            case 1: muteGroups.toggle (MuteGroups::Group::mic); break;
+            case 2: muteGroups.toggle (MuteGroups::Group::fx); break;
+            case 3: if (onToggleWindow) onToggleWindow(); break;
+            default: break;
+        }
+    };
     registerHotkeys();
 
     updateDeviceNames();
@@ -1334,6 +1343,7 @@ void MainComponent::registerHotkeys()
 
     apply (1, settings.getMicMuteHotkey(), ko ("마이크 뮤트그룹"));
     apply (2, settings.getFxMuteHotkey(), ko ("FX 뮤트그룹"));
+    apply (3, settings.getWindowHotkey(), ko ("창 숨기기/불러오기"));
 }
 
 void MainComponent::layoutFxDrawer()
@@ -1364,11 +1374,12 @@ void MainComponent::showSettingsDialog()
     SettingsDialog::show (engine, settings, this, [this] { deviceChosen(); }, [this] { registerHotkeys(); },
                           [this] (bool capturing)
                           {
-                              // the key being chosen must not fire the group it is bound to right now
+                              // the key being chosen must not fire its current action
                               if (capturing)
                               {
                                   hotkeys.clear (1);
                                   hotkeys.clear (2);
+                                  hotkeys.clear (3);
                               }
                               else
                                   registerHotkeys();

@@ -31,6 +31,7 @@ namespace Keys
     constexpr const char* lastRunVersion = "lastRunVersion";
     constexpr const char* micMuteHotkey = "micMuteHotkey";
     constexpr const char* fxMuteHotkey = "fxMuteHotkey";
+    constexpr const char* windowHotkey = "windowHotkey";
     constexpr const char* vst2Enabled = "vst2Enabled";
     constexpr const char* disabledPlugins = "disabledPlugins";
     constexpr const char* lufsTarget = "lufsTarget";
@@ -112,6 +113,8 @@ juce::String LiveMixSettings::getMicMuteHotkey() const { return settings->getVal
 void LiveMixSettings::setMicMuteHotkey (const juce::String& description) { settings->setValue (Keys::micMuteHotkey, description.trim()); }
 juce::String LiveMixSettings::getFxMuteHotkey() const { return settings->getValue (Keys::fxMuteHotkey); }
 void LiveMixSettings::setFxMuteHotkey (const juce::String& description) { settings->setValue (Keys::fxMuteHotkey, description.trim()); }
+juce::String LiveMixSettings::getWindowHotkey() const { return settings->getValue (Keys::windowHotkey); }
+void LiveMixSettings::setWindowHotkey (const juce::String& description) { settings->setValue (Keys::windowHotkey, description.trim()); }
 
 bool LiveMixSettings::getVst2Enabled() const { return settings->getBoolValue (Keys::vst2Enabled, false); }
 void LiveMixSettings::setVst2Enabled (bool on) { settings->setValue (Keys::vst2Enabled, on); }

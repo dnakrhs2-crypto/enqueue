@@ -103,6 +103,7 @@ public:
         {
             juce::PopupMenu menu;
             menu.addItem (1, ko ("LiveMix 열기"));
+            menu.addItem (7, ko ("창 숨기기/불러오기"));
             menu.addSeparator();
             menu.addItem (2, ko ("마이크 전부 ON"));
             menu.addItem (3, ko ("마이크 전부 OFF"));
@@ -175,6 +176,7 @@ public:
         tray = std::make_unique<TrayIcon> ([this] (int item) { trayMenu (item); });
 
         auto& main = mainWindow->getMainComponent();
+        main.onToggleWindow = [this] { toggleWindow(); };
         main.setSafeMode (safeMode);
 
         // a session named on the command line that could not be opened keeps its notice: loading the last session
@@ -323,6 +325,14 @@ public:
             mainWindow->setVisible (false);
     }
 
+    void toggleWindow()
+    {
+        if (mainWindow != nullptr && mainWindow->isVisible() && ! mainWindow->isMinimised())
+            hideToTray();
+        else
+            showWindow();
+    }
+
     class MainWindow : public juce::DocumentWindow
     {
     public:
@@ -445,6 +455,7 @@ private:
         switch (item)
         {
             case 1: showWindow(); break;
+            case 7: toggleWindow(); break;
             case 2: if (document != nullptr) document->setAllChannelsOn (true); break;
             case 3: if (document != nullptr) document->setAllChannelsOn (false); break;
             case 5: if (mainWindow != nullptr) mainWindow->getMainComponent().getMuteGroups().toggle (MuteGroups::Group::mic); break;

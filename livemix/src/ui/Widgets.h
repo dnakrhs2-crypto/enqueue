@@ -12,6 +12,12 @@ namespace gocue::livemix
 inline juce::Font captionFont() { return juce::Font (juce::FontOptions (pt (12.5f), juce::Font::bold)); }
 inline juce::Font bodyFont (float size = 14.5f) { return juce::Font (juce::FontOptions (pt (size))); }
 
+/** The shaped text at the label's actual font, rounded up, with its borders and a little breathing room. */
+inline int labelWidthForText (const juce::Label& label, const juce::String& text)
+{
+    return juce::GlyphArrangement::getStringWidthInt (label.getFont(), text) + label.getBorderSize().getLeftAndRight() + 4;
+}
+
 /** An alert's text box takes the keyboard once the window is up (typing replaces the suggested text). */
 inline void focusAlertTextEditor (juce::AlertWindow& alert, const juce::String& name)
 {

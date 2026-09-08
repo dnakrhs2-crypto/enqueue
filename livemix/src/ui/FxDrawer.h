@@ -42,6 +42,7 @@ public:
     int getPreferredHeight (int width);
 
 private:
+    struct SenderRow;
     int layout (int width, bool apply);   // places everything (apply) or only measures; returns the height used
     void rebuildTabs();
     void rebuildChain();
@@ -66,7 +67,7 @@ private:
     bool groupMuted = false;
     juce::ComboBox directCombo;
     MeterBar meter_ { true };
-    std::vector<std::unique_ptr<juce::Label>> senders;
+    std::vector<std::unique_ptr<SenderRow>> senders;
     bool refreshing = false;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (FxDrawer)
