@@ -101,6 +101,7 @@ void replay(juce::var& state, const EditDelta& delta)
     }
     require(RecorderSerializer::fingerprint(state) == delta.validationHash, "Result delta replays to the validation hash");
 }
+}   // namespace
 int runProjectTests()
 {
     int passed = 0, failed = 0;
@@ -416,6 +417,5 @@ int runProjectTests()
         require(s.load().failed() && s.get().output.left == 7 && s.get().asioDeviceId == "selected", "Bad settings leave current mapping intact");
     });
     std::cout << "project-roundtrip: " << passed << " passed, " << failed << " failed\n"; return failed == 0 ? 0 : 1;
-}
 }
 // Suite routing lives in tests/TestMain.cpp (registry); this file only provides runProjectTests().
