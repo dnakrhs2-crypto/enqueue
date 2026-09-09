@@ -266,9 +266,11 @@ AAC 선택은 MP4 단독 재생·인계 호환성을 위한 결정이다. 임의
 
 현재 JUCE 8.0.15 ASIO 소스에서 `kAsioSupportsTimeInfo=0`, `bufferSwitchTimeInfoCallback` 인자 무시, 상위 `AudioIODeviceCallbackContext {}` 전달을 확인했다. `hostTimeNs`만 읽으면 해결되지 않는다.
 
-**좁은 JUCE ASIO 확장 + Recorder 전용 bridge를 선택한다.** 구현 단계에서 `tools/juce-patches/0002-recorder-asio-timing-tap.patch`로 재현하고 별도 준비한 JUCE 소스 사본에 적용한다. 공유 `C:/Users/claude/JUCE`를 수동 수정하는 절차는 피한다. Recorder 빌드 정의에서만 hook을 켜고 Enqueue/LiveMix의 기본 동작은 유지한다.
+**좁은 JUCE ASIO 확장 + Recorder 전용 bridge를 선택한다.** 아래 Claude 검토 반영 2에 따라 `tools/juce-patches/0002-recorder-asio-timing-tap.patch`를 **공유 `C:/Users/claude/JUCE`에 커밋으로 적용**한다. 별도 JUCE 클론/두 번째 FETCHCONTENT 경로는 만들지 않는다. Recorder 빌드 정의에서만 hook을 켜고 Enqueue/LiveMix의 기본 동작은 유지한다.
 
 확장은 유효성 flags가 있는 `ASIOTime.samplePosition/systemTime`, callback 진입 QPC, buffer index, sample rate, native 입력 sample type/뷰, 장치가 보고한 input/output latency와 reset/xrun 사건을 **POD BlockStamp**로 전달한다. time-info 지원 협상을 하고 미제공 드라이버의 `getSamplePosition` 관측은 지연 비용을 검증한다. systemTime의 단위·epoch·버퍼 기준을 QPC라고 가정하지 않는다. native PCM 탭과 float 출력 변환 책임도 분리한다.
+
+라운드 03은 patch 산출·ON 번역 단위 컴파일·OFF 기계어 동일성과 장치 없는 PCM/시간 통계 테스트 22개를 확인했다. **workspace-write 권한 제한으로 공유 클론 적용/커밋과 ON 전체 Recorder 링크는 미완료**이며 공유 HEAD는 `1918f10` 그대로다. probe는 patch 미적용 빌드의 native 수집을 `UNAVAILABLE`로 보고한다. 등록은 JUCE `open()` 이전, 해제는 driver `close()` 이후이며 기존 `AudioIODeviceCallbackContext`는 바꾸지 않는다. Recorder tap은 기존 JUCE `callbackLock`/float 변환보다 앞에 있고 추가 경로에는 할당·잠금·I/O·COM·로그가 없지만, **기존 JUCE 콜백 전체의 무잠금을 보장하지 않는다**. `getSamplePosition` 비용은 콜백 밖 제어 스레드에서 별도 관측열로 측정한다. 최신 연속 구간의 최대 10초/4096쌍 회귀는 진단용이며 §7.1의 안정화된 ClockMapper는 후속 라운드 범위다. 실장치 시간정보·poll 비용·원본 보존·출력 매핑 결과는 아직 없다. 정확한 명령·실패·미확인은 계획서 라운드 03에 기록한다.
 
 전용 ASIO host 어댑터로 JUCE 장치 구현 전체를 교체하면 열거·버퍼·포맷·재설정·제어판·출력까지 새로 검증해야 하므로 기본안으로 고르지 않는다. 단, 좁은 hook으로 time/PCM을 신뢰성 있게 얻을 수 없다는 재현 가능한 차단 사유가 나오면 어댑터로 바꾸고 근거를 기록한다. **미확인 → 스파이크 2**. FlexASIO 성공은 이 분기 결정과 경로 시험에는 유용하지만 실제 인터페이스 클록 정확도 인증은 아니다.
 

@@ -75,6 +75,8 @@ target_link_libraries(RecorderCore PUBLIC RecorderCommon RecorderFFmpeg_avcodec 
 target_compile_definitions(RecorderCore PUBLIC RECORDER_FFMPEG_VERSION="${_recorder_ffmpeg_version}")
 add_executable(RecorderProbe tools/RecorderProbe.cpp)
 add_executable(RecorderTests tests/TestMain.cpp tests/CaptureContractTests.cpp tests/CfrSchedulerTests.cpp tests/EncoderContractTests.cpp)
+include(src/audio/RecorderAudio.cmake)
+target_sources(RecorderTests PRIVATE tests/AsioStampTests.cpp tests/NativePcmTests.cpp)
 foreach(_rec_target IN ITEMS RecorderCommon RecorderCore RecorderProbe RecorderTests)
     set_property(TARGET ${_rec_target} PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
     target_compile_options(${_rec_target} PRIVATE /utf-8 /W4 /permissive- /EHsc)
@@ -93,3 +95,16 @@ add_test(NAME RecorderCaptureContracts COMMAND RecorderTests --suite capture-con
 add_test(NAME RecorderCfrScheduler COMMAND RecorderTests --suite cfr-scheduler)
 add_test(NAME RecorderEncoderContracts COMMAND RecorderTests --suite encoder-contract)
 message(STATUS "Recorder: pinned LGPL shared FFmpeg ${_recorder_ffmpeg_version}, avcodec ABI 62")
+
+# Round 06 / spike 4A: WAV chunks and durable storage. Keep this block append-only.
+target_sources(RecorderCore PRIVATE src/storage/DurableFile.cpp src/storage/RecordingJournal.cpp src/record/WavTrackWriter.cpp)
+target_sources(RecorderTests PRIVATE tests/JournalTests.cpp tests/WavChunkTests.cpp)
+# Suite routing: tests/TestMain.cpp registry (no per-round main renames).
+add_test(NAME RecorderJournalDurable COMMAND RecorderTests --suite journal-durable)
+add_executable(RecorderDurabilityProbe tools/DurabilityProbe.cpp)
+target_link_libraries(RecorderDurabilityProbe PRIVATE RecorderCore)
+set_property(TARGET RecorderDurabilityProbe PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+target_compile_options(RecorderDurabilityProbe PRIVATE /utf-8 /W4 /permissive- /EHsc)
+set_target_properties(RecorderDurabilityProbe PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/RecorderDurabilityProbe_artefacts/$<CONFIG>")
+add_custom_command(TARGET RecorderDurabilityProbe POST_BUILD COMMAND ${CMAKE_COMMAND} -E copy_if_different
+    ${_rec_dlls} "$<TARGET_FILE_DIR:RecorderDurabilityProbe>" VERBATIM)

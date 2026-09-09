@@ -1,6 +1,7 @@
 #include "capture/MfCameraCapture.h"
 #include "video/PreviewPresenter.h"
 #include "record/EncodePipeline.h"
+#include "audio/AsioProbe.h"
 extern "C"
 {
 #include <libavcodec/avcodec.h>
@@ -467,6 +468,7 @@ int wmain(int argc, wchar_t** argv)
     SetConsoleOutputCP(CP_UTF8); SetConsoleCP(CP_UTF8);
     try
     {
+        if (argc >= 2 && juce::String(argv[1]) == "asio") return runAsioProbe(argc, argv);
         const auto args = parse(argc, argv);
         return args.command == "enumerate" ? enumerate(args) : args.command == "encode" ? encodeCommand(args) : captureCommand(args);
     }
