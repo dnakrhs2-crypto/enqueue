@@ -13,8 +13,9 @@
 namespace gocue::livemix
 {
 
-/** The VST3 chain of one channel / FX / the master as a vertical list: drag the ≡ to reorder, a switch for
-    on / bypass, 열기 for the plugin's window, ✕ to remove, "+ 플러그인 추가" grouped by manufacturer. */
+/** The VST3 chain of one channel / FX / the master as a vertical list: drag a row's number to reorder, a switch for
+    on / bypass, 열기 for the plugin's window, ✕ to remove, "+ 플러그인 추가" grouped by manufacturer, or
+    found by typing in 플러그인 검색. */
 class ChainDrawer : public juce::Component
 {
 public:
@@ -35,6 +36,9 @@ public:
     void showAddMenu (juce::Component* anchor);
     /** The same menu, next to an area of the screen (a button's bounds captured before a layout moved it). */
     void showAddMenu (juce::Rectangle<int> screenArea);
+    /** 플러그인 검색: a window that filters the enabled plugins as the operator types, for the chains whose
+        makers are too many to walk through by submenu. What is picked goes to the end of this chain. */
+    void showPluginSearch();
     void addPlugin (const juce::PluginDescription& description);
     void openEditor (int index);
 
@@ -50,6 +54,11 @@ private:
     void layoutRows();
     /** A preset into this chain: asked whether to replace or append when the chain is not empty. */
     void loadPreset (const PluginPreset& preset);
+    /** The search window closes with the drawer, and after a pick. 'only' closes it only when it is still that
+        window, so a deferred close cannot take away one opened since; null closes whichever is open. */
+    void closePluginSearch (juce::Component* only = nullptr);
+    /** A plugin picked in the search window, looked up in the enabled list again before it goes into the chain. */
+    void addPickedPlugin (const juce::PluginDescription& description);
     void applyPreset (const PluginPreset& preset, bool replace);
     /** The chain as it is, states included, under a name asked for. */
     void saveChainAsPreset();
@@ -67,6 +76,7 @@ private:
     std::vector<std::unique_ptr<Row>> rows;
     int dragFrom = -1, dragTarget = -1;
     int revision = 0;   // bumped by setChain(): deferred work posted for another chain is dropped
+    juce::Component::SafePointer<juce::DialogWindow> pickerWindow;   // 플러그인 검색, while it is open
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (ChainDrawer)
 };

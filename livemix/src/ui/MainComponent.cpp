@@ -135,12 +135,21 @@ MainComponent::MainComponent (MixDocument& doc, LiveMixSettings& s)
     };
     hotkeys.onHotkey = [this] (int id)
     {
+        if (hotkeysHeld > 0)
+            return;   // a session is going in: the model and the graph do not agree yet
+
         switch (id)
         {
             case 1: muteGroups.toggle (MuteGroups::Group::mic); break;
             case 2: muteGroups.toggle (MuteGroups::Group::fx); break;
             case 3: if (onToggleWindow) onToggleWindow(); break;
-            default: break;
+
+            default:
+                // 4 .. 3 + maxPluginGroups: plugin group 1 .. 5 on every mic channel at once
+                if (id >= firstPluginGroupHotkeyId && id < firstPluginGroupHotkeyId + MixSession::maxPluginGroups)
+                    togglePluginGroupEverywhere (id - firstPluginGroupHotkeyId);
+
+                break;
         }
     };
     registerHotkeys();
@@ -153,6 +162,7 @@ MainComponent::MainComponent (MixDocument& doc, LiveMixSettings& s)
 MainComponent::~MainComponent()
 {
     stopTimer();
+    hotkeys.onHotkey = nullptr;   // nothing of this window may be reached from a keypress while it is taken apart
     detachControlServer();   // also covers a window destroyed independently of the app's normal shutdown
     backup.cancel();
     SettingsDialog::closeIfOpen();
@@ -740,9 +750,10 @@ void MainComponent::timerCallback()
                 worst = juce::jmax (worst, chain->getLatencySamples());
 
         const auto sr = juce::jmax (1.0, engine.getSampleRate());
-        const juce::String text = worst > 0 ? ko ("마이크 체인에 지연이 있는 플러그인이 있습니다 (") + juce::String (1000.0 * worst / sr, 1)
-                                                  + ko (" ms). 프리 센드나 직접 출력을 마스터와 같이 쓰면 위상이 어긋날 수 있습니다.")
-                                            : juce::String();
+        const juce::String text = worst > 0 && ! settings.getLatencyNoticeDismissed()
+                                      ? ko ("마이크 체인에 지연이 있는 플러그인이 있습니다 (") + juce::String (1000.0 * worst / sr, 1)
+                                            + ko (" ms). 프리 센드나 직접 출력을 마스터와 같이 쓰면 위상이 어긋날 수 있습니다.")
+                                      : juce::String();
 
         if (text != latencyNote)
         {
@@ -898,6 +909,12 @@ void MainComponent::parentHierarchyChanged()
 
 void MainComponent::hideNotice()
 {
+    // the latency line is the one that would come straight back (it is worked out again every second): closing it
+    // is the operator saying they know, so it stays closed - for good, in this Windows user's settings. (The master
+    // card's 지연 is the device's, not the plugins': dismissing this hides the only reading of the chains'.)
+    if (latencyNote.isNotEmpty())
+        settings.setLatencyNoticeDismissed (true);
+
     // the close button: every line goes
     sessionNote.clear();
     startupNote.clear();
@@ -991,6 +1008,7 @@ void MainComponent::newSession()
 {
     withSessionSecured ([this]
     {
+        const HotkeysHeld held (*this);
         document.newSession();
         faultedPlugins.clear();
         stalledPlugins.clear();
@@ -1009,6 +1027,7 @@ void MainComponent::openSession (const juce::File& file)
 void MainComponent::loadSession (const juce::File& file)
 {
     juce::StringArray warnings, pluginErrors;
+    const HotkeysHeld held (*this);   // the plugins come back inside load(): no keypress may edit the session meanwhile
     const auto result = document.load (file, &warnings, &pluginErrors);
 
     if (result.failed())
@@ -1091,7 +1110,7 @@ bool MainComponent::saveSession()
 void MainComponent::saveSessionAs (std::function<void (bool)> then)
 {
     const auto suggested = (document.hasFile() ? document.getFile().getParentDirectory() : defaultSessionFolder())
-                               .getChildFile ((document.getSession().name.isNotEmpty() ? document.getSession().name : ko ("세션")) + MixSession::fileExtension);
+                               .getChildFile (document.getDisplayName() + MixSession::fileExtension);
     chooser = std::make_unique<juce::FileChooser> (ko ("세션 저장"), suggested, "*.livemix");
     juce::Component::SafePointer<MainComponent> safeThis (this);
     chooser->launchAsync (juce::FileBrowserComponent::saveMode | juce::FileBrowserComponent::canSelectFiles | juce::FileBrowserComponent::warnAboutOverwriting,
@@ -1127,9 +1146,7 @@ void MainComponent::saveSessionAs (std::function<void (bool)> then)
             }
         }
 
-        if (self.document.getSession().name.isEmpty() || self.document.getSession().name == ko ("새 세션"))
-            self.document.setSessionName (file.getFileNameWithoutExtension());
-
+        // the document takes the new file's name unless the operator gave the session one of its own
         const auto result = self.document.save (file);
 
         if (result.failed())
@@ -1302,14 +1319,20 @@ void MainComponent::menuItemSelected (int id, int topLevelMenuIndex)
 
 void MainComponent::renameSessionDialog()
 {
-    auto* alert = new juce::AlertWindow (ko ("세션 이름"), ko ("이 세션의 이름 (창 제목과 백업 파일에 씁니다)"), juce::MessageBoxIconType::NoIcon);
-    alert->addTextEditor ("name", document.getSession().name, ko ("이름"));
+    auto* alert = new juce::AlertWindow (ko ("세션 이름"), ko ("이 세션의 이름 (창 제목과 위쪽 이름 칸에 씁니다). 비우면 세션 파일의 이름을 씁니다."), juce::MessageBoxIconType::NoIcon);
+    const auto shown = document.getDisplayName();
+    alert->addTextEditor ("name", shown, ko ("이름"));
     alert->addButton (ko ("확인"), 1, juce::KeyPress (juce::KeyPress::returnKey));
     alert->addButton (ko ("취소"), 0, juce::KeyPress (juce::KeyPress::escapeKey));
     juce::Component::SafePointer<MainComponent> safeThis (this);
-    alert->enterModalState (true, juce::ModalCallbackFunction::create ([safeThis, alert] (int r)
+    alert->enterModalState (true, juce::ModalCallbackFunction::create ([safeThis, alert, shown] (int r)
     {
-        if (safeThis != nullptr && r == 1)
+        if (safeThis == nullptr || r != 1)
+            return;
+
+        // 확인 on the name already shown is not a choice: storing it would tie a session with no name of its own to
+        // the file it happens to be in, and the next "다른 이름으로 저장" would go on showing the old name
+        if (alert->getTextEditorContents ("name").trim() != shown.trim())
             safeThis->document.setSessionName (alert->getTextEditorContents ("name"));
     }), true);
     focusAlertTextEditor (*alert, "name");
@@ -1385,6 +1408,25 @@ void MainComponent::registerHotkeys()
     apply (1, settings.getMicMuteHotkey(), ko ("마이크 뮤트그룹"));
     apply (2, settings.getFxMuteHotkey(), ko ("FX 뮤트그룹"));
     apply (3, settings.getWindowHotkey(), ko ("창 숨기기/불러오기"));
+
+    for (int group = 1; group <= MixSession::maxPluginGroups; ++group)
+        apply (firstPluginGroupHotkeyId + group - 1, settings.getPluginGroupHotkey (group),
+               ko ("플러그인 그룹 ") + juce::String (group));
+}
+
+void MainComponent::togglePluginGroupEverywhere (int group)
+{
+    bool switchedOff = false;
+    const int channels = document.toggleGroupOnEveryChannel (group, switchedOff);
+
+    if (channels == 0)
+    {
+        showStatus (ko ("플러그인 그룹 ") + juce::String (group + 1) + ko ("이(가) 있는 마이크가 없습니다 (체인 열기 옆 '그룹'에서 만듭니다)"), true);
+        return;
+    }
+
+    showStatus (ko ("플러그인 그룹 ") + juce::String (group + 1) + (switchedOff ? ko (" 끔") : ko (" 켬"))
+                + "  (" + ko ("마이크 ") + juce::String (channels) + ko ("개") + ")");
 }
 
 void MainComponent::layoutFxDrawer()
@@ -1420,11 +1462,8 @@ void MainComponent::showSettingsDialog()
                               if (safe == nullptr) return;
                               // the key being chosen must not fire its current action
                               if (capturing)
-                              {
-                                  safe->hotkeys.clear (1);
-                                  safe->hotkeys.clear (2);
-                                  safe->hotkeys.clear (3);
-                              }
+                                  for (int id = 1; id < firstPluginGroupHotkeyId + MixSession::maxPluginGroups; ++id)
+                                      safe->hotkeys.clear (id);
                               else
                                   safe->registerHotkeys();
                           },

@@ -79,8 +79,12 @@ public:
     static juce::String accountPath (const juce::String& share, const juce::String& id);         // <share>/accounts/<id>.json
     static juce::String adminListPath (const juce::String& share);                             // <share>/accounts/admins.txt
     static juce::String accountFolder (const juce::String& share, const juce::String& id);       // <share>/<id>
-    /** <share>/<id>/<pc>_<yyyy-MM-dd_HHmmss>.livemix, with the characters a file name cannot carry replaced. */
-    static juce::String backupPathFor (const juce::String& share, const juce::String& id, const juce::String& pcName, juce::Time when);
+    /** <share>/<id>/<label>_<pc>_<yyyy-MM-dd_HHmmss>.livemix, with the characters a file name cannot carry replaced.
+        'label' is what the operator typed to say whose session it is; empty leaves it out (<pc>_<date>), and a long
+        one is cut to maxBackupLabel characters so the path stays sane. */
+    static constexpr int maxBackupLabel = 40;
+    static juce::String backupPathFor (const juce::String& share, const juce::String& id, const juce::String& label,
+                                       const juce::String& pcName, juce::Time when);
     /** <share>/<id>/프리셋_<name>.livemixpreset: a plugin preset next to the account's sessions. */
     static juce::String presetPathFor (const juce::String& share, const juce::String& id, const juce::String& presetName);
     /** The preset's name out of a remote (or local) preset file name ("프리셋_x.livemixpreset" -> "x"). */
@@ -104,7 +108,7 @@ public:
     juce::Result createAccount (const Target& target, Done done);
     /** Checks the account's password and lists its backups (everyone's for an admin). */
     juce::Result signIn (const Target& target, SignInDone done);
-    /** Uploads the local file as <share>/<id>/<pc>_<date>.livemix (the path from backupPathFor). */
+    /** Uploads the local file as <share>/<id>/<label>_<pc>_<date>.livemix (the path from backupPathFor). */
     juce::Result start (const Target& target, const juce::File& localFile, const juce::String& remotePath, Done done);
     /** Downloads one backup into 'localFile'. */
     juce::Result startDownload (const Target& target, const juce::String& remotePath, const juce::File& localFile, Done done);

@@ -51,7 +51,7 @@ public:
             expect (doc.hasFile());
             expectEquals (value, 1);
 
-            doc.setSessionName ("one");
+            doc.setSessionName (juce::String::fromUTF8 ("쇼 하나"));   // a name of the operator's own (not the file's)
             expect (doc.isDirty());
             expect (doc.saveIfPossible().wasOk());
             expect (! doc.isDirty());
@@ -64,16 +64,159 @@ public:
             doc.markDirty();         // a chain edit always refreshes the views
             expectEquals (value, announced + 1);
 
-            doc.setSessionName ("two");   // unsaved, then the file is opened again
+            doc.setSessionName (juce::String::fromUTF8 ("쇼 둘"));   // unsaved, then the file is opened again
             juce::StringArray warnings;
             expect (doc.load (file, &warnings).wasOk());
             expect (! doc.isDirty());
-            expectEquals (doc.getSession().name, juce::String ("one"));
+            expectEquals (doc.getSession().name, juce::String::fromUTF8 ("쇼 하나"));
             expectEquals ((int) doc.getSession().channels.size(), 2);   // the blank session's channel plus the added one
 
             doc.newSession();
             expect (! doc.isDirty());
             expect (! doc.hasFile());
+            expect (dir.deleteRecursively());
+        }
+
+        beginTest ("the plugin group hotkey switches that numbered group on every mic channel at once");
+        {
+            MixEngine engine;
+            engine.prepare (48000.0, 256);
+            MixDocument doc (engine);
+            doc.applyToEngine();
+            const auto first = doc.getSession().channels[0].id;
+            const auto second = doc.addChannel();
+
+            int values = 0;
+            doc.onValueChanged = [&values] { ++values; };
+
+            bool off = false;
+            expectEquals (doc.toggleGroupOnEveryChannel (0, off), 0);   // no groups made yet: nothing to switch
+            expect (! off);
+            expectEquals (doc.toggleGroupOnEveryChannel (-1, off), 0);
+            expectEquals (doc.toggleGroupOnEveryChannel (MixSession::maxPluginGroups, off), 0);
+
+            expectEquals (doc.addPluginGroup (first), 0);
+            expectEquals (doc.addPluginGroup (second), 0);
+            values = 0;
+            expectEquals (doc.toggleGroupOnEveryChannel (0, off), 2);   // both are on: the key switches them off
+            expectEquals (values, 1);   // one keypress is one edit, however many channels it touched
+            expect (off);
+            expect (doc.getSession().channels[0].pluginGroups[0].off);
+            expect (doc.getSession().channels[1].pluginGroups[0].off);
+
+            expectEquals (doc.toggleGroupOnEveryChannel (0, off), 2);   // both off: back on
+            expect (! off);
+            expect (! doc.getSession().channels[0].pluginGroups[0].off);
+            expect (! doc.getSession().channels[1].pluginGroups[0].off);
+
+            // one on and one off: the key takes them all off, so the first press always does something
+            doc.setPluginGroupOff (second, 0, true);
+            expectEquals (doc.toggleGroupOnEveryChannel (0, off), 2);
+            expect (off);
+            expect (doc.getSession().channels[0].pluginGroups[0].off);
+            expect (doc.getSession().channels[1].pluginGroups[0].off);
+
+            // a value announcement made while a batch is open is the batch's one announcement, not an extra
+            {
+                values = 0;
+                const MixDocument::ValueBatch batch (doc);
+                doc.renameChannel (first, "held");
+                doc.renameChannel (second, "held too");
+                expectEquals (values, 0);
+            }
+            expectEquals (values, 1);
+
+            // a group only one channel has: only that channel is counted and touched
+            expectEquals (doc.addPluginGroup (first), 1);
+            expectEquals (doc.toggleGroupOnEveryChannel (1, off), 1);
+            expect (off);
+            expect (doc.getSession().channels[0].pluginGroups[1].off);
+            expectEquals ((int) doc.getSession().channels[1].pluginGroups.size(), 1);
+        }
+
+        beginTest ("the session goes by its file name unless the operator chose one of its own");
+        {
+            MixEngine engine;
+            engine.prepare (48000.0, 256);
+            MixDocument doc (engine);
+            const auto dir = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("livemix_name_" + juce::Uuid().toString());
+            expect (dir.createDirectory().wasOk());
+
+            // the session LiveMix makes on the first run: the file names it, nothing of the operator's is stored
+            const auto first = dir.getChildFile (juce::String::fromUTF8 ("기본 세션.livemix"));
+            expect (doc.save (first).wasOk());
+            expectEquals (doc.getDisplayName(), juce::String::fromUTF8 ("기본 세션"));
+            expect (doc.getSession().name.isEmpty());
+
+            // "다른 이름으로 저장": the session is called what the operator saved it as
+            const auto second = dir.getChildFile (juce::String::fromUTF8 ("방송용.livemix"));
+            expect (doc.save (second).wasOk());
+            expectEquals (doc.getDisplayName(), juce::String::fromUTF8 ("방송용"));
+
+            // a name the operator typed is theirs: another file name does not take it away
+            doc.setSessionName (juce::String::fromUTF8 ("리붕후 방송"));
+            const auto third = dir.getChildFile ("show.livemix");
+            expect (doc.save (third).wasOk());
+            expectEquals (doc.getDisplayName(), juce::String::fromUTF8 ("리붕후 방송"));
+
+            MixEngine other;
+            other.prepare (48000.0, 256);
+            MixDocument reopened (other);
+            expect (reopened.load (third).wasOk());
+            expectEquals (reopened.getDisplayName(), juce::String::fromUTF8 ("리붕후 방송"));   // and it comes back with the file
+
+            // a file renamed outside LiveMix: the name on disk is the session's
+            const auto renamed = dir.getChildFile (juce::String::fromUTF8 ("새 이름.livemix"));
+            expect (second.copyFileTo (renamed));
+            expect (reopened.load (renamed).wasOk());
+            expectEquals (reopened.getDisplayName(), juce::String::fromUTF8 ("새 이름"));
+
+            // a chosen name that happens to read like its own file is still the operator's, through a save and a reopen
+            doc.setSessionName (juce::String::fromUTF8 ("방송용"));
+            expect (doc.save (second).wasOk());   // 방송용.livemix, chosen name 방송용
+            const auto fourth = dir.getChildFile (juce::String::fromUTF8 ("다른.livemix"));
+            expect (doc.save (fourth).wasOk());
+            expectEquals (doc.getDisplayName(), juce::String::fromUTF8 ("방송용"));
+            expect (reopened.load (second).wasOk());
+            expectEquals (reopened.getDisplayName(), juce::String::fromUTF8 ("방송용"));
+            expect (reopened.getSession().nameChosen);
+            expect (reopened.save (dir.getChildFile ("after.livemix")).wasOk());
+            expectEquals (reopened.getDisplayName(), juce::String::fromUTF8 ("방송용"));   // and a save-as does not take it
+
+            // a file from before 0.8.0 has no "nameChosen" at all, so the fixtures take it back out again
+            auto olderFile = [this] (const juce::File& file, const juce::String& storedName)
+            {
+                MixSession older;
+                older.name = storedName;
+                older.addChannel();
+                expect (older.save (file).wasOk());
+                auto parsed = juce::JSON::parse (file.loadFileAsString());
+                expect (parsed.getDynamicObject() != nullptr);
+                parsed.getDynamicObject()->removeProperty ("nameChosen");
+                expect (file.replaceWithText (juce::JSON::toString (parsed)));
+                expect (! file.loadFileAsString().contains ("nameChosen"));
+            };
+
+            // one of LiveMix's own placeholder names in an older file: still not the operator's
+            const auto legacy = dir.getChildFile (juce::String::fromUTF8 ("옛 세션.livemix"));
+            olderFile (legacy, juce::String::fromUTF8 ("기본 세션"));
+            expect (reopened.load (legacy).wasOk());
+            expectEquals (reopened.getDisplayName(), juce::String::fromUTF8 ("옛 세션"));
+            expect (! reopened.getSession().nameChosen);
+
+            // an older file carrying a name only the operator could have typed: kept, and marked as theirs
+            const auto legacyChosen = dir.getChildFile (juce::String::fromUTF8 ("어제 세션.livemix"));
+            olderFile (legacyChosen, juce::String::fromUTF8 ("리허설 세팅"));
+            expect (reopened.load (legacyChosen).wasOk());
+            expectEquals (reopened.getDisplayName(), juce::String::fromUTF8 ("리허설 세팅"));
+            expect (reopened.getSession().nameChosen);
+
+            // and once saved again it says so itself, so opening it later leaves the name alone
+            expect (reopened.save (legacyChosen).wasOk());
+            expect (legacyChosen.loadFileAsString().contains ("nameChosen"));
+            expect (reopened.load (legacyChosen).wasOk());
+            expect (reopened.getSession().nameChosen);
+
             expect (dir.deleteRecursively());
         }
 

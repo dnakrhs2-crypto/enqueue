@@ -301,15 +301,39 @@ juce::String WebDavBackup::sanitiseName (const juce::String& name)
 {
     juce::String out;
 
+    // a control character (a tab pasted into the name box) goes through a WebDAV server but not into a Windows file
+    // name: the restore would fail with ERROR_INVALID_NAME
     for (auto c : name.trim())
-        out << (juce::String ("\\/:*?\"<>|").containsChar (c) ? juce::juce_wchar ('_') : c);
+        out << (c < 32 || c == 127 || juce::String ("\\/:*?\"<>|").containsChar (c) ? juce::juce_wchar ('_') : c);
+
+    out = out.trim();
+
+    while (out.endsWithChar ('.'))   // Windows drops a trailing dot, so the file would not be the name we asked for
+        out = out.dropLastCharacters (1).trim();
+
+    // CON, PRN, AUX, NUL, COM1..9, LPT1..9: no Windows file may be called that, extension or not
+    static const char* const reservedStems[] = { "CON", "PRN", "AUX", "NUL",
+                                                 "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
+                                                 "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9" };
+    const auto stem = out.upToFirstOccurrenceOf (".", false, false).toUpperCase();
+
+    for (const auto* reserved : reservedStems)
+        if (stem == reserved)
+        {
+            out = "_" + out;
+            break;
+        }
 
     return out.isEmpty() ? juce::String ("session") : out;
 }
 
-juce::String WebDavBackup::backupPathFor (const juce::String& share, const juce::String& id, const juce::String& pcName, juce::Time when)
+juce::String WebDavBackup::backupPathFor (const juce::String& share, const juce::String& id, const juce::String& label,
+                                          const juce::String& pcName, juce::Time when)
 {
-    return accountFolder (share, id) + "/" + sanitiseName (pcName) + "_" + when.formatted ("%Y-%m-%d_%H%M%S") + ".livemix";
+    // sanitiseName() answers "session" for nothing at all, so an empty label is left out rather than passed through
+    const auto trimmed = label.trim().substring (0, maxBackupLabel);
+    const auto named = trimmed.isEmpty() ? juce::String() : sanitiseName (trimmed) + "_";
+    return accountFolder (share, id) + "/" + named + sanitiseName (pcName) + "_" + when.formatted ("%Y-%m-%d_%H%M%S") + ".livemix";
 }
 
 juce::String WebDavBackup::presetPathFor (const juce::String& share, const juce::String& id, const juce::String& presetName)
@@ -904,7 +928,8 @@ bool WebDavBackup::collectBackups (const juce::String& owner, std::vector<Entry>
         Entry entry;
         entry.owner = owner;
         entry.name = file.name();
-        entry.pc = entry.name.upToLastOccurrenceOf ("_", false, false).upToLastOccurrenceOf ("_", false, false);   // <pc>_<date>_<time>.livemix
+        // <label>_<pc>_<date>_<time>.livemix, the label optional: what is left of the date is the name the list shows
+        entry.pc = entry.name.upToLastOccurrenceOf ("_", false, false).upToLastOccurrenceOf ("_", false, false);
         entry.path = file.path;
         entry.modified = file.modified;
         entry.size = file.size;

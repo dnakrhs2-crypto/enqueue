@@ -315,13 +315,26 @@ namespace
             const int columnFlags = juce::TableHeaderComponent::visible | juce::TableHeaderComponent::resizable;
             header.addColumn (ko ("계정"), columnOwner, 120, 60, 300, columnFlags);
             header.addColumn (ko ("종류"), columnKind, 70, 50, 90, columnFlags);
-            header.addColumn ("PC", columnPc, 150, 60, 400, columnFlags);
+            header.addColumn (ko ("이름 · PC"), columnPc, 150, 60, 400, columnFlags);   // the backup name typed at upload, then the PC
             header.addColumn (ko ("파일"), columnName, 280, 120, 800, columnFlags);
             header.addColumn (ko ("날짜"), columnDate, 140, 100, 200, columnFlags);
             header.addColumn (ko ("크기"), columnSize, 80, 50, 120, columnFlags);
             header.setStretchToFitActive (true);
             header.setColumnVisible (columnOwner, false);
             addAndMakeVisible (table);
+
+            styleCaption (nameCaption, ko ("백업 이름"));
+            // the operator's own word for whose session this is: it goes in front of the backup's file name, so the
+            // list says "리붕후_PC이름_날짜" instead of a PC and a date the others cannot tell apart
+            nameEditor.setFont (bodyFont (14.0f));
+            nameEditor.setTooltip (ko ("백업 파일 이름 앞에 붙습니다. 목록에서 누구 세션인지 알아보려고 쓰는 이름입니다."));
+            nameEditor.setTextToShowWhenEmpty (ko ("누구 세션인지"), Palette::dimText);
+            {
+                const auto remembered = settings.getBackupCreator();
+                nameEditor.setText (remembered.isNotEmpty() ? remembered : document.getDisplayName(), juce::dontSendNotification);
+            }
+            addAndMakeVisible (nameCaption);
+            addAndMakeVisible (nameEditor);
 
             uploadButton.setButtonText (ko ("지금 세션 백업"));
             uploadButton.setWantsKeyboardFocus (false);
@@ -342,7 +355,7 @@ namespace
             restoreButton.onClick = [this] { restoreSelected(); };
             addAndMakeVisible (restoreButton);
 
-            styleCaption (hint, ko ("백업은 로그인한 계정의 것만 보이고, 올리기와 불러오기도 그 계정의 아이디·비밀번호로만 됩니다. 처음이면 '계정 만들기'로 아이디와 비밀번호를 등록하세요. 세션과 플러그인 프리셋이 함께 목록에 보입니다."));
+            styleCaption (hint, ko ("백업은 로그인한 계정의 것만 보이고, 올리기와 불러오기도 그 계정의 아이디·비밀번호로만 됩니다. 처음이면 '계정 만들기'로 아이디와 비밀번호를 등록하세요. 세션과 플러그인 프리셋이 함께 목록에 보입니다. '백업 이름'에 적은 이름이 백업 파일 앞에 붙습니다."));
             hint.setFont (bodyFont (12.5f));
             hint.setMinimumHorizontalScale (1.0f);
             addAndMakeVisible (hint);
@@ -402,6 +415,9 @@ namespace
             uploadButton.setBounds (row.removeFromRight (150));
             row.removeFromRight (8);
             uploadPresetsButton.setBounds (row.removeFromRight (170));
+            row.removeFromRight (14);
+            nameCaption.setBounds (row.removeFromLeft (juce::jmin (74, juce::jmax (0, row.getWidth()))));
+            nameEditor.setBounds (row.removeFromLeft (juce::jmin (230, juce::jmax (0, row.getWidth()))));
             area.removeFromBottom (12);
 
             table.setBounds (area);
@@ -591,7 +607,10 @@ namespace
             }
 
             const auto target = currentTarget();
-            const auto remotePath = WebDavBackup::backupPathFor (target.share, target.accountId, juce::SystemStats::getComputerName(), juce::Time::getCurrentTime());
+            const auto label = nameEditor.getText().trim().substring (0, WebDavBackup::maxBackupLabel);
+            settings.setBackupCreator (label);   // the same name is offered next time
+            const auto remotePath = WebDavBackup::backupPathFor (target.share, target.accountId, label,
+                                                                 juce::SystemStats::getComputerName(), juce::Time::getCurrentTime());
             juce::Component::SafePointer<BackupContent> safe (this);
             auto status = callbacks.status;
             auto* prefs = &settings;
@@ -898,8 +917,8 @@ namespace
         std::vector<WebDavBackup::Entry> entries;
         bool everyoneMode = false;
 
-        juce::Label idCaption, passwordCaption, hint, statusLabel;
-        juce::TextEditor idEditor, passwordEditor;
+        juce::Label idCaption, passwordCaption, hint, statusLabel, nameCaption;
+        juce::TextEditor idEditor, passwordEditor, nameEditor;
         juce::ToggleButton remember;
         juce::TextButton signInButton, createButton, uploadButton, uploadPresetsButton, restoreButton;
         juce::TableListBox table;

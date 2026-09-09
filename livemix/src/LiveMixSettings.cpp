@@ -33,10 +33,12 @@ namespace Keys
     constexpr const char* micMuteHotkey = "micMuteHotkey";
     constexpr const char* fxMuteHotkey = "fxMuteHotkey";
     constexpr const char* windowHotkey = "windowHotkey";
+    constexpr const char* pluginGroupHotkey = "pluginGroupHotkey";   // + the group number (1..5)
     constexpr const char* vst2Enabled = "vst2Enabled";
     constexpr const char* disabledPlugins = "disabledPlugins";
     constexpr const char* lufsTarget = "lufsTarget";
     constexpr const char* lufsAlwaysOnTop = "lufsAlwaysOnTop";
+    constexpr const char* latencyNoticeDismissed = "latencyNoticeDismissed";
 }
 
 LiveMixSettings::LiveMixSettings (const juce::File& directory)
@@ -119,6 +121,19 @@ juce::String LiveMixSettings::getFxMuteHotkey() const { return settings->getValu
 void LiveMixSettings::setFxMuteHotkey (const juce::String& description) { settings->setValue (Keys::fxMuteHotkey, description.trim()); }
 juce::String LiveMixSettings::getWindowHotkey() const { return settings->getValue (Keys::windowHotkey); }
 void LiveMixSettings::setWindowHotkey (const juce::String& description) { settings->setValue (Keys::windowHotkey, description.trim()); }
+
+juce::String LiveMixSettings::getPluginGroupHotkey (int group) const
+{
+    return settings->getValue (juce::String (Keys::pluginGroupHotkey) + juce::String (group));
+}
+
+void LiveMixSettings::setPluginGroupHotkey (int group, const juce::String& description)
+{
+    settings->setValue (juce::String (Keys::pluginGroupHotkey) + juce::String (group), description.trim());
+}
+
+bool LiveMixSettings::getLatencyNoticeDismissed() const { return settings->getBoolValue (Keys::latencyNoticeDismissed, false); }
+void LiveMixSettings::setLatencyNoticeDismissed (bool dismissed) { settings->setValue (Keys::latencyNoticeDismissed, dismissed); }
 
 bool LiveMixSettings::getVst2Enabled() const { return settings->getBoolValue (Keys::vst2Enabled, false); }
 void LiveMixSettings::setVst2Enabled (bool on) { settings->setValue (Keys::vst2Enabled, on); }

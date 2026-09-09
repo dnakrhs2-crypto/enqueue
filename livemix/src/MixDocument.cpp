@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <utility>
 
 namespace gocue::livemix
 {
@@ -10,11 +11,30 @@ namespace
 {
     MixSession defaultSession()
     {
-        MixSession fresh;
-        fresh.name = juce::String::fromUTF8 ("새 세션");
+        MixSession fresh;   // no name: an unsaved session is "새 세션", and once saved it goes by its file
         fresh.addFx (juce::String::fromUTF8 ("리버브"));
         fresh.addChannel();
         return fresh;
+    }
+
+    /** A file written before 0.8.0 says nothing about who chose its name, and LiveMix used to put one there itself:
+        the name it gave the first session ("기본 세션"), the blank session's ("새 세션"), or the file's own name, copied
+        in by "다른 이름으로 저장". Keeping those is what made a session renamed by save-as go on showing "기본 세션".
+        Read once as the file is opened: a name that reads like one of LiveMix's own is dropped, anything else is the
+        operator's and is marked as chosen. A file written from 0.8.0 on with a name the operator chose carries
+        nameChosen and never comes through here; one with no name of its own does, and has nothing to lose. */
+    void settleNameOfAnOlderFile (MixSession& session, const juce::File& file)
+    {
+        const auto name = session.name.trim();
+        const bool liveMixGaveIt = name.isEmpty()
+                                   || name == file.getFileNameWithoutExtension()
+                                   || name == juce::String::fromUTF8 ("새 세션")
+                                   || name == juce::String::fromUTF8 ("기본 세션");
+
+        if (liveMixGaveIt)
+            session.name.clear();
+
+        session.nameChosen = ! liveMixGaveIt;
     }
 }
 
@@ -63,6 +83,8 @@ juce::Result MixDocument::load (const juce::File& newFile, juce::StringArray* wa
     session = std::move (loaded);
     sessionGeneration = juce::Uuid();
     file = newFile;
+    if (! session.nameChosen)
+        settleNameOfAnOlderFile (session, file);   // a file from before 0.8.0 (or one with no name of its own)
     dirty = false;
     juce::StringArray restoreErrors;
     engine.applySession (session, &restoreErrors, true);
@@ -80,6 +102,8 @@ juce::Result MixDocument::load (const juce::File& newFile, juce::StringArray* wa
 
 juce::Result MixDocument::save (const juce::File& newFile)
 {
+    // the name is left exactly as it is: a session with none goes by whatever file it is saved into, and one the
+    // operator typed is theirs whatever the file is called (a save that fails then has nothing to undo)
     for (int attempt = 0;; ++attempt)
     {
         pollPluginEdits();   // edits reported so far are captured below (and keep the document dirty should the write fail)
@@ -430,9 +454,40 @@ void MixDocument::bypassSlot (const juce::Uuid& channelId, const juce::Uuid& slo
         }
 }
 
+int MixDocument::toggleGroupOnEveryChannel (int group, bool& switchedOff)
+{
+    if (group < 0 || group >= MixSession::maxPluginGroups)
+        return 0;
+
+    std::vector<juce::Uuid> channels;
+    bool anyOn = false;
+
+    for (const auto& c : session.channels)
+        if (group < (int) c.pluginGroups.size())
+        {
+            channels.push_back (c.id);
+            anyOn = anyOn || ! c.pluginGroups[(size_t) group].off;
+        }
+
+    // one group still running anywhere means the key switches them off: the first press always does something
+    switchedOff = anyOn;
+
+    {
+        // one keypress is one edit: the cards, the groups window and the Stream Deck never see half of it (each
+        // bypassed plugin would otherwise announce again through the chain listener's markDirty)
+        const ValueBatch batch (*this);
+
+        for (const auto& id : channels)
+            setPluginGroupOff (id, group, anyOn);   // each one bypasses its own members (and leaves those another OFF group holds)
+    }
+
+    return (int) channels.size();
+}
+
 void MixDocument::setSessionName (const juce::String& name)
 {
     session.name = name.trim();
+    session.nameChosen = session.name.isNotEmpty();   // cleared: back to going by the file's name
     valueChanged();
 }
 
@@ -486,6 +541,12 @@ void MixDocument::notifyStructure()
 
 void MixDocument::notifyValue()
 {
+    if (heldValueNotifications > 0)
+    {
+        valueNotificationHeld = true;   // a ValueBatch is open: it makes this one announcement when it closes
+        return;
+    }
+
     if (onValueChanged)
         onValueChanged();
 }

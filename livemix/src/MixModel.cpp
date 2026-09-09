@@ -138,6 +138,11 @@ MixSend& MixSession::sendFor (MixChannel& channel, const juce::Uuid& fxId)
 
 void MixSession::sanitise()
 {
+    name = name.trim();
+
+    if (name.isEmpty())
+        nameChosen = false;   // nothing to have chosen: the session goes by its file
+
     if ((int) channels.size() > maxChannels)
         channels.resize ((size_t) maxChannels);
 
@@ -236,6 +241,7 @@ juce::String MixSession::toJson() const
     root->setProperty ("app", "LiveMix");
     root->setProperty ("version", currentVersion);
     root->setProperty ("name", name);
+    root->setProperty ("nameChosen", nameChosen);
 
     auto* dev = new juce::DynamicObject();
     dev->setProperty ("name", device.name);
@@ -351,6 +357,7 @@ juce::Result MixSession::fromJson (const juce::String& json, MixSession& out, ju
 
     MixSession s;
     s.name = root.getProperty ("name", "").toString();
+    s.nameChosen = (bool) root.getProperty ("nameChosen", false);   // no such key before 0.8.0: MixDocument::load decides
 
     if (const auto dev = root.getProperty ("device", juce::var()); dev.getDynamicObject() != nullptr)
     {

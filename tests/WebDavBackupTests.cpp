@@ -50,8 +50,27 @@ public:
             expectEquals (WebDavBackup::accountPath ("backups", " alice "), juce::String ("/backups/accounts/alice.json"));
             expectEquals (WebDavBackup::adminListPath ("/backups"), juce::String ("/backups/accounts/admins.txt"));
             expectEquals (WebDavBackup::accountFolder ("/backups", "alice"), juce::String ("/backups/alice"));
-            expectEquals (WebDavBackup::backupPathFor ("/backups", "alice", "STUDIO:PC", juce::Time (2026, 8, 4, 15, 30, 0, 0, true)),
-                          juce::String ("/backups/alice/STUDIO_PC_2026-09-04_153000.livemix"));
+            expectEquals (WebDavBackup::backupPathFor ("/backups", "alice", {}, "STUDIO:PC", juce::Time (2026, 8, 4, 15, 30, 0, 0, true)),
+                          juce::String ("/backups/alice/STUDIO_PC_2026-09-04_153000.livemix"));   // no name typed: the PC and the date
+
+            // the operator's own name goes in front, cleaned of what a file name cannot carry and cut to 40 characters
+            expectEquals (WebDavBackup::backupPathFor ("/backups", "alice", "  gom/uze  ", "STUDIO:PC", juce::Time (2026, 8, 4, 15, 30, 0, 0, true)),
+                          juce::String ("/backups/alice/gom_uze_STUDIO_PC_2026-09-04_153000.livemix"));
+            expect (WebDavBackup::backupPathFor ("/backups", "alice", juce::String::repeatedString ("z", 80), "PC", juce::Time (2026, 8, 4, 15, 30, 0, 0, true))
+                        .contains (juce::String::repeatedString ("z", WebDavBackup::maxBackupLabel) + "_PC_"));
+
+            // a control character (a tab pasted into the name box) and a name Windows keeps for a device
+            expectEquals (WebDavBackup::backupPathFor ("/backups", "alice", "A\tB", "PC", juce::Time (2026, 8, 4, 15, 30, 0, 0, true)),
+                          juce::String ("/backups/alice/A_B_PC_2026-09-04_153000.livemix"));
+            expectEquals (WebDavBackup::backupPathFor ("/backups", "alice", "CON", "PC", juce::Time (2026, 8, 4, 15, 30, 0, 0, true)),
+                          juce::String ("/backups/alice/_CON_PC_2026-09-04_153000.livemix"));
+            expectEquals (WebDavBackup::backupPathFor ("/backups", "alice", "show...", "PC", juce::Time (2026, 8, 4, 15, 30, 0, 0, true)),
+                          juce::String ("/backups/alice/show_PC_2026-09-04_153000.livemix"));   // Windows drops a trailing dot
+            expectEquals (WebDavBackup::presetPathFor ("/backups", "alice", "nul"),
+                          juce::String::fromUTF8 ("/backups/alice/\xed\x94\x84\xeb\xa6\xac\xec\x85\x8b_") + "_nul.livemixpreset");
+
+            juce::String labelled;
+            expect (WebDavBackup::parseBackupPath ("/backups", "/backups/alice/gom_STUDIO_PC_2026-09-04_153000.livemix", labelled) && labelled == "alice");
 
             // a backup path is exactly <share>/<owner>/<file>.livemix - nothing a server could resolve elsewhere
             juce::String owner;

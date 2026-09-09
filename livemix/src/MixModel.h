@@ -88,7 +88,11 @@ struct MixSession
     static constexpr juce::int64 maxFileBytes = 32 * 1024 * 1024;   // a session file beyond this is not a session
     static constexpr const char* fileExtension = ".livemix";
 
-    juce::String name;
+    juce::String name;   // empty unless the operator typed one: a session with none goes by its file
+    /** True only when 'name' is a name the operator typed ("세션 이름 바꾸기"). Stored, so a name that happens to read
+        like the file's own is still theirs after the file is opened again. Absent from files written before 0.8.0,
+        which MixDocument::load sorts out once, as it opens them. */
+    bool nameChosen = false;
     MixDevice device;
     std::vector<MixChannel> channels;
     std::vector<MixFx> fx;

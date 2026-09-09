@@ -53,6 +53,14 @@ public:
     void setFxMuteHotkey (const juce::String& description);
     juce::String getWindowHotkey() const;
     void setWindowHotkey (const juce::String& description);
+    /** The hotkey of plugin group 'group' (1..MixSession::maxPluginGroups): it switches that numbered group off and
+        on across every mic channel that has one. */
+    juce::String getPluginGroupHotkey (int group) const;
+    void setPluginGroupHotkey (int group, const juce::String& description);
+
+    /** The notice about a plugin with latency in a mic chain: closed once by the operator, never shown again. */
+    bool getLatencyNoticeDismissed() const;
+    void setLatencyNoticeDismissed (bool dismissed);
 
     /** VST2 plugins offered and used (off unless the operator switched it on). */
     bool getVst2Enabled() const;

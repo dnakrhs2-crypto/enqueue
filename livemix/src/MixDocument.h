@@ -68,6 +68,10 @@ public:
     void removePluginGroup (const juce::Uuid& channelId, int group);   // an OFF group's members come back on
     void setPluginGroupMember (const juce::Uuid& channelId, int group, const juce::Uuid& slotId, bool member);   // joining an OFF group switches the plugin off at once, leaving it switches it on
     void setPluginGroupOff (const juce::Uuid& channelId, int group, bool off);
+    /** The same numbered group on every mic channel that has one, for the global hotkey: a group that is on
+        anywhere switches them all off, otherwise they all come on. Returns how many channels have that group
+        (0: nothing happened) and, in 'switchedOff', which way they went. */
+    int toggleGroupOnEveryChannel (int group, bool& switchedOff);
 
     void setSessionName (const juce::String& name);
     void setDeviceInfo (const juce::String& name, int bufferSize, double sampleRate);
@@ -75,6 +79,22 @@ public:
     /** A plugin chain was edited live (the engine is the truth): the file is out of date. 'refreshViews' false is for
         a parameter turned in a plugin editor: the views need no refresh, only the dirty state (announced once). */
     void markDirty (bool refreshViews = true);
+    /** Holds the value announcements while several edits go in together, and makes the one announcement they add up
+        to when the last holder goes. Message thread; the chain listeners' markDirty() is held by it too. */
+    class ValueBatch
+    {
+    public:
+        explicit ValueBatch (MixDocument& d) : document (d) { ++document.heldValueNotifications; }
+        ~ValueBatch()
+        {
+            if (--document.heldValueNotifications == 0 && std::exchange (document.valueNotificationHeld, false))
+                document.notifyValue();
+        }
+
+    private:
+        MixDocument& document;
+        JUCE_DECLARE_NON_COPYABLE (ValueBatch)
+    };
     /** The operator discarded unsaved changes (a save that failed on quit, then "discard and continue"): the session
         is no longer dirty, so the shutdown save does not bring the discarded edits back. */
     void discardUnsavedChanges() noexcept { dirty.store (false, std::memory_order_release); }
@@ -95,12 +115,16 @@ private:
     void notifyStructure();    // announced only (a load / a new session are clean)
     void notifyValue();
 
+    friend class ValueBatch;
+
     MixEngine& engine;
     MixSession session;
     juce::Uuid sessionGeneration;   // Uuid's default constructor creates a fresh non-null identity
     juce::File file;
     std::atomic<bool> dirty { false };
     bool graphApplied = false;
+    int heldValueNotifications = 0;      // > 0: a ValueBatch is open
+    bool valueNotificationHeld = false;  // something asked to announce while it was
 };
 
 } // namespace gocue::livemix

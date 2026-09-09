@@ -104,6 +104,22 @@ private:
     void showBackupDialog();
     void showSettingsDialog();
     void registerHotkeys();      // from the settings; a refused key goes to the status line
+    /** While one is alive the global hotkeys do nothing: a session (or its plugins) is going into the engine, and
+        WM_HOTKEY arrives straight from the message loop - a plugin that pumps messages while it is built would
+        otherwise let a keypress edit the incoming session against the graph still running. */
+    class HotkeysHeld
+    {
+    public:
+        explicit HotkeysHeld (MainComponent& c) : owner (c) { ++owner.hotkeysHeld; }
+        ~HotkeysHeld() { --owner.hotkeysHeld; }
+
+    private:
+        MainComponent& owner;
+        JUCE_DECLARE_NON_COPYABLE (HotkeysHeld)
+    };
+    /** The global hotkey of plugin group 'group' (0-based): that numbered group off / on across every mic channel. */
+    void togglePluginGroupEverywhere (int group);
+    static constexpr int firstPluginGroupHotkeyId = 4;   // 1 the mic mute group, 2 the FX mute group, 3 the window
     void layoutFxDrawer();       // the drawer's size inside its viewport
     void muteGroupsChanged();    // badges, cards, drawer
     void showPluginManager();
@@ -127,6 +143,7 @@ private:
     ControlServer* controlServer = nullptr;
     juce::Uuid sessionGeneration = document.getSessionGeneration();
     GlobalHotkeys hotkeys;
+    int hotkeysHeld = 0;   // > 0: a session is going into the engine (see HotkeysHeld)
     PluginWindowManager windows;
     WebDavBackup backup;
     std::unique_ptr<PluginManagerWindow> pluginManagerWindow;   // made on first use, hidden on close
