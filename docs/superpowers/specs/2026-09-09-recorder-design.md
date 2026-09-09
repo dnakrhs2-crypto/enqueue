@@ -159,7 +159,9 @@ SourceReader는 `MF_LOW_LATENCY`를 요청하고 일반 소프트웨어 RGB32 vi
 
 라운드 01 구현은 `IMFSourceReaderEx::SetNativeMediaType`로 입력을 고정한 뒤 출력 subtype·크기·분자/분모를 다시 확인한다. MF 비교는 같은 MJPEG native 모드에 NV12 출력을 요청하고 삽입된 MFT의 입력이 MJPEG인지 확인한다. **MF 디코드는 OnReadSample 이전**이므로 그 내부 decode 시간은 SourceReader만으로 분리 계측하지 못한다. 두 경로의 callback→Present 구간 정의를 다르게 적고, 유효한 DeviceTimestamp가 보존된 경우 device→callback/Present 및 프로세스 CPU 사용량을 비교한다. DeviceTimestamp는 QPC와 epoch를 공유하는 100ns 단위이며 PTS와 별도로 보존한다. `--compare-decoders --seconds N`은 같은 장치를 순차 재개방해 N초를 두 경로로 나눈다(장면 유지/반복 패턴은 실행자가 준비, 장면 동일성 자동 인증 없음). [native type 지정](https://learn.microsoft.com/en-us/windows/win32/api/mfreadwrite/nf-mfreadwrite-imfsourcereaderex-setnativemediatype), [DeviceTimestamp](https://learn.microsoft.com/en-us/windows/win32/medfound/mfsampleextension-devicetimestamp)
 
-**프리뷰·녹화의 CPU swscale RGB 중간 변환은 제거했다.** 입력이 709 limited NV12면 payload를 보존한다. 다른 YUV layout은 swscale로 원래 matrix/range를 유지한 NV12로 준비하고, 필요한 601→709·full→limited 변환은 decode worker 전용 D3D11 compute context에서 수행해 CPU NV12로 readback한다. presenter context를 공유하지 않으며 이 변환 경로의 실제 GPU 지연은 미확인이다. 물리 GPU 없는 픽셀 검증은 WARP로 같은 compute shader를 실행한다. 누락된 행렬은 MJPEG/SD=601, HD raw=709, range는 MJPEG=full/raw=limited로 가정한다. SMPTE170M/BT470BG 등 SDR primaries/transfer는 가정으로 기록하고 HDR/wide gamut은 거부한다. **MF 디코드 출력의 실제 range/matrix는 회색 차트로 확인하지 않았으므로 항상 `colourAssumptions`를 기록**한다. 인코더 입력 메타데이터는 BT.709 limited이며 primaries/transfer 가정과 물리 색 인증은 구별한다. GPU 표면을 유지하는 D3D11→CUDA 인코드 경로는 후속이다.
+**프리뷰·녹화의 CPU swscale RGB 중간 변환은 제거했다.** 입력이 709 limited NV12면 payload를 보존한다. 다른 YUV layout은 swscale로 원래 matrix/range를 유지한 NV12로 준비하고, 필요한 601→709·full→limited 변환은 decode worker 전용 D3D11 compute context에서 수행해 CPU NV12로 readback한다. presenter context를 공유하지 않으며 이 변환 경로의 실제 GPU 지연은 미확인이다. 물리 GPU 없는 픽셀 검증은 WARP로 같은 compute shader를 실행한다. **누락된 행렬은 JPEG 유래(FFmpeg MJPEG 및 MF MJPEG→NV12)/SD=601, native HD raw=709, range는 JPEG 유래=full/native raw=limited로 가정**한다. 출력 subtype이 NV12라는 이유로 JPEG 출처를 잃지 않는다. 명시적인 출력 메타데이터는 이 기본값보다 우선한다. SMPTE170M/BT470BG 등 SDR primaries/transfer는 가정으로 기록하고 HDR/wide gamut은 거부한다. MF 경로는 오프라인 결과를 장치 색 인증으로 확대하지 않도록 항상 `colourAssumptions`를 기록한다. 인코더 입력 메타데이터는 BT.709 limited이며 primaries/transfer 가정과 물리 색 인증은 구별한다. GPU 표면을 유지하는 D3D11→CUDA 인코드 경로는 후속이다.
+
+**리뷰 수정(02b), MF 범위/행렬 오프라인 판정:** `RecorderProbe mf-jpeg-range`는 FFmpeg `mjpeg` 인코더의 YUVJ420P full/601 합성 JPEG를 `MFTEnumEx`로 열거한 동기 MJPEG→NV12 `IMFTransform`에 직접 공급한다. 별도 색 처리기·SourceReader·카메라·GPU 없이 raw NV12 평탄 패치 내부 16×16의 Y/U/V 평균을 읽는다. 2026-09-09 이 PC(Windows 10.0.26200)의 `MJPEG Decoder MFT` `{CB17E772-E1CC-4633-8450-5617AF577905}`는 1920×1080/640×480 모두 **Y 0·16·128·235·255 및 색 패치 6개의 Y/U/V를 그대로 출력**했다. full/601 모델 RMSE·최대 오차 **0**, limited/601 **7.640234**, full/709 **6.978205**, limited/709 **8.511114** 코드였다. 출력 속성은 matrix=0(미지정), range=1(full)이다. 이는 이 MFT·입력·해상도에서 **range/matrix 변환 없는 full/601 보존**이라는 수치 추론이다. 다른 MFT·카메라 JPEG 메타데이터·물리 차트에는 자동 인증을 적용하지 않는다. 판정은 11개 패치 전체 최대 오차≤3 및 차선 RMSE 간격≥2 코드일 때만 확정하며, 그 외에는 `unknown`/`UNAVAILABLE`로 기록한다. 위 JPEG 유래 기본값과 WARP 픽셀 계약 테스트의 근거이며, 측정 JSON 경로·명령은 계획서 라운드 01의 02b 기록에 있다. [MFT 출력·버퍼 계약](https://learn.microsoft.com/en-us/windows/win32/api/mftransform/nf-mftransform-imftransform-processoutput)
 
 | 장치 | 준비 전제와 프로젝트 CFR |
 |---|---|
@@ -202,6 +204,8 @@ flowchart LR
 | 스캔아웃·디스플레이 | 17ms | 17ms | 광학 실측, 모니터 조건 기록 |
 | **예산 합계** | **98ms** | **137ms** | 합계는 계획값 |
 
+고정 SDK의 FFmpeg MJPEG 디코더는 frame/slice threading capability가 모두 없으므로 `--decoder-threads 1..16`은 호환용 인수이며 **실효 스레드 수는 1**이다. 스레드 수를 올려 위 8/12ms 예산을 달성한다는 전제는 사용하지 않는다. FFmpeg 경로는 이미 폴백·비교용이며, 기본 MF MJPEG 내부 decode 시간은 callback 전에 발생하므로 이 worker decode 계측으로 분리하지 못한다. 60Hz 계열 모니터의 probe 판정은 `EnumDisplaySettingsW` 정수 59(59.94 포함) 이상을 허용한다. 출력/주사율 조회 실패·기본값 0/1은 `UNAVAILABLE`이며 그 사유만으로 FAIL을 만들지 않는다.
+
 **P0 합격 목표:** native 60 프리뷰의 glass-to-glass p95 ≤100ms·p99 ≤150ms, native 30은 p95 ≤150ms·p99 ≤200ms. OnReadSample 진입부터 Present 제출까지는 각 p95 ≤35ms / ≤45ms. C920을 프로젝트 60으로 변환해도 C920의 지연 기준은 native 30 기준이다. 달성 여부 전부 미확인 → 스파이크 1·3.
 
 끊김은 평균 fps만으로 판정하지 않는다. 승인 부하의 1시간 시험과 스튜디오 3시간 시험에서 **의도하지 않은 캡처·decode·encode 누락 0, ASIO xrun/누락·중복 0, 큐의 지속 증가 0**을 요구한다. 원래 프레임 ID가 준비되어 있는데 `2×native frame period + 1 display period`를 넘겨 화면이 갱신되지 않으면 프리뷰 stall로 센다. `previewStall`과 `sourceCadenceGap`은 첫 callback 이후 1초를 제외한다. 후자는 연속 callback ID 사이의 PTS 또는 callback 간격이 1.5 native period를 넘는 관찰이다. 장치 cadence·stream tick/discontinuity·stall 관찰만으로 소프트웨어 손실 FAIL을 만들지 않는다. overflow/late discard/decode/표시 실패 0과 기존 지연·refresh·시간축 조건을 통과하면 probe의 소프트웨어 관찰은 PASS이며 물리 원본 손실 인증은 별도다. 30→60 반복, 독립 클록의 CFR 보정, 화면 refresh와 native cadence 차이는 별도 카운터다. 불변 장면의 픽셀 동일성으로 손실을 판정하지 않는다.
@@ -210,7 +214,7 @@ flowchart LR
 
 | 자원·우선순위 | 결정 |
 |---|---|
-| 프리뷰 | 캠당 최신 mailbox 1개 + present 중 표면. 오래된 표시 요청은 덮어쓴다. 60Hz present 루프는 JUCE의 파형·미터 repaint timer와 분리한다. 창을 줄여도 두 뷰의 native cadence를 임의로 낮추지 않는다. |
+| 프리뷰 | 캠당 최신 mailbox 1개 + 업로드 중 CPU 표면 최대 1개. CPU 슬롯은 staging 업로드 직후 성공·거절·예외 모두 반환하며 다음 틱까지 보유하지 않는다. GPU 업로드 슬롯 수명은 fence로 별도 관리한다. 오래된 표시 요청은 덮어쓴다. 60Hz present 루프는 JUCE의 파형·미터 repaint timer와 분리한다. `Present`가 busy/occluded이면 소비한 waitable 기회를 다음 틱에 재사용하며 occluded 뒤에는 `DXGI_PRESENT_TEST`로 복귀를 확인한다. 창을 줄여도 두 뷰의 native cadence를 임의로 낮추지 않는다. |
 | 캡처 decode 큐 | 캠당 대기 native sample 2개, decode 중 1개는 별도. 라운드 01은 full이면 새 borrowed sample을 AddRef하기 전에 거절해 콜백 Release/무한 retired 큐를 피하고 `captureDecodeOverflow`로 센다. worker는 대기가 2 native period를 넘은 sample을 `lateQueueDiscard`로 반환하고 다음 입력으로 최신성을 복원한다. 대기>2ms는 별도의 late 관측이다. 정상 합격 시험에서는 overflow/discard가 발생하면 실패다. |
 | encode 표면 큐 | 초기 250ms(60fps 15개/30fps 8개) 총 상한. 라운드 02는 NVENC 내부 `surfaces=4`를 포함해 CPU AVFrame 11개/4개로 준비한다. FIFO·CFR 보유 프레임·인코더가 참조 중인 CPU 버퍼도 이 풀에 포함하며 writable하지 않으면 추가 버퍼 할당 없이 거절한다. 프리뷰 풀 3개는 독립이다. |
 | 압축 packet·오디오 큐 | 영상 packet 큐 초기 3초, 원본 오디오 큐 초기 4초. 큐는 레이트·최대 bit rate로 준비 때 할당한다. 2초 writer stall 시험에서 callback을 막지 않고 회복해야 한다. 메모리 한도는 녹화 시간/프로젝트 용량 제한과 다르다. |
@@ -219,6 +223,8 @@ flowchart LR
 | 지속 과부하 | 프리뷰 해상도는 창 크기로 축소할 수 있으나 갱신율을 먼저 낮추지 않는다. encode 큐가 넘치면 해당 캠을 부분 실패로 표시하고 마지막 안전 지점까지 보존한다. 프리뷰와 원본 오디오를 계속 유지한다. capture 손실은 표시·기록하고 정상 녹화로 위장하지 않는다. |
 | 샘플 원본 위협 | 오디오 queue overflow·쓰기 실패·ASIO reset은 테이크 전체 수집 중단. 완성된 자료는 보존하고 원인을 알린다. 무음 삽입으로 정상 원본 파일인 척하지 않는다. |
 | 설정 변경 | 실행 중 프로젝트 60을 30으로 몰래 바꾸지 않는다. P5가 여유 시험에 실패하면 녹화 밖에서 P3 프로파일을 비교한 뒤 동일 화질·P0 시험 결과로 결정한다. |
+
+손상 MJPEG·빈/짧은 샘플 등 프레임 decode 예외는 worker가 `decoderError`를 1회 세고 `avcodec_flush_buffers` 후 다음 샘플을 처리한다. **연속 30회** 실패에서만 캡처를 종료하며 정상 프레임은 연속 횟수를 초기화한다. EAGAIN은 send/receive 상태를 전진시키고, 완결 MJPEG에서 출력이 없는 경우 프레임 오류로 처리해 busy loop를 만들지 않는다. record sink·source 오류는 이 복구 경계 밖이다. `CURRENTMEDIATYPECHANGED`에서는 callback 재요청만 잠시 멈추고 worker가 현재 type을 다시 읽는다. 해상도·유리수 fps·subtype이 같으면 stride/색 메타데이터를 갱신하고 재개하며, 다르면 종료한다. callback에서 type 조회·decode를 하지 않는다.
 
 설계의 “보장”은 **검증한 장치·포트·드라이버 프로파일에 대한 출시 gate와 런타임 감시**다. 센서 지연이나 임의의 다른 프로그램 부하까지 소프트웨어 큐만으로 보장하지 않는다. 1초 이내 `처리 지연이 발생했습니다`를 표시하고 어떤 스트림의 원본/영상에 문제가 있는지 구분한다. 측정에 실패하면 P0 완료 표시를 하지 않는다.
 
@@ -581,6 +587,7 @@ JUCE·ASIO의 회사 보유 계약이 새 앱에 적용되는 범위, H.264/AAC 
 | U-10 | P5 실효 여유·export 속도/화질·동시 앱 NVENC 점유 | 미확인 → 스파이크 1·3·7. 12세션 한도와 처리량을 구별. 백그라운드 NVENC 점유가 있는 승인 조건도 기록. |
 | U-11 | BtbN exact 소스·전이 의존성·회사 JUCE/ASIO·AVC/AAC 계약 | 미확인 → 스파이크 8. 배포 자료·계약 확인으로 해소, LGPL DLL 결정을 유지. |
 | U-12 | 최종 표시명·확장자 공개명·release repo/remote·사이트·지원 최소 OS | 미확인 → 스파이크 8. ProductIdentity로 변경 가능하게 구현하고 공개 전 CEO/배포 담당 값으로 고정. |
+| U-13 | `DXGI_ERROR_DEVICE_REMOVED` 후 D3D11 장치·swapchain·표면 재생성 | 복구 구현은 앱 라운드 **12/24**로 미룬다. 02b는 기존 오류 보고·종료만 유지하며, 장치 분실/복귀 실측은 미확인이다. |
 
 Claude 고정 결정에 대한 현재 차단 사유는 확인되지 않았다. 구체화한 부분은 CPU MJPEG 기본 경로, D3D11VA 재생, 좁은 ASIO timing/native 확장, 실제 LGPL v3 빌드 고정, AAC 참조 오디오, 두 export 모드와 독립 오디오·더빙의 명시적 시간 규칙이다. 스파이크가 반증하면 해당 결정·측정 근거·영향 라운드를 본문에서 갱신한다.
 

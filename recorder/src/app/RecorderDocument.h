@@ -1,6 +1,8 @@
 #pragma once
 #include "EditHistory.h"
 #include "../model/RecorderSerializer.h"
+#include "../model/ClipEdits.h"
+#include "../model/RenderPlanCompiler.h"
 #include <functional>
 #include <map>
 #include <thread>
@@ -29,12 +31,27 @@ public:
     // Queue acceptance does NOT mean durable storage. Call acknowledgeJournal after append + flush.
     virtual juce::Result enqueue(const EditDelta&) = 0;
 };
+class IRenderPlanConsumer
+{
+public:
+    virtual ~IRenderPlanConsumer() = default;
+    // Owner thread, before publication. Accept a new immutable plan and prepare/queue
+    // prefetch. Failure rejects the edit without changing history or the current plan.
+    virtual juce::Result prepareRenderPlan(std::shared_ptr<const CompiledRenderPlan>) = 0;
+    // Called only after model publication. TimelineTransport must swap the matching
+    // prepared plan at a block boundary with a ramp. While prefetch is pending it must
+    // pause/report preparing; it must never label old audio as the new revision.
+    // No callbacks into the document, exceptions, I/O or blocking in this notification.
+    virtual void publishPreparedPlan(const Id& projectId, Sample revision) noexcept = 0;
+};
 class RecorderDocument
 {
 public:
     using Snapshot = std::shared_ptr<const RecorderProject>;
     RecorderDocument();
     Snapshot snapshot() const { return project; }
+    std::shared_ptr<const CompiledRenderPlan> renderPlanSnapshot() const { return renderPlan; }
+    juce::Result setRenderPlanConsumer(IRenderPlanConsumer*); // caller-owned; detach before destruction
     const RecorderProject& getProject() const { return *project; }
     const EditHistory& getHistory() const { return history; }
     const juce::File& getFile() const { return file; }
@@ -51,6 +68,10 @@ public:
     void checkpointFinished(Snapshot written, const juce::File&, const juce::Result&);
     juce::Result setTimebase(std::uint32_t Fs, FrameRate);
     juce::Result performEdit(const juce::String& name, const std::function<void(EditState&)>&, const EditOptions& = {});
+    // Pure Project/ClipEdits adapter. A returned Project implicitly converts to ClipEditResult.
+    juce::Result performEdit(const juce::String& name, const juce::String& coalesceKey,
+                             const std::function<ClipEditResult(const RecorderProject&)>&,
+                             const EditOptions& = {});
     juce::Result undo();
     juce::Result redo();
     void endGesture() { history.endGesture(); }
@@ -72,7 +93,10 @@ private:
     juce::Result publishEdit(RecorderProject, const juce::String&, const EditOptions&, bool addHistory, const std::vector<Id>& nextSelection);
     juce::Result place(RecorderProject, const Take&, Sample placement);
     EditSnapshot editSnapshot() const;
+    juce::Result preparePlan(const RecorderProject&, std::shared_ptr<const CompiledRenderPlan>&);
+    juce::Result replaceProject(RecorderProject);
     Snapshot project;
+    std::shared_ptr<const CompiledRenderPlan> renderPlan;
     EditHistory history;
     std::vector<Id> selection;
     juce::File file;
@@ -81,6 +105,7 @@ private:
     Sample savedRevision = 0;
     std::map<Sample, Id> journalTransactions;
     IEditJournalSink* journal = nullptr; // caller-owned; detach before destroying
+    IRenderPlanConsumer* renderConsumer = nullptr;
     const std::thread::id owner = std::this_thread::get_id();
 };
 }

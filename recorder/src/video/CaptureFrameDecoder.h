@@ -5,10 +5,12 @@
 
 namespace gocue::recorder
 {
+enum class CaptureDecodeOrigin { native, mfMjpeg };
 class CaptureFrameDecoder
 {
 public:
-    CaptureFrameDecoder(const CameraMode& actualOutput, int mjpegThreads, ColourDevice = ColourDevice::hardware);
+    CaptureFrameDecoder(const CameraMode& actualOutput, int mjpegThreads, ColourDevice = ColourDevice::hardware,
+                        CaptureDecodeOrigin = CaptureDecodeOrigin::native);
     ~CaptureFrameDecoder();
     CaptureFrameDecoder(const CaptureFrameDecoder&) = delete;
     CaptureFrameDecoder& operator=(const CaptureFrameDecoder&) = delete;
@@ -17,6 +19,8 @@ public:
     void decodeCopied(VideoSurface&, FrameStamp&);
     // Same production decoder/normalisation for deterministic memory fixtures.
     void decodeBytes(const std::uint8_t*, size_t bytes, VideoSurface&, FrameStamp&);
+    void flush() noexcept;
+    void updateOutputMode(const CameraMode&); // same signal, refreshed stride/metadata
     int effectiveThreads() const noexcept;
     const std::string& colourDecision() const noexcept;
 private:

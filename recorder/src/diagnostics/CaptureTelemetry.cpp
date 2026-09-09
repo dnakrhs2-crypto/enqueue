@@ -39,6 +39,16 @@ template<size_t N> juce::var traceJson(const std::array<FrameStamp, N>& trace, s
 }
 }
 const char* lossName(LossReason reason) noexcept { return lossNames[static_cast<size_t>(reason)]; }
+void CaptureTelemetry::reset()
+{
+    for (auto& loss : losses) loss.store(0);
+    // Clear one histogram at a time to avoid a multi-megabyte stack temporary.
+    for (auto& timing : timings) timing = Distribution{};
+    workerTrace.fill({}); presentTrace.fill({}); workerTraceCount = presentTraceCount = 0;
+    for (auto* counter : {&callbacks, &samples, &decoded, &presented, &repeatedPresents, &lateQueue,
+        &queueHighWater, &latestReadyFrame, &missingDeviceTimestamp, &invalidDeviceTimestamp, &colourAssumptions}) counter->store(0);
+    sourceStatus.store(S_OK); firstCallbackQpc.store(0);
+}
 bool CaptureTelemetry::softwareLossFree() const noexcept
 {
     for (const auto reason : {LossReason::captureDecodeOverflow, LossReason::lateQueueDiscard, LossReason::decoderError,

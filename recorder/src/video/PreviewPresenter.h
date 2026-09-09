@@ -1,4 +1,5 @@
 #pragma once
+#include <future>
 #include "VideoSurfacePool.h"
 #include <memory>
 
@@ -9,7 +10,7 @@ class PreviewPresenter
 public:
     PreviewPresenter(HWND, VideoSurfacePool&, std::shared_ptr<CaptureTelemetry>, std::uint32_t width, std::uint32_t height);
     ~PreviewPresenter();
-    void start();
+    void start(std::shared_future<void> measurementStart = {});
     void stop();
     bool finished() const noexcept;
     // Read after stop only.
