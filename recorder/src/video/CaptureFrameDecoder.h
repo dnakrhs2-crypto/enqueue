@@ -1,5 +1,6 @@
 #pragma once
 #include "VideoSurfacePool.h"
+#include "GpuColourConverter.h"
 #include <memory>
 
 namespace gocue::recorder
@@ -7,7 +8,7 @@ namespace gocue::recorder
 class CaptureFrameDecoder
 {
 public:
-    CaptureFrameDecoder(const CameraMode& actualOutput, int mjpegThreads);
+    CaptureFrameDecoder(const CameraMode& actualOutput, int mjpegThreads, ColourDevice = ColourDevice::hardware);
     ~CaptureFrameDecoder();
     CaptureFrameDecoder(const CaptureFrameDecoder&) = delete;
     CaptureFrameDecoder& operator=(const CaptureFrameDecoder&) = delete;

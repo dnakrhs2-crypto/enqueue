@@ -198,8 +198,10 @@ struct PreviewPresenter::State
                 }
                 else if (now - due > telemetry->frequency / 60)
                     tick = static_cast<std::uint64_t>((now - start) * 60 / telemetry->frequency);
-                if (!stallActive && telemetry->latestReadyFrame.load() > lastPresentedFrame
-                    && telemetry->ms(qpcNow() - lastNewPresent) > 2 * telemetry->fps.periodMs() + 1000.0 / 60)
+                const auto stallNow = qpcNow();
+                const auto stallStart = std::max(lastNewPresent, telemetry->firstCallbackQpc.load() + telemetry->frequency);
+                if (!stallActive && telemetry->afterWarmup(stallNow) && telemetry->latestReadyFrame.load() > lastPresentedFrame
+                    && telemetry->ms(stallNow - stallStart) > 2 * telemetry->fps.periodMs() + 1000.0 / 60)
                 { telemetry->loss(LossReason::previewStall); stallActive = true; }
                 if (WaitForSingleObject(frameLatency.value, 0) != WAIT_OBJECT_0)
                 { telemetry->loss(LossReason::presentBusy); continue; }

@@ -10,6 +10,7 @@
 #include <cstdio>
 #include <stdexcept>
 #include <string>
+#include <type_traits>
 
 namespace gocue::recorder
 {
@@ -75,6 +76,15 @@ inline void jsonSet(juce::var& value, const char* key, const std::string& item)
 inline void jsonSet(juce::var& value, const char* key, const char* item)
 {
     jsonSet(value, key, juce::var(item));
+}
+// Literal zero must remain a JSON number, not bind to the const char* overload
+// as a null pointer. Preserve bool/double as well as signed integer values.
+template<class T, std::enable_if_t<std::is_arithmetic_v<T>, int> = 0>
+inline void jsonSet(juce::var& value, const char* key, T item)
+{
+    if constexpr (std::is_same_v<T, bool>) jsonSet(value, key, juce::var(item));
+    else if constexpr (std::is_floating_point_v<T>) jsonSet(value, key, juce::var(static_cast<double>(item)));
+    else jsonSet(value, key, juce::var(static_cast<juce::int64>(item)));
 }
 inline juce::var jsonInt(std::uint64_t value) { return juce::var(static_cast<juce::int64>(value)); }
 }

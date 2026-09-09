@@ -73,6 +73,7 @@ public:
             if (sample)
             {
                 const auto frame = ++s.nextFrame;
+                if (frame == 1) t.firstCallbackQpc.store(entered);
                 t.samples.fetch_add(1, std::memory_order_relaxed);
                 if (auto* slot = s.queue.reserve())
                 {
@@ -165,7 +166,9 @@ struct MfCameraCapture::State
     std::atomic<bool> stopRequested{false}, done{true};
     std::thread worker;
     std::string error, colour;
-    State(std::shared_ptr<CaptureTelemetry> t, VideoSurfacePool& p) : telemetry(std::move(t)), pool(p) {}
+    std::function<void(const VideoSurface&)> recordSink;
+    State(std::shared_ptr<CaptureTelemetry> t, VideoSurfacePool& p, std::function<void(const VideoSurface&)> sink)
+        : telemetry(std::move(t)), pool(p), recordSink(std::move(sink)) {}
     void run(std::string link, CameraMode mode, bool mfDecode, int threads, std::promise<CaptureOpenInfo> opened)
     {
         bool openReported = false;
@@ -233,7 +236,8 @@ struct MfCameraCapture::State
                         const auto timestampClass = classifyLate(previousPts, stamp.pts100ns, true, 0.0, mode.fps);
                         if (timestampClass == LateReason::timestampRegression) telemetry->loss(LossReason::timestampRegression);
                         // Do not count our own queue loss a second time as a source gap.
-                        else if (stamp.frame == previousFrame + 1 && timestampClass == LateReason::cadenceGap)
+                        else if (stamp.frame == previousFrame + 1 && telemetry->afterWarmup(previousQpc)
+                            && (timestampClass == LateReason::cadenceGap || telemetry->ms(stamp.callback - previousQpc) > mode.fps.periodMs() * 1.5))
                             telemetry->loss(LossReason::sourceCadenceGap);
                     }
                     previousFrame = stamp.frame; previousPts = stamp.pts100ns; previousQpc = stamp.callback;
@@ -246,9 +250,15 @@ struct MfCameraCapture::State
                         sample.Reset(); // return scarce driver buffer BEFORE decode/colour work
                         decoder.decodeCopied(pool.surface(index), stamp);
                         colour = decoder.colourDecision();
+                        if (mfDecode)
+                        {
+                            pool.surface(index).colourAssumed = true;
+                            colour += "; MF-decoded NV12 matrix/range not verified with a physical grey chart";
+                        }
                         if (pool.surface(index).colourAssumed) telemetry->colourAssumptions.fetch_add(1);
                         telemetry->recordWorker(stamp);
                         telemetry->decoded.fetch_add(1);
+                        if (recordSink) recordSink(pool.surface(index)); // decode worker; one bounded copy, never the MF callback
                         if (pool.publish(index)) telemetry->loss(LossReason::previewMailboxOverwrite);
                         telemetry->latestReadyFrame.store(stamp.frame);
                     }
@@ -291,7 +301,8 @@ struct MfCameraCapture::State
         done.store(true);
     }
 };
-MfCameraCapture::MfCameraCapture(std::shared_ptr<CaptureTelemetry> t, VideoSurfacePool& pool) : state(std::make_unique<State>(std::move(t), pool)) {}
+MfCameraCapture::MfCameraCapture(std::shared_ptr<CaptureTelemetry> t, VideoSurfacePool& pool, std::function<void(const VideoSurface&)> sink)
+    : state(std::make_unique<State>(std::move(t), pool, std::move(sink))) {}
 MfCameraCapture::~MfCameraCapture() { stop(); }
 CaptureOpenInfo MfCameraCapture::start(const std::string& link, CameraMode mode, bool mfDecode, int threads)
 {

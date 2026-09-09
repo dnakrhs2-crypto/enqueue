@@ -189,7 +189,7 @@ int runCaptureContractTests()
         checkHr(twoD->Unlock2D(), "Unlock fixture");
         ComPtr<IMFSample> sample; checkHr(MFCreateSample(&sample), "Create synthetic sample");
         checkHr(sample->AddBuffer(buffer.Get()), "Attach synthetic buffer");
-        CaptureFrameDecoder decoder(mode, 1); decoder.copySample(sample.Get());
+        CaptureFrameDecoder decoder(mode, 1, ColourDevice::warpForTests); decoder.copySample(sample.Get());
         sample.Reset(); buffer.Reset(); twoD.Reset();
         VideoSurface output; output.prepare(16, 16); FrameStamp stamp; decoder.decodeCopied(output, stamp);
         bool exact = true;
@@ -241,7 +241,7 @@ int runCaptureContractTests()
             }
         checkHr(buffer->Unlock(), "Unlock bottom-up fixture"); checkHr(buffer->SetCurrentLength(640), "Set fixture length");
         ComPtr<IMFSample> sample; checkHr(MFCreateSample(&sample), "Create bottom-up sample"); checkHr(sample->AddBuffer(buffer.Get()), "Attach fixture");
-        CaptureFrameDecoder decoder(mode, 1); decoder.copySample(sample.Get());
+        CaptureFrameDecoder decoder(mode, 1, ColourDevice::warpForTests); decoder.copySample(sample.Get());
         VideoSurface output; output.prepare(16, 16); FrameStamp stamp; decoder.decodeCopied(output, stamp);
         bool ordered = true;
         for (unsigned row = 0; row < 16; ++row) ordered &= output.y()[row * 16] == 32 + row;
@@ -251,7 +251,7 @@ int runCaptureContractTests()
     });
     test("NV12 limited passthrough preserves every byte and metadata stamp", []
     {
-        auto mode = rawMode(); CaptureFrameDecoder decoder(mode, 1);
+        auto mode = rawMode(); CaptureFrameDecoder decoder(mode, 1, ColourDevice::warpForTests);
         VideoSurface output; output.prepare(16, 16);
         std::vector<uint8_t> input(384, 128); std::fill_n(input.begin(), 256, 64);
         FrameStamp stamp; stamp.frame = 42; stamp.pts100ns = 1234567; stamp.hasDeviceTimestamp = true; stamp.deviceTimestamp100ns = 7654321;
@@ -263,7 +263,7 @@ int runCaptureContractTests()
     test("full-range pixels really normalise to limited black/white", []
     {
         auto mode = rawMode(); mode.colour.range = MFNominalRange_0_255;
-        CaptureFrameDecoder decoder(mode, 1); VideoSurface output; output.prepare(16, 16); FrameStamp stamp;
+        CaptureFrameDecoder decoder(mode, 1, ColourDevice::warpForTests); VideoSurface output; output.prepare(16, 16); FrameStamp stamp;
         std::vector<uint8_t> input(384, 128);
         std::fill_n(input.begin(), 128, 0); std::fill(input.begin() + 128, input.begin() + 256, 255);
         decoder.decodeBytes(input.data(), input.size(), output, stamp);
@@ -272,7 +272,7 @@ int runCaptureContractTests()
     test("YUY2 BT.601 red is matrix-converted to BT.709 NV12", []
     {
         auto mode = rawMode(CaptureSubtype::yuy2); mode.colour.matrix = MFVideoTransferMatrix_BT601;
-        CaptureFrameDecoder decoder(mode, 1); VideoSurface output; output.prepare(16, 16); FrameStamp stamp;
+        CaptureFrameDecoder decoder(mode, 1, ColourDevice::warpForTests); VideoSurface output; output.prepare(16, 16); FrameStamp stamp;
         std::vector<uint8_t> input(512);
         for (size_t i = 0; i < input.size(); i += 4) { input[i] = input[i+2] = 81; input[i+1] = 90; input[i+3] = 240; }
         decoder.decodeBytes(input.data(), input.size(), output, stamp);
@@ -283,16 +283,16 @@ int runCaptureContractTests()
     test("missing colour metadata is flagged; explicit HDR rejected", []
     {
         auto mode = rawMode(); mode.colour = {};
-        CaptureFrameDecoder decoder(mode, 1); VideoSurface output; output.prepare(16, 16); FrameStamp stamp;
+        CaptureFrameDecoder decoder(mode, 1, ColourDevice::warpForTests); VideoSurface output; output.prepare(16, 16); FrameStamp stamp;
         std::vector<uint8_t> input(384, 128); decoder.decodeBytes(input.data(), input.size(), output, stamp);
         require(output.colourAssumed, "unknown is not colour-certified");
         mode.colour.transfer = MFVideoTransFunc_2084;
-        CaptureFrameDecoder hdr(mode, 1); rejects([&] { hdr.decodeBytes(input.data(), input.size(), output, stamp); });
+        CaptureFrameDecoder hdr(mode, 1, ColourDevice::warpForTests); rejects([&] { hdr.decodeBytes(input.data(), input.size(), output, stamp); });
     });
     test("CPU MJPEG decode produces bounded NV12 and correct grey range", []
     {
         auto mode = rawMode(CaptureSubtype::mjpeg); mode.colour = {};
-        CaptureFrameDecoder decoder(mode, 1); VideoSurface output; output.prepare(16, 16); FrameStamp stamp;
+        CaptureFrameDecoder decoder(mode, 1, ColourDevice::warpForTests); VideoSurface output; output.prepare(16, 16); FrameStamp stamp;
         auto jpeg = makeJpeg(); decoder.decodeBytes(jpeg.data(), jpeg.size(), output, stamp);
         require(output.nv12.size() == 384 && output.width == 16 && output.height == 16, "MJPEG -> NV12");
         require(std::abs(output.y()[0] - 126) <= 3 && std::abs(output.uv()[0] - 128) <= 2, "JPEG full-range grey converted to limited");

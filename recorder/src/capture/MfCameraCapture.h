@@ -1,6 +1,7 @@
 #pragma once
 #include "video/CaptureFrameDecoder.h"
 #include <thread>
+#include <functional>
 
 namespace gocue::recorder
 {
@@ -14,7 +15,7 @@ struct CaptureOpenInfo
 class MfCameraCapture
 {
 public:
-    MfCameraCapture(std::shared_ptr<CaptureTelemetry>, VideoSurfacePool&);
+    MfCameraCapture(std::shared_ptr<CaptureTelemetry>, VideoSurfacePool&, std::function<void(const VideoSurface&)> recordSink = {});
     ~MfCameraCapture();
     CaptureOpenInfo start(const std::string& symbolicLink, CameraMode, bool mfMjpegDecoder, int decoderThreads = 1);
     void stop();

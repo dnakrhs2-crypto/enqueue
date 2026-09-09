@@ -39,6 +39,13 @@ template<size_t N> juce::var traceJson(const std::array<FrameStamp, N>& trace, s
 }
 }
 const char* lossName(LossReason reason) noexcept { return lossNames[static_cast<size_t>(reason)]; }
+bool CaptureTelemetry::softwareLossFree() const noexcept
+{
+    for (const auto reason : {LossReason::captureDecodeOverflow, LossReason::lateQueueDiscard, LossReason::decoderError,
+        LossReason::surfacePoolExhausted, LossReason::uploadBusy, LossReason::presentFailure})
+        if (count(reason)) return false;
+    return true;
+}
 LateReason classifyLate(std::int64_t previous, std::int64_t pts, bool hasPrevious, double waitMs, Rational fps) noexcept
 {
     if (hasPrevious && pts <= previous) return LateReason::timestampRegression;
@@ -114,6 +121,9 @@ juce::var CaptureTelemetry::toJson() const
     jsonSet(value, "percentileDefinition", "nearest rank; 0.1ms upper buckets <=2000ms; larger values use observed max; empty=null");
     jsonSet(value, "captureLossCertification", "UNAVAILABLE: no independent source frame-pattern/optical oracle; PTS gaps are observations, not proven lost frame counts");
     jsonSet(value, "gpuCompletionTiming", "UNAVAILABLE: upload and Present timestamps measure CPU submission, not GPU completion/scanout");
+    jsonSet(value, "cadenceWarmupSeconds", 1);
+    jsonSet(value, "deviceObservations", "sourceCadenceGap (PTS or callback interval >1.5 native periods), stream tick/discontinuity and previewStall are observations; cadence/stall exclude first second from first callback. They do not count as proven software loss.");
+    jsonSet(value, "softwareLossFree", softwareLossFree());
     return value;
 }
 void CaptureTelemetry::writeJson(const juce::File& file, const juce::var& value)

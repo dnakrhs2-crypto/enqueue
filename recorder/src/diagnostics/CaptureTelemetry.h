@@ -54,6 +54,8 @@ public:
     void loss(LossReason reason, std::uint64_t n = 1) noexcept { losses[static_cast<size_t>(reason)].fetch_add(n, std::memory_order_relaxed); }
     std::uint64_t count(LossReason reason) const noexcept { return losses[static_cast<size_t>(reason)].load(std::memory_order_relaxed); }
     double ms(std::int64_t ticks) const noexcept { return 1000.0 * static_cast<double>(ticks) / static_cast<double>(frequency); }
+    bool afterWarmup(std::int64_t qpc) const noexcept { const auto first = firstCallbackQpc.load(); return first && qpc - first >= frequency; }
+    bool softwareLossFree() const noexcept;
     // One owner per timing: worker writes worker timings; presenter writes present timings.
     // Read the JSON/percentiles only after BOTH threads have joined.
     void duration(Timing stage, double milliseconds) noexcept { timings[static_cast<size_t>(stage)].add(milliseconds); }
@@ -65,6 +67,7 @@ public:
     std::atomic<std::uint64_t> callbacks{0}, samples{0}, decoded{0}, presented{0}, repeatedPresents{0}, lateQueue{0};
     std::atomic<std::uint64_t> queueHighWater{0}, latestReadyFrame{0}, missingDeviceTimestamp{0}, invalidDeviceTimestamp{0}, colourAssumptions{0};
     std::atomic<HRESULT> sourceStatus{S_OK};
+    std::atomic<std::int64_t> firstCallbackQpc{0};
     Rational fps;
     std::int64_t frequency;
 private:

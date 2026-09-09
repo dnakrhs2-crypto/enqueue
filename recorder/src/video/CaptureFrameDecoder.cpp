@@ -62,17 +62,16 @@ struct CaptureFrameDecoder::State
     AVCodecContext* codec = nullptr;
     AVPacket* packet = nullptr;
     AVFrame* frame = nullptr;
-    AVFrame* rgb = nullptr;
-    SwsContext* toRgb = nullptr;
-    SwsContext* toNv12 = nullptr;
     SwsContext* direct = nullptr;
+    ColourDevice colourDevice;
+    std::unique_ptr<GpuColourConverter> gpuColour;
     std::vector<std::uint8_t> copied;
     std::string colourDecision;
-    State(CameraMode m, int t) : mode(m), threads(t) {}
+    State(CameraMode m, int t, ColourDevice d) : mode(m), threads(t), colourDevice(d) {}
     ~State()
     {
-        avcodec_free_context(&codec); av_packet_free(&packet); av_frame_free(&frame); av_frame_free(&rgb);
-        sws_freeContext(toRgb); sws_freeContext(toNv12); sws_freeContext(direct);
+        avcodec_free_context(&codec); av_packet_free(&packet); av_frame_free(&frame);
+        sws_freeContext(direct);
     }
     void normalise(AVFrame& input, VideoSurface& output)
     {
@@ -98,8 +97,8 @@ struct CaptureFrameDecoder::State
         else { full = mode.subtype == CaptureSubtype::mjpeg ? 1 : 0; assumed = true; }
         // This spike converts YCbCr matrix/range only. SDR camera gamuts (BT.709, SMPTE 170M / BT.470 BG
         // as reported by JFIF MJPEG webcams and the GC311G2, sRGB / BT.601 transfer) are treated as the
-        // BT.709 SDR family - the chromaticity difference is negligible for webcams and the alternative
-        // (2026-09-09: rejecting them) stopped the StreamCam-style MJPEG path outright. Only HDR / wide
+        // BT.709 SDR family as a documented approximation pending physical colour-chart validation.
+        // Rejecting them (2026-09-09) stopped the StreamCam-style MJPEG path outright. Only HDR / wide
         // gamut signalling is rejected rather than relabelled.
         const auto hdrPrimaries = [] (std::uint32_t p) {
             return p == MFVideoPrimaries_BT2020 || p == MFVideoPrimaries_XYZ || p == MFVideoPrimaries_DCI_P3 || p == MFVideoPrimaries_ACES;
@@ -124,44 +123,35 @@ struct CaptureFrameDecoder::State
         uint8_t* destination[4] = {output.y(), output.uv(), nullptr, nullptr};
         int strides[4] = {static_cast<int>(mode.width), static_cast<int>(mode.width), 0, 0};
         const int width = input.width, height = input.height;
-        if (format == AV_PIX_FMT_NV12 && matrix == SWS_CS_ITU709)
+        if (format == AV_PIX_FMT_NV12)
         {
             for (int plane = 0; plane < 2; ++plane)
                 for (int row = 0; row < (plane == 0 ? height : height / 2); ++row)
                 {
                     auto* dest = destination[plane] + row * strides[plane];
                     const auto* src = input.data[plane] + row * input.linesize[plane];
-                    if (!full) std::memcpy(dest, src, width);
-                    else
-                        // swscale can skip a same-format unscaled range conversion.
-                        // Map full Y 0..255 to 16..235 and C 0..255 to 16..240 explicitly.
-                        for (int x = 0; x < width; ++x) dest[x] = static_cast<uint8_t>(16 + (src[x] * (plane == 0 ? 219 : 224) + 127) / 255);
+                    std::memcpy(dest, src, width);
                 }
-            return;
         }
-        const int flags = SWS_BILINEAR | SWS_ACCURATE_RND;
-        if (matrix == SWS_CS_ITU709 && full == 0)
+        else
         {
+            // Layout/chroma subsampling only, with identical matrix/range at both
+            // ends. Never route live preview/recording through CPU RGB swscale.
+            const int flags = SWS_BILINEAR | SWS_ACCURATE_RND;
             direct = sws_getCachedContext(direct, width, height, format, width, height, AV_PIX_FMT_NV12, flags, nullptr, nullptr, nullptr);
             if (!direct) throw std::bad_alloc();
-            avCheck(sws_setColorspaceDetails(direct, sws_getCoefficients(matrix), full, sws_getCoefficients(SWS_CS_ITU709), 0, 0, 1 << 16, 1 << 16), "Set YUV range");
+            avCheck(sws_setColorspaceDetails(direct, sws_getCoefficients(matrix), full, sws_getCoefficients(matrix), full, 0, 1 << 16, 1 << 16), "Preserve source YUV matrix/range");
             if (sws_scale(direct, input.data, input.linesize, 0, height, destination, strides) != height) throw std::runtime_error("Incomplete NV12 conversion");
-            return;
         }
-        // Explicit high-precision RGB intermediate forces a REAL 601->709 matrix
-        // conversion: a same-size YUV->YUV swscale shortcut can just copy/relabel.
-        toRgb = sws_getCachedContext(toRgb, width, height, format, width, height, AV_PIX_FMT_RGB48LE, flags, nullptr, nullptr, nullptr);
-        toNv12 = sws_getCachedContext(toNv12, width, height, AV_PIX_FMT_RGB48LE, width, height, AV_PIX_FMT_NV12, flags, nullptr, nullptr, nullptr);
-        if (!toRgb || !toNv12) throw std::bad_alloc();
-        avCheck(sws_setColorspaceDetails(toRgb, sws_getCoefficients(matrix), full, sws_getCoefficients(SWS_CS_ITU709), 1, 0, 1 << 16, 1 << 16), "Set source matrix/range");
-        avCheck(sws_setColorspaceDetails(toNv12, sws_getCoefficients(SWS_CS_ITU709), 1, sws_getCoefficients(SWS_CS_ITU709), 0, 0, 1 << 16, 1 << 16), "Set BT.709 limited output");
-        avCheck(av_frame_make_writable(rgb), "RGB staging writable");
-        if (sws_scale(toRgb, input.data, input.linesize, 0, height, rgb->data, rgb->linesize) != height
-            || sws_scale(toNv12, rgb->data, rgb->linesize, 0, height, destination, strides) != height)
-            throw std::runtime_error("Incomplete matrix conversion");
+        if (matrix != SWS_CS_ITU709 || full)
+        {
+            if (!gpuColour) gpuColour = std::make_unique<GpuColourConverter>(mode.width, mode.height, colourDevice);
+            gpuColour->convert(output, matrix == SWS_CS_ITU601, full != 0);
+            colourDecision += "; D3D11 compute + CPU NV12 readback (decode-worker context)";
+        }
     }
 };
-CaptureFrameDecoder::CaptureFrameDecoder(const CameraMode& mode, int threads) : state(std::make_unique<State>(mode, threads))
+CaptureFrameDecoder::CaptureFrameDecoder(const CameraMode& mode, int threads, ColourDevice device) : state(std::make_unique<State>(mode, threads, device))
 {
     if (threads < 1 || threads > 16) throw std::invalid_argument("MJPEG threads must be 1..16");
     if (!mode.width || !mode.height || mode.width > 8192 || mode.height > 8192 || mode.width % 2 || mode.height % 2)
@@ -169,10 +159,8 @@ CaptureFrameDecoder::CaptureFrameDecoder(const CameraMode& mode, int threads) : 
     if (mode.interlace != 0 && mode.interlace != MFVideoInterlace_Progressive)
         throw std::invalid_argument("Interlaced source is unsupported; select a progressive native mode");
     auto& s = *state;
-    s.frame = av_frame_alloc(); s.rgb = av_frame_alloc(); s.packet = av_packet_alloc();
-    if (!s.frame || !s.rgb || !s.packet) throw std::bad_alloc();
-    s.rgb->width = static_cast<int>(mode.width); s.rgb->height = static_cast<int>(mode.height); s.rgb->format = AV_PIX_FMT_RGB48LE;
-    avCheck(av_frame_get_buffer(s.rgb, 32), "Allocate RGB staging");
+    s.frame = av_frame_alloc(); s.packet = av_packet_alloc();
+    if (!s.frame || !s.packet) throw std::bad_alloc();
     s.copied.reserve(static_cast<size_t>(mode.width) * mode.height * 4);
     if (mode.subtype == CaptureSubtype::mjpeg)
     {

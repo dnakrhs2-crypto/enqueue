@@ -115,7 +115,7 @@ CEO의 2026-09-09 확정 요구와 13:20~13:35의 내보내기·더빙·독립 �
 
 ### 4.2 신규 모듈 계약
 
-아래 인터페이스 이름과 경로는 **구현 제안이며 아직 존재하는 코드가 아니다.** `publish`는 불변 상태/사전 할당 메시지 전달, `Result`는 오류를 호출자에게 돌려준다는 계약이다.
+아래는 모듈 계약이다. **캡처·프리뷰는 라운드 01, CFR·NVENC·MP4·synthetic 참조 AAC는 라운드 02에 구현했고 나머지는 제안이다.** `publish`는 불변 상태/사전 할당 메시지 전달, `Result`는 오류를 호출자에게 돌려준다는 계약이다.
 
 | 모듈 (`recorder/src/` 기준) | 책임·주요 공개 인터페이스 | 의존 | 실행·소유 스레드 |
 |---|---|---|---|
@@ -126,9 +126,9 @@ CEO의 2026-09-09 확정 요구와 13:20~13:35의 내보내기·더빙·독립 �
 | `audio/AsioTimingBridge`, `RawAudioTap` | native PCM 뷰·시간정보, `onAsioBlock(BlockStamp, NativeViews)`, bounded enqueue | 좁은 JUCE ASIO 확장 | ASIO callback; 해제·진단 집계는 외부 |
 | `sync/ClockMapper`, `CameraClockMapper` | `observe`, `mapToSample`, `resetEpoch`, `quality`, 고정 지연 보정 | ASIO·QPC·MF 시각 관측 | sync worker; 읽기는 immutable snapshot |
 | `capture/CameraCatalog`, `MfCameraCapture` | `enumerateDevices/types`, `open/start/stop`, `onSample`, 장치 generation | MF SourceReader, UVC | MTA 제어 worker + MF 비동기 callback |
-| `video/CaptureFrameDecoder`, `VideoSurfacePool` | MJPEG→YUV, 업로드/색 변환, `decode`, 프레임 수명 | FFmpeg CPU MJPEG, D3D11 | 캠별 decode worker + GPU 작업 소유자 |
+| `video/CaptureFrameDecoder`, `VideoSurfacePool`, `GpuColourConverter` | NV12 준비·필요한 행렬/range 변환·프레임 수명 | MF NV12, FFmpeg CPU MJPEG 폴백, D3D11 compute | 캠별 decode worker(전용 colour context) |
 | `video/PreviewPresenter` | `publishLatest(camera, surface, stamp)`, 좌우 live/playback 뷰, pacing | D3D11/DXGI, HWND host | GPU/present thread; UI는 상태/크기만 전달 |
-| `record/VideoCfrScheduler`, `NvencEncoder` | 원래 시각→공통 CFR, `selectFrame`, `submit`, `drain` | 클록 mapper, FFmpeg h264_nvenc | 캠별 record/encode worker |
+| `record/VideoCfrScheduler`, `NvencEncoder`, `EncodePipeline` | 원래 시각→공통 CFR, 독립 입력/packet 큐, `select`, `submit`, `drain` | 교체 가능한 CameraTimeMapper, FFmpeg h264_nvenc | 캠별 encode worker + mux worker |
 | `record/WavTrackWriter`, `ReferenceMixWriter`, `Mp4TakeWriter` | WAV 청크·AAC 한 믹스·MP4 packet 기록, `append/flush/finalize`, 오류 | raw PCM queue, FFmpeg, durable file I/O | 오디오 writer 1개 + 캠별 mux worker |
 | `record/TakeController` | `arm/start/stop`, 일반/더빙 배치 원점, 상태 전이 | audio/capture/writers/document | message coordinator, callback에서는 예약 샘플만 채택 |
 | `storage/RecordingJournal`, `DurableFile`, `RecoveryScanner` | `appendCommit`, `checkpoint`, `scan/recover`, 세대·CRC·유효 끝 | Win32 파일 I/O, serializer, FFmpeg | 전용 journal/recovery worker |
@@ -151,15 +151,15 @@ CEO의 2026-09-09 확정 요구와 13:20~13:35의 내보내기·더빙·독립 �
 
 ### 5.1 캡처·디코드 결정
 
-**캡처는 Media Foundation 비동기 SourceReader, MJPEG의 기본 디코드는 고정 FFmpeg의 CPU MJPEG 디코더로 결정한다.** SourceReader에서는 가능하면 장치의 native NV12/YUY2/MJPEG를 요청한다. MJPEG는 compressed sample을 받아 캠별 worker에서 한 번만 디코딩하고 프리뷰·인코딩이 그 결과를 공유한다. 두 소비자를 위해 각각 MJPEG 디코드를 반복하지 않는다.
+**캡처는 Media Foundation 비동기 SourceReader, MJPEG 웹캠의 기본 디코드는 MF SourceReader의 NV12 출력으로 변경한다(라운드 01 실측에 따른 라운드 02 결정).** native NV12는 그대로 사용한다. FFmpeg CPU MJPEG는 `capture --decoder ffmpeg` 폴백·비교용으로 유지한다. 프리뷰·녹화는 같은 한 번의 디코드 결과를 사용하며, 녹화 전용 AVFrame 풀에 NV12 payload를 한 번 복사한다. 라운드 02 `encode` 입력은 1920×1080 MJPEG→MF NV12 또는 native NV12다.
 
-이 결정의 이유는 NVDEC 공식 지원 코덱에 MJPEG가 없어 NVDEC 예산에 넣을 수 없고, FFmpeg를 이미 고정 배포하므로 디코더 선택·스레드 수·처리 시간·타임스탬프 보존을 앱에서 제어할 수 있기 때문이다. MF 내장 디코더가 더 빠르다고 확인된 사실은 없다. **MF 디코드 비교는 스파이크 1의 대안 실험**으로 유지하고 P0·정확한 원래 시각·색 변환을 통과하면 해당 장치 프로파일만 MF 경로로 바꿀 수 있다. MF가 하드웨어 디코더를 허용한다고 MJPEG GPU 디코드를 보장하지 않는다. [NVIDIA NVDEC 코덱 표](https://docs.nvidia.com/video-technologies/video-codec-sdk/13.1/nvdec-application-note/index.html), [Microsoft Source Reader](https://learn.microsoft.com/en-us/windows/win32/medfound/source-reader)
+근거는 사용자가 전달한 Claude의 2026-09-09 GC311G2 MJPEG 1080p60 실측이다. MF의 callback→Present p95는 8.2ms(20초 재측정 3.2ms), CPU는 한 코어 기준 31%, overflow 0이었다. FFmpeg CPU 경로는 decode 약 3.2ms에 CPU swscale RGB 경유 색정규화 약 16ms가 더해져 worker p50 19.8ms, p95 62ms, late/overflow 163(9%)로 P0 소프트웨어 예산에 미달했다. 이 세션이 해당 측정을 재현한 것은 아니다. `r01/devices.json`의 native 51개 모드와 cam1 MJPEG 1920×1080 60/1 선택은 확인했으나 `r01/capture.json`은 없어서 10분 보고서 평가는 **미확인**이다. MF 사용이 MJPEG GPU 디코드를 뜻하지 않으며 내부 decode는 callback 전에 수행된다. [Microsoft Source Reader](https://learn.microsoft.com/en-us/windows/win32/medfound/source-reader)
 
 SourceReader는 `MF_LOW_LATENCY`를 요청하고 일반 소프트웨어 RGB32 video-processing 경로를 피한다. YUV를 보존해 D3D11에서 미리보기용 RGB로 변환하고 encoder에는 NV12를 공급한다. YUY2/MJPEG의 full/limited range·색행렬 정보를 확인해 **BT.709 limited, SDR 8bit 4:2:0**로 정규화하며 메타데이터만 바꾸지 않는다. MF timestamp·sample attribute는 디코드 전에 별도 보존한다. [저지연 속성](https://learn.microsoft.com/en-us/windows/win32/medfound/mf-low-latency), [D3D manager 속성](https://learn.microsoft.com/en-us/windows/win32/medfound/mf-source-reader-d3d-manager)
 
 라운드 01 구현은 `IMFSourceReaderEx::SetNativeMediaType`로 입력을 고정한 뒤 출력 subtype·크기·분자/분모를 다시 확인한다. MF 비교는 같은 MJPEG native 모드에 NV12 출력을 요청하고 삽입된 MFT의 입력이 MJPEG인지 확인한다. **MF 디코드는 OnReadSample 이전**이므로 그 내부 decode 시간은 SourceReader만으로 분리 계측하지 못한다. 두 경로의 callback→Present 구간 정의를 다르게 적고, 유효한 DeviceTimestamp가 보존된 경우 device→callback/Present 및 프로세스 CPU 사용량을 비교한다. DeviceTimestamp는 QPC와 epoch를 공유하는 100ns 단위이며 PTS와 별도로 보존한다. `--compare-decoders --seconds N`은 같은 장치를 순차 재개방해 N초를 두 경로로 나눈다(장면 유지/반복 패턴은 실행자가 준비, 장면 동일성 자동 인증 없음). [native type 지정](https://learn.microsoft.com/en-us/windows/win32/api/mfreadwrite/nf-mfreadwrite-imfsourcereaderex-setnativemediatype), [DeviceTimestamp](https://learn.microsoft.com/en-us/windows/win32/medfound/mfsampleextension-devicetimestamp)
 
-색 변환의 장치 없는 픽셀 계약 테스트는 통과했다. 고정 SDK에서 같은 NV12 포맷의 swscale 경로가 full→limited 변환을 생략하는 것을 테스트로 확인해 명시적 정수 범위 변환을 사용한다. BT.601→709는 RGB48 중간 버퍼를 거쳐 실제 행렬 변환하며 **표시용 YUV→RGB는 D3D11 shader**가 수행한다. 누락된 행렬은 MJPEG/SD=601, HD raw=709, range는 MJPEG=full/raw=limited, primaries/transfer는 SDR 709로 가정하고 JSON에 `colourAssumptions`와 근거를 남긴다. 명시적인 비709 primaries/transfer는 거부한다. 이 가정이 필요한 실물의 색 정확도는 미확인으로 남기며, 다른 primaries/HDR 색 관리 경로는 이번 라운드에 구현하지 않았다.
+**프리뷰·녹화의 CPU swscale RGB 중간 변환은 제거했다.** 입력이 709 limited NV12면 payload를 보존한다. 다른 YUV layout은 swscale로 원래 matrix/range를 유지한 NV12로 준비하고, 필요한 601→709·full→limited 변환은 decode worker 전용 D3D11 compute context에서 수행해 CPU NV12로 readback한다. presenter context를 공유하지 않으며 이 변환 경로의 실제 GPU 지연은 미확인이다. 물리 GPU 없는 픽셀 검증은 WARP로 같은 compute shader를 실행한다. 누락된 행렬은 MJPEG/SD=601, HD raw=709, range는 MJPEG=full/raw=limited로 가정한다. SMPTE170M/BT470BG 등 SDR primaries/transfer는 가정으로 기록하고 HDR/wide gamut은 거부한다. **MF 디코드 출력의 실제 range/matrix는 회색 차트로 확인하지 않았으므로 항상 `colourAssumptions`를 기록**한다. 인코더 입력 메타데이터는 BT.709 limited이며 primaries/transfer 가정과 물리 색 인증은 구별한다. GPU 표면을 유지하는 D3D11→CUDA 인코드 경로는 후속이다.
 
 | 장치 | 준비 전제와 프로젝트 CFR |
 |---|---|
@@ -172,8 +172,8 @@ SourceReader는 `MF_LOW_LATENCY`를 요청하고 일반 소프트웨어 RGB32 vi
 
 ```mermaid
 flowchart LR
-    C1["캠1 MF native sample"] --> D1["캠1 MJPEG CPU 디코드 또는 YUV"]
-    C2["캠2 MF native sample"] --> D2["캠2 MJPEG CPU 디코드 또는 YUV"]
+    C1["캠1 MF native sample"] --> D1["캠1 MF NV12 / FFmpeg 폴백"]
+    C2["캠2 MF native sample"] --> D2["캠2 MF NV12 / FFmpeg 폴백"]
     D1 --> P1["프리뷰 최신 표면"]
     D2 --> P2["프리뷰 최신 표면"]
     P1 --> V["좌우 독립 뷰 · D3D11 present"]
@@ -204,7 +204,7 @@ flowchart LR
 
 **P0 합격 목표:** native 60 프리뷰의 glass-to-glass p95 ≤100ms·p99 ≤150ms, native 30은 p95 ≤150ms·p99 ≤200ms. OnReadSample 진입부터 Present 제출까지는 각 p95 ≤35ms / ≤45ms. C920을 프로젝트 60으로 변환해도 C920의 지연 기준은 native 30 기준이다. 달성 여부 전부 미확인 → 스파이크 1·3.
 
-끊김은 평균 fps만으로 판정하지 않는다. 승인 부하의 1시간 시험과 스튜디오 3시간 시험에서 **의도하지 않은 캡처·decode·encode 누락 0, ASIO xrun/누락·중복 0, 큐의 지속 증가 0**을 요구한다. 원래 프레임 ID가 준비되어 있는데 `2×native frame period + 1 display period`를 넘겨 화면이 갱신되지 않으면 프리뷰 stall로 센다. 30→60 반복, 독립 클록의 CFR 보정, 화면 refresh와 native cadence 차이는 별도 카운터다. 불변 장면의 픽셀 동일성으로 손실을 판정하지 않는다.
+끊김은 평균 fps만으로 판정하지 않는다. 승인 부하의 1시간 시험과 스튜디오 3시간 시험에서 **의도하지 않은 캡처·decode·encode 누락 0, ASIO xrun/누락·중복 0, 큐의 지속 증가 0**을 요구한다. 원래 프레임 ID가 준비되어 있는데 `2×native frame period + 1 display period`를 넘겨 화면이 갱신되지 않으면 프리뷰 stall로 센다. `previewStall`과 `sourceCadenceGap`은 첫 callback 이후 1초를 제외한다. 후자는 연속 callback ID 사이의 PTS 또는 callback 간격이 1.5 native period를 넘는 관찰이다. 장치 cadence·stream tick/discontinuity·stall 관찰만으로 소프트웨어 손실 FAIL을 만들지 않는다. overflow/late discard/decode/표시 실패 0과 기존 지연·refresh·시간축 조건을 통과하면 probe의 소프트웨어 관찰은 PASS이며 물리 원본 손실 인증은 별도다. 30→60 반복, 독립 클록의 CFR 보정, 화면 refresh와 native cadence 차이는 별도 카운터다. 불변 장면의 픽셀 동일성으로 손실을 판정하지 않는다.
 
 ### 5.3 구현으로 지키는 경계·부하 초과 시 정책
 
@@ -212,7 +212,7 @@ flowchart LR
 |---|---|
 | 프리뷰 | 캠당 최신 mailbox 1개 + present 중 표면. 오래된 표시 요청은 덮어쓴다. 60Hz present 루프는 JUCE의 파형·미터 repaint timer와 분리한다. 창을 줄여도 두 뷰의 native cadence를 임의로 낮추지 않는다. |
 | 캡처 decode 큐 | 캠당 대기 native sample 2개, decode 중 1개는 별도. 라운드 01은 full이면 새 borrowed sample을 AddRef하기 전에 거절해 콜백 Release/무한 retired 큐를 피하고 `captureDecodeOverflow`로 센다. worker는 대기가 2 native period를 넘은 sample을 `lateQueueDiscard`로 반환하고 다음 입력으로 최신성을 복원한다. 대기>2ms는 별도의 late 관측이다. 정상 합격 시험에서는 overflow/discard가 발생하면 실패다. |
-| encode 표면 큐 | 초기 250ms(60fps 15개/30fps 8개) 상한. encoder reference용 별도 풀을 포함해 계수화한다. 프리뷰 예약 표면을 가져다 쓰지 않는다. |
+| encode 표면 큐 | 초기 250ms(60fps 15개/30fps 8개) 총 상한. 라운드 02는 NVENC 내부 `surfaces=4`를 포함해 CPU AVFrame 11개/4개로 준비한다. FIFO·CFR 보유 프레임·인코더가 참조 중인 CPU 버퍼도 이 풀에 포함하며 writable하지 않으면 추가 버퍼 할당 없이 거절한다. 프리뷰 풀 3개는 독립이다. |
 | 압축 packet·오디오 큐 | 영상 packet 큐 초기 3초, 원본 오디오 큐 초기 4초. 큐는 레이트·최대 bit rate로 준비 때 할당한다. 2초 writer stall 시험에서 callback을 막지 않고 회복해야 한다. 메모리 한도는 녹화 시간/프로젝트 용량 제한과 다르다. |
 | 정상 자원 여유 | 2캠60 encode 합산 120fps의 **1.3배인 156fps 이상**을 캡처 없는 별도 부하 시험의 초기 합격 목표로 둔다. 실제 capture+preview+8ch 동시 시험을 추가 통과해야 한다. |
 | 우선순위 | ASIO 원본·더빙 오디오 출력, live preview/capture, 녹화 encode/write를 보호한다. 파형 상세화·썸네일·파일 해시·일반 MP4 후처리부터 중지/감속한다. 녹화 시작 전 진행 중 export를 정지된 체크포인트까지 멈춘다. |
@@ -278,6 +278,8 @@ AAC 선택은 MP4 단독 재생·인계 호환성을 위한 결정이다. 임의
 
 부족한 격자는 반복하고 과잉 native 프레임은 생략하되 `nativeRateConversion`, `clockCorrection`, `captureLoss`, `encodeLoss`를 구별한다. drift는 영상에서만 보정한다. 녹음 중 원본 오디오를 리샘플하거나 샘플을 늘려 clock에 맞추지 않는다.
 
+라운드 02의 `CameraTimeMapper`는 교체 가능한 인터페이스이며 초기 어댑터는 첫 보유 MF PTS를 0으로, 도착 QPC를 미래 대기의 deadline 원점으로 사용한다. 노출 시각·ASIO 매핑으로 인증하지 않는다. scheduler는 고정 16개 후보 저장소, 절대 유리수 rescale, 최대 1 native period 미래 후보/대기를 사용한다. 100ns 양자화 때문에 거리 차이 1 tick 이내는 이전 프레임 우선이다. 카운터의 `missing`은 확인한 소프트웨어 거절 수, `repeated/omitted`는 그에 따른 선택 변화를 뜻하므로 합산해 손실을 중복 계산하지 않는다. 장치 cadence만으로 captureLoss를 추정하지 않으며 초기 `clockCorrection`에는 아직 보정하지 않은 도착/PTS 불규칙성도 포함한다. 모든 출력 packet의 PTS↔callback source ID·MF PTS·QPC 대응은 mux worker의 CSV로 남긴다.
+
 정지점이 프레임 경계가 아니면 영상 파일은 `ceil((Nstop-N0)·num/(Fs·den))`개 프레임을 갖는다. 논리 테이크의 유효 끝은 **실제 Nstop**이고 마지막 영상의 남은 1프레임 미만은 presentation padding이다. 원본 WAV를 프레임 길이에 맞추려고 잘라 버리지 않는다. 내부 재생은 논리 끝에서 정지하고 내보내기는 §11의 공통 끝 규칙을 사용한다. 절대 위치에서 유리수 rescale하여 매 프레임 반올림 오차를 누적하지 않는다.
 
 ### 7.4 더빙에서 출력 지연 보정
@@ -330,6 +332,10 @@ WAV 청크는 **초기 30초**마다 모든 마이크가 동일 sample boundary�
 인코딩 초기 프로파일: h264_nvenc, P5, VBR, 1080p, NV12, GOP 약 1초(30/60프레임), **주기적 IDR·닫힌 GOP, B-frame 0, rc-lookahead 0, multipass off**, BT.709 limited. 초기 화질 시험값은 30fps 평균 20Mbps/상한 30Mbps, 60fps 평균 35Mbps/상한 50Mbps다. 고정 제품 품질로 인증된 수치가 아니라 스파이크 1·3·7에서 P5 처리 여유와 실제 장면으로 확정할 출발값이다.
 
 MP4 mux는 `+hybrid_fragmented+frag_keyframe+empty_moov+default_base_moof`를 우선 검증한다. `frag_keyframe`은 IDR을 생성하는 인코더 옵션이 아니다. 복수 분할 조건으로 비키프레임 fragment를 만들지 않도록 시작 설정을 단순화한다. **hybrid와 faststart는 함께 쓰지 않는다.** n8.1 소스에 이 조합 거부 및 trailer의 일반 moov 작성 경로가 있고 로컬 바이너리에 해당 옵션이 있다. 정확한 고정 빌드의 crash·장시간 동작은 미확인 → 스파이크 4. [FFmpeg MP4 문서](https://ffmpeg.org/ffmpeg-formats.html#Fragmentation), [n8.1 movenc 소스](https://raw.githubusercontent.com/FFmpeg/FFmpeg/n8.1/libavformat/movenc.c)
+
+라운드 02는 위 플래그로 `.recording.mp4`에 쓰며, 정상 종료 때 마지막 fragment→trailer→AVIO/파일 flush→덮어쓰기 없는 `.mp4` rename을 수행한다. `trailerMs`, `fileFlushMs`, `renameMs`를 분리한다. 실제 완료 moof/mdat 경계와 tfhd/trun packet 수를 마지막 128개 링에 기록하며 durable journal/GrowingTakeReader용 packet offset index는 구현하지 않는다. 영상 packet FIFO는 3초의 개수·상한 bitrate 기준 byte cap을 동시에 적용하고 AAC 생성·mux·파일 I/O는 encode와 다른 worker에서 한다. overflow/쓰기 오류는 보고하고 프리뷰를 유지하며, 실패 파일을 정상 완료 이름으로 바꾸지 않는다.
+
+synthetic 참조 오디오는 44.1kHz stereo float(공통 1kHz, L 440Hz/R 660Hz 식별)을 swresample로 48kHz 변환한 AAC-LC 192kbps다. 음수 priming PTS·initial_padding·마지막 유효 packet duration을 보존하고 `use_editlist=1`, negative timestamp shift 비활성, movie timescale 48000으로 mux한다. 작은 오프라인 파일에서 정상 trailer 후 두 stream presentation 0 및 AAC 유효 길이/전체 디코드를 확인했다. 고정 SDK는 초기 empty_moov에 유효 edit list가 없다는 경고를 출력하며, 정상 최종 moov의 검증을 crash 파일의 gapless 보증으로 확대하지 않는다. 마무리 1초 실측 게이트(Claude 검토 3)와 실물 1080p30/60 MP4 검증은 후속 실측으로 남긴다.
 
 정지 경로는 다음처럼 분리한다.
 

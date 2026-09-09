@@ -32,8 +32,8 @@ foreach(_rec_lock IN ITEMS
         message(FATAL_ERROR "Recorder: ${_rec_dll} SHA-256 differs from the frozen SDK.")
     endif()
 endforeach()
-foreach(_rec_lib IN ITEMS avcodec avutil swscale swresample)
-    if(_rec_lib STREQUAL "avcodec")
+foreach(_rec_lib IN ITEMS avcodec avformat avutil swscale swresample)
+    if(_rec_lib STREQUAL "avcodec" OR _rec_lib STREQUAL "avformat")
         set(_rec_abi 62)
     elseif(_rec_lib STREQUAL "avutil")
         set(_rec_abi 60)
@@ -66,19 +66,21 @@ target_compile_definitions(RecorderCommon PUBLIC
 add_library(RecorderCore STATIC
     src/capture/CameraCatalog.cpp src/capture/MfCameraCapture.cpp
     src/video/CaptureFrameDecoder.cpp src/video/VideoSurfacePool.cpp src/video/PreviewPresenter.cpp
-    src/diagnostics/CaptureTelemetry.cpp)
+    src/video/GpuColourConverter.cpp src/diagnostics/CaptureTelemetry.cpp
+    src/record/VideoCfrScheduler.cpp src/record/NvencEncoder.cpp src/record/Mp4TakeWriter.cpp
+    src/record/ReferenceMixWriter.cpp src/record/EncodePipeline.cpp)
 target_include_directories(RecorderCore PUBLIC src)
-target_link_libraries(RecorderCore PUBLIC RecorderCommon RecorderFFmpeg_avcodec RecorderFFmpeg_avutil RecorderFFmpeg_swscale
+target_link_libraries(RecorderCore PUBLIC RecorderCommon RecorderFFmpeg_avcodec RecorderFFmpeg_avformat RecorderFFmpeg_avutil RecorderFFmpeg_swscale RecorderFFmpeg_swresample
     PRIVATE mf mfplat mfreadwrite mfuuid ole32 propsys d3d11 dxgi d3dcompiler user32 winmm)
 target_compile_definitions(RecorderCore PUBLIC RECORDER_FFMPEG_VERSION="${_recorder_ffmpeg_version}")
 add_executable(RecorderProbe tools/RecorderProbe.cpp)
-add_executable(RecorderTests tests/TestMain.cpp tests/CaptureContractTests.cpp)
+add_executable(RecorderTests tests/TestMain.cpp tests/CaptureContractTests.cpp tests/CfrSchedulerTests.cpp tests/EncoderContractTests.cpp)
 foreach(_rec_target IN ITEMS RecorderCommon RecorderCore RecorderProbe RecorderTests)
     set_property(TARGET ${_rec_target} PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
     target_compile_options(${_rec_target} PRIVATE /utf-8 /W4 /permissive- /EHsc)
 endforeach()
 # The SDK currently contains only FFmpeg DLLs. Copy the complete same-archive DLL closure;
-# avcodec imports swresample even though this round has no audio code. No static FFmpeg archive.
+# Includes avformat and swresample for the round 02 MP4/AAC writers. No static FFmpeg archive.
 file(GLOB _rec_dlls CONFIGURE_DEPENDS "${RECORDER_FFMPEG_ROOT}/bin/*.dll")
 foreach(_rec_exe IN ITEMS RecorderProbe RecorderTests)
     target_link_libraries(${_rec_exe} PRIVATE RecorderCore)
@@ -87,5 +89,7 @@ foreach(_rec_exe IN ITEMS RecorderProbe RecorderTests)
     add_custom_command(TARGET ${_rec_exe} POST_BUILD COMMAND ${CMAKE_COMMAND} -E copy_if_different
         ${_rec_dlls} "$<TARGET_FILE_DIR:${_rec_exe}>" VERBATIM)
 endforeach()
-add_test(NAME RecorderCaptureContracts COMMAND RecorderTests)
+add_test(NAME RecorderCaptureContracts COMMAND RecorderTests --suite capture-contract)
+add_test(NAME RecorderCfrScheduler COMMAND RecorderTests --suite cfr-scheduler)
+add_test(NAME RecorderEncoderContracts COMMAND RecorderTests --suite encoder-contract)
 message(STATUS "Recorder: pinned LGPL shared FFmpeg ${_recorder_ffmpeg_version}, avcodec ABI 62")
