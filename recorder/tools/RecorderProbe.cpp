@@ -8,6 +8,10 @@
 #include "record/Mp4TakeWriter.h"
 #include "storage/StorageEncoding.h"
 #include <juce_events/juce_events.h>
+#include "media/AudioImport.h"
+#include "playback/ImportedAudioCache.h"
+#include "audio/MediaFoundationAudioFormat.h"
+namespace gocue::recorder { int runPlaybackProbe(int argc, wchar_t** argv); }
 extern "C"
 {
 #include <libavcodec/avcodec.h>
@@ -25,6 +29,8 @@ extern "C"
 #include <map>
 #include <set>
 #include <thread>
+#include <cmath>
+#include <limits>
 
 using namespace gocue::recorder;
 namespace
@@ -807,6 +813,180 @@ int encodeCommand(const Arguments& args)
     return report["result"].toString() == "PASS" ? 0 : report["result"].toString() == "UNAVAILABLE" ? 2 : 1;
 }
 }
+namespace
+{
+// Round 16 probe only: synthetic source/encoder orchestration and measured oracles.
+// Import, resampling, peaks and document publication all use the production classes.
+float importFixtureSignal(Sample sample, std::uint32_t rate, int channel)
+{
+    const double t = static_cast<double>(sample) / rate;
+    return static_cast<float>(.28 * std::sin(6.283185307179586 * ((211 + channel * 157) * t + 271 * t * t))
+        + .11 * std::sin(6.283185307179586 * (997 + channel * 263) * t));
+}
+void importProbeCheck(bool ok, const juce::String& reason)
+{ if (!ok) throw std::runtime_error(reason.toStdString()); }
+void importProbeCheck(const juce::Result& r) { importProbeCheck(r.wasOk(), r.getErrorMessage()); }
+void writeImportFixture(const juce::File& file, std::uint32_t rate, Sample length)
+{
+    importProbeCheck(!file.exists(), "Fixture already exists");
+    std::unique_ptr<juce::OutputStream> stream = file.createOutputStream(); juce::WavAudioFormat format;
+    auto writer = format.createWriterFor(stream, juce::AudioFormatWriterOptions{}.withSampleRate(rate).withNumChannels(2).withBitsPerSample(32));
+    importProbeCheck(writer != nullptr, "Cannot create WAV fixture"); juce::AudioBuffer<float> block(2, 4096);
+    for (Sample at = 0; at < length;)
+    {
+        const auto n = static_cast<int>((std::min)(Sample(4096), length - at));
+        for (int ch = 0; ch < 2; ++ch) for (int s = 0; s < n; ++s) block.setSample(ch, s, importFixtureSignal(at + s, rate, ch));
+        importProbeCheck(writer->writeFromAudioSampleBuffer(block, 0, n), "WAV fixture write failure"); at += n;
+    }
+    importProbeCheck(writer->flush(), "WAV fixture flush failure");
+}
+int importAudioCommand(int argc, wchar_t** argv)
+{
+    Arguments args; args.command = "import-audio";
+    for (int i = 0; i < argc; ++i) args.original.add(juce::String(argv[i]));
+    auto report = jsonObject();
+    try
+    {
+        for (int i = 2; i < argc; ++i)
+        {
+            const auto key = juce::String(argv[i]).toStdString();
+            importProbeCheck((key == "--fixture-set" || key == "--project-dir" || key == "--report") && i + 1 < argc && !args.has(key), "Unknown, duplicate or incomplete import-audio option");
+            args.values.emplace(key, juce::String(argv[++i]).toStdString());
+        }
+        report = baseReport(args); jsonSet(report, "sourceKind", "synthetic");
+        importProbeCheck(args.required("--fixture-set") == "wav-mp3-m4a", "Supported fixture set: wav-mp3-m4a");
+        const auto projectDirectory = filePath(args.required("--project-dir"));
+        args.required("--report"); importProbeCheck(projectDirectory.createDirectory());
+        const auto fixturesDirectory = projectDirectory.getSiblingFile(projectDirectory.getFileName() + "-fixtures-" + newId());
+        importProbeCheck(fixturesDirectory.createDirectory());
+        RecorderDocument document;
+        const auto checkpoint = projectDirectory.getChildFile("project.recorder");
+        if (checkpoint.existsAsFile()) importProbeCheck(document.openCheckpoint(checkpoint));
+        const auto projectFs = document.getProject().Fs;
+        jsonSet(report, "projectDirectory", projectDirectory.getFullPathName()); jsonSet(report, "projectFs", static_cast<int>(projectFs));
+        jsonSet(report, "deviceOpened", false); jsonSet(report, "originalPreservation", "SHA-256 of external original and copied original before/after cache");
+        jsonSet(report, "waveformIntegration", "project-Fs min/max bins; round-09 PeakCache/MediaIndex absent in this branch");
+        juce::Array<juce::var> rows; bool failed = false, unavailable = false;
+        for (const auto& name : {juce::String("wav-44100"), juce::String("wav-48000"), juce::String("wav-96000"), juce::String("mp3-48000"), juce::String("m4a-48000")})
+        {
+            auto row = jsonObject(); jsonSet(row, "fixture", name); const auto rate = static_cast<std::uint32_t>(name.fromLastOccurrenceOf("-", false, false).getIntValue());
+            const Sample length = Sample(rate) * 2 + 137; const bool compressed = !name.startsWith("wav");
+            const auto wav = fixturesDirectory.getChildFile(name + "-source.wav");
+            try
+            {
+                writeImportFixture(wav, rate, length); auto source = wav;
+                if (compressed)
+                {
+                    source = fixturesDirectory.getChildFile(name + (name.startsWith("mp3") ? ".mp3" : ".m4a"));
+                    juce::StringArray command{RECORDER_IMPORT_FFMPEG_EXE, "-hide_banner", "-loglevel", "error", "-nostdin", "-n", "-i", wav.getFullPathName(), "-map", "0:a:0", "-c:a", name.startsWith("mp3") ? "libmp3lame" : "aac", "-b:a", "192k"};
+                    if (name.startsWith("m4a")) command.addArray({"-movie_timescale", juce::String(rate)});
+                    command.add(source.getFullPathName()); juce::Array<juce::var> commandJson; for (const auto& s : command) commandJson.add(s);
+                    jsonSet(row, "fixtureCommand", commandJson); juce::ChildProcess process;
+                    bool generated = process.start(command);
+                    if (generated && !process.waitForProcessToFinish(20000)) { process.kill(); generated = false; }
+                    const auto log = process.readAllProcessOutput(); const auto exitCode = process.getExitCode();
+                    jsonSet(row, "fixtureEncoderExitCode", static_cast<int>(exitCode)); jsonSet(row, "fixtureEncoderLog", log);
+                    if (!generated || exitCode != 0 || !source.existsAsFile())
+                    { status(row, "UNAVAILABLE", "Fixture encoder could not generate this format; see command/log"); unavailable = true; rows.add(row); continue; }
+                }
+                AudioImportRequest request; request.source = source; request.projectDirectory = projectDirectory;
+                request.projectId = document.getProject().projectId; request.projectFs = projectFs; request.playhead = 12347;
+                ImportedAudioCache::Worker worker(request);
+                const auto started = std::chrono::steady_clock::now();
+                while (!worker.finished() && std::chrono::steady_clock::now() - started < std::chrono::seconds(60)) std::this_thread::sleep_for(std::chrono::milliseconds(10));
+                if (!worker.finished()) worker.cancel();
+                std::unique_ptr<PreparedAudioImport> prepared; CachedImportedAudio cache; importProbeCheck(worker.takeResult(prepared, cache));
+                const auto& info = prepared->info(); jsonSet(row, "source", source.getFullPathName()); jsonSet(row, "metadata", info.toVar());
+                jsonSet(row, "expectedOriginalSamples", juce::int64(length)); jsonSet(row, "cacheSamples", juce::int64(cache.samples));
+                jsonSet(row, "cachePcm", cache.pcmFile.getFullPathName()); jsonSet(row, "peakBins", static_cast<int>(cache.peaks.size()));
+                jsonSet(row, "seconds", static_cast<double>(cache.samples) / projectFs);
+                auto pcm = AudioImport::openReader(cache.pcmFile); juce::AudioBuffer<float> samples(2, static_cast<int>(cache.samples));
+                importProbeCheck(pcm->read(&samples, 0, static_cast<int>(cache.samples), 0, true, true), "Cannot read derived PCM");
+                double squared = 0; int count = 0;
+                for (int ch = 0; ch < 2; ++ch) for (int at = 128; at < cache.samples - 128; at += 17)
+                { squared += std::pow(samples.getSample(ch, at) - importFixtureSignal(at, projectFs, ch), 2); ++count; }
+                const auto rms = std::sqrt(squared / count); jsonSet(row, "oracleRmsError", rms);
+                for (const bool head : {true, false})
+                {
+                    double error = 0; int n = 0;
+                    const int begin = head ? 64 : static_cast<int>(cache.samples - 4096);
+                    const int end = head ? 4096 : static_cast<int>(cache.samples - 64);
+                    for (int ch = 0; ch < 2; ++ch) for (int at = begin; at < end; at += 13)
+                    { error += std::pow(samples.getSample(ch, at) - importFixtureSignal(at, projectFs, ch), 2); ++n; }
+                    jsonSet(row, head ? "headRmsError" : "tailRmsError", std::sqrt(error / n));
+                }
+                int bestDelay = 0; double bestError = (std::numeric_limits<double>::max)();
+                for (int delay = -1400; delay <= 1400; ++delay)
+                {
+                    double error = 0;
+                    for (int centre : {4096, static_cast<int>(cache.samples / 2), static_cast<int>(cache.samples - 4096)})
+                        for (int s = 0; s < 512; s += 17)
+                        { const int at = centre + s; error += std::pow(samples.getSample(0, at + delay) - importFixtureSignal(at, projectFs, 0), 2); }
+                    if (error < bestError) { bestError = error; bestDelay = delay; }
+                }
+                jsonSet(row, "measuredDelaySamples", bestDelay); jsonSet(row, "delaySearchRangeSamples", 1400);
+                double seekMaxError = 0;
+                // At equal Fs these compare the shared source reader directly against sequential cache output.
+                if (rate == projectFs)
+                {
+                    auto reader = AudioImport::openReader(prepared->originalFile()); juce::AudioBuffer<float> seek(2, 257);
+                    for (Sample at : {Sample(45007), Sample(2049), length - 257, Sample(17)})
+                    {
+                        importProbeCheck(reader->read(&seek, 0, 257, info.readerStartSample + at, true, true), "Source reader seek failed");
+                        for (int ch = 0; ch < 2; ++ch) for (int s = 0; s < 257; ++s)
+                            seekMaxError = (std::max)(seekMaxError, std::abs(double(seek.getSample(ch, s) - samples.getSample(ch, static_cast<int>(at) + s))));
+                    }
+                    jsonSet(row, "sourceSeekMaxError", seekMaxError);
+                    if (name.startsWith("m4a"))
+                    {
+                        gocue::MediaFoundationAudioFormat format; auto stream = prepared->originalFile().createInputStream();
+                        std::unique_ptr<juce::AudioFormatReader> native(format.createReaderFor(stream.release(), true));
+                        importProbeCheck(native != nullptr, "Shared MF diagnostic reader unavailable"); double nativeError = 0;
+                        for (Sample at : {Sample(45007), Sample(2049), length - 257, Sample(17)})
+                        {
+                            importProbeCheck(native->read(&seek, 0, 257, at, true, true), "Shared MF diagnostic seek failed");
+                            for (int ch = 0; ch < 2; ++ch) for (int s = 0; s < 257; ++s)
+                                nativeError = (std::max)(nativeError, std::abs(double(seek.getSample(ch, s) - samples.getSample(ch, static_cast<int>(at) + s))));
+                        }
+                        jsonSet(row, "sharedMfSeekMaxErrorDiagnostic", nativeError);
+                        jsonSet(row, "sourceSeekPolicy", "Import-only wrapper decodes forward sequentially; backwards seek reopens. Shared MF reader unchanged. Playback seeks PCM.");
+                    }
+                }
+                else jsonSet(row, "sourceSeekCheck", "not compared across different sample rates; rational mapping and PCM oracle checked");
+                juce::Array<juce::var> mapping;
+                for (Sample at : {Sample(0), Sample(1), Sample(10007), cache.samples})
+                { auto m = jsonObject(); jsonSet(m, "projectSourceSample", juce::int64(at)); jsonSet(m, "originalPresentationSample", juce::int64(ImportedAudioCache::sourceSampleFor(at, info, projectFs))); mapping.add(m); }
+                jsonSet(row, "sampleMapping", mapping);
+                const bool unchanged = AudioImport::hashFile(source, worker.control) == info.contentHash && AudioImport::hashFile(prepared->originalFile(), worker.control) == info.contentHash;
+                jsonSet(row, "sourceHashUnchanged", unchanged);
+                importProbeCheck(commitImportedAudio(document, *prepared, worker.control));
+                jsonSet(row, "assetId", prepared->asset().assetId); jsonSet(row, "trackKind", "importAudio"); jsonSet(row, "playhead", juce::int64(prepared->clip().timelineStartSample));
+                const bool pass = unchanged && document.getProject().validate().wasOk() && info.decodedSamples == length
+                    && cache.samples == rescaleRound(length, projectFs, rate) && std::abs(bestDelay) <= 1
+                    && rms < (compressed ? .025 : .0001) && seekMaxError < .002
+                    && static_cast<double>(row["headRmsError"]) < (compressed ? .035 : .0001)
+                    && static_cast<double>(row["tailRmsError"]) < (compressed ? .035 : .0001);
+                status(row, pass ? "PASS" : "FAIL", pass ? "Measured synthetic length, mapping, priming, PCM oracle and available source seek checks" : "Length/alignment/seek/original check failed; inspect measured fields");
+                failed |= !pass;
+            }
+            catch (const std::exception& e) { status(row, "FAIL", e.what()); failed = true; }
+            rows.add(row);
+        }
+        importProbeCheck(document.saveCheckpoint(checkpoint)); jsonSet(report, "fixtures", rows);
+        jsonSet(report, "unverified", "Real DRM files, other Windows codec versions and hardware ASIO playback; MainComponent and round-09 PeakCache wiring deferred");
+        status(report, failed ? "FAIL" : unavailable ? "UNAVAILABLE" : "PASS", "Synthetic import/cache verification; no audio device opened");
+        CaptureTelemetry::writeJson(filePath(args.required("--report")), report);
+        std::cout << report["result"].toString() << ": " << args.required("--report") << '\n';
+        return failed ? 1 : unavailable ? 2 : 0;
+    }
+    catch (const std::exception& e)
+    {
+        status(report, "FAIL", e.what());
+        if (args.has("--report")) try { CaptureTelemetry::writeJson(filePath(args.get("--report")), report); } catch (...) {}
+        std::cerr << juce::JSON::toString(report) << '\n'; return 1;
+    }
+}
+}
 int wmain(int argc, wchar_t** argv)
 {
     SetConsoleOutputCP(CP_UTF8); SetConsoleCP(CP_UTF8);
@@ -815,6 +995,8 @@ int wmain(int argc, wchar_t** argv)
     try
     {
         if (argc >= 2 && juce::String(argv[1]) == "asio") return runAsioProbe(argc, argv);
+        if (argc >= 2 && juce::String(argv[1]) == "import-audio") return importAudioCommand(argc, argv);
+        if (argc >= 2 && juce::String(argv[1]) == "playback") return runPlaybackProbe(argc, argv);
         args = parse(argc, argv);
         report = baseReport(args, &report); // also covers encode's early runtime check without changing its function
         if (args.command == "record-audio" || args.command == "record-take") return recordCommand(args);

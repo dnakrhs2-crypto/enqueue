@@ -184,3 +184,66 @@ target_link_libraries(RecorderCore PUBLIC RecorderModel)
 target_sources(RecorderTests PRIVATE tests/RecorderAudioTests.cpp tests/TakeControllerTests.cpp)
 add_test(NAME RecorderAudio COMMAND RecorderTests --suite recorder-audio)
 add_test(NAME RecorderTakeController COMMAND RecorderTests --suite take-lifecycle)
+# Round 07 / spike 4B. Append-only target integration; one shared test main.
+target_sources(RecorderCore PRIVATE src/storage/RecoverySupport.cpp src/storage/Mp4RecoveryIndex.cpp src/storage/RecoveryScanner.cpp)
+target_link_libraries(RecorderCore PUBLIC RecorderModel PRIVATE bcrypt)
+target_sources(RecorderTests PRIVATE tests/RecoveryTests.cpp tests/LargeFileTests.cpp tools/CrashFixtures.cpp)
+target_include_directories(RecorderTests PRIVATE tools)
+add_test(NAME RecorderRecovery COMMAND RecorderTests --suite recovery-idempotence)
+add_test(NAME RecorderLargeFile COMMAND RecorderTests --suite large-files)
+add_executable(RecorderCrashHarness tools/CrashHarness.cpp tools/CrashFixtures.cpp)
+target_link_libraries(RecorderCrashHarness PRIVATE RecorderCore)
+set_property(TARGET RecorderCrashHarness PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+target_compile_options(RecorderCrashHarness PRIVATE /utf-8 /W4 /permissive- /EHsc)
+set_target_properties(RecorderCrashHarness PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/RecorderCrashHarness_artefacts/$<CONFIG>")
+add_custom_command(TARGET RecorderCrashHarness POST_BUILD COMMAND ${CMAKE_COMMAND} -E copy_if_different
+    ${_rec_dlls} "$<TARGET_FILE_DIR:RecorderCrashHarness>" VERBATIM)
+
+# BEGIN Recorder round 04: clocks / calibration / standalone probe (append-only).
+target_sources(RecorderCore PRIVATE
+    src/sync/ClockMapper.cpp src/sync/CameraClockMapper.cpp src/sync/CalibrationProfile.cpp)
+target_sources(RecorderTests PRIVATE tests/ClockMapperTests.cpp)
+add_test(NAME RecorderClockMapping COMMAND RecorderTests --suite clock-mapping)
+add_executable(RecorderClockProbe tools/ClockProbe.cpp)
+target_link_libraries(RecorderClockProbe PRIVATE RecorderCore)
+set_property(TARGET RecorderClockProbe PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+target_compile_options(RecorderClockProbe PRIVATE /utf-8 /W4 /permissive- /EHsc)
+set_target_properties(RecorderClockProbe PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/RecorderClockProbe_artefacts/$<CONFIG>")
+add_custom_command(TARGET RecorderClockProbe POST_BUILD COMMAND ${CMAKE_COMMAND} -E copy_if_different
+    ${_rec_dlls} "$<TARGET_FILE_DIR:RecorderClockProbe>" VERBATIM)
+# END Recorder round 04.
+# Round 13: pure timeline edits, immutable render plans, and snapshot history contracts.
+target_sources(RecorderModel PRIVATE src/model/ClipEdits.cpp src/model/RenderPlanCompiler.cpp)
+target_sources(RecorderTests PRIVATE
+    tests/ClipEditTests.cpp tests/LinkEditTests.cpp tests/EditHistoryTests.cpp tests/EditPropertyTests.cpp)
+add_test(NAME RecorderCutLinkHistory COMMAND RecorderTests --suite cut-link-history)
+add_test(NAME RecorderEditProperty COMMAND RecorderTests --suite edit-property --seed 909 --iterations 1000)
+# Round 16 / spike 6A: independent audio import and derived PCM (append-only).
+add_library(RecorderImport STATIC
+    src/media/AudioImport.cpp src/playback/ImportedAudioCache.cpp
+    ../src/audio/MediaFoundationAudioFormat.cpp ../src/audio/HighQualityResampler.cpp)
+target_include_directories(RecorderImport PRIVATE ../third_party/r8brain)
+target_link_libraries(RecorderImport PUBLIC RecorderModel RecorderCore PRIVATE juce::juce_audio_formats)
+target_compile_definitions(RecorderImport PUBLIC JUCE_USE_MP3AUDIOFORMAT=1)
+set_property(TARGET RecorderImport PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+target_compile_options(RecorderImport PRIVATE /utf-8 /W4 /permissive- /EHsc)
+target_sources(Recorder PRIVATE src/ui/AudioImportPanel.cpp)
+target_link_libraries(Recorder PRIVATE RecorderImport)
+target_sources(RecorderTests PRIVATE tests/AudioImportTests.cpp tests/ImportedClipTests.cpp)
+target_link_libraries(RecorderTests PRIVATE RecorderImport)
+target_link_libraries(RecorderProbe PRIVATE RecorderImport)
+target_compile_definitions(RecorderProbe PRIVATE RECORDER_IMPORT_FFMPEG_EXE="${RECORDER_FFMPEG_ROOT}/bin/ffmpeg.exe")
+target_compile_definitions(RecorderTests PRIVATE RECORDER_IMPORT_FFMPEG_EXE="${RECORDER_FFMPEG_ROOT}/bin/ffmpeg.exe")
+add_test(NAME RecorderAudioImport COMMAND RecorderTests --suite audio-import)
+add_custom_command(TARGET Recorder POST_BUILD COMMAND ${CMAKE_COMMAND} -E copy_if_different
+    ${_rec_dlls} "$<TARGET_FILE_DIR:Recorder>" VERBATIM)
+# Round 11: finalized-file playback only (append-only integration).
+target_sources(RecorderCore PRIVATE
+    src/media/MediaIndex.cpp src/playback/VideoPlaybackEngine.cpp
+    src/playback/TimelineTransport.cpp src/playback/TimelineAudioRenderer.cpp
+    src/playback/AsioPlaybackOutput.cpp)
+target_link_libraries(RecorderCore PUBLIC RecorderModel)
+target_sources(RecorderProbe PRIVATE tools/PlaybackProbe.cpp)
+target_sources(RecorderTests PRIVATE tests/PlaybackTests.cpp)
+add_test(NAME RecorderPlaybackEngine COMMAND RecorderTests --suite playback-engine)

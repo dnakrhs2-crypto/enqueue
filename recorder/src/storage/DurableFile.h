@@ -7,7 +7,7 @@
 
 namespace gocue::recorder
 {
-enum class FileIoOperation { open, append, patch, flushData };
+enum class FileIoOperation { open, append, patch, flushData, appendProgress, patchProgress };
 
 // Optional test seam. Invoked only by the file owner (never by an audio callback).
 // The adapter must outlive every file using it; it may delay or return an error.
@@ -17,6 +17,8 @@ public:
     virtual ~FileIoFaultAdapter() = default;
     virtual juce::Result beforeIo(FileIoOperation, const juce::File&,
                                   std::uint64_t offset, std::size_t bytes) = 0;
+    // Test-only virtual coordinates; never passed to the native filesystem.
+    virtual std::uint64_t observedOffset(std::uint64_t offset) const { return offset; }
 };
 
 // Single writer, synchronous Win32 I/O, no application buffering. Existing bytes

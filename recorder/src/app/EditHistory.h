@@ -6,6 +6,7 @@ namespace gocue::recorder
 {
 struct EditSnapshot
 {
+    // Deliberately excludes RecorderProject::media, revisions and runtime caches.
     EditState state;
     std::vector<Id> selection;
 };
@@ -26,6 +27,7 @@ public:
     void commitUndo(EditSnapshot current);
     void commitRedo(EditSnapshot current);
     void endGesture();
+    void breakCoalescing() { endGesture(); } // selection/context changes start a new edit gesture
     void clear();
     size_t undoDepth() const { return undos.size(); }
     size_t redoDepth() const { return redos.size(); }

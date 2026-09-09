@@ -382,6 +382,8 @@ hybrid가 고정 빌드에서 복구/읽기 요구에 실패하면 **일반 fMP4
 7. recovered asset 세대를 journal에 commit한 뒤 문서에 연결한다. 복구 중 재차 종료되어도 원본·이전 완료 연결을 보존하고 재실행이 중복 클립을 만들지 않아야 한다.
 8. `복구 완료: 테이크 007, 캠2 마지막 1.2초 없음`처럼 실제 손실 범위와 마지막 편집 revision을 알린다. 부분 자료를 정상 완료와 같은 표시로 섞지 않는다.
 
+**라운드 07 구현 기록 (2026-09-09):** 위 절의 worker API와 `RecorderCrashHarness`를 구현했다. 복구 checkpoint/commit을 원본과 분리한 `recovery/<attempt-uuid>/`에 쓰고, 새 세대가 검증된 뒤 `RecorderDocument::adopt`에 연결한다. 명시적인 라운드 07 요청에 따라 초기 serialized codec·실제 moof/trun/mdat·packet CRC를 저장하는 **크래시 복구 전용 인덱스**를 추가했다. GrowingTakeReader와 concurrent playback은 Claude 검토 3의 실측 gate로 남는다. 테스트에서 캠2의 1.2초 gap 및 정상 캠/WAV 보존을 확인했고, 최종 프로세스 강제종료 5회는 최대 tail 1.0초·원본 hash 불변·두 번째 복구 변화 0이었다. 100회·실물·AAC gapless 정확도·실제 >4GiB/RF64 및 **정전(미확인 → 스파이크 4)**은 이 결과로 인증하지 않는다. 정확한 변경·명령·증거·결정은 [라운드 07 OUT](../plans/2026-09-09-recorder-r07-OUT.md)에 기록했다.
+
 ## 9. 타임라인 모델·편집 연산·undo
 
 ### 9.1 모델과 불변식

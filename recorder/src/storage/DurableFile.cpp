@@ -19,7 +19,7 @@ juce::Result DurableFile::check(FileIoOperation operation, std::uint64_t offset,
 {
     if (error.failed()) return error;
     if (!isOpen()) return windowsError("File not open", ERROR_INVALID_HANDLE);
-    if (faults) return remember(faults->beforeIo(operation, path, offset, bytes));
+    if (faults) return remember(faults->beforeIo(operation, path, faults->observedOffset(offset), bytes));
     return error;
 }
 juce::Result DurableFile::open(const juce::File& target, OpenMode mode)
@@ -51,7 +51,7 @@ juce::Result DurableFile::writeImpl(std::uint64_t offset, const void* data, std:
     auto* bytes = static_cast<const std::uint8_t*>(data);
     while (count)
     {
-        const auto requested = static_cast<DWORD>(std::min<std::size_t>(count, 1u << 30));
+        const auto requested = static_cast<DWORD>(std::min<std::size_t>(faults && count > 1 ? (count + 1) / 2 : count, 1u << 30));
         DWORD written = 0;
         const auto success = WriteFile(handle, bytes, requested, &written, nullptr);
         // Account for an actual partial write even when the remainder fails.
@@ -59,6 +59,8 @@ juce::Result DurableFile::writeImpl(std::uint64_t offset, const void* data, std:
         length.store(std::max(writtenBytes(), offset), std::memory_order_release);
         if (!success) return windowsError("WriteFile", GetLastError());
         if (written == 0) return windowsError("WriteFile made no progress", ERROR_WRITE_FAULT);
+        if (faults && count && check(operation == FileIoOperation::patch ? FileIoOperation::patchProgress
+            : FileIoOperation::appendProgress, offset, count).failed()) return error;
     }
     return error;
 }

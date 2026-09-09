@@ -38,7 +38,38 @@ EditDelta deltaFor(const RecorderProject& before, const RecorderProject& after, 
     return delta;
 }
 }
-RecorderDocument::RecorderDocument() : project(std::make_shared<const RecorderProject>()) {}
+RecorderDocument::RecorderDocument() : project(std::make_shared<const RecorderProject>()), renderPlan(RenderPlanCompiler::compile(*project)) {}
+juce::Result RecorderDocument::preparePlan(const RecorderProject& next, std::shared_ptr<const CompiledRenderPlan>& plan)
+{
+    try
+    {
+        plan = RenderPlanCompiler::compile(next);
+        if (renderConsumer) return renderConsumer->prepareRenderPlan(plan);
+        return juce::Result::ok();
+    }
+    catch (const std::exception& e) { return juce::Result::fail(juce::String::fromUTF8(e.what())); }
+}
+juce::Result RecorderDocument::replaceProject(RecorderProject next)
+{
+    std::shared_ptr<const CompiledRenderPlan> plan;
+    const auto ready = preparePlan(next, plan); if (ready.failed()) return fail(ready.getErrorMessage());
+    project = std::make_shared<const RecorderProject>(std::move(next)); renderPlan = std::move(plan);
+    if (renderConsumer) renderConsumer->publishPreparedPlan(project->projectId, project->editRevision);
+    return juce::Result::ok();
+}
+juce::Result RecorderDocument::setRenderPlanConsumer(IRenderPlanConsumer* consumer)
+{
+    assertOwner(); if (editing) return juce::Result::fail(juce::String::fromUTF8("편집 작업 중입니다."));
+    const juce::ScopedValueSetter<bool> guard(editing, true);
+    if (consumer)
+    {
+        try { const auto ready = consumer->prepareRenderPlan(renderPlan); if (ready.failed()) return fail(ready.getErrorMessage()); }
+        catch (const std::exception& e) { return fail(juce::String::fromUTF8(e.what())); }
+    }
+    renderConsumer = consumer;
+    if (consumer) consumer->publishPreparedPlan(project->projectId, project->editRevision);
+    return juce::Result::ok();
+}
 void RecorderDocument::assertOwner() const { jassert(owner == std::this_thread::get_id()); }
 void RecorderDocument::notify() { if (onChanged) onChanged(); }
 juce::Result RecorderDocument::fail(const juce::String& message) { error = message; notify(); return juce::Result::fail(message); }
@@ -52,16 +83,20 @@ void RecorderDocument::newProject(const juce::String& name, std::uint32_t Fs, Fr
 {
     if (recordingStructureLock) { fail(juce::String::fromUTF8("녹화 중에는 프로젝트를 바꿀 수 없습니다.")); return; }
     assertOwner(); if (editing) return;
+    const juce::ScopedValueSetter<bool> guard(editing, true);
     RecorderProject next; next.name = name; next.Fs = Fs; next.fps = fps;
     const auto valid = next.validate(); if (valid.failed()) { fail(valid.getErrorMessage()); return; }
-    project = std::make_shared<const RecorderProject>(std::move(next)); history.clear(); selection.clear(); file = {}; error.clear(); recovery.clear(); dirty = checkpointRequired = true; savedRevision = 0; journalTransactions.clear(); notify();
+    if (replaceProject(std::move(next)).failed()) return;
+    history.clear(); selection.clear(); file = {}; error.clear(); recovery.clear(); dirty = checkpointRequired = true; savedRevision = 0; journalTransactions.clear(); notify();
 }
 juce::Result RecorderDocument::adopt(RecorderProject next, const juce::File& source, const CheckpointInfo& info)
 {
     if (recordingStructureLock) return fail(juce::String::fromUTF8("녹화 중에는 프로젝트를 바꿀 수 없습니다."));
     assertOwner(); if (editing) return juce::Result::fail(juce::String::fromUTF8("편집 작업 중입니다."));
+    const juce::ScopedValueSetter<bool> guard(editing, true);
     const auto valid = next.validate(); if (valid.failed()) return fail(valid.getErrorMessage());
-    project = std::make_shared<const RecorderProject>(std::move(next)); history.clear(); selection.clear(); file = source;
+    const auto replaced = replaceProject(std::move(next)); if (replaced.failed()) return replaced;
+    history.clear(); selection.clear(); file = source;
     savedRevision = project->editRevision; dirty = checkpointRequired = false; journalTransactions.clear(); error.clear(); recovery = info.recoveryMessage; notify(); return juce::Result::ok();
 }
 juce::Result RecorderDocument::openCheckpoint(const juce::File& source)
@@ -88,16 +123,18 @@ juce::Result RecorderDocument::setTimebase(std::uint32_t Fs, FrameRate fps)
 {
     if (recordingStructureLock) return fail(juce::String::fromUTF8("녹화 중에는 시간 기준을 바꿀 수 없습니다."));
     assertOwner(); if (editing) return juce::Result::fail(juce::String::fromUTF8("편집 작업 중입니다."));
+    const juce::ScopedValueSetter<bool> guard(editing, true);
     if (!project->media->assets.empty() && (project->Fs != Fs || project->fps != fps)) return fail(juce::String::fromUTF8("첫 미디어 이후에는 프로젝트 샘플레이트와 프레임레이트를 바꿀 수 없습니다."));
     auto next = *project; next.Fs = Fs; next.fps = fps; const auto valid = next.validate(); if (valid.failed()) return fail(valid.getErrorMessage());
-    if (Fs != project->Fs || fps != project->fps) { project = std::make_shared<const RecorderProject>(std::move(next)); dirty = checkpointRequired = true; history.clear(); error.clear(); notify(); }
+    if (Fs != project->Fs || fps != project->fps) { const auto replaced = replaceProject(std::move(next)); if (replaced.failed()) return replaced; dirty = checkpointRequired = true; history.clear(); error.clear(); notify(); }
     return juce::Result::ok();
 }
 EditSnapshot RecorderDocument::editSnapshot() const { return {static_cast<const EditState&>(*project), selection}; }
 void RecorderDocument::setSelection(std::vector<Id> ids)
 {
-    assertOwner(); std::vector<Id> valid;
+    assertOwner(); if (editing) return; std::vector<Id> valid;
     for (const auto& id : ids) if (project->findClip(id) != nullptr && std::find(valid.begin(), valid.end(), id) == valid.end()) valid.push_back(id);
+    if (selection != valid) history.breakCoalescing();
     selection = std::move(valid); notify();
 }
 juce::Result RecorderDocument::performEdit(const juce::String& name, const std::function<void(EditState&)>& edit, const EditOptions& options)
@@ -116,14 +153,20 @@ juce::Result RecorderDocument::performEdit(const juce::String& name, const std::
 juce::Result RecorderDocument::publishEdit(RecorderProject next, const juce::String& name, const EditOptions& options, bool addHistory, const std::vector<Id>& nextSelection)
 {
     const auto valid = next.validate(); if (valid.failed()) return fail(valid.getErrorMessage());
-    if (json(RecorderSerializer::editStateToVar(next)) == json(RecorderSerializer::editStateToVar(*project)) && next.media == project->media) return juce::Result::ok();
+    // A coalesced gesture can return to its starting geometry but change selection.
+    // Undo/redo still restores that snapshot and emits a fresh journal revision.
+    if (addHistory && json(RecorderSerializer::editStateToVar(next)) == json(RecorderSerializer::editStateToVar(*project)) && next.media == project->media) return juce::Result::ok();
     if (project->editRevision == (std::numeric_limits<Sample>::max)()) return fail(juce::String::fromUTF8("편집 이력 번호 범위를 초과했습니다."));
     next.editRevision = project->editRevision + 1;
     const auto delta = deltaFor(*project, next, name);
+    std::shared_ptr<const CompiledRenderPlan> plan;
+    const auto ready = preparePlan(next, plan); if (ready.failed()) return fail(ready.getErrorMessage());
     lastTransaction = delta.transactionId;
     if (addHistory) history.push(editSnapshot(), {static_cast<const EditState&>(next), nextSelection}, name, options);
     if (next.media != project->media) checkpointRequired = true;
     project = std::make_shared<const RecorderProject>(std::move(next)); selection = nextSelection; dirty = true; error.clear();
+    renderPlan = std::move(plan);
+    if (renderConsumer) renderConsumer->publishPreparedPlan(project->projectId, project->editRevision);
     // Publish first, then queue the resulting delta. A failed queue leaves the edit visible and unsaved.
     if (journal != nullptr)
     {
@@ -133,6 +176,25 @@ juce::Result RecorderDocument::publishEdit(RecorderProject next, const juce::Str
     }
     if (addHistory) notify();
     return juce::Result::ok();
+}
+juce::Result RecorderDocument::performEdit(const juce::String& name, const juce::String& key,
+    const std::function<ClipEditResult(const RecorderProject&)>& edit, const EditOptions& supplied)
+{
+    assertOwner(); if (editing) return juce::Result::fail(juce::String::fromUTF8("편집 작업 중입니다."));
+    const juce::ScopedValueSetter<bool> guard(editing, true);
+    try
+    {
+        auto result = edit(*project); if (result.status.failed()) return fail(result.status.getErrorMessage());
+        auto& next = result.project;
+        if (next.projectId != project->projectId || next.schemaVersion != project->schemaVersion || next.Fs != project->Fs
+            || next.fps != project->fps || next.editRevision != project->editRevision || next.media != project->media)
+            return fail(juce::String::fromUTF8("편집은 프로젝트 식별자·시간 기준·미디어 registry를 변경할 수 없습니다."));
+        auto selected = result.selection.value_or(selection); std::vector<Id> filtered;
+        for (const auto& id : selected) if (const auto* c = next.findClip(id); c && next.isActive(*c) && std::find(filtered.begin(), filtered.end(), id) == filtered.end()) filtered.push_back(id);
+        auto options = supplied; options.mergeKey = key;
+        return publishEdit(std::move(next), name, options, true, filtered);
+    }
+    catch (const std::exception& e) { return fail(juce::String::fromUTF8(e.what())); }
 }
 juce::Result RecorderDocument::undo()
 {
@@ -159,14 +221,17 @@ juce::Result RecorderDocument::redo()
 juce::Result RecorderDocument::registerMedia(std::vector<MediaAsset> assets, std::vector<Take> takes)
 {
     assertOwner(); if (editing) return juce::Result::fail(juce::String::fromUTF8("편집 작업 중입니다."));
+    const juce::ScopedValueSetter<bool> guard(editing, true);
     auto next = *project; auto registry = std::make_shared<MediaRegistry>(*project->media);
     registry->assets.insert(registry->assets.end(), assets.begin(), assets.end()); registry->takes.insert(registry->takes.end(), takes.begin(), takes.end()); next.media = registry;
     const auto valid = next.validate(); if (valid.failed()) return fail(valid.getErrorMessage());
-    project = std::make_shared<const RecorderProject>(std::move(next)); dirty = checkpointRequired = true; error.clear(); notify(); return juce::Result::ok();
+    const auto replaced = replaceProject(std::move(next)); if (replaced.failed()) return replaced;
+    dirty = checkpointRequired = true; error.clear(); notify(); return juce::Result::ok();
 }
 juce::Result RecorderDocument::updateMediaAsset(MediaAsset asset)
 {
     assertOwner(); if (editing) return juce::Result::fail(juce::String::fromUTF8("편집 작업 중입니다."));
+    const juce::ScopedValueSetter<bool> guard(editing, true);
     auto registry = std::make_shared<MediaRegistry>(*project->media);
     auto found = std::find_if(registry->assets.begin(), registry->assets.end(), [&](const auto& a) { return a.assetId == asset.assetId; });
     if (found == registry->assets.end()) return fail(juce::String::fromUTF8("원본 미디어를 찾을 수 없습니다."));
@@ -177,17 +242,20 @@ juce::Result RecorderDocument::updateMediaAsset(MediaAsset asset)
         return fail(juce::String::fromUTF8("원본 식별자와 포맷을 보존한 새 미디어 세대가 필요합니다."));
     *found = std::move(asset); auto next = *project; next.media = registry;
     const auto valid = next.validate(); if (valid.failed()) return fail(valid.getErrorMessage());
-    project = std::make_shared<const RecorderProject>(std::move(next)); dirty = checkpointRequired = true; error.clear(); notify(); return juce::Result::ok();
+    const auto replaced = replaceProject(std::move(next)); if (replaced.failed()) return replaced;
+    dirty = checkpointRequired = true; error.clear(); notify(); return juce::Result::ok();
 }
 juce::Result RecorderDocument::updateTakeState(const Id& id, TakeState state)
 {
     assertOwner(); if (editing) return juce::Result::fail(juce::String::fromUTF8("편집 작업 중입니다."));
+    const juce::ScopedValueSetter<bool> guard(editing, true);
     auto registry = std::make_shared<MediaRegistry>(*project->media);
     auto found = std::find_if(registry->takes.begin(), registry->takes.end(), [&](const auto& t) { return t.takeId == id; });
     if (found == registry->takes.end()) return fail(juce::String::fromUTF8("테이크를 찾을 수 없습니다."));
     found->state = state; auto next = *project; next.media = registry;
     const auto valid = next.validate(); if (valid.failed()) return fail(valid.getErrorMessage());
-    project = std::make_shared<const RecorderProject>(std::move(next)); dirty = checkpointRequired = true; error.clear(); notify(); return juce::Result::ok();
+    const auto replaced = replaceProject(std::move(next)); if (replaced.failed()) return replaced;
+    dirty = checkpointRequired = true; error.clear(); notify(); return juce::Result::ok();
 }
 juce::Result RecorderDocument::placeTake(Take take, std::vector<MediaAsset> assets)
 {

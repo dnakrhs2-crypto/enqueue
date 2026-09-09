@@ -20,8 +20,10 @@ public:
         std::uint32_t sampleRate = 48000, mics = 8, framesPerBlock = 480;
         std::int64_t n0 = 0, o0 = 0, pstart = 0;
         bool usesOutputOrigin = false;
+        juce::String placementMode = "normal";
         juce::String nativeFormat = "signed PCM24 in right-aligned int32; no conversion";
         std::vector<JournalDeviceMapping> devices;
+        std::vector<JournalFileDescription> additionalFiles; // Camera/index owner remains separate.
         std::uint64_t journalRotationBytes = 8 * 1024 * 1024;
         FileIoFaultAdapter* faults = nullptr;
         // Product connection: the take coordinator owns lifecycle records and
@@ -30,6 +32,7 @@ public:
         std::function<juce::Result(const JournalCheckpoint&)> checkpointSink;
         // One entry per packed channel; logical microphone IDs need not be dense.
         std::vector<unsigned> logicalMicrophones;
+        std::uint64_t testChunkFrames = 0; // Nonzero only with a fault adapter; production remains 30s.
     };
     explicit WavTrackWriter(Config); // Allocates/touches the entire four-second PCM queue.
     ~WavTrackWriter();

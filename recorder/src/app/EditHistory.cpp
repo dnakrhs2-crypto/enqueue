@@ -9,7 +9,7 @@ void EditHistory::push(EditSnapshot before, EditSnapshot after, const juce::Stri
     {
         const auto& last = undos.back().options;
         const auto elapsed = options.nowMs - last.nowMs;
-        merge = options.gestureId.isNotEmpty() ? options.gestureId == last.gestureId
+        merge = options.gestureId.isNotEmpty() ? options.gestureId == last.gestureId && options.mergeKey == last.mergeKey
             : last.gestureId.isEmpty() && options.mergeKey.isNotEmpty() && options.mergeKey == last.mergeKey
               && elapsed >= 0 && elapsed <= mergeWindowMs;
     }

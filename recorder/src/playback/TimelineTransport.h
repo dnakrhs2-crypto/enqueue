@@ -1,0 +1,73 @@
+#pragma once
+#include "IAudioOutput.h"
+#include "TimelineAudioRenderer.h"
+#include "support/BoundedSpscQueue.h"
+
+namespace gocue::recorder
+{
+class VideoPlaybackEngine;
+enum class TransportState { stopped, preparing, ready, scheduled, playing, paused, buffering, draining, failed };
+const char* transportStateName(TransportState) noexcept;
+struct TransportSnapshot
+{
+    TransportState state = TransportState::stopped;
+    std::uint64_t generation = 0, underruns = 0;
+    Sample frozenSample = 0, timelineOrigin = 0, outputOrigin = -1, submittedEnd = 0;
+    Sample renderedEnd = 0, softwareQueuedSamples = 0, outputSample = 0;
+    std::int64_t callbackQpc = 0, firstBlockQpc = 0, firstAudibleQpc = 0;
+    std::uint32_t blockFrames = 0;
+    int outputLatency = 0;
+};
+class TimelineTransport final : public IAudioOutputClient
+{
+public:
+    TimelineTransport(std::uint32_t Fs, std::int64_t qpcFrequency, PlaybackPcmQueue&, Sample timelineEnd);
+    // One non-RT command owner. Seeks coalesce at the next callback boundary.
+    void seek(Sample);
+    void scrub(Sample, bool mouseReleased, std::int64_t nowQpc); // drag <=15Hz, release immediately exact
+    void play();
+    void pause();
+    void stop();
+    void goToStart();
+    // Coordinator pump; UI timer does not advance the clock. File/GPU preparation
+    // runs on renderer/decoder workers. Call after output.start(*this).
+    void service(TimelineAudioRenderer&, VideoPlaybackEngine&, IAudioOutput&, std::int64_t nowQpc);
+    void prepared(std::int64_t reservedOutputSample, bool start); // readiness seam for offline stubs
+    void processOutput(const BlockStamp&, float*, float*) noexcept override;
+    TransportSnapshot snapshot() const noexcept;
+    std::uint64_t generation() const noexcept { return requestedGeneration; } // control owner
+    juce::Result status() const;
+    static Sample audibleCursor(const TransportSnapshot&, std::uint32_t Fs, std::int64_t qpcFrequency,
+                                std::int64_t nowQpc, std::int64_t displayLeadTicks = 0) noexcept;
+private:
+    enum class Kind { prepare, ready, start, pause, stopped, fail };
+    struct Command { Kind kind; std::uint64_t generation; Sample target; std::int64_t output; };
+    void send(Command);
+    void publish(const BlockStamp&) noexcept;
+    const std::uint32_t rate;
+    const std::int64_t frequency;
+    PlaybackPcmQueue& queue;
+    const Sample end;
+    BoundedSpscQueue<Command, 64> commands;
+    // RT-owned state. The control owner only reads the atomic publication below.
+    TransportSnapshot rt;
+    BlockStamp previous{};
+    bool havePrevious = false;
+    struct Publication
+    {
+        std::atomic<std::uint64_t> sequence{0}, generation{0}, underruns{0};
+        std::atomic<int> state{0}, latency{0};
+        std::atomic<std::uint32_t> frames{0};
+        std::atomic<Sample> frozen{0}, origin{0}, outputOrigin{-1}, submitted{0}, rendered{0}, queued{0}, output{0};
+        std::atomic<std::int64_t> qpc{0}, first{0}, audible{0};
+    } published;
+    std::uint64_t requestedGeneration = 0, preparingGeneration = 0, armedGeneration = 0;
+    Sample requestedSample = 0;
+    bool wantPlay = false;
+    bool stopAfterPrepare = false;
+    Sample pendingScrub = 0;
+    std::int64_t lastScrubQpc = 0;
+    bool scrubPending = false;
+    juce::String error; // control owner only
+};
+}

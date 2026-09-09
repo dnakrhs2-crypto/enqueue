@@ -8,6 +8,9 @@ namespace gocue::recorder
 class PreviewPresenter
 {
 public:
+    // Additive round-11 view, implemented in playback/VideoPlaybackEngine.cpp.
+    // Reuses a live view's HWND after that live presenter has stopped.
+    class PlaybackView;
     PreviewPresenter(HWND, VideoSurfacePool&, std::shared_ptr<CaptureTelemetry>, std::uint32_t width, std::uint32_t height);
     ~PreviewPresenter();
     void start(std::shared_future<void> measurementStart = {});
