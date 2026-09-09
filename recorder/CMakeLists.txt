@@ -73,6 +73,8 @@ target_link_libraries(RecorderCore PUBLIC RecorderCommon RecorderFFmpeg_avcodec 
 target_compile_definitions(RecorderCore PUBLIC RECORDER_FFMPEG_VERSION="${_recorder_ffmpeg_version}")
 add_executable(RecorderProbe tools/RecorderProbe.cpp)
 add_executable(RecorderTests tests/TestMain.cpp tests/CaptureContractTests.cpp)
+include(src/audio/RecorderAudio.cmake)
+target_sources(RecorderTests PRIVATE tests/AsioStampTests.cpp tests/NativePcmTests.cpp)
 foreach(_rec_target IN ITEMS RecorderCommon RecorderCore RecorderProbe RecorderTests)
     set_property(TARGET ${_rec_target} PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
     target_compile_options(${_rec_target} PRIVATE /utf-8 /W4 /permissive- /EHsc)
