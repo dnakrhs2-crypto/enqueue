@@ -2,6 +2,7 @@
 #include "media/MediaIndex.h"
 #include <functional>
 #include <optional>
+#include <deque>
 
 namespace gocue::recorder
 {
@@ -45,6 +46,27 @@ struct PlaybackVideoFrame
     std::shared_ptr<const PlaybackTexture> texture;
     bool current(std::uint64_t g) const noexcept { return generation == g && source && source->current(); }
 };
+// Non-RT LRU. Payload identity is source epoch + PTS, independent of an edit's
+// clip ID and timeline placement. Cache wrappers never carry publication rights.
+class PlaybackFrameCache
+{
+public:
+    struct Limits { std::size_t frames = 4, bytes = 32 * 1024 * 1024, gops = 2; };
+    struct Stats { std::size_t frames = 0, bytes = 0, peakBytes = 0; std::uint64_t hits = 0, misses = 0, evictions = 0; };
+    PlaybackFrameCache();
+    explicit PlaybackFrameCache(Limits);
+    std::shared_ptr<const PlaybackVideoFrame> find(const std::shared_ptr<const VideoIndex>&, std::size_t packet);
+    void insert(std::shared_ptr<const PlaybackVideoFrame>);
+    void clear();
+    Stats stats() const noexcept { return counters; }
+    const Limits limits;
+private:
+    struct Entry { std::shared_ptr<const PlaybackVideoFrame> frame; std::size_t bytes, gop; };
+    void prune();
+    void evict(std::size_t);
+    std::deque<Entry> entries;
+    Stats counters;
+};
 struct PlaybackDecodeTiming
 {
     std::int64_t idrSeekTicks = 0, flushTicks = 0, decodeTicks = 0, convertTicks = 0;
@@ -76,6 +98,7 @@ struct PlaybackDisplaySelection
     std::shared_ptr<const PlaybackVideoFrame> frame;
     std::uint64_t generation = 0;
     bool gap = true;
+    bool buffering = false;
 };
 // A successful DXGI latency wait belongs to the next successful Present, even
 // when a seek, busy texture, resize or occlusion prevents this iteration's submit.
@@ -104,9 +127,13 @@ public:
     explicit VideoPlaybackEngine(DecoderFactory = {}); // empty = H.264 + D3D11VA only
     ~VideoPlaybackEngine();
     void prepare(std::vector<PlaybackVideoClip>); // indexed immutable clip set; no TakeController
+    // Control owner: atomically replace both lanes after audio's block-boundary
+    // acknowledgement. Existing HWNDs survive; old workers cancel by generation.
+    void handoff(std::vector<PlaybackVideoClip>, Sample, std::uint64_t generation);
     std::uint64_t seek(Sample);
     void seek(Sample, std::uint64_t generation);
     bool requestFrame(unsigned camera, Sample, std::uint64_t generation, bool advancing = true);
+    bool requestFrames(Sample audibleSample, std::uint64_t generation, bool advancing = true);
     bool ready(Sample, std::uint64_t generation) const;
     void attachPlaybackView(unsigned camera, void* hwnd); // same left/right HWND host as live
     void stop(); // join present, then decoder workers; no callback owns textures
@@ -123,6 +150,7 @@ public:
     // late. Only the present thread marks a real advancing presentation tick.
     PlaybackDisplaySelection displaySelection(unsigned camera, bool presentationTick = false) const;
     void presented(unsigned camera, const PlaybackVideoFrame&, std::int64_t qpc);
+    bool submitIfCurrent(unsigned camera, std::uint64_t generation, const std::function<void()>& submit);
     void presenterInitialised(unsigned camera, std::int64_t beginQpc, std::int64_t endQpc);
     void presenterFailed(unsigned camera, const juce::String&);
 private:

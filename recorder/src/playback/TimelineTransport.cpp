@@ -19,10 +19,20 @@ const char* transportStateName(TransportState s) noexcept
     return "failed";
 }
 TimelineTransport::TimelineTransport(std::uint32_t Fs, std::int64_t hz, PlaybackPcmQueue& q, Sample length)
-    : rate(Fs), frequency(hz), queue(q), end(length)
+    : rate(Fs), frequency(hz), queue(q), end(length), rtEnd(length)
 { if (!rate || rate > 768000 || hz <= 0 || length < 0) throw std::invalid_argument("Invalid transport timebase"); }
 void TimelineTransport::send(Command c)
-{ if (!commands.push(c)) throw std::runtime_error("Transport command queue full"); wake->signal(); }
+{
+    c.timelineEnd = end;
+    if (c.kind == Kind::prepare)
+    {
+        latestSeek.sequence.fetch_add(1);
+        latestSeek.generation.store(c.generation); latestSeek.target.store(c.target); latestSeek.timelineEnd.store(c.timelineEnd);
+        latestSeek.sequence.fetch_add(1);
+    }
+    else if (!commands.push(c)) throw std::runtime_error("Transport command queue full");
+    wake->signal();
+}
 void TimelineTransport::seek(Sample sample)
 {
     if (dubbingLocked) throw std::logic_error("더빙 중에는 탐색할 수 없습니다.");
@@ -60,13 +70,27 @@ void TimelineTransport::stop()
     seek(target); stopAfterPrepare = true;
 }
 void TimelineTransport::goToStart() { seek(0); wantPlay = false; }
+void TimelineTransport::stagePlan(std::shared_ptr<const CompiledRenderPlan> plan, std::vector<AudioSourceBinding> sources,
+                                  std::vector<PlaybackVideoClip> videos, AudioSourceMask mask)
+{
+    if (dubbingLocked) throw std::logic_error("더빙 중에는 재생 계획을 바꿀 수 없습니다.");
+    if (!plan || plan->Fs != rate || plan->timelineEnd < 0) throw std::invalid_argument("Invalid replacement playback plan");
+    const auto s = snapshot();
+    const auto target = s.generation != requestedGeneration ? requestedSample : audibleCursor(s, rate, frequency, s.callbackQpc);
+    auto next = std::make_unique<PendingPlan>(PendingPlan{std::move(plan), std::move(sources), std::move(videos), std::move(mask)});
+    const auto oldEnd = end; end = next->plan->timelineEnd;
+    try { seek((std::clamp)(target, Sample{0}, end)); }
+    catch (...) { end = oldEnd; throw; }
+    pendingPlan = std::move(next);
+}
 void TimelineTransport::scrub(Sample sample, bool released, std::int64_t now)
 {
     if (dubbingLocked) throw std::logic_error("더빙 중에는 탐색할 수 없습니다.");
     if (sample < 0 || sample > end) throw std::out_of_range("Scrub outside timeline");
     wantPlay = false; pendingScrub = sample; scrubPending = true;
+    ++scrubInputs;
     if (released || !lastScrubQpc || now - lastScrubQpc >= frequency / 15)
-    { seek(pendingScrub); lastScrubQpc = now; scrubPending = false; }
+    { seek(pendingScrub); lastScrubQpc = now; scrubPending = false; ++scrubDispatches; }
 }
 void TimelineTransport::prepared(std::int64_t output, bool start)
 {
@@ -96,6 +120,15 @@ void TimelineTransport::processOutput(const BlockStamp& stamp, float* l, float* 
     std::fill_n(l, stamp.numSamples, 0.0f); std::fill_n(r, stamp.numSamples, 0.0f);
     Command command{}; bool received = false;
     for (unsigned i = 0; i < 64; ++i) { Command next{}; if (!commands.pop(next)) break; command = next; received = true; }
+    // One bounded read, never a retry loop on ASIO. If the control writer is in
+    // flight, keep silence/old state until the next block and adopt only its latest target.
+    const auto seq = latestSeek.sequence.load();
+    if (!(seq & 1))
+    {
+        const Command seek{Kind::prepare, latestSeek.generation.load(), latestSeek.target.load(), 0, latestSeek.timelineEnd.load()};
+        if (seq == latestSeek.sequence.load() && seek.generation > rt.generation && (!received || seek.generation >= command.generation))
+        { command = seek; received = true; }
+    }
     if (received)
     {
         // A user pause/seek/stop fades a bounded piece of the OLD prepared PCM
@@ -103,7 +136,7 @@ void TimelineTransport::processOutput(const BlockStamp& stamp, float* l, float* 
         // replaced and before the control owner is allowed to reset the queue.
         if ((command.kind == Kind::prepare || command.kind == Kind::pause) && rt.state == TransportState::playing)
         {
-            const auto count = static_cast<std::uint32_t>((std::min)({Sample(stamp.numSamples), end - rt.submittedEnd,
+            const auto count = static_cast<std::uint32_t>((std::min)({Sample(stamp.numSamples), rtEnd - rt.submittedEnd,
                 (std::max)(Sample{1}, Sample(rate) * 3 / 1000)}));
             if (count && queue.consume(rt.submittedEnd, rt.generation, l, r, count))
             {
@@ -117,6 +150,7 @@ void TimelineTransport::processOutput(const BlockStamp& stamp, float* l, float* 
         }
         if (command.kind == Kind::prepare)
         {
+            rtEnd = command.timelineEnd;
             rt.generation = command.generation; rt.frozenSample = command.target;
             rt.timelineOrigin = rt.submittedEnd = command.target; rt.outputOrigin = -1;
             rt.firstBlockQpc = rt.firstAudibleQpc = 0; rt.state = TransportState::preparing;
@@ -155,7 +189,7 @@ void TimelineTransport::processOutput(const BlockStamp& stamp, float* l, float* 
     }
     if (rt.state == TransportState::playing)
     {
-        const auto count = static_cast<std::uint32_t>((std::min)(Sample(stamp.numSamples - offset), end - rt.submittedEnd));
+        const auto count = static_cast<std::uint32_t>((std::min)(Sample(stamp.numSamples - offset), rtEnd - rt.submittedEnd));
         if (!queue.consume(rt.submittedEnd, rt.generation, l + offset, r + offset, count))
         { ++rt.underruns; rt.state = TransportState::buffering; }
         else
@@ -165,18 +199,17 @@ void TimelineTransport::processOutput(const BlockStamp& stamp, float* l, float* 
                 rt.firstBlockQpc = stamp.callbackQpc;
                 rt.firstAudibleQpc = stamp.callbackQpc + static_cast<std::int64_t>((offset + static_cast<double>(stamp.outputLatencySamples)) * frequency / rate);
             }
-            // Transport onset/endpoint ramp only. Cut-boundary microfades belong
-            // to round 14 and are explicitly rejected by this minimal renderer.
+            // Transport ramp; cut/revision microfades belong to the audio renderer.
             const auto ramp = (std::max)(Sample{1}, Sample(rate) * 3 / 1000);
             for (std::uint32_t i = 0; i < count; ++i)
             {
                 const auto at = rt.submittedEnd + i;
-                const auto n = (std::min)({ramp, at - rt.timelineOrigin + 1, end - at});
+                const auto n = (std::min)({ramp, at - rt.timelineOrigin + 1, rtEnd - at});
                 const auto gain = static_cast<float>(n) / static_cast<float>(ramp);
                 l[offset + i] *= gain; r[offset + i] *= gain;
             }
             rt.submittedEnd += count;
-            if (rt.submittedEnd == end) rt.state = TransportState::draining;
+            if (rt.submittedEnd == rtEnd) rt.state = TransportState::draining;
         }
     }
     if (rt.state == TransportState::draining
@@ -222,7 +255,7 @@ void TimelineTransport::service(TimelineAudioRenderer& audio, VideoPlaybackEngin
     try
     {
         if (scrubPending && now - lastScrubQpc >= frequency / 15)
-        { seek(pendingScrub); lastScrubQpc = now; scrubPending = false; }
+        { seek(pendingScrub); lastScrubQpc = now; scrubPending = false; ++scrubDispatches; }
         const auto deviceStatus = output.status(); if (deviceStatus.failed()) throw std::runtime_error(deviceStatus.getErrorMessage().toStdString());
         const auto s = snapshot();
         if (s.state == TransportState::failed) throw std::runtime_error("ASIO timing invalid; transport stopped");
@@ -231,7 +264,13 @@ void TimelineTransport::service(TimelineAudioRenderer& audio, VideoPlaybackEngin
             seek(s.submittedEnd); // drain accepted device tail, then reprepare both streams
         // Video has no callback-owned queue to reset. Cancel the old generation
         // immediately; audio still waits for the callback's quiescent ack below.
-        if (requestedGeneration && videoGeneration != requestedGeneration)
+        if (pendingPlan && s.state == TransportState::preparing && s.generation == requestedGeneration)
+        {
+            audio.setPlan(pendingPlan->plan, std::move(pendingPlan->sources), std::move(pendingPlan->mask));
+            video.handoff(std::move(pendingPlan->videos), requestedSample, requestedGeneration);
+            videoGeneration = requestedGeneration; pendingPlan.reset();
+        }
+        if (!pendingPlan && requestedGeneration && videoGeneration != requestedGeneration)
         { video.seek(requestedSample, requestedGeneration); videoGeneration = requestedGeneration; }
         if (s.state == TransportState::preparing && s.generation == requestedGeneration)
         {
@@ -258,8 +297,7 @@ void TimelineTransport::service(TimelineAudioRenderer& audio, VideoPlaybackEngin
         if (s.generation != requestedGeneration || s.state == TransportState::preparing) cursor = requestedSample;
         const bool advancing = s.generation == requestedGeneration && (s.state == TransportState::playing
             || s.state == TransportState::draining || s.state == TransportState::buffering);
-        if (requestedGeneration)
-            for (unsigned camera = 0; camera < 2; ++camera) video.requestFrame(camera, cursor, requestedGeneration, advancing);
+        if (!pendingPlan && requestedGeneration) video.requestFrames(cursor, requestedGeneration, advancing);
     }
     catch (const std::exception& e)
     {
@@ -272,6 +310,8 @@ juce::var TimelineTransport::telemetry() const
     auto result = jsonObject(); const auto s = snapshot();
     jsonSet(result, "state", transportStateName(s.state)); jsonSet(result, "generation", s.generation);
     jsonSet(result, "requestedGeneration", requestedGeneration); jsonSet(result, "requestedSample", requestedSample);
+    jsonSet(result, "scrubInputs", scrubInputs); jsonSet(result, "scrubDispatches", scrubDispatches);
+    jsonSet(result, "planHandoffPending", bool(pendingPlan)); jsonSet(result, "timelineEnd", end);
     jsonSet(result, "requestQpc", timing.request); jsonSet(result, "callbackAcknowledgedQpc", timing.callbackAck);
     jsonSet(result, "audioPrepareBeginQpc", timing.audioBegin); jsonSet(result, "audioPrepareEndQpc", timing.audioEnd);
     jsonSet(result, "audioReadyObservedQpc", timing.audioReady); jsonSet(result, "videoReadyObservedQpc", timing.videoReady);

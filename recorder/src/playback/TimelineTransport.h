@@ -30,6 +30,8 @@ public:
     void pause();
     void stop();
     void goToStart();
+    void stagePlan(std::shared_ptr<const CompiledRenderPlan>, std::vector<AudioSourceBinding>,
+                   std::vector<PlaybackVideoClip>, AudioSourceMask = {});
     // Single-owner coordinator: wait on wakeHandle() plus window messages, then
     // service. Video publication/receipt and ASIO publication signal immediately.
     // File/GPU preparation remains on workers; no service() call from the callback.
@@ -49,15 +51,29 @@ public:
                                 std::int64_t nowQpc, std::int64_t displayLeadTicks = 0) noexcept;
 private:
     enum class Kind { prepare, ready, start, pause, stopped, fail };
-    struct Command { Kind kind; std::uint64_t generation; Sample target; std::int64_t output; };
+    struct Command { Kind kind; std::uint64_t generation; Sample target; std::int64_t output; Sample timelineEnd = 0; };
     void send(Command);
     void publish(const BlockStamp&) noexcept;
     const std::uint32_t rate;
     const std::int64_t frequency;
     PlaybackPcmQueue& queue;
-    const Sample end;
+    Sample end;
+    Sample rtEnd; // callback-owned; changes with the acknowledged Prepare command
+    struct PendingPlan
+    {
+        std::shared_ptr<const CompiledRenderPlan> plan;
+        std::vector<AudioSourceBinding> sources;
+        std::vector<PlaybackVideoClip> videos;
+        AudioSourceMask mask;
+    };
+    std::unique_ptr<PendingPlan> pendingPlan; // control owner only
     const std::shared_ptr<PlaybackWakeEvent> wake = std::make_shared<PlaybackWakeEvent>();
     BoundedSpscQueue<Command, 64> commands;
+    struct SeekMailbox
+    {
+        std::atomic<std::uint64_t> sequence{0}, generation{0};
+        std::atomic<Sample> target{0}, timelineEnd{0};
+    } latestSeek;
     // RT-owned state. The control owner only reads the atomic publication below.
     TransportSnapshot rt;
     BlockStamp previous{};
@@ -82,6 +98,7 @@ private:
     Sample pendingScrub = 0;
     std::int64_t lastScrubQpc = 0;
     bool scrubPending = false;
+    std::uint64_t scrubInputs = 0, scrubDispatches = 0;
     juce::String error; // control owner only
     bool dubbingLocked = false;
 };

@@ -3,6 +3,8 @@
 #include "record/WavTrackWriter.h"
 #include "record/Ffmpeg.h"
 #include "diagnostics/CaptureTelemetry.h"
+#include "ui/TimelineView.scale.h"
+#include <psapi.h>
 #include <juce_events/juce_events.h>
 #include <algorithm>
 #include <chrono>
@@ -11,6 +13,7 @@
 #include <map>
 #include <set>
 #include <thread>
+#pragma comment(lib, "psapi.lib")
 
 namespace gocue::recorder
 {
@@ -22,6 +25,7 @@ struct Options
     bool stopToPlay = false;
     bool indexOnly = false;
     bool warm = false;
+    bool twoStreams = false, layoutOnly = false;
     juce::Array<juce::var> command;
     juce::String get(const char* key, const char* fallback = "") const
     { const auto it = values.find(key); return it == values.end() ? juce::String(fallback) : it->second; }
@@ -38,8 +42,6 @@ struct Window
 {
     HWND window = nullptr;
     std::array<HWND, 2> hosts{};
-    std::array<HWND, 2> placeholders{};
-    std::array<bool, 2> gaps{{true, true}};
     bool closed = false;
     static LRESULT CALLBACK procedure(HWND hwnd, UINT message, WPARAM w, LPARAM l)
     {
@@ -52,12 +54,16 @@ struct Window
         if (self && message == WM_CLOSE) { self->closed = true; return 0; }
         if (self && message == WM_SIZE)
         {
-            const auto width = LOWORD(l), height = HIWORD(l);
-            if (self->hosts[0]) MoveWindow(self->hosts[0], 0, 0, width / 2, height, TRUE);
-            if (self->hosts[1]) MoveWindow(self->hosts[1], width / 2, 0, width - width / 2, height, TRUE);
-            for (unsigned i = 0; i < 2; ++i) if (self->placeholders[i])
-                MoveWindow(self->placeholders[i], 0, height / 2 - 12, width / 2, 24, TRUE);
+            const double dpi = GetDpiForWindow(hwnd) / 96.0;
+            const auto boxes = TimelineLayout::cameras(int(LOWORD(l) / dpi), int(HIWORD(l) / dpi));
+            for (unsigned i = 0; i < 2; ++i)
+            {
+                const auto box = TimelineLayout::physical(boxes[i], dpi);
+                if (self->hosts[i]) MoveWindow(self->hosts[i], box.x, box.y, box.width, box.height, TRUE);
+            }
         }
+        if (self && message == WM_DPICHANGED)
+        { const auto& r = *reinterpret_cast<RECT*>(l); SetWindowPos(hwnd, nullptr, r.left, r.top, r.right - r.left, r.bottom - r.top, SWP_NOZORDER | SWP_NOACTIVATE); return 0; }
         return DefWindowProcW(hwnd, message, w, l);
     }
     Window()
@@ -72,9 +78,7 @@ struct Window
             hosts[i] = CreateWindowExW(0, L"STATIC", i == 0 ? L"cam1" : L"영상 없음", WS_CHILD | WS_VISIBLE | SS_BLACKRECT,
                 i * 620, 0, 620, 440, window, nullptr, cls.hInstance, nullptr);
         if (!hosts[0] || !hosts[1]) throw std::runtime_error("Create playback HWND hosts failed");
-        for (unsigned i = 0; i < 2; ++i)
-            placeholders[i] = CreateWindowExW(0, L"STATIC", L"영상 없음", WS_CHILD | WS_VISIBLE | SS_CENTER,
-                0, 208, 620, 24, hosts[i], nullptr, cls.hInstance, nullptr);
+        RECT client{}; GetClientRect(window, &client); SendMessageW(window, WM_SIZE, 0, MAKELPARAM(client.right, client.bottom));
     }
     ~Window() { if (window) DestroyWindow(window); }
     void pump()
@@ -84,14 +88,7 @@ struct Window
         { if (message.message == WM_QUIT) closed = true; TranslateMessage(&message); DispatchMessageW(&message); }
         if (closed) throw std::runtime_error("Playback probe cancelled by user");
     }
-    void updateGaps(const VideoPlaybackEngine& engine)
-    {
-        for (unsigned i = 0; i < 2; ++i)
-        {
-            const auto gap = engine.displaySelection(i).gap;
-            if (gaps[i] != gap) { gaps[i] = gap; ShowWindow(placeholders[i], gap ? SW_SHOWNOACTIVATE : SW_HIDE); }
-        }
-    }
+
 };
 Sample metadataDuration(const juce::File& file, std::uint32_t rate)
 {
@@ -189,20 +186,36 @@ int runPlaybackProbe(int argc, wchar_t** argv)
     {
         for (int i = 0; i < argc; ++i) options.command.add(juce::String(argv[i]));
         jsonSet(report, "command", options.command);
-        const std::set<juce::String> valued{"--media-dir", "--report", "--seek-storm", "--asio-device", "--asio-outputs", "--buffer-size", "--sample-rate"};
+        const std::set<juce::String> valued{"--media-dir", "--report", "--seek-storm", "--asio-device", "--asio-outputs", "--buffer-size", "--sample-rate", "--clip-count"};
         for (int i = 2; i < argc; ++i)
         {
             const juce::String arg(argv[i]);
             if (arg == "--stop-to-play") { options.stopToPlay = true; continue; }
             if (arg == "--index-only") { options.indexOnly = true; continue; }
             if (arg == "--warm") { options.warm = true; continue; }
+            if (arg == "--two-streams" && !options.twoStreams) { options.twoStreams = true; continue; }
+            if (arg == "--layout-only" && !options.layoutOnly) { options.layoutOnly = true; continue; }
             if (!valued.count(arg) || i + 1 == argc || options.values.count(arg)) throw std::invalid_argument("Unknown, duplicate or missing playback option");
             options.values[arg] = juce::String(argv[++i]);
             if (arg == "--report") reportFile = path(options.values[arg]);
         }
-        if (options.get("--media-dir").isEmpty() || reportFile == juce::File()) throw std::invalid_argument("playback requires --media-dir DIR --report FILE");
+        if (reportFile == juce::File()) throw std::invalid_argument("playback requires --report FILE");
+        const auto clipCount = number(options.get("--clip-count", "0"), 0, 100000);
+        if (clipCount) jsonSet(report, "timelineScale", timelineScaleReport(std::size_t(clipCount)));
+        if (options.layoutOnly)
+        {
+            if (!clipCount || options.twoStreams || options.warm || options.indexOnly || options.stopToPlay || !options.get("--seek-storm").isEmpty())
+                throw std::invalid_argument("--layout-only needs --clip-count and cannot measure playback");
+            jsonSet(report, "stage", "headless-layout"); jsonSet(report, "result", "PASS");
+            jsonSet(report, "reason", "Production viewport/layout queries only; no GPU, ASIO, real window or latency gate measured");
+            CaptureTelemetry::writeJson(reportFile, report); std::cout << juce::JSON::toString(report, false) << '\n'; return 0;
+        }
+        if (options.get("--media-dir").isEmpty()) throw std::invalid_argument("playback requires --media-dir DIR");
         const auto directory = path(options.get("--media-dir")); const auto videoFile = directory.getChildFile("cam1.mp4");
         const auto storm = number(options.get("--seek-storm", "0"), 0, 10000);
+        if (options.twoStreams && !directory.getChildFile("cam2.mp4").existsAsFile()) throw std::invalid_argument("--two-streams requires both cam1.mp4 and cam2.mp4");
+        if (options.twoStreams && clipCount == 1) throw std::invalid_argument("Two streams require at least two clips");
+        jsonSet(report, "twoStreamsRequired", options.twoStreams); jsonSet(report, "clipCountRequested", clipCount);
         if (options.warm && options.indexOnly) throw std::invalid_argument("--warm requires playback; incompatible with --index-only");
         constexpr std::uint32_t rate = 48000;
         if (number(options.get("--sample-rate", "48000"), 8000, 768000) != rate)
@@ -236,6 +249,11 @@ int runPlaybackProbe(int argc, wchar_t** argv)
         {
             stage = "media-index"; const auto start = qpcNow(); MediaIndex index;
             const auto indexed = index.openVideo(videoFile, rate);
+            if (options.twoStreams)
+            {
+                const auto second = index.openVideo(directory.getChildFile("cam2.mp4"), rate);
+                jsonSet(report, "cam2VideoPackets", second->packets.size()); jsonSet(report, "cam2IdrCount", second->idrs.size());
+            }
             const auto sources = manifest ? index.openWavManifest(directory) : index.openWavJournal(fixture.root, fixture.take);
             jsonSet(report, "videoPackets", indexed->packets.size()); jsonSet(report, "idrCount", indexed->idrs.size());
             jsonSet(report, "timelineSamples", indexed->length); jsonSet(report, "wavTracks", sources.size());
@@ -283,8 +301,23 @@ int runPlaybackProbe(int argc, wchar_t** argv)
         addVideo(0, video);
         if (directory.getChildFile("cam2.mp4").existsAsFile()) addVideo(1, index.openVideo(directory.getChildFile("cam2.mp4"), rate));
         const unsigned cameras = static_cast<unsigned>(videoClips.size());
-        Sample timelineEnd = video->length;
-        for (const auto& c : videoClips) timelineEnd = (std::max)(timelineEnd, c.mapping.lengthSamples);
+        if (clipCount && unsigned(clipCount) < cameras) throw std::invalid_argument("clip-count must cover every camera");
+        if (clipCount)
+        {
+            auto sources = std::move(videoClips); videoClips.clear();
+            for (int i = 0; i < clipCount; ++i)
+            {
+                const unsigned camera = unsigned(i) % cameras; auto c = sources[camera];
+                const auto slot = Sample(unsigned(i) / cameras);
+                const auto sourceIn = (slot % (std::max)(Sample{1}, c.source->length / rate)) * rate;
+                c.mapping.clipId = newId(); c.mapping.sourceIn = sourceIn; c.mapping.timelineStartSample = slot * rate;
+                c.mapping.lengthSamples = (std::min)(Sample(rate), c.source->length - sourceIn); videoClips.push_back(std::move(c));
+            }
+        }
+        jsonSet(report, "videoClipCount", videoClips.size()); jsonSet(report, "cameraCount", cameras);
+        jsonSet(report, "clipFixtureDefinition", clipCount ? "Synthetic one-second cuts reusing original indexed sources; actual engine prepares these clips. Audio original renders once, beyond its valid tail is silence. UI metadata queries reported separately." : "One full-length clip per indexed camera");
+        Sample timelineEnd = clipCount ? 0 : video->length;
+        for (const auto& c : videoClips) timelineEnd = (std::max)(timelineEnd, c.mapping.timelineStartSample + c.mapping.lengthSamples);
         std::vector<PlaybackAudioTrack> tracks;
         for (const auto& source : audioSources)
         {
@@ -308,6 +341,12 @@ int runPlaybackProbe(int argc, wchar_t** argv)
             if (savedFinal) return;
             jsonSet(report, "video", engine.telemetry()); jsonSet(report, "transport", transport.telemetry());
             jsonSet(report, "underruns", transport.snapshot().underruns);
+            PROCESS_MEMORY_COUNTERS_EX memory{}; memory.cb = sizeof(memory);
+            if (GetProcessMemoryInfo(GetCurrentProcess(), reinterpret_cast<PROCESS_MEMORY_COUNTERS*>(&memory), sizeof(memory)))
+            {
+                auto m = jsonObject(); jsonSet(m, "privateBytes", memory.PrivateUsage); jsonSet(m, "workingSetBytes", memory.WorkingSetSize);
+                jsonSet(m, "peakWorkingSetBytes", memory.PeakWorkingSetSize); jsonSet(m, "definition", "Process counters include indexes, reports, driver/runtime and audio; GPU allocation/cache budgets are separate in video telemetry"); jsonSet(report, "processMemory", m);
+            }
         };
         ReportOnExit stateOnExit{saveState}; // also captures failed seek before worker/queue teardown
         stage = "playback"; startBegin = qpcNow(); output->start(transport); startEnd = qpcNow();
@@ -315,7 +354,6 @@ int runPlaybackProbe(int argc, wchar_t** argv)
         auto pump = [&]
         {
             window.pump(); transport.service(audio, engine, *output, qpcNow()); check(transport.status());
-            window.updateGaps(engine);
             const HANDLE events[]{transport.wakeHandle()};
             const auto waited = MsgWaitForMultipleObjectsEx(1, events, 1000, QS_ALLINPUT, MWMO_INPUTAVAILABLE);
             if (waited == WAIT_FAILED) throw std::runtime_error("Wait for playback coordinator event failed");
@@ -418,7 +456,7 @@ int runPlaybackProbe(int argc, wchar_t** argv)
         jsonSet(report, "seekP95LimitMs", 250); jsonSet(report, "coldSeekLimitMs", 500);
         jsonSet(report, "seekCacheHitP50LimitMs", 50);
         jsonSet(report, "seekTimeoutMs", 10000);
-        jsonSet(report, "seekDefinition", "Release -> FIRST exact containing-frame DXGI receipt in every active camera; codecs retained, immutable resident frame cache validated/rebound per generation; all-camera hit versus any-camera miss. Cold = first distant frame-cache miss, NOT device/OS-cache cold. OS cache is not flushed. Repeat targets exercise hits without changing the denominator.");
+        jsonSet(report, "seekDefinition", "Release -> FIRST exact containing-frame DXGI receipt in every active camera; codecs retained, immutable resident frame cache validated/rebound per generation; all-camera hit versus any-camera miss. Cold = first distant frame-cache miss, NOT device/OS-cache cold. OS cache is not flushed. Uniform random targets keep the requested denominator; supplemental resident repeats exercise warm hits.");
         if (storm) transport.pause();
         const auto beforeStorm = engine.telemetry();
         jsonSet(report, "videoBeforeSeekStorm", beforeStorm); // counters above this boundary include the one-second playback run
@@ -427,23 +465,66 @@ int runPlaybackProbe(int argc, wchar_t** argv)
         const auto coldPacket = nextIdr == video->idrs.end() ? video->packets.size() - 1 : *nextIdr - 1;
         jsonSet(report, "coldSeekDefinition", "First distant target is the last sample of a GOP near 75% of the source, exercising the full IDR prefix with open codecs and OS cache unchanged.");
         Sample previousSeek = 0;
-        for (int i = 0; i < storm; ++i)
+        // Additional continuous reverse drag has its own result, outside the
+        // 1000 random-release latency distribution.
+        bool reverseMet = true;
+        std::vector<int> workload;
+        auto warmSeeks = juce::var(juce::Array<juce::var>{}); jsonSet(report, "warmSeeks", warmSeeks);
+        if (storm)
         {
-            stage = "seek-storm";
-            // Seven coalesced drag requests plus immediate exact release. Every
-            // tenth release repeats the resident target to expose real cache hits.
-            for (int drag = 0; drag < 7; ++drag)
+            workload.push_back(-1); // supplemental distant cold GOP target
+            for (int randomSeek = 0; randomSeek < storm; ++randomSeek)
+            { workload.push_back(randomSeek); if (randomSeek % 10 == 9) workload.push_back(-2); }
+            if (storm < 10) workload.push_back(-2);
+            workload.push_back(-3); // supplemental continuous reverse drag/release
+        }
+        jsonSet(report, "randomSeekRequestedCount", storm);
+        jsonSet(report, "supplementalSeekCount", int(workload.size()) - storm);
+        jsonSet(report, "cacheLatencyDefinition", "Hit/miss latency includes supplemental cold/warm releases; primary seekCount/P95 and cache hit/miss counts contain exactly the requested uniform-random targets. Reverse release is separate.");
+        for (const int i : workload)
+        {
+            const bool reverse = i == -3, coldAttempt = i == -1, warmRepeat = i == -2;
+            const bool randomAttempt = i >= 0;
+            stage = reverse ? "reverse-drag" : "seek-storm";
+            // Random releases keep their full requested denominator. Supplemental
+            // resident repeats exercise warm hits without replacing random targets.
+            for (int drag = 0; drag < (randomAttempt ? 7 : 0); ++drag)
             {
                 random = random * 6364136223846793005ull + 1;
-                transport.scrub(static_cast<Sample>((random >> 1) % static_cast<std::uint64_t>(video->length)), false, qpcNow());
+                transport.scrub(static_cast<Sample>((random >> 1) % static_cast<std::uint64_t>(timelineEnd)), false, qpcNow());
             }
             random = random * 6364136223846793005ull + 1;
-            const auto target = i == 0 ? video->packets[coldPacket].endSample - 1 : i % 10 == 9 ? previousSeek
-                : static_cast<Sample>((random >> 1) % static_cast<std::uint64_t>(video->length));
+            const auto coldTarget = (std::min)(timelineEnd - 1, video->packets[coldPacket].endSample - 1);
+            auto target = coldAttempt ? coldTarget : warmRepeat ? previousSeek
+                : static_cast<Sample>((random >> 1) % static_cast<std::uint64_t>(timelineEnd));
+            std::uint64_t dragInputs = 0, dragDispatches = 0;
+            double dragDurationMs = 0;
+            if (reverse)
+            {
+                const auto before = transport.generation(); const auto start = qpcNow();
+                const auto dragFrom = timelineEnd * 3 / 4, dragTo = timelineEnd / 4;
+                while (qpcNow() - start < hz)
+                {
+                    const auto elapsed = qpcNow() - start;
+                    target = dragFrom - Sample(double(dragFrom - dragTo) * elapsed / hz);
+                    transport.scrub(target, false, qpcNow()); ++dragInputs; pump();
+                }
+                target = dragTo; dragDispatches = transport.generation() - before;
+                dragDurationMs = 1000.0 * (qpcNow() - start) / hz;
+            }
             const auto release = qpcNow(); transport.scrub(target, true, release); const auto gen = transport.generation();
             auto attempt = jsonObject(); jsonSet(attempt, "sample", target); jsonSet(attempt, "generation", gen);
             jsonSet(attempt, "releaseQpc", release); jsonSet(attempt, "result", "pending");
-            jsonSet(attempt, "firstLargeColdSeek", i == 0); seeks.getArray()->add(attempt);
+            jsonSet(attempt, "firstLargeColdSeek", coldAttempt);
+            jsonSet(attempt, "targetSelection", reverse ? "reverse-release" : coldAttempt ? "cold-gop" : warmRepeat ? "resident-repeat" : "uniform-random");
+            if (reverse)
+            {
+                jsonSet(report, "reverseDrag", attempt); jsonSet(attempt, "inputCount", dragInputs);
+                jsonSet(attempt, "dispatchCountBeforeRelease", dragDispatches); jsonSet(attempt, "dragDurationMs", dragDurationMs);
+            }
+            else if (coldAttempt) jsonSet(report, "coldSeek", attempt);
+            else if (warmRepeat) warmSeeks.getArray()->add(attempt);
+            else seeks.getArray()->add(attempt);
             std::int64_t exactAt = 0;
             std::array<std::int64_t, 2> receipts{};
             while (qpcNow() - release < hz * 10)
@@ -454,7 +535,8 @@ int runPlaybackProbe(int argc, wchar_t** argv)
                     // A lane beyond its final clip is an explicit gap, not a
                     // frame that can ever produce an exact receipt.
                     const auto selection = engine.displaySelection(camera);
-                    if (selection.generation == gen && selection.gap) continue;
+                    if (selection.generation == gen && selection.gap)
+                    { exactAt = (std::max)(exactAt, engine.seekTiming(camera).readyQpc); continue; }
                     const auto p = engine.lastPresentation(camera);
                     if (!receipts[camera] && p.generation == gen && p.begin <= target && target < p.end && p.qpc >= release)
                         receipts[camera] = p.qpc;
@@ -483,9 +565,19 @@ int runPlaybackProbe(int argc, wchar_t** argv)
                 const auto s = engine.displaySelection(camera); if (s.gap) continue;
                 const auto t = engine.seekTiming(camera); hit &= t.generation == gen && t.cacheKnown && t.cacheHit;
             }
-            if (hit) ++cacheHits; else ++cacheMisses;
-            const auto ms = 1000.0 * (exactAt - release) / hz; seekTimes.push_back(ms); if (!i) cold = ms;
-            (hit ? hitTimes : missTimes).push_back(ms);
+            const auto ms = 1000.0 * (exactAt - release) / hz;
+            if (!reverse)
+            {
+                if (randomAttempt)
+                { if (hit) ++cacheHits; else ++cacheMisses; seekTimes.push_back(ms); }
+                if (coldAttempt && !hit) cold = ms;
+                (hit ? hitTimes : missTimes).push_back(ms);
+            }
+            else
+            {
+                reverseMet = ms <= 250 && dragDispatches <= std::uint64_t(std::ceil(dragDurationMs * .015)) + 1;
+                jsonSet(attempt, "targetMet", reverseMet);
+            }
             jsonSet(attempt, "result", "presented"); jsonSet(attempt, "releaseToExactPresentMs", ms);
             jsonSet(attempt, "decodedFrameCache", hit ? "hit" : "miss"); previousSeek = target;
             summariseSeeks();
@@ -509,9 +601,18 @@ int runPlaybackProbe(int argc, wchar_t** argv)
         const bool hitsMet = hitTimes.empty() || percentile(hitTimes, .50) <= 50;
         jsonSet(report, "seekCacheHitTargetMet", hitTimes.empty() ? juce::var() : juce::var(hitsMet));
         const bool seekMet = !storm || (seekTimes.size() == static_cast<std::size_t>(storm)
-            && percentile(seekTimes, .95) <= 250 && cold <= 500 && hitsMet);
+            && percentile(seekTimes, .95) <= 250 && cold > 0 && cold <= 500 && hitsMet);
         jsonSet(report, "stopToPlayTargetMet", startupMet); jsonSet(report, "seekTargetMet", storm ? juce::var(seekMet) : juce::var());
-        const bool pass = (!(options.stopToPlay || !storm) || startupMet) && !final.underruns && seekMet;
+        bool resourcesMet = true;
+        for (int camera = 0; camera < int(cameras); ++camera)
+        {
+            const auto c = afterStorm["cameras"][camera];
+            resourcesMet &= int(c["peakReadyFrames"]) <= 3 && int(c["frameCacheFrames"]) <= 4
+                && Sample(c["frameCachePeakBytes"]) <= 32 * 1024 * 1024 && int(c["conversionPeakTextures"]) <= 32
+                && Sample(c["conversionPeakBytes"]) <= 256 * 1024 * 1024 && int(c["peakDecoders"]) <= 2;
+        }
+        jsonSet(report, "resourceBudgetsMet", resourcesMet);
+        const bool pass = (!(options.stopToPlay || !storm) || startupMet) && !final.underruns && seekMet && reverseMet && resourcesMet;
         jsonSet(report, "result", pass ? "PASS" : "FAIL");
         jsonSet(report, "reason", pass ? "Observed finalized-fixture playback/seek software timing targets met; physical A/V gate remains unverified"
                                        : "Observed latency or underrun target missed; inspect measurements");

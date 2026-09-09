@@ -27,6 +27,7 @@ TimelineView::TimelineView(RecorderDocument& d) : edits(d), rows(*this), documen
                     if (orderPreview->status.failed()) { editStatus = orderPreview->status.getErrorMessage(); selectionInfo.setColour(juce::Label::textColourId, Palette::danger); selectionInfo.setText(editStatus, juce::dontSendNotification); }
                 }
                 else orderPreview.reset();
+                rebuildPreview();
                 rows.repaint();
             };
         toolbar.addAndMakeVisible(*b); buttons.emplace(action, std::move(b));
@@ -44,21 +45,71 @@ TimelineView::TimelineView(RecorderDocument& d) : edits(d), rows(*this), documen
     refresh(false, 0, {});
 }
 TimelineView::~TimelineView() { removeKeyListener(this); horizontal.removeListener(this); sidebar.clearTabs(); }
-void TimelineView::clearCaches() { edits.cancelDrag(); edits.clearRange(); peaks.clear(); thumbnails.clear(); shown.reset(); lastClipPaintQpc = 0; lastPaintedTake.clear(); viewStart = 0; editStatus.clear(); }
+void TimelineView::clearCaches() { edits.cancelDrag(); edits.clearRange(); orderPreview.reset(); rebuildPreview(); peaks.clear(); thumbnails.clear(); progressiveThumbnails.invalidate(); convertedThumbnails.clear(); shown.reset(); lastClipPaintQpc = 0; lastPaintedTake.clear(); viewStart = 0; editStatus.clear(); }
 void TimelineView::setPeaks(const Id& asset, std::shared_ptr<PeakCache> cache, unsigned channel) { peaks[asset] = {std::move(cache), {}, channel}; lastPeakRefresh = 0; }
 void TimelineView::setLoadedPeaks(const Id& asset, PeakSnapshot data, unsigned channel)
 { if (!peaks.count(asset)) peaks[asset] = {nullptr, std::make_shared<const PeakSnapshot>(std::move(data)), channel}; rows.repaint(); }
 void TimelineView::setThumbnails(const Id& asset, std::vector<ThumbnailFrame> frames)
 {
-    std::vector<Thumb> converted;
+    std::vector<Thumb> converted; std::size_t imageBytes = 0;
     for (const auto& frame : frames)
     {
+        if (converted.size() >= 32) break;
+        if (frame.width <= 0 || frame.height <= 0 || frame.width > 640 || frame.height > 360
+            || frame.rgb.size() != std::size_t(frame.width) * frame.height * 3) continue;
+        const auto bytes = std::size_t(frame.width) * frame.height * 4;
+        if (imageBytes + bytes > ThumbnailCache::maximumBytes) break;
+        imageBytes += bytes;
         juce::Image image(juce::Image::RGB, frame.width, frame.height, false); juce::Image::BitmapData bitmap(image, juce::Image::BitmapData::writeOnly);
         for (int y = 0; y < frame.height; ++y) for (int x = 0; x < frame.width; ++x)
         { const auto* p = frame.rgb.data() + (std::size_t(y) * frame.width + x) * 3; bitmap.setPixelColour(x, y, juce::Colour(p[0], p[1], p[2])); }
         converted.push_back({frame.sample, std::move(image)});
     }
-    thumbnails[asset] = std::move(converted); rows.repaint();
+    if (converted.empty()) return;
+    std::sort(converted.begin(), converted.end(), [](const auto& a, const auto& b) { return a.sample < b.sample; });
+    thumbnails[asset] = std::move(converted);
+    const auto bytes = [&]
+    { std::size_t n = 0; for (const auto& group : thumbnails) for (const auto& t : group.second) n += std::size_t(t.image.getWidth()) * t.image.getHeight() * 4; return n; };
+    while (bytes() > ThumbnailCache::maximumBytes && thumbnails.size() > 1)
+    { auto it = thumbnails.begin(); if (it->first == asset) ++it; thumbnails.erase(it); }
+    rows.repaint();
+}
+juce::Image TimelineView::thumbnailFor(const Id& assetId, Sample sourceSample, bool priority)
+{
+    const auto asset = assetById.find(assetId);
+    if (asset == assetById.end()) return {};
+    const auto& a = *asset->second;
+    if (a.kind != AssetKind::camera || sourceSample < 0 || sourceSample >= a.logicalLength) return {};
+    const auto key = document.getProject().projectId + "/" + assetId + "/" + juce::String(a.mediaGeneration);
+    if (a.relativePath.isNotEmpty() && !a.relativePath.containsIgnoreCase(".recording.") && document.getFile() != juce::File())
+    {
+        const auto step = (std::max)(Sample{1}, Sample(document.getProject().Fs / 2));
+        progressiveThumbnails.request(key, document.getFile().getParentDirectory().getChildFile(a.relativePath),
+            document.getProject().Fs, sourceSample / step * step, priority);
+    }
+    if (const auto frame = progressiveThumbnails.nearest(key, sourceSample))
+    {
+        auto found = convertedThumbnails.find(frame.get());
+        if (found == convertedThumbnails.end())
+        {
+            if (convertedThumbnails.size() >= 64)
+            {
+                const auto oldest = std::min_element(convertedThumbnails.begin(), convertedThumbnails.end(), [](const auto& a, const auto& b) { return a.second.used < b.second.used; });
+                convertedThumbnails.erase(oldest);
+            }
+            juce::Image image(juce::Image::RGB, frame->width, frame->height, false);
+            juce::Image::BitmapData bitmap(image, juce::Image::BitmapData::writeOnly);
+            for (int y = 0; y < frame->height; ++y) for (int x = 0; x < frame->width; ++x)
+            { const auto* pixel = frame->rgb.data() + (std::size_t(y) * frame->width + x) * 3; bitmap.setPixelColour(x, y, juce::Colour(pixel[0], pixel[1], pixel[2])); }
+            found = convertedThumbnails.emplace(frame.get(), Converted{frame, std::move(image), 0}).first;
+        }
+        found->second.used = ++thumbnailAccess; return found->second.image;
+    }
+    const auto legacy = thumbnails.find(assetId);
+    if (legacy == thumbnails.end() || legacy->second.empty()) return {};
+    const auto& images = legacy->second;
+    auto it = std::upper_bound(images.begin(), images.end(), sourceSample, [](Sample s, const Thumb& t) { return s < t.sample; });
+    if (it != images.begin()) --it; return it->image;
 }
 void TimelineView::rebuildHeaders()
 {
@@ -66,6 +117,14 @@ void TimelineView::rebuildHeaders()
     for (auto kind : {TrackKind::cam1, TrackKind::cam2})
     { auto it = std::find_if(p.tracks.begin(), p.tracks.end(), [kind](const auto& t) { return t.kind == kind; }); if (it != p.tracks.end()) tracks.push_back(*it); else { Track t; t.trackId = kind == TrackKind::cam1 ? "placeholder-cam1" : "placeholder-cam2"; t.kind = kind; t.name = ko(kind == TrackKind::cam1 ? "캠1" : "캠2"); tracks.push_back(t); } }
     for (const auto& t : p.tracks) if (t.kind == TrackKind::mic || t.kind == TrackKind::importAudio) tracks.push_back(t);
+    visibleIndex.rebuild(p, tracks);
+    takeForAsset.clear(); assetById.clear();
+    for (const auto& asset : p.media->assets) assetById.emplace(asset.assetId, &asset);
+    for (const auto& take : p.media->takes)
+    {
+        takeForAsset.emplace(take.cam1AssetId, &take); takeForAsset.emplace(take.cam2AssetId, &take);
+        for (const auto& id : take.microphoneAssetIds) takeForAsset.emplace(id, &take);
+    }
     const bool rebuild = previous.size() != tracks.size() || !std::equal(previous.begin(), previous.end(), tracks.begin(), [](const Track& a, const Track& b) { return a.trackId == b.trackId; });
     if (rebuild) headers.clear();
     for (unsigned i = 0; i < tracks.size(); ++i)
@@ -80,12 +139,51 @@ void TimelineView::rebuildHeaders()
     }
     resized();
 }
+void TimelineView::rebuildPreview()
+{
+    const auto* preview = edits.dragPreview() ? edits.dragPreview() : orderPreview.get();
+    const auto& project = document.getProject();
+    if (!preview) { previewIndex.rebuild(project, {}); return; }
+    auto ghosts = tracks;
+    std::map<Id, std::size_t> rowFor;
+    for (std::size_t row = 0; row < ghosts.size(); ++row)
+    { rowFor.emplace(ghosts[row].trackId, row); ghosts[row].clips = {}; }
+    const auto add = [&](Clip c)
+    {
+        const auto row = rowFor.find(c.trackId); if (row == rowFor.end()) return;
+        c.lengthSamples = (std::max)(Sample{1}, c.lengthSamples);
+        ghosts[row->second].clips.edit().push_back(std::move(c));
+    };
+    if (preview->status.wasOk())
+    {
+        for (const auto& track : preview->project.tracks) for (const auto& c : track.clips.items())
+            if (const auto* original = visibleIndex.find(c.clipId); original
+                && (c.timelineStartSample != original->timelineStartSample || c.lengthSamples != original->lengthSamples)) add(c);
+    }
+    else
+    {
+        const bool drag = edits.dragPreview() != nullptr;
+        const auto ids = drag ? edits.dragTargets() : edits.targets();
+        const auto* reference = ids.empty() ? nullptr : visibleIndex.find(ids.front());
+        if (reference) for (const auto& id : ids) if (const auto* original = visibleIndex.find(id))
+        {
+            auto c = *original;
+            if (drag && edits.dragAction() == TimelineAction::move) c.timelineStartSample += edits.dragValue() - reference->timelineStartSample;
+            else if (drag && edits.dragAction() == TimelineAction::trimIn)
+            { const auto delta = edits.dragValue() - reference->timelineStartSample; c.timelineStartSample += delta; c.lengthSamples -= delta; }
+            else if (drag) c.lengthSamples += edits.dragValue() - reference->timelineEnd();
+            add(std::move(c));
+        }
+    }
+    previewIndex.rebuild(project, ghosts);
+}
 void TimelineView::refresh(bool isLocked, Sample at, const juce::String& status)
 {
     edits.setLocked(isLocked); edits.reconcileSelection(); edits.followPlayhead(at);
     const auto snapshot = document.snapshot(); const auto changed = shown != snapshot || locked != edits.isLocked();
     shown = snapshot; locked = edits.isLocked(); playhead = at; latestStatus = status;
-    if (changed) { orderPreview.reset(); rebuildHeaders(); updateRange(); }
+    progressiveThumbnails.setRecording(locked);
+    if (changed) { orderPreview.reset(); rebuildHeaders(); rebuildPreview(); updateRange(); }
     const auto now = juce::Time::getMillisecondCounter();
     if (!lastPeakRefresh || now - lastPeakRefresh >= 100)
     {
@@ -97,7 +195,7 @@ void TimelineView::refresh(bool isLocked, Sample at, const juce::String& status)
         }
         lastPeakRefresh = now;
     }
-    updateControls(); rows.repaint();
+    if (changed) updateControls(); rows.repaint();
 }
 void TimelineView::updateControls()
 {
@@ -121,13 +219,14 @@ void TimelineView::updateControls()
     if (edits.isLocked()) info = ko("녹화 중 · 구조 편집·스크럽 잠금 · 프리뷰와 마커 추가 가능");
     selectionInfo.setText(info, juce::dontSendNotification); selectionInfo.setTooltip(info);
 }
-void TimelineView::selectionChanged() { orderPreview.reset(); editStatus.clear(); updateControls(); rows.repaint(); }
+void TimelineView::selectionChanged() { orderPreview.reset(); rebuildPreview(); editStatus.clear(); updateControls(); rows.repaint(); }
 void TimelineView::finish(const juce::Result& r, bool playback)
 {
     editStatus = r.failed() ? r.getErrorMessage() : juce::String();
     selectionInfo.setColour(juce::Label::textColourId, r.failed() ? Palette::danger : Palette::dimText);
     if (r.wasOk() && playback && onListeningChanged) onListeningChanged();
     refresh(edits.isLocked(), edits.playhead(), latestStatus);
+    updateControls(); // Failed/no-op edits can change status without a new snapshot.
 }
 juce::Result TimelineView::invoke(TimelineAction a, Sample value, bool exact)
 {
@@ -198,7 +297,7 @@ double TimelineView::xFor(Sample s) const { return headerWidth + (double(s) / do
 Sample TimelineView::sampleFor(double x) const { return Sample(std::llround(juce::jmax(0.0, viewStart + (x - headerWidth) * viewSeconds / juce::jmax(1, rows.getWidth() - headerWidth)) * document.getProject().Fs)); }
 void TimelineView::updateRange()
 {
-    auto end = juce::jmax(playhead, document.getProject().activeTimelineEnd());
+    auto end = juce::jmax(playhead, visibleIndex.timelineEnd());
     for (const auto& m : document.getProject().markers) end = juce::jmax(end, m.sample);
     const auto duration = juce::jmax(viewSeconds, double(end) / document.getProject().Fs + 2);
     viewStart = juce::jlimit(0.0, juce::jmax(0.0, duration - viewSeconds), viewStart);
@@ -231,7 +330,9 @@ void TimelineView::drawWave(juce::Graphics& g, const Clip& clip, juce::Rectangle
 {
     const auto found = peaks.find(clip.assetId); if (found == peaks.end() || !found->second.data) return;
     const auto& s = *found->second.data; const auto ch = found->second.channel; if (ch >= s.channels || s.bins.empty()) return;
-    const auto left = juce::jmax(headerWidth, int(box.getX())), right = juce::jmin(rows.getWidth(), int(box.getRight()));
+    const auto bounds = g.getClipBounds();
+    const auto [left, right] = TimelineLayout::waveColumns(bounds.getX(), bounds.getRight(), int(box.getX()), int(std::ceil(box.getRight())));
+    lastPaintWaveColumns += std::size_t(right - left);
     g.setColour(Palette::meterGreen); const auto middle = box.getCentreY();
     for (int x = left; x < right; ++x)
     {
@@ -246,6 +347,7 @@ void TimelineView::drawWave(juce::Graphics& g, const Clip& clip, juce::Rectangle
 void TimelineView::Rows::paint(juce::Graphics& g)
 {
     ++view.rowPaintCount;
+    view.lastPaintVisitedClips = view.lastPaintWaveColumns = 0;
     auto& v = view; const auto& p = v.document.getProject(); g.fillAll(Palette::card);
     const auto clipBounds = g.getClipBounds(); const auto step = v.viewSeconds <= 2 ? .1 : v.viewSeconds <= 10 ? 1.0 : v.viewSeconds <= 60 ? 5.0 : v.viewSeconds <= 300 ? 30.0 : 60.0;
     g.setFont(juce::Font(juce::FontOptions(14))); g.setColour(Palette::dimText);
@@ -262,30 +364,33 @@ void TimelineView::Rows::paint(juce::Graphics& g)
         g.setColour(juce::Colour::fromString("ff" + m.colour.substring(1))); g.fillRect(x, 17, 3, 13);
         g.drawText(m.name, x + 4, 16, 90, 14, juce::Justification::centredLeft, true);
     }
-    for (unsigned row = 0; row < v.tracks.size(); ++row)
+    const auto [firstRow, lastRow] = TimelineLayout::visibleRows(clipBounds.getY(), clipBounds.getBottom(), int(v.tracks.size()));
+    for (int row = firstRow; row < lastRow; ++row)
     {
         const auto y = rulerHeight + int(row) * rowHeight; if (y > clipBounds.getBottom() || y + rowHeight < clipBounds.getY()) continue;
         g.setColour(Palette::line); g.drawHorizontalLine(y + rowHeight - 1, 0, float(getWidth()));
-        for (const auto& c : v.tracks[row].clips.items()) if (p.isActive(c))
+        const auto visible = v.visibleIndex.visible(std::size_t(row), v.sampleFor(std::max(headerWidth, clipBounds.getX())), v.sampleFor(clipBounds.getRight()) + 1);
+        v.lastPaintVisitedClips += visible.size();
+        for (const auto* item : visible)
         {
+            const auto& c = *item;
             const auto left = float(v.xFor(c.timelineStartSample)), right = float(v.xFor(c.timelineEnd())); if (right <= headerWidth || left >= getWidth()) continue;
             auto box = juce::Rectangle<float>(left, float(y + 3), juce::jmax(2.0f, right - left), float(rowHeight - 6));
             const juce::Graphics::ScopedSaveState save(g); g.reduceClipRegion(headerWidth, y, getWidth() - headerWidth, rowHeight);
             const bool selected = std::find(v.document.getSelection().begin(), v.document.getSelection().end(), c.clipId) != v.document.getSelection().end();
             g.setColour(Palette::card2); g.fillRoundedRectangle(box, 5);
-            const Take* take = nullptr;
-            for (const auto& t : p.media->takes) if (t.cam1AssetId == c.assetId || t.cam2AssetId == c.assetId || std::find(t.microphoneAssetIds.begin(), t.microphoneAssetIds.end(), c.assetId) != t.microphoneAssetIds.end()) { take = &t; break; }
+            const auto lookup = v.takeForAsset.find(c.assetId); const Take* take = lookup == v.takeForAsset.end() ? nullptr : lookup->second;
             auto state = take ? take->state == TakeState::complete ? ko("완료") : take->state == TakeState::partial ? ko("확인 필요") : ko("마무리 중") : juce::String();
             if (take && !p.media->takes.empty() && take->takeId == p.media->takes.back().takeId && v.latestStatus.isNotEmpty()) state = v.latestStatus;
             const auto imageBox = box.withTrimmedTop(24).reduced(2);
-            const auto thumbs = v.thumbnails.find(c.assetId);
-            if (thumbs != v.thumbnails.end() && !thumbs->second.empty())
+            const bool video = v.tracks[std::size_t(row)].kind == TrackKind::cam1 || v.tracks[std::size_t(row)].kind == TrackKind::cam2;
+            if (video)
             {
                 for (float x = juce::jmax(float(headerWidth), imageBox.getX()); x < juce::jmin(float(getWidth()), imageBox.getRight()); x += 72)
                 {
-                    const auto sample = c.sourceIn + v.sampleFor(x) - c.timelineStartSample; const auto& images = thumbs->second;
-                    auto it = std::upper_bound(images.begin(), images.end(), sample, [](Sample s, const Thumb& t) { return s < t.sample; }); if (it != images.begin()) --it;
-                    g.drawImage(it->image, juce::Rectangle<float>(x, imageBox.getY(), 70.0f, imageBox.getHeight()), juce::RectanglePlacement::stretchToFit);
+                    const auto sample = c.sourceIn + v.sampleFor(x) - c.timelineStartSample;
+                    const auto image = v.thumbnailFor(c.assetId, sample);
+                    if (image.isValid()) g.drawImage(image, juce::Rectangle<float>(x, imageBox.getY(), 70.0f, imageBox.getHeight()), juce::RectanglePlacement::stretchToFit);
                 }
             }
             else v.drawWave(g, c, imageBox);
@@ -296,7 +401,7 @@ void TimelineView::Rows::paint(juce::Graphics& g)
             g.setColour(selected ? Palette::accent : Palette::line); g.drawRoundedRectangle(box, 5, selected ? 2.0f : 1.0f);
             if (selected)
             {
-                const auto* asset = p.media->findAsset(c.assetId);
+                const auto assetEntry = v.assetById.find(c.assetId); const auto* asset = assetEntry == v.assetById.end() ? nullptr : assetEntry->second;
                 const bool leftLimit = c.sourceIn == 0, rightLimit = asset && c.sourceIn + c.lengthSamples == asset->logicalLength;
                 g.setColour(leftLimit ? Palette::meterYellow : Palette::accent); g.fillRect(box.getX() + 2, box.getY() + 25, 4.0f, box.getHeight() - 29);
                 g.setColour(rightLimit ? Palette::meterYellow : Palette::accent); g.fillRect(box.getRight() - 6, box.getY() + 25, 4.0f, box.getHeight() - 29);
@@ -310,34 +415,45 @@ void TimelineView::Rows::paint(juce::Graphics& g)
     {
         const juce::Graphics::ScopedSaveState save(g); g.reduceClipRegion(headerWidth, rulerHeight, getWidth() - headerWidth, getHeight() - rulerHeight);
         const bool drag = v.edits.dragPreview() != nullptr;
-        const auto ids = drag ? v.edits.dragTargets() : v.edits.targets();
-        for (unsigned row = 0; row < v.tracks.size(); ++row) for (const auto& original : v.tracks[row].clips.items())
+        for (int row = firstRow; row < lastRow; ++row)
         {
-            if (!p.isActive(original)) continue;
-            const auto* candidate = preview->project.findClip(original.clipId); auto c = candidate ? *candidate : original;
-            if (preview->status.failed())
-            {
-                if (ids.empty() || std::find(ids.begin(), ids.end(), original.clipId) == ids.end()) continue;
-                const auto* reference = p.findClip(ids.front());
-                if (drag && v.edits.dragAction() == TimelineAction::move) c.timelineStartSample += v.edits.dragValue() - reference->timelineStartSample;
-                else if (drag && v.edits.dragAction() == TimelineAction::trimIn)
-                { const auto delta = v.edits.dragValue() - reference->timelineStartSample; c.timelineStartSample += delta; c.lengthSamples -= delta; }
-                else if (drag) c.lengthSamples += v.edits.dragValue() - reference->timelineEnd();
-            }
-            else if (c.timelineStartSample == original.timelineStartSample && c.lengthSamples == original.lengthSamples) continue;
+          const auto visible = v.previewIndex.visible(std::size_t(row), v.sampleFor(std::max(headerWidth, clipBounds.getX())), v.sampleFor(clipBounds.getRight()) + 1);
+          v.lastPaintVisitedClips += visible.size();
+          for (const auto* item : visible)
+          {
+            const auto& c = *item;
             const auto left = float(v.xFor(c.timelineStartSample)), right = float(v.xFor(c.timelineStartSample + std::max(Sample{0}, c.lengthSamples)));
+            if (right <= std::max(headerWidth, clipBounds.getX()) || left >= clipBounds.getRight()) continue;
             const auto box = juce::Rectangle<float>(left, float(rulerHeight + int(row) * rowHeight + 3), std::max(3.0f, right - left), float(rowHeight - 6));
             g.setColour((preview->status.failed() ? Palette::danger : Palette::accent).withAlpha(.23f)); g.fillRect(box);
             g.setColour(preview->status.failed() ? Palette::danger : Palette::accent); g.drawRect(box, 3.0f);
             if (drag && v.edits.dragAction() != TimelineAction::move)
             {
-                const auto* asset = p.media->findAsset(original.assetId);
-                for (auto limit : {original.timelineStartSample - original.sourceIn, original.timelineStartSample - original.sourceIn + asset->logicalLength})
+                const auto* original = v.visibleIndex.find(c.clipId); const auto asset = v.assetById.find(c.assetId);
+                if (!original || asset == v.assetById.end()) continue;
+                for (auto limit : {original->timelineStartSample - original->sourceIn, original->timelineStartSample - original->sourceIn + asset->second->logicalLength})
                 { const auto x = float(v.xFor(limit)); g.setColour(Palette::meterYellow); g.drawLine(x, box.getY(), x, box.getBottom(), 2.0f); }
             }
+          }
         }
     }
     const auto x = int(v.xFor(v.playhead)); if (x >= headerWidth && x < getWidth()) { g.setColour(Palette::danger); g.drawVerticalLine(x, 0, float(getHeight())); g.fillEllipse(float(x - 4), 0, 8, 8); }
+    if (dragging == Drag::scrub) v.drawScrubPreview(g);
+}
+void TimelineView::drawScrubPreview(juce::Graphics& g)
+{
+    // Immediate cached feedback for both sources while precise seeks are throttled.
+    const auto boxes = TimelineLayout::cameras((std::min)(rows.getWidth() - headerWidth, 336), 90);
+    for (unsigned camera = 0; camera < 2; ++camera)
+    {
+        const auto box = boxes[camera]; auto bounds = juce::Rectangle<int>(headerWidth + box.x, viewport.getViewPositionY() + rulerHeight + box.y, box.width, box.height);
+        g.setColour(Palette::background); g.fillRect(bounds);
+        const auto clips = visibleIndex.visible(camera, playhead, playhead + 1);
+        juce::Image image;
+        if (clips.size()) { const auto& c = **clips.begin(); image = thumbnailFor(c.assetId, c.sourceIn + playhead - c.timelineStartSample, true); }
+        if (image.isValid()) g.drawImage(image, bounds.toFloat(), juce::RectanglePlacement::centred);
+        else { g.setColour(Palette::dimText); g.drawText(clips.size() ? ko("썸네일 준비 중") : ko("영상 없음"), bounds, juce::Justification::centred); }
+    }
 }
 void TimelineView::Rows::mouseDown(const juce::MouseEvent& e)
 {
@@ -354,12 +470,14 @@ void TimelineView::Rows::mouseDown(const juce::MouseEvent& e)
     const auto snapshot = v.document.snapshot();
     // A trim handle can be grabbed on either side of its boundary, including the
     // half-open right edge where the source clip no longer contains the sample.
-    for (const auto& c : v.tracks[std::size_t(row)].clips.items()) if (snapshot->isActive(c)
-        && std::find(v.document.getSelection().begin(), v.document.getSelection().end(), c.clipId) != v.document.getSelection().end()
+    const auto nearbyClips = v.visibleIndex.visible(std::size_t(row), v.sampleFor(e.x - 8), v.sampleFor(e.x + 8) + 1);
+    for (const auto* item : nearbyClips) { const auto& c = *item; if (
+        std::find(v.document.getSelection().begin(), v.document.getSelection().end(), c.clipId) != v.document.getSelection().end()
         && (std::abs(e.x - v.xFor(c.timelineStartSample)) <= 7 || std::abs(e.x - v.xFor(c.timelineEnd())) <= 7))
-    { downClip = c.clipId; break; }
-    for (const auto& c : v.tracks[std::size_t(row)].clips.items()) if (snapshot->isActive(c) && downSample >= c.timelineStartSample && downSample < c.timelineEnd())
+    { downClip = c.clipId; break; } }
+    for (const auto* item : v.visibleIndex.visible(std::size_t(row), downSample, downSample + 1))
     {
+        const auto& c = *item;
         if (downClip.isEmpty()) downClip = c.clipId; break;
     }
     if (downClip.isEmpty())
@@ -391,6 +509,7 @@ void TimelineView::Rows::mouseDrag(const juce::MouseEvent& e)
     else if (dragging == Drag::clip && moved)
     {
         const auto* candidate = v.edits.dragTo(downEdge + v.sampleFor(e.x) - downSample, e.mods.isAltDown() || !v.snapButton.getToggleState());
+        v.rebuildPreview();
         if (candidate) { v.editStatus = candidate->status.failed() ? candidate->status.getErrorMessage() : ko("놓아서 확정 · Esc 취소 · Alt 스냅 해제 · 노란 선: 원본 핸들 한계"); v.selectionInfo.setColour(juce::Label::textColourId, candidate->status.failed() ? Palette::danger : Palette::dimText); v.updateControls(); }
     }
     repaint();
@@ -410,8 +529,8 @@ void TimelineView::Rows::mouseMove(const juce::MouseEvent& e)
 {
     bool edge = false; const auto row = (e.y - rulerHeight) / rowHeight;
     if (!view.edits.isLocked() && e.y >= rulerHeight && e.x >= headerWidth && row >= 0 && row < int(view.tracks.size()))
-        for (const auto& c : view.tracks[std::size_t(row)].clips.items()) if (view.document.getProject().isActive(c))
-            edge |= std::abs(e.x - view.xFor(c.timelineStartSample)) <= 7 || std::abs(e.x - view.xFor(c.timelineEnd())) <= 7;
+        for (const auto* c : view.visibleIndex.visible(std::size_t(row), view.sampleFor(e.x - 8), view.sampleFor(e.x + 8) + 1))
+            edge |= std::abs(e.x - view.xFor(c->timelineStartSample)) <= 7 || std::abs(e.x - view.xFor(c->timelineEnd())) <= 7;
     setMouseCursor(edge ? juce::MouseCursor::LeftRightResizeCursor : juce::MouseCursor::NormalCursor);
 }
 void TimelineView::Rows::mouseWheelMove(const juce::MouseEvent& e, const juce::MouseWheelDetails& wheel)

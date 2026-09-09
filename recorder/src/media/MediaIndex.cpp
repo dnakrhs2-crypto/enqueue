@@ -83,6 +83,13 @@ std::size_t VideoIndex::previousIdr(Sample sample) const
     if (it == idrs.begin()) throw std::runtime_error("No preceding IDR");
     return *std::prev(it);
 }
+std::pair<std::size_t, std::size_t> VideoIndex::gopAt(Sample sample) const
+{
+    const auto frame = frameAt(sample);
+    const auto next = std::upper_bound(idrs.begin(), idrs.end(), frame);
+    if (next == idrs.begin()) throw std::runtime_error("No preceding IDR");
+    return {*std::prev(next), next == idrs.end() ? packets.size() : *next};
+}
 std::shared_ptr<const VideoIndex> MediaIndex::openVideo(const juce::File& file, std::uint32_t Fs) const
 {
     demand(Fs > 0 && Fs <= 768000 && file.hasFileExtension("mp4") && !file.getFileName().containsIgnoreCase(".recording."),
@@ -95,6 +102,8 @@ std::shared_ptr<const VideoIndex> MediaIndex::openVideo(const juce::File& file, 
     result->stream = av_find_best_stream(input.value, AVMEDIA_TYPE_VIDEO, -1, -1, nullptr, 0);
     ffCheck(result->stream, "Find H.264 stream");
     const auto* stream = input.value->streams[result->stream]; const auto* codec = stream->codecpar;
+    demand(codec->width > 0 && codec->height > 0 && codec->width <= 1920 && codec->height <= 1080
+        && codec->width % 2 == 0 && codec->height % 2 == 0, "Playback supports even H.264 source dimensions up to 1920x1080");
     demand(codec->codec_id == AV_CODEC_ID_H264 && codec->extradata_size >= 5 && codec->extradata[0] == 1, "Expected MP4 AVC/H.264 configuration");
     const int lengthBytes = (codec->extradata[4] & 3) + 1;
     result->timeBaseNum = stream->time_base.num; result->timeBaseDen = stream->time_base.den;

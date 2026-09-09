@@ -51,6 +51,8 @@ int runWavExportTests();
 int runFinalExportTests();
 int runMixedFpsTests();
 int runDualTakeIntegrationTests();
+int runDualPlaybackTests();      // round 26: shared cursor, gaps and timeline scale
+int runSeekGenerationTests();    // round 26: cancellation, file handoff and cache bounds
 
 namespace
 {
@@ -98,6 +100,8 @@ const Suite suites[] = {
     {"camera-slots", runCameraSlotTests},
     {"mixed-fps", runMixedFpsTests},
     {"partial-camera-take", runDualTakeIntegrationTests},
+    {"dual-playback", runDualPlaybackTests},
+    {"seek-generation", runSeekGenerationTests},
 };
 int usage()
 {

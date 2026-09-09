@@ -32,6 +32,7 @@ struct VideoIndex : IndexedSource
     // Sample containment (floor), never nearest-frame rounding across a cut.
     std::size_t frameAt(Sample) const;
     std::size_t previousIdr(Sample) const;
+    std::pair<std::size_t, std::size_t> gopAt(Sample) const; // packet interval [IDR, next IDR)
     void validateAndBuild(); // also used by device-free synthetic indexes
 };
 struct WavChunk
