@@ -27,6 +27,7 @@ std::shared_ptr<const CompiledRenderPlan> RenderPlanCompiler::compile(const Reco
     size_t audibleCount = 0;
     for (const auto& t : p.tracks)
     {
+        const auto firstClip = clips.size();
         RenderTrackPlan lane{t.trackId, t.kind, t.mute, t.solo, audio(t.kind) && !t.mute && (!anySolo || t.solo), {}};
         if (lane.audible) ++audibleCount;
         std::vector<const Clip*> active;
@@ -62,11 +63,16 @@ std::shared_ptr<const CompiledRenderPlan> RenderPlanCompiler::compile(const Reco
             for (const auto& boundary : MicroFade::boundaries(lane, p.Fs))
             {
                 fades.push_back(boundary);
-                for (auto& c : clips) if (c.trackId == t.trackId)
-                {
-                    if (c.timelineStartSample == boundary.timelineSample) c.microfadeInSamples = boundary.afterSamples;
-                    if (c.timelineStartSample + c.lengthSamples == boundary.timelineSample) c.microfadeOutSamples = boundary.beforeSamples;
-                }
+                // Valid active clips on this lane are ordered and disjoint, so
+                // both their starts and ends are strictly increasing. Avoid a
+                // full-project scan per fade (quadratic at 10,000 clips).
+                const auto begin = clips.begin() + static_cast<std::ptrdiff_t>(firstClip), end = clips.end();
+                const auto in = std::lower_bound(begin, end, boundary.timelineSample,
+                    [](const RenderClip& c, Sample at) { return c.timelineStartSample < at; });
+                if (in != end && in->timelineStartSample == boundary.timelineSample) in->microfadeInSamples = boundary.afterSamples;
+                const auto out = std::lower_bound(begin, end, boundary.timelineSample,
+                    [](const RenderClip& c, Sample at) { return c.timelineStartSample + c.lengthSamples < at; });
+                if (out != end && out->timelineStartSample + out->lengthSamples == boundary.timelineSample) out->microfadeOutSamples = boundary.beforeSamples;
             }
         }
         tracks.push_back(std::move(lane));

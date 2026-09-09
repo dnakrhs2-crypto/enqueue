@@ -20,6 +20,7 @@ struct VideoState
     juce::MemoryBlock aac;
     Sample origin = -1, length = 0, lastMapped100ns = 0;
     std::atomic<bool> failed{false};
+    unsigned mappedFrames = 0;
     juce::String mappingError;
 };
 class VideoDouble final : public ITakeVideoStream
@@ -32,7 +33,7 @@ public:
     { require(audio.codec_id == AV_CODEC_ID_AAC, "Production AAC reference context"); output = file; ++prepared; }
     void startAt(ClockMapping, Sample origin, unsigned, std::function<Sample()>) override { state->origin = origin; }
     void offer(const VideoSurface& f) noexcept override
-    { if (state->origin >= 0) try { state->lastMapped100ns = mapper->map(f.stamp); } catch (const std::exception& e) { state->failed = true; state->mappingError = e.what(); } }
+    { if (state->origin >= 0) try { state->lastMapped100ns = mapper->map(f.stamp); ++state->mappedFrames; } catch (const std::exception& e) { state->failed = true; state->mappingError = e.what(); } }
     void audioPacket(const AVPacket& p) override { state->aac.append(p.data,size_t(p.size)); }
     bool ready() const noexcept override { return true; }
     void sourceFailed(Sample s) noexcept override { state->failed = true; state->length = s; }
@@ -70,6 +71,7 @@ struct Fixture
     std::shared_ptr<Stall> stall = std::make_shared<Stall>();
     std::unique_ptr<DubbingController> controller;
     Sample position = 0; std::int64_t qpc = qpcNow(); std::uint64_t sequence = 0;
+    Sample cameraPtsOffset = 0;
     std::vector<float> outputL, outputR;
     Id importedAsset, importedClip;
     Fixture(bool mic = false, int channels = 2, unsigned cameraCount = 1)
@@ -122,7 +124,7 @@ struct Fixture
         if (camera && controller)
         {
             VideoSurface f; f.stamp.frame = sequence; f.stamp.generation = 1; f.stamp.callback = stamp.callbackQpc;
-            f.stamp.pts100ns = rescaleRound(position,10000000,8000); f.stamp.hasDeviceTimestamp = f.stamp.deviceTimestampValid = true;
+            f.stamp.pts100ns = cameraPtsOffset + rescaleRound(position,10000000,8000); f.stamp.hasDeviceTimestamp = f.stamp.deviceTimestampValid = true;
             f.stamp.deviceTimestamp100ns = std::uint64_t(rescaleRound(stamp.callbackQpc,10000000,qpcFrequency()));
             for (unsigned i = 0; i < config.cameras.size(); ++i) controller->offer(i,f);
         }
@@ -166,6 +168,40 @@ struct Fixture
 int runDubbingPlacementTests()
 {
     recorder_test::Suite tests;
+    tests.test("Epoch changes immediately after start retain both camera lanes and fixed O0", []
+    {
+        for (bool microphones : {false,true})
+        {
+            Fixture f(microphones,2,2); f.config.spanSamples = 8000; f.arm();
+            const auto epoch = f.audio.masterClock().snapshot()->epoch;
+            ok(f.controller->start(f.position + 161)); until([&] { return f.audio.startCommitted(); });
+            const auto origin = f.controller->placement().O0;
+            ++f.sequence; f.cameraPtsOffset = 10000000; // Fit observation gap and startup PTS epoch, continuous native samples/QPC.
+            f.finishNormally();
+            require(f.audio.masterClock().snapshot()->epoch > epoch,"Regression did not change master epoch");
+            for (const auto& v : f.videos) require(v->mappedFrames > 0 && !v->failed && v->length == 8000,"Startup epoch rejected video frames");
+            require(f.controller->placement().O0 == origin && f.controller->placement().Pstart == 137,"Epoch rebound moved O0/Pstart");
+        }
+    });
+    tests.test("Selected reference uses the common fade endpoints and selected-track mute", []
+    {
+        Fixture f;
+        ok(f.document.performEdit("Fade oracle",[&](EditState& state)
+        {
+            auto& c = state.tracks.back().clips.edit().front(); c.timelineStartSample = 100; c.sourceIn = 50; c.lengthSamples = 1000;
+        }));
+        auto source = DubbingController::prepareReferenceAudio(f.document.getProject(),f.directory,f.config.audioTrackId);
+        std::array<float,2200> actual{}; source->render(actual.data(),1100,50,8000);
+        const auto plan = compileAudioRenderPlan(f.document.getProject()); require(!plan->timeline->microfadeBoundaries.empty(),"Fade oracle has no boundary"); const auto& asset = plan->sources.front();
+        CachedImportedAudio cache; AudioImportControl control;
+        ok(ImportedAudioCache::build(f.directory,asset,AudioImport::loadInfo(f.directory,asset),8000,control,cache));
+        TimelineAudioRenderer renderer(8000,4096); renderer.setPlan(plan->timeline,openAudioSources(*plan,f.directory,{{asset.assetId,asset.mediaGeneration,&cache}}));
+        std::array<float,1100> l{},r{}; renderer.renderAudio(50,1100,l.data(),r.data());
+        for (unsigned i = 0; i < l.size(); ++i) require(actual[i*2] == l[i] && actual[i*2+1] == r[i],"Dubbing/reference fade diverged from playback/export");
+        ok(f.document.performEdit("Mute selected",[&](EditState& state) { state.tracks.back().mute = true; }));
+        source = DubbingController::prepareReferenceAudio(f.document.getProject(),f.directory,f.config.audioTrackId); source->render(actual.data(),1100,50,8000);
+        for (const auto sample : actual) require(sample == 0,"Muted selected audio was exported as dubbing reference");
+    });
     tests.test("Off-grid Pstart, output latency sign and no double input correction", []
     {
         const OutputBufferStamp b{10000,137,256,1};

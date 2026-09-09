@@ -1,4 +1,6 @@
 #include "record/DubbingController.h"
+#include "../tests/HardeningChecks.h"
+#include "ProbeOutput.h"
 #include "playback/ImportedAudioCache.h"
 #include "record/Mp4TakeWriter.h"
 #include <juce_events/juce_events.h>
@@ -31,14 +33,22 @@ int runDubbingProbe(int argc, wchar_t** argv)
     try
     {
         std::map<juce::String, juce::String> args;
-        const std::set<juce::String> options{"--devices", "--asio-device", "--audio-file", "--pstart", "--mic-modes", "--seconds", "--project-dir", "--report", "--inputs", "--outputs", "--buffer-size", "--test-offsets"};
+        const std::set<juce::String> options{"--devices", "--asio-device", "--audio-file", "--pstart", "--mic-modes", "--seconds", "--project-dir", "--report", "--inputs", "--outputs", "--buffer-size", "--test-offsets", "--synthetic-epoch-regression"};
         for (int i = 2; i < argc; ++i)
         {
             const juce::String key(argv[i]);
             if (!options.count(key) || args.count(key)) throw std::invalid_argument("Unknown or duplicate dubbing option");
-            if (key == "--test-offsets") args[key] = "true";
+            if (key == "--test-offsets" || key == "--synthetic-epoch-regression") args[key] = "true";
             else { if (++i >= argc) throw std::invalid_argument("Missing dubbing option value"); args[key] = juce::String(argv[i]); }
             if (key == "--report") reportPath = args[key];
+        }
+        if (args.count("--synthetic-epoch-regression"))
+        {
+            if (args.size() != 3 || args["--project-dir"].isEmpty() || reportPath.isEmpty())
+                throw std::invalid_argument("Synthetic epoch regression requires only --project-dir DIR --report FILE");
+            const auto root = probe::prepareOutputRoot(path(args["--project-dir"]));
+            report = hardening::dubbingEpoch(root); jsonSet(report,"schemaVersion",1); jsonSet(report,"projectDirectory",root.getFullPathName());
+            CaptureTelemetry::writeJson(path(reportPath),report); std::cout << juce::JSON::toString(report,true) << '\n'; return 0;
         }
         for (const char* key : {"--devices", "--asio-device", "--audio-file", "--pstart", "--project-dir", "--report"})
             if (!args.count(key) || args[key].isEmpty()) throw std::invalid_argument(std::string("Required option: ") + key);

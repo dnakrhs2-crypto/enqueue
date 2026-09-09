@@ -1,3 +1,4 @@
+#include "ProbeOutput.h"
 #include "export/FinalVideoExporter.h"
 #include "export/WavExportWriter.h"
 #include "export/ExportController.h"
@@ -34,7 +35,7 @@ juce::File path(const juce::String& text) { return juce::File::getCurrentWorking
 juce::var audioProbe(const Args& args)
 {
     recorder_audio_fixture::Fixture fixture; const auto hashes=fixture.hashes(); ExportActivity gate; ExportControl control(gate);
-    auto root=path(required(args,"--out-dir")); if(root.exists()) root=root.getChildFile(newId()); exportCheck(root.createDirectory());
+    const auto root = probe::prepareOutputRoot(path(required(args,"--out-dir")));
     juce::Array<juce::var> cases;
     for(unsigned example=1;example<=4;++example)
     {
@@ -85,6 +86,7 @@ juce::var audioProbe(const Args& args)
 }
 void syntheticCamera(const juce::File& file, unsigned camera, unsigned seconds)
 {
+    exportCheck(file.getParentDirectory().createDirectory());
     NvencEncoder encoder({60,"p5"});encoder.open();ReferenceMixWriter aac(48000);
     const auto partial=file.getSiblingFile(file.getFileName()+".partial");
     FinalMp4Writer mux(partial,encoder.context(),aac.context());
@@ -233,7 +235,7 @@ juce::var finalProbe(const Args& args)
     const auto videoChoice=option(args,"--video","cam1");exportRequire(videoChoice=="cam1"||videoChoice=="cam2","Video must be cam1 or cam2");const unsigned camera=videoChoice=="cam1"?1u:2u;
     const auto secondsText=option(args,"--seconds","60");exportRequire(secondsText.containsOnly("0123456789")&&secondsText.getIntValue()>=8&&secondsText.getIntValue()<=60,"Probe --seconds must be 8..60; product export has no duration cap");
     const auto seconds=static_cast<unsigned>(secondsText.getIntValue());
-    auto root=path(required(args,"--out-dir"));if(root.exists())root=root.getChildFile(newId());exportCheck(root.createDirectory());
+    const auto root = probe::prepareOutputRoot(path(required(args,"--out-dir")));
     recorder_audio_fixture::Fixture fixture;RecorderProject project;juce::File projectRoot;std::vector<juce::File> originals;Id imported;
     const bool synthetic=!args.count("--project")&&!args.count("--source-mp4");
     if(args.count("--project"))
@@ -528,7 +530,7 @@ juce::var combinedProbe(const Args& args)
     const auto seconds = static_cast<unsigned>(secondsText.getIntValue());
     const auto mode = required(args, "--mode"); exportRequire(mode == "materials" || mode == "both" || mode == "final", "Use materials, final or both");
     exportRequire(!args.count("--audio-cases"), "Use a single --audio selection for this combined benchmark");
-    const auto root = ExportController::resolveDestination(path(required(args, "--out-dir"))); exportCheck(root.createDirectory());
+    const auto root = probe::prepareOutputRoot(path(required(args, "--out-dir")));
     std::vector<ExportProbeSource> sources;
     if (required(args, "--fixture") == "long-form")
     {

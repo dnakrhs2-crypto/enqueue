@@ -221,6 +221,62 @@ std::int64_t CameraSampleTimeMapper::now(std::int64_t qpc) const
     }
     throw std::runtime_error("CFR deadline clock unavailable");
 }
+AnchoredCameraTimeMapper::AnchoredCameraTimeMapper(ClockSnapshot audio, CameraClockSnapshot video,
+    std::int64_t n0, std::uint32_t fs) : master(audio), preparedCamera(video), origin(n0), rate(fs)
+{
+    const auto q = master.mapToQpc(origin);
+    if (!rate || !master.valid || !preparedCamera.valid || master.nominalSampleRate != rate
+        || master.qpcFrequency != preparedCamera.qpcFrequency || !q)
+        throw std::invalid_argument("Dubbing anchor requires prepared clocks and a reachable O0");
+    originQpc = *q;
+}
+std::int64_t AnchoredCameraTimeMapper::map(const FrameStamp& stamp)
+{
+    if (!stamp.frame || stamp.callback <= 0 || stamp.generation != preparedCamera.generation)
+        throw std::runtime_error("Dubbing camera generation/stamp changed; mark camera gap");
+    if (anchored)
+    {
+        // LiveTake keeps and remaps the newest negative preroll while waiting
+        // for O0. Re-reading that exact stamp is not a capture discontinuity.
+        const bool same = stamp.frame == previous.frame && stamp.pts100ns == previous.pts100ns && stamp.callback == previous.callback;
+        const auto dp = difference(stamp.pts100ns, previous.pts100ns);
+        const auto dq = difference(stamp.callback, previous.callback) * 10000000 / double(master.qpcFrequency);
+        const auto device = deviceQpc(stamp, master.qpcFrequency), priorDevice = deviceQpc(previous, master.qpcFrequency);
+        const bool deviceJump = device && priorDevice && (*device <= *priorDevice
+            || std::abs(difference(*device, *priorDevice) * 10000000 / double(master.qpcFrequency) - dp) > 2500000);
+        if (!same && (stamp.frame <= previous.frame || dp <= 0 || dq <= 0 || dq > 80000000
+            || std::abs(dp - dq) > 2500000 || deviceJump))
+            throw std::runtime_error("Dubbing camera timestamp discontinuity; mark camera gap");
+    }
+    else
+    {
+        auto q = deviceQpc(stamp, master.qpcFrequency);
+        if (!q && preparedCamera.quality.source == CameraClockSource::ptsArrivalEstimated
+            && std::abs(difference(stamp.pts100ns, preparedCamera.lastPts100ns)) <= 5000000)
+            q = roundedOffset(preparedCamera.qpcOrigin, preparedCamera.qpcOffsetAtOrigin
+                + preparedCamera.qpcTicksPer100ns * difference(stamp.pts100ns, preparedCamera.ptsOrigin100ns));
+        const auto latency = rescale(preparedCamera.cameraResidualLatency100ns,
+            static_cast<std::uint64_t>(master.qpcFrequency), 10000000, Rounding::nearest);
+        const auto corrected = q && latency ? subtract(*q, *latency) : std::nullopt;
+        const auto sample = corrected ? master.mapToSample(*corrected) : std::nullopt;
+        const auto delta = sample ? subtract(*sample, origin) : std::nullopt;
+        const auto time = delta ? sampleToTime100ns(*delta, rate) : std::nullopt;
+        if (!time) throw std::runtime_error("Dubbing first-frame anchor unavailable; mark camera gap");
+        firstPts = stamp.pts100ns; firstTime = *time; anchored = true;
+    }
+    const auto delta = subtract(stamp.pts100ns, firstPts);
+    const auto mapped = delta ? add(firstTime, *delta) : std::nullopt;
+    if (!mapped) throw std::overflow_error("Dubbing anchored PTS overflow");
+    previous = stamp;
+    return *mapped;
+}
+std::int64_t AnchoredCameraTimeMapper::now(std::int64_t qpc) const
+{
+    const auto delta = subtract(qpc, originQpc);
+    const auto time = delta ? rescale(*delta, 10000000, static_cast<std::uint64_t>(master.qpcFrequency)) : std::nullopt;
+    if (!time) throw std::overflow_error("Dubbing deadline overflow");
+    return *time; // Lcam affects the image anchor only, never the output deadline.
+}
 std::optional<std::int64_t> nativeFrameToSample(std::int64_t frame, Rational fps, std::uint32_t rate) noexcept
 {
     if (!fps.numerator || !fps.denominator || fps.numerator > 1000000 || fps.denominator > 1000000 || !rate || rate > 768000) return {};

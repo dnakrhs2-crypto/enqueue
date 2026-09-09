@@ -1,6 +1,7 @@
 #include "DubbingController.h"
 #include "capture/MfCameraCapture.h"
 #include "playback/ImportedAudioCache.h"
+#include "playback/TimelineAudioRenderer.h"
 #include "playback/TimelineTransport.h"
 #include "sync/ClockMath.h"
 #include <algorithm>
@@ -35,88 +36,82 @@ class SelectedAudio final : public IPlaybackBlockProvider
 {
 public:
     SelectedAudio(const RecorderProject& project, const juce::File& directory, const Id& track)
+        : renderer(project.Fs, 4096), rate(project.Fs)
     {
-        plan = RenderPlanCompiler::compile(project);
-        const auto lane = std::find_if(plan->tracks.begin(), plan->tracks.end(), [&](const auto& t) { return t.trackId == track; });
-        need(lane != plan->tracks.end() && lane->kind == TrackKind::importAudio, "더빙할 완성 오디오 트랙을 선택하세요.");
-        spans = lane->spans; rate = project.Fs;
-        for (const auto& fade : plan->microfadeBoundaries) if (fade.trackId == track) fades.push_back(fade);
-        AudioImportControl control;
-        for (const auto& span : spans) if (!span.isGap() && !readers.count(span.assetId))
+        const auto audioPlan = compileAudioRenderPlan(project);
+        auto clips = audioPlan->timeline->activeClips;
+        clips.erase(std::remove_if(clips.begin(), clips.end(), [&](const auto& c) { return c.trackId != track; }), clips.end());
+        auto selected = std::make_shared<CompiledRenderPlan>(project, std::move(clips));
+        selected->timelineEnd = audioPlan->timeline->timelineEnd;
+        selected->tracks = audioPlan->timeline->tracks;
+        selected->microfadeBoundaries = audioPlan->timeline->microfadeBoundaries;
+        selected->tracks.erase(std::remove_if(selected->tracks.begin(), selected->tracks.end(),
+            [&](const auto& t) { return t.trackId != track; }), selected->tracks.end());
+        need(selected->tracks.size() == 1 && selected->tracks[0].kind == TrackKind::importAudio,
+             "Select a completed audio track for dubbing");
+        selected->tracks[0].audible = !selected->tracks[0].mute;
+        selected->audibleTrackCount = selected->tracks[0].audible ? 1 : 0;
+        AudioRenderPlan prepared; prepared.timeline = selected;
+        for (const auto& asset : audioPlan->sources)
+            if (std::any_of(selected->activeClips.begin(), selected->activeClips.end(),
+                [&](const auto& c) { return c.assetId == asset.assetId; })) prepared.sources.push_back(asset);
+        std::vector<CachedImportedAudio> caches; caches.reserve(prepared.sources.size());
+        std::vector<ImportedAudioBinding> bindings; AudioImportControl control;
+        for (const auto& asset : prepared.sources)
         {
-            const auto& asset = *project.media->findAsset(span.assetId); CachedImportedAudio cache;
-            check(ImportedAudioCache::build(directory, asset, AudioImport::loadInfo(directory, asset), rate, control, cache));
-            juce::WavAudioFormat wav; auto reader = std::unique_ptr<juce::AudioFormatReader>(wav.createReaderFor(cache.pcmFile.createInputStream().release(), true));
-            need(reader && reader->sampleRate == rate && reader->numChannels >= 1 && reader->numChannels <= 2, "완성 오디오 PCM 캐시를 열 수 없습니다.");
-            readers.emplace(span.assetId, std::move(reader));
+            caches.emplace_back();
+            check(ImportedAudioCache::build(directory, asset, AudioImport::loadInfo(directory, asset), rate, control, caches.back()));
+            bindings.push_back({asset.assetId, asset.mediaGeneration, &caches.back()});
         }
+        // One selected lane: the common renderer applies its mute, source ranges,
+        // gaps and microfade endpoints exactly as playback and export do.
+        renderer.setPlan(std::move(selected), openAudioSources(prepared, directory, bindings));
     }
     void render(float* stereo, unsigned frames, std::int64_t first, unsigned Fs) override
     {
-        need(Fs == rate && first >= 0, "더빙 오디오 시간 기준이 바뀌었습니다."); const auto end = sum(first, frames);
-        std::fill_n(stereo, size_t(frames) * 2, 0.0f);
-        scratch.setSize(2, int(frames), false, false, true);
-        gains.assign(frames,1.0f);
-        for (const auto& fade : fades)
-        {
-            for (auto at = (std::max)(first,fade.timelineSample - fade.beforeSamples); at < (std::min)(end,fade.timelineSample); ++at)
-                gains[size_t(at - first)] = (std::min)(gains[size_t(at - first)],float(fade.timelineSample - at) / float(fade.beforeSamples));
-            for (auto at = (std::max)(first,fade.timelineSample); at < (std::min)(end,fade.timelineSample + fade.afterSamples); ++at)
-                gains[size_t(at - first)] = (std::min)(gains[size_t(at - first)],float(at - fade.timelineSample + 1) / float(fade.afterSamples));
-        }
-        for (const auto& span : spans)
-        {
-            const auto a = (std::max)(first, span.timeline.start), b = (std::min)(end, span.timeline.start + span.timeline.length);
-            if (span.isGap() || b <= a) continue;
-            auto& reader = *readers.at(span.assetId); const auto n = int(b - a); scratch.clear();
-            float* channels[] {scratch.getWritePointer(0), scratch.getWritePointer(1)};
-            need(reader.read(channels, 2, span.sourceIn + a - span.timeline.start, n), "더빙 오디오 PCM 읽기 실패");
-            for (int i = 0; i < n; ++i)
-            {
-                const auto at = a + i; const auto gain = gains[size_t(at - first)];
-                const auto offset = size_t(at - first) * 2;
-                stereo[offset] = channels[0][i] * gain;
-                stereo[offset + 1] = channels[reader.numChannels == 1 ? 0 : 1][i] * gain;
-            }
-        }
+        need(Fs == rate, "Dubbing audio sample rate changed");
+        left.resize(frames); right.resize(frames);
+        renderer.renderAudio(first, frames, left.data(), right.data());
+        for (unsigned i = 0; i < frames; ++i) { stereo[i * 2] = left[i]; stereo[i * 2 + 1] = right[i]; }
     }
 private:
-    unsigned rate = 0;
-    std::shared_ptr<const CompiledRenderPlan> plan;
-    std::vector<RenderSpan> spans;
-    std::vector<MicrofadeBoundary> fades;
-    std::vector<float> gains;
-    std::map<Id, std::unique_ptr<juce::AudioFormatReader>> readers;
-    juce::AudioBuffer<float> scratch;
+    TimelineAudioRenderer renderer;
+    unsigned rate;
+    std::vector<float> left, right;
 };
 struct CameraOrigin
 {
     std::atomic<Sample> sample{-1};
-    std::uint64_t masterEpoch = 0, cameraEpoch = 0; // published by video start release
+    ClockSnapshot master;
+    CameraClockSnapshot camera; // published by video start release
 };
 class DubCameraTime final : public CameraTimeMapper
 {
 public:
-    DubCameraTime(CameraClockMapper& c, CameraOrigin& o, unsigned fs) : camera(c), origin(o), rate(fs) {}
+    DubCameraTime(CameraOrigin& o, unsigned fs) : origin(o), rate(fs) {}
     std::int64_t map(const FrameStamp& stamp) override
-    { return read([&](CameraSampleTimeMapper& mapper) { return mapper.map(stamp); }); }
+    { return read([&](AnchoredCameraTimeMapper& mapper) { return mapper.map(stamp); }); }
     std::int64_t now(std::int64_t qpc) const override
-    { return read([&](const CameraSampleTimeMapper& mapper) { return mapper.now(qpc); }); }
+    { return read([&](const AnchoredCameraTimeMapper& mapper) { return mapper.now(qpc); }); }
 private:
     template<class F> Sample read(F f) const
     {
         for (unsigned i = 0;; ++i)
         {
-            try { CameraSampleTimeMapper mapper(camera, origin.sample.load(), rate, origin.masterEpoch, origin.cameraEpoch); return f(mapper); }
+            try
+            {
+                if (!mapper) mapper = std::make_unique<AnchoredCameraTimeMapper>(origin.master, origin.camera, origin.sample.load(), rate);
+                return f(*mapper);
+            }
             catch (...)
             {
-                const auto a = camera.masterClock().snapshot(); const auto v = camera.snapshot();
-                if (i == 7 || (a && a->epoch != origin.masterEpoch) || (v && v->epoch != origin.cameraEpoch)) throw;
+                if (i == 7) throw;
                 briefWait();
             }
         }
     }
-    CameraClockMapper& camera; CameraOrigin& origin; unsigned rate;
+    CameraOrigin& origin; unsigned rate;
+    mutable std::unique_ptr<AnchoredCameraTimeMapper> mapper;
 };
 }
 struct DubbingController::Impl final : IAudioOutputClient
@@ -233,7 +228,11 @@ struct DubbingController::Impl final : IAudioOutputClient
                 if (captureStats[i])
                 {
                     const auto d = captureStats[i]->count(LossReason::sourceDiscontinuity), t = captureStats[i]->count(LossReason::sourceTypeChanged);
-                    if (d != discontinuities[i] || t != typeChanges[i]) cameras[i]->reset();
+                    if (d != discontinuities[i] || t != typeChanges[i])
+                    {
+                        cameras[i]->reset();
+                        if (scheduled.load()) { cameraFailures[i] = true; cameraPartial = true; video->discontinuity(); }
+                    }
                     discontinuities[i] = d; typeChanges[i] = t;
                 }
                 cameras[i]->observe(frame.stamp);
@@ -241,10 +240,7 @@ struct DubbingController::Impl final : IAudioOutputClient
                 const auto master = audio.masterClock().snapshot(); const auto camera = cameras[i]->snapshot();
                 if (master && camera) if (const auto mapped = cameras[i]->captureSample(frame.stamp, *master))
                 { lastCaptureSample[i] = mapped->sample; lastFrame[i] = frame.stamp; lastMaster[i] = master; lastCamera[i] = camera; }
-                const auto snapshot = cameras[i]->snapshot();
-                if (scheduled.load() && snapshot && snapshot->epoch != origins[i].cameraEpoch)
-                { cameraFailures[i] = true; cameraPartial = true; video->sourceFailed((std::max)(Sample{0}, audio.acceptedEnd() - placed.O0)); }
-                else video->offer(frame);
+                video->offer(frame);
             }
             catch (...) { cameraFailures[i] = true; cameraPartial = true; video->sourceFailed((std::max)(Sample{0}, audio.acceptedEnd() - placed.O0)); }
         }
@@ -276,7 +272,7 @@ struct DubbingController::Impl final : IAudioOutputClient
             outputSource = audioFactory(*frozen, config.projectDirectory, config.audioTrackId);
             auto reference = audioFactory(*frozen, config.projectDirectory, config.audioTrackId);
             for (unsigned i = 0; i < config.cameras.size(); ++i)
-                videos[i] = factory(i, std::make_unique<DubCameraTime>(*cameras[i], origins[i], device.sampleRate));
+                videos[i] = factory(i, std::make_unique<DubCameraTime>(origins[i], device.sampleRate));
             RecorderAudioEngine::TakeConfig ac; ac.projectDirectory = config.projectDirectory; ac.takeId = config.takeId;
             ac.placementSample = config.Pstart; ac.microphoneAssetIds = take.microphoneAssetIds;
             for (unsigned i = 0; i < config.cameras.size(); ++i)
@@ -381,7 +377,7 @@ struct DubbingController::Impl final : IAudioOutputClient
                 {
                     try { videos[i]->finish(); videoReports[i] = videos[i]->report(); }
                     catch (const std::exception& e) { videos[i]->sourceFailed(videos[i]->availableSamples()); videoReports[i] = jsonObject(); jsonSet(videoReports[i], "finalizerError", e.what()); }
-                    jsonSet(videoReports[i], "clockMapping", "Round-04 CameraClockMapper with common O0 output origin; physical calibration unverified");
+                    jsonSet(videoReports[i], "clockMapping", "Prepared ASIO/QPC first-frame anchor + absolute MF PTS deltas; fixed O0; native discontinuities stop/mark gap; physical drift unverified");
                     if (videos[i]->failed()) { cameraFailures[i] = true; cameraPartial = true; }
                     const auto path = folder().getChildFile("cam" + juce::String(i + 1) + ".mp4");
                     ranges(assets[i], path.existsAsFile() ? videos[i]->availableSamples() : 0);
@@ -580,10 +576,10 @@ juce::Result DubbingController::start(Sample submit)
         need(origin && *origin >= s.audio.currentSample() && submit >= s.audio.currentSample(), "더빙 시작 원점이 과거이거나 범위를 넘었습니다.");
         for (unsigned i = 0; i < s.config.cameras.size(); ++i)
         {
-            s.origins[i].sample = *origin; s.origins[i].masterEpoch = clock->epoch;
             if (s.videos[i]->failed()) { s.cameraFailures[i] = true; s.cameraPartial = true; continue; }
             const auto camera = preparedClock(*s.cameras[i]); need(camera && camera->valid && s.videos[i]->ready(), "카메라 클록이 준비되지 않았습니다.");
-            s.origins[i].sample = *origin; s.origins[i].masterEpoch = clock->epoch; s.origins[i].cameraEpoch = camera->epoch;
+            s.origins[i].master = *clock; s.origins[i].camera = *camera;
+            s.origins[i].sample.store(*origin, std::memory_order_release);
         }
         s.placed.O0 = *origin; s.placed.outputSubmissionSample = submit;
         s.submissionStop = sum(submit, s.placed.spanSamples);
@@ -659,9 +655,8 @@ void DubbingController::tick()
     }
     if (!locked()) return;
     s.audio.pollDeviceEvents();
-    if (s.scheduled.load())
-        if (const auto master = s.audio.masterClock().snapshot(); master && master->epoch != s.origins[0].masterEpoch)
-            s.fail(Failure::clockDiscontinuity);
+    // Native callback continuity/reset/rate checks own ASIO failure. A robust-fit
+    // epoch can change during output startup without changing the sample axis.
     if (s.audio.error() != RecorderAudioEngine::Error::none)
         s.fail(s.audio.error() == RecorderAudioEngine::Error::asioReset ? Failure::asioReset : Failure::clockDiscontinuity);
     if (s.current == State::preparing)

@@ -1,3 +1,4 @@
+#include "ProbeOutput.h"
 #include "DualAudioLoad.h"
 #include "FramePatternSource.h"
 #include "capture/MfCameraCapture.h"
@@ -36,7 +37,7 @@ struct Options
     bool toggleCamera2 = false, headless = false;
     bool product = false, integration = false, measureHeadroom = false;
     CaptureSubtype formats[2]{CaptureSubtype::nv12, CaptureSubtype::nv12};
-    std::string devices, report, projectDirectory;
+    std::string devices, report, projectDirectory, inputSelection;
 };
 unsigned integer(const std::string& text, unsigned minimum, unsigned maximum)
 {
@@ -48,7 +49,7 @@ Options parse(int argc, wchar_t** argv)
 {
     Options o; std::set<std::string> seen;
     const std::set<std::string> flags{"--synthetic", "--synthetic-audio", "--headroom", "--help", "--toggle-camera2", "--headless", "--product", "--measure-headroom"};
-    const std::set<std::string> values{"--devices", "--cam2", "--project-fps", "--seconds", "--stall-ms", "--cpu-contention", "--report", "--asio-device", "--cam1-format", "--cam2-format", "--scenario", "--project-dir"};
+    const std::set<std::string> values{"--devices", "--cam2", "--project-fps", "--seconds", "--stall-ms", "--cpu-contention", "--report", "--asio-device", "--cam1-format", "--cam2-format", "--scenario", "--project-dir", "--inputs"};
     for (int i = 1; i < argc; ++i)
     {
         const auto key = juce::String(argv[i]).toStdString();
@@ -62,6 +63,7 @@ Options parse(int argc, wchar_t** argv)
         if (key == "--devices") o.devices = value;
         else if (key == "--report") o.report = value;
         else if (key == "--project-dir") o.projectDirectory = value;
+        else if (key == "--inputs") { probe::physicalInputs(value); o.inputSelection = value; }
         else if (key == "--scenario") { if (value != "dual-dub-failure-export") throw std::invalid_argument("Unknown integration scenario"); o.integration = o.product = true; }
         else if (key == "--cam2") { if (value != "synthetic") throw std::invalid_argument("--cam2 only accepts synthetic"); o.cam2Synthetic = true; }
         else if (key == "--project-fps") { o.fps = integer(value, 30, 60); if (o.fps != 30 && o.fps != 60) throw std::invalid_argument("Project FPS must be 30 or 60"); }
@@ -76,6 +78,7 @@ Options parse(int argc, wchar_t** argv)
         }
     }
     if (o.help) return o;
+    if (!o.inputSelection.empty() && !o.product) throw std::invalid_argument("--inputs requires --product / RecorderProbe dual-load or integration");
     if(o.measureHeadroom && (!o.product || o.integration))throw std::invalid_argument("--measure-headroom requires product dual-load");
     if (o.headless && !o.toggleCamera2 && !o.product) throw std::invalid_argument("--headless requires a product pipeline");
     if (o.integration && (o.seconds < 6 || o.projectDirectory.empty())) throw std::invalid_argument("Integration requires >=6 seconds and --project-dir DIR");
@@ -277,14 +280,15 @@ public:
             std::array<std::array<std::uint8_t, frames * 3>, 8> pcm{};
             std::array<NativeInputView, 8> views{}; std::array<float, frames> input{}, left{}, right{};
             std::array<const float*, 8> inputs{}; float* outputs[]{left.data(), right.data()};
-            for (unsigned i = 0; i < 8; ++i) { views[i] = {pcm[i].data(), int(i), int(i), nativeFormatForAsio(17)}; inputs[i] = input.data(); }
+            const auto mapping = audio.deviceInfo().activeToPhysical;
+            for (unsigned i = 0; i < mapping.size(); ++i) { views[i] = {pcm[unsigned(mapping[i])].data(), int(i), mapping[i], nativeFormatForAsio(17)}; inputs[i] = input.data(); }
             while (!stop.load())
             {
                 for (unsigned c = 0; c < 8; ++c) for (unsigned i = 0; i < frames; ++i)
                     WavTrackWriter::packPcm24(int((sample + i) % 480) * (int(c) + 1) * 100, pcm[c].data() + i * 3);
                 BlockStamp stamp{}; stamp.flags = samplePositionValid; stamp.sequence = sequence++; stamp.samplePosition = sample;
                 stamp.sampleRate = 48000; stamp.numSamples = frames; stamp.callbackQpc = origin + sample * qpcFrequency() / 48000;
-                audio.processBlock(stamp, views.data(), 8, inputs.data(), outputs, 2); sample += frames;
+                audio.processBlock(stamp, views.data(), unsigned(mapping.size()), inputs.data(), outputs, 2); sample += frames;
                 std::this_thread::sleep_until(start + std::chrono::nanoseconds(sample * 1000000000LL / 48000));
             }
         });
@@ -404,10 +408,13 @@ void productDualLoad(const Options& o, juce::var& report)
     check(!directory.getChildFile("project.recorder").exists() && !directory.getChildFile("media/takes").exists(), "Use a fresh project directory"); ok(directory.createDirectory());
     jsonSet(report, "mediaDirectory", directory.getFullPathName()); jsonSet(report, "pipeline", "product TakeController / MfCameraCapture or FramePatternSource");
     const bool syntheticAudio = o.syntheticAudio || o.toggleCamera2;
-    jsonSet(report, "audioSource", syntheticAudio ? "synthetic native PCM24, 8 channels; product RecorderAudioEngine/WAV/AAC" : "hardware ASIO; product RecorderAudioEngine/native WAV/AAC");
+    jsonSet(report, "audioSource", syntheticAudio ? "synthetic native PCM24, selected inputs; product RecorderAudioEngine/WAV/AAC" : "hardware ASIO; product RecorderAudioEngine/native WAV/AAC");
     jsonSet(report, "previewMeasurement", o.headless ? "CPU latest mailbox consumption; D3D/optical latency UNAVAILABLE" : "Independent D3D11 presenters; optical latency UNAVAILABLE");
     RecorderDocument document; RecorderAudioEngine audio; std::array<int, 8> inputs{0,1,2,3,4,5,6,7};
     if (o.integration && !syntheticAudio) { inputs.fill(-1); inputs[0] = 0; }
+    if (!o.inputSelection.empty()) inputs = probe::physicalInputs(o.inputSelection);
+    juce::Array<juce::var> selectedInputs; for (const auto channel : inputs) if (channel >= 0) selectedInputs.add(channel + 1);
+    jsonSet(report, "physicalInputsOneBased", selectedInputs);
     ok(audio.setInputMap(inputs)); OutputMapping output; output.left=0; output.right=1; ok(audio.setOutputMap(output));
     if (syntheticAudio) ok(audio.openSynthetic(48000,480,8,2));
     else
@@ -904,7 +911,7 @@ int wmain(int argc, wchar_t** argv)
                 "RecorderDualProbe --devices devices.json --cam2 synthetic --toggle-camera2 --seconds 60 --report r24/dual-preview.json [--headless]\n"
                 "RecorderProbe dual-load --devices devices.json --cam2 synthetic --project-fps 30|60 --seconds 60 --report FILE [--measure-headroom]\n"
                 "RecorderProbe integration --devices devices.json --cam2 synthetic --asio-device N --scenario dual-dub-failure-export --seconds 60 --project-dir DIR --report FILE\n"
-                "8 actual ASIO inputs required unless --synthetic-audio. MP4/WAV are stored in a unique sibling directory.\n"; return 0;
+                "Product path accepts --inputs 1,2 or none; default 8 (integration hardware: 1). Use --synthetic-audio for device-free PCM. MP4/WAV are stored in a unique sibling directory.\n"; return 0;
         }
         jsonSet(report, "os", juce::SystemStats::getOperatingSystemName()); jsonSet(report, "cpu", juce::SystemStats::getCpuModel());
         jsonSet(report, "logicalCpus", juce::SystemStats::getNumCpus()); jsonSet(report, "qpcFrequency", std::to_string(qpcFrequency()));

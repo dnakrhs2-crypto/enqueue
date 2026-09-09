@@ -90,6 +90,24 @@ private:
     std::uint32_t rate;
     std::uint64_t audioEpoch, videoEpoch;
 };
+// Dubbing uses one prepared ASIO/QPC model to anchor the first camera frame to
+// reserved O0, then absolute MF PTS deltas. Fit epoch churn when output starts
+// cannot invalidate every video frame. The owner still stops on native ASIO
+// discontinuity; generation/PTS/QPC discontinuity here terminates this lane.
+class AnchoredCameraTimeMapper final : public CameraTimeMapper
+{
+public:
+    AnchoredCameraTimeMapper(ClockSnapshot, CameraClockSnapshot, std::int64_t originSample, std::uint32_t sampleRate);
+    std::int64_t map(const FrameStamp&) override;
+    std::int64_t now(std::int64_t qpc) const override;
+private:
+    ClockSnapshot master;
+    CameraClockSnapshot preparedCamera;
+    std::int64_t origin, originQpc = 0, firstPts = 0, firstTime = 0;
+    std::uint32_t rate;
+    FrameStamp previous;
+    bool anchored = false;
+};
 // Absolute rational rescale, floor rounding; never accumulate rounded periods.
 std::optional<std::int64_t> nativeFrameToSample(std::int64_t frame, Rational fps, std::uint32_t sampleRate) noexcept;
 std::optional<std::int64_t> sampleToTime100ns(std::int64_t sample, std::uint32_t sampleRate) noexcept;

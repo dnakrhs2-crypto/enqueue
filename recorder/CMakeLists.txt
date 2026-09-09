@@ -410,3 +410,15 @@ target_sources(Recorder PRIVATE src/ui/ExportDialog.cpp)
 target_sources(RecorderTests PRIVATE tests/MaterialExportTests.cpp tests/ExportLifecycleTests.cpp)
 add_test(NAME RecorderMaterialsAlignment COMMAND RecorderTests --suite materials-alignment)
 add_test(NAME RecorderExportLifecycle COMMAND RecorderTests --suite export-lifecycle)
+
+# Round 31: shared, device-free hardening fixtures; one registered test runner.
+add_library(RecorderHardeningFixtures STATIC tests/HardeningChecks.cpp
+    tests/EditPropertyChecks.cpp tests/DubbingEpochChecks.cpp)
+target_link_libraries(RecorderHardeningFixtures PUBLIC RecorderExport RecorderTimelineLogic)
+set_property(TARGET RecorderHardeningFixtures PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+target_compile_options(RecorderHardeningFixtures PRIVATE /utf-8 /W4 /permissive- /EHsc)
+target_sources(RecorderTests PRIVATE tests/HardeningTests.cpp)
+target_sources(RecorderProbe PRIVATE tools/HardeningProbe.cpp)
+target_link_libraries(RecorderTests PRIVATE RecorderHardeningFixtures)
+target_link_libraries(RecorderProbe PRIVATE RecorderHardeningFixtures)
+add_test(NAME RecorderHardening COMMAND RecorderTests --suite hardening)
