@@ -239,3 +239,21 @@ target_link_libraries(RecorderCore PUBLIC RecorderModel)
 target_sources(RecorderProbe PRIVATE tools/PlaybackProbe.cpp)
 target_sources(RecorderTests PRIVATE tests/PlaybackTests.cpp)
 add_test(NAME RecorderPlaybackEngine COMMAND RecorderTests --suite playback-engine)
+
+# Round 05 / spike 3: diagnostic dual-camera load, append-only integration.
+add_library(RecorderDualFixtures STATIC tools/FramePatternSource.cpp tools/DualAudioLoad.cpp)
+target_include_directories(RecorderDualFixtures PUBLIC tools)
+target_link_libraries(RecorderDualFixtures PUBLIC RecorderCore)
+add_executable(RecorderDualProbe tools/DualCaptureProbe.cpp)
+target_link_libraries(RecorderDualProbe PRIVATE RecorderDualFixtures)
+foreach(_rec_r05_target IN ITEMS RecorderDualFixtures RecorderDualProbe)
+    set_property(TARGET ${_rec_r05_target} PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+    target_compile_options(${_rec_r05_target} PRIVATE /utf-8 /W4 /permissive- /EHsc)
+endforeach()
+set_target_properties(RecorderDualProbe PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/RecorderDualProbe_artefacts/$<CONFIG>")
+add_custom_command(TARGET RecorderDualProbe POST_BUILD COMMAND ${CMAKE_COMMAND} -E copy_if_different
+    ${_rec_dlls} "$<TARGET_FILE_DIR:RecorderDualProbe>" VERBATIM)
+target_sources(RecorderTests PRIVATE tests/QueueIsolationTests.cpp)
+target_link_libraries(RecorderTests PRIVATE RecorderDualFixtures)
+add_test(NAME RecorderQueueIsolation COMMAND RecorderTests --suite queue-isolation)
