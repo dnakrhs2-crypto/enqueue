@@ -32,6 +32,8 @@ public:
     virtual bool thumbnailReady() const noexcept = 0;
     virtual juce::var report() const = 0; // after finish
     virtual TakeVideoQueues queues() const noexcept { return {}; }
+    virtual bool storageFailed() const noexcept { return false; }
+    virtual bool processingDelayed() const noexcept { return false; }
 };
 
 class TakeController
@@ -56,6 +58,7 @@ public:
         bool externalCapture = false; // app keeps its warmed live capture across takes/tabs
         std::uint64_t cameraGeneration = 0;
         Camera2 camera2; // immutable for this take; disabled/missing means no asset or stream
+        FileIoFaultAdapter* faults = nullptr; // worker I/O injection, never a callback
     };
     struct PlacementMetadata
     {
@@ -98,6 +101,10 @@ public:
     juce::var report() const; // done/partialFailure only
     static std::int64_t frameCount(std::int64_t samples, unsigned Fs, FrameRate fps);
     static const char* stateName(State) noexcept;
+    void requestShutdown(); // owner, idempotent; tick continues durable finalization
+    bool shutdownComplete() const noexcept;
+    std::uint64_t generation() const noexcept;
+    bool processingDelayed() const noexcept;
     // Reuse the production CFR/NVENC/MP4 workers with an explicitly reserved
     // dubbing clock. The normal take path keeps its original mapper/signatures.
     static std::unique_ptr<ITakeVideoStream> createVideoStream(std::unique_ptr<CameraTimeMapper>,

@@ -14,6 +14,7 @@
 #include "audio/MediaFoundationAudioFormat.h"
 namespace gocue::recorder { int runPlaybackProbe(int argc, wchar_t** argv); }
 namespace gocue::recorder { int runDubbingProbe(int argc, wchar_t** argv); }
+namespace gocue::recorder { int runLifecycleProbe(int argc, wchar_t** argv); }
 extern "C"
 {
 #include <libavcodec/avcodec.h>
@@ -1033,6 +1034,7 @@ int wmain(int argc, wchar_t** argv)
         if (argc >= 2 && juce::String(argv[1]) == "dubbing") return runDubbingProbe(argc, argv);
         if (argc >= 2 && juce::String(argv[1]) == "demo") return runDemoProbe(argc, argv);
         if (argc >= 2 && juce::String(argv[1]) == "ui") return runUiProbe(argc, argv);
+        if (argc >= 2 && juce::String(argv[1]) == "lifecycle") return runLifecycleProbe(argc, argv);
         if (argc >= 2 && juce::String(argv[1]) == "recover") return runRecoveryProbe(argc, argv);
         args = parse(argc, argv);
         report = baseReport(args, &report); // also covers encode's early runtime check without changing its function

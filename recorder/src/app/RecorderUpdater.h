@@ -15,6 +15,7 @@ public:
         std::function<bool()> canShutdown;
         // Called on the JUCE message thread, after canShutdown is rechecked.
         std::function<void()> requestShutdown;
+        std::function<void()> shutdownBlocked; // message thread, explanatory banner
     };
     static bool isAvailable();
     static void initialise(Callbacks callbacks = {});

@@ -353,3 +353,10 @@ endif()
 # The script consumes generator-resolved paths. Future targets/tests are built via ALL/CTest.
 file(GENERATE OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/recorder-package-$<CONFIG>.json" CONTENT
     "{\n  \"schema_version\": 1,\n  \"exe\": \"$<TARGET_FILE:Recorder>\",\n  \"ffmpeg_root\": \"${RECORDER_FFMPEG_ROOT}\",\n  \"winsparkle_dir\": \"${WINSPARKLE_DIR}\",\n  \"winsparkle_dll\": \"${GOCUE_WINSPARKLE_DLL}\",\n  \"public_key\": \"${RECORDER_UPDATE_PUBLIC_KEY}\"\n}\n")
+
+# Round 28: lifecycle/fault boundaries. Single suite registry; append only.
+target_sources(RecorderCore PRIVATE src/app/RecorderLifecycle.cpp src/capture/PreviewRecovery.cpp)
+target_link_libraries(Recorder PRIVATE PowrProf)
+target_sources(RecorderTests PRIVATE tests/LifecycleTests.cpp)
+target_sources(RecorderProbe PRIVATE tools/LifecycleProbe.cpp tools/CrashFixtures.cpp)
+add_test(NAME RecorderLifecycle COMMAND RecorderTests --suite lifecycle)

@@ -1,6 +1,7 @@
 #pragma once
 #include "RecorderDocument.h"
 #include "RecorderSettings.h"
+#include "RecorderLifecycle.h"
 #include "record/TakeController.h"
 #include "playback/TimelineTransport.h"
 #include "playback/VideoPlaybackEngine.h"
@@ -44,6 +45,16 @@ public:
     TakeController& takeController() { return take; }
     RecorderAudioEngine& audioEngine() { return audio; }
     const RecorderAudioEngine::DeviceInfo& deviceInfo() const { return device; }
+    std::shared_ptr<RecorderLifecycle> lifecycleState() const { return lifecycle; }
+    void requestShutdown();
+    bool readyForShutdownCommit() const;
+    void releaseForShutdown(); // only after the owner has committed its document/settings
+    bool shutdownComplete() const;
+    void resumeFromSleep();
+    // Export/dubbing coordinators acquire this gate before launching work and
+    // release it only after their callback/worker checkpoint barrier has completed.
+    juce::Result beginExclusive(RecorderLifecycle::Activity, std::function<void()> requestStop = {});
+    void endExclusive(RecorderLifecycle::Activity);
     bool cameraReady(unsigned) const;
     juce::String cameraCaption(unsigned) const;
     bool showingPlayback() const { return playback != nullptr; }
@@ -66,6 +77,7 @@ private:
     void preparePlayback();
     void scheduleDerived();
     RecorderDocument& document;
+    std::shared_ptr<RecorderLifecycle> lifecycle = std::make_shared<RecorderLifecycle>();
     RecorderAudioEngine audio;
     TakeController take;
     std::array<std::unique_ptr<LiveCamera>, 2> cameras;
@@ -77,6 +89,10 @@ private:
     std::future<std::unique_ptr<PreparedPlan>> planWork;
     std::unique_ptr<Playback> playback;
     bool timeline = false, wantPlay = false, pendingLatest = false, autoStart = false;
+    bool shuttingDown = false, resourcesReleased = false, permitRelease = false;
+    bool recordAfterExport = false;
+    std::future<void> releaseWork;
+    std::map<RecorderLifecycle::Activity, std::function<void()>> exclusiveStops;
     Sample cursor = 0;
     Id peaksPublished, derivedProject;
     std::vector<Marker> recordedMarkers;

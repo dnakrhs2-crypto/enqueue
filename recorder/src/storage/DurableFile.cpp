@@ -4,6 +4,7 @@
 
 namespace gocue::recorder
 {
+namespace { struct IoScope { FileIoFaultAdapter* adapter; explicit IoScope(FileIoFaultAdapter* a) : adapter(a) { if (a) a->ioStarted(); } ~IoScope() { if (adapter) adapter->ioFinished(); } }; }
 DurableFile::~DurableFile() { if (isOpen()) CloseHandle(handle); }
 juce::Result DurableFile::remember(juce::Result result)
 {
@@ -24,6 +25,7 @@ juce::Result DurableFile::check(FileIoOperation operation, std::uint64_t offset,
 }
 juce::Result DurableFile::open(const juce::File& target, OpenMode mode)
 {
+    IoScope operation(faults);
     if (isOpen()) return remember(juce::Result::fail("DurableFile is already open"));
     error = juce::Result::ok(); path = target; length.store(0); durable.store(0);
     if (faults && remember(faults->beforeIo(FileIoOperation::open, path, 0, 0)).failed()) return error;
@@ -42,6 +44,7 @@ juce::Result DurableFile::open(const juce::File& target, OpenMode mode)
 }
 juce::Result DurableFile::writeImpl(std::uint64_t offset, const void* data, std::size_t count, FileIoOperation operation)
 {
+    IoScope observation(faults);
     if (check(operation, offset, count).failed()) return error;
     const auto maxOffset = static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max());
     if ((count && !data) || offset > maxOffset || count > maxOffset - offset)
@@ -51,7 +54,7 @@ juce::Result DurableFile::writeImpl(std::uint64_t offset, const void* data, std:
     auto* bytes = static_cast<const std::uint8_t*>(data);
     while (count)
     {
-        const auto requested = static_cast<DWORD>(std::min<std::size_t>(faults && count > 1 ? (count + 1) / 2 : count, 1u << 30));
+        const auto requested = static_cast<DWORD>(std::min<std::size_t>(faults && faults->splitWritesForTesting() && count > 1 ? (count + 1) / 2 : count, 1u << 30));
         DWORD written = 0;
         const auto success = WriteFile(handle, bytes, requested, &written, nullptr);
         // Account for an actual partial write even when the remainder fails.
@@ -82,6 +85,7 @@ juce::Result DurableFile::flushApplicationBuffers()
 }
 juce::Result DurableFile::flushData()
 {
+    IoScope operation(faults);
     if (check(FileIoOperation::flushData, writtenBytes(), 0).failed()) return error;
     if (!FlushFileBuffers(handle)) return windowsError("FlushFileBuffers", GetLastError());
     durable.store(writtenBytes(), std::memory_order_release);

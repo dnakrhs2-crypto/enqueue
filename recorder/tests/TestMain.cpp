@@ -46,6 +46,7 @@ int runMarkerTests();
 int runEditJournalTests();       // round 19: transactions, worker, checkpoint generations
 int runRetakeRecoveryTests();    // round 19: edit/undo/placement/finalization recovery
 int runCameraSlotTests();        // round 24: product camera slots and partial failures
+int runLifecycleTests();         // round 28: faults, shutdown, updater/exclusivity
 
 namespace
 {
@@ -88,6 +89,7 @@ const Suite suites[] = {
     {"queue-isolation", runQueueIsolationTests},
     {"ripple-reorder-markers", runRippleReorderMarkers},
     {"camera-slots", runCameraSlotTests},
+    {"lifecycle", runLifecycleTests},
 };
 int usage()
 {

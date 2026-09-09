@@ -1,6 +1,7 @@
 #include "app/ProductIdentity.h"
 #include "app/RecorderDocument.h"
 #include "app/RecorderSettings.h"
+#include "app/RecorderUpdater.h"
 #include "ui/MainComponent.h"
 #include "model/SafeFileWrite.h"
 #include <juce_gui_basics/juce_gui_basics.h>
@@ -106,12 +107,18 @@ public:
         settings = std::make_unique<RecorderSettings>(rootPath.isEmpty() ? juce::File() : juce::File(rootPath)); const auto loaded = settings->load();
         document = std::make_unique<RecorderDocument>(); window = std::make_unique<MainWindow>(*document, *settings);
         if (demoIterations) { window->content().startDemo(demoIterations, juce::File::getCurrentWorkingDirectory().getChildFile(demoDevices), demoAsio, juce::File::getCurrentWorkingDirectory().getChildFile(demoReport)); return; }
+        const auto lifecycle = window->content().lifecycleState();
+        const juce::Component::SafePointer<MainComponent> content(&window->content());
+        RecorderUpdater::initialise({[lifecycle] { return lifecycle->canShutdown(); },
+            [content] { if (content) content->updateShutdownRequested(); },
+            [content] { if (content) content->updateShutdownBlocked(); }});
         if (loaded.failed()) window->content().showError(loaded.getErrorMessage());
         if (openPath.isNotEmpty()) window->content().openProject(juce::File(openPath));
         else if (loaded.wasOk() && !settings->get().recentProjects.isEmpty()) window->content().openProject(juce::File(settings->get().recentProjects[0]));
     }
     void shutdown() override
     {
+        RecorderUpdater::shutdown(); // deactivate queued thunks, join WinSparkle before host destruction
         timelineAutomation.reset(); window.reset(); document.reset(); settings.reset(); juce::LookAndFeel::setDefaultLookAndFeel(nullptr); lookAndFeel.reset();
     }
     void systemRequestedQuit() override

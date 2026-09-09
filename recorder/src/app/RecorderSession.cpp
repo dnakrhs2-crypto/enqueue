@@ -1,5 +1,7 @@
 #include "RecorderSession.h"
 #include "ui/UiState.h"
+#include "capture/PreviewRecovery.h"
+#include "storage/IoHealth.h"
 #include <algorithm>
 #include <chrono>
 
@@ -24,6 +26,8 @@ struct RecorderSession::LiveCamera
     CameraMode mode;
     std::unique_ptr<MfRuntime> runtime;
     bool failed = false;
+    bool displayFailed = false;
+    PreviewRecovery previewRecovery;
     ~LiveCamera() { presenter.reset(); capture.reset(); }
 };
 class RecorderSession::SharedOutput final : public IAudioOutput
@@ -46,6 +50,7 @@ struct RecorderSession::PreparedPlan
     std::vector<PlaybackAudioTrack> tracks;
     Sample end = 0, revision = 0;
     Id project;
+    std::uint64_t generation = 0;
     juce::String error;
 };
 struct RecorderSession::Playback
@@ -58,23 +63,34 @@ struct RecorderSession::Playback
         : renderer(rate, block), transport(rate, qpcFrequency(), renderer.queue(), end), output(audio) {}
     ~Playback() { output.close(); renderer.stopWorker(); video.stop(); }
 };
-RecorderSession::RecorderSession(RecorderDocument& d) : document(d), take(d, audio) {}
+RecorderSession::RecorderSession(RecorderDocument& d) : document(d), take(d, audio) { lifecycle->bindCaptureBlocker(audio.shutdownBlocker()); }
 RecorderSession::~RecorderSession()
 {
+    lifecycle->blockCommands();
     if (deviceWork.valid()) deviceWork.wait();
     if (planWork.valid()) planWork.wait();
+    if (releaseWork.valid()) releaseWork.wait();
+    take.requestShutdown();
+    while (!take.shutdownComplete()) { take.tick(); std::this_thread::sleep_for(std::chrono::milliseconds(1)); }
     playback.reset();
+    for (auto& cam : cameras) if (cam && cam->capture) cam->capture->requestStop();
     for (auto& cam : cameras) cam.reset(); // stop capture offers before TakeController destruction
 }
 void RecorderSession::setHosts(std::array<void*, 2> next) { hosts = next; }
 bool RecorderSession::configuring() const { return deviceWork.valid(); }
 bool RecorderSession::recording() const { return activeTake(take.state()); }
-bool RecorderSession::busy() const { return configuring() || recording() || take.state() == TakeController::State::finalizing || planWork.valid(); }
+bool RecorderSession::busy() const
+{ return configuring() || recording() || take.state() == TakeController::State::finalizing || planWork.valid()
+    || (lifecycle->snapshot() & (RecorderLifecycle::exporting | RecorderLifecycle::dubbing | RecorderLifecycle::recovering)) != 0; }
 bool RecorderSession::cameraReady(unsigned n) const
-{ return !configuring() && n < 2 && cameras[n] && !cameras[n]->failed && cameras[n]->capture && !cameras[n]->capture->finished(); }
+{ return !shuttingDown && !configuring() && n < 2 && cameras[n] && !cameras[n]->failed && cameras[n]->capture && !cameras[n]->capture->finished(); }
 bool RecorderSession::readyToRecord() const
 {
-    return !busy() && document.getFile() != juce::File() && cameraReady(0) && device.sampleRate
+    const auto exportStop = exclusiveStops.find(RecorderLifecycle::exporting);
+    const bool canPauseExport = !(lifecycle->snapshot() & RecorderLifecycle::exporting) || (exportStop != exclusiveStops.end() && bool(exportStop->second));
+    return lifecycle->acceptsCommands() && canPauseExport && !lifecycle->captureBusy() && !(lifecycle->snapshot() & (RecorderLifecycle::dubbing | RecorderLifecycle::recovering | RecorderLifecycle::fileWork))
+        && !configuring() && !recording() && take.state() != TakeController::State::finalizing && !planWork.valid()
+        && document.getFile() != juce::File() && cameraReady(0) && device.sampleRate
         && audio.clockReady() && validateAudioSettings(current, device, document.getProject()).wasOk();
 }
 juce::String RecorderSession::cameraCaption(unsigned n) const
@@ -85,9 +101,10 @@ juce::String RecorderSession::cameraCaption(unsigned n) const
 }
 juce::Result RecorderSession::configure(UserSettings settings)
 {
+    if (!lifecycle->acceptsCommands()) return juce::Result::fail(recorderFaultText(RecorderFault::updateBusy));
     if (busy()) return juce::Result::fail(k("녹화와 저장이 끝난 뒤 설정을 변경하세요."));
     const auto valid = settings.validate(); if (valid.failed()) return valid;
-    clearPlayback(); error.clear(); notice = k("장치를 연결하는 중입니다.");
+    clearPlayback(); lifecycle->invalidate(); lifecycle->set(RecorderLifecycle::configuring, true); error.clear(); notice = k("장치를 연결하는 중입니다.");
     const auto fixedFs = document.getProject().media->assets.empty() ? 0u : document.getProject().Fs;
     deviceWork = std::async(std::launch::async, [this, settings, fixedFs]() mutable
     {
@@ -136,19 +153,20 @@ juce::Result RecorderSession::configure(UserSettings settings)
 }
 void RecorderSession::presentLive()
 {
-    if (configuring() || playback) return;
-    for (unsigned i = 0; i < 2; ++i) if (cameraReady(i) && hosts[i] && !cameras[i]->presenter)
+    if (shuttingDown || configuring() || playback) return;
+    for (unsigned i = 0; i < 2; ++i) if (cameraReady(i) && hosts[i] && !cameras[i]->presenter && !cameras[i]->displayFailed && !cameras[i]->previewRecovery.recovering())
     {
         try
         {
             cameras[i]->presenter = std::make_unique<PreviewPresenter>(static_cast<HWND>(hosts[i]), *cameras[i]->pool, cameras[i]->telemetry, 1920, 1080);
             cameras[i]->presenter->start();
         }
-        catch (const std::exception& e) { cameras[i]->presenter.reset(); cameras[i]->failed = true; error = k("영상 표시를 시작할 수 없습니다. ") + juce::String::fromUTF8(e.what()); }
+        catch (const std::exception& e) { cameras[i]->presenter.reset(); cameras[i]->displayFailed = true; error = k("영상 표시를 시작할 수 없습니다. ") + juce::String::fromUTF8(e.what()); }
     }
 }
 void RecorderSession::enterTimeline(bool on)
 {
+    if (!lifecycle->acceptsCommands()) return;
     timeline = on;
     if (recording()) return; // same two HWNDs and live presenters survive tab changes
     if (!on) { wantPlay = false; clearPlayback(); presentLive(); }
@@ -157,11 +175,22 @@ void RecorderSession::enterTimeline(bool on)
 juce::Result RecorderSession::record()
 {
     if (!readyToRecord()) return juce::Result::fail(k("녹화 장치와 프로젝트 저장 위치를 확인하세요."));
+    if (lifecycle->snapshot() & RecorderLifecycle::exporting)
+    {
+        if (!recordAfterExport)
+        {
+            recordAfterExport = true; notice = k("내보내기를 안전하게 멈춘 뒤 녹화를 시작합니다.");
+            const auto stop = exclusiveStops.at(RecorderLifecycle::exporting); stop();
+        }
+        return juce::Result::ok(); // endExclusive acknowledges the export checkpoint/join
+    }
+    if (!lifecycle->begin(RecorderLifecycle::recording)) return juce::Result::fail(recorderFaultText(RecorderFault::updateBusy));
     clearPlayback(); presentLive(); error.clear(); recordedMarkers.clear(); peaksPublished.clear();
     TakeController::Config c; c.projectDirectory = document.getFile().getParentDirectory(); c.takeId = juce::Uuid();
     c.cameraSymbolicLink = current.cameraDeviceIds[0].toStdString(); c.cameraMode = cameras[0]->mode;
     c.projectFps = int(document.getProject().fps.numerator); c.externalCapture = true;
     const auto result = take.prepare(c); if (result.wasOk()) { autoStart = true; derivedWorker.setRecording(true); }
+    else lifecycle->end(RecorderLifecycle::recording);
     return result;
 }
 juce::Result RecorderSession::stopRecording() { return take.stop(); }
@@ -172,14 +201,17 @@ void RecorderSession::clearPlayback()
 }
 void RecorderSession::preparePlayback()
 {
+    if (!lifecycle->acceptsCommands()) return;
     if (configuring() || recording() || take.state() == TakeController::State::finalizing || planWork.valid() || playback || !device.sampleRate) return;
     if (device.sampleRate != document.getProject().Fs) { error = k("프로젝트와 ASIO 샘플레이트가 다릅니다."); return; }
     const auto snapshot = document.snapshot(); const auto folder = document.getFile().getParentDirectory();
     if (!snapshot->activeTimelineEnd()) return;
     notice = k("재생 준비 중");
-    planWork = std::async(std::launch::async, [this, snapshot, folder]
+    const auto generation = lifecycle->generation();
+    planWork = std::async(std::launch::async, [this, snapshot, folder, generation]
     {
         auto plan = std::make_unique<PreparedPlan>(); plan->project = snapshot->projectId; plan->revision = snapshot->editRevision; plan->end = snapshot->activeTimelineEnd();
+        plan->generation = generation;
         try
         {
             MediaIndex index;
@@ -242,6 +274,7 @@ std::shared_ptr<const WavSource> RecorderSession::indexRecordedAudio(const Media
 }
 void RecorderSession::play(bool latest)
 {
+    if (!lifecycle->acceptsCommands()) return;
     if ((recording() && !(latest && take.state() == TakeController::State::stopping)) || configuring()) return;
     playbackButtonQpc = qpcNow(); firstPlaybackVideoQpc = firstPlaybackAudioQpc = firstPlaybackAudibleQpc = 0;
     wantPlay = true;
@@ -257,9 +290,10 @@ void RecorderSession::play(bool latest)
 void RecorderSession::pause() { wantPlay = false; if (playback) playback->transport.pause(); }
 void RecorderSession::stopPlayback()
 { wantPlay = false; if (playback) { playback->transport.scrub(playhead(), true, qpcNow()); playback->transport.stop(); } }
-void RecorderSession::goToStart() { wantPlay = false; cursor = 0; if (playback) playback->transport.goToStart(); else preparePlayback(); }
+void RecorderSession::goToStart() { if (!lifecycle->acceptsCommands()) return; wantPlay = false; cursor = 0; if (playback) playback->transport.goToStart(); else preparePlayback(); }
 void RecorderSession::scrub(Sample sample, bool released)
 {
+    if (!lifecycle->acceptsCommands()) return;
     if (recording()) return; wantPlay = false;
     cursor = std::clamp(sample, Sample{0}, document.getProject().activeTimelineEnd());
     if (playback) playback->transport.scrub(cursor, released, qpcNow()); else preparePlayback();
@@ -283,6 +317,7 @@ void RecorderSession::refreshPlaybackPlan()
 { const bool resume = playing(); clearPlayback(); wantPlay = resume; if (timeline) preparePlayback(); }
 void RecorderSession::projectChanged()
 {
+    lifecycle->invalidate();
     clearPlayback(); take.reset(); cursor = 0; wantPlay = false; pendingLatest = false; peaksPublished.clear(); error.clear(); notice.clear();
     if (planWork.valid()) planWork.wait(); // project replacement is disabled while plan preparation is pending
     videoIndexes.clear(); wavIndexes.clear(); derivedKeys.clear(); derivedProject = document.getProject().projectId;
@@ -325,12 +360,32 @@ void RecorderSession::tick()
     if (ready(deviceWork))
     {
         auto result = deviceWork.get(); current = result.settings; device = audio.deviceInfo();
+        lifecycle->end(RecorderLifecycle::configuring);
         notice.clear(); if (result.result.failed()) error = result.result.getErrorMessage();
         if (onConfigured) onConfigured(result.result, current);
         if (current.cameraEnabled[1]) notice = k("캠2 미리보기 · 이번 시연 빌드는 캠1을 녹화합니다.");
     }
     if (configuring()) return;
+    if (recordAfterExport && !(lifecycle->snapshot() & RecorderLifecycle::exporting))
+    { recordAfterExport = false; const auto result = record(); if (result.failed()) error = result.getErrorMessage(); }
     take.tick();
+    lifecycle->set(RecorderLifecycle::recording, recording());
+    lifecycle->set(RecorderLifecycle::finalizing, take.state() == TakeController::State::finalizing);
+    if (shuttingDown)
+    {
+        if (ready(planWork)) planWork.get(); // invalidate late seek/prepare completions
+        if (permitRelease && take.shutdownComplete() && !planWork.valid() && !releaseWork.valid() && !resourcesReleased)
+        {
+            clearPlayback(); // detaches ASIO client before renderer/video join
+            for (auto& cam : cameras) if (cam && cam->capture) cam->capture->requestStop();
+            releaseWork = std::async(std::launch::async, [this]
+            { for (auto& cam : cameras) cam.reset(); audio.closeDevice(); });
+        }
+        if (ready(releaseWork)) { releaseWork.get(); resourcesReleased = true; }
+        return;
+    }
+    if (audio.processingDelayed() || take.processingDelayed()) notice = recorderFaultText(RecorderFault::processingDelay);
+    else if (notice == recorderFaultText(RecorderFault::processingDelay)) notice.clear();
     if (recording() && audio.error() == RecorderAudioEngine::Error::writeFailed) error = k("저장 장치에 쓸 수 없어 녹화를 멈췄습니다.");
     if (autoStart && take.state() == TakeController::State::armed)
     { const auto r = take.start(); autoStart = false; if (r.failed()) error = r.getErrorMessage(); }
@@ -357,18 +412,27 @@ void RecorderSession::tick()
     derivedWorker.setRecording(recording());
     for (unsigned i = 0; i < 2; ++i) if (cameras[i] && !cameras[i]->failed)
     {
-        if (cameras[i]->capture->finished())
+        if (cameras[i]->capture->failureDetected() || cameras[i]->capture->finished())
         {
-            cameras[i]->capture->stop(); cameras[i]->failed = true;
-            if (i == 0) { take.cameraFailed(); error = k("캠1 연결이 끊겼습니다. 원본 녹음은 계속됩니다."); }
-            else error = k("캠2 연결이 끊겼습니다. 캠1과 원본 녹음은 계속됩니다.");
+            cameras[i]->capture->requestStop(); cameras[i]->failed = true;
+            take.cameraFailed(i, cameras[i]->capture->generation());
+            error = recorderFaultText(i ? RecorderFault::camera2Disconnected : RecorderFault::camera1Disconnected);
             cameras[i]->presenter.reset();
         }
         else if (cameras[i]->presenter && cameras[i]->presenter->finished())
         {
-            cameras[i]->presenter->stop(); error = k("영상 표시 장치 연결을 확인하세요. ") + juce::String(cameras[i]->presenter->error());
-            cameras[i]->presenter.reset(); cameras[i]->failed = true;
+            auto& cam = *cameras[i]; cam.presenter->stop(); const auto reason = cam.presenter->error();
+            cam.previewRecovery.lost(reason, IoHealth::now(), [&] { cam.presenter.reset(); });
+            cam.displayFailed = true;
+            error = cam.previewRecovery.recovering() ? recorderFaultText(RecorderFault::gpuRemoved)
+                : k("영상 표시 장치 연결을 확인하세요. ") + juce::String(reason);
         }
+        auto& cam = *cameras[i];
+        if (cam.previewRecovery.retry(IoHealth::now(), [&]
+        {
+            try { cam.presenter = std::make_unique<PreviewPresenter>(static_cast<HWND>(hosts[i]), *cam.pool, cam.telemetry, 1920, 1080); cam.presenter->start(); return true; }
+            catch (...) { cam.presenter.reset(); return false; }
+        })) { cam.displayFailed = false; if (error == recorderFaultText(RecorderFault::gpuRemoved)) error.clear(); }
     }
     if (take.state() == TakeController::State::partialFailure && error.isEmpty())
         error = audio.error() == RecorderAudioEngine::Error::writeFailed ? k("저장 장치에 쓸 수 없어 녹화를 멈췄습니다.")
@@ -376,7 +440,7 @@ void RecorderSession::tick()
     if (ready(planWork))
     {
         auto plan = planWork.get();
-        if (plan->project == document.getProject().projectId && plan->revision == document.getProject().editRevision && timeline && !recording())
+        if (lifecycle->accepts(plan->generation) && plan->project == document.getProject().projectId && plan->revision == document.getProject().editRevision && timeline && !recording())
         {
             if (plan->error.isNotEmpty()) { error = plan->error; wantPlay = false; }
             else try
@@ -416,4 +480,32 @@ void RecorderSession::tick()
         if (item.peaks.sampleRate && onLoadedPeaks) onLoadedPeaks(item.asset, std::move(item.peaks), item.channel);
     }
 }
+void RecorderSession::requestShutdown()
+{
+    if (shuttingDown) return;
+    lifecycle->blockCommands(); shuttingDown = true; autoStart = wantPlay = pendingLatest = recordAfterExport = false;
+    take.requestShutdown();
+    clearPlayback(); // detach output client and invalidate pending playback before file commits
+    const auto stops = exclusiveStops; for (const auto& stop : stops) if (stop.second) stop.second();
+}
+bool RecorderSession::shutdownComplete() const { return resourcesReleased; }
+bool RecorderSession::readyForShutdownCommit() const
+{
+    return shuttingDown && !configuring() && take.shutdownComplete() && !planWork.valid() && !lifecycle->captureBusy()
+        && !(lifecycle->snapshot() & (RecorderLifecycle::exporting | RecorderLifecycle::dubbing | RecorderLifecycle::recovering));
+}
+void RecorderSession::releaseForShutdown() { if (readyForShutdownCommit()) permitRelease = true; }
+void RecorderSession::resumeFromSleep()
+{
+    lifecycle->invalidate(); autoStart = wantPlay = false; stopPlayback();
+    if (!configuring()) audio.deviceDiscontinuity();
+    error = recorderFaultText(RecorderFault::resume);
+}
+juce::Result RecorderSession::beginExclusive(RecorderLifecycle::Activity activity, std::function<void()> stop)
+{
+    if ((activity != RecorderLifecycle::exporting && activity != RecorderLifecycle::dubbing && activity != RecorderLifecycle::recovering)
+        || busy() || !lifecycle->begin(activity)) return juce::Result::fail(recorderFaultText(RecorderFault::updateBusy));
+    exclusiveStops[activity] = std::move(stop); stopPlayback(); lifecycle->invalidate(); return juce::Result::ok();
+}
+void RecorderSession::endExclusive(RecorderLifecycle::Activity activity) { exclusiveStops.erase(activity); lifecycle->end(activity); }
 }

@@ -21,6 +21,8 @@ public:
     CaptureOpenInfo start(const std::string& symbolicLink, CameraMode, bool mfMjpegDecoder, int decoderThreads = 1,
                           std::shared_future<void> measurementStart = {}, std::uint64_t deviceGeneration = 0);
     void stop();
+    void requestStop() noexcept; // no join: stop both cameras before waiting for either
+    void disconnect() noexcept;  // device-event/test adapter, wakes the same worker
     bool finished() const noexcept;
     bool failureDetected() const noexcept; // live atomic signal, before slow driver Flush/Shutdown
     std::uint64_t generation() const noexcept;
