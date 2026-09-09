@@ -275,3 +275,16 @@ add_custom_command(TARGET RecorderDualProbe POST_BUILD COMMAND ${CMAKE_COMMAND} 
 target_sources(RecorderTests PRIVATE tests/QueueIsolationTests.cpp)
 target_link_libraries(RecorderTests PRIVATE RecorderDualFixtures)
 add_test(NAME RecorderQueueIsolation COMMAND RecorderTests --suite queue-isolation)
+
+# Round 15: shared headless interaction logic; GUI and probe use the same commands.
+add_library(RecorderTimelineLogic STATIC src/ui/TimelineView.logic.cpp src/ui/TimelineView.automation.cpp)
+target_link_libraries(RecorderTimelineLogic PUBLIC RecorderModel)
+set_property(TARGET RecorderTimelineLogic PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+target_compile_options(RecorderTimelineLogic PRIVATE /utf-8 /W4 /permissive- /EHsc)
+target_sources(Recorder PRIVATE src/ui/ClipInspector.cpp src/ui/TrackHeader.cpp src/ui/MarkerPanel.cpp src/ui/TimelineView.scenario.cpp)
+target_link_libraries(Recorder PRIVATE RecorderTimelineLogic)
+target_sources(RecorderProbe PRIVATE tools/UiProbe.cpp)
+target_link_libraries(RecorderProbe PRIVATE RecorderTimelineLogic)
+target_sources(RecorderTests PRIVATE tests/RippleTests.cpp tests/ReorderTests.cpp tests/MarkerTests.cpp)
+target_link_libraries(RecorderTests PRIVATE RecorderTimelineLogic)
+add_test(NAME RecorderRippleReorderMarkers COMMAND RecorderTests --suite ripple-reorder-markers)

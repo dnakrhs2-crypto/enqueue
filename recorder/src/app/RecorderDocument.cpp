@@ -139,7 +139,6 @@ void RecorderDocument::setSelection(std::vector<Id> ids)
 }
 juce::Result RecorderDocument::performEdit(const juce::String& name, const std::function<void(EditState&)>& edit, const EditOptions& options)
 {
-    if (recordingStructureLock) return fail(juce::String::fromUTF8("녹화 중에는 구조를 편집할 수 없습니다."));
     assertOwner();
     if (editing) return juce::Result::fail(juce::String::fromUTF8("편집 작업 중에는 다른 편집을 시작할 수 없습니다."));
     const juce::ScopedValueSetter<bool> guard(editing, true);
@@ -152,6 +151,18 @@ juce::Result RecorderDocument::performEdit(const juce::String& name, const std::
 }
 juce::Result RecorderDocument::publishEdit(RecorderProject next, const juce::String& name, const EditOptions& options, bool addHistory, const std::vector<Id>& nextSelection)
 {
+    if (recordingStructureLock)
+    {
+        // Both performEdit adapters share this gate. Only appending markers is safe
+        // while the recording coordinator owns the reserved timeline placement.
+        auto structural = next; structural.markers = project->markers;
+        const bool prefix = next.markers.size() > project->markers.size()
+            && std::equal(project->markers.begin(), project->markers.end(), next.markers.begin(), [](const Marker& a, const Marker& b)
+            { return a.markerId == b.markerId && a.sample == b.sample && a.name == b.name && a.colour == b.colour; });
+        if (!prefix || next.media != project->media
+            || json(RecorderSerializer::editStateToVar(structural)) != json(RecorderSerializer::editStateToVar(*project)))
+            return fail(juce::String::fromUTF8("녹화 중에는 구조를 편집할 수 없습니다. 마커 추가는 가능합니다."));
+    }
     const auto valid = next.validate(); if (valid.failed()) return fail(valid.getErrorMessage());
     // A coalesced gesture can return to its starting geometry but change selection.
     // Undo/redo still restores that snapshot and emits a fresh journal revision.

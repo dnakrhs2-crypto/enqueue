@@ -988,6 +988,7 @@ int importAudioCommand(int argc, wchar_t** argv)
 }
 }
 int runDemoProbe(int argc, wchar_t** argv);
+int runUiProbe(int argc, wchar_t** argv);
 int wmain(int argc, wchar_t** argv)
 {
     SetConsoleOutputCP(CP_UTF8); SetConsoleCP(CP_UTF8);
@@ -999,6 +1000,7 @@ int wmain(int argc, wchar_t** argv)
         if (argc >= 2 && juce::String(argv[1]) == "import-audio") return importAudioCommand(argc, argv);
         if (argc >= 2 && juce::String(argv[1]) == "playback") return runPlaybackProbe(argc, argv);
         if (argc >= 2 && juce::String(argv[1]) == "demo") return runDemoProbe(argc, argv);
+        if (argc >= 2 && juce::String(argv[1]) == "ui") return runUiProbe(argc, argv);
         args = parse(argc, argv);
         report = baseReport(args, &report); // also covers encode's early runtime check without changing its function
         if (args.command == "record-audio" || args.command == "record-take") return recordCommand(args);

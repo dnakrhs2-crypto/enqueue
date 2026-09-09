@@ -51,10 +51,16 @@ class RecorderApplication : public juce::JUCEApplication
 public:
     const juce::String getApplicationName() override { return ProductIdentity::displayName(); }
     const juce::String getApplicationVersion() override { return ProductIdentity::version(); }
-    bool moreThanOneInstanceAllowed() override { return getCommandLineParameters().contains("--test-root") || getCommandLineParameters().contains("--self-test-record"); }
+    bool moreThanOneInstanceAllowed() override { return getCommandLineParameters().contains("--test-root") || getCommandLineParameters().contains("--self-test-record") || getCommandLineParameters().startsWith("--automation "); }
     void initialise(const juce::String& commandLine) override
     {
         auto args = juce::StringArray::fromTokens(commandLine, true); for (auto& arg : args) arg = arg.unquoted();
+        if (args.size() == 2 && args[0] == "--automation")
+        {
+            lookAndFeel = std::make_unique<RecorderLookAndFeel>(); juce::LookAndFeel::setDefaultLookAndFeel(lookAndFeel.get());
+            timelineAutomation = createTimelineAutomationWindow(juce::File::getCurrentWorkingDirectory().getChildFile(args[1]), [this](int result) { setApplicationReturnValue(result); quit(); });
+            return;
+        }
         juce::String rootPath, projectPath, openPath, demoDevices, demoReport;
         int demoIterations = 0, demoAsio = -1; bool automation = false, demoArguments = false, invalid = false;
         for (int i = 0; i < args.size(); ++i)
@@ -106,7 +112,7 @@ public:
     }
     void shutdown() override
     {
-        window.reset(); document.reset(); settings.reset(); juce::LookAndFeel::setDefaultLookAndFeel(nullptr); lookAndFeel.reset();
+        timelineAutomation.reset(); window.reset(); document.reset(); settings.reset(); juce::LookAndFeel::setDefaultLookAndFeel(nullptr); lookAndFeel.reset();
     }
     void systemRequestedQuit() override
     {
@@ -140,6 +146,7 @@ private:
     std::unique_ptr<RecorderSettings> settings;
     std::unique_ptr<RecorderDocument> document;
     std::unique_ptr<MainWindow> window;
+    std::unique_ptr<juce::DocumentWindow> timelineAutomation;
 };
 }
 START_JUCE_APPLICATION(gocue::recorder::RecorderApplication)
