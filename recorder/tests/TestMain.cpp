@@ -15,6 +15,7 @@ int runAsioStampTests();         // round 03: ASIO BlockStamp bridge statistics
 int runNativePcmTests();         // round 03: native PCM -> PCM24 packing
 int runJournalTests();           // round 06: recording journal / durable file
 int runWavChunkTests();          // round 06: WAV chunk writer
+int runProjectTests();           // round 08: project model / serializer / document / undo
 
 namespace
 {
@@ -32,6 +33,7 @@ const Suite suites[] = {
     {"asio-native-pcm", runAsioNativePcm},
     {"journal-durable", runJournalDurable},
     {"wav-chunks", runWavChunkTests},
+    {"project-roundtrip", runProjectTests},
 };
 int usage()
 {

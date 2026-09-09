@@ -108,3 +108,54 @@ target_compile_options(RecorderDurabilityProbe PRIVATE /utf-8 /W4 /permissive- /
 set_target_properties(RecorderDurabilityProbe PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/RecorderDurabilityProbe_artefacts/$<CONFIG>")
 add_custom_command(TARGET RecorderDurabilityProbe POST_BUILD COMMAND ${CMAKE_COMMAND} -E copy_if_different
     ${_rec_dlls} "$<TARGET_FILE_DIR:RecorderDurabilityProbe>" VERBATIM)
+
+# BEGIN Recorder round 08: independent model and GUI (append-only integration block).
+add_library(RecorderModel STATIC
+    src/app/ProductIdentity.cpp src/app/RecorderSettings.cpp
+    src/app/RecorderDocument.cpp src/app/EditHistory.cpp
+    src/model/RecorderModel.cpp src/model/RecorderSerializer.cpp)
+target_include_directories(RecorderModel PUBLIC src)
+target_link_libraries(RecorderModel PUBLIC RecorderCommon)
+
+# ProductIdentity is the single source for runtime names and generated version/icon resources.
+file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/src/app/ProductIdentity.h" _rec_identity_lines
+    REGEX "^#define RECORDER_(DISPLAY_NAME|INTERNAL_ID|VERSION|COMPANY) ")
+foreach(_rec_identity_line IN LISTS _rec_identity_lines)
+    string(REGEX MATCH "^#define (RECORDER_[A-Z_]+) \"([^\"]+)\"" _rec_identity_match "${_rec_identity_line}")
+    set(${CMAKE_MATCH_1} "${CMAKE_MATCH_2}")
+endforeach()
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/src/app/ProductIdentity.h")
+juce_add_gui_app(Recorder
+    PRODUCT_NAME "${RECORDER_DISPLAY_NAME}"
+    COMPANY_NAME "${RECORDER_COMPANY}"
+    BUNDLE_ID "${RECORDER_INTERNAL_ID}"
+    VERSION "${RECORDER_VERSION}"
+    ICON_BIG "${CMAKE_CURRENT_SOURCE_DIR}/resources/icon_512.png"
+    ICON_SMALL "${CMAKE_CURRENT_SOURCE_DIR}/resources/icon_512.png"
+    NEEDS_WEB_BROWSER FALSE NEEDS_CURL FALSE)
+get_target_property(_rec_generated_dir Recorder JUCE_GENERATED_SOURCES_DIRECTORY)
+set(_rec_rc_file "${_rec_generated_dir}/Recorder_resources.rc")
+if(EXISTS "${_rec_rc_file}")
+    file(READ "${_rec_rc_file}" _rec_rc_text)
+    string(REPLACE "." "," _rec_version_commas "${RECORDER_VERSION}")
+    if(NOT _rec_rc_text MATCHES "FILEVERSION[ \t]+${_rec_version_commas},0")
+        file(REMOVE "${_rec_rc_file}")
+    endif()
+endif()
+target_sources(Recorder PRIVATE src/Main.cpp src/ui/RecorderLookAndFeel.cpp src/ui/MainComponent.cpp)
+target_link_libraries(Recorder PRIVATE RecorderModel juce::juce_gui_basics)
+target_compile_definitions(Recorder PRIVATE
+    JUCE_APPLICATION_NAME_STRING="${RECORDER_DISPLAY_NAME}"
+    JUCE_APPLICATION_VERSION_STRING="${RECORDER_VERSION}")
+foreach(_rec_r08_target IN ITEMS RecorderModel Recorder)
+    set_property(TARGET ${_rec_r08_target} PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+    target_compile_options(${_rec_r08_target} PRIVATE /utf-8 /W4 /permissive- /EHsc)
+endforeach()
+
+# The round-01 runner only dispatches capture-contract. Keep that file untouched and
+# rename just its entry point so the new test file can dispatch both suites.
+# Suite routing: tests/TestMain.cpp registry (no per-round main renames).
+target_sources(RecorderTests PRIVATE tests/RecorderProjectTests.cpp)
+target_link_libraries(RecorderTests PRIVATE RecorderModel)
+add_test(NAME RecorderProjectRoundtrip COMMAND RecorderTests --suite project-roundtrip)
+# END Recorder round 08.

@@ -1,0 +1,126 @@
+#include "app/ProductIdentity.h"
+#include "app/RecorderDocument.h"
+#include "app/RecorderSettings.h"
+#include "ui/MainComponent.h"
+#include "model/SafeFileWrite.h"
+#include <juce_gui_basics/juce_gui_basics.h>
+
+namespace gocue::recorder
+{
+namespace
+{
+int roundtrip(const juce::File& testRoot, const juce::File& folder)
+{
+    const auto target = folder.getChildFile(ProductIdentity::projectFileName());
+    juce::Result result = juce::Result::ok();
+    bool bytesEqual = false;
+    if (target.exists()) result = juce::Result::fail(ko("이미 프로젝트가 있는 폴더입니다. 새 폴더를 지정하세요."));
+    else
+    {
+        RecorderDocument created; created.newProject(folder.getFileName());
+        result = created.saveCheckpoint(target);
+        if (result.wasOk())
+        {
+            juce::MemoryBlock first, second;
+            if (!target.loadFileAsData(first)) result = juce::Result::fail(ko("저장한 프로젝트를 읽을 수 없습니다."));
+            RecorderDocument reopened;
+            if (result.wasOk()) result = reopened.openCheckpoint(target);
+            if (result.wasOk()) result = reopened.saveCheckpoint(target);
+            if (result.wasOk())
+            {
+                bytesEqual = target.loadFileAsData(second) && first == second;
+                if (!bytesEqual) result = juce::Result::fail(ko("프로젝트 왕복 후 바이트가 다릅니다."));
+            }
+        }
+        if (result.wasOk())
+        {
+            RecorderSettings settings(testRoot); result = settings.load();
+            if (result.wasOk()) { settings.rememberProject(target); result = settings.save().get(); }
+        }
+    }
+    auto* report = new juce::DynamicObject();
+    report->setProperty("status", result.wasOk() ? "PASS" : "FAIL"); report->setProperty("byteIdentical", bytesEqual);
+    report->setProperty("project", target.getFullPathName()); report->setProperty("error", result.getErrorMessage());
+    const auto written = gocue::SafeFileWrite::writeTextVerified(testRoot.getChildFile("roundtrip.json"), juce::JSON::toString(juce::var(report), false) + "\n");
+    return result.wasOk() && written.wasOk() ? 0 : 1;
+}
+}
+class RecorderApplication : public juce::JUCEApplication
+{
+public:
+    const juce::String getApplicationName() override { return ProductIdentity::displayName(); }
+    const juce::String getApplicationVersion() override { return ProductIdentity::version(); }
+    bool moreThanOneInstanceAllowed() override { return getCommandLineParameters().contains("--test-root"); }
+    void initialise(const juce::String& commandLine) override
+    {
+        auto args = juce::StringArray::fromTokens(commandLine, true); for (auto& arg : args) arg = arg.unquoted();
+        juce::String rootPath, projectPath, openPath; bool invalid = false;
+        for (int i = 0; i < args.size(); ++i)
+        {
+            const auto flag = args[i];
+            if ((flag == "--test-root" || flag == "--new-project" || flag == "--open-project") && i + 1 < args.size())
+            {
+                auto& destination = flag == "--test-root" ? rootPath : flag == "--new-project" ? projectPath : openPath;
+                if (destination.isNotEmpty()) invalid = true; destination = args[++i];
+                if (!juce::File::isAbsolutePath(destination) || destination.startsWith("\\\\") || destination.startsWith("//")) invalid = true;
+            }
+            else if (args.size() == 1 && juce::File::isAbsolutePath(flag) && flag.endsWithIgnoreCase(ProductIdentity::projectExtension())) openPath = flag;
+            else invalid = true;
+        }
+        if (rootPath.isNotEmpty() || projectPath.isNotEmpty())
+        {
+            int result = 2;
+            if (!invalid && rootPath.isNotEmpty() && projectPath.isNotEmpty() && openPath.isEmpty())
+            {
+                try { result = roundtrip(juce::File(rootPath), juce::File(projectPath)); }
+                catch (const std::exception&) { result = 1; }
+            }
+            setApplicationReturnValue(result); quit(); return; // no window, device, tray or updater
+        }
+        if (invalid) { setApplicationReturnValue(2); quit(); return; }
+        lookAndFeel = std::make_unique<RecorderLookAndFeel>(); juce::LookAndFeel::setDefaultLookAndFeel(lookAndFeel.get());
+        settings = std::make_unique<RecorderSettings>(); const auto loaded = settings->load();
+        document = std::make_unique<RecorderDocument>(); window = std::make_unique<MainWindow>(*document, *settings);
+        if (loaded.failed()) window->content().showError(loaded.getErrorMessage());
+        if (openPath.isNotEmpty()) window->content().openProject(juce::File(openPath));
+        else if (loaded.wasOk() && !settings->get().recentProjects.isEmpty()) window->content().openProject(juce::File(settings->get().recentProjects[0]));
+    }
+    void shutdown() override
+    {
+        window.reset(); document.reset(); settings.reset(); juce::LookAndFeel::setDefaultLookAndFeel(nullptr); lookAndFeel.reset();
+    }
+    void systemRequestedQuit() override
+    {
+        if (window == nullptr) { quit(); return; }
+        auto next = settings->get(); next.windowState = window->getWindowStateAsString(); settings->set(std::move(next));
+        window->content().requestClose([] { if (auto* app = juce::JUCEApplication::getInstance()) app->quit(); });
+    }
+    void anotherInstanceStarted(const juce::String& commandLine) override
+    {
+        if (window == nullptr) return;
+        window->setVisible(true); window->toFront(true);
+        const auto path = commandLine.unquoted();
+        if (juce::File::isAbsolutePath(path) && path.endsWithIgnoreCase(ProductIdentity::projectExtension())) window->content().openProject(juce::File(path));
+    }
+private:
+    class MainWindow : public juce::DocumentWindow
+    {
+    public:
+        MainWindow(RecorderDocument& document, RecorderSettings& settings)
+            : juce::DocumentWindow(ProductIdentity::displayName(), Palette::background, juce::DocumentWindow::allButtons)
+        {
+            setUsingNativeTitleBar(true); setContentOwned(new MainComponent(document, settings), true);
+            setResizable(true, false); setResizeLimits(960, 640, 8192, 8192);
+            if (!restoreWindowStateFromString(settings.get().windowState)) centreWithSize(1180, 780);
+            setVisible(true);
+        }
+        MainComponent& content() { return *static_cast<MainComponent*>(getContentComponent()); }
+        void closeButtonPressed() override { juce::JUCEApplication::getInstance()->systemRequestedQuit(); }
+    };
+    std::unique_ptr<RecorderLookAndFeel> lookAndFeel;
+    std::unique_ptr<RecorderSettings> settings;
+    std::unique_ptr<RecorderDocument> document;
+    std::unique_ptr<MainWindow> window;
+};
+}
+START_JUCE_APPLICATION(gocue::recorder::RecorderApplication)
