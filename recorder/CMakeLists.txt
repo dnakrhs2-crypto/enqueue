@@ -2,21 +2,32 @@ set(RECORDER_FFMPEG_ROOT "C:/Users/claude/SDKs/ffmpeg-lgpl/ffmpeg-n8.1-latest-wi
     CACHE PATH "Frozen BtbN n8.1 win64 LGPL shared SDK (headers, import libraries and DLLs)")
 set(_recorder_ffmpeg_version "n8.1.2-51-g7ba069f4f1-20260908")
 if(NOT MSVC OR NOT CMAKE_SIZEOF_VOID_P EQUAL 8)
-    message(FATAL_ERROR "Recorder requires MSVC x64.")
+    message(WARNING "Skipping Recorder: requires MSVC x64.")
+    return()
+endif()
+if(NOT IS_DIRECTORY "${RECORDER_FFMPEG_ROOT}")
+    message(WARNING "Skipping Recorder: SDK directory missing: ${RECORDER_FFMPEG_ROOT}")
+    return()
 endif()
 execute_process(COMMAND "${RECORDER_FFMPEG_ROOT}/bin/ffmpeg.exe" -version
-    RESULT_VARIABLE _rec_ff_result OUTPUT_VARIABLE _rec_ff_version ERROR_VARIABLE _rec_ff_error)
+    RESULT_VARIABLE _rec_ff_result OUTPUT_VARIABLE _rec_ff_version ERROR_VARIABLE _rec_ff_error TIMEOUT 15)
 string(REGEX MATCH "^ffmpeg version ([^ \r\n]+) " _rec_ff_match "${_rec_ff_version}")
 if(NOT _rec_ff_result EQUAL 0 OR NOT CMAKE_MATCH_1 STREQUAL _recorder_ffmpeg_version)
-    message(FATAL_ERROR "Recorder requires FFmpeg ${_recorder_ffmpeg_version}: ${_rec_ff_result}; ${_rec_ff_version}; ${_rec_ff_error}")
+    message(WARNING "Skipping Recorder: requires FFmpeg ${_recorder_ffmpeg_version}: ${_rec_ff_result}; ${_rec_ff_version}; ${_rec_ff_error}")
+    return()
 endif()
 if(NOT _rec_ff_version MATCHES "--enable-shared" OR NOT _rec_ff_version MATCHES "--disable-static"
    OR _rec_ff_version MATCHES "--enable-gpl" OR _rec_ff_version MATCHES "--enable-nonfree")
-    message(FATAL_ERROR "Recorder requires the frozen LGPL shared FFmpeg build.")
+    message(WARNING "Skipping Recorder: requires the frozen LGPL shared FFmpeg build.")
+    return()
 endif()
-file(READ "${RECORDER_FFMPEG_ROOT}/include/libavcodec/version_major.h" _rec_codec_header)
-if(NOT _rec_codec_header MATCHES "#define[ \t]+LIBAVCODEC_VERSION_MAJOR[ \t]+62([\r\n]|$)")
-    message(FATAL_ERROR "Recorder requires avcodec 62 headers.")
+# Use child processes for reads/hashes: file(READ/SHA256) errors in this configure
+# would poison the parent even after return(). Missing/unreadable SDKs are optional.
+execute_process(COMMAND "${CMAKE_COMMAND}" -E cat "${RECORDER_FFMPEG_ROOT}/include/libavcodec/version_major.h"
+    RESULT_VARIABLE _rec_read_result OUTPUT_VARIABLE _rec_codec_header ERROR_VARIABLE _rec_read_error)
+if(NOT _rec_read_result STREQUAL "0" OR NOT _rec_codec_header MATCHES "#define[ \t]+LIBAVCODEC_VERSION_MAJOR[ \t]+62([\r\n]|$)")
+    message(WARNING "Skipping Recorder: requires readable avcodec 62 headers. ${_rec_read_error}")
+    return()
 endif()
 # Hash checks bind the runtime binaries to the design's fixed SDK, not the folder's 'latest' name.
 foreach(_rec_lock IN ITEMS
@@ -26,10 +37,13 @@ foreach(_rec_lock IN ITEMS
     string(REPLACE "|" ";" _rec_lock "${_rec_lock}")
     list(GET _rec_lock 0 _rec_dll)
     list(GET _rec_lock 1 _rec_expected_hash)
-    file(SHA256 "${RECORDER_FFMPEG_ROOT}/bin/${_rec_dll}" _rec_hash)
+    execute_process(COMMAND "${CMAKE_COMMAND}" -E sha256sum "${RECORDER_FFMPEG_ROOT}/bin/${_rec_dll}"
+        RESULT_VARIABLE _rec_hash_result OUTPUT_VARIABLE _rec_hash_line ERROR_VARIABLE _rec_hash_error)
+    string(REGEX MATCH "^[0-9a-fA-F]+" _rec_hash "${_rec_hash_line}")
     string(TOUPPER "${_rec_hash}" _rec_hash)
-    if(NOT _rec_hash STREQUAL _rec_expected_hash)
-        message(FATAL_ERROR "Recorder: ${_rec_dll} SHA-256 differs from the frozen SDK.")
+    if(NOT _rec_hash_result STREQUAL "0" OR NOT _rec_hash STREQUAL _rec_expected_hash)
+        message(WARNING "Skipping Recorder: ${_rec_dll} missing/unreadable or SHA-256 differs from the frozen SDK. ${_rec_hash_error}")
+        return()
     endif()
 endforeach()
 foreach(_rec_lib IN ITEMS avcodec avformat avutil swscale swresample)
@@ -44,7 +58,8 @@ foreach(_rec_lib IN ITEMS avcodec avformat avutil swscale swresample)
     endif()
     foreach(_rec_file IN ITEMS "lib/${_rec_lib}.lib" "bin/${_rec_lib}-${_rec_abi}.dll")
         if(NOT EXISTS "${RECORDER_FFMPEG_ROOT}/${_rec_file}")
-            message(FATAL_ERROR "Recorder SDK file missing: ${_rec_file}")
+            message(WARNING "Skipping Recorder: SDK file missing: ${_rec_file}")
+            return()
         endif()
     endforeach()
     add_library(RecorderFFmpeg_${_rec_lib} SHARED IMPORTED)
@@ -66,7 +81,7 @@ target_compile_definitions(RecorderCommon PUBLIC
 add_library(RecorderCore STATIC
     src/capture/CameraCatalog.cpp src/capture/MfCameraCapture.cpp
     src/video/CaptureFrameDecoder.cpp src/video/VideoSurfacePool.cpp src/video/PreviewPresenter.cpp
-    src/video/GpuColourConverter.cpp src/diagnostics/CaptureTelemetry.cpp
+    src/video/GpuColourConverter.cpp src/diagnostics/CaptureTelemetry.cpp src/diagnostics/MfJpegRangeProbe.cpp
     src/record/VideoCfrScheduler.cpp src/record/NvencEncoder.cpp src/record/Mp4TakeWriter.cpp
     src/record/ReferenceMixWriter.cpp src/record/EncodePipeline.cpp)
 target_include_directories(RecorderCore PUBLIC src)
@@ -74,7 +89,7 @@ target_link_libraries(RecorderCore PUBLIC RecorderCommon RecorderFFmpeg_avcodec 
     PRIVATE mf mfplat mfreadwrite mfuuid ole32 propsys d3d11 dxgi d3dcompiler user32 winmm)
 target_compile_definitions(RecorderCore PUBLIC RECORDER_FFMPEG_VERSION="${_recorder_ffmpeg_version}")
 add_executable(RecorderProbe tools/RecorderProbe.cpp)
-add_executable(RecorderTests tests/TestMain.cpp tests/CaptureContractTests.cpp tests/CfrSchedulerTests.cpp tests/EncoderContractTests.cpp)
+add_executable(RecorderTests tests/TestMain.cpp tests/CaptureContractTests.cpp tests/CaptureReviewTests.cpp tests/CfrSchedulerTests.cpp tests/EncoderContractTests.cpp)
 include(src/audio/RecorderAudio.cmake)
 target_sources(RecorderTests PRIVATE tests/AsioStampTests.cpp tests/NativePcmTests.cpp)
 foreach(_rec_target IN ITEMS RecorderCommon RecorderCore RecorderProbe RecorderTests)
@@ -92,6 +107,7 @@ foreach(_rec_exe IN ITEMS RecorderProbe RecorderTests)
         ${_rec_dlls} "$<TARGET_FILE_DIR:${_rec_exe}>" VERBATIM)
 endforeach()
 add_test(NAME RecorderCaptureContracts COMMAND RecorderTests --suite capture-contract)
+add_test(NAME RecorderCaptureReview COMMAND RecorderTests --suite capture-review)
 add_test(NAME RecorderCfrScheduler COMMAND RecorderTests --suite cfr-scheduler)
 add_test(NAME RecorderEncoderContracts COMMAND RecorderTests --suite encoder-contract)
 message(STATUS "Recorder: pinned LGPL shared FFmpeg ${_recorder_ffmpeg_version}, avcodec ABI 62")

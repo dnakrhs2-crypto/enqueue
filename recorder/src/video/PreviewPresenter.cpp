@@ -1,4 +1,5 @@
 #include "PreviewPresenter.h"
+#include "PresentPacing.h"
 #include <d3d11.h>
 #include <dxgi1_3.h>
 #include <d3dcompiler.h>
@@ -100,10 +101,9 @@ struct PreviewPresenter::State
     juce::var adapter = jsonObject();
     State(HWND w, VideoSurfacePool& p, std::shared_ptr<CaptureTelemetry> t, UINT x, UINT y)
         : window(w), pool(p), telemetry(std::move(t)), width(x), height(y) {}
-    void run(std::promise<void> ready)
+    void run(std::promise<void> ready, std::shared_future<void> measurementStart)
     {
         bool signalled = false;
-        int heldCpu = VideoSurfacePool::none;
         try
         {
             ComApartment apartment;
@@ -140,6 +140,8 @@ struct PreviewPresenter::State
             NativeHandle frameLatency{swap2->GetFrameLatencyWaitableObject()};
             if (!frameLatency.value) throw std::runtime_error("Swapchain has no frame latency waitable object");
             ComPtr<IDXGIOutput> output;
+            jsonSet(adapter, "displayRefreshStatus", "UNAVAILABLE");
+            jsonSet(adapter, "displayRefreshReason", "DXGI output or current display settings could not be queried");
             if (SUCCEEDED(swap->GetContainingOutput(&output)))
             {
                 DXGI_OUTPUT_DESC out{};
@@ -147,7 +149,11 @@ struct PreviewPresenter::State
                 {
                     DEVMODEW display{}; display.dmSize = sizeof(display);
                     if (EnumDisplaySettingsW(out.DeviceName, ENUM_CURRENT_SETTINGS, &display))
+                    {
                         jsonSet(adapter, "displayRefreshHz", jsonInt(display.dmDisplayFrequency));
+                        jsonSet(adapter, "displayRefreshStatus", displayRefreshVerdict(static_cast<int>(display.dmDisplayFrequency)));
+                        jsonSet(adapter, "displayRefreshReason", "EnumDisplaySettings integer Hz; 59 includes 59.94; 0/1 is unavailable");
+                    }
                 }
             }
             ComPtr<ID3D11Texture2D> backBuffer;
@@ -180,11 +186,14 @@ struct PreviewPresenter::State
             jsonSet(adapter, "contextOwner", "present thread only; three fenced upload slots; DO_NOT_WAIT staging maps; no decoder/encoder context sharing");
             int current = -1;
             std::uint64_t lastPresentedFrame = 0;
-            auto lastNewPresent = qpcNow(), previousPresent = std::int64_t{0};
             bool stallActive = false;
+            PresentPacing pacing;
+            ready.set_value(); signalled = true;
+            if (measurementStart.valid())
+                while (!stopping.load() && measurementStart.wait_for(std::chrono::milliseconds(5)) != std::future_status::ready) {}
+            auto lastNewPresent = qpcNow(), previousPresent = std::int64_t{0};
             const auto start = qpcNow();
             std::uint64_t tick = 0;
-            ready.set_value(); signalled = true;
             while (!stopping.load())
             {
                 const auto due = start + static_cast<std::int64_t>(++tick * static_cast<std::uint64_t>(telemetry->frequency) / 60);
@@ -203,10 +212,20 @@ struct PreviewPresenter::State
                 if (!stallActive && telemetry->afterWarmup(stallNow) && telemetry->latestReadyFrame.load() > lastPresentedFrame
                     && telemetry->ms(stallNow - stallStart) > 2 * telemetry->fps.periodMs() + 1000.0 / 60)
                 { telemetry->loss(LossReason::previewStall); stallActive = true; }
-                if (WaitForSingleObject(frameLatency.value, 0) != WAIT_OBJECT_0)
-                { telemetry->loss(LossReason::presentBusy); continue; }
-                const int index = pool.takeLatest();
-                if (index != VideoSurfacePool::none)
+                if (pacing.needsVisibilityTest())
+                {
+                    const auto visible = swap->Present(0, DXGI_PRESENT_TEST);
+                    checkHr(visible, "Test preview visibility");
+                    pacing.visibilityTest(visible);
+                    if (pacing.needsVisibilityTest()) { telemetry->loss(LossReason::presentBusy); continue; }
+                }
+                if (pacing.needsWait())
+                {
+                    const auto wait = WaitForSingleObject(frameLatency.value, 0);
+                    if (wait == WAIT_FAILED) checkHr(HRESULT_FROM_WIN32(GetLastError()), "Wait for preview frame latency");
+                    if (wait != WAIT_OBJECT_0) { telemetry->loss(LossReason::presentBusy); continue; }
+                }
+                pool.uploadLatest([&](VideoSurface& surface)
                 {
                     int candidate = -1;
                     for (int i = 0; i < static_cast<int>(uploads.size()); ++i)
@@ -219,17 +238,14 @@ struct PreviewPresenter::State
                         checkHr(hr, "Poll GPU upload slot");
                         if (hr == S_OK && complete) { candidate = i; break; }
                     }
-                    auto& surface = pool.surface(index);
                     surface.stamp.uploadStart = qpcNow();
                     if (candidate >= 0 && upload(context.Get(), uploads[static_cast<size_t>(candidate)], surface))
                     {
                         surface.stamp.uploadEnd = qpcNow();
                         current = candidate; uploads[static_cast<size_t>(current)].stamp = surface.stamp;
-                        if (heldCpu != VideoSurfacePool::none) pool.release(heldCpu);
-                        heldCpu = index;
                     }
-                    else { telemetry->loss(LossReason::uploadBusy); pool.release(index); }
-                }
+                    else telemetry->loss(LossReason::uploadBusy);
+                }); // staging owns the bytes now; release CPU surface on every exit
                 const float black[] = {0, 0, 0, 1};
                 context->ClearRenderTargetView(target.Get(), black);
                 if (current >= 0)
@@ -250,6 +266,7 @@ struct PreviewPresenter::State
                 const auto submitted = qpcNow();
                 const auto hr = swap->Present(0, DXGI_PRESENT_DO_NOT_WAIT);
                 const auto returned = qpcNow();
+                pacing.presented(hr);
                 if (hr == DXGI_ERROR_WAS_STILL_DRAWING) { telemetry->loss(LossReason::presentBusy); continue; }
                 if (hr == DXGI_STATUS_OCCLUDED) { telemetry->loss(LossReason::presentBusy); continue; }
                 checkHr(hr, "Preview Present");
@@ -273,19 +290,18 @@ struct PreviewPresenter::State
             try { throw; } catch (const std::exception& e) { error = e.what(); }
             telemetry->loss(LossReason::presentFailure);
         }
-        if (heldCpu != VideoSurfacePool::none) pool.release(heldCpu);
         done.store(true);
     }
 };
 PreviewPresenter::PreviewPresenter(HWND window, VideoSurfacePool& pool, std::shared_ptr<CaptureTelemetry> telemetry, UINT width, UINT height)
     : state(std::make_unique<State>(window, pool, std::move(telemetry), width, height)) {}
 PreviewPresenter::~PreviewPresenter() { stop(); }
-void PreviewPresenter::start()
+void PreviewPresenter::start(std::shared_future<void> measurementStart)
 {
     if (state->thread.joinable()) throw std::logic_error("Presenter instance is single-use");
     state->done.store(false);
     std::promise<void> promise; auto future = promise.get_future();
-    state->thread = std::thread(&State::run, state.get(), std::move(promise));
+    state->thread = std::thread(&State::run, state.get(), std::move(promise), std::move(measurementStart));
     future.get();
 }
 void PreviewPresenter::stop() { state->stopping.store(true); if (state->thread.joinable()) state->thread.join(); }

@@ -1,5 +1,7 @@
 #include "capture/MfCameraCapture.h"
 #include "video/PreviewPresenter.h"
+#include "video/PresentPacing.h"
+#include "diagnostics/MfJpegRangeProbe.h"
 #include "record/EncodePipeline.h"
 #include "audio/AsioProbe.h"
 extern "C"
@@ -49,14 +51,16 @@ Arguments parse(int argc, wchar_t** argv)
 {
     Arguments args;
     for (int i = 0; i < argc; ++i) args.original.add(juce::String(argv[i]));
-    if (argc < 2) throw std::invalid_argument("RecorderProbe enumerate --select [--cam1 N --cam1-mode N] --out devices.json | capture --devices FILE --camera cam1 --seconds N --report FILE | encode [--devices FILE --camera cam1 | --synthetic] --project-fps 30|60 --seconds N [--preset p5 --report FILE --out-dir DIR]");
+    if (argc < 2) throw std::invalid_argument("RecorderProbe enumerate --select [--cam1 N --cam1-mode N] --out devices.json | capture --devices FILE --camera cam1 --seconds N --report FILE | mf-jpeg-range [--report FILE] | encode [--devices FILE --camera cam1 | --synthetic] --project-fps 30|60 --seconds N [--preset p5 --report FILE --out-dir DIR]");
     args.command = juce::String(argv[1]).toStdString();
-    const std::set<std::string> allowedFlags = args.command == "enumerate" ? std::set<std::string>{"--select"}
+    const std::set<std::string> allowedFlags = args.command == "mf-jpeg-range" ? std::set<std::string>{}
+        : args.command == "enumerate" ? std::set<std::string>{"--select"}
         : args.command == "encode" ? std::set<std::string>{"--synthetic"} : std::set<std::string>{"--compare-decoders"};
-    const std::set<std::string> allowedValues = args.command == "enumerate" ? std::set<std::string>{"--out", "--cam1", "--cam1-mode", "--cam2", "--cam2-mode"}
+    const std::set<std::string> allowedValues = args.command == "mf-jpeg-range" ? std::set<std::string>{"--report"}
+        : args.command == "enumerate" ? std::set<std::string>{"--out", "--cam1", "--cam1-mode", "--cam2", "--cam2-mode"}
         : args.command == "encode" ? std::set<std::string>{"--devices", "--camera", "--mode", "--seconds", "--report", "--out-dir", "--project-fps", "--preset"}
         : std::set<std::string>{"--devices", "--camera", "--mode", "--seconds", "--report", "--decoder-threads", "--decoder"};
-    if (args.command != "enumerate" && args.command != "capture" && args.command != "encode") throw std::invalid_argument("Unknown subcommand: " + args.command);
+    if (args.command != "enumerate" && args.command != "capture" && args.command != "encode" && args.command != "mf-jpeg-range") throw std::invalid_argument("Unknown subcommand: " + args.command);
     for (int i = 2; i < argc; ++i)
     {
         const auto key = juce::String(argv[i]).toStdString();
@@ -71,7 +75,7 @@ juce::File filePath(const std::string& path)
 {
     return juce::File::getCurrentWorkingDirectory().getChildFile(juce::String::fromUTF8(path.c_str()));
 }
-juce::var baseReport(const Arguments& args)
+juce::var baseReport(const Arguments& args, juce::var* partial = nullptr)
 {
     auto value = jsonObject(), sdk = jsonObject();
     jsonSet(value, "schemaVersion", 1); jsonSet(value, "command", args.original);
@@ -82,6 +86,7 @@ juce::var baseReport(const Arguments& args)
     jsonSet(sdk, "swscaleVersion", jsonInt(swscale_version())); jsonSet(sdk, "configuration", avcodec_configuration());
     jsonSet(sdk, "avformatVersion", jsonInt(avformat_version())); jsonSet(sdk, "swresampleVersion", jsonInt(swresample_version()));
     jsonSet(value, "sdk", sdk);
+    if (partial) *partial = value; // keep version/command evidence even if validation throws
     if (std::string(av_version_info()) != RECORDER_FFMPEG_VERSION || (avcodec_version() >> 16) != 62)
         throw std::runtime_error("Loaded FFmpeg runtime differs from the configured SDK");
     return value;
@@ -124,9 +129,10 @@ juce::var selectCamera(const std::vector<CameraDevice>& devices, const char* cam
 int enumerate(const Arguments& args)
 {
     const auto out = filePath(args.required("--out"));
-    auto report = baseReport(args);
+    auto report = jsonObject();
     try
     {
+        report = baseReport(args, &report);
         const bool indices = args.has("--cam1") || args.has("--cam1-mode") || args.has("--cam2") || args.has("--cam2-mode");
         if (indices && (!args.has("--select") || !args.has("--cam1") || !args.has("--cam1-mode") || args.has("--cam2") != args.has("--cam2-mode")))
             throw std::invalid_argument("Noninteractive selection requires --select --cam1 N --cam1-mode N, and paired --cam2 N --cam2-mode N");
@@ -211,7 +217,7 @@ juce::var runCapture(const std::string& link, CameraMode mode, bool mfDecode, in
     jsonSet(result, "path", mfDecode ? "mf-mjpeg-nv12" : "ffmpeg-native");
     jsonSet(result, "requestedNativeMode", CameraCatalog::modeJson(mode));
     jsonSet(result, "secondsRequested", jsonInt(seconds));
-    jsonSet(result, "cpuDecodeDefinition", mfDecode ? "Post-MF NV12 pass-through only. Internal MF MJPEG decode duration is UNAVAILABLE (happens before callback)."
+    jsonSet(result, "cpuDecodeDefinition", mfDecode ? "Post-MF raw NV12 binding only; range/matrix conversion is in colourNormalise. Internal MF MJPEG decode duration is UNAVAILABLE (happens before callback)."
         : "FFmpeg avcodec_send_packet/receive_frame including padded packet copy; native raw binding for NV12/YUY2. Separate from colour normalisation.");
     jsonSet(result, "callbackToPresentDefinition", mfDecode ? "Decoded NV12 SourceReader callback entry to successful Present submission; excludes internal MF decode."
         : "Native SourceReader callback entry to successful Present submission; includes worker decode and colour normalisation.");
@@ -219,6 +225,8 @@ juce::var runCapture(const std::string& link, CameraMode mode, bool mfDecode, in
     VideoSurfacePool pool(mode.width, mode.height);
     PreviewPresenter presenter(window.handle, pool, telemetry, mode.width, mode.height);
     MfCameraCapture capture(telemetry, pool);
+    std::promise<void> beginMeasurement;
+    auto measurementStart = beginMeasurement.get_future().share();
     bool opened = false, durationComplete = false, cancelled = false;
     std::string failure;
     auto start = std::chrono::steady_clock::now();
@@ -229,16 +237,22 @@ juce::var runCapture(const std::string& link, CameraMode mode, bool mfDecode, in
         SetWindowTextW(window.handle, title.toWideCharPointer());
         // DXGI can synchronously send window messages while creating the swapchain.
         // Keep the HWND owner pumping even while the presenter prepares its device.
-        auto presentReady = std::async(std::launch::async, [&] { presenter.start(); });
+        auto presentReady = std::async(std::launch::async, [&] { presenter.start(measurementStart); });
         while (presentReady.wait_for(std::chrono::milliseconds(0)) != std::future_status::ready)
         { cancelled |= !window.pump(); MsgWaitForMultipleObjects(0, nullptr, FALSE, 5, QS_ALLINPUT); }
         presentReady.get();
         if (cancelled) throw std::runtime_error("User closed preview during preparation");
-        const auto info = capture.start(link, mode, mfDecode, threads);
+        auto captureReady = std::async(std::launch::async, [&] { return capture.start(link, mode, mfDecode, threads, measurementStart); });
+        while (captureReady.wait_for(std::chrono::milliseconds(0)) != std::future_status::ready)
+        { cancelled |= !window.pump(); MsgWaitForMultipleObjects(0, nullptr, FALSE, 5, QS_ALLINPUT); }
+        const auto info = captureReady.get();
+        if (cancelled) throw std::runtime_error("User closed preview during camera open");
         jsonSet(result, "nativeMode", CameraCatalog::modeJson(info.nativeMode));
         jsonSet(result, "outputMode", CameraCatalog::modeJson(info.outputMode));
         jsonSet(result, "decoder", info.decoderName); jsonSet(result, "effectiveDecoderThreads", info.decoderThreads);
+        telemetry->reset(); // both threads are prepared but cannot yet write telemetry
         opened = true; start = std::chrono::steady_clock::now(); cpuStart = processCpu100ns();
+        beginMeasurement.set_value();
         while (std::chrono::steady_clock::now() - start < std::chrono::seconds(seconds))
         {
             if (!window.pump()) { cancelled = true; failure = "User closed preview before requested duration"; break; }
@@ -274,8 +288,10 @@ juce::var runCapture(const std::string& link, CameraMode mode, bool mfDecode, in
     const bool latencyPass = latency.count() > 0 && latency.percentile(0.95) <= p95Limit;
     const int hz = presenter.adapterJson()["displayRefreshHz"];
     if (!opened || telemetry->samples.load() == 0) status(result, "UNAVAILABLE", failure.empty() ? "No delivered hardware samples" : failure);
-    else if (!failure.empty() || !durationComplete || !clean || !latencyPass || hz < 60)
-        status(result, "FAIL", failure.empty() ? "Software observation gate failed: inspect losses, callback-to-Present latency and display refresh (requires >=60Hz)" : failure);
+    else if (!failure.empty() || !durationComplete || !clean || !latencyPass || std::string(displayRefreshVerdict(hz)) == "FAIL")
+        status(result, "FAIL", failure.empty() ? "Software observation gate failed: inspect losses, callback-to-Present latency and display refresh (integer Hz >=59 includes 59.94)" : failure);
+    else if (std::string(displayRefreshVerdict(hz)) == "UNAVAILABLE")
+        status(result, "UNAVAILABLE", "Software observations retained; display refresh query unavailable");
     else status(result, "PASS", mfDecode ? "Measured post-MF-callback software budget only; MF decode/optical/source loss certification remains unavailable"
         : "Measured software callback-to-Present budget; optical/source loss certification remains unavailable");
     return result;
@@ -283,9 +299,10 @@ juce::var runCapture(const std::string& link, CameraMode mode, bool mfDecode, in
 int captureCommand(const Arguments& args)
 {
     const auto out = filePath(args.required("--report"));
-    auto report = baseReport(args);
+    auto report = jsonObject();
     try
     {
+        report = baseReport(args, &report);
         const auto seconds = positiveInteger(args.required("--seconds"));
         const auto threads = positiveInteger(args.get("--decoder-threads", "1"));
         if (threads > 16) throw std::invalid_argument("--decoder-threads must be 1..16");
@@ -305,6 +322,7 @@ int captureCommand(const Arguments& args)
         ComApartment com; MfRuntime mf;
         ProbeWindow window;
         juce::Array<juce::var> runs;
+        const auto addRun = [&](juce::var run) { runs.add(run); jsonSet(report, "runs", runs); };
         if (args.has("--compare-decoders"))
         {
             // Pin one actual native MJPEG mode for BOTH sequential passes. The same UVC
@@ -324,8 +342,8 @@ int captureCommand(const Arguments& args)
             jsonSet(report, "comparisonProtocol", "Sequential A/B on the exact same native MJPEG mode; N seconds TOTAL split floor(N/2) FFmpeg and remaining MF. Keep HDMI/UVC scene/pattern running unchanged. Same-scene identity is operator-controlled, not verified.");
             jsonSet(report, "comparisonLimitation", "MF transforms before OnReadSample; internal MF decode time unavailable. Compare deviceToPresent only when DeviceTimestamp is retained and valid; callbackToPresent endpoints differ. No automatic winning decoder selection.");
             std::cout << "Compare: keep the same input scene/pattern running. FFmpeg " << seconds / 2 << "s, then MF " << seconds - seconds / 2 << "s.\n";
-            runs.add(runCapture(link, mode, false, static_cast<int>(threads), seconds / 2, window));
-            if (!static_cast<bool>(runs.getLast()["cancelled"])) runs.add(runCapture(link, mode, true, static_cast<int>(threads), seconds - seconds / 2, window));
+            addRun(runCapture(link, mode, false, static_cast<int>(threads), seconds / 2, window));
+            if (!static_cast<bool>(runs.getLast()["cancelled"])) addRun(runCapture(link, mode, true, static_cast<int>(threads), seconds - seconds / 2, window));
         }
         else
         {
@@ -335,7 +353,7 @@ int captureCommand(const Arguments& args)
             const auto decoder = args.get("--decoder", mode.subtype == CaptureSubtype::mjpeg ? "mf" : "ffmpeg");
             if (decoder != "mf" && decoder != "ffmpeg") throw std::invalid_argument("--decoder must be mf or ffmpeg");
             if (decoder == "mf" && mode.subtype != CaptureSubtype::mjpeg) throw std::invalid_argument("--decoder mf requires an MJPEG native mode");
-            runs.add(runCapture(link, mode, decoder == "mf", static_cast<int>(threads), seconds, window));
+            addRun(runCapture(link, mode, decoder == "mf", static_cast<int>(threads), seconds, window));
         }
         jsonSet(report, "runs", runs);
         bool allPass = true, unavailable = false;
@@ -346,6 +364,23 @@ int captureCommand(const Arguments& args)
     CaptureTelemetry::writeJson(out, report);
     std::cout << report["result"].toString() << ": " << report["reason"].toString() << "\nReport: " << out.getFullPathName() << '\n';
     return report["result"].toString() == "PASS" ? 0 : report["result"].toString() == "UNAVAILABLE" ? 2 : 1;
+}
+int mfJpegRangeCommand(const Arguments& args)
+{
+    auto report = jsonObject();
+    try
+    {
+        report = baseReport(args, &report);
+        ComApartment com; MfRuntime mf;
+        const auto measured = probeMfJpegRange();
+        jsonSet(report, "sourceKind", "synthetic-offline"); jsonSet(report, "measurement", measured);
+        status(report, static_cast<bool>(measured["allClassified"]) ? "PASS" : "UNAVAILABLE",
+            "Direct MFT synthetic colour judgement; inspect numeric patch means and model errors");
+    }
+    catch (const std::exception& e) { status(report, "UNAVAILABLE", e.what()); }
+    if (args.has("--report")) CaptureTelemetry::writeJson(filePath(args.required("--report")), report);
+    std::cout << juce::JSON::toString(report, false) << '\n';
+    return report["result"].toString() == "PASS" ? 0 : 2;
 }
 }
 namespace
@@ -466,11 +501,25 @@ int encodeCommand(const Arguments& args)
 int wmain(int argc, wchar_t** argv)
 {
     SetConsoleOutputCP(CP_UTF8); SetConsoleCP(CP_UTF8);
+    Arguments args;
+    auto report = jsonObject();
     try
     {
         if (argc >= 2 && juce::String(argv[1]) == "asio") return runAsioProbe(argc, argv);
-        const auto args = parse(argc, argv);
-        return args.command == "enumerate" ? enumerate(args) : args.command == "encode" ? encodeCommand(args) : captureCommand(args);
+        args = parse(argc, argv);
+        report = baseReport(args, &report); // also covers encode's early runtime check without changing its function
+        return args.command == "enumerate" ? enumerate(args) : args.command == "encode" ? encodeCommand(args)
+            : args.command == "mf-jpeg-range" ? mfJpegRangeCommand(args) : captureCommand(args);
     }
-    catch (const std::exception& e) { std::cerr << "RecorderProbe: " << e.what() << '\n'; return 1; }
+    catch (const std::exception& e)
+    {
+        status(report, "FAIL", e.what());
+        try
+        {
+            const auto out = args.get("--report", args.get("--out"));
+            if (!out.empty()) CaptureTelemetry::writeJson(filePath(out), report);
+        }
+        catch (const std::exception& writeError) { std::cerr << "Report write failed: " << writeError.what() << '\n'; }
+        std::cerr << juce::JSON::toString(report, false) << '\n'; return 1;
+    }
 }

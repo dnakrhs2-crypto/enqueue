@@ -26,8 +26,16 @@ public:
     int acquireWrite() noexcept;
     // Returns true when an unconsumed mailbox frame was replaced; frees it on the producer.
     bool publish(int index) noexcept;
-    // Consumer transfers ownership of the latest slot. It must release its previous slot.
+    // Consumer transfers ownership of the latest slot; release before taking another.
     int takeLatest() noexcept;
+    // CPU data is needed only until staging upload returns, including failure/exception.
+    template<class Upload> void uploadLatest(Upload&& upload)
+    {
+        const int index = takeLatest();
+        if (index == none) return;
+        struct Release { VideoSurfacePool& pool; int index; ~Release() { pool.release(index); } } release{*this, index};
+        upload(surface(index));
+    }
     void release(int index) noexcept;
     VideoSurface& surface(int index) noexcept { return surfaces[static_cast<size_t>(index)]; }
 private:

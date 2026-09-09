@@ -56,6 +56,7 @@ public:
     double ms(std::int64_t ticks) const noexcept { return 1000.0 * static_cast<double>(ticks) / static_cast<double>(frequency); }
     bool afterWarmup(std::int64_t qpc) const noexcept { const auto first = firstCallbackQpc.load(); return first && qpc - first >= frequency; }
     bool softwareLossFree() const noexcept;
+    void reset(); // only while callback/worker/presenter are stopped or held before measurement
     // One owner per timing: worker writes worker timings; presenter writes present timings.
     // Read the JSON/percentiles only after BOTH threads have joined.
     void duration(Timing stage, double milliseconds) noexcept { timings[static_cast<size_t>(stage)].add(milliseconds); }

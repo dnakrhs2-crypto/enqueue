@@ -9,6 +9,7 @@
 #include <string>
 
 int runCaptureContractTests();   // round 01: capture / decode / preview contracts (no hardware)
+int runCaptureReviewTests();     // round 02b: recovery, pacing and MF JPEG colour fixtures
 int runCfrSchedulerTests();      // round 02: CFR frame selection / counters
 int runEncoderContractTests();   // round 02: NVENC / MP4 / AAC contracts (no GPU)
 int runAsioStampTests();         // round 03: ASIO BlockStamp bridge statistics
@@ -28,6 +29,7 @@ int runAsioNativePcm() { const int a = runAsioStampTests(), b = runNativePcmTest
 int runJournalDurable() { const int a = runJournalTests(), b = runWavChunkTests(); return (a || b) ? 1 : 0; }
 const Suite suites[] = {
     {"capture-contract", runCaptureContractTests},
+    {"capture-review", runCaptureReviewTests},
     {"cfr-scheduler", runCfrSchedulerTests},
     {"encoder-contract", runEncoderContractTests},
     {"asio-native-pcm", runAsioNativePcm},

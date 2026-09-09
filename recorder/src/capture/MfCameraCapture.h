@@ -2,6 +2,7 @@
 #include "video/CaptureFrameDecoder.h"
 #include <thread>
 #include <functional>
+#include <future>
 
 namespace gocue::recorder
 {
@@ -17,7 +18,8 @@ class MfCameraCapture
 public:
     MfCameraCapture(std::shared_ptr<CaptureTelemetry>, VideoSurfacePool&, std::function<void(const VideoSurface&)> recordSink = {});
     ~MfCameraCapture();
-    CaptureOpenInfo start(const std::string& symbolicLink, CameraMode, bool mfMjpegDecoder, int decoderThreads = 1);
+    CaptureOpenInfo start(const std::string& symbolicLink, CameraMode, bool mfMjpegDecoder, int decoderThreads = 1,
+                          std::shared_future<void> measurementStart = {});
     void stop();
     bool finished() const noexcept;
     // After stop only.

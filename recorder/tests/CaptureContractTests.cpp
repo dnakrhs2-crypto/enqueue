@@ -137,9 +137,10 @@ int runCaptureContractTests()
             require(pool.publish(next) == (frame > 2), "exact unconsumed overwrite count");
         }
         require(pool.surface(held).stamp.frame == 1, "present data stable");
+        pool.release(held); // the presenter releases CPU bytes at the end of upload
         const int latest = pool.takeLatest(); require(pool.surface(latest).stamp.frame == 1000, "newest selected");
         require(pool.takeLatest() == VideoSurfacePool::none, "only one mailbox");
-        pool.release(held); pool.release(latest);
+        pool.release(latest);
     });
     test("telemetry stage boundaries and bounded timestamp trace", []
     {

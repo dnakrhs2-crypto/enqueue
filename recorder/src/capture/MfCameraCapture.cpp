@@ -1,4 +1,5 @@
 #include "MfCameraCapture.h"
+#include "CaptureDecodeRecovery.h"
 #include "support/BoundedSpscQueue.h"
 #include <future>
 #include <chrono>
@@ -26,6 +27,7 @@ struct CallbackState
     CaptureTelemetry& telemetry;
     HANDLE sampleReady = nullptr;
     std::atomic<bool> accepting{false}, flushed{false};
+    std::atomic<bool> currentTypeChanged{false};
     std::atomic<unsigned> active{0};
     IMFSourceReader* reader = nullptr; // worker retains reader through rearm barrier + Flush
     std::uint64_t nextFrame = 0, generation = 0;
@@ -59,7 +61,7 @@ public:
         // No allocation, locks, attribute lookup, buffer access, Release, JSON or GPU here.
         // MF-specific permitted COM calls: retained sample AddRef and async ReadSample.
         if (FAILED(status) || (flags & (MF_SOURCE_READERF_ERROR | MF_SOURCE_READERF_ENDOFSTREAM
-                                       | MF_SOURCE_READERF_CURRENTMEDIATYPECHANGED | MF_SOURCE_READERF_NATIVEMEDIATYPECHANGED)))
+                                       | MF_SOURCE_READERF_NATIVEMEDIATYPECHANGED)))
         {
             t.sourceStatus.store(FAILED(status) ? status : E_FAIL);
             if (FAILED(status) || (flags & MF_SOURCE_READERF_ERROR)) t.loss(LossReason::sourceError);
@@ -69,6 +71,8 @@ public:
         }
         else
         {
+            const bool typeChanged = (flags & MF_SOURCE_READERF_CURRENTMEDIATYPECHANGED) != 0;
+            if (typeChanged) s.currentTypeChanged.store(true);
             if (flags & MF_SOURCE_READERF_STREAMTICK) t.loss(LossReason::sourceStreamTick);
             if (sample)
             {
@@ -89,11 +93,13 @@ public:
                 }
                 else t.loss(LossReason::captureDecodeOverflow); // borrowed sample: no app Release required
             }
-            if (s.accepting.load())
+            // Pause rearming at a type event. Only the worker may query attributes.
+            if (s.accepting.load() && !typeChanged)
             {
                 const auto hr = s.reader->ReadSample(firstVideoStream, 0, nullptr, nullptr, nullptr, nullptr);
                 if (FAILED(hr)) { t.sourceStatus.store(hr); t.loss(LossReason::sourceError); s.accepting.store(false); }
             }
+            if (typeChanged) SetEvent(s.sampleReady);
         }
         if (!s.accepting.load()) SetEvent(s.sampleReady);
         s.active.fetch_sub(1);
@@ -169,7 +175,8 @@ struct MfCameraCapture::State
     std::function<void(const VideoSurface&)> recordSink;
     State(std::shared_ptr<CaptureTelemetry> t, VideoSurfacePool& p, std::function<void(const VideoSurface&)> sink)
         : telemetry(std::move(t)), pool(p), recordSink(std::move(sink)) {}
-    void run(std::string link, CameraMode mode, bool mfDecode, int threads, std::promise<CaptureOpenInfo> opened)
+    void run(std::string link, CameraMode mode, bool mfDecode, int threads, std::promise<CaptureOpenInfo> opened,
+             std::shared_future<void> measurementStart)
     {
         bool openReported = false;
         try
@@ -193,17 +200,45 @@ struct MfCameraCapture::State
                 checkHr(attributes->SetUINT32(MF_READWRITE_ENABLE_HARDWARE_TRANSFORMS, FALSE), "Use controlled CPU MF comparison");
                 checkHr(MFCreateSourceReaderFromMediaSource(source.Get(), attributes.Get(), &reader), "Create async source reader");
                 auto info = configureReader(reader.Get(), mode, mfDecode);
-                CaptureFrameDecoder decoder(info.outputMode, threads);
+                CaptureFrameDecoder decoder(info.outputMode, threads, ColourDevice::hardware,
+                    mfDecode ? CaptureDecodeOrigin::mfMjpeg : CaptureDecodeOrigin::native);
+                CaptureDecodeRecovery recovery;
                 info.decoderThreads = decoder.effectiveThreads();
-                callback->reader = reader.Get(); callback->accepting.store(true);
-                checkHr(reader->ReadSample(firstVideoStream, 0, nullptr, nullptr, nullptr, nullptr), "Initial ReadSample");
-                opened.set_value(info); openReported = true;
+                callback->reader = reader.Get();
+                if (measurementStart.valid())
+                {
+                    // Probe resets telemetry only while both prepared workers are held.
+                    opened.set_value(info); openReported = true;
+                    while (!stopRequested.load() && measurementStart.wait_for(std::chrono::milliseconds(5)) != std::future_status::ready) {}
+                }
+                callback->accepting.store(!stopRequested.load());
+                if (!stopRequested.load())
+                    checkHr(reader->ReadSample(firstVideoStream, 0, nullptr, nullptr, nullptr, nullptr), "Initial ReadSample");
+                if (!openReported) { opened.set_value(info); openReported = true; }
                 std::int64_t previousPts = 0, previousQpc = 0;
                 std::uint64_t previousFrame = 0;
                 while (!stopRequested.load() && callback->accepting.load())
                 {
                     SampleEnvelope envelope;
-                    if (!callback->queue.pop(envelope))
+                    const bool hasSample = callback->queue.pop(envelope);
+                    ComPtr<IMFSample> sample; sample.Attach(envelope.sample);
+                    if (callback->currentTypeChanged.load())
+                    {
+                        while (callback->active.load() != 0) std::this_thread::yield();
+                        ComPtr<IMFMediaType> current;
+                        checkHr(reader->GetCurrentMediaType(firstVideoStream, &current), "Recheck changed SourceReader type");
+                        const auto actual = CameraCatalog::readMode(current.Get());
+                        if (!actual || !actual->sameSignal(info.outputMode))
+                        {
+                            telemetry->loss(LossReason::sourceTypeChanged);
+                            throw std::runtime_error("SourceReader changed subtype/size/rational FPS; capture requires re-prepare");
+                        }
+                        requireSameCaptureSignal(info.outputMode, *actual);
+                        decoder.updateOutputMode(*actual);
+                        callback->currentTypeChanged.store(false);
+                        checkHr(reader->ReadSample(firstVideoStream, 0, nullptr, nullptr, nullptr, nullptr), "Rearm after unchanged signal");
+                    }
+                    if (!hasSample)
                     {
                         // Sleep(1) can round to the Windows timer quantum and miss the
                         // 2ms queue budget. The prepared auto-reset event wakes on commit.
@@ -211,7 +246,6 @@ struct MfCameraCapture::State
                             checkHr(HRESULT_FROM_WIN32(GetLastError()), "Wait for retained sample");
                         continue;
                     }
-                    ComPtr<IMFSample> sample; sample.Attach(envelope.sample);
                     auto& stamp = envelope.stamp;
                     stamp.worker = qpcNow();
                     UINT64 deviceTime = 0;
@@ -246,15 +280,13 @@ struct MfCameraCapture::State
                     if (index == VideoSurfacePool::none) { telemetry->loss(LossReason::surfacePoolExhausted); continue; }
                     try
                     {
-                        decoder.copySample(sample.Get());
-                        sample.Reset(); // return scarce driver buffer BEFORE decode/colour work
-                        decoder.decodeCopied(pool.surface(index), stamp);
-                        colour = decoder.colourDecision();
-                        if (mfDecode)
+                        if (!recovery.frame(decoder, *telemetry, [&]
                         {
-                            pool.surface(index).colourAssumed = true;
-                            colour += "; MF-decoded NV12 matrix/range not verified with a physical grey chart";
-                        }
+                            decoder.copySample(sample.Get());
+                            sample.Reset(); // return scarce driver buffer BEFORE decode/colour work
+                            decoder.decodeCopied(pool.surface(index), stamp);
+                        })) { pool.release(index); continue; }
+                        colour = decoder.colourDecision();
                         if (pool.surface(index).colourAssumed) telemetry->colourAssumptions.fetch_add(1);
                         telemetry->recordWorker(stamp);
                         telemetry->decoded.fetch_add(1);
@@ -262,7 +294,7 @@ struct MfCameraCapture::State
                         if (pool.publish(index)) telemetry->loss(LossReason::previewMailboxOverwrite);
                         telemetry->latestReadyFrame.store(stamp.frame);
                     }
-                    catch (...) { pool.release(index); telemetry->loss(LossReason::decoderError); throw; }
+                    catch (...) { pool.release(index); throw; }
                 }
             }
             catch (...)
@@ -304,7 +336,7 @@ struct MfCameraCapture::State
 MfCameraCapture::MfCameraCapture(std::shared_ptr<CaptureTelemetry> t, VideoSurfacePool& pool, std::function<void(const VideoSurface&)> sink)
     : state(std::make_unique<State>(std::move(t), pool, std::move(sink))) {}
 MfCameraCapture::~MfCameraCapture() { stop(); }
-CaptureOpenInfo MfCameraCapture::start(const std::string& link, CameraMode mode, bool mfDecode, int threads)
+CaptureOpenInfo MfCameraCapture::start(const std::string& link, CameraMode mode, bool mfDecode, int threads, std::shared_future<void> measurementStart)
 {
     if (state->worker.joinable()) throw std::logic_error("Capture instance is single-use");
     static std::atomic<std::uint64_t> generation{0};
@@ -313,7 +345,7 @@ CaptureOpenInfo MfCameraCapture::start(const std::string& link, CameraMode mode,
     state->done.store(false);
     std::promise<CaptureOpenInfo> promise;
     auto future = promise.get_future();
-    state->worker = std::thread(&State::run, state.get(), link, mode, mfDecode, threads, std::move(promise));
+    state->worker = std::thread(&State::run, state.get(), link, mode, mfDecode, threads, std::move(promise), std::move(measurementStart));
     return future.get();
 }
 void MfCameraCapture::stop()

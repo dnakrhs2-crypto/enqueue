@@ -62,15 +62,18 @@ struct CaptureFrameDecoder::State
     AVCodecContext* codec = nullptr;
     AVPacket* packet = nullptr;
     AVFrame* frame = nullptr;
+    AVFrame* received = nullptr;
     SwsContext* direct = nullptr;
     ColourDevice colourDevice;
+    CaptureDecodeOrigin origin;
     std::unique_ptr<GpuColourConverter> gpuColour;
     std::vector<std::uint8_t> copied;
     std::string colourDecision;
-    State(CameraMode m, int t, ColourDevice d) : mode(m), threads(t), colourDevice(d) {}
+    State(CameraMode m, int t, ColourDevice d, CaptureDecodeOrigin o) : mode(m), threads(t), colourDevice(d), origin(o) {}
     ~State()
     {
         avcodec_free_context(&codec); av_packet_free(&packet); av_frame_free(&frame);
+        av_frame_free(&received);
         sws_freeContext(direct);
     }
     void normalise(AVFrame& input, VideoSurface& output)
@@ -79,7 +82,8 @@ struct CaptureFrameDecoder::State
             throw std::runtime_error("Decoder changed dimensions; dynamic format change requires re-prepare");
         if (output.width != mode.width || output.height != mode.height) throw std::runtime_error("Unprepared output surface");
         const auto format = static_cast<AVPixelFormat>(input.format);
-        bool assumed = false;
+        const bool jpegOrigin = mode.subtype == CaptureSubtype::mjpeg || origin == CaptureDecodeOrigin::mfMjpeg;
+        bool assumed = origin == CaptureDecodeOrigin::mfMjpeg;
         int matrix = SWS_CS_ITU709;
         if (input.colorspace == AVCOL_SPC_BT709) matrix = SWS_CS_ITU709;
         else if (input.colorspace == AVCOL_SPC_BT470BG || input.colorspace == AVCOL_SPC_SMPTE170M) matrix = SWS_CS_ITU601;
@@ -87,14 +91,14 @@ struct CaptureFrameDecoder::State
         else if (mode.colour.matrix == MFVideoTransferMatrix_BT709) matrix = SWS_CS_ITU709;
         else if (mode.colour.matrix == MFVideoTransferMatrix_BT601) matrix = SWS_CS_ITU601;
         else if (mode.colour.matrix != 0) throw std::runtime_error("Unsupported MF colour matrix");
-        else { matrix = mode.subtype == CaptureSubtype::mjpeg || mode.height < 720 ? SWS_CS_ITU601 : SWS_CS_ITU709; assumed = true; }
+        else { matrix = jpegOrigin || mode.height < 720 ? SWS_CS_ITU601 : SWS_CS_ITU709; assumed = true; }
         int full = 0;
         if (input.color_range == AVCOL_RANGE_JPEG || jpegFullFormat(format)) full = 1;
         else if (input.color_range == AVCOL_RANGE_MPEG) full = 0;
         else if (mode.colour.range == MFNominalRange_0_255) full = 1;
         else if (mode.colour.range == MFNominalRange_16_235) full = 0;
         else if (mode.colour.range != 0) throw std::runtime_error("Unsupported MF nominal range");
-        else { full = mode.subtype == CaptureSubtype::mjpeg ? 1 : 0; assumed = true; }
+        else { full = jpegOrigin ? 1 : 0; assumed = true; }
         // This spike converts YCbCr matrix/range only. SDR camera gamuts (BT.709, SMPTE 170M / BT.470 BG
         // as reported by JFIF MJPEG webcams and the GC311G2, sRGB / BT.601 transfer) are treated as the
         // BT.709 SDR family as a documented approximation pending physical colour-chart validation.
@@ -120,6 +124,8 @@ struct CaptureFrameDecoder::State
         output.colourAssumed = assumed;
         colourDecision = std::string("input ") + (matrix == SWS_CS_ITU709 ? "BT.709" : "BT.601") + (full ? " full" : " limited")
             + "; output NV12 BT.709 limited; " + (assumed ? "missing metadata uses documented SDR assumptions (not colour-certified)" : "explicit metadata");
+        if (origin == CaptureDecodeOrigin::mfMjpeg)
+            colourDecision += "; MF MJPEG origin: missing range/matrix uses full/601, based on offline Windows MJPEG MFT patches (2026-09-09); explicit output metadata takes precedence; camera chart unverified";
         uint8_t* destination[4] = {output.y(), output.uv(), nullptr, nullptr};
         int strides[4] = {static_cast<int>(mode.width), static_cast<int>(mode.width), 0, 0};
         const int width = input.width, height = input.height;
@@ -151,7 +157,8 @@ struct CaptureFrameDecoder::State
         }
     }
 };
-CaptureFrameDecoder::CaptureFrameDecoder(const CameraMode& mode, int threads, ColourDevice device) : state(std::make_unique<State>(mode, threads, device))
+CaptureFrameDecoder::CaptureFrameDecoder(const CameraMode& mode, int threads, ColourDevice device, CaptureDecodeOrigin origin)
+    : state(std::make_unique<State>(mode, threads, device, origin))
 {
     if (threads < 1 || threads > 16) throw std::invalid_argument("MJPEG threads must be 1..16");
     if (!mode.width || !mode.height || mode.width > 8192 || mode.height > 8192 || mode.width % 2 || mode.height % 2)
@@ -159,8 +166,8 @@ CaptureFrameDecoder::CaptureFrameDecoder(const CameraMode& mode, int threads, Co
     if (mode.interlace != 0 && mode.interlace != MFVideoInterlace_Progressive)
         throw std::invalid_argument("Interlaced source is unsupported; select a progressive native mode");
     auto& s = *state;
-    s.frame = av_frame_alloc(); s.packet = av_packet_alloc();
-    if (!s.frame || !s.packet) throw std::bad_alloc();
+    s.frame = av_frame_alloc(); s.received = av_frame_alloc(); s.packet = av_packet_alloc();
+    if (!s.frame || !s.received || !s.packet) throw std::bad_alloc();
     s.copied.reserve(static_cast<size_t>(mode.width) * mode.height * 4);
     if (mode.subtype == CaptureSubtype::mjpeg)
     {
@@ -168,17 +175,36 @@ CaptureFrameDecoder::CaptureFrameDecoder(const CameraMode& mode, int threads, Co
         if (!codec) throw std::runtime_error("Pinned FFmpeg has no CPU MJPEG decoder");
         s.codec = avcodec_alloc_context3(codec);
         if (!s.codec) throw std::bad_alloc();
-        s.codec->thread_count = threads;
+        // Pinned n8.1 MJPEG has no slice/frame threading capability. Requests are
+        // retained for CLI compatibility, but cannot buy parallel decode here.
+        s.codec->thread_count = (codec->capabilities & AV_CODEC_CAP_SLICE_THREADS) ? threads : 1;
         s.codec->thread_type = FF_THREAD_SLICE; // avoid frame-thread delay in live preview
+        s.codec->err_recognition = AV_EF_CAREFUL | AV_EF_EXPLODE;
         // FFmpeg checks aligned allocation dimensions too (e.g. 16-wide JPEG -> 64).
         // Visible decoded dimensions are separately required to match the native mode.
         s.codec->max_pixels = static_cast<std::int64_t>((mode.width + 63) & ~63u) * ((mode.height + 63) & ~63u);
         avCheck(avcodec_open2(s.codec, codec, nullptr), "Open MJPEG decoder");
     }
+    // MF JPEG provenance makes this conversion known before the first ReadSample.
+    // Prepare the compute device/buffers here, outside the measured frame loop.
+    if (origin == CaptureDecodeOrigin::mfMjpeg
+        && (mode.colour.matrix != MFVideoTransferMatrix_BT709 || mode.colour.range != MFNominalRange_16_235))
+        s.gpuColour = std::make_unique<GpuColourConverter>(mode.width, mode.height, device);
 }
 CaptureFrameDecoder::~CaptureFrameDecoder() = default;
 int CaptureFrameDecoder::effectiveThreads() const noexcept { return state->codec ? state->codec->thread_count : 0; }
 const std::string& CaptureFrameDecoder::colourDecision() const noexcept { return state->colourDecision; }
+void CaptureFrameDecoder::flush() noexcept
+{
+    if (state->codec) avcodec_flush_buffers(state->codec);
+    av_frame_unref(state->frame); av_frame_unref(state->received); av_packet_unref(state->packet);
+    state->copied.clear();
+}
+void CaptureFrameDecoder::updateOutputMode(const CameraMode& mode)
+{
+    if (!state->mode.sameSignal(mode)) throw std::runtime_error("Decoder signal changed; requires re-prepare");
+    state->mode = mode;
+}
 void CaptureFrameDecoder::copySample(IMFSample* sample)
 {
     auto& s = *state;
@@ -241,8 +267,34 @@ void CaptureFrameDecoder::decodeBytes(const std::uint8_t* bytes, size_t length, 
         avCheck(av_new_packet(s.packet, static_cast<int>(length)), "Allocate padded MJPEG packet");
         std::memcpy(s.packet->data, bytes, length);
         s.packet->pts = stamp.pts100ns;
-        avCheck(avcodec_send_packet(s.codec, s.packet), "Send MJPEG packet");
-        avCheck(avcodec_receive_frame(s.codec, s.frame), "Receive MJPEG frame");
+        int sent = avcodec_send_packet(s.codec, s.packet);
+        if (sent == AVERROR(EAGAIN))
+        {
+            // Drain before resubmitting the SAME unconsumed packet. Never spin on
+            // EAGAIN: time cannot make progress in the send/receive state machine.
+            unsigned drained = 0;
+            for (;;)
+            {
+                const int got = avcodec_receive_frame(s.codec, s.received);
+                if (got == AVERROR(EAGAIN)) break;
+                avCheck(got, "Drain pending MJPEG output");
+                av_frame_unref(s.received);
+                if (++drained > 4) throw std::runtime_error("Unbounded pending MJPEG output");
+            }
+            if (!drained) throw std::runtime_error("MJPEG send/receive both returned EAGAIN");
+            sent = avcodec_send_packet(s.codec, s.packet);
+        }
+        avCheck(sent, "Send MJPEG packet");
+        unsigned frames = 0;
+        for (;;)
+        {
+            const int got = avcodec_receive_frame(s.codec, s.received);
+            if (got == AVERROR(EAGAIN)) break; // needs another packet, not a busy retry
+            avCheck(got, "Receive MJPEG frame");
+            if (++frames != 1) throw std::runtime_error("More than one frame in a camera MJPEG sample");
+            av_frame_move_ref(s.frame, s.received);
+        }
+        if (!frames) throw std::runtime_error("MJPEG sample produced no frame (EAGAIN)");
     }
     else
     {
