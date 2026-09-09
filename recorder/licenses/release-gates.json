@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "gates": [
+    {"id": "exact-corresponding-source", "status": "UNVERIFIED", "owner": "배포 담당", "evidence": ""},
+    {"id": "third-party-notices", "status": "UNVERIFIED", "owner": "배포 담당", "evidence": ""},
+    {"id": "JUCE-contract", "status": "UNVERIFIED", "owner": "배포 담당·CEO 확인", "evidence": ""},
+    {"id": "ASIO-contract", "status": "UNVERIFIED", "owner": "배포 담당·CEO 확인", "evidence": ""},
+    {"id": "AVC-contract", "status": "UNVERIFIED", "owner": "배포 담당·CEO 확인", "evidence": ""},
+    {"id": "AAC-contract", "status": "UNVERIFIED", "owner": "배포 담당·CEO 확인", "evidence": ""},
+    {"id": "public-identity-URLs", "status": "UNVERIFIED", "owner": "배포 담당·CEO 확인", "evidence": ""},
+    {"id": "round28-shutdown-and-about-wiring", "status": "UNVERIFIED", "owner": "라운드 28", "evidence": ""},
+    {"id": "clean-PC-install-update", "status": "UNVERIFIED", "owner": "라운드 34", "evidence": ""}
+  ]
+}

@@ -1,0 +1,25 @@
+Recorder (가칭) 0.1.0 — 배포 후보 고지
+
+이 프로그램은 FFmpeg 프로젝트의 공유 라이브러리를 사용합니다.
+고정 빌드: n8.1.2-51-g7ba069f4f1-20260908 (FFmpeg 커밋 식별자 7ba069f4f1).
+FFmpeg 및 이 빌드의 라이선스: GNU LGPL version 3 or later (LGPL-3.0-or-later).
+저작권은 FFmpeg 개발자 및 각 제3자 구성요소의 권리자에게 있습니다.
+LGPL-3.0.txt와 그 안에서 참조하는 GPL-3.0.txt를 함께 제공합니다.
+GPL 본문 동봉은 GPL/nonfree FFmpeg 빌드를 허용한다는 뜻이 아닙니다.
+
+호환되는 수정 FFmpeg DLL로 교체할 수 있으며, 해당 라이브러리 수정·디버깅을
+위한 역공학을 앱의 이용 조건으로 제한하지 않습니다. 앱과 함께 있는 FFmpeg
+DLL은 암호화하거나 다른 이름으로 숨기지 않습니다. 설치 갱신 전 교체 DLL을
+보관하십시오. LGPL 자체의 보증 부인 조건은 동봉 라이선스 본문을 따릅니다.
+
+같은 릴리스의 대응 소스: 공개 전 준비 중.
+공개 URL은 ProductIdentity.h의 RELEASE_BASE_URL / TAG_PREFIX / SOURCES_STEM에서
+정합니다. 현재 .invalid URL은 예약된 자리이며 다운로드 주소가 아닙니다.
+FFmpeg/제3자 소스·패치·레시피·툴체인·각 고지 확보 전에는 공개하지 않습니다.
+원본 upstream의 변경 가능한 latest 링크만으로 대응 소스를 대체하지 않습니다.
+공식 안내: https://ffmpeg.org/legal.html
+
+WinSparkle 고지: WinSparkle-COPYING.txt, WinSparkle-COPYING.expat.txt.
+전체 제3자 확인 목록: THIRD-PARTY.md. 배포 승인 상태: release-gates.json.
+JUCE / ASIO / AVC(H.264) / AAC 계약 적용: 배포 담당·CEO 확인.
+자동화된 DLL·서명 검사는 계약 및 라이선스 적합성 승인을 대신하지 않습니다.

@@ -320,3 +320,36 @@ add_dependencies(RecorderProbe RecorderCrashHarness)
 # Round 24: product camera slots; append-only integration and the shared runner.
 target_sources(RecorderTests PRIVATE tests/CameraSlotTests.cpp)
 add_test(NAME RecorderCameraSlots COMMAND RecorderTests --suite camera-slots)
+
+# Rounds 32+33: append-only dependency audit, updater and packaging description.
+find_package(Python3 COMPONENTS Interpreter REQUIRED)
+set(_rec_audit "${CMAKE_CURRENT_SOURCE_DIR}/../tools/recorder/audit_ffmpeg.py")
+set(_rec_lock_file "${CMAKE_CURRENT_SOURCE_DIR}/third_party/ffmpeg.lock.json")
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${_rec_lock_file}" "${_rec_audit}")
+set(_rec_copy_args "")
+foreach(_rec_copy IN LISTS _rec_dlls)
+    list(APPEND _rec_copy_args --copy-dll "${_rec_copy}")
+endforeach()
+execute_process(COMMAND "${Python3_EXECUTABLE}" -B "${_rec_audit}"
+    --sdk "${RECORDER_FFMPEG_ROOT}" --expected-version "${_recorder_ffmpeg_version}"
+    --lock "${_rec_lock_file}" --report "${CMAKE_CURRENT_BINARY_DIR}/ffmpeg-audit.json" ${_rec_copy_args}
+    RESULT_VARIABLE _rec_audit_result OUTPUT_VARIABLE _rec_audit_output ERROR_VARIABLE _rec_audit_error TIMEOUT 60)
+if(NOT _rec_audit_result STREQUAL "0")
+    message(FATAL_ERROR "Recorder DLL copy/SDK lock audit failed: ${_rec_audit_output} ${_rec_audit_error}")
+endif()
+set(RECORDER_UPDATE_PUBLIC_KEY "" CACHE STRING "Recorder EdDSA public key; independent of Enqueue/LiveMix")
+target_sources(Recorder PRIVATE src/app/RecorderUpdater.cpp)
+target_compile_definitions(Recorder PRIVATE RECORDER_HAS_WINSPARKLE=${GOCUE_HAS_WINSPARKLE}
+    RECORDER_UPDATE_PUBLIC_KEY="${RECORDER_UPDATE_PUBLIC_KEY}")
+# Product name may contain the provisional Korean label; executable identity stays stable.
+file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/src/app/ProductIdentity.h" _rec_package_stem REGEX "^#define RECORDER_PACKAGE_STEM ")
+string(REGEX REPLACE "^#define RECORDER_PACKAGE_STEM \"([^\"]+)\"$" "\\1" _rec_package_stem "${_rec_package_stem}")
+set_target_properties(Recorder PROPERTIES OUTPUT_NAME "${_rec_package_stem}")
+if(GOCUE_HAS_WINSPARKLE)
+    target_link_libraries(Recorder PRIVATE gocue::winsparkle)
+    add_custom_command(TARGET Recorder POST_BUILD COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${GOCUE_WINSPARKLE_DLL}" "$<TARGET_FILE_DIR:Recorder>" VERBATIM)
+endif()
+# The script consumes generator-resolved paths. Future targets/tests are built via ALL/CTest.
+file(GENERATE OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/recorder-package-$<CONFIG>.json" CONTENT
+    "{\n  \"schema_version\": 1,\n  \"exe\": \"$<TARGET_FILE:Recorder>\",\n  \"ffmpeg_root\": \"${RECORDER_FFMPEG_ROOT}\",\n  \"winsparkle_dir\": \"${WINSPARKLE_DIR}\",\n  \"winsparkle_dll\": \"${GOCUE_WINSPARKLE_DLL}\",\n  \"public_key\": \"${RECORDER_UPDATE_PUBLIC_KEY}\"\n}\n")
