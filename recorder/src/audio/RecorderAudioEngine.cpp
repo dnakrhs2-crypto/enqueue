@@ -2,6 +2,7 @@
 #include "RawAudioTap.h"
 #include "NativePcmConverter.h"
 #include "sync/ClockMath.h"
+#include "storage/IoHealth.h"
 #include <juce_audio_devices/juce_audio_devices.h>
 #include <algorithm>
 #include <chrono>
@@ -34,6 +35,7 @@ struct RecorderAudioEngine::Impl final : juce::AudioIODeviceCallback
         std::vector<unsigned> logical;
         std::vector<JournalDeviceMapping> mapping;
         RawAudioTap raw;
+        IoHealth ioHealth;
         RecordingJournal journal;
         std::mutex journalMutex;
         std::unique_ptr<WavTrackWriter> wav;
@@ -63,7 +65,7 @@ struct RecorderAudioEngine::Impl final : juce::AudioIODeviceCallback
                 std::unique_ptr<IPlaybackBlockProvider> dub = {}, std::int64_t pstart = 0, std::int64_t correction = 0)
             : engine(parent), config(std::move(c)), device(parent.info),
             logical(recordMics ? parent.armed() : std::vector<unsigned>{}),
-            mapping(recordMics ? parent.mappings() : std::vector<JournalDeviceMapping>{}), journal(config.faults),
+            mapping(recordMics ? parent.mappings() : std::vector<JournalDeviceMapping>{}), ioHealth(config.faults), journal(&ioHealth),
             dubReference(std::move(dub)), referenceStart(pstart), inputCorrection(correction), dubbing(dubReference != nullptr)
         {
             if (config.projectDirectory == juce::File() || config.takeId.isNull()) throw std::invalid_argument("Missing audio take directory/ID");
@@ -81,7 +83,7 @@ struct RecorderAudioEngine::Impl final : juce::AudioIODeviceCallback
                 WavTrackWriter::Config w;
                 w.projectDirectory = config.projectDirectory; w.takeId = config.takeId;
                 w.sampleRate = device.sampleRate; w.framesPerBlock = device.bufferFrames; w.mics = unsigned(logical.size());
-                w.devices = mapping; w.logicalMicrophones = logical; w.faults = config.faults;
+                w.devices = mapping; w.logicalMicrophones = logical; w.faults = &ioHealth;
                 peakCache = std::make_shared<PeakCache>(device.sampleRate, unsigned(logical.size())); w.peakCache = peakCache;
                 w.checkpointSink = [this](const JournalCheckpoint& cp)
                 { std::lock_guard<std::mutex> lock(journalMutex); return journal.append(cp); };
@@ -262,6 +264,8 @@ struct RecorderAudioEngine::Impl final : juce::AudioIODeviceCallback
     std::array<std::atomic<double>, 2> outputSquares{};
     std::atomic<std::uint64_t> outputSamples{0};
     std::atomic<bool> haveBlock{false};
+    std::atomic<bool> reopenRequired{false};
+    std::atomic<std::uint64_t> deviceEpoch{1};
     BlockStamp previous{}; // native callback only, reset after close/join
     std::vector<float> left, right;
     std::atomic<std::uint32_t> listen{0x00ff0000}; // bit24 enabled; selected<<16, solo<<8, mute
@@ -273,6 +277,7 @@ struct RecorderAudioEngine::Impl final : juce::AudioIODeviceCallback
     std::array<std::atomic<float>, 8> inputMeter{};
     std::unique_ptr<Session> session;
     std::atomic<Session*> active{nullptr};
+    std::shared_ptr<std::atomic<bool>> shutdownBusy = std::make_shared<std::atomic<bool>>(false);
 
     explicit Impl(std::shared_ptr<IClockMapper> m) : mapper(m ? std::move(m) : std::make_shared<LinearClockMapper>())
     {
@@ -285,7 +290,9 @@ struct RecorderAudioEngine::Impl final : juce::AudioIODeviceCallback
     }
     ~Impl()
     {
+        shutdownBusy->store(true);
         closePhysical(); detach(); session.reset(); syncStop = true; if (syncWorker.joinable()) syncWorker.join();
+        shutdownBusy->store(false);
     }
     void drainClock() noexcept
     {
@@ -314,6 +321,7 @@ struct RecorderAudioEngine::Impl final : juce::AudioIODeviceCallback
     }
     void prepareDeviceState()
     {
+        reopenRequired = false; ++deviceEpoch;
         info.activeToPhysical.clear(); for (auto p : inputs) if (p >= 0) info.activeToPhysical.push_back(p);
         std::sort(info.activeToPhysical.begin(), info.activeToPhysical.end());
         left.assign(info.bufferFrames, 0); right.assign(info.bufferFrames, 0);
@@ -331,10 +339,11 @@ struct RecorderAudioEngine::Impl final : juce::AudioIODeviceCallback
         closing = false;
     }
     static void tap(const BlockStamp& s, const NativeInputView* v, std::uint32_t count) noexcept
-    { static_cast<Impl*>(deviceOwner.load(std::memory_order_acquire))->native(s, v, count); }
+    { if (auto* owner = static_cast<Impl*>(deviceOwner.load(std::memory_order_acquire))) owner->native(s, v, count); }
     void native(BlockStamp stamp, const NativeInputView* views, unsigned count) noexcept
     {
         callbacksInFlight.fetch_add(1);
+        if (closing.load()) { callbacksInFlight.fetch_sub(1); return; }
         // Preserve the driver's validity bits for the round-04 quality/epoch
         // model. The legacy adapter below may synthesize a software position.
         originalClockStamps.push(stamp);
@@ -352,7 +361,7 @@ struct RecorderAudioEngine::Impl final : juce::AudioIODeviceCallback
                  || stamp.numSamples != previous.numSamples || stamp.callbackQpc <= previous.callbackQpc)) boundary = Error::clockDiscontinuity;
         if (hadPrevious && stamp.xruns >= previous.xruns) xruns.fetch_add(stamp.xruns - previous.xruns);
         if (!hadPrevious || boundary != Error::none) mappingEpochQpc = stamp.callbackQpc;
-        if (boundary != Error::none) { stableBlocks = 0; if (take) take->signal(boundary); }
+        if (boundary != Error::none) { stableBlocks = 0; if (!reopenRequired.exchange(true)) ++deviceEpoch; if (take) take->signal(boundary); }
         else stableBlocks.fetch_add(1);
         for (unsigned i = 0; i < std::min(count, 8u); ++i) if (views) nativeTypes[i] = views[i].format.asioSampleType;
         bridge.enqueueStamp(stamp);
@@ -464,6 +473,8 @@ struct RecorderAudioEngine::Impl final : juce::AudioIODeviceCallback
     void audioDeviceError(const juce::String&) override { signalReset(); }
     void signalReset() noexcept
     {
+        if (!reopenRequired.exchange(true)) ++deviceEpoch;
+        stableBlocks = 0;
         callbacksInFlight.fetch_add(1); if (auto* s = active.load()) s->signal(Error::asioReset); callbacksInFlight.fetch_sub(1);
     }
 };
@@ -524,6 +535,9 @@ juce::Result RecorderAudioEngine::openDevice(const juce::String& name, unsigned 
             // before start(callback), and report the driver's chosen settings.
             s.info.sampleRate = unsigned(actualRate); s.info.bufferFrames = unsigned(actualBlock);
             s.callbackRate = unsigned(actualRate); s.callbackBlock = unsigned(actualBlock);
+            // Priming may use a different driver-selected rate/buffer. This is
+            // an explicit device reopen with no take, not an in-take reset.
+            s.reopenRequired = false; ++s.deviceEpoch;
             s.left.assign(unsigned(actualBlock), 0); s.right.assign(unsigned(actualBlock), 0);
             s.info.inputLatency = s.device->getInputLatencyInSamples(); s.info.outputLatency = s.device->getOutputLatencyInSamples();
             s.device->start(&s); return juce::Result::ok();
@@ -639,13 +653,14 @@ juce::Result RecorderAudioEngine::prepareDubbing(TakeConfig config, bool recordM
         || std::abs(double(residual)) > double(s.info.sampleRate) * 10)
         return failure("Dubbing device/reference is not ready");
     s.detach(); s.session.reset();
+    s.shutdownBusy->store(true);
     try
     {
         s.session = std::make_unique<Impl::Session>(s, std::move(config), recordMics, std::move(reference), pstart,
                                                    std::int64_t(s.info.inputLatency) + residual);
         s.session->launch(); s.active.store(s.session.get(), std::memory_order_release); return juce::Result::ok();
     }
-    catch (const std::exception& e) { s.session.reset(); return juce::Result::fail(e.what()); }
+    catch (const std::exception& e) { s.session.reset(); s.shutdownBusy->store(s.dubbingOutput.load() != nullptr); return juce::Result::fail(e.what()); }
 }
 juce::Result RecorderAudioEngine::stopDubbingAt(std::int64_t sample)
 {
@@ -660,10 +675,12 @@ juce::Result RecorderAudioEngine::stopDubbingAt(std::int64_t sample)
 }
 void RecorderAudioEngine::setDubbingOutputClient(IAudioOutputClient* client)
 {
+    if (client) impl->shutdownBusy->store(true);
     impl->dubbingOutput.store(nullptr);
     while (impl->outputInFlight.load()) pauseWorker();
     if (client) impl->playback.store(nullptr);
     impl->dubbingOutput.store(client);
+    if (!client) impl->shutdownBusy->store(impl->session && !impl->session->journalClosed.load());
 }
 const ClockMapper& RecorderAudioEngine::masterClock() const noexcept { return impl->robustClock; }
 
@@ -686,15 +703,17 @@ juce::Result RecorderAudioEngine::prepare(TakeConfig config)
 {
     if (impl->busy() || !impl->info.sampleRate) return failure("ASIO device is not ready or a take is active");
     impl->detach(); impl->session.reset();
+    impl->shutdownBusy->store(true);
     try
     {
         impl->session = std::make_unique<Impl::Session>(*impl, std::move(config));
         impl->session->launch(); impl->active.store(impl->session.get(), std::memory_order_release); return juce::Result::ok();
     }
-    catch (const std::exception& e) { impl->session.reset(); return juce::Result::fail(e.what()); }
+    catch (const std::exception& e) { impl->session.reset(); impl->shutdownBusy->store(false); return juce::Result::fail(e.what()); }
 }
 juce::Result RecorderAudioEngine::startAt(std::int64_t sample)
 {
+    if (impl->reopenRequired.load()) return failure("Reopen the ASIO device after a clock discontinuity");
     auto* s = impl->session.get();
     if (!s || s->finishing.load() || sample < currentSample() || sample < 0) return failure("Cannot schedule a past/unprepared audio start");
     std::int64_t unset = -1;
@@ -732,7 +751,8 @@ juce::Result RecorderAudioEngine::finishJournal(bool complete)
         if (s->fatal.load() != Error::none || s->referenceError.load() || !s->stoppedJournal) result = failure("Failed/incomplete take cannot commit TakeFinalized");
         else result = s->journal.append(JournalTakeFinalized{s->config.takeId});
     }
-    const auto closed = s->journal.close(); s->journalClosed = true; return result.failed() ? result : closed;
+    const auto closed = s->journal.close(); s->journalClosed = true;
+    impl->shutdownBusy->store(impl->dubbingOutput.load() != nullptr); return result.failed() ? result : closed;
 }
 const AVCodecContext* RecorderAudioEngine::referenceContext() const { return impl->session && impl->session->reference ? &impl->session->reference->context() : nullptr; }
 void RecorderAudioEngine::pollDeviceEvents()
@@ -740,11 +760,11 @@ void RecorderAudioEngine::pollDeviceEvents()
     if (!impl->device || !impl->session) return;
     AsioEventCounters e{};
     if (AsioTimingBridge::readEvents(*impl->device, e)
-        && (e.resets != impl->session->baselineEvents.resets || e.resyncs != impl->session->baselineEvents.resyncs)) impl->session->signal(Error::asioReset);
+        && (e.resets != impl->session->baselineEvents.resets || e.resyncs != impl->session->baselineEvents.resyncs)) deviceDiscontinuity(Error::asioReset);
 }
 bool RecorderAudioEngine::clockReady() const
 {
-    if (impl->stableBlocks.load() < 3) return false;
+    if (impl->reopenRequired.load() || impl->stableBlocks.load() < 3) return false;
     const auto mapping = impl->mapper->snapshot();
     // A device reopen/reset must not use the previous epoch's worker snapshot.
     return mapping.valid && mapping.originQpc >= impl->mappingEpochQpc.load();
@@ -797,4 +817,26 @@ void RecorderAudioEngine::processBlock(const BlockStamp& stamp, const NativeInpu
     if (!impl->info.synthetic) return;
     impl->native(stamp, in, count); impl->output(floats, int(count), out, int(outputs), stamp.numSamples);
 }
+void RecorderAudioEngine::endAtConfirmedBoundary()
+{
+    impl->detach(); // seq_cst pointer / in-flight handshake; no new native queue writes
+    if (auto* s = impl->session.get())
+    {
+        const auto first = s->n0.load(), last = s->end.load();
+        if (first >= 0 && last > first) s->nstop = last;
+        else s->signal(Error::cancelled);
+    }
+}
+void RecorderAudioEngine::deviceDiscontinuity(Error reason) noexcept
+{
+    if (!impl->reopenRequired.exchange(true)) ++impl->deviceEpoch;
+    impl->stableBlocks = 0;
+    impl->callbacksInFlight.fetch_add(1);
+    if (auto* s = impl->active.load()) s->signal(reason);
+    impl->callbacksInFlight.fetch_sub(1);
+}
+std::uint64_t RecorderAudioEngine::deviceGeneration() const noexcept { return impl->deviceEpoch.load(); }
+bool RecorderAudioEngine::requiresDeviceReopen() const noexcept { return impl->reopenRequired.load(); }
+bool RecorderAudioEngine::processingDelayed() const noexcept { return impl->session && impl->session->ioHealth.delayed(); }
+std::shared_ptr<const std::atomic<bool>> RecorderAudioEngine::shutdownBlocker() const noexcept { return impl->shutdownBusy; }
 }

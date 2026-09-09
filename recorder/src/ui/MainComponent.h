@@ -4,6 +4,7 @@
 #include "AudioSettingsPanel.h"
 #include "CameraSettingsPanel.h"
 #include "app/RecorderSession.h"
+#include "app/RecorderPowerMonitor.h"
 
 namespace gocue::recorder
 {
@@ -14,14 +15,19 @@ public:
     ~MainComponent() override;
     void resized() override;
     void showError(const juce::String&);
+    void showFault(RecorderFault fault) { showError(recorderFaultText(fault)); }
     void openProject(const juce::File&);
     void requestClose(std::function<void()>);
     void createProject(const juce::String&, const juce::File&, unsigned fps);
     void startDemo(int iterations, const juce::File& devices, int asioDevice, const juce::File& report);
+    std::shared_ptr<RecorderLifecycle> lifecycleState() const { return session.lifecycleState(); }
+    void updateShutdownRequested();
+    void updateShutdownBlocked();
+    void checkForUpdates();
 private:
     struct FileResult
     {
-        juce::Result result = juce::Result::ok(); bool opening = false;
+        juce::Result result = juce::Result::ok(); bool opening = false, recovered = false;
         juce::File file; RecorderProject loaded; CheckpointInfo info; RecorderDocument::Snapshot written;
     };
     struct Demo
@@ -39,6 +45,8 @@ private:
     void projectMenu(); void newProjectDialog(); void chooseOpen(); void saveProject(); void saveTo(const juce::File&);
     void beforeSwitch(std::function<void()>); void showSettings(); void persistSettings(); void continueClose();
     void demoTick(); void finishDemo(const juce::String&, const juce::String&);
+    void publishLifecycle();
+    void retryFinalization();
     RecorderDocument& document;
     RecorderSettings& settings;
     RecordView recordView;
@@ -55,9 +63,13 @@ private:
     std::function<void()> afterSave, closeAction;
     bool timeline = false, refreshPending = true, settingsPending = false;
     juce::int64 remainingBytes = -1;
+    std::uint64_t spaceGeneration = 0;
     std::uint32_t lastUi = 0, lastSpace = 0;
     std::int64_t lastStopButtonQpc = 0;
     juce::String banner;
+    juce::TextButton aboutButton, updateButton, retryButton;
+    RecorderPowerMonitor powerMonitor;
+    bool closeCommitRequested = false;
     juce::TooltipWindow tooltips {this};
 };
 }

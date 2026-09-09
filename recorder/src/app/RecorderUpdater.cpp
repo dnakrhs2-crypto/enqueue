@@ -35,14 +35,20 @@ bool mayClose(const std::shared_ptr<State>& value)
     catch (...) { return false; } // never let an exception cross the C ABI
 }
 #if RECORDER_HAS_WINSPARKLE
-int __cdecl canShutdownThunk() { return mayClose(currentState()) ? 1 : 0; }
+void notifyBlocked(const std::shared_ptr<State>& value)
+{
+    if (value && value->active.load()) juce::MessageManager::callAsync([value]
+    { if (value->active.load() && value->callbacks.shutdownBlocked) value->callbacks.shutdownBlocked(); });
+}
+int __cdecl canShutdownThunk()
+{ auto value = currentState(); if (mayClose(value)) return 1; notifyBlocked(value); return 0; }
 void __cdecl requestShutdownThunk()
 {
     auto value = currentState();
-    if (!mayClose(value)) return;
+    if (!mayClose(value)) { notifyBlocked(value); return; }
     juce::MessageManager::callAsync([value]
     {
-        if (!mayClose(value)) return;
+        if (!mayClose(value)) { if (value->active.load() && value->callbacks.shutdownBlocked) value->callbacks.shutdownBlocked(); return; }
         if (value->callbacks.requestShutdown) value->callbacks.requestShutdown();
         else if (auto* app = juce::JUCEApplication::getInstance()) app->systemRequestedQuit();
     });

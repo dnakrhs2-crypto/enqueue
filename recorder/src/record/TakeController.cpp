@@ -5,6 +5,8 @@
 #include "media/ThumbnailCache.h"
 #include "sync/CameraClockMapper.h"
 #include "support/ThreadPriority.h"
+#include "app/RecorderLifecycle.h"
+#include "storage/IoHealth.h"
 #include <algorithm>
 #include <chrono>
 #include <cstring>
@@ -129,6 +131,8 @@ public:
         if (muxWorker.joinable()) muxWorker.join();
     }
     bool failed() const noexcept override { return failedFlag.load(); }
+    bool storageFailed() const noexcept override { return muxFailed.load(); }
+    bool processingDelayed() const noexcept override { return ioHealth.delayed(); }
     std::int64_t availableSamples() const noexcept override
     { const auto failure = sourceFailure.load(); return failure < 0 ? available.load() : std::min(available.load(), failure); }
     bool thumbnailReady() const noexcept override { return thumbnail.load(); }
@@ -174,6 +178,7 @@ private:
     juce::var encoderReport, muxReport, cfrReport, inspection;
     std::string encoderError, muxError;
     bool thumbnailQueued = false; // encoder worker only
+    IoHealth ioHealth;
     ThumbnailCache thumbnailWorker; // first thumbnail disk I/O is below original media work
     juce::File thumbnailPath() const
     { return finalFile.getParentDirectory().getChildFile(finalFile.getFileNameWithoutExtension() == "cam1" ? "index/first-thumbnail.bmp" : "index/cam2-first-thumbnail.bmp"); }
@@ -206,7 +211,7 @@ private:
         std::unique_ptr<Mp4TakeWriter> writer;
         try
         {
-            writer = std::make_unique<Mp4TakeWriter>(finalFile, video, audio);
+            writer = std::make_unique<Mp4TakeWriter>(finalFile, video, audio, &ioHealth);
             prepared.set_value(); signalled = true;
             for (;;)
             {
@@ -338,6 +343,9 @@ struct TakeController::Impl
     VideoFactory factory;
     Config config;
     State current = State::idle;
+    bool shutdownRequested = false;
+    std::uint64_t lifecycleGeneration = 0;
+    Id ownerProject;
     std::vector<State> transitions{State::idle};
     juce::String failure, warning;
     Take take;
@@ -555,6 +563,7 @@ struct TakeController::Impl
             requireResult(takeFolder().createDirectory()); requireResult(takeFolder().getChildFile("index").createDirectory());
             for (const char* path : {"media/imports", "cache", "recovery", "exports"}) requireResult(config.projectDirectory.getChildFile(path).createDirectory());
             RecorderAudioEngine::TakeConfig audioConfig; audioConfig.projectDirectory = config.projectDirectory; audioConfig.takeId = config.takeId;
+            audioConfig.faults = config.faults;
             audioConfig.placementSample = placement; audioConfig.microphoneAssetIds = take.microphoneAssetIds;
             for (unsigned i = 0; i < cameraCount; ++i)
                 audioConfig.additionalFiles.push_back({assets[i].assetId, assets[i].relativePath,
@@ -683,14 +692,15 @@ juce::Result TakeController::reset()
 {
     if (impl->work.valid() || (state() != State::idle && state() != State::done && state() != State::partialFailure))
         return juce::Result::fail("Take is still active");
-    impl->detachSink(); impl->placementMetadata = {}; impl->length = 0; impl->placement = 0;
-    impl->failure.clear(); impl->warning.clear(); impl->current = State::idle;
+    impl->detachSink(); ++impl->lifecycleGeneration; impl->shutdownRequested = false; impl->placementMetadata = {}; impl->length = 0; impl->placement = 0;
+    impl->failure.clear(); impl->warning.clear(); impl->ownerProject.clear(); impl->current = State::idle;
     for (auto& c : impl->cameras) c.active = false;
     return juce::Result::ok();
 }
 juce::Result TakeController::prepare(Config config)
 {
     auto& s = *impl;
+    if (s.shutdownRequested) return juce::Result::fail("Take shutdown blocks new commands");
     if (s.current != State::idle && s.current != State::done && s.current != State::partialFailure) return juce::Result::fail("Take controller is busy");
     if (s.work.valid()) return juce::Result::fail("Previous worker completion must be consumed");
     const auto device = s.audio.deviceInfo();
@@ -718,6 +728,7 @@ juce::Result TakeController::prepare(Config config)
     const auto timebase = s.document.setTimebase(device.sampleRate, {unsigned(config.projectFps), 1});
     if (timebase.failed()) return timebase;
     s.config = std::move(config); s.failure.clear(); s.warning.clear(); s.partial = false; s.saving = false; s.preparedAudio = false;
+    s.ownerProject = s.document.getProject().projectId; ++s.lifecycleGeneration;
     s.audioReport = juce::var(); s.assets.clear(); s.take = Take{}; s.logicalMics.clear(); s.logicalIndices.clear();
     s.mappingSnapshot.clear(); s.deviceSnapshot = device; s.placementMetadata = {}; s.transitions = {State::idle}; s.current = State::idle;
     s.requestedN0 = -1; s.collectionOrigin = -1; s.masterEpoch = 0; s.length = 0; s.stopQpc = s.finalizationQpc = 0;
@@ -733,6 +744,7 @@ juce::Result TakeController::prepare(Config config)
 juce::Result TakeController::start(std::int64_t N0)
 {
     auto& s = *impl;
+    if (s.shutdownRequested) return juce::Result::fail("Take shutdown blocks start");
     if (s.current != State::armed || s.requestedN0 >= 0) return juce::Result::fail("Take must be armed before start");
     const auto device = s.audio.deviceInfo(); if (N0 < 0) N0 = s.audio.currentSample() + std::max<std::int64_t>(device.sampleRate / 4, device.bufferFrames * 2);
     if (!s.audio.clockReady()) return juce::Result::fail("ASIO clock is not stable");
@@ -758,6 +770,19 @@ juce::Result TakeController::stop(std::int64_t Nstop)
 void TakeController::tick()
 {
     auto& s = *impl;
+    // A completed worker owns its old project files, never the newly adopted model.
+    if (s.ownerProject.isNotEmpty() && s.ownerProject != s.document.getProject().projectId)
+    {
+        if (s.work.valid() && s.work.wait_for(std::chrono::milliseconds(0)) != std::future_status::ready) return;
+        if (s.work.valid()) s.work.get();
+        s.detachSink();
+        if (s.preparedAudio)
+        {
+            s.audio.endAtConfirmedBoundary(); s.audio.finishCapture(s.placementEdit);
+            s.finishVideos(std::max<std::int64_t>(0, s.length)); s.audio.finishJournal(false); s.preparedAudio = false;
+        }
+        s.shutdownRequested = true; s.transition(State::partialFailure); s.ownerProject.clear(); return;
+    }
     if (s.work.valid())
     {
         if (s.work.wait_for(std::chrono::milliseconds(0)) != std::future_status::ready) return;
@@ -807,6 +832,17 @@ void TakeController::tick()
     }
     if (s.current == State::preparing)
     {
+        if (s.shutdownRequested && !s.work.valid())
+        {
+            s.audio.endAtConfirmedBoundary(); s.transition(State::stopping);
+        }
+    }
+    if (s.shutdownRequested && (s.current == State::armed || s.current == State::recording || s.current == State::stopping))
+    {
+        s.audio.endAtConfirmedBoundary(); s.transition(State::stopping);
+    }
+    if (s.current == State::preparing)
+    {
         for (unsigned i = 0; i < s.cameraCount; ++i)
             if (s.cameras[i].capture && (s.cameras[i].capture->failureDetected() || s.cameras[i].capture->finished())) cameraFailed(i);
         const bool primaryReady = s.audio.clockReady() && s.cameras[0].video && s.cameras[0].video->ready();
@@ -831,6 +867,7 @@ void TakeController::tick()
             auto& c = s.cameras[i];
             if (c.capture && (c.capture->failureDetected() || c.capture->finished())) cameraFailed(i);
             if (s.audio.referenceFailed()) c.video->sourceFailed(c.video->availableSamples());
+            if (c.video->storageFailed()) s.audio.abort(RecorderAudioEngine::Error::writeFailed);
             if (c.video->failed())
             {
                 s.partial = true; failedCameras |= 1u << i;
@@ -847,7 +884,15 @@ void TakeController::tick()
         }
         if (s.current == State::armed && s.audio.startSample() >= 0) s.transition(State::recording);
         if (s.audio.error() != RecorderAudioEngine::Error::none)
-        { s.partial = true; s.transition(State::stopping); }
+        {
+            using E = RecorderAudioEngine::Error;
+            const auto fault = s.audio.error();
+            s.failure = recorderFaultText(fault == E::writeFailed ? RecorderFault::storageWrite
+                : fault == E::rawOverflow || fault == E::pcmOverflow ? RecorderFault::audioOverflow
+                : fault == E::sampleRateChanged ? RecorderFault::audioRateChanged
+                : fault == E::asioReset ? RecorderFault::audioReset : RecorderFault::audioInput);
+            s.partial = true; s.transition(State::stopping);
+        }
         if (s.audio.stopSample() >= 0 || (s.current == State::stopping && s.audio.error() != RecorderAudioEngine::Error::none))
             s.placeStopped();
     }
@@ -937,4 +982,24 @@ const char* TakeController::stateName(State s) noexcept
 std::unique_ptr<ITakeVideoStream> TakeController::createVideoStream(std::unique_ptr<CameraTimeMapper> mapper,
                                                                  const juce::String&)
 { return std::make_unique<LiveTakeVideo>(std::move(mapper)); }
+void TakeController::requestShutdown()
+{
+    auto& s = *impl;
+    if (s.shutdownRequested) return;
+    s.shutdownRequested = true; s.stopQpc = qpcNow();
+    // Preparation and finalization own session pointers until their result is ready.
+    // tick performs the collection boundary as soon as that ownership returns.
+}
+bool TakeController::shutdownComplete() const noexcept
+{ return !impl->work.valid() && (state() == State::idle || state() == State::done || state() == State::partialFailure); }
+std::uint64_t TakeController::generation() const noexcept { return impl->lifecycleGeneration; }
+bool TakeController::processingDelayed() const noexcept
+{
+    bool delayed = false;
+    for (auto& c : impl->cameras)
+    {
+        c.offers.fetch_add(1); if (auto* video = c.sink.load()) delayed |= video->processingDelayed(); c.offers.fetch_sub(1);
+    }
+    return delayed;
+}
 }

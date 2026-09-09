@@ -1,4 +1,7 @@
 #include "MainComponent.h"
+#include "app/RecorderUpdater.h"
+#include "storage/RecoveryScanner.h"
+#include "storage/IoHealth.h"
 #include <chrono>
 
 namespace gocue::recorder
@@ -29,17 +32,46 @@ MainComponent::MainComponent(RecorderDocument& d, RecorderSettings& s) : documen
     session.onPeaks = [this](const Id& id, auto peaks, unsigned channel) { timelineView.setPeaks(id, peaks, channel); };
     session.onLoadedPeaks = [this](const Id& id, auto peaks, unsigned channel) { timelineView.setLoadedPeaks(id, std::move(peaks), channel); };
     session.onThumbnails = [this](const Id& id, auto frames) { timelineView.setThumbnails(id, std::move(frames)); };
-    document.onChanged = [this] { refreshPending = true; };
+    document.onChanged = [this] { refreshPending = true; publishLifecycle(); };
+    aboutButton.setButtonText(ko("앱 정보")); updateButton.setButtonText(ko("업데이트")); retryButton.setButtonText(ko("마무리 재시도"));
+    for (auto* button : {&aboutButton, &updateButton, &retryButton}) addAndMakeVisible(button);
+    aboutButton.onClick = [] { RecorderUpdater::showAboutDialog(); };
+    updateButton.onClick = [this] { checkForUpdates(); };
+    retryButton.onClick = [this] { if (closeAction) { closeCommitRequested = false; persistSettings(); continueClose(); } else retryFinalization(); };
+    publishLifecycle();
     setSize(1180, 780); refresh(); startTimer(10);
 }
 MainComponent::~MainComponent()
-{ stopTimer(); document.onChanged = nullptr; removeKeyListener(this); settingsWindow.reset(); projectWindow.reset(); }
-void MainComponent::resized() { recordView.setBounds(getLocalBounds()); timelineView.setBounds(recordView.timelineBounds()); }
+{
+    stopTimer(); document.onChanged = nullptr; removeKeyListener(this);
+    session.onConfigured = {}; session.onPeaks = {}; session.onLoadedPeaks = {}; session.onThumbnails = {};
+    session.requestShutdown();
+    if (fileWork.valid()) { const auto r = fileWork.get(); if (r.written) document.checkpointFinished(r.written, r.file, r.result); }
+    session.lifecycleState()->end(RecorderLifecycle::recovering);
+    // JUCE can enter shutdown directly (automation/OS quit). Keep the owner and
+    // HWNDs alive until its collection and durable workers have returned.
+    while (!session.readyForShutdownCommit()) { session.tick(); std::this_thread::sleep_for(std::chrono::milliseconds(1)); }
+    if (document.isDirty() && document.getFile() != juce::File())
+    {
+        const auto saved = document.saveCheckpoint(document.getFile());
+        if (saved.failed()) { juce::Logger::writeToLog(saved.getErrorMessage()); if (auto* app = juce::JUCEApplication::getInstance()) app->setApplicationReturnValue(1); }
+    }
+    if (settingsWork.valid()) settingsWork.get();
+    session.releaseForShutdown();
+    while (!session.shutdownComplete()) { session.tick(); std::this_thread::sleep_for(std::chrono::milliseconds(1)); }
+    settingsWindow.reset(); projectWindow.reset();
+}
+void MainComponent::resized()
+{
+    recordView.setBounds(getLocalBounds()); timelineView.setBounds(recordView.timelineBounds());
+    auto row = getLocalBounds().removeFromBottom(26).removeFromRight(320);
+    updateButton.setBounds(row.removeFromRight(90)); aboutButton.setBounds(row.removeFromRight(90)); retryButton.setBounds(row);
+}
 void MainComponent::showError(const juce::String& message) { banner = message; refreshPending = true; }
 void MainComponent::setTimeline(bool on)
 { timeline = on; session.enterTimeline(on); timelineView.setVisible(on); refresh(); }
 void MainComponent::recordClicked()
-{ if (fileWork.valid()) return; const auto r = session.record(); if (r.failed()) showError(r.getErrorMessage()); else banner.clear(); refreshPending = true; }
+{ if (fileWork.valid() || closeAction) return; const auto r = session.record(); if (r.failed()) showError(r.getErrorMessage()); else banner.clear(); publishLifecycle(); refreshPending = true; }
 void MainComponent::stopClicked()
 {
     lastStopButtonQpc = qpcNow(); timelineView.lastClipPaintQpc = 0; timelineView.lastPaintedTake.clear();
@@ -52,10 +84,25 @@ void MainComponent::refresh()
 {
     auto ui = mapUiState(document.getProject(), settings.get(), session.takeController().state(), document.isRecordingStructureLocked(), session.configuring() || fileWork.valid(), session.deviceInfo().sampleRate != 0, session.cameraReady(0));
     ui.canRecord = !fileWork.valid() && session.readyToRecord();
-    const auto message = document.getError().isNotEmpty() ? document.getError() : banner.isNotEmpty() ? banner : session.error.isNotEmpty() ? session.error : session.notice;
+    const auto& take = session.takeController();
+    const auto audioFault = session.configuring() || closeAction ? RecorderAudioEngine::Error::none : session.audioEngine().error();
+    using E = RecorderAudioEngine::Error;
+    const auto originalFailure = audioFault == E::writeFailed ? recorderFaultText(RecorderFault::storageWrite)
+        : audioFault == E::rawOverflow || audioFault == E::pcmOverflow ? recorderFaultText(RecorderFault::audioOverflow)
+        : audioFault == E::sampleRateChanged ? recorderFaultText(RecorderFault::audioRateChanged)
+        : audioFault == E::asioReset ? recorderFaultText(RecorderFault::audioReset)
+        : audioFault != E::none && audioFault != E::cancelled ? recorderFaultText(RecorderFault::audioInput) : juce::String();
+    auto message = originalFailure.isNotEmpty() ? originalFailure : document.getError().isNotEmpty() ? recorderFaultText(RecorderFault::save) + " " + document.getError()
+        : session.error.isNotEmpty() ? session.error : banner.isNotEmpty() ? banner : session.notice.isNotEmpty() ? session.notice
+        : take.warning().isNotEmpty() ? take.warning() : document.getRecoveryMessage();
+    const auto delayed = recorderFaultText(RecorderFault::processingDelay);
+    if (session.notice == delayed && !message.contains(delayed)) message = delayed + " · " + message;
     const auto takeStatus = session.takeController().statusText();
     const auto status = session.takeController().state() == TakeController::State::idle ? (fileWork.valid() ? ko("저장 중") : document.getStatusText()) : takeStatus;
     recordView.update(ui, document.getProject(), settings.get(), status, message, session.elapsed(), remainingBytes, timeline);
+    retryButton.setButtonText(closeAction ? ko("저장 재시도") : ko("마무리 재시도"));
+    retryButton.setVisible((message.contains(ko("MP4 마무리 실패")) || take.state() == TakeController::State::partialFailure || (closeAction && closeCommitRequested)) && !session.busy() && !fileWork.valid());
+    if (closeAction) { recordView.setEnabled(false); timelineView.setEnabled(false); }
     if (settingsWindow) settingsWindow->getContentComponent()->setEnabled(!session.configuring() && !session.recording());
     for (unsigned i = 0; i < 2; ++i)
     {
@@ -64,13 +111,14 @@ void MainComponent::refresh()
         recordView.setCamera(i, session.cameraCaption(i), i && !enabled && !hasPlayback ? ko("캠2 사용 안 함 · 설정에서 연결")
             : session.showingPlayback() ? ko("영상 없음") : ko("카메라 연결 준비 전"), session.showingPlayback() ? hasPlayback : session.cameraReady(i));
     }
-    if (!session.configuring()) recordView.updateMeters(session.audioEngine().inputPeaks());
+    if (!session.configuring() && !closeAction) recordView.updateMeters(session.audioEngine().inputPeaks());
     timelineView.refresh(ui.live, session.recording() ? session.takeController().placementSample() + session.elapsed() : session.playhead(), takeStatus == ko("대기") ? juce::String() : takeStatus);
     timelineView.transport.setState(ui.canTransport, session.playing(), session.playhead(), document.getProject().Fs);
     timelineView.setVisible(timeline); resized(); refreshPending = false;
 }
 bool MainComponent::keyPressed(const juce::KeyPress& key, juce::Component* origin)
 {
+    if (closeAction || !session.lifecycleState()->acceptsCommands()) return false;
     if (dynamic_cast<juce::TextEditor*>(origin) || (origin && origin->findParentComponentOfClass<juce::TextEditor>())) return false;
     if (key.getKeyCode() == juce::KeyPress::spaceKey && timeline && !session.recording()) { if (session.playing()) session.pause(); else session.play(); return true; }
     if ((key.getTextCharacter() == 'm' || key.getTextCharacter() == 'M') && !fileWork.valid()) { session.addMarker(); return true; }
@@ -79,19 +127,46 @@ bool MainComponent::keyPressed(const juce::KeyPress& key, juce::Component* origi
 void MainComponent::persistSettings()
 { settingsPending = true; if (!settingsWork.valid()) { settingsPending = false; settingsWork = settings.save(); } }
 void MainComponent::requestClose(std::function<void()> action)
-{ closeAction = std::move(action); if (session.takeController().state() == TakeController::State::recording) stopClicked(); continueClose(); }
+{
+    if (closeAction) return;
+    closeAction = std::move(action); closeCommitRequested = false;
+    persistSettings();
+    afterSave = {}; chooser.reset(); recordView.setEnabled(false); timelineView.setEnabled(false);
+    if (settingsWindow) settingsWindow->setVisible(false); if (projectWindow) projectWindow->setVisible(false);
+    session.requestShutdown(); publishLifecycle(); refreshPending = true; continueClose();
+}
 void MainComponent::continueClose()
 {
-    if (!closeAction || fileWork.valid() || session.busy() || settingsWork.valid()) return;
-    if (document.isDirty() && document.getFile() != juce::File()) { saveProject(); return; }
+    if (!closeAction || fileWork.valid() || !session.readyForShutdownCommit() || settingsWork.valid()) return;
+    if (closeCommitRequested) return; // a failed save waits for the explicit retry action
+    if (document.isDirty() && document.getFile() != juce::File()) { saveProject(); closeCommitRequested = true; return; }
+    if (document.isDirty() && document.getFile() == juce::File() && document.getProject().activeTimelineEnd() > 0)
+    { showError(recorderFaultText(RecorderFault::save)); return; }
+    session.releaseForShutdown(); if (!session.shutdownComplete()) return;
     auto action = std::move(closeAction); closeAction = {}; action();
 }
 void MainComponent::timerCallback()
 {
+    if (powerMonitor.poll() && !closeAction) session.resumeFromSleep();
     session.setHosts(recordView.nativeHosts()); session.tick();
     if (completed(fileWork))
     {
         auto r = fileWork.get();
+        if (r.opening && !r.recovered && !closeAction)
+        {
+            session.lifecycleState()->set(RecorderLifecycle::recovering, true);
+            session.lifecycleState()->invalidate();
+            banner = ko("저장된 자료를 복구하는 중입니다.");
+            fileWork = std::async(std::launch::async, [r]() mutable
+            {
+                RecoveryReport recovered; r.result = RecoveryScanner().run(r.file.getParentDirectory(), recovered); r.recovered = true;
+                if (r.result.wasOk()) { r.loaded = std::move(recovered.project); r.info = recovered.checkpointInfo; r.info.recoveryMessage = recorderFaultText(RecorderFault::recovery); }
+                return r;
+            });
+            publishLifecycle(); return;
+        }
+        session.lifecycleState()->end(RecorderLifecycle::recovering);
+        if (r.opening && closeAction) { publishLifecycle(); continueClose(); return; }
         if (r.result.wasOk())
         {
             if (r.opening)
@@ -100,25 +175,52 @@ void MainComponent::timerCallback()
                 if (result.failed()) showError(result.getErrorMessage());
                 else { timelineView.clearCaches(); session.projectChanged(); if (!demo) session.configure(settings.get()); banner.clear(); setTimeline(false); }
             }
-            else document.checkpointFinished(r.written, r.file, r.result);
+            else { document.checkpointFinished(r.written, r.file, r.result); closeCommitRequested = false; }
             settings.rememberProject(r.file); persistSettings();
             if (afterSave) { auto action = std::move(afterSave); afterSave = {}; action(); }
         }
-        else { if (r.written) document.checkpointFinished(r.written, r.file, r.result); showError(r.result.getErrorMessage()); afterSave = {}; closeAction = {}; }
+        else { if (r.written) document.checkpointFinished(r.written, r.file, r.result); showError(recorderFaultText(RecorderFault::save) + " " + r.result.getErrorMessage()); afterSave = {}; closeCommitRequested = bool(closeAction); }
         refreshPending = true;
     }
     if (completed(settingsWork))
     {
-        const auto r = settingsWork.get(); if (r.failed()) { showError(ko("설정을 저장할 수 없습니다. ") + r.getErrorMessage()); closeAction = {}; }
+        const auto r = settingsWork.get(); if (r.failed()) { showError(ko("설정을 저장할 수 없습니다. ") + r.getErrorMessage()); closeCommitRequested = bool(closeAction); }
         else if (settingsPending) persistSettings();
     }
-    if (completed(spaceWork)) remainingBytes = spaceWork.get();
+    if (completed(spaceWork)) { const auto bytes = spaceWork.get(); if (spaceGeneration == session.lifecycleState()->generation()) remainingBytes = bytes; }
     const auto now = juce::Time::getMillisecondCounter();
     if (now - lastSpace >= 5000 && !spaceWork.valid() && document.getFile() != juce::File())
-    { lastSpace = now; const auto path = document.getFile().getParentDirectory(); spaceWork = std::async(std::launch::async, [path] { return path.getBytesFreeOnVolume(); }); }
+    { lastSpace = now; spaceGeneration = session.lifecycleState()->generation(); const auto path = document.getFile().getParentDirectory(); spaceWork = std::async(std::launch::async, [path] { return path.getBytesFreeOnVolume(); }); }
     if (refreshPending || now - lastUi >= 33) { lastUi = now; refresh(); }
     if (demo) demoTick();
-    if (closeAction && session.takeController().state() == TakeController::State::recording) stopClicked();
+    publishLifecycle();
     continueClose();
+}
+void MainComponent::publishLifecycle()
+{
+    auto state = session.lifecycleState();
+    state->set(RecorderLifecycle::unsaved, document.isDirty());
+    state->set(RecorderLifecycle::fileWork, fileWork.valid() || settingsWork.valid() || settingsPending);
+}
+void MainComponent::updateShutdownBlocked() { showError(recorderFaultText(RecorderFault::updateBusy)); }
+void MainComponent::updateShutdownRequested()
+{
+    publishLifecycle(); if (!session.lifecycleState()->canShutdown()) { updateShutdownBlocked(); return; }
+    if (auto* app = juce::JUCEApplication::getInstance()) app->systemRequestedQuit();
+}
+void MainComponent::checkForUpdates()
+{
+    publishLifecycle(); if (!session.lifecycleState()->canShutdown()) { updateShutdownBlocked(); return; }
+    if (!RecorderUpdater::isAvailable()) { showError(ko("공개 업데이트 설정이 준비되지 않았습니다.")); return; }
+    RecorderUpdater::checkForUpdatesWithUI();
+}
+void MainComponent::retryFinalization()
+{
+    if (session.busy() || fileWork.valid() || document.getFile() == juce::File() || closeAction) return;
+    session.stopPlayback(); session.lifecycleState()->invalidate();
+    const auto path = document.getFile();
+    fileWork = std::async(std::launch::async, [path]
+    { FileResult r; r.opening = true; r.file = path; return r; });
+    publishLifecycle();
 }
 }

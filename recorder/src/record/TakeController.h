@@ -37,6 +37,8 @@ public:
     // Preparation worker, before prepare/start. The audio owner outlives the stream.
     virtual void configureClock(const ClockMapper&, std::int64_t /* Lcam100ns */) {}
     virtual void discontinuity() noexcept { sourceFailed(availableSamples()); }
+    virtual bool storageFailed() const noexcept { return false; }
+    virtual bool processingDelayed() const noexcept { return false; }
 };
 
 class TakeController
@@ -64,6 +66,7 @@ public:
         std::array<std::optional<CalibrationProfile>, 2> calibration;
         std::array<std::string, 2> exposure{"uncontrolled", "uncontrolled"};
         std::vector<int> outputMapping; // ordered physical outputs, from the device configuration
+        FileIoFaultAdapter* faults = nullptr; // worker I/O injection, never a callback
     };
     struct PlacementMetadata
     {
@@ -107,6 +110,10 @@ public:
     juce::var report() const; // done/partialFailure only
     static std::int64_t frameCount(std::int64_t samples, unsigned Fs, FrameRate fps);
     static const char* stateName(State) noexcept;
+    void requestShutdown(); // owner, idempotent; tick continues durable finalization
+    bool shutdownComplete() const noexcept;
+    std::uint64_t generation() const noexcept;
+    bool processingDelayed() const noexcept;
     // Reuse the production CFR/NVENC/MP4 workers with an explicitly reserved
     // dubbing clock. The normal take path keeps its original mapper/signatures.
     static std::unique_ptr<ITakeVideoStream> createVideoStream(std::unique_ptr<CameraTimeMapper>,

@@ -94,6 +94,14 @@ public:
     juce::Result stopDubbingAt(std::int64_t correctedInputSample); // may shorten an auto-stop
     void setDubbingOutputClient(IAudioOutputClient*); // attach/detach on control owner; locks device/routing
     const ClockMapper& masterClock() const noexcept;
+    // Control owner: stop collection even if the driver will never call again.
+    // Detaches and waits first, then fixes Nstop to the last accepted native block.
+    void endAtConfirmedBoundary();
+    void deviceDiscontinuity(Error = Error::asioReset) noexcept;
+    std::uint64_t deviceGeneration() const noexcept;
+    bool requiresDeviceReopen() const noexcept;
+    bool processingDelayed() const noexcept;
+    std::shared_ptr<const std::atomic<bool>> shutdownBlocker() const noexcept;
 private:
     struct Impl;
     std::unique_ptr<Impl> impl;

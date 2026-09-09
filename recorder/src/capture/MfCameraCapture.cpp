@@ -355,9 +355,18 @@ CaptureOpenInfo MfCameraCapture::start(const std::string& link, CameraMode mode,
 }
 void MfCameraCapture::stop()
 {
-    state->stopRequested.store(true);
-    if (state->callback) SetEvent(state->callback->sampleReady);
+    requestStop();
     if (state->worker.joinable()) state->worker.join();
+}
+void MfCameraCapture::requestStop() noexcept
+{
+    state->stopRequested.store(true);
+    if (state->callback) { state->callback->accepting = false; SetEvent(state->callback->sampleReady); }
+}
+void MfCameraCapture::disconnect() noexcept
+{
+    state->faulted = true; state->telemetry->sourceStatus = HRESULT_FROM_WIN32(ERROR_DEVICE_NOT_CONNECTED);
+    requestStop();
 }
 bool MfCameraCapture::finished() const noexcept { return state->done.load(); }
 bool MfCameraCapture::failureDetected() const noexcept

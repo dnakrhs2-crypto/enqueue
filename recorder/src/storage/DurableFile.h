@@ -19,6 +19,9 @@ public:
                                   std::uint64_t offset, std::size_t bytes) = 0;
     // Test-only virtual coordinates; never passed to the native filesystem.
     virtual std::uint64_t observedOffset(std::uint64_t offset) const { return offset; }
+    virtual void ioStarted() noexcept {}
+    virtual void ioFinished() noexcept {}
+    virtual bool splitWritesForTesting() const noexcept { return true; }
 };
 
 // Single writer, synchronous Win32 I/O, no application buffering. Existing bytes

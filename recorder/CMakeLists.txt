@@ -396,3 +396,9 @@ add_test(NAME RecorderSeekGeneration COMMAND RecorderTests --suite seek-generati
 target_sources(RecorderTests PRIVATE src/ui/TimelineView.cpp src/ui/RecorderTransportBar.cpp
     src/ui/TrackHeader.cpp src/ui/ClipInspector.cpp src/ui/MarkerPanel.cpp src/ui/RecordView.cpp)
 target_link_libraries(RecorderTests PRIVATE juce::juce_gui_extra)
+# Round 28: lifecycle/fault boundaries. Single suite registry; append only.
+target_sources(RecorderCore PRIVATE src/app/RecorderLifecycle.cpp src/capture/PreviewRecovery.cpp)
+target_link_libraries(Recorder PRIVATE PowrProf)
+target_sources(RecorderTests PRIVATE tests/LifecycleTests.cpp)
+target_sources(RecorderProbe PRIVATE tools/LifecycleProbe.cpp tools/CrashFixtures.cpp)
+add_test(NAME RecorderLifecycle COMMAND RecorderTests --suite lifecycle)
