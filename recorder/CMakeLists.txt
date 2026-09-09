@@ -353,3 +353,20 @@ endif()
 # The script consumes generator-resolved paths. Future targets/tests are built via ALL/CTest.
 file(GENERATE OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/recorder-package-$<CONFIG>.json" CONTENT
     "{\n  \"schema_version\": 1,\n  \"exe\": \"$<TARGET_FILE:Recorder>\",\n  \"ffmpeg_root\": \"${RECORDER_FFMPEG_ROOT}\",\n  \"winsparkle_dir\": \"${WINSPARKLE_DIR}\",\n  \"winsparkle_dll\": \"${GOCUE_WINSPARKLE_DLL}\",\n  \"public_key\": \"${RECORDER_UPDATE_PUBLIC_KEY}\"\n}\n")
+
+# Rounds 20+21: immutable export jobs, offline materials and one final MP4.
+# Append-only integration; shared TestMain.cpp owns every suite entry point.
+add_library(RecorderExport STATIC
+    src/export/ExportJob.cpp src/export/TimelineExporter.cpp
+    src/export/WavExportWriter.cpp src/export/FinalVideoExporter.cpp)
+target_link_libraries(RecorderExport PUBLIC RecorderImport)
+set_property(TARGET RecorderExport PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+target_compile_options(RecorderExport PRIVATE /utf-8 /W4 /permissive- /EHsc)
+target_sources(RecorderTests PRIVATE tests/ExportRangeTests.cpp tests/WavExportTests.cpp tests/FinalExportTests.cpp)
+target_link_libraries(RecorderTests PRIVATE RecorderExport)
+target_sources(RecorderProbe PRIVATE tools/ExportProbe.cpp tests/AudioRenderFixtures.cpp)
+target_link_libraries(RecorderProbe PRIVATE RecorderExport RecorderDualFixtures)
+target_link_libraries(Recorder PRIVATE RecorderExport)
+add_test(NAME RecorderExportAudioRange COMMAND RecorderTests --suite export-audio-range)
+add_test(NAME RecorderWavExport COMMAND RecorderTests --suite wav-export)
+add_test(NAME RecorderFinalExportSources COMMAND RecorderTests --suite final-export-sources)
