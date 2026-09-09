@@ -50,7 +50,7 @@ Arguments parse(int argc, wchar_t** argv)
     args.command = juce::String(argv[1]).toStdString();
     const std::set<std::string> allowedFlags = args.command == "enumerate" ? std::set<std::string>{"--select"} : std::set<std::string>{"--compare-decoders"};
     const std::set<std::string> allowedValues = args.command == "enumerate" ? std::set<std::string>{"--out"}
-        : std::set<std::string>{"--devices", "--camera", "--mode", "--seconds", "--report", "--decoder-threads"};
+        : std::set<std::string>{"--devices", "--camera", "--mode", "--seconds", "--report", "--decoder-threads", "--decoder"};
     if (args.command != "enumerate" && args.command != "capture") throw std::invalid_argument("Unknown subcommand: " + args.command);
     for (int i = 2; i < argc; ++i)
     {
@@ -315,7 +315,16 @@ int captureCommand(const Arguments& args)
             runs.add(runCapture(link, mode, false, static_cast<int>(threads), seconds / 2, window));
             if (!static_cast<bool>(runs.getLast()["cancelled"])) runs.add(runCapture(link, mode, true, static_cast<int>(threads), seconds - seconds / 2, window));
         }
-        else runs.add(runCapture(link, mode, false, static_cast<int>(threads), seconds, window));
+        else
+        {
+            // 2026-09-09 measurement (GC311G2 MJPEG 1080p60, 60 s): MF MJPEG->NV12 callback-to-Present p95 8 ms at 31% of a core;
+            // the FFmpeg CPU path spent ~20 ms/frame in decode + swscale colour normalisation and dropped 9%. MJPEG therefore
+            // defaults to the MF decoder; raw NV12/YUY2 modes stay on the native path. Override with --decoder mf|ffmpeg.
+            const auto decoder = args.get("--decoder", mode.subtype == CaptureSubtype::mjpeg ? "mf" : "ffmpeg");
+            if (decoder != "mf" && decoder != "ffmpeg") throw std::invalid_argument("--decoder must be mf or ffmpeg");
+            if (decoder == "mf" && mode.subtype != CaptureSubtype::mjpeg) throw std::invalid_argument("--decoder mf requires an MJPEG native mode");
+            runs.add(runCapture(link, mode, decoder == "mf", static_cast<int>(threads), seconds, window));
+        }
         jsonSet(report, "runs", runs);
         bool allPass = true, unavailable = false;
         for (const auto& run : runs) { allPass &= run["result"].toString() == "PASS"; unavailable |= run["result"].toString() == "UNAVAILABLE"; }
