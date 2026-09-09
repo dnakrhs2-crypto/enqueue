@@ -54,6 +54,8 @@ int runDualTakeIntegrationTests();
 int runDualPlaybackTests();      // round 26: shared cursor, gaps and timeline scale
 int runSeekGenerationTests();    // round 26: cancellation, file handoff and cache bounds
 int runLifecycleTests();         // round 28: faults, shutdown, updater/exclusivity
+int runMaterialExportTests();
+int runExportLifecycleTests();
 
 namespace
 {
@@ -69,6 +71,8 @@ int runAudioImport() { const int a = runAudioImportTests(), b = runImportedClipT
 int runRippleReorderMarkers() { const int a = runRippleTests(), b = runReorderTests(), c = runMarkerTests(); return (a || b || c) ? 1 : 0; }
 int runRecoveryIdempotence() { const int a = runRecoveryTests(), b = runRetakeRecoveryTests(); return (a || b) ? 1 : 0; }
 const Suite suites[] = {
+    {"materials-alignment", runMaterialExportTests},
+    {"export-lifecycle", runExportLifecycleTests},
     {"export-audio-range", runExportRangeTests},
     {"wav-export", runWavExportTests},
     {"final-export-sources", runFinalExportTests},

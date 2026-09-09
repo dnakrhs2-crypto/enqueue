@@ -87,6 +87,9 @@ juce::var ExportJob::manifest(const juce::Array<juce::var>& files) const
     jsonSet(v, "editRevision", plan().editRevision); jsonSet(v, "range", range.toJson(snapshot.Fs, snapshot.fps));
     jsonSet(v, "Fs", snapshot.Fs); jsonSet(v, "fpsNumerator", snapshot.fps.numerator); jsonSet(v, "fpsDenominator", snapshot.fps.denominator);
     jsonSet(v, "files", files); jsonSet(v, "recordingMayOverlap", mayOverlapRecording);
+    jsonSet(v, "outputOrigin", 0);
+    jsonSet(v, "fileCountPolicy", "Video frameCount is common; WAV sampleCount is project Fs; MP4 sampleCount is AAC presentation at 48k. commonPcmSampleCount/renderedPcmSampleCount retain the project-Fs count.");
+    jsonSet(v, "importMaterialPolicy", "PCM24 mono; stereo imports retain both channels in -L.wav/-R.wav; no automatic downmix");
     jsonSet(v, "microfadePolicy", "Shared TimelineAudioRenderer; 3ms linear, <= half adjacent continuous run; internal cuts/gaps only; no new export-boundary or transport ramps");
     jsonSet(v, "tailPolicy", "Silence after requested end through common frame-aligned end; never shortest-source truncation");
     juce::Array<juce::var> gaps, sources, fades;

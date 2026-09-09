@@ -2,6 +2,7 @@
 #include "app/RecorderUpdater.h"
 #include "storage/RecoveryScanner.h"
 #include "storage/IoHealth.h"
+#include "ExportDialog.h"
 #include <chrono>
 
 namespace gocue::recorder
@@ -33,6 +34,7 @@ MainComponent::MainComponent(RecorderDocument& d, RecorderSettings& s) : documen
     session.onLoadedPeaks = [this](const Id& id, auto peaks, unsigned channel) { timelineView.setLoadedPeaks(id, std::move(peaks), channel); };
     session.onThumbnails = [this](const Id& id, auto frames) { timelineView.setThumbnails(id, std::move(frames)); };
     document.onChanged = [this] { refreshPending = true; publishLifecycle(); };
+    exportDialog = std::make_unique<ExportDialog>(document, session, recordView.exportButton, [this](const juce::String& text) { showError(text); });
     aboutButton.setButtonText(ko("앱 정보")); updateButton.setButtonText(ko("업데이트")); retryButton.setButtonText(ko("마무리 재시도"));
     for (auto* button : {&aboutButton, &updateButton, &retryButton}) addAndMakeVisible(button);
     aboutButton.onClick = [] { RecorderUpdater::showAboutDialog(); };
@@ -71,7 +73,7 @@ void MainComponent::showError(const juce::String& message) { banner = message; r
 void MainComponent::setTimeline(bool on)
 { timeline = on; session.enterTimeline(on); timelineView.setVisible(on); refresh(); }
 void MainComponent::recordClicked()
-{ if (fileWork.valid() || closeAction) return; const auto r = session.record(); if (r.failed()) showError(r.getErrorMessage()); else banner.clear(); publishLifecycle(); refreshPending = true; }
+{ if (fileWork.valid() || closeAction) return; if (exportDialog && !exportDialog->beforeRecording([this] { recordClicked(); })) return; const auto r = session.record(); if (r.failed()) showError(r.getErrorMessage()); else banner.clear(); publishLifecycle(); refreshPending = true; }
 void MainComponent::stopClicked()
 {
     lastStopButtonQpc = qpcNow(); timelineView.lastClipPaintQpc = 0; timelineView.lastPaintedTake.clear();
