@@ -159,3 +159,18 @@ target_sources(RecorderTests PRIVATE tests/RecorderProjectTests.cpp)
 target_link_libraries(RecorderTests PRIVATE RecorderModel)
 add_test(NAME RecorderProjectRoundtrip COMMAND RecorderTests --suite project-roundtrip)
 # END Recorder round 08.
+
+# Round 07 / spike 4B. Append-only target integration; one shared test main.
+target_sources(RecorderCore PRIVATE src/storage/RecoverySupport.cpp src/storage/Mp4RecoveryIndex.cpp src/storage/RecoveryScanner.cpp)
+target_link_libraries(RecorderCore PUBLIC RecorderModel PRIVATE bcrypt)
+target_sources(RecorderTests PRIVATE tests/RecoveryTests.cpp tests/LargeFileTests.cpp tools/CrashFixtures.cpp)
+target_include_directories(RecorderTests PRIVATE tools)
+add_test(NAME RecorderRecovery COMMAND RecorderTests --suite recovery-idempotence)
+add_test(NAME RecorderLargeFile COMMAND RecorderTests --suite large-files)
+add_executable(RecorderCrashHarness tools/CrashHarness.cpp tools/CrashFixtures.cpp)
+target_link_libraries(RecorderCrashHarness PRIVATE RecorderCore)
+set_property(TARGET RecorderCrashHarness PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+target_compile_options(RecorderCrashHarness PRIVATE /utf-8 /W4 /permissive- /EHsc)
+set_target_properties(RecorderCrashHarness PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/RecorderCrashHarness_artefacts/$<CONFIG>")
+add_custom_command(TARGET RecorderCrashHarness POST_BUILD COMMAND ${CMAKE_COMMAND} -E copy_if_different
+    ${_rec_dlls} "$<TARGET_FILE_DIR:RecorderCrashHarness>" VERBATIM)

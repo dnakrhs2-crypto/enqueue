@@ -16,6 +16,8 @@ int runNativePcmTests();         // round 03: native PCM -> PCM24 packing
 int runJournalTests();           // round 06: recording journal / durable file
 int runWavChunkTests();          // round 06: WAV chunk writer
 int runProjectTests();           // round 08: project model / serializer / document / undo
+int runRecoveryTests();          // round 07: recovery and commit replay
+int runLargeFileTests();         // round 07: virtual offsets and I/O failures
 
 namespace
 {
@@ -34,6 +36,8 @@ const Suite suites[] = {
     {"journal-durable", runJournalDurable},
     {"wav-chunks", runWavChunkTests},
     {"project-roundtrip", runProjectTests},
+    {"recovery-idempotence", runRecoveryTests},
+    {"large-files", runLargeFileTests},
 };
 int usage()
 {

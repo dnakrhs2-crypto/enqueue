@@ -1,4 +1,5 @@
 #include "Mp4TakeWriter.h"
+#include "storage/Mp4RecoveryIndex.h"
 #include <algorithm>
 #include <array>
 #include <cstring>
@@ -30,8 +31,15 @@ struct Mp4TakeWriter::State
     std::array<Fragment, 128> fragments{};
     Fragment pending;
     bool haveMoof = false, finalized = false;
+    bool indexing = false, inTrailer = false;
+    FileIoFaultAdapter* faults = nullptr;
+    recovery::Hook hook;
+    Mp4RecoveryIndex index;
+    juce::String ioError;
     double trailerMs = 0, flushMs = 0, renameMs = 0;
-    explicit State(juce::File f) : finalFile(std::move(f)), recording(finalFile.getSiblingFile(finalFile.getFileNameWithoutExtension() + ".recording.mp4")) {}
+    explicit State(juce::File f, FileIoFaultAdapter* adapter, recovery::Hook h)
+        : finalFile(std::move(f)), recording(finalFile.getSiblingFile(finalFile.getFileNameWithoutExtension() + ".recording.mp4")),
+          faults(adapter), hook(std::move(h)), index(adapter) {}
     ~State()
     {
         if (io) { avio_flush(io); av_freep(&io->buffer); avio_context_free(&io); }
@@ -45,9 +53,26 @@ struct Mp4TakeWriter::State
     }
     static int write(void* opaque, const uint8_t* bytes, int size)
     {
-        auto& s = *static_cast<State*>(opaque); DWORD written = 0;
-        if (!WriteFile(s.file, bytes, static_cast<DWORD>(size), &written, nullptr) || written != static_cast<DWORD>(size)) return AVERROR(EIO);
-        s.position += size; s.highEnd = std::max(s.highEnd, s.position); return size;
+        auto& s = *static_cast<State*>(opaque);
+        try
+        {
+            if (s.faults) recovery::check(s.faults->beforeIo(s.position < s.highEnd ? FileIoOperation::patch : FileIoOperation::append,
+                s.recording, s.faults->observedOffset(std::uint64_t(s.position)), std::size_t(size)));
+            const auto* moov = std::search(bytes, bytes + size, "moov", "moov" + 4);
+            const bool finalMoov = s.inTrailer && moov != bytes + size;
+            const bool split = s.hook && s.indexing && size > 16 && (!s.inTrailer || finalMoov);
+            const int first = split ? finalMoov ? int((moov - bytes + size) / 2) : size / 2 : size;
+            const auto writePart = [&](const uint8_t* p, int n)
+            {
+                DWORD written = 0;
+                recovery::require(WriteFile(s.file, p, DWORD(n), &written, nullptr) && written == DWORD(n), "MP4 WriteFile failed (Win32 " + juce::String(int(GetLastError())) + ")");
+                s.position += n; s.highEnd = std::max(s.highEnd, s.position);
+            };
+            writePart(bytes, first);
+            if (split) { recovery::hit(s.hook, finalMoov ? "final-moov-write" : "fragment-write"); writePart(bytes + first, size - first); }
+            return size;
+        }
+        catch (const std::exception& e) { s.ioError = e.what(); return AVERROR(EIO); }
     }
     static std::int64_t seek(void* opaque, std::int64_t offset, int origin)
     {
@@ -110,7 +135,14 @@ struct Mp4TakeWriter::State
             }
             else if (type == tag('m','d','a','t') && haveMoof)
             {
-                pending.end = scanOffset + size; fragments[fragmentCount++ % fragments.size()] = pending; haveMoof = false;
+                pending.end = scanOffset + size;
+                if (indexing)
+                {
+                    if (faults) recovery::check(faults->beforeIo(FileIoOperation::flushData, recording, std::uint64_t(highEnd), 0));
+                    if (!FlushFileBuffers(file)) checkHr(HRESULT_FROM_WIN32(GetLastError()), "Flush completed MP4 fragment");
+                    index.fragment(recording, pending.start, pending.end);
+                }
+                fragments[fragmentCount++ % fragments.size()] = pending; haveMoof = false;
             }
             scanOffset += static_cast<std::int64_t>(size);
         }
@@ -132,8 +164,9 @@ struct Mp4TakeWriter::State
         }
     }
 };
-Mp4TakeWriter::Mp4TakeWriter(const juce::File& file, const AVCodecContext& video, const AVCodecContext& audio)
-    : state(std::make_unique<State>(file))
+Mp4TakeWriter::Mp4TakeWriter(const juce::File& file, const AVCodecContext& video, const AVCodecContext& audio,
+                           FileIoFaultAdapter* faults, recovery::Hook hook)
+    : state(std::make_unique<State>(file, faults, std::move(hook)))
 {
     auto& s = *state;
     if (file.getFileExtension() != ".mp4" || file.exists() || s.recording.exists()) throw std::invalid_argument("MP4 output exists or does not end in .mp4; use a new output directory");
@@ -165,6 +198,8 @@ Mp4TakeWriter::Mp4TakeWriter(const juce::File& file, const AVCodecContext& video
     ffCheck(avformat_write_header(s.format, &options.value), "Write hybrid MP4 header");
     if (av_dict_count(options.value)) throw std::runtime_error("Unconsumed MP4 options");
     s.observeFragments();
+    if (!FlushFileBuffers(s.file)) checkHr(HRESULT_FROM_WIN32(GetLastError()), "Flush initial MP4 codec header");
+    s.index.start(Mp4RecoveryIndex::pathFor(s.recording), *s.format, s.recording); s.indexing = true;
 }
 Mp4TakeWriter::~Mp4TakeWriter() = default;
 void Mp4TakeWriter::video(const AVPacket& p) { state->append(p, 0); }
@@ -177,12 +212,13 @@ void Mp4TakeWriter::finalize()
     ffCheck(av_interleaved_write_frame(s.format, nullptr), "Drain MP4 interleaver");
     // Close the final fragment before hybrid trailer rewrites the root boxes.
     ffCheck(av_write_frame(s.format, nullptr), "Close final MP4 fragment"); s.observeFragments();
+    s.inTrailer = true;
     auto start = qpcNow(); ffCheck(av_write_trailer(s.format), "Write hybrid MP4 trailer");
     s.trailerMs = 1000.0 * (qpcNow() - start) / qpcFrequency();
     start = qpcNow(); avio_flush(s.io); ffCheck(s.io->error, "Flush finalized MP4 AVIO");
     if (!FlushFileBuffers(s.file)) checkHr(HRESULT_FROM_WIN32(GetLastError()), "Flush finalized MP4 file");
     s.flushMs = 1000.0 * (qpcNow() - start) / qpcFrequency();
-    s.closeHandles(); start = qpcNow();
+    s.index.close(); s.closeHandles(); start = qpcNow();
     if (!MoveFileExW(s.recording.getFullPathName().toWideCharPointer(), s.finalFile.getFullPathName().toWideCharPointer(), MOVEFILE_WRITE_THROUGH))
         checkHr(HRESULT_FROM_WIN32(GetLastError()), "Rename finalized MP4 without replacement");
     s.renameMs = 1000.0 * (qpcNow() - start) / qpcFrequency(); s.finalized = true;
@@ -202,7 +238,7 @@ juce::var Mp4TakeWriter::toJson() const
     jsonSet(v, "videoPackets", jsonInt(s.packetCounts[0])); jsonSet(v, "audioPackets", jsonInt(s.packetCounts[1]));
     jsonSet(v, "lastVideoPts", juce::var(static_cast<juce::int64>(s.lastPts[0]))); jsonSet(v, "lastAudioPts", juce::var(static_cast<juce::int64>(s.lastPts[1])));
     jsonSet(v, "completedFragments", jsonInt(s.fragmentCount)); jsonSet(v, "fragments", fragments);
-    jsonSet(v, "fragmentDefinition", "Last 128 actual completed moof+mdat root boundaries before trailer, with tfhd/trun sample counts; AVIO flushed, not a durable journal or GrowingTakeReader index. Last PTS fields are mux input time bases.");
+    jsonSet(v, "fragmentDefinition", "Last 128 completed moof+mdat boundaries. Full crash-only codec/tfhd/tfdt/trun/packet-CRC index is durable in index/*.packets.log after media FlushFileBuffers; not a GrowingTakeReader. Last PTS fields are mux input time bases.");
     jsonSet(v, "trailerMs", s.trailerMs); jsonSet(v, "fileFlushMs", s.flushMs); jsonSet(v, "renameMs", s.renameMs);
     jsonSet(v, "fileSizeBytes", jsonInt(s.finalized ? s.finalFile.getSize() : s.highEnd));
     return v;

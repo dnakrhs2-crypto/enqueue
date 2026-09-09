@@ -171,7 +171,11 @@ struct WavTrackWriter::Impl
         JournalTakeStarted start;
         start.takeId = config.takeId; start.pcm.sampleRate = config.sampleRate; start.pcm.nativeFormat = config.nativeFormat;
         start.n0 = config.n0; start.o0 = config.o0; start.pstart = config.pstart; start.usesOutputOrigin = config.usesOutputOrigin;
+        start.placementMode = config.placementMode;
         start.devices = config.devices;
+        start.files = config.additionalFiles;
+        if (config.testChunkFrames && (!config.faults || config.testChunkFrames % config.sampleRate != 0))
+        { fail(Error::invalidBlock, "Test chunk boundary requires a fault adapter and whole seconds"); return false; }
         for (const auto& t : tracks)
             start.files.push_back({juce::Uuid().toDashedString(), t->path, t->path.upToLastOccurrenceOf("/", true, false) + "{chunk}.wav"});
         if (!io(journal.append(start))) return false;
@@ -226,7 +230,7 @@ struct WavTrackWriter::Impl
         for (std::size_t i = 0; i < static_cast<std::size_t>(block.frames) * config.mics; ++i)
             if (pcm[i] < -8388608 || pcm[i] > 8388607)
             { fail(Error::invalidPcm, "Input is outside signed PCM24; no implicit clipping/conversion"); return false; }
-        const auto chunkFrames = static_cast<std::uint64_t>(config.sampleRate) * chunkSeconds;
+        const auto chunkFrames = config.testChunkFrames ? config.testChunkFrames : static_cast<std::uint64_t>(config.sampleRate) * chunkSeconds;
         std::uint32_t consumed = 0;
         while (consumed < block.frames)
         {

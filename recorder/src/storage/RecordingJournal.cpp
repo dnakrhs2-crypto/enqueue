@@ -61,6 +61,7 @@ bool validPayload(JournalKind kind, const juce::var& p)
     if (kind == JournalKind::Checkpoint) return true;
     if (kind != JournalKind::TakeStarted || !number(p["N0"]) || !number(p["O0"]) || !number(p["Pstart"])
         || !p["usesOutputOrigin"].isBool()) return false;
+    if (p.hasProperty("placementMode") && p["placementMode"].toString() != "normal" && p["placementMode"].toString() != "dub") return false;
     const auto fmt = p["pcm"];
     for (const auto* key : {"sampleRate", "channels", "bitsPerSample", "blockAlign", "dataOffset"})
         if (!nonnegative(fmt[key]) || static_cast<juce::int64>(fmt[key]) == 0) return false;
@@ -140,6 +141,7 @@ juce::Result RecordingJournal::append(const JournalTakeStarted& s, const juce::U
     auto p = take(s.takeId), fmt = object();
     set(p, "N0", juce::var(static_cast<juce::int64>(s.n0))); set(p, "O0", juce::var(static_cast<juce::int64>(s.o0)));
     set(p, "Pstart", juce::var(static_cast<juce::int64>(s.pstart))); set(p, "usesOutputOrigin", s.usesOutputOrigin);
+    set(p, "placementMode", s.placementMode);
     set(fmt, "sampleRate", integer(s.pcm.sampleRate)); set(fmt, "channels", s.pcm.channels);
     set(fmt, "bitsPerSample", s.pcm.bitsPerSample); set(fmt, "blockAlign", s.pcm.blockAlign);
     set(fmt, "dataOffset", integer(s.pcm.dataOffset)); set(fmt, "nativeFormat", s.pcm.nativeFormat); set(p, "pcm", fmt);

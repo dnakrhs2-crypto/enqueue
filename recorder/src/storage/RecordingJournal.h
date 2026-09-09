@@ -28,6 +28,7 @@ struct JournalTakeStarted
     JournalPcmFormat pcm;
     std::int64_t n0 = 0, o0 = 0, pstart = 0;
     bool usesOutputOrigin = false;
+    juce::String placementMode = "normal"; // Independent of input/output clock selection.
     std::vector<JournalDeviceMapping> devices;
 };
 struct JournalFilePosition

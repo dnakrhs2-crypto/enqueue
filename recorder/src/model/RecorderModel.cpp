@@ -122,7 +122,10 @@ juce::Result RecorderProject::validate() const
                   && a.sourceUnitsNumerator <= std::uint64_t(maxSample) && a.sourceUnitsDenominator <= std::uint64_t(maxSample), "원본 시간 매핑이 잘못되었습니다.");
             const auto addPath = [&](const juce::String& path)
             {
-                check(isProjectRelativePath(path) && path.startsWith("media/") && uniqueInsert(paths, path.toLowerCase()), "미디어 상대 경로가 잘못되었거나 중복됩니다.");
+                const auto parts = juce::StringArray::fromTokens(path, "/", "");
+                const bool recoveryPath = parts.size() > 3 && parts[0] == "recovery"
+                    && juce::Uuid(parts[1]).toDashedString() == parts[1] && !juce::Uuid(parts[1]).isNull();
+                check(isProjectRelativePath(path) && (path.startsWith("media/") || recoveryPath) && uniqueInsert(paths, path.toLowerCase()), "미디어 상대 경로가 잘못되었거나 중복됩니다.");
             };
             if (a.relativePath.isNotEmpty()) addPath(a.relativePath);
             check(a.relativePath.isNotEmpty() || !a.chunks.empty(), "미디어 경로가 없습니다.");
@@ -179,7 +182,10 @@ juce::Result RecorderProject::validate() const
                 check(found != assets.end() && found->second->kind == kind && uniqueInsert(takeAssets, value), "테이크의 미디어 참조가 잘못되었습니다.");
                 check(found->second->logicalLength <= t.logicalLength, "원본 길이가 테이크 논리 길이를 벗어납니다.");
             };
-            ref(t.cam1AssetId, AssetKind::camera); cameraSlots[t.cam1AssetId] = 1;
+            // A round-06 audio-only crash can retain recovered microphones even
+            // when no camera was registered. Normal take creation still needs cam1.
+            if (t.cam1AssetId.isNotEmpty()) { ref(t.cam1AssetId, AssetKind::camera); cameraSlots[t.cam1AssetId] = 1; }
+            else check(t.state == TakeState::partial && !t.microphoneAssetIds.empty(), "캠1 또는 복구된 마이크가 필요합니다.");
             if (t.cam2AssetId.isNotEmpty()) { ref(t.cam2AssetId, AssetKind::camera); cameraSlots[t.cam2AssetId] = 2; }
             for (const auto& mic : t.microphoneAssetIds) ref(mic, AssetKind::mic);
         }
