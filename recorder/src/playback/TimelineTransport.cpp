@@ -22,7 +22,7 @@ TimelineTransport::TimelineTransport(std::uint32_t Fs, std::int64_t hz, Playback
     : rate(Fs), frequency(hz), queue(q), end(length)
 { if (!rate || rate > 768000 || hz <= 0 || length < 0) throw std::invalid_argument("Invalid transport timebase"); }
 void TimelineTransport::send(Command c)
-{ if (!commands.push(c)) throw std::runtime_error("Transport command queue full"); }
+{ if (!commands.push(c)) throw std::runtime_error("Transport command queue full"); wake->signal(); }
 void TimelineTransport::seek(Sample sample)
 {
     if (sample < 0 || sample > end) throw std::out_of_range("Seek outside timeline");
@@ -185,6 +185,7 @@ void TimelineTransport::publish(const BlockStamp& s) noexcept
     published.output.store(rt.outputSample); published.qpc.store(rt.callbackQpc); published.frames.store(rt.blockFrames);
     published.latency.store(rt.outputLatency); published.first.store(rt.firstBlockQpc); published.audible.store(rt.firstAudibleQpc);
     published.sequence.fetch_add(1);
+    wake->signal(); // preallocated event; never wait, allocate or acquire a mutex in ASIO
 }
 TransportSnapshot TimelineTransport::snapshot() const noexcept
 {
@@ -202,6 +203,7 @@ TransportSnapshot TimelineTransport::snapshot() const noexcept
 }
 void TimelineTransport::service(TimelineAudioRenderer& audio, VideoPlaybackEngine& video, IAudioOutput& output, std::int64_t now)
 {
+    video.setWakeEvent(wake);
     output.drainTiming();
     try
     {

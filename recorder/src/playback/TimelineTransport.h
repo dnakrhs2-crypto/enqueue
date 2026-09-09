@@ -1,6 +1,7 @@
 #pragma once
 #include "IAudioOutput.h"
 #include "TimelineAudioRenderer.h"
+#include "VideoPlaybackEngine.h"
 #include "support/BoundedSpscQueue.h"
 
 namespace gocue::recorder
@@ -29,9 +30,11 @@ public:
     void pause();
     void stop();
     void goToStart();
-    // Coordinator pump; UI timer does not advance the clock. File/GPU preparation
-    // runs on renderer/decoder workers. Call after output.start(*this).
+    // Single-owner coordinator: wait on wakeHandle() plus window messages, then
+    // service. Video publication/receipt and ASIO publication signal immediately.
+    // File/GPU preparation remains on workers; no service() call from the callback.
     void service(TimelineAudioRenderer&, VideoPlaybackEngine&, IAudioOutput&, std::int64_t nowQpc);
+    void* wakeHandle() const noexcept { return wake->nativeHandle(); }
     void prepared(std::int64_t reservedOutputSample, bool start); // readiness seam for offline stubs
     void processOutput(const BlockStamp&, float*, float*) noexcept override;
     TransportSnapshot snapshot() const noexcept;
@@ -49,6 +52,7 @@ private:
     const std::int64_t frequency;
     PlaybackPcmQueue& queue;
     const Sample end;
+    const std::shared_ptr<PlaybackWakeEvent> wake = std::make_shared<PlaybackWakeEvent>();
     BoundedSpscQueue<Command, 64> commands;
     // RT-owned state. The control owner only reads the atomic publication below.
     TransportSnapshot rt;

@@ -1,10 +1,34 @@
 #pragma once
 #include "media/MediaIndex.h"
 #include <functional>
+#include <optional>
 
 namespace gocue::recorder
 {
 struct PlaybackTexture; // GPU-only immutable texture; final releases on GPU/control workers
+// Auto-reset notification, one waiter per instance. Signal before wait is retained.
+// Construct on the control/worker thread; signal() only calls SetEvent (no allocation).
+class PlaybackWakeEvent
+{
+public:
+    PlaybackWakeEvent();
+    ~PlaybackWakeEvent();
+    PlaybackWakeEvent(const PlaybackWakeEvent&) = delete;
+    PlaybackWakeEvent& operator=(const PlaybackWakeEvent&) = delete;
+    void signal() const noexcept;
+    void* nativeHandle() const noexcept { return handle; }
+private:
+    void* handle = nullptr;
+};
+struct PlaybackDecodePlan
+{
+    std::size_t firstPacket = 0, targetPacket = 0, decodeOnlyFrames = 0;
+    bool fromIdr = true;
+    bool convert(std::int64_t pts, const VideoIndex& source) const
+    { return pts == source.packets.at(targetPacket).pts; }
+};
+PlaybackDecodePlan playbackDecodePlan(const VideoIndex&, std::size_t target,
+                                      std::optional<std::size_t> lastDecoded = {});
 struct PlaybackVideoClip
 {
     RenderClip mapping;
@@ -25,6 +49,9 @@ struct PlaybackDecodeTiming
 {
     std::int64_t idrSeekTicks = 0, flushTicks = 0, decodeTicks = 0, convertTicks = 0;
     std::size_t idrPacket = 0, targetPacket = 0, receivedFrames = 0;
+    std::size_t plannedDecodeOnlyFrames = 0, decodeOnlyFrames = 0, convertedFrames = 0;
+    std::int64_t seekBeginQpc = 0, seekEndQpc = 0, prefixBeginQpc = 0, prefixEndQpc = 0;
+    std::int64_t convertBeginQpc = 0, resourcesReadyQpc = 0, gpuSubmittedQpc = 0, gpuCompleteQpc = 0;
     bool fromIdr = false;
 };
 class IVideoFrameDecoder
@@ -32,7 +59,7 @@ class IVideoFrameDecoder
 public:
     virtual ~IVideoFrameDecoder() = default;
     // Camera worker only: retain the device/codec, invalidate sequential decode
-    // position after a seek (including a cancelled decode that advanced the DPB).
+    // position after an interrupted decode. Completed forward seeks reuse the DPB.
     virtual void resetForSeek() {}
     virtual PlaybackDecodeTiming decodeTiming() const { return {}; }
     virtual std::shared_ptr<const PlaybackTexture> decodeFrame(std::size_t packet,
@@ -87,13 +114,17 @@ public:
     juce::var telemetry() const;
     PlaybackPresentation lastPresentation(unsigned camera) const;
     PlaybackSeekTiming seekTiming(unsigned camera) const;
+    // One non-RT coordinator waiter; independent from each present-thread event.
+    void setWakeEvent(std::shared_ptr<PlaybackWakeEvent>);
+    void* presentationWakeHandle(unsigned camera) const;
     // GPU-present-thread endpoints. Late frames retain the previous picture until
     // the next audio-cursor selection; gaps clear it. No independent video clock.
-    // Ordinary inspections (including gap UI and startup polling) never count as
+    // Ordinary inspections (including gap UI and readiness events) never count as
     // late. Only the present thread marks a real advancing presentation tick.
     PlaybackDisplaySelection displaySelection(unsigned camera, bool presentationTick = false) const;
     void presented(unsigned camera, const PlaybackVideoFrame&, std::int64_t qpc);
     void presenterInitialised(unsigned camera, std::int64_t beginQpc, std::int64_t endQpc);
+    void presenterFailed(unsigned camera, const juce::String&);
 private:
     struct Impl;
     std::unique_ptr<Impl> impl;

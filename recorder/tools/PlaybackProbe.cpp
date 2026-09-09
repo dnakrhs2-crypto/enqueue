@@ -151,6 +151,32 @@ struct ReportOnExit
     std::function<void()> capture;
     ~ReportOnExit() { try { capture(); } catch (...) {} }
 };
+juce::var seekPhases(const PlaybackSeekTiming& t, std::int64_t release, std::int64_t hz)
+{
+    auto result = jsonObject();
+    const auto span = [&](const char* name, std::int64_t begin, std::int64_t end)
+    {
+        auto s = jsonObject();
+        jsonSet(s, "beginQpc", begin ? juce::var(begin) : juce::var());
+        jsonSet(s, "endQpc", end ? juce::var(end) : juce::var());
+        jsonSet(s, "durationMs", begin && end ? juce::var(1000.0 * (end - begin) / hz) : juce::var());
+        jsonSet(result, name, s);
+    };
+    jsonSet(result, "definition", "QPC endpoints; prefix completes when target AVFrame is received; GPU copy/draw completion is separate. Missing/cache-bypassed stages are null. DXGI receipt is successful Present return, not photon time.");
+    span("releaseToRequest", release, t.requestedQpc);
+    span("requestToWorker", t.requestedQpc, t.workerQpc);
+    span("requestToDecoderSeek", t.requestedQpc, t.decode.seekBeginQpc);
+    span("decoderSeekAndFlush", t.decode.seekBeginQpc, t.decode.seekEndQpc);
+    span("prefixDecodeThroughTarget", t.decode.prefixBeginQpc, t.decode.prefixEndQpc);
+    span("targetConversion", t.decode.convertBeginQpc, t.decode.gpuCompleteQpc);
+    span("targetResources", t.decode.convertBeginQpc, t.decode.resourcesReadyQpc);
+    span("targetGpuSubmission", t.decode.resourcesReadyQpc, t.decode.gpuSubmittedQpc);
+    span("targetGpuCompletion", t.decode.gpuSubmittedQpc, t.decode.gpuCompleteQpc);
+    span("requestToReady", t.requestedQpc, t.readyQpc);
+    span("readyToDxgiReceipt", t.readyQpc, t.presentQpc);
+    span("releaseToDxgiReceipt", release, t.presentQpc);
+    return result;
+}
 }
 int runPlaybackProbe(int argc, wchar_t** argv)
 {
@@ -290,7 +316,9 @@ int runPlaybackProbe(int argc, wchar_t** argv)
         {
             window.pump(); transport.service(audio, engine, *output, qpcNow()); check(transport.status());
             window.updateGaps(engine);
-            MsgWaitForMultipleObjects(0, nullptr, FALSE, 1, QS_ALLINPUT);
+            const HANDLE events[]{transport.wakeHandle()};
+            const auto waited = MsgWaitForMultipleObjectsEx(1, events, 1000, QS_ALLINPUT, MWMO_INPUTAVAILABLE);
+            if (waited == WAIT_FAILED) throw std::runtime_error("Wait for playback coordinator event failed");
         };
         if (options.warm)
         {
@@ -338,7 +366,8 @@ int runPlaybackProbe(int argc, wchar_t** argv)
         jsonSet(report, "firstVideoPresentMs", videoMs); jsonSet(report, "firstAudioBlockOutputMs", blockMs);
         jsonSet(report, "firstAudioAudibleEstimateMs", audibleMs); jsonSet(report, "stopToPlayMs", (std::max)(videoMs, audibleMs));
         jsonSet(report, "indexToPlayMs", 1000.0 * ((std::max)({firstVideo[0], firstVideo[1], firstAudio.firstAudibleQpc}) - indexBegin) / hz);
-        jsonSet(report, "stopToPlayLimitMs", 2000);
+        const auto startupLimit = options.warm ? 150 : 2000;
+        jsonSet(report, "stopToPlayLimitMs", startupLimit);
         juce::Array<juce::var> startupCameras;
         const auto videoState = engine.telemetry();
         for (unsigned camera = 0; camera < cameras; ++camera)
@@ -354,6 +383,7 @@ int runPlaybackProbe(int argc, wchar_t** argv)
             jsonSet(phases, "readyToFirstPresent", interval(timing.readyQpc, firstVideo[camera], stoppedAt, hz));
             jsonSet(phases, "stopToFirstPresent", interval(stoppedAt, firstVideo[camera], stoppedAt, hz));
             jsonSet(phases, "seek", c["seek"]); startupCameras.add(phases);
+            jsonSet(phases, "seekPhases", seekPhases(timing, stoppedAt, hz));
         }
         jsonSet(startup, "cameras", startupCameras); jsonSet(startup, "transport", transport.telemetry());
         jsonSet(startup, "stopToFirstAudioBlock", interval(stoppedAt, firstAudio.firstBlockQpc, stoppedAt, hz));
@@ -386,9 +416,12 @@ int runPlaybackProbe(int argc, wchar_t** argv)
         };
         ReportOnExit seekSummaryOnExit{summariseSeeks};
         jsonSet(report, "seekP95LimitMs", 250); jsonSet(report, "coldSeekLimitMs", 500);
+        jsonSet(report, "seekCacheHitP50LimitMs", 50);
         jsonSet(report, "seekTimeoutMs", 10000);
         jsonSet(report, "seekDefinition", "Release -> FIRST exact containing-frame DXGI receipt in every active camera; codecs retained, immutable resident frame cache validated/rebound per generation; all-camera hit versus any-camera miss. Cold = first distant frame-cache miss, NOT device/OS-cache cold. OS cache is not flushed. Repeat targets exercise hits without changing the denominator.");
         if (storm) transport.pause();
+        const auto beforeStorm = engine.telemetry();
+        jsonSet(report, "videoBeforeSeekStorm", beforeStorm); // counters above this boundary include the one-second playback run
         const auto coldAnchor = video->frameAt(video->length * 3 / 4);
         const auto nextIdr = std::upper_bound(video->idrs.begin(), video->idrs.end(), coldAnchor);
         const auto coldPacket = nextIdr == video->idrs.end() ? video->packets.size() - 1 : *nextIdr - 1;
@@ -432,6 +465,13 @@ int runPlaybackProbe(int argc, wchar_t** argv)
                 exactAt = 0;
             }
             jsonSet(attempt, "video", engine.telemetry()); jsonSet(attempt, "transport", transport.telemetry());
+            juce::Array<juce::var> phases;
+            for (unsigned camera = 0; camera < cameras; ++camera)
+            {
+                auto detail = seekPhases(engine.seekTiming(camera), release, hz);
+                jsonSet(detail, "camera", camera); phases.add(detail);
+            }
+            jsonSet(attempt, "phases", phases);
             if (!exactAt)
             {
                 ++timeouts; jsonSet(attempt, "result", "timeout"); jsonSet(attempt, "releaseToExactPresentMs", juce::var());
@@ -452,11 +492,24 @@ int runPlaybackProbe(int argc, wchar_t** argv)
         }
         summariseSeeks();
         const auto final = transport.snapshot(); jsonSet(report, "underruns", final.underruns); jsonSet(report, "video", engine.telemetry());
+        juce::Array<juce::var> deltas; const auto afterStorm = engine.telemetry();
+        for (unsigned camera = 0; camera < cameras; ++camera)
+        {
+            auto delta = jsonObject(); jsonSet(delta, "camera", camera);
+            for (const auto* key : {"lateDisplaySelections", "staleDiscarded", "cancelledTargetDecodes", "cancelledPrefetchDecodes"})
+                jsonSet(delta, key, static_cast<juce::int64>(afterStorm["cameras"][static_cast<int>(camera)][key])
+                    - static_cast<juce::int64>(beforeStorm["cameras"][static_cast<int>(camera)][key]));
+            deltas.add(delta);
+        }
+        jsonSet(report, "seekStormCounterDelta", deltas);
         jsonSet(report, "audibleCursorSample", TimelineTransport::audibleCursor(final, rate, hz, qpcNow()));
         saveState(); savedFinal = true;
         output->close(); audio.stopWorker(); engine.stop();
-        const bool startupMet = (std::max)(videoMs, audibleMs) <= 2000;
-        const bool seekMet = !storm || (seekTimes.size() == static_cast<std::size_t>(storm) && percentile(seekTimes, .95) <= 250 && cold <= 500);
+        const bool startupMet = (std::max)(videoMs, audibleMs) <= startupLimit;
+        const bool hitsMet = hitTimes.empty() || percentile(hitTimes, .50) <= 50;
+        jsonSet(report, "seekCacheHitTargetMet", hitTimes.empty() ? juce::var() : juce::var(hitsMet));
+        const bool seekMet = !storm || (seekTimes.size() == static_cast<std::size_t>(storm)
+            && percentile(seekTimes, .95) <= 250 && cold <= 500 && hitsMet);
         jsonSet(report, "stopToPlayTargetMet", startupMet); jsonSet(report, "seekTargetMet", storm ? juce::var(seekMet) : juce::var());
         const bool pass = (!(options.stopToPlay || !storm) || startupMet) && !final.underruns && seekMet;
         jsonSet(report, "result", pass ? "PASS" : "FAIL");
