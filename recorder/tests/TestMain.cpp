@@ -17,6 +17,8 @@ int runNativePcmTests();         // round 03: native PCM -> PCM24 packing
 int runJournalTests();           // round 06: recording journal / durable file
 int runWavChunkTests();          // round 06: WAV chunk writer
 int runProjectTests();           // round 08: project model / serializer / document / undo
+int runAudioImportTests();       // round 16: copied originals, decoded lengths and derived PCM
+int runImportedClipTests();      // round 16: independent import track/document transaction
 
 namespace
 {
@@ -27,6 +29,7 @@ struct Suite
 };
 int runAsioNativePcm() { const int a = runAsioStampTests(), b = runNativePcmTests(); return (a || b) ? 1 : 0; }
 int runJournalDurable() { const int a = runJournalTests(), b = runWavChunkTests(); return (a || b) ? 1 : 0; }
+int runAudioImport() { const int a = runAudioImportTests(), b = runImportedClipTests(); return (a || b) ? 1 : 0; }
 const Suite suites[] = {
     {"capture-contract", runCaptureContractTests},
     {"capture-review", runCaptureReviewTests},
@@ -36,6 +39,7 @@ const Suite suites[] = {
     {"journal-durable", runJournalDurable},
     {"wav-chunks", runWavChunkTests},
     {"project-roundtrip", runProjectTests},
+    {"audio-import", runAudioImport},
 };
 int usage()
 {
