@@ -17,6 +17,8 @@ public:
         std::string symbolicLink;
         CameraMode mode;
         CalibrationProfile calibration;
+        std::uint64_t generation = 0;
+        std::string exposure = "uncontrolled";
     };
     struct Config
     {
@@ -29,6 +31,8 @@ public:
         Id retakeStack;
         std::vector<Camera> cameras;
         bool recordMicrophones = false, synthetic = false;
+        bool externalCapture = false;
+        std::vector<int> outputMapping;
     };
     struct Placement
     {
@@ -57,7 +61,8 @@ public:
     const Placement& placement() const noexcept;
     const Id& selectedAudioTrack() const noexcept;
     void offer(unsigned camera, const VideoSurface&) noexcept; // sole decode producer per camera
-    void cameraFailed(unsigned camera) noexcept;
+    TakeVideoQueues cameraQueues(unsigned camera) const noexcept; // owner thread, atomic worker counters
+    void cameraFailed(unsigned camera, std::uint64_t generation = 0) noexcept;
     std::shared_ptr<VideoSurfacePool> previewPool(unsigned camera) const;
     juce::var report() const; // after done/partialFailure
     juce::var calibrationOffsetReport() const; // same captured stamp + frozen clock, changed profile values

@@ -5,6 +5,9 @@
 #include <chrono>
 #include <cstring>
 #include <thread>
+#include <fstream>
+#include <filesystem>
+#include <sstream>
 
 namespace gocue::recorder::probe
 {
@@ -127,7 +130,10 @@ juce::var FramePatternOracle::finish() const
     jsonSet(v, "coverage", native.value() > project.value() ? "CFR-selected native frames only; omitted native frames cannot be certified from this MP4" : "All native IDs expected in the MP4, including first and last; synthetic source only");
     return v;
 }
-juce::var inspectPatternMp4(const juce::File& file, unsigned camera, Rational native, Rational project, unsigned seconds)
+namespace
+{
+void decodePatternMp4(const juce::File& file, Rational project,
+                     const std::function<void(std::optional<PatternId>, std::int64_t)>& observe)
 {
     ScopedRecorderPriority priority(RecorderThreadRole::background);
     AVFormatContext* raw = nullptr;
@@ -141,7 +147,7 @@ juce::var inspectPatternMp4(const juce::File& file, unsigned camera, Rational na
     ffCheck(avcodec_parameters_to_context(decoder.get(), raw->streams[stream]->codecpar), "Copy oracle codec parameters");
     decoder->thread_count = 1; decoder->err_recognition = AV_EF_EXPLODE;
     ffCheck(avcodec_open2(decoder.get(), codec, nullptr), "Open software pixel decoder");
-    auto packet = ffPacket(); auto frame = ffFrame(); FramePatternOracle oracle(camera, native, project, seconds);
+    auto packet = ffPacket(); auto frame = ffFrame();
     const auto receive = [&](bool draining)
     {
         for (;;)
@@ -154,7 +160,7 @@ juce::var inspectPatternMp4(const juce::File& file, unsigned camera, Rational na
                 throw std::runtime_error("Oracle requires decoded 8-bit YUV");
             if (frame->best_effort_timestamp == AV_NOPTS_VALUE) throw std::runtime_error("Oracle frame has no PTS");
             const auto pts = av_rescale_q(frame->best_effort_timestamp, raw->streams[stream]->time_base, AVRational{static_cast<int>(project.denominator), static_cast<int>(project.numerator)});
-            oracle.observe(readPattern(frame->data[0], frame->linesize[0], frame->width, frame->height), pts); av_frame_unref(frame.get());
+            observe(readPattern(frame->data[0], frame->linesize[0], frame->width, frame->height), pts); av_frame_unref(frame.get());
         }
     };
     for (;;)
@@ -169,7 +175,31 @@ juce::var inspectPatternMp4(const juce::File& file, unsigned camera, Rational na
         av_packet_unref(packet.get());
     }
     ffCheck(avcodec_send_packet(decoder.get(), nullptr), "Flush oracle decoder"); receive(true);
-    auto result = oracle.finish(); jsonSet(result, "file", file.getFullPathName()); jsonSet(result, "priorityError", priority.error); return result;
+}
+}
+juce::var inspectPatternMp4(const juce::File& file, unsigned camera, Rational native, Rational project, unsigned seconds)
+{
+    FramePatternOracle oracle(camera,native,project,seconds);
+    decodePatternMp4(file,project,[&](auto id,auto pts){oracle.observe(id,pts);});
+    auto result=oracle.finish();jsonSet(result,"file",file.getFullPathName());return result;
+}
+juce::var inspectMappedPatternMp4(const juce::File& file, const juce::File& traceFile, unsigned camera, Rational project)
+{
+    std::ifstream trace(std::filesystem::path(traceFile.getFullPathName().toWideCharPointer()));
+    std::string line; if (!std::getline(trace,line) || line != "pts,sourceId,mfPts100ns,callbackQpc,mapped100ns")
+        throw std::runtime_error("Missing or invalid product source trace");
+    std::uint64_t decoded=0, errors=0;
+    decodePatternMp4(file,project,[&](auto id,auto pts)
+    {
+        std::int64_t expectedPts=-1, source=-1; char comma=0;
+        if (!std::getline(trace,line)) {++errors;return;}
+        std::istringstream row(line); row>>expectedPts>>comma>>source;
+        if (!row || comma!=',' || expectedPts!=pts || pts!=std::int64_t(decoded) || !id || id->camera!=camera || id->frame!=source) ++errors;
+        ++decoded;
+    });
+    if (std::getline(trace,line)) ++errors;
+    auto result=jsonObject();jsonSet(result,"result",decoded&&!errors?"PASS":"FAIL");jsonSet(result,"decodedFrames",jsonInt(decoded));jsonSet(result,"pixelOrPtsErrors",jsonInt(errors));
+    jsonSet(result,"definition","Full decoded pixels/PTS vs product CFR source trace; phase/N0-aware. CFR nearest-frame policy is tested separately; this does not certify sensor capture loss.");return result;
 }
 
 struct FramePatternSource::State
@@ -181,6 +211,7 @@ struct FramePatternSource::State
     std::function<void(const VideoSurface&)> sink;
     VideoSurface scratch;
     CodecPtr jpeg;
+    std::int64_t jpegSequence = 0; // includes warmup; pixel IDs may restart independently
     FramePtr jpegFrame = ffFrame(); PacketPtr jpegPacket = ffPacket();
     struct Slot { std::vector<std::uint8_t> bytes; FrameStamp stamp; };
     std::array<Slot, 4> slots; // producer + two pending + one decode owner
@@ -229,7 +260,7 @@ struct FramePatternSource::State
             jpegFrame->data[1][y * jpegFrame->linesize[1] + x] = scratch.uv()[y * 1920 + x * 2];
             jpegFrame->data[2][y * jpegFrame->linesize[2] + x] = scratch.uv()[y * 1920 + x * 2 + 1];
         }
-        jpegFrame->pts = number - 1; ffCheck(avcodec_send_frame(jpeg.get(), jpegFrame.get()), "Generate source JPEG");
+        jpegFrame->pts = jpegSequence++; ffCheck(avcodec_send_frame(jpeg.get(), jpegFrame.get()), "Generate source JPEG");
         ffCheck(avcodec_receive_packet(jpeg.get(), jpegPacket.get()), "Receive source JPEG");
         if (static_cast<std::size_t>(jpegPacket->size) > scratch.nv12.size() * 2) throw std::runtime_error("Synthetic JPEG exceeded prepared sample cap");
         bytes.assign(jpegPacket->data, jpegPacket->data + jpegPacket->size); av_packet_unref(jpegPacket.get());

@@ -46,7 +46,7 @@ juce::var CfrCounters::toJson() const
         jsonSet(reason, "repeated", jsonInt(reasons[i].repeated)); jsonSet(reason, "omitted", jsonInt(reasons[i].omitted));
         jsonSet(reason, "missing", jsonInt(reasons[i].missing)); jsonSet(value, names[i], reason);
     }
-    jsonSet(value, "definition", "missing counts known rejected input/output frames; repeated/omitted classify selection changes, not additional losses. Device cadence alone is not captureLoss. clockCorrection also includes arrival/PTS irregularity; no calibrated clock in round 02.");
+    jsonSet(value, "definition", "missing counts known rejected input/output frames; repeated/omitted classify selection changes, not additional losses. Native repeats use the selected camera frame phase, independently of project grid phase. Device cadence alone is not captureLoss.");
     return value;
 }
 VideoCfrScheduler::VideoCfrScheduler(Rational n, Rational p) : native(n), project(p)
@@ -106,7 +106,12 @@ std::optional<CfrSelection> VideoCfrScheduler::select(std::int64_t now, bool dra
     const auto ideal = nearestNativeIndex(next, native, project);
     if (result.repeated)
     {
-        result.reason = ideal == previousIdeal ? CfrReason::nativeRateConversion : pendingLoss.value_or(CfrReason::clockCorrection);
+        // Cameras start at independent phases. A nominal 30 -> 60 repeat may
+        // land on either project-grid parity, including after applying Lcam.
+        const bool upsample = std::uint64_t(native.numerator) * project.denominator < std::uint64_t(project.numerator) * native.denominator;
+        const auto halfNative = (5000000LL * native.denominator + native.numerator - 1) / native.numerator;
+        const bool nominalRepeat = upsample && distance(result.input) <= halfNative + 1;
+        result.reason = nominalRepeat ? CfrReason::nativeRateConversion : pendingLoss.value_or(CfrReason::clockCorrection);
         ++stats.repeated; ++stats.reasons[static_cast<size_t>(result.reason)].repeated;
     }
     auto nominalOmissions = std::max<std::int64_t>(0, previousIdeal < 0 ? 0 : ideal - previousIdeal - 1);

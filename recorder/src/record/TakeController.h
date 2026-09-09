@@ -3,10 +3,12 @@
 #include "app/RecorderDocument.h"
 #include "NvencEncoder.h"
 #include "VideoCfrScheduler.h"
+#include "sync/CalibrationProfile.h"
 #include <functional>
 
 namespace gocue::recorder
 {
+class ClockMapper;
 struct TakeVideoQueues
 {
     unsigned surfaces = 0, surfaceHighWater = 0, surfaceCapacity = 0;
@@ -32,6 +34,9 @@ public:
     virtual bool thumbnailReady() const noexcept = 0;
     virtual juce::var report() const = 0; // after finish
     virtual TakeVideoQueues queues() const noexcept { return {}; }
+    // Preparation worker, before prepare/start. The audio owner outlives the stream.
+    virtual void configureClock(const ClockMapper&, std::int64_t /* Lcam100ns */) {}
+    virtual void discontinuity() noexcept { sourceFailed(availableSamples()); }
 };
 
 class TakeController
@@ -56,6 +61,9 @@ public:
         bool externalCapture = false; // app keeps its warmed live capture across takes/tabs
         std::uint64_t cameraGeneration = 0;
         Camera2 camera2; // immutable for this take; disabled/missing means no asset or stream
+        std::array<std::optional<CalibrationProfile>, 2> calibration;
+        std::array<std::string, 2> exposure{"uncontrolled", "uncontrolled"};
+        std::vector<int> outputMapping; // ordered physical outputs, from the device configuration
     };
     struct PlacementMetadata
     {
@@ -91,6 +99,7 @@ public:
     void offer(const VideoSurface&) noexcept;
     void offer(unsigned camera, const VideoSurface&) noexcept;
     void cameraFailed(unsigned camera = 0, std::uint64_t generation = 0) noexcept;
+    void cameraDiscontinuity(unsigned camera, std::uint64_t generation = 0) noexcept;
     std::shared_ptr<VideoSurfacePool> previewPool(unsigned camera = 0) const;
     bool cameraActive(unsigned) const noexcept;
     bool cameraDisconnected(unsigned) const noexcept;

@@ -23,7 +23,7 @@ struct RecorderSession::LiveCamera
     std::unique_ptr<PreviewPresenter> presenter;
     CameraMode mode;
     std::unique_ptr<MfRuntime> runtime;
-    bool failed = false;
+    bool failed = false, previewFailed = false;
     ~LiveCamera() { presenter.reset(); capture.reset(); }
 };
 class RecorderSession::SharedOutput final : public IAudioOutput
@@ -71,7 +71,8 @@ bool RecorderSession::configuring() const { return deviceWork.valid(); }
 bool RecorderSession::recording() const { return activeTake(take.state()); }
 bool RecorderSession::busy() const { return configuring() || recording() || take.state() == TakeController::State::finalizing || planWork.valid(); }
 bool RecorderSession::cameraReady(unsigned n) const
-{ return !configuring() && n < 2 && cameras[n] && !cameras[n]->failed && cameras[n]->capture && !cameras[n]->capture->finished(); }
+{ return !configuring() && n < 2 && current.cameraEnabled[n] && cameras[n] && !cameras[n]->failed && cameras[n]->capture
+    && !cameras[n]->capture->failureDetected() && !cameras[n]->capture->finished(); }
 bool RecorderSession::readyToRecord() const
 {
     return !busy() && document.getFile() != juce::File() && cameraReady(0) && device.sampleRate
@@ -87,6 +88,9 @@ juce::Result RecorderSession::configure(UserSettings settings)
 {
     if (busy()) return juce::Result::fail(k("녹화와 저장이 끝난 뒤 설정을 변경하세요."));
     const auto valid = settings.validate(); if (valid.failed()) return valid;
+    if (settings.cameraEnabled[0] && settings.cameraEnabled[1]
+        && CameraCatalog::sameDevice(settings.cameraDeviceIds[0].toStdString(), settings.cameraDeviceIds[1].toStdString()))
+        return juce::Result::fail(k("같은 카메라를 두 번 선택할 수 없습니다."));
     clearPlayback(); error.clear(); notice = k("장치를 연결하는 중입니다.");
     const auto fixedFs = document.getProject().media->assets.empty() ? 0u : document.getProject().Fs;
     deviceWork = std::async(std::launch::async, [this, settings, fixedFs]() mutable
@@ -116,10 +120,16 @@ juce::Result RecorderSession::configure(UserSettings settings)
                     auto cam = std::make_unique<LiveCamera>(); cam->runtime = std::make_unique<MfRuntime>();
                     cam->mode = CameraMode::parse(settings.cameraModes[i].toStdString());
                     if (cam->mode.width != 1920 || cam->mode.height != 1080) throw std::runtime_error("1080p 입력 모드를 선택하세요.");
-                    cam->telemetry = std::make_shared<CaptureTelemetry>(cam->mode.fps);
+                    cam->telemetry = std::make_shared<CaptureTelemetry>(cam->mode.fps, i ? "cam2" : "cam1");
                     cam->pool = std::make_shared<VideoSurfacePool>(1920, 1080);
-                    cam->capture = std::make_unique<MfCameraCapture>(cam->telemetry, *cam->pool, [this, i](const VideoSurface& frame)
-                    { if (i == 0) take.offer(frame); });
+                    cam->capture = std::make_unique<MfCameraCapture>(cam->telemetry, *cam->pool,
+                        [this, i, stats = cam->telemetry, discontinuities = std::uint64_t{0}, types = std::uint64_t{0}](const VideoSurface& frame) mutable
+                    {
+                        const auto d = stats->count(LossReason::sourceDiscontinuity), t = stats->count(LossReason::sourceTypeChanged);
+                        if (d != discontinuities || t != types) take.cameraDiscontinuity(i, frame.stamp.generation);
+                        discontinuities = d; types = t;
+                        take.offer(i, frame);
+                    });
                     const auto opened = cam->capture->start(settings.cameraDeviceIds[i].toStdString(), cam->mode, cam->mode.subtype == CaptureSubtype::mjpeg);
                     cam->mode = opened.nativeMode; cameras[i] = std::move(cam);
                 }
@@ -137,14 +147,14 @@ juce::Result RecorderSession::configure(UserSettings settings)
 void RecorderSession::presentLive()
 {
     if (configuring() || playback) return;
-    for (unsigned i = 0; i < 2; ++i) if (cameraReady(i) && hosts[i] && !cameras[i]->presenter)
+    for (unsigned i = 0; i < 2; ++i) if (cameraReady(i) && hosts[i] && !cameras[i]->previewFailed && !cameras[i]->presenter)
     {
         try
         {
             cameras[i]->presenter = std::make_unique<PreviewPresenter>(static_cast<HWND>(hosts[i]), *cameras[i]->pool, cameras[i]->telemetry, 1920, 1080);
             cameras[i]->presenter->start();
         }
-        catch (const std::exception& e) { cameras[i]->presenter.reset(); cameras[i]->failed = true; error = k("영상 표시를 시작할 수 없습니다. ") + juce::String::fromUTF8(e.what()); }
+        catch (const std::exception& e) { cameras[i]->presenter.reset(); cameras[i]->previewFailed = true; error = k("영상 표시를 시작할 수 없습니다. ") + juce::String::fromUTF8(e.what()); }
     }
 }
 void RecorderSession::enterTimeline(bool on)
@@ -157,12 +167,35 @@ void RecorderSession::enterTimeline(bool on)
 juce::Result RecorderSession::record()
 {
     if (!readyToRecord()) return juce::Result::fail(k("녹화 장치와 프로젝트 저장 위치를 확인하세요."));
-    clearPlayback(); presentLive(); error.clear(); recordedMarkers.clear(); peaksPublished.clear();
+    clearPlayback(); presentLive(); error.clear(); notice.clear(); recordedMarkers.clear(); peaksPublished.clear();
     TakeController::Config c; c.projectDirectory = document.getFile().getParentDirectory(); c.takeId = juce::Uuid();
     c.cameraSymbolicLink = current.cameraDeviceIds[0].toStdString(); c.cameraMode = cameras[0]->mode;
     c.projectFps = int(document.getProject().fps.numerator); c.externalCapture = true;
+    c.cameraGeneration = cameras[0]->capture->generation();
+    c.camera2.enabled = cameraReady(1);
+    if (c.camera2.enabled)
+    {
+        c.camera2.symbolicLink = current.cameraDeviceIds[1].toStdString(); c.camera2.mode = cameras[1]->mode;
+        c.camera2.generation = cameras[1]->capture->generation();
+    }
+    c.outputMapping = current.output.mono ? std::vector<int>{current.output.monoChannel}
+                                         : std::vector<int>{current.output.left, current.output.right};
+    for (unsigned i = 0; i < (c.camera2.enabled ? 2u : 1u); ++i)
+    {
+        const auto key = calibrationKey(current.cameraDeviceIds[i].toStdString(), cameras[i]->mode, c.exposure[i],
+            device.name.toStdString(), device.sampleRate, device.bufferFrames, c.outputMapping);
+        for (const auto& profile : calibrationProfiles) if (profile.key == key) { c.calibration[i] = profile; break; }
+    }
+    if (current.cameraEnabled[1] && !c.camera2.enabled) notice = k("캠2 연결을 확인하세요. 캠1으로 녹화합니다.");
     const auto result = take.prepare(c); if (result.wasOk()) { autoStart = true; derivedWorker.setRecording(true); }
     return result;
+}
+juce::Result RecorderSession::setCalibrationProfiles(std::vector<CalibrationProfile> profiles)
+{
+    if (busy()) return juce::Result::fail(k("녹화와 저장이 끝난 뒤 보정을 변경하세요."));
+    try { for (const auto& profile : profiles) profile.requireMatch(profile.key); }
+    catch (const std::exception& e) { return juce::Result::fail(e.what()); }
+    calibrationProfiles = std::move(profiles); return juce::Result::ok();
 }
 juce::Result RecorderSession::stopRecording() { return take.stop(); }
 void RecorderSession::clearPlayback()
@@ -327,10 +360,10 @@ void RecorderSession::tick()
         auto result = deviceWork.get(); current = result.settings; device = audio.deviceInfo();
         notice.clear(); if (result.result.failed()) error = result.result.getErrorMessage();
         if (onConfigured) onConfigured(result.result, current);
-        if (current.cameraEnabled[1]) notice = k("캠2 미리보기 · 이번 시연 빌드는 캠1을 녹화합니다.");
     }
     if (configuring()) return;
     take.tick();
+    if (take.warning().isNotEmpty()) notice = take.warning();
     if (recording() && audio.error() == RecorderAudioEngine::Error::writeFailed) error = k("저장 장치에 쓸 수 없어 녹화를 멈췄습니다.");
     if (autoStart && take.state() == TakeController::State::armed)
     { const auto r = take.start(); autoStart = false; if (r.failed()) error = r.getErrorMessage(); }
@@ -357,17 +390,17 @@ void RecorderSession::tick()
     derivedWorker.setRecording(recording());
     for (unsigned i = 0; i < 2; ++i) if (cameras[i] && !cameras[i]->failed)
     {
-        if (cameras[i]->capture->finished())
+        if (cameras[i]->capture->failureDetected() || cameras[i]->capture->finished())
         {
-            cameras[i]->capture->stop(); cameras[i]->failed = true;
-            if (i == 0) { take.cameraFailed(); error = k("캠1 연결이 끊겼습니다. 원본 녹음은 계속됩니다."); }
+            take.cameraFailed(i, cameras[i]->capture->generation()); cameras[i]->failed = true;
+            if (i == 0) error = k("캠1 연결이 끊겼습니다. 원본 녹음과 연결된 캠2는 계속됩니다.");
             else error = k("캠2 연결이 끊겼습니다. 캠1과 원본 녹음은 계속됩니다.");
             cameras[i]->presenter.reset();
         }
         else if (cameras[i]->presenter && cameras[i]->presenter->finished())
         {
             cameras[i]->presenter->stop(); error = k("영상 표시 장치 연결을 확인하세요. ") + juce::String(cameras[i]->presenter->error());
-            cameras[i]->presenter.reset(); cameras[i]->failed = true;
+            cameras[i]->presenter.reset(); cameras[i]->previewFailed = true;
         }
     }
     if (take.state() == TakeController::State::partialFailure && error.isEmpty())

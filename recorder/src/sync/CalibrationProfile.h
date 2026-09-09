@@ -32,5 +32,10 @@ struct CalibrationProfile
     static CalibrationProfile fromJson(const juce::var&); // strict schema/types/ranges
     std::string serialize() const;
     static CalibrationProfile deserialize(const std::string&);
+    // Full-key match is required before using any residual. Throws on mismatch.
+    void requireMatch(const CalibrationKey&) const;
 };
+CalibrationKey calibrationKey(const std::string& cameraId, const CameraMode&, const std::string& exposure,
+                              const std::string& asioDriver, unsigned Fs, unsigned buffer,
+                              const std::vector<int>& outputMapping);
 }

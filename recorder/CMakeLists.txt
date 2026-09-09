@@ -353,3 +353,21 @@ endif()
 # The script consumes generator-resolved paths. Future targets/tests are built via ALL/CTest.
 file(GENERATE OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/recorder-package-$<CONFIG>.json" CONTENT
     "{\n  \"schema_version\": 1,\n  \"exe\": \"$<TARGET_FILE:Recorder>\",\n  \"ffmpeg_root\": \"${RECORDER_FFMPEG_ROOT}\",\n  \"winsparkle_dir\": \"${WINSPARKLE_DIR}\",\n  \"winsparkle_dll\": \"${GOCUE_WINSPARKLE_DLL}\",\n  \"public_key\": \"${RECORDER_UPDATE_PUBLIC_KEY}\"\n}\n")
+
+# Rounds 25+27: append-only registration, single shared test runner.
+target_sources(RecorderTests PRIVATE tests/MixedFpsTests.cpp tests/DualTakeIntegrationTests.cpp)
+add_test(NAME RecorderMixedFps COMMAND RecorderTests --suite mixed-fps)
+add_test(NAME RecorderDualTakeIntegration COMMAND RecorderTests --suite partial-camera-take)
+# Reuse the standalone dual harness for RecorderProbe dual-load/integration.
+target_link_libraries(RecorderDualProbe PRIVATE RecorderImport)
+add_dependencies(RecorderProbe RecorderDualProbe)
+
+# Pick up round-20/21's target regardless of append order after the merge.
+# Missing exporters remain an explicit UNAVAILABLE probe stage.
+function(_recorder_r27_link_export)
+    if(TARGET RecorderExport)
+        target_link_libraries(RecorderDualProbe PRIVATE RecorderExport)
+        target_compile_definitions(RecorderDualProbe PRIVATE RECORDER_R27_EXPORT_AVAILABLE=1)
+    endif()
+endfunction()
+cmake_language(DEFER CALL _recorder_r27_link_export)

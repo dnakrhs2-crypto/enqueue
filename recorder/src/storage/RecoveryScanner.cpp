@@ -57,10 +57,19 @@ bool manifest(const juce::File& root, const Id& takeId, RecorderProject& out, co
         // registry; never reinterpret an arbitrary JSON file as a finished take.
         if (!known || number(v["schemaVersion"]) != 1 || id(v["takeId"]) != takeId || v["state"].toString() != "done") return false;
         const auto* take = known->media->findTake(takeId);
-        if (!take || take->cam2AssetId.isNotEmpty() || take->cam1AssetId != v["cameraAssetId"].toString()
+        if (!take || take->cam1AssetId != v["cameraAssetId"].toString()
             || number(v["Fs"]) != known->Fs || number(v["fpsNumerator"]) != known->fps.numerator || number(v["fpsDenominator"]) != known->fps.denominator
             || number(v["N0"]) != take->N0 || number(v["Nstop"]) - take->N0 != take->logicalLength
             || number(v["placementSample"]) != take->placementSample || number(v["logicalLength"]) != take->logicalLength) return false;
+        const auto cameras = v["cameras"];
+        if (take->cam2AssetId.isNotEmpty() && (!cameras.isArray() || cameras.size() != 2)) return false;
+        if (cameras.isArray())
+        {
+            if (cameras.size() != (take->cam2AssetId.isEmpty() ? 1 : 2)) return false;
+            for (int i = 0; i < cameras.size(); ++i)
+                if (number(cameras[i]["slot"]) != i + 1 || cameras[i]["assetId"].toString() != (i ? take->cam2AssetId : take->cam1AssetId)
+                    || number(cameras[i]["N0"]) != take->N0 || number(cameras[i]["Nstop"]) != take->N0 + take->logicalLength) return false;
+        }
         const auto microphones = v["microphones"]; if (!microphones.isArray() || microphones.size() != static_cast<int>(take->microphoneAssetIds.size())) return false;
         for (int i = 0; i < microphones.size(); ++i)
             if (microphones[i]["assetId"].toString() != take->microphoneAssetIds[static_cast<size_t>(i)]
@@ -68,13 +77,15 @@ bool manifest(const juce::File& root, const Id& takeId, RecorderProject& out, co
         auto registry = std::make_shared<MediaRegistry>(*known->media);
         for (auto& asset : registry->assets)
         {
-            if (asset.assetId == take->cam1AssetId)
+            if (asset.assetId == take->cam1AssetId || asset.assetId == take->cam2AssetId)
             {
-                const auto path = "media/takes/" + juce::Uuid(takeId).toDashedString() + "/cam1.mp4";
+                const bool second = asset.assetId == take->cam2AssetId;
+                const auto video = cameras.isArray() ? cameras[second ? 1 : 0]["video"] : v["video"];
+                const auto path = "media/takes/" + juce::Uuid(takeId).toDashedString() + (second ? "/cam2.mp4" : "/cam1.mp4");
                 const auto media = child(root, path);
-                if (!bool(v["video"]["mux"]["finalized"]) || !media.existsAsFile() || media.getSize() != number(v["video"]["mux"]["fileSizeBytes"])) return false;
+                if (!bool(video["mux"]["finalized"]) || !media.existsAsFile() || media.getSize() != number(video["mux"]["fileSizeBytes"])) return false;
                 const auto inspection = Mp4TakeWriter::inspect(media);
-                if (!bool(inspection["presentationStartsAtZero"]) || RecorderSerializer::fingerprint(inspection["streams"]) != RecorderSerializer::fingerprint(v["video"]["inspection"]["streams"])) return false;
+                if (!bool(inspection["presentationStartsAtZero"]) || RecorderSerializer::fingerprint(inspection["streams"]) != RecorderSerializer::fingerprint(video["inspection"]["streams"])) return false;
                 if (asset.relativePath != path) { if (asset.mediaGeneration == INT64_MAX) return false; ++asset.mediaGeneration; asset.relativePath = path; }
             }
             else if (std::find(take->microphoneAssetIds.begin(), take->microphoneAssetIds.end(), asset.assetId) != take->microphoneAssetIds.end())
@@ -428,9 +439,10 @@ juce::Result RecoveryScanner::run(const juce::File& root, RecoveryReport& report
             }
             JournalPcmFormat fmt; const auto pcm = state.start["pcm"]; fmt.sampleRate = u32(pcm["sampleRate"]); fmt.dataOffset = u32(pcm["dataOffset"]);
             require(fmt.sampleRate == report.project.Fs, "Take/project sample-rate mismatch");
-            Sample length = take.logicalLength; if (state.stopped) { const auto origin = bool(state.start["usesOutputOrigin"]) ? take.O0 : take.N0; require(state.stop >= origin, "Negative stopped duration"); length = std::max(length, state.stop - origin); }
+            const bool fixedEnd = state.stopped || take.logicalLength > 0;
+            Sample length = take.logicalLength; if (state.stopped) { const auto origin = bool(state.start["usesOutputOrigin"]) ? take.O0 : take.N0; require(state.stop >= origin, "Negative stopped duration"); length = state.stop - origin; }
             for (const auto& entry : state.positions)
-            { require(entry.second.firstSample <= std::uint64_t(INT64_MAX) - entry.second.validSamples, "WAV range overflow"); length = std::max(length, Sample(entry.second.firstSample + entry.second.validSamples)); }
+            { require(entry.second.firstSample <= std::uint64_t(INT64_MAX) - entry.second.validSamples, "WAV range overflow"); if (!fixedEnd) length = std::max(length, Sample(entry.second.firstSample + entry.second.validSamples)); }
             std::vector<MediaAsset> assets; juce::Array<juce::var> cameraReports;
             int microphone = 0;
             if (restoreComplete)
@@ -482,7 +494,18 @@ juce::Result RecoveryScanner::run(const juce::File& root, RecoveryReport& report
                             const auto dest = attempt().getChildFile("media/" + takeId + "/" + (cam2 ? "cam2.mp4" : "cam1.mp4"));
                             if (!index.existsAsFile()) { index = attempt().getChildFile("index/" + takeId + (cam2 ? "-cam2.log" : "-cam1.log")); Mp4RecoveryIndex::rebuild(input, index); }
                             const auto recovered = Mp4RecoveryIndex::recover(input, index, dest, report.project.Fs, options.faults);
-                            a.relativePath = rel(root, dest); a.originalFormat = recovered.format; a.availableRanges.push_back({0, recovered.samples}); length = std::max(length, recovered.samples);
+                            a.relativePath = rel(root, dest); a.originalFormat = recovered.format;
+                            if (!fixedEnd) length = std::max(length, recovered.samples);
+                            const auto end = fixedEnd ? std::min(length, recovered.samples) : recovered.samples;
+                            const auto* prior = registry->findAsset(a.assetId);
+                            if (prior && !prior->gaps.empty())
+                            {
+                                // Encoded padding/repeats cannot fill a previously
+                                // committed camera gap or a failed generation.
+                                for (const auto& range : prior->availableRanges)
+                                    if (range.start < end) a.availableRanges.push_back({range.start, std::min(range.length, end - range.start)});
+                            }
+                            else if (end > 0) a.availableRanges.push_back({0, end});
                             a.sourceUnitsNumerator = a.originalFormat.fps.numerator; a.sourceUnitsDenominator = std::uint64_t(report.project.Fs) * a.originalFormat.fps.denominator;
                             outputFiles.add(fileEntry(root, a.relativePath)); set(details, "samples", integer(recovered.samples)); set(details, "videoFrames", integer(std::int64_t(recovered.videoFrames)));
                             set(details, "audioSamples", integer(std::int64_t(recovered.audioSamples))); set(details, "fragments", integer(std::int64_t(recovered.fragments))); set(details, "fullDecode", true); set(details, "ignoredTail", recovered.ignoredTail);

@@ -65,6 +65,7 @@ public:
     void recordPresent(const FrameStamp&, std::int64_t returned);
     juce::var toJson() const;
     static void writeJson(const juce::File&, const juce::var&);
+    juce::var softwarePreviewGate(bool presentedByD3D, int displayRefreshHz) const; // after both workers join
     std::atomic<std::uint64_t> callbacks{0}, samples{0}, decoded{0}, presented{0}, repeatedPresents{0}, lateQueue{0};
     std::atomic<std::uint64_t> queueHighWater{0}, latestReadyFrame{0}, missingDeviceTimestamp{0}, invalidDeviceTimestamp{0}, colourAssumptions{0};
     std::atomic<HRESULT> sourceStatus{S_OK};
