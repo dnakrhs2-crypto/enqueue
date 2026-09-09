@@ -46,6 +46,9 @@ int runMarkerTests();
 int runEditJournalTests();       // round 19: transactions, worker, checkpoint generations
 int runRetakeRecoveryTests();    // round 19: edit/undo/placement/finalization recovery
 int runCameraSlotTests();        // round 24: product camera slots and partial failures
+int runExportRangeTests();       // rounds 20+21: immutable export range and common PCM
+int runWavExportTests();
+int runFinalExportTests();
 
 namespace
 {
@@ -61,6 +64,9 @@ int runAudioImport() { const int a = runAudioImportTests(), b = runImportedClipT
 int runRippleReorderMarkers() { const int a = runRippleTests(), b = runReorderTests(), c = runMarkerTests(); return (a || b || c) ? 1 : 0; }
 int runRecoveryIdempotence() { const int a = runRecoveryTests(), b = runRetakeRecoveryTests(); return (a || b) ? 1 : 0; }
 const Suite suites[] = {
+    {"export-audio-range", runExportRangeTests},
+    {"wav-export", runWavExportTests},
+    {"final-export-sources", runFinalExportTests},
     {"audio-cut-render", runAudioCutRenderTests},
     {"audio-prefetch-underrun", runPlaybackQueueTests},
     {"capture-contract", runCaptureContractTests},
