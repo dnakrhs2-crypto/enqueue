@@ -563,6 +563,9 @@ juce::Result WebDavBackup::begin (const Target& t, Job which, bool needsAccount)
     target.accountId = target.accountId.trim();
     job = which;
     remotePath.clear();
+    renameTo.clear();
+    adminAsked = false;
+    adminAnswer = false;
     localFile = juce::File();
     data.reset();
     done = nullptr;
@@ -670,6 +673,67 @@ juce::Result WebDavBackup::startDownload (const Target& t, const juce::String& p
     }
 
     return juce::Result::ok();
+}
+
+juce::Result WebDavBackup::startDelete (const Target& t, const juce::String& path, Done onDone)
+{
+    if (const auto result = begin (t, Job::remove, true); result.failed())
+        return result;
+
+    remotePath = path;
+    done = std::move (onDone);
+
+    if (! startThread())
+    {
+        done = nullptr;
+        return juce::Result::fail (juce::String::fromUTF8 ("백업 스레드를 시작하지 못했습니다"));
+    }
+
+    return juce::Result::ok();
+}
+
+juce::Result WebDavBackup::startRename (const Target& t, const juce::String& path, const juce::String& newName, Done onDone)
+{
+    if (const auto result = begin (t, Job::rename, true); result.failed())
+        return result;
+
+    if (newName.trim().isEmpty() || newName.containsChar ('/'))
+        return juce::Result::fail (juce::String::fromUTF8 ("바꿀 이름이 올바르지 않습니다"));
+
+    remotePath = path;
+    renameTo = newName.trim();
+    done = std::move (onDone);
+
+    if (! startThread())
+    {
+        done = nullptr;
+        return juce::Result::fail (juce::String::fromUTF8 ("백업 스레드를 시작하지 못했습니다"));
+    }
+
+    return juce::Result::ok();
+}
+
+juce::String WebDavBackup::renamedFileName (const juce::String& oldFileName, const juce::String& typed)
+{
+    const bool preset = oldFileName.endsWithIgnoreCase (".livemixpreset");
+    const auto extension = preset ? juce::String (".livemixpreset") : juce::String (".livemix");
+    auto stem = typed.trim();
+
+    if (stem.endsWithIgnoreCase (extension))   // the operator typed the extension too
+        stem = stem.dropLastCharacters (extension.length()).trim();
+
+    const auto prefix = juce::String::fromUTF8 ("프리셋_");
+
+    if (preset && stem.startsWith (prefix))    // a preset keeps its prefix, typed or not
+        stem = stem.substring (prefix.length()).trim();
+
+    while (stem.endsWithChar ('.'))   // before the empty check: "..." is not a name, and must not become "session"
+        stem = stem.dropLastCharacters (1).trim();
+
+    if (stem.isEmpty())
+        return {};
+
+    return (preset ? prefix : juce::String()) + sanitiseName (stem) + extension;
 }
 
 void WebDavBackup::cancel()
@@ -958,6 +1022,8 @@ void WebDavBackup::run()
         case Job::upload:        runUpload (ok, message); break;
         case Job::uploadMany:    runUploadMany (ok, message); break;
         case Job::download:      runDownload (ok, message); break;
+        case Job::remove:        runDelete (ok, message); break;
+        case Job::rename:        runRename (ok, message); break;
     }
 
     if (threadShouldExit())
@@ -1091,9 +1157,11 @@ void WebDavBackup::runSignIn (bool& ok, juce::String& message, std::vector<Entry
 
 bool WebDavBackup::putFile (const juce::MemoryBlock& bytes, const juce::String& path, juce::String& message)
 {
-    // the file lands under a temporary name and is renamed onto the final one: a cut-off upload never sits under a
-    // backup's name
-    const auto partPath = path + ".part";
+    // the file lands under a temporary name in the same folder and is renamed onto the final one: a cut-off upload
+    // never sits under a backup's name. The temporary is named after this upload, not after the backup - two PCs
+    // writing over one backup would otherwise meet on the same ".part", and a long preset name plus a suffix would
+    // pass the server's 255-byte limit on a file name.
+    const auto partPath = path.upToLastOccurrenceOf ("/", true, false) + juce::Uuid().toDashedString() + ".part";
     juce::String error;
     const int put = request ("PUT", partPath, &bytes, {}, error);
 
@@ -1105,11 +1173,18 @@ bool WebDavBackup::putFile (const juce::MemoryBlock& bytes, const juce::String& 
         if (moved == 200 || moved == 201 || moved == 204)
             return true;
 
+        // the upload is lost either way: its staging file goes rather than sitting on the share for good. Best
+        // effort - a refused or cut-off DELETE leaves it, and then the operator is told where it is.
+        juce::String ignored;
+        const int removed = request ("DELETE", partPath, nullptr, {}, ignored);
+        const auto leftBehind = (removed == 200 || removed == 202 || removed == 204 || removed == 404)
+                                    ? juce::String()
+                                    : juce::String::fromUTF8 (" (올리던 파일이 ") + partPath + juce::String::fromUTF8 (" 로 남았습니다)");
+
         if (moved == 0)
-            message = error;
+            message = error + leftBehind;
         else
-            message = juce::String::fromUTF8 ("서버가 이름 바꾸기를 거부했습니다 (HTTP ") + juce::String (moved) + "): " + partPath
-                      + juce::String::fromUTF8 (" 로 남아 있습니다");
+            message = juce::String::fromUTF8 ("서버가 이름 바꾸기를 거부했습니다 (HTTP ") + juce::String (moved) + ")" + leftBehind;
     }
     else if (put == 401 || put == 403)
         message = serverRefused();
@@ -1123,7 +1198,7 @@ bool WebDavBackup::putFile (const juce::MemoryBlock& bytes, const juce::String& 
 
 void WebDavBackup::runUpload (bool& ok, juce::String& message)
 {
-    if (! verifyAccount (message))
+    if (! verifyAccount (message) || ! ownsPath (remotePath, message))
         return;
 
     if (! makeFolder (accountFolder (target.share, target.accountId), message))
@@ -1140,6 +1215,10 @@ void WebDavBackup::runUploadMany (bool& ok, juce::String& message)
 {
     if (! verifyAccount (message))
         return;
+
+    for (const auto& upload : uploads)   // every one of them, before a single byte is written
+        if (! ownsPath (upload.second, message))
+            return;
 
     if (! makeFolder (accountFolder (target.share, target.accountId), message))
         return;
@@ -1172,35 +1251,147 @@ void WebDavBackup::runUploadMany (bool& ok, juce::String& message)
     message = juce::String::fromUTF8 ("플러그인 프리셋 백업 완료: ") + juce::String (sent) + juce::String::fromUTF8 ("개");
 }
 
-void WebDavBackup::runDownload (bool& ok, juce::String& message)
+bool WebDavBackup::ownsPath (const juce::String& path, juce::String& message)
 {
-    if (! verifyAccount (message))
-        return;
-
     // exactly <share>/<owner>/<file>.livemix - nothing the server could resolve elsewhere; another account's backup
     // only for an admin
     juce::String owner;
 
-    if (! parseBackupPath (target.share, remotePath, owner))
+    if (! parseBackupPath (target.share, path, owner))
     {
-        message = juce::String::fromUTF8 ("백업 경로가 올바르지 않습니다: ") + remotePath;
+        message = juce::String::fromUTF8 ("백업 경로가 올바르지 않습니다: ") + path;
+        return false;
+    }
+
+    if (owner == target.accountId)
+        return true;
+
+    bool failed = false;
+    const bool admin = isAdminCached (message, failed);
+
+    if (failed)
+        return false;
+
+    if (! admin)
+    {
+        message = juce::String::fromUTF8 ("다른 계정의 백업입니다.");
+        return false;
+    }
+
+    return true;
+}
+
+bool WebDavBackup::isAdminCached (juce::String& message, bool& failed)
+{
+    failed = false;
+
+    if (adminAsked)
+        return adminAnswer;
+
+    const bool admin = isAdmin (message, failed);
+
+    if (failed)
+        return false;   // asked again next time: a network failure is not an answer
+
+    adminAsked = true;
+    adminAnswer = admin;
+    return admin;
+}
+
+void WebDavBackup::runDelete (bool& ok, juce::String& message)
+{
+    if (! verifyAccount (message) || ! ownsPath (remotePath, message))
+        return;
+
+    juce::String error;
+    const int status = request ("DELETE", remotePath, nullptr, {}, error);
+
+    if (status == 0)
+    {
+        message = error;
         return;
     }
 
-    if (owner != target.accountId)
+    if (status == 401 || status == 403)
     {
-        bool failed = false;
-        const bool admin = isAdmin (message, failed);
-
-        if (failed)
-            return;
-
-        if (! admin)
-        {
-            message = juce::String::fromUTF8 ("다른 계정의 백업입니다.");
-            return;
-        }
+        message = serverRefused();
+        return;
     }
+
+    // 404: it is not there, which is what was asked for
+    if (status != 200 && status != 202 && status != 204 && status != 404)
+    {
+        message = httpRefused (status, remotePath);
+        return;
+    }
+
+    ok = true;
+    const auto name = remotePath.fromLastOccurrenceOf ("/", false, false);
+    // 202: the server took the request but has not finished - it may still be in the list for a moment
+    message = status == 202 ? juce::String::fromUTF8 ("삭제를 서버가 접수했습니다 (목록에 잠시 더 보일 수 있습니다): ") + name
+                            : juce::String::fromUTF8 ("지웠습니다: ") + name;
+}
+
+void WebDavBackup::runRename (bool& ok, juce::String& message)
+{
+    if (! verifyAccount (message) || ! ownsPath (remotePath, message))
+        return;
+
+    const auto folder = remotePath.upToLastOccurrenceOf ("/", true, false);
+    const auto newPath = folder + renameTo;
+
+    if (renameTo.isEmpty() || renameTo.containsChar ('/') || newPath == remotePath)
+    {
+        message = juce::String::fromUTF8 ("바꿀 이름이 올바르지 않습니다");
+        return;
+    }
+
+    if (! ownsPath (newPath, message))   // where it is going, not only where it is now
+        return;
+
+    juce::String error;
+    // Overwrite: F - a name already taken is refused, never quietly replaced
+    const int status = request ("MOVE", remotePath, nullptr,
+                                "Destination: " + trimmedBase (target.baseUrl) + encodePath (newPath) + "\r\nOverwrite: F\r\n", error);
+
+    if (status == 0)
+    {
+        message = error;
+        return;
+    }
+
+    if (status == 401 || status == 403)
+    {
+        message = serverRefused();
+        return;
+    }
+
+    if (status == 412)
+    {
+        message = juce::String::fromUTF8 ("같은 이름의 백업이 이미 있습니다: ") + renameTo;
+        return;
+    }
+
+    if (status == 404)
+    {
+        message = juce::String::fromUTF8 ("서버에 그 백업이 없습니다: ") + remotePath;
+        return;
+    }
+
+    if (status != 200 && status != 201 && status != 204)
+    {
+        message = httpRefused (status, remotePath);
+        return;
+    }
+
+    ok = true;
+    message = juce::String::fromUTF8 ("이름을 바꿨습니다: ") + renameTo;
+}
+
+void WebDavBackup::runDownload (bool& ok, juce::String& message)
+{
+    if (! verifyAccount (message) || ! ownsPath (remotePath, message))
+        return;
 
     juce::String error;
     juce::MemoryBlock bytes;

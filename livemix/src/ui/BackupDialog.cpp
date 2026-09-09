@@ -355,6 +355,31 @@ namespace
             restoreButton.onClick = [this] { restoreSelected(); };
             addAndMakeVisible (restoreButton);
 
+            // what can be done to the backup picked in the list
+            styleCaption (selectedCaption, ko ("고른 백업:"));
+            addAndMakeVisible (selectedCaption);
+
+            overwriteButton.setButtonText (ko ("지금 세션으로 덮어쓰기"));
+            overwriteButton.setTooltip (ko ("고른 백업 파일을 지금 세션으로 바꿔 씁니다 (파일 이름은 그대로)"));
+            overwriteButton.setWantsKeyboardFocus (false);
+            overwriteButton.setEnabled (false);
+            overwriteButton.onClick = [this] { overwriteSelected(); };
+            addAndMakeVisible (overwriteButton);
+
+            renameButton.setButtonText (ko ("이름 바꾸기"));
+            renameButton.setWantsKeyboardFocus (false);
+            renameButton.setEnabled (false);
+            renameButton.onClick = [this] { renameSelected(); };
+            addAndMakeVisible (renameButton);
+
+            deleteButton.setButtonText (ko ("삭제"));
+            deleteButton.setWantsKeyboardFocus (false);
+            deleteButton.setColour (juce::TextButton::buttonColourId, Palette::danger);
+            deleteButton.setColour (juce::TextButton::textColourOffId, juce::Colours::white);
+            deleteButton.setEnabled (false);
+            deleteButton.onClick = [this] { deleteSelected(); };
+            addAndMakeVisible (deleteButton);
+
             styleCaption (hint, ko ("백업은 로그인한 계정의 것만 보이고, 올리기와 불러오기도 그 계정의 아이디·비밀번호로만 됩니다. 처음이면 '계정 만들기'로 아이디와 비밀번호를 등록하세요. 세션과 플러그인 프리셋이 함께 목록에 보입니다. '백업 이름'에 적은 이름이 백업 파일 앞에 붙습니다."));
             hint.setFont (bodyFont (12.5f));
             hint.setMinimumHorizontalScale (1.0f);
@@ -409,6 +434,16 @@ namespace
             auto bottom = area.removeFromBottom (30);
             statusLabel.setBounds (bottom);
             area.removeFromBottom (8);
+            auto picked = area.removeFromBottom (30);
+            deleteButton.setBounds (picked.removeFromRight (80));
+            picked.removeFromRight (8);
+            renameButton.setBounds (picked.removeFromRight (110));
+            picked.removeFromRight (8);
+            overwriteButton.setBounds (picked.removeFromRight (170));
+            picked.removeFromRight (14);
+            selectedCaption.setBounds (picked);
+            area.removeFromBottom (8);
+
             row = area.removeFromBottom (32);
             restoreButton.setBounds (row.removeFromRight (190));
             row.removeFromRight (14);
@@ -474,9 +509,20 @@ namespace
             createButton.setEnabled (! busy);
             uploadButton.setEnabled (! busy);
             uploadPresetsButton.setEnabled (! busy);
-            restoreButton.setEnabled (! busy && table.getSelectedRow() >= 0);
             idEditor.setEnabled (! busy);
             passwordEditor.setEnabled (! busy);
+            updateSelectionButtons (busy);
+        }
+
+        /** The four buttons that need a backup picked in the list (a preset cannot be overwritten by a session). */
+        void updateSelectionButtons (bool busy)
+        {
+            const int row = table.getSelectedRow();
+            const bool picked = ! busy && juce::isPositiveAndBelow (row, (int) entries.size());
+            restoreButton.setEnabled (picked);
+            renameButton.setEnabled (picked);
+            deleteButton.setEnabled (picked);
+            overwriteButton.setEnabled (picked && ! entries[(size_t) row].isPreset);
         }
 
         void setStatus (const juce::String& text, bool error)
@@ -518,7 +564,7 @@ namespace
             table.deselectAllRows();
             table.updateContent();
             table.repaint();
-            restoreButton.setEnabled (false);
+            updateSelectionButtons (backup.isBusy());
         }
 
         void signIn()
@@ -724,6 +770,220 @@ namespace
             setStatus (ko ("플러그인 프리셋 ") + juce::String ((int) presets.size()) + ko ("개 올리는 중..."), false);
         }
 
+        /** The backup picked in the list, or nothing (with a word in the status line). */
+        const WebDavBackup::Entry* selectedEntry()
+        {
+            const int row = table.getSelectedRow();
+
+            if (! juce::isPositiveAndBelow (row, (int) entries.size()))
+            {
+                setStatus (ko ("목록에서 백업을 고르세요"), true);
+                return nullptr;
+            }
+
+            return &entries[(size_t) row];
+        }
+
+        void deleteSelected()
+        {
+            const auto* entry = selectedEntry();
+
+            if (entry == nullptr || ! checkReady())
+                return;
+
+            const auto name = entry->name;
+            const auto path = entry->path;
+            juce::Component::SafePointer<BackupContent> safe (this);
+            juce::AlertWindow::showAsync (juce::MessageBoxOptions()
+                                              .withIconType (juce::MessageBoxIconType::WarningIcon)
+                                              .withTitle (ko ("백업 삭제"))
+                                              .withMessage (ko ("'") + name + ko ("' 백업을 서버에서 지울까요?") + juce::newLine + juce::newLine
+                                                            + ko ("되돌릴 수 없습니다."))
+                                              .withButton (ko ("삭제"))
+                                              .withButton (ko ("취소")),
+                                          [safe, path] (int result)
+            {
+                if (safe == nullptr || result != 1 || ! safe->checkReady())
+                    return;
+
+                const auto target = safe->currentTarget();
+                auto status = safe->callbacks.status;
+                auto* prefs = &safe->settings;
+                const bool keep = safe->remember.getToggleState();
+                const auto started = safe->backup.startDelete (target, path, [safe, target, status, prefs, keep] (bool ok, const juce::String& message)
+                {
+                    if (ok)
+                        persistAccount (*prefs, target, keep);
+
+                    if (status)
+                        status (message, ! ok);
+
+                    if (safe == nullptr)
+                        return;
+
+                    safe->setStatus (message, ! ok);
+
+                    if (ok)
+                        safe->whenIdle ([safe] { if (safe != nullptr) safe->signIn(); });   // the list without it
+                    else
+                        safe->setBusy (false);
+                });
+
+                if (started.failed())
+                {
+                    safe->setStatus (started.getErrorMessage(), true);
+                    return;
+                }
+
+                safe->setBusy (true);
+                safe->setStatus (ko ("삭제 중... ") + path.fromLastOccurrenceOf ("/", false, false), false);
+            });
+        }
+
+        void renameSelected()
+        {
+            const auto* entry = selectedEntry();
+
+            if (entry == nullptr || ! checkReady())
+                return;
+
+            const auto name = entry->name;
+            const auto path = entry->path;
+            const bool preset = entry->isPreset;
+            // what is shown to edit: no extension, and no "프리셋_" in front of a preset
+            const auto shown = preset ? WebDavBackup::presetNameFromFileName (name)
+                                      : name.upToLastOccurrenceOf (".", false, false);
+
+            auto* alert = new juce::AlertWindow (ko ("백업 이름 바꾸기"),
+                                                 ko ("새 이름 (확장자는 그대로 붙습니다)"), juce::MessageBoxIconType::NoIcon);
+            alert->addTextEditor ("name", shown, ko ("이름"));
+            alert->addButton (ko ("확인"), 1, juce::KeyPress (juce::KeyPress::returnKey));
+            alert->addButton (ko ("취소"), 0, juce::KeyPress (juce::KeyPress::escapeKey));
+            juce::Component::SafePointer<BackupContent> safe (this);
+            alert->enterModalState (true, juce::ModalCallbackFunction::create ([safe, alert, name, path, shown] (int result)
+            {
+                if (safe == nullptr || result != 1)
+                    return;
+
+                const auto typed = alert->getTextEditorContents ("name").trim();
+
+                if (typed == shown.trim())
+                    return;   // nothing changed
+
+                const auto newName = WebDavBackup::renamedFileName (name, typed);
+
+                if (newName.isEmpty())
+                {
+                    safe->setStatus (ko ("쓸 수 있는 이름이 아닙니다"), true);
+                    return;
+                }
+
+                if (! safe->checkReady())
+                    return;
+
+                const auto target = safe->currentTarget();
+                auto status = safe->callbacks.status;
+                auto* prefs = &safe->settings;
+                const bool keep = safe->remember.getToggleState();
+                const auto started = safe->backup.startRename (target, path, newName, [safe, target, status, prefs, keep] (bool ok, const juce::String& message)
+                {
+                    if (ok)
+                        persistAccount (*prefs, target, keep);
+
+                    if (status)
+                        status (message, ! ok);
+
+                    if (safe == nullptr)
+                        return;
+
+                    safe->setStatus (message, ! ok);
+
+                    if (ok)
+                        safe->whenIdle ([safe] { if (safe != nullptr) safe->signIn(); });
+                    else
+                        safe->setBusy (false);
+                });
+
+                if (started.failed())
+                {
+                    safe->setStatus (started.getErrorMessage(), true);
+                    return;
+                }
+
+                safe->setBusy (true);
+                safe->setStatus (ko ("이름 바꾸는 중... ") + newName, false);
+            }), true);
+            focusAlertTextEditor (*alert, "name");
+        }
+
+        void overwriteSelected()
+        {
+            const auto* entry = selectedEntry();
+
+            if (entry == nullptr || ! checkReady())
+                return;
+
+            if (entry->isPreset)
+            {
+                setStatus (ko ("플러그인 프리셋은 세션으로 덮어쓸 수 없습니다"), true);
+                return;
+            }
+
+            const auto name = entry->name;
+            const auto path = entry->path;
+            juce::Component::SafePointer<BackupContent> safe (this);
+            juce::AlertWindow::showAsync (juce::MessageBoxOptions()
+                                              .withIconType (juce::MessageBoxIconType::QuestionIcon)
+                                              .withTitle (ko ("백업 덮어쓰기"))
+                                              .withMessage (ko ("'") + name + ko ("' 백업을 지금 세션으로 덮어쓸까요?") + juce::newLine + juce::newLine
+                                                            + ko ("그 백업에 들어 있던 내용은 사라집니다. 파일 이름은 그대로입니다."))
+                                              .withButton (ko ("덮어쓰기"))
+                                              .withButton (ko ("취소")),
+                                          [safe, path] (int result)
+            {
+                if (safe == nullptr || result != 1 || ! safe->checkReady())
+                    return;
+
+                if (! safe->callbacks.saveBeforeUpload || ! safe->callbacks.saveBeforeUpload())
+                {
+                    safe->setStatus (ko ("먼저 세션을 저장하세요 (세션 > 저장)"), true);
+                    return;
+                }
+
+                const auto target = safe->currentTarget();
+                auto status = safe->callbacks.status;
+                auto* prefs = &safe->settings;
+                const bool keep = safe->remember.getToggleState();
+                const auto started = safe->backup.start (target, safe->document.getFile(), path, [safe, target, status, prefs, keep] (bool ok, const juce::String& message)
+                {
+                    if (ok)
+                        persistAccount (*prefs, target, keep);
+
+                    if (status)
+                        status (message, ! ok);
+
+                    if (safe == nullptr)
+                        return;
+
+                    safe->setStatus (message, ! ok);
+
+                    if (ok)
+                        safe->whenIdle ([safe] { if (safe != nullptr) safe->signIn(); });   // its new size and date
+                    else
+                        safe->setBusy (false);
+                });
+
+                if (started.failed())
+                {
+                    safe->setStatus (started.getErrorMessage(), true);
+                    return;
+                }
+
+                safe->setBusy (true);
+                safe->setStatus (ko ("덮어쓰는 중... ") + path.fromLastOccurrenceOf ("/", false, false), false);
+            });
+        }
+
         void restoreSelected()
         {
             const int row = table.getSelectedRow();
@@ -899,9 +1159,9 @@ namespace
             g.drawText (text, 8, 0, width - 16, height, juce::Justification::centredLeft, true);
         }
 
-        void selectedRowsChanged (int lastRowSelected) override
+        void selectedRowsChanged (int) override
         {
-            restoreButton.setEnabled (lastRowSelected >= 0 && ! backup.isBusy());
+            updateSelectionButtons (backup.isBusy());
         }
 
         void cellDoubleClicked (int rowNumber, int, const juce::MouseEvent&) override
@@ -917,10 +1177,11 @@ namespace
         std::vector<WebDavBackup::Entry> entries;
         bool everyoneMode = false;
 
-        juce::Label idCaption, passwordCaption, hint, statusLabel, nameCaption;
+        juce::Label idCaption, passwordCaption, hint, statusLabel, nameCaption, selectedCaption;
         juce::TextEditor idEditor, passwordEditor, nameEditor;
         juce::ToggleButton remember;
         juce::TextButton signInButton, createButton, uploadButton, uploadPresetsButton, restoreButton;
+        juce::TextButton overwriteButton, renameButton, deleteButton;
         juce::TableListBox table;
         juce::Component::SafePointer<juce::DialogWindow> registerWindow;
 

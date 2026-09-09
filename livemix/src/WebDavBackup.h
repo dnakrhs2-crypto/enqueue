@@ -20,6 +20,8 @@ namespace gocue::livemix
         only the temporary file behind, never a half file under a backup's name
       - download: one backup into a local file (written whole, then renamed into place); another account's backup
         only for an admin
+      - delete: one backup off the share (DELETE), the same account rule as the download
+      - rename: one backup under another name in its own folder (MOVE, never over a file that is there)
     Results come back on the message thread. The owner cancels (or destroys) the object. */
 class WebDavBackup : private juce::Thread
 {
@@ -112,6 +114,14 @@ public:
     juce::Result start (const Target& target, const juce::File& localFile, const juce::String& remotePath, Done done);
     /** Downloads one backup into 'localFile'. */
     juce::Result startDownload (const Target& target, const juce::String& remotePath, const juce::File& localFile, Done done);
+    /** Deletes one backup (or preset) off the share. Gone for good: the caller asks first. */
+    juce::Result startDelete (const Target& target, const juce::String& remotePath, Done done);
+    /** Renames one backup (or preset) inside its own folder. 'newName' is a file name, extension and all, and a name
+        already taken is refused rather than overwritten. */
+    juce::Result startRename (const Target& target, const juce::String& remotePath, const juce::String& newName, Done done);
+    /** The file name a rename would really use: 'sanitiseName' on what was typed, with the old file's extension kept
+        (and the preset prefix, for a preset). Empty when nothing usable is left. */
+    static juce::String renamedFileName (const juce::String& oldFileName, const juce::String& typed);
     /** Uploads several local files (the plugin presets) to their remote paths in one job; the message counts them. */
     juce::Result startUploads (const Target& target, std::vector<std::pair<juce::File, juce::String>> files, Done done);
     bool isBusy() const noexcept { return isThreadRunning(); }
@@ -119,7 +129,7 @@ public:
     void cancel();
 
 private:
-    enum class Job { createAccount, signIn, upload, download, uploadMany };
+    enum class Job { createAccount, signIn, upload, download, uploadMany, remove, rename };
 
     void run() override;
     void runCreateAccount (bool& ok, juce::String& message);
@@ -129,6 +139,11 @@ private:
     /** PUT under a temporary name, then MOVE onto 'path'. Worker thread. */
     bool putFile (const juce::MemoryBlock& bytes, const juce::String& path, juce::String& message);
     void runDownload (bool& ok, juce::String& message);
+    void runDelete (bool& ok, juce::String& message);
+    void runRename (bool& ok, juce::String& message);
+    /** 'path' is a backup of this account (or of another one, with the admin list): nothing is read or written
+        anywhere the signed-in account may not. Worker thread. */
+    bool ownsPath (const juce::String& path, juce::String& message);
     juce::Result begin (const Target& target, Job job, bool needsAccount);
     /** One request: the status code, or 0 with 'error' when no connection was made. The answer's body lands in
         'response' when asked for. Worker thread. */
@@ -138,6 +153,8 @@ private:
     bool verifyAccount (juce::String& message);
     /** Whether the account is on the admin list. Worker thread. */
     bool isAdmin (juce::String& message, bool& failed);
+    /** The same, asked at most once per job (the answer cannot change while one runs). Worker thread. */
+    bool isAdminCached (juce::String& message, bool& failed);
     /** The .livemix files in one account's folder. Worker thread. */
     bool collectBackups (const juce::String& owner, std::vector<Entry>& entries, juce::String& message);
     /** MKCOL, 405 (exists) is fine. Worker thread. */
@@ -146,6 +163,8 @@ private:
     Job job = Job::signIn;
     Target target;
     juce::String remotePath;
+    juce::String renameTo;      // rename: the new file name (no path)
+    bool adminAsked = false, adminAnswer = false;   // isAdminCached, cleared by begin()
     juce::File localFile;
     juce::MemoryBlock data;
     std::vector<std::pair<juce::File, juce::String>> uploads;   // uploadMany: local file, remote path

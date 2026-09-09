@@ -69,6 +69,25 @@ public:
             expectEquals (WebDavBackup::presetPathFor ("/backups", "alice", "nul"),
                           juce::String::fromUTF8 ("/backups/alice/\xed\x94\x84\xeb\xa6\xac\xec\x85\x8b_") + "_nul.livemixpreset");
 
+            // the name a rename really uses: the extension is kept, a preset keeps its prefix, and the same
+            // legalising as an upload applies to what was typed
+            const auto presetPrefix = juce::String::fromUTF8 ("\xed\x94\x84\xeb\xa6\xac\xec\x85\x8b_");
+            expectEquals (WebDavBackup::renamedFileName ("PC_2026-09-04_153000.livemix", "  rehearsal  "),
+                          juce::String ("rehearsal.livemix"));
+            expectEquals (WebDavBackup::renamedFileName ("PC_2026-09-04_153000.livemix", "show.livemix"),
+                          juce::String ("show.livemix"));                                  // the extension typed too
+            expectEquals (WebDavBackup::renamedFileName ("PC_2026-09-04_153000.livemix", "a/b"),
+                          juce::String ("a_b.livemix"));                                   // never a second path segment
+            expectEquals (WebDavBackup::renamedFileName ("PC_2026-09-04_153000.livemix", "CON"),
+                          juce::String ("_CON.livemix"));
+            expectEquals (WebDavBackup::renamedFileName ("PC_2026-09-04_153000.livemix", "   "), juce::String());
+            expectEquals (WebDavBackup::renamedFileName ("PC_2026-09-04_153000.livemix", "..."), juce::String());   // not a name
+            expectEquals (WebDavBackup::renamedFileName (presetPrefix + "vocal.livemixpreset", " . . "), juce::String());
+            expectEquals (WebDavBackup::renamedFileName (presetPrefix + "vocal.livemixpreset", "vocal 2"),
+                          presetPrefix + "vocal 2.livemixpreset");
+            expectEquals (WebDavBackup::renamedFileName (presetPrefix + "vocal.livemixpreset", presetPrefix + "vocal 2"),
+                          presetPrefix + "vocal 2.livemixpreset");                         // the prefix typed too
+
             juce::String labelled;
             expect (WebDavBackup::parseBackupPath ("/backups", "/backups/alice/gom_STUDIO_PC_2026-09-04_153000.livemix", labelled) && labelled == "alice");
 
