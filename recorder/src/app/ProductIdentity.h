@@ -2,7 +2,7 @@
 #include <juce_core/juce_core.h>
 
 // CMake reads these same definitions for the executable's resources.
-#define RECORDER_DISPLAY_NAME "Recorder"
+#define RECORDER_DISPLAY_NAME "Recorder (가칭)"
 #define RECORDER_INTERNAL_ID "gocue.recorder"
 #define RECORDER_SETTINGS_FOLDER "Recorder"
 #define RECORDER_PROJECT_EXTENSION ".recorder"
@@ -10,6 +10,17 @@
 #define RECORDER_APP_ID "{9BD0A267-2A38-47C1-9623-F1B76E2587D4}"
 #define RECORDER_VERSION "0.1.0"
 #define RECORDER_COMPANY "Gomtwigim"
+// CEO/release-owner confirmation is still pending (U-12). Never publish these URLs.
+#define RECORDER_PACKAGE_STEM "Recorder"
+#define RECORDER_RELEASE_REPO "UNCONFIRMED/recorder"
+#define RECORDER_RELEASE_REMOTE "UNCONFIRMED"
+#define RECORDER_TAG_PREFIX "recorder-v"
+#define RECORDER_SITE_DIR "recorder"
+#define RECORDER_SITE_URL "https://recorder.invalid/recorder/"
+#define RECORDER_APPCAST_URL "https://recorder.invalid/appcast.xml"
+#define RECORDER_RELEASE_BASE_URL "https://recorder.invalid/releases/download/"
+#define RECORDER_SOURCES_STEM "Recorder-sources"
+#define RECORDER_PUBLICATION_CONFIRMED "0"
 
 namespace gocue::recorder
 {
@@ -24,6 +35,9 @@ struct ProductIdentity
     static juce::String projectFileName();
     static juce::String settingsFileName();
     static juce::String updateRegistryKey();
+    static juce::String appcastUrl();
+    static juce::String correspondingSourceUrl();
+    static bool publicationConfirmed();
     static juce::File settingsDirectory(const juce::File& testRoot = {});
     struct MigrationAlias { juce::String displayName, settingsFolder, projectExtension, fileType; };
     static const std::vector<MigrationAlias>& migrationAliases();

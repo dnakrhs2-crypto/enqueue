@@ -11,6 +11,13 @@ juce::String ProductIdentity::projectExtension() { return RECORDER_PROJECT_EXTEN
 juce::String ProductIdentity::projectFileName() { return "project" + projectExtension(); }
 juce::String ProductIdentity::settingsFileName() { return juce::String(RECORDER_SETTINGS_FOLDER) + ".settings"; }
 juce::String ProductIdentity::updateRegistryKey() { return "Software\\" RECORDER_COMPANY "\\" RECORDER_SETTINGS_FOLDER "\\WinSparkle"; }
+juce::String ProductIdentity::appcastUrl() { return RECORDER_APPCAST_URL; }
+juce::String ProductIdentity::correspondingSourceUrl()
+{
+    return juce::String(RECORDER_RELEASE_BASE_URL) + RECORDER_TAG_PREFIX + version()
+        + "/" + RECORDER_SOURCES_STEM + "-" + version() + ".zip";
+}
+bool ProductIdentity::publicationConfirmed() { return juce::String(RECORDER_PUBLICATION_CONFIRMED) == "1"; }
 juce::File ProductIdentity::settingsDirectory(const juce::File& testRoot)
 {
     return testRoot != juce::File() ? testRoot
