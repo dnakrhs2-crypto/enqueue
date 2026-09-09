@@ -49,6 +49,8 @@ int runCameraSlotTests();        // round 24: product camera slots and partial f
 int runExportRangeTests();       // rounds 20+21: immutable export range and common PCM
 int runWavExportTests();
 int runFinalExportTests();
+int runMixedFpsTests();
+int runDualTakeIntegrationTests();
 
 namespace
 {
@@ -94,6 +96,8 @@ const Suite suites[] = {
     {"queue-isolation", runQueueIsolationTests},
     {"ripple-reorder-markers", runRippleReorderMarkers},
     {"camera-slots", runCameraSlotTests},
+    {"mixed-fps", runMixedFpsTests},
+    {"partial-camera-take", runDualTakeIntegrationTests},
 };
 int usage()
 {

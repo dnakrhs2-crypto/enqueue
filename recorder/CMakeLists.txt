@@ -370,3 +370,20 @@ target_link_libraries(Recorder PRIVATE RecorderExport)
 add_test(NAME RecorderExportAudioRange COMMAND RecorderTests --suite export-audio-range)
 add_test(NAME RecorderWavExport COMMAND RecorderTests --suite wav-export)
 add_test(NAME RecorderFinalExportSources COMMAND RecorderTests --suite final-export-sources)
+# Rounds 25+27: append-only registration, single shared test runner.
+target_sources(RecorderTests PRIVATE tests/MixedFpsTests.cpp tests/DualTakeIntegrationTests.cpp)
+add_test(NAME RecorderMixedFps COMMAND RecorderTests --suite mixed-fps)
+add_test(NAME RecorderDualTakeIntegration COMMAND RecorderTests --suite partial-camera-take)
+# Reuse the standalone dual harness for RecorderProbe dual-load/integration.
+target_link_libraries(RecorderDualProbe PRIVATE RecorderImport)
+add_dependencies(RecorderProbe RecorderDualProbe)
+
+# Pick up round-20/21's target regardless of append order after the merge.
+# Missing exporters remain an explicit UNAVAILABLE probe stage.
+function(_recorder_r27_link_export)
+    if(TARGET RecorderExport)
+        target_link_libraries(RecorderDualProbe PRIVATE RecorderExport)
+        target_compile_definitions(RecorderDualProbe PRIVATE RECORDER_R27_EXPORT_AVAILABLE=1)
+    endif()
+endfunction()
+cmake_language(DEFER CALL _recorder_r27_link_export)

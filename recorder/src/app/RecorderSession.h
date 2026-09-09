@@ -22,6 +22,7 @@ public:
     juce::Result configure(UserSettings); // completion through onConfigured
     void enterTimeline(bool);
     juce::Result record();
+    juce::Result setCalibrationProfiles(std::vector<CalibrationProfile>); // outside an active take
     juce::Result stopRecording();
     void play(bool latestTake = false);
     void pause();
@@ -72,6 +73,7 @@ private:
     std::array<void*, 2> hosts{};
     RecorderAudioEngine::DeviceInfo device;
     UserSettings current;
+    std::vector<CalibrationProfile> calibrationProfiles;
     struct DeviceResult { juce::Result result = juce::Result::ok(); UserSettings settings; };
     std::future<DeviceResult> deviceWork;
     std::future<std::unique_ptr<PreparedPlan>> planWork;

@@ -1,5 +1,6 @@
 #include "CameraClockMapper.h"
 #include <stdexcept>
+#include <thread>
 
 namespace gocue::recorder
 {
@@ -183,27 +184,42 @@ CameraSampleTimeMapper::CameraSampleTimeMapper(CameraClockMapper& mapper, std::i
 }
 std::int64_t CameraSampleTimeMapper::map(const FrameStamp& stamp)
 {
-    const auto audio = camera.masterClock().snapshot();
-    if (!audio || audio->nominalSampleRate != rate) throw std::runtime_error("CFR master rate unavailable/changed");
-    const auto sample = camera.captureSample(stamp, *audio);
-    if (!sample || sample->masterEpoch != audioEpoch || sample->cameraEpoch != videoEpoch)
-        throw std::runtime_error("CFR clock unavailable or epoch changed; stop take/mark camera gap");
-    const auto delta = subtract(sample->sample, origin);
-    const auto time = delta ? sampleToTime100ns(*delta, rate) : std::nullopt;
-    if (!time) throw std::overflow_error("CFR sample time overflow");
-    return *time;
+    for (unsigned attempt = 0; attempt < 8; ++attempt)
+    {
+        const auto audio = camera.masterClock().snapshot();
+        const auto video = camera.snapshot();
+        if ((audio && (audio->epoch != audioEpoch || audio->nominalSampleRate != rate)) || (video && video->epoch != videoEpoch))
+            throw std::runtime_error("CFR clock epoch/rate changed; stop take/mark camera gap");
+        const auto sample = audio ? camera.captureSample(stamp, *audio) : std::nullopt;
+        if (sample)
+        {
+            if (sample->masterEpoch != audioEpoch || sample->cameraEpoch != videoEpoch) throw std::runtime_error("CFR clock epoch changed");
+            const auto delta = subtract(sample->sample, origin);
+            const auto time = delta ? sampleToTime100ns(*delta, rate) : std::nullopt;
+            if (!time) throw std::overflow_error("CFR sample time overflow");
+            return *time;
+        }
+        std::this_thread::yield(); // worker only; retry an overlapping snapshot publication, never reuse an old epoch
+    }
+    throw std::runtime_error("CFR clock unavailable; mark camera gap");
 }
 std::int64_t CameraSampleTimeMapper::now(std::int64_t qpc) const
 {
-    const auto audio = camera.masterClock().snapshot();
-    const auto video = camera.snapshot();
-    if (!audio || !video || audio->epoch != audioEpoch || video->epoch != videoEpoch || audio->nominalSampleRate != rate)
-        throw std::runtime_error("CFR clock epoch changed");
-    const auto sample = audio->mapToSample(qpc);
-    const auto delta = sample ? subtract(*sample, origin) : std::nullopt;
-    const auto time = delta ? sampleToTime100ns(*delta, rate) : std::nullopt;
-    if (!time) throw std::runtime_error("CFR deadline clock unavailable");
-    return *time;
+    for (unsigned attempt = 0; attempt < 8; ++attempt)
+    {
+        const auto audio = camera.masterClock().snapshot(); const auto video = camera.snapshot();
+        if ((audio && (audio->epoch != audioEpoch || audio->nominalSampleRate != rate)) || (video && video->epoch != videoEpoch))
+            throw std::runtime_error("CFR clock epoch changed");
+        if (audio && video)
+        {
+            const auto sample = audio->mapToSample(qpc);
+            const auto delta = sample ? subtract(*sample, origin) : std::nullopt;
+            const auto time = delta ? sampleToTime100ns(*delta, rate) : std::nullopt;
+            if (time) return *time;
+        }
+        std::this_thread::yield();
+    }
+    throw std::runtime_error("CFR deadline clock unavailable");
 }
 std::optional<std::int64_t> nativeFrameToSample(std::int64_t frame, Rational fps, std::uint32_t rate) noexcept
 {

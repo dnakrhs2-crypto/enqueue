@@ -148,4 +148,17 @@ void CaptureTelemetry::writeJson(const juce::File& file, const juce::var& value)
     });
     if (result.failed()) throw std::runtime_error(result.getErrorMessage().toStdString());
 }
+juce::var CaptureTelemetry::softwarePreviewGate(bool d3d, int refresh) const
+{
+    auto result=jsonObject(); const auto& latency=distribution(Timing::callbackToPresent);
+    const double limit=fps.value()>45?35:45;
+    const bool measured=d3d && latency.count()>0 && refresh>1;
+    const bool loss= !softwareLossFree() || count(LossReason::sourceError) || count(LossReason::timestampRegression);
+    const bool pass=!loss && latency.percentile(.95)<=limit && refresh>=59;
+    jsonSet(result,"result",loss?"FAIL":!measured?"UNAVAILABLE":pass?"PASS":"FAIL");
+    jsonSet(result,"nativeRate",fps.text());jsonSet(result,"callbackToPresent",latency.toJson());
+    jsonSet(result,"p95LimitMs",limit);jsonSet(result,"displayRefreshHz",refresh);
+    jsonSet(result,"physicalP0","UNAVAILABLE: software submission timing is not glass-to-glass or physical source-loss certification");
+    return result;
+}
 }

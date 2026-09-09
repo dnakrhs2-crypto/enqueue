@@ -32,6 +32,7 @@ private:
 // Full software decode, including flush/EOF. Never certifies a file by CFR count
 // alone. Physical camera files have no built-in pixel oracle.
 juce::var inspectPatternMp4(const juce::File&, unsigned camera, Rational native, Rational project, unsigned seconds);
+juce::var inspectMappedPatternMp4(const juce::File&, const juce::File& sourceTrace, unsigned camera, Rational project);
 
 class FramePatternSource
 {

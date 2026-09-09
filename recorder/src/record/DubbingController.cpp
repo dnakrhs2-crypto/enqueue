@@ -137,6 +137,9 @@ struct DubbingController::Impl final : IAudioOutputClient
     std::array<std::uint64_t, 2> discontinuities{}, typeChanges{}; // sole camera producer
     std::array<std::atomic<unsigned>, 2> inFlight{};
     std::array<std::atomic<std::uint64_t>, 2> receivedFrames{};
+    std::array<std::atomic<std::uint64_t>, 2> generations{}, staleOffers{};
+    std::array<std::atomic<bool>, 2> cameraFailures{};
+    std::atomic<bool> cameraPartial{false};
     std::array<std::atomic<Sample>, 2> lastCaptureSample{};
     std::array<FrameStamp, 2> lastFrame;
     std::array<std::optional<ClockSnapshot>, 2> lastMaster;
@@ -215,6 +218,16 @@ struct DubbingController::Impl final : IAudioOutputClient
         if (i >= 2) return; inFlight[i].fetch_add(1);
         if (auto* video = sinks[i].load())
         {
+            auto generation = generations[i].load();
+            if (!generation) { generations[i].compare_exchange_strong(generation, frame.stamp.generation); generation = generations[i].load(); }
+            if (generation != frame.stamp.generation)
+            {
+                ++staleOffers[i];
+                if (frame.stamp.generation > generation && !cameraFailures[i].exchange(true))
+                { cameraPartial = true; cameras[i]->reset(CameraEpochReason::generationChange); video->discontinuity(); }
+                inFlight[i].fetch_sub(1); return;
+            }
+            if (video->failed()) { inFlight[i].fetch_sub(1); return; }
             try
             {
                 if (captureStats[i])
@@ -230,10 +243,10 @@ struct DubbingController::Impl final : IAudioOutputClient
                 { lastCaptureSample[i] = mapped->sample; lastFrame[i] = frame.stamp; lastMaster[i] = master; lastCamera[i] = camera; }
                 const auto snapshot = cameras[i]->snapshot();
                 if (scheduled.load() && snapshot && snapshot->epoch != origins[i].cameraEpoch)
-                    video->sourceFailed((std::max)(Sample{0}, audio.acceptedEnd() - placed.O0));
+                { cameraFailures[i] = true; cameraPartial = true; video->sourceFailed((std::max)(Sample{0}, audio.acceptedEnd() - placed.O0)); }
                 else video->offer(frame);
             }
-            catch (...) { video->sourceFailed((std::max)(Sample{0}, audio.acceptedEnd() - placed.O0)); }
+            catch (...) { cameraFailures[i] = true; cameraPartial = true; video->sourceFailed((std::max)(Sample{0}, audio.acceptedEnd() - placed.O0)); }
         }
         inFlight[i].fetch_sub(1);
     }
@@ -279,14 +292,23 @@ struct DubbingController::Impl final : IAudioOutputClient
                                       config.cameras[0].calibration.inputResidualLatencySamples)); preparedAudio = true;
             for (unsigned i = 0; i < config.cameras.size(); ++i)
             {
-                videos[i]->prepare(folder().getChildFile("cam" + juce::String(i + 1) + ".mp4"), NvencProfile{int(frozen->fps.numerator)}, config.cameras[i].mode.fps, *audio.referenceContext());
-                sinks[i].store(videos[i].get());
-                if (!config.synthetic)
+                try
                 {
-                    if (!runtime) runtime = std::make_unique<MfRuntime>();
-                    captureStats[i] = std::make_shared<CaptureTelemetry>(config.cameras[i].mode.fps);
-                    captures[i] = std::make_unique<MfCameraCapture>(captureStats[i], *previews[i], [this, i](const auto& f) { offer(i, f); });
-                    captures[i]->start(config.cameras[i].symbolicLink, config.cameras[i].mode, config.cameras[i].mode.subtype == CaptureSubtype::mjpeg);
+                    videos[i]->configureClock(audio.masterClock(), config.cameras[i].calibration.cameraResidualLatency100ns);
+                    videos[i]->prepare(folder().getChildFile("cam" + juce::String(i + 1) + ".mp4"), NvencProfile{int(frozen->fps.numerator)}, config.cameras[i].mode.fps, *audio.referenceContext());
+                    sinks[i].store(videos[i].get());
+                    if (!config.synthetic && !config.externalCapture)
+                    {
+                        if (!runtime) runtime = std::make_unique<MfRuntime>();
+                        captureStats[i] = std::make_shared<CaptureTelemetry>(config.cameras[i].mode.fps);
+                        captures[i] = std::make_unique<MfCameraCapture>(captureStats[i], *previews[i], [this, i](const auto& f) { offer(i, f); });
+                        captures[i]->start(config.cameras[i].symbolicLink, config.cameras[i].mode, config.cameras[i].mode.subtype == CaptureSubtype::mjpeg, 1, {}, generations[i].load());
+                    }
+                }
+                catch (const std::exception&)
+                {
+                    if (i == 0) throw;
+                    videos[i]->sourceFailed(0); cameraFailures[i] = true; cameraPartial = true;
                 }
             }
             renderWorker = std::thread([this] { render(); }); writeDurable(folder().getChildFile("take.json"), manifest());
@@ -328,6 +350,8 @@ struct DubbingController::Impl final : IAudioOutputClient
         {
             take.N0 = take.O0 = placed.O0; take.logicalLength = placed.recordedSamples; take.state = TakeState::finalising;
             for (auto& a : assets) ranges(a, placed.recordedSamples);
+            for (unsigned i = 0; i < config.cameras.size(); ++i)
+                if (videos[i]->failed()) ranges(assets[i], videos[i]->availableSamples());
             for (size_t i = 0; i < micLanes.size(); ++i) chunks(assets[config.cameras.size() + i], unsigned(micLanes[i] + 1), placed.recordedSamples);
             const auto result = document.placeDubbingTake(take, assets, micLanes, {config.Pstart, placed.spanSamples}, config.retakeStack);
             if (result.failed()) { message = result.getErrorMessage(); fail(Failure::storage); }
@@ -345,16 +369,20 @@ struct DubbingController::Impl final : IAudioOutputClient
         {
             try
             {
-                const auto result = audio.finishCapture(editId); if (result.failed() && failureCode == Failure::none) fail(Failure::storage);
-                audioReport = audio.telemetry();
                 double period = 0; for (const auto& c : config.cameras) period = (std::max)(period, c.mode.fps.periodMs());
                 const auto deadline = qpcNow() + std::int64_t(period * double(qpcFrequency()) / 1000);
                 while (qpcNow() < deadline) briefWait(); detachVideo();
+                // Deliver both boundaries before WAV/AAC drain or either join.
+                for (auto& video : videos) if (video) video->endAt(placed.recordedSamples);
+                const auto result = audio.finishCapture(editId); if (result.failed() && failureCode == Failure::none) fail(Failure::storage);
+                audioReport = audio.telemetry();
+                for (auto& video : videos) if (video) video->audioDone();
                 for (unsigned i = 0; i < config.cameras.size(); ++i)
                 {
-                    videos[i]->endAt(placed.recordedSamples); videos[i]->audioDone(); videos[i]->finish(); videoReports[i] = videos[i]->report();
+                    try { videos[i]->finish(); videoReports[i] = videos[i]->report(); }
+                    catch (const std::exception& e) { videos[i]->sourceFailed(videos[i]->availableSamples()); videoReports[i] = jsonObject(); jsonSet(videoReports[i], "finalizerError", e.what()); }
                     jsonSet(videoReports[i], "clockMapping", "Round-04 CameraClockMapper with common O0 output origin; physical calibration unverified");
-                    if (videos[i]->failed()) fail(Failure::storage);
+                    if (videos[i]->failed()) { cameraFailures[i] = true; cameraPartial = true; }
                     const auto path = folder().getChildFile("cam" + juce::String(i + 1) + ".mp4");
                     ranges(assets[i], path.existsAsFile() ? videos[i]->availableSamples() : 0);
                     if (path.existsAsFile()) assets[i].relativePath = path.getRelativePathFrom(config.projectDirectory).replaceCharacter('\\', '/');
@@ -375,6 +403,18 @@ struct DubbingController::Impl final : IAudioOutputClient
         jsonSet(v, "Pstart", placed.Pstart); jsonSet(v, "placementSample", placed.Pstart); jsonSet(v, "O0", placed.O0); jsonSet(v, "Ostop", placed.Ostop);
         jsonSet(v, "outputSubmissionSample", placed.outputSubmissionSample); jsonSet(v, "recordedSamples", placed.recordedSamples);
         jsonSet(v, "spanSamples", placed.spanSamples); jsonSet(v, "Fs", int(device.sampleRate));
+        // Share the completed-take identity/length envelope with normal takes so
+        // recovery can validate each finalized camera without remuxing its peer.
+        jsonSet(v, "N0", placed.O0); jsonSet(v, "Nstop", placed.Ostop); jsonSet(v, "logicalLength", placed.recordedSamples);
+        jsonSet(v, "fpsNumerator", int(frozen->fps.numerator)); jsonSet(v, "fpsDenominator", int(frozen->fps.denominator));
+        jsonSet(v, "cameraAssetId", take.cam1AssetId);
+        juce::Array<juce::var> microphones, cameraReports;
+        for (size_t i = 0; i < micMap.size(); ++i)
+        {
+            auto mic = jsonObject(); jsonSet(mic, "assetId", take.microphoneAssetIds[i]);
+            jsonSet(mic, "physicalIndex", micMap[i].physicalIndex); microphones.add(mic);
+        }
+        jsonSet(v, "microphones", microphones);
         jsonSet(v, "stackId", placed.stackId); jsonSet(v, "versionId", placed.versionId); jsonSet(v, "referenceAudioTrack", config.audioTrackId);
         jsonSet(v, "recordMicrophones", config.recordMicrophones); jsonSet(v, "failureCode", int(failureCode.load())); jsonSet(v, "error", errorText());
         jsonSet(v, "audio", audioReport); juce::Array<juce::var> video, profiles;
@@ -382,13 +422,25 @@ struct DubbingController::Impl final : IAudioOutputClient
         {
             auto stream = videoReports[i].isObject() ? videoReports[i] : jsonObject();
             jsonSet(stream, "receivedFrames", jsonInt(receivedFrames[i].load()));
+            jsonSet(stream, "cameraFailed", cameraFailures[i].load()); jsonSet(stream, "staleOffers", jsonInt(staleOffers[i].load()));
+            jsonSet(stream, "generation", jsonInt(generations[i].load()));
+            jsonSet(stream, "O0", placed.O0); jsonSet(stream, "Ostop", placed.Ostop);
+            juce::Array<juce::var> gaps;
+            for (const auto& gap : assets[i].gaps) { auto g = jsonObject(); jsonSet(g, "start", gap.start); jsonSet(g, "length", gap.length); gaps.add(g); }
+            jsonSet(stream, "gaps", gaps);
             jsonSet(stream, "lastMappedCaptureSample", lastCaptureSample[i].load());
+            auto camera = jsonObject(); jsonSet(camera, "slot", int(i + 1)); jsonSet(camera, "assetId", assets[i].assetId);
+            jsonSet(camera, "N0", placed.O0); jsonSet(camera, "Nstop", placed.Ostop); jsonSet(camera, "video", stream);
+            jsonSet(camera, "gaps", gaps); cameraReports.add(camera);
             video.add(stream); auto p = jsonObject();
             jsonSet(p, "cameraResidualLatency100ns", config.cameras[i].calibration.cameraResidualLatency100ns);
             jsonSet(p, "outputResidualSamples", config.cameras[i].calibration.outputResidualLatencySamples);
-            jsonSet(p, "inputResidualSamples", config.cameras[i].calibration.inputResidualLatencySamples); profiles.add(p);
+            jsonSet(p, "inputResidualSamples", config.cameras[i].calibration.inputResidualLatencySamples);
+            if (!config.cameras[i].calibration.key.cameraId.empty()) jsonSet(p, "profile", config.cameras[i].calibration.toJson());
+            profiles.add(p);
         }
         jsonSet(v, "videos", video); jsonSet(v, "calibration", profiles);
+        jsonSet(v, "cameras", cameraReports);
         jsonSet(v, "expectedVideoFrames", TakeController::frameCount(placed.recordedSamples, device.sampleRate, frozen->fps));
         jsonSet(v, "stopToPlacementMs", placementMs);
         jsonSet(v, "clockPolicy", "Round-04 outputOriginSample; Nv=S(q-Lcam); Pvideo=Pstart+(Nv-O0). Driver buffer reference and physical latency remain unverified.");
@@ -400,7 +452,14 @@ struct DubbingController::Impl final : IAudioOutputClient
         if (message.isNotEmpty()) return message;
         switch (failureCode.load())
         {
-            case Failure::none: return {};
+            case Failure::none:
+                if (cameraFailures[0].load() && cameraFailures[1].load())
+                    return juce::String::fromUTF8("두 카메라의 영상 녹화를 중단했습니다. 완성 오디오 재생은 계속됩니다.");
+                if (cameraPartial.load()) return juce::String::fromUTF8(cameraFailures[1].load()
+                    ? "캠2 녹화에 문제가 발생했습니다. 캠1과 완성 오디오 재생은 계속됩니다."
+                    : config.cameras.size() == 2 ? "캠1 녹화에 문제가 발생했습니다. 캠2와 완성 오디오 재생은 계속됩니다."
+                                                : "캠1 녹화에 문제가 발생했습니다. 완성 오디오 재생은 계속됩니다.");
+                return {};
             case Failure::playbackUnderrun: return juce::String::fromUTF8("완성 오디오 재생 데이터가 부족해 더빙을 중단했습니다.");
             case Failure::asioReset: return juce::String::fromUTF8("ASIO 장치가 재설정되어 더빙을 중단했습니다.");
             case Failure::clockDiscontinuity: return juce::String::fromUTF8("클록이 끊겨 더빙을 중단했습니다.");
@@ -446,6 +505,12 @@ juce::Result DubbingController::prepare(Config c)
         need(span > 0 && sum(c.Pstart, span) <= end, "더빙 끝이 선택한 오디오 끝을 벗어납니다.");
         for (const auto& cam : c.cameras)
         {
+            // Legacy synthetic fixtures can exercise explicit offsets without a
+            // measured key. A product profile must match every device coordinate.
+            if (!cam.calibration.key.cameraId.empty() || (!c.synthetic && (cam.calibration.cameraResidualLatency100ns
+                || cam.calibration.inputResidualLatencySamples || cam.calibration.outputResidualLatencySamples)))
+                cam.calibration.requireMatch(calibrationKey(cam.symbolicLink, cam.mode, cam.exposure, device.name.toStdString(),
+                    device.sampleRate, device.bufferFrames, c.outputMapping));
             need(std::abs(double(cam.calibration.cameraResidualLatency100ns)) <= 100000000
                 && std::abs(double(cam.calibration.outputResidualLatencySamples)) <= double(device.sampleRate) * 10,
                 "카메라 또는 출력 보정 값이 허용 범위를 벗어났습니다.");
@@ -455,10 +520,13 @@ juce::Result DubbingController::prepare(Config c)
                 && cam.calibration.inputResidualLatencySamples == c.cameras[0].calibration.inputResidualLatencySamples,
                 "두 카메라의 ASIO 입출력 보정 값이 다릅니다.");
         }
+        if (c.cameras.size() == 2 && !c.synthetic)
+            need(!CameraCatalog::sameDevice(c.cameras[0].symbolicLink, c.cameras[1].symbolicLink), "같은 카메라를 두 번 선택할 수 없습니다.");
         for (auto& cap : s.captures) if (cap) { cap->stop(); cap.reset(); } s.detachVideo();
         for (auto& video : s.videos) video.reset();
         s.device = device; s.config = std::move(c); s.frozen = s.document.snapshot(); s.placed = {}; s.placed.Pstart = s.config.Pstart; s.placed.spanSamples = span;
-        s.failureCode = Failure::none; s.message.clear(); s.preparedAudio = false; s.saving = false; s.stopQpc = 0; s.placementMs = 0;
+        s.failureCode = Failure::none; s.cameraPartial = false; s.message.clear(); s.preparedAudio = false; s.saving = false; s.stopQpc = 0; s.placementMs = 0;
+        for (auto& failure : s.cameraFailures) failure = false;
         s.renderStop = false; s.renderReady = false; s.scheduled = false; s.havePrevious = false; s.underruns = 0;
         s.submissionStop = -1; s.submittedThrough = -1; s.submitted = 0; s.audioReport = juce::var(); s.videoReports = {};
         s.pcm = std::make_unique<PlaybackPcmQueue>(device.sampleRate, device.bufferFrames);
@@ -468,8 +536,10 @@ juce::Result DubbingController::prepare(Config c)
         {
             const auto& cam = s.config.cameras[i];
             s.cameras[i] = std::make_unique<CameraClockMapper>(s.audio.masterClock(), qpcFrequency(), cam.mode.fps, cam.calibration.cameraResidualLatency100ns);
-            s.origins[i].sample = -1; s.previews[i] = std::make_shared<VideoSurfacePool>(1920, 1080);
+            s.origins[i].sample = -1;
+            s.previews[i] = s.config.externalCapture ? nullptr : std::make_shared<VideoSurfacePool>(1920, 1080);
             s.receivedFrames[i] = 0; s.lastCaptureSample[i] = 0;
+            s.generations[i] = cam.generation; s.staleOffers[i] = 0; s.cameraFailures[i] = false;
             s.discontinuities[i] = s.typeChanges[i] = 0; s.captureStats[i].reset();
             s.lastMaster[i].reset(); s.lastCamera[i].reset();
             MediaAsset a; a.kind = AssetKind::camera; a.contentIdentity = a.assetId;
@@ -510,6 +580,8 @@ juce::Result DubbingController::start(Sample submit)
         need(origin && *origin >= s.audio.currentSample() && submit >= s.audio.currentSample(), "더빙 시작 원점이 과거이거나 범위를 넘었습니다.");
         for (unsigned i = 0; i < s.config.cameras.size(); ++i)
         {
+            s.origins[i].sample = *origin; s.origins[i].masterEpoch = clock->epoch;
+            if (s.videos[i]->failed()) { s.cameraFailures[i] = true; s.cameraPartial = true; continue; }
             const auto camera = preparedClock(*s.cameras[i]); need(camera && camera->valid && s.videos[i]->ready(), "카메라 클록이 준비되지 않았습니다.");
             s.origins[i].sample = *origin; s.origins[i].masterEpoch = clock->epoch; s.origins[i].cameraEpoch = camera->epoch;
         }
@@ -517,7 +589,7 @@ juce::Result DubbingController::start(Sample submit)
         s.submissionStop = sum(submit, s.placed.spanSamples);
         check(s.audio.startAt(*origin)); check(s.audio.stopDubbingAt(sum(*origin, s.placed.spanSamples)));
         for (unsigned i = 0; i < s.config.cameras.size(); ++i)
-            s.videos[i]->startAt(s.audio.clockMapping(), *origin, s.device.sampleRate, [&s]
+            if (!s.videos[i]->failed()) s.videos[i]->startAt(s.audio.clockMapping(), *origin, s.device.sampleRate, [&s]
             { return (std::max)(Sample{0}, s.audio.acceptedEnd() - s.placed.O0); });
         s.scheduled.store(true, std::memory_order_release); return juce::Result::ok();
     }
@@ -561,12 +633,12 @@ void DubbingController::tick()
             {
                 if (result.failed() && s.document.getProject().media->findTake(s.take.takeId)) s.document.updateTakeState(s.take.takeId, TakeState::partial);
                 s.document.checkpointFinished(s.saved, s.config.projectDirectory.getChildFile("project.recorder"), result);
-                s.preparedAudio = false; s.current = s.failureCode == Failure::none ? State::done : State::partialFailure; s.release(); return;
+                s.preparedAudio = false; s.current = s.failureCode == Failure::none && !s.cameraPartial ? State::done : State::partialFailure; s.release(); return;
             }
             if (s.document.getProject().media->findTake(s.take.takeId))
             {
                 for (const auto& a : s.assets) { const auto update = s.document.updateMediaAsset(a); if (update.failed()) { s.message = update.getErrorMessage(); s.fail(Failure::storage); } }
-                const auto update = s.document.updateTakeState(s.take.takeId, s.failureCode == Failure::none ? TakeState::complete : TakeState::partial);
+                const auto update = s.document.updateTakeState(s.take.takeId, s.failureCode == Failure::none && !s.cameraPartial ? TakeState::complete : TakeState::partial);
                 if (update.failed()) { s.message = update.getErrorMessage(); s.fail(Failure::storage); }
             }
             s.saved = s.document.snapshot(); s.saving = true;
@@ -574,12 +646,12 @@ void DubbingController::tick()
             {
                 try
                 {
-                    auto manifest = s.manifest(); jsonSet(manifest, "state", s.failureCode == Failure::none ? "done" : "partialFailure");
+                    auto manifest = s.manifest(); jsonSet(manifest, "state", s.failureCode == Failure::none && !s.cameraPartial ? "done" : "partialFailure");
                     writeDurable(s.folder().getChildFile("take.json"), manifest);
                     const auto projectFile = s.config.projectDirectory.getChildFile("project.recorder");
                     check(RecorderSerializer::writeCheckpoint(projectFile, *s.saved));
                     DurableFile durable; check(durable.open(projectFile)); check(durable.flushData()); check(durable.close());
-                    check(s.audio.finishJournal(s.failureCode == Failure::none)); return juce::Result::ok();
+                    check(s.audio.finishJournal(s.failureCode == Failure::none && !s.cameraPartial)); return juce::Result::ok();
                 }
                 catch (const std::exception& e) { s.audio.finishJournal(false); s.fail(Failure::storage); return juce::Result::fail(juce::String::fromUTF8(e.what())); }
             }); return;
@@ -597,11 +669,15 @@ void DubbingController::tick()
         const auto master = s.audio.masterClock().snapshot();
         bool ready = s.renderReady.load() && s.audio.clockReady() && master && master->valid;
         for (unsigned i = 0; i < s.config.cameras.size(); ++i)
-        { const auto c = s.cameras[i]->snapshot(); ready = ready && s.videos[i] && s.videos[i]->ready() && c && c->valid; }
+        { const auto c = s.cameras[i]->snapshot(); ready = ready && s.videos[i] && (s.videos[i]->failed() || (s.videos[i]->ready() && c && c->valid)); }
         if (ready) s.current = State::armed;
         else if (qpcNow() - s.prepareQpc > qpcFrequency() * 30) s.fail(Failure::preparation);
     }
-    for (unsigned i = 0; i < s.config.cameras.size(); ++i) if (s.captures[i] && s.captures[i]->finished()) cameraFailed(i);
+    for (unsigned i = 0; i < s.config.cameras.size(); ++i)
+    {
+        if (s.captures[i] && (s.captures[i]->failureDetected() || s.captures[i]->finished())) cameraFailed(i);
+        if (s.videos[i] && s.videos[i]->failed()) { s.cameraFailures[i] = true; s.cameraPartial = true; }
+    }
     if (s.audio.referenceFailed()) s.fail(Failure::storage);
     if (s.current == State::armed && s.audio.startSample() >= 0) s.current = State::recording;
     if (s.failureCode != Failure::none || (s.audio.stopSample() >= 0 && s.submittedThrough.load() >= s.submissionStop.load()))
@@ -623,15 +699,25 @@ juce::String DubbingController::statusText() const
     {
         case State::idle: return juce::String::fromUTF8("더빙 대기"); case State::preparing: return juce::String::fromUTF8("더빙 준비 중"); case State::armed: return juce::String::fromUTF8("더빙 준비됨");
         case State::recording: return juce::String::fromUTF8("완성 오디오 재생 · 영상 녹화 중"); case State::stopping: return juce::String::fromUTF8("더빙 정지 중");
-        case State::finalizing: return juce::String::fromUTF8("더빙 마무리 중"); case State::done: return juce::String::fromUTF8("더빙 완료"); case State::partialFailure: return juce::String::fromUTF8("더빙 일부 저장 · 동기 실패 확인 필요");
+        case State::finalizing: return juce::String::fromUTF8("더빙 마무리 중"); case State::done: return juce::String::fromUTF8("더빙 완료"); case State::partialFailure: return juce::String::fromUTF8("더빙 일부 저장 · 실패 스트림 확인 필요");
     }
     return {};
 }
 const DubbingController::Placement& DubbingController::placement() const noexcept { return impl->placed; }
 const Id& DubbingController::selectedAudioTrack() const noexcept { return impl->config.audioTrackId; }
 void DubbingController::offer(unsigned i, const VideoSurface& f) noexcept { impl->offer(i, f); }
-void DubbingController::cameraFailed(unsigned i) noexcept
-{ if (i < 2) if (auto* v = impl->sinks[i].load()) v->sourceFailed((std::max)(Sample{0}, impl->audio.acceptedEnd() - impl->placed.O0)); }
+TakeVideoQueues DubbingController::cameraQueues(unsigned i) const noexcept
+{
+    const auto& s = *impl;
+    return i < s.config.cameras.size() && s.current != State::preparing && s.videos[i] ? s.videos[i]->queues() : TakeVideoQueues{};
+}
+void DubbingController::cameraFailed(unsigned i, std::uint64_t generation) noexcept
+{
+    if (i >= 2) return; auto& s = *impl; s.inFlight[i].fetch_add(1);
+    if (auto* v = s.sinks[i].load()) if ((!generation || generation == s.generations[i].load()) && !s.cameraFailures[i].exchange(true))
+    { s.cameraPartial = true; v->sourceFailed((std::max)(Sample{0}, s.audio.acceptedEnd() - s.placed.O0)); }
+    s.inFlight[i].fetch_sub(1);
+}
 std::shared_ptr<VideoSurfacePool> DubbingController::previewPool(unsigned i) const { return i < 2 ? impl->previews[i] : nullptr; }
 juce::var DubbingController::report() const
 {

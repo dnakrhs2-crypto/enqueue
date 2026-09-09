@@ -66,6 +66,14 @@ bool CalibrationKey::operator==(const CalibrationKey& b) const noexcept
     return cameraId == b.cameraId && nativeMode == b.nativeMode && fps == b.fps && exposure == b.exposure
         && asioDriver == b.asioDriver && sampleRate == b.sampleRate && bufferSamples == b.bufferSamples && outputMapping == b.outputMapping;
 }
+CalibrationKey calibrationKey(const std::string& cameraId, const CameraMode& mode, const std::string& exposure,
+                              const std::string& asioDriver, unsigned Fs, unsigned buffer, const std::vector<int>& outputs)
+{ return {cameraId, mode.text(), exposure, asioDriver, mode.fps, Fs, buffer, outputs}; }
+void CalibrationProfile::requireMatch(const CalibrationKey& expected) const
+{
+    validate(*this);
+    if (!(key == expected)) throw std::invalid_argument("Calibration profile does not match camera/native mode/fps/exposure/ASIO/Fs/buffer/output mapping");
+}
 juce::var CalibrationProfile::toJson() const
 {
     validate(*this);

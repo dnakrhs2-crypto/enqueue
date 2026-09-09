@@ -992,6 +992,21 @@ int importAudioCommand(int argc, wchar_t** argv)
 }
 int runDemoProbe(int argc, wchar_t** argv);
 int runUiProbe(int argc, wchar_t** argv);
+int runDualProductProbe(int argc, wchar_t** argv)
+{
+    const auto executable=juce::File::getSpecialLocation(juce::File::currentExecutableFile);
+    const auto config=executable.getParentDirectory().getFileName();
+    const auto dual=executable.getParentDirectory().getParentDirectory().getParentDirectory()
+        .getChildFile("RecorderDualProbe_artefacts/"+config+"/RecorderDualProbe.exe");
+    juce::StringArray args;args.add(dual.getFullPathName());
+    bool headroom=false;for(int i=2;i<argc;++i)if(juce::String(argv[i])=="--headroom")headroom=true;
+    if(!headroom)args.add("--product");
+    for(int i=2;i<argc;++i)args.add(juce::String(argv[i]));
+    if(juce::String(argv[1])=="integration"&&!args.contains("--scenario")){args.add("--scenario");args.add("dual-dub-failure-export");}
+    juce::ChildProcess child;
+    if(!dual.existsAsFile()||!child.start(args)){std::cerr<<"RecorderDualProbe unavailable: "<<dual.getFullPathName()<<'\n';return 2;}
+    const auto output=child.readAllProcessOutput();child.waitForProcessToFinish(-1);std::cout<<output;return int(child.getExitCode());
+}
 int runRecoveryProbe(int argc, wchar_t** argv)
 {
     juce::StringArray args; for (int i = 2; i < argc; ++i) args.add(juce::String(argv[i]));
@@ -1036,6 +1051,7 @@ int wmain(int argc, wchar_t** argv)
         if (argc >= 2 && juce::String(argv[1]) == "demo") return runDemoProbe(argc, argv);
         if (argc >= 2 && juce::String(argv[1]) == "ui") return runUiProbe(argc, argv);
         if (argc >= 2 && juce::String(argv[1]) == "recover") return runRecoveryProbe(argc, argv);
+        if (argc >= 2 && (juce::String(argv[1]) == "dual-load" || juce::String(argv[1]) == "integration")) return runDualProductProbe(argc, argv);
         args = parse(argc, argv);
         report = baseReport(args, &report); // also covers encode's early runtime check without changing its function
         if (args.command == "record-audio" || args.command == "record-take") return recordCommand(args);
