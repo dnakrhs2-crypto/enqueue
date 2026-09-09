@@ -1,6 +1,7 @@
 #pragma once
 #include "IAudioOutput.h"
 #include "TimelineAudioRenderer.h"
+#include "VideoPlaybackEngine.h"
 #include "support/BoundedSpscQueue.h"
 
 namespace gocue::recorder
@@ -29,14 +30,17 @@ public:
     void pause();
     void stop();
     void goToStart();
-    // Coordinator pump; UI timer does not advance the clock. File/GPU preparation
-    // runs on renderer/decoder workers. Call after output.start(*this).
+    // Single-owner coordinator: wait on wakeHandle() plus window messages, then
+    // service. Video publication/receipt and ASIO publication signal immediately.
+    // File/GPU preparation remains on workers; no service() call from the callback.
     void service(TimelineAudioRenderer&, VideoPlaybackEngine&, IAudioOutput&, std::int64_t nowQpc);
+    void* wakeHandle() const noexcept { return wake->nativeHandle(); }
     void prepared(std::int64_t reservedOutputSample, bool start); // readiness seam for offline stubs
     void processOutput(const BlockStamp&, float*, float*) noexcept override;
     TransportSnapshot snapshot() const noexcept;
     std::uint64_t generation() const noexcept { return requestedGeneration; } // control owner
     juce::Result status() const;
+    juce::var telemetry() const; // control owner; no JSON in the ASIO callback
     static Sample audibleCursor(const TransportSnapshot&, std::uint32_t Fs, std::int64_t qpcFrequency,
                                 std::int64_t nowQpc, std::int64_t displayLeadTicks = 0) noexcept;
 private:
@@ -48,6 +52,7 @@ private:
     const std::int64_t frequency;
     PlaybackPcmQueue& queue;
     const Sample end;
+    const std::shared_ptr<PlaybackWakeEvent> wake = std::make_shared<PlaybackWakeEvent>();
     BoundedSpscQueue<Command, 64> commands;
     // RT-owned state. The control owner only reads the atomic publication below.
     TransportSnapshot rt;
@@ -61,7 +66,12 @@ private:
         std::atomic<Sample> frozen{0}, origin{0}, outputOrigin{-1}, submitted{0}, rendered{0}, queued{0}, output{0};
         std::atomic<std::int64_t> qpc{0}, first{0}, audible{0};
     } published;
-    std::uint64_t requestedGeneration = 0, preparingGeneration = 0, armedGeneration = 0;
+    std::uint64_t requestedGeneration = 0, preparingGeneration = 0, videoGeneration = 0, armedGeneration = 0;
+    struct PreparationTiming
+    {
+        std::int64_t request = 0, callbackAck = 0, audioBegin = 0, audioEnd = 0;
+        std::int64_t audioReady = 0, videoReady = 0, armed = 0;
+    } timing;
     Sample requestedSample = 0;
     bool wantPlay = false;
     bool stopAfterPrepare = false;
