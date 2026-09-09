@@ -230,3 +230,12 @@ target_compile_definitions(RecorderTests PRIVATE RECORDER_IMPORT_FFMPEG_EXE="${R
 add_test(NAME RecorderAudioImport COMMAND RecorderTests --suite audio-import)
 add_custom_command(TARGET Recorder POST_BUILD COMMAND ${CMAKE_COMMAND} -E copy_if_different
     ${_rec_dlls} "$<TARGET_FILE_DIR:Recorder>" VERBATIM)
+# Round 11: finalized-file playback only (append-only integration).
+target_sources(RecorderCore PRIVATE
+    src/media/MediaIndex.cpp src/playback/VideoPlaybackEngine.cpp
+    src/playback/TimelineTransport.cpp src/playback/TimelineAudioRenderer.cpp
+    src/playback/AsioPlaybackOutput.cpp)
+target_link_libraries(RecorderCore PUBLIC RecorderModel)
+target_sources(RecorderProbe PRIVATE tools/PlaybackProbe.cpp)
+target_sources(RecorderTests PRIVATE tests/PlaybackTests.cpp)
+add_test(NAME RecorderPlaybackEngine COMMAND RecorderTests --suite playback-engine)

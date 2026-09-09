@@ -7,6 +7,7 @@
 #include "media/AudioImport.h"
 #include "playback/ImportedAudioCache.h"
 #include "audio/MediaFoundationAudioFormat.h"
+namespace gocue::recorder { int runPlaybackProbe(int argc, wchar_t** argv); }
 extern "C"
 {
 #include <libavcodec/avcodec.h>
@@ -686,6 +687,7 @@ int wmain(int argc, wchar_t** argv)
     {
         if (argc >= 2 && juce::String(argv[1]) == "asio") return runAsioProbe(argc, argv);
         if (argc >= 2 && juce::String(argv[1]) == "import-audio") return importAudioCommand(argc, argv);
+        if (argc >= 2 && juce::String(argv[1]) == "playback") return runPlaybackProbe(argc, argv);
         args = parse(argc, argv);
         report = baseReport(args, &report); // also covers encode's early runtime check without changing its function
         return args.command == "enumerate" ? enumerate(args) : args.command == "encode" ? encodeCommand(args)

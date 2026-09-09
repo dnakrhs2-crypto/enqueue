@@ -30,6 +30,7 @@ std::uint64_t recorderEditPropertySeed = 909;
 int recorderEditPropertyIterations = 1000;
 int runAudioImportTests();       // round 16: copied originals, decoded lengths and derived PCM
 int runImportedClipTests();      // round 16: independent import track/document transaction
+int runPlaybackTests();          // round 11: indexed playback / audible transport (no devices)
 
 namespace
 {
@@ -57,6 +58,7 @@ const Suite suites[] = {
     {"cut-link-history", runCutLinkHistory},
     {"edit-property", runEditPropertyTests},
     {"audio-import", runAudioImport},
+    {"playback-engine", runPlaybackTests},
 };
 int usage()
 {
