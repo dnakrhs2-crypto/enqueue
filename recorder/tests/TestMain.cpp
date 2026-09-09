@@ -33,6 +33,8 @@ int recorderEditPropertyIterations = 1000;
 int runAudioImportTests();       // round 16: copied originals, decoded lengths and derived PCM
 int runImportedClipTests();      // round 16: independent import track/document transaction
 int runPlaybackTests();          // round 11: indexed playback / audible transport (no devices)
+int runAudioCutRenderTests();    // round 14: independent audio cuts / source masks / microfades
+int runPlaybackQueueTests();     // round 14: prefetch / revision banks / RT allocation hook
 
 namespace
 {
@@ -46,6 +48,8 @@ int runJournalDurable() { const int a = runJournalTests(), b = runWavChunkTests(
 int runCutLinkHistory() { const int a = runClipEditTests(), b = runLinkEditTests(), c = runEditHistoryTests(); return (a || b || c) ? 1 : 0; }
 int runAudioImport() { const int a = runAudioImportTests(), b = runImportedClipTests(); return (a || b) ? 1 : 0; }
 const Suite suites[] = {
+    {"audio-cut-render", runAudioCutRenderTests},
+    {"audio-prefetch-underrun", runPlaybackQueueTests},
     {"capture-contract", runCaptureContractTests},
     {"capture-review", runCaptureReviewTests},
     {"cfr-scheduler", runCfrSchedulerTests},
