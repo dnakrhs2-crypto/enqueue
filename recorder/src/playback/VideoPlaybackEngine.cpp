@@ -105,15 +105,25 @@ public:
         checkHr(gpu->video_device->CreateVideoProcessorEnumerator(&desc, &enumerator), "Create NV12 playback processor enumerator");
         checkHr(gpu->video_device->CreateVideoProcessor(enumerator.Get(), 0, &processor), "Create GPU NV12 to BGRA processor");
     }
+    void resetForSeek() override { lastFrame = noFrame; }
+    PlaybackDecodeTiming decodeTiming() const override { return timing; }
     std::shared_ptr<const PlaybackTexture> decodeFrame(std::size_t target, const std::function<bool()>& cancelled) override
     {
+        timing = {}; timing.targetPacket = target;
         const auto& wanted = source->packets.at(target);
-        if (lastFrame == noFrame || target <= lastFrame || target - lastFrame > 8)
+        const auto idr = source->previousIdr(wanted.sample);
+        if (lastFrame == noFrame || target <= lastFrame || (target - lastFrame > 8 && idr > lastFrame))
         {
-            const auto idr = source->previousIdr(wanted.sample);
+            // A forward cursor jump within this GOP is cheaper to continue than
+            // to flush and decode the same IDR prefix a second time.
+            timing.fromIdr = true; timing.idrPacket = idr;
+            const auto seekBegin = qpcNow();
             ffCheck(av_seek_frame(input.value, source->stream, source->packets[idr].pts, AVSEEK_FLAG_BACKWARD), "Seek preceding IDR");
+            const auto flushBegin = qpcNow(); timing.idrSeekTicks = flushBegin - seekBegin;
             avcodec_flush_buffers(codec.get()); draining = false;
+            timing.flushTicks = qpcNow() - flushBegin;
         }
+        const auto decodeBegin = qpcNow();
         auto frame = ffFrame(); auto packet = ffPacket();
         for (;;)
         {
@@ -121,12 +131,17 @@ public:
             const auto received = avcodec_receive_frame(codec.get(), frame.get());
             if (received == 0)
             {
+                ++timing.receivedFrames;
                 if (frame->format != AV_PIX_FMT_D3D11) throw std::runtime_error("Decoder returned a non-D3D11 frame; fallback rejected");
                 const auto pts = frame->best_effort_timestamp;
                 if (pts > wanted.pts) throw std::runtime_error("Decoder skipped requested indexed frame");
                 if (pts == wanted.pts)
                 {
-                    lastFrame = target; return convert(*frame, cancelled);
+                    lastFrame = target; const auto convertBegin = qpcNow();
+                    timing.decodeTicks = convertBegin - decodeBegin;
+                    auto texture = convert(*frame, cancelled);
+                    timing.convertTicks = qpcNow() - convertBegin;
+                    return texture;
                 }
                 av_frame_unref(frame.get()); continue;
             }
@@ -215,6 +230,7 @@ private:
     ComPtr<ID3D11VideoProcessor> processor;
     std::size_t lastFrame = noFrame;
     bool draining = false;
+    PlaybackDecodeTiming timing;
     DXGI_ADAPTER_DESC1 adapterDescription{};
     juce::String driverVersion;
 };
@@ -226,6 +242,13 @@ std::size_t activeClip(const std::vector<PlaybackVideoClip>& clips, Sample sampl
     if (it == clips.begin()) return absent;
     const auto& c = std::prev(it)->mapping;
     return sample < c.timelineStartSample + c.lengthSamples ? static_cast<std::size_t>(std::distance(clips.begin(), it) - 1) : absent;
+}
+std::pair<std::size_t, std::size_t> frameKey(const std::vector<PlaybackVideoClip>& clips, Sample sample)
+{
+    const auto clip = activeClip(clips, sample);
+    if (clip == absent) return {absent, absent};
+    const auto& c = clips[clip];
+    return {clip, c.source->frameAt(c.mapping.sourceIn + sample - c.mapping.timelineStartSample)};
 }
 }
 
@@ -260,8 +283,13 @@ struct VideoPlaybackEngine::Impl
         std::thread worker;
         Sample target = 0;
         std::uint64_t request = 0, stale = 0, decoded = 0, prefetched = 0, late = 0;
+        std::uint64_t generation = 0, lateGeneration = 0, decoderOpens = 0, cacheHits = 0, cacheMisses = 0;
+        std::pair<std::size_t, std::size_t> lateKey{absent, absent};
+        bool advancing = false;
+        std::int64_t decoderCreateTicks = 0, presenterBeginQpc = 0, presenterEndQpc = 0;
         std::vector<std::shared_ptr<const PlaybackVideoFrame>> ready;
         PlaybackPresentation presented;
+        PlaybackSeekTiming timing;
         juce::String error;
     };
     std::array<Lane, 2> lanes;
@@ -287,11 +315,16 @@ struct VideoPlaybackEngine::Impl
                     std::unique_lock<std::mutex> lock(lane.mutex);
                     lane.wake.wait(lock, [&] { return stopping.load() || lane.request != processed; });
                     if (stopping.load()) break;
-                    target = lane.target; request = lane.request; gen = generation.load(); cache = lane.ready;
+                    target = lane.target; request = lane.request; gen = lane.generation; cache = lane.ready;
+                    if (lane.timing.generation == gen && !lane.timing.workerQpc) lane.timing.workerQpc = qpcNow();
                 }
                 processed = request;
                 const auto cancelled = [&] { return stopping.load() || generation.load() != gen; };
-                if (decoderGeneration != gen) { decoders.clear(); cache.clear(); decoderGeneration = gen; }
+                if (decoderGeneration != gen)
+                {
+                    for (auto& entry : decoders) entry.second->resetForSeek();
+                    decoderGeneration = gen;
+                }
                 const auto clip = activeClip(lane.clips, target);
                 if (clip == absent)
                 { std::lock_guard<std::mutex> lock(lane.mutex); if (!cancelled()) lane.ready.clear(); continue; }
@@ -308,31 +341,63 @@ struct VideoPlaybackEngine::Impl
                 for (const auto& [which, packet] : wanted)
                 {
                     if (cancelled()) break;
+                    // Exact target is published first. Superseded cursor work
+                    // must not wait for optional next-clip/next-frame prefetch.
+                    const bool exactTarget = ready.empty();
+                    if (!exactTarget)
+                    { std::lock_guard<std::mutex> lock(lane.mutex); if (lane.request != request) break; }
                     const auto& c = lane.clips[which]; const auto& p = c.source->packets[packet];
                     if (!c.source->current()) throw std::runtime_error("Video media generation replaced; prepare a new clip set");
                     const auto hit = std::find_if(cache.begin(), cache.end(), [&](const auto& f)
-                        { return f->current(gen) && f->clipId == c.mapping.clipId && f->pts == p.pts; });
-                    if (hit != cache.end()) { ready.push_back(*hit); continue; }
-                    auto& decoder = decoders[which]; if (!decoder) decoder = factory(c.source);
-                    if (!decoder) throw std::runtime_error("Playback decoder factory returned null");
-                    auto texture = decoder->decodeFrame(packet, cancelled);
+                        { return f->source == c.source && f->source->current() && f->clipId == c.mapping.clipId && f->pts == p.pts; });
+                    bool measureSeek = false;
+                    {
+                        std::lock_guard<std::mutex> lock(lane.mutex);
+                        measureSeek = exactTarget && lane.timing.generation == gen && !lane.timing.readyQpc;
+                        if (measureSeek)
+                        {
+                            lane.timing.cacheKnown = true; lane.timing.cacheHit = hit != cache.end();
+                            if (lane.timing.cacheHit) ++lane.cacheHits; else ++lane.cacheMisses;
+                        }
+                    }
+                    std::shared_ptr<const PlaybackTexture> texture;
+                    if (hit != cache.end()) texture = (*hit)->texture;
+                    else
+                    {
+                        auto& decoder = decoders[which];
+                        if (!decoder)
+                        {
+                            const auto begin = qpcNow();
+                            { std::lock_guard<std::mutex> lock(lane.mutex); if (measureSeek && lane.timing.generation == gen) lane.timing.decoderBeginQpc = begin; }
+                            decoder = factory(c.source);
+                            if (!decoder) throw std::runtime_error("Playback decoder factory returned null");
+                            const auto finish = qpcNow();
+                            std::lock_guard<std::mutex> lock(lane.mutex);
+                            ++lane.decoderOpens; lane.decoderCreateTicks += finish - begin;
+                            if (measureSeek && lane.timing.generation == gen) lane.timing.decoderEndQpc = finish;
+                        }
+                        if (cancelled()) break;
+                        { std::lock_guard<std::mutex> lock(lane.mutex); if (measureSeek && lane.timing.generation == gen) lane.timing.decodeBeginQpc = qpcNow(); }
+                        texture = decoder->decodeFrame(packet, cancelled);
+                        const auto finish = qpcNow();
+                        std::lock_guard<std::mutex> lock(lane.mutex);
+                        if (measureSeek && lane.timing.generation == gen)
+                        { lane.timing.decodeEndQpc = finish; lane.timing.decode = decoder->decodeTiming(); }
+                        if (!cancelled()) { ++lane.decoded; if (which == next) ++lane.prefetched; }
+                    }
                     if (cancelled() || !c.source->current()) break;
                     auto f = std::make_shared<PlaybackVideoFrame>(); f->clipId = c.mapping.clipId; f->pts = p.pts;
                     f->begin = c.mapping.timelineStartSample + (std::max)(Sample{0}, p.sample - c.mapping.sourceIn);
                     f->end = (std::min)(c.mapping.timelineStartSample + c.mapping.lengthSamples,
                         c.mapping.timelineStartSample + p.endSample - c.mapping.sourceIn);
                     f->generation = gen; f->source = c.source; f->texture = std::move(texture); ready.push_back(f);
-                    std::lock_guard<std::mutex> lock(lane.mutex); ++lane.decoded; if (which == next) ++lane.prefetched;
-                }
-                {
                     std::lock_guard<std::mutex> lock(lane.mutex);
-                    if (cancelled()) ++lane.stale;
-                    else
-                    {
-                        for (const auto& f : ready) if (!f->current(gen)) throw std::runtime_error("Media replaced before display-ready publish");
-                        lane.ready = std::move(ready); // <=3 total, including next clip's first frame
-                    }
+                    if (cancelled()) break;
+                    for (const auto& item : ready) if (!item->current(gen)) throw std::runtime_error("Media replaced before display-ready publish");
+                    lane.ready = ready; // publish exact now, then <=3 total including next clip
+                    if (measureSeek) lane.timing.readyQpc = qpcNow();
                 }
+                if (cancelled()) { std::lock_guard<std::mutex> lock(lane.mutex); ++lane.stale; }
             }
         }
         catch (const std::exception& e) { std::lock_guard<std::mutex> lock(lane.mutex); lane.error = juce::String::fromUTF8(e.what()); }
@@ -355,7 +420,14 @@ void VideoPlaybackEngine::stop()
 void VideoPlaybackEngine::prepare(std::vector<PlaybackVideoClip> clips)
 {
     stop();
-    for (auto& lane : impl->lanes) { lane.clips.clear(); lane.error.clear(); lane.request = 0; lane.presented = {}; }
+    for (auto& lane : impl->lanes)
+    {
+        lane.clips.clear(); lane.error.clear(); lane.request = lane.generation = 0; lane.target = 0;
+        lane.presented = {}; lane.timing = {}; lane.advancing = false;
+        lane.stale = lane.decoded = lane.prefetched = lane.late = lane.lateGeneration = 0;
+        lane.decoderOpens = lane.cacheHits = lane.cacheMisses = 0; lane.lateKey = {absent, absent};
+        lane.decoderCreateTicks = lane.presenterBeginQpc = lane.presenterEndQpc = 0;
+    }
     for (auto& clip : clips)
     {
         const auto& c = clip.mapping;
@@ -380,21 +452,32 @@ std::uint64_t VideoPlaybackEngine::seek(Sample sample) { const auto gen = impl->
 void VideoPlaybackEngine::seek(Sample sample, std::uint64_t gen)
 {
     if (sample < 0 || !gen || gen <= impl->generation.load()) throw std::invalid_argument("Seek generation must increase");
-    impl->generation.store(gen);
-    for (auto& lane : impl->lanes)
     {
-        { std::lock_guard<std::mutex> lock(lane.mutex); lane.target = sample; lane.ready.clear(); ++lane.request; }
-        lane.wake.notify_one();
+        // Pair target and generation under the same locks. A worker must never
+        // adopt the new generation with the previous lane's target.
+        std::scoped_lock lock(impl->lanes[0].mutex, impl->lanes[1].mutex);
+        impl->generation.store(gen);
+        for (auto& lane : impl->lanes)
+        {
+            lane.target = sample; lane.generation = gen; lane.advancing = false; ++lane.request;
+            lane.timing = {}; lane.timing.generation = gen; lane.timing.target = sample; lane.timing.requestedQpc = qpcNow();
+            // Keep at most three immutable cache entries. Only the camera worker
+            // may rebind a validated file/clip/PTS match to this seek generation.
+        }
     }
+    for (auto& lane : impl->lanes) lane.wake.notify_one();
 }
-bool VideoPlaybackEngine::requestFrame(unsigned camera, Sample sample, std::uint64_t gen)
+bool VideoPlaybackEngine::requestFrame(unsigned camera, Sample sample, std::uint64_t gen, bool advancing)
 {
     if (camera > 1 || sample < 0) throw std::invalid_argument("Invalid camera/frame request");
     auto& lane = impl->lanes[camera];
     { std::lock_guard<std::mutex> lock(lane.mutex);
       if (gen != impl->generation.load()) { ++lane.stale; return false; }
-      if (lane.target == sample) return true;
-      lane.target = sample; ++lane.request; }
+      lane.advancing = advancing;
+      const auto sameFrame = frameKey(lane.clips, lane.target) == frameKey(lane.clips, sample);
+      lane.target = sample;
+      if (sameFrame) return true; // audio samples within one frame need no new decode work
+      ++lane.request; }
     lane.wake.notify_one(); return true;
 }
 bool VideoPlaybackEngine::ready(Sample sample, std::uint64_t gen) const
@@ -403,12 +486,13 @@ bool VideoPlaybackEngine::ready(Sample sample, std::uint64_t gen) const
     for (const auto& lane : impl->lanes)
     {
         std::lock_guard<std::mutex> lock(lane.mutex);
+        if (lane.generation != gen) return false;
         if (activeClip(lane.clips, sample) == absent) continue;
         if (std::none_of(lane.ready.begin(), lane.ready.end(), [&](const auto& f) { return f->current(gen) && f->begin <= sample && sample < f->end; })) return false;
     }
-    return true;
+    return gen == impl->generation.load();
 }
-PlaybackDisplaySelection VideoPlaybackEngine::displaySelection(unsigned camera) const
+PlaybackDisplaySelection VideoPlaybackEngine::displaySelection(unsigned camera, bool presentationTick) const
 {
     auto& lane = impl->lanes.at(camera); std::lock_guard<std::mutex> lock(lane.mutex);
     PlaybackDisplaySelection selected; selected.generation = impl->generation.load();
@@ -416,18 +500,38 @@ PlaybackDisplaySelection VideoPlaybackEngine::displaySelection(unsigned camera) 
     if (!selected.gap)
     {
         for (const auto& f : lane.ready) if (f->current(selected.generation) && f->begin <= lane.target && lane.target < f->end) { selected.frame = f; break; }
-        if (!selected.frame) ++lane.late;
+        if (!selected.frame && presentationTick && lane.advancing && lane.generation == selected.generation)
+        {
+            const auto key = frameKey(lane.clips, lane.target);
+            if (lane.lateGeneration != selected.generation || lane.lateKey != key)
+            { ++lane.late; lane.lateGeneration = selected.generation; lane.lateKey = key; }
+        }
     }
     return selected;
 }
 void VideoPlaybackEngine::presented(unsigned camera, const PlaybackVideoFrame& frame, std::int64_t qpc)
 {
     auto& lane = impl->lanes.at(camera); std::lock_guard<std::mutex> lock(lane.mutex);
-    if (frame.current(impl->generation.load())) lane.presented = {frame.generation, frame.begin, frame.end, frame.pts, qpc};
+    if (frame.current(impl->generation.load()))
+    {
+        // Preserve the FIRST successful receipt for a frame, even when repeated
+        // present ticks occur before the control owner next polls it.
+        if (lane.presented.generation != frame.generation || lane.presented.begin != frame.begin || lane.presented.pts != frame.pts)
+            lane.presented = {frame.generation, frame.begin, frame.end, frame.pts, qpc};
+        if (lane.timing.generation == frame.generation && !lane.timing.presentQpc
+            && frame.begin <= lane.timing.target && lane.timing.target < frame.end) lane.timing.presentQpc = qpc;
+    }
     else ++lane.stale;
 }
 PlaybackPresentation VideoPlaybackEngine::lastPresentation(unsigned camera) const
 { const auto& lane = impl->lanes.at(camera); std::lock_guard<std::mutex> lock(lane.mutex); return lane.presented; }
+PlaybackSeekTiming VideoPlaybackEngine::seekTiming(unsigned camera) const
+{ const auto& lane = impl->lanes.at(camera); std::lock_guard<std::mutex> lock(lane.mutex); return lane.timing; }
+void VideoPlaybackEngine::presenterInitialised(unsigned camera, std::int64_t begin, std::int64_t end)
+{
+    auto& lane = impl->lanes.at(camera); std::lock_guard<std::mutex> lock(lane.mutex);
+    lane.presenterBeginQpc = begin; lane.presenterEndQpc = end;
+}
 void VideoPlaybackEngine::attachPlaybackView(unsigned camera, void* hwnd)
 {
     if (camera > 1 || !IsWindow(static_cast<HWND>(hwnd))) throw std::invalid_argument("Playback needs an existing left/right HWND host");
@@ -445,17 +549,38 @@ juce::var VideoPlaybackEngine::telemetry() const
     jsonSet(result, "decoder", "FFmpeg H.264 + AV_HWDEVICE_TYPE_D3D11VA; no CPU fallback");
     jsonSet(result, "interop", "Dedicated decoder/presenter devices; GPU NV12 to shared BGRA; keyed mutex + completion query; no CPU pixel readback");
     jsonSet(result, "displayReadyLimitPerCamera", 3); jsonSet(result, "decoderDpb", "FFmpeg-owned per decoder; current plus next clip decoder");
+    jsonSet(result, "lateDefinition", "Unique missing containing frames at advancing presentation ticks; excludes seek preparation, gap/startup/UI queries and repeated ticks for the same frame");
     for (const auto& lane : impl->lanes)
     {
         std::lock_guard<std::mutex> lock(lane.mutex); auto c = jsonObject();
         jsonSet(c, "readyFrames", lane.ready.size()); jsonSet(c, "decoded", lane.decoded); jsonSet(c, "nextClipPrefetched", lane.prefetched);
         jsonSet(c, "staleDiscarded", lane.stale); jsonSet(c, "lateDisplaySelections", lane.late); jsonSet(c, "error", lane.error); cameras.add(c);
+        jsonSet(c, "generation", lane.generation); jsonSet(c, "targetSample", lane.target);
+        jsonSet(c, "decoderOpens", lane.decoderOpens); jsonSet(c, "decoderCreateMs", 1000.0 * lane.decoderCreateTicks / qpcFrequency());
+        jsonSet(c, "seekCacheHits", lane.cacheHits); jsonSet(c, "seekCacheMisses", lane.cacheMisses);
+        jsonSet(c, "presenterInitBeginQpc", lane.presenterBeginQpc); jsonSet(c, "presenterInitEndQpc", lane.presenterEndQpc);
+        const auto& t = lane.timing; auto seek = jsonObject();
+        jsonSet(seek, "generation", t.generation); jsonSet(seek, "sample", t.target);
+        jsonSet(seek, "requestedQpc", t.requestedQpc); jsonSet(seek, "workerQpc", t.workerQpc);
+        jsonSet(seek, "decoderBeginQpc", t.decoderBeginQpc); jsonSet(seek, "decoderEndQpc", t.decoderEndQpc);
+        jsonSet(seek, "decodeBeginQpc", t.decodeBeginQpc); jsonSet(seek, "decodeEndQpc", t.decodeEndQpc);
+        jsonSet(seek, "readyQpc", t.readyQpc); jsonSet(seek, "firstExactPresentQpc", t.presentQpc);
+        jsonSet(seek, "frameCache", !t.cacheKnown ? "pending" : t.cacheHit ? "hit" : "miss");
+        jsonSet(seek, "phase", t.presentQpc ? "presented" : t.readyQpc ? "display-ready" : t.decodeBeginQpc ? "target-decode" : t.decoderBeginQpc ? "decoder-create" : "queued");
+        const auto ms = [](std::int64_t ticks) { return 1000.0 * ticks / qpcFrequency(); };
+        jsonSet(seek, "idrSeekMs", ms(t.decode.idrSeekTicks)); jsonSet(seek, "decoderFlushMs", ms(t.decode.flushTicks));
+        jsonSet(seek, "compressedDecodeMs", ms(t.decode.decodeTicks)); jsonSet(seek, "gpuConvertMs", ms(t.decode.convertTicks));
+        jsonSet(seek, "fromIdr", t.decode.fromIdr); jsonSet(seek, "idrPacket", t.decode.idrPacket);
+        jsonSet(seek, "targetPacket", t.decode.targetPacket); jsonSet(seek, "receivedFrames", t.decode.receivedFrames);
+        jsonSet(c, "seek", seek);
+        jsonSet(c, "lastPresentedGeneration", lane.presented.generation); jsonSet(c, "lastPresentedBegin", lane.presented.begin);
+        jsonSet(c, "lastPresentedEnd", lane.presented.end); jsonSet(c, "lastPresentedQpc", lane.presented.qpc);
         for (const auto& frame : lane.ready) if (frame->texture)
         {
-            const auto& t = *frame->texture;
-            jsonSet(c, "adapterDescription", t.adapterName); jsonSet(c, "vendorId", t.vendorId); jsonSet(c, "deviceId", t.deviceId);
-            jsonSet(c, "driverVersion", t.driverVersion.isEmpty() ? juce::var() : juce::var(t.driverVersion));
-            jsonSet(c, "decoderFramePoolSize", t.decoderFramePoolSize); break;
+            const auto& texture = *frame->texture;
+            jsonSet(c, "adapterDescription", texture.adapterName); jsonSet(c, "vendorId", texture.vendorId); jsonSet(c, "deviceId", texture.deviceId);
+            jsonSet(c, "driverVersion", texture.driverVersion.isEmpty() ? juce::var() : juce::var(texture.driverVersion));
+            jsonSet(c, "decoderFramePoolSize", texture.decoderFramePoolSize); break;
         }
     }
     jsonSet(result, "cameras", cameras); return result;
@@ -474,6 +599,7 @@ void PreviewPresenter::PlaybackView::run()
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
         }
         if (stopping.load()) return;
+        const auto initBegin = qpcNow();
         ComPtr<ID3D11Device> decoderDevice; first.frame->texture->texture->GetDevice(&decoderDevice);
         ComPtr<IDXGIDevice> dxgi; checkHr(decoderDevice.As(&dxgi), "Get playback adapter device");
         ComPtr<IDXGIAdapter> adapter; checkHr(dxgi->GetAdapter(&adapter), "Get playback adapter");
@@ -519,7 +645,8 @@ float4 psMain(Vertex v) : SV_Target { return picture.Sample(linearSampler, v.uv)
             ComPtr<ID3D11Texture2D> back; checkHr(swap->GetBuffer(0, IID_PPV_ARGS(&back)), "Get playback backbuffer");
             checkHr(device->CreateRenderTargetView(back.Get(), nullptr, &target), "Create playback target");
         };
-        makeTarget(); PresentPacing pacing;
+        makeTarget(); PresentPacing pacing; PlaybackPresentOpportunity opportunity;
+        engine.presenterInitialised(camera, initBegin, qpcNow());
         std::shared_ptr<const PlaybackVideoFrame> displayed;
         first = {}; // do not retain the startup frame/decoder device forever
         decoderDevice.Reset(); dxgi.Reset();
@@ -530,7 +657,13 @@ float4 psMain(Vertex v) : SV_Target { return picture.Sample(linearSampler, v.uv)
             nextTick = qpcNow() + period;
             if (pacing.needsVisibilityTest())
             { const auto hr = swap->Present(0, DXGI_PRESENT_TEST); checkHr(hr, "Test playback visibility"); pacing.visibilityTest(hr); if (pacing.needsVisibilityTest()) continue; }
-            if (pacing.needsWait() && WaitForSingleObject(latency.value, 0) != WAIT_OBJECT_0) continue;
+            if (opportunity.needsWait())
+            {
+                const auto wait = WaitForSingleObject(latency.value, 0);
+                if (wait == WAIT_TIMEOUT) continue;
+                if (wait != WAIT_OBJECT_0) throw std::runtime_error("Playback latency wait failed");
+                opportunity.acquired();
+            }
             GetClientRect(hwnd, &client);
             if (client.right <= 0 || client.bottom <= 0) continue;
             if (desc.Width != static_cast<UINT>(client.right) || desc.Height != static_cast<UINT>(client.bottom))
@@ -539,7 +672,7 @@ float4 psMain(Vertex v) : SV_Target { return picture.Sample(linearSampler, v.uv)
                 desc.Width = client.right; desc.Height = client.bottom;
                 checkHr(swap->ResizeBuffers(0, desc.Width, desc.Height, DXGI_FORMAT_UNKNOWN, desc.Flags), "Resize playback host"); makeTarget();
             }
-            const auto selection = engine.displaySelection(camera);
+            const auto selection = engine.displaySelection(camera, true);
             if (selection.gap || (displayed && !displayed->current(selection.generation))) displayed.reset();
             if (selection.frame) displayed = selection.frame;
             const float black[]{0, 0, 0, 1}; context->ClearRenderTargetView(target.Get(), black);
@@ -569,6 +702,7 @@ float4 psMain(Vertex v) : SV_Target { return picture.Sample(linearSampler, v.uv)
             const auto current = engine.displaySelection(camera);
             if (displayed && !displayed->current(current.generation)) continue;
             const auto submitted = qpcNow(); const auto hr = swap->Present(0, DXGI_PRESENT_DO_NOT_WAIT); pacing.presented(hr);
+            opportunity.submitted(hr == S_OK);
             if (hr == DXGI_STATUS_OCCLUDED || hr == DXGI_ERROR_WAS_STILL_DRAWING) continue;
             checkHr(hr, "Playback Present");
             if (displayed && displayed->texture) engine.presented(camera, *displayed, submitted);

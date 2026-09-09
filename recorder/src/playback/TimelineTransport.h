@@ -37,6 +37,7 @@ public:
     TransportSnapshot snapshot() const noexcept;
     std::uint64_t generation() const noexcept { return requestedGeneration; } // control owner
     juce::Result status() const;
+    juce::var telemetry() const; // control owner; no JSON in the ASIO callback
     static Sample audibleCursor(const TransportSnapshot&, std::uint32_t Fs, std::int64_t qpcFrequency,
                                 std::int64_t nowQpc, std::int64_t displayLeadTicks = 0) noexcept;
 private:
@@ -61,7 +62,12 @@ private:
         std::atomic<Sample> frozen{0}, origin{0}, outputOrigin{-1}, submitted{0}, rendered{0}, queued{0}, output{0};
         std::atomic<std::int64_t> qpc{0}, first{0}, audible{0};
     } published;
-    std::uint64_t requestedGeneration = 0, preparingGeneration = 0, armedGeneration = 0;
+    std::uint64_t requestedGeneration = 0, preparingGeneration = 0, videoGeneration = 0, armedGeneration = 0;
+    struct PreparationTiming
+    {
+        std::int64_t request = 0, callbackAck = 0, audioBegin = 0, audioEnd = 0;
+        std::int64_t audioReady = 0, videoReady = 0, armed = 0;
+    } timing;
     Sample requestedSample = 0;
     bool wantPlay = false;
     bool stopAfterPrepare = false;

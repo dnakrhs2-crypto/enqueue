@@ -51,17 +51,19 @@ PlaybackVideoClip videoClip(std::shared_ptr<const VideoIndex> index, Sample star
 }
 struct StubState
 {
-    std::atomic<unsigned> opens{0}, decodes{0};
+    std::atomic<unsigned> opens{0}, decodes{0}, resets{0};
+    std::atomic<int> blockedPacket{-1};
     std::atomic<bool> delay{false}, entered{false}, release{false};
 };
 class StubDecoder final : public IVideoFrameDecoder
 {
 public:
     explicit StubDecoder(std::shared_ptr<StubState> s) : shared(std::move(s)) { ++shared->opens; }
-    std::shared_ptr<const PlaybackTexture> decodeFrame(std::size_t, const std::function<bool()>& cancelled) override
+    void resetForSeek() override { ++shared->resets; }
+    std::shared_ptr<const PlaybackTexture> decodeFrame(std::size_t packet, const std::function<bool()>& cancelled) override
     {
         ++shared->decodes;
-        if (shared->delay.exchange(false))
+        if (shared->delay.exchange(false) || shared->blockedPacket.load() == static_cast<int>(packet))
         {
             shared->entered.store(true);
             const auto until = std::chrono::steady_clock::now() + std::chrono::seconds(5);
@@ -319,6 +321,117 @@ int runPlaybackTests()
         eventually([&] { return video.ready(8000, 2); }); const auto display = video.displaySelection(0);
         require(display.frame && display.frame->generation == 2 && display.frame->begin == 8000, "Stale decode became display-ready");
         require(!video.requestFrame(0, 0, 1) && !video.ready(0, 1), "Old seek accepted");
+        require(state->opens == 1 && state->resets >= 1, "Cancelled seek recreated the device or retained decoder position");
+    });
+    suite.test("exact seek publishes before blocked prefetch and rebinds cached frames without reopening decoders", []
+    {
+        auto state = std::make_shared<StubState>(); state->blockedPacket = 1;
+        const auto index = videoIndex(); VideoPlaybackEngine video(factory(state));
+        video.prepare({videoClip(index, 0, 0, index->length)}); video.seek(0, 1);
+        eventually([&] { return state->entered.load(); });
+        require(video.ready(0, 1), "Exact target waits for optional prefetch");
+        const auto old = video.displaySelection(0).frame;
+        video.seek(200, 2); // same containing frame, new exact seek generation
+        eventually([&] { return video.ready(200, 2); });
+        const auto frame = video.displaySelection(0).frame;
+        require(frame && frame != old && frame->begin == 0 && frame->generation == 2, "Cached immutable frame not rebound");
+        require(video.seekTiming(0).cacheHit && video.seekTiming(0).decodeBeginQpc == 0, "Cache hit performed target decode");
+        video.presented(0, *old, 100); require(video.lastPresentation(0).generation != 1, "Old mailbox receipt accepted");
+        video.presented(0, *frame, 200); video.presented(0, *frame, 300);
+        require(video.lastPresentation(0).qpc == 200 && video.seekTiming(0).presentQpc == 200, "First exact receipt overwritten by repeated Present");
+        require(state->opens == 1, "Warm cached seek reopened decoder"); state->release = true;
+    });
+    suite.test("100 seek generations select exact containing frames on both cameras with bounded caches", []
+    {
+        auto state = std::make_shared<StubState>(); const auto index = videoIndex(3600);
+        VideoPlaybackEngine video(factory(state));
+        video.prepare({videoClip(index, 0, 0, index->length, 0), videoClip(index, 0, 0, index->length, 1)});
+        Sample previousTarget = 0;
+        for (std::uint64_t gen = 1; gen <= 100; ++gen)
+        {
+            const Sample target = gen % 10 == 0 ? previousTarget : static_cast<Sample>((gen * 7919) % index->length);
+            video.seek(target, gen); eventually([&] { return video.ready(target, gen); });
+            for (unsigned camera = 0; camera < 2; ++camera)
+            {
+                const auto selection = video.displaySelection(camera);
+                require(selection.frame && selection.frame->generation == gen && selection.frame->begin <= target
+                    && target < selection.frame->end && selection.frame->pts == index->packets[index->frameAt(target)].pts, "Seek did not select exact indexed frame");
+                if (gen % 10 == 0) require(video.seekTiming(camera).cacheHit, "Repeated seek missed resident exact frame");
+                require(static_cast<int>(video.telemetry()["cameras"][static_cast<int>(camera)]["readyFrames"]) <= 3, "Cache exceeded three frames");
+            }
+            require(!video.ready(target, gen - 1), "Previous generation became ready"); previousTarget = target;
+        }
+        require(state->opens == 2, "Seek storm recreated per-camera devices");
+    });
+    suite.test("late counts missing frames only at advancing present ticks, never inspection or seek preparation", []
+    {
+        auto state = std::make_shared<StubState>(); state->delay = true;
+        const auto index = videoIndex(); VideoPlaybackEngine video(factory(state));
+        video.prepare({videoClip(index, 0, 0, index->length)}); video.seek(0, 1);
+        eventually([&] { return state->entered.load(); });
+        const auto late = [&] { return static_cast<juce::int64>(video.telemetry()["cameras"][0]["lateDisplaySelections"]); };
+        for (int i = 0; i < 2500; ++i) { video.displaySelection(0); video.displaySelection(0, true); }
+        require(late() == 0, "Startup/paused exact preparation counted as late");
+        video.requestFrame(0, 100, 1, true);
+        for (int i = 0; i < 2500; ++i) video.displaySelection(0);
+        require(late() == 0, "UI gap/telemetry query counted as presentation");
+        for (Sample sample = 100; sample < 800; ++sample)
+        { video.requestFrame(0, sample, 1, true); video.displaySelection(0, true); }
+        require(late() == 1, "Repeated ticks/audio samples within one late frame inflated count");
+        video.requestFrame(0, 800, 1, true); video.displaySelection(0, true); require(late() == 2, "Next missing frame not counted");
+        video.requestFrame(0, index->length, 1, true); require(video.displaySelection(0, true).gap && late() == 2, "Gap counted as late");
+        video.seek(1600, 2); state->release = true; eventually([&] { return video.ready(1600, 2); });
+        for (Sample sample = 1600; sample < 2400; ++sample)
+        {
+            video.requestFrame(0, sample, 2, true); const auto s = video.displaySelection(0, true);
+            require(s.frame && s.frame->begin == 1600, "Containing-frame floor selection changed within a frame");
+        }
+        require(late() == 2, "Ready frame counted as late");
+    });
+    suite.test("seek discard and texture retry retain acquired DXGI opportunity until successful Present", []
+    {
+        struct Event { HANDLE value = CreateEventW(nullptr, FALSE, TRUE, nullptr); ~Event() { if (value) CloseHandle(value); } } signal;
+        require(signal.value && WaitForSingleObject(signal.value, 0) == WAIT_OBJECT_0, "Acquire initial synthetic latency signal");
+        PlaybackPresentOpportunity opportunity; require(opportunity.needsWait(), "Initial frame did not wait");
+        opportunity.acquired();
+        // Seek changes generation between drawing and Present. No submit and no
+        // future swapchain signal: the next iteration must reuse this opportunity.
+        require(WaitForSingleObject(signal.value, 0) == WAIT_TIMEOUT, "Synthetic wait was not consumed");
+        const auto canSubmit = !opportunity.needsWait() || WaitForSingleObject(signal.value, 0) == WAIT_OBJECT_0;
+        require(canSubmit, "Seek discard waits for a new signal without submitting the next frame");
+        opportunity.submitted(false); require(!opportunity.needsWait(), "Occluded/busy Present consumed opportunity");
+        opportunity.submitted(true); require(opportunity.needsWait(), "Successful Present did not require next latency wait");
+    });
+    suite.test("unacknowledged seek burst cannot publish an old target with the newest generation", []
+    {
+        auto state = std::make_shared<StubState>(); state->delay = true;
+        const auto index = videoIndex(); VideoPlaybackEngine video(factory(state));
+        video.prepare({videoClip(index, 0, 0, index->length, 0), videoClip(index, 0, 0, index->length, 1)});
+        video.seek(0, 1); eventually([&] { return state->entered.load(); });
+        for (std::uint64_t gen = 2; gen <= 101; ++gen) video.seek(static_cast<Sample>(gen * 800), gen);
+        state->release = true; eventually([&] { return video.ready(80800, 101); });
+        for (unsigned camera = 0; camera < 2; ++camera)
+        {
+            const auto s = video.displaySelection(camera);
+            require(s.frame && s.frame->generation == 101 && s.frame->begin == 80800, "Burst paired new generation with old target");
+            require(!video.requestFrame(camera, 0, 100), "Burst accepted superseded generation");
+        }
+    });
+    suite.test("seek from ready immediately cancels video while audio waits for callback acknowledgement", []
+    {
+        TimelineAudioRenderer audio(1000, 100); audio.setPlan({}, 10000);
+        auto state = std::make_shared<StubState>(); VideoPlaybackEngine video(factory(state)); video.prepare({});
+        TimelineTransport transport(1000, 1000000, audio.queue(), 10000); StubOutput output; output.start(transport);
+        transport.seek(0); output.tick(); transport.service(audio, video, output, output.current.callbackQpc);
+        eventually([&] { return audio.ready(); }); transport.service(audio, video, output, output.current.callbackQpc);
+        output.tick(); require(transport.snapshot().state == TransportState::ready, "Initial seek not ready");
+        transport.seek(500); transport.play(); const auto gen = transport.generation();
+        transport.service(audio, video, output, output.current.callbackQpc);
+        require(transport.status().wasOk() && video.displaySelection(0).generation == gen
+            && transport.snapshot().generation != gen, "Pending seek armed old ready state or failed to cancel video");
+        output.tick(); transport.service(audio, video, output, output.current.callbackQpc);
+        require(transport.status().wasOk() && transport.snapshot().frozenSample == 500, "Seek target changed before ack");
+        output.close();
     });
     suite.test("pending Seek survives immediate Play/Pause and scrub release bypasses drag throttle", []
     {
