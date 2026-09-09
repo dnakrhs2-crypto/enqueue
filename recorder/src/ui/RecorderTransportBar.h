@@ -1,0 +1,18 @@
+#pragma once
+#include "RecorderLookAndFeel.h"
+#include "UiState.h"
+
+namespace gocue::recorder
+{
+class RecorderTransportBar : public juce::Component
+{
+public:
+    RecorderTransportBar();
+    void setState(bool enabled, bool playing, Sample, unsigned Fs);
+    void resized() override;
+    juce::TextButton play {ko("재생")}, pause {ko("일시정지")}, stop {ko("정지")}, beginning {ko("처음으로")};
+    juce::TextButton zoomOut {"−"}, zoomIn {"+"}, fit {ko("전체")};
+private:
+    juce::Label time, zoom, snap;
+};
+}

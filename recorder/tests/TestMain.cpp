@@ -33,6 +33,7 @@ int recorderEditPropertyIterations = 1000;
 int runAudioImportTests();       // round 16: copied originals, decoded lengths and derived PCM
 int runImportedClipTests();      // round 16: independent import track/document transaction
 int runPlaybackTests();          // round 11: indexed playback / audible transport (no devices)
+int runUiWiringTests();          // round 12: UI state, settings, derived caches and shared output
 
 namespace
 {
@@ -63,6 +64,7 @@ const Suite suites[] = {
     {"edit-property", runEditPropertyTests},
     {"audio-import", runAudioImport},
     {"playback-engine", runPlaybackTests},
+    {"ui-wiring", runUiWiringTests},
 };
 int usage()
 {

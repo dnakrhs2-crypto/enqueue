@@ -4,6 +4,7 @@
 #include "ui/MainComponent.h"
 #include "model/SafeFileWrite.h"
 #include <juce_gui_basics/juce_gui_basics.h>
+#include <charconv>
 
 namespace gocue::recorder
 {
@@ -50,14 +51,29 @@ class RecorderApplication : public juce::JUCEApplication
 public:
     const juce::String getApplicationName() override { return ProductIdentity::displayName(); }
     const juce::String getApplicationVersion() override { return ProductIdentity::version(); }
-    bool moreThanOneInstanceAllowed() override { return getCommandLineParameters().contains("--test-root"); }
+    bool moreThanOneInstanceAllowed() override { return getCommandLineParameters().contains("--test-root") || getCommandLineParameters().contains("--self-test-record"); }
     void initialise(const juce::String& commandLine) override
     {
         auto args = juce::StringArray::fromTokens(commandLine, true); for (auto& arg : args) arg = arg.unquoted();
-        juce::String rootPath, projectPath, openPath; bool invalid = false;
+        juce::String rootPath, projectPath, openPath, demoDevices, demoReport;
+        int demoIterations = 0, demoAsio = -1; bool automation = false, demoArguments = false, invalid = false;
         for (int i = 0; i < args.size(); ++i)
         {
             const auto flag = args[i];
+            if (flag == "--automation") { automation = true; continue; }
+            if ((flag == "--self-test-record" || flag == "--devices" || flag == "--asio-device" || flag == "--report") && i + 1 < args.size())
+            {
+                demoArguments = true;
+                const auto value = args[++i];
+                if (flag == "--self-test-record" || flag == "--asio-device")
+                {
+                    const auto number = value.toStdString(); auto& destination = flag == "--self-test-record" ? demoIterations : demoAsio;
+                    const auto parsed = std::from_chars(number.data(), number.data() + number.size(), destination);
+                    if (parsed.ec != std::errc{} || parsed.ptr != number.data() + number.size()) invalid = true;
+                }
+                else if (flag == "--devices") demoDevices = value; else demoReport = value;
+                continue;
+            }
             if ((flag == "--test-root" || flag == "--new-project" || flag == "--open-project") && i + 1 < args.size())
             {
                 auto& destination = flag == "--test-root" ? rootPath : flag == "--new-project" ? projectPath : openPath;
@@ -67,7 +83,7 @@ public:
             else if (args.size() == 1 && juce::File::isAbsolutePath(flag) && flag.endsWithIgnoreCase(ProductIdentity::projectExtension())) openPath = flag;
             else invalid = true;
         }
-        if (rootPath.isNotEmpty() || projectPath.isNotEmpty())
+        if ((rootPath.isNotEmpty() || projectPath.isNotEmpty()) && !automation && !demoArguments)
         {
             int result = 2;
             if (!invalid && rootPath.isNotEmpty() && projectPath.isNotEmpty() && openPath.isEmpty())
@@ -79,8 +95,11 @@ public:
         }
         if (invalid) { setApplicationReturnValue(2); quit(); return; }
         lookAndFeel = std::make_unique<RecorderLookAndFeel>(); juce::LookAndFeel::setDefaultLookAndFeel(lookAndFeel.get());
-        settings = std::make_unique<RecorderSettings>(); const auto loaded = settings->load();
+        if ((automation || demoArguments) && (demoIterations < 1 || demoIterations > 1000 || demoAsio < 0 || demoDevices.isEmpty() || demoReport.isEmpty() || openPath.isNotEmpty() || projectPath.isNotEmpty())) { setApplicationReturnValue(2); quit(); return; }
+        if (demoIterations && rootPath.isEmpty()) rootPath = juce::File::getCurrentWorkingDirectory().getChildFile(demoReport).getParentDirectory().getChildFile("demo-settings-" + juce::Uuid().toString()).getFullPathName();
+        settings = std::make_unique<RecorderSettings>(rootPath.isEmpty() ? juce::File() : juce::File(rootPath)); const auto loaded = settings->load();
         document = std::make_unique<RecorderDocument>(); window = std::make_unique<MainWindow>(*document, *settings);
+        if (demoIterations) { window->content().startDemo(demoIterations, juce::File::getCurrentWorkingDirectory().getChildFile(demoDevices), demoAsio, juce::File::getCurrentWorkingDirectory().getChildFile(demoReport)); return; }
         if (loaded.failed()) window->content().showError(loaded.getErrorMessage());
         if (openPath.isNotEmpty()) window->content().openProject(juce::File(openPath));
         else if (loaded.wasOk() && !settings->get().recentProjects.isEmpty()) window->content().openProject(juce::File(settings->get().recentProjects[0]));

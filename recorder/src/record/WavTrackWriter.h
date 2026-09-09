@@ -1,5 +1,6 @@
 #pragma once
 #include "storage/RecordingJournal.h"
+#include "media/PeakCache.h"
 #include <memory>
 #include <functional>
 
@@ -33,6 +34,7 @@ public:
         // One entry per packed channel; logical microphone IDs need not be dense.
         std::vector<unsigned> logicalMicrophones;
         std::uint64_t testChunkFrames = 0; // Nonzero only with a fault adapter; production remains 30s.
+        std::shared_ptr<PeakCache> peakCache; // derived min/max, accumulated on this writer worker
     };
     explicit WavTrackWriter(Config); // Allocates/touches the entire four-second PCM queue.
     ~WavTrackWriter();

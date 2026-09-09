@@ -23,6 +23,8 @@ juce::String encode(const UserSettings& s)
     }
     juce::Array<juce::var> inputs; for (const int input : s.physicalInputs) inputs.add(input);
     p.setValue("physicalInputs", juce::JSON::toString(inputs, true));
+    for (size_t i = 0; i < 8; ++i)
+    { p.setValue(key("microphoneName", i), s.microphoneNames[i]); p.setValue(key("microphoneArmed", i), s.microphoneArmed[i]); }
     p.setValue("outputMono", s.output.mono); p.setValue("outputLeft", s.output.left); p.setValue("outputRight", s.output.right); p.setValue("outputMonoChannel", s.output.monoChannel);
     p.setValue("inputOffsetSamples", static_cast<juce::int64>(s.calibration.inputOffsetSamples)); p.setValue("outputOffsetSamples", static_cast<juce::int64>(s.calibration.outputOffsetSamples));
     p.setValue("calibrationDate", s.calibration.calibrationDate); p.setValue("calibrationIdentity", s.calibration.calibrationIdentity); p.setValue("calibrationAsioDeviceId", s.calibration.asioDeviceId);
@@ -61,6 +63,8 @@ juce::Result decode(const juce::String& text, UserSettings& out)
         s.calibration.cameraOffsetSamples[i] = number(key("cameraOffsetSamples", i), 0);
     }
     const auto inputs = juce::JSON::parse(p.getValue("physicalInputs", "[]"));
+    for (size_t i = 0; i < 8; ++i)
+    { s.microphoneNames[i] = p.getValue(key("microphoneName", i)); s.microphoneArmed[i] = boolean(key("microphoneArmed", i), true); }
     const auto calibrationInputs = juce::JSON::parse(p.getValue("calibrationPhysicalInputs", "[]"));
     const auto recent = juce::JSON::parse(p.getValue("recentProjects", "[]"));
     if (!inputs.isArray() || !calibrationInputs.isArray() || !recent.isArray()) return juce::Result::fail(ko("설정의 입력 또는 최근 프로젝트 목록이 잘못되었습니다."));
@@ -85,7 +89,7 @@ juce::Result UserSettings::validate() const
 {
     const auto mapping = output.validate(); if (mapping.failed()) return mapping;
     if (bufferSize <= 0 || preferredSampleRate == 0 || physicalInputs.size() > 8) return juce::Result::fail(ko("오디오 장치 설정이 잘못되었습니다."));
-    std::set<int> seen; for (const int input : physicalInputs) if (input < 0 || !seen.insert(input).second) return juce::Result::fail(ko("물리 입력이 중복되었거나 잘못되었습니다."));
+    std::set<int> seen; for (const int input : physicalInputs) if (input < -1 || input > 255 || (input >= 0 && !seen.insert(input).second)) return juce::Result::fail(ko("물리 입력이 중복되었거나 잘못되었습니다."));
     if (cameraEnabled[0] && cameraEnabled[1] && cameraDeviceIds[0].isNotEmpty() && cameraDeviceIds[0] == cameraDeviceIds[1]) return juce::Result::fail(ko("같은 카메라를 두 번 선택할 수 없습니다."));
     for (const auto& path : recentProjects) if (!juce::File::isAbsolutePath(path)) return juce::Result::fail(ko("최근 프로젝트 위치가 잘못되었습니다."));
     return juce::Result::ok();

@@ -247,3 +247,14 @@ target_link_libraries(RecorderCore PUBLIC RecorderModel)
 target_sources(RecorderProbe PRIVATE tools/PlaybackProbe.cpp)
 target_sources(RecorderTests PRIVATE tests/PlaybackTests.cpp)
 add_test(NAME RecorderPlaybackEngine COMMAND RecorderTests --suite playback-engine)
+
+# Round 12: app/device/UI wiring. Append only; keep the shared test entry point.
+target_sources(RecorderCore PRIVATE src/media/PeakCache.cpp src/media/ThumbnailCache.cpp
+    src/app/RecorderSession.cpp src/ui/UiState.cpp)
+target_sources(Recorder PRIVATE src/ui/RecordView.cpp src/ui/TimelineView.cpp
+    src/ui/RecorderTransportBar.cpp src/ui/AudioSettingsPanel.cpp src/ui/CameraSettingsPanel.cpp
+    src/ui/ProjectDialogs.cpp src/ui/DemoAutomation.cpp)
+target_link_libraries(Recorder PRIVATE RecorderCore juce::juce_gui_extra)
+target_sources(RecorderProbe PRIVATE tools/DemoProbe.cpp)
+target_sources(RecorderTests PRIVATE tests/UiWiringTests.cpp)
+add_test(NAME RecorderUiWiring COMMAND RecorderTests --suite ui-wiring)

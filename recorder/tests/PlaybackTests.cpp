@@ -305,9 +305,9 @@ int runPlaybackTests()
         transport.processOutput(stamp(100), l, r); require(transport.snapshot().state == TransportState::ready, "Paused seek did not cue");
         transport.pause(); transport.processOutput(stamp(200), l, r); require(transport.snapshot().state == TransportState::paused, "Pause state");
         transport.stop(); transport.processOutput(stamp(300), l, r); queue.reset(); transport.prepared(0, false);
-        transport.processOutput(stamp(400), l, r); require(transport.snapshot().state == TransportState::stopped && transport.snapshot().frozenSample == 0, "Stop did not return to zero");
+        transport.processOutput(stamp(400), l, r); require(transport.snapshot().state == TransportState::stopped && transport.snapshot().frozenSample == 300, "Stop did not retain current position");
         transport.goToStart(); transport.processOutput(stamp(500), l, r); transport.prepared(0, false);
-        transport.processOutput(stamp(600), l, r); require(transport.snapshot().state == TransportState::ready, "Beginning did not cue first frame");
+        transport.processOutput(stamp(600), l, r); require(transport.snapshot().state == TransportState::ready && transport.snapshot().frozenSample == 0, "Beginning did not cue first frame");
         transport.prepared(650, true); transport.processOutput(stamp(700), l, r);
         require(transport.snapshot().state == TransportState::buffering && transport.snapshot().firstBlockQpc == 0, "Missed reservation silently started late");
     });

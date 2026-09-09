@@ -267,6 +267,7 @@ struct WavTrackWriter::Impl
                 }
                 if (!io(t.file.write(packed.data() + offset, bytes - offset))) return false;
             }
+            if (config.peakCache) config.peakCache->append(pcm + std::size_t(consumed) * config.mics, frames, total);
             consumed += frames; inChunk += frames; written.store(total + frames, std::memory_order_release); dirty = true;
             if ((total + frames) % config.sampleRate == 0 && !checkpoint()) return false;
         }
@@ -316,6 +317,7 @@ struct WavTrackWriter::Impl
         catch (const std::exception& e) { fail(Error::internal, juce::String::fromUTF8(e.what())); }
         catch (...) { fail(Error::internal, "Unknown writer worker exception"); }
         closeTracks(); io(journal.close());
+        if (config.peakCache) config.peakCache->finish();
         if (failure.load(std::memory_order_acquire) == Error::none) current.store(State::stopped, std::memory_order_release);
         if (!announced) ready.set_value(result());
     }

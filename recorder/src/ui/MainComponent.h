@@ -1,64 +1,62 @@
 #pragma once
-#include "RecorderLookAndFeel.h"
-#include "../app/RecorderDocument.h"
-#include "../app/RecorderSettings.h"
-#include <juce_gui_basics/juce_gui_basics.h>
+#include "RecordView.h"
+#include "TimelineView.h"
+#include "AudioSettingsPanel.h"
+#include "CameraSettingsPanel.h"
+#include "app/RecorderSession.h"
 
 namespace gocue::recorder
 {
-class MainComponent : public juce::Component, private juce::Timer
+class MainComponent : public juce::Component, private juce::Timer, private juce::KeyListener
 {
 public:
     MainComponent(RecorderDocument&, RecorderSettings&);
     ~MainComponent() override;
-    void paint(juce::Graphics&) override;
     void resized() override;
     void showError(const juce::String&);
     void openProject(const juce::File&);
     void requestClose(std::function<void()>);
+    void createProject(const juce::String&, const juce::File&, unsigned fps);
+    void startDemo(int iterations, const juce::File& devices, int asioDevice, const juce::File& report);
 private:
     struct FileResult
     {
-        juce::Result result = juce::Result::ok();
-        bool opening = false;
-        juce::File file;
-        RecorderProject loaded;
-        CheckpointInfo info;
-        RecorderDocument::Snapshot written;
+        juce::Result result = juce::Result::ok(); bool opening = false;
+        juce::File file; RecorderProject loaded; CheckpointInfo info; RecorderDocument::Snapshot written;
     };
-    class TrackRows : public juce::Component
+    struct Demo
     {
-    public:
-        explicit TrackRows(RecorderDocument& d) : document(d) {}
-        void paint(juce::Graphics&) override;
-        RecorderDocument& document;
+        enum class Step { opening, configuring, ready, recording, waitingPlayback, showingPlayback, finished } step = Step::opening;
+        int iterations = 20, iteration = 0, asioIndex = -1, returnCode = 1;
+        juce::File devices, report, folder;
+        std::int64_t phaseQpc = qpcNow(), stopQpc = 0, clipQpc = 0;
+        juce::Array<juce::var> rows;
+        std::future<juce::Result> writing;
     };
     void timerCallback() override;
-    void refresh();
-    void projectMenu();
-    void chooseProject(bool create);
-    void saveProject();
-    void saveTo(const juce::File&);
-    void beforeSwitch(std::function<void()>);
-    void continueClose();
-    void cameraCard(juce::Graphics&, juce::Rectangle<int>, bool second);
+    bool keyPressed(const juce::KeyPress&, juce::Component*) override;
+    void refresh(); void setTimeline(bool); void recordClicked(); void stopClicked(); void latestClicked();
+    void projectMenu(); void newProjectDialog(); void chooseOpen(); void saveProject(); void saveTo(const juce::File&);
+    void beforeSwitch(std::function<void()>); void showSettings(); void persistSettings(); void continueClose();
+    void demoTick(); void finishDemo(const juce::String&, const juce::String&);
     RecorderDocument& document;
     RecorderSettings& settings;
-    juce::TextButton projectButton {ko("프로젝트")}, recordTab {ko("녹화")}, timelineTab {ko("타임라인")};
-    juce::TextButton normalButton {ko("일반")}, dubButton {ko("더빙")}, settingsButton {ko("설정")}, exportButton {ko("내보내기")};
-    juce::TextButton startButton {ko("녹화 시작")}, markerButton {ko("마커 추가")}, undoButton {ko("실행취소")}, redoButton {ko("다시실행")};
-    juce::Label projectName, statusLabel, errorLabel;
-    juce::Viewport tracksViewport;
-    TrackRows trackRows;
+    RecordView recordView;
+    TimelineView timelineView;
+    RecorderSession session; // joins native host users before RecordView destruction
+    std::unique_ptr<juce::DocumentWindow> settingsWindow, projectWindow;
+    AudioSettingsPanel* audioPanel = nullptr;
+    juce::Label* settingsError = nullptr;
     std::unique_ptr<juce::FileChooser> chooser;
+    std::unique_ptr<Demo> demo;
     std::future<FileResult> fileWork;
     std::future<juce::Result> settingsWork;
     std::future<juce::int64> spaceWork;
     std::function<void()> afterSave, closeAction;
-    bool timeline = false, dub = false, showSettings = false, closingSettings = false, settingsPending = false;
+    bool timeline = false, refreshPending = true, settingsPending = false;
     juce::int64 remainingBytes = -1;
-    int spacePollCountdown = 0;
-    juce::Rectangle<int> leftCamera, rightCamera, lowerArea;
+    std::uint32_t lastUi = 0, lastSpace = 0;
+    std::int64_t lastStopButtonQpc = 0;
     juce::String banner;
     juce::TooltipWindow tooltips {this};
 };

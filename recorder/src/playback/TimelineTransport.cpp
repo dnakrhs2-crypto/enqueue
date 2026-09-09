@@ -45,7 +45,14 @@ void TimelineTransport::pause()
     // the callback does not own yet. That Prepare already quiesces output.
     if (snapshot().generation == requestedGeneration) send({Kind::pause, requestedGeneration, requestedSample, 0});
 }
-void TimelineTransport::stop() { wantPlay = false; seek(0); stopAfterPrepare = true; }
+void TimelineTransport::stop()
+{
+    wantPlay = false;
+    const auto s = snapshot();
+    const auto target = s.generation != requestedGeneration ? requestedSample
+        : s.outputOrigin >= 0 ? audibleCursor(s, rate, frequency, s.callbackQpc) : s.frozenSample;
+    seek(target); stopAfterPrepare = true;
+}
 void TimelineTransport::goToStart() { wantPlay = false; seek(0); }
 void TimelineTransport::scrub(Sample sample, bool released, std::int64_t now)
 {
