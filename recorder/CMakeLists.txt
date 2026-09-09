@@ -91,3 +91,17 @@ foreach(_rec_exe IN ITEMS RecorderProbe RecorderTests)
 endforeach()
 add_test(NAME RecorderCaptureContracts COMMAND RecorderTests)
 message(STATUS "Recorder: pinned LGPL shared FFmpeg ${_recorder_ffmpeg_version}, avcodec ABI 62")
+
+# Round 06 / spike 4A: WAV chunks and durable storage. Keep this block append-only.
+target_sources(RecorderCore PRIVATE src/storage/DurableFile.cpp src/storage/RecordingJournal.cpp src/record/WavTrackWriter.cpp)
+target_sources(RecorderTests PRIVATE tests/JournalTests.cpp tests/WavChunkTests.cpp)
+# Preserve the round-01 runner file; the new storage test file supplies suite routing.
+set_property(SOURCE tests/TestMain.cpp APPEND PROPERTY COMPILE_DEFINITIONS main=recorderRound01TestMain)
+add_test(NAME RecorderJournalDurable COMMAND RecorderTests --suite journal-durable)
+add_executable(RecorderDurabilityProbe tools/DurabilityProbe.cpp)
+target_link_libraries(RecorderDurabilityProbe PRIVATE RecorderCore)
+set_property(TARGET RecorderDurabilityProbe PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+target_compile_options(RecorderDurabilityProbe PRIVATE /utf-8 /W4 /permissive- /EHsc)
+set_target_properties(RecorderDurabilityProbe PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/RecorderDurabilityProbe_artefacts/$<CONFIG>")
+add_custom_command(TARGET RecorderDurabilityProbe POST_BUILD COMMAND ${CMAKE_COMMAND} -E copy_if_different
+    ${_rec_dlls} "$<TARGET_FILE_DIR:RecorderDurabilityProbe>" VERBATIM)

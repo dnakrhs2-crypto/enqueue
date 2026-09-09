@@ -96,18 +96,28 @@ struct CaptureFrameDecoder::State
         else if (mode.colour.range == MFNominalRange_16_235) full = 0;
         else if (mode.colour.range != 0) throw std::runtime_error("Unsupported MF nominal range");
         else { full = mode.subtype == CaptureSubtype::mjpeg ? 1 : 0; assumed = true; }
-        // This spike converts YCbCr matrix/range only. Reject explicit non-SDR/BT.709
-        // primaries rather than relabel HDR/other gamuts as BT.709.
-        if (mode.colour.primaries != 0 && mode.colour.primaries != MFVideoPrimaries_BT709)
-            throw std::runtime_error("Non-BT.709 primaries require a colour-managed path");
-        if (mode.colour.transfer != 0 && mode.colour.transfer != MFVideoTransFunc_709)
-            throw std::runtime_error("Non-BT.709 transfer function is not supported in the SDR spike");
-        if (input.color_primaries != AVCOL_PRI_UNSPECIFIED && input.color_primaries != AVCOL_PRI_BT709)
-            throw std::runtime_error("Decoded non-BT.709 primaries require a colour-managed path");
-        if (input.color_trc != AVCOL_TRC_UNSPECIFIED && input.color_trc != AVCOL_TRC_BT709)
-            throw std::runtime_error("Decoded non-BT.709 transfer function is unsupported");
-        if (mode.colour.primaries == 0 && input.color_primaries == AVCOL_PRI_UNSPECIFIED) assumed = true;
-        if (mode.colour.transfer == 0 && input.color_trc == AVCOL_TRC_UNSPECIFIED) assumed = true;
+        // This spike converts YCbCr matrix/range only. SDR camera gamuts (BT.709, SMPTE 170M / BT.470 BG
+        // as reported by JFIF MJPEG webcams and the GC311G2, sRGB / BT.601 transfer) are treated as the
+        // BT.709 SDR family - the chromaticity difference is negligible for webcams and the alternative
+        // (2026-09-09: rejecting them) stopped the StreamCam-style MJPEG path outright. Only HDR / wide
+        // gamut signalling is rejected rather than relabelled.
+        const auto hdrPrimaries = [] (std::uint32_t p) {
+            return p == MFVideoPrimaries_BT2020 || p == MFVideoPrimaries_XYZ || p == MFVideoPrimaries_DCI_P3 || p == MFVideoPrimaries_ACES;
+        };
+        const auto hdrTransfer = [] (std::uint32_t t) {
+            return t == MFVideoTransFunc_2084 || t == MFVideoTransFunc_HLG || t == MFVideoTransFunc_2020 || t == MFVideoTransFunc_2020_const;
+        };
+        if (hdrPrimaries(mode.colour.primaries))
+            throw std::runtime_error("HDR / wide-gamut primaries require a colour-managed path");
+        if (hdrTransfer(mode.colour.transfer))
+            throw std::runtime_error("HDR transfer function is not supported in the SDR spike");
+        if (input.color_primaries == AVCOL_PRI_BT2020 || input.color_primaries == AVCOL_PRI_SMPTE428 || input.color_primaries == AVCOL_PRI_SMPTE431 || input.color_primaries == AVCOL_PRI_SMPTE432)
+            throw std::runtime_error("Decoded HDR / wide-gamut primaries require a colour-managed path");
+        if (input.color_trc == AVCOL_TRC_SMPTE2084 || input.color_trc == AVCOL_TRC_ARIB_STD_B67 || input.color_trc == AVCOL_TRC_BT2020_10 || input.color_trc == AVCOL_TRC_BT2020_12)
+            throw std::runtime_error("Decoded HDR transfer function is unsupported");
+        // Anything that is not explicitly BT.709 (missing or another SDR gamut) is a documented assumption.
+        if (mode.colour.primaries != MFVideoPrimaries_BT709 && input.color_primaries != AVCOL_PRI_BT709) assumed = true;
+        if (mode.colour.transfer != MFVideoTransFunc_709 && input.color_trc != AVCOL_TRC_BT709) assumed = true;
         output.colourAssumed = assumed;
         colourDecision = std::string("input ") + (matrix == SWS_CS_ITU709 ? "BT.709" : "BT.601") + (full ? " full" : " limited")
             + "; output NV12 BT.709 limited; " + (assumed ? "missing metadata uses documented SDR assumptions (not colour-certified)" : "explicit metadata");
