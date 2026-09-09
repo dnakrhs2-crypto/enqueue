@@ -209,14 +209,14 @@ void rippleStacks(Edit& e, SampleRange r)
         if (last > first) { s.anchorSample = first; s.spanSamples = last - first; }
     }
 }
-ClipEditResult trim(const RecorderProject& p, const std::vector<Id>& requested, Sample t, bool in)
+ClipEditResult trim(const RecorderProject& p, const std::vector<Id>& requested, Sample t, bool in, bool frameSnap)
 {
     return apply(p, [&](Edit& e)
     {
         auto ids = expand(p, requested, false); const auto& reference = *p.findClip(requested.front());
         const auto edge = in ? reference.timelineStartSample : reference.timelineEnd();
         need(t >= 0, "트림 위치는 음수가 될 수 없습니다.");
-        if (hasVideo(p, ids) && t != edge) t = snap(p, t);
+        if (frameSnap && hasVideo(p, ids) && t != edge) t = snap(p, t);
         const auto delta = t - edge;
         const auto stacks = stackIds(p, ids);
         // Match the edited edge across versions. For an outer stack edge each version's
@@ -275,8 +275,8 @@ ClipEditResult ClipEdits::split(const RecorderProject& p, const std::vector<Id>&
         });
     });
 }
-ClipEditResult ClipEdits::trimIn(const RecorderProject& p, const std::vector<Id>& ids, Sample t) { return trim(p, ids, t, true); }
-ClipEditResult ClipEdits::trimOut(const RecorderProject& p, const std::vector<Id>& ids, Sample t) { return trim(p, ids, t, false); }
+ClipEditResult ClipEdits::trimIn(const RecorderProject& p, const std::vector<Id>& ids, Sample t, bool frameSnap) { return trim(p, ids, t, true, frameSnap); }
+ClipEditResult ClipEdits::trimOut(const RecorderProject& p, const std::vector<Id>& ids, Sample t, bool frameSnap) { return trim(p, ids, t, false, frameSnap); }
 ClipEditResult ClipEdits::remove(const RecorderProject& p, const std::vector<Id>& requested)
 { return apply(p, [&](Edit& e) { e.rewrite(expand(p, requested), [](const Clip&) { return std::vector<Clip>{}; }); }); }
 ClipEditResult ClipEdits::remove(const RecorderProject& p, const std::vector<Id>& requested, SampleRange r)
@@ -313,7 +313,7 @@ ClipEditResult ClipEdits::rippleDeleteTracks(const RecorderProject& p, SampleRan
         r = range(p, r, false); checkExternalLinks(p, ids, lanes); cut(e, ids, r, true);
     });
 }
-ClipEditResult ClipEdits::move(const RecorderProject& p, const std::vector<Id>& requested, Sample delta)
+ClipEditResult ClipEdits::move(const RecorderProject& p, const std::vector<Id>& requested, Sample delta, bool frameSnap)
 {
     return apply(p, [&](Edit& e)
     {
@@ -324,7 +324,7 @@ ClipEditResult ClipEdits::move(const RecorderProject& p, const std::vector<Id>& 
         for (const auto& id : requested) { const auto* c = p.findClip(id); if (!anchor && video(p, *c)) anchor = c; }
         for (const auto& t : p.tracks) for (const auto& c : t.clips.items())
             if (!anchor && ids.count(c.clipId) && video(p, c) && p.isActive(c) == p.isActive(*p.findClip(requested.front()))) anchor = &c;
-        if (anchor && delta != 0) delta = add(snap(p, add(anchor->timelineStartSample, delta)), -anchor->timelineStartSample);
+        if (frameSnap && anchor && delta != 0) delta = add(snap(p, add(anchor->timelineStartSample, delta)), -anchor->timelineStartSample);
         e.rewrite(ids, [&](const Clip& c) { auto out = c; out.timelineStartSample = add(c.timelineStartSample, delta); return std::vector<Clip>{out}; });
         for (auto& s : e.p.takeStacks) if (stacks.count(s.stackId)) s.anchorSample = add(s.anchorSample, delta);
     });

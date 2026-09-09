@@ -294,3 +294,16 @@ target_sources(RecorderModel PRIVATE src/playback/RenderPlanCompiler.cpp src/aud
 target_sources(RecorderTests PRIVATE tests/AudioRenderFixtures.cpp tests/AudioCutRenderTests.cpp tests/PlaybackQueueTests.cpp)
 add_test(NAME RecorderAudioCutRender COMMAND RecorderTests --suite audio-cut-render)
 add_test(NAME RecorderAudioPrefetchUnderrun COMMAND RecorderTests --suite audio-prefetch-underrun)
+
+# Round 15: shared headless interaction logic; GUI and probe use the same commands.
+add_library(RecorderTimelineLogic STATIC src/ui/TimelineView.logic.cpp src/ui/TimelineView.automation.cpp)
+target_link_libraries(RecorderTimelineLogic PUBLIC RecorderModel)
+set_property(TARGET RecorderTimelineLogic PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+target_compile_options(RecorderTimelineLogic PRIVATE /utf-8 /W4 /permissive- /EHsc)
+target_sources(Recorder PRIVATE src/ui/ClipInspector.cpp src/ui/TrackHeader.cpp src/ui/MarkerPanel.cpp src/ui/TimelineView.scenario.cpp)
+target_link_libraries(Recorder PRIVATE RecorderTimelineLogic)
+target_sources(RecorderProbe PRIVATE tools/UiProbe.cpp)
+target_link_libraries(RecorderProbe PRIVATE RecorderTimelineLogic)
+target_sources(RecorderTests PRIVATE tests/RippleTests.cpp tests/ReorderTests.cpp tests/MarkerTests.cpp)
+target_link_libraries(RecorderTests PRIVATE RecorderTimelineLogic)
+add_test(NAME RecorderRippleReorderMarkers COMMAND RecorderTests --suite ripple-reorder-markers)

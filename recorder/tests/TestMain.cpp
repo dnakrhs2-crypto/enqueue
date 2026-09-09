@@ -40,6 +40,9 @@ int runUiWiringTests();          // round 12: UI state, settings, derived caches
 int runQueueIsolationTests();    // round 05: two-camera queues, raw-audio stop and pixel oracle
 int runAudioCutRenderTests();    // round 14: independent audio cuts / source masks / microfades
 int runPlaybackQueueTests();     // round 14: prefetch / revision banks / RT allocation hook
+int runRippleTests();
+int runReorderTests();
+int runMarkerTests();
 
 namespace
 {
@@ -52,6 +55,7 @@ int runAsioNativePcm() { const int a = runAsioStampTests(), b = runNativePcmTest
 int runJournalDurable() { const int a = runJournalTests(), b = runWavChunkTests(); return (a || b) ? 1 : 0; }
 int runCutLinkHistory() { const int a = runClipEditTests(), b = runLinkEditTests(), c = runEditHistoryTests(); return (a || b || c) ? 1 : 0; }
 int runAudioImport() { const int a = runAudioImportTests(), b = runImportedClipTests(); return (a || b) ? 1 : 0; }
+int runRippleReorderMarkers() { const int a = runRippleTests(), b = runReorderTests(), c = runMarkerTests(); return (a || b || c) ? 1 : 0; }
 const Suite suites[] = {
     {"audio-cut-render", runAudioCutRenderTests},
     {"audio-prefetch-underrun", runPlaybackQueueTests},
@@ -77,6 +81,7 @@ const Suite suites[] = {
     {"take-stack-edits", runTakeStackTests},
     {"ui-wiring", runUiWiringTests},
     {"queue-isolation", runQueueIsolationTests},
+    {"ripple-reorder-markers", runRippleReorderMarkers},
 };
 int usage()
 {
