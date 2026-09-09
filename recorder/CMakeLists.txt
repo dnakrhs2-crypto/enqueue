@@ -174,3 +174,18 @@ target_compile_options(RecorderCrashHarness PRIVATE /utf-8 /W4 /permissive- /EHs
 set_target_properties(RecorderCrashHarness PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/RecorderCrashHarness_artefacts/$<CONFIG>")
 add_custom_command(TARGET RecorderCrashHarness POST_BUILD COMMAND ${CMAKE_COMMAND} -E copy_if_different
     ${_rec_dlls} "$<TARGET_FILE_DIR:RecorderCrashHarness>" VERBATIM)
+
+# BEGIN Recorder round 04: clocks / calibration / standalone probe (append-only).
+target_sources(RecorderCore PRIVATE
+    src/sync/ClockMapper.cpp src/sync/CameraClockMapper.cpp src/sync/CalibrationProfile.cpp)
+target_sources(RecorderTests PRIVATE tests/ClockMapperTests.cpp)
+add_test(NAME RecorderClockMapping COMMAND RecorderTests --suite clock-mapping)
+add_executable(RecorderClockProbe tools/ClockProbe.cpp)
+target_link_libraries(RecorderClockProbe PRIVATE RecorderCore)
+set_property(TARGET RecorderClockProbe PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+target_compile_options(RecorderClockProbe PRIVATE /utf-8 /W4 /permissive- /EHsc)
+set_target_properties(RecorderClockProbe PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/RecorderClockProbe_artefacts/$<CONFIG>")
+add_custom_command(TARGET RecorderClockProbe POST_BUILD COMMAND ${CMAKE_COMMAND} -E copy_if_different
+    ${_rec_dlls} "$<TARGET_FILE_DIR:RecorderClockProbe>" VERBATIM)
+# END Recorder round 04.

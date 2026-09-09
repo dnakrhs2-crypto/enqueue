@@ -13,6 +13,7 @@ int runCfrSchedulerTests();      // round 02: CFR frame selection / counters
 int runEncoderContractTests();   // round 02: NVENC / MP4 / AAC contracts (no GPU)
 int runAsioStampTests();         // round 03: ASIO BlockStamp bridge statistics
 int runNativePcmTests();         // round 03: native PCM -> PCM24 packing
+int runClockMapperTests();       // round 04: clocks / epochs / calibration / CFR timing
 int runJournalTests();           // round 06: recording journal / durable file
 int runWavChunkTests();          // round 06: WAV chunk writer
 int runProjectTests();           // round 08: project model / serializer / document / undo
@@ -33,6 +34,7 @@ const Suite suites[] = {
     {"cfr-scheduler", runCfrSchedulerTests},
     {"encoder-contract", runEncoderContractTests},
     {"asio-native-pcm", runAsioNativePcm},
+    {"clock-mapping", runClockMapperTests},
     {"journal-durable", runJournalDurable},
     {"wav-chunks", runWavChunkTests},
     {"project-roundtrip", runProjectTests},
