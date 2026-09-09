@@ -16,12 +16,14 @@ public:
 private:
     void timerCallback() override;
     void modesFor(unsigned);
+    void selectionChanged(unsigned, bool enabling);
     UserSettings initial;
     std::vector<CameraDevice> cameras;
     std::future<std::vector<CameraDevice>> work;
     std::array<juce::ToggleButton, 2> enabled;
     std::array<juce::ComboBox, 2> devices, modes;
     std::array<juce::Label, 2> modeLabels, ids;
-    juce::Label fps, status, calibration;
+    std::array<int, 2> acceptedDevices{};
+    juce::Label fps, status, calibration, nextTake;
 };
 }

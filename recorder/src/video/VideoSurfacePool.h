@@ -22,6 +22,10 @@ class VideoSurfacePool
 public:
     static constexpr int none = -1;
     static constexpr size_t size = 3; // producer + latest mailbox + presenter
+    struct Snapshot
+    {
+        std::uint64_t acquired = 0, published = 0, consumed = 0, overwritten = 0, exhausted = 0;
+    };
     VideoSurfacePool(std::uint32_t width, std::uint32_t height);
     int acquireWrite() noexcept;
     // Returns true when an unconsumed mailbox frame was replaced; frees it on the producer.
@@ -38,10 +42,12 @@ public:
     }
     void release(int index) noexcept;
     VideoSurface& surface(int index) noexcept { return surfaces[static_cast<size_t>(index)]; }
+    Snapshot snapshot() const noexcept;
 private:
     enum State { free, writing, mailbox, presenting };
     std::array<VideoSurface, size> surfaces;
     std::array<std::atomic<int>, size> states{};
     std::atomic<int> latest{none};
+    std::atomic<std::uint64_t> acquired{0}, publications{0}, consumed{0}, overwritten{0}, exhausted{0};
 };
 }

@@ -21,7 +21,7 @@ void RecordView::CameraCard::paint(juce::Graphics& g)
 void RecordView::CameraCard::resized()
 {
     const auto a = getLocalBounds().reduced(8).withTrimmedTop(28);
-    const auto w = juce::jmin(a.getWidth(), a.getHeight() * 16 / 9), h = w * 9 / 16;
+    const auto w = juce::jmax(0, juce::jmin(a.getWidth(), a.getHeight() * 16 / 9)), h = w * 9 / 16;
     host.setBounds(juce::Rectangle<int>(w, h).withCentre(a.getCentre())); ensureHost();
 }
 RecordView::Microphone::Microphone()
@@ -44,6 +44,8 @@ RecordView::RecordView()
     for (auto* l : {&projectName, &statusLabel, &errorLabel, &noMicrophones}) { addAndMakeVisible(l); l->setFont(juce::Font(juce::FontOptions(17))); }
     projectName.setFont(juce::Font(juce::FontOptions(20, juce::Font::bold))); errorLabel.setColour(juce::Label::textColourId, Palette::danger);
     for (auto& cam : cameras) addAndMakeVisible(cam);
+    setCamera(0, ko("캠1"), ko("캠1 연결 안 됨 · 설정에서 연결"), false);
+    setCamera(1, ko("캠2"), ko("캠2 사용 안 함 · 설정에서 연결"), false);
     addAndMakeVisible(microphoneViewport); microphoneViewport.setViewedComponent(&strips, false); microphoneViewport.setScrollBarsShown(false, true);
     for (unsigned i = 0; i < 8; ++i)
     {
@@ -60,13 +62,22 @@ std::array<void*, 2> RecordView::nativeHosts()
 { for (auto& cam : cameras) cam.ensureHost(); return {cameras[0].host.getHWND(), cameras[1].host.getHWND()}; }
 void RecordView::setCamera(unsigned i, const juce::String& caption, const juce::String& placeholder, bool visible)
 {
-    auto& c = cameras.at(i); if (c.caption == caption && c.placeholder == placeholder && c.showVideo == visible) return;
-    c.caption = caption; c.placeholder = placeholder; c.showVideo = visible; c.host.setVisible(visible); c.repaint();
+    auto& c = cameras.at(i);
+    if (visible && placeholder != ko("영상 없음")) c.liveSeen = true;
+    const auto state = i == 1 && placeholder == ko("카메라 연결 준비 전")
+        ? (c.liveSeen ? ko("캠2 연결 끊김") : ko("캠2 사용 안 함 · 설정에서 연결")) : placeholder;
+    if (c.caption == caption && c.placeholder == state && c.showVideo == visible) return;
+    c.caption = caption; c.placeholder = state; c.showVideo = visible; c.host.setVisible(visible); c.repaint();
 }
 void RecordView::update(const RecorderUiState& ui, const RecorderProject& p, const UserSettings& s, const juce::String& status,
                         const juce::String& banner, Sample elapsed, juce::int64 remaining, bool isTimeline)
 {
     const auto oldCount = stripCount; const auto wasTimeline = timeline; timeline = isTimeline;
+    for (unsigned i = 0; i < 2; ++i)
+    {
+        const auto key = s.cameraEnabled[i] ? s.cameraDeviceIds[i] + "\n" + s.cameraModes[i] : juce::String();
+        if (cameraConfiguration[i] != key) { cameraConfiguration[i] = key; cameras[i].liveSeen = false; }
+    }
     projectName.setText(p.name, juce::dontSendNotification); projectName.setTooltip(p.name);
     statusLabel.setText((ui.live ? ko("녹화 중   ·   ") : juce::String()) + formatRecorderTime(elapsed, p.Fs) + "   ·   "
         + (remaining < 0 ? ko("남은 공간 확인 중") : ko("남은 공간 ") + juce::String(double(remaining) / 1000000000.0, 1) + "GB") + "   ·   " + status, juce::dontSendNotification);

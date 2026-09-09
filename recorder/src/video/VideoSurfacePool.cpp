@@ -18,9 +18,9 @@ int VideoSurfacePool::acquireWrite() noexcept
     for (size_t i = 0; i < size; ++i)
     {
         int expected = free;
-        if (states[i].compare_exchange_strong(expected, writing, std::memory_order_acquire)) return static_cast<int>(i);
+        if (states[i].compare_exchange_strong(expected, writing, std::memory_order_acquire)) { ++acquired; return static_cast<int>(i); }
     }
-    return none;
+    ++exhausted; return none;
 }
 bool VideoSurfacePool::publish(int index) noexcept
 {
@@ -28,12 +28,12 @@ bool VideoSurfacePool::publish(int index) noexcept
     states[static_cast<size_t>(index)].store(mailbox, std::memory_order_relaxed);
     const int old = latest.exchange(index, std::memory_order_acq_rel);
     if (old != none) states[static_cast<size_t>(old)].store(free, std::memory_order_release);
-    return old != none;
+    ++publications; if (old != none) ++overwritten; return old != none;
 }
 int VideoSurfacePool::takeLatest() noexcept
 {
     const int index = latest.exchange(none, std::memory_order_acquire);
-    if (index != none) states[static_cast<size_t>(index)].store(presenting, std::memory_order_relaxed);
+    if (index != none) { states[static_cast<size_t>(index)].store(presenting, std::memory_order_relaxed); ++consumed; }
     return index;
 }
 void VideoSurfacePool::release(int index) noexcept
@@ -41,4 +41,6 @@ void VideoSurfacePool::release(int index) noexcept
     assert(index >= 0 && static_cast<size_t>(index) < size);
     states[static_cast<size_t>(index)].store(free, std::memory_order_release);
 }
+VideoSurfacePool::Snapshot VideoSurfacePool::snapshot() const noexcept
+{ return {acquired.load(), publications.load(), consumed.load(), overwritten.load(), exhausted.load()}; }
 }

@@ -1,9 +1,55 @@
 #include "CameraCatalog.h"
+#include "app/RecorderSettings.h"
 #include <charconv>
 #include <sstream>
 
 namespace gocue::recorder
 {
+bool CameraCatalog::sameDevice(const std::string& a, const std::string& b)
+{
+    return !a.empty() && !b.empty() && juce::String::fromUTF8(a.c_str()).equalsIgnoreCase(juce::String::fromUTF8(b.c_str()));
+}
+juce::Result CameraCatalog::configure(const UserSettings& settings)
+{
+    const auto valid = settings.validate(); if (valid.failed()) return valid;
+    if (settings.cameraEnabled[0] && settings.cameraEnabled[1]
+        && sameDevice(settings.cameraDeviceIds[0].toStdString(), settings.cameraDeviceIds[1].toStdString()))
+        return juce::Result::fail(juce::String::fromUTF8("같은 카메라를 두 번 선택할 수 없습니다."));
+    for (unsigned i = 0; i < 2; ++i)
+    {
+        auto& s = slots[i]; const auto link = settings.cameraDeviceIds[i].toStdString(), mode = settings.cameraModes[i].toStdString();
+        if (s.enabled == settings.cameraEnabled[i] && (s.symbolicLink == link || sameDevice(s.symbolicLink, link)) && s.nativeMode == mode) continue;
+        s.enabled = settings.cameraEnabled[i]; s.symbolicLink = link; s.nativeMode = mode; s.mode.reset(); ++s.generation;
+        s.status = s.enabled && !link.empty() ? CameraSlotStatus::missing : CameraSlotStatus::disabled;
+    }
+    return juce::Result::ok();
+}
+void CameraCatalog::refresh(const std::vector<CameraDevice>& devices)
+{
+    for (auto& s : slots)
+    {
+        if (!s.enabled || s.symbolicLink.empty()) continue;
+        const auto previous = s.status; s.mode.reset();
+        s.status = previous == CameraSlotStatus::ready || previous == CameraSlotStatus::disconnected
+            ? CameraSlotStatus::disconnected : CameraSlotStatus::missing;
+        for (const auto& d : devices) if (sameDevice(d.symbolicLink, s.symbolicLink))
+        {
+            s.status = CameraSlotStatus::modeUnavailable;
+            if (!d.unavailableReason.empty()) break;
+            // Match the saved signal, never the transient native type index.
+            for (const auto& mode : d.modes) if (mode.text() == s.nativeMode && mode.width == 1920 && mode.height == 1080)
+            { s.mode = mode; s.status = CameraSlotStatus::ready; break; }
+            break;
+        }
+        if (s.status != previous) ++s.generation;
+    }
+}
+void CameraCatalog::disconnected(unsigned index)
+{
+    auto& s = slots.at(index);
+    if (s.enabled && s.status != CameraSlotStatus::disconnected)
+    { s.status = CameraSlotStatus::disconnected; s.mode.reset(); ++s.generation; }
+}
 namespace
 {
 std::uint32_t parsePositive(const std::string& text)

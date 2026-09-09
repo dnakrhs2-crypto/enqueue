@@ -171,6 +171,7 @@ struct MfCameraCapture::State
     VideoSurfacePool& pool;
     std::shared_ptr<CallbackState> callback;
     std::atomic<bool> stopRequested{false}, done{true};
+    std::atomic<bool> faulted{false};
     std::thread worker;
     std::string error, colour;
     std::function<void(const VideoSurface&)> recordSink;
@@ -301,6 +302,7 @@ struct MfCameraCapture::State
             }
             catch (...)
             {
+                faulted = true;
                 if (!openReported) { opened.set_exception(std::current_exception()); openReported = true; }
                 try { throw; } catch (const std::exception& e) { error = e.what(); }
             }
@@ -329,6 +331,7 @@ struct MfCameraCapture::State
         }
         catch (...)
         {
+            faulted = true;
             if (!openReported) opened.set_exception(std::current_exception());
             try { throw; } catch (const std::exception& e) { error = e.what(); }
         }
@@ -338,12 +341,12 @@ struct MfCameraCapture::State
 MfCameraCapture::MfCameraCapture(std::shared_ptr<CaptureTelemetry> t, VideoSurfacePool& pool, std::function<void(const VideoSurface&)> sink)
     : state(std::make_unique<State>(std::move(t), pool, std::move(sink))) {}
 MfCameraCapture::~MfCameraCapture() { stop(); }
-CaptureOpenInfo MfCameraCapture::start(const std::string& link, CameraMode mode, bool mfDecode, int threads, std::shared_future<void> measurementStart)
+CaptureOpenInfo MfCameraCapture::start(const std::string& link, CameraMode mode, bool mfDecode, int threads, std::shared_future<void> measurementStart, std::uint64_t deviceGeneration)
 {
     if (state->worker.joinable()) throw std::logic_error("Capture instance is single-use");
     static std::atomic<std::uint64_t> generation{0};
     state->callback = std::make_shared<CallbackState>(*state->telemetry);
-    state->callback->generation = ++generation;
+    state->callback->generation = deviceGeneration ? deviceGeneration : ++generation;
     state->done.store(false);
     std::promise<CaptureOpenInfo> promise;
     auto future = promise.get_future();
@@ -357,6 +360,12 @@ void MfCameraCapture::stop()
     if (state->worker.joinable()) state->worker.join();
 }
 bool MfCameraCapture::finished() const noexcept { return state->done.load(); }
+bool MfCameraCapture::failureDetected() const noexcept
+{
+    return state->faulted.load() || FAILED(state->telemetry->sourceStatus.load())
+        || state->telemetry->count(LossReason::endOfStream) != 0;
+}
+std::uint64_t MfCameraCapture::generation() const noexcept { return state->callback ? state->callback->generation : 0; }
 const std::string& MfCameraCapture::error() const noexcept { return state->error; }
 const std::string& MfCameraCapture::colourDecision() const noexcept { return state->colour; }
 }

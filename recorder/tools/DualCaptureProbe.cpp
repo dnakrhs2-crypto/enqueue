@@ -2,6 +2,7 @@
 #include "FramePatternSource.h"
 #include "capture/MfCameraCapture.h"
 #include "record/EncodePipeline.h"
+#include "record/TakeController.h"
 #include "video/PreviewPresenter.h"
 #include "video/PresentPacing.h"
 #include "support/ThreadPriority.h"
@@ -25,6 +26,7 @@ struct Options
     unsigned fps = 60, seconds = 60, stallMs = 0, contention = 0;
     int asioDevice = 0;
     bool cam2Synthetic = false;
+    bool toggleCamera2 = false, headless = false;
     CaptureSubtype formats[2]{CaptureSubtype::nv12, CaptureSubtype::mjpeg};
     std::string devices, report;
 };
@@ -37,14 +39,15 @@ unsigned integer(const std::string& text, unsigned minimum, unsigned maximum)
 Options parse(int argc, wchar_t** argv)
 {
     Options o; std::set<std::string> seen;
-    const std::set<std::string> flags{"--synthetic", "--synthetic-audio", "--headroom", "--help"};
+    const std::set<std::string> flags{"--synthetic", "--synthetic-audio", "--headroom", "--help", "--toggle-camera2", "--headless"};
     const std::set<std::string> values{"--devices", "--cam2", "--project-fps", "--seconds", "--stall-ms", "--cpu-contention", "--report", "--asio-device", "--cam1-format", "--cam2-format"};
     for (int i = 1; i < argc; ++i)
     {
         const auto key = juce::String(argv[i]).toStdString();
         if (!seen.insert(key).second) throw std::invalid_argument("Duplicate option: " + key);
         if (flags.count(key))
-        { if (key == "--synthetic") o.synthetic = true; if (key == "--synthetic-audio") o.syntheticAudio = true; if (key == "--headroom") o.headroom = true; if (key == "--help") o.help = true; continue; }
+        { if (key == "--synthetic") o.synthetic = true; if (key == "--synthetic-audio") o.syntheticAudio = true; if (key == "--headroom") o.headroom = true; if (key == "--help") o.help = true;
+          if (key == "--toggle-camera2") o.toggleCamera2 = true; if (key == "--headless") o.headless = true; continue; }
         if (!values.count(key) || ++i == argc) throw std::invalid_argument("Unknown/incomplete option: " + key);
         const auto value = juce::String(argv[i]).toStdString();
         if (key == "--devices") o.devices = value;
@@ -62,6 +65,9 @@ Options parse(int argc, wchar_t** argv)
         }
     }
     if (o.help) return o;
+    if (o.headless && !o.toggleCamera2) throw std::invalid_argument("--headless requires --toggle-camera2 (product lifecycle diagnostics)");
+    if (o.toggleCamera2 && (o.seconds < 8 || o.headroom || o.stallMs || o.contention || seen.count("--asio-device")))
+        throw std::invalid_argument("--toggle-camera2 requires >=8 seconds; uses the product take path and synthetic PCM clock; use the round-05 path for ASIO/stall/contention");
     if (o.report.empty()) throw std::invalid_argument("--report FILE is required; media is saved beside the report in a unique take directory");
     if (o.headroom)
     {
@@ -240,6 +246,245 @@ void headroom(const Options& o, juce::var& report)
     jsonSet(report, "processCpuPercentOneCore", (cpuEnd - cpu) / (elapsed * 100000));
     jsonSet(report, "definition", "Two concurrent independent h264_nvenc P5 sessions, prepared changing 1080p NV12 banks. Sum of frames divided by common wall time including both drains. No capture/preview/CFR/PCM/AAC/mux/disk; content-specific, not the simultaneous-load gate.");
     status(report, !abort && fps >= 156 ? "PASS" : "FAIL", abort ? "An encoder failed; inspect both lane reports" : "Two-session synthetic encode headroom measured");
+}
+// Round 24 exercises the same take controller as the product. Audio is an
+// explicit synthetic native PCM fixture; no ASIO/USB/optical certification.
+class ProductAudioFeed
+{
+public:
+    explicit ProductAudioFeed(RecorderAudioEngine& a) : audio(a)
+    {
+        worker = std::thread([this]
+        {
+            ScopedRecorderPriority priority(RecorderThreadRole::capturePreview);
+            constexpr unsigned frames = 480;
+            const auto origin = qpcNow(); const auto start = std::chrono::steady_clock::now();
+            std::int64_t sample = 0; std::uint64_t sequence = 0;
+            std::array<std::array<std::uint8_t, frames * 3>, 8> pcm{};
+            std::array<NativeInputView, 8> views{}; std::array<float, frames> input{}, left{}, right{};
+            std::array<const float*, 8> inputs{}; float* outputs[]{left.data(), right.data()};
+            for (unsigned i = 0; i < 8; ++i) { views[i] = {pcm[i].data(), int(i), int(i), nativeFormatForAsio(17)}; inputs[i] = input.data(); }
+            while (!stop.load())
+            {
+                for (unsigned c = 0; c < 8; ++c) for (unsigned i = 0; i < frames; ++i)
+                    WavTrackWriter::packPcm24(int((sample + i) % 480) * (int(c) + 1) * 100, pcm[c].data() + i * 3);
+                BlockStamp stamp{}; stamp.flags = samplePositionValid; stamp.sequence = sequence++; stamp.samplePosition = sample;
+                stamp.sampleRate = 48000; stamp.numSamples = frames; stamp.callbackQpc = origin + sample * qpcFrequency() / 48000;
+                audio.processBlock(stamp, views.data(), 8, inputs.data(), outputs, 2); sample += frames;
+                std::this_thread::sleep_until(start + std::chrono::nanoseconds(sample * 1000000000LL / 48000));
+            }
+        });
+    }
+    ~ProductAudioFeed() { stop = true; if (worker.joinable()) worker.join(); }
+private:
+    RecorderAudioEngine& audio;
+    std::atomic<bool> stop{false};
+    std::thread worker;
+};
+void productDualLoad(const Options& o, juce::var& report)
+{
+    const auto check = [](bool condition, const char* message) { if (!condition) throw std::runtime_error(message); };
+    const auto ok = [](const juce::Result& r) { if (r.failed()) throw std::runtime_error(r.getErrorMessage().toStdString()); };
+    juce::var selected;
+    if (!o.devices.empty())
+    {
+        if (!file(o.devices).existsAsFile()) throw std::invalid_argument("devices.json is absent");
+        ok(juce::JSON::parse(file(o.devices).loadFileAsString(), selected));
+        if (int(selected["schemaVersion"]) != 1) throw std::invalid_argument("Invalid devices.json schemaVersion");
+    }
+    UserSettings settings; settings.cameraEnabled = {true, false};
+    std::array<CameraMode, 2> modes;
+    std::array<bool, 2> synthetic{o.synthetic, o.synthetic || o.cam2Synthetic};
+    std::vector<CameraDevice> devices;
+    for (unsigned i = 0; i < 2; ++i)
+    {
+        const auto name = i ? "cam2" : "cam1";
+        if (synthetic[i])
+        {
+            settings.cameraDeviceIds[i] = juce::String("synthetic:") + name;
+            modes[i] = CameraMode::parse(std::string(subtypeName(o.formats[i])) + " 1920x1080 " + (i ? "30/1" : "60/1"));
+        }
+        else
+        {
+            const auto selection = selected["selections"][juce::Identifier(name)];
+            settings.cameraDeviceIds[i] = selection["symbolicLink"].toString();
+            if (settings.cameraDeviceIds[i].isEmpty()) throw std::invalid_argument(std::string("devices.json has no ") + name + " symbolicLink");
+            modes[i] = CameraMode::parse(selection["mode"].toString().toStdString());
+        }
+        settings.cameraModes[i] = modes[i].text();
+        CameraDevice d; d.symbolicLink = settings.cameraDeviceIds[i].toStdString(); d.modes.push_back(modes[i]); devices.push_back(d);
+    }
+    CameraCatalog catalog; ok(catalog.configure(settings)); catalog.refresh(devices);
+    const auto directory = file(o.report).getParentDirectory().getChildFile("product-dual-" + juce::Uuid().toString()); ok(directory.createDirectory());
+    jsonSet(report, "mediaDirectory", directory.getFullPathName()); jsonSet(report, "pipeline", "product TakeController / MfCameraCapture or FramePatternSource");
+    jsonSet(report, "audioSource", "synthetic native PCM24, 8 channels, 48000 Hz; product RecorderAudioEngine/WAV/AAC");
+    jsonSet(report, "previewMeasurement", o.headless ? "CPU latest mailbox consumption; D3D/optical latency UNAVAILABLE" : "Independent D3D11 presenters; optical latency UNAVAILABLE");
+    RecorderDocument document; document.newProject("Round 24 dual preview", 48000, {o.fps, 1});
+    RecorderAudioEngine audio; std::array<int, 8> inputs{0,1,2,3,4,5,6,7}; ok(audio.setInputMap(inputs));
+    ok(audio.openSynthetic(48000, 480, 8, 2)); for (unsigned i = 0; i < 8; ++i) ok(audio.arm(i, true));
+    ProductAudioFeed feed(audio); TakeController take(document, audio); MfRuntime mf;
+    std::unique_ptr<DualWindow> window; if (!o.headless) window = std::make_unique<DualWindow>();
+    std::array<std::unique_ptr<Camera>, 2> cameras;
+    std::array<std::atomic<std::int64_t>, 2> sourceOrigins{};
+    std::array<unsigned, 2> sourceStarts{};
+    juce::Array<juce::var> events, takes, queueTrace, sourceReports;
+    bool started = false; double nextTrace = 0; const auto wallStart = qpcNow();
+    auto event = [&](const char* text)
+    { auto e = jsonObject(); jsonSet(e, "event", text); jsonSet(e, "sample", audio.currentSample()); jsonSet(e, "cam2Generation", jsonInt(catalog.slot(1).generation)); events.add(e); };
+    auto service = [&]
+    {
+        if (window) { window->pump(); check(!window->cancelled, "User cancelled dual-preview experiment"); }
+        else for (auto& c : cameras) if (c && c->pool) c->pool->uploadLatest([](const VideoSurface&) {});
+        take.tick();
+        const auto elapsed = double(qpcNow() - wallStart) / qpcFrequency();
+        if (elapsed >= nextTrace)
+        {
+            auto row = jsonObject(); jsonSet(row, "seconds", elapsed);
+            for (unsigned i = 0; i < 2; ++i)
+            {
+                const auto q = take.cameraQueues(i); auto v = jsonObject();
+                jsonSet(v, "active", take.cameraActive(i)); jsonSet(v, "surfaceOccupancy", q.surfaces); jsonSet(v, "surfaceCapacity", q.surfaceCapacity);
+                jsonSet(v, "surfaceHighWater", q.surfaceHighWater); jsonSet(v, "surfaceOverflow", jsonInt(q.surfaceOverflow));
+                jsonSet(v, "videoPacketCount", jsonInt(q.videoPackets)); jsonSet(v, "videoPacketBytes", jsonInt(q.videoBytes)); jsonSet(v, "audioPacketCount", jsonInt(q.audioPackets));
+                if (cameras[i])
+                {
+                    const auto& c = *cameras[i]; const auto preview = c.pool->snapshot();
+                    jsonSet(v, "sampleQueueHighWater", jsonInt(c.telemetry->queueHighWater.load()));
+                    jsonSet(v, "latestPreviewId", jsonInt(c.telemetry->latestReadyFrame.load()));
+                    jsonSet(v, "previewPublished", jsonInt(preview.published)); jsonSet(v, "previewConsumed", jsonInt(preview.consumed));
+                    jsonSet(v, "previewOverwritten", jsonInt(preview.overwritten)); jsonSet(v, "previewExhausted", jsonInt(preview.exhausted));
+                }
+                jsonSet(row, i ? "cam2" : "cam1", v);
+            }
+            if (queueTrace.size() == 512) queueTrace.remove(0); queueTrace.add(row); nextTrace = elapsed + .25;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    };
+    auto waitUntil = [&](auto predicate, double timeout)
+    { const auto deadline = qpcNow() + std::int64_t(timeout * qpcFrequency()); while (!predicate()) { check(qpcNow() < deadline, "Product dual-load deadline exceeded"); service(); } };
+    auto background = [&](auto task)
+    {
+        auto work = std::async(std::launch::async, task);
+        while (work.wait_for(std::chrono::milliseconds(0)) != std::future_status::ready) service();
+        work.get();
+    };
+    auto closeCamera = [&](unsigned i)
+    {
+        if (!cameras[i]) return;
+        auto& c = *cameras[i]; background([&] { c.stopCapture(); c.finish(); });
+        auto v = jsonObject(); jsonSet(v, "slot", int(i + 1)); jsonSet(v, "sourceKind", c.synthetic ? "synthetic" : "hardware");
+        jsonSet(v, "telemetry", c.telemetry->toJson()); jsonSet(v, "source", c.pattern ? c.pattern->toJson() : c.sourceInfo);
+        if (c.presenter) jsonSet(v, "adapter", c.presenter->adapterJson());
+        const auto p = c.pool->snapshot(); jsonSet(v, "previewPublished", jsonInt(p.published)); jsonSet(v, "previewConsumed", jsonInt(p.consumed));
+        jsonSet(v, "previewExhausted", jsonInt(p.exhausted));
+        jsonSet(v, "softwareLossFree", c.telemetry->softwareLossFree());
+        jsonSet(v, "sourceFailed", c.pattern ? c.pattern->failed() : c.capture && !c.capture->error().empty());
+        sourceReports.add(v); cameras[i].reset();
+    };
+    auto openCamera = [&](unsigned i)
+    {
+        const auto slot = catalog.slot(i); check(slot.ready(), "Camera slot has no selected native mode");
+        auto c = std::make_unique<Camera>(i + 1, synthetic[i], 0); c->mode = *slot.mode; c->link = slot.symbolicLink;
+        c->telemetry = std::make_shared<CaptureTelemetry>(c->mode.fps, i ? "cam2" : "cam1"); c->pool = std::make_unique<VideoSurfacePool>(1920, 1080);
+        cameras[i] = std::move(c); auto& cam = *cameras[i];
+        std::promise<void> go; auto gate = go.get_future().share();
+        try
+        {
+            const auto sink = [&, i](const VideoSurface& f) { take.offer(i, f); };
+            if (window)
+            {
+                cam.presenter = std::make_unique<PreviewPresenter>(window->views[i], *cam.pool, cam.telemetry, 1920, 1080);
+                background([&] { cam.presenter->start(gate); });
+            }
+            if (cam.synthetic)
+            {
+                FramePatternSource::Config config{i + 1, cam.mode.fps.numerator, std::min(3600u, o.seconds + 120), cam.mode.subtype}; config.generation = slot.generation;
+                cam.pattern = std::make_unique<FramePatternSource>(config, *cam.pool, cam.telemetry, sink);
+                background([&] { cam.pattern->start(gate, sourceOrigins[i]); });
+            }
+            else
+            {
+                cam.capture = std::make_unique<MfCameraCapture>(cam.telemetry, *cam.pool, sink);
+                background([&] { const auto opened = cam.capture->start(cam.link, cam.mode, cam.mode.subtype == CaptureSubtype::mjpeg, 1, gate, slot.generation);
+                    jsonSet(cam.sourceInfo, "nativeMode", CameraCatalog::modeJson(opened.nativeMode)); });
+            }
+            sourceOrigins[i] = qpcNow(); go.set_value(); ++sourceStarts[i];
+        }
+        catch (...) { go.set_value(); throw; }
+    };
+    try
+    {
+        openCamera(0); waitUntil([&] { return audio.clockReady(); }, 10);
+        const unsigned unit = o.seconds / 4;
+        for (unsigned phase = 0; phase < 4; ++phase)
+        {
+            const bool enabled = phase == 1 || phase == 3;
+            settings.cameraEnabled[1] = enabled; ok(catalog.configure(settings)); catalog.refresh(devices);
+            if (enabled) openCamera(1); else closeCamera(1);
+            event(enabled ? (phase == 3 ? "cam2-reconnected" : "cam2-on") : "cam2-off");
+            TakeController::Config config; config.projectDirectory = directory; config.cameraMode = modes[0]; config.cameraSymbolicLink = settings.cameraDeviceIds[0].toStdString();
+            config.synthetic = synthetic[0]; config.projectFps = int(o.fps); config.externalCapture = true; config.cameraGeneration = catalog.slot(0).generation;
+            config.camera2.enabled = enabled; config.camera2.synthetic = synthetic[1]; config.camera2.mode = modes[1];
+            config.camera2.symbolicLink = settings.cameraDeviceIds[1].toStdString(); config.camera2.generation = catalog.slot(1).generation;
+            ok(take.prepare(config)); waitUntil([&] { return take.state() == TakeController::State::armed || take.state() == TakeController::State::partialFailure; }, 15);
+            check(take.state() == TakeController::State::armed, "Product take preparation failed"); ok(take.start());
+            waitUntil([&] { return take.state() == TakeController::State::recording; }, 5); started = true;
+            const auto n0 = take.scheduledStart(), length = std::int64_t(phase == 3 ? o.seconds - unit * 3 : unit) * 48000;
+            ok(take.stop(n0 + length)); bool disconnected = false, disabledRequested = false;
+            std::uint64_t cam1AtDisconnect = 0, cam1BeforeToggle = cameras[0]->telemetry->latestReadyFrame.load();
+            const auto deadline = qpcNow() + (length / 48000 + 20) * qpcFrequency();
+            while (take.state() != TakeController::State::done && take.state() != TakeController::State::partialFailure)
+            {
+                check(qpcNow() < deadline, "Product take did not finish");
+                if (phase == 1 && !disabledRequested && audio.currentSample() >= n0 + length / 4)
+                {
+                    settings.cameraEnabled[1] = false; disabledRequested = true; event("cam2-disable-requested-for-next-take");
+                    check(take.cameraActive(1), "Cam2 disabled prematurely in the active take");
+                }
+                if (phase == 1 && !disconnected && audio.currentSample() >= n0 + length / 2)
+                {
+                    const auto generation = catalog.slot(1).generation;
+                    take.cameraFailed(1, generation); catalog.disconnected(1);
+                    disconnected = true; cam1AtDisconnect = cameras[0]->telemetry->latestReadyFrame.load(); event("cam2-disconnected");
+                    background([&] { cameras[1]->stopCapture(); });
+                }
+                service();
+            }
+            auto result = take.report(); jsonSet(result, "phase", int(phase)); takes.add(result);
+            check(take.logicalLength() == length, "Take logical length differs from common Nstop-N0");
+            const auto& project = document.getProject(); const auto* t = project.media->findTake(config.takeId.toString()); check(t != nullptr, "Take was not placed");
+            const auto* first = project.media->findAsset(t->cam1AssetId); check(first && first->gaps.empty(), "Healthy cam1 was truncated or failed");
+            for (const auto& id : t->microphoneAssetIds) check(project.media->findAsset(id)->gaps.empty(), "Raw WAV was truncated");
+            check(cameras[0]->telemetry->latestReadyFrame.load() > cam1BeforeToggle, "Cam1 preview stopped during cam2 toggle");
+            if (phase == 1)
+            {
+                const auto* second = project.media->findAsset(t->cam2AssetId);
+                check(disabledRequested && disconnected && second && !second->gaps.empty(), "Cam2 disconnect did not produce an explicit gap");
+                check(cameras[0]->telemetry->latestReadyFrame.load() > cam1AtDisconnect, "Cam1 preview stopped after cam2 disconnect");
+                check(take.cameraDisconnected(1), "Cam2 disconnect state was lost"); closeCamera(1);
+            }
+            else check(take.state() == TakeController::State::done, "Unexpected partial failure");
+            if (!enabled)
+            {
+                const auto folder = directory.getChildFile("media/takes/" + config.takeId.toDashedString());
+                check(t->cam2AssetId.isEmpty() && !cameras[1] && !folder.getChildFile("cam2.mp4").exists() && !folder.getChildFile("cam2.recording.mp4").exists(), "OFF cam2 created a source/file/asset");
+            }
+        }
+        closeCamera(1); closeCamera(0);
+        for (const auto& r : sourceReports)
+            check(bool(r["softwareLossFree"]) && !bool(r["sourceFailed"]) && std::int64_t(r["previewPublished"]) > 0 && std::int64_t(r["previewConsumed"]) > 0 && std::int64_t(r["previewExhausted"]) == 0, "Preview/source loss or surface starvation; inspect source reports");
+        status(report, "PASS", "Product OFF/ON/deferred-disable/disconnect/reconnect, common take boundaries and independent preview/queues observed");
+    }
+    catch (const std::exception& e)
+    {
+        status(report, started ? "FAIL" : "UNAVAILABLE", e.what());
+        for (unsigned i = 0; i < 2; ++i) if (cameras[i])
+        { cameras[i]->stopCapture(); cameras[i]->finish(); cameras[i].reset(); }
+    }
+    jsonSet(report, "events", events); jsonSet(report, "takes", takes); jsonSet(report, "queueTimeline", queueTrace); jsonSet(report, "sources", sourceReports);
+    jsonSet(report, "cam1SourceStarts", int(sourceStarts[0])); jsonSet(report, "cam2SourceStarts", int(sourceStarts[1]));
+    jsonSet(report, "secondsMeasured", double(qpcNow() - wallStart) / qpcFrequency());
+    jsonSet(report, "isolationDefinition", "Real per-camera queue/pool counters sampled about every 250ms (last 512); cam1 source remains open across four takes; source+encoder+asset absent while cam2 OFF. Saturated encoder-pool isolation is separately verified by camera-slots; no injected encoder stall here.");
 }
 void dualLoad(const Options& o, juce::var& report)
 {
@@ -448,6 +693,7 @@ int wmain(int argc, wchar_t** argv)
                 "  --project-fps 30|60 --seconds 60 --report FILE [--stall-ms 2000] [--cpu-contention N]\n"
                 "  [--cam1-format nv12|mjpeg --cam2-format nv12|mjpeg] (defaults: NV12 60 + MJPEG 30)\n"
                 "RecorderDualProbe --headroom --seconds 60 --project-fps 60 --report FILE\n"
+                "RecorderDualProbe --devices devices.json --cam2 synthetic --toggle-camera2 --seconds 60 --report r24/dual-preview.json [--headless]\n"
                 "8 actual ASIO inputs required unless --synthetic-audio. MP4/WAV are stored in a unique sibling directory.\n"; return 0;
         }
         jsonSet(report, "os", juce::SystemStats::getOperatingSystemName()); jsonSet(report, "cpu", juce::SystemStats::getCpuModel());
@@ -461,7 +707,7 @@ int wmain(int argc, wchar_t** argv)
         juce::ScopedJuceInitialiser_GUI juceRuntime;
         struct Timer { MMRESULT result = timeBeginPeriod(1); ~Timer() { if (result == TIMERR_NOERROR) timeEndPeriod(1); } } timer;
         jsonSet(report, "timeBeginPeriodResult", timer.result);
-        if (o.headroom) headroom(o, report); else dualLoad(o, report);
+        if (o.headroom) headroom(o, report); else if (o.toggleCamera2) productDualLoad(o, report); else dualLoad(o, report);
     }
     catch (const std::exception& e) { status(report, "FAIL", e.what()); }
     jsonSet(report, "endedUtc", utcNowIso8601());

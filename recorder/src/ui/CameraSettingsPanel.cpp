@@ -10,9 +10,10 @@ CameraSettingsPanel::CameraSettingsPanel(const UserSettings& s, const RecorderPr
         enabled[i].setButtonText(ko(i ? "캠2 사용" : "캠1 사용")); enabled[i].setToggleState(s.cameraEnabled[i], juce::dontSendNotification);
         addAndMakeVisible(enabled[i]); addAndMakeVisible(devices[i]); addAndMakeVisible(modes[i]); addAndMakeVisible(modeLabels[i]); addAndMakeVisible(ids[i]);
         modeLabels[i].setText(ko("입력 모드"), juce::dontSendNotification); devices[i].setTextWhenNothingSelected(ko("장치 선택")); modes[i].setTextWhenNothingSelected(ko("1080p 입력 모드 선택"));
-        devices[i].onChange = [this, i] { modesFor(i); }; enabled[i].onClick = [this, i] { devices[i].setEnabled(enabled[i].getToggleState()); modes[i].setEnabled(enabled[i].getToggleState()); };
+        devices[i].onChange = [this, i] { selectionChanged(i, false); }; enabled[i].onClick = [this, i] { selectionChanged(i, true); };
     }
-    for (auto* l : {&fps, &status, &calibration}) { addAndMakeVisible(l); l->setFont(juce::Font(juce::FontOptions(17))); }
+    for (auto* l : {&fps, &status, &calibration, &nextTake}) { addAndMakeVisible(l); l->setFont(juce::Font(juce::FontOptions(17))); }
+    nextTake.setText(ko("캠2 해제는 다음 테이크부터 적용됩니다."), juce::dontSendNotification);
     fps.setText(ko("프로젝트 ") + juce::String(p.fps.numerator) + (p.media->assets.empty() ? ko(" fps · 첫 미디어 후 고정") : ko(" fps · 고정")), juce::dontSendNotification);
     status.setText(ko("카메라 장치를 확인하는 중입니다."), juce::dontSendNotification);
     const bool changed = s.calibration.asioDeviceId != s.asioDeviceId || s.calibration.cameraDeviceIds != s.cameraDeviceIds || s.calibration.cameraModes != s.cameraModes;
@@ -30,6 +31,7 @@ void CameraSettingsPanel::timerCallback()
         {
             for (int n = 0; n < int(cameras.size()); ++n) { devices[i].addItem(juce::String::fromUTF8(cameras[std::size_t(n)].friendlyName.c_str()), n + 1); if (cameras[std::size_t(n)].symbolicLink == initial.cameraDeviceIds[i].toStdString()) devices[i].setSelectedId(n + 1, juce::dontSendNotification); }
             if (!devices[i].getSelectedId() && initial.cameraDeviceIds[i].isNotEmpty()) devices[i].setText(ko("저장된 카메라 · 연결 안 됨"), juce::dontSendNotification);
+            acceptedDevices[i] = devices[i].getSelectedId();
             modesFor(i); devices[i].setEnabled(enabled[i].getToggleState()); modes[i].setEnabled(enabled[i].getToggleState());
         }
         status.setText(cameras.empty() ? ko("연결된 카메라가 없습니다.") : ko("같은 카메라를 두 번 선택할 수 없습니다."), juce::dontSendNotification);
@@ -40,10 +42,29 @@ void CameraSettingsPanel::timerCallback()
 void CameraSettingsPanel::modesFor(unsigned i)
 {
     modes[i].clear(juce::dontSendNotification); const int n = devices[i].getSelectedId() - 1;
-    if (n < 0 || n >= int(cameras.size())) return;
+    if (n < 0 || n >= int(cameras.size()))
+    { ids[i].setText(initial.cameraDeviceIds[i], juce::dontSendNotification); modes[i].setText(initial.cameraModes[i], juce::dontSendNotification); return; }
     const auto& c = cameras[std::size_t(n)]; ids[i].setText(juce::String(c.symbolicLink), juce::dontSendNotification); ids[i].setTooltip(juce::String(c.symbolicLink));
     for (unsigned m = 0; m < c.modes.size(); ++m) if (c.modes[m].width == 1920 && c.modes[m].height == 1080)
     { const auto text = juce::String(c.modes[m].text()); modes[i].addItem(text, int(m) + 1); if (text == initial.cameraModes[i]) modes[i].setSelectedId(int(m) + 1, juce::dontSendNotification); }
+}
+void CameraSettingsPanel::selectionChanged(unsigned i, bool enabling)
+{
+    const auto selection = read(initial); CameraCatalog model;
+    const auto valid = model.configure(selection);
+    if (valid.failed())
+    {
+        if (enabling) enabled[i].setToggleState(false, juce::dontSendNotification);
+        else devices[i].setSelectedId(acceptedDevices[i], juce::dontSendNotification);
+        status.setText(valid.getErrorMessage(), juce::dontSendNotification);
+    }
+    else
+    {
+        acceptedDevices[i] = devices[i].getSelectedId();
+        if (!enabling) modesFor(i);
+        status.setText(ko("선택한 장치와 입력 모드를 저장합니다."), juce::dontSendNotification);
+    }
+    devices[i].setEnabled(enabled[i].getToggleState()); modes[i].setEnabled(enabled[i].getToggleState());
 }
 UserSettings CameraSettingsPanel::read(UserSettings s) const
 {
@@ -56,12 +77,12 @@ UserSettings CameraSettingsPanel::read(UserSettings s) const
 }
 void CameraSettingsPanel::resized()
 {
-    auto a = getLocalBounds().reduced(16); fps.setBounds(a.removeFromTop(36)); a.removeFromTop(12);
+    auto a = getLocalBounds().reduced(12); fps.setBounds(a.removeFromTop(28)); a.removeFromTop(4);
     for (unsigned i = 0; i < 2; ++i)
     {
-        enabled[i].setBounds(a.removeFromTop(34)); devices[i].setBounds(a.removeFromTop(38)); ids[i].setBounds(a.removeFromTop(28));
-        auto row = a.removeFromTop(38); modeLabels[i].setBounds(row.removeFromLeft(104)); modes[i].setBounds(row); a.removeFromTop(22);
+        enabled[i].setBounds(a.removeFromTop(28)); devices[i].setBounds(a.removeFromTop(32)); ids[i].setBounds(a.removeFromTop(22));
+        auto row = a.removeFromTop(32); modeLabels[i].setBounds(row.removeFromLeft(104)); modes[i].setBounds(row); a.removeFromTop(8);
     }
-    status.setBounds(a.removeFromTop(42)); calibration.setBounds(a.removeFromTop(42));
+    status.setBounds(a.removeFromTop(36)); calibration.setBounds(a.removeFromTop(28)); nextTake.setBounds(a.removeFromTop(30));
 }
 }

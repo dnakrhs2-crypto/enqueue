@@ -33,6 +33,7 @@ private:
         juce::HWNDComponent host;
         juce::String caption, placeholder;
         bool showVideo = false;
+        bool liveSeen = false;
     };
     class Microphone : public juce::Component
     {
@@ -45,6 +46,7 @@ private:
         float peak = 0;
     };
     std::array<CameraCard, 2> cameras;
+    std::array<juce::String, 2> cameraConfiguration;
     std::array<Microphone, 8> microphones;
     juce::Viewport microphoneViewport;
     juce::Component strips;

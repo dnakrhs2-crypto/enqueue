@@ -41,6 +41,7 @@ public:
         unsigned camera = 1, fps = 60, seconds = 60;
         CaptureSubtype subtype = CaptureSubtype::nv12;
         ColourDevice colourDevice = ColourDevice::hardware;
+        std::uint64_t generation = 1;
     };
     FramePatternSource(Config, VideoSurfacePool&, std::shared_ptr<CaptureTelemetry>, std::function<void(const VideoSurface&)>);
     ~FramePatternSource();

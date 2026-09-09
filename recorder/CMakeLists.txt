@@ -275,3 +275,7 @@ add_custom_command(TARGET RecorderDualProbe POST_BUILD COMMAND ${CMAKE_COMMAND} 
 target_sources(RecorderTests PRIVATE tests/QueueIsolationTests.cpp)
 target_link_libraries(RecorderTests PRIVATE RecorderDualFixtures)
 add_test(NAME RecorderQueueIsolation COMMAND RecorderTests --suite queue-isolation)
+
+# Round 24: product camera slots; append-only integration and the shared runner.
+target_sources(RecorderTests PRIVATE tests/CameraSlotTests.cpp)
+add_test(NAME RecorderCameraSlots COMMAND RecorderTests --suite camera-slots)
