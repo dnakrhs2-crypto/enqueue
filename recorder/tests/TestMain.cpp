@@ -28,6 +28,8 @@ int runEditHistoryTests();
 int runEditPropertyTests();
 std::uint64_t recorderEditPropertySeed = 909;
 int recorderEditPropertyIterations = 1000;
+int runAudioImportTests();       // round 16: copied originals, decoded lengths and derived PCM
+int runImportedClipTests();      // round 16: independent import track/document transaction
 
 namespace
 {
@@ -39,6 +41,7 @@ struct Suite
 int runAsioNativePcm() { const int a = runAsioStampTests(), b = runNativePcmTests(); return (a || b) ? 1 : 0; }
 int runJournalDurable() { const int a = runJournalTests(), b = runWavChunkTests(); return (a || b) ? 1 : 0; }
 int runCutLinkHistory() { const int a = runClipEditTests(), b = runLinkEditTests(), c = runEditHistoryTests(); return (a || b || c) ? 1 : 0; }
+int runAudioImport() { const int a = runAudioImportTests(), b = runImportedClipTests(); return (a || b) ? 1 : 0; }
 const Suite suites[] = {
     {"capture-contract", runCaptureContractTests},
     {"capture-review", runCaptureReviewTests},
@@ -53,6 +56,7 @@ const Suite suites[] = {
     {"large-files", runLargeFileTests},
     {"cut-link-history", runCutLinkHistory},
     {"edit-property", runEditPropertyTests},
+    {"audio-import", runAudioImport},
 };
 int usage()
 {

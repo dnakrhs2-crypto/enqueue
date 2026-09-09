@@ -211,3 +211,22 @@ target_sources(RecorderTests PRIVATE
     tests/ClipEditTests.cpp tests/LinkEditTests.cpp tests/EditHistoryTests.cpp tests/EditPropertyTests.cpp)
 add_test(NAME RecorderCutLinkHistory COMMAND RecorderTests --suite cut-link-history)
 add_test(NAME RecorderEditProperty COMMAND RecorderTests --suite edit-property --seed 909 --iterations 1000)
+# Round 16 / spike 6A: independent audio import and derived PCM (append-only).
+add_library(RecorderImport STATIC
+    src/media/AudioImport.cpp src/playback/ImportedAudioCache.cpp
+    ../src/audio/MediaFoundationAudioFormat.cpp ../src/audio/HighQualityResampler.cpp)
+target_include_directories(RecorderImport PRIVATE ../third_party/r8brain)
+target_link_libraries(RecorderImport PUBLIC RecorderModel RecorderCore PRIVATE juce::juce_audio_formats)
+target_compile_definitions(RecorderImport PUBLIC JUCE_USE_MP3AUDIOFORMAT=1)
+set_property(TARGET RecorderImport PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+target_compile_options(RecorderImport PRIVATE /utf-8 /W4 /permissive- /EHsc)
+target_sources(Recorder PRIVATE src/ui/AudioImportPanel.cpp)
+target_link_libraries(Recorder PRIVATE RecorderImport)
+target_sources(RecorderTests PRIVATE tests/AudioImportTests.cpp tests/ImportedClipTests.cpp)
+target_link_libraries(RecorderTests PRIVATE RecorderImport)
+target_link_libraries(RecorderProbe PRIVATE RecorderImport)
+target_compile_definitions(RecorderProbe PRIVATE RECORDER_IMPORT_FFMPEG_EXE="${RECORDER_FFMPEG_ROOT}/bin/ffmpeg.exe")
+target_compile_definitions(RecorderTests PRIVATE RECORDER_IMPORT_FFMPEG_EXE="${RECORDER_FFMPEG_ROOT}/bin/ffmpeg.exe")
+add_test(NAME RecorderAudioImport COMMAND RecorderTests --suite audio-import)
+add_custom_command(TARGET Recorder POST_BUILD COMMAND ${CMAKE_COMMAND} -E copy_if_different
+    ${_rec_dlls} "$<TARGET_FILE_DIR:Recorder>" VERBATIM)
