@@ -1,10 +1,15 @@
 #pragma once
 #include "DurableFile.h"
 #include <vector>
+#include <functional>
 
 namespace gocue::recorder
 {
-enum class JournalKind : std::uint16_t { TakeStarted = 1, Checkpoint, TakeStopped, TakeFinalized };
+enum class JournalKind : std::uint16_t
+{
+    TakeStarted = 1, Checkpoint, TakeStopped, TakeFinalized,
+    EditTransaction = 16, TakePlacement, RetakeVersionSwitch, EditCheckpoint, MediaRegistry
+}; // RetakeVersionSwitch is a storage contract; controller binding is round 27/28.
 struct JournalPcmFormat
 {
     std::uint32_t sampleRate = 48000;
@@ -68,7 +73,7 @@ class RecordingJournal
 {
 public:
     static constexpr std::uint16_t schemaVersion = 1;
-    static constexpr std::size_t headerBytes = 48, commitBytes = 8, maxRecordBytes = 1024 * 1024;
+    static constexpr std::size_t headerBytes = 48, commitBytes = 8, maxRecordBytes = 16 * 1024 * 1024;
     explicit RecordingJournal(FileIoFaultAdapter* adapter = nullptr) : stream(adapter) {}
     ~RecordingJournal();
     RecordingJournal(const RecordingJournal&) = delete;
@@ -77,22 +82,38 @@ public:
     juce::Result append(const JournalTakeStarted&, const juce::Uuid& transaction = juce::Uuid());
     juce::Result append(const JournalCheckpoint&, const juce::Uuid& transaction = juce::Uuid());
     juce::Result append(const JournalTakeStopped&, const juce::Uuid& transaction = juce::Uuid());
-    juce::Result append(const JournalTakeFinalized&, const juce::Uuid& transaction = juce::Uuid());
+    juce::Result append(const JournalTakeFinalized&, const juce::Uuid& transaction = juce::Uuid(),
+                        const std::function<void(const char*)>& = {});
     juce::Result close();
     std::uint64_t durableSequence() const noexcept { return sequence; } // Owner thread.
     static juce::File logFile(const juce::File&, unsigned number);
     // Structural corruption stops replay across ALL later segments. It is reported
     // in ignoredTail; OS/read errors return failure. No repair or truncation here.
     static juce::Result replay(const juce::File& journalDirectory, JournalReplay&);
+    // Independent edit sequence/lock. A verified checkpoint supplies the retained
+    // first segment and preceding sequence after old segments have been collected.
+    juce::Result openEdits(const juce::File&, unsigned firstSegment = 1,
+                           std::uint64_t precedingSequence = 0, std::uint64_t rotationBytes = 8 * 1024 * 1024);
+    static juce::Result replayEdits(const juce::File&, JournalReplay&, unsigned firstSegment = 1,
+                                   std::uint64_t precedingSequence = 0);
+    static juce::File editLogFile(const juce::File&, unsigned);
+    juce::Result appendEditRecord(JournalKind, const juce::var&, const juce::Uuid& = juce::Uuid(),
+                                  const std::function<void(const char*)>& = {});
+    juce::Result rotate();
+    unsigned currentSegment() const noexcept { return segment; }
 
 private:
-    juce::Result appendRecord(JournalKind, const juce::Uuid&, const juce::var&);
+    juce::Result openDomain(const juce::File&, std::uint64_t, bool, unsigned, std::uint64_t);
+    static juce::Result replayDomain(const juce::File&, JournalReplay&, bool, unsigned, std::uint64_t);
+    juce::Result appendRecord(JournalKind, const juce::Uuid&, const juce::var&,
+                              const std::function<void(const char*)>& = {});
     juce::Result fail(juce::Result);
     DurableFile stream;
     HANDLE writerLock = INVALID_HANDLE_VALUE;
     juce::File directory;
     std::uint64_t sequence = 0, rotateAt = 0;
     unsigned segment = 0;
+    bool edits = false;
     juce::Result error = juce::Result::ok();
 };
 }

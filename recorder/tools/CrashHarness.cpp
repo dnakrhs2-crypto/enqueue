@@ -1,4 +1,5 @@
 #include "CrashFixtures.h"
+#include "storage/EditJournal.h"
 #include <atomic>
 #include <charconv>
 #include <chrono>
@@ -13,9 +14,18 @@ namespace
 {
 const char* cases[]{"fragment-write", "wav-header-write", "chunk-replace", "final-moov-write", "checkpoint-replace",
     "take-before-commit", "take-after-commit", "recovery-before-commit", "recovery-after-commit"};
+const std::map<juce::String, juce::StringArray> editCases{
+    {"edit", {"edit-before-commit", "edit-after-commit"}},
+    {"undo", {"undo-before-commit", "undo-after-commit"}},
+    {"take-placement", {"take-placement-before-commit", "take-placement-after-commit", "take-finalize-before-commit", "take-finalize-after-commit"}},
+    {"retake", {"retake-before-commit", "retake-after-commit"}},
+    {"checkpoint", {"checkpoint-backup-flushed", "checkpoint-verified-before-replace", "checkpoint-after-replace", "checkpoint-before-commit", "checkpoint-after-commit", "checkpoint-before-collect"}}
+};
+bool editCase(const juce::String& stage)
+{ for (const auto& group : editCases) if (group.second.contains(stage)) return true; return false; }
 struct Options
 {
-    bool child = false, large = false; unsigned iterations = 5, caseOffset = 0, seconds = 6;
+    bool child = false, large = false, selftest = false; unsigned iterations = 5, caseOffset = 0, seconds = 6;
     juce::String selected = "all", event; juce::File report, root;
 };
 unsigned numberArgument(const char* p)
@@ -30,6 +40,7 @@ Options parse(int argc, char** argv)
     {
         const juce::String name(argv[i]);
         if (name == "--child") { o.child = true; continue; }
+        if (name == "--selftest") { o.selftest = true; continue; }
         if (name == "--include-large-files") { o.large = true; continue; }
         require(i + 1 < argc, "Missing option value"); const auto* v = argv[++i];
         if (name == "--iterations") o.iterations = numberArgument(v);
@@ -42,7 +53,10 @@ Options parse(int argc, char** argv)
         else throw std::invalid_argument("Unknown option: " + name.toStdString());
     }
     require(o.iterations > 0 && o.iterations <= 10000 && o.seconds >= 5 && o.seconds <= 10, "Use --iterations 1..10000 and --seconds 5..10");
-    bool known = o.selected == "all"; for (const auto* c : cases) known |= o.selected == c; require(known, "Unknown crash case");
+    if (o.selftest && o.selected == "all") o.selected = "edit,undo,take-placement,retake,checkpoint";
+    const auto selections = juce::StringArray::fromTokens(o.selected, ",", "");
+    for (const auto& selected : selections)
+    { bool known = selected == "all" || editCases.count(selected) || editCase(selected); for (const auto* c : cases) known |= selected == c; require(known, "Unknown crash case: " + selected); }
     require(o.child ? o.root != juce::File() && o.event.isNotEmpty() && o.selected != "all" : o.report != juce::File(), "Require --report, or --child --root --ready-event --crash-cases NAME"); return o;
 }
 struct Handle
@@ -103,8 +117,111 @@ void place(RecorderDocument& document, const juce::File& root, const juce::Uuid&
     }
     document.setJournalSink(&sink); check(document.placeTake(take, assets));
 }
+juce::var activeState(const RecorderProject& project)
+{
+    auto out = object(); const auto edit = RecorderSerializer::editStateToVar(project);
+    set(out, "markers", edit["markers"]); set(out, "takeStacks", edit["takeStacks"]);
+    juce::Array<juce::var> tracks;
+    for (const auto& track : project.tracks)
+    {
+        auto lane = object(); set(lane, "trackId", track.trackId); set(lane, "mute", track.mute); set(lane, "solo", track.solo);
+        juce::Array<juce::var> clips;
+        for (const auto& clip : track.clips.items()) if (project.isActive(clip))
+        {
+            auto c = object(); set(c, "assetId", clip.assetId); set(c, "sourceIn", integer(clip.sourceIn));
+            set(c, "start", integer(clip.timelineStartSample)); set(c, "length", integer(clip.lengthSamples)); clips.add(c);
+        }
+        set(lane, "clips", clips); tracks.add(lane);
+    }
+    set(out, "tracks", tracks); return out;
+}
+int editChild(const Options& o)
+{
+    Handle event; event.value = OpenEventW(EVENT_MODIFY_STATE, FALSE, o.event.toWideCharPointer()); require(event.value != nullptr, "Open crash event");
+    crashFixture::baseline(o.root); RecoveryReport recovered; check(RecoveryScanner().run(o.root, recovered));
+    RecorderDocument doc; check(doc.adopt(recovered.project, o.root.getChildFile("project.recorder"), recovered.checkpointInfo));
+    crashFixture::TicketSink sink; doc.setJournalSink(&sink);
+    EditJournal prepare; check(prepare.open(o.root, recovered.project, recovered.checkpointInfo));
+    check(doc.performEdit("R19 fixture versions/mute/solo", [](EditState& e)
+    {
+        TakeStack stack; stack.spanSamples = 48000; TakeVersion a, b; auto& lane = e.tracks[0];
+        auto first = lane.clips.items()[0], second = first; first.takeStackId = second.takeStackId = stack.stackId;
+        first.versionId = a.versionId; second.versionId = b.versionId; second.clipId = newId(); second.lengthSamples = 24000;
+        a.clipIds = {first.clipId}; b.clipIds = {second.clipId}; lane.clips.edit() = {first, second}; lane.mute = true; lane.solo = true;
+        stack.versions = {a, b}; stack.activeVersionId = a.versionId; e.takeStacks = {stack};
+        e.markers[0].sample = 19001; e.markers[0].name = "saved-before-crash";
+    }));
+    check(prepare.append(sink.ticket, doc.getProject())); check(prepare.checkpoint());
+    const auto cursor = prepare.checkpointInfo(); check(prepare.close()); const auto before = doc.getProject();
+    Gate gate(o, event.value); gate.takeId = before.media->takes[0].takeId; gate.submitted.store(48000);
+    const auto storeOracle = [&](const RecorderProject& expected, bool exact)
+    {
+        auto v = object(); set(v, "expectedEditHash", RecorderSerializer::fingerprint(RecorderSerializer::editStateToVar(expected)));
+        set(v, "expectedActiveHash", RecorderSerializer::fingerprint(activeState(expected))); set(v, "exactClipIds", exact);
+        set(v, "durableRevision", integer(expected.editRevision)); set(v, "retakeControllerBinding", "Deferred to rounds 27/28; reserved transaction and model fixture only");
+        writeJson(o.root.getChildFile("edit-oracle.json"), v);
+    };
+    if (o.selected.startsWith("take-placement-") || o.selected.startsWith("take-finalize-"))
+    {
+        Take take; take.number = 7; take.createdAt = "2026-09-09T00:00:01Z"; take.logicalLength = 48000; take.state = TakeState::finalising;
+        MediaAsset asset; asset.logicalLength = 48000; asset.availableRanges = {{0, 48000}}; asset.contentIdentity = asset.assetId;
+        asset.relativePath = "media/takes/" + juce::Uuid(take.takeId).toDashedString() + "/cam1.mp4";
+        asset.originalFormat.codec = "h264"; asset.originalFormat.width = 1920; asset.originalFormat.height = 1080; asset.sourceUnitsNumerator = 30; asset.sourceUnitsDenominator = 48000;
+        take.cam1AssetId = asset.assetId; take.placementSample = before.activeTimelineEnd(); gate.takeId = take.takeId;
+        crashFixture::Camera camera(o.root.getChildFile(asset.relativePath)); for (int i = 0; i < 30; ++i) camera.frame(); camera.finish();
+        JournalTakeStarted start; start.takeId = juce::Uuid(take.takeId); start.pstart = take.placementSample;
+        start.files.push_back({juce::Uuid(asset.assetId).toDashedString(), asset.relativePath, asset.relativePath});
+        RecordingJournal takes; check(takes.open(o.root.getChildFile("journal"))); check(takes.append(start));
+        check(doc.placeTake(take, {asset}));
+        check(takes.append(JournalTakeStopped{start.takeId, 48000, juce::Uuid(sink.ticket.transactionId)}));
+        if (o.selected.startsWith("take-placement-"))
+        {
+            storeOracle(doc.getProject(), !o.selected.contains("before")); gate.armed.store(true);
+            EditJournal log({nullptr, [&](const char* stage) { gate.hit((juce::String(stage) == "journal-before-commit" ? "take-placement-before-commit" : "take-placement-after-commit")); }});
+            check(log.open(o.root, before, cursor)); check(log.append(sink.ticket, doc.getProject()));
+        }
+        else
+        {
+            EditJournal log; check(log.open(o.root, before, cursor)); check(log.append(sink.ticket, doc.getProject()));
+            check(doc.performEdit("delete before late finalize", [&](EditState& e)
+            { for (auto& lane : e.tracks) { auto& clips = lane.clips.edit(); clips.erase(std::remove_if(clips.begin(), clips.end(), [&](const Clip& c) { return c.assetId == asset.assetId; }), clips.end()); } }));
+            check(log.append(sink.ticket, doc.getProject())); check(log.close());
+            auto finalized = doc.getProject(); auto registry = std::make_shared<MediaRegistry>(*finalized.media); registry->takes.back().state = TakeState::complete; finalized.media = registry;
+            RecoveryScanner::writeTakeManifest(o.root, finalized, take.takeId); storeOracle(doc.getProject(), true); gate.armed.store(true);
+            check(takes.append(JournalTakeFinalized{start.takeId}, juce::Uuid(), [&](const char* stage)
+            { gate.hit(juce::String(stage) == "journal-before-commit" ? "take-finalize-before-commit" : "take-finalize-after-commit"); }));
+        }
+    }
+    else if (o.selected.startsWith("checkpoint-"))
+    {
+        EditJournal log({nullptr, [&](const char* stage) { gate.hit(stage); }}); check(log.open(o.root, before, cursor));
+        check(doc.performEdit("checkpoint edit", [](EditState& e) { e.markers[0].name = "checkpoint durable edit"; e.tracks[0].mute = false; }));
+        check(log.append(sink.ticket, doc.getProject())); storeOracle(doc.getProject(), true); gate.armed.store(true); check(log.checkpoint());
+    }
+    else
+    {
+        if (o.selected.startsWith("undo-")) check(doc.undo());
+        else if (o.selected.startsWith("retake-")) check(doc.performEdit("reserved retake switch", [](EditState& e) { e.takeStacks[0].activeVersionId = e.takeStacks[0].versions[1].versionId; }));
+        else check(doc.performEdit("edit", [](EditState& e) { e.tracks[0].mute = false; e.tracks[0].solo = false; e.markers[0].name = "new marker"; }));
+        storeOracle(o.selected.contains("before") ? before : doc.getProject(), true);
+        const auto family = o.selected.upToFirstOccurrenceOf("-", false, false);
+        gate.armed.store(true);
+        EditJournal::Options config; config.hook = [&](const char* stage)
+        { gate.hit((family + (juce::String(stage) == "journal-before-commit" ? "-before-commit" : "-after-commit")).toRawUTF8()); };
+        if (family == "retake")
+        { EditJournal log(config); check(log.open(o.root, before, cursor)); check(log.append(sink.ticket, doc.getProject(), JournalKind::RetakeVersionSwitch)); }
+        else
+        {
+            EditJournalWorker::Options options; options.journal = config;
+            EditJournalWorker worker(o.root, std::make_shared<const RecorderProject>(before), cursor, options);
+            check(worker.waitUntilIdle()); worker.attach(doc); check(worker.enqueue(sink.ticket, doc.snapshot())); check(worker.waitUntilIdle());
+        }
+    }
+    throw std::runtime_error("Requested R19 crash stage was not reached");
+}
 int child(const Options& o)
 {
+    if (editCase(o.selected)) return editChild(o);
     Handle event; event.value = OpenEventW(EVENT_MODIFY_STATE, FALSE, o.event.toWideCharPointer()); require(event.value != nullptr, "Open parent crash event");
     auto project = crashFixture::baseline(o.root); Gate gate(o, event.value);
     auto config = crashFixture::wavConfig(o.root); config.faults = &gate; config.testChunkFrames = 5 * 48000;
@@ -171,6 +288,25 @@ juce::var iteration(const Options& options, unsigned iterationNumber, const char
     RecoveryScanner scanner; check(scanner.run(root, first, &document));
     const auto after = crashFixture::hashes(root, true); const auto allBefore = crashFixture::hashes(root);
     RecoveryReport second; check(scanner.run(root, second)); const auto allAfter = crashFixture::hashes(root);
+    if (editCase(stage))
+    {
+        const auto oracle = juce::JSON::parse(root.getChildFile("edit-oracle.json").loadFileAsString());
+        const bool exact = bool(oracle["exactClipIds"]);
+        const bool edits = RecorderSerializer::fingerprint(activeState(first.project)) == oracle["expectedActiveHash"].toString()
+            && (!exact || RecorderSerializer::fingerprint(RecorderSerializer::editStateToVar(first.project)) == oracle["expectedEditHash"].toString());
+        const bool idempotent = allBefore == allAfter && second.changedTakes == 0 && second.addedClips == 0
+            && RecorderSerializer::toJson(first.project) == RecorderSerializer::toJson(second.project);
+        const bool adopted = RecorderSerializer::toJson(document.getProject()) == RecorderSerializer::toJson(first.project);
+        const bool revision = first.lastSavedEditRevision >= number(oracle["durableRevision"])
+            || juce::String(stage) == "take-placement-before-commit";
+        auto result = object(); set(result, "iteration", int(iterationNumber)); set(result, "case", stage);
+        set(result, "status", before == after && edits && idempotent && adopted && revision ? "PASS" : "FAIL");
+        set(result, "project", root.getFullPathName()); set(result, "childPid", int(process.dwProcessId)); set(result, "terminateExitCode", integer(exit));
+        set(result, "activeClipsMuteSoloMarkersVersionMatch", edits); set(result, "exactCommittedClipIds", exact); set(result, "durableRevisionPreserved", revision);
+        set(result, "originalHashesUnchanged", before == after); set(result, "originalHashes", hashRows(before, after));
+        set(result, "secondRunNoChanges", idempotent); set(result, "documentAdoptedAfterCommit", adopted);
+        set(result, "oracle", oracle); set(result, "firstRecovery", first.toJson()); set(result, "secondRecovery", second.toJson()); return result;
+    }
     const auto takeId = progress["takeId"].toString(); const auto* take = first.project.media->findTake(takeId); require(take != nullptr, "Crashed take was not recovered");
     const auto submitted = number(progress["submittedSamples"]); bool ranges = true, pcm = true; double maxLoss = 0; juce::Array<juce::var> rangesReport;
     for (const auto& asset : first.project.media->assets)
@@ -198,12 +334,17 @@ int parent(const Options& options)
     check(options.report.getParentDirectory().createDirectory());
     const auto runRoot = options.report.getParentDirectory().getChildFile("crash-media-" + juce::Uuid().toString()); check(runRoot.createDirectory());
     auto report = object(); set(report, "schemaVersion", 1); set(report, "ffmpegBuild", RECORDER_FFMPEG_VERSION);
-    set(report, "startedUtc", juce::Time::getCurrentTime().toISO8601(true)); set(report, "source", "Synthetic CPU OpenH264 1920x1080p30 + AAC reference + 8 mono PCM24 WAV; actual Recorder writers");
+    set(report, "startedUtc", juce::Time::getCurrentTime().toISO8601(true)); set(report, "source", options.selftest
+        ? "Synthetic CPU OpenH264/AAC original plus real document/edit journal/checkpoint/recovery; reserved retake model fixture (27/28 binding deferred)"
+        : "Synthetic CPU OpenH264 1920x1080p30 + AAC reference + 8 mono PCM24 WAV; actual Recorder writers");
     set(report, "powerLoss", juce::String::fromUTF8("미확인 → 스파이크 4")); set(report, "caseOffset", int(options.caseOffset)); set(report, "iterationsRequested", int(options.iterations));
     juce::Array<juce::var> results; unsigned failures = 0;
     for (unsigned i = 0; i < options.iterations; ++i)
     {
-        const auto selected = options.selected == "all" ? juce::String(cases[(options.caseOffset + i) % std::size(cases)]) : options.selected;
+        const auto requested = juce::StringArray::fromTokens(options.selected, ",", "");
+        const auto index = options.caseOffset + i;
+        auto selected = options.selected == "all" ? juce::String(cases[index % std::size(cases)]) : requested[int(index % unsigned(requested.size()))];
+        if (const auto group = editCases.find(selected); group != editCases.end()) selected = group->second[int((index / unsigned(requested.size())) % unsigned(group->second.size()))];
         const auto root = runRoot.getChildFile(juce::String(i + 1).paddedLeft('0', 4) + "-" + selected);
         try { auto result = iteration(options, i + 1, selected.toRawUTF8(), root); if (result["status"].toString() != "PASS") ++failures; results.add(result); }
         catch (const std::exception& e) { auto result = object(); set(result, "iteration", int(i + 1)); set(result, "case", selected); set(result, "status", "FAIL"); set(result, "error", e.what()); set(result, "project", root.getFullPathName()); results.add(result); ++failures; }
@@ -217,6 +358,8 @@ int parent(const Options& options)
     set(report, "results", results); set(report, "failures", int(failures)); set(report, "status", failures ? "FAIL" : "PASS"); set(report, "endedUtc", juce::Time::getCurrentTime().toISO8601(true));
     juce::StringArray coverage, pending;
     for (const auto* c : cases) { bool covered = false; for (const auto& r : results) covered |= r["case"].toString() == c && r["status"].toString() == "PASS"; (covered ? coverage : pending).add(c); }
+    for (const auto& group : editCases) for (const auto& c : group.second)
+    { bool covered = false; for (const auto& r : results) covered |= r["case"].toString() == c && r["status"].toString() == "PASS"; (covered ? coverage : pending).add(c); }
     set(report, "passedCases", juce::var(coverage)); set(report, "casesNotPassedInThisRun", juce::var(pending)); writeJson(options.report, report);
     std::cout << (failures ? "FAIL" : "PASS") << " report " << options.report.getFullPathName() << std::endl; return failures ? 1 : 0;
 }

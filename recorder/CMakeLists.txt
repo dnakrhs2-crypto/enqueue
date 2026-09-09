@@ -275,3 +275,9 @@ add_custom_command(TARGET RecorderDualProbe POST_BUILD COMMAND ${CMAKE_COMMAND} 
 target_sources(RecorderTests PRIVATE tests/QueueIsolationTests.cpp)
 target_link_libraries(RecorderTests PRIVATE RecorderDualFixtures)
 add_test(NAME RecorderQueueIsolation COMMAND RecorderTests --suite queue-isolation)
+
+# Round 19: edit durability and recovery. One test main; append-only integration.
+target_sources(RecorderCore PRIVATE src/storage/EditJournal.cpp)
+target_sources(RecorderTests PRIVATE tests/EditJournalTests.cpp tests/RetakeRecoveryTests.cpp)
+add_test(NAME RecorderEditJournalReplay COMMAND RecorderTests --suite edit-journal-replay)
+add_dependencies(RecorderProbe RecorderCrashHarness)

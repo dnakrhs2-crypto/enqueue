@@ -106,6 +106,12 @@ juce::Result RecorderDocument::openCheckpoint(const juce::File& source)
 }
 juce::Result RecorderDocument::saveCheckpoint(const juce::File& target)
 {
+    assertOwner(); if (journal && journal->ownsCheckpoint(target))
+    {
+        const auto result = journal->checkpointAndWait();
+        if (result.failed()) return fail(result.getErrorMessage());
+        return dirty ? fail(juce::String::fromUTF8("확인되지 않은 편집이 남아 있습니다. 마지막 저장 이력을 확인하세요.")) : result;
+    }
     assertOwner(); const auto written = snapshot(); const auto result = RecorderSerializer::writeCheckpoint(target, *written);
     checkpointFinished(written, target, result); return result;
 }
@@ -126,7 +132,7 @@ juce::Result RecorderDocument::setTimebase(std::uint32_t Fs, FrameRate fps)
     const juce::ScopedValueSetter<bool> guard(editing, true);
     if (!project->media->assets.empty() && (project->Fs != Fs || project->fps != fps)) return fail(juce::String::fromUTF8("첫 미디어 이후에는 프로젝트 샘플레이트와 프레임레이트를 바꿀 수 없습니다."));
     auto next = *project; next.Fs = Fs; next.fps = fps; const auto valid = next.validate(); if (valid.failed()) return fail(valid.getErrorMessage());
-    if (Fs != project->Fs || fps != project->fps) { const auto replaced = replaceProject(std::move(next)); if (replaced.failed()) return replaced; dirty = checkpointRequired = true; history.clear(); error.clear(); notify(); }
+    if (Fs != project->Fs || fps != project->fps) { const auto replaced = replaceProject(std::move(next)); if (replaced.failed()) return replaced; dirty = checkpointRequired = true; history.clear(); error.clear(); enqueueRegistry(); notify(); }
     return juce::Result::ok();
 }
 EditSnapshot RecorderDocument::editSnapshot() const { return {static_cast<const EditState&>(*project), selection}; }
@@ -171,7 +177,7 @@ juce::Result RecorderDocument::publishEdit(RecorderProject next, const juce::Str
     if (journal != nullptr)
     {
         journalTransactions[delta.revision] = delta.transactionId;
-        try { const auto accepted = journal->enqueue(delta); if (accepted.failed()) error = accepted.getErrorMessage(); }
+        try { const auto accepted = journal->enqueue(delta, project); if (accepted.failed()) error = accepted.getErrorMessage(); }
         catch (const std::exception& e) { error = juce::String::fromUTF8(e.what()); }
     }
     if (addHistory) notify();
@@ -226,7 +232,7 @@ juce::Result RecorderDocument::registerMedia(std::vector<MediaAsset> assets, std
     registry->assets.insert(registry->assets.end(), assets.begin(), assets.end()); registry->takes.insert(registry->takes.end(), takes.begin(), takes.end()); next.media = registry;
     const auto valid = next.validate(); if (valid.failed()) return fail(valid.getErrorMessage());
     const auto replaced = replaceProject(std::move(next)); if (replaced.failed()) return replaced;
-    dirty = checkpointRequired = true; error.clear(); notify(); return juce::Result::ok();
+    dirty = checkpointRequired = true; error.clear(); enqueueRegistry(); notify(); return juce::Result::ok();
 }
 juce::Result RecorderDocument::updateMediaAsset(MediaAsset asset)
 {
@@ -243,7 +249,7 @@ juce::Result RecorderDocument::updateMediaAsset(MediaAsset asset)
     *found = std::move(asset); auto next = *project; next.media = registry;
     const auto valid = next.validate(); if (valid.failed()) return fail(valid.getErrorMessage());
     const auto replaced = replaceProject(std::move(next)); if (replaced.failed()) return replaced;
-    dirty = checkpointRequired = true; error.clear(); notify(); return juce::Result::ok();
+    dirty = checkpointRequired = true; error.clear(); enqueueRegistry(); notify(); return juce::Result::ok();
 }
 juce::Result RecorderDocument::updateTakeState(const Id& id, TakeState state)
 {
@@ -255,7 +261,7 @@ juce::Result RecorderDocument::updateTakeState(const Id& id, TakeState state)
     found->state = state; auto next = *project; next.media = registry;
     const auto valid = next.validate(); if (valid.failed()) return fail(valid.getErrorMessage());
     const auto replaced = replaceProject(std::move(next)); if (replaced.failed()) return replaced;
-    dirty = checkpointRequired = true; error.clear(); notify(); return juce::Result::ok();
+    dirty = checkpointRequired = true; error.clear(); enqueueRegistry(); notify(); return juce::Result::ok();
 }
 juce::Result RecorderDocument::placeTake(Take take, std::vector<MediaAsset> assets)
 {
@@ -318,6 +324,21 @@ void RecorderDocument::acknowledgeJournal(const EditDelta& ticket, const juce::R
     if (!dirty) error.clear();
     // Registry/timebase durability still requires a checkpoint; a pure edit can be saved by its journal.
     notify();
+}
+void RecorderDocument::enqueueRegistry()
+{
+    if (!journal) return;
+    try { const auto r = journal->enqueueRegistry(project); if (r.failed()) error = r.getErrorMessage(); }
+    catch (const std::exception& e) { error = e.what(); }
+}
+void RecorderDocument::acknowledgeJournalState(Snapshot written, const juce::Result& result)
+{
+    assertOwner(); if (!written || written->projectId != project->projectId) return;
+    if (result.failed()) { fail(result.getErrorMessage()); return; }
+    if (written->media == project->media && written->Fs == project->Fs && written->fps == project->fps)
+        checkpointRequired = false;
+    dirty = checkpointRequired || savedRevision < project->editRevision;
+    if (!dirty) error.clear(); notify();
 }
 juce::Result RecorderDocument::placeTake(Take take, std::vector<MediaAsset> assets, const std::vector<int>& microphones)
 {

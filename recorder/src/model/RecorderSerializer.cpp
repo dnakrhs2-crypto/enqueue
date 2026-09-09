@@ -1,9 +1,11 @@
 #include "RecorderSerializer.h"
 #include "../app/ProductIdentity.h"
 #include "model/SafeFileWrite.h"
+#include "storage/DurableFile.h"
 #include <charconv>
 #include <limits>
 #include <stdexcept>
+#include <mutex>
 
 namespace gocue::recorder
 {
@@ -233,6 +235,13 @@ juce::String RecorderSerializer::toJson(const RecorderProject& p)
     put(registry, "assets", array(p.media->assets, asset)); put(registry, "takes", array(p.media->takes, take)); put(root, "media", registry);
     put(root, "checksum", fingerprint(root)); return juce::JSON::toString(root, false) + "\n";
 }
+juce::String RecorderSerializer::toJson(const RecorderProject& p, const CheckpointInfo& info)
+{
+    auto root = juce::JSON::parse(toJson(p)); root.getDynamicObject()->removeProperty("checksum");
+    auto cursor = object(); put(cursor, "generation", integer(info.generation)); put(cursor, "journalPath", info.journalPath);
+    put(cursor, "segment", integer(info.journalSegment)); put(cursor, "sequence", integer(static_cast<Sample>(info.journalSequence)));
+    put(root, "checkpoint", cursor); put(root, "checksum", fingerprint(root)); return juce::JSON::toString(root, false) + "\n";
+}
 juce::Result RecorderSerializer::fromJson(const juce::String& json, RecorderProject& out, CheckpointInfo* info)
 {
     try
@@ -249,50 +258,118 @@ juce::Result RecorderSerializer::fromJson(const juce::String& json, RecorderProj
         static_cast<EditState&>(p) = readEdit(field(root, "edit")); auto registry = std::make_shared<MediaRegistry>();
         const auto& m = field(root, "media"); registry->assets = readArray<MediaAsset>(field(m, "assets"), readAsset); registry->takes = readArray<Take>(field(m, "takes"), readTake); p.media = registry;
         const auto valid = p.validate(); if (valid.failed()) return valid;
+        CheckpointInfo cursor; cursor.checkpointRevision = p.editRevision;
+        if (root.hasProperty("checkpoint"))
+        {
+            const auto c = field(root, "checkpoint");
+            require(c.isObject() && c.getDynamicObject()->getProperties().size() == 4, "잘못된 checkpoint 세대입니다.");
+            cursor.generation = num(c, "generation"); cursor.journalPath = stringField(c, "journalPath");
+            cursor.journalSegment = u32(c, "segment"); const auto seq = num(c, "sequence");
+            require(cursor.generation > 0 && cursor.journalSegment > 0 && seq >= 0 && isProjectRelativePath(cursor.journalPath), "잘못된 checkpoint 저널 위치입니다.");
+            require(cursor.journalPath == "journal" || (cursor.journalPath.startsWith("recovery/") && cursor.journalPath.endsWith("/journal")), "지원하지 않는 checkpoint 저널 위치입니다.");
+            cursor.journalSequence = static_cast<std::uint64_t>(seq);
+            root.getDynamicObject()->removeProperty("checkpoint");
+        }
         // Reject unrecognised/lossy fields in this schema instead of silently dropping them on save.
         auto canonical = juce::JSON::parse(toJson(p)); canonical.getDynamicObject()->removeProperty("checksum");
         require(sameFields(canonical, root), "프로젝트에 지원하지 않는 필드가 있습니다.");
-        out = std::move(p); if (info != nullptr) *info = {out.editRevision, false, {}}; return juce::Result::ok();
+        out = std::move(p); if (info != nullptr) *info = cursor; return juce::Result::ok();
     }
     catch (const std::exception& e) { return juce::Result::fail(juce::String::fromUTF8(e.what())); }
 }
 juce::Result RecorderSerializer::readCheckpoint(const juce::File& file, RecorderProject& out, CheckpointInfo* info, bool allowBackup)
 {
     const auto text = file.loadFileAsString();
-    const auto result = fromJson(text, out, info);
-    if (result.wasOk() || !allowBackup || foreignOrFuture(text)) return result;
+    RecorderProject primary; CheckpointInfo primaryInfo;
+    const auto result = fromJson(text, primary, &primaryInfo);
+    primaryInfo.sourceFile = file;
+    if (!allowBackup || foreignOrFuture(text)) { if (result.wasOk()) { out = primary; if (info) *info = primaryInfo; } return result; }
     const auto backup = file.getSiblingFile(file.getFileName() + ".bak");
-    if (!backup.existsAsFile()) return result;
+    if (!backup.existsAsFile()) { if (result.wasOk()) { out = primary; if (info) *info = primaryInfo; } return result; }
     CheckpointInfo recovered;
-    const auto fallback = fromJson(backup.loadFileAsString(), out, &recovered);
+    RecorderProject previous; const auto fallback = fromJson(backup.loadFileAsString(), previous, &recovered);
+    recovered.sourceFile = backup;
+    const bool backupNewer = fallback.wasOk() && (recovered.generation > primaryInfo.generation
+        || (recovered.generation == primaryInfo.generation && previous.editRevision > primary.editRevision));
+    if (result.wasOk() && (!backupNewer || previous.projectId != primary.projectId))
+    { out = primary; if (info) *info = primaryInfo; return result; }
     if (fallback.failed()) return juce::Result::fail(result.getErrorMessage() + juce::String::fromUTF8(" 이전 저장본도 열 수 없습니다: ") + fallback.getErrorMessage());
+    out = previous;
     recovered.usedBackup = true; recovered.recoveryMessage = juce::String::fromUTF8("이전 저장본을 열었습니다. 원본 파일은 보존됩니다. 마지막 저장 이력: ") + juce::String(static_cast<juce::int64>(out.editRevision));
     if (info != nullptr) *info = recovered;
     return juce::Result::ok();
 }
 juce::Result RecorderSerializer::writeCheckpoint(const juce::File& file, const RecorderProject& p)
+{ CheckpointInfo written; return writeCheckpoint(file, p, written); }
+juce::Result RecorderSerializer::writeCheckpoint(const juce::File& file, const RecorderProject& p, CheckpointInfo& written,
+                                                 FileIoFaultAdapter* faults, const std::function<void(const char*)>& hook)
 {
+    // Also serializes the legacy TakeController's checkpoint call with the edit worker.
+    static std::mutex checkpointMutex; const std::lock_guard<std::mutex> guard(checkpointMutex);
+    try
+    {
     const auto valid = p.validate(); if (valid.failed()) return valid;
     if (file == juce::File()) return juce::Result::fail(juce::String::fromUTF8("프로젝트 저장 위치가 없습니다."));
     if (file.getFullPathName().startsWith("\\\\")) return juce::Result::fail(juce::String::fromUTF8("프로젝트는 로컬 폴더에 저장하세요."));
     const auto verify = [](const juce::String& text) { RecorderProject checked; return fromJson(text, checked); };
+    const auto flush = [&](const juce::File& target)
+    {
+        DurableFile durable(faults); auto r = durable.open(target); if (r.failed()) return r;
+        r = durable.flushData(); const auto closed = durable.close(); return r.failed() ? r : closed;
+    };
+    auto nextInfo = written; nextInfo.checkpointRevision = p.editRevision;
+    Sample generation = nextInfo.generation; juce::String unchanged;
     if (file.exists())
     {
         if (!file.existsAsFile()) return juce::Result::fail(juce::String::fromUTF8("프로젝트 저장 경로가 파일이 아닙니다."));
-        const auto old = file.loadFileAsString(); RecorderProject previous;
-        const auto checked = fromJson(old, previous);
+        const auto old = file.loadFileAsString(); RecorderProject previous; CheckpointInfo prior;
+        const auto checked = fromJson(old, previous, &prior);
         if (checked.failed()) return juce::Result::fail(juce::String::fromUTF8("기존 저장본이 손상되어 덮어쓰지 않았습니다. ") + checked.getErrorMessage());
         if (previous.projectId != p.projectId || previous.editRevision > p.editRevision)
             return juce::Result::fail(juce::String::fromUTF8("다른 프로젝트 또는 더 최신 저장본을 덮어쓸 수 없습니다."));
-        const auto savedBackup = gocue::SafeFileWrite::writeTextVerified(file.getSiblingFile(file.getFileName() + ".bak"), old, verify);
+        generation = (std::max)(generation, prior.generation);
+        // Identical explicit saves preserve bytes, while a new journal cursor
+        // always creates a generation even at the same user edit revision.
+        if (written.generation == 0 && written.journalSequence == 0 && written.journalSegment == 1
+            && written.journalPath == "journal")
+        {
+            nextInfo = prior;
+            if (toJson(previous) == toJson(p)) unchanged = old;
+        }
+        const auto backup = file.getSiblingFile(file.getFileName() + ".bak");
+        RecorderProject bakProject; CheckpointInfo bakInfo;
+        if (backup.existsAsFile() && fromJson(backup.loadFileAsString(), bakProject, &bakInfo).wasOk())
+        {
+            if (bakProject.projectId != p.projectId || bakProject.editRevision > p.editRevision)
+                return juce::Result::fail("Cannot replace a foreign/newer backup checkpoint");
+            generation = (std::max)(generation, bakInfo.generation);
+        }
+        const auto savedBackup = gocue::SafeFileWrite::writeTextVerified(backup, old, verify);
         if (savedBackup.failed()) return savedBackup;
+        const auto flushed = flush(backup); if (flushed.failed()) return flushed;
+        if (hook) hook("checkpoint-backup-flushed");
     }
     for (const auto* path : {"journal", "media/takes", "media/imports", "cache", "recovery", "exports"})
     {
         const auto created = file.getParentDirectory().getChildFile(path).createDirectory();
         if (created.failed()) return created;
     }
-    // Durability/journal checkpoint commit is supplied by rounds 06/19, after this succeeds.
-    return gocue::SafeFileWrite::writeTextVerified(file, toJson(p), verify);
+    if (unchanged.isNotEmpty())
+    { const auto r = flush(file); if (r.wasOk()) written = nextInfo; return r; }
+    if (generation == (std::numeric_limits<Sample>::max)()) return juce::Result::fail("Checkpoint generation exhausted");
+    nextInfo.generation = generation + 1; nextInfo.checkpointRevision = p.editRevision;
+    const auto json = toJson(p, nextInfo);
+    if (hook) hook("checkpoint-replace");
+    const auto saved = gocue::SafeFileWrite::writeTextVerified(file, json, [&](const juce::String& text)
+    { const auto r = verify(text); if (r.wasOk() && hook) hook("checkpoint-verified-before-replace"); return r; });
+    if (saved.failed()) return saved;
+    if (hook) hook("checkpoint-after-replace");
+    const auto flushed = flush(file); if (flushed.failed()) return flushed;
+    RecorderProject verified; CheckpointInfo checked; const auto read = fromJson(file.loadFileAsString(), verified, &checked);
+    if (read.failed()) return read;
+    if (toJson(verified) != toJson(p) || checked.generation != nextInfo.generation) return juce::Result::fail("Checkpoint read-back mismatch");
+    written = checked; written.sourceFile = file; if (hook) hook("checkpoint-after-flush"); return juce::Result::ok();
+    }
+    catch (const std::exception& e) { return juce::Result::fail(e.what()); }
 }
 }

@@ -35,6 +35,8 @@ int runImportedClipTests();      // round 16: independent import track/document 
 int runPlaybackTests();          // round 11: indexed playback / audible transport (no devices)
 int runUiWiringTests();          // round 12: UI state, settings, derived caches and shared output
 int runQueueIsolationTests();    // round 05: two-camera queues, raw-audio stop and pixel oracle
+int runEditJournalTests();       // round 19: transactions, worker, checkpoint generations
+int runRetakeRecoveryTests();    // round 19: edit/undo/placement/finalization recovery
 
 namespace
 {
@@ -47,6 +49,7 @@ int runAsioNativePcm() { const int a = runAsioStampTests(), b = runNativePcmTest
 int runJournalDurable() { const int a = runJournalTests(), b = runWavChunkTests(); return (a || b) ? 1 : 0; }
 int runCutLinkHistory() { const int a = runClipEditTests(), b = runLinkEditTests(), c = runEditHistoryTests(); return (a || b || c) ? 1 : 0; }
 int runAudioImport() { const int a = runAudioImportTests(), b = runImportedClipTests(); return (a || b) ? 1 : 0; }
+int runRecoveryIdempotence() { const int a = runRecoveryTests(), b = runRetakeRecoveryTests(); return (a || b) ? 1 : 0; }
 const Suite suites[] = {
     {"capture-contract", runCaptureContractTests},
     {"capture-review", runCaptureReviewTests},
@@ -59,7 +62,8 @@ const Suite suites[] = {
     {"project-roundtrip", runProjectTests},
     {"recorder-audio", runRecorderAudioTests},
     {"take-lifecycle", runTakeControllerTests},
-    {"recovery-idempotence", runRecoveryTests},
+    {"recovery-idempotence", runRecoveryIdempotence},
+    {"edit-journal-replay", runEditJournalTests},
     {"large-files", runLargeFileTests},
     {"cut-link-history", runCutLinkHistory},
     {"edit-property", runEditPropertyTests},

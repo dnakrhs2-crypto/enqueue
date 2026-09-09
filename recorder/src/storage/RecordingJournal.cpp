@@ -35,6 +35,16 @@ bool relative(const juce::var& v)
 }
 bool validPayload(JournalKind kind, const juce::var& p)
 {
+    if (kind >= JournalKind::EditTransaction && kind <= JournalKind::MediaRegistry)
+    {
+        const auto project = p["projectId"].toString();
+        if (!p.isObject() || juce::Uuid(project).isNull()
+            || (project != juce::Uuid(project).toString() && project != juce::Uuid(project).toDashedString())) return false;
+        if (kind == JournalKind::EditCheckpoint)
+            return nonnegative(p["revision"]) && nonnegative(p["generation"]) && p["checksum"].isString();
+        return nonnegative(p["baseRevision"]) && nonnegative(p["revision"])
+            && p["entities"].isArray() && p["validationHash"].isString() && p["resultHash"].isString();
+    }
     if (!p.isObject() || !uuid(p["takeId"])) return false;
     if (kind == JournalKind::TakeFinalized) return true;
     if (kind == JournalKind::TakeStopped) return number(p["Nstop"]) && uuid(p["placementEditId"]);
@@ -83,29 +93,51 @@ juce::File RecordingJournal::logFile(const juce::File& dir, unsigned n)
     return dir.getChildFile("takes-" + juce::String(n).paddedLeft('0', 6) + ".log");
 }
 juce::Result RecordingJournal::open(const juce::File& dir, std::uint64_t rotationBytes)
+{ return openDomain(dir, rotationBytes, false, 1, 0); }
+juce::File RecordingJournal::editLogFile(const juce::File& dir, unsigned n)
+{ return dir.getChildFile("edits-" + juce::String(n).paddedLeft('0', 6) + ".log"); }
+juce::Result RecordingJournal::openEdits(const juce::File& dir, unsigned first, std::uint64_t preceding, std::uint64_t rotation)
+{ return openDomain(dir, rotation, true, first, preceding); }
+juce::Result RecordingJournal::openDomain(const juce::File& dir, std::uint64_t rotationBytes, bool editDomain, unsigned first, std::uint64_t preceding)
 {
     if (writerLock != INVALID_HANDLE_VALUE) return fail(juce::Result::fail("Journal already open"));
-    error = juce::Result::ok(); sequence = 0; segment = 0; directory = dir;
+    error = juce::Result::ok(); sequence = 0; segment = 0; directory = dir; edits = editDomain;
+    if (first == 0) return fail(juce::Result::fail("Invalid first journal segment"));
     if (rotationBytes < headerBytes + commitBytes) return fail(juce::Result::fail("Journal rotation limit too small"));
     rotateAt = rotationBytes;
     if (fail(directory.createDirectory()).failed()) return error;
-    const auto lockFile = directory.getChildFile("takes.writer.lock");
+    const auto lockFile = directory.getChildFile(edits ? "edits.writer.lock" : "takes.writer.lock");
     writerLock = CreateFileW(lockFile.getFullPathName().toWideCharPointer(), GENERIC_READ | GENERIC_WRITE,
         0, nullptr, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
     if (writerLock == INVALID_HANDLE_VALUE)
         return fail(juce::Result::fail("Journal writer lock failed (Win32 " + juce::String(static_cast<int>(GetLastError())) + ")"));
     JournalReplay read;
-    if (fail(replay(directory, read)).failed()) { close(); return error; }
+    if (fail(replayDomain(directory, read, edits, first, preceding)).failed()) { close(); return error; }
     if (read.ignoredTail)
     {
         fail(juce::Result::fail("Journal needs recovery in a new copy; original tail preserved: " + read.tailReason));
         close(); return error;
     }
-    sequence = read.lastSequence; segment = std::max(1u, read.fileCount);
-    if (fail(stream.open(logFile(directory, segment))).failed()) close();
+    sequence = read.lastSequence; segment = std::max(first, read.fileCount);
+    if (fail(stream.open(edits ? editLogFile(directory, segment) : logFile(directory, segment))).failed()) close();
     return error;
 }
-juce::Result RecordingJournal::appendRecord(JournalKind kind, const juce::Uuid& txn, const juce::var& payload)
+juce::Result RecordingJournal::appendEditRecord(JournalKind kind, const juce::var& payload, const juce::Uuid& txn,
+                                               const std::function<void(const char*)>& hook)
+{
+    if (!edits || kind < JournalKind::EditTransaction || kind > JournalKind::MediaRegistry)
+        return fail(juce::Result::fail("Wrong journal domain/kind"));
+    return appendRecord(kind, txn, payload, hook);
+}
+juce::Result RecordingJournal::rotate()
+{
+    if (error.failed()) return error;
+    if (!stream.isOpen() || segment == std::numeric_limits<unsigned>::max()) return fail(juce::Result::fail("Cannot rotate journal"));
+    if (fail(stream.close()).failed()) return error;
+    return fail(stream.open(edits ? editLogFile(directory, ++segment) : logFile(directory, ++segment), DurableFile::OpenMode::createNew));
+}
+juce::Result RecordingJournal::appendRecord(JournalKind kind, const juce::Uuid& txn, const juce::var& payload,
+                                           const std::function<void(const char*)>& hook)
 {
     if (error.failed()) return error;
     if (writerLock == INVALID_HANDLE_VALUE) return fail(juce::Result::fail("Journal is not open"));
@@ -125,15 +157,15 @@ juce::Result RecordingJournal::appendRecord(JournalKind kind, const juce::Uuid& 
     std::memcpy(h + headerBytes, json.toRawUTF8(), bytes); put(h + total - commitBytes, committed);
     if (stream.writtenBytes() && total > rotateAt - std::min(rotateAt, stream.writtenBytes()))
     {
-        if (segment == std::numeric_limits<unsigned>::max()) return fail(juce::Result::fail("Journal segment number exhausted"));
-        if (fail(stream.close()).failed()) return error;
-        if (fail(stream.open(logFile(directory, ++segment), DurableFile::OpenMode::createNew)).failed()) return error;
+        if (rotate().failed()) return error;
     }
     // Commit marker is a separate final append. A torn body/marker fails replay.
-    if (fail(stream.write(h, total - commitBytes)).failed()
-        || fail(stream.write(h + total - commitBytes, commitBytes)).failed()
+    if (fail(stream.write(h, total - commitBytes)).failed()) return error;
+    if (hook) hook("journal-before-commit");
+    if (fail(stream.write(h + total - commitBytes, commitBytes)).failed()
         || fail(stream.flushApplicationBuffers()).failed() || fail(stream.flushData()).failed()) return error;
     ++sequence;
+    if (hook) hook("journal-after-commit");
     return error;
 }
 juce::Result RecordingJournal::append(const JournalTakeStarted& s, const juce::Uuid& txn)
@@ -175,9 +207,9 @@ juce::Result RecordingJournal::append(const JournalTakeStopped& s, const juce::U
     auto p = take(s.takeId); set(p, "Nstop", juce::var(static_cast<juce::int64>(s.nstop)));
     set(p, "placementEditId", s.placementEditId.toDashedString()); return appendRecord(JournalKind::TakeStopped, txn, p);
 }
-juce::Result RecordingJournal::append(const JournalTakeFinalized& f, const juce::Uuid& txn)
+juce::Result RecordingJournal::append(const JournalTakeFinalized& f, const juce::Uuid& txn, const std::function<void(const char*)>& hook)
 {
-    return appendRecord(JournalKind::TakeFinalized, txn, take(f.takeId));
+    return appendRecord(JournalKind::TakeFinalized, txn, take(f.takeId), hook);
 }
 juce::Result RecordingJournal::close()
 {
@@ -190,17 +222,23 @@ juce::Result RecordingJournal::close()
     return error;
 }
 juce::Result RecordingJournal::replay(const juce::File& directory, JournalReplay& out)
+{ return replayDomain(directory, out, false, 1, 0); }
+juce::Result RecordingJournal::replayEdits(const juce::File& dir, JournalReplay& out, unsigned first, std::uint64_t preceding)
+{ return replayDomain(dir, out, true, first, preceding); }
+juce::Result RecordingJournal::replayDomain(const juce::File& directory, JournalReplay& out, bool edits, unsigned first, std::uint64_t preceding)
 {
-    out = {};
+    out = {}; out.lastSequence = preceding; out.fileCount = first - 1;
     if (!directory.exists()) return juce::Result::ok();
     std::vector<std::pair<unsigned, juce::File>> segments;
-    for (const auto& f : directory.findChildFiles(juce::File::findFiles, false, "takes-*.log"))
+    for (const auto& f : directory.findChildFiles(juce::File::findFiles, false, edits ? "edits-*.log" : "takes-*.log"))
     {
         const auto name = f.getFileNameWithoutExtension().substring(6);
         const auto n = name.getLargeIntValue();
         if (!name.containsOnly("0123456789") || name.length() < 6 || n < 1
-            || n > std::numeric_limits<unsigned>::max() || logFile(directory, static_cast<unsigned>(n)) != f)
+            || n > std::numeric_limits<unsigned>::max()
+            || (edits ? editLogFile(directory, static_cast<unsigned>(n)) : logFile(directory, static_cast<unsigned>(n))) != f)
             return juce::Result::fail("Invalid journal segment name: " + f.getFileName());
+        if (n < first) continue;
         segments.emplace_back(static_cast<unsigned>(n), f);
     }
     std::sort(segments.begin(), segments.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
@@ -226,6 +264,7 @@ juce::Result RecordingJournal::replay(const juce::File& directory, JournalReplay
             const auto total = get<std::uint32_t>(h.data() + 4), payloadSize = get<std::uint32_t>(h.data() + 36);
             const auto nextSequence = get<std::uint64_t>(h.data() + 12);
             const auto kind = static_cast<JournalKind>(get<std::uint16_t>(h.data() + 10));
+            if (edits != (kind >= JournalKind::EditTransaction && kind <= JournalKind::MediaRegistry)) return stop("Wrong journal domain/kind");
             if (get<std::uint32_t>(h.data()) != magic || get<std::uint32_t>(h.data() + 44) != crc32(h.data(), 44))
                 return stop("Record header magic/CRC mismatch");
             if (get<std::uint16_t>(h.data() + 8) != schemaVersion) return stop("Unsupported journal schema");

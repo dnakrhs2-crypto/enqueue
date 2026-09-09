@@ -7,6 +7,7 @@
 #include "record/TakeController.h"
 #include "record/Mp4TakeWriter.h"
 #include "storage/StorageEncoding.h"
+#include "storage/RecoveryScanner.h"
 #include <juce_events/juce_events.h>
 #include "media/AudioImport.h"
 #include "playback/ImportedAudioCache.h"
@@ -988,6 +989,35 @@ int importAudioCommand(int argc, wchar_t** argv)
 }
 }
 int runDemoProbe(int argc, wchar_t** argv);
+int runRecoveryProbe(int argc, wchar_t** argv)
+{
+    juce::StringArray args; for (int i = 2; i < argc; ++i) args.add(juce::String(argv[i]));
+    if (args.contains("--selftest"))
+    {
+        const auto executable = juce::File::getSpecialLocation(juce::File::currentExecutableFile);
+        const auto config = executable.getParentDirectory().getFileName();
+        const auto harness = executable.getParentDirectory().getParentDirectory().getParentDirectory()
+            .getChildFile("RecorderCrashHarness_artefacts/" + config + "/RecorderCrashHarness.exe");
+        if (!harness.existsAsFile()) { std::cerr << "RecorderCrashHarness is missing: " << harness.getFullPathName() << '\n'; return 1; }
+        args.insert(0, harness.getFullPathName()); juce::ChildProcess process;
+        if (!process.start(args)) { std::cerr << "Could not start recovery selftest\n"; return 1; }
+        const auto output = process.readAllProcessOutput(); process.waitForProcessToFinish(-1);
+        std::cout << output; return static_cast<int>(process.getExitCode());
+    }
+    juce::File root, report;
+    for (int i = 0; i < args.size(); ++i)
+    {
+        if (i + 1 == args.size()) throw std::invalid_argument("recover requires --project-dir PATH [--report PATH]");
+        const auto key = args[i]; const auto value = juce::File::getCurrentWorkingDirectory().getChildFile(args[++i]);
+        if (key == "--project-dir") root = value; else if (key == "--report") report = value;
+        else throw std::invalid_argument("Unknown recover option: " + key.toStdString());
+    }
+    RecoveryReport result; const auto status = RecoveryScanner().run(root, result);
+    auto json = result.toJson(); json.getDynamicObject()->setProperty("status", status.wasOk() ? "PASS" : "FAIL");
+    if (status.failed()) json.getDynamicObject()->setProperty("error", status.getErrorMessage());
+    if (report != juce::File()) CaptureTelemetry::writeJson(report, json);
+    std::cout << juce::JSON::toString(json, false) << '\n'; return status.wasOk() ? 0 : 1;
+}
 int wmain(int argc, wchar_t** argv)
 {
     SetConsoleOutputCP(CP_UTF8); SetConsoleCP(CP_UTF8);
@@ -999,6 +1029,7 @@ int wmain(int argc, wchar_t** argv)
         if (argc >= 2 && juce::String(argv[1]) == "import-audio") return importAudioCommand(argc, argv);
         if (argc >= 2 && juce::String(argv[1]) == "playback") return runPlaybackProbe(argc, argv);
         if (argc >= 2 && juce::String(argv[1]) == "demo") return runDemoProbe(argc, argv);
+        if (argc >= 2 && juce::String(argv[1]) == "recover") return runRecoveryProbe(argc, argv);
         args = parse(argc, argv);
         report = baseReport(args, &report); // also covers encode's early runtime check without changing its function
         if (args.command == "record-audio" || args.command == "record-take") return recordCommand(args);
