@@ -65,6 +65,34 @@ struct Fixture
 int runTakeStackTests()
 {
     recorder_test::Suite tests;
+    tests.test("Locked coordinator placement and retake preserve user edit and marker rules", []
+    {
+        Fixture f; auto& d = f.document; d.setRecordingStructureLock(true);
+        bool ran = false;
+        require(d.performEdit("state edit", [&](EditState&) { ran = true; }).failed(), "Locked state edit accepted");
+        require(d.performEdit("pure edit", {}, [&](const RecorderProject& p) { ran = true; return p; }).failed()
+                && !ran, "Locked user callbacks must not execute");
+        bool notified = false, keptLock = true, blockedReentry = true;
+        d.onChanged = [&]
+        {
+            if (d.getProject().media->takes.empty()) return;
+            notified = true; keptLock = keptLock && d.isRecordingStructureLocked();
+            bool entered = false;
+            blockedReentry = blockedReentry && d.performEdit("notification edit", [&](EditState&) { entered = true; }).failed() && !entered;
+        };
+        f.add(137, 9600, 9600); const auto firstVersion = f.versions.front();
+        Marker marker; marker.sample = 201; marker.name = "Capture marker"; ok(d.addMarker(marker));
+        const auto beforeRetake = hash(d.getProject()); const auto depth = d.getHistory().undoDepth();
+        f.add(137, 9600, 3201, false, f.stack); d.onChanged = {};
+        require(notified && keptLock && blockedReentry && d.isRecordingStructureLocked(), "Coordinator leaked its edit authority to notifications");
+        require(d.getHistory().undoDepth() == depth + 1 && d.getProject().takeStacks.front().activeVersionId == f.versions.back(),
+                "Locked retake must publish one complete version transaction");
+        require(d.useTakeVersion(f.stack, firstVersion).failed() && d.placeTake(d.getProject().media->takes.back().takeId).failed()
+                && d.undo().failed() && d.redo().failed(), "User version/placement/history bypassed recording lock");
+        require(d.getProject().markers.back().markerId == marker.markerId, "Coordinator dropped live marker");
+        d.setRecordingStructureLock(false); ok(d.undo());
+        require(hash(d.getProject()) == beforeRetake && d.getProject().media->takes.size() == 2, "Retake undo must retain recorded originals");
+    });
     tests.test("Three retakes, second restore, one undo/redo, checkpoint and original SHA256", []
     {
         Fixture f; f.add(137, 9600, 9600); const auto stack = f.stack;

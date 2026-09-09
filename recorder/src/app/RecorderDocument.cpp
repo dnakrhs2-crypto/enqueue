@@ -142,6 +142,7 @@ juce::Result RecorderDocument::performEdit(const juce::String& name, const std::
 {
     assertOwner();
     if (editing) return juce::Result::fail(juce::String::fromUTF8("편집 작업 중에는 다른 편집을 시작할 수 없습니다."));
+    if (recordingStructureLock) return fail(juce::String::fromUTF8("녹화 중에는 구조를 편집할 수 없습니다. 마커 추가는 가능합니다."));
     const juce::ScopedValueSetter<bool> guard(editing, true);
     auto next = *project;
     try { edit(static_cast<EditState&>(next)); }
@@ -150,17 +151,25 @@ juce::Result RecorderDocument::performEdit(const juce::String& name, const std::
     nextSelection.erase(std::remove_if(nextSelection.begin(), nextSelection.end(), [&](const auto& id) { return next.findClip(id) == nullptr; }), nextSelection.end());
     return publishEdit(std::move(next), name, options, true, nextSelection);
 }
-juce::Result RecorderDocument::publishEdit(RecorderProject next, const juce::String& name, const EditOptions& options, bool addHistory, const std::vector<Id>& nextSelection)
+juce::Result RecorderDocument::addMarker(Marker marker)
 {
-    if (recordingStructureLock)
+    assertOwner(); if (editing) return juce::Result::fail(juce::String::fromUTF8("편집 작업 중입니다."));
+    const juce::ScopedValueSetter<bool> guard(editing, true);
+    auto next = *project; next.markers.push_back(std::move(marker));
+    return publishEdit(std::move(next), juce::String::fromUTF8("마커 추가"), {}, true, selection, EditOrigin::markerAppend);
+}
+juce::Result RecorderDocument::publishEdit(RecorderProject next, const juce::String& name, const EditOptions& options,
+    bool addHistory, const std::vector<Id>& nextSelection, EditOrigin origin)
+{
+    if (recordingStructureLock && origin != EditOrigin::coordinator)
     {
-        // Both performEdit adapters share this gate. Only appending markers is safe
-        // while the recording coordinator owns the reserved timeline placement.
+        // Coordinator authority is local to this publication, never a temporary
+        // unlock that notifications or other user edits could inherit.
         auto structural = next; structural.markers = project->markers;
         const bool prefix = next.markers.size() > project->markers.size()
             && std::equal(project->markers.begin(), project->markers.end(), next.markers.begin(), [](const Marker& a, const Marker& b)
             { return a.markerId == b.markerId && a.sample == b.sample && a.name == b.name && a.colour == b.colour; });
-        if (!prefix || next.media != project->media
+        if (origin != EditOrigin::markerAppend || !prefix || next.media != project->media
             || json(RecorderSerializer::editStateToVar(structural)) != json(RecorderSerializer::editStateToVar(*project)))
             return fail(juce::String::fromUTF8("녹화 중에는 구조를 편집할 수 없습니다. 마커 추가는 가능합니다."));
     }
@@ -192,8 +201,8 @@ juce::Result RecorderDocument::publishEdit(RecorderProject next, const juce::Str
 juce::Result RecorderDocument::performEdit(const juce::String& name, const juce::String& key,
     const std::function<ClipEditResult(const RecorderProject&)>& edit, const EditOptions& supplied)
 {
-    if (recordingStructureLock) return fail(juce::String::fromUTF8("녹화 중에는 구조를 편집할 수 없습니다."));
     assertOwner(); if (editing) return juce::Result::fail(juce::String::fromUTF8("편집 작업 중입니다."));
+    if (recordingStructureLock) return fail(juce::String::fromUTF8("녹화 중에는 구조를 편집할 수 없습니다. 마커 추가는 가능합니다."));
     const juce::ScopedValueSetter<bool> guard(editing, true);
     try
     {
@@ -227,7 +236,7 @@ juce::Result RecorderDocument::placeDubbingTake(Take take, std::vector<MediaAsse
     std::vector<Id> selected;
     for (const auto& t : result.project.tracks) for (const auto& c : t.clips.items())
         if (result.project.isActive(c) && (c.assetId == take.cam1AssetId || c.assetId == take.cam2AssetId)) selected.push_back(c.clipId);
-    return publishEdit(std::move(result.project), juce::String::fromUTF8("더빙 테이크 배치"), {}, true, selected);
+    return publishEdit(std::move(result.project), juce::String::fromUTF8("더빙 테이크 배치"), {}, true, selected, EditOrigin::coordinator);
 }
 juce::Result RecorderDocument::useTakeVersion(const Id& stack, const Id& version)
 {
@@ -296,7 +305,11 @@ juce::Result RecorderDocument::updateTakeState(const Id& id, TakeState state)
 }
 juce::Result RecorderDocument::placeTake(Take take, std::vector<MediaAsset> assets)
 {
-    if (recordingStructureLock) return fail(juce::String::fromUTF8("녹화 중에는 테이크를 배치할 수 없습니다."));
+    return placeNewTake(std::move(take), std::move(assets), EditOrigin::user);
+}
+juce::Result RecorderDocument::placeNewTake(Take take, std::vector<MediaAsset> assets, EditOrigin origin)
+{
+    if (recordingStructureLock && origin != EditOrigin::coordinator) return fail(juce::String::fromUTF8("녹화 중에는 테이크를 배치할 수 없습니다."));
     assertOwner(); if (editing) return juce::Result::fail(juce::String::fromUTF8("편집 작업 중입니다."));
     const juce::ScopedValueSetter<bool> guard(editing, true);
     auto next = *project; auto registry = std::make_shared<MediaRegistry>(*project->media);
@@ -310,7 +323,7 @@ juce::Result RecorderDocument::placeTake(Take take, std::vector<MediaAsset> asse
     if (take.createdAt.isEmpty()) take.createdAt = juce::Time::getCurrentTime().toISO8601(true);
     if (take.name.isEmpty()) take.name = juce::String::fromUTF8("테이크 ") + juce::String(take.number).paddedLeft('0', 3) + " · " + take.createdAt;
     registry->assets.insert(registry->assets.end(), assets.begin(), assets.end()); registry->takes.push_back(take); next.media = registry;
-    return place(std::move(next), take, take.placementSample);
+    return place(std::move(next), take, take.placementSample, origin);
 }
 juce::Result RecorderDocument::placeTake(const Id& id)
 {
@@ -320,7 +333,7 @@ juce::Result RecorderDocument::placeTake(const Id& id)
     const auto* take = project->media->findTake(id); if (take == nullptr) return fail(juce::String::fromUTF8("테이크를 찾을 수 없습니다."));
     return place(*project, *take, take->mode == TakeMode::normal ? project->activeTimelineEnd() : take->placementSample);
 }
-juce::Result RecorderDocument::place(RecorderProject next, const Take& take, Sample placement)
+juce::Result RecorderDocument::place(RecorderProject next, const Take& take, Sample placement, EditOrigin origin)
 {
     LinkGroup group;
     const auto addClip = [&](const Id& assetId, TrackKind kind, int micIndex, const juce::String& name)
@@ -341,7 +354,7 @@ juce::Result RecorderDocument::place(RecorderProject next, const Take& take, Sam
     }
     if (group.clipIds.size() >= 2) next.linkGroups.push_back(group);
     else for (auto& t : next.tracks) for (auto& c : t.clips.edit()) if (c.linkGroupId == group.linkGroupId) c.linkGroupId.clear();
-    return publishEdit(std::move(next), juce::String::fromUTF8("테이크 배치"), {}, true, group.clipIds);
+    return publishEdit(std::move(next), juce::String::fromUTF8("테이크 배치"), {}, true, group.clipIds, origin);
 }
 void RecorderDocument::acknowledgeJournal(const EditDelta& ticket, const juce::Result& result)
 {
@@ -356,7 +369,7 @@ void RecorderDocument::acknowledgeJournal(const EditDelta& ticket, const juce::R
     // Registry/timebase durability still requires a checkpoint; a pure edit can be saved by its journal.
     notify();
 }
-juce::Result RecorderDocument::placeTake(Take take, std::vector<MediaAsset> assets, const std::vector<int>& microphones)
+juce::Result RecorderDocument::placeRecordedTake(Take take, std::vector<MediaAsset> assets, const std::vector<int>& microphones)
 {
     assertOwner();
     if (microphones.size() != take.microphoneAssetIds.size() || !placementMicrophones.empty())
@@ -368,6 +381,6 @@ juce::Result RecorderDocument::placeTake(Take take, std::vector<MediaAsset> asse
         seen.push_back(mic);
     }
     const juce::ScopedValueSetter<std::vector<int>> mapping(placementMicrophones, microphones);
-    return placeTake(std::move(take), std::move(assets));
+    return placeNewTake(std::move(take), std::move(assets), EditOrigin::coordinator);
 }
 }

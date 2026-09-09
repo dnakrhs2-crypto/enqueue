@@ -208,7 +208,9 @@ void TimelineAudioRenderer::setPlan(std::vector<PlaybackAudioTrack> legacy, Samp
             auto c = item.mapping; c.trackId = t.trackId;
             need(item.source && c.timelineStartSample >= cursor && c.timelineStartSample <= end && c.lengthSamples > 0
                 && c.lengthSamples <= end - c.timelineStartSample && c.sourceUnitsNumerator == c.sourceUnitsDenominator, "Invalid legacy PCM mapping");
-            if (c.assetId.isEmpty()) c.assetId = c.clipId;
+            // Legacy callers may supply only a WAV source and sample mapping.
+            // Empty asset IDs denote gaps in the compiled plan, never anonymous PCM.
+            if (c.assetId.isEmpty()) c.assetId = c.clipId.isNotEmpty() ? c.clipId : newId();
             if (std::none_of(bindings.begin(), bindings.end(), [&](const auto& b) { return b.assetId == c.assetId; }))
                 bindings.push_back({c.assetId, wavAudioSource(item.source, true)});
             if (cursor < c.timelineStartSample) track.spans.push_back({{cursor, c.timelineStartSample - cursor}});

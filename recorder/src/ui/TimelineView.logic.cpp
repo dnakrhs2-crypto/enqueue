@@ -258,7 +258,7 @@ juce::Result TimelineEditController::setTrackListening(const Id& id, bool solo)
 juce::Result TimelineEditController::addMarker(const juce::String& name, const juce::String& colour)
 {
     Marker marker; marker.sample = cursor; marker.name = name.isEmpty() ? k("마커 ") + juce::String(document.getProject().markers.size() + 1) : name; marker.colour = colour;
-    return document.performEdit(text(TimelineAction::addMarker), [marker](EditState& e) { e.markers.push_back(marker); });
+    return document.addMarker(std::move(marker));
 }
 juce::Result TimelineEditController::editMarker(const Id& id, Sample at, const juce::String& name, const juce::String& colour)
 {

@@ -307,3 +307,6 @@ target_link_libraries(RecorderProbe PRIVATE RecorderTimelineLogic)
 target_sources(RecorderTests PRIVATE tests/RippleTests.cpp tests/ReorderTests.cpp tests/MarkerTests.cpp)
 target_link_libraries(RecorderTests PRIVATE RecorderTimelineLogic)
 add_test(NAME RecorderRippleReorderMarkers COMMAND RecorderTests --suite ripple-reorder-markers)
+
+# Rounds 14+15 merge regression: exercise suite lifetimes in one process as well.
+add_test(NAME RecorderAllSuites COMMAND RecorderTests)

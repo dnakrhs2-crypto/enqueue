@@ -9,5 +9,6 @@ int runDubbingFailureTests()
     suite.test("Invalid preparation does not leave locks or a take", [] { runDubbingFailureScenario(3); });
     suite.test("Abort during asynchronous preparation drains the later-created session", [] { runDubbingFailureScenario(4); });
     suite.test("One camera failure preserves the other stream and leaves an explicit gap", [] { runDubbingFailureScenario(5); });
+    suite.test("Rejected placement leaves no take and drains without an unchecked access", [] { runDubbingFailureScenario(6); });
     return suite.result("dubbing-failures");
 }

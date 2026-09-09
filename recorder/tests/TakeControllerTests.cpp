@@ -119,11 +119,19 @@ int runTakeControllerTests()
         require(f.controller.structureEditingLocked(), "Structure locked during recording");
         require(f.document.performEdit("Forbidden", [](EditState& e) { e.name = "changed"; }).failed(), "Document enforces lock");
         require(f.document.undo().failed(), "Undo locked");
+        bool placementNotified = false, placementLocked = false;
+        f.document.onChanged = [&]
+        {
+            if (!placementNotified && !f.document.getProject().media->takes.empty())
+            { placementNotified = true; placementLocked = f.document.isRecordingStructureLocked(); }
+        };
         const auto length = 1601; f.video->release = false; ok(f.controller.stop(n0 + length));
         while (f.audio.stopSample() < 0) { f.feed(); f.controller.tick(); }
         f.controller.tick();
         require(f.controller.state() == TakeController::State::finalizing, "Stop enters finalizing without joining worker");
         require(!f.controller.structureEditingLocked() && f.document.getProject().media->takes.size() == 1, "Clip placed before finalizer completes");
+        f.document.onChanged = {};
+        require(placementNotified && placementLocked, "Coordinator unlocked user edits before publishing recorded take");
         require(f.document.getProject().media->takes[0].logicalLength == length, "Logical end remains exact Nstop");
         require(f.controller.placementMetadata().ready && f.controller.placementMetadata().Nstop - f.controller.placementMetadata().N0 == length,
                 "Duration/peak/thumbnail cache available before finalizer drain");

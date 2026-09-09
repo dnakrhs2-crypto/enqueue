@@ -193,6 +193,7 @@ int runClipEditTests()
     test("tiny source pieces limit fades to half length and audio mapping rounds at origin", []
     {
         auto p=fixture(); const auto id=clip(p,3).clipId; p=result(ClipEdits::unlink(p,{id})); p=result(ClipEdits::trimOut(p,{id},5));
+        p=result(ClipEdits::move(p,{id},100)); // Both edges are internal; project endpoints do not receive a fade.
         const auto plan=RenderPlanCompiler::compile(p); need(plan->activeClips.back().microfadeInSamples==2&&plan->activeClips.back().microfadeOutSamples==2,"half length cap");
         RenderSpan s{{100,1000},newId(),newId(),101,0,147,160}; need(RenderPlanCompiler::sourceUnitAt(s,100,false)==93,"absolute source rescale");
     });

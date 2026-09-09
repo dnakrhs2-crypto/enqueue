@@ -456,7 +456,6 @@ struct TakeController::Impl
         placementMetadata = {length > 0, false, audio.startSample(), audio.stopSample(), placement, deviceSnapshot.sampleRate, peakSnapshot,
                              video && video->thumbnailReady() ? takeFolder().getChildFile("index/first-thumbnail.bmp") : juce::File()};
         placementMetadata.waveform = audio.peakCache();
-        document.setRecordingStructureLock(false);
         if (length <= 0)
         {
             partial = true; failure = "No nonempty callback-confirmed take range";
@@ -467,10 +466,11 @@ struct TakeController::Impl
             take.placementSample = placement; take.state = TakeState::finalising;
             for (auto& asset : assets) setRanges(asset, length);
             for (std::size_t i = 0; i < logicalMics.size(); ++i) setChunks(assets[i + 1], logicalMics[i], length);
-            const auto result = document.placeTake(take, assets, logicalIndices);
+            const auto result = document.placeRecordedTake(take, assets, logicalIndices);
             if (result.failed()) { partial = true; failure = result.getErrorMessage(); }
             else { take = *document.getProject().media->findTake(take.takeId); placementEdit = juce::Uuid(document.lastEditTransaction()); }
         }
+        document.setRecordingStructureLock(false);
         placementMs = elapsedMs(stopQpc); finalizationQpc = qpcNow(); transition(State::finalizing);
         work = std::async(std::launch::async, [this]
         {
