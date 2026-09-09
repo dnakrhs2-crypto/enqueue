@@ -49,6 +49,8 @@ int runCameraSlotTests();        // round 24: product camera slots and partial f
 int runExportRangeTests();       // rounds 20+21: immutable export range and common PCM
 int runWavExportTests();
 int runFinalExportTests();
+int runMaterialExportTests();
+int runExportLifecycleTests();
 
 namespace
 {
@@ -64,6 +66,8 @@ int runAudioImport() { const int a = runAudioImportTests(), b = runImportedClipT
 int runRippleReorderMarkers() { const int a = runRippleTests(), b = runReorderTests(), c = runMarkerTests(); return (a || b || c) ? 1 : 0; }
 int runRecoveryIdempotence() { const int a = runRecoveryTests(), b = runRetakeRecoveryTests(); return (a || b) ? 1 : 0; }
 const Suite suites[] = {
+    {"materials-alignment", runMaterialExportTests},
+    {"export-lifecycle", runExportLifecycleTests},
     {"export-audio-range", runExportRangeTests},
     {"wav-export", runWavExportTests},
     {"final-export-sources", runFinalExportTests},

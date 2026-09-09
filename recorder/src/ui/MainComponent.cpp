@@ -1,4 +1,5 @@
 #include "MainComponent.h"
+#include "ExportDialog.h"
 #include <chrono>
 
 namespace gocue::recorder
@@ -30,6 +31,7 @@ MainComponent::MainComponent(RecorderDocument& d, RecorderSettings& s) : documen
     session.onLoadedPeaks = [this](const Id& id, auto peaks, unsigned channel) { timelineView.setLoadedPeaks(id, std::move(peaks), channel); };
     session.onThumbnails = [this](const Id& id, auto frames) { timelineView.setThumbnails(id, std::move(frames)); };
     document.onChanged = [this] { refreshPending = true; };
+    exportDialog = std::make_unique<ExportDialog>(document, session, recordView.exportButton, [this](const juce::String& text) { showError(text); });
     setSize(1180, 780); refresh(); startTimer(10);
 }
 MainComponent::~MainComponent()
@@ -39,7 +41,7 @@ void MainComponent::showError(const juce::String& message) { banner = message; r
 void MainComponent::setTimeline(bool on)
 { timeline = on; session.enterTimeline(on); timelineView.setVisible(on); refresh(); }
 void MainComponent::recordClicked()
-{ if (fileWork.valid()) return; const auto r = session.record(); if (r.failed()) showError(r.getErrorMessage()); else banner.clear(); refreshPending = true; }
+{ if (fileWork.valid()) return; if (exportDialog && !exportDialog->beforeRecording([this] { recordClicked(); })) return; const auto r = session.record(); if (r.failed()) showError(r.getErrorMessage()); else banner.clear(); refreshPending = true; }
 void MainComponent::stopClicked()
 {
     lastStopButtonQpc = qpcNow(); timelineView.lastClipPaintQpc = 0; timelineView.lastPaintedTake.clear();

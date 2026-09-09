@@ -1,5 +1,6 @@
 #include "export/FinalVideoExporter.h"
 #include "export/WavExportWriter.h"
+#include "export/ExportController.h"
 #include "diagnostics/CaptureTelemetry.h"
 #include "support/Platform.h"
 #include "../tests/AudioRenderFixtures.h"
@@ -18,6 +19,7 @@ extern "C"
 #include <map>
 #include <set>
 #include <cstring>
+#include <chrono>
 
 namespace gocue::recorder
 {
@@ -330,19 +332,330 @@ juce::var finalProbe(const Args& args)
     return report;
 }
 }
+namespace
+{
+class ExportProbeUnavailable : public std::runtime_error
+{ public: using std::runtime_error::runtime_error; };
+struct ExportProbeSource
+{
+    RecorderProject project;
+    juce::File directory;
+    std::vector<juce::File> originals;
+    juce::String description;
+    bool pixelIds = false;
+};
+ExportProbeSource checkpointSource(const juce::File& checkpoint, const juce::File& destination)
+{
+    if (!checkpoint.existsAsFile()) throw ExportProbeUnavailable("Actual round-10 checkpoint is missing: " + checkpoint.getFullPathName().toStdString());
+    ExportProbeSource source; exportCheck(RecorderSerializer::readCheckpoint(checkpoint, source.project, nullptr, false));
+    source.directory = destination; source.description = "Actual saved checkpoint copied with original media; journal replay is not implied";
+    source.originals.push_back(checkpoint); std::set<juce::String> paths;
+    for (const auto& asset : source.project.media->assets)
+    {
+        if (asset.relativePath.isNotEmpty()) paths.insert(asset.relativePath);
+        for (const auto& chunk : asset.chunks) paths.insert(chunk.relativePath);
+        if (asset.kind == AssetKind::importAudio && asset.relativePath.isNotEmpty())
+        {
+            const auto metadata = checkpoint.getParentDirectory().getChildFile(asset.relativePath).getSiblingFile(".import-info.json");
+            if (metadata.existsAsFile()) paths.insert(metadata.getRelativePathFrom(checkpoint.getParentDirectory()));
+        }
+    }
+    for (const auto& relative : paths)
+    {
+        exportRequire(isProjectRelativePath(relative), "Unsafe fixture media path");
+        const auto original = checkpoint.getParentDirectory().getChildFile(relative), copy = destination.getChildFile(relative);
+        exportRequire(original.existsAsFile(), ("Checkpoint source is missing: " + original.getFullPathName()).toRawUTF8());
+        exportCheck(copy.getParentDirectory().createDirectory()); exportRequire(!copy.exists() && original.copyFileTo(copy), "Copy checkpoint source into isolated fixture");
+        source.originals.push_back(original); source.originals.push_back(copy);
+    }
+    exportCheck(RecorderSerializer::writeCheckpoint(destination.getChildFile("project.recorder"), source.project));
+    source.originals.push_back(destination.getChildFile("project.recorder")); return source;
+}
+ExportProbeSource editedSource(const Args& args, const juce::File& destination, unsigned seconds, bool twoCameras)
+{
+    recorder_audio_fixture::Fixture fixture; const auto temporary = fixture.root;
+    exportRequire(temporary.getParentDirectory() == juce::File::getSpecialLocation(juce::File::tempDirectory)
+        && temporary.getFileName().startsWith("recorder-r14-fixture-"), "Unexpected temporary fixture owner");
+    exportRequire(temporary.deleteRecursively(), "Remove only owned seed fixture"); fixture.root = destination;
+    exportCheck(destination.createDirectory()); ExportProbeSource source; source.directory = destination;
+    buildFinalFixture(fixture, args, 1, seconds, source.originals);
+    auto& p = fixture.project;
+    if (twoCameras)
+    {
+        const auto camera = destination.getChildFile(p.media->assets[1].relativePath); syntheticCamera(camera, 2, seconds); source.originals.push_back(camera);
+        // Actual linked cut then independent one-sample/microphone ripple edits.
+        std::vector<Id> linked; for (std::size_t i = 0; i < 4; ++i) linked.push_back(p.tracks[i].clips.items()[0].clipId);
+        const auto apply = [&](ClipEditResult r) { exportCheck(r.status); p = std::move(r.project); ++p.editRevision; };
+        apply(ClipEdits::link(p, linked)); apply(ClipEdits::remove(p, {p.tracks[0].clips.items()[0].clipId}, {Sample(p.Fs), Sample(p.Fs / 2)}));
+        const auto ids = [](const Track& t) { std::vector<Id> result; for (const auto& c : t.clips.items()) result.push_back(c.clipId); return result; };
+        apply(ClipEdits::unlink(p, ids(p.tracks[2]))); apply(ClipEdits::move(p, ids(p.tracks[2]), 1, false));
+        apply(ClipEdits::unlink(p, ids(p.tracks[3]))); apply(ClipEdits::rippleDeleteTracks(p, {4 * Sample(p.Fs), p.Fs}, {p.tracks[3].trackId}));
+        auto registry = std::make_shared<MediaRegistry>(*p.media); auto& cameraAsset = registry->assets[1];
+        cameraAsset.availableRanges = {{0, 6 * Sample(p.Fs)}, {7 * Sample(p.Fs), cameraAsset.logicalLength - 7 * Sample(p.Fs)}};
+        cameraAsset.gaps = {{6 * Sample(p.Fs), p.Fs}}; p.media = registry;
+        std::vector<Id> versions; for (unsigned i = 0; i < 2; ++i) versions.push_back(p.tracks[i].clips.items()[0].clipId);
+        apply(ClipEdits::unlink(p, versions)); TakeStack stack; stack.spanSamples = p.Fs; TakeVersion oldVersion, newVersion;
+        for (unsigned i = 0; i < 2; ++i)
+        {
+            auto& track = p.tracks[i]; auto old = track.clips.items()[0], active = old;
+            old.takeStackId = active.takeStackId = stack.stackId; old.versionId = oldVersion.versionId; active.versionId = newVersion.versionId;
+            active.clipId = newId(); active.sourceIn += 800; oldVersion.clipIds.push_back(old.clipId); newVersion.clipIds.push_back(active.clipId);
+            track.clips.edit()[0] = old; track.clips.edit().push_back(active);
+        }
+        stack.activeVersionId = newVersion.versionId; stack.versions = {oldVersion, newVersion}; p.takeStacks.push_back(stack);
+        p.tracks[2].mute = true; p.tracks[3].solo = true; source.pixelIds = !args.count("--source-mp4");
+    }
+    else
+    {
+        // buildFinalFixture's second camera is metadata-only until explicitly
+        // supplied. Remove it from both track and take usage for this real 1cam.
+        p.tracks[1].clips.edit().clear(); auto registry = std::make_shared<MediaRegistry>(*p.media);
+        registry->takes[0].cam2AssetId.clear(); registry->assets.erase(registry->assets.begin() + 1); p.media = registry;
+    }
+    exportCheck(p.validate()); source.project = p;
+    exportCheck(RecorderSerializer::writeCheckpoint(destination.getChildFile("project.recorder"), p)); source.originals.push_back(destination.getChildFile("project.recorder"));
+    source.description = args.count("--source-mp4") ? "Actual round-02 MP4; deterministic edited microphone/import tones are synthetic" : "Two synthetic frame-ID cameras and independent edited audio";
+    return source;
+}
+// Streaming source pixel check and AAC presentation/tail check, run BEFORE each
+// child publication. The shared production verifier owns demux/decode and EOF.
+struct ExportSourceOracle
+{
+    const ExportJob& job;
+    TrackKind camera;
+    bool pixelIds;
+    unsigned slot;
+    PcmOracle pcm;
+    MediaIndex media;
+    std::map<Id, std::unique_ptr<SourcePixelOracle>> sources;
+    double squared = 0, tailSquared = 0, luma = 0, maximumLuma = 0;
+    Sample samples = 0, tailSamples = 0, frames = 0, black = 0;
+    ExportSourceOracle(const ExportJob& j, const FinalExportSelection& selection, ExportControl& c, bool ids)
+        : job(j), camera(selection.video), pixelIds(ids), slot(camera == TrackKind::cam1 ? 1 : 2), pcm(j, selection.audio, c) {}
+    ExportVerificationObserver observer()
+    {
+        ExportVerificationObserver observer;
+        observer.audio = [this](Sample at, unsigned count, const float* left, const float* right)
+        {
+            for (unsigned i = 0; i < count; ++i)
+            {
+                const auto n = std::size_t(at + i) * 2; exportRequire(n + 1 < pcm.interleaved.size(), "AAC exceeded common presentation range");
+                const double a = left[i] - pcm.interleaved[n], b = right[i] - pcm.interleaved[n + 1], e = a * a + b * b;
+                squared += e; ++samples; if (at + i >= Sample(pcm.interleaved.size() / 2) - 4096) { tailSquared += e; ++tailSamples; }
+            }
+        };
+        observer.video = [this](Sample n, const AVFrame& frame)
+        {
+            ++frames; const auto at = frameToSample(job.range.firstFrame + n, job.snapshot.Fs, job.snapshot.fps);
+            const MediaAsset* asset = nullptr; Sample sourceSample = 0;
+            for (const auto& t : job.snapshot.tracks) if (t.kind == camera) for (const auto& c : t.clips.items())
+                if (job.snapshot.isActive(c) && at >= c.timelineStartSample && at < c.timelineEnd())
+                {
+                    const auto* a = job.snapshot.media->findAsset(c.assetId); const auto u = c.sourceIn + (at - c.timelineStartSample);
+                    for (const auto& range : a->availableRanges) if (u >= range.start && u < range.start + range.length) { asset = a; sourceSample = u; }
+                }
+            if (!asset)
+            {
+                ++black; for (int y = 0; y < frame.height; y += 16) for (int x = 0; x < frame.width; x += 16)
+                    exportRequire(std::abs(int(frame.data[0][y * frame.linesize[0] + x]) - 16) <= 3, "Camera gap is not black");
+                return;
+            }
+            auto& source = sources[asset->assetId]; if (!source) source = std::make_unique<SourcePixelOracle>(media.openVideo(job.projectDirectory.getChildFile(asset->relativePath), job.snapshot.Fs));
+            const auto& expected = source->at(sourceSample);
+            if (pixelIds)
+            {
+                const auto id = probe::readPattern(frame.data[0], frame.linesize[0], frame.width, frame.height);
+                const auto expectedId = probe::readPattern(expected.data[0], expected.linesize[0], expected.width, expected.height);
+                exportRequire(id && expectedId && id->camera == slot && id->frame == expectedId->frame, "Material camera/frame-ID mapping mismatch");
+            }
+            double error = 0; Sample pixels = 0;
+            for (int y = 0; y < frame.height; y += 16) for (int x = 0; x < frame.width; x += 16)
+            { error += std::abs(int(frame.data[0][y * frame.linesize[0] + x]) - int(expected.data[0][y * expected.linesize[0] + x])); ++pixels; }
+            error /= double(pixels); luma += error; maximumLuma = (std::max)(maximumLuma, error); exportRequire(error <= 12, "Decoded source luma comparison failed");
+        };
+        observer.finish = [this]
+        {
+            exportRequire(frames == job.range.frameCount && samples == Sample(pcm.interleaved.size() / 2) && tailSamples > 0
+                && std::sqrt(squared / (2 * double(samples))) < .04 && std::sqrt(tailSquared / (2 * double(tailSamples))) < .04,
+                "Source audio/presentation/tail count oracle failed");
+        };
+        return observer;
+    }
+    juce::var report() const
+    {
+        auto row = jsonObject(); jsonSet(row, "camera", slot); jsonSet(row, "frames", frames); jsonSet(row, "blackFrames", black);
+        jsonSet(row, "pixelFrameIdVerified", pixelIds); jsonSet(row, "audioRmsError", std::sqrt(squared / (2 * double(samples))));
+        jsonSet(row, "audioTail4096RmsError", std::sqrt(tailSquared / (2 * double(tailSamples))));
+        jsonSet(row, "meanSourceLumaError", luma / double((std::max)(Sample{1}, frames - black))); jsonSet(row, "maximumFrameLumaError", maximumLuma); return row;
+    }
+};
+juce::var encodedQuality(const juce::File& file, const ExportJob& job)
+{
+    struct Input { AVFormatContext* p = nullptr; ~Input() { avformat_close_input(&p); } } input;
+    ffCheck(avformat_open_input(&input.p, file.getFullPathName().toRawUTF8(), nullptr, nullptr), "Inspect delivered quality");
+    ffCheck(avformat_find_stream_info(input.p, nullptr), "Inspect delivered streams");
+    std::uint64_t videoBytes = 0, audioBytes = 0; Sample frames = 0; auto packet = ffPacket();
+    for (;;)
+    {
+        const auto code = av_read_frame(input.p, packet.get()); if (code == AVERROR_EOF) break; ffCheck(code, "Read delivered packet sizes");
+        if (input.p->streams[packet->stream_index]->codecpar->codec_type == AVMEDIA_TYPE_VIDEO) { videoBytes += packet->size; ++frames; }
+        else audioBytes += packet->size; av_packet_unref(packet.get());
+    }
+    exportRequire(frames == job.range.frameCount, "Delivered packet frame count mismatch");
+    const auto seconds = double(job.range.frameCount) * job.snapshot.fps.denominator / job.snapshot.fps.numerator;
+    auto row = jsonObject(); jsonSet(row, "name", file.getFileName()); jsonSet(row, "fileBytes", file.getSize()); jsonSet(row, "frameCount", frames);
+    jsonSet(row, "videoPacketBytes", videoBytes); jsonSet(row, "videoBitrateBps", videoBytes * 8.0 / seconds); jsonSet(row, "audioBitrateBps", audioBytes * 8.0 / seconds);
+    jsonSet(row, "visualQualityGate", "Manual visual/NLE assessment remains unverified; bitrate is a measurement, not a quality verdict"); return row;
+}
+struct ProbeDiskFault final : FileIoFaultAdapter
+{
+    bool manifest = false;
+    juce::String manifestParentPrefix;
+    juce::Result beforeIo(FileIoOperation op, const juce::File& file, std::uint64_t, std::size_t) override
+    {
+        if (manifest ? op == FileIoOperation::flushData && file.getFileName().startsWith("export-manifest")
+                         && file.getParentDirectory().getFileName().startsWith(manifestParentPrefix)
+                     : op == FileIoOperation::append)
+            return juce::Result::fail("Injected export disk failure");
+        return juce::Result::ok();
+    }
+};
+juce::var combinedProbe(const Args& args)
+{
+    const auto secondsText = option(args, "--seconds", "60");
+    exportRequire(secondsText.containsOnly("0123456789") && secondsText.getIntValue() >= 8 && secondsText.getIntValue() <= 60,
+        "Development probe --seconds must be 8..60; product export duration is unlimited");
+    const auto seconds = static_cast<unsigned>(secondsText.getIntValue());
+    const auto mode = required(args, "--mode"); exportRequire(mode == "materials" || mode == "both" || mode == "final", "Use materials, final or both");
+    exportRequire(!args.count("--audio-cases"), "Use a single --audio selection for this combined benchmark");
+    const auto root = ExportController::resolveDestination(path(required(args, "--out-dir"))); exportCheck(root.createDirectory());
+    std::vector<ExportProbeSource> sources;
+    if (required(args, "--fixture") == "long-form")
+    {
+        const auto evidence = args.count("--evidence-dir") ? path(args.at("--evidence-dir"))
+            : juce::File::getSpecialLocation(juce::File::userHomeDirectory).getChildFile("tools/claude_harness/recorder_validation");
+        const auto mp4 = args.count("--source-mp4") ? path(args.at("--source-mp4")) : evidence.getChildFile("r02/encode60/cam1.mp4");
+        const auto checkpoint = args.count("--project") ? path(args.at("--project")) : evidence.getChildFile("r10/project/project.recorder");
+        if (!mp4.existsAsFile() || !checkpoint.existsAsFile()) throw ExportProbeUnavailable("long-form requires actual r02 MP4 and r10 project; supply --source-mp4 and --project or --evidence-dir");
+        auto actual = args; actual["--source-mp4"] = mp4.getFullPathName();
+        sources.push_back(editedSource(actual, root.getChildFile("r02-fixture"), seconds, false));
+        sources.push_back(checkpointSource(checkpoint, root.getChildFile("r10-fixture")));
+    }
+    else if (args.count("--project")) sources.push_back(checkpointSource(path(args.at("--project")), root.getChildFile("fixture")));
+    else sources.push_back(editedSource(args, root.getChildFile("fixture"), seconds, true));
+    juce::Array<juce::var> cases, faults, hashes;
+    AudioImportControl hashControl; std::map<juce::String, juce::String> protectedFiles;
+    const auto protect = [&](const juce::File& file)
+    { protectedFiles[file.getFullPathName()] = AudioImport::hashFile(file, hashControl); };
+    const auto checkProtected = [&]
+    { for (const auto& entry : protectedFiles) exportRequire(AudioImport::hashFile(juce::File(entry.first), hashControl) == entry.second, "Original or completed output changed during fault/cancel/retry"); };
+    for (const auto& source : sources) for (const auto& file : source.originals) protect(file);
+    for (std::size_t sourceIndex = 0; sourceIndex < sources.size(); ++sourceIndex)
+    {
+        const auto& source = sources[sourceIndex]; const auto duration = (std::min)(source.project.activeTimelineEnd(), Sample(seconds) * source.project.Fs);
+        for (auto exportMode : {ExportController::Mode::materials, ExportController::Mode::finalVideo})
+        {
+            if ((mode == "materials" && exportMode != ExportController::Mode::materials) || (mode == "final" && exportMode != ExportController::Mode::finalVideo)) continue;
+            const juce::String name = exportMode == ExportController::Mode::materials ? "materials" : "final";
+            ExportController::Request request; request.mode = exportMode; request.range = SampleRange{0, duration};
+            request.destination = root.getChildFile("source-" + juce::String(sourceIndex + 1) + "-" + name); request.materials.includeImports = true;
+            ExportJob plan(source.project, source.directory, request.destination, request.range);
+            const auto camera = option(args, "--video", "cam1"); exportRequire(camera == "cam1" || camera == "cam2", "Video must be cam1 or cam2");
+            request.finalSource = {camera == "cam1" ? TrackKind::cam1 : TrackKind::cam2, FinalVideoExporter::audioSource(plan, option(args, "--audio", "mix"))};
+            if (args.count("--reference-audio")) request.materials.referenceAudio = FinalVideoExporter::audioSource(plan, args.at("--reference-audio"));
+            juce::Array<juce::var> oracles;
+            const MaterialExporter::CameraRenderer cameraRenderer = [&](const ExportJob& j, const FinalExportSelection& selection, ExportControl& control, FileIoFaultAdapter* fault)
+            {
+                ExportSourceOracle oracle(j, selection, control, source.pixelIds);
+                auto result = FinalVideoExporter::run(j, selection, control, oracle.observer(), fault); oracles.add(oracle.report()); return result;
+            };
+            ExportController controller([&](const ExportJob& j, const ExportController::Request& r, ExportControl& control, FileIoFaultAdapter* fault)
+            { return r.mode == ExportController::Mode::materials ? MaterialExporter::run(j, r.materials, control, fault, cameraRenderer) : cameraRenderer(j, r.finalSource, control, fault); });
+            const auto started = std::chrono::steady_clock::now();
+            exportCheck(controller.start(source.project, source.directory, request)); controller.wait(); const auto result = controller.status();
+            const auto elapsed = std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count();
+            exportRequire(result.state == ExportController::State::completed, result.error.toRawUTF8());
+            juce::Array<juce::var> quality;
+            for (const auto& row : *result.manifest["files"].getArray())
+            {
+                const auto output = result.outputDirectory.getChildFile(row["name"].toString());
+                if (output.hasFileExtension("mp4")) quality.add(encodedQuality(output, plan));
+                else exportRequire(WavExportWriter::inspect(output).sampleCount == std::uint64_t(plan.range.sampleCount), "Material WAV common count failed");
+                protect(output);
+            }
+            protect(result.outputDirectory.getChildFile("export-manifest.json"));
+            auto record = result.manifest.clone(); jsonSet(record, "outputDirectory", result.outputDirectory.getFullPathName()); jsonSet(record, "sourceDescription", source.description);
+            const auto renderedFrames = double(plan.range.frameCount) * (exportMode == ExportController::Mode::materials ? double(MaterialExporter::cameras(source.project).size()) : 1.0);
+            jsonSet(record, "coreElapsedSeconds", record["elapsedSeconds"]); jsonSet(record, "elapsedSeconds", elapsed);
+            jsonSet(record, "effectiveFps", renderedFrames / elapsed); jsonSet(record, "renderedVideoFrames", renderedFrames);
+            jsonSet(record, "speedMeasurement", "Job creation, all preparation/render/encode/full verification/source oracles/durable publish; excludes fixture copying and separate bitrate scan");
+            jsonSet(record, "mode", name); jsonSet(record, "quality", quality); jsonSet(record, "sourceOracles", oracles);
+            jsonSet(record, "benchmarkRequested", args.count("--benchmark") != 0); jsonSet(record, "speedIncludesProbeOracle", true);
+            if (exportMode == ExportController::Mode::finalVideo) jsonSet(record, "initial2xTargetMet", double(record["effectiveFps"]) >= 2.0 * source.project.fps.numerator / source.project.fps.denominator);
+            cases.add(record);
+            if (args.count("--fault-cases")) for (int faultCase = 0; faultCase < 3; ++faultCase)
+            {
+                auto faultRequest = request; faultRequest.range = SampleRange{0, (std::min)(duration, Sample(source.project.Fs) * 2)};
+                faultRequest.destination = root.getChildFile("fault-" + juce::String(sourceIndex + 1) + "-" + name + "-" + juce::String(faultCase));
+                ProbeDiskFault disk; disk.manifest = faultCase == 2; disk.manifestParentPrefix = faultRequest.destination.getFileName() + "."; bool cancelAtRender = faultCase == 0;
+                ExportController failure([&](const ExportJob& j, const ExportController::Request& r, ExportControl& control, FileIoFaultAdapter* fault)
+                {
+                    auto progress = control.onProgress;
+                    control.onProgress = [&, progress](const ExportProgress& p)
+                    { if (progress) progress(p); if (cancelAtRender && (p.stage == "render" || p.stage.endsWith("/render"))) control.cancelled.store(true); };
+                    return r.mode == ExportController::Mode::materials ? MaterialExporter::run(j, r.materials, control, fault) : FinalVideoExporter::run(j, r.finalSource, control, {}, fault);
+                });
+                exportCheck(failure.start(source.project, source.directory, faultRequest, false, faultCase ? &disk : nullptr)); failure.wait();
+                const auto failed = failure.status();
+                exportRequire(failed.state == (faultCase ? ExportController::State::failed : ExportController::State::cancelled)
+                    && !faultRequest.destination.exists(), "Fault case incorrectly published/returned success");
+                exportRequire(root.findChildFiles(juce::File::findFilesAndDirectories, true, "*.partial").isEmpty(), "Fault left partial output behind");
+                checkProtected(); auto faultRow = jsonObject(); jsonSet(faultRow, "mode", name); jsonSet(faultRow, "sourceIndex", sourceIndex + 1);
+                jsonSet(faultRow, "case", faultCase == 0 ? "cancel-during-render" : faultCase == 1 ? "disk-write" : "manifest-flush");
+                jsonSet(faultRow, "originalsAndCompletedOutputsUnchanged", true); jsonSet(faultRow, "ownedPartialsRemoved", true);
+                if (faultCase == 1)
+                {
+                    cancelAtRender = false; exportCheck(failure.retry()); failure.wait();
+                    exportRequire(failure.status().state == ExportController::State::completed, "Disk failure retry did not complete"); checkProtected(); jsonSet(faultRow, "retrySucceeded", true);
+                    for (const auto& file : failure.status().outputDirectory.findChildFiles(juce::File::findFiles, true)) protect(file);
+                }
+                faults.add(faultRow);
+            }
+        }
+    }
+    checkProtected();
+    for (const auto& entry : protectedFiles) { auto row = jsonObject(); jsonSet(row, "path", entry.first); jsonSet(row, "sha256", entry.second); hashes.add(row); }
+    auto report = jsonObject(); jsonSet(report, "cases", cases); jsonSet(report, "faultCases", faults); jsonSet(report, "protectedHashes", hashes);
+    jsonSet(report, "outputDirectory", root.getFullPathName()); jsonSet(report, "originalsAndCompletedOutputsUnchanged", true);
+    jsonSet(report, "developmentSecondsCap", seconds); jsonSet(report, "longDurationMeasured", false);
+    jsonSet(report, "unverified", "1h/3h I/O, physical disk-full/power loss, visual quality, ASIO/GUI source-preview and Premiere/Resolve MP4/WAV/RF64/AAC import are separate manual gates. Default development run is at most 60 seconds per source, not a long-duration certification.");
+    return report;
+}
+}
 int runExportProbe(int argc,wchar_t** argv)
 {
     Args args;auto report=jsonObject();
     try
     {
-        const std::set<juce::String> allowed{"--fixture","--mode","--out-dir","--report","--video","--audio","--audio-cases","--source-mp4","--project","--seconds"};
+        const std::set<juce::String> allowed{"--fixture","--mode","--out-dir","--report","--video","--audio","--audio-cases","--source-mp4","--project","--seconds","--evidence-dir","--reference-audio"};
+        const std::set<juce::String> flags{"--benchmark", "--fault-cases"};
         for(int i=2;i<argc;++i)
-        { const juce::String key(argv[i]);exportRequire(allowed.count(key)&&i+1<argc&&!args.count(key),"Unknown/duplicate export option or missing value");args.emplace(key,juce::String(argv[++i])); }
-        required(args,"--report");required(args,"--out-dir");const auto mode=required(args,"--mode"),fixture=required(args,"--fixture");
+        { const juce::String key(argv[i]); exportRequire(!args.count(key), "Duplicate export option");
+          if (flags.count(key)) args.emplace(key, "true");
+          else { exportRequire(allowed.count(key)&&i+1<argc,"Unknown export option or missing value");args.emplace(key,juce::String(argv[++i])); } }
+        required(args,"--report");const auto mode=required(args,"--mode"),fixture=required(args,"--fixture");
+        if (!args.count("--out-dir")) args["--out-dir"] = path(args.at("--report")).getSiblingFile(path(args.at("--report")).getFileNameWithoutExtension() + "-output").getFullPathName();
         if(mode=="audio-materials"&&fixture=="audio-cuts-gaps-rf64")report=audioProbe(args);
         else if(mode=="final"&&fixture=="edited-one-camera")report=finalProbe(args);
+        else if(fixture=="long-form" || fixture=="two-camera-independent-audio") report=combinedProbe(args);
         else throw std::runtime_error("Unsupported export fixture/mode");
         jsonSet(report,"result","PASS");CaptureTelemetry::writeJson(path(required(args,"--report")),report);std::cout<<"PASS: "<<required(args,"--report")<<'\n';return 0;
+    }
+    catch(const ExportProbeUnavailable& e)
+    {
+        jsonSet(report,"result","unavailable");jsonSet(report,"error",e.what());
+        if(args.count("--report")) try { CaptureTelemetry::writeJson(path(args.at("--report")),report); } catch (...) {}
+        std::cerr<<juce::JSON::toString(report,false)<<'\n';return 2;
     }
     catch(const std::exception& e)
     {

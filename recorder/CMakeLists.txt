@@ -370,3 +370,11 @@ target_link_libraries(Recorder PRIVATE RecorderExport)
 add_test(NAME RecorderExportAudioRange COMMAND RecorderTests --suite export-audio-range)
 add_test(NAME RecorderWavExport COMMAND RecorderTests --suite wav-export)
 add_test(NAME RecorderFinalExportSources COMMAND RecorderTests --suite final-export-sources)
+
+# Rounds 22+23: sequential material publication, export lifecycle and Korean UI.
+# Append only; the shared test runner remains the sole main().
+target_sources(RecorderExport PRIVATE src/export/MaterialExporter.cpp src/export/ExportController.cpp)
+target_sources(Recorder PRIVATE src/ui/ExportDialog.cpp)
+target_sources(RecorderTests PRIVATE tests/MaterialExportTests.cpp tests/ExportLifecycleTests.cpp)
+add_test(NAME RecorderMaterialsAlignment COMMAND RecorderTests --suite materials-alignment)
+add_test(NAME RecorderExportLifecycle COMMAND RecorderTests --suite export-lifecycle)

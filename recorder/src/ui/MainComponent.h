@@ -7,6 +7,7 @@
 
 namespace gocue::recorder
 {
+class ExportDialog;
 class MainComponent : public juce::Component, private juce::Timer, private juce::KeyListener
 {
 public:
@@ -44,6 +45,7 @@ private:
     RecordView recordView;
     TimelineView timelineView;
     RecorderSession session; // joins native host users before RecordView destruction
+    std::unique_ptr<ExportDialog> exportDialog;
     std::unique_ptr<juce::DocumentWindow> settingsWindow, projectWindow;
     AudioSettingsPanel* audioPanel = nullptr;
     juce::Label* settingsError = nullptr;
