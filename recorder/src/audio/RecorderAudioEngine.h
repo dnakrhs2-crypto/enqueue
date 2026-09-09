@@ -2,6 +2,7 @@
 #include "AsioTapAbi.h"
 #include "app/RecorderSettings.h"
 #include "playback/PlaybackBlockQueue.h"
+#include "playback/IAudioOutput.h"
 #include "record/ReferenceMixWriter.h"
 #include "record/WavTrackWriter.h"
 #include "sync/IClockMapper.h"
@@ -24,6 +25,8 @@ public:
         int inputLatency = 0, outputLatency = 0, physicalInputs = 0, physicalOutputs = 0;
         std::vector<int> activeToPhysical;
         bool synthetic = false;
+        juce::StringArray inputNames, outputNames;
+        std::vector<int> availableBuffers;
     };
     struct TakeConfig
     {
@@ -74,6 +77,10 @@ public:
     Error error() const noexcept;
     bool referenceFailed() const noexcept;
     std::array<float, 8> peaks() const noexcept;
+    std::array<float, 8> inputPeaks() const noexcept; // latest input block, including unarmed microphones
+    std::shared_ptr<PeakCache> peakCache() const; // owner; after prepare has completed
+    void setPlaybackClient(IAudioOutputClient*); // same ASIO owner, detach barrier before destruction
+    juce::Result showControlPanel(); // UI owner only, outside a take
     juce::var telemetry() const; // after finishCapture
     // Synthetic driver/test adapter only. Real ASIO invokes the native hook before
     // JUCE's float conversion and uses its matching output callback afterwards.

@@ -50,7 +50,7 @@ private:
 class CaptureTelemetry
 {
 public:
-    explicit CaptureTelemetry(Rational rate) : fps(rate), frequency(qpcFrequency()) {}
+    explicit CaptureTelemetry(Rational rate, std::string id = {}) : fps(rate), frequency(qpcFrequency()), pipelineId(std::move(id)) {}
     void loss(LossReason reason, std::uint64_t n = 1) noexcept { losses[static_cast<size_t>(reason)].fetch_add(n, std::memory_order_relaxed); }
     std::uint64_t count(LossReason reason) const noexcept { return losses[static_cast<size_t>(reason)].load(std::memory_order_relaxed); }
     double ms(std::int64_t ticks) const noexcept { return 1000.0 * static_cast<double>(ticks) / static_cast<double>(frequency); }
@@ -71,6 +71,8 @@ public:
     std::atomic<std::int64_t> firstCallbackQpc{0};
     Rational fps;
     std::int64_t frequency;
+    const std::string pipelineId; // Immutable camera dimension; survives reset().
+    std::atomic<DWORD> capturePriorityError{0}, previewPriorityError{0};
 private:
     std::array<std::atomic<std::uint64_t>, static_cast<size_t>(LossReason::count)> losses{};
     std::array<Distribution, static_cast<size_t>(Timing::count)> timings{};

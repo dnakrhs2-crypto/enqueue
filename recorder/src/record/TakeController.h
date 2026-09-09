@@ -40,6 +40,7 @@ public:
         CameraMode cameraMode;
         bool synthetic = false;
         int projectFps = 60;
+        bool externalCapture = false; // app keeps its warmed live capture across takes/tabs
     };
     struct PlacementMetadata
     {
@@ -48,6 +49,7 @@ public:
         unsigned sampleRate = 0;
         std::array<float, 8> peaks{};
         juce::File firstThumbnail;
+        std::shared_ptr<PeakCache> waveform;
     };
     using VideoFactory = std::function<std::unique_ptr<ITakeVideoStream>()>;
     TakeController(RecorderDocument&, RecorderAudioEngine&, VideoFactory = {});
@@ -57,6 +59,7 @@ public:
     juce::Result prepare(Config);
     juce::Result start(std::int64_t N0 = -1);
     juce::Result stop(std::int64_t Nstop = -1);
+    juce::Result reset(); // owner, completed take only; releases metadata before changing projects
     void tick();
     State state() const noexcept;
     bool structureEditingLocked() const noexcept;

@@ -1,5 +1,6 @@
 #pragma once
 #include "storage/RecordingJournal.h"
+#include "media/PeakCache.h"
 #include <memory>
 #include <functional>
 
@@ -33,6 +34,7 @@ public:
         // One entry per packed channel; logical microphone IDs need not be dense.
         std::vector<unsigned> logicalMicrophones;
         std::uint64_t testChunkFrames = 0; // Nonzero only with a fault adapter; production remains 30s.
+        std::shared_ptr<PeakCache> peakCache; // derived min/max, accumulated on this writer worker
     };
     explicit WavTrackWriter(Config); // Allocates/touches the entire four-second PCM queue.
     ~WavTrackWriter();
@@ -48,6 +50,9 @@ public:
     // Detach/join the producer BEFORE calling stop. Nstop is exclusive in the
     // configured N0/O0 clock. Failure preserves originals and never finalizes.
     juce::Result stop(std::int64_t nstop, const juce::Uuid& placementEditId);
+    // Upstream raw loss/reset: preserve an unfinished take, never journal a
+    // normal finalization for a truncated source. Lock-free control/worker signal.
+    void requestAbort() noexcept;
     State state() const noexcept;
     Error error() const noexcept;
     juce::Result status() const; // Control thread only; copies the error text.

@@ -257,3 +257,31 @@ target_sources(RecorderTests PRIVATE tests/DubbingPlacementTests.cpp tests/Dubbi
 add_test(NAME RecorderDubbingPlacement COMMAND RecorderTests --suite dubbing-clock-placement)
 add_test(NAME RecorderDubbingFailures COMMAND RecorderTests --suite dubbing-failures)
 add_test(NAME RecorderTakeStackEdits COMMAND RecorderTests --suite take-stack-edits)
+
+# Round 12: app/device/UI wiring. Append only; keep the shared test entry point.
+target_sources(RecorderCore PRIVATE src/media/PeakCache.cpp src/media/ThumbnailCache.cpp
+    src/app/RecorderSession.cpp src/ui/UiState.cpp)
+target_sources(Recorder PRIVATE src/ui/RecordView.cpp src/ui/TimelineView.cpp
+    src/ui/RecorderTransportBar.cpp src/ui/AudioSettingsPanel.cpp src/ui/CameraSettingsPanel.cpp
+    src/ui/ProjectDialogs.cpp src/ui/DemoAutomation.cpp)
+target_link_libraries(Recorder PRIVATE RecorderCore juce::juce_gui_extra)
+target_sources(RecorderProbe PRIVATE tools/DemoProbe.cpp)
+target_sources(RecorderTests PRIVATE tests/UiWiringTests.cpp)
+add_test(NAME RecorderUiWiring COMMAND RecorderTests --suite ui-wiring)
+# Round 05 / spike 3: diagnostic dual-camera load, append-only integration.
+add_library(RecorderDualFixtures STATIC tools/FramePatternSource.cpp tools/DualAudioLoad.cpp)
+target_include_directories(RecorderDualFixtures PUBLIC tools)
+target_link_libraries(RecorderDualFixtures PUBLIC RecorderCore)
+add_executable(RecorderDualProbe tools/DualCaptureProbe.cpp)
+target_link_libraries(RecorderDualProbe PRIVATE RecorderDualFixtures)
+foreach(_rec_r05_target IN ITEMS RecorderDualFixtures RecorderDualProbe)
+    set_property(TARGET ${_rec_r05_target} PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+    target_compile_options(${_rec_r05_target} PRIVATE /utf-8 /W4 /permissive- /EHsc)
+endforeach()
+set_target_properties(RecorderDualProbe PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/RecorderDualProbe_artefacts/$<CONFIG>")
+add_custom_command(TARGET RecorderDualProbe POST_BUILD COMMAND ${CMAKE_COMMAND} -E copy_if_different
+    ${_rec_dlls} "$<TARGET_FILE_DIR:RecorderDualProbe>" VERBATIM)
+target_sources(RecorderTests PRIVATE tests/QueueIsolationTests.cpp)
+target_link_libraries(RecorderTests PRIVATE RecorderDualFixtures)
+add_test(NAME RecorderQueueIsolation COMMAND RecorderTests --suite queue-isolation)

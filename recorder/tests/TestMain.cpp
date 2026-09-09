@@ -36,6 +36,8 @@ int runPlaybackTests();          // round 11: indexed playback / audible transpo
 int runDubbingPlacementTests();
 int runDubbingFailureTests();
 int runTakeStackTests();
+int runUiWiringTests();          // round 12: UI state, settings, derived caches and shared output
+int runQueueIsolationTests();    // round 05: two-camera queues, raw-audio stop and pixel oracle
 
 namespace
 {
@@ -69,6 +71,8 @@ const Suite suites[] = {
     {"dubbing-clock-placement", runDubbingPlacementTests},
     {"dubbing-failures", runDubbingFailureTests},
     {"take-stack-edits", runTakeStackTests},
+    {"ui-wiring", runUiWiringTests},
+    {"queue-isolation", runQueueIsolationTests},
 };
 int usage()
 {

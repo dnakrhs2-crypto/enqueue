@@ -113,6 +113,9 @@ void CaptureTelemetry::recordPresent(const FrameStamp& stamp, std::int64_t retur
 juce::var CaptureTelemetry::toJson() const
 {
     auto value = jsonObject(), metrics = jsonObject(), counts = jsonObject();
+    jsonSet(value, "pipelineId", pipelineId);
+    jsonSet(value, "capturePriorityError", capturePriorityError.load());
+    jsonSet(value, "previewPriorityError", previewPriorityError.load());
     for (size_t i = 0; i < timings.size(); ++i) jsonSet(metrics, timingNames[i], timings[i].toJson());
     for (size_t i = 0; i < losses.size(); ++i) jsonSet(counts, lossNames[i], jsonInt(losses[i].load()));
     jsonSet(counts, "callbacks", jsonInt(callbacks.load())); jsonSet(counts, "samples", jsonInt(samples.load()));

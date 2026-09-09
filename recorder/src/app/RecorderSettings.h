@@ -23,6 +23,8 @@ struct UserSettings
     std::array<juce::String, 2> cameraDeviceIds, cameraModes;
     std::array<bool, 2> cameraEnabled {true, false};
     std::vector<int> physicalInputs;
+    std::array<juce::String, 8> microphoneNames;
+    std::array<bool, 8> microphoneArmed {true, true, true, true, true, true, true, true};
     OutputMapping output;
     CaptureSnapshot calibration;
     juce::StringArray recentProjects;

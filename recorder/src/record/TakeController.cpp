@@ -2,6 +2,7 @@
 #include "Mp4TakeWriter.h"
 #include "capture/MfCameraCapture.h"
 #include "storage/StorageEncoding.h"
+#include "media/ThumbnailCache.h"
 #include <algorithm>
 #include <chrono>
 #include <cstring>
@@ -153,6 +154,8 @@ private:
     std::string encoderError, muxError;
     juce::String thumbnailPath() const
     { return streamName == "cam1" ? juce::String("index/first-thumbnail.bmp") : "index/" + streamName + "-first-thumbnail.bmp"; }
+    bool thumbnailQueued = false; // encoder worker only
+    ThumbnailCache thumbnailWorker; // first thumbnail disk I/O is below original media work
     void saveThumbnail(const AVFrame& frame)
     {
         // Small, rebuildable 160x90 luminance BMP; never scan media on stop.
@@ -168,8 +171,12 @@ private:
             auto* p = data.data() + 54 + (height - 1 - y) * stride + x * 3; p[0] = p[1] = p[2] = value;
         }
         const auto file = finalFile.getParentDirectory().getChildFile(thumbnailPath());
-        DurableFile output; requireResult(output.open(file, DurableFile::OpenMode::createNew)); requireResult(output.write(data.data(), data.size()));
-        requireResult(output.flushData()); requireResult(output.close()); thumbnail = true;
+        thumbnailQueued = thumbnailWorker.enqueue("first", [this, file, data = std::move(data)](const auto& yield)
+        {
+            if (yield()) return;
+            DurableFile output; requireResult(output.open(file, DurableFile::OpenMode::createNew)); requireResult(output.write(data.data(), data.size()));
+            requireResult(output.flushData()); requireResult(output.close()); thumbnail = true;
+        });
     }
     void mux(const AVCodecContext& video, const AVCodecContext& audio, std::promise<void> prepared)
     {
@@ -255,7 +262,7 @@ private:
                     if (!chosen) break;
                     for (std::size_t i = 0; i < chosen->releasedCount; ++i) pool->release(chosen->released[i]);
                     const auto& stamp = pool->stamp(chosen->input.slot);
-                    if (!thumbnail.load()) { try { saveThumbnail(pool->frame(chosen->input.slot)); } catch (...) {} }
+                    if (!thumbnailQueued) { try { saveThumbnail(pool->frame(chosen->input.slot)); } catch (...) {} }
                     trace << chosen->pts << ',' << stamp.frame << ',' << stamp.pts100ns << ',' << stamp.callback << ',' << chosen->input.time100ns << '\n';
                     encoder->submit(pool->frame(chosen->input.slot), chosen->pts, sink);
                 }
@@ -404,7 +411,7 @@ struct TakeController::Impl
             requireResult(audio.prepare(std::move(audioConfig))); preparedAudio = true;
             video->prepare(takeFolder().getChildFile("cam1.mp4"), NvencProfile{config.projectFps}, config.cameraMode.fps, *audio.referenceContext());
             recordSink.store(video.get(), std::memory_order_release);
-            if (!config.synthetic)
+            if (!config.synthetic && !config.externalCapture)
             {
                 if (!mfRuntime) mfRuntime = std::make_unique<MfRuntime>();
                 captureTelemetry = std::make_shared<CaptureTelemetry>(config.cameraMode.fps);
@@ -448,6 +455,7 @@ struct TakeController::Impl
         peakSnapshot = audio.peaks();
         placementMetadata = {length > 0, false, audio.startSample(), audio.stopSample(), placement, deviceSnapshot.sampleRate, peakSnapshot,
                              video && video->thumbnailReady() ? takeFolder().getChildFile("index/first-thumbnail.bmp") : juce::File()};
+        placementMetadata.waveform = audio.peakCache();
         document.setRecordingStructureLock(false);
         if (length <= 0)
         {
@@ -496,6 +504,14 @@ struct TakeController::Impl
 };
 TakeController::TakeController(RecorderDocument& d, RecorderAudioEngine& a, VideoFactory f) : impl(std::make_unique<Impl>(d, a, std::move(f))) {}
 TakeController::~TakeController() = default;
+juce::Result TakeController::reset()
+{
+    if (impl->work.valid() || (state() != State::idle && state() != State::done && state() != State::partialFailure))
+        return juce::Result::fail("Take is still active");
+    impl->detachSink(); impl->placementMetadata = {}; impl->length = 0; impl->placement = 0;
+    impl->failure.clear(); impl->warning.clear(); impl->current = State::idle;
+    return juce::Result::ok();
+}
 juce::Result TakeController::prepare(Config config)
 {
     auto& s = *impl;
@@ -575,6 +591,9 @@ void TakeController::tick()
             {
                 try
                 {
+                    // Derived cache is disposable; its failure cannot change original durability.
+                    if (const auto peaks = s.audio.peakCache())
+                        PeakCache::write(s.config.projectDirectory.getChildFile("cache/" + s.take.takeId + ".peaks.json"), peaks->snapshot());
                     writeJsonDurable(s.takeFolder().getChildFile("take.json"), s.manifest(s.partial ? "partialFailure" : "done"));
                     const auto file = s.config.projectDirectory.getChildFile("project.recorder");
                     requireResult(RecorderSerializer::writeCheckpoint(file, *s.savedSnapshot)); flushExisting(file);

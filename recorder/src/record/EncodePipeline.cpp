@@ -1,6 +1,7 @@
 #include "EncodePipeline.h"
 #include "Mp4TakeWriter.h"
 #include "ReferenceMixWriter.h"
+#include "support/ThreadPriority.h"
 #include <algorithm>
 #include <chrono>
 #include <cstring>
@@ -69,23 +70,27 @@ struct EncodePipeline::State
     Event framesReady, packetsReady;
     std::thread encodeThread, muxThread;
     std::atomic<bool> stopping{false}, encodeDone{false}, muxFailed{false};
+    std::atomic<bool> encodeFailed{false};
+    FileIoFaultAdapter* faults;
+    DWORD encodePriorityError = 0, muxPriorityError = 0;
     std::atomic<std::uint64_t> surfaceLoss{0}, packetLoss{0};
     std::atomic<std::int64_t> originQpc{0}, end100ns{0};
     juce::var encoderReport, muxReport, audioReport, inspection;
     std::string encodeError, muxError;
     std::uint64_t traceCount = 0, traceHash = 14695981039346656037ULL;
     juce::File traceFile;
-    State(NvencProfile p, Rational rate, unsigned duration, juce::File f, std::shared_ptr<CaptureTelemetry> t, std::unique_ptr<CameraTimeMapper> m)
+    State(NvencProfile p, Rational rate, unsigned duration, juce::File f, std::shared_ptr<CaptureTelemetry> t, std::unique_ptr<CameraTimeMapper> m, FileIoFaultAdapter* fault)
         : profile(std::move(p)), native(rate), seconds(duration), output(std::move(f)), capture(std::move(t)),
           mapper(m ? std::move(m) : std::make_unique<MfPtsTimeMapper>(qpcFrequency())), surfaces(profile.cpuSurfaces()),
           packets(profile.fps, profile.maxRate()), scheduler(native, Rational{static_cast<unsigned>(profile.fps), 1}),
-          traceFile(output.getSiblingFile(output.getFileNameWithoutExtension() + ".source-ids.csv"))
+          faults(fault), traceFile(output.getSiblingFile(output.getFileNameWithoutExtension() + ".source-ids.csv"))
     {
         profile.validate(); if (!seconds || seconds > 86400 * 7) throw std::invalid_argument("Encode seconds must be 1..604800");
         end100ns.store(static_cast<std::int64_t>(seconds) * 10000000);
     }
     void mux(const AVCodecContext& codec, std::promise<void> prepared)
     {
+        ScopedRecorderPriority priority(RecorderThreadRole::encodeWrite); muxPriorityError = priority.error;
         bool signalled = false;
         std::unique_ptr<Mp4TakeWriter> writer;
         std::unique_ptr<ReferenceMixWriter> reference;
@@ -93,7 +98,7 @@ struct EncodePipeline::State
         {
             reference = std::make_unique<ReferenceMixWriter>();
             if (traceFile.exists()) throw std::runtime_error("Source-ID CSV already exists; use a fresh output directory");
-            writer = std::make_unique<Mp4TakeWriter>(output, codec, reference->context());
+            writer = std::make_unique<Mp4TakeWriter>(output, codec, reference->context(), faults);
             std::ofstream trace(std::filesystem::path(traceFile.getFullPathName().toWideCharPointer()), std::ios::binary);
             trace.exceptions(std::ios::badbit | std::ios::failbit);
             trace << "outputPts,sourceId,mfPts100ns,callbackQpc,mapped100ns,repeated\n";
@@ -131,6 +136,7 @@ struct EncodePipeline::State
     }
     void encode(std::promise<void> prepared)
     {
+        ScopedRecorderPriority priority(RecorderThreadRole::encodeWrite); encodePriorityError = priority.error;
         bool signalled = false;
         std::unique_ptr<NvencEncoder> encoder;
         std::deque<Trace> pendingTraces;
@@ -173,6 +179,7 @@ struct EncodePipeline::State
             {
                 if (muxFailed.load()) throw std::runtime_error("Mux worker failed");
                 consumeFrames();
+                if (surfaceLoss.load()) throw std::runtime_error("Encode surface overflow; camera partial failure, preview/audio continue");
                 const auto now = mapper->now(qpcNow());
                 if (stopping.load() && !stopApplied)
                 {
@@ -197,7 +204,7 @@ struct EncodePipeline::State
         }
         catch (const std::exception& e)
         {
-            encodeError = e.what(); if (!signalled) prepared.set_exception(std::current_exception());
+            encodeError = e.what(); encodeFailed.store(true); if (!signalled) prepared.set_exception(std::current_exception());
         }
         if (encoder) encoderReport = encoder->toJson();
         size_t count = 0; const auto released = scheduler.releaseAll(count);
@@ -208,8 +215,8 @@ struct EncodePipeline::State
         if (muxThread.joinable()) muxThread.join();
     }
 };
-EncodePipeline::EncodePipeline(NvencProfile p, Rational n, unsigned seconds, juce::File out, std::shared_ptr<CaptureTelemetry> t, std::unique_ptr<CameraTimeMapper> m)
-    : state(std::make_unique<State>(std::move(p), n, seconds, std::move(out), std::move(t), std::move(m))) {}
+EncodePipeline::EncodePipeline(NvencProfile p, Rational n, unsigned seconds, juce::File out, std::shared_ptr<CaptureTelemetry> t, std::unique_ptr<CameraTimeMapper> m, FileIoFaultAdapter* fault)
+    : state(std::make_unique<State>(std::move(p), n, seconds, std::move(out), std::move(t), std::move(m), fault)) {}
 EncodePipeline::~EncodePipeline() { stop(); }
 void EncodePipeline::start()
 {
@@ -233,9 +240,19 @@ double EncodePipeline::secondsSinceOrigin() const noexcept
 {
     const auto origin = state->originQpc.load(); return origin ? static_cast<double>(qpcNow() - origin) / qpcFrequency() : -1;
 }
+bool EncodePipeline::failed() const noexcept
+{ return state->encodeFailed.load() || state->muxFailed.load() || state->surfaceLoss.load() || state->packetLoss.load(); }
+EncodeQueueSnapshot EncodePipeline::queueSnapshot() const noexcept
+{
+    const auto read = state->packets.read.load(std::memory_order_acquire);
+    const auto written = state->packets.written.load(std::memory_order_acquire);
+    return {state->surfaces.occupied(), std::min<std::uint64_t>(state->packets.limit, written - read), state->packets.bytes.load()};
+}
 juce::var EncodePipeline::toJson() const
 {
     const auto& s = *state; auto value = jsonObject();
+    jsonSet(value, "pipelineId", s.capture->pipelineId);
+    jsonSet(value, "encodePriorityError", s.encodePriorityError); jsonSet(value, "muxPriorityError", s.muxPriorityError);
     jsonSet(value, "encoder", s.encoderReport); jsonSet(value, "cfr", s.scheduler.counters().toJson());
     jsonSet(value, "mux", s.muxReport); jsonSet(value, "referenceAudio", s.audioReport); jsonSet(value, "finalInspection", s.inspection);
     jsonSet(value, "surfaceQueueHighWater", static_cast<int>(s.surfaces.highWater()));

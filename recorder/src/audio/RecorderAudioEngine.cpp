@@ -37,6 +37,7 @@ struct RecorderAudioEngine::Impl final : juce::AudioIODeviceCallback
         RecordingJournal journal;
         std::mutex journalMutex;
         std::unique_ptr<WavTrackWriter> wav;
+        std::shared_ptr<PeakCache> peakCache;
         std::unique_ptr<ReferenceMixWriter> reference;
         std::unique_ptr<PlaybackBlockQueue> referenceQueue;
         std::thread worker, referenceWorker;
@@ -81,6 +82,7 @@ struct RecorderAudioEngine::Impl final : juce::AudioIODeviceCallback
                 w.projectDirectory = config.projectDirectory; w.takeId = config.takeId;
                 w.sampleRate = device.sampleRate; w.framesPerBlock = device.bufferFrames; w.mics = unsigned(logical.size());
                 w.devices = mapping; w.logicalMicrophones = logical; w.faults = config.faults;
+                peakCache = std::make_shared<PeakCache>(device.sampleRate, unsigned(logical.size())); w.peakCache = peakCache;
                 w.checkpointSink = [this](const JournalCheckpoint& cp)
                 { std::lock_guard<std::mutex> lock(journalMutex); return journal.append(cp); };
                 wav = std::make_unique<WavTrackWriter>(std::move(w)); check(wav->start());
@@ -267,6 +269,8 @@ struct RecorderAudioEngine::Impl final : juce::AudioIODeviceCallback
     std::array<float, 8> monitorWeights{};
     std::atomic<PlaybackBlockQueue*> playback{nullptr};
     std::atomic<IAudioOutputClient*> dubbingOutput{nullptr};
+    std::atomic<IAudioOutputClient*> playbackClient{nullptr};
+    std::array<std::atomic<float>, 8> inputMeter{};
     std::unique_ptr<Session> session;
     std::atomic<Session*> active{nullptr};
 
@@ -394,13 +398,26 @@ struct RecorderAudioEngine::Impl final : juce::AudioIODeviceCallback
     {
         outputInFlight.fetch_add(1);
         for (int c = 0; c < outputCount; ++c) if (out[c]) std::fill(out[c], out[c] + frames, 0.0f);
+        // Input metering is independent of the selected output and its buffer size.
+        for (unsigned mic = 0; mic < 8; ++mic)
+        {
+            float peakValue = 0;
+            const auto found = std::lower_bound(info.activeToPhysical.begin(), info.activeToPhysical.end(), inputs[mic]);
+            const auto index = int(found - info.activeToPhysical.begin());
+            if (inputs[mic] >= 0 && index < inputCount && in && in[index])
+                for (unsigned i = 0; i < frames; ++i) peakValue = std::max(peakValue, std::abs(in[index][i]));
+            inputMeter[mic].store(peakValue, std::memory_order_relaxed);
+        }
         if (frames <= left.size())
         {
+            // Dubbing owns this block, including silence on a timing mismatch.
             if (auto* dub = dubbingOutput.load())
             {
                 if (previous.numSamples == frames) dub->processOutput(previous, left.data(), right.data());
                 else { std::fill_n(left.data(), frames, 0.0f); std::fill_n(right.data(), frames, 0.0f); signalReset(); }
             }
+            else if (auto* client = playbackClient.load(); client && previous.numSamples == frames)
+                client->processOutput(previous, left.data(), right.data());
             else if (auto* q = playback.load()) q->consume(left.data(), right.data(), frames);
             else { std::fill(left.begin(), left.begin() + frames, 0.0f); std::fill(right.begin(), right.begin() + frames, 0.0f); }
             const auto setting = listen.load(std::memory_order_relaxed);
@@ -479,6 +496,8 @@ juce::Result RecorderAudioEngine::openDevice(const juce::String& name, unsigned 
             s.info = {}; s.info.name = selected; s.info.sampleRate = rate;
             s.info.bufferFrames = unsigned(block ? block : s.device->getDefaultBufferSize());
             s.info.physicalInputs = s.device->getInputChannelNames().size(); s.info.physicalOutputs = s.device->getOutputChannelNames().size();
+            s.info.inputNames = s.device->getInputChannelNames(); s.info.outputNames = s.device->getOutputChannelNames();
+            for (auto size : s.device->getAvailableBufferSizes()) s.info.availableBuffers.push_back(size);
             if (!s.info.bufferFrames || s.info.bufferFrames > 16384 || s.info.physicalOutputs <= 0 || s.info.physicalOutputs > 256)
                 throw std::runtime_error("ASIO requires an output callback and supported buffer size");
             for (auto p : s.inputs) if (p >= s.info.physicalInputs) throw std::runtime_error("Selected physical input is unavailable");
@@ -647,6 +666,22 @@ void RecorderAudioEngine::setDubbingOutputClient(IAudioOutputClient* client)
     impl->dubbingOutput.store(client);
 }
 const ClockMapper& RecorderAudioEngine::masterClock() const noexcept { return impl->robustClock; }
+
+void RecorderAudioEngine::setPlaybackClient(IAudioOutputClient* client)
+{
+    impl->playbackClient.store(nullptr);
+    while (impl->outputInFlight.load()) pauseWorker();
+    impl->playbackClient.store(client);
+}
+juce::Result RecorderAudioEngine::showControlPanel()
+{
+    if (impl->busy() || !impl->device) return failure("테이크가 끝난 뒤 ASIO 장치를 확인하세요.");
+    return impl->device->showControlPanel() ? juce::Result::ok() : failure("ASIO 제어판을 열 수 없습니다.");
+}
+std::array<float, 8> RecorderAudioEngine::inputPeaks() const noexcept
+{ std::array<float, 8> p{}; for (unsigned i = 0; i < 8; ++i) p[i] = impl->inputMeter[i].load(); return p; }
+std::shared_ptr<PeakCache> RecorderAudioEngine::peakCache() const
+{ return impl->session ? impl->session->peakCache : nullptr; }
 juce::Result RecorderAudioEngine::prepare(TakeConfig config)
 {
     if (impl->busy() || !impl->info.sampleRate) return failure("ASIO device is not ready or a take is active");
