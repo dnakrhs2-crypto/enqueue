@@ -454,34 +454,46 @@ void MixDocument::bypassSlot (const juce::Uuid& channelId, const juce::Uuid& slo
         }
 }
 
-int MixDocument::toggleGroupOnEveryChannel (int group, bool& switchedOff)
+int MixDocument::setGroupOffOnEveryChannel (int group, bool off)
 {
     if (group < 0 || group >= MixSession::maxPluginGroups)
         return 0;
 
     std::vector<juce::Uuid> channels;
-    bool anyOn = false;
 
     for (const auto& c : session.channels)
         if (group < (int) c.pluginGroups.size())
-        {
             channels.push_back (c.id);
-            anyOn = anyOn || ! c.pluginGroups[(size_t) group].off;
-        }
 
-    // one group still running anywhere means the key switches them off: the first press always does something
-    switchedOff = anyOn;
+    if (channels.empty())
+        return 0;
 
     {
-        // one keypress is one edit: the cards, the groups window and the Stream Deck never see half of it (each
+        // one operation is one edit: the cards, the groups window and the Stream Deck never see half of it (each
         // bypassed plugin would otherwise announce again through the chain listener's markDirty)
         const ValueBatch batch (*this);
 
         for (const auto& id : channels)
-            setPluginGroupOff (id, group, anyOn);   // each one bypasses its own members (and leaves those another OFF group holds)
+            setPluginGroupOff (id, group, off);   // each one bypasses its own members (and leaves those another OFF group holds)
     }
 
     return (int) channels.size();
+}
+
+int MixDocument::toggleGroupOnEveryChannel (int group, bool& switchedOff)
+{
+    if (group < 0 || group >= MixSession::maxPluginGroups)
+        return 0;
+
+    bool anyOn = false;
+
+    for (const auto& c : session.channels)
+        if (group < (int) c.pluginGroups.size())
+            anyOn = anyOn || ! c.pluginGroups[(size_t) group].off;
+
+    // one group still running anywhere means the key switches them off: the first press always does something
+    switchedOff = anyOn;
+    return setGroupOffOnEveryChannel (group, anyOn);
 }
 
 void MixDocument::setSessionName (const juce::String& name)

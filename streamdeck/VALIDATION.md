@@ -1,3 +1,119 @@
+# 1.1.0 validation — 2026-09-09
+
+Implemented the Stream Deck half of the all-mics plugin-group feature in this
+worktree on `livemix-sd-groups`. Plugin/package versions: **1.1.0.0 / 1.1.0**;
+runtime hello: **1.1.0**. Reused installed Node **24.13.0**, SDK **2.1.2** and
+CLI **1.9.0**. Commands ran from `C:\Users\claude\gocue-sd\streamdeck`.
+
+| Exact command | Actual result |
+|---|---|
+| `npm.cmd run typecheck` | Exit 0; source and test TypeScript checks passed. Repeated after adding the checker tests, also exit 0. |
+| `npm.cmd run build` | Exit 0; generated assets/localizations and the Rollup bundle. Standalone Rollup build: **3.3 s**. |
+| `npm.cmd test` | Exit 0 on the first run; **134 tests, 134 passed, 0 failed, 0 cancelled, 0 skipped, 0 todo**, **173585.1685 ms**. The script rebuilt the distributable (Rollup **2.6 s**) before compiling and running tests. No timeout rerun was needed. |
+| `npm.cmd run validate` | Exit 0; **28 manifest image references / 56 files** checked in both sizes, **158 packaged images** match design sources, ko/en complete. Remote manifest/layout schema loads emitted warnings; Elgato still reported **Validation successful**. |
+| `npm.cmd run validate -- --no-update-check` | Exit 0; the same asset counts and **Validation successful**, without remote-schema warnings. |
+| `npm.cmd run pack -- -f` | Exit 0; **Successfully packaged plugin**, **168 files**, **301.1 KiB unpacked**, version **1.1.0.0**, nine actions. |
+
+Package: **[dist/com.gomtwigim.livemix.streamDeckPlugin](dist/com.gomtwigim.livemix.streamDeckPlugin)**,
+**182,698 bytes (178.4 KiB)**. SHA-256:
+`936a7b01d4239f048201dd0bdb39d3f1af9fc033b63dca1990261d1101baaeb6`.
+The archive was reopened with .NET ZIP support: all **168 archived files**
+byte-match their tested build inputs. Tests, tools, logs, source maps, development
+directories and discovery data are absent. The CLI alone wrote the requested
+`dist/` package; no distribution file was manually edited.
+
+## Behavior and evidence
+
+- Added `com.gomtwigim.livemix.plugin-group-all`, named **플러그인 그룹 (전체 마이크)** /
+  **Plugin Group (All Mics)**. No channel binding is used. Slot index is an integer
+  1–5, validated like the existing per-mic plugin-group action.
+- Toggle computes from the current snapshot at dispatch: any matching group ON
+  means set every matching group OFF; all OFF means set every matching group ON.
+  Explicit ON sends `off:false`; explicit OFF sends `off:true`. Channels without
+  that slot are skipped. No matching group renders `그룹 없음` / `Group missing`;
+  key down alerts once without sending a command. Release is inert.
+- Uses queue target `plugin-group-all/<index>`, `computed=true`, two conflict
+  retries, and the shared ACK plus canonical-state barrier. The edit is
+  `setPluginGroupOffEverywhere { index, off }` in the normal NDJSON v1 envelope,
+  with `instanceId`, `sessionId` and `ifRevision`. ACK validation requires the
+  matching index, boolean off and integer count. Results never patch the cache;
+  normal `channels[].pluginGroups` deltas update all visible keys.
+- The base class gates both rendering and input on `pluginGroupsEverywhere`.
+  Korean and English fake-host tests omit this capability and verify the existing
+  unsupported message, state 0, one alert and no edit command. The new key needs
+  LiveMix 0.10.0+; the existing eight actions retain their LiveMix 0.6.0+ requirement.
+- Accent **All ON / 모두 ON** uses state 1 only when every matching group is ON.
+  Red **All OFF / 모두 OFF** and warning **Some ON / 일부 ON** use state 0.
+  The chip shows the selected digit independently of the ON/total detail line.
+  Stopped audio retains the pause badge. The title is the display alias or
+  `All mics · Group N` / `전체 마이크 · 그룹 N`, formatted through `displayName`.
+- PI fields are group, Toggle/ON/OFF mode and display name only. It unions and
+  sorts `channels[].groupIndices`, shows per-index microphone counts, keeps a
+  disabled missing saved slot, and preserves the saved index offline while
+  allowing mode/title edits. Both locales include the all-mics rule, version
+  requirement and existing numbered-slot note.
+- The complete suite includes the existing 118 tests plus 16 new tests covering
+  synchronized keys, external mixed state, explicit/no-op modes, partial group
+  membership, missing/vanished slots, unsupported capability, conflict
+  recomputation, shared queue, actual wire results/errors and ACK-only cache
+  preservation, settings bounds, live PI options and shipped PI behavior.
+  Static/runtime equality covers all three new lamps and all five digits in both
+  sizes. Every fake-host rolling **≤10 calls/key/second** assertion remains active.
+- The real-app checker now observes canonical snapshots/deltas, verifies both
+  the mic and group key, and prints `GROUP_ALL_OK` or
+  `GROUP_ALL_SKIPPED (no group 1 in the current session)`. Four subprocess tests
+  ran it against isolated fake LiveMix sessions: initially all ON, all OFF,
+  mixed, and absent group 1. All restored the original mic/group switches.
+  These are simulated checker tests, not a claim of real LiveMix/device testing.
+- A local headless Chromium preview was visually inspected for Korean/English
+  ON/OFF/mixed labels, digits 1/5, count placement, pause badges, titles and the
+  distinct white stacked-chip menu glyph. The review HTML/PNG are in ignored
+  `.test-build/`; no Marketplace media was regenerated. Listing description
+  lengths are **1,187 English / 739 Korean characters** with normalized newlines.
+
+## Files changed
+
+- New `src/actions/plugin-group-all.ts`; registration in `src/plugin.ts`;
+  `src/livemix/{bindings,protocol,connection}.ts`; `src/ui/{artwork,key-renderer}.ts`.
+  The existing action implementations, base class and command queue are reused.
+- `tools/{actions,locales,generate-assets}.mjs`; generated `src/ui/strings.ts`,
+  plugin `manifest.json`, `ko.json`, `en.json`, `ui/strings.js`, and
+  **40 new SVG files each** in `design/actions/plugin-group-all/` and
+  `com.gomtwigim.livemix.sdPlugin/imgs/actions/plugin-group-all/`.
+  Existing action artwork is byte-identical to the pre-change files.
+- Plugin `ui/{inspector.html,inspector.js}`, generated `bin/plugin.js`, and
+  package version in `package.json`.
+- `tests/{action-helpers.ts,fake-host.mjs,fake-livemix-server.mjs}`;
+  `tests/{actions,bindings,connection,rendering,inspector}.test.ts`;
+  new `tests/real-check.test.ts`; `tools/real_livemix_check.mjs`.
+- `README.md`, `CHANGELOG.md`, this `VALIDATION.md`;
+  `docs/superpowers/specs/2026-09-08-livemix-streamdeck-design.md`;
+  `docs/marketplace/livemix-streamdeck/{listing-en,listing-ko,release-notes-en}.md`.
+
+## Handoff and deviations
+
+Real LiveMix 0.10.0, Stream Deck/Mobile installation and device checks, review and
+release remain with Claude as requested. No real LiveMix process was controlled
+in this implementation session. The checker performs the requested two global
+presses; when the initial groups are mixed, it additionally restores only the
+differing per-channel flags with `setPluginGroupOff`. Two global toggles cannot
+restore a mixed initial state under the hotkey's any-ON rule. The same restoration
+is attempted on a check failure, with a session guard.
+
+Normal validation succeeded with remote-schema warnings; the explicit offline
+invocation was also run and passed. No feature scope was deferred. Edits stay
+within the authorized Stream Deck and Markdown files. No dependencies were
+installed; node_modules, C++, CMake, installer, site and Git were not edited.
+Marketplace PNG/HTML hashes still match their pre-change values.
+The lockfile is unchanged, SHA-256:
+`6062a47265ac17f33ac578f2cb4e0943e181ad1600ad89fa00ce50decf4f718e`.
+Its existing version metadata is intentionally retained under the no-lockfile-edit
+constraint; package.json, the generated manifest and runtime hello use 1.1.0.
+
+Earlier validation records follow and describe their respective releases.
+
+---
+
 # Round 4 / 1.0.0 validation — 2026-09-08
 
 Implemented in this worktree on `livemix-streamdeck`. Plugin/package versions:

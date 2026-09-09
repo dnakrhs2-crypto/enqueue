@@ -31,6 +31,10 @@ function states(id, size) {
       [name, actionSvg(state, en, 1, 0, false, "mic", size)],
       ...[1, 2, 3, 4, 5].map(index => ["group-" + index + "-" + name, actionSvg(state, en, index, 0, false, "mic", size)])
     ]));
+    case "plugin-group-all": return Object.fromEntries([["off", "plugin-all-off", 0], ["on", "plugin-all-on", 3], ["mixed", "plugin-all-mixed", 2]].flatMap(([name, state, count]) => [
+      [name, actionSvg(state, en, count, 3, false, "mic", size)],
+      ...[1, 2, 3, 4, 5].map(index => ["group-" + index + "-" + name, actionSvg(state, en, count, 3, false, "mic", size, index)])
+    ]));
     case "fx-send": return { off: emptySend(id, size), on: svgDocument(size, '<rect width="144" height="144" rx="12" fill="' + palette.background + '"/><g transform="translate(48 8) scale(2)">' + glyph(id, palette.accent) + '</g><text x="72" y="98" text-anchor="middle" font-family="Segoe UI,sans-serif" font-size="25" fill="' + palette.text + '">35%</text>') };
     case "fx-send-step": return { off: emptySend(id, size), on: sendSvg(35, "+5", en, false, false, size),
       increase: sendSvg(35, "+5", en, false, false, size), decrease: sendSvg(35, "−5", en, false, false, size),
@@ -65,6 +69,8 @@ for (const [language, strings] of Object.entries(locales)) await write(resolve(p
   }])), Localization: strings
 }, null, 2) + "\n");
 const manifest = JSON.parse(await readFile(resolve(plugin, "manifest.json"), "utf8"));
+const pkg = JSON.parse(await readFile(resolve(root, "package.json"), "utf8"));
+manifest.Version = pkg.version + ".0";
 manifest.Description = "Control LiveMix microphones, mute groups, plugin groups and FX sends on this Windows PC.";
 manifest.Actions = actions.map(a => ({ UUID: `com.gomtwigim.livemix.${a.id}`, Name: locales.en[a.name], Tooltip: locales.en[a.tooltip],
   Icon: `imgs/actions/${a.id}/icon`, PropertyInspectorPath: "ui/inspector.html", Controllers: [a.id === "fx-send" ? "Encoder" : "Keypad"],

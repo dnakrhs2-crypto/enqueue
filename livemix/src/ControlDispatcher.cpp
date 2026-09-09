@@ -54,6 +54,21 @@ ControlDispatcher::Result ControlDispatcher::dispatch (const ControlProtocol::Co
                 if (changed) document.setAllChannelsOn (a.on);
                 return P::CommandResult { P::AllChannelsResult { a.on, count } };
             }
+            else if constexpr (std::is_same_v<T, P::SetPluginGroupOffEverywhere>)
+            {
+                const auto index = (size_t) (a.index - 1);
+                int count = 0;
+                for (const auto& c : session.channels)
+                    if (index < c.pluginGroups.size())
+                    {
+                        ++count;
+                        changed = changed || c.pluginGroups[index].off != a.off;
+                    }
+                if (count == 0) return Code::pluginGroupNotFound;
+                if (! canAdvance()) return Code::internalError;
+                if (changed) document.setGroupOffOnEveryChannel (a.index - 1, a.off);
+                return P::CommandResult { P::PluginGroupEverywhereResult { a.index, a.off, count } };
+            }
             else if constexpr (std::is_same_v<T, P::SetMuteGroup> || std::is_same_v<T, P::ToggleMuteGroup>)
             {
                 const auto group = a.group == P::MuteGroup::mic ? MuteGroups::Group::mic : MuteGroups::Group::fx;

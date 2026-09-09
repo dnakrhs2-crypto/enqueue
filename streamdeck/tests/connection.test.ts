@@ -22,6 +22,7 @@ test("hello token, v1, instance and complete snapshot gate readiness", async t =
   assert.equal(connection.ready, false);
   await assert.rejects(connection.command(mic(server.snapshot.state.channels[0].id)), /DISCONNECTED/);
   assert.equal(server.received[0].token, server.token); assert.deepEqual(server.received[0].supportedVersions, [1]);
+  assert.equal(server.received[0].client.version, "1.1.0"); assert.ok(connection.capabilities.includes("pluginGroupsEverywhere"));
   server.broadcastState("initial"); await ready();
   assert.equal(connection.store.snapshot?.instanceId, server.snapshot.instanceId);
 });
@@ -33,9 +34,37 @@ test("ACK validation follows each command result and rejects malformed group/sen
     { command: { command: "setAllChannelsOn", args: { on: true } }, result: { on: true, count: 3 }, bad: { on: true, count: -1 } },
     { command: { command: "toggleMuteGroup", args: { group: "mic" } }, result: { group: "mic", muted: true }, bad: { group: "fx", muted: true } },
     { command: { command: "setPluginGroupOff", args: { channelId: snapshot.state.channels[0].id, index: 2, off: false } }, result: { index: 2, off: false }, bad: { index: 1, off: false } },
+    ...[{ index: 1, off: false, count: 3 }, { index: 2, off: "false", count: 3 }, { index: 2, off: false }, { index: 2, off: false, count: 1.5 }, { index: 2, off: false, count: "3" }].map(bad => ({
+      command: { command: "setPluginGroupOffEverywhere" as const, args: { index: 2, off: false } }, result: { index: 2, off: false, count: 3 }, bad })),
     { command: { command: "setSend", args: { channelId: snapshot.state.channels[0].id, fxId: snapshot.state.fx[0].id, amount: 0.35 } }, result: { amount: 0.35, pre: false }, bad: { amount: 1.5, pre: false } }
   ];
   for (const c of cases) { assert.equal(validAck(c.command, { ...ack, result: c.result }), true); assert.equal(validAck(c.command, { ...ack, result: c.bad }), false); assert.equal(validAck(c.command, ack), false); }
+});
+
+test("plugin group everywhere wire: count, no-op ACK, canonical delta, validation and missing group error", async t => {
+  const { server, connection, ready } = await setup(t); await ready();
+  server.mutate((s: Snapshot) => {
+    s.state.channels[0]!.pluginGroups = [{ index: 1, off: false }];
+    s.state.channels.push({ ...structuredClone(s.state.channels[0]!), id: "33333333333343338333333333333333" },
+      { ...structuredClone(s.state.channels[0]!), id: "55555555555545558555555555555555", pluginGroups: [] });
+  }, true);
+  await until(connection.store, "change", () => connection.store.snapshot?.revision === server.snapshot.revision);
+  const revision = server.snapshot.revision, command: Command = { command: "setPluginGroupOffEverywhere", args: { index: 1, off: true } };
+  server.behavior.omitDelta = true;
+  const ack = await connection.command(command, revision);
+  assert.deepEqual(ack.result, { index: 1, off: true, count: 2 }); assert.equal(ack.changed, true); assert.equal(ack.revision, revision + 1);
+  assert.equal(connection.store.snapshot?.revision, revision);
+  assert.equal(connection.store.snapshot?.state.channels[0]!.pluginGroups[0]!.off, false, "ACK never patches the cache");
+  server.behavior.omitDelta = false; server.publishDelta();
+  await until(connection.store, "change", () => connection.store.snapshot?.revision === ack.revision);
+  assert.ok(connection.store.snapshot?.state.channels.every(c => c.pluginGroups.every(g => g.off)));
+  const same = await connection.command(command, ack.revision);
+  assert.equal(same.changed, false); assert.equal(same.revision, ack.revision); assert.deepEqual(same.result, ack.result);
+  for (const args of [{ index: 0, off: true }, { index: 6, off: true }, { index: 1.5, off: true }, { index: "1", off: true }, { index: 1, off: "true" }, { index: 1 }]) {
+    await assert.rejects(connection.command({ command: "setPluginGroupOffEverywhere", args } as Command), /INVALID_ARGUMENT/);
+  }
+  await assert.rejects(connection.command({ command: "setPluginGroupOffEverywhere", args: { index: 3, off: false } }), /PLUGIN_GROUP_NOT_FOUND/);
+  assert.equal(server.snapshot.revision, ack.revision);
 });
 test("UTF-8 byte splitting, coalesced messages, CRLF and framing limits", async () => {
   const source = await fixture("initial-state"), bytes = Buffer.from(JSON.stringify(source) + "\r\n");

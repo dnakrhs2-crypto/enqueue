@@ -151,6 +151,74 @@ public:
             expectEquals (f.valueCalls, 2); expectEquals (f.groupCalls, 0); expectEquals (f.structureCalls, 0);
         }
 
+        beginTest ("setPluginGroupOffEverywhere counts matching channels and batches one edit, with no-op and revision guards");
+        {
+            Fixture f;
+            const auto second = f.document.addChannel();
+            f.document.addChannel();
+            expectEquals (f.document.addPluginGroup (f.channel()), 0);
+            expectEquals (f.document.addPluginGroup (f.channel()), 1);
+            expectEquals (f.document.addPluginGroup (second), 0);
+            f.clean();
+            const auto before = f.state.getCurrent();
+            const auto off = ack (f, P::SetPluginGroupOffEverywhere { 1, true });
+            const auto offResult = result<P::PluginGroupEverywhereResult> (off);
+            expect (off.changed && offResult.off); expectEquals (offResult.index, 1); expectEquals (offResult.count, 2);
+            const auto& channels = f.document.getSession().channels;
+            expect (channels[0].pluginGroups[0].off && channels[1].pluginGroups[0].off);
+            expect (! channels[0].pluginGroups[1].off); expect (channels[2].pluginGroups.empty());
+            expect (f.state.getCurrent().projection.channels[2] == before.projection.channels[2]);
+            expect (f.document.isDirty()); expectEquals (f.valueCalls, 1);
+            expectEquals (f.groupCalls, 0); expectEquals (f.structureCalls, 0);
+            expectEquals (off.context.revision, before.revision + 1);
+            const auto delta = ControlState::diff (before, f.state.getCurrent());
+            expect (delta.kind == ControlState::ChangeKind::values);
+            expectEquals ((int) delta.changes.channels.size(), 2);
+            for (const auto& c : delta.changes.channels) expect (c.pluginGroups.has_value());
+
+            const auto repeated = ack (f, P::SetPluginGroupOffEverywhere { 1, true });
+            expect (! repeated.changed); expectEquals (result<P::PluginGroupEverywhereResult> (repeated).count, 2);
+            expectEquals (repeated.context.revision, off.context.revision); expectEquals (f.valueCalls, 1);
+            f.clean();
+            const auto cleanRevision = f.state.getCurrent().revision;
+            const auto unchanged = ack (f, P::SetPluginGroupOffEverywhere { 1, true });
+            expect (! unchanged.changed); expect (! f.document.isDirty()); expectEquals (f.valueCalls, 0);
+            expectEquals (unchanged.context.revision, cleanRevision);
+
+            const auto on = ack (f, P::SetPluginGroupOffEverywhere { 1, false });
+            expect (on.changed && ! result<P::PluginGroupEverywhereResult> (on).off);
+            expectEquals (result<P::PluginGroupEverywhereResult> (on).count, 2);
+            expect (! channels[0].pluginGroups[0].off && ! channels[1].pluginGroups[0].off);
+            expectEquals (on.context.revision, cleanRevision + 1); expectEquals (f.valueCalls, 1);
+
+            // Only one flag differs, but both channels have the group and belong in the result's count.
+            f.document.setPluginGroupOff (second, 0, true); f.clean();
+            const auto mixedRevision = f.state.getCurrent().revision;
+            const auto mixed = ack (f, P::SetPluginGroupOffEverywhere { 1, true });
+            expect (mixed.changed); expectEquals (result<P::PluginGroupEverywhereResult> (mixed).count, 2);
+            expect (channels[0].pluginGroups[0].off && channels[1].pluginGroups[0].off);
+            expectEquals (mixed.context.revision, mixedRevision + 1); expectEquals (f.valueCalls, 1);
+
+            f.clean();
+            const auto twoRevision = f.state.getCurrent().revision;
+            const auto two = ack (f, P::SetPluginGroupOffEverywhere { 2, true });
+            const auto twoResult = result<P::PluginGroupEverywhereResult> (two);
+            expect (two.changed && twoResult.off); expectEquals (twoResult.index, 2); expectEquals (twoResult.count, 1);
+            expect (channels[0].pluginGroups[1].off); expectEquals ((int) channels[1].pluginGroups.size(), 1);
+            expect (channels[0].pluginGroups[0].off && channels[1].pluginGroups[0].off);
+            expect (f.state.getCurrent().projection.channels[2] == before.projection.channels[2]);
+            expectEquals (two.context.revision, twoRevision + 1); expectEquals (f.valueCalls, 1);
+
+            f.clean();
+            const auto guardedRevision = f.state.getCurrent().revision;
+            error (f, f.command (P::SetPluginGroupOffEverywhere { 3, true }), P::ErrorCode::pluginGroupNotFound);
+            auto stale = f.command (P::SetPluginGroupOffEverywhere { 1, false }); stale.ifRevision = before.revision;
+            error (f, stale, P::ErrorCode::revisionConflict);
+            expectEquals (f.state.getCurrent().revision, guardedRevision); expect (! f.document.isDirty());
+            expectEquals (f.valueCalls, 0); expectEquals (f.groupCalls, 0); expectEquals (f.structureCalls, 0);
+            expect (f.callbacksOnMessageThread);
+        }
+
         beginTest ("both mute commands use MuteGroups callbacks, retain stored sends/returns, and latch empty groups");
         {
             Fixture f;
@@ -205,6 +273,20 @@ public:
                 expect (! chain->getSlot (0).bypassed.load());
                 expectWithinAbsoluteError (f.render(), 0.25f, 1.0e-6f);
                 expectEquals (f.valueCalls, 4); expectEquals (f.structureCalls, 0); expectEquals (f.groupCalls, 0);
+
+                f.clean();
+                expect (ack (f, P::SetPluginGroupOffEverywhere { 1, true }).changed);
+                expect (ack (f, P::SetPluginGroupOff { f.channel(), 2, true }).changed);
+                expect (ack (f, P::SetPluginGroupOffEverywhere { 1, false }).changed);
+                expect (! f.document.getSession().channels[0].pluginGroups[0].off);
+                expect (f.document.getSession().channels[0].pluginGroups[1].off && chain->getSlot (0).bypassed.load());
+                expectWithinAbsoluteError (f.render(), 0.5f, 1.0e-6f);   // group 2 still holds the shared slot off
+                expect (! ack (f, P::SetPluginGroupOffEverywhere { 1, false }).changed);
+                expectEquals (f.valueCalls, 3);
+                expect (ack (f, P::SetPluginGroupOffEverywhere { 2, false }).changed);
+                expect (! chain->getSlot (0).bypassed.load());
+                expectWithinAbsoluteError (f.render(), 0.25f, 1.0e-6f);
+                expectEquals (f.valueCalls, 4); expectEquals (f.structureCalls, 0); expectEquals (f.groupCalls, 0);
             }
         }
 
@@ -246,7 +328,8 @@ public:
             const auto revision = f.state.getCurrent().revision;
             const P::CommandArgs commands[] { P::SetChannelOn { f.channel(), true }, P::SetAllChannelsOn { true },
                 P::SetMuteGroup { P::MuteGroup::mic, false }, P::SetMuteGroup { P::MuteGroup::fx, false },
-                P::SetPluginGroupOff { f.channel(), 1, false }, P::SetSend { f.channel(), f.fx(), 0.0, {} },
+                P::SetPluginGroupOff { f.channel(), 1, false }, P::SetPluginGroupOffEverywhere { 1, false },
+                P::SetSend { f.channel(), f.fx(), 0.0, {} },
                 P::SetSend { f.channel(), f.fx(), {}, false }, P::RequestState {} };
             for (const auto& command : commands)
             {
@@ -263,6 +346,8 @@ public:
             const auto all = ack (f, P::SetAllChannelsOn { false });
             expect (! all.changed); expectEquals (result<P::AllChannelsResult> (all).count, 0);
             expectEquals (all.context.revision, emptyRevision); expect (! f.document.isDirty()); expectEquals (f.valueCalls, 0);
+            error (f, f.command (P::SetPluginGroupOffEverywhere { 1, true }), P::ErrorCode::pluginGroupNotFound);
+            expectEquals (f.state.getCurrent().revision, emptyRevision);
         }
 
         beginTest ("invalid typed arguments, missing targets and stale instance/session/revision never invoke setters");
@@ -271,6 +356,7 @@ public:
             error (f, f.command (P::SetChannelOn { juce::Uuid(), false }), P::ErrorCode::channelNotFound);
             error (f, f.command (P::SetPluginGroupOff { f.channel(), 1, true }), P::ErrorCode::pluginGroupNotFound);
             for (const auto index : { 0, 6 }) error (f, f.command (P::SetPluginGroupOff { f.channel(), index, true }), P::ErrorCode::invalidArgument);
+            for (const auto index : { 0, 6 }) error (f, f.command (P::SetPluginGroupOffEverywhere { index, true }), P::ErrorCode::invalidArgument);
             error (f, f.command (P::SetSend { f.channel(), f.fx(), -0.1, {} }), P::ErrorCode::invalidArgument);
             error (f, f.command (P::SetSend { f.channel(), f.fx(), 1.1, {} }), P::ErrorCode::invalidArgument);
             error (f, f.command (P::SetSend { f.channel(), f.fx(), {}, {} }), P::ErrorCode::invalidArgument);

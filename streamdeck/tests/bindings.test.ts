@@ -50,6 +50,17 @@ test("invalid enum/future settings versions disable input; malformed UUID does n
   assert.equal(migrateSettings({ channelId: "../session" }).settings.channelId, "");
 });
 
+test("plugin-group-all settings validate numbered slots and modes without a channel binding", () => {
+  const defaults = actionSettings("plugin-group-all", {});
+  assert.equal(defaults.valid, true); assert.equal(defaults.settings.groupIndex, 1); assert.equal(defaults.settings.mode, "toggle");
+  assert.equal(defaults.settings.channelId, ""); assert.equal(actionSettings("plugin-group-all", defaults.settings).changed, false);
+  for (const kind of ["plugin-group", "plugin-group-all"] as const) {
+    for (const groupIndex of [1, 2, 3, 4, 5]) for (const mode of ["toggle", "on", "off"]) assert.equal(actionSettings(kind, { groupIndex, mode }).valid, true);
+    for (const groupIndex of [0, 6, 1.5, "2", NaN, Infinity, null]) assert.equal(actionSettings(kind, { groupIndex }).valid, false);
+  }
+  assert.equal(actionSettings("plugin-group-all", { mode: "mute" }).valid, false);
+});
+
 test("send key settings default to up/5/50 and reject invalid modes, steps and target percentages", () => {
   const defaults = actionSettings("fx-send-step", {});
   assert.equal(defaults.valid, true); assert.equal(defaults.settings.mode, "up");

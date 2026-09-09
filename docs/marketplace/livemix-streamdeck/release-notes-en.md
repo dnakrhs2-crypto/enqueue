@@ -1,3 +1,9 @@
+# LiveMix 1.1.0
+
+- Added Plugin Group (All Mics), a key that switches a numbered plugin group (1–5) across every microphone that has it. Toggle turns all OFF if any are ON, otherwise all ON; explicit ON and OFF modes are also available.
+- The key shows the group number, All ON / All OFF / Some ON and the ON/total count. Setup includes group, mode and display name, with microphone counts in the group list.
+- This new key requires LiveMix 0.10.0+ with External Control enabled. Older versions show an update message for this key. The other eight actions still support LiveMix 0.6.0+.
+
 # LiveMix 1.0.0
 
 Initial public release for Stream Deck.

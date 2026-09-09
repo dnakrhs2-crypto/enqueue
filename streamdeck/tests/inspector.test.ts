@@ -56,9 +56,9 @@ test("shipped PI script: text-only names, offline preservation, auto-save, stale
   }
 });
 
-test("all eight shipped PI views expose only relevant fields, localized modes/notes and instant offline-safe settings", async () => {
+test("all nine shipped PI views expose only relevant fields, localized modes/notes and instant offline-safe settings", async () => {
   const [strings, script] = await Promise.all(["strings.js", "inspector.js"].map(file => readFile(resolve(pluginRoot, "ui", file), "utf8")));
-  for (const language of ["ko", "en"]) for (const kind of ["mic", "all-mics", "mic-mute-group", "fx-mute-group", "plugin-group", "fx-send", "fx-send-step", "status"]) {
+  for (const language of ["ko", "en"]) for (const kind of ["mic", "all-mics", "mic-mute-group", "fx-mute-group", "plugin-group", "plugin-group-all", "fx-send", "fx-send-step", "status"]) {
     const fields = ["channel", "fx", "group", "mode", "step", "target", "press", "display", "fallback", "title"];
     const elements = Object.fromEntries([...fields.flatMap(id => [id, `${id}-row`, `${id}-label`]), "short-title", "status", "note"].map(id => [id, new Element()]));
     const document = { documentElement: new Element(), getElementById: (id: string) => elements[id], createElement: () => new Element() };
@@ -71,11 +71,13 @@ test("all eight shipped PI views expose only relevant fields, localized modes/no
       mic: ["channel", "mode", "fallback", "title"], "all-mics": ["mode", "title"],
       "mic-mute-group": ["mode", "title"], "fx-mute-group": ["mode", "title"],
       "plugin-group": ["channel", "group", "mode", "fallback", "title"],
+      "plugin-group-all": ["group", "mode", "title"],
       "fx-send": ["channel", "fx", "step", "press", "fallback"],
       "fx-send-step": ["channel", "fx", "mode", "step", "fallback"], status: ["display"] };
     assert.deepEqual(fields.filter(id => !elements[`${id}-row`]!.hidden), expected[kind], kind);
     for (const id of fields) assert.ok(elements[`${id}-label`]!.textContent);
     if (kind === "all-mics") assert.deepEqual(elements.mode!.children.map(c => c.textContent), [locale.toggle, locale.setAllOn, locale.setAllOff]);
+    if (kind === "plugin-group-all") assert.deepEqual(elements.mode!.children.map(c => c.textContent), [locale.toggle, locale.on, locale.off]);
     if (kind.endsWith("mute-group")) assert.deepEqual(elements.mode!.children.map(c => c.textContent), [locale.toggle, locale.mute, locale.unmute]);
     if (kind === "fx-send") assert.deepEqual(elements.step!.children.map(c => c.value), ["1", "5"]);
     if (kind === "fx-send-step") {
@@ -92,6 +94,7 @@ test("all eight shipped PI views expose only relevant fields, localized modes/no
     assert.deepEqual(elements.group!.children.map(c => c.value), ["1", "2"]);
     if (kind.endsWith("mute-group")) assert.equal(elements.note!.textContent, locale.membershipNote + "\n" + locale.targets.replace("{count}", kind.startsWith("mic") ? "2" : "1"));
     if (kind === "plugin-group") assert.equal(elements.note!.textContent, locale.groupNote);
+    if (kind === "plugin-group-all") assert.equal(elements.note!.textContent, locale.groupAllNote + "\n" + locale.groupNote);
     if (kind === "fx-send") assert.equal(elements.note!.textContent, locale.dialNote);
     socket.receive({ event: "sendToPropertyInspector", context: "wrong", payload: { ...live, sequence: 2, message: "WRONG" } });
     socket.receive({ event: "sendToPropertyInspector", context: "pi", payload: { ...live, revision: 1, sequence: 2, message: "STALE" } });
@@ -126,5 +129,43 @@ test("all eight shipped PI views expose only relevant fields, localized modes/no
       elements.mode!.value = "set"; elements.mode!.listeners.get("change")!(); assert.equal(elements.target!.value, "100");
     }
     socket.close(); assert.equal(elements.status!.textContent, locale.offlineHelp); assert.equal(elements.fx!.value, settings.fxId);
+  }
+});
+
+test("plugin-group-all PI unions slots with per-channel counts, saves only its fields and preserves missing/offline selections", async () => {
+  const [strings, script] = await Promise.all(["strings.js", "inspector.js"].map(file => readFile(resolve(pluginRoot, "ui", file), "utf8")));
+  for (const language of ["ko", "en"]) {
+    const fields = ["channel", "fx", "group", "mode", "step", "target", "press", "display", "fallback", "title"];
+    const elements = Object.fromEntries([...fields.flatMap(id => [id, `${id}-row`, `${id}-label`]), "short-title", "status", "note"].map(id => [id, new Element()]));
+    const document = { documentElement: new Element(), getElementById: (id: string) => elements[id], createElement: () => new Element() };
+    const window: Record<string, any> = { addEventListener() {} }, environment = { window, document, WebSocket: Socket };
+    runInNewContext(strings!, environment); runInNewContext(script!, environment);
+    window.connectElgatoStreamDeckSocket(1234, "pi", "registerPropertyInspector", JSON.stringify({ application: { language } }),
+      JSON.stringify({ context: "key", action: "com.gomtwigim.livemix.plugin-group-all", payload: { settings: { groupIndex: 2, mode: "toggle" } } }));
+    const socket = Socket.current; socket.onopen(); const locale = window.LiveMixStrings[language];
+    assert.equal(elements.group!.disabled, true); assert.equal(elements.group!.value, "2");
+    assert.deepEqual(fields.filter(id => !elements[`${id}-row`]!.hidden), ["group", "mode", "title"]);
+    const live = { op: "options", context: "key", requestId: "pi1", sequence: 1, connection: "ready", instanceId: "i", sessionId: "s", revision: 1,
+      message: locale.connected, channels: [{ id: "a", groupIndices: [5, 1] }, { id: "b", groupIndices: [2, 1] }, { id: "c", groupIndices: [2] }], groupIndices: [4] };
+    socket.receive({ event: "sendToPropertyInspector", context: "pi", payload: live });
+    assert.equal(elements.group!.disabled, false); assert.equal(elements.group!.value, "2");
+    assert.deepEqual(elements.group!.children.map(c => c.value), ["1", "2", "5"]);
+    assert.deepEqual(elements.group!.children.map(c => c.textContent), language === "ko"
+      ? ["그룹 1 · 마이크 2개", "그룹 2 · 마이크 2개", "그룹 5 · 마이크 1개"] : ["Group 1 · 2 mics", "Group 2 · 2 mics", "Group 5 · 1 mic"]);
+    assert.equal(elements.note!.textContent, locale.groupAllNote + "\n" + locale.groupNote); assert.equal(elements.note!.hidden, false);
+    elements.group!.value = "5"; elements.group!.listeners.get("change")!();
+    assert.deepEqual(socket.sent.at(-1)!.payload, { groupIndex: 5, mode: "toggle", settingsVersion: 1 });
+    socket.receive({ event: "sendToPropertyInspector", context: "pi", payload: { ...live, sequence: 2, channels: [{ id: "a", groupIndices: [1] }] } });
+    assert.equal(elements.group!.value, "5"); assert.equal(elements.group!.children[0]!.disabled, true);
+    assert.equal(elements.group!.children[0]!.textContent, locale.group + " 5 · " + locale.missingGroup);
+    socket.receive({ event: "sendToPropertyInspector", context: "pi", payload: { ...live, sequence: 3, connection: "disabled", channels: undefined, message: locale.disabledHelp } });
+    assert.equal(elements.group!.disabled, true); assert.equal(elements.group!.value, "5");
+    assert.equal(elements.group!.children[0]!.textContent, locale.group + " 5");
+    elements.mode!.value = "off"; elements.mode!.listeners.get("change")!();
+    elements["short-title"]!.value = "Live <&>"; elements["short-title"]!.listeners.get("input")!();
+    assert.deepEqual(socket.sent.at(-1)!.payload, { groupIndex: 5, mode: "off", shortTitle: "Live <&>", settingsVersion: 1 });
+    socket.receive({ event: "sendToPropertyInspector", context: "pi", payload: { ...live, sequence: 4 } });
+    assert.equal(elements.group!.value, "5"); assert.equal(elements.group!.disabled, false);
+    socket.close(); assert.equal(elements.group!.value, "5"); assert.equal(elements.group!.disabled, true);
   }
 });

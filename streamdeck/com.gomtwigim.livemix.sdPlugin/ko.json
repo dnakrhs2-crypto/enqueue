@@ -60,6 +60,18 @@
       }
     ]
   },
+  "com.gomtwigim.livemix.plugin-group-all": {
+    "Name": "플러그인 그룹 (전체 마이크)",
+    "Tooltip": "그 번호의 플러그인 그룹을 마이크 전체에서 한꺼번에 껐다 켭니다 (LiveMix 0.10.0 이상).",
+    "States": [
+      {
+        "Name": "모두 OFF"
+      },
+      {
+        "Name": "모두 ON"
+      }
+    ]
+  },
   "com.gomtwigim.livemix.fx-send": {
     "Name": "FX 보내는 양",
     "Tooltip": "회전으로 보내는 양을 조절하고 짧게 눌렀다 떼어 프리/포스트를 바꿉니다.",
@@ -131,6 +143,12 @@
     "fxMuteGroupTooltip": "LiveMix 뮤트그룹에 소속된 FX를 뮤트하거나 해제합니다.",
     "pluginGroup": "플러그인 그룹",
     "pluginGroupTooltip": "마이크의 기존 번호 슬롯에 해당하는 플러그인 그룹을 토글합니다.",
+    "pluginGroupAll": "플러그인 그룹 (전체 마이크)",
+    "pluginGroupAllTooltip": "그 번호의 플러그인 그룹을 마이크 전체에서 한꺼번에 껐다 켭니다 (LiveMix 0.10.0 이상).",
+    "allMicsShort": "전체 마이크",
+    "groupMicCount": "마이크 {count}개",
+    "groupMicCountOne": "마이크 {count}개",
+    "groupAllNote": "그 번호의 그룹을 마이크 전체에서 한꺼번에 껐다 켭니다. 하나라도 켜져 있으면 전부 끄고, 다 꺼져 있으면 전부 켭니다. LiveMix 0.10.0 이상이 필요합니다.",
     "fxSend": "FX 보내는 양",
     "fxSendTooltip": "회전으로 보내는 양을 조절하고 짧게 눌렀다 떼어 프리/포스트를 바꿉니다.",
     "fxSendStep": "FX 보내는 양 ±",

@@ -77,6 +77,59 @@ public:
             expect (dir.deleteRecursively());
         }
 
+        beginTest ("setting a plugin group everywhere counts matching channels and batches their chain announcements");
+        {
+            MixEngine engine;
+            engine.prepare (48000.0, 256);
+            MixDocument doc (engine);
+            doc.applyToEngine();
+            const auto first = doc.getSession().channels[0].id;
+            const auto second = doc.addChannel();
+            const auto third = doc.addChannel();
+            int values = 0;
+            doc.onValueChanged = [&values] { ++values; };
+            doc.discardUnsavedChanges();
+            expectEquals (doc.setGroupOffOnEveryChannel (0, true), 0);
+            expectEquals (doc.setGroupOffOnEveryChannel (-1, true), 0);
+            expectEquals (doc.setGroupOffOnEveryChannel (MixSession::maxPluginGroups, true), 0);
+            expectEquals (values, 0); expect (! doc.isDirty());
+
+            expectEquals (doc.addPluginGroup (first), 0);
+            expectEquals (doc.addPluginGroup (first), 1);
+            expectEquals (doc.addPluginGroup (second), 0);
+            for (const auto& id : { first, second, third })
+            {
+                auto* chain = engine.getChannelChain (id);
+                expect (chain != nullptr);
+                if (chain != nullptr)
+                {
+                    chain->addPlugin (std::make_unique<TestGainPlugin> (0.5f));
+                    if (id != third) doc.setPluginGroupMember (id, 0, chain->getSlot (0).state.slotId, true);
+                }
+            }
+            doc.discardUnsavedChanges(); values = 0;
+            expectEquals (doc.setGroupOffOnEveryChannel (0, true), 2);
+            expectEquals (values, 1); expect (doc.isDirty());
+            const auto& channels = doc.getSession().channels;
+            expect (channels[0].pluginGroups[0].off && channels[1].pluginGroups[0].off);
+            expect (! channels[0].pluginGroups[1].off); expect (channels[2].pluginGroups.empty());
+            for (const auto& id : { first, second, third })
+                if (const auto* chain = engine.getChannelChain (id)) expect (chain->getSlot (0).bypassed.load() == (id != third));
+
+            expectEquals (doc.setGroupOffOnEveryChannel (0, false), 2);
+            expectEquals (values, 2);
+            expect (! channels[0].pluginGroups[0].off && ! channels[1].pluginGroups[0].off);
+            for (const auto& id : { first, second, third })
+                if (const auto* chain = engine.getChannelChain (id)) expect (! chain->getSlot (0).bypassed.load());
+            expectEquals (doc.setGroupOffOnEveryChannel (1, true), 1);
+            expectEquals (values, 3); expect (channels[0].pluginGroups[1].off);
+            expectEquals ((int) channels[1].pluginGroups.size(), 1); expect (channels[2].pluginGroups.empty());
+            expect (! channels[0].pluginGroups[0].off && ! channels[1].pluginGroups[0].off);
+            doc.discardUnsavedChanges(); values = 0;
+            expectEquals (doc.setGroupOffOnEveryChannel (2, true), 0);
+            expectEquals (values, 0); expect (! doc.isDirty());
+        }
+
         beginTest ("the plugin group hotkey switches that numbered group on every mic channel at once");
         {
             MixEngine engine;

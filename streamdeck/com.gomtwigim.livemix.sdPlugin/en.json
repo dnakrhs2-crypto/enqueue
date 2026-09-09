@@ -60,6 +60,18 @@
       }
     ]
   },
+  "com.gomtwigim.livemix.plugin-group-all": {
+    "Name": "Plugin Group (All Mics)",
+    "Tooltip": "Switch a numbered plugin group off or on across every microphone at once (LiveMix 0.10.0+).",
+    "States": [
+      {
+        "Name": "All OFF"
+      },
+      {
+        "Name": "All ON"
+      }
+    ]
+  },
   "com.gomtwigim.livemix.fx-send": {
     "Name": "FX Send Amount",
     "Tooltip": "Rotate to adjust the send amount; short press and release to toggle pre/post.",
@@ -131,6 +143,12 @@
     "fxMuteGroupTooltip": "Mute or unmute the FX assigned to LiveMix's mute group.",
     "pluginGroup": "Plugin Group",
     "pluginGroupTooltip": "Toggle an existing numbered plugin group on a microphone.",
+    "pluginGroupAll": "Plugin Group (All Mics)",
+    "pluginGroupAllTooltip": "Switch a numbered plugin group off or on across every microphone at once (LiveMix 0.10.0+).",
+    "allMicsShort": "All mics",
+    "groupMicCount": "{count} mics",
+    "groupMicCountOne": "{count} mic",
+    "groupAllNote": "Switch that numbered group off or on across every microphone at once. If any is on, turn them all off; if all are off, turn them all on. Requires LiveMix 0.10.0 or later.",
     "fxSend": "FX Send Amount",
     "fxSendTooltip": "Rotate to adjust the send amount; short press and release to toggle pre/post.",
     "fxSendStep": "FX Send ±",

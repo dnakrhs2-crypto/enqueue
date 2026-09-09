@@ -128,7 +128,7 @@ public:
             expectEquals ((int) decoder.bufferedBytes(), 0);
         }
 
-        beginTest ("all eight commands, hello negotiation, ping and session-free requestState have typed values");
+        beginTest ("all nine commands, hello negotiation, ping and session-free requestState have typed values");
         {
             const std::string channel = "\"channelId\":\"11111111111141118111111111111111\"";
             const std::string fx = "\"fxId\":\"22222222222242228222222222222222\"";
@@ -137,6 +137,7 @@ public:
                 { "setAllChannelsOn", "{\"on\":true}" }, { "toggleMuteGroup", "{\"group\":\"mic\"}" },
                 { "setMuteGroup", "{\"group\":\"fx\",\"muted\":false}" },
                 { "setPluginGroupOff", "{" + channel + ",\"index\":2,\"off\":true}" },
+                { "setPluginGroupOffEverywhere", "{\"index\":2,\"off\":true}" },
                 { "setSend", "{" + channel + "," + fx + ",\"amount\":0.38,\"pre\":false}" }, { "requestState", "{}" }
             };
             for (size_t i = 0; i < std::size (commands); ++i)
@@ -148,7 +149,34 @@ public:
                 {
                     const auto* c = std::get_if<P::Command> (message);
                     expect (c != nullptr);
-                    if (c != nullptr) { expectEquals ((int) c->args.index(), (int) i); expect (c->sessionId.has_value()); }
+                    if (c != nullptr)
+                    {
+                        expectEquals ((int) c->args.index(), (int) i); expect (c->sessionId.has_value());
+                        if (const auto* a = std::get_if<P::SetPluginGroupOffEverywhere> (&c->args))
+                        {
+                            expectEquals (a->index, 2); expect (a->off);
+                        }
+                    }
+                }
+            }
+            for (const auto index : { 1, 5 })
+            {
+                auto request = juce::JSON::parse (command ("setPluginGroupOffEverywhere", "{\"index\":" + std::to_string (index) + ",\"off\":false}").c_str());
+                request.getDynamicObject()->setProperty ("ifRevision", P::maxSafeInteger);
+                const auto reply = P::validate (request);
+                const auto* message = std::get_if<P::ClientMessage> (&reply);
+                expect (message != nullptr);
+                if (message != nullptr)
+                {
+                    const auto* c = std::get_if<P::Command> (message);
+                    expect (c != nullptr);
+                    if (c != nullptr)
+                    {
+                        expect (c->ifRevision == P::maxSafeInteger);
+                        const auto* a = std::get_if<P::SetPluginGroupOffEverywhere> (&c->args);
+                        expect (a != nullptr);
+                        if (a != nullptr) { expectEquals (a->index, index); expect (! a->off); }
+                    }
                 }
             }
             auto request = juce::JSON::parse (command ("requestState", "{}").c_str());
@@ -195,6 +223,15 @@ public:
             const std::string pair = channel + ",\"fxId\":\"22222222222242228222222222222222\"";
             for (const auto* value : { "null", "1", "\"true\"" }) invalid (juce::JSON::parse (command ("setChannelOn", "{" + channel + ",\"on\":" + value + "}").c_str()));
             for (const auto* value : { "0", "6", "1.5", "2.0", "true", "null", "\"2\"" }) invalid (juce::JSON::parse (command ("setPluginGroupOff", "{" + channel + ",\"index\":" + value + ",\"off\":true}").c_str()));
+            for (const auto* value : { "0", "6", "1.5", "2.0", "true", "null", "\"2\"" }) invalid (juce::JSON::parse (command ("setPluginGroupOffEverywhere", "{\"index\":" + std::string (value) + ",\"off\":true}").c_str()));
+            for (const auto* value : { "null", "0", "1", "\"true\"" }) invalid (juce::JSON::parse (command ("setPluginGroupOffEverywhere", "{\"index\":2,\"off\":" + std::string (value) + "}").c_str()));
+            invalid (juce::JSON::parse (command ("setPluginGroupOffEverywhere", "{\"off\":true}").c_str()));
+            invalid (juce::JSON::parse (command ("setPluginGroupOffEverywhere", "{\"index\":2}").c_str()));
+            for (const auto* field : { "instanceId", "sessionId" })
+            {
+                auto bad = juce::JSON::parse (command ("setPluginGroupOffEverywhere", "{\"index\":2,\"off\":true}").c_str());
+                bad.getDynamicObject()->removeProperty (field); invalid (bad);
+            }
             for (const auto* value : { "-0.01", "1.01", "null", "true", "\"0.5\"" }) invalid (juce::JSON::parse (command ("setSend", "{" + pair + ",\"amount\":" + value + "}").c_str()));
             invalid (juce::JSON::parse (command ("setSend", "{" + pair + "}").c_str()));
             invalid (juce::JSON::parse (command ("setSend", "{" + pair + ",\"pre\":null}").c_str()));
@@ -212,6 +249,13 @@ public:
             expect (P::validateCommand (typed).has_value());
             std::get<P::SetSend> (typed.args).amount = std::numeric_limits<double>::infinity();
             expect (P::validateCommand (typed).has_value());
+            for (const auto index : { 0, 6 })
+            {
+                typed.args = P::SetPluginGroupOffEverywhere { index, true };
+                const auto error = P::validateCommand (typed);
+                expect (error.has_value());
+                if (error) expect (error->code == P::ErrorCode::invalidArgument);
+            }
         }
 
         beginTest ("every server message and ack result encodes required fields, errors are stable and states are bounded");
@@ -220,7 +264,10 @@ public:
             const auto hello = encoded (P::HelloAck { "1", context.instanceId, "0.5.3" });
             expectEquals (hello["type"].toString(), juce::String ("helloAck"));
             expectEquals (hello["server"]["version"].toString(), juce::String ("0.5.3"));
-            expectEquals (hello["capabilities"].size(), 5);
+            expectEquals ((int) hello["v"], 1);
+            expectEquals (hello["capabilities"].size(), 6);
+            expectEquals (hello["capabilities"][4].toString(), juce::String ("sends"));
+            expectEquals (hello["capabilities"][5].toString(), juce::String ("pluginGroupsEverywhere"));
             expectEquals ((int) hello["eventIntervalMs"], 100); expectEquals ((int) hello["heartbeatIntervalMs"], 5000);
             P::Projection projection;
             projection.session.name = juce::String::fromUTF8 ("곰 \"방송\"\n");
@@ -238,7 +285,8 @@ public:
             expectEquals (delta["changes"].getDynamicObject()->getProperties().size(), 0);
             expectEquals ((juce::int64) delta["baseRevision"], context.revision - 2);
             const P::CommandResult results[] { P::OnResult { true }, P::AllChannelsResult { false, 2 }, P::MuteGroupResult { P::MuteGroup::fx, true },
-                                              P::PluginGroupResult { 2, true }, P::SendResult { 0.38, false }, P::RequestStateResult { context.revision } };
+                                              P::PluginGroupResult { 2, true }, P::PluginGroupEverywhereResult { 2, true, 3 },
+                                              P::SendResult { 0.38, false }, P::RequestStateResult { context.revision } };
             for (const auto& result : results)
             {
                 const auto ack = encoded (P::Ack { "2", context, false, result });
@@ -246,6 +294,14 @@ public:
                 for (const auto* field : { "id", "instanceId", "sessionId", "revision", "changed", "result" }) expect (ack.hasProperty (field));
                 expect (ack["changed"].isBool() && ! (bool) ack["changed"]);
                 expect (ack["result"].isObject());
+                if (const auto* r = std::get_if<P::PluginGroupEverywhereResult> (&result))
+                {
+                    const auto& value = ack["result"];
+                    expectEquals (value.getDynamicObject()->getProperties().size(), 3);
+                    expect (value["index"].isInt()); expectEquals ((int) value["index"], r->index);
+                    expect (value["off"].isBool()); expect ((bool) value["off"] == r->off);
+                    expect (value["count"].isInt()); expectEquals ((int) value["count"], r->count);
+                }
             }
             const auto pong = encoded (P::Pong { "3", context });
             expectEquals (pong["type"].toString(), juce::String ("pong"));

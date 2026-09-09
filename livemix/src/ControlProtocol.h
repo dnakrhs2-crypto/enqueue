@@ -48,10 +48,11 @@ public:
     struct ToggleMuteGroup { MuteGroup group = MuteGroup::mic; };
     struct SetMuteGroup { MuteGroup group = MuteGroup::mic; bool muted = false; };
     struct SetPluginGroupOff { juce::Uuid channelId; int index = 1; bool off = false; };
+    struct SetPluginGroupOffEverywhere { int index = 1; bool off = false; };
     struct SetSend { juce::Uuid channelId, fxId; std::optional<double> amount; std::optional<bool> pre; };
     struct RequestState {};
     using CommandArgs = std::variant<SetChannelOn, ToggleChannel, SetAllChannelsOn, ToggleMuteGroup,
-                                     SetMuteGroup, SetPluginGroupOff, SetSend, RequestState>;
+                                     SetMuteGroup, SetPluginGroupOff, SetPluginGroupOffEverywhere, SetSend, RequestState>;
     struct Command
     {
         juce::String id;
@@ -184,9 +185,11 @@ public:
     struct AllChannelsResult { bool on = false; int count = 0; };
     struct MuteGroupResult { MuteGroup group = MuteGroup::mic; bool muted = false; };
     struct PluginGroupResult { int index = 1; bool off = false; };
+    struct PluginGroupEverywhereResult { int index = 1; bool off = false; int count = 0; };
     struct SendResult { double amount = 0.0; bool pre = false; };
     struct RequestStateResult { juce::int64 snapshotRevision = 0; };
-    using CommandResult = std::variant<OnResult, AllChannelsResult, MuteGroupResult, PluginGroupResult, SendResult, RequestStateResult>;
+    using CommandResult = std::variant<OnResult, AllChannelsResult, MuteGroupResult, PluginGroupResult,
+                                       PluginGroupEverywhereResult, SendResult, RequestStateResult>;
     struct Ack { juce::String id; Context context; bool changed = false; CommandResult result; };
     struct ErrorResponse
     {

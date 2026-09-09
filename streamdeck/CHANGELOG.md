@@ -1,5 +1,19 @@
 # LiveMix Stream Deck changelog
 
+## 1.1.0 — 2026-09-09
+
+### 한국어
+
+- 플러그인 그룹 (전체 마이크) 키를 추가했습니다. 같은 번호의 그룹 1–5를 가진 모든 마이크에서 한꺼번에 토글하거나 ON/OFF로 설정합니다. 토글은 하나라도 ON이면 전부 OFF, 전부 OFF이면 전부 ON입니다.
+- 그룹 번호와 켜진 그룹 수/전체 수, 모두 ON·모두 OFF·일부 ON을 표시합니다. 설정에는 그룹·동작·표시 이름만 있으며 그룹 선택에 해당 마이크 수를 표시합니다.
+- 새 키에는 LiveMix 0.10.0+가 필요합니다. 이전 LiveMix에서는 업데이트 안내를 표시하고 명령을 보내지 않습니다. 기존 여덟 동작은 LiveMix 0.6.0+에서 계속 사용할 수 있습니다.
+
+### English
+
+- Added Plugin Group (All Mics): toggle or explicitly set ON/OFF for numbered group 1–5 across every microphone that has it. Toggle turns all OFF if any are ON, otherwise all ON.
+- Shows the group digit, ON/total count and All ON, All OFF or Some ON. Setup exposes group, mode and display name; group choices show the microphone count.
+- The new key requires LiveMix 0.10.0+. Older LiveMix versions show an update message and receive no command. The existing eight actions still require only LiveMix 0.6.0+.
+
 ## 1.0.0 — 2026-09-08
 
 ### 한국어
