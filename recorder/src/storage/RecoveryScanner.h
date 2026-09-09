@@ -9,7 +9,9 @@ struct RecoveryReport
 {
     RecorderProject project;
     juce::File checkpoint, attempt;
+    CheckpointInfo checkpointInfo;
     Sample lastSavedEditRevision = 0;
+    std::uint64_t replayedEdits = 0, registryCommits = 0;
     std::uint64_t changedTakes = 0, addedClips = 0, duplicateTransactions = 0;
     bool ignoredEditTail = false, ignoredTakeTail = false, usedBackup = false;
     juce::StringArray messages, warnings, orphans;

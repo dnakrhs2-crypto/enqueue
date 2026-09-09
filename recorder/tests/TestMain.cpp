@@ -43,6 +43,8 @@ int runPlaybackQueueTests();     // round 14: prefetch / revision banks / RT all
 int runRippleTests();
 int runReorderTests();
 int runMarkerTests();
+int runEditJournalTests();       // round 19: transactions, worker, checkpoint generations
+int runRetakeRecoveryTests();    // round 19: edit/undo/placement/finalization recovery
 
 namespace
 {
@@ -56,6 +58,7 @@ int runJournalDurable() { const int a = runJournalTests(), b = runWavChunkTests(
 int runCutLinkHistory() { const int a = runClipEditTests(), b = runLinkEditTests(), c = runEditHistoryTests(); return (a || b || c) ? 1 : 0; }
 int runAudioImport() { const int a = runAudioImportTests(), b = runImportedClipTests(); return (a || b) ? 1 : 0; }
 int runRippleReorderMarkers() { const int a = runRippleTests(), b = runReorderTests(), c = runMarkerTests(); return (a || b || c) ? 1 : 0; }
+int runRecoveryIdempotence() { const int a = runRecoveryTests(), b = runRetakeRecoveryTests(); return (a || b) ? 1 : 0; }
 const Suite suites[] = {
     {"audio-cut-render", runAudioCutRenderTests},
     {"audio-prefetch-underrun", runPlaybackQueueTests},
@@ -70,7 +73,8 @@ const Suite suites[] = {
     {"project-roundtrip", runProjectTests},
     {"recorder-audio", runRecorderAudioTests},
     {"take-lifecycle", runTakeControllerTests},
-    {"recovery-idempotence", runRecoveryTests},
+    {"recovery-idempotence", runRecoveryIdempotence},
+    {"edit-journal-replay", runEditJournalTests},
     {"large-files", runLargeFileTests},
     {"cut-link-history", runCutLinkHistory},
     {"edit-property", runEditPropertyTests},

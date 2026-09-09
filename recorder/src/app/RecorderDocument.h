@@ -30,6 +30,10 @@ public:
     // Must only enqueue a copy; no disk I/O here. Completion returns on the document owner thread.
     // Queue acceptance does NOT mean durable storage. Call acknowledgeJournal after append + flush.
     virtual juce::Result enqueue(const EditDelta&) = 0;
+    virtual juce::Result enqueue(const EditDelta& delta, std::shared_ptr<const RecorderProject>) { return enqueue(delta); }
+    virtual juce::Result enqueueRegistry(std::shared_ptr<const RecorderProject>) { return juce::Result::ok(); }
+    virtual bool ownsCheckpoint(const juce::File&) const { return false; }
+    virtual juce::Result checkpointAndWait() { return juce::Result::fail("No checkpoint worker"); }
 };
 class IRenderPlanConsumer
 {
@@ -87,6 +91,9 @@ public:
     juce::Result placeTake(const Id& registeredTakeId);
     void setJournalSink(IEditJournalSink* sink) { journal = sink; }
     void acknowledgeJournal(const EditDelta& ticket, const juce::Result&);
+    // Called on the owner thread with exactly the immutable state whose media
+    // registry was flushed. Finalization does not add an undo entry/revision.
+    void acknowledgeJournalState(Snapshot, const juce::Result&);
     std::function<void()> onChanged;
     // Recorder coordinator lock; owner thread only. Registry finalization remains
     // available, while user timeline/timebase/document replacement is blocked.
@@ -127,5 +134,6 @@ private:
     bool recordingStructureLock = false;
     std::vector<int> placementMicrophones;
     Id lastTransaction;
+    void enqueueRegistry();
 };
 }

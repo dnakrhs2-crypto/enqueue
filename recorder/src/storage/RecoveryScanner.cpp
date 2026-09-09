@@ -1,6 +1,8 @@
 #include "RecoveryScanner.h"
 #include "Mp4RecoveryIndex.h"
 #include "StorageEncoding.h"
+#include "EditJournal.h"
+#include "record/Mp4TakeWriter.h"
 #include <algorithm>
 #include <array>
 #include <cstring>
@@ -41,13 +43,55 @@ bool verifyFiles(const juce::File& root, const juce::var& files, bool hash)
     }
     return true;
 }
-bool manifest(const juce::File& root, const Id& takeId, RecorderProject& out)
+bool manifest(const juce::File& root, const Id& takeId, RecorderProject& out, const RecorderProject* known = nullptr)
 {
     try
     {
     const auto file = child(root, "media/takes/" + juce::Uuid(takeId).toDashedString() + "/take.json");
     if (!file.existsAsFile()) return false;
     auto v = juce::JSON::parse(file.loadFileAsString()); if (!v.isObject()) return false;
+    if (!v.hasProperty("checksum"))
+    {
+        // Round-10 product manifests predate the round-07 recovery envelope.
+        // Bind their IDs/origins and exact media lengths to the checksummed
+        // registry; never reinterpret an arbitrary JSON file as a finished take.
+        if (!known || number(v["schemaVersion"]) != 1 || id(v["takeId"]) != takeId || v["state"].toString() != "done") return false;
+        const auto* take = known->media->findTake(takeId);
+        if (!take || take->cam2AssetId.isNotEmpty() || take->cam1AssetId != v["cameraAssetId"].toString()
+            || number(v["Fs"]) != known->Fs || number(v["fpsNumerator"]) != known->fps.numerator || number(v["fpsDenominator"]) != known->fps.denominator
+            || number(v["N0"]) != take->N0 || number(v["Nstop"]) - take->N0 != take->logicalLength
+            || number(v["placementSample"]) != take->placementSample || number(v["logicalLength"]) != take->logicalLength) return false;
+        const auto microphones = v["microphones"]; if (!microphones.isArray() || microphones.size() != static_cast<int>(take->microphoneAssetIds.size())) return false;
+        for (int i = 0; i < microphones.size(); ++i)
+            if (microphones[i]["assetId"].toString() != take->microphoneAssetIds[static_cast<size_t>(i)]
+                || number(microphones[i]["physicalIndex"]) != take->capture.physicalInputs[static_cast<size_t>(i)]) return false;
+        auto registry = std::make_shared<MediaRegistry>(*known->media);
+        for (auto& asset : registry->assets)
+        {
+            if (asset.assetId == take->cam1AssetId)
+            {
+                const auto path = "media/takes/" + juce::Uuid(takeId).toDashedString() + "/cam1.mp4";
+                const auto media = child(root, path);
+                if (!bool(v["video"]["mux"]["finalized"]) || !media.existsAsFile() || media.getSize() != number(v["video"]["mux"]["fileSizeBytes"])) return false;
+                const auto inspection = Mp4TakeWriter::inspect(media);
+                if (!bool(inspection["presentationStartsAtZero"]) || RecorderSerializer::fingerprint(inspection["streams"]) != RecorderSerializer::fingerprint(v["video"]["inspection"]["streams"])) return false;
+                if (asset.relativePath != path) { if (asset.mediaGeneration == INT64_MAX) return false; ++asset.mediaGeneration; asset.relativePath = path; }
+            }
+            else if (std::find(take->microphoneAssetIds.begin(), take->microphoneAssetIds.end(), asset.assetId) != take->microphoneAssetIds.end())
+            {
+                if (asset.chunks.empty()) return false;
+                for (const auto& chunk : asset.chunks)
+                {
+                    const auto wav = child(root, chunk.relativePath); juce::FileInputStream in(wav); std::array<std::uint8_t, 44> h{};
+                    if (in.failedToOpen() || in.read(h.data(), 44) != 44 || std::memcmp(h.data(), "RIFF", 4) || std::memcmp(h.data() + 36, "data", 4)) return false;
+                    const auto bytes = std::uint64_t(chunk.sourceRange.length) * 3;
+                    if (bytes > UINT32_MAX || storageEncoding::get<std::uint32_t>(h.data() + 40) != bytes || wav.getSize() != static_cast<juce::int64>(44 + bytes + (bytes & 1))) return false;
+                }
+            }
+        }
+        for (auto& item : registry->takes) if (item.takeId == takeId) item.state = TakeState::complete;
+        out = *known; out.media = registry; return out.validate().wasOk();
+    }
     const auto hash = v["checksum"].toString(); v.getDynamicObject()->removeProperty("checksum");
     if (number(v["schemaVersion"]) != 1 || id(v["takeId"]) != takeId || hash != RecorderSerializer::fingerprint(v)
         || !verifyFiles(root, v["files"], false) || RecorderSerializer::fromJson(v["project"].toString(), out).failed()) return false;
@@ -166,6 +210,10 @@ juce::var RecoveryReport::toJson() const
     recovery::set(v, "lastSavedEditRevision", recovery::integer(lastSavedEditRevision)); recovery::set(v, "resultRevision", recovery::integer(project.editRevision));
     recovery::set(v, "duplicateTransactions", recovery::integer(std::int64_t(duplicateTransactions))); recovery::set(v, "ignoredEditTail", ignoredEditTail); recovery::set(v, "ignoredTakeTail", ignoredTakeTail);
     recovery::set(v, "usedBackup", usedBackup); recovery::set(v, "messages", juce::var(messages)); recovery::set(v, "warnings", juce::var(warnings)); recovery::set(v, "orphans", juce::var(orphans)); recovery::set(v, "takes", takes);
+    recovery::set(v, "checkpointGeneration", recovery::integer(checkpointInfo.generation));
+    recovery::set(v, "editJournalPath", checkpointInfo.journalPath);
+    recovery::set(v, "replayedEdits", recovery::integer(static_cast<Sample>(replayedEdits)));
+    recovery::set(v, "registryCommits", recovery::integer(static_cast<Sample>(registryCommits)));
     recovery::set(v, "powerLoss", juce::String::fromUTF8("미확인 → 스파이크 4")); return v;
 }
 std::uint64_t RecoveryScanner::wavSamples(std::uint64_t actual, const JournalFilePosition& pos)
@@ -188,22 +236,7 @@ void RecoveryScanner::appendEdit(const juce::File& file, const EditDelta& delta,
 }
 void RecoveryScanner::writeCheckpoint(const juce::File& file, const RecorderProject& project, FileIoFaultAdapter* faults, const recovery::Hook& hook)
 {
-    using namespace recovery; check(project.validate()); const auto json = RecorderSerializer::toJson(project);
-    const auto temporary = file.getSiblingFile(file.getFileName() + ".pending-" + juce::Uuid().toString());
-    writeNew(temporary, json.toRawUTF8(), json.getNumBytesAsUTF8(), faults);
-    RecorderProject verified; check(RecorderSerializer::fromJson(temporary.loadFileAsString(), verified));
-    if (file.existsAsFile())
-    {
-        // Backup is independently durable before primary replacement. A crash in
-        // this interval leaves at least one validated checkpoint.
-        RecorderProject prior; check(RecorderSerializer::fromJson(file.loadFileAsString(), prior));
-        require(prior.projectId == project.projectId && prior.editRevision <= project.editRevision, "Cannot replace a foreign/newer checkpoint");
-        const auto backup = file.getSiblingFile(file.getFileName() + ".bak"); const auto staged = backup.getSiblingFile(backup.getFileName() + ".pending-" + juce::Uuid().toString());
-        const auto previous = RecorderSerializer::toJson(prior); writeNew(staged, previous.toRawUTF8(), previous.getNumBytesAsUTF8(), faults);
-        require(MoveFileExW(staged.getFullPathName().toWideCharPointer(), backup.getFullPathName().toWideCharPointer(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH), "Replace durable checkpoint backup");
-    }
-    hit(hook, "checkpoint-replace");
-    require(MoveFileExW(temporary.getFullPathName().toWideCharPointer(), file.getFullPathName().toWideCharPointer(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH), "Replace durable primary checkpoint");
+    CheckpointInfo written; recovery::check(RecorderSerializer::writeCheckpoint(file, project, written, faults, hook));
 }
 void RecoveryScanner::writeTakeManifest(const juce::File& root, const RecorderProject& project, const Id& takeId)
 {
@@ -222,17 +255,22 @@ juce::Result RecoveryScanner::run(const juce::File& root, RecoveryReport& report
         WriterLock projectLock(child(root, "project.writer.lock")); WriterLock takeLock(child(root, "journal/takes.writer.lock"));
         const auto primary = child(root, "project.recorder"), backup = child(root, "project.recorder.bak");
         bool selected = false; std::set<Id> committedRecoveryTakes; juce::var chosenCommit;
+        Sample maximumGeneration = 0;
+        std::vector<std::pair<RecorderProject, juce::var>> recoveryCandidates;
         const auto choose = [&](const juce::File& file, bool isBackup, const juce::var& commit)
         {
             if (!file.existsAsFile()) return;
-            RecorderProject candidate; const auto r = RecorderSerializer::fromJson(file.loadFileAsString(), candidate);
+            RecorderProject candidate; CheckpointInfo candidateInfo; const auto r = RecorderSerializer::fromJson(file.loadFileAsString(), candidate, &candidateInfo);
+            candidateInfo.sourceFile = file;
             if (r.failed()) { report.warnings.add("Invalid checkpoint: " + rel(root, file) + ": " + r.getErrorMessage()); return; }
             if (selected && candidate.projectId != report.project.projectId) { report.warnings.add("Checkpoint project UUID mismatch: " + rel(root, file)); return; }
-            if (!selected || candidate.editRevision > report.project.editRevision)
-            { report.project = candidate; report.checkpoint = file; report.usedBackup = isBackup; selected = true; chosenCommit = commit; }
+            maximumGeneration = (std::max)(maximumGeneration, candidateInfo.generation);
+            if (!selected || candidateInfo.generation > report.checkpointInfo.generation
+                || (candidateInfo.generation == report.checkpointInfo.generation && candidate.editRevision > report.project.editRevision))
+            { report.project = candidate; report.checkpointInfo = candidateInfo; report.checkpoint = file; report.usedBackup = isBackup; selected = true; chosenCommit = commit; }
             // Primary wins a same-revision backup tie: media finalization can
             // update registry state without a new user edit revision (round 08).
-            else if (candidate.editRevision == report.project.editRevision && !isBackup)
+            else if (candidateInfo.generation == report.checkpointInfo.generation && candidate.editRevision == report.project.editRevision && !isBackup)
                 require(RecorderSerializer::toJson(candidate) == RecorderSerializer::toJson(report.project), "Conflicting checkpoints at the same revision");
         };
         choose(primary, false, {}); choose(backup, true, {});
@@ -249,7 +287,7 @@ juce::Result RecoveryScanner::run(const juce::File& root, RecoveryReport& report
                 RecorderProject candidate; if (RecorderSerializer::fromJson(file.loadFileAsString(), candidate).failed()) return false;
                 if (selected && candidate.projectId != report.project.projectId) return false;
                 choose(file, false, p);
-                if (const auto* ids = p["recoveredTakeIds"].getArray()) for (const auto& value : *ids) committedRecoveryTakes.insert(id(value));
+                recoveryCandidates.emplace_back(candidate, p);
                 valid = true; return true;
             });
             if (!valid || replay.ignoredTail) report.orphans.add(rel(root, dir) + "/ (uncommitted recovery attempt)");
@@ -266,9 +304,30 @@ juce::Result RecoveryScanner::run(const juce::File& root, RecoveryReport& report
             if (const auto* list = chosenCommit["messages"].getArray()) for (const auto& v : *list) report.messages.add(v.toString());
             if (const auto* list = chosenCommit["takes"].getArray()) report.takes = *list;
         }
+        // A newer primary can include earlier recovered asset generations. Only
+        // suppress recovery when those exact generations are still connected.
+        for (const auto& candidate : recoveryCandidates)
+            if (const auto* ids = candidate.second["recoveredTakeIds"].getArray()) for (const auto& v : *ids)
+            {
+                const auto takeId = id(v); const auto* take = report.project.media->findTake(takeId);
+                const auto* previous = candidate.first.media->findTake(takeId);
+                bool connected = take && previous && assetIds(*take) == assetIds(*previous);
+                if (connected) for (const auto& aid : assetIds(*take))
+                {
+                    const auto* a = report.project.media->findAsset(aid); const auto* b = candidate.first.media->findAsset(aid);
+                    connected &= a && b && a->mediaGeneration == b->mediaGeneration && paths(*a) == paths(*b);
+                }
+                if (connected) committedRecoveryTakes.insert(takeId);
+            }
         report.lastSavedEditRevision = chosenCommit.isObject() ? number(chosenCommit["lastSavedEditRevision"]) : report.project.editRevision;
+        const auto selectedRevision = report.project.editRevision;
         std::set<Id> transactions; unsigned segment = 0;
-        auto edits = child(root, "journal").findChildFiles(juce::File::findFiles, false, "edits-*.log"); edits.sort();
+        EditJournalReplay native; check(EditJournal::replay(root, report.project, report.checkpointInfo, native));
+        report.ignoredEditTail = native.framing.ignoredTail; report.replayedEdits = native.appliedEdits; report.registryCommits = native.registryCommits;
+        report.duplicateTransactions += native.framing.duplicateTransactions; transactions = native.transactions;
+        if (report.ignoredEditTail) report.warnings.add("Edit tail ignored: " + native.framing.tailReason);
+        if (native.appliedEdits) report.lastSavedEditRevision = report.project.editRevision;
+        auto edits = native.legacy ? child(root, report.checkpointInfo.journalPath).findChildFiles(juce::File::findFiles, false, "edits-*.log") : juce::Array<juce::File>{}; edits.sort();
         for (const auto& file : edits)
         {
             const auto expected = "edits-" + juce::String(++segment).paddedLeft('0', 6) + ".log";
@@ -282,9 +341,9 @@ juce::Result RecoveryScanner::run(const juce::File& root, RecoveryReport& report
                     require(expectedResult.editRevision == number(record.payload["revision"]) && expectedResult.projectId == report.project.projectId, "Invalid edit result");
                     if (!transactions.insert(record.transaction.toString()).second) { ++report.duplicateTransactions; return true; }
                     if (expectedResult.editRevision <= report.project.editRevision) return true;
-                    report.project = apply(report.project, record.payload); report.lastSavedEditRevision = report.project.editRevision; return true;
+                    report.project = apply(report.project, record.payload); report.lastSavedEditRevision = report.project.editRevision; ++report.replayedEdits; return true;
                 }
-                catch (const std::exception& e) { report.warnings.add(e.what()); return false; }
+                catch (const std::exception& e) { transactions.erase(record.transaction.toString()); report.warnings.add(e.what()); return false; }
             });
             report.duplicateTransactions += replay.duplicates;
             if (replay.ignoredTail) { report.ignoredEditTail = true; report.warnings.add("Edit tail ignored: " + replay.reason); break; }
@@ -329,7 +388,7 @@ juce::Result RecoveryScanner::run(const juce::File& root, RecoveryReport& report
             const auto manifestPath = "media/takes/" + juce::Uuid(take.takeId).toDashedString() + "/take.json"; referenced.insert(manifestPath);
             if (take.state == TakeState::complete)
             {
-                RecorderProject recorded; bool valid = manifest(root, take.takeId, recorded) && recorded.projectId == report.project.projectId;
+                RecorderProject recorded; bool valid = manifest(root, take.takeId, recorded, &report.project) && recorded.projectId == report.project.projectId;
                 if (valid)
                 {
                     valid = assetIds(take) == assetIds(*recorded.media->findTake(take.takeId));
@@ -353,7 +412,7 @@ juce::Result RecoveryScanner::run(const juce::File& root, RecoveryReport& report
             auto& state = started.at(takeId);
             if (completed.count(takeId) || committedRecoveryTakes.count(takeId)) continue;
             const Take* existing = registry->findTake(takeId); Take take; RecorderProject finished;
-            const bool restoreComplete = state.finalized && manifest(root, takeId, finished) && finished.projectId == report.project.projectId;
+            const bool restoreComplete = state.finalized && manifest(root, takeId, finished, &report.project) && finished.projectId == report.project.projectId;
             if (restoreComplete) take = *finished.media->findTake(takeId);
             else if (existing) take = *existing;
             else
@@ -500,22 +559,29 @@ juce::Result RecoveryScanner::run(const juce::File& root, RecoveryReport& report
             if (!referenced.count(name)) report.orphans.add(name);
         }
         report.addedClips = clips(report.project) - originalClipCount; check(report.project.validate());
-        if (report.changedTakes)
+        if (report.changedTakes || report.project.editRevision != selectedRevision || report.registryCommits
+            || report.ignoredEditTail || native.legacy)
         {
-            const auto dir = attempt(); const auto checkpoint = dir.getChildFile("project.recorder"); const auto json = RecorderSerializer::toJson(report.project);
+            const auto dir = attempt(); const auto checkpoint = dir.getChildFile("project.recorder");
+            require(maximumGeneration < INT64_MAX, "Recovery checkpoint generation overflow");
+            auto cursor = report.checkpointInfo; cursor.generation = maximumGeneration + 1; cursor.checkpointRevision = report.project.editRevision;
+            cursor.sourceFile = checkpoint;
+            cursor.journalPath = rel(root, dir) + "/journal"; cursor.journalSegment = 1; cursor.journalSequence = 0;
+            const auto json = RecorderSerializer::toJson(report.project, cursor);
             writeNew(checkpoint, json.toRawUTF8(), json.getNumBytesAsUTF8(), options.faults);
+            RecorderProject verified; check(RecorderSerializer::fromJson(checkpoint.loadFileAsString(), verified));
             hit(options.hook, "recovery-before-commit");
             auto commit = object(); set(commit, "checkpoint", rel(root, checkpoint)); set(commit, "sha256", sha256(checkpoint)); set(commit, "files", outputFiles);
             set(commit, "projectId", report.project.projectId); set(commit, "lastSavedEditRevision", integer(report.lastSavedEditRevision));
             juce::Array<juce::var> ids; for (const auto& t : committedRecoveryTakes) ids.add(t); set(commit, "recoveredTakeIds", ids);
             set(commit, "messages", juce::var(report.messages)); set(commit, "takes", report.takes);
             Log log(options.faults); log.open(dir.getChildFile("commit.log"), true); log.append(Kind::recovery, commit); log.close();
-            hit(options.hook, "recovery-after-commit"); report.checkpoint = checkpoint;
+            hit(options.hook, "recovery-after-commit"); report.checkpoint = checkpoint; report.checkpointInfo = cursor;
             writeJson(dir.getChildFile("report.json"), report.toJson(), options.faults);
         }
         if (document)
         {
-            CheckpointInfo info; info.checkpointRevision = report.project.editRevision; info.usedBackup = report.usedBackup;
+            auto info = report.checkpointInfo; info.checkpointRevision = report.project.editRevision; info.usedBackup = report.usedBackup;
             info.recoveryMessage = report.messages.joinIntoString("\n") + juce::String::fromUTF8("\n마지막 편집 revision: ") + juce::String(juce::int64(report.lastSavedEditRevision));
             check(document->adopt(report.project, primary, info));
         }

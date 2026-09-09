@@ -310,3 +310,9 @@ add_test(NAME RecorderRippleReorderMarkers COMMAND RecorderTests --suite ripple-
 
 # Rounds 14+15 merge regression: exercise suite lifetimes in one process as well.
 add_test(NAME RecorderAllSuites COMMAND RecorderTests)
+
+# Round 19: edit durability and recovery. One test main; append-only integration.
+target_sources(RecorderCore PRIVATE src/storage/EditJournal.cpp)
+target_sources(RecorderTests PRIVATE tests/EditJournalTests.cpp tests/RetakeRecoveryTests.cpp)
+add_test(NAME RecorderEditJournalReplay COMMAND RecorderTests --suite edit-journal-replay)
+add_dependencies(RecorderProbe RecorderCrashHarness)
