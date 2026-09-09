@@ -1,6 +1,7 @@
 #include "WavTrackWriter.h"
 #include "diagnostics/CaptureTelemetry.h"
 #include "storage/StorageEncoding.h"
+#include "support/ThreadPriority.h"
 #include <algorithm>
 #include <array>
 #include <chrono>
@@ -119,6 +120,7 @@ struct WavTrackWriter::Impl
     std::vector<std::unique_ptr<Track>> tracks;
     std::vector<std::uint8_t> packed;
     std::thread worker;
+    DWORD priorityError = 0;
     std::atomic<State> current{State::idle};
     std::atomic<Error> failure{Error::none};
     std::atomic<bool> stopRequested{false};
@@ -275,6 +277,7 @@ struct WavTrackWriter::Impl
     }
     void run(std::promise<juce::Result> ready)
     {
+        ScopedRecorderPriority priority(RecorderThreadRole::encodeWrite); priorityError = priority.error;
         bool announced = false;
         try
         {
@@ -361,6 +364,11 @@ juce::Result WavTrackWriter::stop(std::int64_t nstop, const juce::Uuid& editId)
     impl->stopRequested.store(true, std::memory_order_release); impl->worker.join(); return impl->result();
 }
 WavTrackWriter::State WavTrackWriter::state() const noexcept { return impl->current.load(std::memory_order_acquire); }
+void WavTrackWriter::requestAbort() noexcept
+{
+    auto expected = Error::none; impl->failure.compare_exchange_strong(expected, Error::discontinuity, std::memory_order_release);
+    impl->current.store(State::failed, std::memory_order_release);
+}
 WavTrackWriter::Error WavTrackWriter::error() const noexcept { return impl->failure.load(std::memory_order_acquire); }
 juce::Result WavTrackWriter::status() const { return impl->result(); }
 std::uint64_t WavTrackWriter::queueFrames() const noexcept { return impl->queue.pendingFrames.load(std::memory_order_relaxed); }
@@ -384,6 +392,7 @@ juce::var WavTrackWriter::telemetry() const
 {
     if (impl->worker.joinable()) throw std::logic_error("Join writer before reading telemetry");
     auto v = jsonObject();
+    jsonSet(v, "writerPriorityError", impl->priorityError);
     jsonSet(v, "writtenSamplesPerMic", jsonInt(writtenSamples())); jsonSet(v, "mediaDurableSamplesPerMic", jsonInt(mediaDurableSamples()));
     jsonSet(v, "journalDurableSamplesPerMic", jsonInt(journalDurableSamples()));
     jsonSet(v, "queueCapacityFrames", jsonInt(queueCapacityFrames())); jsonSet(v, "queueHighWaterFrames", jsonInt(impl->queue.highWater));

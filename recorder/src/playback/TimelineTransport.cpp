@@ -1,5 +1,6 @@
 #include "TimelineTransport.h"
 #include "VideoPlaybackEngine.h"
+#include "support/Platform.h"
 #include <algorithm>
 #include <cmath>
 
@@ -21,12 +22,13 @@ TimelineTransport::TimelineTransport(std::uint32_t Fs, std::int64_t hz, Playback
     : rate(Fs), frequency(hz), queue(q), end(length)
 { if (!rate || rate > 768000 || hz <= 0 || length < 0) throw std::invalid_argument("Invalid transport timebase"); }
 void TimelineTransport::send(Command c)
-{ if (!commands.push(c)) throw std::runtime_error("Transport command queue full"); }
+{ if (!commands.push(c)) throw std::runtime_error("Transport command queue full"); wake->signal(); }
 void TimelineTransport::seek(Sample sample)
 {
     if (sample < 0 || sample > end) throw std::out_of_range("Seek outside timeline");
     send({Kind::prepare, requestedGeneration + 1, sample, 0});
     ++requestedGeneration; requestedSample = sample; armedGeneration = 0; stopAfterPrepare = false; scrubPending = false;
+    timing = {}; timing.request = qpcNow();
 }
 void TimelineTransport::play()
 {
@@ -66,6 +68,7 @@ void TimelineTransport::prepared(std::int64_t output, bool start)
     if (snapshot().generation != requestedGeneration) throw std::logic_error("Prepare requires callback generation acknowledgement");
     send({start ? Kind::start : stopAfterPrepare ? Kind::stopped : Kind::ready, requestedGeneration, requestedSample, output});
     armedGeneration = requestedGeneration;
+    timing.armed = qpcNow();
 }
 Sample TimelineTransport::audibleCursor(const TransportSnapshot& s, std::uint32_t Fs, std::int64_t hz,
                                        std::int64_t now, std::int64_t lead) noexcept
@@ -189,6 +192,7 @@ void TimelineTransport::publish(const BlockStamp& s) noexcept
     published.output.store(rt.outputSample); published.qpc.store(rt.callbackQpc); published.frames.store(rt.blockFrames);
     published.latency.store(rt.outputLatency); published.first.store(rt.firstBlockQpc); published.audible.store(rt.firstAudibleQpc);
     published.sequence.fetch_add(1);
+    wake->signal(); // preallocated event; never wait, allocate or acquire a mutex in ASIO
 }
 TransportSnapshot TimelineTransport::snapshot() const noexcept
 {
@@ -206,6 +210,7 @@ TransportSnapshot TimelineTransport::snapshot() const noexcept
 }
 void TimelineTransport::service(TimelineAudioRenderer& audio, VideoPlaybackEngine& video, IAudioOutput& output, std::int64_t now)
 {
+    video.setWakeEvent(wake);
     output.drainTiming();
     try
     {
@@ -217,26 +222,37 @@ void TimelineTransport::service(TimelineAudioRenderer& audio, VideoPlaybackEngin
         if (s.state == TransportState::buffering && s.generation == requestedGeneration
             && audibleCursor(s, rate, frequency, now) == s.submittedEnd)
             seek(s.submittedEnd); // drain accepted device tail, then reprepare both streams
+        // Video has no callback-owned queue to reset. Cancel the old generation
+        // immediately; audio still waits for the callback's quiescent ack below.
+        if (requestedGeneration && videoGeneration != requestedGeneration)
+        { video.seek(requestedSample, requestedGeneration); videoGeneration = requestedGeneration; }
         if (s.state == TransportState::preparing && s.generation == requestedGeneration)
         {
             if (preparingGeneration != s.generation)
             {
-                audio.prepare(requestedSample, s.generation); video.seek(requestedSample, s.generation);
+                timing.callbackAck = s.callbackQpc; timing.audioBegin = qpcNow();
+                audio.prepare(requestedSample, s.generation); timing.audioEnd = qpcNow();
                 preparingGeneration = s.generation;
             }
             const auto audioStatus = audio.status(), videoStatus = video.status();
             if (audioStatus.failed()) throw std::runtime_error(audioStatus.getErrorMessage().toStdString());
             if (videoStatus.failed()) throw std::runtime_error(videoStatus.getErrorMessage().toStdString());
-            if (armedGeneration != s.generation && audio.ready() && video.ready(requestedSample, s.generation))
+            const bool audioReady = audio.ready(), videoReady = video.ready(requestedSample, s.generation);
+            if (audioReady && !timing.audioReady) timing.audioReady = qpcNow();
+            if (videoReady && !timing.videoReady) timing.videoReady = qpcNow();
+            if (armedGeneration != s.generation && audioReady && videoReady)
                 prepared(output.latestOutputSample() + Sample(queue.blockFrames) * 3, wantPlay && requestedSample < end);
         }
-        else if (s.state == TransportState::ready && wantPlay && requestedSample < end)
+        else if (s.state == TransportState::ready && s.generation == requestedGeneration && wantPlay && requestedSample < end)
             prepared(output.latestOutputSample() + Sample(queue.blockFrames) * 3, true);
         const auto videoStatus = video.status(); if (videoStatus.failed()) throw std::runtime_error(videoStatus.getErrorMessage().toStdString());
         const auto audioStatus = audio.status(); if (audioStatus.failed()) throw std::runtime_error(audioStatus.getErrorMessage().toStdString());
         auto cursor = audibleCursor(s, rate, frequency, now, frequency / 60);
         if (s.generation != requestedGeneration || s.state == TransportState::preparing) cursor = requestedSample;
-        for (unsigned camera = 0; camera < 2; ++camera) video.requestFrame(camera, cursor, requestedGeneration);
+        const bool advancing = s.generation == requestedGeneration && (s.state == TransportState::playing
+            || s.state == TransportState::draining || s.state == TransportState::buffering);
+        if (requestedGeneration)
+            for (unsigned camera = 0; camera < 2; ++camera) video.requestFrame(camera, cursor, requestedGeneration, advancing);
     }
     catch (const std::exception& e)
     {
@@ -244,4 +260,16 @@ void TimelineTransport::service(TimelineAudioRenderer& audio, VideoPlaybackEngin
     }
 }
 juce::Result TimelineTransport::status() const { return error.isEmpty() ? juce::Result::ok() : juce::Result::fail(error); }
+juce::var TimelineTransport::telemetry() const
+{
+    auto result = jsonObject(); const auto s = snapshot();
+    jsonSet(result, "state", transportStateName(s.state)); jsonSet(result, "generation", s.generation);
+    jsonSet(result, "requestedGeneration", requestedGeneration); jsonSet(result, "requestedSample", requestedSample);
+    jsonSet(result, "requestQpc", timing.request); jsonSet(result, "callbackAcknowledgedQpc", timing.callbackAck);
+    jsonSet(result, "audioPrepareBeginQpc", timing.audioBegin); jsonSet(result, "audioPrepareEndQpc", timing.audioEnd);
+    jsonSet(result, "audioReadyObservedQpc", timing.audioReady); jsonSet(result, "videoReadyObservedQpc", timing.videoReady);
+    jsonSet(result, "startCommandQpc", timing.armed); jsonSet(result, "reservedOutputSample", s.outputOrigin);
+    jsonSet(result, "firstAudioBlockQpc", s.firstBlockQpc); jsonSet(result, "firstAudioAudibleEstimateQpc", s.firstAudibleQpc);
+    jsonSet(result, "underruns", s.underruns); jsonSet(result, "error", error); return result;
+}
 }

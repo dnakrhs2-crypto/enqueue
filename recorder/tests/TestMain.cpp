@@ -34,6 +34,7 @@ int runAudioImportTests();       // round 16: copied originals, decoded lengths 
 int runImportedClipTests();      // round 16: independent import track/document transaction
 int runPlaybackTests();          // round 11: indexed playback / audible transport (no devices)
 int runUiWiringTests();          // round 12: UI state, settings, derived caches and shared output
+int runQueueIsolationTests();    // round 05: two-camera queues, raw-audio stop and pixel oracle
 
 namespace
 {
@@ -65,6 +66,7 @@ const Suite suites[] = {
     {"audio-import", runAudioImport},
     {"playback-engine", runPlaybackTests},
     {"ui-wiring", runUiWiringTests},
+    {"queue-isolation", runQueueIsolationTests},
 };
 int usage()
 {

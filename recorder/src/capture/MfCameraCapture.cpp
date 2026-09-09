@@ -1,4 +1,5 @@
 #include "MfCameraCapture.h"
+#include "support/ThreadPriority.h"
 #include "CaptureDecodeRecovery.h"
 #include "support/BoundedSpscQueue.h"
 #include <future>
@@ -178,6 +179,7 @@ struct MfCameraCapture::State
     void run(std::string link, CameraMode mode, bool mfDecode, int threads, std::promise<CaptureOpenInfo> opened,
              std::shared_future<void> measurementStart)
     {
+        ScopedRecorderPriority priority(RecorderThreadRole::capturePreview); telemetry->capturePriorityError.store(priority.error);
         bool openReported = false;
         try
         {

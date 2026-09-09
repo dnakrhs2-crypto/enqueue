@@ -50,6 +50,9 @@ public:
     // Detach/join the producer BEFORE calling stop. Nstop is exclusive in the
     // configured N0/O0 clock. Failure preserves originals and never finalizes.
     juce::Result stop(std::int64_t nstop, const juce::Uuid& placementEditId);
+    // Upstream raw loss/reset: preserve an unfinished take, never journal a
+    // normal finalization for a truncated source. Lock-free control/worker signal.
+    void requestAbort() noexcept;
     State state() const noexcept;
     Error error() const noexcept;
     juce::Result status() const; // Control thread only; copies the error text.

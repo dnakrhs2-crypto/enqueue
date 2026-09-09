@@ -1,4 +1,5 @@
 #include "PreviewPresenter.h"
+#include "support/ThreadPriority.h"
 #include "PresentPacing.h"
 #include <d3d11.h>
 #include <dxgi1_3.h>
@@ -103,6 +104,7 @@ struct PreviewPresenter::State
         : window(w), pool(p), telemetry(std::move(t)), width(x), height(y) {}
     void run(std::promise<void> ready, std::shared_future<void> measurementStart)
     {
+        ScopedRecorderPriority priority(RecorderThreadRole::capturePreview); telemetry->previewPriorityError.store(priority.error);
         bool signalled = false;
         try
         {
