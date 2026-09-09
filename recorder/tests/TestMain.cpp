@@ -38,6 +38,8 @@ int runDubbingFailureTests();
 int runTakeStackTests();
 int runUiWiringTests();          // round 12: UI state, settings, derived caches and shared output
 int runQueueIsolationTests();    // round 05: two-camera queues, raw-audio stop and pixel oracle
+int runAudioCutRenderTests();    // round 14: independent audio cuts / source masks / microfades
+int runPlaybackQueueTests();     // round 14: prefetch / revision banks / RT allocation hook
 
 namespace
 {
@@ -51,6 +53,8 @@ int runJournalDurable() { const int a = runJournalTests(), b = runWavChunkTests(
 int runCutLinkHistory() { const int a = runClipEditTests(), b = runLinkEditTests(), c = runEditHistoryTests(); return (a || b || c) ? 1 : 0; }
 int runAudioImport() { const int a = runAudioImportTests(), b = runImportedClipTests(); return (a || b) ? 1 : 0; }
 const Suite suites[] = {
+    {"audio-cut-render", runAudioCutRenderTests},
+    {"audio-prefetch-underrun", runPlaybackQueueTests},
     {"capture-contract", runCaptureContractTests},
     {"capture-review", runCaptureReviewTests},
     {"cfr-scheduler", runCfrSchedulerTests},

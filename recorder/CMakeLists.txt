@@ -285,3 +285,12 @@ add_custom_command(TARGET RecorderDualProbe POST_BUILD COMMAND ${CMAKE_COMMAND} 
 target_sources(RecorderTests PRIVATE tests/QueueIsolationTests.cpp)
 target_link_libraries(RecorderTests PRIVATE RecorderDualFixtures)
 add_test(NAME RecorderQueueIsolation COMMAND RecorderTests --suite queue-isolation)
+# Round 14: preserve round-13 declarations/ABI, compile its completed implementation
+# once from playback. No edits to the shared model or another round's source list.
+set_source_files_properties(src/model/RenderPlanCompiler.cpp PROPERTIES HEADER_FILE_ONLY TRUE)
+target_sources(RecorderModel PRIVATE src/playback/RenderPlanCompiler.cpp src/audio/MicroFade.cpp)
+# The existing RecorderImport target owns juce_audio_formats. Recorder/Probe/Tests
+# already link it; do not compile a second copy with different MP3 definitions.
+target_sources(RecorderTests PRIVATE tests/AudioRenderFixtures.cpp tests/AudioCutRenderTests.cpp tests/PlaybackQueueTests.cpp)
+add_test(NAME RecorderAudioCutRender COMMAND RecorderTests --suite audio-cut-render)
+add_test(NAME RecorderAudioPrefetchUnderrun COMMAND RecorderTests --suite audio-prefetch-underrun)
