@@ -32,7 +32,9 @@ std::vector<MicrofadeBoundary> MicroFade::boundaries(const RenderTrackPlan& trac
     for (const auto& span : track.spans)
         if (!runs.empty() && continuous(runs.back(), span)) runs.back().timeline.length += span.timeline.length;
         else runs.push_back(span);
-    for (std::size_t i = 0; i <= runs.size(); ++i)
+    // Only internal discontinuities. Timeline endpoints retain the original PCM;
+    // transport start/stop/seek ramps belong to the output queue, not this plan.
+    for (std::size_t i = 1; i < runs.size(); ++i)
     {
         const auto* a = i ? &runs[i - 1] : nullptr;
         const auto* b = i < runs.size() ? &runs[i] : nullptr;

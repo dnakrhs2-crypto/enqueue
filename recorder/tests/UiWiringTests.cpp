@@ -1,4 +1,5 @@
 #include "TestSupport.h"
+#include "AudioRenderFixtures.h"
 #include "ui/UiState.h"
 #include "media/PeakCache.h"
 #include "media/ThumbnailCache.h"
@@ -106,6 +107,33 @@ int runUiWiringTests()
         require(left[1] > .99f && left[2] == -1 && right[2] == -1 && left[5] == 0 && left[7] == 0, "Written PCM or missing-tail silence failed");
         const auto file = folder.getChildFile("cache.json"); require(PeakCache::write(file, c.peakCache->snapshot()).wasOk(), "Persist peaks");
         require(PeakCache::read(file).samples == 5, "Reopen peaks");
+    });
+    suite.test("anonymous legacy WAV mappings retain first PCM samples and independent sources", []
+    {
+        recorder_audio_fixture::Fixture f(8000);
+        std::vector<PlaybackAudioTrack> tracks;
+        TimelineAudioRenderer renderer(8000, 16);
+        for (unsigned mic = 0; mic < 2; ++mic)
+        {
+            const auto& asset = f.project.media->assets[2 + mic];
+            PlaybackAudioTrack track; track.trackId = "anonymous-mic-" + juce::String(mic);
+            RenderClip clip; clip.lengthSamples = 8; clip.mediaGeneration = asset.mediaGeneration;
+            require(clip.clipId.isEmpty() && clip.assetId.isEmpty(), "Exercise legacy mapping without IDs");
+            track.clips.push_back({clip, RecorderSession::indexRecordedAudio(asset, f.root, 8000, track.trackId)});
+            renderer.setPlan({track}, 10); float left[10]{}, right[10]{}; renderer.renderAudio(0, 10, left, right);
+            for (unsigned i = 0; i < 10; ++i)
+            {
+                const float expected = i < 8 ? f.sample(mic, i) : 0;
+                require(left[i] == expected && right[i] == expected, "Anonymous PCM became silence/faded or tail padding changed");
+            }
+            tracks.push_back(std::move(track));
+        }
+        renderer.setPlan(std::move(tracks), 10); float left[10]{}, right[10]{}; renderer.renderAudio(0, 10, left, right);
+        for (unsigned i = 0; i < 8; ++i)
+        {
+            const auto expected = f.sample(0, i) * .5f + f.sample(1, i) * .5f;
+            require(left[i] == expected && right[i] == expected, "Anonymous WAV bindings aliased different sources");
+        }
     });
     suite.test("single ASIO owner dispatches transport and monitor does not alter PCM", []
     {

@@ -148,6 +148,12 @@ struct Fixture
     {
         until([&] { controller->tick(); return !controller->locked(); });
     }
+    const Take& placedTake() const
+    {
+        const auto& takes = document.getProject().media->takes;
+        require(!takes.empty(), "Dubbing placement did not publish a take");
+        return takes.back();
+    }
     void finishNormally()
     {
         const auto stop = controller->placement().O0 + controller->placement().spanSamples;
@@ -186,9 +192,10 @@ int runDubbingPlacementTests()
         Fixture f(false,2,2); const auto original = f.document.getProject().media->findAsset(f.importedAsset)->contentIdentity;
         f.begin(); const auto placement = f.controller->placement();
         require(placement.Pstart == 137 && placement.O0 == placement.outputSubmissionSample + 23,"O0 residual applied once with fixed Pstart");
+        require(f.document.isRecordingStructureLocked(), "Dubbing owns structure through placement");
         f.finishNormally(); const auto& p = f.document.getProject();
         require(f.audio.armedMicrophones().empty() && f.audio.currentSample() > placement.O0,"Clock continues without inputs");
-        require(p.media->takes.back().microphoneAssetIds.empty(),"Mic-off creates no WAV assets");
+        require(f.placedTake().microphoneAssetIds.empty(),"Mic-off creates no WAV assets");
         require(p.media->findAsset(f.importedAsset)->contentIdentity == original,"Imported original preserved");
         require(p.findClip(f.importedClip)->timelineStartSample == 0 && p.findClip(f.importedClip)->takeStackId.isEmpty(),"Completed audio untouched/outside link");
         const auto at = size_t(placement.outputSubmissionSample);
@@ -209,13 +216,34 @@ int runDubbingPlacementTests()
     tests.test("Optional native WAV uses corrected O0 range, never selected output PCM", []
     {
         Fixture f(true); f.begin(); const auto origin = f.controller->placement().O0; f.finishNormally();
-        const auto& take = f.document.getProject().media->takes.back(); require(take.microphoneAssetIds.size() == 1,"One sparse armed mic recorded");
+        const auto& take = f.placedTake(); require(take.microphoneAssetIds.size() == 1,"One sparse armed mic recorded");
         const auto* a = f.document.getProject().media->findAsset(take.microphoneAssetIds[0]); require(a->logicalLength == 1600,"WAV range length exact");
         auto reader = AudioImport::openReader(f.directory.getChildFile(a->chunks[0].relativePath)); require(reader && reader->lengthInSamples == 1600,"Reopen original WAV");
         std::array<float,1600> samples{}; float* ptr[]{samples.data()}; require(reader->read(ptr,1,0,1600),"Read original WAV samples");
         for (int i = 0; i < 1600; ++i)
             require(std::abs(samples[size_t(i)] - float(123456 + origin + 11 + i) / 8388608) < 0.0000002f,"Input residual corrected exactly once; native source sample oracle");
         const auto report = f.controller->report(); require(Sample(report["audio"]["N0"]) == origin && Sample(report["audio"]["Nstop"]) == origin + 1600,"Reported corrected [O0,Ostop)");
+    });
+    tests.test("Coordinator publishes under the recording lock while user edits stay blocked", []
+    {
+        Fixture f; f.begin(); const auto revision = f.document.getProject().editRevision;
+        bool edited = false;
+        require(f.document.performEdit("user state", [&](EditState&) { edited = true; }).failed(), "User state edit allowed during dubbing");
+        require(f.document.performEdit("user model", {}, [&](const RecorderProject& p) { edited = true; return p; }).failed()
+                && !edited, "Locked user edit callback was executed");
+        Marker marker; marker.sample = f.config.Pstart; ok(f.document.addMarker(marker));
+        const auto publication = std::make_shared<std::array<bool, 2>>();
+        f.document.onChanged = [&f, publication]
+        {
+            if (!(*publication)[0] && !f.document.getProject().media->takes.empty())
+            { (*publication)[0] = true; (*publication)[1] = f.document.isRecordingStructureLocked(); }
+        };
+        f.finishNormally(); f.document.onChanged = {};
+        require((*publication)[0] && (*publication)[1], "Dubbing placement must publish before releasing the structure lock");
+        require(f.document.getProject().editRevision == revision + 2 && f.placedTake().state == TakeState::complete,
+                "Marker and coordinator placement must remain separate complete transactions");
+        require(f.document.getProject().markers.back().markerId == marker.markerId && !f.document.isRecordingStructureLocked(),
+                "Finalization lost the live marker or kept the document locked");
     });
     tests.test("Selected mono reference duplicates L/R, ignores other tracks and mic arm", []
     {
@@ -273,7 +301,7 @@ void runDubbingFailureScenario(int scenario)
         require(f.controller->failure() == DubbingController::Failure::playbackUnderrun,"Real queue underrun is terminal during dubbing");
         f.stall->paused = false; f.complete();
         require(f.controller->state() == DubbingController::State::partialFailure,"Underrun not disguised as normal completion");
-        require(f.controller->placement().recordedSamples > 0 && f.document.getProject().media->takes.back().state == TakeState::partial,"Partial capture prefix preserved");
+        require(f.controller->placement().recordedSamples > 0 && f.placedTake().state == TakeState::partial,"Partial capture prefix preserved");
         require(Sample(f.controller->report()["playbackUnderruns"]) == 1,"Underrun reported once");
     }
     else if (scenario == 1)
@@ -281,9 +309,9 @@ void runDubbingFailureScenario(int scenario)
         f.begin(); for (int i = 0; i < 3; ++i) f.feed(); const auto accepted = f.audio.acceptedEnd();
         f.feed(true,false); f.controller->tick(); f.complete();
         require(f.controller->failure() == DubbingController::Failure::asioReset && f.controller->placement().Ostop == accepted,"Reset preserves last callback-confirmed end");
-        require(f.document.getProject().media->takes.back().state == TakeState::partial,"Reset take is partial");
+        require(f.placedTake().state == TakeState::partial,"Reset take is partial");
         RecorderDocument opened; ok(opened.openCheckpoint(f.directory.getChildFile("project.recorder")));
-        require(opened.getProject().media->takes.back().state == TakeState::partial,"Partial state persists to disk");
+        require(!opened.getProject().media->takes.empty() && opened.getProject().media->takes.back().state == TakeState::partial,"Partial state persists to disk");
     }
     else if (scenario == 2)
     {
@@ -291,6 +319,9 @@ void runDubbingFailureScenario(int scenario)
         require(f.document.performEdit("locked", [&](EditState&) { ran = true; }).failed(),"Legacy edit locked");
         require(f.document.performEdit("locked",{},[&](const RecorderProject& p) { ran = true; return ClipEditResult(p); }).failed(),"Pure edit overload locked");
         require(!ran && f.document.getProject().editRevision == revision && f.document.undo().failed(),"No edit callback or undo during dubbing");
+        Marker marker; marker.sample = f.config.Pstart; marker.name = "During dubbing"; ok(f.document.addMarker(marker));
+        require(f.document.isRecordingStructureLocked() && f.document.getProject().markers.back().markerId == marker.markerId,
+                "Marker append preserves the dubbing structure lock");
         recorder_test::rejects([&] { f.transport.seek(900); }); recorder_test::rejects([&] { f.transport.scrub(900,true,qpcNow()); });
         recorder_test::rejects([&] { f.transport.stop(); }); recorder_test::rejects([&] { f.transport.play(); });
         OutputMapping outputs; outputs.left = 1; require(f.audio.setOutputMap(outputs).failed() && f.audio.closeDevice().failed() && f.audio.arm(0,false).failed(),"Device, output, arm locked");
@@ -314,8 +345,38 @@ void runDubbingFailureScenario(int scenario)
         const auto stop = f.controller->placement().O0 + f.controller->placement().spanSamples;
         while (f.position < stop + 160 && f.controller->state() != DubbingController::State::finalizing)
         { f.feed(); f.controller->tick(); std::this_thread::sleep_for(std::chrono::milliseconds(1)); }
-        f.complete(); const auto& p = f.document.getProject(); const auto& take = p.media->takes.back();
+        f.complete(); const auto& p = f.document.getProject(); const auto& take = f.placedTake();
         require(f.controller->state() == DubbingController::State::partialFailure && f.controller->placement().recordedSamples == 1600, "One failed camera does not stop the common recording range");
         require(!p.media->findAsset(take.cam1AssetId)->gaps.empty() && p.media->findAsset(take.cam2AssetId)->gaps.empty(), "Failed camera tail is a gap; other camera remains complete");
+    }
+    else if (scenario == 6)
+    {
+        f.begin();
+        struct RejectPlacement final : IRenderPlanConsumer
+        {
+            RecorderDocument& document;
+            bool rejecting = false;
+            unsigned rejected = 0;
+            explicit RejectPlacement(RecorderDocument& d) : document(d) { ok(document.setRenderPlanConsumer(this)); rejecting = true; }
+            ~RejectPlacement() override { document.setRenderPlanConsumer(nullptr); }
+            juce::Result prepareRenderPlan(std::shared_ptr<const CompiledRenderPlan>) override
+            {
+                if (!rejecting) return juce::Result::ok();
+                ++rejected; return juce::Result::fail("Injected placement preparation failure");
+            }
+            void publishPreparedPlan(const Id&, Sample) noexcept override {}
+        } reject(f.document);
+        const auto before = f.document.snapshot(); const auto depth = f.document.getHistory().undoDepth();
+        const auto stop = f.controller->placement().O0 + f.controller->placement().spanSamples;
+        while (f.position < stop + 160 && f.controller->state() != DubbingController::State::finalizing)
+        { f.feed(); f.controller->tick(); std::this_thread::sleep_for(std::chrono::milliseconds(1)); }
+        f.complete();
+        require(reject.rejected == 1 && f.controller->state() == DubbingController::State::partialFailure
+                && f.controller->failure() == DubbingController::Failure::storage, "Rejected placement must report storage failure");
+        require(f.controller->error() == "Injected placement preparation failure", "Placement error was lost");
+        require(f.document.snapshot() == before && f.document.getHistory().undoDepth() == depth, "Rejected placement partially published media/history");
+        recorder_test::rejects([&] { f.placedTake(); }); // A missing take is a test failure, never an unchecked back().
+        require(!f.document.isRecordingStructureLocked() && !f.transport.isDubbingLocked()
+                && f.audio.closeDevice().wasOk(), "Placement failure did not drain workers/release locks");
     }
 }

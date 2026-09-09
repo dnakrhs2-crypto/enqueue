@@ -15,7 +15,7 @@ using K = AudioSourceMask::Kind;
 struct Run { Sample start, length, source; };
 // Independent golden oracle: hand-written source runs for each spec example.
 // It does not inspect the compiled spans or ask MicroFade for its envelope.
-void oracle(const Fixture& f, unsigned channel, const std::vector<Run>& runs, const StereoRender& out)
+void oracle(const Fixture& f, unsigned channel, const std::vector<Run>& runs, const StereoRender& out, Sample timelineEnd)
 {
     for (Sample i = 0; i < static_cast<Sample>(out.left.size()); ++i)
     {
@@ -25,8 +25,10 @@ void oracle(const Fixture& f, unsigned channel, const std::vector<Run>& runs, co
             expected = f.sample(channel, run.source + i - run.start);
             const auto fade = (std::min)((Sample(f.project.Fs) * 3 + 500) / 1000, run.length / 2);
             const auto from = i - run.start, to = run.start + run.length - 1 - i;
-            if (fade > 0 && (from < fade || to < fade))
-                expected *= fade == 1 ? 0.0f : static_cast<float>((std::min)(from, to)) / static_cast<float>(fade - 1);
+            const bool fadeIn = run.start > 0 && from < fade;
+            const bool fadeOut = run.start + run.length < timelineEnd && to < fade;
+            if (fade > 0 && (fadeIn || fadeOut))
+                expected *= fade == 1 ? 0.0f : static_cast<float>(fadeIn ? from : to) / static_cast<float>(fade - 1);
             break;
         }
         require(out.left[static_cast<std::size_t>(i)] == expected && out.right[static_cast<std::size_t>(i)] == expected,
@@ -40,35 +42,53 @@ RecorderProject checked(ClipEditResult edit) { require(edit.status.wasOk(), edit
 int runAudioCutRenderTests()
 {
     Suite suite;
+    suite.test("timeline endpoints retain exact PCM and continuous splits introduce no fades", []
+    {
+        Fixture f(8000); const auto bindings = sources(f); const auto end = f.project.activeTimelineEnd();
+        const auto split = checked(ClipEdits::split(f.project, {f.project.tracks[3].clips.items()[0].clipId}, 1));
+        for (const auto* p : std::array<const RecorderProject*, 2>{&f.project, &split})
+        {
+            const auto plan = RenderPlanCompiler::compile(*p);
+            require(plan->microfadeBoundaries.empty(), "Timeline endpoints or continuous source split acquired automatic fades");
+            const auto start = render(*p, bindings, material(*p, 3), {0, 8}, 3);
+            const auto tail = render(*p, bindings, material(*p, 3), {end - 8, 10}, 3);
+            for (unsigned i = 0; i < 8; ++i)
+            {
+                require(start.left[i] == f.sample(1, i) && start.right[i] == f.sample(1, i), "First original PCM samples faded");
+                require(tail.left[i] == f.sample(1, end - 8 + i) && tail.right[i] == f.sample(1, end - 8 + i), "Final original PCM samples faded");
+            }
+            require(tail.left[8] == 0 && tail.right[9] == 0, "Past-end padding must remain silent");
+        }
+    });
     suite.test("section 11.1 example 1: independent mic cut leaves 10s and a silent second", []
     {
         Fixture f; const auto before = f.hashes(); const auto p = f.example(1); const auto bindings = sources(f); const auto fs = Sample(p.Fs);
         const auto plan = RenderPlanCompiler::compile(p); require(plan->timelineEnd == 10 * fs, "Common 10s range");
         for (unsigned lane = 0; lane < 2; ++lane) require(p.tracks[lane].clips.items().size() == 1 && p.tracks[lane].clips.items()[0].lengthSamples == fs * 10, "Camera cuts were changed by independent audio edit");
-        oracle(f, 0, {{0, 10 * fs, 0}}, render(p, bindings, material(p, 2), {0, plan->timelineEnd}, 509));
-        oracle(f, 1, {{0, 2 * fs, 0}, {3 * fs, 7 * fs, 3 * fs}}, render(p, bindings, material(p, 3), {0, plan->timelineEnd}, 997));
+        oracle(f, 0, {{0, 10 * fs, 0}}, render(p, bindings, material(p, 2), {0, plan->timelineEnd}, 509), plan->timelineEnd);
+        oracle(f, 1, {{0, 2 * fs, 0}, {3 * fs, 7 * fs, 3 * fs}}, render(p, bindings, material(p, 3), {0, plan->timelineEnd}, 997), plan->timelineEnd);
         require(f.hashes() == before, "Original WAV SHA-256 changed");
     });
     suite.test("section 11.1 example 2: mic-only ripple retains common 10s with 1s silent tail", []
     {
         Fixture f; const auto before = f.hashes(); const auto p = f.example(2); const auto bindings = sources(f); const auto fs = Sample(p.Fs);
         require(p.activeTimelineEnd() == 10 * fs, "Independent ripple shortened the common range");
-        oracle(f, 1, {{0, 2 * fs, 0}, {2 * fs, 7 * fs, 3 * fs}}, render(p, bindings, material(p, 3), {0, 10 * fs}, 401));
-        oracle(f, 0, {{0, 10 * fs, 0}}, render(p, bindings, material(p, 2), {0, 10 * fs}));
+        oracle(f, 1, {{0, 2 * fs, 0}, {2 * fs, 7 * fs, 3 * fs}}, render(p, bindings, material(p, 3), {0, 10 * fs}, 401), p.activeTimelineEnd());
+        oracle(f, 0, {{0, 10 * fs, 0}}, render(p, bindings, material(p, 2), {0, 10 * fs}), p.activeTimelineEnd());
         require(f.hashes() == before, "Ripple modified original chunks");
     });
     suite.test("section 11.1 example 3: global ripple makes every lane 9s with matching source cuts", []
     {
         Fixture f; const auto p = f.example(3); const auto bindings = sources(f); const auto fs = Sample(p.Fs);
         require(p.activeTimelineEnd() == 9 * fs, "Global ripple length");
-        for (unsigned mic = 0; mic < 2; ++mic) oracle(f, mic, {{0, 2 * fs, 0}, {2 * fs, 7 * fs, 3 * fs}}, render(p, bindings, material(p, mic + 2), {0, 9 * fs}, 257));
+        for (unsigned mic = 0; mic < 2; ++mic) oracle(f, mic, {{0, 2 * fs, 0}, {2 * fs, 7 * fs, 3 * fs}}, render(p, bindings, material(p, mic + 2), {0, 9 * fs}, 257), p.activeTimelineEnd());
         for (unsigned camera = 0; camera < 2; ++camera)
         {
             const auto& clips = p.tracks[camera].clips.items(); require(clips.size() == 2, "Camera global cut count");
             require(clips[1].timelineStartSample == 2 * fs && clips[1].sourceIn == 3 * fs && clips[1].timelineEnd() == 9 * fs, "Camera source mapping");
         }
     });
-    suite.test("source-continuous splits at 1 sample and inside end fades are bit-identical", []
+    suite.test("source-continuous splits at 1 sample and near timeline endpoints are bit-identical", []
     {
         Fixture f; const auto bindings = sources(f); const auto length = f.project.activeTimelineEnd();
         const auto baseline = render(f.project, bindings, material(f.project, 3), {0, length}, 4096);
@@ -82,7 +102,7 @@ int runAudioCutRenderTests()
     suite.test("one-sample independent audio move is not rounded to a video frame", []
     {
         Fixture f; const auto p = checked(ClipEdits::move(f.project, {f.project.tracks[3].clips.items()[0].clipId}, 1));
-        oracle(f, 1, {{1, Sample(p.Fs) * 10, 0}}, render(p, sources(f), material(p, 3), {0, p.activeTimelineEnd()}, 239));
+        oracle(f, 1, {{1, Sample(p.Fs) * 10, 0}}, render(p, sources(f), material(p, 3), {0, p.activeTimelineEnd()}, 239), p.activeTimelineEnd());
         require(p.tracks[0].clips.items()[0].timelineStartSample == 0 && p.activeTimelineEnd() == Sample(p.Fs) * 10 + 1, "Audio move changed camera or common tail");
     });
     suite.test("fixed K includes silent/empty lanes, muted solo selects silence, video solo is irrelevant", []
@@ -113,7 +133,7 @@ int runAudioCutRenderTests()
         for (unsigned i = 0; i < output.left.size(); ++i) require(output.left[i] == f.sample(0, 131000 + i), "PRBS/impulse chunk boundary changed");
         auto p = f.project; auto registry = std::make_shared<MediaRegistry>(*p.media); auto& asset = registry->assets[3];
         asset.availableRanges = {{0, 10000}, {11000, asset.logicalLength - 11000}}; asset.gaps = {{10000, 1000}}; p.media = registry;
-        oracle(f, 1, {{0, 10000, 0}, {11000, asset.logicalLength - 11000, 11000}}, render(p, bindings, material(p, 3), {0, p.activeTimelineEnd()}, 113));
+        oracle(f, 1, {{0, 10000, 0}, {11000, asset.logicalLength - 11000, 11000}}, render(p, bindings, material(p, 3), {0, p.activeTimelineEnd()}, 113), p.activeTimelineEnd());
     });
     suite.test("source masks can prepare only selected assets and ignore unrelated stale sources", []
     {
@@ -131,7 +151,7 @@ int runAudioCutRenderTests()
         for (Sample n = 1; n < 400; ++n) require(MicroFade::clampLength(144, n) * 2 <= n, "Fade overlaps/extends short fragment");
         Fixture f; auto p = f.project; auto& c = p.tracks[3].clips.edit()[0]; c.sourceIn = 1000; c.lengthSamples = 7; c.timelineStartSample = 100;
         const auto out = render(p, sources(f), material(p, 3), {0, 200}, 2);
-        oracle(f, 1, {{100, 7, 1000}}, out);
+        oracle(f, 1, {{100, 7, 1000}}, out, p.activeTimelineEnd());
         RenderSpan a{{0, 5}, "a", "source", 0, 1}, b{{5, 5}, "b", "source", 5, 1};
         require(MicroFade::continuous(a, b) && !MicroFade::continuous(a, b, 1, .5f), "No-op continuity ignored gain");
         b.mediaGeneration = 2; require(!MicroFade::continuous(a, b), "Different media generations joined");

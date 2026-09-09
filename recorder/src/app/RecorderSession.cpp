@@ -277,7 +277,7 @@ void RecorderSession::addMarker()
 {
     Marker m; m.name = k("마커"); m.sample = recording() ? take.placementSample() + elapsed() : playhead();
     if (recording()) recordedMarkers.push_back(m);
-    else document.performEdit(k("마커 추가"), [m](EditState& e) { e.markers.push_back(m); });
+    else document.addMarker(std::move(m));
 }
 void RecorderSession::refreshPlaybackPlan()
 { const bool resume = playing(); clearPlayback(); wantPlay = resume; if (timeline) preparePlayback(); }

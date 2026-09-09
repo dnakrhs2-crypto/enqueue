@@ -72,6 +72,8 @@ public:
     juce::Result performEdit(const juce::String& name, const juce::String& coalesceKey,
                              const std::function<ClipEditResult(const RecorderProject&)>&,
                              const EditOptions& = {});
+    // The only user edit allowed during capture; no arbitrary edit callback runs.
+    juce::Result addMarker(Marker);
     juce::Result undo();
     juce::Result redo();
     void endGesture() { history.endGesture(); }
@@ -87,10 +89,11 @@ public:
     void acknowledgeJournal(const EditDelta& ticket, const juce::Result&);
     std::function<void()> onChanged;
     // Recorder coordinator lock; owner thread only. Registry finalization remains
-    // available, while timeline/timebase/document replacement is blocked.
+    // available, while user timeline/timebase/document replacement is blocked.
     void setRecordingStructureLock(bool locked) { assertOwner(); recordingStructureLock = locked; }
     bool isRecordingStructureLocked() const { return recordingStructureLock; }
-    juce::Result placeTake(Take, std::vector<MediaAsset>, const std::vector<int>& logicalMicrophoneIndices);
+    // Coordinator-only placement keeps the structure lock held through publication.
+    juce::Result placeRecordedTake(Take, std::vector<MediaAsset>, const std::vector<int>& logicalMicrophoneIndices);
     const Id& lastEditTransaction() const { return lastTransaction; }
     // Coordinator transaction: register captured originals and replace the complete
     // dubbing version in one publication/undo step, including while capture is locked.
@@ -98,11 +101,14 @@ public:
                                  SampleRange recordingRange, const Id& retakeStack = {});
     juce::Result useTakeVersion(const Id& stackId, const Id& versionId);
 private:
+    enum class EditOrigin { user, markerAppend, coordinator };
     void assertOwner() const;
     juce::Result fail(const juce::String&);
     void notify();
-    juce::Result publishEdit(RecorderProject, const juce::String&, const EditOptions&, bool addHistory, const std::vector<Id>& nextSelection);
-    juce::Result place(RecorderProject, const Take&, Sample placement);
+    juce::Result publishEdit(RecorderProject, const juce::String&, const EditOptions&, bool addHistory,
+                             const std::vector<Id>& nextSelection, EditOrigin = EditOrigin::user);
+    juce::Result placeNewTake(Take, std::vector<MediaAsset>, EditOrigin);
+    juce::Result place(RecorderProject, const Take&, Sample placement, EditOrigin = EditOrigin::user);
     EditSnapshot editSnapshot() const;
     juce::Result preparePlan(const RecorderProject&, std::shared_ptr<const CompiledRenderPlan>&);
     juce::Result replaceProject(RecorderProject);

@@ -254,7 +254,7 @@ AAC 선택은 MP4 단독 재생·인계 호환성을 위한 결정이다. 임의
 
 ### 6.3 내부 클릭 방지
 
-편집 결과 렌더에서만 불연속 경계 양쪽에 **기본 3ms 선형 microfade**를 적용한다. 길이는 각 인접 유효 조각 길이의 절반 이하로 제한하고 파일을 늘리거나 겹쳐 재생하지 않는다. 원본상 연속하고 같은 gain인 클립을 단순 스플릿한 경계에는 적용하지 않는다. mute/solo 전환·seek 시작/정지에도 짧은 ramp를 쓴다. 사용자 조절 UI·곡선·크로스페이드 기능은 없다.
+편집 결과 렌더에서만 내부 불연속 경계 양쪽에 **기본 3ms 선형 microfade**를 적용한다. 길이는 각 인접 유효 조각 길이의 절반 이하로 제한하고 파일을 늘리거나 겹쳐 재생하지 않는다. 타임라인 0과 공통 타임라인 끝 자체에는 자동 microfade를 적용하지 않으며, 원본상 연속하고 같은 gain인 클립을 단순 스플릿한 경계에도 적용하지 않는다. 타임라인 내부의 gap 진입·복귀와 불연속 컷에는 적용한다. mute/solo 전환·seek 시작/정지에는 별도의 출력 ramp를 쓴다. 사용자 조절 UI·곡선·크로스페이드 기능은 없다.
 
 실시간 청취·소재 WAV·최종 AAC 직전 PCM이 **같은 TimelineAudioRenderer**를 사용한다. 따라서 컷 주변 수 ms의 소재 WAV는 내부 페이드에 의해 원본과 다를 수 있다. 원본 청크는 그대로 보존되고 소스 연속 구간의 PCM은 변경하지 않는다. 변화 위치·길이와 golden 렌더 비교는 스파이크 6·7 및 컷 편집 라운드의 기준이다.
 
@@ -452,7 +452,7 @@ split/trim/리플이 stack에 적용되면 모든 버전의 **timeline 좌표**�
 | 스크럽 목표 | mouse release→양쪽 정확한 화면 p95 ≤250ms, 큰 cold seek ≤500ms 초기 목표. 캐시 hit/miss 구분. 1초 GOP의 2×60은 최악 약 120frame decode이므로 연속 재생 fps로 seek 응답을 보장하지 않음. 미확인 → 스파이크 5. |
 | gap·장치 없음 | camera clip 없는 구간은 `영상 없음` placeholder, export는 검정. 캠2 off의 live 상태는 `캠2 사용 안 함`, 분리는 `캠2 연결 끊김`. 다른 source를 시간 이동해 채우지 않음. |
 | underrun | 일반 재생은 공통 transport를 buffering 상태로 멈추고 재준비 후 같이 시작. ASIO callback은 기다리지 않고 무음 출력. 더빙 녹화에서는 연속 동기 실패이므로 take 중단. |
-| 재생 중 편집 | 새 revision의 plan·prefetch를 준비한 뒤 block boundary에서 교체하고 microfade. 준비가 안 되면 일시정지/준비 상태를 명시하며 오래된 cache를 새 모델의 소리로 재생하지 않음. 녹화 중 구조 편집은 금지. |
+| 재생 중 편집 | 새 revision의 plan·prefetch를 준비한 뒤 block boundary에서 교체하고 microfade. 준비가 안 되면 일시정지/준비 상태를 명시하며 오래된 cache를 새 모델의 소리로 재생하지 않음. 녹화 중 사용자 구조 편집은 금지하고 마커 추가 전용 API만 허용. 녹화/더빙 코디네이터의 원본 등록·테이크 배치·리테이크 발행은 잠금을 유지한 별도 경로로 허용하며 동일한 검증·이력·journal·render plan 발행을 거침. |
 
 원본을 축소 표시해도 H.264 decoder는 1080p를 처리한다. 프록시는 MVP에 만들지 않고 짧은 GOP·index·cancellable seek·bounded cache로 시작한다. 문서상 NVDEC의 다중 context 지원이 실제 우리 seek latency의 인증은 아니다. [NVIDIA 디코드 문서](https://docs.nvidia.com/video-technologies/video-codec-sdk/13.1/nvdec-application-note/index.html)
 
