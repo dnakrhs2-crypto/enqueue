@@ -175,3 +175,10 @@ target_sources(RecorderTests PRIVATE tests/RecorderProjectTests.cpp)
 target_link_libraries(RecorderTests PRIVATE RecorderModel)
 add_test(NAME RecorderProjectRoundtrip COMMAND RecorderTests --suite project-roundtrip)
 # END Recorder round 08.
+
+# Round 13: pure timeline edits, immutable render plans, and snapshot history contracts.
+target_sources(RecorderModel PRIVATE src/model/ClipEdits.cpp src/model/RenderPlanCompiler.cpp)
+target_sources(RecorderTests PRIVATE
+    tests/ClipEditTests.cpp tests/LinkEditTests.cpp tests/EditHistoryTests.cpp tests/EditPropertyTests.cpp)
+add_test(NAME RecorderCutLinkHistory COMMAND RecorderTests --suite cut-link-history)
+add_test(NAME RecorderEditProperty COMMAND RecorderTests --suite edit-property --seed 909 --iterations 1000)

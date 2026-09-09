@@ -7,6 +7,8 @@
 #include <exception>
 #include <iostream>
 #include <string>
+#include <charconv>
+#include <cstdint>
 
 int runCaptureContractTests();   // round 01: capture / decode / preview contracts (no hardware)
 int runCaptureReviewTests();     // round 02b: recovery, pacing and MF JPEG colour fixtures
@@ -17,6 +19,12 @@ int runNativePcmTests();         // round 03: native PCM -> PCM24 packing
 int runJournalTests();           // round 06: recording journal / durable file
 int runWavChunkTests();          // round 06: WAV chunk writer
 int runProjectTests();           // round 08: project model / serializer / document / undo
+int runClipEditTests();
+int runLinkEditTests();
+int runEditHistoryTests();
+int runEditPropertyTests();
+std::uint64_t recorderEditPropertySeed = 909;
+int recorderEditPropertyIterations = 1000;
 
 namespace
 {
@@ -27,6 +35,7 @@ struct Suite
 };
 int runAsioNativePcm() { const int a = runAsioStampTests(), b = runNativePcmTests(); return (a || b) ? 1 : 0; }
 int runJournalDurable() { const int a = runJournalTests(), b = runWavChunkTests(); return (a || b) ? 1 : 0; }
+int runCutLinkHistory() { const int a = runClipEditTests(), b = runLinkEditTests(), c = runEditHistoryTests(); return (a || b || c) ? 1 : 0; }
 const Suite suites[] = {
     {"capture-contract", runCaptureContractTests},
     {"capture-review", runCaptureReviewTests},
@@ -36,10 +45,12 @@ const Suite suites[] = {
     {"journal-durable", runJournalDurable},
     {"wav-chunks", runWavChunkTests},
     {"project-roundtrip", runProjectTests},
+    {"cut-link-history", runCutLinkHistory},
+    {"edit-property", runEditPropertyTests},
 };
 int usage()
 {
-    std::cerr << "RecorderTests [--suite <name>|--list]\n  suites:";
+    std::cerr << "RecorderTests [--suite <name>|--list] [--seed <uint64> --iterations <positive int>]\n  suites:";
     for (const auto& s : suites) std::cerr << ' ' << s.name;
     std::cerr << '\n';
     return 2;
@@ -55,20 +66,30 @@ int main(int argc, char** argv)
             for (const auto& s : suites) std::cout << s.name << '\n';
             return 0;
         }
-        if (argc == 1 || (argc == 3 && std::strcmp(argv[1], "--suite") == 0 && std::strcmp(argv[2], "all") == 0))
+        std::string selected = "all";
+        bool hasSuite = false, hasSeed = false, hasIterations = false;
+        for (int i = 1; i < argc; ++i)
+        {
+            const std::string flag = argv[i];
+            if (i + 1 == argc) return usage();
+            const char* value = argv[++i]; const char* end = value + std::strlen(value);
+            if (flag == "--suite" && !hasSuite) { selected = value; hasSuite = true; }
+            else if (flag == "--seed" && !hasSeed)
+            { const auto r = std::from_chars(value, end, recorderEditPropertySeed); if (r.ec != std::errc{} || r.ptr != end) return usage(); hasSeed = true; }
+            else if (flag == "--iterations" && !hasIterations)
+            { const auto r = std::from_chars(value, end, recorderEditPropertyIterations); if (r.ec != std::errc{} || r.ptr != end || recorderEditPropertyIterations < 1 || recorderEditPropertyIterations > 1000000) return usage(); hasIterations = true; }
+            else return usage();
+        }
+        if ((hasSeed || hasIterations) && selected != "all" && selected != "edit-property") return usage();
+        if (selected == "all")
         {
             int failed = 0;
             for (const auto& s : suites) failed |= s.run();
             std::cout << "RecorderTests: all suites " << (failed ? "FAILED" : "passed") << '\n';
             return failed ? 1 : 0;
         }
-        if (argc == 3 && std::strcmp(argv[1], "--suite") == 0)
-        {
-            for (const auto& s : suites)
-                if (std::strcmp(argv[2], s.name) == 0) return s.run();
-            std::cerr << "Unknown suite: " << argv[2] << '\n';
-            return usage();
-        }
+        for (const auto& s : suites) if (selected == s.name) return s.run();
+        std::cerr << "Unknown suite: " << selected << '\n';
         return usage();
     }
     catch (const std::exception& e)
