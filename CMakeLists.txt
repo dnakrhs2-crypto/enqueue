@@ -328,3 +328,4 @@ if(GOCUE_HAS_WINSPARKLE)
 endif()
 
 add_subdirectory(tests)
+add_subdirectory(recorder)

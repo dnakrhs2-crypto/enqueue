@@ -142,7 +142,7 @@ CEO의 2026-09-09 확정 요구와 13:20~13:35의 내보내기·더빙·독립 �
 ### 4.3 스레드·수명 규칙
 
 - ASIO callback에서 메모리 할당, 파일 I/O, JSON, COM 호출, GPU 대기, mutex, 디코드/인코드, shared_ptr 최종 해제를 하지 않는다. 입력 원본 복사→예약 transport 채택→준비된 재생 블록→선택 ASIO 출력 순서다. 큐의 슬롯·최대 블록 크기는 장치 준비 시 할당한다.
-- MF callback은 시각·샘플 참조만 캡처 큐에 전달하고 다음 ReadSample을 요청한다. 샘플의 Release와 큰 버퍼 반환은 소유 worker에서 한다. 드라이버 버퍼를 오래 잡지 않도록 자체 풀로 옮기는 경로를 측정한다.
+- MF callback은 시각·샘플 참조만 캡처 큐에 전달하고 다음 ReadSample을 요청한다. **라운드 01 API 구체화:** 콜백의 COM 호출 예외는 큐 슬롯 확보 후 샘플 `AddRef`와 비동기 `ReadSample`뿐이다. PTS·콜백 진입/큐 제출 QPC·프레임 번호를 보존하고, `MFSampleExtension_DeviceTimestamp`의 `GetUINT64`는 보존한 같은 sample에서 worker가 버퍼 접근 전에 수행한다. `Release`와 큰 버퍼 반환·디코드는 worker 전용이다. worker는 driver bytes를 자체 저장소로 복사한 직후 sample을 반환하고 디코드한다. 정지 시 재요청 차단→실행 중 콜백 이탈→비동기 `Flush`/`OnFlush`→source 종료→큐 참조 반환을 따른다. 이 최소 예외는 MF 자체의 내부 할당/잠금이 없다는 보증이 아니다. [비동기 SourceReader](https://learn.microsoft.com/en-us/windows/win32/medfound/using-the-source-reader-in-asynchronous-mode), [Flush](https://learn.microsoft.com/en-us/windows/win32/api/mfreadwrite/nf-mfreadwrite-imfsourcereader-flush)
 - 각 카메라가 자신의 디코더·CFR·인코더·mux 상태를 소유한다. 프리뷰 최신 슬롯과 녹화 FIFO의 참조/여유 슬롯은 분리한다. 인코더가 표면을 오래 붙잡아도 프리뷰가 풀 고갈로 정지하지 않게 예약 슬롯 또는 encode 전용 GPU 복사를 둔다.
 - D3D11 immediate/video context의 다중 스레드 호출은 무보호로 공유하지 않는다. PreviewPresenter의 context와 decoder/encoder context 수명·공유 texture/fence를 명시하고 비동기 완료를 확인한다. FFmpeg D3D11 context lock은 GPU worker 내부에서만 사용한다. 공유 장치·표면의 실제 동작은 미확인 → 스파이크 1·5.
 - 종료는 새 명령 차단→마지막 수집 경계→callback 분리→queue drain→파일/저널 flush→worker join→COM/D3D/DLL 해제 순서다. 늦게 도착한 callback·seek·마무리 결과는 project/device/take generation으로 폐기한다.
@@ -156,6 +156,10 @@ CEO의 2026-09-09 확정 요구와 13:20~13:35의 내보내기·더빙·독립 �
 이 결정의 이유는 NVDEC 공식 지원 코덱에 MJPEG가 없어 NVDEC 예산에 넣을 수 없고, FFmpeg를 이미 고정 배포하므로 디코더 선택·스레드 수·처리 시간·타임스탬프 보존을 앱에서 제어할 수 있기 때문이다. MF 내장 디코더가 더 빠르다고 확인된 사실은 없다. **MF 디코드 비교는 스파이크 1의 대안 실험**으로 유지하고 P0·정확한 원래 시각·색 변환을 통과하면 해당 장치 프로파일만 MF 경로로 바꿀 수 있다. MF가 하드웨어 디코더를 허용한다고 MJPEG GPU 디코드를 보장하지 않는다. [NVIDIA NVDEC 코덱 표](https://docs.nvidia.com/video-technologies/video-codec-sdk/13.1/nvdec-application-note/index.html), [Microsoft Source Reader](https://learn.microsoft.com/en-us/windows/win32/medfound/source-reader)
 
 SourceReader는 `MF_LOW_LATENCY`를 요청하고 일반 소프트웨어 RGB32 video-processing 경로를 피한다. YUV를 보존해 D3D11에서 미리보기용 RGB로 변환하고 encoder에는 NV12를 공급한다. YUY2/MJPEG의 full/limited range·색행렬 정보를 확인해 **BT.709 limited, SDR 8bit 4:2:0**로 정규화하며 메타데이터만 바꾸지 않는다. MF timestamp·sample attribute는 디코드 전에 별도 보존한다. [저지연 속성](https://learn.microsoft.com/en-us/windows/win32/medfound/mf-low-latency), [D3D manager 속성](https://learn.microsoft.com/en-us/windows/win32/medfound/mf-source-reader-d3d-manager)
+
+라운드 01 구현은 `IMFSourceReaderEx::SetNativeMediaType`로 입력을 고정한 뒤 출력 subtype·크기·분자/분모를 다시 확인한다. MF 비교는 같은 MJPEG native 모드에 NV12 출력을 요청하고 삽입된 MFT의 입력이 MJPEG인지 확인한다. **MF 디코드는 OnReadSample 이전**이므로 그 내부 decode 시간은 SourceReader만으로 분리 계측하지 못한다. 두 경로의 callback→Present 구간 정의를 다르게 적고, 유효한 DeviceTimestamp가 보존된 경우 device→callback/Present 및 프로세스 CPU 사용량을 비교한다. DeviceTimestamp는 QPC와 epoch를 공유하는 100ns 단위이며 PTS와 별도로 보존한다. `--compare-decoders --seconds N`은 같은 장치를 순차 재개방해 N초를 두 경로로 나눈다(장면 유지/반복 패턴은 실행자가 준비, 장면 동일성 자동 인증 없음). [native type 지정](https://learn.microsoft.com/en-us/windows/win32/api/mfreadwrite/nf-mfreadwrite-imfsourcereaderex-setnativemediatype), [DeviceTimestamp](https://learn.microsoft.com/en-us/windows/win32/medfound/mfsampleextension-devicetimestamp)
+
+색 변환의 장치 없는 픽셀 계약 테스트는 통과했다. 고정 SDK에서 같은 NV12 포맷의 swscale 경로가 full→limited 변환을 생략하는 것을 테스트로 확인해 명시적 정수 범위 변환을 사용한다. BT.601→709는 RGB48 중간 버퍼를 거쳐 실제 행렬 변환하며 **표시용 YUV→RGB는 D3D11 shader**가 수행한다. 누락된 행렬은 MJPEG/SD=601, HD raw=709, range는 MJPEG=full/raw=limited, primaries/transfer는 SDR 709로 가정하고 JSON에 `colourAssumptions`와 근거를 남긴다. 명시적인 비709 primaries/transfer는 거부한다. 이 가정이 필요한 실물의 색 정확도는 미확인으로 남기며, 다른 primaries/HDR 색 관리 경로는 이번 라운드에 구현하지 않았다.
 
 | 장치 | 준비 전제와 프로젝트 CFR |
 |---|---|
@@ -207,7 +211,7 @@ flowchart LR
 | 자원·우선순위 | 결정 |
 |---|---|
 | 프리뷰 | 캠당 최신 mailbox 1개 + present 중 표면. 오래된 표시 요청은 덮어쓴다. 60Hz present 루프는 JUCE의 파형·미터 repaint timer와 분리한다. 창을 줄여도 두 뷰의 native cadence를 임의로 낮추지 않는다. |
-| 캡처 decode 큐 | 캠당 대기 native sample 2개를 초기값으로 한다. decode 중 1개는 별도. 늦어진 sample을 누적하지 않고 최신성을 복원하되 손실을 `captureDecodeOverflow`로 기록한다. 정상 합격 시험에서는 이 동작이 발생하면 실패다. |
+| 캡처 decode 큐 | 캠당 대기 native sample 2개, decode 중 1개는 별도. 라운드 01은 full이면 새 borrowed sample을 AddRef하기 전에 거절해 콜백 Release/무한 retired 큐를 피하고 `captureDecodeOverflow`로 센다. worker는 대기가 2 native period를 넘은 sample을 `lateQueueDiscard`로 반환하고 다음 입력으로 최신성을 복원한다. 대기>2ms는 별도의 late 관측이다. 정상 합격 시험에서는 overflow/discard가 발생하면 실패다. |
 | encode 표면 큐 | 초기 250ms(60fps 15개/30fps 8개) 상한. encoder reference용 별도 풀을 포함해 계수화한다. 프리뷰 예약 표면을 가져다 쓰지 않는다. |
 | 압축 packet·오디오 큐 | 영상 packet 큐 초기 3초, 원본 오디오 큐 초기 4초. 큐는 레이트·최대 bit rate로 준비 때 할당한다. 2초 writer stall 시험에서 callback을 막지 않고 회복해야 한다. 메모리 한도는 녹화 시간/프로젝트 용량 제한과 다르다. |
 | 정상 자원 여유 | 2캠60 encode 합산 120fps의 **1.3배인 156fps 이상**을 캡처 없는 별도 부하 시험의 초기 합격 목표로 둔다. 실제 capture+preview+8ch 동시 시험을 추가 통과해야 한다. |
