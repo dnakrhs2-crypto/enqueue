@@ -4,6 +4,7 @@
 #include "diagnostics/MfJpegRangeProbe.h"
 #include "record/EncodePipeline.h"
 #include "audio/AsioProbe.h"
+namespace gocue::recorder { int runPlaybackProbe(int argc, wchar_t** argv); }
 extern "C"
 {
 #include <libavcodec/avcodec.h>
@@ -506,6 +507,7 @@ int wmain(int argc, wchar_t** argv)
     try
     {
         if (argc >= 2 && juce::String(argv[1]) == "asio") return runAsioProbe(argc, argv);
+        if (argc >= 2 && juce::String(argv[1]) == "playback") return runPlaybackProbe(argc, argv);
         args = parse(argc, argv);
         report = baseReport(args, &report); // also covers encode's early runtime check without changing its function
         return args.command == "enumerate" ? enumerate(args) : args.command == "encode" ? encodeCommand(args)

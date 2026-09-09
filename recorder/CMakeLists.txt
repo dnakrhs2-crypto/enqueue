@@ -175,3 +175,13 @@ target_sources(RecorderTests PRIVATE tests/RecorderProjectTests.cpp)
 target_link_libraries(RecorderTests PRIVATE RecorderModel)
 add_test(NAME RecorderProjectRoundtrip COMMAND RecorderTests --suite project-roundtrip)
 # END Recorder round 08.
+
+# Round 11: finalized-file playback only (append-only integration).
+target_sources(RecorderCore PRIVATE
+    src/media/MediaIndex.cpp src/playback/VideoPlaybackEngine.cpp
+    src/playback/TimelineTransport.cpp src/playback/TimelineAudioRenderer.cpp
+    src/playback/AsioPlaybackOutput.cpp)
+target_link_libraries(RecorderCore PUBLIC RecorderModel)
+target_sources(RecorderProbe PRIVATE tools/PlaybackProbe.cpp)
+target_sources(RecorderTests PRIVATE tests/PlaybackTests.cpp)
+add_test(NAME RecorderPlaybackEngine COMMAND RecorderTests --suite playback-engine)
