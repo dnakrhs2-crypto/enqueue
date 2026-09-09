@@ -19,9 +19,11 @@ public:
     MfCameraCapture(std::shared_ptr<CaptureTelemetry>, VideoSurfacePool&, std::function<void(const VideoSurface&)> recordSink = {});
     ~MfCameraCapture();
     CaptureOpenInfo start(const std::string& symbolicLink, CameraMode, bool mfMjpegDecoder, int decoderThreads = 1,
-                          std::shared_future<void> measurementStart = {});
+                          std::shared_future<void> measurementStart = {}, std::uint64_t deviceGeneration = 0);
     void stop();
     bool finished() const noexcept;
+    bool failureDetected() const noexcept; // live atomic signal, before slow driver Flush/Shutdown
+    std::uint64_t generation() const noexcept;
     // After stop only.
     const std::string& error() const noexcept;
     const std::string& colourDecision() const noexcept;

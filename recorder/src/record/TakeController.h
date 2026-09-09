@@ -7,6 +7,11 @@
 
 namespace gocue::recorder
 {
+struct TakeVideoQueues
+{
+    unsigned surfaces = 0, surfaceHighWater = 0, surfaceCapacity = 0;
+    std::uint64_t videoPackets = 0, audioPackets = 0, videoBytes = 0, surfaceOverflow = 0;
+};
 // One camera stream seam. The production implementation owns independent encode
 // and mux workers. Tests can inject a bounded lifecycle double without a GPU.
 class ITakeVideoStream
@@ -26,6 +31,7 @@ public:
     virtual std::int64_t availableSamples() const noexcept = 0;
     virtual bool thumbnailReady() const noexcept = 0;
     virtual juce::var report() const = 0; // after finish
+    virtual TakeVideoQueues queues() const noexcept { return {}; }
 };
 
 class TakeController
@@ -34,6 +40,13 @@ public:
     enum class State { idle, preparing, armed, recording, stopping, finalizing, done, partialFailure };
     struct Config
     {
+        struct Camera2
+        {
+            bool enabled = false, synthetic = false;
+            std::string symbolicLink;
+            CameraMode mode;
+            std::uint64_t generation = 0;
+        };
         juce::File projectDirectory;
         juce::Uuid takeId;
         std::string cameraSymbolicLink;
@@ -41,6 +54,8 @@ public:
         bool synthetic = false;
         int projectFps = 60;
         bool externalCapture = false; // app keeps its warmed live capture across takes/tabs
+        std::uint64_t cameraGeneration = 0;
+        Camera2 camera2; // immutable for this take; disabled/missing means no asset or stream
     };
     struct PlacementMetadata
     {
@@ -74,8 +89,12 @@ public:
     const PlacementMetadata& placementMetadata() const noexcept;
     // Decode producer (or synthetic probe) only; callback never holds preview refs.
     void offer(const VideoSurface&) noexcept;
-    void cameraFailed() noexcept;
-    std::shared_ptr<VideoSurfacePool> previewPool() const;
+    void offer(unsigned camera, const VideoSurface&) noexcept;
+    void cameraFailed(unsigned camera = 0, std::uint64_t generation = 0) noexcept;
+    std::shared_ptr<VideoSurfacePool> previewPool(unsigned camera = 0) const;
+    bool cameraActive(unsigned) const noexcept;
+    bool cameraDisconnected(unsigned) const noexcept;
+    TakeVideoQueues cameraQueues(unsigned) const noexcept;
     juce::var report() const; // done/partialFailure only
     static std::int64_t frameCount(std::int64_t samples, unsigned Fs, FrameRate fps);
     static const char* stateName(State) noexcept;

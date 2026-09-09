@@ -316,3 +316,7 @@ target_sources(RecorderCore PRIVATE src/storage/EditJournal.cpp)
 target_sources(RecorderTests PRIVATE tests/EditJournalTests.cpp tests/RetakeRecoveryTests.cpp)
 add_test(NAME RecorderEditJournalReplay COMMAND RecorderTests --suite edit-journal-replay)
 add_dependencies(RecorderProbe RecorderCrashHarness)
+
+# Round 24: product camera slots; append-only integration and the shared runner.
+target_sources(RecorderTests PRIVATE tests/CameraSlotTests.cpp)
+add_test(NAME RecorderCameraSlots COMMAND RecorderTests --suite camera-slots)

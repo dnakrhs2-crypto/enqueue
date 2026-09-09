@@ -3,6 +3,8 @@
 #include "capture/MfCameraCapture.h"
 #include "storage/StorageEncoding.h"
 #include "media/ThumbnailCache.h"
+#include "sync/CameraClockMapper.h"
+#include "support/ThreadPriority.h"
 #include <algorithm>
 #include <chrono>
 #include <cstring>
@@ -50,37 +52,46 @@ public:
     {
         auto* p = packets[read.load() % capacity].get(); bytes.fetch_sub(p->size); av_packet_unref(p); read.fetch_add(1, std::memory_order_release);
     }
+    std::uint64_t count() const noexcept { const auto r = read.load(); return written.load() - r; }
+    std::uint64_t byteCount() const noexcept { return bytes.load(); }
 private:
     const unsigned capacity;
     const std::uint64_t byteLimit;
     std::vector<PacketPtr> packets;
     std::atomic<std::uint64_t> read{0}, written{0}, bytes{0};
 };
-// Retains round 02's MF PTS cadence, with the first callback QPC translated to
-// ASIO sample coordinates. Frozen temporary clock snapshot, no exposure claim.
+// Per-camera timestamp fit. The audio engine still supplies its round-10 frozen
+// IClockMapper snapshot; round 25 owns replacement of that master clock bridge.
 class TakeCameraMapper final : public CameraTimeMapper
 {
 public:
-    TakeCameraMapper(ClockMapping c, std::int64_t start, unsigned rate) : clock(c), n0(start), Fs(rate), pts(qpcFrequency()) {}
+    TakeCameraMapper(CameraClockMapper& camera, ClockMapping c, std::int64_t start, unsigned rate)
+        : camera(camera), clock(c), n0(start), Fs(rate) {}
     std::int64_t map(const FrameStamp& frame) override
     {
-        if (!begun) { offset = rescaleRound(clock.mapToSample(frame.callback) - n0, 10000000, Fs); begun = true; }
-        return pts.map(frame) + offset;
+        const auto snapshot = camera.snapshot();
+        const auto qpc = snapshot ? snapshot->timestampQpc(frame) : std::nullopt;
+        if (!qpc || (epoch && snapshot->epoch != *epoch))
+            throw std::runtime_error("Camera clock generation/epoch changed or timestamp unavailable");
+        // Preparation may restart the camera clock before the first mapped frame.
+        // Bind to that valid frame once; later discontinuities still fail this camera.
+        if (!epoch) epoch = snapshot->epoch;
+        return rescaleRound(clock.mapToSample(*qpc) - n0, 10000000, Fs);
     }
     std::int64_t now(std::int64_t qpc) const override { return rescaleRound(clock.mapToSample(qpc) - n0, 10000000, Fs); }
 private:
+    CameraClockMapper& camera;
     ClockMapping clock;
-    std::int64_t n0, offset = 0;
+    std::int64_t n0;
     unsigned Fs;
-    MfPtsTimeMapper pts;
-    bool begun = false;
+    std::optional<std::uint64_t> epoch;
 };
 class LiveTakeVideo final : public ITakeVideoStream
 {
 public:
     LiveTakeVideo() = default;
-    LiveTakeVideo(std::unique_ptr<CameraTimeMapper> timeMapper, juce::String cameraName)
-        : mapper(std::move(timeMapper)), streamName(std::move(cameraName)) {}
+    explicit LiveTakeVideo(std::unique_ptr<CameraTimeMapper> timeMapper)
+        : mapper(std::move(timeMapper)) {}
     ~LiveTakeVideo() override
     {
         sourceFailure = 0; ending = true; audioEnded = true; aborting = true;
@@ -90,6 +101,7 @@ public:
     void prepare(const juce::File& output, NvencProfile p, Rational native, const AVCodecContext& audio) override
     {
         finalFile = output; profile = p; nativeRate = native;
+        cameraClock = std::make_unique<CameraClockMapper>(timestampReference, qpcFrequency(), native);
         pool = std::make_unique<NvencFramePool>(p.cpuSurfaces());
         videoPackets = std::make_unique<PacketQueue>(unsigned(p.fps * 3), std::uint64_t(p.maxRate()) * 3 / 8);
         audioPackets = std::make_unique<PacketQueue>(192, 2 * 1024 * 1024);
@@ -99,14 +111,18 @@ public:
     }
     void startAt(ClockMapping clock, std::int64_t n0, unsigned rate, std::function<std::int64_t()> length) override
     {
-        if (!mapper) mapper = std::make_unique<TakeCameraMapper>(clock, n0, rate);
+        if (!mapper)
+        {
+            mapper = std::make_unique<TakeCameraMapper>(*cameraClock, clock, n0, rate);
+            waitingForClock = true;
+        }
         Fs = rate; acceptedLength = std::move(length);
         begun.store(true, std::memory_order_release);
     }
     void offer(const VideoSurface& frame) noexcept override
     {
         if (ending.load() || videoEnded.load() || sourceFailure.load() >= 0) return;
-        if (pool && !pool->copy(frame)) { overflow.fetch_add(1); failedFlag = true; }
+        if (pool && !pool->copy(frame)) { overflow.fetch_add(1); sourceFailed(available.load()); }
         else gotFrame = true;
     }
     void audioPacket(const AVPacket& p) override
@@ -114,7 +130,7 @@ public:
         if (muxFailed.load()) throw std::runtime_error("Take mux failed");
         if (!audioPackets->push(p)) { failedFlag = true; throw std::runtime_error("Take AAC packet queue overflow"); }
     }
-    bool ready() const noexcept override { return gotFrame.load(); }
+    bool ready() const noexcept override { return gotFrame.load() && clockReady.load(); }
     void sourceFailed(std::int64_t sample) noexcept override
     { std::int64_t unset = -1; sourceFailure.compare_exchange_strong(unset, std::max<std::int64_t>(0, sample)); failedFlag = true; }
     void endAt(std::int64_t length) noexcept override { finalLength = length; ending.store(true, std::memory_order_release); }
@@ -133,8 +149,17 @@ public:
         auto v = jsonObject(); jsonSet(v, "encoder", encoderReport); jsonSet(v, "mux", muxReport); jsonSet(v, "cfr", cfrReport);
         jsonSet(v, "inspection", inspection); jsonSet(v, "error", encoderError); jsonSet(v, "muxError", muxError);
         jsonSet(v, "surfaceOverflow", jsonInt(overflow.load())); jsonSet(v, "failed", failed()); jsonSet(v, "availableSamples", jsonInt(availableSamples()));
-        jsonSet(v, "clockMapping", "Round-02 MF PTS cadence + first callback QPC mapped by replaceable IClockMapper OLS snapshot; uncalibrated");
-        jsonSet(v, "thumbnail", thumbnail.load() ? thumbnailPath() : juce::String("unavailable")); return v;
+        jsonSet(v, "clockMapping", "Independent CameraClockMapper device timestamp / PTS arrival fit; common frozen IClockMapper audio snapshot; uncalibrated");
+        const auto clock = cameraClock ? cameraClock->snapshot() : std::nullopt;
+        if (clock) { jsonSet(v, "cameraEpoch", jsonInt(clock->epoch)); jsonSet(v, "deviceGeneration", jsonInt(clock->generation)); jsonSet(v, "cameraClockSource", cameraClockSourceName(clock->quality.source)); }
+        jsonSet(v, "surfaceCapacity", pool ? pool->capacity() : 0); jsonSet(v, "surfaceHighWater", pool ? int(pool->highWater()) : 0);
+        jsonSet(v, "thumbnail", thumbnail.load() ? thumbnailPath().getFileName() : juce::String("unavailable")); return v;
+    }
+    TakeVideoQueues queues() const noexcept override
+    {
+        return {pool ? pool->occupied() : 0, pool ? pool->highWater() : 0, pool ? unsigned(pool->capacity()) : 0,
+                videoPackets ? videoPackets->count() : 0, audioPackets ? audioPackets->count() : 0,
+                videoPackets ? videoPackets->byteCount() : 0, overflow.load()};
     }
 private:
     juce::File finalFile;
@@ -143,7 +168,10 @@ private:
     std::unique_ptr<NvencFramePool> pool;
     std::unique_ptr<PacketQueue> videoPackets, audioPackets;
     std::unique_ptr<CameraTimeMapper> mapper;
-    juce::String streamName = "cam1";
+    ClockMapper timestampReference{qpcFrequency()}; // CameraClockMapper timestamp-only use; audio mapping is supplied explicitly above.
+    std::unique_ptr<CameraClockMapper> cameraClock;
+    std::atomic<bool> clockReady{false};
+    bool waitingForClock = false; // encoder worker after startAt's begun release
     std::function<std::int64_t()> acceptedLength;
     unsigned Fs = 48000;
     std::atomic<bool> gotFrame{false}, begun{false}, ending{false}, videoEnded{false}, audioEnded{false}, failedFlag{false}, muxFailed{false}, aborting{false}, thumbnail{false};
@@ -152,10 +180,10 @@ private:
     std::thread encoderWorker, muxWorker;
     juce::var encoderReport, muxReport, cfrReport, inspection;
     std::string encoderError, muxError;
-    juce::String thumbnailPath() const
-    { return streamName == "cam1" ? juce::String("index/first-thumbnail.bmp") : "index/" + streamName + "-first-thumbnail.bmp"; }
     bool thumbnailQueued = false; // encoder worker only
     ThumbnailCache thumbnailWorker; // first thumbnail disk I/O is below original media work
+    juce::File thumbnailPath() const
+    { return finalFile.getParentDirectory().getChildFile(finalFile.getFileNameWithoutExtension() == "cam1" ? "index/first-thumbnail.bmp" : "index/cam2-first-thumbnail.bmp"); }
     void saveThumbnail(const AVFrame& frame)
     {
         // Small, rebuildable 160x90 luminance BMP; never scan media on stop.
@@ -170,7 +198,7 @@ private:
             const auto value = std::uint8_t(std::clamp((luma - 16) * 255 / 219, 0, 255));
             auto* p = data.data() + 54 + (height - 1 - y) * stride + x * 3; p[0] = p[1] = p[2] = value;
         }
-        const auto file = finalFile.getParentDirectory().getChildFile(thumbnailPath());
+        const auto file = thumbnailPath();
         thumbnailQueued = thumbnailWorker.enqueue("first", [this, file, data = std::move(data)](const auto& yield)
         {
             if (yield()) return;
@@ -180,6 +208,7 @@ private:
     }
     void mux(const AVCodecContext& video, const AVCodecContext& audio, std::promise<void> prepared)
     {
+        ScopedRecorderPriority priority(RecorderThreadRole::encodeWrite);
         bool signalled = false;
         std::unique_ptr<Mp4TakeWriter> writer;
         try
@@ -205,6 +234,7 @@ private:
     }
     void encode(const AVCodecContext& audio, std::promise<void> prepared)
     {
+        ScopedRecorderPriority priority(RecorderThreadRole::encodeWrite);
         bool signalled = false;
         VideoCfrScheduler scheduler(nativeRate, {unsigned(profile.fps), 1});
         std::unique_ptr<NvencEncoder> encoder;
@@ -215,7 +245,7 @@ private:
             std::promise<void> muxReady; auto future = muxReady.get_future();
             muxWorker = std::thread([this, &audio, &encoder, ready = std::move(muxReady)]() mutable { mux(encoder->context(), audio, std::move(ready)); });
             future.get(); prepared.set_value(); signalled = true;
-            const auto traceFile = finalFile.getParentDirectory().getChildFile("index/" + streamName + "-source-ids.csv");
+            const auto traceFile = finalFile.getParentDirectory().getChildFile("index/" + finalFile.getFileNameWithoutExtension() + "-source-ids.csv");
             std::ofstream trace(std::filesystem::path(traceFile.getFullPathName().toWideCharPointer()), std::ios::binary);
             trace.exceptions(std::ios::badbit | std::ios::failbit); trace << "pts,sourceId,mfPts100ns,callbackQpc,mapped100ns\n";
             const PacketSink sink = [this](const AVPacket& p)
@@ -225,7 +255,16 @@ private:
             };
             const auto accept = [&](int slot)
             {
+                cameraClock->observe(pool->stamp(slot));
+                if (waitingForClock)
+                {
+                    // A new PTS-arrival epoch needs fresh observations before its
+                    // first valid frame can bind the normal recording mapper.
+                    const auto clock = cameraClock->snapshot();
+                    if (!clock || !clock->timestampQpc(pool->stamp(slot))) { pool->release(slot); return; }
+                }
                 const auto time = mapper->map(pool->stamp(slot));
+                waitingForClock = false;
                 if (time < 0)
                 { if (preroll >= 0) pool->release(preroll); preroll = slot; return; }
                 if (preroll >= 0)
@@ -242,7 +281,12 @@ private:
                 if (!begun.load(std::memory_order_acquire))
                 {
                     int slot = -1;
-                    while (pool->pop(slot)) { if (preroll >= 0) pool->release(preroll); preroll = slot; }
+                    while (pool->pop(slot))
+                    {
+                        cameraClock->observe(pool->stamp(slot));
+                        const auto clock = cameraClock->snapshot(); clockReady = clock && clock->valid;
+                        if (preroll >= 0) pool->release(preroll); preroll = slot;
+                    }
                     if (ending.load()) break; waitBriefly(); continue;
                 }
                 if (preroll >= 0 && !scheduler.size())
@@ -304,20 +348,30 @@ struct TakeController::Impl
     std::vector<MediaAsset> assets;
     std::vector<unsigned> logicalMics;
     std::vector<int> logicalIndices;
-    std::unique_ptr<ITakeVideoStream> video;
-    std::atomic<ITakeVideoStream*> recordSink{nullptr};
-    std::atomic<unsigned> offerInFlight{0};
-    std::shared_ptr<VideoSurfacePool> preview, pendingPreview;
-    std::shared_ptr<CaptureTelemetry> captureTelemetry;
-    std::unique_ptr<MfCameraCapture> capture;
+    struct Camera
+    {
+        std::unique_ptr<ITakeVideoStream> video;
+        std::atomic<ITakeVideoStream*> sink{nullptr};
+        std::atomic<unsigned> offers{0};
+        std::atomic<bool> active{false}, disconnected{false}, referenceFailed{false};
+        std::atomic<std::uint64_t> generation{0}, staleOffers{0};
+        std::shared_ptr<VideoSurfacePool> preview;
+        std::shared_ptr<CaptureTelemetry> telemetry;
+        std::unique_ptr<MfCameraCapture> capture;
+        juce::var report;
+    };
+    std::array<Camera, 2> cameras;
+    unsigned cameraCount = 1;
+    juce::String preparationNotice;
     std::unique_ptr<MfRuntime> mfRuntime; // remains alive with the preview capture after finalization
     std::future<juce::Result> work;
     RecorderDocument::Snapshot savedSnapshot;
     bool saving = false, partial = false, preparedAudio = false;
     std::int64_t requestedN0 = -1, length = 0, placement = 0, stopQpc = 0, prepareQpc = 0, finalizationQpc = 0;
+    std::atomic<std::int64_t> collectionOrigin{-1};
     double placementMs = 0, finalizationMs = 0, mediaFinalizationMs = 0, stopToDoneMs = 0;
     juce::Uuid placementEdit;
-    juce::var audioReport, videoReport;
+    juce::var audioReport;
     RecorderAudioEngine::DeviceInfo deviceSnapshot;
     std::vector<JournalDeviceMapping> mappingSnapshot;
     std::array<float, 8> peakSnapshot{};
@@ -328,24 +382,59 @@ struct TakeController::Impl
     {
         if (work.valid()) work.wait();
         detachSink();
-        if (capture) capture->stop();
+        for (auto& c : cameras) if (c.capture) c.capture->stop();
         if (preparedAudio)
         {
-            audio.abort(RecorderAudioEngine::Error::cancelled);
-            audio.finishCapture(placementEdit);
-            if (video) { video->endAt(std::max<std::int64_t>(0, length)); video->audioDone(); video->finish(); }
-            audio.finishJournal(false);
+            audio.abort(RecorderAudioEngine::Error::cancelled); audio.finishCapture(placementEdit);
+            finishVideos(std::max<std::int64_t>(0, length)); audio.finishJournal(false);
         }
-        video.reset(); document.setRecordingStructureLock(false);
+        for (auto& c : cameras) c.video.reset();
+        document.setRecordingStructureLock(false);
     }
     void transition(State next) { if (current != next) { current = next; transitions.push_back(next); } }
+    CameraMode mode(unsigned i) const { return i ? config.camera2.mode : config.cameraMode; }
+    std::string link(unsigned i) const { return i ? config.camera2.symbolicLink : config.cameraSymbolicLink; }
+    bool synthetic(unsigned i) const { return i ? config.camera2.synthetic : config.synthetic; }
+    juce::String cameraName(unsigned i) const { return i ? "cam2" : "cam1"; }
     void detachSink()
-    { recordSink.store(nullptr); while (offerInFlight.load()) waitBriefly(); }
-    void offer(const VideoSurface& frame) noexcept
     {
-        offerInFlight.fetch_add(1);
-        if (auto* sink = recordSink.load()) sink->offer(frame);
-        offerInFlight.fetch_sub(1);
+        for (auto& c : cameras) c.sink.store(nullptr);
+        for (auto& c : cameras) while (c.offers.load()) waitBriefly();
+    }
+    void offer(unsigned i, const VideoSurface& frame) noexcept
+    {
+        if (i >= cameras.size()) return;
+        auto& c = cameras[i]; c.offers.fetch_add(1);
+        if (auto* sink = c.sink.load())
+        {
+            auto generation = c.generation.load();
+            if (!generation) { c.generation.compare_exchange_strong(generation, frame.stamp.generation); generation = c.generation.load(); }
+            if (generation == frame.stamp.generation) sink->offer(frame);
+            else ++c.staleOffers;
+        }
+        c.offers.fetch_sub(1);
+    }
+    void failCamera(unsigned i, std::uint64_t generation) noexcept
+    {
+        if (i >= cameras.size()) return;
+        auto& c = cameras[i]; c.offers.fetch_add(1);
+        if (auto* sink = c.sink.load()) if (!generation || c.generation.load() == generation)
+        {
+            c.disconnected = true;
+            const auto origin = collectionOrigin.load();
+            sink->sourceFailed(origin < 0 ? 0 : std::max<std::int64_t>(0, audio.acceptedEnd() - origin));
+        }
+        c.offers.fetch_sub(1);
+    }
+    void finishVideos(std::int64_t end)
+    {
+        // Both lanes receive the same boundary BEFORE either join can wait.
+        for (auto& c : cameras) if (c.video) { c.video->endAt(end); c.video->audioDone(); }
+        for (auto& c : cameras) if (c.video)
+        {
+            try { c.video->finish(); c.report = c.video->report(); }
+            catch (const std::exception& e) { partial = true; failure = juce::String::fromUTF8(e.what()); c.video->sourceFailed(0); }
+        }
     }
     juce::File takeFolder() const { return config.projectDirectory.getChildFile("media/takes/" + config.takeId.toDashedString()); }
     juce::var manifest(const char* state) const
@@ -366,24 +455,41 @@ struct TakeController::Impl
         }
         for (auto peak : peaks) peakValues.add(double(peak));
         jsonSet(v, "microphones", microphones); jsonSet(v, "peaks", peakValues);
-        jsonSet(v, "firstThumbnail", video && video->thumbnailReady() ? "index/first-thumbnail.bmp" : "");
-        jsonSet(v, "audio", audioReport); jsonSet(v, "video", videoReport);
-        jsonSet(v, "clockMapping", "Temporary IClockMapper OLS / first camera QPC + MF PTS; not physical sync calibration");
+        jsonSet(v, "firstThumbnail", cameras[0].video && cameras[0].video->thumbnailReady() ? "index/first-thumbnail.bmp" : "");
+        jsonSet(v, "audio", audioReport); jsonSet(v, "video", cameras[0].report);
+        juce::Array<juce::var> cameraReports;
+        for (unsigned i = 0; i < cameraCount; ++i)
+        {
+            const auto& c = cameras[i]; auto r = jsonObject(); jsonSet(r, "slot", int(i + 1));
+            jsonSet(r, "symbolicLink", synthetic(i) ? "synthetic" : link(i)); jsonSet(r, "nativeMode", mode(i).text());
+            jsonSet(r, "generation", jsonInt(c.generation.load())); jsonSet(r, "staleOffers", jsonInt(c.staleOffers.load()));
+            jsonSet(r, "disconnected", c.disconnected.load()); jsonSet(r, "referenceFailed", c.referenceFailed.load());
+            jsonSet(r, "N0", requestedN0); jsonSet(r, "Nstop", requestedN0 < 0 ? -1 : requestedN0 + length);
+            jsonSet(r, "assetId", i ? take.cam2AssetId : take.cam1AssetId); jsonSet(r, "video", c.report);
+            juce::Array<juce::var> gaps;
+            if (i < assets.size()) for (const auto& gap : assets[i].gaps) { auto g = jsonObject(); jsonSet(g, "start", gap.start); jsonSet(g, "length", gap.length); gaps.add(g); }
+            jsonSet(r, "gaps", gaps); cameraReports.add(r);
+        }
+        jsonSet(v, "cameras", cameraReports); jsonSet(v, "camera2Active", cameras[1].active.load());
+        jsonSet(v, "clockMapping", "Independent camera timestamp fits; shared frozen IClockMapper audio snapshot, uncalibrated");
         return v;
     }
     void initialiseAssets()
     {
         const auto device = audio.deviceInfo(); deviceSnapshot = device; mappingSnapshot = audio.microphoneMapping(); peakSnapshot.fill(0);
-        take = {}; take.takeId = config.takeId.toString(); take.cam1AssetId = newId();
-        take.capture.asioDeviceId = device.name; take.capture.cameraDeviceIds[0] = juce::String(config.synthetic ? "synthetic" : config.cameraSymbolicLink);
-        take.capture.cameraModes[0] = config.cameraMode.text();
-        take.capture.calibrationIdentity = "temporary-linear-uncalibrated";
+        take = {}; take.takeId = config.takeId.toString();
+        take.capture.asioDeviceId = device.name; take.capture.calibrationIdentity = "camera-fit-frozen-audio-uncalibrated";
         assets.clear(); logicalMics = audio.armedMicrophones(); logicalIndices.clear();
-        MediaAsset camera; camera.assetId = take.cam1AssetId; camera.kind = AssetKind::camera;
-        camera.relativePath = "media/takes/" + config.takeId.toDashedString() + "/cam1.recording.mp4";
-        camera.contentIdentity = camera.assetId; camera.originalFormat.codec = "h264";
-        camera.originalFormat.width = 1920; camera.originalFormat.height = 1080; camera.originalFormat.fps = {unsigned(config.projectFps), 1};
-        camera.sourceUnitsNumerator = unsigned(config.projectFps); camera.sourceUnitsDenominator = device.sampleRate; assets.push_back(camera);
+        for (unsigned i = 0; i < cameraCount; ++i)
+        {
+            MediaAsset camera; camera.kind = AssetKind::camera;
+            (i ? take.cam2AssetId : take.cam1AssetId) = camera.assetId;
+            take.capture.cameraDeviceIds[i] = juce::String(synthetic(i) ? "synthetic" : link(i)); take.capture.cameraModes[i] = mode(i).text();
+            camera.relativePath = "media/takes/" + config.takeId.toDashedString() + "/" + cameraName(i) + ".recording.mp4";
+            camera.contentIdentity = camera.assetId; camera.originalFormat.codec = "h264";
+            camera.originalFormat.width = 1920; camera.originalFormat.height = 1080; camera.originalFormat.fps = {unsigned(config.projectFps), 1};
+            camera.sourceUnitsNumerator = unsigned(config.projectFps); camera.sourceUnitsDenominator = device.sampleRate; assets.push_back(camera);
+        }
         for (std::size_t i = 0; i < logicalMics.size(); ++i)
         {
             const auto mapping = mappingSnapshot[i];
@@ -398,37 +504,75 @@ struct TakeController::Impl
     {
         try
         {
-            detachSink(); if (capture) { capture->stop(); capture.reset(); }
-            video.reset();
+            detachSink();
+            for (auto& c : cameras) { c.capture.reset(); c.video.reset(); c.preview.reset(); }
+            cameraCount = config.camera2.enabled && (config.camera2.synthetic || !config.camera2.symbolicLink.empty()) ? 2u : 1u;
+            for (unsigned i = 0; i < cameraCount; ++i)
+            {
+                auto& c = cameras[i];
+                if (!config.externalCapture) c.preview = std::make_shared<VideoSurfacePool>(1920, 1080);
+                if (!synthetic(i) && !config.externalCapture)
+                {
+                    try
+                    {
+                        if (!mfRuntime) mfRuntime = std::make_unique<MfRuntime>();
+                        c.telemetry = std::make_shared<CaptureTelemetry>(mode(i).fps);
+                        c.capture = std::make_unique<MfCameraCapture>(c.telemetry, *c.preview, [this, i](const VideoSurface& f) { offer(i, f); });
+                        c.capture->start(link(i), mode(i), mode(i).subtype == CaptureSubtype::mjpeg, 1, {}, c.generation.load());
+                        c.generation = c.capture->generation();
+                    }
+                    catch (const std::exception& e)
+                    {
+                        if (i == 0) throw;
+                        c.capture.reset(); c.preview.reset(); cameraCount = 1;
+                        preparationNotice = juce::String::fromUTF8("캠2 연결을 확인하세요. 캠1으로 녹화합니다. ") + juce::String::fromUTF8(e.what());
+                    }
+                }
+            }
+            // Resolve optional source availability before any cam2 asset, encoder,
+            // journal planned-file entry or MP4 is created.
+            initialiseAssets();
             requireResult(takeFolder().createDirectory()); requireResult(takeFolder().getChildFile("index").createDirectory());
             for (const char* path : {"media/imports", "cache", "recovery", "exports"}) requireResult(config.projectDirectory.getChildFile(path).createDirectory());
-            video = factory();
             RecorderAudioEngine::TakeConfig audioConfig; audioConfig.projectDirectory = config.projectDirectory; audioConfig.takeId = config.takeId;
-            audioConfig.placementSample = placement;
-            audioConfig.additionalFiles.push_back({take.cam1AssetId, assets[0].relativePath, "media/takes/" + config.takeId.toDashedString() + "/cam1.mp4"});
-            audioConfig.microphoneAssetIds = take.microphoneAssetIds;
-            audioConfig.referencePackets = [this](const AVPacket& p) { video->audioPacket(p); };
-            requireResult(audio.prepare(std::move(audioConfig))); preparedAudio = true;
-            video->prepare(takeFolder().getChildFile("cam1.mp4"), NvencProfile{config.projectFps}, config.cameraMode.fps, *audio.referenceContext());
-            recordSink.store(video.get(), std::memory_order_release);
-            if (!config.synthetic && !config.externalCapture)
+            audioConfig.placementSample = placement; audioConfig.microphoneAssetIds = take.microphoneAssetIds;
+            for (unsigned i = 0; i < cameraCount; ++i)
+                audioConfig.additionalFiles.push_back({assets[i].assetId, assets[i].relativePath,
+                    "media/takes/" + config.takeId.toDashedString() + "/" + cameraName(i) + ".mp4"});
+            audioConfig.referencePackets = [this](const AVPacket& p)
             {
-                if (!mfRuntime) mfRuntime = std::make_unique<MfRuntime>();
-                captureTelemetry = std::make_shared<CaptureTelemetry>(config.cameraMode.fps);
-                capture = std::make_unique<MfCameraCapture>(captureTelemetry, *pendingPreview, [this](const VideoSurface& f) { offer(f); });
-                capture->start(config.cameraSymbolicLink, config.cameraMode, config.cameraMode.subtype == CaptureSubtype::mjpeg);
+                for (auto& c : cameras) if (c.video && !c.referenceFailed.load())
+                {
+                    try { c.video->audioPacket(p); }
+                    catch (...) { c.referenceFailed = true; c.video->sourceFailed(c.video->availableSamples()); }
+                }
+            };
+            requireResult(audio.prepare(std::move(audioConfig))); preparedAudio = true;
+            for (unsigned i = 0; i < cameraCount; ++i)
+            {
+                auto& c = cameras[i]; c.video = factory(); c.active = true;
+                try
+                {
+                    c.video->prepare(takeFolder().getChildFile(cameraName(i) + ".mp4"), NvencProfile{config.projectFps}, mode(i).fps, *audio.referenceContext());
+                    c.sink.store(c.video.get());
+                }
+                catch (const std::exception& e)
+                {
+                    if (i == 0) throw;
+                    c.referenceFailed = true; c.video->sourceFailed(0); partial = true;
+                    preparationNotice = juce::String::fromUTF8("캠2 녹화를 준비할 수 없습니다. 캠1과 원본 녹음은 계속됩니다. ") + juce::String::fromUTF8(e.what());
+                }
             }
             writeJsonDurable(takeFolder().getChildFile("take.json"), manifest("preparing"));
             return juce::Result::ok();
         }
         catch (const std::exception& e)
         {
-            detachSink(); if (capture) capture->stop();
+            detachSink(); for (auto& c : cameras) if (c.capture) c.capture->stop();
             if (preparedAudio)
             {
                 audio.abort(RecorderAudioEngine::Error::cancelled); audio.finishCapture(placementEdit);
-                if (video) { video->endAt(0); video->audioDone(); video->finish(); }
-                audio.finishJournal(false); preparedAudio = false;
+                finishVideos(0); audio.finishJournal(false); preparedAudio = false;
             }
             return juce::Result::fail(e.what());
         }
@@ -454,7 +598,7 @@ struct TakeController::Impl
         length = audio.stopSample() - audio.startSample();
         peakSnapshot = audio.peaks();
         placementMetadata = {length > 0, false, audio.startSample(), audio.stopSample(), placement, deviceSnapshot.sampleRate, peakSnapshot,
-                             video && video->thumbnailReady() ? takeFolder().getChildFile("index/first-thumbnail.bmp") : juce::File()};
+                             cameras[0].video && cameras[0].video->thumbnailReady() ? takeFolder().getChildFile("index/first-thumbnail.bmp") : juce::File()};
         placementMetadata.waveform = audio.peakCache();
         if (length <= 0)
         {
@@ -465,7 +609,9 @@ struct TakeController::Impl
             take.N0 = audio.startSample(); requestedN0 = take.N0; take.logicalLength = length;
             take.placementSample = placement; take.state = TakeState::finalising;
             for (auto& asset : assets) setRanges(asset, length);
-            for (std::size_t i = 0; i < logicalMics.size(); ++i) setChunks(assets[i + 1], logicalMics[i], length);
+            for (unsigned i = 0; i < cameraCount; ++i)
+                if (cameras[i].video->failed()) setRanges(assets[i], cameras[i].video->availableSamples());
+            for (std::size_t i = 0; i < logicalMics.size(); ++i) setChunks(assets[i + cameraCount], logicalMics[i], length);
             const auto result = document.placeRecordedTake(take, assets, logicalIndices);
             if (result.failed()) { partial = true; failure = result.getErrorMessage(); }
             else { take = *document.getProject().media->findTake(take.takeId); placementEdit = juce::Uuid(document.lastEditTransaction()); }
@@ -477,24 +623,32 @@ struct TakeController::Impl
             const auto start = qpcNow();
             try
             {
-                // Commit TakeStopped immediately after placement, then finish raw
-                // capture. Preview remains live while its encode sink is detached.
+                // Close video intake after at most one native period. Waiting for
+                // WAV/AAC drain first can fill the bounded video pool with frames
+                // beyond Nstop while CFR is already at its final output frame.
+                double period = mode(0).fps.periodMs();
+                if (cameraCount == 2) period = std::max(period, mode(1).fps.periodMs());
+                const auto deadline = qpcNow() + std::int64_t(period * double(qpcFrequency()) / 1000.0);
+                while (qpcNow() < deadline) waitBriefly();
+                detachSink();
+                for (auto& c : cameras) if (c.video) c.video->endAt(length);
+                // Preview captures keep running; both encoders can drain while
+                // TakeStopped and the raw/AAC tail are committed independently.
                 const auto audioResult = audio.finishCapture(placementEdit);
                 if (audioResult.failed()) partial = true;
-                audioReport = audio.telemetry();
-                peakSnapshot = audio.peaks();
-                // Permit at most one native period for an already exposed frame.
-                const auto deadline = qpcNow() + std::int64_t(config.cameraMode.fps.periodMs() * double(qpcFrequency()) / 1000.0);
-                while (qpcNow() < deadline) waitBriefly();
-                detachSink(); video->endAt(length); video->audioDone(); video->finish(); videoReport = video->report();
-                partial = partial || video->failed() || audio.referenceFailed();
-                const auto validVideo = std::min(length, video->availableSamples());
-                setRanges(assets[0], validVideo);
-                if (takeFolder().getChildFile("cam1.mp4").existsAsFile()) assets[0].relativePath = "media/takes/" + config.takeId.toDashedString() + "/cam1.mp4";
-                else setRanges(assets[0], 0); // incomplete payload is preserved for recovery, not advertised as playable
+                audioReport = audio.telemetry(); peakSnapshot = audio.peaks();
+                finishVideos(length);
+                partial = partial || audio.referenceFailed();
+                for (unsigned i = 0; i < cameraCount; ++i)
+                {
+                    auto& c = cameras[i]; partial = partial || c.video->failed(); setRanges(assets[i], c.video->availableSamples());
+                    const auto name = cameraName(i) + ".mp4";
+                    if (takeFolder().getChildFile(name).existsAsFile()) assets[i].relativePath = "media/takes/" + config.takeId.toDashedString() + "/" + name;
+                    else setRanges(assets[i], 0);
+                }
                 const auto written = std::int64_t(audioReport["wav"]["writtenSamplesPerMic"]);
                 for (std::size_t i = 0; i < logicalMics.size(); ++i)
-                { setRanges(assets[i + 1], written); setChunks(assets[i + 1], logicalMics[i], std::min(length, written)); }
+                { setRanges(assets[i + cameraCount], written); setChunks(assets[i + cameraCount], logicalMics[i], std::min(length, written)); }
                 for (auto& asset : assets) ++asset.mediaGeneration;
                 mediaFinalizationMs = elapsedMs(start); return audioResult;
             }
@@ -510,6 +664,7 @@ juce::Result TakeController::reset()
         return juce::Result::fail("Take is still active");
     impl->detachSink(); impl->placementMetadata = {}; impl->length = 0; impl->placement = 0;
     impl->failure.clear(); impl->warning.clear(); impl->current = State::idle;
+    for (auto& c : impl->cameras) c.active = false;
     return juce::Result::ok();
 }
 juce::Result TakeController::prepare(Config config)
@@ -522,15 +677,26 @@ juce::Result TakeController::prepare(Config config)
         || (config.projectFps != 30 && config.projectFps != 60) || config.cameraMode.width != 1920 || config.cameraMode.height != 1080
         || !config.cameraMode.fps.numerator || !config.cameraMode.fps.denominator || (!config.synthetic && config.cameraSymbolicLink.empty()))
         return juce::Result::fail("Select a ready ASIO device and cam1 1080p native mode / project 30 or 60");
+    if (config.camera2.enabled && (config.camera2.synthetic || !config.camera2.symbolicLink.empty()))
+    {
+        const auto& m = config.camera2.mode;
+        if (m.width != 1920 || m.height != 1080 || !m.fps.numerator || !m.fps.denominator)
+            return juce::Result::fail("Select a cam2 1080p native mode");
+        if (!config.synthetic && !config.camera2.synthetic && CameraCatalog::sameDevice(config.cameraSymbolicLink, config.camera2.symbolicLink))
+            return juce::Result::fail(juce::String::fromUTF8("같은 카메라를 두 번 선택할 수 없습니다."));
+    }
     const auto timebase = s.document.setTimebase(device.sampleRate, {unsigned(config.projectFps), 1});
     if (timebase.failed()) return timebase;
     s.config = std::move(config); s.failure.clear(); s.warning.clear(); s.partial = false; s.saving = false; s.preparedAudio = false;
-    s.audioReport = juce::var(); s.videoReport = juce::var(); s.placementMetadata = {}; s.transitions = {State::idle}; s.current = State::idle;
-    s.requestedN0 = -1; s.length = 0; s.stopQpc = s.finalizationQpc = 0;
+    s.audioReport = juce::var(); s.assets.clear(); s.take = Take{}; s.logicalMics.clear(); s.logicalIndices.clear();
+    s.mappingSnapshot.clear(); s.deviceSnapshot = device; s.placementMetadata = {}; s.transitions = {State::idle}; s.current = State::idle;
+    s.requestedN0 = -1; s.collectionOrigin = -1; s.length = 0; s.stopQpc = s.finalizationQpc = 0;
     s.placementMs = s.finalizationMs = s.mediaFinalizationMs = s.stopToDoneMs = 0; s.placementEdit = juce::Uuid();
-    s.placement = s.document.getProject().activeTimelineEnd(); s.initialiseAssets();
-    s.pendingPreview = std::make_shared<VideoSurfacePool>(1920, 1080);
-    if (s.logicalMics.empty()) s.warning = juce::String::fromUTF8("녹음 중인 마이크가 없습니다");
+    s.placement = s.document.getProject().activeTimelineEnd(); s.preparationNotice.clear();
+    s.detachSink();
+    for (auto& c : s.cameras) { c.active = false; c.disconnected = false; c.referenceFailed = false; c.staleOffers = 0; c.report = juce::var(); }
+    s.cameras[0].generation = s.config.cameraGeneration; s.cameras[1].generation = s.config.camera2.generation;
+    if (s.audio.armedMicrophones().empty()) s.warning = juce::String::fromUTF8("녹음 중인 마이크가 없습니다");
     s.document.setRecordingStructureLock(true); s.transition(State::preparing); s.prepareQpc = qpcNow();
     s.work = std::async(std::launch::async, [&s] { return s.prepareWorker(); }); return juce::Result::ok();
 }
@@ -541,9 +707,11 @@ juce::Result TakeController::start(std::int64_t N0)
     const auto device = s.audio.deviceInfo(); if (N0 < 0) N0 = s.audio.currentSample() + std::max<std::int64_t>(device.sampleRate / 4, device.bufferFrames * 2);
     if (!s.audio.clockReady()) return juce::Result::fail("ASIO clock is not stable");
     const auto result = s.audio.startAt(N0); if (result.failed()) return result;
-    s.requestedN0 = N0;
-    s.video->startAt(s.audio.clockMapping(), N0, device.sampleRate, [&s]
-    { return s.audio.startSample() >= 0 ? std::max<std::int64_t>(0, s.audio.acceptedEnd() - s.audio.startSample()) : 0; });
+    s.requestedN0 = N0; s.collectionOrigin = N0;
+    const auto clock = s.audio.clockMapping();
+    for (auto& c : s.cameras) if (c.active.load() && c.video && !c.video->failed())
+        c.video->startAt(clock, N0, device.sampleRate, [&s]
+        { return s.audio.startSample() >= 0 ? std::max<std::int64_t>(0, s.audio.acceptedEnd() - s.audio.startSample()) : 0; });
     return juce::Result::ok();
 }
 juce::Result TakeController::stop(std::int64_t Nstop)
@@ -564,7 +732,7 @@ void TakeController::tick()
         if (result.failed()) { s.failure = result.getErrorMessage(); s.partial = true; }
         if (s.current == State::preparing && result.failed())
         { s.document.setRecordingStructureLock(false); s.transition(State::partialFailure); return; }
-        if (s.current == State::preparing) s.preview = s.pendingPreview;
+        if (s.current == State::preparing && s.preparationNotice.isNotEmpty()) s.warning = s.preparationNotice;
         if (s.current == State::finalizing)
         {
             if (s.saving)
@@ -575,7 +743,7 @@ void TakeController::tick()
                 s.preparedAudio = false; s.transition(s.partial ? State::partialFailure : State::done); return;
             }
             s.placementMetadata.peaks = s.peakSnapshot; s.placementMetadata.peaksComplete = true;
-            if (s.video && s.video->thumbnailReady()) s.placementMetadata.firstThumbnail = s.takeFolder().getChildFile("index/first-thumbnail.bmp");
+            if (s.cameras[0].video && s.cameras[0].video->thumbnailReady()) s.placementMetadata.firstThumbnail = s.takeFolder().getChildFile("index/first-thumbnail.bmp");
             if (s.length > 0 && s.document.getProject().media->findTake(s.take.takeId))
             {
                 for (auto asset : s.assets)
@@ -606,7 +774,11 @@ void TakeController::tick()
     }
     if (s.current == State::preparing)
     {
-        if (s.audio.clockReady() && s.video && s.video->ready()) s.transition(State::armed);
+        for (unsigned i = 0; i < s.cameraCount; ++i)
+            if (s.cameras[i].capture && (s.cameras[i].capture->failureDetected() || s.cameras[i].capture->finished())) cameraFailed(i);
+        const bool primaryReady = s.audio.clockReady() && s.cameras[0].video && s.cameras[0].video->ready();
+        if (primaryReady && s.cameraCount == 2 && !s.cameras[1].video->ready() && elapsedMs(s.prepareQpc) > 10000) cameraFailed(1);
+        if (primaryReady && (s.cameraCount == 1 || s.cameras[1].video->ready() || s.cameras[1].video->failed())) s.transition(State::armed);
         else if (elapsedMs(s.prepareQpc) > 10000)
         {
             s.failure = "ASIO clock/camera did not become ready within 10 seconds"; s.partial = true;
@@ -617,8 +789,19 @@ void TakeController::tick()
     if (s.current == State::armed || s.current == State::recording || s.current == State::stopping)
     {
         s.audio.pollDeviceEvents();
-        if (s.capture && s.capture->finished()) cameraFailed();
-        if (s.audio.referenceFailed()) cameraFailed();
+        for (unsigned i = 0; i < s.cameraCount; ++i)
+        {
+            auto& c = s.cameras[i];
+            if (c.capture && (c.capture->failureDetected() || c.capture->finished())) cameraFailed(i);
+            if (s.audio.referenceFailed()) c.video->sourceFailed(c.video->availableSamples());
+            if (c.video->failed())
+            {
+                s.partial = true;
+                s.warning = juce::String::fromUTF8(c.disconnected.load()
+                    ? (i ? "캠2 연결이 끊겼습니다. 캠1과 원본 녹음은 계속됩니다." : "캠1 연결이 끊겼습니다. 원본 녹음과 연결된 캠2는 계속됩니다.")
+                    : (i ? "캠2 처리 지연이 발생했습니다. 캠1과 원본 녹음은 계속됩니다." : "캠1 처리 지연이 발생했습니다. 원본 녹음과 연결된 캠2는 계속됩니다."));
+            }
+        }
         if (s.current == State::armed && s.audio.startSample() >= 0) s.transition(State::recording);
         if (s.audio.error() != RecorderAudioEngine::Error::none)
         { s.partial = true; s.transition(State::stopping); }
@@ -649,12 +832,22 @@ std::int64_t TakeController::scheduledStart() const noexcept { return impl->requ
 std::int64_t TakeController::logicalLength() const noexcept { return impl->length; }
 std::int64_t TakeController::placementSample() const noexcept { return impl->placement; }
 const TakeController::PlacementMetadata& TakeController::placementMetadata() const noexcept { return impl->placementMetadata; }
-void TakeController::offer(const VideoSurface& frame) noexcept { impl->offer(frame); }
-void TakeController::cameraFailed() noexcept
+void TakeController::offer(const VideoSurface& frame) noexcept { impl->offer(0, frame); }
+void TakeController::offer(unsigned camera, const VideoSurface& frame) noexcept { impl->offer(camera, frame); }
+void TakeController::cameraFailed(unsigned camera, std::uint64_t generation) noexcept { impl->failCamera(camera, generation); }
+std::shared_ptr<VideoSurfacePool> TakeController::previewPool(unsigned camera) const
+{ return camera < 2 && !(state() == State::preparing && impl->work.valid()) ? impl->cameras[camera].preview : nullptr; }
+bool TakeController::cameraActive(unsigned camera) const noexcept
+{ return camera < 2 && impl->cameras[camera].active.load(); }
+bool TakeController::cameraDisconnected(unsigned camera) const noexcept
+{ return camera < 2 && impl->cameras[camera].disconnected.load(); }
+TakeVideoQueues TakeController::cameraQueues(unsigned camera) const noexcept
 {
-    if (auto* sink = impl->recordSink.load()) sink->sourceFailed(std::max<std::int64_t>(0, impl->audio.acceptedEnd() - impl->requestedN0));
+    if (camera >= 2) return {};
+    auto& c = impl->cameras[camera]; c.offers.fetch_add(1);
+    const auto* sink = c.sink.load(); const auto result = sink ? sink->queues() : TakeVideoQueues{};
+    c.offers.fetch_sub(1); return result;
 }
-std::shared_ptr<VideoSurfacePool> TakeController::previewPool() const { return impl->preview; }
 juce::var TakeController::report() const
 {
     const auto& s = *impl;
@@ -666,7 +859,7 @@ juce::var TakeController::report() const
     jsonSet(v, "mediaFinalizationMs", s.mediaFinalizationMs); jsonSet(v, "stopToDoneMs", s.stopToDoneMs);
     jsonSet(v, "timingDefinition", "QPC wall time: stopToPlacement includes reserved Nstop wait; finalization is placement through media/project/journal flush acknowledgement; mediaFinalization is worker drain only");
     jsonSet(v, "expectedVideoFrames", frameCount(std::max<std::int64_t>(0, s.length), s.deviceSnapshot.sampleRate, {unsigned(s.config.projectFps), 1}));
-    jsonSet(v, "cam2", "disabled; no encoder or file"); jsonSet(v, "projectDirectory", s.config.projectDirectory.getFullPathName());
+    jsonSet(v, "cam2", s.cameras[1].active.load() ? "active; independent encoder and file" : "disabled; no encoder or file"); jsonSet(v, "projectDirectory", s.config.projectDirectory.getFullPathName());
     return v;
 }
 std::int64_t TakeController::frameCount(std::int64_t samples, unsigned Fs, FrameRate fps)
@@ -692,6 +885,6 @@ const char* TakeController::stateName(State s) noexcept
     return "unknown";
 }
 std::unique_ptr<ITakeVideoStream> TakeController::createVideoStream(std::unique_ptr<CameraTimeMapper> mapper,
-                                                                 const juce::String& cameraName)
-{ return std::make_unique<LiveTakeVideo>(std::move(mapper), cameraName); }
+                                                                 const juce::String&)
+{ return std::make_unique<LiveTakeVideo>(std::move(mapper)); }
 }

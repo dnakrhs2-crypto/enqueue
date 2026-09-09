@@ -253,7 +253,7 @@ struct FramePatternSource::State
                 for (int i = 0; i < 4; ++i) { bool free = false; if (owned[i].compare_exchange_strong(free, true)) { slot = i; break; } }
                 if (slot < 0) { telemetry->loss(LossReason::captureDecodeOverflow); continue; }
                 auto& item = slots[slot]; make(static_cast<std::uint32_t>(index + 1), item.bytes); ++generated;
-                auto& stamp = item.stamp; stamp = {}; stamp.frame = index + 1; stamp.generation = 1;
+                auto& stamp = item.stamp; stamp = {}; stamp.frame = index + 1; stamp.generation = config.generation;
                 stamp.pts100ns = VideoCfrScheduler::gridTime(static_cast<std::int64_t>(index), mode.fps);
                 const auto originalQpc = zero + static_cast<std::int64_t>(index) * frequency / config.fps;
                 stamp.deviceTimestamp100ns = static_cast<std::uint64_t>(originalQpc / frequency * 10000000 + originalQpc % frequency * 10000000 / frequency);
