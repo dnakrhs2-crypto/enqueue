@@ -353,3 +353,13 @@ endif()
 # The script consumes generator-resolved paths. Future targets/tests are built via ALL/CTest.
 file(GENERATE OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/recorder-package-$<CONFIG>.json" CONTENT
     "{\n  \"schema_version\": 1,\n  \"exe\": \"$<TARGET_FILE:Recorder>\",\n  \"ffmpeg_root\": \"${RECORDER_FFMPEG_ROOT}\",\n  \"winsparkle_dir\": \"${WINSPARKLE_DIR}\",\n  \"winsparkle_dll\": \"${GOCUE_WINSPARKLE_DLL}\",\n  \"public_key\": \"${RECORDER_UPDATE_PUBLIC_KEY}\"\n}\n")
+
+# Round 26 / spike 5B: dual playback, bounded caches and visible timeline queries.
+target_sources(RecorderTimelineLogic PRIVATE src/ui/TimelineView.scale.cpp)
+target_sources(RecorderTests PRIVATE tests/DualPlaybackTests.cpp tests/SeekGenerationTests.cpp)
+add_test(NAME RecorderDualPlayback COMMAND RecorderTests --suite dual-playback)
+add_test(NAME RecorderSeekGeneration COMMAND RecorderTests --suite seek-generation)
+# Headless component layout/paint uses the unchanged product widgets without HWNDs.
+target_sources(RecorderTests PRIVATE src/ui/TimelineView.cpp src/ui/RecorderTransportBar.cpp
+    src/ui/TrackHeader.cpp src/ui/ClipInspector.cpp src/ui/MarkerPanel.cpp src/ui/RecordView.cpp)
+target_link_libraries(RecorderTests PRIVATE juce::juce_gui_extra)

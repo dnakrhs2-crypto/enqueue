@@ -1,6 +1,7 @@
 #pragma once
 #include "RecorderTransportBar.h"
 #include "TimelineView.logic.h"
+#include "TimelineView.scale.h"
 #include "ClipInspector.h"
 #include "TrackHeader.h"
 #include "MarkerPanel.h"
@@ -23,6 +24,7 @@ public:
     void zoom(double factor);
     void zoomToFit();
     void reveal(Sample);
+    void revealTrack(unsigned row) { viewport.setViewPosition(0, rulerHeight + int(row) * rowHeight); }
     void resized() override;
     void visibilityChanged() override { if (isShowing()) grabKeyboardFocus(); }
     TimelineEditController edits;
@@ -34,6 +36,7 @@ public:
     std::int64_t lastClipPaintQpc = 0;
     Id lastPaintedTake;
     unsigned rowPaintCount = 0;
+    std::size_t lastPaintVisitedClips = 0, lastPaintWaveColumns = 0;
 private:
     struct PeakDisplay { std::shared_ptr<PeakCache> live; std::shared_ptr<const PeakSnapshot> data; unsigned channel = 0; };
     struct Thumb { Sample sample; juce::Image image; };
@@ -55,6 +58,7 @@ private:
         bool collapseSelection = false;
     } rows;
     void rebuildHeaders();
+    void rebuildPreview();
     void scrollBarMoved(juce::ScrollBar*, double) override;
     void updateRange();
     void finish(const juce::Result&, bool playback = true);
@@ -64,9 +68,11 @@ private:
     void setRangeFromInputs();
     bool keyPressed(const juce::KeyPress&, juce::Component*) override;
     void drawWave(juce::Graphics&, const Clip&, juce::Rectangle<float>);
+    juce::Image thumbnailFor(const Id&, Sample, bool priority = false);
+    void drawScrubPreview(juce::Graphics&);
     double xFor(Sample) const;
     Sample sampleFor(double x) const;
-    static constexpr int headerWidth = 210, rulerHeight = 30, rowHeight = 72;
+    static constexpr int headerWidth = TimelineLayout::headerWidth, rulerHeight = TimelineLayout::rulerHeight, rowHeight = TimelineLayout::rowHeight;
     RecorderDocument& document;
     RecorderDocument::Snapshot shown;
     juce::Viewport viewport;
@@ -82,9 +88,16 @@ private:
     ClipInspector inspector;
     MarkerPanel markerPanel;
     std::vector<Track> tracks;
+    TimelineVisibleIndex visibleIndex, previewIndex;
+    std::map<Id, const Take*> takeForAsset;
+    std::map<Id, const MediaAsset*> assetById;
     std::vector<std::unique_ptr<TrackHeader>> headers;
     std::map<Id, PeakDisplay> peaks;
     std::map<Id, std::vector<Thumb>> thumbnails;
+    struct Converted { std::shared_ptr<const ThumbnailFrame> source; juce::Image image; std::uint64_t used; };
+    std::map<const ThumbnailFrame*, Converted> convertedThumbnails;
+    ThumbnailCache progressiveThumbnails;
+    std::uint64_t thumbnailAccess = 0;
     double viewStart = 0, viewSeconds = 20;
     Sample playhead = 0;
     bool locked = false;

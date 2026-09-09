@@ -46,6 +46,8 @@ int runMarkerTests();
 int runEditJournalTests();       // round 19: transactions, worker, checkpoint generations
 int runRetakeRecoveryTests();    // round 19: edit/undo/placement/finalization recovery
 int runCameraSlotTests();        // round 24: product camera slots and partial failures
+int runDualPlaybackTests();      // round 26: shared cursor, gaps and timeline scale
+int runSeekGenerationTests();    // round 26: cancellation, file handoff and cache bounds
 
 namespace
 {
@@ -88,6 +90,8 @@ const Suite suites[] = {
     {"queue-isolation", runQueueIsolationTests},
     {"ripple-reorder-markers", runRippleReorderMarkers},
     {"camera-slots", runCameraSlotTests},
+    {"dual-playback", runDualPlaybackTests},
+    {"seek-generation", runSeekGenerationTests},
 };
 int usage()
 {
