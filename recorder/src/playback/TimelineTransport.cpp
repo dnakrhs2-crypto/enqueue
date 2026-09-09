@@ -24,12 +24,14 @@ void TimelineTransport::send(Command c)
 { if (!commands.push(c)) throw std::runtime_error("Transport command queue full"); }
 void TimelineTransport::seek(Sample sample)
 {
+    if (dubbingLocked) throw std::logic_error("더빙 중에는 탐색할 수 없습니다.");
     if (sample < 0 || sample > end) throw std::out_of_range("Seek outside timeline");
     send({Kind::prepare, requestedGeneration + 1, sample, 0});
     ++requestedGeneration; requestedSample = sample; armedGeneration = 0; stopAfterPrepare = false; scrubPending = false;
 }
 void TimelineTransport::play()
 {
+    if (dubbingLocked) throw std::logic_error("더빙 중에는 재생을 변경할 수 없습니다.");
     if (scrubPending) seek(pendingScrub);
     wantPlay = true; const auto s = snapshot();
     // A Play pressed immediately after Seek must keep that pending target.
@@ -40,15 +42,17 @@ void TimelineTransport::play()
 }
 void TimelineTransport::pause()
 {
+    if (dubbingLocked) throw std::logic_error("더빙 중에는 재생을 변경할 수 없습니다.");
     wantPlay = false;
     // Do not overwrite an unacknowledged Prepare with a Pause for a generation
     // the callback does not own yet. That Prepare already quiesces output.
     if (snapshot().generation == requestedGeneration) send({Kind::pause, requestedGeneration, requestedSample, 0});
 }
-void TimelineTransport::stop() { wantPlay = false; seek(0); stopAfterPrepare = true; }
-void TimelineTransport::goToStart() { wantPlay = false; seek(0); }
+void TimelineTransport::stop() { seek(0); wantPlay = false; stopAfterPrepare = true; }
+void TimelineTransport::goToStart() { seek(0); wantPlay = false; }
 void TimelineTransport::scrub(Sample sample, bool released, std::int64_t now)
 {
+    if (dubbingLocked) throw std::logic_error("더빙 중에는 탐색할 수 없습니다.");
     if (sample < 0 || sample > end) throw std::out_of_range("Scrub outside timeline");
     wantPlay = false; pendingScrub = sample; scrubPending = true;
     if (released || !lastScrubQpc || now - lastScrubQpc >= frequency / 15)
@@ -56,6 +60,7 @@ void TimelineTransport::scrub(Sample sample, bool released, std::int64_t now)
 }
 void TimelineTransport::prepared(std::int64_t output, bool start)
 {
+    if (dubbingLocked) throw std::logic_error("더빙 중에는 출력을 변경할 수 없습니다.");
     if (snapshot().generation != requestedGeneration) throw std::logic_error("Prepare requires callback generation acknowledgement");
     send({start ? Kind::start : stopAfterPrepare ? Kind::stopped : Kind::ready, requestedGeneration, requestedSample, output});
     armedGeneration = requestedGeneration;
@@ -199,6 +204,7 @@ TransportSnapshot TimelineTransport::snapshot() const noexcept
 }
 void TimelineTransport::service(TimelineAudioRenderer& audio, VideoPlaybackEngine& video, IAudioOutput& output, std::int64_t now)
 {
+    if (dubbingLocked) return;
     output.drainTiming();
     try
     {

@@ -5,6 +5,8 @@
 #include "record/ReferenceMixWriter.h"
 #include "record/WavTrackWriter.h"
 #include "sync/IClockMapper.h"
+#include "sync/ClockMapper.h"
+#include "playback/IAudioOutput.h"
 #include <array>
 #include <memory>
 
@@ -77,6 +79,14 @@ public:
     // JUCE's float conversion and uses its matching output callback afterwards.
     void processBlock(const BlockStamp&, const NativeInputView*, unsigned count,
                       const float* const* inputs, float* const* outputs, unsigned outputCount) noexcept;
+    // Dubbing uses the same device/native writer. Only this input adapter subtracts
+    // reported input latency + residual; all later coordinates are already corrected.
+    juce::Result prepareDubbing(TakeConfig, bool recordMicrophones,
+                               std::unique_ptr<IPlaybackBlockProvider> referenceAudio,
+                               std::int64_t Pstart, std::int64_t inputResidualSamples = 0);
+    juce::Result stopDubbingAt(std::int64_t correctedInputSample); // may shorten an auto-stop
+    void setDubbingOutputClient(IAudioOutputClient*); // attach/detach on control owner; locks device/routing
+    const ClockMapper& masterClock() const noexcept;
 private:
     struct Impl;
     std::unique_ptr<Impl> impl;

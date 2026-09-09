@@ -76,6 +76,10 @@ public:
     juce::var report() const; // done/partialFailure only
     static std::int64_t frameCount(std::int64_t samples, unsigned Fs, FrameRate fps);
     static const char* stateName(State) noexcept;
+    // Reuse the production CFR/NVENC/MP4 workers with an explicitly reserved
+    // dubbing clock. The normal take path keeps its original mapper/signatures.
+    static std::unique_ptr<ITakeVideoStream> createVideoStream(std::unique_ptr<CameraTimeMapper>,
+                                                            const juce::String& cameraName);
 private:
     struct Impl;
     std::unique_ptr<Impl> impl;

@@ -92,6 +92,11 @@ public:
     bool isRecordingStructureLocked() const { return recordingStructureLock; }
     juce::Result placeTake(Take, std::vector<MediaAsset>, const std::vector<int>& logicalMicrophoneIndices);
     const Id& lastEditTransaction() const { return lastTransaction; }
+    // Coordinator transaction: register captured originals and replace the complete
+    // dubbing version in one publication/undo step, including while capture is locked.
+    juce::Result placeDubbingTake(Take, std::vector<MediaAsset>, const std::vector<int>& microphoneLanes,
+                                 SampleRange recordingRange, const Id& retakeStack = {});
+    juce::Result useTakeVersion(const Id& stackId, const Id& versionId);
 private:
     void assertOwner() const;
     juce::Result fail(const juce::String&);

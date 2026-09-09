@@ -33,6 +33,9 @@ int recorderEditPropertyIterations = 1000;
 int runAudioImportTests();       // round 16: copied originals, decoded lengths and derived PCM
 int runImportedClipTests();      // round 16: independent import track/document transaction
 int runPlaybackTests();          // round 11: indexed playback / audible transport (no devices)
+int runDubbingPlacementTests();
+int runDubbingFailureTests();
+int runTakeStackTests();
 
 namespace
 {
@@ -63,6 +66,9 @@ const Suite suites[] = {
     {"edit-property", runEditPropertyTests},
     {"audio-import", runAudioImport},
     {"playback-engine", runPlaybackTests},
+    {"dubbing-clock-placement", runDubbingPlacementTests},
+    {"dubbing-failures", runDubbingFailureTests},
+    {"take-stack-edits", runTakeStackTests},
 };
 int usage()
 {

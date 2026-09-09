@@ -1,4 +1,5 @@
 #include "RecorderDocument.h"
+#include "model/TakeStackEdits.h"
 #include <algorithm>
 #include <limits>
 #include <map>
@@ -180,6 +181,7 @@ juce::Result RecorderDocument::publishEdit(RecorderProject next, const juce::Str
 juce::Result RecorderDocument::performEdit(const juce::String& name, const juce::String& key,
     const std::function<ClipEditResult(const RecorderProject&)>& edit, const EditOptions& supplied)
 {
+    if (recordingStructureLock) return fail(juce::String::fromUTF8("녹화 중에는 구조를 편집할 수 없습니다."));
     assertOwner(); if (editing) return juce::Result::fail(juce::String::fromUTF8("편집 작업 중입니다."));
     const juce::ScopedValueSetter<bool> guard(editing, true);
     try
@@ -195,6 +197,30 @@ juce::Result RecorderDocument::performEdit(const juce::String& name, const juce:
         return publishEdit(std::move(next), name, options, true, filtered);
     }
     catch (const std::exception& e) { return fail(juce::String::fromUTF8(e.what())); }
+}
+
+juce::Result RecorderDocument::placeDubbingTake(Take take, std::vector<MediaAsset> assets,
+    const std::vector<int>& microphones, SampleRange range, const Id& retakeStack)
+{
+    assertOwner(); if (editing) return fail(juce::String::fromUTF8("편집 작업 중입니다."));
+    const juce::ScopedValueSetter<bool> guard(editing, true);
+    auto next = *project; auto registry = std::make_shared<MediaRegistry>(*project->media);
+    int last = 0; for (const auto& previous : registry->takes) last = (std::max)(last, previous.number);
+    if (last == (std::numeric_limits<int>::max)()) return fail(juce::String::fromUTF8("테이크 번호 범위를 초과했습니다."));
+    take.number = last + 1; take.mode = TakeMode::dub;
+    if (take.createdAt.isEmpty()) take.createdAt = juce::Time::getCurrentTime().toISO8601(true);
+    if (take.name.isEmpty()) take.name = juce::String::fromUTF8("더빙 ") + juce::String(take.number);
+    registry->assets.insert(registry->assets.end(), assets.begin(), assets.end()); registry->takes.push_back(take); next.media = registry;
+    auto result = TakeStackEdits::addTake(next, take.takeId, range, microphones, retakeStack);
+    if (result.status.failed()) return fail(result.status.getErrorMessage());
+    std::vector<Id> selected;
+    for (const auto& t : result.project.tracks) for (const auto& c : t.clips.items())
+        if (result.project.isActive(c) && (c.assetId == take.cam1AssetId || c.assetId == take.cam2AssetId)) selected.push_back(c.clipId);
+    return publishEdit(std::move(result.project), juce::String::fromUTF8("더빙 테이크 배치"), {}, true, selected);
+}
+juce::Result RecorderDocument::useTakeVersion(const Id& stack, const Id& version)
+{
+    return performEdit(juce::String::fromUTF8("이 테이크 사용"), {}, [&](const RecorderProject& p) { return TakeStackEdits::useVersion(p, stack, version); });
 }
 juce::Result RecorderDocument::undo()
 {

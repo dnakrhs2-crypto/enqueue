@@ -77,6 +77,9 @@ private:
 class LiveTakeVideo final : public ITakeVideoStream
 {
 public:
+    LiveTakeVideo() = default;
+    LiveTakeVideo(std::unique_ptr<CameraTimeMapper> timeMapper, juce::String cameraName)
+        : mapper(std::move(timeMapper)), streamName(std::move(cameraName)) {}
     ~LiveTakeVideo() override
     {
         sourceFailure = 0; ending = true; audioEnded = true; aborting = true;
@@ -95,7 +98,8 @@ public:
     }
     void startAt(ClockMapping clock, std::int64_t n0, unsigned rate, std::function<std::int64_t()> length) override
     {
-        mapper = std::make_unique<TakeCameraMapper>(clock, n0, rate); Fs = rate; acceptedLength = std::move(length);
+        if (!mapper) mapper = std::make_unique<TakeCameraMapper>(clock, n0, rate);
+        Fs = rate; acceptedLength = std::move(length);
         begun.store(true, std::memory_order_release);
     }
     void offer(const VideoSurface& frame) noexcept override
@@ -129,7 +133,7 @@ public:
         jsonSet(v, "inspection", inspection); jsonSet(v, "error", encoderError); jsonSet(v, "muxError", muxError);
         jsonSet(v, "surfaceOverflow", jsonInt(overflow.load())); jsonSet(v, "failed", failed()); jsonSet(v, "availableSamples", jsonInt(availableSamples()));
         jsonSet(v, "clockMapping", "Round-02 MF PTS cadence + first callback QPC mapped by replaceable IClockMapper OLS snapshot; uncalibrated");
-        jsonSet(v, "thumbnail", thumbnail.load() ? "index/first-thumbnail.bmp" : "unavailable"); return v;
+        jsonSet(v, "thumbnail", thumbnail.load() ? thumbnailPath() : juce::String("unavailable")); return v;
     }
 private:
     juce::File finalFile;
@@ -138,6 +142,7 @@ private:
     std::unique_ptr<NvencFramePool> pool;
     std::unique_ptr<PacketQueue> videoPackets, audioPackets;
     std::unique_ptr<CameraTimeMapper> mapper;
+    juce::String streamName = "cam1";
     std::function<std::int64_t()> acceptedLength;
     unsigned Fs = 48000;
     std::atomic<bool> gotFrame{false}, begun{false}, ending{false}, videoEnded{false}, audioEnded{false}, failedFlag{false}, muxFailed{false}, aborting{false}, thumbnail{false};
@@ -146,6 +151,8 @@ private:
     std::thread encoderWorker, muxWorker;
     juce::var encoderReport, muxReport, cfrReport, inspection;
     std::string encoderError, muxError;
+    juce::String thumbnailPath() const
+    { return streamName == "cam1" ? juce::String("index/first-thumbnail.bmp") : "index/" + streamName + "-first-thumbnail.bmp"; }
     void saveThumbnail(const AVFrame& frame)
     {
         // Small, rebuildable 160x90 luminance BMP; never scan media on stop.
@@ -160,7 +167,7 @@ private:
             const auto value = std::uint8_t(std::clamp((luma - 16) * 255 / 219, 0, 255));
             auto* p = data.data() + 54 + (height - 1 - y) * stride + x * 3; p[0] = p[1] = p[2] = value;
         }
-        const auto file = finalFile.getParentDirectory().getChildFile("index/first-thumbnail.bmp");
+        const auto file = finalFile.getParentDirectory().getChildFile(thumbnailPath());
         DurableFile output; requireResult(output.open(file, DurableFile::OpenMode::createNew)); requireResult(output.write(data.data(), data.size()));
         requireResult(output.flushData()); requireResult(output.close()); thumbnail = true;
     }
@@ -201,7 +208,7 @@ private:
             std::promise<void> muxReady; auto future = muxReady.get_future();
             muxWorker = std::thread([this, &audio, &encoder, ready = std::move(muxReady)]() mutable { mux(encoder->context(), audio, std::move(ready)); });
             future.get(); prepared.set_value(); signalled = true;
-            const auto traceFile = finalFile.getParentDirectory().getChildFile("index/cam1-source-ids.csv");
+            const auto traceFile = finalFile.getParentDirectory().getChildFile("index/" + streamName + "-source-ids.csv");
             std::ofstream trace(std::filesystem::path(traceFile.getFullPathName().toWideCharPointer()), std::ios::binary);
             trace.exceptions(std::ios::badbit | std::ios::failbit); trace << "pts,sourceId,mfPts100ns,callbackQpc,mapped100ns\n";
             const PacketSink sink = [this](const AVPacket& p)
@@ -665,4 +672,7 @@ const char* TakeController::stateName(State s) noexcept
     }
     return "unknown";
 }
+std::unique_ptr<ITakeVideoStream> TakeController::createVideoStream(std::unique_ptr<CameraTimeMapper> mapper,
+                                                                 const juce::String& cameraName)
+{ return std::make_unique<LiveTakeVideo>(std::move(mapper), cameraName); }
 }

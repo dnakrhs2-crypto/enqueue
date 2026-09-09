@@ -247,3 +247,13 @@ target_link_libraries(RecorderCore PUBLIC RecorderModel)
 target_sources(RecorderProbe PRIVATE tools/PlaybackProbe.cpp)
 target_sources(RecorderTests PRIVATE tests/PlaybackTests.cpp)
 add_test(NAME RecorderPlaybackEngine COMMAND RecorderTests --suite playback-engine)
+
+# Rounds 17+18: append-only integration. One ASIO device, independent UI panels.
+target_sources(RecorderModel PRIVATE src/model/TakeStackEdits.cpp)
+target_sources(RecorderImport PRIVATE src/record/DubbingController.cpp)
+target_sources(Recorder PRIVATE src/ui/DubbingPanel.cpp src/ui/TakeListPanel.cpp)
+target_sources(RecorderProbe PRIVATE tools/DubbingProbe.cpp)
+target_sources(RecorderTests PRIVATE tests/DubbingPlacementTests.cpp tests/DubbingFailureTests.cpp tests/TakeStackTests.cpp)
+add_test(NAME RecorderDubbingPlacement COMMAND RecorderTests --suite dubbing-clock-placement)
+add_test(NAME RecorderDubbingFailures COMMAND RecorderTests --suite dubbing-failures)
+add_test(NAME RecorderTakeStackEdits COMMAND RecorderTests --suite take-stack-edits)

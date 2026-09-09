@@ -37,6 +37,10 @@ public:
     TransportSnapshot snapshot() const noexcept;
     std::uint64_t generation() const noexcept { return requestedGeneration; } // control owner
     juce::Result status() const;
+    // Call only after normal output is detached. Dubbing shares the Recorder
+    // ASIO device; while locked no seek/play/pause/output preparation can mutate it.
+    void setDubbingLocked(bool locked) noexcept { dubbingLocked = locked; }
+    bool isDubbingLocked() const noexcept { return dubbingLocked; }
     static Sample audibleCursor(const TransportSnapshot&, std::uint32_t Fs, std::int64_t qpcFrequency,
                                 std::int64_t nowQpc, std::int64_t displayLeadTicks = 0) noexcept;
 private:
@@ -69,5 +73,6 @@ private:
     std::int64_t lastScrubQpc = 0;
     bool scrubPending = false;
     juce::String error; // control owner only
+    bool dubbingLocked = false;
 };
 }
