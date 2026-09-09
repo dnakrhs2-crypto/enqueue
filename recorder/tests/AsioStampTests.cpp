@@ -135,13 +135,4 @@ int runAsioStampTests()
     std::cout << "AsioStampTests: " << passed << " passed, " << failed << " failed; no device opened\n";
     return failed ? 1 : 0;
 }
-int runNativePcmTests();
-int recorderCaptureTestMain(int argc, char** argv);
-int main(int argc, char** argv)
-{
-    if (argc == 3 && std::string(argv[1]) == "--suite" && std::string(argv[2]) == "asio-native-pcm")
-    { const int a = runAsioStampTests(), b = runNativePcmTests(); return a | b; }
-    if (argc == 1)
-    { const int a = recorderCaptureTestMain(argc, argv), b = runAsioStampTests(), c = runNativePcmTests(); return a | b | c; }
-    return recorderCaptureTestMain(argc, argv);
-}
+// Suite routing lives in tests/TestMain.cpp (registry); this file only provides runAsioStampTests().

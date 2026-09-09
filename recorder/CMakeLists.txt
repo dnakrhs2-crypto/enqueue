@@ -95,8 +95,7 @@ message(STATUS "Recorder: pinned LGPL shared FFmpeg ${_recorder_ffmpeg_version},
 # Round 06 / spike 4A: WAV chunks and durable storage. Keep this block append-only.
 target_sources(RecorderCore PRIVATE src/storage/DurableFile.cpp src/storage/RecordingJournal.cpp src/record/WavTrackWriter.cpp)
 target_sources(RecorderTests PRIVATE tests/JournalTests.cpp tests/WavChunkTests.cpp)
-# Preserve the round-01 runner file; the new storage test file supplies suite routing.
-set_property(SOURCE tests/TestMain.cpp APPEND PROPERTY COMPILE_DEFINITIONS main=recorderRound01TestMain)
+# Suite routing: tests/TestMain.cpp registry (no per-round main renames).
 add_test(NAME RecorderJournalDurable COMMAND RecorderTests --suite journal-durable)
 add_executable(RecorderDurabilityProbe tools/DurabilityProbe.cpp)
 target_link_libraries(RecorderDurabilityProbe PRIVATE RecorderCore)

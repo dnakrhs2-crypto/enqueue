@@ -174,27 +174,4 @@ int runJournalTests()
     return failed ? 1 : 0;
 }
 
-int runWavChunkTests();
-int recorderRound01TestMain(int, char**);
-// CMake renames only the existing TestMain.cpp entry point. No shared runner edit.
-int main(int argc, char** argv)
-{
-    try
-    {
-        if (argc == 1)
-        {
-            const auto journal = runJournalTests(); const auto wav = runWavChunkTests();
-            const auto capture = recorderRound01TestMain(argc, argv); return journal || wav || capture ? 1 : 0;
-        }
-        if (argc == 3 && std::string(argv[1]) == "--suite")
-        {
-            const std::string suite(argv[2]);
-            if (suite == "journal-durable") { const auto journal = runJournalTests(); const auto wav = runWavChunkTests(); return journal || wav ? 1 : 0; }
-            if (suite == "wav-chunks") return runWavChunkTests();
-            // Preserve suites added to the original runner by parallel rounds.
-            return recorderRound01TestMain(argc, argv);
-        }
-        std::cerr << "RecorderTests [--suite capture-contract|journal-durable|wav-chunks]\n"; return 2;
-    }
-    catch (const std::exception& e) { std::cerr << "Unhandled storage test exception: " << e.what() << '\n'; return 1; }
-}
+// Suite routing lives in tests/TestMain.cpp (registry); this file only provides runJournalTests().

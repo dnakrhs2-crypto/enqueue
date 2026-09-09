@@ -24,7 +24,5 @@ set_property(TARGET RecorderAudioDevices PROPERTY MSVC_RUNTIME_LIBRARY "MultiThr
 target_compile_options(RecorderAudioDevices PRIVATE /utf-8 /W4 /permissive- /EHsc)
 target_sources(RecorderProbe PRIVATE "${CMAKE_CURRENT_LIST_DIR}/AsioProbe.cpp")
 target_link_libraries(RecorderCore PUBLIC RecorderAudioDevices)
-# Preserve round 01's TestMain.cpp byte-for-byte. The new entrypoint delegates
-# capture-contract to that existing main and adds asio-native-pcm/the default suite.
-set_source_files_properties(tests/TestMain.cpp PROPERTIES COMPILE_DEFINITIONS "main=recorderCaptureTestMain")
+# Suite routing: tests/TestMain.cpp registry (no per-round main renames).
 add_test(NAME RecorderAsioNativePcm COMMAND RecorderTests --suite asio-native-pcm)
