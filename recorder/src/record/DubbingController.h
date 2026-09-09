@@ -18,6 +18,7 @@ public:
         CameraMode mode;
         CalibrationProfile calibration;
         std::uint64_t generation = 0;
+        std::shared_ptr<CaptureTelemetry> telemetry; // optional external capture notifications
         std::string exposure = "uncontrolled";
     };
     struct Config

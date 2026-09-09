@@ -50,6 +50,10 @@ public:
     // owner must call reset() for MF discontinuity/type-change notifications that
     // are not represented by generation/PTS. All consumers must check BOTH epochs.
     bool observe(const FrameStamp&);
+    // Explicit recoverable notification, on the next valid frame. A PTS-only
+    // source gets a provisional callback anchor while its lower-envelope fit
+    // warms again; this remains estimated timing, not an exposure measurement.
+    bool reanchor(const FrameStamp&);
     void reset(CameraEpochReason = CameraEpochReason::explicitDiscontinuity);
     void setResidualLatency(std::int64_t latency100ns); // worker; new epoch
     std::optional<CameraClockSnapshot> snapshot() const noexcept { return published.read(); }
@@ -74,39 +78,47 @@ private:
 // after clock warmup. It is NEVER the first callback/first retained frame. The
 // camera worker calls observe(stamp) before submitting that frame to this adapter;
 // map() only reads snapshots, so already observed preroll can be mapped again.
-// Epoch changes throw so the caller stops the take/marks the camera gap. Negative
+// Unannounced epoch changes throw; explicit reanchors accept a new camera epoch
+// in the same device generation, retaining N0 and the ASIO epoch. Negative
 // preroll times remain negative; the owner retains/selects preroll before pushing
 // nonnegative CfrInput into VideoCfrScheduler. now() never applies Lcam.
 class CameraSampleTimeMapper final : public CameraTimeMapper
 {
 public:
     CameraSampleTimeMapper(CameraClockMapper&, std::int64_t originSample, std::uint32_t sampleRate,
-                          std::uint64_t masterEpoch, std::uint64_t cameraEpoch);
+                          std::uint64_t masterEpoch, CameraClockSnapshot preparedCamera);
     std::int64_t map(const FrameStamp&) override;
     std::int64_t now(std::int64_t qpc) const override;
+    void reanchor() noexcept override { reanchorPending = true; }
 private:
     CameraClockMapper& camera;
     std::int64_t origin;
     std::uint32_t rate;
     std::uint64_t audioEpoch, videoEpoch;
+    std::uint64_t generation;
+    bool reanchorPending = true, mapped = false;
+    std::int64_t lastTime = 0, timeOffset = 0;
 };
 // Dubbing uses one prepared ASIO/QPC model to anchor the first camera frame to
 // reserved O0, then absolute MF PTS deltas. Fit epoch churn when output starts
 // cannot invalidate every video frame. The owner still stops on native ASIO
-// discontinuity; generation/PTS/QPC discontinuity here terminates this lane.
+// discontinuity. Explicit source notifications reanchor once; generation changes
+// and unannounced invalid timestamps still terminate this lane.
 class AnchoredCameraTimeMapper final : public CameraTimeMapper
 {
 public:
     AnchoredCameraTimeMapper(ClockSnapshot, CameraClockSnapshot, std::int64_t originSample, std::uint32_t sampleRate);
     std::int64_t map(const FrameStamp&) override;
     std::int64_t now(std::int64_t qpc) const override;
+    void reanchor() noexcept override { anchored = false; reanchorPending = true; }
 private:
     ClockSnapshot master;
     CameraClockSnapshot preparedCamera;
     std::int64_t origin, originQpc = 0, firstPts = 0, firstTime = 0;
     std::uint32_t rate;
     FrameStamp previous;
-    bool anchored = false;
+    bool anchored = false, reanchorPending = false, hasMappedFrame = false;
+    std::int64_t lastTime = 0;
 };
 // Absolute rational rescale, floor rounding; never accumulate rounded periods.
 std::optional<std::int64_t> nativeFrameToSample(std::int64_t frame, Rational fps, std::uint32_t sampleRate) noexcept;

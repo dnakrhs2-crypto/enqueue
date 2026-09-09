@@ -34,7 +34,7 @@ NvencFramePool::NvencFramePool(int c, int w, int h) : limit(c), width(w), height
         ffCheck(av_frame_get_buffer(f.get(), 32), "Allocate independent encode surface");
     }
 }
-bool NvencFramePool::copy(const VideoSurface& source) noexcept
+bool NvencFramePool::copy(const VideoSurface& source, std::uint64_t clockRevision) noexcept
 {
     if (source.width != static_cast<unsigned>(width) || source.height != static_cast<unsigned>(height)
         || source.nv12.size() != static_cast<size_t>(width) * height * 3 / 2) return false;
@@ -52,6 +52,7 @@ bool NvencFramePool::copy(const VideoSurface& source) noexcept
                 std::memcpy(f.data[p] + static_cast<size_t>(y) * f.linesize[p], src + static_cast<size_t>(y) * width, width);
         }
         stamps[static_cast<size_t>(i)] = source.stamp;
+        clockRevisions[static_cast<size_t>(i)] = clockRevision;
         const auto count = occupancy.fetch_add(1) + 1;
         if (count > maximum.load()) maximum.store(count);
         if (queue.push(i)) return true;

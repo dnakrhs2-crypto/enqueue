@@ -71,7 +71,7 @@ public:
     void configureClock(const ClockMapper& master, std::int64_t latency) override
     { masterClock = &master; cameraLatency = latency; }
     void discontinuity() noexcept override
-    { clockReset = true; sourceFailed(available.load()); }
+    { clockRevisions.fetch_add(1); }
     ~LiveTakeVideo() override
     {
         sourceFailure = 0; ending = true; audioEnded = true; aborting = true;
@@ -98,7 +98,7 @@ public:
             const auto camera = cameraClock->snapshot();
             if (!master || !master->valid || !camera || !camera->valid)
                 throw std::runtime_error("Recording camera/master clock is not ready");
-            mapper = std::make_unique<CameraSampleTimeMapper>(*cameraClock, n0, rate, master->epoch, camera->epoch);
+            mapper = std::make_unique<CameraSampleTimeMapper>(*cameraClock, n0, rate, master->epoch, *camera);
             masterEpoch = master->epoch;
         }
         else if (masterClock) if (const auto master = masterClock->snapshot()) masterEpoch = master->epoch;
@@ -108,7 +108,7 @@ public:
     void offer(const VideoSurface& frame) noexcept override
     {
         if (ending.load() || videoEnded.load() || sourceFailure.load() >= 0) return;
-        if (pool && !pool->copy(frame)) { overflow.fetch_add(1); sourceFailed(available.load()); }
+        if (pool && !pool->copy(frame, clockRevisions.load())) { overflow.fetch_add(1); sourceFailed(available.load()); }
         else gotFrame = true;
     }
     void audioPacket(const AVPacket& p) override
@@ -141,9 +141,11 @@ public:
         auto v = jsonObject(); jsonSet(v, "encoder", encoderReport); jsonSet(v, "mux", muxReport); jsonSet(v, "cfr", cfrReport);
         jsonSet(v, "inspection", inspection); jsonSet(v, "error", encoderError); jsonSet(v, "muxError", muxError);
         jsonSet(v, "surfaceOverflow", jsonInt(overflow.load())); jsonSet(v, "failed", failed()); jsonSet(v, "availableSamples", jsonInt(availableSamples()));
-        jsonSet(v, "clockMapping", "Independent CameraClockMapper; live robust ASIO master; Nv=S(q-Lcam), fixed N0/O0 and epochs");
+        jsonSet(v, "clockMapping", "Independent CameraClockMapper; Nv=S(q-Lcam), fixed N0/O0; recoverable camera reanchors; generation/native ASIO failures remain fatal");
         jsonSet(v, "Lcam100ns", cameraLatency); jsonSet(v, "masterEpoch", jsonInt(masterEpoch));
-        jsonSet(v, "explicitDiscontinuity", clockReset.load());
+        jsonSet(v, "explicitDiscontinuity", clockRevisions.load() != 0);
+        jsonSet(v, "reanchorRequests", jsonInt(clockRevisions.load()));
+        jsonSet(v, "reanchors", jsonInt(reanchors));
         const auto clock = cameraClock ? cameraClock->snapshot() : std::nullopt;
         if (clock) { jsonSet(v, "cameraEpoch", jsonInt(clock->epoch)); jsonSet(v, "cameraEpochReason", cameraEpochReasonName(clock->reason)); jsonSet(v, "deviceGeneration", jsonInt(clock->generation)); jsonSet(v, "cameraClockSource", cameraClockSourceName(clock->quality.source)); }
         jsonSet(v, "surfaceCapacity", pool ? pool->capacity() : 0); jsonSet(v, "surfaceHighWater", pool ? int(pool->highWater()) : 0);
@@ -165,7 +167,8 @@ private:
     const ClockMapper* masterClock = nullptr;
     std::int64_t cameraLatency = 0;
     std::uint64_t masterEpoch = 0;
-    std::atomic<bool> clockReset{false};
+    std::atomic<std::uint64_t> clockRevisions{0};
+    std::uint64_t observedClockRevision = 0, reanchors = 0; // encoder worker only
     ClockMapper timestampReference{qpcFrequency()}; // Readiness only for externally mapped dubbing streams.
     std::unique_ptr<CameraClockMapper> cameraClock;
     std::atomic<bool> clockReady{false};
@@ -241,6 +244,7 @@ private:
         VideoCfrScheduler scheduler(nativeRate, {unsigned(profile.fps), 1});
         std::unique_ptr<NvencEncoder> encoder;
         int preroll = -1;
+        unsigned invalidReanchorFrames = 0;
         try
         {
             encoder = std::make_unique<NvencEncoder>(profile); encoder->open();
@@ -255,11 +259,37 @@ private:
                 if (muxFailed.load() || !videoPackets->push(p)) throw std::runtime_error("Take video packet queue/mux failure");
                 available.store(rescaleRound(p.pts + 1, Fs, unsigned(profile.fps)));
             };
+            const auto observe = [&](int slot, bool mapping)
+            {
+                const auto& stamp = pool->stamp(slot);
+                const auto revision = pool->clockRevision(slot);
+                if (!stamp.frame || stamp.callback <= 0)
+                {
+                    // A pending notification waits for a valid image, with a
+                    // bounded grace period (one native second of bad frames).
+                    if (revision == observedClockRevision || ++invalidReanchorFrames >=
+                        (nativeRate.numerator + nativeRate.denominator - 1) / nativeRate.denominator)
+                        throw std::runtime_error("Camera source persistently supplied invalid stamps");
+                    return false;
+                }
+                invalidReanchorFrames = 0;
+                if (revision != observedClockRevision)
+                {
+                    if (!cameraClock->reanchor(stamp)) return false;
+                    if (mapping) mapper->reanchor();
+                    observedClockRevision = revision; ++reanchors;
+                }
+                else cameraClock->observe(stamp);
+                return true;
+            };
             const auto accept = [&](int slot)
             {
-                cameraClock->observe(pool->stamp(slot));
                 std::int64_t time;
-                try { time = mapper->map(pool->stamp(slot)); }
+                try
+                {
+                    if (!observe(slot, true)) { pool->release(slot); return; }
+                    time = mapper->map(pool->stamp(slot));
+                }
                 catch (...) { pool->release(slot); throw; }
                 if (time < 0)
                 { if (preroll >= 0) pool->release(preroll); preroll = slot; return; }
@@ -273,14 +303,14 @@ private:
             for (;;)
             {
                 if (aborting.load()) break;
-                if (clockReset.load()) { cameraClock->reset(); break; }
                 if (muxFailed.load()) throw std::runtime_error("Take mux failed");
                 if (!begun.load(std::memory_order_acquire))
                 {
                     int slot = -1;
                     while (pool->pop(slot))
                     {
-                        cameraClock->observe(pool->stamp(slot));
+                        try { if (!observe(slot, false)) { pool->release(slot); continue; } }
+                        catch (...) { pool->release(slot); throw; }
                         const auto clock = cameraClock->snapshot(); clockReady = clock && clock->valid;
                         if (preroll >= 0) pool->release(preroll); preroll = slot;
                     }
@@ -428,7 +458,8 @@ struct TakeController::Impl
             else
             {
                 ++c.staleOffers;
-                if (frame.stamp.generation > generation) sink->discontinuity();
+                if (frame.stamp.generation > generation)
+                { c.disconnected = true; sink->sourceFailed(sink->availableSamples()); }
             }
         }
         c.offers.fetch_sub(1);
@@ -538,6 +569,7 @@ struct TakeController::Impl
             for (unsigned i = 0; i < cameraCount; ++i)
             {
                 auto& c = cameras[i];
+                c.telemetry = i ? config.camera2.telemetry : config.cameraTelemetry;
                 if (!config.externalCapture) c.preview = std::make_shared<VideoSurfacePool>(1920, 1080);
                 if (!synthetic(i) && !config.externalCapture)
                 {

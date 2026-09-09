@@ -188,6 +188,22 @@ int runCameraSlotTests()
         require(f.lanes[0]->offers == 1 && f.lanes[1]->offers == 1, "Correct generation routed to each camera");
         f.stopAt(n0 + 1601); f.finish(); require(std::int64_t(f.take.report()["cameras"][1]["staleOffers"]) == 1, "Discard is counted");
     });
+    suite.test("New cam2 generation stays a partial failure even after reanchor notifications", []
+    {
+        Fixture f; const auto n0 = f.begin(); for (int i = 0; i < 10; ++i) f.feed();
+        VideoSurface frame; frame.stamp.generation = 23;
+        f.take.cameraDiscontinuity(1, 22); f.take.offer(1, frame);
+        const auto available = f.lanes[1]->available.load();
+        require(f.lanes[1]->failed && f.take.cameraDisconnected(1), "A new incarnation must not resume this take lane");
+        f.take.cameraDiscontinuity(1, 22); frame.stamp.generation = 22; f.take.offer(1, frame);
+        f.stopAt(n0 + 8001); f.finish();
+        const auto& p = f.document.getProject(); const auto& take = p.media->takes.front();
+        const auto* cam2 = p.media->findAsset(take.cam2AssetId);
+        require(f.take.state() == TakeController::State::partialFailure && cam2->gaps.size() == 1
+                && cam2->gaps.front().start == available, "Reconnect retains the failed tail boundary");
+        require(p.media->findAsset(take.cam1AssetId)->gaps.empty()
+                && p.media->findAsset(take.microphoneAssetIds.front())->gaps.empty(), "Cam1 and original WAV stay complete");
+    });
     suite.test("Slow encoder cannot borrow the other camera's surfaces or either preview mailbox", []
     {
         VideoSurfacePool a(320, 192), b(320, 192); NvencFramePool encA(4, 320, 192), encB(4, 320, 192);

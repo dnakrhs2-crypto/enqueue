@@ -422,3 +422,7 @@ target_sources(RecorderProbe PRIVATE tools/HardeningProbe.cpp)
 target_link_libraries(RecorderTests PRIVATE RecorderHardeningFixtures)
 target_link_libraries(RecorderProbe PRIVATE RecorderHardeningFixtures)
 add_test(NAME RecorderHardening COMMAND RecorderTests --suite hardening)
+
+# Source discontinuity recovery: same shared runner, no hardware required.
+target_sources(RecorderTests PRIVATE tests/SourceReanchorTests.cpp)
+add_test(NAME RecorderSourceReanchor COMMAND RecorderTests --suite source-reanchor)

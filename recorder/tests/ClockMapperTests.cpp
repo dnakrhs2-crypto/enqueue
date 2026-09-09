@@ -255,7 +255,7 @@ int runClockMapperTests()
     {
         ClockMapper master(hz); const auto audio = ready(master); CameraClockMapper camera(master, hz, {60, 1}, 100000);
         auto f = frame(600); camera.observe(f);
-        CameraSampleTimeMapper adapter(camera, s0 + 480000, 48000, audio.epoch, camera.snapshot()->epoch);
+        CameraSampleTimeMapper adapter(camera, s0 + 480000, 48000, audio.epoch, *camera.snapshot());
         require(adapter.map(f) == -100000, "negative preroll was clamped or first-frame zeroed");
         require(adapter.now(f.callback) == 300000, "Lcam incorrectly shifted CFR deadline");
         f = frame(601); camera.observe(f); require(adapter.map(f) == 66666, "mapped CFR sample time wrong");

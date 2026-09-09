@@ -36,7 +36,9 @@ public:
     virtual TakeVideoQueues queues() const noexcept { return {}; }
     // Preparation worker, before prepare/start. The audio owner outlives the stream.
     virtual void configureClock(const ClockMapper&, std::int64_t /* Lcam100ns */) {}
-    virtual void discontinuity() noexcept { sourceFailed(availableSamples()); }
+    // Decode producer: request a clock reanchor at the next offered frame.
+    // Device removal/generation changes and persistent failures use sourceFailed.
+    virtual void discontinuity() noexcept {}
     virtual bool storageFailed() const noexcept { return false; }
     virtual bool processingDelayed() const noexcept { return false; }
 };
@@ -53,6 +55,7 @@ public:
             std::string symbolicLink;
             CameraMode mode;
             std::uint64_t generation = 0;
+            std::shared_ptr<CaptureTelemetry> telemetry; // optional external capture notifications
         };
         juce::File projectDirectory;
         juce::Uuid takeId;
@@ -62,6 +65,7 @@ public:
         int projectFps = 60;
         bool externalCapture = false; // app keeps its warmed live capture across takes/tabs
         std::uint64_t cameraGeneration = 0;
+        std::shared_ptr<CaptureTelemetry> cameraTelemetry; // optional external capture notifications
         Camera2 camera2; // immutable for this take; disabled/missing means no asset or stream
         std::array<std::optional<CalibrationProfile>, 2> calibration;
         std::array<std::string, 2> exposure{"uncontrolled", "uncontrolled"};

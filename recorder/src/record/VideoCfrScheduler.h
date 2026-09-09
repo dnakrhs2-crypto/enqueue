@@ -12,6 +12,9 @@ public:
     virtual ~CameraTimeMapper() = default;
     virtual std::int64_t map(const FrameStamp&) = 0; // take-relative 100 ns
     virtual std::int64_t now(std::int64_t qpc) const = 0;
+    // CFR worker only, immediately before mapping the next valid frame. Keep
+    // the reserved take origin and output grid; only the source clock restarts.
+    virtual void reanchor() noexcept {}
 };
 class MfPtsTimeMapper final : public CameraTimeMapper
 {

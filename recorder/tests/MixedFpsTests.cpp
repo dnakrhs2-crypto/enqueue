@@ -46,7 +46,7 @@ int runMixedFpsTests()
         CameraClockMapper a(master,10000000,{60,1},100000), b(master,10000000,{30,1},300000);
         const auto first=stamp(60,60), second=stamp(30,30); a.observe(first); b.observe(second);
         const auto epoch=master.snapshot()->epoch;
-        CameraSampleTimeMapper ma(a,24000,48000,epoch,a.snapshot()->epoch), mb(b,24000,48000,epoch,b.snapshot()->epoch);
+        CameraSampleTimeMapper ma(a,24000,48000,epoch,*a.snapshot()), mb(b,24000,48000,epoch,*b.snapshot());
         require(ma.map(first)==4900000 && mb.map(second)==4700000, "Separate 10/30ms delays subtract once from capture time");
         require(ma.now(20000000)==5000000 && mb.now(20000000)==5000000, "Lcam never shifts deadlines/N0");
         const auto before=a.snapshot()->epoch;

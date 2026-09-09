@@ -93,6 +93,7 @@ public:
     { return read([&](AnchoredCameraTimeMapper& mapper) { return mapper.map(stamp); }); }
     std::int64_t now(std::int64_t qpc) const override
     { return read([&](const AnchoredCameraTimeMapper& mapper) { return mapper.now(qpc); }); }
+    void reanchor() noexcept override { reanchorPending = true; }
 private:
     template<class F> Sample read(F f) const
     {
@@ -101,6 +102,7 @@ private:
             try
             {
                 if (!mapper) mapper = std::make_unique<AnchoredCameraTimeMapper>(origin.master, origin.camera, origin.sample.load(), rate);
+                if (reanchorPending) { mapper->reanchor(); reanchorPending = false; }
                 return f(*mapper);
             }
             catch (...)
@@ -112,6 +114,7 @@ private:
     }
     CameraOrigin& origin; unsigned rate;
     mutable std::unique_ptr<AnchoredCameraTimeMapper> mapper;
+    mutable bool reanchorPending = false;
 };
 }
 struct DubbingController::Impl final : IAudioOutputClient
@@ -219,7 +222,7 @@ struct DubbingController::Impl final : IAudioOutputClient
             {
                 ++staleOffers[i];
                 if (frame.stamp.generation > generation && !cameraFailures[i].exchange(true))
-                { cameraPartial = true; cameras[i]->reset(CameraEpochReason::generationChange); video->discontinuity(); }
+                { cameraPartial = true; cameras[i]->reset(CameraEpochReason::generationChange); video->sourceFailed(video->availableSamples()); }
                 inFlight[i].fetch_sub(1); return;
             }
             if (video->failed()) { inFlight[i].fetch_sub(1); return; }
@@ -230,8 +233,8 @@ struct DubbingController::Impl final : IAudioOutputClient
                     const auto d = captureStats[i]->count(LossReason::sourceDiscontinuity), t = captureStats[i]->count(LossReason::sourceTypeChanged);
                     if (d != discontinuities[i] || t != typeChanges[i])
                     {
-                        cameras[i]->reset();
-                        if (scheduled.load()) { cameraFailures[i] = true; cameraPartial = true; video->discontinuity(); }
+                        cameras[i]->reanchor(frame.stamp);
+                        video->discontinuity();
                     }
                     discontinuities[i] = d; typeChanges[i] = t;
                 }
@@ -536,7 +539,7 @@ juce::Result DubbingController::prepare(Config c)
             s.previews[i] = s.config.externalCapture ? nullptr : std::make_shared<VideoSurfacePool>(1920, 1080);
             s.receivedFrames[i] = 0; s.lastCaptureSample[i] = 0;
             s.generations[i] = cam.generation; s.staleOffers[i] = 0; s.cameraFailures[i] = false;
-            s.discontinuities[i] = s.typeChanges[i] = 0; s.captureStats[i].reset();
+            s.discontinuities[i] = s.typeChanges[i] = 0; s.captureStats[i] = cam.telemetry;
             s.lastMaster[i].reset(); s.lastCamera[i].reset();
             MediaAsset a; a.kind = AssetKind::camera; a.contentIdentity = a.assetId;
             a.relativePath = "media/takes/" + s.config.takeId.toDashedString() + "/cam" + juce::String(i + 1) + ".recording.mp4";

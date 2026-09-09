@@ -63,6 +63,23 @@ void CameraClockMapper::beginEpoch(CameraEpochReason r, const FrameStamp& s)
     published.publish(state);
 }
 void CameraClockMapper::reset(CameraEpochReason reason) { beginEpoch(reason, previous); }
+bool CameraClockMapper::reanchor(const FrameStamp& stamp)
+{
+    if (!stamp.frame || stamp.callback <= 0) return false;
+    reset();
+    if (!observe(stamp)) return false;
+    if (!state.valid)
+    {
+        // The old PTS fit belongs to the previous segment. Do not extrapolate
+        // across a reset or wait 250ms before accepting this segment's images.
+        state.ptsOrigin100ns = stamp.pts100ns; state.qpcOrigin = stamp.callback;
+        state.qpcOffsetAtOrigin = 0;
+        state.qpcTicksPer100ns = double(state.qpcFrequency) / 10000000;
+        state.valid = true; state.quality.warmingUp = true;
+        published.publish(state);
+    }
+    return true;
+}
 void CameraClockMapper::setResidualLatency(std::int64_t latency)
 {
     if (std::abs(static_cast<double>(latency)) > 100000000) throw std::invalid_argument("Camera residual latency exceeds 10 seconds");
@@ -178,9 +195,10 @@ std::optional<CaptureSample> CameraClockMapper::captureSample(const FrameStamp& 
     return CaptureSample{*sample, *capture, audio.epoch, camera->epoch, audio.quality.grade, camera->quality.source};
 }
 CameraSampleTimeMapper::CameraSampleTimeMapper(CameraClockMapper& mapper, std::int64_t n0, std::uint32_t fs,
-    std::uint64_t a, std::uint64_t v) : camera(mapper), origin(n0), rate(fs), audioEpoch(a), videoEpoch(v)
+    std::uint64_t a, CameraClockSnapshot prepared)
+    : camera(mapper), origin(n0), rate(fs), audioEpoch(a), videoEpoch(prepared.epoch), generation(prepared.generation)
 {
-    if (!fs || !a || !v) throw std::invalid_argument("CFR adapter requires rate and reserved epochs");
+    if (!fs || !a || !prepared.epoch || !prepared.valid) throw std::invalid_argument("CFR adapter requires rate and prepared clocks");
 }
 std::int64_t CameraSampleTimeMapper::map(const FrameStamp& stamp)
 {
@@ -188,8 +206,10 @@ std::int64_t CameraSampleTimeMapper::map(const FrameStamp& stamp)
     {
         const auto audio = camera.masterClock().snapshot();
         const auto video = camera.snapshot();
-        if ((audio && (audio->epoch != audioEpoch || audio->nominalSampleRate != rate)) || (video && video->epoch != videoEpoch))
+        if ((audio && (audio->epoch != audioEpoch || audio->nominalSampleRate != rate))
+            || (video && (video->generation != generation || (!reanchorPending && video->epoch != videoEpoch))))
             throw std::runtime_error("CFR clock epoch/rate changed; stop take/mark camera gap");
+        if (reanchorPending && video && video->valid) videoEpoch = video->epoch;
         const auto sample = audio ? camera.captureSample(stamp, *audio) : std::nullopt;
         if (sample)
         {
@@ -197,7 +217,23 @@ std::int64_t CameraSampleTimeMapper::map(const FrameStamp& stamp)
             const auto delta = subtract(sample->sample, origin);
             const auto time = delta ? sampleToTime100ns(*delta, rate) : std::nullopt;
             if (!time) throw std::overflow_error("CFR sample time overflow");
-            return *time;
+            if (reanchorPending)
+            {
+                // Callback-estimated anchors can overlap by a few ticks. Keep
+                // CFR input ordering without moving N0 or resetting its grid.
+                timeOffset = 0;
+                if (mapped && *time <= lastTime)
+                {
+                    const auto next = add(lastTime, 1);
+                    const auto offset = next ? subtract(*next, *time) : std::nullopt;
+                    if (!offset) throw std::overflow_error("CFR reanchor overflow");
+                    timeOffset = *offset;
+                }
+                reanchorPending = false;
+            }
+            const auto result = add(*time, timeOffset);
+            if (!result) throw std::overflow_error("CFR reanchor time overflow");
+            mapped = true; lastTime = *result; return *result;
         }
         std::this_thread::yield(); // worker only; retry an overlapping snapshot publication, never reuse an old epoch
     }
@@ -251,23 +287,37 @@ std::int64_t AnchoredCameraTimeMapper::map(const FrameStamp& stamp)
     else
     {
         auto q = deviceQpc(stamp, master.qpcFrequency);
-        if (!q && preparedCamera.quality.source == CameraClockSource::ptsArrivalEstimated
+        if (!q && !reanchorPending && preparedCamera.quality.source == CameraClockSource::ptsArrivalEstimated
             && std::abs(difference(stamp.pts100ns, preparedCamera.lastPts100ns)) <= 5000000)
             q = roundedOffset(preparedCamera.qpcOrigin, preparedCamera.qpcOffsetAtOrigin
                 + preparedCamera.qpcTicksPer100ns * difference(stamp.pts100ns, preparedCamera.ptsOrigin100ns));
+        // A notified PTS reset invalidates the prepared PTS fit, but not O0 or
+        // the prepared ASIO/QPC clock. Anchor this segment once at its arrival.
+        if (!q && reanchorPending) q = stamp.callback;
         const auto latency = rescale(preparedCamera.cameraResidualLatency100ns,
             static_cast<std::uint64_t>(master.qpcFrequency), 10000000, Rounding::nearest);
         const auto corrected = q && latency ? subtract(*q, *latency) : std::nullopt;
         const auto sample = corrected ? master.mapToSample(*corrected) : std::nullopt;
         const auto delta = sample ? subtract(*sample, origin) : std::nullopt;
-        const auto time = delta ? sampleToTime100ns(*delta, rate) : std::nullopt;
+        // A prepared snapshot has a bounded extrapolation window. Later source
+        // segments use the already reserved O0/QPC origin, just like deadlines;
+        // they must not ask that old snapshot to map a frame minutes later.
+        const auto time = reanchorPending && corrected ? std::optional<std::int64_t>(now(*corrected))
+            : delta ? sampleToTime100ns(*delta, rate) : std::nullopt;
         if (!time) throw std::runtime_error("Dubbing first-frame anchor unavailable; mark camera gap");
-        firstPts = stamp.pts100ns; firstTime = *time; anchored = true;
+        firstPts = stamp.pts100ns; firstTime = *time;
+        if (reanchorPending && hasMappedFrame && firstTime <= lastTime)
+        {
+            const auto next = add(lastTime, 1);
+            if (!next) throw std::overflow_error("Dubbing reanchor overflow");
+            firstTime = *next;
+        }
+        anchored = true; reanchorPending = false;
     }
     const auto delta = subtract(stamp.pts100ns, firstPts);
     const auto mapped = delta ? add(firstTime, *delta) : std::nullopt;
     if (!mapped) throw std::overflow_error("Dubbing anchored PTS overflow");
-    previous = stamp;
+    previous = stamp; hasMappedFrame = true; lastTime = *mapped;
     return *mapped;
 }
 std::int64_t AnchoredCameraTimeMapper::now(std::int64_t qpc) const

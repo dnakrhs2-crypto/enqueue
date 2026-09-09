@@ -194,6 +194,31 @@ int runTakeControllerTests()
         const auto* mic = f.document.getProject().media->findAsset(take.microphoneAssetIds[0]);
         require(mic->gaps.empty() && mic->logicalLength == nstop - n0, "Microphone retains complete interval");
     });
+    suite.test("Repeated source discontinuity/type-change notifications keep the take lane collecting", []
+    {
+        Fixture f;
+        auto telemetry = std::make_shared<CaptureTelemetry>(f.config.cameraMode.fps);
+        f.config.cameraTelemetry = telemetry; f.config.cameraGeneration = 7;
+        f.arm(); VideoSurface frame; frame.stamp.generation = 7;
+        telemetry->loss(LossReason::sourceDiscontinuity); f.controller.offer(frame);
+        require(!f.video->failed, "Initial source notification must not fail an armed camera");
+        const auto n0 = f.position + 81; ok(f.controller.start(n0));
+        until([&] { return f.audio.startCommitted(); });
+        while (f.audio.startSample() < 0) { f.feed(); f.controller.tick(); }
+        for (unsigned i = 0; i < 60; ++i)
+        {
+            telemetry->loss(i % 2 ? LossReason::sourceTypeChanged : LossReason::sourceDiscontinuity);
+            frame.stamp.frame = i + 1; f.controller.offer(frame); f.feed(); f.controller.tick();
+            require(!f.video->failed && f.controller.state() == TakeController::State::recording,
+                    "Every recoverable notification must leave collection running");
+        }
+        require(f.video->videoOffers == 61, "Every post-notification frame reached the stream");
+        ok(f.controller.stop(f.position + 39)); while (f.audio.stopSample() < 0) f.feed(); f.complete();
+        const auto& p = f.document.getProject(); const auto& take = p.media->takes.front();
+        require(f.controller.state() == TakeController::State::done && !f.controller.cameraDisconnected(0), "No partial failure");
+        require(p.media->findAsset(take.cam1AssetId)->gaps.empty(), "Recoverable events must not create a camera tail gap");
+        require(p.media->findAsset(take.microphoneAssetIds.front())->logicalLength == take.logicalLength, "Original WAV remains complete");
+    });
     suite.test("ASIO epoch failure stops whole take and preserves last valid block", []
     {
         Fixture f; const auto n0 = f.begin(); f.feed(); const auto stop = f.audio.acceptedEnd(); f.feed(44100); f.complete();

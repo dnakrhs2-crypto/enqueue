@@ -57,6 +57,7 @@ int runLifecycleTests();         // round 28: faults, shutdown, updater/exclusiv
 int runHardeningTests();
 int runMaterialExportTests();
 int runExportLifecycleTests();
+int runSourceReanchorTests();
 
 namespace
 {
@@ -72,6 +73,7 @@ int runAudioImport() { const int a = runAudioImportTests(), b = runImportedClipT
 int runRippleReorderMarkers() { const int a = runRippleTests(), b = runReorderTests(), c = runMarkerTests(); return (a || b || c) ? 1 : 0; }
 int runRecoveryIdempotence() { const int a = runRecoveryTests(), b = runRetakeRecoveryTests(); return (a || b) ? 1 : 0; }
 const Suite suites[] = {
+    {"source-reanchor", runSourceReanchorTests},
     {"hardening", runHardeningTests},
     {"materials-alignment", runMaterialExportTests},
     {"export-lifecycle", runExportLifecycleTests},

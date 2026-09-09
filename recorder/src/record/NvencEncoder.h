@@ -24,10 +24,11 @@ class NvencFramePool
 {
 public:
     NvencFramePool(int capacity, int width = 1920, int height = 1080);
-    bool copy(const VideoSurface&) noexcept;
+    bool copy(const VideoSurface&, std::uint64_t clockRevision = 0) noexcept;
     bool pop(int& slot) noexcept { return queue.pop(slot); }
     const AVFrame& frame(int slot) const { return *frames.at(static_cast<size_t>(slot)); }
     const FrameStamp& stamp(int slot) const { return stamps.at(static_cast<size_t>(slot)); }
+    std::uint64_t clockRevision(int slot) const { return clockRevisions.at(static_cast<size_t>(slot)); }
     void release(int slot) noexcept;
     unsigned highWater() const noexcept { return maximum.load(); }
     unsigned occupied() const noexcept { return occupancy.load(); }
@@ -36,6 +37,7 @@ private:
     int limit, width, height;
     std::array<FramePtr, 15> frames;
     std::array<FrameStamp, 15> stamps{};
+    std::array<std::uint64_t, 15> clockRevisions{}; // published with each queued frame
     std::array<std::atomic<bool>, 15> owned{};
     std::atomic<unsigned> occupancy{0}, maximum{0};
     BoundedSpscQueue<int, 15> queue;

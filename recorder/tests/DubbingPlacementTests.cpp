@@ -33,7 +33,8 @@ public:
     { require(audio.codec_id == AV_CODEC_ID_AAC, "Production AAC reference context"); output = file; ++prepared; }
     void startAt(ClockMapping, Sample origin, unsigned, std::function<Sample()>) override { state->origin = origin; }
     void offer(const VideoSurface& f) noexcept override
-    { if (state->origin >= 0) try { state->lastMapped100ns = mapper->map(f.stamp); ++state->mappedFrames; } catch (const std::exception& e) { state->failed = true; state->mappingError = e.what(); } }
+    { if (!state->failed && state->origin >= 0) try { state->lastMapped100ns = mapper->map(f.stamp); ++state->mappedFrames; } catch (const std::exception& e) { state->failed = true; state->mappingError = e.what(); } }
+    void discontinuity() noexcept override { mapper->reanchor(); }
     void audioPacket(const AVPacket& p) override { state->aac.append(p.data,size_t(p.size)); }
     bool ready() const noexcept override { return true; }
     void sourceFailed(Sample s) noexcept override { state->failed = true; state->length = s; }
@@ -168,6 +169,56 @@ struct Fixture
 int runDubbingPlacementTests()
 {
     recorder_test::Suite tests;
+    tests.test("Mic off/on survives initial and repeated source discontinuity/type changes at fixed O0", []
+    {
+        for (bool microphones : {false, true})
+        {
+            Fixture f(microphones, 2, 2); f.config.spanSamples = 8000;
+            auto telemetry = std::make_shared<CaptureTelemetry>(f.config.cameras[0].mode.fps);
+            f.config.cameras[0].telemetry = telemetry; f.arm();
+            ok(f.controller->start(f.position + 161)); until([&] { return f.audio.startCommitted(); });
+            const auto origin = f.controller->placement().O0;
+            unsigned notifications = 0;
+            while (f.position < origin + 8000 + 160 && f.controller->state() != DubbingController::State::finalizing)
+            {
+                // Includes the very first mapped frame and consecutive resets.
+                const auto reason = notifications % 2 ? LossReason::sourceTypeChanged : LossReason::sourceDiscontinuity;
+                telemetry->loss(reason); ++notifications;
+                f.cameraPtsOffset = notifications % 2 ? 900000000 : -900000000;
+                // Only camera one restarts its PTS segment; camera two continues.
+                const auto before = f.videos[0]->mappedFrames;
+                f.feed(false, false);
+                VideoSurface frame; frame.stamp.frame = f.sequence; frame.stamp.generation = 1;
+                frame.stamp.pts100ns = f.cameraPtsOffset + rescaleRound(f.position - 80, 10000000, 8000);
+                frame.stamp.callback = f.qpc + rescaleRound(f.position - 80, qpcFrequency(), 8000);
+                frame.stamp.hasDeviceTimestamp = frame.stamp.deviceTimestampValid = true;
+                frame.stamp.deviceTimestamp100ns = std::uint64_t(rescaleRound(frame.stamp.callback, 10000000, qpcFrequency()));
+                f.controller->offer(0, frame);
+                frame.stamp.pts100ns -= f.cameraPtsOffset; f.controller->offer(1, frame);
+                require(!f.videos[0]->failed && f.videos[0]->mappedFrames == before + 1, "Reanchored dubbing frame must be submitted");
+                f.controller->tick(); std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            }
+            f.complete(); const auto& p = f.document.getProject(); const auto& take = f.placedTake();
+            require(notifications >= 100 && f.controller->state() == DubbingController::State::done, "Repeated notifications complete normally");
+            require(f.controller->placement().O0 == origin && take.logicalLength == 8000, "O0 and full take duration remain fixed");
+            require(p.media->findAsset(take.cam1AssetId)->gaps.empty() && p.media->findAsset(take.cam2AssetId)->gaps.empty(), "Neither lane has a failure gap");
+            require(f.videos[0]->mappedFrames == f.videos[1]->mappedFrames, "Other camera keeps receiving every frame");
+            require(f.controller->calibrationOffsetReport()["status"].toString() == "PASS", "Reanchor preserves calibration arithmetic");
+        }
+    });
+    tests.test("Dubbing generation change still closes only the affected camera lane", []
+    {
+        Fixture f(true, 2, 2); f.begin();
+        VideoSurface frame; frame.stamp.generation = 2; f.controller->offer(1, frame);
+        require(f.videos[1]->failed && !f.videos[0]->failed, "Reconnect must fail only camera two");
+        const auto stop = f.controller->placement().O0 + f.controller->placement().spanSamples;
+        while (f.position < stop + 160 && f.controller->state() != DubbingController::State::finalizing)
+        { f.feed(); f.controller->tick(); std::this_thread::sleep_for(std::chrono::milliseconds(1)); }
+        f.complete(); const auto& p = f.document.getProject(); const auto& take = f.placedTake();
+        require(f.controller->state() == DubbingController::State::partialFailure && take.logicalLength == 1600, "Common interval continues to the scheduled stop");
+        require(p.media->findAsset(take.cam2AssetId)->gaps.size() == 1 && p.media->findAsset(take.cam1AssetId)->gaps.empty(), "Reconnect leaves only cam2's gap");
+        require(p.media->findAsset(take.microphoneAssetIds.front())->gaps.empty(), "Microphone original is complete");
+    });
     tests.test("Epoch changes immediately after start retain both camera lanes and fixed O0", []
     {
         for (bool microphones : {false,true})
