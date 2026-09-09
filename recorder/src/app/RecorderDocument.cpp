@@ -50,6 +50,7 @@ juce::String RecorderDocument::getStatusText() const
 }
 void RecorderDocument::newProject(const juce::String& name, std::uint32_t Fs, FrameRate fps)
 {
+    if (recordingStructureLock) { fail(juce::String::fromUTF8("녹화 중에는 프로젝트를 바꿀 수 없습니다.")); return; }
     assertOwner(); if (editing) return;
     RecorderProject next; next.name = name; next.Fs = Fs; next.fps = fps;
     const auto valid = next.validate(); if (valid.failed()) { fail(valid.getErrorMessage()); return; }
@@ -57,6 +58,7 @@ void RecorderDocument::newProject(const juce::String& name, std::uint32_t Fs, Fr
 }
 juce::Result RecorderDocument::adopt(RecorderProject next, const juce::File& source, const CheckpointInfo& info)
 {
+    if (recordingStructureLock) return fail(juce::String::fromUTF8("녹화 중에는 프로젝트를 바꿀 수 없습니다."));
     assertOwner(); if (editing) return juce::Result::fail(juce::String::fromUTF8("편집 작업 중입니다."));
     const auto valid = next.validate(); if (valid.failed()) return fail(valid.getErrorMessage());
     project = std::make_shared<const RecorderProject>(std::move(next)); history.clear(); selection.clear(); file = source;
@@ -84,6 +86,7 @@ void RecorderDocument::checkpointFinished(Snapshot written, const juce::File& ta
 }
 juce::Result RecorderDocument::setTimebase(std::uint32_t Fs, FrameRate fps)
 {
+    if (recordingStructureLock) return fail(juce::String::fromUTF8("녹화 중에는 시간 기준을 바꿀 수 없습니다."));
     assertOwner(); if (editing) return juce::Result::fail(juce::String::fromUTF8("편집 작업 중입니다."));
     if (!project->media->assets.empty() && (project->Fs != Fs || project->fps != fps)) return fail(juce::String::fromUTF8("첫 미디어 이후에는 프로젝트 샘플레이트와 프레임레이트를 바꿀 수 없습니다."));
     auto next = *project; next.Fs = Fs; next.fps = fps; const auto valid = next.validate(); if (valid.failed()) return fail(valid.getErrorMessage());
@@ -99,6 +102,7 @@ void RecorderDocument::setSelection(std::vector<Id> ids)
 }
 juce::Result RecorderDocument::performEdit(const juce::String& name, const std::function<void(EditState&)>& edit, const EditOptions& options)
 {
+    if (recordingStructureLock) return fail(juce::String::fromUTF8("녹화 중에는 구조를 편집할 수 없습니다."));
     assertOwner();
     if (editing) return juce::Result::fail(juce::String::fromUTF8("편집 작업 중에는 다른 편집을 시작할 수 없습니다."));
     const juce::ScopedValueSetter<bool> guard(editing, true);
@@ -116,6 +120,7 @@ juce::Result RecorderDocument::publishEdit(RecorderProject next, const juce::Str
     if (project->editRevision == (std::numeric_limits<Sample>::max)()) return fail(juce::String::fromUTF8("편집 이력 번호 범위를 초과했습니다."));
     next.editRevision = project->editRevision + 1;
     const auto delta = deltaFor(*project, next, name);
+    lastTransaction = delta.transactionId;
     if (addHistory) history.push(editSnapshot(), {static_cast<const EditState&>(next), nextSelection}, name, options);
     if (next.media != project->media) checkpointRequired = true;
     project = std::make_shared<const RecorderProject>(std::move(next)); selection = nextSelection; dirty = true; error.clear();
@@ -131,6 +136,7 @@ juce::Result RecorderDocument::publishEdit(RecorderProject next, const juce::Str
 }
 juce::Result RecorderDocument::undo()
 {
+    if (recordingStructureLock) return fail(juce::String::fromUTF8("녹화 중에는 실행취소할 수 없습니다."));
     assertOwner(); if (editing) return juce::Result::fail(juce::String::fromUTF8("편집 작업 중입니다."));
     const juce::ScopedValueSetter<bool> guard(editing, true);
     const auto* entry = history.undoEntry(); if (entry == nullptr) return juce::Result::ok();
@@ -141,6 +147,7 @@ juce::Result RecorderDocument::undo()
 }
 juce::Result RecorderDocument::redo()
 {
+    if (recordingStructureLock) return fail(juce::String::fromUTF8("녹화 중에는 다시실행할 수 없습니다."));
     assertOwner(); if (editing) return juce::Result::fail(juce::String::fromUTF8("편집 작업 중입니다."));
     const juce::ScopedValueSetter<bool> guard(editing, true);
     const auto* entry = history.redoEntry(); if (entry == nullptr) return juce::Result::ok();
@@ -184,6 +191,7 @@ juce::Result RecorderDocument::updateTakeState(const Id& id, TakeState state)
 }
 juce::Result RecorderDocument::placeTake(Take take, std::vector<MediaAsset> assets)
 {
+    if (recordingStructureLock) return fail(juce::String::fromUTF8("녹화 중에는 테이크를 배치할 수 없습니다."));
     assertOwner(); if (editing) return juce::Result::fail(juce::String::fromUTF8("편집 작업 중입니다."));
     const juce::ScopedValueSetter<bool> guard(editing, true);
     auto next = *project; auto registry = std::make_shared<MediaRegistry>(*project->media);
@@ -201,6 +209,7 @@ juce::Result RecorderDocument::placeTake(Take take, std::vector<MediaAsset> asse
 }
 juce::Result RecorderDocument::placeTake(const Id& id)
 {
+    if (recordingStructureLock) return fail(juce::String::fromUTF8("녹화 중에는 테이크를 배치할 수 없습니다."));
     assertOwner(); if (editing) return juce::Result::fail(juce::String::fromUTF8("편집 작업 중입니다."));
     const juce::ScopedValueSetter<bool> guard(editing, true);
     const auto* take = project->media->findTake(id); if (take == nullptr) return fail(juce::String::fromUTF8("테이크를 찾을 수 없습니다."));
@@ -220,7 +229,11 @@ juce::Result RecorderDocument::place(RecorderProject next, const Take& take, Sam
     };
     addClip(take.cam1AssetId, TrackKind::cam1, -1, juce::String::fromUTF8("캠1"));
     addClip(take.cam2AssetId, TrackKind::cam2, -1, juce::String::fromUTF8("캠2"));
-    for (size_t i = 0; i < take.microphoneAssetIds.size(); ++i) addClip(take.microphoneAssetIds[i], TrackKind::mic, static_cast<int>(i), juce::String::fromUTF8("마이크 ") + juce::String(static_cast<int>(i) + 1));
+    for (size_t i = 0; i < take.microphoneAssetIds.size(); ++i)
+    {
+        const int logical = placementMicrophones.empty() ? static_cast<int>(i) : placementMicrophones[i];
+        addClip(take.microphoneAssetIds[i], TrackKind::mic, logical, juce::String::fromUTF8("마이크 ") + juce::String(logical + 1));
+    }
     if (group.clipIds.size() >= 2) next.linkGroups.push_back(group);
     else for (auto& t : next.tracks) for (auto& c : t.clips.edit()) if (c.linkGroupId == group.linkGroupId) c.linkGroupId.clear();
     return publishEdit(std::move(next), juce::String::fromUTF8("테이크 배치"), {}, true, group.clipIds);
@@ -237,5 +250,19 @@ void RecorderDocument::acknowledgeJournal(const EditDelta& ticket, const juce::R
     if (!dirty) error.clear();
     // Registry/timebase durability still requires a checkpoint; a pure edit can be saved by its journal.
     notify();
+}
+juce::Result RecorderDocument::placeTake(Take take, std::vector<MediaAsset> assets, const std::vector<int>& microphones)
+{
+    assertOwner();
+    if (microphones.size() != take.microphoneAssetIds.size() || !placementMicrophones.empty())
+        return fail("Invalid recorded microphone placement");
+    std::vector<int> seen;
+    for (auto mic : microphones)
+    {
+        if (mic < 0 || mic >= 8 || std::find(seen.begin(), seen.end(), mic) != seen.end()) return fail("Invalid logical microphone lane");
+        seen.push_back(mic);
+    }
+    const juce::ScopedValueSetter<std::vector<int>> mapping(placementMicrophones, microphones);
+    return placeTake(std::move(take), std::move(assets));
 }
 }

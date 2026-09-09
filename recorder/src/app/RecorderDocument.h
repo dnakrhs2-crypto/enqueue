@@ -65,6 +65,12 @@ public:
     void setJournalSink(IEditJournalSink* sink) { journal = sink; }
     void acknowledgeJournal(const EditDelta& ticket, const juce::Result&);
     std::function<void()> onChanged;
+    // Recorder coordinator lock; owner thread only. Registry finalization remains
+    // available, while timeline/timebase/document replacement is blocked.
+    void setRecordingStructureLock(bool locked) { assertOwner(); recordingStructureLock = locked; }
+    bool isRecordingStructureLocked() const { return recordingStructureLock; }
+    juce::Result placeTake(Take, std::vector<MediaAsset>, const std::vector<int>& logicalMicrophoneIndices);
+    const Id& lastEditTransaction() const { return lastTransaction; }
 private:
     void assertOwner() const;
     juce::Result fail(const juce::String&);
@@ -82,5 +88,8 @@ private:
     std::map<Sample, Id> journalTransactions;
     IEditJournalSink* journal = nullptr; // caller-owned; detach before destroying
     const std::thread::id owner = std::this_thread::get_id();
+    bool recordingStructureLock = false;
+    std::vector<int> placementMicrophones;
+    Id lastTransaction;
 };
 }

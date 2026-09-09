@@ -1,6 +1,7 @@
 #pragma once
 #include "storage/RecordingJournal.h"
 #include <memory>
+#include <functional>
 
 namespace gocue::recorder
 {
@@ -23,6 +24,12 @@ public:
         std::vector<JournalDeviceMapping> devices;
         std::uint64_t journalRotationBytes = 8 * 1024 * 1024;
         FileIoFaultAdapter* faults = nullptr;
+        // Product connection: the take coordinator owns lifecycle records and
+        // serialises this worker's checkpoints with MP4/take commits. Empty keeps
+        // round 06's standalone journal behaviour. Must outlive stop/join.
+        std::function<juce::Result(const JournalCheckpoint&)> checkpointSink;
+        // One entry per packed channel; logical microphone IDs need not be dense.
+        std::vector<unsigned> logicalMicrophones;
     };
     explicit WavTrackWriter(Config); // Allocates/touches the entire four-second PCM queue.
     ~WavTrackWriter();

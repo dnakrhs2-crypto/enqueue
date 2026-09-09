@@ -175,3 +175,12 @@ target_sources(RecorderTests PRIVATE tests/RecorderProjectTests.cpp)
 target_link_libraries(RecorderTests PRIVATE RecorderModel)
 add_test(NAME RecorderProjectRoundtrip COMMAND RecorderTests --suite project-roundtrip)
 # END Recorder round 08.
+
+# Rounds 09+10: append-only integration, single shared test main and suite registry.
+target_sources(RecorderCore PRIVATE
+    src/audio/RecorderAudioEngine.cpp src/playback/PlaybackBlockQueue.cpp
+    src/sync/LinearClockMapper.cpp src/record/TakeController.cpp)
+target_link_libraries(RecorderCore PUBLIC RecorderModel)
+target_sources(RecorderTests PRIVATE tests/RecorderAudioTests.cpp tests/TakeControllerTests.cpp)
+add_test(NAME RecorderAudio COMMAND RecorderTests --suite recorder-audio)
+add_test(NAME RecorderTakeController COMMAND RecorderTests --suite take-lifecycle)

@@ -67,10 +67,19 @@ WavTrackWriter::Config checkedConfig(WavTrackWriter::Config c)
         || static_cast<std::uint64_t>(c.sampleRate) * 30 * 3 + 37 >= std::numeric_limits<std::uint32_t>::max()
         || c.takeId.isNull() || c.devices.size() != c.mics || c.projectDirectory == juce::File())
         throw std::invalid_argument("Invalid WAV configuration (Fs, 1..8 mics, block size, mapping, take ID, or RIFF size)");
+    if (c.logicalMicrophones.empty()) for (unsigned i = 1; i <= c.mics; ++i) c.logicalMicrophones.push_back(i);
+    if (c.logicalMicrophones.size() != c.mics) throw std::invalid_argument("Invalid logical microphone count");
     std::array<bool, 8> seen{};
+    for (auto mic : c.logicalMicrophones)
+    {
+        if (mic < 1 || mic > 8 || seen[mic - 1]) throw std::invalid_argument("Invalid logical microphone IDs");
+        seen[mic - 1] = true;
+    }
+    seen.fill(false);
     for (const auto& d : c.devices)
     {
-        if (d.mic < 1 || d.mic > static_cast<int>(c.mics) || seen[static_cast<std::size_t>(d.mic - 1)]
+        if (d.mic < 1 || d.mic > 8 || seen[static_cast<std::size_t>(d.mic - 1)]
+            || std::find(c.logicalMicrophones.begin(), c.logicalMicrophones.end(), unsigned(d.mic)) == c.logicalMicrophones.end()
             || d.activeIndex < 0 || d.physicalIndex < 0 || d.deviceId.isEmpty())
             throw std::invalid_argument("Invalid microphone/device mapping");
         seen[static_cast<std::size_t>(d.mic - 1)] = true;
@@ -156,7 +165,7 @@ struct WavTrackWriter::Impl
         for (unsigned mic = 1; mic <= config.mics; ++mic)
         {
             auto t = std::make_unique<Track>(config.faults);
-            t->path = WavTrackWriter::chunkPath(config.takeId, mic, chunk);
+            t->path = WavTrackWriter::chunkPath(config.takeId, config.logicalMicrophones[mic - 1], chunk);
             const auto file = config.projectDirectory.getChildFile(t->path);
             if (!io(file.getParentDirectory().createDirectory()) || !io(t->file.open(file, DurableFile::OpenMode::createNew))
                 || !io(t->file.write(header.data(), header.size())) || !io(t->file.flushData())) return false;
@@ -167,14 +176,14 @@ struct WavTrackWriter::Impl
     }
     bool prepare()
     {
-        if (!io(journal.open(config.projectDirectory.getChildFile("journal"), config.journalRotationBytes)) || !openChunk()) return false;
+        if ((!config.checkpointSink && !io(journal.open(config.projectDirectory.getChildFile("journal"), config.journalRotationBytes))) || !openChunk()) return false;
         JournalTakeStarted start;
         start.takeId = config.takeId; start.pcm.sampleRate = config.sampleRate; start.pcm.nativeFormat = config.nativeFormat;
         start.n0 = config.n0; start.o0 = config.o0; start.pstart = config.pstart; start.usesOutputOrigin = config.usesOutputOrigin;
         start.devices = config.devices;
         for (const auto& t : tracks)
             start.files.push_back({juce::Uuid().toDashedString(), t->path, t->path.upToLastOccurrenceOf("/", true, false) + "{chunk}.wav"});
-        if (!io(journal.append(start))) return false;
+        if (!config.checkpointSink && !io(journal.append(start))) return false;
         lastHeader = lastCheckpoint = qpcNow();
         return true;
     }
@@ -205,7 +214,7 @@ struct WavTrackWriter::Impl
                 static_cast<std::int64_t>(end), 1, config.sampleRate, 44, 3});
         }
         const auto mediaAt = qpcNow(); mediaDurable.store(end, std::memory_order_release);
-        if (!io(journal.append(cp))) return false;
+        if (!io(config.checkpointSink ? config.checkpointSink(cp) : journal.append(cp))) return false;
         const auto journalAt = qpcNow(); journalDurable.store(end, std::memory_order_release);
         trace[checkpointCount++ % trace.size()] = {end, headerAt, mediaAt, journalAt};
         flushTimes.add(ms(journalAt - began)); lastCheckpoint = journalAt; dirty = false;
@@ -290,10 +299,14 @@ struct WavTrackWriter::Impl
                     const auto samples = static_cast<std::int64_t>(written.load());
                     if (origin() > std::numeric_limits<std::int64_t>::max() - samples || nstop != origin() + samples)
                         fail(Error::discontinuity, "Nstop does not match the accepted PCM sample range");
-                    else if (io(journal.append(JournalTakeStopped{config.takeId, nstop, editId}))
-                             && checkpoint() && closeTracks() && io(journal.append(JournalTakeFinalized{config.takeId})))
+                    else if ((config.checkpointSink || io(journal.append(JournalTakeStopped{config.takeId, nstop, editId})))
+                             && checkpoint() && closeTracks() && (config.checkpointSink || io(journal.append(JournalTakeFinalized{config.takeId}))))
                         ++closedChunkSets;
                 }
+                // A failed producer cannot fabricate silence or a successful
+                // finalization. Preserve the successfully written prefix header
+                // and checkpoint whenever the remaining I/O still works.
+                else if (dirty) checkpoint();
             }
         }
         catch (const std::exception& e) { fail(Error::internal, juce::String::fromUTF8(e.what())); }

@@ -4,6 +4,10 @@
 #include "diagnostics/MfJpegRangeProbe.h"
 #include "record/EncodePipeline.h"
 #include "audio/AsioProbe.h"
+#include "record/TakeController.h"
+#include "record/Mp4TakeWriter.h"
+#include "storage/StorageEncoding.h"
+#include <juce_events/juce_events.h>
 extern "C"
 {
 #include <libavcodec/avcodec.h>
@@ -14,6 +18,8 @@ extern "C"
 #include <algorithm>
 #include <charconv>
 #include <chrono>
+#include <cmath>
+#include <cstring>
 #include <iostream>
 #include <future>
 #include <map>
@@ -53,14 +59,17 @@ Arguments parse(int argc, wchar_t** argv)
     for (int i = 0; i < argc; ++i) args.original.add(juce::String(argv[i]));
     if (argc < 2) throw std::invalid_argument("RecorderProbe enumerate --select [--cam1 N --cam1-mode N] --out devices.json | capture --devices FILE --camera cam1 --seconds N --report FILE | mf-jpeg-range [--report FILE] | encode [--devices FILE --camera cam1 | --synthetic] --project-fps 30|60 --seconds N [--preset p5 --report FILE --out-dir DIR]");
     args.command = juce::String(argv[1]).toStdString();
-    const std::set<std::string> allowedFlags = args.command == "mf-jpeg-range" ? std::set<std::string>{}
+    const bool record = args.command == "record-audio" || args.command == "record-take";
+    const std::set<std::string> allowedFlags = record ? std::set<std::string>{"--synthetic"}
+        : args.command == "mf-jpeg-range" ? std::set<std::string>{}
         : args.command == "enumerate" ? std::set<std::string>{"--select"}
         : args.command == "encode" ? std::set<std::string>{"--synthetic"} : std::set<std::string>{"--compare-decoders"};
-    const std::set<std::string> allowedValues = args.command == "mf-jpeg-range" ? std::set<std::string>{"--report"}
+    const std::set<std::string> allowedValues = record ? std::set<std::string>{"--asio-device", "--inputs", "--outputs", "--sample-rate", "--buffer-size", "--seconds", "--project-dir", "--report", "--devices", "--camera", "--project-fps"}
+        : args.command == "mf-jpeg-range" ? std::set<std::string>{"--report"}
         : args.command == "enumerate" ? std::set<std::string>{"--out", "--cam1", "--cam1-mode", "--cam2", "--cam2-mode"}
         : args.command == "encode" ? std::set<std::string>{"--devices", "--camera", "--mode", "--seconds", "--report", "--out-dir", "--project-fps", "--preset"}
         : std::set<std::string>{"--devices", "--camera", "--mode", "--seconds", "--report", "--decoder-threads", "--decoder"};
-    if (args.command != "enumerate" && args.command != "capture" && args.command != "encode" && args.command != "mf-jpeg-range") throw std::invalid_argument("Unknown subcommand: " + args.command);
+    if (!record && args.command != "enumerate" && args.command != "capture" && args.command != "encode" && args.command != "mf-jpeg-range") throw std::invalid_argument("Unknown subcommand: " + args.command);
     for (int i = 2; i < argc; ++i)
     {
         const auto key = juce::String(argv[i]).toStdString();
@@ -385,6 +394,306 @@ int mfJpegRangeCommand(const Arguments& args)
 }
 namespace
 {
+std::int32_t recordingPattern(std::int64_t sample, int physical)
+{
+    const auto word = (std::uint32_t(sample) * 7919u + unsigned(physical) * 104729u) & 0xffffffu;
+    return word & 0x800000u ? std::int32_t(word) - 16777216 : std::int32_t(word);
+}
+void recordCheck(const juce::Result& result) { if (result.failed()) throw std::runtime_error(result.getErrorMessage().toStdString()); }
+void pumpRecordMessages()
+{
+    MSG message{};
+    while (PeekMessageW(&message, nullptr, 0, 0, PM_REMOVE)) { TranslateMessage(&message); DispatchMessageW(&message); }
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+}
+// Hardware-free native driver fixture. Its audio and video clocks run on separate
+// paced workers, through the production queues/controllers. This is not P0 evidence.
+class SyntheticRecordSource
+{
+public:
+    SyntheticRecordSource(RecorderAudioEngine& audio, TakeController* take, unsigned cameraFps) : engine(audio), controller(take)
+    {
+        const auto device = engine.deviceInfo();
+        audioThread = std::thread([this, device]
+        {
+            try
+            {
+                const auto frames = device.bufferFrames;
+                std::vector<std::vector<std::uint8_t>> bytes(device.activeToPhysical.size(), std::vector<std::uint8_t>(std::size_t(frames) * 3));
+                std::vector<std::vector<float>> floats(device.activeToPhysical.size(), std::vector<float>(frames));
+                std::array<NativeInputView,8> views{}; std::array<const float*,8> inputs{};
+                std::vector<std::vector<float>> outputs(std::size_t(device.physicalOutputs), std::vector<float>(frames));
+                std::vector<float*> out; for (auto& channel : outputs) out.push_back(channel.data());
+                const auto start = std::chrono::steady_clock::now(); const auto originQpc = qpcNow();
+                std::int64_t sample = 0; std::uint64_t sequence = 0;
+                while (!stopping.load())
+                {
+                    for (std::size_t c = 0; c < bytes.size(); ++c)
+                    {
+                        for (unsigned i = 0; i < frames; ++i)
+                        {
+                            const auto value = recordingPattern(sample + i, device.activeToPhysical[c]);
+                            WavTrackWriter::packPcm24(value, bytes[c].data() + i * 3); floats[c][i] = float(value) / 8388608.0f;
+                        }
+                        views[c] = {bytes[c].data(), int(c), device.activeToPhysical[c], nativeFormatForAsio(17)}; inputs[c] = floats[c].data();
+                    }
+                    BlockStamp stamp{}; stamp.flags = timeInfoPresent | samplePositionValid | sampleRateValid;
+                    stamp.samplePosition = sample; stamp.sequence = sequence++; stamp.numSamples = frames; stamp.bufferIndex = int(stamp.sequence % 2);
+                    stamp.sampleRate = device.sampleRate; stamp.callbackQpc = originQpc + sample * qpcFrequency() / device.sampleRate;
+                    engine.processBlock(stamp, views.data(), unsigned(bytes.size()), inputs.data(), out.data(), unsigned(out.size()));
+                    sample += frames;
+                    std::this_thread::sleep_until(start + std::chrono::nanoseconds(sample * 1000000000LL / device.sampleRate));
+                }
+            }
+            catch (...) { failed = true; }
+        });
+        if (controller) videoThread = std::thread([this, cameraFps]
+        {
+            try
+            {
+                VideoSurface surface; surface.prepare(1920,1080);
+                const auto began = std::chrono::steady_clock::now(); std::uint64_t frame = 0;
+                while (!stopping.load())
+                {
+                    std::fill(surface.nv12.begin(), surface.nv12.end(), std::uint8_t(128));
+                    std::fill(surface.nv12.begin(), surface.nv12.begin() + 1920 * 1080, std::uint8_t(32 + (frame % 180)));
+                    surface.stamp.frame = frame + 1; surface.stamp.pts100ns = std::int64_t(frame) * 10000000 / cameraFps;
+                    surface.stamp.callback = qpcNow(); controller->offer(surface); ++frame;
+                    std::this_thread::sleep_until(began + std::chrono::nanoseconds(std::int64_t(frame) * 1000000000 / cameraFps));
+                }
+            }
+            catch (...) { failed = true; }
+        });
+    }
+    ~SyntheticRecordSource() { stop(); }
+    void stop() { stopping = true; if (audioThread.joinable()) audioThread.join(); if (videoThread.joinable()) videoThread.join(); }
+    std::atomic<bool> failed{false};
+private:
+    RecorderAudioEngine& engine;
+    TakeController* controller;
+    std::atomic<bool> stopping{false};
+    std::thread audioThread, videoThread;
+};
+juce::var validateRecordedWavs(const juce::File& project, const juce::Uuid& take, const juce::var& audio, bool synthetic)
+{
+    auto result = jsonObject(); juce::Array<juce::var> tracks;
+    const auto Fs = unsigned(int(audio["sampleRate"])); const auto n0 = std::int64_t(audio["N0"]);
+    const auto length = std::int64_t(audio["Nstop"]) - n0;
+    std::uint64_t mismatches = 0; bool valid = true;
+    if (const auto* microphones = audio["tracks"].getArray()) for (const auto& mic : *microphones)
+    {
+        const auto number = unsigned(int(mic["mic"])); const int physical = int(mic["physicalIndex"]);
+        const auto dir = project.getChildFile(WavTrackWriter::chunkPath(take, number, 1)).getParentDirectory();
+        auto files = dir.findChildFiles(juce::File::findFiles, false, "*.wav"); files.sort();
+        std::uint64_t samples = 0; double squares = 0; bool headers = true;
+        for (const auto& file : files)
+        {
+            juce::MemoryBlock block;
+            if (!file.loadFileAsData(block) || block.getSize() < 44) { headers = false; continue; }
+            const auto* p = static_cast<const std::uint8_t*>(block.getData());
+            const auto bytes = storageEncoding::get<std::uint32_t>(p + 40), count = bytes / 3;
+            headers &= std::memcmp(p, "RIFF", 4) == 0 && std::memcmp(p + 8, "WAVEfmt ", 8) == 0 && std::memcmp(p + 36,"data",4) == 0
+                && storageEncoding::get<std::uint32_t>(p + 24) == Fs && storageEncoding::get<std::uint16_t>(p + 22) == 1
+                && storageEncoding::get<std::uint16_t>(p + 34) == 24 && bytes % 3 == 0
+                && std::uint64_t(bytes) + 44 + (bytes & 1) == block.getSize();
+            if (std::uint64_t(bytes) + 44 > block.getSize()) { headers = false; continue; }
+            for (unsigned i = 0; i < count; ++i)
+            {
+                const auto* sample = p + 44 + i * 3;
+                const auto word = std::uint32_t(sample[0]) | std::uint32_t(sample[1]) << 8 | std::uint32_t(sample[2]) << 16;
+                const auto value = word & 0x800000u ? std::int32_t(word) - 16777216 : std::int32_t(word);
+                const double normal = double(value) / 8388608.0; squares += normal * normal;
+                if (synthetic && value != recordingPattern(n0 + std::int64_t(samples) + i, physical)) ++mismatches;
+            }
+            samples += count;
+        }
+        auto track = jsonObject(); jsonSet(track, "mic", int(number)); jsonSet(track, "samples", jsonInt(samples));
+        jsonSet(track, "chunks", files.size()); jsonSet(track, "headersValid", headers); jsonSet(track, "rms", samples ? std::sqrt(squares / double(samples)) : 0.0);
+        valid &= headers && std::int64_t(samples) == length; tracks.add(track);
+    }
+    jsonSet(result, "tracks", tracks); jsonSet(result, "pcmMismatches", jsonInt(mismatches)); jsonSet(result, "valid", valid && !mismatches);
+    jsonSet(result, "expectedSamplesPerMic", length); return result;
+}
+juce::var validateRecordedMp4(const juce::File& file, std::int64_t expectedFrames, std::int64_t expectedAudio)
+{
+    auto result = Mp4TakeWriter::inspect(file);
+    struct Input { AVFormatContext* context = nullptr; ~Input() { avformat_close_input(&context); } } input;
+    ffCheck(avformat_open_input(&input.context, file.getFullPathName().toRawUTF8(), nullptr, nullptr), "Open recorded MP4 validation");
+    ffCheck(avformat_find_stream_info(input.context, nullptr), "Read recorded MP4 streams");
+    std::array<CodecPtr,2> codecs; bool formats = input.context->nb_streams == 2;
+    if (!formats) throw std::runtime_error("Recorded MP4 does not have video+AAC");
+    formats &= input.context->streams[0]->codecpar->codec_id == AV_CODEC_ID_H264
+        && input.context->streams[1]->codecpar->codec_id == AV_CODEC_ID_AAC
+        && input.context->streams[1]->codecpar->sample_rate == 48000
+        && input.context->streams[1]->codecpar->ch_layout.nb_channels == 2
+        && input.context->streams[1]->duration == expectedAudio;
+    for (unsigned i = 0; i < 2; ++i)
+    {
+        const auto* decoder = avcodec_find_decoder(input.context->streams[i]->codecpar->codec_id);
+        codecs[i].reset(avcodec_alloc_context3(decoder)); if (!codecs[i]) throw std::bad_alloc();
+        ffCheck(avcodec_parameters_to_context(codecs[i].get(), input.context->streams[i]->codecpar), "Copy recording decoder parameters");
+        codecs[i]->thread_count = 1; ffCheck(avcodec_open2(codecs[i].get(), decoder, nullptr), "Open recording decoder");
+    }
+    auto packet = ffPacket(); auto frame = ffFrame(); std::int64_t frames = 0, audioSamples = 0;
+    const auto receive = [&](int stream)
+    {
+        for (;;)
+        {
+            const auto rc = avcodec_receive_frame(codecs[std::size_t(stream)].get(), frame.get());
+            if (rc == AVERROR(EAGAIN) || rc == AVERROR_EOF) break; ffCheck(rc, "Decode complete recorded file");
+            if (stream == 0) ++frames; else audioSamples += frame->nb_samples; av_frame_unref(frame.get());
+        }
+    };
+    for (;;)
+    {
+        const int rc = av_read_frame(input.context, packet.get()); if (rc == AVERROR_EOF) break; ffCheck(rc, "Read recording packets");
+        ffCheck(avcodec_send_packet(codecs[std::size_t(packet->stream_index)].get(), packet.get()), "Decode recording packet");
+        receive(packet->stream_index); av_packet_unref(packet.get());
+    }
+    for (int i = 0; i < 2; ++i) { ffCheck(avcodec_send_packet(codecs[std::size_t(i)].get(), nullptr), "Drain recording decoder"); receive(i); }
+    auto stream = file.createInputStream(); bool boxes = bool(stream); unsigned moof = 0, moov = 0;
+    while (stream && stream->getPosition() < stream->getTotalLength())
+    {
+        const auto begin = stream->getPosition(); const auto size32 = std::uint32_t(stream->readIntBigEndian());
+        const auto tag = std::uint32_t(stream->readIntBigEndian());
+        const auto size = size32 == 1 ? std::uint64_t(stream->readInt64BigEndian()) : std::uint64_t(size32);
+        if (size < (size32 == 1 ? 16u : 8u) || size > std::uint64_t(stream->getTotalLength() - begin)) { boxes = false; break; }
+        moof += tag == 0x6d6f6f66u; moov += tag == 0x6d6f6f76u; stream->setPosition(begin + std::int64_t(size));
+    }
+    jsonSet(result, "decodedVideoFrames", frames); jsonSet(result, "decodedAudioSamplesIncludingCodecTail", audioSamples);
+    jsonSet(result, "normalMp4", boxes && moov == 1 && moof == 0); jsonSet(result, "rootMoof", int(moof));
+    jsonSet(result, "validation", "Final headers and root boxes reopened after rename; all H.264/AAC packets decoded. Physical camera synchronization and optical frame identity are separate measurements.");
+    jsonSet(result, "valid", formats && frames == expectedFrames && boxes && moov == 1 && !moof && bool(result["presentationStartsAtZero"])); return result;
+}
+int recordCommand(const Arguments& args)
+{
+    const bool takeMode = args.command == "record-take", synthetic = args.has("--synthetic");
+    auto report = baseReport(args); jsonSet(report, "sourceKind", synthetic ? "synthetic-native-PCM-and-NV12" : "hardware");
+    bool started = false;
+    try
+    {
+        juce::ScopedJuceInitialiser_GUI juceRuntime;
+        const unsigned seconds = positiveInteger(args.get("--seconds", "60"));
+        if (seconds > 604800) throw std::invalid_argument("Recording duration exceeds seven days");
+        const auto project = filePath(args.required("--project-dir"));
+        RecorderDocument document;
+        if (takeMode && project.getChildFile("project.recorder").existsAsFile()) recordCheck(document.openCheckpoint(project.getChildFile("project.recorder")));
+        const unsigned Fs = positiveInteger(args.get("--sample-rate", takeMode ? std::to_string(document.getProject().Fs) : "48000"));
+        const auto fps = positiveInteger(args.get("--project-fps", "60"));
+        if (takeMode && !project.getChildFile("project.recorder").existsAsFile()) document.newProject("Recorder probe", Fs, {fps,1});
+        RecorderAudioEngine audio;
+        std::array<int,8> inputs{-1,-1,-1,-1,-1,-1,-1,-1};
+        const auto inputOption = args.get("--inputs", "1,2");
+        if (inputOption != "none")
+        {
+            const auto parts = juce::StringArray::fromTokens(juce::String(inputOption), ",", "");
+            if (parts.isEmpty() || parts.size() > 8) throw std::invalid_argument("--inputs accepts 1..8 physical channels or none");
+            for (int i = 0; i < parts.size(); ++i) inputs[std::size_t(i)] = int(positiveInteger(parts[i].toStdString())) - 1;
+        }
+        recordCheck(audio.setInputMap(inputs));
+        OutputMapping output; const auto outputOption = args.get("--outputs", "1:2");
+        if (outputOption != "none")
+        {
+            const auto colon = outputOption.find(':');
+            if (colon == std::string::npos) { output.mono = true; output.monoChannel = int(positiveInteger(outputOption)) - 1; }
+            else { output.left = int(positiveInteger(outputOption.substr(0,colon))) - 1; output.right = int(positiveInteger(outputOption.substr(colon+1))) - 1; }
+        }
+        recordCheck(audio.setOutputMap(output));
+        const unsigned block = args.has("--buffer-size") ? positiveInteger(args.required("--buffer-size")) : synthetic ? 480u : 0u;
+        if (synthetic) recordCheck(audio.openSynthetic(Fs, block, 8, 8));
+        else
+        {
+            const auto devices = RecorderAudioEngine::deviceNames(); const auto indexText = args.required("--asio-device");
+            unsigned index = 0; const auto parsed = std::from_chars(indexText.data(), indexText.data()+indexText.size(), index);
+            if (parsed.ec != std::errc{} || parsed.ptr != indexText.data()+indexText.size() || index >= unsigned(devices.size())) throw std::invalid_argument("--asio-device is a zero-based ASIO registry index");
+            jsonSet(report, "asioDevice", devices[int(index)]); recordCheck(audio.openDevice(devices[int(index)], Fs, int(block)));
+        }
+        for (unsigned i = 0; i < 8; ++i) if (inputs[i] >= 0) recordCheck(audio.arm(i, true));
+        const auto device = audio.deviceInfo();
+        struct PlaybackAttachment
+        {
+            RecorderAudioEngine& engine;
+            PlaybackProviderPump provider;
+            PlaybackAttachment(RecorderAudioEngine& a, unsigned rate, unsigned frames) : engine(a), provider(rate, frames, std::make_unique<ToneBlockProvider>()) { engine.setPlaybackQueue(&provider.queue()); }
+            ~PlaybackAttachment() { engine.setPlaybackQueue(nullptr); }
+        } playback(audio, device.sampleRate, device.bufferFrames);
+        TakeController controller(document, audio);
+        std::unique_ptr<SyntheticRecordSource> source;
+        if (synthetic) source = std::make_unique<SyntheticRecordSource>(audio, takeMode ? &controller : nullptr, 30);
+        const auto readyLimit = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+        while (!audio.clockReady())
+        { if (std::chrono::steady_clock::now() > readyLimit) throw std::runtime_error("No stable ASIO output callback clock within 10 seconds"); pumpRecordMessages(); }
+        juce::Uuid takeId;
+        if (takeMode)
+        {
+            TakeController::Config c; c.projectDirectory = project; c.takeId = takeId; c.projectFps = int(fps); c.synthetic = synthetic;
+            if (synthetic) { c.cameraMode.width = 1920; c.cameraMode.height = 1080; c.cameraMode.fps = {30,1}; }
+            else
+            {
+                if (args.get("--camera", "cam1") != "cam1") throw std::invalid_argument("record-take supports cam1 only");
+                juce::var devices; recordCheck(juce::JSON::parse(filePath(args.required("--devices")).loadFileAsString(), devices));
+                if (int(devices["schemaVersion"]) != 1) throw std::invalid_argument("Invalid devices.json schema");
+                const auto camera = devices["selections"]["cam1"];
+                c.cameraSymbolicLink = camera["symbolicLink"].toString().toStdString(); c.cameraMode = CameraMode::parse(camera["mode"].toString().toStdString());
+            }
+            recordCheck(controller.prepare(c));
+            while (controller.state() == TakeController::State::preparing) { controller.tick(); pumpRecordMessages(); }
+            if (controller.state() != TakeController::State::armed) throw std::runtime_error(controller.error().toStdString());
+            recordCheck(controller.start()); started = true;
+            const auto nstop = controller.scheduledStart() + std::int64_t(seconds) * device.sampleRate;
+            const auto limit = std::chrono::steady_clock::now() + std::chrono::seconds(seconds + 15);
+            bool stopSent = false;
+            while (controller.state() != TakeController::State::done && controller.state() != TakeController::State::partialFailure)
+            {
+                controller.tick();
+                if (!stopSent && controller.state() == TakeController::State::recording && audio.currentSample() >= nstop - std::int64_t(device.bufferFrames) * 4)
+                { recordCheck(controller.stop(nstop)); stopSent = true; }
+                if (std::chrono::steady_clock::now() > limit) { audio.abort(RecorderAudioEngine::Error::cancelled); throw std::runtime_error("Take completion timeout"); }
+                pumpRecordMessages();
+            }
+            jsonSet(report, "take", controller.report()); jsonSet(report, "audio", controller.report()["audio"]);
+            if (controller.state() != TakeController::State::done) throw std::runtime_error("Take partially failed; completed media preserved");
+            const auto mp4 = project.getChildFile("media/takes/" + takeId.toDashedString() + "/cam1.mp4");
+            const auto count = TakeController::frameCount(controller.logicalLength(), device.sampleRate, {fps,1});
+            const auto checked = validateRecordedMp4(mp4, count, rescaleRound(controller.logicalLength(), 48000, device.sampleRate));
+            jsonSet(report, "mp4Validation", checked);
+            if (!bool(checked["valid"])) throw std::runtime_error("Final MP4 frame/AAC/box validation failed");
+        }
+        else
+        {
+            RecorderAudioEngine::TakeConfig c; c.projectDirectory = project; c.takeId = takeId; recordCheck(audio.prepare(c));
+            const auto n0 = audio.currentSample() + std::max(device.sampleRate / 4, device.bufferFrames * 2);
+            recordCheck(audio.startAt(n0)); recordCheck(audio.stopAt(n0 + std::int64_t(seconds) * device.sampleRate)); started = true;
+            const auto limit = std::chrono::steady_clock::now() + std::chrono::seconds(seconds + 15);
+            while (audio.stopSample() < 0 && audio.error() == RecorderAudioEngine::Error::none)
+            {
+                audio.pollDeviceEvents(); if (std::chrono::steady_clock::now() > limit) { audio.abort(RecorderAudioEngine::Error::cancelled); break; } pumpRecordMessages();
+            }
+            const auto result = audio.finishCapture(juce::Uuid()); jsonSet(report, "audio", audio.telemetry());
+            recordCheck(audio.finishJournal(result.wasOk())); recordCheck(result);
+        }
+        if (source) { source->stop(); if (source->failed.load()) throw std::runtime_error("Synthetic source worker failed"); }
+        const auto verified = validateRecordedWavs(project, takeId, report["audio"], synthetic); jsonSet(report, "wavValidation", verified);
+        JournalReplay journal; recordCheck(RecordingJournal::replay(project.getChildFile("journal"), journal));
+        juce::Array<juce::var> events; int checkpoints = 0;
+        for (const auto& entry : journal.records) if (entry.payload["takeId"].toString() == takeId.toDashedString())
+        { events.add(int(entry.kind)); checkpoints += entry.kind == JournalKind::Checkpoint; }
+        jsonSet(report, "journalEvents", events); jsonSet(report, "journalCheckpoints", checkpoints); jsonSet(report, "journalTailIgnored", journal.ignoredTail);
+        jsonSet(report, "takeId", takeId.toDashedString()); jsonSet(report, "secondsRequested", int(seconds));
+        jsonSet(report, "outputTone", "Prepared worker tone L=440Hz/R=660Hz peak .05; mono=(L+R)/2. Digital routing tested; audible/physical loopback confirmation remains Claude's measurement.");
+        jsonSet(report, "playbackQueueUnderruns", jsonInt(playback.provider.queue().underruns()));
+        const auto expected = std::int64_t(seconds) * device.sampleRate;
+        const auto recorded = std::int64_t(report["audio"]["Nstop"]) - std::int64_t(report["audio"]["N0"]);
+        if (!bool(verified["valid"]) || std::abs(recorded - expected) > device.bufferFrames || journal.ignoredTail) throw std::runtime_error("WAV/sample/journal validation failed");
+        status(report, "PASS", "Production recording paths finalized and reopened; hardware audibility/physical synchronization are separate measurements");
+    }
+    catch (const std::invalid_argument& e) { status(report, "FAIL", e.what()); }
+    catch (const std::exception& e) { status(report, started ? "FAIL" : "UNAVAILABLE", e.what()); }
+    if (args.has("--report")) CaptureTelemetry::writeJson(filePath(args.required("--report")), report);
+    else std::cout << juce::JSON::toString(report, false) << '\n';
+    std::cout << report["result"].toString() << ": " << report["reason"].toString() << '\n';
+    return report["result"].toString() == "PASS" ? 0 : report["result"].toString() == "UNAVAILABLE" ? 2 : 1;
+}
 int encodeCommand(const Arguments& args)
 {
     auto report = baseReport(args);
@@ -508,6 +817,7 @@ int wmain(int argc, wchar_t** argv)
         if (argc >= 2 && juce::String(argv[1]) == "asio") return runAsioProbe(argc, argv);
         args = parse(argc, argv);
         report = baseReport(args, &report); // also covers encode's early runtime check without changing its function
+        if (args.command == "record-audio" || args.command == "record-take") return recordCommand(args);
         return args.command == "enumerate" ? enumerate(args) : args.command == "encode" ? encodeCommand(args)
             : args.command == "mf-jpeg-range" ? mfJpegRangeCommand(args) : captureCommand(args);
     }

@@ -22,6 +22,8 @@ struct ReferenceMixWriter::State
     std::int64_t firstPts = AV_NOPTS_VALUE, lastEnd = AV_NOPTS_VALUE;
     std::uint64_t packets = 0;
     bool finished = false;
+    bool synthetic = false;
+    unsigned inputRate = 44100;
     ~State() { swr_free(&swr); av_audio_fifo_free(fifo); }
     void receive(const PacketSink& sink)
     {
@@ -60,9 +62,12 @@ struct ReferenceMixWriter::State
         convertedSamples += output; encodeAvailable(sink, false); return output;
     }
 };
-ReferenceMixWriter::ReferenceMixWriter() : state(std::make_unique<State>())
+ReferenceMixWriter::ReferenceMixWriter() : ReferenceMixWriter(44100) { state->synthetic = true; }
+ReferenceMixWriter::ReferenceMixWriter(unsigned inputRate) : state(std::make_unique<State>())
 {
     auto& s = *state;
+    if (inputRate < 8000 || inputRate > 768000) throw std::invalid_argument("Reference input rate outside 8000..768000");
+    s.inputRate = inputRate;
     const auto* encoder = avcodec_find_encoder_by_name("aac");
     if (!encoder) throw std::runtime_error("Pinned FFmpeg has no built-in AAC encoder");
     s.codec.reset(avcodec_alloc_context3(encoder)); if (!s.codec) throw std::bad_alloc();
@@ -79,7 +84,7 @@ ReferenceMixWriter::ReferenceMixWriter() : state(std::make_unique<State>())
         ffCheck(av_frame_get_buffer(f, 0), "Allocate AAC PCM frame");
     }
     AVChannelLayout inputLayout = AV_CHANNEL_LAYOUT_STEREO;
-    ffCheck(swr_alloc_set_opts2(&s.swr, &c.ch_layout, c.sample_fmt, c.sample_rate, &inputLayout, AV_SAMPLE_FMT_FLT, 44100, 0, nullptr), "Prepare reference resampler");
+    ffCheck(swr_alloc_set_opts2(&s.swr, &c.ch_layout, c.sample_fmt, c.sample_rate, &inputLayout, AV_SAMPLE_FMT_FLT, int(inputRate), 0, nullptr), "Prepare reference resampler");
     ffCheck(swr_init(s.swr), "Open reference resampler");
     s.fifo = av_audio_fifo_alloc(c.sample_fmt, 2, 4096); if (!s.fifo) throw std::bad_alloc();
 }
@@ -88,6 +93,7 @@ const AVCodecContext& ReferenceMixWriter::context() const { return *state->codec
 void ReferenceMixWriter::advance(std::int64_t target, const PacketSink& sink)
 {
     auto& s = *state;
+    if (!s.synthetic) throw std::logic_error("Use append for real reference PCM");
     if (s.finished || target < s.requested || target > 48000LL * 86400 * 7) throw std::invalid_argument("Reference duration must increase within 7 days");
     s.requested = target;
     const auto inputEnd = av_rescale_rnd(target, 44100, 48000, AV_ROUND_UP);
@@ -108,7 +114,8 @@ void ReferenceMixWriter::advance(std::int64_t target, const PacketSink& sink)
 }
 void ReferenceMixWriter::finish(std::int64_t target, const PacketSink& sink)
 {
-    advance(target, sink);
+    if (state->synthetic) advance(target, sink);
+    else if (target != state->requested || state->finished) throw std::logic_error("Reference input length mismatch");
     auto& s = *state;
     while (s.resample(0, sink) > 0) {}
     // The source end was rounded up by at most one source sample. Retain exactly
@@ -128,6 +135,24 @@ void ReferenceMixWriter::finish(std::int64_t target, const PacketSink& sink)
     if (s.firstPts != -s.codec->initial_padding || s.lastEnd != target) throw std::runtime_error("AAC priming/duration contract failed");
     s.finished = true;
 }
+void ReferenceMixWriter::append(const float* pcm, unsigned frames, const PacketSink& sink)
+{
+    auto& s = *state;
+    if (s.synthetic || s.finished || !pcm || !frames) throw std::invalid_argument("Invalid actual reference PCM append");
+    for (std::size_t i = 0; i < std::size_t(frames) * 2; ++i)
+        if (!std::isfinite(pcm[i])) throw std::invalid_argument("Non-finite reference PCM");
+    unsigned consumed = 0;
+    const unsigned block = std::min(1024u, std::max(1u, s.inputRate * 1024u / 48000u));
+    while (consumed < frames)
+    {
+        const auto count = std::min(block, frames - consumed);
+        std::copy(pcm + consumed * 2, pcm + (consumed + count) * 2, s.source.begin());
+        s.inputSamples += count;
+        s.requested = av_rescale_rnd(s.inputSamples, 48000, s.inputRate, AV_ROUND_NEAR_INF);
+        s.resample(int(count), sink); consumed += count;
+    }
+}
+void ReferenceMixWriter::finishInput(const PacketSink& sink) { finish(state->requested, sink); }
 std::int64_t ReferenceMixWriter::padding(std::int64_t valid, int size, int initial)
 {
     if (valid < 0 || size <= 0 || initial < 0) throw std::invalid_argument("Invalid AAC priming arithmetic");
@@ -136,7 +161,8 @@ std::int64_t ReferenceMixWriter::padding(std::int64_t valid, int size, int initi
 juce::var ReferenceMixWriter::toJson() const
 {
     const auto& s = *state; auto v = jsonObject();
-    jsonSet(v, "source", "Synthetic 44100 Hz float stereo: common 1 kHz, L 440 Hz / R 660 Hz identifier, swresample -> 48000 Hz");
+    jsonSet(v, "source", s.synthetic ? "Synthetic 44100 Hz float stereo fixture" : "Actual take PCM at interface Fs; fixed armed-microphone mean duplicated L/R (zero microphones = silence)");
+    jsonSet(v, "inputSampleRate", int(s.inputRate));
     jsonSet(v, "codec", "aac"); jsonSet(v, "profile", "LC"); jsonSet(v, "bitRate", 192000);
     jsonSet(v, "sampleRate", 48000); jsonSet(v, "channels", 2); jsonSet(v, "inputSamples", jsonInt(s.inputSamples));
     jsonSet(v, "resampledSamples", jsonInt(s.convertedSamples)); jsonSet(v, "presentationSamples", jsonInt(s.encodedSamples));
