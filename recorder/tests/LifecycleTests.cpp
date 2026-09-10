@@ -53,11 +53,17 @@ int runLifecycleTests()
         // Apartment-model ASIO drivers can only be created on the (STA) message thread, so the
         // device negotiation must run on the caller and report there, not on the camera worker.
         RecorderDocument document; RecorderSession session(document);
+        int callbacks = 0; std::thread::id callbackThread; juce::Result callbackResult = juce::Result::ok();
+        session.onConfigured = [&](const juce::Result& r, const UserSettings&) { ++callbacks; callbackThread = std::this_thread::get_id(); callbackResult = r; };
         UserSettings s; s.asioDeviceId = "recorder-test-missing-asio-device"; s.cameraEnabled = {false, false};
         const auto result = session.configure(s);
         require(result.failed(), "Missing ASIO device must fail configure synchronously");
         require(result.getErrorMessage().contains(juce::String::fromUTF8("장치 연결을 확인하세요")), "Synchronous audio failure keeps the user-facing prefix");
-        require(!session.configuring(), "No asynchronous device work remains after a synchronous audio failure");
+        require(callbacks == 1 && callbackThread == std::this_thread::get_id() && callbackResult.failed(), "onConfigured runs exactly once, synchronously on the caller, with the failure");
+        require(!session.configuring() && !session.busy(), "No asynchronous device work remains and the session is not busy");
+        require((session.lifecycleState()->snapshot() & RecorderLifecycle::configuring) == 0, "Lifecycle configuring bit is released before configure returns");
+        session.tick();
+        require(callbacks == 1, "A later tick does not re-emit the completion");
         require(session.audioEngine().deviceInfo().sampleRate == 0, "Failed negotiation leaves no device open");
     });
     suite.test("All Korean failure banners have the specified meaning", []
