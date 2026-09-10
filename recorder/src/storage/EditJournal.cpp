@@ -103,7 +103,12 @@ RecorderProject EditJournal::apply(const RecorderProject& before, const juce::va
         && (registryOnly ? revision == base : base < INT64_MAX && revision == base + 1), "Edit revision/project chain mismatch");
     require(hash(before) == record["baseHash"].toString(), "Edit base hash mismatch");
     auto root = juce::JSON::parse(RecorderSerializer::toJson(before)); auto edit = root["edit"];
-    if (registryOnly) require(record["entities"].isArray() && record["entities"].size() == 0, "Registry commit cannot edit clips");
+    if (registryOnly) // a registry commit edits nothing but the markers a time-base change rescaled
+    {
+        require(record["entities"].isArray(), "Registry commit entities");
+        for (const auto& entity : *record["entities"].getArray())
+            require(record.hasProperty("timebase") && entity["collection"].toString() == "markers", "Registry commit cannot edit clips");
+    }
     mergeEntities(edit, record["entities"], before.projectId);
     require(RecorderSerializer::fingerprint(edit) == record["validationHash"].toString(), "Edit validation hash mismatch");
     if (record.hasProperty("media")) set(root, "media", record["media"]);
@@ -201,8 +206,8 @@ juce::Result EditJournal::appendRegistry(const RecorderProject& result)
     try
     {
         if (hash(current) == hash(result)) return juce::Result::ok();
-        EditDelta d; d.projectId = result.projectId; d.baseRevision = current.editRevision; d.revision = result.editRevision;
-        d.name = "media registry"; d.validationHash = RecorderSerializer::fingerprint(RecorderSerializer::editStateToVar(result));
+        auto d = deltaFor(current, result, "media registry"); // marker entities when a time-base change rescaled them, otherwise none
+        d.baseRevision = current.editRevision; d.revision = result.editRevision;
         const auto p = payload(current, d, result); const auto next = apply(current, p, true);
         check(journal.appendEditRecord(JournalKind::MediaRegistry, p, juce::Uuid(d.transactionId), options.hook)); current = next; return juce::Result::ok();
     }
