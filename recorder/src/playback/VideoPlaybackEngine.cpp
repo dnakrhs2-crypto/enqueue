@@ -404,7 +404,6 @@ constexpr auto absent = static_cast<std::size_t>(-1);
 struct VideoClip : PlaybackVideoClip
 {
     Sample displayEnd = 0;
-    bool beginsAtClipStart = false, endsAtClipEnd = false;
 };
 using VideoClips = std::vector<VideoClip>;
 Sample sourceSampleAt(const VideoClip& c, Sample sample)
@@ -456,7 +455,8 @@ std::array<std::shared_ptr<const VideoClips>, 2> validatedClips(std::vector<Play
             part.mapping.timelineStartSample += begin; part.mapping.sourceIn += begin;
             part.mapping.lengthSamples = end - begin; part.mapping.gaps.clear();
             part.displayEnd = part.mapping.timelineStartSample + part.mapping.lengthSamples;
-            part.beginsAtClipStart = begin == 0; part.endsAtClipEnd = end == c.lengthSamples;
+            part.beginsAtClipStart = clip.beginsAtClipStart && begin == 0;
+            part.endsAtClipEnd = clip.endsAtClipEnd && end == c.lengthSamples;
             lanes[clip.camera].push_back(std::move(part));
         };
         for (const auto& gap : c.gaps)

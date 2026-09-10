@@ -370,7 +370,10 @@ void RecorderSession::preparePlayback()
                             if (begin >= end) continue;
                             auto mapping = mappingFor(clip, *asset); mapping.sourceIn = begin;
                             mapping.timelineStartSample += begin - clip.sourceIn; mapping.lengthSamples = end - begin; mapping.gaps.clear();
-                            plan->videos.push_back({mapping, track.kind == TrackKind::cam2 ? 1u : 0u, source});
+                            // Preserve the original edit boundaries: an unavailable
+                            // head/tail is a source gap, never a subframe clip seam.
+                            plan->videos.push_back({mapping, track.kind == TrackKind::cam2 ? 1u : 0u, source,
+                                begin == clip.sourceIn, end == clip.sourceIn + clip.lengthSamples});
                         }
                     }
                     else if (asset->kind == AssetKind::mic)
