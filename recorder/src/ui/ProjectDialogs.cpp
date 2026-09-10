@@ -1,5 +1,6 @@
 #include "MainComponent.h"
 #include "ShortcutSettingsPanel.h"
+#include <algorithm>
 
 namespace gocue::recorder
 {
@@ -77,7 +78,10 @@ void MainComponent::showSettings()
     auto* content = new SettingsForm(settings.get(), document.getProject(), session.deviceInfo(),
         [this](const UserSettings& s) { return session.calibrationMatches(s); });
     audioPanel = &content->audio; cameraPanel = &content->camera; settingsError = &content->error;
-    settingsWindow->setContentOwned(content, true); settingsWindow->centreAroundComponent(this, 720, 590);
+    settingsWindow->setContentOwned(content, true);
+    // The audio tab lays out four microphone slots per page (588 px); make them visible without scrolling.
+    settingsWindow->centreAroundComponent(this, 720, (std::min)(700, juce::Desktop::getInstance().getDisplays().getPrimaryDisplay() != nullptr
+        ? juce::Desktop::getInstance().getDisplays().getPrimaryDisplay()->userArea.getHeight() - 60 : 700));
     const auto configure = [this, content](UserSettings s)
     {
         s.shortcuts = settings.get().shortcuts;
