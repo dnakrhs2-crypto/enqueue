@@ -271,6 +271,21 @@ juce::Result RecorderSession::setCalibrationProfiles(std::vector<CalibrationProf
     catch (const std::exception& e) { return juce::Result::fail(e.what()); }
     calibrationProfiles = std::move(profiles); return juce::Result::ok();
 }
+CalibrationMatch RecorderSession::calibrationMatches(const UserSettings& settings) const
+{
+    const auto match = gocue::recorder::calibrationMatches(settings, calibrationProfiles);
+    if (match != CalibrationMatch::matched) return match;
+    const auto& actual = audio.deviceInfo();
+    if (configuring() || (actual.sampleRate && (actual.name != settings.asioDeviceId
+        || actual.sampleRate != settings.preferredSampleRate || actual.bufferFrames != unsigned(settings.bufferSize))))
+        return CalibrationMatch::settingsChanged;
+    for (unsigned i = 0; i < settings.cameraEnabled.size(); ++i) if (settings.cameraEnabled[i])
+    {
+        if (actual.sampleRate && calibrationKey(settings, i).inputMapping != audio.calibrationInputMapping()) return CalibrationMatch::settingsChanged;
+        if (cameraReady(i) && cameras[i]->mode.text() != settings.cameraModes[i].toStdString()) return CalibrationMatch::settingsChanged;
+    }
+    return match;
+}
 juce::Result RecorderSession::stopRecording() { return take.stop(); }
 void RecorderSession::clearPlayback()
 {
@@ -340,15 +355,7 @@ void RecorderSession::preparePlayback()
 }
 std::shared_ptr<const WavSource> RecorderSession::indexRecordedAudio(const MediaAsset& asset, const juce::File& folder, unsigned Fs, const Id& track)
 {
-    if (asset.kind != AssetKind::mic || asset.mediaGeneration < 1 || asset.logicalLength < 0)
-        throw std::invalid_argument("Invalid recorded audio asset");
-    auto wav = std::make_shared<WavSource>(); wav->trackId = track; wav->sampleRate = Fs;
-    wav->epoch = std::make_shared<MediaEpoch>(); wav->generation = std::uint64_t(asset.mediaGeneration); wav->epoch->value.store(wav->generation);
-    for (const auto& chunk : asset.chunks)
-        wav->chunks.push_back({folder.getChildFile(chunk.relativePath), chunk.sourceRange.start, chunk.sourceRange.length, 44, 44 + std::uint64_t(chunk.sourceRange.length) * 3});
-    MediaIndex::validateWav(*wav);
-    if (wav->length > asset.logicalLength) throw std::invalid_argument("WAV chunks exceed the recorded take");
-    wav->length = asset.logicalLength; return wav;
+    return MediaIndex::recordedAudio(asset, folder, Fs, track);
 }
 void RecorderSession::play(bool latest)
 {

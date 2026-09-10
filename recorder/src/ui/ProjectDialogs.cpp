@@ -18,7 +18,8 @@ public:
     juce::TabbedComponent tabs {juce::TabbedButtonBar::TabsAtTop};
     juce::Viewport audioScroll, cameraScroll;
     juce::TextButton apply {ko("적용")}, close {ko("닫기")}; juce::Label error;
-    SettingsForm(const UserSettings& s, const RecorderProject& p, const RecorderAudioEngine::DeviceInfo& d) : audio(s, p, d), camera(s, p)
+    SettingsForm(const UserSettings& s, const RecorderProject& p, const RecorderAudioEngine::DeviceInfo& d, CameraSettingsPanel::CalibrationMatcher matcher)
+        : audio(s, p, d), camera(s, p, std::move(matcher))
     {
         audioScroll.setViewedComponent(&audio, false); cameraScroll.setViewedComponent(&camera, false);
         tabs.addTab(ko("오디오 장치"), Palette::bar, &audioScroll, false); tabs.addTab(ko("카메라"), Palette::bar, &cameraScroll, false);
@@ -63,15 +64,17 @@ public:
 }
 void MainComponent::showSettings()
 {
-    if (session.busy()) return; session.enterTimeline(false); audioPanel = nullptr; settingsError = nullptr; settingsWindow.reset();
+    if (session.busy()) return; session.enterTimeline(false); audioPanel = nullptr; cameraPanel = nullptr; settingsError = nullptr; settingsWindow.reset();
     auto window = std::make_unique<FormWindow>(ko("설정"));
     window->onClosed = [this] { if (timeline) session.enterTimeline(true); }; settingsWindow = std::move(window);
-    auto* content = new SettingsForm(settings.get(), document.getProject(), session.deviceInfo()); audioPanel = &content->audio; settingsError = &content->error;
+    auto* content = new SettingsForm(settings.get(), document.getProject(), session.deviceInfo(),
+        [this](const UserSettings& s) { return session.calibrationMatches(s); });
+    audioPanel = &content->audio; cameraPanel = &content->camera; settingsError = &content->error;
     settingsWindow->setContentOwned(content, true); settingsWindow->centreAroundComponent(this, 720, 590);
     const auto configure = [this, content](UserSettings s)
     {
         if (session.configuring()) { pendingConfigure = s; content->error.setText(ko("이전 변경을 적용한 뒤 이어서 적용합니다."), juce::dontSendNotification); return; }
-        const auto result = session.configure(s); content->error.setText(result.failed() ? result.getErrorMessage() : ko("장치를 연결하는 중입니다."), juce::dontSendNotification); if (result.wasOk()) banner.clear();
+        const auto result = content->audio.configure(session, s, settings.get()); content->error.setText(result.failed() ? result.getErrorMessage() : ko("장치를 연결하는 중입니다."), juce::dontSendNotification); if (result.wasOk()) banner.clear();
     };
     // Audio edits apply immediately with the saved camera choices, so running previews are left alone.
     content->audio.onChanged = [configure](UserSettings s) { configure(s); };

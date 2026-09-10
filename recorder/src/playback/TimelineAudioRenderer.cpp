@@ -153,16 +153,7 @@ std::vector<AudioSourceBinding> openAudioSources(const AudioRenderPlan& plan, co
         }
         else
         {
-            auto source = std::make_shared<WavSource>(); source->sampleRate = plan.timeline->Fs; source->channels = unsigned(asset.originalFormat.channels); source->trackId = asset.assetId;
-            source->generation = static_cast<std::uint64_t>(asset.mediaGeneration); source->epoch = std::make_shared<MediaEpoch>(); source->epoch->value = source->generation;
-            const auto add = [&](const juce::String& path, SampleRange range)
-            {
-                need(isProjectRelativePath(path) && range.length > 0 && range.length <= ((std::numeric_limits<Sample>::max)() - 44) / (source->channels * 3), "Invalid virtual WAV chunk");
-                source->chunks.push_back({directory.getChildFile(path), range.start, range.length, 44, 44 + static_cast<std::uint64_t>(range.length) * source->channels * 3});
-            };
-            if (asset.chunks.empty()) add(asset.relativePath, {0, asset.logicalLength});
-            else for (const auto& chunk : asset.chunks) add(chunk.relativePath, chunk.sourceRange);
-            MediaIndex::validateWav(*source); source->length = asset.logicalLength;
+            const auto source = MediaIndex::recordedAudio(asset, directory, plan.timeline->Fs, asset.assetId);
             result.push_back({asset.assetId, wavAudioSource(source)});
         }
     }

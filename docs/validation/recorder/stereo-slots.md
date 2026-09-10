@@ -74,3 +74,38 @@
 - `RecordView.cpp`: 마이크 카드의 물리 입력 표시와 미터 설명만 변경했다.
 - `ProductIdentity.h`, 버전, 릴리스 노트, `tools/release.py`, `site`, MainComponent, CameraSettingsPanel, CrashHandler는 변경하지 않았다. push 및 release.py를 실행하지 않았다.
 
+## 리뷰 반영
+
+2026-09-10, `bae6e05`에 대한 세 건의 리뷰를 반영했다. 위 검증 결과와 병합 참고는 최초 스테레오 구현 시점의 기록이며, 이번 수정에는 아래 UI 파일도 포함된다.
+
+- **P1 — 앱 재생 인덱싱:** `MediaIndex::recordedAudio()`에서 마이크 자산의 채널 수를 1~2로 검증하고 `WavSource.channels`와 `44 + frames * channels * 3` 바이트 한계를 설정한다. `RecorderSession::indexRecordedAudio()`와 내보내기용 `openAudioSources()`가 같은 함수를 호출한다. 상대 경로·청크 길이·파일 헤더·durable watermark·논리 길이를 검증하고, 복구된 짧은 청크 뒤의 논리 tail을 유지한다.
+- **P2 — 거부된 선택 복원:** `AudioSettingsPanel::configure()`가 세션의 동기 실패를 받으면 마지막 적용 설정으로 `setSettings()`와 실제 엔진 정보로 `setDeviceInfo()`를 호출한다. `ProjectDialogs`의 즉시 적용과 `MainComponent`의 `pendingConfigure` 재시도가 모두 이 경로를 사용한다. 복원은 알림 없이 수행해 추가 설정 작업을 만들지 않는다.
+- **P2 — 보정 상태:** `UiState`의 전체 키 비교와 `RecorderSession::calibrationMatches(const UserSettings&) const`를 패널에 연결했다. 무장된 `[슬롯,L,R]`, 카메라·모드·fps·노출 정책·ASIO·샘플레이트·버퍼·출력 매핑이 맞아야 측정 결과를 표시한다. 열린 오디오 엔진의 실제 입력/무장 매핑과 네이티브 카메라 모드도 확인한다. `inputMapping` 없는 프로파일 및 전체 키 없는 기존 표시용 저장값은 **입력 매핑 확인 전 · 재측정 필요**다.
+- **본선 병합:** 한 인자 판정 함수는 본선 `refreshCalibration()`에서도 그대로 호출할 수 있다. 이 트리에는 표시 갱신만을 위한 작은 `refreshCalibration()`을 추가해 생성자·목록 로딩·선택·모드 변경 및 적용된 오디오/무장 설정 변경에서 호출한다. 기존 `modesFor()`와 모드 선택 정책은 유지했다. 본선의 갱신 코드와 중복되는 호출은 병합 시 정리하면 된다.
+
+`UiWiringTests.cpp`에 다음 합성 회귀 테스트 9개를 추가했다.
+
+1. 실제 WAV writer → 앱 인덱싱 → 스테레오 재생: 첫 샘플, L/R, 30초 청크 경계 및 바이트 한계.
+2. `{1,2,1}` 혼합 테이크: 슬롯별 재생, 논리 슬롯 평균 믹스, 내보내기 소스와 PCM 비교.
+3. 실제 `RecoveryScanner`로 마지막 오른쪽 샘플이 잘린 WAV 복구 → 앱 인덱싱 → 온전한 스테레오 prefix와 tail gap 무음 확인. 원본 바이트 불변도 확인.
+4. 잘못된 채널 메타데이터, 헤더 채널 불일치, 논리 길이 초과 및 음수 청크 길이 거부.
+5. 실제 제품 콤보를 `sendNotificationSync`로 조작 → 중복 검사 실패 → 표시·디스크 설정·합성 엔진 매핑 일치 및 연결 중 문구 복원.
+6. 대기 선택을 재시도할 때 실패 → 직전 완료 설정으로 복원. 대기 선택과 선행 작업 완료는 테스트에서 합성하며 재시도는 제품의 공통 함수를 호출한다.
+7. 희소 슬롯·L/R·무장 상태에 대한 세션 판정과 엔진 키 일치, 입력/슬롯/무장 변경 시 무효화, 무장하지 않은 입력 변경은 유지.
+8. 카메라·모드·fps·장치·샘플레이트·버퍼·출력 변경 및 두 카메라 프로파일 검사.
+9. 기존 프로파일 직렬화 왕복과 매핑 미확인 문구, 전체 키 없는 기존 표시값, 결과 없음 상태.
+
+하드웨어를 여는 앱 실행은 하지 않고 테스트 실행기만 사용한다. 카메라·FlexASIO·NVENC의 실장치 연결과 실제 화면에서의 녹화/최근 테이크 버튼 조작은 검증 범위 밖이다.
+
+이번 리뷰 반영 후 실제 실행 결과:
+
+- `cmake --preset local` 구성 성공. 로컬 설치 `C:/Users/claude/tools/cmake/bin/cmake.exe`를 사용했다.
+- `cmake --build --preset local-release --target Recorder --target RecorderTests -- -m:1 -nr:false -v:m -nologo` 성공, 종료 코드 0.
+- `RecorderTests.exe --suite ui-wiring`: **21 passed, 0 failed**, 종료 코드 0.
+- `RecorderTests.exe` 전체: **531 passed, 0 failed** (기준선 522 + 신규 9), 46개 결과 요약의 통과 수를 합산했다. 종료 코드 0, 최종 출력 `RecorderTests: all suites passed`.
+- 편집 property 테스트: seed **909**, **1,000** iterations, 불변식 및 undo/redo 해시 검사 통과.
+- 첫 빌드에서 새 테스트의 불변 타임라인 생성 방식 오류를 고쳤고, 첫 UI 실행에서 복구 fixture의 프로젝트 샘플레이트를 WAV와 같은 8kHz로 맞췄다. 위 수치는 두 fixture 수정을 반영한 최종 실행 결과다.
+- `git diff --check` 통과. 커밋·push·release.py 실행, ProductIdentity·버전·릴리스 노트·site 수정, CrashHandler 추가는 하지 않았다.
+
+최종 로그: `build/stereo-review-configure.log`, `build/stereo-review-build-final.log`, `build/stereo-review-ui-tests-final.log`, `build/stereo-review-tests-final.log`. 파일별 위치와 남은 검증 범위는 작업 폴더의 `OUT.md`에 기록했다.
+

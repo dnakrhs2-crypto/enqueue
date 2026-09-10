@@ -1,4 +1,5 @@
 #include "AudioSettingsPanel.h"
+#include "app/RecorderSession.h"
 
 namespace gocue::recorder
 {
@@ -28,9 +29,15 @@ AudioSettingsPanel::AudioSettingsPanel(const UserSettings& s, const RecorderProj
     mono.onClick = [this, changed] { right.setEnabled(!mono.getToggleState()); leftLabel.setText(mono.getToggleState() ? ko("재생 출력 모노 채널") : ko("재생 출력 왼쪽"), juce::dontSendNotification); changed(); };
     for (auto* box : {&devices, &rate, &buffer, &left, &right}) box->onChange = changed;
     for (auto& box : inputs) box.onChange = changed;
-    for (unsigned i = 0; i < 8; ++i) { label(*this, inputLabels[i], ko("마이크 ") + juce::String(i + 1) + ko(" · 물리 입력")); addAndMakeVisible(inputs[i]); }
+    for (unsigned i = 0; i < 8; ++i) { label(*this, inputLabels[i], ko("마이크 ") + juce::String(i + 1) + ko(" · 물리 입력")); inputs[i].setComponentID("microphoneInput" + juce::String(i + 1)); addAndMakeVisible(inputs[i]); }
     controlPanel.onClick = [this] { if (onControlPanel) onControlPanel(); };
     setDeviceInfo(info);
+}
+juce::Result AudioSettingsPanel::configure(RecorderSession& session, UserSettings requested, const UserSettings& applied)
+{
+    const auto result = session.configure(std::move(requested));
+    if (result.failed()) { setSettings(applied); setDeviceInfo(session.audioEngine().deviceInfo()); }
+    return result;
 }
 void AudioSettingsPanel::setSettings(const UserSettings& s)
 {

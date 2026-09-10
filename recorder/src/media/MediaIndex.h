@@ -64,6 +64,9 @@ public:
     std::vector<std::shared_ptr<const WavSource>> openWavJournal(const juce::File& projectDirectory,
                                                                const juce::Uuid& take) const;
     static void validateWav(WavSource&); // validates PCM24 mono/stereo header and durable limits
+    // Finalized/recovered microphone assets; shared by app playback and export.
+    static std::shared_ptr<const WavSource> recordedAudio(const MediaAsset&, const juce::File& folder,
+                                                         unsigned Fs, const Id& track);
 private:
     std::shared_ptr<MediaEpoch> epoch = std::make_shared<MediaEpoch>();
 };

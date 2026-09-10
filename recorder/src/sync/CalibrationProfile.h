@@ -6,6 +6,7 @@
 namespace gocue::recorder
 {
 enum class CalibrationQuality { unmeasured, softwareEstimated, physicalMeasured };
+enum class CalibrationMatch { unmeasured, inputMappingUnverified, settingsChanged, matched };
 struct CalibrationKey
 {
     std::string cameraId, nativeMode, exposure, asioDriver;

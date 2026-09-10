@@ -123,6 +123,26 @@ std::shared_ptr<const VideoIndex> MediaIndex::openVideo(const juce::File& file, 
     if (!result->current()) throw std::runtime_error("Media replaced after index scan");
     return result;
 }
+std::shared_ptr<const WavSource> MediaIndex::recordedAudio(const MediaAsset& asset, const juce::File& folder, unsigned Fs, const Id& track)
+{
+    demand(asset.kind == AssetKind::mic && asset.mediaGeneration >= 1 && asset.logicalLength >= 0
+        && asset.originalFormat.channels >= 1 && asset.originalFormat.channels <= 2, "Invalid recorded audio asset");
+    auto wav = std::make_shared<WavSource>(); wav->trackId = track; wav->sampleRate = Fs;
+    wav->channels = unsigned(asset.originalFormat.channels);
+    wav->epoch = std::make_shared<MediaEpoch>(); wav->generation = std::uint64_t(asset.mediaGeneration); wav->epoch->value = wav->generation;
+    const auto add = [&](const juce::String& path, SampleRange range)
+    {
+        demand(isProjectRelativePath(path) && range.start >= 0 && range.length > 0
+            && range.length <= ((std::numeric_limits<Sample>::max)() - 44) / (wav->channels * 3), "Invalid recorded WAV chunk");
+        wav->chunks.push_back({folder.getChildFile(path), range.start, range.length, 44,
+            44 + std::uint64_t(range.length) * wav->channels * 3});
+    };
+    if (asset.chunks.empty() && asset.relativePath.isNotEmpty()) add(asset.relativePath, {0, asset.logicalLength});
+    else for (const auto& chunk : asset.chunks) add(chunk.relativePath, chunk.sourceRange);
+    validateWav(*wav);
+    demand(wav->length <= asset.logicalLength, "WAV chunks exceed the recorded take");
+    wav->length = asset.logicalLength; return wav;
+}
 void MediaIndex::validateWav(WavSource& source)
 {
     demand(source.sampleRate > 0 && source.sampleRate <= 768000 && source.channels >= 1 && source.channels <= 2, "Invalid WAV sample rate/channels");

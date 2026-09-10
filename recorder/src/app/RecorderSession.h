@@ -24,6 +24,7 @@ public:
     void enterTimeline(bool);
     juce::Result record();
     juce::Result setCalibrationProfiles(std::vector<CalibrationProfile>); // outside an active take
+    CalibrationMatch calibrationMatches(const UserSettings&) const;
     juce::Result stopRecording();
     void play(bool latestTake = false);
     void pause();

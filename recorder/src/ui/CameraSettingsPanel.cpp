@@ -3,7 +3,7 @@
 
 namespace gocue::recorder
 {
-CameraSettingsPanel::CameraSettingsPanel(const UserSettings& s, const RecorderProject& p) : initial(s)
+CameraSettingsPanel::CameraSettingsPanel(const UserSettings& s, const RecorderProject& p, CalibrationMatcher matcher) : initial(s), matchCalibration(std::move(matcher))
 {
     for (unsigned i = 0; i < 2; ++i)
     {
@@ -11,16 +11,22 @@ CameraSettingsPanel::CameraSettingsPanel(const UserSettings& s, const RecorderPr
         addAndMakeVisible(enabled[i]); addAndMakeVisible(devices[i]); addAndMakeVisible(modes[i]); addAndMakeVisible(modeLabels[i]); addAndMakeVisible(ids[i]);
         modeLabels[i].setText(ko("입력 모드"), juce::dontSendNotification); devices[i].setTextWhenNothingSelected(ko("장치 선택")); modes[i].setTextWhenNothingSelected(ko("1080p 입력 모드 선택"));
         devices[i].onChange = [this, i] { selectionChanged(i, false); }; enabled[i].onClick = [this, i] { selectionChanged(i, true); };
+        modes[i].onChange = [this] { refreshCalibration(); };
     }
     for (auto* l : {&fps, &status, &calibration, &nextTake}) { addAndMakeVisible(l); l->setFont(juce::Font(juce::FontOptions(17))); }
     nextTake.setText(ko("캠2 해제는 다음 테이크부터 적용됩니다."), juce::dontSendNotification);
     fps.setText(ko("프로젝트 ") + juce::String(p.fps.numerator) + (p.media->assets.empty() ? ko(" fps · 첫 미디어 후 고정") : ko(" fps · 고정")), juce::dontSendNotification);
     status.setText(ko("카메라 장치를 확인하는 중입니다."), juce::dontSendNotification);
-    const bool changed = s.calibration.asioDeviceId != s.asioDeviceId || s.calibration.cameraDeviceIds != s.cameraDeviceIds || s.calibration.cameraModes != s.cameraModes;
-    calibration.setText(ko("동기 보정 · ") + (s.calibration.calibrationDate.isEmpty() ? ko("보정 결과 없음") : changed ? ko("설정 변경으로 재측정 필요") : ko("측정됨")), juce::dontSendNotification);
+    refreshCalibration();
     work = std::async(std::launch::async, [] { ComApartment apartment; MfRuntime runtime; return CameraCatalog::enumerate(); }); startTimer(100);
 }
 CameraSettingsPanel::~CameraSettingsPanel() { stopTimer(); }
+void CameraSettingsPanel::setSettings(const UserSettings& s) { initial = s; refreshCalibration(); }
+void CameraSettingsPanel::refreshCalibration()
+{
+    const auto s = read(initial);
+    calibration.setText(calibrationStatusText(matchCalibration ? matchCalibration(s) : calibrationMatches(s, {})), juce::dontSendNotification);
+}
 void CameraSettingsPanel::timerCallback()
 {
     if (!work.valid() || work.wait_for(std::chrono::milliseconds(0)) != std::future_status::ready) return;
@@ -37,7 +43,7 @@ void CameraSettingsPanel::timerCallback()
         status.setText(cameras.empty() ? ko("연결된 카메라가 없습니다.") : ko("같은 카메라를 두 번 선택할 수 없습니다."), juce::dontSendNotification);
     }
     catch (const std::exception& e) { status.setText(ko("카메라 목록을 읽을 수 없습니다. ") + juce::String::fromUTF8(e.what()), juce::dontSendNotification); }
-    stopTimer();
+    refreshCalibration(); stopTimer();
 }
 void CameraSettingsPanel::modesFor(unsigned i)
 {
@@ -65,6 +71,7 @@ void CameraSettingsPanel::selectionChanged(unsigned i, bool enabling)
         status.setText(ko("선택한 장치와 입력 모드를 저장합니다."), juce::dontSendNotification);
     }
     devices[i].setEnabled(enabled[i].getToggleState()); modes[i].setEnabled(enabled[i].getToggleState());
+    refreshCalibration();
 }
 UserSettings CameraSettingsPanel::read(UserSettings s) const
 {
