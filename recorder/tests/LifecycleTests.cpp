@@ -83,6 +83,19 @@ int runLifecycleTests()
             require(info.physicalOutputs < 2 || (applied.output.left == 0 && applied.output.right == 1), "Playback defaults to outputs 1/2");
         }
     });
+    suite.test("First-run audio defaults apply once per device choice, mono on a single output, explicit none kept", []
+    {
+        RecorderAudioEngine::DeviceInfo info; info.sampleRate = 48000; info.physicalInputs = 2; info.physicalOutputs = 2;
+        UserSettings s; require(applyAudioDefaults(s, info) && s.audioDefaultsApplied, "Defaults apply on the first open");
+        require(s.physicalInputs == std::vector<int>{0} && s.output.left == 0 && s.output.right == 1 && !s.output.mono, "Microphone 1 -> input 1, playback -> outputs 1/2");
+        s.output = {}; require(!applyAudioDefaults(s, info) && s.output.left == -1 && s.output.right == -1, "An explicit none is kept once defaults were applied");
+        UserSettings m; info.physicalOutputs = 1;
+        require(applyAudioDefaults(m, info) && m.output.mono && m.output.monoChannel == 0 && m.output.left == -1 && m.output.right == -1 && m.output.validate().wasOk(), "Single output -> valid mono mapping");
+        UserSettings n; info.physicalInputs = 0; info.physicalOutputs = 0;
+        require(!applyAudioDefaults(n, info) && n.audioDefaultsApplied && n.physicalInputs.empty() && n.output.left == -1, "No channels -> nothing mapped, marker still set");
+        UserSettings closed; RecorderAudioEngine::DeviceInfo none;
+        require(!applyAudioDefaults(closed, none) && !closed.audioDefaultsApplied, "No open device -> untouched");
+    });
     suite.test("All Korean failure banners have the specified meaning", []
     {
         require(recorderFaultText(RecorderFault::camera2Disconnected) == juce::String::fromUTF8("캠2 연결이 끊겼습니다. 캠1과 원본 녹음은 계속됩니다."), "Camera message");

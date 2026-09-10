@@ -599,13 +599,36 @@ def package_recorder(args):
         print("package-only: no GitHub, site or tag changes; this does not approve publication")
     return {"output": output, "installer": installer, "appcast": output / "appcast.xml", "notes": output / "notes.html",
             "version": identity["VERSION"], "tag": identity["TAG_PREFIX"] + identity["VERSION"],
-            "url": identity["RELEASE_BASE_URL"] + identity["TAG_PREFIX"] + identity["VERSION"] + "/" + installer.name}
+            "url": identity["RELEASE_BASE_URL"] + identity["TAG_PREFIX"] + identity["VERSION"] + "/" + installer.name,
+            "report": report, "source": (output / source_name) if source_name else None,
+            "sources_name": identity["SOURCES_STEM"] + "-" + identity["VERSION"] + ".zip"}
+
+
+def recorder_tag_preflight(tag_name):
+    """Same checks the legacy path runs before its long build: an existing tag must be annotated and on HEAD."""
+    head = run(["git", "rev-parse", "HEAD"], cwd=ROOT, capture=True).strip()
+    if run(["git", "tag", "--list", tag_name], cwd=ROOT, capture=True).strip():
+        tagged = run(["git", "rev-list", "-n", "1", tag_name], cwd=ROOT, capture=True).strip()
+        if tagged != head:
+            sys.exit("tag %s already exists on another commit (%s, HEAD is %s) - bump RECORDER_VERSION" % (tag_name, tagged[:10], head[:10]))
+        if run(["git", "cat-file", "-t", "refs/tags/" + tag_name], cwd=ROOT, capture=True).strip() != "tag":
+            sys.exit("tag %s is a lightweight tag - delete it and let the script create the annotated one" % tag_name)
+    ref = os.environ.get("GITHUB_REF_NAME", "")
+    if ref and ref != tag_name:
+        sys.exit("git tag %s does not match the Recorder version (expected %s)" % (ref, tag_name))
 
 
 def publish_recorder(args, candidate):
     """Same shape as the legacy publish: annotated tag at HEAD, push main + tag to the app remote (a mirror of this
     repository), GitHub release with installer + appcast (+ fixed-name installer), then the website."""
     tag_name = candidate["tag"]
+    report = candidate.get("report") or {}
+    if report.get("status") != "PASS":
+        blockers = ", ".join(report.get("blockers", []))
+        if not getattr(args, "accept_blocked_gates", False):
+            sys.exit("Recorder candidate passed the technical checks but release gates are %s (%s). "
+                     "Publishing needs the release owner's decision: re-run with --accept-blocked-gates." % (report.get("status"), blockers))
+        print("publishing with unresolved release gates (accepted by the release owner):", blockers)
     head = run(["git", "rev-parse", "HEAD"], cwd=ROOT, capture=True).strip()
     if run(["git", "tag", "--list", tag_name], cwd=ROOT, capture=True).strip():
         tagged = run(["git", "rev-list", "-n", "1", tag_name], cwd=ROOT, capture=True).strip()
@@ -615,8 +638,13 @@ def publish_recorder(args, candidate):
         run(["git", "tag", "-a", tag_name, "-m", APP["name"] + " " + candidate["version"]], cwd=ROOT)
     run(["git", "push", APP["remote"], "HEAD:main"], cwd=ROOT)
     run(["git", "push", APP["remote"], tag_name], cwd=ROOT)
+    # the About dialog links the same-release source archive: a validated --source-bundle, otherwise this commit
+    source = candidate.get("source")
+    if source is None:
+        source = candidate["output"] / candidate["sources_name"]
+        run(["git", "archive", "--format=zip", "-o", str(source), "HEAD"], cwd=ROOT)
     gh = find_gh()
-    run([gh, "release", "create", tag_name, str(candidate["installer"]), str(candidate["appcast"]),
+    run([gh, "release", "create", tag_name, str(candidate["installer"]), str(candidate["appcast"]), str(source),
          "--repo", APP["repo"], "--title", APP["name"] + " " + candidate["version"], "--verify-tag",
          "--notes-file", str(candidate["notes"])])
     print("published :", "https://github.com/%s/releases/tag/%s" % (APP["repo"], tag_name))
@@ -649,6 +677,7 @@ def main():
     parser.add_argument("--package-only", action="store_true", help="build/test/sign a local candidate; never change GitHub, site or tags")
     parser.add_argument("--source-bundle", default="", help="Recorder exact-source ZIP with source-manifest.json (optional for a blocked local candidate)")
     parser.add_argument("--allow-dirty", action="store_true", help="release from a working tree with uncommitted changes (not for real releases)")
+    parser.add_argument("--accept-blocked-gates", action="store_true", help="Recorder --publish: publish a technically PASS candidate whose release gates are still BLOCKED (release owner decision)")
     args = parser.parse_args()
     global APP
     APP = APPS[args.app]
@@ -675,6 +704,7 @@ def main():
         dirty = run(["git", "status", "--porcelain"], cwd=ROOT, capture=True)
         if dirty.strip():
             sys.exit("the working tree has uncommitted changes - commit first:\n" + dirty)
+        recorder_tag_preflight(APP["tag_prefix"] + recorder_identity()["VERSION"])
         publish_recorder(args, package_recorder(args))
         return
 

@@ -386,7 +386,7 @@ class RecorderReleaseRoutingTests(unittest.TestCase):
             release.main()
             package.assert_called_once()
             publish.assert_called_once_with(mock.ANY, candidate)
-            self.assertEqual([list(c.args[0]) for c in run.call_args_list], [["git", "status", "--porcelain"]])
+            self.assertEqual(list(run.call_args_list[0].args[0]), ["git", "status", "--porcelain"]) # then the tag preflight
         with mock.patch.dict(release.APPS["recorder"], {"publication_confirmed": True}), \
              mock.patch.object(sys, "argv", ["release.py", "--app", "recorder", "--publish"]), \
              mock.patch.object(release, "run", return_value=" M tools/release.py\n"), mock.patch.object(release, "package_recorder") as package, \

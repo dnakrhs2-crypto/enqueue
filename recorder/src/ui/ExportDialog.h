@@ -40,6 +40,9 @@ private:
     std::unique_ptr<juce::FileChooser> chooser;
     std::function<void()> pendingRecording;
     bool recordingReserved = false, finalMode = false, restoreTimeline = false, updating = false, previewAttached = false;
+    bool exportGateHeld = false; // session lifecycle "exporting": blocks updater shutdown/quiet checks while a job runs
+    bool holdExportGate();
+    void releaseExportGate();
     std::vector<AudioSourceMask> imports, microphones;
     std::shared_ptr<ExportControl> previewControl;
     ExportActivity previewActivity;

@@ -106,4 +106,8 @@ private:
     std::deque<Derived> derivedResults;
     ThumbnailCache derivedWorker; // destroyed/joined before callback result storage
 };
+// First-run audio defaults for a freshly chosen device: microphone 1 on input 1, playback on outputs 1/2 (mono on a
+// single-output device). Runs once per device choice (UserSettings::audioDefaultsApplied); later explicit "none"
+// choices are kept. Returns whether any mapping changed.
+bool applyAudioDefaults(UserSettings&, const RecorderAudioEngine::DeviceInfo&);
 }

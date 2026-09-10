@@ -26,6 +26,7 @@ struct UserSettings
     std::array<juce::String, 8> microphoneNames;
     std::array<bool, 8> microphoneArmed {true, true, true, true, true, true, true, true};
     OutputMapping output;
+    bool audioDefaultsApplied = false; // first-run input/output defaults were applied for asioDeviceId
     CaptureSnapshot calibration;
     juce::StringArray recentProjects;
     juce::String windowState;

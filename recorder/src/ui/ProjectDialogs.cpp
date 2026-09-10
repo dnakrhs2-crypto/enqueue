@@ -79,7 +79,8 @@ void MainComponent::showSettings()
     { session.stopPlayback(); const auto result = session.audioEngine().showControlPanel(); if (result.failed()) content->error.setText(result.getErrorMessage(), juce::dontSendNotification); else session.configure(settings.get()); };
     content->apply.onClick = [this, content, configure]
     {
-        const auto s = content->camera.read(content->audio.read(settings.get())); auto result = validateAudioSettings(s, session.deviceInfo(), document.getProject());
+        const auto s = content->camera.read(content->audio.read(settings.get()));
+        auto result = s.asioDeviceId.isEmpty() ? juce::Result::ok() : validateAudioSettings(s, session.deviceInfo(), document.getProject()); // cameras apply without an ASIO device
         if (result.wasOk()) result = content->camera.scanning() ? juce::Result::fail(ko("카메라 목록을 확인하는 중입니다.")) : validateCameraSettings(s, content->camera.catalog());
         if (result.failed()) content->error.setText(result.getErrorMessage(), juce::dontSendNotification); else configure(s);
     };

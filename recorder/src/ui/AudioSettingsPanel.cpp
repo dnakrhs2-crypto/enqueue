@@ -21,7 +21,7 @@ AudioSettingsPanel::AudioSettingsPanel(const UserSettings& s, const RecorderProj
     const auto changed = [this]
     {
         auto s = read(initial);
-        if (s.asioDeviceId != actual.name) { s.physicalInputs.clear(); s.output = {}; } // a new device gets its first-run defaults
+        if (s.asioDeviceId != actual.name) { s.physicalInputs.clear(); s.output = {}; s.audioDefaultsApplied = false; } // a new device gets its first-run defaults
         actualLabel.setText(ko("장치를 연결하는 중입니다."), juce::dontSendNotification);
         if (onChanged) onChanged(s);
     };
@@ -32,6 +32,16 @@ AudioSettingsPanel::AudioSettingsPanel(const UserSettings& s, const RecorderProj
     controlPanel.onClick = [this] { if (onControlPanel) onControlPanel(); };
     setDeviceInfo(info);
 }
+void AudioSettingsPanel::setSettings(const UserSettings& s)
+{
+    initial = s;
+    for (int i = 0; i < devices.getNumItems(); ++i) if (devices.getItemText(i) == s.asioDeviceId) devices.setSelectedId(devices.getItemId(i), juce::dontSendNotification);
+    rate.setSelectedId(int(fixed ? projectFs : s.preferredSampleRate), juce::dontSendNotification);
+    buffer.setText(juce::String(s.bufferSize), juce::dontSendNotification);
+    mono.setToggleState(s.output.mono, juce::dontSendNotification); right.setEnabled(!s.output.mono);
+    leftLabel.setText(s.output.mono ? ko("재생 출력 모노 채널") : ko("재생 출력 왼쪽"), juce::dontSendNotification);
+}
+void AudioSettingsPanel::setBusy(bool configuring) { busy = configuring; controlPanel.setEnabled(!busy && actual.sampleRate != 0); }
 UserSettings AudioSettingsPanel::read(UserSettings s) const
 {
     if (devices.getSelectedId()) s.asioDeviceId = devices.getText();
@@ -63,7 +73,7 @@ void AudioSettingsPanel::setDeviceInfo(const RecorderAudioEngine::DeviceInfo& in
         for (int i = 0; i < info.physicalInputs; ++i) box.addItem(juce::String(i + 1) + " · " + info.inputNames[i], i + 2);
         box.setSelectedId(m < s.physicalInputs.size() ? s.physicalInputs[m] + 2 : 1, juce::dontSendNotification);
     }
-    controlPanel.setEnabled(info.sampleRate != 0);
+    controlPanel.setEnabled(!busy && info.sampleRate != 0);
 }
 void AudioSettingsPanel::resized()
 {

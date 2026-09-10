@@ -79,8 +79,17 @@ ExportDialog::~ExportDialog()
     stopPreview();
     if (previewWork.valid()) try { previewWork.get(); } catch (...) {}
     controller.cancel(); controller.wait();
+    releaseExportGate();
     if (window) window->clearContentComponent(); window.reset();
 }
+bool ExportDialog::holdExportGate()
+{
+    if (exportGateHeld) return true;
+    exportGateHeld = session.beginExclusive(RecorderLifecycle::exporting, [this] { controller.cancel(); }).wasOk();
+    return exportGateHeld;
+}
+void ExportDialog::releaseExportGate()
+{ if (exportGateHeld) { exportGateHeld = false; session.endExclusive(RecorderLifecycle::exporting); } }
 void ExportDialog::show()
 {
     refreshSources(); if (!window) window = std::make_unique<Window>(*this);
@@ -241,10 +250,11 @@ void ExportDialog::startExport(bool again)
             const auto state = controller.status();
             exportRequire(state.projectId == document.getProject().projectId && !session.busy() && !document.isRecordingStructureLocked(), "같은 프로젝트에서 녹화가 끝난 뒤 재시도하세요.");
             exportRequire(juce::File::isAbsolutePath(folder.getText()), "출력 폴더의 전체 경로를 선택하세요.");
+            exportRequire(holdExportGate(), "녹화·재생이 끝난 뒤 내보내기를 시작하세요.");
             result = controller.retry(juce::File(folder.getText()).getChildFile(state.outputDirectory.getFileName()));
         }
-        else result = controller.start(document, request());
-        if (result.failed()) sourceStatus.setText(result.getErrorMessage(), juce::dontSendNotification);
+        else { exportRequire(holdExportGate(), "녹화·재생이 끝난 뒤 내보내기를 시작하세요."); result = controller.start(document, request()); }
+        if (result.failed()) { releaseExportGate(); sourceStatus.setText(result.getErrorMessage(), juce::dontSendNotification); }
     }
     catch (const std::exception& e) { sourceStatus.setText(juce::String::fromUTF8(e.what()), juce::dontSendNotification); }
     refreshSelection();
@@ -309,6 +319,7 @@ void ExportDialog::timerCallback()
     }
     if (recordingReserved && !session.recording() && !document.isRecordingStructureLocked())
     { recordingReserved = false; controller.endRecording(); }
+    if (exportGateHeld && !controller.busy()) releaseExportGate(); // completed, cancelled or failed
     const auto state = controller.status(); progressValue = state.progress.fraction;
     using S = ExportController::State;
     juce::String text;

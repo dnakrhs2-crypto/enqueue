@@ -15,6 +15,7 @@ juce::String encode(const UserSettings& s)
 {
     juce::PropertySet p; p.setValue("schemaVersion", 1); p.setValue("productId", ProductIdentity::internalId());
     p.setValue("asioDeviceId", s.asioDeviceId); p.setValue("bufferSize", s.bufferSize); p.setValue("preferredSampleRate", static_cast<juce::int64>(s.preferredSampleRate));
+    p.setValue("audioDefaultsApplied", s.audioDefaultsApplied);
     for (size_t i = 0; i < 2; ++i)
     {
         p.setValue(key("cameraEnabled", i), s.cameraEnabled[i]); p.setValue(key("cameraDeviceId", i), s.cameraDeviceIds[i]); p.setValue(key("cameraMode", i), s.cameraModes[i]);
@@ -55,6 +56,7 @@ juce::Result decode(const juce::String& text, UserSettings& out)
     const auto boolean = [&](const juce::String& name, bool fallback) { return bounded(name, fallback ? 1 : 0, 0, 1) != 0; };
     if (integer("schemaVersion", 0) != 1 || p.getValue("productId") != ProductIdentity::internalId()) return juce::Result::fail(ko("지원하지 않는 설정 파일입니다."));
     UserSettings s; s.asioDeviceId = p.getValue("asioDeviceId"); s.bufferSize = integer("bufferSize", 256);
+    s.audioDefaultsApplied = boolean("audioDefaultsApplied", false);
     s.preferredSampleRate = static_cast<std::uint32_t>(bounded("preferredSampleRate", 48000, 1, (std::numeric_limits<std::uint32_t>::max)()));
     for (size_t i = 0; i < 2; ++i)
     {

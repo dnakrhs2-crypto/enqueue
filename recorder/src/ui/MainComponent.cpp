@@ -25,7 +25,7 @@ MainComponent::MainComponent(RecorderDocument& d, RecorderSettings& s) : documen
     timelineView.onListeningChanged = [this] { session.refreshPlaybackPlan(); };
     session.onConfigured = [this](const juce::Result& result, const UserSettings& s)
     {
-        settings.set(s); persistSettings(); if (result.failed()) showError(result.getErrorMessage());
+        settings.set(s); persistSettings(); if (result.failed()) showError(result.getErrorMessage()); else banner.clear();
         if (audioPanel) { audioPanel->setSettings(s); audioPanel->setDeviceInfo(session.deviceInfo()); }
         if (settingsError) settingsError->setText(result.wasOk() ? ko("설정을 적용했습니다.") : result.getErrorMessage(), juce::dontSendNotification);
         refreshPending = true;
@@ -110,7 +110,8 @@ void MainComponent::refresh()
     retryButton.setButtonText(closeAction ? ko("저장 재시도") : ko("마무리 재시도"));
     retryButton.setVisible((message.contains(ko("MP4 마무리 실패")) || take.state() == TakeController::State::partialFailure || (closeAction && closeCommitRequested)) && !session.busy() && !fileWork.valid());
     if (closeAction) { recordView.setEnabled(false); timelineView.setEnabled(false); }
-    if (settingsWindow) settingsWindow->getContentComponent()->setEnabled(!session.configuring() && !session.recording());
+    if (settingsWindow) settingsWindow->getContentComponent()->setEnabled(!session.recording()); // edits made while applying are queued
+    if (audioPanel) audioPanel->setBusy(session.configuring());
     for (unsigned i = 0; i < 2; ++i)
     {
         const bool enabled = settings.get().cameraEnabled[i]; bool hasPlayback = false;

@@ -4,6 +4,7 @@
 #include "storage/IoHealth.h"
 #include <algorithm>
 #include <chrono>
+#include <tuple>
 
 namespace gocue::recorder
 {
@@ -16,6 +17,19 @@ bool activeTake(TakeController::State s)
 template<class T> bool ready(std::future<T>& f) { return f.valid() && f.wait_for(std::chrono::milliseconds(0)) == std::future_status::ready; }
 RenderClip mappingFor(const Clip& c, const MediaAsset& a)
 { RenderClip r; r.clipId = c.clipId; r.trackId = c.trackId; r.assetId = c.assetId; r.sourceIn = c.sourceIn; r.timelineStartSample = c.timelineStartSample; r.lengthSamples = c.lengthSamples; r.mediaGeneration = a.mediaGeneration; r.gaps = a.gaps; return r; }
+}
+bool applyAudioDefaults(UserSettings& s, const RecorderAudioEngine::DeviceInfo& info)
+{
+    if (s.audioDefaultsApplied || !info.sampleRate) return false;
+    const auto before = std::make_tuple(s.physicalInputs, s.output.mono, s.output.left, s.output.right, s.output.monoChannel);
+    s.audioDefaultsApplied = true;
+    if (s.physicalInputs.empty() && info.physicalInputs > 0) s.physicalInputs = {0};
+    if (!s.output.mono && s.output.left < 0 && s.output.right < 0 && info.physicalOutputs > 0)
+    {
+        if (info.physicalOutputs >= 2) { s.output.left = 0; s.output.right = 1; }
+        else { s.output.mono = true; s.output.monoChannel = 0; s.output.left = -1; s.output.right = -1; }
+    }
+    return before != std::make_tuple(s.physicalInputs, s.output.mono, s.output.left, s.output.right, s.output.monoChannel);
 }
 struct RecorderSession::LiveCamera
 {
@@ -132,15 +146,10 @@ juce::Result RecorderSession::configure(UserSettings settings)
             checkResult(audio.openDevice(settings.asioDeviceId, fixedFs ? fixedFs : settings.preferredSampleRate, settings.bufferSize));
             if (fixedFs && audio.deviceInfo().sampleRate != fixedFs)
             { audio.closeDevice(); throw std::runtime_error("프로젝트 샘플레이트가 고정되어 있습니다. ASIO 장치의 샘플레이트를 맞추세요."); }
-            const auto info = audio.deviceInfo();
-            // First-run defaults so the device simply works: microphone 1 on input 1, playback on outputs 1/2.
-            if (settings.physicalInputs.empty() && info.physicalInputs > 0)
-            { settings.physicalInputs = {0}; map[0] = 0; checkResult(audio.setInputMap(map)); }
-            if (!settings.output.mono && settings.output.left < 0 && settings.output.right < 0 && info.physicalOutputs > 0)
+            if (applyAudioDefaults(settings, audio.deviceInfo()))
             {
-                if (info.physicalOutputs >= 2) { settings.output.left = 0; settings.output.right = 1; }
-                else { settings.output.mono = true; settings.output.monoChannel = 0; }
-                checkResult(audio.setOutputMap(settings.output));
+                map.fill(-1); for (std::size_t i = 0; i < settings.physicalInputs.size(); ++i) map[i] = settings.physicalInputs[i];
+                checkResult(audio.setInputMap(map)); checkResult(audio.setOutputMap(settings.output));
             }
             for (unsigned i = 0; i < 8; ++i) checkResult(audio.arm(i, map[i] >= 0 && settings.microphoneArmed[i]));
             settings.preferredSampleRate = audio.deviceInfo().sampleRate;

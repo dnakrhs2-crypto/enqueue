@@ -10,7 +10,8 @@ public:
     AudioSettingsPanel(const UserSettings&, const RecorderProject&, const RecorderAudioEngine::DeviceInfo&);
     UserSettings read(UserSettings base) const;
     void setDeviceInfo(const RecorderAudioEngine::DeviceInfo&);
-    void setSettings(const UserSettings& s) { initial = s; }
+    void setSettings(const UserSettings&); // sync the visible choices with what the session applied
+    void setBusy(bool configuring);       // only the ASIO control panel is held back while a change is applying
     void resized() override;
     std::function<void(UserSettings)> onChanged; // any edit applies immediately (no connect button)
     std::function<void()> onControlPanel;
@@ -19,6 +20,7 @@ private:
     bool fixed;
     unsigned projectFs;
     RecorderAudioEngine::DeviceInfo actual;
+    bool busy = false;
     juce::Label deviceLabel, rateLabel, actualLabel, bufferLabel, latencyLabel, leftLabel, rightLabel;
     juce::ComboBox devices, rate, buffer, left, right;
     juce::ToggleButton mono {ko("모노 출력")};
