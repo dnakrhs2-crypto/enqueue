@@ -101,8 +101,17 @@ Sample RenderPlanCompiler::sourceUnitAt(const RenderSpan& s, Sample t, bool vide
     unsigned __int64 high = 0, remainder = 0;
     const auto low = _umul128(static_cast<std::uint64_t>(u), s.sourceUnitsNumerator, &high);
     if (high >= s.sourceUnitsDenominator) throw std::overflow_error("원본 프레임 범위를 초과했습니다.");
-    const auto frame = _udiv128(high, low, s.sourceUnitsDenominator, &remainder);
+    auto frame = _udiv128(high, low, s.sourceUnitsDenominator, &remainder);
     if (frame > static_cast<std::uint64_t>((std::numeric_limits<Sample>::max)())) throw std::overflow_error("원본 프레임 범위를 초과했습니다.");
+    // VideoIndex/frameToSample round each PTS boundary to the nearest sample.
+    // The next frame contains u when its exact boundary is less than half a
+    // sample after u. Use the division remainder to avoid another wide multiply.
+    if (s.sourceUnitsDenominator - remainder <= (s.sourceUnitsNumerator - 1) / 2)
+    {
+        if (frame == static_cast<std::uint64_t>((std::numeric_limits<Sample>::max)()))
+            throw std::overflow_error("Rounded source frame exceeds the coordinate range");
+        ++frame;
+    }
     return static_cast<Sample>(frame);
 }
 }

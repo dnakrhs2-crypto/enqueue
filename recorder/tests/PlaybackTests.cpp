@@ -139,6 +139,78 @@ public:
 int runPlaybackTests()
 {
     Suite suite;
+    suite.test("alignment: compiled CFR frames match the indexed rounded sample boundaries", []
+    {
+        for (unsigned Fs : {48000u, 44100u, 32000u})
+        {
+            auto source = videoIndex(); source->sampleRate = Fs; source->validateAndBuild();
+            RenderSpan span{{12345, source->length - 101}, newId(), newId(), 101, 1, 60, Fs};
+            for (Sample delta = 0; delta < Fs; ++delta)
+                require(RenderPlanCompiler::sourceUnitAt(span, 12345 + delta, true) == Sample(source->frameAt(101 + delta)),
+                    "Compiler and decoder disagree at a rounded CFR sample boundary");
+        }
+    });
+    suite.test("alignment: moved trimmed clip maps every boundary to the same source video and PCM", []
+    {
+        Temp temp; auto source = videoIndex(601);
+        source->startPts = 120;
+        for (auto& p : source->packets) { p.pts += 120; p.dts += 120; }
+        source->validateAndBuild();
+        std::vector<std::int32_t> pcm(std::size_t(source->length));
+        for (std::size_t i = 0; i < pcm.size(); ++i) pcm[i] = std::int32_t(i) + 1;
+        auto audio = std::make_shared<WavSource>(); audio->epoch = std::make_shared<MediaEpoch>(); audio->trackId = "alignment-mic";
+        audio->chunks.push_back(wav(temp.root.getChildFile("position.wav"), 0, pcm, source->length)); MediaIndex::validateWav(*audio);
+        constexpr Sample placement = 12345, in = 63841, length = 96123;
+        auto vc = videoClip(source, placement, in, length); vc.mapping.gaps = {{1600, 800}};
+        auto ac = audioTrack(audio, placement, in, length); ac.clips[0].mapping.gaps = vc.mapping.gaps;
+        TimelineAudioRenderer renderer(48000, 512); renderer.setPlan({ac}, placement + length);
+        VideoPlaybackEngine video(factory(std::make_shared<StubState>())); video.prepare({vc}); std::uint64_t generation = 0;
+        for (Sample delta : {Sample{-1}, Sample{0}, Sample{1}, Sample{158}, Sample{159}, Sample{160}, Sample{799}, Sample{800},
+                             Sample{1599}, Sample{1600}, Sample{2399}, Sample{2400}, Sample{48000}, length - 1, length})
+        {
+            const auto t = placement + delta; const auto u = in + delta;
+            video.seek(t, ++generation); eventually([&] { return video.ready(t, generation); });
+            const auto selected = video.displaySelection(0); float l = 0, r = 0; renderer.renderAudio(t, 1, &l, &r);
+            const bool gap = delta < 0 || delta >= length || (delta >= 1600 && delta < 2400);
+            require(selected.gap == gap, "Clip block/gap and selected picture disagree");
+            if (!gap)
+            {
+                require(selected.frame && selected.frame->pts == 120 + u / 800 && selected.frame->begin <= t && t < selected.frame->end,
+                    "Nonzero PTS origin, sourceIn or placement shifted the selected frame");
+                require(l == float(u + 1) / 8388608.0f && r == l, "PCM source coordinate differs from video source coordinate");
+            }
+            else require(l == 0 && r == 0, "Audio escaped the visible clip/gap boundary");
+        }
+    });
+    suite.test("alignment: coordinator selects the audible playhead frame without a fixed display lead", []
+    {
+        auto source = videoIndex(); source->sampleRate = 1000; source->validateAndBuild();
+        VideoPlaybackEngine video(factory(std::make_shared<StubState>())); video.prepare({videoClip(source, 0, 0, source->length)});
+        TimelineAudioRenderer audio(1000, 100); audio.setPlan({}, source->length);
+        TimelineTransport transport(1000, 1000000, audio.queue(), source->length); StubOutput output; output.start(transport);
+        transport.seek(0); transport.play(); unsigned checked = 0;
+        for (int i = 0; i < 16; ++i)
+        {
+            // Advance synthetic callbacks only after the worker has supplied
+            // their PCM; otherwise this tight loop fabricates an underrun.
+            if (transport.snapshot().state == TransportState::playing)
+                eventually([&] { return audio.queue().queuedFrames() >= 100; });
+            output.tick(); transport.service(audio, video, output, output.current.callbackQpc);
+            if (transport.snapshot().state == TransportState::preparing)
+                eventually([&] { transport.service(audio, video, output, output.current.callbackQpc); return audio.ready() && video.ready(transport.snapshot().frozenSample, transport.generation()); });
+            const auto snapshot = transport.snapshot();
+            if (snapshot.state != TransportState::playing) continue;
+            const auto audible = TimelineTransport::audibleCursor(snapshot, 1000, 1000000, output.current.callbackQpc);
+            const auto target = Sample(video.telemetry()["cameras"][0]["targetSample"]);
+            require(target == audible, "Video coordinator requested a different time from the audible/UI cursor");
+            eventually([&] { return video.ready(target, transport.generation()); });
+            const auto selected = video.displaySelection(0);
+            require(selected.frame && selected.frame->begin <= audible && audible < selected.frame->end,
+                "Selected video frame does not contain the displayed/audible playhead");
+            ++checked;
+        }
+        require(checked >= 8 && transport.status().wasOk(), "Synthetic advancing output did not exercise alignment");
+    });
     suite.test("packet index builds closed-GOP IDR lookup and floors exact frame containment", []
     {
         const auto v = videoIndex(); require(v->length == 144000 && v->idrs.size() == 3, "Index length/IDR count");

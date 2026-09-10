@@ -41,7 +41,7 @@ public:
     // Owner/worker thread only. Throws on invalid input/overflow; no handles or cache state.
     static std::shared_ptr<const CompiledRenderPlan> compile(const RecorderProject&);
     // Absolute source logical coordinate -> native sample or CFR frame index.
-    // Video floors (last PTS <= u); audio rounds. VFR readers must apply the PTS oracle
+    // Video contains u in rounded PTS sample boundaries; audio rounds. VFR readers must apply the PTS oracle
     // to their actual source index, using the same logical u instead of assuming CFR.
     static Sample sourceUnitAt(const RenderSpan&, Sample timelineSample, bool video);
 };

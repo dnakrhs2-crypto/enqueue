@@ -31,6 +31,7 @@ struct CfrChange { std::uint64_t repeated = 0, omitted = 0, missing = 0; };
 struct CfrCounters
 {
     std::uint64_t inputs = 0, outputs = 0, repeated = 0, omitted = 0;
+    std::int64_t maximumDeliveryDelay100ns = 0;
     std::array<CfrChange, 4> reasons{};
     juce::var toJson() const;
 };
@@ -50,13 +51,14 @@ struct CfrSelection
     size_t releasedCount = 0;
 };
 // Single worker, fixed storage, no device/GPU/clock reads. Ties select the older
-// image. A future candidate ends the wait early; otherwise wait <=1 native period.
+// image. A future candidate ends the wait early; otherwise allow one native
+// period PLUS observed capture/decode delivery delay, in the same mapped clock.
 class VideoCfrScheduler
 {
 public:
     static constexpr size_t capacity = 16;
     VideoCfrScheduler(Rational nativeRate, Rational projectRate);
-    void push(CfrInput);
+    void push(CfrInput, std::optional<std::int64_t> availableTime100ns = {});
     std::optional<CfrSelection> select(std::int64_t now100ns, bool drain = false);
     void noteLoss(CfrReason, std::uint64_t count);
     const CfrCounters& counters() const noexcept { return stats; }

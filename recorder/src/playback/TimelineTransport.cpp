@@ -293,7 +293,10 @@ void TimelineTransport::service(TimelineAudioRenderer& audio, VideoPlaybackEngin
             prepared(output.latestOutputSample() + Sample(queue.blockFrames) * 3, true);
         const auto videoStatus = video.status(); if (videoStatus.failed()) throw std::runtime_error(videoStatus.getErrorMessage().toStdString());
         const auto audioStatus = audio.status(); if (audioStatus.failed()) throw std::runtime_error(audioStatus.getErrorMessage().toStdString());
-        auto cursor = audibleCursor(s, rate, frequency, now, frequency / 60);
+        // Selection and the UI share the audible cursor. Decoder prefetch owns
+        // lookahead; adding a fixed refresh period here displays the next frame
+        // early and clears clip ends before the audio reaches them.
+        auto cursor = audibleCursor(s, rate, frequency, now);
         if (s.generation != requestedGeneration || s.state == TransportState::preparing) cursor = requestedSample;
         const bool advancing = s.generation == requestedGeneration && (s.state == TransportState::playing
             || s.state == TransportState::draining || s.state == TransportState::buffering);

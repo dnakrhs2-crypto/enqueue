@@ -13,6 +13,7 @@
 #include "playback/ImportedAudioCache.h"
 #include "audio/MediaFoundationAudioFormat.h"
 namespace gocue::recorder { int runPlaybackProbe(int argc, wchar_t** argv); }
+namespace gocue::recorder { int runAlignmentProbe(int argc, wchar_t** argv); }
 namespace gocue::recorder { int runHardeningProbe(int argc, wchar_t** argv); }
 namespace gocue::recorder { int runDubbingProbe(int argc, wchar_t** argv); }
 namespace gocue::recorder { int runExportProbe(int argc, wchar_t** argv); }
@@ -1049,6 +1050,7 @@ int wmain(int argc, wchar_t** argv)
         if (argc >= 2 && juce::String(argv[1]) == "export") return runExportProbe(argc, argv);
         if (argc >= 2 && juce::String(argv[1]) == "import-audio") return importAudioCommand(argc, argv);
         if (argc >= 2 && juce::String(argv[1]) == "playback") return runPlaybackProbe(argc, argv);
+        if (argc >= 2 && juce::String(argv[1]) == "alignment") return runAlignmentProbe(argc, argv);
         if (argc >= 2 && juce::String(argv[1]) == "hardening") return runHardeningProbe(argc, argv);
         if (argc >= 2 && juce::String(argv[1]) == "dubbing") return runDubbingProbe(argc, argv);
         if (argc >= 2 && juce::String(argv[1]) == "demo") return runDemoProbe(argc, argv);
