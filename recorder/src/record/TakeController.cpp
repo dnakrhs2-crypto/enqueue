@@ -290,6 +290,7 @@ private:
                 {
                     if (!cameraClock->reanchor(stamp)) return false;
                     if (mapping) mapper->reanchor();
+                    scheduler.resetDeliveryDelay();
                     observedClockRevision = revision; ++reanchors;
                 }
                 else cameraClock->observe(stamp);

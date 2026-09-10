@@ -1216,13 +1216,14 @@ float4 psMain(Vertex v) : SV_Target { return picture.Sample(linearSampler, v.uv)
                 checkHr(swap->ResizeBuffers(0, desc.Width, desc.Height, DXGI_FORMAT_UNKNOWN, desc.Flags), "Resize playback host"); makeTarget();
             }
             const auto selection = engine.displaySelection(camera, presentationTick);
-            const auto displayed = display.select(selection);
+            const auto decision = display.select(selection);
+            const auto& displayed = decision.frame;
             auto overlay = selection;
             if (displayed) overlay.buffering = false;
             postOverlay(overlay);
-            // Before the very first picture, leave the existing host surface
-            // alone. Only explicit gaps submit an empty/black playback picture.
-            if (!selection.gap && !displayed) continue;
+            // Startup can skip; invalidated on-screen pixels require a clear
+            // even while a valid replacement clip is still buffering.
+            if (!decision.shouldSubmit()) continue;
             const float black[]{0, 0, 0, 1}; context->ClearRenderTargetView(target.Get(), black);
             if (displayed && displayed->texture)
             {
@@ -1257,6 +1258,7 @@ float4 psMain(Vertex v) : SV_Target { return picture.Sample(linearSampler, v.uv)
             opportunity.submitted(hr == S_OK);
             if (hr == DXGI_STATUS_OCCLUDED || hr == DXGI_ERROR_WAS_STILL_DRAWING) continue;
             checkHr(hr, "Playback Present");
+            if (hr != S_OK) continue;
             display.submitted(displayed);
             // A held pre-seek picture is visible continuity, never an exact
             // receipt for the new generation (and never a stale decode result).

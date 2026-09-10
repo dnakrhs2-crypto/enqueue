@@ -103,6 +103,12 @@ inline void writeReport(const juce::String& name, const juce::String& csv, const
     require(root.getChildFile(name + ".csv").replaceWithText(csv), "Write seam frame trace");
     require(root.getChildFile(name + ".json").replaceWithText(juce::JSON::toString(summary)), "Write seam summary");
 }
+inline PlaybackDisplayDecision submitPicture(PlaybackDisplayState& display, const PlaybackDisplaySelection& selection)
+{
+    const auto decision = display.select(selection);
+    if (decision.shouldSubmit()) display.submitted(decision.frame); // synthetic successful sink, never a DXGI claim
+    return decision;
+}
 inline void run(unsigned mode, bool realMedia)
 {
     recorder_audio_fixture::Fixture fixture;
@@ -164,8 +170,8 @@ inline void run(unsigned mode, bool realMedia)
         const auto sample = seam + frame * step;
         video.requestFrames(sample, 1, true);
         const auto selection = video.displaySelection(0, true);
-        const auto picture = display.select(selection);
-        display.submitted(picture); // synthetic output receipt; never a DXGI claim
+        const auto decision = submitPicture(display, selection);
+        const auto& picture = decision.frame;
         if (selection.frame) video.presented(0, *selection.frame, qpcNow());
         const auto& c = clips[frame >= 0 ? 1 : 0];
         const auto expectedSource = c.mapping.sourceIn + sample - c.mapping.timelineStartSample;
@@ -174,14 +180,14 @@ inline void run(unsigned mode, bool realMedia)
         if (frame >= 0 && selection.frame && selection.frame->clipId == clips[1].mapping.clipId && boundaryDelayMs < 0) boundaryDelayMs = arrival;
         if (frame >= -10)
         {
-            missing += !selection.frame; black += !picture; held += picture && !selection.frame;
+            missing += !selection.frame; black += decision.action == PlaybackDisplayAction::clear; held += picture && !selection.frame;
             orderErrors += picture && picture->begin < previousBegin;
             wrongPts += selection.frame && (selection.frame->pts != expectedPts || selection.frame->source != c.source);
             if (picture) previousBegin = picture->begin;
             csv += juce::String(frame) + "," + juce::String(sample) + "," + juce::String(expectedSource) + "," + juce::String(expectedPts) + ","
                 + (selection.frame ? juce::String(selection.frame->pts) : "empty") + "," + (picture ? juce::String(picture->pts) : "empty") + ","
                 + (picture ? juce::String(picture->begin) : "empty") + "," + (picture && picture->source == sources[0] ? "A" : picture ? "B" : "empty")
-                + "," + juce::String(int(!picture)) + "," + juce::String(int(picture && !selection.frame)) + "," + juce::String(arrival, 3) + "\n";
+                + "," + juce::String(int(decision.action == PlaybackDisplayAction::clear)) + "," + juce::String(int(picture && !selection.frame)) + "," + juce::String(arrival, 3) + "\n";
         }
         float left[step]{}, right[step]{};
         if (!audio.queue().consume(sample, 1, left, right, unsigned(step))) ++audioUnderruns;
@@ -220,19 +226,20 @@ inline void scrub()
     auto b = a; b.mapping.clipId = newId(); b.mapping.timelineStartSample = seam; b.mapping.sourceIn = sourceIn; b.mapping.lengthSamples = seam;
     VideoPlaybackEngine video([stats](auto s) { return std::make_unique<DelayedDecoder>(s, stats); });
     video.prepare({a, b}); video.seek(seam - 12 * step, 1); awaitFrame([&] { return video.ready(seam - 12 * step, 1); });
-    PlaybackDisplayState display; display.submitted(display.select(video.displaySelection(0)));
+    PlaybackDisplayState display; submitPicture(display, video.displaySelection(0));
     unsigned black = 0, held = 0; std::uint64_t generation = 1;
     juce::String csv = "relativeFrame,timelineSample,generation,displayedPts,black,held\n";
     for (int direction : {1, -1}) for (int n = -10; n <= 10; ++n)
     {
         const int relative = n * direction; const auto target = seam + relative * step;
         video.seek(target, ++generation);
-        const auto selection = video.displaySelection(0); const auto picture = display.select(selection);
-        black += !picture; held += picture && !selection.frame; display.submitted(picture);
+        const auto selection = video.displaySelection(0); const auto decision = submitPicture(display, selection);
+        const auto& picture = decision.frame;
+        black += decision.action == PlaybackDisplayAction::clear; held += picture && !selection.frame;
         csv += juce::String(relative) + "," + juce::String(target) + "," + juce::String(generation) + ","
-            + (picture ? juce::String(picture->pts) : "empty") + "," + juce::String(int(!picture)) + "," + juce::String(int(picture && !selection.frame)) + "\n";
+            + (picture ? juce::String(picture->pts) : "empty") + "," + juce::String(int(decision.action == PlaybackDisplayAction::clear)) + "," + juce::String(int(picture && !selection.frame)) + "\n";
         awaitFrame([&] { return video.ready(target, generation); });
-        const auto exact = video.displaySelection(0); display.submitted(display.select(exact));
+        const auto exact = video.displaySelection(0); submitPicture(display, exact);
         require(exact.frame && exact.frame->pts == source->packets[source->frameAt(relative < 0 ? target : sourceIn + relative * step)].pts, "Scrub release PTS is not sourceIn-containing frame");
     }
     auto report = jsonObject(); jsonSet(report, "blackSubmissions", black); jsonSet(report, "heldFrames", held); jsonSet(report, "scrubRequests", 42);
@@ -272,26 +279,55 @@ inline void addTests(recorder_test::Suite& suite)
         auto b = a; b.mapping.clipId = newId(); b.mapping.timelineStartSample = seam; b.mapping.sourceIn = sourceIn; b.mapping.lengthSamples = seam;
         VideoPlaybackEngine video([stats](auto s) { return std::make_unique<DelayedDecoder>(s, stats); }); video.prepare({a, b});
         video.seek(0, 1); awaitFrame([&] { return video.ready(0, 1); });
-        PlaybackDisplayState display; display.submitted(display.select(video.displaySelection(0)));
+        PlaybackDisplayState display; submitPicture(display, video.displaySelection(0));
         video.requestFrames(36000, 1, true);
-        require(video.displaySelection(0).gap && !display.select(video.displaySelection(0)), "Preroll painted into a real gap");
+        require(video.displaySelection(0).gap && submitPicture(display, video.displaySelection(0)).action == PlaybackDisplayAction::clear, "Preroll painted into a real gap");
         awaitFrame([&] { return video.ready(seam, 1); });
-        require(video.displaySelection(0).gap && !display.select(video.displaySelection(0)), "Decoded next frame filled the gap early");
+        require(video.displaySelection(0).gap && submitPicture(display, video.displaySelection(0)).action == PlaybackDisplayAction::clear, "Decoded next frame filled the gap early");
         video.requestFrames(seam, 1, true); const auto selection = video.displaySelection(0);
-        require(selection.frame && selection.frame->pts == sourceIn / step && display.select(selection), "Gap exit discarded its preroll");
+        require(selection.frame && selection.frame->pts == sourceIn / step && submitPicture(display, selection).action == PlaybackDisplayAction::picture, "Gap exit discarded its preroll");
     });
     suite.test("cut seam: hold policy preserves startup, real gaps and source epoch invalidation", []
     {
         auto source = syntheticIndex();
         auto f = std::make_shared<PlaybackVideoFrame>(); f->source = source; f->generation = 1;
         PlaybackDisplayState display; PlaybackDisplaySelection selection; selection.gap = false; selection.generation = 1;
-        require(!display.select(selection), "Startup invented a picture");
+        auto decision = display.select(selection);
+        require(!decision.frame && !decision.shouldSubmit() && decision.action == PlaybackDisplayAction::skip, "Startup submitted an invented picture or black");
         display.submitted(f); selection.generation = 2;
-        require(display.select(selection) == f && !f->current(2), "Hold changed old frame publication rights");
-        selection.gap = true; require(!display.select(selection), "Real gap retained old pixels");
-        selection.gap = false; require(!display.select(selection), "Picture resurrected after an explicit gap");
+        decision = display.select(selection);
+        require(decision.frame == f && decision.shouldSubmit() && !f->current(2), "Hold changed old frame publication rights");
+        selection.gap = true; require(display.select(selection).action == PlaybackDisplayAction::clear, "Real gap retained old pixels");
+        selection.gap = false; require(display.select(selection).action == PlaybackDisplayAction::clear, "Skipped gap clear resurrected old pixels");
+        display.submitted({}); require(!display.select(selection).shouldSubmit(), "Successful gap clear was not acknowledged");
         display.submitted(f); ++source->epoch->value;
-        require(!display.select(selection), "Replaced file epoch retained old pixels");
+        for (unsigned retry = 0; retry < 3; ++retry)
+        {
+            ++selection.generation; decision = display.select(selection);
+            require(!selection.gap && !decision.frame && decision.shouldSubmit() && decision.action == PlaybackDisplayAction::clear,
+                "Epoch invalidation skipped clear during a generation/busy/occlusion retry");
+        }
+        unsigned black = 0;
+        if (decision.shouldSubmit()) { ++black; display.submitted(decision.frame); }
+        require(!display.select(selection).shouldSubmit(), "Epoch invalidation repeatedly submitted black after success");
+        auto replacement = std::make_shared<PlaybackVideoFrame>(); replacement->source = syntheticIndex(); replacement->generation = selection.generation;
+        selection.frame = replacement; decision = submitPicture(display, selection);
+        require(decision.frame == replacement && decision.action == PlaybackDisplayAction::picture, "Replacement failed to resume normal submission");
+        selection.frame.reset(); require(display.select(selection).frame == replacement && black == 1, "Replacement was lost or invalidation submitted black more than once");
+        std::cout << "SEAM epoch invalidation: blackSubmissions=" << black << ", replacement=normal\n";
+    });
+    suite.test("cut seam: a ready replacement satisfies invalidation without an intervening black frame", []
+    {
+        auto source = syntheticIndex(); auto old = std::make_shared<PlaybackVideoFrame>(); old->source = source;
+        PlaybackDisplayState display; display.submitted(old); ++source->epoch->value;
+        auto replacement = std::make_shared<PlaybackVideoFrame>(); replacement->source = syntheticIndex();
+        PlaybackDisplaySelection selection; selection.gap = false; selection.frame = replacement;
+        auto decision = display.select(selection);
+        require(decision.action == PlaybackDisplayAction::picture && decision.frame == replacement, "Ready replacement unnecessarily submitted black");
+        // If that picture cannot submit, invalidated pixels still need clearing.
+        selection.frame.reset(); require(display.select(selection).action == PlaybackDisplayAction::clear, "Unsubmitted replacement consumed pending clear");
+        selection.frame = replacement; submitPicture(display, selection);
+        selection.frame.reset(); require(display.select(selection).frame == replacement, "Successful replacement did not become retained picture");
     });
     suite.test("cut seam: fractional sourceIn uses the containing PTS and exact half-open boundary", []
     {
