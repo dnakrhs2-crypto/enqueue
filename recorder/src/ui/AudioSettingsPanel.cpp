@@ -21,7 +21,7 @@ AudioSettingsPanel::AudioSettingsPanel(const UserSettings& s, const RecorderProj
     const auto changed = [this]
     {
         auto s = read(initial);
-        if (s.asioDeviceId != actual.name) { s.physicalInputs.clear(); s.output = {}; s.audioDefaultsApplied = false; } // a new device gets its first-run defaults
+        if (s.asioDeviceId != actual.name) { s.physicalInputs.clear(); s.stereoSlots.fill(false); s.output = {}; s.audioDefaultsApplied = false; } // a new device gets its first-run defaults
         actualLabel.setText(ko("장치를 연결하는 중입니다."), juce::dontSendNotification);
         if (onChanged) onChanged(s);
     };
@@ -40,6 +40,7 @@ void AudioSettingsPanel::setSettings(const UserSettings& s)
     buffer.setText(juce::String(s.bufferSize), juce::dontSendNotification);
     mono.setToggleState(s.output.mono, juce::dontSendNotification); right.setEnabled(!s.output.mono);
     leftLabel.setText(s.output.mono ? ko("재생 출력 모노 채널") : ko("재생 출력 왼쪽"), juce::dontSendNotification);
+    setDeviceInfo(actual);
 }
 void AudioSettingsPanel::selectRate(unsigned fs)
 {
@@ -54,7 +55,11 @@ UserSettings AudioSettingsPanel::read(UserSettings s) const
     s.output.mono = mono.getToggleState(); s.output.left = left.getSelectedId() - 2; s.output.right = right.getSelectedId() - 2;
     s.output.monoChannel = s.output.left; s.physicalInputs.clear();
     if (s.output.mono) { s.output.left = -1; s.output.right = -1; } else s.output.monoChannel = -1;
-    for (const auto& box : inputs) s.physicalInputs.push_back(box.getSelectedId() - 2);
+    for (unsigned i = 0; i < inputs.size(); ++i)
+    {
+        const int id = inputs[i].getSelectedId(); s.stereoSlots[i] = id >= 1000;
+        s.physicalInputs.push_back(s.stereoSlots[i] ? id - 1000 : id ? id - 2 : -1);
+    }
     return s;
 }
 void AudioSettingsPanel::setDeviceInfo(const RecorderAudioEngine::DeviceInfo& info)
@@ -76,7 +81,9 @@ void AudioSettingsPanel::setDeviceInfo(const RecorderAudioEngine::DeviceInfo& in
     {
         auto& box = inputs[m]; box.clear(juce::dontSendNotification); box.addItem(ko("사용 안 함"), 1);
         for (int i = 0; i < info.physicalInputs; ++i) box.addItem(juce::String(i + 1) + " · " + info.inputNames[i], i + 2);
-        box.setSelectedId(m < s.physicalInputs.size() ? s.physicalInputs[m] + 2 : 1, juce::dontSendNotification);
+        for (int i = 0; i + 1 < info.physicalInputs; ++i)
+            box.addItem(juce::String(i + 1) + "+" + juce::String(i + 2) + " · " + info.inputNames[i] + "/" + info.inputNames[i + 1] + ko(" (스테레오)"), i + 1000);
+        box.setSelectedId(m < s.physicalInputs.size() && s.physicalInputs[m] >= 0 ? s.physicalInputs[m] + (s.stereoSlots[m] ? 1000 : 2) : 1, juce::dontSendNotification);
     }
     controlPanel.setEnabled(!busy && info.sampleRate != 0);
 }

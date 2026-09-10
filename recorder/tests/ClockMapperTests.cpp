@@ -261,6 +261,14 @@ int runClockMapperTests()
         f = frame(601); camera.observe(f); require(adapter.map(f) == 66666, "mapped CFR sample time wrong");
         master.reset(); rejects([&]{ adapter.now(f.callback); }); rejects([&]{ adapter.map(f); });
     });
+    suite.test("Calibration binds stereo input pair and rejects stale mono mapping", []
+    {
+        auto p = profile(); p.key.inputMapping = {6,2,3};
+        const auto loaded = CalibrationProfile::deserialize(p.serialize()); require(loaded.key == p.key, "Stereo calibration key round trip");
+        auto mono = p.key; mono.inputMapping = {6,2,-1}; rejects([&] { loaded.requireMatch(mono); });
+        mono.inputMapping.clear(); rejects([&] { loaded.requireMatch(mono); });
+        p.key.inputMapping = {6,2,3,7,3,-1}; rejects([&] { p.serialize(); });
+    });
     suite.test("calibration JSON roundtrip preserves mode, fps, mapping order, signs", []
     {
         const auto p = profile(), restored = CalibrationProfile::deserialize(p.serialize());

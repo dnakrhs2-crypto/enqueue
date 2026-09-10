@@ -23,6 +23,7 @@ struct UserSettings
     std::array<juce::String, 2> cameraDeviceIds, cameraModes;
     std::array<bool, 2> cameraEnabled {true, false};
     std::vector<int> physicalInputs;
+    std::array<bool, 8> stereoSlots{}; // physicalInputs is L; R is L+1. Missing settings stay mono.
     std::array<juce::String, 8> microphoneNames;
     std::array<bool, 8> microphoneArmed {true, true, true, true, true, true, true, true};
     OutputMapping output;
@@ -30,7 +31,7 @@ struct UserSettings
     CaptureSnapshot calibration;
     juce::StringArray recentProjects;
     juce::String windowState;
-    juce::Result validate() const;
+    juce::Result validate(int deviceInputCount = 256) const;
 };
 class RecorderSettings
 {

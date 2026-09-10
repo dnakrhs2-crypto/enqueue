@@ -64,32 +64,35 @@ struct WavReader final : PlaybackAudioSource
     WavSource wav;
     bool allowGaps;
     WavReader(const WavSource& s, bool gaps) : wav(s), allowGaps(gaps)
-    { epoch = s.epoch; generation = s.generation; sampleRate = s.sampleRate; length = s.length; }
+    { epoch = s.epoch; generation = s.generation; sampleRate = s.sampleRate; channels = int(s.channels); length = s.length; }
     void read(Sample first, unsigned frames, float* l, float* r) const override
     {
         need(current() && first >= 0 && first <= length && frames <= static_cast<std::uint64_t>(length - first), "Stale WAV generation or invalid source range");
-        std::fill_n(l, frames, 0.0f);
-        std::vector<std::uint8_t> bytes(std::size_t(frames) * 3);
+        std::fill_n(l, frames, 0.0f); std::fill_n(r, frames, 0.0f);
+        const auto align = unsigned(channels) * 3;
+        std::vector<std::uint8_t> bytes(std::size_t(frames) * align);
         Sample covered = 0;
         for (const auto& c : wav.chunks)
         {
             const auto a = (std::max)(first, c.firstSample), b = (std::min)(first + frames, c.firstSample + c.validSamples);
             if (a >= b) continue;
-            const auto count = static_cast<int>((b - a) * 3);
+            const auto count = static_cast<int>((b - a) * align);
             juce::FileInputStream input(c.file);
-            need(c.dataOffset + static_cast<std::uint64_t>(b - c.firstSample) * 3 <= c.validBytes
-                && input.openedOk() && input.setPosition(static_cast<juce::int64>(c.dataOffset) + (a - c.firstSample) * 3)
+            need(c.dataOffset + static_cast<std::uint64_t>(b - c.firstSample) * align <= c.validBytes
+                && input.openedOk() && input.setPosition(static_cast<juce::int64>(c.dataOffset) + (a - c.firstSample) * align)
                 && input.read(bytes.data(), count) == count, "Short read inside committed WAV range");
             for (Sample i = 0; i < b - a; ++i)
-            {
-                const auto* p = bytes.data() + i * 3;
-                const auto raw = std::int32_t(p[0]) | (std::int32_t(p[1]) << 8) | (std::int32_t(p[2]) << 16);
-                l[a - first + i] = static_cast<float>(raw & 0x800000 ? raw - 0x1000000 : raw) / 8388608.0f;
-            }
+                for (int ch = 0; ch < channels; ++ch)
+                {
+                    const auto* p = bytes.data() + (i * channels + ch) * 3;
+                    const auto raw = std::int32_t(p[0]) | (std::int32_t(p[1]) << 8) | (std::int32_t(p[2]) << 16);
+                    (ch ? r : l)[a - first + i] = static_cast<float>(raw & 0x800000 ? raw - 0x1000000 : raw) / 8388608.0f;
+                }
             covered += b - a;
         }
         need(allowGaps || covered == frames, "Available audio span is missing a source chunk");
-        std::copy_n(l, frames, r); need(current(), "WAV generation changed during read");
+        if (channels == 1) std::copy_n(l, frames, r);
+        need(current(), "WAV generation changed during read");
     }
 };
 struct ImportedReader final : PlaybackAudioSource
@@ -150,12 +153,12 @@ std::vector<AudioSourceBinding> openAudioSources(const AudioRenderPlan& plan, co
         }
         else
         {
-            auto source = std::make_shared<WavSource>(); source->sampleRate = plan.timeline->Fs; source->trackId = asset.assetId;
+            auto source = std::make_shared<WavSource>(); source->sampleRate = plan.timeline->Fs; source->channels = unsigned(asset.originalFormat.channels); source->trackId = asset.assetId;
             source->generation = static_cast<std::uint64_t>(asset.mediaGeneration); source->epoch = std::make_shared<MediaEpoch>(); source->epoch->value = source->generation;
             const auto add = [&](const juce::String& path, SampleRange range)
             {
-                need(isProjectRelativePath(path) && range.length > 0 && range.length <= ((std::numeric_limits<Sample>::max)() - 44) / 3, "Invalid virtual WAV chunk");
-                source->chunks.push_back({directory.getChildFile(path), range.start, range.length, 44, 44 + static_cast<std::uint64_t>(range.length) * 3});
+                need(isProjectRelativePath(path) && range.length > 0 && range.length <= ((std::numeric_limits<Sample>::max)() - 44) / (source->channels * 3), "Invalid virtual WAV chunk");
+                source->chunks.push_back({directory.getChildFile(path), range.start, range.length, 44, 44 + static_cast<std::uint64_t>(range.length) * source->channels * 3});
             };
             if (asset.chunks.empty()) add(asset.relativePath, {0, asset.logicalLength});
             else for (const auto& chunk : asset.chunks) add(chunk.relativePath, chunk.sourceRange);

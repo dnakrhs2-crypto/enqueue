@@ -12,6 +12,7 @@ struct CalibrationKey
     Rational fps;
     std::uint32_t sampleRate = 0, bufferSamples = 0;
     std::vector<int> outputMapping; // zero-based physical outputs, ORDER is significant
+    std::vector<int> inputMapping; // logical/L/R triples; absent in legacy profiles
     bool operator==(const CalibrationKey&) const noexcept;
 };
 struct CalibrationProfile
@@ -37,5 +38,5 @@ struct CalibrationProfile
 };
 CalibrationKey calibrationKey(const std::string& cameraId, const CameraMode&, const std::string& exposure,
                               const std::string& asioDriver, unsigned Fs, unsigned buffer,
-                              const std::vector<int>& outputMapping);
+                              const std::vector<int>& outputMapping, const std::vector<int>& inputMapping = {});
 }

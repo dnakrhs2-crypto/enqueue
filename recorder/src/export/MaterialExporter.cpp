@@ -117,6 +117,7 @@ std::vector<MaterialOutput> MaterialExporter::outputs(const ExportJob& j, const 
         {
             const auto* asset = j.snapshot.media->findAsset(c.assetId);
             exportRequire(asset != nullptr, "Missing material audio asset");
+            if (t.kind == TrackKind::mic) channels = (std::max)(channels, asset->originalFormat.channels);
             if (t.kind == TrackKind::importAudio)
             {
                 exportRequire(asset->originalFormat.channels >= 1 && asset->originalFormat.channels <= 2,
@@ -127,20 +128,22 @@ std::vector<MaterialOutput> MaterialExporter::outputs(const ExportJob& j, const 
         }
         auto stem = t.kind == TrackKind::mic ? "mic" + juce::String(t.microphoneIndex + 1).paddedLeft('0', 2)
             : "import_" + juce::File::createLegalFileName(t.name.isNotEmpty() ? t.name : sourceName.isNotEmpty() ? sourceName : "audio").substring(0, 100);
-        // Reserve the pair together, including case-insensitive Windows collisions.
+        const int fileChannels = t.kind == TrackKind::mic ? channels : 1;
+        const int fileCount = channels / fileChannels;
+        // Reserve all outputs together, including case-insensitive Windows collisions.
         juce::String unique = stem;
         for (unsigned suffix = 2;; ++suffix)
         {
             bool collision = false;
-            for (int ch = 0; ch < channels; ++ch)
-                collision |= names.count((unique + (channels == 2 ? (ch ? "-R" : "-L") : "") + ".wav").toLowerCase()) != 0;
+            for (int ch = 0; ch < fileCount; ++ch)
+                collision |= names.count((unique + (fileCount == 2 ? (ch ? "-R" : "-L") : "") + ".wav").toLowerCase()) != 0;
             if (!collision) break;
             unique = stem + " (" + juce::String(suffix) + ")";
         }
-        for (int ch = 0; ch < channels; ++ch)
+        for (int ch = 0; ch < fileCount; ++ch)
         {
-            const auto name = unique + (channels == 2 ? (ch ? "-R" : "-L") : "") + ".wav";
-            names.insert(name.toLowerCase()); result.push_back({name, {}, mask, ch});
+            const auto name = unique + (fileCount == 2 ? (ch ? "-R" : "-L") : "") + ".wav";
+            names.insert(name.toLowerCase()); result.push_back({name, {}, mask, fileChannels == 2 ? -1 : ch, unsigned(fileChannels)});
         }
     }
     exportRequire(!result.empty(), "No camera or audio material tracks");
@@ -197,14 +200,16 @@ juce::var MaterialExporter::run(const ExportJob& j, const MaterialExportOptions&
         {
             auto bindings = TimelineExporter::openSources(j, item.audio, control);
             ExportAudioRenderer renderer(j, std::move(bindings), item.audio);
-            WavExportWriter writer(publication.file(item.name), j.snapshot.Fs, j.range.sampleCount, faults);
+            WavExportWriter writer(publication.file(item.name), j.snapshot.Fs, j.range.sampleCount, faults, item.channels);
             std::vector<float> left(16384), right(left.size());
             for (Sample at = 0; at < j.range.sampleCount;)
             {
                 control.checkpoint();
                 const auto count = static_cast<unsigned>((std::min)(Sample(left.size()), j.range.sampleCount - at));
                 renderer.render(at, count, left.data(), right.data());
-                writer.append(item.sourceChannel ? right.data() : left.data(), count); at += count;
+                if (item.channels == 2) writer.appendStereo(left.data(), right.data(), count);
+                else writer.append(item.sourceChannel ? right.data() : left.data(), count);
+                at += count;
                 progress(item.name + "/audio", i, double(at) / j.range.sampleCount * .97);
             }
             control.checkpoint(); writer.finish();
@@ -213,7 +218,7 @@ juce::var MaterialExporter::run(const ExportJob& j, const MaterialExportOptions&
             row = jsonObject(); jsonSet(row, "verified", true); jsonSet(row, "trackId", item.audio.trackId);
             jsonSet(row, "assetIds", TimelineExporter::assetIds(j, item.audio)); jsonSet(row, "sourceChannel", item.sourceChannel);
             jsonSet(row, "sampleCount", j.range.sampleCount); jsonSet(row, "frameCount", j.range.frameCount);
-            jsonSet(row, "Fs", j.snapshot.Fs); jsonSet(row, "channels", 1); jsonSet(row, "bitsPerSample", 24);
+            jsonSet(row, "Fs", j.snapshot.Fs); jsonSet(row, "channels", item.channels); jsonSet(row, "bitsPerSample", 24);
             jsonSet(row, "rf64", header.rf64); jsonSet(row, "ignoresMuteSolo", true);
         }
         jsonSet(row, "name", item.name); jsonSet(row, "outputOrigin", 0);

@@ -14,13 +14,13 @@ struct Fixture
     RecorderProject project;
     std::array<std::vector<std::int32_t>, 2> pcm;
     std::vector<juce::File> originals;
-    explicit Fixture(std::uint32_t Fs = 48000);
+    explicit Fixture(std::uint32_t Fs = 48000, bool stereoFirst = false);
     ~Fixture();
     RecorderProject example(unsigned number) const;
     std::vector<juce::String> hashes() const;
     float sample(unsigned channel, Sample at) const;
 };
-void writePcm24(const juce::File&, std::uint32_t Fs, const std::vector<std::int32_t>&, Sample first, Sample count);
+void writePcm24(const juce::File&, std::uint32_t Fs, const std::vector<std::int32_t>&, Sample first, Sample count, unsigned channels = 1);
 struct StereoRender { std::vector<float> left, right; };
 StereoRender render(const RecorderProject&, const std::vector<AudioSourceBinding>&, const AudioSourceMask&, SampleRange, unsigned block = 4096);
 }

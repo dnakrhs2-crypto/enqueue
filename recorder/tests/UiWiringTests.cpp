@@ -23,6 +23,25 @@ void waitUntil(const std::function<bool()>& predicate)
 int runUiWiringTests()
 {
     Suite suite;
+    suite.test("Stereo settings round trip, legacy mono defaults and right-channel validation", []
+    {
+        const auto root = juce::File::getSpecialLocation(juce::File::tempDirectory).getChildFile("stereo-settings-" + newId());
+        {
+            RecorderSettings settings(root); UserSettings value; value.physicalInputs = {0, 2}; value.stereoSlots[0] = true;
+            require(settings.set(value).wasOk() && settings.save().get().wasOk(), "Save stereo settings");
+            RecorderSettings loaded(root); require(loaded.load().wasOk() && loaded.get().stereoSlots[0] && !loaded.get().stereoSlots[1], "Stereo round trip");
+            value.physicalInputs[1] = 1; require(value.validate().failed(), "Right reused by mono");
+            value.physicalInputs = {0}; require(value.validate(1).failed() && value.validate(2).wasOk(), "Device right-channel bound");
+            value.physicalInputs = {-1}; require(value.validate().failed(), "Unselected stereo slot rejected");
+            value.physicalInputs = {255}; require(value.validate().failed(), "Right channel overflow rejected");
+            auto xml = juce::parseXML(settings.getFile()); require(xml != nullptr, "Settings XML");
+            juce::PropertySet props; props.restoreFromXml(*xml);
+            for (int i = 0; i < 8; ++i) props.removeValue("stereoSlot" + juce::String(i));
+            require(settings.getFile().replaceWithText(props.createXml("RECORDER_SETTINGS")->toString()), "Legacy settings fixture");
+            require(loaded.load().wasOk() && !loaded.get().stereoSlots[0] && loaded.get().physicalInputs == std::vector<int>({0,2}), "Missing fields stay mono");
+        }
+        root.deleteRecursively();
+    });
     suite.test("recording state keeps live views and locks structure / transport", []
     {
         RecorderProject p; UserSettings s;

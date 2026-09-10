@@ -67,7 +67,7 @@ struct Fixture
         for(unsigned i=0;i<2;++i)
         {
             CalibrationProfile p; p.key=calibrationKey(i?config.camera2.symbolicLink:config.cameraSymbolicLink,
-                i?config.camera2.mode:config.cameraMode,"uncontrolled",audio.deviceInfo().name.toStdString(),8000,80,{0,1});
+                i?config.camera2.mode:config.cameraMode,"uncontrolled",audio.deviceInfo().name.toStdString(),8000,80,{0,1},audio.calibrationInputMapping());
             p.cameraResidualLatency100ns=i?300000:100000; config.calibration[i]=p;
         }
         for(int i=0;i<30;++i)feed(); until([&]{return audio.clockReady();});

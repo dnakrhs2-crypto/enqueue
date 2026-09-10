@@ -95,7 +95,9 @@ void RecordView::update(const RecorderUiState& ui, const RecorderProject& p, con
     {
         auto& mic = microphones[i]; const auto input = i < s.physicalInputs.size() ? s.physicalInputs[i] : -1;
         mic.setVisible(i < stripCount); mic.name.setText(s.microphoneNames[i].isEmpty() ? ko("마이크 ") + juce::String(i + 1) : s.microphoneNames[i], juce::dontSendNotification);
-        mic.name.setEditable(false, !ui.structureLocked); mic.physical.setText(input >= 0 ? ko("물리 입력 ") + juce::String(input + 1) : ko("입력 선택 안 함"), juce::dontSendNotification);
+        mic.name.setEditable(false, !ui.structureLocked); mic.physical.setText(input >= 0 ? ko("물리 입력 ") + juce::String(input + 1)
+            + (s.stereoSlots[i] ? "+" + juce::String(input + 2) + ko(" (스테레오)") : juce::String()) : ko("입력 선택 안 함"), juce::dontSendNotification);
+        mic.physical.setTooltip(s.stereoSlots[i] ? ko("입력 미터: L/R 중 큰 값") : ko("입력 미터: 모노"));
         mic.arm.setToggleState(input >= 0 && s.microphoneArmed[i], juce::dontSendNotification); mic.arm.setEnabled(!ui.structureLocked && input >= 0); mic.monitor.setEnabled(input >= 0);
     }
     if (oldCount != stripCount || wasTimeline != timeline) resized();

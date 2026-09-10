@@ -75,7 +75,8 @@ struct Fixture
     Sample cameraPtsOffset = 0;
     std::vector<float> outputL, outputR;
     Id importedAsset, importedClip;
-    Fixture(bool mic = false, int channels = 2, unsigned cameraCount = 1)
+    bool stereoMic;
+    Fixture(bool mic = false, int channels = 2, unsigned cameraCount = 1, bool stereo = false) : stereoMic(stereo)
     {
         ok(directory.createDirectory()); const auto source = directory.getChildFile("input.wav");
         juce::WavAudioFormat wav; auto stream = source.createOutputStream();
@@ -88,7 +89,8 @@ struct Fixture
         config.audioTrackId = imported->track().trackId; importedAsset = imported->asset().assetId; importedClip = imported->clip().clipId;
         ok(commitImportedAudio(document,*imported,control));
         std::array<int,8> map{-1,-1,-1,-1,-1,-1,-1,-1}; if (mic) map[5] = 2;
-        ok(audio.setInputMap(map)); OutputMapping outputs; outputs.left = 0; outputs.right = 1; ok(audio.setOutputMap(outputs));
+        std::array<bool,8> slots{}; slots[5] = stereoMic;
+        ok(audio.setInputMap(map,slots)); OutputMapping outputs; outputs.left = 0; outputs.right = 1; ok(audio.setOutputMap(outputs));
         ok(audio.openSynthetic(8000,80,8,2)); if (mic) ok(audio.arm(5,true));
         config.projectDirectory = directory; config.Pstart = 137; config.spanSamples = 1600; config.synthetic = true; config.recordMicrophones = mic;
         for (unsigned i = 0; i < cameraCount; ++i)
@@ -116,11 +118,12 @@ struct Fixture
     {
         std::array<std::uint8_t,240> native{}; std::array<float,80> l{},r{},in{};
         for (unsigned i = 0; i < 80; ++i) WavTrackWriter::packPcm24(123456 + int(position + i),native.data() + i * 3);
-        NativeInputView view{native.data(),0,2,nativeFormatForAsio(17)};
-        const float* inputs[]{in.data()}; float* outputs[]{l.data(),r.data()};
+        auto nativeRight = native; for (unsigned i = 0; i < 80; ++i) WavTrackWriter::packPcm24(-456789 - int(position + i),nativeRight.data() + i * 3);
+        NativeInputView views[]{{native.data(),0,2,nativeFormatForAsio(17)}, {nativeRight.data(),1,3,nativeFormatForAsio(17)}};
+        const float* inputs[]{in.data(),in.data()}; float* outputs[]{l.data(),r.data()};
         BlockStamp stamp{}; stamp.sequence = sequence++; stamp.samplePosition = position; stamp.sampleRate = 8000; stamp.numSamples = 80;
         stamp.flags = samplePositionValid | latenciesValid; stamp.callbackQpc = qpc + rescaleRound(position,qpcFrequency(),8000); stamp.resets = reset ? 1 : 0;
-        audio.processBlock(stamp,config.recordMicrophones ? &view : nullptr,config.recordMicrophones ? 1 : 0,inputs,outputs,2);
+        audio.processBlock(stamp,config.recordMicrophones ? views : nullptr,config.recordMicrophones ? (stereoMic ? 2 : 1) : 0,inputs,outputs,2);
         outputL.insert(outputL.end(),l.begin(),l.end()); outputR.insert(outputR.end(),r.begin(),r.end());
         if (camera && controller)
         {
@@ -169,6 +172,15 @@ struct Fixture
 int runDubbingPlacementTests()
 {
     recorder_test::Suite tests;
+    tests.test("Dubbing records one stereo mic asset and two-channel native WAV", []
+    {
+        Fixture f(true, 2, 1, true); f.begin(); f.finishNormally(); const auto& take = f.placedTake();
+        const auto* asset = f.document.getProject().media->findAsset(take.microphoneAssetIds[0]);
+        require(asset && asset->originalFormat.channels == 2 && take.capture.physicalInputsRight == std::vector<int>{3}, "Dubbing stereo asset/mapping");
+        juce::WavAudioFormat format; std::unique_ptr<juce::AudioFormatReader> reader(format.createReaderFor(f.directory.getChildFile(asset->chunks[0].relativePath).createInputStream().release(),true));
+        float l[1]{},r[1]{}; float* dest[]{l,r}; require(reader && reader->numChannels == 2 && reader->bitsPerSample == 24 && reader->read(dest,2,0,1), "Dubbing PCM24 stereo WAV");
+        require(l[0] > 0 && r[0] < 0, "Dubbing L/R not collapsed");
+    });
     tests.test("Mic off/on survives initial and repeated source discontinuity/type changes at fixed O0", []
     {
         for (bool microphones : {false, true})

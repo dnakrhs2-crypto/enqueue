@@ -140,7 +140,7 @@ juce::Result RecorderSession::configure(UserSettings settings)
         checkResult(audio.closeDevice());
         std::array<int, 8> map; map.fill(-1);
         for (std::size_t i = 0; i < settings.physicalInputs.size(); ++i) map[i] = settings.physicalInputs[i];
-        checkResult(audio.setInputMap(map)); checkResult(audio.setOutputMap(settings.output));
+        checkResult(audio.setInputMap(map, settings.stereoSlots)); checkResult(audio.setOutputMap(settings.output));
         if (settings.asioDeviceId.isNotEmpty())
         {
             checkResult(audio.openDevice(settings.asioDeviceId, fixedFs ? fixedFs : settings.preferredSampleRate, settings.bufferSize));
@@ -149,7 +149,7 @@ juce::Result RecorderSession::configure(UserSettings settings)
             if (applyAudioDefaults(settings, audio.deviceInfo()))
             {
                 map.fill(-1); for (std::size_t i = 0; i < settings.physicalInputs.size(); ++i) map[i] = settings.physicalInputs[i];
-                checkResult(audio.setInputMap(map)); checkResult(audio.setOutputMap(settings.output));
+                checkResult(audio.setInputMap(map, settings.stereoSlots)); checkResult(audio.setOutputMap(settings.output));
             }
             for (unsigned i = 0; i < 8; ++i) checkResult(audio.arm(i, map[i] >= 0 && settings.microphoneArmed[i]));
             settings.preferredSampleRate = audio.deviceInfo().sampleRate;
@@ -255,7 +255,7 @@ juce::Result RecorderSession::record()
     for (unsigned i = 0; i < (c.camera2.enabled ? 2u : 1u); ++i)
     {
         const auto key = calibrationKey(current.cameraDeviceIds[i].toStdString(), cameras[i]->mode, c.exposure[i],
-            device.name.toStdString(), device.sampleRate, device.bufferFrames, c.outputMapping);
+            device.name.toStdString(), device.sampleRate, device.bufferFrames, c.outputMapping, audio.calibrationInputMapping());
         for (const auto& profile : calibrationProfiles) if (profile.key == key) { c.calibration[i] = profile; break; }
     }
     if (current.cameraEnabled[1] && !c.camera2.enabled) notice = k("캠2 연결을 확인하세요. 캠1으로 녹화합니다.");

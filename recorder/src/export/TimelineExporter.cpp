@@ -78,15 +78,19 @@ juce::var TimelineExporter::audioMaterials(const ExportJob& j, ExportControl& co
     {
         const auto stem = m.track->kind == TrackKind::mic ? "mic" + juce::String(m.track->microphoneIndex + 1).paddedLeft('0', 2)
             : "import-" + m.track->trackId;
+        const auto fileChannels = m.track->kind == TrackKind::mic ? m.channels : 1;
+        const auto fileCount = m.channels / fileChannels;
         std::vector<std::unique_ptr<WavExportWriter>> writers;
-        for (int ch = 0; ch < m.channels; ++ch)
-            writers.push_back(std::make_unique<WavExportWriter>(output.file(stem + (m.channels == 2 ? (ch ? "-R" : "-L") : "") + ".wav"), j.snapshot.Fs, j.range.sampleCount, faults));
+        for (int ch = 0; ch < fileCount; ++ch)
+            writers.push_back(std::make_unique<WavExportWriter>(output.file(stem + (fileCount == 2 ? (ch ? "-R" : "-L") : "") + ".wav"), j.snapshot.Fs, j.range.sampleCount, faults, unsigned(fileChannels)));
         ExportAudioRenderer renderer(j, std::move(m.sources), m.mask);
         for (Sample at = 0; at < j.range.sampleCount;)
         {
             control.checkpoint(); const auto count = static_cast<unsigned>((std::min)(Sample(l.size()), j.range.sampleCount - at));
-            renderer.render(at, count, l.data(), r.data()); writers[0]->append(l.data(), count);
-            if (m.channels == 2) writers[1]->append(r.data(), count); at += count;
+            renderer.render(at, count, l.data(), r.data());
+            if (fileChannels == 2) writers[0]->appendStereo(l.data(), r.data(), count);
+            else { writers[0]->append(l.data(), count); if (fileCount == 2) writers[1]->append(r.data(), count); }
+            at += count;
             if (control.onProgress)
             {
                 const double fraction = (trackNumber + double(at) / j.range.sampleCount) / materials.size();
@@ -94,13 +98,13 @@ juce::var TimelineExporter::audioMaterials(const ExportJob& j, ExportControl& co
                 control.onProgress({"audio", fraction * .95, seconds, fraction > 0 ? std::optional<double>(seconds * (1 - fraction) / fraction) : std::nullopt});
             }
         }
-        for (int ch = 0; ch < m.channels; ++ch)
+        for (int ch = 0; ch < fileCount; ++ch)
         {
             auto& w = *writers[std::size_t(ch)]; control.checkpoint(); w.finish(); auto f = jsonObject();
             jsonSet(f, "name", w.partialFile().getFileName().dropLastCharacters(8)); jsonSet(f, "verified", true);
-            jsonSet(f, "trackId", m.track->trackId); jsonSet(f, "sourceChannel", ch); jsonSet(f, "assetIds", assetIds(j, m.mask));
+            jsonSet(f, "trackId", m.track->trackId); jsonSet(f, "sourceChannel", fileChannels == 2 ? -1 : ch); jsonSet(f, "assetIds", assetIds(j, m.mask));
             jsonSet(f, "sampleCount", j.range.sampleCount); jsonSet(f, "frameCount", j.range.frameCount);
-            jsonSet(f, "Fs", j.snapshot.Fs); jsonSet(f, "channels", 1); jsonSet(f, "bitsPerSample", 24); jsonSet(f, "rf64", w.header().rf64); files.add(f);
+            jsonSet(f, "Fs", j.snapshot.Fs); jsonSet(f, "channels", fileChannels); jsonSet(f, "bitsPerSample", 24); jsonSet(f, "rf64", w.header().rf64); files.add(f);
         }
         ++trackNumber;
     }

@@ -12,7 +12,7 @@ struct PeakSnapshot
     unsigned sampleRate = 0, channels = 0;
     std::uint64_t samplesPerBin = 1, samples = 0;
     bool complete = false;
-    std::vector<std::array<PeakBin, 8>> bins;
+    std::vector<std::array<PeakBin, 16>> bins;
 };
 // One WAV worker writes; UI copies a bounded summary. No calls on the ASIO thread.
 // At the cap, adjacent bins merge without losing extrema or any earlier duration.

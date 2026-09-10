@@ -20,6 +20,22 @@ struct Fault final : FileIoFaultAdapter
 int runWavExportTests()
 {
     Suite s;
+    s.test("Stereo PCM24 RIFF/RF64 channel layout and interleaved microphone material", []
+    {
+        const auto huge = WavExportWriter::makeHeader(48000, 0x100000000ULL / 6 + 100, 2);
+        const auto reread = WavExportWriter::readHeader(huge.bytes.data(), huge.bytes.size());
+        require(reread.rf64 && reread.channels == 2 && reread.sampleCount == huge.sampleCount, "Stereo RF64 ds64 counts frames");
+        recorder_audio_fixture::Fixture f(48000, true); ExportActivity gate; ExportControl control(gate);
+        ExportJob job(f.project, f.root, {}, SampleRange{0, 4800}); const auto manifest = TimelineExporter::audioMaterials(job, control);
+        require(manifest["files"].size() == 2, "One WAV per microphone slot");
+        require(!job.outputDirectory.getChildFile("mic01-L.wav").exists() && !job.outputDirectory.getChildFile("mic01-R.wav").exists(), "Stereo slot is one material");
+        const auto file = job.outputDirectory.getChildFile("mic01.wav"); require(WavExportWriter::inspect(file).channels == 2, "Interleaved stereo material");
+        require(WavExportWriter::inspect(job.outputDirectory.getChildFile("mic02.wav")).channels == 1, "Mono material retained");
+        juce::WavAudioFormat format; std::unique_ptr<juce::AudioFormatReader> reader(format.createReaderFor(file.createInputStream().release(), true));
+        std::vector<float> l(4800), r(4800); float* dst[]{l.data(),r.data()}; require(reader && reader->read(dst, 2, 0, 4800), "Read exported stereo PCM");
+        for (int i = 200; i < 4600; ++i)
+            require(l[i] == f.sample(0,i) && r[i] == float(-f.pcm[0][i] / 2) / 8388608.0f, "Export L/R exact PCM oracle");
+    });
     s.test("RF64 ds64 above 4GiB and independent JUCE header reread without fake payload", []
     {
         const std::uint64_t riffLimit = (0xffffffffULL - 44) / 3;

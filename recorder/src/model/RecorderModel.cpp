@@ -154,7 +154,7 @@ juce::Result RecorderProject::validate() const
             else
             {
                 check(f.sampleRate > 0 && f.channels > 0 && f.bitsPerSample >= 0, "오디오 원본 포맷이 잘못되었습니다.");
-                if (a.kind == AssetKind::mic) check(f.channels == 1 && f.bitsPerSample == 24 && f.sampleRate == Fs, "마이크 원본은 프로젝트 레이트의 모노 24비트여야 합니다.");
+                if (a.kind == AssetKind::mic) check((f.channels == 1 || f.channels == 2) && f.bitsPerSample == 24 && f.sampleRate == Fs, "마이크 원본은 프로젝트 레이트의 모노 또는 스테레오 24비트여야 합니다.");
             }
             const std::uint64_t expectedNumerator = a.kind == AssetKind::camera ? f.fps.numerator : f.sampleRate;
             const std::uint64_t expectedDenominator = std::uint64_t(Fs) * (a.kind == AssetKind::camera ? f.fps.denominator : 1u);
@@ -175,7 +175,15 @@ juce::Result RecorderProject::validate() const
             check(t.N0 >= 0 && t.O0 >= 0 && rangeOk(t.placementSample, t.logicalLength), "테이크 시간 범위가 잘못되었습니다.");
             check(t.microphoneAssetIds.size() <= 8 && t.capture.physicalInputs.size() == t.microphoneAssetIds.size(), "마이크 참조와 입력 매핑이 일치하지 않습니다.");
             std::set<int> inputs;
-            for (const int input : t.capture.physicalInputs) check(input >= 0 && uniqueInsert(inputs, input), "물리 입력이 잘못되었거나 중복됩니다.");
+            check(t.capture.physicalInputsRight.empty() || t.capture.physicalInputsRight.size() == t.capture.physicalInputs.size(), "스테레오 입력 매핑 수가 일치하지 않습니다.");
+            for (size_t i = 0; i < t.capture.physicalInputs.size(); ++i)
+            {
+                const int left = t.capture.physicalInputs[i], right = t.capture.physicalInputsRight.empty() ? -1 : t.capture.physicalInputsRight[i];
+                check(left >= 0 && left <= 255 && uniqueInsert(inputs, left), "물리 입력이 잘못되었거나 중복됩니다.");
+                check(right == -1 || (right == left + 1 && right <= 255 && uniqueInsert(inputs, right)), "스테레오 오른쪽 입력이 잘못되었거나 중복됩니다.");
+                const auto found = assets.find(t.microphoneAssetIds[i]);
+                check(found != assets.end() && found->second->originalFormat.channels == (right >= 0 ? 2 : 1), "마이크 채널 수와 물리 입력 매핑이 일치하지 않습니다.");
+            }
             const auto ref = [&](const Id& value, AssetKind kind)
             {
                 const auto found = assets.find(value);

@@ -5,6 +5,7 @@
 #include <cstring>
 #include <functional>
 #include <iostream>
+#include <numeric>
 #include <stdexcept>
 #include <thread>
 
@@ -38,12 +39,13 @@ std::int32_t pattern(std::uint64_t sample, unsigned mic)
 }
 void feed(WavTrackWriter& w, const WavTrackWriter::Config& c, std::uint64_t first, std::uint64_t count)
 {
-    std::vector<std::int32_t> pcm(static_cast<std::size_t>(c.framesPerBlock) * c.mics);
+    const auto channels = c.slotChannels.empty() ? c.mics : std::accumulate(c.slotChannels.begin(), c.slotChannels.end(), 0u);
+    std::vector<std::int32_t> pcm(static_cast<std::size_t>(c.framesPerBlock) * channels);
     for (std::uint64_t i = 0; i < count;)
     {
         const auto n = static_cast<std::uint32_t>(std::min<std::uint64_t>(c.framesPerBlock, count - i));
         for (unsigned frame = 0; frame < n; ++frame)
-            for (unsigned mic = 0; mic < c.mics; ++mic) pcm[static_cast<std::size_t>(frame) * c.mics + mic] = pattern(first + i + frame, mic);
+            for (unsigned mic = 0; mic < channels; ++mic) pcm[static_cast<std::size_t>(frame) * channels + mic] = pattern(first + i + frame, mic);
         // Accelerated non-RT fixture producer: wait BEFORE push, never retry a lost block.
         until([&] { return w.queueFrames() + n <= w.queueCapacityFrames() || w.error() != WavTrackWriter::Error::none; });
         success(w.status()); require(w.tryPush(pcm.data(), n, first + i), "Prepared queue accepted fixture block"); i += n;
@@ -107,6 +109,38 @@ int runWavChunkTests()
         try { body(); ++passed; std::cout << "PASS " << name << '\n'; }
         catch (const std::exception& e) { ++failed; std::cerr << "FAIL " << name << ": " << e.what() << '\n'; }
     };
+    test("Mixed stereo/mono chunks retain interleaved PCM, per-file journal and peak channels", []
+    {
+        auto c = config(1001, 2); c.slotChannels = {2, 1};
+        c.devices[0].rightPhysicalIndex = 3; c.devices[0].rightActiveIndex = 1; c.devices[1].activeIndex = 2;
+        c.peakCache = std::make_shared<PeakCache>(c.sampleRate, 3, 137);
+        const std::uint64_t boundary = c.sampleRate * 30, length = boundary + 139;
+        WavTrackWriter w(c); success(w.start()); feed(w, c, 0, length); success(w.stop(c.n0 + length, juce::Uuid()));
+        for (unsigned chunk = 1; chunk <= 2; ++chunk)
+        {
+            const auto first = chunk == 1 ? 0 : boundary, frames = chunk == 1 ? boundary : length - boundary;
+            auto bytes = read(c.projectDirectory.getChildFile(WavTrackWriter::chunkPath(c.takeId, 1, chunk)));
+            const auto* data = static_cast<const std::uint8_t*>(bytes.getData());
+            require(bytes.getSize() == 44 + frames * 6 && storageEncoding::get<std::uint16_t>(data + 22) == 2
+                && storageEncoding::get<std::uint16_t>(data + 32) == 6 && storageEncoding::get<std::uint32_t>(data + 28) == c.sampleRate * 6, "Stereo PCM24 header/size");
+            for (std::uint64_t frame = 0; frame < frames; ++frame) for (unsigned ch = 0; ch < 2; ++ch)
+            {
+                const auto* p = data + 44 + (frame * 2 + ch) * 3;
+                const auto word = std::uint32_t(p[0]) | std::uint32_t(p[1]) << 8 | std::uint32_t(p[2]) << 16;
+                require(word == (std::uint32_t(pattern(first + frame, ch)) & 0xffffffu), "Interleaved stereo byte oracle");
+            }
+            verify(c.projectDirectory.getChildFile(WavTrackWriter::chunkPath(c.takeId, 2, chunk)), c.sampleRate, 2, first, frames);
+        }
+        JournalReplay replay; success(RecordingJournal::replay(c.projectDirectory.getChildFile("journal"), replay));
+        require(!replay.ignoredTail && int(replay.records[0].payload["files"][0]["pcm"]["channels"]) == 2
+            && int(replay.records[0].payload["files"][1]["pcm"]["channels"]) == 1, "Mixed file PCM journal formats");
+        for (const auto& record : replay.records) if (record.kind == JournalKind::Checkpoint)
+            for (const auto& file : *record.payload["files"].getArray())
+                require(int(file["blockAlign"]) == (file["path"].toString().contains("mic01") ? 6 : 3), "Per-file checkpoint alignment");
+        const auto peaks = c.peakCache->snapshot();
+        require(peaks.channels == 3 && peaks.samples == length && peaks.complete, "Packed peak dimensions and final tail");
+        c.projectDirectory.deleteRecursively();
+    });
     test("PCM24 LE golden bytes: zero, LSB, signs and extrema", []
     {
         const std::int32_t values[] = {0, 1, -1, 8388607, -8388608, 256, -256};

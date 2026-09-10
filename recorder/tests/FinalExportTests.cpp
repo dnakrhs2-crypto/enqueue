@@ -41,7 +41,7 @@ CodecPtr softwareVideo()
     c->gop_size = 30; c->max_b_frames = 0; c->flags |= AV_CODEC_FLAG_GLOBAL_HEADER; c->thread_count = 1;
     ffCheck(avcodec_open2(c.get(), codec, nullptr), "Open CPU mux fixture"); return c;
 }
-void writeMuxFixture(const juce::File& partial, unsigned Fs, Sample frameCount, FileIoFaultAdapter* fault = nullptr)
+void writeMuxFixture(const juce::File& partial, unsigned Fs, Sample frameCount, FileIoFaultAdapter* fault = nullptr, ExportAudioRenderer* rendered = nullptr)
 {
     auto video = softwareVideo(); ReferenceMixWriter audio(Fs); FinalMp4Writer mux(partial, *video, audio.context(), fault);
     auto f = ffFrame(); f->width = f->height = 16; f->format = AV_PIX_FMT_YUV420P; ffCheck(av_frame_get_buffer(f.get(),32), "Allocate CPU fixture frame");
@@ -64,6 +64,11 @@ void writeMuxFixture(const juce::File& partial, unsigned Fs, Sample frameCount, 
             const auto count = static_cast<unsigned>((std::min)(Sample{4096}, end - at));
             for (unsigned i = 0; i < count; ++i)
             { stereo[std::size_t(i) * 2] = .2f * float(std::sin(6.283185307179586 * 440 * (at + i) / Fs)); stereo[std::size_t(i) * 2 + 1] = -.1f * float(std::sin(6.283185307179586 * 660 * (at + i) / Fs)); }
+            if (rendered)
+            {
+                std::vector<float> l(count), r(count); rendered->render(at, count, l.data(), r.data());
+                for (unsigned i = 0; i < count; ++i) { stereo[i*2] = l[i]; stereo[i*2+1] = r[i]; }
+            }
             audio.append(stereo.data(), count, audioSink); at += count;
         }
     }
@@ -73,6 +78,39 @@ void writeMuxFixture(const juce::File& partial, unsigned Fs, Sample frameCount, 
 int runFinalExportTests()
 {
     Suite s;
+    s.test("Stereo microphone final selection, mix and decoded AAC retain channel separation", []
+    {
+        recorder_audio_fixture::Fixture f(48000, true);
+        for (Sample i = 0; i < Sample(f.pcm[0].size()); ++i) f.pcm[0][i] = std::int32_t(2000000 * std::sin(6.283185307179586 * 440 * i / 48000));
+        const auto* asset = f.project.media->findAsset(f.project.tracks[2].clips.items()[0].assetId);
+        for (const auto& chunk : asset->chunks)
+        {
+            const auto file = f.root.getChildFile(chunk.relativePath); require(file.deleteFile(), "Replace isolated stereo source with tone");
+            recorder_audio_fixture::writePcm24(file,48000,f.pcm[0],chunk.sourceRange.start,chunk.sourceRange.length,2);
+        }
+        ExportActivity gate; ExportControl control(gate); ExportJob job(f.project,f.root,{},SampleRange{0,48000});
+        auto bindings = TimelineExporter::openSources(job,{AudioSourceMask::Kind::microphoneMix},control);
+        const auto mic = FinalVideoExporter::audioSource(job,"mic:1"), mix = FinalVideoExporter::audioSource(job,"mix");
+        for (const auto& mask : {mic,mix}) FinalVideoExporter::validateSelection(job,{TrackKind::cam1,mask});
+        const auto one = pcmAt(job,mic,bindings,337), mixed = pcmAt(job,mix,bindings,337);
+        const auto expectedL = f.sample(0,337), expectedR = float(-f.pcm[0][337]/2)/8388608.0f;
+        require(one.first == expectedL && one.second == expectedR, "Selected stereo mic PCM");
+        require(mixed.first == (expectedL + f.sample(1,337)) * .5f && mixed.second == (expectedR + f.sample(1,337)) * .5f, "Mixed mono/stereo slot mean");
+        ExportAudioRenderer renderer(job,bindings,mic); const auto path = f.root.getChildFile("stereo-final.mp4.partial");
+        writeMuxFixture(path,48000,30,nullptr,&renderer);
+        double error = 0; Sample samples = 0; ExportVerificationObserver observer;
+        observer.audio = [&](Sample first,unsigned count,const float* l,const float* r)
+        {
+            for (unsigned i = 0; i < count; ++i)
+            {
+                const auto expected = .0 + f.sample(0,first+i), right = double(float(-f.pcm[0][first+i]/2)/8388608.0f);
+                error += (l[i]-expected)*(l[i]-expected)+(r[i]-right)*(r[i]-right);
+            }
+            samples += count;
+        };
+        FinalVideoExporter::verify(path,30,48000,48000,{30,1},control,observer,AV_CODEC_ID_MPEG4);
+        require(samples == 48000 && std::sqrt(error / (samples * 2)) < .015, "Decoded stereo AAC PCM oracle");
+    });
     s.test("three final masks isolate microphones/import and scope solo correctly", []
     {
         recorder_audio_fixture::Fixture f; auto p = f.project; const auto imported = addImport(p); p.tracks.back().solo = true;

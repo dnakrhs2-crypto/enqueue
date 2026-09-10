@@ -77,6 +77,7 @@ struct CaptureSnapshot
     std::array<juce::String, 2> cameraDeviceIds, cameraModes;
     juce::String asioDeviceId, calibrationDate, calibrationIdentity;
     std::vector<int> physicalInputs;
+    std::vector<int> physicalInputsRight; // armed slot order; empty in legacy mono takes, -1 for mono
     std::array<Sample, 2> cameraOffsetSamples {};
     Sample inputOffsetSamples = 0, outputOffsetSamples = 0;
 };

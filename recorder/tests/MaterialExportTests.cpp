@@ -112,6 +112,20 @@ std::vector<Id> clips(const Track& t) { std::vector<Id> ids; for (const auto& c 
 int runMaterialExportTests()
 {
     Suite s;
+    s.test("Material export emits one interleaved stereo mic WAV alongside mono and camera files", []
+    {
+        recorder_audio_fixture::Fixture f(48000, true); ExportActivity gate; ExportControl control(gate);
+        ExportJob job(f.project, f.root, {}, SampleRange{0,4800}); const auto outputs = MaterialExporter::outputs(job, {});
+        require(outputs.size() == 4, "Two cameras plus two slots");
+        const auto manifest = MaterialExporter::run(job, {}, control, nullptr, cpuCamera);
+        require(manifest["files"].size() == 4, "Published complete material set");
+        const auto file = job.outputDirectory.getChildFile("mic01.wav"); const auto header = WavExportWriter::inspect(file);
+        require(header.channels == 2 && header.sampleCount == 4800, "Stereo material frame count");
+        require(WavExportWriter::inspect(job.outputDirectory.getChildFile("mic02.wav")).channels == 1, "Mono material unchanged");
+        juce::WavAudioFormat format; std::unique_ptr<juce::AudioFormatReader> reader(format.createReaderFor(file.createInputStream().release(),true));
+        float l[1]{},r[1]{}; float* dst[]{l,r}; require(reader && reader->read(dst,2,333,1), "Stereo material independent reread");
+        require(l[0] == f.sample(0,333) && r[0] == float(-f.pcm[0][333]/2)/8388608.0f, "Material export L/R oracle");
+    });
     s.test("Two cameras linked cut, unlinked one-sample move, mic ripple, camera gap and edited import share exact end", []
     {
         recorder_audio_fixture::Fixture f; auto& p = f.project; std::vector<Id> linked;

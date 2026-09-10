@@ -15,7 +15,8 @@ struct MaterialOutput
     juce::String name;
     std::optional<TrackKind> camera;
     AudioSourceMask audio;
-    int sourceChannel = 0;
+    int sourceChannel = 0; // -1 = interleaved stereo slot
+    unsigned channels = 1;
 };
 class MaterialExporter
 {

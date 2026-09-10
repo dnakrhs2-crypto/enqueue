@@ -72,8 +72,15 @@ bool manifest(const juce::File& root, const Id& takeId, RecorderProject& out, co
         }
         const auto microphones = v["microphones"]; if (!microphones.isArray() || microphones.size() != static_cast<int>(take->microphoneAssetIds.size())) return false;
         for (int i = 0; i < microphones.size(); ++i)
-            if (microphones[i]["assetId"].toString() != take->microphoneAssetIds[static_cast<size_t>(i)]
-                || number(microphones[i]["physicalIndex"]) != take->capture.physicalInputs[static_cast<size_t>(i)]) return false;
+        {
+            const auto index = static_cast<size_t>(i); const auto m = microphones[i];
+            const auto right = take->capture.physicalInputsRight.empty() ? -1 : take->capture.physicalInputsRight[index];
+            if (m["assetId"].toString() != take->microphoneAssetIds[index] || number(m["physicalIndex"]) != take->capture.physicalInputs[index]) return false;
+            if (right >= 0 && (!m.hasProperty("rightPhysical") || !m.hasProperty("channels"))) return false;
+            if (m.hasProperty("rightPhysical") && number(m["rightPhysical"]) != right) return false;
+            if (m.hasProperty("leftPhysical") && number(m["leftPhysical"]) != take->capture.physicalInputs[index]) return false;
+            if (m.hasProperty("channels") && number(m["channels"]) != (right >= 0 ? 2 : 1)) return false;
+        }
         auto registry = std::make_shared<MediaRegistry>(*known->media);
         for (auto& asset : registry->assets)
         {
@@ -95,7 +102,12 @@ bool manifest(const juce::File& root, const Id& takeId, RecorderProject& out, co
                 {
                     const auto wav = child(root, chunk.relativePath); juce::FileInputStream in(wav); std::array<std::uint8_t, 44> h{};
                     if (in.failedToOpen() || in.read(h.data(), 44) != 44 || std::memcmp(h.data(), "RIFF", 4) || std::memcmp(h.data() + 36, "data", 4)) return false;
-                    const auto bytes = std::uint64_t(chunk.sourceRange.length) * 3;
+                    const auto channels = asset.originalFormat.channels;
+                    if ((channels != 1 && channels != 2) || storageEncoding::get<std::uint16_t>(h.data() + 22) != channels
+                        || storageEncoding::get<std::uint16_t>(h.data() + 32) != channels * 3
+                        || storageEncoding::get<std::uint32_t>(h.data() + 24) != asset.originalFormat.sampleRate
+                        || storageEncoding::get<std::uint16_t>(h.data() + 34) != 24) return false;
+                    const auto bytes = std::uint64_t(chunk.sourceRange.length) * channels * 3;
                     if (bytes > UINT32_MAX || storageEncoding::get<std::uint32_t>(h.data() + 40) != bytes || wav.getSize() != static_cast<juce::int64>(44 + bytes + (bytes & 1))) return false;
                 }
             }
@@ -184,7 +196,7 @@ void fillGaps(MediaAsset& a, Sample length)
 std::uint64_t copyWav(const juce::File& source, const juce::File& dest, const JournalPcmFormat& fmt,
                       const JournalFilePosition& pos, FileIoFaultAdapter* faults)
 {
-    require(fmt.channels == 1 && fmt.bitsPerSample == 24 && fmt.blockAlign == 3 && pos.blockAlign == 3
+    require((fmt.channels == 1 || fmt.channels == 2) && fmt.bitsPerSample == 24 && fmt.blockAlign == fmt.channels * 3 && pos.blockAlign == fmt.blockAlign
         && pos.dataOffset == fmt.dataOffset && fmt.dataOffset >= 44 && fmt.sampleRate > 0, "Journal WAV fmt/offset mismatch");
     juce::FileInputStream input(source); check(input.getStatus());
     // RIFF length/data length may be torn. The durable journal, stable fmt
@@ -193,15 +205,15 @@ std::uint64_t copyWav(const juce::File& source, const juce::File& dest, const Jo
     require(input.read(old.data(), int(old.size())) == old.size(), "Truncated WAV fmt");
     require(std::memcmp(old.data(), "RIFF", 4) == 0 && std::memcmp(old.data() + 8, "WAVEfmt ", 8) == 0
         && storageEncoding::get<std::uint32_t>(old.data() + 16) == 16 && storageEncoding::get<std::uint16_t>(old.data() + 20) == 1
-        && storageEncoding::get<std::uint16_t>(old.data() + 22) == 1 && storageEncoding::get<std::uint32_t>(old.data() + 24) == fmt.sampleRate
-        && storageEncoding::get<std::uint16_t>(old.data() + 32) == 3 && storageEncoding::get<std::uint16_t>(old.data() + 34) == 24, "WAV fmt differs from journal");
+        && storageEncoding::get<std::uint16_t>(old.data() + 22) == fmt.channels && storageEncoding::get<std::uint32_t>(old.data() + 24) == fmt.sampleRate
+        && storageEncoding::get<std::uint16_t>(old.data() + 32) == fmt.blockAlign && storageEncoding::get<std::uint16_t>(old.data() + 34) == 24, "WAV fmt differs from journal");
     std::array<std::uint8_t, 8> dataHeader{};
     require(input.setPosition(fmt.dataOffset - 8) && input.read(dataHeader.data(), 8) == 8 && std::memcmp(dataHeader.data(), "data", 4) == 0, "WAV data offset differs from journal");
     const auto samples = RecoveryScanner::wavSamples(std::uint64_t(input.getTotalLength()), pos);
-    const auto bytes = samples * 3; require(bytes <= UINT32_MAX - 37, "WAV chunk exceeds RIFF; RF64 export remains separate");
+    const auto bytes = samples * fmt.blockAlign; require(bytes <= UINT32_MAX - 37, "WAV chunk exceeds RIFF; RF64 export remains separate");
     std::array<std::uint8_t, 44> h{}; std::memcpy(h.data(), old.data(), old.size());
     storageEncoding::put(h.data() + 4, std::uint32_t(36 + bytes + (bytes & 1)));
-    storageEncoding::put(h.data() + 28, fmt.sampleRate * 3); std::memcpy(h.data() + 36, "data", 4); storageEncoding::put(h.data() + 40, std::uint32_t(bytes));
+    storageEncoding::put(h.data() + 28, fmt.sampleRate * fmt.blockAlign); std::memcpy(h.data() + 36, "data", 4); storageEncoding::put(h.data() + 40, std::uint32_t(bytes));
     check(dest.getParentDirectory().createDirectory()); DurableFile output(faults); check(output.open(dest, DurableFile::OpenMode::createNew)); check(output.write(h.data(), h.size()));
     require(input.setPosition(pos.dataOffset), "Seek WAV data offset"); std::array<std::uint8_t, 3 * 16384> buffer{};
     for (std::uint64_t left = bytes; left;)
@@ -460,7 +472,9 @@ juce::Result RecoveryScanner::run(const juce::File& root, RecoveryReport& report
                 if (const auto* prior = registry->findAsset(a.assetId)) { a = *prior; a.mediaGeneration++; a.chunks.clear(); a.availableRanges.clear(); a.gaps.clear(); }
                 if (source.hasFileExtension("wav"))
                 {
-                    a.kind = AssetKind::mic; a.originalFormat.codec = "pcm_s24le"; a.originalFormat.sampleRate = fmt.sampleRate; a.originalFormat.channels = 1; a.originalFormat.bitsPerSample = 24;
+                    auto slotFormat = fmt; const auto slotPcm = f.hasProperty("pcm") ? f["pcm"] : pcm;
+                    slotFormat.channels = std::uint16_t(u32(slotPcm["channels"])); slotFormat.blockAlign = std::uint16_t(u32(slotPcm["blockAlign"]));
+                    a.kind = AssetKind::mic; a.originalFormat.codec = "pcm_s24le"; a.originalFormat.sampleRate = fmt.sampleRate; a.originalFormat.channels = slotFormat.channels; a.originalFormat.bitsPerSample = 24;
                     a.sourceUnitsNumerator = 1; a.sourceUnitsDenominator = 1; a.relativePath.clear();
                     auto prefix = sourcePath.upToLastOccurrenceOf("/", true, false);
                     for (const auto& entry : state.positions)
@@ -468,14 +482,19 @@ juce::Result RecoveryScanner::run(const juce::File& root, RecoveryReport& report
                         const auto& pos = entry.second; if (!pos.path.startsWith(prefix)) continue;
                         const auto input = child(root, pos.path); if (!input.existsAsFile()) { report.warnings.add("Missing WAV chunk: " + pos.path); continue; }
                         const auto dest = attempt().getChildFile(pos.path);
-                        const auto samples = copyWav(input, dest, fmt, pos, options.faults);
+                        const auto samples = copyWav(input, dest, slotFormat, pos, options.faults);
                         outputFiles.add(fileEntry(root, rel(root, dest)));
                         if (samples) { a.chunks.push_back({rel(root, dest), {Sample(pos.firstSample), Sample(samples)}}); a.availableRanges.push_back({Sample(pos.firstSample), Sample(samples)}); }
                     }
                     if (a.chunks.empty()) a.relativePath = sourcePath; // All-gap source, never read by a render plan.
-                    if (!existing) { take.microphoneAssetIds.push_back(a.assetId); int physical = microphone;
-                        for (const auto& d : *state.start["devices"].getArray()) if (number(d["mic"]) == microphone + 1) physical = int(number(d["physicalIndex"]));
-                        take.capture.physicalInputs.push_back(physical); }
+                    if (!existing)
+                    {
+                        take.microphoneAssetIds.push_back(a.assetId); int physical = microphone, right = -1;
+                        const auto logical = source.getParentDirectory().getFileName().substring(3).getIntValue();
+                        for (const auto& d : *state.start["devices"].getArray()) if (number(d["mic"]) == logical)
+                        { physical = int(number(d["physicalIndex"])); if (d.hasProperty("rightPhysicalIndex")) right = int(number(d["rightPhysicalIndex"])); }
+                        take.capture.physicalInputs.push_back(physical); take.capture.physicalInputsRight.push_back(right);
+                    }
                     ++microphone;
                 }
                 else
@@ -563,7 +582,17 @@ juce::Result RecoveryScanner::run(const juce::File& root, RecoveryReport& report
                 for (const auto& a : assets)
                 {
                     const auto kind = a.kind == AssetKind::mic ? TrackKind::mic : a.assetId == take.cam2AssetId ? TrackKind::cam2 : TrackKind::cam1;
-                    int mic = -1; if (kind == TrackKind::mic) mic = int(std::find(take.microphoneAssetIds.begin(), take.microphoneAssetIds.end(), a.assetId) - take.microphoneAssetIds.begin());
+                    int mic = -1;
+                    if (kind == TrackKind::mic)
+                    {
+                        mic = int(std::find(take.microphoneAssetIds.begin(), take.microphoneAssetIds.end(), a.assetId) - take.microphoneAssetIds.begin());
+                        for (const auto& f : *state.start["files"].getArray()) if (id(f["assetId"]) == a.assetId)
+                        {
+                            const auto folder = child(root, f["path"].toString()).getParentDirectory().getFileName();
+                            const auto logical = folder.substring(3).getIntValue();
+                            if (folder.startsWith("mic") && logical >= 1 && logical <= 8) mic = logical - 1;
+                        }
+                    }
                     auto lane = std::find_if(report.project.tracks.begin(), report.project.tracks.end(), [&](const auto& t) { return t.kind == kind && t.microphoneIndex == mic; });
                     if (lane == report.project.tracks.end()) { Track t; t.kind = kind; t.microphoneIndex = mic; t.name = kind == TrackKind::mic ? "Mic " + juce::String(mic + 1) : kind == TrackKind::cam2 ? "Cam 2" : "Cam 1"; report.project.tracks.push_back(t); lane = report.project.tracks.end() - 1; }
                     Clip clip; clip.assetId = a.assetId; clip.trackId = lane->trackId; clip.timelineStartSample = take.placementSample; clip.lengthSamples = length;

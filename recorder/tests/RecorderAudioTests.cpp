@@ -28,13 +28,16 @@ struct Fixture
     std::int64_t position = 0, qpc = qpcNow();
     std::uint64_t sequence = 0;
     static constexpr unsigned Fs = 8000, block = 80;
-    std::array<std::array<std::uint8_t, block * 3>, 8> raw{};
-    std::array<std::array<float, block>, 8> input{};
+    std::array<std::array<std::uint8_t, block * 3>, 16> raw{};
+    std::array<std::array<float, block>, 16> input{};
     std::array<std::array<float, block>, 4> output{};
-    Fixture(unsigned microphones = 8)
+    bool stereo;
+    Fixture(unsigned microphones = 8, bool stereoSlot = false) : stereo(stereoSlot)
     {
+        if (stereo) { map[0] = 12; map[1] = 2; }
         for (unsigned i = microphones; i < 8; ++i) map[i] = -1;
-        ok(engine.setInputMap(map)); ok(engine.openSynthetic(Fs, block, 8, 4));
+        std::array<bool, 8> slots{}; slots[0] = stereo;
+        ok(engine.setInputMap(map, slots)); ok(engine.openSynthetic(Fs, block, 16, 4));
         for (unsigned i = 0; i < microphones; ++i) ok(engine.arm(i, true));
         config.projectDirectory = juce::File::getSpecialLocation(juce::File::tempDirectory).getChildFile("RecorderAudioTests-" + juce::Uuid().toString());
         for (int i = 0; i < 4; ++i) feed();
@@ -43,15 +46,15 @@ struct Fixture
     void feed(unsigned rate = Fs, std::uint64_t resets = 0, bool missingNativePosition = false)
     {
         const auto active = engine.deviceInfo().activeToPhysical;
-        std::array<NativeInputView, 8> views{};
-        std::array<const float*, 8> floatInputs{};
+        std::array<NativeInputView, 16> views{};
+        std::array<const float*, 16> floatInputs{};
         std::array<float*, 4> floatOutputs{};
         for (unsigned c = 0; c < active.size(); ++c)
         {
             for (unsigned i = 0; i < block; ++i)
             {
                 WavTrackWriter::packPcm24(pattern(position + i, unsigned(active[c])), raw[c].data() + i * 3);
-                input[c][i] = .25f; // deliberately unrelated to native PCM
+                input[c][i] = stereo && active[c] == map[0] + 1 ? -.5f : .25f; // deliberately unrelated to native PCM
             }
             views[c] = {raw[c].data(), int(c), active[c], nativeFormatForAsio(17)}; floatInputs[c] = input[c].data();
         }
@@ -73,13 +76,15 @@ struct Fixture
         const auto file = config.projectDirectory.getChildFile(WavTrackWriter::chunkPath(config.takeId, logical + 1, 1));
         juce::MemoryBlock bytes; require(file.loadFileAsData(bytes), "WAV exists");
         const auto* p = static_cast<const std::uint8_t*>(bytes.getData());
-        require(bytes.getSize() == std::size_t(44 + samples * 3 + (samples & 1)), "WAV exact logical sample count/pad");
-        require(storageEncoding::get<std::uint32_t>(p + 40) == samples * 3, "WAV data header");
-        for (std::int64_t i = 0; i < samples; ++i)
+        const auto channels = stereo && logical == 0 ? 2u : 1u;
+        const auto dataBytes = samples * channels * 3;
+        require(bytes.getSize() == std::size_t(44 + dataBytes + (dataBytes & 1)), "WAV exact logical sample count/pad");
+        require(storageEncoding::get<std::uint16_t>(p + 22) == channels && storageEncoding::get<std::uint32_t>(p + 40) == dataBytes, "WAV channel/data header");
+        for (std::int64_t i = 0; i < samples; ++i) for (unsigned ch = 0; ch < channels; ++ch)
         {
-            const auto* sample = p + 44 + i * 3;
+            const auto* sample = p + 44 + (i * channels + ch) * 3;
             const auto word = std::uint32_t(sample[0]) | std::uint32_t(sample[1]) << 8 | std::uint32_t(sample[2]) << 16;
-            require(word == (std::uint32_t(pattern(n0 + i, unsigned(map[logical]))) & 0xffffffu), "Native PCM24 bytes preserved in logical/physical order");
+            require(word == (std::uint32_t(pattern(n0 + i, unsigned(map[logical]) + ch)) & 0xffffffu), "Native PCM24 bytes preserved in logical/physical order");
         }
     }
 };
@@ -97,6 +102,55 @@ struct Stall final : FileIoFaultAdapter
 int runRecorderAudioTests()
 {
     recorder_test::Suite suite;
+    suite.test("Eight stereo slots capture sixteen physical channels and peak cache round trip", []
+    {
+        Fixture f(8); ok(f.engine.closeDevice()); std::array<bool,8> stereo{}; stereo.fill(true);
+        for (unsigned i = 0; i < 8; ++i) f.map[i] = int(i * 2);
+        ok(f.engine.setInputMap(f.map,stereo)); ok(f.engine.openSynthetic(Fixture::Fs,Fixture::block,16,4));
+        f.position = 0; f.sequence = 0; const auto start = f.begin(), length = 333LL; ok(f.engine.stopAt(start+length));
+        while (f.engine.stopSample() < 0) f.feed(); ok(f.engine.finishCapture(juce::Uuid())); ok(f.engine.finishJournal(true));
+        const auto peaks = f.engine.peakCache()->snapshot(); require(peaks.channels == 16 && peaks.samples == length, "Sixteen packed peak channels");
+        const auto cacheFile = f.config.projectDirectory.getChildFile("stereo.peaks.json"); ok(PeakCache::write(cacheFile,peaks));
+        const auto reread = PeakCache::read(cacheFile); require(reread.channels == 16 && reread.bins.back()[15].maximum == peaks.bins.back()[15].maximum, "Sixteenth peak channel persisted");
+        for (unsigned mic = 0; mic < 8; ++mic)
+        {
+            juce::MemoryBlock bytes; require(f.config.projectDirectory.getChildFile(WavTrackWriter::chunkPath(f.config.takeId,mic+1,1)).loadFileAsData(bytes), "Stereo slot WAV exists");
+            const auto* p = static_cast<const std::uint8_t*>(bytes.getData()); require(bytes.getSize() == 44 + length * 6 && storageEncoding::get<std::uint16_t>(p+22) == 2, "All slots are stereo");
+            for (Sample i = 0; i < length; ++i) for (unsigned ch = 0; ch < 2; ++ch)
+            {
+                const auto* v = p+44+(i*2+ch)*3; const auto word = unsigned(v[0]) | unsigned(v[1]) << 8 | unsigned(v[2]) << 16;
+                require(word == (unsigned(pattern(start+i,mic*2+ch)) & 0xffffffu), "Sixteen-channel native byte oracle");
+            }
+        }
+        JournalReplay replay; ok(RecordingJournal::replay(f.config.projectDirectory.getChildFile("journal"),replay));
+        require(int(replay.records[0].payload["pcm"]["channels"]) == 2, "Uniform stereo journal default");
+    });
+    suite.test("Stereo slot native L/R, physical bounds, listening and frozen mapping", []
+    {
+        Fixture f(2, true); OutputMapping out; out.left = 0; out.right = 1; ok(f.engine.setOutputMap(out));
+        auto invalid = f.map; invalid[1] = 13; std::array<bool, 8> stereo{}; stereo[0] = true;
+        require(f.engine.setInputMap(invalid, stereo).failed(), "Stereo right cannot be reused by a mono slot");
+        invalid = f.map; invalid[0] = 15; require(f.engine.setInputMap(invalid, stereo).failed(), "Right channel must exist on device");
+        f.engine.setInputMonitoring(true, 1); for (int i = 0; i < 4; ++i) f.feed();
+        require(std::abs(f.output[0].back() - .25f) < 1e-6f && std::abs(f.output[1].back() + .5f) < 1e-6f, "Monitor L/R identity");
+        require(f.engine.inputPeaks()[0] == .5f, "Stereo input meter is maximum of L/R");
+        const auto start = f.begin(), length = 1739LL; ok(f.engine.stopAt(start + length));
+        require(f.engine.setInputMap(f.map, {}).failed(), "Cannot change stereo during take");
+        while (f.engine.stopSample() < 0) { f.engine.setListeningState(1, 2); f.feed(); }
+        ok(f.engine.finishCapture(juce::Uuid())); ok(f.engine.finishJournal(true)); f.verify(0, start, length); f.verify(1, start, length);
+        const auto peak = f.engine.peakCache()->snapshot(); require(peak.channels == 3 && peak.samples == length && peak.complete, "Mixed slot peak channels");
+        double expectedSquares = 0;
+        for (Sample i = 0; i < length; ++i)
+        {
+            const float mono = float(pattern(start+i,2))/8388608.0f;
+            const float left = (float(pattern(start+i,12))/8388608.0f + mono) * .5f;
+            const float right = (float(pattern(start+i,13))/8388608.0f + mono) * .5f;
+            expectedSquares += (double(left)*left + double(right)*right) * .5;
+        }
+        require(std::abs(double(f.engine.telemetry()["referenceInputRms"]) - std::sqrt(expectedSquares / length)) < 1e-7, "Reference mix uses stereo L/R and a mono slot mean");
+        JournalReplay replay; ok(RecordingJournal::replay(f.config.projectDirectory.getChildFile("journal"), replay));
+        require(int(replay.records.front().payload["files"][0]["pcm"]["channels"]) == 2, "Engine journals stereo asset format");
+    });
     suite.test("8ch native PCM / exact partial boundaries / mute solo monitor isolation", []
     {
         Fixture f; const auto n0 = f.begin(), length = 1539LL; ok(f.engine.stopAt(n0 + length));

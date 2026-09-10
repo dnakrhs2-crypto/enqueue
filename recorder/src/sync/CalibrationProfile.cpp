@@ -26,6 +26,15 @@ void validate(const CalibrationProfile& p)
         throw std::invalid_argument("Invalid calibration key/value");
     std::set<int> outputs;
     for (const auto c : k.outputMapping) if (c < 0 || c > 1023 || !outputs.insert(c).second) throw std::invalid_argument("Invalid calibration output mapping");
+    if (k.inputMapping.size() > 24 || k.inputMapping.size() % 3) throw std::invalid_argument("Invalid calibration input mapping");
+    std::set<int> inputs, slots;
+    for (std::size_t i = 0; i < k.inputMapping.size(); i += 3)
+    {
+        const auto mic = k.inputMapping[i], left = k.inputMapping[i + 1], right = k.inputMapping[i + 2];
+        if (mic < 1 || mic > 8 || !slots.insert(mic).second || left < 0 || left > 255 || !inputs.insert(left).second
+            || (right != -1 && (right != left + 1 || right > 255 || !inputs.insert(right).second)))
+            throw std::invalid_argument("Invalid calibration stereo input pair");
+    }
     qualityName(p.quality);
     if (p.quality != CalibrationQuality::unmeasured
         && (p.measuredUtc.size() < 20 || p.measuredUtc[10] != 'T' || p.measuredUtc.back() != 'Z' || p.method.empty() || !p.measurementCount))
@@ -64,11 +73,11 @@ std::uint32_t unsignedField(const juce::var& v, const char* name)
 bool CalibrationKey::operator==(const CalibrationKey& b) const noexcept
 {
     return cameraId == b.cameraId && nativeMode == b.nativeMode && fps == b.fps && exposure == b.exposure
-        && asioDriver == b.asioDriver && sampleRate == b.sampleRate && bufferSamples == b.bufferSamples && outputMapping == b.outputMapping;
+        && asioDriver == b.asioDriver && sampleRate == b.sampleRate && bufferSamples == b.bufferSamples && outputMapping == b.outputMapping && inputMapping == b.inputMapping;
 }
 CalibrationKey calibrationKey(const std::string& cameraId, const CameraMode& mode, const std::string& exposure,
-                              const std::string& asioDriver, unsigned Fs, unsigned buffer, const std::vector<int>& outputs)
-{ return {cameraId, mode.text(), exposure, asioDriver, mode.fps, Fs, buffer, outputs}; }
+                              const std::string& asioDriver, unsigned Fs, unsigned buffer, const std::vector<int>& outputs, const std::vector<int>& inputs)
+{ return {cameraId, mode.text(), exposure, asioDriver, mode.fps, Fs, buffer, outputs, inputs}; }
 void CalibrationProfile::requireMatch(const CalibrationKey& expected) const
 {
     validate(*this);
@@ -83,6 +92,7 @@ juce::var CalibrationProfile::toJson() const
     jsonSet(k, "asioDriver", key.asioDriver); jsonSet(k, "sampleRate", key.sampleRate); jsonSet(k, "bufferSamples", key.bufferSamples);
     jsonSet(f, "numerator", key.fps.numerator); jsonSet(f, "denominator", key.fps.denominator); jsonSet(k, "fps", f);
     juce::Array<juce::var> outputs; for (const auto c : key.outputMapping) outputs.add(c); jsonSet(k, "outputMapping", outputs);
+    if (!key.inputMapping.empty()) { juce::Array<juce::var> inputs; for (const auto c : key.inputMapping) inputs.add(c); jsonSet(k, "inputMapping", inputs); }
     jsonSet(root, "key", k);
     jsonSet(root, "cameraResidualLatency100ns", std::to_string(cameraResidualLatency100ns));
     jsonSet(root, "inputResidualLatencySamples", std::to_string(inputResidualLatencySamples));
@@ -104,6 +114,12 @@ CalibrationProfile CalibrationProfile::fromJson(const juce::var& root)
     {
         const auto c = exactInteger(item); if (c < 0 || c > 1023) throw std::invalid_argument("Invalid physical output");
         p.key.outputMapping.push_back(static_cast<int>(c));
+    }
+    if (k.hasProperty("inputMapping"))
+    {
+        const auto* inputs = field(k, "inputMapping").getArray();
+        if (!inputs || inputs->size() > 24) throw std::invalid_argument("Invalid calibration inputs array");
+        for (const auto& item : *inputs) { const auto c = exactInteger(item); if (c < -1 || c > 255) throw std::invalid_argument("Invalid calibration input"); p.key.inputMapping.push_back(int(c)); }
     }
     p.cameraResidualLatency100ns = exactInteger(field(root, "cameraResidualLatency100ns"));
     p.inputResidualLatencySamples = exactInteger(field(root, "inputResidualLatencySamples"));

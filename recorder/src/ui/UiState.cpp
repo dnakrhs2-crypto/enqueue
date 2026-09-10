@@ -23,7 +23,7 @@ RecorderUiState mapUiState(const RecorderProject& p, const UserSettings& setting
 }
 juce::Result validateAudioSettings(const UserSettings& s, const RecorderAudioEngine::DeviceInfo& device, const RecorderProject& p)
 {
-    const auto basic = s.validate(); if (basic.failed()) return basic;
+    const auto basic = s.validate(device.name == s.asioDeviceId && device.sampleRate ? device.physicalInputs : 256); if (basic.failed()) return basic;
     if (s.asioDeviceId.isEmpty()) return juce::Result::fail(k("오디오 장치를 선택하세요."));
     if (s.output.mono ? s.output.monoChannel < 0 : s.output.left < 0 || s.output.right < 0)
         return juce::Result::fail(k("재생 출력 채널을 선택하세요."));

@@ -42,6 +42,18 @@ RecorderProject checked(ClipEditResult edit) { require(edit.status.wasOk(), edit
 int runAudioCutRenderTests()
 {
     Suite suite;
+    suite.test("Stereo microphone cuts preserve independent L/R and shared sample edits", []
+    {
+        recorder_audio_fixture::Fixture f(48000, true); auto p = f.project;
+        const auto& track = p.tracks[2];
+        auto edit = ClipEdits::remove(p, {track.clips.items()[0].clipId}, {48000,48000});
+        require(edit.status.wasOk(), "Stereo cut accepted"); ++edit.project.editRevision;
+        auto bindings = openAudioSources(*compileAudioRenderPlan(edit.project), f.root);
+        const auto out = recorder_audio_fixture::render(edit.project, bindings, {AudioSourceMask::Kind::microphone, track.trackId}, {0,144000});
+        for (Sample at : {Sample{500}, Sample{47500}, Sample{96500}, Sample{130500}})
+            require(out.left[at] == f.sample(0,at) && out.right[at] == float(-f.pcm[0][at] / 2) / 8388608.0f, "Stereo sample oracle across cut/chunk boundaries");
+        require(out.left[70000] == 0 && out.right[70000] == 0, "Cut gap is silent in both channels");
+    });
     suite.test("timeline endpoints retain exact PCM and continuous splits introduce no fades", []
     {
         Fixture f(8000); const auto bindings = sources(f); const auto end = f.project.activeTimelineEnd();

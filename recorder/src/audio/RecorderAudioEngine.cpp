@@ -34,6 +34,8 @@ struct RecorderAudioEngine::Impl final : juce::AudioIODeviceCallback
         DeviceInfo device;
         std::vector<unsigned> logical;
         std::vector<JournalDeviceMapping> mapping;
+        unsigned pcmChannels = 0;
+        std::vector<unsigned> channelOffsets;
         RawAudioTap raw;
         IoHealth ioHealth;
         RecordingJournal journal;
@@ -50,8 +52,8 @@ struct RecorderAudioEngine::Impl final : juce::AudioIODeviceCallback
         juce::Uuid editId;
         std::array<std::atomic<float>, 8> peak{};
         std::array<double, 8> squares{};
-        std::array<NativeFormat, 8> formats{};
-        std::array<bool, 8> haveFormat{};
+        std::array<NativeFormat, 16> formats{};
+        std::array<bool, 16> haveFormat{};
         std::uint64_t converted = 0;
         double referenceSquares = 0;
         juce::String workerError, referenceMessage;
@@ -72,8 +74,12 @@ struct RecorderAudioEngine::Impl final : juce::AudioIODeviceCallback
             if (config.microphoneAssetIds.empty()) for (std::size_t i = 0; i < logical.size(); ++i) config.microphoneAssetIds.push_back(newId());
             if (config.microphoneAssetIds.size() != logical.size()) throw std::invalid_argument("Audio asset IDs do not match armed microphones");
             for (const auto& m : mapping)
-                if (!NativePcmConverter::supports(nativeFormatForAsio(engine.nativeTypes[std::size_t(m.activeIndex)].load())))
-                    throw std::invalid_argument("Selected ASIO native input format cannot be preserved as PCM24");
+            {
+                channelOffsets.push_back(pcmChannels); pcmChannels += m.channels();
+                for (int index : {m.activeIndex, m.rightActiveIndex})
+                    if (index >= 0 && !NativePcmConverter::supports(nativeFormatForAsio(engine.nativeTypes[std::size_t(index)].load())))
+                        throw std::invalid_argument("Selected ASIO native input format cannot be preserved as PCM24");
+            }
             if (engine.device) AsioTimingBridge::readEvents(*engine.device, baselineEvents);
             raw.prepare(device.activeToPhysical, device.bufferFrames,
                         (std::uint64_t(device.sampleRate) * 4 + device.bufferFrames - 1) / device.bufferFrames);
@@ -84,7 +90,8 @@ struct RecorderAudioEngine::Impl final : juce::AudioIODeviceCallback
                 w.projectDirectory = config.projectDirectory; w.takeId = config.takeId;
                 w.sampleRate = device.sampleRate; w.framesPerBlock = device.bufferFrames; w.mics = unsigned(logical.size());
                 w.devices = mapping; w.logicalMicrophones = logical; w.faults = &ioHealth;
-                peakCache = std::make_shared<PeakCache>(device.sampleRate, unsigned(logical.size())); w.peakCache = peakCache;
+                for (const auto& m : mapping) w.slotChannels.push_back(m.channels());
+                peakCache = std::make_shared<PeakCache>(device.sampleRate, pcmChannels); w.peakCache = peakCache;
                 w.checkpointSink = [this](const JournalCheckpoint& cp)
                 { std::lock_guard<std::mutex> lock(journalMutex); return journal.append(cp); };
                 wav = std::make_unique<WavTrackWriter>(std::move(w)); check(wav->start());
@@ -144,12 +151,14 @@ struct RecorderAudioEngine::Impl final : juce::AudioIODeviceCallback
             JournalTakeStarted s; s.takeId = config.takeId; s.n0 = sample; s.pstart = config.placementSample;
             if (dubbing) { s.o0 = sample; s.usesOutputOrigin = true; s.placementMode = "dub"; }
             s.pcm.sampleRate = device.sampleRate; s.devices = mapping; s.files = config.additionalFiles;
+            if (!mapping.empty() && std::all_of(mapping.begin(), mapping.end(), [](const auto& m) { return m.channels() == 2; }))
+            { s.pcm.channels = 2; s.pcm.blockAlign = 6; }
             for (auto& file : s.files) file.assetId = juce::Uuid(file.assetId).toDashedString();
             juce::String formatsText;
             for (std::size_t c = 0; c < logical.size(); ++c)
             {
                 const auto path = WavTrackWriter::chunkPath(config.takeId, logical[c], 1);
-                s.files.push_back({juce::Uuid(config.microphoneAssetIds[c]).toDashedString(), path, path.upToLastOccurrenceOf("/", true, false) + "{chunk}.wav"});
+                s.files.push_back({juce::Uuid(config.microphoneAssetIds[c]).toDashedString(), path, path.upToLastOccurrenceOf("/", true, false) + "{chunk}.wav", mapping[c].channels()});
                 const auto sampleType = engine.nativeTypes[std::size_t(mapping[c].activeIndex)].load();
                 formatsText += "mic" + juce::String(int(logical[c])) + " ASIO type " + juce::String(sampleType) + ": "
                     + juce::String(NativePcmConverter::policy(nativeFormatForAsio(sampleType))) + "; ";
@@ -165,7 +174,7 @@ struct RecorderAudioEngine::Impl final : juce::AudioIODeviceCallback
             try
             {
                 std::vector<std::uint8_t> packed(std::size_t(device.bufferFrames) * 3);
-                std::vector<std::int32_t> pcm(std::size_t(device.bufferFrames) * logical.size());
+                std::vector<std::int32_t> pcm(std::size_t(device.bufferFrames) * pcmChannels);
                 std::vector<float> stereo(std::size_t(device.bufferFrames) * 2);
                 for (;;)
                 {
@@ -193,34 +202,37 @@ struct RecorderAudioEngine::Impl final : juce::AudioIODeviceCallback
                     if (std::uint64_t(first - start) != converted) { raw.release(); signal(Error::invalidNative); continue; }
                     std::fill(stereo.begin(), stereo.end(), 0.0f);
                     bool valid = true;
-                    for (std::size_t c = 0; c < logical.size(); ++c)
+                    for (std::size_t c = 0; c < logical.size() && valid; ++c)
                     {
-                        const auto& view = block->channels[std::size_t(mapping[c].activeIndex)];
-                        const auto logicalIndex = logical[c] - 1;
-                        if (haveFormat[logicalIndex] && !sameNativeFormat(formats[logicalIndex], view.format)) { valid = false; break; }
-                        formats[logicalIndex] = view.format; haveFormat[logicalIndex] = true;
-                        const auto* data = static_cast<const std::uint8_t*>(view.data) + std::size_t(skip) * view.format.strideBytes;
-                        const auto bytes = std::size_t(frames - 1) * view.format.strideBytes + view.format.containerBytes;
-                        const auto result = NativePcmConverter::pack(view.format, data, bytes, frames, packed.data(), packed.size());
-                        if (!result) { valid = false; break; }
-                        float maximum = peak[logicalIndex].load();
-                        for (unsigned i = 0; i < frames; ++i)
+                        const auto& slot = mapping[c]; const auto logicalIndex = logical[c] - 1;
+                        for (unsigned ch = 0; ch < slot.channels(); ++ch)
                         {
-                            const auto* p = packed.data() + i * 3;
-                            const auto word = std::uint32_t(p[0]) | std::uint32_t(p[1]) << 8 | std::uint32_t(p[2]) << 16;
-                            const auto value = (word & 0x800000u) ? std::int32_t(word) - 16777216 : std::int32_t(word);
-                            pcm[std::size_t(i) * logical.size() + c] = value;
-                            const float normal = float(value) / 8388608.0f;
-                            maximum = std::max(maximum, std::abs(normal));
-                            stereo[i * 2] += normal / float(logical.size());
+                            const auto& view = block->channels[std::size_t(ch ? slot.rightActiveIndex : slot.activeIndex)];
+                            const auto formatIndex = logicalIndex * 2 + ch;
+                            if (haveFormat[formatIndex] && !sameNativeFormat(formats[formatIndex], view.format)) { valid = false; break; }
+                            formats[formatIndex] = view.format; haveFormat[formatIndex] = true;
+                            const auto* data = static_cast<const std::uint8_t*>(view.data) + std::size_t(skip) * view.format.strideBytes;
+                            const auto bytes = std::size_t(frames - 1) * view.format.strideBytes + view.format.containerBytes;
+                            const auto result = NativePcmConverter::pack(view.format, data, bytes, frames, packed.data(), packed.size());
+                            if (!result) { valid = false; break; }
+                            float maximum = peak[logicalIndex].load();
+                            for (unsigned i = 0; i < frames; ++i)
+                            {
+                                const auto* p = packed.data() + i * 3;
+                                const auto word = std::uint32_t(p[0]) | std::uint32_t(p[1]) << 8 | std::uint32_t(p[2]) << 16;
+                                const auto value = (word & 0x800000u) ? std::int32_t(word) - 16777216 : std::int32_t(word);
+                                pcm[std::size_t(i) * pcmChannels + channelOffsets[c] + ch] = value;
+                                const float normal = float(value) / 8388608.0f;
+                                maximum = std::max(maximum, std::abs(normal));
+                                stereo[i * 2 + ch] += normal / float(logical.size());
+                                if (slot.channels() == 1) stereo[i * 2 + 1] += normal / float(logical.size());
+                            }
+                            squares[logicalIndex] += result.sumSquares / slot.channels(); peak[logicalIndex] = maximum;
                         }
-                        squares[logicalIndex] += result.sumSquares; peak[logicalIndex] = maximum;
                     }
                     if (!valid) { raw.release(); signal(Error::invalidNative); continue; }
                     if (wav && !wav->tryPush(pcm.data(), frames, converted, block->stamp.callbackQpc))
                     { raw.release(); signal(wav->error() == WavTrackWriter::Error::queueOverflow ? Error::pcmOverflow : Error::writeFailed); continue; }
-                    for (unsigned i = 0; i < frames; ++i)
-                        stereo[i * 2 + 1] = stereo[i * 2];
                     if (dubReference) dubReference->render(stereo.data(), frames, referenceStart + std::int64_t(converted), device.sampleRate);
                     for (unsigned i = 0; i < frames; ++i)
                         referenceSquares += (double(stereo[i * 2]) * stereo[i * 2] + double(stereo[i * 2 + 1]) * stereo[i * 2 + 1]) * .5;
@@ -244,9 +256,9 @@ struct RecorderAudioEngine::Impl final : juce::AudioIODeviceCallback
 
     DeviceInfo info;
     std::array<int, 8> inputs{-1,-1,-1,-1,-1,-1,-1,-1};
-    std::array<bool, 8> armedFlags{};
+    std::array<bool, 8> stereoSlots{}, armedFlags{};
     OutputMapping outputs;
-    std::array<std::atomic<int>, 8> nativeTypes{};
+    std::array<std::atomic<int>, 16> nativeTypes{};
     std::unique_ptr<juce::AudioIODeviceType> type;
     std::unique_ptr<juce::AudioIODevice> device;
     bool ownsTap = false;
@@ -315,14 +327,27 @@ struct RecorderAudioEngine::Impl final : juce::AudioIODeviceCallback
         {
             const int physical = inputs[mic - 1];
             const int index = int(std::find(info.activeToPhysical.begin(), info.activeToPhysical.end(), physical) - info.activeToPhysical.begin());
-            v.push_back({info.name, "Microphone " + juce::String(int(mic)), int(mic), index, physical});
+            v.push_back({info.name, "Microphone " + juce::String(int(mic)), int(mic), index, physical,
+                         stereoSlots[mic - 1] ? activeIndex(physical + 1) : -1, stereoSlots[mic - 1] ? physical + 1 : -1});
         }
         return v;
+    }
+    int activeIndex(int physical) const noexcept
+    {
+        const auto found = std::lower_bound(info.activeToPhysical.begin(), info.activeToPhysical.end(), physical);
+        return found != info.activeToPhysical.end() && *found == physical ? int(found - info.activeToPhysical.begin()) : -1;
+    }
+    std::vector<int> selectedInputs() const
+    {
+        std::vector<int> result;
+        for (unsigned i = 0; i < 8; ++i) if (inputs[i] >= 0)
+        { result.push_back(inputs[i]); if (stereoSlots[i]) result.push_back(inputs[i] + 1); }
+        return result;
     }
     void prepareDeviceState()
     {
         reopenRequired = false; ++deviceEpoch;
-        info.activeToPhysical.clear(); for (auto p : inputs) if (p >= 0) info.activeToPhysical.push_back(p);
+        info.activeToPhysical = selectedInputs();
         std::sort(info.activeToPhysical.begin(), info.activeToPhysical.end());
         left.assign(info.bufferFrames, 0); right.assign(info.bufferFrames, 0);
         callbackRate = info.sampleRate; callbackBlock = info.bufferFrames;
@@ -363,7 +388,7 @@ struct RecorderAudioEngine::Impl final : juce::AudioIODeviceCallback
         if (!hadPrevious || boundary != Error::none) mappingEpochQpc = stamp.callbackQpc;
         if (boundary != Error::none) { stableBlocks = 0; if (!reopenRequired.exchange(true)) ++deviceEpoch; if (take) take->signal(boundary); }
         else stableBlocks.fetch_add(1);
-        for (unsigned i = 0; i < std::min(count, 8u); ++i) if (views) nativeTypes[i] = views[i].format.asioSampleType;
+        for (unsigned i = 0; i < std::min(count, unsigned(nativeTypes.size())); ++i) if (views) nativeTypes[i] = views[i].format.asioSampleType;
         bridge.enqueueStamp(stamp);
         auto inputStamp = stamp;
         if (take && take->dubbing)
@@ -411,10 +436,12 @@ struct RecorderAudioEngine::Impl final : juce::AudioIODeviceCallback
         for (unsigned mic = 0; mic < 8; ++mic)
         {
             float peakValue = 0;
-            const auto found = std::lower_bound(info.activeToPhysical.begin(), info.activeToPhysical.end(), inputs[mic]);
-            const auto index = int(found - info.activeToPhysical.begin());
-            if (inputs[mic] >= 0 && index < inputCount && in && in[index])
-                for (unsigned i = 0; i < frames; ++i) peakValue = std::max(peakValue, std::abs(in[index][i]));
+            for (unsigned ch = 0; ch < (stereoSlots[mic] ? 2u : 1u); ++ch)
+            {
+                const auto index = activeIndex(inputs[mic] + int(ch));
+                if (inputs[mic] >= 0 && index >= 0 && index < inputCount && in && in[index])
+                    for (unsigned i = 0; i < frames; ++i) peakValue = std::max(peakValue, std::abs(in[index][i]));
+            }
             inputMeter[mic].store(peakValue, std::memory_order_relaxed);
         }
         if (frames <= left.size())
@@ -441,15 +468,19 @@ struct RecorderAudioEngine::Impl final : juce::AudioIODeviceCallback
             for (unsigned i = 0; i < frames; ++i)
             {
                 monitorGain += std::clamp((enabled ? 1.0f : 0.0f) - monitorGain, -step, step);
-                float monitor = 0;
+                float monitorL = 0, monitorR = 0;
                 for (unsigned mic = 0; mic < 8; ++mic)
                 {
                     monitorWeights[mic] += std::clamp(target[mic] - monitorWeights[mic], -step, step);
-                    const auto found = std::lower_bound(info.activeToPhysical.begin(), info.activeToPhysical.end(), inputs[mic]);
-                    const auto index = int(found - info.activeToPhysical.begin());
-                    if (inputs[mic] >= 0 && index < inputCount && in && in[index]) monitor += in[index][i] * monitorWeights[mic];
+                    const auto lIndex = activeIndex(inputs[mic]);
+                    const auto rIndex = stereoSlots[mic] ? activeIndex(inputs[mic] + 1) : lIndex;
+                    if (inputs[mic] >= 0 && in)
+                    {
+                        if (lIndex >= 0 && lIndex < inputCount && in[lIndex]) monitorL += in[lIndex][i] * monitorWeights[mic];
+                        if (rIndex >= 0 && rIndex < inputCount && in[rIndex]) monitorR += in[rIndex][i] * monitorWeights[mic];
+                    }
                 }
-                const float l = left[i] + monitor * monitorGain, r = right[i] + monitor * monitorGain;
+                const float l = left[i] + monitorL * monitorGain, r = right[i] + monitorR * monitorGain;
                 if (outputs.mono)
                 {
                     if (outputs.monoChannel >= 0 && outputs.monoChannel < outputCount && out[outputs.monoChannel])
@@ -517,7 +548,7 @@ juce::Result RecorderAudioEngine::openDevice(const juce::String& name, unsigned 
             for (auto size : s.device->getAvailableBufferSizes()) s.info.availableBuffers.push_back(size);
             if (!s.info.bufferFrames || s.info.bufferFrames > 16384 || s.info.physicalOutputs <= 0 || s.info.physicalOutputs > 256)
                 throw std::runtime_error("ASIO requires an output callback and supported buffer size");
-            for (auto p : s.inputs) if (p >= s.info.physicalInputs) throw std::runtime_error("Selected physical input is unavailable");
+            for (auto p : s.selectedInputs()) if (p >= s.info.physicalInputs) throw std::runtime_error("Selected physical input is unavailable");
             for (auto p : {s.outputs.left, s.outputs.right, s.outputs.monoChannel}) if (p >= s.info.physicalOutputs) throw std::runtime_error("Selected physical output is unavailable");
             s.prepareDeviceState();
             juce::BigInteger outputMask; outputMask.setRange(0, s.info.physicalOutputs, true);
@@ -568,7 +599,7 @@ juce::Result RecorderAudioEngine::openSynthetic(unsigned Fs, unsigned block, int
     if (s.busy()) return failure("테이크가 끝난 뒤 샘플레이트를 변경하세요.");
     if (Fs < 8000 || Fs > 768000 || !block || block > 16384 || ins < 0 || ins > 256 || outs < 1 || outs > 256)
         return failure("Invalid synthetic device configuration");
-    for (auto p : s.inputs) if (p >= ins) return failure("Synthetic physical input unavailable");
+    for (auto p : s.selectedInputs()) if (p >= ins) return failure("Synthetic physical input unavailable");
     for (auto p : {s.outputs.left, s.outputs.right, s.outputs.monoChannel}) if (p >= outs) return failure("Synthetic physical output unavailable");
     s.closePhysical(); s.detach(); s.session.reset();
     s.info = {}; s.info.name = "synthetic-native-PCM"; s.info.sampleRate = Fs; s.info.bufferFrames = block;
@@ -581,26 +612,21 @@ juce::Result RecorderAudioEngine::closeDevice()
     impl->closePhysical(); impl->detach(); impl->session.reset(); impl->info = {}; return juce::Result::ok();
 }
 RecorderAudioEngine::DeviceInfo RecorderAudioEngine::deviceInfo() const { return impl->info; }
-juce::Result RecorderAudioEngine::setInputMap(const std::array<int, 8>& map)
+juce::Result RecorderAudioEngine::setInputMap(const std::array<int, 8>& map, const std::array<bool, 8>& stereo)
 {
     auto& s = *impl;
     if (s.busy()) return failure("Input mapping is fixed for the take");
-    std::vector<int> selected;
-    for (auto p : map)
-    {
-        if (p < -1 || p > 255 || (p >= 0 && s.info.sampleRate && p >= s.info.physicalInputs)
-            || (p >= 0 && std::find(selected.begin(), selected.end(), p) != selected.end())) return failure("Invalid or duplicate physical input");
-        if (p >= 0) selected.push_back(p);
-    }
-    const auto previous = s.inputs; const auto old = s.info;
+    UserSettings settings; settings.physicalInputs.assign(map.begin(), map.end()); settings.stereoSlots = stereo;
+    const auto valid = settings.validate(s.info.sampleRate ? s.info.physicalInputs : 256); if (valid.failed()) return valid;
+    const auto previous = s.inputs; const auto previousStereo = s.stereoSlots; const auto old = s.info;
     // The old device must stop before changing any callback-visible map.
-    s.closePhysical(); s.inputs = map;
+    s.closePhysical(); s.inputs = map; s.stereoSlots = stereo;
     if (!old.sampleRate) return juce::Result::ok();
     auto result = old.synthetic ? openSynthetic(old.sampleRate, old.bufferFrames, old.physicalInputs, old.physicalOutputs)
                                : openDevice(old.name, old.sampleRate, int(old.bufferFrames));
     if (result.failed())
     {
-        s.closePhysical(); s.inputs = previous;
+        s.closePhysical(); s.inputs = previous; s.stereoSlots = previousStereo;
         const auto restored = old.synthetic ? openSynthetic(old.sampleRate, old.bufferFrames, old.physicalInputs, old.physicalOutputs)
                                            : openDevice(old.name, old.sampleRate, int(old.bufferFrames));
         if (restored.failed()) return juce::Result::fail(result.getErrorMessage() + "; map restore failed: " + restored.getErrorMessage());
@@ -631,6 +657,12 @@ juce::Result RecorderAudioEngine::arm(unsigned mic, bool enabled)
 }
 std::vector<unsigned> RecorderAudioEngine::armedMicrophones() const { return impl->armed(); }
 std::vector<JournalDeviceMapping> RecorderAudioEngine::microphoneMapping() const { return impl->mappings(); }
+std::vector<int> RecorderAudioEngine::calibrationInputMapping() const
+{
+    std::vector<int> result;
+    for (const auto& m : impl->mappings()) result.insert(result.end(), {m.mic, m.physicalIndex, m.rightPhysicalIndex});
+    return result;
+}
 void RecorderAudioEngine::setInputMonitoring(bool enabled, std::uint8_t selected) noexcept
 {
     auto old = impl->listen.load();
@@ -795,8 +827,9 @@ juce::var RecorderAudioEngine::telemetry() const
     {
         auto t = jsonObject(); const auto mic = s->logical[i];
         jsonSet(t, "mic", int(mic)); jsonSet(t, "physicalIndex", s->mapping[i].physicalIndex); jsonSet(t, "activeIndex", s->mapping[i].activeIndex);
+        jsonSet(t, "channels", s->mapping[i].channels()); jsonSet(t, "rightPhysicalIndex", s->mapping[i].rightPhysicalIndex);
         jsonSet(t, "peak", s->peak[mic - 1].load()); jsonSet(t, "rms", s->converted ? std::sqrt(s->squares[mic - 1] / double(s->converted)) : 0.0);
-        jsonSet(t, "nativeAsioType", s->formats[mic - 1].asioSampleType); jsonSet(t, "conversionPolicy", NativePcmConverter::policy(s->formats[mic - 1])); tracks.add(t);
+        jsonSet(t, "nativeAsioType", s->formats[(mic - 1) * 2].asioSampleType); jsonSet(t, "conversionPolicy", NativePcmConverter::policy(s->formats[(mic - 1) * 2])); tracks.add(t);
     }
     jsonSet(v, "device", s->device.name); jsonSet(v, "sampleRate", int(s->device.sampleRate)); jsonSet(v, "bufferFrames", int(s->device.bufferFrames));
     jsonSet(v, "inputLatencySamples", s->device.inputLatency); jsonSet(v, "outputLatencySamples", s->device.outputLatency);
