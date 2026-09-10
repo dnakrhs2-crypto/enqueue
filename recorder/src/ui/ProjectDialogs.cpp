@@ -1,4 +1,5 @@
 #include "MainComponent.h"
+#include "ShortcutSettingsPanel.h"
 
 namespace gocue::recorder
 {
@@ -15,14 +16,16 @@ class SettingsForm : public juce::Component
 {
 public:
     AudioSettingsPanel audio; CameraSettingsPanel camera;
+    ShortcutSettingsPanel shortcuts;
     juce::TabbedComponent tabs {juce::TabbedButtonBar::TabsAtTop};
     juce::Viewport audioScroll, cameraScroll;
     juce::TextButton apply {ko("적용")}, close {ko("닫기")}; juce::Label error;
     SettingsForm(const UserSettings& s, const RecorderProject& p, const RecorderAudioEngine::DeviceInfo& d, CameraSettingsPanel::CalibrationMatcher matcher)
-        : audio(s, p, d), camera(s, p, std::move(matcher))
+        : audio(s, p, d), camera(s, p, std::move(matcher)), shortcuts(s)
     {
         audioScroll.setViewedComponent(&audio, false); cameraScroll.setViewedComponent(&camera, false);
         tabs.addTab(ko("오디오 장치"), Palette::bar, &audioScroll, false); tabs.addTab(ko("카메라"), Palette::bar, &cameraScroll, false);
+        tabs.addTab(ko("단축키"), Palette::bar, &shortcuts, false);
         addAndMakeVisible(tabs); addAndMakeVisible(apply); addAndMakeVisible(close); addAndMakeVisible(error); error.setColour(juce::Label::textColourId, Palette::danger);
     }
     void resized() override
@@ -73,6 +76,7 @@ void MainComponent::showSettings()
     settingsWindow->setContentOwned(content, true); settingsWindow->centreAroundComponent(this, 720, 590);
     const auto configure = [this, content](UserSettings s)
     {
+        s.shortcuts = settings.get().shortcuts;
         if (session.configuring()) { pendingConfigure = s; content->error.setText(ko("이전 변경을 적용한 뒤 이어서 적용합니다."), juce::dontSendNotification); return; }
         const auto result = content->audio.configure(session, s, settings.get()); content->error.setText(result.failed() ? result.getErrorMessage() : ko("장치를 연결하는 중입니다."), juce::dontSendNotification); if (result.wasOk()) banner.clear();
     };
@@ -82,6 +86,13 @@ void MainComponent::showSettings()
     { session.stopPlayback(); const auto result = session.audioEngine().showControlPanel(); if (result.failed()) content->error.setText(result.getErrorMessage(), juce::dontSendNotification); else session.configure(settings.get()); };
     content->apply.onClick = [this, content, configure]
     {
+        if (content->tabs.getCurrentTabIndex() == 2)
+        {
+            const auto next = content->shortcuts.read(settings.get()); const auto result = settings.set(next);
+            content->error.setText(result.failed() ? result.getErrorMessage() : ko("단축키를 적용했습니다."), juce::dontSendNotification);
+            if (result.wasOk()) { if (pendingConfigure) pendingConfigure->shortcuts = next.shortcuts; persistSettings(); refreshPending = true; }
+            return;
+        }
         const auto s = content->camera.read(content->audio.read(settings.get()));
         auto result = s.asioDeviceId.isEmpty() ? juce::Result::ok() : validateAudioSettings(s, session.deviceInfo(), document.getProject()); // cameras apply without an ASIO device
         if (result.wasOk()) result = content->camera.scanning() ? juce::Result::fail(ko("카메라 목록을 확인하는 중입니다.")) : validateCameraSettings(s, content->camera.catalog());

@@ -57,7 +57,7 @@ public:
     void initialise(const juce::String& commandLine) override
     {
         CrashHandler::install();
-        auto args = juce::StringArray::fromTokens(commandLine, true); for (auto& arg : args) arg = arg.unquoted();
+        auto args = juce::StringArray::fromTokens(commandLine.trim(), true); for (auto& arg : args) arg = arg.unquoted();
         if (args.contains("--crash-test")) { volatile int* nowhere = nullptr; *nowhere = 1; } // diagnostic: proves the crash reporter on this PC
         if (args.size() == 2 && args[0] == "--automation")
         {

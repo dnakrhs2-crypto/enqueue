@@ -6,6 +6,7 @@
 namespace gocue::recorder
 {
 std::unique_ptr<juce::DocumentWindow> createCutEditStressWindow(const juce::var&, std::function<void(int)>);
+std::unique_ptr<juce::DocumentWindow> createTimelineUxWindow(const juce::var&, std::function<void(int)>);
 namespace
 {
 class TimelineScenarioWindow : public juce::DocumentWindow, private juce::Timer
@@ -60,6 +61,8 @@ std::unique_ptr<juce::DocumentWindow> createTimelineAutomationWindow(const juce:
         if (int(config["schemaVersion"]) == 1 && config["scenario"].toString() == "cut-edit-stress"
             && juce::File::isAbsolutePath(config["project"].toString()) && juce::File::isAbsolutePath(config["report"].toString()))
             return createCutEditStressWindow(config, completion);
+        if (int(config["schemaVersion"]) == 1 && config["scenario"].toString() == "timeline-ux" && juce::File::isAbsolutePath(config["report"].toString()))
+            return createTimelineUxWindow(config, completion);
         if (int(config["schemaVersion"]) != 1 || config["scenario"].toString() != "independent-audio-cuts" || config["runId"].toString().isEmpty()
             || !juce::File::isAbsolutePath(config["report"].toString())) throw std::invalid_argument("Invalid timeline scenario");
         return std::make_unique<TimelineScenarioWindow>(config, completion);

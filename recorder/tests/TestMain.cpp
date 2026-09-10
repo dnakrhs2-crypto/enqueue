@@ -59,6 +59,7 @@ int runMaterialExportTests();
 int runExportLifecycleTests();
 int runSourceReanchorTests();
 int runCutEditStabilityTests();
+int runTimelineUxTests();
 
 namespace
 {
@@ -75,6 +76,7 @@ int runRippleReorderMarkers() { const int a = runRippleTests(), b = runReorderTe
 int runRecoveryIdempotence() { const int a = runRecoveryTests(), b = runRetakeRecoveryTests(); return (a || b) ? 1 : 0; }
 const Suite suites[] = {
     {"cut-edit-stability", runCutEditStabilityTests},
+    {"timeline-ux", runTimelineUxTests},
     {"source-reanchor", runSourceReanchorTests},
     {"hardening", runHardeningTests},
     {"materials-alignment", runMaterialExportTests},

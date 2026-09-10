@@ -2,6 +2,8 @@
 #include "RecorderTransportBar.h"
 #include "TimelineView.logic.h"
 #include "TimelineView.scale.h"
+#include "TimelineInteraction.h"
+#include "ShortcutKeys.h"
 #include "ClipInspector.h"
 #include "TrackHeader.h"
 #include "MarkerPanel.h"
@@ -22,8 +24,12 @@ public:
     void setThumbnails(const Id&, std::vector<ThumbnailFrame>);
     void clearCaches();
     void zoom(double factor);
+    void zoomAt(double factor, double rowX);
     void zoomToFit();
     void reveal(Sample);
+    void setRecordingPreview(bool active, Sample placement, Sample elapsed, const UserSettings&);
+    void setShortcuts(const RecorderShortcuts& value) { if (shortcuts.keys != value.keys) { shortcuts = value; updateControls(); } }
+    std::function<bool(const juce::KeyPress&, juce::Component*)> onGlobalKey;
     void revealTrack(unsigned row) { viewport.setViewPosition(0, rulerHeight + int(row) * rowHeight); }
     void resized() override;
     void visibilityChanged() override { if (isShowing()) grabKeyboardFocus(); }
@@ -41,7 +47,7 @@ private:
     friend struct StabilityTestAccess;
     struct PeakDisplay { std::shared_ptr<PeakCache> live; std::shared_ptr<const PeakSnapshot> data; unsigned channel = 0; };
     struct Thumb { Sample sample; juce::Image image; };
-    class Rows : public juce::Component
+    class Rows : public juce::Component, private juce::Timer
     {
     public:
         explicit Rows(TimelineView& v) : view(v) {}
@@ -51,12 +57,26 @@ private:
         void mouseUp(const juce::MouseEvent&) override;
         void mouseMove(const juce::MouseEvent&) override;
         void mouseWheelMove(const juce::MouseEvent&, const juce::MouseWheelDetails&) override;
+        void cancelGesture(bool restore = true);
         TimelineView& view;
         enum class Drag { none, scrub, range, clip } dragging = Drag::none;
         Sample downSample = 0, downEdge = 0;
         Id downClip;
         bool moved = false;
         bool collapseSelection = false;
+        TimelineAction pendingAction = TimelineAction::move;
+        TimelineSnapIndex snapIndex;
+        std::optional<Sample> snapGuide;
+        juce::Point<float> lastPointer;
+        juce::ModifierKeys lastModifiers;
+        Sample previousPlayhead = 0;
+        double previousViewStart = 0;
+        std::optional<SampleRange> previousRange;
+        int downRow = -1;
+    private:
+        void updateDrag();
+        void timerCallback() override;
+        std::uint32_t lastAutoScroll = 0;
     } rows;
     void rebuildHeaders();
     void rebuildPreview();
@@ -102,6 +122,8 @@ private:
     double viewStart = 0, viewSeconds = 20;
     Sample playhead = 0;
     bool locked = false;
+    RecorderShortcuts shortcuts;
+    struct RecordingPreview { bool active = false, follow = true; Sample start = 0, length = 0; std::array<bool, 2> cameras{}; std::array<bool, 8> microphones{}; } recordingPreview;
     juce::String latestStatus;
     juce::String editStatus;
     std::unique_ptr<ClipEditResult> orderPreview;
