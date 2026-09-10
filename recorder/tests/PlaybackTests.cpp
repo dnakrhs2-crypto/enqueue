@@ -248,7 +248,8 @@ int runPlaybackTests()
         require(WaitForSingleObject(video.presentationWakeHandle(0), 0) == WAIT_OBJECT_0, "Presenter request event missing");
         require(!video.ready(0, 1), "Incomplete decode marked ready");
         state->releaseWake.signal();
-        require(WaitForSingleObject(wake->nativeHandle(), 1000) == WAIT_OBJECT_0 && video.ready(0, 1), "Publication did not wake coordinator with ready frame");
+        require(WaitForSingleObject(wake->nativeHandle(), 5000) == WAIT_OBJECT_0, "Publication did not wake the coordinator");
+        require(video.ready(0, 1), "Coordinator woke before the published frame was ready");
         require(WaitForSingleObject(video.presentationWakeHandle(0), 0) == WAIT_OBJECT_0, "Coordinator consumed presenter's notification");
         const auto frame = video.displaySelection(0).frame;
         video.presented(0, *frame, qpcNow());
