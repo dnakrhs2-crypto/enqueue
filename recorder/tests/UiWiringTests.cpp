@@ -1,5 +1,6 @@
 #include "TestSupport.h"
 #include "AudioRenderFixtures.h"
+#include "RecordedGapFixtures.h"
 #include "ui/UiState.h"
 #include "ui/AudioSettingsPanel.h"
 #include "media/PeakCache.h"
@@ -66,6 +67,7 @@ void checkAppPlayback(const std::vector<unsigned>& slots)
     for (unsigned i = 0; i < slots.size(); ++i)
     {
         MediaAsset asset; asset.kind = AssetKind::mic; asset.mediaGeneration = 2; asset.logicalLength = frames; asset.originalFormat.channels = int(slots[i]);
+        asset.availableRanges = {{0, frames}};
         asset.chunks = {{WavTrackWriter::chunkPath(c.takeId, i + 1, 1), {0, boundary}},
                         {WavTrackWriter::chunkPath(c.takeId, i + 1, 2), {boundary, 7}}};
         const auto source = RecorderSession::indexRecordedAudio(asset, f.root, c.sampleRate, asset.assetId);
@@ -161,34 +163,143 @@ void checkRejectedSelection(bool queued)
 int runUiWiringTests()
 {
     Suite suite;
+    for (unsigned channels : {1u, 2u}) for (const auto gap : recorder_audio_fixture::recordedGaps)
+    {
+        const auto name = "App session playback: " + std::to_string(channels) + " channels, " + recorder_audio_fixture::gapName(gap);
+        suite.test(name.c_str(), [=]
+        {
+            recorder_audio_fixture::RecordedGapFixture f(channels, gap);
+            const auto plan = RenderPlanCompiler::compile(f.project);
+            PlaybackAudioTrack track; track.trackId = f.project.tracks[1].trackId;
+            std::vector<AudioSourceBinding> bindings;
+            for (const auto& clip : plan->activeClips) if (clip.trackId == track.trackId)
+            {
+                const auto& asset = *f.project.media->findAsset(clip.assetId);
+                const auto wav = RecorderSession::indexRecordedAudio(asset, f.root, f.project.Fs, track.trackId);
+                require(wav->current() && wav->generation == std::uint64_t(asset.mediaGeneration)
+                    && wav->length == asset.logicalLength && wav->channels == channels, "App source identity, logical length and layout");
+                if (asset.availableRanges.empty()) require(wav->chunks.empty(), "All-gap assets must not open even an existing WAV");
+                track.clips.push_back({clip, wav}); bindings.push_back({asset.assetId, wavAudioSource(wav, true)});
+            }
+            require(track.clips.size() == 2, "Index both damaged and healthy takes before preparing playback");
+            TimelineAudioRenderer renderer(f.project.Fs, 256); renderer.setPlan({track}, f.totalFrames);
+            std::vector<float> l(f.totalFrames), r(f.totalFrames); renderer.renderAudio(0, unsigned(f.totalFrames), l.data(), r.data());
+            f.verifyPcm(l, r);
+            const auto compiled = recorder_audio_fixture::render(f.project, bindings, {}, {0, f.totalFrames}, 127);
+            const auto alternate = recorder_audio_fixture::render(f.project, bindings, {}, {0, f.totalFrames}, 509);
+            f.verifyPcm(compiled.left, compiled.right);
+            require(compiled.left == alternate.left && compiled.right == alternate.right, "Gap playback is independent of render block size");
+        });
+    }
     suite.test("App playback indexes stereo writer PCM across the 30-second chunk boundary", [] { checkAppPlayback({2}); });
     suite.test("App playback indexes mixed 1/2/1 slots and agrees with export sources", [] { checkAppPlayback({1, 2, 1}); });
-    suite.test("App playback indexes recovered stereo prefix and silences torn right-sample tail", []
+    for (unsigned channels : {1u, 2u})
     {
-        ReviewFolder f; RecorderProject initial; initial.Fs = 8000;
-        RecoveryScanner::writeCheckpoint(f.root.getChildFile("project.recorder"), initial);
-        const auto c = writeReviewTake(f.root, {2}, 13); const auto original = f.root.getChildFile(WavTrackWriter::chunkPath(c.takeId, 1, 1));
-        juce::MemoryBlock torn; require(original.loadFileAsData(torn), "Read stereo fixture"); torn.setSize(torn.getSize() - 1);
-        require(original.replaceWithData(torn.getData(), torn.getSize()), "Tear final right sample");
-        RecoveryReport recovered; const auto result = RecoveryScanner().run(f.root, recovered); require(result.wasOk(), result.getErrorMessage().toRawUTF8());
-        require(recovered.project.media->takes.size() == 1, "Recover stereo take");
-        const auto* asset = recovered.project.media->findAsset(recovered.project.media->takes[0].microphoneAssetIds[0]);
-        require(asset && asset->originalFormat.channels == 2 && asset->logicalLength == 13 && asset->gaps.size() == 1
-            && asset->gaps[0].start == 12 && asset->gaps[0].length == 1, "Recover complete stereo frames and explicit tail gap");
-        const auto source = RecorderSession::indexRecordedAudio(*asset, f.root, 8000, "recovered-mic");
-        require(source->channels == 2 && source->length == 13 && source->chunks[0].validBytes == 44 + 12 * 6, "Recovered app durable watermark");
-        TimelineAudioRenderer renderer(8000, 16); PlaybackAudioTrack track; track.trackId = "recovered-mic";
-        RenderClip clip; clip.trackId = track.trackId; clip.lengthSamples = 13; clip.mediaGeneration = asset->mediaGeneration;
-        clip.gaps = asset->gaps; track.clips.push_back({clip, source}); renderer.setPlan({track}, 13);
-        float left[13]{}, right[13]{}; renderer.renderAudio(0, 13, left, right);
-        for (unsigned i = 0; i < 13; ++i) require(left[i] == (i < 12 ? float(reviewPcm(i, 0)) / 8388608.0f : 0)
-            && right[i] == (i < 12 ? float(reviewPcm(i, 1)) / 8388608.0f : 0), "Recovered stereo prefix/tail playback");
-        juce::MemoryBlock after; require(original.loadFileAsData(after) && after == torn, "Playback/recovery altered original WAV");
-    });
+        const auto name = "App playback indexes recovered prefix and torn sample tail: " + std::to_string(channels) + " channels";
+        suite.test(name.c_str(), [=]
+        {
+            ReviewFolder f; RecorderProject initial; initial.Fs = 8000;
+            RecoveryScanner::writeCheckpoint(f.root.getChildFile("project.recorder"), initial);
+            const auto c = writeReviewTake(f.root, {channels}, 13); const auto original = f.root.getChildFile(WavTrackWriter::chunkPath(c.takeId, 1, 1));
+            juce::MemoryBlock torn; require(original.loadFileAsData(torn), "Read recorded PCM fixture");
+            // Mono odd-length PCM has a RIFF pad byte; tear PCM, not just padding.
+            torn.setSize(44 + 13 * channels * 3 - 1);
+            require(original.replaceWithData(torn.getData(), torn.getSize()), "Tear final channel sample");
+            RecoveryReport recovered; const auto result = RecoveryScanner().run(f.root, recovered); require(result.wasOk(), result.getErrorMessage().toRawUTF8());
+            require(recovered.project.media->takes.size() == 1, "Recover recorded take");
+            const auto* asset = recovered.project.media->findAsset(recovered.project.media->takes[0].microphoneAssetIds[0]);
+            require(asset && asset->originalFormat.channels == int(channels) && asset->logicalLength == 13 && asset->gaps.size() == 1
+                && asset->gaps[0].start == 12 && asset->gaps[0].length == 1, "Recover complete channel frames and explicit tail gap");
+            const auto source = RecorderSession::indexRecordedAudio(*asset, f.root, 8000, "recovered-mic");
+            require(source->channels == channels && source->length == 13 && source->chunks[0].validBytes == 44 + 12 * channels * 3, "Recovered app durable watermark");
+            TimelineAudioRenderer renderer(8000, 16); PlaybackAudioTrack track; track.trackId = "recovered-mic";
+            RenderClip clip; clip.trackId = track.trackId; clip.lengthSamples = 13; clip.mediaGeneration = asset->mediaGeneration;
+            clip.gaps = asset->gaps; track.clips.push_back({clip, source}); renderer.setPlan({track}, 13);
+            float left[13]{}, right[13]{}; renderer.renderAudio(0, 13, left, right);
+            for (unsigned i = 0; i < 13; ++i) require(left[i] == (i < 12 ? float(reviewPcm(i, 0)) / 8388608.0f : 0)
+                && right[i] == (i < 12 ? float(reviewPcm(i, channels == 2 ? 1 : 0)) / 8388608.0f : 0), "Recovered mono/stereo prefix/tail playback");
+            juce::MemoryBlock after; require(original.loadFileAsData(after) && after == torn, "Playback/recovery altered original WAV");
+        });
+    }
+    for (unsigned channels : {1u, 2u})
+    {
+        const auto name = "App playback after recovery of a missing take plus healthy take: " + std::to_string(channels) + " channels";
+        suite.test(name.c_str(), [=]
+        {
+            ReviewFolder f; RecorderProject initial; initial.Fs = 8000;
+            RecoveryScanner::writeCheckpoint(f.root.getChildFile("project.recorder"), initial);
+            const auto lost = writeReviewTake(f.root, {channels}, 13);
+            const auto missing = f.root.getChildFile(WavTrackWriter::chunkPath(lost.takeId, 1, 1));
+            require(missing.deleteFile(), "Remove isolated take WAV before real recovery");
+            writeReviewTake(f.root, {channels}, 13);
+            RecoveryReport recovered; const auto result = RecoveryScanner().run(f.root, recovered);
+            require(result.wasOk(), result.getErrorMessage().toRawUTF8());
+            require(recovered.project.media->takes.size() == 2 && recovered.project.activeTimelineEnd() == 26, "Recover both takes and preserve placement");
+            PlaybackAudioTrack track; unsigned empty = 0, healthy = 0;
+            for (const auto& lane : recovered.project.tracks) if (lane.kind == TrackKind::mic)
+            {
+                track.trackId = lane.trackId;
+                for (const auto& c : lane.clips.items())
+                {
+                    const auto& a = *recovered.project.media->findAsset(c.assetId);
+                    const auto source = RecorderSession::indexRecordedAudio(a, f.root, 8000, lane.trackId);
+                    if (a.availableRanges.empty())
+                    {
+                        ++empty; require(a.chunks.empty() && a.relativePath.isNotEmpty() && a.gaps.size() == 1
+                            && a.gaps[0].start == 0 && a.gaps[0].length == 13 && source->chunks.empty(), "Real recovery retains only a placeholder path for an all-gap take");
+                    }
+                    else ++healthy;
+                    RenderClip clip; clip.clipId = c.clipId; clip.assetId = c.assetId; clip.trackId = lane.trackId;
+                    clip.timelineStartSample = c.timelineStartSample; clip.lengthSamples = c.lengthSamples;
+                    clip.mediaGeneration = a.mediaGeneration; clip.gaps = a.gaps; track.clips.push_back({clip, source});
+                }
+            }
+            require(empty == 1 && healthy == 1, "Missing and healthy recovery paths both indexed");
+            TimelineAudioRenderer renderer(8000, 16); renderer.setPlan({track}, 26);
+            float l[26]{}, r[26]{}; renderer.renderAudio(0, 26, l, r);
+            for (const auto& c : track.clips) for (unsigned i = 0; i < 13; ++i)
+            {
+                const bool silence = c.source->chunks.empty(); const auto at = c.mapping.timelineStartSample + i;
+                require(l[at] == (silence ? 0 : float(reviewPcm(i, 0)) / 8388608.0f)
+                    && r[at] == (silence ? 0 : float(reviewPcm(i, channels == 2 ? 1 : 0)) / 8388608.0f), "Recovered missing take is silent and healthy PCM plays");
+            }
+            require(!missing.exists(), "Indexing must not recreate missing media");
+        });
+    }
+    for (unsigned channels : {1u, 2u})
+    {
+        const auto name = "App single-file WAV fallback respects durable availability: " + std::to_string(channels) + " channels";
+        suite.test(name.c_str(), [=]
+        {
+            ReviewFolder f; const auto c = writeReviewTake(f.root, {channels}, 13);
+            MediaAsset asset; asset.kind = AssetKind::mic; asset.mediaGeneration = 1; asset.logicalLength = 17;
+            asset.originalFormat.channels = int(channels); asset.relativePath = WavTrackWriter::chunkPath(c.takeId, 1, 1);
+            asset.availableRanges = {{0, 5}, {5, 8}}; asset.gaps = {{13, 4}};
+            const auto wav = RecorderSession::indexRecordedAudio(asset, f.root, 8000, "mic");
+            require(wav->length == 17 && wav->chunks.size() == 1 && wav->chunks[0].validSamples == 13
+                && wav->chunks[0].validBytes == 44 + 13 * channels * 3, "Single-file fallback uses only committed frames and bytes");
+            float l[17]{}, r[17]{}; wavAudioSource(wav, true)->read(0, 17, l, r);
+            for (unsigned i = 0; i < 17; ++i)
+                require(l[i] == (i < 13 ? float(reviewPcm(i, 0)) / 8388608.0f : 0)
+                    && r[i] == (i < 13 ? float(reviewPcm(i, channels == 2 ? 1 : 0)) / 8388608.0f : 0), "Single-file logical tail supplies silence");
+            for (const auto& ranges : std::vector<std::vector<SampleRange>>{{{1, 12}}, {{0, 0}}, {{0, -1}}, {{0, 18}},
+                    {{0, 5}, {6, 7}}, {{0, 8}, {7, 6}}, {{0, 17}}})
+            {
+                asset.availableRanges = ranges;
+                rejects([&] { RecorderSession::indexRecordedAudio(asset, f.root, 8000, "mic"); });
+            }
+            asset.availableRanges = {{0, 13}}; asset.relativePath = "media/missing.wav";
+            rejects([&] { RecorderSession::indexRecordedAudio(asset, f.root, 8000, "mic"); });
+            asset.availableRanges.clear(); asset.gaps = {{0, 17}}; asset.chunks = {{"media/stale.wav", {0, 13}}};
+            require(RecorderSession::indexRecordedAudio(asset, f.root, 8000, "mic")->chunks.empty(), "No available PCM means silence even with stale chunk metadata");
+            rejects([&] { RecorderSession::indexRecordedAudio(asset, f.root, 0, "mic"); });
+        });
+    }
     suite.test("App WAV index rejects invalid channel metadata, duration and chunk ranges", []
     {
         ReviewFolder f; const auto c = writeReviewTake(f.root, {2}, 13);
         MediaAsset asset; asset.kind = AssetKind::mic; asset.mediaGeneration = 1; asset.logicalLength = 13;
+        asset.availableRanges = {{0, 13}};
         asset.chunks = {{WavTrackWriter::chunkPath(c.takeId, 1, 1), {0, 13}}};
         for (int channels : {-1, 0, 1, 3}) { asset.originalFormat.channels = channels; rejects([&] { RecorderSession::indexRecordedAudio(asset, f.root, 8000, "mic"); }); }
         asset.originalFormat.channels = 2; asset.logicalLength = 12; rejects([&] { RecorderSession::indexRecordedAudio(asset, f.root, 8000, "mic"); });
@@ -348,6 +459,7 @@ int runUiWiringTests()
         require(writer.stop(5, juce::Uuid()).wasOk(), "Writer stop"); require(c.peakCache->snapshot().complete, "Writer tail incomplete");
         MediaAsset asset; asset.kind = AssetKind::mic; asset.mediaGeneration = 2; asset.logicalLength = 8;
         asset.originalFormat.channels = 1;
+        asset.availableRanges = {{0, 5}}; asset.gaps = {{5, 3}};
         asset.chunks.push_back({WavTrackWriter::chunkPath(c.takeId, 1, 1), {0, 5}});
         const auto source = RecorderSession::indexRecordedAudio(asset, folder, 48000, "mic");
         require(source->current() && source->generation == 2 && source->chunks[0].validBytes == 59, "Finalized media/header generation mismatch");

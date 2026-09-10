@@ -65,6 +65,7 @@ public:
                                                                const juce::Uuid& take) const;
     static void validateWav(WavSource&); // validates PCM24 mono/stereo header and durable limits
     // Finalized/recovered microphone assets; shared by app playback and export.
+    // Empty availability is logical silence; a single-file fallback needs a durable prefix.
     static std::shared_ptr<const WavSource> recordedAudio(const MediaAsset&, const juce::File& folder,
                                                          unsigned Fs, const Id& track);
 private:

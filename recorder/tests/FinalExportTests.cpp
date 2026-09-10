@@ -3,6 +3,7 @@
 #include "record/ReferenceMixWriter.h"
 #include "playback/VideoPlaybackEngine.h"
 #include "AudioRenderFixtures.h"
+#include "RecordedGapFixtures.h"
 #include "TestSupport.h"
 #include <algorithm>
 #include <cmath>
@@ -78,6 +79,48 @@ void writeMuxFixture(const juce::File& partial, unsigned Fs, Sample frameCount, 
 int runFinalExportTests()
 {
     Suite s;
+    for (unsigned channels : {1u, 2u}) for (const auto gap : recorder_audio_fixture::recordedGaps)
+    {
+        const auto name = "Final export with healthy take: " + std::to_string(channels) + " channels, " + recorder_audio_fixture::gapName(gap);
+        s.test(name.c_str(), [=]
+        {
+            recorder_audio_fixture::RecordedGapFixture f(channels, gap);
+            ExportActivity gate; ExportControl control(gate); ExportJob job(f.project, f.root);
+            const auto mix = FinalVideoExporter::audioSource(job, "mix"), mic = FinalVideoExporter::audioSource(job, "mic:1");
+            std::vector<float> l(f.totalFrames), r(f.totalFrames);
+            for (const auto& mask : {mix, mic})
+            {
+                FinalVideoExporter::validateSelection(job, {TrackKind::cam1, mask});
+                const auto sources = TimelineExporter::openSources(job, mask, control);
+                require(sources.size() == 2, "Final preflight retains both damaged and healthy take sources");
+                ExportAudioRenderer renderer(job, sources, mask);
+                renderer.render(0, unsigned(f.totalFrames), l.data(), r.data()); f.verifyPcm(l, r);
+            }
+            ExportAudioRenderer renderer(job, TimelineExporter::openSources(job, mix, control), mix);
+            ExportPublication publication(job);
+            const auto partial = publication.file("final.mp4").getSiblingFile("final.mp4.partial");
+            writeMuxFixture(partial, f.project.Fs, job.range.frameCount, nullptr, &renderer);
+            double error = 0; Sample samples = 0; ExportVerificationObserver observer;
+            observer.audio = [&](Sample first, unsigned count, const float* left, const float* right)
+            {
+                for (unsigned i = 0; i < count; ++i)
+                {
+                    const auto at = std::size_t(first + i);
+                    error += (left[i] - l[at]) * (left[i] - l[at]) + (right[i] - r[at]) * (right[i] - r[at]);
+                    if (first + i >= 512 && first + i + 512 < f.totalFrames
+                        && f.silent(first + i - 512) && f.silent(first + i + 512))
+                        require(std::abs(left[i]) < .003f && std::abs(right[i]) < .003f, "Decoded AAC gap interior remains silent within codec tolerance");
+                }
+                samples += count;
+            };
+            auto row = FinalVideoExporter::verify(partial, job.range.frameCount, f.totalFrames, f.project.Fs,
+                f.project.fps, control, observer, AV_CODEC_ID_MPEG4);
+            require(samples == f.totalFrames && std::sqrt(error / (samples * 2)) < .015, "Decode all final AAC samples against verified PCM");
+            jsonSet(row, "name", "final.mp4"); publication.commit(juce::Array<juce::var>{row}, control);
+            require(job.outputDirectory.getChildFile("final.mp4").existsAsFile()
+                && job.outputDirectory.getChildFile("export-manifest.json").existsAsFile(), "Publish verified final output");
+        });
+    }
     s.test("Stereo microphone final selection, mix and decoded AAC retain channel separation", []
     {
         recorder_audio_fixture::Fixture f(48000, true);
