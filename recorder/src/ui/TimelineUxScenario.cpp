@@ -142,7 +142,7 @@ private:
         auto ui = mapUiState(p, settings, recording ? TakeController::State::recording : TakeController::State::idle, recording, false, true, true);
         surface.update(ui, p, settings, recording ? ko("녹화 중") : ko("입력 검증"), ko("검증 창 · 녹화 상태와 출력 시계는 합성입니다"), elapsed, 100000000000, timeline);
         view.setVisible(timeline); view.setBounds(surface.timelineBounds());
-        view.setRecordingPreview(recording, placement, elapsed, settings);
+        view.setRecordingPreview(recording, placement, elapsed, {{bool(live[0]), bool(live[1])}, {1, 2}}, settings);
         view.refresh(recording, recording ? placement + elapsed : cursor, {});
         view.transport.setState(!recording, transport && transport->snapshot().state == TransportState::playing, cursor, p.Fs);
         for (unsigned i = 0; i < 2; ++i)
