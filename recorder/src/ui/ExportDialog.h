@@ -17,7 +17,11 @@ public:
     void show();
     void resized() override;
     bool beforeRecording(std::function<void()> resume);
+    bool ownsShortcutOrigin(const juce::Component*) const;
+    bool previewActive() const { return preview || previewWork.valid(); }
+    std::function<bool(const juce::KeyPress&, juce::Component*)> onShortcut;
 private:
+    friend struct ShortcutExceptionTestAccess;
     struct Window;
     struct Preview;
     void timerCallback() override;

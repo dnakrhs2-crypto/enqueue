@@ -3,6 +3,7 @@
 
 namespace gocue::recorder
 {
+namespace exception_test { thread_local std::function<std::future<std::vector<CameraDevice>>()> cameraWorker; }
 CameraSettingsPanel::CameraSettingsPanel(const UserSettings& s, const RecorderProject& p, CalibrationMatcher matcher)
     : initial(s), matchCalibration(std::move(matcher)), projectFps(p.fps.numerator)
 {
@@ -19,7 +20,13 @@ CameraSettingsPanel::CameraSettingsPanel(const UserSettings& s, const RecorderPr
     fps.setText(ko("프로젝트 ") + juce::String(p.fps.numerator) + (p.media->assets.empty() ? ko(" fps · 첫 미디어 후 고정") : ko(" fps · 고정")), juce::dontSendNotification);
     status.setText(ko("카메라 장치를 확인하는 중입니다."), juce::dontSendNotification);
     refreshCalibration();
-    work = std::async(std::launch::async, [] { ComApartment apartment; MfRuntime runtime; return CameraCatalog::enumerate(); }); startTimer(100);
+    try
+    {
+        work = exception_test::cameraWorker ? exception_test::cameraWorker()
+            : std::async(std::launch::async, [] { ComApartment apartment; MfRuntime runtime; return CameraCatalog::enumerate(); }); startTimer(100);
+    }
+    catch (const std::exception& e) { status.setText(ko("카메라 목록 확인을 시작할 수 없습니다. ") + juce::String::fromUTF8(e.what()), juce::dontSendNotification); }
+    catch (...) { status.setText(ko("카메라 목록 확인을 시작할 수 없습니다. 알 수 없는 오류"), juce::dontSendNotification); }
 }
 CameraSettingsPanel::~CameraSettingsPanel() { stopTimer(); }
 void CameraSettingsPanel::setSettings(const UserSettings& s) { initial = s; refreshCalibration(); }
@@ -45,6 +52,7 @@ void CameraSettingsPanel::timerCallback()
         refreshCalibration();
     }
     catch (const std::exception& e) { status.setText(ko("카메라 목록을 읽을 수 없습니다. ") + juce::String::fromUTF8(e.what()), juce::dontSendNotification); }
+    catch (...) { status.setText(ko("카메라 목록을 읽을 수 없습니다. 알 수 없는 오류"), juce::dontSendNotification); }
     refreshCalibration(); stopTimer();
 }
 void CameraSettingsPanel::modesFor(unsigned i)

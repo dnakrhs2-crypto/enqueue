@@ -48,6 +48,40 @@ void CrashHandler::install()
     std::set_terminate(onTerminate);
 }
 juce::File CrashHandler::directory() { return ProductIdentity::settingsDirectory().getChildFile("crash"); }
+juce::File CrashHandler::writeExceptionReport(const juce::String& what, const juce::String& source, int line,
+                                             const juce::File& reportDirectory) noexcept
+{
+    try
+    {
+        const auto dir = reportDirectory == juce::File() ? directory() : reportDirectory;
+        if (dir.createDirectory().failed()) return {};
+        static std::atomic<unsigned> serial{0};
+        const auto now = juce::Time::getCurrentTime();
+        const auto stamp = now.formatted("%Y%m%d-%H%M%S") + "." + juce::String(now.toMilliseconds() % 1000).paddedLeft('0', 3)
+            + "-" + juce::String(serial.fetch_add(1));
+        const auto report = dir.getChildFile("Recorder-" + ProductIdentity::version() + "-" + stamp + "-"
+            + juce::String((juce::int64) GetCurrentProcessId()) + "-exception.txt");
+        juce::String text;
+        text << ProductIdentity::displayName() << " " << ProductIdentity::version() << " handled exception\n"
+             << "time: " << now.toString(true, true) << "\nwhat: " << what << "\nfile: " << source << "\nline: " << line
+             << "\n\nstack:\n" << juce::SystemStats::getStackBacktrace();
+        return report.replaceWithText(text) ? report : juce::File();
+    }
+    catch (...) { return {}; }
+}
+void CrashHandler::handleException(const std::exception* exception, const juce::String& source, int line,
+                                  const std::function<void(const juce::File&)>& notify, const juce::File& reportDirectory) noexcept
+{
+    static thread_local bool handling = false;
+    if (handling) return;
+    struct Guard { bool& value; explicit Guard(bool& v) : value(v) { value = true; } ~Guard() { value = false; } } guard(handling);
+    try
+    {
+        const auto report = writeExceptionReport(exception ? juce::String::fromUTF8(exception->what()) : juce::String("Unknown non-standard exception"), source, line, reportDirectory);
+        if (notify) notify(report);
+    }
+    catch (...) { OutputDebugStringW(L"Recorder: exception notification failed\n"); }
+}
 juce::File CrashHandler::latestUnseenReport()
 {
     juce::File newest;

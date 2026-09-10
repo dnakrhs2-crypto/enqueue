@@ -1,0 +1,368 @@
+// Included once by TestMain.cpp; no separate main and no hardware startup.
+#include <juce_gui_extra/juce_gui_extra.h>
+#include "TestSupport.h"
+#include "AudioRenderFixtures.h"
+#include "ui/MainComponent.h"
+#include "ui/ExportDialog.h"
+#include "support/CrashHandler.h"
+#include <system_error>
+#include <chrono>
+#include <thread>
+
+#pragma comment(lib, "PowrProf.lib")
+#pragma comment(lib, "dbghelp.lib")
+#define RECORDER_HAS_WINSPARKLE 0
+#include "../src/ui/MainComponent.cpp"
+#include "../src/ui/ProjectDialogs.cpp"
+#include "../src/ui/ExportDialog.cpp"
+#include "../src/ui/CameraSettingsPanel.cpp"
+#include "../src/ui/DemoAutomation.cpp"
+#include "../src/ui/RecorderLookAndFeel.cpp"
+#include "../src/app/RecorderUpdater.cpp"
+#include "../src/support/CrashHandler.cpp"
+
+namespace gocue::recorder
+{
+struct ShortcutExceptionTestAccess
+{
+    static RecorderSession& session(MainComponent& main) { return main.session; }
+    static void stopTimers(MainComponent& main) { main.stopTimer(); main.exportDialog->stopTimer(); }
+    static void tick(MainComponent& main) { main.timerCallback(); }
+    static void refresh(MainComponent& main) { main.refresh(); }
+    static void settings(MainComponent& main) { main.showSettings(); }
+    static bool settingsVisible(MainComponent& main) { return main.settingsWindow && main.settingsWindow->isVisible(); }
+    static SettingsForm& settingsForm(MainComponent& main) { return *static_cast<SettingsForm*>(main.settingsWindow->getContentComponent()); }
+    static ExportDialog& exporting(MainComponent& main) { return *main.exportDialog; }
+    static juce::TextButton& exportFocus(MainComponent& main) { return main.exportDialog->openFolder; }
+    static juce::TextEditor& exportText(MainComponent& main) { return main.exportDialog->folder; }
+    static void allowStartButton(MainComponent& main) { main.recordView.startButton.setEnabled(true); }
+    static juce::String banner(MainComponent& main) { return main.banner; }
+    static juce::String exceptionBanner(MainComponent& main) { return main.exceptionBanner; }
+    static void releaseKey(MainComponent& main) { main.heldShortcut = {}; }
+    static bool listenerOn(MainComponent& main, juce::Component* origin) { return main.shortcutFocus == origin; }
+    static void mockPreview(MainComponent& main)
+    {
+        std::promise<std::shared_ptr<ExportDialog::Preview>> promise;
+        main.exportDialog->previewWork = promise.get_future(); promise.set_exception(std::make_exception_ptr(std::runtime_error("injected preview")));
+    }
+    static void openAudio(RecorderSession& session, unsigned Fs = 8000)
+    {
+        recorder_test::require(session.audio.openSynthetic(Fs, 80, 0, 2).wasOk(), "Open synthetic audio");
+        session.device = session.audio.deviceInfo();
+    }
+    static void failLaunch(MainComponent& main)
+    { main.beforeWorkerStart = [](const char*) { throw std::system_error(std::make_error_code(std::errc::resource_unavailable_try_again), "injected UI launch"); }; }
+    static bool startFile(MainComponent& main)
+    { return main.startFileWork({}, [] { return MainComponent::FileResult{}; }); }
+    static void failFile(MainComponent& main, std::exception_ptr error)
+    {
+        main.pendingFile.written = main.document.snapshot(); main.pendingFile.file = main.settings.getFile().getSiblingFile("failed.recorder");
+        std::promise<MainComponent::FileResult> promise; main.fileWork = promise.get_future(); promise.set_exception(error);
+    }
+    static bool filePending(MainComponent& main) { return main.fileWork.valid(); }
+    static void persist(MainComponent& main) { main.persistSettings(); }
+    static bool settingsPending(MainComponent& main) { return main.settingsWork.valid() || main.settingsPending; }
+    static void failSettings(MainComponent& main, std::exception_ptr error)
+    {
+        std::promise<juce::Result> promise; main.settingsWork = promise.get_future(); promise.set_exception(error);
+    }
+    static juce::Result failDeviceStart(RecorderSession& session)
+    {
+        session.beforeWorkerStart = [](const char*) { throw std::runtime_error("injected device launch"); };
+        return session.startDeviceWork([] { return RecorderSession::DeviceResult{}; });
+    }
+    static void failDeviceGet(RecorderSession& session, std::exception_ptr error)
+    {
+        session.lifecycle->set(RecorderLifecycle::configuring, true); session.notice = "configuring";
+        std::promise<RecorderSession::DeviceResult> promise; session.deviceWork = promise.get_future(); promise.set_exception(error);
+    }
+    static void failRelease(RecorderSession& session, bool launch)
+    {
+        if (launch) session.beforeWorkerStart = [](const char*) { throw std::runtime_error("injected release launch"); };
+        else { std::promise<void> promise; session.releaseWork = promise.get_future(); promise.set_exception(std::make_exception_ptr(42)); }
+    }
+};
+}
+
+namespace shortcut_exception_tests
+{
+using namespace gocue::recorder;
+using recorder_test::require;
+using Access = ShortcutExceptionTestAccess;
+struct Folder
+{
+    juce::File root = juce::File::getSpecialLocation(juce::File::tempDirectory).getChildFile("recorder-keys-" + newId());
+    ~Folder()
+    {
+        if (root.getParentDirectory() == juce::File::getSpecialLocation(juce::File::tempDirectory)
+            && root.getFileName().startsWith("recorder-keys-")) root.deleteRecursively();
+    }
+};
+void pump()
+{
+    MSG message{};
+    for (unsigned n = 0; n < 100 && PeekMessageW(&message, nullptr, 0, 0, PM_REMOVE); ++n)
+    { TranslateMessage(&message); DispatchMessageW(&message); }
+}
+template<class F> void until(F condition)
+{
+    const auto end = std::chrono::steady_clock::now() + std::chrono::seconds(8);
+    while (!condition()) { require(std::chrono::steady_clock::now() < end, "Exception regression timeout"); std::this_thread::sleep_for(std::chrono::milliseconds(1)); }
+}
+juce::String labels(const juce::Component& component)
+{
+    juce::String result;
+    if (const auto* label = dynamic_cast<const juce::Label*>(&component)) result += label->getText();
+    for (auto* child : component.getChildren()) result += labels(*child);
+    return result;
+}
+struct CameraFixture
+{
+    CameraFixture()
+    {
+        exception_test::cameraWorker = []
+        { std::promise<std::vector<CameraDevice>> promise; auto future = promise.get_future(); promise.set_value({}); return future; };
+    }
+    ~CameraFixture() { exception_test::cameraWorker = {}; }
+};
+class Video final : public ITakeVideoStream
+{
+public:
+    void prepare(const juce::File& file, NvencProfile, Rational, const AVCodecContext&) override
+    { require(file.replaceWithText("synthetic shortcut fixture, not encoded media"), "Video fixture file"); }
+    void startAt(ClockMapping, std::int64_t, unsigned, std::function<std::int64_t()>) override {}
+    void offer(const VideoSurface&) noexcept override {}
+    void audioPacket(const AVPacket&) override {}
+    bool ready() const noexcept override { return true; }
+    void sourceFailed(std::int64_t n) noexcept override { end = n; }
+    void endAt(std::int64_t n) noexcept override { end = n; }
+    void audioDone() noexcept override {}
+    void finish() override {}
+    bool failed() const noexcept override { return false; }
+    std::int64_t availableSamples() const noexcept override { return end; }
+    bool thumbnailReady() const noexcept override { return false; }
+    juce::var report() const override { return {}; }
+private:
+    std::int64_t end = 0;
+};
+struct MainFixture
+{
+    Folder folder;
+    RecorderDocument document;
+    RecorderSettings settings{folder.root};
+    MainComponent main{document, settings, [] { return std::make_unique<Video>(); }};
+    RecorderSession& session = Access::session(main);
+    Sample position = 0;
+    std::uint64_t sequence = 0;
+    std::int64_t firstQpc = qpcNow();
+    MainFixture() { Access::stopTimers(main); document.newProject("shortcut fixture", 8000, {30, 1}); }
+    void feed()
+    {
+        float left[80]{}, right[80]{}; float* output[]{left, right};
+        BlockStamp stamp{}; stamp.flags = samplePositionValid | latenciesValid; stamp.sequence = sequence++;
+        stamp.samplePosition = position; stamp.sampleRate = 8000; stamp.numSamples = 80; stamp.callbackQpc = firstQpc + position * qpcFrequency() / 8000;
+        session.audioEngine().processBlock(stamp, nullptr, 0, nullptr, output, 2); position += 80;
+    }
+    void begin()
+    {
+        Access::openAudio(session); for (int i = 0; i < 4; ++i) feed();
+        until([&] { return session.audioEngine().clockReady(); });
+        TakeController::Config config; config.projectDirectory = folder.root; config.synthetic = true; config.projectFps = 30;
+        config.cameraMode.width = 1920; config.cameraMode.height = 1080; config.cameraMode.fps = {30, 1};
+        auto& take = session.takeController(); require(take.prepare(config).wasOk(), "Prepare synthetic recording");
+        until([&] { take.tick(); return take.state() == TakeController::State::armed; });
+        require(take.start(position + 81).wasOk(), "Start synthetic recording");
+        until([&] { return session.audioEngine().startCommitted(); });
+        until([&] { feed(); take.tick(); return take.state() == TakeController::State::recording; });
+    }
+    void finish()
+    {
+        auto& take = session.takeController();
+        if (take.state() == TakeController::State::recording) require(take.stop().wasOk(), "Finish synthetic recording");
+        until([&] { feed(); take.tick(); return take.shutdownComplete(); });
+    }
+};
+void focus(MainComponent& main, juce::Component& target)
+{
+    pump(); // finish posted form text updates before assigning the test focus
+    target.setEnabled(true); target.grabKeyboardFocus();
+    until([&] { pump(); return juce::Component::getCurrentlyFocusedComponent() == &target && Access::listenerOn(main, &target); });
+}
+class ExceptionApplication final : public juce::JUCEApplication
+{
+public:
+    explicit ExceptionApplication(const juce::File& folder) : root(folder) {}
+    const juce::String getApplicationName() override { return "Recorder exception regression"; }
+    const juce::String getApplicationVersion() override { return "test"; }
+    void initialise(const juce::String&) override {}
+    void shutdown() override {}
+    void unhandledException(const std::exception* e, const juce::String& file, int line) override
+    { ++calls; CrashHandler::handleException(e, file, line, [this](const juce::File& report) { reports.push_back(report); }, root); }
+    int calls = 0;
+    std::vector<juce::File> reports;
+private:
+    juce::File root;
+};
+}
+
+int runShortcutExceptionTests()
+{
+    using namespace shortcut_exception_tests;
+    recorder_test::Suite suite;
+    juce::ScopedJuceInitialiser_GUI gui;
+    suite.test("Focused nonmodal export control forwards F10 to the live take stop", []
+    {
+        MainFixture f; f.begin();
+        Access::settings(f.main); require(!Access::settingsVisible(f.main), "Settings opened during recording");
+        auto& exporting = Access::exporting(f.main); exporting.show();
+        auto& button = Access::exportFocus(f.main); focus(f.main, button);
+        require(!f.main.isParentOf(&button) && exporting.ownsShortcutOrigin(&button), "Export must be a separate owned top-level window");
+        require(button.getPeer()->handleKeyPress(juce::KeyPress::F10Key, 0), "Native peer did not handle F10");
+        require(f.session.takeController().state() == TakeController::State::stopping, "F10 did not call TakeController::stop");
+        f.finish();
+    });
+    suite.test("Visible settings reject F9 and permit F10 from main and settings controls", []
+    {
+        CameraFixture camera;
+        for (bool settingsFocus : {true, false})
+        {
+            MainFixture f; Access::settings(f.main); require(Access::settingsVisible(f.main), "Settings fixture not visible");
+            f.begin(); Access::allowStartButton(f.main);
+            require(!f.main.routeShortcut(juce::KeyPress(juce::KeyPress::F9Key), &f.main), "F9 escaped settings gate");
+            require(f.session.takeController().state() == TakeController::State::recording, "Ignored F9 changed recording");
+            if (settingsFocus)
+            {
+                auto& button = Access::settingsForm(f.main).close; focus(f.main, button);
+                require(button.getPeer()->handleKeyPress(juce::KeyPress::F10Key, 0), "Settings peer did not route F10");
+            }
+            else require(f.main.routeShortcut(juce::KeyPress(juce::KeyPress::F10Key), &f.main), "Settings visibility blocked main F10 routing");
+            require(f.session.takeController().state() == TakeController::State::stopping, "F10 did not stop while settings remained visible"); f.finish();
+        }
+    });
+    suite.test("Export text input and shortcut capture focus do not execute recording keys", []
+    {
+        MainFixture f; f.begin(); auto& exporting = Access::exporting(f.main); exporting.show();
+        auto& editor = Access::exportText(f.main); focus(f.main, editor);
+        editor.getPeer()->handleKeyPress(juce::KeyPress::F10Key, 0);
+        require(f.session.takeController().state() == TakeController::State::recording, "Text input stopped recording");
+        juce::Component child; editor.addChildComponent(child);
+        require(!f.main.routeShortcut(juce::KeyPress(juce::KeyPress::F10Key), &child), "Text editor descendant escaped exclusion");
+        ShortcutSettingsPanel captures(f.settings.get()); exporting.addAndMakeVisible(captures);
+        juce::Button* capture = nullptr;
+        for (auto* c : captures.getChildren()) if (auto* button = dynamic_cast<juce::Button*>(c); button && button->getButtonText() == "F9") capture = button;
+        require(capture && capture->onClick, "Capture button fixture"); capture->onClick();
+        require(!f.main.routeShortcut(juce::KeyPress(juce::KeyPress::F10Key), capture), "Capture widget executed stop");
+        juce::TextButton unrelated;
+        require(!f.main.routeShortcut(juce::KeyPress(juce::KeyPress::F10Key), &unrelated), "Unowned window routed a shortcut"); f.finish();
+    });
+    suite.test("Export preview preparation retains its recording start gate", []
+    {
+        MainFixture f; Access::mockPreview(f.main); Access::allowStartButton(f.main);
+        require(!f.main.routeShortcut(juce::KeyPress(juce::KeyPress::F9Key), &f.main), "Preview allowed F9");
+        require(!f.main.routeShortcut(juce::KeyPress(juce::KeyPress::spaceKey), &f.main) && !f.session.showingPlayback(), "Preview allowed competing timeline ASIO playback");
+        require(Access::exporting(f.main).previewActive() && Access::banner(f.main).isEmpty(), "F9 cancelled preview or attempted record");
+    });
+    suite.test("Unhandled recording error remains visible with stop and save guidance", []
+    {
+        MainFixture f; f.begin(); const auto report = f.folder.root.getChildFile("sample-exception.txt");
+        f.main.showUnhandledException(report); f.main.showError("later device banner"); Access::refresh(f.main);
+        const auto visible = labels(f.main);
+        require(visible.contains(ko("예상치 못한 오류가 기록됐습니다: sample-exception.txt")), "Report banner hidden by normal status");
+        require(visible.contains(ko("녹화를 정지하고 프로젝트를 저장하세요")), "Recording recovery guidance missing"); f.finish();
+    });
+    suite.test("Device work launch and future exceptions clear configuring and notify failure", []
+    {
+        RecorderDocument document; RecorderSession session(document); int failures = 0;
+        session.onConfigured = [&](const juce::Result& r, const UserSettings&) { require(r.failed(), "Failure callback claimed success"); ++failures; };
+        require(Access::failDeviceStart(session).failed(), "Device launch threw or succeeded");
+        for (const auto& error : {std::make_exception_ptr(std::runtime_error("injected device future")), std::make_exception_ptr(42)})
+        { Access::failDeviceGet(session, error); session.tick(); }
+        require(failures == 3 && !session.configuring() && !(session.lifecycleState()->snapshot() & RecorderLifecycle::configuring), "Configuring lifecycle remained set");
+        require(session.notice.isEmpty() && session.error.isNotEmpty(), "Configuration failure banner missing");
+    });
+    suite.test("Shutdown release launch and future failures still release synthetic resources", []
+    {
+        for (bool launch : {true, false})
+        {
+            RecorderDocument document; RecorderSession session(document); Access::openAudio(session);
+            session.requestShutdown(); require(session.readyForShutdownCommit(), "Shutdown commit fixture"); session.releaseForShutdown();
+            Access::failRelease(session, launch); session.tick();
+            require(session.shutdownComplete() && session.audioEngine().deviceInfo().sampleRate == 0, "Failed release stranded devices");
+            require(session.error.isNotEmpty(), "Release failure was silent");
+        }
+    });
+    suite.test("UI file and settings launch failures show a banner and release lifecycle gates", []
+    {
+        MainFixture f; Access::failLaunch(f.main);
+        require(!Access::startFile(f.main) && !Access::filePending(f.main), "Failed file launch retained work");
+        require(Access::banner(f.main).contains("injected UI launch"), "File launch banner missing");
+        Access::persist(f.main); require(!Access::settingsPending(f.main), "Failed settings launch retained pending state");
+        require(Access::banner(f.main).contains("injected UI launch") && !(f.session.lifecycleState()->snapshot() & RecorderLifecycle::fileWork), "Settings launch banner/lifecycle wrong");
+    });
+    suite.test("UI file and settings futures contain standard and nonstandard exceptions", []
+    {
+        for (const auto& error : {std::make_exception_ptr(std::runtime_error("injected future")), std::make_exception_ptr(42)})
+        {
+            MainFixture f; Access::failFile(f.main, error); Access::tick(f.main);
+            require(!Access::filePending(f.main) && Access::banner(f.main).isNotEmpty(), "Failed file future escaped or stayed pending");
+            Access::failSettings(f.main, error); Access::tick(f.main);
+            require(!Access::settingsPending(f.main) && !(f.session.lifecycleState()->snapshot() & RecorderLifecycle::fileWork), "Failed settings future retained lifecycle gate");
+        }
+    });
+    suite.test("Camera enumeration launch and future failures display status without hardware", []
+    {
+        CameraFixture reset;
+        exception_test::cameraWorker = []() -> std::future<std::vector<CameraDevice>> { throw std::runtime_error("injected camera launch"); };
+        CameraSettingsPanel launch({}, RecorderProject{});
+        require(!launch.scanning() && labels(launch).contains("injected camera launch"), "Camera launch stuck scanning");
+        for (const auto& error : {std::make_exception_ptr(std::runtime_error("injected camera future")), std::make_exception_ptr(42)})
+        {
+            exception_test::cameraWorker = [error] { std::promise<std::vector<CameraDevice>> promise; auto future = promise.get_future(); promise.set_exception(error); return future; };
+            CameraSettingsPanel future({}, RecorderProject{});
+            until([&] { pump(); return !future.scanning(); });
+            require(labels(future).contains(ko("카메라 목록을 읽을 수 없습니다")), "Camera future failure was silent");
+        }
+    });
+    suite.test("Saturated transport pause returns a failed Result and detaches playback", []
+    {
+        recorder_audio_fixture::Fixture source(8000); auto project = source.project;
+        project.tracks.erase(project.tracks.begin(), project.tracks.begin() + 2); // metadata-only cameras are not opened
+        RecorderDocument document; require(document.adopt(project, source.root.getChildFile("project.recorder"), {}).wasOk(), "Playback fixture");
+        RecorderSession session(document); Access::openAudio(session); session.enterTimeline(true);
+        until([&] { session.tick(); return session.showingPlayback() || session.error.isNotEmpty(); });
+        require(session.showingPlayback(), "Synthetic playback preparation failed");
+        float left[80]{}, right[80]{}; float* output[]{left, right}; BlockStamp stamp{}; stamp.sampleRate = 8000; stamp.numSamples = 80; stamp.flags = samplePositionValid; stamp.callbackQpc = qpcNow();
+        session.audioEngine().processBlock(stamp, nullptr, 0, nullptr, output, 2); // acknowledge transport generation, then stop consuming commands
+        auto result = juce::Result::ok();
+        for (unsigned n = 0; n < 128 && result.wasOk(); ++n) result = session.pause();
+        require(result.failed() && result.getErrorMessage().contains("Transport command queue full"), "Queue saturation escaped or was not exercised");
+        require(!session.showingPlayback() && !session.playing(), "Rejected pause left ASIO playback attached");
+    });
+    suite.test("JUCE message queue exceptions write reports and later callbacks continue", []
+    {
+        Folder folder; ExceptionApplication app(folder.root); int later = 0;
+        require(juce::MessageManager::callAsync([] { throw std::runtime_error("injected queued exception"); }), "Queue first callback");
+        require(juce::MessageManager::callAsync([&] { ++later; }), "Queue continuation");
+        require(juce::MessageManager::callAsync([] { throw 42; }), "Queue unknown exception");
+        require(juce::MessageManager::callAsync([&] { ++later; }), "Queue final continuation");
+        until([&] { pump(); return later == 2; });
+        require(app.calls == 2 && app.reports.size() == 2 && app.reports[0] != app.reports[1], "Exception reports lost/overwritten");
+        for (const auto& report : app.reports)
+        {
+            require(report.existsAsFile() && report.getFileName().startsWith("Recorder-" + ProductIdentity::version()) && report.getFileName().endsWith("-exception.txt"), "Report filename/file missing");
+            const auto text = report.loadFileAsString().replace("\r\n", "\n");
+            require(text.contains("file:") && text.contains("juce_Messaging_windows.cpp") && text.contains("line:") && text.contains("stack:\n") && text.fromFirstOccurrenceOf("stack:\n", false, false).trim().isNotEmpty(), "Report source/line/backtrace missing");
+        }
+        require(app.reports[0].loadFileAsString().contains("injected queued exception") && app.reports[1].loadFileAsString().contains("Unknown non-standard exception"), "Exception what() missing");
+    });
+    suite.test("Exception reporter handles unwritable destination and notification reentry", []
+    {
+        Folder folder; require(folder.root.createDirectory().wasOk(), "Reporter fixture root");
+        const auto blocked = folder.root.getChildFile("file-not-directory"); require(blocked.replaceWithText("fixture"), "Blocked destination fixture");
+        bool notified = false;
+        CrashHandler::handleException(nullptr, "source.cpp", 123, [&](const juce::File& report)
+        { notified = true; require(report == juce::File(), "Failed report claimed success"); CrashHandler::handleException(nullptr, "nested.cpp", 1, {}); }, blocked);
+        require(notified && CrashHandler::directory() == ProductIdentity::settingsDirectory().getChildFile("crash"), "Reporter failure or production directory wrong");
+    });
+    return suite.result("shortcut-exceptions");
+}

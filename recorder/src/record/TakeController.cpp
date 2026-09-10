@@ -19,10 +19,23 @@
 
 namespace gocue::recorder
 {
+// Owner-thread fault seam: tests can fail thread creation without exhausting OS resources.
+namespace exception_test { thread_local std::function<void(const char*)> beforeTakeWorker; }
 namespace
 {
 void waitBriefly() { std::this_thread::sleep_for(std::chrono::milliseconds(1)); }
 void requireResult(const juce::Result& r) { if (r.failed()) throw std::runtime_error(r.getErrorMessage().toStdString()); }
+juce::Result takeException(const char* context)
+{
+    try { throw; }
+    catch (const std::exception& e) { return juce::Result::fail(juce::String::fromUTF8(context) + ": " + juce::String::fromUTF8(e.what())); }
+    catch (...) { return juce::Result::fail(juce::String::fromUTF8(context) + ": unknown exception"); }
+}
+template<class F> auto launchTakeWorker(const char* phase, F&& work)
+{
+    if (exception_test::beforeTakeWorker) exception_test::beforeTakeWorker(phase);
+    return std::async(std::launch::async, std::forward<F>(work));
+}
 double elapsedMs(std::int64_t start) { return 1000.0 * double(qpcNow() - start) / double(qpcFrequency()); }
 void flushExisting(const juce::File& file)
 {
@@ -417,15 +430,32 @@ struct TakeController::Impl
     ~Impl()
     {
         if (work.valid()) work.wait();
-        detachSink();
-        for (auto& c : cameras) if (c.capture) c.capture->stop();
-        if (preparedAudio)
-        {
-            audio.abort(RecorderAudioEngine::Error::cancelled); audio.finishCapture(placementEdit);
-            finishVideos(std::max<std::int64_t>(0, length)); audio.finishJournal(false);
-        }
+        cleanupFailedWork();
         for (auto& c : cameras) c.video.reset();
         document.setRecordingStructureLock(false);
+    }
+    void cleanupFailedWork()
+    {
+        detachSink();
+        for (auto& c : cameras) { c.active = false; if (c.capture) try { c.capture->stop(); } catch (...) { partial = true; } }
+        if (!preparedAudio) return;
+        audio.abort(RecorderAudioEngine::Error::cancelled);
+        // Each cleanup is independent: a failed encoder must not retain the journal lock.
+        try { audio.finishCapture(placementEdit); } catch (...) { partial = true; }
+        try { finishVideos(std::max<std::int64_t>(0, length)); } catch (...) { partial = true; }
+        try { audio.finishJournal(false); } catch (...) { partial = true; }
+        preparedAudio = false;
+    }
+    void failedWorker(const juce::Result& result)
+    {
+        failure = result.getErrorMessage() + juce::String::fromUTF8(" 녹화를 정지하고 프로젝트를 저장하세요"); partial = true;
+        cleanupFailedWork(); document.setRecordingStructureLock(false);
+        if (ownerProject == document.getProject().projectId)
+        {
+            if (document.getProject().media->findTake(take.takeId)) document.updateTakeState(take.takeId, TakeState::partial);
+            if (saving && savedSnapshot) document.checkpointFinished(savedSnapshot, config.projectDirectory.getChildFile("project.recorder"), result);
+        }
+        saving = false; transition(State::partialFailure);
     }
     void transition(State next) { if (current != next) { current = next; transitions.push_back(next); } }
     CameraMode mode(unsigned i) const { return i ? config.camera2.mode : config.cameraMode; }
@@ -488,6 +518,7 @@ struct TakeController::Impl
                 partial = true; failure = juce::String::fromUTF8(e.what()); c.video->sourceFailed(c.video->availableSamples());
                 c.report = jsonObject(); jsonSet(c.report,"finalizerError",e.what());
             }
+            catch (...) { partial = true; failure = "Unknown video finalizer exception"; c.video->sourceFailed(c.video->availableSamples()); }
         }
     }
     juce::File takeFolder() const { return config.projectDirectory.getChildFile("media/takes/" + config.takeId.toDashedString()); }
@@ -629,15 +660,9 @@ struct TakeController::Impl
             writeJsonDurable(takeFolder().getChildFile("take.json"), manifest("preparing"));
             return juce::Result::ok();
         }
-        catch (const std::exception& e)
+        catch (...)
         {
-            detachSink(); for (auto& c : cameras) if (c.capture) c.capture->stop();
-            if (preparedAudio)
-            {
-                audio.abort(RecorderAudioEngine::Error::cancelled); audio.finishCapture(placementEdit);
-                finishVideos(0); audio.finishJournal(false); preparedAudio = false;
-            }
-            return juce::Result::fail(e.what());
+            const auto result = takeException("Take preparation failed"); cleanupFailedWork(); return result;
         }
     }
     void setRanges(MediaAsset& asset, std::int64_t available)
@@ -681,7 +706,9 @@ struct TakeController::Impl
         }
         document.setRecordingStructureLock(false);
         placementMs = elapsedMs(stopQpc); finalizationQpc = qpcNow(); transition(State::finalizing);
-        work = std::async(std::launch::async, [this]
+        try
+        {
+        work = launchTakeWorker("finalize", [this]
         {
             const auto start = qpcNow();
             try
@@ -715,8 +742,10 @@ struct TakeController::Impl
                 for (auto& asset : assets) ++asset.mediaGeneration;
                 mediaFinalizationMs = elapsedMs(start); return audioResult;
             }
-            catch (const std::exception& e) { partial = true; mediaFinalizationMs = elapsedMs(start); return juce::Result::fail(e.what()); }
+            catch (...) { partial = true; mediaFinalizationMs = elapsedMs(start); throw; }
         });
+        }
+        catch (...) { failedWorker(takeException("Take finalization could not start")); }
     }
 };
 TakeController::TakeController(RecorderDocument& d, RecorderAudioEngine& a, VideoFactory f) : impl(std::make_unique<Impl>(d, a, std::move(f))) {}
@@ -780,8 +809,17 @@ juce::Result TakeController::prepare(Config config)
     for (auto& c : s.cameras) { c.active = false; c.disconnected = false; c.referenceFailed = false; c.staleOffers = 0; c.report = juce::var(); }
     s.cameras[0].generation = s.config.cameraGeneration; s.cameras[1].generation = s.config.camera2.generation;
     if (s.audio.armedMicrophones().empty()) s.warning = juce::String::fromUTF8("녹음 중인 마이크가 없습니다");
-    s.document.setRecordingStructureLock(true); s.transition(State::preparing); s.prepareQpc = qpcNow();
-    s.work = std::async(std::launch::async, [&s] { return s.prepareWorker(); }); return juce::Result::ok();
+    try
+    {
+        s.document.setRecordingStructureLock(true); s.transition(State::preparing); s.prepareQpc = qpcNow();
+        s.work = launchTakeWorker("prepare", [&s] { return s.prepareWorker(); }); return juce::Result::ok();
+    }
+    catch (...)
+    {
+        const auto result = takeException("Take preparation could not start");
+        s.document.setRecordingStructureLock(false); s.transition(State::idle); s.ownerProject.clear();
+        s.failure = result.getErrorMessage(); return result;
+    }
 }
 juce::Result TakeController::start(std::int64_t N0)
 {
@@ -816,19 +854,16 @@ void TakeController::tick()
     if (s.ownerProject.isNotEmpty() && s.ownerProject != s.document.getProject().projectId)
     {
         if (s.work.valid() && s.work.wait_for(std::chrono::milliseconds(0)) != std::future_status::ready) return;
-        if (s.work.valid()) s.work.get();
-        s.detachSink();
-        if (s.preparedAudio)
-        {
-            s.audio.endAtConfirmedBoundary(); s.audio.finishCapture(s.placementEdit);
-            s.finishVideos(std::max<std::int64_t>(0, s.length)); s.audio.finishJournal(false); s.preparedAudio = false;
-        }
+        if (s.work.valid()) try { s.work.get(); } catch (...) { s.failure = takeException("Stale take worker failed").getErrorMessage(); }
+        s.cleanupFailedWork();
         s.shutdownRequested = true; s.transition(State::partialFailure); s.ownerProject.clear(); return;
     }
     if (s.work.valid())
     {
         if (s.work.wait_for(std::chrono::milliseconds(0)) != std::future_status::ready) return;
-        const auto result = s.work.get();
+        auto result = juce::Result::ok();
+        try { result = s.work.get(); }
+        catch (...) { s.failedWorker(takeException("Take worker failed")); return; }
         if (result.failed()) { s.failure = result.getErrorMessage(); s.partial = true; }
         if (s.current == State::preparing && result.failed())
         { s.document.setRecordingStructureLock(false); s.transition(State::partialFailure); return; }
@@ -855,7 +890,9 @@ void TakeController::tick()
                 if (updated.failed()) { s.partial = true; s.failure = updated.getErrorMessage(); }
             }
             s.savedSnapshot = s.document.snapshot(); s.saving = true;
-            s.work = std::async(std::launch::async, [&s]
+            try
+            {
+            s.work = launchTakeWorker("save", [&s]
             {
                 try
                 {
@@ -867,8 +904,10 @@ void TakeController::tick()
                     requireResult(RecorderSerializer::writeCheckpoint(file, *s.savedSnapshot)); flushExisting(file);
                     requireResult(s.audio.finishJournal(!s.partial)); return juce::Result::ok();
                 }
-                catch (const std::exception& e) { s.audio.finishJournal(false); return juce::Result::fail(e.what()); }
+                catch (...) { throw; } // get() owns cleanup and checkpoint failure publication
             });
+            }
+            catch (...) { s.failedWorker(takeException("Take save could not start")); }
             return;
         }
     }

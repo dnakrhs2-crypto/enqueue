@@ -10,6 +10,10 @@
 #include <charconv>
 #include <cstdint>
 
+// This review permits only compile-definition changes to recorder/CMakeLists.txt.
+// Keep the real window implementations in this one test translation unit.
+#include "ShortcutExceptionTests.cpp"
+
 int runCaptureContractTests();   // round 01: capture / decode / preview contracts (no hardware)
 int runCaptureReviewTests();     // round 02b: recovery, pacing and MF JPEG colour fixtures
 int runCfrSchedulerTests();      // round 02: CFR frame selection / counters
@@ -60,6 +64,7 @@ int runExportLifecycleTests();
 int runSourceReanchorTests();
 int runCutEditStabilityTests();
 int runTimelineUxTests();
+int runShortcutExceptionTests();
 
 namespace
 {
@@ -75,6 +80,7 @@ int runAudioImport() { const int a = runAudioImportTests(), b = runImportedClipT
 int runRippleReorderMarkers() { const int a = runRippleTests(), b = runReorderTests(), c = runMarkerTests(); return (a || b || c) ? 1 : 0; }
 int runRecoveryIdempotence() { const int a = runRecoveryTests(), b = runRetakeRecoveryTests(); return (a || b) ? 1 : 0; }
 const Suite suites[] = {
+    {"shortcut-exceptions", runShortcutExceptionTests},
     {"cut-edit-stability", runCutEditStabilityTests},
     {"timeline-ux", runTimelineUxTests},
     {"source-reanchor", runSourceReanchorTests},
@@ -124,6 +130,7 @@ int usage()
     std::cerr << '\n';
     return 2;
 }
+
 }
 
 int main(int argc, char** argv)

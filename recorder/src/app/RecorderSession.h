@@ -17,7 +17,7 @@ namespace gocue::recorder
 class RecorderSession
 {
 public:
-    explicit RecorderSession(RecorderDocument&);
+    explicit RecorderSession(RecorderDocument&, TakeController::VideoFactory = {});
     ~RecorderSession();
     void setHosts(std::array<void*, 2>);
     juce::Result configure(UserSettings); // completion through onConfigured
@@ -27,7 +27,7 @@ public:
     CalibrationMatch calibrationMatches(const UserSettings&) const;
     juce::Result stopRecording();
     void play(bool latestTake = false);
-    void pause();
+    juce::Result pause();
     void stopPlayback();
     void goToStart();
     void scrub(Sample, bool released);
@@ -71,6 +71,7 @@ public:
     static std::shared_ptr<const WavSource> indexRecordedAudio(const MediaAsset&, const juce::File& folder, unsigned Fs, const Id& track);
 private:
     friend struct StabilityTestAccess;
+    friend struct ShortcutExceptionTestAccess;
     struct LiveCamera;
     struct Playback;
     struct PreparedPlan
@@ -88,6 +89,8 @@ private:
     void preparePlayback();
     std::unique_ptr<PreparedPlan> collectPreparedPlan();
     void playbackPreparationFailed(const juce::String&);
+    juce::Result configurationFailed(const juce::String&);
+    void finishDeviceRelease();
     void scheduleDerived();
     RecorderDocument& document;
     std::shared_ptr<RecorderLifecycle> lifecycle = std::make_shared<RecorderLifecycle>();
@@ -99,6 +102,8 @@ private:
     UserSettings current;
     std::vector<CalibrationProfile> calibrationProfiles;
     struct DeviceResult { juce::Result result = juce::Result::ok(); UserSettings settings; };
+    juce::Result startDeviceWork(std::function<DeviceResult()>);
+    std::function<void(const char*)> beforeWorkerStart; // owner-thread failure injection; empty in the application
     std::future<DeviceResult> deviceWork;
     std::future<std::unique_ptr<PreparedPlan>> planWork;
     std::unique_ptr<Playback> playback;

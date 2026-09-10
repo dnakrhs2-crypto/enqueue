@@ -162,8 +162,10 @@ target_sources(Recorder PRIVATE src/Main.cpp src/ui/RecorderLookAndFeel.cpp src/
 target_sources(Recorder PRIVATE src/support/CrashHandler.cpp)
 target_link_libraries(Recorder PRIVATE RecorderModel juce::juce_gui_basics dbghelp)
 target_compile_definitions(Recorder PRIVATE
+    JUCE_CATCH_UNHANDLED_EXCEPTIONS=1
     JUCE_APPLICATION_NAME_STRING="${RECORDER_DISPLAY_NAME}"
     JUCE_APPLICATION_VERSION_STRING="${RECORDER_VERSION}")
+target_compile_definitions(RecorderTests PRIVATE JUCE_CATCH_UNHANDLED_EXCEPTIONS=1)
 foreach(_rec_r08_target IN ITEMS RecorderModel Recorder)
     set_property(TARGET ${_rec_r08_target} PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
     target_compile_options(${_rec_r08_target} PRIVATE /utf-8 /W4 /permissive- /EHsc)
