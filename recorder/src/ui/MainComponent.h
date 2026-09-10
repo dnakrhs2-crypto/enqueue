@@ -28,6 +28,7 @@ public:
     void checkForUpdates();
     void connectDevicesFromSettings() { if (!demo) session.configure(settings.get()); } // startup without a project: grab ASIO/cameras right away
 private:
+    friend struct StabilityTestAccess;
     struct FileResult
     {
         juce::Result result = juce::Result::ok(); bool opening = false, recovered = false;

@@ -427,3 +427,8 @@ add_test(NAME RecorderHardening COMMAND RecorderTests --suite hardening)
 # Source discontinuity recovery: same shared runner, no hardware required.
 target_sources(RecorderTests PRIVATE tests/SourceReanchorTests.cpp)
 add_test(NAME RecorderSourceReanchor COMMAND RecorderTests --suite source-reanchor)
+
+# Cut-edit stability: shared suite registry, real GUI interaction regressions.
+target_sources(RecorderTests PRIVATE tests/CutEditStabilityTests.cpp)
+add_test(NAME RecorderCutEditStability COMMAND RecorderTests --suite cut-edit-stability)
+target_sources(Recorder PRIVATE tools/CutEditStress.cpp)
