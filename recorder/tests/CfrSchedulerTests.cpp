@@ -32,6 +32,46 @@ CfrCounters simulate(Rational native, Rational project, unsigned seconds)
 int runCfrSchedulerTests()
 {
     Suite s;
+    s.test("alignment: delayed camera delivery selects the nearest source without moving the CFR grid", []
+    {
+        const auto run = [](bool accountForDelivery)
+        {
+            VideoCfrScheduler c({60,1}, {60,1}); c.push({14,0,0});
+            unsigned input = 1, errors = 0;
+            // Measured fixture phase 1.5208 ms, delivery ~18.672 ms. All input
+            // pixels/IDs arrive in order; a one-period wall deadline is too soon.
+            for (std::int64_t now = 185211; now < 11000000 && c.nextPts() < 60; now += 1000)
+            {
+                while (true)
+                {
+                    const auto capture = 15208 + VideoCfrScheduler::gridTime(input - 1, {60,1});
+                    const auto delivered = capture + 186720;
+                    if (delivered > now) break;
+                    c.push({14 + input, capture, int(input % 16)}, accountForDelivery ? std::optional<std::int64_t>(delivered) : std::nullopt);
+                    ++input;
+                }
+                if (const auto selected = c.select(now))
+                {
+                    const auto expected = selected->pts == 0 ? 14 : 15 + selected->pts;
+                    if (selected->input.sourceId != std::uint64_t(expected)) ++errors;
+                    require(selected->grid100ns == VideoCfrScheduler::gridTime(selected->pts, {60,1}), "Delivery compensation moved output PTS");
+                }
+                require(c.size() <= 3, "Delayed delivery grew the CFR queue");
+            }
+            require(c.nextPts() == 60, "Delayed camera fixture did not finish"); return errors;
+        };
+        const auto baseline = run(false), corrected = run(true);
+        std::cout << "CFR alignment: unadjusted deadline wrong frames=" << baseline << "/60, delivery-aware=" << corrected << "/60\n";
+        require(baseline == 59 && corrected == 0, "Measured camera delivery did not preserve nearest-frame alignment");
+    });
+    s.test("alignment: delivery grace remains bounded on camera loss and stop drains immediately", []
+    {
+        VideoCfrScheduler c({60,1}, {60,1}); c.push({1,0,0}, 200000); require(bool(c.select(200000)), "Select first delivered frame");
+        const auto deadline = VideoCfrScheduler::gridTime(1, {60,1}) + 166667 + 200000;
+        require(!c.select(deadline - 1) && bool(c.select(deadline)), "Delivery grace did not expire at the bounded deadline");
+        require(bool(c.select(0, true)), "Stop waited for missing future camera delivery");
+        require(c.counters().maximumDeliveryDelay100ns == 200000, "Delivery diagnostic lost its measured bound");
+    });
     s.test("30 -> 60 repeats and 60 -> 30 omissions are native conversion", []
     {
         const auto up = simulate({30,1}, {60,1}, 60);

@@ -108,13 +108,13 @@ juce::Image TimelineView::thumbnailFor(const Id& assetId, Sample sourceSample, b
     const auto& a = *asset->second;
     if (a.kind != AssetKind::camera || sourceSample < 0 || sourceSample >= a.logicalLength) return {};
     const auto key = document.getProject().projectId + "/" + assetId + "/" + juce::String(a.mediaGeneration);
+    const auto frameSample = ThumbnailCache::frameSample(sourceSample, document.getProject().Fs, a.originalFormat.fps);
     if (a.relativePath.isNotEmpty() && !a.relativePath.containsIgnoreCase(".recording.") && document.getFile() != juce::File())
     {
-        const auto step = (std::max)(Sample{1}, Sample(document.getProject().Fs / 2));
         progressiveThumbnails.request(key, document.getFile().getParentDirectory().getChildFile(a.relativePath),
-            document.getProject().Fs, sourceSample / step * step, priority);
+            document.getProject().Fs, frameSample, priority);
     }
-    if (const auto frame = progressiveThumbnails.nearest(key, sourceSample))
+    if (const auto frame = progressiveThumbnails.at(key, sourceSample))
     {
         auto found = convertedThumbnails.find(frame.get());
         if (found == convertedThumbnails.end())
@@ -136,7 +136,7 @@ juce::Image TimelineView::thumbnailFor(const Id& assetId, Sample sourceSample, b
     if (legacy == thumbnails.end() || legacy->second.empty()) return {};
     const auto& images = legacy->second;
     auto it = std::upper_bound(images.begin(), images.end(), sourceSample, [](Sample s, const Thumb& t) { return s < t.sample; });
-    if (it != images.begin()) --it; return it->image;
+    if (it != images.begin()) --it; return it->sample == frameSample ? it->image : juce::Image{};
 }
 void TimelineView::rebuildHeaders()
 {

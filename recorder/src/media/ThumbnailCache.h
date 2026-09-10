@@ -1,5 +1,5 @@
 #pragma once
-#include <juce_core/juce_core.h>
+#include "model/RecorderModel.h"
 #include <condition_variable>
 #include <deque>
 #include <functional>
@@ -11,7 +11,7 @@
 
 namespace gocue::recorder
 {
-struct ThumbnailFrame { std::int64_t sample = 0; int width = 160, height = 90; std::vector<std::uint8_t> rgb; };
+struct ThumbnailFrame { std::int64_t sample = 0, endSample = 0; int width = 160, height = 90; std::vector<std::uint8_t> rgb; };
 // Derived work only. Bounded, deduplicated and suspended during capture.
 // A job receives a cooperative checkpoint: wait during recording, true on shutdown.
 class ThumbnailCache
@@ -32,6 +32,10 @@ public:
     // caller requests only visible strip points, with drag target given priority.
     bool request(const juce::String& key, const juce::File&, unsigned Fs, std::int64_t sample, bool priority = false);
     std::shared_ptr<const ThumbnailFrame> nearest(const juce::String& key, std::int64_t sample);
+    // Exact containment for the timeline/scrub view. A nearby cached image is
+    // not evidence of the requested frame; show pending until it is available.
+    std::shared_ptr<const ThumbnailFrame> at(const juce::String& key, Sample sample);
+    static Sample frameSample(Sample, unsigned Fs, FrameRate);
     void invalidate(); // rejects queued/in-flight old-generation results
     struct Stats { std::size_t bytes = 0, peakBytes = 0, frames = 0, pending = 0; std::uint64_t hits = 0, misses = 0, evictions = 0, stale = 0; };
     Stats stats() const;

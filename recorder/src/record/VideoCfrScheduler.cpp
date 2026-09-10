@@ -39,6 +39,7 @@ juce::var CfrCounters::toJson() const
     auto value = jsonObject();
     jsonSet(value, "inputs", jsonInt(inputs)); jsonSet(value, "outputs", jsonInt(outputs));
     jsonSet(value, "repeated", jsonInt(repeated)); jsonSet(value, "omitted", jsonInt(omitted));
+    jsonSet(value, "maximumDeliveryDelay100ns", maximumDeliveryDelay100ns);
     const char* names[] = {"nativeRateConversion", "clockCorrection", "captureLoss", "encodeLoss"};
     for (size_t i = 0; i < reasons.size(); ++i)
     {
@@ -73,11 +74,13 @@ std::int64_t VideoCfrScheduler::nearestNativeIndex(std::int64_t index, Rational 
     // Older on an exact half-frame tie.
     return numerator / denominator + (numerator % denominator > denominator / 2);
 }
-void VideoCfrScheduler::push(CfrInput frame)
+void VideoCfrScheduler::push(CfrInput frame, std::optional<std::int64_t> availableTime)
 {
     if (used == capacity) throw std::overflow_error("CFR candidate capacity exceeded");
     if (frame.slot < 0 || !frame.sourceId || frame.sourceId <= lastInputId || frame.time100ns < 0
         || (lastInputId && frame.time100ns <= lastTime)) throw std::invalid_argument("CFR input ID/time must increase within one epoch");
+    if (availableTime && *availableTime > frame.time100ns)
+        stats.maximumDeliveryDelay100ns = std::max(stats.maximumDeliveryDelay100ns, *availableTime - frame.time100ns);
     frames[used++] = frame; lastInputId = frame.sourceId; lastTime = frame.time100ns; ++stats.inputs;
 }
 void VideoCfrScheduler::noteLoss(CfrReason reason, std::uint64_t count)
@@ -92,7 +95,12 @@ std::optional<CfrSelection> VideoCfrScheduler::select(std::int64_t now, bool dra
     const auto grid = gridTime(next, project);
     // ceil(native period) makes the deadline no shorter due to 100 ns rounding.
     const auto wait = (10000000LL * native.denominator + native.numerator - 1) / native.numerator;
-    if (!drain && frames[used - 1].time100ns < grid && now < grid + wait) return {};
+    // The image nearest the grid may still be in camera/MJPEG delivery when
+    // wall time has passed grid + one period. Only extend the wait; never move
+    // the capture timestamps, N0, or output PTS to compensate for that latency.
+    const bool beforeDeadline = now < grid || now - grid < wait
+        || now - grid - wait < stats.maximumDeliveryDelay100ns;
+    if (!drain && frames[used - 1].time100ns < grid && beforeDeadline) return {};
     size_t best = 0;
     auto distance = [grid](const CfrInput& f) { return f.time100ns > grid ? f.time100ns - grid : grid - f.time100ns; };
     if (frames[0].time100ns > grid + wait) return {};

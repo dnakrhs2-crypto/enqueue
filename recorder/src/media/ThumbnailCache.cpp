@@ -73,6 +73,27 @@ std::shared_ptr<const ThumbnailFrame> ThumbnailCache::nearest(const juce::String
     if (!best) { ++counters.misses; return {}; }
     ++counters.hits; best->used = ++access; return best->frame;
 }
+std::shared_ptr<const ThumbnailFrame> ThumbnailCache::at(const juce::String& key, Sample sample)
+{
+    const std::lock_guard<std::mutex> lock(mutex);
+    for (auto& item : cache)
+    {
+        auto& c = item.second;
+        if (c.sourceKey == key && c.frame->sample <= sample && sample < c.frame->endSample)
+        { ++counters.hits; c.used = ++access; return c.frame; }
+    }
+    ++counters.misses; return {};
+}
+Sample ThumbnailCache::frameSample(Sample sample, unsigned Fs, FrameRate fps)
+{
+    if (sample < 0) throw std::invalid_argument("Negative thumbnail source sample");
+    auto frame = sampleToFrame(sample, Fs, fps);
+    // Near INT64_MAX the nearest frame boundary can be unrepresentable even
+    // though the containing frame and the source sample are both valid.
+    try { if (frameToSample(frame, Fs, fps) > sample) --frame; }
+    catch (const std::overflow_error&) { --frame; }
+    return frameToSample(frame, Fs, fps);
+}
 void ThumbnailCache::invalidate()
 {
     const std::lock_guard<std::mutex> lock(mutex); ++generation;
@@ -125,27 +146,45 @@ std::vector<ThumbnailFrame> ThumbnailCache::decodePoints(const juce::File& file,
     const auto count = samples.empty() ? std::size_t{12} : (std::min)(samples.size(), maximumPending);
     for (std::size_t i = 0; i < count && !yield(); ++i)
     {
-        const auto target = (st->start_time == AV_NOPTS_VALUE ? 0 : st->start_time)
-            + (samples.empty() ? duration * std::int64_t(i) / 12 : av_rescale_q(samples[i], AVRational{1, int(Fs)}, st->time_base));
+        const auto origin = st->start_time == AV_NOPTS_VALUE ? 0 : st->start_time;
+        const auto sample = samples.empty() ? av_rescale_q(duration * std::int64_t(i) / 12, st->time_base, AVRational{1, int(Fs)}) : samples[i];
+        if (sample < 0) continue;
+        // Seek backward, then compare in the SAME rounded sample coordinates as
+        // VideoIndex. Rounding the query to a PTS and taking the next frame both
+        // cross frame boundaries and lose the final partial frame.
+        const auto target = origin + av_rescale_q_rnd(sample, AVRational{1, int(Fs)}, st->time_base, AV_ROUND_DOWN);
         if (av_seek_frame(input, stream, target, AVSEEK_FLAG_BACKWARD) < 0) break; avcodec_flush_buffers(ctx.get());
-        bool found = false;
-        while (!yield() && !found && av_read_frame(input, packet.get()) >= 0)
+        auto chosen = ffFrame(); Sample begin = -1, end = -1; bool finished = false;
+        while (!yield() && !finished)
         {
-            if (packet->stream_index == stream && avcodec_send_packet(ctx.get(), packet.get()) >= 0)
+            const auto read = av_read_frame(input, packet.get());
+            const bool draining = read == AVERROR_EOF;
+            if (read < 0 && !draining) ffCheck(read, "Read thumbnail packet");
+            if ((draining || packet->stream_index == stream) && avcodec_send_packet(ctx.get(), draining ? nullptr : packet.get()) >= 0)
                 while (avcodec_receive_frame(ctx.get(), frame.get()) == 0)
                 {
-                    if (frame->best_effort_timestamp < target) continue;
-                    ThumbnailFrame thumb; thumb.sample = av_rescale_q(frame->best_effort_timestamp - (st->start_time == AV_NOPTS_VALUE ? 0 : st->start_time), st->time_base, AVRational{1, int(Fs)});
-                    thumb.rgb.resize(std::size_t(thumb.width * thumb.height * 3));
-                    const std::unique_ptr<SwsContext, void(*)(SwsContext*)> scaler(sws_getContext(frame->width, frame->height, AVPixelFormat(frame->format), thumb.width, thumb.height, AV_PIX_FMT_RGB24, SWS_FAST_BILINEAR, nullptr, nullptr, nullptr), sws_freeContext);
-                    if (!scaler) throw std::runtime_error("Thumbnail scaler unavailable");
-                    std::uint8_t* pixels[] = {thumb.rgb.data()}; int strides[] = {thumb.width * 3};
-                    sws_scale(scaler.get(), frame->data, frame->linesize, 0, frame->height, pixels, strides);
-                    result.push_back(std::move(thumb)); found = true; break;
+                    const auto pts = frame->best_effort_timestamp;
+                    if (pts == AV_NOPTS_VALUE) continue;
+                    const auto first = av_rescale_q(pts - origin, st->time_base, AVRational{1, int(Fs)});
+                    if (first > sample) { end = first; finished = true; break; }
+                    av_frame_unref(chosen.get()); ffCheck(av_frame_ref(chosen.get(), frame.get()), "Retain containing thumbnail frame");
+                    begin = first;
+                    end = frame->duration > 0 ? av_rescale_q(pts - origin + frame->duration, st->time_base, AVRational{1, int(Fs)}) : first;
+                    if (sample < end) { finished = true; break; }
                 }
             av_packet_unref(packet.get());
+            if (draining) break;
         }
-        if (!found) break;
+        if (begin >= 0 && begin <= sample && sample < end && !yield())
+        {
+            ThumbnailFrame thumb; thumb.sample = begin; thumb.endSample = end;
+            thumb.rgb.resize(std::size_t(thumb.width * thumb.height * 3));
+            const std::unique_ptr<SwsContext, void(*)(SwsContext*)> scaler(sws_getContext(chosen->width, chosen->height, AVPixelFormat(chosen->format), thumb.width, thumb.height, AV_PIX_FMT_RGB24, SWS_FAST_BILINEAR, nullptr, nullptr, nullptr), sws_freeContext);
+            if (!scaler) throw std::runtime_error("Thumbnail scaler unavailable");
+            std::uint8_t* pixels[] = {thumb.rgb.data()}; int strides[] = {thumb.width * 3};
+            sws_scale(scaler.get(), chosen->data, chosen->linesize, 0, chosen->height, pixels, strides);
+            result.push_back(std::move(thumb));
+        }
     }
     return result;
 }

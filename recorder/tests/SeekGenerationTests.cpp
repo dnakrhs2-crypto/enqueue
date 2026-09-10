@@ -3,6 +3,7 @@
 #include "media/ThumbnailCache.h"
 #include "support/Platform.h"
 #include <chrono>
+#include <limits>
 #include <thread>
 
 using namespace gocue::recorder;
@@ -50,6 +51,46 @@ struct Decoder : IVideoFrameDecoder
 int runSeekGenerationTests()
 {
     Suite suite;
+    suite.test("alignment: real thumbnail decode contains the sample including the final partial frame", []
+    {
+        const auto root = juce::File::getSpecialLocation(juce::File::tempDirectory).getChildFile("recorder-thumbnail-alignment-" + juce::Uuid().toString());
+        struct Cleanup { juce::File root; ~Cleanup() { if (root.getParentDirectory() == juce::File::getSpecialLocation(juce::File::tempDirectory)
+            && root.getFileName().startsWith("recorder-thumbnail-alignment-")) root.deleteRecursively(); } } cleanup{root};
+        require(root.createDirectory().wasOk(), "Create thumbnail alignment fixture"); const auto file = root.getChildFile("frames.mp4");
+        // Native software MPEG4 keeps the test independent of NVENC/capture hardware.
+        // A nonzero stream origin also catches accidentally applying N0/start_time twice.
+        juce::ChildProcess encoder;
+        require(encoder.start(juce::StringArray{RECORDER_IMPORT_FFMPEG_EXE, "-v", "error", "-f", "lavfi", "-i",
+            "testsrc2=size=160x90:rate=60", "-frames:v", "5", "-c:v", "mpeg4", "-bf", "0", "-output_ts_offset", "2", file.getFullPathName()})
+            && encoder.waitForProcessToFinish(15000) && encoder.getExitCode() == 0, "Encode software thumbnail fixture");
+        const std::vector<Sample> points{1, 799, 800, 801, 3199, 3200, 3999};
+        const auto frames = ThumbnailCache::decodePoints(file, 48000, points, [] { return false; });
+        require(frames.size() == points.size(), "Thumbnail dropped a valid final-frame sample");
+        for (std::size_t i = 0; i < points.size(); ++i)
+            require(frames[i].sample == points[i] / 800 * 800 && frames[i].endSample == frames[i].sample + 800,
+                "Thumbnail selected the following video frame or lost its containment interval");
+        require(ThumbnailCache::decodePoints(file, 48000, {4000}, [] { return false; }).empty(), "Thumbnail escaped the exclusive source end");
+    });
+    suite.test("alignment: thumbnail requests follow indexed frame boundaries and never reuse a neighbouring frame", []
+    {
+        for (unsigned Fs : {48000u, 44100u, 32000u})
+        {
+            auto indexed = source(); indexed->sampleRate = Fs; indexed->validateAndBuild();
+            for (Sample t = 0; t < 2 * Fs; ++t)
+                require(ThumbnailCache::frameSample(t, Fs, {60,1}) == indexed->packets[indexed->frameAt(t)].sample,
+                    "Thumbnail quantization differs from the indexed containing frame");
+        }
+        ThumbnailCache cache([](const auto&, unsigned, const auto& points, const auto&)
+        { ThumbnailFrame f; f.sample = points[0]; f.endSample = f.sample + 800; f.rgb.resize(160 * 90 * 3); return std::vector<ThumbnailFrame>{f}; });
+        const auto file = juce::File::getCurrentWorkingDirectory().getChildFile("synthetic-thumbnail.mp4");
+        require(cache.request("asset/1", file, 48000, 24000), "Request exact frame");
+        eventually([&] { return bool(cache.at("asset/1", 24321)); });
+        require(cache.at("asset/1", 24799) && !cache.at("asset/1", 23999) && !cache.at("asset/1", 24800)
+            && !cache.at("asset/2", 24321), "Neighbouring or stale-generation thumbnail appeared at the playhead");
+        require(ThumbnailCache::frameSample(23999, 48000, {60,1}) == 23200, "Half-second bucket erased 29 source frames");
+        const auto last = (std::numeric_limits<Sample>::max)() - 1;
+        require(ThumbnailCache::frameSample(last, 48000, {60,1}) == last / 800 * 800, "Last representable source frame overflowed during paint");
+    });
     suite.test("LRU retains adjacent GOP targets with hard frame and byte limits", []
     {
         const auto s = source(); PlaybackFrameCache cache;

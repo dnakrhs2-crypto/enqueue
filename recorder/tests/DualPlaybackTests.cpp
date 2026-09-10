@@ -2,6 +2,7 @@
 #include "ui/TimelineView.h"
 #include "ui/RecordView.h"
 #include "TestSupport.h"
+#include "StabilityTestAccess.h"
 #include "playback/TimelineTransport.h"
 #include "ui/TimelineView.scale.h"
 #include "support/Platform.h"
@@ -53,6 +54,23 @@ struct Output : IAudioOutput
 int runDualPlaybackTests()
 {
     Suite suite;
+    suite.test("alignment: visible block and playhead coordinates round trip after zoom and scroll", []
+    {
+        juce::ScopedJuceInitialiser_GUI runtime;
+        RecorderDocument document; document.newProject("alignment");
+        require(document.setTimebase(48000, {60,1}).wasOk(), "Set alignment timebase");
+        TimelineView view(document); view.setBounds(0, 0, 1280, 480);
+        for (double factor : {1.0, .2, 5.0})
+        {
+            view.zoom(factor); view.reveal(480000);
+            for (Sample t : {Sample{0}, Sample{1}, Sample{799}, Sample{800}, Sample{12345}, Sample{63840}, Sample{480479}, Sample{480480}})
+            {
+                view.refresh(false, t, {});
+                const auto restored = StabilityTestAccess::sample(view, StabilityTestAccess::x(view, t));
+                require(restored == t, "Block/playhead x coordinate changed its timeline sample");
+            }
+        }
+    });
     suite.test("1000 dual seeks floor independent 30/60 fps sources at one timeline time", []
     {
         auto a = source(60), b = source(30);

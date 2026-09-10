@@ -245,7 +245,7 @@ target_sources(RecorderCore PRIVATE
     src/playback/TimelineTransport.cpp src/playback/TimelineAudioRenderer.cpp
     src/playback/AsioPlaybackOutput.cpp)
 target_link_libraries(RecorderCore PUBLIC RecorderModel)
-target_sources(RecorderProbe PRIVATE tools/PlaybackProbe.cpp)
+target_sources(RecorderProbe PRIVATE tools/PlaybackProbe.cpp tools/AlignmentProbe.cpp)
 target_sources(RecorderTests PRIVATE tests/PlaybackTests.cpp)
 add_test(NAME RecorderPlaybackEngine COMMAND RecorderTests --suite playback-engine)
 

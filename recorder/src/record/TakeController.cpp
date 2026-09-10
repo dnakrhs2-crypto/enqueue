@@ -284,11 +284,12 @@ private:
             };
             const auto accept = [&](int slot)
             {
-                std::int64_t time;
+                std::int64_t time, availableTime;
                 try
                 {
                     if (!observe(slot, true)) { pool->release(slot); return; }
                     time = mapper->map(pool->stamp(slot));
+                    availableTime = mapper->now(qpcNow());
                 }
                 catch (...) { pool->release(slot); throw; }
                 if (time < 0)
@@ -298,7 +299,7 @@ private:
                     scheduler.push({pool->stamp(preroll).frame, 0, preroll}); preroll = -1;
                     if (time == 0) { pool->release(slot); return; }
                 }
-                scheduler.push({pool->stamp(slot).frame, time, slot});
+                scheduler.push({pool->stamp(slot).frame, time, slot}, availableTime);
             };
             for (;;)
             {
