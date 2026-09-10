@@ -59,6 +59,7 @@ private:
     std::unique_ptr<ExportDialog> exportDialog;
     std::unique_ptr<juce::DocumentWindow> settingsWindow, projectWindow;
     AudioSettingsPanel* audioPanel = nullptr;
+    CameraSettingsPanel* cameraPanel = nullptr;
     juce::Label* settingsError = nullptr;
     std::unique_ptr<juce::FileChooser> chooser;
     std::unique_ptr<Demo> demo;

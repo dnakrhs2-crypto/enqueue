@@ -25,12 +25,14 @@ juce::String encode(const UserSettings& s)
     juce::Array<juce::var> inputs; for (const int input : s.physicalInputs) inputs.add(input);
     p.setValue("physicalInputs", juce::JSON::toString(inputs, true));
     for (size_t i = 0; i < 8; ++i)
-    { p.setValue(key("microphoneName", i), s.microphoneNames[i]); p.setValue(key("microphoneArmed", i), s.microphoneArmed[i]); }
+    { p.setValue(key("microphoneName", i), s.microphoneNames[i]); p.setValue(key("microphoneArmed", i), s.microphoneArmed[i]); p.setValue(key("stereoSlot", i), s.stereoSlots[i]); }
     p.setValue("outputMono", s.output.mono); p.setValue("outputLeft", s.output.left); p.setValue("outputRight", s.output.right); p.setValue("outputMonoChannel", s.output.monoChannel);
     p.setValue("inputOffsetSamples", static_cast<juce::int64>(s.calibration.inputOffsetSamples)); p.setValue("outputOffsetSamples", static_cast<juce::int64>(s.calibration.outputOffsetSamples));
     p.setValue("calibrationDate", s.calibration.calibrationDate); p.setValue("calibrationIdentity", s.calibration.calibrationIdentity); p.setValue("calibrationAsioDeviceId", s.calibration.asioDeviceId);
     juce::Array<juce::var> calibrationInputs; for (const int input : s.calibration.physicalInputs) calibrationInputs.add(input);
     p.setValue("calibrationPhysicalInputs", juce::JSON::toString(calibrationInputs, true));
+    juce::Array<juce::var> calibrationRight; for (const int input : s.calibration.physicalInputsRight) calibrationRight.add(input);
+    p.setValue("calibrationPhysicalInputsRight", juce::JSON::toString(calibrationRight, true));
     juce::Array<juce::var> recent; for (const auto& path : s.recentProjects) recent.add(path);
     p.setValue("recentProjects", juce::JSON::toString(recent, true)); p.setValue("windowState", s.windowState);
     return p.createXml("RECORDER_SETTINGS")->toString();
@@ -66,12 +68,19 @@ juce::Result decode(const juce::String& text, UserSettings& out)
     }
     const auto inputs = juce::JSON::parse(p.getValue("physicalInputs", "[]"));
     for (size_t i = 0; i < 8; ++i)
-    { s.microphoneNames[i] = p.getValue(key("microphoneName", i)); s.microphoneArmed[i] = boolean(key("microphoneArmed", i), true); }
+    { s.microphoneNames[i] = p.getValue(key("microphoneName", i)); s.microphoneArmed[i] = boolean(key("microphoneArmed", i), true); s.stereoSlots[i] = boolean(key("stereoSlot", i), false); }
     const auto calibrationInputs = juce::JSON::parse(p.getValue("calibrationPhysicalInputs", "[]"));
+    const auto calibrationRight = juce::JSON::parse(p.getValue("calibrationPhysicalInputsRight", "[]"));
     const auto recent = juce::JSON::parse(p.getValue("recentProjects", "[]"));
     if (!inputs.isArray() || !calibrationInputs.isArray() || !recent.isArray()) return juce::Result::fail(ko("설정의 입력 또는 최근 프로젝트 목록이 잘못되었습니다."));
     for (const auto& input : *inputs.getArray()) { if (!input.isInt()) return juce::Result::fail(ko("물리 입력 번호가 잘못되었습니다.")); s.physicalInputs.push_back(static_cast<int>(input)); }
     for (const auto& input : *calibrationInputs.getArray()) { if (!input.isInt()) return juce::Result::fail(ko("보정 입력 번호가 잘못되었습니다.")); s.calibration.physicalInputs.push_back(static_cast<int>(input)); }
+    if (!calibrationRight.isArray()) return juce::Result::fail("Invalid calibration right inputs");
+    for (const auto& input : *calibrationRight.getArray())
+    {
+        if (!input.isInt() || int(input) < -1 || int(input) > 255) return juce::Result::fail("Invalid calibration right input");
+        s.calibration.physicalInputsRight.push_back(int(input));
+    }
     for (const auto& path : *recent.getArray()) { if (!path.isString()) return juce::Result::fail(ko("최근 프로젝트 경로가 잘못되었습니다.")); s.recentProjects.add(path.toString()); }
     s.output.mono = boolean("outputMono", false); s.output.left = integer("outputLeft", -1); s.output.right = integer("outputRight", -1); s.output.monoChannel = integer("outputMonoChannel", -1);
     s.calibration.inputOffsetSamples = number("inputOffsetSamples", 0); s.calibration.outputOffsetSamples = number("outputOffsetSamples", 0);
@@ -87,11 +96,20 @@ juce::Result OutputMapping::validate() const
     if (!mono && ((left == -1) != (right == -1) || (left >= 0 && left == right))) return juce::Result::fail(ko("재생 출력 왼쪽과 오른쪽은 서로 다른 채널을 선택하세요."));
     return juce::Result::ok();
 }
-juce::Result UserSettings::validate() const
+juce::Result UserSettings::validate(int deviceInputCount) const
 {
     const auto mapping = output.validate(); if (mapping.failed()) return mapping;
     if (bufferSize <= 0 || preferredSampleRate == 0 || physicalInputs.size() > 8) return juce::Result::fail(ko("오디오 장치 설정이 잘못되었습니다."));
-    std::set<int> seen; for (const int input : physicalInputs) if (input < -1 || input > 255 || (input >= 0 && !seen.insert(input).second)) return juce::Result::fail(ko("물리 입력이 중복되었거나 잘못되었습니다."));
+    if (deviceInputCount < 0 || deviceInputCount > 256) return juce::Result::fail(ko("오디오 장치 입력 수가 잘못되었습니다."));
+    std::set<int> seen;
+    for (size_t i = 0; i < stereoSlots.size(); ++i)
+    {
+        const int left = i < physicalInputs.size() ? physicalInputs[i] : -1;
+        if (left < -1 || left >= deviceInputCount || (stereoSlots[i] && (left < 0 || left + 1 >= deviceInputCount)))
+            return juce::Result::fail(ko("선택한 모노 또는 스테레오 물리 입력이 없습니다."));
+        if (left >= 0 && (!seen.insert(left).second || (stereoSlots[i] && !seen.insert(left + 1).second)))
+            return juce::Result::fail(ko("물리 입력이 다른 마이크 슬롯과 중복됩니다."));
+    }
     if (cameraEnabled[0] && cameraEnabled[1] && cameraDeviceIds[0].isNotEmpty() && cameraDeviceIds[0] == cameraDeviceIds[1]) return juce::Result::fail(ko("같은 카메라를 두 번 선택할 수 없습니다."));
     for (const auto& path : recentProjects) if (!juce::File::isAbsolutePath(path)) return juce::Result::fail(ko("최근 프로젝트 위치가 잘못되었습니다."));
     return juce::Result::ok();

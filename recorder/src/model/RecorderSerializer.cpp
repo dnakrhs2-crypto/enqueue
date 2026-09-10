@@ -51,6 +51,7 @@ V capture(const CaptureSnapshot& c)
     { auto v = object(); put(v, "deviceId", c.cameraDeviceIds[i]); put(v, "mode", c.cameraModes[i]); put(v, "offsetSamples", integer(c.cameraOffsetSamples[i])); cameras.add(v); }
     put(o, "cameras", cameras); put(o, "asioDeviceId", c.asioDeviceId);
     put(o, "physicalInputs", array(c.physicalInputs, [](int i) { return V(i); }));
+    if (!c.physicalInputsRight.empty()) put(o, "physicalInputsRight", array(c.physicalInputsRight, [](int i) { return V(i); }));
     put(o, "inputOffsetSamples", integer(c.inputOffsetSamples)); put(o, "outputOffsetSamples", integer(c.outputOffsetSamples));
     put(o, "calibrationDate", c.calibrationDate); put(o, "calibrationIdentity", c.calibrationIdentity); return o;
 }
@@ -154,7 +155,10 @@ CaptureSnapshot readCapture(const V& v)
     for (size_t i = 0; i < 2; ++i) { const auto& x = cameras[static_cast<int>(i)]; c.cameraDeviceIds[i] = stringField(x, "deviceId"); c.cameraModes[i] = stringField(x, "mode"); c.cameraOffsetSamples[i] = num(x, "offsetSamples"); }
     c.asioDeviceId = stringField(v, "asioDeviceId"); c.calibrationDate = stringField(v, "calibrationDate"); c.calibrationIdentity = stringField(v, "calibrationIdentity");
     c.inputOffsetSamples = num(v, "inputOffsetSamples"); c.outputOffsetSamples = num(v, "outputOffsetSamples");
-    c.physicalInputs = readArray<int>(field(v, "physicalInputs"), [](const V& x) { const auto n = number(x); require(n >= 0 && n <= (std::numeric_limits<int>::max)(), "물리 입력 범위가 잘못되었습니다."); return static_cast<int>(n); }); return c;
+    c.physicalInputs = readArray<int>(field(v, "physicalInputs"), [](const V& x) { const auto n = number(x); require(n >= 0 && n <= (std::numeric_limits<int>::max)(), "물리 입력 범위가 잘못되었습니다."); return static_cast<int>(n); });
+    if (v.hasProperty("physicalInputsRight"))
+        c.physicalInputsRight = readArray<int>(field(v, "physicalInputsRight"), [](const V& x) { const auto n = number(x); require(n >= -1 && n <= 255, "Invalid right physical input"); return static_cast<int>(n); });
+    return c;
 }
 Take readTake(const V& v)
 {

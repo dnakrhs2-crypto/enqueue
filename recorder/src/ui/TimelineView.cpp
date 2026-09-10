@@ -21,6 +21,15 @@ Sample previewSubtract(Sample a, Sample b)
     if (b < 0 && a > hi + b) return hi;
     return a - b;
 }
+Track trackLabel(const Track& track, const RecorderProject& project)
+{
+    auto display = track;
+    if (track.kind == TrackKind::mic)
+        for (const auto& clip : track.clips.items()) if (project.isActive(clip))
+            if (const auto* asset = project.media->findAsset(clip.assetId); asset && asset->originalFormat.channels == 2)
+            { display.name += juce::String::fromUTF8(" · 스테레오"); break; }
+    return display;
+}
 }
 TimelineView::TimelineView(RecorderDocument& d) : edits(d), rows(*this), document(d), inspector(edits), markerPanel(edits)
 {
@@ -153,7 +162,7 @@ void TimelineView::rebuildHeaders()
             h->onEdit = [this](const juce::Result& r) { finish(r); }; h->onSelection = [this] { selectionChanged(); };
             rows.addAndMakeVisible(*h); headers.push_back(std::move(h));
         }
-        headers[i]->refresh(tracks[i]);
+        headers[i]->refresh(trackLabel(tracks[i], document.getProject()));
     }
     resized();
 }
@@ -236,7 +245,7 @@ void TimelineView::updateControls()
         if (edits.isLocked() && a != TimelineAction::addMarker) hint = ko("녹화 중에는 구조 편집을 사용할 수 없습니다.");
         b.setTooltip(hint);
     }
-    for (unsigned i = 0; i < headers.size(); ++i) headers[i]->refresh(tracks[i]);
+    for (unsigned i = 0; i < headers.size(); ++i) headers[i]->refresh(trackLabel(tracks[i], document.getProject()));
     inspector.refresh(); markerPanel.refresh();
     juce::String info = editStatus.isNotEmpty() ? editStatus : ko("Shift/Ctrl 다중 선택 · 빈 곳 드래그/Shift+눈금 드래그로 구간 선택");
     if (const auto r = edits.selectedRange()) info = ko("선택 구간 [") + juce::String(r->start) + ", " + juce::String(r->start + r->length) + ko(") 샘플 · ") + info;
@@ -365,7 +374,20 @@ void TimelineView::resized()
 void TimelineView::drawWave(juce::Graphics& g, const Clip& clip, juce::Rectangle<float> box)
 {
     const auto found = peaks.find(clip.assetId); if (found == peaks.end() || !found->second.data) return;
-    const auto& s = *found->second.data; const auto ch = found->second.channel; if (ch >= s.channels || s.bins.empty()) return;
+    const auto& s = *found->second.data; auto ch = found->second.channel;
+    const auto& media = *document.getProject().media; const auto* asset = media.findAsset(clip.assetId);
+    const auto width = asset && asset->originalFormat.channels == 2 ? 2u : 1u;
+    if (asset && asset->kind == AssetKind::mic)
+        for (const auto& take : media.takes)
+        {
+            unsigned offset = 0;
+            for (const auto& id : take.microphoneAssetIds)
+            {
+                if (id == clip.assetId) { ch = offset; break; }
+                if (const auto* preceding = media.findAsset(id)) offset += unsigned(preceding->originalFormat.channels);
+            }
+        }
+    if (ch >= s.channels || s.bins.empty()) return;
     const auto bounds = g.getClipBounds();
     const auto [left, right] = TimelineLayout::waveColumns(bounds.getX(), bounds.getRight(), int(box.getX()), int(std::ceil(box.getRight())));
     lastPaintWaveColumns += std::size_t(right - left);
@@ -376,7 +398,8 @@ void TimelineView::drawWave(juce::Graphics& g, const Clip& clip, juce::Rectangle
         const auto last = juce::jmax(first + 1, clip.sourceIn + sampleFor(x + 1) - clip.timelineStartSample);
         const auto a = std::uint64_t(first) / s.samplesPerBin, b = juce::jmin<std::uint64_t>(s.bins.size(), (std::uint64_t(last) + s.samplesPerBin - 1) / s.samplesPerBin);
         if (a >= b) continue; auto low = s.bins[std::size_t(a)][ch].minimum, high = s.bins[std::size_t(a)][ch].maximum;
-        for (auto i = a + 1; i < b; ++i) { low = juce::jmin(low, s.bins[std::size_t(i)][ch].minimum); high = juce::jmax(high, s.bins[std::size_t(i)][ch].maximum); }
+        for (auto i = a; i < b; ++i) for (unsigned channel = ch; channel < juce::jmin(ch + width, s.channels); ++channel)
+        { low = juce::jmin(low, s.bins[std::size_t(i)][channel].minimum); high = juce::jmax(high, s.bins[std::size_t(i)][channel].maximum); }
         g.drawVerticalLine(x, middle - high * box.getHeight() * .47f, juce::jmax(middle - high * box.getHeight() * .47f + 1, middle - low * box.getHeight() * .47f));
     }
 }

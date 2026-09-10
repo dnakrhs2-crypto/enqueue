@@ -60,12 +60,13 @@ struct Fixture
     TakeController controller{document, audio, [this] { return std::make_unique<VideoDouble>(video); }};
     TakeController::Config config;
     std::int64_t position = 0, qpc = qpcNow(); std::uint64_t sequence = 0;
-    unsigned microphones;
-    Fixture(unsigned mics = 1) : microphones(mics)
+    unsigned microphones; bool stereo;
+    Fixture(unsigned mics = 1, bool stereoSlot = false) : microphones(mics), stereo(stereoSlot)
     {
         std::array<int, 8> map{-1,-1,-1,-1,-1,-1,-1,-1};
         if (mics) map[5] = 2; // sparse logical mic06, physical input3
-        ok(audio.setInputMap(map)); ok(audio.openSynthetic(8000, 80, 8, 2)); if (mics) ok(audio.arm(5, true));
+        std::array<bool, 8> slots{}; slots[5] = stereo;
+        ok(audio.setInputMap(map, slots)); ok(audio.openSynthetic(8000, 80, 8, 2)); if (mics) ok(audio.arm(5, true));
         document.newProject("Take lifecycle", 8000, {60,1});
         config.projectDirectory = juce::File::getSpecialLocation(juce::File::tempDirectory).getChildFile("TakeControllerTests-" + juce::Uuid().toString());
         config.synthetic = true; config.projectFps = 60; config.cameraMode.width = 1920; config.cameraMode.height = 1080;
@@ -78,11 +79,12 @@ struct Fixture
         std::array<std::uint8_t, 240> pcm{};
         std::array<float, 80> left{}, right{}, input{};
         for (unsigned i = 0; i < 80; ++i) WavTrackWriter::packPcm24(123456 + int(position + i), pcm.data() + i * 3);
-        NativeInputView view{pcm.data(), 0, 2, nativeFormatForAsio(17)};
-        const float* inputs[] = {input.data()}; float* outputs[] = {left.data(), right.data()};
+        auto rightPcm = pcm; for (unsigned i = 0; i < 80; ++i) WavTrackWriter::packPcm24(-345678 - int(position + i), rightPcm.data() + i * 3);
+        NativeInputView views[]{{pcm.data(), 0, 2, nativeFormatForAsio(17)}, {rightPcm.data(), 1, 3, nativeFormatForAsio(17)}};
+        const float* inputs[] = {input.data(), input.data()}; float* outputs[] = {left.data(), right.data()};
         BlockStamp stamp{}; stamp.flags = samplePositionValid; stamp.sequence = sequence++; stamp.samplePosition = position;
         stamp.sampleRate = Fs; stamp.numSamples = 80; stamp.callbackQpc = qpc + position * qpcFrequency() / 8000;
-        audio.processBlock(stamp, microphones ? &view : nullptr, microphones ? 1 : 0, inputs, outputs, 2); position += 80;
+        audio.processBlock(stamp, microphones ? views : nullptr, microphones ? (stereo ? 2 : 1) : 0, inputs, outputs, 2); position += 80;
     }
     void arm()
     {
@@ -105,6 +107,21 @@ struct Fixture
 int runTakeControllerTests()
 {
     recorder_test::Suite suite;
+    suite.test("Stereo sparse microphone asset, capture snapshot and take manifest", []
+    {
+        Fixture f(1, true); const auto start = f.begin(); ok(f.controller.stop(start + 1601));
+        while (f.audio.stopSample() < 0) { f.feed(); f.controller.tick(); } f.complete();
+        require(f.controller.state() == TakeController::State::done, "Stereo take finalized");
+        const auto& project = f.document.getProject(); const auto& take = project.media->takes.back();
+        const auto* asset = project.media->findAsset(take.microphoneAssetIds[0]);
+        require(asset && asset->originalFormat.channels == 2 && asset->logicalLength == 1601, "Stereo mic asset");
+        require(take.capture.physicalInputs == std::vector<int>{2} && take.capture.physicalInputsRight == std::vector<int>{3}, "Capture pair persists");
+        RecorderProject loaded; ok(RecorderSerializer::fromJson(RecorderSerializer::toJson(project), loaded));
+        require(loaded.media->takes.back().capture.physicalInputsRight[0] == 3, "Project stereo round trip");
+        auto manifest = juce::JSON::parse(f.config.projectDirectory.getChildFile("media/takes/" + f.config.takeId.toDashedString() + "/take.json"));
+        require(int(manifest["microphones"][0]["leftPhysical"]) == 2 && int(manifest["microphones"][0]["rightPhysical"]) == 3
+            && int(manifest["microphones"][0]["channels"]) == 2, "Take manifest stereo identity");
+    });
     suite.test("Sample-defined CFR ceil including 44.1k and partial-frame stops", []
     {
         require(TakeController::frameCount(48000,48000,{60,1}) == 60, "One-second frame count");

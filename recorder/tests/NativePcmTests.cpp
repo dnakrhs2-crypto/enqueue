@@ -169,7 +169,8 @@ int runNativePcmTests()
     test("prepare bounds and callback queue copies padded source", []
     {
         RawAudioTap tap; rejects([&] { tap.prepare({1,1}, 32, 2); }); rejects([&] { tap.prepare({3,1}, 32, 2); });
-        rejects([&] { tap.prepare({0,1,2,3,4,5,6,7,8}, 32, 2); }); rejects([&] { tap.prepare({0}, 0, 2); });
+        tap.prepare({0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15}, 32, 2);
+        rejects([&] { tap.prepare({0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16}, 32, 2); }); rejects([&] { tap.prepare({0}, 0, 2); });
         rejects([&] { tap.prepare({0}, 262144, 65536); });
         tap.prepare({5}, 2, 1); auto f = nativeFormatForAsio(17); f.strideBytes = 8;
         const std::array<std::uint8_t, 11> native{1,0,0,0xaa,0xaa,0xaa,0xaa,0xaa,0xff,0xff,0xff};

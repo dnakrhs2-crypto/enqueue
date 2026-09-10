@@ -35,6 +35,39 @@ int runRecoveryTests()
     av_log_set_level(AV_LOG_ERROR); unsigned passed = 0, failed = 0;
     const auto test = [&](const char* name, const std::function<void()>& run)
     { try { run(); ++passed; std::cout << "PASS " << name << '\n'; } catch (const std::exception& e) { ++failed; std::cerr << "FAIL " << name << ": " << e.what() << '\n'; } };
+    test("Torn stereo right sample is excluded as a whole frame during recovery", []
+    {
+        Fixture f; auto c = crashFixture::wavConfig(f.root, 1); c.slotChannels = {2};
+        c.devices[0].rightPhysicalIndex = c.devices[0].physicalIndex + 1; c.devices[0].rightActiveIndex = 1;
+        WavTrackWriter writer(c); check(writer.start()); crashFixture::push(writer,0,1600,2); check(writer.stop(1600,juce::Uuid()));
+        const auto file = f.root.getChildFile(WavTrackWriter::chunkPath(c.takeId,1,1)); auto torn = bytes(file); torn.setSize(torn.getSize()-1); raw(file,torn);
+        const auto original = sha256(file); RecoveryReport report; check(RecoveryScanner().run(f.root,report));
+        const auto* asset = report.project.media->findAsset(report.project.media->takes[0].microphoneAssetIds[0]);
+        require(asset && asset->originalFormat.channels == 2 && asset->logicalLength == 1600 && asset->chunks[0].sourceRange.length == 1599
+            && asset->gaps.size() == 1 && asset->gaps[0].length == 1, "Incomplete L/R frame becomes one tail gap");
+        require(f.root.getChildFile(asset->chunks[0].relativePath).getSize() == 44+1599*6 && sha256(file) == original, "Complete stereo prefix copied; original untouched");
+    });
+    test("Mixed stereo/mono recovery preserves headers, samples and input pairs idempotently", []
+    {
+        Fixture f; auto c = crashFixture::wavConfig(f.root, 2); c.slotChannels = {2,1};
+        c.devices[0].rightPhysicalIndex = c.devices[0].physicalIndex + 1; c.devices[0].rightActiveIndex = 1;
+        c.devices[1].physicalIndex = c.devices[0].physicalIndex + 2; c.devices[1].activeIndex = 2;
+        WavTrackWriter writer(c); check(writer.start()); crashFixture::push(writer, 0, 1600, 3); check(writer.stop(1600, juce::Uuid()));
+        const auto originals = crashFixture::hashes(f.root, true); RecoveryReport report; check(RecoveryScanner().run(f.root, report));
+        require(report.project.media->takes.size() == 1, "Recovered mixed take");
+        const auto& take = report.project.media->takes[0];
+        require(take.capture.physicalInputsRight == std::vector<int>({c.devices[0].rightPhysicalIndex,-1}), "Recovered physical input pair");
+        for (unsigned i = 0; i < 2; ++i)
+        {
+            const auto* asset = report.project.media->findAsset(take.microphoneAssetIds[i]);
+            require(asset && asset->originalFormat.channels == (i ? 1 : 2) && asset->logicalLength == 1600, "Recovered format/frame count");
+            const auto original = bytes(f.root.getChildFile(WavTrackWriter::chunkPath(c.takeId, i + 1, 1)));
+            const auto recovered = bytes(f.root.getChildFile(asset->chunks[0].relativePath));
+            require(original == recovered, "Recovered interleaved PCM is byte-identical");
+        }
+        const auto project = RecorderSerializer::toJson(report.project); RecoveryReport second; check(RecoveryScanner().run(f.root, second));
+        require(RecorderSerializer::toJson(second.project) == project && originals == crashFixture::hashes(f.root, true), "Idempotent recovery leaves originals unchanged");
+    });
     test("Latest valid backup selected by revision, corrupt primary retained", []
     {
         Fixture f; auto newer = f.initial; newer.name = "latest"; newer.editRevision = 4;

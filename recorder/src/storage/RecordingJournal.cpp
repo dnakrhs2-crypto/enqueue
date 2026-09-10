@@ -33,6 +33,16 @@ bool relative(const juce::var& v)
         if (component.isEmpty() || component == "." || component == "..") return false;
     return true;
 }
+bool validPcm(const juce::var& fmt)
+{
+    for (const auto* key : {"sampleRate", "channels", "bitsPerSample", "blockAlign", "dataOffset"})
+        if (!nonnegative(fmt[key]) || static_cast<juce::int64>(fmt[key]) == 0) return false;
+    const auto channels = static_cast<juce::int64>(fmt["channels"]);
+    return (channels == 1 || channels == 2) && static_cast<juce::int64>(fmt["bitsPerSample"]) == 24
+        && static_cast<juce::int64>(fmt["blockAlign"]) == channels * 3
+        && static_cast<juce::int64>(fmt["dataOffset"]) == 44 && static_cast<juce::int64>(fmt["sampleRate"]) <= 768000
+        && fmt["nativeFormat"].isString();
+}
 bool validPayload(JournalKind kind, const juce::var& p)
 {
     if (kind >= JournalKind::EditTransaction && kind <= JournalKind::MediaRegistry)
@@ -57,6 +67,7 @@ bool validPayload(JournalKind kind, const juce::var& p)
         if (kind == JournalKind::TakeStarted)
         {
             if (!uuid(f["assetId"]) || !relative(f["plannedPath"])) return false;
+            if (f.hasProperty("pcm") && (!validPcm(f["pcm"]) || f["pcm"]["sampleRate"] != p["pcm"]["sampleRate"])) return false;
         }
         else if (kind == JournalKind::Checkpoint)
         {
@@ -73,16 +84,20 @@ bool validPayload(JournalKind kind, const juce::var& p)
         || !p["usesOutputOrigin"].isBool()) return false;
     if (p.hasProperty("placementMode") && p["placementMode"].toString() != "normal" && p["placementMode"].toString() != "dub") return false;
     const auto fmt = p["pcm"];
-    for (const auto* key : {"sampleRate", "channels", "bitsPerSample", "blockAlign", "dataOffset"})
-        if (!nonnegative(fmt[key]) || static_cast<juce::int64>(fmt[key]) == 0) return false;
-    if (static_cast<int>(fmt["channels"]) != 1 || static_cast<int>(fmt["bitsPerSample"]) != 24
-        || static_cast<int>(fmt["blockAlign"]) != 3 || !fmt["nativeFormat"].isString()) return false;
+    if (!validPcm(fmt)) return false;
     const auto* devices = p["devices"].getArray();
     if (!devices || devices->size() > 8) return false;
     for (const auto& d : *devices)
+    {
         if (!d.isObject() || !d["deviceId"].isString() || !d["name"].isString()
             || !nonnegative(d["mic"]) || static_cast<int>(d["mic"]) < 1 || static_cast<int>(d["mic"]) > 8
             || !nonnegative(d["activeIndex"]) || !nonnegative(d["physicalIndex"])) return false;
+        if (d.hasProperty("rightPhysicalIndex") || d.hasProperty("rightActiveIndex"))
+            if (!nonnegative(d["rightPhysicalIndex"]) || !nonnegative(d["rightActiveIndex"])
+                || static_cast<juce::int64>(d["rightPhysicalIndex"]) != static_cast<juce::int64>(d["physicalIndex"]) + 1
+                || static_cast<juce::int64>(d["rightPhysicalIndex"]) > 255
+                || static_cast<juce::int64>(d["rightActiveIndex"]) != static_cast<juce::int64>(d["activeIndex"]) + 1) return false;
+    }
     return true;
 }
 }
@@ -180,12 +195,19 @@ juce::Result RecordingJournal::append(const JournalTakeStarted& s, const juce::U
     juce::Array<juce::var> files, devices;
     for (const auto& f : s.files)
     {
-        auto v = object(); set(v, "assetId", f.assetId); set(v, "path", f.path); set(v, "plannedPath", f.plannedPath); files.add(v);
+        auto v = object(); set(v, "assetId", f.assetId); set(v, "path", f.path); set(v, "plannedPath", f.plannedPath);
+        if (f.channels)
+        {
+            auto pcm = fmt.clone(); set(pcm, "channels", int(f.channels)); set(pcm, "blockAlign", int(f.channels * 3)); set(v, "pcm", pcm);
+        }
+        files.add(v);
     }
     for (const auto& d : s.devices)
     {
         auto v = object(); set(v, "deviceId", d.deviceId); set(v, "name", d.name); set(v, "mic", d.mic);
-        set(v, "activeIndex", d.activeIndex); set(v, "physicalIndex", d.physicalIndex); devices.add(v);
+        set(v, "activeIndex", d.activeIndex); set(v, "physicalIndex", d.physicalIndex);
+        if (d.rightPhysicalIndex >= 0) { set(v, "rightPhysicalIndex", d.rightPhysicalIndex); set(v, "rightActiveIndex", d.rightActiveIndex); }
+        devices.add(v);
     }
     set(p, "files", files); set(p, "devices", devices);
     return appendRecord(JournalKind::TakeStarted, txn, p);

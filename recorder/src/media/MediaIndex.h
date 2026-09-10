@@ -45,6 +45,7 @@ struct WavSource : IndexedSource
 {
     Id trackId;
     std::uint32_t sampleRate = 48000;
+    unsigned channels = 1;
     Sample length = 0;
     std::vector<WavChunk> chunks; // gaps are silence; chunk boundaries are hidden
 };
@@ -62,7 +63,10 @@ public:
     // Round-06 committed journal; only a TakeFinalized source can be opened here.
     std::vector<std::shared_ptr<const WavSource>> openWavJournal(const juce::File& projectDirectory,
                                                                const juce::Uuid& take) const;
-    static void validateWav(WavSource&); // validates PCM24 mono header and durable limits
+    static void validateWav(WavSource&); // validates PCM24 mono/stereo header and durable limits
+    // Finalized/recovered microphone assets; shared by app playback and export.
+    static std::shared_ptr<const WavSource> recordedAudio(const MediaAsset&, const juce::File& folder,
+                                                         unsigned Fs, const Id& track);
 private:
     std::shared_ptr<MediaEpoch> epoch = std::make_shared<MediaEpoch>();
 };

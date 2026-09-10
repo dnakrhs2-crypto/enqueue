@@ -411,7 +411,8 @@ struct DubbingController::Impl final : IAudioOutputClient
         for (size_t i = 0; i < micMap.size(); ++i)
         {
             auto mic = jsonObject(); jsonSet(mic, "assetId", take.microphoneAssetIds[i]);
-            jsonSet(mic, "physicalIndex", micMap[i].physicalIndex); microphones.add(mic);
+            jsonSet(mic, "physicalIndex", micMap[i].physicalIndex);
+            jsonSet(mic, "leftPhysical", micMap[i].physicalIndex); jsonSet(mic, "rightPhysical", micMap[i].rightPhysicalIndex); jsonSet(mic, "channels", micMap[i].channels()); microphones.add(mic);
         }
         jsonSet(v, "microphones", microphones);
         jsonSet(v, "stackId", placed.stackId); jsonSet(v, "versionId", placed.versionId); jsonSet(v, "referenceAudioTrack", config.audioTrackId);
@@ -509,7 +510,7 @@ juce::Result DubbingController::prepare(Config c)
             if (!cam.calibration.key.cameraId.empty() || (!c.synthetic && (cam.calibration.cameraResidualLatency100ns
                 || cam.calibration.inputResidualLatencySamples || cam.calibration.outputResidualLatencySamples)))
                 cam.calibration.requireMatch(calibrationKey(cam.symbolicLink, cam.mode, cam.exposure, device.name.toStdString(),
-                    device.sampleRate, device.bufferFrames, c.outputMapping));
+                    device.sampleRate, device.bufferFrames, c.outputMapping, s.audio.calibrationInputMapping()));
             need(std::abs(double(cam.calibration.cameraResidualLatency100ns)) <= 100000000
                 && std::abs(double(cam.calibration.outputResidualLatencySamples)) <= double(device.sampleRate) * 10,
                 "카메라 또는 출력 보정 값이 허용 범위를 벗어났습니다.");
@@ -552,8 +553,8 @@ juce::Result DubbingController::prepare(Config c)
         for (const auto& m : s.micMap)
         {
             MediaAsset a; a.kind = AssetKind::mic; a.contentIdentity = a.assetId; a.originalFormat.codec = "pcm_s24le";
-            a.originalFormat.sampleRate = device.sampleRate; a.originalFormat.channels = 1; a.originalFormat.bitsPerSample = 24;
-            s.micLanes.push_back(m.mic - 1); s.take.microphoneAssetIds.push_back(a.assetId); s.take.capture.physicalInputs.push_back(m.physicalIndex); s.assets.push_back(a);
+            a.originalFormat.sampleRate = device.sampleRate; a.originalFormat.channels = int(m.channels()); a.originalFormat.bitsPerSample = 24;
+            s.micLanes.push_back(m.mic - 1); s.take.microphoneAssetIds.push_back(a.assetId); s.take.capture.physicalInputs.push_back(m.physicalIndex); s.take.capture.physicalInputsRight.push_back(m.rightPhysicalIndex); s.assets.push_back(a);
         }
         s.take.capture.asioDeviceId = device.name; s.take.capture.inputOffsetSamples = device.inputLatency + s.config.cameras[0].calibration.inputResidualLatencySamples;
         s.take.capture.outputOffsetSamples = device.outputLatency + s.config.cameras[0].calibration.outputResidualLatencySamples;

@@ -20,11 +20,14 @@ struct JournalPcmFormat
 struct JournalFileDescription
 {
     juce::String assetId, path, plannedPath; // Project-relative paths; plannedPath may be a chunk pattern.
+    unsigned channels = 0; // WAV override; 0 inherits the take PCM format (legacy journals).
 };
 struct JournalDeviceMapping
 {
     juce::String deviceId, name;
     int mic = 0, activeIndex = 0, physicalIndex = 0; // mic is 1-based, device indices are 0-based.
+    int rightActiveIndex = -1, rightPhysicalIndex = -1; // -1 = mono
+    unsigned channels() const noexcept { return rightPhysicalIndex >= 0 ? 2u : 1u; }
 };
 struct JournalTakeStarted
 {

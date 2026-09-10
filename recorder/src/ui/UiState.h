@@ -18,5 +18,9 @@ RecorderUiState mapUiState(const RecorderProject&, const UserSettings&, TakeCont
                           bool documentLocked, bool preparingDevices, bool asioReady, bool camera1Ready);
 juce::Result validateAudioSettings(const UserSettings&, const RecorderAudioEngine::DeviceInfo&, const RecorderProject&);
 juce::Result validateCameraSettings(const UserSettings&, const std::vector<CameraDevice>&);
+// Same complete key used for recording; only armed, selected slots enter inputMapping.
+CalibrationKey calibrationKey(const UserSettings&, unsigned camera);
+CalibrationMatch calibrationMatches(const UserSettings&, const std::vector<CalibrationProfile>&);
+juce::String calibrationStatusText(CalibrationMatch);
 juce::String formatRecorderTime(Sample, unsigned Fs);
 }

@@ -4,6 +4,7 @@
 
 namespace gocue::recorder
 {
+class RecorderSession;
 class AudioSettingsPanel : public juce::Component
 {
 public:
@@ -11,6 +12,7 @@ public:
     UserSettings read(UserSettings base) const;
     void setDeviceInfo(const RecorderAudioEngine::DeviceInfo&);
     void setSettings(const UserSettings&); // sync the visible choices with what the session applied
+    juce::Result configure(RecorderSession&, UserSettings, const UserSettings& applied); // immediate or queued edit; restore on synchronous rejection
     void setBusy(bool configuring);       // only the ASIO control panel is held back while a change is applying
     void resized() override;
     std::function<void(UserSettings)> onChanged; // any edit applies immediately (no connect button)

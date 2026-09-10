@@ -6,7 +6,7 @@
 
 namespace gocue::recorder
 {
-// One set of mono tracks is owned by one worker, so all microphones cross the
+// One set of mono/stereo slots is owned by one worker, so all microphones cross the
 // same 30 * Fs sample boundary, including when an input block straddles it.
 class WavTrackWriter
 {
@@ -31,8 +31,9 @@ public:
         // serialises this worker's checkpoints with MP4/take commits. Empty keeps
         // round 06's standalone journal behaviour. Must outlive stop/join.
         std::function<juce::Result(const JournalCheckpoint&)> checkpointSink;
-        // One entry per packed channel; logical microphone IDs need not be dense.
+        // One entry per slot; PCM is packed in slot order, L then R for stereo.
         std::vector<unsigned> logicalMicrophones;
+        std::vector<unsigned> slotChannels; // 1 or 2 per slot; empty = all mono
         std::uint64_t testChunkFrames = 0; // Nonzero only with a fault adapter; production remains 30s.
         std::shared_ptr<PeakCache> peakCache; // derived min/max, accumulated on this writer worker
     };

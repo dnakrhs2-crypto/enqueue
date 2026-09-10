@@ -505,7 +505,8 @@ struct TakeController::Impl
         for (std::size_t i = 0; i < logicalMics.size(); ++i)
         {
             auto m = jsonObject(); jsonSet(m, "mic", int(logicalMics[i])); jsonSet(m, "assetId", take.microphoneAssetIds[i]);
-            jsonSet(m, "physicalIndex", mappings[i].physicalIndex); jsonSet(m, "activeIndex", mappings[i].activeIndex); microphones.add(m);
+            jsonSet(m, "physicalIndex", mappings[i].physicalIndex); jsonSet(m, "activeIndex", mappings[i].activeIndex);
+            jsonSet(m, "leftPhysical", mappings[i].physicalIndex); jsonSet(m, "rightPhysical", mappings[i].rightPhysicalIndex); jsonSet(m, "channels", mappings[i].channels()); microphones.add(m);
         }
         for (auto peak : peaks) peakValues.add(double(peak));
         jsonSet(v, "microphones", microphones); jsonSet(v, "peaks", peakValues);
@@ -554,8 +555,8 @@ struct TakeController::Impl
             const auto mapping = mappingSnapshot[i];
             MediaAsset mic; mic.kind = AssetKind::mic; mic.contentIdentity = mic.assetId;
             mic.originalFormat.codec = "pcm_s24le"; mic.originalFormat.sampleRate = device.sampleRate;
-            mic.originalFormat.channels = 1; mic.originalFormat.bitsPerSample = 24;
-            take.microphoneAssetIds.push_back(mic.assetId); take.capture.physicalInputs.push_back(mapping.physicalIndex);
+            mic.originalFormat.channels = int(mapping.channels()); mic.originalFormat.bitsPerSample = 24;
+            take.microphoneAssetIds.push_back(mic.assetId); take.capture.physicalInputs.push_back(mapping.physicalIndex); take.capture.physicalInputsRight.push_back(mapping.rightPhysicalIndex);
             logicalIndices.push_back(int(logicalMics[i]) - 1); assets.push_back(mic);
         }
     }
@@ -754,7 +755,7 @@ juce::Result TakeController::prepare(Config config)
         for (unsigned i = 0; i < count; ++i) if (config.calibration[i])
             config.calibration[i]->requireMatch(calibrationKey(i ? config.camera2.symbolicLink : config.cameraSymbolicLink,
                 i ? config.camera2.mode : config.cameraMode, config.exposure[i], device.name.toStdString(),
-                device.sampleRate, device.bufferFrames, config.outputMapping));
+                device.sampleRate, device.bufferFrames, config.outputMapping, s.audio.calibrationInputMapping()));
     }
     catch (const std::exception& e) { return juce::Result::fail(e.what()); }
     const auto timebase = s.document.setTimebase(device.sampleRate, {unsigned(config.projectFps), 1});

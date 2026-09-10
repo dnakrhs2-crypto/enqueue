@@ -10,7 +10,7 @@ namespace gocue::recorder
 class RawAudioTap
 {
 public:
-    static constexpr std::size_t maxChannels = 8, maxStrideBytes = 8;
+    static constexpr std::size_t maxChannels = 16, maxStrideBytes = 8;
     struct Block
     {
         BlockStamp stamp{};

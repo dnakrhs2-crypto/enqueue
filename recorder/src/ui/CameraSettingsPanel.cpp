@@ -3,7 +3,8 @@
 
 namespace gocue::recorder
 {
-CameraSettingsPanel::CameraSettingsPanel(const UserSettings& s, const RecorderProject& p) : initial(s), projectFps(p.fps.numerator)
+CameraSettingsPanel::CameraSettingsPanel(const UserSettings& s, const RecorderProject& p, CalibrationMatcher matcher)
+    : initial(s), matchCalibration(std::move(matcher)), projectFps(p.fps.numerator)
 {
     for (unsigned i = 0; i < 2; ++i)
     {
@@ -21,6 +22,12 @@ CameraSettingsPanel::CameraSettingsPanel(const UserSettings& s, const RecorderPr
     work = std::async(std::launch::async, [] { ComApartment apartment; MfRuntime runtime; return CameraCatalog::enumerate(); }); startTimer(100);
 }
 CameraSettingsPanel::~CameraSettingsPanel() { stopTimer(); }
+void CameraSettingsPanel::setSettings(const UserSettings& s) { initial = s; refreshCalibration(); }
+void CameraSettingsPanel::refreshCalibration()
+{
+    const auto s = read(initial);
+    calibration.setText(calibrationStatusText(matchCalibration ? matchCalibration(s) : calibrationMatches(s, {})), juce::dontSendNotification);
+}
 void CameraSettingsPanel::timerCallback()
 {
     if (!work.valid() || work.wait_for(std::chrono::milliseconds(0)) != std::future_status::ready) return;
@@ -38,7 +45,7 @@ void CameraSettingsPanel::timerCallback()
         refreshCalibration();
     }
     catch (const std::exception& e) { status.setText(ko("카메라 목록을 읽을 수 없습니다. ") + juce::String::fromUTF8(e.what()), juce::dontSendNotification); }
-    stopTimer();
+    refreshCalibration(); stopTimer();
 }
 void CameraSettingsPanel::modesFor(unsigned i)
 {
@@ -76,13 +83,6 @@ void CameraSettingsPanel::selectionChanged(unsigned i, bool enabling)
     }
     devices[i].setEnabled(enabled[i].getToggleState()); modes[i].setEnabled(enabled[i].getToggleState());
     refreshCalibration();
-}
-void CameraSettingsPanel::refreshCalibration()
-{
-    // Computed from the current selection (auto-picked modes included), not from the settings the panel opened with.
-    const auto s = read(initial);
-    const bool changed = s.calibration.asioDeviceId != s.asioDeviceId || s.calibration.cameraDeviceIds != s.cameraDeviceIds || s.calibration.cameraModes != s.cameraModes;
-    calibration.setText(ko("동기 보정 · ") + (s.calibration.calibrationDate.isEmpty() ? ko("보정 결과 없음") : changed ? ko("설정 변경으로 재측정 필요") : ko("측정됨")), juce::dontSendNotification);
 }
 UserSettings CameraSettingsPanel::read(UserSettings s) const
 {

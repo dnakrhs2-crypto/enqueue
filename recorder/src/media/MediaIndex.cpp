@@ -123,25 +123,46 @@ std::shared_ptr<const VideoIndex> MediaIndex::openVideo(const juce::File& file, 
     if (!result->current()) throw std::runtime_error("Media replaced after index scan");
     return result;
 }
+std::shared_ptr<const WavSource> MediaIndex::recordedAudio(const MediaAsset& asset, const juce::File& folder, unsigned Fs, const Id& track)
+{
+    demand(asset.kind == AssetKind::mic && asset.mediaGeneration >= 1 && asset.logicalLength >= 0
+        && asset.originalFormat.channels >= 1 && asset.originalFormat.channels <= 2, "Invalid recorded audio asset");
+    auto wav = std::make_shared<WavSource>(); wav->trackId = track; wav->sampleRate = Fs;
+    wav->channels = unsigned(asset.originalFormat.channels);
+    wav->epoch = std::make_shared<MediaEpoch>(); wav->generation = std::uint64_t(asset.mediaGeneration); wav->epoch->value = wav->generation;
+    const auto add = [&](const juce::String& path, SampleRange range)
+    {
+        demand(isProjectRelativePath(path) && range.start >= 0 && range.length > 0
+            && range.length <= ((std::numeric_limits<Sample>::max)() - 44) / (wav->channels * 3), "Invalid recorded WAV chunk");
+        wav->chunks.push_back({folder.getChildFile(path), range.start, range.length, 44,
+            44 + std::uint64_t(range.length) * wav->channels * 3});
+    };
+    if (asset.chunks.empty() && asset.relativePath.isNotEmpty()) add(asset.relativePath, {0, asset.logicalLength});
+    else for (const auto& chunk : asset.chunks) add(chunk.relativePath, chunk.sourceRange);
+    validateWav(*wav);
+    demand(wav->length <= asset.logicalLength, "WAV chunks exceed the recorded take");
+    wav->length = asset.logicalLength; return wav;
+}
 void MediaIndex::validateWav(WavSource& source)
 {
-    demand(source.sampleRate > 0 && source.sampleRate <= 768000, "Invalid WAV sample rate");
+    demand(source.sampleRate > 0 && source.sampleRate <= 768000 && source.channels >= 1 && source.channels <= 2, "Invalid WAV sample rate/channels");
+    const auto align = source.channels * 3;
     std::sort(source.chunks.begin(), source.chunks.end(), [](const auto& a, const auto& b) { return a.firstSample < b.firstSample; });
     Sample end = 0;
     for (const auto& c : source.chunks)
     {
         demand(c.firstSample >= end && c.validSamples > 0 && c.validSamples <= (std::numeric_limits<Sample>::max)() - c.firstSample,
                "Overlapping, empty or overflowing WAV chunk");
-        demand(c.dataOffset == 44 && c.validSamples <= (std::numeric_limits<Sample>::max)() / 3, "Unsupported WAV layout");
-        const auto bytes = c.dataOffset + static_cast<std::uint64_t>(c.validSamples) * 3;
+        demand(c.dataOffset == 44 && c.validSamples <= (std::numeric_limits<Sample>::max)() / align, "Unsupported WAV layout");
+        const auto bytes = c.dataOffset + static_cast<std::uint64_t>(c.validSamples) * align;
         demand(c.validBytes >= bytes && c.validBytes <= static_cast<std::uint64_t>((std::max)(juce::int64{0}, c.file.getSize())), "WAV extends beyond durable file watermark");
         juce::FileInputStream input(c.file); std::uint8_t header[44]{};
         demand(input.openedOk() && input.read(header, 44) == 44, "Cannot read WAV header");
         demand(std::memcmp(header, "RIFF", 4) == 0 && std::memcmp(header + 8, "WAVEfmt ", 8) == 0
-            && le(header + 16, 4) == 16 && le(header + 20, 2) == 1 && le(header + 22, 2) == 1
-            && le(header + 24, 4) == source.sampleRate && le(header + 28, 4) == source.sampleRate * 3
-            && le(header + 32, 2) == 3 && le(header + 34, 2) == 24 && std::memcmp(header + 36, "data", 4) == 0
-            && le(header + 40, 4) >= static_cast<std::uint64_t>(c.validSamples) * 3, "Expected round-06 mono PCM24 WAV header");
+            && le(header + 16, 4) == 16 && le(header + 20, 2) == 1 && le(header + 22, 2) == source.channels
+            && le(header + 24, 4) == source.sampleRate && le(header + 28, 4) == source.sampleRate * align
+            && le(header + 32, 2) == align && le(header + 34, 2) == 24 && std::memcmp(header + 36, "data", 4) == 0
+            && le(header + 40, 4) >= static_cast<std::uint64_t>(c.validSamples) * align, "Expected mono/stereo PCM24 WAV header");
         end = c.firstSample + c.validSamples;
     }
     source.length = end;
@@ -159,6 +180,7 @@ std::vector<std::shared_ptr<const WavSource>> MediaIndex::openWavManifest(const 
     {
         auto s = std::make_shared<WavSource>(); s->epoch = epoch; s->generation = version;
         s->trackId = track["trackId"].toString(); s->sampleRate = static_cast<std::uint32_t>(rate);
+        if (track.hasProperty("channels")) s->channels = unsigned(integer(track["channels"]));
         demand(s->trackId.isNotEmpty(), "Manifest trackId missing");
         for (const auto& previous : result) demand(previous->trackId != s->trackId, "Duplicate WAV trackId");
         const auto* chunks = track["chunks"].getArray(); demand(chunks != nullptr, "Manifest chunks missing");
@@ -176,6 +198,7 @@ std::vector<std::shared_ptr<const WavSource>> MediaIndex::openWavJournal(const j
     bool started = false, finalized = false; std::uint32_t rate = 0;
     std::map<juce::String, WavChunk> latest;
     std::map<juce::String, Id> trackIds;
+    std::map<juce::String, unsigned> trackChannels;
     for (const auto& record : replay.records)
     {
         const auto& p = record.payload;
@@ -184,17 +207,23 @@ std::vector<std::shared_ptr<const WavSource>> MediaIndex::openWavJournal(const j
         {
             demand(!started, "Repeated TakeStarted"); started = true;
             const auto pcm = p["pcm"];
-            demand(integer(pcm["channels"]) == 1 && integer(pcm["bitsPerSample"]) == 24, "Journal PCM format unsupported");
+            demand((integer(pcm["channels"]) == 1 || integer(pcm["channels"]) == 2) && integer(pcm["bitsPerSample"]) == 24, "Journal PCM format unsupported");
             const auto fs = integer(pcm["sampleRate"]); demand(fs > 0 && fs <= 768000, "Journal Fs out of range"); rate = static_cast<std::uint32_t>(fs);
-            for (const auto& f : *p["files"].getArray())
-                trackIds[f["path"].toString().upToLastOccurrenceOf("/", false, false)] = f["assetId"].toString();
+            for (const auto& f : *p["files"].getArray()) if (f["path"].toString().endsWithIgnoreCase(".wav"))
+            {
+                const auto parent = f["path"].toString().upToLastOccurrenceOf("/", false, false);
+                trackIds[parent] = f["assetId"].toString();
+                trackChannels[parent] = unsigned(integer((f.hasProperty("pcm") ? f["pcm"] : pcm)["channels"]));
+            }
         }
         else if (record.kind == JournalKind::Checkpoint)
         {
             demand(started && !finalized, "Checkpoint outside finalized take lifecycle");
             for (const auto& c : *p["files"].getArray())
             {
-                demand(integer(c["blockAlign"]) == 3, "Journal block alignment mismatch");
+                if (!c["path"].toString().endsWithIgnoreCase(".wav")) continue;
+                const auto parent = c["path"].toString().upToLastOccurrenceOf("/", false, false);
+                demand(trackChannels.count(parent) && integer(c["blockAlign"]) == trackChannels.at(parent) * 3, "Journal block alignment mismatch");
                 auto chunk = manifestChunk(directory, c);
                 if (chunk.validSamples) latest[c["path"].toString()] = std::move(chunk);
             }
@@ -208,7 +237,7 @@ std::vector<std::shared_ptr<const WavSource>> MediaIndex::openWavJournal(const j
         const auto parent = path.upToLastOccurrenceOf("/", false, false); const auto id = trackIds.find(parent);
         demand(id != trackIds.end(), "Journal chunk has no registered microphone");
         auto& s = tracks[id->second];
-        if (!s) { s = std::make_shared<WavSource>(); s->epoch = epoch; s->generation = version; s->sampleRate = rate; s->trackId = id->second; }
+        if (!s) { s = std::make_shared<WavSource>(); s->epoch = epoch; s->generation = version; s->sampleRate = rate; s->channels = trackChannels.at(parent); s->trackId = id->second; }
         s->chunks.push_back(c);
     }
     std::vector<std::shared_ptr<const WavSource>> result;

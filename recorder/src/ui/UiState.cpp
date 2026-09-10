@@ -23,7 +23,7 @@ RecorderUiState mapUiState(const RecorderProject& p, const UserSettings& setting
 }
 juce::Result validateAudioSettings(const UserSettings& s, const RecorderAudioEngine::DeviceInfo& device, const RecorderProject& p)
 {
-    const auto basic = s.validate(); if (basic.failed()) return basic;
+    const auto basic = s.validate(device.name == s.asioDeviceId && device.sampleRate ? device.physicalInputs : 256); if (basic.failed()) return basic;
     if (s.asioDeviceId.isEmpty()) return juce::Result::fail(k("오디오 장치를 선택하세요."));
     if (s.output.mono ? s.output.monoChannel < 0 : s.output.left < 0 || s.output.right < 0)
         return juce::Result::fail(k("재생 출력 채널을 선택하세요."));
@@ -47,6 +47,46 @@ juce::Result validateCameraSettings(const UserSettings& s, const std::vector<Cam
         if (!found) return juce::Result::fail(k(i == 0 ? "캠1 장치와 입력 모드를 선택하세요." : "캠2 장치와 입력 모드를 선택하세요."));
     }
     return juce::Result::ok();
+}
+CalibrationKey calibrationKey(const UserSettings& s, unsigned camera)
+{
+    if (camera >= s.cameraModes.size() || s.validate().failed()) throw std::invalid_argument("Invalid calibration settings");
+    std::vector<int> inputs;
+    for (std::size_t i = 0; i < s.physicalInputs.size(); ++i)
+        if (s.physicalInputs[i] >= 0 && s.microphoneArmed[i])
+            inputs.insert(inputs.end(), {int(i + 1), s.physicalInputs[i], s.stereoSlots[i] ? s.physicalInputs[i] + 1 : -1});
+    return calibrationKey(s.cameraDeviceIds[camera].toStdString(), CameraMode::parse(s.cameraModes[camera].toStdString()),
+        "uncontrolled", s.asioDeviceId.toStdString(), s.preferredSampleRate, unsigned(s.bufferSize),
+        s.output.mono ? std::vector<int>{s.output.monoChannel} : std::vector<int>{s.output.left, s.output.right}, inputs);
+}
+CalibrationMatch calibrationMatches(const UserSettings& s, const std::vector<CalibrationProfile>& profiles)
+{
+    const bool measured = std::any_of(profiles.begin(), profiles.end(), [](const auto& p) { return p.quality != CalibrationQuality::unmeasured; });
+    if (!measured) return s.calibration.calibrationDate.isEmpty() ? CalibrationMatch::unmeasured : CalibrationMatch::inputMappingUnverified;
+    bool enabled = false, legacy = false;
+    try
+    {
+        for (unsigned i = 0; i < s.cameraEnabled.size(); ++i) if (s.cameraEnabled[i])
+        {
+            enabled = true; const auto key = calibrationKey(s, i); bool matched = false, missingMapping = false;
+            for (const auto& profile : profiles) if (profile.quality != CalibrationQuality::unmeasured)
+            {
+                if (profile.key == key && !profile.key.inputMapping.empty()) { profile.requireMatch(key); matched = true; break; }
+                auto legacyKey = key; legacyKey.inputMapping.clear();
+                if (profile.key.inputMapping.empty() && profile.key == legacyKey) missingMapping = true;
+            }
+            if (!matched && !missingMapping) return CalibrationMatch::settingsChanged;
+            legacy = legacy || !matched;
+        }
+    }
+    catch (const std::exception&) { return CalibrationMatch::settingsChanged; }
+    return !enabled ? CalibrationMatch::settingsChanged : legacy ? CalibrationMatch::inputMappingUnverified : CalibrationMatch::matched;
+}
+juce::String calibrationStatusText(CalibrationMatch match)
+{
+    return k("동기 보정 · ") + (match == CalibrationMatch::matched ? k("측정됨")
+        : match == CalibrationMatch::inputMappingUnverified ? k("입력 매핑 확인 전 · 재측정 필요")
+        : match == CalibrationMatch::settingsChanged ? k("설정 변경으로 재측정 필요") : k("보정 결과 없음"));
 }
 juce::String formatRecorderTime(Sample sample, unsigned Fs)
 {

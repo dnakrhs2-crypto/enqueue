@@ -9,6 +9,7 @@
 #include <future>
 #include <limits>
 #include <mutex>
+#include <numeric>
 #include <thread>
 
 namespace gocue::recorder
@@ -65,11 +66,16 @@ static_assert(std::atomic<WavTrackWriter::Error>::is_always_lock_free);
 WavTrackWriter::Config checkedConfig(WavTrackWriter::Config c)
 {
     if (c.sampleRate == 0 || c.mics == 0 || c.mics > 8 || c.framesPerBlock == 0 || c.framesPerBlock > 16384
-        || static_cast<std::uint64_t>(c.sampleRate) * 30 * 3 + 37 >= std::numeric_limits<std::uint32_t>::max()
+        || static_cast<std::uint64_t>(c.sampleRate) * 30 * 6 + 37 >= std::numeric_limits<std::uint32_t>::max()
         || c.takeId.isNull() || c.devices.size() != c.mics || c.projectDirectory == juce::File())
         throw std::invalid_argument("Invalid WAV configuration (Fs, 1..8 mics, block size, mapping, take ID, or RIFF size)");
     if (c.logicalMicrophones.empty()) for (unsigned i = 1; i <= c.mics; ++i) c.logicalMicrophones.push_back(i);
     if (c.logicalMicrophones.size() != c.mics) throw std::invalid_argument("Invalid logical microphone count");
+    if (c.slotChannels.empty()) c.slotChannels.assign(c.mics, 1);
+    if (c.slotChannels.size() != c.mics || std::any_of(c.slotChannels.begin(), c.slotChannels.end(), [](auto n) { return n < 1 || n > 2; }))
+        throw std::invalid_argument("Invalid slot channel counts");
+    const auto total = std::accumulate(c.slotChannels.begin(), c.slotChannels.end(), 0u);
+    if (c.peakCache && c.peakCache->snapshot().channels != total) throw std::invalid_argument("Peak channel count differs from PCM");
     std::array<bool, 8> seen{};
     for (auto mic : c.logicalMicrophones)
     {
@@ -83,20 +89,24 @@ WavTrackWriter::Config checkedConfig(WavTrackWriter::Config c)
             || std::find(c.logicalMicrophones.begin(), c.logicalMicrophones.end(), unsigned(d.mic)) == c.logicalMicrophones.end()
             || d.activeIndex < 0 || d.physicalIndex < 0 || d.deviceId.isEmpty())
             throw std::invalid_argument("Invalid microphone/device mapping");
+        const auto slot = std::size_t(std::find(c.logicalMicrophones.begin(), c.logicalMicrophones.end(), unsigned(d.mic)) - c.logicalMicrophones.begin());
+        if (d.channels() != c.slotChannels[slot] || d.physicalIndex > 255
+            || (d.channels() == 2 && (d.rightPhysicalIndex != d.physicalIndex + 1 || d.rightPhysicalIndex > 255 || d.rightActiveIndex != d.activeIndex + 1))
+            || (d.channels() == 1 && d.rightActiveIndex != -1)) throw std::invalid_argument("Slot format differs from physical input pair");
         seen[static_cast<std::size_t>(d.mic - 1)] = true;
     }
     return c;
 }
-std::array<std::uint8_t, 44> wavHeader(std::uint32_t rate, std::uint64_t frames)
+std::array<std::uint8_t, 44> wavHeader(std::uint32_t rate, std::uint64_t frames, unsigned channels)
 {
     using storageEncoding::put;
     std::array<std::uint8_t, 44> h{};
-    const auto size = static_cast<std::uint32_t>(frames * 3);
+    const auto size = static_cast<std::uint32_t>(frames * channels * 3);
     std::memcpy(h.data(), "RIFF", 4); put(h.data() + 4, 36u + size + (size & 1u));
     std::memcpy(h.data() + 8, "WAVEfmt ", 8); put(h.data() + 16, 16u);
-    put(h.data() + 20, std::uint16_t{1}); put(h.data() + 22, std::uint16_t{1});
-    put(h.data() + 24, rate); put(h.data() + 28, rate * 3);
-    put(h.data() + 32, std::uint16_t{3}); put(h.data() + 34, std::uint16_t{24});
+    put(h.data() + 20, std::uint16_t{1}); put(h.data() + 22, std::uint16_t(channels));
+    put(h.data() + 24, rate); put(h.data() + 28, rate * channels * 3);
+    put(h.data() + 32, std::uint16_t(channels * 3)); put(h.data() + 34, std::uint16_t{24});
     std::memcpy(h.data() + 36, "data", 4); put(h.data() + 40, size);
     return h;
 }
@@ -104,14 +114,15 @@ std::array<std::uint8_t, 44> wavHeader(std::uint32_t rate, std::uint64_t frames)
 
 struct WavTrackWriter::Impl
 {
-    explicit Impl(Config c) : config(checkedConfig(std::move(c))), queue(config.sampleRate, config.mics, config.framesPerBlock),
-        journal(config.faults), packed(static_cast<std::size_t>(config.framesPerBlock) * 3), frequency(qpcFrequency()) {}
+    explicit Impl(Config c) : config(checkedConfig(std::move(c))), queue(config.sampleRate, std::accumulate(config.slotChannels.begin(), config.slotChannels.end(), 0u), config.framesPerBlock),
+        journal(config.faults), packed(static_cast<std::size_t>(config.framesPerBlock) * 6), frequency(qpcFrequency()) {}
     struct Track
     {
         explicit Track(FileIoFaultAdapter* fault) : file(fault) {}
         DurableFile file;
         juce::String path;
         bool pad = false;
+        unsigned channels = 1, offset = 0;
     };
     struct CheckpointStamp { std::uint64_t samples = 0; std::int64_t header = 0, media = 0, journal = 0; };
     Config config;
@@ -163,10 +174,12 @@ struct WavTrackWriter::Impl
     bool openChunk()
     {
         tracks.clear();
-        const auto header = wavHeader(config.sampleRate, 0);
+        unsigned offset = 0;
         for (unsigned mic = 1; mic <= config.mics; ++mic)
         {
             auto t = std::make_unique<Track>(config.faults);
+            t->channels = config.slotChannels[mic - 1]; t->offset = offset; offset += t->channels;
+            const auto header = wavHeader(config.sampleRate, 0, t->channels);
             t->path = WavTrackWriter::chunkPath(config.takeId, config.logicalMicrophones[mic - 1], chunk);
             const auto file = config.projectDirectory.getChildFile(t->path);
             if (!io(file.getParentDirectory().createDirectory()) || !io(t->file.open(file, DurableFile::OpenMode::createNew))
@@ -181,6 +194,8 @@ struct WavTrackWriter::Impl
         if ((!config.checkpointSink && !io(journal.open(config.projectDirectory.getChildFile("journal"), config.journalRotationBytes))) || !openChunk()) return false;
         JournalTakeStarted start;
         start.takeId = config.takeId; start.pcm.sampleRate = config.sampleRate; start.pcm.nativeFormat = config.nativeFormat;
+        if (std::all_of(config.slotChannels.begin(), config.slotChannels.end(), [](auto n) { return n == 2; }))
+        { start.pcm.channels = 2; start.pcm.blockAlign = 6; }
         start.n0 = config.n0; start.o0 = config.o0; start.pstart = config.pstart; start.usesOutputOrigin = config.usesOutputOrigin;
         start.placementMode = config.placementMode;
         start.devices = config.devices;
@@ -188,7 +203,7 @@ struct WavTrackWriter::Impl
         if (config.testChunkFrames && (!config.faults || config.testChunkFrames % config.sampleRate != 0))
         { fail(Error::invalidBlock, "Test chunk boundary requires a fault adapter and whole seconds"); return false; }
         for (const auto& t : tracks)
-            start.files.push_back({juce::Uuid().toDashedString(), t->path, t->path.upToLastOccurrenceOf("/", true, false) + "{chunk}.wav"});
+            start.files.push_back({juce::Uuid().toDashedString(), t->path, t->path.upToLastOccurrenceOf("/", true, false) + "{chunk}.wav", t->channels});
         if (!config.checkpointSink && !io(journal.append(start))) return false;
         lastHeader = lastCheckpoint = qpcNow();
         return true;
@@ -196,11 +211,11 @@ struct WavTrackWriter::Impl
     bool checkpoint()
     {
         if (!dirty) return true;
-        const auto header = wavHeader(config.sampleRate, inChunk);
         const auto began = qpcNow();
         for (auto& t : tracks)
         {
-            if ((inChunk & 1u) && !t->pad)
+            const auto header = wavHeader(config.sampleRate, inChunk, t->channels);
+            if (((inChunk * t->channels * 3) & 1u) && !t->pad)
             {
                 const std::uint8_t zero = 0;
                 if (!io(t->file.write(&zero, 1))) return false;
@@ -217,7 +232,7 @@ struct WavTrackWriter::Impl
         {
             if (!io(t->file.flushData())) return false;
             cp.files.push_back({t->path, t->file.durableBytes(), inChunk, end - inChunk,
-                static_cast<std::int64_t>(end), 1, config.sampleRate, 44, 3});
+                static_cast<std::int64_t>(end), 1, config.sampleRate, 44, t->channels * 3});
         }
         const auto mediaAt = qpcNow(); mediaDurable.store(end, std::memory_order_release);
         if (!io(config.checkpointSink ? config.checkpointSink(cp) : journal.append(cp))) return false;
@@ -238,7 +253,7 @@ struct WavTrackWriter::Impl
         if (block.first != end) { fail(Error::discontinuity, "PCM sample sequence gap/duplicate; take stopped"); return false; }
         if (end > static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max()) - block.frames)
         { fail(Error::invalidBlock, "Sample position exceeds int64"); return false; }
-        for (std::size_t i = 0; i < static_cast<std::size_t>(block.frames) * config.mics; ++i)
+        for (std::size_t i = 0; i < static_cast<std::size_t>(block.frames) * queue.mics; ++i)
             if (pcm[i] < -8388608 || pcm[i] > 8388607)
             { fail(Error::invalidPcm, "Input is outside signed PCM24; no implicit clipping/conversion"); return false; }
         const auto chunkFrames = config.testChunkFrames ? config.testChunkFrames : static_cast<std::uint64_t>(config.sampleRate) * chunkSeconds;
@@ -257,10 +272,12 @@ struct WavTrackWriter::Impl
             const auto frames = static_cast<std::uint32_t>(std::min<std::uint64_t>({block.frames - consumed, chunkFrames - inChunk, untilCheckpoint}));
             for (std::size_t mic = 0; mic < tracks.size(); ++mic)
             {
-                for (std::uint32_t i = 0; i < frames; ++i)
-                    WavTrackWriter::packPcm24(pcm[(static_cast<std::size_t>(consumed) + i) * config.mics + mic], packed.data() + i * 3);
                 auto& t = *tracks[mic];
-                const auto bytes = static_cast<std::size_t>(frames) * 3;
+                for (std::uint32_t i = 0; i < frames; ++i)
+                    for (unsigned ch = 0; ch < t.channels; ++ch)
+                        WavTrackWriter::packPcm24(pcm[(static_cast<std::size_t>(consumed) + i) * queue.mics + t.offset + ch],
+                                                packed.data() + (std::size_t(i) * t.channels + ch) * 3);
+                const auto bytes = static_cast<std::size_t>(frames) * t.channels * 3;
                 std::size_t offset = 0;
                 if (t.pad)
                 {
@@ -269,7 +286,7 @@ struct WavTrackWriter::Impl
                 }
                 if (!io(t.file.write(packed.data() + offset, bytes - offset))) return false;
             }
-            if (config.peakCache) config.peakCache->append(pcm + std::size_t(consumed) * config.mics, frames, total);
+            if (config.peakCache) config.peakCache->append(pcm + std::size_t(consumed) * queue.mics, frames, total);
             consumed += frames; inChunk += frames; written.store(total + frames, std::memory_order_release); dirty = true;
             if ((total + frames) % config.sampleRate == 0 && !checkpoint()) return false;
         }

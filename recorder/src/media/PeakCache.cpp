@@ -7,7 +7,7 @@ namespace gocue::recorder
 {
 PeakCache::PeakCache(unsigned Fs, unsigned channels, unsigned width)
 {
-    if (!Fs || !channels || channels > 8) throw std::invalid_argument("Invalid peak dimensions");
+    if (!Fs || !channels || channels > 16) throw std::invalid_argument("Invalid peak dimensions");
     state.sampleRate = Fs; state.channels = channels; state.samplesPerBin = width ? width : std::max(1u, Fs / 100);
     state.bins.reserve(maximumBins);
 }
@@ -57,13 +57,13 @@ PeakSnapshot PeakCache::read(const juce::File& file)
     s.sampleRate = unsigned(int(v["rate"])); s.channels = unsigned(int(v["channels"]));
     s.samplesPerBin = std::uint64_t(juce::int64(v["width"])); s.samples = std::uint64_t(juce::int64(v["samples"])); s.complete = bool(v["complete"]);
     auto* bins = v["bins"].getArray();
-    if (int(v["version"]) != 1 || !s.sampleRate || s.sampleRate > 768000 || !s.channels || s.channels > 8 || !s.samplesPerBin
+    if (int(v["version"]) != 1 || !s.sampleRate || s.sampleRate > 768000 || !s.channels || s.channels > 16 || !s.samplesPerBin
         || s.samplesPerBin > (1ull << 40) || s.samples > (1ull << 52) || !bins || bins->size() > int(maximumBins)
         || std::uint64_t(bins->size()) != (s.samples + s.samplesPerBin - 1) / s.samplesPerBin) throw std::invalid_argument("Invalid peak cache");
     for (const auto& values : *bins)
     {
         auto* row = values.getArray(); if (!row || row->size() != int(s.channels * 2)) throw std::invalid_argument("Invalid peak row");
-        std::array<PeakBin, 8> b{};
+        std::array<PeakBin, 16> b{};
         for (unsigned c = 0; c < s.channels; ++c)
         {
             b[c] = {float((*row)[int(c * 2)]), float((*row)[int(c * 2 + 1)])};

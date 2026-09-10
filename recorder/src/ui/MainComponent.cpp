@@ -17,7 +17,7 @@ MainComponent::MainComponent(RecorderDocument& d, RecorderSettings& s) : documen
     recordView.startButton.onClick = [this] { recordClicked(); }; recordView.stopButton.onClick = [this] { stopClicked(); };
     recordView.latestButton.onClick = [this] { latestClicked(); }; recordView.markerButton.onClick = [this] { session.addMarker(); refreshPending = true; };
     recordView.onArm = [this](unsigned i, bool on)
-    { const auto r = session.audioEngine().arm(i, on); if (r.failed()) showError(r.getErrorMessage()); else { auto next = settings.get(); next.microphoneArmed[i] = on; settings.set(next); session.updateMicrophoneSettings(next); persistSettings(); } refreshPending = true; };
+    { const auto r = session.audioEngine().arm(i, on); if (r.failed()) showError(r.getErrorMessage()); else { auto next = settings.get(); next.microphoneArmed[i] = on; settings.set(next); session.updateMicrophoneSettings(next); persistSettings(); if (cameraPanel) cameraPanel->setSettings(next); } refreshPending = true; };
     recordView.onMonitor = [this, mask = std::uint8_t{0}](unsigned i, bool on) mutable { mask = std::uint8_t(on ? mask | (1u << i) : mask & ~(1u << i)); session.setMonitoring(mask); };
     recordView.onName = [this](unsigned i, const juce::String& name) { auto next = settings.get(); next.microphoneNames[i] = name; settings.set(next); session.updateMicrophoneSettings(next); persistSettings(); };
     auto& t = timelineView.transport; t.play.onClick = [this] { session.play(); }; t.pause.onClick = [this] { session.pause(); }; t.stop.onClick = [this] { session.stopPlayback(); }; t.beginning.onClick = [this] { session.goToStart(); };
@@ -27,11 +27,13 @@ MainComponent::MainComponent(RecorderDocument& d, RecorderSettings& s) : documen
     {
         settings.set(s); persistSettings(); if (result.failed()) showError(result.getErrorMessage()); else banner.clear();
         if (audioPanel && !pendingConfigure) { audioPanel->setSettings(s); audioPanel->setDeviceInfo(session.deviceInfo()); } // a queued edit keeps the user's latest choices on screen
+        if (cameraPanel) cameraPanel->setSettings(s);
         if (settingsError) settingsError->setText(result.wasOk() ? ko("설정을 적용했습니다.") : result.getErrorMessage(), juce::dontSendNotification);
         refreshPending = true;
         if (pendingConfigure)
         {
-            const auto next = *pendingConfigure; pendingConfigure.reset(); const auto queued = session.configure(next);
+            const auto next = *pendingConfigure; pendingConfigure.reset();
+            const auto queued = audioPanel ? audioPanel->configure(session, next, s) : session.configure(next);
             if (settingsError) settingsError->setText(queued.failed() ? queued.getErrorMessage() : ko("장치를 연결하는 중입니다."), juce::dontSendNotification);
         }
     };

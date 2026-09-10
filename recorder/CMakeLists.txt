@@ -267,7 +267,7 @@ target_sources(Recorder PRIVATE src/ui/RecordView.cpp src/ui/TimelineView.cpp
     src/ui/ProjectDialogs.cpp src/ui/DemoAutomation.cpp)
 target_link_libraries(Recorder PRIVATE RecorderCore juce::juce_gui_extra)
 target_sources(RecorderProbe PRIVATE tools/DemoProbe.cpp)
-target_sources(RecorderTests PRIVATE tests/UiWiringTests.cpp)
+target_sources(RecorderTests PRIVATE tests/UiWiringTests.cpp src/ui/AudioSettingsPanel.cpp)
 add_test(NAME RecorderUiWiring COMMAND RecorderTests --suite ui-wiring)
 # Round 05 / spike 3: diagnostic dual-camera load, append-only integration.
 add_library(RecorderDualFixtures STATIC tools/FramePatternSource.cpp tools/DualAudioLoad.cpp)

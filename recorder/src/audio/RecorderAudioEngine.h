@@ -48,11 +48,12 @@ public:
     juce::Result closeDevice();
     DeviceInfo deviceInfo() const;
     // Entries are logical microphones 0..7; -1 = unselected. Unique physical IDs.
-    juce::Result setInputMap(const std::array<int, 8>&);
+    juce::Result setInputMap(const std::array<int, 8>&, const std::array<bool, 8>& stereoSlots = {});
     juce::Result setOutputMap(OutputMapping);
     juce::Result arm(unsigned mic, bool);
     std::vector<unsigned> armedMicrophones() const; // logical 1..8
     std::vector<JournalDeviceMapping> microphoneMapping() const;
+    std::vector<int> calibrationInputMapping() const; // triples: logical ID, L, R (-1 mono)
     void setInputMonitoring(bool enabled, std::uint8_t selected = 0xff) noexcept;
     void setListeningState(std::uint8_t muteMask, std::uint8_t soloMask) noexcept;
     // Caller keeps queue alive through detach. Detach waits for in-flight output
