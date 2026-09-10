@@ -51,6 +51,7 @@ public:
     juce::Result deleteMarker(const Id&);
     bool beginDrag(TimelineAction);
     const ClipEditResult* dragTo(Sample absoluteEdgeOrStart, bool exact);
+    std::optional<Sample> dragNeighbourGuide() const;
     juce::Result commitDrag();
     void cancelDrag();
     const ClipEditResult* dragPreview() const { return dragResult.get(); }

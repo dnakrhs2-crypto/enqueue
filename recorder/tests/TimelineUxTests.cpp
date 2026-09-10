@@ -4,12 +4,17 @@
 #include "ui/TimelineView.automation.h"
 #include "ui/RecordView.h"
 #include "ui/ShortcutSettingsPanel.h"
+#include "CutSeamChecks.h"
 #include <limits>
 
 namespace gocue::recorder
 {
 struct TimelineUxTestAccess
 {
+    static juce::String status(const TimelineView& view) { return view.selectionInfo.getText(); }
+    static std::optional<Sample> guide(const TimelineView& view) { return view.rows.snapGuide; }
+    static Sample sample(const TimelineView& view, float x) { return view.sampleFor(x); }
+    static void snap(TimelineView& view, bool on) { view.snapButton.setToggleState(on, juce::dontSendNotification); }
     static const std::vector<Track>& tracks(const TimelineView& view) { return view.tracks; }
     static bool recordingRow(const TimelineView& view, std::size_t row) { return view.isRecordingTrack(view.tracks.at(row)); }
     static bool displayOnlyRow(const TimelineView& view, std::size_t row) { return !view.headers.at(row)->isEnabled(); }
@@ -49,6 +54,30 @@ float xAt(TimelineView& view, double seconds)
     return float(TimelineLayout::headerWidth + (seconds - bar->getCurrentRangeStart()) / bar->getCurrentRangeSize() * (rowsOf(view)->getWidth() - TimelineLayout::headerWidth));
 }
 void adopt(RecorderDocument& document) { require(document.adopt(makeTimelineUiFixture(), {}, {}).wasOk(), "UI fixture"); }
+RecorderProject offGridFixture()
+{
+    auto p = makeTimelineUiFixture(); p.fps = {60, 1};
+    for (auto& track : p.tracks)
+    {
+        auto& clips = track.clips.edit();
+        clips[0].lengthSamples = 320640;
+        clips[1].timelineStartSample = 600000;
+    }
+    require(p.validate().wasOk(), "Off-grid fixture"); return p;
+}
+void dragRows(TimelineView& v, const Id& id, TimelineAction action, Sample at, int modifiers = 0)
+{
+    const auto p = v.edits.document.snapshot(); const auto& c = *p->findClip(id);
+    const auto edge = action == TimelineAction::trimOut ? c.timelineEnd() : c.timelineStartSample;
+    const auto grab = action == TimelineAction::move ? c.lengthSamples / 2 : 0;
+    if (action != TimelineAction::move) { v.edits.clickClip(id); v.selectionChanged(); }
+    auto* rows = rowsOf(v); const auto x = xAt(v, double(edge + grab) / p->Fs), target = xAt(v, double(at + grab) / p->Fs);
+    const auto mods = modifiers | juce::ModifierKeys::leftButtonModifier;
+    rows->mouseDown(mouse(*rows, x, 66, x, 66, mods)); rows->mouseDrag(mouse(*rows, target, 66, x, 66, mods));
+    require(v.edits.dragPreview() != nullptr, "Rows drag did not start");
+    require(v.edits.dragPreview()->status.wasOk(), v.edits.dragPreview()->status.getErrorMessage().toRawUTF8());
+    rows->mouseUp(mouse(*rows, target, 66, x, 66, mods));
+}
 void paint(TimelineView& view)
 {
     juce::Image image(juce::Image::ARGB, view.getWidth(), view.getHeight(), true, juce::SoftwareImageType{});
@@ -73,6 +102,277 @@ int runTimelineUxTests()
 {
     juce::ScopedJuceInitialiser_GUI gui;
     Suite suite;
+    suite.test("Rows magnet commits the exact off-grid neighbour end", []
+    {
+        RecorderDocument d; const auto p = offGridFixture(); require(d.adopt(p, {}, {}).wasOk(), "Off-grid adopt");
+        TimelineView v(d); v.setSize(1180, 620); v.refresh(false, 0, {});
+        auto* rows = rowsOf(v); const auto& moving = p.tracks[0].clips.items()[1];
+        const auto x = xAt(v, double(moving.timelineStartSample + 48000) / p.Fs);
+        const auto target = xAt(v, double(320640 + 48000 + 100) / p.Fs);
+        rows->mouseDown(mouse(*rows, x, 66, x, 66)); rows->mouseDrag(mouse(*rows, target, 66, x, 66));
+        rows->mouseUp(mouse(*rows, target, 66, x, 66));
+        const auto actual = d.getProject().findClip(moving.clipId)->timelineStartSample;
+        std::cout << "SNAP off-grid expected=320640 actual=" << actual << " gapSamples=" << actual - 320640 << '\n';
+        require(actual == 320640, "Magnetic neighbour target was rounded back to the frame grid");
+        require(TimelineUxTestAccess::status(v).contains(juce::String::fromUTF8("이웃 클립에 붙임")), "Committed join status missing");
+    });
+    for (const auto action : {TimelineAction::trimIn, TimelineAction::trimOut})
+        suite.test(action == TimelineAction::trimIn ? "Rows trim-in joins an off-grid neighbour exactly" : "Rows trim-out joins an off-grid neighbour exactly", [action]
+        {
+            auto p = offGridFixture();
+            for (auto& t : p.tracks)
+            {
+                auto& clips = t.clips.edit();
+                if (action == TimelineAction::trimOut) { clips[0].lengthSamples = 240000; clips[1].timelineStartSample = 320640; }
+                else { clips[1].timelineStartSample = 400000; clips[1].sourceIn = 120000; clips[1].lengthSamples = 120000; }
+            }
+            RecorderDocument d; require(d.adopt(p, {}, {}).wasOk(), "Trim fixture"); TimelineView v(d); v.setSize(1180, 620); v.refresh(false, 0, {});
+            const auto id = p.tracks[0].clips.items()[action == TimelineAction::trimIn ? 1 : 0].clipId;
+            dragRows(v, id, action, 320640 + 100);
+            const auto* c = d.getProject().findClip(id);
+            require((action == TimelineAction::trimIn ? c->timelineStartSample : c->timelineEnd()) == 320640, "Trim retained a fractional gap");
+            require(TimelineUxTestAccess::status(v).contains(juce::String::fromUTF8("이웃 클립에 붙임")), "Trim join status missing");
+        });
+    suite.test("Rows free move retains the project grid and linked offsets", []
+    {
+        auto p = offGridFixture(); p.tracks[3].clips.edit()[1].timelineStartSample += 37;
+        RecorderDocument d; require(d.adopt(p, {}, {}).wasOk(), "Offset fixture"); TimelineView v(d); v.setSize(1180, 620); v.refresh(false, 0, {});
+        const auto id = p.tracks[0].clips.items()[1].clipId, mic = p.tracks[3].clips.items()[1].clipId;
+        dragRows(v, id, TimelineAction::move, 950123);
+        require(d.getProject().findClip(id)->timelineStartSample == 950400, "Free move lost frame quantisation");
+        require(d.getProject().findClip(mic)->timelineStartSample - d.getProject().findClip(id)->timelineStartSample == 37, "Free move lost link offset");
+        dragRows(v, id, TimelineAction::move, 320640 + 100);
+        require(d.getProject().findClip(id)->timelineStartSample == 320640, "Bundle anchor did not join");
+        require(d.getProject().findClip(mic)->timelineStartSample == 320677, "Joined bundle was independently rounded");
+        require(d.undo().wasOk() && d.redo().wasOk() && d.getProject().findClip(id)->timelineStartSample == 320640, "Join history was not exact");
+    });
+    for (const bool alt : {true, false})
+        suite.test(alt ? "Rows Alt bypass preserves the exact mouse sample beside a neighbour" : "Rows snap-off preserves the exact mouse sample beside a neighbour", [alt]
+        {
+            RecorderDocument d; const auto p = offGridFixture(); require(d.adopt(p, {}, {}).wasOk(), "Bypass fixture");
+            TimelineView v(d); v.setSize(1180, 620); v.refresh(false, 0, {}); if (!alt) TimelineUxTestAccess::snap(v, false);
+            const auto& c = p.tracks[0].clips.items()[1]; const auto grab = c.lengthSamples / 2;
+            const auto x = xAt(v, double(c.timelineStartSample + grab) / p.Fs), target = xAt(v, double(321217 + grab) / p.Fs);
+            const auto exact = c.timelineStartSample + TimelineUxTestAccess::sample(v, target) - TimelineUxTestAccess::sample(v, float(int(x)));
+            dragRows(v, c.clipId, TimelineAction::move, 321217, alt ? juce::ModifierKeys::altModifier : 0);
+            require(d.getProject().findClip(c.clipId)->timelineStartSample == exact && exact != 320640, "Bypass was magnetised or frame-rounded");
+        });
+    for (const bool marker : {true, false})
+        suite.test(marker ? "Rows marker magnet overrides the frame grid" : "Rows playhead magnet overrides the frame grid", [marker]
+        {
+            auto p = offGridFixture(); if (marker) { Marker m; m.sample = 900123; p.markers.push_back(m); }
+            RecorderDocument d; require(d.adopt(p, {}, {}).wasOk(), "Point fixture"); TimelineView v(d); v.setSize(1180, 620); v.refresh(false, marker ? 0 : 900123, {});
+            dragRows(v, p.tracks[0].clips.items()[1].clipId, TimelineAction::move, 900223);
+            require(d.getProject().findClip(p.tracks[0].clips.items()[1].clipId)->timelineStartSample == 900123, "Point magnet was frame-rounded");
+        });
+    suite.test("snap uses 12 pixels, a rational one-frame/20ms floor, and clip priority on ties", []
+    {
+        require(TimelineInteraction::snapPixels == 12, "Pixel tolerance");
+        require(TimelineInteraction::snapTolerance(.1, 48000, 1000, {120, 1}) == 960, "20ms minimum");
+        require(TimelineInteraction::snapTolerance(.1, 48000, 1000, {60, 1}) == 1200, "Frame plus rounding margin");
+        require(TimelineInteraction::snapTolerance(.1, 48000, 1000, {30, 1}) == 2400, "One-frame plus rounding margin");
+        require(TimelineInteraction::snapTolerance(.1, 48000, 1000, {30000, 1001}) == 2403, "Fractional frame minimum");
+        require(TimelineInteraction::snapTolerance(600, 48000, 1000, {60, 1}) == 345600, "Zoomed-out pixel tolerance");
+        auto p = offGridFixture(); Marker m; m.sample = 320840; p.markers.push_back(m);
+        TimelineSnapIndex snap; const auto ids = TimelineEditController::expandLinks(p, {p.tracks[0].clips.items()[1].clipId});
+        snap.build(p, ids, 320840, TimelineAction::trimIn);
+        const auto tied = snap.snap(320740, 100, false);
+        require(tied.value == 320640 && tied.clipBoundary, "Marker/playhead beat an equidistant clip edge");
+        p.markers.clear(); snap.build(p, ids, 0, TimelineAction::trimIn);
+        require(snap.snap(321600, 960, false).guide == 320640, "Tolerance boundary should be inclusive");
+        require(!snap.snap(321601, 960, false).guide, "Outside tolerance joined");
+    });
+    suite.test("interactive model moves absorb subframe gaps/overlaps with one shared delta", []
+    {
+        auto p = offGridFixture(); p.tracks[3].clips.edit()[1].timelineStartSample += 37;
+        const auto id = p.tracks[0].clips.items()[1].clipId, mic = p.tracks[3].clips.items()[1].clipId;
+        for (const Sample distance : {-799, -1, 0, 1, 799})
+        {
+            const auto r = ClipEdits::move(p, {id}, 320640 + distance - 600000, true, true);
+            require(r.status.wasOk() && r.project.findClip(id)->timelineStartSample == 320640, "Subframe move did not close");
+            require(r.project.findClip(mic)->timelineStartSample == 320677, "Subframe move lost relative offset");
+        }
+        require(ClipEdits::move(p, {id}, 320640 - 800 - 600000, true, true).status.failed(), "One-frame overlap was silently absorbed");
+        const auto beyond = ClipEdits::move(p, {id}, 320640 + 800 - 600000, true, true);
+        require(beyond.status.wasOk() && beyond.project.findClip(id)->timelineStartSample != 320640, "One-frame gap was silently absorbed");
+    });
+    suite.test("grid rounding cannot leave a subframe gap or defeat the magnet radius", []
+    {
+        auto p = offGridFixture(); for (auto& t : p.tracks) t.clips.edit()[0].lengthSamples = 320160;
+        const auto id = p.tracks[0].clips.items()[1].clipId;
+        const auto r = ClipEdits::move(p, {id}, 321100 - 600000, true, true);
+        require(r.status.wasOk() && r.project.findClip(id)->timelineStartSample == 320160, "Rounding left a 640-sample gap");
+        TimelineSnapIndex snap; snap.build(p, TimelineEditController::expandLinks(p, {id}), 0, TimelineAction::move);
+        const auto tolerance = TimelineInteraction::snapTolerance(.1, p.Fs, 1000, p.fps);
+        require(snap.snap(321100, tolerance, false).value == 320160, "Temporal radius missed rounding closure");
+        const auto outside = snap.snap(320160 + tolerance + 1, tolerance, false);
+        require(!outside.guide, "Outside radius magnetised");
+        const auto free = ClipEdits::move(p, {id}, outside.value - 600000, true, true);
+        require(free.status.wasOk() && free.project.findClip(id)->timelineStartSample - 320160 >= 800, "Outside radius silently joined after rounding");
+    });
+    for (const bool in : {true, false})
+        suite.test(in ? "interactive model trim-in absorbs subframe gaps/overlaps" : "interactive model trim-out absorbs subframe gaps/overlaps", [in]
+        {
+            auto p = offGridFixture();
+            for (auto& t : p.tracks)
+            {
+                auto& c = t.clips.edit();
+                if (in) { c[1].timelineStartSample = 400000; c[1].sourceIn = 120000; c[1].lengthSamples = 120000; }
+                else { c[0].lengthSamples = 240000; c[1].timelineStartSample = 320640; }
+            }
+            const auto id = p.tracks[0].clips.items()[in ? 1 : 0].clipId;
+            for (const Sample distance : {-799, -1, 1, 799})
+            {
+                const auto r = in ? ClipEdits::trimIn(p, {id}, 320640 + distance, true, true) : ClipEdits::trimOut(p, {id}, 320640 + distance, true, true);
+                require(r.status.wasOk(), "Subframe trim rejected");
+                const auto* c = r.project.findClip(id); require((in ? c->timelineStartSample : c->timelineEnd()) == 320640, "Subframe trim gap remains");
+            }
+            const auto r = in ? ClipEdits::trimIn(p, {id}, 319840, true, true) : ClipEdits::trimOut(p, {id}, 321440, true, true);
+            require(r.status.failed(), "One-frame trim overlap was absorbed");
+        });
+    suite.test("legacy subframe video seams hold the preceding PTS even on a cold seek", []
+    {
+        using namespace recorder_cut_seam;
+        for (const Sample gap : {1, 160, 799, 800, 801})
+        {
+            auto source = syntheticIndex(); auto stats = std::make_shared<DecodeStats>();
+            PlaybackVideoClip a; a.source = source; a.mapping.clipId = newId(); a.mapping.trackId = newId(); a.mapping.mediaGeneration = 1; a.mapping.lengthSamples = 320640;
+            auto b = a; b.mapping.clipId = newId(); b.mapping.timelineStartSample = 320640 + gap; b.mapping.sourceIn = 110400; b.mapping.lengthSamples = 4800;
+            VideoPlaybackEngine video([stats](auto s) { return std::make_unique<DelayedDecoder>(s, stats); }); video.prepare({a, b});
+            PlaybackDisplayState display; unsigned black = 0, missing = 0;
+            for (const Sample at : {320639LL, 320640LL, 320640 + gap - 1, 320640 + gap})
+            {
+                const auto gen = video.seek(at); awaitFrame([&] { return video.ready(at, gen); });
+                const auto selection = video.displaySelection(0); const auto decision = submitPicture(display, selection);
+                const bool trueGap = gap >= 800 && at >= 320640 && at < b.mapping.timelineStartSample;
+                require(selection.gap == trueGap, "Gap classification changed");
+                if (!trueGap)
+                {
+                    missing += !selection.frame; black += decision.action == PlaybackDisplayAction::clear;
+                    require(selection.frame && selection.frame->pts == (at < b.mapping.timelineStartSample ? 400 : 138), "Wrong held/incoming PTS");
+                }
+            }
+            require(black == 0 && missing == 0, "Subframe seam lost its picture");
+            std::cout << "SNAP legacy gapSamples=" << gap << " black=" << black << " missing=" << missing << '\n';
+        }
+    });
+    suite.test("subframe asset gaps and different tracks remain explicit gaps", []
+    {
+        using namespace recorder_cut_seam;
+        auto source = syntheticIndex(); auto stats = std::make_shared<DecodeStats>();
+        PlaybackVideoClip a; a.source = source; a.mapping.clipId = newId(); a.mapping.trackId = newId(); a.mapping.mediaGeneration = 1; a.mapping.lengthSamples = 4800; a.mapping.gaps = {{1600, 1}};
+        VideoPlaybackEngine video([stats](auto s) { return std::make_unique<DelayedDecoder>(s, stats); }); video.prepare({a});
+        video.seek(1600); require(video.displaySelection(0).gap, "One-sample asset gap was filled");
+        a.mapping.gaps.clear(); auto b = a; b.mapping.clipId = newId(); b.mapping.trackId = newId(); b.mapping.timelineStartSample = 4801;
+        video.prepare({a, b}); video.seek(4800); require(video.displaySelection(0).gap, "Different-track gap was filled");
+    });
+    if (juce::SystemStats::getEnvironmentVariable("RECORDER_SNAP_PROJECT", {}).isNotEmpty())
+        suite.test("copied real takes split-delete-drag with exact seam and legacy gap playback", []
+        {
+            using namespace recorder_cut_seam;
+            const juce::File file(juce::SystemStats::getEnvironmentVariable("RECORDER_SNAP_PROJECT", {}));
+            RecorderProject p; require(RecorderSerializer::readCheckpoint(file, p).wasOk(), "Read copied checkpoint");
+            require(p.media->takes.size() == 1 && p.tracks.size() == 2, "Expected the supplied single-take camera/microphone fixture");
+            auto registry = std::make_shared<MediaRegistry>(*p.media); p.media = registry;
+            auto take = registry->takes.front(); take.takeId = newId(); take.number = 2; take.placementSample = 600000; take.microphoneAssetIds.clear();
+            LinkGroup group;
+            for (auto& track : p.tracks)
+            {
+                auto clip = track.clips.items().front(); auto asset = *registry->findAsset(clip.assetId);
+                asset.assetId = newId(); asset.contentIdentity = "snap-independent-copy-" + asset.assetId;
+                if (asset.kind == AssetKind::camera)
+                {
+                    const auto original = file.getParentDirectory().getChildFile(asset.relativePath);
+                    const auto second = original.getSiblingFile("cam-second.mp4");
+                    require(second.existsAsFile(), "Independent camera copy missing");
+                    asset.relativePath = second.getRelativePathFrom(file.getParentDirectory()).replaceCharacter('\\', '/');
+                    take.cam1AssetId = asset.assetId;
+                }
+                else
+                {
+                    take.microphoneAssetIds.push_back(asset.assetId);
+                    for (auto& chunk : asset.chunks)
+                    {
+                        const auto original = file.getParentDirectory().getChildFile(chunk.relativePath);
+                        const auto second = original.getSiblingFile(original.getFileNameWithoutExtension() + "-second.wav");
+                        require(second.existsAsFile(), "Independent PCM copy missing");
+                        chunk.relativePath = second.getRelativePathFrom(file.getParentDirectory()).replaceCharacter('\\', '/');
+                    }
+                }
+                registry->assets.push_back(asset); clip.assetId = asset.assetId; clip.clipId = newId();
+                clip.timelineStartSample = 600000; clip.linkGroupId = group.linkGroupId; group.clipIds.push_back(clip.clipId);
+                track.clips.edit().push_back(clip);
+            }
+            registry->takes.push_back(take); p.linkGroups.push_back(group);
+            require(p.validate().wasOk(), p.validate().getErrorMessage().toRawUTF8());
+            RecorderDocument d; require(d.adopt(p, {}, {}).wasOk(), "Adopt copied takes"); TimelineView v(d); v.setSize(1380, 620); v.refresh(false, 0, {});
+            const auto cameraAt = [&](Sample at)
+            {
+                for (const auto& c : d.getProject().tracks[0].clips.items()) if (c.timelineStartSample <= at && at < c.timelineEnd()) return c.clipId;
+                throw std::runtime_error("Edited real camera clip missing");
+            };
+            for (const Sample start : {0, 600000})
+            {
+                v.edits.clickClip(cameraAt(start)); v.edits.followPlayhead(start + 48000); require(v.invoke(TimelineAction::split).wasOk(), "Real first split");
+                v.edits.clickClip(cameraAt(start + 60000)); v.edits.followPlayhead(start + 110400); require(v.invoke(TimelineAction::split).wasOk(), "Real second split");
+                v.edits.clickClip(cameraAt(start + 60000)); require(v.invoke(TimelineAction::remove).wasOk(), "Real middle delete");
+                dragRows(v, cameraAt(start + 110400), TimelineAction::move, start + 48000 + 100);
+            }
+            const auto tailA = cameraAt(60000), headB = cameraAt(600000), tailB = cameraAt(660000);
+            const auto boundary = d.getProject().findClip(tailA)->timelineEnd();
+            v.edits.clickClip(headB); v.edits.clickClip(tailB, false, true);
+            dragRows(v, headB, TimelineAction::move, boundary + 100);
+            require(d.getProject().findClip(headB)->timelineStartSample == boundary && boundary == 418080, "Real take seam has a residual gap");
+            require(d.getProject().findClip(tailB)->timelineStartSample == boundary + 48000, "Selected fragments lost their shared delta");
+            require(RecorderSerializer::writeCheckpoint(file.getSiblingFile("snap-joined.recorder"), d.getProject()).wasOk(), "Write edited copy");
+            MediaIndex index;
+            for (const Sample legacyGap : {0, 160})
+            {
+                const auto project = legacyGap == 0 ? d.getProject() : checked(ClipEdits::move(d.getProject(), {headB, tailB}, legacyGap, false));
+                const auto plan = RenderPlanCompiler::compile(project); std::vector<PlaybackVideoClip> clips;
+                for (const auto& c : plan->activeClips) if (c.trackId == project.tracks[0].trackId)
+                {
+                    const auto* asset = project.media->findAsset(c.assetId);
+                    auto source = index.openVideo(file.getParentDirectory().getChildFile(asset->relativePath), project.Fs);
+                    auto mapping = c; mapping.mediaGeneration = Sample(source->generation); clips.push_back({mapping, 0, source});
+                }
+                std::sort(clips.begin(), clips.end(), [](const auto& a, const auto& b) { return a.mapping.timelineStartSample < b.mapping.timelineStartSample; });
+                VideoPlaybackEngine video; video.prepare(clips); video.seek(boundary - 24 * step, 1);
+                awaitFrame([&] { require(video.status().wasOk(), video.status().getErrorMessage().toRawUTF8()); return video.ready(boundary - 24 * step, 1); });
+                PlaybackDisplayState display; unsigned missing = 0, black = 0, empty = 0, wrongPts = 0, orderErrors = 0;
+                Sample previous = -1; const auto began = std::chrono::steady_clock::now();
+                juce::String csv = "relativeFrame,timelineSample,expectedPts,selectedPts,displayedPts,black,empty\n";
+                for (int relative = -24; relative <= 10; ++relative)
+                {
+                    std::this_thread::sleep_until(began + std::chrono::microseconds((relative + 24) * 1000000 / 60));
+                    const auto sample = boundary + relative * step; video.requestFrames(sample, 1, true);
+                    const auto selection = video.displaySelection(0); const auto decision = submitPicture(display, selection);
+                    if (relative < -10) continue;
+                    const PlaybackVideoClip* expected = nullptr;
+                    for (const auto& c : clips) if (c.mapping.timelineStartSample <= sample) expected = &c;
+                    require(expected != nullptr, "Expected real clip");
+                    const auto sourceSample = expected->mapping.sourceIn + (std::min)(sample - expected->mapping.timelineStartSample, expected->mapping.lengthSamples - 1);
+                    const auto pts = expected->source->packets[expected->source->frameAt(sourceSample)].pts;
+                    missing += !selection.frame; black += decision.action == PlaybackDisplayAction::clear; empty += !decision.frame;
+                    if (selection.frame)
+                    {
+                        wrongPts += selection.frame->source != expected->source || selection.frame->pts != pts;
+                        orderErrors += selection.frame->begin < previous; previous = selection.frame->begin;
+                    }
+                    csv += juce::String(relative) + "," + juce::String(sample) + "," + juce::String(pts) + ","
+                        + (selection.frame ? juce::String(selection.frame->pts) : "empty") + ","
+                        + (decision.frame ? juce::String(decision.frame->pts) : "empty") + ","
+                        + juce::String(int(decision.action == PlaybackDisplayAction::clear)) + "," + juce::String(int(!decision.frame)) + "\n";
+                }
+                auto report = jsonObject(); jsonSet(report, "measurement", "Copied H264 files; production D3D11VA decoder and display policy; synthetic successful sink, no capture/ASIO/HWND Present");
+                jsonSet(report, "frames", 21); jsonSet(report, "boundarySample", boundary); jsonSet(report, "gapSamples", legacyGap);
+                jsonSet(report, "missingExactFrames", missing); jsonSet(report, "blackSubmissions", black); jsonSet(report, "emptyFrames", empty);
+                jsonSet(report, "wrongPts", wrongPts); jsonSet(report, "orderErrors", orderErrors); jsonSet(report, "engine", video.telemetry());
+                writeReport(legacyGap ? "real-snap-legacy-gap" : "real-snap-joined", csv, report);
+                std::cout << "SNAP REAL boundary=" << boundary << " gap=" << legacyGap << " black=" << black << " empty=" << empty << " missing=" << missing << " wrongPts=" << wrongPts << '\n';
+                require(missing == 0 && black == 0 && empty == 0 && wrongPts == 0 && orderErrors == 0, "Real seam picture mismatch (see CSV)");
+            }
+        });
     suite.test("3px jitter selects without opening a drag or changing history; 4px starts a preview", []
     {
         RecorderDocument d; adopt(d); TimelineView v(d); v.setSize(1180, 620); v.refresh(false, 0, {});
@@ -174,7 +474,7 @@ int runTimelineUxTests()
         const auto hi = (std::numeric_limits<Sample>::max)();
         require(TimelineInteraction::snapTolerance(double(hi) / 48000, 48000, 1) == hi, "Fit tolerance was not capped");
         require(TimelineInteraction::snapTolerance(std::numeric_limits<double>::infinity(), 48000, 1) == hi, "Infinite tolerance");
-        require(TimelineInteraction::snapTolerance(std::numeric_limits<double>::quiet_NaN(), 48000, 1) == 1, "NaN tolerance");
+        require(TimelineInteraction::snapTolerance(std::numeric_limits<double>::quiet_NaN(), 48000, 1) == 2400, "NaN tolerance must retain the temporal floor");
         require(TimelineSamples::roundNonnegative(std::nextafter(double(hi), 0.0)) > hi - 2048, "Last finite rounding changed");
         require(formatRecorderTime(48048, 48000) == "00:00:01.001" && formatRecorderTime(-1, 48000) == "00:00:00.000", "Ordinary time labels changed");
         require(formatRecorderTime(hi, 1) == "2562047788015215:30:07.000", "Extreme time label overflowed");
@@ -197,7 +497,7 @@ int runTimelineUxTests()
         require(v.edits.beginDrag(TimelineAction::trimOut), "Begin extreme trim");
         v.edits.dragTo((std::numeric_limits<Sample>::max)(), true); v.selectionChanged(); paint(v); v.edits.cancelDrag(); v.selectionChanged();
         v.zoomToFit(); paint(v);
-        // One sample-area pixel makes an eight-pixel snap tolerance exceed INT64_MAX.
+        // One sample-area pixel makes the snap tolerance exceed INT64_MAX.
         v.setSize(503, 620); v.zoomToFit(); auto* rows = rowsOf(v);
         const auto x = xAt(v, double(clip.timelineStartSample) / before->Fs);
         rows->mouseDown(mouse(*rows, x, 66, x, 66)); rows->mouseDrag(mouse(*rows, x + 4, 66, x, 66));

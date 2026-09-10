@@ -27,6 +27,32 @@ bool sameClip(const Clip& a, const Clip& b)
         && a.linkGroupId == b.linkGroupId && a.takeStackId == b.takeStackId && a.versionId == b.versionId;
 }
 Sample snap(const RecorderProject& p, Sample t) { return frameToSample(sampleToFrame(t, p.Fs, p.fps), p.Fs, p.fps); }
+std::optional<Sample> neighbourDelta(const RecorderProject& p, const Ids& ids, const Clip& reference,
+    Sample delta, bool move, bool in, Sample requestedDelta)
+{
+    // Largest integer distance strictly below one rational project frame.
+    const auto tolerance = (std::uint64_t(p.Fs) * p.fps.denominator - 1) / p.fps.numerator;
+    auto best = tolerance;
+    std::optional<Sample> joined;
+    const auto consider = [&](Sample originalEdge, Sample target, bool front)
+    {
+        const auto edge = add(originalEdge, delta), requestedEdge = add(originalEdge, requestedDelta);
+        if (edge < 0) return;
+        // Grid rounding must not turn an overlap of a full frame into an accepted join.
+        if (front ? requestedEdge < target && std::uint64_t(target) - std::uint64_t(requestedEdge) > tolerance
+                  : requestedEdge > target && std::uint64_t(requestedEdge) - std::uint64_t(target) > tolerance) return;
+        const auto distance = edge >= target ? std::uint64_t(edge) - std::uint64_t(target) : std::uint64_t(target) - std::uint64_t(edge);
+        if (distance <= best && (!joined || distance < best))
+        { best = distance; joined = add(delta, target - edge); }
+    };
+    for (const auto& track : p.tracks) if (track.trackId == reference.trackId)
+        for (const auto& c : track.clips.items()) if (!ids.count(c.clipId) && p.isActive(c))
+        {
+            if (move || in) consider(reference.timelineStartSample, c.timelineEnd(), true);
+            if (move || !in) consider(reference.timelineEnd(), c.timelineStartSample, false);
+        }
+    return joined;
+}
 Ids explicitIds(const RecorderProject& p, const std::vector<Id>& ids)
 {
     need(!ids.empty(), "편집할 클립을 선택하세요.");
@@ -209,14 +235,22 @@ void rippleStacks(Edit& e, SampleRange r)
         if (last > first) { s.anchorSample = first; s.spanSamples = last - first; }
     }
 }
-ClipEditResult trim(const RecorderProject& p, const std::vector<Id>& requested, Sample t, bool in, bool frameSnap)
+ClipEditResult trim(const RecorderProject& p, const std::vector<Id>& requested, Sample t, bool in, bool frameSnap, bool joinNeighbours)
 {
     return apply(p, [&](Edit& e)
     {
         auto ids = expand(p, requested, false); const auto& reference = *p.findClip(requested.front());
         const auto edge = in ? reference.timelineStartSample : reference.timelineEnd();
         need(t >= 0, "트림 위치는 음수가 될 수 없습니다.");
-        if (frameSnap && hasVideo(p, ids) && t != edge) t = snap(p, t);
+        const auto requestedDelta = t - edge;
+        auto joined = joinNeighbours && t != edge ? neighbourDelta(p, ids, reference, requestedDelta, false, in, requestedDelta) : std::nullopt;
+        if (joined) t = add(edge, *joined);
+        else if (frameSnap && hasVideo(p, ids) && t != edge)
+        {
+            t = snap(p, t);
+            if (joinNeighbours) joined = neighbourDelta(p, ids, reference, t - edge, false, in, requestedDelta);
+            if (joined) t = add(edge, *joined);
+        }
         const auto delta = t - edge;
         const auto stacks = stackIds(p, ids);
         // Match the edited edge across versions. For an outer stack edge each version's
@@ -275,8 +309,8 @@ ClipEditResult ClipEdits::split(const RecorderProject& p, const std::vector<Id>&
         });
     });
 }
-ClipEditResult ClipEdits::trimIn(const RecorderProject& p, const std::vector<Id>& ids, Sample t, bool frameSnap) { return trim(p, ids, t, true, frameSnap); }
-ClipEditResult ClipEdits::trimOut(const RecorderProject& p, const std::vector<Id>& ids, Sample t, bool frameSnap) { return trim(p, ids, t, false, frameSnap); }
+ClipEditResult ClipEdits::trimIn(const RecorderProject& p, const std::vector<Id>& ids, Sample t, bool frameSnap, bool joinNeighbours) { return trim(p, ids, t, true, frameSnap, joinNeighbours); }
+ClipEditResult ClipEdits::trimOut(const RecorderProject& p, const std::vector<Id>& ids, Sample t, bool frameSnap, bool joinNeighbours) { return trim(p, ids, t, false, frameSnap, joinNeighbours); }
 ClipEditResult ClipEdits::remove(const RecorderProject& p, const std::vector<Id>& requested)
 { return apply(p, [&](Edit& e) { e.rewrite(expand(p, requested), [](const Clip&) { return std::vector<Clip>{}; }); }); }
 ClipEditResult ClipEdits::remove(const RecorderProject& p, const std::vector<Id>& requested, SampleRange r)
@@ -313,7 +347,7 @@ ClipEditResult ClipEdits::rippleDeleteTracks(const RecorderProject& p, SampleRan
         r = range(p, r, false); checkExternalLinks(p, ids, lanes); cut(e, ids, r, true);
     });
 }
-ClipEditResult ClipEdits::move(const RecorderProject& p, const std::vector<Id>& requested, Sample delta, bool frameSnap)
+ClipEditResult ClipEdits::move(const RecorderProject& p, const std::vector<Id>& requested, Sample delta, bool frameSnap, bool joinNeighbours)
 {
     return apply(p, [&](Edit& e)
     {
@@ -324,7 +358,16 @@ ClipEditResult ClipEdits::move(const RecorderProject& p, const std::vector<Id>& 
         for (const auto& id : requested) { const auto* c = p.findClip(id); if (!anchor && video(p, *c)) anchor = c; }
         for (const auto& t : p.tracks) for (const auto& c : t.clips.items())
             if (!anchor && ids.count(c.clipId) && video(p, c) && p.isActive(c) == p.isActive(*p.findClip(requested.front()))) anchor = &c;
-        if (frameSnap && anchor && delta != 0) delta = add(snap(p, add(anchor->timelineStartSample, delta)), -anchor->timelineStartSample);
+        const auto requestedDelta = delta;
+        const auto& reference = anchor ? *anchor : *p.findClip(requested.front());
+        auto joined = joinNeighbours && delta != 0 ? neighbourDelta(p, ids, reference, delta, true, false, requestedDelta) : std::nullopt;
+        if (joined) delta = *joined;
+        else if (frameSnap && anchor && delta != 0)
+        {
+            delta = add(snap(p, add(anchor->timelineStartSample, delta)), -anchor->timelineStartSample);
+            if (joinNeighbours) joined = neighbourDelta(p, ids, reference, delta, true, false, requestedDelta);
+            if (joined) delta = *joined;
+        }
         e.rewrite(ids, [&](const Clip& c) { auto out = c; out.timelineStartSample = add(c.timelineStartSample, delta); return std::vector<Clip>{out}; });
         for (auto& s : e.p.takeStacks) if (stacks.count(s.stackId)) s.anchorSample = add(s.anchorSample, delta);
     });

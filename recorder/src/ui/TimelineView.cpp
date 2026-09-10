@@ -707,24 +707,23 @@ void TimelineView::Rows::updateDrag()
 {
     auto& v = view; if (v.edits.isLocked() || !moved) return;
     const auto bypass = lastModifiers.isAltDown() || !v.snapButton.getToggleState();
-    const auto tolerance = TimelineInteraction::snapTolerance(v.viewSeconds, v.document.getProject().Fs, getWidth() - headerWidth);
+    const auto tolerance = TimelineInteraction::snapTolerance(v.viewSeconds, v.document.getProject().Fs, getWidth() - headerWidth, v.document.getProject().fps);
     const auto raw = dragging == Drag::clip ? previewAdd(downEdge, previewSubtract(v.sampleFor(lastPointer.x), downSample)) : v.sampleFor(lastPointer.x); // saturated: never overflows before the range checks
     const auto snapped = snapIndex.snap(std::max(Sample{0}, raw), tolerance, bypass); snapGuide = snapped.guide;
     if (dragging == Drag::scrub) { v.playhead = snapped.value; v.edits.followPlayhead(v.playhead); if (v.onScrub) v.onScrub(v.playhead, false); }
     else if (dragging == Drag::range) { v.edits.setRange(downSample, snapped.value); v.updateControls(); }
     else if (dragging == Drag::clip)
     {
-        const auto* candidate = v.edits.dragTo(snapped.value, bypass);
-        if (candidate && candidate->status.wasOk() && snapGuide && !v.edits.dragTargets().empty())
-            if (const auto* actual = candidate->project.findClip(v.edits.dragTargets().front()))
-                if ((pendingAction == TimelineAction::trimOut ? actual->timelineEnd() : actual->timelineStartSample) != snapped.value) snapGuide.reset();
+        const auto* candidate = v.edits.dragTo(snapped.value, bypass || snapped.guide.has_value());
+        const auto joined = bypass ? std::nullopt : v.edits.dragNeighbourGuide();
+        if (joined) snapGuide = joined;
         v.rebuildPreview();
         if (candidate)
         {
             const bool otherRow = (int(lastPointer.y) - rulerHeight) / rowHeight != downRow;
             v.editStatus = candidate->status.failed() ? candidate->status.getErrorMessage()
                 : (otherRow ? ko("원래 트랙 유지 · ") : juce::String()) + ko("함께 편집 ") + juce::String(int(v.edits.dragTargets().size())) + ko("개 · 놓아서 확정 · Esc 취소")
-                  + (bypass ? ko(" · 스냅 해제") : snapGuide ? ko(" · 스냅 맞춤") : ko(" · Alt 스냅 해제"));
+                  + (bypass ? ko(" · 스냅 해제") : joined ? ko(" · 이웃 클립에 붙임") : snapGuide ? ko(" · 스냅 맞춤") : ko(" · Alt 스냅 해제"));
             v.selectionInfo.setColour(juce::Label::textColourId, candidate->status.failed() ? Palette::danger : Palette::dimText);
             v.selectionInfo.setText(v.editStatus, juce::dontSendNotification);
         }
@@ -764,7 +763,13 @@ void TimelineView::Rows::mouseUp(const juce::MouseEvent& e)
     auto& v = view; const auto mode = dragging;
     if (mode == Drag::clip && moved && !v.edits.isLocked()) mouseDrag(e);
     stopTimer(); dragging = Drag::none; snapGuide.reset();
-    if (mode == Drag::clip && moved) { const auto revision = v.document.getProject().editRevision; const auto r = v.edits.commitDrag(); v.finish(r, revision != v.document.getProject().editRevision); }
+    if (mode == Drag::clip && moved)
+    {
+        const auto joined = !lastModifiers.isAltDown() && v.snapButton.getToggleState() && v.edits.dragNeighbourGuide().has_value();
+        const auto revision = v.document.getProject().editRevision; const auto r = v.edits.commitDrag();
+        v.finish(r, revision != v.document.getProject().editRevision);
+        if (r.wasOk() && joined) { v.editStatus = ko("이웃 클립에 붙임"); v.updateControls(); }
+    }
     else if (mode == Drag::scrub && !v.edits.isLocked()) { v.edits.seek(moved ? v.playhead : downSample); v.selectionChanged(); }
     else if (mode == Drag::range) { if (!moved && !v.edits.isLocked()) v.edits.seek(v.sampleFor(e.x)); v.selectionChanged(); }
     if (collapseSelection && !moved && pendingClipUnchanged()) { v.edits.clickClip(downClip); v.selectionChanged(); }

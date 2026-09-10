@@ -401,22 +401,33 @@ float4 psMain(Vertex v) : SV_Target {
     juce::String driverVersion;
 };
 constexpr auto absent = static_cast<std::size_t>(-1);
-std::size_t activeClip(const std::vector<PlaybackVideoClip>& clips, Sample sample)
+struct VideoClip : PlaybackVideoClip
+{
+    Sample displayEnd = 0;
+    bool beginsAtClipStart = false, endsAtClipEnd = false;
+};
+using VideoClips = std::vector<VideoClip>;
+Sample sourceSampleAt(const VideoClip& c, Sample sample)
+{
+    // A legacy subframe seam displays the preceding clip's final source sample.
+    // Source handles and the incoming clip's first PTS never move.
+    return c.mapping.sourceIn + (std::min)(sample - c.mapping.timelineStartSample, c.mapping.lengthSamples - 1);
+}
+std::size_t activeClip(const VideoClips& clips, Sample sample)
 {
     const auto it = std::upper_bound(clips.begin(), clips.end(), sample,
         [](Sample s, const auto& c) { return s < c.mapping.timelineStartSample; });
     if (it == clips.begin()) return absent;
-    const auto& c = std::prev(it)->mapping;
-    return sample < c.timelineStartSample + c.lengthSamples ? static_cast<std::size_t>(std::distance(clips.begin(), it) - 1) : absent;
+    return sample < std::prev(it)->displayEnd ? static_cast<std::size_t>(std::distance(clips.begin(), it) - 1) : absent;
 }
-std::pair<std::size_t, std::size_t> frameKey(const std::vector<PlaybackVideoClip>& clips, Sample sample)
+std::pair<std::size_t, std::size_t> frameKey(const VideoClips& clips, Sample sample)
 {
     const auto clip = activeClip(clips, sample);
     if (clip == absent) return {absent, absent};
     const auto& c = clips[clip];
-    return {clip, c.source->frameAt(c.mapping.sourceIn + sample - c.mapping.timelineStartSample)};
+    return {clip, c.source->frameAt(sourceSampleAt(c, sample))};
 }
-std::size_t prerollClipAt(const std::vector<PlaybackVideoClip>& clips, Sample sample)
+std::size_t prerollClipAt(const VideoClips& clips, Sample sample)
 {
     const auto next = std::upper_bound(clips.begin(), clips.end(), sample,
         [](Sample s, const auto& c) { return s < c.mapping.timelineStartSample; });
@@ -424,8 +435,7 @@ std::size_t prerollClipAt(const std::vector<PlaybackVideoClip>& clips, Sample sa
         > Sample(next->source->sampleRate) * VideoPlaybackEngine::prerollMilliseconds / 1000) return absent;
     return static_cast<std::size_t>(std::distance(clips.begin(), next));
 }
-using VideoClips = std::vector<PlaybackVideoClip>;
-std::array<std::shared_ptr<const VideoClips>, 2> validatedClips(VideoClips input)
+std::array<std::shared_ptr<const VideoClips>, 2> validatedClips(std::vector<PlaybackVideoClip> input)
 {
     std::array<VideoClips, 2> lanes;
     for (const auto& clip : input)
@@ -442,8 +452,12 @@ std::array<std::shared_ptr<const VideoClips>, 2> validatedClips(VideoClips input
         const auto append = [&](Sample begin, Sample end)
         {
             if (begin == end) return;
-            auto part = clip; part.mapping.timelineStartSample += begin; part.mapping.sourceIn += begin;
-            part.mapping.lengthSamples = end - begin; part.mapping.gaps.clear(); lanes[clip.camera].push_back(std::move(part));
+            VideoClip part; static_cast<PlaybackVideoClip&>(part) = clip;
+            part.mapping.timelineStartSample += begin; part.mapping.sourceIn += begin;
+            part.mapping.lengthSamples = end - begin; part.mapping.gaps.clear();
+            part.displayEnd = part.mapping.timelineStartSample + part.mapping.lengthSamples;
+            part.beginsAtClipStart = begin == 0; part.endsAtClipEnd = end == c.lengthSamples;
+            lanes[clip.camera].push_back(std::move(part));
         };
         for (const auto& gap : c.gaps)
         {
@@ -461,17 +475,29 @@ std::array<std::shared_ptr<const VideoClips>, 2> validatedClips(VideoClips input
         Sample end = 0;
         for (const auto& c : clips)
         { if (c.mapping.timelineStartSample < end) throw std::invalid_argument("Video clips overlap"); end = c.mapping.timelineStartSample + c.mapping.lengthSamples; }
+        for (std::size_t n = 1; n < clips.size(); ++n)
+        {
+            auto& before = clips[n - 1]; const auto& after = clips[n];
+            const auto gap = after.mapping.timelineStartSample - before.displayEnd;
+            if (gap <= 0 || !before.endsAtClipEnd || !after.beginsAtClipStart
+                || before.mapping.trackId != after.mapping.trackId || before.mapping.clipId == after.mapping.clipId) continue;
+            const auto& last = before.source->packets[before.source->frameAt(before.mapping.sourceIn + before.mapping.lengthSamples - 1)];
+            // Recorded video is project-CFR. Use its actual indexed frame duration,
+            // including rational rates; never absorb a full frame or an asset gap.
+            if (gap < last.endSample - last.sample) before.displayEnd = after.mapping.timelineStartSample;
+        }
         result[i] = std::make_shared<const VideoClips>(std::move(clips));
     }
     return result;
 }
-std::shared_ptr<const PlaybackVideoFrame> mappedFrame(const PlaybackVideoClip& c, std::size_t packet,
+std::shared_ptr<const PlaybackVideoFrame> mappedFrame(const VideoClip& c, std::size_t packet,
     std::uint64_t generation, std::shared_ptr<const PlaybackTexture> texture)
 {
     const auto& p = c.source->packets[packet];
     auto f = std::make_shared<PlaybackVideoFrame>(); f->clipId = c.mapping.clipId; f->pts = p.pts;
     f->begin = c.mapping.timelineStartSample + (std::max)(Sample{0}, p.sample - c.mapping.sourceIn);
     f->end = c.mapping.timelineStartSample + (std::min)(c.mapping.lengthSamples, p.endSample - c.mapping.sourceIn);
+    if (p.endSample >= c.mapping.sourceIn + c.mapping.lengthSamples) f->end = c.displayEnd;
     f->generation = generation; f->source = c.source; f->texture = std::move(texture); return f;
 }
 }
@@ -615,7 +641,7 @@ struct VideoPlaybackEngine::Impl
             if (which == absent) return false;
             const auto& c = clips[which];
             if (f.source != c.source || f.clipId != c.mapping.clipId || f.begin < c.mapping.timelineStartSample
-                || f.end > c.mapping.timelineStartSample + c.mapping.lengthSamples) return false;
+                || f.end > c.displayEnd) return false;
             return f.pts == c.source->packets[first].pts
                 || (first + 1 < c.source->packets.size() && f.pts == c.source->packets[first + 1].pts);
         };
@@ -750,7 +776,7 @@ struct VideoPlaybackEngine::Impl
                 for (auto it = decoders.begin(); it != decoders.end();)
                     if (it->first != clip && it->first != next) it = decoders.erase(it); else ++it;
                 const auto& current = clips[clip]; const auto& mapping = current.mapping;
-                const auto frame = current.source->frameAt(mapping.sourceIn + target - mapping.timelineStartSample);
+                const auto frame = current.source->frameAt(sourceSampleAt(current, target));
                 std::vector<std::pair<std::size_t, std::size_t>> wanted{{clip, frame}};
                 if (advancing && frame + 1 < current.source->packets.size()
                     && current.source->packets[frame + 1].sample < mapping.sourceIn + mapping.lengthSamples) wanted.push_back({clip, frame + 1});

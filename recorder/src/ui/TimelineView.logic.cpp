@@ -169,11 +169,11 @@ ClipEditResult TimelineEditController::apply(const RecorderProject& p, TimelineA
     switch (a)
     {
         case TimelineAction::split: return ClipEdits::split(p, ids, cursor);
-        case TimelineAction::trimIn: return ClipEdits::trimIn(p, ids, at, !exact);
-        case TimelineAction::trimOut: return ClipEdits::trimOut(p, ids, at, !exact);
+        case TimelineAction::trimIn: return ClipEdits::trimIn(p, ids, at, !exact, !exact);
+        case TimelineAction::trimOut: return ClipEdits::trimOut(p, ids, at, !exact, !exact);
         case TimelineAction::move:
             if (ids.empty() || at < 0) break;
-            return ClipEdits::move(p, ids, at - p.findClip(ids.front())->timelineStartSample, !exact);
+            return ClipEdits::move(p, ids, at - p.findClip(ids.front())->timelineStartSample, !exact, !exact);
         case TimelineAction::remove:
             if (range) return ids.empty() ? ClipEdits::remove(p, *range) : ClipEdits::remove(p, ids, *range);
             return ClipEdits::remove(p, ids);
@@ -285,6 +285,19 @@ const ClipEditResult* TimelineEditController::dragTo(Sample at, bool exact)
     if (!dragBase || isLocked()) return nullptr;
     dragAt = at; dragExact = exact;
     dragResult = std::make_unique<ClipEditResult>(apply(*dragBase, dragKind, dragIds, at, exact)); return dragResult.get();
+}
+std::optional<Sample> TimelineEditController::dragNeighbourGuide() const
+{
+    if (!dragResult || dragResult->status.failed()) return {};
+    const auto& p = dragResult->project;
+    for (const auto& id : dragIds) if (const auto* edited = p.findClip(id))
+        for (const auto& track : p.tracks) if (track.trackId == edited->trackId)
+            for (const auto& other : track.clips.items()) if (!contains(dragIds, other.clipId) && p.isActive(other))
+            {
+                if (dragKind != TimelineAction::trimOut && edited->timelineStartSample == other.timelineEnd()) return other.timelineEnd();
+                if (dragKind != TimelineAction::trimIn && edited->timelineEnd() == other.timelineStartSample) return other.timelineStartSample;
+            }
+    return {};
 }
 juce::Result TimelineEditController::commitDrag()
 {
