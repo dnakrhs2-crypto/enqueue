@@ -1,9 +1,27 @@
 #include "TimelineView.h"
 #include <algorithm>
 #include <cmath>
+#include <limits>
 
 namespace gocue::recorder
 {
+namespace
+{
+Sample previewAdd(Sample a, Sample b)
+{
+    constexpr auto hi = (std::numeric_limits<Sample>::max)(), lo = (std::numeric_limits<Sample>::min)();
+    if (b > 0 && a > hi - b) return hi;
+    if (b < 0 && a < lo - b) return lo;
+    return a + b;
+}
+Sample previewSubtract(Sample a, Sample b)
+{
+    constexpr auto hi = (std::numeric_limits<Sample>::max)(), lo = (std::numeric_limits<Sample>::min)();
+    if (b > 0 && a < lo + b) return lo;
+    if (b < 0 && a > hi + b) return hi;
+    return a - b;
+}
+}
 TimelineView::TimelineView(RecorderDocument& d) : edits(d), rows(*this), document(d), inspector(edits), markerPanel(edits)
 {
     addAndMakeVisible(transport); addAndMakeVisible(viewport); addAndMakeVisible(horizontal); addAndMakeVisible(selectionInfo);
@@ -151,7 +169,13 @@ void TimelineView::rebuildPreview()
     const auto add = [&](Clip c)
     {
         const auto row = rowFor.find(c.trackId); if (row == rowFor.end()) return;
-        c.lengthSamples = (std::max)(Sample{1}, c.lengthSamples);
+        // Rejected edits still need a red ghost. Its geometry is display-only:
+        // intersect it with the representable timeline before the Clip index
+        // calls timelineEnd(). Never change the rejected edit/commit result.
+        constexpr auto maximum = (std::numeric_limits<Sample>::max)();
+        const auto end = previewAdd(c.timelineStartSample, (std::max)(Sample{1}, c.lengthSamples));
+        c.timelineStartSample = std::clamp(c.timelineStartSample, Sample{0}, maximum - 1);
+        c.lengthSamples = std::clamp(previewSubtract(end, c.timelineStartSample), Sample{1}, maximum - c.timelineStartSample);
         ghosts[row->second].clips.edit().push_back(std::move(c));
     };
     if (preview->status.wasOk())
@@ -168,10 +192,10 @@ void TimelineView::rebuildPreview()
         if (reference) for (const auto& id : ids) if (const auto* original = visibleIndex.find(id))
         {
             auto c = *original;
-            if (drag && edits.dragAction() == TimelineAction::move) c.timelineStartSample += edits.dragValue() - reference->timelineStartSample;
+            if (drag && edits.dragAction() == TimelineAction::move) c.timelineStartSample = previewAdd(c.timelineStartSample, previewSubtract(edits.dragValue(), reference->timelineStartSample));
             else if (drag && edits.dragAction() == TimelineAction::trimIn)
-            { const auto delta = edits.dragValue() - reference->timelineStartSample; c.timelineStartSample += delta; c.lengthSamples -= delta; }
-            else if (drag) c.lengthSamples += edits.dragValue() - reference->timelineEnd();
+            { const auto delta = previewSubtract(edits.dragValue(), reference->timelineStartSample); c.timelineStartSample = previewAdd(c.timelineStartSample, delta); c.lengthSamples = previewSubtract(c.lengthSamples, delta); }
+            else if (drag) c.lengthSamples = previewAdd(c.lengthSamples, previewSubtract(edits.dragValue(), reference->timelineEnd()));
             add(std::move(c));
         }
     }
@@ -294,7 +318,16 @@ bool TimelineView::keyPressed(const juce::KeyPress& key, juce::Component* origin
     return false;
 }
 double TimelineView::xFor(Sample s) const { return headerWidth + (double(s) / document.getProject().Fs - viewStart) / viewSeconds * juce::jmax(1, rows.getWidth() - headerWidth); }
-Sample TimelineView::sampleFor(double x) const { return Sample(std::llround(juce::jmax(0.0, viewStart + (x - headerWidth) * viewSeconds / juce::jmax(1, rows.getWidth() - headerWidth)) * document.getProject().Fs)); }
+Sample TimelineView::sampleFor(double x) const
+{
+    const auto sample = (viewStart + (x - headerWidth) * viewSeconds / juce::jmax(1, rows.getWidth() - headerWidth)) * document.getProject().Fs;
+    if (!(sample > 0)) return 0; // Includes NaN and negative coordinates.
+    // Hit/paint queries add one for their half-open end. Reserve that sample,
+    // and reject the rounded 2^63 boundary before calling llround.
+    constexpr auto maximum = (std::numeric_limits<Sample>::max)() - 1;
+    if (!std::isfinite(sample) || sample >= double(maximum)) return maximum;
+    return Sample(std::llround(sample));
+}
 void TimelineView::updateRange()
 {
     auto end = juce::jmax(playhead, visibleIndex.timelineEnd());
@@ -494,6 +527,9 @@ void TimelineView::Rows::mouseDown(const juce::MouseEvent& e)
     if (e.mods.isPopupMenu()) { v.showEditMenu(); return; }
     if (v.edits.isLocked() || e.mods.isCtrlDown() || e.mods.isShiftDown()) return;
     const auto* c = snapshot->findClip(downClip);
+    // The document can change before the next 33 ms refresh (e.g. a take/version
+    // publication). A hit from the displayed index is not proof of membership.
+    if (!c || !snapshot->isActive(*c)) { v.edits.cancelDrag(); return; }
     auto action = TimelineAction::move;
     if (std::abs(e.x - v.xFor(c->timelineStartSample)) <= 7 && std::abs(e.x - v.xFor(c->timelineStartSample)) <= std::abs(e.x - v.xFor(c->timelineEnd()))) action = TimelineAction::trimIn;
     else if (std::abs(e.x - v.xFor(c->timelineEnd())) <= 7) action = TimelineAction::trimOut;
@@ -508,7 +544,7 @@ void TimelineView::Rows::mouseDrag(const juce::MouseEvent& e)
     else if (dragging == Drag::range && moved) { v.edits.setRange(downSample, v.sampleFor(e.x)); v.updateControls(); }
     else if (dragging == Drag::clip && moved)
     {
-        const auto* candidate = v.edits.dragTo(downEdge + v.sampleFor(e.x) - downSample, e.mods.isAltDown() || !v.snapButton.getToggleState());
+        const auto* candidate = v.edits.dragTo(previewAdd(downEdge, previewSubtract(v.sampleFor(e.x), downSample)), e.mods.isAltDown() || !v.snapButton.getToggleState());
         v.rebuildPreview();
         if (candidate) { v.editStatus = candidate->status.failed() ? candidate->status.getErrorMessage() : ko("놓아서 확정 · Esc 취소 · Alt 스냅 해제 · 노란 선: 원본 핸들 한계"); v.selectionInfo.setColour(juce::Label::textColourId, candidate->status.failed() ? Palette::danger : Palette::dimText); v.updateControls(); }
     }

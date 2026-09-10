@@ -69,13 +69,24 @@ public:
     // Worker-only adapter shared with the headless writer-to-playback regression.
     static std::shared_ptr<const WavSource> indexRecordedAudio(const MediaAsset&, const juce::File& folder, unsigned Fs, const Id& track);
 private:
+    friend struct StabilityTestAccess;
     struct LiveCamera;
     struct Playback;
-    struct PreparedPlan;
+    struct PreparedPlan
+    {
+        std::vector<PlaybackVideoClip> videos;
+        std::vector<PlaybackAudioTrack> tracks;
+        Sample end = 0, revision = 0;
+        Id project;
+        std::uint64_t generation = 0;
+        juce::String error;
+    };
     class SharedOutput;
     void clearPlayback();
     void presentLive();
     void preparePlayback();
+    std::unique_ptr<PreparedPlan> collectPreparedPlan();
+    void playbackPreparationFailed(const juce::String&);
     void scheduleDerived();
     RecorderDocument& document;
     std::shared_ptr<RecorderLifecycle> lifecycle = std::make_shared<RecorderLifecycle>();
@@ -101,9 +112,16 @@ private:
     std::map<juce::String, std::shared_ptr<const VideoIndex>> videoIndexes;
     std::map<juce::String, std::shared_ptr<const WavSource>> wavIndexes;
     std::set<juce::String> derivedKeys;
-    struct Derived { Id asset; std::vector<ThumbnailFrame> thumbs; PeakSnapshot peaks; unsigned channel = 0; };
+    struct Derived
+    {
+        Id asset; std::vector<ThumbnailFrame> thumbs; PeakSnapshot peaks; unsigned channel = 0;
+        std::uint64_t requestGeneration = 0;
+        Id project;
+        Sample mediaGeneration = 0;
+    };
     std::mutex derivedMutex;
     std::deque<Derived> derivedResults;
+    std::atomic<std::uint64_t> derivedGeneration{1};
     ThumbnailCache derivedWorker; // destroyed/joined before callback result storage
 };
 // First-run audio defaults for a freshly chosen device: microphone 1 on input 1, playback on outputs 1/2 (mono on a

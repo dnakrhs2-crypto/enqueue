@@ -38,6 +38,7 @@ public:
     unsigned rowPaintCount = 0;
     std::size_t lastPaintVisitedClips = 0, lastPaintWaveColumns = 0;
 private:
+    friend struct StabilityTestAccess;
     struct PeakDisplay { std::shared_ptr<PeakCache> live; std::shared_ptr<const PeakSnapshot> data; unsigned channel = 0; };
     struct Thumb { Sample sample; juce::Image image; };
     class Rows : public juce::Component

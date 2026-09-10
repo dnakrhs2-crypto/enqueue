@@ -58,15 +58,6 @@ public:
     void drainTiming() override { audio.pollDeviceEvents(); }
 private: RecorderAudioEngine& audio;
 };
-struct RecorderSession::PreparedPlan
-{
-    std::vector<PlaybackVideoClip> videos;
-    std::vector<PlaybackAudioTrack> tracks;
-    Sample end = 0, revision = 0;
-    Id project;
-    std::uint64_t generation = 0;
-    juce::String error;
-};
 struct RecorderSession::Playback
 {
     VideoPlaybackEngine video;
@@ -286,6 +277,8 @@ void RecorderSession::preparePlayback()
     if (!snapshot->activeTimelineEnd()) return;
     notice = k("재생 준비 중");
     const auto generation = lifecycle->generation();
+    try
+    {
     planWork = std::async(std::launch::async, [this, snapshot, folder, generation]
     {
         auto plan = std::make_unique<PreparedPlan>(); plan->project = snapshot->projectId; plan->revision = snapshot->editRevision; plan->end = snapshot->activeTimelineEnd();
@@ -337,6 +330,23 @@ void RecorderSession::preparePlayback()
         catch (const std::exception& e) { plan->error = juce::String::fromUTF8(e.what()); }
         return plan;
     });
+    }
+    catch (const std::exception& e) { playbackPreparationFailed(juce::String::fromUTF8(e.what())); }
+    catch (...) { playbackPreparationFailed(k("알 수 없는 재생 준비 오류")); }
+}
+void RecorderSession::playbackPreparationFailed(const juce::String& reason)
+{
+    clearPlayback(); wantPlay = pendingLatest = false; notice.clear();
+    error = k("재생 준비를 완료할 수 없습니다. ") + reason;
+}
+std::unique_ptr<RecorderSession::PreparedPlan> RecorderSession::collectPreparedPlan()
+{
+    // Exceptions stored by std::async must never escape the message timer, even
+    // during shutdown. get() also retires the failed future so shutdown can join.
+    try { return planWork.get(); }
+    catch (const std::exception& e) { playbackPreparationFailed(juce::String::fromUTF8(e.what())); }
+    catch (...) { playbackPreparationFailed(k("알 수 없는 재생 준비 오류")); }
+    return {};
 }
 std::shared_ptr<const WavSource> RecorderSession::indexRecordedAudio(const MediaAsset& asset, const juce::File& folder, unsigned Fs, const Id& track)
 {
@@ -396,6 +406,9 @@ void RecorderSession::refreshPlaybackPlan()
 void RecorderSession::projectChanged()
 {
     lifecycle->invalidate();
+    ++derivedGeneration;
+    derivedWorker.invalidate();
+    { const std::lock_guard<std::mutex> lock(derivedMutex); derivedResults.clear(); }
     clearPlayback(); take.reset(); cursor = 0; wantPlay = false; pendingLatest = false; peaksPublished.clear(); error.clear(); notice.clear();
     if (planWork.valid()) planWork.wait(); // project replacement is disabled while plan preparation is pending
     videoIndexes.clear(); wavIndexes.clear(); derivedKeys.clear(); derivedProject = document.getProject().projectId;
@@ -405,19 +418,24 @@ void RecorderSession::scheduleDerived()
 {
     if (document.getFile() == juce::File() || recording()) return;
     const auto p = document.snapshot(); const auto folder = document.getFile().getParentDirectory();
+    const auto generation = derivedGeneration.load();
     for (const auto& takeItem : p->media->takes)
     {
-        const auto key = p->projectId + "/peaks/" + takeItem.takeId;
+        auto key = p->projectId + "/peaks/" + takeItem.takeId;
+        for (const auto& id : takeItem.microphoneAssetIds)
+            if (const auto* asset = p->media->findAsset(id)) key += "/" + id + "/" + juce::String(asset->mediaGeneration);
         if (derivedKeys.count(key)) continue;
-        const auto accepted = derivedWorker.enqueue(key, [this, takeItem, folder](const auto& yield)
+        const auto accepted = derivedWorker.enqueue(key, [this, takeItem, folder, p, generation](const auto& yield)
         {
-            if (yield()) return;
+            if (generation != derivedGeneration.load() || yield()) return;
             const auto file = folder.getChildFile("cache/" + takeItem.takeId + ".peaks.json");
             if (!file.existsAsFile()) return;
             const auto peaks = PeakCache::read(file);
             const std::lock_guard<std::mutex> lock(derivedMutex);
+            if (generation != derivedGeneration.load()) return;
             for (unsigned i = 0; i < takeItem.microphoneAssetIds.size(); ++i)
-                derivedResults.push_back({takeItem.microphoneAssetIds[i], {}, peaks, i});
+                if (const auto* asset = p->media->findAsset(takeItem.microphoneAssetIds[i]))
+                    derivedResults.push_back({asset->assetId, {}, peaks, i, generation, p->projectId, asset->mediaGeneration});
         });
         if (accepted) derivedKeys.insert(key);
     }
@@ -425,10 +443,12 @@ void RecorderSession::scheduleDerived()
     {
         const auto key = p->projectId + "/thumb/" + asset.assetId + "/" + juce::String(asset.mediaGeneration);
         if (derivedKeys.count(key)) continue;
-        const auto accepted = derivedWorker.enqueue(key, [this, asset, folder, rate = p->Fs](const auto& yield)
+        const auto accepted = derivedWorker.enqueue(key, [this, asset, folder, rate = p->Fs, project = p->projectId, generation](const auto& yield)
         {
-            auto frames = ThumbnailCache::decode(folder.getChildFile(asset.relativePath), rate, yield);
-            if (!frames.empty()) { const std::lock_guard<std::mutex> lock(derivedMutex); derivedResults.push_back({asset.assetId, std::move(frames), {}, 0}); }
+            const auto cancelled = [&] { return generation != derivedGeneration.load() || yield(); };
+            auto frames = ThumbnailCache::decode(folder.getChildFile(asset.relativePath), rate, cancelled);
+            if (!frames.empty() && !cancelled())
+            { const std::lock_guard<std::mutex> lock(derivedMutex); derivedResults.push_back({asset.assetId, std::move(frames), {}, 0, generation, project, asset.mediaGeneration}); }
         });
         if (accepted) derivedKeys.insert(key);
     }
@@ -450,7 +470,7 @@ void RecorderSession::tick()
     lifecycle->set(RecorderLifecycle::finalizing, take.state() == TakeController::State::finalizing);
     if (shuttingDown)
     {
-        if (ready(planWork)) planWork.get(); // invalidate late seek/prepare completions
+        if (ready(planWork)) collectPreparedPlan(); // retire late/failed preparations
         if (permitRelease && take.shutdownComplete() && !planWork.valid() && !releaseWork.valid() && !resourcesReleased)
         {
             clearPlayback(); // detaches ASIO client before renderer/video join
@@ -518,10 +538,10 @@ void RecorderSession::tick()
             : audio.error() != RecorderAudioEngine::Error::none ? k("오디오 장치 오류로 녹화를 멈췄습니다.") : k("일반 MP4 마무리 실패 · 재시도");
     if (ready(planWork))
     {
-        auto plan = planWork.get();
-        if (lifecycle->accepts(plan->generation) && plan->project == document.getProject().projectId && plan->revision == document.getProject().editRevision && timeline && !recording())
+        auto plan = collectPreparedPlan();
+        if (plan && lifecycle->accepts(plan->generation) && plan->project == document.getProject().projectId && plan->revision == document.getProject().editRevision && timeline && !recording())
         {
-            if (plan->error.isNotEmpty()) { error = plan->error; wantPlay = false; }
+            if (plan->error.isNotEmpty()) playbackPreparationFailed(plan->error);
             else try
             {
                 for (auto& cam : cameras) if (cam) cam->presenter.reset();
@@ -531,7 +551,8 @@ void RecorderSession::tick()
                 playback->output.start(playback->transport); playback->transport.seek(std::clamp(cursor, Sample{0}, plan->end));
                 if (wantPlay) playback->transport.play(); pendingLatest = false; notice.clear();
             }
-            catch (const std::exception& e) { clearPlayback(); error = k("재생 준비를 완료할 수 없습니다. ") + juce::String::fromUTF8(e.what()); wantPlay = false; }
+            catch (const std::exception& e) { playbackPreparationFailed(juce::String::fromUTF8(e.what())); }
+            catch (...) { playbackPreparationFailed(k("알 수 없는 재생 준비 오류")); }
         }
     }
     if (playback)
@@ -553,8 +574,12 @@ void RecorderSession::tick()
     if (!busy()) scheduleDerived();
     std::deque<Derived> completed;
     { const std::lock_guard<std::mutex> lock(derivedMutex); completed.swap(derivedResults); }
-    for (auto& item : completed) if (document.getProject().media->findAsset(item.asset))
+    for (auto& item : completed)
     {
+        const auto& currentProject = document.getProject();
+        const auto* asset = currentProject.media->findAsset(item.asset);
+        if (!asset || item.requestGeneration != derivedGeneration.load() || item.project != currentProject.projectId
+            || item.mediaGeneration != asset->mediaGeneration) continue;
         if (!item.thumbs.empty() && onThumbnails) onThumbnails(item.asset, std::move(item.thumbs));
         if (item.peaks.sampleRate && onLoadedPeaks) onLoadedPeaks(item.asset, std::move(item.peaks), item.channel);
     }
