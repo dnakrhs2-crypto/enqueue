@@ -40,12 +40,25 @@ struct TimelineSamples
         return offset ? add(clip.sourceIn, *offset) : std::nullopt;
     }
 };
-// Pixel-based interaction policy shared by the view and device-free regressions.
+// Interaction policy shared by the view and device-free regressions.
 struct TimelineInteraction
 {
-    static constexpr int dragThreshold = 4, snapPixels = 8, edgePixels = 32;
-    static Sample snapTolerance(double seconds, unsigned sampleRate, int width)
-    { return (std::max)(Sample{1}, TimelineSamples::roundNonnegative(seconds * (double(sampleRate) * snapPixels / (std::max)(1, width)))); }
+    static constexpr int dragThreshold = 4, snapPixels = 12, edgePixels = 32;
+    static Sample snapTolerance(double seconds, unsigned sampleRate, int width, FrameRate fps = {})
+    {
+        const auto pixels = TimelineSamples::roundNonnegative(seconds * (double(sampleRate) * snapPixels / (std::max)(1, width)));
+        const auto numerator = std::uint64_t(sampleRate) * fps.denominator;
+        const auto denominator = (std::max)(1u, fps.numerator);
+        const auto frame = numerator / denominator + (numerator % denominator != 0);
+        const auto halfDenominator = std::uint64_t(denominator) * 2;
+        const auto halfFrame = numerator / halfDenominator + (numerator % halfDenominator != 0);
+        const auto limit = std::uint64_t((std::numeric_limits<Sample>::max)());
+        // One frame for seam closure, plus half a frame for subsequent grid rounding.
+        // Thus an unsnapped pointer outside this radius cannot round into a tiny seam.
+        const auto seamRadius = frame >= limit || halfFrame >= limit - frame ? limit : frame + halfFrame;
+        const auto minimum = (std::max)(seamRadius, std::uint64_t(sampleRate / 50 + (sampleRate % 50 != 0))); // 20 ms
+        return (std::max)({Sample{1}, pixels, Sample((std::min)(minimum, std::uint64_t((std::numeric_limits<Sample>::max)())))});
+    }
     static double zoomStart(double start, double seconds, double nextSeconds, double fraction)
     { return std::max(0.0, start + fraction * (seconds - nextSeconds)); }
     static double revealStart(double start, double seconds, double at)
@@ -61,17 +74,17 @@ struct TimelineInteraction
 class TimelineSnapIndex
 {
 public:
-    struct Result { Sample value; std::optional<Sample> guide; };
+    struct Result { Sample value; std::optional<Sample> guide; bool clipBoundary = false; };
     void build(const RecorderProject& p, const std::vector<Id>& selected, Sample playhead, TimelineAction action)
     {
-        points = {0, playhead}; offsets.clear();
+        points = {0, playhead}; clipPoints.clear(); offsets.clear();
         const std::set<Id> excluded(selected.begin(), selected.end());
         const auto* reference = selected.empty() ? nullptr : p.findClip(selected.front());
         const auto addOffset = [&](Sample edge, Sample base)
         { if (const auto offset = TimelineSamples::subtract(edge, base)) offsets.push_back(*offset); };
         for (const auto& track : p.tracks) for (const auto& clip : track.clips.items()) if (p.isActive(clip))
         {
-            if (!excluded.count(clip.clipId)) { points.push_back(clip.timelineStartSample); points.push_back(clip.timelineEnd()); }
+            if (!excluded.count(clip.clipId)) { clipPoints.push_back(clip.timelineStartSample); clipPoints.push_back(clip.timelineEnd()); }
             else if (reference)
             {
                 if (action == TimelineAction::move)
@@ -83,6 +96,7 @@ public:
         for (const auto& marker : p.markers) points.push_back(marker.sample);
         if (offsets.empty()) offsets.push_back(0);
         std::sort(points.begin(), points.end()); points.erase(std::unique(points.begin(), points.end()), points.end());
+        std::sort(clipPoints.begin(), clipPoints.end()); clipPoints.erase(std::unique(clipPoints.begin(), clipPoints.end()), clipPoints.end());
         std::sort(offsets.begin(), offsets.end()); offsets.erase(std::unique(offsets.begin(), offsets.end()), offsets.end());
     }
     Result snap(Sample value, Sample tolerance, bool bypass) const
@@ -92,20 +106,25 @@ public:
         for (const auto offset : offsets)
         {
             const auto edge = TimelineSamples::add(value, offset); if (!edge) continue;
-            const auto next = std::lower_bound(points.begin(), points.end(), *edge);
-            const auto consider = [&](Sample target)
+            const auto consider = [&](Sample target, bool boundary)
             {
                 const auto distance = TimelineSamples::distance(target, *edge);
                 const auto candidate = TimelineSamples::subtract(target, offset);
-                if (candidate && *candidate >= 0 && distance <= best && (!result.guide || distance < best))
-                { best = distance; result = {*candidate, target}; }
+                if (candidate && *candidate >= 0 && distance <= best
+                    && (!result.guide || distance < best || (distance == best && boundary && !result.clipBoundary)))
+                { best = distance; result = {*candidate, target, boundary}; }
             };
-            if (next != points.end()) consider(*next);
-            if (next != points.begin()) consider(*std::prev(next));
+            const auto search = [&](const std::vector<Sample>& candidates, bool boundary)
+            {
+                const auto next = std::lower_bound(candidates.begin(), candidates.end(), *edge);
+                if (next != candidates.end()) consider(*next, boundary);
+                if (next != candidates.begin()) consider(*std::prev(next), boundary);
+            };
+            search(clipPoints, true); search(points, false);
         }
         return result;
     }
 private:
-    std::vector<Sample> points, offsets;
+    std::vector<Sample> points, clipPoints, offsets;
 };
 }
