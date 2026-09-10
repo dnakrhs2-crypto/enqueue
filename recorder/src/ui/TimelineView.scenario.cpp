@@ -5,6 +5,7 @@
 
 namespace gocue::recorder
 {
+std::unique_ptr<juce::DocumentWindow> createTimelineUxWindow(const juce::var&, std::function<void(int)>);
 namespace
 {
 class TimelineScenarioWindow : public juce::DocumentWindow, private juce::Timer
@@ -56,10 +57,12 @@ std::unique_ptr<juce::DocumentWindow> createTimelineAutomationWindow(const juce:
     {
         if (!file.existsAsFile() || file.getSize() > 65536) throw std::invalid_argument("Invalid scenario file");
         const auto config = juce::JSON::parse(file);
+        if (int(config["schemaVersion"]) == 1 && config["scenario"].toString() == "timeline-ux" && juce::File::isAbsolutePath(config["report"].toString()))
+            return createTimelineUxWindow(config, completion);
         if (int(config["schemaVersion"]) != 1 || config["scenario"].toString() != "independent-audio-cuts" || config["runId"].toString().isEmpty()
             || !juce::File::isAbsolutePath(config["report"].toString())) throw std::invalid_argument("Invalid timeline scenario");
         return std::make_unique<TimelineScenarioWindow>(config, completion);
     }
-    catch (const std::exception&) { completion(2); return {}; }
+    catch (const std::exception& e) { file.withFileExtension("error.txt").replaceWithText(juce::String::fromUTF8(e.what())); completion(2); return {}; }
 }
 }

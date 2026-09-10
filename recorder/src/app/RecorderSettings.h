@@ -1,5 +1,6 @@
 #pragma once
 #include "ProductIdentity.h"
+#include "RecorderShortcuts.h"
 #include "../model/RecorderModel.h"
 #include <condition_variable>
 #include <deque>
@@ -30,6 +31,7 @@ struct UserSettings
     CaptureSnapshot calibration;
     juce::StringArray recentProjects;
     juce::String windowState;
+    RecorderShortcuts shortcuts;
     juce::Result validate() const;
 };
 class RecorderSettings

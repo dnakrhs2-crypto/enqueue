@@ -1,0 +1,68 @@
+﻿ControlType.Custom  370,206,1180,620
+ControlType.Custom  370,206,1180,38
+ControlType.Text  700,208,541,34
+ControlType.Text 확대 1245,208,50,34
+ControlType.Text 스냅 · 준비 전 1425,208,125,34
+ControlType.Button 처음으로 372,210,88,30
+ControlType.Button 재생 464,210,68,30
+ControlType.Button 일시정지 536,210,88,30
+ControlType.Button 정지 628,210,66,30
+ControlType.Button â 1297,210,32,30
+ControlType.Button + 1333,210,32,30
+ControlType.Button 전체 1369,210,54,30
+ControlType.Button 스냅 켜짐 1425,208,125,34
+ControlType.Custom  370,244,1180,46
+ControlType.Custom  370,244,1908,32
+ControlType.Button 편집 370,245,62,30
+ControlType.Button 스플릿 436,245,86,30
+ControlType.Button 앞 트림 526,245,86,30
+ControlType.Button 뒤 트림 616,245,86,30
+ControlType.Button 삭제 706,245,86,30
+ControlType.Button 구간 삭제하고 당기기 796,245,170,30
+ControlType.Button 앞으로 970,245,86,30
+ControlType.Button 뒤로 1060,245,86,30
+ControlType.Button 링크 해제 1150,245,86,30
+ControlType.Button 선택 클립 링크 1240,245,126,30
+ControlType.Button 실행취소 1370,245,220,30
+ControlType.ScrollBar  370,282,1180,8
+ControlType.Custom  370,290,904,498
+ControlType.Custom  370,290,888,498
+ControlType.Custom  370,320,206,70
+ControlType.Text 캠1 378,322,190,28
+ControlType.Custom  370,392,206,70
+ControlType.Text 캠2 378,394,190,28
+ControlType.Custom  370,464,206,70
+ControlType.Text 마이크 1 378,466,190,28
+ControlType.Button 대상 376,499,47,28
+ControlType.Button 음소거 427,499,70,28
+ControlType.Button 솔로 501,499,62,28
+ControlType.Custom  370,536,206,70
+ControlType.Text 마이크 2 378,538,190,28
+ControlType.Button 대상 376,571,47,28
+ControlType.Button 음소거 427,571,70,28
+ControlType.Button 솔로 501,571,62,28
+ControlType.Group  1280,290,270,512
+ControlType.Group  1280,290,270,28
+ControlType.Custom  1280,290,270,28
+ControlType.Button 클립 속성 1280,290,56,28
+ControlType.Button 마커 1337,290,56,28
+ControlType.Custom  1281,318,268,483
+ControlType.Custom  1281,318,268,483
+ControlType.Custom  1281,318,250,370
+ControlType.Text 클립을 선택하세요 1285,318,242,28
+ControlType.Text 샘플 · 숫자 입력은 정확히 적용 1285,346,242,24
+ControlType.Text 시작 1285,376,82,28
+ControlType.Text  1369,376,158,28
+ControlType.Text 끝 1285,407,82,28
+ControlType.Text  1369,407,158,28
+ControlType.Text source In 1285,438,82,28
+ControlType.Text  1369,438,158,28
+ControlType.Text source Out 1285,469,82,28
+ControlType.Text  1369,469,158,28
+ControlType.Text 길이 1285,500,82,28
+ControlType.Text  1369,500,158,28
+ControlType.Text  1285,536,242,50
+ControlType.Text 테이크 버전 목록
+버전 없음 1285,590,242,94
+ControlType.ScrollBar  580,788,694,14
+ControlType.Text Shift/Ctrl 다중 선택 · 빈 곳 드래그/Shift+눈금 드래그로 구간 선택 370,802,1180,24

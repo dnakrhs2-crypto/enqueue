@@ -55,7 +55,7 @@ public:
     bool moreThanOneInstanceAllowed() override { return getCommandLineParameters().contains("--test-root") || getCommandLineParameters().contains("--self-test-record") || getCommandLineParameters().startsWith("--automation "); }
     void initialise(const juce::String& commandLine) override
     {
-        auto args = juce::StringArray::fromTokens(commandLine, true); for (auto& arg : args) arg = arg.unquoted();
+        auto args = juce::StringArray::fromTokens(commandLine.trim(), true); for (auto& arg : args) arg = arg.unquoted();
         if (args.size() == 2 && args[0] == "--automation")
         {
             lookAndFeel = std::make_unique<RecorderLookAndFeel>(); juce::LookAndFeel::setDefaultLookAndFeel(lookAndFeel.get());

@@ -10,7 +10,7 @@
 namespace gocue::recorder
 {
 class ExportDialog;
-class MainComponent : public juce::Component, private juce::Timer, private juce::KeyListener
+class MainComponent : public juce::Component, private juce::Timer, private juce::KeyListener, private juce::FocusChangeListener
 {
 public:
     MainComponent(RecorderDocument&, RecorderSettings&);
@@ -44,6 +44,8 @@ private:
     };
     void timerCallback() override;
     bool keyPressed(const juce::KeyPress&, juce::Component*) override;
+    bool keyStateChanged(bool, juce::Component*) override;
+    void globalFocusChanged(juce::Component*) override;
     void refresh(); void setTimeline(bool); void recordClicked(); void stopClicked(); void latestClicked();
     void projectMenu(); void newProjectDialog(); void chooseOpen(); void saveProject(); void saveTo(const juce::File&);
     void beforeSwitch(std::function<void()>); void showSettings(); void persistSettings(); void continueClose();
@@ -71,6 +73,8 @@ private:
     juce::int64 remainingBytes = -1;
     std::uint64_t spaceGeneration = 0;
     std::uint32_t lastUi = 0, lastSpace = 0;
+    juce::KeyPress heldShortcut;
+    juce::Component::SafePointer<juce::Component> shortcutFocus;
     std::int64_t lastStopButtonQpc = 0;
     juce::String banner;
     juce::TextButton aboutButton, updateButton, retryButton;

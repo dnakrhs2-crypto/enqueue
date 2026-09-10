@@ -109,11 +109,12 @@ void RecordView::resized()
     projectButton.setBounds(top.removeFromLeft(88).reduced(2)); exportButton.setBounds(top.removeFromRight(105).reduced(2)); settingsButton.setBounds(top.removeFromRight(70).reduced(2));
     dubButton.setBounds(top.removeFromRight(58).reduced(2)); normalButton.setBounds(top.removeFromRight(58).reduced(2)); timelineTab.setBounds(top.removeFromRight(94).reduced(2)); recordTab.setBounds(top.removeFromRight(66).reduced(2)); projectName.setBounds(top.reduced(6, 0));
     statusLabel.setBounds(a.removeFromTop(28)); errorLabel.setBounds(a.removeFromTop(32)); a.removeFromTop(6);
-    const int cameraHeight = juce::jlimit(140, (a.getWidth() - 16) * 9 / 32 + 44, a.getHeight() - (timeline ? 206 : 228));
+    const int cameraHeight = timeline ? juce::jlimit(120, 220, a.getHeight() / 3)
+        : juce::jlimit(140, (a.getWidth() - 16) * 9 / 32 + 44, a.getHeight() - 228);
     auto cameraArea = a.removeFromTop(cameraHeight); auto l = cameraArea.removeFromLeft((cameraArea.getWidth() - 12) / 2); cameraArea.removeFromLeft(12); cameras[0].setBounds(l); cameras[1].setBounds(cameraArea);
     a.removeFromTop(8); auto controls = a.removeFromTop(38);
     startButton.setBounds(controls.removeFromLeft(128).reduced(2)); stopButton.setBounds(controls.removeFromLeft(76).reduced(2)); markerButton.setBounds(controls.removeFromLeft(120).reduced(2)); latestButton.setBounds(controls.removeFromLeft(178).reduced(2));
-    a.removeFromTop(8); lowerBounds = a;
+    a.removeFromTop(8); lowerBounds = a.withTrimmedBottom(18);
     noMicrophones.setBounds(a.removeFromBottom(25)); microphoneViewport.setBounds(a);
     strips.setSize(juce::jmax(a.getWidth() - 2, int(stripCount) * 176), 132);
     for (unsigned i = 0; i < 8; ++i) microphones[i].setBounds(int(i) * 176, 0, 172, 132);

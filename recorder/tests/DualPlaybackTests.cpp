@@ -190,7 +190,10 @@ int runDualPlaybackTests()
         root.update({}, document.getProject(), {}, {}, {}, 0, 0, true);
         root.setCamera(0, longName, juce::String::fromUTF8("영상 없음"), false);
         root.setCamera(1, longName, juce::String::fromUTF8("영상 없음"), false);
-        root.setSize(960, 640); timeline.setBounds(root.timelineBounds()); timeline.refresh(false, 120000000, {}); timeline.reveal(120000000);
+        root.setSize(960, 640); timeline.setBounds(root.timelineBounds()); timeline.refresh(false, 120000000, {});
+        // Minimal reveal keeps the requested sample near the right edge. Leave
+        // enough visible room for both trial ghost positions used below.
+        timeline.reveal(120144000);
         for (const auto& asset : document.getProject().media->assets) if (asset.kind == AssetKind::mic)
         {
             PeakSnapshot peaks; peaks.sampleRate = 48000; peaks.channels = 1; peaks.samples = std::uint64_t(asset.logicalLength); peaks.samplesPerBin = 16384; peaks.complete = true;

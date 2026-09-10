@@ -2,6 +2,7 @@
 #include "model/SafeFileWrite.h"
 #include <algorithm>
 #include <charconv>
+#include <cstring>
 #include <limits>
 #include <set>
 
@@ -33,6 +34,8 @@ juce::String encode(const UserSettings& s)
     p.setValue("calibrationPhysicalInputs", juce::JSON::toString(calibrationInputs, true));
     juce::Array<juce::var> recent; for (const auto& path : s.recentProjects) recent.add(path);
     p.setValue("recentProjects", juce::JSON::toString(recent, true)); p.setValue("windowState", s.windowState);
+    for (std::size_t i = 0; i < RecorderShortcuts::count; ++i)
+        p.setValue(RecorderShortcuts::field(RecorderCommand(i)), s.shortcuts.keys[i]);
     return p.createXml("RECORDER_SETTINGS")->toString();
 }
 juce::Result decode(const juce::String& text, UserSettings& out)
@@ -76,6 +79,8 @@ juce::Result decode(const juce::String& text, UserSettings& out)
     s.output.mono = boolean("outputMono", false); s.output.left = integer("outputLeft", -1); s.output.right = integer("outputRight", -1); s.output.monoChannel = integer("outputMonoChannel", -1);
     s.calibration.inputOffsetSamples = number("inputOffsetSamples", 0); s.calibration.outputOffsetSamples = number("outputOffsetSamples", 0);
     s.calibration.calibrationDate = p.getValue("calibrationDate"); s.calibration.calibrationIdentity = p.getValue("calibrationIdentity"); s.calibration.asioDeviceId = p.getValue("calibrationAsioDeviceId");
+    for (std::size_t i = 0; i < RecorderShortcuts::count; ++i)
+        s.shortcuts.keys[i] = p.getValue(RecorderShortcuts::field(RecorderCommand(i)), s.shortcuts.keys[i]);
     s.windowState = p.getValue("windowState"); const auto valid = s.validate(); if (valid.wasOk()) out = std::move(s); return valid;
     }
     catch (const std::exception& e) { return juce::Result::fail(juce::String::fromUTF8(e.what())); }
@@ -87,8 +92,39 @@ juce::Result OutputMapping::validate() const
     if (!mono && ((left == -1) != (right == -1) || (left >= 0 && left == right))) return juce::Result::fail(ko("재생 출력 왼쪽과 오른쪽은 서로 다른 채널을 선택하세요."));
     return juce::Result::ok();
 }
+juce::String RecorderShortcuts::name(RecorderCommand c)
+{
+    const char* names[] {"녹화 시작", "녹화 정지", "재생 / 정지", "스플릿", "마커 추가"};
+    return ko(names[std::size_t(c)]);
+}
+const char* RecorderShortcuts::field(RecorderCommand c)
+{
+    const char* fields[] {"shortcutRecordStart", "shortcutRecordStop", "shortcutPlayStop", "shortcutSplit", "shortcutMarker"};
+    return fields[std::size_t(c)];
+}
+juce::Result RecorderShortcuts::validate() const
+{
+    std::set<juce::String> seen;
+    for (std::size_t i = 0; i < count; ++i)
+    {
+        auto value = keys[i].trim().toLowerCase();
+        if (value.isEmpty() || value.length() > 64) return juce::Result::fail(name(RecorderCommand(i)) + ko(" 키를 지정하세요."));
+        auto base = value;
+        for (const auto* modifier : {"ctrl + ", "shift + ", "alt + "}) if (base.startsWith(modifier)) base = base.substring(int(std::strlen(modifier)));
+        const bool functionKey = base == "f" + juce::String(base.substring(1).getIntValue()) && base.substring(1).getIntValue() >= 1 && base.substring(1).getIntValue() <= 35;
+        const bool named = juce::StringArray{"spacebar", "return", "escape", "backspace", "delete", "tab", "insert", "home", "end", "page up", "page down", "cursor left", "cursor right", "cursor up", "cursor down", "play", "stop", "fast forward", "rewind"}.contains(base);
+        const bool printable = base.length() == 1 && base[0] >= 33 && base[0] <= 126;
+        const bool extended = base.startsWith("numpad ") && juce::StringArray{"0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "+", "-", "*", "/", ".", "=", "separator", "delete"}.contains(base.substring(7));
+        if (!functionKey && !named && !printable && !extended) return juce::Result::fail(ko("키 입력 버튼으로 단축키를 지정하세요."));
+        if (base == "escape" || base == "tab" || base == "return" || value == "delete" || value == "ctrl + z" || value == "ctrl + shift + z" || value == "alt + f4")
+            return juce::Result::fail(ko("취소·탐색·편집에 사용 중인 키입니다: ") + keys[i]);
+        if (!seen.insert(value.removeCharacters(" ")).second) return juce::Result::fail(ko("다른 동작과 단축키가 겹칩니다: ") + keys[i]);
+    }
+    return juce::Result::ok();
+}
 juce::Result UserSettings::validate() const
 {
+    const auto shortcutResult = shortcuts.validate(); if (shortcutResult.failed()) return shortcutResult;
     const auto mapping = output.validate(); if (mapping.failed()) return mapping;
     if (bufferSize <= 0 || preferredSampleRate == 0 || physicalInputs.size() > 8) return juce::Result::fail(ko("오디오 장치 설정이 잘못되었습니다."));
     std::set<int> seen; for (const int input : physicalInputs) if (input < -1 || input > 255 || (input >= 0 && !seen.insert(input).second)) return juce::Result::fail(ko("물리 입력이 중복되었거나 잘못되었습니다."));
