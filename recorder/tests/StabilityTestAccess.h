@@ -51,6 +51,27 @@ struct StabilityTestAccess
         if (mapped.failed()) throw std::runtime_error(mapped.getErrorMessage().toStdString());
         session.device = audio.deviceInfo();
     }
+    // Exercise the real async session preparation, including available-range and
+    // decoded-length clipping. Only immutable media indexes and audio are synthetic.
+    static std::vector<PlaybackVideoClip> prepareVideos(RecorderSession& session,
+        const std::vector<std::shared_ptr<const VideoIndex>>& sources)
+    {
+        const auto& p = session.document.getProject();
+        if (sources.size() != p.media->assets.size()) throw std::runtime_error("Video fixture source count");
+        for (std::size_t i = 0; i < sources.size(); ++i)
+        {
+            const auto& asset = p.media->assets[i];
+            session.videoIndexes[p.projectId + "/" + asset.assetId + "/" + juce::String(asset.mediaGeneration)] = sources[i];
+        }
+        openAudio(session);
+        session.preparePlayback();
+        if (!session.planWork.valid() || session.planWork.wait_for(std::chrono::seconds(10)) != std::future_status::ready)
+            throw std::runtime_error("Session video preparation did not complete");
+        auto plan = session.collectPreparedPlan();
+        if (!plan) throw std::runtime_error(session.error.toStdString());
+        if (plan->error.isNotEmpty()) throw std::runtime_error(plan->error.toStdString());
+        return std::move(plan->videos);
+    }
     static juce::Component& rows(TimelineView& view) { return view.rows; }
     static float x(TimelineView& view, Sample at) { return float(view.xFor(at)); }
     static Sample sample(TimelineView& view, double x) { return view.sampleFor(x); }

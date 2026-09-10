@@ -5,6 +5,7 @@
 #include "ui/RecordView.h"
 #include "ui/ShortcutSettingsPanel.h"
 #include "CutSeamChecks.h"
+#include "PlaybackGapChecks.h"
 #include <limits>
 
 namespace gocue::recorder
@@ -256,6 +257,20 @@ int runTimelineUxTests()
             std::cout << "SNAP legacy gapSamples=" << gap << " black=" << black << " missing=" << missing << '\n';
         }
     });
+    suite.test("session recovered tail gap agrees with final export", []
+    { recorder_playback_gap::sessionGapCheck(recorder_playback_gap::Missing::tail); });
+    suite.test("session incoming leading source gap agrees with final export", []
+    { recorder_playback_gap::sessionGapCheck(recorder_playback_gap::Missing::head); });
+    suite.test("session internal one-sample camera gap agrees with final export", []
+    { recorder_playback_gap::sessionGapCheck(recorder_playback_gap::Missing::interior); });
+    suite.test("session joined complete clips keep zero black or empty frames", []
+    { recorder_playback_gap::sessionGapCheck(recorder_playback_gap::Missing::none); });
+    suite.test("session trimmed clips retain legacy subframe hold and final source coordinate", []
+    { recorder_playback_gap::sessionGapCheck(recorder_playback_gap::Missing::none, 799, 800); });
+    suite.test("engine explicit gap split preserves revoked original tail boundary", []
+    { recorder_playback_gap::fragmentGapSplitCheck(true); });
+    suite.test("engine explicit gap split preserves revoked original head boundary", []
+    { recorder_playback_gap::fragmentGapSplitCheck(false); });
     suite.test("subframe asset gaps and different tracks remain explicit gaps", []
     {
         using namespace recorder_cut_seam;

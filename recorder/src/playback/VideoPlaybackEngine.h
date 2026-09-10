@@ -35,6 +35,9 @@ struct PlaybackVideoClip
     RenderClip mapping;
     unsigned camera = 0; // cam1=0, cam2=1
     std::shared_ptr<const VideoIndex> source;
+    // Whole clips reach both original edit boundaries. Availability/decoded-length
+    // clipping must revoke the corresponding boundary before handing off a fragment.
+    bool beginsAtClipStart = true, endsAtClipEnd = true;
 };
 struct PlaybackVideoFrame
 {
