@@ -145,6 +145,7 @@ juce::Result RecorderDocument::adoptProvisionalTimebase(std::uint32_t Fs)
     if (Fs == project->Fs) return juce::Result::ok();
     auto next = *project; next.Fs = Fs; const auto valid = next.validate(); if (valid.failed()) return juce::Result::fail(valid.getErrorMessage());
     const auto replaced = replaceProject(std::move(next)); if (replaced.failed()) return replaced;
+    enqueueRegistry(); // an attached edit journal must see the time base before any later edit payload
     notify(); return juce::Result::ok(); // not dirty, history kept: undo snapshots hold EditState only, never Fs
 }
 EditSnapshot RecorderDocument::editSnapshot() const { return {static_cast<const EditState&>(*project), selection}; }

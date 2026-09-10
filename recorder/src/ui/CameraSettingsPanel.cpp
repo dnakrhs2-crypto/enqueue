@@ -11,6 +11,7 @@ CameraSettingsPanel::CameraSettingsPanel(const UserSettings& s, const RecorderPr
         addAndMakeVisible(enabled[i]); addAndMakeVisible(devices[i]); addAndMakeVisible(modes[i]); addAndMakeVisible(modeLabels[i]); addAndMakeVisible(ids[i]);
         modeLabels[i].setText(ko("입력 모드"), juce::dontSendNotification); devices[i].setTextWhenNothingSelected(ko("장치 선택")); modes[i].setTextWhenNothingSelected(ko("1080p 입력 모드 선택"));
         devices[i].onChange = [this, i] { selectionChanged(i, false); }; enabled[i].onClick = [this, i] { selectionChanged(i, true); };
+        modes[i].onChange = [this] { refreshCalibration(); };
     }
     for (auto* l : {&fps, &status, &calibration, &nextTake}) { addAndMakeVisible(l); l->setFont(juce::Font(juce::FontOptions(17))); }
     nextTake.setText(ko("캠2 해제는 다음 테이크부터 적용됩니다."), juce::dontSendNotification);

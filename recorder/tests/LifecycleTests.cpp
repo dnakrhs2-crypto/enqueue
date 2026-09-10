@@ -105,6 +105,8 @@ int runLifecycleTests()
         require(adoptDeviceSampleRate(document, 44100) && document.getProject().Fs == 44100, "Provisional project adopts the device rate");
         require(document.isDirty() == wasDirty && document.getHistory().undoDepth() == historyBefore, "Adoption is derived state: no unsaved edit, history kept");
         require(!adoptDeviceSampleRate(document, 44100), "Equal rates -> nothing to do");
+        Marker marker; marker.sample = 4410; require(document.addMarker(marker).wasOk(), "Marker on an empty project");
+        require(!adoptDeviceSampleRate(document, 48000) && document.getProject().Fs == 44100, "Markers/history pin the time base: no silent adoption");
         UserSettings s; s.asioDeviceId = "X"; s.physicalInputs = {0}; s.output.left = 0; s.output.right = 1;
         RecorderAudioEngine::DeviceInfo info; info.name = "X"; info.sampleRate = 44100; info.physicalInputs = 2; info.physicalOutputs = 2;
         RecorderProject fixed; auto media = std::make_shared<MediaRegistry>(); media->assets.push_back(MediaAsset{}); fixed.media = media;

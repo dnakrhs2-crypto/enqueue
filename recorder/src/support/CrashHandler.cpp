@@ -52,13 +52,10 @@ juce::File CrashHandler::latestUnseenReport()
 {
     juce::File newest;
     for (const auto& f : directory().findChildFiles(juce::File::findFiles, false, "*.txt"))
-        if (!f.getFileName().endsWith(".seen.txt") && (newest == juce::File() || f.getLastModificationTime() > newest.getLastModificationTime())) newest = f;
+        if (!f.getFileName().endsWith(".seen.txt") && !f.getSiblingFile(f.getFileName() + ".seen").existsAsFile()
+            && (newest == juce::File() || f.getLastModificationTime() > newest.getLastModificationTime())) newest = f;
     return newest;
 }
-juce::File CrashHandler::markSeen(const juce::File& report)
-{
-    if (!report.existsAsFile()) return report;
-    const auto seen = report.getSiblingFile(report.getFileNameWithoutExtension() + ".seen.txt");
-    return report.moveFileTo(seen) ? seen : report;
-}
+void CrashHandler::markSeen(const juce::File& report)
+{ if (report.existsAsFile()) report.getSiblingFile(report.getFileName() + ".seen").create(); }
 }

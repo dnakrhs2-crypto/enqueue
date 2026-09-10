@@ -113,6 +113,22 @@ int runTakeControllerTests()
         require(TakeController::frameCount(0,48000,{60000,1001}) == 0, "Empty interval has zero frames");
         recorder_test::rejects([] { TakeController::frameCount(-1,48000,{60,1}); });
     });
+    suite.test("First take persists the project rate it fixes before TakeStarted, so a crash mid-take still recovers", []
+    {
+        Fixture f; f.config.projectDirectory.createDirectory(); const auto file = f.config.projectDirectory.getChildFile("project.recorder");
+        { RecorderDocument seed; seed.newProject("Adopt", 48000, {60,1}); ok(RecorderSerializer::writeCheckpoint(file, *seed.snapshot())); }
+        ok(f.document.openCheckpoint(file)); require(f.document.getProject().Fs == 48000 && !f.document.isDirty(), "Saved provisional project at 48000");
+        f.arm();
+        RecorderProject onDisk; ok(RecorderSerializer::readCheckpoint(file, onDisk));
+        require(onDisk.Fs == 8000 && f.document.getProject().Fs == 8000 && !f.document.isDirty(), "Checkpoint on disk carries the fixed rate before the take starts");
+        const auto origin = f.position + 81; ok(f.controller.start(origin)); until([&] { return f.audio.startCommitted(); });
+        JournalReplay replay; ok(RecordingJournal::replay(f.config.projectDirectory.getChildFile("journal"), replay));
+        require(!replay.records.empty() && replay.records.front().kind == JournalKind::TakeStarted && unsigned(int(replay.records.front().payload["pcm"]["sampleRate"])) == onDisk.Fs, "Journal rate matches the persisted project");
+        while (f.audio.startSample() < 0) { f.feed(); f.controller.tick(); }
+        require(f.controller.state() == TakeController::State::recording, "Recording after the early checkpoint");
+        ok(f.controller.stop(origin + 401)); while (f.audio.stopSample() < 0) { f.feed(); f.controller.tick(); }
+        f.complete(); require(f.controller.state() == TakeController::State::done, "Take completes after the early checkpoint");
+    });
     suite.test("Lifecycle / immediate placement independent of finalizer / sparse mic lane / journal order", []
     {
         Fixture f; const auto n0 = f.begin();

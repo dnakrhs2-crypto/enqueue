@@ -759,6 +759,15 @@ juce::Result TakeController::prepare(Config config)
     catch (const std::exception& e) { return juce::Result::fail(e.what()); }
     const auto timebase = s.document.setTimebase(device.sampleRate, {unsigned(config.projectFps), 1});
     if (timebase.failed()) return timebase;
+    if (s.document.getProject().media->assets.empty())
+    {
+        // The first take fixes the project rate: persist it before TakeStarted so a crash during this take still recovers
+        // (RecoveryScanner compares the journal rate with the checkpoint on disk). A failed save does not start recording.
+        const auto file = config.projectDirectory.getChildFile("project.recorder"); const auto snapshot = s.document.snapshot();
+        const auto saved = RecorderSerializer::writeCheckpoint(file, *snapshot); if (saved.wasOk()) flushExisting(file);
+        s.document.checkpointFinished(snapshot, file, saved);
+        if (saved.failed()) return juce::Result::fail(juce::String::fromUTF8("프로젝트를 저장할 수 없어 녹화를 시작하지 않습니다. ") + saved.getErrorMessage());
+    }
     s.config = std::move(config); s.failure.clear(); s.warning.clear(); s.partial = false; s.saving = false; s.preparedAudio = false;
     s.ownerProject = s.document.getProject().projectId; ++s.lifecycleGeneration;
     s.audioReport = juce::var(); s.assets.clear(); s.take = Take{}; s.logicalMics.clear(); s.logicalIndices.clear();

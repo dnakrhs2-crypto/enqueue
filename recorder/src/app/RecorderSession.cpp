@@ -22,7 +22,9 @@ RenderClip mappingFor(const Clip& c, const MediaAsset& a)
 bool adoptDeviceSampleRate(RecorderDocument& document, unsigned deviceFs)
 {
     const auto& p = document.getProject();
-    if (!deviceFs || !p.media->assets.empty() || p.Fs == deviceFs) return false;
+    // Markers and undo/redo entries are sample coordinates at the current rate: such a project keeps its rate and reports the
+    // mismatch instead (a marker at 480000 would silently move from 10.0 s to 10.9 s).
+    if (!deviceFs || !p.media->assets.empty() || !p.markers.empty() || document.getHistory().undoDepth() || document.getHistory().redoDepth() || p.Fs == deviceFs) return false;
     return document.adoptProvisionalTimebase(deviceFs).wasOk();
 }
 juce::String rateMismatchText(unsigned projectFs, unsigned deviceFs)
