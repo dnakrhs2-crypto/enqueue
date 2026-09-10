@@ -1,5 +1,6 @@
 #include "TestSupport.h"
 #include "record/TakeController.h"
+#include "media/MediaIndex.h"
 #include <chrono>
 #include <thread>
 
@@ -25,6 +26,8 @@ struct DoubleState
     std::atomic<bool> finishing{false}, release{true}, failed{false};
     std::atomic<std::int64_t> available{0};
     std::atomic<unsigned> audioPackets{0}, videoOffers{0};
+    juce::var muxReport;
+    std::function<void(const juce::File&)> afterFinish;
 };
 class VideoDouble final : public ITakeVideoStream
 {
@@ -50,11 +53,17 @@ public:
     {
         state->finishing = true; until([&] { return state->release.load(); });
         if (!output.existsAsFile()) require(output.getSiblingFile("cam1.recording.mp4").moveFileTo(output), "Double final rename");
+        if (state->afterFinish) state->afterFinish(output);
     }
     bool failed() const noexcept override { return state->failed.load(); }
     std::int64_t availableSamples() const noexcept override { return state->available.load(); }
     bool thumbnailReady() const noexcept override { return false; }
-    juce::var report() const override { auto v = jsonObject(); jsonSet(v, "source", "lifecycle test double; not encoded media"); return v; }
+    juce::var report() const override
+    {
+        auto v = jsonObject(); jsonSet(v, "source", "lifecycle test double; not encoded media");
+        if (state->muxReport.isObject()) jsonSet(v, "mux", state->muxReport);
+        return v;
+    }
 private:
     std::shared_ptr<DoubleState> state;
     juce::File output;
@@ -110,6 +119,56 @@ struct Fixture
         until([&] { controller.tick(); return controller.state() == TakeController::State::done || controller.state() == TakeController::State::partialFailure; });
     }
 };
+void requireRanges(const std::vector<SampleRange>& ranges, Sample available)
+{
+    require(ranges.size() == (available ? 1u : 0u), "Unexpected available range count");
+    if (available) require(ranges[0].start == 0 && ranges[0].length == available, "Available range exceeds confirmed media");
+}
+void verifyFinalizedAssets(Fixture& f, Sample audioSamples = -1, Sample videoSamples = -1)
+{
+    const auto snapshot = f.document.snapshot(); const auto& project = *snapshot;
+    const auto& take = project.media->takes.back();
+    const auto* camera = project.media->findAsset(take.cam1AssetId);
+    require(camera && camera->relativePath.endsWith("/cam1.mp4") && camera->mediaGeneration >= 1, "Final camera path/generation was not published");
+    require(f.config.projectDirectory.getChildFile(camera->relativePath).existsAsFile(), "Published final camera does not exist");
+    require(!f.config.projectDirectory.getChildFile(camera->relativePath).getSiblingFile("cam1.recording.mp4").exists(), "Temporary camera survived rename");
+    requireRanges(camera->availableRanges, videoSamples < 0 ? take.logicalLength : videoSamples);
+    const auto wavReport = f.audio.telemetry()["wav"];
+    if (audioSamples < 0) audioSamples = std::min({take.logicalLength, Sample(wavReport["writtenSamplesPerMic"]), Sample(wavReport["mediaDurableSamplesPerMic"])});
+    for (const auto& id : take.microphoneAssetIds)
+    {
+        const auto* mic = project.media->findAsset(id);
+        require(mic && mic->mediaGeneration >= 1 && mic->logicalLength == take.logicalLength, "Final WAV identity/generation/length missing");
+        requireRanges(mic->availableRanges, audioSamples);
+        require(mic->gaps.size() == (audioSamples < take.logicalLength ? 1u : 0u), "WAV loss was not represented as a gap");
+        if (!mic->gaps.empty()) require(mic->gaps[0].start == audioSamples && mic->gaps[0].length == take.logicalLength - audioSamples, "WAV gap does not match durable tail");
+        const auto indexed = MediaIndex::recordedAudio(*mic, f.config.projectDirectory, project.Fs, newId());
+        Sample indexedSamples = 0;
+        for (const auto& chunk : indexed->chunks) { require(chunk.file.existsAsFile(), "Indexed WAV chunk missing"); indexedSamples += chunk.validSamples; }
+        require(indexed->length == take.logicalLength && indexedSamples == audioSamples, "WAV index overstates actual media");
+    }
+    const auto file = f.config.projectDirectory.getChildFile("project.recorder");
+    ok(f.document.saveCheckpoint(file)); RecorderProject loaded; ok(RecorderSerializer::readCheckpoint(file, loaded));
+    require(loaded.validate().wasOk() && loaded.media->findTake(take.takeId)->state == take.state, "Saved final take state changed");
+    require(RecorderSerializer::fingerprint(RecorderSerializer::toJson(loaded)) == RecorderSerializer::fingerprint(RecorderSerializer::toJson(project)), "Saved metadata differs from confirmed document");
+    require(loaded.media->findAsset(take.cam1AssetId)->relativePath == camera->relativePath, "Reloaded project retained the recording MP4 path");
+    for (const auto& id : take.microphoneAssetIds)
+    {
+        const auto* mic = loaded.media->findAsset(id); requireRanges(mic->availableRanges, audioSamples);
+        require(MediaIndex::recordedAudio(*mic, file.getParentDirectory(), loaded.Fs, newId())->length == take.logicalLength, "Saved WAV metadata cannot be indexed");
+    }
+}
+struct FailWavTailFlush final : FileIoFaultAdapter
+{
+    unsigned channels = 1;
+    std::atomic<unsigned> failures{0};
+    juce::Result beforeIo(FileIoOperation op, const juce::File& file, std::uint64_t offset, std::size_t) override
+    {
+        if (file.hasFileExtension("wav") && op == FileIoOperation::flushData && offset > 44 + 8000 * channels * 3)
+        { ++failures; return juce::Result::fail("injected WAV tail flush failure"); }
+        return juce::Result::ok();
+    }
+};
 }
 int runTakeControllerTests()
 {
@@ -137,6 +196,7 @@ int runTakeControllerTests()
             require(!f.document.isRecordingStructureLocked() && !f.audio.shutdownBlocker()->load(), "Failed finalization retained locks");
             require(f.controller.shutdownComplete() && f.controller.error().contains("injected thread creation failure"), "Worker state/error lost");
             require(!f.document.getProject().media->takes.empty() && f.document.getProject().media->takes.back().state == TakeState::partial, "Partial take missing");
+            verifyFinalizedAssets(f);
         });
     suite.test("Thrown checkpoint worker exception is collected and releases the journal", []
     {
@@ -149,6 +209,57 @@ int runTakeControllerTests()
         require(f.controller.state() == TakeController::State::partialFailure && f.controller.error().contains("Take worker failed"), "future.get exception did not reach failure state");
         require(!f.document.isRecordingStructureLocked() && !f.audio.shutdownBlocker()->load() && f.controller.shutdownComplete(), "Thrown worker retained lifecycle resources");
         require(f.document.isDirty() && f.document.getError().isNotEmpty(), "Thrown checkpoint was treated as saved");
+        verifyFinalizedAssets(f);
+    });
+    for (bool stereo : {false, true})
+        suite.test(stereo ? "Stereo failed cleanup publishes the durable WAV prefix" : "Mono finalization publishes the durable WAV prefix", [stereo]
+        {
+            FailWavTailFlush fault; fault.channels = stereo ? 2 : 1;
+            Fixture f(1, stereo); f.config.faults = &fault;
+            const auto start = f.begin(); ok(f.controller.stop(start + 8401));
+            std::unique_ptr<FailTakeLaunch> injection;
+            if (stereo) injection = std::make_unique<FailTakeLaunch>("finalize");
+            while (f.audio.stopSample() < 0) { f.feed(); f.controller.tick(); } f.complete();
+            require(fault.failures > 0 && f.controller.state() == TakeController::State::partialFailure, "WAV flush fault was not exercised");
+            const auto report = f.audio.telemetry()["wav"];
+            require(Sample(report["writtenSamplesPerMic"]) == 8401 && Sample(report["mediaDurableSamplesPerMic"]) == 8000, "Fixture must distinguish written data from durable data");
+            verifyFinalizedAssets(f, 8000);
+        });
+    suite.test("Finalization limits WAV availability to the actual truncated chunk", []
+    {
+        Fixture f; bool truncated = false;
+        f.video->afterFinish = [&](const juce::File& camera)
+        {
+            juce::FileOutputStream wav(camera.getParentDirectory().getChildFile("audio/mic06/000001.wav"));
+            truncated = wav.openedOk() && wav.setPosition(44 + 97 * 3) && wav.truncate().wasOk();
+        };
+        const auto start = f.begin(); ok(f.controller.stop(start + 401));
+        while (f.audio.stopSample() < 0) { f.feed(); f.controller.tick(); } f.complete();
+        require(truncated && f.controller.state() == TakeController::State::partialFailure, "Truncated chunk did not make the take partial");
+        verifyFinalizedAssets(f, 97);
+    });
+    suite.test("Final camera availability requires completed media, not queued frames", []
+    {
+        for (bool finalized : {false, true})
+        {
+            Fixture f; f.video->muxReport = jsonObject();
+            jsonSet(f.video->muxReport, "finalized", finalized); jsonSet(f.video->muxReport, "completedFragments", 1);
+            jsonSet(f.video->muxReport, "videoPackets", 1);
+            const auto start = f.begin(); ok(f.controller.stop(start + 401));
+            while (f.audio.stopSample() < 0) { f.feed(); f.controller.tick(); } f.complete();
+            require(f.controller.state() == TakeController::State::partialFailure, "Unconfirmed camera tail remained available");
+            verifyFinalizedAssets(f, 401, finalized ? rescaleRound(1, 8000, 60) : 0);
+        }
+    });
+    suite.test("Missing WAV chunk becomes a full gap and an indexable silent source", []
+    {
+        Fixture f; bool removed = false;
+        f.video->afterFinish = [&](const juce::File& camera)
+        { removed = camera.getParentDirectory().getChildFile("audio/mic06/000001.wav").deleteFile(); };
+        const auto start = f.begin(); ok(f.controller.stop(start + 401));
+        while (f.audio.stopSample() < 0) { f.feed(); f.controller.tick(); } f.complete();
+        require(removed && f.controller.state() == TakeController::State::partialFailure, "Missing chunk was still published as available");
+        verifyFinalizedAssets(f, 0);
     });
     suite.test("Stereo sparse microphone asset, capture snapshot and take manifest", []
     {

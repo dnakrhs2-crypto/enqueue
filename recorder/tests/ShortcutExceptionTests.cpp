@@ -188,21 +188,38 @@ void focus(MainComponent& main, juce::Component& target)
     target.setEnabled(true); target.grabKeyboardFocus();
     until([&] { pump(); return juce::Component::getCurrentlyFocusedComponent() == &target && Access::listenerOn(main, &target); });
 }
-class ExceptionApplication final : public juce::JUCEApplication
+class ThrowingTimer final : public juce::Timer
 {
 public:
-    explicit ExceptionApplication(const juce::File& folder) : root(folder) {}
-    const juce::String getApplicationName() override { return "Recorder exception regression"; }
-    const juce::String getApplicationVersion() override { return "test"; }
-    void initialise(const juce::String&) override {}
-    void shutdown() override {}
-    void unhandledException(const std::exception* e, const juce::String& file, int line) override
-    { ++calls; CrashHandler::handleException(e, file, line, [this](const juce::File& report) { reports.push_back(report); }, root); }
     int calls = 0;
-    std::vector<juce::File> reports;
 private:
-    juce::File root;
+    void timerCallback() override
+    { stopTimer(); ++calls; throw std::runtime_error("injected unexpected timer exception"); }
 };
+}
+
+int runUnexpectedJuceExceptionTests(bool timer)
+{
+    using namespace shortcut_exception_tests;
+    recorder_test::Suite suite;
+    juce::ScopedJuceInitialiser_GUI gui;
+    bool continued = false;
+    suite.test(timer ? "Unexpected timer callback" : "Unexpected callAsync callback", [&]
+    {
+        if (timer)
+        {
+            ThrowingTimer callback; callback.startTimer(1);
+            until([&] { pump(); return callback.calls == 1; });
+        }
+        else
+        {
+            require(juce::MessageManager::callAsync([] { throw std::runtime_error("injected unexpected async exception"); }), "Queue injection");
+        }
+        require(juce::MessageManager::callAsync([&] { continued = true; }), "Queue continuation after injection");
+        until([&] { pump(); return continued; });
+    });
+    suite.test("Exception dispatch continued", [&] { require(continued, "Message loop did not continue"); });
+    return suite.result("unhandled-injection");
 }
 
 int runShortcutExceptionTests()
@@ -340,29 +357,53 @@ int runShortcutExceptionTests()
     });
     suite.test("JUCE message queue exceptions write reports and later callbacks continue", []
     {
-        Folder folder; ExceptionApplication app(folder.root); int later = 0;
+        Folder folder; std::vector<juce::File> reports; int later = 0;
+        recorder_test::ExpectedUnhandledExceptions expected(2, [&](const std::exception* e, const juce::String& file, int line)
+        { CrashHandler::handleException(e, file, line, [&](const juce::File& report) { reports.push_back(report); }, folder.root); });
         require(juce::MessageManager::callAsync([] { throw std::runtime_error("injected queued exception"); }), "Queue first callback");
         require(juce::MessageManager::callAsync([&] { ++later; }), "Queue continuation");
         require(juce::MessageManager::callAsync([] { throw 42; }), "Queue unknown exception");
         require(juce::MessageManager::callAsync([&] { ++later; }), "Queue final continuation");
         until([&] { pump(); return later == 2; });
-        require(app.calls == 2 && app.reports.size() == 2 && app.reports[0] != app.reports[1], "Exception reports lost/overwritten");
-        for (const auto& report : app.reports)
+        require(expected.calls() == 2 && reports.size() == 2 && reports[0] != reports[1], "Exception reports lost/overwritten");
+        for (const auto& report : reports)
         {
             require(report.existsAsFile() && report.getFileName().startsWith("Recorder-" + ProductIdentity::version()) && report.getFileName().endsWith("-exception.txt"), "Report filename/file missing");
             const auto text = report.loadFileAsString().replace("\r\n", "\n");
             require(text.contains("file:") && text.contains("juce_Messaging_windows.cpp") && text.contains("line:") && text.contains("stack:\n") && text.fromFirstOccurrenceOf("stack:\n", false, false).trim().isNotEmpty(), "Report source/line/backtrace missing");
         }
-        require(app.reports[0].loadFileAsString().contains("injected queued exception") && app.reports[1].loadFileAsString().contains("Unknown non-standard exception"), "Exception what() missing");
+        require(reports[0].loadFileAsString().contains("injected queued exception") && reports[1].loadFileAsString().contains("Unknown non-standard exception"), "Exception what() missing");
     });
+    for (const auto* injection : {"inject-unhandled-async", "inject-unhandled-timer"})
+        suite.test(injection, [injection]
+        {
+            juce::ChildProcess child;
+            require(child.start(juce::StringArray{juce::File::getSpecialLocation(juce::File::currentExecutableFile).getFullPathName(), "--suite", injection}), "Start exception injection subprocess");
+            require(child.waitForProcessToFinish(15000), "Exception injection subprocess timed out");
+            const auto output = child.readAllProcessOutput();
+            require(child.getExitCode() == 1, "Unhandled GUI exception did not fail the process");
+            require(output.contains("unhandled-injection: 1 passed, 1 failed") && output.contains("1 unexpected JUCE exceptions"), "GUI exception was not counted against its test and process");
+            require(output.contains("injected unexpected") && output.contains("PASS Exception dispatch continued"), "Wrong failure or callbacks did not continue");
+        });
     suite.test("Exception reporter handles unwritable destination and notification reentry", []
     {
         Folder folder; require(folder.root.createDirectory().wasOk(), "Reporter fixture root");
         const auto blocked = folder.root.getChildFile("file-not-directory"); require(blocked.replaceWithText("fixture"), "Blocked destination fixture");
-        bool notified = false;
+        const auto nested = folder.root.getChildFile("nested-reports");
+        int notifications = 0, nestedNotifications = 0;
+        juce::File returned = blocked;
         CrashHandler::handleException(nullptr, "source.cpp", 123, [&](const juce::File& report)
-        { notified = true; require(report == juce::File(), "Failed report claimed success"); CrashHandler::handleException(nullptr, "nested.cpp", 1, {}); }, blocked);
-        require(notified && CrashHandler::directory() == ProductIdentity::settingsDirectory().getChildFile("crash"), "Reporter failure or production directory wrong");
+        {
+            ++notifications; returned = report;
+            CrashHandler::handleException(nullptr, "nested.cpp", 1, [&](const juce::File&) { ++nestedNotifications; }, nested);
+        }, blocked);
+        require(notifications == 1 && returned == juce::File(), "Failed report notification/path wrong");
+        require(nestedNotifications == 0 && !nested.exists(), "Reentrant reporter wrote a file or invoked notification");
+        juce::File laterReport;
+        CrashHandler::handleException(nullptr, "later.cpp", 2, [&](const juce::File& report)
+        { ++nestedNotifications; laterReport = report; }, nested);
+        require(nestedNotifications == 1 && laterReport.existsAsFile() && laterReport.getParentDirectory() == nested, "Reporter reentry guard did not reset");
+        require(CrashHandler::directory() == ProductIdentity::settingsDirectory().getChildFile("crash"), "Production report directory wrong");
     });
     return suite.result("shortcut-exceptions");
 }

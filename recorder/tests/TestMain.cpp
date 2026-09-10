@@ -14,6 +14,40 @@
 // Keep the real window implementations in this one test translation unit.
 #include "ShortcutExceptionTests.cpp"
 
+namespace recorder_test
+{
+thread_local ExpectedUnhandledExceptions* ExpectedUnhandledExceptions::active = nullptr;
+ExpectedUnhandledExceptions::ExpectedUnhandledExceptions(unsigned count, Observer observe)
+    : previous(active), expected(count), observer(std::move(observe)) { active = this; }
+ExpectedUnhandledExceptions::~ExpectedUnhandledExceptions()
+{
+    active = previous;
+    if (observed != expected)
+    {
+        ++unexpectedUnhandledExceptions;
+        std::cerr << "Expected JUCE exception count mismatch: " << observed << " of " << expected << '\n';
+    }
+}
+void recordUnhandledException(const std::exception* error, const juce::String& file, int line) noexcept
+{
+    try
+    {
+        auto* expected = ExpectedUnhandledExceptions::active;
+        if (expected && expected->observed < expected->expected)
+        {
+            ++expected->observed;
+            if (expected->observer) expected->observer(error, file, line);
+            return;
+        }
+        ++unexpectedUnhandledExceptions;
+        std::cerr << "Unhandled JUCE exception in " << (currentTest ? currentTest : "between tests")
+                  << ": " << (error ? error->what() : "unknown non-standard exception")
+                  << " (" << file << ':' << line << ")\n";
+    }
+    catch (...) { ++unexpectedUnhandledExceptions; }
+}
+}
+
 int runCaptureContractTests();   // round 01: capture / decode / preview contracts (no hardware)
 int runCaptureReviewTests();     // round 02b: recovery, pacing and MF JPEG colour fixtures
 int runCfrSchedulerTests();      // round 02: CFR frame selection / counters
@@ -68,6 +102,16 @@ int runShortcutExceptionTests();
 
 namespace
 {
+class TestApplication final : public juce::JUCEApplication
+{
+public:
+    const juce::String getApplicationName() override { return "RecorderTests"; }
+    const juce::String getApplicationVersion() override { return "test"; }
+    void initialise(const juce::String&) override {}
+    void shutdown() override {}
+    void unhandledException(const std::exception* error, const juce::String& file, int line) override
+    { recorder_test::recordUnhandledException(error, file, line); }
+};
 struct Suite
 {
     const char* name;
@@ -135,6 +179,7 @@ int usage()
 
 int main(int argc, char** argv)
 {
+    std::cout << std::unitbuf;
     try
     {
         if (argc == 2 && std::strcmp(argv[1], "--list") == 0)
@@ -157,20 +202,37 @@ int main(int argc, char** argv)
             else return usage();
         }
         if ((hasSeed || hasIterations) && selected != "all" && selected != "edit-property") return usage();
-        if (selected == "all")
+        // The application outlives every suite's GUI shutdown too. Keep GUI
+        // initialization local so non-GUI suites retain their existing lifecycle.
+        TestApplication application;
+        int result = 0;
         {
-            int failed = 0;
-            for (const auto& s : suites) failed |= s.run();
-            std::cout << "RecorderTests: all suites " << (failed ? "FAILED" : "passed") << '\n';
-            return failed ? 1 : 0;
+            const auto runSelected = [&]() -> int
+            {
+                // Deliberately failing subprocess fixtures are excluded from --list/all.
+                if (selected == "inject-unhandled-async") return runUnexpectedJuceExceptionTests(false);
+                if (selected == "inject-unhandled-timer") return runUnexpectedJuceExceptionTests(true);
+                if (selected == "all")
+                {
+                    int failed = 0;
+                    for (const auto& s : suites) failed |= s.run();
+                    std::cout << "RecorderTests: all suites " << (recorder_test::processResult(failed) ? "FAILED" : "passed") << '\n';
+                    return failed;
+                }
+                for (const auto& s : suites) if (selected == s.name) return s.run();
+                std::cerr << "Unknown suite: " << selected << '\n';
+                return usage();
+            };
+            result = runSelected();
         }
-        for (const auto& s : suites) if (selected == s.name) return s.run();
-        std::cerr << "Unknown suite: " << selected << '\n';
-        return usage();
+        if (recorder_test::unexpectedUnhandledExceptions.load())
+            std::cerr << "RecorderTests: " << recorder_test::unexpectedUnhandledExceptions.load() << " unexpected JUCE exceptions\n";
+        return result == 2 ? 2 : recorder_test::processResult(result);
     }
     catch (const std::exception& e)
     {
         std::cerr << "Unhandled test exception: " << e.what() << '\n';
         return 1;
     }
+    catch (...) { std::cerr << "Unhandled non-standard test exception\n"; return 1; }
 }

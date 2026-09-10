@@ -452,7 +452,8 @@ struct TakeController::Impl
         cleanupFailedWork(); document.setRecordingStructureLock(false);
         if (ownerProject == document.getProject().projectId)
         {
-            if (document.getProject().media->findTake(take.takeId)) document.updateTakeState(take.takeId, TakeState::partial);
+            const auto published = finalizeAssets();
+            if (published.failed()) failure += "; " + published.getErrorMessage();
             if (saving && savedSnapshot) document.checkpointFinished(savedSnapshot, config.projectDirectory.getChildFile("project.recorder"), result);
         }
         saving = false; transition(State::partialFailure);
@@ -680,6 +681,87 @@ struct TakeController::Impl
             asset.chunks.push_back({WavTrackWriter::chunkPath(config.takeId, mic, std::uint64_t(first / chunk) + 1), {first, std::min(chunk, available - first)}});
         asset.relativePath = asset.chunks.empty() ? WavTrackWriter::chunkPath(config.takeId, mic, 1) : juce::String();
     }
+    void confirmAudioAsset(MediaAsset& asset, unsigned mic, std::int64_t durable)
+    {
+        setChunks(asset, mic, durable);
+        auto candidates = std::move(asset.chunks);
+        asset.chunks.clear(); asset.availableRanges.clear(); asset.gaps.clear(); asset.logicalLength = length;
+        std::int64_t end = 0;
+        const auto align = unsigned(asset.originalFormat.channels) * 3;
+        for (auto chunk : candidates)
+        {
+            const auto file = config.projectDirectory.getChildFile(chunk.relativePath);
+            juce::FileInputStream input(file); std::uint8_t header[44]{};
+            // A watermark alone cannot prove a missing/truncated chunk or its header.
+            if (!input.openedOk() || input.read(header, 44) != 44 || file.getSize() < 44
+                || std::memcmp(header, "RIFF", 4) || std::memcmp(header + 8, "WAVEfmt ", 8)
+                || storageEncoding::get<std::uint32_t>(header + 16) != 16
+                || storageEncoding::get<std::uint16_t>(header + 20) != 1
+                || storageEncoding::get<std::uint16_t>(header + 22) != asset.originalFormat.channels
+                || storageEncoding::get<std::uint32_t>(header + 24) != deviceSnapshot.sampleRate
+                || storageEncoding::get<std::uint32_t>(header + 28) != deviceSnapshot.sampleRate * align
+                || storageEncoding::get<std::uint16_t>(header + 32) != align
+                || storageEncoding::get<std::uint16_t>(header + 34) != 24 || std::memcmp(header + 36, "data", 4)) continue;
+            chunk.sourceRange.length = std::min({chunk.sourceRange.length, std::int64_t((file.getSize() - 44) / align),
+                std::int64_t(storageEncoding::get<std::uint32_t>(header + 40) / align)});
+            if (chunk.sourceRange.length <= 0) continue;
+            const auto range = chunk.sourceRange;
+            if (range.start > end) asset.gaps.push_back({end, range.start - end});
+            if (!asset.availableRanges.empty() && range.start == end) asset.availableRanges.back().length += range.length;
+            else asset.availableRanges.push_back(range);
+            end = range.start + range.length; asset.chunks.push_back(std::move(chunk));
+        }
+        if (end < length) asset.gaps.push_back({end, length - end});
+        asset.relativePath = asset.chunks.empty() ? WavTrackWriter::chunkPath(config.takeId, mic, 1) : juce::String();
+    }
+    juce::Result finalizeAssets()
+    {
+        // Owner thread, after either normal joins or failed-worker cleanup. Never
+        // publish the pre-drain promise of a full take as finalized availability.
+        if (length <= 0) return juce::Result::ok();
+        try
+        {
+            audioReport = juce::var();
+            try { audioReport = audio.telemetry(); } catch (...) { partial = true; }
+            peakSnapshot = audio.peaks(); placementMetadata.peaks = peakSnapshot; placementMetadata.peaksComplete = true;
+            partial = partial || audio.referenceFailed();
+            for (unsigned i = 0; i < cameraCount; ++i)
+            {
+                auto& c = cameras[i]; auto& asset = assets[i];
+                const auto final = takeFolder().getChildFile(cameraName(i) + ".mp4");
+                std::int64_t available = 0;
+                if (final.existsAsFile())
+                {
+                    asset.relativePath = final.getRelativePathFrom(config.projectDirectory).replaceCharacter('\\', '/');
+                    available = c.video ? c.video->availableSamples() : 0;
+                    const auto mux = c.report["mux"];
+                    if (mux.isObject())
+                    {
+                        // Encoded/queued frames are not durable MP4 media. A final
+                        // rename follows the completed fragments and final flush.
+                        available = bool(mux["finalized"]) && std::int64_t(mux["completedFragments"]) > 0
+                            ? std::min(available, rescaleRound(std::max<std::int64_t>(0, std::int64_t(mux["videoPackets"])), deviceSnapshot.sampleRate, unsigned(config.projectFps))) : 0;
+                    }
+                }
+                // Unrenamed fragments remain recovery inputs, not playable media.
+                setRanges(asset, available); partial = partial || !c.video || c.video->failed() || !asset.gaps.empty();
+            }
+            const auto durable = std::clamp(std::min(std::int64_t(audioReport["wav"]["writtenSamplesPerMic"]),
+                std::int64_t(audioReport["wav"]["mediaDurableSamplesPerMic"])), std::int64_t(0), length);
+            for (std::size_t i = 0; i < logicalMics.size(); ++i)
+            {
+                auto& asset = assets[i + cameraCount]; confirmAudioAsset(asset, logicalMics[i], durable);
+                partial = partial || !asset.gaps.empty();
+            }
+            for (auto& asset : assets) ++asset.mediaGeneration;
+            take.state = partial ? TakeState::partial : TakeState::complete;
+            if (!document.getProject().media->findTake(take.takeId))
+                return document.placeRecordedTake(take, assets, logicalIndices);
+            for (const auto& asset : assets) requireResult(document.updateMediaAsset(asset));
+            return document.updateTakeState(take.takeId, take.state);
+        }
+        catch (...) { return takeException("Take media publication failed"); }
+    }
     void placeStopped()
     {
         if (!stopQpc) stopQpc = qpcNow();
@@ -728,18 +810,6 @@ struct TakeController::Impl
                 if (audioResult.failed()) partial = true;
                 audioReport = audio.telemetry(); peakSnapshot = audio.peaks();
                 finishVideos(length);
-                partial = partial || audio.referenceFailed();
-                for (unsigned i = 0; i < cameraCount; ++i)
-                {
-                    auto& c = cameras[i]; partial = partial || c.video->failed(); setRanges(assets[i], c.video->availableSamples());
-                    const auto name = cameraName(i) + ".mp4";
-                    if (takeFolder().getChildFile(name).existsAsFile()) assets[i].relativePath = "media/takes/" + config.takeId.toDashedString() + "/" + name;
-                    else setRanges(assets[i], 0);
-                }
-                const auto written = std::int64_t(audioReport["wav"]["writtenSamplesPerMic"]);
-                for (std::size_t i = 0; i < logicalMics.size(); ++i)
-                { setRanges(assets[i + cameraCount], written); setChunks(assets[i + cameraCount], logicalMics[i], std::min(length, written)); }
-                for (auto& asset : assets) ++asset.mediaGeneration;
                 mediaFinalizationMs = elapsedMs(start); return audioResult;
             }
             catch (...) { partial = true; mediaFinalizationMs = elapsedMs(start); throw; }
@@ -879,16 +949,8 @@ void TakeController::tick()
             }
             s.placementMetadata.peaks = s.peakSnapshot; s.placementMetadata.peaksComplete = true;
             if (s.cameras[0].video && s.cameras[0].video->thumbnailReady()) s.placementMetadata.firstThumbnail = s.takeFolder().getChildFile("index/first-thumbnail.bmp");
-            if (s.length > 0 && s.document.getProject().media->findTake(s.take.takeId))
-            {
-                for (auto asset : s.assets)
-                {
-                    const auto updated = s.document.updateMediaAsset(std::move(asset));
-                    if (updated.failed()) { s.partial = true; s.failure = updated.getErrorMessage(); }
-                }
-                const auto updated = s.document.updateTakeState(s.take.takeId, s.partial ? TakeState::partial : TakeState::complete);
-                if (updated.failed()) { s.partial = true; s.failure = updated.getErrorMessage(); }
-            }
+            const auto published = s.finalizeAssets();
+            if (published.failed()) { s.failedWorker(published); return; }
             s.savedSnapshot = s.document.snapshot(); s.saving = true;
             try
             {
