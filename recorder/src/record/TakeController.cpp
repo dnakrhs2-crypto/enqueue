@@ -354,7 +354,13 @@ private:
                 }
                 if (ending.load())
                 {
-                    if (scheduler.nextPts() < target) { failedFlag = true; sourceFailed(available.load()); }
+                    // A stop inside the last frame period leaves that slot only partially covered by the take. When no
+                    // candidate arrived for it (delivery delay at the very end), the take is still complete: the tail is
+                    // shorter than one frame and playback holds the previous image. Any other shortfall is a real loss.
+                    const auto missing = target - scheduler.nextPts();
+                    const auto samplesPerFrame = rescaleRound(1, Fs, unsigned(profile.fps));
+                    const bool partialLastSlot = missing == 1 && samplesPerFrame > 0 && length % samplesPerFrame != 0;
+                    if (missing > 0 && !partialLastSlot) { failedFlag = true; sourceFailed(available.load()); }
                     break;
                 }
                 waitBriefly();
@@ -743,6 +749,9 @@ struct TakeController::Impl
                         available = bool(mux["finalized"]) && std::int64_t(mux["completedFragments"]) > 0
                             ? std::min(available, rescaleRound(std::max<std::int64_t>(0, std::int64_t(mux["videoPackets"])), deviceSnapshot.sampleRate, unsigned(config.projectFps))) : 0;
                     }
+                    // A tail shorter than one frame period (stop inside the last slot) is covered by the held last frame.
+                    const auto samplesPerFrame = rescaleRound(1, deviceSnapshot.sampleRate, unsigned(config.projectFps));
+                    if (available > 0 && length - available < samplesPerFrame) available = length;
                 }
                 // Unrenamed fragments remain recovery inputs, not playable media.
                 setRanges(asset, available); partial = partial || !c.video || c.video->failed() || !asset.gaps.empty();
