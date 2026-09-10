@@ -42,7 +42,7 @@ struct AudioImportRequest
     juce::File source, projectDirectory;
     Id projectId;
     std::uint32_t projectFs = 48000;
-    Sample playhead = 0; // captured when the user chooses import, never append-to-end
+    Sample playhead = 0; // insertion position captured by the caller; never recomputed on completion
     FileIoFaultAdapter* copyFaults = nullptr; // optional bounded I/O fault injection
 };
 

@@ -8,6 +8,7 @@
 #include "video/PreviewPresenter.h"
 #include "capture/MfCameraCapture.h"
 #include "media/ThumbnailCache.h"
+#include "playback/ImportedAudioCache.h"
 #include <map>
 
 namespace gocue::recorder
@@ -72,12 +73,15 @@ public:
 private:
     friend struct StabilityTestAccess;
     friend struct ShortcutExceptionTestAccess;
+    friend struct ImportUiTestAccess;
     struct LiveCamera;
     struct Playback;
     struct PreparedPlan
     {
         std::vector<PlaybackVideoClip> videos;
         std::vector<PlaybackAudioTrack> tracks;
+        std::shared_ptr<const CompiledRenderPlan> importedPlan;
+        std::vector<AudioSourceBinding> audioSources;
         Sample end = 0, revision = 0;
         Id project;
         std::uint64_t generation = 0;
@@ -106,6 +110,7 @@ private:
     std::function<void(const char*)> beforeWorkerStart; // owner-thread failure injection; empty in the application
     std::future<DeviceResult> deviceWork;
     std::future<std::unique_ptr<PreparedPlan>> planWork;
+    std::shared_ptr<AudioImportControl> planImportControl;
     std::unique_ptr<Playback> playback;
     bool timeline = false, wantPlay = false, pendingLatest = false, autoStart = false;
     bool shuttingDown = false, resourcesReleased = false, permitRelease = false;
@@ -117,6 +122,7 @@ private:
     std::vector<Marker> recordedMarkers;
     std::map<juce::String, std::shared_ptr<const VideoIndex>> videoIndexes;
     std::map<juce::String, std::shared_ptr<const WavSource>> wavIndexes;
+    std::map<juce::String, CachedImportedAudio> importedIndexes; // plan worker only; cleared after its join
     std::set<juce::String> derivedKeys;
     struct Derived
     {

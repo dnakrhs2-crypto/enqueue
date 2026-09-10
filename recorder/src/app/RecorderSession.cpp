@@ -86,6 +86,7 @@ RecorderSession::RecorderSession(RecorderDocument& d, TakeController::VideoFacto
 RecorderSession::~RecorderSession()
 {
     lifecycle->blockCommands();
+    if (planImportControl) planImportControl->cancelled.store(true);
     if (deviceWork.valid()) deviceWork.wait();
     if (planWork.valid()) planWork.wait();
     if (releaseWork.valid()) releaseWork.wait();
@@ -331,15 +332,20 @@ void RecorderSession::preparePlayback()
     if (!snapshot->activeTimelineEnd()) return;
     notice = k("재생 준비 중");
     const auto generation = lifecycle->generation();
+    planImportControl = std::make_shared<AudioImportControl>();
     try
     {
-    planWork = std::async(std::launch::async, [this, snapshot, folder, generation]
+    planWork = std::async(std::launch::async, [this, snapshot, folder, generation, importControl = planImportControl]
     {
         auto plan = std::make_unique<PreparedPlan>(); plan->project = snapshot->projectId; plan->revision = snapshot->editRevision; plan->end = snapshot->activeTimelineEnd();
         plan->generation = generation;
         try
         {
             MediaIndex index;
+            const bool hasImports = std::any_of(snapshot->media->assets.begin(), snapshot->media->assets.end(),
+                [](const auto& asset) { return asset.kind == AssetKind::importAudio; });
+            if (hasImports) plan->importedPlan = compileAudioRenderPlan(*snapshot)->timeline;
+            std::set<Id> openedAudio;
             for (const auto& track : snapshot->tracks)
             {
                 PlaybackAudioTrack audioTrack; audioTrack.trackId = track.trackId; audioTrack.mute = track.mute; audioTrack.solo = track.solo;
@@ -375,8 +381,20 @@ void RecorderSession::preparePlayback()
                         // WavSource contains only committed chunks; its reader supplies silence
                         // for absent ranges, including a failed take's trailing gap.
                         mapping.gaps.clear(); audioTrack.clips.push_back({mapping, source});
+                        if (hasImports && openedAudio.insert(asset->assetId).second)
+                            plan->audioSources.push_back({asset->assetId, wavAudioSource(source, true)});
                     }
-                    else throw std::runtime_error("불러온 오디오의 타임라인 재생 연결은 준비 중입니다.");
+                    else if (asset->kind == AssetKind::importAudio && openedAudio.insert(asset->assetId).second)
+                    {
+                        auto found = importedIndexes.find(key);
+                        if (found == importedIndexes.end())
+                        {
+                            const auto info = AudioImport::loadInfo(folder, *asset); CachedImportedAudio cache;
+                            checkResult(ImportedAudioCache::build(folder, *asset, info, snapshot->Fs, *importControl, cache));
+                            found = importedIndexes.emplace(key, std::move(cache)).first;
+                        }
+                        plan->audioSources.push_back({asset->assetId, importedAudioSource(*asset, found->second)});
+                    }
                 }
                 if (track.kind == TrackKind::mic || track.kind == TrackKind::importAudio) plan->tracks.push_back(std::move(audioTrack));
             }
@@ -464,8 +482,9 @@ void RecorderSession::projectChanged()
     derivedWorker.invalidate();
     { const std::lock_guard<std::mutex> lock(derivedMutex); derivedResults.clear(); }
     clearPlayback(); take.reset(); cursor = 0; wantPlay = false; pendingLatest = false; peaksPublished.clear(); error.clear(); notice.clear();
+    if (planImportControl) planImportControl->cancelled.store(true);
     if (planWork.valid()) planWork.wait(); // project replacement is disabled while plan preparation is pending
-    videoIndexes.clear(); wavIndexes.clear(); derivedKeys.clear(); derivedProject = document.getProject().projectId;
+    videoIndexes.clear(); wavIndexes.clear(); importedIndexes.clear(); derivedKeys.clear(); derivedProject = document.getProject().projectId;
     scheduleDerived();
 }
 void RecorderSession::scheduleDerived()
@@ -473,6 +492,25 @@ void RecorderSession::scheduleDerived()
     if (document.getFile() == juce::File() || recording()) return;
     const auto p = document.snapshot(); const auto folder = document.getFile().getParentDirectory();
     const auto generation = derivedGeneration.load();
+    for (const auto& asset : p->media->assets) if (asset.kind == AssetKind::importAudio)
+    {
+        const auto key = p->projectId + "/import-peaks/" + asset.assetId + "/" + juce::String(asset.mediaGeneration);
+        if (derivedKeys.count(key)) continue;
+        const auto accepted = derivedWorker.enqueue(key, [this, asset, folder, p, generation](const auto& yield)
+        {
+            const auto cancelled = [&] { return generation != derivedGeneration.load() || yield(); };
+            if (cancelled()) return;
+            AudioImportControl control; control.onProgress = [&](auto, double) { control.cancelled.store(cancelled()); };
+            CachedImportedAudio cache;
+            const auto info = AudioImport::loadInfo(folder, asset);
+            const auto result = ImportedAudioCache::build(folder, asset, info, p->Fs, control, cache);
+            if (result.failed() || cancelled()) return;
+            auto peaks = ImportedAudioCache::peakSnapshot(cache);
+            const std::lock_guard<std::mutex> lock(derivedMutex);
+            if (generation == derivedGeneration.load()) derivedResults.push_back({asset.assetId, {}, std::move(peaks), 0, generation, p->projectId, asset.mediaGeneration});
+        });
+        if (accepted) derivedKeys.insert(key);
+    }
     for (const auto& takeItem : p->media->takes)
     {
         auto key = p->projectId + "/peaks/" + takeItem.takeId;
@@ -619,7 +657,9 @@ void RecorderSession::tick()
             {
                 for (auto& cam : cameras) if (cam) cam->presenter.reset();
                 playback = std::make_unique<Playback>(device.sampleRate, device.bufferFrames, plan->end, audio);
-                playback->renderer.setPlan(std::move(plan->tracks), plan->end); playback->video.prepare(std::move(plan->videos));
+                if (plan->importedPlan) playback->renderer.setPlan(std::move(plan->importedPlan), std::move(plan->audioSources));
+                else playback->renderer.setPlan(std::move(plan->tracks), plan->end);
+                playback->video.prepare(std::move(plan->videos));
                 for (unsigned i = 0; i < 2; ++i) if (hosts[i]) playback->video.attachPlaybackView(i, hosts[i]);
                 playback->output.start(playback->transport); playback->transport.seek(std::clamp(cursor, Sample{0}, plan->end));
                 if (wantPlay) playback->transport.play(); pendingLatest = false; notice.clear();
@@ -668,6 +708,8 @@ void RecorderSession::requestShutdown()
 {
     if (shuttingDown) return;
     lifecycle->blockCommands(); shuttingDown = true; autoStart = wantPlay = pendingLatest = recordAfterExport = false;
+    if (planImportControl) planImportControl->cancelled.store(true);
+    ++derivedGeneration; derivedWorker.invalidate();
     take.requestShutdown();
     clearPlayback(); // detach output client and invalidate pending playback before file commits
     const auto stops = exclusiveStops; for (const auto& stop : stops) if (stop.second) stop.second();
