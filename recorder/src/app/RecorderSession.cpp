@@ -12,11 +12,23 @@ namespace
 {
 juce::String k(const char* s) { return juce::String::fromUTF8(s); }
 void checkResult(const juce::Result& r) { if (r.failed()) throw std::runtime_error(r.getErrorMessage().toStdString()); }
+struct RateMismatch : std::runtime_error { using std::runtime_error::runtime_error; }; // the device stays open; the banner names both rates
+juce::String rateMismatchText(unsigned projectFs, unsigned deviceFs)
+{
+    return k("프로젝트는 ") + juce::String(projectFs) + k(" Hz로 고정돼 있는데 오디오 장치가 ") + juce::String(deviceFs) + k(" Hz로 열렸습니다. 설정에서 샘플레이트를 ")
+        + juce::String(projectFs) + k("으로 바꾸세요. 다른 프로그램이 장치를 쓰고 있으면 바뀌지 않을 수 있습니다.");
+}
 bool activeTake(TakeController::State s)
 { using S = TakeController::State; return s == S::preparing || s == S::armed || s == S::recording || s == S::stopping; }
 template<class T> bool ready(std::future<T>& f) { return f.valid() && f.wait_for(std::chrono::milliseconds(0)) == std::future_status::ready; }
 RenderClip mappingFor(const Clip& c, const MediaAsset& a)
 { RenderClip r; r.clipId = c.clipId; r.trackId = c.trackId; r.assetId = c.assetId; r.sourceIn = c.sourceIn; r.timelineStartSample = c.timelineStartSample; r.lengthSamples = c.lengthSamples; r.mediaGeneration = a.mediaGeneration; r.gaps = a.gaps; return r; }
+}
+bool adoptDeviceSampleRate(RecorderDocument& document, unsigned deviceFs)
+{
+    const auto& p = document.getProject();
+    if (!deviceFs || !p.media->assets.empty() || p.Fs == deviceFs) return false;
+    return document.setTimebase(deviceFs, p.fps).wasOk();
 }
 bool applyAudioDefaults(UserSettings& s, const RecorderAudioEngine::DeviceInfo& info)
 {
@@ -144,8 +156,8 @@ juce::Result RecorderSession::configure(UserSettings settings)
         if (settings.asioDeviceId.isNotEmpty())
         {
             checkResult(audio.openDevice(settings.asioDeviceId, fixedFs ? fixedFs : settings.preferredSampleRate, settings.bufferSize));
-            if (fixedFs && audio.deviceInfo().sampleRate != fixedFs)
-            { audio.closeDevice(); throw std::runtime_error("프로젝트 샘플레이트가 고정되어 있습니다. ASIO 장치의 샘플레이트를 맞추세요."); }
+            if (fixedFs && audio.deviceInfo().sampleRate != fixedFs) // keep it open: meters work, recording/playback stay blocked with both numbers shown
+                throw RateMismatch(rateMismatchText(fixedFs, audio.deviceInfo().sampleRate).toStdString());
             if (applyAudioDefaults(settings, audio.deviceInfo()))
             {
                 map.fill(-1); for (std::size_t i = 0; i < settings.physicalInputs.size(); ++i) map[i] = settings.physicalInputs[i];
@@ -156,6 +168,7 @@ juce::Result RecorderSession::configure(UserSettings settings)
             settings.bufferSize = int(audio.deviceInfo().bufferFrames);
         }
     }
+    catch (const RateMismatch& e) { audioResult = juce::Result::fail(juce::String::fromUTF8(e.what())); }
     catch (const std::exception& e) { audioResult = juce::Result::fail(k("장치 연결을 확인하세요. ") + juce::String::fromUTF8(e.what())); }
     deviceWork = std::async(std::launch::async, [this, settings, audioResult, camerasUnchanged]() mutable
     {
@@ -281,7 +294,7 @@ void RecorderSession::preparePlayback()
 {
     if (!lifecycle->acceptsCommands()) return;
     if (configuring() || recording() || take.state() == TakeController::State::finalizing || planWork.valid() || playback || !device.sampleRate) return;
-    if (device.sampleRate != document.getProject().Fs) { error = k("프로젝트와 ASIO 샘플레이트가 다릅니다."); return; }
+    if (device.sampleRate != document.getProject().Fs) { error = rateMismatchText(document.getProject().Fs, device.sampleRate); return; }
     const auto snapshot = document.snapshot(); const auto folder = document.getFile().getParentDirectory();
     if (!snapshot->activeTimelineEnd()) return;
     notice = k("재생 준비 중");
@@ -438,6 +451,7 @@ void RecorderSession::tick()
     if (ready(deviceWork))
     {
         auto result = deviceWork.get(); current = result.settings; device = audio.deviceInfo();
+        adoptDeviceSampleRate(document, device.sampleRate);
         lifecycle->end(RecorderLifecycle::configuring);
         notice.clear(); if (result.result.failed()) error = result.result.getErrorMessage();
         if (onConfigured) onConfigured(result.result, current);

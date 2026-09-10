@@ -34,6 +34,12 @@ struct CameraMode
     static CameraMode parse(const std::string&);
     bool sameSignal(const CameraMode&) const noexcept;
 };
+// "1080p 60fps · MJPEG" for people; text() stays the stored/parsed form.
+juce::String friendlyModeText(const CameraMode&);
+// Index of the sensible 1080p default for a project fps: reaches the fps (59.94 counts for 60), closest to it,
+// MJPEG before NV12 before YUY2 (USB bandwidth). -1 when the device has no 1080p mode.
+int preferred1080pMode(const std::vector<CameraMode>& modes, unsigned projectFps) noexcept;
+bool reachesProjectFps(const CameraMode&, unsigned projectFps) noexcept;
 struct CameraDevice
 {
     std::string id, friendlyName, symbolicLink, unavailableReason;

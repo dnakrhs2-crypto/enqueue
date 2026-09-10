@@ -62,7 +62,7 @@ private:
     void scrollBarMoved(juce::ScrollBar*, double) override;
     void updateRange();
     void finish(const juce::Result&, bool playback = true);
-    void showEditMenu();
+    void showEditMenu(bool atMouse = false);
     void showRipplePrompt();
     void updateControls();
     void setRangeFromInputs();

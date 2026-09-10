@@ -159,7 +159,8 @@ if(EXISTS "${_rec_rc_file}")
     endif()
 endif()
 target_sources(Recorder PRIVATE src/Main.cpp src/ui/RecorderLookAndFeel.cpp src/ui/MainComponent.cpp)
-target_link_libraries(Recorder PRIVATE RecorderModel juce::juce_gui_basics)
+target_sources(Recorder PRIVATE src/support/CrashHandler.cpp)
+target_link_libraries(Recorder PRIVATE RecorderModel juce::juce_gui_basics dbghelp)
 target_compile_definitions(Recorder PRIVATE
     JUCE_APPLICATION_NAME_STRING="${RECORDER_DISPLAY_NAME}"
     JUCE_APPLICATION_VERSION_STRING="${RECORDER_VERSION}")

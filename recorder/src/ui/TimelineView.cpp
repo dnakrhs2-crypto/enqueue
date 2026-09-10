@@ -254,7 +254,7 @@ void TimelineView::showRipplePrompt()
         .withMessage(body).withButton(ko("대상 확대")).withButton(ko("링크 해제")).withButton(ko("취소")).withAssociatedComponent(this),
         [safe, prompt](int result) { if (safe) safe->finish(safe->edits.resolveRipple(prompt, result == 1 ? RippleChoice::expand : result == 2 ? RippleChoice::unlink : RippleChoice::cancel), result == 1 || result == 2); });
 }
-void TimelineView::showEditMenu()
+void TimelineView::showEditMenu(bool atMouse)
 {
     juce::PopupMenu menu;
     for (auto a : {TimelineAction::split, TimelineAction::trimIn, TimelineAction::trimOut, TimelineAction::remove, TimelineAction::rippleAll,
@@ -273,7 +273,10 @@ void TimelineView::showEditMenu()
     }
     juce::Component::SafePointer<TimelineView> safe(this);
     const auto base = document.snapshot(); const auto selection = document.getSelection();
-    menu.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(&menuButton), [safe, base, selection](int result)
+    auto options = juce::PopupMenu::Options().withTargetComponent(&menuButton);
+    if (atMouse) // a right-click opens where the mouse is, not next to the toolbar button
+    { const auto p = juce::Desktop::getInstance().getMainMouseSource().getScreenPosition().roundToInt(); options = juce::PopupMenu::Options().withTargetScreenArea({p.x, p.y, 1, 1}); }
+    menu.showMenuAsync(options, [safe, base, selection](int result)
     {
         if (!safe || result == 0) return;
         if (safe->document.snapshot() != base || safe->document.getSelection() != selection) { safe->finish(juce::Result::fail(ko("편집 대상이 바뀌었습니다. 메뉴를 다시 여세요.")), false); return; }
@@ -484,14 +487,14 @@ void TimelineView::Rows::mouseDown(const juce::MouseEvent& e)
     {
         if (!e.mods.isShiftDown() && !e.mods.isCtrlDown()) v.edits.clearSelection(); v.edits.clearRange();
         if (!v.edits.isLocked()) dragging = Drag::range;
-        if (e.mods.isPopupMenu()) { dragging = Drag::none; v.showEditMenu(); } v.selectionChanged(); return;
+        if (e.mods.isPopupMenu()) { dragging = Drag::none; v.showEditMenu(true); } v.selectionChanged(); return;
     }
     const auto& explicitIds = v.edits.explicitSelection();
     if (!e.mods.isShiftDown() && !e.mods.isCtrlDown() && std::find(explicitIds.begin(), explicitIds.end(), downClip) != explicitIds.end())
     { v.edits.focusSelection(downClip); collapseSelection = !e.mods.isPopupMenu() && explicitIds.size() > 1; }
     else v.edits.clickClip(downClip, e.mods.isShiftDown(), e.mods.isCtrlDown());
     v.selectionChanged();
-    if (e.mods.isPopupMenu()) { v.showEditMenu(); return; }
+    if (e.mods.isPopupMenu()) { v.showEditMenu(true); return; }
     if (v.edits.isLocked() || e.mods.isCtrlDown() || e.mods.isShiftDown()) return;
     const auto* c = snapshot->findClip(downClip);
     auto action = TimelineAction::move;

@@ -31,7 +31,8 @@ juce::Result validateAudioSettings(const UserSettings& s, const RecorderAudioEng
     for (auto input : s.physicalInputs) if (input >= device.physicalInputs) return juce::Result::fail(k("선택한 물리 입력이 없습니다."));
     if (s.output.mono ? s.output.monoChannel >= device.physicalOutputs : s.output.left >= device.physicalOutputs || s.output.right >= device.physicalOutputs)
         return juce::Result::fail(k("선택한 재생 출력 채널이 없습니다."));
-    if (!p.media->assets.empty() && device.sampleRate != p.Fs) return juce::Result::fail(k("프로젝트 샘플레이트가 고정되어 있습니다. ASIO 장치의 샘플레이트를 맞추세요."));
+    if (!p.media->assets.empty() && device.sampleRate != p.Fs)
+        return juce::Result::fail(k("프로젝트는 ") + juce::String(p.Fs) + k(" Hz로 고정돼 있는데 오디오 장치가 ") + juce::String(device.sampleRate) + k(" Hz입니다. 설정에서 샘플레이트를 ") + juce::String(p.Fs) + k("으로 바꾸세요."));
     return juce::Result::ok();
 }
 juce::Result validateCameraSettings(const UserSettings& s, const std::vector<CameraDevice>& cameras)

@@ -24,6 +24,7 @@ private:
     std::array<juce::ComboBox, 2> devices, modes;
     std::array<juce::Label, 2> modeLabels, ids;
     std::array<int, 2> acceptedDevices{};
+    unsigned projectFps = 30;
     juce::Label fps, status, calibration, nextTake;
 };
 }

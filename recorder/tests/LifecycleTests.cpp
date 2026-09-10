@@ -1,5 +1,6 @@
 #include "TestSupport.h"
 #include "../tools/LifecycleFixtures.h"
+#include "ui/UiState.h"
 
 using namespace gocue::recorder;
 using recorder_test::require;
@@ -95,6 +96,32 @@ int runLifecycleTests()
         require(!applyAudioDefaults(n, info) && n.audioDefaultsApplied && n.physicalInputs.empty() && n.output.left == -1, "No channels -> nothing mapped, marker still set");
         UserSettings closed; RecorderAudioEngine::DeviceInfo none;
         require(!applyAudioDefaults(closed, none) && !closed.audioDefaultsApplied, "No open device -> untouched");
+    });
+    suite.test("A project without media follows the device sample rate; a fixed project names both rates", []
+    {
+        RecorderDocument document; require(document.getProject().Fs == 48000, "Provisional default");
+        require(!adoptDeviceSampleRate(document, 0), "No open device -> untouched");
+        require(adoptDeviceSampleRate(document, 44100) && document.getProject().Fs == 44100, "Provisional project adopts the device rate");
+        require(!adoptDeviceSampleRate(document, 44100), "Equal rates -> nothing to do");
+        UserSettings s; s.asioDeviceId = "X"; s.physicalInputs = {0}; s.output.left = 0; s.output.right = 1;
+        RecorderAudioEngine::DeviceInfo info; info.name = "X"; info.sampleRate = 44100; info.physicalInputs = 2; info.physicalOutputs = 2;
+        RecorderProject fixed; auto media = std::make_shared<MediaRegistry>(); media->assets.push_back(MediaAsset{}); fixed.media = media;
+        const auto r = validateAudioSettings(s, info, fixed);
+        require(r.failed() && r.getErrorMessage().contains("48000") && r.getErrorMessage().contains("44100"), "Fixed-project mismatch names both rates");
+        require(validateAudioSettings(s, info, RecorderProject{}).wasOk(), "Provisional project accepts any device rate");
+    });
+    suite.test("Camera input modes get a sensible default per project fps and friendly labels", []
+    {
+        const CameraMode nv5 = CameraMode::parse("NV12 1920x1080 5/1"), mj60 = CameraMode::parse("MJPEG 1920x1080 60/1"), nv60 = CameraMode::parse("NV12 1920x1080 60/1"),
+            yuy30 = CameraMode::parse("YUY2 1920x1080 30/1"), mj5994 = CameraMode::parse("MJPEG 1920x1080 60000/1001"), hd720 = CameraMode::parse("MJPEG 1280x720 60/1");
+        const std::vector<CameraMode> modes{nv5, hd720, yuy30, nv60, mj60};
+        require(preferred1080pMode(modes, 60) == 4, "60 fps project: MJPEG 60 before NV12 60");
+        require(preferred1080pMode(modes, 30) == 2, "30 fps project: the exact 30 fps mode wins over faster ones");
+        require(preferred1080pMode({nv5, hd720}, 30) == 0, "Only a slow 1080p mode: still the best available");
+        require(preferred1080pMode({hd720}, 30) == -1, "No 1080p mode");
+        require(preferred1080pMode({nv5, mj5994}, 60) == 1 && reachesProjectFps(mj5994, 60) && !reachesProjectFps(nv5, 60), "59.94 counts as reaching 60");
+        require(friendlyModeText(mj60) == juce::String::fromUTF8("1080p 60fps \xc2\xb7 MJPEG") && friendlyModeText(mj5994) == juce::String::fromUTF8("1080p 59.94fps \xc2\xb7 MJPEG"), "Friendly label");
+        require(mj60.text() == "MJPEG 1920x1080 60/1", "Stored form unchanged");
     });
     suite.test("All Korean failure banners have the specified meaning", []
     {

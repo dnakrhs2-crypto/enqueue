@@ -94,6 +94,22 @@ GUID subtypeGuid(CaptureSubtype subtype) noexcept
 {
     switch (subtype) { case CaptureSubtype::nv12: return MFVideoFormat_NV12; case CaptureSubtype::yuy2: return MFVideoFormat_YUY2; default: return MFVideoFormat_MJPG; }
 }
+juce::String friendlyModeText(const CameraMode& m)
+{ return "1080p " + juce::String(m.fps.value(), m.fps.denominator == 1 ? 0 : 2) + "fps " + juce::String::fromUTF8("\xc2\xb7") + " " + juce::String(subtypeName(m.subtype)); }
+bool reachesProjectFps(const CameraMode& m, unsigned projectFps) noexcept { return m.fps.value() + 0.1 >= double(projectFps); }
+int preferred1080pMode(const std::vector<CameraMode>& modes, unsigned projectFps) noexcept
+{
+    int best = -1; double bestScore = 0;
+    for (std::size_t i = 0; i < modes.size(); ++i)
+    {
+        const auto& m = modes[i]; if (m.width != 1920 || m.height != 1080) continue;
+        const double distance = m.fps.value() - double(projectFps);
+        const double score = (reachesProjectFps(m, projectFps) ? 0.0 : 1000.0) + (distance < 0 ? -distance : distance) * 10.0
+            + (m.subtype == CaptureSubtype::mjpeg ? 0.0 : m.subtype == CaptureSubtype::nv12 ? 1.0 : 2.0);
+        if (best < 0 || score < bestScore) { best = int(i); bestScore = score; }
+    }
+    return best;
+}
 std::string CameraMode::text() const
 {
     return std::string(subtypeName(subtype)) + " " + std::to_string(width) + "x" + std::to_string(height) + " " + fps.text();

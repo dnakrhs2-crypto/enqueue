@@ -3,7 +3,7 @@
 
 namespace gocue::recorder
 {
-CameraSettingsPanel::CameraSettingsPanel(const UserSettings& s, const RecorderProject& p) : initial(s)
+CameraSettingsPanel::CameraSettingsPanel(const UserSettings& s, const RecorderProject& p) : initial(s), projectFps(p.fps.numerator)
 {
     for (unsigned i = 0; i < 2; ++i)
     {
@@ -45,8 +45,13 @@ void CameraSettingsPanel::modesFor(unsigned i)
     if (n < 0 || n >= int(cameras.size()))
     { ids[i].setText(initial.cameraDeviceIds[i], juce::dontSendNotification); modes[i].setText(initial.cameraModes[i], juce::dontSendNotification); return; }
     const auto& c = cameras[std::size_t(n)]; ids[i].setText(juce::String(c.symbolicLink), juce::dontSendNotification); ids[i].setTooltip(juce::String(c.symbolicLink));
+    // Friendly labels; the stored form stays mode.text(). A saved choice below the project fps (a 5 fps leftover) is replaced by the sensible default.
     for (unsigned m = 0; m < c.modes.size(); ++m) if (c.modes[m].width == 1920 && c.modes[m].height == 1080)
-    { const auto text = juce::String(c.modes[m].text()); modes[i].addItem(text, int(m) + 1); if (text == initial.cameraModes[i]) modes[i].setSelectedId(int(m) + 1, juce::dontSendNotification); }
+    {
+        modes[i].addItem(friendlyModeText(c.modes[m]), int(m) + 1);
+        if (juce::String(c.modes[m].text()) == initial.cameraModes[i] && reachesProjectFps(c.modes[m], projectFps)) modes[i].setSelectedId(int(m) + 1, juce::dontSendNotification);
+    }
+    if (const auto best = preferred1080pMode(c.modes, projectFps); !modes[i].getSelectedId() && best >= 0) modes[i].setSelectedId(best + 1, juce::dontSendNotification);
 }
 void CameraSettingsPanel::selectionChanged(unsigned i, bool enabling)
 {

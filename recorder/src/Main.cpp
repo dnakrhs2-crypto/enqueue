@@ -2,6 +2,7 @@
 #include "app/RecorderDocument.h"
 #include "app/RecorderSettings.h"
 #include "app/RecorderUpdater.h"
+#include "support/CrashHandler.h"
 #include "ui/MainComponent.h"
 #include "model/SafeFileWrite.h"
 #include <juce_gui_basics/juce_gui_basics.h>
@@ -55,6 +56,8 @@ public:
     bool moreThanOneInstanceAllowed() override { return getCommandLineParameters().contains("--test-root") || getCommandLineParameters().contains("--self-test-record") || getCommandLineParameters().startsWith("--automation "); }
     void initialise(const juce::String& commandLine) override
     {
+        CrashHandler::install();
+        if (commandLine.contains("--crash-test")) { volatile int* nowhere = nullptr; *nowhere = 1; } // diagnostic: proves the crash reporter on this PC
         auto args = juce::StringArray::fromTokens(commandLine, true); for (auto& arg : args) arg = arg.unquoted();
         if (args.size() == 2 && args[0] == "--automation")
         {
@@ -113,6 +116,8 @@ public:
             [content] { if (content) content->updateShutdownRequested(); },
             [content] { if (content) content->updateShutdownBlocked(); }});
         if (loaded.failed()) window->content().showError(loaded.getErrorMessage());
+        if (const auto report = CrashHandler::latestUnseenReport(); report != juce::File())
+        { window->content().showError(ko("이전 실행이 비정상 종료됐습니다. 보고 파일: ") + report.getFullPathName()); CrashHandler::markSeen(report); }
         if (openPath.isNotEmpty()) window->content().openProject(juce::File(openPath));
         else if (loaded.wasOk() && !settings->get().recentProjects.isEmpty()) window->content().openProject(juce::File(settings->get().recentProjects[0]));
         else window->content().connectDevicesFromSettings();
