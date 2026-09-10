@@ -26,6 +26,8 @@ from recorder import validate_release as validate
 
 REPO = TOOLS.parent
 IDENTITY = release.recorder_identity()
+INSTALLER_NAME = IDENTITY["PACKAGE_STEM"] + "-Setup-" + IDENTITY["VERSION"] + ".exe"
+NOTES_RELATIVE = "docs/release-notes/recorder/" + IDENTITY["VERSION"] + ".html"
 KEY = base64.b64encode(b"k" * 32).decode()
 SIGNATURE = base64.b64encode(b"s" * 64).decode()
 
@@ -83,11 +85,11 @@ def candidate(bundle):
     audit.write_json(payload / "release-links.json", {"version": IDENTITY["VERSION"],
         "source_url": IDENTITY["RELEASE_BASE_URL"] + IDENTITY["TAG_PREFIX"] + IDENTITY["VERSION"] + "/"
         + IDENTITY["SOURCES_STEM"] + "-" + IDENTITY["VERSION"] + ".zip"})
-    installer = bundle / "Recorder-Setup-0.1.0.exe"
+    installer = bundle / INSTALLER_NAME
     make_pe(installer)
     with mock.patch.object(release, "APP", release.APPS["recorder"]):
         release.write_recorder_metadata(bundle, IDENTITY, installer, SIGNATURE,
-            REPO / "docs/release-notes/recorder/0.1.0.html", KEY)
+            REPO / NOTES_RELATIVE, KEY)
     return bundle
 
 
@@ -156,7 +158,7 @@ class BundleValidationTests(unittest.TestCase):
         self.verify.assert_called_once()
 
     def test_tampered_installer_does_not_reach_signature_check(self):
-        with (self.bundle / "Recorder-Setup-0.1.0.exe").open("ab") as stream:
+        with (self.bundle / INSTALLER_NAME).open("ab") as stream:
             stream.write(b"tampered")
         self.assertEqual(self.check()["status"], "FAIL")
         self.verify.assert_not_called()
@@ -371,7 +373,7 @@ class RecorderReleaseRoutingTests(unittest.TestCase):
     def test_package_pipeline_orders_build_test_stage_iscc_sign_and_stays_local(self):
         with tempfile.TemporaryDirectory() as directory, ExitStack() as stack:
             root = Path(directory)
-            for relative in ("recorder/src/app/ProductIdentity.h", "docs/release-notes/recorder/0.1.0.html"):
+            for relative in ("recorder/src/app/ProductIdentity.h", NOTES_RELATIVE):
                 dest = root / relative
                 dest.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copyfile(REPO / relative, dest)
@@ -398,7 +400,7 @@ class RecorderReleaseRoutingTests(unittest.TestCase):
                 self.assertEqual(cmd[0], "ISCC")
                 order.append("ISCC")
                 output = Path(next(c[len("/DOutputDir="):] for c in cmd if str(c).startswith("/DOutputDir=")))
-                (output / "Recorder-Setup-0.1.0.exe").write_bytes(b"installer")
+                (output / INSTALLER_NAME).write_bytes(b"installer")
                 return ""
             stack.enter_context(mock.patch.object(release, "recorder_build", side_effect=build))
             stack.enter_context(mock.patch.object(release, "stage_recorder", side_effect=stage))
@@ -453,7 +455,7 @@ class RealWinSparkleSignatureTests(unittest.TestCase):
                                     check=True, capture_output=True, text=True).stdout
             key = re.search(r"[A-Za-z0-9+/]{43}=", public)[0]
             with redirect_stdout(io.StringIO()):
-                signature = release.sign(tool, private, bundle / "Recorder-Setup-0.1.0.exe")
+                signature = release.sign(tool, private, bundle / INSTALLER_NAME)
             appcast = bundle / "appcast.xml"
             appcast.write_text(appcast.read_text(encoding="utf-8").replace(SIGNATURE, signature), encoding="utf-8")
             (bundle / "public-key.txt").write_text(key + "\n", encoding="ascii")
