@@ -491,6 +491,8 @@ juce::Result RecorderAudioEngine::openDevice(const juce::String& name, unsigned 
     if (s.busy()) return failure("테이크가 끝난 뒤 오디오 장치를 변경하세요.");
     if (Fs < 8000 || Fs > 768000 || requestedBuffer < 0 || requestedBuffer > 16384 || name.isEmpty()) return failure("Invalid ASIO device request");
     if (!AsioTimingBridge::hookCompiled()) return failure("Recorder ASIO native hook unavailable");
+    // Vendor ASIO drivers are apartment-threaded COM objects: create/open/close them on the message thread only.
+    jassert(juce::MessageManager::getInstanceWithoutCreating() == nullptr || juce::MessageManager::getInstance()->isThisTheMessageThread());
     const auto old = s.info;
     s.closePhysical(); s.detach(); s.session.reset();
     const auto attempt = [&](const juce::String& selected, unsigned rate, int block) -> juce::Result
@@ -504,6 +506,10 @@ juce::Result RecorderAudioEngine::openDevice(const juce::String& name, unsigned 
             if (!s.type->getDeviceNames().contains(selected)) return failure("Selected ASIO device is missing; no automatic substitution");
             s.device.reset(s.type->createDevice(selected, selected));
             if (!s.device) return failure("ASIO device creation failed");
+            // JUCE keeps the driver-level failure (No such device / Driver failed to initialise / ...)
+            // in the device object; surface it instead of a misleading channel/buffer complaint.
+            if (const auto driverError = s.device->getLastError(); driverError.isNotEmpty())
+                throw std::runtime_error(("ASIO driver could not be opened: " + driverError).toStdString());
             s.info = {}; s.info.name = selected; s.info.sampleRate = rate;
             s.info.bufferFrames = unsigned(block ? block : s.device->getDefaultBufferSize());
             s.info.physicalInputs = s.device->getInputChannelNames().size(); s.info.physicalOutputs = s.device->getOutputChannelNames().size();

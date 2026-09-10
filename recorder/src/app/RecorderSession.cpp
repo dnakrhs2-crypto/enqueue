@@ -111,26 +111,42 @@ juce::Result RecorderSession::configure(UserSettings settings)
         return juce::Result::fail(k("같은 카메라를 두 번 선택할 수 없습니다."));
     clearPlayback(); lifecycle->invalidate(); lifecycle->set(RecorderLifecycle::configuring, true); error.clear(); notice = k("장치를 연결하는 중입니다.");
     const auto fixedFs = document.getProject().media->assets.empty() ? 0u : document.getProject().Fs;
-    deviceWork = std::async(std::launch::async, [this, settings, fixedFs]() mutable
+    // ASIO drivers are COM objects and vendor drivers register them apartment-threaded: they can
+    // only be created, opened and closed on the (STA) message thread, never on the MTA camera
+    // worker. Negotiate audio here on the caller first; a failure is reported synchronously.
+    juce::Result audioResult = juce::Result::ok();
+    try
+    {
+        checkResult(audio.closeDevice());
+        std::array<int, 8> map; map.fill(-1);
+        for (std::size_t i = 0; i < settings.physicalInputs.size(); ++i) map[i] = settings.physicalInputs[i];
+        checkResult(audio.setInputMap(map)); checkResult(audio.setOutputMap(settings.output));
+        if (settings.asioDeviceId.isNotEmpty())
+        {
+            checkResult(audio.openDevice(settings.asioDeviceId, fixedFs ? fixedFs : settings.preferredSampleRate, settings.bufferSize));
+            if (fixedFs && audio.deviceInfo().sampleRate != fixedFs)
+            { audio.closeDevice(); throw std::runtime_error("프로젝트 샘플레이트가 고정되어 있습니다. ASIO 장치의 샘플레이트를 맞추세요."); }
+            for (unsigned i = 0; i < 8; ++i) checkResult(audio.arm(i, map[i] >= 0 && settings.microphoneArmed[i]));
+            settings.preferredSampleRate = audio.deviceInfo().sampleRate;
+            settings.bufferSize = int(audio.deviceInfo().bufferFrames);
+        }
+    }
+    catch (const std::exception& e) { audioResult = juce::Result::fail(k("장치 연결을 확인하세요. ") + juce::String::fromUTF8(e.what())); }
+    if (audioResult.failed())
+    {
+        for (auto& cam : cameras) cam.reset(); // same outcome as the worker path: cameras are released
+        current = settings; device = audio.deviceInfo();
+        lifecycle->end(RecorderLifecycle::configuring); notice.clear(); error = audioResult.getErrorMessage();
+        if (onConfigured) onConfigured(audioResult, current);
+        return audioResult;
+    }
+    deviceWork = std::async(std::launch::async, [this, settings]() mutable
     {
         DeviceResult result; result.settings = settings;
         try
         {
             ComApartment apartment;
             for (auto& cam : cameras) cam.reset();
-            checkResult(audio.closeDevice());
-            std::array<int, 8> map; map.fill(-1);
-            for (std::size_t i = 0; i < settings.physicalInputs.size(); ++i) map[i] = settings.physicalInputs[i];
-            checkResult(audio.setInputMap(map)); checkResult(audio.setOutputMap(settings.output));
-            if (settings.asioDeviceId.isNotEmpty())
-            {
-                checkResult(audio.openDevice(settings.asioDeviceId, fixedFs ? fixedFs : settings.preferredSampleRate, settings.bufferSize));
-                if (fixedFs && audio.deviceInfo().sampleRate != fixedFs)
-                { audio.closeDevice(); throw std::runtime_error("프로젝트 샘플레이트가 고정되어 있습니다. ASIO 장치의 샘플레이트를 맞추세요."); }
-                for (unsigned i = 0; i < 8; ++i) checkResult(audio.arm(i, map[i] >= 0 && settings.microphoneArmed[i]));
-                result.settings.preferredSampleRate = audio.deviceInfo().sampleRate;
-                result.settings.bufferSize = int(audio.deviceInfo().bufferFrames);
-            }
             for (unsigned i = 0; i < 2; ++i) if (settings.cameraEnabled[i] && settings.cameraDeviceIds[i].isNotEmpty())
             {
                 try
@@ -419,10 +435,10 @@ void RecorderSession::tick()
         {
             clearPlayback(); // detaches ASIO client before renderer/video join
             for (auto& cam : cameras) if (cam && cam->capture) cam->capture->requestStop();
-            releaseWork = std::async(std::launch::async, [this]
-            { for (auto& cam : cameras) cam.reset(); audio.closeDevice(); });
+            releaseWork = std::async(std::launch::async, [this] { for (auto& cam : cameras) cam.reset(); });
         }
-        if (ready(releaseWork)) { releaseWork.get(); resourcesReleased = true; }
+        // The ASIO driver is closed on the thread that created it (message thread), after the cameras.
+        if (ready(releaseWork)) { releaseWork.get(); audio.closeDevice(); resourcesReleased = true; }
         return;
     }
     if (take.warning().isNotEmpty()) notice = take.warning();

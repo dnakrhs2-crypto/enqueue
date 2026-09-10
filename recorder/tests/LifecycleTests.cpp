@@ -48,6 +48,18 @@ int runLifecycleTests()
         session.releaseForShutdown(); lifecycleFixture::until([&] { session.tick(); return session.shutdownComplete(); });
         require(session.audioEngine().deviceInfo().sampleRate == 0, "Device released after commit and worker join");
     });
+    suite.test("Audio device failure surfaces synchronously from configure on the caller thread", []
+    {
+        // Apartment-model ASIO drivers can only be created on the (STA) message thread, so the
+        // device negotiation must run on the caller and report there, not on the camera worker.
+        RecorderDocument document; RecorderSession session(document);
+        UserSettings s; s.asioDeviceId = "recorder-test-missing-asio-device"; s.cameraEnabled = {false, false};
+        const auto result = session.configure(s);
+        require(result.failed(), "Missing ASIO device must fail configure synchronously");
+        require(result.getErrorMessage().contains(juce::String::fromUTF8("장치 연결을 확인하세요")), "Synchronous audio failure keeps the user-facing prefix");
+        require(!session.configuring(), "No asynchronous device work remains after a synchronous audio failure");
+        require(session.audioEngine().deviceInfo().sampleRate == 0, "Failed negotiation leaves no device open");
+    });
     suite.test("All Korean failure banners have the specified meaning", []
     {
         require(recorderFaultText(RecorderFault::camera2Disconnected) == juce::String::fromUTF8("캠2 연결이 끊겼습니다. 캠1과 원본 녹음은 계속됩니다."), "Camera message");
