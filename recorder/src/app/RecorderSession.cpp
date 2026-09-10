@@ -82,7 +82,7 @@ struct RecorderSession::Playback
         : renderer(rate, block), transport(rate, qpcFrequency(), renderer.queue(), end), output(audio) {}
     ~Playback() { output.close(); renderer.stopWorker(); video.stop(); }
 };
-RecorderSession::RecorderSession(RecorderDocument& d) : document(d), take(d, audio) { lifecycle->bindCaptureBlocker(audio.shutdownBlocker()); }
+RecorderSession::RecorderSession(RecorderDocument& d, TakeController::VideoFactory factory) : document(d), take(d, audio, std::move(factory)) { lifecycle->bindCaptureBlocker(audio.shutdownBlocker()); }
 RecorderSession::~RecorderSession()
 {
     lifecycle->blockCommands();
@@ -164,7 +164,8 @@ juce::Result RecorderSession::configure(UserSettings settings)
     }
     catch (const RateMismatch& e) { audioResult = juce::Result::fail(juce::String::fromUTF8(e.what())); }
     catch (const std::exception& e) { audioResult = juce::Result::fail(k("장치 연결을 확인하세요. ") + juce::String::fromUTF8(e.what())); }
-    deviceWork = std::async(std::launch::async, [this, settings, audioResult, camerasUnchanged]() mutable
+    catch (...) { audioResult = juce::Result::fail(k("알 수 없는 장치 연결 오류")); }
+    return startDeviceWork([this, settings, audioResult, camerasUnchanged]() mutable
     {
         DeviceResult result; result.settings = settings; result.result = audioResult;
         const auto addFailure = [&result](const juce::String& text)
@@ -203,7 +204,29 @@ juce::Result RecorderSession::configure(UserSettings settings)
         catch (const std::exception& e) { addFailure(k("장치 연결을 확인하세요. ") + juce::String::fromUTF8(e.what())); }
         return result;
     });
+}
+juce::Result RecorderSession::startDeviceWork(std::function<DeviceResult()> work)
+{
+    lifecycle->set(RecorderLifecycle::configuring, true);
+    try
+    {
+        if (beforeWorkerStart) beforeWorkerStart("configure");
+        deviceWork = std::async(std::launch::async, std::move(work));
+    }
+    catch (const std::exception& e) { return configurationFailed(juce::String::fromUTF8(e.what())); }
+    catch (...) { return configurationFailed(k("알 수 없는 장치 작업 시작 오류")); }
     return juce::Result::ok();
+}
+juce::Result RecorderSession::configurationFailed(const juce::String& reason)
+{
+    lifecycle->end(RecorderLifecycle::configuring); notice.clear();
+    // A partially applied ASIO mapping must not become a record-ready configuration.
+    const auto closed = audio.closeDevice(); device = audio.deviceInfo();
+    error = k("장치 설정을 완료할 수 없습니다. ") + reason;
+    if (closed.failed()) error += " / " + closed.getErrorMessage();
+    const auto result = juce::Result::fail(error);
+    if (onConfigured) onConfigured(result, current);
+    return result;
 }
 void RecorderSession::presentLive()
 {
@@ -398,7 +421,15 @@ void RecorderSession::play(bool latest)
     if (playback) { playback->transport.play(); pendingLatest = false; }
     else preparePlayback();
 }
-void RecorderSession::pause() { wantPlay = false; if (playback) playback->transport.pause(); }
+juce::Result RecorderSession::pause()
+{
+    wantPlay = false;
+    try { if (playback) playback->transport.pause(); return juce::Result::ok(); }
+    catch (const std::exception& e) { error = k("재생을 일시 정지할 수 없습니다. ") + juce::String::fromUTF8(e.what()); }
+    catch (...) { error = k("재생을 일시 정지할 수 없습니다. 알 수 없는 오류"); }
+    clearPlayback(); // detach output when the callback cannot accept another command
+    return juce::Result::fail(error);
+}
 void RecorderSession::stopPlayback()
 { wantPlay = false; if (playback) { playback->transport.scrub(playhead(), true, qpcNow()); playback->transport.stop(); } }
 void RecorderSession::goToStart() { if (!lifecycle->acceptsCommands()) return; wantPlay = false; cursor = 0; if (playback) playback->transport.goToStart(); else preparePlayback(); }
@@ -480,11 +511,18 @@ void RecorderSession::tick()
 {
     if (ready(deviceWork))
     {
-        auto result = deviceWork.get(); current = result.settings; device = audio.deviceInfo();
-        adoptDeviceSampleRate(document, device.sampleRate);
+        DeviceResult result; bool collected = false;
+        try { result = deviceWork.get(); collected = true; }
+        catch (const std::exception& e) { for (auto& cam : cameras) cam.reset(); configurationFailed(juce::String::fromUTF8(e.what())); }
+        catch (...) { for (auto& cam : cameras) cam.reset(); configurationFailed(k("알 수 없는 장치 작업 오류")); }
+        if (collected)
+        {
+        current = result.settings; device = audio.deviceInfo();
         lifecycle->end(RecorderLifecycle::configuring);
+        adoptDeviceSampleRate(document, device.sampleRate);
         notice.clear(); if (result.result.failed()) error = result.result.getErrorMessage();
         if (onConfigured) onConfigured(result.result, current);
+        }
     }
     if (configuring()) return;
     if (recordAfterExport && !(lifecycle->snapshot() & RecorderLifecycle::exporting))
@@ -499,10 +537,18 @@ void RecorderSession::tick()
         {
             clearPlayback(); // detaches ASIO client before renderer/video join
             for (auto& cam : cameras) if (cam && cam->capture) cam->capture->requestStop();
-            releaseWork = std::async(std::launch::async, [this] { for (auto& cam : cameras) cam.reset(); });
+            try { if (beforeWorkerStart) beforeWorkerStart("release"); releaseWork = std::async(std::launch::async, [this] { for (auto& cam : cameras) cam.reset(); }); }
+            catch (const std::exception& e) { error = k("장치 해제 작업을 시작할 수 없습니다. ") + juce::String::fromUTF8(e.what()); finishDeviceRelease(); }
+            catch (...) { error = k("장치 해제 작업을 시작할 수 없습니다. 알 수 없는 오류"); finishDeviceRelease(); }
         }
         // The ASIO driver is closed on the thread that created it (message thread), after the cameras.
-        if (ready(releaseWork)) { releaseWork.get(); audio.closeDevice(); resourcesReleased = true; }
+        if (ready(releaseWork))
+        {
+            try { releaseWork.get(); }
+            catch (const std::exception& e) { error = k("장치 해제 작업 오류: ") + juce::String::fromUTF8(e.what()); }
+            catch (...) { error = k("알 수 없는 장치 해제 작업 오류"); }
+            finishDeviceRelease();
+        }
         return;
     }
     if (take.warning().isNotEmpty()) notice = take.warning();
@@ -558,8 +604,11 @@ void RecorderSession::tick()
         })) { cam.displayFailed = false; if (error == recorderFaultText(RecorderFault::gpuRemoved)) error.clear(); }
     }
     if (take.state() == TakeController::State::partialFailure && error.isEmpty())
+    {
         error = audio.error() == RecorderAudioEngine::Error::writeFailed ? k("저장 장치에 쓸 수 없어 녹화를 멈췄습니다.")
             : audio.error() != RecorderAudioEngine::Error::none ? k("오디오 장치 오류로 녹화를 멈췄습니다.") : k("일반 MP4 마무리 실패 · 재시도");
+        if (take.error().isNotEmpty()) error += " " + take.error();
+    }
     if (ready(planWork))
     {
         auto plan = collectPreparedPlan();
@@ -607,6 +656,13 @@ void RecorderSession::tick()
         if (!item.thumbs.empty() && onThumbnails) onThumbnails(item.asset, std::move(item.thumbs));
         if (item.peaks.sampleRate && onLoadedPeaks) onLoadedPeaks(item.asset, std::move(item.peaks), item.channel);
     }
+}
+void RecorderSession::finishDeviceRelease()
+{
+    // Rare synchronous fallback after a launch/get failure; no worker still owns cameras.
+    for (auto& cam : cameras) cam.reset();
+    const auto result = audio.closeDevice(); resourcesReleased = result.wasOk();
+    if (result.failed()) error = result.getErrorMessage();
 }
 void RecorderSession::requestShutdown()
 {

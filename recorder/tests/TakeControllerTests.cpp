@@ -5,8 +5,15 @@
 
 using namespace gocue::recorder;
 using recorder_test::require;
+namespace gocue::recorder::exception_test { extern thread_local std::function<void(const char*)> beforeTakeWorker; }
 namespace
 {
+struct FailTakeLaunch
+{
+    explicit FailTakeLaunch(const char* phase)
+    { exception_test::beforeTakeWorker = [phase](const char* current) { if (std::string(current) == phase) throw std::system_error(std::make_error_code(std::errc::resource_unavailable_try_again), "injected thread creation failure"); }; }
+    ~FailTakeLaunch() { exception_test::beforeTakeWorker = {}; }
+};
 void ok(const juce::Result& r) { if (r.failed()) throw std::runtime_error(r.getErrorMessage().toStdString()); }
 template<class F> void until(F f)
 {
@@ -107,6 +114,42 @@ struct Fixture
 int runTakeControllerTests()
 {
     recorder_test::Suite suite;
+    suite.test("Preparation launch failure restores idle and the structure lock", []
+    {
+        Fixture f;
+        {
+            FailTakeLaunch injection("prepare"); const auto result = f.controller.prepare(f.config);
+            require(result.failed() && result.getErrorMessage().contains("injected thread creation failure"), "Launch exception must become Result");
+            require(f.controller.state() == TakeController::State::idle && !f.document.isRecordingStructureLocked(), "Failed launch retained preparing/lock");
+            require(f.controller.shutdownComplete() && !f.audio.shutdownBlocker()->load(), "Failed launch retained capture resources");
+        }
+        const auto start = f.begin(); ok(f.controller.stop(start + 401));
+        while (f.audio.stopSample() < 0) { f.feed(); f.controller.tick(); } f.complete();
+        require(f.controller.state() == TakeController::State::done, "Retry after failed launch did not finish");
+    });
+    for (const auto* phase : {"finalize", "save"})
+        suite.test(phase == std::string("finalize") ? "Finalizer launch failure releases capture and preserves partial take" : "Checkpoint launch failure releases capture and preserves partial take", [phase]
+        {
+            Fixture f; const auto start = f.begin(); ok(f.controller.stop(start + 401));
+            FailTakeLaunch injection(phase);
+            while (f.audio.stopSample() < 0) { f.feed(); f.controller.tick(); } f.complete();
+            require(f.controller.state() == TakeController::State::partialFailure, "Failed finalization stuck or falsely succeeded");
+            require(!f.document.isRecordingStructureLocked() && !f.audio.shutdownBlocker()->load(), "Failed finalization retained locks");
+            require(f.controller.shutdownComplete() && f.controller.error().contains("injected thread creation failure"), "Worker state/error lost");
+            require(!f.document.getProject().media->takes.empty() && f.document.getProject().media->takes.back().state == TakeState::partial, "Partial take missing");
+        });
+    suite.test("Thrown checkpoint worker exception is collected and releases the journal", []
+    {
+        Fixture f; const auto start = f.begin();
+        const auto manifest = f.config.projectDirectory.getChildFile("media/takes/" + f.config.takeId.toDashedString() + "/take.json");
+        require(manifest.moveFileTo(manifest.getSiblingFile("take-before-failure.json")), "Preserve fixture manifest");
+        require(manifest.createDirectory().wasOk(), "Inject metadata write exception");
+        ok(f.controller.stop(start + 401));
+        while (f.audio.stopSample() < 0) { f.feed(); f.controller.tick(); } f.complete();
+        require(f.controller.state() == TakeController::State::partialFailure && f.controller.error().contains("Take worker failed"), "future.get exception did not reach failure state");
+        require(!f.document.isRecordingStructureLocked() && !f.audio.shutdownBlocker()->load() && f.controller.shutdownComplete(), "Thrown worker retained lifecycle resources");
+        require(f.document.isDirty() && f.document.getError().isNotEmpty(), "Thrown checkpoint was treated as saved");
+    });
     suite.test("Stereo sparse microphone asset, capture snapshot and take manifest", []
     {
         Fixture f(1, true); const auto start = f.begin(); ok(f.controller.stop(start + 1601));

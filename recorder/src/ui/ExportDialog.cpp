@@ -12,6 +12,8 @@ struct ExportDialog::Window final : juce::DocumentWindow
     explicit Window(ExportDialog& d) : DocumentWindow(ko("내보내기"), Palette::background, closeButton), owner(d)
     { setUsingNativeTitleBar(true); setContentNonOwned(&owner, true); setResizable(true, false); setResizeLimits(700, 640, 1400, 1000); centreWithSize(800, 700); }
     void closeButtonPressed() override { owner.closeWindow(); }
+    bool keyPressed(const juce::KeyPress& key) override
+    { return owner.onShortcut && owner.onShortcut(key, juce::Component::getCurrentlyFocusedComponent()); }
 };
 struct ExportDialog::Preview final : IAudioOutputClient
 {
@@ -95,6 +97,8 @@ void ExportDialog::show()
     refreshSources(); if (!window) window = std::make_unique<Window>(*this);
     window->setVisible(true); window->toFront(true); refreshSelection();
 }
+bool ExportDialog::ownsShortcutOrigin(const juce::Component* origin) const
+{ return origin && window && (origin == window.get() || window->isParentOf(origin)); }
 void ExportDialog::closeWindow()
 { stopPreview(); if (window) window->setVisible(false); }
 void ExportDialog::refreshSources()
@@ -272,7 +276,8 @@ void ExportDialog::startPreview()
         { auto bindings = TimelineExporter::openSources(*job, mask, *c); c->checkpoint(); return std::make_shared<Preview>(job, std::move(bindings), mask, device.bufferFrames); });
         if (window) window->enterModalState(false);
     }
-    catch (const std::exception& e) { sourceStatus.setText(juce::String::fromUTF8(e.what()), juce::dontSendNotification); }
+    catch (const std::exception& e) { sourceStatus.setText(juce::String::fromUTF8(e.what()), juce::dontSendNotification); stopPreview(); }
+    catch (...) { sourceStatus.setText(ko("알 수 없는 미리 듣기 준비 오류"), juce::dontSendNotification); stopPreview(); }
     refreshSelection();
 }
 void ExportDialog::stopPreview()
@@ -300,6 +305,7 @@ void ExportDialog::timerCallback()
         try { auto prepared = previewWork.get(); if (!previewControl->cancelled.load()) preview = std::move(prepared); }
         catch (const ExportCancelled&) {}
         catch (const std::exception& e) { sourceStatus.setText(juce::String::fromUTF8(e.what()), juce::dontSendNotification); stopPreview(); }
+        catch (...) { sourceStatus.setText(ko("알 수 없는 미리 듣기 준비 오류"), juce::dontSendNotification); stopPreview(); }
         if (!preview) stopPreview();
     }
     if (preview)

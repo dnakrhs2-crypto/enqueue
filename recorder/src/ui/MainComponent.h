@@ -13,10 +13,12 @@ class ExportDialog;
 class MainComponent : public juce::Component, private juce::Timer, private juce::KeyListener, private juce::FocusChangeListener
 {
 public:
-    MainComponent(RecorderDocument&, RecorderSettings&);
+    MainComponent(RecorderDocument&, RecorderSettings&, TakeController::VideoFactory = {});
     ~MainComponent() override;
     void resized() override;
     void showError(const juce::String&);
+    void showUnhandledException(const juce::File& report);
+    bool routeShortcut(const juce::KeyPress&, juce::Component* origin);
     void showFault(RecorderFault fault) { showError(recorderFaultText(fault)); }
     void openProject(const juce::File&);
     void requestClose(std::function<void()>);
@@ -29,6 +31,7 @@ public:
     void connectDevicesFromSettings() { if (!demo) session.configure(settings.get()); } // startup without a project: grab ASIO/cameras right away
 private:
     friend struct StabilityTestAccess;
+    friend struct ShortcutExceptionTestAccess;
     struct FileResult
     {
         juce::Result result = juce::Result::ok(); bool opening = false, recovered = false;
@@ -53,6 +56,10 @@ private:
     void demoTick(); void finishDemo(const juce::String&, const juce::String&);
     void publishLifecycle();
     void retryFinalization();
+    bool ownsShortcutOrigin(const juce::Component*) const;
+    bool startFileWork(FileResult, std::function<FileResult()>);
+    FileResult collectFileWork();
+    void settingsFailed(const juce::String&);
     RecorderDocument& document;
     RecorderSettings& settings;
     RecordView recordView;
@@ -66,6 +73,8 @@ private:
     std::unique_ptr<juce::FileChooser> chooser;
     std::unique_ptr<Demo> demo;
     std::future<FileResult> fileWork;
+    FileResult pendingFile; // preserve checkpoint/open metadata if a future throws
+    std::function<void(const char*)> beforeWorkerStart; // owner-thread failure injection
     std::future<juce::Result> settingsWork;
     std::future<juce::int64> spaceWork;
     std::function<void()> afterSave, closeAction;
@@ -79,6 +88,7 @@ private:
     juce::Component::SafePointer<juce::Component> shortcutFocus;
     std::int64_t lastStopButtonQpc = 0;
     juce::String banner;
+    juce::String exceptionBanner; // persists across device/status refreshes
     juce::TextButton aboutButton, updateButton, retryButton;
     RecorderPowerMonitor powerMonitor;
     bool closeCommitRequested = false;

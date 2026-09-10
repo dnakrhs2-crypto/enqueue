@@ -54,6 +54,14 @@ public:
     const juce::String getApplicationName() override { return ProductIdentity::displayName(); }
     const juce::String getApplicationVersion() override { return ProductIdentity::version(); }
     bool moreThanOneInstanceAllowed() override { return getCommandLineParameters().contains("--test-root") || getCommandLineParameters().contains("--self-test-record") || getCommandLineParameters().startsWith("--automation "); }
+    void unhandledException(const std::exception* exception, const juce::String& sourceFilename, int lineNumber) override
+    {
+        CrashHandler::handleException(exception, sourceFilename, lineNumber, [this](const juce::File& report)
+        {
+            lastExceptionReport = report; exceptionReported = true;
+            if (window) { window->content().showUnhandledException(report); if (report != juce::File()) CrashHandler::markSeen(report); }
+        });
+    }
     void initialise(const juce::String& commandLine) override
     {
         CrashHandler::install();
@@ -109,6 +117,7 @@ public:
         if (demoIterations && rootPath.isEmpty()) rootPath = juce::File::getCurrentWorkingDirectory().getChildFile(demoReport).getParentDirectory().getChildFile("demo-settings-" + juce::Uuid().toString()).getFullPathName();
         settings = std::make_unique<RecorderSettings>(rootPath.isEmpty() ? juce::File() : juce::File(rootPath)); const auto loaded = settings->load();
         document = std::make_unique<RecorderDocument>(); window = std::make_unique<MainWindow>(*document, *settings);
+        if (exceptionReported) { window->content().showUnhandledException(lastExceptionReport); if (lastExceptionReport != juce::File()) CrashHandler::markSeen(lastExceptionReport); }
         if (demoIterations) { window->content().startDemo(demoIterations, juce::File::getCurrentWorkingDirectory().getChildFile(demoDevices), demoAsio, juce::File::getCurrentWorkingDirectory().getChildFile(demoReport)); return; }
         const auto lifecycle = window->content().lifecycleState();
         const juce::Component::SafePointer<MainComponent> content(&window->content());
@@ -167,6 +176,8 @@ private:
     std::unique_ptr<RecorderDocument> document;
     std::unique_ptr<MainWindow> window;
     std::unique_ptr<juce::DocumentWindow> timelineAutomation;
+    juce::File lastExceptionReport;
+    bool exceptionReported = false;
 };
 }
 START_JUCE_APPLICATION(gocue::recorder::RecorderApplication)

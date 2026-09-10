@@ -10,7 +10,10 @@ class FormWindow : public juce::DocumentWindow
 public:
     explicit FormWindow(const juce::String& title) : DocumentWindow(title, Palette::background, closeButton) { setUsingNativeTitleBar(true); setResizable(false, false); }
     std::function<void()> onClosed;
+    std::function<bool(const juce::KeyPress&, juce::Component*)> onShortcut;
     void closeButtonPressed() override { setVisible(false); if (onClosed) onClosed(); }
+    bool keyPressed(const juce::KeyPress& key) override
+    { return onShortcut && onShortcut(key, juce::Component::getCurrentlyFocusedComponent()); }
 };
 class SettingsForm : public juce::Component
 {
@@ -69,6 +72,7 @@ void MainComponent::showSettings()
 {
     if (session.busy()) return; session.enterTimeline(false); audioPanel = nullptr; cameraPanel = nullptr; settingsError = nullptr; settingsWindow.reset();
     auto window = std::make_unique<FormWindow>(ko("설정"));
+    window->onShortcut = [this](const juce::KeyPress& key, juce::Component* origin) { return routeShortcut(key, origin); };
     window->onClosed = [this] { if (timeline) session.enterTimeline(true); }; settingsWindow = std::move(window);
     auto* content = new SettingsForm(settings.get(), document.getProject(), session.deviceInfo(),
         [this](const UserSettings& s) { return session.calibrationMatches(s); });
@@ -102,7 +106,9 @@ void MainComponent::showSettings()
 }
 void MainComponent::newProjectDialog()
 {
-    projectWindow = std::make_unique<FormWindow>(ko("새 프로젝트")); auto* content = new NewProjectForm(); projectWindow->setContentOwned(content, true); projectWindow->centreAroundComponent(this, 700, 270);
+    auto window = std::make_unique<FormWindow>(ko("새 프로젝트"));
+    window->onShortcut = [this](const juce::KeyPress& key, juce::Component* origin) { return routeShortcut(key, origin); };
+    projectWindow = std::move(window); auto* content = new NewProjectForm(); projectWindow->setContentOwned(content, true); projectWindow->centreAroundComponent(this, 700, 270);
     content->cancel.onClick = [this] { projectWindow->setVisible(false); };
     content->create.onClick = [this, content]
     {
@@ -132,7 +138,8 @@ void MainComponent::createProject(const juce::String& name, const juce::File& fo
 {
     if (session.busy() || fileWork.valid()) return; const auto path = folder.getFullPathName();
     if (name.trim().isEmpty() || path.startsWith("\\\\") || path.startsWith("//") || (fps != 30 && fps != 60)) { showError(ko("프로젝트 이름·로컬 폴더·프레임레이트를 확인하세요.")); return; }
-    fileWork = std::async(std::launch::async, [name, folder, fps]
+    FileResult context; context.opening = true; context.file = folder.getChildFile(ProductIdentity::projectFileName());
+    startFileWork(context, [name, folder, fps]
     {
         FileResult r; r.opening = true; r.file = folder.getChildFile(ProductIdentity::projectFileName()); r.loaded.name = name; r.loaded.fps = {fps, 1};
         if (r.file.exists() || folder.getChildFile("media").exists() || folder.getChildFile("journal").exists()) r.result = juce::Result::fail(ko("이미 프로젝트 자료가 있는 폴더입니다. 새 폴더를 선택하세요."));
@@ -145,11 +152,18 @@ void MainComponent::chooseOpen()
     chooser->launchAsync(juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles, [safe](const juce::FileChooser& c) { if (safe) { const auto path = c.getResult(); safe->chooser.reset(); if (path != juce::File()) safe->openProject(path); } });
 }
 void MainComponent::openProject(const juce::File& path)
-{ beforeSwitch([this, path] { fileWork = std::async(std::launch::async, [path] { FileResult r; r.opening = true; r.file = path; r.result = RecorderSerializer::readCheckpoint(path, r.loaded, &r.info); return r; }); refreshPending = true; }); }
+{
+    beforeSwitch([this, path]
+    {
+        FileResult context; context.opening = true; context.file = path;
+        startFileWork(context, [context]() mutable { context.result = RecorderSerializer::readCheckpoint(context.file, context.loaded, &context.info); return context; }); refreshPending = true;
+    });
+}
 void MainComponent::saveProject() { if (document.getFile() == juce::File()) newProjectDialog(); else saveTo(document.getFile()); }
 void MainComponent::saveTo(const juce::File& path)
 {
     if (fileWork.valid() || session.busy()) return; const auto snapshot = document.snapshot();
-    fileWork = std::async(std::launch::async, [snapshot, path] { FileResult r; r.file = path; r.written = snapshot; r.result = RecorderSerializer::writeCheckpoint(path, *snapshot); return r; }); refreshPending = true;
+    FileResult context; context.file = path; context.written = snapshot;
+    startFileWork(context, [context]() mutable { context.result = RecorderSerializer::writeCheckpoint(context.file, *context.written); return context; }); refreshPending = true;
 }
 }
