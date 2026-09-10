@@ -8,19 +8,19 @@
 #define RECORDER_PROJECT_EXTENSION ".recorder"
 #define RECORDER_FILE_TYPE "Recorder.Project"
 #define RECORDER_APP_ID "{9BD0A267-2A38-47C1-9623-F1B76E2587D4}"
-#define RECORDER_VERSION "0.1.1"
+#define RECORDER_VERSION "0.1.2"
 #define RECORDER_COMPANY "Gomtwigim"
-// CEO/release-owner confirmation is still pending (U-12). Never publish these URLs.
+// Confirmed by the CEO on 2026-09-10 (in-app updates): GitHub releases feed + gomtwigim.com page, like Enqueue/LiveMix.
 #define RECORDER_PACKAGE_STEM "Recorder"
-#define RECORDER_RELEASE_REPO "UNCONFIRMED/recorder"
-#define RECORDER_RELEASE_REMOTE "UNCONFIRMED"
+#define RECORDER_RELEASE_REPO "dnakrhs2-crypto/recorder"
+#define RECORDER_RELEASE_REMOTE "recorder"
 #define RECORDER_TAG_PREFIX "recorder-v"
 #define RECORDER_SITE_DIR "recorder"
-#define RECORDER_SITE_URL "https://recorder.invalid/recorder/"
-#define RECORDER_APPCAST_URL "https://recorder.invalid/appcast.xml"
-#define RECORDER_RELEASE_BASE_URL "https://recorder.invalid/releases/download/"
+#define RECORDER_SITE_URL "https://xn--jb0byyo90f.com/recorder/"
+#define RECORDER_APPCAST_URL "https://github.com/dnakrhs2-crypto/recorder/releases/latest/download/appcast.xml"
+#define RECORDER_RELEASE_BASE_URL "https://github.com/dnakrhs2-crypto/recorder/releases/download/"
 #define RECORDER_SOURCES_STEM "Recorder-sources"
-#define RECORDER_PUBLICATION_CONFIRMED "0"
+#define RECORDER_PUBLICATION_CONFIRMED "1"
 
 namespace gocue::recorder
 {

@@ -191,7 +191,7 @@ class BundleValidationTests(unittest.TestCase):
 
     def test_appcast_cross_app_url_is_rejected(self):
         path = self.bundle / "appcast.xml"
-        path.write_text(path.read_text(encoding="utf-8").replace("recorder.invalid/releases/download", "github.com/owner/enqueue/releases/download"), encoding="utf-8")
+        path.write_text(path.read_text(encoding="utf-8").replace(IDENTITY["RELEASE_BASE_URL"], "https://github.com/owner/enqueue/releases/download/"), encoding="utf-8")
         refresh_manifest(self.bundle)
         self.assertTrue(any("mismatch" in error for error in self.check()["errors"]))
 
@@ -304,23 +304,35 @@ class LegacyRegressionTests(unittest.TestCase):
                 deploy.assert_called_once_with(release.SITE_REPO, None)
                 build.assert_not_called()
 
+    def _deploy_site_dry(self, directory, confirmed):
+        work = Path(directory) / "work"
+        work.mkdir()
+        def command(cmd, **kwargs):
+            if cmd[:2] == ["git", "clone"]:
+                (Path(cmd[-1]) / ".git").mkdir(parents=True)
+            return "" # no changes, so no push
+        with mock.patch.dict(release.APPS["recorder"], {"publication_confirmed": confirmed}), \
+             mock.patch.object(release, "APP", release.APPS["enqueue"]), \
+             mock.patch.object(release.tempfile, "mkdtemp", return_value=str(work)), \
+             mock.patch.object(release, "latest_from_github", return_value=None) as latest, \
+             mock.patch.object(release, "run", side_effect=command), \
+             mock.patch.object(release.shutil, "rmtree"):
+            release.deploy_site(release.SITE_REPO, None)
+        return work, [c.args[1] for c in latest.call_args_list]
+
     def test_site_deploy_never_queries_or_copies_unconfirmed_recorder(self):
         with tempfile.TemporaryDirectory() as directory:
-            work = Path(directory) / "work"
-            work.mkdir()
-            def command(cmd, **kwargs):
-                if cmd[:2] == ["git", "clone"]:
-                    (Path(cmd[-1]) / ".git").mkdir(parents=True)
-                return "" # no changes, so no push
-            with mock.patch.object(release, "APP", release.APPS["enqueue"]), \
-                 mock.patch.object(release.tempfile, "mkdtemp", return_value=str(work)), \
-                 mock.patch.object(release, "latest_from_github", return_value=None) as latest, \
-                 mock.patch.object(release, "run", side_effect=command), \
-                 mock.patch.object(release.shutil, "rmtree"):
-                release.deploy_site(release.SITE_REPO, None)
-            self.assertEqual([c.args[1] for c in latest.call_args_list], [release.APPS[k]["repo"] for k in ("enqueue", "livemix")])
+            work, queried = self._deploy_site_dry(directory, confirmed=False)
+            self.assertEqual(queried, [release.APPS[k]["repo"] for k in ("enqueue", "livemix")])
             self.assertFalse((work / "pages/recorder").exists())
             self.assertTrue((work / "pages/livemix/index.html").is_file())
+
+    def test_site_deploy_includes_confirmed_recorder(self):
+        with tempfile.TemporaryDirectory() as directory:
+            work, queried = self._deploy_site_dry(directory, confirmed=True)
+            self.assertEqual(queried, [release.APPS[k]["repo"] for k in ("enqueue", "livemix", "recorder")])
+            self.assertTrue((work / "pages/recorder/index.html").is_file())
+            self.assertTrue((work / "pages/recorder/notes.html").is_file())
 
 
 class RecorderReleaseRoutingTests(unittest.TestCase):
@@ -339,17 +351,49 @@ class RecorderReleaseRoutingTests(unittest.TestCase):
             site.assert_not_called()
 
     def test_conflicting_flags_and_placeholder_publication_fail_before_actions(self):
-        cases = [["--package-only", "--publish"], ["--package-only", "--site-only"],
-                 ["--package-only", "--skip-build"], ["--package-only", "--skip-tests"],
-                 ["--publish", "--repo", "real-owner/recorder"], ["--site-only"],
-                 ["--package-only", "--repo", "real-owner/recorder"]]
-        for flags in cases:
-            with self.subTest(flags=flags), mock.patch.object(sys, "argv", ["release.py", "--app", "recorder", *flags]), \
-                 mock.patch.object(release, "run") as run, mock.patch.object(release, "package_recorder") as package, \
-                 redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
-                release.main()
-            run.assert_not_called()
+        always = [["--package-only", "--publish"], ["--package-only", "--site-only"],
+                  ["--package-only", "--skip-build"], ["--package-only", "--skip-tests"],
+                  ["--publish", "--repo", "real-owner/recorder"], ["--package-only", "--repo", "real-owner/recorder"],
+                  ["--publish", "--allow-dirty"], ["--publish", "--skip-tests"]]
+        unconfirmed_only = [["--site-only"], ["--publish"]]
+        for confirmed, cases in ((True, always), (False, always + unconfirmed_only)):
+            for flags in cases:
+                with self.subTest(confirmed=confirmed, flags=flags), mock.patch.dict(release.APPS["recorder"], {"publication_confirmed": confirmed}), \
+                     mock.patch.object(sys, "argv", ["release.py", "--app", "recorder", *flags]), \
+                     mock.patch.object(release, "run") as run, mock.patch.object(release, "package_recorder") as package, \
+                     mock.patch.object(release, "publish_recorder") as publish, mock.patch.object(release, "deploy_site") as site, \
+                     redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+                    release.main()
+                run.assert_not_called()
+                package.assert_not_called()
+                publish.assert_not_called()
+                site.assert_not_called()
+
+    def test_confirmed_identity_routes_site_only_and_publish(self):
+        with mock.patch.dict(release.APPS["recorder"], {"publication_confirmed": True}), \
+             mock.patch.object(sys, "argv", ["release.py", "--app", "recorder", "--site-only"]), \
+             mock.patch.object(release, "run") as run, mock.patch.object(release, "package_recorder") as package, \
+             mock.patch.object(release, "deploy_site") as site:
+            release.main()
+            site.assert_called_once_with(release.SITE_REPO, None)
             package.assert_not_called()
+            run.assert_not_called()
+        candidate = {"tag": "recorder-v9.9.9"}
+        with mock.patch.dict(release.APPS["recorder"], {"publication_confirmed": True}), \
+             mock.patch.object(sys, "argv", ["release.py", "--app", "recorder", "--publish"]), \
+             mock.patch.object(release, "run", return_value="") as run, mock.patch.object(release, "package_recorder", return_value=candidate) as package, \
+             mock.patch.object(release, "publish_recorder") as publish:
+            release.main()
+            package.assert_called_once()
+            publish.assert_called_once_with(mock.ANY, candidate)
+            self.assertEqual([list(c.args[0]) for c in run.call_args_list], [["git", "status", "--porcelain"]])
+        with mock.patch.dict(release.APPS["recorder"], {"publication_confirmed": True}), \
+             mock.patch.object(sys, "argv", ["release.py", "--app", "recorder", "--publish"]), \
+             mock.patch.object(release, "run", return_value=" M tools/release.py\n"), mock.patch.object(release, "package_recorder") as package, \
+             mock.patch.object(release, "publish_recorder") as publish, redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+            release.main()
+        package.assert_not_called()
+        publish.assert_not_called()
 
     def test_build_discovers_final_target_output_and_runs_all_registered_tests(self):
         with tempfile.TemporaryDirectory() as directory, mock.patch.object(release, "ROOT", Path(directory)), \

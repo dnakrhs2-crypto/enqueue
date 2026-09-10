@@ -344,7 +344,7 @@ def latest_from_github(gh, repo, app=None, allow_missing=False):
     if version.startswith(app["tag_prefix"]):
         version = version[len(app["tag_prefix"]):]
     version = version.lstrip("v")
-    installer = next((a for a in info["assets"] if re.match(r"(Enqueue|GoCue|LiveMix)-Setup-[0-9.]+\.exe$", a["name"])), None)
+    installer = next((a for a in info["assets"] if re.match(r"(Enqueue|GoCue|LiveMix|Recorder)-Setup-[0-9.]+\.exe$", a["name"])), None)
     if installer is None:
         sys.exit("the latest release has no %s-Setup-x.y.z.exe asset" % app["name"])
     if "/releases/download/" not in installer["url"]:
@@ -595,7 +595,40 @@ def package_recorder(args):
     print("local Recorder candidate:", output)
     print("technical checks:", report["technical_status"], "; release gates:", report["status"])
     print("unresolved:", ", ".join(report["blockers"]))
-    print("package-only: no GitHub, site or tag changes; this does not approve publication")
+    if not getattr(args, "publish", False):
+        print("package-only: no GitHub, site or tag changes; this does not approve publication")
+    return {"output": output, "installer": installer, "appcast": output / "appcast.xml", "notes": output / "notes.html",
+            "version": identity["VERSION"], "tag": identity["TAG_PREFIX"] + identity["VERSION"],
+            "url": identity["RELEASE_BASE_URL"] + identity["TAG_PREFIX"] + identity["VERSION"] + "/" + installer.name}
+
+
+def publish_recorder(args, candidate):
+    """Same shape as the legacy publish: annotated tag at HEAD, push main + tag to the app remote (a mirror of this
+    repository), GitHub release with installer + appcast (+ fixed-name installer), then the website."""
+    tag_name = candidate["tag"]
+    head = run(["git", "rev-parse", "HEAD"], cwd=ROOT, capture=True).strip()
+    if run(["git", "tag", "--list", tag_name], cwd=ROOT, capture=True).strip():
+        tagged = run(["git", "rev-list", "-n", "1", tag_name], cwd=ROOT, capture=True).strip()
+        if tagged != head:
+            sys.exit("tag %s is on %s, HEAD is %s - bump RECORDER_VERSION" % (tag_name, tagged[:10], head[:10]))
+    else:
+        run(["git", "tag", "-a", tag_name, "-m", APP["name"] + " " + candidate["version"]], cwd=ROOT)
+    run(["git", "push", APP["remote"], "HEAD:main"], cwd=ROOT)
+    run(["git", "push", APP["remote"], tag_name], cwd=ROOT)
+    gh = find_gh()
+    run([gh, "release", "create", tag_name, str(candidate["installer"]), str(candidate["appcast"]),
+         "--repo", APP["repo"], "--title", APP["name"] + " " + candidate["version"], "--verify-tag",
+         "--notes-file", str(candidate["notes"])])
+    print("published :", "https://github.com/%s/releases/tag/%s" % (APP["repo"], tag_name))
+    fixed = candidate["output"] / APP["fixed"]
+    shutil.copyfile(candidate["installer"], fixed)
+    run([gh, "release", "upload", tag_name, str(fixed), "--repo", APP["repo"], "--clobber"])
+    if not args.skip_site:
+        deploy_site(SITE_REPO, {
+            "version": candidate["version"], "tag": tag_name, "url": candidate["url"], "size": candidate["installer"].stat().st_size,
+            "date": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "latest_url": "https://github.com/%s/releases/latest/download/%s" % (APP["repo"], APP["fixed"]),
+            "feedback": read_feedback_link()})
 
 
 def main():
@@ -625,13 +658,24 @@ def main():
     if args.app == "recorder":
         # No recorder operation may fall through to the legacy publishing pipeline.
         # A CLI --repo override must not turn a provisional identity into a public release.
-        if args.publish or args.site_only:
-            sys.exit("Recorder publication is blocked: ProductIdentity/URLs, source, contracts and rounds 28/34 require release-owner confirmation. Use --package-only.")
-        if not args.package_only:
-            parser.error("Recorder currently requires --package-only")
+        if (args.publish or args.site_only) and not APP.get("publication_confirmed", False):
+            sys.exit("Recorder publication is blocked: ProductIdentity/URLs require release-owner confirmation (RECORDER_PUBLICATION_CONFIRMED). Use --package-only.")
         if args.repo and args.repo != APP["repo"]:
             parser.error("Recorder --repo must match ProductIdentity.h; CLI overrides cannot change release identity")
-        package_recorder(args)
+        if args.site_only:
+            deploy_site(SITE_REPO, None)
+            return
+        if args.package_only:
+            package_recorder(args)
+            return
+        if not args.publish:
+            parser.error("Recorder requires --package-only or --publish")
+        if args.allow_dirty or args.skip_build or args.skip_tests:
+            sys.exit("--publish builds and tests what is committed: --allow-dirty / --skip-build / --skip-tests are for local test builds only")
+        dirty = run(["git", "status", "--porcelain"], cwd=ROOT, capture=True)
+        if dirty.strip():
+            sys.exit("the working tree has uncommitted changes - commit first:\n" + dirty)
+        publish_recorder(args, package_recorder(args))
         return
 
     if not args.repo:

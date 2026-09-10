@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Recorder (가칭)</title>
-<meta name="description" content="웹캠 영상과 ASIO 원본 오디오를 한 프로젝트에 기록하는 Windows용 Recorder (가칭). 공개 준비 중입니다.">
+<meta name="description" content="웹캠 영상과 ASIO 원본 오디오를 한 프로젝트에 기록하는 Windows용 Recorder (가칭). 내부 배포 버전.">
 <link rel="stylesheet" href="../style.css">
 </head>
 <body>
@@ -18,14 +18,17 @@
 </header>
 <main><article>
   <header class="product-head"><div>
-    <h1>Recorder <small>가칭 · 공개 준비 중</small></h1>
+    <h1>Recorder <small>가칭 · 내부 배포</small></h1>
     <p class="tagline">웹캠 영상과 원본 오디오를 하나의 프로젝트에</p>
   </div></header>
   <section class="download-row" aria-label="다운로드">
-    <div id="download-slot"><p class="notice">다운로드 준비 중입니다. 이름과 배포 일정은 아직 확정되지 않았습니다.</p></div>
+    <a class="download-button" id="download" href="__DOWNLOAD_URL__">
+      <strong id="download-label">__DOWNLOAD_LABEL__</strong>
+      <span id="download-meta">Windows 10 / 11 (64비트)</span>
+    </a>
     <dl class="requirements">
       <dt>개발 대상</dt><dd>Windows 64비트 · NVIDIA GPU · ASIO 오디오 인터페이스</dd>
-      <dt>지원 환경</dt><dd>Windows 10 / 11의 지원 최소 빌드와 드라이버 조합은 설치 검증 후 안내합니다.</dd>
+      <dt>기타</dt><dd><a href="notes.html">바뀐 점</a> · <a href="https://github.com/dnakrhs2-crypto/recorder/releases">GitHub 릴리스</a></dd>
     </dl>
   </section>
   <section class="body-section">
@@ -42,7 +45,7 @@
   <section class="body-section" id="sources">
     <h2>오픈소스와 고지</h2>
     <p>이 프로그램은 LGPL v3-or-later로 배포되는 FFmpeg 공유 라이브러리를 사용합니다.</p>
-    <p id="source-slot">같은 릴리스의 대응 소스: 공개 전 준비 중</p>
+    <p id="source-slot">같은 릴리스의 대응 소스: <a href="https://github.com/dnakrhs2-crypto/recorder">GitHub 저장소</a></p>
     <p><a href="notices.html">라이선스·제3자 고지 안내</a></p>
   </section>
 </article></main>
@@ -54,19 +57,12 @@
 (function () {
   fetch('latest.json', { cache: 'no-cache' }).then(function (r) { return r.ok ? r.json() : null; })
     .then(function (info) {
-      // Local candidate metadata never enables a public download.
-      if (!info || info.publishable !== true || !info.tag || !info.source_url) return;
-      var binary = new URL(info.url), source = new URL(info.source_url);
-      var releasePath = '/releases/download/' + info.tag + '/';
-      if (binary.protocol !== 'https:' || source.protocol !== 'https:' || binary.origin !== source.origin ||
-          binary.hostname.endsWith('.invalid') || binary.pathname.indexOf(releasePath) < 0 ||
-          source.pathname.indexOf(releasePath) < 0) return;
-      var link = document.createElement('a'); link.className = 'download-button';
-      link.href = binary.href; link.textContent = 'Recorder ' + info.version + ' 다운로드';
-      document.getElementById('download-slot').replaceChildren(link);
-      var sources = document.createElement('a'); sources.href = source.href;
-      sources.textContent = '같은 릴리스의 대응 소스 다운로드';
-      document.getElementById('source-slot').replaceChildren(sources);
+      // latest.json is written at deploy from the GitHub release: refresh the button with the newest version.
+      if (!info || !info.url || !info.version) return;
+      var binary = new URL(info.url);
+      if (binary.protocol !== 'https:' || binary.hostname !== 'github.com' || binary.pathname.indexOf('/releases/download/') < 0) return;
+      document.getElementById('download').href = binary.href;
+      document.getElementById('download-label').textContent = 'Recorder ' + info.version + ' 다운로드';
     }).catch(function () {});
 })();
 </script>

@@ -29,6 +29,11 @@ MainComponent::MainComponent(RecorderDocument& d, RecorderSettings& s) : documen
         if (audioPanel) { audioPanel->setSettings(s); audioPanel->setDeviceInfo(session.deviceInfo()); }
         if (settingsError) settingsError->setText(result.wasOk() ? ko("설정을 적용했습니다.") : result.getErrorMessage(), juce::dontSendNotification);
         refreshPending = true;
+        if (pendingConfigure)
+        {
+            const auto next = *pendingConfigure; pendingConfigure.reset(); const auto queued = session.configure(next);
+            if (settingsError) settingsError->setText(queued.failed() ? queued.getErrorMessage() : ko("장치를 연결하는 중입니다."), juce::dontSendNotification);
+        }
     };
     session.onPeaks = [this](const Id& id, auto peaks, unsigned channel) { timelineView.setPeaks(id, peaks, channel); };
     session.onLoadedPeaks = [this](const Id& id, auto peaks, unsigned channel) { timelineView.setLoadedPeaks(id, std::move(peaks), channel); };
@@ -151,6 +156,13 @@ void MainComponent::timerCallback()
 {
     if (powerMonitor.poll() && !closeAction) session.resumeFromSleep();
     session.setHosts(recordView.nativeHosts()); session.tick();
+    // Updates: a quiet check 20 s after launch and then once a day, only while nothing is recording/exporting.
+    if (!demo && !closeAction && RecorderUpdater::isAvailable() && !session.busy() && session.lifecycleState()->canShutdown())
+    {
+        const auto t = juce::Time::getCurrentTime();
+        if ((t - launchedAt).inSeconds() >= 20.0 && (lastQuietCheck == juce::Time() || (t - lastQuietCheck).inHours() >= 24.0))
+        { lastQuietCheck = t; RecorderUpdater::checkQuietly(); }
+    }
     if (completed(fileWork))
     {
         auto r = fileWork.get();

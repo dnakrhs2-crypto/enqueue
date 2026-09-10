@@ -12,18 +12,23 @@ AudioSettingsPanel::AudioSettingsPanel(const UserSettings& s, const RecorderProj
     for (auto* box : {&devices, &rate, &buffer, &left, &right}) { addAndMakeVisible(box); box->setTextWhenNothingSelected(ko("선택 안 함")); }
     int id = 1; for (const auto& name : RecorderAudioEngine::deviceNames()) { devices.addItem(name, id); if (name == s.asioDeviceId) devices.setSelectedId(id, juce::dontSendNotification); ++id; }
     if (s.asioDeviceId.isNotEmpty() && !devices.getSelectedId()) devices.setText(s.asioDeviceId + ko(" · 연결 안 됨"), juce::dontSendNotification);
+    if (s.asioDeviceId.isEmpty() && devices.getNumItems() > 0) devices.setSelectedId(1, juce::dontSendNotification); // the session picks the first driver too
     for (auto Fs : {44100, 48000, 88200, 96000, 192000}) rate.addItem(juce::String(Fs) + " Hz", Fs);
     rate.setSelectedId(int(fixed ? p.Fs : s.preferredSampleRate), juce::dontSendNotification); rate.setEnabled(!fixed);
     buffer.setEditableText(true); buffer.setText(juce::String(s.bufferSize), juce::dontSendNotification);
-    for (auto* b : {&connect, &controlPanel}) addAndMakeVisible(b); addAndMakeVisible(mono); mono.setToggleState(s.output.mono, juce::dontSendNotification);
-    mono.onClick = [this] { right.setEnabled(!mono.getToggleState()); leftLabel.setText(mono.getToggleState() ? ko("재생 출력 모노 채널") : ko("재생 출력 왼쪽"), juce::dontSendNotification); };
-    for (unsigned i = 0; i < 8; ++i) { label(*this, inputLabels[i], ko("마이크 ") + juce::String(i + 1) + ko(" · 물리 입력")); addAndMakeVisible(inputs[i]); }
-    connect.onClick = [this]
+    addAndMakeVisible(controlPanel); addAndMakeVisible(mono); mono.setToggleState(s.output.mono, juce::dontSendNotification);
+    // Every edit applies at once: the session (re)opens the device, there is no connect step.
+    const auto changed = [this]
     {
         auto s = read(initial);
-        if (s.asioDeviceId != actual.name) { s.physicalInputs.clear(); s.output = {}; }
-        if (onConnect) onConnect(s);
+        if (s.asioDeviceId != actual.name) { s.physicalInputs.clear(); s.output = {}; } // a new device gets its first-run defaults
+        actualLabel.setText(ko("장치를 연결하는 중입니다."), juce::dontSendNotification);
+        if (onChanged) onChanged(s);
     };
+    mono.onClick = [this, changed] { right.setEnabled(!mono.getToggleState()); leftLabel.setText(mono.getToggleState() ? ko("재생 출력 모노 채널") : ko("재생 출력 왼쪽"), juce::dontSendNotification); changed(); };
+    for (auto* box : {&devices, &rate, &buffer, &left, &right}) box->onChange = changed;
+    for (auto& box : inputs) box.onChange = changed;
+    for (unsigned i = 0; i < 8; ++i) { label(*this, inputLabels[i], ko("마이크 ") + juce::String(i + 1) + ko(" · 물리 입력")); addAndMakeVisible(inputs[i]); }
     controlPanel.onClick = [this] { if (onControlPanel) onControlPanel(); };
     setDeviceInfo(info);
 }
@@ -63,7 +68,7 @@ void AudioSettingsPanel::setDeviceInfo(const RecorderAudioEngine::DeviceInfo& in
 void AudioSettingsPanel::resized()
 {
     auto a = getLocalBounds().reduced(16); auto row = a.removeFromTop(38);
-    deviceLabel.setBounds(row.removeFromLeft(112)); connect.setBounds(row.removeFromRight(112).reduced(2)); devices.setBounds(row.reduced(2));
+    deviceLabel.setBounds(row.removeFromLeft(112)); devices.setBounds(row.reduced(2));
     row = a.removeFromTop(38); rateLabel.setBounds(row.removeFromLeft(112)); rate.setBounds(row.removeFromLeft(155).reduced(2)); bufferLabel.setBounds(row.removeFromLeft(66)); buffer.setBounds(row.removeFromLeft(100).reduced(2)); controlPanel.setBounds(row.reduced(2));
     actualLabel.setBounds(a.removeFromTop(30)); latencyLabel.setBounds(a.removeFromTop(34));
     row = a.removeFromTop(32); mono.setBounds(row.removeFromLeft(145)); a.removeFromTop(4);

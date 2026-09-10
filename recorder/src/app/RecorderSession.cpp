@@ -109,11 +109,17 @@ juce::Result RecorderSession::configure(UserSettings settings)
     if (settings.cameraEnabled[0] && settings.cameraEnabled[1]
         && CameraCatalog::sameDevice(settings.cameraDeviceIds[0].toStdString(), settings.cameraDeviceIds[1].toStdString()))
         return juce::Result::fail(k("같은 카메라를 두 번 선택할 수 없습니다."));
+    // No connect step: an unset device means "use the first ASIO driver on this PC".
+    if (settings.asioDeviceId.isEmpty()) { const auto names = RecorderAudioEngine::deviceNames(); if (!names.isEmpty()) settings.asioDeviceId = names[0]; }
+    // Camera choices that did not change keep their running capture: an audio-only change must not blank the previews.
+    bool camerasUnchanged = settings.cameraEnabled == current.cameraEnabled && settings.cameraDeviceIds == current.cameraDeviceIds && settings.cameraModes == current.cameraModes;
+    for (unsigned i = 0; i < 2 && camerasUnchanged; ++i) if (settings.cameraEnabled[i] && !cameraReady(i)) camerasUnchanged = false;
     clearPlayback(); lifecycle->invalidate(); lifecycle->set(RecorderLifecycle::configuring, true); error.clear(); notice = k("장치를 연결하는 중입니다.");
     const auto fixedFs = document.getProject().media->assets.empty() ? 0u : document.getProject().Fs;
     // ASIO drivers are COM objects and vendor drivers register them apartment-threaded: they can
     // only be created, opened and closed on the (STA) message thread, never on the MTA camera
-    // worker. Negotiate audio here on the caller first; a failure is reported synchronously.
+    // worker. Negotiate audio here on the caller first. A failure travels with the completion and
+    // does not stop the cameras.
     juce::Result audioResult = juce::Result::ok();
     try
     {
@@ -126,23 +132,28 @@ juce::Result RecorderSession::configure(UserSettings settings)
             checkResult(audio.openDevice(settings.asioDeviceId, fixedFs ? fixedFs : settings.preferredSampleRate, settings.bufferSize));
             if (fixedFs && audio.deviceInfo().sampleRate != fixedFs)
             { audio.closeDevice(); throw std::runtime_error("프로젝트 샘플레이트가 고정되어 있습니다. ASIO 장치의 샘플레이트를 맞추세요."); }
+            const auto info = audio.deviceInfo();
+            // First-run defaults so the device simply works: microphone 1 on input 1, playback on outputs 1/2.
+            if (settings.physicalInputs.empty() && info.physicalInputs > 0)
+            { settings.physicalInputs = {0}; map[0] = 0; checkResult(audio.setInputMap(map)); }
+            if (!settings.output.mono && settings.output.left < 0 && settings.output.right < 0 && info.physicalOutputs > 0)
+            {
+                if (info.physicalOutputs >= 2) { settings.output.left = 0; settings.output.right = 1; }
+                else { settings.output.mono = true; settings.output.monoChannel = 0; }
+                checkResult(audio.setOutputMap(settings.output));
+            }
             for (unsigned i = 0; i < 8; ++i) checkResult(audio.arm(i, map[i] >= 0 && settings.microphoneArmed[i]));
             settings.preferredSampleRate = audio.deviceInfo().sampleRate;
             settings.bufferSize = int(audio.deviceInfo().bufferFrames);
         }
     }
     catch (const std::exception& e) { audioResult = juce::Result::fail(k("장치 연결을 확인하세요. ") + juce::String::fromUTF8(e.what())); }
-    if (audioResult.failed())
+    deviceWork = std::async(std::launch::async, [this, settings, audioResult, camerasUnchanged]() mutable
     {
-        for (auto& cam : cameras) cam.reset(); // same outcome as the worker path: cameras are released
-        current = settings; device = audio.deviceInfo();
-        lifecycle->end(RecorderLifecycle::configuring); notice.clear(); error = audioResult.getErrorMessage();
-        if (onConfigured) onConfigured(audioResult, current);
-        return audioResult;
-    }
-    deviceWork = std::async(std::launch::async, [this, settings]() mutable
-    {
-        DeviceResult result; result.settings = settings;
+        DeviceResult result; result.settings = settings; result.result = audioResult;
+        const auto addFailure = [&result](const juce::String& text)
+        { result.result = juce::Result::fail(result.result.failed() ? result.result.getErrorMessage() + " / " + text : text); };
+        if (camerasUnchanged) return result;
         try
         {
             ComApartment apartment;
@@ -169,11 +180,11 @@ juce::Result RecorderSession::configure(UserSettings settings)
                 }
                 catch (const std::exception& e)
                 {
-                    result.result = juce::Result::fail(k(i ? "캠2 연결을 확인하세요. " : "캠1 연결을 확인하세요. ") + juce::String::fromUTF8(e.what()));
+                    addFailure(k(i ? "캠2 연결을 확인하세요. " : "캠1 연결을 확인하세요. ") + juce::String::fromUTF8(e.what()));
                 }
             }
         }
-        catch (const std::exception& e) { result.result = juce::Result::fail(k("장치 연결을 확인하세요. ") + juce::String::fromUTF8(e.what())); }
+        catch (const std::exception& e) { addFailure(k("장치 연결을 확인하세요. ") + juce::String::fromUTF8(e.what())); }
         return result;
     });
     return juce::Result::ok();

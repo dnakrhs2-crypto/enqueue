@@ -48,23 +48,40 @@ int runLifecycleTests()
         session.releaseForShutdown(); lifecycleFixture::until([&] { session.tick(); return session.shutdownComplete(); });
         require(session.audioEngine().deviceInfo().sampleRate == 0, "Device released after commit and worker join");
     });
-    suite.test("Audio device failure surfaces synchronously from configure on the caller thread", []
+    suite.test("Audio device failure travels with the completion and never blocks camera configuration", []
     {
-        // Apartment-model ASIO drivers can only be created on the (STA) message thread, so the
-        // device negotiation must run on the caller and report there, not on the camera worker.
+        // Apartment-model ASIO drivers can only be created on the (STA) message thread, so the device is
+        // negotiated on the caller; the failure is delivered once through onConfigured with the camera work.
         RecorderDocument document; RecorderSession session(document);
-        int callbacks = 0; std::thread::id callbackThread; juce::Result callbackResult = juce::Result::ok();
-        session.onConfigured = [&](const juce::Result& r, const UserSettings&) { ++callbacks; callbackThread = std::this_thread::get_id(); callbackResult = r; };
+        int callbacks = 0; juce::Result callbackResult = juce::Result::ok();
+        session.onConfigured = [&](const juce::Result& r, const UserSettings&) { ++callbacks; callbackResult = r; };
         UserSettings s; s.asioDeviceId = "recorder-test-missing-asio-device"; s.cameraEnabled = {false, false};
-        const auto result = session.configure(s);
-        require(result.failed(), "Missing ASIO device must fail configure synchronously");
-        require(result.getErrorMessage().contains(juce::String::fromUTF8("장치 연결을 확인하세요")), "Synchronous audio failure keeps the user-facing prefix");
-        require(callbacks == 1 && callbackThread == std::this_thread::get_id() && callbackResult.failed(), "onConfigured runs exactly once, synchronously on the caller, with the failure");
-        require(!session.configuring() && !session.busy(), "No asynchronous device work remains and the session is not busy");
-        require((session.lifecycleState()->snapshot() & RecorderLifecycle::configuring) == 0, "Lifecycle configuring bit is released before configure returns");
-        session.tick();
-        require(callbacks == 1, "A later tick does not re-emit the completion");
+        require(session.configure(s).wasOk(), "configure accepts the request; the audio failure is reported with the completion");
+        lifecycleFixture::until([&] { session.tick(); return !session.configuring() && callbacks == 1; });
+        require(callbackResult.failed() && callbackResult.getErrorMessage().contains(juce::String::fromUTF8("장치 연결을 확인하세요")), "Audio failure keeps the user-facing prefix");
+        require(session.error.contains(juce::String::fromUTF8("장치 연결을 확인하세요")), "Banner carries the audio failure");
+        require((session.lifecycleState()->snapshot() & RecorderLifecycle::configuring) == 0 && !session.busy(), "Configuring ends with the completion");
         require(session.audioEngine().deviceInfo().sampleRate == 0, "Failed negotiation leaves no device open");
+        session.tick(); require(callbacks == 1, "A later tick does not re-emit the completion");
+    });
+    suite.test("Unset ASIO device selects the first driver on this PC with first-run defaults", []
+    {
+        RecorderDocument document; RecorderSession session(document);
+        UserSettings applied; int callbacks = 0; juce::Result callbackResult = juce::Result::ok();
+        session.onConfigured = [&](const juce::Result& r, const UserSettings& s) { ++callbacks; applied = s; callbackResult = r; };
+        UserSettings s; s.cameraEnabled = {false, false};
+        require(session.configure(s).wasOk(), "configure accepts an unset device");
+        lifecycleFixture::until([&] { session.tick(); return callbacks == 1; });
+        const auto names = RecorderAudioEngine::deviceNames();
+        if (names.isEmpty()) { require(applied.asioDeviceId.isEmpty() && session.audioEngine().deviceInfo().sampleRate == 0, "No ASIO driver: nothing selected"); return; }
+        require(applied.asioDeviceId == names[0], "The first registry driver is chosen");
+        if (callbackResult.wasOk())
+        {
+            const auto info = session.audioEngine().deviceInfo();
+            require(info.sampleRate != 0, "The chosen driver is open");
+            require(info.physicalInputs == 0 || (applied.physicalInputs.size() == 1 && applied.physicalInputs[0] == 0), "Microphone 1 defaults to input 1");
+            require(info.physicalOutputs < 2 || (applied.output.left == 0 && applied.output.right == 1), "Playback defaults to outputs 1/2");
+        }
     });
     suite.test("All Korean failure banners have the specified meaning", []
     {

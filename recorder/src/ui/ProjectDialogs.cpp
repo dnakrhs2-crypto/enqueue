@@ -69,8 +69,12 @@ void MainComponent::showSettings()
     auto* content = new SettingsForm(settings.get(), document.getProject(), session.deviceInfo()); audioPanel = &content->audio; settingsError = &content->error;
     settingsWindow->setContentOwned(content, true); settingsWindow->centreAroundComponent(this, 720, 590);
     const auto configure = [this, content](UserSettings s)
-    { const auto result = session.configure(s); content->error.setText(result.failed() ? result.getErrorMessage() : ko("장치를 연결하는 중입니다."), juce::dontSendNotification); if (result.wasOk()) banner.clear(); };
-    content->audio.onConnect = [content, configure](UserSettings s) { configure(content->camera.read(s)); };
+    {
+        if (session.configuring()) { pendingConfigure = s; content->error.setText(ko("이전 변경을 적용한 뒤 이어서 적용합니다."), juce::dontSendNotification); return; }
+        const auto result = session.configure(s); content->error.setText(result.failed() ? result.getErrorMessage() : ko("장치를 연결하는 중입니다."), juce::dontSendNotification); if (result.wasOk()) banner.clear();
+    };
+    // Audio edits apply immediately with the saved camera choices, so running previews are left alone.
+    content->audio.onChanged = [configure](UserSettings s) { configure(s); };
     content->audio.onControlPanel = [this, content]
     { session.stopPlayback(); const auto result = session.audioEngine().showControlPanel(); if (result.failed()) content->error.setText(result.getErrorMessage(), juce::dontSendNotification); else session.configure(settings.get()); };
     content->apply.onClick = [this, content, configure]

@@ -5,6 +5,7 @@
 #include "CameraSettingsPanel.h"
 #include "app/RecorderSession.h"
 #include "app/RecorderPowerMonitor.h"
+#include <optional>
 
 namespace gocue::recorder
 {
@@ -64,6 +65,8 @@ private:
     std::future<juce::int64> spaceWork;
     std::function<void()> afterSave, closeAction;
     bool timeline = false, refreshPending = true, settingsPending = false;
+    std::optional<UserSettings> pendingConfigure; // a settings edit made while the previous one is still applying
+    juce::Time launchedAt = juce::Time::getCurrentTime(), lastQuietCheck;
     juce::int64 remainingBytes = -1;
     std::uint64_t spaceGeneration = 0;
     std::uint32_t lastUi = 0, lastSpace = 0;
