@@ -10,6 +10,6 @@ struct CrashHandler
     static void install();
     static juce::File directory();
     static juce::File latestUnseenReport(); // newest *.txt not yet shown at startup; empty when none
-    static void markSeen(const juce::File& report);
+    static juce::File markSeen(const juce::File& report); // renames to *.seen.txt; returns the file to reveal
 };
 }

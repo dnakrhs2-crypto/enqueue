@@ -118,11 +118,12 @@ public:
         if (loaded.failed()) window->content().showError(loaded.getErrorMessage());
         if (const auto report = CrashHandler::latestUnseenReport(); report != juce::File())
         {
-            // A dialog, not the banner: the banner is cleared as soon as the devices connect.
+            // A dialog, not the banner: the banner is cleared as soon as the devices connect. The folder button reveals the report.
+            const auto kept = CrashHandler::markSeen(report);
             juce::AlertWindow::showAsync(juce::MessageBoxOptions().withIconType(juce::MessageBoxIconType::WarningIcon).withTitle(ko("비정상 종료 보고"))
-                .withMessage(ko("이전 실행이 비정상 종료됐습니다. 아래 보고 파일(.txt와 같은 이름의 .dmp)을 보내주시면 원인을 찾을 수 있습니다.\n") + report.getFullPathName())
-                .withButton(ko("확인")).withAssociatedComponent(&window->content()), nullptr);
-            CrashHandler::markSeen(report);
+                .withMessage(ko("이전 실행이 비정상 종료됐습니다. 보고 파일(.txt와 같은 이름의 .dmp)을 보내주시면 원인을 찾을 수 있습니다.\n") + kept.getFileName())
+                .withButton(ko("폴더 열기")).withButton(ko("확인")).withAssociatedComponent(&window->content()),
+                [kept](int result) { if (result == 1) kept.revealToUser(); });
         }
         if (openPath.isNotEmpty()) window->content().openProject(juce::File(openPath));
         else if (loaded.wasOk() && !settings->get().recentProjects.isEmpty()) window->content().openProject(juce::File(settings->get().recentProjects[0]));
