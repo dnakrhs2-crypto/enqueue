@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Recorder (가칭) 바뀐 점</title>
+<link rel="icon" href="assets/icon.png">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;700&display=swap">
+<link rel="stylesheet" href="../style.css">
+<script defer src="https://static.cloudflareinsights.com/beacon.min.js" data-cf-beacon='{"token": "ba5c97d4030f4886a543055e34721a3b"}'></script>
+</head>
+<body>
+<header class="wrap top">
+  <a class="brand" href="./"><img src="assets/icon.png" alt="" width="36" height="36">Recorder (가칭)</a>
+  <nav class="nav"><a href="./">다운로드</a><a href="https://github.com/dnakrhs2-crypto/recorder/releases">GitHub</a></nav>
+</header>
+<main class="wrap">
+  <h1 style="font-size:28px;margin-top:12px">바뀐 점</h1>
+  <p class="meta" style="margin-top:6px">버전별 변경 사항. 최신 버전이 맨 위입니다.</p>
+  <article class="notes"><h2>Recorder (가칭) 0.1.2</h2>
+<p>내부 배포 버전입니다. 이제 앱이 새 버전을 스스로 확인해 설치합니다.</p>
+<ul>
+  <li>ASIO 자동 연결: "장치 연결" 버튼을 없앴습니다. 설정에서 고르는 즉시 적용되고, 처음 실행하면 이 PC의 첫 ASIO 드라이버를 잡아 마이크 1은 입력 1, 재생은 출력 1/2로 시작합니다.</li>
+  <li>오디오 장치 실패가 카메라를 끊지 않습니다. 카메라 설정이 그대로면 오디오만 바꿔도 미리보기가 유지됩니다.</li>
+  <li>앱 내 업데이트: 실행 20초 뒤와 하루 한 번 새 버전을 조용히 확인하고, 있으면 안내 후 설치합니다. 녹화·더빙·내보내기 중에는 확인도 설치도 하지 않습니다. 정보 화면의 업데이트 확인 버튼도 동작합니다.</li>
+  <li>0.1.1: 벤더 ASIO 드라이버(Apartment 모델 COM)를 메시지 스레드에서 열도록 고쳐 "ASIO requires an output callback…" 오류를 해결했습니다.</li>
+</ul>
+<p>프로젝트는 사용자가 지정한 로컬 폴더에 저장되며 설치·업데이트·제거 시 삭제되지 않습니다.</p></article>
+  <article class="notes"><h2>Recorder (가칭) 0.1.1 · 배포 후보</h2>
+<p>내부 설치·배포 검증을 위한 후보입니다. 공개 릴리스가 아닙니다.</p>
+<ul>
+  <li>ASIO 장치 연결 실패 수정: 벤더 ASIO 드라이버(Apartment 모델 COM)를 카메라 워커(MTA) 대신 메시지 스레드에서 생성·열기·닫기합니다. 0.1.0에서 "ASIO requires an output callback and supported buffer size"로 표시되던 문제입니다.</li>
+  <li>장치 연결 실패 시 드라이버가 보고한 실제 오류 문구를 그대로 표시합니다.</li>
+  <li>회귀 테스트 추가: 오디오 장치 실패는 설정 적용 시 즉시 보고됩니다.</li>
+</ul>
+<p>표시명·공개 URL·정확한 대응 소스 묶음·회사 계약·지원 최소 OS는 확인 중입니다.
+클린 PC 설치·업데이트, 정전 복구, 실물 웹캠 2대와 스튜디오 오디오 인터페이스 검증은 대표 실물 테스트 항목입니다.
+미디어 기능의 최종 제공 범위와 성능을 이 후보 노트로 보장하지 않습니다.</p></article>
+  <article class="notes"><h2>Recorder (가칭) 0.1.0 · 배포 후보</h2>
+<p>내부 설치·배포 검증을 위한 후보입니다. 공개 릴리스가 아닙니다.</p>
+<ul>
+  <li>고정 FFmpeg LGPL v3-or-later SDK의 아카이브·헤더·DLL과 전이 의존성을 검사합니다.</li>
+  <li>사용자 계정별 설치기와 .recorder 프로젝트 연결을 준비했습니다.</li>
+  <li>게시 없이 설치기·서명·배포 manifest·사이트 미리보기를 만드는 경로를 추가했습니다.</li>
+</ul>
+<p>표시명·공개 URL·정확한 대응 소스 묶음·회사 계약·지원 최소 OS는 확인 중입니다.
+병행 라운드 병합 후 종료 조건·앱 메뉴 연결과 클린 PC 설치·업데이트를 검증해야 합니다.
+미디어 기능의 최종 제공 범위와 성능을 이 후보 노트로 보장하지 않습니다.</p></article>
+</main>
+<footer class="wrap"><div>Recorder (가칭) · 곰튀김</div></footer>
+</body>
+</html>
