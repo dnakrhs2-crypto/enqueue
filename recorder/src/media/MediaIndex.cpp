@@ -137,8 +137,25 @@ std::shared_ptr<const WavSource> MediaIndex::recordedAudio(const MediaAsset& ass
         wav->chunks.push_back({folder.getChildFile(path), range.start, range.length, 44,
             44 + std::uint64_t(range.length) * wav->channels * 3});
     };
-    if (asset.chunks.empty() && asset.relativePath.isNotEmpty()) add(asset.relativePath, {0, asset.logicalLength});
-    else for (const auto& chunk : asset.chunks) add(chunk.relativePath, chunk.sourceRange);
+    // Failed saves/recovery retain a path even when no PCM is available. In that
+    // case keep an empty source: validateWav performs no file I/O without chunks.
+    if (!asset.availableRanges.empty())
+    {
+        if (asset.chunks.empty())
+        {
+            // A standalone WAV starts at source sample zero. Availability must
+            // establish its durable prefix; logicalLength may include a lost tail.
+            Sample durable = 0;
+            for (const auto range : asset.availableRanges)
+            {
+                demand(range.start == durable && range.length > 0 && range.length <= asset.logicalLength - durable,
+                    "Single-file recorded WAV requires a contiguous durable prefix");
+                durable += range.length;
+            }
+            add(asset.relativePath, {0, durable});
+        }
+        else for (const auto& chunk : asset.chunks) add(chunk.relativePath, chunk.sourceRange);
+    }
     validateWav(*wav);
     demand(wav->length <= asset.logicalLength, "WAV chunks exceed the recorded take");
     wav->length = asset.logicalLength; return wav;

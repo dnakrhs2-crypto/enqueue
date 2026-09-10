@@ -3,6 +3,7 @@
 #include "record/ReferenceMixWriter.h"
 #include "diagnostics/CaptureTelemetry.h"
 #include "AudioRenderFixtures.h"
+#include "RecordedGapFixtures.h"
 #include "TestSupport.h"
 #include "support/Platform.h"
 #include "model/RecorderSerializer.h"
@@ -112,6 +113,26 @@ std::vector<Id> clips(const Track& t) { std::vector<Id> ids; for (const auto& c 
 int runMaterialExportTests()
 {
     Suite s;
+    for (unsigned channels : {1u, 2u}) for (const auto gap : recorder_audio_fixture::recordedGaps)
+    {
+        const auto name = "Material export with healthy take: " + std::to_string(channels) + " channels, " + recorder_audio_fixture::gapName(gap);
+        s.test(name.c_str(), [=]
+        {
+            recorder_audio_fixture::RecordedGapFixture f(channels, gap);
+            ExportActivity gate; ExportControl control(gate); ExportJob job(f.project, f.root);
+            const auto manifest = MaterialExporter::run(job, {}, control, nullptr, cpuCamera);
+            require(manifest["files"].size() == 2, "Publish camera reference and microphone material together");
+            const auto file = job.outputDirectory.getChildFile("mic01.wav");
+            const auto header = WavExportWriter::inspect(file);
+            require(header.channels == channels && header.sampleCount == f.totalFrames, "Material channel layout and both take lengths");
+            juce::WavAudioFormat format;
+            std::unique_ptr<juce::AudioFormatReader> reader(format.createReaderFor(file.createInputStream().release(), true));
+            std::vector<float> l(f.totalFrames), r(f.totalFrames); float* dst[]{l.data(), r.data()};
+            require(reader && reader->read(dst, int(channels), 0, int(f.totalFrames)), "Independently decode complete material WAV");
+            if (channels == 1) r = l;
+            f.verifyPcm(l, r);
+        });
+    }
     s.test("Material export emits one interleaved stereo mic WAV alongside mono and camera files", []
     {
         recorder_audio_fixture::Fixture f(48000, true); ExportActivity gate; ExportControl control(gate);
