@@ -123,6 +123,8 @@ private:
     EditSnapshot editSnapshot() const;
     juce::Result preparePlan(const RecorderProject&, std::shared_ptr<const CompiledRenderPlan>&);
     juce::Result replaceProject(RecorderProject);
+    // After a rate change: republish markers at the new rate as one journal-visible edit (no history entry).
+    juce::Result retimeMarkers(std::uint32_t oldFs, std::uint32_t newFs);
     Snapshot project;
     std::shared_ptr<const CompiledRenderPlan> renderPlan;
     EditHistory history;

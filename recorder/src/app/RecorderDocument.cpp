@@ -128,33 +128,53 @@ void RecorderDocument::checkpointFinished(Snapshot written, const juce::File& ta
     notify();
 }
 // Markers are the only sample coordinates a project without media can hold: keep their time across a rate change.
-static void rescaleMarkers(RecorderProject& p, std::uint32_t oldFs, std::uint32_t newFs)
+// Exact int64 rounding; an out-of-range coordinate is reported before anything is replaced.
+static juce::Result rescaleMarkers(RecorderProject& p, std::uint32_t oldFs, std::uint32_t newFs)
 {
-    if (!oldFs || !newFs || oldFs == newFs) return;
-    for (auto& m : p.markers) m.sample = Sample(std::llround(double(m.sample) * double(newFs) / double(oldFs)));
+    if (!oldFs || !newFs || oldFs == newFs) return juce::Result::ok();
+    try { for (auto& m : p.markers) m.sample = rescaleRound(m.sample, newFs, oldFs); }
+    catch (const std::exception& e) { return juce::Result::fail(juce::String::fromUTF8(e.what())); }
+    return juce::Result::ok();
 }
 juce::Result RecorderDocument::setTimebase(std::uint32_t Fs, FrameRate fps)
 {
     if (recordingStructureLock) return fail(juce::String::fromUTF8("녹화 중에는 시간 기준을 바꿀 수 없습니다."));
     assertOwner(); if (editing) return juce::Result::fail(juce::String::fromUTF8("편집 작업 중입니다."));
-    const juce::ScopedValueSetter<bool> guard(editing, true);
-    if (!project->media->assets.empty() && (project->Fs != Fs || project->fps != fps)) return fail(juce::String::fromUTF8("첫 미디어 이후에는 프로젝트 샘플레이트와 프레임레이트를 바꿀 수 없습니다."));
-    auto next = *project; next.Fs = Fs; next.fps = fps; rescaleMarkers(next, project->Fs, Fs); const auto valid = next.validate(); if (valid.failed()) return fail(valid.getErrorMessage());
-    if (Fs != project->Fs || fps != project->fps) { const auto replaced = replaceProject(std::move(next)); if (replaced.failed()) return replaced; dirty = checkpointRequired = true; history.clear(); error.clear(); enqueueRegistry(); notify(); }
-    return juce::Result::ok();
+    const auto oldFs = project->Fs;
+    {
+        const juce::ScopedValueSetter<bool> guard(editing, true);
+        if (!project->media->assets.empty() && (project->Fs != Fs || project->fps != fps)) return fail(juce::String::fromUTF8("첫 미디어 이후에는 프로젝트 샘플레이트와 프레임레이트를 바꿀 수 없습니다."));
+        auto next = *project; next.Fs = Fs; next.fps = fps; const auto valid = next.validate(); if (valid.failed()) return fail(valid.getErrorMessage());
+        { auto retimed = next; const auto scaled = rescaleMarkers(retimed, oldFs, Fs); if (scaled.failed()) return fail(scaled.getErrorMessage()); } // dry run before anything changes
+        if (Fs == project->Fs && fps == project->fps) return juce::Result::ok();
+        const auto replaced = replaceProject(std::move(next)); if (replaced.failed()) return replaced;
+        dirty = checkpointRequired = true; history.clear(); error.clear(); enqueueRegistry(); notify();
+    }
+    return retimeMarkers(oldFs, Fs); // journal order: time base (registry record) first, then the marker edit
+}
+juce::Result RecorderDocument::retimeMarkers(std::uint32_t oldFs, std::uint32_t newFs)
+{
+    if (project->markers.empty() || !oldFs || !newFs || oldFs == newFs) return juce::Result::ok();
+    auto next = *project; const auto scaled = rescaleMarkers(next, oldFs, newFs); if (scaled.failed()) return fail(scaled.getErrorMessage());
+    return publishEdit(std::move(next), juce::String::fromUTF8("마커 시간 기준 변환"), {}, false, selection, EditOrigin::coordinator);
 }
 juce::Result RecorderDocument::adoptProvisionalTimebase(std::uint32_t Fs)
 {
     if (recordingStructureLock) return juce::Result::fail(juce::String::fromUTF8("녹화 중에는 시간 기준을 바꿀 수 없습니다."));
     assertOwner(); if (editing) return juce::Result::fail(juce::String::fromUTF8("편집 작업 중입니다."));
-    const juce::ScopedValueSetter<bool> guard(editing, true);
     if (!project->media->assets.empty()) return juce::Result::fail(juce::String::fromUTF8("첫 미디어 이후에는 프로젝트 샘플레이트를 바꿀 수 없습니다."));
     if (Fs == project->Fs) return juce::Result::ok();
-    auto next = *project; next.Fs = Fs; rescaleMarkers(next, project->Fs, Fs); const auto valid = next.validate(); if (valid.failed()) return juce::Result::fail(valid.getErrorMessage());
-    const auto replaced = replaceProject(std::move(next)); if (replaced.failed()) return replaced;
-    history.clear(); // undo entries hold marker coordinates at the old rate
-    enqueueRegistry(); // an attached edit journal must see the time base before any later edit payload
-    notify(); return juce::Result::ok(); // not dirty: the saved file (old rate + old coordinates) re-adopts consistently on the next open
+    const auto oldFs = project->Fs;
+    {
+        const juce::ScopedValueSetter<bool> guard(editing, true);
+        auto next = *project; next.Fs = Fs; const auto valid = next.validate(); if (valid.failed()) return juce::Result::fail(valid.getErrorMessage());
+        { auto retimed = next; const auto scaled = rescaleMarkers(retimed, oldFs, Fs); if (scaled.failed()) return scaled; } // dry run before anything changes
+        const auto replaced = replaceProject(std::move(next)); if (replaced.failed()) return replaced;
+        history.clear(); // undo entries hold marker coordinates at the old rate
+        enqueueRegistry(); // an attached edit journal must see the time base before any later edit payload
+        notify(); // not dirty by itself: the saved file (old rate + old coordinates) re-adopts consistently on the next open
+    }
+    return retimeMarkers(oldFs, Fs); // markers, when present, are republished as an edit (dirty, journal-visible)
 }
 EditSnapshot RecorderDocument::editSnapshot() const { return {static_cast<const EditState&>(*project), selection}; }
 void RecorderDocument::setSelection(std::vector<Id> ids)
