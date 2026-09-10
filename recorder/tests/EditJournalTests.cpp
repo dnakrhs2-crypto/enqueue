@@ -165,6 +165,17 @@ int runEditJournalTests()
         require(reached && first.project.name == "durable second" && RecorderSerializer::toJson(first.project) == RecorderSerializer::toJson(second.project)
             && second.replayedEdits == 0 && second.changedTakes == 0, "Checkpoint crash lost durable edit or repeated recovery");
     });
+    test("Provisional rate adoption rescales markers in the same registry record and replays atomically", []
+    {
+        Fixture f; EditJournalWorker worker(f.root, f.document.snapshot(), f.cursor); worker.attach(f.document); check(worker.waitUntilIdle());
+        Marker m; m.sample = 4800; check(f.document.addMarker(m)); check(worker.waitUntilIdle());
+        check(f.document.adoptProvisionalTimebase(44100)); check(worker.waitUntilIdle());
+        require(f.document.getProject().Fs == 44100 && f.document.getProject().markers[0].sample == 4410 && f.document.isDirty(), "Adopted rate with the marker kept at 0.1 s");
+        check(f.document.performEdit("after", [](EditState& e) { e.name = "after"; })); check(worker.waitUntilIdle());
+        check(worker.shutdown()); worker.detach();
+        RecorderProject p = f.initial; EditJournalReplay r; check(EditJournal::replay(f.root, p, f.cursor, r));
+        require(!r.framing.ignoredTail && p.Fs == 44100 && p.markers.size() == 1 && p.markers[0].sample == 4410 && p.name == "after", "Replay applies time base + markers in one registry record, then the later edit");
+    });
     test("Explicit document Save queues a checkpoint behind edits and timebase registry", []
     {
         Fixture f; EditJournalWorker worker(f.root, f.document.snapshot(), f.cursor); worker.attach(f.document); check(worker.waitUntilIdle());

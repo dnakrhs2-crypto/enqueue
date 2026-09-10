@@ -109,10 +109,12 @@ int runLifecycleTests()
         require(adoptDeviceSampleRate(document, 48000) && document.getProject().Fs == 48000, "Markers do not fix the rate");
         require(document.getProject().markers.size() == 1 && document.getProject().markers[0].sample == 4800, "Marker keeps its time (0.1 s) across the rate change");
         require(document.getHistory().undoDepth() == 0 && document.getHistory().redoDepth() == 0, "Old-rate undo entries are dropped");
-        require(document.isDirty(), "Retimed markers are an edit: the document is unsaved");
+        require(document.isDirty(), "Retimed markers make the document unsaved");
         Marker farMarker; farMarker.sample = 9007199254740993; require(document.addMarker(farMarker).wasOk(), "Large coordinate");
+        int notified = 0; document.onChanged = [&] { ++notified; require(document.getProject().Fs == 44100 && document.getProject().markers[0].sample == 4410, "Subscribers see the final state only"); };
         require(adoptDeviceSampleRate(document, 44100) && document.getProject().markers[1].sample == 8275364315293287, "Exact int64 rounding through rescaleRound");
-        require(document.getProject().markers[0].sample == 4410, "First marker back at 0.1 s");
+        require(document.getProject().markers[0].sample == 4410 && notified == 1, "First marker back at 0.1 s, one notification for the whole change");
+        document.onChanged = {};
         require(document.setTimebase(96000, document.getProject().fps).wasOk() && document.getProject().markers[0].sample == 9600, "setTimebase rescales markers too");
         UserSettings s; s.asioDeviceId = "X"; s.physicalInputs = {0}; s.output.left = 0; s.output.right = 1;
         RecorderAudioEngine::DeviceInfo info; info.name = "X"; info.sampleRate = 44100; info.physicalInputs = 2; info.physicalOutputs = 2;

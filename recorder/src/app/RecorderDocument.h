@@ -16,6 +16,10 @@ struct EntityDelta
     bool removed = false;
     juce::var value; // complete resulting entity; tracks include their clip list
 };
+// Entity-level difference between two projects (name, tracks, markers, link groups, take stacks); shared by edits and
+// the journal's registry record, which carries the markers a time-base change rescaled.
+struct EditDelta;
+EditDelta deltaFor(const RecorderProject& before, const RecorderProject& after, const juce::String& name);
 struct EditDelta
 {
     Id transactionId = newId(), projectId;
@@ -123,8 +127,6 @@ private:
     EditSnapshot editSnapshot() const;
     juce::Result preparePlan(const RecorderProject&, std::shared_ptr<const CompiledRenderPlan>&);
     juce::Result replaceProject(RecorderProject);
-    // After a rate change: republish markers at the new rate as one journal-visible edit (no history entry).
-    juce::Result retimeMarkers(std::uint32_t oldFs, std::uint32_t newFs);
     Snapshot project;
     std::shared_ptr<const CompiledRenderPlan> renderPlan;
     EditHistory history;
