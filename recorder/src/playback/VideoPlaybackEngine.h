@@ -100,6 +100,20 @@ struct PlaybackDisplaySelection
     bool gap = true;
     bool buffering = false;
 };
+// Device-free picture retention policy, shared with the DXGI presenter. Only a
+// successful submission becomes the retained picture.
+struct PlaybackDisplayState
+{
+    std::shared_ptr<const PlaybackVideoFrame> retained;
+    std::shared_ptr<const PlaybackVideoFrame> select(const PlaybackDisplaySelection& selection)
+    {
+        // A seek revokes publication rights, not the pixels already on screen.
+        // Real gaps and replaced source epochs must still clear the picture.
+        if (selection.gap || (retained && (!retained->source || !retained->source->current()))) retained.reset();
+        return selection.frame ? selection.frame : retained;
+    }
+    void submitted(std::shared_ptr<const PlaybackVideoFrame> frame) { retained = std::move(frame); }
+};
 // A successful DXGI latency wait belongs to the next successful Present, even
 // when a seek, busy texture, resize or occlusion prevents this iteration's submit.
 // Device-free seam for the same state machine used by the playback presenter.
@@ -123,6 +137,8 @@ struct PlaybackSeekTiming
 class VideoPlaybackEngine
 {
 public:
+    static constexpr unsigned prerollMilliseconds = 250, maximumReadyFrames = 4;
+    // Called on independent current/preroll workers (up to two per camera).
     using DecoderFactory = std::function<std::unique_ptr<IVideoFrameDecoder>(std::shared_ptr<const VideoIndex>)>;
     explicit VideoPlaybackEngine(DecoderFactory = {}); // empty = H.264 + D3D11VA only
     ~VideoPlaybackEngine();
