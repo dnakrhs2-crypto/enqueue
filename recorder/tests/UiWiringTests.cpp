@@ -188,6 +188,19 @@ UserSettings reviewSettings()
     s.output.left = 0; s.output.right = 1; s.audioDefaultsApplied = true;
     s.cameraDeviceIds[0] = "fixture-camera"; s.cameraModes[0] = "NV12 1920x1080 30/1"; return s;
 }
+template<class Control> Control& audioControl(AudioSettingsPanel& panel, const juce::String& id)
+{
+    auto* control = dynamic_cast<Control*>(panel.findChildWithID(id));
+    require(control != nullptr, "Product audio settings control missing"); return *control;
+}
+RecorderAudioEngine::DeviceInfo audioSettingsDevice(int channels = 8)
+{
+    RecorderAudioEngine::DeviceInfo d; d.name = "synthetic-native-PCM"; d.synthetic = true;
+    d.sampleRate = 48000; d.bufferFrames = 256; d.availableBuffers = {128, 256, 512};
+    d.physicalInputs = channels; d.physicalOutputs = 2; d.outputNames = {"L", "R"};
+    for (int i = 0; i < channels; ++i) d.inputNames.add("Analog " + juce::String(i + 1));
+    return d; // metadata injection only: never open an ASIO driver or a camera
+}
 CalibrationProfile reviewCalibration(const UserSettings& s, unsigned camera = 0)
 {
     CalibrationProfile p; p.key = calibrationKey(s, camera); p.quality = CalibrationQuality::physicalMeasured;
@@ -196,7 +209,8 @@ CalibrationProfile reviewCalibration(const UserSettings& s, unsigned camera = 0)
 void checkRejectedSelection(bool queued)
 {
     juce::ScopedJuceInitialiser_GUI runtime; ReviewFolder f; RecorderSettings saved(f.root);
-    auto applied = reviewSettings(); require(saved.set(applied).wasOk() && saved.save().get().wasOk(), "Save applied settings");
+    auto applied = reviewSettings(); applied.physicalInputs[1] = 2; applied.stereoSlots[0] = true;
+    require(saved.set(applied).wasOk() && saved.save().get().wasOk(), "Save applied settings");
     RecorderDocument document; RecorderSession session(document); applySyntheticSettings(session.audioEngine(), applied);
     require(session.audioEngine().openSynthetic(48000, 256, 8, 2).wasOk(), "Synthetic settings device");
     AudioSettingsPanel panel(applied, document.getProject(), session.audioEngine().deviceInfo());
@@ -209,21 +223,29 @@ void checkRejectedSelection(bool queued)
         if (queued) pending = next;
         else result = panel.configure(session, std::move(next), saved.get());
     };
-    combo->setSelectedId(1000, juce::sendNotificationSync); // input 1+2 conflicts with slot 2's mono input 2
+    // Force a stale/disabled menu choice: moving the stereo pair to 2+3 conflicts with slot 2's input 3.
+    combo->setSelectedId(3, juce::sendNotificationSync);
     if (queued)
     {
-        require(pending.has_value() && combo->getSelectedId() == 1000, "Queued choice must remain until retry");
-        applied.physicalInputs[0] = 2; applied.physicalInputs[1] = 3; // preceding configuration has now completed
+        require(pending.has_value() && combo->getSelectedId() == 3, "Queued choice must remain until retry");
+        require(audioControl<juce::Label>(panel, "microphoneHint1").getText().contains(ko("마이크 2")), "Queued overlap must be explained immediately");
+        applied.physicalInputs[0] = 3; applied.physicalInputs[1] = 5; // preceding configuration has now completed
         applySyntheticSettings(session.audioEngine(), applied);
         require(saved.set(applied).wasOk() && saved.save().get().wasOk(), "Persist preceding applied configuration");
         const auto next = *pending; pending.reset(); result = panel.configure(session, next, saved.get());
     }
     require(result.failed() && edits == 1 && completions == 0 && !session.configuring(), "Synchronous rejection must not launch device work or recursive edits");
     const auto visible = panel.read(saved.get()); RecorderSettings disk(f.root); require(disk.load().wasOk(), "Reload accepted settings");
-    require(combo->getSelectedId() == applied.physicalInputs[0] + 2 && !visible.stereoSlots[0]
+    require(combo->getSelectedId() == applied.physicalInputs[0] + 2 && visible.stereoSlots == applied.stereoSlots
+        && audioControl<juce::TextButton>(panel, "microphoneStereo1").getToggleState()
+        && !audioControl<juce::TextButton>(panel, "microphoneMono1").getToggleState()
         && visible.physicalInputs == applied.physicalInputs && disk.get().physicalInputs == applied.physicalInputs
         && disk.get().stereoSlots == applied.stereoSlots && saved.get().physicalInputs == applied.physicalInputs,
         "Rejected stereo selection survived in visible or saved settings");
+    const auto hint = audioControl<juce::Label>(panel, "microphoneHint1").getText();
+    require(hint.contains(ko("변경 취소")) && hint.contains(ko("마이크 2")), "Restoring controls erased the slot-specific rejection reason");
+    require(audioControl<juce::Label>(panel, "microphoneSummary1").getText().contains(
+        ko("입력 ") + juce::String(applied.physicalInputs[0] + 1) + "+" + juce::String(applied.physicalInputs[0] + 2)), "Rejected selection survived in the summary");
     require(session.audioEngine().deviceInfo().synthetic && session.audioEngine().calibrationInputMapping() == calibrationKey(visible, 0).inputMapping,
         "Visible settings and applied engine mapping disagree");
     bool actualRate = false;
@@ -534,7 +556,194 @@ int runUiWiringTests()
         asset.originalFormat.channels = 2; asset.logicalLength = 12; rejects([&] { RecorderSession::indexRecordedAudio(asset, f.root, 8000, "mic"); });
         asset.logicalLength = 13; asset.chunks[0].sourceRange.length = -1; rejects([&] { RecorderSession::indexRecordedAudio(asset, f.root, 8000, "mic"); });
     });
-    suite.test("Rejected stereo combo restores visible, saved and engine settings synchronously", [] { checkRejectedSelection(false); });
+    suite.test("Audio controls round trip every 0.1.4 mono/stereo input mapping with immediate edits", []
+    {
+        juce::ScopedJuceInitialiser_GUI runtime; RecorderProject project; auto empty = reviewSettings();
+        empty.physicalInputs.assign(8, -1); const auto device = audioSettingsDevice();
+        AudioSettingsPanel panel(empty, project, device); unsigned edits = 0; auto requested = empty;
+        panel.onChanged = [&](UserSettings next) { ++edits; requested = std::move(next); };
+        for (unsigned slot = 0; slot < 8; ++slot) for (int physical = -1; physical < 8; ++physical) for (bool stereo : {false, true})
+        {
+            if (stereo && (physical < 0 || physical == 7)) continue;
+            panel.setSettings(empty); edits = 0; requested = empty;
+            const auto number = juce::String(slot + 1);
+            auto& input = audioControl<juce::ComboBox>(panel, "microphoneInput" + number);
+            auto& mono = audioControl<juce::TextButton>(panel, "microphoneMono" + number);
+            auto& pair = audioControl<juce::TextButton>(panel, "microphoneStereo" + number);
+            require(input.getNumItems() == 9 && input.getItemId(0) == 1 && input.getItemId(8) == 9,
+                "Physical input menu still mixes stereo pairs with mono entries");
+            input.setSelectedId(physical + 2, juce::sendNotificationSync);
+            if (stereo) { require(pair.isEnabled(), "Valid adjacent pair unavailable"); pair.setToggleState(true, juce::sendNotificationSync); }
+            auto expected = empty; expected.physicalInputs[slot] = physical; expected.stereoSlots[slot] = stereo;
+            const auto visible = panel.read(empty);
+            require(visible.physicalInputs == expected.physicalInputs && visible.stereoSlots == expected.stereoSlots
+                && requested.physicalInputs == expected.physicalInputs && requested.stereoSlots == expected.stereoSlots
+                && visible.validate(8).wasOk(), "New controls changed the persisted left-index/stereo contract");
+            require(edits == (physical >= 0 ? 1u : 0u) + unsigned(stereo), "Control edit was delayed, duplicated or omitted");
+            require(pair.getToggleState() == stereo && mono.getToggleState() == (physical >= 0 && !stereo), "Channel buttons disagree with read()");
+            if (stereo)
+            {
+                require(audioControl<juce::Label>(panel, "microphoneHint" + number).getText().contains(
+                    ko("오른쪽 = ") + juce::String(physical + 2) + " · Analog " + juce::String(physical + 2)), "Automatic right channel name is missing");
+                input.setSelectedId(1, juce::sendNotificationSync);
+                const auto disabled = panel.read(empty);
+                require(disabled.physicalInputs[slot] == -1 && !disabled.stereoSlots[slot] && !pair.isEnabled()
+                    && !mono.isEnabled() && !mono.getToggleState(), "Use none retained a highlighted or enabled channel selector");
+            }
+        }
+    });
+    suite.test("0.1.4 XML mixed slots restore both controls and preserve engine mapping", []
+    {
+        juce::ScopedJuceInitialiser_GUI runtime; ReviewFolder f; RecorderSettings saved(f.root);
+        // Frozen 0.1.4 field layout; no new serializer or migration is involved.
+        juce::PropertySet properties; properties.setValue("schemaVersion", 1); properties.setValue("productId", ProductIdentity::internalId());
+        properties.setValue("asioDeviceId", "synthetic-native-PCM"); properties.setValue("audioDefaultsApplied", true);
+        properties.setValue("physicalInputs", "[0,2,-1,4,6,-1,-1,7]");
+        properties.setValue("stereoSlot0", true); properties.setValue("stereoSlot3", true);
+        properties.setValue("outputLeft", juce::var(0)); properties.setValue("outputRight", 1);
+        require(saved.getFile().getParentDirectory().createDirectory().wasOk()
+            && saved.getFile().replaceWithText(properties.createXml("RECORDER_SETTINGS")->toString()), "Write 0.1.4 XML fixture");
+        const auto loaded = saved.load(); if (loaded.failed()) throw std::runtime_error(loaded.getErrorMessage().toStdString());
+        const auto legacy = saved.get(); RecorderProject project; const auto device = audioSettingsDevice();
+        AudioSettingsPanel panel(reviewSettings(), project, device); unsigned edits = 0;
+        panel.onChanged = [&](UserSettings) { ++edits; };
+        panel.setSettings(legacy); panel.setDeviceInfo(device);
+        const auto visible = panel.read(legacy);
+        require(edits == 0 && visible.physicalInputs == legacy.physicalInputs && visible.stereoSlots == legacy.stereoSlots,
+            "Loading an applied configuration changed its selection or submitted another edit");
+        for (unsigned slot = 0; slot < 8; ++slot)
+        {
+            const auto number = juce::String(slot + 1);
+            require(audioControl<juce::ComboBox>(panel, "microphoneInput" + number).getSelectedId() == legacy.physicalInputs[slot] + 2
+                && audioControl<juce::TextButton>(panel, "microphoneStereo" + number).getToggleState() == legacy.stereoSlots[slot]
+                && audioControl<juce::TextButton>(panel, "microphoneMono" + number).getToggleState() == (legacy.physicalInputs[slot] >= 0 && !legacy.stereoSlots[slot]), "Mixed legacy slot selection is not displayed");
+        }
+        RecorderAudioEngine engine; applySyntheticSettings(engine, visible);
+        require(engine.openSynthetic(48000, 256, 8, 2).wasOk()
+            && engine.calibrationInputMapping() == std::vector<int>({1,0,1, 2,2,-1, 4,4,5, 5,6,-1, 8,7,-1}), "Legacy L/R mapping changed at engine boundary");
+        require(saved.set(visible).wasOk() && saved.save().get().wasOk(), "Save round-tripped UI settings");
+        RecorderSettings reloaded(f.root); require(reloaded.load().wasOk() && reloaded.get().physicalInputs == legacy.physicalInputs
+            && reloaded.get().stereoSlots == legacy.stereoSlots, "UI round trip changed saved XML mapping");
+    });
+    suite.test("Last input disables stereo with a visible reason and permits explicit mono", []
+    {
+        juce::ScopedJuceInitialiser_GUI runtime; RecorderProject project;
+        for (int count : {0, 1, 8})
+        {
+            auto s = reviewSettings(); s.physicalInputs.assign(8, -1); if (count) s.physicalInputs[0] = count - 1;
+            AudioSettingsPanel panel(s, project, audioSettingsDevice(count));
+            auto& input = audioControl<juce::ComboBox>(panel, "microphoneInput1");
+            auto& mono = audioControl<juce::TextButton>(panel, "microphoneMono1");
+            auto& stereo = audioControl<juce::TextButton>(panel, "microphoneStereo1");
+            require(!stereo.isEnabled() && mono.isEnabled() == (count > 0) && input.getNumItems() == count + 1, "Absent right input did not disable stereo");
+            const auto hint = audioControl<juce::Label>(panel, "microphoneHint1").getText();
+            require(hint.contains(count ? ko("마지막 입력") : ko("물리 입력을 선택")), "Disabled selector has no visible reason");
+            if (count > 1)
+            {
+                input.setSelectedId(count, juce::sendNotificationSync); stereo.setToggleState(true, juce::sendNotificationSync);
+                require(!input.isItemEnabled(count + 1), "Stereo may move its left channel to the last physical input");
+                mono.setToggleState(true, juce::sendNotificationSync);
+                require(input.isItemEnabled(count + 1), "Changing to mono did not release the last input");
+                input.setSelectedId(count + 1, juce::sendNotificationSync);
+                require(panel.read(s).physicalInputs[0] == count - 1 && !panel.read(s).stereoSlots[0], "Explicit last-input mono changed layout");
+            }
+        }
+    });
+    suite.test("Occupied left and right inputs show slot numbers across pages and release immediately", []
+    {
+        juce::ScopedJuceInitialiser_GUI runtime; RecorderProject project; auto s = reviewSettings();
+        s.physicalInputs = {0, -1, -1, -1, 4, -1, -1, -1}; s.stereoSlots[0] = s.stereoSlots[4] = true; s.microphoneArmed[4] = false;
+        AudioSettingsPanel panel(s, project, audioSettingsDevice());
+        auto& target = audioControl<juce::ComboBox>(panel, "microphoneInput2");
+        for (int id : {2, 3, 6, 7}) require(!target.isItemEnabled(id), "An occupied L/R input is still selectable");
+        require(target.getItemText(2).contains(ko("마이크 1")) && target.getItemText(6).contains(ko("마이크 5")), "Disabled choices omit their owning slots");
+        auto& own = audioControl<juce::ComboBox>(panel, "microphoneInput1");
+        require(own.isItemEnabled(2) && own.isItemEnabled(3), "A slot conflicts with its own channels");
+        target.setSelectedId(4, juce::sendNotificationSync); // input 3, with input 4 available on its right
+        audioControl<juce::TextButton>(panel, "microphoneStereo2").setToggleState(true, juce::sendNotificationSync);
+        require(!target.isItemEnabled(5) && target.getItemText(4).contains(ko("마이크 5")), "Candidate stereo right channel ignored the hidden unarmed slot");
+        audioControl<juce::ComboBox>(panel, "microphoneInput5").setSelectedId(1, juce::sendNotificationSync);
+        require(target.isItemEnabled(5) && target.isItemEnabled(6) && target.isItemEnabled(7), "Disabling a slot did not release both physical channels");
+    });
+    suite.test("Stereo conflicts are explained before apply and include every overlapping slot", []
+    {
+        juce::ScopedJuceInitialiser_GUI runtime; RecorderProject project; const auto s = reviewSettings();
+        AudioSettingsPanel panel(s, project, audioSettingsDevice());
+        require(!audioControl<juce::TextButton>(panel, "microphoneStereo1").isEnabled()
+            && audioControl<juce::Label>(panel, "microphoneHint1").getText().contains(ko("마이크 2")), "Occupied adjacent input needs a visible stereo explanation");
+        unsigned callbacks = 0;
+        panel.onChanged = [&](UserSettings next)
+        {
+            ++callbacks;
+            const auto hint = audioControl<juce::Label>(panel, "microphoneHint3").getText();
+            require(hint.contains(ko("마이크 1")), "Overlap explanation arrived after onChanged");
+            if (next.stereoSlots[2]) require(hint.contains(ko("마이크 2")), "Stereo overlap only reports one of its channels");
+        };
+        // Inject stale popup/toggle notifications; ordinary UI choices are already disabled.
+        audioControl<juce::ComboBox>(panel, "microphoneInput3").setSelectedId(2, juce::sendNotificationSync);
+        audioControl<juce::TextButton>(panel, "microphoneStereo3").setToggleState(true, juce::sendNotificationSync);
+        require(callbacks == 2 && panel.read(s).validate(8).failed(), "Stale input event bypassed the existing validation contract");
+    });
+    suite.test("Four-slot pages fit the fixed panel and expose all eight summaries without applying", []
+    {
+        juce::ScopedJuceInitialiser_GUI runtime; RecorderProject project; auto s = reviewSettings();
+        s.physicalInputs = {0, 2, -1, 6, -1, -1, -1, 7}; s.stereoSlots[0] = true;
+        gocue::livemix::LiveMixLookAndFeel lookAndFeel;
+        AudioSettingsPanel panel(s, project, audioSettingsDevice()); panel.setLookAndFeel(&lookAndFeel);
+        unsigned edits = 0; panel.onChanged = [&](UserSettings) { ++edits; };
+        for (int width : {500, 684}) for (unsigned page = 0; page < 2; ++page)
+        {
+            panel.setSize(width, 588); audioControl<juce::TextButton>(panel, "microphonePage" + juce::String(page + 1)).onClick();
+            for (unsigned slot = 0; slot < 8; ++slot)
+            {
+                const auto number = juce::String(slot + 1); auto& input = audioControl<juce::ComboBox>(panel, "microphoneInput" + number);
+                auto& summary = audioControl<juce::Label>(panel, "microphoneSummary" + number);
+                auto& hint = audioControl<juce::Label>(panel, "microphoneHint" + number);
+                auto& mono = audioControl<juce::TextButton>(panel, "microphoneMono" + number);
+                auto& stereo = audioControl<juce::TextButton>(panel, "microphoneStereo" + number);
+                require(input.isVisible() == (slot / 4 == page) && summary.isVisible() == input.isVisible(), "Page hides a slot or shows the wrong slot number");
+                if (!input.isVisible()) continue;
+                require(panel.getLocalBounds().contains(hint.getBounds()) && input.getWidth() >= 280
+                    && summary.getBottom() <= input.getY() && input.getRight() < mono.getX() && mono.getRight() <= stereo.getX()
+                    && input.getBottom() <= hint.getY(), "New audio rows overflow or overlap at the supported panel size");
+                require(summary.getText().startsWith(ko("마이크 ") + number + ko(" · ")), "Slot summary lost its logical microphone number");
+            }
+            juce::Image image(juce::Image::ARGB, width, 588, true, juce::SoftwareImageType{}); juce::Graphics graphics(image);
+            graphics.fillAll(Palette::background); panel.paintEntireComponent(graphics, true);
+            const auto snapshotPath = juce::SystemStats::getEnvironmentVariable("RECORDER_AUDIO_UI_SNAPSHOTS", {});
+            if (snapshotPath.isNotEmpty())
+            {
+                require(juce::File::isAbsolutePath(snapshotPath), "Snapshot directory must be absolute");
+                const juce::File directory(snapshotPath); juce::MemoryOutputStream png;
+                require(directory.createDirectory().wasOk() && juce::PNGImageFormat().writeImageToStream(image, png)
+                    && directory.getChildFile("audio-" + juce::String(width) + "-page" + juce::String(page + 1) + ".png")
+                        .replaceWithData(png.getData(), png.getDataSize()), "Write injected-device panel render");
+            }
+        }
+        require(edits == 0 && panel.read(s).physicalInputs == s.physicalInputs
+            && audioControl<juce::TextButton>(panel, "microphonePage2").getButtonText().contains(ko("1개 사용")), "Paging applies settings or omits active slots on the other page");
+    });
+    suite.test("Device selection retains first-run defaults and later explicit none choices", []
+    {
+        juce::ScopedJuceInitialiser_GUI runtime; RecorderProject project; auto s = reviewSettings(); s.physicalInputs[1] = 2; s.stereoSlots[0] = true;
+        AudioSettingsPanel panel(s, project, audioSettingsDevice()); auto requested = s; unsigned edits = 0;
+        panel.onChanged = [&](UserSettings next) { ++edits; requested = std::move(next); };
+        auto& devices = audioControl<juce::ComboBox>(panel, "audioDevice");
+        devices.addItem("injected-new-device", 99999); devices.setSelectedId(99999, juce::sendNotificationSync);
+        require(edits == 1 && requested.asioDeviceId == "injected-new-device" && requested.physicalInputs.empty()
+            && requested.stereoSlots == std::array<bool,8>{} && !requested.audioDefaultsApplied
+            && requested.output.left == -1 && requested.output.right == -1, "New device retained the previous device's map/defaults marker");
+        auto device = audioSettingsDevice(); device.name = requested.asioDeviceId;
+        require(applyAudioDefaults(requested, device) && requested.physicalInputs[0] == 0 && !requested.stereoSlots[0], "First apply no longer supplies mono input 1");
+        panel.setSettings(requested); panel.setDeviceInfo(device);
+        require(audioControl<juce::ComboBox>(panel, "microphoneInput1").getSelectedId() == 2
+            && audioControl<juce::TextButton>(panel, "microphoneMono1").getToggleState(), "Applied first-run defaults are not visible");
+        audioControl<juce::ComboBox>(panel, "microphoneInput1").setSelectedId(1, juce::sendNotificationSync);
+        require(requested.physicalInputs[0] == -1 && requested.audioDefaultsApplied && !applyAudioDefaults(requested, device), "Explicit none reapplied first-run defaults");
+        panel.setBusy(true);
+        require(audioControl<juce::ComboBox>(panel, "microphoneInput1").isEnabled(), "Configuring prevents queued microphone edits");
+    });
+    suite.test("Rejected stereo input restores visible, saved and engine settings synchronously", [] { checkRejectedSelection(false); });
     suite.test("Rejected queued stereo edit restores the latest completed settings", [] { checkRejectedSelection(true); });
     suite.test("Calibration display and engine agree on armed sparse slot/L/R keys", []
     {
@@ -774,6 +983,25 @@ int runUiWiringTests()
         require(playback.calls == 2 && dubbing.calls == 2 && samples[0] == .25f, "Normal playback did not resume after dubbing detach");
         engine.setPlaybackClient(nullptr); feed(16, 0);
         require(playback.calls == 2 && dubbing.calls == 2 && samples[0] == 0, "Detached output still called a client");
+    });
+    suite.test("Synthetic audio settings owner blocks native device creation for hardware-free validation", []
+    {
+        auto owner = std::make_unique<AsioTimingBridge>(1000000);
+        require(owner->registerTap(), "Reserve the synthetic ASIO owner before any device request");
+        RecorderAudioEngine engine;
+        const auto blocked = engine.openDevice("recorder-test-no-physical-device", 48000, 256);
+        require(blocked.failed() && (!AsioTimingBridge::hookCompiled() || blocked.getErrorMessage().contains("ASIO owner"))
+            && engine.deviceInfo().sampleRate == 0, "The injected owner must reject before native device creation");
+        // TestMain runs ui-wiring after ASIO ownership tests and before lifecycle.
+        // That existing suite can otherwise open the PC's first real ASIO driver.
+        // Opt-in keeps the same synthetic owner until process exit, so full-suite
+        // validation uses its device-unavailable path without modifying the engine.
+        if (juce::SystemStats::getEnvironmentVariable("RECORDER_TEST_NO_HARDWARE", {}) == "1")
+        {
+            static std::unique_ptr<AsioTimingBridge> fullRunOwner;
+            fullRunOwner = std::move(owner);
+            std::cout << "Injected ASIO owner retained: native device creation blocked for remaining suites\n";
+        }
     });
     return suite.result("ui-wiring");
 }
