@@ -253,10 +253,10 @@ void ExportDialog::startExport(bool again)
             exportRequire(holdExportGate(), "녹화·재생이 끝난 뒤 내보내기를 시작하세요.");
             result = controller.retry(juce::File(folder.getText()).getChildFile(state.outputDirectory.getFileName()));
         }
-        else { exportRequire(holdExportGate(), "녹화·재생이 끝난 뒤 내보내기를 시작하세요."); result = controller.start(document, request()); }
+        else { const auto r = request(); exportRequire(holdExportGate(), "녹화·재생이 끝난 뒤 내보내기를 시작하세요."); result = controller.start(document, r); }
         if (result.failed()) { releaseExportGate(); sourceStatus.setText(result.getErrorMessage(), juce::dontSendNotification); }
     }
-    catch (const std::exception& e) { sourceStatus.setText(juce::String::fromUTF8(e.what()), juce::dontSendNotification); }
+    catch (const std::exception& e) { if (!controller.busy()) releaseExportGate(); sourceStatus.setText(juce::String::fromUTF8(e.what()), juce::dontSendNotification); }
     refreshSelection();
 }
 void ExportDialog::startPreview()

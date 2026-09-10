@@ -14,7 +14,7 @@ AudioSettingsPanel::AudioSettingsPanel(const UserSettings& s, const RecorderProj
     if (s.asioDeviceId.isNotEmpty() && !devices.getSelectedId()) devices.setText(s.asioDeviceId + ko(" · 연결 안 됨"), juce::dontSendNotification);
     if (s.asioDeviceId.isEmpty() && devices.getNumItems() > 0) devices.setSelectedId(1, juce::dontSendNotification); // the session picks the first driver too
     for (auto Fs : {44100, 48000, 88200, 96000, 192000}) rate.addItem(juce::String(Fs) + " Hz", Fs);
-    rate.setSelectedId(int(fixed ? p.Fs : s.preferredSampleRate), juce::dontSendNotification); rate.setEnabled(!fixed);
+    selectRate(fixed ? p.Fs : s.preferredSampleRate); rate.setEnabled(!fixed);
     buffer.setEditableText(true); buffer.setText(juce::String(s.bufferSize), juce::dontSendNotification);
     addAndMakeVisible(controlPanel); addAndMakeVisible(mono); mono.setToggleState(s.output.mono, juce::dontSendNotification);
     // Every edit applies at once: the session (re)opens the device, there is no connect step.
@@ -36,10 +36,15 @@ void AudioSettingsPanel::setSettings(const UserSettings& s)
 {
     initial = s;
     for (int i = 0; i < devices.getNumItems(); ++i) if (devices.getItemText(i) == s.asioDeviceId) devices.setSelectedId(devices.getItemId(i), juce::dontSendNotification);
-    rate.setSelectedId(int(fixed ? projectFs : s.preferredSampleRate), juce::dontSendNotification);
+    selectRate(fixed ? projectFs : s.preferredSampleRate);
     buffer.setText(juce::String(s.bufferSize), juce::dontSendNotification);
     mono.setToggleState(s.output.mono, juce::dontSendNotification); right.setEnabled(!s.output.mono);
     leftLabel.setText(s.output.mono ? ko("재생 출력 모노 채널") : ko("재생 출력 왼쪽"), juce::dontSendNotification);
+}
+void AudioSettingsPanel::selectRate(unsigned fs)
+{
+    if (fs && rate.indexOfItemId(int(fs)) < 0) rate.addItem(juce::String(int(fs)) + " Hz", int(fs)); // driver-reported rate outside the preset list
+    rate.setSelectedId(int(fs), juce::dontSendNotification);
 }
 void AudioSettingsPanel::setBusy(bool configuring) { busy = configuring; controlPanel.setEnabled(!busy && actual.sampleRate != 0); }
 UserSettings AudioSettingsPanel::read(UserSettings s) const

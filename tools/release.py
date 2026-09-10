@@ -629,6 +629,12 @@ def publish_recorder(args, candidate):
             sys.exit("Recorder candidate passed the technical checks but release gates are %s (%s). "
                      "Publishing needs the release owner's decision: re-run with --accept-blocked-gates." % (report.get("status"), blockers))
         print("publishing with unresolved release gates (accepted by the release owner):", blockers)
+    # the About dialog links the same-release source archive: a validated --source-bundle, otherwise this commit's
+    # snapshot; prepared before anything is tagged or pushed
+    source = candidate.get("source")
+    if source is None:
+        source = candidate["output"] / candidate["sources_name"]
+        run(["git", "archive", "--format=zip", "-o", str(source), "HEAD"], cwd=ROOT)
     head = run(["git", "rev-parse", "HEAD"], cwd=ROOT, capture=True).strip()
     if run(["git", "tag", "--list", tag_name], cwd=ROOT, capture=True).strip():
         tagged = run(["git", "rev-list", "-n", "1", tag_name], cwd=ROOT, capture=True).strip()
@@ -638,11 +644,6 @@ def publish_recorder(args, candidate):
         run(["git", "tag", "-a", tag_name, "-m", APP["name"] + " " + candidate["version"]], cwd=ROOT)
     run(["git", "push", APP["remote"], "HEAD:main"], cwd=ROOT)
     run(["git", "push", APP["remote"], tag_name], cwd=ROOT)
-    # the About dialog links the same-release source archive: a validated --source-bundle, otherwise this commit
-    source = candidate.get("source")
-    if source is None:
-        source = candidate["output"] / candidate["sources_name"]
-        run(["git", "archive", "--format=zip", "-o", str(source), "HEAD"], cwd=ROOT)
     gh = find_gh()
     run([gh, "release", "create", tag_name, str(candidate["installer"]), str(candidate["appcast"]), str(source),
          "--repo", APP["repo"], "--title", APP["name"] + " " + candidate["version"], "--verify-tag",

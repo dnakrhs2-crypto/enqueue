@@ -379,14 +379,25 @@ class RecorderReleaseRoutingTests(unittest.TestCase):
             package.assert_not_called()
             run.assert_not_called()
         candidate = {"tag": "recorder-v9.9.9"}
+        order = []
         with mock.patch.dict(release.APPS["recorder"], {"publication_confirmed": True}), \
              mock.patch.object(sys, "argv", ["release.py", "--app", "recorder", "--publish"]), \
-             mock.patch.object(release, "run", return_value="") as run, mock.patch.object(release, "package_recorder", return_value=candidate) as package, \
-             mock.patch.object(release, "publish_recorder") as publish:
+             mock.patch.object(release, "run", return_value="") as run, \
+             mock.patch.object(release, "recorder_tag_preflight", side_effect=lambda tag: order.append(("preflight", tag))), \
+             mock.patch.object(release, "package_recorder", side_effect=lambda a: order.append("package") or candidate), \
+             mock.patch.object(release, "publish_recorder", side_effect=lambda a, c: order.append(("publish", c))):
             release.main()
-            package.assert_called_once()
-            publish.assert_called_once_with(mock.ANY, candidate)
-            self.assertEqual(list(run.call_args_list[0].args[0]), ["git", "status", "--porcelain"]) # then the tag preflight
+            self.assertEqual(order, [("preflight", "recorder-v" + IDENTITY["VERSION"]), "package", ("publish", candidate)])
+            self.assertEqual(list(run.call_args_list[0].args[0]), ["git", "status", "--porcelain"])
+        with mock.patch.dict(release.APPS["recorder"], {"publication_confirmed": True}), \
+             mock.patch.object(sys, "argv", ["release.py", "--app", "recorder", "--publish"]), \
+             mock.patch.object(release, "run", return_value=""), \
+             mock.patch.object(release, "recorder_tag_preflight", side_effect=SystemExit("tag mismatch")), \
+             mock.patch.object(release, "package_recorder") as package, mock.patch.object(release, "publish_recorder") as publish, \
+             redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+            release.main()
+        package.assert_not_called()
+        publish.assert_not_called()
         with mock.patch.dict(release.APPS["recorder"], {"publication_confirmed": True}), \
              mock.patch.object(sys, "argv", ["release.py", "--app", "recorder", "--publish"]), \
              mock.patch.object(release, "run", return_value=" M tools/release.py\n"), mock.patch.object(release, "package_recorder") as package, \

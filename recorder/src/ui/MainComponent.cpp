@@ -26,7 +26,7 @@ MainComponent::MainComponent(RecorderDocument& d, RecorderSettings& s) : documen
     session.onConfigured = [this](const juce::Result& result, const UserSettings& s)
     {
         settings.set(s); persistSettings(); if (result.failed()) showError(result.getErrorMessage()); else banner.clear();
-        if (audioPanel) { audioPanel->setSettings(s); audioPanel->setDeviceInfo(session.deviceInfo()); }
+        if (audioPanel && !pendingConfigure) { audioPanel->setSettings(s); audioPanel->setDeviceInfo(session.deviceInfo()); } // a queued edit keeps the user's latest choices on screen
         if (settingsError) settingsError->setText(result.wasOk() ? ko("설정을 적용했습니다.") : result.getErrorMessage(), juce::dontSendNotification);
         refreshPending = true;
         if (pendingConfigure)
@@ -52,6 +52,7 @@ MainComponent::~MainComponent()
 {
     stopTimer(); document.onChanged = nullptr; removeKeyListener(this);
     session.onConfigured = {}; session.onPeaks = {}; session.onLoadedPeaks = {}; session.onThumbnails = {};
+    exportDialog.reset(); // cancels/joins a running export and releases the session's exporting gate before the wait below
     session.requestShutdown();
     if (fileWork.valid()) { const auto r = fileWork.get(); if (r.written) document.checkpointFinished(r.written, r.file, r.result); }
     session.lifecycleState()->end(RecorderLifecycle::recovering);
@@ -194,7 +195,11 @@ void MainComponent::timerCallback()
             settings.rememberProject(r.file); persistSettings();
             if (afterSave) { auto action = std::move(afterSave); afterSave = {}; action(); }
         }
-        else { if (r.written) document.checkpointFinished(r.written, r.file, r.result); showError(recorderFaultText(RecorderFault::save) + " " + r.result.getErrorMessage()); afterSave = {}; closeCommitRequested = bool(closeAction); }
+        else
+        {
+            if (r.written) document.checkpointFinished(r.written, r.file, r.result); showError(recorderFaultText(RecorderFault::save) + " " + r.result.getErrorMessage()); afterSave = {}; closeCommitRequested = bool(closeAction);
+            if (r.opening && !closeAction && !demo) session.configure(settings.get()); // a missing recent project must not leave ASIO/cameras unconnected
+        }
         refreshPending = true;
     }
     if (completed(settingsWork))

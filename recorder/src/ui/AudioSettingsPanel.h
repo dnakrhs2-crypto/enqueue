@@ -21,6 +21,7 @@ private:
     unsigned projectFs;
     RecorderAudioEngine::DeviceInfo actual;
     bool busy = false;
+    void selectRate(unsigned fs);
     juce::Label deviceLabel, rateLabel, actualLabel, bufferLabel, latencyLabel, leftLabel, rightLabel;
     juce::ComboBox devices, rate, buffer, left, right;
     juce::ToggleButton mono {ko("모노 출력")};
