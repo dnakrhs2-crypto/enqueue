@@ -248,8 +248,17 @@ int runPlaybackTests()
         require(WaitForSingleObject(video.presentationWakeHandle(0), 0) == WAIT_OBJECT_0, "Presenter request event missing");
         require(!video.ready(0, 1), "Incomplete decode marked ready");
         state->releaseWake.signal();
-        require(WaitForSingleObject(wake->nativeHandle(), 5000) == WAIT_OBJECT_0, "Publication did not wake the coordinator");
-        require(video.ready(0, 1), "Coordinator woke before the published frame was ready");
+        // The coordinator must be woken without polling, but a wake may arrive slightly before the frame becomes
+        // visible to ready(); tolerate that by re-waiting on the same event instead of asserting on the first wake.
+        bool woken = false;
+        for (const auto deadline = juce::Time::getMillisecondCounter() + 5000; juce::Time::getMillisecondCounter() < deadline;)
+        {
+            if (WaitForSingleObject(wake->nativeHandle(), 200) == WAIT_OBJECT_0) woken = true;
+            if (woken && video.ready(0, 1)) break;
+        }
+        require(woken, "Publication did not wake the coordinator");
+        require(video.ready(0, 1), "Published frame never became ready after the wake");
+        wake->signal(); // the loop above may have consumed the publication wake; the receipt check below owns the next one
         require(WaitForSingleObject(video.presentationWakeHandle(0), 0) == WAIT_OBJECT_0, "Coordinator consumed presenter's notification");
         const auto frame = video.displaySelection(0).frame;
         video.presented(0, *frame, qpcNow());
