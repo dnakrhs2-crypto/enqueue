@@ -115,6 +115,7 @@ public:
         if (loaded.failed()) window->content().showError(loaded.getErrorMessage());
         if (openPath.isNotEmpty()) window->content().openProject(juce::File(openPath));
         else if (loaded.wasOk() && !settings->get().recentProjects.isEmpty()) window->content().openProject(juce::File(settings->get().recentProjects[0]));
+        else window->content().connectDevicesFromSettings();
     }
     void shutdown() override
     {

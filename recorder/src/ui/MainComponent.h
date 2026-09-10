@@ -26,6 +26,7 @@ public:
     void updateShutdownRequested();
     void updateShutdownBlocked();
     void checkForUpdates();
+    void connectDevicesFromSettings() { if (!demo) session.configure(settings.get()); } // startup without a project: grab ASIO/cameras right away
 private:
     struct FileResult
     {
