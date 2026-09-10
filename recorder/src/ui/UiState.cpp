@@ -90,7 +90,9 @@ juce::String calibrationStatusText(CalibrationMatch match)
 }
 juce::String formatRecorderTime(Sample sample, unsigned Fs)
 {
-    const auto ms = Fs ? (std::max)(Sample{0}, sample) * 1000 / Fs : 0;
-    return juce::String::formatted("%02lld:%02lld:%02lld.%03lld", ms / 3600000, ms / 60000 % 60, ms / 1000 % 60, ms % 1000);
+    const auto nonnegative = (std::max)(Sample{0}, sample);
+    const auto seconds = Fs ? nonnegative / Fs : 0;
+    const auto millis = Fs ? (nonnegative % Fs) * 1000 / Fs : 0;
+    return juce::String::formatted("%02lld:%02lld:%02lld.%03lld", seconds / 3600, seconds / 60 % 60, seconds % 60, millis);
 }
 }

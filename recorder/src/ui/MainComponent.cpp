@@ -134,7 +134,8 @@ void MainComponent::refresh()
             : session.showingPlayback() ? ko("영상 없음") : ko("카메라 연결 준비 전"), session.showingPlayback() ? hasPlayback : session.cameraReady(i));
     }
     if (!session.configuring() && !closeAction) recordView.updateMeters(session.audioEngine().inputPeaks());
-    timelineView.setRecordingPreview(ui.live, take.placementSample(), session.elapsed(), settings.get());
+    timelineView.setRecordingPreview(ui.live, take.placementSample(), session.elapsed(),
+        {{session.cameraReady(0), session.cameraReady(1)}, ui.live ? session.audioEngine().armedMicrophones() : std::vector<unsigned>{}}, settings.get());
     timelineView.refresh(ui.structureLocked, session.recording() ? session.takeController().placementSample() + session.elapsed() : session.playhead(), takeStatus == ko("대기") ? juce::String() : takeStatus);
     timelineView.transport.setState(ui.canTransport, session.playing(), session.playhead(), document.getProject().Fs);
     timelineView.setVisible(timeline); resized(); refreshPending = false;

@@ -144,6 +144,13 @@ void TimelineView::rebuildHeaders()
     for (auto kind : {TrackKind::cam1, TrackKind::cam2})
     { auto it = std::find_if(p.tracks.begin(), p.tracks.end(), [kind](const auto& t) { return t.kind == kind; }); if (it != p.tracks.end()) tracks.push_back(*it); else { Track t; t.trackId = kind == TrackKind::cam1 ? "placeholder-cam1" : "placeholder-cam2"; t.kind = kind; t.name = ko(kind == TrackKind::cam1 ? "캠1" : "캠2"); tracks.push_back(t); } }
     for (const auto& t : p.tracks) if (t.kind == TrackKind::mic || t.kind == TrackKind::importAudio) tracks.push_back(t);
+    if (recordingPreview.active) for (unsigned slot = 0; slot < recordingPreview.microphones.size(); ++slot)
+        if (recordingPreview.microphones[slot] && std::none_of(tracks.begin(), tracks.end(), [slot](const Track& t)
+            { return t.kind == TrackKind::mic && t.microphoneIndex == int(slot); }))
+        {
+            Track t; t.trackId = "placeholder-mic-" + juce::String(slot + 1); t.kind = TrackKind::mic; t.microphoneIndex = int(slot);
+            t.name = recordingPreview.microphoneLabels[slot]; tracks.push_back(std::move(t));
+        }
     visibleIndex.rebuild(p, tracks);
     takeForAsset.clear(); assetById.clear();
     for (const auto& asset : p.media->assets) assetById.emplace(asset.assetId, &asset);
@@ -163,6 +170,7 @@ void TimelineView::rebuildHeaders()
             rows.addAndMakeVisible(*h); headers.push_back(std::move(h));
         }
         headers[i]->refresh(trackLabel(tracks[i], document.getProject()));
+        headers[i]->setEnabled(std::any_of(p.tracks.begin(), p.tracks.end(), [&](const Track& t) { return t.trackId == tracks[i].trackId; }));
     }
     resized();
 }
@@ -290,7 +298,7 @@ void TimelineView::showRipplePrompt()
         .withMessage(body).withButton(ko("대상 확대")).withButton(ko("링크 해제")).withButton(ko("취소")).withAssociatedComponent(this),
         [safe, prompt](int result) { if (safe) safe->finish(safe->edits.resolveRipple(prompt, result == 1 ? RippleChoice::expand : result == 2 ? RippleChoice::unlink : RippleChoice::cancel), result == 1 || result == 2); });
 }
-void TimelineView::showEditMenu(bool atMouse)
+juce::PopupMenu TimelineView::createEditMenu() const
 {
     juce::PopupMenu menu;
     for (auto a : {TimelineAction::split, TimelineAction::trimIn, TimelineAction::trimOut, TimelineAction::remove, TimelineAction::rippleAll,
@@ -300,13 +308,18 @@ void TimelineView::showEditMenu(bool atMouse)
         auto label = a == TimelineAction::undo || a == TimelineAction::redo ? edits.historyText(a == TimelineAction::redo) : TimelineEditController::text(a);
         if (a == TimelineAction::rippleAll) label += ko(" · 전 트랙");
         if (a == TimelineAction::rippleAudio) label += ko(" · 선택 오디오 트랙");
-        if (a == TimelineAction::split) label += " (S)";
+        if (a == TimelineAction::split) label += " (" + shortcuts[RecorderCommand::split] + ")";
         if (a == TimelineAction::remove) label += " (Delete)";
-        if (a == TimelineAction::addMarker) label += " (M)";
+        if (a == TimelineAction::addMarker) label += " (" + shortcuts[RecorderCommand::marker] + ")";
         if (a == TimelineAction::undo) label += " (Ctrl+Z)";
         if (a == TimelineAction::redo) label += " (Ctrl+Shift+Z)";
         menu.addItem(int(a) + 1, label, edits.enabled(a));
     }
+    return menu;
+}
+void TimelineView::showEditMenu(bool atMouse)
+{
+    auto menu = createEditMenu();
     juce::Component::SafePointer<TimelineView> safe(this);
     const auto base = document.snapshot(); const auto selection = document.getSelection();
     auto options = juce::PopupMenu::Options().withTargetComponent(&menuButton);
@@ -337,12 +350,9 @@ double TimelineView::xFor(Sample s) const { return headerWidth + (double(s) / do
 Sample TimelineView::sampleFor(double x) const
 {
     const auto sample = (viewStart + (x - headerWidth) * viewSeconds / juce::jmax(1, rows.getWidth() - headerWidth)) * document.getProject().Fs;
-    if (!(sample > 0)) return 0; // Includes NaN and negative coordinates.
     // Hit/paint queries add one for their half-open end. Reserve that sample,
     // and reject the rounded 2^63 boundary before calling llround.
-    constexpr auto maximum = (std::numeric_limits<Sample>::max)() - 1;
-    if (!std::isfinite(sample) || sample >= double(maximum)) return maximum;
-    return Sample(std::llround(sample));
+    return TimelineSamples::roundNonnegative(sample, (std::numeric_limits<Sample>::max)() - 1);
 }
 void TimelineView::updateRange()
 {
@@ -367,26 +377,39 @@ void TimelineView::zoomAt(double factor, double rowX)
 void TimelineView::zoomToFit() { viewStart = 0; viewSeconds = juce::jmax(5.0, double(document.getProject().activeTimelineEnd()) / document.getProject().Fs + 1); updateRange(); rows.repaint(); }
 void TimelineView::reveal(Sample at) { viewStart = TimelineInteraction::revealStart(viewStart, viewSeconds, double(at) / document.getProject().Fs); updateRange(); rows.repaint(); }
 void TimelineView::scrollBarMoved(juce::ScrollBar*, double start) { viewStart = start; recordingPreview.follow = false; rows.repaint(); }
-void TimelineView::setRecordingPreview(bool active, Sample placement, Sample elapsed, const UserSettings& settings)
+void TimelineView::setRecordingPreview(bool active, Sample placement, Sample elapsed, const RecordingPreviewTargets& targets, const UserSettings& settings)
 {
+    const auto previous = recordingPreview;
     if (active && !recordingPreview.active)
     {
         recordingPreview.follow = true;
         const auto start = double(placement) / document.getProject().Fs;
         if (start < viewStart || start > viewStart + viewSeconds * .75) viewStart = std::max(0.0, start - viewSeconds * .25);
     }
-    recordingPreview.active = active; recordingPreview.start = placement; recordingPreview.length = std::max(Sample{0}, elapsed);
+    recordingPreview.active = active; recordingPreview.start = std::max(Sample{0}, placement); recordingPreview.length = std::max(Sample{0}, elapsed);
     if (active && recordingPreview.follow)
     {
-        const auto end = double(placement + recordingPreview.length) / document.getProject().Fs;
+        const auto end = double(previewAdd(recordingPreview.start, recordingPreview.length)) / document.getProject().Fs;
         if (end > viewStart + viewSeconds * .9) viewStart = end - viewSeconds * .9;
         updateRange();
     }
-    recordingPreview.cameras = settings.cameraEnabled;
+    recordingPreview.cameras = targets.cameras;
+    recordingPreview.microphones.fill(false);
+    for (const auto logical : targets.microphones) if (logical >= 1 && logical <= recordingPreview.microphones.size())
+        recordingPreview.microphones[logical - 1] = true;
     for (std::size_t i = 0; i < recordingPreview.microphones.size(); ++i)
-        recordingPreview.microphones[i] = i < settings.physicalInputs.size() && settings.physicalInputs[i] >= 0 && settings.microphoneArmed[i];
-    // The preview is paint-only. The take controller remains the sole clip publisher.
+        recordingPreview.microphoneLabels[i] = (settings.microphoneNames[i].isEmpty() ? ko("마이크 ") + juce::String(i + 1) : settings.microphoneNames[i])
+            + (settings.stereoSlots[i] ? ko(" · 스테레오") : juce::String());
+    // Only labels use settings. Membership is the session's actual capture set.
+    // Missing microphone lanes are display-only; the take controller publishes tracks/clips.
+    if (previous.active != active || previous.microphones != recordingPreview.microphones || previous.microphoneLabels != recordingPreview.microphoneLabels)
+    { rebuildHeaders(); rebuildPreview(); updateRange(); }
     rows.repaint();
+}
+bool TimelineView::isRecordingTrack(const Track& track) const
+{
+    return recordingPreview.active && (track.kind == TrackKind::cam1 ? recordingPreview.cameras[0] : track.kind == TrackKind::cam2 ? recordingPreview.cameras[1]
+        : track.kind == TrackKind::mic && track.microphoneIndex >= 0 && track.microphoneIndex < 8 && recordingPreview.microphones[std::size_t(track.microphoneIndex)]);
 }
 void TimelineView::resized()
 {
@@ -419,16 +442,22 @@ void TimelineView::drawWave(juce::Graphics& g, const Clip& clip, juce::Rectangle
                 if (const auto* preceding = media.findAsset(id)) offset += unsigned(preceding->originalFormat.channels);
             }
         }
-    if (ch >= s.channels || s.bins.empty()) return;
+    if (ch >= s.channels || s.bins.empty() || !s.samplesPerBin) return;
     const auto bounds = g.getClipBounds();
-    const auto [left, right] = TimelineLayout::waveColumns(bounds.getX(), bounds.getRight(), int(box.getX()), int(std::ceil(box.getRight())));
+    const auto [left, right] = TimelineLayout::waveColumns(bounds.getX(), bounds.getRight(),
+        int(std::clamp(double(box.getX()), double(bounds.getX()), double(bounds.getRight()))),
+        int(std::clamp(std::ceil(double(box.getRight())), double(bounds.getX()), double(bounds.getRight()))));
     lastPaintWaveColumns += std::size_t(right - left);
     g.setColour(Palette::meterGreen); const auto middle = box.getCentreY();
     for (int x = left; x < right; ++x)
     {
-        const auto first = juce::jmax(Sample{0}, clip.sourceIn + sampleFor(x) - clip.timelineStartSample);
-        const auto last = juce::jmax(first + 1, clip.sourceIn + sampleFor(x + 1) - clip.timelineStartSample);
-        const auto a = std::uint64_t(first) / s.samplesPerBin, b = juce::jmin<std::uint64_t>(s.bins.size(), (std::uint64_t(last) + s.samplesPerBin - 1) / s.samplesPerBin);
+        const auto start = TimelineSamples::sourceAt(clip, sampleFor(x)), end = TimelineSamples::sourceAt(clip, sampleFor(x + 1));
+        if (!start || !end) continue;
+        const auto first = juce::jmax(Sample{0}, *start);
+        const auto onePast = TimelineSamples::add(first, 1); if (!onePast) continue;
+        const auto last = juce::jmax(*onePast, *end);
+        const auto a = std::uint64_t(first) / s.samplesPerBin, b = juce::jmin<std::uint64_t>(s.bins.size(),
+            std::uint64_t(last) / s.samplesPerBin + (std::uint64_t(last) % s.samplesPerBin != 0));
         if (a >= b) continue; auto low = s.bins[std::size_t(a)][ch].minimum, high = s.bins[std::size_t(a)][ch].maximum;
         for (auto i = a; i < b; ++i) for (unsigned channel = ch; channel < juce::jmin(ch + width, s.channels); ++channel)
         { low = juce::jmin(low, s.bins[std::size_t(i)][channel].minimum); high = juce::jmax(high, s.bins[std::size_t(i)][channel].maximum); }
@@ -440,18 +469,32 @@ void TimelineView::Rows::paint(juce::Graphics& g)
     ++view.rowPaintCount;
     view.lastPaintVisitedClips = view.lastPaintWaveColumns = 0;
     auto& v = view; const auto& p = v.document.getProject(); g.fillAll(Palette::card);
-    const auto clipBounds = g.getClipBounds(); const auto step = v.viewSeconds <= 2 ? .1 : v.viewSeconds <= 10 ? 1.0 : v.viewSeconds <= 60 ? 5.0 : v.viewSeconds <= 300 ? 30.0 : 60.0;
+    if (getWidth() <= headerWidth) return;
+    const auto clipBounds = g.getClipBounds(); auto step = v.viewSeconds <= 2 ? .1 : v.viewSeconds <= 10 ? 1.0 : v.viewSeconds <= 60 ? 5.0 : v.viewSeconds <= 300 ? 30.0 : 60.0;
+    const auto maxTicks = std::max(1, (getWidth() - headerWidth) / 80);
+    if (v.viewSeconds / step > maxTicks) step = std::pow(10.0, std::ceil(std::log10(v.viewSeconds / maxTicks)));
     g.setFont(juce::Font(juce::FontOptions(14))); g.setColour(Palette::dimText);
-    for (double t = std::ceil(v.viewStart / step) * step; t <= v.viewStart + v.viewSeconds; t += step)
-    { const int x = int(v.xFor(Sample(std::llround(t * p.Fs)))); g.drawVerticalLine(x, 22, float(getHeight())); g.drawText(formatRecorderTime(Sample(t * p.Fs), p.Fs).substring(3, 8), x + 3, 0, 64, 22, juce::Justification::centredLeft); }
+    const auto firstTick = std::ceil(v.viewStart / step) * step;
+    for (int tick = 0; tick <= maxTicks + 1; ++tick)
+    {
+        const auto t = firstTick + tick * step, sample = t * p.Fs;
+        if (!std::isfinite(sample) || sample >= double((std::numeric_limits<Sample>::max)()) || t > v.viewStart + v.viewSeconds) break;
+        const auto at = TimelineSamples::roundNonnegative(sample); const auto pixel = v.xFor(at);
+        if (pixel < headerWidth || pixel >= getWidth()) continue;
+        const auto x = int(pixel); g.drawVerticalLine(x, 22, float(getHeight()));
+        g.drawText(formatRecorderTime(at, p.Fs).substring(3, 8), x + 3, 0, 64, 22, juce::Justification::centredLeft);
+    }
+    // Bound raster geometry before JUCE converts floating coordinates to pixels.
+    const auto paintX = [&](Sample at) { return float(std::clamp(v.xFor(at), double(headerWidth - 8), double(getWidth() + 8))); };
     if (const auto range = v.edits.selectedRange())
     {
         const juce::Graphics::ScopedSaveState save(g); g.reduceClipRegion(headerWidth, 0, getWidth() - headerWidth, getHeight());
-        g.setColour(Palette::accent.withAlpha(.17f)); g.fillRect(float(v.xFor(range->start)), 0.0f, float(v.xFor(range->start + range->length) - v.xFor(range->start)), float(getHeight()));
+        const auto left = paintX(range->start), right = paintX(previewAdd(range->start, range->length));
+        g.setColour(Palette::accent.withAlpha(.17f)); g.fillRect(left, 0.0f, std::max(0.0f, right - left), float(getHeight()));
     }
     for (const auto& m : p.markers)
     {
-        const int x = int(v.xFor(m.sample)); if (x < headerWidth || x >= getWidth()) continue;
+        const auto pixel = v.xFor(m.sample); if (pixel < headerWidth || pixel >= getWidth()) continue; const int x = int(pixel);
         g.setColour(juce::Colour::fromString("ff" + m.colour.substring(1))); g.fillRect(x, 17, 3, 13);
         g.drawText(m.name, x + 4, 16, 90, 14, juce::Justification::centredLeft, true);
     }
@@ -465,7 +508,7 @@ void TimelineView::Rows::paint(juce::Graphics& g)
         for (const auto* item : visible)
         {
             const auto& c = *item;
-            const auto left = float(v.xFor(c.timelineStartSample)), right = float(v.xFor(c.timelineEnd())); if (right <= headerWidth || left >= getWidth()) continue;
+            const auto left = paintX(c.timelineStartSample), right = paintX(c.timelineEnd()); if (right <= headerWidth || left >= getWidth()) continue;
             auto box = juce::Rectangle<float>(left, float(y + 3), juce::jmax(2.0f, right - left), float(rowHeight - 6));
             const juce::Graphics::ScopedSaveState save(g); g.reduceClipRegion(headerWidth, y, getWidth() - headerWidth, rowHeight);
             const bool selected = std::find(v.document.getSelection().begin(), v.document.getSelection().end(), c.clipId) != v.document.getSelection().end();
@@ -479,8 +522,8 @@ void TimelineView::Rows::paint(juce::Graphics& g)
             {
                 for (float x = juce::jmax(float(headerWidth), imageBox.getX()); x < juce::jmin(float(getWidth()), imageBox.getRight()); x += 72)
                 {
-                    const auto sample = c.sourceIn + v.sampleFor(x) - c.timelineStartSample;
-                    const auto image = v.thumbnailFor(c.assetId, sample);
+                    const auto sample = TimelineSamples::sourceAt(c, v.sampleFor(x)); if (!sample) continue;
+                    const auto image = v.thumbnailFor(c.assetId, *sample);
                     if (image.isValid()) g.drawImage(image, juce::Rectangle<float>(x, imageBox.getY(), 70.0f, imageBox.getHeight()), juce::RectanglePlacement::stretchToFit);
                 }
             }
@@ -495,7 +538,8 @@ void TimelineView::Rows::paint(juce::Graphics& g)
             if (selected)
             {
                 const auto assetEntry = v.assetById.find(c.assetId); const auto* asset = assetEntry == v.assetById.end() ? nullptr : assetEntry->second;
-                const bool leftLimit = c.sourceIn == 0, rightLimit = asset && c.sourceIn + c.lengthSamples == asset->logicalLength;
+                const auto sourceEnd = TimelineSamples::add(c.sourceIn, c.lengthSamples);
+                const bool leftLimit = c.sourceIn == 0, rightLimit = asset && sourceEnd && *sourceEnd == asset->logicalLength;
                 g.setColour(leftLimit ? Palette::meterYellow : Palette::accent); g.fillRect(box.getX() + 2, box.getY() + 25, 4.0f, box.getHeight() - 29);
                 g.setColour(rightLimit ? Palette::meterYellow : Palette::accent); g.fillRect(box.getRight() - 6, box.getY() + 25, 4.0f, box.getHeight() - 29);
                 if (v.edits.focusedClip() == c.clipId) { g.setColour(Palette::text); g.fillEllipse(box.getX() + 5, box.getY() + 3, 4, 4); }
@@ -515,7 +559,7 @@ void TimelineView::Rows::paint(juce::Graphics& g)
           for (const auto* item : visible)
           {
             const auto& c = *item;
-            const auto left = float(v.xFor(c.timelineStartSample)), right = float(v.xFor(c.timelineStartSample + std::max(Sample{0}, c.lengthSamples)));
+            const auto left = paintX(c.timelineStartSample), right = paintX(previewAdd(c.timelineStartSample, std::max(Sample{0}, c.lengthSamples)));
             if (right <= std::max(headerWidth, clipBounds.getX()) || left >= clipBounds.getRight()) continue;
             const auto box = juce::Rectangle<float>(left, float(rulerHeight + int(row) * rowHeight + 3), std::max(3.0f, right - left), float(rowHeight - 6));
             g.setColour((preview->status.failed() ? Palette::danger : Palette::accent).withAlpha(.23f)); g.fillRect(box);
@@ -531,8 +575,13 @@ void TimelineView::Rows::paint(juce::Graphics& g)
             {
                 const auto* original = v.visibleIndex.find(c.clipId); const auto asset = v.assetById.find(c.assetId);
                 if (!original || asset == v.assetById.end()) continue;
-                for (auto limit : {original->timelineStartSample - original->sourceIn, original->timelineStartSample - original->sourceIn + asset->second->logicalLength})
-                { const auto x = float(v.xFor(limit)); g.setColour(Palette::meterYellow); g.drawLine(x, box.getY(), x, box.getBottom(), 2.0f); }
+                const auto first = TimelineSamples::subtract(original->timelineStartSample, original->sourceIn);
+                const auto last = first ? TimelineSamples::add(*first, asset->second->logicalLength) : std::nullopt;
+                for (const auto limit : {first, last}) if (limit)
+                {
+                    const auto x = v.xFor(*limit); if (x < headerWidth || x >= getWidth()) continue;
+                    g.setColour(Palette::meterYellow); g.drawLine(float(x), box.getY(), float(x), box.getBottom(), 2.0f);
+                }
             }
           }
         }
@@ -544,10 +593,9 @@ void TimelineView::Rows::paint(juce::Graphics& g)
         for (int row = firstRow; row < lastRow; ++row)
         {
             const auto& track = v.tracks[std::size_t(row)];
-            const bool active = track.kind == TrackKind::cam1 ? recording.cameras[0] : track.kind == TrackKind::cam2 ? recording.cameras[1]
-                : track.kind == TrackKind::mic && track.microphoneIndex >= 0 && track.microphoneIndex < 8 && recording.microphones[std::size_t(track.microphoneIndex)];
-            if (!active) continue;
-            const auto left = float(v.xFor(recording.start)), right = float(v.xFor(recording.start + recording.length));
+            if (!v.isRecordingTrack(track)) continue;
+            const auto left = paintX(recording.start), right = paintX(previewAdd(recording.start, recording.length));
+            if (right <= headerWidth || left >= getWidth()) continue;
             const auto box = juce::Rectangle<float>(left, float(rulerHeight + row * rowHeight + 3), std::max(4.0f, right - left), float(rowHeight - 6));
             g.setColour(Palette::danger.withAlpha(.23f)); g.fillRoundedRectangle(box, 5);
             g.setColour(Palette::danger); g.drawRoundedRectangle(box, 5, 2); g.drawVerticalLine(int(right), box.getY(), box.getBottom());
@@ -559,7 +607,7 @@ void TimelineView::Rows::paint(juce::Graphics& g)
         const auto x = float(v.xFor(*snapGuide));
         if (x >= headerWidth && x < getWidth()) { g.setColour(Palette::meterYellow); g.drawLine(x, 0, x, float(getHeight()), 2); g.drawText(ko("스냅"), int(x) + 4, 0, 45, 19, juce::Justification::centredLeft); }
     }
-    const auto x = int(v.xFor(v.playhead)); if (x >= headerWidth && x < getWidth()) { g.setColour(Palette::danger); g.drawVerticalLine(x, 0, float(getHeight())); g.fillEllipse(float(x - 4), 0, 8, 8); }
+    const auto pixel = v.xFor(v.playhead); if (pixel >= headerWidth && pixel < getWidth()) { const auto x = int(pixel); g.setColour(Palette::danger); g.drawVerticalLine(x, 0, float(getHeight())); g.fillEllipse(float(x - 4), 0, 8, 8); }
     if (dragging == Drag::scrub) v.drawScrubPreview(g);
 }
 void TimelineView::drawScrubPreview(juce::Graphics& g)
@@ -570,9 +618,9 @@ void TimelineView::drawScrubPreview(juce::Graphics& g)
     {
         const auto box = boxes[camera]; auto bounds = juce::Rectangle<int>(headerWidth + box.x, viewport.getViewPositionY() + rulerHeight + box.y, box.width, box.height);
         g.setColour(Palette::background); g.fillRect(bounds);
-        const auto clips = visibleIndex.visible(camera, playhead, playhead + 1);
+        const auto clips = visibleIndex.visible(camera, playhead, previewAdd(playhead, 1));
         juce::Image image;
-        if (clips.size()) { const auto& c = **clips.begin(); image = thumbnailFor(c.assetId, c.sourceIn + playhead - c.timelineStartSample, true); }
+        if (clips.size()) { const auto& c = **clips.begin(); if (const auto sample = TimelineSamples::sourceAt(c, playhead)) image = thumbnailFor(c.assetId, *sample, true); }
         if (image.isValid()) g.drawImage(image, bounds.toFloat(), juce::RectanglePlacement::centred);
         else { g.setColour(Palette::dimText); g.drawText(clips.size() ? ko("썸네일 준비 중") : ko("영상 없음"), bounds, juce::Justification::centred); }
     }
@@ -592,7 +640,6 @@ void TimelineView::Rows::mouseDown(const juce::MouseEvent& e)
     }
     const auto row = (e.y - rulerHeight) / rowHeight; if (row < 0 || row >= int(v.tracks.size())) return;
     downRow = row;
-    const auto snapshot = v.document.snapshot();
     // A trim handle can be grabbed on either side of its boundary, including the
     // half-open right edge where the source clip no longer contains the sample.
     const auto nearbyClips = v.visibleIndex.visible(std::size_t(row), v.sampleFor(e.x - 8), v.sampleFor(e.x + 8) + 1);
@@ -616,17 +663,31 @@ void TimelineView::Rows::mouseDown(const juce::MouseEvent& e)
     { v.edits.focusSelection(downClip); collapseSelection = !e.mods.isPopupMenu() && explicitIds.size() > 1; }
     else v.edits.clickClip(downClip, e.mods.isShiftDown(), e.mods.isCtrlDown());
     v.selectionChanged();
-    if (e.mods.isPopupMenu()) { v.showEditMenu(true); return; }
-    if (v.edits.isLocked() || e.mods.isCtrlDown() || e.mods.isShiftDown()) return;
-    const auto* c = snapshot->findClip(downClip);
+    downSnapshot = v.document.snapshot(); downRevision = downSnapshot->editRevision;
+    downSelection = v.document.getSelection(); downExplicitSelection = v.edits.explicitSelection(); downTargets = v.edits.targets();
+    const auto* c = downSnapshot->findClip(downClip);
     // The document can change before the next 33 ms refresh (e.g. a take/version
     // publication). A hit from the displayed index is not proof of membership.
-    if (!c || !snapshot->isActive(*c)) { dragging = Drag::none; return; }
+    if (!c || !downSnapshot->isActive(*c)) { cancelGesture(false); return; }
+    downStart = c->timelineStartSample; downEnd = c->timelineEnd();
     auto action = TimelineAction::move;
     if (std::abs(e.x - v.xFor(c->timelineStartSample)) <= 7 && std::abs(e.x - v.xFor(c->timelineStartSample)) <= std::abs(e.x - v.xFor(c->timelineEnd()))) action = TimelineAction::trimIn;
     else if (std::abs(e.x - v.xFor(c->timelineEnd())) <= 7) action = TimelineAction::trimOut;
     downEdge = action == TimelineAction::trimOut ? c->timelineEnd() : c->timelineStartSample;
-    pendingAction = action; dragging = Drag::clip;
+    pendingAction = action;
+    if (e.mods.isPopupMenu()) { v.showEditMenu(true); return; }
+    if (v.edits.isLocked() || e.mods.isCtrlDown() || e.mods.isShiftDown()) return;
+    dragging = Drag::clip;
+}
+bool TimelineView::Rows::pendingClipUnchanged() const
+{
+    const auto current = view.document.snapshot();
+    if (!downSnapshot || current != downSnapshot || current->editRevision != downRevision
+        || view.document.getSelection() != downSelection || view.edits.explicitSelection() != downExplicitSelection
+        || view.edits.targets() != downTargets) return false;
+    const auto* clip = current->findClip(downClip);
+    return clip && current->isActive(*clip) && clip->timelineStartSample == downStart && clip->timelineEnd() == downEnd
+        && (pendingAction == TimelineAction::trimOut ? clip->timelineEnd() : clip->timelineStartSample) == downEdge;
 }
 void TimelineView::Rows::mouseDrag(const juce::MouseEvent& e)
 {
@@ -634,7 +695,7 @@ void TimelineView::Rows::mouseDrag(const juce::MouseEvent& e)
     lastPointer = e.position; lastModifiers = e.mods;
     if (!moved && e.getDistanceFromDragStart() >= TimelineInteraction::dragThreshold)
     {
-        if (dragging == Drag::clip && !v.edits.beginDrag(pendingAction)) { dragging = Drag::none; return; }
+        if (dragging == Drag::clip && (!pendingClipUnchanged() || !v.edits.beginDrag(pendingAction))) { cancelGesture(false); return; }
         moved = true;
         snapIndex.build(v.document.getProject(), dragging == Drag::clip ? v.edits.dragTargets() : std::vector<Id>{}, previousPlayhead, pendingAction);
         lastAutoScroll = juce::Time::getMillisecondCounter(); startTimer(16);
@@ -646,7 +707,7 @@ void TimelineView::Rows::updateDrag()
 {
     auto& v = view; if (v.edits.isLocked() || !moved) return;
     const auto bypass = lastModifiers.isAltDown() || !v.snapButton.getToggleState();
-    const auto tolerance = std::max(Sample{1}, Sample(std::llround(v.viewSeconds * v.document.getProject().Fs * TimelineInteraction::snapPixels / std::max(1, getWidth() - headerWidth))));
+    const auto tolerance = TimelineInteraction::snapTolerance(v.viewSeconds, v.document.getProject().Fs, getWidth() - headerWidth);
     const auto raw = dragging == Drag::clip ? previewAdd(downEdge, previewSubtract(v.sampleFor(lastPointer.x), downSample)) : v.sampleFor(lastPointer.x); // saturated: never overflows before the range checks
     const auto snapped = snapIndex.snap(std::max(Sample{0}, raw), tolerance, bypass); snapGuide = snapped.guide;
     if (dragging == Drag::scrub) { v.playhead = snapped.value; v.edits.followPlayhead(v.playhead); if (v.onScrub) v.onScrub(v.playhead, false); }
@@ -694,6 +755,7 @@ void TimelineView::Rows::cancelGesture(bool restore)
         view.viewStart = previousViewStart; view.updateRange();
     }
     collapseSelection = false; moved = false;
+    downSnapshot.reset(); downSelection.clear(); downExplicitSelection.clear(); downTargets.clear();
     view.snapButton.setButtonText(view.snapButton.getToggleState() ? ko("스냅 켜짐") : ko("스냅 꺼짐"));
     setMouseCursor(juce::MouseCursor::NormalCursor); view.rebuildPreview(); repaint();
 }
@@ -705,7 +767,8 @@ void TimelineView::Rows::mouseUp(const juce::MouseEvent& e)
     if (mode == Drag::clip && moved) { const auto revision = v.document.getProject().editRevision; const auto r = v.edits.commitDrag(); v.finish(r, revision != v.document.getProject().editRevision); }
     else if (mode == Drag::scrub && !v.edits.isLocked()) { v.edits.seek(moved ? v.playhead : downSample); v.selectionChanged(); }
     else if (mode == Drag::range) { if (!moved && !v.edits.isLocked()) v.edits.seek(v.sampleFor(e.x)); v.selectionChanged(); }
-    if (collapseSelection && !moved) { v.edits.clickClip(downClip); v.selectionChanged(); }
+    if (collapseSelection && !moved && pendingClipUnchanged()) { v.edits.clickClip(downClip); v.selectionChanged(); }
+    downSnapshot.reset(); downSelection.clear(); downExplicitSelection.clear(); downTargets.clear(); collapseSelection = false;
     v.snapButton.setButtonText(v.snapButton.getToggleState() ? ko("스냅 켜짐") : ko("스냅 꺼짐"));
     mouseMove(e);
     repaint();

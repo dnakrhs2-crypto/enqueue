@@ -13,6 +13,11 @@
 
 namespace gocue::recorder
 {
+struct RecordingPreviewTargets
+{
+    std::array<bool, 2> cameras{};
+    std::vector<unsigned> microphones; // Armed logical slots 1..8, as returned by the audio engine.
+};
 class TimelineView : public juce::Component, private juce::ScrollBar::Listener, private juce::KeyListener
 {
 public:
@@ -27,7 +32,7 @@ public:
     void zoomAt(double factor, double rowX);
     void zoomToFit();
     void reveal(Sample);
-    void setRecordingPreview(bool active, Sample placement, Sample elapsed, const UserSettings&);
+    void setRecordingPreview(bool active, Sample placement, Sample elapsed, const RecordingPreviewTargets&, const UserSettings&);
     void setShortcuts(const RecorderShortcuts& value) { if (shortcuts.keys != value.keys) { shortcuts = value; updateControls(); } }
     std::function<bool(const juce::KeyPress&, juce::Component*)> onGlobalKey;
     void revealTrack(unsigned row) { viewport.setViewPosition(0, rulerHeight + int(row) * rowHeight); }
@@ -45,6 +50,7 @@ public:
     std::size_t lastPaintVisitedClips = 0, lastPaintWaveColumns = 0;
 private:
     friend struct StabilityTestAccess;
+    friend struct TimelineUxTestAccess;
     struct PeakDisplay { std::shared_ptr<PeakCache> live; std::shared_ptr<const PeakSnapshot> data; unsigned channel = 0; };
     struct Thumb { Sample sample; juce::Image image; };
     class Rows : public juce::Component, private juce::Timer
@@ -62,6 +68,9 @@ private:
         enum class Drag { none, scrub, range, clip } dragging = Drag::none;
         Sample downSample = 0, downEdge = 0;
         Id downClip;
+        RecorderDocument::Snapshot downSnapshot;
+        std::vector<Id> downSelection, downExplicitSelection, downTargets;
+        Sample downRevision = 0, downStart = 0, downEnd = 0;
         bool moved = false;
         bool collapseSelection = false;
         TimelineAction pendingAction = TimelineAction::move;
@@ -74,6 +83,7 @@ private:
         std::optional<SampleRange> previousRange;
         int downRow = -1;
     private:
+        bool pendingClipUnchanged() const;
         void updateDrag();
         void timerCallback() override;
         std::uint32_t lastAutoScroll = 0;
@@ -84,6 +94,8 @@ private:
     void updateRange();
     void finish(const juce::Result&, bool playback = true);
     void showEditMenu(bool atMouse = false);
+    juce::PopupMenu createEditMenu() const;
+    bool isRecordingTrack(const Track&) const;
     void showRipplePrompt();
     void updateControls();
     void setRangeFromInputs();
@@ -123,7 +135,14 @@ private:
     Sample playhead = 0;
     bool locked = false;
     RecorderShortcuts shortcuts;
-    struct RecordingPreview { bool active = false, follow = true; Sample start = 0, length = 0; std::array<bool, 2> cameras{}; std::array<bool, 8> microphones{}; } recordingPreview;
+    struct RecordingPreview
+    {
+        bool active = false, follow = true;
+        Sample start = 0, length = 0;
+        std::array<bool, 2> cameras{};
+        std::array<bool, 8> microphones{};
+        std::array<juce::String, 8> microphoneLabels;
+    } recordingPreview;
     juce::String latestStatus;
     juce::String editStatus;
     std::unique_ptr<ClipEditResult> orderPreview;
