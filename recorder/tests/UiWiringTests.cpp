@@ -1,3 +1,4 @@
+#include <juce_gui_extra/juce_gui_extra.h>
 #include "TestSupport.h"
 #include "AudioRenderFixtures.h"
 #include "RecordedGapFixtures.h"
@@ -8,6 +9,12 @@
 #include "playback/TimelineTransport.h"
 #include "app/RecorderSession.h"
 #include "storage/RecoveryScanner.h"
+#include "ui/MainComponent.h"
+#include "StabilityTestAccess.h"
+#include "export/MaterialExporter.h"
+// The headless app harness in ShortcutExceptionTests.cpp compiles MainComponent;
+// compile its shared import widget here without starting the product application.
+#include "../src/ui/AudioImportPanel.cpp"
 #include <atomic>
 #include <chrono>
 #include <cmath>
@@ -16,13 +23,78 @@
 
 using namespace gocue::recorder;
 using namespace recorder_test;
+namespace recorder_import_test { juce::File writeWav(const juce::File&, std::uint32_t, int, Sample); }
+namespace gocue::recorder
+{
+struct ImportUiTestAccess
+{
+    static void stopTimer(MainComponent& main) { main.stopTimer(); }
+    static void tick(MainComponent& main) { main.audioImporter.timerCallback(); main.timerCallback(); }
+    static bool busy(const MainComponent& main) { return main.importBusy(); }
+    static void click(MainComponent& main, const juce::File& file)
+    { main.audioImporter.chooseFileForTesting = [file] { return file; }; main.recordView.importButton.onClick(); }
+    static void cancel(MainComponent& main) { main.audioImporter.cancelImport(); }
+    static void ready(MainComponent& main) { main.refresh(); }
+    static bool enabled(MainComponent& main) { return main.recordView.importButton.isEnabled(); }
+    static juce::String message(MainComponent& main) { return main.banner; }
+    static void startRecording(MainComponent& main) { main.recordView.startButton.onClick(); }
+    static void seek(MainComponent& main, Sample at) { main.session.scrub(at, true); }
+    static void play(MainComponent& main) { main.timelineView.transport.play.onClick(); }
+    static void pause(MainComponent& main) { main.timelineView.transport.pause.onClick(); }
+    static bool buttonPlaced(MainComponent& main)
+    {
+        const auto& r = main.recordView;
+        return r.importButton.isVisible() && r.importButton.getWidth() >= 140
+            && r.dubButton.getRight() <= r.importButton.getX() && r.importButton.getRight() <= r.settingsButton.getX();
+    }
+};
+}
 namespace
 {
+using ImportAccess = ImportUiTestAccess;
 void waitUntil(const std::function<bool()>& predicate)
 {
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
     while (!predicate() && std::chrono::steady_clock::now() < deadline) std::this_thread::sleep_for(std::chrono::milliseconds(1));
     require(predicate(), "Worker timeout");
+}
+template<class Predicate> void waitImportUi(MainComponent& main, Predicate done)
+{
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(20);
+    while (!done() && std::chrono::steady_clock::now() < deadline)
+    { ImportAccess::tick(main); std::this_thread::sleep_for(std::chrono::milliseconds(2)); }
+    require(done(), "Import UI worker timeout");
+}
+void paintImportedWave(MainComponent& main)
+{
+    auto& view = StabilityTestAccess::timeline(main); view.zoomToFit();
+    juce::Image picture(juce::Image::ARGB, view.getWidth(), view.getHeight(), true, juce::SoftwareImageType{});
+    juce::Graphics graphics(picture); view.paintEntireComponent(graphics, true);
+    require(view.lastPaintWaveColumns > 0, "Actual timeline paint did not draw imported waveform");
+}
+// Same processBlock/output mapping used by ASIO, driven by a synthetic clock.
+// Capture actual output while the app's transport and renderer workers run.
+void hearImportedAudio(MainComponent& main, int channels)
+{
+    auto& session = StabilityTestAccess::session(main); StabilityTestAccess::openAudio(session);
+    ImportAccess::seek(main, 4800); ImportAccess::play(main);
+    std::array<float, 480> left{}, right{}; float* output[]{left.data(), right.data()};
+    double energy = 0, difference = 0; unsigned sequence = 0;
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(4);
+    while (energy < 1 && std::chrono::steady_clock::now() < deadline)
+    {
+        ImportAccess::tick(main);
+        BlockStamp stamp{}; stamp.flags = samplePositionValid | latenciesValid;
+        stamp.sampleRate = 48000; stamp.numSamples = 480; stamp.sequence = sequence;
+        stamp.samplePosition = Sample(sequence++) * 480; stamp.callbackQpc = qpcNow();
+        session.audioEngine().processBlock(stamp, nullptr, 0, nullptr, output, 2);
+        for (size_t i = 0; i < left.size(); ++i) { energy += left[i] * left[i] + right[i] * right[i]; difference += std::abs(left[i] - right[i]); }
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    require(session.error.isEmpty(), session.error.toRawUTF8());
+    require(energy > 1, "Imported PCM never reached the app's selected ASIO output path");
+    require(channels == 1 ? difference < 1e-5 : difference > .1, "Mono duplication/stereo channel identity lost");
+    ImportAccess::pause(main);
 }
 struct ReviewFolder
 {
@@ -163,6 +235,163 @@ void checkRejectedSelection(bool queued)
 int runUiWiringTests()
 {
     Suite suite;
+    for (const auto rate : {44100u, 48000u}) for (const auto channels : {1, 2})
+    {
+        const auto name = "Main import button -> waveform/ASIO PCM/save/reopen/materials/final source: " + std::to_string(rate) + "/" + std::to_string(channels);
+        suite.test(name.c_str(), [=]
+        {
+            juce::ScopedJuceInitialiser_GUI runtime; ReviewFolder folder; RecorderDocument document;
+            const auto file = folder.root.getChildFile("project/project.recorder");
+            require(document.saveCheckpoint(file).wasOk(), "Save import project");
+            const auto wav = recorder_import_test::writeWav(folder.root.getChildFile("fixtures"), rate, channels, Sample(rate) * 2 + 137);
+            AudioImportControl hashControl; const auto sourceHash = AudioImport::hashFile(wav, hashControl);
+            Id assetId;
+            {
+                RecorderSettings settings(folder.root.getChildFile("settings")); MainComponent main(document, settings); ImportAccess::stopTimer(main);
+                require(ImportAccess::buttonPlaced(main) && ImportAccess::enabled(main), "Main import button location/accessibility");
+                ImportAccess::click(main, wav);
+                require(ImportAccess::busy(main) && (main.lifecycleState()->snapshot() & RecorderLifecycle::fileWork), "Import must acquire lifecycle file gate");
+                require(!ImportAccess::enabled(main) && !main.lifecycleState()->canShutdown(), "Busy import/update gate");
+                const auto project = document.getProject().projectId;
+                main.createProject("blocked", folder.root.getChildFile("blocked"), 30); main.openProject(wav);
+                ImportAccess::startRecording(main);
+                require(document.getProject().projectId == project && !StabilityTestAccess::session(main).recording(), "Import allowed project replacement/recording");
+                waitImportUi(main, [&] { return !ImportAccess::busy(main); });
+                require(document.getProject().tracks.size() == 1 && document.getProject().media->assets.size() == 1, "Main handler did not publish import");
+                const auto& track = document.getProject().tracks.front(); const auto clip = track.clips.items().front(); assetId = clip.assetId;
+                require(track.kind == TrackKind::importAudio && clip.timelineStartSample == 0
+                    && clip.lengthSamples == rescaleRound(Sample(rate) * 2 + 137, 48000, rate), "Import track, placement or sample mapping");
+                require(ImportAccess::message(main).contains(rate == 48000 ? juce::String::fromUTF8("변환 없음") : juce::String::fromUTF8("44100 → 48000")), "Korean sample-rate result missing");
+                require(ImportAccess::message(main).contains(juce::String::fromUTF8("타임라인 끝")), "Placement rule not shown");
+                paintImportedWave(main); hearImportedAudio(main, channels);
+                require(document.saveCheckpoint(file).wasOk(), "Save imported project");
+            }
+            // Remove a copied cache file to require a real rebuild on reopen.
+            const auto manifests = file.getParentDirectory().getChildFile("cache/imported-audio").findChildFiles(juce::File::findFiles, false, "*.json");
+            require(!manifests.isEmpty(), "Persistent cache manifest missing");
+            const auto generation = juce::JSON::parse(manifests[0])["generation"].toString();
+            require(manifests[0].getSiblingFile(generation).getChildFile("audio.wav").deleteFile(), "Remove derived cache fixture");
+            RecorderDocument reopened; require(reopened.openCheckpoint(file).wasOk(), "Reopen imported project");
+            require(reopened.getProject().media->findAsset(assetId) && reopened.getProject().tracks.front().kind == TrackKind::importAudio, "Reopen lost imported asset/track");
+            {
+                RecorderSettings settings(folder.root.getChildFile("reopen-settings")); MainComponent main(reopened, settings); ImportAccess::stopTimer(main);
+                auto& session = StabilityTestAccess::session(main); session.projectChanged(); StabilityTestAccess::tab(main, true);
+                waitImportUi(main, [&]
+                {
+                    auto& view = StabilityTestAccess::timeline(main); view.zoomToFit();
+                    juce::Image picture(juce::Image::ARGB, view.getWidth(), view.getHeight(), true, juce::SoftwareImageType{});
+                    juce::Graphics graphics(picture); view.paintEntireComponent(graphics, true); return view.lastPaintWaveColumns > 0;
+                });
+                hearImportedAudio(main, channels);
+            }
+            ExportActivity activity; ExportControl control(activity); ExportJob job(reopened.getProject(), file.getParentDirectory());
+            MaterialExportOptions materials; materials.includeImports = true;
+            const auto outputs = MaterialExporter::outputs(job, materials);
+            require(outputs.size() == size_t(channels), "Imported materials not offered for every channel");
+            rejects([&] { MaterialExporter::outputs(job, {}); }); // import-only project has no materials unless included
+            const auto manifest = MaterialExporter::run(job, materials, control);
+            require(manifest["files"].size() == channels, "Imported materials not published");
+            for (const auto& output : outputs)
+            {
+                auto reader = AudioImport::openReader(job.outputDirectory.getChildFile(output.name)); juce::AudioBuffer<float> pcm(1, 1024);
+                require(reader->read(&pcm, 0, 1024, 4800, true, false) && pcm.getMagnitude(0, 1024) > .1f, "Exported imported material is silent");
+            }
+            auto videoProject = reopened.getProject(); Track camera; camera.kind = TrackKind::cam1;
+            videoProject.tracks.push_back(camera); // an empty camera lane renders black, with no capture hardware
+            ExportJob finalJob(videoProject, file.getParentDirectory());
+            const auto selection = FinalVideoExporter::audioSource(finalJob, "import:" + assetId);
+            FinalVideoExporter::validateSelection(finalJob, {TrackKind::cam1, selection});
+            require(TimelineExporter::assetIds(finalJob, selection).contains(juce::var(assetId)), "Final export omitted imported source");
+            ExportAudioRenderer finalAudio(finalJob, TimelineExporter::openSources(finalJob, selection, control), selection);
+            std::array<float, 512> left{}, right{}; finalAudio.render(4800, 512, left.data(), right.data());
+            require(*std::max_element(left.begin(), left.end()) > .1f, "Final export imported source is silent");
+            require(AudioImport::hashFile(wav, hashControl) == sourceHash, "External WAV changed");
+        });
+    }
+    suite.test("Main drop placement is captured before asynchronous import; imported clips split, move, delete and persist", []
+    {
+        juce::ScopedJuceInitialiser_GUI runtime; ReviewFolder folder; RecorderDocument document;
+        const auto file = folder.root.getChildFile("project/project.recorder"); require(document.saveCheckpoint(file).wasOk(), "Project fixture");
+        const auto wav = recorder_import_test::writeWav(folder.root.getChildFile("fixtures"), 48000, 1, 96000);
+        RecorderSettings settings(folder.root.getChildFile("settings")); MainComponent main(document, settings); ImportAccess::stopTimer(main);
+        ImportAccess::click(main, wav); waitImportUi(main, [&] { return !ImportAccess::busy(main); });
+        StabilityTestAccess::tab(main, false); main.filesDropped({wav.getFullPathName()}, 10, 10);
+        waitImportUi(main, [&] { return !ImportAccess::busy(main); });
+        require(document.getProject().tracks[1].clips.items()[0].timelineStartSample == 96000, "Recording view must append at captured end");
+        ImportAccess::seek(main, 12347); main.filesDropped({wav.getFullPathName()}, 10, 500);
+        ImportAccess::seek(main, 54321); waitImportUi(main, [&] { return !ImportAccess::busy(main); });
+        const auto clip = document.getProject().tracks[2].clips.items()[0];
+        require(clip.timelineStartSample == 12347 && ImportAccess::message(main).contains(juce::String::fromUTF8("재생헤드")), "Drop followed a later cursor/mouse location");
+        auto& view = StabilityTestAccess::timeline(main); view.edits.clickClip(clip.clipId);
+        ImportAccess::seek(main, 12347 + 48000); ImportAccess::ready(main);
+        require(view.invoke(TimelineAction::split, 12347 + 48000, true).wasOk(), "Imported split");
+        require(document.getProject().tracks[2].clips.items().size() == 2, "Split did not produce two clips");
+        const auto second = document.getProject().tracks[2].clips.items()[1]; view.edits.clickClip(second.clipId);
+        require(view.invoke(TimelineAction::move, second.timelineStartSample + 4800, true).wasOk(), "Imported move");
+        require(document.getProject().findClip(second.clipId)->timelineStartSample == second.timelineStartSample + 4800, "Imported move offset");
+        require(view.invoke(TimelineAction::remove).wasOk(), "Imported delete");
+        require(document.getProject().tracks[2].clips.items().size() == 1, "Delete did not remove selected import piece");
+        require(document.undo().wasOk() && document.redo().wasOk(), "Imported edit undo/redo");
+        require(document.saveCheckpoint(file).wasOk(), "Save edits"); RecorderDocument reopened;
+        require(reopened.openCheckpoint(file).wasOk() && reopened.getProject().tracks[2].clips.items().size() == 1
+            && reopened.getProject().tracks[2].clips.items()[0].lengthSamples == 48000, "Imported cut edits not retained");
+        ExportActivity activity; ExportControl control(activity); ExportJob job(reopened.getProject(), file.getParentDirectory());
+        const auto mask = FinalVideoExporter::audioSource(job, "import:" + clip.assetId);
+        TimelineAudioRenderer renderer(48000, 512); renderer.setPlan(job.audioPlan->timeline, TimelineExporter::openSources(job, mask, control), mask);
+        std::array<float, 512> left{}, right{};
+        renderer.renderAudio(clip.timelineStartSample + 4096, 512, left.data(), right.data());
+        require(*std::max_element(left.begin(), left.end()) > .1f, "Kept imported piece became silent after edits/reopen");
+        renderer.renderAudio(clip.timelineStartSample + 48000 + 4096, 512, left.data(), right.data());
+        require(std::all_of(left.begin(), left.end(), [](float sample) { return sample == 0; }), "Deleted imported piece still renders audio");
+    });
+    suite.test("Main import rejects unsupported/corrupt files and recording/finalizing gates without publication", []
+    {
+        juce::ScopedJuceInitialiser_GUI runtime; ReviewFolder folder; RecorderDocument document;
+        require(document.saveCheckpoint(folder.root.getChildFile("project/project.recorder")).wasOk(), "Project fixture");
+        const auto wav = recorder_import_test::writeWav(folder.root.getChildFile("fixtures"), 48000, 1, 4096);
+        RecorderSettings settings(folder.root.getChildFile("settings")); MainComponent main(document, settings); ImportAccess::stopTimer(main);
+        main.filesDropped({wav.withFileExtension("flac").getFullPathName()}, 0, 0);
+        require(ImportAccess::message(main).contains(juce::String::fromUTF8("지원하지 않는")) && !ImportAccess::busy(main), "Unsupported drop needs Korean reason");
+        main.filesDropped({wav.getFullPathName(), wav.getFullPathName()}, 0, 0);
+        require(ImportAccess::message(main).contains(juce::String::fromUTF8("하나씩")), "Multiple files silently ignored");
+        for (const auto gate : {RecorderLifecycle::recording, RecorderLifecycle::finalizing})
+        {
+            main.lifecycleState()->set(gate, true); ImportAccess::ready(main);
+            require(!ImportAccess::enabled(main), "Recording/finalization left import button enabled");
+            ImportAccess::click(main, wav); main.filesDropped({wav.getFullPathName()}, 0, 0);
+            require(!ImportAccess::busy(main) && document.getProject().media->assets.empty(), "Lifecycle gate allowed import");
+            main.lifecycleState()->end(gate);
+        }
+        const auto bad = wav.getSiblingFile("broken.wav"); require(bad.replaceWithText("broken WAV"), "Corrupt fixture");
+        ImportAccess::click(main, bad); waitImportUi(main, [&] { return !ImportAccess::busy(main); });
+        require(document.getProject().media->assets.empty() && ImportAccess::message(main).contains(juce::String::fromUTF8("실패")), "Corrupt import not rolled back/reported");
+        require(main.lifecycleState()->canShutdown(), "Failure leaked lifecycle gate");
+    });
+    suite.test("Main import cancel, close request and direct destruction join without late publication", []
+    {
+        for (int mode = 0; mode < 3; ++mode)
+        {
+            juce::ScopedJuceInitialiser_GUI runtime; ReviewFolder folder; RecorderDocument document;
+            const auto file = folder.root.getChildFile("project/project.recorder"); require(document.saveCheckpoint(file).wasOk(), "Project fixture");
+            const auto wav = recorder_import_test::writeWav(folder.root.getChildFile("fixtures"), 44100, 2, 44100 * 4);
+            RecorderSettings settings(folder.root.getChildFile("settings")); auto main = std::make_unique<MainComponent>(document, settings); ImportAccess::stopTimer(*main);
+            ImportAccess::click(*main, wav); auto lifecycle = main->lifecycleState();
+            if (mode == 0)
+            {
+                ImportAccess::cancel(*main); waitImportUi(*main, [&] { return !ImportAccess::busy(*main); });
+                require(ImportAccess::message(*main).contains(juce::String::fromUTF8("취소")) && lifecycle->canShutdown(), "Cancel reason/gate missing");
+            }
+            else if (mode == 1)
+            {
+                bool closed = false; main->requestClose([&] { closed = true; }); waitImportUi(*main, [&] { return closed; });
+                require(!(lifecycle->snapshot() & RecorderLifecycle::fileWork), "Close callback ran before file barrier");
+            }
+            main.reset();
+            require(document.getProject().media->assets.empty() && document.getProject().tracks.empty(), "Cancelled/closed worker published late");
+            require(file.getParentDirectory().getChildFile("media/imports").findChildFiles(juce::File::findDirectories, false).isEmpty(), "Cancelled import left copied asset");
+            require(wav.existsAsFile(), "Close deleted original input");
+        }
+    });
     for (unsigned channels : {1u, 2u}) for (const auto gap : recorder_audio_fixture::recordedGaps)
     {
         const auto name = "App session playback: " + std::to_string(channels) + " channels, " + recorder_audio_fixture::gapName(gap);

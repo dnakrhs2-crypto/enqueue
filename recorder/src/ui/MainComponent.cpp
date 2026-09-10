@@ -9,13 +9,30 @@
 namespace gocue::recorder
 {
 namespace { template<class T> bool completed(std::future<T>& f) { return f.valid() && f.wait_for(std::chrono::milliseconds(0)) == std::future_status::ready; } }
-MainComponent::MainComponent(RecorderDocument& d, RecorderSettings& s, TakeController::VideoFactory factory) : document(d), settings(s), timelineView(d), session(d, std::move(factory))
+MainComponent::MainComponent(RecorderDocument& d, RecorderSettings& s, TakeController::VideoFactory factory) : document(d), settings(s), timelineView(d), session(d, std::move(factory)), audioImporter(d)
 {
     addAndMakeVisible(recordView); addChildComponent(timelineView); setWantsKeyboardFocus(true); addKeyListener(this);
     juce::Desktop::getInstance().addFocusChangeListener(this);
     recordView.projectButton.onClick = [this] { projectMenu(); };
     recordView.recordTab.onClick = [this] { setTimeline(false); }; recordView.timelineTab.onClick = [this] { setTimeline(true); };
     recordView.settingsButton.onClick = [this] { showSettings(); };
+    recordView.importButton.onClick = [this] { importAudio(); };
+    addChildComponent(audioImporter); audioImporter.setCompact(true);
+    audioImporter.onStatusChanged = [this](const juce::String& message) { showError(message + importPlacement); };
+    audioImporter.onBusyChanged = [this] { audioImporter.setVisible(importBusy()); publishLifecycle(); refreshPending = true; };
+    audioImporter.onImported = [this](const MediaAsset& asset, const CachedImportedAudio& cache)
+    {
+        timelineView.setLoadedPeaks(asset.assetId, ImportedAudioCache::peakSnapshot(cache), 0);
+        session.refreshPlaybackPlan(); setTimeline(true);
+        const auto& tracks = document.getProject().tracks;
+        for (unsigned row = 0; row < tracks.size(); ++row) for (const auto& clip : tracks[row].clips.items())
+            if (clip.assetId == asset.assetId)
+            {
+                document.setSelection({clip.clipId}); timelineView.selectionChanged();
+                session.scrub(clip.timelineStartSample, true);
+                timelineView.reveal(clip.timelineStartSample); timelineView.revealTrack(row);
+            }
+    };
     recordView.startButton.onClick = [this] { recordClicked(); }; recordView.stopButton.onClick = [this] { stopClicked(); };
     recordView.latestButton.onClick = [this] { latestClicked(); }; recordView.markerButton.onClick = [this] { session.addMarker(); refreshPending = true; };
     recordView.onArm = [this](unsigned i, bool on)
@@ -60,6 +77,8 @@ MainComponent::~MainComponent()
     stopTimer(); document.onChanged = nullptr; removeKeyListener(this);
     juce::Desktop::getInstance().removeFocusChangeListener(this);
     if (shortcutFocus) shortcutFocus->removeKeyListener(this);
+    audioImporter.onImported = {}; audioImporter.onStatusChanged = {}; audioImporter.onBusyChanged = {};
+    audioImporter.shutdown(); importStarting = false; publishLifecycle();
     session.onConfigured = {}; session.onPeaks = {}; session.onLoadedPeaks = {}; session.onThumbnails = {};
     exportDialog.reset(); // cancels/joins a running export and releases the session's exporting gate before the wait below
     session.requestShutdown();
@@ -83,6 +102,8 @@ MainComponent::~MainComponent()
 void MainComponent::resized()
 {
     recordView.setBounds(getLocalBounds()); timelineView.setBounds(recordView.timelineBounds());
+    const auto lastButton = recordView.latestButton.getBounds();
+    audioImporter.setBounds(lastButton.getRight() + 8, lastButton.getY(), juce::jmax(0, getWidth() - lastButton.getRight() - 20), lastButton.getHeight());
     auto row = getLocalBounds().removeFromBottom(26).removeFromRight(320);
     updateButton.setBounds(row.removeFromRight(90)); aboutButton.setBounds(row.removeFromRight(90)); retryButton.setBounds(row);
 }
@@ -98,8 +119,43 @@ void MainComponent::showUnhandledException(const juce::File& report)
 }
 void MainComponent::setTimeline(bool on)
 { timeline = on; session.enterTimeline(on); timelineView.setVisible(on); refresh(); }
+bool MainComponent::canImportAudio() const
+{
+    return !closeAction && !importBusy() && !fileWork.valid() && !session.busy()
+        && !document.isRecordingStructureLocked() && !session.lifecycleState()->captureBusy()
+        && session.lifecycleState()->acceptsCommands()
+        && !(session.lifecycleState()->snapshot() & (RecorderLifecycle::fileWork | RecorderLifecycle::recording
+            | RecorderLifecycle::finalizing | RecorderLifecycle::dubbing | RecorderLifecycle::exporting | RecorderLifecycle::recovering))
+        && !(settingsWindow && settingsWindow->isVisible()) && !(exportDialog && exportDialog->previewActive());
+}
+void MainComponent::importAudio(const juce::File& file)
+{
+    if (!canImportAudio()) { showError(ko("녹화·마무리와 파일 작업이 끝난 뒤 오디오를 불러오세요.")); return; }
+    if (document.getFile() == juce::File()) { showError(ko("먼저 프로젝트 > 새 프로젝트에서 저장할 폴더를 선택하세요.")); return; }
+    const auto at = timeline ? session.playhead() : document.getProject().activeTimelineEnd();
+    importPlacement = (timeline ? ko(" · 요청 시 재생헤드 ") : ko(" · 요청 시 타임라인 끝 "))
+        + juce::String(double(at) / document.getProject().Fs, 3) + ko("초에 배치");
+    if (!session.lifecycleState()->begin(RecorderLifecycle::fileWork)) return;
+    importStarting = true; publishLifecycle();
+    session.pause(); // capture the insertion sample first, then pause while the file is prepared
+    audioImporter.setImportContext(document.getFile().getParentDirectory(), at);
+    audioImporter.setRecordingActive(false);
+    try { if (file == juce::File()) audioImporter.chooseFile(); else audioImporter.importFile(file); }
+    catch (const std::exception& e) { audioImporter.shutdown(); showError(ko("오디오 불러오기를 시작하지 못했습니다. ") + juce::String::fromUTF8(e.what())); }
+    importStarting = false; audioImporter.setVisible(importBusy()); publishLifecycle(); refresh();
+}
+bool MainComponent::isInterestedInFileDrag(const juce::StringArray& files)
+{ return !files.isEmpty(); } // also receive unsupported drops so the user gets a reason
+void MainComponent::filesDropped(const juce::StringArray& files, int, int)
+{
+    if (files.size() != 1) { showError(ko("오디오 파일은 한 번에 하나씩 끌어다 놓으세요.")); return; }
+    const juce::File file(files[0]);
+    if (!file.hasFileExtension("wav;wave;mp3;m4a;aac;m4b;mp4;wma"))
+    { showError(ko("지원하지 않는 오디오 형식입니다. WAV · MP3 · M4A · AAC 파일을 선택하세요.")); return; }
+    importAudio(file);
+}
 void MainComponent::recordClicked()
-{ if (fileWork.valid() || closeAction || (settingsWindow && settingsWindow->isVisible()) || (exportDialog && exportDialog->previewActive())) return; if (exportDialog && !exportDialog->beforeRecording([this] { recordClicked(); })) return; const auto r = session.record(); if (r.failed()) showError(r.getErrorMessage()); else banner.clear(); publishLifecycle(); refreshPending = true; }
+{ if (fileWork.valid() || importBusy() || closeAction || (settingsWindow && settingsWindow->isVisible()) || (exportDialog && exportDialog->previewActive())) return; if (exportDialog && !exportDialog->beforeRecording([this] { recordClicked(); })) return; const auto r = session.record(); if (r.failed()) showError(r.getErrorMessage()); else banner.clear(); publishLifecycle(); refreshPending = true; }
 void MainComponent::stopClicked()
 {
     lastStopButtonQpc = qpcNow(); timelineView.lastClipPaintQpc = 0; timelineView.lastPaintedTake.clear();
@@ -110,8 +166,12 @@ void MainComponent::stopClicked()
 void MainComponent::latestClicked() { setTimeline(true); session.play(true); timelineView.reveal(session.takeController().placementSample()); refresh(); }
 void MainComponent::refresh()
 {
-    auto ui = mapUiState(document.getProject(), settings.get(), session.takeController().state(), document.isRecordingStructureLocked(), session.configuring() || fileWork.valid(), session.deviceInfo().sampleRate != 0, session.cameraReady(0));
-    ui.canRecord = !fileWork.valid() && session.readyToRecord();
+    auto ui = mapUiState(document.getProject(), settings.get(), session.takeController().state(), document.isRecordingStructureLocked(), session.configuring() || fileWork.valid() || importBusy(), session.deviceInfo().sampleRate != 0, session.cameraReady(0));
+    ui.canRecord = !fileWork.valid() && !importBusy() && session.readyToRecord();
+    audioImporter.setRecordingActive(session.recording() || document.isRecordingStructureLocked()
+        || (session.lifecycleState()->snapshot() & RecorderLifecycle::finalizing));
+    recordView.importButton.setEnabled(canImportAudio());
+    recordView.importButton.setTooltip(ko("WAV · MP3 · M4A · AAC / 모노 · 스테레오 · 타임라인: 요청 시 재생헤드, 녹화 화면: 타임라인 끝"));
     const auto& take = session.takeController();
     const auto audioFault = session.configuring() || closeAction ? RecorderAudioEngine::Error::none : session.audioEngine().error();
     using E = RecorderAudioEngine::Error;
@@ -127,7 +187,7 @@ void MainComponent::refresh()
     if (exceptionBanner.isNotEmpty()) message = exceptionBanner + (message.isNotEmpty() ? " · " + message : juce::String());
     if (session.notice == delayed && !message.contains(delayed)) message = delayed + " · " + message;
     const auto takeStatus = session.takeController().statusText();
-    const auto status = session.takeController().state() == TakeController::State::idle ? (fileWork.valid() ? ko("저장 중") : document.getStatusText()) : takeStatus;
+    const auto status = importBusy() ? ko("오디오 불러오는 중") : session.takeController().state() == TakeController::State::idle ? (fileWork.valid() ? ko("저장 중") : document.getStatusText()) : takeStatus;
     recordView.update(ui, document.getProject(), settings.get(), status, message, session.elapsed(), remainingBytes, timeline);
     const auto& shortcuts = settings.get().shortcuts;
     recordView.startButton.setTooltip(ko("녹화 시작 · ") + shortcuts[RecorderCommand::recordStart]);
@@ -170,7 +230,7 @@ bool MainComponent::routeShortcut(const juce::KeyPress& key, juce::Component* or
     // Other settings-window commands are suspended; export preview owns ASIO output.
     if (*command != RecorderCommand::recordStop
         && (closeAction || !session.lifecycleState()->acceptsCommands() || (settingsWindow && settingsWindow->isVisible()))) return false;
-    if (*command != RecorderCommand::recordStop && exportDialog && exportDialog->previewActive()) return false;
+    if (*command != RecorderCommand::recordStop && (importBusy() || (exportDialog && exportDialog->previewActive()))) return false;
     if (heldShortcut == key) return true;
     heldShortcut = key;
     switch (*command)
@@ -237,12 +297,13 @@ void MainComponent::requestClose(std::function<void()> action)
     closeAction = std::move(action); closeCommitRequested = false;
     persistSettings();
     afterSave = {}; chooser.reset(); recordView.setEnabled(false); timelineView.setEnabled(false);
+    audioImporter.cancelImport();
     if (settingsWindow) settingsWindow->setVisible(false); if (projectWindow) projectWindow->setVisible(false);
     session.requestShutdown(); publishLifecycle(); refreshPending = true; continueClose();
 }
 void MainComponent::continueClose()
 {
-    if (!closeAction || fileWork.valid() || !session.readyForShutdownCommit() || settingsWork.valid()) return;
+    if (!closeAction || fileWork.valid() || importBusy() || !session.readyForShutdownCommit() || settingsWork.valid()) return;
     if (closeCommitRequested) return; // a failed save waits for the explicit retry action
     if (document.isDirty() && document.getFile() != juce::File()) { saveProject(); closeCommitRequested = true; return; }
     if (document.isDirty() && document.getFile() == juce::File() && document.getProject().activeTimelineEnd() > 0)
@@ -332,7 +393,7 @@ void MainComponent::publishLifecycle()
 {
     auto state = session.lifecycleState();
     state->set(RecorderLifecycle::unsaved, document.isDirty());
-    state->set(RecorderLifecycle::fileWork, fileWork.valid() || settingsWork.valid() || settingsPending);
+    state->set(RecorderLifecycle::fileWork, fileWork.valid() || importBusy() || settingsWork.valid() || settingsPending);
 }
 void MainComponent::updateShutdownBlocked() { showError(recorderFaultText(RecorderFault::updateBusy)); }
 void MainComponent::updateShutdownRequested()
@@ -348,7 +409,7 @@ void MainComponent::checkForUpdates()
 }
 void MainComponent::retryFinalization()
 {
-    if (session.busy() || fileWork.valid() || document.getFile() == juce::File() || closeAction) return;
+    if (session.busy() || fileWork.valid() || importBusy() || document.getFile() == juce::File() || closeAction) return;
     session.stopPlayback(); session.lifecycleState()->invalidate();
     const auto path = document.getFile();
     FileResult context; context.opening = true; context.file = path;

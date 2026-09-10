@@ -1,5 +1,6 @@
 #pragma once
 #include "media/AudioImport.h"
+#include "media/PeakCache.h"
 #include <array>
 #include <thread>
 
@@ -32,6 +33,7 @@ public:
                              const ImportedAudioInfo&, std::uint32_t projectFs,
                              AudioImportControl&, CachedImportedAudio&);
     static Sample sourceSampleFor(Sample projectSourceSample, const ImportedAudioInfo&, std::uint32_t projectFs);
+    static PeakSnapshot peakSnapshot(const CachedImportedAudio&); // bounded L/R envelope for one timeline lane
 
     // One import/cache job, below-normal CPU and background I/O priority on Windows.
     // The document is deliberately excluded: take the prepared value on its owner thread.

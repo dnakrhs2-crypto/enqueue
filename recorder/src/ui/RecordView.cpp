@@ -40,7 +40,7 @@ void RecordView::Microphone::resized()
 { name.setBounds(8, 6, getWidth() - 16, 26); physical.setBounds(8, 32, getWidth() - 16, 22); arm.setBounds(8, 54, getWidth() - 16, 24); monitor.setBounds(8, 96, getWidth() - 16, 28); }
 RecordView::RecordView()
 {
-    for (auto* b : {&projectButton, &recordTab, &timelineTab, &normalButton, &dubButton, &settingsButton, &exportButton, &startButton, &stopButton, &markerButton, &latestButton}) { addAndMakeVisible(b); b->setWantsKeyboardFocus(false); }
+    for (auto* b : {&projectButton, &recordTab, &timelineTab, &normalButton, &dubButton, &importButton, &settingsButton, &exportButton, &startButton, &stopButton, &markerButton, &latestButton}) { addAndMakeVisible(b); b->setWantsKeyboardFocus(false); }
     for (auto* l : {&projectName, &statusLabel, &errorLabel, &noMicrophones}) { addAndMakeVisible(l); l->setFont(juce::Font(juce::FontOptions(17))); }
     projectName.setFont(juce::Font(juce::FontOptions(20, juce::Font::bold))); errorLabel.setColour(juce::Label::textColourId, Palette::danger);
     for (auto& cam : cameras) addAndMakeVisible(cam);
@@ -109,6 +109,7 @@ void RecordView::resized()
 {
     auto a = getLocalBounds().reduced(12); auto top = a.removeFromTop(40);
     projectButton.setBounds(top.removeFromLeft(88).reduced(2)); exportButton.setBounds(top.removeFromRight(105).reduced(2)); settingsButton.setBounds(top.removeFromRight(70).reduced(2));
+    importButton.setBounds(top.removeFromRight(148).reduced(2));
     dubButton.setBounds(top.removeFromRight(58).reduced(2)); normalButton.setBounds(top.removeFromRight(58).reduced(2)); timelineTab.setBounds(top.removeFromRight(94).reduced(2)); recordTab.setBounds(top.removeFromRight(66).reduced(2)); projectName.setBounds(top.reduced(6, 0));
     statusLabel.setBounds(a.removeFromTop(28)); errorLabel.setBounds(a.removeFromTop(32)); a.removeFromTop(6);
     const int cameraHeight = timeline ? juce::jlimit(120, 220, a.getHeight() / 3)

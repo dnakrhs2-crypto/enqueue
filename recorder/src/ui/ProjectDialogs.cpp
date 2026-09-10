@@ -70,7 +70,7 @@ public:
 }
 void MainComponent::showSettings()
 {
-    if (session.busy()) return; session.enterTimeline(false); audioPanel = nullptr; cameraPanel = nullptr; settingsError = nullptr; settingsWindow.reset();
+    if (session.busy() || importBusy() || closeAction) return; session.enterTimeline(false); audioPanel = nullptr; cameraPanel = nullptr; settingsError = nullptr; settingsWindow.reset();
     auto window = std::make_unique<FormWindow>(ko("설정"));
     window->onShortcut = [this](const juce::KeyPress& key, juce::Component* origin) { return routeShortcut(key, origin); };
     window->onClosed = [this] { if (timeline) session.enterTimeline(true); }; settingsWindow = std::move(window);
@@ -119,7 +119,7 @@ void MainComponent::newProjectDialog()
 }
 void MainComponent::beforeSwitch(std::function<void()> action)
 {
-    if (session.busy() || fileWork.valid()) { showError(ko("녹화와 저장이 끝난 뒤 프로젝트를 변경하세요.")); return; }
+    if (session.busy() || fileWork.valid() || importBusy() || closeAction) { showError(ko("녹화·오디오 불러오기와 저장이 끝난 뒤 프로젝트를 변경하세요.")); return; }
     session.stopPlayback(); if (document.isDirty() && document.getFile() != juce::File()) { afterSave = std::move(action); saveProject(); } else action();
 }
 void MainComponent::projectMenu()
@@ -136,7 +136,7 @@ void MainComponent::projectMenu()
 }
 void MainComponent::createProject(const juce::String& name, const juce::File& folder, unsigned fps)
 {
-    if (session.busy() || fileWork.valid()) return; const auto path = folder.getFullPathName();
+    if (session.busy() || fileWork.valid() || importBusy() || closeAction) return; const auto path = folder.getFullPathName();
     if (name.trim().isEmpty() || path.startsWith("\\\\") || path.startsWith("//") || (fps != 30 && fps != 60)) { showError(ko("프로젝트 이름·로컬 폴더·프레임레이트를 확인하세요.")); return; }
     FileResult context; context.opening = true; context.file = folder.getChildFile(ProductIdentity::projectFileName());
     startFileWork(context, [name, folder, fps]
@@ -162,7 +162,7 @@ void MainComponent::openProject(const juce::File& path)
 void MainComponent::saveProject() { if (document.getFile() == juce::File()) newProjectDialog(); else saveTo(document.getFile()); }
 void MainComponent::saveTo(const juce::File& path)
 {
-    if (fileWork.valid() || session.busy()) return; const auto snapshot = document.snapshot();
+    if (fileWork.valid() || importBusy() || session.busy()) return; const auto snapshot = document.snapshot();
     FileResult context; context.file = path; context.written = snapshot;
     startFileWork(context, [context]() mutable { context.result = RecorderSerializer::writeCheckpoint(context.file, *context.written); return context; }); refreshPending = true;
 }

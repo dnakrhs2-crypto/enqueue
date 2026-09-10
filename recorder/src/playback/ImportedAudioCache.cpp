@@ -114,6 +114,26 @@ Sample ImportedAudioCache::sourceSampleFor(Sample projectSample, const ImportedA
     require(projectSample >= 0, "원본 샘플 위치는 음수일 수 없습니다.");
     return rescaleRound(projectSample, info.sampleRate, Fs);
 }
+PeakSnapshot ImportedAudioCache::peakSnapshot(const CachedImportedAudio& cache)
+{
+    PeakSnapshot result; result.sampleRate = cache.sampleRate; result.channels = 1;
+    result.samples = static_cast<std::uint64_t>(cache.samples); result.complete = true;
+    const auto stride = (std::max)(size_t{1}, (cache.peaks.size() + PeakCache::maximumBins - 1) / PeakCache::maximumBins);
+    result.samplesPerBin = std::uint64_t(cache.samplesPerPeak) * stride;
+    for (size_t at = 0; at < cache.peaks.size(); at += stride)
+    {
+        std::array<PeakBin, 16> bin{};
+        bin[0] = {cache.peaks[at].minimum[0], cache.peaks[at].maximum[0]};
+        for (size_t i = at; i < (std::min)(at + stride, cache.peaks.size()); ++i)
+            for (int channel = 0; channel < cache.channels; ++channel)
+            {
+                bin[0].minimum = (std::min)(bin[0].minimum, cache.peaks[i].minimum[size_t(channel)]);
+                bin[0].maximum = (std::max)(bin[0].maximum, cache.peaks[i].maximum[size_t(channel)]);
+            }
+        result.bins.push_back(bin);
+    }
+    return result;
+}
 juce::Result ImportedAudioCache::build(const juce::File& projectDirectory, const MediaAsset& asset,
                                      const ImportedAudioInfo& info, std::uint32_t Fs,
                                      AudioImportControl& control, CachedImportedAudio& result)

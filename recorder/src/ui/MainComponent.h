@@ -3,6 +3,7 @@
 #include "TimelineView.h"
 #include "AudioSettingsPanel.h"
 #include "CameraSettingsPanel.h"
+#include "AudioImportPanel.h"
 #include "app/RecorderSession.h"
 #include "app/RecorderPowerMonitor.h"
 #include <optional>
@@ -10,12 +11,14 @@
 namespace gocue::recorder
 {
 class ExportDialog;
-class MainComponent : public juce::Component, private juce::Timer, private juce::KeyListener, private juce::FocusChangeListener
+class MainComponent : public juce::Component, public juce::FileDragAndDropTarget, private juce::Timer, private juce::KeyListener, private juce::FocusChangeListener
 {
 public:
     MainComponent(RecorderDocument&, RecorderSettings&, TakeController::VideoFactory = {});
     ~MainComponent() override;
     void resized() override;
+    bool isInterestedInFileDrag(const juce::StringArray&) override;
+    void filesDropped(const juce::StringArray&, int, int) override;
     void showError(const juce::String&);
     void showUnhandledException(const juce::File& report);
     bool routeShortcut(const juce::KeyPress&, juce::Component* origin);
@@ -32,6 +35,7 @@ public:
 private:
     friend struct StabilityTestAccess;
     friend struct ShortcutExceptionTestAccess;
+    friend struct ImportUiTestAccess;
     struct FileResult
     {
         juce::Result result = juce::Result::ok(); bool opening = false, recovered = false;
@@ -56,6 +60,9 @@ private:
     void demoTick(); void finishDemo(const juce::String&, const juce::String&);
     void publishLifecycle();
     void retryFinalization();
+    bool importBusy() const { return importStarting || audioImporter.isBusy(); }
+    bool canImportAudio() const;
+    void importAudio(const juce::File& = {});
     bool ownsShortcutOrigin(const juce::Component*) const;
     bool startFileWork(FileResult, std::function<FileResult()>);
     FileResult collectFileWork();
@@ -65,6 +72,7 @@ private:
     RecordView recordView;
     TimelineView timelineView;
     RecorderSession session; // joins native host users before RecordView destruction
+    AudioImportPanel audioImporter;
     std::unique_ptr<ExportDialog> exportDialog;
     std::unique_ptr<juce::DocumentWindow> settingsWindow, projectWindow;
     AudioSettingsPanel* audioPanel = nullptr;
@@ -92,6 +100,8 @@ private:
     juce::TextButton aboutButton, updateButton, retryButton;
     RecorderPowerMonitor powerMonitor;
     bool closeCommitRequested = false;
+    bool importStarting = false;
+    juce::String importPlacement;
     juce::TooltipWindow tooltips {this};
 };
 }

@@ -83,6 +83,18 @@ void wait(ImportedAudioCache::Worker& w)
 int runAudioImportTests()
 {
     Suite suite;
+    suite.test("imported timeline peaks include a right-only signal and bound long-file bins", []
+    {
+        CachedImportedAudio cache; cache.channels = 2; cache.sampleRate = 48000; cache.samplesPerPeak = 256;
+        cache.peaks.resize(PeakCache::maximumBins * 2 + 1); cache.samples = Sample(cache.peaks.size()) * 256 - 17;
+        cache.peaks.back().minimum[1] = -.75f; cache.peaks.back().maximum[1] = .5f;
+        const auto peaks = ImportedAudioCache::peakSnapshot(cache);
+        require(peaks.complete && peaks.sampleRate == 48000 && peaks.samples == cache.samples
+            && peaks.bins.size() <= PeakCache::maximumBins, "Bounded waveform lost duration");
+        require(peaks.bins.back()[0].minimum == -.75f && peaks.bins.back()[0].maximum == .5f,
+            "Right-only tail waveform disappeared from imported lane");
+        require(peaks.bins.size() * peaks.samplesPerBin >= peaks.samples, "Waveform tail coverage");
+    });
     suite.test("copy, reopen, SHA-256 and unpublished asset ownership", []
     {
         Workspace w; RecorderDocument doc; auto r = w.request(doc); AudioImportControl c;
