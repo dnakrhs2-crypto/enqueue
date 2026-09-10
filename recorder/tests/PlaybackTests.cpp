@@ -6,6 +6,7 @@
 #include "record/WavTrackWriter.h"
 #include "storage/StorageEncoding.h"
 #include "support/Platform.h"
+#include "CutSeamChecks.h"
 #include <algorithm>
 #include <chrono>
 #include <cmath>
@@ -684,5 +685,6 @@ int runPlaybackTests()
         video.prepare({videoClip(index, 0, 0, 1600)}); video.seek(0, 1);
         eventually([&] { return video.status().failed(); }); require(opens == 1 && !video.ready(0, 1), "Decoder error silently fell back");
     });
+    recorder_cut_seam::addTests(suite);
     return suite.result("playback-engine");
 }

@@ -19,6 +19,7 @@ extern "C"
 #include <mutex>
 #include <thread>
 #include <set>
+#include <future>
 
 namespace gocue::recorder
 {
@@ -299,7 +300,7 @@ float4 psMain(Vertex v) : SV_Target {
     std::shared_ptr<PlaybackTexture> acquireOutput()
     {
         // Never mutate a texture held by an immutable frame or the presenter.
-        // Ready queue (3), retained LRU (4), in-flight work and presenter refs.
+        // Ready queue (4), retained LRU (4), in-flight work and presenter refs.
         // The shared per-camera budget also covers slots surviving old decoders.
         for (const auto& slot : outputs)
             if (slot.use_count() == 1)
@@ -414,6 +415,14 @@ std::pair<std::size_t, std::size_t> frameKey(const std::vector<PlaybackVideoClip
     if (clip == absent) return {absent, absent};
     const auto& c = clips[clip];
     return {clip, c.source->frameAt(c.mapping.sourceIn + sample - c.mapping.timelineStartSample)};
+}
+std::size_t prerollClipAt(const std::vector<PlaybackVideoClip>& clips, Sample sample)
+{
+    const auto next = std::upper_bound(clips.begin(), clips.end(), sample,
+        [](Sample s, const auto& c) { return s < c.mapping.timelineStartSample; });
+    if (next == clips.end() || next->mapping.timelineStartSample - sample
+        > Sample(next->source->sampleRate) * VideoPlaybackEngine::prerollMilliseconds / 1000) return absent;
+    return static_cast<std::size_t>(std::distance(clips.begin(), next));
 }
 using VideoClips = std::vector<PlaybackVideoClip>;
 std::array<std::shared_ptr<const VideoClips>, 2> validatedClips(VideoClips input)
@@ -544,6 +553,10 @@ struct VideoPlaybackEngine::Impl
         std::pair<std::size_t, std::size_t> lateKey{absent, absent};
         bool advancing = false;
         std::int64_t decoderCreateTicks = 0, presenterBeginQpc = 0, presenterEndQpc = 0;
+        std::uint64_t prerollStarts = 0, prerollPrefixFrames = 0;
+        Sample prerollLeadSamples = 0;
+        std::int64_t prerollTicks = 0;
+        PlaybackDecodeTiming prerollDecode;
         std::vector<std::shared_ptr<const PlaybackVideoFrame>> ready;
         PlaybackFrameCache cache;
         std::shared_ptr<PlaybackResources> resources = std::make_shared<PlaybackResources>();
@@ -589,12 +602,108 @@ struct VideoPlaybackEngine::Impl
             notify(lane);
         }
     }
+    // Keep two current pictures plus two next-segment pictures independently of
+    // the LRU. Publishing a current frame must not erase a completed preroll.
+    static bool wantedNow(const Lane& lane, const PlaybackVideoFrame& f)
+    {
+        if (!f.current(lane.generation)) return false;
+        const auto& clips = *lane.clips;
+        const auto [clip, packet] = frameKey(clips, lane.target);
+        const auto next = prerollClipAt(clips, lane.target);
+        const auto matches = [&](std::size_t which, std::size_t first)
+        {
+            if (which == absent) return false;
+            const auto& c = clips[which];
+            if (f.source != c.source || f.clipId != c.mapping.clipId || f.begin < c.mapping.timelineStartSample
+                || f.end > c.mapping.timelineStartSample + c.mapping.lengthSamples) return false;
+            return f.pts == c.source->packets[first].pts
+                || (first + 1 < c.source->packets.size() && f.pts == c.source->packets[first + 1].pts);
+        };
+        return matches(clip, packet) || (next != absent && matches(next, clips[next].source->frameAt(clips[next].mapping.sourceIn)));
+    }
+    static void pruneReady(Lane& lane)
+    {
+        lane.ready.erase(std::remove_if(lane.ready.begin(), lane.ready.end(),
+            [&](const auto& f) { return !wantedNow(lane, *f); }), lane.ready.end());
+    }
+    void publishFrame(Lane& lane, const std::shared_ptr<const PlaybackVideoFrame>& f)
+    {
+        lane.cache.insert(f); pruneReady(lane);
+        if (!wantedNow(lane, *f)) return;
+        lane.ready.erase(std::remove_if(lane.ready.begin(), lane.ready.end(), [&](const auto& old)
+            { return old->clipId == f->clipId && old->begin == f->begin; }), lane.ready.end());
+        lane.ready.push_back(f); lane.peakReady = (std::max)(lane.peakReady, lane.ready.size());
+        notify(lane);
+    }
+    std::future<std::unique_ptr<IVideoFrameDecoder>> startPreroll(Lane& lane, std::shared_ptr<const VideoClips> plan,
+        std::size_t next, std::uint64_t gen, std::unique_ptr<IVideoFrameDecoder> decoder)
+    {
+        return std::async(std::launch::async, [this, &lane, plan, next, gen, decoder = std::move(decoder)]() mutable
+        {
+            const auto& c = (*plan)[next];
+            const auto cancelled = [&]
+            {
+                if (stopping.load() || generation.load() != gen || !c.source->current()) return true;
+                std::lock_guard<std::mutex> lock(lane.mutex);
+                return lane.clips != plan || (activeClip(*plan, lane.target) != next && prerollClipAt(*plan, lane.target) != next);
+            };
+            const auto begin = qpcNow();
+            try
+            {
+                ComApartment apartment;
+                { std::lock_guard<std::mutex> lock(lane.mutex); ++lane.prerollStarts; lane.prerollLeadSamples = c.mapping.timelineStartSample - lane.target; }
+                if (!cancelled() && !decoder)
+                {
+                    decoder = factory ? factory(c.source) : std::make_unique<HardwareDecoder>(c.source, lane.resources);
+                    if (!decoder) throw std::runtime_error("Playback preroll factory returned null");
+                    std::lock_guard<std::mutex> lock(lane.mutex);
+                    ++lane.decoderOpens; lane.decoderCreateTicks += qpcNow() - begin;
+                }
+                const auto first = c.source->frameAt(c.mapping.sourceIn);
+                for (auto packet = first; packet < c.source->packets.size() && packet < first + 2 && !cancelled(); ++packet)
+                {
+                    if (c.source->packets[packet].sample >= c.mapping.sourceIn + c.mapping.lengthSamples) break;
+                    auto texture = decoder->decodeFrame(packet, cancelled);
+                    if (cancelled())
+                    {
+                        decoder->resetForSeek(); std::lock_guard<std::mutex> lock(lane.mutex);
+                        ++lane.stale; ++lane.cancelledPrefetch; break;
+                    }
+                    const auto timing = decoder->decodeTiming();
+                    auto frame = mappedFrame(c, packet, gen, std::move(texture));
+                    std::lock_guard<std::mutex> lock(lane.mutex);
+                    if (generation.load() != gen) break;
+                    ++lane.decoded; ++lane.prefetched;
+                    if (packet == first)
+                    { lane.prerollTicks = qpcNow() - begin; lane.prerollPrefixFrames = timing.decodeOnlyFrames; lane.prerollDecode = timing; }
+                    publishFrame(lane, frame);
+                }
+            }
+            catch (const std::exception& e)
+            {
+                if (!cancelled())
+                {
+                    std::lock_guard<std::mutex> lock(lane.mutex);
+                    if (generation.load() == gen && lane.clips == plan && c.source->current())
+                        lane.error = juce::String::fromUTF8(e.what());
+                }
+                decoder.reset();
+            }
+            { std::lock_guard<std::mutex> lock(lane.mutex); ++lane.request; notify(lane); }
+            lane.wake.notify_one(); return std::move(decoder);
+        });
+    }
     void run(unsigned camera)
     {
         auto& lane = lanes[camera];
         std::uint64_t processed = 0;
         std::map<std::size_t, std::unique_ptr<IVideoFrameDecoder>> decoders;
         std::shared_ptr<const VideoClips> decoderPlan;
+        // A prefix job owns its decoder exclusively. At the cut the camera
+        // worker adopts that warm DPB after the job has completed.
+        std::future<std::unique_ptr<IVideoFrameDecoder>> preroll;
+        std::size_t prerollClip = absent, primedClip = absent;
+        std::uint64_t prerollGeneration = 0, primedGeneration = 0;
         try
         {
             ComApartment apartment;
@@ -612,19 +721,37 @@ struct VideoPlaybackEngine::Impl
                         lane.timing.workerQpc = qpcNow();
                 }
                 processed = request;
-                if (decoderPlan != plan) { decoders.clear(); decoderPlan = plan; }
                 const auto& clips = *plan;
                 const auto cancelled = [&] { return stopping.load() || generation.load() != gen; };
                 const auto clip = activeClip(clips, target);
+                const auto next = prerollClipAt(clips, target);
+                if (preroll.valid())
+                {
+                    const bool obsolete = prerollGeneration != gen || decoderPlan != plan
+                        || (prerollClip != clip && prerollClip != next);
+                    // Current playback never waits on next-segment prefix work.
+                    if (obsolete || prerollClip == clip || preroll.wait_for(std::chrono::seconds(0)) == std::future_status::ready)
+                    {
+                        auto decoder = preroll.get();
+                        if (!obsolete && decoder) decoders[prerollClip] = std::move(decoder);
+                    }
+                }
+                if (decoderPlan != plan) { decoders.clear(); decoderPlan = plan; }
                 if (clip == absent)
-                { std::lock_guard<std::mutex> lock(lane.mutex); if (!cancelled()) { lane.ready.clear(); notify(lane); } continue; }
-                const auto next = clip + 1 < clips.size() ? clip + 1 : absent;
+                {
+                    { std::lock_guard<std::mutex> lock(lane.mutex); if (!cancelled()) { pruneReady(lane); notify(lane); } }
+                    if (!cancelled() && next != absent && !preroll.valid() && (primedClip != next || primedGeneration != gen))
+                    {
+                        primedClip = prerollClip = next; primedGeneration = prerollGeneration = gen;
+                        decoders.clear(); preroll = startPreroll(lane, plan, next, gen, {});
+                    }
+                    continue;
+                }
                 for (auto it = decoders.begin(); it != decoders.end();)
                     if (it->first != clip && it->first != next) it = decoders.erase(it); else ++it;
                 const auto& current = clips[clip]; const auto& mapping = current.mapping;
                 const auto frame = current.source->frameAt(mapping.sourceIn + target - mapping.timelineStartSample);
                 std::vector<std::pair<std::size_t, std::size_t>> wanted{{clip, frame}};
-                if (next != absent) wanted.push_back({next, clips[next].source->frameAt(clips[next].mapping.sourceIn)});
                 if (advancing && frame + 1 < current.source->packets.size()
                     && current.source->packets[frame + 1].sample < mapping.sourceIn + mapping.lengthSamples) wanted.push_back({clip, frame + 1});
                 std::vector<std::shared_ptr<const PlaybackVideoFrame>> ready;
@@ -638,10 +765,10 @@ struct VideoPlaybackEngine::Impl
                     {
                         if (cancelled()) return true;
                         std::lock_guard<std::mutex> lock(lane.mutex);
-                        return !exactTarget && (lane.request != request || (which == clip && !lane.advancing));
+                        const auto key = frameKey(*lane.clips, lane.target);
+                        return !exactTarget && (!lane.advancing || key.first != clip || key.second > packet);
                     };
-                    if (!exactTarget)
-                    { std::lock_guard<std::mutex> lock(lane.mutex); if (lane.request != request) break; }
+                    if (cancelDecode()) break;
                     const auto& c = clips[which];
                     if (!c.source->current()) break; // buffering until finalized media handoff
                     std::shared_ptr<const PlaybackVideoFrame> hit;
@@ -649,6 +776,8 @@ struct VideoPlaybackEngine::Impl
                     {
                         std::lock_guard<std::mutex> lock(lane.mutex);
                         hit = lane.cache.find(c.source, packet);
+                        if (!hit) for (const auto& f : lane.ready)
+                            if (f->current(gen) && f->source == c.source && f->pts == c.source->packets[packet].pts) { hit = f; break; }
                         measureSeek = exactTarget && lane.timing.generation == gen && !lane.timing.readyQpc;
                         if (measureSeek)
                         {
@@ -657,8 +786,7 @@ struct VideoPlaybackEngine::Impl
                         }
                     }
                     std::shared_ptr<const PlaybackTexture> texture;
-                    const bool primeNext = hit && which == next && decoders.find(which) == decoders.end();
-                    if (hit && !primeNext) texture = hit->texture;
+                    if (hit) texture = hit->texture;
                     else
                     {
                         auto& decoder = decoders[which];
@@ -691,23 +819,28 @@ struct VideoPlaybackEngine::Impl
                             if (exactTarget) ++lane.cancelledTargets; else ++lane.cancelledPrefetch;
                             break;
                         }
-                        ++lane.decoded; if (which == next) ++lane.prefetched;
+                        ++lane.decoded;
                     }
                     if (cancelled() || !c.source->current()) break;
                     auto f = mappedFrame(c, packet, gen, std::move(texture)); ready.push_back(f);
                     std::lock_guard<std::mutex> lock(lane.mutex);
                     if (cancelled()) break;
                     if (std::any_of(ready.begin(), ready.end(), [gen](const auto& item) { return !item->current(gen); })) break;
-                    lane.cache.insert(f);
-                    lane.ready = ready; // publish exact now, then <=3 total including next clip
-                    lane.peakReady = (std::max)(lane.peakReady, ready.size());
+                    publishFrame(lane, f);
                     if (measureSeek) lane.timing.readyQpc = qpcNow();
                     notify(lane);
+                }
+                if (!cancelled() && next != absent && !preroll.valid() && (primedClip != next || primedGeneration != gen))
+                {
+                    primedClip = prerollClip = next; primedGeneration = prerollGeneration = gen;
+                    auto decoder = std::move(decoders[next]); decoders.erase(next);
+                    preroll = startPreroll(lane, plan, next, gen, std::move(decoder));
                 }
             }
         }
         catch (const std::exception& e)
         { std::lock_guard<std::mutex> lock(lane.mutex); lane.error = juce::String::fromUTF8(e.what()); notify(lane); }
+        if (preroll.valid()) preroll.wait(); // submitted GPU fence finishes before lane resources are released
         decoders.clear(); // FFmpeg/D3D resources released on camera worker
     }
 };
@@ -737,6 +870,8 @@ void VideoPlaybackEngine::prepare(std::vector<PlaybackVideoClip> clips)
         lane.decoderOpens = lane.cacheHits = lane.cacheMisses = 0; lane.lateKey = {absent, absent};
         lane.staleRequests = lane.staleReceipts = lane.cancelledTargets = lane.cancelledPrefetch = 0;
         lane.decoderCreateTicks = lane.presenterBeginQpc = lane.presenterEndQpc = 0;
+        lane.prerollStarts = lane.prerollPrefixFrames = 0; lane.prerollLeadSamples = lane.prerollTicks = 0;
+        lane.prerollDecode = {};
         lane.peakReady = 0;
     }
     impl->generation.store(0); impl->stopping.store(false);
@@ -775,7 +910,8 @@ bool VideoPlaybackEngine::requestFrame(unsigned camera, Sample sample, std::uint
       if (gen != impl->generation.load()) { ++lane.stale; ++lane.staleRequests; return false; }
       const bool advancingChanged = lane.advancing != advancing;
       lane.advancing = advancing;
-      const auto sameFrame = frameKey(*lane.clips, lane.target) == frameKey(*lane.clips, sample);
+      const auto sameFrame = frameKey(*lane.clips, lane.target) == frameKey(*lane.clips, sample)
+          && prerollClipAt(*lane.clips, lane.target) == prerollClipAt(*lane.clips, sample);
       lane.target = sample;
       if (sameFrame && !advancingChanged) return true;
       ++lane.request; lane.presentWake.signal(); }
@@ -791,7 +927,8 @@ bool VideoPlaybackEngine::requestFrames(Sample sample, std::uint64_t gen, bool a
         for (unsigned i = 0; i < 2; ++i)
         {
             auto& lane = impl->lanes[i];
-            changed[i] = lane.advancing != advancing || frameKey(*lane.clips, lane.target) != frameKey(*lane.clips, sample);
+            changed[i] = lane.advancing != advancing || frameKey(*lane.clips, lane.target) != frameKey(*lane.clips, sample)
+                || prerollClipAt(*lane.clips, lane.target) != prerollClipAt(*lane.clips, sample);
             lane.target = sample; lane.advancing = advancing;
             if (changed[i]) { ++lane.request; lane.presentWake.signal(); }
         }
@@ -890,7 +1027,9 @@ juce::var VideoPlaybackEngine::telemetry() const
     auto result = jsonObject(); juce::Array<juce::var> cameras;
     jsonSet(result, "decoder", "FFmpeg H.264 + AV_HWDEVICE_TYPE_D3D11VA; no CPU fallback");
     jsonSet(result, "interop", "Dedicated decoder/presenter devices; target-only GPU NV12 copy + BT.709 shader to reusable shared BGRA; keyed mutex + D3D11 fence event; no CPU pixel readback");
-    jsonSet(result, "displayReadyLimitPerCamera", 3); jsonSet(result, "decoderDpb", "FFmpeg-owned per decoder; current plus next clip decoder");
+    jsonSet(result, "displayReadyLimitPerCamera", maximumReadyFrames); jsonSet(result, "decoderDpb", "FFmpeg-owned per decoder; current plus next clip decoder");
+    jsonSet(result, "prerollMilliseconds", prerollMilliseconds);
+    jsonSet(result, "prerollPolicy", "Independent next-segment IDR prefix, two retained pictures; survives advancing cursor requests; generation/gap/source fenced");
     jsonSet(result, "conversionSurfaceLimitPerDecoder", 12);
     jsonSet(result, "conversionTextureLimitPerCamera", PlaybackResources::maxTextures);
     jsonSet(result, "conversionByteLimitPerCamera", PlaybackResources::maxBytes);
@@ -902,6 +1041,13 @@ juce::var VideoPlaybackEngine::telemetry() const
     {
         std::lock_guard<std::mutex> lock(lane.mutex); auto c = jsonObject();
         jsonSet(c, "readyFrames", lane.ready.size()); jsonSet(c, "decoded", lane.decoded); jsonSet(c, "nextClipPrefetched", lane.prefetched);
+        jsonSet(c, "prerollStarts", lane.prerollStarts); jsonSet(c, "prerollLeadSamples", lane.prerollLeadSamples);
+        jsonSet(c, "prerollFirstFrameMs", 1000.0 * lane.prerollTicks / qpcFrequency());
+        jsonSet(c, "prerollPrefixFrames", lane.prerollPrefixFrames);
+        jsonSet(c, "prerollIdrSeekMs", 1000.0 * lane.prerollDecode.idrSeekTicks / qpcFrequency());
+        jsonSet(c, "prerollFlushMs", 1000.0 * lane.prerollDecode.flushTicks / qpcFrequency());
+        jsonSet(c, "prerollDecodeMs", 1000.0 * lane.prerollDecode.decodeTicks / qpcFrequency());
+        jsonSet(c, "prerollConvertMs", 1000.0 * lane.prerollDecode.convertTicks / qpcFrequency());
         const auto cache = lane.cache.stats(); const auto& resources = *lane.resources;
         jsonSet(c, "peakReadyFrames", lane.peakReady); jsonSet(c, "frameCacheFrames", cache.frames);
         jsonSet(c, "frameCacheBytes", cache.bytes); jsonSet(c, "frameCachePeakBytes", cache.peakBytes);
@@ -1023,7 +1169,7 @@ float4 psMain(Vertex v) : SV_Target { return picture.Sample(linearSampler, v.uv)
         };
         makeTarget(); PresentPacing pacing; PlaybackPresentOpportunity opportunity;
         engine.presenterInitialised(camera, initBegin, qpcNow());
-        std::shared_ptr<const PlaybackVideoFrame> displayed;
+        PlaybackDisplayState display;
         first = {}; // do not retain the startup frame/decoder device forever
         decoderDevice.Reset(); dxgi.Reset();
         struct TimerHandle { HANDLE value; ~TimerHandle() { if (value) CloseHandle(value); } } timer{
@@ -1070,11 +1216,13 @@ float4 psMain(Vertex v) : SV_Target { return picture.Sample(linearSampler, v.uv)
                 checkHr(swap->ResizeBuffers(0, desc.Width, desc.Height, DXGI_FORMAT_UNKNOWN, desc.Flags), "Resize playback host"); makeTarget();
             }
             const auto selection = engine.displaySelection(camera, presentationTick);
-            if (selection.gap || (displayed && !displayed->current(selection.generation))) displayed.reset();
-            if (selection.frame) displayed = selection.frame;
+            const auto displayed = display.select(selection);
             auto overlay = selection;
-            if (displayed && displayed->current(selection.generation)) overlay.buffering = false;
+            if (displayed) overlay.buffering = false;
             postOverlay(overlay);
+            // Before the very first picture, leave the existing host surface
+            // alone. Only explicit gaps submit an empty/black playback picture.
+            if (!selection.gap && !displayed) continue;
             const float black[]{0, 0, 0, 1}; context->ClearRenderTargetView(target.Get(), black);
             if (displayed && displayed->texture)
             {
@@ -1100,7 +1248,8 @@ float4 psMain(Vertex v) : SV_Target { return picture.Sample(linearSampler, v.uv)
             // A generation changed during GPU work must not become a successful
             // exact-seek result. Recheck immediately before submission and receipt.
             const auto current = engine.displaySelection(camera);
-            if (displayed && !displayed->current(current.generation)) continue;
+            if (current.generation != selection.generation || current.gap != selection.gap
+                || (displayed && !displayed->source->current())) continue;
             HRESULT hr = S_FALSE; std::int64_t received = 0;
             if (!engine.submitIfCurrent(camera, current.generation, [&]
                 { hr = swap->Present(0, DXGI_PRESENT_DO_NOT_WAIT); received = qpcNow(); })) continue;
@@ -1108,7 +1257,10 @@ float4 psMain(Vertex v) : SV_Target { return picture.Sample(linearSampler, v.uv)
             opportunity.submitted(hr == S_OK);
             if (hr == DXGI_STATUS_OCCLUDED || hr == DXGI_ERROR_WAS_STILL_DRAWING) continue;
             checkHr(hr, "Playback Present");
-            if (displayed && displayed->texture) engine.presented(camera, *displayed, received);
+            display.submitted(displayed);
+            // A held pre-seek picture is visible continuity, never an exact
+            // receipt for the new generation (and never a stale decode result).
+            if (selection.frame && displayed && displayed->texture) engine.presented(camera, *displayed, received);
         }
         context->ClearState(); context->Flush();
     }
