@@ -54,6 +54,15 @@ VideoCfrScheduler::VideoCfrScheduler(Rational n, Rational p) : native(n), projec
 {
     rateCheck(n); rateCheck(p);
     if (p.denominator != 1 || (p.numerator != 30 && p.numerator != 60)) throw std::invalid_argument("Project CFR must be 30/1 or 60/1");
+    const auto period = (10000000LL * native.denominator + native.numerator - 1) / native.numerator;
+    // At >=30 Hz, bound the TOTAL deadline to min(two periods, 50 ms).
+    // Slower sources need a 1.5-period floor on that cap: the nearest picture
+    // can be half a period ahead and take one period to arrive (29.97 Hz needs
+    // 50.05 ms, 24 Hz needs 62.5 ms). Preserve that normal delivery allowance.
+    // The measured 18.672 ms / 60 Hz fixture also fits the capped deadline.
+    // Longer stalls fall through to the existing repeat/loss policy.
+    const auto nearestWithDelivery = (15000000LL * native.denominator + native.numerator - 1) / native.numerator;
+    deliveryLimit = std::max(nearestWithDelivery, std::min(2 * period, 500000LL)) - period;
 }
 std::int64_t VideoCfrScheduler::gridTime(std::int64_t index, Rational rate)
 {
@@ -79,9 +88,35 @@ void VideoCfrScheduler::push(CfrInput frame, std::optional<std::int64_t> availab
     if (used == capacity) throw std::overflow_error("CFR candidate capacity exceeded");
     if (frame.slot < 0 || !frame.sourceId || frame.sourceId <= lastInputId || frame.time100ns < 0
         || (lastInputId && frame.time100ns <= lastTime)) throw std::invalid_argument("CFR input ID/time must increase within one epoch");
-    if (availableTime && *availableTime > frame.time100ns)
-        stats.maximumDeliveryDelay100ns = std::max(stats.maximumDeliveryDelay100ns, *availableTime - frame.time100ns);
+    if (availableTime)
+    {
+        if (*availableTime < lastDeliveryTime) resetDeliveryDelay();
+        lastDeliveryTime = *availableTime;
+        const auto delay = *availableTime > frame.time100ns ? *availableTime - frame.time100ns : 0;
+        stats.maximumDeliveryDelay100ns = std::max(stats.maximumDeliveryDelay100ns, delay);
+        if (*availableTime >= 0)
+        {
+            const auto bucket = *availableTime / deliveryBucket100ns;
+            auto& observation = deliveryHistory[static_cast<size_t>(bucket % deliveryHistory.size())];
+            const auto start = bucket * deliveryBucket100ns;
+            if (observation.start != start) observation = {start, 0};
+            observation.maximum = std::max(observation.maximum, std::min(delay, deliveryLimit));
+        }
+    }
     frames[used++] = frame; lastInputId = frame.sourceId; lastTime = frame.time100ns; ++stats.inputs;
+}
+void VideoCfrScheduler::resetDeliveryDelay() noexcept
+{
+    deliveryHistory = {}; lastDeliveryTime = -1;
+}
+std::int64_t VideoCfrScheduler::deliveryDelay(std::int64_t now) const noexcept
+{
+    std::int64_t delay = 0;
+    for (const auto& observation : deliveryHistory)
+        if (observation.start >= 0 && now >= observation.start
+            && now - observation.start < deliveryBucket100ns * static_cast<std::int64_t>(deliveryHistory.size()))
+            delay = std::max(delay, observation.maximum);
+    return delay;
 }
 void VideoCfrScheduler::noteLoss(CfrReason reason, std::uint64_t count)
 {
@@ -99,7 +134,7 @@ std::optional<CfrSelection> VideoCfrScheduler::select(std::int64_t now, bool dra
     // wall time has passed grid + one period. Only extend the wait; never move
     // the capture timestamps, N0, or output PTS to compensate for that latency.
     const bool beforeDeadline = now < grid || now - grid < wait
-        || now - grid - wait < stats.maximumDeliveryDelay100ns;
+        || now - grid - wait < deliveryDelay(now);
     if (!drain && frames[used - 1].time100ns < grid && beforeDeadline) return {};
     size_t best = 0;
     auto distance = [grid](const CfrInput& f) { return f.time100ns > grid ? f.time100ns - grid : grid - f.time100ns; };

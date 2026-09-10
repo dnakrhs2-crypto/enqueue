@@ -1,5 +1,6 @@
 #include "record/VideoCfrScheduler.h"
 #include "TestSupport.h"
+#include <algorithm>
 #include <cmath>
 
 using namespace gocue::recorder;
@@ -37,7 +38,7 @@ int runCfrSchedulerTests()
         const auto run = [](bool accountForDelivery)
         {
             VideoCfrScheduler c({60,1}, {60,1}); c.push({14,0,0});
-            unsigned input = 1, errors = 0;
+            unsigned input = 1, errors = 0, phaseFrames = 0; std::int64_t phaseTotal = 0;
             // Measured fixture phase 1.5208 ms, delivery ~18.672 ms. All input
             // pixels/IDs arrive in order; a one-period wall deadline is too soon.
             for (std::int64_t now = 185211; now < 11000000 && c.nextPts() < 60; now += 1000)
@@ -55,10 +56,14 @@ int runCfrSchedulerTests()
                     const auto expected = selected->pts == 0 ? 14 : 15 + selected->pts;
                     if (selected->input.sourceId != std::uint64_t(expected)) ++errors;
                     require(selected->grid100ns == VideoCfrScheduler::gridTime(selected->pts, {60,1}), "Delivery compensation moved output PTS");
+                    if (selected->pts) { phaseTotal += selected->input.time100ns - selected->grid100ns; ++phaseFrames; }
                 }
                 require(c.size() <= 3, "Delayed delivery grew the CFR queue");
             }
-            require(c.nextPts() == 60, "Delayed camera fixture did not finish"); return errors;
+            require(c.nextPts() == 60, "Delayed camera fixture did not finish");
+            std::cout << "CFR measured-delay fixture: deliveryAware=" << accountForDelivery
+                      << ", meanSourceMinusGridMs=" << double(phaseTotal) / phaseFrames / 10000.0 << '\n';
+            return errors;
         };
         const auto baseline = run(false), corrected = run(true);
         std::cout << "CFR alignment: unadjusted deadline wrong frames=" << baseline << "/60, delivery-aware=" << corrected << "/60\n";
@@ -67,10 +72,97 @@ int runCfrSchedulerTests()
     s.test("alignment: delivery grace remains bounded on camera loss and stop drains immediately", []
     {
         VideoCfrScheduler c({60,1}, {60,1}); c.push({1,0,0}, 200000); require(bool(c.select(200000)), "Select first delivered frame");
-        const auto deadline = VideoCfrScheduler::gridTime(1, {60,1}) + 166667 + 200000;
+        const auto deadline = VideoCfrScheduler::gridTime(1, {60,1}) + 2 * 166667;
         require(!c.select(deadline - 1) && bool(c.select(deadline)), "Delivery grace did not expire at the bounded deadline");
         require(bool(c.select(0, true)), "Stop waited for missing future camera delivery");
         require(c.counters().maximumDeliveryDelay100ns == 200000, "Delivery diagnostic lost its measured bound");
+    });
+    s.test("alignment: 200ms spike, normal recovery and input loss obey the total wait cap and expire the spike", []
+    {
+        for (unsigned fps : {30u, 60u})
+        {
+            const Rational rate{fps, 1}; VideoCfrScheduler c(rate, rate);
+            const auto period = (10000000LL + fps - 1) / fps;
+            const auto cap = std::min(2 * period, 500000LL);
+            c.push({1,0,0}, 2000000);
+            while (c.select(2000000)) {} // Catch up after the actual 200ms stall.
+            c.push({2,2100000,1}, 2200000); // Delivery returns to 10ms.
+            while (c.select(2200000)) {}
+            auto grid = VideoCfrScheduler::gridTime(c.nextPts(), rate);
+            c.noteLoss(CfrReason::captureLoss, 1);
+            require(!c.select(grid + cap - 1), "Spike grace ended before its capped deadline");
+            const auto lost = c.select(grid + cap);
+            require(lost && lost->reason == CfrReason::captureLoss, "Spike exceeded cap or changed existing loss classification");
+            // Resume normal delivery for >one second so the old peak expires.
+            const auto resumed = grid + cap;
+            for (unsigned i = 1; i <= fps * 2; ++i)
+            {
+                const auto capture = resumed + VideoCfrScheduler::gridTime(i, rate);
+                const auto delivered = capture + 100000;
+                c.push({2 + i, capture, int(i % 16)}, delivered);
+                while (c.select(delivered)) {}
+            }
+            grid = VideoCfrScheduler::gridTime(c.nextPts(), rate);
+            const auto normalDeadline = grid + period + 100000;
+            require(!c.select(normalDeadline - 1) && bool(c.select(normalDeadline)), "Recovered input loss still used the expired spike budget");
+            require(c.counters().maximumDeliveryDelay100ns == 2000000, "Expiry erased the lifetime spike diagnostic");
+            std::cout << "CFR spike recovery: fps=" << fps << ", cappedWaitMs=" << double(cap) / 10000.0
+                      << ", recoveredWaitMs=" << double(normalDeadline - grid) / 10000.0 << ", diagnosticMaxMs=200\n";
+        }
+    });
+    s.test("alignment: delivery observations expire while no input arrives", []
+    {
+        VideoCfrScheduler c({60,1}, {60,1}); c.push({1,0,0}, 2000000);
+        require(bool(c.select(2000000)), "Initial spike frame missing");
+        // At exactly one second after observing the spike, frame 71's original
+        // one-period deadline is due. A still-active grace would block it.
+        while (c.nextPts() < 72) require(bool(c.select(12000000)), "Idle input retained an expired delivery observation");
+        require(c.counters().maximumDeliveryDelay100ns == 2000000, "Idle expiry erased diagnostic");
+    });
+    s.test("alignment: reanchor resets only delivery budget and preserves CFR grid, candidates and diagnostics", []
+    {
+        VideoCfrScheduler c({60,1}, {60,1}); c.push({1,0,0}, 2000000);
+        while (c.select(2000000)) {}
+        const auto next = c.nextPts(); const auto outputs = c.counters().outputs;
+        const auto deadline = VideoCfrScheduler::gridTime(next, {60,1}) + 166667;
+        require(!c.select(deadline), "Fixture has no live spike grace to reset");
+        c.resetDeliveryDelay();
+        require(c.nextPts() == next && c.counters().outputs == outputs && c.size() == 1, "Reanchor reset more than latency observations");
+        const auto selected = c.select(deadline);
+        require(selected && selected->pts == next && selected->input.sourceId == 1, "Reanchor retained the old delivery budget or moved the grid");
+        require(c.counters().maximumDeliveryDelay100ns == 2000000, "Reanchor erased lifetime diagnostic");
+    });
+    s.test("alignment: up to one native period of normal delivery still selects the nearest future picture", []
+    {
+        for (const Rational rate : {Rational{30,1}, Rational{60,1}, Rational{30000,1001}, Rational{60000,1001}, Rational{24,1}})
+            for (unsigned fraction : {0u, 1u, 2u})
+        {
+            const Rational project{rate.numerator / rate.denominator > 30 ? 60u : 30u, 1};
+            VideoCfrScheduler c(rate, project);
+            const auto period = (10000000LL * rate.denominator + rate.numerator - 1) / rate.numerator;
+            const auto delay = period * fraction / 2, phase = period * 49 / 100;
+            c.push({1,0,0}, 0); unsigned input = 0;
+            for (std::int64_t now = 0; now < VideoCfrScheduler::gridTime(65, project) && c.nextPts() < 60; now += 100)
+            {
+                const auto capture = phase + VideoCfrScheduler::gridTime(input, rate);
+                if (capture + delay <= now)
+                { c.push({2 + input, capture, int((input + 1) % 16)}, capture + delay); ++input; }
+                if (const auto selected = c.select(now))
+                {
+                    // Brute-force all fixture capture times, including pictures
+                    // not delivered yet: an independent nearest-frame oracle.
+                    std::uint64_t expected = 1; auto distance = selected->grid100ns;
+                    for (unsigned candidate = 0; candidate < 130; ++candidate)
+                    {
+                        const auto delta = std::abs(phase + VideoCfrScheduler::gridTime(candidate, rate) - selected->grid100ns);
+                        if (delta + 1 < distance) { expected = 2 + candidate; distance = delta; }
+                    }
+                    require(selected->input.sourceId == expected, "Bounded delivery picked the older, more distant picture");
+                }
+                require(c.size() <= 3, "Normal delivery grew candidate storage");
+            }
+            require(c.nextPts() == 60, "Normal delayed stream failed to complete");
+        }
     });
     s.test("30 -> 60 repeats and 60 -> 30 omissions are native conversion", []
     {

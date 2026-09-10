@@ -100,19 +100,39 @@ struct PlaybackDisplaySelection
     bool gap = true;
     bool buffering = false;
 };
-// Device-free picture retention policy, shared with the DXGI presenter. Only a
+enum class PlaybackDisplayAction { skip, picture, clear };
+struct PlaybackDisplayDecision
+{
+    std::shared_ptr<const PlaybackVideoFrame> frame;
+    PlaybackDisplayAction action = PlaybackDisplayAction::skip;
+    bool shouldSubmit() const noexcept { return action != PlaybackDisplayAction::skip; }
+};
+// Device-free picture retention and submission policy, shared with the DXGI presenter. Only a
 // successful submission becomes the retained picture.
 struct PlaybackDisplayState
 {
     std::shared_ptr<const PlaybackVideoFrame> retained;
-    std::shared_ptr<const PlaybackVideoFrame> select(const PlaybackDisplaySelection& selection)
+    PlaybackDisplayDecision select(const PlaybackDisplaySelection& selection)
     {
         // A seek revokes publication rights, not the pixels already on screen.
-        // Real gaps and replaced source epochs must still clear the picture.
-        if (selection.gap || (retained && (!retained->source || !retained->source->current()))) retained.reset();
-        return selection.frame ? selection.frame : retained;
+        // Dropping an invalid reference does not erase those pixels. Keep the
+        // clear pending across generation changes/busy/occluded submit retries.
+        if (selection.gap || (retained && (!retained->source || !retained->source->current())))
+        {
+            clearPending |= bool(retained);
+            retained.reset();
+        }
+        if (selection.gap) return {{}, PlaybackDisplayAction::clear};
+        if (selection.frame) return {selection.frame, PlaybackDisplayAction::picture};
+        if (retained) return {retained, PlaybackDisplayAction::picture};
+        return {{}, clearPending ? PlaybackDisplayAction::clear : PlaybackDisplayAction::skip};
     }
-    void submitted(std::shared_ptr<const PlaybackVideoFrame> frame) { retained = std::move(frame); }
+    // Call only after a successful Present; a replacement picture also fulfils
+    // a pending clear, without inserting black ahead of an already ready frame.
+    void submitted(std::shared_ptr<const PlaybackVideoFrame> frame)
+    { retained = std::move(frame); clearPending = false; }
+private:
+    bool clearPending = false;
 };
 // A successful DXGI latency wait belongs to the next successful Present, even
 // when a seek, busy texture, resize or occlusion prevents this iteration's submit.

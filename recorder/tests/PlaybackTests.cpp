@@ -586,6 +586,34 @@ int runPlaybackTests()
         }
         require(late() == 2, "Ready frame counted as late");
     });
+    suite.test("epoch replacement buffers a valid clip, submits black once, then submits the new frame", []
+    {
+        auto state = std::make_shared<StubState>(); const auto old = videoIndex(), fresh = videoIndex();
+        VideoPlaybackEngine video(factory(state)); video.prepare({videoClip(old, 0, 0, old->length)});
+        video.seek(0, 1); eventually([&] { return video.ready(0, 1); });
+        PlaybackDisplayState display; auto decision = display.select(video.displaySelection(0));
+        require(decision.action == PlaybackDisplayAction::picture, "Initial picture not ready");
+        display.submitted(decision.frame);
+        ++old->epoch->value; state->blockedPacket = 2;
+        video.handoff({videoClip(fresh, 0, 0, fresh->length)}, 1600, 2);
+        eventually([&] { return state->entered.load(); });
+        const auto selection = video.displaySelection(0);
+        require(!selection.gap && selection.buffering && !selection.frame, "Replacement fixture did not buffer a valid clip");
+        decision = display.select(selection);
+        require(decision.shouldSubmit() && decision.action == PlaybackDisplayAction::clear && !decision.frame, "Presenter would skip invalidated on-screen pixels");
+        unsigned black = 0, pictures = 0;
+        require(!video.submitIfCurrent(0, 1, [&] { ++black; }), "Old generation submitted the clear");
+        decision = display.select(video.displaySelection(0));
+        require(decision.shouldSubmit() && video.submitIfCurrent(0, 2, [&] { ++black; }), "Generation rejection consumed pending clear");
+        display.submitted(decision.frame); // synthetic receipt of the same submit/skip branch
+        for (int i = 0; i < 3; ++i) require(!display.select(video.displaySelection(0)).shouldSubmit(), "Buffering resubmitted black after success");
+        state->release = true; eventually([&] { return video.ready(1600, 2); });
+        decision = display.select(video.displaySelection(0));
+        require(decision.action == PlaybackDisplayAction::picture && decision.frame && decision.frame->source == fresh && decision.frame->pts == 2, "Replacement did not resume at exact PTS");
+        require(video.submitIfCurrent(0, 2, [&] { ++pictures; }), "Replacement submit rejected");
+        display.submitted(decision.frame);
+        require(black == 1 && pictures == 1 && video.status().wasOk(), "Invalidation/replacement submission sequence failed");
+    });
     suite.test("seek discard and texture retry retain acquired DXGI opportunity until successful Present", []
     {
         struct Event { HANDLE value = CreateEventW(nullptr, FALSE, TRUE, nullptr); ~Event() { if (value) CloseHandle(value); } } signal;

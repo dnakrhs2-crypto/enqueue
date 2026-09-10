@@ -52,7 +52,8 @@ struct CfrSelection
 };
 // Single worker, fixed storage, no device/GPU/clock reads. Ties select the older
 // image. A future candidate ends the wait early; otherwise allow one native
-// period PLUS observed capture/decode delivery delay, in the same mapped clock.
+// period plus recent capture/decode delivery delay, in the same mapped clock.
+// The total wait is capped; diagnostic lifetime maxima never set deadlines.
 class VideoCfrScheduler
 {
 public:
@@ -61,6 +62,9 @@ public:
     void push(CfrInput, std::optional<std::int64_t> availableTime100ns = {});
     std::optional<CfrSelection> select(std::int64_t now100ns, bool drain = false);
     void noteLoss(CfrReason, std::uint64_t count);
+    // Source reanchor/discontinuity invalidates latency observations, not the
+    // take's output grid, queued pictures or lifetime diagnostic counters.
+    void resetDeliveryDelay() noexcept;
     const CfrCounters& counters() const noexcept { return stats; }
     std::int64_t nextPts() const noexcept { return next; }
     size_t size() const noexcept { return used; }
@@ -69,6 +73,14 @@ public:
     static std::int64_t frameCount(std::int64_t duration100ns, Rational rate);
     static std::int64_t nearestNativeIndex(std::int64_t projectIndex, Rational nativeRate, Rational projectRate);
 private:
+    std::int64_t deliveryDelay(std::int64_t now100ns) const noexcept;
+    // Ten 100 ms buckets keep fixed storage even at high native rates. Round
+    // observation times down: a peak expires after 900..1000 ms, including
+    // when input stops (select evaluates age, not just push).
+    static constexpr std::int64_t deliveryBucket100ns = 1000000;
+    struct DeliveryBucket { std::int64_t start = -1, maximum = 0; };
+    std::array<DeliveryBucket, 10> deliveryHistory{};
+    std::int64_t lastDeliveryTime = -1, deliveryLimit = 0;
     Rational native, project;
     std::array<CfrInput, capacity> frames{};
     size_t used = 0;
