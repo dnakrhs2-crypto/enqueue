@@ -112,4 +112,6 @@ private:
 bool applyAudioDefaults(UserSettings&, const RecorderAudioEngine::DeviceInfo&);
 // A project without media is provisional: it follows the open device's sample rate (the first take fixes it). Returns whether Fs changed.
 bool adoptDeviceSampleRate(RecorderDocument&, unsigned deviceFs);
+// Banner for a fixed project whose device opened at another rate: both numbers and the way back (device panel, then 적용).
+juce::String rateMismatchText(unsigned projectFs, unsigned deviceFs);
 }

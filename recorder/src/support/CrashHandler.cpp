@@ -5,6 +5,7 @@
 #include <dbghelp.h>
 #include "CrashHandler.h"
 #include "app/ProductIdentity.h"
+#include <atomic>
 #include <cstdlib>
 #include <exception>
 
@@ -12,10 +13,12 @@ namespace gocue::recorder
 {
 namespace
 {
+std::atomic<bool> reporting{false};
 void writeReport(EXCEPTION_POINTERS* info, const char* origin)
 {
+    if (reporting.exchange(true)) return; // a crash inside the reporter (heap damage, second thread): give up, do not recurse
     const auto dir = CrashHandler::directory(); dir.createDirectory();
-    const auto base = dir.getChildFile("Recorder-" + ProductIdentity::version() + "-" + juce::Time::getCurrentTime().formatted("%Y%m%d-%H%M%S"));
+    const auto base = dir.getChildFile("Recorder-" + ProductIdentity::version() + "-" + juce::Time::getCurrentTime().formatted("%Y%m%d-%H%M%S") + "-" + juce::String((juce::int64) GetCurrentProcessId()));
     const auto dump = juce::File(base.getFullPathName() + ".dmp");
     HANDLE file = CreateFileW(dump.getFullPathName().toWideCharPointer(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
     bool dumped = false;
@@ -40,6 +43,7 @@ void onTerminate() { writeReport(nullptr, "std::terminate"); std::abort(); }
 }
 void CrashHandler::install()
 {
+    directory().createDirectory(); // prepared while the process is healthy
     juce::SystemStats::setApplicationCrashHandler(onCrash); // SetUnhandledExceptionFilter underneath
     std::set_terminate(onTerminate);
 }

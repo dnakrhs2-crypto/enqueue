@@ -50,7 +50,9 @@ int runUiWiringTests()
         s.physicalInputs = {2}; require(validateAudioSettings(s, d, p).failed(), "Missing input accepted");
         s.physicalInputs = {-1, 1}; require(validateAudioSettings(s, d, p).wasOk(), "Sparse input rejected");
         auto registry = std::make_shared<MediaRegistry>(); registry->assets.emplace_back(); p.media = registry; d.sampleRate = 44100;
-        require(validateAudioSettings(s, d, p).failed(), "Fixed project Fs mismatch accepted");
+        // 0.1.3: a fixed-project rate mismatch is not an input error (the device is reopened at the project rate on 적용);
+        // recording is blocked by RecorderSession::readyToRecord and the banner names both rates (rateMismatchText).
+        require(validateAudioSettings(s, d, p).wasOk(), "Fixed project Fs mismatch must not block applying settings");
     });
     suite.test("camera panels validate identity, mode and duplicate slots", []
     {

@@ -136,6 +136,17 @@ juce::Result RecorderDocument::setTimebase(std::uint32_t Fs, FrameRate fps)
     if (Fs != project->Fs || fps != project->fps) { const auto replaced = replaceProject(std::move(next)); if (replaced.failed()) return replaced; dirty = checkpointRequired = true; history.clear(); error.clear(); enqueueRegistry(); notify(); }
     return juce::Result::ok();
 }
+juce::Result RecorderDocument::adoptProvisionalTimebase(std::uint32_t Fs)
+{
+    if (recordingStructureLock) return juce::Result::fail(juce::String::fromUTF8("녹화 중에는 시간 기준을 바꿀 수 없습니다."));
+    assertOwner(); if (editing) return juce::Result::fail(juce::String::fromUTF8("편집 작업 중입니다."));
+    const juce::ScopedValueSetter<bool> guard(editing, true);
+    if (!project->media->assets.empty()) return juce::Result::fail(juce::String::fromUTF8("첫 미디어 이후에는 프로젝트 샘플레이트를 바꿀 수 없습니다."));
+    if (Fs == project->Fs) return juce::Result::ok();
+    auto next = *project; next.Fs = Fs; const auto valid = next.validate(); if (valid.failed()) return juce::Result::fail(valid.getErrorMessage());
+    const auto replaced = replaceProject(std::move(next)); if (replaced.failed()) return replaced;
+    notify(); return juce::Result::ok(); // not dirty, history kept: undo snapshots hold EditState only, never Fs
+}
 EditSnapshot RecorderDocument::editSnapshot() const { return {static_cast<const EditState&>(*project), selection}; }
 void RecorderDocument::setSelection(std::vector<Id> ids)
 {

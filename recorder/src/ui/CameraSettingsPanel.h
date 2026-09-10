@@ -17,6 +17,7 @@ private:
     void timerCallback() override;
     void modesFor(unsigned);
     void selectionChanged(unsigned, bool enabling);
+    void refreshCalibration();
     UserSettings initial;
     std::vector<CameraDevice> cameras;
     std::future<std::vector<CameraDevice>> work;
@@ -25,6 +26,7 @@ private:
     std::array<juce::Label, 2> modeLabels, ids;
     std::array<int, 2> acceptedDevices{};
     unsigned projectFps = 30;
+    bool replacedMode = false;
     juce::Label fps, status, calibration, nextTake;
 };
 }

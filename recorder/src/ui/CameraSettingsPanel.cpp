@@ -16,8 +16,7 @@ CameraSettingsPanel::CameraSettingsPanel(const UserSettings& s, const RecorderPr
     nextTake.setText(ko("캠2 해제는 다음 테이크부터 적용됩니다."), juce::dontSendNotification);
     fps.setText(ko("프로젝트 ") + juce::String(p.fps.numerator) + (p.media->assets.empty() ? ko(" fps · 첫 미디어 후 고정") : ko(" fps · 고정")), juce::dontSendNotification);
     status.setText(ko("카메라 장치를 확인하는 중입니다."), juce::dontSendNotification);
-    const bool changed = s.calibration.asioDeviceId != s.asioDeviceId || s.calibration.cameraDeviceIds != s.cameraDeviceIds || s.calibration.cameraModes != s.cameraModes;
-    calibration.setText(ko("동기 보정 · ") + (s.calibration.calibrationDate.isEmpty() ? ko("보정 결과 없음") : changed ? ko("설정 변경으로 재측정 필요") : ko("측정됨")), juce::dontSendNotification);
+    refreshCalibration();
     work = std::async(std::launch::async, [] { ComApartment apartment; MfRuntime runtime; return CameraCatalog::enumerate(); }); startTimer(100);
 }
 CameraSettingsPanel::~CameraSettingsPanel() { stopTimer(); }
@@ -34,7 +33,8 @@ void CameraSettingsPanel::timerCallback()
             acceptedDevices[i] = devices[i].getSelectedId();
             modesFor(i); devices[i].setEnabled(enabled[i].getToggleState()); modes[i].setEnabled(enabled[i].getToggleState());
         }
-        status.setText(cameras.empty() ? ko("연결된 카메라가 없습니다.") : ko("같은 카메라를 두 번 선택할 수 없습니다."), juce::dontSendNotification);
+        status.setText(cameras.empty() ? ko("연결된 카메라가 없습니다.") : replacedMode ? ko("입력 모드를 프로젝트 fps에 맞춰 다시 골랐습니다. 적용을 누르면 저장됩니다.") : ko("같은 카메라를 두 번 선택할 수 없습니다."), juce::dontSendNotification);
+        refreshCalibration();
     }
     catch (const std::exception& e) { status.setText(ko("카메라 목록을 읽을 수 없습니다. ") + juce::String::fromUTF8(e.what()), juce::dontSendNotification); }
     stopTimer();
@@ -51,7 +51,11 @@ void CameraSettingsPanel::modesFor(unsigned i)
         modes[i].addItem(friendlyModeText(c.modes[m]), int(m) + 1);
         if (juce::String(c.modes[m].text()) == initial.cameraModes[i] && reachesProjectFps(c.modes[m], projectFps)) modes[i].setSelectedId(int(m) + 1, juce::dontSendNotification);
     }
-    if (const auto best = preferred1080pMode(c.modes, projectFps); !modes[i].getSelectedId() && best >= 0) modes[i].setSelectedId(best + 1, juce::dontSendNotification);
+    if (const auto best = preferred1080pMode(c.modes, projectFps); !modes[i].getSelectedId() && best >= 0)
+    {
+        modes[i].setSelectedId(best + 1, juce::dontSendNotification);
+        if (initial.cameraModes[i].isNotEmpty() && juce::String(c.modes[std::size_t(best)].text()) != initial.cameraModes[i]) replacedMode = true;
+    }
 }
 void CameraSettingsPanel::selectionChanged(unsigned i, bool enabling)
 {
@@ -70,6 +74,14 @@ void CameraSettingsPanel::selectionChanged(unsigned i, bool enabling)
         status.setText(ko("선택한 장치와 입력 모드를 저장합니다."), juce::dontSendNotification);
     }
     devices[i].setEnabled(enabled[i].getToggleState()); modes[i].setEnabled(enabled[i].getToggleState());
+    refreshCalibration();
+}
+void CameraSettingsPanel::refreshCalibration()
+{
+    // Computed from the current selection (auto-picked modes included), not from the settings the panel opened with.
+    const auto s = read(initial);
+    const bool changed = s.calibration.asioDeviceId != s.asioDeviceId || s.calibration.cameraDeviceIds != s.cameraDeviceIds || s.calibration.cameraModes != s.cameraModes;
+    calibration.setText(ko("동기 보정 · ") + (s.calibration.calibrationDate.isEmpty() ? ko("보정 결과 없음") : changed ? ko("설정 변경으로 재측정 필요") : ko("측정됨")), juce::dontSendNotification);
 }
 UserSettings CameraSettingsPanel::read(UserSettings s) const
 {

@@ -13,11 +13,6 @@ namespace
 juce::String k(const char* s) { return juce::String::fromUTF8(s); }
 void checkResult(const juce::Result& r) { if (r.failed()) throw std::runtime_error(r.getErrorMessage().toStdString()); }
 struct RateMismatch : std::runtime_error { using std::runtime_error::runtime_error; }; // the device stays open; the banner names both rates
-juce::String rateMismatchText(unsigned projectFs, unsigned deviceFs)
-{
-    return k("프로젝트는 ") + juce::String(projectFs) + k(" Hz로 고정돼 있는데 오디오 장치가 ") + juce::String(deviceFs) + k(" Hz로 열렸습니다. 설정에서 샘플레이트를 ")
-        + juce::String(projectFs) + k("으로 바꾸세요. 다른 프로그램이 장치를 쓰고 있으면 바뀌지 않을 수 있습니다.");
-}
 bool activeTake(TakeController::State s)
 { using S = TakeController::State; return s == S::preparing || s == S::armed || s == S::recording || s == S::stopping; }
 template<class T> bool ready(std::future<T>& f) { return f.valid() && f.wait_for(std::chrono::milliseconds(0)) == std::future_status::ready; }
@@ -28,7 +23,12 @@ bool adoptDeviceSampleRate(RecorderDocument& document, unsigned deviceFs)
 {
     const auto& p = document.getProject();
     if (!deviceFs || !p.media->assets.empty() || p.Fs == deviceFs) return false;
-    return document.setTimebase(deviceFs, p.fps).wasOk();
+    return document.adoptProvisionalTimebase(deviceFs).wasOk();
+}
+juce::String rateMismatchText(unsigned projectFs, unsigned deviceFs)
+{
+    return k("프로젝트는 ") + juce::String(projectFs) + k(" Hz로 고정돼 있는데 오디오 장치가 ") + juce::String(deviceFs) + k(" Hz로 열렸습니다. ASIO 제어판이나 장치 소프트웨어에서 ")
+        + juce::String(projectFs) + k(" Hz로 맞추고, 장치를 쓰는 다른 프로그램을 닫은 뒤 설정에서 적용을 누르세요.");
 }
 bool applyAudioDefaults(UserSettings& s, const RecorderAudioEngine::DeviceInfo& info)
 {
@@ -119,7 +119,8 @@ bool RecorderSession::readyToRecord() const
     return lifecycle->acceptsCommands() && canPauseExport && !lifecycle->captureBusy() && !(lifecycle->snapshot() & (RecorderLifecycle::dubbing | RecorderLifecycle::recovering | RecorderLifecycle::fileWork))
         && !configuring() && !recording() && take.state() != TakeController::State::finalizing && !planWork.valid()
         && document.getFile() != juce::File() && cameraReady(0) && device.sampleRate
-        && audio.clockReady() && validateAudioSettings(current, device, document.getProject()).wasOk();
+        && audio.clockReady() && validateAudioSettings(current, device, document.getProject()).wasOk()
+        && (document.getProject().media->assets.empty() || device.sampleRate == document.getProject().Fs); // a fixed project records only at its own rate
 }
 juce::String RecorderSession::cameraCaption(unsigned n) const
 {
@@ -156,8 +157,6 @@ juce::Result RecorderSession::configure(UserSettings settings)
         if (settings.asioDeviceId.isNotEmpty())
         {
             checkResult(audio.openDevice(settings.asioDeviceId, fixedFs ? fixedFs : settings.preferredSampleRate, settings.bufferSize));
-            if (fixedFs && audio.deviceInfo().sampleRate != fixedFs) // keep it open: meters work, recording/playback stay blocked with both numbers shown
-                throw RateMismatch(rateMismatchText(fixedFs, audio.deviceInfo().sampleRate).toStdString());
             if (applyAudioDefaults(settings, audio.deviceInfo()))
             {
                 map.fill(-1); for (std::size_t i = 0; i < settings.physicalInputs.size(); ++i) map[i] = settings.physicalInputs[i];
@@ -166,6 +165,8 @@ juce::Result RecorderSession::configure(UserSettings settings)
             for (unsigned i = 0; i < 8; ++i) checkResult(audio.arm(i, map[i] >= 0 && settings.microphoneArmed[i]));
             settings.preferredSampleRate = audio.deviceInfo().sampleRate;
             settings.bufferSize = int(audio.deviceInfo().bufferFrames);
+            if (fixedFs && audio.deviceInfo().sampleRate != fixedFs) // mapped and armed already: meters/monitoring work, record/playback stay blocked
+                throw RateMismatch(rateMismatchText(fixedFs, audio.deviceInfo().sampleRate).toStdString());
         }
     }
     catch (const RateMismatch& e) { audioResult = juce::Result::fail(juce::String::fromUTF8(e.what())); }

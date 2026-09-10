@@ -71,6 +71,9 @@ public:
     juce::Result saveCheckpoint(const juce::File&); // synchronous CLI/test convenience
     void checkpointFinished(Snapshot written, const juce::File&, const juce::Result&);
     juce::Result setTimebase(std::uint32_t Fs, FrameRate);
+    // A project without media runs at the open device's rate: replaces Fs without touching dirty state or history
+    // (the saved file re-adopts on the next open; the first take fixes the rate for good).
+    juce::Result adoptProvisionalTimebase(std::uint32_t Fs);
     juce::Result performEdit(const juce::String& name, const std::function<void(EditState&)>&, const EditOptions& = {});
     // Pure Project/ClipEdits adapter. A returned Project implicitly converts to ClipEditResult.
     juce::Result performEdit(const juce::String& name, const juce::String& coalesceKey,

@@ -100,14 +100,17 @@ int runLifecycleTests()
     suite.test("A project without media follows the device sample rate; a fixed project names both rates", []
     {
         RecorderDocument document; require(document.getProject().Fs == 48000, "Provisional default");
+        const auto wasDirty = document.isDirty(); const auto historyBefore = document.getHistory().undoDepth();
         require(!adoptDeviceSampleRate(document, 0), "No open device -> untouched");
         require(adoptDeviceSampleRate(document, 44100) && document.getProject().Fs == 44100, "Provisional project adopts the device rate");
+        require(document.isDirty() == wasDirty && document.getHistory().undoDepth() == historyBefore, "Adoption is derived state: no unsaved edit, history kept");
         require(!adoptDeviceSampleRate(document, 44100), "Equal rates -> nothing to do");
         UserSettings s; s.asioDeviceId = "X"; s.physicalInputs = {0}; s.output.left = 0; s.output.right = 1;
         RecorderAudioEngine::DeviceInfo info; info.name = "X"; info.sampleRate = 44100; info.physicalInputs = 2; info.physicalOutputs = 2;
         RecorderProject fixed; auto media = std::make_shared<MediaRegistry>(); media->assets.push_back(MediaAsset{}); fixed.media = media;
-        const auto r = validateAudioSettings(s, info, fixed);
-        require(r.failed() && r.getErrorMessage().contains("48000") && r.getErrorMessage().contains("44100"), "Fixed-project mismatch names both rates");
+        require(validateAudioSettings(s, info, fixed).wasOk(), "A fixed-project mismatch is not an input error: 적용 reaches configure() and reopens at the project rate");
+        const auto text = rateMismatchText(fixed.Fs, info.sampleRate);
+        require(text.contains("48000") && text.contains("44100") && text.contains(juce::String::fromUTF8("적용")), "The mismatch banner names both rates and the way back");
         require(validateAudioSettings(s, info, RecorderProject{}).wasOk(), "Provisional project accepts any device rate");
     });
     suite.test("Camera input modes get a sensible default per project fps and friendly labels", []
