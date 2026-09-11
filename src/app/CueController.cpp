@@ -387,8 +387,16 @@ void CueController::playlistStep (const juce::Uuid& groupId)
             run.position = 0;
 
             if (shuffle)
+            {
+                const auto lastPlayed = run.order.back();
+
                 for (int i = (int) run.order.size() - 1; i > 0; --i)
                     std::swap (run.order[(size_t) i], run.order[(size_t) randomChoice (i + 1)]);
+
+                // a 랜덤 반복 jukebox: the new round must not open with the song that just ended
+                if (run.order.size() > 1 && run.order.front() == lastPlayed)
+                    std::swap (run.order.front(), run.order[(size_t) juce::jlimit (1, (int) run.order.size() - 1, 1 + randomChoice ((int) run.order.size() - 1))]);
+            }
         }
 
         const auto childId = run.order[(size_t) run.position];

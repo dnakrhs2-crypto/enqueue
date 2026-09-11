@@ -33,6 +33,9 @@ public:
 
         if (throwOnPrepare)
             throw std::runtime_error ("prepare failed");
+
+        resetDelay();
+        setLatencySamples (latencySamples);   // reported to the host, as a look-ahead limiter does
     }
     void releaseResources() override { ++releaseCount; }
 
@@ -41,10 +44,50 @@ public:
         lastNumChannels = buffer.getNumChannels();
         lastNumSamples = buffer.getNumSamples();
         ++processCount;
+        const int n = buffer.getNumSamples();
+
+        if (latencySamples > 0)
+        {
+            // a real delay of latencySamples (the ring is exactly that long): the output lags the input by the latency reported
+            for (int ch = 0; ch < 2 && ch < buffer.getNumChannels(); ++ch)
+            {
+                float* d = buffer.getWritePointer (ch);
+                float* ring = delayLine.getWritePointer (ch);
+                int p = delayPos;
+
+                for (int i = 0; i < n; ++i)
+                {
+                    const float in = d[i];
+                    d[i] = ring[p];
+                    ring[p] = in;
+
+                    if (++p == latencySamples)
+                        p = 0;
+                }
+            }
+
+            delayPos = (delayPos + n) % latencySamples;
+        }
+
         buffer.applyGain (gain);
 
         if (emitNaN && buffer.getNumSamples() > 0)
             buffer.setSample (0, 0, std::numeric_limits<float>::quiet_NaN());   // a broken plugin: poison in the output
+    }
+
+    /** A new latency while running (a look-ahead setting changed): the host hears of it through audioProcessorChanged. */
+    void setLatencyLive (int newLatency)
+    {
+        latencySamples = juce::jmax (0, newLatency);
+        resetDelay();
+        setLatencySamples (latencySamples);
+    }
+
+    void resetDelay()
+    {
+        delayLine.setSize (2, juce::jmax (1, latencySamples));
+        delayLine.clear();
+        delayPos = 0;
     }
 
     double getTailLengthSeconds() const override { return tail; }
@@ -93,6 +136,9 @@ public:
     int lastNumSamples = 0;
     bool emitNaN = false;          // writes a NaN into the first sample of every block
     bool throwOnPrepare = false;   // prepareToPlay throws
+    int latencySamples = 0;        // set before the plugin is added: reported at prepare, and the output really lags by as much
+    juce::AudioBuffer<float> delayLine;
+    int delayPos = 0;
     static inline int liveInstances = 0;   // instances alive right now (a chain rebuild must destroy the old ones)
 };
 

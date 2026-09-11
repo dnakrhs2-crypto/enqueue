@@ -18,6 +18,7 @@ namespace Keys
     constexpr const char* activeCuesFolded  = "activeCuesCollapsed";
     constexpr const char* reopenAfterUpdate = "reopenProjectAfterUpdate";
     constexpr const char* youtubeAddToQueue = "youtubeAddToQueue";
+    constexpr const char* disabledPlugins   = "disabledPlugins";
 }
 
 AppSettings::AppSettings()
@@ -122,6 +123,19 @@ bool AppSettings::getYouTubeAddToQueue() const
 void AppSettings::setYouTubeAddToQueue (bool add)
 {
     settings->setValue (Keys::youtubeAddToQueue, add);
+}
+
+juce::StringArray AppSettings::getDisabledPlugins() const
+{
+    juce::StringArray keys;
+    keys.addLines (settings->getValue (Keys::disabledPlugins));
+    keys.removeEmptyStrings();
+    return keys;
+}
+
+void AppSettings::setDisabledPlugins (const juce::StringArray& keys)
+{
+    settings->setValue (Keys::disabledPlugins, keys.joinIntoString ("\n"));
 }
 
 bool AppSettings::getInspectorCollapsed() const

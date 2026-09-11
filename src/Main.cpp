@@ -65,6 +65,7 @@ public:
 
         auto& host = engine->getPluginHost();
         host.loadKnownPluginsFromXml (settings->getPluginList().get());
+        host.setDisabledPlugins (settings->getDisabledPlugins());   // the "사용" switches of 플러그인 관리, before any chain comes back
         host.onKnownPluginsChanged = [this]
         {
             if (engine != nullptr && settings != nullptr)

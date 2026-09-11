@@ -8,7 +8,6 @@ namespace gocue::PluginDialogs
 
 namespace
 {
-    juce::Component::SafePointer<juce::DialogWindow> managerDialog;
     juce::Component::SafePointer<juce::DialogWindow> masterDialog;
 
     class MasterInsertsContent : public juce::Component
@@ -70,22 +69,6 @@ namespace
     }
 }
 
-void showPluginManager (AudioEngine& engine, AppSettings& settings, juce::Component* centreAround)
-{
-    if (managerDialog != nullptr)
-    {
-        managerDialog->toFront (true);
-        return;
-    }
-
-    auto& host = engine.getPluginHost();
-    auto* list = new juce::PluginListComponent (host.getFormatManager(), host.getKnownPlugins(),
-                                                settings.getDeadMansPedalFile(), settings.getPropertiesFile(), false);
-    list->setSize (780, 480);
-
-    managerDialog = launch (list, ko ("VST3 플러그인 관리 - [Options]에서 스캔"), centreAround, true);
-}
-
 void showMasterInserts (AudioEngine& engine, PluginWindowManager& windows,
                         std::function<void()> onOpenPluginManager, PerformEdit performEdit,
                         juce::Component* centreAround)
@@ -111,9 +94,6 @@ void closeAll()
 {
     if (masterDialog != nullptr)
         delete masterDialog.getComponent();
-
-    if (managerDialog != nullptr)
-        delete managerDialog.getComponent();
 }
 
 } // namespace gocue::PluginDialogs

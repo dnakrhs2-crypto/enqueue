@@ -33,6 +33,15 @@ public:
         juce::AudioBuffer<float> scratch;                    // used for bypass and for plugins that need > 2 channels
         int numScratchChannels = 2;
 
+        // Plugin delay compensation (0.9.8): the dry signal of a bypassed (or busy / suspended / faulted) plugin goes
+        // through a delay of the plugin's own latency, so switching it on and off does not move the sound in time.
+        // The line is sized on the message thread (prepare, a latency change) under the chain lock; the callback
+        // reads and writes it.
+        std::atomic<int> latency { 0 };          // samples the plugin delays its output by, as it reported last
+        juce::AudioBuffer<float> dryDelay;       // 2-channel ring, latency + block samples
+        int dryDelayWrite = 0;                   // audio thread: the ring's write index
+        float wetMix = 1.0f;                     // audio thread: 1 = the plugin's output, 0 = the delayed dry signal; ramps when the bypass changes
+
         bool isMissing() const noexcept { return plugin == nullptr; }
     };
 
@@ -54,6 +63,7 @@ public:
     static constexpr double maxTailSeconds = 10.0;
     static constexpr int maxScratchChannels = 31;   // JUCE's AudioBuffer holds < 32 channel pointers inline (a 32-channel view needs 33 and allocates on the audio thread); a plugin wanting more is refused
     static constexpr int stallBlocks = 200;         // dry passes in a row before the operator hears of a plugin that does not answer
+    static constexpr double bypassRampSeconds = 0.005;   // the wet <-> dry crossfade when a bypass switch moves (32 samples at least)
 
     PluginChain() = default;
     ~PluginChain() override;
@@ -77,7 +87,8 @@ public:
     void addMissingSlot (const PluginSlotState& state, int insertAt = -1);
     void removePlugin (int index);
     bool movePlugin (int from, int to);
-    /** Bypassed plugins still run (so delays / reverbs keep time) but their output is discarded. */
+    /** Bypassed plugins still run (so delays / reverbs keep time) but their output is discarded: the dry signal,
+        delayed by the plugin's latency, goes on instead, with a short crossfade either way (no jump in time, no click). */
     void setBypassed (int index, bool shouldBypass);
     void clear();
 
@@ -90,18 +101,22 @@ public:
         missing. Returns one message per failure. */
     juce::StringArray restore (const std::vector<PluginSlotState>& states, const Factory& factory);
 
-    /** True when the slots (count, plugin identity, bypass) match 'states'; parameter values are not compared.
-        Message thread. Used to decide whether an undo step must rebuild this chain. */
+    /** True when the slots (count, plugin identity) match 'states'; parameter values and the bypass flags are not
+        compared (applyStates sets both). Message thread. Used to decide whether an undo step must rebuild this chain. */
     bool matchesStructure (const std::vector<PluginSlotState>& states) const;
     /** For a chain whose structure matches 'states': pushes each slot's saved state / bypass into the live
         instance (undo of a preset change without rebuilding the instances). */
     void applyStates (const std::vector<PluginSlotState>& states);
 
-    /** Sum of the tails of the active (non-bypassed) plugins in series, clamped to [0, maxTailSeconds]. Any thread. */
+    /** Sum of the tails of the active (non-bypassed) plugins in series plus every plugin's latency (in flight on the
+        wet or the dry path), clamped to [0, maxTailSeconds]. Any thread. */
     double getTailSeconds() const;
     /** Recompute the cached tail (message thread): a plugin may report a longer / shorter tail after a parameter
         change without any structural edit. */
     void refreshTailCache() { updateTailCache(); }
+    /** Recompute what the callback reads, from the message thread: the tail, and each plugin's dry delay line when
+        the plugin now reports another latency (a limiter's look-ahead changed). Called when a plugin reported a change. */
+    void refreshPluginCaches();
 
     /** True once (since the previous call) when any hosted plugin reported a parameter / state change,
         e.g. the user turned a knob in an editor. Any thread. Used for dirty tracking. */
@@ -110,7 +125,8 @@ public:
     juce::StringArray takeNewFaults();
     /** Plugins whose callback lock has been busy for stallBlocks blocks in a row (passed dry meanwhile), once each. */
     juce::StringArray takeNewStalls();
-    /** The latency the live, non-bypassed plugins add, in samples (message thread). */
+    /** The latency the chain adds, in samples: every live plugin's own, bypassed or not (a bypassed plugin's dry
+        signal is delayed by as much). Message thread. */
     int getLatencySamples() const;
 
     /** Audio thread: processes channels 0-1 of buffer[0, numSamples) in place. */
@@ -120,6 +136,9 @@ private:
     bool prepareSlot (Slot& slot);   // false when the plugin threw (or wants too many channels): the slot is faulted
     void processLocked (juce::AudioBuffer<float>& buffer, int numSamples);   // one block of at most the prepared size, the lock held
     void updateTailCache();          // message thread: the tail the callback reads without asking any plugin
+    void updateDelayLines();         // message thread, under the lock: each slot's dry delay follows the plugin's latency
+    static void sizeDelayLine (Slot& slot, int latency, int blockSize);   // (re)allocates and clears - never on the audio thread
+    static void delayDryInPlace (Slot& slot, juce::AudioBuffer<float>& dry, int numSamples) noexcept;   // audio thread: channels 0-1 through the slot's line
     void markFaulted (Slot& slot) noexcept;
     static bool isFinite (const juce::AudioBuffer<float>& buffer, int numSamples) noexcept;
     void clearSlots (bool notify);   // the destructor clears without chainChanged (pluginAboutToBeRemoved still closes editors)
@@ -132,9 +151,11 @@ private:
 
     mutable juce::CriticalSection lock;      // guards 'slots' between the audio thread and edits
     std::vector<std::unique_ptr<Slot>> slots;
+    std::atomic<int> slotCount { 0 };        // slots.size(), for getNumSlots() from any thread without the lock
     juce::MidiBuffer midi;
     double sampleRate = 44100.0;
     int blockSize = 512;
+    int bypassRampSamples = 220;             // bypassRampSeconds at the prepared rate
     Listener* listener = nullptr;
     std::atomic<bool> stateChanged { false };
     std::atomic<bool> faultRaised { false };   // a slot faulted since takeNewFaults()

@@ -263,6 +263,7 @@ MainComponent::~MainComponent()
     scheduler.stopTicking();
     controller.cancelPending();
     stopTimer();
+    pluginManagerWindow.reset();   // listens to the plugin host's known-plugin list: gone before the engine is
     PluginDialogs::closeAll();
     WorkspaceSettingsDialog::closeIfOpen();
     AudioSettingsDialog::closeIfOpen();
@@ -2972,7 +2973,13 @@ void MainComponent::refreshFileInfoForAllCues()
 
 void MainComponent::showPluginManager()
 {
-    PluginDialogs::showPluginManager (engine, settings, this);
+    if (pluginManagerWindow == nullptr)
+    {
+        pluginManagerWindow = std::make_unique<PluginManagerWindow> (engine.getPluginHost(), settings);
+        pluginManagerWindow->centreAroundComponent (this, pluginManagerWindow->getWidth(), pluginManagerWindow->getHeight());
+    }
+
+    pluginManagerWindow->open();
 }
 
 void MainComponent::showYouTubeWindow()

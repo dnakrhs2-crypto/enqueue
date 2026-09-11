@@ -20,6 +20,15 @@ public:
         intro.setMinimumHorizontalScale (1.0f);
         addAndMakeVisible (intro);
 
+        // the notice the operator asked for (0.9.8): word for word, above the link box where it is read before a download
+        warning.setText (ko ("저작권 침해 우려가 있는 영상의 경우 다운로드 하지 말아주세요. 다운로드의 모든 책임은 사용자에게 있습니다."),
+                         juce::dontSendNotification);
+        warning.setColour (juce::Label::textColourId, Palette::paused);
+        warning.setFont (juce::Font (juce::FontOptions (14.0f, juce::Font::bold)));
+        warning.setJustificationType (juce::Justification::topLeft);
+        warning.setMinimumHorizontalScale (1.0f);
+        addAndMakeVisible (warning);
+
         linkLabel.setText (ko ("링크"), juce::dontSendNotification);
         addAndMakeVisible (linkLabel);
 
@@ -65,7 +74,7 @@ public:
         addAndMakeVisible (log);
 
         downloader.onProgress = [this] (const YouTubeDownloader::Progress& p) { handleProgress (p); };
-        setSize (660, 440);
+        setSize (660, 480);
     }
 
     void focusLink()
@@ -78,6 +87,8 @@ public:
     {
         auto area = getLocalBounds().reduced (16, 14);
         intro.setBounds (area.removeFromTop (40));
+        area.removeFromTop (4);
+        warning.setBounds (area.removeFromTop (40));   // two lines at the default width
         area.removeFromTop (6);
 
         auto row = area.removeFromTop (30);
@@ -204,7 +215,7 @@ private:
     AppSettings& settings;
     YouTubeDownloader downloader;
 
-    juce::Label intro, linkLabel, status;
+    juce::Label intro, warning, linkLabel, status;
     juce::TextEditor urlEditor;
     juce::TextButton downloadButton { ko ("다운로드") }, cancelButton { ko ("취소") }, folderButton { ko ("저장 폴더 열기") };
     juce::ToggleButton addToQueue { ko ("다운받고 큐에 넣기") };
@@ -223,7 +234,7 @@ YouTubeWindow::YouTubeWindow (AppSettings& settings, const juce::String& appVers
     content = c;
     setContentOwned (c, true);
     setResizable (true, false);
-    setResizeLimits (520, 360, 10000, 10000);
+    setResizeLimits (520, 400, 10000, 10000);
     centreWithSize (getWidth(), getHeight());
 }
 

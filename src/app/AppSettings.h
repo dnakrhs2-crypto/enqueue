@@ -52,6 +52,10 @@ public:
     bool getYouTubeAddToQueue() const;
     void setYouTubeAddToQueue (bool add);
 
+    /** 플러그인 관리: the plugins whose "사용" switch is off (PluginHost::keyFor keys), out of every '+ 추가' menu. */
+    juce::StringArray getDisabledPlugins() const;
+    void setDisabledPlugins (const juce::StringArray& keys);
+
     /** Writes pending changes to disk now. */
     void flush();
 

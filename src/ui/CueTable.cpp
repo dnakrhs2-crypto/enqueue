@@ -5,6 +5,7 @@
 #include "app/Commands.h"
 #include "audio/CueFileInfo.h"
 #include "model/CueColors.h"
+#include "ui/GroupModeLabels.h"
 #include "ui/UiUtils.h"
 
 namespace gocue
@@ -595,11 +596,7 @@ void CueTable::paintCell (juce::Graphics& g, int rowNumber, int columnId, int wi
             if (cue.isGroup())
             {
                 const int count = (int) cues.childrenOf (index).size();
-                const char* mode = cue.group.mode == GroupMode::timeline ? "타임라인"
-                                 : cue.group.mode == GroupMode::playlist ? "플레이리스트"
-                                 : cue.group.mode == GroupMode::startFirstEnter ? "첫 큐 시작 후 진입"
-                                 : cue.group.mode == GroupMode::startFirst ? "첫 큐 시작" : "랜덤";
-                text = ko (mode) + ko (" · ") + juce::String (count) + ko ("개");
+                text = groupPresetName (cue.group) + ko (" · ") + juce::String (count) + ko ("개");
                 colour = Palette::dimText;
             }
             else if (cue.isMic())

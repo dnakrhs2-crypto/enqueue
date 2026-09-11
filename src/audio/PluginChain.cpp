@@ -15,6 +15,7 @@ void PluginChain::prepare (double newSampleRate, int newBlockSize)
 {
     sampleRate = newSampleRate > 0.0 ? newSampleRate : 44100.0;
     blockSize = juce::jmax (1, newBlockSize);
+    bypassRampSamples = juce::jmax (32, (int) std::lround (sampleRate * bypassRampSeconds));
     midi.ensureSize (4096);   // an effect that emits MIDI must not make the buffer grow on the audio thread
 
     {
@@ -33,6 +34,7 @@ bool PluginChain::prepareSlot (Slot& slot)
     auto& plugin = *slot.plugin;
     bool ok = true;
     int wanted = 2;
+    int latency = 0;
 
     try
     {
@@ -55,6 +57,7 @@ bool PluginChain::prepareSlot (Slot& slot)
         plugin.setRateAndBufferSizeDetails (sampleRate, blockSize);
         plugin.prepareToPlay (sampleRate, blockSize);
         wanted = juce::jmax (2, plugin.getTotalNumInputChannels(), plugin.getTotalNumOutputChannels());
+        latency = juce::jmax (0, plugin.getLatencySamples());   // what a look-ahead limiter / linear-phase EQ delays by
     }
     catch (...)
     {
@@ -70,6 +73,8 @@ bool PluginChain::prepareSlot (Slot& slot)
 
     slot.numScratchChannels = juce::jmin (maxScratchChannels, wanted);
     slot.scratch.setSize (slot.numScratchChannels, blockSize, false, false, true);
+    sizeDelayLine (slot, latency, blockSize);
+    slot.wetMix = slot.bypassed.load() ? 0.0f : 1.0f;   // a fresh preparation starts where the switch is: no ramp
     return ok;
 }
 
@@ -86,9 +91,7 @@ juce::StringArray PluginChain::takeNewFaults()
     if (! faultRaised.exchange (false, std::memory_order_acq_rel))
         return names;
 
-    const juce::ScopedLock sl (lock);
-
-    for (auto& slot : slots)
+    for (auto& slot : slots)   // message thread only (the one that edits 'slots'): no chain lock, so the callback is never made to skip the chain for this
     {
         if (slot->faulted.load (std::memory_order_relaxed) && ! slot->faultReported)
         {
@@ -102,20 +105,20 @@ juce::StringArray PluginChain::takeNewFaults()
 
 int PluginChain::getLatencySamples() const
 {
-    const juce::ScopedLock sl (lock);
     int total = 0;
 
-    for (auto& slot : slots)
-        if (slot->plugin != nullptr && ! slot->bypassed.load (std::memory_order_relaxed) && ! slot->faulted.load (std::memory_order_relaxed))
-            total += juce::jmax (0, slot->plugin->getLatencySamples());
+    for (auto& slot : slots)   // message thread only: no chain lock (see takeNewFaults)
+        if (slot->plugin != nullptr)
+            total += slot->latency.load (std::memory_order_relaxed);   // bypassed or faulted too: their dry signal is delayed by as much
 
     return total;
 }
 
 int PluginChain::getNumSlots() const
 {
-    const juce::ScopedLock sl (lock);
-    return (int) slots.size();
+    // any thread, no lock: the UI asks on every refresh (a chain lock here would make the callback pass the whole chain
+    // dry, raw and out of time, whenever the two coincide) and the patch renderer asks from the callback itself
+    return slotCount.load (std::memory_order_relaxed);
 }
 
 PluginChain::Slot& PluginChain::getSlot (int index)
@@ -144,6 +147,7 @@ void PluginChain::insertSlot (std::unique_ptr<Slot> slot, int insertAt)
             insertAt = (int) slots.size();
 
         slots.insert (slots.begin() + insertAt, std::move (slot));
+        slotCount.store ((int) slots.size(), std::memory_order_relaxed);
     }
 
     notifyChanged();
@@ -232,6 +236,7 @@ void PluginChain::removePlugin (int index)
 
         dead = std::move (slots[(size_t) index]);
         slots.erase (slots.begin() + index);
+        slotCount.store ((int) slots.size(), std::memory_order_relaxed);
     }
 
     destroySlot (std::move (dead));
@@ -258,16 +263,13 @@ bool PluginChain::movePlugin (int from, int to)
 
 void PluginChain::setBypassed (int index, bool shouldBypass)
 {
-    {
-        const juce::ScopedLock sl (lock);
+    // no chain lock here: the flag is atomic and 'slots' is not touched (message thread only), so the callback is not
+    // made to pass the whole chain dry for a switch - the slot itself crossfades to / from its delayed dry signal
+    if (index < 0 || index >= (int) slots.size())
+        return;
 
-        if (index < 0 || index >= (int) slots.size())
-            return;
-
-        slots[(size_t) index]->bypassed.store (shouldBypass);
-        slots[(size_t) index]->state.bypassed = shouldBypass;
-    }
-
+    slots[(size_t) index]->bypassed.store (shouldBypass);
+    slots[(size_t) index]->state.bypassed = shouldBypass;
     notifyChanged();
 }
 
@@ -283,6 +285,7 @@ void PluginChain::clearSlots (bool notify)
     {
         const juce::ScopedLock sl (lock);
         dead.swap (slots);
+        slotCount.store (0, std::memory_order_relaxed);
     }
 
     if (dead.empty())
@@ -305,8 +308,8 @@ bool PluginChain::matchesStructure (const std::vector<PluginSlotState>& states) 
         const auto& slot = *slots[i];
         const auto& s = states[i];
 
-        if (slot.bypassed.load() != s.bypassed)
-            return false;
+        // the bypass flag is not structure: applyStates() sets it, so the undo of a bypass toggle keeps the instances
+        // (a rebuild would drop every delay / reverb history and reload the plugins mid-show)
 
         if (slot.plugin != nullptr)
         {
@@ -484,6 +487,7 @@ juce::StringArray PluginChain::restore (const std::vector<PluginSlotState>& stat
         const juce::ScopedLock sl (lock);
         old.swap (slots);
         slots.swap (fresh);
+        slotCount.store ((int) slots.size(), std::memory_order_relaxed);
     }
 
     for (auto& slot : old)
@@ -501,18 +505,28 @@ double PluginChain::getTailSeconds() const
 
 void PluginChain::updateTailCache()
 {
-    const juce::ScopedLock sl (lock);
+    // message thread only: 'slots' is iterated without the chain lock (see takeNewFaults), and each plugin is asked
+    // under its own callback lock - not concurrently with its processBlock, and the callback passes that one slot
+    // through its delay line meanwhile instead of skipping the whole chain out of time
     double tail = 0.0;
 
     for (auto& slot : slots)
     {
-        if (slot->plugin == nullptr || slot->bypassed.load() || slot->faulted.load (std::memory_order_relaxed))
+        if (slot->plugin == nullptr)
             continue;
+
+        // the plugin's latency is in flight on either path (its own delay when active, the dry line when bypassed or
+        // faulted): a cue must play on for that long after its file ends or the last samples are cut
+        tail = juce::jmin (maxTailSeconds, tail + (double) slot->latency.load (std::memory_order_relaxed) / sampleRate);
+
+        if (slot->bypassed.load() || slot->faulted.load (std::memory_order_relaxed))
+            continue;   // its output is discarded: its tail does not ring
 
         double t = maxTailSeconds;
 
         try
         {
+            const juce::ScopedLock callbackLock (slot->plugin->getCallbackLock());
             t = slot->plugin->getTailLengthSeconds();
         }
         catch (...) {}   // a plugin that throws here counts as the longest tail
@@ -528,6 +542,91 @@ void PluginChain::updateTailCache()
     }
 
     tailSecondsCache.store ((float) juce::jlimit (0.0, maxTailSeconds, tail), std::memory_order_relaxed);
+}
+
+void PluginChain::refreshPluginCaches()
+{
+    updateTailCache();
+    updateDelayLines();
+}
+
+void PluginChain::sizeDelayLine (Slot& slot, int newLatency, int block)
+{
+    newLatency = juce::jmax (0, newLatency);
+    slot.dryDelay.setSize (2, newLatency + juce::jmax (1, block), false, true, true);
+    slot.dryDelay.clear();
+    slot.dryDelayWrite = 0;
+    slot.latency.store (newLatency, std::memory_order_relaxed);
+}
+
+void PluginChain::updateDelayLines()
+{
+    // message thread only. The latencies are read first without the chain lock (the plugin under its callback lock,
+    // as in updateTailCache); the lock is taken - and the callback made to pass the chain dry for a block - only for a
+    // line that really has to be resized, which happens when a plugin's look-ahead / oversampling changed
+    std::vector<std::pair<Slot*, int>> resize;
+
+    for (auto& slot : slots)
+    {
+        if (slot->plugin == nullptr)
+            continue;
+
+        const int known = slot->latency.load (std::memory_order_relaxed);
+        int latency = known;
+
+        try
+        {
+            const juce::ScopedLock callbackLock (slot->plugin->getCallbackLock());
+            latency = juce::jmax (0, slot->plugin->getLatencySamples());
+        }
+        catch (...) {}   // a plugin that throws here keeps the latency it last reported
+
+        if (latency != known || slot->dryDelay.getNumSamples() < latency + blockSize)
+            resize.emplace_back (slot.get(), latency);
+    }
+
+    if (resize.empty())
+        return;
+
+    const juce::ScopedLock sl (lock);   // the callback reads and writes the lines: resized only while it is out
+
+    for (auto& [slot, latency] : resize)
+        sizeDelayLine (*slot, latency, blockSize);   // the line starts over: one silent gap of the new length, as the plugin's own buffers do
+}
+
+void PluginChain::delayDryInPlace (Slot& slot, juce::AudioBuffer<float>& dry, int numSamples) noexcept
+{
+    const int latency = slot.latency.load (std::memory_order_relaxed);
+    const int capacity = slot.dryDelay.getNumSamples();
+
+    if (latency <= 0 || slot.dryDelay.getNumChannels() < 2 || capacity <= latency)
+        return;   // nothing to delay by (or a line that is not ready): the signal passes as it is
+
+    const int start = slot.dryDelayWrite;
+
+    for (int ch = 0; ch < 2 && ch < dry.getNumChannels(); ++ch)
+    {
+        float* d = dry.getWritePointer (ch);
+        float* ring = slot.dryDelay.getWritePointer (ch);
+        int w = start;
+
+        for (int i = 0; i < numSamples; ++i)
+        {
+            int r = w - latency;
+
+            if (r < 0)
+                r += capacity;
+
+            const float in = d[i];
+            d[i] = ring[r];
+            ring[w] = in;
+
+            if (++w == capacity)
+                w = 0;
+        }
+    }
+
+    slot.dryDelayWrite = (start + numSamples) % capacity;
 }
 
 bool PluginChain::isFinite (const juce::AudioBuffer<float>& buffer, int numSamples) noexcept
@@ -577,23 +676,28 @@ void PluginChain::processLocked (juce::AudioBuffer<float>& buffer, int numSample
         if (slot->plugin == nullptr)
             continue;
 
-        if (slot->faulted.load (std::memory_order_relaxed))
-            continue;   // dry pass: it threw once, it is not trusted with the audio again
-
         auto& plugin = *slot->plugin;
-        const bool bypassed = slot->bypassed.load (std::memory_order_relaxed);
-        const int ins = plugin.getTotalNumInputChannels();
-        const int outs = plugin.getTotalNumOutputChannels();
         auto& scratch = slot->scratch;
 
         if (scratch.getNumSamples() < numSamples)
             continue;   // a block larger than prepared for: the owner chunks its blocks, so this does not happen - and never allocates here
 
+        // Whatever becomes of this slot, the signal leaves it delayed by the plugin's latency - by the plugin on the
+        // wet path, by delayDryInPlace on the dry one - so a bypass, a busy block or a fault never moves the sound in time.
+        if (slot->faulted.load (std::memory_order_relaxed))
+        {
+            delayDryInPlace (*slot, buffer, numSamples);   // dry pass: it threw once, it is not trusted with the audio again
+            continue;
+        }
+
+        const bool bypassed = slot->bypassed.load (std::memory_order_relaxed);
+        const int ins = plugin.getTotalNumInputChannels();
+        const int outs = plugin.getTotalNumOutputChannels();
         midi.clear();
 
         // The plugin's callback lock is held while it runs (as juce::AudioProcessorPlayer does) - but never waited
         // for: the message thread holds it while it captures state for a save, and a slow plugin there must not stall
-        // every channel. Busy, or suspended (loading a preset): a dry pass for this block.
+        // every channel. Busy, or suspended (loading a preset): a dry pass for this block, in time.
         const juce::ScopedTryLock callbackLock (plugin.getCallbackLock());
 
         if (! callbackLock.isLocked() || plugin.isSuspended())
@@ -601,77 +705,91 @@ void PluginChain::processLocked (juce::AudioBuffer<float>& buffer, int numSample
             if (slot->busyBlocks.fetch_add (1, std::memory_order_relaxed) + 1 == stallBlocks)
                 stallRaised.store (true, std::memory_order_release);   // a second or two of dry passes: the operator hears of it
 
+            delayDryInPlace (*slot, buffer, numSamples);
             continue;
         }
 
         slot->busyBlocks.store (0, std::memory_order_relaxed);
 
-        if (bypassed || slot->numScratchChannels != 2 || ins > 2 || outs > 2)
-        {
+        // The plugin runs on a copy when it needs more than two channels, otherwise in place with the dry input copied
+        // aside first. Either way both signals are at hand afterwards - 'wet' (the plugin's output) and 'dry' (the
+        // input, then delayed by the plugin's latency) - and the slot hands on the one the bypass switch asks for,
+        // crossfading over bypassRampSamples when the switch has just moved: no click, and no jump in time, as the
+        // two are aligned. The plugin runs while bypassed too, so its delay lines and reverb tails stay current.
+        const bool viaScratch = slot->numScratchChannels != 2 || ins > 2 || outs > 2;
+        juce::AudioBuffer<float>& wet = viaScratch ? scratch : buffer;
+        juce::AudioBuffer<float>& dry = viaScratch ? buffer : scratch;
+
+        if (viaScratch)
             scratch.clear (0, numSamples);
 
-            for (int ch = 0; ch < 2 && ch < scratch.getNumChannels(); ++ch)
-                scratch.copyFrom (ch, 0, buffer, ch, 0, numSamples);
+        for (int ch = 0; ch < 2 && ch < scratch.getNumChannels(); ++ch)
+            scratch.copyFrom (ch, 0, buffer, ch, 0, numSamples);   // in place: the dry input, kept - a plugin that throws half-way must not leave its partial block behind
 
-            juce::AudioBuffer<float> view (scratch.getArrayOfWritePointers(), slot->numScratchChannels, 0, numSamples);
+        juce::AudioBuffer<float> view (wet.getArrayOfWritePointers(), viaScratch ? slot->numScratchChannels : 2, 0, numSamples);
+        bool ok = true;
 
-            try
-            {
-                plugin.processBlock (view, midi);
-            }
-            catch (...)
-            {
-                markFaulted (*slot);   // the show goes on without this plugin
-                continue;
-            }
-
-            if (bypassed)
-                continue;   // the plugin kept time (delay lines, reverb tails stay current); output discarded
-
-            if (! isFinite (view, numSamples))
-            {
-                markFaulted (*slot);   // NaN / Inf would poison the buses: the dry input stays in 'buffer'
-                continue;
-            }
-
-            for (int ch = 0; ch < 2 && ch < scratch.getNumChannels(); ++ch)
-                buffer.copyFrom (ch, 0, scratch, ch, 0, numSamples);
-        }
-        else
+        try
         {
-            // the dry input is kept in scratch: a plugin that throws half-way must not leave its partial block behind
-            for (int ch = 0; ch < 2 && ch < scratch.getNumChannels(); ++ch)
-                scratch.copyFrom (ch, 0, buffer, ch, 0, numSamples);
+            plugin.processBlock (view, midi);
+        }
+        catch (...)
+        {
+            ok = false;   // the show goes on without this plugin
+        }
 
-            juce::AudioBuffer<float> view (buffer.getArrayOfWritePointers(), 2, 0, numSamples);
+        if (ok && ! isFinite (view, numSamples))
+            ok = false;   // NaN / Inf would poison the buses
 
-            try
-            {
-                plugin.processBlock (view, midi);
-            }
-            catch (...)
-            {
-                markFaulted (*slot);
+        if (! ok)
+        {
+            markFaulted (*slot);
 
+            if (! viaScratch)
                 for (int ch = 0; ch < 2 && ch < scratch.getNumChannels(); ++ch)
-                    buffer.copyFrom (ch, 0, scratch, ch, 0, numSamples);   // the input passes through untouched
+                    buffer.copyFrom (ch, 0, scratch, ch, 0, numSamples);   // the input passes through untouched...
 
-                continue;
-            }
-
-            if (! isFinite (view, numSamples))
-            {
-                markFaulted (*slot);   // NaN / Inf: the dry input goes on instead
-
-                for (int ch = 0; ch < 2 && ch < scratch.getNumChannels(); ++ch)
-                    buffer.copyFrom (ch, 0, scratch, ch, 0, numSamples);
-
-                continue;
-            }
+            delayDryInPlace (*slot, buffer, numSamples);   // ...and in time
+            continue;
         }
 
         if (outs == 1)
-            buffer.copyFrom (1, 0, buffer, 0, 0, numSamples);   // mono-out plugin: mirror to the right channel
+            wet.copyFrom (1, 0, wet, 0, 0, numSamples);   // mono-out plugin: mirror to the right channel
+
+        delayDryInPlace (*slot, dry, numSamples);   // every block, used or not: the line is current the moment it is needed
+
+        const float target = bypassed ? 0.0f : 1.0f;
+
+        if (slot->wetMix == target)
+        {
+            // settled: the signal asked for goes on (when it is not in 'buffer' already), the other is discarded
+            if ((target > 0.5f) == viaScratch)
+                for (int ch = 0; ch < 2 && ch < buffer.getNumChannels() && ch < scratch.getNumChannels(); ++ch)
+                    buffer.copyFrom (ch, 0, scratch, ch, 0, numSamples);
+        }
+        else
+        {
+            const float step = 1.0f / (float) juce::jmax (1, bypassRampSamples);
+            float mix = slot->wetMix;
+
+            for (int ch = 0; ch < 2 && ch < buffer.getNumChannels() && ch < scratch.getNumChannels(); ++ch)
+            {
+                const float* w = wet.getReadPointer (ch);
+                const float* d = dry.getReadPointer (ch);
+                float* out = buffer.getWritePointer (ch);   // one of w / d: each sample is read before it is written
+                float m = slot->wetMix;
+
+                for (int i = 0; i < numSamples; ++i)
+                {
+                    m = target > m ? juce::jmin (target, m + step) : juce::jmax (target, m - step);
+                    out[i] = w[i] * m + d[i] * (1.0f - m);
+                }
+
+                mix = m;
+            }
+
+            slot->wetMix = mix;
+        }
     }
 }
 
@@ -700,6 +818,8 @@ void PluginChain::resetProcessing() noexcept
         }
 
         slot->scratch.clear();
+        slot->dryDelay.clear();   // the compensation line starts over with the plugin's own
+        slot->dryDelayWrite = 0;
     }
 }
 
@@ -718,9 +838,7 @@ juce::StringArray PluginChain::takeNewStalls()
     if (! stallRaised.exchange (false, std::memory_order_acq_rel))
         return names;
 
-    const juce::ScopedLock sl (lock);
-
-    for (auto& slot : slots)
+    for (auto& slot : slots)   // message thread only: no chain lock (see takeNewFaults)
     {
         if (slot->plugin != nullptr && ! slot->stallReported && slot->busyBlocks.load (std::memory_order_relaxed) >= stallBlocks)
         {

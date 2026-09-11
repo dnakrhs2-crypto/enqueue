@@ -6,6 +6,7 @@
 #include <juce_core/juce_core.h>
 
 #include <cmath>
+#include <thread>
 
 namespace gocue::tests
 {
@@ -120,7 +121,9 @@ public:
             const int bypassedCallsBefore = second->processCount;
             fill (buffer, 1.0f);
             chain.process (buffer, 512);
-            expectWithinAbsoluteError (buffer.getSample (0, 10), 0.5f, 1e-6f);   // output of the bypassed plugin is discarded
+            expectWithinAbsoluteError (buffer.getSample (0, 400), 0.5f, 1e-6f);   // output of the bypassed plugin is discarded (once the 240-sample crossfade is over)
+            expectGreaterThan (buffer.getSample (0, 0), 0.25f);                    // the switch does not jump: the first samples still carry most of the plugin's output...
+            expectLessThan (buffer.getSample (0, 0), buffer.getSample (0, 100));   // ...and the dry signal takes over gradually
             expect (chain.getSlot (1).bypassed.load());
             expectEquals (second->processCount, bypassedCallsBefore + 2);        // ...but it keeps running (time advances): two pieces of 256
 
@@ -135,8 +138,10 @@ public:
             second->suspendProcessing (false);
             fill (buffer, 1.0f);
             chain.process (buffer, 512);
-            expectWithinAbsoluteError (buffer.getSample (0, 10), 0.25f, 1e-6f);
+            expectWithinAbsoluteError (buffer.getSample (0, 400), 0.25f, 1e-6f);   // back in, after the crossfade
             chain.setBypassed (1, true);
+            fill (buffer, 1.0f);
+            chain.process (buffer, 512);   // the crossfade to dry runs its course
 
             beginTest ("plugin parameter / state changes are flagged for dirty tracking");
             expect (! chain.consumeStateChanged());
@@ -239,6 +244,110 @@ public:
             expectWithinAbsoluteError (chain.getTailSeconds(), 0.75, 1e-12);
             chain.addPlugin (std::make_unique<TestGainPlugin> (1.0f, std::numeric_limits<double>::infinity()));
             expectWithinAbsoluteError (chain.getTailSeconds(), PluginChain::maxTailSeconds, 1e-12);
+        }
+
+        beginTest ("delay compensation: a bypassed plugin's dry signal is delayed by the plugin's latency");
+        {
+            PluginChain chain;
+            chain.prepare (48000.0, 64);   // the bypass crossfade = 240 samples
+            auto* lat = new TestGainPlugin (0.5f);
+            lat->latencySamples = 16;
+            chain.addPlugin (std::unique_ptr<juce::AudioPluginInstance> (lat));
+            expectEquals (chain.getLatencySamples(), 16);
+
+            juce::AudioBuffer<float> block (2, 64);
+            auto silence = [&] (int blocks) { for (int i = 0; i < blocks; ++i) { block.clear(); chain.process (block, 64); } };
+            auto impulse = [&] { block.clear(); block.setSample (0, 0, 1.0f); block.setSample (1, 0, 1.0f); chain.process (block, 64); };
+            auto peakIndex = [&]
+            {
+                int best = -1;
+                float bestValue = 0.0f;
+
+                for (int i = 0; i < 64; ++i)
+                    if (std::abs (block.getSample (0, i)) > bestValue)
+                    {
+                        bestValue = std::abs (block.getSample (0, i));
+                        best = i;
+                    }
+
+                return best;
+            };
+
+            impulse();
+            expectEquals (peakIndex(), 16);                                     // active: the plugin's own delay
+            expectWithinAbsoluteError (block.getSample (0, 16), 0.5f, 1e-6f);
+            expectWithinAbsoluteError (block.getSample (1, 16), 0.5f, 1e-6f);
+
+            chain.setBypassed (0, true);
+            silence (4);                                                        // the crossfade runs out over silence
+            impulse();
+            expectEquals (peakIndex(), 16);                                     // bypassed: still 16 late - the dry signal went through the same delay
+            expectWithinAbsoluteError (block.getSample (0, 16), 1.0f, 1e-6f);   // ...without the plugin's gain
+            expectWithinAbsoluteError (block.getSample (0, 0), 0.0f, 1e-6f);    // and nothing early
+
+            chain.setBypassed (0, false);
+            silence (4);
+            impulse();
+            expectEquals (peakIndex(), 16);
+            expectWithinAbsoluteError (block.getSample (0, 16), 0.5f, 1e-6f);
+
+            beginTest ("delay compensation: the switch crossfades instead of jumping");
+            for (int i = 0; i < 4; ++i) { fill (block, 1.0f); chain.process (block, 64); }   // DC: the plugin and the line primed
+            expectWithinAbsoluteError (block.getSample (0, 63), 0.5f, 1e-6f);
+            chain.setBypassed (0, true);
+            fill (block, 1.0f);
+            chain.process (block, 64);
+            expectGreaterThan (block.getSample (0, 0), 0.5f);                   // the first sample moved one step towards dry (1.0)...
+            expectLessThan (block.getSample (0, 0), 0.51f);
+            expectGreaterThan (block.getSample (0, 63), block.getSample (0, 0));
+            expectLessThan (block.getSample (0, 63), 1.0f);                     // ...64 of 240 samples in, still on its way
+            for (int i = 0; i < 4; ++i) { fill (block, 1.0f); chain.process (block, 64); }
+            expectWithinAbsoluteError (block.getSample (0, 63), 1.0f, 1e-6f);   // settled on dry
+
+            beginTest ("delay compensation: a busy plugin (its callback lock held) passes the dry signal through the same delay");
+            chain.setBypassed (0, false);
+            silence (4);
+            {
+                // the lock is held from another thread (a JUCE CriticalSection re-enters on its own thread): what a
+                // state capture on the message thread does while the callback runs
+                juce::WaitableEvent locked, release;
+                std::thread holder ([&]
+                {
+                    const juce::ScopedLock held (lat->getCallbackLock());
+                    locked.signal();
+                    release.wait();
+                });
+                locked.wait();
+                const int calls = lat->processCount;
+                impulse();
+                expectEquals (lat->processCount, calls);                        // the plugin did not run...
+                expectEquals (peakIndex(), 16);                                 // ...and the dry signal is not early
+                expectWithinAbsoluteError (block.getSample (0, 16), 1.0f, 1e-6f);
+                release.signal();
+                holder.join();
+            }
+
+            beginTest ("delay compensation: a latency the plugin reports later resizes the line");
+            lat->setLatencyLive (32);
+            expect (chain.consumeStateChanged());                               // audioProcessorChanged (latencyChanged)
+            chain.refreshPluginCaches();                                        // what the engine does on that flag
+            expectEquals (chain.getLatencySamples(), 32);
+            chain.setBypassed (0, true);
+            silence (4);
+            impulse();
+            expectEquals (peakIndex(), 32);
+            expectWithinAbsoluteError (block.getSample (0, 32), 1.0f, 1e-6f);
+
+            beginTest ("delay compensation: a faulted plugin's dry pass keeps the delay too");
+            chain.setBypassed (0, false);
+            silence (4);
+            lat->emitNaN = true;
+            silence (1);                                                        // NaN: the slot is faulted from here
+            expect (chain.getSlot (0).faulted.load());
+            impulse();
+            expectEquals (peakIndex(), 32);
+            expectWithinAbsoluteError (block.getSample (0, 32), 1.0f, 1e-6f);
+            expectEquals (chain.getLatencySamples(), 32);
         }
 
         beginTest ("engine: cue chain, master chain, tails and chain removal while playing");

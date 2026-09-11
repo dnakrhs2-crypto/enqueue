@@ -1,6 +1,7 @@
 #include "ui/TransportBar.h"
 
 #include "app/Commands.h"
+#include "ui/GroupModeLabels.h"
 #include "ui/UiUtils.h"
 
 namespace gocue
@@ -99,11 +100,7 @@ void TransportBar::setStandbyCue (int index, const Cue* cue)
     {
         cueFile.setText (describeGroup ? describeGroup (*cue) : ko ("그룹"), juce::dontSendNotification);
         cueFile.setColour (juce::Label::textColourId, Palette::dimText);
-        cueMeta.setText (ko ("그룹 큐   ") + (cue->group.mode == GroupMode::timeline ? ko ("자식 전부 동시에 시작 (각자 프리웨이트)")
-                                            : cue->group.mode == GroupMode::playlist ? ko ("자식 차례로 재생 (두 번째 GO = 다음 곡)")
-                                            : cue->group.mode == GroupMode::startFirstEnter ? ko ("첫 자식 시작, 플레이헤드는 그룹 안으로")
-                                            : cue->group.mode == GroupMode::startFirst ? ko ("첫 자식 시작, 플레이헤드는 그룹 뒤로")
-                                            : ko ("자식 중 하나를 랜덤으로 (한 바퀴에 한 번씩)")), juce::dontSendNotification);
+        cueMeta.setText (ko ("그룹 큐   ") + groupPresetName (cue->group) + ko (" — ") + groupPresetDescription (cue->group), juce::dontSendNotification);
         return;
     }
 

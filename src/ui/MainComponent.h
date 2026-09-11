@@ -11,6 +11,7 @@
 #include "ui/CueInspector.h"
 #include "ui/SplitDivider.h"
 #include "ui/ManualWindow.h"
+#include "ui/PluginManager.h"
 #include "ui/YouTubeWindow.h"
 #include "ui/CueTable.h"
 #include "ui/FooterBar.h"
@@ -268,6 +269,7 @@ private:
     void applyPanicSeconds (double seconds);
     std::unique_ptr<ManualWindow> manualWindow;   // made on first use, hidden on close
     std::unique_ptr<YouTubeWindow> youtubeWindow;   // the same
+    std::unique_ptr<PluginManagerWindow> pluginManagerWindow;   // the same (Ctrl+P)
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (MainComponent)
 };

@@ -875,6 +875,39 @@ public:
             document.cues.remove (document.cues.indexOf (g.id));
         }
 
+        beginTest ("random loop (playlist + loop + shuffle): a new round never opens with the song that just ended");
+        {
+            Cue g;
+            g.name = "R";
+            g.type = CueType::group;
+            g.group.mode = GroupMode::playlist;
+            g.group.loop = true;
+            g.group.shuffle = true;
+            const int gi = document.cues.add (g);
+            Cue x, y;
+            x.name = "x"; x.file = tone; x.parentId = g.id;
+            y.name = "y"; y.file = tone; y.parentId = g.id;
+            document.cues.add (x);
+            document.cues.add (y);
+            const auto systemRandom = controller.randomChoice;
+            controller.randomChoice = [] (int) { return 0; };   // a shuffle that always swaps with the first: [x, y] -> [y, x], and would hand a round's last song straight back
+            now += 1.0;
+            document.cues.setPlayheadIndex (gi);
+            expect (controller.go() == CueController::GoResult::started);
+            controller.goKeyReleased();
+            expect (engine.isPlaying (y.id) && ! engine.isPlaying (x.id));   // the shuffled order: y, x
+            engine.stop (y.id);
+            render (engine, scheduler, now, out, 2);
+            expect (engine.isPlaying (x.id));
+            engine.stop (x.id);                                              // the round ends on x
+            render (engine, scheduler, now, out, 2);
+            expect (engine.isPlaying (y.id) && ! engine.isPlaying (x.id));   // the new round: reshuffled to [x, y], then x is moved off the front
+            controller.randomChoice = systemRandom;
+            stopEverything();
+            expect (! controller.isCueActive (g.id));
+            document.cues.remove (document.cues.indexOf (g.id));
+        }
+
         beginTest ("playlist crossfade: the next child starts before the current one ends");
         {
             Cue g;

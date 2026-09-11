@@ -1645,13 +1645,14 @@ bool AudioEngine::consumePluginStateChanges()
 {
     bool changed = false;
 
-    // a plugin that reported a change may also report a different tail length now: refresh the cache the audio
-    // thread reads (getTailSeconds) so a cue does not stop processing a reverb / delay tail early or hold one too long
+    // a plugin that reported a change may also report a different tail length (or latency) now: refresh what the
+    // audio thread reads (getTailSeconds, the bypass delay lines) so a cue does not stop processing a reverb / delay
+    // tail early or hold one too long, and a bypassed plugin's dry signal keeps the plugin's new delay
     auto poll = [&changed] (PluginChain& chain)
     {
         if (chain.consumeStateChanged())
         {
-            chain.refreshTailCache();
+            chain.refreshPluginCaches();
             changed = true;
         }
     };

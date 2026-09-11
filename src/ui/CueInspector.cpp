@@ -4,6 +4,7 @@
 #include "audio/CueFileInfo.h"
 #include "ui/CueTable.h"
 #include "model/CueColors.h"
+#include "ui/GroupModeLabels.h"
 #include "ui/PluginChainComponent.h"
 #include "ui/UiUtils.h"
 
@@ -2855,24 +2856,27 @@ public:
     {
         styleLabel (modeLabel, ko ("모드"));
         addAndMakeVisible (modeLabel);
-        modeCombo.addItem (ko ("타임라인 — 자식 전부 동시에 (각자 프리웨이트)"), 1);
-        modeCombo.addItem (ko ("플레이리스트 — 차례로"), 2);
-        modeCombo.addItem (ko ("첫 큐 시작 후 그룹 안으로 진입"), 3);
-        modeCombo.addItem (ko ("첫 큐 시작 (플레이헤드는 그룹 뒤로)"), 4);
-        modeCombo.addItem (ko ("랜덤 — 한 바퀴에 한 번씩"), 5);
+        // the box's order = GroupPreset's order (GroupModeLabels.h); the two loops are the playlist mode with 반복 (and 셔플) on
+        modeCombo.addItem (ko ("타임라인 — 자식 전부 동시에 (각자 프리웨이트)"), (int) GroupPreset::timeline + 1);
+        modeCombo.addItem (ko ("플레이리스트 — 차례로 한 바퀴"), (int) GroupPreset::playlist + 1);
+        modeCombo.addItem (ko ("순차 반복 — 차례로, 끝나면 처음부터 계속"), (int) GroupPreset::sequentialLoop + 1);
+        modeCombo.addItem (ko ("랜덤 반복 — 무작위로 계속 (한 바퀴마다 다시 섞음)"), (int) GroupPreset::randomLoop + 1);
+        modeCombo.addItem (ko ("첫 큐 시작 후 그룹 안으로 진입"), (int) GroupPreset::startFirstEnter + 1);
+        modeCombo.addItem (ko ("첫 큐 시작 (플레이헤드는 그룹 뒤로)"), (int) GroupPreset::startFirst + 1);
+        modeCombo.addItem (ko ("랜덤 — GO마다 한 곡 (한 바퀴에 한 번씩)"), (int) GroupPreset::random + 1);
         modeCombo.setWantsKeyboardFocus (false);
         modeCombo.onChange = [this]
         {
             if (refreshing || modeCombo.getSelectedId() <= 0)
                 return;
 
-            const auto mode = (GroupMode) (modeCombo.getSelectedId() - 1);
-            edit (ko ("그룹 모드"), [mode] (Cue& c) { c.group.mode = mode; });
+            const auto preset = (GroupPreset) (modeCombo.getSelectedId() - 1);
+            edit (ko ("그룹 모드"), [preset] (Cue& c) { applyGroupPreset (c.group, preset); });
         };
         addAndMakeVisible (modeCombo);
 
         styleToggle (loopToggle, ko ("반복"));
-        loopToggle.setTooltip (ko ("플레이리스트: 마지막 자식 뒤에 처음부터 다시"));
+        loopToggle.setTooltip (ko ("플레이리스트: 마지막 자식 뒤에 처음부터 다시 (켜면 모드가 '순차 반복' / '랜덤 반복'으로 표시됩니다)"));
         loopToggle.onClick = [this] { const bool on = loopToggle.getToggleState(); edit (ko ("플레이리스트 반복"), [on] (Cue& c) { c.group.loop = on; }); };
         addAndMakeVisible (loopToggle);
 
@@ -2915,7 +2919,7 @@ public:
         if (cue != nullptr && cue->isGroup())
         {
             shownId = cue->id;
-            modeCombo.setSelectedId ((int) cue->group.mode + 1, juce::dontSendNotification);
+            modeCombo.setSelectedId ((int) groupPresetOf (cue->group) + 1, juce::dontSendNotification);
             loopToggle.setToggleState (cue->group.loop, juce::dontSendNotification);
             shuffleToggle.setToggleState (cue->group.shuffle, juce::dontSendNotification);
             crossfadeToggle.setToggleState (cue->group.crossfade, juce::dontSendNotification);
