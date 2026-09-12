@@ -454,10 +454,11 @@ void RecorderSession::play(bool latest)
         if (take.state() == TakeController::State::idle && !document.getProject().media->takes.empty()) cursor = document.getProject().media->takes.back().placementSample;
     }
     timeline = true;
-    if (playhead() >= document.getProject().activeTimelineEnd())
+    // At or past the end there is nothing to play; the cursor stays where the user put it (it may be the
+    // position of the next take, so Play must not move it). A "latest take" request is placed at the take's
+    // start and may arrive before the take is placed (the timeline still ends before it), so it is exempt.
+    if (!latest && playhead() >= document.getProject().activeTimelineEnd())
     {
-        // At or past the end there is nothing to play; the cursor stays where the user put it (it may be the
-        // position of the next take, so Play must not move it).
         wantPlay = pendingLatest = false;
         if (playback) playback->transport.stop();
         return;
