@@ -435,7 +435,8 @@ def stage_recorder(description, output, identity):
     audited = audit(description["ffmpeg_root"], lock, lock["runtime"]["version"])
     if audited["status"] != "PASS":
         sys.exit("Recorder FFmpeg audit failed: " + str(audited["errors"]))
-    source = pathlib.Path(description["exe"]).parent
+    executable = pathlib.Path(description["exe"]).resolve()
+    source = executable.parent
     payload = output / "payload"
     payload.mkdir()
     # Copy this target's runtime directory, never a guessed build/artefacts path.
@@ -445,6 +446,11 @@ def stage_recorder(description, output, identity):
         if path.is_symlink() or (hasattr(path, "is_junction") and path.is_junction()):
             sys.exit("runtime directory contains a symlink/junction: " + str(path))
         if path.is_file() and path.suffix.lower() not in excluded:
+            # The reused package build directory keeps executables from earlier configurations (Recorder.exe after
+            # the Tally rename): only the executable CMake declared for this target is a runtime asset.
+            if path.suffix.lower() == ".exe" and path.resolve() != executable:
+                print("staging   : skipping stale executable " + path.name)
+                continue
             destination = payload / path.relative_to(source)
             destination.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(path, destination)

@@ -152,6 +152,9 @@ def validate_bundle(bundle, tool=None, trusted_public_key=""):
             raise ValueError("non-x64 payload image")
         if "payload/WinSparkle.dll" not in images or manifest["executable"] not in images:
             raise ValueError("missing app or WinSparkle PE")
+        other_executables = sorted(n for n in images if n.lower().endswith(".exe") and n != manifest["executable"])
+        if other_executables:
+            raise ValueError("payload contains executables other than the app: " + str(other_executables))
         closure = dependency_closure(images)
         if closure["missing"]:
             raise ValueError("missing payload dependency DLLs: " + str(closure["missing"]))

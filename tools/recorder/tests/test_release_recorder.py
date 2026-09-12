@@ -185,6 +185,12 @@ class BundleValidationTests(unittest.TestCase):
         (self.bundle / "payload/extra.dll").write_bytes(b"extra")
         self.assertEqual(self.check()["status"], "FAIL")
 
+    def test_second_executable_in_payload_is_rejected(self):
+        # 0.1.8 rename: a Recorder.exe left in the reused package build directory must not ship next to Tally.exe.
+        make_pe(self.bundle / "payload/Recorder.exe", ["KERNEL32.dll"])
+        refresh_manifest(self.bundle)
+        self.assertTrue(any("executables other than the app" in error for error in self.check()["errors"]))
+
     def test_required_notice_cannot_be_omitted(self):
         (self.bundle / "payload/licenses/NOTICE.txt").unlink()
         refresh_manifest(self.bundle)
