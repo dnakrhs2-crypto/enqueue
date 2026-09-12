@@ -68,6 +68,9 @@ public:
     void removePluginGroup (const juce::Uuid& channelId, int group);   // an OFF group's members come back on
     void setPluginGroupMember (const juce::Uuid& channelId, int group, const juce::Uuid& slotId, bool member);   // joining an OFF group switches the plugin off at once, leaving it switches it on
     void setPluginGroupOff (const juce::Uuid& channelId, int group, bool off);
+    /** Sets the same numbered group (0-based) on every mic channel that has one, with one value announcement.
+        Returns how many channels have that group (0: nothing happened). */
+    int setGroupOffOnEveryChannel (int group, bool off);
     /** The same numbered group on every mic channel that has one, for the global hotkey: a group that is on
         anywhere switches them all off, otherwise they all come on. Returns how many channels have that group
         (0: nothing happened) and, in 'switchedOff', which way they went. */

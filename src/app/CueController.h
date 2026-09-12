@@ -6,7 +6,9 @@
 #include "audio/AudioEngine.h"
 
 #include <functional>
+#include <limits>
 #include <map>
+#include <memory>
 #include <set>
 #include <vector>
 
@@ -89,11 +91,20 @@ public:
     int sequenceEnd (const CueList& list, int index) const;
     /** Cancels scheduled starts, follows and duck restores. */
     void cancelPending();
-    /** Cancels the pending starts / follows / duck restores that belong to one cue's run. */
-    void cancelPendingFor (const juce::Uuid& cueId);
+    /** What cancelPendingFor() takes of a cue's run: everything; all but its observers (a playlist moving to its next child
+        ends the child's watch only, the group's own follow stays); or only its scheduled starts (a doubled start goes, the
+        run - its playlist steps, its follow - stays). A duck restore is not pending here: it runs when the cue is over. */
+    enum class Cancel { all, keepObservers, startsOnly };
+    /** Cancels the pending starts / steps / follows that belong to one cue's run. Entries tagged with 'keepRunId' (the
+        scheduler id of the start they were put on for: that run's follow) are left alone; 0 = keep nothing. */
+    void cancelPendingFor (const juce::Uuid& cueId, Cancel scope = Cancel::all, int keepRunId = 0);
     /** Number of scheduled starts / follows still pending (tests). */
     int getNumPending() const;
-    bool hasPendingFor (const juce::Uuid& cueId) const;
+    /** A scheduled start or a playlist step of this cue's run is still pending. The observer watches (an auto-follow
+        waiting for the cue to end, a duck restore) count only when asked ('includeObservers'): a group's own
+        observers would otherwise keep the group "active" forever and could never fire - but a child's pending follow
+        does mean the group is still going. */
+    bool hasPendingFor (const juce::Uuid& cueId, bool includeObservers = false) const;
     /** Scheduled starts / follows, running wait cues or playlist groups: something would still start. */
     bool hasPendingStarts() const noexcept { return ! pending.empty() || ! waits.empty() || ! playlists.empty(); }
     /** Cues that have been started at least once since the last reset (drives the "second colour"). */
@@ -107,6 +118,11 @@ public:
     bool handleHotkeyRepeat (const juce::KeyPress& key) const;
     /** Fires the cues whose wall-clock trigger matches 'now' (once per matching second). Call ~30x per second. */
     void checkWallClock (juce::Time now);
+    /** fireSequence() for a cue wherever it lives (hotkeys, wall clocks): the list and index are looked up now. */
+    void fireSequenceById (const juce::Uuid& id, bool audition = false);
+    /** A check that comes this late still examines every second since the previous one (a busy message thread must
+        not skip 12:00:00); a longer gap (sleep, a clock change) examines only the current second. */
+    static constexpr double wallClockCatchUpSeconds = 60.0;
     /** L: pre-loads the selected cue so GO starts it with no disk latency. */
     bool loadSelected (double startSeconds = 0.0);
 
@@ -125,8 +141,9 @@ public:
     bool isGroupActive (int index) const;
     bool isGroupActive (const CueList& list, int index) const;
     /** Stops everything inside a group (pending starts, playlist run, running children).
-        fadeMs: 0 = at once, < 0 = each child's own stop fade, > 0 = that fade. */
-    void stopGroup (const juce::Uuid& groupId, int fadeMs);
+        fadeMs: 0 = at once, < 0 = each child's own stop fade, > 0 = that fade. 'previousRunOnly' (a restart): the
+        group's own entries that belong to the run starting right now - its follow - stay (see cancelPreviousRun). */
+    void stopGroup (const juce::Uuid& groupId, int fadeMs, bool previousRunOnly = false);
     /** Playlist groups: fades the current child out and starts the next (delta 1) / previous (-1) one. */
     bool playlistSkip (const juce::Uuid& groupId, int delta);
     /** Random groups pick a child with this (0 .. count-1); tests inject a deterministic one. */
@@ -155,8 +172,9 @@ private:
     static juce::String cueLabel (int index, const Cue& cue);
     /** Fires a cue by id at once (it may have been edited since it was scheduled). */
     GoResult startById (const juce::Uuid& id, bool audition);
-    /** False when an immediate start failed (a scheduled one is true). */
-    bool scheduleStart (const juce::Uuid& id, double atSeconds, bool audition);
+    /** The result of an immediate start (atSeconds is now or past); a scheduled one is 'started'. 'scheduledId' receives the
+        scheduler id of the start (0 when it ran at once): what a walk puts on for that run is tagged with it. */
+    GoResult scheduleStart (const juce::Uuid& id, double atSeconds, bool audition, int* scheduledId = nullptr);
     AudioEngine::PlayOptions playOptions (bool audition) const;
     double startOffsetForNextPlay = 0.0;   // previewFrom(): seconds into the region the next play begins at
     bool explicitStartForNextPlay = false;
@@ -167,7 +185,22 @@ private:
     void applyPendingGoto();
     /** Recomputes and applies the ducks of every target after a contribution changed. */
     void refreshDucks (double rampSeconds);
-    void track (int schedulerId, const juce::Uuid& owner);
+    /** What a pending entry is to its owner's run: a scheduled start, a playlist step (the watch that moves the list on,
+        the crossfade's fade-out) or an observer (a follow waiting for the run to end): see hasPendingFor(). */
+    enum class PendingKind { start, step, observer };
+    /** Remembers a scheduler entry as part of 'owner's run (cancelled with it). 'runId' = the scheduler id of the scheduled
+        start the entry was put on for (a walk's follow behind its schedule), 0 = none: see cancelPreviousRun(). */
+    void track (int schedulerId, const juce::Uuid& owner, PendingKind kind = PendingKind::start, int runId = 0);
+    /** The GO window applied to a hotkey / cart click: true (and reported) when the same cue was fired inside it. */
+    bool refusesDoubleFire (const juce::Uuid& cueId, const juce::String& label);
+    /** A restart (second-trigger) drops the previous run's pending entries - not those of the run that is starting right now
+        (the follow a sequence walk put on right behind the scheduled start that is firing). */
+    void cancelPreviousRun (const juce::Uuid& cueId);
+    /** The contributions (duck cue -> dB) the running duck cues put on a cue that starts now. */
+    std::map<juce::Uuid, double> ducksFor (const juce::Uuid& cueId) const;
+    /** Takes a duck cue's contributions off everyone (over its duck time) and forgets it. */
+    void releaseDuck (const juce::Uuid& id);
+    void clearDucks();
     void playlistStep (const juce::Uuid& groupId);
     double remainingSecondsOf (const juce::Uuid& id) const;
 
@@ -178,7 +211,7 @@ private:
     GoResult triggerImpl (const Cue& cue, bool audition);
     GoResult firstTriggerResult = GoResult::started;
     bool firstTriggerSeen = true;
-    struct Pending { int id; juce::Uuid owner; };
+    struct Pending { int id; juce::Uuid owner; PendingKind kind = PendingKind::start; int runId = 0; };
     std::vector<Pending> pending;
     GoResult triggerControl (const Cue& cue, int index, bool audition);
     bool recording = false;
@@ -203,6 +236,13 @@ private:
         CueController& owner;
     };
     std::map<juce::Uuid, std::map<juce::Uuid, double>> ducks;   // target -> (ducking cue -> dB)
+    /** A duck cue that runs now: what it puts on whoever plays meanwhile, whom it spares, and the watch that releases it. */
+    struct ActiveDuck { double levelDb = 0.0; double seconds = 0.0; std::set<juce::Uuid> spare; int watchId = -1; };
+    std::map<juce::Uuid, ActiveDuck> activeDucks;
+    std::map<juce::Uuid, double> lastFireTimes;                  // hotkey / cart: cue -> when it last fired (the GO window on them)
+    int firingStartId = std::numeric_limits<int>::max();         // the scheduled start being carried out right now (its scheduler id) ...
+    juce::Uuid firingStartCue = juce::Uuid::null();              // ... and its cue: see cancelPreviousRun()
+    std::map<juce::Uuid, juce::int64> wallClockFired;            // cue -> the epoch second its clock last fired (a clock set back must not fire it again)
     std::set<juce::Uuid> played;
     juce::int64 lastWallClockSecond = -1;
     double lastGoTime = -1.0e9;

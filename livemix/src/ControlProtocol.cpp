@@ -266,7 +266,8 @@ namespace
             if constexpr (std::is_same_v<T, P::OnResult> || std::is_same_v<T, P::AllChannelsResult>) put (v, "on", r.on);
             if constexpr (std::is_same_v<T, P::AllChannelsResult>) put (v, "count", r.count);
             if constexpr (std::is_same_v<T, P::MuteGroupResult>) { put (v, "group", groupName (r.group)); put (v, "muted", r.muted); }
-            if constexpr (std::is_same_v<T, P::PluginGroupResult>) { put (v, "index", r.index); put (v, "off", r.off); }
+            if constexpr (std::is_same_v<T, P::PluginGroupResult> || std::is_same_v<T, P::PluginGroupEverywhereResult>) { put (v, "index", r.index); put (v, "off", r.off); }
+            if constexpr (std::is_same_v<T, P::PluginGroupEverywhereResult>) put (v, "count", r.count);
             if constexpr (std::is_same_v<T, P::SendResult>) { put (v, "amount", r.amount); put (v, "pre", r.pre); }
             if constexpr (std::is_same_v<T, P::RequestStateResult>) put (v, "snapshotRevision", r.snapshotRevision);
         }, result);
@@ -369,6 +370,11 @@ ControlProtocol::ValidationResult ControlProtocol::validate (const juce::var& v)
         if (! a["on"].isBool()) return fail (Code::invalidArgument);
         c.args = SetAllChannelsOn { (bool) a["on"] };
     }
+    else if (name == "setPluginGroupOffEverywhere")
+    {
+        if (! integer (a["index"], 1, 5) || ! a["off"].isBool()) return fail (Code::invalidArgument);
+        c.args = SetPluginGroupOffEverywhere { (int) a["index"], (bool) a["off"] };
+    }
     else if (name == "toggleMuteGroup" || name == "setMuteGroup")
     {
         if (! group (a["group"])) return fail (Code::invalidArgument);
@@ -395,6 +401,7 @@ std::optional<ControlProtocol::Error> ControlProtocol::validateCommand (const Co
         using T = std::decay_t<decltype (a)>;
         if constexpr (std::is_same_v<T, SetChannelOn> || std::is_same_v<T, ToggleChannel>) return ! a.channelId.isNull();
         else if constexpr (std::is_same_v<T, SetPluginGroupOff>) return ! a.channelId.isNull() && a.index >= 1 && a.index <= 5;
+        else if constexpr (std::is_same_v<T, SetPluginGroupOffEverywhere>) return a.index >= 1 && a.index <= 5;
         else if constexpr (std::is_same_v<T, SetSend>) return ! a.channelId.isNull() && ! a.fxId.isNull()
             && (a.amount || a.pre) && (! a.amount || amount (*a.amount));
         else if constexpr (std::is_same_v<T, SetMuteGroup> || std::is_same_v<T, ToggleMuteGroup>) return group (a.group);
@@ -528,7 +535,7 @@ ControlProtocol::EncodeResult ControlProtocol::encode (const ServerMessage& mess
             put (v, "type", "helloAck"); put (v, "id", m.id); put (v, "instanceId", m.instanceId.toString());
             auto server = object(); put (server, "name", "LiveMix"); put (server, "version", m.serverVersion); put (v, "server", server);
             juce::Array<juce::var> capabilities;
-            for (const auto* name : { "stateDelta", "mic", "muteGroups", "pluginGroups", "sends" }) capabilities.add (name);
+            for (const auto* name : { "stateDelta", "mic", "muteGroups", "pluginGroups", "sends", "pluginGroupsEverywhere" }) capabilities.add (name);
             put (v, "capabilities", capabilities); put (v, "eventIntervalMs", 100); put (v, "heartbeatIntervalMs", 5000);
         }
         else if constexpr (std::is_same_v<T, State>)

@@ -61,6 +61,7 @@ export type EditCommand = MicCommand
   | { command: "toggleMuteGroup"; args: { group: "mic" | "fx" } }
   | { command: "setMuteGroup"; args: { group: "mic" | "fx"; muted: boolean } }
   | { command: "setPluginGroupOff"; args: { channelId: string; index: number; off: boolean } }
+  | { command: "setPluginGroupOffEverywhere"; args: { index: number; off: boolean } }
   | { command: "setSend"; args: { channelId: string; fxId: string } & ({ amount: number; pre?: never } | { pre: boolean; amount?: never }) };
 export type Command = EditCommand | { command: "requestState"; args: Record<string, never> };
 
@@ -73,6 +74,7 @@ export function validAck(command: Command, ack: Ack): boolean {
     case "setAllChannelsOn": return typeof r.on === "boolean" && isRevision(r.count) && r.count <= 8;
     case "toggleMuteGroup": case "setMuteGroup": return r.group === command.args.group && typeof r.muted === "boolean";
     case "setPluginGroupOff": return r.index === command.args.index && typeof r.off === "boolean";
+    case "setPluginGroupOffEverywhere": return r.index === command.args.index && typeof r.off === "boolean" && Number.isInteger(r.count);
     case "setSend": return typeof r.amount === "number" && Number.isFinite(r.amount) && r.amount >= 0 && r.amount <= 1 && typeof r.pre === "boolean";
   }
 }

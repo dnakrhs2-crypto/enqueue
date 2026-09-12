@@ -1,6 +1,6 @@
 #pragma once
 
-#include "LoudnessMeter.h"
+#include "audio/LoudnessMeter.h"
 #include "MixModel.h"
 #include "audio/PluginChain.h"
 #include "audio/PluginHost.h"

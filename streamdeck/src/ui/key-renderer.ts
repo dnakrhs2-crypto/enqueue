@@ -42,12 +42,13 @@ export function sendImage(percent: number, badge: string, language: Language, mu
 }
 
 /** Cache only bounded state/count/index/group combinations, never user names. */
-export function actionImage(lamp: ActionLamp, language: Language, count = 0, total = 0, audioStopped = false, group: "mic" | "fx" = "mic"): string {
+export function actionImage(lamp: ActionLamp, language: Language, count = 0, total = 0, audioStopped = false, group: "mic" | "fx" = "mic", index = 1): string {
   count = Number.isFinite(count) ? Math.max(0, Math.min(8, Math.trunc(count))) : 0;
   total = Number.isFinite(total) ? Math.max(0, Math.min(8, Math.trunc(total))) : 0;
-  const key = [lamp, language, count, total, audioStopped, group].join("/");
+  index = Number.isFinite(index) ? Math.max(1, Math.min(5, Math.trunc(index))) : 1;
+  const key = [lamp, language, count, total, audioStopped, group, index].join("/");
   const cached = images.get(key); if (cached) return cached;
-  const image = dataUrl(actionSvg(lamp, strings[language], count, total, audioStopped, group));
+  const image = dataUrl(actionSvg(lamp, strings[language], count, total, audioStopped, group, 144, index));
   images.set(key, image); return image;
 }
 

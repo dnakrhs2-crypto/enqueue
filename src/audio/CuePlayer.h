@@ -123,6 +123,8 @@ public:
     void setInitialGainDb (double gainDb) noexcept;
     /** Duck / boost applied on top of the cue gain, reached over 'rampSeconds'. 0 dB = none. Any thread. */
     void setDuckDb (double duckDb, double rampSeconds) noexcept;
+    /** Before start(): the duck the instance begins at (a cue that starts while a duck cue runs). Message thread. */
+    void setInitialDuckDb (double duckDb) noexcept;
     double getDuckDb() const noexcept { return duckDb.load (std::memory_order_relaxed); }
     /** Live level matrix / trim from the inspector; the audio thread ramps to the new gains over ~10 ms. Message thread. */
     void setLiveLevels (const LevelMatrix& levels, const TrimLevels& trim);
@@ -242,6 +244,8 @@ private:
     std::atomic<double> liveRate { 1.0 };
     std::atomic<float> targetGain { 1.0f };
     std::atomic<float> duckTarget { 1.0f };
+    std::atomic<bool> duckJump { false };      // setInitialDuckDb(): the audio thread puts duckInitial in place at once (a start, nothing to click) ...
+    std::atomic<float> duckInitial { 1.0f };   // ... and then ramps to whatever goal came in since (a release sent before the first block)
     std::atomic<double> duckRampSeconds { 0.0 };
     std::atomic<double> duckDb { 0.0 };
     std::atomic<double> positionSeconds { 0.0 };

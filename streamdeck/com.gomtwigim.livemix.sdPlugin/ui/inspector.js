@@ -7,6 +7,7 @@
   let t = window.LiveMixStrings.en;
   const isMute = () => kind.endsWith("mute-group");
   const isSendStep = () => kind === "fx-send-step";
+  const isGroupAll = () => kind === "plugin-group-all";
   function send(event, payload) { if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ event, context: uuid, payload })); }
   function option(value, text) { const el = document.createElement("option"); el.value = String(value); el.textContent = text; return el; }
   function choices(id, values) { const el = byId(id); el.replaceChildren(); for (const [value, label] of values) el.append(option(value, label)); }
@@ -34,13 +35,15 @@
     updateSelect("channel", channels, settings.channelId, settings.channelName, t.choose);
     updateSelect("fx", fx, settings.fxId, settings.fxName, t.chooseFx);
     const group = byId("group"), index = settings.groupIndex || 1;
-    const indices = channels.find(c => c.id === settings.channelId)?.groupIndices || groupIndices;
+    const groupCounts = new Map();
+    if (isGroupAll()) for (const channel of channels) for (const n of new Set(channel.groupIndices || [])) groupCounts.set(n, (groupCounts.get(n) || 0) + 1);
+    const indices = isGroupAll() ? [...groupCounts.keys()].sort((a, b) => a - b) : channels.find(c => c.id === settings.channelId)?.groupIndices || groupIndices;
     group.replaceChildren(); group.disabled = !ready;
     if (!indices.includes(index)) {
       const missing = option(index, t.group + " " + index + (ready ? " · " + t.missingGroup : ""));
       missing.disabled = true; group.append(missing);
     }
-    for (const n of indices) group.append(option(n, t.group + " " + n));
+    for (const n of indices) group.append(option(n, t.group + " " + n + (isGroupAll() ? " · " + (groupCounts.get(n) === 1 ? t.groupMicCountOne : t.groupMicCount).replace("{count}", String(groupCounts.get(n))) : "")));
     group.value = String(index);
     if (isMute()) byId("note").textContent = t.membershipNote + "\n" + t.targets.replace("{count}", String(ready && counts ? counts[kind === "mic-mute-group" ? "mic" : "fx"] : "—"));
   }
@@ -76,7 +79,7 @@
     document.documentElement.lang = info.application.language === "ko" ? "ko" : "en";
     for (const [id, key] of [["channel", "microphone"], ["fx", "fxChannel"], ["group", "group"], ["mode", "mode"], ["step", "step"], ["target", "targetValue"], ["press", "press"], ["display", "display"], ["fallback", "fallback"], ["title", "shortTitle"]]) byId(id + "-label").textContent = t[key];
     const bound = ["mic", "plugin-group", "fx-send", "fx-send-step"].includes(kind);
-    for (const [id, visible] of [["channel", bound], ["fx", kind === "fx-send" || isSendStep()], ["group", kind === "plugin-group"],
+    for (const [id, visible] of [["channel", bound], ["fx", kind === "fx-send" || isSendStep()], ["group", kind === "plugin-group" || isGroupAll()],
       ["mode", !["fx-send", "status"].includes(kind)], ["step", kind === "fx-send"], ["press", kind === "fx-send"],
       ["display", kind === "status"], ["fallback", bound], ["title", !["fx-send", "fx-send-step", "status"].includes(kind)]]) byId(id + "-row").hidden = !visible;
     choices("mode", isSendStep() ? [["up", t.increase], ["down", t.decrease], ["set", t.setValue]]
@@ -84,8 +87,8 @@
     choices("step", (isSendStep() ? [1, 5, 10] : [1, 5]).map(value => [value, value + "%"]));
     choices("press", [["pre-post", t.prePost], ["none", t.pressNone]]);
     choices("display", [["connection", t.connection], ["session", t.session], ["audio", t.audio]]);
-    byId("note").hidden = !isMute() && !["plugin-group", "fx-send"].includes(kind);
-    byId("note").textContent = kind === "plugin-group" ? t.groupNote : kind === "fx-send" ? t.dialNote : "";
+    byId("note").hidden = !isMute() && !["plugin-group", "plugin-group-all", "fx-send"].includes(kind);
+    byId("note").textContent = isGroupAll() ? t.groupAllNote + "\n" + t.groupNote : kind === "plugin-group" ? t.groupNote : kind === "fx-send" ? t.dialNote : "";
     byId("status").textContent = t.offlineHelp;
     showSettings(); updateLists();
     socket = new WebSocket("ws://127.0.0.1:" + port);

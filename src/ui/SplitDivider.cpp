@@ -6,7 +6,7 @@ namespace gocue
 {
 
 SplitDivider::SplitDivider (Orientation o)
-    : orientation (o), toggle ("fold", Palette::dimText, Palette::text, Palette::text)
+    : orientation (o)
 {
     setMouseCursor (orientation == Orientation::horizontal ? juce::MouseCursor::UpDownResizeCursor
                                                            : juce::MouseCursor::LeftRightResizeCursor);
@@ -33,12 +33,15 @@ void SplitDivider::updateShape()
     juce::Path p;
     const bool away = ! collapsed;
 
-    if (orientation == Orientation::horizontal)
-        away ? p.addTriangle (0.0f, 0.0f, 10.0f, 0.0f, 5.0f, 5.0f) : p.addTriangle (0.0f, 5.0f, 10.0f, 5.0f, 5.0f, 0.0f);
-    else
-        away ? p.addTriangle (0.0f, 0.0f, 5.0f, 5.0f, 0.0f, 10.0f) : p.addTriangle (5.0f, 0.0f, 5.0f, 10.0f, 0.0f, 5.0f);
-
-    toggle.setShape (p, false, true, false);
+    const float half = Palette::dividerChevronSize * 0.5f;
+    const float direction = away ? 1.0f : -1.0f;
+    p.startNewSubPath (-half, -half * 0.5f * direction);
+    p.lineTo (0.0f, half * 0.5f * direction);
+    p.lineTo (half, -half * 0.5f * direction);
+    if (orientation == Orientation::vertical)
+        p.applyTransform (juce::AffineTransform::rotation (-juce::MathConstants<float>::halfPi));
+    toggle.shape = p;
+    toggle.repaint();
     toggle.setTooltip (collapsed ? ko ("펴기") : ko ("접기 (구분선 더블클릭도 됩니다)"));
 }
 
@@ -54,27 +57,13 @@ void SplitDivider::resized()
 
 void SplitDivider::paint (juce::Graphics& g)
 {
-    g.fillAll (Palette::panel);
+    g.fillAll (Palette::background);
 
     const auto b = getLocalBounds().toFloat();
-    g.setColour (Palette::outline);
-
-    if (orientation == Orientation::horizontal)
-    {
-        g.drawLine (0.0f, 0.5f, b.getWidth(), 0.5f);
-        g.drawLine (0.0f, b.getHeight() - 0.5f, b.getWidth(), b.getHeight() - 0.5f);
-    }
-    else
-    {
-        g.drawLine (0.5f, 0.0f, 0.5f, b.getHeight());
-        g.drawLine (b.getWidth() - 0.5f, 0.0f, b.getWidth() - 0.5f, b.getHeight());
-    }
-
-    // grip dots either side of the chevron
-    g.setColour (Palette::dimText.withAlpha (0.6f));
     const auto c = b.getCentre();
+    g.setColour (Palette::muted.withAlpha (Palette::rowBorderAlpha));
 
-    for (const float off : { -40.0f, -34.0f, -28.0f, 28.0f, 34.0f, 40.0f })
+    for (const float off : { -36.0f, -30.0f, -24.0f })
     {
         const float x = orientation == Orientation::horizontal ? c.x + off : c.x;
         const float y = orientation == Orientation::horizontal ? c.y : c.y + off;
@@ -88,6 +77,7 @@ void SplitDivider::mouseDown (const juce::MouseEvent& e)
         return;   // nothing to resize: the chevron / a double-click brings the pane back
 
     dragging = true;
+    repaint();
     dragStart = orientation == Orientation::horizontal ? e.getScreenY() : e.getScreenX();
 
     if (onDragStart)
@@ -111,6 +101,7 @@ void SplitDivider::mouseUp (const juce::MouseEvent&)
         return;
 
     dragging = false;
+    repaint();
 
     if (onDragEnd)
         onDragEnd();

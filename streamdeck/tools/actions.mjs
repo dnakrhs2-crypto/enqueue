@@ -5,6 +5,7 @@ export const actions = [
   { id: "mic-mute-group", name: "micMuteGroup", tooltip: "micMuteGroupTooltip", states: ["unmuteState", "muteState"] },
   { id: "fx-mute-group", name: "fxMuteGroup", tooltip: "fxMuteGroupTooltip", states: ["unmuteState", "muteState"] },
   { id: "plugin-group", name: "pluginGroup", tooltip: "pluginGroupTooltip", states: ["off", "on"] },
+  { id: "plugin-group-all", name: "pluginGroupAll", tooltip: "pluginGroupAllTooltip", states: ["allOff", "allOn"] },
   { id: "fx-send", name: "fxSend", tooltip: "fxSendTooltip", states: ["fxSend"] },
   { id: "fx-send-step", name: "fxSendStep", tooltip: "fxSendStepTooltip", states: ["fxSendStep"] },
   { id: "status", name: "statusAction", tooltip: "statusTooltip", states: ["disconnected", "connected"] }

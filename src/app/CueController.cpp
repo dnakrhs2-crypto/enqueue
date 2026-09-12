@@ -37,6 +37,30 @@ CueController::GoResult CueController::triggerControl (const Cue& cue, int index
 
     if (ctl.kind == ControlKind::wait)
     {
+        // a wait that still runs follows the cue's second-trigger rule, as a playing audio cue does
+        if (const auto w = waits.find (cue.id); w != waits.end() && clock() < w->second)
+        {
+            switch (cue.secondTrigger)
+            {
+                case SecondTriggerAction::nothing:
+                case SecondTriggerAction::devamp:   // nothing to finish early: the wait runs out on its own
+                    status (ko ("이미 대기 중: ") + cueLabel (index, cue));
+                    return GoResult::ignored;
+
+                case SecondTriggerAction::panic:
+                case SecondTriggerAction::stop:
+                case SecondTriggerAction::hardStop:
+                    cancelPendingFor (cue.id);   // its follow goes with it: nothing starts behind a cancelled wait
+                    waits.erase (cue.id);
+                    status (ko ("대기 취소: ") + cueLabel (index, cue));
+                    return GoResult::ignored;
+
+                case SecondTriggerAction::hardStopRestart:
+                    cancelPreviousRun (cue.id);   // the previous run's follow must not fire for the new run (two follows = two starts)
+                    break;                        // the wait starts over
+            }
+        }
+
         waits[cue.id] = clock() + ctl.seconds;
         status (ko ("대기 ") + juce::String (ctl.seconds, 2) + ko ("초: ") + cueLabel (index, cue));
         played.insert (cue.id);
@@ -201,7 +225,8 @@ bool CueController::isGroupActive (const CueList& cues, int index) const
     {
         const auto& c = cues.get (i);
 
-        if (engine.isPlaying (c.id) || fadeRunner.isRunning (c.id) || hasPendingFor (c.id) || playlists.count (c.id) != 0)
+        // a child's own follow (an observer) counts: the next child it leads to has not started yet, so the group is not over
+        if (engine.isPlaying (c.id) || fadeRunner.isRunning (c.id) || hasPendingFor (c.id, true) || playlists.count (c.id) != 0)
             return true;
 
         if (const auto w = waits.find (c.id); w != waits.end() && clock() < w->second)
@@ -220,9 +245,12 @@ double CueController::remainingSecondsOf (const juce::Uuid& id) const
     return -1.0;
 }
 
-void CueController::stopGroup (const juce::Uuid& groupId, int fadeMs)
+void CueController::stopGroup (const juce::Uuid& groupId, int fadeMs, bool previousRunOnly)
 {
-    cancelPendingFor (groupId);
+    if (previousRunOnly)
+        cancelPreviousRun (groupId);
+    else
+        cancelPendingFor (groupId);
     playlists.erase (groupId);
     int index = -1;
     auto* list = document.listContaining (groupId, &index);
@@ -387,8 +415,23 @@ void CueController::playlistStep (const juce::Uuid& groupId)
             run.position = 0;
 
             if (shuffle)
+            {
+                const auto lastPlayed = run.current;   // the child that really played last (a disarmed one at the end of the order never did)
+
                 for (int i = (int) run.order.size() - 1; i > 0; --i)
                     std::swap (run.order[(size_t) i], run.order[(size_t) randomChoice (i + 1)]);
+
+                // a 랜덤 반복 jukebox: the new round must not open with the song that just ended - among the children
+                // that can play (a disarmed or deleted one at the front is skipped below, so the first playable counts)
+                std::vector<size_t> playable;
+
+                for (size_t k = 0; k < run.order.size(); ++k)
+                    if (const auto* c = document.findCueAnywhere (run.order[k]); c != nullptr && c->armed)
+                        playable.push_back (k);
+
+                if (playable.size() > 1 && run.order[playable[0]] == lastPlayed)
+                    std::swap (run.order[playable[0]], run.order[playable[(size_t) juce::jlimit (1, (int) playable.size() - 1, 1 + randomChoice ((int) playable.size() - 1))]]);
+            }
         }
 
         const auto childId = run.order[(size_t) run.position];
@@ -404,7 +447,7 @@ void CueController::playlistStep (const juce::Uuid& groupId)
         const double startAt = clock() + child->preWaitSeconds;
         const bool audition = run.audition;
 
-        const bool started = scheduleStart (childId, startAt, audition);
+        const bool started = scheduleStart (childId, startAt, audition) != GoResult::failed;
 
         // scheduleStart runs a zero-pre-wait child at once, and that child may be a control cue that stops (and so
         // erases) this very playlist. From here 'run' and 'it' may be dangling: re-find the entry before any more use.
@@ -466,7 +509,7 @@ void CueController::playlistStep (const juce::Uuid& groupId)
                                         const int ms = (int) std::lround (xf * 1000.0);
 
                                         if (nextPreWait > 0.0)   // fade out when the next one actually starts
-                                            track (scheduler.schedule (clock() + nextPreWait, [this, childId, ms] { if (engine.isPlaying (childId)) engine.fadeOutAndStop (childId, ms); }), groupId);
+                                            track (scheduler.schedule (clock() + nextPreWait, [this, childId, ms] { if (engine.isPlaying (childId)) engine.fadeOutAndStop (childId, ms); }), groupId, PendingKind::step);
                                         else
                                             engine.fadeOutAndStop (childId, ms);
                                     }
@@ -476,7 +519,7 @@ void CueController::playlistStep (const juce::Uuid& groupId)
                                         ++next->second.position;
                                         playlistStep (groupId);
                                     }
-                                }), groupId);
+                                }), groupId, PendingKind::step);
         return;
     }
 
@@ -491,7 +534,7 @@ bool CueController::playlistSkip (const juce::Uuid& groupId, int delta)
         return false;
 
     const auto* group = document.findCueAnywhere (groupId);
-    cancelPendingFor (groupId);   // the follow watch of the current child
+    cancelPendingFor (groupId, Cancel::keepObservers);   // the playlist's watch on the current child - not the group's own follow, which outlives the skip
     const auto current = it->second.current;
 
     if (! current.isNull())
@@ -543,11 +586,79 @@ bool CueController::isGoLocked() const
     return window > 0.0 && clock() - lastGoTime < window;
 }
 
-void CueController::track (int schedulerId, const juce::Uuid& owner)
+bool CueController::refusesDoubleFire (const juce::Uuid& cueId, const juce::String& label)
+{
+    // the GO window on a cue's hotkey / cart click (a setting): the same cue pressed again inside it is one press - another
+    // cue is not held back (sound effects on neighbouring keys come fast on purpose)
+    const auto& settings = document.settings;
+
+    if (! settings.doubleGoHotkeys || settings.doubleGoSeconds <= 0.0)
+        return false;
+
+    const double now = clock();
+
+    if (const auto it = lastFireTimes.find (cueId); it != lastFireTimes.end() && now - it->second < settings.doubleGoSeconds)
+    {
+        status (ko ("더블 GO 방지, 무시: ") + label);
+
+        if (onGoRejected)
+            onGoRejected();
+
+        return true;
+    }
+
+    lastFireTimes[cueId] = now;
+    return false;
+}
+
+std::map<juce::Uuid, double> CueController::ducksFor (const juce::Uuid& cueId) const
+{
+    std::map<juce::Uuid, double> contributions;
+
+    for (const auto& [ducker, duck] : activeDucks)
+    {
+        // not by itself (a restart), not what it spares (its own children), and not by a duck cue that is over but whose
+        // release has not run yet (its follower starts in the same tick)
+        if (ducker == cueId || duck.spare.count (cueId) != 0 || ! isCueActive (ducker))
+            continue;
+
+        contributions[ducker] = duck.levelDb;
+    }
+
+    return contributions;
+}
+
+void CueController::releaseDuck (const juce::Uuid& id)
+{
+    const auto it = activeDucks.find (id);
+
+    if (it == activeDucks.end())
+        return;   // already released (a panic, a new project): nothing of it is on anyone
+
+    const double ramp = it->second.seconds;
+    scheduler.cancel (it->second.watchId);
+    activeDucks.erase (it);
+
+    for (auto& target : ducks)
+        target.second.erase (id);
+
+    refreshDucks (ramp);
+}
+
+void CueController::clearDucks()
+{
+    for (const auto& d : activeDucks)
+        scheduler.cancel (d.second.watchId);
+
+    activeDucks.clear();
+    ducks.clear();
+}
+
+void CueController::track (int schedulerId, const juce::Uuid& owner, PendingKind kind, int runId)
 {
     // forget entries the scheduler has already run
     pending.erase (std::remove_if (pending.begin(), pending.end(), [this] (const Pending& p) { return ! scheduler.isPending (p.id); }), pending.end());
-    pending.push_back ({ schedulerId, owner });
+    pending.push_back ({ schedulerId, owner, kind, runId });
 }
 
 int CueController::getNumPending() const
@@ -561,10 +672,10 @@ int CueController::getNumPending() const
     return n;
 }
 
-bool CueController::hasPendingFor (const juce::Uuid& cueId) const
+bool CueController::hasPendingFor (const juce::Uuid& cueId, bool includeObservers) const
 {
     for (const auto& p : pending)
-        if (p.owner == cueId && scheduler.isPending (p.id))
+        if (p.owner == cueId && (includeObservers || p.kind != PendingKind::observer) && scheduler.isPending (p.id))
             return true;
 
     return false;
@@ -578,22 +689,38 @@ void CueController::cancelPending()
     pending.clear();
 }
 
-void CueController::cancelPendingFor (const juce::Uuid& cueId)
+void CueController::cancelPendingFor (const juce::Uuid& cueId, Cancel scope, int keepRunId)
 {
+    auto matches = [&] (const Pending& p)
+    {
+        if (p.owner != cueId || (keepRunId != 0 && p.runId == keepRunId))
+            return false;
+
+        switch (scope)
+        {
+            case Cancel::all:           return true;
+            case Cancel::keepObservers: return p.kind != PendingKind::observer;
+            case Cancel::startsOnly:    return p.kind == PendingKind::start;
+        }
+
+        return true;
+    };
+
     for (const auto& p : pending)
-        if (p.owner == cueId)
+        if (matches (p))
             scheduler.cancel (p.id);
 
-    pending.erase (std::remove_if (pending.begin(), pending.end(), [&] (const Pending& p) { return p.owner == cueId; }), pending.end());
+    pending.erase (std::remove_if (pending.begin(), pending.end(), matches), pending.end());
+    // the duck this cue put on the others is not released here: its own watch lets go when the cue is really over
+    // (after a stop fade too), over the cue's duck time - see applyDuck()
+}
 
-    // the duck this cue put on the others is released with its cleanup watch (which was just cancelled)
-    bool ducked = false;
-
-    for (auto& target : ducks)
-        ducked = target.second.erase (cueId) > 0 || ducked;
-
-    if (ducked)
-        refreshDucks (0.2);
+void CueController::cancelPreviousRun (const juce::Uuid& cueId)
+{
+    // a scheduled start of this cue is firing: the sequence walk that scheduled it put the new run's follow on for it (tagged
+    // with the start's id) - that follow belongs to the run starting now; everything else of the cue goes (an earlier run's
+    // follow, and the follow of a direct GO in between, which this start replaces - later is not the same as this run's)
+    cancelPendingFor (cueId, Cancel::all, firingStartCue == cueId ? firingStartId : 0);
 }
 
 //==============================================================================
@@ -769,7 +896,7 @@ CueController::GoResult CueController::triggerImpl (const Cue& cue, bool auditio
                     return GoResult::ignored;
 
                 case SecondTriggerAction::hardStopRestart:
-                    stopGroup (cue.id, 0);
+                    stopGroup (cue.id, 0, true);   // the follow of the run starting now (put on by the walk that scheduled it) stays
                     break;
             }
         }
@@ -949,8 +1076,8 @@ CueController::GoResult CueController::triggerImpl (const Cue& cue, bool auditio
                 return GoResult::ignored;
 
             case SecondTriggerAction::hardStopRestart:
-                cancelPendingFor (cue.id);   // the previous run's follow / duck restore must not fire for the new run
-                break;                       // play() restarts the running instance
+                cancelPreviousRun (cue.id);   // the previous run's follow must not fire for the new run (this run's own stays)
+                break;                        // play() restarts the running instance
         }
     }
 
@@ -965,11 +1092,26 @@ CueController::GoResult CueController::triggerImpl (const Cue& cue, bool auditio
         startNextAtLevelFor = juce::Uuid::null();
     }
 
+    // under a running duck cue it starts at the ducked level (a restart keeps it). The very contributions it starts with
+    // are what its restore takes off again: looked up once, not again after play() (a duck cue may end meanwhile)
+    const auto contributions = ducksFor (cue.id);
+    double duckTotal = 0.0;
+
+    for (const auto& c : contributions)
+        duckTotal += c.second;
+
+    options.duckDb = juce::jlimit (Cue::minGainDb, Cue::maxGainDb, duckTotal);
+
     if (! engine.play (cue, options, &error))
     {
         status (error, true);
         return GoResult::failed;
     }
+
+    if (contributions.empty())
+        ducks.erase (cue.id);
+    else
+        ducks[cue.id] = contributions;
 
     played.insert (cue.id);
     return GoResult::started;
@@ -1015,6 +1157,24 @@ void CueController::applyFadeStopOthers (const Cue& cue, const std::set<juce::Uu
         if (inScope (p.id))
             engine.fadeOutAndStop (p.id, ms);
     }
+
+    // a run in scope must not carry on behind the fade: a playlist would start its next child, a follow its next cue,
+    // a pre-wait its cue, a wait cue its continuation
+    auto stopsToo = [&] (const juce::Uuid& id) { return spare.count (id) == 0 && id != ownTarget && inScope (id); };
+    std::vector<juce::Uuid> owners;
+
+    for (const auto& p : pending)
+        if (stopsToo (p.owner))
+            owners.push_back (p.owner);
+
+    for (const auto& owner : owners)
+        cancelPendingFor (owner);
+
+    for (auto it = playlists.begin(); it != playlists.end();)
+        it = stopsToo (it->first) ? playlists.erase (it) : std::next (it);
+
+    for (auto it = waits.begin(); it != waits.end();)
+        it = stopsToo (it->first) ? waits.erase (it) : std::next (it);
 }
 
 void CueController::refreshDucks (double rampSeconds)
@@ -1042,35 +1202,38 @@ void CueController::refreshDucks (double rampSeconds)
 void CueController::applyDuck (const Cue& cue, const std::set<juce::Uuid>& spare)
 {
     if (! cue.duck.enabled)
+    {
+        releaseDuck (cue.id);   // restarted with its duck switched off meanwhile: what the earlier run put on the others comes off
         return;
+    }
 
-    bool any = false;
+    const auto id = cue.id;
+    auto& active = activeDucks[id];
+    active.levelDb = cue.duck.levelDb;
+    active.seconds = cue.duck.seconds;
+    active.spare = spare;
 
+    // what plays now is taken down over the duck time; what starts while this cue runs starts ducked (duckFor)
     for (const auto& p : engine.getPlayingCues())
     {
         if (spare.count (p.id) != 0 || p.loaded)
             continue;
 
-        ducks[p.id][cue.id] = cue.duck.levelDb;
-        any = true;
+        ducks[p.id][id] = cue.duck.levelDb;
     }
 
-    if (! any)
-        return;
-
     refreshDucks (cue.duck.seconds);
-    const auto id = cue.id;
-    const double ramp = cue.duck.seconds;
 
-    // this cue's contribution ends when it is over (or stopped); the others keep theirs
-    track (scheduler.watch ([this, id] { return ! isCueActive (id); },
-                            [this, id, ramp]
-                            {
-                                for (auto& target : ducks)
-                                    target.second.erase (id);
+    // this cue's contribution ends when the cue is really over - after its stop fade, not when its schedules are cancelled -
+    // and the others come back over the duck time. Not tracked with the run: a stop must not release the duck early, and
+    // a group's own watch must not count as the group still running. One watch per duck cue: an earlier run's watch is
+    // cancelled outright rather than reused - in the tick that ends the earlier run and (through a follow) starts this one,
+    // that watch is already out of the queue on its way to firing, and would come back for a second look
+    if (active.watchId > 0)
+        scheduler.cancel (active.watchId);
 
-                                refreshDucks (ramp);
-                            }), id);
+    active.watchId = scheduler.watch ([this, id] { return ! isCueActive (id); },
+                                      [this, id] { releaseDuck (id); });
 }
 
 std::set<juce::Uuid> CueController::familyOf (const Cue& cue) const
@@ -1099,8 +1262,15 @@ CueController::GoResult CueController::startById (const juce::Uuid& id, bool aud
     if (result != GoResult::started)
         return result;
 
-    // a group's own fade-stop-others / duck must not hit the children it just started
-    const auto spare = familyOf (copy);
+    // a group's own fade-stop-others / duck must not hit the children it just started - nor may a control cue's hit
+    // the group it just started (its children are what the operator hears of it)
+    auto spare = familyOf (copy);
+
+    if (copy.isControl() && copy.control.needsTarget())
+        if (const auto* target = document.findCueAnywhere (copy.control.targetId))
+            for (const auto& id2 : familyOf (*target))
+                spare.insert (id2);
+
     applyFadeStopOthers (copy, spare);
     applyDuck (copy, spare);
     return result;
@@ -1108,16 +1278,34 @@ CueController::GoResult CueController::startById (const juce::Uuid& id, bool aud
 
 CueController::GoResult CueController::fire (const juce::Uuid& cueId, bool audition)
 {
+    if (const auto* cue = document.findCueAnywhere (cueId); cue != nullptr && refusesDoubleFire (cueId, cue->name))
+        return GoResult::rejectedDoubleGo;
+
     return startById (cueId, audition);
 }
 
-bool CueController::scheduleStart (const juce::Uuid& id, double atSeconds, bool audition)
+CueController::GoResult CueController::scheduleStart (const juce::Uuid& id, double atSeconds, bool audition, int* scheduledId)
 {
-    if (atSeconds <= clock())
-        return startById (id, audition) != GoResult::failed;
+    if (scheduledId != nullptr)
+        *scheduledId = 0;
 
-    track (scheduler.schedule (atSeconds, [this, id, audition] { startById (id, audition); }), id);
-    return true;
+    if (atSeconds <= clock())
+        return startById (id, audition);
+
+    // the start is told its own scheduler id: a restart it causes must spare what the walk puts on for this very run
+    auto startId = std::make_shared<int> (0);
+    *startId = scheduler.schedule (atSeconds, [this, id, audition, startId]
+                                              {
+                                                  const juce::ScopedValueSetter<int> firing (firingStartId, *startId);
+                                                  const juce::ScopedValueSetter<juce::Uuid> firingCue (firingStartCue, id);
+                                                  startById (id, audition);
+                                              });
+    track (*startId, id, PendingKind::start, *startId);
+
+    if (scheduledId != nullptr)
+        *scheduledId = *startId;
+
+    return GoResult::started;
 }
 
 int CueController::sequenceEnd (int index) const
@@ -1187,10 +1375,66 @@ int CueController::fireSequence (CueList& cues, int index, bool audition)
         lastGroupEnterIndex = -1;
         lastGroupEnterList = nullptr;
 
-        if (cue.armed)
-            scheduleStart (cue.id, startAt, audition);
-        else
-            status (ko ("비활성 큐 건너뜀: ") + cueLabel (i, cue));
+        // The cue this sequence starts with is fired again while its pre-wait still runs (or while it plays and has a
+        // pre-wait): its second-trigger rule applies now, not after another pre-wait, and a pending start is never
+        // doubled - a hotkey pressed twice is one start
+        if (i == index && cue.preWaitSeconds > 0.0 && (hasPendingFor (cue.id) || isCueActive (cue.id)))
+        {
+            const bool playing = engine.isPlaying (cue.id);
+            const bool running = isCueActive (cue.id);   // playing, waiting (a wait cue), or a group with children on the go
+
+            // a running playlist answers a second GO with its next child, as it does without a pre-wait
+            if (running && cue.isGroup() && cue.group.mode == GroupMode::playlist && playlists.count (cue.id) != 0)
+            {
+                trigger (cue, audition);
+                return next;
+            }
+
+            // a normal GO on a cue that is auditioning restarts it for real whatever its rule says (as go() / trigger() do)
+            const bool auditionRestart = playing && engine.isAuditioning (cue.id) && ! isAuditionRequested (audition);
+            const auto rule = auditionRestart ? SecondTriggerAction::hardStopRestart : cue.secondTrigger;
+
+            if (rule == SecondTriggerAction::nothing)
+                return next;   // the run (or its pre-wait) goes on untouched
+
+            if (rule == SecondTriggerAction::hardStopRestart)
+            {
+                // the pre-wait starts over, and so does the sequence: the starts the earlier walk scheduled for the
+                // cues behind this one (auto-continue) go too, or they would come up twice. The same walk as below -
+                // a disarmed cue is stepped over, the chain ends at the first cue that does not auto-continue - and a
+                // later cue that is already playing keeps its run (its follow, its duck): only its start was doubled
+                for (int k = index; k >= 0 && k < bound; k = cues.subtreeEnd (k))
+                {
+                    const auto& c = cues.get (k);
+
+                    if (! c.armed)
+                        continue;
+
+                    if (k == index || ! isCueActive (c.id))
+                        cancelPendingFor (c.id);
+                    else
+                        cancelPendingFor (c.id, Cancel::startsOnly);   // running (playing, a playlist on its children, a wait): only its doubled start goes, its run (steps, follow) stays
+
+                    if (c.continueMode != ContinueMode::autoContinue || (c.isDevamp() && c.devamp.startNextCue))
+                        break;   // where the start walk ends too
+                }
+            }
+            else
+            {
+                if (running)
+                    trigger (cue, audition);   // stop / fade / devamp the running instance now (a wait is cancelled; a devamp keeps its follow, as always)
+                else
+                    cancelPendingFor (cue.id);   // a start still in its pre-wait: dropped
+
+                return next;   // the re-trigger is answered: nothing new starts behind it
+            }
+        }
+
+        int runId = 0;   // the scheduled start's id: the follow put on below is that run's own (a restart from it keeps it)
+        const auto result = scheduleStart (cue.id, startAt, audition, &runId);
+
+        if (result == GoResult::ignored)
+            return next;   // the second-trigger rule acted on (or kept) the running instance: its own sequence stands, no new one is put behind it
 
         // a devamp that starts the next cue itself is its own continuation: its continue mode is ignored
         if (cue.continueMode == ContinueMode::none || (cue.isDevamp() && cue.devamp.startNextCue))
@@ -1204,7 +1448,8 @@ int CueController::fireSequence (CueList& cues, int index, bool audition)
         }
 
         // auto-follow: the rest of the chain starts when this cue has finished (a disarmed cue is over at once).
-        // The next cue is remembered by id: rows may be inserted / deleted / moved meanwhile.
+        // The next cue is remembered by id: rows may be inserted / deleted / moved meanwhile. An observer of the run
+        // (see track): a group's follow must not count as the group still running, or it would wait for itself.
         const auto nextId = next < bound ? cues.get (next).id : juce::Uuid::null();
         const auto id = cue.id;
         const bool armed = cue.armed;
@@ -1217,7 +1462,7 @@ int CueController::fireSequence (CueList& cues, int index, bool audition)
 
                                         if (auto* nextList = document.listContaining (nextId, &nextIndex))
                                             fireSequence (*nextList, nextIndex, audition);
-                                    }), id);
+                                    }), id, PendingKind::observer, runId);
 
         return sequenceEnd (cues, index);
     }
@@ -1320,6 +1565,25 @@ void CueController::goKeyReleased()
     goKeyDown = false;
 }
 
+void CueController::fireSequenceById (const juce::Uuid& id, bool audition)
+{
+    int index = -1;
+    auto* list = document.listContaining (id, &index);
+
+    if (list == nullptr)
+        return;
+
+    if (! list->get (index).armed)
+    {
+        // looked at once more right before the start: a trigger fired earlier in the same second may have disarmed it,
+        // and a key aimed at a disarmed cue starts nothing (fireSequence would pass on to the next cue)
+        status (ko ("비활성 큐, 트리거 무시: ") + cueLabel (index, list->get (index)));
+        return;
+    }
+
+    fireSequence (*list, index, audition);
+}
+
 bool CueController::handleHotkey (const juce::KeyPress& key)
 {
     const auto description = key.getTextDescription();
@@ -1327,11 +1591,15 @@ bool CueController::handleHotkey (const juce::KeyPress& key)
     if (description.isEmpty())
         return false;
 
-    bool handled = false;
+    // the match is found first and fired after the walk: the start may switch lists (a goto in the sequence), which
+    // would pull the list - and the cue reference - out from under the walk
+    juce::Uuid matchId = juce::Uuid::null();
+    juce::String label;
+    bool armed = true;
 
     document.forEachList ([&] (CueList& cues)   // hotkeys reach into every list and cart
     {
-        if (handled)
+        if (! matchId.isNull())
             return;   // one key fires one cue (the loader clears duplicates; this guards a live edit race)
 
         for (int i = 0; i < cues.size(); ++i)
@@ -1340,15 +1608,29 @@ bool CueController::handleHotkey (const juce::KeyPress& key)
 
             if (cue.hotkey.isNotEmpty() && juce::KeyPress::createFromDescription (cue.hotkey) == key)
             {
-                fireSequence (cues, i, false);   // hotkeys do not move the playhead
-                status (ko ("핫키: ") + cueLabel (i, cue));
-                handled = true;
+                matchId = cue.id;
+                label = cueLabel (i, cue);
+                armed = cue.armed;
                 return;
             }
         }
     });
 
-    return handled;
+    if (matchId.isNull())
+        return false;
+
+    if (! armed)
+    {
+        status (ko ("비활성 큐, 핫키 무시: ") + label);   // GO passes over a disarmed cue; a key aimed at it starts nothing (not the next cue either)
+        return true;
+    }
+
+    if (refusesDoubleFire (matchId, label))
+        return true;   // the key is taken (nothing else may act on it), the cue is left alone
+
+    status (ko ("핫키: ") + label);   // before the start: what goes wrong in it (a missing file, a panic) overwrites this
+    fireSequenceById (matchId, false);   // hotkeys do not move the playhead
+    return true;
 }
 
 bool CueController::handleHotkeyRepeat (const juce::KeyPress& key) const
@@ -1372,10 +1654,16 @@ void CueController::checkWallClock (juce::Time now)
     if (second == lastWallClockSecond)
         return;
 
-    // every second since the last check is examined (a busy message thread must not skip 12:00:00);
-    // after a long gap (sleep, clock change) only the current second counts
-    juce::int64 from = lastWallClockSecond < 0 || second - lastWallClockSecond > 5 || second < lastWallClockSecond ? second : lastWallClockSecond + 1;
+    // every second since the last check is examined (a busy message thread - a long file open, a plugin scan - must
+    // not skip 12:00:00); after a longer gap (sleep, a clock change) only the current second counts
+    const juce::int64 catchUp = (juce::int64) wallClockCatchUpSeconds;
+    juce::int64 from = lastWallClockSecond < 0 || second - lastWallClockSecond > catchUp || second < lastWallClockSecond ? second : lastWallClockSecond + 1;
     lastWallClockSecond = second;
+
+    // the matches are collected first and fired after the walk: a start may switch lists (a goto), which would pull
+    // the list out from under the walk
+    struct Due { juce::Uuid id; juce::String label; bool armed; };
+    std::vector<Due> due;
 
     for (juce::int64 s = from; s <= second; ++s)
     {
@@ -1387,15 +1675,32 @@ void CueController::checkWallClock (juce::Time now)
         {
             for (int i = 0; i < cues.size(); ++i)
             {
-                const auto& wc = cues.get (i).wallClock;
+                const auto& cue = cues.get (i);
+                const auto& wc = cue.wallClock;
 
                 if (wc.enabled && wc.hour == hour && wc.minute == minute && wc.second == sec && (wc.daysMask & dayBit) != 0)
                 {
-                    status (ko ("시간 트리거: ") + cueLabel (i, cues.get (i)));
-                    fireSequence (cues, i, false);
+                    // a clock set back brings a second round again: a cue fires once per second of its clock (a new project forgets)
+                    if (const auto fired = wallClockFired.find (cue.id); fired != wallClockFired.end() && fired->second >= s)
+                        continue;
+
+                    wallClockFired[cue.id] = s;
+                    due.push_back ({ cue.id, cueLabel (i, cue), cue.armed });
                 }
             }
         });
+    }
+
+    for (const auto& d : due)
+    {
+        if (! d.armed)
+        {
+            status (ko ("비활성 큐, 시간 트리거 무시: ") + d.label);   // a disarmed cue starts nothing - not the next cue either
+            continue;
+        }
+
+        status (ko ("시간 트리거: ") + d.label);
+        fireSequenceById (d.id, false);
     }
 }
 
@@ -1520,6 +1825,7 @@ void CueController::panicAll()
     fadeRunner.stopAll();
     const double now = clock();
     cancelPending();
+    clearDucks();   // everything goes out: nothing that starts after the panic is under a duck from before it
     playlists.clear();
     waits.clear();
 
@@ -1549,6 +1855,7 @@ void CueController::hardStopAll()
 {
     fadeRunner.stopAll();
     cancelPending();
+    clearDucks();
     playlists.clear();
     waits.clear();
     engine.stopAll();
@@ -1594,7 +1901,9 @@ void CueController::resetForNewProject()
     playlists.clear();
     randomUsed.clear();
     waits.clear();
-    ducks.clear();
+    clearDucks();
+    lastFireTimes.clear();
+    wallClockFired.clear();
     played.clear();
     recorded.clear();
     recording = false;
@@ -1602,6 +1911,7 @@ void CueController::resetForNewProject()
     lastGroupEnterList = nullptr;
     pendingGoto = {};
     gotoApplied = false;
+    lastWallClockSecond = -1;   // the new project's clocks start from the current second: nothing from before it, nothing skipped
 }
 
 void CueController::resetAll()
@@ -1611,7 +1921,8 @@ void CueController::resetAll()
     playlists.clear();
     randomUsed.clear();
     waits.clear();
-    ducks.clear();
+    clearDucks();
+    lastFireTimes.clear();
     played.clear();
     engine.stopAll();
     document.cues.setPlayheadIndex (document.cues.isEmpty() ? -1 : 0);

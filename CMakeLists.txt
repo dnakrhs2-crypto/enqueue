@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.22)
 
-project(Enqueue VERSION 0.9.7 LANGUAGES C CXX)
+project(Enqueue VERSION 0.10.1 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -85,6 +85,7 @@ target_sources(GoCueCore INTERFACE
     ${CMAKE_CURRENT_SOURCE_DIR}/src/audio/CuePlayer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/audio/HighQualityResampler.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/audio/AudioEngine.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/audio/LoudnessMeter.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/audio/PluginChain.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/audio/PluginHost.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/audio/MediaFoundationAudioFormat.cpp
@@ -192,6 +193,7 @@ target_sources(Enqueue PRIVATE
     src/ui/CurveEditor.cpp
     src/ui/PluginWindows.cpp
     src/ui/PluginChainComponent.cpp
+    src/ui/PluginManager.cpp
     src/ui/PluginDialogs.cpp)
 
 target_compile_definitions(Enqueue PRIVATE
@@ -235,8 +237,7 @@ target_sources(LiveMixCore INTERFACE
     ${CMAKE_CURRENT_SOURCE_DIR}/livemix/src/ControlLog.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/livemix/src/LiveMixSettings.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/livemix/src/GlobalHotkeys.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/livemix/src/PluginPreset.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/livemix/src/LoudnessMeter.cpp)
+    ${CMAKE_CURRENT_SOURCE_DIR}/livemix/src/PluginPreset.cpp)
 target_include_directories(LiveMixCore INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/livemix/src)
 target_link_libraries(LiveMixCore INTERFACE GoCueCore)
 if(WIN32)
@@ -244,7 +245,7 @@ if(WIN32)
 endif()
 target_sources(LiveMixCore INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/livemix/src/WebDavBackup.cpp)
 
-set(LIVEMIX_VERSION "0.9.0")   # LiveMix version (the Enqueue version is the project version); not a cache variable: a bump must reach existing build trees
+set(LIVEMIX_VERSION "0.10.0")   # LiveMix version (the Enqueue version is the project version); not a cache variable: a bump must reach existing build trees
 set(LIVEMIX_APPCAST_URL "" CACHE STRING "LiveMix WinSparkle appcast URL (empty disables update checks)")
 
 # The online backup's server account is built into the app from a JSON file that lives outside the repository

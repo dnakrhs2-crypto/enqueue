@@ -7,14 +7,6 @@
 namespace gocue
 {
 
-namespace
-{
-    const juce::Colour gangColours[] = {
-        juce::Colour (0xff5a3d8b), juce::Colour (0xff3d6f8b), juce::Colour (0xff3d8b5a), juce::Colour (0xff8b8b3d),
-        juce::Colour (0xff8b5a3d), juce::Colour (0xff8b3d5a), juce::Colour (0xff3d8b8b), juce::Colour (0xff6b6b6b)
-    };
-}
-
 LevelMatrixComponent::LevelMatrixComponent()
 {
     setWantsKeyboardFocus (true);
@@ -310,7 +302,7 @@ juce::String LevelMatrixComponent::textFor (double db) const
 void LevelMatrixComponent::paint (juce::Graphics& g)
 {
     g.fillAll (Palette::panel);
-    g.setFont (juce::Font (juce::FontOptions (14.0f)));
+    g.setFont (Palette::monoFont (Palette::fieldValueSize));
 
     const int x0 = headerWidth + gap;
     const int y0 = headerHeight + gap;
@@ -319,8 +311,10 @@ void LevelMatrixComponent::paint (juce::Graphics& g)
     for (int o = 0; o < matrix.numOutputs(); ++o)
     {
         const bool connected = o < (int) outputConnected.size() ? outputConnected[(size_t) o] : true;
-        g.setColour (connected ? Palette::dimText : Palette::dimText.withAlpha (0.45f));
         const juce::Rectangle<int> r (x0 + (o + 1) * (cellWidth + gap), 0, cellWidth, headerHeight);
+        g.setColour (Palette::panel2);
+        g.fillRect (r);
+        g.setColour (connected ? Palette::muted : Palette::muted.withAlpha (Palette::disabledAlpha));
         const auto name = o < outputNames.size() && outputNames[o].isNotEmpty() ? outputNames[o] : juce::String (o + 1);
         g.drawFittedText (name, r, juce::Justification::centred, 1);
 
@@ -338,11 +332,19 @@ void LevelMatrixComponent::paint (juce::Graphics& g)
     g.setColour (Palette::dimText);
 
     if (mainVisible)
+    {
+        g.setColour (Palette::panel2);
+        g.fillRect (0, y0, headerWidth, cellHeight);
+        g.setColour (Palette::muted);
         g.drawFittedText (ko ("메인"), juce::Rectangle<int> (0, y0, headerWidth - 4, cellHeight), juce::Justification::centredRight, 1);
+    }
 
     for (int i = 0; i < matrix.numInputs(); ++i)
     {
         const juce::Rectangle<int> r (0, y0 + (i + 1) * (cellHeight + gap), headerWidth - 4, cellHeight);
+        g.setColour (Palette::panel2);
+        g.fillRect (r.withWidth (headerWidth));
+        g.setColour (Palette::muted);
         const auto name = i < inputNames.size() && inputNames[i].isNotEmpty() ? inputNames[i] : ko ("입력 ") + juce::String (i + 1);
         g.drawFittedText (name, r, juce::Justification::centredRight, 1);
     }
@@ -357,49 +359,57 @@ void LevelMatrixComponent::paint (juce::Graphics& g)
         const double value = getValue (c);
         const bool silent = LevelMatrix::isSilent (value) || value < minDb;
         const int gang = gangOf (c);
-        juce::Colour fill = c.kind == Kind::cross ? (silent ? Palette::rowOdd : Palette::rowEven.brighter (0.25f)) : Palette::rowEven.brighter (0.1f);
-
-        if (gang > 0)
-            fill = gangColours[(gang - 1) % 8].withAlpha (silent ? 0.35f : 0.75f);
+        const bool litCrosspoint = c.kind == Kind::cross && ! silent && isActive (c);
+        juce::Colour fill = litCrosspoint ? Palette::field.overlaidWith (Palette::accent.withAlpha (Palette::crosspointAlpha)) : Palette::field;
 
         if (! editable)
-            fill = fill.withAlpha (0.5f);
+            fill = fill.withAlpha (Palette::disabledAlpha);
 
         const bool active = isActive (c);
 
         if (! active)
-            fill = fill.withAlpha (0.35f);
+            fill = fill.withAlpha (Palette::inactiveCellAlpha);
 
         // a whole column goes grey when its cue output reaches no device output: the value is kept (it counts
         // again on a wider device) but it does nothing right now. Applied last so nothing lifts it again.
         const bool dead = c.out >= 0 && c.out < (int) outputConnected.size() && ! outputConnected[(size_t) c.out];
 
         if (dead)
-            fill = fill.withAlpha (0.12f);
+            fill = fill.withAlpha (Palette::deadCellAlpha);
 
         g.setColour (fill);
-        g.fillRoundedRectangle (r.toFloat(), 3.0f);
+        g.fillRect (r);
+        g.setColour (Palette::outline);
+        g.drawRect (r, 1);
+        if (gang > 0)   // keep all eight gang identities without replacing the active crosspoint tint
+        {
+            g.setColour (Palette::gangColours[(gang - 1) % 8].withAlpha (silent ? Palette::gangSilentAlpha : Palette::gangActiveAlpha));
+            g.fillRect (r.getX() + 1, r.getY() + 1, 3, r.getHeight() - 2);
+        }
 
         if (! active)   // hatched: this cell is not part of the fade
         {
-            g.setColour (Palette::dimText.withAlpha (0.35f));
+            juce::Graphics::ScopedSaveState save (g);
+            g.reduceClipRegion (r.reduced (1));
+            g.setColour (Palette::dimText.withAlpha (Palette::inactiveCellAlpha));
 
             for (int hx = r.getX() - r.getHeight(); hx < r.getRight(); hx += 6)
                 g.drawLine ((float) hx, (float) r.getBottom(), (float) hx + (float) r.getHeight(), (float) r.getY(), 1.0f);
         }
         else if (activeMode)
         {
-            g.setColour (juce::Colours::yellow.withAlpha (0.8f));
+            g.setColour (Palette::accent);
             g.fillRect (r.getX() + 2, r.getY() + 2, 4, 4);
         }
 
         if (c == selected)
         {
             g.setColour (Palette::standby);
-            g.drawRoundedRectangle (r.toFloat().reduced (0.5f), 3.0f, 1.5f);
+            g.drawRect (r.toFloat().reduced (0.5f), Palette::selectionWidth);
         }
 
         g.setColour (dead ? Palette::dimText.withAlpha (0.35f) : (silent ? Palette::dimText : Palette::text));
+        g.setFont (litCrosspoint ? Palette::monoFont (Palette::fieldValueSize).boldened() : Palette::monoFont (Palette::fieldValueSize));
         g.drawFittedText (textFor (value), r.reduced (3, 0), juce::Justification::centred, 1);
     });
 }
@@ -606,7 +616,8 @@ void LevelMatrixComponent::beginTyping (const juce::String& initial)
 
     typingEditor = std::make_unique<juce::TextEditor>();
     typingEditor->setInputRestrictions (8, "0123456789.-+");
-    typingEditor->setJustification (juce::Justification::centred);
+    typingEditor->setJustification (juce::Justification::centredRight);
+    typingEditor->setFont (Palette::monoFont (Palette::fieldValueSize));
     typingEditor->setText (initial.startsWithChar ('-') && initial.length() > 1 && ! juce::CharacterFunctions::isDigit (initial[1]) ? juce::String() : initial, false);
     typingEditor->setCaretPosition (typingEditor->getText().length());
     typingEditor->onReturnKey = [this] { commitTyping(); };

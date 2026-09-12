@@ -12,7 +12,7 @@ TimeLoopsPanel::TimeLoopsPanel (ProjectDocument& doc, AudioEngine& e, juce::Audi
     {
         label.setText (ko (text), juce::dontSendNotification);
         label.setColour (juce::Label::textColourId, Palette::dimText);
-        label.setFont (juce::Font (juce::FontOptions (15.0f)));
+        label.setFont (Palette::font (Palette::fieldLabelSize));
         addAndMakeVisible (label);
     };
 
@@ -130,6 +130,7 @@ TimeLoopsPanel::~TimeLoopsPanel() = default;
 void TimeLoopsPanel::setupEditor (juce::TextEditor& editor, const juce::String& allowed, int maxLength)
 {
     editor.setInputRestrictions (maxLength, allowed);
+    editor.setFont (Palette::monoFont (Palette::fieldValueSize));
     editor.setJustification (juce::Justification::centredRight);
     editor.setSelectAllWhenFocused (true);
     editor.onEscapeKey = [this] { cancelEditAndPanic(); };
@@ -518,7 +519,7 @@ void TimeLoopsPanel::showContextMenu (juce::Point<int> screenPosition)
 void TimeLoopsPanel::resized()
 {
     auto area = getLocalBounds().reduced (10, 6);
-    const int rowHeight = 24;
+    const int rowHeight = Palette::fieldHeight;
 
     auto row = area.removeFromTop (rowHeight);
     // 834 px in total: fits the 840 px inside the minimum window width

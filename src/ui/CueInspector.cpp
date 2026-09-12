@@ -4,6 +4,7 @@
 #include "audio/CueFileInfo.h"
 #include "ui/CueTable.h"
 #include "model/CueColors.h"
+#include "ui/GroupModeLabels.h"
 #include "ui/PluginChainComponent.h"
 #include "ui/UiUtils.h"
 
@@ -12,11 +13,39 @@ namespace gocue
 
 namespace
 {
-    void styleLabel (juce::Label& label, const juce::String& text, float size = 15.0f)
+    /** Keep the 30px fields reachable when the inspector is reduced to a short or narrow pane. */
+    class InspectorPage : public juce::Viewport
+    {
+    public:
+        InspectorPage (juce::Component& c, int height, int width) : content (c), minHeight (height), minWidth (width)
+        {
+            setViewedComponent (&content, false);
+            setScrollBarsShown (true, true);
+            setScrollOnDragEnabled (false);   // field / waveform drags belong to their existing editors
+        }
+
+        void resized() override
+        {
+            if (sizing)
+                return;
+            const juce::ScopedValueSetter<bool> guard (sizing, true);
+            juce::Viewport::resized();
+            const int scroll = getScrollBarThickness();
+            content.setSize (juce::jmax (minWidth, getWidth() - scroll), juce::jmax (minHeight, getHeight() - scroll));
+        }
+
+    private:
+        juce::Component& content;
+        const int minHeight, minWidth;
+        bool sizing = false;
+    };
+
+    void styleLabel (juce::Label& label, const juce::String& text, float size = Palette::fieldLabelSize)
     {
         label.setText (text, juce::dontSendNotification);
         label.setColour (juce::Label::textColourId, Palette::dimText);
-        label.setFont (juce::Font (juce::FontOptions (size)));
+        label.setFont (Palette::font (size));
+        label.setJustificationType (juce::Justification::centredLeft);
     }
 
     void styleToggle (juce::ToggleButton& toggle, const juce::String& text)
@@ -30,6 +59,7 @@ namespace
     void styleNumberEditor (juce::TextEditor& editor, const juce::String& allowed, int maxLength)
     {
         editor.setInputRestrictions (maxLength, allowed);
+        editor.setFont (Palette::monoFont (Palette::fieldValueSize));
         editor.setJustification (juce::Justification::centredRight);
         editor.setSelectAllWhenFocused (true);
     }
@@ -48,9 +78,16 @@ namespace
 class HotkeyButton : public juce::TextButton
 {
 public:
-    HotkeyButton() { setWantsKeyboardFocus (false); }
+    HotkeyButton()
+    {
+        setWantsKeyboardFocus (false);
+        getProperties().set ("slateKeycap", true);
+    }
 
     std::function<void (const juce::String& description)> onHotkeyChanged;
+    /** The key just captured (accepted): the owner marks it held, so the OS auto-repeat of a key that is still down
+        does not fire the cue it was just given to. */
+    std::function<void (const juce::KeyPress&)> onCaptured;
     /** Returns a reason to refuse the key, or an empty string. */
     std::function<juce::String (const juce::KeyPress&)> validate;
 
@@ -59,15 +96,20 @@ public:
         hotkey = description;
 
         if (! capturing)
+        {
             setButtonText (hotkey.isEmpty() ? ko ("핫키: 없음") : ko ("핫키: ") + hotkey);
+            setTooltip (getButtonText());
+        }
     }
 
     void clicked() override
     {
         capturing = true;
+        setComponentID ("hotkeyCapture");   // what the GO command looks for: Space pressed into the capture is a refused key, not a GO
         setWantsKeyboardFocus (true);
         grabKeyboardFocus();
         setButtonText (ko ("키를 누르세요... (Esc 취소)"));
+        setTooltip (getButtonText());
     }
 
     bool keyPressed (const juce::KeyPress& key) override
@@ -90,6 +132,7 @@ public:
             if (reason.isNotEmpty())
             {
                 setButtonText (reason);
+                setTooltip (reason);
                 juce::Component::SafePointer<HotkeyButton> safeThis (this);
                 juce::Timer::callAfterDelay (1500, [safeThis] { if (safeThis != nullptr) safeThis->setHotkey (safeThis->hotkey); });
                 return true;
@@ -98,6 +141,9 @@ public:
 
         if (onHotkeyChanged)
             onHotkeyChanged (key.getTextDescription());
+
+        if (onCaptured)
+            onCaptured (key);
 
         return true;
     }
@@ -112,6 +158,7 @@ private:
     void finishCapture()
     {
         capturing = false;
+        setComponentID ({});
         setWantsKeyboardFocus (false);
         setHotkey (hotkey);
     }
@@ -126,6 +173,8 @@ class CueInspector::BasicsPanel : public juce::Component,
                                   public juce::FileDragAndDropTarget
 {
 public:
+    std::function<void (int keyCode)> onKeyCaptured;   // the hotkey button took a key: see CueInspector::onHotkeyCaptured
+
     BasicsPanel (ProjectDocument& doc, AudioEngine& e, AppSettings& s)
         : document (doc), cues (doc.cues), engine (e), settings (s)
     {
@@ -146,6 +195,7 @@ public:
 
         auto textEditor = [this] (juce::TextEditor& editor, std::function<void()> commit)
         {
+            editor.setFont (Palette::font (Palette::fieldValueSize));
             editor.setSelectAllWhenFocused (true);
             editor.onReturnKey = [commit, &editor] { commit(); editor.giveAwayKeyboardFocus(); };
             editor.onFocusLost = commit;
@@ -154,7 +204,8 @@ public:
         };
 
         textEditor (numberEditor, [this] { commitNumber(); });
-        numberEditor.setJustification (juce::Justification::centredLeft);
+        numberEditor.setFont (Palette::monoFont (Palette::fieldValueSize));
+        numberEditor.setJustification (juce::Justification::centredRight);
         textEditor (nameEditor, [this] { commitName(); });
         textEditor (preEditor, [this] { commitWait (true); });
         styleNumberEditor (preEditor, "0123456789:.", 12);
@@ -183,7 +234,8 @@ public:
         secondColourCombo.onChange = [this] { commitColour (true); };
 
         filePathLabel.setColour (juce::Label::textColourId, Palette::text);
-        filePathLabel.setFont (juce::Font (juce::FontOptions (15.0f)));
+        filePathLabel.setFont (Palette::monoFont (Palette::fileSize));
+        filePathLabel.getProperties().set ("slateField", true);
         filePathLabel.setMinimumHorizontalScale (1.0f);
         filePathLabel.setTooltip (ko ("파일을 여기에 끌어다 놓으면 교체됩니다"));
         addAndMakeVisible (filePathLabel);
@@ -212,6 +264,7 @@ public:
         {
             edit (ko ("핫키"), [description] (Cue& c) { c.hotkey = description; });
         };
+        hotkeyButton.onCaptured = [this] (const juce::KeyPress& key) { if (onKeyCaptured) onKeyCaptured (key.getKeyCode()); };
         hotkeyButton.validate = [this] (const juce::KeyPress& key) -> juce::String
         {
             if (key.getModifiers().isCommandDown() || key.getModifiers().isAltDown())
@@ -239,7 +292,7 @@ public:
         };
         addAndMakeVisible (hotkeyButton);
 
-        clearHotkeyButton.setButtonText ("x");
+        clearHotkeyButton.setButtonText (ko ("×"));
         clearHotkeyButton.setTooltip (ko ("핫키 지우기"));
         clearHotkeyButton.setWantsKeyboardFocus (false);
         clearHotkeyButton.onClick = [this] { edit (ko ("핫키 지우기"), [] (Cue& c) { c.hotkey.clear(); }); };
@@ -264,13 +317,14 @@ public:
 
         gainSlider.setSliderStyle (juce::Slider::LinearHorizontal);
         gainSlider.setRange (Cue::minGainDb, Cue::maxGainDb, 0.1);
-        gainSlider.setTextBoxStyle (juce::Slider::TextBoxRight, false, 70, 22);
+        gainSlider.setTextBoxStyle (juce::Slider::TextBoxRight, false, 80, Palette::fieldHeight);
         gainSlider.setTextValueSuffix (" dB");
         gainSlider.setDoubleClickReturnValue (true, 0.0);
         gainSlider.setWantsKeyboardFocus (false);
         gainSlider.onValueChange = [this] { commitGain(); };
         addAndMakeVisible (gainSlider);
 
+        notesEditor.setFont (Palette::font (Palette::fieldValueSize));
         notesEditor.setMultiLine (true, true);
         notesEditor.setReturnKeyStartsNewLine (true);
         notesEditor.setScrollbarsShown (true);
@@ -281,7 +335,12 @@ public:
 
     std::function<void()> onPanic;
 
-    void focusNotes() { notesEditor.grabKeyboardFocus(); }
+    void focusNotes()
+    {
+        if (auto* viewport = findParentComponentOfClass<juce::Viewport>())
+            viewport->setViewPosition (0, notesEditor.getY());
+        notesEditor.grabKeyboardFocus();
+    }
 
     void setEditable (bool shouldBeEditable)
     {
@@ -368,56 +427,53 @@ public:
 
     void resized() override
     {
-        auto area = getLocalBounds().reduced (12, 6);
-        const int rowHeight = 26;
-        auto nextRow = [&] { auto r = area.removeFromTop (rowHeight); area.removeFromTop (5); return r; };
+        auto area = getLocalBounds().reduced (12, 8);
+        auto nextRow = [&] { auto r = area.removeFromTop (Palette::fieldHeight); area.removeFromTop (8); return r; };
 
         auto row = nextRow();
         numberLabel.setBounds (row.removeFromLeft (36));
-        numberEditor.setBounds (row.removeFromLeft (70));
-        row.removeFromLeft (10);
-        nameLabel.setBounds (row.removeFromLeft (36));
-        nameEditor.setBounds (row.removeFromLeft (juce::jmax (120, row.getWidth() - 420)));
-        row.removeFromLeft (10);
-        colourLabel.setBounds (row.removeFromLeft (24));
-        colourCombo.setBounds (row.removeFromLeft (110));
+        numberEditor.setBounds (row.removeFromLeft (80));
         row.removeFromLeft (8);
+        nameLabel.setBounds (row.removeFromLeft (36));
+        colourCombo.setBounds (row.removeFromRight (120));
+        colourLabel.setBounds (row.removeFromRight (28));
+        row.removeFromRight (8);
+        nameEditor.setBounds (row);
 
         row = nextRow();
         fileLabel.setBounds (row.removeFromLeft (36));
-        browseButton.setBounds (row.removeFromRight (96));
+        browseButton.setBounds (row.removeFromRight (100));
         row.removeFromRight (8);
         filePathLabel.setBounds (row);
-        dropArea = filePathLabel.getBounds().expanded (2, 3);
+        dropArea = filePathLabel.getBounds();
 
         row = nextRow();
-        preLabel.setBounds (row.removeFromLeft (70));
-        preEditor.setBounds (row.removeFromLeft (84));
-        row.removeFromLeft (10);
-        postLabel.setBounds (row.removeFromLeft (84));
-        postEditor.setBounds (row.removeFromLeft (84));
-        row.removeFromLeft (10);
-        continueLabel.setBounds (row.removeFromLeft (34));
-        continueCombo.setBounds (row.removeFromLeft (130));
-        row.removeFromLeft (14);
-        hotkeyButton.setBounds (row.removeFromLeft (190));
+        preLabel.setBounds (row.removeFromLeft (64));
+        preEditor.setBounds (row.removeFromLeft (110));
+        row.removeFromLeft (8);
+        postLabel.setBounds (row.removeFromLeft (76));
+        postEditor.setBounds (row.removeFromLeft (110));
+        row.removeFromLeft (8);
+        continueLabel.setBounds (row.removeFromLeft (28));
+        continueCombo.setBounds (row.removeFromLeft (150));
+        row.removeFromLeft (8);
+        hotkeyButton.setBounds (row.removeFromLeft (120));
         row.removeFromLeft (4);
-        clearHotkeyButton.setBounds (row.removeFromLeft (26));
+        clearHotkeyButton.setBounds (row.removeFromLeft (Palette::fieldHeight));
 
         row = nextRow();
         flagToggle.setBounds (row.removeFromLeft (64));
-        armedToggle.setBounds (row.removeFromLeft (104));
-        autoLoadToggle.setBounds (row.removeFromLeft (92));
-        row.removeFromLeft (10);
+        armedToggle.setBounds (row.removeFromLeft (96));
+        autoLoadToggle.setBounds (row.removeFromLeft (88));
+        row.removeFromLeft (8);
         fadeOutLabel.setBounds (row.removeFromLeft (104));
-        fadeOutEditor.setBounds (row.removeFromLeft (70));
-        row.removeFromLeft (10);
+        fadeOutEditor.setBounds (row.removeFromLeft (90));
+        row.removeFromLeft (8);
         gainLabel.setBounds (row.removeFromLeft (62));
-        gainSlider.setBounds (row.removeFromLeft (juce::jmin (300, row.getWidth())));
+        gainSlider.setBounds (row.removeFromLeft (juce::jmin (360, row.getWidth())));
 
-        row = area.removeFromTop (juce::jmax (40, area.getHeight()));
-        notesLabel.setBounds (row.removeFromLeft (36).withHeight (24));
-        notesEditor.setBounds (row);
+        notesLabel.setBounds (area.removeFromLeft (36).withHeight (Palette::fieldHeight));
+        notesEditor.setBounds (area);
     }
 
     void paint (juce::Graphics& g) override
@@ -426,10 +482,10 @@ public:
 
         if (dragOver)
         {
-            g.setColour (Palette::standby.withAlpha (0.25f));
-            g.fillRoundedRectangle (dropArea.toFloat(), 4.0f);
+            g.setColour (Palette::accent.withAlpha (Palette::menuHighlightAlpha));
+            g.fillRoundedRectangle (dropArea.toFloat(), Palette::fieldRadius);
             g.setColour (Palette::standby);
-            g.drawRoundedRectangle (dropArea.toFloat(), 4.0f, 1.5f);
+            g.drawRoundedRectangle (dropArea.toFloat(), Palette::fieldRadius, 1.5f);
         }
     }
 
@@ -729,6 +785,9 @@ public:
         };
         addAndMakeVisible (secondCombo);
 
+        styleLabel (playlistHint, ko ("플레이리스트 그룹은 항상 다음 곡"));
+        addAndMakeVisible (playlistHint);
+
         // wall clock
         styleToggle (wallToggle, ko ("시간 트리거 (시:분:초)"));
         wallToggle.onClick = [this] { const bool on = wallToggle.getToggleState(); edit (ko ("시간 트리거"), [on] (Cue& c) { c.wallClock.enabled = on; }); };
@@ -737,7 +796,7 @@ public:
         for (auto* e : { &hourEditor, &minuteEditor, &secondEditor })
         {
             styleNumberEditor (*e, "0123456789", 2);
-            e->setJustification (juce::Justification::centred);
+            e->setJustification (juce::Justification::centredRight);
             e->onReturnKey = [this, e] { commitWallClock(); e->giveAwayKeyboardFocus(); };
             e->onFocusLost = [this] { commitWallClock(); };
             addAndMakeVisible (*e);
@@ -751,7 +810,9 @@ public:
             b.setButtonText (juce::String::fromUTF8 (dayNames[d]));
             b.setClickingTogglesState (true);
             b.setWantsKeyboardFocus (false);
-            b.setColour (juce::TextButton::buttonOnColourId, Palette::standby);
+            b.setColour (juce::TextButton::buttonOnColourId, Palette::accent);
+            b.getProperties().set ("slatePill", true);
+            b.getProperties().set ("slateSmall", true);
             b.onClick = [this, d]
             {
                 const bool on = dayButtons[(size_t) d].getToggleState();
@@ -851,7 +912,18 @@ public:
             return;
         }
 
-        secondCombo.setSelectedId ((int) cue->secondTrigger + 1, juce::dontSendNotification);
+        if (cue->isGroup() && cue->group.mode == GroupMode::playlist)
+        {
+            // a running playlist answers a second GO with its next child whatever the rule says: the rule is not offered
+            secondCombo.setSelectedId (0, juce::dontSendNotification);
+            secondCombo.setText (ko ("다음 곡으로 (플레이리스트는 항상)"), juce::dontSendNotification);
+            secondCombo.setEnabled (false);
+        }
+        else
+        {
+            secondCombo.setSelectedId ((int) cue->secondTrigger + 1, juce::dontSendNotification);
+        }
+
         wallToggle.setToggleState (cue->wallClock.enabled, juce::dontSendNotification);
 
         auto setIfIdle = [] (juce::TextEditor& e, const juce::String& text) { if (! e.hasKeyboardFocus (true)) e.setText (text, false); };
@@ -873,32 +945,35 @@ public:
     void resized() override
     {
         auto area = getLocalBounds().reduced (12, 6);
-        const int rowHeight = 26;
+        const int rowHeight = Palette::fieldHeight;
         auto nextRow = [&] { auto r = area.removeFromTop (rowHeight); area.removeFromTop (6); return r; };
 
         auto row = nextRow();
         secondLabel.setBounds (row.removeFromLeft (160));
-        secondCombo.setBounds (row.removeFromLeft (300));
+        secondCombo.setBounds (row.removeFromLeft (260));
+
+        row.removeFromLeft (12);
+        playlistHint.setBounds (row);
 
         row = nextRow();
         wallToggle.setBounds (row.removeFromLeft (180));
-        hourEditor.setBounds (row.removeFromLeft (34));
+        hourEditor.setBounds (row.removeFromLeft (50));
         row.removeFromLeft (4);
-        minuteEditor.setBounds (row.removeFromLeft (34));
+        minuteEditor.setBounds (row.removeFromLeft (50));
         row.removeFromLeft (4);
-        secondEditor.setBounds (row.removeFromLeft (34));
+        secondEditor.setBounds (row.removeFromLeft (50));
         row.removeFromLeft (14);
 
         for (auto& b : dayButtons)
         {
-            b.setBounds (row.removeFromLeft (30));
+            b.setBounds (row.removeFromLeft (Palette::weekdaySize).withSizeKeepingCentre (Palette::weekdaySize, Palette::weekdaySize));
             row.removeFromLeft (3);
         }
 
         row = nextRow();
         fadeStopToggle.setBounds (row.removeFromLeft (230));
         fadeStopSecondsLabel.setBounds (row.removeFromLeft (60));
-        fadeStopSecondsEditor.setBounds (row.removeFromLeft (60));
+        fadeStopSecondsEditor.setBounds (row.removeFromLeft (70));
         row.removeFromLeft (14);
         fadeStopScopeLabel.setBounds (row.removeFromLeft (36));
         fadeStopScopeCombo.setBounds (row.removeFromLeft (120));
@@ -906,10 +981,10 @@ public:
         row = nextRow();
         duckToggle.setBounds (row.removeFromLeft (230));
         duckLevelLabel.setBounds (row.removeFromLeft (130));
-        duckLevelEditor.setBounds (row.removeFromLeft (60));
+        duckLevelEditor.setBounds (row.removeFromLeft (70));
         row.removeFromLeft (14);
         duckSecondsLabel.setBounds (row.removeFromLeft (60));
-        duckSecondsEditor.setBounds (row.removeFromLeft (60));
+        duckSecondsEditor.setBounds (row.removeFromLeft (70));
 
         row = nextRow();
         hint.setBounds (row);
@@ -989,7 +1064,7 @@ private:
 
     ProjectDocument& document;
     CueList& cues;
-    juce::Label secondLabel, fadeStopSecondsLabel, fadeStopScopeLabel, duckLevelLabel, duckSecondsLabel, hint;
+    juce::Label playlistHint, secondLabel, fadeStopSecondsLabel, fadeStopScopeLabel, duckLevelLabel, duckSecondsLabel, hint;
     juce::ComboBox secondCombo, fadeStopScopeCombo;
     juce::ToggleButton wallToggle, fadeStopToggle, duckToggle;
     juce::TextEditor hourEditor, minuteEditor, secondEditor, fadeStopSecondsEditor, duckLevelEditor, duckSecondsEditor;
@@ -1110,7 +1185,7 @@ public:
     void resized() override
     {
         auto area = getLocalBounds().reduced (12, 6);
-        auto row = area.removeFromTop (26);
+        auto row = area.removeFromTop (Palette::fieldHeight);
         patchLabel.setBounds (row.removeFromLeft (36));
         patchCombo.setBounds (row.removeFromLeft (220));
         row.removeFromLeft (12);
@@ -1267,7 +1342,7 @@ public:
                 auto* s = sliders.add (new juce::Slider());
                 s->setSliderStyle (juce::Slider::LinearVertical);
                 s->setRange (-60.0, LevelMatrix::maxDb, 0.1);
-                s->setTextBoxStyle (juce::Slider::TextBoxBelow, false, 48, 18);
+                s->setTextBoxStyle (juce::Slider::TextBoxBelow, false, 64, Palette::fieldHeight);
                 s->setDoubleClickReturnValue (true, 0.0);
                 s->setWantsKeyboardFocus (false);
                 s->onValueChange = [this, k, s] { commit (k, s->getValue()); };
@@ -1276,7 +1351,7 @@ public:
                 auto* l = labels.add (new juce::Label());
                 l->setJustificationType (juce::Justification::centred);
                 l->setColour (juce::Label::textColourId, Palette::dimText);
-                l->setFont (juce::Font (juce::FontOptions (13.0f)));
+                l->setFont (Palette::font (Palette::fieldLabelSize));
                 strip.addAndMakeVisible (l);
             }
 
@@ -1307,7 +1382,7 @@ public:
         auto area = getLocalBounds().reduced (12, 6);
         hint.setBounds (area.removeFromTop (18));
         area.removeFromTop (6);
-        auto row = area.removeFromTop (26);
+        auto row = area.removeFromTop (Palette::fieldHeight);
         mainLabel.setBounds (row.removeFromLeft (110));
         mainSlider.setBounds (row.removeFromLeft (juce::jmin (400, row.getWidth())));
         area.removeFromTop (6);
@@ -1322,7 +1397,7 @@ private:
     {
         s.setSliderStyle (juce::Slider::LinearHorizontal);
         s.setRange (-60.0, LevelMatrix::maxDb, 0.1);
-        s.setTextBoxStyle (juce::Slider::TextBoxRight, false, 70, 22);
+        s.setTextBoxStyle (juce::Slider::TextBoxRight, false, 80, Palette::fieldHeight);
         s.setTextValueSuffix (" dB");
         s.setDoubleClickReturnValue (true, 0.0);
         s.setWantsKeyboardFocus (false);
@@ -1330,7 +1405,7 @@ private:
 
     void layoutStrip()
     {
-        const int w = 52;
+        const int w = 72;
         const int h = juce::jmax (80, viewport.getHeight() - 4);
         strip.setSize (juce::jmax (viewport.getWidth(), sliders.size() * w), h);
 
@@ -1593,7 +1668,7 @@ public:
     void resized() override
     {
         auto area = getLocalBounds().reduced (12, 6);
-        auto row = area.removeFromTop (26);
+        auto row = area.removeFromTop (Palette::fieldHeight);
         targetLabel.setBounds (row.removeFromLeft (48));
         targetCombo.setBounds (row.removeFromLeft (juce::jlimit (240, 560, row.getWidth() - 430)));   // a long cue name gets the spare width
         row.removeFromLeft (12);
@@ -1604,7 +1679,7 @@ public:
         stopToggle.setBounds (row.removeFromLeft (140));
         area.removeFromTop (4);
 
-        row = area.removeFromTop (26);
+        row = area.removeFromTop (Palette::fieldHeight);
         levelsToggle.setBounds (row.removeFromLeft (100));
         fetchButton.setBounds (row.removeFromLeft (160));
         row.removeFromLeft (6);
@@ -1981,11 +2056,11 @@ public:
     void resized() override
     {
         auto area = getLocalBounds().reduced (12, 6);
-        auto row = area.removeFromTop (26);
+        auto row = area.removeFromTop (Palette::fieldHeight);
         targetLabel.setBounds (row.removeFromLeft (48));
         targetCombo.setBounds (row.removeFromLeft (juce::jlimit (240, 560, row.getWidth() - 8)));   // a long cue name gets the width
         area.removeFromTop (6);
-        row = area.removeFromTop (26);
+        row = area.removeFromTop (Palette::fieldHeight);
         modeLabel.setBounds (row.removeFromLeft (48));
         modeCombo.setBounds (row.removeFromLeft (300));
         row.removeFromLeft (16);
@@ -2231,7 +2306,8 @@ public:
                 strip.addAndMakeVisible (r->value);
 
                 r->text.setColour (juce::Label::textColourId, Palette::dimText);
-                r->text.setFont (juce::Font (juce::FontOptions (14.0f)));
+                r->text.setFont (Palette::monoFont (Palette::fieldValueSize));
+                r->text.getProperties().set ("slateField", true);
                 r->text.setJustificationType (juce::Justification::centredRight);
                 r->text.setText (param->getText ((float) r->value.getValue(), 24), juce::dontSendNotification);
                 strip.addAndMakeVisible (r->text);
@@ -2296,13 +2372,13 @@ private:
 
     void layoutRows()
     {
-        const int rowH = 26;
+        const int rowH = Palette::formRowHeight;
         strip.setSize (juce::jmax (100, viewport.getWidth() - 14), juce::jmax (viewport.getHeight(), rows.size() * rowH));
 
         for (int i = 0; i < rows.size(); ++i)
         {
             auto* r = rows[i];
-            auto row = juce::Rectangle<int> (0, i * rowH, strip.getWidth(), rowH).reduced (0, 2);
+            auto row = juce::Rectangle<int> (0, i * rowH, strip.getWidth(), rowH).reduced (0, 4);
             r->active.setBounds (row.removeFromLeft (juce::jmax (200, row.getWidth() / 2)));
             r->text.setBounds (row.removeFromRight (110));
             r->value.setBounds (row.reduced (6, 0));
@@ -2472,11 +2548,11 @@ public:
     void resized() override
     {
         auto area = getLocalBounds().reduced (12, 6);
-        auto row = area.removeFromTop (26);
+        auto row = area.removeFromTop (Palette::fieldHeight);
         targetLabel.setBounds (row.removeFromLeft (48));
         targetCombo.setBounds (row.removeFromLeft (260));
         area.removeFromTop (6);
-        row = area.removeFromTop (26);
+        row = area.removeFromTop (Palette::fieldHeight);
         startNextToggle.setBounds (row.removeFromLeft (200));
         stopToggle.setBounds (row.removeFromLeft (200));
         area.removeFromTop (6);
@@ -2591,7 +2667,7 @@ public:
     void resized() override
     {
         auto area = getLocalBounds().reduced (12, 6);
-        auto row = area.removeFromTop (26);
+        auto row = area.removeFromTop (Palette::fieldHeight);
         firstLabel.setBounds (row.removeFromLeft (80));
         firstEditor.setBounds (row.removeFromLeft (60));
         row.removeFromLeft (16);
@@ -2746,11 +2822,11 @@ public:
     void resized() override
     {
         auto area = getLocalBounds().reduced (12, 6);
-        auto row = area.removeFromTop (26);
+        auto row = area.removeFromTop (Palette::fieldHeight);
         kindLabel.setBounds (row.removeFromLeft (48));
         kindCombo.setBounds (row.removeFromLeft (420));
         area.removeFromTop (6);
-        row = area.removeFromTop (26);
+        row = area.removeFromTop (Palette::fieldHeight);
         targetLabel.setBounds (row.removeFromLeft (48));
         targetCombo.setBounds (row.removeFromLeft (260));
         row.removeFromLeft (12);
@@ -2855,24 +2931,27 @@ public:
     {
         styleLabel (modeLabel, ko ("모드"));
         addAndMakeVisible (modeLabel);
-        modeCombo.addItem (ko ("타임라인 — 자식 전부 동시에 (각자 프리웨이트)"), 1);
-        modeCombo.addItem (ko ("플레이리스트 — 차례로"), 2);
-        modeCombo.addItem (ko ("첫 큐 시작 후 그룹 안으로 진입"), 3);
-        modeCombo.addItem (ko ("첫 큐 시작 (플레이헤드는 그룹 뒤로)"), 4);
-        modeCombo.addItem (ko ("랜덤 — 한 바퀴에 한 번씩"), 5);
+        // the box's order = GroupPreset's order (GroupModeLabels.h); the two loops are the playlist mode with 반복 (and 셔플) on
+        modeCombo.addItem (ko ("타임라인 — 자식 전부 동시에 (각자 프리웨이트)"), (int) GroupPreset::timeline + 1);
+        modeCombo.addItem (ko ("플레이리스트 — 차례로 한 바퀴"), (int) GroupPreset::playlist + 1);
+        modeCombo.addItem (ko ("순차 반복 — 차례로, 끝나면 처음부터 계속"), (int) GroupPreset::sequentialLoop + 1);
+        modeCombo.addItem (ko ("랜덤 반복 — 무작위로 계속 (한 바퀴마다 다시 섞음)"), (int) GroupPreset::randomLoop + 1);
+        modeCombo.addItem (ko ("첫 큐 시작 후 그룹 안으로 진입"), (int) GroupPreset::startFirstEnter + 1);
+        modeCombo.addItem (ko ("첫 큐 시작 (플레이헤드는 그룹 뒤로)"), (int) GroupPreset::startFirst + 1);
+        modeCombo.addItem (ko ("랜덤 — GO마다 한 곡 (한 바퀴에 한 번씩)"), (int) GroupPreset::random + 1);
         modeCombo.setWantsKeyboardFocus (false);
         modeCombo.onChange = [this]
         {
             if (refreshing || modeCombo.getSelectedId() <= 0)
                 return;
 
-            const auto mode = (GroupMode) (modeCombo.getSelectedId() - 1);
-            edit (ko ("그룹 모드"), [mode] (Cue& c) { c.group.mode = mode; });
+            const auto preset = (GroupPreset) (modeCombo.getSelectedId() - 1);
+            edit (ko ("그룹 모드"), [preset] (Cue& c) { applyGroupPreset (c.group, preset); });
         };
         addAndMakeVisible (modeCombo);
 
         styleToggle (loopToggle, ko ("반복"));
-        loopToggle.setTooltip (ko ("플레이리스트: 마지막 자식 뒤에 처음부터 다시"));
+        loopToggle.setTooltip (ko ("플레이리스트: 마지막 자식 뒤에 처음부터 다시 (켜면 모드가 '순차 반복' / '랜덤 반복'으로 표시됩니다)"));
         loopToggle.onClick = [this] { const bool on = loopToggle.getToggleState(); edit (ko ("플레이리스트 반복"), [on] (Cue& c) { c.group.loop = on; }); };
         addAndMakeVisible (loopToggle);
 
@@ -2915,7 +2994,7 @@ public:
         if (cue != nullptr && cue->isGroup())
         {
             shownId = cue->id;
-            modeCombo.setSelectedId ((int) cue->group.mode + 1, juce::dontSendNotification);
+            modeCombo.setSelectedId ((int) groupPresetOf (cue->group) + 1, juce::dontSendNotification);
             loopToggle.setToggleState (cue->group.loop, juce::dontSendNotification);
             shuffleToggle.setToggleState (cue->group.shuffle, juce::dontSendNotification);
             crossfadeToggle.setToggleState (cue->group.crossfade, juce::dontSendNotification);
@@ -2937,7 +3016,7 @@ public:
     void resized() override
     {
         auto area = getLocalBounds().reduced (12, 6);
-        auto row = area.removeFromTop (26);
+        auto row = area.removeFromTop (Palette::fieldHeight);
         modeLabel.setBounds (row.removeFromLeft (40));
         modeCombo.setBounds (row.removeFromLeft (320));
         row.removeFromLeft (16);
@@ -3021,7 +3100,7 @@ private:
             const double axis = axisSeconds();
 
             // axis ticks
-            g.setFont (juce::Font (juce::FontOptions (12.0f)));
+            g.setFont (Palette::monoFont (Palette::rulerSize));
             const double step = axis <= 20.0 ? 1.0 : axis <= 60.0 ? 5.0 : axis <= 300.0 ? 30.0 : 60.0;
 
             for (double t = 0.0; t <= axis + 1e-9; t += step)
@@ -3042,7 +3121,7 @@ private:
                 const double length = owner.cues.effectiveLengthOf (child);
                 const bool selected = child == selectedChild;
                 g.setColour (selected ? Palette::text : Palette::dimText);
-                g.setFont (juce::Font (juce::FontOptions (14.0f, selected ? juce::Font::bold : juce::Font::plain)));
+                g.setFont (Palette::font (Palette::fieldLabelSize, selected));
                 g.drawText ((c.number.isNotEmpty() ? c.number + " " : juce::String()) + c.name, 4, y, labelWidth - 8, h, juce::Justification::centredLeft, true);
 
                 const float x0 = xFor (c.preWaitSeconds);
@@ -3058,12 +3137,12 @@ private:
 
                 if (selected)
                 {
-                    g.setColour (juce::Colours::white);
+                    g.setColour (Palette::accentInk);
                     g.drawRoundedRectangle (bar, 3.0f, 1.5f);
                 }
 
-                g.setColour (juce::Colours::black.withAlpha (0.8f));
-                g.setFont (juce::Font (juce::FontOptions (h < 20 ? 11.0f : 13.0f)));   // the text spans the row, not the bar
+                g.setColour (Palette::onBright);
+                g.setFont (Palette::font (h < 20 ? Palette::kickerSize : Palette::fieldLabelSize));   // the text spans the row, not the bar
                 g.drawText (formatTimeMs (c.preWaitSeconds), juce::Rectangle<int> ((int) bar.getX() + 4, y, juce::jmax (0, (int) bar.getWidth() - 4), h),
                             juce::Justification::centredLeft, true);
                 y += h;
@@ -3072,7 +3151,7 @@ private:
             if (children.empty())
             {
                 g.setColour (Palette::dimText);
-                g.setFont (juce::Font (juce::FontOptions (14.0f)));
+                g.setFont (Palette::font (Palette::fieldLabelSize));
                 g.drawText (ko ("자식 큐가 없습니다 — 큐를 이 그룹 아래로 끌어다 넣거나, 큐를 선택하고 Ctrl+G로 묶으세요"), getLocalBounds(), juce::Justification::centred);
             }
         }
@@ -3253,7 +3332,7 @@ public:
         auto area = getLocalBounds().reduced (12, 8);
         hint.setBounds (area.removeFromTop (18));
         area.removeFromTop (6);
-        chainStrip.setBounds (area.removeFromTop (juce::jmax (54, juce::jmin (70, area.getHeight()))));
+        chainStrip.setBounds (area.removeFromTop (Palette::pluginSlotHeight + Palette::scrollBarWidth));
     }
 
     void paint (juce::Graphics& g) override { g.fillAll (Palette::panel); }
@@ -3271,13 +3350,23 @@ CueInspector::CueInspector (ProjectDocument& doc, AudioEngine& e, AppSettings& s
 {
     engine.getDeviceManager().addChangeListener (this);   // dead output columns follow the device
 
-    title.setFont (juce::Font (juce::FontOptions (16.0f, juce::Font::bold)));
-    title.setColour (juce::Label::textColourId, Palette::dimText);
+    title.setText (ko ("큐 인스펙터"), juce::dontSendNotification);
+    title.setFont (Palette::font (Palette::bodySize, true));
+    title.setColour (juce::Label::textColourId, Palette::text);
+    title.setBorderSize (juce::BorderSize<int> (0));
     addAndMakeVisible (title);
+
+    selectionDetails.setFont (Palette::font (Palette::fileSize));
+    selectionDetails.setColour (juce::Label::textColourId, Palette::muted);
+    selectionDetails.setJustificationType (juce::Justification::centredRight);
+    selectionDetails.setMinimumHorizontalScale (1.0f);
+    selectionDetails.setBorderSize (juce::BorderSize<int> (0));
+    addAndMakeVisible (selectionDetails);
 
     basicsPanel = std::make_unique<BasicsPanel> (document, engine, settings);
     basics = basicsPanel.get();
     basics->onPanic = [this] { if (onPanic) onPanic(); };
+    basics->onKeyCaptured = [this] (int keyCode) { if (onHotkeyCaptured) onHotkeyCaptured (keyCode); };
 
     timeLoopsPanel = std::make_unique<TimeLoopsPanel> (document, engine, thumbnailCache);
     timeLoops = timeLoopsPanel.get();
@@ -3306,7 +3395,7 @@ CueInspector::CueInspector (ProjectDocument& doc, AudioEngine& e, AppSettings& s
     controlPanel = std::make_unique<ControlPanel> (document);
     micPanel = std::make_unique<MicPanel> (document, engine);
 
-    tabs.setTabBarDepth (28);
+    tabs.setTabBarDepth (Palette::tabBarHeight);
     tabs.setOutline (0);
     tabs.setColour (juce::TabbedComponent::backgroundColourId, Palette::panel);
     tabs.onTabShown = [this]
@@ -3424,52 +3513,61 @@ void CueInspector::rebuildTabs (int wanted)
     tabSet = wanted;
     tabs.clearTabs();
 
+    auto addTab = [this] (const juce::String& name, juce::Colour colour, juce::Component* panel, bool)
+    {
+        const int height = panel == basics ? Palette::inspectorBasicHeight
+                         : panel == timeLoops || panel == curvePanel.get() ? Palette::inspectorPlotHeight : Palette::inspectorFormHeight;
+        const int width = panel == curvePanel.get() || panel == fadePanel.get() ? Palette::inspectorWideWidth
+                        : panel == controlPanel.get() ? Palette::inspectorControlWidth : Palette::inspectorPageWidth;
+        tabs.addTab (name, colour, new InspectorPage (*panel, height, width), true);
+    };
+
     if (wanted == 5)
     {
-        tabs.addTab (ko ("기본"), Palette::panel, basics, false);
-        tabs.addTab (ko ("입력"), Palette::panel, micPanel.get(), false);
-        tabs.addTab (ko ("레벨"), Palette::panel, levels, false);
-        tabs.addTab (ko ("트림"), Palette::panel, trim, false);
-        tabs.addTab (ko ("트리거"), Palette::panel, triggers, false);
-        tabs.addTab (ko ("플러그인"), Palette::panel, effects, false);
+        addTab (ko ("기본"), Palette::panel, basics, false);
+        addTab (ko ("입력"), Palette::panel, micPanel.get(), false);
+        addTab (ko ("레벨"), Palette::panel, levels, false);
+        addTab (ko ("트림"), Palette::panel, trim, false);
+        addTab (ko ("트리거"), Palette::panel, triggers, false);
+        addTab (ko ("플러그인"), Palette::panel, effects, false);
         tabs.setCurrentTabIndex (1);
     }
     else if (wanted == 4)
     {
-        tabs.addTab (ko ("기본"), Palette::panel, basics, false);
-        tabs.addTab (ko ("동작"), Palette::panel, controlPanel.get(), false);
-        tabs.addTab (ko ("트리거"), Palette::panel, triggers, false);
+        addTab (ko ("기본"), Palette::panel, basics, false);
+        addTab (ko ("동작"), Palette::panel, controlPanel.get(), false);
+        addTab (ko ("트리거"), Palette::panel, triggers, false);
         tabs.setCurrentTabIndex (1);
     }
     else if (wanted == 3)
     {
-        tabs.addTab (ko ("기본"), Palette::panel, basics, false);
-        tabs.addTab (ko ("그룹"), Palette::panel, groupPanel.get(), false);
-        tabs.addTab (ko ("트리거"), Palette::panel, triggers, false);
+        addTab (ko ("기본"), Palette::panel, basics, false);
+        addTab (ko ("그룹"), Palette::panel, groupPanel.get(), false);
+        addTab (ko ("트리거"), Palette::panel, triggers, false);
         tabs.setCurrentTabIndex (1);
     }
     else if (wanted == 2)
     {
-        tabs.addTab (ko ("기본"), Palette::panel, basics, false);
-        tabs.addTab (ko ("디밴프"), Palette::panel, devampPanel.get(), false);
-        tabs.addTab (ko ("트리거"), Palette::panel, triggers, false);
+        addTab (ko ("기본"), Palette::panel, basics, false);
+        addTab (ko ("디밴프"), Palette::panel, devampPanel.get(), false);
+        addTab (ko ("트리거"), Palette::panel, triggers, false);
         tabs.setCurrentTabIndex (1);
     }
     else if (wanted == 1)
     {
-        tabs.addTab (ko ("기본"), Palette::panel, basics, false);
-        tabs.addTab (ko ("페이드"), Palette::panel, fadeInOutPanel.get(), false);
-        tabs.addTab (ko ("커브"), Palette::panel, curvePanel.get(), false);
+        addTab (ko ("기본"), Palette::panel, basics, false);
+        addTab (ko ("페이드"), Palette::panel, fadeInOutPanel.get(), false);
+        addTab (ko ("커브"), Palette::panel, curvePanel.get(), false);
         tabs.setCurrentTabIndex (1);
     }
     else
     {
-        tabs.addTab (ko ("기본"), Palette::panel, basics, false);
-        tabs.addTab (ko ("재생"), Palette::panel, timeLoops, false);
-        tabs.addTab (ko ("레벨"), Palette::panel, levels, false);
-        tabs.addTab (ko ("트림"), Palette::panel, trim, false);
-        tabs.addTab (ko ("트리거"), Palette::panel, triggers, false);
-        tabs.addTab (ko ("플러그인"), Palette::panel, effects, false);
+        addTab (ko ("기본"), Palette::panel, basics, false);
+        addTab (ko ("재생"), Palette::panel, timeLoops, false);
+        addTab (ko ("레벨"), Palette::panel, levels, false);
+        addTab (ko ("트림"), Palette::panel, trim, false);
+        addTab (ko ("트리거"), Palette::panel, triggers, false);
+        addTab (ko ("플러그인"), Palette::panel, effects, false);
         tabs.setCurrentTabIndex (0);
     }
 }
@@ -3496,18 +3594,21 @@ void CueInspector::refresh()
 
     if (cue == nullptr)
     {
-        title.setText (ko ("큐 인스펙터 - 선택된 큐 없음"), juce::dontSendNotification);
+        selectionDetails.setText (ko ("선택된 큐 없음"), juce::dontSendNotification);
     }
     else
     {
         const int count = (int) cues.getSelectedIndices().size();
-        juce::String text = ko ("큐 인스펙터 - ") + (cue->number.isNotEmpty() ? cue->number + " " : juce::String()) + cue->name;
+        juce::String text = (cue->number.isNotEmpty() ? cue->number + ko (" · ") : juce::String()) + cue->name;
+        if (cue->file != juce::File())
+            text << ko (" · ") << cue->file.getFileName();
 
         if (count > 1)
             text << ko ("  (") << count << ko ("개 선택, 표에서 한꺼번에 편집)");
 
-        title.setText (text, juce::dontSendNotification);
+        selectionDetails.setText (text, juce::dontSendNotification);
     }
+    selectionDetails.setTooltip (selectionDetails.getText());
 
     rebuildTabs (cue == nullptr ? 0 : cue->isFade() ? 1 : cue->isDevamp() ? 2 : cue->isGroup() ? 3 : cue->isControl() ? 4 : cue->isMic() ? 5 : 0);
     basics->refresh();
@@ -3528,16 +3629,18 @@ void CueInspector::refresh()
 
 void CueInspector::resized()
 {
-    auto area = getLocalBounds();
-    title.setBounds (area.removeFromTop (24).reduced (12, 2));
+    auto area = getLocalBounds().reduced (1);
+    auto heading = area.removeFromTop (Palette::cardHeaderHeight - 1).reduced (14, 0);
+    title.setBounds (heading.removeFromLeft (110));
+    selectionDetails.setBounds (heading);
     tabs.setBounds (area);
 }
 
 void CueInspector::paint (juce::Graphics& g)
 {
-    g.fillAll (Palette::panel);
+    Palette::drawCard (g, getLocalBounds());
     g.setColour (Palette::outline);
-    g.drawLine (0.0f, 0.5f, (float) getWidth(), 0.5f);
+    g.fillRect (1, Palette::cardHeaderHeight - 1, getWidth() - 2, 1);
 }
 
 } // namespace gocue

@@ -1,31 +1,179 @@
 #include "ui/TransportBar.h"
 
 #include "app/Commands.h"
+#include "ui/GroupModeLabels.h"
 #include "ui/UiUtils.h"
 
 namespace gocue
 {
 
+namespace
+{
+    void drawSurface (juce::Graphics& g, juce::Rectangle<int> bounds, juce::Colour fill, juce::Colour edge,
+                      bool over, bool down)
+    {
+        const auto r = bounds.toFloat().reduced (0.5f);
+        juce::Path shape;
+        shape.addRoundedRectangle (r, Palette::cornerRadius);
+        g.setColour (down ? fill.darker (Palette::pressedDarken) : over ? fill.brighter (Palette::hoverBrighten) : fill);
+        g.fillPath (shape);
+        g.setColour (edge);
+        g.strokePath (shape, juce::PathStrokeType (Palette::borderWidth));
+        Palette::drawTopHighlight (g, shape, r);
+    }
+
+    int keyWidth (const juce::String& text)
+    {
+        return juce::GlyphArrangement::getStringWidthInt (Palette::monoFont (Palette::keySize), text) + 10;
+    }
+
+    void drawKey (juce::Graphics& g, juce::Rectangle<int> bounds, juce::Colour colour, const juce::String& text)
+    {
+        g.setColour (colour.withAlpha (Palette::keyAlpha));
+        g.drawRoundedRectangle (bounds.toFloat().reduced (0.5f), Palette::keyRadius, Palette::borderWidth);
+        g.setFont (Palette::monoFont (Palette::keySize));
+        g.drawText (text, bounds, juce::Justification::centred, false);
+    }
+}
+
+void TransportBar::GoButton::paintButton (juce::Graphics& g, bool over, bool down)
+{
+    const auto colour = findColour (juce::TextButton::buttonColourId);
+    drawSurface (g, getLocalBounds(), colour, locked ? Palette::stopButton : colour, over, down);
+    if (locked)
+    {
+        g.setColour (Palette::stopButton);
+        g.drawRoundedRectangle (getLocalBounds().toFloat().reduced (1.5f), Palette::cornerRadius, Palette::selectionWidth);
+    }
+    g.setColour (findColour (juce::TextButton::textColourOffId));
+    Palette::drawHeavyText (g, "GO", getLocalBounds(), Palette::goFont(), juce::Justification::centred, Palette::goTextStroke);
+}
+
+void TransportBar::TransportButton::paintButton (juce::Graphics& g, bool over, bool down)
+{
+    const auto colour = findColour (juce::TextButton::textColourOffId);
+    drawSurface (g, getLocalBounds(), findColour (juce::TextButton::buttonColourId), colour, over, down);
+    const auto font = Palette::font (Palette::bodySize, true);
+    const int captionWidth = juce::GlyphArrangement::getStringWidthInt (font, getButtonText());
+    const bool stop = icon == Icon::stop;
+    const int totalWidth = Palette::statusIconSize + 8 + captionWidth + (stop ? 0 : 8 + keyWidth (key));
+    auto line = getLocalBounds().withSizeKeepingCentre (juce::jmin (getWidth() - 16, totalWidth), 22);
+    if (stop)
+        line.translate (0, -8);
+    const auto iconArea = line.removeFromLeft (Palette::statusIconSize).toFloat();
+    const auto c = iconArea.getCentre();
+    juce::Path path;
+    g.setColour (colour);
+    if (icon == Icon::pause)
+    {
+        path.addRectangle (c.x - 4.0f, c.y - 4.0f, 2.5f, 8.0f);
+        path.addRectangle (c.x + 1.5f, c.y - 4.0f, 2.5f, 8.0f);
+    }
+    else if (icon == Icon::fade)
+    {
+        path.startNewSubPath (c.x - 5.0f, c.y - 5.0f);
+        path.lineTo (c.x - 1.0f, c.y + 1.0f);
+        path.lineTo (c.x + 5.0f, c.y + 4.0f);
+        path.lineTo (c.x - 5.0f, c.y + 4.0f);
+        path.closeSubPath();
+        g.strokePath (path, juce::PathStrokeType (1.5f));
+        path.clear();
+    }
+    else
+        path.addRectangle (c.x - 3.0f, c.y - 3.0f, 6.0f, 6.0f);
+    g.fillPath (path);
+    line.removeFromLeft (8);
+    if (! stop)
+    {
+        drawKey (g, line.removeFromRight (keyWidth (key)).withSizeKeepingCentre (keyWidth (key), 15), colour, key);
+        line.removeFromRight (8);
+    }
+    g.setColour (colour);
+    g.setFont (font);
+    g.drawText (getButtonText(), line, juce::Justification::centred, true);
+    if (stop)
+    {
+        const int detailWidth = juce::GlyphArrangement::getStringWidthInt (Palette::font (Palette::fileSize, true), detail);
+        auto bottom = getLocalBounds().withSizeKeepingCentre (keyWidth (key) + 4 + detailWidth, 16).translated (0, 11);
+        drawKey (g, bottom.removeFromLeft (keyWidth (key)), colour, key);
+        bottom.removeFromLeft (4);
+        g.setColour (colour);
+        g.setFont (Palette::font (Palette::fileSize, true));
+        g.drawText (detail, bottom, juce::Justification::centredLeft, true);
+    }
+}
+
+void TransportBar::GearButton::paintButton (juce::Graphics& g, bool over, bool down)
+{
+    drawSurface (g, getLocalBounds(), Palette::panel2, Palette::outline, over, down);
+    const auto c = getLocalBounds().toFloat().getCentre();
+    g.setColour (Palette::muted);
+    g.drawEllipse (c.x - 3.0f, c.y - 3.0f, 6.0f, 6.0f, 1.5f);
+    for (int i = 0; i < 8; ++i)
+    {
+        const float a = juce::MathConstants<float>::twoPi * (float) i / 8.0f;
+        g.drawLine (c.x + std::cos (a) * 5.5f, c.y + std::sin (a) * 5.5f,
+                    c.x + std::cos (a) * 8.0f, c.y + std::sin (a) * 8.0f, 1.8f);
+    }
+}
+
+void TransportBar::MetaLabel::paint (juce::Graphics& g)
+{
+    auto rest = getText();
+    auto area = getLocalBounds();
+    const auto labelFont = Palette::font (Palette::fileSize);
+    const auto valueFont = Palette::monoFont (Palette::fileSize).boldened();
+    // These are prefixes of the existing cueMeta strings, not a second source of cue descriptions.
+    const juce::StringArray labels { ko ("길이 "), ko ("페이드인 "), ko ("정지 페이드 "), ko ("게인 "), ko ("패치 "),
+                                    ko ("제어 큐: "), ko ("페이드 "), ko ("속도 → "), ko ("그룹 큐"), ko ("마이크 큐"), ko ("디밴프") };
+    while (rest.isNotEmpty() && area.getWidth() > 0)
+    {
+        const int separator = rest.indexOf ("   ");
+        const auto part = separator < 0 ? rest : rest.substring (0, separator);
+        rest = separator < 0 ? juce::String() : rest.substring (separator + 3).trimStart();
+        juce::String label, value = part;
+        for (const auto& prefix : labels)
+            if (part.startsWith (prefix))
+            {
+                label = prefix;
+                value = part.substring (prefix.length());
+                break;
+            }
+        const int labelWidth = juce::GlyphArrangement::getStringWidthInt (labelFont, label);
+        g.setFont (labelFont);
+        g.setColour (Palette::muted);
+        g.drawText (label, area.removeFromLeft (juce::jmin (area.getWidth(), labelWidth)), juce::Justification::centredLeft, true);
+        const int valueWidth = juce::GlyphArrangement::getStringWidthInt (valueFont, value);
+        g.setFont (valueFont);
+        g.setColour (Palette::text);
+        g.drawText (value, area.removeFromLeft (juce::jmin (area.getWidth(), valueWidth)), juce::Justification::centredLeft, true);
+        area.removeFromLeft (juce::jmin (16, area.getWidth()));
+    }
+}
+
 TransportBar::TransportBar (juce::ApplicationCommandManager& cm)
     : commands (cm)
 {
     goButton.setColour (juce::TextButton::buttonColourId, Palette::goButton);
-    goButton.setColour (juce::TextButton::textColourOffId, juce::Colours::white);
+    goButton.setColour (juce::TextButton::textColourOffId, Palette::onBright);
     goButton.setWantsKeyboardFocus (false);
     goButton.onClick = [this] { commands.invokeDirectly (CommandIDs::go, true); };
     addAndMakeVisible (goButton);
 
-    pauseButton.setButtonText (ko ("일시정지 (P)"));
-    styleButton (pauseButton, Palette::standby.darker (0.15f));   // white text 4:1
+    pauseButton.setButtonText (ko ("일시정지"));
+    pauseButton.key = "P";
+    styleButton (pauseButton, Palette::paused);
     pauseButton.onClick = [this] { commands.invokeDirectly (CommandIDs::pauseToggle, true); };
 
-    fadeOutButton.setButtonText (ko ("페이드아웃 (F)"));
+    fadeOutButton.setButtonText (ko ("페이드아웃"));
+    fadeOutButton.key = "F";
     styleButton (fadeOutButton, Palette::fadingOut);
-    fadeOutButton.setColour (juce::TextButton::textColourOffId, Palette::onBright);   // dark text on orange
     fadeOutButton.onClick = [this] { commands.invokeDirectly (CommandIDs::fadeOutSelected, true); };
 
-    panicButton.setButtonText (ko ("전체 페이드 정지 (Esc)"));
-    styleButton (panicButton, Palette::stopButton.darker (0.12f));   // white text 4:1
+    panicButton.setButtonText (ko ("전체 페이드 정지"));
+    panicButton.key = "Esc";
+    styleButton (panicButton, Palette::stopButton);
+    panicButton.setColour (juce::TextButton::buttonColourId, Palette::panel2.interpolatedWith (Palette::stopButton, Palette::stopTintAlpha));
     panicButton.onClick = [this] { commands.invokeDirectly (CommandIDs::panicAll, true); };
     setPanicSeconds (panicSeconds);
 
@@ -39,35 +187,65 @@ TransportBar::TransportBar (juce::ApplicationCommandManager& cm)
     addAndMakeVisible (panicSettingsButton);
 
     standbyTitle.setText (ko ("다음 큐"), juce::dontSendNotification);
-    standbyTitle.setColour (juce::Label::textColourId, Palette::dimText);
-    standbyTitle.setFont (juce::Font (juce::FontOptions (13.0f)));
+    standbyTitle.setColour (juce::Label::textColourId, Palette::accent);
+    auto kickerFont = Palette::font (Palette::kickerSize, true);
+    kickerFont.setExtraKerningFactor (Palette::kickerTracking);
+    standbyTitle.setFont (kickerFont);
     addAndMakeVisible (standbyTitle);
 
-    cueNumber.setFont (juce::Font (juce::FontOptions (30.0f, juce::Font::bold)));
+    cueNumber.setFont (Palette::monoFont (Palette::nextNameSize).boldened());
     cueNumber.setColour (juce::Label::textColourId, Palette::standby);
     cueNumber.setJustificationType (juce::Justification::centredLeft);
     addAndMakeVisible (cueNumber);
 
-    cueName.setFont (juce::Font (juce::FontOptions (22.0f, juce::Font::bold)));
+    cueName.setFont (Palette::font (Palette::nextNameSize, true));
     cueName.setColour (juce::Label::textColourId, Palette::text);
     addAndMakeVisible (cueName);
 
-    cueFile.setFont (juce::Font (juce::FontOptions (13.0f)));
+    cueFile.setFont (Palette::monoFont (Palette::fileSize));
     cueFile.setColour (juce::Label::textColourId, Palette::dimText);
     addAndMakeVisible (cueFile);
 
-    cueMeta.setFont (juce::Font (juce::FontOptions (13.0f)));
+    cueMeta.setFont (Palette::font (Palette::fileSize));
     cueMeta.setColour (juce::Label::textColourId, Palette::dimText);
     addAndMakeVisible (cueMeta);
 
-    playingLabel.setFont (juce::Font (juce::FontOptions (14.0f, juce::Font::bold)));
+    momentaryLabel.setText (ko ("실시간 · LUFS"), juce::dontSendNotification);
+    averageLabel.setText (ko ("평균 · LUFS"), juce::dontSendNotification);
+    for (auto* label : { &momentaryLabel, &averageLabel, &momentaryValue, &averageValue })
+    {
+        const bool value = label == &momentaryValue || label == &averageValue;
+        label->setFont (value ? Palette::monoFont (Palette::loudnessSize).boldened() : Palette::font (Palette::loudnessLabelSize, true));
+        label->setColour (juce::Label::textColourId, value ? Palette::text : Palette::muted);
+        label->setBorderSize (juce::BorderSize<int> (0));
+        label->setMinimumHorizontalScale (value ? 0.7f : 0.85f);   // a narrow next-cue card shrinks the digits instead of clipping
+        addAndMakeVisible (label);
+    }
+    averageWindow.getProperties().set ("slateTextOnly", true);
+    averageWindow.setColour (juce::TextButton::textColourOffId, Palette::muted);
+    averageWindow.setWantsKeyboardFocus (false);
+    averageWindow.onClick = [this] { showLoudnessWindowMenu(); };
+    addAndMakeVisible (averageWindow);
+    setLoudness (false, 0.0, false, 0.0, averageSeconds);
+
+    playingLabel.setFont (Palette::font (Palette::fileSize));
     playingLabel.setColour (juce::Label::textColourId, Palette::dimText);
     playingLabel.setJustificationType (juce::Justification::centredRight);
-    addAndMakeVisible (playingLabel);
+    addChildComponent (playingLabel);   // retained for setPlayingCount; the visible count lives in ActiveCuesPanel
 
-    statusLabel.setFont (juce::Font (juce::FontOptions (13.0f)));
+    statusLabel.setFont (Palette::font (Palette::fileSize));
     statusLabel.setJustificationType (juce::Justification::centredRight);
-    addAndMakeVisible (statusLabel);
+    addChildComponent (statusLabel);
+
+    contextLabel.setFont (Palette::font (Palette::fileSize));
+    contextLabel.setColour (juce::Label::textColourId, Palette::muted);
+    contextLabel.setJustificationType (juce::Justification::centredRight);
+    addAndMakeVisible (contextLabel);
+    for (auto* label : { &standbyTitle, &cueNumber, &cueName, &cueFile, &contextLabel, &statusLabel })
+    {
+        label->setBorderSize (juce::BorderSize<int> (0));
+        label->setMinimumHorizontalScale (1.0f);
+    }
 
     setStandbyCue (-1, nullptr);
     setPlayingCount (0, 0);
@@ -75,13 +253,25 @@ TransportBar::TransportBar (juce::ApplicationCommandManager& cm)
 
 void TransportBar::styleButton (juce::TextButton& button, juce::Colour colour)
 {
-    button.setColour (juce::TextButton::buttonColourId, colour);
-    button.setColour (juce::TextButton::textColourOffId, juce::Colours::white);
+    button.setColour (juce::TextButton::buttonColourId, Palette::panel2);
+    button.setColour (juce::TextButton::textColourOffId, colour);
     button.setWantsKeyboardFocus (false);
     addAndMakeVisible (button);
 }
 
 void TransportBar::setStandbyCue (int index, const Cue* cue)
+{
+    const auto previousNumber = cueNumber.getText();
+    updateStandbyCue (index, cue);
+    cueNumber.setTooltip (cueNumber.getText());
+    cueName.setTooltip (cueName.getText());
+    cueFile.setTooltip (cueFile.getText());
+    cueMeta.setTooltip (cueMeta.getText());
+    if (cueNumber.getText() != previousNumber)
+        resized();
+}
+
+void TransportBar::updateStandbyCue (int index, const Cue* cue)
 {
     if (cue == nullptr)
     {
@@ -99,11 +289,7 @@ void TransportBar::setStandbyCue (int index, const Cue* cue)
     {
         cueFile.setText (describeGroup ? describeGroup (*cue) : ko ("그룹"), juce::dontSendNotification);
         cueFile.setColour (juce::Label::textColourId, Palette::dimText);
-        cueMeta.setText (ko ("그룹 큐   ") + (cue->group.mode == GroupMode::timeline ? ko ("자식 전부 동시에 시작 (각자 프리웨이트)")
-                                            : cue->group.mode == GroupMode::playlist ? ko ("자식 차례로 재생 (두 번째 GO = 다음 곡)")
-                                            : cue->group.mode == GroupMode::startFirstEnter ? ko ("첫 자식 시작, 플레이헤드는 그룹 안으로")
-                                            : cue->group.mode == GroupMode::startFirst ? ko ("첫 자식 시작, 플레이헤드는 그룹 뒤로")
-                                            : ko ("자식 중 하나를 랜덤으로 (한 바퀴에 한 번씩)")), juce::dontSendNotification);
+        cueMeta.setText (ko ("그룹 큐   ") + groupPresetName (cue->group) + ko (" — ") + groupPresetDescription (cue->group), juce::dontSendNotification);
         return;
     }
 
@@ -175,7 +361,15 @@ void TransportBar::setStandbyCue (int index, const Cue* cue)
          << "   " << ko ("페이드인 ") << juce::roundToInt (cue->audio.envelope.fadeInSeconds (cue->regionLength()) * 1000.0) << " ms"
          << "   " << ko ("정지 페이드 ") << cue->fadeOutMs << " ms"
          << "   " << ko ("게인 ") << juce::String (cue->gainDb, 1) << " dB";
+    if (describePatch)
+        meta << ko ("   패치 ") << describePatch (*cue);
     cueMeta.setText (meta, juce::dontSendNotification);
+}
+
+void TransportBar::setContextText (const juce::String& text)
+{
+    contextLabel.setText (text, juce::dontSendNotification);
+    contextLabel.setTooltip (text);
 }
 
 void TransportBar::setPlayingCount (int numPlaying, int numPaused)
@@ -193,6 +387,9 @@ void TransportBar::showStatus (const juce::String& message, bool isError)
 {
     statusLabel.setText (message, juce::dontSendNotification);
     statusLabel.setColour (juce::Label::textColourId, isError ? Palette::missing : Palette::dimText);
+    statusLabel.setTooltip (message);
+    statusLabel.setVisible (true);
+    contextLabel.setVisible (false);
     startTimer (isError ? 6000 : 3000);
 }
 
@@ -227,13 +424,16 @@ void TransportBar::setAuditionMode (bool auditioning)
         return;
 
     auditionMode = auditioning;
-    goButton.setButtonText (auditionMode ? ko ("GO (\xEC\x98\xA4\xEB\x94\x94\xEC\x85\x98)") : juce::String ("GO"));   // GO (오디션)
+    goButton.setTooltip (auditionMode ? ko ("GO (오디션)") : juce::String ("GO"));
     updateGoLook();
 }
 
 void TransportBar::updateGoLook()
 {
     goButton.setColour (juce::TextButton::buttonColourId, goFlashing ? Palette::stopButton : (auditionMode ? Palette::standby : Palette::goButton));
+    goButton.setColour (juce::TextButton::textColourOffId, auditionMode ? Palette::accentInk : Palette::onBright);
+    goButton.locked = goLocked || goFlashing;
+    goButton.repaint();
     repaint();
 }
 
@@ -241,56 +441,101 @@ void TransportBar::timerCallback()
 {
     stopTimer();
     statusLabel.setText ("", juce::dontSendNotification);
+    statusLabel.setVisible (false);
+    contextLabel.setVisible (true);
 }
 
 void TransportBar::setPanicSeconds (double seconds)
 {
     panicSeconds = seconds;
     const bool whole = std::abs (seconds - std::round (seconds)) < 0.001;
-    panicButton.setButtonText (ko ("전체 페이드 정지 (Esc) ") + juce::String (seconds, whole ? 0 : 1) + ko ("초"));
+    panicButton.detail = juce::String (seconds, whole ? 0 : 1) + ko ("초");
+    panicButton.setTooltip (ko ("전체 페이드 정지 (Esc) ") + panicButton.detail);
+    panicButton.repaint();
+}
+
+void TransportBar::setLoudness (bool momentaryValid, double momentaryLufs, bool averageValid, double averageLufs, int windowSeconds)
+{
+    const auto reading = [] (bool valid, double value)
+    {
+        return valid && std::isfinite (value) ? juce::String (value, 1) : ko ("—");
+    };
+    momentaryValue.setText (reading (momentaryValid, momentaryLufs), juce::dontSendNotification);
+    averageValue.setText (reading (averageValid, averageLufs), juce::dontSendNotification);
+    averageSeconds = windowSeconds;
+    const auto caption = juce::String (windowSeconds) + ko ("초 ▾");
+    if (averageWindow.getButtonText() != caption)
+        averageWindow.setButtonText (caption);
+}
+
+void TransportBar::showLoudnessWindowMenu()
+{
+    juce::PopupMenu menu;
+    for (const int seconds : { 5, 10, 20, 30, 60 })
+        menu.addItem (seconds, juce::String (seconds) + ko ("초"), true, averageSeconds == seconds);
+    menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&averageWindow),
+                       [safeThis = juce::Component::SafePointer<TransportBar> (this)] (int seconds)
+    {
+        if (safeThis != nullptr && seconds > 0 && safeThis->onLufsAverageSecondsChanged)
+            safeThis->onLufsAverageSecondsChanged (seconds);
+    });
 }
 
 void TransportBar::resized()
 {
-    auto area = getLocalBounds().reduced (10, 8);
-
-    goButton.setBounds (area.removeFromLeft (juce::roundToInt ((float) area.getHeight() * 1.7f)));   // the biggest thing on screen, same shape at every window size
-    area.removeFromLeft (16);
-
-    auto right = area.removeFromRight (230);
-    auto buttons = right.removeFromBottom (28);
-    panicSettingsButton.setBounds (buttons.removeFromRight (30));
-    buttons.removeFromRight (4);
-    panicButton.setBounds (buttons);
-    right.removeFromBottom (4);
-    buttons = right.removeFromBottom (28);
-    pauseButton.setBounds (buttons.removeFromLeft (buttons.getWidth() / 2 - 2));
-    buttons.removeFromLeft (4);
-    fadeOutButton.setBounds (buttons);
-    playingLabel.setBounds (right.removeFromTop (22));
-    statusLabel.setBounds (right);
-
-    area.removeFromRight (10);
-
-    standbyTitle.setBounds (area.removeFromTop (16));
-    auto main = area.removeFromTop (36);
-    cueNumber.setBounds (main.removeFromLeft (70));
+    if (getWidth() <= 0 || getHeight() <= 0)
+        return;
+    auto area = getLocalBounds();
+    goButton.setBounds (area.removeFromLeft (juce::jmin (Palette::goWidth, getWidth() / 6)));
+    area.removeFromLeft (Palette::gap);
+    auto right = area.removeFromRight (juce::jlimit (Palette::minTransportWidth, Palette::transportWidth, getWidth() / 4));
+    const int halfWidth = juce::jmax (0, (right.getWidth() - Palette::buttonGap) / 2);
+    auto top = right.removeFromTop (juce::jmax (0, (right.getHeight() - Palette::buttonGap) / 2));
+    pauseButton.setBounds (top.removeFromLeft (halfWidth));
+    top.removeFromLeft (Palette::buttonGap);
+    fadeOutButton.setBounds (top);
+    right.removeFromTop (Palette::buttonGap);
+    panicButton.setBounds (right.removeFromLeft (halfWidth));
+    right.removeFromLeft (Palette::buttonGap);
+    panicSettingsButton.setBounds (right);
+    area.removeFromRight (Palette::gap);
+    nextCard = area;
+    const juce::Rectangle<int> surfaces[] = { nextCard, goButton.getBounds(), pauseButton.getBounds(), fadeOutButton.getBounds(),
+                                             panicButton.getBounds(), panicSettingsButton.getBounds() };
+    for (int i = 0; i < 6; ++i)
+        shadows[i].resize (surfaces[i]);
+    area.reduce (16, 12);
+    auto heading = area.removeFromTop (18);
+    standbyTitle.setBounds (heading.removeFromLeft (60));
+    contextLabel.setBounds (heading);
+    statusLabel.setBounds (heading);
+    area.removeFromTop (4);
+    auto readings = area.removeFromRight (juce::jmin (Palette::loudnessWidth, area.getWidth() / 2));
+    auto live = readings.removeFromLeft (readings.getWidth() / 2);
+    live.removeFromRight (Palette::buttonGap);
+    momentaryLabel.setBounds (live.removeFromTop (Palette::loudnessLabelHeight));
+    momentaryValue.setBounds (live.removeFromTop (Palette::loudnessValueHeight));
+    auto averageHeading = readings.removeFromTop (Palette::loudnessLabelHeight);
+    averageWindow.setBounds (averageHeading.removeFromLeft (Palette::loudnessWindowWidth));
+    averageLabel.setBounds (averageHeading);
+    averageValue.setBounds (readings.removeFromTop (Palette::loudnessValueHeight));
+    area.removeFromRight (Palette::buttonGap);
+    auto main = area.removeFromTop (33);
+    const int numberWidth = juce::GlyphArrangement::getStringWidthInt (cueNumber.getFont(), cueNumber.getText());
+    cueNumber.setBounds (main.removeFromLeft (juce::jmin (numberWidth, juce::jmax (0, main.getWidth() / 3))));
+    main.removeFromLeft (10);
     cueName.setBounds (main);
+    area.removeFromTop (4);
     cueFile.setBounds (area.removeFromTop (18));
+    area.removeFromTop (4);
     cueMeta.setBounds (area.removeFromTop (18));
 }
 
 void TransportBar::paint (juce::Graphics& g)
 {
-    g.fillAll (Palette::panel);
-    g.setColour (Palette::outline);
-    g.drawLine (0.0f, (float) getHeight() - 0.5f, (float) getWidth(), (float) getHeight() - 0.5f);
-
-    if (goLocked || goFlashing)
-    {
-        g.setColour (goFlashing ? Palette::missing : Palette::stopButton.brighter (0.4f));
-        g.drawRect (goButton.getBounds().expanded (3), 3);
-    }
+    for (const auto& shadow : shadows)
+        shadow.draw (g);
+    Palette::drawCard (g, nextCard);
 }
 
 } // namespace gocue

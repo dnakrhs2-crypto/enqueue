@@ -8,7 +8,6 @@ namespace gocue::PluginDialogs
 
 namespace
 {
-    juce::Component::SafePointer<juce::DialogWindow> managerDialog;
     juce::Component::SafePointer<juce::DialogWindow> masterDialog;
 
     class MasterInsertsContent : public juce::Component
@@ -20,7 +19,7 @@ namespace
         {
             title.setText (ko ("마스터 버스 인서트 - 모든 큐가 믹스된 뒤 마지막으로 통과합니다"), juce::dontSendNotification);
             title.setColour (juce::Label::textColourId, Palette::dimText);
-            title.setFont (juce::Font (juce::FontOptions (13.0f)));
+            title.setFont (Palette::font (Palette::bodySize));
             addAndMakeVisible (title);
 
             strip.onOpenPluginManager = std::move (onOpenPluginManager);
@@ -28,7 +27,7 @@ namespace
             strip.setChain (&engine.getMasterChain(), ko ("마스터"));
             addAndMakeVisible (strip);
 
-            setSize (760, 120);
+            setSize (760, 140);
         }
 
         void resized() override
@@ -41,7 +40,7 @@ namespace
 
         void paint (juce::Graphics& g) override
         {
-            g.fillAll (Palette::panel);
+            Palette::drawDialog (g, getLocalBounds());
         }
 
         void chainChanged (PluginChain* chain)
@@ -62,28 +61,12 @@ namespace
         options.dialogTitle = title;
         options.content.setOwned (content);
         options.componentToCentreAround = centreAround;
-        options.dialogBackgroundColour = Palette::panel;
+        options.dialogBackgroundColour = Palette::background;
         options.escapeKeyTriggersCloseButton = true;
         options.useNativeTitleBar = true;
         options.resizable = resizable;
         return options.launchAsync();
     }
-}
-
-void showPluginManager (AudioEngine& engine, AppSettings& settings, juce::Component* centreAround)
-{
-    if (managerDialog != nullptr)
-    {
-        managerDialog->toFront (true);
-        return;
-    }
-
-    auto& host = engine.getPluginHost();
-    auto* list = new juce::PluginListComponent (host.getFormatManager(), host.getKnownPlugins(),
-                                                settings.getDeadMansPedalFile(), settings.getPropertiesFile(), false);
-    list->setSize (780, 480);
-
-    managerDialog = launch (list, ko ("VST3 플러그인 관리 - [Options]에서 스캔"), centreAround, true);
 }
 
 void showMasterInserts (AudioEngine& engine, PluginWindowManager& windows,
@@ -111,9 +94,6 @@ void closeAll()
 {
     if (masterDialog != nullptr)
         delete masterDialog.getComponent();
-
-    if (managerDialog != nullptr)
-        delete managerDialog.getComponent();
 }
 
 } // namespace gocue::PluginDialogs

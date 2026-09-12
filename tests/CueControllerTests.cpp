@@ -875,6 +875,273 @@ public:
             document.cues.remove (document.cues.indexOf (g.id));
         }
 
+        beginTest ("random loop (playlist + loop + shuffle): a new round never opens with the song that just ended");
+        {
+            Cue g;
+            g.name = "R";
+            g.type = CueType::group;
+            g.group.mode = GroupMode::playlist;
+            g.group.loop = true;
+            g.group.shuffle = true;
+            const int gi = document.cues.add (g);
+            Cue x, y;
+            x.name = "x"; x.file = tone; x.parentId = g.id;
+            y.name = "y"; y.file = tone; y.parentId = g.id;
+            document.cues.add (x);
+            document.cues.add (y);
+            const auto systemRandom = controller.randomChoice;
+            controller.randomChoice = [] (int) { return 0; };   // a shuffle that always swaps with the first: [x, y] -> [y, x], and would hand a round's last song straight back
+            now += 1.0;
+            document.cues.setPlayheadIndex (gi);
+            expect (controller.go() == CueController::GoResult::started);
+            controller.goKeyReleased();
+            expect (engine.isPlaying (y.id) && ! engine.isPlaying (x.id));   // the shuffled order: y, x
+            engine.stop (y.id);
+            render (engine, scheduler, now, out, 2);
+            expect (engine.isPlaying (x.id));
+            engine.stop (x.id);                                              // the round ends on x
+            render (engine, scheduler, now, out, 2);
+            expect (engine.isPlaying (y.id) && ! engine.isPlaying (x.id));   // the new round: reshuffled to [x, y], then x is moved off the front
+            controller.randomChoice = systemRandom;
+            stopEverything();
+            expect (! controller.isCueActive (g.id));
+            document.cues.remove (document.cues.indexOf (g.id));
+        }
+
+        beginTest ("a hotkey aimed at a disarmed cue starts nothing - not the next cue either");
+        {
+            document.cues.update (0, [] (Cue& x) { x.hotkey = "F7"; x.armed = false; });
+            now += 1.0;
+            expect (controller.handleHotkey (juce::KeyPress::createFromDescription ("F7")));   // the key is taken...
+            render (engine, scheduler, now, out, 2);
+            expect (! engine.isPlaying (a.id) && ! engine.isPlaying (b.id));                  // ...but nothing starts (GO would pass on to b; a key aimed at a does not)
+            document.cues.update (0, [] (Cue& x) { x.hotkey = ""; x.armed = true; });
+            stopEverything();
+        }
+
+        beginTest ("a group with auto-follow: the cue after it starts when the group's children have ended");
+        {
+            Cue g;
+            g.name = "GF";
+            g.type = CueType::group;
+            g.continueMode = ContinueMode::autoFollow;
+            const int gi = document.cues.add (g);
+            Cue x;
+            x.name = "gx"; x.file = tone; x.parentId = g.id;
+            document.cues.add (x);
+            Cue after;
+            after.name = "after-g"; after.file = tone;
+            document.cues.add (after);
+            now += 1.0;
+            document.cues.setPlayheadIndex (gi);
+            expect (controller.go() == CueController::GoResult::started);
+            controller.goKeyReleased();
+            expect (engine.isPlaying (x.id));
+            expect (! engine.isPlaying (after.id));
+            engine.stop (x.id);
+            render (engine, scheduler, now, out, 3);
+            expect (! controller.isCueActive (g.id));   // nothing runs or waits inside: the follow watch itself does not count
+            expect (engine.isPlaying (after.id));       // the follow fired
+            stopEverything();
+            document.cues.removeIndices ({ document.cues.indexOf (g.id), document.cues.indexOf (after.id) });
+        }
+
+        beginTest ("a hotkey pressed again during the pre-wait is one start; a stop rule on a running cue does not re-arm its follow");
+        {
+            document.cues.update (0, [] (Cue& x) { x.hotkey = "F8"; x.preWaitSeconds = 0.5; });
+            now += 1.0;
+            expect (controller.handleHotkey (juce::KeyPress::createFromDescription ("F8")));
+            expect (controller.handleHotkey (juce::KeyPress::createFromDescription ("F8")));   // hardStopRestart: the pre-wait starts over, once
+            expectEquals (controller.getNumPending(), 1);
+            render (engine, scheduler, now, out, 50);   // 0.58 s
+            expect (engine.isPlaying (a.id));
+            expectEquals (engine.getNumPlaying(), 1);
+            stopEverything();
+
+            // a running cue with a hard-stop rule and an auto-follow: the second press stops it and b does not follow
+            document.cues.update (0, [] (Cue& x) { x.preWaitSeconds = 0.0; x.secondTrigger = SecondTriggerAction::hardStop; x.continueMode = ContinueMode::autoFollow; });
+            now += 1.0;
+            expect (controller.handleHotkey (juce::KeyPress::createFromDescription ("F8")));
+            expect (engine.isPlaying (a.id));
+            expect (controller.handleHotkey (juce::KeyPress::createFromDescription ("F8")));   // stops a
+            render (engine, scheduler, now, out, 3);
+            expect (! engine.isPlaying (a.id));
+            expect (! engine.isPlaying (b.id));   // the follow of the stopped run was cancelled, and no new one was put behind the stop
+            stopEverything();
+            document.cues.update (0, [] (Cue& x) { x.hotkey = ""; x.secondTrigger = SecondTriggerAction::hardStopRestart; x.continueMode = ContinueMode::none; });
+        }
+
+        beginTest ("wall-clock: a check up to 60 s late still fires the seconds it missed; a new project forgets the last check");
+        {
+            document.cues.update (1, [] (Cue& cue) { cue.wallClock.enabled = true; cue.wallClock.hour = 10; cue.wallClock.minute = 0; cue.wallClock.second = 0; cue.wallClock.daysMask = 0x7f; });
+            now += 1.0;
+            const juce::Time before (2026, 8, 2, 9, 59, 50, 0);   // 10 s before 10:00:00
+            controller.checkWallClock (before);
+            expect (! engine.isPlaying (b.id));
+            controller.checkWallClock (before + juce::RelativeTime::seconds (30.0));   // 10:00:20: the message thread was busy for 30 s
+            expect (engine.isPlaying (b.id));
+            stopEverything();
+
+            // a new project: its clocks start from the current second - the second already examined is examined afresh
+            controller.resetForNewProject();
+            now += 1.0;
+            document.cues.update (1, [] (Cue& cue) { cue.wallClock.enabled = true; cue.wallClock.hour = 10; cue.wallClock.minute = 0; cue.wallClock.second = 20; });
+            controller.checkWallClock (before + juce::RelativeTime::seconds (30.0));
+            expect (engine.isPlaying (b.id));
+            stopEverything();
+            document.cues.update (1, [] (Cue& cue) { cue.wallClock.enabled = false; });
+        }
+
+        beginTest ("fade-stop-others ends a playlist run in scope: its next child does not start behind the fade");
+        {
+            Cue g;
+            g.name = "PL";
+            g.type = CueType::group;
+            g.group.mode = GroupMode::playlist;
+            const int gi = document.cues.add (g);
+            Cue x, y;
+            x.name = "px"; x.file = tone; x.parentId = g.id;
+            y.name = "py"; y.file = tone; y.parentId = g.id;
+            document.cues.add (x);
+            document.cues.add (y);
+            Cue killer;
+            killer.name = "killer"; killer.file = tone;
+            killer.fadeStopOthers.enabled = true;
+            killer.fadeStopOthers.seconds = 0.01;
+            killer.fadeStopOthers.scope = FadeStopScope::all;
+            document.cues.add (killer);
+            now += 1.0;
+            document.cues.setPlayheadIndex (gi);
+            expect (controller.go() == CueController::GoResult::started);
+            controller.goKeyReleased();
+            expect (engine.isPlaying (x.id));
+            expect (controller.fire (killer.id) == CueController::GoResult::started);
+            render (engine, scheduler, now, out, 5);   // the 10 ms fade is over; the playlist's step would have fired
+            expect (! engine.isPlaying (x.id));
+            expect (! engine.isPlaying (y.id));        // the playlist did not go on to y
+            expect (! controller.isCueActive (g.id));
+            expect (engine.isPlaying (killer.id));
+            stopEverything();
+            document.cues.removeIndices ({ document.cues.indexOf (g.id), document.cues.indexOf (killer.id) });
+        }
+
+        beginTest ("a start control cue's fade-stop-others spares the group it starts");
+        {
+            Cue g;
+            g.name = "TG";
+            g.type = CueType::group;
+            const int gi = document.cues.add (g);
+            juce::ignoreUnused (gi);
+            Cue x;
+            x.name = "tx"; x.file = tone; x.parentId = g.id;
+            document.cues.add (x);
+            Cue starter;
+            starter.name = "starter";
+            starter.type = CueType::control;
+            starter.control.kind = ControlKind::start;
+            starter.control.targetId = g.id;
+            starter.fadeStopOthers.enabled = true;
+            starter.fadeStopOthers.seconds = 0.01;
+            starter.fadeStopOthers.scope = FadeStopScope::all;
+            document.cues.add (starter);
+            now += 1.0;
+            expect (controller.fire (starter.id) == CueController::GoResult::started);
+            render (engine, scheduler, now, out, 5);
+            expect (engine.isPlaying (x.id));   // the group's child was not faded out by the cue that started it
+            stopEverything();
+            document.cues.removeIndices ({ document.cues.indexOf (g.id), document.cues.indexOf (starter.id) });
+        }
+
+        beginTest ("a child's auto-follow keeps its group active: the cue after the group waits for the whole chain");
+        {
+            Cue g;
+            g.name = "GC";
+            g.type = CueType::group;
+            g.group.mode = GroupMode::startFirst;
+            g.continueMode = ContinueMode::autoFollow;
+            const int gi = document.cues.add (g);
+            Cue ca, cb;
+            ca.name = "ca"; ca.file = tone; ca.parentId = g.id; ca.continueMode = ContinueMode::autoFollow;
+            cb.name = "cb"; cb.file = tone; cb.parentId = g.id;
+            document.cues.add (ca);
+            document.cues.add (cb);
+            Cue z;
+            z.name = "z"; z.file = tone;
+            document.cues.add (z);
+            now += 1.0;
+            document.cues.setPlayheadIndex (gi);
+            expect (controller.go() == CueController::GoResult::started);
+            controller.goKeyReleased();
+            expect (engine.isPlaying (ca.id) && ! engine.isPlaying (cb.id) && ! engine.isPlaying (z.id));
+            engine.stop (ca.id);
+            render (engine, scheduler, now, out, 3);
+            expect (engine.isPlaying (cb.id));   // ca's follow
+            expect (! engine.isPlaying (z.id));  // the group is not over while its chain (cb) plays
+            engine.stop (cb.id);
+            render (engine, scheduler, now, out, 3);
+            expect (engine.isPlaying (z.id));    // now the group's own follow
+            stopEverything();
+            document.cues.removeIndices ({ document.cues.indexOf (g.id), document.cues.indexOf (z.id) });
+        }
+
+        beginTest ("a restart during the pre-wait takes the sequence's earlier schedule with it (auto-continue, over a disarmed cue)");
+        {
+            // a (pre-wait 1 s, auto-continue) -> b (disarmed: stepped over) -> the list's third cue ("c", left by the
+            // auto-continue test above): the earlier walk scheduled a and that cue
+            const auto thirdId = document.cues.get (2).id;
+            document.cues.update (0, [] (Cue& x) { x.hotkey = "F9"; x.preWaitSeconds = 1.0; x.continueMode = ContinueMode::autoContinue; x.postWaitSeconds = 0.0; });
+            document.cues.update (1, [] (Cue& x) { x.armed = false; });
+            now += 1.0;
+            expect (controller.handleHotkey (juce::KeyPress::createFromDescription ("F9")));   // a at +1.0, the third cue right behind it
+            expectEquals (controller.getNumPending(), 2);
+            render (engine, scheduler, now, out, 43);                                            // ~0.5 s
+            expect (controller.handleHotkey (juce::KeyPress::createFromDescription ("F9")));   // restart: both schedules move (the third cue's too, past the disarmed b)
+            expectEquals (controller.getNumPending(), 2);
+            render (engine, scheduler, now, out, 50);                                            // ~1.08 s: the first schedule would have fired at 1.0
+            expect (! engine.isPlaying (a.id) && ! engine.isPlaying (thirdId));
+            render (engine, scheduler, now, out, 45);                                            // ~1.6 s: the restarted one
+            expect (engine.isPlaying (a.id), "a did not start at the restarted time");
+            expect (engine.isPlaying (thirdId), "the auto-continued cue did not start behind a");
+            expect (! engine.isPlaying (b.id), "the disarmed b started");
+            expectEquals (engine.getNumPlaying(), 2);
+            stopEverything();
+            document.cues.update (0, [] (Cue& x) { x.hotkey = ""; x.preWaitSeconds = 0.0; x.continueMode = ContinueMode::none; });
+            document.cues.update (1, [] (Cue& x) { x.armed = true; });
+        }
+
+        beginTest ("skipping a playlist to its next child keeps the group's own auto-follow");
+        {
+            Cue g;
+            g.name = "PS";
+            g.type = CueType::group;
+            g.group.mode = GroupMode::playlist;
+            g.continueMode = ContinueMode::autoFollow;
+            const int gi = document.cues.add (g);
+            Cue x, y;
+            x.name = "sx"; x.file = tone; x.parentId = g.id;
+            y.name = "sy"; y.file = tone; y.parentId = g.id;
+            document.cues.add (x);
+            document.cues.add (y);
+            Cue z;
+            z.name = "sz"; z.file = tone;
+            document.cues.add (z);
+            now += 1.0;
+            document.cues.setPlayheadIndex (gi);
+            expect (controller.go() == CueController::GoResult::started);
+            controller.goKeyReleased();
+            expect (engine.isPlaying (x.id));
+            expect (controller.trigger (document.cues.get (gi)) == CueController::GoResult::ignored);   // next child
+            render (engine, scheduler, now, out, 2);
+            expect (engine.isPlaying (y.id) && ! engine.isPlaying (z.id));
+            engine.stop (x.id);
+            engine.stop (y.id);
+            render (engine, scheduler, now, out, 3);
+            expect (! controller.isCueActive (g.id));
+            expect (engine.isPlaying (z.id));   // the list is over: the group's follow still fires
+            stopEverything();
+            document.cues.removeIndices ({ document.cues.indexOf (g.id), document.cues.indexOf (z.id) });
+        }
+
         beginTest ("playlist crossfade: the next child starts before the current one ends");
         {
             Cue g;
@@ -1174,6 +1441,433 @@ public:
             expectWithinAbsoluteError (engine.getDuckDb (a.id), 0.0, 0.01);   // released with the cleanup watch
             document.cues.update (1, [] (Cue& c) { c.duck.enabled = false; });
             stopEverything();
+        }
+
+        beginTest ("the GO window applies to a cue's hotkey and cart click when the option is on (the same cue only)");
+        {
+            auto settings = document.settings;
+            settings.doubleGoSeconds = 0.5;
+            settings.doubleGoHotkeys = true;
+            document.setSettings (settings);
+            document.cues.update (0, [] (Cue& x) { x.hotkey = "F10"; });
+            document.cues.update (1, [] (Cue& x) { x.hotkey = "F11"; });
+            now += 1.0;
+            const int rejectedBefore = rejected;
+
+            expect (controller.handleHotkey (juce::KeyPress::createFromDescription ("F10")));
+            expect (engine.isPlaying (a.id));
+            const auto firstInstance = engine.getStartOrder (a.id);
+            render (engine, scheduler, now, out, 20);                                            // 0.23 s
+            expect (controller.handleHotkey (juce::KeyPress::createFromDescription ("F10")));   // the key is taken, the cue is left alone
+            expectEquals (engine.getStartOrder (a.id), firstInstance);                          // not restarted
+            expectEquals (rejected, rejectedBefore + 1);
+            expect (controller.handleHotkey (juce::KeyPress::createFromDescription ("F11")));   // another cue inside the window fires
+            expect (engine.isPlaying (b.id));
+            render (engine, scheduler, now, out, 30);                                            // 0.58 s after the first press
+            expect (controller.handleHotkey (juce::KeyPress::createFromDescription ("F10")));
+            expect (engine.getStartOrder (a.id) > firstInstance);                               // restarted (hardStopRestart)
+            stopEverything();
+
+            // a cart click is the same
+            now += 1.0;
+            expect (controller.fire (a.id) == CueController::GoResult::started);
+            now += 0.2;
+            expect (controller.fire (a.id) == CueController::GoResult::rejectedDoubleGo);
+            expect (controller.fire (b.id) == CueController::GoResult::started);
+            now += 0.4;
+            expect (controller.fire (a.id) == CueController::GoResult::started);
+            stopEverything();
+
+            // the option off: the window is the GO's alone
+            settings.doubleGoHotkeys = false;
+            document.setSettings (settings);
+            now += 1.0;
+            expect (controller.fire (a.id) == CueController::GoResult::started);
+            now += 0.2;
+            expect (controller.fire (a.id) == CueController::GoResult::started);
+            stopEverything();
+
+            settings.doubleGoSeconds = 0.0;
+            settings.doubleGoHotkeys = true;
+            document.setSettings (settings);
+            document.cues.update (0, [] (Cue& x) { x.hotkey = ""; });
+            document.cues.update (1, [] (Cue& x) { x.hotkey = ""; });
+        }
+
+        beginTest ("a duck cue ducks what starts while it runs (a restart too), not its own children, and lets go when it is really over");
+        {
+            // b ducks (-12 dB over 0.05 s) and has a 300 ms stop fade; a starts after b: it starts ducked
+            document.cues.update (1, [] (Cue& x) { x.duck.enabled = true; x.duck.levelDb = -12.0; x.duck.seconds = 0.05; x.fadeOutMs = 300; });
+            now += 1.0;
+            expect (controller.fire (b.id) == CueController::GoResult::started);
+            render (engine, scheduler, now, out, 3);
+            expect (controller.fire (a.id) == CueController::GoResult::started);
+            expectWithinAbsoluteError (engine.getDuckDb (a.id), -12.0, 1e-9);   // from its first sample
+            expect (controller.fire (a.id) == CueController::GoResult::started);   // restarted: still ducked
+            expectWithinAbsoluteError (engine.getDuckDb (a.id), -12.0, 1e-9);
+
+            // b stops with its fade: a stays ducked until b's sound is over, then comes back
+            controller.stopCue (b.id, true);
+            render (engine, scheduler, now, out, 5);    // 58 ms into the 300 ms fade
+            expect (engine.isPlaying (b.id));
+            expectWithinAbsoluteError (engine.getDuckDb (a.id), -12.0, 1e-9);
+            render (engine, scheduler, now, out, 30);   // past the fade
+            expect (! engine.isPlaying (b.id));
+            expectWithinAbsoluteError (engine.getDuckDb (a.id), 0.0, 1e-9);
+            stopEverything();
+
+            // a ducking playlist group: its own children start unducked, an outsider that starts meanwhile is ducked
+            Cue g;
+            g.name = "DG"; g.type = CueType::group; g.group.mode = GroupMode::playlist;
+            g.duck.enabled = true; g.duck.levelDb = -6.0; g.duck.seconds = 0.05;
+            document.cues.add (g);
+            Cue x, y;
+            x.name = "dx"; x.file = tone; x.parentId = g.id;
+            y.name = "dy"; y.file = tone; y.parentId = g.id;
+            document.cues.add (x);
+            document.cues.add (y);
+            now += 1.0;
+            expect (controller.fire (g.id) == CueController::GoResult::started);
+            expect (engine.isPlaying (x.id));
+            expectWithinAbsoluteError (engine.getDuckDb (x.id), 0.0, 1e-9);
+            expect (controller.fire (a.id) == CueController::GoResult::started);
+            expectWithinAbsoluteError (engine.getDuckDb (a.id), -6.0, 1e-9);
+            engine.stop (x.id);
+            render (engine, scheduler, now, out, 3);
+            expect (engine.isPlaying (y.id));
+            expectWithinAbsoluteError (engine.getDuckDb (y.id), 0.0, 1e-9);   // the group's own child
+            engine.stop (y.id);
+            render (engine, scheduler, now, out, 3);
+            expect (! controller.isCueActive (g.id));
+            expectWithinAbsoluteError (engine.getDuckDb (a.id), 0.0, 1e-9);   // the group is over: released
+            stopEverything();
+            document.cues.removeIndices ({ document.cues.indexOf (g.id) });
+
+            // a ducking cue's auto-follow starts when the cue is over: the follower is not ducked by it
+            Cue follower;
+            follower.name = "after-duck"; follower.file = tone;
+            document.cues.add (follower);   // a, b, follower
+            document.cues.update (1, [] (Cue& x) { x.fadeOutMs = 0; x.continueMode = ContinueMode::autoFollow; });   // b (duck) -> follower
+            now += 1.0;
+            controller.fireSequence (1);
+            expect (engine.isPlaying (b.id));
+            engine.stop (b.id);
+            render (engine, scheduler, now, out, 3);
+            expect (engine.isPlaying (follower.id));
+            expectWithinAbsoluteError (engine.getDuckDb (follower.id), 0.0, 1e-9);
+            stopEverything();
+            document.cues.remove (document.cues.indexOf (follower.id));
+            document.cues.update (1, [] (Cue& x) { x.duck.enabled = false; x.continueMode = ContinueMode::none; });
+        }
+
+        beginTest ("wall-clock: a clock set back does not fire the same second again; a new project starts afresh");
+        {
+            document.cues.update (1, [] (Cue& x) { x.wallClock.enabled = true; x.wallClock.hour = 14; x.wallClock.minute = 0; x.wallClock.second = 0; x.wallClock.daysMask = 0x7f; });
+            const juce::Time at (2026, 8, 2, 14, 0, 0, 0);
+            controller.checkWallClock (at - juce::RelativeTime::seconds (1.0));
+            controller.checkWallClock (at);
+            expect (engine.isPlaying (b.id));
+            stopEverything();
+            controller.checkWallClock (at + juce::RelativeTime::seconds (1.0));
+            controller.checkWallClock (at - juce::RelativeTime::seconds (2.0));   // the clock was set back
+            controller.checkWallClock (at);                                       // 14:00:00 comes round again
+            expect (! engine.isPlaying (b.id));
+            controller.checkWallClock (at + juce::RelativeTime::days (1.0));      // tomorrow's 14:00:00 is a new second
+            expect (engine.isPlaying (b.id));
+            stopEverything();
+            controller.resetForNewProject();
+            controller.checkWallClock (at - juce::RelativeTime::seconds (1.0));
+            controller.checkWallClock (at);
+            expect (engine.isPlaying (b.id));   // a new project: fired again
+            stopEverything();
+            document.cues.update (1, [] (Cue& x) { x.wallClock.enabled = false; });
+        }
+
+        beginTest ("a restart during the pre-wait leaves a playlist group behind it running: only its doubled start goes");
+        {
+            // a (pre-wait 0.5 s, auto-continue, F9) -> b (disarmed: stepped over) -> playlist group PG (px, py)
+            Cue g;
+            g.name = "PG"; g.type = CueType::group; g.group.mode = GroupMode::playlist;
+            document.cues.add (g);
+            Cue x, y;
+            x.name = "px"; x.file = tone; x.parentId = g.id;
+            y.name = "py"; y.file = tone; y.parentId = g.id;
+            document.cues.add (x);
+            document.cues.add (y);
+            document.cues.update (0, [] (Cue& q) { q.hotkey = "F9"; q.preWaitSeconds = 0.5; q.continueMode = ContinueMode::autoContinue; q.postWaitSeconds = 0.0; });
+            document.cues.update (1, [] (Cue& q) { q.armed = false; });
+            now += 1.0;
+            expect (controller.handleHotkey (juce::KeyPress::createFromDescription ("F9")));
+            render (engine, scheduler, now, out, 52);   // 0.6 s: a plays, the group's first child too
+            expect (engine.isPlaying (a.id) && engine.isPlaying (x.id));
+            expect (controller.handleHotkey (juce::KeyPress::createFromDescription ("F9")));   // restart: a's pre-wait starts over, the group behind it keeps running
+            engine.stop (x.id);
+            render (engine, scheduler, now, out, 3);
+            expect (engine.isPlaying (y.id), "the playlist did not move on after the restart");
+            stopEverything();
+            document.cues.removeIndices ({ document.cues.indexOf (g.id) });
+            document.cues.update (0, [] (Cue& q) { q.hotkey = ""; q.preWaitSeconds = 0.0; q.continueMode = ContinueMode::none; });
+            document.cues.update (1, [] (Cue& q) { q.armed = true; });
+        }
+
+        beginTest ("a running wait cue follows its second-trigger rule: ignore / cancel (no follow) / restart (one follow)");
+        {
+            Cue w;
+            w.name = "W"; w.type = CueType::control; w.control.kind = ControlKind::wait; w.control.seconds = 1.0;
+            w.continueMode = ContinueMode::autoFollow;
+            w.secondTrigger = SecondTriggerAction::nothing;
+            const int wi = document.cues.add (w);
+            Cue after;
+            after.name = "after-w"; after.file = tone;
+            document.cues.add (after);
+            now += 1.0;
+            controller.fireSequence (wi);
+            expect (controller.isCueActive (w.id));
+            render (engine, scheduler, now, out, 10);   // 0.12 s in
+            controller.fireSequence (wi);               // "nothing": still waiting, no second follow
+            expect (controller.isCueActive (w.id));
+            expect (! engine.isPlaying (after.id));
+
+            document.cues.update (wi, [] (Cue& q) { q.secondTrigger = SecondTriggerAction::hardStop; });
+            controller.fireSequence (wi);               // cancelled
+            expect (! controller.isCueActive (w.id));
+            render (engine, scheduler, now, out, 5);
+            expect (! engine.isPlaying (after.id));     // nothing follows a cancelled wait
+
+            document.cues.update (wi, [] (Cue& q) { q.secondTrigger = SecondTriggerAction::hardStopRestart; });
+            now += 1.0;
+            controller.startRecording();
+            controller.fireSequence (wi);
+            render (engine, scheduler, now, out, 43);   // 0.5 s in
+            controller.fireSequence (wi);               // restarted: another 1.0 s from now
+            render (engine, scheduler, now, out, 52);   // 0.6 s later: the first wait would be over, the restarted one is not
+            expect (controller.isCueActive (w.id));
+            expect (! engine.isPlaying (after.id));
+            render (engine, scheduler, now, out, 40);   // over
+            expect (! controller.isCueActive (w.id));
+            expect (engine.isPlaying (after.id));
+            int followStarts = 0;
+
+            for (const auto& r : controller.stopRecording())
+                if (r.cueId == after.id)
+                    ++followStarts;
+
+            expectEquals (followStarts, 1);             // one follow, not two
+            stopEverything();
+            document.cues.removeIndices ({ document.cues.indexOf (w.id), document.cues.indexOf (after.id) });
+        }
+
+        beginTest ("a wait cue with a pre-wait: a re-trigger during the wait keeps one follow (restart) or adds none (ignore)");
+        {
+            Cue w;
+            w.name = "PW"; w.type = CueType::control; w.control.kind = ControlKind::wait; w.control.seconds = 2.0;
+            w.preWaitSeconds = 0.5; w.continueMode = ContinueMode::autoFollow; w.secondTrigger = SecondTriggerAction::hardStopRestart;
+            const int wi = document.cues.add (w);
+            Cue after;
+            after.name = "after-pw"; after.file = tone;
+            document.cues.add (after);
+            now += 1.0;
+            controller.startRecording();
+            controller.fireSequence (wi);                // waits from 0.5 to 2.5
+            render (engine, scheduler, now, out, 65);    // 0.75 s: waiting
+            expect (controller.isCueActive (w.id));
+            controller.fireSequence (wi);                // restart: a new pre-wait, then the wait runs ~1.27 .. 3.27
+            render (engine, scheduler, now, out, 163);   // 2.65 s: the first wait would have ended at 2.5
+            expect (controller.isCueActive (w.id));
+            expect (! engine.isPlaying (after.id), "the follow of the earlier run fired");
+            render (engine, scheduler, now, out, 60);    // 3.35 s: over
+            expect (! controller.isCueActive (w.id));
+            expect (engine.isPlaying (after.id), "the restarted wait's follow did not fire");
+            int followStarts = 0;
+
+            for (const auto& r : controller.stopRecording())
+                if (r.cueId == after.id)
+                    ++followStarts;
+
+            expectEquals (followStarts, 1);
+            stopEverything();
+
+            // "ignore": the second press changes nothing and adds no follow
+            document.cues.update (wi, [] (Cue& q) { q.secondTrigger = SecondTriggerAction::nothing; });
+            now += 1.0;
+            controller.startRecording();
+            controller.fireSequence (wi);
+            render (engine, scheduler, now, out, 65);    // 0.75 s
+            controller.fireSequence (wi);
+            expectEquals (controller.getNumPending(), 1);   // the one follow, no second start
+            render (engine, scheduler, now, out, 160);   // 2.6 s: the wait (0.5 .. 2.5) is over
+            expect (engine.isPlaying (after.id));
+            followStarts = 0;
+
+            for (const auto& r : controller.stopRecording())
+                if (r.cueId == after.id)
+                    ++followStarts;
+
+            expectEquals (followStarts, 1);
+            stopEverything();
+            document.cues.removeIndices ({ document.cues.indexOf (w.id), document.cues.indexOf (after.id) });
+        }
+
+        beginTest ("an audio cue with a pre-wait restarted while it plays keeps the follow of the new run");
+        {
+            document.cues.update (0, [] (Cue& x) { x.preWaitSeconds = 0.5; x.continueMode = ContinueMode::autoFollow; });   // a -> b
+            now += 1.0;
+            controller.startRecording();
+            controller.fireSequence (0);                 // a at 0.5
+            render (engine, scheduler, now, out, 65);    // 0.75 s: a plays
+            expect (engine.isPlaying (a.id));
+            controller.fireSequence (0);                 // restart: a again at ~1.27, one follow
+            render (engine, scheduler, now, out, 60);    // 1.45 s: restarted
+            expect (engine.isPlaying (a.id));
+            expect (! engine.isPlaying (b.id));
+            engine.stop (a.id);
+            render (engine, scheduler, now, out, 3);
+            expect (engine.isPlaying (b.id), "the follow of the restarted run did not fire");
+            int followStarts = 0;
+
+            for (const auto& r : controller.stopRecording())
+                if (r.cueId == b.id)
+                    ++followStarts;
+
+            expectEquals (followStarts, 1);
+            stopEverything();
+            document.cues.update (0, [] (Cue& x) { x.preWaitSeconds = 0.0; x.continueMode = ContinueMode::none; });
+        }
+
+        beginTest ("a playlist group with a pre-wait: a second GO while it runs is 'next', whatever its rule says");
+        {
+            Cue g;
+            g.name = "PPW"; g.type = CueType::group; g.group.mode = GroupMode::playlist; g.preWaitSeconds = 0.5;
+            g.secondTrigger = SecondTriggerAction::nothing;
+            const int gi = document.cues.add (g);
+            Cue x, y;
+            x.name = "ppx"; x.file = tone; x.parentId = g.id;
+            y.name = "ppy"; y.file = tone; y.parentId = g.id;
+            document.cues.add (x);
+            document.cues.add (y);
+            now += 1.0;
+            controller.fireSequence (gi);
+            render (engine, scheduler, now, out, 60);    // 0.7 s: the first child plays
+            expect (engine.isPlaying (x.id));
+            controller.fireSequence (gi);                // next
+            render (engine, scheduler, now, out, 2);
+            expect (engine.isPlaying (y.id), "the second GO did not move the playlist on");
+            stopEverything();
+            document.cues.removeIndices ({ document.cues.indexOf (g.id) });
+        }
+
+        beginTest ("a duck cue restarted with its duck switched off lets the others come back");
+        {
+            document.cues.update (1, [] (Cue& x) { x.duck.enabled = true; x.duck.levelDb = -12.0; x.duck.seconds = 0.05; });
+            now += 1.0;
+            expect (controller.fire (a.id) == CueController::GoResult::started);
+            render (engine, scheduler, now, out, 2);
+            expect (controller.fire (b.id) == CueController::GoResult::started);   // b ducks a
+            render (engine, scheduler, now, out, 2);
+            expectWithinAbsoluteError (engine.getDuckDb (a.id), -12.0, 1e-9);
+            document.cues.update (1, [] (Cue& x) { x.duck.enabled = false; });
+            expect (controller.fire (b.id) == CueController::GoResult::started);   // restarted without a duck
+            render (engine, scheduler, now, out, 2);
+            expectWithinAbsoluteError (engine.getDuckDb (a.id), 0.0, 1e-9);
+            stopEverything();
+        }
+
+        beginTest ("a duck cue restarted by a follow in the tick its earlier run ends keeps one release watch");
+        {
+            // f (auto-follow -> b) starts before b; b ducks a; f and b end in the same block: f's follow restarts b while b's
+            // own release watch is already on its way to firing
+            Cue f;
+            f.name = "f"; f.file = tone; f.continueMode = ContinueMode::autoFollow;
+            const int fi = document.cues.add (f, 1);   // a, f, b
+            document.cues.update (2, [] (Cue& x) { x.duck.enabled = true; x.duck.levelDb = -12.0; x.duck.seconds = 0.05; });
+            now += 1.0;
+            expect (controller.fire (a.id) == CueController::GoResult::started);
+            controller.fireSequence (fi);                 // f plays, its follow (b) waits
+            render (engine, scheduler, now, out, 2);
+            expect (controller.fire (b.id) == CueController::GoResult::started);   // b ducks a
+            render (engine, scheduler, now, out, 2);
+            const int entriesBefore = scheduler.pendingCount();   // f's follow + b's release watch
+            engine.stop (f.id);
+            engine.stop (b.id);
+            render (engine, scheduler, now, out, 1);      // one tick: the follow restarts b
+            expect (engine.isPlaying (b.id));
+            expectEquals (scheduler.pendingCount(), entriesBefore - 1);   // the follow is spent, b has one watch (not two)
+            expectWithinAbsoluteError (engine.getDuckDb (a.id), -12.0, 1e-9);   // still ducked by the restarted b
+            engine.stop (b.id);
+            render (engine, scheduler, now, out, 3);
+            expectWithinAbsoluteError (engine.getDuckDb (a.id), 0.0, 1e-9);
+            expectEquals (scheduler.pendingCount(), 0);
+            stopEverything();
+            document.cues.update (2, [] (Cue& x) { x.duck.enabled = false; });
+            document.cues.remove (fi);
+        }
+
+        beginTest ("a scheduled start's restart keeps its own follow only: a direct GO's follow of the run it replaces goes");
+        {
+            // a (auto-continue, post-wait 0.5) -> W2 (wait 1 s, hardStopRestart, auto-follow) -> b. a's walk schedules W2 at 0.5
+            // with a follow of its own; a direct GO of W2 at 0.1 starts the wait with another follow; the scheduled start at 0.5
+            // restarts the wait: only the walk's follow may remain, or b starts twice
+            Cue w;
+            w.name = "W2"; w.type = CueType::control; w.control.kind = ControlKind::wait; w.control.seconds = 1.0;
+            w.continueMode = ContinueMode::autoFollow; w.secondTrigger = SecondTriggerAction::hardStopRestart;
+            const int wi = document.cues.add (w, 1);   // a, W2, b
+            document.cues.update (0, [] (Cue& x) { x.continueMode = ContinueMode::autoContinue; x.postWaitSeconds = 0.5; });
+            now += 1.0;
+            controller.startRecording();
+            controller.fireSequence (0);                 // a now, W2 at 0.5 (+ its follow)
+            render (engine, scheduler, now, out, 9);     // 0.1 s
+            controller.fireSequence (wi);                // a direct GO: the wait starts now (0.1 .. 1.1), with a follow of its own
+            expect (controller.isCueActive (w.id));
+            render (engine, scheduler, now, out, 43);    // 0.6 s: the scheduled start restarted the wait (0.5 .. 1.5)
+            expect (controller.isCueActive (w.id));
+            render (engine, scheduler, now, out, 86);    // 1.6 s: over
+            expect (! controller.isCueActive (w.id));
+            expect (engine.isPlaying (b.id));
+            int followStarts = 0;
+
+            for (const auto& r : controller.stopRecording())
+                if (r.cueId == b.id)
+                    ++followStarts;
+
+            expectEquals (followStarts, 1);              // one follow fired, not both
+            stopEverything();
+            document.cues.remove (wi);
+            document.cues.update (0, [] (Cue& x) { x.continueMode = ContinueMode::none; x.postWaitSeconds = 0.0; });
+        }
+
+        beginTest ("a group with a pre-wait restarted while its children play keeps the follow of the new run");
+        {
+            Cue g;
+            g.name = "GR"; g.type = CueType::group; g.group.mode = GroupMode::timeline; g.preWaitSeconds = 0.5;
+            g.continueMode = ContinueMode::autoFollow;   // -> after-gr
+            const int gi = document.cues.add (g);
+            Cue x;
+            x.name = "grx"; x.file = tone; x.parentId = g.id;
+            document.cues.add (x);
+            Cue after;
+            after.name = "after-gr"; after.file = tone;
+            document.cues.add (after);
+            now += 1.0;
+            controller.startRecording();
+            controller.fireSequence (gi);                // the group at 0.5
+            render (engine, scheduler, now, out, 65);    // 0.75 s: x plays
+            expect (engine.isPlaying (x.id));
+            controller.fireSequence (gi);                // restart: the group again at ~1.27
+            render (engine, scheduler, now, out, 60);    // 1.45 s: restarted (x again)
+            expect (engine.isPlaying (x.id));
+            expect (! engine.isPlaying (after.id));
+            engine.stop (x.id);
+            render (engine, scheduler, now, out, 3);
+            expect (engine.isPlaying (after.id), "the follow of the restarted group did not fire");
+            int followStarts = 0;
+
+            for (const auto& r : controller.stopRecording())
+                if (r.cueId == after.id)
+                    ++followStarts;
+
+            expectEquals (followStarts, 1);
+            stopEverything();
+            document.cues.removeIndices ({ document.cues.indexOf (g.id), document.cues.indexOf (after.id) });
         }
 
         beginTest ("played cues are remembered for the second colour until reset");

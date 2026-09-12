@@ -17,6 +17,15 @@ void ContainerTabs::setEditable (bool shouldBeEditable)
     repaint();
 }
 
+void ContainerTabs::setInfoText (juce::String text)
+{
+    if (infoText == text)
+        return;
+    infoText = std::move (text);
+    resized();
+    repaint();
+}
+
 void ContainerTabs::refresh()
 {
     tabs.clear();
@@ -37,60 +46,58 @@ void ContainerTabs::refresh()
 
 void ContainerTabs::resized()
 {
-    juce::Font font (juce::FontOptions (15.0f));
-    int x = 4;
+    const auto font = Palette::font (Palette::tabSize, true);
+    int x = 8;
 
     for (auto& t : tabs)
     {
-        const int width = juce::jlimit (60, 220, (int) juce::GlyphArrangement::getStringWidth (font, t.name) + (t.isCart ? 44 : 28));
-        t.bounds = { x, 2, width, getHeight() - 4 };
+        const int width = juce::jlimit (60, 220, juce::GlyphArrangement::getStringWidthInt (font, t.name) + 44);
+        t.bounds = { x, 6, width, getHeight() - 6 };
         x += width + 2;
     }
 
-    addButton = { x + 2, 2, 26, getHeight() - 4 };
+    addButton = { x + 2, 6, 26, getHeight() - 6 };
+    infoBounds = { addButton.getRight() + Palette::gap, 6, juce::jmax (0, getWidth() - addButton.getRight() - Palette::gap - 14), getHeight() - 6 };
 }
 
 void ContainerTabs::paint (juce::Graphics& g)
 {
-    g.fillAll (Palette::panel);
+    g.fillAll (Palette::panel2);
     g.setColour (Palette::outline);
     g.drawLine (0.0f, (float) getHeight() - 0.5f, (float) getWidth(), (float) getHeight() - 0.5f);
 
     for (const auto& t : tabs)
     {
         auto r = t.bounds;
-        g.setColour (t.active ? Palette::rowEven.brighter (0.25f) : Palette::background);
-        g.fillRoundedRectangle (r.toFloat(), 4.0f);
-
-        if (t.active)
-        {
-            g.setColour (Palette::standby);
-            g.fillRect (r.getX() + 6, r.getBottom() - 3, r.getWidth() - 12, 2);
-        }
-
-        int textX = r.getX() + 8;
+        Palette::drawTab (g, r, t.active);
+        int textX = r.getX() + 12;
+        g.setColour (t.active ? Palette::text : Palette::muted);
+        const float gx = (float) textX, gy = (float) r.getCentreY() - 5.0f;
+        juce::Path icon;
 
         if (t.isCart)
         {
-            // a little 2x2 grid marks a cart
-            g.setColour (t.active ? Palette::text : Palette::dimText);
-            const float gx = (float) textX, gy = (float) r.getCentreY() - 5.0f;
-
             for (int i = 0; i < 2; ++i)
                 for (int j = 0; j < 2; ++j)
-                    g.fillRect (gx + (float) i * 6.0f, gy + (float) j * 6.0f, 4.5f, 4.5f);
-
-            textX += 16;
+                    icon.addRoundedRectangle (gx + (float) i * 6.0f, gy + (float) j * 6.0f, 4.0f, 4.0f, 0.5f);
         }
+        else
+            for (int i = 0; i < 3; ++i)
+                icon.addRectangle (gx, gy + 1.0f + (float) i * 3.0f, 9.0f, 1.3f);
+        g.fillPath (icon);
+        textX += 16;
 
         g.setColour (t.active ? Palette::text : Palette::dimText);
-        g.setFont (juce::Font (juce::FontOptions (15.0f, t.active ? juce::Font::bold : juce::Font::plain)));
+        g.setFont (Palette::font (Palette::tabSize, t.active));
         g.drawText (t.name, textX, r.getY(), r.getRight() - textX - 6, r.getHeight(), juce::Justification::centredLeft, true);
     }
 
-    g.setColour (editable ? Palette::dimText : Palette::outline);
-    g.setFont (juce::Font (juce::FontOptions (18.0f)));
+    g.setColour (Palette::accent.withMultipliedAlpha (editable ? 1.0f : Palette::disabledAlpha));
+    g.setFont (Palette::font (Palette::bodySize, true));
     g.drawText ("+", addButton, juce::Justification::centred, false);
+    g.setColour (Palette::muted);
+    g.setFont (Palette::font (Palette::headerSize));
+    g.drawText (infoText, infoBounds, juce::Justification::centredRight, true);
 }
 
 int ContainerTabs::tabAt (juce::Point<int> p) const

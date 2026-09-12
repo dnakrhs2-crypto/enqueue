@@ -48,9 +48,17 @@ public:
     bool getActiveCuesCollapsed() const;
     void setActiveCuesCollapsed (bool collapsed);
 
+    /** This PC's next-cue loudness average window (5, 10, 20, 30 or 60 seconds). */
+    int getLufsAverageSeconds() const;
+    void setLufsAverageSeconds (int seconds);
+
     /** 유튜브 다운로드: put the downloaded file into the cue list right away (on by default). */
     bool getYouTubeAddToQueue() const;
     void setYouTubeAddToQueue (bool add);
+
+    /** 플러그인 관리: the plugins whose "사용" switch is off (PluginHost::keyFor keys), out of every '+ 추가' menu. */
+    juce::StringArray getDisabledPlugins() const;
+    void setDisabledPlugins (const juce::StringArray& keys);
 
     /** Writes pending changes to disk now. */
     void flush();

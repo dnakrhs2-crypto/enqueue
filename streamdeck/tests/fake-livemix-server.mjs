@@ -20,12 +20,16 @@ export class FakeLiveMix extends EventEmitter {
   discoveryState = "ready";
   token = randomBytes(32).toString("base64url");
   behavior = { omitState: false, omitDelta: false, omitAck: false, omitPong: false, holdCommands: false, holdHello: false, split: false, version: 1, rejectAuth: false, helloInstance: "" };
+  constructor({ pluginGroupsEverywhere = true } = {}) { super(); this.pluginGroupsEverywhere = pluginGroupsEverywhere; }
   async start() {
     this.appdata = await mkdtemp(join(tmpdir(), "livemix-sd-"));
     this.directory = join(this.appdata, "LiveMix", "control");
     this.discoveryPath = join(this.directory, "discovery.json");
     await mkdir(this.directory, { recursive: true });
     this.snapshot = await fixture("initial-state"); this.helloFixture = await fixture("hello-ack");
+    this.helloFixture.capabilities = this.helloFixture.capabilities.filter(c => c !== "pluginGroupsEverywhere");
+    if (this.pluginGroupsEverywhere) this.helloFixture.capabilities.push("pluginGroupsEverywhere");
+    this.helloFixture.server.version = this.pluginGroupsEverywhere ? "0.10.0" : "0.9.0";
     this.ordering = await fixture("ordering"); this.errorsFixture = await fixture("errors"); this.clientHello = await fixture("hello");
     await this.listen(); await this.publishDiscovery();
     this.heartbeatTimer = setInterval(() => { void this.publishDiscovery().catch(error => this.errors.push(error)); }, 5000);
@@ -85,6 +89,13 @@ export class FakeLiveMix extends EventEmitter {
       assert.equal(typeof a.on, "boolean");
       for (const c of state.channels) c.on = a.on;
       result = { on: a.on, count: state.channels.length };
+    } else if (m.command === "setPluginGroupOffEverywhere") {
+      if (!this.pluginGroupsEverywhere) { this.error(client, m.id, "UNKNOWN_COMMAND"); return; }
+      if (!Number.isInteger(a.index) || a.index < 1 || a.index > 5 || typeof a.off !== "boolean") { this.error(client, m.id, "INVALID_ARGUMENT"); return; }
+      const targets = state.channels.flatMap(c => c.pluginGroups.filter(g => g.index === a.index));
+      if (!targets.length) { this.error(client, m.id, "PLUGIN_GROUP_NOT_FOUND"); return; }
+      for (const group of targets) group.off = a.off;
+      result = { index: a.index, off: a.off, count: targets.length };
     } else if (m.command === "toggleMuteGroup" || m.command === "setMuteGroup") {
       assert.ok(a.group === "mic" || a.group === "fx");
       if (m.command === "setMuteGroup") assert.equal(typeof a.muted, "boolean");
@@ -159,7 +170,7 @@ export class FakeLiveMix extends EventEmitter {
   }
   error(client, id, code) { this.send(client, { v: 1, type: "error", id, code, message: "Test command rejected", retryable: false, ...this.context() }); }
   publishDiscovery(overrides = {}) {
-    const value = { schemaVersion: 1, app: "LiveMix", appVersion: "0.5.3", instanceId: this.snapshot.instanceId, pid: process.pid,
+    const value = { schemaVersion: 1, app: "LiveMix", appVersion: this.helloFixture.server.version, instanceId: this.snapshot.instanceId, pid: process.pid,
       state: this.discoveryState, host: "127.0.0.1", updatedAt: new Date().toISOString(), heartbeat: ++this.heartbeat, leaseMs: 15000,
       ...(this.discoveryState === "ready" ? { port: this.port, token: this.token } : {}), ...overrides };
     const temporary = join(this.directory, `discovery-${this.heartbeat}.tmp`);

@@ -15,6 +15,7 @@ AudioEngine::AudioEngine (int readAhead)
 
     mixBuffer.setSize (2, blockSize.load());
     playerBuffer.setSize (CuePlayer::maxChannels, blockSize.load());
+    loudness.prepare (sampleRate.load());
     players.reserve (maxPlayers);   // push_back under the audio lock must not reallocate (play() refuses beyond this)
 
     muteRuntime = std::make_unique<PatchRuntime>();
@@ -738,6 +739,9 @@ bool AudioEngine::play (const Cue& cue, const PlayOptions& options, juce::String
                 if (options.hasStartGain)
                     existing->setInitialGainDb (options.startGainDb);
 
+                if (options.duckDb != 0.0)
+                    existing->setInitialDuckDb (options.duckDb);   // in place before its first audible block (not a ramp down across it)
+
                 existing->setStartOrder (++startCounter);
                 existing->start();
                 committedRunning.store (true, std::memory_order_release);
@@ -775,6 +779,9 @@ bool AudioEngine::play (const Cue& cue, const PlayOptions& options, juce::String
     player->prepare (getSampleRate(), getBlockSize());
     if (options.hasStartGain)
         player->setInitialGainDb (options.startGainDb);
+
+    if (options.duckDb != 0.0)
+        player->setInitialDuckDb (options.duckDb);
 
     player->setStartOrder (++startCounter);
     player->setChain (findCueChain (cue.id));
@@ -1645,13 +1652,16 @@ bool AudioEngine::consumePluginStateChanges()
 {
     bool changed = false;
 
-    // a plugin that reported a change may also report a different tail length now: refresh the cache the audio
-    // thread reads (getTailSeconds) so a cue does not stop processing a reverb / delay tail early or hold one too long
+    // a plugin that reported a change may also report a different tail length (or latency) now: refresh what the
+    // audio thread reads (getTailSeconds, the bypass delay lines) so a cue does not stop processing a reverb / delay
+    // tail early or hold one too long, and a bypassed plugin's dry signal keeps the plugin's new delay
     auto poll = [&changed] (PluginChain& chain)
     {
+        chain.recoverAfterStalls();   // a plugin that stalled longer than its ring holds is reset here, on the message thread
+
         if (chain.consumeStateChanged())
         {
-            chain.refreshTailCache();
+            chain.refreshPluginCaches();
             changed = true;
         }
     };
@@ -1684,6 +1694,8 @@ void AudioEngine::prepare (double newSampleRate, int newBlockSize, int newNumDev
     previousSampleRate = sampleRate.load();
     previousBlockSize = blockSize.load();
     formatPrepared = true;
+
+    loudness.prepare (sampleRate.load());
 
     {
         const juce::ScopedLock sl (lock);
@@ -1769,6 +1781,8 @@ void AudioEngine::renderBlock (juce::AudioBuffer<float>& output, int numSamples,
 
         masterChain.process (mixBuffer, n);   // legacy master inserts on device outputs 1-2
         applyOutputGate (mixBuffer, n);       // the panic gate: closed = silence, whatever the chains still ring with
+        if (output.getNumChannels() > 0)
+            loudness.process (mixBuffer.getReadPointer (0), output.getNumChannels() > 1 ? mixBuffer.getReadPointer (1) : nullptr, n);
 
         for (int ch = 0; ch < output.getNumChannels(); ++ch)
         {

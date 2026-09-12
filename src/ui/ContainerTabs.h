@@ -1,6 +1,7 @@
 #pragma once
 
 #include "app/ProjectDocument.h"
+#include "ui/UiUtils.h"
 
 #include <juce_gui_basics/juce_gui_basics.h>
 
@@ -19,6 +20,7 @@ public:
     /** Rebuilds the tabs from the document (call on containersChanged). */
     void refresh();
     void setEditable (bool shouldBeEditable);
+    void setInfoText (juce::String text);
 
     std::function<void (int index)> onSelect;
     std::function<void()> onAddList;
@@ -33,7 +35,7 @@ public:
     void mouseDown (const juce::MouseEvent& e) override;
     void mouseDoubleClick (const juce::MouseEvent& e) override;
 
-    static constexpr int height = 26;
+    static constexpr int height = Palette::tabBarHeight;
 
 private:
     struct Tab
@@ -51,6 +53,8 @@ private:
     ProjectDocument& document;
     std::vector<Tab> tabs;
     juce::Rectangle<int> addButton;
+    juce::Rectangle<int> infoBounds;
+    juce::String infoText;
     bool editable = true;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (ContainerTabs)

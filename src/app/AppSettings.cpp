@@ -18,6 +18,8 @@ namespace Keys
     constexpr const char* activeCuesFolded  = "activeCuesCollapsed";
     constexpr const char* reopenAfterUpdate = "reopenProjectAfterUpdate";
     constexpr const char* youtubeAddToQueue = "youtubeAddToQueue";
+    constexpr const char* disabledPlugins   = "disabledPlugins";
+    constexpr const char* lufsAverageSeconds = "lufsAverageSeconds";
 }
 
 AppSettings::AppSettings()
@@ -124,6 +126,19 @@ void AppSettings::setYouTubeAddToQueue (bool add)
     settings->setValue (Keys::youtubeAddToQueue, add);
 }
 
+juce::StringArray AppSettings::getDisabledPlugins() const
+{
+    juce::StringArray keys;
+    keys.addLines (settings->getValue (Keys::disabledPlugins));
+    keys.removeEmptyStrings();
+    return keys;
+}
+
+void AppSettings::setDisabledPlugins (const juce::StringArray& keys)
+{
+    settings->setValue (Keys::disabledPlugins, keys.joinIntoString ("\n"));
+}
+
 bool AppSettings::getInspectorCollapsed() const
 {
     return settings->getBoolValue (Keys::inspectorFolded, false);
@@ -162,6 +177,25 @@ juce::String AppSettings::getLastRunVersion() const
 void AppSettings::setLastRunVersion (const juce::String& version)
 {
     settings->setValue (Keys::lastRunVersion, version);
+}
+
+int AppSettings::getLufsAverageSeconds() const
+{
+    const int seconds = settings->getIntValue (Keys::lufsAverageSeconds, 20);
+    for (const int allowed : { 5, 10, 20, 30, 60 })
+        if (seconds == allowed)
+            return seconds;
+    return 20;
+}
+
+void AppSettings::setLufsAverageSeconds (int seconds)
+{
+    for (const int allowed : { 5, 10, 20, 30, 60 })
+        if (seconds == allowed)
+        {
+            settings->setValue (Keys::lufsAverageSeconds, seconds);
+            return;
+        }
 }
 
 void AppSettings::flush()

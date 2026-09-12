@@ -82,7 +82,7 @@ export class FxBinding {
   }
 }
 
-export type ActionKind = "all-mics" | "mic-mute-group" | "fx-mute-group" | "plugin-group" | "fx-send" | "fx-send-step" | "status";
+export type ActionKind = "all-mics" | "mic-mute-group" | "fx-mute-group" | "plugin-group" | "plugin-group-all" | "fx-send" | "fx-send-step" | "status";
 export type ActionSettings = Omit<MicSettings, "mode"> & {
   mode: "toggle" | "on" | "off" | "mute" | "unmute" | "up" | "down" | "set";
   fxId: string; fxName: string; groupIndex: number;
@@ -95,7 +95,7 @@ export function actionSettings(kind: ActionKind, value: unknown): { settings: Ac
   const validTarget = typeof o.targetPercent === "number" && Number.isInteger(o.targetPercent) && o.targetPercent >= 0 && o.targetPercent <= 100;
   const base = migrateSettings({ ...o, mode: "toggle" });
   const valid = base.valid && (o.mode === undefined || modes.includes(String(o.mode)))
-    && (kind !== "plugin-group" || o.groupIndex === undefined || (Number.isInteger(o.groupIndex) && Number(o.groupIndex) >= 1 && Number(o.groupIndex) <= 5))
+    && (!(kind === "plugin-group" || kind === "plugin-group-all") || o.groupIndex === undefined || (Number.isInteger(o.groupIndex) && Number(o.groupIndex) >= 1 && Number(o.groupIndex) <= 5))
     && (!(kind === "fx-send" || sendStep) || o.stepPercent === undefined || steps.includes(o.stepPercent as number))
     && (kind !== "fx-send" || o.pressMode === undefined || o.pressMode === "pre-post" || o.pressMode === "none")
     && (!sendStep || o.targetPercent === undefined || validTarget)

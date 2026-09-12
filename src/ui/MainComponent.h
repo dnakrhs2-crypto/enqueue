@@ -11,6 +11,7 @@
 #include "ui/CueInspector.h"
 #include "ui/SplitDivider.h"
 #include "ui/ManualWindow.h"
+#include "ui/PluginManager.h"
 #include "ui/YouTubeWindow.h"
 #include "ui/CueTable.h"
 #include "ui/FooterBar.h"
@@ -199,6 +200,7 @@ private:
     void showYouTubeWindow();
     void showAlert (const juce::String& title, const juce::String& message, bool isError);
     void updateTransportStandby();
+    void updateAudioStatus();
 
     void timerCallback() override;
     void cueListStructureChanged() override;
@@ -224,6 +226,8 @@ private:
     OperationalKeys operationalKeys { *this };
     std::vector<juce::Component::SafePointer<juce::Component>> keyedWindows;   // top-level windows that carry operationalKeys
     int windowScanCountdown = 0;
+    juce::int64 lastLoudnessSubBlockCount = 0;
+    double lastLoudnessSubBlockMs = 0.0;
     bool escHeld = false;                  // the Esc mapping fires on the down edge only (a held key must not hard-cut)
     double lastPanicKeyMs = -1.0e9;        // when the main window last handled an Esc press (the hook skips that press)
     double lastQuietEscMs = -1.0e9;        // an Esc with nothing playing: a second one within 0.5 s hard-closes the gate
@@ -255,6 +259,9 @@ private:
     CueInspector inspector;
     ActiveCuesPanel activeCues;
     FooterBar footer;
+    ModeToggle modeToggle;
+    Palette::CachedShadow listShadow, activeShadow, inspectorShadow;
+    juce::Rectangle<int> listCardBounds;
     std::unique_ptr<juce::FileChooser> chooser;
     bool dragOverWindow = false;
     bool activeCuesVisible = true;
@@ -268,6 +275,7 @@ private:
     void applyPanicSeconds (double seconds);
     std::unique_ptr<ManualWindow> manualWindow;   // made on first use, hidden on close
     std::unique_ptr<YouTubeWindow> youtubeWindow;   // the same
+    std::unique_ptr<PluginManagerWindow> pluginManagerWindow;   // the same (Ctrl+P)
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (MainComponent)
 };

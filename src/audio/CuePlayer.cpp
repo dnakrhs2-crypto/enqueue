@@ -406,6 +406,15 @@ void CuePlayer::setDuckDb (double db, double rampSeconds) noexcept
     duckTarget.store (tmp.gainLinear(), std::memory_order_relaxed);
 }
 
+void CuePlayer::setInitialDuckDb (double db) noexcept
+{
+    // fresh or loaded (a loaded instance is already in the render loop, silent): the audio thread puts the level in
+    // place before the first audible sample instead of ramping down from full across that block
+    setDuckDb (db, 0.0);
+    duckInitial.store (duckTarget.load (std::memory_order_relaxed), std::memory_order_relaxed);
+    duckJump.store (true, std::memory_order_release);
+}
+
 double CuePlayer::getLengthSeconds() const noexcept
 {
     if (micMode)
@@ -763,6 +772,14 @@ bool CuePlayer::renderNextBlock (juce::AudioBuffer<float>& fullBuffer, int numSa
         else if (gainLinear != 1.0f)
         {
             buffer.applyGain (0, numSamples, gainLinear);
+        }
+
+        if (duckJump.exchange (false, std::memory_order_acq_rel))
+        {
+            // a start under a running duck cue: at the ducked level from the first sample (no dip from full). A goal that
+            // came in since (the duck cue ended before this block) is reached from there by the ramp below, not jumped to
+            duckLevel = duckGoalSeen = duckInitial.load (std::memory_order_relaxed);
+            duckSamplesLeft = 0;
         }
 
         const float duckGoal = duckTarget.load (std::memory_order_relaxed);

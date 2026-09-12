@@ -1,5 +1,7 @@
 #pragma once
 
+#include "ui/UiUtils.h"
+
 #include <juce_gui_basics/juce_gui_basics.h>
 
 #include <functional>
@@ -14,7 +16,7 @@ public:
     /** horizontal = spans the width, drags up / down (the pane is below); vertical = spans the height, the pane is to the right. */
     enum class Orientation { horizontal, vertical };
 
-    static constexpr int thickness = 10;
+    static constexpr int thickness = Palette::gap;
 
     explicit SplitDivider (Orientation orientation);
 
@@ -33,6 +35,8 @@ public:
     void mouseDrag (const juce::MouseEvent& e) override;
     void mouseUp (const juce::MouseEvent& e) override;
     void mouseDoubleClick (const juce::MouseEvent& e) override;
+    void mouseEnter (const juce::MouseEvent&) override { repaint(); }
+    void mouseExit (const juce::MouseEvent&) override { repaint(); }
 
 private:
     void updateShape();
@@ -40,7 +44,17 @@ private:
     const Orientation orientation;
     bool collapsed = false, dragging = false;
     int dragStart = 0;
-    juce::ShapeButton toggle;
+    struct FoldButton : juce::Button
+    {
+        FoldButton() : juce::Button ("fold") {}
+        void paintButton (juce::Graphics& g, bool over, bool) override
+        {
+            g.setColour (over ? Palette::accent : Palette::muted);
+            g.strokePath (shape, juce::PathStrokeType (Palette::dividerStroke),
+                          juce::AffineTransform::translation ((float) getWidth() * 0.5f, (float) getHeight() * 0.5f));
+        }
+        juce::Path shape;
+    } toggle;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (SplitDivider)
 };

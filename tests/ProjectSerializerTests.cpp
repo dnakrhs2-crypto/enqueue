@@ -155,6 +155,7 @@ public:
         {
             Project p;
             p.settings.doubleGoSeconds = 1.5;
+            p.settings.doubleGoHotkeys = false;
             p.settings.panicSeconds = 3.0;
             p.settings.autoNumber = false;
             p.settings.rowSize = 2;
@@ -172,6 +173,7 @@ public:
             Project q;
             expect (ProjectSerializer::fromJson (ProjectSerializer::toJson (p), q, nullptr).wasOk());
             expectWithinAbsoluteError (q.settings.doubleGoSeconds, 1.5, 1e-9);
+            expect (! q.settings.doubleGoHotkeys);
             expectWithinAbsoluteError (q.settings.panicSeconds, 3.0, 1e-9);
             expect (! q.settings.autoNumber);
             expectEquals (q.settings.rowSize, 2);

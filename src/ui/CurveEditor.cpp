@@ -13,7 +13,7 @@ CurveEditor::CurveEditor()
     {
         l.setText (ko (text), juce::dontSendNotification);
         l.setColour (juce::Label::textColourId, Palette::dimText);
-        l.setFont (juce::Font (juce::FontOptions (15.0f)));
+        l.setFont (Palette::font (Palette::fieldLabelSize));
         addAndMakeVisible (l);
     };
 
@@ -21,7 +21,7 @@ CurveEditor::CurveEditor()
     label (intensityLabel, "강도");
     label (domainLabel, "오디오 도메인");
     label (hint, "S커브 = 부드러운 시작·끝 · 파라메트릭 = 강도(1 = 직선, 클수록 늦게 출발; 대칭 켜면 양끝 완만) · 커스텀 = 캔버스 클릭으로 점 추가, 드래그 이동, 더블클릭/Delete 삭제. 이퀄파워 = 파라메트릭 0.5 + 리니어, 이퀄게인 = 직선 + 리니어");
-    hint.setFont (juce::Font (juce::FontOptions (13.0f)));
+    hint.setFont (Palette::font (Palette::fileSize));
 
     shapeBox.addItem (ko ("S커브"), 1);
     shapeBox.addItem (ko ("파라메트릭"), 2);
@@ -60,7 +60,7 @@ CurveEditor::CurveEditor()
 
     intensitySlider.setRange (FadeCurve::minIntensity, FadeCurve::maxIntensity, 0.1);
     intensitySlider.setSkewFactorFromMidPoint (1.0);
-    intensitySlider.setTextBoxStyle (juce::Slider::TextBoxRight, false, 56, 22);
+    intensitySlider.setTextBoxStyle (juce::Slider::TextBoxRight, false, 70, Palette::fieldHeight);
     intensitySlider.setDoubleClickReturnValue (true, 2.0);
     intensitySlider.setWantsKeyboardFocus (false);
     intensitySlider.onValueChange = [this]
@@ -146,7 +146,7 @@ void CurveEditor::notify (bool finished)
 void CurveEditor::resized()
 {
     auto area = getLocalBounds().reduced (12, 6);
-    auto row = area.removeFromTop (26);
+    auto row = area.removeFromTop (Palette::fieldHeight);
     shapeLabel.setBounds (row.removeFromLeft (36));
     shapeBox.setBounds (row.removeFromLeft (120));
     row.removeFromLeft (12);
@@ -224,7 +224,7 @@ void CurveEditor::Canvas::paint (juce::Graphics& g)
             path.lineTo (p);
     }
 
-    g.setColour (isEnabled() ? juce::Colours::yellow.withAlpha (0.9f) : Palette::dimText);
+    g.setColour (isEnabled() ? Palette::accent.withAlpha (Palette::envelopeAlpha) : Palette::dimText);
     g.strokePath (path, juce::PathStrokeType (2.0f));
 
     if (owner.curve.shape == CurveShape::custom)
@@ -234,13 +234,13 @@ void CurveEditor::Canvas::paint (juce::Graphics& g)
         for (int i = 0; i < (int) points.size(); ++i)
         {
             const auto p = toScreen (points[(size_t) i].x, points[(size_t) i].y);
-            g.setColour (i == selected ? Palette::standby : juce::Colours::yellow);
+            g.setColour (i == selected ? Palette::standby : Palette::accent);
             g.fillEllipse (p.x - 5.0f, p.y - 5.0f, 10.0f, 10.0f);
         }
     }
 
     g.setColour (Palette::dimText);
-    g.setFont (juce::Font (juce::FontOptions (13.0f)));
+    g.setFont (Palette::font (Palette::fileSize));
     g.drawText (ko ("시간 →"), r.withTrimmedTop (r.getHeight() - 14.0f).withTrimmedLeft (r.getWidth() - 50.0f).toNearestInt(), juce::Justification::centredRight, false);
     g.drawText (ko ("완료 ↑"), juce::Rectangle<int> ((int) r.getX() + 2, (int) r.getY() + 2, 44, 14), juce::Justification::centredLeft, false);
 }

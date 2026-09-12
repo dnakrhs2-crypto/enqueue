@@ -26,14 +26,15 @@ namespace
 {
     void focusAlertEditor (juce::AlertWindow& alert, const juce::String& editorName);   // defined further down
 
-    constexpr int menuBarHeight = 30;   // 17 pt menu titles
-    constexpr int transportHeight = 148;
-    constexpr int footerHeight = 30;
     constexpr double pluginChangeGraceMs = 1500.0;
 }
 
 bool MainComponent::HotkeyListener::keyPressed (const juce::KeyPress& key, juce::Component*)
 {
+    // typing in a field: no cue hotkey fires (letters and digits never get here, but an F key passes a text editor)
+    if (dynamic_cast<juce::TextEditor*> (juce::Component::getCurrentlyFocusedComponent()) != nullptr)
+        return false;
+
     const int code = key.getKeyCode();
 
     if (heldKeys.count (code) != 0)
@@ -76,6 +77,7 @@ MainComponent::MainComponent (AudioEngine& e, AppSettings& s, juce::ApplicationC
     setWantsKeyboardFocus (true);
 
     addAndMakeVisible (menuBar);
+    addAndMakeVisible (modeToggle);
     addAndMakeVisible (transport);
     addAndMakeVisible (table);
     addAndMakeVisible (inspector);
@@ -136,7 +138,7 @@ MainComponent::MainComponent (AudioEngine& e, AppSettings& s, juce::ApplicationC
     cart.onFilesDropped = [this] (const juce::StringArray& files, int slot) { addCuesFromFiles (files, slot); };
     cart.onStop = [this] (const juce::Uuid& id) { controller.stopCue (id, true); };   // pending follows go too
     table.isNumberTaken = [this] (const juce::String& number, const juce::Uuid& exceptId) { return document.isNumberTaken (number, exceptId); };
-    document.onPatchesChanged = [this] { inspector.refreshDeviceDependent(); };   // dead output columns follow the patch
+    document.onPatchesChanged = [this] { inspector.refreshDeviceDependent(); updateTransportStandby(); };   // output columns and next-cue metadata follow the patch
     document.onBeforeContainerSwitch = [this] { table.finishEditing(); inspector.finishEditing(); };   // a half-typed field belongs to the list that is leaving
     table.onEditCues = [this] (const std::vector<int>& rows, const juce::String& name, const std::function<void (Cue&)>& mutator)
     {
@@ -179,6 +181,11 @@ MainComponent::MainComponent (AudioEngine& e, AppSettings& s, juce::ApplicationC
         const auto& t = document.cues.get (index);
         return juce::String::fromUTF8 ("\xE2\x86\x92 ") + (t.number.isNotEmpty() ? t.number + " " : "#" + juce::String (index + 1) + " ") + t.name;
     };
+    transport.describePatch = [this] (const Cue& cue)
+    {
+        const auto& patch = document.patchForCue (cue);
+        return patch.name + " (" + juce::String (patch.numCueOutputs) + ")";
+    };
     table.onEditDuration = [this] (int) { ensureInspectorShown(); inspector.showTimeTab(); };
 
     inspector.onOpenPluginManager = [this] { showPluginManager(); };
@@ -190,6 +197,7 @@ MainComponent::MainComponent (AudioEngine& e, AppSettings& s, juce::ApplicationC
         table.focusTable();   // on Windows the keyboard hook already turned this Esc into the panic
     };
     inspector.onReturnFocus = [this] { table.focusTable(); };
+    inspector.onHotkeyCaptured = [this] (int keyCode) { hotkeyListener.heldKeys.insert (keyCode); };   // the OS repeat of the key still held is not a first press
     activeCues.onPauseRequested = [this] (const juce::Uuid& id, bool resume)
     {
         if (resume)
@@ -226,7 +234,8 @@ MainComponent::MainComponent (AudioEngine& e, AppSettings& s, juce::ApplicationC
     };
     inspector.onResetCue = [this] { controller.resetSelected(); };
 
-    footer.onShowModeChanged = [this] (bool mode) { setShowMode (mode); };
+    modeToggle.onShowModeChanged = [this] (bool mode) { setShowMode (mode); };
+    transport.onLufsAverageSecondsChanged = [this] (int seconds) { settings.setLufsAverageSeconds (seconds); };
     footer.onWarningsClicked = [this] { showWarnings(); };
 
     document.snapshotDecorator = [this] (Project& project) { captureLivePluginStates (project); };
@@ -246,8 +255,10 @@ MainComponent::MainComponent (AudioEngine& e, AppSettings& s, juce::ApplicationC
 
     commands.registerAllCommandsForTarget (this);
     commands.setFirstCommandTarget (this);
-    addKeyListener (&hotkeyListener);            // cue hotkeys first ...
-    addKeyListener (commands.getKeyMappings());  // ... then the command shortcuts
+    // JUCE asks key listeners last-added first: the command shortcuts go in first so the cue hotkeys are asked before
+    // them (the two never overlap - a hotkey may not be a key the app uses - but the order is what the name says)
+    addKeyListener (commands.getKeyMappings());
+    addKeyListener (&hotkeyListener);
     setApplicationCommandManagerToWatch (&commands);
 
     setSize (1100, 820);
@@ -263,6 +274,7 @@ MainComponent::~MainComponent()
     scheduler.stopTicking();
     controller.cancelPending();
     stopTimer();
+    pluginManagerWindow.reset();   // listens to the plugin host's known-plugin list: gone before the engine is
     PluginDialogs::closeAll();
     WorkspaceSettingsDialog::closeIfOpen();
     AudioSettingsDialog::closeIfOpen();
@@ -279,9 +291,13 @@ MainComponent::~MainComponent()
 void MainComponent::resized()
 {
     auto area = getLocalBounds();
-    menuBar.setBounds (area.removeFromTop (menuBarHeight));
-    transport.setBounds (area.removeFromTop (transportHeight));
-    footer.setBounds (area.removeFromBottom (footerHeight));
+    auto menuArea = area.removeFromTop (Palette::menuBarHeight);
+    modeToggle.setBounds (menuArea.removeFromRight (Palette::modeToggleWidth));
+    menuBar.setBounds (menuArea);
+    footer.setBounds (area.removeFromBottom (Palette::footerHeight));
+    area.reduce (Palette::gap, Palette::gap);
+    transport.setBounds (area.removeFromTop (Palette::transportHeight));
+    area.removeFromTop (Palette::gap);
 
     // below the transport: [ cue list | active cues ] over a divider over the inspector. The two secondary panes
     // take a share of the area (not a fixed size), so a resized window keeps the proportions.
@@ -299,6 +315,11 @@ void MainComponent::resized()
     activeCuesDivider.setCollapsed (! activeCuesVisible);
     activeCuesDivider.setBounds (area.removeFromRight (SplitDivider::thickness));
 
+    listCardBounds = area;
+    listShadow.resize (listCardBounds);
+    activeShadow.resize (activeCues.getBounds());
+    inspectorShadow.resize (inspector.getBounds());
+    area.reduce (1, 1);
     containerTabs.setBounds (area.removeFromTop (ContainerTabs::height));
     table.setBounds (area);
     cart.setBounds (area);
@@ -368,10 +389,26 @@ void MainComponent::ensureInspectorShown()
 void MainComponent::paint (juce::Graphics& g)
 {
     g.fillAll (Palette::background);
+    // Draw shadows in the parent so they can extend into the gaps between the existing components.
+    listShadow.draw (g);
+    if (activeCues.isVisible())
+        activeShadow.draw (g);
+    if (inspector.isVisible())
+        inspectorShadow.draw (g);
+    Palette::drawCard (g, listCardBounds);
+    if (activeCues.isVisible())
+        Palette::drawCard (g, activeCues.getBounds());
+    if (inspector.isVisible())
+        Palette::drawCard (g, inspector.getBounds());
 }
 
 void MainComponent::paintOverChildren (juce::Graphics& g)
 {
+    Palette::finishCard (g, listCardBounds);
+    if (activeCues.isVisible())
+        Palette::finishCard (g, activeCues.getBounds());
+    if (inspector.isVisible())
+        Palette::finishCard (g, inspector.getBounds());
     if (dragOverWindow)
     {
         g.setColour (Palette::standby);
@@ -888,6 +925,12 @@ bool MainComponent::perform (const InvocationInfo& info)
             if (info.invocationMethod == InvocationInfo::fromKeyPress && ! info.isKeyDown)
             {
                 controller.goKeyReleased();
+            }
+            else if (auto* focused = juce::Component::getCurrentlyFocusedComponent();
+                     info.invocationMethod == InvocationInfo::fromKeyPress && focused != nullptr && focused->getComponentID() == "hotkeyCapture")
+            {
+                // Space pressed into the inspector's "키를 누르세요" capture: the capture refuses it as a reserved key,
+                // and the key-state path that brings the GO command here must not fire the show meanwhile
             }
             else
             {
@@ -1912,6 +1955,11 @@ void MainComponent::setShowMode (bool shouldBeShowMode)
     containerTabs.setEditable (! showMode);
     inspector.setEditable (! showMode);
     footer.setShowMode (showMode);
+    modeToggle.setShowMode (showMode);
+
+    if (pluginManagerWindow != nullptr)
+        pluginManagerWindow->setLocked (showMode);   // an open manager must not scan / switch plugins during the show either
+
     commands.commandStatusChanged();
     transport.showStatus (showMode ? ko ("쇼 모드: 편집 잠김") : ko ("편집 모드"), false);
     table.focusTable();
@@ -2972,7 +3020,14 @@ void MainComponent::refreshFileInfoForAllCues()
 
 void MainComponent::showPluginManager()
 {
-    PluginDialogs::showPluginManager (engine, settings, this);
+    if (pluginManagerWindow == nullptr)
+    {
+        pluginManagerWindow = std::make_unique<PluginManagerWindow> (engine.getPluginHost(), settings);
+        pluginManagerWindow->centreAroundComponent (this, pluginManagerWindow->getWidth(), pluginManagerWindow->getHeight());
+    }
+
+    pluginManagerWindow->setLocked (showMode);
+    pluginManagerWindow->open();
 }
 
 void MainComponent::showYouTubeWindow()
@@ -3020,6 +3075,45 @@ void MainComponent::showAlert (const juce::String& title, const juce::String& me
 void MainComponent::updateTransportStandby()
 {
     transport.setStandbyCue (document.cues.getPlayheadIndex(), document.cues.getPlayhead());
+    auto context = document.getContainerInfo (document.getActiveContainer()).name;
+    if (document.settings.lockPlayheadToSelection)
+        context << ko (" · 플레이헤드 잠금");
+    transport.setContextText (context);
+    auto number = [this] (int index)
+    {
+        if (! document.cues.isValidIndex (index))
+            return juce::String ("--");
+        const auto& cue = document.cues.get (index);
+        return cue.number.isNotEmpty() ? cue.number : "#" + juce::String (index + 1);
+    };
+    containerTabs.setInfoText (document.isActiveCart() ? ko ("카트: 버튼 클릭 = 실행")
+                                : ko ("선택 ") + number (document.cues.getSelectedIndex())
+                                    + ko (" · 다음 ") + number (document.cues.getPlayheadIndex()) + ko (" · Space = GO"));
+}
+
+void MainComponent::updateAudioStatus()
+{
+    auto& manager = engine.getDeviceManager();
+    auto* device = manager.getCurrentAudioDevice();
+    if (device == nullptr || ! device->isOpen())
+    {
+        footer.setAudioStatus (ko ("오디오 장치 없음"));
+        return;
+    }
+
+    const double rate = device->getCurrentSampleRate();
+    const int buffer = device->getCurrentBufferSizeSamples();
+    const int reportedLatency = device->getOutputLatencyInSamples();
+    juce::String status = manager.getCurrentAudioDeviceType() + ko (" · ") + device->getName();
+    if (rate > 0.0 && std::isfinite (rate))
+    {
+        status << ko (" · ") << juce::String (rate / 1000.0, std::fmod (rate, 1000.0) == 0.0 ? 0 : 1) << " kHz";
+        status << ko (" · ") << buffer << " samples";
+        const int latencySamples = reportedLatency > 0 ? reportedLatency : juce::jmax (0, buffer);
+        status << ko (" · 출력 지연 ") << juce::String ((double) latencySamples / rate * 1000.0, 1) << " ms";
+    }
+    status << ko (" · CPU ") << juce::String (manager.getCpuUsage() * 100.0, 1) << "%";
+    footer.setAudioStatus (status);
 }
 
 //==============================================================================
@@ -3123,22 +3217,57 @@ void MainComponent::installEscapePolicy (juce::Component& root)
 
 void MainComponent::timerCallback()
 {
+    auto& meter = engine.getLoudnessMeter();
+    meter.poll();
+    const auto& stats = meter.getStats();
+    const auto subBlockCount = stats.getSubBlockCount();
+    const double nowMs = juce::Time::getMillisecondCounterHiRes();
+    if (subBlockCount > lastLoudnessSubBlockCount)
+        lastLoudnessSubBlockMs = nowMs;
+    lastLoudnessSubBlockCount = subBlockCount;
+    // A stopped device leaves the last readings in the meter. Hide them without clearing its average history. The
+    // sub-block counter jumps once a callback (a burst of 100 ms sub-blocks), so a large ASIO buffer can leave it
+    // still for over a second between callbacks - the "no audio" wait must clear the whole callback interval plus a
+    // timer tick, not a flat second.
+    const double sr = engine.getSampleRate();
+    const double callbackMs = sr > 0.0 ? engine.getBlockSize() * 1000.0 / sr : 0.0;
+    const double staleAfterMs = juce::jmax (1000.0, callbackMs * 2.5 + 200.0);
+    const bool receivingAudio = subBlockCount > 0 && nowMs - lastLoudnessSubBlockMs < staleAfterMs;
+    const auto momentary = stats.momentary();
+    const int windowSeconds = settings.getLufsAverageSeconds();
+    const auto average = stats.windowed (windowSeconds);
+    transport.setLoudness (receivingAudio && momentary.valid, momentary.value,
+                           receivingAudio && average.valid, average.value, windowSeconds);
+
     if (--windowScanCountdown <= 0)
     {
         windowScanCountdown = 30;   // once a second
         attachOperationalKeysToWindows();
         installEscapePolicy (inspector);
+        updateAudioStatus();
     }
 
     engine.reapIfNeeded();   // finished players are destroyed here, never from the audio thread's callback
     tryPendingStartOnOpen();
 
-    if (! juce::Process::isForegroundProcess())
+    // key-ups missed while another app - or another window of this one (a plugin editor, the manual) - had the focus
+    // must not look like auto-repeat, or the next press of that hotkey would be swallowed
+    if (auto* peer = getPeer(); ! juce::Process::isForegroundProcess() || peer == nullptr || ! peer->isFocused())
     {
-        hotkeyListener.heldKeys.clear();   // key-ups missed while another app had the focus must not look like auto-repeat
+        hotkeyListener.heldKeys.clear();
         operationalKeys.reset();
         escHeld = false;
         controller.goKeyReleased();
+    }
+
+    // nothing in this window holds the keyboard (a field gave the focus away on Enter): the list view takes it back,
+    // or the cue hotkeys and shortcuts - which live on this component - would be unreachable until the next click
+    if (auto* peer = getPeer(); peer != nullptr && peer->isFocused() && juce::Component::getCurrentlyFocusedComponent() == nullptr)
+    {
+        if (document.isActiveCart())
+            cart.grabKeyboardFocus();
+        else
+            table.focusTable();
     }
 
     auto playing = engine.getPlayingCues();
@@ -3169,6 +3298,7 @@ void MainComponent::timerCallback()
     }
 
     transport.setPlayingCount (running, paused);
+    activeCues.setPlayingCount (running, paused);
     transport.setGoLocked (controller.isGoLocked());
     inspector.setPlayback (playing);
 
@@ -3214,8 +3344,7 @@ void MainComponent::cueListStructureChanged()
 
 void MainComponent::cueChanged (int index)
 {
-    if (index == document.cues.getPlayheadIndex())
-        updateTransportStandby();
+    updateTransportStandby();
 
     // a loaded instance holds a copy of the cue: after an edit it would play the old settings
     if (document.cues.isValidIndex (index))
@@ -3234,6 +3363,7 @@ void MainComponent::cueChanged (int index)
 
 void MainComponent::cueSelectionChanged (int)
 {
+    updateTransportStandby();
     commands.commandStatusChanged();
 }
 
@@ -3363,6 +3493,7 @@ void MainComponent::updateContainerView()
     cart.setVisible (isCart);
     table.setVisible (! isCart);
     containerTabs.refresh();
+    updateTransportStandby();
     commands.commandStatusChanged();
 
     if (isCart)
@@ -3385,6 +3516,7 @@ void MainComponent::documentStateChanged()
     table.setRowSize (document.settings.rowSize);
     transport.setPanicSeconds (document.settings.panicSeconds);
     transport.setAuditionMode (document.settings.alwaysAudition);
+    updateTransportStandby();
 
     if (onWindowTitleChanged)
         onWindowTitleChanged (document.getWindowTitle());

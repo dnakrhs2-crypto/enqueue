@@ -15,14 +15,6 @@ namespace
     constexpr float pointRadius = 5.0f;
     constexpr float hitRadius = 7.0f;
 
-    const juce::Colour waveColour   { 0xff7fa7d9 };
-    const juce::Colour waveDim      { 0xff44546a };
-    const juce::Colour envelopeCol  { 0xffe6c229 };
-    const juce::Colour handleCol    { 0xffb0b0b8 };
-    const juce::Colour cursorCol    { 0xffd0d0d8 };
-    const juce::Colour playheadCol  { 0xffff5555 };
-    const juce::Colour sliceCol     { 0xff5fd36b };
-
     double niceTickInterval (double secondsPerPixel, int minPixels)
     {
         static const double candidates[] = { 0.01, 0.02, 0.05, 0.1, 0.2, 0.5, 1.0, 2.0, 5.0, 10.0, 15.0, 30.0, 60.0, 120.0, 300.0, 600.0 };
@@ -262,12 +254,16 @@ void WaveformView::resized()
 //==============================================================================
 void WaveformView::paint (juce::Graphics& g)
 {
-    g.fillAll (Palette::background);
+    g.fillAll (Palette::panel);
+    juce::Path waveShape;
+    waveShape.addRoundedRectangle (waveArea.toFloat().reduced (0.5f), Palette::fieldRadius);
+    g.setColour (Palette::field);
+    g.fillPath (waveShape);
 
     if (! hasCue || loadedFile == juce::File())
     {
         g.setColour (Palette::dimText);
-        g.setFont (juce::Font (juce::FontOptions (14.0f)));
+        g.setFont (Palette::font (Palette::bodySize));
         g.drawText (hasCue ? ko ("파일 없음") : ko ("선택된 큐 없음"), getLocalBounds(), juce::Justification::centred);
         return;
     }
@@ -280,9 +276,6 @@ void WaveformView::paint (juce::Graphics& g)
     const auto region = juce::Rectangle<float> (xs, (float) waveArea.getY(), juce::jmax (0.0f, xe - xs), (float) waveArea.getHeight())
                             .getIntersection (waveArea.toFloat());
 
-    g.setColour (Palette::rowEven);
-    g.fillRect (region);
-
     if (thumbnail.getTotalLength() > 0.0)
     {
         const int numChannels = thumbnail.getNumChannels();
@@ -290,22 +283,47 @@ void WaveformView::paint (juce::Graphics& g)
         auto drawChannels = [&] (const juce::Colour& colour, juce::Rectangle<int> clip)
         {
             juce::Graphics::ScopedSaveState state (g);
+            g.reduceClipRegion (waveShape);
             g.reduceClipRegion (clip);
             g.setColour (colour);
 
             if (viewChannel >= 0 && viewChannel < numChannels)
             {
-                thumbnail.drawChannel (g, waveArea, viewStart, viewEnd, viewChannel, verticalZoom);
+                thumbnail.drawChannel (g, waveArea.reduced (0, 4), viewStart, viewEnd, viewChannel, verticalZoom);
             }
             else
             {
                 for (int ch = 0; ch < numChannels; ++ch)
-                    thumbnail.drawChannel (g, waveArea, viewStart, viewEnd, ch, verticalZoom);
+                {
+                    const int top = waveArea.getY() + ch * waveArea.getHeight() / numChannels;
+                    const int bottom = waveArea.getY() + (ch + 1) * waveArea.getHeight() / numChannels;
+                    thumbnail.drawChannel (g, juce::Rectangle<int> (waveArea.getX(), top, waveArea.getWidth(), bottom - top)
+                                                  .reduced (0, juce::jmin (4, (bottom - top) / 4)),
+                                           viewStart, viewEnd, ch, verticalZoom);
+                }
             }
         };
 
-        drawChannels (waveDim, waveArea);
-        drawChannels (waveColour, region.getSmallestIntegerContainer());
+        drawChannels (Palette::waveDim, waveArea);
+        drawChannels (Palette::wave, region.getSmallestIntegerContainer());
+
+        const bool singleChannel = viewChannel >= 0 && viewChannel < numChannels;
+        const int lanes = singleChannel ? 1 : numChannels;
+        g.setFont (Palette::monoFont (Palette::channelTagSize));
+        for (int lane = 0; lane < lanes; ++lane)
+        {
+            const int ch = singleChannel ? viewChannel : lane;
+            const int top = waveArea.getY() + lane * waveArea.getHeight() / lanes;
+            const int bottom = waveArea.getY() + (lane + 1) * waveArea.getHeight() / lanes;
+            if (lane > 0)
+            {
+                g.setColour (Palette::outline);
+                g.drawHorizontalLine (top, (float) waveArea.getX(), (float) waveArea.getRight());
+            }
+            g.setColour (Palette::muted);
+            g.drawText (ch == 0 ? "L" : ch == 1 ? "R" : juce::String (ch + 1),
+                        waveArea.getX() + 6, top + 2, 24, juce::jmax (0, juce::jmin (14, bottom - top - 2)), juce::Justification::topLeft);
+        }
     }
     else if (loadedFile.existsAsFile())
     {
@@ -318,14 +336,10 @@ void WaveformView::paint (juce::Graphics& g)
         g.drawText (ko ("[없음] ") + loadedFile.getFullPathName(), waveArea, juce::Justification::centred);
     }
 
-    // centre line
-    g.setColour (Palette::outline);
-    g.drawHorizontalLine (waveArea.getCentreY(), (float) waveArea.getX(), (float) waveArea.getRight());
-
     // cursor
     if (cursor >= viewStart && cursor <= viewEnd)
     {
-        g.setColour (cursorCol.withAlpha (0.6f));
+        g.setColour (Palette::waveCursor.withAlpha (Palette::rowBorderAlpha));
         const float x = xForTime (cursor);
         g.drawLine (x, (float) waveArea.getY(), x, (float) waveArea.getBottom(), 1.0f);
     }
@@ -337,18 +351,18 @@ void WaveformView::paint (juce::Graphics& g)
     // playhead
     if (playhead >= 0.0 && playhead >= viewStart && playhead <= viewEnd)
     {
-        g.setColour (playing ? playheadCol : playheadCol.withAlpha (0.5f));
+        g.setColour (playing ? Palette::stopButton : Palette::stopButton.withAlpha (Palette::disabledAlpha));
         const float x = xForTime (playhead);
         g.drawLine (x, (float) waveArea.getY(), x, (float) waveArea.getBottom(), 2.0f);
     }
 
     g.setColour (Palette::outline);
-    g.drawRect (waveArea);
+    g.drawRoundedRectangle (waveArea.toFloat().reduced (0.5f), Palette::fieldRadius, Palette::borderWidth);
 
     if (hasKeyboardFocus (true))
     {
-        g.setColour (Palette::standby.withAlpha (0.8f));
-        g.drawRect (getLocalBounds(), 1);
+        g.setColour (Palette::accent);
+        g.drawRoundedRectangle (waveArea.toFloat().reduced (0.5f), Palette::fieldRadius, Palette::borderWidth);
     }
 }
 
@@ -361,7 +375,7 @@ void WaveformView::drawRuler (juce::Graphics& g) const
     const double interval = niceTickInterval (secondsPerPixel, 70);
     const double minor = interval / 5.0;
 
-    g.setFont (juce::Font (juce::FontOptions (10.0f)));
+    g.setFont (Palette::monoFont (Palette::rulerSize));
 
     for (double t = std::floor (viewStart / minor) * minor; t <= viewEnd + 1e-9; t += minor)
     {
@@ -377,7 +391,10 @@ void WaveformView::drawRuler (juce::Graphics& g) const
         if (major)
         {
             g.setColour (Palette::dimText);
-            g.drawText (formatTimeMs (t, interval < 1.0), (int) x + 3, rulerArea.getY(), 80, rulerArea.getHeight() - 2,
+            const auto caption = formatTimeMs (t, interval < 1.0);
+            const int width = juce::GlyphArrangement::getStringWidthInt (Palette::monoFont (Palette::rulerSize), caption);
+            const int labelX = juce::jmax (waveArea.getX(), juce::jmin ((int) x + 3, waveArea.getRight() - width - 3));
+            g.drawText (caption, labelX, rulerArea.getY(), width, rulerArea.getHeight() - 2,
                         juce::Justification::centredLeft, false);
         }
     }
@@ -415,7 +432,7 @@ void WaveformView::drawEnvelope (juce::Graphics& g) const
         }
     }
 
-    g.setColour (envelopeCol.withAlpha (0.9f));
+    g.setColour (Palette::envelope.withAlpha (Palette::envelopeAlpha));
     g.strokePath (path, juce::PathStrokeType (2.0f));
 
     for (int i = 0; i < (int) envelope.points.size(); ++i)
@@ -429,7 +446,7 @@ void WaveformView::drawEnvelope (juce::Graphics& g) const
         const bool hovered = i == hoverPoint;
         const float radius = selected ? pointRadius + 1.5f : pointRadius;
 
-        g.setColour (selected ? juce::Colours::white : (hovered ? envelopeCol.brighter (0.4f) : envelopeCol));
+        g.setColour (selected ? Palette::accentInk : (hovered ? Palette::envelope.brighter (Palette::hoverBrighten) : Palette::envelope));
         g.fillEllipse (position.x - radius, position.y - radius, radius * 2.0f, radius * 2.0f);
         g.setColour (Palette::background);
         g.drawEllipse (position.x - radius, position.y - radius, radius * 2.0f, radius * 2.0f, 1.0f);
@@ -451,7 +468,7 @@ juce::Rectangle<float> WaveformView::sliceBadge (double seconds, int count) cons
 {
     const float x = xForTime (seconds);
     const float w = count == 0 ? 44.0f : 30.0f;
-    return { x + 2.0f, (float) waveArea.getY() + 2.0f, w, 14.0f };
+    return { x + 2.0f, (float) waveArea.getY() + 16.0f, w, 14.0f };
 }
 
 void WaveformView::drawSlices (juce::Graphics& g) const
@@ -459,7 +476,7 @@ void WaveformView::drawSlices (juce::Graphics& g) const
     if (! hasCue || cue.audio.slices.empty())
         return;
 
-    g.setFont (juce::Font (juce::FontOptions (11.0f)));
+    g.setFont (Palette::monoFont (Palette::kickerSize));
 
     auto drawBadge = [&] (double seconds, int count, bool selected, bool hovered)
     {
@@ -468,9 +485,9 @@ void WaveformView::drawSlices (juce::Graphics& g) const
         if (r.getRight() < (float) waveArea.getX() || r.getX() > (float) waveArea.getRight())
             return;
 
-        g.setColour (selected ? juce::Colours::white : (hovered ? sliceCol.brighter (0.4f) : sliceCol));
+        g.setColour (selected ? Palette::selectionRing : (hovered ? Palette::waveMarker.brighter (Palette::hoverBrighten) : Palette::waveMarker));
         g.fillRoundedRectangle (r, 3.0f);
-        g.setColour (juce::Colours::black);
+        g.setColour (Palette::accentInk);
         g.drawFittedText (countText (count), r.toNearestInt(), juce::Justification::centred, 1);
     };
 
@@ -487,7 +504,7 @@ void WaveformView::drawSlices (juce::Graphics& g) const
 
         const bool selected = selectedSlice == i;
         const bool hovered = hoverSlice == i;
-        g.setColour (selected ? juce::Colours::white : (hovered ? sliceCol.brighter (0.4f) : sliceCol.withAlpha (0.85f)));
+        g.setColour (selected ? Palette::selectionRing : (hovered ? Palette::waveMarker.brighter (Palette::hoverBrighten) : Palette::waveMarker));
         g.drawLine (x, (float) waveArea.getY(), x, (float) waveArea.getBottom(), selected || hovered ? 2.0f : 1.0f);
 
         juce::Path top;   // a small downward triangle at the top of the marker
@@ -625,26 +642,24 @@ void WaveformView::drawHandles (juce::Graphics& g) const
     if (! hasCue)
         return;
 
-    auto drawHandle = [&] (double seconds, bool isStart, bool hovered)
+    auto drawHandle = [&] (double seconds, bool hovered)
     {
         const float x = xForTime (seconds);
 
         if (x < (float) waveArea.getX() - handleSize || x > (float) waveArea.getRight() + handleSize)
             return;
 
-        g.setColour (hovered ? juce::Colours::white : handleCol);
-        g.drawLine (x, (float) waveArea.getY(), x, (float) waveArea.getBottom(), hovered ? 2.0f : 1.0f);
+        g.setColour (hovered ? Palette::selectionRing : Palette::waveMarker);
+        g.drawLine (x, (float) waveArea.getY(), x, (float) waveArea.getBottom(), Palette::borderWidth);
 
         juce::Path triangle;
-        const float top = (float) waveArea.getBottom() + 1.0f;
-        const float bottom = top + (float) handleSize;
-        const float dir = isStart ? 1.0f : -1.0f;
-        triangle.addTriangle (x, top, x, bottom, x + dir * (float) handleSize, bottom);
+        const float top = (float) waveArea.getY();
+        triangle.addTriangle (x - 4.0f, top, x + 4.0f, top, x, top + 5.0f);
         g.fillPath (triangle);
     };
 
-    drawHandle (regionStart(), true, hoverStart || drag == Drag::startHandle);
-    drawHandle (regionEnd(), false, hoverEnd || drag == Drag::endHandle);
+    drawHandle (regionStart(), hoverStart || drag == Drag::startHandle);
+    drawHandle (regionEnd(), hoverEnd || drag == Drag::endHandle);
 }
 
 //==============================================================================

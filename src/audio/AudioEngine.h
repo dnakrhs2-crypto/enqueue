@@ -1,6 +1,7 @@
 #pragma once
 
 #include "audio/CuePlayer.h"
+#include "audio/LoudnessMeter.h"
 #include "audio/PluginChain.h"
 #include "audio/PluginHost.h"
 #include "model/AudioPatch.h"
@@ -25,6 +26,9 @@ class AudioEngine : private juce::AudioIODeviceCallback,
                     private juce::AsyncUpdater
 {
 public:
+    /** Device outputs 1-2 after the master inserts and output gate; poll from the message thread. */
+    livemix::LoudnessMeter& getLoudnessMeter() noexcept { return loudness; }
+
     struct PlayingCue
     {
         juce::Uuid id;
@@ -50,6 +54,7 @@ public:
         juce::Uuid patchOverride = juce::Uuid::null();   // audition "대체 패치": play through this patch instead of the cue own patch
         bool hasStartGain = false;          // 페이드 인: the instance starts at startGainDb (the fade lifts it from there)
         double startGainDb = 0.0;
+        double duckDb = 0.0;                // the duck the running duck cues put on it: the instance begins at this level (no dip from full)
     };
 
     /** @param readAheadSamples  disk read-ahead per cue; 0 = synchronous reads (offline tests). */
@@ -333,6 +338,7 @@ private:
     std::array<const float*, maxDeviceInputs> inputPointers {};   // >=32-output path: input block pointers, no allocation
 
     PluginChain masterChain;
+    livemix::LoudnessMeter loudness;
     std::map<juce::String, std::unique_ptr<PluginChain>> cueChains;   // keyed by Uuid string
     PluginChain::Listener* chainListener = nullptr;
 

@@ -27,7 +27,7 @@ public:
     void setCue (const Cue* cue);
     /** Live playhead in file seconds (negative hides it). */
     void setPlayhead (double filePositionSeconds, bool isPlaying);
-    /** -1 = all channels overlaid, otherwise one channel. */
+    /** -1 = all channels in separate lanes, otherwise one channel in a single lane. */
     void setViewChannel (int channel);
     int getViewChannel() const noexcept { return viewChannel; }
     int getNumFileChannels() const noexcept { return thumbnail.getNumChannels(); }

@@ -1,5 +1,7 @@
 #pragma once
 
+#include "ui/UiUtils.h"
+
 #include "app/AppSettings.h"
 #include "app/ProjectDocument.h"
 #include "audio/AudioEngine.h"
@@ -57,6 +59,9 @@ public:
     /** Called after a tab switch (click or cue-type rebuild) stole the keyboard focus into a panel field;
         the owner puts it back on the cue table so Space still means GO. */
     std::function<void()> onReturnFocus;
+    /** The 기본 tab captured a hotkey (key code): the owner marks it held, so the auto-repeat of the key still being
+        down does not fire the cue it was just given to. */
+    std::function<void (int keyCode)> onHotkeyCaptured;
     /** Commits (or drops) whatever field is being edited, synchronously: called before the active list changes so a
         half-typed number lands on the cue it was typed for. */
     void finishEditing();
@@ -99,7 +104,7 @@ private:
     AppSettings& settings;
     juce::AudioThumbnailCache thumbnailCache { 64 };
 
-    juce::Label title;
+    juce::Label title, selectionDetails;
     /** juce::TabbedComponent brings the new panel to the front *with* focus, which lands on the panel's first text
         field; a cue player must not swallow the next Space into a number box, so the owner is told to move it back. */
     class InspectorTabs : public juce::TabbedComponent
@@ -108,6 +113,23 @@ private:
         using juce::TabbedComponent::TabbedComponent;
         std::function<void()> onTabShown;
         void currentTabChanged (int, const juce::String&) override { if (onTabShown) onTabShown(); }
+        void paint (juce::Graphics& g) override
+        {
+            {
+                juce::Graphics::ScopedSaveState save (g);   // TabbedComponent clips its paint to the tab content
+                juce::TabbedComponent::paint (g);
+            }
+            g.setColour (Palette::panel2);
+            g.fillRect (getLocalBounds().removeFromTop (getTabBarDepth()));
+            g.setColour (Palette::outline);
+            g.fillRect (0, getTabBarDepth() - 1, getWidth(), 1);
+        }
+        void resized() override
+        {
+            juce::TabbedComponent::resized();
+            auto& bar = getTabbedButtonBar();
+            bar.setBounds (bar.getBounds().withTrimmedLeft (Palette::cardInset).withTrimmedRight (Palette::cardInset));
+        }
     };
 
     InspectorTabs tabs { juce::TabbedButtonBar::TabsAtTop };

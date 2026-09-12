@@ -20,10 +20,22 @@ public:
         intro.setMinimumHorizontalScale (1.0f);
         addAndMakeVisible (intro);
 
+        // the notice the operator asked for (0.9.8): word for word, above the link box where it is read before a download
+        warning.setText (ko ("저작권 침해 우려가 있는 영상의 경우 다운로드 하지 말아주세요. 다운로드의 모든 책임은 사용자에게 있습니다."),
+                         juce::dontSendNotification);
+        warning.setColour (juce::Label::textColourId, Palette::paused);
+        warning.setFont (Palette::font (Palette::alertMessageSize, true));
+        warning.setJustificationType (juce::Justification::topLeft);
+        warning.setMinimumHorizontalScale (1.0f);
+        addAndMakeVisible (warning);
+
         linkLabel.setText (ko ("링크"), juce::dontSendNotification);
+        linkLabel.setFont (Palette::font (Palette::fieldLabelSize));
+        linkLabel.setColour (juce::Label::textColourId, Palette::muted);
         addAndMakeVisible (linkLabel);
 
         urlEditor.setTextToShowWhenEmpty ("https://www.youtube.com/watch?v=...", Palette::dimText);
+        urlEditor.setFont (Palette::font (Palette::fieldValueSize));
         urlEditor.setSelectAllWhenFocused (true);
         urlEditor.onReturnKey = [this] { startDownload(); };
         addAndMakeVisible (urlEditor);
@@ -58,14 +70,14 @@ public:
         log.setReadOnly (true);
         log.setCaretVisible (false);
         log.setScrollbarsShown (true);
-        log.setColour (juce::TextEditor::backgroundColourId, Palette::background);
+        log.setColour (juce::TextEditor::backgroundColourId, Palette::field);
         log.setColour (juce::TextEditor::outlineColourId, Palette::outline);
         log.setColour (juce::TextEditor::focusedOutlineColourId, Palette::outline);
         log.setTextToShowWhenEmpty (ko ("받은 파일이 여기에 표시됩니다."), Palette::dimText);
         addAndMakeVisible (log);
 
         downloader.onProgress = [this] (const YouTubeDownloader::Progress& p) { handleProgress (p); };
-        setSize (660, 440);
+        setSize (660, 480);
     }
 
     void focusLink()
@@ -78,6 +90,8 @@ public:
     {
         auto area = getLocalBounds().reduced (16, 14);
         intro.setBounds (area.removeFromTop (40));
+        area.removeFromTop (4);
+        warning.setBounds (area.removeFromTop (40));   // two lines at the default width
         area.removeFromTop (6);
 
         auto row = area.removeFromTop (30);
@@ -88,7 +102,7 @@ public:
         urlEditor.setBounds (row);
         area.removeFromTop (10);
 
-        auto options = area.removeFromTop (28);
+        auto options = area.removeFromTop (Palette::fieldHeight);
         folderButton.setBounds (options.removeFromRight (140));
         options.removeFromRight (8);
         addToQueue.setBounds (options);
@@ -103,7 +117,7 @@ public:
 
     void paint (juce::Graphics& g) override
     {
-        g.fillAll (Palette::background);
+        Palette::drawDialog (g, getLocalBounds());
     }
 
 private:
@@ -204,7 +218,7 @@ private:
     AppSettings& settings;
     YouTubeDownloader downloader;
 
-    juce::Label intro, linkLabel, status;
+    juce::Label intro, warning, linkLabel, status;
     juce::TextEditor urlEditor;
     juce::TextButton downloadButton { ko ("다운로드") }, cancelButton { ko ("취소") }, folderButton { ko ("저장 폴더 열기") };
     juce::ToggleButton addToQueue { ko ("다운받고 큐에 넣기") };
@@ -223,7 +237,7 @@ YouTubeWindow::YouTubeWindow (AppSettings& settings, const juce::String& appVers
     content = c;
     setContentOwned (c, true);
     setResizable (true, false);
-    setResizeLimits (520, 360, 10000, 10000);
+    setResizeLimits (520, 400, 10000, 10000);
     centreWithSize (getWidth(), getHeight());
 }
 

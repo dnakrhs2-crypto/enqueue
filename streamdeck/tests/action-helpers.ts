@@ -5,8 +5,8 @@ import { FakeLiveMix } from "./fake-livemix-server.mjs";
 import { until } from "./helpers.mjs";
 import type { Projection } from "../src/livemix/protocol.js";
 
-export async function setupActions(t: TestContext, language = "ko") {
-  const server = await new FakeLiveMix().start(), host = new FakeHost();
+export async function setupActions(t: TestContext, language = "ko", serverOptions: { pluginGroupsEverywhere?: boolean } = {}) {
+  const server = await new FakeLiveMix(serverOptions).start(), host = new FakeHost();
   t.after(async () => { try { await host.close(); assert.ok(!host.output.includes(server.token)); } finally { await server.close(); } });
   const state = server.snapshot.state as Projection, channel = state.channels[0]!, fx = state.fx[0]!;
   state.audio.running = true;
