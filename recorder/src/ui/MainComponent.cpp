@@ -24,7 +24,7 @@ MainComponent::MainComponent(RecorderDocument& d, RecorderSettings& s, TakeContr
     {
         timelineView.setLoadedPeaks(asset.assetId, ImportedAudioCache::peakSnapshot(cache), 0);
         session.refreshPlaybackPlan(); setTimeline(true);
-        const auto& tracks = document.getProject().tracks;
+        const auto snapshot = document.snapshot(); const auto& tracks = snapshot->tracks;
         for (unsigned row = 0; row < tracks.size(); ++row) for (const auto& clip : tracks[row].clips.items())
             if (clip.assetId == asset.assetId)
             {

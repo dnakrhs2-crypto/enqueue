@@ -9,6 +9,8 @@ namespace
 {
 constexpr std::array editActions {TimelineAction::split, TimelineAction::trimIn, TimelineAction::trimOut,
     TimelineAction::remove, TimelineAction::undo, TimelineAction::redo, TimelineAction::addMarker};
+// Keep the fixed command below the variable list so even large projects cannot collide.
+constexpr int showAllTracksMenuId = 1000, firstHiddenTrackMenuId = 1001;
 
 Sample previewAdd(Sample a, Sample b)
 {
@@ -32,6 +34,16 @@ Track trackLabel(const Track& track, const RecorderProject& project)
             if (const auto* asset = project.media->findAsset(clip.assetId); asset && asset->originalFormat.channels == 2)
             { display.name += juce::String::fromUTF8(" · 스테레오"); break; }
     return display;
+}
+bool onlyTrackVisibilityChanged(const RecorderProject& before, const RecorderProject& after)
+{
+    if (before.media != after.media || before.Fs != after.Fs || before.fps != after.fps || before.tracks.size() != after.tracks.size()) return false;
+    bool changed = false;
+    for (std::size_t i = 0; i < before.tracks.size(); ++i) changed |= before.tracks[i].hidden != after.tracks[i].hidden;
+    if (!changed) return false;
+    auto restored = static_cast<const EditState&>(after);
+    for (std::size_t i = 0; i < restored.tracks.size(); ++i) restored.tracks[i].hidden = before.tracks[i].hidden;
+    return juce::JSON::toString(RecorderSerializer::editStateToVar(before), true) == juce::JSON::toString(RecorderSerializer::editStateToVar(restored), true);
 }
 }
 TimelineView::TimelineView(RecorderDocument& d) : edits(d), rows(*this), document(d), inspector(edits), markerPanel(edits)
@@ -76,6 +88,7 @@ void TimelineView::setLoadedPeaks(const Id& asset, PeakSnapshot data, unsigned c
 void TimelineView::rebuildHeaders()
 {
     const auto previous = tracks; tracks.clear(); const auto& p = document.getProject();
+    // Manual hiding takes precedence over all automatic row visibility rules.
     // A row is shown only while its track is in use: it holds an active clip, or its source is a recording target
     // (camera enabled in the settings, microphone armed for the running take). An unused 캠2 or microphone stays hidden.
     const auto hasActiveClips = [&p](const Track& t)
@@ -85,17 +98,18 @@ void TimelineView::rebuildHeaders()
         const auto kind = i == 0 ? TrackKind::cam1 : TrackKind::cam2;
         const auto it = std::find_if(p.tracks.begin(), p.tracks.end(), [kind](const auto& t) { return t.kind == kind; });
         const bool target = recordingPreview.enabledCameras[i] || (recordingPreview.active && recordingPreview.cameras[i]);
-        if (it != p.tracks.end()) { if (hasActiveClips(*it) || target) tracks.push_back(*it); }
+        if (it != p.tracks.end()) { if (!it->hidden && (hasActiveClips(*it) || target)) tracks.push_back(*it); }
         else if (target) { Track t; t.trackId = i == 0 ? "placeholder-cam1" : "placeholder-cam2"; t.kind = kind; t.name = ko(i == 0 ? "캠1" : "캠2"); tracks.push_back(t); }
     }
     for (const auto& t : p.tracks)
     {
+        if (t.hidden) continue;
         const bool armedNow = recordingPreview.active && t.microphoneIndex >= 0 && t.microphoneIndex < 8 && recordingPreview.microphones[std::size_t(t.microphoneIndex)];
         const bool listening = t.solo || t.mute; // a soloed/muted track still shapes the mix, so its buttons must stay reachable
         if ((t.kind == TrackKind::mic && (hasActiveClips(t) || armedNow || listening)) || (t.kind == TrackKind::importAudio && (hasActiveClips(t) || listening))) tracks.push_back(t);
     }
     if (recordingPreview.active) for (unsigned slot = 0; slot < recordingPreview.microphones.size(); ++slot)
-        if (recordingPreview.microphones[slot] && std::none_of(tracks.begin(), tracks.end(), [slot](const Track& t)
+        if (recordingPreview.microphones[slot] && std::none_of(p.tracks.begin(), p.tracks.end(), [slot](const Track& t)
             { return t.kind == TrackKind::mic && t.microphoneIndex == int(slot); }))
         {
             Track t; t.trackId = "placeholder-mic-" + juce::String(slot + 1); t.kind = TrackKind::mic; t.microphoneIndex = int(slot);
@@ -116,7 +130,12 @@ void TimelineView::rebuildHeaders()
         if (rebuild)
         {
             auto h = std::make_unique<TrackHeader>(edits, tracks[i].trackId);
-            h->onEdit = [this](const juce::Result& r) { finish(r); };
+            h->onEdit = [this, id = tracks[i].trackId](const juce::Result& r)
+            {
+                const auto& ts = document.getProject().tracks;
+                const bool hidden = std::any_of(ts.begin(), ts.end(), [&](const Track& t) { return t.trackId == id && t.hidden; });
+                finish(r, !hidden);
+            };
             rows.addAndMakeVisible(*h); headers.push_back(std::move(h));
         }
         headers[i]->refresh(trackLabel(tracks[i], document.getProject()));
@@ -212,6 +231,9 @@ void TimelineView::updateControls()
     juce::String info = editStatus.isNotEmpty() ? editStatus : ko("클립 위쪽 띠 드래그 = 이동 · 아래쪽 드래그 = 구간 선택(Delete로 잘라내기) · Shift/Ctrl 다중 선택 · 빈 곳/Shift+눈금 드래그도 구간 선택");
     if (const auto r = edits.selectedRange()) info = ko("선택 구간 [") + juce::String(r->start) + ", " + juce::String(r->start + r->length) + ko(") 샘플 · ") + info;
     if (edits.isLocked()) info = ko("녹화 중 · 구조 편집·스크럽 잠금 · 프리뷰와 마커 추가 가능");
+    const auto& projectTracks = document.getProject().tracks;
+    const auto hiddenCount = std::count_if(projectTracks.begin(), projectTracks.end(), [](const Track& t) { return t.hidden; });
+    if (hiddenCount > 0) info += ko(" · 숨긴 트랙 ") + juce::String(hiddenCount) + ko("개는 편집 메뉴에서 보이기");
     selectionInfo.setText(info, juce::dontSendNotification); selectionInfo.setTooltip(info);
 }
 void TimelineView::selectionChanged() { rebuildPreview(); editStatus.clear(); updateControls(); rows.repaint(); }
@@ -225,8 +247,9 @@ void TimelineView::finish(const juce::Result& r, bool playback)
 }
 juce::Result TimelineView::invoke(TimelineAction a, Sample value, bool exact)
 {
-    const auto revision = document.getProject().editRevision;
-    const auto r = edits.execute(a, value, exact); finish(r, a != TimelineAction::addMarker && revision != document.getProject().editRevision); return r;
+    const auto before = document.snapshot(); const auto r = edits.execute(a, value, exact); const auto& after = document.getProject();
+    // Visibility undo/redo must not restart the playback session either.
+    finish(r, a != TimelineAction::addMarker && before->editRevision != after.editRevision && !onlyTrackVisibilityChanged(*before, after)); return r;
 }
 void TimelineView::setRangeFromInputs()
 {
@@ -235,7 +258,13 @@ void TimelineView::setRangeFromInputs()
     { finish(juce::Result::fail(ko("서로 다른 시작·끝 샘플을 입력하세요.")), false); return; }
     edits.setRange(a, b); selectionChanged();
 }
-juce::PopupMenu TimelineView::createEditMenu() const
+TimelineView::EditMenuContext TimelineView::captureEditMenuContext() const
+{
+    EditMenuContext context{document.snapshot(), document.getSelection(), {}};
+    for (const auto& t : context.base->tracks) if (t.hidden) context.hiddenTracks.push_back(t.trackId);
+    return context;
+}
+juce::PopupMenu TimelineView::createEditMenu(const EditMenuContext& context) const
 {
     juce::PopupMenu menu;
     for (auto a : editActions)
@@ -248,24 +277,51 @@ juce::PopupMenu TimelineView::createEditMenu() const
         if (a == TimelineAction::redo) label += " (Ctrl+Shift+Z)";
         menu.addItem(int(a) + 1, label, edits.enabled(a));
     }
+    menu.addSeparator();
+    if (context.hiddenTracks.empty()) menu.addItem(showAllTracksMenuId, ko("숨긴 트랙 없음"), false);
+    else
+    {
+        juce::PopupMenu hidden; int itemId = firstHiddenTrackMenuId;
+        for (const auto& t : context.base->tracks) if (t.hidden) // a hidden track still shapes the mix: say so next to its name
+            hidden.addItem(itemId++, t.name + (t.solo ? ko(" · 솔로 켜짐") : t.mute ? ko(" · 음소거") : juce::String()), !edits.isLocked());
+        hidden.addSeparator(); hidden.addItem(showAllTracksMenuId, ko("모두 보이기"), !edits.isLocked());
+        menu.addSubMenu(ko("숨긴 트랙 ") + juce::String(context.hiddenTracks.size()) + ko("개"), hidden, !edits.isLocked());
+    }
     return menu;
 }
 void TimelineView::showEditMenu(bool atMouse)
 {
-    auto menu = createEditMenu();
+    const auto context = captureEditMenuContext(); auto menu = createEditMenu(context);
     juce::Component::SafePointer<TimelineView> safe(this);
-    const auto base = document.snapshot(); const auto selection = document.getSelection();
     auto options = juce::PopupMenu::Options().withTargetComponent(&menuButton);
     if (atMouse) // a right-click opens where the mouse is, not next to the toolbar button
     { const auto p = juce::Desktop::getInstance().getMainMouseSource().getScreenPosition().roundToInt(); options = juce::PopupMenu::Options().withTargetScreenArea({p.x, p.y, 1, 1}); }
-    menu.showMenuAsync(options, [safe, base, selection](int result)
+    menu.showMenuAsync(options, [safe, context](int result)
     {
-        if (!safe || result == 0) return;
-        if (safe->document.snapshot() != base || safe->document.getSelection() != selection) { safe->finish(juce::Result::fail(ko("편집 대상이 바뀌었습니다. 메뉴를 다시 여세요.")), false); return; }
-        const auto a = TimelineAction(result - 1);
-        if (a == TimelineAction::addMarker && safe->onAddMarkerRequested) safe->onAddMarkerRequested();
-        else safe->invoke(a, safe->edits.playhead());
+        if (safe) safe->handleEditMenuResult(result, context);
     });
+}
+void TimelineView::handleEditMenuResult(int result, const EditMenuContext& context)
+{
+    if (result == 0) return;
+    if (document.snapshot() != context.base || document.getSelection() != context.selection)
+    { finish(juce::Result::fail(ko("편집 대상이 바뀌었습니다. 메뉴를 다시 여세요.")), false); return; }
+    if (result == showAllTracksMenuId)
+    { finish(edits.setTracksHidden(context.hiddenTracks, false), false); return; } // one edit: Ctrl+Z hides them all again
+    if (result >= firstHiddenTrackMenuId)
+    {
+        const auto index = std::size_t(result - firstHiddenTrackMenuId);
+        if (index >= context.hiddenTracks.size()) return;
+        const auto& id = context.hiddenTracks[index];
+        const auto& ts = document.getProject().tracks;
+        if (std::none_of(ts.begin(), ts.end(), [&](const Track& t) { return t.trackId == id && t.hidden; }))
+        { finish(juce::Result::fail(ko("편집 대상이 바뀌었습니다. 메뉴를 다시 여세요.")), false); return; }
+        finish(edits.setTrackHidden(id, false), false); return;
+    }
+    const auto action = std::find_if(editActions.begin(), editActions.end(), [result](TimelineAction a) { return int(a) + 1 == result; });
+    if (action == editActions.end()) return;
+    if (*action == TimelineAction::addMarker && onAddMarkerRequested) onAddMarkerRequested();
+    else invoke(*action, edits.playhead());
 }
 bool TimelineView::keyPressed(const juce::KeyPress& key, juce::Component* origin)
 {
@@ -348,8 +404,15 @@ void TimelineView::setRecordingPreview(bool active, Sample placement, Sample ela
 }
 void TimelineView::revealTrack(const Id& trackId)
 {
+    const auto id = trackId; // The caller may have passed a reference into the snapshot being replaced.
+    const auto& ts = document.getProject().tracks;
+    if (std::any_of(ts.begin(), ts.end(), [&](const Track& t) { return t.trackId == id && t.hidden; }))
+    {
+        if (edits.setTrackHidden(id, false).failed()) return;
+        refresh(edits.isLocked(), edits.playhead(), latestStatus);
+    }
     for (unsigned row = 0; row < tracks.size(); ++row)
-        if (tracks[row].trackId == trackId) { viewport.setViewPosition(0, rulerHeight + int(row) * rowHeight); return; }
+        if (tracks[row].trackId == id) { viewport.setViewPosition(0, rulerHeight + int(row) * rowHeight); return; }
 }
 bool TimelineView::isRecordingTrack(const Track& track) const
 {

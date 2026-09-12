@@ -37,7 +37,7 @@ public:
     std::function<bool(const juce::KeyPress&, juce::Component*)> onGlobalKey;
     // Host-owned marker entry (name dialog at the captured time). Unset: the marker is added immediately at the playhead.
     std::function<void()> onAddMarkerRequested;
-    void revealTrack(const Id& trackId); // display rows differ from project tracks: unused tracks are hidden
+    void revealTrack(const Id& trackId); // Restore manual visibility before scrolling to an imported track.
     void resized() override;
     void paint(juce::Graphics&) override;
     void visibilityChanged() override { if (isShowing()) grabKeyboardFocus(); }
@@ -97,7 +97,15 @@ private:
     void updateRange();
     void finish(const juce::Result&, bool playback = true);
     void showEditMenu(bool atMouse = false);
-    juce::PopupMenu createEditMenu() const;
+    struct EditMenuContext
+    {
+        RecorderDocument::Snapshot base;
+        std::vector<Id> selection, hiddenTracks;
+    };
+    EditMenuContext captureEditMenuContext() const;
+    juce::PopupMenu createEditMenu() const { return createEditMenu(captureEditMenuContext()); }
+    juce::PopupMenu createEditMenu(const EditMenuContext&) const;
+    void handleEditMenuResult(int result, const EditMenuContext&);
     bool isRecordingTrack(const Track&) const;
     void updateControls();
     void setRangeFromInputs();

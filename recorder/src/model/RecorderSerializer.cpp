@@ -72,7 +72,10 @@ V clip(const Clip& c)
 V track(const Track& t)
 {
     auto o = object(); put(o, "trackId", t.trackId); put(o, "kind", enumName(t.kind, trackNames)); put(o, "name", t.name);
-    put(o, "mute", t.mute); put(o, "solo", t.solo); put(o, "microphoneIndex", t.microphoneIndex); put(o, "clips", array(t.clips.items(), clip)); return o;
+    put(o, "mute", t.mute); put(o, "solo", t.solo);
+    // Omit the default so existing checkpoint/journal hashes remain valid.
+    if (t.hidden) put(o, "hidden", true);
+    put(o, "microphoneIndex", t.microphoneIndex); put(o, "clips", array(t.clips.items(), clip)); return o;
 }
 V marker(const Marker& m)
 { auto o = object(); put(o, "markerId", m.markerId); put(o, "sample", integer(m.sample)); put(o, "name", m.name); put(o, "colour", m.colour); return o; }
@@ -176,7 +179,8 @@ Clip readClip(const V& v)
 Track readTrack(const V& v)
 {
     Track t; t.trackId = stringField(v, "trackId"); t.kind = readEnum<TrackKind>(field(v, "kind"), trackNames); t.name = stringField(v, "name");
-    t.mute = boolean(v, "mute"); t.solo = boolean(v, "solo"); t.microphoneIndex = intField(v, "microphoneIndex"); t.clips.edit() = readArray<Clip>(field(v, "clips"), readClip); return t;
+    t.mute = boolean(v, "mute"); t.solo = boolean(v, "solo"); t.hidden = v.hasProperty("hidden") ? boolean(v, "hidden") : false;
+    t.microphoneIndex = intField(v, "microphoneIndex"); t.clips.edit() = readArray<Clip>(field(v, "clips"), readClip); return t;
 }
 EditState readEdit(const V& v)
 {
@@ -275,6 +279,9 @@ juce::Result RecorderSerializer::fromJson(const juce::String& json, RecorderProj
             root.getDynamicObject()->removeProperty("checkpoint");
         }
         // Reject unrecognised/lossy fields in this schema instead of silently dropping them on save.
+        if (auto* tracks = root["edit"]["tracks"].getArray()) // parsed above, so an array; the guard only keeps a corrupt file from crashing
+            for (auto& t : *tracks)
+                if (t.hasProperty("hidden") && !bool(t["hidden"])) t.getDynamicObject()->removeProperty("hidden");
         auto canonical = juce::JSON::parse(toJson(p)); canonical.getDynamicObject()->removeProperty("checksum");
         require(sameFields(canonical, root), "프로젝트에 지원하지 않는 필드가 있습니다.");
         out = std::move(p); if (info != nullptr) *info = cursor; return juce::Result::ok();

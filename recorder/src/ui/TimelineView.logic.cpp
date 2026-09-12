@@ -37,6 +37,8 @@ juce::String TimelineEditController::text(TimelineAction a)
         case TimelineAction::mute: return k("음소거");
         case TimelineAction::solo: return k("솔로");
         case TimelineAction::seek: return k("이동");
+        case TimelineAction::hideTrack: return juce::String::fromUTF8("트랙 숨기기");
+        case TimelineAction::showTrack: return juce::String::fromUTF8("트랙 보이기");
     }
     return {};
 }
@@ -53,7 +55,8 @@ bool TimelineEditController::enabled(TimelineAction a) const
         case TimelineAction::remove: return range.has_value() || !targets().empty();
         case TimelineAction::link: return targets().size() > 1;
         case TimelineAction::seek: case TimelineAction::editMarker: case TimelineAction::deleteMarker:
-        case TimelineAction::mute: case TimelineAction::solo: return true;
+        case TimelineAction::mute: case TimelineAction::solo:
+        case TimelineAction::hideTrack: case TimelineAction::showTrack: return true;
         default: return !targets().empty();
     }
 }
@@ -254,6 +257,23 @@ juce::Result TimelineEditController::setTrackListening(const Id& id, bool solo)
     if (std::none_of(ts.begin(), ts.end(), [&](const Track& t) { return t.trackId == id && audio(t); })) return juce::Result::fail(k("오디오 트랙을 선택하세요."));
     return document.performEdit(text(solo ? TimelineAction::solo : TimelineAction::mute), [=](EditState& e)
     { for (auto& t : e.tracks) if (t.trackId == id) { if (solo) t.solo = !t.solo; else t.mute = !t.mute; } });
+}
+juce::Result TimelineEditController::setTrackHidden(const Id& id, bool hidden)
+{
+    if (isLocked()) return blocked();
+    const auto& ts = document.getProject().tracks;
+    if (std::none_of(ts.begin(), ts.end(), [&](const Track& t) { return t.trackId == id; }))
+        return juce::Result::fail(juce::String::fromUTF8("트랙을 선택하세요."));
+    return document.performEdit(text(hidden ? TimelineAction::hideTrack : TimelineAction::showTrack), [=](EditState& e)
+    { for (auto& t : e.tracks) if (t.trackId == id) t.hidden = hidden; });
+}
+juce::Result TimelineEditController::setTracksHidden(const std::vector<Id>& ids, bool hidden)
+{
+    if (isLocked()) return blocked();
+    if (ids.empty()) return juce::Result::ok();
+    const auto name = text(hidden ? TimelineAction::hideTrack : TimelineAction::showTrack) + (ids.size() > 1 ? juce::String(" (") + juce::String(int(ids.size())) + ")" : juce::String());
+    return document.performEdit(name, [ids, hidden](EditState& e)
+    { for (auto& t : e.tracks) if (std::find(ids.begin(), ids.end(), t.trackId) != ids.end()) t.hidden = hidden; });
 }
 juce::Result TimelineEditController::addMarker(const juce::String& name, const juce::String& colour)
 {

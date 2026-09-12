@@ -35,6 +35,32 @@ void TrackHeader::paint(juce::Graphics& g)
     g.fillAll(Palette::bar); g.setColour(Palette::line);
     g.fillRect(getWidth() - 1, 0, 1, getHeight()); g.fillRect(0, getHeight() - 1, getWidth(), 1);
 }
+juce::PopupMenu TrackHeader::createContextMenu() const
+{
+    juce::PopupMenu menu;
+    if (isEnabled()) menu.addItem(int(TimelineAction::hideTrack) + 1, ko("트랙 숨기기"), !edits.isLocked());
+    return menu;
+}
+void TrackHeader::mouseDown(const juce::MouseEvent& e)
+{
+    if (!isEnabled() || !e.mods.isPopupMenu()) return;
+    const auto base = edits.document.snapshot();
+    juce::Component::SafePointer<TrackHeader> safe(this);
+    createContextMenu().showMenuAsync(juce::PopupMenu::Options().withTargetComponent(this).withMousePosition(), [safe, base](int result)
+    {
+        if (safe) safe->handleContextMenuResult(result, base);
+    });
+}
+void TrackHeader::handleContextMenuResult(int result, const RecorderDocument::Snapshot& base)
+{
+    if (!isEnabled() || result != int(TimelineAction::hideTrack) + 1) return;
+    // Hiding a row destroys its header when onEdit refreshes the view.
+    const auto callback = onEdit;
+    const auto r = edits.document.snapshot() != base
+        ? juce::Result::fail(ko("편집 대상이 바뀌었습니다. 메뉴를 다시 여세요."))
+        : edits.setTrackHidden(id, true);
+    if (callback) callback(r);
+}
 void TrackHeader::resized()
 {
     name.setBounds(8, 2, getWidth() - 16, 28);

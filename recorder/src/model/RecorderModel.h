@@ -113,6 +113,7 @@ struct Track
     TrackKind kind = TrackKind::cam1;
     juce::String name;
     bool mute = false, solo = false;
+    bool hidden = false; // Timeline display only; capture, playback and export still use this track.
     int microphoneIndex = -1; // logical 0..7 for mic, -1 otherwise
     SharedList<Clip> clips;
 };
