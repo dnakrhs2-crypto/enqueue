@@ -37,7 +37,7 @@ Track trackLabel(const Track& track, const RecorderProject& project)
 TimelineView::TimelineView(RecorderDocument& d) : edits(d), rows(*this), document(d), inspector(edits), markerPanel(edits)
 {
     addAndMakeVisible(transport); addAndMakeVisible(viewport); addAndMakeVisible(horizontal); addAndMakeVisible(selectionInfo);
-    selectionInfo.setFont(juce::Font(juce::FontOptions(15))); selectionInfo.setColour(juce::Label::textColourId, Palette::dimText);
+    selectionInfo.setFont(recorderFont(11.5f)); selectionInfo.setColour(juce::Label::textColourId, Palette::dimText);
     viewport.setViewedComponent(&rows, false); viewport.setScrollBarsShown(true, false); viewport.setScrollOnDragMode(juce::Viewport::ScrollOnDragMode::never); horizontal.addListener(this); horizontal.setAutoHide(false);
     transport.zoomIn.onClick = [this] { zoom(.5); }; transport.zoomOut.onClick = [this] { zoom(2); }; transport.fit.onClick = [this] { zoomToFit(); };
     transport.waveIn.onClick = [this] { changeWaveformScale(true); }; transport.waveOut.onClick = [this] { changeWaveformScale(false); };
@@ -47,17 +47,22 @@ TimelineView::TimelineView(RecorderDocument& d) : edits(d), rows(*this), documen
     for (auto action : editActions)
     {
         auto b = std::make_unique<juce::TextButton>(TimelineEditController::text(action)); b->setWantsKeyboardFocus(false);
+        b->getProperties().set("recorderFontSize", 12.0f);
         b->onClick = [this, action] { if (action == TimelineAction::addMarker && onAddMarkerRequested) onAddMarkerRequested(); else invoke(action, edits.playhead()); };
         toolbar.addAndMakeVisible(*b); buttons.emplace(action, std::move(b));
     }
     for (auto* field : {&rangeStart, &rangeEnd}) { toolbar.addAndMakeVisible(field); field->setInputRestrictions(19, "0123456789"); field->onReturnKey = [this] { setRangeFromInputs(); }; }
     rangeStart.setTextToShowWhenEmpty(ko("구간 시작 · 샘플"), Palette::dimText); rangeEnd.setTextToShowWhenEmpty(ko("구간 끝 · 샘플"), Palette::dimText);
     rangeStart.setTooltip(ko("선택 구간 시작 · 정수 샘플")); rangeEnd.setTooltip(ko("선택 구간 끝 · 정수 샘플"));
+    for (auto* field : {&rangeStart, &rangeEnd}) { field->setFont(recorderMonoFont(12)); field->setJustification(juce::Justification::centredRight); }
     toolbar.addAndMakeVisible(rangeButton); rangeButton.setWantsKeyboardFocus(false); rangeButton.onClick = [this] { setRangeFromInputs(); };
     addAndMakeVisible(snapButton); snapButton.setClickingTogglesState(true); snapButton.setToggleState(true, juce::dontSendNotification); snapButton.setWantsKeyboardFocus(false);
     snapButton.setTooltip(ko("클립 경계·마커·재생헤드에 붙이기 · 영상은 프레임 · Alt 드래그로 해제"));
     snapButton.onClick = [this] { snapButton.setButtonText(snapButton.getToggleState() ? ko("스냅 켜짐") : ko("스냅 꺼짐")); };
     addAndMakeVisible(sidebar); sidebar.addTab(ko("클립 속성"), Palette::card, &inspector, false); sidebar.addTab(ko("마커"), Palette::card, &markerPanel, false); sidebar.setTabBarDepth(28);
+    sidebar.setOutline(0); sidebar.setTabBarDepth(34);
+    for (auto* button : {&menuButton, &snapButton, &rangeButton}) button->getProperties().set("recorderFontSize", 12.0f);
+    menuButton.getProperties().set("recorderMenuArrow", true);
     inspector.onEdit = [this](const juce::Result& r) { finish(r); }; markerPanel.onEdit = [this](const juce::Result& r) { finish(r, false); };
     markerPanel.onAddRequested = [this] { if (onAddMarkerRequested) onAddMarkerRequested(); else finish(edits.addMarker(), false); };
     edits.onSeek = [this](Sample at, bool released) { playhead = at; if (onScrub) onScrub(at, released); reveal(at); };
@@ -351,13 +356,25 @@ bool TimelineView::isRecordingTrack(const Track& track) const
     return recordingPreview.active && (track.kind == TrackKind::cam1 ? recordingPreview.cameras[0] : track.kind == TrackKind::cam2 ? recordingPreview.cameras[1]
         : track.kind == TrackKind::mic && track.microphoneIndex >= 0 && track.microphoneIndex < 8 && recordingPreview.microphones[std::size_t(track.microphoneIndex)]);
 }
+void TimelineView::paint(juce::Graphics& g)
+{
+    g.setColour(Palette::card); g.fillRoundedRectangle(getLocalBounds().toFloat(), Palette::cardRadius);
+    g.setColour(Palette::bar); g.fillRect(0, 0, getWidth(), 38); g.fillRect(toolbarViewport.getBounds()); g.fillRect(selectionInfo.getBounds());
+    g.setColour(Palette::line); g.fillRect(0, 37, getWidth(), 1);
+    g.fillRect(toolbarViewport.getBounds().withY(toolbarViewport.getBottom() - 1).withHeight(1));
+    g.fillRect(selectionInfo.getBounds().withHeight(1));
+    g.fillRect(sidebar.getX() - 1, sidebar.getY(), 1, sidebar.getHeight());
+    g.drawRoundedRectangle(getLocalBounds().toFloat().reduced(.5f), Palette::cardRadius, 1);
+}
 void TimelineView::resized()
 {
     auto a = getLocalBounds(); auto top = a.removeFromTop(38);
     snapButton.setBounds(top.removeFromRight(125).reduced(0, 2)); transport.setBounds(top);
     const bool compact = getHeight() < 210;
     auto side = compact ? a.removeFromRight(270) : juce::Rectangle<int>();
-    toolbarViewport.setBounds(compact ? side.removeFromTop(46) : a.removeFromTop(46));
+    // Reserve scrollbar space only when the full command row needs horizontal scrolling.
+    const int toolbarHeight = (compact ? side.getWidth() : a.getWidth()) < 1334 ? 46 : 38;
+    toolbarViewport.setBounds(compact ? side.removeFromTop(toolbarHeight) : a.removeFromTop(toolbarHeight));
     int x = 0; menuButton.setBounds(x, 1, 62, 30); x += 66;
     for (auto& item : buttons)
     { const int w = item.first == TimelineAction::undo || item.first == TimelineAction::redo ? 220 : 86; item.second->setBounds(x, 1, w, 30); x += w + 4; }
@@ -365,7 +382,7 @@ void TimelineView::resized()
     selectionInfo.setBounds(compact ? side.removeFromTop(24) : a.removeFromBottom(24)); sidebar.setBounds(compact ? side : a.removeFromRight(270)); a.removeFromRight(6);
     horizontal.setBounds(a.removeFromBottom(14).withTrimmedLeft(headerWidth)); viewport.setBounds(a);
     rows.setSize(juce::jmax(1, a.getWidth() - 16), juce::jmax(a.getHeight(), rulerHeight + int(tracks.size()) * rowHeight));
-    for (unsigned i = 0; i < headers.size(); ++i) headers[i]->setBounds(0, rulerHeight + int(i) * rowHeight, headerWidth - 4, rowHeight - 2);
+    for (unsigned i = 0; i < headers.size(); ++i) headers[i]->setBounds(0, rulerHeight + int(i) * rowHeight, headerWidth, rowHeight);
 }
 void TimelineView::drawWave(juce::Graphics& g, const Clip& clip, juce::Rectangle<float> box)
 {
@@ -421,7 +438,7 @@ void TimelineView::drawWave(juce::Graphics& g, const Clip& clip, juce::Rectangle
     if (lanes == 2)
     {
         g.setColour(Palette::line); g.drawHorizontalLine(int(box.getCentreY()), float(left), float(right));
-        g.setColour(Palette::dimText); g.setFont(juce::Font(juce::FontOptions(11, juce::Font::bold)));
+        g.setColour(Palette::dimText); g.setFont(recorderMonoFont(11, juce::Font::bold));
         g.drawText("L", juce::Rectangle<float>(float(left + 3), box.getY(), 12.0f, laneHeight), juce::Justification::centredLeft);
         g.drawText("R", juce::Rectangle<float>(float(left + 3), box.getCentreY(), 12.0f, laneHeight), juce::Justification::centredLeft);
     }
@@ -431,11 +448,15 @@ void TimelineView::Rows::paint(juce::Graphics& g)
     ++view.rowPaintCount;
     view.lastPaintVisitedClips = view.lastPaintWaveColumns = 0;
     auto& v = view; const auto& p = v.document.getProject(); g.fillAll(Palette::card);
+    g.setColour(Palette::bar); g.fillRect(0, 0, getWidth(), rulerHeight); g.fillRect(0, rulerHeight, headerWidth, getHeight() - rulerHeight);
+    g.setColour(Palette::line); g.fillRect(0, rulerHeight - 1, getWidth(), 1); g.fillRect(headerWidth - 1, 0, 1, getHeight());
     if (getWidth() <= headerWidth) return;
+    g.setColour(Palette::line.withAlpha(.45f));
+    for (int x = headerWidth + 118; x < getWidth(); x += 119) g.drawVerticalLine(x, float(rulerHeight), float(getHeight()));
     const auto clipBounds = g.getClipBounds(); auto step = v.viewSeconds <= 2 ? .1 : v.viewSeconds <= 10 ? 1.0 : v.viewSeconds <= 60 ? 5.0 : v.viewSeconds <= 300 ? 30.0 : 60.0;
     const auto maxTicks = std::max(1, (getWidth() - headerWidth) / 80);
     if (v.viewSeconds / step > maxTicks) step = std::pow(10.0, std::ceil(std::log10(v.viewSeconds / maxTicks)));
-    g.setFont(juce::Font(juce::FontOptions(14))); g.setColour(Palette::dimText);
+    g.setFont(recorderMonoFont(10));
     const auto firstTick = std::ceil(v.viewStart / step) * step;
     for (int tick = 0; tick <= maxTicks + 1; ++tick)
     {
@@ -443,8 +464,8 @@ void TimelineView::Rows::paint(juce::Graphics& g)
         if (!std::isfinite(sample) || sample >= double((std::numeric_limits<Sample>::max)()) || t > v.viewStart + v.viewSeconds) break;
         const auto at = TimelineSamples::roundNonnegative(sample); const auto pixel = v.xFor(at);
         if (pixel < headerWidth || pixel >= getWidth()) continue;
-        const auto x = int(pixel); g.drawVerticalLine(x, 22, float(getHeight()));
-        g.drawText(formatRecorderTime(at, p.Fs).substring(3, 8), x + 3, 0, 64, 22, juce::Justification::centredLeft);
+        const auto x = int(pixel); g.setColour(Palette::line); g.drawVerticalLine(x, 0, float(rulerHeight));
+        g.setColour(Palette::dimText); g.drawText(formatRecorderTime(at, p.Fs).substring(3, 8), x + 3, 13, 64, rulerHeight - 13, juce::Justification::centredLeft);
     }
     // Bound raster geometry before JUCE converts floating coordinates to pixels.
     const auto paintX = [&](Sample at) { return float(std::clamp(v.xFor(at), double(headerWidth - 8), double(getWidth() + 8))); };
@@ -452,7 +473,7 @@ void TimelineView::Rows::paint(juce::Graphics& g)
     {
         const juce::Graphics::ScopedSaveState save(g); g.reduceClipRegion(headerWidth, 0, getWidth() - headerWidth, getHeight());
         const auto left = paintX(range->start), right = paintX(previewAdd(range->start, range->length));
-        g.setColour(Palette::accent.withAlpha(.17f)); g.fillRect(left, 0.0f, std::max(0.0f, right - left), float(getHeight()));
+        g.setColour(Palette::selection); g.fillRect(left, float(rulerHeight), std::max(0.0f, right - left), float(getHeight() - rulerHeight));
     }
     const auto [firstRow, lastRow] = TimelineLayout::visibleRows(clipBounds.getY(), clipBounds.getBottom(), int(v.tracks.size()));
     for (int row = firstRow; row < lastRow; ++row)
@@ -468,27 +489,27 @@ void TimelineView::Rows::paint(juce::Graphics& g)
             auto box = juce::Rectangle<float>(left, float(y + 3), juce::jmax(2.0f, right - left), float(rowHeight - 6));
             const juce::Graphics::ScopedSaveState save(g); g.reduceClipRegion(headerWidth, y, getWidth() - headerWidth, rowHeight);
             const bool selected = std::find(v.document.getSelection().begin(), v.document.getSelection().end(), c.clipId) != v.document.getSelection().end();
-            g.setColour(Palette::card2); g.fillRoundedRectangle(box, 5);
+            const bool video = v.tracks[std::size_t(row)].kind == TrackKind::cam1 || v.tracks[std::size_t(row)].kind == TrackKind::cam2;
+            if (video) g.setGradientFill(juce::ColourGradient(Palette::clipVideoTop, box.getTopLeft(), Palette::clipVideoBottom, box.getBottomLeft(), false));
+            else g.setColour(Palette::clipAudio);
+            g.fillRoundedRectangle(box, Palette::controlRadius);
             const auto lookup = v.takeForAsset.find(c.assetId); const Take* take = lookup == v.takeForAsset.end() ? nullptr : lookup->second;
             auto state = take ? take->state == TakeState::complete ? ko("완료") : take->state == TakeState::partial ? ko("확인 필요") : ko("마무리 중") : juce::String();
             if (take && !p.media->takes.empty() && take->takeId == p.media->takes.back().takeId && v.latestStatus.isNotEmpty()) state = v.latestStatus;
             const auto imageBox = box.withTrimmedTop(24).reduced(2);
-            const bool video = v.tracks[std::size_t(row)].kind == TrackKind::cam1 || v.tracks[std::size_t(row)].kind == TrackKind::cam2;
             if (!video) v.drawWave(g, c, imageBox);
-            g.setColour(Palette::text); g.setFont(juce::Font(juce::FontOptions(14)));
+            g.setColour(juce::Colours::white); g.setFont(recorderFont(12, juce::Font::bold));
             auto labelBounds = box.withHeight(24).withTrimmedLeft(c.linkGroupId.isEmpty() ? 6.0f : 28.0f);
             g.drawText((take ? take->name : ko("클립")) + " · " + state, labelBounds, juce::Justification::centredLeft, true);
             if (c.linkGroupId.isNotEmpty()) { g.setColour(Palette::accent); g.drawRoundedRectangle(box.getX() + 6, box.getY() + 8, 12, 7, 3, 1.5f); g.drawRoundedRectangle(box.getX() + 12, box.getY() + 10, 12, 7, 3, 1.5f); }
-            g.setColour(selected ? Palette::accent : Palette::line); g.drawRoundedRectangle(box, 5, selected ? 2.0f : 1.0f);
+            g.setColour(selected ? Palette::accent : Palette::line);
+            g.drawRoundedRectangle(box.reduced(selected ? 1.0f : .5f), Palette::controlRadius, selected ? 2.0f : 1.0f);
             if (v.edits.dragPreview() && std::find(v.edits.dragTargets().begin(), v.edits.dragTargets().end(), c.clipId) != v.edits.dragTargets().end())
-            { g.setColour(Palette::background.withAlpha(.5f)); g.fillRoundedRectangle(box, 5); }
+            { g.setColour(Palette::background.withAlpha(.5f)); g.fillRoundedRectangle(box, Palette::controlRadius); }
             if (selected)
             {
-                const auto assetEntry = v.assetById.find(c.assetId); const auto* asset = assetEntry == v.assetById.end() ? nullptr : assetEntry->second;
-                const auto sourceEnd = TimelineSamples::add(c.sourceIn, c.lengthSamples);
-                const bool leftLimit = c.sourceIn == 0, rightLimit = asset && sourceEnd && *sourceEnd == asset->logicalLength;
-                g.setColour(leftLimit ? Palette::meterYellow : Palette::accent); g.fillRect(box.getX() + 2, box.getY() + 25, 4.0f, box.getHeight() - 29);
-                g.setColour(rightLimit ? Palette::meterYellow : Palette::accent); g.fillRect(box.getRight() - 6, box.getY() + 25, 4.0f, box.getHeight() - 29);
+                g.setColour(Palette::accent); g.fillRoundedRectangle(box.getX() + 3, box.getY() + 26, 4.0f, box.getHeight() - 32, 2);
+                g.fillRoundedRectangle(box.getRight() - 7, box.getY() + 26, 4.0f, box.getHeight() - 32, 2);
                 if (v.edits.focusedClip() == c.clipId) { g.setColour(Palette::text); g.fillEllipse(box.getX() + 5, box.getY() + 3, 4, 4); }
             }
             if (take && !p.media->takes.empty() && take->takeId == p.media->takes.back().takeId
@@ -540,8 +561,9 @@ void TimelineView::Rows::paint(juce::Graphics& g)
             const auto left = paintX(recording.start), right = paintX(previewAdd(recording.start, recording.length));
             if (right <= headerWidth || left >= getWidth()) continue;
             const auto box = juce::Rectangle<float>(left, float(rulerHeight + row * rowHeight + 3), std::max(4.0f, right - left), float(rowHeight - 6));
-            g.setColour(Palette::danger.withAlpha(.23f)); g.fillRoundedRectangle(box, 5);
-            g.setColour(Palette::danger); g.drawRoundedRectangle(box, 5, 2); g.drawVerticalLine(int(right), box.getY(), box.getBottom());
+            g.setColour(Palette::card.overlaidWith(Palette::recording.withAlpha(.22f))); g.fillRoundedRectangle(box, Palette::controlRadius);
+            g.setColour(Palette::recording); g.drawRoundedRectangle(box.reduced(1), Palette::controlRadius, 2); g.drawVerticalLine(int(right) - 1, box.getY(), box.getBottom());
+            g.setFont(recorderFont(12, juce::Font::bold));
             g.setColour(Palette::text); g.drawText(ko("● 녹화 중 · ") + formatRecorderTime(recording.length, p.Fs), box.reduced(8, 2).withHeight(24), juce::Justification::centredLeft, true);
         }
     }
@@ -566,7 +588,7 @@ void TimelineView::Rows::paint(juce::Graphics& g)
         {
             const juce::Rectangle<float> label(x + 3, 0, width, labelHeight);
             g.fillRoundedRectangle(label, 3);
-            g.setColour(colour.getPerceivedBrightness() >= .55f ? juce::Colours::black : juce::Colours::white);
+            g.setColour(juce::Colours::white);
             g.setFont(juce::Font(juce::FontOptions(14, juce::Font::bold)));
             g.drawText(marker.name, label.reduced(5, 0), juce::Justification::centredLeft, true);
         }
@@ -576,7 +598,12 @@ void TimelineView::Rows::paint(juce::Graphics& g)
         const auto x = float(v.xFor(*snapGuide));
         if (x >= headerWidth && x < getWidth()) { g.setColour(Palette::meterYellow); g.drawLine(x, 0, x, float(getHeight()), 2); g.drawText(ko("스냅"), int(x) + 4, 0, 45, 19, juce::Justification::centredLeft); }
     }
-    const auto pixel = v.xFor(v.playhead); if (pixel >= headerWidth && pixel < getWidth()) { const auto x = int(pixel); g.setColour(Palette::danger); g.drawVerticalLine(x, 0, float(getHeight())); g.fillEllipse(float(x - 4), 0, 8, 8); }
+    const auto pixel = v.xFor(v.playhead);
+    if (pixel >= headerWidth && pixel < getWidth())
+    {
+        const auto x = float(int(pixel)); g.setColour(Palette::recording); g.fillRect(x, 0.0f, 2.0f, float(getHeight()));
+        juce::Path head; head.addTriangle(x - 6, 0, x + 8, 0, x + 1, 10); g.fillPath(head);
+    }
 }
 void TimelineView::Rows::mouseDown(const juce::MouseEvent& e)
 {

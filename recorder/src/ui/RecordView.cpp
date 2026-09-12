@@ -12,10 +12,20 @@ void RecordView::CameraCard::ensureHost()
 }
 void RecordView::CameraCard::paint(juce::Graphics& g)
 {
-    g.setColour(Palette::card); g.fillRoundedRectangle(getLocalBounds().toFloat(), 12);
-    g.setColour(Palette::text); g.setFont(juce::Font(juce::FontOptions(17, juce::Font::bold)));
-    g.drawFittedText(caption, getLocalBounds().reduced(10, 0).removeFromTop(34), juce::Justification::centredLeft, 1);
-    g.setColour(Palette::meterBg); g.fillRect(host.getBounds());
+    const auto card = getLocalBounds().toFloat().reduced(.5f);
+    g.setColour(Palette::card); g.fillRoundedRectangle(card, Palette::cardRadius);
+    g.setColour(Palette::line); g.drawRoundedRectangle(card, Palette::cardRadius, 1);
+    auto heading = getLocalBounds().reduced(10, 0).removeFromTop(34);
+    if (recording)
+    {
+        const auto badge = heading.removeFromRight(42).withSizeKeepingCentre(38, 18).toFloat();
+        g.setColour(Palette::recording); g.fillRoundedRectangle(badge, 9);
+        g.setColour(juce::Colours::white); g.setFont(recorderFont(10.5f, juce::Font::bold));
+        g.drawText("REC", badge, juce::Justification::centred);
+    }
+    g.setColour(Palette::text); g.setFont(recorderFont(14, juce::Font::bold));
+    g.drawFittedText(caption, heading, juce::Justification::centredLeft, 1);
+    g.setColour(juce::Colours::black); g.fillRect(host.getBounds());
     if (!showVideo) { g.setColour(Palette::dimText); g.setFont(juce::Font(juce::FontOptions(17))); g.drawFittedText(placeholder, host.getBounds().reduced(8), juce::Justification::centred, 2); }
 }
 void RecordView::CameraCard::resized()
@@ -28,13 +38,18 @@ RecordView::Microphone::Microphone()
 {
     for (auto* l : {&name, &physical}) { addAndMakeVisible(l); l->setFont(juce::Font(juce::FontOptions(17))); }
     name.setEditable(false, true); addAndMakeVisible(arm); addAndMakeVisible(monitor);
+    name.setFont(recorderFont(13.5f, juce::Font::bold));
+    physical.setFont(recorderFont(11.5f)); physical.setColour(juce::Label::textColourId, Palette::dimText);
 }
 void RecordView::Microphone::paint(juce::Graphics& g)
 {
-    g.setColour(Palette::card); g.fillRoundedRectangle(getLocalBounds().reduced(3).toFloat(), 10);
+    const auto card = getLocalBounds().reduced(3).toFloat().reduced(.5f);
+    g.setColour(Palette::card); g.fillRoundedRectangle(card, Palette::cardRadius);
+    g.setColour(Palette::line); g.drawRoundedRectangle(card, Palette::cardRadius, 1);
     auto meter = juce::Rectangle<float>(12, 80, float(getWidth() - 24), 10); g.setColour(Palette::meterBg); g.fillRoundedRectangle(meter, 3);
     const auto level = peak > 0 ? juce::jlimit(0.0f, 1.0f, (60 + 20 * std::log10(peak)) / 60) : 0.0f;
     g.setColour(peak >= .98f ? Palette::meterRed : peak >= .8f ? Palette::meterYellow : Palette::meterGreen); g.fillRoundedRectangle(meter.withWidth(meter.getWidth() * level), 3);
+    g.setColour(Palette::line); g.drawRoundedRectangle(meter, 3, 1);
 }
 void RecordView::Microphone::resized()
 { name.setBounds(8, 6, getWidth() - 16, 26); physical.setBounds(8, 32, getWidth() - 16, 22); arm.setBounds(8, 54, getWidth() - 16, 24); monitor.setBounds(8, 96, getWidth() - 16, 28); }
@@ -42,7 +57,13 @@ RecordView::RecordView()
 {
     for (auto* b : {&projectButton, &recordTab, &timelineTab, &importButton, &settingsButton, &exportButton, &startButton, &stopButton, &markerButton}) { addAndMakeVisible(b); b->setWantsKeyboardFocus(false); }
     for (auto* l : {&projectName, &statusLabel, &errorLabel, &noMicrophones}) { addAndMakeVisible(l); l->setFont(juce::Font(juce::FontOptions(17))); }
-    projectName.setFont(juce::Font(juce::FontOptions(20, juce::Font::bold))); errorLabel.setColour(juce::Label::textColourId, Palette::danger);
+    projectName.setFont(recorderFont(16, juce::Font::bold)); errorLabel.setColour(juce::Label::textColourId, Palette::danger);
+    statusLabel.setFont(recorderMonoFont(12)); errorLabel.setFont(recorderFont(12));
+    for (auto* b : {&projectButton, &recordTab, &timelineTab, &importButton, &settingsButton, &exportButton, &startButton, &stopButton, &markerButton})
+        b->getProperties().set("recorderFontSize", 13.0f);
+    projectButton.getProperties().set("recorderMenuArrow", true);
+    recordTab.setConnectedEdges(juce::Button::ConnectedOnRight); timelineTab.setConnectedEdges(juce::Button::ConnectedOnLeft);
+    recordTab.setColour(juce::TextButton::textColourOffId, Palette::dimText); timelineTab.setColour(juce::TextButton::textColourOffId, Palette::dimText);
     for (auto& cam : cameras) addAndMakeVisible(cam);
     setCamera(0, ko("캠1"), ko("캠1 연결 안 됨 · 설정에서 연결"), false);
     setCamera(1, ko("캠2"), ko("캠2 사용 안 함 · 설정에서 연결"), false);
@@ -56,6 +77,7 @@ RecordView::RecordView()
     }
     exportButton.setEnabled(false); exportButton.setTooltip(ko("내보내기 준비 전"));
     startButton.setColour(juce::TextButton::buttonColourId, Palette::brand);
+    startButton.setColour(juce::TextButton::textColourOffId, juce::Colours::white);
 }
 std::array<void*, 2> RecordView::nativeHosts()
 { for (auto& cam : cameras) cam.ensureHost(); return {cameras[0].host.getHWND(), cameras[1].host.getHWND()}; }
@@ -76,6 +98,8 @@ void RecordView::update(const RecorderUiState& ui, const RecorderProject& p, con
     {
         const auto key = s.cameraEnabled[i] ? s.cameraDeviceIds[i] + "\n" + s.cameraModes[i] : juce::String();
         if (cameraConfiguration[i] != key) { cameraConfiguration[i] = key; cameras[i].liveSeen = false; }
+        const bool recording = ui.live && s.cameraEnabled[i];
+        if (cameras[i].recording != recording) { cameras[i].recording = recording; cameras[i].repaint(); }
     }
     projectName.setText(p.name, juce::dontSendNotification); projectName.setTooltip(p.name);
     statusLabel.setText((ui.live ? ko("녹화 중   ·   ") : juce::String()) + formatRecorderTime(elapsed, p.Fs) + "   ·   "
@@ -85,6 +109,9 @@ void RecordView::update(const RecorderUiState& ui, const RecorderProject& p, con
     projectButton.setEnabled(!ui.structureLocked); settingsButton.setEnabled(!ui.structureLocked);
     recordTab.setToggleState(!timeline, juce::dontSendNotification); timelineTab.setToggleState(timeline, juce::dontSendNotification);
     startButton.setEnabled(ui.canRecord); stopButton.setEnabled(ui.canStop); markerButton.setEnabled(ui.live || !ui.structureLocked);
+    stopButton.setColour(RecorderLookAndFeel::buttonOutlineColourId, ui.live ? Palette::recording : Palette::line);
+    stopButton.setColour(juce::TextButton::textColourOffId, ui.live ? Palette::recording : Palette::text);
+    stopButton.setColour(juce::TextButton::buttonColourId, ui.live ? Palette::bar.overlaidWith(Palette::recording.withAlpha(.14f)) : Palette::bar);
     microphoneViewport.setVisible(!timeline); noMicrophones.setVisible(!timeline && ui.armedMicrophones == 0);
     noMicrophones.setText(ko("녹음 중인 마이크가 없습니다"), juce::dontSendNotification);
     stripCount = 0; for (unsigned i = 0; i < s.physicalInputs.size(); ++i) if (s.physicalInputs[i] >= 0) stripCount = i + 1;
@@ -101,20 +128,34 @@ void RecordView::update(const RecorderUiState& ui, const RecorderProject& p, con
 }
 void RecordView::updateMeters(const std::array<float, 8>& values)
 { for (unsigned i = 0; i < 8; ++i) { auto& m = microphones[i]; m.peak = juce::jmax(values[i], m.peak * .82f); m.repaint(8, 78, m.getWidth() - 16, 16); } }
-void RecordView::paint(juce::Graphics& g) { g.fillAll(Palette::background); }
+void RecordView::paint(juce::Graphics& g)
+{
+    g.fillAll(Palette::background); g.setColour(Palette::card); g.fillRect(0, 0, getWidth(), 46);
+    g.setColour(Palette::line); g.fillRect(0, 45, getWidth(), 1);
+}
+void RecordView::paintOverChildren(juce::Graphics& g)
+{
+    g.setColour(Palette::line);
+    g.drawRoundedRectangle(recordTab.getBounds().getUnion(timelineTab.getBounds()).toFloat().reduced(.5f), Palette::controlRadius, 1);
+}
 void RecordView::resized()
 {
-    auto a = getLocalBounds().reduced(12); auto top = a.removeFromTop(40);
-    projectButton.setBounds(top.removeFromLeft(88).reduced(2)); exportButton.setBounds(top.removeFromRight(105).reduced(2)); settingsButton.setBounds(top.removeFromRight(70).reduced(2));
-    timelineTab.setBounds(top.removeFromRight(94).reduced(2)); recordTab.setBounds(top.removeFromRight(66).reduced(2)); projectName.setBounds(top.reduced(6, 0));
-    statusLabel.setBounds(a.removeFromTop(28)); errorLabel.setBounds(a.removeFromTop(32)); a.removeFromTop(6);
-    const int cameraHeight = timeline ? juce::jlimit(120, 220, a.getHeight() / 3)
+    auto a = getLocalBounds(); auto top = a.removeFromTop(46).reduced(12, 8);
+    projectButton.setBounds(top.removeFromLeft(96)); top.removeFromLeft(8);
+    exportButton.setBounds(top.removeFromRight(82)); top.removeFromRight(8);
+    settingsButton.setBounds(top.removeFromRight(64)); top.removeFromRight(8);
+    importButton.setBounds(top.removeFromRight(148)); top.removeFromRight(14);
+    timelineTab.setBounds(top.removeFromRight(94)); recordTab.setBounds(top.removeFromRight(66));
+    top.removeFromRight(12); projectName.setBounds(top.reduced(6, 0));
+    statusLabel.setBounds(a.removeFromTop(26).reduced(12, 0));
+    errorLabel.setBounds(a.removeFromTop(errorLabel.getText().isEmpty() ? 0 : 26).reduced(12, 0));
+    a = a.reduced(12, 0); a.removeFromTop(8);
+    const int cameraHeight = timeline ? juce::jlimit(120, 236, a.getHeight() / 3)
         : juce::jlimit(140, (a.getWidth() - 16) * 9 / 32 + 44, a.getHeight() - 228);
     auto cameraArea = a.removeFromTop(cameraHeight); auto l = cameraArea.removeFromLeft((cameraArea.getWidth() - 12) / 2); cameraArea.removeFromLeft(12); cameras[0].setBounds(l); cameras[1].setBounds(cameraArea);
     a.removeFromTop(8); auto controls = a.removeFromTop(38);
     startButton.setBounds(controls.removeFromLeft(128).reduced(2)); stopButton.setBounds(controls.removeFromLeft(76).reduced(2)); markerButton.setBounds(controls.removeFromLeft(120).reduced(2));
-    importButton.setBounds(controls.removeFromRight(148).reduced(2));
-    a.removeFromTop(8); lowerBounds = a.withTrimmedBottom(18);
+    a.removeFromTop(8); lowerBounds = a.withTrimmedBottom(10);
     noMicrophones.setBounds(a.removeFromBottom(25)); microphoneViewport.setBounds(a);
     strips.setSize(juce::jmax(a.getWidth() - 2, int(stripCount) * 176), 132);
     for (unsigned i = 0; i < 8; ++i) microphones[i].setBounds(int(i) * 176, 0, 172, 132);

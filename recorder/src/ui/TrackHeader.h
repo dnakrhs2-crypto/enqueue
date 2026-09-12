@@ -9,6 +9,7 @@ class TrackHeader : public juce::Component
 public:
     TrackHeader(TimelineEditController&, Id);
     void refresh(const Track&);
+    void paint(juce::Graphics&) override;
     void resized() override;
     std::function<void(juce::Result)> onEdit;
 private:

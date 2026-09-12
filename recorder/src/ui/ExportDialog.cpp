@@ -56,6 +56,8 @@ ExportDialog::ExportDialog(RecorderDocument& d, RecorderSession& s, juce::Button
     rangeStart.setText("0"); rangeEnd.setText("0");
     rangeStart.setInputRestrictions(18, "0123456789."); rangeEnd.setInputRestrictions(18, "0123456789.");
     rangeStart.setTooltip(ko("선택 구간 시작 (초)")); rangeEnd.setTooltip(ko("선택 구간 끝 (초)"));
+    for (auto* field : {&rangeStart, &rangeEnd}) { field->setFont(recorderMonoFont(14)); field->setJustification(juce::Justification::centredRight); }
+    commonRange.setFont(recorderMonoFont(14));
     videoLabel.setText(ko("영상 소스: 캠1 / 캠2"), juce::dontSendNotification);
     audioLabel.setText(ko("오디오 소스"), juce::dontSendNotification);
     referenceLabel.setText(ko("참조 오디오"), juce::dontSendNotification);
@@ -95,7 +97,7 @@ void ExportDialog::releaseExportGate()
 void ExportDialog::show()
 {
     refreshSources(); if (!window) window = std::make_unique<Window>(*this);
-    window->setVisible(true); window->toFront(true); refreshSelection();
+    window->setVisible(true); styleRecorderWindow(*window); window->toFront(true); refreshSelection();
 }
 bool ExportDialog::ownsShortcutOrigin(const juce::Component* origin) const
 { return origin && window && (origin == window.get() || window->isParentOf(origin)); }

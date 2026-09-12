@@ -39,6 +39,7 @@ public:
     std::function<void()> onAddMarkerRequested;
     void revealTrack(const Id& trackId); // display rows differ from project tracks: unused tracks are hidden
     void resized() override;
+    void paint(juce::Graphics&) override;
     void visibilityChanged() override { if (isShowing()) grabKeyboardFocus(); }
     TimelineEditController edits;
     juce::Result invoke(TimelineAction, Sample value = 0, bool exact = false);

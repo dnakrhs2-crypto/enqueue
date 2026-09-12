@@ -171,7 +171,7 @@ private:
             setUsingNativeTitleBar(true); setContentOwned(new MainComponent(document, settings), true);
             setResizable(true, false); setResizeLimits(960, 640, 8192, 8192);
             if (!restoreWindowStateFromString(settings.get().windowState)) centreWithSize(1180, 780);
-            setVisible(true);
+            setVisible(true); styleRecorderWindow(*this);
         }
         MainComponent& content() { return *static_cast<MainComponent*>(getContentComponent()); }
         void closeButtonPressed() override { juce::JUCEApplication::getInstance()->systemRequestedQuit(); }

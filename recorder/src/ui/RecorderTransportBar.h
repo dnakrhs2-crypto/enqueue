@@ -10,6 +10,7 @@ public:
     RecorderTransportBar();
     void setState(bool enabled, bool playing, Sample, unsigned Fs);
     void setWaveformScale(unsigned);
+    void paint(juce::Graphics&) override;
     void resized() override;
     juce::TextButton play {ko("재생")}, stop {ko("정지")}, beginning {ko("처음으로")};
     juce::TextButton zoomOut {ko("−")}, zoomIn {"+"}, fit {ko("전체")};

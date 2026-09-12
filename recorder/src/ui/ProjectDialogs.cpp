@@ -28,8 +28,8 @@ public:
         : audio(s, p, d), camera(s, p, std::move(matcher)), shortcuts(s)
     {
         audioScroll.setViewedComponent(&audio, false); cameraScroll.setViewedComponent(&camera, false);
-        tabs.addTab(ko("오디오 장치"), Palette::bar, &audioScroll, false); tabs.addTab(ko("카메라"), Palette::bar, &cameraScroll, false);
-        tabs.addTab(ko("단축키"), Palette::bar, &shortcuts, false);
+        tabs.addTab(ko("오디오 장치"), Palette::card, &audioScroll, false); tabs.addTab(ko("카메라"), Palette::card, &cameraScroll, false);
+        tabs.addTab(ko("단축키"), Palette::card, &shortcuts, false); tabs.setOutline(1); tabs.setTabBarDepth(34);
         addAndMakeVisible(tabs); addAndMakeVisible(apply); addAndMakeVisible(close); addAndMakeVisible(error); error.setColour(juce::Label::textColourId, Palette::danger);
     }
     void resized() override
@@ -165,7 +165,7 @@ void MainComponent::showSettings()
         if (result.wasOk()) result = content->camera.scanning() ? juce::Result::fail(ko("카메라 목록을 확인하는 중입니다.")) : validateCameraSettings(s, content->camera.catalog());
         if (result.failed()) content->error.setText(result.getErrorMessage(), juce::dontSendNotification); else configure(s);
     };
-    content->close.onClick = [this] { settingsWindow->closeButtonPressed(); }; settingsWindow->setVisible(true);
+    content->close.onClick = [this] { settingsWindow->closeButtonPressed(); }; settingsWindow->setVisible(true); styleRecorderWindow(*settingsWindow);
 }
 void MainComponent::newProjectDialog()
 {
@@ -189,7 +189,7 @@ void MainComponent::newProjectDialog()
         const auto path = content->folder.getText().trim(), name = content->name.getText().trim();
         if (name.isEmpty() || !juce::File::isAbsolutePath(path) || path.startsWith("\\\\") || path.startsWith("//")) { content->error.setText(ko("프로젝트 이름과 로컬 폴더를 입력하세요."), juce::dontSendNotification); return; }
         createProject(name, juce::File(path), unsigned(content->fps.getSelectedId())); projectWindow->setVisible(false);
-    }; projectWindow->setVisible(true); projectWindow->toFront(true); content->name.grabKeyboardFocus(); content->name.selectAll();
+    }; projectWindow->setVisible(true); styleRecorderWindow(*projectWindow); projectWindow->toFront(true); content->name.grabKeyboardFocus(); content->name.selectAll();
 }
 void MainComponent::beforeSwitch(std::function<void()> action)
 {

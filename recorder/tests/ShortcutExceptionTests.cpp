@@ -132,8 +132,12 @@ void snapshot(juce::Component& component, const char* name)
     const auto path = juce::SystemStats::getEnvironmentVariable("RECORDER_TEST_SCREENSHOT_ROOT", {});
     if (!juce::File::isAbsolutePath(path)) return;
     const juce::File folder(path); require(folder.createDirectory().wasOk(), "Screenshot directory");
+    RecorderLookAndFeel theme;
+    auto* previous = &component.getLookAndFeel(); component.setLookAndFeel(&theme);
+    const auto image = component.createComponentSnapshot(component.getLocalBounds());
+    component.setLookAndFeel(previous);
     juce::FileOutputStream output(folder.getChildFile(name));
-    require(output.openedOk() && juce::PNGImageFormat().writeImageToStream(component.createComponentSnapshot(component.getLocalBounds()), output), "Write UI screenshot");
+    require(output.openedOk() && juce::PNGImageFormat().writeImageToStream(image, output), "Write UI screenshot");
 }
 struct CameraFixture
 {
@@ -356,8 +360,9 @@ int runShortcutExceptionTests()
         {
             f.main.setSize(width, 780); auto& view = Access::recordView(f.main); const auto progress = Access::importProgress(f.main);
             require(progress.getX() > view.markerButton.getRight() && progress.getWidth() >= 400
-                && progress.getRight() < view.importButton.getX(), "Compact import overlaps buttons or has no usable width");
-            require(view.importButton.getY() == view.markerButton.getY(), "Import did not move into freed control row");
+                && progress.getRight() <= view.getWidth() - 12, "Compact import overlaps buttons or has no usable width");
+            require(view.importButton.getY() == view.settingsButton.getY()
+                && view.timelineTab.getRight() < view.importButton.getX() && view.importButton.getRight() < view.settingsButton.getX(), "Import is not between the view tabs and settings");
         }
         require(Access::recordView(f.main).stopButton.getTooltip() == ko("녹화 정지 · spacebar"), "Stop tooltip encoding/default");
         require(RecorderUpdater::aboutText().startsWith(juce::String::fromUTF8(RECORDER_DISPLAY_NAME)), "About identity encoding");
@@ -410,6 +415,7 @@ int runShortcutExceptionTests()
         for (bool settingsFocus : {true, false})
         {
             MainFixture f; Access::settings(f.main); require(Access::settingsVisible(f.main), "Settings fixture not visible");
+            snapshot(Access::settingsForm(f.main), "settings-form.png");
             f.begin(); Access::allowStartButton(f.main);
             require(!f.main.routeShortcut(juce::KeyPress(juce::KeyPress::F9Key), &f.main), "F9 escaped settings gate");
             require(f.session.takeController().state() == TakeController::State::recording, "Ignored F9 changed recording");

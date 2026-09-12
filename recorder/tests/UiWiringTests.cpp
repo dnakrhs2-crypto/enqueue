@@ -45,9 +45,11 @@ struct ImportUiTestAccess
     {
         const auto& r = main.recordView;
         return r.importButton.isVisible() && r.importButton.getWidth() >= 140
-            && r.importButton.getY() == r.markerButton.getY()
+            && r.importButton.getY() == r.settingsButton.getY()
+            && r.timelineTab.getRight() < r.importButton.getX() && r.importButton.getRight() < r.settingsButton.getX()
             && r.markerButton.getRight() < main.audioImporter.getX()
-            && main.audioImporter.getWidth() >= 400 && main.audioImporter.getRight() < r.importButton.getX();
+            && main.audioImporter.getY() == r.markerButton.getY()
+            && main.audioImporter.getWidth() >= 400 && main.audioImporter.getRight() <= r.getWidth() - 12;
     }
 };
 }
@@ -691,7 +693,7 @@ int runUiWiringTests()
     {
         juce::ScopedJuceInitialiser_GUI runtime; RecorderProject project; auto s = reviewSettings();
         s.physicalInputs = {0, 2, -1, 6, -1, -1, -1, 7}; s.stereoSlots[0] = true;
-        gocue::livemix::LiveMixLookAndFeel lookAndFeel;
+        RecorderLookAndFeel lookAndFeel;
         AudioSettingsPanel panel(s, project, audioSettingsDevice()); panel.setLookAndFeel(&lookAndFeel);
         unsigned edits = 0; panel.onChanged = [&](UserSettings) { ++edits; };
         for (int width : {500, 684}) for (unsigned page = 0; page < 2; ++page)

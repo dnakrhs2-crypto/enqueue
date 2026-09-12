@@ -16,6 +16,7 @@ class MainComponent : public juce::Component, public juce::FileDragAndDropTarget
 public:
     MainComponent(RecorderDocument&, RecorderSettings&, TakeController::VideoFactory = {});
     ~MainComponent() override;
+    void paint(juce::Graphics&) override;
     void resized() override;
     bool isInterestedInFileDrag(const juce::StringArray&) override;
     void filesDropped(const juce::StringArray&, int, int) override;
@@ -106,6 +107,7 @@ private:
     juce::String banner;
     juce::String exceptionBanner; // persists across device/status refreshes
     juce::TextButton aboutButton, updateButton, retryButton;
+    std::array<juce::Label, 4> footerLabels;
     RecorderPowerMonitor powerMonitor;
     bool closeCommitRequested = false;
     bool importStarting = false;

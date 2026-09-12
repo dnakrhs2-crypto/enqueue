@@ -12,6 +12,9 @@ MarkerPanel::MarkerPanel(TimelineEditController& c) : edits(c)
     name.setTextToShowWhenEmpty(ko("이름"), Palette::dimText); position.setTextToShowWhenEmpty(ko("위치 · 샘플"), Palette::dimText);
     colour.setTextToShowWhenEmpty(ko("색 #RRGGBB"), Palette::dimText); colour.setTooltip(ko("색 #RRGGBB · Enter로 적용"));
     position.setInputRestrictions(19, "0123456789"); name.setTooltip(ko("이름 · Enter로 적용"));
+    position.setFont(recorderMonoFont(12)); position.setJustification(juce::Justification::centredRight);
+    colour.setFont(recorderMonoFont(12));
+    for (auto* button : {&add, &change, &remove}) button->getProperties().set("recorderFontSize", 12.0f);
     add.onClick = [this] { if (onAddRequested) { onAddRequested(); return; } const auto r = edits.addMarker(); if (onEdit) onEdit(r); };
     change.onClick = [this] { apply(); };
     remove.onClick = [this] { const auto r = edits.deleteMarker(selected); if (onEdit) onEdit(r); };
@@ -41,10 +44,14 @@ void MarkerPanel::listBoxItemDoubleClicked(int row, const juce::MouseEvent&)
 void MarkerPanel::paintListBoxItem(int row, juce::Graphics& g, int w, int h, bool isSelected)
 {
     if (row < 0 || row >= int(markers.size())) return; const auto& m = markers[std::size_t(row)];
-    if (isSelected) g.fillAll(Palette::card2);
+    if (isSelected) g.fillAll(Palette::selection);
+    g.setColour(Palette::line.withAlpha(.6f)); g.fillRect(0, h - 1, w, 1);
     g.setColour(juce::Colour::fromString("ff" + m.colour.substring(1))); g.fillEllipse(5, float(h / 2 - 4), 8, 8);
-    g.setColour(Palette::text); g.setFont(juce::Font(juce::FontOptions(14)));
-    g.drawText(juce::String(m.sample) + " · " + m.name, 18, 0, w - 20, h, juce::Justification::centredLeft, true);
+    const auto sample = juce::String(m.sample); const auto font = recorderMonoFont(11.5f);
+    const auto width = juce::jmin(w / 2, juce::roundToInt(juce::GlyphArrangement::getStringWidth(font, sample)) + 6);
+    g.setColour(Palette::dimText); g.setFont(font); g.drawText(sample, 18, 0, width, h, juce::Justification::centredLeft, true);
+    g.setColour(Palette::text); g.setFont(recorderFont(12.5f));
+    g.drawText(ko(" · ") + m.name, 18 + width, 0, juce::jmax(0, w - 20 - width), h, juce::Justification::centredLeft, true);
 }
 void MarkerPanel::apply()
 {

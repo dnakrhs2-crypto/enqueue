@@ -69,7 +69,13 @@ MainComponent::MainComponent(RecorderDocument& d, RecorderSettings& s, TakeContr
     exportDialog = std::make_unique<ExportDialog>(document, session, recordView.exportButton, [this](const juce::String& text) { showError(text); });
     exportDialog->onShortcut = [this](const juce::KeyPress& key, juce::Component* origin) { return routeShortcut(key, origin); };
     aboutButton.setButtonText(ko("앱 정보")); updateButton.setButtonText(ko("업데이트")); retryButton.setButtonText(ko("마무리 재시도"));
-    for (auto* button : {&aboutButton, &updateButton, &retryButton}) addAndMakeVisible(button);
+    for (auto* button : {&aboutButton, &updateButton, &retryButton})
+    { addAndMakeVisible(button); button->getProperties().set("recorderFontSize", 11.5f); }
+    for (auto& label : footerLabels)
+    {
+        addAndMakeVisible(label); label.setFont(recorderFont(11.5f, juce::Font::bold));
+        label.setBorderSize(juce::BorderSize<int>(0, 9, 0, 9)); label.setMinimumHorizontalScale(1);
+    }
     aboutButton.onClick = [] { RecorderUpdater::showAboutDialog(); };
     updateButton.onClick = [this] { checkForUpdates(); };
     retryButton.onClick = [this] { if (closeAction) { closeCommitRequested = false; persistSettings(); continueClose(); } else retryFinalization(); };
@@ -103,14 +109,34 @@ MainComponent::~MainComponent()
     while (!session.shutdownComplete()) { session.tick(); std::this_thread::sleep_for(std::chrono::milliseconds(1)); }
     settingsWindow.reset(); projectWindow.reset();
 }
+void MainComponent::paint(juce::Graphics& g)
+{
+    const auto footer = getLocalBounds().removeFromBottom(30);
+    g.setColour(Palette::card); g.fillRect(footer);
+    g.setColour(Palette::line); g.fillRect(footer.withHeight(1));
+    for (unsigned i = 0; i < footerLabels.size(); ++i)
+    {
+        g.setColour(i == 3 && session.recording() ? Palette::recording : Palette::line);
+        g.drawRoundedRectangle(footerLabels[i].getBounds().toFloat().reduced(.5f), 99, 1);
+    }
+}
 void MainComponent::resized()
 {
-    recordView.setBounds(getLocalBounds()); timelineView.setBounds(recordView.timelineBounds());
+    recordView.setBounds(getLocalBounds().withTrimmedBottom(30)); timelineView.setBounds(recordView.timelineBounds());
     const auto lastButton = recordView.markerButton.getBounds();
     audioImporter.setBounds(lastButton.getRight() + 8, lastButton.getY(),
-        juce::jmax(0, recordView.importButton.getX() - lastButton.getRight() - 16), lastButton.getHeight());
-    auto row = getLocalBounds().removeFromBottom(26).removeFromRight(320);
-    updateButton.setBounds(row.removeFromRight(90)); aboutButton.setBounds(row.removeFromRight(90)); retryButton.setBounds(row);
+        juce::jmax(0, recordView.getWidth() - lastButton.getRight() - 20), lastButton.getHeight());
+    auto row = getLocalBounds().removeFromBottom(30).reduced(12, 4);
+    updateButton.setBounds(row.removeFromRight(78)); row.removeFromRight(6);
+    aboutButton.setBounds(row.removeFromRight(74)); row.removeFromRight(6);
+    retryButton.setBounds(retryButton.isVisible() ? row.removeFromRight(102) : juce::Rectangle<int>());
+    row.removeFromRight(10);
+    std::array<int, 4> widths{}; int total = 0;
+    for (unsigned i = 0; i < widths.size(); ++i)
+    { widths[i] = juce::jlimit(56, i == 0 ? 340 : 220, juce::roundToInt(juce::GlyphArrangement::getStringWidth(footerLabels[i].getFont(), footerLabels[i].getText())) + 20); total += widths[i]; }
+    const auto scale = juce::jmin(1.0, double(juce::jmax(0, row.getWidth() - 24)) / juce::jmax(1, total));
+    for (unsigned i = 0; i < widths.size(); ++i)
+    { footerLabels[i].setBounds(row.removeFromLeft(int(widths[i] * scale))); if (i + 1 < widths.size()) row.removeFromLeft(8); }
 }
 void MainComponent::showError(const juce::String& message) { banner = message; refreshPending = true; }
 void MainComponent::showUnhandledException(const juce::File& report)
@@ -196,6 +222,15 @@ void MainComponent::refresh()
     if (session.notice == delayed && !message.contains(delayed)) message = delayed + " · " + message;
     const auto takeStatus = session.takeController().statusText();
     const auto status = importBusy() ? ko("오디오 불러오는 중") : session.takeController().state() == TakeController::State::idle ? (fileWork.valid() ? ko("저장 중") : document.getStatusText()) : takeStatus;
+    const auto& device = session.deviceInfo();
+    const juce::String footerText[] = {
+        device.name.isEmpty() ? ko("ASIO · 장치 연결 안 됨") : ko("ASIO · ") + device.name + ko(" · ")
+            + juce::String(double(device.sampleRate) / 1000, device.sampleRate % 1000 ? 1 : 0) + ko(" kHz · ") + juce::String(device.bufferFrames),
+        session.cameraCaption(0), session.cameraCaption(1), ui.live ? ko("녹화 중") : takeStatus};
+    for (unsigned i = 0; i < footerLabels.size(); ++i)
+    { footerLabels[i].setText(footerText[i], juce::dontSendNotification); footerLabels[i].setTooltip(footerText[i]); }
+    footerLabels[3].setColour(juce::Label::textColourId, ui.live ? Palette::recording : Palette::text);
+    repaint(getLocalBounds().removeFromBottom(30));
     recordView.update(ui, document.getProject(), settings.get(), status, message, session.elapsed(), remainingBytes, timeline);
     const auto& shortcuts = settings.get().shortcuts;
     recordView.startButton.setTooltip(ko("녹화 시작 · ") + shortcuts[RecorderCommand::recordStart]);

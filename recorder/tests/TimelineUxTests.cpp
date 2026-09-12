@@ -184,9 +184,9 @@ int runTimelineUxTests()
             if (button->getButtonText() == ko("솔로")) solo = button;
         }
         require(count == 2 && mute && solo, "Target button remains or listening controls missing");
-        require(mute->findColour(juce::TextButton::buttonOnColourId) == Palette::danger
+        require(mute->findColour(juce::TextButton::buttonOnColourId) == Palette::muteOn
             && mute->findColour(juce::TextButton::textColourOnId) == juce::Colours::white, "Mute active contrast");
-        require(solo->findColour(juce::TextButton::buttonOnColourId) == Palette::meterYellow
+        require(solo->findColour(juce::TextButton::buttonOnColourId) == Palette::soloOn
             && solo->findColour(juce::TextButton::textColourOnId) == juce::Colours::black, "Solo active contrast");
         require(mute->getWidth() >= 90 && solo->getWidth() >= 90 && mute->getRight() < solo->getX() && solo->getRight() <= header.getWidth(), "Listening controls overlap or overflow");
         header.mouseDown(mouse(header, 10, 10, 10, 10)); mute->onClick(); solo->onClick();
@@ -280,7 +280,12 @@ int runTimelineUxTests()
     {
         RecorderDocument d; adopt(d); TimelineView v(d); v.setSize(1180, 620); auto* rows = rowsOf(v); const auto x = xAt(v, 4);
         v.refresh(false, TimelineUxTestAccess::sample(v, x), {}); const auto before = TimelineUxTestAccess::rowImage(v);
-        require(before.getPixelAt(int(x) + 15, 85) == Palette::card2, "Camera card unexpectedly contains a filmstrip");
+        const auto fill = before.getPixelAt(int(x) + 15, 85);
+        const auto expected = Palette::clipVideoTop.interpolatedWith(Palette::clipVideoBottom,
+            (85.5f - float(TimelineLayout::rulerHeight + 3)) / float(TimelineLayout::rowHeight - 6));
+        require(std::abs(int(fill.getRed()) - int(expected.getRed())) <= 2
+            && std::abs(int(fill.getGreen()) - int(expected.getGreen())) <= 2
+            && std::abs(int(fill.getBlue()) - int(expected.getBlue())) <= 2, "Camera card gradient unexpectedly contains a filmstrip");
         rows->mouseDown(mouse(*rows, x, 10, x, 10)); const auto during = TimelineUxTestAccess::rowImage(v);
         for (int y = TimelineLayout::rulerHeight; y < TimelineLayout::rulerHeight + 2 * TimelineLayout::rowHeight; ++y)
             for (int at = TimelineLayout::headerWidth; at < before.getWidth(); ++at)

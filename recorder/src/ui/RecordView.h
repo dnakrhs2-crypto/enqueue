@@ -16,6 +16,7 @@ public:
     std::array<void*, 2> nativeHosts();
     juce::Rectangle<int> timelineBounds() const { return lowerBounds; }
     void paint(juce::Graphics&) override;
+    void paintOverChildren(juce::Graphics&) override;
     void resized() override;
     juce::TextButton projectButton {ko("프로젝트")}, recordTab {ko("녹화")}, timelineTab {ko("타임라인")};
     juce::TextButton settingsButton {ko("설정")}, exportButton {ko("내보내기")};
@@ -35,6 +36,7 @@ private:
         juce::String caption, placeholder;
         bool showVideo = false;
         bool liveSeen = false;
+        bool recording = false;
     };
     class Microphone : public juce::Component
     {
