@@ -1,0 +1,606 @@
+RecorderTests.exe : [aac @ 000001e2de827a80] Qavg: 65536.000
+위치 줄:2 문자:1
++ & build/vs2022/recorder/RecorderTests_artefacts/Release/RecorderTests ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: ([aac @ 000001e2de827a80] Qavg: 65536.000:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+[aac @ 000001e2de827a80] Qavg: 65536.000
+[aac @ 000001e2e3c3c000] Qavg: 65536.000
+[aac @ 000001e2e39ab380] Qavg: 65536.000
+[aac @ 000001e2e0d36b80] Qavg: 65536.000
+[aac @ 000001e2e39bdb80] Qavg: 14081.742
+[aac @ 000001e2df63e6c0] Qavg: 14081.742
+[aac @ 000001e2de9ecbc0] Qavg: 65536.000
+[aac @ 000001e2de9ec440] Qavg: 65536.000
+[aac @ 000001e2de9ed6c0] Qavg: 16626.828
+PASS 3px jitter selects without opening a drag or changing history; 4px starts a preview
+PASS linked movement keeps original tracks when pointer crosses lanes and commits once
+PASS magnet snaps group trailing edges, markers and playhead; Alt bypass is exact
+PASS mouse anchored zoom, Shift wheel, and scrub release preserve the visible time
+PASS recording during a drag cancels preview and rejects structural edits
+PASS recording layout keeps both preview hosts and controls above an editable sized timeline
+PASS shortcut defaults, modified-key identity, text focus, duplicates and reserved keys
+PASS shortcut settings persist JUCE descriptions, restore legacy defaults and reject corrupt duplicates
+timeline-ux: 8 passed, 0 failed; no capture/NVENC hardware opened
+PASS Production stream discontinuity requests never latch a source failure or clear a real failure
+recording PTS-only: reanchors=62, submitted=3600, decoded=3600
+PASS Recording PTS-only encodes and decodes 3600 frames across repeated source resets
+recording device: reanchors=62, submitted=3600, decoded=3600
+PASS Recording device timestamp encodes and decodes 3600 frames across repeated source resets
+dubbing PTS-only: reanchors=62, submitted=3600, decoded=3600
+PASS Dubbing PTS-only encodes and decodes 3600 frames across repeated source resets
+dubbing device: reanchors=62, submitted=3600, decoded=3600
+PASS Dubbing device timestamp encodes and decodes 3600 frames across repeated source resets
+PASS Queued frames retain the reanchor boundary despite later producer requests
+PASS Invalid stamps do not consume recovery and a reanchor cannot accept a new ASIO epoch
+source-reanchor: 7 passed, 0 failed; no capture/NVENC hardware opened
+PASS 10000 long clips: canonical checkpoint, durable reorder, undo and redo
+PASS Virtual 4GiB boundaries, RF64 header and three-hour packet index
+PASS Repeated cancelled dual seeks join workers and release owned resources
+PASS Cancelled real WAV exports reclaim handles, workers and partials
+PASS Start epoch +1 still submits and decodes every dubbing frame
+PASS Probe output reruns preserve existing files and select a fresh directory
+HardeningTests: 6 passed, 0 failed; no capture/NVENC hardware opened
+PASS Two cameras linked cut, unlinked one-sample move, mic ripple, camera gap and edited import share exact end
+PASS Active retake changes its camera mapping; inactive long version never extends export
+PASS Unused cam2 omitted, used cam2 with no active clip remains a black lane
+PASS Dubbing reference chooses completed audio; ambiguous imports need explicit choice
+PASS Cancellation after verified cam1 preserves no partial material set
+PASS Parent cancellation reaches child preparation checkpoints without progress or file callbacks
+MaterialExportTests: 6 passed, 0 failed; no capture/NVENC hardware opened
+PASS Collision suffix handles files/directories and retry never overwrites completed outputs
+PASS Cancellation waits for a quiescent worker before reserving recording
+PASS Write and manifest flush failures clean partials; retry uses immutable revision
+PASS Document recording lock rejects before job creation
+PASS Publication collision after snapshot and forged verification never replace targets
+PASS Parent path failure reports and changed-folder retry succeeds
+ExportLifecycleTests: 6 passed, 0 failed; no capture/NVENC hardware opened
+PASS outward common range, half-sample rational duration, overflow rejection
+PASS section 11.1 three independent edits, muted materials, common lengths and immutable originals
+PASS snapshot survives later trims/mutes, explicit nonzero range rebases and pads end
+PASS gap and one-sample movement retain shared realtime/offline microfades
+PASS record/document flags and atomic activity gate prevent overlap
+ExportRangeTests: 5 passed, 0 failed; no capture/NVENC hardware opened
+PASS RF64 ds64 above 4GiB and independent JUCE header reread without fake payload
+PASS PCM24 extrema, odd RIFF padding, durable finish then no-replace publish
+PASS durable open/write/header/flush failures propagate, no completed WAV
+[aac @ 000001e2de9ebd00] Qavg: 266.102
+[aac @ 000001e2de9ed6c0] Qavg: 271.789
+[aac @ 000001e2de9ec800] Qavg: 290.142
+[aac @ 000001e2de9ecf80] Qavg: 281.272
+[aac @ 000001e2de8f6bc0] Qavg: 271.789
+[aac @ 000001e2de8f7340] Qavg: 137.299
+[aac @ 000001e2de8f6f80] Qavg: 13217.808
+[aac @ 000001e2de8f7700] Qavg: nan
+PASS short writes cannot finish; existing partial and completed files survive cancellation
+PASS multi-file cancel and manifest-flush failure preserve originals and previous completed exports
+WavExportTests: 5 passed, 0 failed; no capture/NVENC hardware opened
+PASS three final masks isolate microphones/import and scope solo correctly
+PASS import asset filter, mono duplicate and 3+ channel error even if muted
+PASS empty mic selection is continuous silence and material mask cannot leak into final
+PASS final source preparation builds and validates real stereo import cache at project Fs
+PASS arbitrary P-frame cuts use selected lane mapping, IDR decode plan and never stream-copy
+PASS ordinary MP4 full decode validates presentation zero, AAC priming and unaligned tail at project rates
+PASS large rebased source positions do not overflow intermediate timeline addition
+PASS final cancellation before hardware and during full verification preserves completed outputs
+PASS MP4 DurableFile flush failure and abandoned mux never publish
+FinalExportTests: 9 passed, 0 failed; no capture/NVENC hardware opened
+PASS timeline endpoints retain exact PCM and continuous splits introduce no fades
+PASS section 11.1 example 1: independent mic cut leaves 10s and a silent second
+PASS section 11.1 example 2: mic-only ripple retains common 10s with 1s silent tail
+PASS section 11.1 example 3: global ripple makes every lane 9s with matching source cuts
+PASS source-continuous splits at 1 sample and near timeline endpoints are bit-identical
+PASS one-sample independent audio move is not rounded to a video frame
+PASS fixed K includes silent/empty lanes, muted solo selects silence, video solo is irrelevant
+PASS individual microphone honors only its own mute; material ignores all mute/solo
+PASS virtual chunk boundaries are invisible, explicit asset gaps are silent and faded
+PASS source masks can prepare only selected assets and ignore unrelated stale sources
+PASS short fragments have nonoverlapping half-length linear fades; gain-changing splits are discontinuous
+PASS only active retake version renders, frozen source descriptors survive later model edits
+PASS shared renderer pads arbitrary export ranges and rejects stale/short source reads
+PASS real 44.1k import cache keeps stereo and project-sample sourceIn without double resampling
+audio-cut-render: 14 passed, 0 failed; no capture/NVENC hardware opened
+PASS worker prefetch >=250ms, short take only valid tail, PCM matches offline in every block
+PASS revision cutover waits for prefill, fades both sides and cannot consume old PCM at boundary
+PASS superseded seek/revision tickets cannot publish or reclaim callback-owned PCM
+PASS renderer mute/solo revision replacement uses new fixed mix at a callback boundary
+PASS in-flight read is invalidated before newer seek can publish
+PASS worker read error is exposed and prepared data cannot hide it
+PASS media epoch invalidation rejects buffered PCM after worker join without RT destruction
+PASS engine queue adopts shortened/extended revision tails and distinguishes EOF from underrun
+PASS all-or-nothing underrun triggers existing TimelineTransport buffering without allocation
+PASS allocation hook self-check covers scalar, array, aligned and nothrow forms
+PASS RecorderAudioEngine consumes same queue without callback allocation and preserves stereo output mapping
+PASS SPSC repeated bank replacement/partial blocks never duplicate or overwrite PCM
+PASS provider pump depth is time based even for small ASIO blocks
+audio-prefetch-underrun: 13 passed, 0 failed; no capture/NVENC hardware opened
+PASS rational preserves numerator/denominator without rounding/reduction
+PASS mode grammar and exact native identity
+PASS bounded queue takes no ownership on overflow and wraps
+PASS SPSC concurrent delivery order and capacity
+PASS late, regression and cadence loss classifications
+PASS bounded telemetry percentiles and absent data
+PASS mailbox latest wins, present slot cannot be overwritten
+PASS telemetry stage boundaries and bounded timestamp trace
+PASS JSON writer creates parents and verifies UTF-8 replacement
+[swscaler @ 000001e2e3914bc0] deprecated pixel format used, make sure you did set range correctly
+[mjpeg @ 000001e2de8f7340] No JPEG data found in image
+[swscaler @ 000001e2e3823cc0] deprecated pixel format used, make sure you did set range correctly
+[mjpeg @ 000001e2de9ebd00] No JPEG data found in image
+[swscaler @ 000001e2de6c6200] deprecated pixel format used, make sure you did set range correctly
+[mjpeg @ 000001e2de9ebd00] Found EOI before any SOF, ignoring
+[mjpeg @ 000001e2de9ebd00] No JPEG data found in image
+[swscaler @ 000001e2e3823cc0] deprecated pixel format used, make sure you did set range correctly
+[mjpeg @ 000001e2de9ebd00] No JPEG data found in image
+[swscaler @ 000001e2de6c6200] deprecated pixel format used, make sure you did set range correctly
+[aac @ 000001e2de9ebd00] Qavg: 1344.361
+[aac @ 000001e2de9ec440] Qavg: 1344.954
+[aac @ 000001e2de9ecf80] Qavg: 1344.877
+[mp4 @ 000001e2df486dc0] No meaningful edit list will be written when using empty_moov without delay_moov
+[mp4 @ 000001e2df486dc0] Track 1 starts with a nonzero dts -1024, while the moov already has been written. Set the dela
+y_moov flag to handle this case.
+[aac @ 000001e2de9ecbc0] Qavg: 1344.954
+[mp4 @ 000001e2df486840] No meaningful edit list will be written when using empty_moov without delay_moov
+[aac @ 000001e2de9ecf80] Qavg: nan
+PASS MF synthetic padded NV12 buffer is copied before sample release
+PASS mailbox concurrent frame data remains stable
+PASS MF bottom-up padded YUY2 preserves logical scanline order
+PASS NV12 limited passthrough preserves every byte and metadata stamp
+PASS full-range pixels really normalise to limited black/white
+PASS YUY2 BT.601 red is matrix-converted to BT.709 NV12
+PASS missing colour metadata is flagged; explicit HDR rejected
+PASS CPU MJPEG decode produces bounded NV12 and correct grey range
+RecorderCaptureContracts: 17 passed, 0 failed; no hardware opened
+PASS presenter holds at most one CPU surface, releasing success/busy/exception
+PASS busy and occluded Present retain wait credit until a real Present succeeds
+PASS integer 59.94 and unavailable display refresh are distinguished
+PASS bad MJPEG packet fixtures increment decoderError and next frame continues
+PASS decode stops only on the 30th consecutive failure
+PASS identical current media type can change metadata without changing signal
+PASS measurement reset clears counts, timings and traces while owners are held
+PASS measured Microsoft MFT fixture is full 601, not HD raw limited 709
+PASS MF JPEG origin converts full 601 Y/UV before preview and encoder
+capture-review: 9 passed, 0 failed; no capture/NVENC hardware opened
+PASS 30 -> 60 repeats and 60 -> 30 omissions are native conversion
+PASS 59.94 -> 60 three-hour absolute rational oracle, no accumulated rounding
+PASS bounded future wait, closest frame, tie older, late source cannot force distant future
+PASS capture loss, encode loss and clock correction have separate causes
+PASS PTS/ID regression and queue capacity fail explicitly
+PASS MF PTS mapper has independent arrival deadline origin
+PASS capture gate excludes first-second cadence and separates device observations
+RecorderCfrScheduler: 7 passed, 0 failed; no capture/NVENC hardware opened
+PASS NVENC unopened contexts carry pinned 30/60 options and safe lifetimes
+PASS encode pool includes retained refs without starving preview or allocating replacements
+PASS AAC resampler, priming and partial tail arithmetic agree with real built-in encoder
+Offline hybrid fixture: C:\Users\claude\AppData\Local\Temp\RecorderEncoderContracts-0085879aebe7446bb8dc2d329390d019.mp4; trailerMs=0.0893
+PASS hybrid MP4 normal stop has exact packet counts, final presentation zero and decodes offline
+PASS abandoned writer preserves recording file, no destructor trailer or rename
+RecorderEncoderContracts: 5 passed, 0 failed; no capture/NVENC hardware opened
+AsioStampTests: 10 passed, 0 failed; no device opened
+NativePcmTests: 12 passed, 0 failed; no device opened
+ASIO fixture: ppm=100.013, RMS samples=1.5212, MAD outliers=9, max phase update samples=1
+PASS 100ppm, callback jitter and MAD outliers: accuracy and inverse
+PASS every ASIO discontinuity starts a new invalid epoch
+PASS reset establishes fresh coordinates and bounded event history
+PASS legacy fallback uses callback QPC plus accumulated numSamples
+PASS invalid systemTime with valid position is still low quality
+PASS submillisecond ASIO blocks retain a full eight-second observation window
+PASS int64 origins above 2^53 retain sample and QPC detail
+PASS native 60000/1001 to 60: three-hour absolute rational oracle
+PASS 128-bit rescale handles uptime, signed limits and overflow
+PASS O0 / Pvideo signs, buffer offset, residual and no duplicate input correction
+PASS DeviceTimestamp uses 100ns QPC epoch at a non-10MHz frequency
+Camera fallback fixture: ppm=-0.406217, RMS ms=0.70673, MAD outliers=6
+PASS PTS fallback lower arrival envelope, latency distribution and low quality
+PASS camera timestamp and generation discontinuities expose epochs
+PASS invalid DeviceTimestamp falls back and cannot masquerade as QPC
+PASS CFR adapter supplies N0/O0-relative time, unshifted deadline, rejects epochs
+PASS calibration JSON roundtrip preserves mode, fps, mapping order, signs
+PASS calibration rejects future schemas, lossy numbers and incomplete measurements
+PASS immutable snapshot publication is coherent under concurrent readers
+ClockMapper: 18 passed, 0 failed; no capture/NVENC hardware opened
+PASS DurableFile append/patch/app flush/OS watermark and reopen
+PASS DurableFile real Win32 open error and patch bounds
+PASS IEEE CRC32 known answer and all record kinds roundtrip
+PASS Every truncated byte of last record replays only the prior commit
+PASS CRC corruption stops subsequent valid records; original is preserved on reopen
+PASS Header CRC, sequence, future schema and commit marker are enforced
+PASS Duplicate transactions across rotations are ignored while physical sequence advances
+PASS A damaged earlier rotation stops all later segments and a missing segment is detected
+PASS Journal flush failure never acknowledges sequence and directory has a single writer
+PASS Unsafe paths and missing PCM/device fields are rejected before append
+Journal/durable tests: 10 passed, 0 failed
+PASS PCM24 LE golden bytes: zero, LSB, signs and extrema
+PASS Thirty-second chunks split straddling blocks at identical microphone boundaries
+PASS Exact thirty-second stop produces one chunk without an empty successor
+PASS Live one-second header is flushed before checkpoint; odd PCM padding is overwritten on append
+PASS WAV append failure is immediately visible and never finalizes/synthesizes silence
+PASS Media and journal flush failures retain distinct conservative watermarks
+PASS Header update failure propagates
+PASS Queue overflow under a held I/O operation is reported without waiting for writer
+PASS Discontinuous sample numbers and invalid PCM stop the take
+PASS Output-clock origin, stop boundary validation and existing-original protection
+WAV chunk tests: 10 passed, 0 failed
+PASS PCM24 LE golden bytes: zero, LSB, signs and extrema
+PASS Thirty-second chunks split straddling blocks at identical microphone boundaries
+PASS Exact thirty-second stop produces one chunk without an empty successor
+PASS Live one-second header is flushed before checkpoint; odd PCM padding is overwritten on append
+PASS WAV append failure is immediately visible and never finalizes/synthesizes silence
+PASS Media and journal flush failures retain distinct conservative watermarks
+PASS Header update failure propagates
+PASS Queue overflow under a held I/O operation is reported without waiting for writer
+PASS Discontinuous sample numbers and invalid PCM stop the take
+PASS Output-clock origin, stop boundary validation and existing-original protection
+WAV chunk tests: 10 passed, 0 failed
+PASS identity and isolated user settings root
+PASS empty project save reopen resave is byte identical without devices
+PASS two cameras eight microphones and chunks roundtrip
+PASS single-camera normal take with zero microphones
+PASS checkpoint preserves exact prior generation and rejects invalid replacement
+PASS backup fallback reports recovery without overwriting damaged primary
+PASS future and foreign schema never fall back to an older backup
+PASS checksum corruption missing fields and wrong numeric types rejected
+PASS 64-bit positions above double precision survive JSON exactly
+PASS absolute traversal device and duplicate asset paths rejected
+PASS invalid asset clip bounds IDs and overflow rejected
+PASS half-open adjacency accepted active overlap rejected
+PASS explicit gaps and partial camera lengths keep valid available source ranges
+PASS link group bidirectional membership and independent relinking
+PASS take stack atomic active version excludes old cameras and audio tail
+PASS take stack foreign membership dangling version and import membership rejected
+PASS origin-based frame/sample conversion has no three-hour cumulative drift
+PASS signed ties invalid rates and 128-bit intermediates
+PASS metadata snapshots share unchanged clips and invalid edits never publish
+PASS undo redo restores selection and metadata while keeping media registry
+PASS 700ms merge gesture merge history limit and redo barriers
+PASS selection and no-op edits do not create revisions or clear redo
+PASS normal take placement includes independent audio and excludes markers
+PASS dub placement keeps off-grid Pstart and immutable timebase after media
+[aac @ 000001e2de6c4a40] Qavg: 271.065
+[aac @ 000001e2de6c3800] Qavg: 259.569
+[aac @ 000001e2de6c3440] Qavg: 272.847
+[aac @ 000001e2de6c46c0] Qavg: 272.847
+[aac @ 000001e2de6c4300] Qavg: 51797.625
+[aac @ 000001e2de6c46c0] Qavg: 65536.000
+[aac @ 000001e2de6c3080] Qavg: 18469.428
+[aac @ 000001e2de6c3440] Qavg: 59056.199
+[aac @ 000001e2de6c4a40] Qavg: 360.367
+[aac @ 000001e2de6c3f40] Qavg: 16659.990
+[aac @ 000001e2de6c4300] Qavg: 16652.936
+PASS take number timestamp and display name assigned automatically
+PASS journal result deltas replay name entities ordering deletion undo and redo
+PASS raw JSON integer overflow cannot wrap into a valid schema
+PASS checkpoint folder layout failed backup and stale revisions
+PASS journal acknowledgement advances saved status only for matching transactions
+PASS finalisation registry changes survive undo and create no history
+PASS import source mapping uses native rational rate and nested edits are rejected
+PASS settings worker persists devices mapping correction recent paths and window
+PASS settings invalid channels duplicate cameras and failed worker writes
+PASS corrupt settings integer does not silently reset a device mapping
+project-roundtrip: 34 passed, 0 failed
+PASS 8ch native PCM / exact partial boundaries / mute solo monitor isolation
+PASS Duplicate outputs rejected, independent sides, mono mean, unused outputs zero
+PASS Output-only take retains sample clock, no mic WAV or synthetic tone in reference
+PASS Fs change and ASIO reset stop at last confirmed input, preserve prefix
+PASS Four-second queues overflow stops complete take without silent replacement
+PASS Temporary OLS mapper uses origin-relative arithmetic and invertible samples
+PASS Actual PCM AAC uses interface Fs and preserves priming / exact rescaled tail
+PASS Device reopen waits for a clock fit from the new sample-rate epoch
+PASS WAV I/O failure propagates to whole-take collection stop
+RecorderAudioTests: 9 passed, 0 failed; no capture/NVENC hardware opened
+PASS Sample-defined CFR ceil including 44.1k and partial-frame stops
+PASS Lifecycle / immediate placement independent of finalizer / sparse mic lane / journal order
+PASS Independent audio active end controls placement; markers excluded; zero microphones allowed
+PASS Camera failure leaves audio running and registers explicit camera tail gap
+PASS Repeated source discontinuity/type-change notifications keep the take lane collecting
+PASS ASIO epoch failure stops whole take and preserves last valid block
+PASS Controller reuses device for consecutive takes without prior metadata or journal state
+TakeControllerTests: 7 passed, 0 failed; no capture/NVENC hardware opened
+PASS Latest valid backup selected by revision, corrupt primary retained
+PASS Invalid checksum and unsupported schema never become checkpoints
+PASS Project writer lock excludes recovery without a mutation
+PASS Legacy WavTrackWriter journal lock excludes scanner
+PASS Truncated edit commit retains previous revision
+PASS Edit CRC stops all later commits and segments
+PASS Damaged edit log cannot be resumed in place
+PASS Duplicate transaction ignored across records and segments
+PASS Orphan reported and preserved, including second scan
+PASS WAV torn header and partial bytes recover only durable complete samples
+PASS Truncated take journal tail and duplicate take transaction
+PASS recovery-before-commit
+PASS recovery-after-commit
+PASS Partial cam2 reports 1.2s gap without truncating cam1 or WAV
+PASS Completed manifest preserved and durable edit delta replayed
+PASS Completed manifest restores missing registration without remux
+PASS No durable sample take produces one diagnostic commit and zero clips
+PASS Output clock and dub placement retain exact origin and Pstart
+PASS Saving recovered checkpoint and deleting clips never resurrects placement
+PASS MP4 packet CRC excludes corrupt fragment and all following packets
+PASS Legacy intact fMP4 without persisted index can rebuild into a new attempt
+PASS journal-before-commit
+PASS journal-after-commit
+RecoveryTests: 23 passed, 0 failed
+PASS edit during append
+PASS edit after commit
+PASS undo during append
+PASS undo after commit
+PASS retake during append
+PASS retake after commit
+PASS Late TakeFinalized restores registry without resurrecting a deleted placement
+PASS recovery-before-commit
+PASS recovery-after-commit
+PASS Recovered journal continuation accepts a new edit and another restart
+PASS Corrupt primary remains intact while resumed edits checkpoint into recovery
+PASS Invalid placement delta does not suppress a valid stopped take
+PASS Round-10 completed manifest reuses normal MP4 without remux
+RetakeRecoveryTests: 13 passed, 0 failed (retake controller binding deferred to 27/28)
+PASS Native edit delta roundtrip retains int64 markers, order and no snapshot commands
+PASS Undo and redo each persist a new revision despite history coalescing
+PASS tail
+PASS crc
+PASS sequence
+PASS schema
+PASS commit
+PASS Duplicate transactions span rotated segments without duplicate edits
+PASS Semantic delta checksum failure stops a structurally committed record
+PASS Two committed checkpoint generations retain backup replay before collecting logs
+PASS Completed gesture stays saving until owner receives flush
+PASS Failed journal flush stays unsaved
+PASS Automatic checkpoint worker and normal shutdown use latest durable snapshot
+PASS Project writer lock refuses a concurrent journal worker
+PASS checkpoint-backup-flushed
+PASS checkpoint-verified-before-replace
+PASS checkpoint-after-replace
+PASS checkpoint-before-commit
+PASS checkpoint-after-commit
+PASS checkpoint-before-collect
+PASS Explicit document Save queues a checkpoint behind edits and timebase registry
+EditJournalTests: 21 passed, 0 failed
+PASS Virtual 4GiB boundary and Win32 disk-full without large allocation
+PASS Take journal preserves >4GiB offsets and >2^53 sample coordinates
+PASS WAV worker propagates disk-full and keeps last durable samples
+PASS WAV worker propagates disk-full and keeps last durable samples
+PASS WAV worker propagates disk-full and keeps last durable samples
+PASS Recovery copy disk-full never commits/adopts or modifies original
+PASS Checkpoint flush failure keeps old primary and backup
+PASS Disk-full edit journal has no visible committed revision
+PASS MP4 recovery output disk-full is an I/O error, not a camera gap
+LargeFileTests: 9 passed, 0 failed
+PASS clip split snaps all linked members and preserves source continuity
+PASS clip split endpoints and outside are no-ops
+PASS clip front trim preserves remaining absolute source position and extends handles
+PASS clip back trim and shared handle intersection reject atomically
+PASS clip unlinked audio trims and moves by one sample
+PASS clip remove clip and middle range preserve empty time
+PASS clip 11.1 example 1 mic2 gap keeps both cameras at ten seconds
+PASS clip 11.1 example 2 mic2 ripple and last second silence
+PASS clip 11.1 example 3 all tracks become nine seconds
+PASS clip ripple marker half-open boundaries and selected markers remain
+PASS clip move uses one absolute video snap and refuses overlap
+PASS clip reorder unequal bundles in both directions is one value transform
+PASS clip stack split trim ripple move include all versions
+PASS clip stack trim after split touches only corresponding pieces
+PASS clip unlinked stack mic edits active placement and retains previous
+PASS clip integer source oracle stays identical across video split
+PASS clip stack links cannot cross active versions and deletion removes empty stack
+PASS clip unchanged trims preserve off-grid anchors and unrelated empty stacks
+PASS clip render explicit source gaps, microfades and no fade on continuous split
+PASS clip mute solo K includes empty selected lanes and excludes camera solo
+PASS clip tiny source pieces limit fades to half length and audio mapping rounds at origin
+PASS clip ripple discontinuity fades both sides while a shorter linked handle limits extension
+PASS clip invalid identifiers ranges and overflow return errors
+ClipEditTests: 23 passed, 0 failed
+PASS link cross-source link unlink relink preserves offsets and source metadata
+PASS link merges two existing groups without losing members
+PASS link split preserves two outside members and creates fresh side groups
+PASS link single outside survivor keeps identity and becomes unlinked
+PASS link selected-track ripple refuses outside links even when linked clip is later
+PASS link linked move preserves offset and rejects collisions without partial moves
+PASS link middle removal preserves outside members and no hidden unlink of target tracks
+PASS link invalid or singleton explicit selection rejected
+LinkEditTests: 8 passed, 0 failed
+PASS history pure edit undo redo restores hash selection and publishes monotonic deltas
+PASS history 700ms inclusive key window and context boundaries
+PASS history coalesced return to original geometry still restores selection
+PASS history 200 step bound and redo invalidation
+PASS history registry generation append and cache identity survive every undo
+PASS history no-op and failed edits preserve revision redo and publication
+PASS history pure adapter rejects registry timebase identity and revision mutations
+PASS history prepared plan publication and simulated block boundary including undo
+PASS history journal queue failure leaves published edit visible and unsaved
+PASS history revision overflow and reentrant edits cannot publish
+EditHistoryTests: 10 passed, 0 failed
+EditPropertyTests: {"status": "PASS", "seed": 909, "firstOperation": "restore inactive retake version before random destructive edits", "iterations": 1000, "committed": 692, "rejected": 163, "noops": 145, "undoSteps": 198, "operationAttempts": [69, 65, 77, 74, 53, 58, 57, 74, 70, 59, 53, 76, 61, 78, 76], "operationCommits": [56, 41, 43, 68, 53, 50, 40, 59, 8, 52, 5, 76, 61, 78, 2], "operationOrder": "split,trimIn,trimOut,removeRange,remove,rippleAll,rippleTracks,move,reorder,link,unlink,muteSolo,marker,append,retakeVersion", "invariantsAndUndoRedoHashes": true}
+PASS copy, reopen, SHA-256 and unpublished asset ownership
+PASS copy write/flush failures and cancellations leave no half asset
+PASS missing, codec, 3-channel and truncated files give errors with rollback
+PASS 44.1/48/96k lengths, sample mapping, float32 cache, peaks and immutable source
+PASS cache reuses verified bytes and invalidates for corruption, hash and Fs
+PASS worker yields during recording, cancellation and cache failure clean the import
+PASS cancellation during verification and PCM generation removes partial files
+PASS recording pause resumes a complete worker job
+PASS mono M4A and raw AAC/MP3 without gapless tags retain explicit boundary evidence
+  mp3 raw=97920 lead=1105 tail=678 rms=0.00641103
+  m4a raw=97280 lead=1024 tail=119 rms=0.00614471
+PASS MP3/M4A priming, final padding, source alignment and seek
+AudioImportTests: 10 passed, 0 failed; no capture/NVENC hardware opened
+PASS one atomic publication at exact off-grid playhead with independent track kind
+PASS new project starts at zero; each file gets its own track without microphone limit
+PASS mute/solo, undo/redo, checkpoint and sidecar survive without source mutation
+PASS cancel, changed project, bad placement and revision overflow never register half an asset
+ImportedClipTests: 4 passed, 0 failed; no capture/NVENC hardware opened
+PASS packet index builds closed-GOP IDR lookup and floors exact frame containment
+PASS seek plan decodes IDR prefix without conversion and reuses the shortest valid DPB path
+PASS completed frame wakes independent coordinator and presenter events without polling
+PASS resident hit publishes synchronously while cancelled prefetch still owns its GPU fence
+PASS ASIO acknowledgement signals a preallocated coordinator event after atomic publication
+PASS invalid video packet layout, open GOP, reorder and growing filename are rejected
+PASS WAV chunk boundaries, committed tail and explicit gaps render one virtual source
+PASS mute/solo mean uses selected tracks including silent gaps and empty tracks
+PASS WAV format/watermark errors and stale file generations cannot render
+PASS round-06 committed journal opens only finalized WAV generations across 30s chunks
+PASS take.json schema preserves watermark and denies unknown formats/unsafe paths
+PASS PCM queue is transactional on underrun, supports split callback blocks and generation fencing
+PASS PCM SPSC slots cannot be overwritten while callback owns partial data
+PASS worker prepares at least 250ms, short take prepares only valid tail
+PASS audible cursor subtracts software queue plus output latency and interpolates QPC
+PASS ASIO adopts exact reserved start sample; late preparation and underrun output silence
+PASS common transport drains accepted tail, reparses readiness and restarts after underrun
+PASS pause, stop, beginning and missed scheduled start retain distinct transport states
+PASS stop seeks to the audible cursor and preserves an unacknowledged seek target
+PASS dubbing lock rejects transport changes without cancelling pending play
+PASS seek generation discards in-flight decode and refuses stale frame requests
+PASS exact seek publishes before blocked prefetch and rebinds cached frames without reopening decoders
+PASS 100 seek generations select exact containing frames on both cameras with bounded caches
+PASS late counts missing frames only at advancing present ticks, never inspection or seek preparation
+PASS seek discard and texture retry retain acquired DXGI opportunity until successful Present
+PASS unacknowledged seek burst cannot publish an old target with the newest generation
+PASS seek from ready immediately cancels video while audio waits for callback acknowledgement
+PASS pending Seek survives immediate Play/Pause and scrub release bypasses drag throttle
+PASS pause ramp drains prepared samples and resume does not replay the accepted tail
+PASS next clip decoder and first frame are ready before a cut, within three frame slots
+PASS two cameras share generation/readiness, source gaps clear display, file epoch invalidates ready frames
+PASS decoder initialization failure is observable and never replaced by a CPU stub
+playback-engine: 32 passed, 0 failed; no capture/NVENC hardware opened
+PASS Mic off/on survives initial and repeated source discontinuity/type changes at fixed O0
+PASS Dubbing generation change still closes only the affected camera lane
+PASS Epoch changes immediately after start retain both camera lanes and fixed O0
+PASS Selected reference uses the common fade endpoints and selected-track mute
+PASS Off-grid Pstart, output latency sign and no double input correction
+PASS Preparation waits for the master clock fit before arming
+PASS Mic-off callback clock, scheduled selected stereo PCM and two-camera anchor
+PASS Optional native WAV uses corrected O0 range, never selected output PCM
+PASS Coordinator publishes under the recording lock while user edits stay blocked
+PASS Selected mono reference duplicates L/R, ignores other tracks and mic arm
+PASS Selected reference follows imported clip cuts and timeline gaps
+PASS Reference AAC bytes are identical with microphone recording off/on
+PASS Controller retake preserves first range, early stop tail and automatic stop
+dubbing-clock-placement: 13 passed, 0 failed; no capture/NVENC hardware opened
+PASS Playback underrun aborts and preserves partial completion
+PASS ASIO reset aborts at accepted end and persists partial take
+PASS Edit, seek, output and arm locks cover both document APIs
+PASS Invalid preparation does not leave locks or a take
+PASS Abort during asynchronous preparation drains the later-created session
+PASS One camera failure preserves the other stream and leaves an explicit gap
+PASS Rejected placement leaves no take and drains without an unchecked access
+dubbing-failures: 7 passed, 0 failed; no capture/NVENC hardware opened
+PASS Locked coordinator placement and retake preserve user edit and marker rules
+PASS Three retakes, second restore, one undo/redo, checkpoint and original SHA256
+PASS Short active version leaves black/silent tail without old media
+PASS Off-grid overlap splits two old stacks and archives the visible combination
+PASS Global ripple and stack split transform every version
+PASS Unlinked mic edits only active version; activation previews outside-span impact and rejects collision
+PASS Outer trim uses all versions and never mutates original handles
+PASS Trim a split stack with a shorter active version preserves its blank tail
+take-stack-edits: 8 passed, 0 failed; no capture/NVENC hardware opened
+PASS recording state keeps live views and locks structure / transport
+PASS camera2 off and zero microphones warn but permit camera recording
+PASS audio settings reject duplicate stereo and allow explicit mono
+PASS camera panels validate identity, mode and duplicate slots
+PASS peaks preserve signed extrema, channel identity, partial bins and stop tail
+PASS bounded peak compaction retains every sample and early transients
+PASS thumbnail queue defers recording, deduplicates and caps pending work
+PASS WAV writer publishes immediate peaks from written PCM, independently of UI
+PASS anonymous legacy WAV mappings retain first PCM samples and independent sources
+PASS single ASIO owner dispatches transport and monitor does not alter PCM
+PASS dubbing exclusively owns shared output while every input meter stays live
+ui-wiring: 11 passed, 0 failed; no capture/NVENC hardware opened
+PASS camera identity survives telemetry reset
+PASS held cam1 encoder surfaces cannot block cam2 capture queue or latest mailbox
+PASS raw queue overflow latches take-wide stop; upstream loss prevents WAV finalization
+PASS realtime source workers keep cam2 preview advancing with a saturated cam1 bank
+PASS four-second WAV overflow stops take without retry or inserted silence
+PASS pixel IDs round-trip, CRC damage and wrong camera are detected
+PASS oracle permits 30 to 60 repeats and 60 to 30 intentional omissions
+PASS production NV12 and MJPEG decoders retain pixel oracle
+PASS full MP4 decode catches hidden ID loss with equal CFR packet count
+PASS 8ch realtime synthetic tap writes bit-exact mono PCM24 originals
+PASS two-second real WAV I/O stall recovers inside the four-second queue
+QueueIsolationTests: 11 passed, 0 failed; no capture/NVENC hardware opened
+PASS UI click shift ctrl expand links without saved history
+PASS UI split targets match model and unlink detaches explicit microphone only
+PASS editing a linked group retains directly clicked unlink intent
+PASS selected interval delete preserves empty time and uses selected links
+PASS external camera link prompts then cancel or explicit global expansion
+PASS explicit unlink plus local ripple is one undo and leaves global markers
+PASS all-audio links expand only audio lanes and stale dialogs refuse
+RippleTests: 7 passed, 0 failed; no capture/NVENC hardware opened
+PASS UI neighbour insertion moves corresponding clips on all lanes
+PASS asymmetric neighbour is rejected before commit
+PASS drag preview collision and source handles reject atomically
+PASS video drag snaps; Alt and numeric trim preserve exact sample
+PASS stale drag and cancelled drag cannot publish
+PASS independent-audio-cuts scenario verifies every other track after each UI operation
+ReorderTests: 6 passed, 0 failed; no capture/NVENC hardware opened
+PASS marker add rename colour position delete undo and jump mapping
+PASS global ripple transforms marker half-open boundaries and all take versions
+PASS recording lock maps all structural controls but permits marker append
+MarkerTests: 3 passed, 0 failed; no capture/NVENC hardware opened
+PASS Stable symbolic links survive enumeration reorder and native type index changes
+PASS Duplicate enabled camera is rejected transactionally including symbolic link case
+PASS Disconnect/reconnect changes only that slot generation and never auto-substitutes
+PASS RecorderSettings persists enabled flags, stable links and native modes
+PASS OFF cam2 creates no source/encoder/file/asset
+PASS Missing cam2 creates no source/encoder/file/asset
+PASS Two lanes share N0/Nstop; stopping reaches both before a slow finalizer
+PASS Cam2 disconnect leaves its gap and preserves cam1/raw WAV through Nstop
+PASS Cam1 AAC mux rejection cannot stop cam2/raw
+PASS Cam2 AAC mux rejection cannot stop cam1/raw
+PASS Stale frame and disconnect generations are ignored independently
+PASS New cam2 generation stays a partial failure even after reanchor notifications
+PASS Slow encoder cannot borrow the other camera's surfaces or either preview mailbox
+PASS Each CameraClockMapper owns its generation and native cadence
+camera-slots: 14 passed, 0 failed; no capture/NVENC hardware opened
+PASS 30 to 60 native repeats respect independent camera phase
+PASS 30 to 60 native repeats respect independent camera phase
+PASS 30 to 60 native repeats respect independent camera phase
+PASS Two camera Lcam values map through one live master and reserved N0
+PASS Calibration full key includes native mode/rate and ordered output mapping
+PASS Common exclusive sample end is preserved for both native rates
+PASS MJPEG warmup followed by repeated pixel ID keeps encoder timestamps monotonic
+mixed-fps: 7 passed, 0 failed; no capture/NVENC hardware opened
+PASS Product profiles reach both streams and reserve identical non-grid boundaries
+PASS Changed output order rejects old calibration before assets or journal are created
+PASS One finalizer exception still finishes the healthy lane and raw input
+PASS One finalizer exception still finishes the healthy lane and raw input
+PASS Cam2 explicit discontinuity and stale reconnection cannot extend its take
+PASS Single camera with zero microphones creates no cam2 or WAV asset
+PASS Recovery does not promote CFR padding to logical duration or truncate healthy lanes
+PASS Two-camera dubbing failure keeps common Ostop and other camera
+PASS Background index work pauses until recording is released
+partial-camera-take: 9 passed, 0 failed; no capture/NVENC hardware opened
+PASS 1000 dual seeks floor independent 30/60 fps sources at one timeline time
+PASS internal gaps and shorter camera tails preserve the other source time
+PASS ASIO audible cursor drives both lanes through one transport and underrun recovery
+PASS revision handoff waits for callback acknowledgement and replaces video and audio length
+PASS 10000 clips and long Korean names use visible intervals and logical DPI layout
+PASS actual UI components lay out and paint 10000 clips at 960x640 without a native window
+dual-playback: 6 passed, 0 failed; no capture/NVENC hardware opened
+PASS LRU retains adjacent GOP targets with hard frame and byte limits
+PASS in-flight old decoder result cannot overwrite newest seek or Present receipt
+PASS resident reverse seek publishes without waiting for an old GPU fence
+PASS file generation handoff rejects old work and remaps both new sources
+PASS 1000 unacknowledged seeks coalesce without filling the ASIO command queue
+PASS continuous reverse drag dispatches approximately 15 Hz and release is exact
+PASS thumbnail strips publish incrementally and evict under a bounded RGB budget
+PASS late thumbnail completion is discarded and recording suspends derived requests
+seek-generation: 8 passed, 0 failed; no capture/NVENC hardware opened
+PASS Updater rejects every live/unsaved activity and both directions of record/export
+PASS Concurrent updater reads only atomic snapshots
+PASS Dubbing ASIO output owns an independent updater/export blocker until callback detach
+PASS Application shutdown waits for export acknowledgement and owner commit before releasing devices
+PASS Audio device failure travels with the completion and never blocks camera configuration
+PASS Unset ASIO device selects the first driver on this PC with first-run defaults
+PASS First-run audio defaults apply once per device choice, mono on a single output, explicit none kept
+PASS All Korean failure banners have the specified meaning
+PASS GPU device reset joins old presenter, retries on cooldown, preserves capture
+PASS Closing an armed take never waits for a callback that may not arrive
+PASS Shutdown waits for durable media before join/device release; late callbacks are ignored
+PASS Late take finalization cannot publish into a replaced project
+PASS Production lifecycle + recovery: project-close
+PASS Production lifecycle + recovery: asio-rate-change
+PASS Production lifecycle + recovery: disk-full
+PASS Production lifecycle + recovery: writer-stall
+LifecycleTests: 16 passed, 0 failed; no capture/NVENC hardware opened
+RecorderTests: all suites passed

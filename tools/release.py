@@ -31,6 +31,20 @@ from xml.sax.saxutils import escape
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 
 
+def recorder_identity():
+    text = (ROOT / "recorder/src/app/ProductIdentity.h").read_text(encoding="utf-8")
+    return dict(re.findall(r'^#define RECORDER_([A-Z_]+) "([^"\r\n]*)"', text, re.M))
+
+
+def recorder_app():
+    identity = recorder_identity()
+    return dict(name=identity["DISPLAY_NAME"], exe=identity["PACKAGE_STEM"] + ".exe", iss="Recorder.iss",
+                target="Recorder", fixed=identity["PACKAGE_STEM"] + "-Setup.exe",
+                notes_dir="docs/release-notes/recorder", site_dir=identity["SITE_DIR"],
+                tag_prefix=identity["TAG_PREFIX"], repo=identity["RELEASE_REPO"], remote=identity["RELEASE_REMOTE"],
+                appcast=identity["APPCAST_URL"], publication_confirmed=identity["PUBLICATION_CONFIRMED"] == "1")
+
+
 APPS = {
     "enqueue": dict(name="Enqueue", exe="Enqueue.exe", iss="Enqueue.iss", artefacts="Enqueue_artefacts", target="Enqueue",
                     fixed="Enqueue-Setup.exe", notes_dir="docs/release-notes", site_dir="", tag_prefix="v",
@@ -38,12 +52,15 @@ APPS = {
     "livemix": dict(name="LiveMix", exe="LiveMix.exe", iss="LiveMix.iss", artefacts="LiveMix_artefacts", target="LiveMix",
                     fixed="LiveMix-Setup.exe", notes_dir="docs/release-notes/livemix", site_dir="livemix", tag_prefix="livemix-v",
                     repo="dnakrhs2-crypto/livemix", remote="livemix"),
+    "recorder": recorder_app(),
 }
 SITE_REPO = "dnakrhs2-crypto/enqueue"   # 곰튀김.com lives on this repo's gh-pages, both apps included
 APP = APPS["enqueue"]
 
 
 def read_version():
+    if APP.get("target") == "Recorder":
+        return recorder_identity()["VERSION"]
     text = (ROOT / "CMakeLists.txt").read_text(encoding="utf-8")
     if APP["name"] == "LiveMix":
         match = re.search(r'set\(LIVEMIX_VERSION\s+"([0-9]+\.[0-9]+\.[0-9]+)"', text)
@@ -268,7 +285,8 @@ def deploy_site(repo, latest):
     global REPO_FOR_SITE
     REPO_FOR_SITE = repo
     latest_by_app = {}
-    for key, app in APPS.items():
+    site_apps = {key: app for key, app in APPS.items() if app.get("publication_confirmed", True)}
+    for key, app in site_apps.items():
         if latest is not None and app is APP:
             latest_by_app[key] = latest
         else:
@@ -284,9 +302,11 @@ def deploy_site(repo, latest):
         for item in pages.iterdir():
             if item.name != ".git":
                 shutil.rmtree(item) if item.is_dir() else item.unlink()
-        shutil.copytree(site_src, pages, dirs_exist_ok=True)
+        unpublished = {app["site_dir"] for app in APPS.values() if not app.get("publication_confirmed", True)}
+        shutil.copytree(site_src, pages, dirs_exist_ok=True,
+                        ignore=lambda directory, names: unpublished.intersection(names) if pathlib.Path(directory) == site_src else set())
         (pages / ".nojekyll").write_text("", encoding="utf-8")
-        for key, app in APPS.items():
+        for key, app in site_apps.items():
             info = latest_by_app.get(key)
             page_dir = pages / app["site_dir"] if app["site_dir"] else pages
             page_dir.mkdir(parents=True, exist_ok=True)
@@ -324,7 +344,7 @@ def latest_from_github(gh, repo, app=None, allow_missing=False):
     if version.startswith(app["tag_prefix"]):
         version = version[len(app["tag_prefix"]):]
     version = version.lstrip("v")
-    installer = next((a for a in info["assets"] if re.match(r"(Enqueue|GoCue|LiveMix)-Setup-[0-9.]+\.exe$", a["name"])), None)
+    installer = next((a for a in info["assets"] if re.match(r"(Enqueue|GoCue|LiveMix|Recorder|Tally)-Setup-[0-9.]+\.exe$", a["name"])), None)
     if installer is None:
         sys.exit("the latest release has no %s-Setup-x.y.z.exe asset" % app["name"])
     if "/releases/download/" not in installer["url"]:
@@ -334,6 +354,319 @@ def latest_from_github(gh, repo, app=None, allow_missing=False):
     latest_url = ("https://github.com/%s/releases/latest/download/%s" % (repo, fixed["name"])) if fixed else installer["url"]
     return {"version": version, "tag": info["tagName"], "url": installer["url"], "size": installer["size"],
             "date": info["publishedAt"], "latest_url": latest_url, "feedback": read_feedback_link()}
+
+
+def package_legacy(args, version):
+    """Opt-in local mode; the existing legacy release path below is unchanged."""
+    build(args.preset, False)
+    source = ROOT / "build/vs2022" / APP["artefacts"] / "Release"
+    for name in (APP["exe"], "WinSparkle.dll"):
+        if not (source / name).is_file():
+            sys.exit("missing package input: " + str(source / name))
+    output = ROOT / "out/release" / args.app
+    output.mkdir(parents=True, exist_ok=True)
+    output = pathlib.Path(tempfile.mkdtemp(prefix=version + "-", dir=output))
+    iscc, tool = find_iscc(), find_winsparkle_tool(args.winsparkle_dir)
+    if not iscc or not tool or not pathlib.Path(args.key).is_file():
+        sys.exit("local packaging needs ISCC, WinSparkle and --key")
+    if args.app == "enqueue":
+        for name in ("yt-dlp.exe", "qjs.exe", "lame.exe", "libsndfile-1.dll", "LICENSES.txt"):
+            if not (pathlib.Path(args.tools_dir) / name).is_file():
+                sys.exit("missing Enqueue tools: " + name)
+    installer = make_installer(iscc, version, source, output, args.tools_dir if args.app == "enqueue" else "")
+    signature = sign(tool, args.key, installer)
+    notes_path = pathlib.Path(args.notes) if args.notes else ROOT / APP["notes_dir"] / (version + ".html")
+    notes = notes_path.read_text(encoding="utf-8") if notes_path.is_file() else "<p>%s %s</p>" % (APP["name"], version)
+    (output / "notes.html").write_text(wrap_notes_for_feed(notes), encoding="utf-8")
+    url, _ = write_appcast(output / "appcast.xml", args.repo, version, installer, signature, wrap_notes_for_feed(notes))
+    (output / "latest.json").write_text(json.dumps({"version": version, "tag": APP["tag_prefix"] + version,
+        "url": url, "size": installer.stat().st_size, "publishable": False}, indent=2) + "\n", encoding="utf-8")
+    print("local package (not published):", output)
+
+
+def recorder_run(cmd, cwd=ROOT, capture=False):
+    # Windows sessions can contain both Path and PATH. An explicit environment
+    # avoids MSBuild's duplicate-key error without changing the legacy runner.
+    print("+", " ".join(str(c) for c in cmd), flush=True)
+    environment = dict(os.environ)
+    environment["MSBUILDDISABLENODEREUSE"] = "1"
+    result = subprocess.run([str(c) for c in cmd], cwd=str(cwd), check=True, env=environment,
+                            capture_output=capture, text=True, encoding="utf-8", errors="replace")
+    return result.stdout if capture else ""
+
+
+def recorder_build(args, public_key):
+    if not re.fullmatch(r"[A-Za-z0-9_-]+", args.preset):
+        sys.exit("Recorder preset must be a simple preset name")
+    cmake = os.environ.get("CMAKE", "") or shutil.which("cmake")
+    if not cmake:
+        sys.exit("cmake not found (add CMake/bin to PATH or set CMAKE to cmake.exe)")
+    ctest = pathlib.Path(cmake).with_name("ctest.exe" if os.name == "nt" else "ctest")
+    build_dir = ROOT / "out/recorder-package-build" / args.preset
+    # A skipped/removed target must not reuse a previous configure's description.
+    for stale in build_dir.rglob("recorder-package-Release.json"):
+        if not stale.resolve().is_relative_to(build_dir.resolve()):
+            sys.exit("packaging description escapes the isolated build tree")
+        stale.unlink()
+    recorder_run([cmake, "--preset", args.preset, "-B", build_dir, "-DGOCUE_BUILD_RECORDER=ON",
+                  "-DRECORDER_UPDATE_PUBLIC_KEY=" + public_key])
+    # ALL and all registered CTests pick up later merged Recorder/probe/test targets.
+    recorder_run([cmake, "--build", build_dir, "--config", "Release", "--parallel",
+                  os.environ.get("CMAKE_BUILD_PARALLEL_LEVEL", "4")])
+    recorder_run([ctest, "--test-dir", build_dir, "-C", "Release", "--output-on-failure", "--no-tests=error"])
+    recorder_run([sys.executable, "-B", "-m", "unittest", "discover", "-s", "tools/recorder/tests"])
+    descriptions = list(build_dir.rglob("recorder-package-Release.json"))
+    if len(descriptions) != 1:
+        sys.exit("Recorder packaging description missing/ambiguous: configure must enable the Recorder target")
+    description = json.loads(descriptions[0].read_text(encoding="utf-8"))
+    executable = pathlib.Path(description["exe"])
+    if not executable.resolve().is_relative_to(build_dir.resolve()) or not executable.is_file():
+        sys.exit("CMake Recorder executable is missing or outside the isolated build tree")
+    if description["public_key"] != public_key:
+        sys.exit("CMake embedded Recorder public key differs from signing key")
+    return description
+
+
+def stage_recorder(description, output, identity):
+    from recorder.audit_ffmpeg import audit, dependency_closure, pe_imports, sha256, write_json
+    from recorder.validate_release import REQUIRED_NOTICES, file_record
+    lock_path = ROOT / "recorder/third_party/ffmpeg.lock.json"
+    lock = json.loads(lock_path.read_text(encoding="utf-8"))
+    audited = audit(description["ffmpeg_root"], lock, lock["runtime"]["version"])
+    if audited["status"] != "PASS":
+        sys.exit("Recorder FFmpeg audit failed: " + str(audited["errors"]))
+    declared = pathlib.Path(description["exe"])
+    if declared.is_symlink() or (hasattr(declared, "is_junction") and declared.is_junction()):
+        sys.exit("declared Recorder executable is a symlink/junction: " + str(declared))
+    executable = declared.resolve()
+    source = declared.parent
+    payload = output / "payload"
+    payload.mkdir()
+    # Copy this target's runtime directory, never a guessed build/artefacts path.
+    # Future resources are included; linker/debug intermediates are not runtime assets.
+    excluded = {".pdb", ".ilk", ".lib", ".exp", ".obj", ".iobj", ".ipdb", ".log", ".tlog"}
+    for path in source.rglob("*"):
+        if path.is_symlink() or (hasattr(path, "is_junction") and path.is_junction()):
+            sys.exit("runtime directory contains a symlink/junction: " + str(path))
+        if path.is_file() and path.suffix.lower() not in excluded:
+            # The reused package build directory keeps executables from earlier configurations (Recorder.exe after
+            # the Tally rename): only the executable CMake declared for this target is a runtime asset.
+            if path.suffix.lower() == ".exe" and path.resolve() != executable:
+                print("staging   : skipping stale executable " + path.name)
+                continue
+            destination = payload / path.relative_to(source)
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(path, destination)
+    for relative, record in lock["files"]["dlls"].items():
+        path = payload / pathlib.Path(relative).name
+        if not path.is_file() or sha256(path) != record["sha256"]:
+            sys.exit("built FFmpeg DLL missing/differs from lock: " + relative)
+    if not (payload / "WinSparkle.dll").is_file():
+        sys.exit("Recorder packaging requires WinSparkle.dll (configure WINSPARKLE_DIR)")
+    if sha256(payload / "WinSparkle.dll") != sha256(description["winsparkle_dll"]):
+        sys.exit("built WinSparkle DLL differs from the configured SDK")
+    images = {p.relative_to(payload).as_posix(): pe_imports(p) for p in payload.rglob("*")
+              if p.is_file() and p.suffix.lower() in (".exe", ".dll")}
+    closure = dependency_closure(images)
+    if closure["missing"]:
+        sys.exit("missing runtime dependency DLLs: " + str(closure["missing"]))
+    shutil.copytree(ROOT / "recorder/licenses", payload / "licenses")
+    for name in REQUIRED_NOTICES:
+        if not (payload / "licenses" / name).is_file():
+            sys.exit("missing required notice: " + name)
+    # Bind the WinSparkle notices to the actual SDK used by the generated target.
+    for original, copied in (("COPYING", "WinSparkle-COPYING.txt"), ("COPYING.expat", "WinSparkle-COPYING.expat.txt")):
+        if (pathlib.Path(description["winsparkle_dir"]) / original).read_bytes() != (payload / "licenses" / copied).read_bytes():
+            sys.exit("WinSparkle notice differs from configured SDK: " + original)
+    source_url = identity["RELEASE_BASE_URL"] + identity["TAG_PREFIX"] + identity["VERSION"] + "/" + identity["SOURCES_STEM"] + "-" + identity["VERSION"] + ".zip"
+    write_json(payload / "release-links.json", {"version": identity["VERSION"], "source_url": source_url,
+        "publication_confirmed": identity["PUBLICATION_CONFIRMED"] == "1"})
+    shutil.copyfile(lock_path, output / "ffmpeg.lock.json")
+    write_json(output / "ffmpeg-audit.json", audited)
+    return payload, [file_record(p, output) for p in sorted(payload.rglob("*")) if p.is_file()]
+
+
+def write_recorder_installer_identity(path, identity):
+    values = {"AppName": identity["DISPLAY_NAME"], "AppExe": identity["PACKAGE_STEM"] + ".exe",
+              "AppPublisher": identity["COMPANY"], "InstallerAppId": "{" + identity["APP_ID"],
+              "SettingsFolder": identity["SETTINGS_FOLDER"], "ProjectExtension": identity["PROJECT_EXTENSION"],
+              "FileType": identity["FILE_TYPE"], "IdentityVersion": identity["VERSION"], "PackageStem": identity["PACKAGE_STEM"]}
+    if any('"' in value or "\n" in value or "\r" in value for value in values.values()):
+        sys.exit("invalid Inno ProductIdentity value")
+    path.write_text("\n".join('#define %s "%s"' % (key, value) for key, value in values.items()) + "\n", encoding="utf-8-sig")
+
+
+def write_recorder_metadata(output, identity, installer, signature, notes_path, public_key, source_archive=None):
+    from recorder.audit_ffmpeg import write_json
+    from recorder.validate_release import file_record
+    version = identity["VERSION"]
+    notes = wrap_notes_for_feed(notes_path.read_text(encoding="utf-8"))
+    (output / "notes.html").write_text(notes, encoding="utf-8")
+    appcast = output / "appcast.xml"
+    # Keep write_appcast's legacy output unchanged; adapt only this candidate file.
+    old_url, old_feed = write_appcast(appcast, identity["RELEASE_REPO"], version, installer, signature, notes)
+    url = identity["RELEASE_BASE_URL"] + identity["TAG_PREFIX"] + version + "/" + installer.name
+    appcast.write_text(appcast.read_text(encoding="utf-8").replace(escape(old_url), escape(url))
+                      .replace(escape(old_feed), escape(identity["APPCAST_URL"])), encoding="utf-8")
+    latest = {"version": version, "tag": identity["TAG_PREFIX"] + version, "url": url,
+              "size": installer.stat().st_size, "date": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+              "publishable": False, "source_url": identity["RELEASE_BASE_URL"] + identity["TAG_PREFIX"] + version + "/"
+                + identity["SOURCES_STEM"] + "-" + version + ".zip", "notices_url": "licenses/NOTICE.txt"}
+    write_json(output / "latest.json", latest)
+    (output / "public-key.txt").write_text(public_key + "\n", encoding="ascii")
+    # Byte-preserved legacy pages; only the new Recorder subtree gets generated files.
+    shutil.copytree(ROOT / "site", output / "site")
+    page_dir = output / "site" / identity["SITE_DIR"]
+    page_dir.mkdir(parents=True, exist_ok=True)
+    write_json(page_dir / "latest.json", latest)
+    shutil.copyfile(output / "notes.html", page_dir / "notes.html")
+    shutil.copytree(output / "payload/licenses", page_dir / "licenses", dirs_exist_ok=True)
+    manifest = {"schema_version": 1, "app": "recorder", "version": version, "identity": identity,
+                "installer": installer.name, "executable": "payload/" + identity["PACKAGE_STEM"] + ".exe",
+                "embedded_public_key": public_key, "source_archive": source_archive,
+                "publication_mode": "package-only", "files": []}
+    manifest["files"] = [file_record(path, output) for path in sorted(output.rglob("*"))
+                         if path.is_file() and path not in (output / "manifest.json", output / "validation.json")]
+    write_json(output / "manifest.json", manifest)
+    return manifest
+
+
+def package_recorder(args):
+    from recorder.audit_ffmpeg import write_json
+    from recorder.validate_release import file_record, validate_bundle, validate_sources
+    identity = recorder_identity()
+    iscc = find_iscc()
+    # Configure-preset WinSparkle path is used later; preflight needs an explicit
+    # tool path or its environment fallback, without reading any private key itself.
+    tool = find_winsparkle_tool(args.winsparkle_dir)
+    if not tool:
+        # Query local preset inheritance without configuring the user's build tree.
+        presets = {}
+        for name in ("CMakePresets.json", "CMakeUserPresets.json"):
+            file = ROOT / name
+            if file.is_file():
+                presets.update({p["name"]: p for p in json.loads(file.read_text(encoding="utf-8"))["configurePresets"]})
+        def sdk_path(name, seen=None):
+            seen = set() if seen is None else seen
+            if name in seen:
+                return ""
+            seen.add(name)
+            preset = presets.get(name, {})
+            value = preset.get("cacheVariables", {}).get("WINSPARKLE_DIR", "")
+            if value:
+                return value.get("value", "") if isinstance(value, dict) else value
+            parents = preset.get("inherits", [])
+            for parent in ([parents] if isinstance(parents, str) else parents):
+                value = sdk_path(parent, seen)
+                if value:
+                    return value
+            return ""
+        tool = find_winsparkle_tool(sdk_path(args.preset))
+    if not iscc or not tool:
+        sys.exit("Recorder package-only needs ISCC and WinSparkle (ISCC / --winsparkle-dir / WINSPARKLE_DIR)")
+    if not args.key or not pathlib.Path(args.key).is_file():
+        sys.exit("EdDSA private key file not found (--key / GOCUE_EDDSA_PRIVATE_KEY_FILE); no package was built")
+    public_output = recorder_run([tool, "public-key", "--private-key-file", args.key], capture=True)
+    keys = re.findall(r"(?<![A-Za-z0-9+/])[A-Za-z0-9+/]{43}=(?![A-Za-z0-9+/=])", public_output)
+    if len(set(keys)) != 1:
+        sys.exit("could not read exactly one EdDSA public key from winsparkle-tool")
+    public_key = keys[0]
+    notes = pathlib.Path(args.notes) if args.notes else ROOT / APP["notes_dir"] / (identity["VERSION"] + ".html")
+    if not notes.is_file():
+        sys.exit("release notes missing: " + str(notes))
+    if args.source_bundle:
+        validate_sources(pathlib.Path(args.source_bundle))
+    description = recorder_build(args, public_key)
+    parent = ROOT / "out/release/recorder"
+    parent.mkdir(parents=True, exist_ok=True)
+    output = pathlib.Path(tempfile.mkdtemp(prefix=identity["VERSION"] + "-", dir=parent))
+    payload, payload_before = stage_recorder(description, output, identity)
+    identity_file = output / "ProductIdentity.iss"
+    write_recorder_installer_identity(identity_file, identity)
+    recorder_run([iscc, "/Q", "/DIdentityFile=" + str(identity_file), "/DSourceDir=" + str(payload),
+                  "/DOutputDir=" + str(output), "/DAppVersion=" + identity["VERSION"], str(ROOT / "installer/Recorder.iss")])
+    installer = output / (identity["PACKAGE_STEM"] + "-Setup-" + identity["VERSION"] + ".exe")
+    if not installer.is_file():
+        sys.exit("Recorder installer was not produced: " + str(installer))
+    payload_after = [file_record(p, output) for p in sorted(payload.rglob("*")) if p.is_file()]
+    if payload_after != payload_before:
+        sys.exit("Recorder payload changed while compiling the installer")
+    signature = sign(tool, args.key, installer)
+    source_name = None
+    if args.source_bundle:
+        source_name = identity["SOURCES_STEM"] + "-" + identity["VERSION"] + ".zip"
+        shutil.copyfile(args.source_bundle, output / source_name)
+    write_recorder_metadata(output, identity, installer, signature, notes, public_key, source_name)
+    report = validate_bundle(output, tool, public_key)
+    write_json(output / "validation.json", report)
+    if report["errors"]:
+        sys.exit("Recorder candidate validation failed: " + str(report["errors"]))
+    print("local Recorder candidate:", output)
+    print("technical checks:", report["technical_status"], "; release gates:", report["status"])
+    print("unresolved:", ", ".join(report["blockers"]))
+    if not getattr(args, "publish", False):
+        print("package-only: no GitHub, site or tag changes; this does not approve publication")
+    return {"output": output, "installer": installer, "appcast": output / "appcast.xml", "notes": output / "notes.html",
+            "version": identity["VERSION"], "tag": identity["TAG_PREFIX"] + identity["VERSION"],
+            "url": identity["RELEASE_BASE_URL"] + identity["TAG_PREFIX"] + identity["VERSION"] + "/" + installer.name,
+            "report": report, "source": (output / source_name) if source_name else None,
+            "sources_name": identity["SOURCES_STEM"] + "-" + identity["VERSION"] + ".zip"}
+
+
+def recorder_tag_preflight(tag_name):
+    """Same checks the legacy path runs before its long build: an existing tag must be annotated and on HEAD."""
+    head = run(["git", "rev-parse", "HEAD"], cwd=ROOT, capture=True).strip()
+    if run(["git", "tag", "--list", tag_name], cwd=ROOT, capture=True).strip():
+        tagged = run(["git", "rev-list", "-n", "1", tag_name], cwd=ROOT, capture=True).strip()
+        if tagged != head:
+            sys.exit("tag %s already exists on another commit (%s, HEAD is %s) - bump RECORDER_VERSION" % (tag_name, tagged[:10], head[:10]))
+        if run(["git", "cat-file", "-t", "refs/tags/" + tag_name], cwd=ROOT, capture=True).strip() != "tag":
+            sys.exit("tag %s is a lightweight tag - delete it and let the script create the annotated one" % tag_name)
+    ref = os.environ.get("GITHUB_REF_NAME", "")
+    if ref and ref != tag_name:
+        sys.exit("git tag %s does not match the Recorder version (expected %s)" % (ref, tag_name))
+
+
+def publish_recorder(args, candidate):
+    """Same shape as the legacy publish: annotated tag at HEAD, push main + tag to the app remote (a mirror of this
+    repository), GitHub release with installer + appcast (+ fixed-name installer), then the website."""
+    tag_name = candidate["tag"]
+    report = candidate.get("report") or {}
+    if report.get("status") != "PASS":
+        blockers = ", ".join(report.get("blockers", []))
+        if not getattr(args, "accept_blocked_gates", False):
+            sys.exit("Recorder candidate passed the technical checks but release gates are %s (%s). "
+                     "Publishing needs the release owner's decision: re-run with --accept-blocked-gates." % (report.get("status"), blockers))
+        print("publishing with unresolved release gates (accepted by the release owner):", blockers)
+    # the About dialog links the same-release source archive: a validated --source-bundle, otherwise this commit's
+    # snapshot; prepared before anything is tagged or pushed
+    source = candidate.get("source")
+    if source is None:
+        source = candidate["output"] / candidate["sources_name"]
+        run(["git", "archive", "--format=zip", "-o", str(source), "HEAD"], cwd=ROOT)
+    head = run(["git", "rev-parse", "HEAD"], cwd=ROOT, capture=True).strip()
+    if run(["git", "tag", "--list", tag_name], cwd=ROOT, capture=True).strip():
+        tagged = run(["git", "rev-list", "-n", "1", tag_name], cwd=ROOT, capture=True).strip()
+        if tagged != head:
+            sys.exit("tag %s is on %s, HEAD is %s - bump RECORDER_VERSION" % (tag_name, tagged[:10], head[:10]))
+    else:
+        run(["git", "tag", "-a", tag_name, "-m", APP["name"] + " " + candidate["version"]], cwd=ROOT)
+    run(["git", "push", APP["remote"], "HEAD:main"], cwd=ROOT)
+    run(["git", "push", APP["remote"], tag_name], cwd=ROOT)
+    gh = find_gh()
+    run([gh, "release", "create", tag_name, str(candidate["installer"]), str(candidate["appcast"]), str(source),
+         "--repo", APP["repo"], "--title", APP["name"] + " " + candidate["version"], "--verify-tag",
+         "--notes-file", str(candidate["notes"])])
+    print("published :", "https://github.com/%s/releases/tag/%s" % (APP["repo"], tag_name))
+    fixed = candidate["output"] / APP["fixed"]
+    shutil.copyfile(candidate["installer"], fixed)
+    run([gh, "release", "upload", tag_name, str(fixed), "--repo", APP["repo"], "--clobber"])
+    if not args.skip_site:
+        deploy_site(SITE_REPO, {
+            "version": candidate["version"], "tag": tag_name, "url": candidate["url"], "size": candidate["installer"].stat().st_size,
+            "date": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "latest_url": "https://github.com/%s/releases/latest/download/%s" % (APP["repo"], APP["fixed"]),
+            "feedback": read_feedback_link()})
 
 
 def main():
@@ -351,10 +684,39 @@ def main():
     parser.add_argument("--publish", action="store_true", help="create the GitHub release with gh and upload installer + appcast")
     parser.add_argument("--site-only", action="store_true", help="only redeploy the website from the latest GitHub release")
     parser.add_argument("--skip-site", action="store_true", help="publish without touching the website")
+    parser.add_argument("--package-only", action="store_true", help="build/test/sign a local candidate; never change GitHub, site or tags")
+    parser.add_argument("--source-bundle", default="", help="Recorder exact-source ZIP with source-manifest.json (optional for a blocked local candidate)")
     parser.add_argument("--allow-dirty", action="store_true", help="release from a working tree with uncommitted changes (not for real releases)")
+    parser.add_argument("--accept-blocked-gates", action="store_true", help="Recorder --publish: publish a technically PASS candidate whose release gates are still BLOCKED (release owner decision)")
     args = parser.parse_args()
     global APP
     APP = APPS[args.app]
+
+    if args.package_only and (args.publish or args.site_only or args.skip_build or args.skip_tests):
+        parser.error("--package-only requires build/tests and cannot be combined with --publish or --site-only")
+    if args.app == "recorder":
+        # No recorder operation may fall through to the legacy publishing pipeline.
+        # A CLI --repo override must not turn a provisional identity into a public release.
+        if (args.publish or args.site_only) and not APP.get("publication_confirmed", False):
+            sys.exit("Recorder publication is blocked: ProductIdentity/URLs require release-owner confirmation (RECORDER_PUBLICATION_CONFIRMED). Use --package-only.")
+        if args.repo and args.repo != APP["repo"]:
+            parser.error("Recorder --repo must match ProductIdentity.h; CLI overrides cannot change release identity")
+        if args.site_only:
+            deploy_site(SITE_REPO, None)
+            return
+        if args.package_only:
+            package_recorder(args)
+            return
+        if not args.publish:
+            parser.error("Recorder requires --package-only or --publish")
+        if args.allow_dirty or args.skip_build or args.skip_tests:
+            sys.exit("--publish builds and tests what is committed: --allow-dirty / --skip-build / --skip-tests are for local test builds only")
+        dirty = run(["git", "status", "--porcelain"], cwd=ROOT, capture=True)
+        if dirty.strip():
+            sys.exit("the working tree has uncommitted changes - commit first:\n" + dirty)
+        recorder_tag_preflight(APP["tag_prefix"] + recorder_identity()["VERSION"])
+        publish_recorder(args, package_recorder(args))
+        return
 
     if not args.repo:
         # the env fallback belongs to Enqueue: with --app livemix it would push to one repo and publish in another
@@ -370,6 +732,10 @@ def main():
     # Single source of truth: the exe's VERSIONINFO, the installer name, the appcast and the
     # GitHub tag must all agree, otherwise the published appcast points at a 404.
     version = read_version()
+
+    if args.package_only:
+        package_legacy(args, version)
+        return
 
     # what ships must be what is committed: a stray local edit would be in the installer but in no git history
     if not args.allow_dirty:

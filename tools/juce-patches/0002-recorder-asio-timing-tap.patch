@@ -1,0 +1,309 @@
+From c3b73fc3f1175c06a637ea7d96b1f1a2bfa59991 Mon Sep 17 00:00:00 2001
+From: Recorder <recorder@localhost>
+Date: Wed, 9 Sep 2026 15:56:34 +0900
+Subject: [PATCH] Recorder patch: ASIO timing/native tap hook (off by default)
+
+---
+ .../native/juce_ASIO_windows.cpp              | 195 ++++++++++++++++++
+ 1 file changed, 195 insertions(+)
+
+diff --git a/modules/juce_audio_devices/native/juce_ASIO_windows.cpp b/modules/juce_audio_devices/native/juce_ASIO_windows.cpp
+index 456d588..244b733 100644
+--- a/modules/juce_audio_devices/native/juce_ASIO_windows.cpp
++++ b/modules/juce_audio_devices/native/juce_ASIO_windows.cpp
+@@ -32,8 +32,38 @@
+   ==============================================================================
+ */
+ 
++#if defined (JUCE_RECORDER_ASIO_TAP) && JUCE_RECORDER_ASIO_TAP
++#include <audio/AsioTapAbi.h>
++#endif
++
+ namespace juce
+ {
++#if defined (JUCE_RECORDER_ASIO_TAP) && JUCE_RECORDER_ASIO_TAP
++namespace RecorderAsioTap
++{
++    template <typename Value> static std::uint64_t raw64 (Value value) noexcept
++    {
++       #if NATIVE_INT64
++        return static_cast<std::uint64_t> (value);
++       #else
++        return (static_cast<std::uint64_t> (value.hi) << 32) | static_cast<std::uint32_t> (value.lo);
++       #endif
++    }
++    static std::int64_t position (ASIOSamples value) noexcept
++    {
++        auto bits = raw64 (value);
++        std::int64_t result;
++        memcpy (&result, &bits, sizeof (result));
++        return result;
++    }
++    static std::int64_t qpc() noexcept
++    {
++        LARGE_INTEGER value {};
++        QueryPerformanceCounter (&value);
++        return value.QuadPart;
++    }
++}
++#endif
+ 
+ #undef WINDOWS
+ 
+@@ -461,6 +491,9 @@ public:
+ 
+         if (asioObject->future (kAsioCanReportOverload, nullptr) != ASE_OK)
+             xruns = -1;
++#if defined (JUCE_RECORDER_ASIO_TAP) && JUCE_RECORDER_ASIO_TAP
++        recorderOverloadSupported = xruns >= 0;
++#endif
+ 
+         inBuffers.calloc (totalNumInputChans + 8);
+         outBuffers.calloc (totalNumOutputChans + 8);
+@@ -507,6 +540,10 @@ public:
+             buffersCreated = true;
+             ioBufferSpace.calloc (totalBuffers * currentBlockSizeSamples + 32);
+ 
++#if defined (JUCE_RECORDER_ASIO_TAP) && JUCE_RECORDER_ASIO_TAP
++            for (auto& views : recorderInputViews)
++                views.calloc (numActiveInputChans);
++#endif
+             int n = 0;
+             Array<int> types;
+             currentBitDepth = 16;
+@@ -524,6 +561,12 @@ public:
+ 
+                     types.addIfNotAlreadyThere (channelInfo.type);
+                     inputFormat[n] = ASIOSampleFormat (channelInfo.type);
++#if defined (JUCE_RECORDER_ASIO_TAP) && JUCE_RECORDER_ASIO_TAP
++                    for (int bank = 0; bank != 2; ++bank)
++                        recorderInputViews[bank][n] = { bufferInfos[n].buffers[bank], n, i,
++                                                       gocue::recorder::nativeFormatForAsio (channelInfo.type) };
++#endif
++
+ 
+                     currentBitDepth = jmax (currentBitDepth, inputFormat[n].bitDepth);
+                     ++n;
+@@ -717,6 +760,9 @@ public:
+ 
+     void resetRequest() noexcept
+     {
++#if defined (JUCE_RECORDER_ASIO_TAP) && JUCE_RECORDER_ASIO_TAP
++        recorderResets.fetch_add (1, std::memory_order_relaxed);
++#endif
+         startTimer (500);
+     }
+ 
+@@ -746,6 +792,33 @@ public:
+         }
+     }
+ 
++#if defined (JUCE_RECORDER_ASIO_TAP) && JUCE_RECORDER_ASIO_TAP
++    // Control-thread measurement only. Not a bufferSwitch timestamp fallback.
++    gocue::recorder::AsioEventCounters recorderReadEvents() const noexcept
++    {
++        return { recorderXruns.load (std::memory_order_relaxed), recorderResets.load (std::memory_order_relaxed),
++                 recorderResyncs.load (std::memory_order_relaxed), recorderLatencyChanges.load (std::memory_order_relaxed),
++                 recorderOverloadSupported ? 1u : 0u };
++    }
++    bool recorderPollPosition (gocue::recorder::SamplePositionPoll& result) noexcept
++    {
++        result = {};
++        if (asioObject == nullptr || ! deviceIsOpen)
++            return false;
++        ASIOSamples position {};
++        ASIOTimeStamp time {};
++        result.qpcBefore = RecorderAsioTap::qpc();
++        result.asioError = asioObject->getSamplePosition (&position, &time);
++        result.qpcAfter = RecorderAsioTap::qpc();
++        result.valid = result.asioError == ASE_OK ? 1u : 0u;
++        if (result.valid != 0)
++        {
++            result.samplePosition = RecorderAsioTap::position (position);
++            result.systemTimeRaw = RecorderAsioTap::raw64 (time);
++        }
++        return true;
++    }
++#endif
+ private:
+     //==============================================================================
+     WeakReference<ASIOAudioIODeviceType> owner;
+@@ -784,6 +857,55 @@ private:
+     bool insideControlPanelModalLoop = false;
+     bool shouldUsePreferredSize = false;
+     int xruns = 0;
++#if defined (JUCE_RECORDER_ASIO_TAP) && JUCE_RECORDER_ASIO_TAP
++    HeapBlock<gocue::recorder::NativeInputView> recorderInputViews[2];
++    std::uint64_t recorderSequence = 0, recorderLatencyGeneration = 0;
++    std::atomic<std::uint64_t> recorderXruns { 0 }, recorderResets { 0 }, recorderResyncs { 0 }, recorderLatencyChanges { 0 };
++    bool recorderLatenciesKnown = false, recorderOverloadSupported = false;
++    static_assert (std::atomic<std::uint64_t>::is_always_lock_free);
++
++    void recorderTap (gocue::recorder::AsioTapFunction tap, const ASIOTime* time, long index, std::int64_t entryQpc) noexcept
++    {
++        if (! isStarted || ! buffersCreated || index < 0 || index > 1)
++            return;
++        using namespace gocue::recorder;
++        BlockStamp stamp {};
++        stamp.callbackQpc = entryQpc;
++        stamp.sequence = recorderSequence++;
++        stamp.bufferIndex = static_cast<std::int32_t> (index);
++        stamp.numSamples = static_cast<std::uint32_t> (currentBlockSizeSamples);
++        stamp.sampleRate = currentSampleRate;
++        stamp.inputLatencySamples = inputLatency;
++        stamp.outputLatencySamples = outputLatency;
++        stamp.xruns = recorderXruns.load (std::memory_order_relaxed);
++        stamp.resets = recorderResets.load (std::memory_order_relaxed);
++        stamp.resyncs = recorderResyncs.load (std::memory_order_relaxed);
++        stamp.latencyChanges = recorderLatencyChanges.load (std::memory_order_relaxed);
++        if (recorderLatenciesKnown && stamp.latencyChanges == recorderLatencyGeneration)
++            stamp.flags |= latenciesValid;
++        if (recorderOverloadSupported)
++            stamp.flags |= overloadReportingSupported;
++        if (time != nullptr)
++        {
++            stamp.flags |= timeInfoPresent;
++            const auto& info = time->timeInfo;
++            stamp.asioTimeInfoFlags = static_cast<std::uint32_t> (info.flags);
++            // Raw values preserved even when invalid; flags remain authoritative.
++            stamp.samplePosition = RecorderAsioTap::position (info.samplePosition);
++            stamp.systemTimeRaw = RecorderAsioTap::raw64 (info.systemTime);
++            if ((info.flags & kSamplePositionValid) != 0) stamp.flags |= samplePositionValid;
++            if ((info.flags & kSystemTimeValid) != 0) stamp.flags |= systemTimeValid;
++            if ((info.flags & kSampleRateValid) != 0)
++            {
++                stamp.flags |= sampleRateValid;
++                stamp.sampleRate = info.sampleRate;
++            }
++        }
++        // Views prepared in open(), valid until this callback returns. Existing
++        // JUCE callbackLock/float conversion/outputReady execute AFTER this tap.
++        tap (stamp, recorderInputViews[index].getData(), static_cast<std::uint32_t> (numActiveInputChans));
++    }
++#endif
+ 
+     //==============================================================================
+     static String convertASIOString (char* text, int length)
+@@ -1029,7 +1151,13 @@ private:
+     {
+         inputLatency = outputLatency = 0;
+ 
++#if defined (JUCE_RECORDER_ASIO_TAP) && JUCE_RECORDER_ASIO_TAP
++        recorderLatencyGeneration = recorderLatencyChanges.load (std::memory_order_relaxed);
++        recorderLatenciesKnown = asioObject->getLatencies (&inputLatency, &outputLatency) == ASE_OK;
++        if (! recorderLatenciesKnown)
++#else
+         if (asioObject->getLatencies (&inputLatency, &outputLatency) != 0)
++#endif
+             JUCE_ASIO_LOG ("getLatencies() failed");
+         else
+             JUCE_ASIO_LOG ("Latencies: in = " + String ((int) inputLatency) + ", out = " + String ((int) outputLatency));
+@@ -1385,6 +1513,10 @@ private:
+         switch (selector)
+         {
+             case kAsioSelectorSupported:
++#if defined (JUCE_RECORDER_ASIO_TAP) && JUCE_RECORDER_ASIO_TAP
++                if (value == kAsioSupportsTimeInfo)
++                    return 1;
++#endif
+                 if (value == kAsioResetRequest || value == kAsioEngineVersion || value == kAsioResyncRequest
+                      || value == kAsioLatenciesChanged || value == kAsioSupportsInputMonitor || value == kAsioOverload)
+                     return 1;
+@@ -1392,13 +1524,28 @@ private:
+ 
+             case kAsioBufferSizeChange:  JUCE_ASIO_LOG ("kAsioBufferSizeChange"); resetRequest(); return 1;
+             case kAsioResetRequest:      JUCE_ASIO_LOG ("kAsioResetRequest");     resetRequest(); return 1;
++#if defined (JUCE_RECORDER_ASIO_TAP) && JUCE_RECORDER_ASIO_TAP
++            case kAsioResyncRequest:
++                recorderResyncs.fetch_add (1, std::memory_order_relaxed); resetRequest(); return 1;
++            case kAsioLatenciesChanged:
++                recorderLatencyChanges.fetch_add (1, std::memory_order_relaxed); return 1;
++#else
+             case kAsioResyncRequest:     JUCE_ASIO_LOG ("kAsioResyncRequest");    resetRequest(); return 1;
+             case kAsioLatenciesChanged:  JUCE_ASIO_LOG ("kAsioLatenciesChanged"); return 1;
++#endif
+             case kAsioEngineVersion:     return 2;
+ 
+             case kAsioSupportsTimeInfo:
++#if defined (JUCE_RECORDER_ASIO_TAP) && JUCE_RECORDER_ASIO_TAP
++                return 1;
++#endif
+             case kAsioSupportsTimeCode:  return 0;
++#if defined (JUCE_RECORDER_ASIO_TAP) && JUCE_RECORDER_ASIO_TAP
++            case kAsioOverload:
++                recorderXruns.fetch_add (1, std::memory_order_relaxed); ++xruns; return 1;
++#else
+             case kAsioOverload:          ++xruns; return 1;
++#endif
+         }
+ 
+         return 0;
+@@ -1408,6 +1555,30 @@ private:
+     template <int deviceIndex>
+     struct ASIOCallbackFunctions
+     {
++#if defined (JUCE_RECORDER_ASIO_TAP) && JUCE_RECORDER_ASIO_TAP
++        static ASIOTime* JUCE_ASIOCALLBACK bufferSwitchTimeInfoCallback (ASIOTime* time, long index, long)
++        {
++            const auto tap = gocue::recorder::recorderAsioTap.load (std::memory_order_acquire);
++            const auto entryQpc = tap != nullptr ? RecorderAsioTap::qpc() : 0;
++            if (auto* d = currentASIODev[deviceIndex])
++            {
++                if (tap != nullptr) d->recorderTap (tap, time, index, entryQpc);
++                d->callback (index);
++            }
++            return {};
++        }
++
++        static void JUCE_ASIOCALLBACK bufferSwitchCallback (long index, long)
++        {
++            const auto tap = gocue::recorder::recorderAsioTap.load (std::memory_order_acquire);
++            const auto entryQpc = tap != nullptr ? RecorderAsioTap::qpc() : 0;
++            if (auto* d = currentASIODev[deviceIndex])
++            {
++                if (tap != nullptr) d->recorderTap (tap, nullptr, index, entryQpc);
++                d->callback (index);
++            }
++        }
++#else
+         static ASIOTime* JUCE_ASIOCALLBACK bufferSwitchTimeInfoCallback (ASIOTime*, long index, long)
+         {
+             if (auto* d = currentASIODev[deviceIndex])
+@@ -1422,6 +1593,7 @@ private:
+                 d->callback (index);
+         }
+ 
++#endif
+         static long JUCE_ASIOCALLBACK asioMessagesCallback (long selector, long value, void*, double*)
+         {
+             if (auto* d = currentASIODev[deviceIndex])
+@@ -1678,3 +1850,26 @@ void sendASIODeviceChangeToListeners (ASIOAudioIODeviceType* type)
+ }
+ 
+ } // namespace juce
++
++#if defined (JUCE_RECORDER_ASIO_TAP) && JUCE_RECORDER_ASIO_TAP
++bool gocue::recorder::pollAsioSamplePosition (juce::AudioIODevice& device, SamplePositionPoll& result) noexcept
++{
++    if (auto* asio = dynamic_cast<juce::ASIOAudioIODevice*> (&device))
++        return asio->recorderPollPosition (result);
++    result = {};
++    return false;
++}
++#endif
++
++#if defined (JUCE_RECORDER_ASIO_TAP) && JUCE_RECORDER_ASIO_TAP
++bool gocue::recorder::readAsioEventCounters (const juce::AudioIODevice& device, AsioEventCounters& result) noexcept
++{
++    if (auto* asio = dynamic_cast<const juce::ASIOAudioIODevice*> (&device))
++    {
++        result = asio->recorderReadEvents();
++        return true;
++    }
++    result = {};
++    return false;
++}
++#endif
+-- 
+2.53.0.windows.1
+

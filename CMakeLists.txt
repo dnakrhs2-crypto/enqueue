@@ -329,3 +329,7 @@ if(GOCUE_HAS_WINSPARKLE)
 endif()
 
 add_subdirectory(tests)
+option(GOCUE_BUILD_RECORDER "Build Recorder with the pinned FFmpeg SDK when available" ON)
+if(GOCUE_BUILD_RECORDER)
+    add_subdirectory(recorder)
+endif()
