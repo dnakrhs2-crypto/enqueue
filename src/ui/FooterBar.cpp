@@ -162,7 +162,8 @@ void FooterBar::paint (juce::Graphics& g)
     g.fillAll (Palette::panel);
     g.setColour (Palette::outline);
     g.drawLine (0.0f, 0.5f, (float) getWidth(), 0.5f);
-    g.drawRoundedRectangle (countLabel.getBounds().toFloat().reduced (0.5f), Palette::pillRadius, Palette::borderWidth);
+    const auto countBounds = countLabel.getBounds().toFloat().reduced (0.5f);
+    g.drawRoundedRectangle (countBounds, Palette::pillRadius (countBounds), Palette::borderWidth);
 }
 
 } // namespace gocue

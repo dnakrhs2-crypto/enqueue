@@ -15,6 +15,7 @@ AudioEngine::AudioEngine (int readAhead)
 
     mixBuffer.setSize (2, blockSize.load());
     playerBuffer.setSize (CuePlayer::maxChannels, blockSize.load());
+    loudness.prepare (sampleRate.load());
     players.reserve (maxPlayers);   // push_back under the audio lock must not reallocate (play() refuses beyond this)
 
     muteRuntime = std::make_unique<PatchRuntime>();
@@ -1780,7 +1781,8 @@ void AudioEngine::renderBlock (juce::AudioBuffer<float>& output, int numSamples,
 
         masterChain.process (mixBuffer, n);   // legacy master inserts on device outputs 1-2
         applyOutputGate (mixBuffer, n);       // the panic gate: closed = silence, whatever the chains still ring with
-        loudness.process (mixBuffer.getReadPointer (0), mixBuffer.getNumChannels() > 1 ? mixBuffer.getReadPointer (1) : nullptr, n);
+        if (output.getNumChannels() > 0)
+            loudness.process (mixBuffer.getReadPointer (0), output.getNumChannels() > 1 ? mixBuffer.getReadPointer (1) : nullptr, n);
 
         for (int ch = 0; ch < output.getNumChannels(); ++ch)
         {

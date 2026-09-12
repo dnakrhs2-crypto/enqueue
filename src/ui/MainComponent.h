@@ -226,6 +226,8 @@ private:
     OperationalKeys operationalKeys { *this };
     std::vector<juce::Component::SafePointer<juce::Component>> keyedWindows;   // top-level windows that carry operationalKeys
     int windowScanCountdown = 0;
+    juce::int64 lastLoudnessSubBlockCount = 0;
+    double lastLoudnessSubBlockMs = 0.0;
     bool escHeld = false;                  // the Esc mapping fires on the down edge only (a held key must not hard-cut)
     double lastPanicKeyMs = -1.0e9;        // when the main window last handled an Esc press (the hook skips that press)
     double lastQuietEscMs = -1.0e9;        // an Esc with nothing playing: a second one within 0.5 s hard-closes the gate

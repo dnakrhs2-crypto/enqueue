@@ -3219,10 +3219,19 @@ void MainComponent::timerCallback()
 {
     auto& meter = engine.getLoudnessMeter();
     meter.poll();
-    const auto momentary = meter.getStats().momentary();
+    const auto& stats = meter.getStats();
+    const auto subBlockCount = stats.getSubBlockCount();
+    const double nowMs = juce::Time::getMillisecondCounterHiRes();
+    if (subBlockCount > lastLoudnessSubBlockCount)
+        lastLoudnessSubBlockMs = nowMs;
+    lastLoudnessSubBlockCount = subBlockCount;
+    // A stopped device leaves the last readings in the meter. Hide them without clearing its average history.
+    const bool receivingAudio = subBlockCount > 0 && nowMs - lastLoudnessSubBlockMs < 1000.0;
+    const auto momentary = stats.momentary();
     const int windowSeconds = settings.getLufsAverageSeconds();
-    const auto average = meter.getStats().windowed (windowSeconds);
-    transport.setLoudness (momentary.valid, momentary.value, average.valid, average.value, windowSeconds);
+    const auto average = stats.windowed (windowSeconds);
+    transport.setLoudness (receivingAudio && momentary.valid, momentary.value,
+                           receivingAudio && average.valid, average.value, windowSeconds);
 
     if (--windowScanCountdown <= 0)
     {

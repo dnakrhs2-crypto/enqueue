@@ -102,7 +102,7 @@ namespace Palette
     const juce::Colour transparent { 0x00000000 };
     const juce::Colour highlightColour = accentInk.withAlpha (0.04f);
 
-    constexpr float cornerRadius = 12.0f, fieldRadius = 10.0f, pillRadius = 99.0f;
+    constexpr float cornerRadius = 12.0f, fieldRadius = 10.0f;
     constexpr float keyRadius = 3.0f, tickRadius = 4.0f, colourBarRadius = 2.0f;
     constexpr float borderWidth = 1.0f, selectionWidth = 2.0f;
     constexpr float rowBorderAlpha = 0.6f, disabledAlpha = 0.55f, keyAlpha = 0.7f;
@@ -118,8 +118,9 @@ namespace Palette
     constexpr int matrixCellWidth = 62, matrixHeaderWidth = 104, matrixGap = 1;
     constexpr int inspectorPageWidth = 860, inspectorBasicHeight = 232, inspectorPlotHeight = 250, inspectorFormHeight = 208;
     constexpr int inspectorControlWidth = 936, inspectorWideWidth = 1080;
-    constexpr int modeToggleWidth = 164, loudnessWidth = 220, weekdaySize = 26;
+    constexpr int modeToggleWidth = 164, loudnessWidth = 220, loudnessWindowWidth = 44, weekdaySize = 26;
     constexpr int dialogInset = 8, pluginSlotWidth = 216, pluginSlotHeight = 72, pluginSlotGap = 26;
+    constexpr int settingsWidth = 640, settingsHeight = 499;   // General's last row ends at y=475; leave 24px below it.
     constexpr int alertIconWidth = 80, alertIconSize = 36;
     constexpr float alertTitleSize = 18.0f, alertMessageSize = 14.0f, manualSize = 14.5f;
     constexpr float dividerChevronSize = 8.0f, dividerStroke = 1.0f;
@@ -269,15 +270,20 @@ namespace Palette
         drawTopHighlight (g, shape, bounds.toFloat().reduced (0.5f));
     }
 
+    inline float pillRadius (juce::Rectangle<float> bounds) noexcept
+    {
+        return juce::jmin (bounds.getWidth(), bounds.getHeight()) * 0.5f;
+    }
+
     inline void drawPill (juce::Graphics& g, juce::Rectangle<int> bounds, juce::Colour colour,
                           const juce::String& label, const juce::Font& labelFont, bool filled = false)
     {
         const auto r = bounds.toFloat().reduced (0.5f);
         g.setColour (colour);
         if (filled)
-            g.fillRoundedRectangle (r, pillRadius);
+            g.fillRoundedRectangle (r, pillRadius (r));
         else
-            g.drawRoundedRectangle (r, pillRadius, borderWidth);
+            g.drawRoundedRectangle (r, pillRadius (r), borderWidth);
         g.setColour (filled ? accentInk : colour);
         g.setFont (labelFont);
         g.drawText (label, bounds.reduced (7, 0), juce::Justification::centred, true);

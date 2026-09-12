@@ -366,7 +366,7 @@ namespace
             tabs.addTab (ko ("파일"), Palette::panel, new FilesTab (document), true);
             tabs.addTab (ko ("오디오"), Palette::panel, new AudioTab (document), true);
             addAndMakeVisible (tabs);
-            setSize (680, 520);
+            setSize (Palette::settingsWidth, Palette::settingsHeight);
         }
 
         void resized() override { tabs.setBounds (getLocalBounds().reduced (Palette::dialogInset)); }

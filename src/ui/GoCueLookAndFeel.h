@@ -169,7 +169,7 @@ public:
 
         const bool pill = button.getProperties().getWithDefault ("slatePill", false);
         const bool segment = button.getProperties().getWithDefault ("slateSegment", false);
-        const float radius = pill ? Palette::pillRadius : segment ? Palette::cornerRadius : Palette::fieldRadius;
+        const float radius = pill ? Palette::pillRadius (bounds) : segment ? Palette::cornerRadius : Palette::fieldRadius;
         juce::Path shape;
         shape.addRoundedRectangle (bounds.getX(), bounds.getY(), bounds.getWidth(), bounds.getHeight(), radius, radius,
                                    ! (flatOnLeft || flatOnTop), ! (flatOnRight || flatOnTop), ! (flatOnLeft || flatOnBottom), ! (flatOnRight || flatOnBottom));
@@ -260,7 +260,7 @@ public:
         const auto track = horizontal ? juce::Rectangle<float> ((float) x, centre - 2.0f, (float) width, 4.0f)
                                       : juce::Rectangle<float> (centre - 2.0f, (float) y, 4.0f, (float) height);
         g.setColour (Palette::outline);
-        g.fillRoundedRectangle (track, Palette::pillRadius);
+        g.fillRoundedRectangle (track, Palette::pillRadius (track));
         const auto thumb = horizontal ? juce::Point<float> (sliderPos, centre) : juce::Point<float> (centre, sliderPos);
         const float size = Palette::sliderThumbSize;
         g.setColour (Palette::accent.withMultipliedAlpha (slider.isEnabled() ? 1.0f : Palette::disabledAlpha));
@@ -343,7 +343,7 @@ public:
         const auto thumb = vertical ? juce::Rectangle<int> (x + (width - Palette::scrollBarWidth) / 2, thumbStart, Palette::scrollBarWidth, thumbSize)
                                     : juce::Rectangle<int> (thumbStart, y + (height - Palette::scrollBarWidth) / 2, thumbSize, Palette::scrollBarWidth);
         g.setColour (over || down ? Palette::text : Palette::muted);
-        g.fillRoundedRectangle (thumb.toFloat(), Palette::pillRadius);
+        g.fillRoundedRectangle (thumb.toFloat(), Palette::pillRadius (thumb.toFloat()));
     }
 
     int getTabButtonOverlap (int) override { return 0; }

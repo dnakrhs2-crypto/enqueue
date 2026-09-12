@@ -122,6 +122,40 @@ public:
             }
             expect (! meter.getStats().momentary().valid);
         }
+
+        beginTest ("AudioEngine mono output meters only L, without summing the unused R or averaging channel powers");
+        {
+            AudioEngine engine (0);
+            engine.prepare (sampleRate, blockSize, 1);
+            Cue mic;
+            mic.type = CueType::mic;
+            mic.mic.numInputs = 2;
+            mic.gainDb = 0.0;
+            juce::String error;
+            expect (engine.play (mic, &error), error);
+            juce::AudioBuffer<float> input (2, blockSize), output (1, blockSize);
+            LoudnessMeter leftOnly;
+            leftOnly.prepare (sampleRate);
+            auto& meter = engine.getLoudnessMeter();
+            // One channel needs twice the power of each channel in the -23 LUFS stereo reference above.
+            const double monoPeakDb = -23.0 + 10.0 * std::log10 (2.0);
+            for (int block = 0; block < 100; ++block)
+            {
+                sineBlock (input.getWritePointer (0), block * blockSize, monoPeakDb);
+                sineBlock (input.getWritePointer (1), block * blockSize, -6.0);   // present in the mix, absent from the device output
+                engine.renderBlock (output, blockSize, input.getArrayOfReadPointers(), 2);
+                leftOnly.process (output.getReadPointer (0), nullptr, blockSize);
+                leftOnly.poll();
+                meter.poll();
+            }
+            const auto momentary = meter.getStats().momentary();
+            const auto average = meter.getStats().windowed (20);
+            expect (momentary.valid && average.valid && leftOnly.getStats().momentary().valid);
+            expectWithinAbsoluteError (momentary.value, -23.0, 0.5);
+            expectWithinAbsoluteError (average.value, -23.0, 0.5);
+            expectWithinAbsoluteError (momentary.value, leftOnly.getStats().momentary().value, 1e-8);
+            expectWithinAbsoluteError (average.value, leftOnly.getStats().windowed (20).value, 1e-8);
+        }
     }
 };
 

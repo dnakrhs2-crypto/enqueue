@@ -1,5 +1,6 @@
 #include "ui/ActiveCuesPanel.h"
 
+#include "model/CueColors.h"
 #include "ui/UiUtils.h"
 
 #include <algorithm>
@@ -65,6 +66,7 @@ public:
     {
         paused = p.paused;
         fadingOut = p.fadingOut;
+        colourIndex = cue != nullptr ? cue->color : 0;
         fraction = p.progress >= 0.0 ? juce::jlimit (0.0, 1.0, p.progress) : 0.0;
         infinite = p.progress < 0.0;
         pauseButton.setButtonText (paused ? ko ("재개") : ko ("일시정지"));
@@ -101,6 +103,13 @@ public:
         numberLabel.setBounds (top.removeFromLeft (juce::jmin (numberWidth, top.getWidth() / 3)));
         if (numberWidth > 0)
             top.removeFromLeft (8);
+        colourBounds = {};
+        if (colourIndex > 0)
+        {
+            colourBounds = top.removeFromLeft (Palette::colourBarWidth)
+                              .withSizeKeepingCentre (Palette::colourBarWidth, Palette::colourBarHeight);
+            top.removeFromLeft (8);
+        }
         nameLabel.setBounds (top);
         area.removeFromTop (6);
         auto middle = area.removeFromTop (30);
@@ -131,16 +140,23 @@ public:
             g.setColour (stateColour());
             g.fillRoundedRectangle (card, Palette::cornerRadius);
         }
+        if (colourIndex > 0)
+        {
+            g.setColour (CueColors::get (colourIndex));
+            g.fillRoundedRectangle (colourBounds.toFloat(), Palette::colourBarRadius);
+        }
+        const auto statePill = stateBounds.toFloat();
         g.setColour (stateColour().withAlpha (Palette::statePillAlpha));
-        g.fillRoundedRectangle (stateBounds.toFloat(), Palette::pillRadius);
+        g.fillRoundedRectangle (statePill, Palette::pillRadius (statePill));
         g.setColour (stateColour());
         g.setFont (Palette::font (Palette::pillSize, true));
         g.drawText (stateText, stateBounds.reduced (7, 0), juce::Justification::centred, true);
         const auto track = barArea.toFloat();
         g.setColour (Palette::outline.withAlpha (Palette::trackAlpha));
-        g.fillRoundedRectangle (track, Palette::pillRadius);
+        g.fillRoundedRectangle (track, Palette::pillRadius (track));
+        const auto progress = track.withWidth (infinite ? track.getWidth() : track.getWidth() * (float) fraction);
         g.setColour (stateColour());
-        g.fillRoundedRectangle (track.withWidth (infinite ? track.getWidth() : track.getWidth() * (float) fraction), Palette::pillRadius);
+        g.fillRoundedRectangle (progress, Palette::pillRadius (progress));
     }
 
     void mouseDown (const juce::MouseEvent& e) override { scrub (e); }
@@ -160,8 +176,9 @@ private:
     const juce::Uuid id;
     juce::TextButton pauseButton, panicButton;
     juce::Label numberLabel, nameLabel, timeLabel, remainingLabel;
-    juce::Rectangle<int> barArea, stateBounds;
+    juce::Rectangle<int> barArea, stateBounds, colourBounds;
     juce::String stateText;
+    int colourIndex = 0;
     double fraction = 0.0;
     bool paused = false, fadingOut = false, infinite = false;
 };

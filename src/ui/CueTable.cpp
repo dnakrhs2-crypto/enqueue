@@ -1015,6 +1015,8 @@ void CueTable::beginCellEdit (int row, ColumnId column)
         return;   // inside a collapsed group
 
     table.scrollToEnsureRowIsOnscreen (visibleRow);
+    table.scrollToEnsureColumnIsOnscreen (column);
+    table.getHorizontalScrollBar().handleUpdateNowIfNeeded();   // apply the new viewport/header offset before reading the cell
     auto cell = table.getCellPosition (column, visibleRow, true);
 
     if (cell.isEmpty())

@@ -463,7 +463,7 @@ void TransportBar::setLoudness (bool momentaryValid, double momentaryLufs, bool 
     momentaryValue.setText (reading (momentaryValid, momentaryLufs), juce::dontSendNotification);
     averageValue.setText (reading (averageValid, averageLufs), juce::dontSendNotification);
     averageSeconds = windowSeconds;
-    const auto caption = juce::String (windowSeconds) + ko ("초");
+    const auto caption = juce::String (windowSeconds) + ko ("초 ▾");
     if (averageWindow.getButtonText() != caption)
         averageWindow.setButtonText (caption);
 }
@@ -516,7 +516,7 @@ void TransportBar::resized()
     momentaryLabel.setBounds (live.removeFromTop (18));
     momentaryValue.setBounds (live.removeFromTop (32));
     auto averageHeading = readings.removeFromTop (18);
-    averageWindow.setBounds (averageHeading.removeFromLeft (32));
+    averageWindow.setBounds (averageHeading.removeFromLeft (Palette::loudnessWindowWidth));
     averageLabel.setBounds (averageHeading);
     averageValue.setBounds (readings.removeFromTop (32));
     area.removeFromRight (Palette::buttonGap);
