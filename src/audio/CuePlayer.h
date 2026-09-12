@@ -244,6 +244,7 @@ private:
     std::atomic<double> liveRate { 1.0 };
     std::atomic<float> targetGain { 1.0f };
     std::atomic<float> duckTarget { 1.0f };
+    std::atomic<bool> duckJump { false };      // setInitialDuckDb(): the audio thread takes the goal as the level at once (a start, nothing to click)
     std::atomic<double> duckRampSeconds { 0.0 };
     std::atomic<double> duckDb { 0.0 };
     std::atomic<double> positionSeconds { 0.0 };

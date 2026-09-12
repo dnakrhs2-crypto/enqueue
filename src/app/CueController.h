@@ -6,7 +6,9 @@
 #include "audio/AudioEngine.h"
 
 #include <functional>
+#include <limits>
 #include <map>
+#include <memory>
 #include <set>
 #include <vector>
 
@@ -93,8 +95,9 @@ public:
         ends the child's watch only, the group's own follow stays); or only its scheduled starts (a doubled start goes, the
         run - its playlist steps, its follow - stays). A duck restore is not pending here: it runs when the cue is over. */
     enum class Cancel { all, keepObservers, startsOnly };
-    /** Cancels the pending starts / steps / follows that belong to one cue's run. */
-    void cancelPendingFor (const juce::Uuid& cueId, Cancel scope = Cancel::all);
+    /** Cancels the pending starts / steps / follows that belong to one cue's run. Entries with a scheduler id at or above
+        'beforeSchedulerId' are left alone (they were put on after a given start was scheduled: they belong to that run). */
+    void cancelPendingFor (const juce::Uuid& cueId, Cancel scope = Cancel::all, int beforeSchedulerId = std::numeric_limits<int>::max());
     /** Number of scheduled starts / follows still pending (tests). */
     int getNumPending() const;
     /** A scheduled start or a playlist step of this cue's run is still pending. The observer watches (an auto-follow
@@ -187,8 +190,13 @@ private:
     void track (int schedulerId, const juce::Uuid& owner, PendingKind kind = PendingKind::start);
     /** The GO window applied to a hotkey / cart click: true (and reported) when the same cue was fired inside it. */
     bool refusesDoubleFire (const juce::Uuid& cueId, const juce::String& label);
-    /** The duck (dB) the running duck cues put on a cue that starts now; 'record' books their contributions for its restore. */
-    double duckFor (const juce::Uuid& cueId, bool record);
+    /** A restart (second-trigger) drops the previous run's pending entries - not those of the run that is starting right now
+        (the follow a sequence walk put on right behind the scheduled start that is firing). */
+    void cancelPreviousRun (const juce::Uuid& cueId);
+    /** The contributions (duck cue -> dB) the running duck cues put on a cue that starts now. */
+    std::map<juce::Uuid, double> ducksFor (const juce::Uuid& cueId) const;
+    /** Takes a duck cue's contributions off everyone (over its duck time) and forgets it. */
+    void releaseDuck (const juce::Uuid& id);
     void clearDucks();
     void playlistStep (const juce::Uuid& groupId);
     double remainingSecondsOf (const juce::Uuid& id) const;
@@ -229,6 +237,8 @@ private:
     struct ActiveDuck { double levelDb = 0.0; double seconds = 0.0; std::set<juce::Uuid> spare; int watchId = -1; };
     std::map<juce::Uuid, ActiveDuck> activeDucks;
     std::map<juce::Uuid, double> lastFireTimes;                  // hotkey / cart: cue -> when it last fired (the GO window on them)
+    int firingStartId = std::numeric_limits<int>::max();         // the scheduled start being carried out right now (its scheduler id) ...
+    juce::Uuid firingStartCue = juce::Uuid::null();              // ... and its cue: see cancelPreviousRun()
     std::map<juce::Uuid, juce::int64> wallClockFired;            // cue -> the epoch second its clock last fired (a clock set back must not fire it again)
     std::set<juce::Uuid> played;
     juce::int64 lastWallClockSecond = -1;

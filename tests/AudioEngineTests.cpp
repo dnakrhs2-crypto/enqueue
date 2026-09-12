@@ -362,6 +362,38 @@ public:
             engine.reapFinishedPlayers();
         }
 
+        beginTest ("an instance started under a duck is at the ducked level from its first block - loaded or fresh");
+        {
+            Cue c;
+            c.file = tone;
+            expect (engine.play (c));                                 // the reference: an unducked first block
+            render (engine, out, 1);
+            const float full = rms (out, 0);
+            expect (full > 0.1f);
+            engine.stopAll();
+            render (engine, out, 3);
+            engine.reapFinishedPlayers();
+
+            AudioEngine::PlayOptions ducked;
+            ducked.duckDb = -20.0;                                    // gain 0.1
+            expect (engine.load (c));
+            render (engine, out, 3);                                  // loaded: silent
+            expectWithinAbsoluteError (rms (out, 0), 0.0f, 1e-6f);
+            expect (engine.play (c, ducked, nullptr));                // the loaded instance starts
+            render (engine, out, 1);
+            expectWithinAbsoluteError (rms (out, 0), full * 0.1f, full * 0.02f);   // not a ramp down from full across the block
+            engine.stopAll();
+            render (engine, out, 3);
+            engine.reapFinishedPlayers();
+
+            expect (engine.play (c, ducked, nullptr));                // a fresh instance
+            render (engine, out, 1);
+            expectWithinAbsoluteError (rms (out, 0), full * 0.1f, full * 0.02f);
+            engine.stopAll();
+            render (engine, out, 3);
+            engine.reapFinishedPlayers();
+        }
+
         beginTest ("missing or unassigned files are rejected with a message");
         {
             Cue missing;

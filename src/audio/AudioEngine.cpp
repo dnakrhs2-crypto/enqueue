@@ -739,7 +739,7 @@ bool AudioEngine::play (const Cue& cue, const PlayOptions& options, juce::String
                     existing->setInitialGainDb (options.startGainDb);
 
                 if (options.duckDb != 0.0)
-                    existing->setDuckDb (options.duckDb, 0.0);   // it may be rendering (loaded): the goal lands within its first block
+                    existing->setInitialDuckDb (options.duckDb);   // in place before its first audible block (not a ramp down across it)
 
                 existing->setStartOrder (++startCounter);
                 existing->start();
