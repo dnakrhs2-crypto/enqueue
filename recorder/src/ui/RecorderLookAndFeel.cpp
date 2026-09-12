@@ -175,12 +175,14 @@ int RecorderLookAndFeel::getTabButtonBestWidth(juce::TabBarButton& button, int)
 { const auto& bar = button.getTabbedButtonBar(); return juce::jmax(80, bar.getWidth() / juce::jmax(1, bar.getNumTabs())); }
 void RecorderLookAndFeel::drawTabbedButtonBarBackground(juce::TabbedButtonBar& bar, juce::Graphics& g)
 { g.fillAll(Palette::bar); g.setColour(Palette::line); g.fillRect(0, bar.getHeight() - 1, bar.getWidth(), 1); }
-void RecorderLookAndFeel::drawTabButton(juce::TabBarButton& button, juce::Graphics& g, bool, bool)
+void RecorderLookAndFeel::drawTabButton(juce::TabBarButton& button, juce::Graphics& g, bool over, bool down)
 {
-    const bool selected = button.getToggleState();
+    const bool selected = button.getToggleState(), enabled = button.isEnabled(); // isEnabled() also reflects a disabled parent
+    const float alpha = enabled ? 1.0f : .45f;
     g.fillAll(Palette::bar);
-    g.setColour(selected ? Palette::text : Palette::dimText); g.setFont(recorderFont(12.5f, juce::Font::bold));
+    if (enabled && (over || down)) { g.setColour(Palette::text.withAlpha(down ? .10f : .06f)); g.fillRect(button.getLocalBounds()); }
+    g.setColour((selected ? Palette::text : Palette::dimText).withMultipliedAlpha(alpha)); g.setFont(recorderFont(12.5f, juce::Font::bold));
     g.drawFittedText(button.getButtonText(), button.getLocalBounds().reduced(6, 2), juce::Justification::centred, 1);
-    g.setColour(selected ? Palette::accent : Palette::line); g.fillRect(0, button.getHeight() - (selected ? 2 : 1), button.getWidth(), selected ? 2 : 1);
+    g.setColour((selected ? Palette::accent : Palette::line).withMultipliedAlpha(alpha)); g.fillRect(0, button.getHeight() - (selected ? 2 : 1), button.getWidth(), selected ? 2 : 1);
 }
 }

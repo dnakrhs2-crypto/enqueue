@@ -38,6 +38,8 @@ struct ShortcutExceptionTestAccess
     static juce::TextEditor& exportText(MainComponent& main) { return main.exportDialog->folder; }
     static void allowStartButton(MainComponent& main) { main.recordView.startButton.setEnabled(true); }
     static juce::String banner(MainComponent& main) { return main.banner; }
+    static void clearBanner(MainComponent& main) { main.banner = {}; }
+    static juce::Rectangle<int> timelineBounds(MainComponent& main) { return main.timelineView.getBounds(); }
     static juce::String exceptionBanner(MainComponent& main) { return main.exceptionBanner; }
     static void releaseKey(MainComponent& main) { main.heldShortcut = {}; }
     static bool listenerOn(MainComponent& main, juce::Component* origin) { return main.shortcutFocus == origin; }
@@ -458,6 +460,27 @@ int runShortcutExceptionTests()
         const auto visible = labels(f.main);
         require(visible.contains(ko("예상치 못한 오류가 기록됐습니다: sample-exception.txt")), "Report banner hidden by normal status");
         require(visible.contains(ko("녹화를 정지하고 프로젝트를 저장하세요")), "Recording recovery guidance missing"); f.finish();
+    });
+    suite.test("A notice that appears after layout gets its 26 px row in both tabs; clearing it gives the row back", []
+    {
+        // The notice row is 0 px tall while empty. MainComponent re-applies identical bounds on every refresh, which never
+        // reaches RecordView::resized(), so the view itself re-runs its layout when the notice appears or clears.
+        MainFixture f; auto armed = f.settings.get(); armed.physicalInputs = {0, -1, -1, -1, -1, -1, -1, -1}; armed.microphoneArmed[0] = true; // no armed microphone would itself fill the notice row
+        require(f.settings.set(armed).wasOk() && f.document.saveCheckpoint(f.folder.root.getChildFile("layout/project.recorder")).wasOk(), "Saved project fixture with an armed microphone");
+        f.main.setSize(960, 640); auto& view = Access::recordView(f.main);
+        for (const bool timelineTab : {false, true})
+        {
+            if (timelineTab) view.timelineTab.onClick(); else Access::refresh(f.main); // the tab click refreshes; an empty project prepares no playback
+            require(view.noticeBounds().getHeight() == 0, ("Baseline notice present: " + labels(f.main)).toRawUTF8());
+            const auto plain = view.timelineBounds(); require(plain.getHeight() > 100 && Access::timelineBounds(f.main) == plain, "Baseline lower-area layout");
+            f.main.showError("later device banner"); Access::refresh(f.main);
+            require(view.noticeBounds().getHeight() == 26 && labels(f.main).contains("later device banner"), "Notice row did not appear at the same window size");
+            require(view.noticeBounds().getBottom() <= view.timelineBounds().getY() && Access::timelineBounds(f.main) == view.timelineBounds(), "Lower area not re-laid out under the notice row");
+            // Record tab: the camera cards absorb the row. Timeline tab: the timeline itself gives up the room.
+            require(!timelineTab || view.timelineBounds().getHeight() < plain.getHeight(), "Timeline tab did not make room for the notice");
+            Access::clearBanner(f.main); Access::refresh(f.main);
+            require(view.noticeBounds().getHeight() == 0 && view.timelineBounds() == plain && Access::timelineBounds(f.main) == plain, "Cleared notice did not give the row back");
+        }
     });
     suite.test("Device work launch and future exceptions clear configuring and notify failure", []
     {

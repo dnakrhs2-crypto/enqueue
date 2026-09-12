@@ -508,8 +508,12 @@ void TimelineView::Rows::paint(juce::Graphics& g)
             { g.setColour(Palette::background.withAlpha(.5f)); g.fillRoundedRectangle(box, Palette::controlRadius); }
             if (selected)
             {
-                g.setColour(Palette::accent); g.fillRoundedRectangle(box.getX() + 3, box.getY() + 26, 4.0f, box.getHeight() - 32, 2);
-                g.fillRoundedRectangle(box.getRight() - 7, box.getY() + 26, 4.0f, box.getHeight() - 32, 2);
+                // Yellow handle: the trim already reaches the source start/end, so it cannot extend further that way.
+                const auto assetEntry = v.assetById.find(c.assetId); const auto* asset = assetEntry == v.assetById.end() ? nullptr : assetEntry->second;
+                const auto sourceEnd = TimelineSamples::add(c.sourceIn, c.lengthSamples);
+                const bool leftLimit = c.sourceIn == 0, rightLimit = asset && sourceEnd && *sourceEnd == asset->logicalLength;
+                g.setColour(leftLimit ? Palette::meterYellow : Palette::accent); g.fillRoundedRectangle(box.getX() + 3, box.getY() + 26, 4.0f, box.getHeight() - 32, 2);
+                g.setColour(rightLimit ? Palette::meterYellow : Palette::accent); g.fillRoundedRectangle(box.getRight() - 7, box.getY() + 26, 4.0f, box.getHeight() - 32, 2);
                 if (v.edits.focusedClip() == c.clipId) { g.setColour(Palette::text); g.fillEllipse(box.getX() + 5, box.getY() + 3, 4, 4); }
             }
             if (take && !p.media->takes.empty() && take->takeId == p.media->takes.back().takeId
@@ -567,6 +571,14 @@ void TimelineView::Rows::paint(juce::Graphics& g)
             g.setColour(Palette::text); g.drawText(ko("● 녹화 중 · ") + formatRecorderTime(recording.length, p.Fs), box.reduced(8, 2).withHeight(24), juce::Justification::centredLeft, true);
         }
     }
+    if (const auto range = v.edits.selectedRange())
+    {
+        // Above the opaque clips: the ruler shows the selected span and clips inside it are tinted, so the range Delete removes stays readable.
+        const juce::Graphics::ScopedSaveState save(g); g.reduceClipRegion(headerWidth, 0, getWidth() - headerWidth, getHeight());
+        const auto left = paintX(range->start), right = paintX(previewAdd(range->start, range->length));
+        g.setColour(Palette::accent.withAlpha(.17f)); g.fillRect(left, 0.0f, std::max(0.0f, right - left), float(getHeight()));
+        g.setColour(Palette::accent.withAlpha(.6f)); g.fillRect(left, 0.0f, 1.0f, float(rulerHeight)); g.fillRect(right - 1, 0.0f, 1.0f, float(rulerHeight));
+    }
     // Draw over the clips so marker positions remain visible across every track.
     for (std::size_t i = 0; i < v.displayMarkers.size(); ++i)
     {
@@ -588,7 +600,7 @@ void TimelineView::Rows::paint(juce::Graphics& g)
         {
             const juce::Rectangle<float> label(x + 3, 0, width, labelHeight);
             g.fillRoundedRectangle(label, 3);
-            g.setColour(juce::Colours::white);
+            g.setColour(colour.getPerceivedBrightness() >= .55f ? juce::Colours::black : juce::Colours::white); // readable on white/yellow markers too
             g.setFont(juce::Font(juce::FontOptions(14, juce::Font::bold)));
             g.drawText(marker.name, label.reduced(5, 0), juce::Justification::centredLeft, true);
         }

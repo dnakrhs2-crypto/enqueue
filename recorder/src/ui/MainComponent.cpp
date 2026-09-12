@@ -131,12 +131,16 @@ void MainComponent::resized()
     aboutButton.setBounds(row.removeFromRight(74)); row.removeFromRight(6);
     retryButton.setBounds(retryButton.isVisible() ? row.removeFromRight(102) : juce::Rectangle<int>());
     row.removeFromRight(10);
-    std::array<int, 4> widths{}; int total = 0;
-    for (unsigned i = 0; i < widths.size(); ++i)
-    { widths[i] = juce::jlimit(56, i == 0 ? 340 : 220, juce::roundToInt(juce::GlyphArrangement::getStringWidth(footerLabels[i].getFont(), footerLabels[i].getText())) + 20); total += widths[i]; }
+    if (footerWidthsStale) // text widths are measured when a footer string changed, not on every 33 ms refresh
+    {
+        for (unsigned i = 0; i < footerWidths.size(); ++i)
+            footerWidths[i] = juce::jlimit(56, i == 0 ? 340 : 220, juce::roundToInt(juce::GlyphArrangement::getStringWidth(footerLabels[i].getFont(), footerLabels[i].getText())) + 20);
+        footerWidthsStale = false;
+    }
+    int total = 0; for (const auto width : footerWidths) total += width;
     const auto scale = juce::jmin(1.0, double(juce::jmax(0, row.getWidth() - 24)) / juce::jmax(1, total));
-    for (unsigned i = 0; i < widths.size(); ++i)
-    { footerLabels[i].setBounds(row.removeFromLeft(int(widths[i] * scale))); if (i + 1 < widths.size()) row.removeFromLeft(8); }
+    for (unsigned i = 0; i < footerWidths.size(); ++i)
+    { footerLabels[i].setBounds(row.removeFromLeft(int(footerWidths[i] * scale))); if (i + 1 < footerWidths.size()) row.removeFromLeft(8); }
 }
 void MainComponent::showError(const juce::String& message) { banner = message; refreshPending = true; }
 void MainComponent::showUnhandledException(const juce::File& report)
@@ -227,10 +231,15 @@ void MainComponent::refresh()
         device.name.isEmpty() ? ko("ASIO · 장치 연결 안 됨") : ko("ASIO · ") + device.name + ko(" · ")
             + juce::String(double(device.sampleRate) / 1000, device.sampleRate % 1000 ? 1 : 0) + ko(" kHz · ") + juce::String(device.bufferFrames),
         session.cameraCaption(0), session.cameraCaption(1), ui.live ? ko("녹화 중") : takeStatus};
+    bool footerChanged = footerLive != session.recording(); footerLive = session.recording(); // the state pill outline follows the recording state
     for (unsigned i = 0; i < footerLabels.size(); ++i)
-    { footerLabels[i].setText(footerText[i], juce::dontSendNotification); footerLabels[i].setTooltip(footerText[i]); }
-    footerLabels[3].setColour(juce::Label::textColourId, ui.live ? Palette::recording : Palette::text);
-    repaint(getLocalBounds().removeFromBottom(30));
+    {
+        if (footerLabels[i].getText() == footerText[i]) continue;
+        footerLabels[i].setText(footerText[i], juce::dontSendNotification); footerLabels[i].setTooltip(footerText[i]); footerChanged = true;
+    }
+    const auto stateColour = ui.live ? Palette::recording : Palette::text;
+    if (footerLabels[3].findColour(juce::Label::textColourId) != stateColour) { footerLabels[3].setColour(juce::Label::textColourId, stateColour); footerChanged = true; }
+    if (footerChanged) { footerWidthsStale = true; repaint(getLocalBounds().removeFromBottom(30)); } // static footer: no repaint or width measurement per 33 ms refresh
     recordView.update(ui, document.getProject(), settings.get(), status, message, session.elapsed(), remainingBytes, timeline);
     const auto& shortcuts = settings.get().shortcuts;
     recordView.startButton.setTooltip(ko("녹화 시작 · ") + shortcuts[RecorderCommand::recordStart]);

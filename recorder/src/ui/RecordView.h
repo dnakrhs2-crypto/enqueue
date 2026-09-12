@@ -15,6 +15,7 @@ public:
     void setCamera(unsigned, const juce::String& caption, const juce::String& placeholder, bool visible);
     std::array<void*, 2> nativeHosts();
     juce::Rectangle<int> timelineBounds() const { return lowerBounds; }
+    juce::Rectangle<int> noticeBounds() const { return errorLabel.getBounds(); } // 0 px tall while there is no notice
     void paint(juce::Graphics&) override;
     void paintOverChildren(juce::Graphics&) override;
     void resized() override;

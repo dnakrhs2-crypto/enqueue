@@ -108,6 +108,7 @@ private:
     juce::String exceptionBanner; // persists across device/status refreshes
     juce::TextButton aboutButton, updateButton, retryButton;
     std::array<juce::Label, 4> footerLabels;
+    std::array<int, 4> footerWidths{}; bool footerWidthsStale = true, footerLive = false; // measured/repainted only when a footer string or the recording state changes
     RecorderPowerMonitor powerMonitor;
     bool closeCommitRequested = false;
     bool importStarting = false;

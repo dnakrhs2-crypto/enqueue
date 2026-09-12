@@ -105,6 +105,7 @@ void RecordView::update(const RecorderUiState& ui, const RecorderProject& p, con
     statusLabel.setText((ui.live ? ko("녹화 중   ·   ") : juce::String()) + formatRecorderTime(elapsed, p.Fs) + "   ·   "
         + (remaining < 0 ? ko("남은 공간 확인 중") : ko("남은 공간 ") + juce::String(double(remaining) / 1000000000.0, 1) + "GB") + "   ·   " + status, juce::dontSendNotification);
     statusLabel.setColour(juce::Label::textColourId, ui.live ? Palette::danger : Palette::dimText);
+    const bool hadNotice = errorLabel.getText().isNotEmpty();
     errorLabel.setText(banner.isNotEmpty() ? banner : ui.warning, juce::dontSendNotification); errorLabel.setTooltip(banner);
     projectButton.setEnabled(!ui.structureLocked); settingsButton.setEnabled(!ui.structureLocked);
     recordTab.setToggleState(!timeline, juce::dontSendNotification); timelineTab.setToggleState(timeline, juce::dontSendNotification);
@@ -124,7 +125,9 @@ void RecordView::update(const RecorderUiState& ui, const RecorderProject& p, con
         mic.physical.setTooltip(s.stereoSlots[i] ? ko("입력 미터: L/R 중 큰 값") : ko("입력 미터: 모노"));
         mic.arm.setToggleState(input >= 0 && s.microphoneArmed[i], juce::dontSendNotification); mic.arm.setEnabled(!ui.structureLocked && input >= 0); mic.monitor.setEnabled(input >= 0);
     }
-    if (oldCount != stripCount || wasTimeline != timeline) resized();
+    // The notice row is 0 px tall while empty: a notice that appears (or clears) later must re-run the layout so the row
+    // shows and timelineBounds() moves with it. JUCE skips a child's resized() when the parent re-applies identical bounds.
+    if (oldCount != stripCount || wasTimeline != timeline || hadNotice != errorLabel.getText().isNotEmpty()) resized();
 }
 void RecordView::updateMeters(const std::array<float, 8>& values)
 { for (unsigned i = 0; i < 8; ++i) { auto& m = microphones[i]; m.peak = juce::jmax(values[i], m.peak * .82f); m.repaint(8, 78, m.getWidth() - 16, 16); } }

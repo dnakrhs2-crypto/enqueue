@@ -276,6 +276,23 @@ int runTimelineUxTests()
         paint(v); v.zoom(.1); paint(v); v.reveal(40 * d.getProject().Fs); paint(v); v.setSize(300, 620); paint(v);
         require(d.snapshot() == before, "Marker paint changed the document");
     });
+    suite.test("marker names stay readable on white, yellow and dark markers", []
+    {
+        RecorderDocument d; adopt(d); TimelineView v(d); v.setSize(1180, 620);
+        const char* colours[] {"#ffffff", "#ffd400", "#202020"};
+        for (unsigned i = 0; i < 3; ++i)
+        { Marker m; m.sample = (2 + 4 * i) * d.getProject().Fs; m.name = "MARKER"; m.colour = colours[i]; require(d.addMarker(m).wasOk(), "Marker colour fixture"); }
+        v.refresh(false, 0, {}); const auto image = TimelineUxTestAccess::rowImage(v);
+        for (unsigned i = 0; i < 3; ++i)
+        {
+            const auto fill = juce::Colour::fromString("ff" + juce::String(colours[i]).substring(1)); const int x = int(xAt(v, 2 + 4 * i));
+            require(image.getPixelAt(x + 8, 2) == fill, "Marker label fill missing");
+            bool ink = false; // bold glyph stems leave fully inked pixels; contrast against the fill is what the reader sees
+            for (int px = x + 8; px < x + 70 && !ink; ++px) for (int py = 3; py < 19 && !ink; ++py)
+                ink = std::abs(image.getPixelAt(px, py).getPerceivedBrightness() - fill.getPerceivedBrightness()) > .5f;
+            require(ink, (juce::String("Marker name invisible on ") + colours[i]).toRawUTF8());
+        }
+    });
     suite.test("camera cards and ruler scrubbing paint without timeline video previews", []
     {
         RecorderDocument d; adopt(d); TimelineView v(d); v.setSize(1180, 620); auto* rows = rowsOf(v); const auto x = xAt(v, 4);
@@ -291,6 +308,19 @@ int runTimelineUxTests()
             for (int at = TimelineLayout::headerWidth; at < before.getWidth(); ++at)
                 require(before.getPixelAt(at, y) == during.getPixelAt(at, y), "Scrubbing added an inline video preview");
         rows->mouseUp(mouse(*rows, x, 10, x, 10));
+    });
+    suite.test("selected clip handles turn yellow only where the trim already reaches the source start or end", []
+    {
+        RecorderDocument d; adopt(d); TimelineView v(d); v.setSize(1180, 620); v.refresh(false, 0, {});
+        const auto Fs = d.getProject().Fs; const auto second = d.getProject().tracks[0].clips.items()[1].clipId; // take 2: 12 s .. 18 s, the whole 6 s asset
+        v.edits.clickClip(second); v.selectionChanged();
+        const int y = TimelineLayout::rulerHeight + 3 + 26 + (TimelineLayout::rowHeight - 6 - 32) / 2; // handle centre on row 0
+        auto image = TimelineUxTestAccess::rowImage(v);
+        require(image.getPixelAt(int(xAt(v, 12)) + 5, y) == Palette::meterYellow && image.getPixelAt(int(xAt(v, 18)) - 5, y) == Palette::meterYellow, "Whole-asset clip lacks yellow limit handles");
+        require(v.invoke(TimelineAction::trimIn, 13 * Fs, true).wasOk(), "Trim in"); v.refresh(false, 0, {});
+        const auto* clip = d.getProject().findClip(second); require(clip && clip->sourceIn == Fs && clip->timelineStartSample == 13 * Fs, "Trim fixture");
+        v.edits.clickClip(second); v.selectionChanged(); image = TimelineUxTestAccess::rowImage(v);
+        require(image.getPixelAt(int(xAt(v, 13)) + 5, y) == Palette::accent && image.getPixelAt(int(xAt(v, 18)) - 5, y) == Palette::meterYellow, "Handles do not distinguish the extendable start from the source end");
     });
     suite.test("Rows magnet commits the exact off-grid neighbour end", []
     {
@@ -592,10 +622,14 @@ int runTimelineUxTests()
     {
         RecorderDocument d; adopt(d); TimelineView v(d); v.setSize(1180, 620); v.refresh(false, 0, {});
         auto* rows = rowsOf(v); const auto x = xAt(v, 4), endX = xAt(v, 5); const auto before = d.snapshot();
+        const auto plain = TimelineUxTestAccess::rowImage(v);
         rows->mouseDown(mouse(*rows, x, 66, x, 66)); rows->mouseDrag(mouse(*rows, endX, 66, x, 66));
         require(!v.edits.dragPreview() && d.getSelection().empty(), "Body drag moved the clip or kept the clip selection");
         rows->mouseUp(mouse(*rows, endX, 66, x, 66));
         const auto range = v.edits.selectedRange(); require(range && range->length > 0 && d.snapshot() == before, "Body drag did not select a range");
+        const auto highlighted = TimelineUxTestAccess::rowImage(v); const int mid = int((x + endX) / 2), outside = int(x) - 24;
+        require(highlighted.getPixelAt(mid, 4) != plain.getPixelAt(mid, 4) && highlighted.getPixelAt(outside, 4) == plain.getPixelAt(outside, 4), "Ruler does not show the selected range");
+        require(highlighted.getPixelAt(mid, TimelineLayout::rulerHeight + 40) != plain.getPixelAt(mid, TimelineLayout::rulerHeight + 40), "Range tint hidden under the opaque clip");
         require(v.edits.enabled(TimelineAction::remove) && v.invoke(TimelineAction::remove).wasOk(), "Delete did not cut the range");
         require(d.getProject().editRevision == before->editRevision + 1 && !v.edits.selectedRange(), "Range cut was not one edit");
         const auto inside = range->start + range->length / 2;
