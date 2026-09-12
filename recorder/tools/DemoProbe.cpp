@@ -18,7 +18,7 @@ int runDemoProbe(int argc, wchar_t** argv)
         {
             const juce::String flag(argv[i]);
             if (flag == "--two-cameras" && !twoCameras) { twoCameras = true; continue; }
-            if (i + 1 >= argc || (flag != "--app" && flag != "--devices" && flag != "--asio-device" && flag != "--iterations" && flag != "--report") || args.count(flag)) throw std::invalid_argument("Invalid demo arguments");
+            if (i + 1 >= argc || (flag != "--app" && flag != "--devices" && flag != "--asio-device" && flag != "--iterations" && flag != "--report" && flag != "--timeline") || args.count(flag)) throw std::invalid_argument("Invalid demo arguments");
             args[flag] = juce::String(argv[++i]); if (flag == "--report") reportFile = juce::File::getCurrentWorkingDirectory().getChildFile(args[flag]);
         }
         if (twoCameras)
@@ -47,6 +47,7 @@ int runDemoProbe(int argc, wchar_t** argv)
         const auto isolated = reportFile.getParentDirectory().getChildFile("demo-settings-" + juce::Uuid().toString());
         const auto runReport = isolated.getChildFile("measurement.json");
         juce::StringArray command {app.getFullPathName(), "--automation", "--self-test-record", juce::String(count), "--devices", devices.getFullPathName(), "--asio-device", juce::String(asio), "--report", runReport.getFullPathName(), "--test-root", isolated.getFullPathName()};
+        if (args["--timeline"].isNotEmpty()) { command.add("--demo-timeline"); command.add(args["--timeline"]); } // gap | overwrite: timeline-tab takes from the second iteration
         if (twoCameras)
         {
             const auto selection = juce::JSON::parse(devices)["selections"];

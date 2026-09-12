@@ -27,7 +27,9 @@ public:
     void initialiseProject(const juce::File& explicitPath, bool promptIfMissing, bool connectDevices = true);
     void requestClose(std::function<void()>);
     void createProject(const juce::String&, const juce::File&, unsigned fps);
-    void startDemo(int iterations, const juce::File& devices, int asioDevice, const juce::File& report);
+    // timelineMode (diagnostic): "" = record tab; "gap" = from the second take, record in the timeline tab 5 s past the end;
+    // "overwrite" = 3 s inside the last take (its audio is heard while recording, the overlap is replaced).
+    void startDemo(int iterations, const juce::File& devices, int asioDevice, const juce::File& report, const juce::String& timelineMode = {});
     std::shared_ptr<RecorderLifecycle> lifecycleState() const { return session.lifecycleState(); }
     void updateShutdownRequested();
     void updateShutdownBlocked();
@@ -46,6 +48,7 @@ private:
     {
         enum class Step { opening, configuring, ready, recording, waitingPlayback, showingPlayback, finished } step = Step::opening;
         int iterations = 20, iteration = 0, asioIndex = -1, returnCode = 1;
+        juce::String timelineMode; bool timelineArmed = false; Sample expectedPlacement = -1; Id previousCam1Asset;
         juce::File devices, report, folder;
         std::int64_t phaseQpc = qpcNow(), stopQpc = 0, clipQpc = 0;
         juce::Array<juce::var> rows;

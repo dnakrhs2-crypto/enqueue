@@ -5,9 +5,10 @@
 
 namespace gocue::recorder
 {
-void MainComponent::startDemo(int iterations, const juce::File& devices, int asioIndex, const juce::File& report)
+void MainComponent::startDemo(int iterations, const juce::File& devices, int asioIndex, const juce::File& report, const juce::String& timelineMode)
 {
     if (demo) return; demo = std::make_unique<Demo>(); demo->iterations = iterations; demo->devices = devices; demo->asioIndex = asioIndex; demo->report = report;
+    demo->timelineMode = timelineMode;
     demo->folder = report.getParentDirectory().getChildFile("demo-" + juce::Uuid().toString());
     if (iterations < 1 || iterations > 1000 || asioIndex < 0 || !devices.existsAsFile()) { finishDemo("FAIL", "Invalid demo arguments"); return; }
     createProject(ko("녹화 시연"), demo->folder, 60);
@@ -64,9 +65,21 @@ void MainComponent::demoTick()
     }
     else if (d.step == Demo::Step::configuring && !session.configuring())
     { if (session.error.isNotEmpty()) { finishDemo("UNAVAILABLE", session.error); return; } d.step = Demo::Step::ready; d.phaseQpc = now; }
-    else if (d.step == Demo::Step::ready && session.readyToRecord())
+    else if (d.step == Demo::Step::ready)
     {
-        setTimeline(false); recordView.startButton.onClick(); d.step = Demo::Step::recording; d.phaseQpc = now;
+        const auto& p = document.getProject(); const Sample end = p.activeTimelineEnd(), Fs = Sample(session.deviceInfo().sampleRate);
+        if (d.timelineMode.isNotEmpty() && d.iteration >= 1 && end > 0 && !d.timelineArmed)
+        {
+            // Timeline-tab take at the playhead: "gap" leaves 5 s of nothing before it, "overwrite" starts 3 s inside the
+            // last take (its microphone audio is audible, so the take listens while recording and replaces the overlap).
+            setTimeline(true);
+            session.scrub(d.timelineMode == "overwrite" ? std::max<Sample>(0, end - 3 * Fs) : end + 5 * Fs, true);
+            d.expectedPlacement = session.playhead(); d.previousCam1Asset = p.media->takes.empty() ? Id() : p.media->takes.back().cam1AssetId;
+            d.timelineArmed = true; return; // the timeline playback plan is being prepared; record once the session is ready again
+        }
+        if (!session.readyToRecord()) return;
+        if (!d.timelineArmed) { setTimeline(false); d.expectedPlacement = -1; d.previousCam1Asset.clear(); }
+        d.timelineArmed = false; recordView.startButton.onClick(); d.step = Demo::Step::recording; d.phaseQpc = now;
     }
     else if (d.step == Demo::Step::recording)
     {
@@ -93,7 +106,21 @@ void MainComponent::demoTick()
             jsonSet(row, "stopToFirstVideoMs", ms(session.firstPlaybackVideoQpc)); jsonSet(row, "stopToFirstAudioMs", ms(session.firstPlaybackAudioQpc));
             jsonSet(row, "stopToFirstAudibleEstimateMs", ms(session.firstPlaybackAudibleQpc));
             jsonSet(row, "stopToFirstPlaybackMs", ms(std::max(session.firstPlaybackVideoQpc, session.firstPlaybackAudibleQpc)));
-            jsonSet(row, "pass", ms(d.clipQpc) <= 250 && ms(std::max(session.firstPlaybackVideoQpc, session.firstPlaybackAudibleQpc)) <= 2000);
+            bool placed = true;
+            if (d.expectedPlacement >= 0)
+            {
+                // Timeline-tab placement: the take starts exactly at the reserved playhead; in overwrite mode the previous
+                // take's camera clip now ends where the new one starts (the overlap was carved out, time preserved).
+                const auto& p = document.getProject(); const auto& take = p.media->takes.back();
+                bool overwriteOk = true; Sample previousEnd = -1;
+                for (const auto& track : p.tracks) if (track.kind == TrackKind::cam1)
+                    for (const auto& c : track.clips.items()) if (p.isActive(c) && c.assetId == d.previousCam1Asset) previousEnd = c.timelineEnd();
+                if (d.timelineMode == "overwrite") overwriteOk = previousEnd == d.expectedPlacement; // gap mode: the previous clip is untouched
+                placed = take.placementSample == d.expectedPlacement && overwriteOk;
+                jsonSet(row, "timelineMode", d.timelineMode); jsonSet(row, "expectedPlacement", d.expectedPlacement); jsonSet(row, "actualPlacement", take.placementSample);
+                jsonSet(row, "previousCam1ClipEnd", previousEnd); jsonSet(row, "placementOk", placed);
+            }
+            jsonSet(row, "pass", placed && ms(d.clipQpc) <= 250 && ms(std::max(session.firstPlaybackVideoQpc, session.firstPlaybackAudibleQpc)) <= 2000);
             jsonSet(row, "take", session.takeController().report()); d.rows.add(row); d.step = Demo::Step::showingPlayback; d.phaseQpc = now;
         }
         else if (seconds > 15) { finishDemo("FAIL", session.error.isEmpty() ? "No first video/audio/clip within 15 seconds" : session.error); }

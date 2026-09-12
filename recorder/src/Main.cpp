@@ -73,13 +73,13 @@ public:
             timelineAutomation = createTimelineAutomationWindow(juce::File::getCurrentWorkingDirectory().getChildFile(args[1]), [this](int result) { setApplicationReturnValue(result); quit(); });
             return;
         }
-        juce::String rootPath, projectPath, openPath, demoDevices, demoReport;
+        juce::String rootPath, projectPath, openPath, demoDevices, demoReport, demoTimeline;
         int demoIterations = 0, demoAsio = -1; bool automation = false, demoArguments = false, invalid = false;
         for (int i = 0; i < args.size(); ++i)
         {
             const auto flag = args[i];
             if (flag == "--automation") { automation = true; continue; }
-            if ((flag == "--self-test-record" || flag == "--devices" || flag == "--asio-device" || flag == "--report") && i + 1 < args.size())
+            if ((flag == "--self-test-record" || flag == "--devices" || flag == "--asio-device" || flag == "--report" || flag == "--demo-timeline") && i + 1 < args.size())
             {
                 demoArguments = true;
                 const auto value = args[++i];
@@ -89,7 +89,7 @@ public:
                     const auto parsed = std::from_chars(number.data(), number.data() + number.size(), destination);
                     if (parsed.ec != std::errc{} || parsed.ptr != number.data() + number.size()) invalid = true;
                 }
-                else if (flag == "--devices") demoDevices = value; else demoReport = value;
+                else if (flag == "--devices") demoDevices = value; else if (flag == "--demo-timeline") demoTimeline = value; else demoReport = value;
                 continue;
             }
             if ((flag == "--test-root" || flag == "--new-project" || flag == "--open-project") && i + 1 < args.size())
@@ -118,7 +118,7 @@ public:
         settings = std::make_unique<RecorderSettings>(rootPath.isEmpty() ? juce::File() : juce::File(rootPath)); const auto loaded = settings->load();
         document = std::make_unique<RecorderDocument>(); window = std::make_unique<MainWindow>(*document, *settings);
         if (exceptionReported) { window->content().showUnhandledException(lastExceptionReport); if (lastExceptionReport != juce::File()) CrashHandler::markSeen(lastExceptionReport); }
-        if (demoIterations) { window->content().startDemo(demoIterations, juce::File::getCurrentWorkingDirectory().getChildFile(demoDevices), demoAsio, juce::File::getCurrentWorkingDirectory().getChildFile(demoReport)); return; }
+        if (demoIterations) { window->content().startDemo(demoIterations, juce::File::getCurrentWorkingDirectory().getChildFile(demoDevices), demoAsio, juce::File::getCurrentWorkingDirectory().getChildFile(demoReport), demoTimeline); return; }
         if (rootPath.isNotEmpty())
         {
             // Isolated GUI inspection; --test-root + --new-project still uses the headless roundtrip above.
