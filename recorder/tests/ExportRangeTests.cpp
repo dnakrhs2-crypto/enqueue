@@ -1,6 +1,7 @@
 #include "export/TimelineExporter.h"
 #include "export/WavExportWriter.h"
 #include "AudioRenderFixtures.h"
+#include "TimelineGapFixtures.h"
 #include "TestSupport.h"
 #include "model/ClipEdits.h"
 #include "app/RecorderDocument.h"
@@ -41,6 +42,28 @@ void compareExample(const recorder_audio_fixture::Fixture& fixture, unsigned exa
 int runExportRangeTests()
 {
     Suite s;
+    s.test("Default range includes leading and middle timeline gaps; realtime and export PCM are zero", []
+    {
+        recorder_audio_fixture::Fixture f;
+        for (const bool leading : {false, true})
+        {
+            const auto p = recorder_timeline_gap::project(f, leading); ExportJob job(p, f.root);
+            require(job.range.requested.start == 0 && job.range.requested.length == Sample(leading ? 25 : 20) * p.Fs
+                && job.range.sampleCount == job.range.requested.length, "Range never truncates leading time or stops at a gap");
+            ExportActivity gate; ExportControl control(gate); AudioSourceMask mask{AudioSourceMask::Kind::microphoneMix};
+            const auto bindings = TimelineExporter::openSources(job, mask, control);
+            TimelineAudioRenderer realtime(p.Fs, 4096); realtime.setPlan(job.audioPlan->timeline, bindings, mask);
+            ExportAudioRenderer offline(job, bindings, mask); std::vector<float> a(4096), b(4096), l(4096), r(4096);
+            for (Sample at = 0; at < job.range.sampleCount; at += 4096)
+            {
+                const auto count = unsigned(std::min(Sample{4096}, job.range.sampleCount - at));
+                realtime.renderAudio(at, count, a.data(), b.data()); offline.render(at, count, l.data(), r.data());
+                require(std::equal(a.begin(), a.begin() + count, l.begin()) && std::equal(b.begin(), b.begin() + count, r.begin()), "Playback and export agree across the whole range");
+                for (unsigned i = 0; i < count; ++i) if (recorder_timeline_gap::sourceAt(at + i, p.Fs, leading) < 0)
+                    require(l[i] == 0 && r[i] == 0, "Every timeline gap PCM sample is exactly zero");
+            }
+        }
+    });
     s.test("outward common range, half-sample rational duration, overflow rejection", []
     {
         for (const auto Fs : {44100u, 48000u, 48001u}) for (const auto fps : {FrameRate{30,1}, FrameRate{60,1}, FrameRate{60000,1001}})

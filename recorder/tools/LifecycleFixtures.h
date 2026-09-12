@@ -99,6 +99,7 @@ struct Recording
         std::array<int, 8> map{0, -1, -1, -1, -1, -1, -1, -1};
         check(audio.setInputMap(map)); check(audio.openSynthetic(rate, block, 1, 2)); check(audio.arm(0, true));
         config.projectDirectory = root; config.synthetic = true; config.externalCapture = true; config.projectFps = 30;
+        config.placementSample = document.getProject().activeTimelineEnd(); // This fixture preserves the previously completed take.
         config.cameraMode.width = 1920; config.cameraMode.height = 1080; config.cameraMode.fps = {30, 1}; config.cameraGeneration = 71;
         config.camera2.enabled = true; config.camera2.synthetic = true; config.camera2.mode = config.cameraMode; config.camera2.generation = 72;
         config.faults = &faults;

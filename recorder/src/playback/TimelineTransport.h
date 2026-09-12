@@ -40,6 +40,7 @@ public:
     void prepared(std::int64_t reservedOutputSample, bool start); // readiness seam for offline stubs
     void processOutput(const BlockStamp&, float*, float*) noexcept override;
     TransportSnapshot snapshot() const noexcept;
+    Sample playhead(std::int64_t nowQpc) const noexcept; // owner: includes unacknowledged/throttled scrubs
     std::uint64_t generation() const noexcept { return requestedGeneration; } // control owner
     juce::Result status() const;
     // Call only after normal output is detached. Dubbing shares the Recorder

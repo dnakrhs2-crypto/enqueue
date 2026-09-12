@@ -4,6 +4,7 @@
 #include "playback/VideoPlaybackEngine.h"
 #include "AudioRenderFixtures.h"
 #include "RecordedGapFixtures.h"
+#include "TimelineGapFixtures.h"
 #include "TestSupport.h"
 #include <algorithm>
 #include <cmath>
@@ -42,7 +43,8 @@ CodecPtr softwareVideo()
     c->gop_size = 30; c->max_b_frames = 0; c->flags |= AV_CODEC_FLAG_GLOBAL_HEADER; c->thread_count = 1;
     ffCheck(avcodec_open2(c.get(), codec, nullptr), "Open CPU mux fixture"); return c;
 }
-void writeMuxFixture(const juce::File& partial, unsigned Fs, Sample frameCount, FileIoFaultAdapter* fault = nullptr, ExportAudioRenderer* rendered = nullptr)
+void writeMuxFixture(const juce::File& partial, unsigned Fs, Sample frameCount, FileIoFaultAdapter* fault = nullptr,
+                     ExportAudioRenderer* rendered = nullptr, const ExportJob* mapped = nullptr)
 {
     auto video = softwareVideo(); ReferenceMixWriter audio(Fs); FinalMp4Writer mux(partial, *video, audio.context(), fault);
     auto f = ffFrame(); f->width = f->height = 16; f->format = AV_PIX_FMT_YUV420P; ffCheck(av_frame_get_buffer(f.get(),32), "Allocate CPU fixture frame");
@@ -58,6 +60,13 @@ void writeMuxFixture(const juce::File& partial, unsigned Fs, Sample frameCount, 
     Sample at = 0; std::vector<float> stereo(8192); const PacketSink audioSink = [&](const AVPacket& p) { mux.audio(p); };
     for (Sample n = 0; n < frameCount; ++n)
     {
+        if (mapped)
+        {
+            ffCheck(av_frame_make_writable(f.get()), "Writable mapped CPU fixture frame");
+            const auto black = FinalVideoExporter::mappingAt(*mapped, TrackKind::cam1, n).black();
+            for (int p = 0; p < 3; ++p) for (int y = 0; y < (p ? 8 : 16); ++y)
+                std::memset(f->data[p] + y * f->linesize[p], p ? 128 : black ? 16 : 64, p ? 8 : 16);
+        }
         f->pts = n; ffCheck(avcodec_send_frame(video.get(), f.get()), "Encode CPU fixture"); receive();
         const auto end = frameToSample(n + 1, Fs, {30,1});
         while (at < end)
@@ -79,6 +88,35 @@ void writeMuxFixture(const juce::File& partial, unsigned Fs, Sample frameCount, 
 int runFinalExportTests()
 {
     Suite s;
+    for (const bool leading : {false, true}) s.test(leading ? "Final MP4: first clip at 15 seconds retains black/silent leading range"
+        : "Final MP4: 5-to-15 second empty interval is black video and silent AAC", [leading]
+    {
+        recorder_audio_fixture::Fixture f; const auto p = recorder_timeline_gap::project(f, leading);
+        ExportJob job(p, f.root); ExportActivity gate; ExportControl control(gate);
+        require(job.range.requested.start == 0 && job.range.sampleCount == Sample(leading ? 25 : 20) * p.Fs,
+            "Default final range includes all leading and middle time");
+        const auto mask = FinalVideoExporter::audioSource(job, "mix");
+        ExportAudioRenderer audio(job, TimelineExporter::openSources(job, mask, control), mask);
+        const auto file = f.root.getChildFile("timeline-gap.mp4.partial"); writeMuxFixture(file, p.Fs, job.range.frameCount, nullptr, &audio, &job);
+        Sample frames = 0, blackFrames = 0, samples = 0, silentSamples = 0;
+        ExportVerificationObserver observer;
+        observer.video = [&](Sample n, const AVFrame& picture)
+        {
+            const bool gap = recorder_timeline_gap::sourceAt(frameToSample(n, p.Fs, p.fps), p.Fs, leading) < 0;
+            require(std::abs(int(picture.data[0][0]) - (gap ? 16 : 64)) <= 3, "Decoded video matches independent black-frame oracle");
+            ++frames; if (gap) ++blackFrames;
+        };
+        observer.audio = [&](Sample first, unsigned count, const float* l, const float* r)
+        {
+            samples += count;
+            for (unsigned i = 0; i < count; ++i) if (recorder_timeline_gap::silentInterior(first + i, p.Fs, leading))
+            { require(std::abs(l[i]) < .003f && std::abs(r[i]) < .003f, "Decoded AAC gap is silent within codec tolerance"); ++silentSamples; }
+        };
+        FinalVideoExporter::verify(file, job.range.frameCount, job.range.sampleCount, p.Fs, p.fps, control, observer, AV_CODEC_ID_MPEG4);
+        require(frames == job.range.frameCount && blackFrames == (leading ? 450 : 300) && samples == job.range.sampleCount,
+            "Exact decoded video/black/AAC counts match common range");
+        require(silentSamples > Sample(leading ? 14 : 9) * p.Fs, "AAC silence checked throughout the long empty interval");
+    });
     for (unsigned channels : {1u, 2u}) for (const auto gap : recorder_audio_fixture::recordedGaps)
     {
         const auto name = "Final export with healthy take: " + std::to_string(channels) + " channels, " + recorder_audio_fixture::gapName(gap);

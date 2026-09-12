@@ -28,6 +28,9 @@ public:
     static ClipEditResult remove(const RecorderProject&, const std::vector<Id>& clipIds);
     static ClipEditResult remove(const RecorderProject&, const std::vector<Id>& clipIds, SampleRange);
     static ClipEditResult remove(const RecorderProject&, SampleRange); // all active targets, preserves time
+    // Exact sample overwrite on the named lanes only. Keeps time, inactive take
+    // versions and other linked lanes; surviving fragments retain their links.
+    static ClipEditResult carveOut(const RecorderProject&, const std::vector<Id>& trackIds, SampleRange);
     static ClipEditResult rippleDeleteAll(const RecorderProject&, SampleRange);
     // Audio tracks only; edits active clips, preserves previous versions and global markers.
     static ClipEditResult rippleDeleteTracks(const RecorderProject&, SampleRange, const std::vector<Id>& trackIds);

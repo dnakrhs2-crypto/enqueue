@@ -4,6 +4,7 @@
 #include "diagnostics/CaptureTelemetry.h"
 #include "AudioRenderFixtures.h"
 #include "RecordedGapFixtures.h"
+#include "TimelineGapFixtures.h"
 #include "TestSupport.h"
 #include "support/Platform.h"
 #include "model/RecorderSerializer.h"
@@ -113,6 +114,40 @@ std::vector<Id> clips(const Track& t) { std::vector<Id> ids; for (const auto& c 
 int runMaterialExportTests()
 {
     Suite s;
+    for (const bool leading : {false, true}) s.test(leading ? "All material MP4/WAV files retain 15 seconds of initial black and silence"
+        : "All material MP4/WAV files retain the empty 5-to-15 second interval", [leading]
+    {
+        recorder_audio_fixture::Fixture f; const auto p = recorder_timeline_gap::project(f, leading);
+        ExportJob job(p, f.root); ExportActivity gate; ExportControl control(gate);
+        const auto manifest = MaterialExporter::run(job, {}, control, nullptr, cpuCamera);
+        const Sample length = Sample(leading ? 25 : 20) * p.Fs;
+        require(manifest["files"].size() == 4 && job.range.sampleCount == length, "Two cameras and two microphones share full range");
+        for (const auto& row : *manifest["files"].getArray())
+        {
+            require(Sample(row["commonPcmSampleCount"]) == length && Sample(row["commonFrameCount"]) == job.range.frameCount,
+                "Every material declares the same duration");
+            const auto file = job.outputDirectory.getChildFile(row["name"].toString());
+            if (file.hasFileExtension("wav"))
+            {
+                const auto pcm = readMono(file); require(Sample(pcm.size()) == length, "Actual WAV length matches common range");
+                for (Sample at = 0; at < length; ++at) if (recorder_timeline_gap::sourceAt(at, p.Fs, leading) < 0)
+                    require(pcm[size_t(at)] == 0.0f, "Every gap sample in material WAV is exactly zero");
+            }
+            else
+            {
+                require(Sample(row["blackFrames"]) == (leading ? 450 : 300), "Each camera retains all black frames");
+                Sample samples = 0, silentSamples = 0; ExportVerificationObserver observer;
+                observer.audio = [&](Sample first, unsigned count, const float* l, const float* r)
+                {
+                    samples += count;
+                    for (unsigned i = 0; i < count; ++i) if (recorder_timeline_gap::silentInterior(first + i, p.Fs, leading))
+                    { require(std::abs(l[i]) < .003f && std::abs(r[i]) < .003f, "Each camera reference AAC is silent in the gap"); ++silentSamples; }
+                };
+                FinalVideoExporter::verify(file, job.range.frameCount, length, p.Fs, p.fps, control, observer, AV_CODEC_ID_MPEG4);
+                require(samples == length && silentSamples > Sample(leading ? 14 : 9) * p.Fs, "Actual MP4 AAC covers the common range");
+            }
+        }
+    });
     for (unsigned channels : {1u, 2u}) for (const auto gap : recorder_audio_fixture::recordedGaps)
     {
         const auto name = "Material export with healthy take: " + std::to_string(channels) + " channels, " + recorder_audio_fixture::gapName(gap);

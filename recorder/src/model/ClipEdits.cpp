@@ -197,7 +197,7 @@ struct FragmentGroups
         return right ? it->second.second : it->second.first;
     }
 };
-void cut(Edit& e, const Ids& ids, SampleRange r, bool ripple)
+void cut(Edit& e, const Ids& ids, SampleRange r, bool ripple, bool retainLinks = false)
 {
     FragmentGroups groups;
     e.rewrite(ids, [&](const Clip& c)
@@ -210,7 +210,7 @@ void cut(Edit& e, const Ids& ids, SampleRange r, bool ripple)
             if (start >= finish) return;
             auto part = c; part.clipId = e.id(); part.sourceIn += start - c.timelineStartSample;
             part.timelineStartSample = ripple ? pull(start, r) : start; part.lengthSamples = finish - start;
-            part.linkGroupId = groups.side(e, c.linkGroupId, right); out.push_back(part);
+            part.linkGroupId = retainLinks ? c.linkGroupId : groups.side(e, c.linkGroupId, right); out.push_back(part);
         };
         piece(c.timelineStartSample, (std::min)(end, r.start), false);
         piece((std::max)(c.timelineStartSample, b), end, true);
@@ -315,6 +315,22 @@ ClipEditResult ClipEdits::remove(const RecorderProject& p, const std::vector<Id>
 { return apply(p, [&](Edit& e) { e.rewrite(expand(p, requested), [](const Clip&) { return std::vector<Clip>{}; }); }); }
 ClipEditResult ClipEdits::remove(const RecorderProject& p, const std::vector<Id>& requested, SampleRange r)
 { return apply(p, [&](Edit& e) { const auto ids = expand(p, requested); cut(e, ids, range(p, r, hasVideo(p, ids)), false); }); }
+ClipEditResult ClipEdits::carveOut(const RecorderProject& p, const std::vector<Id>& tracks, SampleRange r)
+{
+    return apply(p, [&](Edit& e)
+    {
+        r = range(p, r, false);
+        Ids ids;
+        for (const auto& id : tracks)
+        {
+            const auto lane = std::find_if(p.tracks.begin(), p.tracks.end(), [&](const Track& t) { return t.trackId == id; });
+            need(lane != p.tracks.end(), "덮어쓸 트랙을 찾을 수 없습니다.");
+            for (const auto& c : lane->clips.items())
+                if (p.isActive(c) && c.timelineStartSample < r.start + r.length && c.timelineEnd() > r.start) ids.insert(c.clipId);
+        }
+        cut(e, ids, r, false, true);
+    });
+}
 ClipEditResult ClipEdits::remove(const RecorderProject& p, SampleRange r)
 {
     return apply(p, [&](Edit& e)

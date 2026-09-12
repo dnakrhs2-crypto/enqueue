@@ -59,6 +59,7 @@ RecorderProject stackedProject()
 {
     RecorderDocument d;
     auto first = takeFixture(1, 1000, true, 1), second = takeFixture(2, 500, true, 1);
+    second.take.placementSample = 1000;
     ok(d.placeTake(first.take, first.assets)); ok(d.placeTake(second.take, second.assets));
     RecorderProject p = d.getProject(); TakeStack s; s.spanSamples = 1000; TakeVersion v1, v2;
     for (auto& track : p.tracks)
@@ -301,13 +302,96 @@ int runProjectTests()
         const auto revision = d.getProject().editRevision; d.setSelection({d.getProject().tracks[0].clips.items()[0].clipId}); ok(d.performEdit("noop", [](EditState&) {}));
         require(d.getProject().editRevision == revision && d.getHistory().redoDepth() == 1, "No-op leaves history and revision unchanged");
     });
-    test("normal take placement includes independent audio and excludes markers", []
+    test("normal take retains the requested end placement and registered reinsertion position", []
     {
         RecorderDocument d; auto a = takeFixture(1, 100); ok(d.placeTake(a.take, a.assets)); addImport(d, 1000, 2000);
         ok(d.performEdit("marker", [](EditState& e) { Marker m; m.sample = 50000; e.markers.push_back(m); }));
-        auto b = takeFixture(2, 200); ok(d.placeTake(b.take, b.assets)); require(d.getProject().media->takes.back().placementSample == 3000, "Independent audio determines placement");
+        auto b = takeFixture(2, 200); b.take.placementSample = d.getProject().activeTimelineEnd();
+        ok(d.placeTake(b.take, b.assets)); require(d.getProject().media->takes.back().placementSample == 3000, "Caller can request the end including independent audio");
         require(d.getProject().tracks[0].clips.items().back().timelineStartSample == 3000, "No artificial gap");
         ok(d.undo()); require(d.getProject().media->takes.size() == 2, "Undo placement keeps take available"); ok(d.placeTake(b.take.takeId)); require(d.getProject().activeTimelineEnd() == 3200, "Original can be reinserted");
+    });
+    test("normal take at 15 seconds preserves the empty interval after a 5 second take", []
+    {
+        RecorderDocument d; auto first = takeFixture(1, 5 * 48000, true, 2); ok(d.placeTake(first.take, first.assets));
+        auto later = takeFixture(2, 5 * 48000, true, 2); later.take.placementSample = 15 * 48000;
+        ok(d.placeTake(later.take, later.assets));
+        for (const auto& track : d.getProject().tracks)
+        {
+            require(track.clips.items().size() == 2, "No filler clip inserted");
+            require(track.clips.items()[0].timelineEnd() == 5 * 48000 && track.clips.items()[1].timelineStartSample == 15 * 48000,
+                "Requested recording position retained on every recorded lane");
+        }
+        const auto placed = RecorderSerializer::fingerprint(RecorderSerializer::editStateToVar(d.getProject()));
+        ok(d.undo()); ok(d.placeTake(later.take.takeId));
+        require(d.getProject().tracks[0].clips.items().back().timelineStartSample == 15 * 48000, "Registered take preserves gap placement");
+        require(d.getProject().activeTimelineEnd() == 20 * 48000 && placed.isNotEmpty(), "Common end includes leading time");
+    });
+    for (const auto cut : {SampleRange{50,250}, SampleRange{900,300}, SampleRange{400,200}, SampleRange{50,1200}})
+    {
+        const auto label = "normal overwrite exact range " + std::to_string(cut.start) + "/" + std::to_string(cut.length);
+        test(label.c_str(), [cut]
+        {
+            RecorderDocument d; auto old = takeFixture(1, 1000, true, 2); old.take.placementSample = 100;
+            ok(d.placeTake(old.take, old.assets));
+            const auto before = d.snapshot(); const auto hash = RecorderSerializer::fingerprint(RecorderSerializer::editStateToVar(*before));
+            const auto depth = d.getHistory().undoDepth();
+            Journal journal; d.setJournalSink(&journal);
+            auto fresh = takeFixture(2, cut.length, false, 1); fresh.take.placementSample = cut.start;
+            d.setRecordingStructureLock(true);
+            require(d.performEdit("blocked", [](EditState& e) { e.tracks.clear(); }).failed() && d.snapshot() == before,
+                "Existing clips remain immutable while recording");
+            ok(d.placeRecordedTake(fresh.take, fresh.assets, {1})); d.setRecordingStructureLock(false);
+            const auto& p = d.getProject(); ok(p.validate());
+            for (size_t lane : {size_t{0}, size_t{3}})
+            {
+                std::vector<SampleRange> expected;
+                if (cut.start > 100) expected.push_back({100, std::min(Sample{1100}, cut.start) - 100});
+                if (cut.start + cut.length < 1100) expected.push_back({std::max(Sample{100}, cut.start + cut.length), 1100 - std::max(Sample{100}, cut.start + cut.length)});
+                size_t fragments = 0;
+                for (const auto& c : p.tracks[lane].clips.items()) if (c.assetId == before->tracks[lane].clips.items()[0].assetId)
+                {
+                    require(fragments < expected.size() && c.timelineStartSample == expected[fragments].start
+                        && c.lengthSamples == expected[fragments].length && c.sourceIn == c.timelineStartSample - 100,
+                        "Surviving fragment retains timeline and source time without frame snapping"); ++fragments;
+                }
+                require(fragments == expected.size(), "Front/back/split/full overwrite fragment count");
+                const auto& placed = p.tracks[lane].clips.items().back();
+                require(placed.timelineStartSample == cut.start && placed.lengthSamples == cut.length, "New take fills only requested interval");
+            }
+            for (size_t lane : {size_t{1}, size_t{2}})
+            {
+                const auto& a = before->tracks[lane].clips.items()[0]; const auto& b = p.tracks[lane].clips.items()[0];
+                require(p.tracks[lane].clips.items().size() == 1 && a.clipId == b.clipId && a.assetId == b.assetId
+                    && a.timelineStartSample == b.timelineStartSample && a.sourceIn == b.sourceIn && a.lengthSamples == b.lengthSamples
+                    && a.linkGroupId == b.linkGroupId, "Unrecorded linked camera and microphone remain unchanged");
+            }
+            require(d.getHistory().undoDepth() == depth + 1, "Overwrite and placement are one edit");
+            const auto after = RecorderSerializer::fingerprint(RecorderSerializer::editStateToVar(p));
+            require(journal.edits.size() == 1, "Overwrite and placement emit one journal edit");
+            auto replayed = RecorderSerializer::editStateToVar(*before); replay(replayed, journal.edits.front());
+            require(RecorderSerializer::fingerprint(replayed) == after, "One journal delta reproduces all overwritten fragments, links and placement");
+            d.setJournalSink(nullptr);
+            ok(d.undo()); require(RecorderSerializer::fingerprint(RecorderSerializer::editStateToVar(d.getProject())) == hash, "One undo restores all clips and links");
+            require(d.getProject().media->takes.size() == 2, "Recorded originals survive undo");
+            ok(d.redo()); require(RecorderSerializer::fingerprint(RecorderSerializer::editStateToVar(d.getProject())) == after, "One redo restores the whole overwrite");
+        });
+    }
+    test("normal overwrite carves only the active take-stack version on recorded lanes", []
+    {
+        RecorderDocument d; const auto p = stackedProject(); ok(d.adopt(p, {}, {}));
+        auto fresh = takeFixture(3, 100); fresh.take.placementSample = 125; ok(d.placeTake(fresh.take, fresh.assets));
+        const auto& next = d.getProject();
+        for (const auto& track : p.tracks) for (const auto& c : track.clips.items())
+            if (!p.isActive(c) || track.kind != TrackKind::cam1)
+            {
+                const auto* kept = next.findClip(c.clipId);
+                require(kept && kept->sourceIn == c.sourceIn && kept->timelineStartSample == c.timelineStartSample
+                    && kept->lengthSamples == c.lengthSamples && kept->versionId == c.versionId, "Other lanes and inactive versions preserved");
+            }
+        require(next.takeStacks[0].activeVersionId == p.takeStacks[0].activeVersionId, "Overwrite does not switch take version");
+        ok(d.undo()); require(RecorderSerializer::fingerprint(RecorderSerializer::editStateToVar(d.getProject()))
+            == RecorderSerializer::fingerprint(RecorderSerializer::editStateToVar(p)), "Stack overwrite is one reversible edit");
     });
     test("dub placement keeps off-grid Pstart and immutable timebase after media", []
     {

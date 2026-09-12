@@ -140,6 +140,87 @@ public:
 int runPlaybackTests()
 {
     Suite suite;
+    suite.test("Playback starting in a long gap paints the whole host black before any decoder exists", []
+    {
+        struct Host
+        {
+            HWND window = CreateWindowExW(0, L"STATIC", L"", WS_POPUP, 0, 0, 80, 60, nullptr, nullptr, GetModuleHandleW(nullptr), nullptr);
+            ~Host() { if (window) DestroyWindow(window); }
+        } host;
+        require(host.window != nullptr, "Create hidden playback test host");
+        auto state = std::make_shared<StubState>(); const auto index = videoIndex();
+        VideoPlaybackEngine video(factory(state)); video.prepare({videoClip(index, 15 * 48000, 0, 48000)});
+        video.seek(0); video.attachPlaybackView(0, host.window);
+        const auto overlay = FindWindowExW(host.window, nullptr, L"STATIC", nullptr);
+        require(overlay != nullptr, "Gap overlay exists without a decoded texture");
+        RECT bounds{}; GetClientRect(overlay, &bounds);
+        require(bounds.right == 80 && bounds.bottom == 60, "Initial gap covers the entire host");
+        struct Canvas
+        {
+            HDC dc = CreateCompatibleDC(nullptr); HBITMAP bitmap = nullptr; HGDIOBJ previous = nullptr;
+            ~Canvas() { if (previous) SelectObject(dc, previous); if (bitmap) DeleteObject(bitmap); if (dc) DeleteDC(dc); }
+        } canvas;
+        BITMAPINFO info{}; info.bmiHeader.biSize = sizeof(BITMAPINFOHEADER); info.bmiHeader.biWidth = 80; info.bmiHeader.biHeight = -60;
+        info.bmiHeader.biPlanes = 1; info.bmiHeader.biBitCount = 32; info.bmiHeader.biCompression = BI_RGB;
+        void* pixels = nullptr; canvas.bitmap = CreateDIBSection(canvas.dc, &info, DIB_RGB_COLORS, &pixels, nullptr, 0);
+        require(canvas.dc && canvas.bitmap && pixels, "Create device-free gap paint canvas");
+        canvas.previous = SelectObject(canvas.dc, canvas.bitmap); FillRect(canvas.dc, &bounds, static_cast<HBRUSH>(GetStockObject(WHITE_BRUSH)));
+        SendMessageW(overlay, WM_PRINTCLIENT, reinterpret_cast<WPARAM>(canvas.dc), PRF_CLIENT | PRF_ERASEBKGND);
+        require(GetPixel(canvas.dc, 1, 1) == RGB(0, 0, 0) && GetPixel(canvas.dc, 78, 58) == RGB(0, 0, 0), "Actual startup overlay paints black across the host");
+        require(state->opens == 0, "Leading gap must not open a decoder or GPU adapter");
+    });
+    suite.test("Transport keeps pending and beyond-end cursors, prepares silent tail and stops without error", []
+    {
+        TimelineAudioRenderer audio(1000, 100); audio.setPlan({}, 1000);
+        VideoPlaybackEngine video(factory(std::make_shared<StubState>())); video.prepare({});
+        TimelineTransport transport(1000, 1000000, audio.queue(), 1000); StubOutput output; output.start(transport);
+        transport.scrub(15000, true, 1000000);
+        require(transport.playhead(1000000) == 15000, "Unacknowledged seek reports requested position");
+        transport.play();
+        eventually([&]
+        {
+            output.tick(); transport.service(audio, video, output, output.current.callbackQpc);
+            require(transport.status().wasOk(), "Beyond-end preparation failed");
+            for (unsigned i = 0; i < 100; ++i) require(output.left[i] == 0 && output.right[i] == 0, "Beyond-end playback submitted audio");
+            return transport.snapshot().state == TransportState::stopped && transport.snapshot().generation == transport.generation();
+        });
+        require(transport.playhead(output.current.callbackQpc) == 15000 && video.displaySelection(0).gap, "Cursor and black selection retained past end");
+        transport.scrub(700, true, 2000000); transport.scrub(725, false, 2000001);
+        require(transport.playhead(2000001) == 725, "Throttled scrub position is visible before dispatch");
+        transport.goToStart(); require(transport.playhead(2000002) == 0, "Go to start retires a pending far seek");
+        rejects([&] { transport.seek(-1); }); rejects([&] { transport.scrub(-1, true, 2000003); });
+    });
+    suite.test("One full frame and multi-second timeline gaps clear both cameras; subframe seam holds", []
+    {
+        const auto index = videoIndex(); const Sample frame = index->packets[0].endSample - index->packets[0].sample;
+        for (const Sample gap : {frame - 1, frame, 10 * Sample(index->sampleRate)})
+        {
+            VideoPlaybackEngine video(factory(std::make_shared<StubState>())); std::vector<PlaybackVideoClip> clips;
+            for (unsigned cam = 0; cam < 2; ++cam)
+            {
+                clips.push_back(videoClip(index, 0, 0, frame * 2, cam));
+                clips.push_back(videoClip(index, frame * 2 + gap, frame * 4, frame * 2, cam));
+            }
+            video.prepare(clips); std::array<PlaybackDisplayState, 2> displays;
+            auto generation = video.seek(frame); eventually([&] { return video.ready(frame, generation); });
+            for (unsigned cam = 0; cam < 2; ++cam) displays[cam].submitted(video.displaySelection(cam).frame);
+            for (const Sample at : {frame * 2, frame * 2 + gap - 1})
+            {
+                generation = video.seek(at); eventually([&] { return video.ready(at, generation); });
+                for (unsigned cam = 0; cam < 2; ++cam)
+                {
+                    const auto selection = video.displaySelection(cam); const auto decision = displays[cam].select(selection);
+                    require(selection.gap == (gap >= frame), "Exact one-frame gap boundary");
+                    require((decision.action == PlaybackDisplayAction::clear) == (gap >= frame), "Long gap must clear retained pixels");
+                    if (gap >= frame) require(!decision.frame && !displays[cam].retained, "Previous frame cannot remain in a gap");
+                    else require(decision.frame != nullptr, "Legacy subframe seam keeps the final frame");
+                }
+            }
+            const auto next = frame * 2 + gap; generation = video.seek(next); eventually([&] { return video.ready(next, generation); });
+            for (unsigned cam = 0; cam < 2; ++cam) require(video.displaySelection(cam).frame != nullptr, "Next clip resumes after gap");
+        }
+        require(VideoPlaybackEngine::prerollMilliseconds == 250, "Existing IDR preroll duration retained");
+    });
     suite.test("alignment: compiled CFR frames match the indexed rounded sample boundaries", []
     {
         for (unsigned Fs : {48000u, 44100u, 32000u})
