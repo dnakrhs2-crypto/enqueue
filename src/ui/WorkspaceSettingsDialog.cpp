@@ -33,7 +33,7 @@ namespace
             auto* label = labels.add (new juce::Label());
             label->setText (text, juce::dontSendNotification);
             label->setColour (juce::Label::textColourId, Palette::dimText);
-            label->setFont (juce::Font (juce::FontOptions (13.0f)));
+            label->setFont (Palette::font (Palette::fieldLabelSize));
             addAndMakeVisible (label);
             return *label;
         }
@@ -60,6 +60,7 @@ namespace
         {
             auto* editor = editors.add (new juce::TextEditor());
             editor->setInputRestrictions (10, allowed);
+            editor->setFont (Palette::monoFont (Palette::fieldValueSize));
             editor->setJustification (juce::Justification::centredRight);
             editor->setSelectAllWhenFocused (true);
             editor->setText (initial, false);
@@ -99,7 +100,7 @@ namespace
                                    [] (WorkspaceSettings& w, const juce::String& t) { w.doubleGoSeconds = t.getDoubleValue(); },
                                    [] (const WorkspaceSettings& w) { return juce::String (w.doubleGoSeconds, 2); });
             goHint = &addLabel (ko ("이 시간 안에 들어온 GO는 무시하고 GO 버튼이 빨갛게 깜빡입니다"));
-            goHint->setFont (juce::Font (juce::FontOptions (11.0f)));
+            goHint->setFont (Palette::font (Palette::kickerSize));
 
             hotkeysToggle = &addToggle (ko ("큐 핫키·카트 클릭에도 적용 (같은 큐를 이 시간 안에 다시 누르면 무시)"), s.doubleGoHotkeys,
                                         [] (WorkspaceSettings& w, bool v) { w.doubleGoHotkeys = v; });
@@ -112,7 +113,7 @@ namespace
                                       [] (WorkspaceSettings& w, const juce::String& t) { w.panicSeconds = t.getDoubleValue(); },
                                       [] (const WorkspaceSettings& w) { return juce::String (w.panicSeconds, 1); });
             panicHint = &addLabel (ko ("Esc 한 번 = 이 시간 동안 전체 페이드아웃 후 정지, 0.5초 안에 두 번 = 즉시 정지"));
-            panicHint->setFont (juce::Font (juce::FontOptions (11.0f)));
+            panicHint->setFont (Palette::font (Palette::kickerSize));
 
             autoNumberToggle = &addToggle (ko ("새 큐에 자동 번호"), s.autoNumber,
                                            [] (WorkspaceSettings& w, bool v) { w.autoNumber = v; });
@@ -153,7 +154,7 @@ namespace
         void resized() override
         {
             auto area = getLocalBounds().reduced (16, 12);
-            const int rowHeight = 26;
+            const int rowHeight = Palette::fieldHeight;
             auto next = [&] { auto r = area.removeFromTop (rowHeight); area.removeFromTop (6); return Row { r, 0 }; };
 
             auto row = next();
@@ -221,13 +222,13 @@ namespace
             rotateToggle = &addToggle (ko ("오래된 백업 정리 (최근 15개만 보관)"), s.rotateBackups,
                                        [] (WorkspaceSettings& w, bool v) { w.rotateBackups = v; });
             hint = &addLabel (ko ("백업은 프로젝트 파일 옆 \"<이름>.enqueue.backups\" 폴더에 쌓입니다. 저장한 적 없는 프로젝트는 백업하지 않습니다."));
-            hint->setFont (juce::Font (juce::FontOptions (11.0f)));
+            hint->setFont (Palette::font (Palette::kickerSize));
         }
 
         void resized() override
         {
             auto area = getLocalBounds().reduced (16, 12);
-            const int rowHeight = 26;
+            const int rowHeight = Palette::fieldHeight;
             auto next = [&] { auto r = area.removeFromTop (rowHeight); area.removeFromTop (6); return Row { r, 0 }; };
 
             auto row = next();
@@ -266,7 +267,7 @@ namespace
                                     [] (WorkspaceSettings& w, const juce::String& t) { w.minLevelDb = t.getDoubleValue(); },
                                     [] (const WorkspaceSettings& w) { return juce::String (w.minLevelDb, 1); });
             hint = &addLabel (ko ("출력 라우팅·출력 이름·출력 인서트는 오디오 > 오디오 패치... 에서, 장치와 채널 수는 오디오 > 오디오 출력 설정에서 바꿉니다."));
-            hint->setFont (juce::Font (juce::FontOptions (11.0f)));
+            hint->setFont (Palette::font (Palette::kickerSize));
 
             auditionLabel = &addLabel (ko ("오디션 (Alt+Space / Alt+V) 방식"));
             auditionBox.addItem (ko ("그대로 재생 (표시만)"), 1);
@@ -297,7 +298,7 @@ namespace
             refreshPatchBox();
 
             auditionHint = &addLabel (ko ("재생 메뉴의 \"항상 오디션\"을 켜면 모든 GO / 미리듣기가 이 방식으로 재생됩니다. 오디션 중인 큐에 일반 GO를 하면 실제 출력으로 다시 시작합니다."));
-            auditionHint->setFont (juce::Font (juce::FontOptions (11.0f)));
+            auditionHint->setFont (Palette::font (Palette::kickerSize));
         }
 
         void refreshPatchBox()
@@ -324,7 +325,7 @@ namespace
         void resized() override
         {
             auto area = getLocalBounds().reduced (16, 12);
-            const int rowHeight = 26;
+            const int rowHeight = Palette::fieldHeight;
             auto next = [&] { auto r = area.removeFromTop (rowHeight); area.removeFromTop (6); return Row { r, 0 }; };
 
             auto row = next();
@@ -359,17 +360,17 @@ namespace
     public:
         explicit Content (ProjectDocument& document)
         {
-            tabs.setTabBarDepth (28);
+            tabs.setTabBarDepth (Palette::tabBarHeight);
             tabs.setOutline (0);
             tabs.addTab (ko ("일반"), Palette::panel, new GeneralTab (document), true);
             tabs.addTab (ko ("파일"), Palette::panel, new FilesTab (document), true);
             tabs.addTab (ko ("오디오"), Palette::panel, new AudioTab (document), true);
             addAndMakeVisible (tabs);
-            setSize (640, 412);
+            setSize (680, 520);
         }
 
-        void resized() override { tabs.setBounds (getLocalBounds()); }
-        void paint (juce::Graphics& g) override { g.fillAll (Palette::panel); }
+        void resized() override { tabs.setBounds (getLocalBounds().reduced (Palette::dialogInset)); }
+        void paint (juce::Graphics& g) override { Palette::drawDialog (g, getLocalBounds()); }
 
     private:
         juce::TabbedComponent tabs { juce::TabbedButtonBar::TabsAtTop };
@@ -388,7 +389,7 @@ void show (ProjectDocument& document, juce::Component* centreAround)
     options.dialogTitle = ko ("프로젝트 설정");
     options.content.setOwned (new Content (document));
     options.componentToCentreAround = centreAround;
-    options.dialogBackgroundColour = Palette::panel;
+    options.dialogBackgroundColour = Palette::background;
     options.escapeKeyTriggersCloseButton = true;
     options.useNativeTitleBar = true;
     options.resizable = false;

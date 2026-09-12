@@ -19,9 +19,12 @@ namespace
     public:
         explicit SelectorHost (juce::AudioDeviceManager& dm) : deviceManager (dm)
         {
+            viewport.setScrollBarsShown (true, false);
+            viewport.setScrollOnDragEnabled (false);
+            addAndMakeVisible (viewport);
             hint.setJustificationType (juce::Justification::centredLeft);
             hint.setColour (juce::Label::textColourId, Palette::dimText);
-            hint.setFont (juce::Font (juce::FontOptions (12.0f)));
+            hint.setFont (Palette::font (Palette::fieldLabelSize));
             addAndMakeVisible (hint);
             rebuild();
             deviceManager.addChangeListener (this);
@@ -35,12 +38,15 @@ namespace
 
         void resized() override
         {
-            auto area = getLocalBounds();
+            auto area = getLocalBounds().reduced (Palette::dialogInset + 4);
             hint.setBounds (area.removeFromBottom (24).reduced (8, 0));
+            viewport.setBounds (area);
 
             if (selector != nullptr)
-                selector->setBounds (area);
+                selector->setSize (juce::jmax (1, area.getWidth() - viewport.getScrollBarThickness()), selector->getHeight());
         }
+
+        void paint (juce::Graphics& g) override { Palette::drawDialog (g, getLocalBounds()); }
 
     private:
         static bool allowsMultichannel (juce::AudioDeviceManager& dm)
@@ -59,6 +65,7 @@ namespace
             // 1-2, so the list is hidden: JUCE only shows it while the minimum is below the device's channel count,
             // and a minimum equal to the maximum keeps the selector's own bookkeeping consistent.
             const int minOut = multichannel ? 2 : AudioEngine::maxDeviceOutputs;
+            viewport.setViewedComponent (nullptr, false);
             selector = std::make_unique<juce::AudioDeviceSelectorComponent> (deviceManager,
                                                                             0, AudioEngine::maxDeviceInputs,   // inputs for mic cues
                                                                             minOut, AudioEngine::maxDeviceOutputs,
@@ -66,7 +73,8 @@ namespace
                                                                             false,    // midi output
                                                                             true,     // stereo pairs
                                                                             false);   // show advanced options directly
-            addAndMakeVisible (*selector);
+            selector->setItemHeight (Palette::fieldHeight);
+            viewport.setViewedComponent (selector.get(), false);
             hint.setText (multichannel ? ko ("ASIO: 출력 채널을 최대 64개까지 열 수 있습니다.")
                                        : ko ("다채널 출력은 ASIO에서만 됩니다. 이 모드에서는 출력 1-2만 사용합니다."),
                           juce::dontSendNotification);
@@ -81,6 +89,7 @@ namespace
 
         juce::AudioDeviceManager& deviceManager;
         std::unique_ptr<juce::AudioDeviceSelectorComponent> selector;
+        juce::Viewport viewport;
         juce::Label hint;
         bool builtForMultichannel = false;
     };
@@ -100,7 +109,7 @@ void show (juce::AudioDeviceManager& deviceManager, juce::Component* centreAroun
     options.dialogTitle = ko ("오디오 출력 설정 (ASIO / WASAPI)");
     options.content.setOwned (selector);
     options.componentToCentreAround = centreAround;
-    options.dialogBackgroundColour = Palette::panel;
+    options.dialogBackgroundColour = Palette::background;
     options.escapeKeyTriggersCloseButton = true;
     options.useNativeTitleBar = true;
     options.resizable = false;

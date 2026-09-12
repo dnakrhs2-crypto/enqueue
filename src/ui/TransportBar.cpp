@@ -15,7 +15,6 @@ namespace
         const auto r = bounds.toFloat().reduced (0.5f);
         juce::Path shape;
         shape.addRoundedRectangle (r, Palette::cornerRadius);
-        juce::DropShadow { Palette::shadowColour, Palette::shadowRadius, { 0, Palette::shadowOffsetY } }.drawForPath (g, shape);
         g.setColour (down ? fill.darker (Palette::pressedDarken) : over ? fill.brighter (Palette::hoverBrighten) : fill);
         g.fillPath (shape);
         g.setColour (edge);
@@ -210,6 +209,24 @@ TransportBar::TransportBar (juce::ApplicationCommandManager& cm)
     cueMeta.setFont (Palette::font (Palette::fileSize));
     cueMeta.setColour (juce::Label::textColourId, Palette::dimText);
     addAndMakeVisible (cueMeta);
+
+    momentaryLabel.setText (ko ("실시간 · LUFS"), juce::dontSendNotification);
+    averageLabel.setText (ko ("평균 · LUFS"), juce::dontSendNotification);
+    for (auto* label : { &momentaryLabel, &averageLabel, &momentaryValue, &averageValue })
+    {
+        const bool value = label == &momentaryValue || label == &averageValue;
+        label->setFont (value ? Palette::monoFont (Palette::loudnessSize).boldened() : Palette::font (Palette::kickerSize));
+        label->setColour (juce::Label::textColourId, value ? Palette::text : Palette::muted);
+        label->setBorderSize (juce::BorderSize<int> (0));
+        label->setMinimumHorizontalScale (1.0f);
+        addAndMakeVisible (label);
+    }
+    averageWindow.getProperties().set ("slateTextOnly", true);
+    averageWindow.setColour (juce::TextButton::textColourOffId, Palette::muted);
+    averageWindow.setWantsKeyboardFocus (false);
+    averageWindow.onClick = [this] { showLoudnessWindowMenu(); };
+    addAndMakeVisible (averageWindow);
+    setLoudness (false, 0.0, false, 0.0, averageSeconds);
 
     playingLabel.setFont (Palette::font (Palette::fileSize));
     playingLabel.setColour (juce::Label::textColourId, Palette::dimText);
@@ -437,14 +454,41 @@ void TransportBar::setPanicSeconds (double seconds)
     panicButton.repaint();
 }
 
+void TransportBar::setLoudness (bool momentaryValid, double momentaryLufs, bool averageValid, double averageLufs, int windowSeconds)
+{
+    const auto reading = [] (bool valid, double value)
+    {
+        return valid && std::isfinite (value) ? juce::String (value, 1) : ko ("—");
+    };
+    momentaryValue.setText (reading (momentaryValid, momentaryLufs), juce::dontSendNotification);
+    averageValue.setText (reading (averageValid, averageLufs), juce::dontSendNotification);
+    averageSeconds = windowSeconds;
+    const auto caption = juce::String (windowSeconds) + ko ("초");
+    if (averageWindow.getButtonText() != caption)
+        averageWindow.setButtonText (caption);
+}
+
+void TransportBar::showLoudnessWindowMenu()
+{
+    juce::PopupMenu menu;
+    for (const int seconds : { 5, 10, 20, 30, 60 })
+        menu.addItem (seconds, juce::String (seconds) + ko ("초"), true, averageSeconds == seconds);
+    menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&averageWindow),
+                       [safeThis = juce::Component::SafePointer<TransportBar> (this)] (int seconds)
+    {
+        if (safeThis != nullptr && seconds > 0 && safeThis->onLufsAverageSecondsChanged)
+            safeThis->onLufsAverageSecondsChanged (seconds);
+    });
+}
+
 void TransportBar::resized()
 {
     if (getWidth() <= 0 || getHeight() <= 0)
         return;
     auto area = getLocalBounds();
-    goButton.setBounds (area.removeFromLeft (juce::jmin (Palette::goWidth, area.getWidth())));
+    goButton.setBounds (area.removeFromLeft (juce::jmin (Palette::goWidth, getWidth() / 6)));
     area.removeFromLeft (Palette::gap);
-    auto right = area.removeFromRight (juce::jmin (Palette::transportWidth, area.getWidth()));
+    auto right = area.removeFromRight (juce::jlimit (Palette::minTransportWidth, Palette::transportWidth, getWidth() / 4));
     const int halfWidth = juce::jmax (0, (right.getWidth() - Palette::buttonGap) / 2);
     auto top = right.removeFromTop (juce::jmax (0, (right.getHeight() - Palette::buttonGap) / 2));
     pauseButton.setBounds (top.removeFromLeft (halfWidth));
@@ -456,12 +500,26 @@ void TransportBar::resized()
     panicSettingsButton.setBounds (right);
     area.removeFromRight (Palette::gap);
     nextCard = area;
+    const juce::Rectangle<int> surfaces[] = { nextCard, goButton.getBounds(), pauseButton.getBounds(), fadeOutButton.getBounds(),
+                                             panicButton.getBounds(), panicSettingsButton.getBounds() };
+    for (int i = 0; i < 6; ++i)
+        shadows[i].resize (surfaces[i]);
     area.reduce (16, 12);
     auto heading = area.removeFromTop (18);
     standbyTitle.setBounds (heading.removeFromLeft (60));
     contextLabel.setBounds (heading);
     statusLabel.setBounds (heading);
     area.removeFromTop (4);
+    auto readings = area.removeFromRight (juce::jmin (Palette::loudnessWidth, area.getWidth() / 2));
+    auto live = readings.removeFromLeft (readings.getWidth() / 2);
+    live.removeFromRight (Palette::buttonGap);
+    momentaryLabel.setBounds (live.removeFromTop (18));
+    momentaryValue.setBounds (live.removeFromTop (32));
+    auto averageHeading = readings.removeFromTop (18);
+    averageWindow.setBounds (averageHeading.removeFromLeft (32));
+    averageLabel.setBounds (averageHeading);
+    averageValue.setBounds (readings.removeFromTop (32));
+    area.removeFromRight (Palette::buttonGap);
     auto main = area.removeFromTop (33);
     const int numberWidth = juce::GlyphArrangement::getStringWidthInt (cueNumber.getFont(), cueNumber.getText());
     cueNumber.setBounds (main.removeFromLeft (juce::jmin (numberWidth, juce::jmax (0, main.getWidth() / 3))));
@@ -475,6 +533,8 @@ void TransportBar::resized()
 
 void TransportBar::paint (juce::Graphics& g)
 {
+    for (const auto& shadow : shadows)
+        shadow.draw (g);
     Palette::drawCard (g, nextCard);
 }
 

@@ -7,7 +7,7 @@ namespace gocue
 
 PluginEditorWindow::PluginEditorWindow (juce::AudioPluginInstance& p, const juce::String& title,
                                         std::function<void (PluginEditorWindow&)> closeCallback)
-    : DocumentWindow (title, Palette::panel, DocumentWindow::closeButton | DocumentWindow::minimiseButton),
+    : DocumentWindow (title, Palette::background, DocumentWindow::closeButton | DocumentWindow::minimiseButton),
       plugin (p),
       onClose (std::move (closeCallback))
 {

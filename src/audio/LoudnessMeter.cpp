@@ -219,7 +219,7 @@ double LoudnessStats::windowPower (int blocks) const noexcept
     for (int i = 0; i < blocks; ++i)
     {
         if (--idx < 0)
-            idx = shortTermBlocks - 1;
+            idx = historyBlocks - 1;
 
         sum += ring[(size_t) idx];
     }
@@ -233,8 +233,8 @@ void LoudnessStats::addSubBlock (double meanSquareLeft, double meanSquareRight)
     if (! std::isfinite (meanSquareRight)) meanSquareRight = 0.0;
 
     ring[(size_t) ringPos] = juce::jmax (0.0, meanSquareLeft) + juce::jmax (0.0, meanSquareRight);   // both channels weigh 1 (L / R)
-    ringPos = (ringPos + 1) % shortTermBlocks;
-    filled = juce::jmin (shortTermBlocks, filled + 1);
+    ringPos = (ringPos + 1) % historyBlocks;
+    filled = juce::jmin (historyBlocks, filled + 1);
     ++subBlocks;
 
     if (filled >= momentaryBlocks)
@@ -278,6 +278,33 @@ LoudnessValue LoudnessStats::shortTerm() const
 
     const auto s = loudnessOf (windowPower (shortTermBlocks));
     return s.valid && s.value >= shownFloor ? s : LoudnessValue {};
+}
+
+LoudnessValue LoudnessStats::windowed (double seconds) const
+{
+    if (! std::isfinite (seconds) || seconds <= 0.0)
+        return {};
+
+    const int blocks = juce::jmin (filled, (int) std::llround (juce::jmin (60.0, seconds) / subBlockSeconds));
+    // Compare powers to avoid logarithms for every sub-block on each UI tick.
+    static const double gatePower = std::pow (10.0, (absoluteGate + 0.691) / 10.0);
+    double sum = 0.0;
+    int accepted = 0, idx = ringPos;
+
+    for (int i = 0; i < blocks; ++i)
+    {
+        if (--idx < 0)
+            idx = historyBlocks - 1;
+
+        const double power = ring[(size_t) idx];
+        if (power > gatePower)
+        {
+            sum += power;
+            ++accepted;
+        }
+    }
+
+    return accepted > 0 ? loudnessOf (sum / accepted) : LoudnessValue {};
 }
 
 LoudnessValue LoudnessStats::integrated() const

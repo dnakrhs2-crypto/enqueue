@@ -48,6 +48,10 @@ public:
     bool getActiveCuesCollapsed() const;
     void setActiveCuesCollapsed (bool collapsed);
 
+    /** This PC's next-cue loudness average window (5, 10, 20, 30 or 60 seconds). */
+    int getLufsAverageSeconds() const;
+    void setLufsAverageSeconds (int seconds);
+
     /** 유튜브 다운로드: put the downloaded file into the cue list right away (on by default). */
     bool getYouTubeAddToQueue() const;
     void setYouTubeAddToQueue (bool add);

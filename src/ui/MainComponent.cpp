@@ -77,6 +77,7 @@ MainComponent::MainComponent (AudioEngine& e, AppSettings& s, juce::ApplicationC
     setWantsKeyboardFocus (true);
 
     addAndMakeVisible (menuBar);
+    addAndMakeVisible (modeToggle);
     addAndMakeVisible (transport);
     addAndMakeVisible (table);
     addAndMakeVisible (inspector);
@@ -233,7 +234,8 @@ MainComponent::MainComponent (AudioEngine& e, AppSettings& s, juce::ApplicationC
     };
     inspector.onResetCue = [this] { controller.resetSelected(); };
 
-    footer.onShowModeChanged = [this] (bool mode) { setShowMode (mode); };
+    modeToggle.onShowModeChanged = [this] (bool mode) { setShowMode (mode); };
+    transport.onLufsAverageSecondsChanged = [this] (int seconds) { settings.setLufsAverageSeconds (seconds); };
     footer.onWarningsClicked = [this] { showWarnings(); };
 
     document.snapshotDecorator = [this] (Project& project) { captureLivePluginStates (project); };
@@ -289,7 +291,9 @@ MainComponent::~MainComponent()
 void MainComponent::resized()
 {
     auto area = getLocalBounds();
-    menuBar.setBounds (area.removeFromTop (Palette::menuBarHeight));
+    auto menuArea = area.removeFromTop (Palette::menuBarHeight);
+    modeToggle.setBounds (menuArea.removeFromRight (Palette::modeToggleWidth));
+    menuBar.setBounds (menuArea);
     footer.setBounds (area.removeFromBottom (Palette::footerHeight));
     area.reduce (Palette::gap, Palette::gap);
     transport.setBounds (area.removeFromTop (Palette::transportHeight));
@@ -312,6 +316,9 @@ void MainComponent::resized()
     activeCuesDivider.setBounds (area.removeFromRight (SplitDivider::thickness));
 
     listCardBounds = area;
+    listShadow.resize (listCardBounds);
+    activeShadow.resize (activeCues.getBounds());
+    inspectorShadow.resize (inspector.getBounds());
     area.reduce (1, 1);
     containerTabs.setBounds (area.removeFromTop (ContainerTabs::height));
     table.setBounds (area);
@@ -383,6 +390,11 @@ void MainComponent::paint (juce::Graphics& g)
 {
     g.fillAll (Palette::background);
     // Draw shadows in the parent so they can extend into the gaps between the existing components.
+    listShadow.draw (g);
+    if (activeCues.isVisible())
+        activeShadow.draw (g);
+    if (inspector.isVisible())
+        inspectorShadow.draw (g);
     Palette::drawCard (g, listCardBounds);
     if (activeCues.isVisible())
         Palette::drawCard (g, activeCues.getBounds());
@@ -1943,6 +1955,7 @@ void MainComponent::setShowMode (bool shouldBeShowMode)
     containerTabs.setEditable (! showMode);
     inspector.setEditable (! showMode);
     footer.setShowMode (showMode);
+    modeToggle.setShowMode (showMode);
 
     if (pluginManagerWindow != nullptr)
         pluginManagerWindow->setLocked (showMode);   // an open manager must not scan / switch plugins during the show either
@@ -3204,6 +3217,13 @@ void MainComponent::installEscapePolicy (juce::Component& root)
 
 void MainComponent::timerCallback()
 {
+    auto& meter = engine.getLoudnessMeter();
+    meter.poll();
+    const auto momentary = meter.getStats().momentary();
+    const int windowSeconds = settings.getLufsAverageSeconds();
+    const auto average = meter.getStats().windowed (windowSeconds);
+    transport.setLoudness (momentary.valid, momentary.value, average.valid, average.value, windowSeconds);
+
     if (--windowScanCountdown <= 0)
     {
         windowScanCountdown = 30;   // once a second

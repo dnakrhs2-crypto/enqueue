@@ -19,7 +19,7 @@ namespace
         {
             title.setText (ko ("마스터 버스 인서트 - 모든 큐가 믹스된 뒤 마지막으로 통과합니다"), juce::dontSendNotification);
             title.setColour (juce::Label::textColourId, Palette::dimText);
-            title.setFont (juce::Font (juce::FontOptions (13.0f)));
+            title.setFont (Palette::font (Palette::bodySize));
             addAndMakeVisible (title);
 
             strip.onOpenPluginManager = std::move (onOpenPluginManager);
@@ -27,7 +27,7 @@ namespace
             strip.setChain (&engine.getMasterChain(), ko ("마스터"));
             addAndMakeVisible (strip);
 
-            setSize (760, 120);
+            setSize (760, 140);
         }
 
         void resized() override
@@ -40,7 +40,7 @@ namespace
 
         void paint (juce::Graphics& g) override
         {
-            g.fillAll (Palette::panel);
+            Palette::drawDialog (g, getLocalBounds());
         }
 
         void chainChanged (PluginChain* chain)
@@ -61,7 +61,7 @@ namespace
         options.dialogTitle = title;
         options.content.setOwned (content);
         options.componentToCentreAround = centreAround;
-        options.dialogBackgroundColour = Palette::panel;
+        options.dialogBackgroundColour = Palette::background;
         options.escapeKeyTriggersCloseButton = true;
         options.useNativeTitleBar = true;
         options.resizable = resizable;

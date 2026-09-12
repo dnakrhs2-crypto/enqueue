@@ -24,15 +24,18 @@ public:
         warning.setText (ko ("저작권 침해 우려가 있는 영상의 경우 다운로드 하지 말아주세요. 다운로드의 모든 책임은 사용자에게 있습니다."),
                          juce::dontSendNotification);
         warning.setColour (juce::Label::textColourId, Palette::paused);
-        warning.setFont (juce::Font (juce::FontOptions (14.0f, juce::Font::bold)));
+        warning.setFont (Palette::font (Palette::alertMessageSize, true));
         warning.setJustificationType (juce::Justification::topLeft);
         warning.setMinimumHorizontalScale (1.0f);
         addAndMakeVisible (warning);
 
         linkLabel.setText (ko ("링크"), juce::dontSendNotification);
+        linkLabel.setFont (Palette::font (Palette::fieldLabelSize));
+        linkLabel.setColour (juce::Label::textColourId, Palette::muted);
         addAndMakeVisible (linkLabel);
 
         urlEditor.setTextToShowWhenEmpty ("https://www.youtube.com/watch?v=...", Palette::dimText);
+        urlEditor.setFont (Palette::font (Palette::fieldValueSize));
         urlEditor.setSelectAllWhenFocused (true);
         urlEditor.onReturnKey = [this] { startDownload(); };
         addAndMakeVisible (urlEditor);
@@ -67,7 +70,7 @@ public:
         log.setReadOnly (true);
         log.setCaretVisible (false);
         log.setScrollbarsShown (true);
-        log.setColour (juce::TextEditor::backgroundColourId, Palette::background);
+        log.setColour (juce::TextEditor::backgroundColourId, Palette::field);
         log.setColour (juce::TextEditor::outlineColourId, Palette::outline);
         log.setColour (juce::TextEditor::focusedOutlineColourId, Palette::outline);
         log.setTextToShowWhenEmpty (ko ("받은 파일이 여기에 표시됩니다."), Palette::dimText);
@@ -99,7 +102,7 @@ public:
         urlEditor.setBounds (row);
         area.removeFromTop (10);
 
-        auto options = area.removeFromTop (28);
+        auto options = area.removeFromTop (Palette::fieldHeight);
         folderButton.setBounds (options.removeFromRight (140));
         options.removeFromRight (8);
         addToQueue.setBounds (options);
@@ -114,7 +117,7 @@ public:
 
     void paint (juce::Graphics& g) override
     {
-        g.fillAll (Palette::background);
+        Palette::drawDialog (g, getLocalBounds());
     }
 
 private:

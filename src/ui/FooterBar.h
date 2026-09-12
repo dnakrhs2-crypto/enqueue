@@ -7,7 +7,23 @@
 namespace gocue
 {
 
-/** Bottom strip: edit / show mode toggle, cue count, broken-cue warnings. */
+/** Menu bar's edit / show mode segment, sharing MainComponent's existing mode action. */
+class ModeToggle : public juce::Component
+{
+public:
+    ModeToggle();
+    void setShowMode (bool showMode);
+    std::function<void (bool showMode)> onShowModeChanged;
+    void resized() override;
+    void paint (juce::Graphics&) override;
+    void paintOverChildren (juce::Graphics&) override;
+
+private:
+    juce::TextButton editButton, showButton;
+    juce::Rectangle<int> modeBounds;
+};
+
+/** Bottom strip: cue count, broken-cue warnings, mode hint and audio status. */
 class FooterBar : public juce::Component
 {
 public:
@@ -19,17 +35,14 @@ public:
     void setWarningCount (int count);
     void setAudioStatus (juce::String text);
 
-    std::function<void (bool showMode)> onShowModeChanged;
     std::function<void()> onWarningsClicked;
 
     void resized() override;
     void paint (juce::Graphics& g) override;
-    void paintOverChildren (juce::Graphics& g) override;
 
 private:
-    juce::TextButton editButton, showButton, warningsButton;
+    juce::TextButton warningsButton;
     juce::Label countLabel, modeHint, audioStatus;
-    juce::Rectangle<int> modeBounds;
     bool showMode = false;
 };
 

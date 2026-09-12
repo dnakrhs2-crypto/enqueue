@@ -85,6 +85,7 @@ target_sources(GoCueCore INTERFACE
     ${CMAKE_CURRENT_SOURCE_DIR}/src/audio/CuePlayer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/audio/HighQualityResampler.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/audio/AudioEngine.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/audio/LoudnessMeter.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/audio/PluginChain.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/audio/PluginHost.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/audio/MediaFoundationAudioFormat.cpp
@@ -236,8 +237,7 @@ target_sources(LiveMixCore INTERFACE
     ${CMAKE_CURRENT_SOURCE_DIR}/livemix/src/ControlLog.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/livemix/src/LiveMixSettings.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/livemix/src/GlobalHotkeys.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/livemix/src/PluginPreset.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/livemix/src/LoudnessMeter.cpp)
+    ${CMAKE_CURRENT_SOURCE_DIR}/livemix/src/PluginPreset.cpp)
 target_include_directories(LiveMixCore INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/livemix/src)
 target_link_libraries(LiveMixCore INTERFACE GoCueCore)
 if(WIN32)

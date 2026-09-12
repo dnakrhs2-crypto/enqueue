@@ -19,6 +19,7 @@ namespace Keys
     constexpr const char* reopenAfterUpdate = "reopenProjectAfterUpdate";
     constexpr const char* youtubeAddToQueue = "youtubeAddToQueue";
     constexpr const char* disabledPlugins   = "disabledPlugins";
+    constexpr const char* lufsAverageSeconds = "lufsAverageSeconds";
 }
 
 AppSettings::AppSettings()
@@ -176,6 +177,25 @@ juce::String AppSettings::getLastRunVersion() const
 void AppSettings::setLastRunVersion (const juce::String& version)
 {
     settings->setValue (Keys::lastRunVersion, version);
+}
+
+int AppSettings::getLufsAverageSeconds() const
+{
+    const int seconds = settings->getIntValue (Keys::lufsAverageSeconds, 20);
+    for (const int allowed : { 5, 10, 20, 30, 60 })
+        if (seconds == allowed)
+            return seconds;
+    return 20;
+}
+
+void AppSettings::setLufsAverageSeconds (int seconds)
+{
+    for (const int allowed : { 5, 10, 20, 30, 60 })
+        if (seconds == allowed)
+        {
+            settings->setValue (Keys::lufsAverageSeconds, seconds);
+            return;
+        }
 }
 
 void AppSettings::flush()

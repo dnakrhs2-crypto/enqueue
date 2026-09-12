@@ -697,7 +697,12 @@ void CueTable::paintCell (juce::Graphics& g, int rowNumber, int columnId, int wi
             font = Palette::monoFont (Palette::fileSize);
             justification = juce::Justification::centredLeft;
             if (cue.isGroup())
-                break;   // child count and mode are the name cell's pill
+            {
+                text = groupPresetName (cue.group) + " · " + juce::String ((int) cues.childrenOf (index).size()) + ko ("개");
+                colour = Palette::muted;
+                font = Palette::font (Palette::fileSize);
+                break;
+            }
             if (cue.isMic())
                 text = ko ("입력 ") + juce::String (cue.mic.firstInput + 1) + (cue.mic.numInputs > 1 ? "-" + juce::String (cue.mic.firstInput + cue.mic.numInputs) : juce::String());
             else if (cue.isControl() && ! cue.control.needsTarget())

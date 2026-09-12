@@ -5,7 +5,7 @@
 namespace gocue
 {
 
-FooterBar::FooterBar()
+ModeToggle::ModeToggle()
 {
     auto setup = [this] (juce::TextButton& button, const char* text)
     {
@@ -17,15 +17,56 @@ FooterBar::FooterBar()
 
     setup (editButton, "편집 모드");
     setup (showButton, "쇼 모드");
-    setup (warningsButton, "경고");
 
     editButton.onClick = [this] { if (onShowModeChanged) onShowModeChanged (false); };
     showButton.onClick = [this] { if (onShowModeChanged) onShowModeChanged (true); };
-    warningsButton.onClick = [this] { if (onWarningsClicked) onWarningsClicked(); };
     editButton.setConnectedEdges (juce::Button::ConnectedOnRight);
     showButton.setConnectedEdges (juce::Button::ConnectedOnLeft);
     editButton.getProperties().set ("slateSegment", true);
     showButton.getProperties().set ("slateSegment", true);
+    setShowMode (false);
+}
+
+void ModeToggle::setShowMode (bool showMode)
+{
+    editButton.setToggleState (! showMode, juce::dontSendNotification);
+    showButton.setToggleState (showMode, juce::dontSendNotification);
+    for (auto* button : { &editButton, &showButton })
+    {
+        button->setColour (juce::TextButton::buttonColourId, Palette::panel);
+        button->setColour (juce::TextButton::buttonOnColourId, Palette::accent);
+        button->setColour (juce::TextButton::textColourOffId, Palette::muted);
+        button->setColour (juce::TextButton::textColourOnId, Palette::accentInk);
+    }
+}
+
+void ModeToggle::resized()
+{
+    modeBounds = getLocalBounds().reduced (Palette::gap, 3);
+    auto modes = modeBounds;
+    editButton.setBounds (modes.removeFromLeft (modes.getWidth() / 2));
+    showButton.setBounds (modes);
+}
+
+void ModeToggle::paint (juce::Graphics& g)
+{
+    g.fillAll (Palette::panel);
+    g.setColour (Palette::outline);
+    g.fillRect (0, getHeight() - 1, getWidth(), 1);
+}
+
+void ModeToggle::paintOverChildren (juce::Graphics& g)
+{
+    g.setColour (Palette::outline);
+    g.drawRoundedRectangle (modeBounds.toFloat().reduced (0.5f), Palette::cornerRadius, Palette::borderWidth);
+}
+
+FooterBar::FooterBar()
+{
+    warningsButton.setButtonText (ko ("경고"));
+    warningsButton.setWantsKeyboardFocus (false);
+    warningsButton.onClick = [this] { if (onWarningsClicked) onWarningsClicked(); };
+    addAndMakeVisible (warningsButton);
     warningsButton.getProperties().set ("slatePill", true);
     warningsButton.getProperties().set ("slateSmall", true);
     warningsButton.getProperties().set ("slateColourOutline", true);
@@ -60,17 +101,9 @@ FooterBar::FooterBar()
 void FooterBar::setShowMode (bool mode)
 {
     showMode = mode;
-    editButton.setToggleState (! showMode, juce::dontSendNotification);
-    showButton.setToggleState (showMode, juce::dontSendNotification);
-    for (auto* button : { &editButton, &showButton })
-    {
-        button->setColour (juce::TextButton::buttonColourId, Palette::panel);
-        button->setColour (juce::TextButton::buttonOnColourId, Palette::accent);
-        button->setColour (juce::TextButton::textColourOffId, Palette::muted);
-        button->setColour (juce::TextButton::textColourOnId, Palette::accentInk);
-    }
     modeHint.setText (showMode ? ko ("쇼 모드: 편집 잠김 (Ctrl+Shift+M)") : ko ("편집 모드 · 쇼 모드 = Ctrl+Shift+M"), juce::dontSendNotification);
     modeHint.setTooltip (modeHint.getText());
+    resized();
     repaint();
 }
 
@@ -109,11 +142,6 @@ void FooterBar::resized()
     if (getWidth() <= 0 || getHeight() <= 0)
         return;
     auto area = getLocalBounds().reduced (14, 3);
-    modeBounds = area.removeFromLeft (148);
-    auto modes = modeBounds;
-    editButton.setBounds (modes.removeFromLeft (80));
-    showButton.setBounds (modes);
-    area.removeFromLeft (Palette::gap);
     const int countWidth = juce::GlyphArrangement::getStringWidthInt (countLabel.getFont(), countLabel.getText()) + 18;
     countLabel.setBounds (area.removeFromLeft (countWidth));
     area.removeFromLeft (Palette::gap);
@@ -123,10 +151,10 @@ void FooterBar::resized()
         warningsButton.setBounds (area.removeFromLeft (warningWidth));
         area.removeFromLeft (Palette::gap);
     }
-    const int audioWidth = juce::GlyphArrangement::getStringWidthInt (audioStatus.getFont(), audioStatus.getText());
-    audioStatus.setBounds (area.removeFromRight (juce::jmin (audioWidth, juce::jmax (0, area.getWidth()))));
-    area.removeFromRight (juce::jmin (Palette::gap, area.getWidth()));
-    modeHint.setBounds (area);
+    const int hintWidth = juce::GlyphArrangement::getStringWidthInt (modeHint.getFont(), modeHint.getText());
+    modeHint.setBounds (area.removeFromLeft (juce::jmin (hintWidth, area.getWidth() / 2)));
+    area.removeFromLeft (juce::jmin (Palette::gap, area.getWidth()));
+    audioStatus.setBounds (area);
 }
 
 void FooterBar::paint (juce::Graphics& g)
@@ -135,12 +163,6 @@ void FooterBar::paint (juce::Graphics& g)
     g.setColour (Palette::outline);
     g.drawLine (0.0f, 0.5f, (float) getWidth(), 0.5f);
     g.drawRoundedRectangle (countLabel.getBounds().toFloat().reduced (0.5f), Palette::pillRadius, Palette::borderWidth);
-}
-
-void FooterBar::paintOverChildren (juce::Graphics& g)
-{
-    g.setColour (Palette::outline);
-    g.drawRoundedRectangle (modeBounds.toFloat().reduced (0.5f), Palette::cornerRadius, Palette::borderWidth);
 }
 
 } // namespace gocue

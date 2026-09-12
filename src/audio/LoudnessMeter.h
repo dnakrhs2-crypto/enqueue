@@ -78,6 +78,7 @@ public:
     static constexpr double subBlockSeconds = 0.1;
     static constexpr int momentaryBlocks = 4;    // 400 ms
     static constexpr int shortTermBlocks = 30;   // 3 s
+    static constexpr int historyBlocks = 600;    // 60 s, shared with Enqueue's selectable average
     static constexpr double absoluteGate = -70.0;
     static constexpr double relativeGateIntegrated = -10.0;
     static constexpr double relativeGateRange = -20.0;
@@ -91,6 +92,8 @@ public:
 
     LoudnessValue momentary() const;
     LoudnessValue shortTerm() const;
+    /** Recent seconds (up to 60): mean channel-sum power of 100 ms blocks strictly above -70 LUFS. */
+    LoudnessValue windowed (double seconds) const;
     LoudnessValue integrated() const;
     LoudnessValue loudnessRange() const;
     LoudnessValue maxMomentary() const noexcept { return maxM; }
@@ -125,7 +128,7 @@ private:
 
     double windowPower (int blocks) const noexcept;   // the mean summed power of the last 'blocks' sub-blocks
 
-    std::array<double, (size_t) shortTermBlocks> ring {};
+    std::array<double, (size_t) historyBlocks> ring {};
     int ringPos = 0, filled = 0;
     juce::int64 subBlocks = 0;
     Histogram integratedHist, rangeHist;

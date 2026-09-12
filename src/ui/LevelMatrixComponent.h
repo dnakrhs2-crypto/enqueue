@@ -1,6 +1,7 @@
 #pragma once
 
 #include "model/LevelMatrix.h"
+#include "ui/UiUtils.h"
 
 #include <juce_gui_basics/juce_gui_basics.h>
 
@@ -56,11 +57,11 @@ public:
     bool keyPressed (const juce::KeyPress& key) override;
     void focusLost (FocusChangeType) override;
 
-    static constexpr int cellWidth = 58;
-    static constexpr int cellHeight = 24;
-    static constexpr int gap = 3;
-    static constexpr int headerWidth = 64;
-    static constexpr int headerHeight = 22;
+    static constexpr int cellWidth = Palette::matrixCellWidth;
+    static constexpr int cellHeight = Palette::matrixCellSize;
+    static constexpr int gap = Palette::matrixGap;
+    static constexpr int headerWidth = Palette::matrixHeaderWidth;
+    static constexpr int headerHeight = Palette::matrixCellSize;
 
 private:
     enum class Kind { none, main, input, output, cross };

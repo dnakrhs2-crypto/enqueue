@@ -11,7 +11,7 @@ class ManualWindow::Content : public juce::Component
 public:
     Content()
     {
-        tabs.setTabBarDepth (30);
+        tabs.setTabBarDepth (Palette::tabBarHeight);
         tabs.setOutline (0);
         tabs.setColour (juce::TabbedComponent::backgroundColourId, Palette::panel);
 
@@ -22,11 +22,11 @@ public:
             page->setReadOnly (true);
             page->setCaretVisible (false);
             page->setScrollbarsShown (true);
-            page->setFont (juce::Font (juce::FontOptions (14.5f)));
-            page->setColour (juce::TextEditor::backgroundColourId, Palette::background);
+            page->setFont (Palette::font (Palette::manualSize));
+            page->setColour (juce::TextEditor::backgroundColourId, Palette::panel);
             page->setColour (juce::TextEditor::textColourId, Palette::text);
-            page->setColour (juce::TextEditor::outlineColourId, juce::Colours::transparentBlack);
-            page->setColour (juce::TextEditor::focusedOutlineColourId, juce::Colours::transparentBlack);
+            page->setColour (juce::TextEditor::outlineColourId, Palette::transparent);
+            page->setColour (juce::TextEditor::focusedOutlineColourId, Palette::transparent);
             page->setIndents (14, 12);
             page->setText (ko (section.text), false);
             page->setLineSpacing (1.25f);
@@ -46,12 +46,12 @@ public:
 
     void resized() override
     {
-        tabs.setBounds (getLocalBounds());
+        tabs.setBounds (getLocalBounds().reduced (Palette::dialogInset));
     }
 
     void paint (juce::Graphics& g) override
     {
-        g.fillAll (Palette::background);
+        Palette::drawDialog (g, getLocalBounds());
     }
 
 private:
@@ -299,6 +299,7 @@ R"(출력 · 패치 · 플러그인
 
 ■ 오디오 패치 편집기 (Ctrl+Shift+P)
   큐 출력(패치당 기본 16개, 1~128; 기존 프로젝트는 여기 "큐 출력 수"에서) → 장치 출력 라우팅 매트릭스, 패치 메인 레벨, 스테레오 쌍, 큐 출력 이름.
+  장치 출력 인서트는 이미 쓰는 프로젝트에서만 표시.
   큐 출력 인서트 · 장치 출력 인서트(VST3). 큐마다 기본 탭에서 어느 패치를 쓸지 고릅니다. 패치를 여러 개 만들어 두면 오디션용 "대체 패치"로도 씁니다.
   순서: 큐 인서트 → 레벨 매트릭스 → 큐 출력 인서트 → 라우팅 + 패치 메인 → 장치 출력 인서트 → 마스터 버스 인서트(장치 1-2) → 장치.
   라우팅 변경은 재생 중에도 즉시(10 ms 램프) 반영됩니다. 재생 중인 큐의 패치 변경은 다음 시작부터.

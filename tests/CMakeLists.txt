@@ -30,6 +30,7 @@ target_sources(EnqueueTests PRIVATE
     PluginPresetTests.cpp
     PluginSearchTests.cpp
     LoudnessMeterTests.cpp
+    LoudnessAverageTests.cpp
     ResamplerTests.cpp
     CueListTests.cpp
     YouTubeDownloaderTests.cpp

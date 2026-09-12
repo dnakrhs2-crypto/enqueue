@@ -257,6 +257,8 @@ private:
     CueInspector inspector;
     ActiveCuesPanel activeCues;
     FooterBar footer;
+    ModeToggle modeToggle;
+    Palette::CachedShadow listShadow, activeShadow, inspectorShadow;
     juce::Rectangle<int> listCardBounds;
     std::unique_ptr<juce::FileChooser> chooser;
     bool dragOverWindow = false;

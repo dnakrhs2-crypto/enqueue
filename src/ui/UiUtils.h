@@ -99,6 +99,7 @@ namespace Palette
     const juce::Colour rowEven = panel, rowOdd = panel, header = panel2, button = panel2;
     const juce::Colour muted = dimText, accent = standby, goButton = playing, stopButton = missing, warn = paused;
     const juce::Colour shadowColour { 0x59000000 };
+    const juce::Colour transparent { 0x00000000 };
     const juce::Colour highlightColour = accentInk.withAlpha (0.04f);
 
     constexpr float cornerRadius = 12.0f, fieldRadius = 10.0f, pillRadius = 99.0f;
@@ -110,12 +111,31 @@ namespace Palette
     constexpr float bodySize = 13.0f, headerSize = 11.5f, fileSize = 12.0f, timeSize = 12.5f;
     constexpr float tabSize = 12.5f, pillSize = 11.0f, kickerSize = 11.0f, keySize = 10.5f;
     constexpr float nextNameSize = 28.0f, remainingSize = 26.0f, goSize = 58.0f;
+    constexpr float fieldLabelSize = 12.0f, fieldValueSize = 13.0f, loudnessSize = 22.0f;
+    constexpr float rulerSize = 10.5f, channelTagSize = 10.0f, sliderThumbSize = 14.0f;
+    constexpr float crosspointAlpha = 0.22f, waveDimAlpha = 0.35f, envelopeAlpha = 0.9f;
+    constexpr int fieldHeight = 30, formRowHeight = 38, matrixCellSize = 38;
+    constexpr int matrixCellWidth = 62, matrixHeaderWidth = 104, matrixGap = 1;
+    constexpr int inspectorPageWidth = 860, inspectorBasicHeight = 232, inspectorPlotHeight = 250, inspectorFormHeight = 208;
+    constexpr int inspectorControlWidth = 936, inspectorWideWidth = 1080;
+    constexpr int modeToggleWidth = 164, loudnessWidth = 220, weekdaySize = 26;
+    constexpr int dialogInset = 8, pluginSlotWidth = 216, pluginSlotHeight = 72, pluginSlotGap = 26;
+    constexpr int alertIconWidth = 80, alertIconSize = 36;
+    constexpr float alertTitleSize = 18.0f, alertMessageSize = 14.0f, manualSize = 14.5f;
+    constexpr float dividerChevronSize = 8.0f, dividerStroke = 1.0f;
+    const juce::Colour wave = accent, waveDim = accent.withAlpha (waveDimAlpha);
+    const juce::Colour envelope = paused, waveCursor = muted, waveMarker = accent;
+    const juce::Colour gangColours[] = {
+        juce::Colour (0xff5a3d8b), juce::Colour (0xff3d6f8b), juce::Colour (0xff3d8b5a), juce::Colour (0xff8b8b3d),
+        juce::Colour (0xff8b5a3d), juce::Colour (0xff8b3d5a), juce::Colour (0xff3d8b8b), juce::Colour (0xff6b6b6b)
+    };
+    constexpr float gangSilentAlpha = 0.35f, gangActiveAlpha = 0.75f, inactiveCellAlpha = 0.35f, deadCellAlpha = 0.12f;
     constexpr float headerTracking = 0.02f, kickerTracking = 0.08f;
     constexpr float tickSize = 15.0f;
     constexpr float groupTextStroke = 0.25f, goTextStroke = 0.8f;
     constexpr int gap = 12, cardInset = 10, cardHeaderHeight = 40, tabBarHeight = 41;
     constexpr int menuBarHeight = 32, transportHeight = 128, footerHeight = 30;
-    constexpr int goWidth = 220, transportWidth = 360, buttonGap = 8;
+    constexpr int goWidth = 220, transportWidth = 360, minTransportWidth = 260, buttonGap = 8;
     constexpr int tableHeaderHeight = 30, rowHeights[] = { 28, 32, 40 };
     constexpr int statusColumnWidth = 34, numberColumnWidth = 52, fileColumnWidth = 250;
     constexpr int preWaitColumnWidth = 92, durationColumnWidth = 92, postWaitColumnWidth = 104, continueColumnWidth = 46;
@@ -179,6 +199,38 @@ namespace Palette
         g.strokePath (outlinePath, juce::PathStrokeType (stroke));
     }
 
+    /** Build only in resized(). Painting a countdown never repeats the shadow blur. */
+    class CachedShadow
+    {
+    public:
+        void resize (juce::Rectangle<int> newBounds)
+        {
+            const bool sameSize = bounds.getWidth() == newBounds.getWidth() && bounds.getHeight() == newBounds.getHeight();
+            bounds = newBounds;
+            if (sameSize && image.isValid())
+                return;
+            image = {};
+            if (bounds.isEmpty())
+                return;
+            image = juce::Image (juce::Image::ARGB, bounds.getWidth() + padding * 2, bounds.getHeight() + padding * 2, true);
+            juce::Graphics canvas (image);
+            juce::Path shape;
+            shape.addRoundedRectangle (bounds.withPosition (padding, padding).toFloat().reduced (0.5f), cornerRadius);
+            juce::DropShadow { shadowColour, shadowRadius, { 0, shadowOffsetY } }.drawForPath (canvas, shape);
+        }
+
+        void draw (juce::Graphics& g) const
+        {
+            if (image.isValid())
+                g.drawImageAt (image, bounds.getX() - padding, bounds.getY() - padding);
+        }
+
+    private:
+        static constexpr int padding = shadowRadius + shadowOffsetY;
+        juce::Rectangle<int> bounds;
+        juce::Image image;
+    };
+
     inline void drawCard (juce::Graphics& g, juce::Rectangle<int> bounds)
     {
         if (bounds.isEmpty())
@@ -186,12 +238,17 @@ namespace Palette
         const auto r = bounds.toFloat().reduced (0.5f);
         juce::Path shape;
         shape.addRoundedRectangle (r, cornerRadius);
-        juce::DropShadow { shadowColour, shadowRadius, { 0, shadowOffsetY } }.drawForPath (g, shape);
         g.setColour (panel);
         g.fillPath (shape);
         g.setColour (outline);
         g.strokePath (shape, juce::PathStrokeType (borderWidth));
         drawTopHighlight (g, shape, r);
+    }
+
+    inline void drawDialog (juce::Graphics& g, juce::Rectangle<int> bounds)
+    {
+        g.fillAll (background);
+        drawCard (g, bounds.reduced (dialogInset));
     }
 
     /** Finish a card after its existing child components paint, without changing their parentage. */

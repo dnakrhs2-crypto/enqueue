@@ -1694,6 +1694,8 @@ void AudioEngine::prepare (double newSampleRate, int newBlockSize, int newNumDev
     previousBlockSize = blockSize.load();
     formatPrepared = true;
 
+    loudness.prepare (sampleRate.load());
+
     {
         const juce::ScopedLock sl (lock);
 
@@ -1778,6 +1780,7 @@ void AudioEngine::renderBlock (juce::AudioBuffer<float>& output, int numSamples,
 
         masterChain.process (mixBuffer, n);   // legacy master inserts on device outputs 1-2
         applyOutputGate (mixBuffer, n);       // the panic gate: closed = silence, whatever the chains still ring with
+        loudness.process (mixBuffer.getReadPointer (0), mixBuffer.getNumChannels() > 1 ? mixBuffer.getReadPointer (1) : nullptr, n);
 
         for (int ch = 0; ch < output.getNumChannels(); ++ch)
         {

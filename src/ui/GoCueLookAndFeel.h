@@ -44,7 +44,7 @@ public:
         setColour (juce::ListBox::backgroundColourId, Palette::panel);
         setColour (juce::ListBox::outlineColourId, Palette::outline);
         setColour (juce::ScrollBar::thumbColourId, Palette::muted);
-        setColour (juce::ScrollBar::backgroundColourId, juce::Colours::transparentBlack);
+        setColour (juce::ScrollBar::backgroundColourId, Palette::transparent);
         setColour (juce::PopupMenu::backgroundColourId, Palette::panel);
         setColour (juce::PopupMenu::textColourId, Palette::text);
         setColour (juce::PopupMenu::headerTextColourId, Palette::dimText);
@@ -117,17 +117,43 @@ public:
 
     juce::Font getTextButtonFont (juce::TextButton& button, int) override
     {
+        if (button.getProperties().getWithDefault ("slateTextOnly", false))
+            return Palette::font (Palette::kickerSize);
+        if (button.getProperties().getWithDefault ("slateKeycap", false))
+            return Palette::monoFont (Palette::fileSize);
         if (button.getProperties().getWithDefault ("slateSegment", false))
             return Palette::font (Palette::fileSize, button.getToggleState());
         return Palette::font (button.getProperties().getWithDefault ("slateSmall", false) ? Palette::headerSize : Palette::bodySize, true);
+    }
+
+    void drawButtonText (juce::Graphics& g, juce::TextButton& button, bool over, bool down) override
+    {
+        if (! button.getProperties().getWithDefault ("slateTextOnly", false))
+        {
+            juce::LookAndFeel_V4::drawButtonText (g, button, over, down);
+            return;
+        }
+        g.setFont (Palette::font (Palette::kickerSize));
+        g.setColour (over ? Palette::accent : button.findColour (juce::TextButton::textColourOffId));
+        g.drawText (button.getButtonText(), button.getLocalBounds(), juce::Justification::centredLeft, true);
     }
 
     /** Flat surfaces; connected mode segments share one perimeter drawn by their owner. */
     void drawButtonBackground (juce::Graphics& g, juce::Button& button, const juce::Colour& backgroundColour,
                                bool isMouseOverButton, bool isButtonDown) override
     {
+        if (button.getProperties().getWithDefault ("slateTextOnly", false))
+        {
+            if (isMouseOverButton)
+            {
+                g.setColour (Palette::accent);
+                g.fillRect (2, button.getHeight() - 2, juce::jmax (0, button.getWidth() - 4), 1);
+            }
+            return;
+        }
         const auto bounds = button.getLocalBounds().toFloat().reduced (0.5f, 0.5f);
-        auto base = backgroundColour.withMultipliedAlpha (button.isEnabled() ? 1.0f : Palette::disabledAlpha);
+        auto base = (button.getProperties().getWithDefault ("slateKeycap", false) ? Palette::field : backgroundColour)
+                        .withMultipliedAlpha (button.isEnabled() ? 1.0f : Palette::disabledAlpha);
 
         if (isButtonDown)
             base = base.darker (Palette::pressedDarken);
@@ -142,15 +168,12 @@ public:
         const bool flatOnBottom = (flags & juce::Button::ConnectedOnBottom) != 0;
 
         const bool pill = button.getProperties().getWithDefault ("slatePill", false);
-        const bool small = button.getProperties().getWithDefault ("slateSmall", false);
         const bool segment = button.getProperties().getWithDefault ("slateSegment", false);
-        const float radius = pill ? Palette::pillRadius : small ? Palette::fieldRadius : Palette::cornerRadius;
+        const float radius = pill ? Palette::pillRadius : segment ? Palette::cornerRadius : Palette::fieldRadius;
         juce::Path shape;
         shape.addRoundedRectangle (bounds.getX(), bounds.getY(), bounds.getWidth(), bounds.getHeight(), radius, radius,
                                    ! (flatOnLeft || flatOnTop), ! (flatOnRight || flatOnTop), ! (flatOnLeft || flatOnBottom), ! (flatOnRight || flatOnBottom));
 
-        if (! small && ! segment && ! pill)
-            juce::DropShadow { Palette::shadowColour, Palette::shadowRadius, { 0, Palette::shadowOffsetY } }.drawForPath (g, shape);
         g.setColour (base);
         g.fillPath (shape);
         if (! segment)
@@ -187,8 +210,67 @@ public:
 
     juce::Font getComboBoxFont (juce::ComboBox&) override { return Palette::font (Palette::timeSize); }
 
+    void positionComboBoxText (juce::ComboBox& box, juce::Label& label) override
+    {
+        label.setBounds (8, 1, juce::jmax (0, box.getWidth() - 38), box.getHeight() - 2);
+        label.setBorderSize (juce::BorderSize<int> (0));
+        label.setFont (getComboBoxFont (box));
+    }
+
+    juce::Label* createSliderTextBox (juce::Slider& slider) override
+    {
+        auto* label = juce::LookAndFeel_V4::createSliderTextBox (slider);
+        label->getProperties().set ("slateField", true);
+        label->setFont (Palette::monoFont (Palette::fieldValueSize));
+        label->setJustificationType (juce::Justification::centredRight);
+        label->setBorderSize (juce::BorderSize<int> (0, 8, 0, 8));
+        return label;
+    }
+
+    void drawLabel (juce::Graphics& g, juce::Label& label) override
+    {
+        if (! label.getProperties().getWithDefault ("slateField", false))
+        {
+            juce::LookAndFeel_V4::drawLabel (g, label);
+            return;
+        }
+        const auto bounds = label.getLocalBounds().toFloat().reduced (0.5f);
+        g.setColour (Palette::field);
+        g.fillRoundedRectangle (bounds, Palette::fieldRadius);
+        g.setColour (label.isBeingEdited() ? Palette::accent : Palette::outline);
+        g.drawRoundedRectangle (bounds, Palette::fieldRadius, Palette::borderWidth);
+        if (! label.isBeingEdited())
+        {
+            g.setColour (label.findColour (juce::Label::textColourId).withMultipliedAlpha (label.isEnabled() ? 1.0f : Palette::disabledAlpha));
+            g.setFont (label.getFont());
+            g.drawText (label.getText(), label.getLocalBounds().reduced (8, 0), label.getJustificationType(), true);
+        }
+    }
+
+    void drawLinearSlider (juce::Graphics& g, int x, int y, int width, int height, float sliderPos,
+                           float minSliderPos, float maxSliderPos, juce::Slider::SliderStyle style, juce::Slider& slider) override
+    {
+        if (style != juce::Slider::LinearHorizontal && style != juce::Slider::LinearVertical)
+        {
+            juce::LookAndFeel_V4::drawLinearSlider (g, x, y, width, height, sliderPos, minSliderPos, maxSliderPos, style, slider);
+            return;
+        }
+        const bool horizontal = style == juce::Slider::LinearHorizontal;
+        const float centre = horizontal ? (float) y + (float) height * 0.5f : (float) x + (float) width * 0.5f;
+        const auto track = horizontal ? juce::Rectangle<float> ((float) x, centre - 2.0f, (float) width, 4.0f)
+                                      : juce::Rectangle<float> (centre - 2.0f, (float) y, 4.0f, (float) height);
+        g.setColour (Palette::outline);
+        g.fillRoundedRectangle (track, Palette::pillRadius);
+        const auto thumb = horizontal ? juce::Point<float> (sliderPos, centre) : juce::Point<float> (centre, sliderPos);
+        const float size = Palette::sliderThumbSize;
+        g.setColour (Palette::accent.withMultipliedAlpha (slider.isEnabled() ? 1.0f : Palette::disabledAlpha));
+        g.fillEllipse (thumb.x - size * 0.5f, thumb.y - size * 0.5f, size, size);
+    }
+
     void fillTextEditorBackground (juce::Graphics& g, int width, int height, juce::TextEditor& editor) override
     {
+        // TextEditor treats an opaque field colour as covering its bounds, including the rounded corners.
+        g.fillAll (Palette::panel);
         g.setColour (editor.findColour (juce::TextEditor::backgroundColourId));
         g.fillRoundedRectangle (juce::Rectangle<int> (width, height).toFloat().reduced (0.5f), Palette::fieldRadius);
     }
@@ -226,6 +308,34 @@ public:
     }
 
     int getDefaultScrollbarWidth() override { return Palette::scrollBarWidth; }
+
+    void drawAlertBox (juce::Graphics& g, juce::AlertWindow& alert, const juce::Rectangle<int>&, juce::TextLayout& layout) override
+    {
+        Palette::drawDialog (g, alert.getLocalBounds());
+        const bool hasIcon = alert.getAlertType() != juce::MessageBoxIconType::NoIcon;
+        if (hasIcon)
+        {
+            const bool warning = alert.getAlertType() == juce::MessageBoxIconType::WarningIcon;
+            const auto icon = juce::Rectangle<int> (22, 30, Palette::alertIconSize, Palette::alertIconSize).toFloat();
+            juce::Path shape;
+            if (warning)
+                shape.addTriangle (icon.getCentreX(), icon.getY(), icon.getRight(), icon.getBottom(), icon.getX(), icon.getBottom());
+            else
+                shape.addEllipse (icon);
+            g.setColour (warning ? Palette::warn : Palette::accent);
+            g.strokePath (shape, juce::PathStrokeType (Palette::selectionWidth));
+            g.setFont (Palette::font (Palette::alertTitleSize, true));
+            g.drawText (warning ? "!" : alert.getAlertType() == juce::MessageBoxIconType::InfoIcon ? "i" : "?",
+                        icon.translated (0.0f, warning ? 3.0f : 0.0f), juce::Justification::centred);
+        }
+        // Keep JUCE's layout origin: it has already allowed for its 80px icon and the extra controls.
+        layout.draw (g, juce::Rectangle<int> (1 + (hasIcon ? Palette::alertIconWidth : 0), 30,
+                                             alert.getWidth() - 2, alert.getHeight() - getAlertWindowButtonHeight() - 22).toFloat());
+    }
+
+    juce::Font getAlertWindowTitleFont() override { return Palette::font (Palette::alertTitleSize, true); }
+    juce::Font getAlertWindowMessageFont() override { return Palette::font (Palette::alertMessageSize); }
+    juce::Font getAlertWindowFont() override { return Palette::font (Palette::bodySize); }
 
     void drawScrollbar (juce::Graphics& g, juce::ScrollBar&, int x, int y, int width, int height, bool vertical,
                          int thumbStart, int thumbSize, bool over, bool down) override

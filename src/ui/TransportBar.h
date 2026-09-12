@@ -40,6 +40,8 @@ public:
     void flashGoRejected();
     /** "항상 오디션": accent colour and tooltip, while the visible label remains GO. */
     void setAuditionMode (bool auditioning);
+    void setLoudness (bool momentaryValid, double momentaryLufs, bool averageValid, double averageLufs, int windowSeconds);
+    std::function<void (int seconds)> onLufsAverageSecondsChanged;
 
     void resized() override;
     void paint (juce::Graphics& g) override;
@@ -49,6 +51,7 @@ private:
     void styleButton (juce::TextButton& button, juce::Colour colour);
     void updateGoLook();
     void updateStandbyCue (int index, const Cue* cue);
+    void showLoudnessWindowMenu();
 
     juce::ApplicationCommandManager& commands;
 
@@ -89,7 +92,11 @@ private:
     TransportButton pauseButton { TransportButton::Icon::pause }, fadeOutButton { TransportButton::Icon::fade }, panicButton { TransportButton::Icon::stop };
     juce::Label standbyTitle, cueNumber, cueName, cueFile, playingLabel, statusLabel, contextLabel;
     MetaLabel cueMeta;
+    juce::Label momentaryLabel, momentaryValue, averageLabel, averageValue;
+    juce::TextButton averageWindow;
+    int averageSeconds = 20;
     juce::Rectangle<int> nextCard;
+    Palette::CachedShadow shadows[6];
     bool goLocked = false;
     bool goFlashing = false;
     bool auditionMode = false;

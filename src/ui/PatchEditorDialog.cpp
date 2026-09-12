@@ -16,7 +16,7 @@ namespace
     {
         label.setText (text, juce::dontSendNotification);
         label.setColour (juce::Label::textColourId, Palette::dimText);
-        label.setFont (juce::Font (juce::FontOptions (12.0f)));
+        label.setFont (Palette::font (Palette::fieldLabelSize));
     }
 
     /** One insert chain strip in its own window (cue output or device output inserts). */
@@ -29,7 +29,7 @@ namespace
         {
             title.setText (description, juce::dontSendNotification);
             title.setColour (juce::Label::textColourId, Palette::dimText);
-            title.setFont (juce::Font (juce::FontOptions (13.0f)));
+            title.setFont (Palette::font (Palette::bodySize));
             addAndMakeVisible (title);
 
             strip.onOpenPluginManager = std::move (onOpenPluginManager);
@@ -40,7 +40,7 @@ namespace
             };
             strip.setChain (&chain, ownerName);
             addAndMakeVisible (strip);
-            setSize (760, 120);
+            setSize (760, 140);
         }
 
         void resized() override
@@ -51,7 +51,7 @@ namespace
             strip.setBounds (area);
         }
 
-        void paint (juce::Graphics& g) override { g.fillAll (Palette::panel); }
+        void paint (juce::Graphics& g) override { Palette::drawDialog (g, getLocalBounds()); }
         void chainChanged (PluginChain* chain) { strip.chainChanged (chain); }
 
     private:
@@ -67,7 +67,7 @@ namespace
         options.dialogTitle = title;
         options.content.setOwned (content);
         options.componentToCentreAround = centreAround;
-        options.dialogBackgroundColour = Palette::panel;
+        options.dialogBackgroundColour = Palette::background;
         options.escapeKeyTriggersCloseButton = true;
         options.useNativeTitleBar = true;
         options.resizable = resizable;
@@ -84,7 +84,7 @@ namespace
         {
             patchList.setModel (this);
             patchList.setRowHeight (24);
-            patchList.setColour (juce::ListBox::backgroundColourId, Palette::rowOdd);
+            patchList.setColour (juce::ListBox::backgroundColourId, Palette::panel);
             addAndMakeVisible (patchList);
 
             auto button = [this] (juce::TextButton& b, const char* text, std::function<void()> fn)
@@ -102,6 +102,7 @@ namespace
 
             styleLabel (nameLabel, ko ("이름"));
             addAndMakeVisible (nameLabel);
+            nameEditor.setFont (Palette::font (Palette::fieldValueSize));
             nameEditor.setSelectAllWhenFocused (true);
             nameEditor.onReturnKey = [this] { commitName(); nameEditor.giveAwayKeyboardFocus(); };
             nameEditor.onFocusLost = [this] { commitName(); };
@@ -110,6 +111,7 @@ namespace
             styleLabel (outputsLabel, ko ("큐 출력 개수 (1~128)"));
             addAndMakeVisible (outputsLabel);
             outputsEditor.setInputRestrictions (3, "0123456789");
+            outputsEditor.setFont (Palette::monoFont (Palette::fieldValueSize));
             outputsEditor.setJustification (juce::Justification::centredRight);
             outputsEditor.setSelectAllWhenFocused (true);
             outputsEditor.onReturnKey = [this] { commitOutputs(); outputsEditor.giveAwayKeyboardFocus(); };
@@ -119,12 +121,11 @@ namespace
             styleLabel (deviceLabel, "");
             addAndMakeVisible (deviceLabel);
 
-            tabs.setTabBarDepth (26);
+            tabs.setTabBarDepth (Palette::tabBarHeight);
             tabs.setOutline (0);
             tabs.setColour (juce::TabbedComponent::backgroundColourId, Palette::panel);
             tabs.addTab (ko ("큐 출력"), Palette::panel, &cueOutputsPage, false);
             tabs.addTab (ko ("패치 라우팅"), Palette::panel, &routingPage, false);
-            tabs.addTab (ko ("장치 출력"), Palette::panel, &deviceOutputsPage, false);
             addAndMakeVisible (tabs);
 
             // cue outputs page
@@ -183,13 +184,15 @@ namespace
                 insertsContent->chainChanged (chain);
 
             refreshInsertCounts();
+            updateDeviceOutputsVisibility();
+            layoutPages();
         }
 
         void resized() override
         {
             auto area = getLocalBounds().reduced (12, 10);
             auto left = area.removeFromLeft (200);
-            auto buttons = left.removeFromBottom (26);
+            auto buttons = left.removeFromBottom (Palette::fieldHeight);
             addButton.setBounds (buttons.removeFromLeft (60));
             buttons.removeFromLeft (4);
             duplicateButton.setBounds (buttons.removeFromLeft (60));
@@ -199,9 +202,9 @@ namespace
             patchList.setBounds (left);
 
             area.removeFromLeft (12);
-            auto row = area.removeFromTop (24);
+            auto row = area.removeFromTop (Palette::fieldHeight);
             nameLabel.setBounds (row.removeFromLeft (36));
-            nameEditor.setBounds (row.removeFromLeft (220));
+            nameEditor.setBounds (row.removeFromLeft (juce::jmax (80, row.getWidth() - 324)));
             row.removeFromLeft (12);
             outputsLabel.setBounds (row.removeFromLeft (130));
             outputsEditor.setBounds (row.removeFromLeft (50));
@@ -217,7 +220,7 @@ namespace
             layoutPages();
         }
 
-        void paint (juce::Graphics& g) override { g.fillAll (Palette::panel); }
+        void paint (juce::Graphics& g) override { Palette::drawDialog (g, getLocalBounds()); }
 
     private:
         //======================================================================
@@ -229,9 +232,9 @@ namespace
             if (row < 0 || row >= (int) document.patches.size())
                 return;
 
-            g.fillAll (rowIsSelected ? Palette::standby.withAlpha (0.35f) : (row % 2 == 0 ? Palette::rowEven : Palette::rowOdd));
+            g.fillAll (rowIsSelected ? Palette::selected : Palette::panel);
             g.setColour (Palette::text);
-            g.setFont (juce::Font (juce::FontOptions (13.0f)));
+            g.setFont (Palette::font (Palette::bodySize));
             const auto& p = document.patches[(size_t) row];
             g.drawFittedText ((row == 0 ? ko ("★ ") : juce::String()) + p.name + "  (" + juce::String (p.numCueOutputs) + ")",
                               6, 0, width - 12, height, juce::Justification::centredLeft, 1);
@@ -260,6 +263,7 @@ namespace
             const juce::ScopedValueSetter<bool> guard (refreshing, true);
             const auto* p = current();
             const bool has = p != nullptr;
+            updateDeviceOutputsVisibility();
 
             for (auto* c : std::initializer_list<juce::Component*> { &nameEditor, &outputsEditor, &defaultsButton, &tabs })
                 c->setEnabled (has);
@@ -342,6 +346,7 @@ namespace
 
                 r->name.setText (k < p->cueOutputNames.size() ? p->cueOutputNames[k] : juce::String(), false);
                 r->name.setTextToShowWhenEmpty (p->cueOutputName (k), Palette::dimText);
+                r->name.setFont (Palette::font (Palette::fieldValueSize));
                 r->name.setSelectAllWhenFocused (true);
                 r->name.onReturnKey = [this, k, r] { commitOutputName (k, r->name.getText()); r->name.giveAwayKeyboardFocus(); };
                 r->name.onFocusLost = [this, k, r] { commitOutputName (k, r->name.getText()); };
@@ -362,6 +367,40 @@ namespace
                 r->inserts.onClick = [this, k] { openCueOutputInserts (k); };
                 cueOutputsStrip.addAndMakeVisible (r->inserts);
             }
+        }
+
+        void updateDeviceOutputsVisibility()
+        {
+            const auto* p = current();
+            bool visible = false;
+            if (p != nullptr)
+            {
+                const int outputs = juce::jmax (engine.getNumDeviceOutputs(), (int) p->deviceOutputInserts.size());
+                for (int output = 0; output < outputs; ++output)
+                {
+                    // Live edits have not necessarily been saved into deviceOutputInserts yet. Prefer the
+                    // existing runtime's slot count; an unavailable device still keeps its stored slots.
+                    const auto* chain = engine.findPatchDeviceOutputChain (p->id, output);
+                    if (chain != nullptr ? chain->getNumSlots() > 0
+                                         : output < (int) p->deviceOutputInserts.size() && ! p->deviceOutputInserts[(size_t) output].empty())
+                    {
+                        visible = true;
+                        break;
+                    }
+                }
+            }
+
+            if (visible && tabs.getNumTabs() == 2)
+                tabs.addTab (ko ("장치 출력"), Palette::panel, &deviceOutputsPage, false);
+            else if (! visible && tabs.getNumTabs() > 2)
+            {
+                if (tabs.getCurrentTabIndex() == 2)
+                    tabs.setCurrentTabIndex (1);
+                tabs.removeTab (2);
+            }
+            deviceOutputsStrip.setVisible (visible);
+            deviceOutputsHint.setVisible (visible);
+            deviceOutputsViewport.setVisible (visible);
         }
 
         void rebuildDeviceOutputRows (const AudioPatch* p)
@@ -410,13 +449,13 @@ namespace
             cueOutputsHint.setBounds (area.removeFromTop (18));
             area.removeFromTop (4);
             cueOutputsViewport.setBounds (area);
-            const int rowH = 28;
+            const int rowH = Palette::formRowHeight;
             cueOutputsStrip.setSize (juce::jmax (100, area.getWidth() - 14), juce::jmax (area.getHeight(), cueOutputRows.size() * rowH));
 
             for (int k = 0; k < cueOutputRows.size(); ++k)
             {
                 auto* r = cueOutputRows[k];
-                auto row = juce::Rectangle<int> (0, k * rowH, cueOutputsStrip.getWidth(), rowH).reduced (0, 2);
+                auto row = juce::Rectangle<int> (0, k * rowH, cueOutputsStrip.getWidth(), rowH).reduced (0, 4);
                 r->label.setBounds (row.removeFromLeft (30));
                 row.removeFromLeft (6);
                 r->name.setBounds (row.removeFromLeft (200));
@@ -440,7 +479,7 @@ namespace
             for (int m = 0; m < deviceOutputRows.size(); ++m)
             {
                 auto* r = deviceOutputRows[m];
-                auto row = juce::Rectangle<int> (0, m * rowH, deviceOutputsStrip.getWidth(), rowH).reduced (0, 2);
+                auto row = juce::Rectangle<int> (0, m * rowH, deviceOutputsStrip.getWidth(), rowH).reduced (0, 4);
                 r->label.setBounds (row.removeFromLeft (110));
                 row.removeFromLeft (6);
                 r->inserts.setBounds (row.removeFromLeft (110));

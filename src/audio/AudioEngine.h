@@ -1,6 +1,7 @@
 #pragma once
 
 #include "audio/CuePlayer.h"
+#include "audio/LoudnessMeter.h"
 #include "audio/PluginChain.h"
 #include "audio/PluginHost.h"
 #include "model/AudioPatch.h"
@@ -25,6 +26,9 @@ class AudioEngine : private juce::AudioIODeviceCallback,
                     private juce::AsyncUpdater
 {
 public:
+    /** Device outputs 1-2 after the master inserts and output gate; poll from the message thread. */
+    livemix::LoudnessMeter& getLoudnessMeter() noexcept { return loudness; }
+
     struct PlayingCue
     {
         juce::Uuid id;
@@ -334,6 +338,7 @@ private:
     std::array<const float*, maxDeviceInputs> inputPointers {};   // >=32-output path: input block pointers, no allocation
 
     PluginChain masterChain;
+    livemix::LoudnessMeter loudness;
     std::map<juce::String, std::unique_ptr<PluginChain>> cueChains;   // keyed by Uuid string
     PluginChain::Listener* chainListener = nullptr;
 

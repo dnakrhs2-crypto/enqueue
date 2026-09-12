@@ -15,7 +15,7 @@ namespace
         {
             info.setText (ko ("\"") + sourceName + ko ("\"의 속성을 선택한 큐 ") + juce::String (targetCount) + ko ("개에 붙여넣습니다."), juce::dontSendNotification);
             info.setColour (juce::Label::textColourId, Palette::dimText);
-            info.setFont (juce::Font (juce::FontOptions (13.0f)));
+            info.setFont (Palette::font (Palette::bodySize));
             addAndMakeVisible (info);
 
             auto setup = [this] (juce::ToggleButton& t, const char* text, bool on)
@@ -58,7 +58,7 @@ namespace
             cancelButton.onClick = [this] { closeDialog(); };
             addAndMakeVisible (cancelButton);
 
-            setSize (520, 330);
+            setSize (520, 350);
         }
 
         void resized() override
@@ -69,17 +69,17 @@ namespace
 
             for (auto* t : { &basics, &timing, &triggers, &timeLoops, &levels, &effects, &fade })
             {
-                t->setBounds (area.removeFromTop (26));
+                t->setBounds (area.removeFromTop (Palette::fieldHeight));
                 area.removeFromTop (2);
             }
 
-            auto buttons = area.removeFromBottom (28);
+            auto buttons = area.removeFromBottom (Palette::fieldHeight);
             cancelButton.setBounds (buttons.removeFromRight (80));
             buttons.removeFromRight (8);
             applyButton.setBounds (buttons.removeFromRight (100));
         }
 
-        void paint (juce::Graphics& g) override { g.fillAll (Palette::panel); }
+        void paint (juce::Graphics& g) override { Palette::drawDialog (g, getLocalBounds()); }
 
     private:
         void closeDialog()
@@ -101,7 +101,7 @@ void show (juce::Component* centreAround, const juce::String& sourceName, int ta
     options.dialogTitle = ko ("큐 속성 붙여넣기");
     options.content.setOwned (new Content (sourceName, targetCount, std::move (onApply)));
     options.componentToCentreAround = centreAround;
-    options.dialogBackgroundColour = Palette::panel;
+    options.dialogBackgroundColour = Palette::background;
     options.escapeKeyTriggersCloseButton = true;
     options.useNativeTitleBar = true;
     options.resizable = false;

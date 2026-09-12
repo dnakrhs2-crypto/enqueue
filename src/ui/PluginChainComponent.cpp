@@ -7,9 +7,9 @@ namespace gocue
 
 namespace
 {
-    constexpr int slotWidth = 196;
-    constexpr int slotGap = 26;   // room for the arrow between slots
-    constexpr int slotHeight = 54;
+    constexpr int slotWidth = Palette::pluginSlotWidth;
+    constexpr int slotGap = Palette::pluginSlotGap;   // room for the arrow between slots
+    constexpr int slotHeight = Palette::pluginSlotHeight;
 }
 
 //==============================================================================
@@ -29,9 +29,9 @@ public:
             title = ko ("[없음] ") + title;
 
         name.setText (title, juce::dontSendNotification);   // the number sits in the badge on the left
-        name.setFont (juce::Font (juce::FontOptions (15.0f, juce::Font::bold)));
+        name.setFont (Palette::font (Palette::bodySize, true));
         name.setColour (juce::Label::textColourId, missing ? Palette::missing : Palette::text);
-        name.setMinimumHorizontalScale (0.8f);
+        name.setMinimumHorizontalScale (1.0f);
         name.setInterceptsMouseClicks (false, false);   // a double-click on the name reaches mouseDoubleClick() below
         setTooltip (slot.state.fileOrIdentifier);
         addAndMakeVisible (name);
@@ -55,8 +55,9 @@ public:
         const bool bypassed = slot.bypassed.load();
         bypass.setButtonText (bypassed ? ko ("비활성") : ko ("활성"));
         bypass.setTooltip (ko ("누르면 활성 ↔ 비활성 (비활성 = 소리가 이 플러그인을 건너뜀)"));
-        bypass.setColour (juce::TextButton::buttonColourId, bypassed ? Palette::fadingOut : Palette::playing);
-        bypass.setColour (juce::TextButton::textColourOffId, Palette::onBright);   // dark text reads on both
+        bypass.setColour (juce::TextButton::buttonColourId, Palette::panel2);
+        bypass.setColour (juce::TextButton::textColourOffId, bypassed ? Palette::fadingOut : Palette::playing);
+        bypass.getProperties().set ("slateColourOutline", true);
         bypass.setWantsKeyboardFocus (false);
         bypass.onClick = [this] { owner.toggleBypass (index); };
         addAndMakeVisible (bypass);
@@ -69,7 +70,8 @@ public:
 
         remove.setButtonText ("x");
         remove.setTooltip (ko ("삭제"));
-        remove.setColour (juce::TextButton::buttonColourId, Palette::stopButton.darker (0.12f));
+        remove.setColour (juce::TextButton::buttonColourId, Palette::panel2);
+        remove.setColour (juce::TextButton::textColourOffId, Palette::stopButton);
         remove.setWantsKeyboardFocus (false);
         remove.onClick = [this] { owner.removeSlot (index); };
         addAndMakeVisible (remove);
@@ -80,14 +82,14 @@ public:
     void resized() override
     {
         auto area = getLocalBounds().reduced (4);
-        auto top = area.removeFromTop (20);
+        auto top = area.removeFromTop (Palette::fieldHeight);
         later.setBounds (top.removeFromRight (22));
         top.removeFromRight (2);
         earlier.setBounds (top.removeFromRight (22));
         top.removeFromRight (4);
         top.removeFromLeft (24);   // the number badge
         name.setBounds (top);
-        area.removeFromTop (2);
+        area.removeFromTop (4);
         bypass.setBounds (area.removeFromLeft (54));
         area.removeFromLeft (4);
         remove.setBounds (area.removeFromRight (28));
@@ -97,17 +99,17 @@ public:
 
     void paint (juce::Graphics& g) override
     {
-        g.setColour (missing ? Palette::missing.withAlpha (0.12f) : Palette::rowEven);
-        g.fillRoundedRectangle (getLocalBounds().toFloat(), 4.0f);
+        g.setColour (missing ? Palette::field.overlaidWith (Palette::missing.withAlpha (Palette::stopTintAlpha)) : Palette::field);
+        g.fillRoundedRectangle (getLocalBounds().toFloat(), Palette::fieldRadius);
         g.setColour (Palette::outline);
-        g.drawRoundedRectangle (getLocalBounds().toFloat().reduced (0.5f), 4.0f, 1.0f);
+        g.drawRoundedRectangle (getLocalBounds().toFloat().reduced (0.5f), Palette::fieldRadius, Palette::borderWidth);
 
         // the processing order: a numbered badge
         const auto badge = juce::Rectangle<float> (5.0f, 5.0f, 18.0f, 18.0f);
         g.setColour (missing ? Palette::missing : Palette::standby);
         g.fillEllipse (badge);
-        g.setColour (juce::Colours::white);
-        g.setFont (juce::Font (juce::FontOptions (13.0f, juce::Font::bold)));
+        g.setColour (Palette::accentInk);
+        g.setFont (Palette::monoFont (Palette::fieldValueSize).boldened());
         g.drawText (juce::String (index + 1), badge, juce::Justification::centred, false);
     }
 
@@ -146,7 +148,7 @@ PluginChainComponent::PluginChainComponent (AudioEngine& e, PluginWindowManager&
 {
     viewport.setViewedComponent (&strip, false);
     viewport.setScrollBarsShown (false, true, false, true);
-    viewport.setScrollBarThickness (8);
+    viewport.setScrollBarThickness (Palette::scrollBarWidth);
     addAndMakeVisible (viewport);
 
     addButton.setButtonText (ko ("+ 플러그인"));
@@ -161,7 +163,7 @@ PluginChainComponent::PluginChainComponent (AudioEngine& e, PluginWindowManager&
     addAndMakeVisible (manageButton);
 
     emptyLabel.setColour (juce::Label::textColourId, Palette::dimText);
-    emptyLabel.setFont (juce::Font (juce::FontOptions (15.0f)));
+    emptyLabel.setFont (Palette::font (Palette::fieldLabelSize));
     emptyLabel.setInterceptsMouseClicks (false, false);   // it overlays the strip; never swallow slot clicks
     addAndMakeVisible (emptyLabel);
 
@@ -380,9 +382,9 @@ void PluginChainComponent::resized()
 {
     auto area = getLocalBounds();
     auto buttons = area.removeFromRight (100);
-    manageButton.setBounds (buttons.removeFromBottom (24));
+    manageButton.setBounds (buttons.removeFromBottom (Palette::fieldHeight));
     buttons.removeFromBottom (4);
-    addButton.setBounds (buttons.removeFromBottom (24));
+    addButton.setBounds (buttons.removeFromBottom (Palette::fieldHeight));
     area.removeFromRight (8);
 
     viewport.setBounds (area);

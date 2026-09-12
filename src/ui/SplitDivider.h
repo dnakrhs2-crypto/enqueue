@@ -44,7 +44,17 @@ private:
     const Orientation orientation;
     bool collapsed = false, dragging = false;
     int dragStart = 0;
-    juce::ShapeButton toggle;
+    struct FoldButton : juce::Button
+    {
+        FoldButton() : juce::Button ("fold") {}
+        void paintButton (juce::Graphics& g, bool over, bool) override
+        {
+            g.setColour (over ? Palette::accent : Palette::muted);
+            g.strokePath (shape, juce::PathStrokeType (Palette::dividerStroke),
+                          juce::AffineTransform::translation ((float) getWidth() * 0.5f, (float) getHeight() * 0.5f));
+        }
+        juce::Path shape;
+    } toggle;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (SplitDivider)
 };

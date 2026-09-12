@@ -6,7 +6,7 @@ namespace gocue
 {
 
 SplitDivider::SplitDivider (Orientation o)
-    : orientation (o), toggle ("fold", Palette::muted, Palette::accent, Palette::accent)
+    : orientation (o)
 {
     setMouseCursor (orientation == Orientation::horizontal ? juce::MouseCursor::UpDownResizeCursor
                                                            : juce::MouseCursor::LeftRightResizeCursor);
@@ -33,12 +33,15 @@ void SplitDivider::updateShape()
     juce::Path p;
     const bool away = ! collapsed;
 
-    if (orientation == Orientation::horizontal)
-        away ? p.addTriangle (0.0f, 0.0f, 10.0f, 0.0f, 5.0f, 5.0f) : p.addTriangle (0.0f, 5.0f, 10.0f, 5.0f, 5.0f, 0.0f);
-    else
-        away ? p.addTriangle (0.0f, 0.0f, 5.0f, 5.0f, 0.0f, 10.0f) : p.addTriangle (5.0f, 0.0f, 5.0f, 10.0f, 0.0f, 5.0f);
-
-    toggle.setShape (p, false, true, false);
+    const float half = Palette::dividerChevronSize * 0.5f;
+    const float direction = away ? 1.0f : -1.0f;
+    p.startNewSubPath (-half, -half * 0.5f * direction);
+    p.lineTo (0.0f, half * 0.5f * direction);
+    p.lineTo (half, -half * 0.5f * direction);
+    if (orientation == Orientation::vertical)
+        p.applyTransform (juce::AffineTransform::rotation (-juce::MathConstants<float>::halfPi));
+    toggle.shape = p;
+    toggle.repaint();
     toggle.setTooltip (collapsed ? ko ("펴기") : ko ("접기 (구분선 더블클릭도 됩니다)"));
 }
 
@@ -58,16 +61,7 @@ void SplitDivider::paint (juce::Graphics& g)
 
     const auto b = getLocalBounds().toFloat();
     const auto c = b.getCentre();
-    const bool hover = isMouseOver (true) || dragging;
-    if (hover)
-    {
-        g.setColour (Palette::accent);
-        if (orientation == Orientation::horizontal)
-            g.fillRoundedRectangle (c.x - 44.0f, c.y - 0.5f, 88.0f, 1.0f, Palette::pillRadius);
-        else
-            g.fillRoundedRectangle (c.x - 0.5f, c.y - 44.0f, 1.0f, 88.0f, Palette::pillRadius);
-    }
-    g.setColour (hover ? Palette::accent : Palette::muted.withAlpha (Palette::rowBorderAlpha));
+    g.setColour (Palette::muted.withAlpha (Palette::rowBorderAlpha));
 
     for (const float off : { -36.0f, -30.0f, -24.0f })
     {

@@ -40,12 +40,12 @@ namespace
         return shown;
     }
 
-    juce::Font bodyFont (float size) { return juce::Font (juce::FontOptions (size)); }
+    juce::Font bodyFont (float size) { return Palette::font (size); }
 
     void styleCaption (juce::Label& label, const juce::String& text, float size, bool bold = false)
     {
         label.setText (text, juce::dontSendNotification);
-        label.setFont (juce::Font (juce::FontOptions (size, bold ? juce::Font::bold : juce::Font::plain)));
+        label.setFont (Palette::font (size, bold));
         label.setColour (juce::Label::textColourId, bold ? Palette::text : Palette::dimText);
         label.setJustificationType (juce::Justification::centredLeft);
         label.setMinimumHorizontalScale (1.0f);
@@ -83,7 +83,7 @@ public:
         table.setModel (&model);
         table.setHeaderHeight (30);
         table.setRowHeight (30);
-        table.setColour (juce::ListBox::backgroundColourId, Palette::background);
+        table.setColour (juce::ListBox::backgroundColourId, Palette::panel);
         table.setColour (juce::ListBox::outlineColourId, Palette::outline);
         table.setOutlineThickness (1);
         auto& header = table.getHeader();
@@ -160,7 +160,7 @@ public:
         table.setBounds (area);
     }
 
-    void paint (juce::Graphics& g) override { g.fillAll (Palette::panel); }
+    void paint (juce::Graphics& g) override { Palette::drawDialog (g, getLocalBounds()); }
 
     void focusSearch()
     {
@@ -204,12 +204,15 @@ private:
 
             if (columnId == colEnabled)
             {
-                const auto box = juce::Rectangle<float> (18.0f, 18.0f).withCentre ({ (float) width * 0.5f, (float) height * 0.5f });
-                g.setColour (enabled ? Palette::standby : Palette::dimText);
-                g.drawRoundedRectangle (box, 4.0f, 1.5f);
+                const auto box = juce::Rectangle<float> (Palette::tickSize, Palette::tickSize).withCentre ({ (float) width * 0.5f, (float) height * 0.5f });
+                g.setColour (enabled ? Palette::accent : Palette::field);
+                g.fillRoundedRectangle (box, Palette::tickRadius);
+                g.setColour (enabled ? Palette::accent : Palette::muted);
+                g.drawRoundedRectangle (box, Palette::tickRadius, Palette::borderWidth);
 
                 if (enabled)
                 {
+                    g.setColour (Palette::accentInk);
                     juce::Path tick;
                     tick.startNewSubPath (box.getX() + 4.0f, box.getCentreY());
                     tick.lineTo (box.getCentreX() - 1.0f, box.getBottom() - 5.0f);
@@ -381,7 +384,7 @@ private:
 
 //==============================================================================
 PluginManagerWindow::PluginManagerWindow (PluginHost& host, AppSettings& settings)
-    : DocumentWindow (ko ("플러그인 관리"), Palette::panel, DocumentWindow::allButtons)
+    : DocumentWindow (ko ("플러그인 관리"), Palette::background, DocumentWindow::allButtons)
 {
     setUsingNativeTitleBar (true);
     auto* c = new Content (host, settings);
