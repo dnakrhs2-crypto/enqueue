@@ -37,7 +37,7 @@ public:
     std::function<bool(const juce::KeyPress&, juce::Component*)> onGlobalKey;
     // Host-owned marker entry (name dialog at the captured time). Unset: the marker is added immediately at the playhead.
     std::function<void()> onAddMarkerRequested;
-    void revealTrack(unsigned row) { viewport.setViewPosition(0, rulerHeight + int(row) * rowHeight); }
+    void revealTrack(const Id& trackId); // display rows differ from project tracks: unused tracks are hidden
     void resized() override;
     void visibilityChanged() override { if (isShowing()) grabKeyboardFocus(); }
     TimelineEditController edits;
@@ -83,6 +83,7 @@ private:
         double previousViewStart = 0;
         std::optional<SampleRange> previousRange;
         int downRow = -1;
+        bool bodyGesture = false; // mouse went down on a clip body: drag = range selection, click = select
     private:
         bool pendingClipUnchanged() const;
         void updateDrag();
@@ -135,6 +136,7 @@ private:
         bool active = false, follow = true;
         Sample start = 0, length = 0;
         std::array<bool, 2> cameras{};
+        std::array<bool, 2> enabledCameras {true, false}; // settings: a camera in use keeps its row even without clips
         std::array<bool, 8> microphones{};
         std::array<juce::String, 8> microphoneLabels;
     } recordingPreview;

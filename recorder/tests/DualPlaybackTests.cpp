@@ -228,7 +228,7 @@ int runDualPlaybackTests()
             for (auto* child : c.getChildren()) inspect(*child);
         };
         inspect(root); require(hosts.size() == 2 && hosts[0].getRight() < hosts[1].getX() && hosts[0].getY() == hosts[1].getY(), "Actual camera cards stacked/overlapped");
-        timeline.revealTrack(2);
+        timeline.revealTrack(document.getProject().tracks[2].trackId);
         for (double dpi : {1.0, 1.5, 2.0})
         {
             juce::Image picture(juce::Image::ARGB, int(960 * dpi), int(640 * dpi), true, juce::SoftwareImageType{});

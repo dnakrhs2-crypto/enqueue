@@ -456,6 +456,8 @@ void RecorderSession::play(bool latest)
     timeline = true;
     if (playhead() >= document.getProject().activeTimelineEnd())
     {
+        // At or past the end there is nothing to play; the cursor stays where the user put it (it may be the
+        // position of the next take, so Play must not move it).
         wantPlay = pendingLatest = false;
         if (playback) playback->transport.stop();
         return;

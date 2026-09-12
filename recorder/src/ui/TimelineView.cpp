@@ -71,9 +71,23 @@ void TimelineView::setLoadedPeaks(const Id& asset, PeakSnapshot data, unsigned c
 void TimelineView::rebuildHeaders()
 {
     const auto previous = tracks; tracks.clear(); const auto& p = document.getProject();
-    for (auto kind : {TrackKind::cam1, TrackKind::cam2})
-    { auto it = std::find_if(p.tracks.begin(), p.tracks.end(), [kind](const auto& t) { return t.kind == kind; }); if (it != p.tracks.end()) tracks.push_back(*it); else { Track t; t.trackId = kind == TrackKind::cam1 ? "placeholder-cam1" : "placeholder-cam2"; t.kind = kind; t.name = ko(kind == TrackKind::cam1 ? "캠1" : "캠2"); tracks.push_back(t); } }
-    for (const auto& t : p.tracks) if (t.kind == TrackKind::mic || t.kind == TrackKind::importAudio) tracks.push_back(t);
+    // A row is shown only while its track is in use: it holds an active clip, or its source is a recording target
+    // (camera enabled in the settings, microphone armed for the running take). An unused 캠2 or microphone stays hidden.
+    const auto hasActiveClips = [&p](const Track& t)
+    { return std::any_of(t.clips.items().begin(), t.clips.items().end(), [&p](const Clip& c) { return p.isActive(c); }); };
+    for (unsigned i = 0; i < 2; ++i)
+    {
+        const auto kind = i == 0 ? TrackKind::cam1 : TrackKind::cam2;
+        const auto it = std::find_if(p.tracks.begin(), p.tracks.end(), [kind](const auto& t) { return t.kind == kind; });
+        const bool target = recordingPreview.enabledCameras[i] || (recordingPreview.active && recordingPreview.cameras[i]);
+        if (it != p.tracks.end()) { if (hasActiveClips(*it) || target) tracks.push_back(*it); }
+        else if (target) { Track t; t.trackId = i == 0 ? "placeholder-cam1" : "placeholder-cam2"; t.kind = kind; t.name = ko(i == 0 ? "캠1" : "캠2"); tracks.push_back(t); }
+    }
+    for (const auto& t : p.tracks)
+    {
+        const bool armedNow = recordingPreview.active && t.microphoneIndex >= 0 && t.microphoneIndex < 8 && recordingPreview.microphones[std::size_t(t.microphoneIndex)];
+        if ((t.kind == TrackKind::mic && (hasActiveClips(t) || armedNow)) || (t.kind == TrackKind::importAudio && hasActiveClips(t))) tracks.push_back(t);
+    }
     if (recordingPreview.active) for (unsigned slot = 0; slot < recordingPreview.microphones.size(); ++slot)
         if (recordingPreview.microphones[slot] && std::none_of(tracks.begin(), tracks.end(), [slot](const Track& t)
             { return t.kind == TrackKind::mic && t.microphoneIndex == int(slot); }))
@@ -189,7 +203,7 @@ void TimelineView::updateControls()
     }
     for (unsigned i = 0; i < headers.size(); ++i) headers[i]->refresh(trackLabel(tracks[i], document.getProject()));
     inspector.refresh(); markerPanel.refresh();
-    juce::String info = editStatus.isNotEmpty() ? editStatus : ko("Shift/Ctrl 다중 선택 · 빈 곳 드래그/Shift+눈금 드래그로 구간 선택");
+    juce::String info = editStatus.isNotEmpty() ? editStatus : ko("클립 위쪽 띠 드래그 = 이동 · 아래쪽 드래그 = 구간 선택(Delete로 잘라내기) · Shift/Ctrl 다중 선택 · 빈 곳/Shift+눈금 드래그도 구간 선택");
     if (const auto r = edits.selectedRange()) info = ko("선택 구간 [") + juce::String(r->start) + ", " + juce::String(r->start + r->length) + ko(") 샘플 · ") + info;
     if (edits.isLocked()) info = ko("녹화 중 · 구조 편집·스크럽 잠금 · 프리뷰와 마커 추가 가능");
     selectionInfo.setText(info, juce::dontSendNotification); selectionInfo.setTooltip(info);
@@ -312,7 +326,7 @@ void TimelineView::setRecordingPreview(bool active, Sample placement, Sample ela
         if (end > viewStart + viewSeconds * .9) viewStart = end - viewSeconds * .9;
         updateRange();
     }
-    recordingPreview.cameras = targets.cameras;
+    recordingPreview.cameras = targets.cameras; recordingPreview.enabledCameras = settings.cameraEnabled;
     recordingPreview.microphones.fill(false);
     for (const auto logical : targets.microphones) if (logical >= 1 && logical <= recordingPreview.microphones.size())
         recordingPreview.microphones[logical - 1] = true;
@@ -321,9 +335,15 @@ void TimelineView::setRecordingPreview(bool active, Sample placement, Sample ela
             + (settings.stereoSlots[i] ? ko(" · 스테레오") : juce::String());
     // Only labels use settings. Membership is the session's actual capture set.
     // Missing microphone lanes are display-only; the take controller publishes tracks/clips.
-    if (previous.active != active || previous.microphones != recordingPreview.microphones || previous.microphoneLabels != recordingPreview.microphoneLabels)
+    if (previous.active != active || previous.microphones != recordingPreview.microphones || previous.microphoneLabels != recordingPreview.microphoneLabels
+        || previous.cameras != recordingPreview.cameras || previous.enabledCameras != recordingPreview.enabledCameras)
     { rebuildHeaders(); rebuildPreview(); updateRange(); }
     rows.repaint();
+}
+void TimelineView::revealTrack(const Id& trackId)
+{
+    for (unsigned row = 0; row < tracks.size(); ++row)
+        if (tracks[row].trackId == trackId) { viewport.setViewPosition(0, rulerHeight + int(row) * rowHeight); return; }
 }
 bool TimelineView::isRecordingTrack(const Track& track) const
 {
@@ -562,7 +582,7 @@ void TimelineView::Rows::mouseDown(const juce::MouseEvent& e)
     auto& v = view; grabKeyboardFocus(); if (e.x < headerWidth) return;
     cancelGesture(false); previousPlayhead = v.playhead; previousRange = v.edits.selectedRange(); previousViewStart = v.viewStart;
     lastPointer = e.position; lastModifiers = e.mods;
-    dragging = Drag::none; moved = false; collapseSelection = false; downSample = v.sampleFor(e.x); downClip.clear();
+    dragging = Drag::none; moved = false; collapseSelection = false; bodyGesture = false; downSample = v.sampleFor(e.x); downClip.clear();
     if (e.y < rulerHeight)
     {
         if (v.edits.isLocked()) return;
@@ -589,6 +609,14 @@ void TimelineView::Rows::mouseDown(const juce::MouseEvent& e)
         if (!e.mods.isShiftDown() && !e.mods.isCtrlDown()) v.edits.clearSelection(); v.edits.clearRange();
         if (!v.edits.isLocked()) dragging = Drag::range;
         if (e.mods.isPopupMenu()) { dragging = Drag::none; v.showEditMenu(true); } v.selectionChanged(); return;
+    }
+    // Clip body (below the title strip, away from the trim edges): a drag selects a time range across all tracks
+    // (Delete cuts it out, time preserved); a plain click still selects the clip on mouse up. The title strip moves.
+    if (const auto* hit = v.visibleIndex.find(downClip); hit && !v.edits.isLocked() && !e.mods.isShiftDown() && !e.mods.isCtrlDown() && !e.mods.isPopupMenu())
+    {
+        const bool nearEdge = std::abs(e.x - v.xFor(hit->timelineStartSample)) <= 7 || std::abs(e.x - v.xFor(hit->timelineEnd())) <= 7;
+        const bool body = e.y - (rulerHeight + row * rowHeight) > 3 + 24;
+        if (!nearEdge && body) { bodyGesture = true; dragging = Drag::range; return; }
     }
     const auto& explicitIds = v.edits.explicitSelection();
     if (!e.mods.isShiftDown() && !e.mods.isCtrlDown() && std::find(explicitIds.begin(), explicitIds.end(), downClip) != explicitIds.end())
@@ -628,6 +656,7 @@ void TimelineView::Rows::mouseDrag(const juce::MouseEvent& e)
     if (!moved && e.getDistanceFromDragStart() >= TimelineInteraction::dragThreshold)
     {
         if (dragging == Drag::clip && (!pendingClipUnchanged() || !v.edits.beginDrag(pendingAction))) { cancelGesture(false); return; }
+        if (dragging == Drag::range && bodyGesture) { v.edits.clearSelection(); v.selectionChanged(); } // the range, not the clip, is the edit target
         moved = true;
         snapIndex.build(v.document.getProject(), dragging == Drag::clip ? v.edits.dragTargets() : std::vector<Id>{}, previousPlayhead, pendingAction);
         lastAutoScroll = juce::Time::getMillisecondCounter(); startTimer(16);
@@ -685,7 +714,7 @@ void TimelineView::Rows::cancelGesture(bool restore)
         if (mode == Drag::scrub) { view.playhead = previousPlayhead; view.edits.seek(previousPlayhead); }
         view.viewStart = previousViewStart; view.updateRange();
     }
-    collapseSelection = false; moved = false;
+    collapseSelection = false; moved = false; bodyGesture = false;
     downSnapshot.reset(); downSelection.clear(); downExplicitSelection.clear(); downTargets.clear();
     view.snapButton.setButtonText(view.snapButton.getToggleState() ? ko("스냅 켜짐") : ko("스냅 꺼짐"));
     setMouseCursor(juce::MouseCursor::NormalCursor); view.rebuildPreview(); repaint();
@@ -703,9 +732,14 @@ void TimelineView::Rows::mouseUp(const juce::MouseEvent& e)
         if (r.wasOk() && joined) { v.editStatus = ko("이웃 클립에 붙임"); v.updateControls(); }
     }
     else if (mode == Drag::scrub && !v.edits.isLocked()) { v.edits.seek(moved ? v.playhead : downSample); v.selectionChanged(); }
-    else if (mode == Drag::range) { if (!moved && !v.edits.isLocked()) v.edits.seek(v.sampleFor(e.x)); v.selectionChanged(); }
+    else if (mode == Drag::range)
+    {
+        if (!moved && bodyGesture) { v.edits.clearRange(); v.edits.clickClip(downClip); }
+        else if (!moved && !v.edits.isLocked()) v.edits.seek(v.sampleFor(e.x));
+        v.selectionChanged();
+    }
     if (collapseSelection && !moved && pendingClipUnchanged()) { v.edits.clickClip(downClip); v.selectionChanged(); }
-    downSnapshot.reset(); downSelection.clear(); downExplicitSelection.clear(); downTargets.clear(); collapseSelection = false;
+    downSnapshot.reset(); downSelection.clear(); downExplicitSelection.clear(); downTargets.clear(); collapseSelection = false; bodyGesture = false;
     v.snapButton.setButtonText(v.snapButton.getToggleState() ? ko("스냅 켜짐") : ko("스냅 꺼짐"));
     mouseMove(e);
     repaint();
@@ -716,7 +750,8 @@ void TimelineView::Rows::mouseMove(const juce::MouseEvent& e)
     if (!view.edits.isLocked() && e.y >= rulerHeight && e.x >= headerWidth && row >= 0 && row < int(view.tracks.size()))
         for (const auto* c : view.visibleIndex.visible(std::size_t(row), view.sampleFor(e.x - 8), view.sampleFor(e.x + 8) + 1))
         { edge |= std::abs(e.x - view.xFor(c->timelineStartSample)) <= 7 || std::abs(e.x - view.xFor(c->timelineEnd())) <= 7; clip |= c->timelineStartSample <= view.sampleFor(e.x) && c->timelineEnd() > view.sampleFor(e.x); }
-    setMouseCursor(view.edits.isLocked() ? juce::MouseCursor::NormalCursor : edge ? juce::MouseCursor::LeftRightResizeCursor : clip ? juce::MouseCursor::DraggingHandCursor : e.x >= headerWidth ? juce::MouseCursor::CrosshairCursor : juce::MouseCursor::NormalCursor);
+    const bool titleStrip = row >= 0 && e.y - (rulerHeight + row * rowHeight) <= 3 + 24; // the strip moves; the body below selects a range
+    setMouseCursor(view.edits.isLocked() ? juce::MouseCursor::NormalCursor : edge ? juce::MouseCursor::LeftRightResizeCursor : clip && titleStrip ? juce::MouseCursor::DraggingHandCursor : e.x >= headerWidth ? juce::MouseCursor::CrosshairCursor : juce::MouseCursor::NormalCursor);
 }
 void TimelineView::Rows::mouseWheelMove(const juce::MouseEvent& e, const juce::MouseWheelDetails& wheel)
 {

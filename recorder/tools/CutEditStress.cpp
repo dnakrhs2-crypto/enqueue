@@ -150,7 +150,7 @@ private:
             case 18: A::mouse(v, 0, down, down, juce::ModifierKeys::rightButtonModifier); break;
             case 19: A::button(v, TimelineAction::unlink); break;
             case 20: A::wheel(v, .25f, juce::ModifierKeys::ctrlModifier); A::wheel(v, -.25f, juce::ModifierKeys::ctrlModifier); break;
-            case 21: A::wheel(v, -.25f, juce::ModifierKeys::shiftModifier); v.revealTrack(unsigned(row)); A::wheel(v, -.25f, 0); break;
+            case 21: A::wheel(v, -.25f, juce::ModifierKeys::shiftModifier); { const auto& ts = v.edits.document.getProject().tracks; if (!ts.empty()) v.revealTrack(ts[std::size_t(row) % ts.size()].trackId); } A::wheel(v, -.25f, 0); break;
             case 22: A::latest(*main); break;
             case 23: A::tab(*main, false); break;
             case 24: v.edits.followPlayhead(mid); A::button(v, TimelineAction::split); break;

@@ -26,6 +26,7 @@ namespace gocue::recorder
 struct ShortcutExceptionTestAccess
 {
     static RecorderSession& session(MainComponent& main) { return main.session; }
+    static void placement(RecorderSession& session, TakeController::Config& config) { session.configurePlacement(config); } // tab rule + live markers/names in the placement edit
     static void stopTimers(MainComponent& main) { main.stopTimer(); main.exportDialog->stopTimer(); }
     static void tick(MainComponent& main) { main.timerCallback(); }
     static void refresh(MainComponent& main) { main.refresh(); }
@@ -187,6 +188,7 @@ struct MainFixture
         until([&] { return session.audioEngine().clockReady(); });
         TakeController::Config config; config.projectDirectory = folder.root; config.synthetic = true; config.projectFps = 30;
         config.cameraMode.width = 1920; config.cameraMode.height = 1080; config.cameraMode.fps = {30, 1};
+        ShortcutExceptionTestAccess::placement(session, config); // 0.1.6: the session reserves the position (record tab = active end) and folds live markers into the placement edit
         auto& take = session.takeController(); require(take.prepare(config).wasOk(), "Prepare synthetic recording");
         until([&] { take.tick(); return take.state() == TakeController::State::armed; });
         require(take.start(position + 81).wasOk(), "Start synthetic recording");
@@ -253,7 +255,12 @@ int runShortcutExceptionTests()
         require(shortcutCommand(bindings, space, nullptr, false) == RecorderCommand::playStop, "Idle must select play/stop");
         juce::TextEditor text; juce::Component child; text.addChildComponent(child);
         require(!shortcutCommand(bindings, space, &text, true) && !shortcutCommand(bindings, space, &child, false), "Text consumes Space");
-        MainFixture f;
+        // 0.1.6: Play at/after the active end does nothing (the cursor may mark the next take), so the idle check needs
+        // a timeline with content and the cursor at its start.
+        recorder_audio_fixture::Fixture source(8000); auto project = source.project;
+        project.tracks.erase(project.tracks.begin(), project.tracks.begin() + 2);
+        MainFixture f; require(f.document.adopt(project, f.folder.root.getChildFile("project.recorder"), {}).wasOk(), "Existing timeline fixture");
+        f.session.projectChanged(); f.session.scrub(0, true);
         require(f.main.routeShortcut(space, &f.main) && f.session.playing(), "Idle Space did not request playback");
         require(f.main.routeShortcut(space, &f.main) && f.session.playing(), "Held Space toggled playback twice");
         Access::releaseKey(f.main);

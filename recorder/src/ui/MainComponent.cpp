@@ -30,7 +30,7 @@ MainComponent::MainComponent(RecorderDocument& d, RecorderSettings& s, TakeContr
             {
                 document.setSelection({clip.clipId}); timelineView.selectionChanged();
                 session.scrub(clip.timelineStartSample, true);
-                timelineView.reveal(clip.timelineStartSample); timelineView.revealTrack(row);
+                timelineView.reveal(clip.timelineStartSample); timelineView.revealTrack(tracks[row].trackId);
             }
     };
     recordView.startButton.onClick = [this] { recordClicked(); }; recordView.stopButton.onClick = [this] { stopClicked(); };

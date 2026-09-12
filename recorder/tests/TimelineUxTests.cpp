@@ -93,10 +93,10 @@ void dragRows(TimelineView& v, const Id& id, TimelineAction action, Sample at, i
     if (action != TimelineAction::move) { v.edits.clickClip(id); v.selectionChanged(); }
     auto* rows = rowsOf(v); const auto x = xAt(v, double(edge + grab) / p->Fs), target = xAt(v, double(at + grab) / p->Fs);
     const auto mods = modifiers | juce::ModifierKeys::leftButtonModifier;
-    rows->mouseDown(mouse(*rows, x, 66, x, 66, mods)); rows->mouseDrag(mouse(*rows, target, 66, x, 66, mods));
+    rows->mouseDown(mouse(*rows, x, 45, x, 45, mods)); rows->mouseDrag(mouse(*rows, target, 45, x, 45, mods));
     require(v.edits.dragPreview() != nullptr, "Rows drag did not start");
     require(v.edits.dragPreview()->status.wasOk(), v.edits.dragPreview()->status.getErrorMessage().toRawUTF8());
-    rows->mouseUp(mouse(*rows, target, 66, x, 66, mods));
+    rows->mouseUp(mouse(*rows, target, 45, x, 45, mods));
 }
 void paint(TimelineView& view)
 {
@@ -294,8 +294,8 @@ int runTimelineUxTests()
         auto* rows = rowsOf(v); const auto& moving = p.tracks[0].clips.items()[1];
         const auto x = xAt(v, double(moving.timelineStartSample + 48000) / p.Fs);
         const auto target = xAt(v, double(320640 + 48000 + 100) / p.Fs);
-        rows->mouseDown(mouse(*rows, x, 66, x, 66)); rows->mouseDrag(mouse(*rows, target, 66, x, 66));
-        rows->mouseUp(mouse(*rows, target, 66, x, 66));
+        rows->mouseDown(mouse(*rows, x, 45, x, 45)); rows->mouseDrag(mouse(*rows, target, 45, x, 45));
+        rows->mouseUp(mouse(*rows, target, 45, x, 45));
         const auto actual = d.getProject().findClip(moving.clipId)->timelineStartSample;
         std::cout << "SNAP off-grid expected=320640 actual=" << actual << " gapSamples=" << actual - 320640 << '\n';
         require(actual == 320640, "Magnetic neighbour target was rounded back to the frame grid");
@@ -575,7 +575,7 @@ int runTimelineUxTests()
     suite.test("3px jitter selects without opening a drag or changing history; 4px starts a preview", []
     {
         RecorderDocument d; adopt(d); TimelineView v(d); v.setSize(1180, 620); v.refresh(false, 0, {});
-        auto* rows = rowsOf(v); const auto x = xAt(v, 4), y = 66.0f; const auto snapshot = d.snapshot();
+        auto* rows = rowsOf(v); const auto x = xAt(v, 4), y = 45.0f; const auto snapshot = d.snapshot();
         rows->mouseDown(mouse(*rows, x, y, x, y)); rows->mouseDrag(mouse(*rows, x + 3, y, x, y));
         require(!v.edits.dragPreview(), "Subthreshold move creates preview"); rows->mouseUp(mouse(*rows, x + 3, y, x, y));
         require(d.snapshot() == snapshot && d.getSelection().size() == 4, "Click moved media or lost linked selection");
@@ -583,11 +583,30 @@ int runTimelineUxTests()
         require(v.edits.dragPreview() != nullptr, "4px drag did not start"); require(d.snapshot() == snapshot, "Preview mutated document");
         v.clearCaches(); require(!v.edits.dragPreview(), "Reset retained drag");
     });
+    suite.test("Clip body drag selects a range across all tracks and Delete cuts it out; a body click still selects", []
+    {
+        RecorderDocument d; adopt(d); TimelineView v(d); v.setSize(1180, 620); v.refresh(false, 0, {});
+        auto* rows = rowsOf(v); const auto x = xAt(v, 4), endX = xAt(v, 5); const auto before = d.snapshot();
+        rows->mouseDown(mouse(*rows, x, 66, x, 66)); rows->mouseDrag(mouse(*rows, endX, 66, x, 66));
+        require(!v.edits.dragPreview() && d.getSelection().empty(), "Body drag moved the clip or kept the clip selection");
+        rows->mouseUp(mouse(*rows, endX, 66, x, 66));
+        const auto range = v.edits.selectedRange(); require(range && range->length > 0 && d.snapshot() == before, "Body drag did not select a range");
+        require(v.edits.enabled(TimelineAction::remove) && v.invoke(TimelineAction::remove).wasOk(), "Delete did not cut the range");
+        require(d.getProject().editRevision == before->editRevision + 1 && !v.edits.selectedRange(), "Range cut was not one edit");
+        const auto inside = range->start + range->length / 2;
+        for (const auto& track : d.getProject().tracks) for (const auto& clip : track.clips.items())
+            require(!d.getProject().isActive(clip) || clip.timelineStartSample > inside || clip.timelineEnd() <= inside, "Range still covered on a track");
+        require(d.getProject().activeTimelineEnd() == before->activeTimelineEnd(), "Range cut rippled the timeline");
+        require(d.undo().wasOk() && d.snapshot()->editRevision == before->editRevision + 2, "Undo of the cut failed");
+        v.refresh(false, 0, {}); // the app refreshes the visible index every 33 ms; the click below hits the restored clips
+        rows->mouseDown(mouse(*rows, x, 66, x, 66)); rows->mouseUp(mouse(*rows, x, 66, x, 66));
+        require(d.getSelection().size() == 4 && !v.edits.selectedRange(), "Body click did not select the linked clips");
+    });
     suite.test("linked movement keeps original tracks when pointer crosses lanes and commits once", []
     {
         RecorderDocument d; adopt(d); TimelineView v(d); v.setSize(1180, 620); v.refresh(false, 0, {});
         auto* rows = rowsOf(v); const auto x = xAt(v, 4), endX = xAt(v, 5); const auto before = d.snapshot();
-        rows->mouseDown(mouse(*rows, x, 66, x, 66)); rows->mouseDrag(mouse(*rows, endX, 138, x, 66));
+        rows->mouseDown(mouse(*rows, x, 45, x, 45)); rows->mouseDrag(mouse(*rows, endX, 138, x, 66));
         require(v.edits.dragPreview() && v.edits.dragTargets().size() == 4, "Linked ghosts missing");
         rows->mouseUp(mouse(*rows, endX, 138, x, 66)); require(d.getProject().editRevision == before->editRevision + 1, "Gesture was not one edit");
         for (std::size_t lane = 0; lane < 4; ++lane)
@@ -608,15 +627,15 @@ int runTimelineUxTests()
                 const auto other = d.getProject().tracks[0].clips.items()[1].clipId;
                 v.edits.clickClip(id); require(v.invoke(TimelineAction::move, 48000, true).wasOk(), "Initial move for undo");
                 auto* rows = rowsOf(v); const auto x = xAt(v, action == TimelineAction::trimIn ? 1 : action == TimelineAction::trimOut ? 11 : 5);
-                rows->mouseDown(mouse(*rows, x, 66, x, 66));
+                rows->mouseDown(mouse(*rows, x, 45, x, 45));
                 require(!v.edits.dragPreview(), "mouseDown must defer editing");
                 if (change == 0) require(v.invoke(TimelineAction::undo).wasOk(), "Intervening undo");
                 else if (change == 1) { d.setSelection({other}); v.refresh(false, 0, {}); }
                 else require(v.invoke(TimelineAction::remove).wasOk(), "Intervening delete");
                 const auto after = d.snapshot(); const auto selection = d.getSelection(); const auto depth = d.getHistory().undoDepth();
-                rows->mouseDrag(mouse(*rows, x + 4, 66, x, 66));
+                rows->mouseDrag(mouse(*rows, x + 4, 45, x, 45));
                 require(!v.edits.dragPreview(), "Changed mouseDown target opened a drag");
-                rows->mouseUp(mouse(*rows, x + 4, 66, x, 66));
+                rows->mouseUp(mouse(*rows, x + 4, 45, x, 45));
                 require(d.snapshot() == after && d.getSelection() == selection && d.getHistory().undoDepth() == depth,
                     "Delayed gesture changed the intervening document/selection/history");
             }
@@ -626,12 +645,12 @@ int runTimelineUxTests()
         RecorderDocument d; adopt(d); TimelineView v(d); v.setSize(1180, 620); v.refresh(false, 0, {});
         const auto first = d.getProject().tracks[0].clips.items()[0].clipId, second = d.getProject().tracks[0].clips.items()[1].clipId;
         v.edits.clickClip(first); v.edits.clickClip(second, false, true);
-        auto* rows = rowsOf(v); const auto x = xAt(v, 4); rows->mouseDown(mouse(*rows, x, 66, x, 66));
+        auto* rows = rowsOf(v); const auto x = xAt(v, 4); rows->mouseDown(mouse(*rows, x, 45, x, 45));
         v.edits.clickClip(second); const auto snapshotSelection = d.getSelection(); const auto before = d.snapshot();
-        rows->mouseUp(mouse(*rows, x, 66, x, 66));
+        rows->mouseUp(mouse(*rows, x, 45, x, 45));
         require(d.getSelection() == snapshotSelection && d.snapshot() == before, "mouseUp restored a stale selection");
         v.edits.clickClip(first, false, true); v.refresh(true, 0, {});
-        rows->mouseDown(mouse(*rows, x, 66, x, 66)); rows->mouseUp(mouse(*rows, x, 66, x, 66));
+        rows->mouseDown(mouse(*rows, x, 45, x, 45)); rows->mouseUp(mouse(*rows, x, 45, x, 45));
         require(v.edits.explicitSelection() == std::vector<Id>{first} && d.snapshot() == before, "Locked timeline no longer allows click selection");
     });
     suite.test("magnet snaps group trailing edges, markers and playhead; Alt bypass is exact", []
@@ -699,9 +718,9 @@ int runTimelineUxTests()
         // One sample-area pixel makes the snap tolerance exceed INT64_MAX.
         v.setSize(503, 620); v.zoomToFit(); auto* rows = rowsOf(v);
         const auto x = xAt(v, double(clip.timelineStartSample) / before->Fs);
-        rows->mouseDown(mouse(*rows, x, 66, x, 66)); rows->mouseDrag(mouse(*rows, x + 4, 66, x, 66));
+        rows->mouseDown(mouse(*rows, x, 45, x, 45)); rows->mouseDrag(mouse(*rows, x + 4, 45, x, 45));
         require(v.edits.dragPreview() != nullptr, "Extreme pointer did not exercise updateDrag"); paint(v);
-        v.clearCaches(); rows->mouseUp(mouse(*rows, x + 4, 66, x, 66));
+        v.clearCaches(); rows->mouseUp(mouse(*rows, x + 4, 45, x, 45));
         v.setSize(300, 620); paint(v); // No sample area remains beside the header.
         require(d.snapshot() == before && d.getHistory().undoDepth() == 0, "Extreme preview changed the document");
     });
@@ -723,8 +742,8 @@ int runTimelineUxTests()
     suite.test("recording during a drag cancels preview and rejects structural edits", []
     {
         RecorderDocument d; adopt(d); TimelineView v(d); v.setSize(1180, 620); v.refresh(false, 0, {}); auto* rows = rowsOf(v); const auto x = xAt(v, 4);
-        rows->mouseDown(mouse(*rows, x, 66, x, 66)); rows->mouseDrag(mouse(*rows, x + 20, 66, x, 66)); const auto before = d.snapshot();
-        d.setRecordingStructureLock(true); v.refresh(true, 0, {}); rows->mouseUp(mouse(*rows, x + 20, 66, x, 66));
+        rows->mouseDown(mouse(*rows, x, 45, x, 45)); rows->mouseDrag(mouse(*rows, x + 20, 45, x, 45)); const auto before = d.snapshot();
+        d.setRecordingStructureLock(true); v.refresh(true, 0, {}); rows->mouseUp(mouse(*rows, x + 20, 45, x, 45));
         require(d.snapshot() == before && !v.edits.dragPreview() && !v.edits.enabled(TimelineAction::split), "Recording allowed pending drag commit");
         require(v.invoke(TimelineAction::split).failed(), "Recording split was enabled"); d.setRecordingStructureLock(false);
     });
@@ -762,7 +781,8 @@ int runTimelineUxTests()
         require(TimelineUxTestAccess::displayOnlyRow(v, 2) && tracks[2].clips.items().empty(), "Preview row became editable media");
         paint(v); require(d.snapshot() == before && d.getHistory().undoDepth() == 0, "First recording preview published media");
         v.setRecordingPreview(false, 0, 0, {}, settings); v.refresh(false, 0, {});
-        require(TimelineUxTestAccess::tracks(v).size() == 2 && d.snapshot() == before, "Stopped preview left a microphone track");
+        // 0.1.6: unused tracks are hidden — the disabled, empty camera one and the finished microphone preview go; the enabled camera two stays.
+        require(TimelineUxTestAccess::tracks(v).size() == 1 && TimelineUxTestAccess::tracks(v)[0].kind == TrackKind::cam2 && d.snapshot() == before, "Stopped preview left a microphone track or hid the enabled camera");
     });
     suite.test("new stereo logical slot gets one row and yields to the published track", []
     {
@@ -782,7 +802,9 @@ int runTimelineUxTests()
         v.refresh(true, 21 * 48000, {});
         require(TimelineUxTestAccess::tracks(v).size() == 5 && TimelineUxTestAccess::tracks(v).back().trackId == published.trackId, "Published track duplicated placeholder");
         v.setRecordingPreview(false, 0, 0, {}, settings); v.refresh(false, 0, {});
-        require(TimelineUxTestAccess::tracks(v).size() == 5 && !TimelineUxTestAccess::recordingRow(v, 4), "Stop removed actual stereo track");
+        // 0.1.6: an empty microphone track that is no longer a recording target is hidden until it holds a clip.
+        require(TimelineUxTestAccess::tracks(v).size() == 4 && std::none_of(TimelineUxTestAccess::tracks(v).begin(), TimelineUxTestAccess::tracks(v).end(),
+            [](const Track& t) { return t.microphoneIndex == 3; }) && d.getProject().tracks.back().trackId == published.trackId, "Stop did not hide the empty stereo track or dropped it from the project");
     });
     suite.test("enabled but unavailable camera two has no growing recording clip", []
     {
