@@ -44,7 +44,6 @@ public:
         surface.startButton.onClick = [this] { startRecording(); };
         surface.stopButton.onClick = [this] { stopRecording(); };
         surface.markerButton.onClick = [this] { view.edits.addMarker(); };
-        surface.latestButton.onClick = [this] { if (transport) { transport->seek(0); transport->play(); } };
         surface.settingsButton.onClick = [this]
         {
             class Window : public juce::DocumentWindow
@@ -57,7 +56,6 @@ public:
             settingsWindow->centreAroundComponent(this, 650, 500); settingsWindow->setVisible(true);
         };
         view.transport.play.onClick = [this] { if (transport) transport->play(); };
-        view.transport.pause.onClick = [this] { if (transport) transport->pause(); };
         view.transport.stop.onClick = [this] { if (transport) transport->stop(); };
         view.transport.beginning.onClick = [this] { if (transport) transport->goToStart(); };
         view.onScrub = [this](Sample at, bool released) { cursor = at; if (transport) transport->scrub(at, released, qpcNow()); };

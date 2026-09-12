@@ -413,7 +413,7 @@ void RecorderDocument::enqueueRegistry()
 {
     if (!journal) return;
     try { const auto r = journal->enqueueRegistry(project); if (r.failed()) error = r.getErrorMessage(); }
-    catch (const std::exception& e) { error = e.what(); }
+    catch (const std::exception& e) { error = juce::String::fromUTF8(e.what()); }
 }
 void RecorderDocument::acknowledgeJournalState(Snapshot written, const juce::Result& result)
 {

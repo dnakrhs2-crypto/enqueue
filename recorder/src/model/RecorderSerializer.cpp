@@ -374,6 +374,6 @@ juce::Result RecorderSerializer::writeCheckpoint(const juce::File& file, const R
     if (toJson(verified) != toJson(p) || checked.generation != nextInfo.generation) return juce::Result::fail("Checkpoint read-back mismatch");
     written = checked; written.sourceFile = file; if (hook) hook("checkpoint-after-flush"); return juce::Result::ok();
     }
-    catch (const std::exception& e) { return juce::Result::fail(e.what()); }
+    catch (const std::exception& e) { return juce::Result::fail(juce::String::fromUTF8(e.what())); }
 }
 }

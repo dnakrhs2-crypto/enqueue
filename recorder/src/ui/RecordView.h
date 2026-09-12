@@ -18,9 +18,9 @@ public:
     void paint(juce::Graphics&) override;
     void resized() override;
     juce::TextButton projectButton {ko("프로젝트")}, recordTab {ko("녹화")}, timelineTab {ko("타임라인")};
-    juce::TextButton normalButton {ko("일반")}, dubButton {ko("더빙")}, settingsButton {ko("설정")}, exportButton {ko("내보내기")};
+    juce::TextButton settingsButton {ko("설정")}, exportButton {ko("내보내기")};
     juce::TextButton importButton {ko("오디오 불러오기")};
-    juce::TextButton startButton {ko("녹화 시작")}, stopButton {ko("정지")}, markerButton {ko("마커 추가")}, latestButton {ko("방금 테이크 재생")};
+    juce::TextButton startButton {ko("녹화 시작")}, stopButton {ko("정지")}, markerButton {ko("마커 추가")};
     std::function<void(unsigned, bool)> onArm, onMonitor;
     std::function<void(unsigned, juce::String)> onName;
 private:

@@ -12,7 +12,7 @@ MarkerPanel::MarkerPanel(TimelineEditController& c) : edits(c)
     name.setTextToShowWhenEmpty(ko("이름"), Palette::dimText); position.setTextToShowWhenEmpty(ko("위치 · 샘플"), Palette::dimText);
     colour.setTextToShowWhenEmpty(ko("색 #RRGGBB"), Palette::dimText); colour.setTooltip(ko("색 #RRGGBB · Enter로 적용"));
     position.setInputRestrictions(19, "0123456789"); name.setTooltip(ko("이름 · Enter로 적용"));
-    add.onClick = [this] { const auto r = edits.addMarker(); if (onEdit) onEdit(r); };
+    add.onClick = [this] { if (onAddRequested) { onAddRequested(); return; } const auto r = edits.addMarker(); if (onEdit) onEdit(r); };
     change.onClick = [this] { apply(); };
     remove.onClick = [this] { const auto r = edits.deleteMarker(selected); if (onEdit) onEdit(r); };
 }

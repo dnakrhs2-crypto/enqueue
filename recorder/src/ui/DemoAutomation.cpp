@@ -76,7 +76,7 @@ void MainComponent::demoTick()
         if (session.takeController().state() == TakeController::State::recording && session.elapsed() >= Sample(session.deviceInfo().sampleRate) * 10)
         {
             recordView.stopButton.onClick(); d.stopQpc = lastStopButtonQpc; d.clipQpc = 0;
-            recordView.latestButton.onClick(); d.step = Demo::Step::waitingPlayback; d.phaseQpc = now;
+            latestClicked(); d.step = Demo::Step::waitingPlayback; d.phaseQpc = now;
         }
     }
     else if (d.step == Demo::Step::waitingPlayback)

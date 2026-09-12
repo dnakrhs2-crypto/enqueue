@@ -44,7 +44,7 @@ TimelineView::TimelineView(RecorderDocument& d) : edits(d), rows(*this), documen
                         TimelineAction::earlier, TimelineAction::later, TimelineAction::unlink, TimelineAction::link, TimelineAction::undo, TimelineAction::redo, TimelineAction::addMarker})
     {
         auto b = std::make_unique<juce::TextButton>(TimelineEditController::text(action)); b->setWantsKeyboardFocus(false);
-        b->onClick = [this, action] { invoke(action, edits.playhead()); };
+        b->onClick = [this, action] { if (action == TimelineAction::addMarker && onAddMarkerRequested) onAddMarkerRequested(); else invoke(action, edits.playhead()); };
         if (action == TimelineAction::earlier || action == TimelineAction::later)
             b->onStateChange = [this, action, button = b.get()]
             {
@@ -68,6 +68,7 @@ TimelineView::TimelineView(RecorderDocument& d) : edits(d), rows(*this), documen
     snapButton.onClick = [this] { snapButton.setButtonText(snapButton.getToggleState() ? ko("스냅 켜짐") : ko("스냅 꺼짐")); };
     addAndMakeVisible(sidebar); sidebar.addTab(ko("클립 속성"), Palette::card, &inspector, false); sidebar.addTab(ko("마커"), Palette::card, &markerPanel, false); sidebar.setTabBarDepth(28);
     inspector.onEdit = [this](const juce::Result& r) { finish(r); }; markerPanel.onEdit = [this](const juce::Result& r) { finish(r, false); };
+    markerPanel.onAddRequested = [this] { if (onAddMarkerRequested) onAddMarkerRequested(); else finish(edits.addMarker(), false); };
     edits.onSeek = [this](Sample at, bool released) { playhead = at; if (onScrub) onScrub(at, released); reveal(at); };
     refresh(false, 0, {});
 }
@@ -330,7 +331,9 @@ void TimelineView::showEditMenu(bool atMouse)
         if (!safe || result == 0) return;
         if (safe->document.snapshot() != base || safe->document.getSelection() != selection) { safe->finish(juce::Result::fail(ko("편집 대상이 바뀌었습니다. 메뉴를 다시 여세요.")), false); return; }
         const auto a = TimelineAction(result - 1);
-        if (a == TimelineAction::rippleAudio) safe->showRipplePrompt(); else safe->invoke(a, safe->edits.playhead());
+        if (a == TimelineAction::rippleAudio) safe->showRipplePrompt();
+        else if (a == TimelineAction::addMarker && safe->onAddMarkerRequested) safe->onAddMarkerRequested();
+        else safe->invoke(a, safe->edits.playhead());
     });
 }
 bool TimelineView::keyPressed(const juce::KeyPress& key, juce::Component* origin)
@@ -341,7 +344,7 @@ bool TimelineView::keyPressed(const juce::KeyPress& key, juce::Component* origin
     if (key.getModifiers().isCtrlDown() && (code == 'Z' || code == 'z')) { invoke(key.getModifiers().isShiftDown() ? TimelineAction::redo : TimelineAction::undo); return true; }
     if (key.getModifiers().isCtrlDown() || key.getModifiers().isAltDown()) return false;
     if (!onGlobalKey) if (const auto command = shortcutCommand(shortcuts, key, origin))
-    { if (*command == RecorderCommand::split) { invoke(TimelineAction::split); return true; } if (*command == RecorderCommand::marker) { invoke(TimelineAction::addMarker); return true; } }
+    { if (*command == RecorderCommand::split) { invoke(TimelineAction::split); return true; } if (*command == RecorderCommand::marker) { if (onAddMarkerRequested) onAddMarkerRequested(); else invoke(TimelineAction::addMarker); return true; } }
     if (code == juce::KeyPress::deleteKey) { invoke(TimelineAction::remove); return true; }
     if (code == juce::KeyPress::escapeKey) { rows.cancelGesture(); selectionChanged(); return true; }
     return false;

@@ -427,7 +427,7 @@ juce::Result AudioImport::prepare(const AudioImportRequest& request, AudioImport
         track.clips.edit().push_back(clip);
         checked(gocue::SafeFileWrite::writeTextVerified(directory.getChildFile(".import-info.json"), juce::JSON::toString(info.toVar()),
             [](const juce::String& value) { try { ImportedAudioInfo::fromVar(juce::JSON::parse(value)); return juce::Result::ok(); }
-                catch (const std::exception& e) { return juce::Result::fail(e.what()); } }));
+                catch (const std::exception& e) { return juce::Result::fail(juce::String::fromUTF8(e.what())); } }));
         control.checkpoint(Stage::ready, 1); output = std::move(prepared); return juce::Result::ok();
     }
     catch (const std::exception& e)
@@ -449,12 +449,12 @@ ImportedAudioInfo AudioImport::loadInfo(const juce::File& projectDirectory, cons
 }
 juce::Result commitImportedAudio(RecorderDocument& document, PreparedAudioImport& prepared, AudioImportControl& control)
 {
-    if (control.cancelled.load()) return juce::Result::fail("오디오 불러오기를 취소했습니다.");
+    if (control.cancelled.load()) return juce::Result::fail(juce::String::fromUTF8("오디오 불러오기를 취소했습니다."));
     if (prepared.committed || document.getProject().projectId != prepared.request.projectId
         || document.getProject().Fs != prepared.request.projectFs
         || (document.getFile() != juce::File() && document.getFile().getParentDirectory() != prepared.request.projectDirectory))
-        return juce::Result::fail("불러오기 중 프로젝트가 바뀌었거나 이미 등록한 오디오입니다.");
-    const auto result = document.performEdit("오디오 파일 불러오기", [&](EditState& edit)
+        return juce::Result::fail(juce::String::fromUTF8("불러오기 중 프로젝트가 바뀌었거나 이미 등록한 오디오입니다."));
+    const auto result = document.performEdit(juce::String::fromUTF8("오디오 파일 불러오기"), [&](EditState& edit)
     {
         // Verified against round 08 RecorderDocument::performEdit: its working object is RecorderProject.
         auto& next = static_cast<RecorderProject&>(edit);

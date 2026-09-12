@@ -34,12 +34,12 @@ MainComponent::MainComponent(RecorderDocument& d, RecorderSettings& s, TakeContr
             }
     };
     recordView.startButton.onClick = [this] { recordClicked(); }; recordView.stopButton.onClick = [this] { stopClicked(); };
-    recordView.latestButton.onClick = [this] { latestClicked(); }; recordView.markerButton.onClick = [this] { session.addMarker(); refreshPending = true; };
+    recordView.markerButton.onClick = [this] { session.addMarker(); refreshPending = true; };
     recordView.onArm = [this](unsigned i, bool on)
     { const auto r = session.audioEngine().arm(i, on); if (r.failed()) showError(r.getErrorMessage()); else { auto next = settings.get(); next.microphoneArmed[i] = on; settings.set(next); session.updateMicrophoneSettings(next); persistSettings(); if (cameraPanel) cameraPanel->setSettings(next); } refreshPending = true; };
     recordView.onMonitor = [this, mask = std::uint8_t{0}](unsigned i, bool on) mutable { mask = std::uint8_t(on ? mask | (1u << i) : mask & ~(1u << i)); session.setMonitoring(mask); };
     recordView.onName = [this](unsigned i, const juce::String& name) { auto next = settings.get(); next.microphoneNames[i] = name; settings.set(next); session.updateMicrophoneSettings(next); persistSettings(); };
-    auto& t = timelineView.transport; t.play.onClick = [this] { session.play(); }; t.pause.onClick = [this] { session.pause(); }; t.stop.onClick = [this] { session.stopPlayback(); }; t.beginning.onClick = [this] { session.goToStart(); };
+    auto& t = timelineView.transport; t.play.onClick = [this] { session.play(); }; t.stop.onClick = [this] { session.stopPlayback(); }; t.beginning.onClick = [this] { session.goToStart(); };
     timelineView.onScrub = [this](Sample at, bool released) { session.scrub(at, released); };
     timelineView.onListeningChanged = [this] { session.refreshPlaybackPlan(); };
     timelineView.onGlobalKey = [this](const juce::KeyPress& key, juce::Component* origin) { return keyPressed(key, origin); };
@@ -60,7 +60,6 @@ MainComponent::MainComponent(RecorderDocument& d, RecorderSettings& s, TakeContr
     };
     session.onPeaks = [this](const Id& id, auto peaks, unsigned channel) { timelineView.setPeaks(id, peaks, channel); };
     session.onLoadedPeaks = [this](const Id& id, auto peaks, unsigned channel) { timelineView.setLoadedPeaks(id, std::move(peaks), channel); };
-    session.onThumbnails = [this](const Id& id, auto frames) { timelineView.setThumbnails(id, std::move(frames)); };
     document.onChanged = [this] { refreshPending = true; publishLifecycle(); };
     exportDialog = std::make_unique<ExportDialog>(document, session, recordView.exportButton, [this](const juce::String& text) { showError(text); });
     exportDialog->onShortcut = [this](const juce::KeyPress& key, juce::Component* origin) { return routeShortcut(key, origin); };
@@ -102,7 +101,7 @@ MainComponent::~MainComponent()
 void MainComponent::resized()
 {
     recordView.setBounds(getLocalBounds()); timelineView.setBounds(recordView.timelineBounds());
-    const auto lastButton = recordView.latestButton.getBounds();
+    const auto lastButton = recordView.markerButton.getBounds();
     audioImporter.setBounds(lastButton.getRight() + 8, lastButton.getY(), juce::jmax(0, getWidth() - lastButton.getRight() - 20), lastButton.getHeight());
     auto row = getLocalBounds().removeFromBottom(26).removeFromRight(320);
     updateButton.setBounds(row.removeFromRight(90)); aboutButton.setBounds(row.removeFromRight(90)); retryButton.setBounds(row);

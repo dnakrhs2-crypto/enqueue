@@ -299,7 +299,7 @@ juce::Result RecorderSession::setCalibrationProfiles(std::vector<CalibrationProf
     if (!lifecycle->acceptsCommands()) return juce::Result::fail(recorderFaultText(RecorderFault::updateBusy));
     if (busy()) return juce::Result::fail(k("녹화와 저장이 끝난 뒤 보정을 변경하세요."));
     try { for (const auto& profile : profiles) profile.requireMatch(profile.key); }
-    catch (const std::exception& e) { return juce::Result::fail(e.what()); }
+    catch (const std::exception& e) { return juce::Result::fail(juce::String::fromUTF8(e.what())); }
     calibrationProfiles = std::move(profiles); return juce::Result::ok();
 }
 CalibrationMatch RecorderSession::calibrationMatches(const UserSettings& settings) const

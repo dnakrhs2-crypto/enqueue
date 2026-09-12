@@ -11,6 +11,7 @@ public:
     void refresh();
     void resized() override;
     std::function<void(juce::Result)> onEdit;
+    std::function<void()> onAddRequested; // set by the timeline view: routes "마커 추가" to the host's name dialog
 private:
     int getNumRows() override { return int(markers.size()); }
     void paintListBoxItem(int, juce::Graphics&, int, int, bool) override;

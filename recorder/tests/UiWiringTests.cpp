@@ -40,12 +40,12 @@ struct ImportUiTestAccess
     static void startRecording(MainComponent& main) { main.recordView.startButton.onClick(); }
     static void seek(MainComponent& main, Sample at) { main.session.scrub(at, true); }
     static void play(MainComponent& main) { main.timelineView.transport.play.onClick(); }
-    static void pause(MainComponent& main) { main.timelineView.transport.pause.onClick(); }
+    static void pause(MainComponent& main) { main.timelineView.transport.stop.onClick(); } // the transport has no separate pause button any more; stop keeps the position
     static bool buttonPlaced(MainComponent& main)
     {
         const auto& r = main.recordView;
         return r.importButton.isVisible() && r.importButton.getWidth() >= 140
-            && r.dubButton.getRight() <= r.importButton.getX() && r.importButton.getRight() <= r.settingsButton.getX();
+            && r.timelineTab.getRight() <= r.importButton.getX() && r.importButton.getRight() <= r.settingsButton.getX();
     }
 };
 }

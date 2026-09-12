@@ -40,7 +40,7 @@ void RecordView::Microphone::resized()
 { name.setBounds(8, 6, getWidth() - 16, 26); physical.setBounds(8, 32, getWidth() - 16, 22); arm.setBounds(8, 54, getWidth() - 16, 24); monitor.setBounds(8, 96, getWidth() - 16, 28); }
 RecordView::RecordView()
 {
-    for (auto* b : {&projectButton, &recordTab, &timelineTab, &normalButton, &dubButton, &importButton, &settingsButton, &exportButton, &startButton, &stopButton, &markerButton, &latestButton}) { addAndMakeVisible(b); b->setWantsKeyboardFocus(false); }
+    for (auto* b : {&projectButton, &recordTab, &timelineTab, &importButton, &settingsButton, &exportButton, &startButton, &stopButton, &markerButton}) { addAndMakeVisible(b); b->setWantsKeyboardFocus(false); }
     for (auto* l : {&projectName, &statusLabel, &errorLabel, &noMicrophones}) { addAndMakeVisible(l); l->setFont(juce::Font(juce::FontOptions(17))); }
     projectName.setFont(juce::Font(juce::FontOptions(20, juce::Font::bold))); errorLabel.setColour(juce::Label::textColourId, Palette::danger);
     for (auto& cam : cameras) addAndMakeVisible(cam);
@@ -55,7 +55,6 @@ RecordView::RecordView()
         mic.name.onTextChange = [this, i] { if (onName) onName(i, microphones[i].name.getText()); };
     }
     exportButton.setEnabled(false); exportButton.setTooltip(ko("내보내기 준비 전"));
-    dubButton.setEnabled(false); dubButton.setTooltip(ko("더빙 녹화 준비 전"));
     startButton.setColour(juce::TextButton::buttonColourId, Palette::brand);
 }
 std::array<void*, 2> RecordView::nativeHosts()
@@ -84,10 +83,8 @@ void RecordView::update(const RecorderUiState& ui, const RecorderProject& p, con
     statusLabel.setColour(juce::Label::textColourId, ui.live ? Palette::danger : Palette::dimText);
     errorLabel.setText(banner.isNotEmpty() ? banner : ui.warning, juce::dontSendNotification); errorLabel.setTooltip(banner);
     projectButton.setEnabled(!ui.structureLocked); settingsButton.setEnabled(!ui.structureLocked);
-    normalButton.setToggleState(true, juce::dontSendNotification); normalButton.setEnabled(!ui.structureLocked);
     recordTab.setToggleState(!timeline, juce::dontSendNotification); timelineTab.setToggleState(timeline, juce::dontSendNotification);
     startButton.setEnabled(ui.canRecord); stopButton.setEnabled(ui.canStop); markerButton.setEnabled(ui.live || !ui.structureLocked);
-    latestButton.setEnabled(ui.canTransport || ui.takeStatus == ko("정지 중")); latestButton.setVisible(true);
     microphoneViewport.setVisible(!timeline); noMicrophones.setVisible(!timeline && ui.armedMicrophones == 0);
     noMicrophones.setText(ko("녹음 중인 마이크가 없습니다"), juce::dontSendNotification);
     stripCount = 0; for (unsigned i = 0; i < s.physicalInputs.size(); ++i) if (s.physicalInputs[i] >= 0) stripCount = i + 1;
@@ -110,13 +107,13 @@ void RecordView::resized()
     auto a = getLocalBounds().reduced(12); auto top = a.removeFromTop(40);
     projectButton.setBounds(top.removeFromLeft(88).reduced(2)); exportButton.setBounds(top.removeFromRight(105).reduced(2)); settingsButton.setBounds(top.removeFromRight(70).reduced(2));
     importButton.setBounds(top.removeFromRight(148).reduced(2));
-    dubButton.setBounds(top.removeFromRight(58).reduced(2)); normalButton.setBounds(top.removeFromRight(58).reduced(2)); timelineTab.setBounds(top.removeFromRight(94).reduced(2)); recordTab.setBounds(top.removeFromRight(66).reduced(2)); projectName.setBounds(top.reduced(6, 0));
+    timelineTab.setBounds(top.removeFromRight(94).reduced(2)); recordTab.setBounds(top.removeFromRight(66).reduced(2)); projectName.setBounds(top.reduced(6, 0));
     statusLabel.setBounds(a.removeFromTop(28)); errorLabel.setBounds(a.removeFromTop(32)); a.removeFromTop(6);
     const int cameraHeight = timeline ? juce::jlimit(120, 220, a.getHeight() / 3)
         : juce::jlimit(140, (a.getWidth() - 16) * 9 / 32 + 44, a.getHeight() - 228);
     auto cameraArea = a.removeFromTop(cameraHeight); auto l = cameraArea.removeFromLeft((cameraArea.getWidth() - 12) / 2); cameraArea.removeFromLeft(12); cameras[0].setBounds(l); cameras[1].setBounds(cameraArea);
     a.removeFromTop(8); auto controls = a.removeFromTop(38);
-    startButton.setBounds(controls.removeFromLeft(128).reduced(2)); stopButton.setBounds(controls.removeFromLeft(76).reduced(2)); markerButton.setBounds(controls.removeFromLeft(120).reduced(2)); latestButton.setBounds(controls.removeFromLeft(178).reduced(2));
+    startButton.setBounds(controls.removeFromLeft(128).reduced(2)); stopButton.setBounds(controls.removeFromLeft(76).reduced(2)); markerButton.setBounds(controls.removeFromLeft(120).reduced(2));
     a.removeFromTop(8); lowerBounds = a.withTrimmedBottom(18);
     noMicrophones.setBounds(a.removeFromBottom(25)); microphoneViewport.setBounds(a);
     strips.setSize(juce::jmax(a.getWidth() - 2, int(stripCount) * 176), 132);

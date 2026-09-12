@@ -2,7 +2,7 @@
 
 namespace gocue::recorder
 {
-juce::String ProductIdentity::displayName() { return RECORDER_DISPLAY_NAME; }
+juce::String ProductIdentity::displayName() { return juce::String::fromUTF8(RECORDER_DISPLAY_NAME); } // UTF-8 literal: a plain const char* is read as ASCII/Latin-1 and garbles the title
 juce::String ProductIdentity::internalId() { return RECORDER_INTERNAL_ID; }
 juce::String ProductIdentity::version() { return RECORDER_VERSION; }
 juce::String ProductIdentity::appId() { return RECORDER_APP_ID; }

@@ -144,7 +144,7 @@ struct RecorderAudioEngine::Impl final : juce::AudioIODeviceCallback
                 if (converted) reference->finishInput(config.referencePackets);
                 referenceReport = reference->toJson();
             }
-            catch (const std::exception& e) { referenceMessage = e.what(); referenceError = true; }
+            catch (const std::exception& e) { referenceMessage = juce::String::fromUTF8(e.what()); referenceError = true; }
         }
         void startJournal(std::int64_t sample)
         {
@@ -241,7 +241,7 @@ struct RecorderAudioEngine::Impl final : juce::AudioIODeviceCallback
                     converted += frames; raw.release();
                 }
             }
-            catch (const std::exception& e) { workerError = e.what(); signal(Error::writeFailed); }
+            catch (const std::exception& e) { workerError = juce::String::fromUTF8(e.what()); signal(Error::writeFailed); }
             referenceInputDone.store(true, std::memory_order_release);
             if (referenceWorker.joinable()) referenceWorker.join();
             if (wav)
@@ -579,7 +579,7 @@ juce::Result RecorderAudioEngine::openDevice(const juce::String& name, unsigned 
             s.info.inputLatency = s.device->getInputLatencyInSamples(); s.info.outputLatency = s.device->getOutputLatencyInSamples();
             s.device->start(&s); return juce::Result::ok();
         }
-        catch (const std::exception& e) { s.closePhysical(); return juce::Result::fail(e.what()); }
+        catch (const std::exception& e) { s.closePhysical(); return juce::Result::fail(juce::String::fromUTF8(e.what())); }
     };
     const auto result = attempt(name, Fs, requestedBuffer);
     if (result.wasOk()) return result;
@@ -698,7 +698,7 @@ juce::Result RecorderAudioEngine::prepareDubbing(TakeConfig config, bool recordM
                                                    std::int64_t(s.info.inputLatency) + residual);
         s.session->launch(); s.active.store(s.session.get(), std::memory_order_release); return juce::Result::ok();
     }
-    catch (const std::exception& e) { s.session.reset(); s.shutdownBusy->store(s.dubbingOutput.load() != nullptr); return juce::Result::fail(e.what()); }
+    catch (const std::exception& e) { s.session.reset(); s.shutdownBusy->store(s.dubbingOutput.load() != nullptr); return juce::Result::fail(juce::String::fromUTF8(e.what())); }
 }
 juce::Result RecorderAudioEngine::stopDubbingAt(std::int64_t sample)
 {
@@ -747,7 +747,7 @@ juce::Result RecorderAudioEngine::prepare(TakeConfig config)
         impl->session = std::make_unique<Impl::Session>(*impl, std::move(config));
         impl->session->launch(); impl->active.store(impl->session.get(), std::memory_order_release); return juce::Result::ok();
     }
-    catch (const std::exception& e) { impl->session.reset(); impl->shutdownBusy->store(false); return juce::Result::fail(e.what()); }
+    catch (const std::exception& e) { impl->session.reset(); impl->shutdownBusy->store(false); return juce::Result::fail(juce::String::fromUTF8(e.what())); }
 }
 juce::Result RecorderAudioEngine::startAt(std::int64_t sample)
 {

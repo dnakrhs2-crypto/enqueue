@@ -8,7 +8,7 @@ AudioImportPanel::AudioImportPanel(RecorderDocument& d) : document(d)
     addAndMakeVisible(status); addAndMakeVisible(progressBar);
     importButton.onClick = [this] { chooseFile(); }; cancelButton.onClick = [this] { cancelImport(); };
     cancelButton.setEnabled(false); progressBar.setVisible(false);
-    status.setText("WAV · MP3 · M4A · AAC / mono · stereo", juce::dontSendNotification);
+    status.setText(juce::String::fromUTF8("WAV · MP3 · M4A · AAC / mono · stereo"), juce::dontSendNotification);
 }
 AudioImportPanel::~AudioImportPanel() { onBusyChanged = {}; shutdown(); }
 void AudioImportPanel::shutdown()

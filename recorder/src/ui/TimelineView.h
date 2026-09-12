@@ -35,6 +35,8 @@ public:
     void setRecordingPreview(bool active, Sample placement, Sample elapsed, const RecordingPreviewTargets&, const UserSettings&);
     void setShortcuts(const RecorderShortcuts& value) { if (shortcuts.keys != value.keys) { shortcuts = value; updateControls(); } }
     std::function<bool(const juce::KeyPress&, juce::Component*)> onGlobalKey;
+    // Host-owned marker entry (name dialog at the captured time). Unset: the marker is added immediately at the playhead.
+    std::function<void()> onAddMarkerRequested;
     void revealTrack(unsigned row) { viewport.setViewPosition(0, rulerHeight + int(row) * rowHeight); }
     void resized() override;
     void visibilityChanged() override { if (isShowing()) grabKeyboardFocus(); }

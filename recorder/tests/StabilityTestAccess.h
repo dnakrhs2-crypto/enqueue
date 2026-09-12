@@ -13,7 +13,7 @@ struct StabilityTestAccess
     static TimelineView& timeline(MainComponent& main) { return main.timelineView; }
     static RecorderSession& session(MainComponent& main) { return main.session; }
     static void tab(MainComponent& main, bool timeline) { main.setTimeline(timeline); }
-    static void latest(MainComponent& main) { main.recordView.latestButton.onClick(); }
+    static void latest(MainComponent& main) { main.latestClicked(); }
     static void refresh(MainComponent& main) { main.refresh(); }
     static void failPreparation(RecorderSession& session, std::exception_ptr error)
     {
