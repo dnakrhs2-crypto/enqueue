@@ -5,6 +5,8 @@
 #include "ui/RecordView.h"
 #include "ui/ShortcutSettingsPanel.h"
 #include "playback/ImportedAudioCache.h"
+#include "export/TimelineExporter.h"
+#include "storage/EditJournal.h"
 #include "CutSeamChecks.h"
 #include "PlaybackGapChecks.h"
 #include <limits>
@@ -16,7 +18,20 @@ struct TimelineUxTestAccess
     static juce::TextButton* button(const TimelineView& view, TimelineAction action)
     { const auto it = view.buttons.find(action); return it == view.buttons.end() ? nullptr : it->second.get(); }
     static std::size_t buttonCount(const TimelineView& view) { return view.buttons.size(); }
-    static int menuCount(const TimelineView& view) { return view.createEditMenu().getNumItems(); }
+    static int menuCount(const TimelineView& view)
+    {
+        const auto menu = view.createEditMenu(); int count = 0;
+        for (juce::PopupMenu::MenuItemIterator i(menu); i.next();)
+            if (i.getItem().itemID > 0 && i.getItem().itemID <= int(TimelineAction::showTrack) + 1) ++count;
+        return count;
+    }
+    static juce::PopupMenu menu(const TimelineView& view) { return view.createEditMenu(); }
+    static auto menuContext(const TimelineView& view) { return view.captureEditMenuContext(); }
+    static void menuResult(TimelineView& view, int result, const TimelineView::EditMenuContext& context)
+    { view.handleEditMenuResult(result, context); }
+    static juce::PopupMenu headerMenu(TimelineView& view, std::size_t row) { return view.headers.at(row)->createContextMenu(); }
+    static void headerMenuResult(TimelineView& view, std::size_t row, int result, const RecorderDocument::Snapshot& base)
+    { view.headers.at(row)->handleContextMenuResult(result, base); }
     static juce::Component& header(TimelineView& view, std::size_t row) { return *view.headers.at(row); }
     static bool transportClearOfSnap(const TimelineView& view) { return view.transport.getRight() <= view.snapButton.getX(); }
     static void selectRange(TimelineView& view, Sample start, Sample end)
@@ -32,6 +47,8 @@ struct TimelineUxTestAccess
         juce::Graphics g(image); view.rows.paint(g); return image;
     }
     static juce::String status(const TimelineView& view) { return view.selectionInfo.getText(); }
+    static juce::String statusTooltip(TimelineView& view) { return view.selectionInfo.getTooltip(); }
+    static int verticalScroll(const TimelineView& view) { return view.viewport.getViewPositionY(); }
     static std::optional<Sample> guide(const TimelineView& view) { return view.rows.snapGuide; }
     static Sample sample(const TimelineView& view, float x) { return view.sampleFor(x); }
     static void snap(TimelineView& view, bool on) { view.snapButton.setToggleState(on, juce::dontSendNotification); }
@@ -74,6 +91,16 @@ float xAt(TimelineView& view, double seconds)
     return float(TimelineLayout::headerWidth + (seconds - bar->getCurrentRangeStart()) / bar->getCurrentRangeSize() * (rowsOf(view)->getWidth() - TimelineLayout::headerWidth));
 }
 void adopt(RecorderDocument& document) { require(document.adopt(makeTimelineUiFixture(), {}, {}).wasOk(), "UI fixture"); }
+bool trackShown(const TimelineView& view, const Id& id)
+{
+    const auto& tracks = TimelineUxTestAccess::tracks(view);
+    return std::any_of(tracks.begin(), tracks.end(), [&](const Track& t) { return t.trackId == id; });
+}
+juce::PopupMenu::Item menuItem(const juce::PopupMenu& menu, const juce::String& label)
+{
+    for (juce::PopupMenu::MenuItemIterator i(menu); i.next();) if (i.getItem().text == label) return i.getItem();
+    throw std::runtime_error("Menu item missing: " + label.toStdString());
+}
 RecorderProject offGridFixture()
 {
     auto p = makeTimelineUiFixture(); p.fps = {60, 1};
@@ -149,7 +176,7 @@ int runTimelineUxTests()
             v.refresh(locked, 0, {});
             require(TimelineUxTestAccess::buttonCount(v) == 7 && TimelineUxTestAccess::menuCount(v) == 7, "Unexpected edit action count");
             for (const auto action : {TimelineAction::rippleAll, TimelineAction::rippleAudio, TimelineAction::earlier,
-                                     TimelineAction::later, TimelineAction::unlink, TimelineAction::link})
+                                     TimelineAction::later, TimelineAction::unlink, TimelineAction::link, TimelineAction::hideTrack, TimelineAction::showTrack})
                 require(!TimelineUxTestAccess::button(v, action) && TimelineUxTestAccess::menuLabel(v, action).isEmpty(), "Removed action remains in toolbar/menu");
             for (const auto action : {TimelineAction::split, TimelineAction::trimIn, TimelineAction::trimOut, TimelineAction::remove,
                                      TimelineAction::undo, TimelineAction::redo, TimelineAction::addMarker})
@@ -823,8 +850,230 @@ int runTimelineUxTests()
         v.refresh(false, 0, {});
         const auto shown = [&](const Id& id) { const auto& ts = TimelineUxTestAccess::tracks(v); return std::any_of(ts.begin(), ts.end(), [&](const Track& t) { return t.trackId == id; }); };
         require(shown(mics[0]) && !shown(mics[1]), "Soloed empty track was hidden or the plain empty track stayed");
+        require(v.edits.setTrackHidden(mics[0], true).wasOk(), "Manually hide empty soloed track"); v.refresh(false, 0, {});
+        require(!shown(mics[0]), "Manual hiding lost to empty-track solo visibility");
+        require(v.edits.setTrackHidden(mics[0], false).wasOk(), "Show empty soloed track"); v.refresh(false, 0, {});
+        require(shown(mics[0]), "Unhidden empty soloed track did not return");
         require(v.edits.setTrackListening(mics[0], true).wasOk(), "Un-solo"); v.refresh(false, 0, {});
         require(!shown(mics[0]), "Empty, un-soloed track stayed visible");
+        require(v.edits.setTrackHidden(mics[0], true).wasOk() && v.edits.setTrackHidden(mics[0], false).wasOk(), "Toggle empty unused track visibility"); v.refresh(false, 0, {});
+        require(!shown(mics[0]), "Showing an unused empty track bypassed automatic hiding");
+    });
+    suite.test("manual track hiding overrides clips and listening state with journaled undo and redo", []
+    {
+        struct Journal : IEditJournalSink
+        {
+            std::vector<EditDelta> edits;
+            juce::Result enqueue(const EditDelta& delta) override { edits.push_back(delta); return juce::Result::ok(); }
+        } journal;
+        RecorderDocument d; require(d.adopt(stereoWaveFixture(), {}, {}).wasOk(), "Visibility fixture");
+        TimelineView v(d); v.setSize(1180, 620); d.setJournalSink(&journal);
+        const auto mic = d.getProject().tracks[2].trackId;
+        require(v.edits.setTrackListening(mic, true).wasOk() && v.edits.setTrackListening(mic, false).wasOk(), "Solo and mute fixture microphone");
+        int playbackChanges = 0; v.onListeningChanged = [&] { ++playbackChanges; };
+        const auto original = d.snapshot();
+        for (const auto row : {2u, 0u, 1u, 4u})
+        {
+            const auto id = original->tracks[row].trackId; const auto depth = d.getHistory().undoDepth(); const auto visible = d.snapshot();
+            require(v.edits.setTrackHidden(id, true).wasOk(), "Hide populated track"); v.refresh(false, 0, {});
+            require(!trackShown(v, id) && d.getProject().tracks[row].hidden && d.getHistory().undoDepth() == depth + 1, "Manual hide did not remove the row or create history");
+            const auto& delta = journal.edits.back();
+            require(delta.name == ko("트랙 숨기기") && delta.entities.size() == 1 && delta.entities[0].entityId == id
+                && bool(delta.entities[0].value["hidden"]), "Journal omitted the hidden track state");
+            require(delta.validationHash == RecorderSerializer::fingerprint(RecorderSerializer::editStateToVar(d.getProject())), "Visibility journal hash mismatch");
+            const auto replayed = EditJournal::apply(*visible, EditJournal::payload(*visible, delta, d.getProject()));
+            require(RecorderSerializer::toJson(replayed) == RecorderSerializer::toJson(d.getProject()), "Journal replay lost hiding");
+            const auto hidden = d.snapshot();
+            require(v.edits.setTrackHidden(id, true).wasOk() && d.snapshot() == hidden, "Repeated hide published a no-op");
+            require(v.invoke(TimelineAction::undo).wasOk() && trackShown(v, id) && !d.getProject().tracks[row].hidden, "Undo did not restore the row");
+            require(v.invoke(TimelineAction::redo).wasOk() && !trackShown(v, id) && d.getProject().tracks[row].hidden, "Redo did not hide the row");
+            const auto beforeShow = d.snapshot();
+            require(v.edits.setTrackHidden(id, false).wasOk(), "Show populated track"); v.refresh(false, 0, {});
+            require(trackShown(v, id) && journal.edits.back().name == ko("트랙 보이기"), "Explicit show did not restore the row");
+            require(RecorderSerializer::toJson(EditJournal::apply(*beforeShow, EditJournal::payload(*beforeShow, journal.edits.back(), d.getProject())))
+                == RecorderSerializer::toJson(d.getProject()), "Journal replay lost showing");
+            require(d.getProject().tracks[row].mute == original->tracks[row].mute && d.getProject().tracks[row].solo == original->tracks[row].solo
+                && &d.getProject().tracks[row].clips.items() == &original->tracks[row].clips.items() && d.getProject().media == original->media,
+                "Visibility changed listening, clips or media");
+        }
+        const auto before = d.snapshot();
+        require(v.edits.setTrackHidden("placeholder-cam1", true).failed() && v.edits.setTrackHidden(newId(), false).failed()
+            && d.snapshot() == before, "Missing/display-only track accepted");
+        require(playbackChanges == 0, "Visibility undo/redo restarted playback");
+    });
+    suite.test("hidden recording targets do not reappear as placeholder rows", []
+    {
+        RecorderDocument d; adopt(d); TimelineView v(d); v.setSize(1180, 620);
+        for (const auto row : {0u, 1u, 2u}) require(v.edits.setTrackHidden(d.getProject().tracks[row].trackId, true).wasOk(), "Hide recording target");
+        UserSettings settings; settings.cameraEnabled = {true, true}; const auto before = d.snapshot();
+        v.setRecordingPreview(true, 20 * 48000, 48000, {{true, true}, {1, 2, 4}}, settings); v.refresh(true, 21 * 48000, {});
+        const auto& tracks = TimelineUxTestAccess::tracks(v);
+        require(tracks.size() == 2 && tracks[0].trackId == before->tracks[3].trackId && tracks[1].trackId == "placeholder-mic-4",
+            "Hidden target was replaced by a display-only row");
+        require(TimelineUxTestAccess::recordingRow(v, 0) && TimelineUxTestAccess::recordingRow(v, 1)
+            && TimelineUxTestAccess::displayOnlyRow(v, 1), "Unhidden capture targets or new microphone placeholder changed");
+        paint(v); require(d.snapshot() == before, "Recording preview edited the hidden tracks");
+    });
+    suite.test("track visibility edits are locked during recording", []
+    {
+        RecorderDocument d; adopt(d); TimelineView v(d);
+        const auto mic = d.getProject().tracks[2].trackId, camera = d.getProject().tracks[0].trackId;
+        require(v.edits.setTrackHidden(mic, true).wasOk(), "Hide fixture track");
+        const auto before = d.snapshot(); const auto depth = d.getHistory().undoDepth();
+        d.setRecordingStructureLock(true);
+        require(v.edits.setTrackHidden(camera, true).failed() && v.edits.setTrackHidden(mic, false).failed(), "Recording document accepted a visibility edit");
+        d.setRecordingStructureLock(false); v.refresh(true, 0, {});
+        require(v.edits.setTrackHidden(camera, true).failed() && v.edits.setTrackHidden(mic, false).failed(), "Controller lock accepted a visibility edit");
+        require(d.snapshot() == before && d.getHistory().undoDepth() == depth, "Rejected visibility edits mutated the document");
+    });
+    suite.test("track headers offer hiding only for editable unlocked rows", []
+    {
+        RecorderDocument d; adopt(d); TimelineView v(d); v.setSize(1180, 620);
+        for (const auto row : {0u, 2u})
+        {
+            const auto item = menuItem(TimelineUxTestAccess::headerMenu(v, row), ko("트랙 숨기기"));
+            require(item.isEnabled && item.itemID > 0, "Editable header hide command missing");
+            auto& header = TimelineUxTestAccess::header(v, row); const auto before = d.snapshot();
+            header.mouseDown(mouse(header, 10, 10, 10, 10));
+            require(d.snapshot() == before && d.getSelection().empty() && header.getWidth() == 210 && header.getHeight() == 72,
+                "Header left click or geometry changed");
+        }
+        d.setRecordingStructureLock(true);
+        require(!menuItem(TimelineUxTestAccess::headerMenu(v, 2), ko("트랙 숨기기")).isEnabled, "Locked header hide command enabled");
+        d.setRecordingStructureLock(false); const auto before = d.snapshot(); int playbackChanges = 0;
+        v.onListeningChanged = [&] { ++playbackChanges; };
+        TimelineUxTestAccess::headerMenuResult(v, 2, menuItem(TimelineUxTestAccess::headerMenu(v, 2), ko("트랙 숨기기")).itemID, before);
+        require(!trackShown(v, before->tracks[2].trackId) && d.getProject().tracks[2].hidden && playbackChanges == 0,
+            "Header menu failed to hide/refresh the row or restarted playback");
+        RecorderDocument empty; TimelineView preview(empty); UserSettings settings; settings.cameraEnabled = {true, true};
+        preview.setRecordingPreview(true, 0, 48000, {{true, true}, {1}}, settings);
+        require(TimelineUxTestAccess::tracks(preview).size() == 3, "Placeholder fixture missing");
+        for (std::size_t row = 0; row < TimelineUxTestAccess::tracks(preview).size(); ++row)
+            require(TimelineUxTestAccess::displayOnlyRow(preview, row) && TimelineUxTestAccess::headerMenu(preview, row).getNumItems() == 0,
+                "Display-only header exposed a hide menu");
+    });
+    suite.test("edit menu lists hidden tracks and restores one or all", []
+    {
+        RecorderDocument d; adopt(d); TimelineView v(d); v.setSize(1180, 620);
+        const auto none = menuItem(TimelineUxTestAccess::menu(v), ko("숨긴 트랙 없음"));
+        require(!none.isEnabled && !none.subMenu, "Empty hidden list must be a disabled item");
+        for (const auto row : {0u, 2u, 3u}) require(v.edits.setTrackHidden(d.getProject().tracks[row].trackId, true).wasOk(), "Hide menu fixture");
+        v.refresh(false, 0, {}); const auto before = d.snapshot();
+        const auto submenu = menuItem(TimelineUxTestAccess::menu(v), ko("숨긴 트랙 3개"));
+        require(submenu.isEnabled && submenu.subMenu && submenu.subMenu->getNumItems() == 4, "Hidden submenu count incorrect");
+        for (const auto row : {0u, 2u, 3u})
+            require(menuItem(*submenu.subMenu, before->tracks[row].name).isEnabled, "Hidden track name missing");
+        const auto hint = ko(" · 숨긴 트랙 3개는 편집 메뉴에서 보이기");
+        require(TimelineUxTestAccess::status(v).contains(hint) && TimelineUxTestAccess::statusTooltip(v).contains(hint), "Hidden-track help or tooltip missing");
+        int playbackChanges = 0; v.onListeningChanged = [&] { ++playbackChanges; };
+        TimelineUxTestAccess::menuResult(v, menuItem(*submenu.subMenu, before->tracks[2].name).itemID, TimelineUxTestAccess::menuContext(v));
+        require(trackShown(v, before->tracks[2].trackId) && !trackShown(v, before->tracks[0].trackId) && !trackShown(v, before->tracks[3].trackId),
+            "Single-track show restored the wrong tracks");
+        const auto remaining = menuItem(TimelineUxTestAccess::menu(v), ko("숨긴 트랙 2개"));
+        const auto revisionBeforeShowAll = d.getProject().editRevision;
+        TimelineUxTestAccess::menuResult(v, menuItem(*remaining.subMenu, ko("모두 보이기")).itemID, TimelineUxTestAccess::menuContext(v));
+        require(std::none_of(d.getProject().tracks.begin(), d.getProject().tracks.end(), [](const Track& t) { return t.hidden; })
+            && TimelineUxTestAccess::tracks(v).size() == before->tracks.size(), "Show all left hidden tracks");
+        require(d.getProject().editRevision == revisionBeforeShowAll + 1, "Show all must be one journaled edit");
+        require(d.undo().wasOk() && std::count_if(d.getProject().tracks.begin(), d.getProject().tracks.end(), [](const Track& t) { return t.hidden; }) == 2
+            && d.redo().wasOk(), "One undo must hide the two tracks again");
+        require(!menuItem(TimelineUxTestAccess::menu(v), ko("숨긴 트랙 없음")).isEnabled
+            && !TimelineUxTestAccess::status(v).contains(ko("숨긴 트랙")) && !TimelineUxTestAccess::statusTooltip(v).contains(ko("숨긴 트랙"))
+            && playbackChanges == 0, "Restoring visibility retained stale hints or refreshed playback");
+    });
+    suite.test("hidden-track menu rejects changed documents selections and recording locks", []
+    {
+        for (const bool all : {false, true}) for (const int change : {0, 1, 2})
+        {
+            RecorderDocument d; adopt(d); TimelineView v(d);
+            require(v.edits.setTrackHidden(d.getProject().tracks[0].trackId, true).wasOk()
+                && v.edits.setTrackHidden(d.getProject().tracks[2].trackId, true).wasOk(), "Hide menu safety fixture");
+            const auto context = TimelineUxTestAccess::menuContext(v);
+            const auto submenu = menuItem(TimelineUxTestAccess::menu(v), ko("숨긴 트랙 2개"));
+            const auto result = menuItem(*submenu.subMenu, all ? ko("모두 보이기") : d.getProject().tracks[0].name).itemID;
+            if (change == 0) require(d.performEdit("reorder tracks", [](EditState& e) { std::swap(e.tracks[0], e.tracks[2]); }).wasOk(), "Reorder menu targets");
+            if (change == 1) d.setSelection({d.getProject().tracks[0].clips.items()[0].clipId});
+            if (change == 2)
+            {
+                d.setRecordingStructureLock(true);
+                const auto lockedMenu = menuItem(TimelineUxTestAccess::menu(v), ko("숨긴 트랙 2개"));
+                require(!lockedMenu.isEnabled && !menuItem(*lockedMenu.subMenu, ko("모두 보이기")).isEnabled
+                    && !menuItem(*lockedMenu.subMenu, d.getProject().tracks[0].name).isEnabled, "Locked show commands enabled");
+            }
+            const auto before = d.snapshot(); const auto depth = d.getHistory().undoDepth();
+            TimelineUxTestAccess::menuResult(v, result, context);
+            require(d.snapshot() == before && d.getHistory().undoDepth() == depth, "Stale/locked submenu changed visibility");
+            require(TimelineUxTestAccess::status(v).contains(change == 2 ? ko("녹화 중") : ko("편집 대상이 바뀌었습니다")), "Menu safety status missing");
+        }
+    });
+    suite.test("track hidden state survives JSON roundtrip and legacy projects default to visible", []
+    {
+        auto p = makeTimelineUiFixture(); const auto original = RecorderSerializer::fingerprint(RecorderSerializer::editStateToVar(p));
+        const auto resign = [](juce::var& root)
+        {
+            root.getDynamicObject()->removeProperty("checksum");
+            root.getDynamicObject()->setProperty("checksum", RecorderSerializer::fingerprint(root));
+        };
+        p.tracks[0].hidden = p.tracks[2].hidden = true;
+        require(RecorderSerializer::fingerprint(RecorderSerializer::editStateToVar(p)) != original, "Visibility omitted from edit hash");
+        RecorderProject restored; require(RecorderSerializer::fromJson(RecorderSerializer::toJson(p), restored).wasOk(), "Hidden project roundtrip");
+        for (std::size_t row = 0; row < p.tracks.size(); ++row) require(restored.tracks[row].hidden == p.tracks[row].hidden, "Roundtrip lost hidden state");
+        require(restored.schemaVersion == p.schemaVersion && restored.validate().wasOk(), "Visibility changed schema or validation");
+        auto legacy = juce::JSON::parse(RecorderSerializer::toJson(p));
+        for (auto& track : *legacy["edit"]["tracks"].getArray()) track.getDynamicObject()->removeProperty("hidden");
+        resign(legacy);
+        require(RecorderSerializer::fromJson(juce::JSON::toString(legacy), restored).wasOk()
+            && std::none_of(restored.tracks.begin(), restored.tracks.end(), [](const Track& t) { return t.hidden; }), "Legacy tracks did not default to visible");
+        require(RecorderSerializer::fingerprint(RecorderSerializer::editStateToVar(restored)) == original
+            && RecorderSerializer::fingerprint(juce::JSON::parse(RecorderSerializer::toJson(restored))) == RecorderSerializer::fingerprint(legacy), "Legacy checkpoint/journal hashes changed");
+        legacy["edit"]["tracks"][0].getDynamicObject()->setProperty("hidden", false); resign(legacy);
+        require(RecorderSerializer::fromJson(juce::JSON::toString(legacy), restored).wasOk() && !restored.tracks[0].hidden, "Explicit false visibility rejected");
+        legacy["edit"]["tracks"][0].getDynamicObject()->setProperty("hidden", "true");
+        resign(legacy);
+        require(RecorderSerializer::fromJson(juce::JSON::toString(legacy), restored).failed(), "Non-boolean hidden field accepted");
+    });
+    suite.test("hidden tracks retain playback and export clips and listening state", []
+    {
+        auto p = stereoWaveFixture(); p.tracks[2].solo = true; p.tracks[3].mute = true;
+        const auto before = compileAudioRenderPlan(p); const ExportJob exportBefore(p, juce::File::getCurrentWorkingDirectory());
+        for (auto& t : p.tracks) t.hidden = true;
+        const auto after = compileAudioRenderPlan(p); const ExportJob exportAfter(p, juce::File::getCurrentWorkingDirectory());
+        require(p.validate().wasOk() && p.activeTimelineEnd() == before->timeline->timelineEnd && after->timeline->timelineEnd == before->timeline->timelineEnd
+            && after->timeline->tracks.size() == before->timeline->tracks.size() && after->timeline->activeClips.size() == before->timeline->activeClips.size()
+            && after->sources.size() == before->sources.size() && after->timeline->audibleTrackCount == before->timeline->audibleTrackCount,
+            "Hiding tracks changed playback duration, sources or mix membership");
+        for (std::size_t row = 0; row < p.tracks.size(); ++row)
+        {
+            const auto& a = before->timeline->tracks[row]; const auto& b = after->timeline->tracks[row];
+            require(a.trackId == b.trackId && a.mute == b.mute && a.solo == b.solo && a.audible == b.audible && a.spans.size() == b.spans.size(), "Hiding changed a listening lane");
+            for (const auto& clip : p.tracks[row].clips.items())
+                require(std::any_of(after->timeline->activeClips.begin(), after->timeline->activeClips.end(), [&](const RenderClip& c)
+                    { return c.clipId == clip.clipId && c.trackId == clip.trackId && c.assetId == clip.assetId && c.lengthSamples == clip.lengthSamples; }), "Hidden clip missing from playback plan");
+            if (p.tracks[row].kind == TrackKind::mic || p.tracks[row].kind == TrackKind::importAudio)
+            {
+                const AudioSourceMask mask{AudioSourceMask::Kind::materialTrack, p.tracks[row].trackId};
+                const auto assets = TimelineExporter::assetIds(exportBefore, mask);
+                require(!assets.isEmpty() && TimelineExporter::assetIds(exportAfter, mask) == assets, "Hidden audio omitted from export");
+            }
+        }
+        const AudioSourceMask mix{AudioSourceMask::Kind::microphoneMix};
+        require(TimelineExporter::assetIds(exportAfter, mix) == TimelineExporter::assetIds(exportBefore, mix)
+            && exportAfter.range.sampleCount == exportBefore.range.sampleCount && exportAfter.plan().activeClips.size() == exportBefore.plan().activeClips.size(),
+            "Hidden soloed microphone or cameras changed the export plan");
+    });
+    suite.test("revealTrack restores hidden imported tracks and quietly respects recording locks", []
+    {
+        RecorderDocument d; require(d.adopt(stereoWaveFixture(), {}, {}).wasOk(), "Import visibility fixture");
+        TimelineView v(d); v.setSize(1180, 240); const auto id = d.getProject().tracks.back().trackId;
+        require(v.edits.setTrackHidden(id, true).wasOk(), "Hide import track"); v.refresh(false, 0, {});
+        require(!trackShown(v, id), "Import track still visible");
+        v.revealTrack(d.getProject().tracks.back().trackId);
+        require(!d.getProject().tracks.back().hidden && trackShown(v, id) && TimelineUxTestAccess::verticalScroll(v) > 0, "Reveal did not show and scroll to the imported track");
+        const auto shown = d.snapshot(); v.revealTrack(id); require(d.snapshot() == shown, "Revealing a visible track created history");
+        require(v.edits.setTrackHidden(id, true).wasOk(), "Hide import for lock test");
+        d.setRecordingStructureLock(true); v.refresh(false, 0, {}); const auto before = d.snapshot(); const auto status = TimelineUxTestAccess::status(v);
+        v.revealTrack(id);
+        require(d.snapshot() == before && !trackShown(v, id) && TimelineUxTestAccess::status(v) == status, "Locked reveal edited or reported an error");
     });
     suite.test("first recording creates display-only rows from armed logical microphones", []
     {

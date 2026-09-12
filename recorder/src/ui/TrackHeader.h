@@ -11,8 +11,12 @@ public:
     void refresh(const Track&);
     void paint(juce::Graphics&) override;
     void resized() override;
+    void mouseDown(const juce::MouseEvent&) override;
     std::function<void(juce::Result)> onEdit;
 private:
+    friend struct TimelineUxTestAccess;
+    juce::PopupMenu createContextMenu() const;
+    void handleContextMenuResult(int result, const RecorderDocument::Snapshot& base);
     TimelineEditController& edits;
     Id id;
     juce::Label name;

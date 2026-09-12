@@ -5,7 +5,7 @@ namespace gocue::recorder
 {
 // Shared by mouse/keyboard/widgets and the headless probe. No JUCE GUI or devices.
 enum class TimelineAction { split, trimIn, trimOut, remove, rippleAll, rippleAudio,
-    move, earlier, later, unlink, link, undo, redo, addMarker, editMarker, deleteMarker, mute, solo, seek };
+    move, earlier, later, unlink, link, undo, redo, addMarker, editMarker, deleteMarker, mute, solo, seek, hideTrack, showTrack };
 enum class RippleChoice { cancel, expand, unlink };
 struct RipplePrompt
 {
@@ -46,6 +46,8 @@ public:
     RipplePrompt ripplePrompt() const;
     juce::Result resolveRipple(const RipplePrompt&, RippleChoice);
     juce::Result setTrackListening(const Id&, bool solo);
+    juce::Result setTrackHidden(const Id&, bool hidden);
+    juce::Result setTracksHidden(const std::vector<Id>&, bool hidden); // one journaled edit (one undo step) for several tracks
     juce::Result addMarker(const juce::String& name = {}, const juce::String& colour = "#4c8dff");
     juce::Result editMarker(const Id&, Sample, const juce::String& name, const juce::String& colour);
     juce::Result deleteMarker(const Id&);
