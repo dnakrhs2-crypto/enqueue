@@ -9,7 +9,7 @@ struct RecorderShortcuts
 {
     static constexpr std::size_t count = std::size_t(RecorderCommand::count);
     // JUCE KeyPress::getTextDescription strings, also readable by older settings readers.
-    std::array<juce::String, count> keys {"F9", "F10", "spacebar", "S", "M"};
+    std::array<juce::String, count> keys {"F9", "spacebar", "spacebar", "S", "M"};
     const juce::String& operator[](RecorderCommand command) const { return keys[std::size_t(command)]; }
     static juce::String name(RecorderCommand);
     static const char* field(RecorderCommand);

@@ -101,7 +101,7 @@ public:
             else if (args.size() == 1 && juce::File::isAbsolutePath(flag) && flag.endsWithIgnoreCase(ProductIdentity::projectExtension())) openPath = flag;
             else invalid = true;
         }
-        if ((rootPath.isNotEmpty() || projectPath.isNotEmpty()) && !automation && !demoArguments)
+        if (projectPath.isNotEmpty() && !automation && !demoArguments)
         {
             int result = 2;
             if (!invalid && rootPath.isNotEmpty() && projectPath.isNotEmpty() && openPath.isEmpty())
@@ -119,6 +119,13 @@ public:
         document = std::make_unique<RecorderDocument>(); window = std::make_unique<MainWindow>(*document, *settings);
         if (exceptionReported) { window->content().showUnhandledException(lastExceptionReport); if (lastExceptionReport != juce::File()) CrashHandler::markSeen(lastExceptionReport); }
         if (demoIterations) { window->content().startDemo(demoIterations, juce::File::getCurrentWorkingDirectory().getChildFile(demoDevices), demoAsio, juce::File::getCurrentWorkingDirectory().getChildFile(demoReport)); return; }
+        if (rootPath.isNotEmpty())
+        {
+            // Isolated GUI inspection; --test-root + --new-project still uses the headless roundtrip above.
+            if (loaded.failed()) window->content().showError(loaded.getErrorMessage());
+            window->content().initialiseProject(openPath.isEmpty() ? juce::File() : juce::File(openPath), false, false);
+            return; // no startup prompt, devices, updater or previous-crash dialog
+        }
         const auto lifecycle = window->content().lifecycleState();
         const juce::Component::SafePointer<MainComponent> content(&window->content());
         RecorderUpdater::initialise({[lifecycle] { return lifecycle->canShutdown(); },
@@ -134,9 +141,7 @@ public:
                 .withButton(ko("폴더 열기")).withButton(ko("확인")).withAssociatedComponent(&window->content()),
                 [report](int result) { if (result == 1) report.revealToUser(); });
         }
-        if (openPath.isNotEmpty()) window->content().openProject(juce::File(openPath));
-        else if (loaded.wasOk() && !settings->get().recentProjects.isEmpty()) window->content().openProject(juce::File(settings->get().recentProjects[0]));
-        else window->content().connectDevicesFromSettings();
+        window->content().initialiseProject(openPath.isEmpty() ? juce::File() : juce::File(openPath), true);
     }
     void shutdown() override
     {

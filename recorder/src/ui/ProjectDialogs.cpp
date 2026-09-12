@@ -45,14 +45,19 @@ public:
     juce::Label nameLabel, folderLabel, fpsLabel, error;
     juce::TextEditor name, folder;
     juce::ComboBox fps;
-    juce::TextButton browse {ko("폴더 선택")}, create {ko("새 프로젝트")}, cancel {ko("취소")};
+    juce::TextButton browse {ko("폴더 선택")}, create {ko("새 프로젝트")}, cancel {ko("취소")}, open {ko("기존 프로젝트 열기…")};
     std::unique_ptr<juce::FileChooser> chooser;
     NewProjectForm()
     {
         for (auto* l : {&nameLabel, &folderLabel, &fpsLabel, &error}) addAndMakeVisible(l);
         nameLabel.setText(ko("이름"), juce::dontSendNotification); folderLabel.setText(ko("로컬 폴더"), juce::dontSendNotification); fpsLabel.setText(ko("프레임레이트"), juce::dontSendNotification);
-        addAndMakeVisible(name); addAndMakeVisible(folder); addAndMakeVisible(fps); for (auto* b : {&browse, &create, &cancel}) addAndMakeVisible(b);
+        addAndMakeVisible(name); addAndMakeVisible(folder); addAndMakeVisible(fps); for (auto* b : {&browse, &create, &cancel, &open}) addAndMakeVisible(b);
         name.setText(ko("새 프로젝트")); fps.addItem("30", 30); fps.addItem("60", 60); fps.setSelectedId(30);
+        name.setSelectAllWhenFocused(true);
+        name.onReturnKey = [this] { create.triggerClick(); };
+        name.onEscapeKey = [this] { cancel.triggerClick(); };
+        folder.onReturnKey = [this] { create.triggerClick(); };
+        folder.onEscapeKey = [this] { cancel.triggerClick(); };
         browse.onClick = [this]
         {
             chooser = std::make_unique<juce::FileChooser>(ko("프로젝트를 저장할 로컬 폴더"), juce::File(), juce::String()); const juce::Component::SafePointer<NewProjectForm> safe(this);
@@ -66,8 +71,62 @@ public:
         row = a.removeFromTop(42); folderLabel.setBounds(row.removeFromLeft(118)); browse.setBounds(row.removeFromRight(112).reduced(2)); folder.setBounds(row.reduced(2));
         row = a.removeFromTop(42); fpsLabel.setBounds(row.removeFromLeft(118)); fps.setBounds(row.removeFromLeft(140).reduced(2)); error.setBounds(a.removeFromTop(40));
         row = a.removeFromBottom(40); cancel.setBounds(row.removeFromRight(86).reduced(2)); create.setBounds(row.removeFromRight(140).reduced(2));
+        open.setBounds(row.removeFromLeft(190).reduced(2));
     }
 };
+}
+void MainComponent::promptMarker()
+{
+    if (markerWindow || closeAction || fileWork.valid() || importBusy() || !session.lifecycleState()->acceptsCommands()
+        || (settingsWindow && settingsWindow->isVisible()) || (projectWindow && projectWindow->isVisible())
+        || (!session.recording() && document.isRecordingStructureLocked())) return;
+    const auto at = session.recording() ? session.takeController().placementSample() + session.elapsed() : session.playhead();
+    const auto defaultName = ko("마커 ") + juce::String(document.getProject().markers.size() + 1);
+    const auto project = document.getProject().projectId;
+    auto window = std::make_unique<juce::AlertWindow>(ko("마커 추가"), ko("마커 이름을 입력하세요."), juce::MessageBoxIconType::NoIcon, this);
+    window->addTextEditor("markerName", defaultName, ko("이름"));
+    window->addButton(ko("확인"), 1, juce::KeyPress(juce::KeyPress::returnKey));
+    window->addButton(ko("취소"), 0, juce::KeyPress(juce::KeyPress::escapeKey));
+    window->centreAroundComponent(this, window->getWidth(), window->getHeight());
+    markerWindow = window.get(); markerProject = project;
+    const juce::Component::SafePointer<MainComponent> safe(this);
+    const auto prompt = markerWindow;
+    window->enterModalState(true, juce::ModalCallbackFunction::create([safe, prompt, project, at, defaultName](int result)
+    {
+        if (!safe || !prompt || safe->markerWindow != prompt) return;
+        safe->markerWindow = nullptr;
+        if (result != 1 || safe->closeAction || project != safe->document.getProject().projectId) return;
+        const auto name = prompt->getTextEditorContents("markerName");
+        safe->session.addMarker(name.trim().isEmpty() ? defaultName : name, at);
+        safe->refreshPending = true;
+    }), true);
+    auto* editor = window->getTextEditor("markerName");
+    window.release(); // modal manager owns deletion after the asynchronous callback
+    editor->grabKeyboardFocus(); editor->selectAll();
+}
+void MainComponent::dismissMarkerPrompt()
+{
+    auto prompt = markerWindow; markerWindow = nullptr;
+    if (prompt) { prompt->exitModalState(0); prompt.deleteAndZero(); }
+}
+void MainComponent::initialiseProject(const juce::File& explicitPath, bool promptIfMissing, bool connectDevices)
+{
+    devicesEnabled = connectDevices;
+    promptAfterStartupOpen = promptIfMissing && explicitPath == juce::File();
+    if (explicitPath != juce::File()) openProject(explicitPath);
+    else if (!settings.get().recentProjects.isEmpty()) openProject(juce::File(settings.get().recentProjects[0]));
+    else
+    {
+        promptAfterStartupOpen = false;
+        if (promptIfMissing) newProjectDialog();
+        connectDevicesFromSettings();
+    }
+    if (promptAfterStartupOpen && !fileWork.valid())
+    {
+        promptAfterStartupOpen = false;
+        if (document.getFile() == juce::File()) newProjectDialog();
+        connectDevicesFromSettings();
+    }
 }
 void MainComponent::showSettings()
 {
@@ -110,20 +169,32 @@ void MainComponent::showSettings()
 }
 void MainComponent::newProjectDialog()
 {
+    if (closeAction || demo) return;
+    if (projectWindow && projectWindow->isVisible()) { projectWindow->toFront(true); return; }
+    dismissMarkerPrompt();
     auto window = std::make_unique<FormWindow>(ko("새 프로젝트"));
     window->onShortcut = [this](const juce::KeyPress& key, juce::Component* origin) { return routeShortcut(key, origin); };
     projectWindow = std::move(window); auto* content = new NewProjectForm(); projectWindow->setContentOwned(content, true); projectWindow->centreAroundComponent(this, 700, 270);
+    if (!settings.get().recentProjects.isEmpty())
+    {
+        const auto folder = juce::File(settings.get().recentProjects[0]).getParentDirectory();
+        if (folder.isDirectory()) content->folder.setText(folder.getFullPathName());
+    }
     content->cancel.onClick = [this] { projectWindow->setVisible(false); };
+    content->open.onClick = [this] { chooseOpen(); };
     content->create.onClick = [this, content]
     {
+        if (session.busy() || fileWork.valid() || importBusy() || closeAction)
+        { content->error.setText(ko("장치 연결과 현재 작업이 끝난 뒤 새 프로젝트를 만드세요."), juce::dontSendNotification); return; }
         const auto path = content->folder.getText().trim(), name = content->name.getText().trim();
         if (name.isEmpty() || !juce::File::isAbsolutePath(path) || path.startsWith("\\\\") || path.startsWith("//")) { content->error.setText(ko("프로젝트 이름과 로컬 폴더를 입력하세요."), juce::dontSendNotification); return; }
         createProject(name, juce::File(path), unsigned(content->fps.getSelectedId())); projectWindow->setVisible(false);
-    }; projectWindow->setVisible(true);
+    }; projectWindow->setVisible(true); projectWindow->toFront(true); content->name.grabKeyboardFocus(); content->name.selectAll();
 }
 void MainComponent::beforeSwitch(std::function<void()> action)
 {
     if (session.busy() || fileWork.valid() || importBusy() || closeAction) { showError(ko("녹화·오디오 불러오기와 저장이 끝난 뒤 프로젝트를 변경하세요.")); return; }
+    dismissMarkerPrompt();
     session.stopPlayback(); if (document.isDirty() && document.getFile() != juce::File()) { afterSave = std::move(action); saveProject(); } else action();
 }
 void MainComponent::projectMenu()
@@ -159,6 +230,7 @@ void MainComponent::openProject(const juce::File& path)
 {
     beforeSwitch([this, path]
     {
+        if (projectWindow) projectWindow->setVisible(false);
         FileResult context; context.opening = true; context.file = path;
         startFileWork(context, [context]() mutable { context.result = RecorderSerializer::readCheckpoint(context.file, context.loaded, &context.info); return context; }); refreshPending = true;
     });

@@ -24,6 +24,7 @@ public:
     bool routeShortcut(const juce::KeyPress&, juce::Component* origin);
     void showFault(RecorderFault fault) { showError(recorderFaultText(fault)); }
     void openProject(const juce::File&);
+    void initialiseProject(const juce::File& explicitPath, bool promptIfMissing, bool connectDevices = true);
     void requestClose(std::function<void()>);
     void createProject(const juce::String&, const juce::File&, unsigned fps);
     void startDemo(int iterations, const juce::File& devices, int asioDevice, const juce::File& report);
@@ -31,7 +32,7 @@ public:
     void updateShutdownRequested();
     void updateShutdownBlocked();
     void checkForUpdates();
-    void connectDevicesFromSettings() { if (!demo) session.configure(settings.get()); } // startup without a project: grab ASIO/cameras right away
+    void connectDevicesFromSettings() { if (!demo && devicesEnabled) session.configure(settings.get()); }
 private:
     friend struct StabilityTestAccess;
     friend struct ShortcutExceptionTestAccess;
@@ -55,6 +56,7 @@ private:
     bool keyStateChanged(bool, juce::Component*) override;
     void globalFocusChanged(juce::Component*) override;
     void refresh(); void setTimeline(bool); void recordClicked(); void stopClicked(); void latestClicked();
+    void promptMarker(); void dismissMarkerPrompt();
     void projectMenu(); void newProjectDialog(); void chooseOpen(); void saveProject(); void saveTo(const juce::File&);
     void beforeSwitch(std::function<void()>); void showSettings(); void persistSettings(); void continueClose();
     void demoTick(); void finishDemo(const juce::String&, const juce::String&);
@@ -75,6 +77,8 @@ private:
     AudioImportPanel audioImporter;
     std::unique_ptr<ExportDialog> exportDialog;
     std::unique_ptr<juce::DocumentWindow> settingsWindow, projectWindow;
+    juce::Component::SafePointer<juce::AlertWindow> markerWindow;
+    Id markerProject;
     AudioSettingsPanel* audioPanel = nullptr;
     CameraSettingsPanel* cameraPanel = nullptr;
     juce::Label* settingsError = nullptr;
@@ -87,6 +91,7 @@ private:
     std::future<juce::int64> spaceWork;
     std::function<void()> afterSave, closeAction;
     bool timeline = false, refreshPending = true, settingsPending = false;
+    bool devicesEnabled = true, promptAfterStartupOpen = false;
     std::optional<UserSettings> pendingConfigure; // a settings edit made while the previous one is still applying
     juce::Time launchedAt = juce::Time::getCurrentTime(), lastQuietCheck;
     juce::int64 remainingBytes = -1;

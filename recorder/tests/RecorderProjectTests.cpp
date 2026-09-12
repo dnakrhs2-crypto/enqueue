@@ -400,6 +400,36 @@ int runProjectTests()
         require(s.calibration.cameraOffsetSamples[1] == -19 && s.calibration.outputOffsetSamples == 200 && s.windowState == "window-state", "Correction and window retained");
         require(s.recentProjects[0] == f.checkpoint().getFullPathName(), "Recent projects retained");
     });
+    test("shortcut defaults share Space only between recording stop and playback stop", []
+    {
+        RecorderShortcuts shortcuts; ok(shortcuts.validate());
+        require(shortcuts[RecorderCommand::recordStop] == "spacebar" && shortcuts[RecorderCommand::playStop] == "spacebar", "New stop defaults");
+        shortcuts.keys[1] = "ctrl + K"; shortcuts.keys[2] = "CTRL + k"; ok(shortcuts.validate());
+        for (const auto command : {RecorderCommand::recordStart, RecorderCommand::split, RecorderCommand::marker})
+        {
+            auto duplicate = shortcuts; duplicate.keys[std::size_t(command)] = "ctrl + K";
+            require(duplicate.validate().failed(), "A third command shared the stop binding");
+        }
+        shortcuts.keys[1] = "F8"; shortcuts.keys[2] = "P"; ok(shortcuts.validate());
+        shortcuts.keys[4] = "F8"; require(shortcuts.validate().failed(), "Distinct stop still rejects other duplicates");
+    });
+    test("legacy F10 plus Space migrates and persists, custom stop or playback stays intact", []
+    {
+        for (const auto& pair : {std::pair<const char*, const char*>{"F10", "spacebar"}, {"F8", "spacebar"}, {"F10", "P"}, {"ctrl + K", "ctrl + K"}})
+        {
+            TempProject f; RecorderSettings settings(f.root); ok(settings.save().get());
+            const auto xml = juce::parseXML(settings.getFile().loadFileAsString()); require(xml != nullptr, "Settings XML fixture");
+            juce::PropertySet properties; properties.restoreFromXml(*xml);
+            properties.setValue("shortcutRecordStop", pair.first); properties.setValue("shortcutPlayStop", pair.second);
+            require(settings.getFile().replaceWithText(properties.createXml("RECORDER_SETTINGS")->toString()), "Write legacy binding");
+            ok(settings.load()); const auto expected = juce::String(pair.first) == "F10" && juce::String(pair.second) == "spacebar" ? "spacebar" : pair.first;
+            require(settings.get().shortcuts[RecorderCommand::recordStop] == expected && settings.get().shortcuts[RecorderCommand::playStop] == pair.second, "Migration overwrote custom binding");
+            ok(settings.save().get()); RecorderSettings reopened(f.root); ok(reopened.load());
+            require(reopened.get().shortcuts.keys == settings.get().shortcuts.keys, "Migrated bindings failed roundtrip");
+            const auto savedXml = juce::parseXML(settings.getFile().loadFileAsString()); properties.restoreFromXml(*savedXml);
+            require(properties.getValue("shortcutRecordStop") == expected, "Encode retained the old default");
+        }
+    });
     test("settings invalid channels duplicate cameras and failed worker writes", []
     {
         require(OutputMapping{false, 2, 2, -1}.validate().failed(), "Duplicate L/R rejected"); ok(OutputMapping{true, -1, -1, 5}.validate());

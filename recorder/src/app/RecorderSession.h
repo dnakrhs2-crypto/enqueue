@@ -33,6 +33,7 @@ public:
     void goToStart();
     void scrub(Sample, bool released);
     void addMarker();
+    void addMarker(const juce::String& name, Sample at);
     void setMonitoring(std::uint8_t mask);
     void updateMicrophoneSettings(const UserSettings&);
     void refreshPlaybackPlan();

@@ -1,6 +1,7 @@
 #include "TestSupport.h"
 #include "../tools/LifecycleFixtures.h"
 #include "ui/UiState.h"
+#include "audio/AsioTimingBridge.h"
 
 using namespace gocue::recorder;
 using recorder_test::require;
@@ -67,12 +68,17 @@ int runLifecycleTests()
     });
     suite.test("Unset ASIO device selects the first driver on this PC with first-run defaults", []
     {
+        // The full runner retains an owner in ui-wiring; standalone lifecycle runs need the same opt-in guard.
+        AsioTimingBridge nativeBlocker(1000000);
+        const bool noHardware = juce::SystemStats::getEnvironmentVariable("RECORDER_TEST_NO_HARDWARE", {}) == "1";
+        if (noHardware) nativeBlocker.registerTap();
         RecorderDocument document; RecorderSession session(document);
         UserSettings applied; int callbacks = 0; juce::Result callbackResult = juce::Result::ok();
         session.onConfigured = [&](const juce::Result& r, const UserSettings& s) { ++callbacks; applied = s; callbackResult = r; };
         UserSettings s; s.cameraEnabled = {false, false};
         require(session.configure(s).wasOk(), "configure accepts an unset device");
         lifecycleFixture::until([&] { session.tick(); return callbacks == 1; });
+        if (noHardware) require(session.audioEngine().deviceInfo().sampleRate == 0, "Hardware-free test must not open a native ASIO device");
         const auto names = RecorderAudioEngine::deviceNames();
         if (names.isEmpty()) { require(applied.asioDeviceId.isEmpty() && session.audioEngine().deviceInfo().sampleRate == 0, "No ASIO driver: nothing selected"); return; }
         require(applied.asioDeviceId == names[0], "The first registry driver is chosen");
