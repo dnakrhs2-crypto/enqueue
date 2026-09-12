@@ -37,6 +37,8 @@ public:
         std::vector<juce::String> microphoneAssetIds; // armed logical order; generated if empty
         PacketSink referencePackets; // AAC worker only; empty = no reference stream
         FileIoFaultAdapter* faults = nullptr;
+        bool alignToOutput = false; // normal take: native input is on the audible output clock
+        std::int64_t inputResidualSamples = 0; // excludes the device-reported input latency
     };
     explicit RecorderAudioEngine(std::shared_ptr<IClockMapper> = {});
     ~RecorderAudioEngine();
@@ -44,7 +46,8 @@ public:
     static juce::StringArray deviceNames(); // control thread, ASIO only
     juce::Result openDevice(const juce::String& name, unsigned requestedFs, int requestedBuffer = 0);
     // Hardware-free adapter uses the identical native/transport/output path.
-    juce::Result openSynthetic(unsigned Fs, unsigned block, int physicalInputs = 8, int physicalOutputs = 2);
+    juce::Result openSynthetic(unsigned Fs, unsigned block, int physicalInputs = 8, int physicalOutputs = 2,
+                               int inputLatency = 0, int outputLatency = 0);
     juce::Result closeDevice();
     DeviceInfo deviceInfo() const;
     // Entries are logical microphones 0..7; -1 = unselected. Unique physical IDs.
@@ -74,6 +77,7 @@ public:
     std::int64_t startSample() const noexcept;   // -1 until adopted
     bool startCommitted() const noexcept;       // durable TakeStarted, eligible for callback adoption
     std::int64_t stopSample() const noexcept;    // -1 until adopted
+    std::int64_t requestedStopSample() const noexcept; // shared capture/output stop command, -1 until scheduled
     std::int64_t acceptedEnd() const noexcept;
     Error error() const noexcept;
     bool referenceFailed() const noexcept;
@@ -87,8 +91,8 @@ public:
     // JUCE's float conversion and uses its matching output callback afterwards.
     void processBlock(const BlockStamp&, const NativeInputView*, unsigned count,
                       const float* const* inputs, float* const* outputs, unsigned outputCount) noexcept;
-    // Dubbing uses the same device/native writer. Only this input adapter subtracts
-    // reported input latency + residual; all later coordinates are already corrected.
+    // Dubbing shares the normal listening take's native input adapter: subtract
+    // reported input latency + residual once; all later coordinates are corrected.
     juce::Result prepareDubbing(TakeConfig, bool recordMicrophones,
                                std::unique_ptr<IPlaybackBlockProvider> referenceAudio,
                                std::int64_t Pstart, std::int64_t inputResidualSamples = 0);

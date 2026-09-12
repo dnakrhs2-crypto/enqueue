@@ -4,6 +4,7 @@
 #include "storage/StorageEncoding.h"
 #include "media/ThumbnailCache.h"
 #include "sync/CameraClockMapper.h"
+#include "sync/ClockMath.h"
 #include "support/ThreadPriority.h"
 #include "app/RecorderLifecycle.h"
 #include "storage/IoHealth.h"
@@ -49,6 +50,82 @@ void writeJsonDurable(const juce::File& file, const juce::var& json)
 {
     CaptureTelemetry::writeJson(file, json); flushExisting(file);
 }
+Sample checkedSample(std::optional<Sample> sample)
+{
+    if (!sample) throw std::overflow_error("Recording playback sample overflow");
+    return *sample;
+}
+class PositionedAudio final : public IPlaybackBlockProvider
+{
+public:
+    PositionedAudio(std::unique_ptr<IPlaybackBlockProvider> source, Sample position)
+        : provider(std::move(source)), at(position)
+    { if (!provider) throw std::invalid_argument("Missing recording listening mix"); }
+    void render(float* stereo, unsigned frames, Sample first, unsigned Fs) override
+    { provider->render(stereo, frames, checkedSample(clock_math::add(at, first)), Fs); }
+private:
+    std::unique_ptr<IPlaybackBlockProvider> provider;
+    Sample at;
+};
+// The normal take owns this output through the callback detach barrier. File
+// reads/prefetch use the existing worker pump; ASIO only consumes prepared PCM.
+class TakeListeningOutput final : public IAudioOutputClient
+{
+public:
+    TakeListeningOutput(RecorderAudioEngine& engine, const RecorderAudioEngine::DeviceInfo& info,
+                        std::unique_ptr<IPlaybackBlockProvider> source, Sample at, Sample correction)
+        : audio(engine), device(info), pump(info.sampleRate, info.bufferFrames,
+            std::make_unique<PositionedAudio>(std::move(source), at)), outputCorrection(correction) {}
+    void schedule(Sample start) noexcept { submission = start; scheduled.store(true, std::memory_order_release); }
+    void processOutput(const BlockStamp& stamp, float* l, float* r) noexcept override
+    {
+        std::fill_n(l, stamp.numSamples, 0.0f); std::fill_n(r, stamp.numSamples, 0.0f);
+        if (!scheduled.load(std::memory_order_acquire) || audio.error() != RecorderAudioEngine::Error::none) return;
+        const bool changed = stamp.sampleRate != device.sampleRate || stamp.numSamples != device.bufferFrames
+            || ((stamp.flags & latenciesValid) && (stamp.inputLatencySamples != device.inputLatency || stamp.outputLatencySamples != device.outputLatency))
+            || (havePrevious && (stamp.samplePosition != previous.samplePosition + previous.numSamples
+                || stamp.callbackQpc <= previous.callbackQpc || stamp.xruns != previous.xruns
+                || stamp.latencyChanges != previous.latencyChanges));
+        const bool reset = havePrevious && (stamp.resets != previous.resets || stamp.resyncs != previous.resyncs);
+        previous = stamp; havePrevious = true;
+        if (reset || changed)
+        { audio.abort(reset ? RecorderAudioEngine::Error::asioReset : RecorderAudioEngine::Error::clockDiscontinuity); return; }
+        // Read the SAME stop command as the native input adapter. Separate
+        // publication of an output stop could miss a callback during Stop.
+        const auto requested = audio.requestedStopSample();
+        const auto end = requested < 0 ? INT64_MAX : requested - outputCorrection;
+        if (requested >= 0 && end - submission < rendered)
+        { audio.abort(RecorderAudioEngine::Error::missedStop); return; }
+        const auto first = (std::max)(stamp.samplePosition, submission);
+        const auto last = (std::min)(stamp.samplePosition + stamp.numSamples, end);
+        if (last <= first) return;
+        if (!audio.startCommitted() || first - submission != rendered)
+        { audio.abort(RecorderAudioEngine::Error::missedStart); return; }
+        const auto count = unsigned(last - first), offset = unsigned(first - stamp.samplePosition);
+        if (!pump.queue().consume(rendered, 1, l + offset, r + offset, count))
+        { ++underruns; audio.abort(RecorderAudioEngine::Error::clockDiscontinuity); return; }
+        rendered += count;
+    }
+    bool failed() { return pump.queue().state() == PlaybackQueueState::failed; }
+    // Owner/worker only, after the output detach barrier.
+    juce::var report() const
+    {
+        auto v = jsonObject(); jsonSet(v, "outputSubmissionSample", submission);
+        const auto requested = audio.requestedStopSample();
+        jsonSet(v, "outputStopSample", requested < 0 ? Sample{-1} : requested - outputCorrection);
+        jsonSet(v, "submittedSamples", rendered); jsonSet(v, "underruns", jsonInt(underruns)); return v;
+    }
+private:
+    RecorderAudioEngine& audio;
+    RecorderAudioEngine::DeviceInfo device;
+    PlaybackProviderPump pump;
+    std::atomic<bool> scheduled{false};
+    const Sample outputCorrection;
+    Sample submission = -1, rendered = 0;
+    std::uint64_t underruns = 0;
+    BlockStamp previous{};
+    bool havePrevious = false;
+};
 class PacketQueue
 {
 public:
@@ -79,6 +156,7 @@ class LiveTakeVideo final : public ITakeVideoStream
 {
 public:
     LiveTakeVideo() = default;
+    explicit LiveTakeVideo(bool listening) : anchoredOutputClock(listening) {}
     explicit LiveTakeVideo(std::unique_ptr<CameraTimeMapper> timeMapper)
         : mapper(std::move(timeMapper)) {}
     void configureClock(const ClockMapper& master, std::int64_t latency) override
@@ -111,7 +189,8 @@ public:
             const auto camera = cameraClock->snapshot();
             if (!master || !master->valid || !camera || !camera->valid)
                 throw std::runtime_error("Recording camera/master clock is not ready");
-            mapper = std::make_unique<CameraSampleTimeMapper>(*cameraClock, n0, rate, master->epoch, *camera);
+            if (anchoredOutputClock) mapper = std::make_unique<AnchoredCameraTimeMapper>(*master, *camera, n0, rate);
+            else mapper = std::make_unique<CameraSampleTimeMapper>(*cameraClock, n0, rate, master->epoch, *camera);
             masterEpoch = master->epoch;
         }
         else if (masterClock) if (const auto master = masterClock->snapshot()) masterEpoch = master->epoch;
@@ -156,6 +235,7 @@ public:
         jsonSet(v, "surfaceOverflow", jsonInt(overflow.load())); jsonSet(v, "failed", failed()); jsonSet(v, "availableSamples", jsonInt(availableSamples()));
         jsonSet(v, "clockMapping", "Independent CameraClockMapper; Nv=S(q-Lcam), fixed N0/O0; recoverable camera reanchors; generation/native ASIO failures remain fatal");
         jsonSet(v, "Lcam100ns", cameraLatency); jsonSet(v, "masterEpoch", jsonInt(masterEpoch));
+        if (anchoredOutputClock) jsonSet(v, "anchoredToOutput", true);
         jsonSet(v, "explicitDiscontinuity", clockRevisions.load() != 0);
         jsonSet(v, "reanchorRequests", jsonInt(clockRevisions.load()));
         jsonSet(v, "reanchors", jsonInt(reanchors));
@@ -177,6 +257,7 @@ private:
     std::unique_ptr<NvencFramePool> pool;
     std::unique_ptr<PacketQueue> videoPackets, audioPackets;
     std::unique_ptr<CameraTimeMapper> mapper;
+    bool anchoredOutputClock = false;
     const ClockMapper* masterClock = nullptr;
     std::int64_t cameraLatency = 0;
     std::uint64_t masterEpoch = 0;
@@ -433,8 +514,12 @@ struct TakeController::Impl
     std::vector<JournalDeviceMapping> mappingSnapshot;
     std::array<float, 8> peakSnapshot{};
     PlacementMetadata placementMetadata;
+    std::unique_ptr<TakeListeningOutput> listening;
+    bool listeningAttached = false;
+    Sample inputCorrection = 0, outputCorrection = 0, outputSubmission = -1;
+    juce::var listeningReport;
     Impl(RecorderDocument& d, RecorderAudioEngine& a, VideoFactory f) : document(d), audio(a), factory(std::move(f))
-    { if (!factory) factory = [] { return std::make_unique<LiveTakeVideo>(); }; }
+    { if (!factory) factory = [this] { return std::make_unique<LiveTakeVideo>(bool(config.listeningAudio)); }; }
     ~Impl()
     {
         if (work.valid()) work.wait();
@@ -444,6 +529,8 @@ struct TakeController::Impl
     }
     void cleanupFailedWork()
     {
+        detachListening();
+        listening.reset();
         detachSink();
         for (auto& c : cameras) { c.active = false; if (c.capture) try { c.capture->stop(); } catch (...) { partial = true; } }
         if (!preparedAudio) return;
@@ -453,6 +540,11 @@ struct TakeController::Impl
         try { finishVideos(std::max<std::int64_t>(0, length)); } catch (...) { partial = true; }
         try { audio.finishJournal(false); } catch (...) { partial = true; }
         preparedAudio = false;
+    }
+    void detachListening()
+    {
+        if (listeningAttached) { audio.setPlaybackClient(nullptr); listeningAttached = false; }
+        if (listening) listeningReport = listening->report();
     }
     void failedWorker(const juce::Result& result)
     {
@@ -569,8 +661,17 @@ struct TakeController::Impl
             jsonSet(r, "gaps", gaps); cameraReports.add(r);
         }
         jsonSet(v, "cameras", cameraReports); jsonSet(v, "camera2Active", cameras[1].active.load());
-        jsonSet(v, "clockMapping", "Independent camera fits / Lcam; shared live robust ASIO clock; physical timing requires measured profiles");
+        jsonSet(v, "clockMapping", config.listeningAudio
+            ? "Prepared ASIO/QPC output origin and camera PTS / Lcam; native failures stop capture; physical timing requires measured profiles"
+            : "Independent camera fits / Lcam; shared live robust ASIO clock; physical timing requires measured profiles");
         jsonSet(v, "masterEpoch", jsonInt(masterEpoch));
+        if (config.listeningAudio)
+        {
+            jsonSet(v, "timelineListening", listeningReport);
+            jsonSet(v, "inputCorrectionSamples", inputCorrection); jsonSet(v, "outputCorrectionSamples", outputCorrection);
+            jsonSet(v, "outputSubmissionSample", outputSubmission);
+            jsonSet(v, "alignment", "O0=S0+Lout+Rout; input=N-Lin-Rin; Pmic=P+input-O0; Pvideo=P+Nv-O0");
+        }
         return v;
     }
     void initialiseAssets()
@@ -578,6 +679,8 @@ struct TakeController::Impl
         const auto device = audio.deviceInfo(); deviceSnapshot = device; mappingSnapshot = audio.microphoneMapping(); peakSnapshot.fill(0);
         take = {}; take.takeId = config.takeId.toString();
         take.capture.asioDeviceId = device.name; take.capture.calibrationIdentity = "live-master-camera-fit/full-key-profiles-or-unmeasured";
+        if (config.listeningAudio)
+        { take.capture.inputOffsetSamples = inputCorrection; take.capture.outputOffsetSamples = outputCorrection; }
         assets.clear(); logicalMics = audio.armedMicrophones(); logicalIndices.clear();
         for (unsigned i = 0; i < cameraCount; ++i)
         {
@@ -637,6 +740,8 @@ struct TakeController::Impl
             for (const char* path : {"media/imports", "cache", "recovery", "exports"}) requireResult(config.projectDirectory.getChildFile(path).createDirectory());
             RecorderAudioEngine::TakeConfig audioConfig; audioConfig.projectDirectory = config.projectDirectory; audioConfig.takeId = config.takeId;
             audioConfig.faults = config.faults;
+            audioConfig.alignToOutput = bool(config.listeningAudio);
+            audioConfig.inputResidualSamples = inputCorrection - (config.listeningAudio ? deviceSnapshot.inputLatency : 0);
             audioConfig.placementSample = placement; audioConfig.microphoneAssetIds = take.microphoneAssetIds;
             for (unsigned i = 0; i < cameraCount; ++i)
                 audioConfig.additionalFiles.push_back({assets[i].assetId, assets[i].relativePath,
@@ -650,6 +755,8 @@ struct TakeController::Impl
                 }
             };
             requireResult(audio.prepare(std::move(audioConfig))); preparedAudio = true;
+            if (config.listeningAudio)
+                listening = std::make_unique<TakeListeningOutput>(audio, deviceSnapshot, config.listeningAudio(), placement, outputCorrection);
             for (unsigned i = 0; i < cameraCount; ++i)
             {
                 auto& c = cameras[i]; c.video = factory(); c.active = true;
@@ -779,6 +886,7 @@ struct TakeController::Impl
     }
     void placeStopped()
     {
+        detachListening();
         if (!stopQpc) stopQpc = qpcNow();
         length = audio.stopSample() - audio.startSample();
         peakSnapshot = audio.peaks();
@@ -823,6 +931,7 @@ struct TakeController::Impl
                 // Preview captures keep running; both encoders can drain while
                 // TakeStopped and the raw/AAC tail are committed independently.
                 const auto audioResult = audio.finishCapture(placementEdit);
+                listening.reset(); // output detached before any worker-owned reader is destroyed
                 if (audioResult.failed()) partial = true;
                 audioReport = audio.telemetry(); peakSnapshot = audio.peaks();
                 finishVideos(length);
@@ -852,6 +961,7 @@ juce::Result TakeController::prepare(Config config)
     if (s.current != State::idle && s.current != State::done && s.current != State::partialFailure) return juce::Result::fail("Take controller is busy");
     if (s.work.valid()) return juce::Result::fail("Previous worker completion must be consumed");
     const auto device = s.audio.deviceInfo();
+    Sample inputCorrection = 0, outputCorrection = 0;
     if (config.placementSample < 0) return juce::Result::fail("Recording placement cannot be negative");
     if (!device.sampleRate || config.projectDirectory == juce::File() || config.takeId.isNull()
         || (config.projectFps != 30 && config.projectFps != 60) || config.cameraMode.width != 1920 || config.cameraMode.height != 1080
@@ -872,6 +982,22 @@ juce::Result TakeController::prepare(Config config)
             config.calibration[i]->requireMatch(calibrationKey(i ? config.camera2.symbolicLink : config.cameraSymbolicLink,
                 i ? config.camera2.mode : config.cameraMode, config.exposure[i], device.name.toStdString(),
                 device.sampleRate, device.bufferFrames, config.outputMapping, s.audio.calibrationInputMapping()));
+        if (config.listeningAudio)
+        {
+            const CalibrationProfile* common = nullptr;
+            for (unsigned i = 0; i < count; ++i) if (config.calibration[i])
+            {
+                const auto& profile = *config.calibration[i];
+                if (common && (profile.inputResidualLatencySamples != common->inputResidualLatencySamples
+                    || profile.outputResidualLatencySamples != common->outputResidualLatencySamples))
+                    return juce::Result::fail("Camera profiles disagree on ASIO input/output residual latency");
+                common = &profile;
+            }
+            inputCorrection = checkedSample(clock_math::add(device.inputLatency, common ? common->inputResidualLatencySamples : 0));
+            outputCorrection = checkedSample(clock_math::add(device.outputLatency, common ? common->outputResidualLatencySamples : 0));
+            if (device.inputLatency < 0 || device.outputLatency < 0 || inputCorrection < 0 || outputCorrection < 0)
+                return juce::Result::fail("Recording playback requires nonnegative effective input/output latency");
+        }
     }
     catch (const std::exception& e) { return juce::Result::fail(e.what()); }
     const auto timebase = s.document.setTimebase(device.sampleRate, {unsigned(config.projectFps), 1});
@@ -886,10 +1012,12 @@ juce::Result TakeController::prepare(Config config)
         if (saved.failed()) return juce::Result::fail(juce::String::fromUTF8("프로젝트를 저장할 수 없어 녹화를 시작하지 않습니다. ") + saved.getErrorMessage());
     }
     s.config = std::move(config); s.failure.clear(); s.warning.clear(); s.partial = false; s.saving = false; s.preparedAudio = false;
+    s.inputCorrection = inputCorrection; s.outputCorrection = outputCorrection;
     s.ownerProject = s.document.getProject().projectId; ++s.lifecycleGeneration;
     s.audioReport = juce::var(); s.assets.clear(); s.take = Take{}; s.logicalMics.clear(); s.logicalIndices.clear();
     s.mappingSnapshot.clear(); s.deviceSnapshot = device; s.placementMetadata = {}; s.transitions = {State::idle}; s.current = State::idle;
     s.requestedN0 = -1; s.collectionOrigin = -1; s.masterEpoch = 0; s.length = 0; s.stopQpc = s.finalizationQpc = 0;
+    s.detachListening(); s.listening.reset(); s.listeningReport = juce::var(); s.outputSubmission = -1;
     s.placementMs = s.finalizationMs = s.mediaFinalizationMs = s.stopToDoneMs = 0; s.placementEdit = juce::Uuid();
     s.placement = s.config.placementSample; s.preparationNotice.clear();
     s.detachSink();
@@ -913,26 +1041,62 @@ juce::Result TakeController::start(std::int64_t N0)
     auto& s = *impl;
     if (s.shutdownRequested) return juce::Result::fail("Take shutdown blocks start");
     if (s.current != State::armed || s.requestedN0 >= 0) return juce::Result::fail("Take must be armed before start");
-    const auto device = s.audio.deviceInfo(); if (N0 < 0) N0 = s.audio.currentSample() + std::max<std::int64_t>(device.sampleRate / 4, device.bufferFrames * 2);
-    if (!s.audio.clockReady()) return juce::Result::fail("ASIO clock is not stable");
-    const auto master = s.audio.masterClock().snapshot();
-    s.masterEpoch = master ? master->epoch : 0;
-    const auto result = s.audio.startAt(N0); if (result.failed()) return result;
-    s.requestedN0 = N0; s.collectionOrigin = N0;
-    const auto clock = s.audio.clockMapping();
-    for (auto& c : s.cameras) if (c.active.load() && c.video && !c.video->failed())
-        try { c.video->startAt(clock, N0, device.sampleRate, [&s]
-        { return s.audio.startSample() >= 0 ? std::max<std::int64_t>(0, s.audio.acceptedEnd() - s.audio.startSample()) : 0; }); }
-        catch (...) { c.video->sourceFailed(0); s.partial = true; }
-    return juce::Result::ok();
+    const auto device = s.audio.deviceInfo();
+    try
+    {
+        if (N0 < 0)
+        {
+            N0 = checkedSample(clock_math::add(s.audio.currentSample(), std::max<std::int64_t>(device.sampleRate / 4, device.bufferFrames * 2)));
+            if (s.listening) N0 = checkedSample(clock_math::add(N0, s.outputCorrection));
+        }
+        if (!s.audio.clockReady()) return juce::Result::fail("ASIO clock is not stable");
+        const auto master = s.audio.masterClock().snapshot();
+        s.masterEpoch = master ? master->epoch : 0;
+        if (s.listening)
+        {
+            const auto submit = checkedSample(clock_math::subtract(N0, s.outputCorrection));
+            const auto origin = outputOriginSample(s.placement, device.outputLatency,
+                {submit, s.placement, device.bufferFrames, s.masterEpoch}, s.outputCorrection - device.outputLatency);
+            if (!origin || *origin != N0 || submit < s.audio.currentSample())
+                return juce::Result::fail("Recording output origin is unavailable or in the past");
+            s.outputSubmission = submit;
+        }
+        const auto result = s.audio.startAt(N0); if (result.failed()) return result;
+        s.requestedN0 = N0; s.collectionOrigin = N0;
+        const auto clock = s.audio.clockMapping();
+        for (auto& c : s.cameras) if (c.active.load() && c.video && !c.video->failed())
+            try { c.video->startAt(clock, N0, device.sampleRate, [&s]
+            { return s.audio.startSample() >= 0 ? std::max<std::int64_t>(0, s.audio.acceptedEnd() - s.audio.startSample()) : 0; }); }
+            catch (...) { c.video->sourceFailed(0); s.partial = true; }
+        if (s.listening)
+        {
+            s.listening->schedule(s.outputSubmission);
+            s.audio.setPlaybackClient(s.listening.get()); s.listeningAttached = true;
+        }
+        return juce::Result::ok();
+    }
+    catch (...) { return takeException("Cannot schedule recording playback"); }
 }
 juce::Result TakeController::stop(std::int64_t Nstop)
 {
     auto& s = *impl;
     if (s.current != State::recording && !(s.current == State::armed && s.requestedN0 >= 0)) return juce::Result::fail("No recording to stop");
-    if (Nstop < 0) Nstop = std::max(s.audio.currentSample(), s.requestedN0) + s.audio.deviceInfo().bufferFrames;
-    const auto result = s.audio.stopAt(Nstop); if (result.failed()) return result;
-    s.stopQpc = qpcNow(); s.transition(State::stopping); return juce::Result::ok();
+    try
+    {
+        Sample outputStop = -1;
+        if (s.listening)
+        {
+            if (Nstop < 0)
+                Nstop = checkedSample(clock_math::add(checkedSample(clock_math::add(
+                    std::max(s.audio.currentSample(), s.outputSubmission), s.deviceSnapshot.bufferFrames)), s.outputCorrection));
+            outputStop = checkedSample(clock_math::subtract(Nstop, s.outputCorrection));
+            if (outputStop < s.audio.currentSample()) return juce::Result::fail("Recording cannot stop before already submitted audio");
+        }
+        else if (Nstop < 0) Nstop = std::max(s.audio.currentSample(), s.requestedN0) + s.audio.deviceInfo().bufferFrames;
+        const auto result = s.audio.stopAt(Nstop); if (result.failed()) return result;
+        s.stopQpc = qpcNow(); s.transition(State::stopping); return juce::Result::ok();
+    }
+    catch (...) { return takeException("Cannot schedule recording playback stop"); }
 }
 void TakeController::tick()
 {
@@ -990,6 +1154,12 @@ void TakeController::tick()
             return;
         }
     }
+    if (s.listening && s.listening->failed()
+        && (s.current == State::preparing || s.current == State::armed || s.current == State::recording))
+    {
+        s.audio.abort(RecorderAudioEngine::Error::clockDiscontinuity);
+        s.failure = "Timeline audio prefetch failed; captured media preserved"; s.partial = true; s.transition(State::stopping);
+    }
     if (s.current == State::preparing)
     {
         if (s.shutdownRequested && !s.work.valid())
@@ -1018,7 +1188,10 @@ void TakeController::tick()
     if (s.current == State::armed || s.current == State::recording || s.current == State::stopping)
     {
         s.audio.pollDeviceEvents();
-        if (s.masterEpoch)
+        // Listening uses the dubbing mapper's prepared O0/PTS anchor. A fit-only
+        // epoch change must not shift it; native reset/rate/xrun checks still stop
+        // the complete take through the input adapter and listening callback.
+        if (s.masterEpoch && !s.listening)
             if (const auto master = s.audio.masterClock().snapshot(); master && master->epoch != s.masterEpoch)
                 s.audio.abort(RecorderAudioEngine::Error::clockDiscontinuity);
         unsigned failedCameras = 0;

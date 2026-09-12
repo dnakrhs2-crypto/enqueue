@@ -1,4 +1,5 @@
 #include "RecorderSession.h"
+#include "record/DubbingController.h"
 #include "ui/UiState.h"
 #include "capture/PreviewRecovery.h"
 #include "storage/IoHealth.h"
@@ -270,9 +271,13 @@ juce::Result RecorderSession::record()
         return juce::Result::ok(); // endExclusive acknowledges the export checkpoint/join
     }
     if (!lifecycle->begin(RecorderLifecycle::recording)) return juce::Result::fail(recorderFaultText(RecorderFault::updateBusy));
-    clearPlayback(); wantPlay = pendingLatest = false; presentLive(); error.clear(); notice.clear(); recordedMarkers.clear(); peaksPublished.clear();
     TakeController::Config c; c.projectDirectory = document.getFile().getParentDirectory(); c.takeId = juce::Uuid();
-    configurePlacement(c);
+    try { configurePlacement(c); }
+    catch (const std::exception& e)
+    { lifecycle->end(RecorderLifecycle::recording); error = k("녹화 오디오를 준비할 수 없습니다. ") + juce::String::fromUTF8(e.what()); return juce::Result::fail(error); }
+    catch (...)
+    { lifecycle->end(RecorderLifecycle::recording); error = k("녹화 오디오를 준비할 수 없습니다."); return juce::Result::fail(error); }
+    clearPlayback(); wantPlay = pendingLatest = false; presentLive(); error.clear(); notice.clear(); recordedMarkers.clear(); peaksPublished.clear();
     c.cameraSymbolicLink = current.cameraDeviceIds[0].toStdString(); c.cameraMode = cameras[0]->mode;
     c.projectFps = int(document.getProject().fps.numerator); c.externalCapture = true;
     c.cameraGeneration = cameras[0]->capture->generation();
@@ -299,6 +304,20 @@ void RecorderSession::configurePlacement(TakeController::Config& config)
 {
     // The recording tab has no visible cursor: reserve the active end there.
     config.placementSample = timeline ? playhead() : document.getProject().activeTimelineEnd();
+    config.listeningAudio = {};
+    if (timeline)
+    {
+        const auto snapshot = document.snapshot();
+        const auto plan = RenderPlanCompiler::compile(*snapshot);
+        const auto at = config.placementSample;
+        const bool audible = std::any_of(plan->tracks.begin(), plan->tracks.end(), [at](const auto& track)
+        {
+            return track.audible && std::any_of(track.spans.begin(), track.spans.end(), [at](const auto& span)
+            { return !span.isGap() && span.timeline.start + span.timeline.length > at; });
+        });
+        if (audible) config.listeningAudio = [snapshot, folder = config.projectDirectory, at]
+        { return DubbingController::prepareTimelineAudio(*snapshot, folder, at); };
+    }
     config.editPlacement = [this](EditState& e)
     {
         for (auto& track : e.tracks) if (track.kind == TrackKind::mic && track.microphoneIndex >= 0 && track.microphoneIndex < 8)

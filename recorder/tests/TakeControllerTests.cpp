@@ -2,6 +2,7 @@
 #include "record/TakeController.h"
 #include "app/RecorderSession.h"
 #include "media/MediaIndex.h"
+#include "sync/CameraClockMapper.h"
 #include <chrono>
 #include <limits>
 #include <thread>
@@ -39,6 +40,9 @@ struct DoubleState
     std::atomic<unsigned> audioPackets{0}, videoOffers{0};
     juce::var muxReport;
     std::function<void(const juce::File&)> afterFinish;
+    Sample origin = -1, cameraLatency = 0;
+    unsigned rate = 0;
+    const ClockMapper* master = nullptr;
 };
 class VideoDouble final : public ITakeVideoStream
 {
@@ -52,8 +56,9 @@ public:
         DurableFile f; ok(f.open(output.getSiblingFile("cam1.recording.mp4"), DurableFile::OpenMode::createNew));
         const char text[] = "lifecycle-test-double"; ok(f.write(text, sizeof(text))); ok(f.flushData()); ok(f.close());
     }
-    void startAt(ClockMapping clock, std::int64_t origin, unsigned, std::function<std::int64_t()>) override
-    { require(clock.valid && origin >= 0, "Video receives valid N0/clock"); }
+    void configureClock(const ClockMapper& clock, Sample latency) override { state->master = &clock; state->cameraLatency = latency; }
+    void startAt(ClockMapping clock, std::int64_t origin, unsigned rate, std::function<std::int64_t()>) override
+    { require(clock.valid && origin >= 0, "Video receives valid N0/clock"); state->origin = origin; state->rate = rate; }
     void offer(const VideoSurface&) noexcept override { ++state->videoOffers; }
     void audioPacket(const AVPacket&) override { ++state->audioPackets; }
     bool ready() const noexcept override { return true; }
@@ -89,39 +94,59 @@ struct Fixture
     TakeController::Config config;
     std::int64_t position = 0, qpc = qpcNow(); std::uint64_t sequence = 0;
     unsigned microphones; bool stereo;
-    Fixture(unsigned mics = 1, bool stereoSlot = false) : microphones(mics), stereo(stereoSlot)
+    bool saveOutput = false;
+    std::vector<float> outputL, outputR;
+    float monitorInput = 0;
+    std::uint64_t resets = 0, xruns = 0, latencyChanges = 0;
+    unsigned rate, block;
+    Fixture(unsigned mics = 1, bool stereoSlot = false, int inputLatency = 0, int outputLatency = 0,
+            unsigned sampleRate = 8000, unsigned blockFrames = 80)
+        : microphones(mics), stereo(stereoSlot), rate(sampleRate), block(blockFrames)
     {
         std::array<int, 8> map{-1,-1,-1,-1,-1,-1,-1,-1};
         if (mics) map[5] = 2; // sparse logical mic06, physical input3
+        if (mics > 1) map[7] = 5;
         std::array<bool, 8> slots{}; slots[5] = stereo;
-        ok(audio.setInputMap(map, slots)); ok(audio.openSynthetic(8000, 80, 8, 2)); if (mics) ok(audio.arm(5, true));
-        document.newProject("Take lifecycle", 8000, {60,1});
+        ok(audio.setInputMap(map, slots)); OutputMapping outputs; outputs.left = 0; outputs.right = 1; ok(audio.setOutputMap(outputs));
+        ok(audio.openSynthetic(rate, block, 8, 2, inputLatency, outputLatency)); if (mics) ok(audio.arm(5, true));
+        if (mics > 1) ok(audio.arm(7, true));
+        document.newProject("Take lifecycle", rate, {60,1});
         config.projectDirectory = juce::File::getSpecialLocation(juce::File::tempDirectory).getChildFile("TakeControllerTests-" + juce::Uuid().toString());
         config.synthetic = true; config.projectFps = 60; config.cameraMode.width = 1920; config.cameraMode.height = 1080;
         config.cameraMode.fps = {30,1};
+        config.outputMapping = {0, 1};
         for (int i = 0; i < 4; ++i) feed(); until([&] { return audio.clockReady(); });
     }
     ~Fixture() { video->release = true; }
-    void feed(unsigned Fs = 8000)
+    void feed(unsigned Fs = 0)
     {
-        std::array<std::uint8_t, 240> pcm{};
-        std::array<float, 80> left{}, right{}, input{};
-        for (unsigned i = 0; i < 80; ++i) WavTrackWriter::packPcm24(123456 + int(position + i), pcm.data() + i * 3);
-        auto rightPcm = pcm; for (unsigned i = 0; i < 80; ++i) WavTrackWriter::packPcm24(-345678 - int(position + i), rightPcm.data() + i * 3);
-        NativeInputView views[]{{pcm.data(), 0, 2, nativeFormatForAsio(17)}, {rightPcm.data(), 1, 3, nativeFormatForAsio(17)}};
+        std::vector<std::uint8_t> pcm(block * 3);
+        std::vector<float> left(block), right(block), input(block, monitorInput);
+        for (unsigned i = 0; i < block; ++i) WavTrackWriter::packPcm24(123456 + int(position + i), pcm.data() + i * 3);
+        auto rightPcm = pcm; for (unsigned i = 0; i < block; ++i) WavTrackWriter::packPcm24(-345678 - int(position + i), rightPcm.data() + i * 3);
+        NativeInputView views[]{{pcm.data(), 0, 2, nativeFormatForAsio(17)}, {rightPcm.data(), 1, microphones > 1 ? 5 : 3, nativeFormatForAsio(17)}};
         const float* inputs[] = {input.data(), input.data()}; float* outputs[] = {left.data(), right.data()};
         BlockStamp stamp{}; stamp.flags = samplePositionValid; stamp.sequence = sequence++; stamp.samplePosition = position;
-        stamp.sampleRate = Fs; stamp.numSamples = 80; stamp.callbackQpc = qpc + position * qpcFrequency() / 8000;
-        audio.processBlock(stamp, microphones ? views : nullptr, microphones ? (stereo ? 2 : 1) : 0, inputs, outputs, 2); position += 80;
+        stamp.sampleRate = Fs ? Fs : rate; stamp.numSamples = block; stamp.callbackQpc = qpc + rescaleRound(position, qpcFrequency(), rate);
+        stamp.resets = resets; stamp.xruns = xruns; stamp.latencyChanges = latencyChanges;
+        stamp.flags |= latenciesValid; stamp.inputLatencySamples = audio.deviceInfo().inputLatency; stamp.outputLatencySamples = audio.deviceInfo().outputLatency;
+        audio.processBlock(stamp, microphones ? views : nullptr, microphones ? (stereo || microphones > 1 ? 2 : 1) : 0, inputs, outputs, 2); position += block;
+        if (saveOutput) { outputL.insert(outputL.end(), left.begin(), left.end()); outputR.insert(outputR.end(), right.begin(), right.end()); }
     }
     void arm()
     {
         ok(controller.prepare(config)); require(controller.state() == TakeController::State::preparing, "Preparation is asynchronous");
-        until([&] { controller.tick(); return controller.state() == TakeController::State::armed; });
+        until([&] { controller.tick(); require(controller.state() != TakeController::State::partialFailure, controller.error().toRawUTF8()); return controller.state() == TakeController::State::armed; });
     }
     std::int64_t begin()
     {
-        arm(); const auto origin = position + 81; ok(controller.start(origin));
+        arm(); Sample origin = position + 81;
+        if (config.listeningAudio)
+        {
+            origin += audio.deviceInfo().outputLatency;
+            for (const auto& profile : config.calibration) if (profile) { origin += profile->outputResidualLatencySamples; break; }
+        }
+        ok(controller.start(origin));
         until([&] { return audio.startCommitted(); });
         while (audio.startSample() < 0) { feed(); controller.tick(); }
         require(controller.state() == TakeController::State::recording, "Callback acknowledgement enters recording"); return origin;
@@ -182,9 +207,11 @@ struct FailWavTailFlush final : FileIoFaultAdapter
     }
 };
 }
+#include "TimelineRecordingTests.h"
 int runTakeControllerTests()
 {
     recorder_test::Suite suite;
+    addTimelineRecordingTests(suite);
     suite.test("Timeline cursor reserves off-grid placement, journal Pstart and one undo including markers", []
     {
         Fixture f; f.session.enterTimeline(true); constexpr Sample placement = 15 * 8000 + 37, length = 1601;

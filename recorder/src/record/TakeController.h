@@ -61,6 +61,9 @@ public:
         juce::Uuid takeId;
         Sample placementSample = 0; // reserved timeline position, independent of the capture clock
         std::function<void(EditState&)> editPlacement; // owner-thread metadata, in the same undo/journal transaction
+        // Empty keeps the original normal-take path. Called on the preparation
+        // worker with a frozen timeline; this provider feeds ASIO only, never WAV/AAC.
+        std::function<std::unique_ptr<IPlaybackBlockProvider>()> listeningAudio;
         std::string cameraSymbolicLink;
         CameraMode cameraMode;
         bool synthetic = false;
@@ -89,7 +92,7 @@ public:
     // Owner/message thread commands; slow work is deferred to workers. tick must
     // run regularly (e.g. 5-10ms during stop) on this same document owner thread.
     juce::Result prepare(Config);
-    juce::Result start(std::int64_t N0 = -1);
+    juce::Result start(std::int64_t N0 = -1); // with listening audio N0 is the audible output origin
     juce::Result stop(std::int64_t Nstop = -1);
     juce::Result reset(); // owner, completed take only; releases metadata before changing projects
     void tick();
