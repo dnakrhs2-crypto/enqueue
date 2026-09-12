@@ -89,9 +89,12 @@ public:
     int sequenceEnd (const CueList& list, int index) const;
     /** Cancels scheduled starts, follows and duck restores. */
     void cancelPending();
-    /** Cancels the pending starts / follows / duck restores that belong to one cue's run. 'keepObservers' leaves the
-        run's own follow and duck restore in place (a playlist moving to its next child ends the child's watch only). */
-    void cancelPendingFor (const juce::Uuid& cueId, bool keepObservers = false);
+    /** What cancelPendingFor() takes of a cue's run: everything; all but its observers (a playlist moving to its next child
+        ends the child's watch only, the group's own follow stays); or only its scheduled starts (a doubled start goes, the
+        run - its playlist steps, its follow - stays). A duck restore is not pending here: it runs when the cue is over. */
+    enum class Cancel { all, keepObservers, startsOnly };
+    /** Cancels the pending starts / steps / follows that belong to one cue's run. */
+    void cancelPendingFor (const juce::Uuid& cueId, Cancel scope = Cancel::all);
     /** Number of scheduled starts / follows still pending (tests). */
     int getNumPending() const;
     /** A scheduled start or a playlist step of this cue's run is still pending. The observer watches (an auto-follow
@@ -177,9 +180,16 @@ private:
     void applyPendingGoto();
     /** Recomputes and applies the ducks of every target after a contribution changed. */
     void refreshDucks (double rampSeconds);
-    /** Remembers a scheduler entry as part of 'owner's run (cancelled with it). 'observer' = a watch that only looks
-        at the run (its follow, its duck restore) rather than a start that belongs to it: see hasPendingFor(). */
-    void track (int schedulerId, const juce::Uuid& owner, bool observer = false);
+    /** What a pending entry is to its owner's run: a scheduled start, a playlist step (the watch that moves the list on,
+        the crossfade's fade-out) or an observer (a follow waiting for the run to end): see hasPendingFor(). */
+    enum class PendingKind { start, step, observer };
+    /** Remembers a scheduler entry as part of 'owner's run (cancelled with it). */
+    void track (int schedulerId, const juce::Uuid& owner, PendingKind kind = PendingKind::start);
+    /** The GO window applied to a hotkey / cart click: true (and reported) when the same cue was fired inside it. */
+    bool refusesDoubleFire (const juce::Uuid& cueId, const juce::String& label);
+    /** The duck (dB) the running duck cues put on a cue that starts now; 'record' books their contributions for its restore. */
+    double duckFor (const juce::Uuid& cueId, bool record);
+    void clearDucks();
     void playlistStep (const juce::Uuid& groupId);
     double remainingSecondsOf (const juce::Uuid& id) const;
 
@@ -190,7 +200,7 @@ private:
     GoResult triggerImpl (const Cue& cue, bool audition);
     GoResult firstTriggerResult = GoResult::started;
     bool firstTriggerSeen = true;
-    struct Pending { int id; juce::Uuid owner; bool observer = false; };
+    struct Pending { int id; juce::Uuid owner; PendingKind kind = PendingKind::start; };
     std::vector<Pending> pending;
     GoResult triggerControl (const Cue& cue, int index, bool audition);
     bool recording = false;
@@ -215,6 +225,11 @@ private:
         CueController& owner;
     };
     std::map<juce::Uuid, std::map<juce::Uuid, double>> ducks;   // target -> (ducking cue -> dB)
+    /** A duck cue that runs now: what it puts on whoever plays meanwhile, whom it spares, and the watch that releases it. */
+    struct ActiveDuck { double levelDb = 0.0; double seconds = 0.0; std::set<juce::Uuid> spare; int watchId = -1; };
+    std::map<juce::Uuid, ActiveDuck> activeDucks;
+    std::map<juce::Uuid, double> lastFireTimes;                  // hotkey / cart: cue -> when it last fired (the GO window on them)
+    std::map<juce::Uuid, juce::int64> wallClockFired;            // cue -> the epoch second its clock last fired (a clock set back must not fire it again)
     std::set<juce::Uuid> played;
     juce::int64 lastWallClockSecond = -1;
     double lastGoTime = -1.0e9;

@@ -738,6 +738,9 @@ bool AudioEngine::play (const Cue& cue, const PlayOptions& options, juce::String
                 if (options.hasStartGain)
                     existing->setInitialGainDb (options.startGainDb);
 
+                if (options.duckDb != 0.0)
+                    existing->setDuckDb (options.duckDb, 0.0);   // it may be rendering (loaded): the goal lands within its first block
+
                 existing->setStartOrder (++startCounter);
                 existing->start();
                 committedRunning.store (true, std::memory_order_release);
@@ -775,6 +778,9 @@ bool AudioEngine::play (const Cue& cue, const PlayOptions& options, juce::String
     player->prepare (getSampleRate(), getBlockSize());
     if (options.hasStartGain)
         player->setInitialGainDb (options.startGainDb);
+
+    if (options.duckDb != 0.0)
+        player->setInitialDuckDb (options.duckDb);
 
     player->setStartOrder (++startCounter);
     player->setChain (findCueChain (cue.id));

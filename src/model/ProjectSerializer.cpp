@@ -631,6 +631,7 @@ namespace
         auto* obj = new juce::DynamicObject();
         obj->setProperty ("doubleGoSeconds", s.doubleGoSeconds);
         obj->setProperty ("requireKeyUp", s.requireKeyUp);
+        obj->setProperty ("doubleGoHotkeys", s.doubleGoHotkeys);
         obj->setProperty ("panicSeconds", s.panicSeconds);
         obj->setProperty ("autoNumber", s.autoNumber);
         obj->setProperty ("numberIncrement", s.numberIncrement);
@@ -684,6 +685,7 @@ namespace
 
         s.doubleGoSeconds         = (double) v.getProperty ("doubleGoSeconds", s.doubleGoSeconds);
         s.requireKeyUp            = (bool) v.getProperty ("requireKeyUp", s.requireKeyUp);
+        s.doubleGoHotkeys         = (bool) v.getProperty ("doubleGoHotkeys", s.doubleGoHotkeys);
         s.panicSeconds            = (double) v.getProperty ("panicSeconds", s.panicSeconds);
         s.autoNumber              = (bool) v.getProperty ("autoNumber", s.autoNumber);
         s.numberIncrement         = (double) v.getProperty ("numberIncrement", s.numberIncrement);

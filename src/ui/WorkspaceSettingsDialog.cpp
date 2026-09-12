@@ -101,6 +101,9 @@ namespace
             goHint = &addLabel (ko ("이 시간 안에 들어온 GO는 무시하고 GO 버튼이 빨갛게 깜빡입니다"));
             goHint->setFont (juce::Font (juce::FontOptions (11.0f)));
 
+            hotkeysToggle = &addToggle (ko ("큐 핫키·카트 클릭에도 적용 (같은 큐를 이 시간 안에 다시 누르면 무시)"), s.doubleGoHotkeys,
+                                        [] (WorkspaceSettings& w, bool v) { w.doubleGoHotkeys = v; });
+
             keyUpToggle = &addToggle (ko ("키를 뗀 뒤에만 다시 GO"), s.requireKeyUp,
                                       [] (WorkspaceSettings& w, bool v) { w.requireKeyUp = v; });
 
@@ -159,6 +162,8 @@ namespace
             row = next();
             goHint->setBounds (row.take (area.getWidth()));
             row = next();
+            hotkeysToggle->setBounds (row.take (area.getWidth()));
+            row = next();
             keyUpToggle->setBounds (row.take (300));
             area.removeFromTop (6);
 
@@ -194,7 +199,7 @@ namespace
         juce::Label *goLabel, *goHint, *panicLabel, *panicHint, *incrementLabel, *rowSizeLabel;
         juce::ComboBox rowSizeBox;
         juce::TextEditor *goEditor, *panicEditor, *incrementEditor, *openEditor, *closeEditor;
-        juce::ToggleButton *keyUpToggle, *autoNumberToggle, *lockToggle, *openToggle, *closeToggle;
+        juce::ToggleButton *hotkeysToggle, *keyUpToggle, *autoNumberToggle, *lockToggle, *openToggle, *closeToggle;
     };
 
     class FilesTab : public SettingsTab
@@ -360,7 +365,7 @@ namespace
             tabs.addTab (ko ("파일"), Palette::panel, new FilesTab (document), true);
             tabs.addTab (ko ("오디오"), Palette::panel, new AudioTab (document), true);
             addAndMakeVisible (tabs);
-            setSize (640, 380);
+            setSize (640, 412);
         }
 
         void resized() override { tabs.setBounds (getLocalBounds()); }

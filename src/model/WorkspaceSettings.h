@@ -19,6 +19,7 @@ struct WorkspaceSettings
     // 일반
     double doubleGoSeconds = 0.0;          // minimum time between two GOs; 0 = off
     bool requireKeyUp = false;             // the GO key must be released before it fires again
+    bool doubleGoHotkeys = true;           // the GO window also refuses the same cue's hotkey / cart click inside it
     double panicSeconds = 1.0;             // Esc: fade everything out over this, then stop
     bool autoNumber = true;
     double numberIncrement = 1.0;

@@ -50,6 +50,7 @@ public:
         juce::Uuid patchOverride = juce::Uuid::null();   // audition "대체 패치": play through this patch instead of the cue own patch
         bool hasStartGain = false;          // 페이드 인: the instance starts at startGainDb (the fade lifts it from there)
         double startGainDb = 0.0;
+        double duckDb = 0.0;                // the duck the running duck cues put on it: the instance begins at this level (no dip from full)
     };
 
     /** @param readAheadSamples  disk read-ahead per cue; 0 = synchronous reads (offline tests). */

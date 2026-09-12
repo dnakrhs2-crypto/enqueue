@@ -863,7 +863,18 @@ public:
             return;
         }
 
-        secondCombo.setSelectedId ((int) cue->secondTrigger + 1, juce::dontSendNotification);
+        if (cue->isGroup() && cue->group.mode == GroupMode::playlist)
+        {
+            // a running playlist answers a second GO with its next child whatever the rule says: the rule is not offered
+            secondCombo.setSelectedId (0, juce::dontSendNotification);
+            secondCombo.setText (ko ("다음 곡으로 (플레이리스트는 항상)"), juce::dontSendNotification);
+            secondCombo.setEnabled (false);
+        }
+        else
+        {
+            secondCombo.setSelectedId ((int) cue->secondTrigger + 1, juce::dontSendNotification);
+        }
+
         wallToggle.setToggleState (cue->wallClock.enabled, juce::dontSendNotification);
 
         auto setIfIdle = [] (juce::TextEditor& e, const juce::String& text) { if (! e.hasKeyboardFocus (true)) e.setText (text, false); };

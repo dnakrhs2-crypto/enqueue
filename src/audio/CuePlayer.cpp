@@ -406,6 +406,12 @@ void CuePlayer::setDuckDb (double db, double rampSeconds) noexcept
     duckTarget.store (tmp.gainLinear(), std::memory_order_relaxed);
 }
 
+void CuePlayer::setInitialDuckDb (double db) noexcept
+{
+    setDuckDb (db, 0.0);
+    duckLevel = duckGoalSeen = duckTarget.load (std::memory_order_relaxed);   // not rendering yet: the first block is already at the level
+}
+
 double CuePlayer::getLengthSeconds() const noexcept
 {
     if (micMode)

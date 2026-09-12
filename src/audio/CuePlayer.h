@@ -123,6 +123,8 @@ public:
     void setInitialGainDb (double gainDb) noexcept;
     /** Duck / boost applied on top of the cue gain, reached over 'rampSeconds'. 0 dB = none. Any thread. */
     void setDuckDb (double duckDb, double rampSeconds) noexcept;
+    /** Before start(): the duck the instance begins at (a cue that starts while a duck cue runs). Message thread. */
+    void setInitialDuckDb (double duckDb) noexcept;
     double getDuckDb() const noexcept { return duckDb.load (std::memory_order_relaxed); }
     /** Live level matrix / trim from the inspector; the audio thread ramps to the new gains over ~10 ms. Message thread. */
     void setLiveLevels (const LevelMatrix& levels, const TrimLevels& trim);
