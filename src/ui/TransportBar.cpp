@@ -215,10 +215,10 @@ TransportBar::TransportBar (juce::ApplicationCommandManager& cm)
     for (auto* label : { &momentaryLabel, &averageLabel, &momentaryValue, &averageValue })
     {
         const bool value = label == &momentaryValue || label == &averageValue;
-        label->setFont (value ? Palette::monoFont (Palette::loudnessSize).boldened() : Palette::font (Palette::kickerSize));
+        label->setFont (value ? Palette::monoFont (Palette::loudnessSize).boldened() : Palette::font (Palette::loudnessLabelSize, true));
         label->setColour (juce::Label::textColourId, value ? Palette::text : Palette::muted);
         label->setBorderSize (juce::BorderSize<int> (0));
-        label->setMinimumHorizontalScale (1.0f);
+        label->setMinimumHorizontalScale (value ? 0.7f : 0.85f);   // a narrow next-cue card shrinks the digits instead of clipping
         addAndMakeVisible (label);
     }
     averageWindow.getProperties().set ("slateTextOnly", true);
@@ -513,12 +513,12 @@ void TransportBar::resized()
     auto readings = area.removeFromRight (juce::jmin (Palette::loudnessWidth, area.getWidth() / 2));
     auto live = readings.removeFromLeft (readings.getWidth() / 2);
     live.removeFromRight (Palette::buttonGap);
-    momentaryLabel.setBounds (live.removeFromTop (18));
-    momentaryValue.setBounds (live.removeFromTop (32));
-    auto averageHeading = readings.removeFromTop (18);
+    momentaryLabel.setBounds (live.removeFromTop (Palette::loudnessLabelHeight));
+    momentaryValue.setBounds (live.removeFromTop (Palette::loudnessValueHeight));
+    auto averageHeading = readings.removeFromTop (Palette::loudnessLabelHeight);
     averageWindow.setBounds (averageHeading.removeFromLeft (Palette::loudnessWindowWidth));
     averageLabel.setBounds (averageHeading);
-    averageValue.setBounds (readings.removeFromTop (32));
+    averageValue.setBounds (readings.removeFromTop (Palette::loudnessValueHeight));
     area.removeFromRight (Palette::buttonGap);
     auto main = area.removeFromTop (33);
     const int numberWidth = juce::GlyphArrangement::getStringWidthInt (cueNumber.getFont(), cueNumber.getText());

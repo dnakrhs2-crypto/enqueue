@@ -384,7 +384,11 @@ public:
 
     void drawPopupMenuBackground (juce::Graphics& g, int width, int height) override
     {
-        Palette::drawCard (g, { width, height });
+        // A popup menu is its own desktop window; the corners outside a rounded fill show the peer's bare white
+        // background on this compositor. Fill the whole rectangle opaquely so no corner is ever left white.
+        g.fillAll (Palette::panel);
+        g.setColour (Palette::outline);
+        g.drawRect (0, 0, width, height, (int) Palette::borderWidth);
     }
 
     void drawMenuBarBackground (juce::Graphics& g, int width, int height, bool, juce::MenuBarComponent&) override

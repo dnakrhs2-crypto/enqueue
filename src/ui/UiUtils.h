@@ -111,14 +111,14 @@ namespace Palette
     constexpr float bodySize = 13.0f, headerSize = 11.5f, fileSize = 12.0f, timeSize = 12.5f;
     constexpr float tabSize = 12.5f, pillSize = 11.0f, kickerSize = 11.0f, keySize = 10.5f;
     constexpr float nextNameSize = 28.0f, remainingSize = 26.0f, goSize = 58.0f;
-    constexpr float fieldLabelSize = 12.0f, fieldValueSize = 13.0f, loudnessSize = 22.0f;
+    constexpr float fieldLabelSize = 12.0f, fieldValueSize = 13.0f, loudnessSize = 34.0f, loudnessLabelSize = 12.0f;
     constexpr float rulerSize = 10.5f, channelTagSize = 10.0f, sliderThumbSize = 14.0f;
     constexpr float crosspointAlpha = 0.22f, waveDimAlpha = 0.35f, envelopeAlpha = 0.9f;
     constexpr int fieldHeight = 30, formRowHeight = 38, matrixCellSize = 38;
     constexpr int matrixCellWidth = 62, matrixHeaderWidth = 104, matrixGap = 1;
     constexpr int inspectorPageWidth = 860, inspectorBasicHeight = 232, inspectorPlotHeight = 250, inspectorFormHeight = 208;
     constexpr int inspectorControlWidth = 936, inspectorWideWidth = 1080;
-    constexpr int modeToggleWidth = 164, loudnessWidth = 220, loudnessWindowWidth = 44, weekdaySize = 26;
+    constexpr int modeToggleWidth = 164, loudnessWidth = 300, loudnessWindowWidth = 48, loudnessValueHeight = 46, loudnessLabelHeight = 18, weekdaySize = 26;
     constexpr int dialogInset = 8, pluginSlotWidth = 216, pluginSlotHeight = 72, pluginSlotGap = 26;
     constexpr int settingsWidth = 640, settingsHeight = 499;   // General's last row ends at y=475; leave 24px below it.
     constexpr int alertIconWidth = 80, alertIconSize = 36;
