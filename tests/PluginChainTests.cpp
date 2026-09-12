@@ -420,11 +420,99 @@ public:
             process (false);                                                     // block D: the plugin is back, fed block C first
             expectEquals (peak().first, -1);                                     // the impulse it still held is not played a second time
 
+            for (int i = 0; i < 4; ++i)
+                process (false);                                                 // the crossfade back to the plugin's output (240 samples) runs out
+
             process (true);                                                      // block E: a new impulse
             process (false);                                                     // F
             process (false);                                                     // G: 128 samples after E
             expectEquals (peak().first, 0);                                      // on time - the missed block did not set the plugin back
             expectWithinAbsoluteError (peak().second, 0.5f, 1e-6f);              // and it is the plugin's output again
+        }
+
+        beginTest ("delay compensation: a longer stall is caught up a couple of blocks per callback, dry meanwhile");
+        {
+            PluginChain chain;
+            chain.prepare (48000.0, 64);
+            auto* p = new TestGainPlugin (0.5f);   // no latency: the ring still records every block
+            chain.addPlugin (std::unique_ptr<juce::AudioPluginInstance> (p));
+            juce::AudioBuffer<float> block (2, 64);
+            auto dc = [&] { fill (block, 1.0f); chain.process (block, 64); return block.getSample (0, 63); };
+
+            for (int i = 0; i < 6; ++i)
+                dc();
+
+            expectWithinAbsoluteError (dc(), 0.5f, 1e-6f);   // wet
+            int stalled = 0;
+
+            {
+                juce::WaitableEvent locked, release;
+                std::thread holder ([&] { const juce::ScopedLock held (p->getCallbackLock()); locked.signal(); release.wait(); });
+                locked.wait();
+
+                for (int i = 0; i < 4; ++i)
+                {
+                    expectWithinAbsoluteError (dc(), 1.0f, 1e-6f);   // dry (no latency: as it is)
+                    ++stalled;
+                }
+
+                release.signal();
+                holder.join();
+            }
+
+            const int before = p->processCount;
+            int maxPerCallback = 0;
+            float last = 0.0f;
+
+            for (int i = 0; i < 12; ++i)
+            {
+                const int c0 = p->processCount;
+                last = dc();
+                maxPerCallback = juce::jmax (maxPerCallback, p->processCount - c0);
+            }
+
+            expectLessOrEqual (maxPerCallback, 3);                    // catchUpBlocks fed back + the current block, never more
+            expectEquals (p->processCount - before, stalled + 12);    // every block went through the plugin exactly once, in order
+            expectWithinAbsoluteError (last, 0.5f, 1e-6f);            // and it is wet again (after the crossfade)
+        }
+
+        beginTest ("delay compensation: a stall longer than the ring holds is answered by a reset on the message thread");
+        {
+            PluginChain chain;
+            chain.prepare (48000.0, 64);
+            auto* p = new TestGainPlugin (0.5f);
+            chain.addPlugin (std::unique_ptr<juce::AudioPluginInstance> (p));
+            juce::AudioBuffer<float> block (2, 64);
+            auto dc = [&] { fill (block, 1.0f); chain.process (block, 64); return block.getSample (0, 63); };
+
+            for (int i = 0; i < 6; ++i)
+                dc();
+
+            {
+                juce::WaitableEvent locked, release;
+                std::thread holder ([&] { const juce::ScopedLock held (p->getCallbackLock()); locked.signal(); release.wait(); });
+                locked.wait();
+
+                for (int i = 0; i < 12; ++i)
+                    dc();   // 12 blocks: more than the ring (8 blocks) holds
+
+                release.signal();
+                holder.join();
+            }
+
+            const int resets = p->resetCount;
+
+            for (int i = 0; i < 10; ++i)
+                expectWithinAbsoluteError (dc(), 1.0f, 1e-6f);   // dry until the message thread has had its turn: what was lost cannot be fed back
+
+            chain.recoverAfterStalls();
+            expectEquals (p->resetCount, resets + 1);
+            float last = 0.0f;
+
+            for (int i = 0; i < 8; ++i)
+                last = dc();
+
+            expectWithinAbsoluteError (last, 0.5f, 1e-6f);   // wet again, its time the show's
         }
 
         beginTest ("engine: cue chain, master chain, tails and chain removal while playing");

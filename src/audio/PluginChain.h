@@ -41,7 +41,8 @@ public:
         juce::AudioBuffer<float> dryDelay;       // 2-channel ring of the recent input: latency + a few blocks
         int dryDelayWrite = 0;                   // audio thread: the ring's write index
         float wetMix = 1.0f;                     // audio thread: 1 = the plugin's output, 0 = the delayed dry signal; ramps when the bypass changes
-        int skipped = 0;                         // audio thread: input samples the plugin has not seen (its callback lock was busy, it was suspended): fed to it from the ring before it runs again, so its own time never falls behind the show
+        int skipped = 0;                         // audio thread: input samples the plugin has not seen (its callback lock was busy, it was suspended): fed to it from the ring, catchUpBlocks per callback, before it runs again - its own time never falls behind the show
+        std::atomic<bool> overflow { false };    // the backlog outgrew the ring: the plugin is reset on the message thread (recoverAfterStalls) instead of catching up, dry until then
 
         bool isMissing() const noexcept { return plugin == nullptr; }
     };
@@ -118,6 +119,9 @@ public:
     /** Recompute what the callback reads, from the message thread: the tail, and each plugin's dry delay line when
         the plugin now reports another latency (a limiter's look-ahead changed). Called when a plugin reported a change. */
     void refreshPluginCaches();
+    /** Message thread, every UI tick: a plugin whose missed input outgrew its ring (a long stall) is reset - its own
+        time starts afresh with the show's - and goes back to its output. Cheap when nothing is pending. */
+    void recoverAfterStalls();
 
     /** True once (since the previous call) when any hosted plugin reported a parameter / state change,
         e.g. the user turned a knob in an editor. Any thread. Used for dirty tracking. */
@@ -140,8 +144,10 @@ private:
     void updateDelayLines();         // message thread, under the lock: each slot's dry delay follows the plugin's latency
     static void sizeDelayLine (Slot& slot, int latency, int blockSize);   // (re)allocates and clears - never on the audio thread
     static void delayDryInPlace (Slot& slot, juce::AudioBuffer<float>& dry, int numSamples) noexcept;   // audio thread: records channels 0-1 in the slot's ring and, when the plugin has latency, replaces them with the delayed signal
-    bool catchUpSkipped (Slot& slot) noexcept;   // audio thread, the plugin's callback lock held: feeds it the input it missed; false when it faulted doing so
+    bool catchUpSkipped (Slot& slot, int budgetSamples) noexcept;   // audio thread, the plugin's callback lock held: feeds it up to 'budgetSamples' of the input it missed; false when it faulted doing so
+    void noteSkipped (Slot& slot, int numSamples) noexcept;         // audio thread: the plugin did not see this block (it is in the ring); flags an overflow when the ring cannot hold the backlog
     static constexpr int ringBlocks = 8;         // the ring holds latency + this many blocks: a stall of that many blocks is caught up in full
+    static constexpr int catchUpBlocks = 2;      // missed input fed per callback (so a callback runs the plugin three times at most): a backlog drains by one block per callback
     void markFaulted (Slot& slot) noexcept;
     static bool isFinite (const juce::AudioBuffer<float>& buffer, int numSamples) noexcept;
     void clearSlots (bool notify);   // the destructor clears without chainChanged (pluginAboutToBeRemoved still closes editors)
@@ -163,6 +169,7 @@ private:
     std::atomic<bool> stateChanged { false };
     std::atomic<bool> faultRaised { false };   // a slot faulted since takeNewFaults()
     std::atomic<bool> stallRaised { false };   // a slot crossed stallBlocks since takeNewStalls()
+    std::atomic<bool> overflowRaised { false };   // a slot's backlog outgrew its ring: recoverAfterStalls() has work
     std::atomic<float> tailSecondsCache { 0.0f };   // getTailSeconds() for the audio thread
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (PluginChain)

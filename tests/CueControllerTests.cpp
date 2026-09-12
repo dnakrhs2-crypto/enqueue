@@ -1052,6 +1052,89 @@ public:
             document.cues.removeIndices ({ document.cues.indexOf (g.id), document.cues.indexOf (starter.id) });
         }
 
+        beginTest ("a child's auto-follow keeps its group active: the cue after the group waits for the whole chain");
+        {
+            Cue g;
+            g.name = "GC";
+            g.type = CueType::group;
+            g.group.mode = GroupMode::startFirst;
+            g.continueMode = ContinueMode::autoFollow;
+            const int gi = document.cues.add (g);
+            Cue ca, cb;
+            ca.name = "ca"; ca.file = tone; ca.parentId = g.id; ca.continueMode = ContinueMode::autoFollow;
+            cb.name = "cb"; cb.file = tone; cb.parentId = g.id;
+            document.cues.add (ca);
+            document.cues.add (cb);
+            Cue z;
+            z.name = "z"; z.file = tone;
+            document.cues.add (z);
+            now += 1.0;
+            document.cues.setPlayheadIndex (gi);
+            expect (controller.go() == CueController::GoResult::started);
+            controller.goKeyReleased();
+            expect (engine.isPlaying (ca.id) && ! engine.isPlaying (cb.id) && ! engine.isPlaying (z.id));
+            engine.stop (ca.id);
+            render (engine, scheduler, now, out, 3);
+            expect (engine.isPlaying (cb.id));   // ca's follow
+            expect (! engine.isPlaying (z.id));  // the group is not over while its chain (cb) plays
+            engine.stop (cb.id);
+            render (engine, scheduler, now, out, 3);
+            expect (engine.isPlaying (z.id));    // now the group's own follow
+            stopEverything();
+            document.cues.removeIndices ({ document.cues.indexOf (g.id), document.cues.indexOf (z.id) });
+        }
+
+        beginTest ("a restart during the pre-wait takes the sequence's earlier schedule with it (auto-continue)");
+        {
+            document.cues.update (0, [] (Cue& x) { x.hotkey = "F9"; x.preWaitSeconds = 1.0; x.continueMode = ContinueMode::autoContinue; x.postWaitSeconds = 0.0; });
+            now += 1.0;
+            expect (controller.handleHotkey (juce::KeyPress::createFromDescription ("F9")));   // a at +1.0, b right behind it
+            expectEquals (controller.getNumPending(), 2);
+            render (engine, scheduler, now, out, 43);                                            // ~0.5 s
+            expect (controller.handleHotkey (juce::KeyPress::createFromDescription ("F9")));   // restart: both schedules move
+            expectEquals (controller.getNumPending(), 2);
+            render (engine, scheduler, now, out, 50);                                            // ~1.08 s: the first schedule would have fired at 1.0
+            expect (! engine.isPlaying (a.id) && ! engine.isPlaying (b.id));
+            render (engine, scheduler, now, out, 45);                                            // ~1.6 s: the restarted one
+            expect (engine.isPlaying (a.id) && engine.isPlaying (b.id));
+            expectEquals (engine.getNumPlaying(), 2);
+            stopEverything();
+            document.cues.update (0, [] (Cue& x) { x.hotkey = ""; x.preWaitSeconds = 0.0; x.continueMode = ContinueMode::none; });
+        }
+
+        beginTest ("skipping a playlist to its next child keeps the group's own auto-follow");
+        {
+            Cue g;
+            g.name = "PS";
+            g.type = CueType::group;
+            g.group.mode = GroupMode::playlist;
+            g.continueMode = ContinueMode::autoFollow;
+            const int gi = document.cues.add (g);
+            Cue x, y;
+            x.name = "sx"; x.file = tone; x.parentId = g.id;
+            y.name = "sy"; y.file = tone; y.parentId = g.id;
+            document.cues.add (x);
+            document.cues.add (y);
+            Cue z;
+            z.name = "sz"; z.file = tone;
+            document.cues.add (z);
+            now += 1.0;
+            document.cues.setPlayheadIndex (gi);
+            expect (controller.go() == CueController::GoResult::started);
+            controller.goKeyReleased();
+            expect (engine.isPlaying (x.id));
+            expect (controller.trigger (document.cues.get (gi)) == CueController::GoResult::ignored);   // next child
+            render (engine, scheduler, now, out, 2);
+            expect (engine.isPlaying (y.id) && ! engine.isPlaying (z.id));
+            engine.stop (x.id);
+            engine.stop (y.id);
+            render (engine, scheduler, now, out, 3);
+            expect (! controller.isCueActive (g.id));
+            expect (engine.isPlaying (z.id));   // the list is over: the group's follow still fires
+            stopEverything();
+            document.cues.removeIndices ({ document.cues.indexOf (g.id), document.cues.indexOf (z.id) });
+        }
+
         beginTest ("playlist crossfade: the next child starts before the current one ends");
         {
             Cue g;

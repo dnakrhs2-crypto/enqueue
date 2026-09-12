@@ -1650,6 +1650,8 @@ bool AudioEngine::consumePluginStateChanges()
     // tail early or hold one too long, and a bypassed plugin's dry signal keeps the plugin's new delay
     auto poll = [&changed] (PluginChain& chain)
     {
+        chain.recoverAfterStalls();   // a plugin that stalled longer than its ring holds is reset here, on the message thread
+
         if (chain.consumeStateChanged())
         {
             chain.refreshPluginCaches();

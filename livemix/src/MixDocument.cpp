@@ -527,6 +527,8 @@ bool MixDocument::pollPluginEdits()
     bool edited = false;
     engine.forEachChain ([&edited] (PluginChain& chain)
     {
+        chain.recoverAfterStalls();   // a plugin that stalled longer than its ring holds is reset here, on the message thread
+
         if (chain.consumeStateChanged())
         {
             chain.refreshPluginCaches();   // a changed tail, a changed latency (look-ahead / oversampling): what the callback reads follows

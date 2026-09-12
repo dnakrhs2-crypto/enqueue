@@ -388,12 +388,23 @@ std::vector<PluginSlotState> PluginChain::getStates (bool* complete) const
                 if (const auto xml = description.createXml())
                     s.descriptionXml = xml->toString (juce::XmlElement::TextFormat().singleLine().withoutHeader());
 
-                // Read without the plugin's callback lock, as JUCE's own AudioPluginHost does while its graph plays: a
-                // VST3 handles getState alongside its processing itself. Holding the lock here made the callback pass
-                // the plugin for a block whenever a save or an undo snapshot coincided with it - and a plugin that
-                // misses a block of input keeps its delay lines that much behind the show from then on.
+                // A VST3 is read without its callback lock, as JUCE's own AudioPluginHost does while its graph plays:
+                // the VST3 contract has the plugin handle getState alongside its processing. Holding the lock made the
+                // callback pass the plugin for a block whenever a save or an undo snapshot coincided with it (the
+                // chain now feeds a plugin what it missed, but a skip is still a skip). A VST2's bank read walks its
+                // programs (setCurrentProgram) - not something to interleave with processBlock: it keeps the lock.
                 juce::MemoryBlock block;
-                slot->plugin->getStateInformation (block);
+
+                if (description.pluginFormatName == "VST3")
+                {
+                    slot->plugin->getStateInformation (block);
+                }
+                else
+                {
+                    const juce::ScopedLock callbackLock (slot->plugin->getCallbackLock());
+                    slot->plugin->getStateInformation (block);
+                }
+
                 s.stateBase64 = block.getSize() > 0 ? juce::Base64::toBase64 (block.getData(), block.getSize()) : juce::String();
             }
             catch (...)
@@ -548,6 +559,47 @@ void PluginChain::refreshPluginCaches()
     updateTailCache();
 }
 
+void PluginChain::recoverAfterStalls()
+{
+    if (! overflowRaised.exchange (false, std::memory_order_acq_rel))
+        return;
+
+    for (auto& slot : slots)   // message thread only
+    {
+        if (slot->plugin == nullptr || ! slot->overflow.load (std::memory_order_relaxed))
+            continue;
+
+        // the callback stays out (the chain lock) while the plugin's history and the host's ring are cleared together:
+        // from here the plugin's time is the show's again, with nothing pending inside it
+        const juce::ScopedLock sl (lock);
+        const juce::ScopedLock callbackLock (slot->plugin->getCallbackLock());
+
+        if (slot->plugin->isSuspended())
+        {
+            overflowRaised.store (true, std::memory_order_release);   // still loading a preset: next tick
+            continue;
+        }
+
+        if (! slot->faulted.load (std::memory_order_relaxed))
+        {
+            try
+            {
+                slot->plugin->reset();
+            }
+            catch (...)
+            {
+                markFaulted (*slot);
+            }
+        }
+
+        slot->scratch.clear();
+        slot->dryDelay.clear();
+        slot->dryDelayWrite = 0;
+        slot->skipped = 0;
+        slot->overflow.store (false, std::memory_order_relaxed);
+    }
+}
+
 void PluginChain::sizeDelayLine (Slot& slot, int newLatency, int block)
 {
     newLatency = juce::jmax (0, newLatency);
@@ -632,24 +684,44 @@ void PluginChain::delayDryInPlace (Slot& slot, juce::AudioBuffer<float>& dry, in
     slot.dryDelayWrite = (start + numSamples) % capacity;
 }
 
-bool PluginChain::catchUpSkipped (Slot& slot) noexcept
+void PluginChain::noteSkipped (Slot& slot, int numSamples) noexcept
+{
+    const int capacity = slot.dryDelay.getNumSamples();
+
+    if (slot.skipped + numSamples > capacity)
+    {
+        // the ring cannot hold the whole backlog: what it lost cannot be fed back, so catching up would leave the
+        // plugin behind by that much for good - the message thread resets it instead (recoverAfterStalls)
+        slot.skipped = capacity;
+        slot.overflow.store (true, std::memory_order_relaxed);
+        overflowRaised.store (true, std::memory_order_release);
+    }
+    else
+    {
+        slot.skipped += numSamples;
+    }
+}
+
+bool PluginChain::catchUpSkipped (Slot& slot, int budgetSamples) noexcept
 {
     // The plugin missed 'skipped' input samples (its callback lock was busy, it was suspended). Without them its own
     // time - delay lines, look-ahead buffers, envelopes - would stay that much behind the show for good, and every such
-    // block would add up. The ring keeps the recent input: those samples go through the plugin now, its output thrown
-    // away (the operator heard the delayed dry signal for them), so it is up to date when the current block follows.
+    // block would add up. The ring keeps the recent input: those samples go through the plugin, its output thrown away
+    // (the operator hears the delayed dry signal meanwhile), up to 'budgetSamples' per callback so the callback never
+    // grows past a few blocks of plugin work; the rest waits for the next callback.
     const int capacity = slot.dryDelay.getNumSamples();
     const int block = slot.scratch.getNumSamples();
-    int todo = juce::jmin (slot.skipped, capacity);
-    slot.skipped = 0;
+    int todo = juce::jmin (slot.skipped, capacity, juce::jmax (0, budgetSamples));
 
     if (todo <= 0 || slot.dryDelay.getNumChannels() < 2 || block <= 0)
         return true;
 
-    int r = slot.dryDelayWrite - todo;   // the oldest of the missed samples
+    int r = slot.dryDelayWrite - slot.skipped;   // the oldest of the missed samples
 
     if (r < 0)
         r += capacity;
+
+    slot.skipped -= todo;
 
     while (todo > 0)
     {
@@ -773,17 +845,35 @@ void PluginChain::processLocked (juce::AudioBuffer<float>& buffer, int numSample
             if (slot->busyBlocks.fetch_add (1, std::memory_order_relaxed) + 1 == stallBlocks)
                 stallRaised.store (true, std::memory_order_release);   // a second or two of dry passes: the operator hears of it
 
-            slot->skipped = juce::jmin (slot->skipped + numSamples, slot->dryDelay.getNumSamples());   // fed to the plugin when it is back
+            noteSkipped (*slot, numSamples);   // fed to the plugin when it is back
             delayDryInPlace (*slot, buffer, numSamples);
+            slot->wetMix = 0.0f;               // its output comes back with the crossfade once it has caught up
             continue;
         }
 
         slot->busyBlocks.store (0, std::memory_order_relaxed);
 
-        if (slot->skipped > 0 && ! catchUpSkipped (*slot))
+        if (slot->skipped > 0 || slot->overflow.load (std::memory_order_relaxed))
         {
-            delayDryInPlace (*slot, buffer, numSamples);   // it faulted on the input it had missed: dry, in time, from here on
-            continue;
+            // behind the show: part of the backlog goes through the plugin now; this block joins the backlog (the
+            // delayed dry signal is heard) until the backlog is gone - or, after an overflow, until the message thread
+            // has reset the plugin
+            const bool ok = catchUpSkipped (*slot, catchUpBlocks * juce::jmax (1, scratch.getNumSamples()));
+            midi.clear();   // what the fed-back blocks produced must not enter the current block as input
+
+            if (! ok)
+            {
+                delayDryInPlace (*slot, buffer, numSamples);   // it faulted on the input it had missed: dry, in time, from here on
+                continue;
+            }
+
+            if (slot->skipped > 0 || slot->overflow.load (std::memory_order_relaxed))
+            {
+                noteSkipped (*slot, numSamples);
+                delayDryInPlace (*slot, buffer, numSamples);
+                slot->wetMix = 0.0f;
+                continue;
+            }
         }
 
         // The plugin runs on a copy when it needs more than two channels, otherwise in place with the dry input copied
@@ -884,6 +974,7 @@ void PluginChain::resetProcessing() noexcept
         slot->dryDelay.clear();
         slot->dryDelayWrite = 0;
         slot->skipped = 0;
+        slot->overflow.store (false, std::memory_order_relaxed);
 
         if (slot->faulted.load (std::memory_order_relaxed))
             continue;

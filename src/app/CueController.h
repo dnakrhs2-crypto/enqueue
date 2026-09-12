@@ -89,14 +89,16 @@ public:
     int sequenceEnd (const CueList& list, int index) const;
     /** Cancels scheduled starts, follows and duck restores. */
     void cancelPending();
-    /** Cancels the pending starts / follows / duck restores that belong to one cue's run. */
-    void cancelPendingFor (const juce::Uuid& cueId);
+    /** Cancels the pending starts / follows / duck restores that belong to one cue's run. 'keepObservers' leaves the
+        run's own follow and duck restore in place (a playlist moving to its next child ends the child's watch only). */
+    void cancelPendingFor (const juce::Uuid& cueId, bool keepObservers = false);
     /** Number of scheduled starts / follows still pending (tests). */
     int getNumPending() const;
     /** A scheduled start or a playlist step of this cue's run is still pending. The observer watches (an auto-follow
-        waiting for the cue to end, a duck restore) do not count: a group's own observers would otherwise keep the
-        group "active" forever and the observer could never fire. */
-    bool hasPendingFor (const juce::Uuid& cueId) const;
+        waiting for the cue to end, a duck restore) count only when asked ('includeObservers'): a group's own
+        observers would otherwise keep the group "active" forever and could never fire - but a child's pending follow
+        does mean the group is still going. */
+    bool hasPendingFor (const juce::Uuid& cueId, bool includeObservers = false) const;
     /** Scheduled starts / follows, running wait cues or playlist groups: something would still start. */
     bool hasPendingStarts() const noexcept { return ! pending.empty() || ! waits.empty() || ! playlists.empty(); }
     /** Cues that have been started at least once since the last reset (drives the "second colour"). */
