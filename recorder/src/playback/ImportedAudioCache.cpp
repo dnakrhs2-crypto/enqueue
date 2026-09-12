@@ -116,19 +116,21 @@ Sample ImportedAudioCache::sourceSampleFor(Sample projectSample, const ImportedA
 }
 PeakSnapshot ImportedAudioCache::peakSnapshot(const CachedImportedAudio& cache)
 {
-    PeakSnapshot result; result.sampleRate = cache.sampleRate; result.channels = 1;
+    PeakSnapshot result; result.sampleRate = cache.sampleRate;
+    result.channels = cache.channels == 2 ? 2u : 1u;
     result.samples = static_cast<std::uint64_t>(cache.samples); result.complete = true;
     const auto stride = (std::max)(size_t{1}, (cache.peaks.size() + PeakCache::maximumBins - 1) / PeakCache::maximumBins);
     result.samplesPerBin = std::uint64_t(cache.samplesPerPeak) * stride;
     for (size_t at = 0; at < cache.peaks.size(); at += stride)
     {
         std::array<PeakBin, 16> bin{};
-        bin[0] = {cache.peaks[at].minimum[0], cache.peaks[at].maximum[0]};
+        for (unsigned channel = 0; channel < result.channels; ++channel)
+            bin[channel] = {cache.peaks[at].minimum[channel], cache.peaks[at].maximum[channel]};
         for (size_t i = at; i < (std::min)(at + stride, cache.peaks.size()); ++i)
-            for (int channel = 0; channel < cache.channels; ++channel)
+            for (unsigned channel = 0; channel < result.channels; ++channel)
             {
-                bin[0].minimum = (std::min)(bin[0].minimum, cache.peaks[i].minimum[size_t(channel)]);
-                bin[0].maximum = (std::max)(bin[0].maximum, cache.peaks[i].maximum[size_t(channel)]);
+                bin[channel].minimum = (std::min)(bin[channel].minimum, cache.peaks[i].minimum[channel]);
+                bin[channel].maximum = (std::max)(bin[channel].maximum, cache.peaks[i].maximum[channel]);
             }
         result.bins.push_back(bin);
     }

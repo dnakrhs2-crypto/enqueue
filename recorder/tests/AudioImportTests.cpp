@@ -83,17 +83,31 @@ void wait(ImportedAudioCache::Worker& w)
 int runAudioImportTests()
 {
     Suite suite;
-    suite.test("imported timeline peaks include a right-only signal and bound long-file bins", []
+    suite.test("imported stereo timeline peaks preserve separate L/R extrema and bound long-file bins", []
     {
         CachedImportedAudio cache; cache.channels = 2; cache.sampleRate = 48000; cache.samplesPerPeak = 256;
         cache.peaks.resize(PeakCache::maximumBins * 2 + 1); cache.samples = Sample(cache.peaks.size()) * 256 - 17;
+        cache.peaks[0].minimum[0] = -.25f; cache.peaks[1].maximum[0] = .125f;
         cache.peaks.back().minimum[1] = -.75f; cache.peaks.back().maximum[1] = .5f;
         const auto peaks = ImportedAudioCache::peakSnapshot(cache);
         require(peaks.complete && peaks.sampleRate == 48000 && peaks.samples == cache.samples
             && peaks.bins.size() <= PeakCache::maximumBins, "Bounded waveform lost duration");
-        require(peaks.bins.back()[0].minimum == -.75f && peaks.bins.back()[0].maximum == .5f,
-            "Right-only tail waveform disappeared from imported lane");
+        require(peaks.channels == 2 && peaks.bins.front()[0].minimum == -.25f && peaks.bins.front()[0].maximum == .125f
+            && peaks.bins.front()[1].minimum == 0 && peaks.bins.front()[1].maximum == 0, "Left envelope mixed into right channel");
+        require(peaks.bins.back()[1].minimum == -.75f && peaks.bins.back()[1].maximum == .5f
+            && peaks.bins.back()[0].minimum == 0 && peaks.bins.back()[0].maximum == 0,
+            "Right-only tail waveform disappeared or mixed into left channel");
         require(peaks.bins.size() * peaks.samplesPerBin >= peaks.samples, "Waveform tail coverage");
+    });
+    suite.test("mono and empty imported peak snapshots remain compatible", []
+    {
+        CachedImportedAudio cache; cache.channels = 1; cache.sampleRate = 48000; cache.samples = 256;
+        cache.peaks.resize(1); cache.peaks[0].minimum = {-.4f, -.9f}; cache.peaks[0].maximum = {.3f, .8f};
+        const auto mono = ImportedAudioCache::peakSnapshot(cache);
+        require(mono.channels == 1 && mono.bins[0][0].minimum == -.4f && mono.bins[0][0].maximum == .3f,
+            "Legacy mono summary used an absent channel");
+        cache.peaks.clear(); cache.samples = 0;
+        require(ImportedAudioCache::peakSnapshot(cache).bins.empty(), "Empty peak cache created data");
     });
     suite.test("copy, reopen, SHA-256 and unpublished asset ownership", []
     {
@@ -145,6 +159,11 @@ int runAudioImportTests()
             const auto expected = rescaleRound(Sample(rate) * 2 + 137, 48000, rate);
             require(cache.samples == expected && p->asset().logicalLength == expected && cache.channels == channels, "length mapping");
             require(cache.peaks.size() == static_cast<size_t>((expected + 255) / 256), "peak coverage");
+            const auto snapshot = ImportedAudioCache::peakSnapshot(cache);
+            require(snapshot.channels == unsigned(channels), "Decoded cache lost its channel count at the timeline adapter");
+            for (int ch = 0; ch < channels; ++ch)
+                require(snapshot.bins[1][ch].minimum == cache.peaks[1].minimum[ch]
+                    && snapshot.bins[1][ch].maximum == cache.peaks[1].maximum[ch], "Decoded channel envelope changed");
             auto pcm = AudioImport::openReader(cache.pcmFile); juce::AudioBuffer<float> samples(channels, static_cast<int>(expected));
             require(pcm->read(&samples, 0, static_cast<int>(expected), 0, true, channels == 2), "cache read");
             double error = 0; Sample measured = 0;
@@ -163,6 +182,9 @@ int runAudioImportTests()
         std::unique_ptr<PreparedAudioImport> p; requireOk(AudioImport::prepare(r, c, p)); CachedImportedAudio a, b;
         requireOk(ImportedAudioCache::build(r.projectDirectory, p->asset(), p->info(), 48000, c, a));
         requireOk(ImportedAudioCache::build(r.projectDirectory, p->asset(), p->info(), 48000, c, b)); require(b.reused && a.pcmFile == b.pcmFile, "reuse");
+        const auto reusedPeaks = ImportedAudioCache::peakSnapshot(b);
+        require(reusedPeaks.channels == 2 && reusedPeaks.bins[1][1].minimum == a.peaks[1].minimum[1]
+            && reusedPeaks.bins[1][1].maximum == a.peaks[1].maximum[1], "Reused v1 cache lost right channel");
         requireOk(ImportedAudioCache::build(r.projectDirectory, p->asset(), p->info(), 44100, c, b)); require(!b.reused && a.key != b.key, "Fs invalidation");
         a.pcmFile.replaceWithText("corrupted cache");
         requireOk(ImportedAudioCache::build(r.projectDirectory, p->asset(), p->info(), 48000, c, b)); require(!b.reused && a.pcmFile != b.pcmFile, "corrupt cache rebuilt");

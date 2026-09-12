@@ -29,7 +29,7 @@ void ClipInspector::refresh()
         if (changed || !inputs[i].hasKeyboardFocus(true)) inputs[i].setText(c ? juce::String(values[i]) : juce::String(), false);
     }
     title.setText(c ? ko("선택 속성 · ") + juce::String(ids.size()) + ko("개") : ko("클립을 선택하세요"), juce::dontSendNotification);
-    link.setText(c ? c->linkGroupId.isEmpty() ? ko("링크 없음") : ko("링크 · ") + juce::String(ids.size()) + ko("개 함께 편집\n링크 해제: 직접 클릭한 클립") : juce::String(), juce::dontSendNotification);
+    link.setText(c ? c->linkGroupId.isEmpty() ? ko("링크 없음") : ko("링크 · ") + juce::String(ids.size()) + ko("개 함께 편집") : juce::String(), juce::dontSendNotification);
     juce::String versionText = ko("테이크 버전 목록\n"); bool found = false;
     if (c) for (const auto& stack : p.takeStacks) if (stack.stackId == c->takeStackId)
     {
