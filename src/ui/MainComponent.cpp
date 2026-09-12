@@ -3225,8 +3225,14 @@ void MainComponent::timerCallback()
     if (subBlockCount > lastLoudnessSubBlockCount)
         lastLoudnessSubBlockMs = nowMs;
     lastLoudnessSubBlockCount = subBlockCount;
-    // A stopped device leaves the last readings in the meter. Hide them without clearing its average history.
-    const bool receivingAudio = subBlockCount > 0 && nowMs - lastLoudnessSubBlockMs < 1000.0;
+    // A stopped device leaves the last readings in the meter. Hide them without clearing its average history. The
+    // sub-block counter jumps once a callback (a burst of 100 ms sub-blocks), so a large ASIO buffer can leave it
+    // still for over a second between callbacks - the "no audio" wait must clear the whole callback interval plus a
+    // timer tick, not a flat second.
+    const double sr = engine.getSampleRate();
+    const double callbackMs = sr > 0.0 ? engine.getBlockSize() * 1000.0 / sr : 0.0;
+    const double staleAfterMs = juce::jmax (1000.0, callbackMs * 2.5 + 200.0);
+    const bool receivingAudio = subBlockCount > 0 && nowMs - lastLoudnessSubBlockMs < staleAfterMs;
     const auto momentary = stats.momentary();
     const int windowSeconds = settings.getLufsAverageSeconds();
     const auto average = stats.windowed (windowSeconds);
