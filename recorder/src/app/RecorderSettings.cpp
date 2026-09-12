@@ -38,6 +38,7 @@ juce::String encode(const UserSettings& s)
     p.setValue("recentProjects", juce::JSON::toString(recent, true)); p.setValue("windowState", s.windowState);
     for (std::size_t i = 0; i < RecorderShortcuts::count; ++i)
         p.setValue(RecorderShortcuts::field(RecorderCommand(i)), s.shortcuts.keys[i]);
+    p.setValue("shortcutRevision", 2); // 2 = the stop key defaults to spacebar; older files migrate F10 once
     return p.createXml("RECORDER_SETTINGS")->toString();
 }
 juce::Result decode(const juce::String& text, UserSettings& out)
@@ -90,7 +91,9 @@ juce::Result decode(const juce::String& text, UserSettings& out)
     s.calibration.calibrationDate = p.getValue("calibrationDate"); s.calibration.calibrationIdentity = p.getValue("calibrationIdentity"); s.calibration.asioDeviceId = p.getValue("calibrationAsioDeviceId");
     for (std::size_t i = 0; i < RecorderShortcuts::count; ++i)
         s.shortcuts.keys[i] = p.getValue(RecorderShortcuts::field(RecorderCommand(i)), s.shortcuts.keys[i]);
-    if (s.shortcuts[RecorderCommand::recordStop] == "F10" && s.shortcuts[RecorderCommand::playStop] == "spacebar")
+    // One-time migration of the 0.1.5 defaults (stop = F10). A file written by 0.1.6+ carries shortcutRevision 2, so a
+    // stop key the user deliberately set back to F10 is kept.
+    if (integer("shortcutRevision", 1) < 2 && s.shortcuts[RecorderCommand::recordStop] == "F10" && s.shortcuts[RecorderCommand::playStop] == "spacebar")
         s.shortcuts.keys[std::size_t(RecorderCommand::recordStop)] = "spacebar";
     s.windowState = p.getValue("windowState"); const auto valid = s.validate(); if (valid.wasOk()) out = std::move(s); return valid;
     }

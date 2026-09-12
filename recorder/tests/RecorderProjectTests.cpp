@@ -503,7 +503,7 @@ int runProjectTests()
         {
             TempProject f; RecorderSettings settings(f.root); ok(settings.save().get());
             const auto xml = juce::parseXML(settings.getFile().loadFileAsString()); require(xml != nullptr, "Settings XML fixture");
-            juce::PropertySet properties; properties.restoreFromXml(*xml);
+            juce::PropertySet properties; properties.restoreFromXml(*xml); properties.removeValue("shortcutRevision"); // a 0.1.5 file has no revision
             properties.setValue("shortcutRecordStop", pair.first); properties.setValue("shortcutPlayStop", pair.second);
             require(settings.getFile().replaceWithText(properties.createXml("RECORDER_SETTINGS")->toString()), "Write legacy binding");
             ok(settings.load()); const auto expected = juce::String(pair.first) == "F10" && juce::String(pair.second) == "spacebar" ? "spacebar" : pair.first;
@@ -513,6 +513,15 @@ int runProjectTests()
             const auto savedXml = juce::parseXML(settings.getFile().loadFileAsString()); properties.restoreFromXml(*savedXml);
             require(properties.getValue("shortcutRecordStop") == expected, "Encode retained the old default");
         }
+    });
+    test("shortcut migration runs once: a stop key deliberately set back to F10 survives save and reload", []
+    {
+        TempProject f; RecorderSettings settings(f.root); ok(settings.save().get());
+        auto custom = settings.get();
+        custom.shortcuts.keys[std::size_t(RecorderCommand::recordStop)] = "F10"; custom.shortcuts.keys[std::size_t(RecorderCommand::playStop)] = "spacebar";
+        ok(settings.set(custom)); ok(settings.save().get());
+        RecorderSettings reopened(f.root); ok(reopened.load());
+        require(reopened.get().shortcuts[RecorderCommand::recordStop] == "F10" && reopened.get().shortcuts[RecorderCommand::playStop] == "spacebar", "Repeated migration overwrote the user's F10 stop key");
     });
     test("settings invalid channels duplicate cameras and failed worker writes", []
     {

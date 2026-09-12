@@ -365,7 +365,7 @@ juce::Result RecoveryScanner::run(const juce::File& root, RecoveryReport& report
                     if (expectedResult.editRevision <= report.project.editRevision) return true;
                     report.project = apply(report.project, record.payload); report.lastSavedEditRevision = report.project.editRevision; ++report.replayedEdits; return true;
                 }
-                catch (const std::exception& e) { transactions.erase(record.transaction.toString()); report.warnings.add(e.what()); return false; }
+                catch (const std::exception& e) { transactions.erase(record.transaction.toString()); report.warnings.add(juce::String::fromUTF8(e.what())); return false; }
             });
             report.duplicateTransactions += replay.duplicates;
             if (replay.ignoredTail) { report.ignoredEditTail = true; report.warnings.add("Edit tail ignored: " + replay.reason); break; }
@@ -533,7 +533,7 @@ juce::Result RecoveryScanner::run(const juce::File& root, RecoveryReport& report
                             // A recovery output I/O failure must abort the transaction,
                             // never masquerade as a short camera.
                             if (options.faults) throw;
-                            report.warnings.add(sourcePath + ": " + e.what()); set(details, "error", e.what());
+                            report.warnings.add(sourcePath + ": " + juce::String::fromUTF8(e.what())); set(details, "error", juce::String::fromUTF8(e.what()));
                         }
                     }
                     if (a.availableRanges.empty()) a.relativePath = sourcePath;
@@ -651,8 +651,8 @@ juce::Result RecoveryScanner::run(const juce::File& root, RecoveryReport& report
     }
     catch (const std::exception& e)
     {
-        report.warnings.add(e.what());
-        return juce::Result::fail(e.what());
+        report.warnings.add(juce::String::fromUTF8(e.what()));
+        return juce::Result::fail(juce::String::fromUTF8(e.what()));
     }
 }
 }

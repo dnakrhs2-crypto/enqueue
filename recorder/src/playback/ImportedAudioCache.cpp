@@ -12,6 +12,7 @@ namespace
 {
 using Stage = AudioImportControl::Stage;
 void require(bool ok, const juce::String& reason) { if (!ok) throw std::runtime_error(reason.toStdString()); }
+void require(bool ok, const char* reason) { if (!ok) throw std::runtime_error(reason); } // UTF-8 literal bytes stay intact
 void checked(const juce::Result& r) { require(r.wasOk(), r.getErrorMessage()); }
 
 class TrimmedSource final : public juce::AudioSource
@@ -216,7 +217,7 @@ juce::Result ImportedAudioCache::build(const juce::File& projectDirectory, const
         m->setProperty("Fs", static_cast<int>(Fs)); m->setProperty("samples", juce::int64(cache.samples)); m->setProperty("channels", cache.channels);
         m->setProperty("pcmHash", pcmHash); m->setProperty("peaksHash", peaksHash);
         checked(gocue::SafeFileWrite::writeTextVerified(manifest, juce::JSON::toString(metadata),
-            [&](const juce::String& text) { return juce::JSON::parse(text)["generation"].toString() == generation ? juce::Result::ok() : juce::Result::fail("캐시 manifest 검증 실패"); }));
+            [&](const juce::String& text) { return juce::JSON::parse(text)["generation"].toString() == generation ? juce::Result::ok() : juce::Result::fail(juce::String::fromUTF8("캐시 manifest 검증 실패")); }));
         published = true; control.checkpoint(Stage::ready, 1); result = std::move(cache); return juce::Result::ok();
     }
     catch (const std::exception& e)
@@ -247,9 +248,9 @@ ImportedAudioCache::Worker::Worker(AudioImportRequest request, bool recording)
 ImportedAudioCache::Worker::~Worker() { cancel(); if (thread.joinable()) thread.join(); }
 juce::Result ImportedAudioCache::Worker::takeResult(std::unique_ptr<PreparedAudioImport>& output, CachedImportedAudio& cache)
 {
-    if (!finished() || taken) return juce::Result::fail("오디오 작업이 아직 끝나지 않았거나 결과를 이미 가져왔습니다.");
+    if (!finished() || taken) return juce::Result::fail(juce::String::fromUTF8("오디오 작업이 아직 끝나지 않았거나 결과를 이미 가져왔습니다."));
     if (thread.joinable()) thread.join(); taken = true;
-    if (control.cancelled.load()) { prepared.reset(); return juce::Result::fail("오디오 불러오기를 취소했습니다."); }
+    if (control.cancelled.load()) { prepared.reset(); return juce::Result::fail(juce::String::fromUTF8("오디오 불러오기를 취소했습니다.")); }
     output = std::move(prepared); cache = std::move(cached); return result;
 }
 }

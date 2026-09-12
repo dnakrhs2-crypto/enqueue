@@ -48,7 +48,7 @@ struct FinalMp4Writer::State
             if (patch < std::uint64_t(count)) exportCheck(s.file.write(bytes + patch, static_cast<std::size_t>(std::uint64_t(count) - patch)));
             s.position += count; return count;
         }
-        catch (const std::exception& e) { s.ioError = e.what(); return AVERROR(EIO); }
+        catch (const std::exception& e) { s.ioError = juce::String::fromUTF8(e.what()); return AVERROR(EIO); }
     }
     static std::int64_t seek(void* opaque, std::int64_t offset, int origin)
     {

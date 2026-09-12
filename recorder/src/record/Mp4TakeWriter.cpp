@@ -72,7 +72,7 @@ struct Mp4TakeWriter::State
             if (split) { recovery::hit(s.hook, finalMoov ? "final-moov-write" : "fragment-write"); writePart(bytes + first, size - first); }
             return size;
         }
-        catch (const std::exception& e) { s.ioError = e.what(); return AVERROR(EIO); }
+        catch (const std::exception& e) { s.ioError = juce::String::fromUTF8(e.what()); return AVERROR(EIO); }
     }
     static std::int64_t seek(void* opaque, std::int64_t offset, int origin)
     {

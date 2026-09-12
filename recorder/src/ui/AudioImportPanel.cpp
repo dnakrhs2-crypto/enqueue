@@ -26,7 +26,7 @@ void AudioImportPanel::chooseFile()
 {
     if (recording || isBusy()) return;
     if (chooseFileForTesting) { const auto file = chooseFileForTesting(); if (file != juce::File()) importFile(file); return; }
-    chooser = std::make_unique<juce::FileChooser>("오디오 파일 불러오기", juce::File(), "*.wav;*.wave;*.mp3;*.m4a;*.aac;*.m4b;*.mp4;*.wma");
+    chooser = std::make_unique<juce::FileChooser>(juce::String::fromUTF8("오디오 파일 불러오기"), juce::File(), "*.wav;*.wave;*.mp3;*.m4a;*.aac;*.m4b;*.mp4;*.wma");
     cancelButton.setEnabled(true);
     report(juce::String::fromUTF8("불러올 오디오 파일을 선택하세요."));
     if (onBusyChanged) onBusyChanged();

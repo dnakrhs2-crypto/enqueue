@@ -149,11 +149,11 @@ juce::Result EditJournal::replay(const juce::File& root, RecorderProject& projec
                 if (r.kind == JournalKind::MediaRegistry) ++out.registryCommits; else ++out.appliedEdits;
             }
             catch (const std::exception& e)
-            { out.framing.ignoredTail = true; out.framing.tailReason = e.what(); break; }
+            { out.framing.ignoredTail = true; out.framing.tailReason = juce::String::fromUTF8(e.what()); break; }
         }
         return juce::Result::ok();
     }
-    catch (const std::exception& e) { return juce::Result::fail(e.what()); }
+    catch (const std::exception& e) { return juce::Result::fail(juce::String::fromUTF8(e.what())); }
 }
 juce::Result EditJournal::open(const juce::File& projectRoot, const RecorderProject& durable, const CheckpointInfo& position)
 {
@@ -185,7 +185,7 @@ juce::Result EditJournal::open(const juce::File& projectRoot, const RecorderProj
         directory = child(root, cursor.journalPath);
         check(journal.openEdits(directory, cursor.journalSegment, cursor.journalSequence, options.rotationBytes)); return juce::Result::ok();
     }
-    catch (const std::exception& e) { close(); return juce::Result::fail(e.what()); }
+    catch (const std::exception& e) { close(); return juce::Result::fail(juce::String::fromUTF8(e.what())); }
 }
 juce::Result EditJournal::append(const EditDelta& delta, const RecorderProject& result, JournalKind kind)
 {
@@ -198,7 +198,7 @@ juce::Result EditJournal::append(const EditDelta& delta, const RecorderProject& 
         const auto p = payload(current, delta, result); const auto next = apply(current, p);
         check(journal.appendEditRecord(kind, p, juce::Uuid(delta.transactionId), options.hook)); current = next; return juce::Result::ok();
     }
-    catch (const std::exception& e) { return juce::Result::fail(e.what()); }
+    catch (const std::exception& e) { return juce::Result::fail(juce::String::fromUTF8(e.what())); }
 }
 juce::Result EditJournal::appendRegistry(const RecorderProject& result)
 {
@@ -211,7 +211,7 @@ juce::Result EditJournal::appendRegistry(const RecorderProject& result)
         const auto p = payload(current, d, result); const auto next = apply(current, p, true);
         check(journal.appendEditRecord(JournalKind::MediaRegistry, p, juce::Uuid(d.transactionId), options.hook)); current = next; return juce::Result::ok();
     }
-    catch (const std::exception& e) { return juce::Result::fail(e.what()); }
+    catch (const std::exception& e) { return juce::Result::fail(juce::String::fromUTF8(e.what())); }
 }
 juce::Result EditJournal::checkpoint()
 {
@@ -262,7 +262,7 @@ juce::Result EditJournal::checkpoint()
         }
         return juce::Result::ok();
     }
-    catch (const std::exception& e) { return juce::Result::fail(e.what()); }
+    catch (const std::exception& e) { return juce::Result::fail(juce::String::fromUTF8(e.what())); }
 }
 juce::Result EditJournal::close()
 { const auto r = journal.close(); lock.reset(); return r; }

@@ -999,7 +999,7 @@ juce::Result TakeController::prepare(Config config)
                 return juce::Result::fail("Recording playback requires nonnegative effective input/output latency");
         }
     }
-    catch (const std::exception& e) { return juce::Result::fail(e.what()); }
+    catch (const std::exception& e) { return juce::Result::fail(juce::String::fromUTF8(e.what())); }
     const auto timebase = s.document.setTimebase(device.sampleRate, {unsigned(config.projectFps), 1});
     if (timebase.failed()) return timebase;
     if (s.document.getProject().media->assets.empty())

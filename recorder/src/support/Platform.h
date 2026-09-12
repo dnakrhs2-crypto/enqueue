@@ -75,7 +75,7 @@ inline void jsonSet(juce::var& value, const char* key, const std::string& item)
 }
 inline void jsonSet(juce::var& value, const char* key, const char* item)
 {
-    jsonSet(value, key, juce::var(item));
+    jsonSet(value, key, juce::var(juce::String::fromUTF8(item))); // UTF-8 literals/exception texts, not ASCII
 }
 // Literal zero must remain a JSON number, not bind to the const char* overload
 // as a null pointer. Preserve bool/double as well as signed integer values.

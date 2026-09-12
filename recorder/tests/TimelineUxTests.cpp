@@ -767,6 +767,26 @@ int runTimelineUxTests()
             require(image.isValid() && d.snapshot() == snapshot, "Growing clip mutated document"); timeline.setRecordingPreview(false, 0, 0, {}, s);
         }
     });
+    suite.test("a soloed track keeps its row after its last clip is deleted so it can be un-soloed; un-soloed empty tracks hide", []
+    {
+        RecorderDocument d; adopt(d); TimelineView v(d); v.setSize(1180, 620); v.refresh(false, 0, {});
+        std::vector<Id> mics; for (const auto& t : d.getProject().tracks) if (t.kind == TrackKind::mic) mics.push_back(t.trackId);
+        require(mics.size() == 2, "Fixture needs two microphone tracks");
+        require(v.edits.setTrackListening(mics[0], true).wasOk(), "Solo the first microphone track");
+        // The fixture holds two linked takes: delete every clip on the soloed track (its linked partners go with it).
+        for (int guard = 0; guard < 8; ++guard)
+        {
+            Id clip; for (const auto& t : d.getProject().tracks) if (t.trackId == mics[0] && !t.clips.items().empty()) clip = t.clips.items().front().clipId;
+            if (clip.isEmpty()) break;
+            v.edits.clickClip(clip); require(v.edits.execute(TimelineAction::remove).wasOk(), "Delete a linked take"); v.refresh(false, 0, {});
+        }
+        for (const auto& t : d.getProject().tracks) require(t.clips.items().empty(), "Fixture still has clips after deleting every take");
+        v.refresh(false, 0, {});
+        const auto shown = [&](const Id& id) { const auto& ts = TimelineUxTestAccess::tracks(v); return std::any_of(ts.begin(), ts.end(), [&](const Track& t) { return t.trackId == id; }); };
+        require(shown(mics[0]) && !shown(mics[1]), "Soloed empty track was hidden or the plain empty track stayed");
+        require(v.edits.setTrackListening(mics[0], true).wasOk(), "Un-solo"); v.refresh(false, 0, {});
+        require(!shown(mics[0]), "Empty, un-soloed track stayed visible");
+    });
     suite.test("first recording creates display-only rows from armed logical microphones", []
     {
         RecorderDocument d; TimelineView v(d); v.setSize(1180, 620); const auto before = d.snapshot();

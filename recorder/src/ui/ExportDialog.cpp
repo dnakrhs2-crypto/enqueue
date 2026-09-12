@@ -120,7 +120,7 @@ void ExportDialog::refreshSources()
     {
         if (t.kind == TrackKind::mic)
         {
-            const auto name = ko("마이크 ") + juce::String(t.microphoneIndex + 1) + (t.name.isNotEmpty() ? " · " + t.name : "");
+            const auto name = ko("마이크 ") + juce::String(t.microphoneIndex + 1) + (t.name.isNotEmpty() ? ko(" · ") + t.name : juce::String());
             microphones.push_back({AudioSourceMask::Kind::microphone, t.trackId}); micChoice.addItem(name, int(microphones.size())); listed.add(name);
         }
         if (t.kind == TrackKind::importAudio) for (const auto& c : t.clips.items()) if (p.isActive(c))

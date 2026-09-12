@@ -360,7 +360,7 @@ juce::Result WavTrackWriter::start()
     if (!impl->current.compare_exchange_strong(expected, State::starting)) return juce::Result::fail("WAV writer is single-use");
     std::promise<juce::Result> ready; auto future = ready.get_future();
     try { impl->worker = std::thread([this, ready = std::move(ready)]() mutable { impl->run(std::move(ready)); }); }
-    catch (const std::exception& e) { impl->fail(Error::internal, e.what()); return impl->result(); }
+    catch (const std::exception& e) { impl->fail(Error::internal, juce::String::fromUTF8(e.what())); return impl->result(); }
     return future.get();
 }
 bool WavTrackWriter::tryPush(const std::int32_t* pcm, std::uint32_t frames, std::uint64_t first, std::int64_t qpc) noexcept

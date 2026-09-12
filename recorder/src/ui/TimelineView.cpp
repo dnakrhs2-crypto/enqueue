@@ -86,7 +86,8 @@ void TimelineView::rebuildHeaders()
     for (const auto& t : p.tracks)
     {
         const bool armedNow = recordingPreview.active && t.microphoneIndex >= 0 && t.microphoneIndex < 8 && recordingPreview.microphones[std::size_t(t.microphoneIndex)];
-        if ((t.kind == TrackKind::mic && (hasActiveClips(t) || armedNow)) || (t.kind == TrackKind::importAudio && hasActiveClips(t))) tracks.push_back(t);
+        const bool listening = t.solo || t.mute; // a soloed/muted track still shapes the mix, so its buttons must stay reachable
+        if ((t.kind == TrackKind::mic && (hasActiveClips(t) || armedNow || listening)) || (t.kind == TrackKind::importAudio && (hasActiveClips(t) || listening))) tracks.push_back(t);
     }
     if (recordingPreview.active) for (unsigned slot = 0; slot < recordingPreview.microphones.size(); ++slot)
         if (recordingPreview.microphones[slot] && std::none_of(tracks.begin(), tracks.end(), [slot](const Track& t)
@@ -195,9 +196,9 @@ void TimelineView::updateControls()
         auto& b = *item.second; const auto a = item.first; b.setEnabled(edits.enabled(a));
         juce::String hint = TimelineEditController::text(a);
         if (a == TimelineAction::undo || a == TimelineAction::redo) { hint = edits.historyText(a == TimelineAction::redo); b.setButtonText(hint); hint += a == TimelineAction::redo ? " · Ctrl+Shift+Z" : " · Ctrl+Z"; }
-        if (a == TimelineAction::split) hint += " · " + shortcuts[RecorderCommand::split];
+        if (a == TimelineAction::split) hint += ko(" · ") + shortcuts[RecorderCommand::split];
         if (a == TimelineAction::remove) hint += " · Delete";
-        if (a == TimelineAction::addMarker) hint += " · " + shortcuts[RecorderCommand::marker];
+        if (a == TimelineAction::addMarker) hint += ko(" · ") + shortcuts[RecorderCommand::marker];
         if (edits.isLocked() && a != TimelineAction::addMarker) hint = ko("녹화 중에는 구조 편집을 사용할 수 없습니다.");
         b.setTooltip(hint);
     }

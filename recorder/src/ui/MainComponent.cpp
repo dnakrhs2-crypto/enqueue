@@ -192,7 +192,7 @@ void MainComponent::refresh()
     if (document.getFile() == juce::File() && !closeAction)
         message = ko("프로젝트 > 새 프로젝트에서 저장할 폴더를 선택하세요.")
             + (message.isNotEmpty() ? ko(" · ") + message : juce::String());
-    if (exceptionBanner.isNotEmpty()) message = exceptionBanner + (message.isNotEmpty() ? " · " + message : juce::String());
+    if (exceptionBanner.isNotEmpty()) message = exceptionBanner + (message.isNotEmpty() ? ko(" · ") + message : juce::String());
     if (session.notice == delayed && !message.contains(delayed)) message = delayed + " · " + message;
     const auto takeStatus = session.takeController().statusText();
     const auto status = importBusy() ? ko("오디오 불러오는 중") : session.takeController().state() == TakeController::State::idle ? (fileWork.valid() ? ko("저장 중") : document.getStatusText()) : takeStatus;

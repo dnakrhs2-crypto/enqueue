@@ -184,6 +184,9 @@ juce::Result RecorderSession::configure(UserSettings settings)
                     auto cam = std::make_unique<LiveCamera>(); cam->runtime = std::make_unique<MfRuntime>();
                     cam->mode = CameraMode::parse(settings.cameraModes[i].toStdString());
                     if (cam->mode.width != 1920 || cam->mode.height != 1080) throw std::runtime_error("1080p 입력 모드를 선택하세요.");
+                    // 0.1.6: only 30/60 fps modes are offered; a slower mode saved by an older version must be re-chosen (the settings
+                    // window replaces it with the sensible default) instead of silently capturing at 15/20 fps.
+                    if (!isStandardFrameRate(cam->mode.fps)) throw std::runtime_error("입력 모드를 30 또는 60fps로 다시 선택하세요 (설정 > 카메라).");
                     cam->telemetry = std::make_shared<CaptureTelemetry>(cam->mode.fps, i ? "cam2" : "cam1");
                     cam->pool = std::make_shared<VideoSurfacePool>(1920, 1080);
                     cam->capture = std::make_unique<MfCameraCapture>(cam->telemetry, *cam->pool,
@@ -581,7 +584,8 @@ void RecorderSession::scheduleDerived()
         });
         if (accepted) derivedKeys.insert(key);
     }
-    for (const auto& asset : p->media->assets) if (asset.kind == AssetKind::camera && !asset.relativePath.contains(".recording.") && !asset.availableRanges.empty())
+    // Camera thumbnails are decoded only for a consumer (the 0.1.6 timeline no longer shows them).
+    if (onThumbnails) for (const auto& asset : p->media->assets) if (asset.kind == AssetKind::camera && !asset.relativePath.contains(".recording.") && !asset.availableRanges.empty())
     {
         const auto key = p->projectId + "/thumb/" + asset.assetId + "/" + juce::String(asset.mediaGeneration);
         if (derivedKeys.count(key)) continue;

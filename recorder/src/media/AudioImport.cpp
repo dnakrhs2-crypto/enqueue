@@ -25,6 +25,8 @@ namespace
 using Stage = AudioImportControl::Stage;
 void require(bool ok, const juce::String& message)
 { if (!ok) throw std::runtime_error(message.toStdString()); }
+// UTF-8 literals must not pass through juce::String(const char*) (ASCII): keep the bytes as they are.
+void require(bool ok, const char* message) { if (!ok) throw std::runtime_error(message); }
 void checked(const juce::Result& r) { require(r.wasOk(), r.getErrorMessage()); }
 
 std::unique_ptr<juce::AudioFormatReader> openNativeMf(const juce::File& file)
@@ -176,7 +178,7 @@ void auditMediaFoundation(const juce::File& file, AudioImportControl& control, I
 {
     using Microsoft::WRL::ComPtr;
     const auto hr = [](HRESULT value)
-    { require(SUCCEEDED(value), "Media Foundation 오디오 검증 실패 (HRESULT 0x" + juce::String::toHexString(static_cast<int>(value)) + "). 지원하지 않는 codec/DRM 또는 손상된 파일일 수 있습니다."); };
+    { require(SUCCEEDED(value), juce::String::fromUTF8("Media Foundation 오디오 검증 실패 (HRESULT 0x") + juce::String::toHexString(static_cast<int>(value)) + "). 지원하지 않는 codec/DRM 또는 손상된 파일일 수 있습니다."); };
     ComPtr<IMFAttributes> attributes; hr(MFCreateAttributes(&attributes, 1)); hr(attributes->SetUINT32(MF_LOW_LATENCY, FALSE));
     ComPtr<IMFSourceReader> reader; hr(MFCreateSourceReaderFromURL(file.getFullPathName().toWideCharPointer(), attributes.Get(), &reader));
     hr(reader->SetStreamSelection(MF_SOURCE_READER_ALL_STREAMS, FALSE)); hr(reader->SetStreamSelection(MF_SOURCE_READER_FIRST_AUDIO_STREAM, TRUE));

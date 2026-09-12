@@ -62,7 +62,7 @@ public:
         view.onListeningChanged = [this] { rebuild = true; };
         view.onGlobalKey = [this](const juce::KeyPress& key, juce::Component* origin)
         {
-            const auto command = shortcutCommand(settings.shortcuts, key, origin); if (!command) return false;
+            const auto command = shortcutCommand(settings.shortcuts, key, origin, recording); if (!command) return false; // shared Space: stop while recording
             switch (*command)
             {
                 case RecorderCommand::recordStart: if (!recording) startRecording(); break;
@@ -184,7 +184,7 @@ private:
             const auto seconds = int(configuration["seconds"]);
             if (seconds > 0 && double(now - started) / qpcFrequency() >= seconds) writeReport();
         }
-        catch (const std::exception& e) { failure = e.what(); writeReport(); }
+        catch (const std::exception& e) { failure = juce::String::fromUTF8(e.what()); writeReport(); }
     }
     void writeReport()
     {
