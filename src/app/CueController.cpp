@@ -245,9 +245,12 @@ double CueController::remainingSecondsOf (const juce::Uuid& id) const
     return -1.0;
 }
 
-void CueController::stopGroup (const juce::Uuid& groupId, int fadeMs)
+void CueController::stopGroup (const juce::Uuid& groupId, int fadeMs, bool previousRunOnly)
 {
-    cancelPendingFor (groupId);
+    if (previousRunOnly)
+        cancelPreviousRun (groupId);
+    else
+        cancelPendingFor (groupId);
     playlists.erase (groupId);
     int index = -1;
     auto* list = document.listContaining (groupId, &index);
@@ -651,11 +654,11 @@ void CueController::clearDucks()
     ducks.clear();
 }
 
-void CueController::track (int schedulerId, const juce::Uuid& owner, PendingKind kind)
+void CueController::track (int schedulerId, const juce::Uuid& owner, PendingKind kind, int runId)
 {
     // forget entries the scheduler has already run
     pending.erase (std::remove_if (pending.begin(), pending.end(), [this] (const Pending& p) { return ! scheduler.isPending (p.id); }), pending.end());
-    pending.push_back ({ schedulerId, owner, kind });
+    pending.push_back ({ schedulerId, owner, kind, runId });
 }
 
 int CueController::getNumPending() const
@@ -686,11 +689,11 @@ void CueController::cancelPending()
     pending.clear();
 }
 
-void CueController::cancelPendingFor (const juce::Uuid& cueId, Cancel scope, int beforeSchedulerId)
+void CueController::cancelPendingFor (const juce::Uuid& cueId, Cancel scope, int keepRunId)
 {
     auto matches = [&] (const Pending& p)
     {
-        if (p.owner != cueId || p.id >= beforeSchedulerId)
+        if (p.owner != cueId || (keepRunId != 0 && p.runId == keepRunId))
             return false;
 
         switch (scope)
@@ -714,9 +717,10 @@ void CueController::cancelPendingFor (const juce::Uuid& cueId, Cancel scope, int
 
 void CueController::cancelPreviousRun (const juce::Uuid& cueId)
 {
-    // a scheduled start of this cue is firing: the sequence walk that scheduled it put the new run's follow on right behind
-    // the schedule (a higher scheduler id) - that follow belongs to the run starting now, only the older entries go
-    cancelPendingFor (cueId, Cancel::all, firingStartCue == cueId ? firingStartId : std::numeric_limits<int>::max());
+    // a scheduled start of this cue is firing: the sequence walk that scheduled it put the new run's follow on for it (tagged
+    // with the start's id) - that follow belongs to the run starting now; everything else of the cue goes (an earlier run's
+    // follow, and the follow of a direct GO in between, which this start replaces - later is not the same as this run's)
+    cancelPendingFor (cueId, Cancel::all, firingStartCue == cueId ? firingStartId : 0);
 }
 
 //==============================================================================
@@ -892,7 +896,7 @@ CueController::GoResult CueController::triggerImpl (const Cue& cue, bool auditio
                     return GoResult::ignored;
 
                 case SecondTriggerAction::hardStopRestart:
-                    stopGroup (cue.id, 0);
+                    stopGroup (cue.id, 0, true);   // the follow of the run starting now (put on by the walk that scheduled it) stays
                     break;
             }
         }
@@ -1280,12 +1284,15 @@ CueController::GoResult CueController::fire (const juce::Uuid& cueId, bool audit
     return startById (cueId, audition);
 }
 
-CueController::GoResult CueController::scheduleStart (const juce::Uuid& id, double atSeconds, bool audition)
+CueController::GoResult CueController::scheduleStart (const juce::Uuid& id, double atSeconds, bool audition, int* scheduledId)
 {
+    if (scheduledId != nullptr)
+        *scheduledId = 0;
+
     if (atSeconds <= clock())
         return startById (id, audition);
 
-    // the start is told its own scheduler id: a restart it causes must spare what the walk puts on behind this schedule
+    // the start is told its own scheduler id: a restart it causes must spare what the walk puts on for this very run
     auto startId = std::make_shared<int> (0);
     *startId = scheduler.schedule (atSeconds, [this, id, audition, startId]
                                               {
@@ -1293,7 +1300,11 @@ CueController::GoResult CueController::scheduleStart (const juce::Uuid& id, doub
                                                   const juce::ScopedValueSetter<juce::Uuid> firingCue (firingStartCue, id);
                                                   startById (id, audition);
                                               });
-    track (*startId, id);
+    track (*startId, id, PendingKind::start, *startId);
+
+    if (scheduledId != nullptr)
+        *scheduledId = *startId;
+
     return GoResult::started;
 }
 
@@ -1419,7 +1430,8 @@ int CueController::fireSequence (CueList& cues, int index, bool audition)
             }
         }
 
-        const auto result = scheduleStart (cue.id, startAt, audition);
+        int runId = 0;   // the scheduled start's id: the follow put on below is that run's own (a restart from it keeps it)
+        const auto result = scheduleStart (cue.id, startAt, audition, &runId);
 
         if (result == GoResult::ignored)
             return next;   // the second-trigger rule acted on (or kept) the running instance: its own sequence stands, no new one is put behind it
@@ -1450,7 +1462,7 @@ int CueController::fireSequence (CueList& cues, int index, bool audition)
 
                                         if (auto* nextList = document.listContaining (nextId, &nextIndex))
                                             fireSequence (*nextList, nextIndex, audition);
-                                    }), id, PendingKind::observer);
+                                    }), id, PendingKind::observer, runId);
 
         return sequenceEnd (cues, index);
     }

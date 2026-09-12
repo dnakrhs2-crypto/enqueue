@@ -394,6 +394,30 @@ public:
             engine.reapFinishedPlayers();
         }
 
+        beginTest ("a release ramp sent before the first block still starts from the ducked level and climbs from there");
+        {
+            Cue c;
+            c.file = tone;
+            expect (engine.play (c));
+            render (engine, out, 1);
+            const float full = rms (out, 0);
+            engine.stopAll();
+            render (engine, out, 3);
+            engine.reapFinishedPlayers();
+
+            AudioEngine::PlayOptions ducked;
+            ducked.duckDb = -20.0;                                    // gain 0.1
+            expect (engine.play (c, ducked, nullptr));
+            engine.setDuckDb (c.id, 0.0, 1.0);                       // the duck cue ended before the first block: back up over 1 s
+            render (engine, out, 1);
+            expect (rms (out, 0) < full * 0.15f, "the first block did not start from the ducked level");   // ~0.1, on its way up
+            render (engine, out, 41);                                 // block 43: the ramp is about half way (0.1 -> 1.0 linear in gain)
+            expectWithinAbsoluteError (rms (out, 0), 0.3536f * 0.544f, 0.02f);
+            engine.stopAll();
+            render (engine, out, 3);
+            engine.reapFinishedPlayers();
+        }
+
         beginTest ("missing or unassigned files are rejected with a message");
         {
             Cue missing;

@@ -1802,6 +1802,74 @@ public:
             document.cues.remove (fi);
         }
 
+        beginTest ("a scheduled start's restart keeps its own follow only: a direct GO's follow of the run it replaces goes");
+        {
+            // a (auto-continue, post-wait 0.5) -> W2 (wait 1 s, hardStopRestart, auto-follow) -> b. a's walk schedules W2 at 0.5
+            // with a follow of its own; a direct GO of W2 at 0.1 starts the wait with another follow; the scheduled start at 0.5
+            // restarts the wait: only the walk's follow may remain, or b starts twice
+            Cue w;
+            w.name = "W2"; w.type = CueType::control; w.control.kind = ControlKind::wait; w.control.seconds = 1.0;
+            w.continueMode = ContinueMode::autoFollow; w.secondTrigger = SecondTriggerAction::hardStopRestart;
+            const int wi = document.cues.add (w, 1);   // a, W2, b
+            document.cues.update (0, [] (Cue& x) { x.continueMode = ContinueMode::autoContinue; x.postWaitSeconds = 0.5; });
+            now += 1.0;
+            controller.startRecording();
+            controller.fireSequence (0);                 // a now, W2 at 0.5 (+ its follow)
+            render (engine, scheduler, now, out, 9);     // 0.1 s
+            controller.fireSequence (wi);                // a direct GO: the wait starts now (0.1 .. 1.1), with a follow of its own
+            expect (controller.isCueActive (w.id));
+            render (engine, scheduler, now, out, 43);    // 0.6 s: the scheduled start restarted the wait (0.5 .. 1.5)
+            expect (controller.isCueActive (w.id));
+            render (engine, scheduler, now, out, 86);    // 1.6 s: over
+            expect (! controller.isCueActive (w.id));
+            expect (engine.isPlaying (b.id));
+            int followStarts = 0;
+
+            for (const auto& r : controller.stopRecording())
+                if (r.cueId == b.id)
+                    ++followStarts;
+
+            expectEquals (followStarts, 1);              // one follow fired, not both
+            stopEverything();
+            document.cues.remove (wi);
+            document.cues.update (0, [] (Cue& x) { x.continueMode = ContinueMode::none; x.postWaitSeconds = 0.0; });
+        }
+
+        beginTest ("a group with a pre-wait restarted while its children play keeps the follow of the new run");
+        {
+            Cue g;
+            g.name = "GR"; g.type = CueType::group; g.group.mode = GroupMode::timeline; g.preWaitSeconds = 0.5;
+            g.continueMode = ContinueMode::autoFollow;   // -> after-gr
+            const int gi = document.cues.add (g);
+            Cue x;
+            x.name = "grx"; x.file = tone; x.parentId = g.id;
+            document.cues.add (x);
+            Cue after;
+            after.name = "after-gr"; after.file = tone;
+            document.cues.add (after);
+            now += 1.0;
+            controller.startRecording();
+            controller.fireSequence (gi);                // the group at 0.5
+            render (engine, scheduler, now, out, 65);    // 0.75 s: x plays
+            expect (engine.isPlaying (x.id));
+            controller.fireSequence (gi);                // restart: the group again at ~1.27
+            render (engine, scheduler, now, out, 60);    // 1.45 s: restarted (x again)
+            expect (engine.isPlaying (x.id));
+            expect (! engine.isPlaying (after.id));
+            engine.stop (x.id);
+            render (engine, scheduler, now, out, 3);
+            expect (engine.isPlaying (after.id), "the follow of the restarted group did not fire");
+            int followStarts = 0;
+
+            for (const auto& r : controller.stopRecording())
+                if (r.cueId == after.id)
+                    ++followStarts;
+
+            expectEquals (followStarts, 1);
+            stopEverything();
+            document.cues.removeIndices ({ document.cues.indexOf (g.id), document.cues.indexOf (after.id) });
+        }
+
         beginTest ("played cues are remembered for the second colour until reset");
         {
             controller.resetAll();
