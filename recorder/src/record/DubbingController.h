@@ -72,6 +72,10 @@ public:
     // reference AAC use independent readers of this same selected track mapping.
     static std::unique_ptr<IPlaybackBlockProvider> prepareReferenceAudio(const RecorderProject&,
         const juce::File& projectDirectory, const Id& audioTrack);
+    // Normal recording listens to the frozen timeline mix from P, including all
+    // audible imported/microphone lanes. Worker only; the tail renders silence.
+    static std::unique_ptr<IPlaybackBlockProvider> prepareTimelineAudio(const RecorderProject&,
+        const juce::File& projectDirectory, Sample Pstart);
 private:
     struct Impl;
     std::unique_ptr<Impl> impl;

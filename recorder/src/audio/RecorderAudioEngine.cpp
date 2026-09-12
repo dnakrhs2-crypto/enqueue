@@ -70,6 +70,15 @@ struct RecorderAudioEngine::Impl final : juce::AudioIODeviceCallback
             mapping(recordMics ? parent.mappings() : std::vector<JournalDeviceMapping>{}), ioHealth(config.faults), journal(&ioHealth),
             dubReference(std::move(dub)), referenceStart(pstart), inputCorrection(correction), dubbing(dubReference != nullptr)
         {
+            if (config.alignToOutput)
+            {
+                if (dubbing || device.inputLatency < 0 || device.outputLatency < 0
+                    || (parent.outputs.mono ? parent.outputs.monoChannel < 0 : parent.outputs.left < 0 && parent.outputs.right < 0)
+                    || std::abs(double(config.inputResidualSamples)) > double(device.sampleRate) * 10)
+                    throw std::invalid_argument("Invalid recording input latency correction");
+                inputCorrection = std::int64_t(device.inputLatency) + config.inputResidualSamples;
+                if (inputCorrection < 0) throw std::invalid_argument("Negative effective recording input latency");
+            }
             if (config.projectDirectory == juce::File() || config.takeId.isNull()) throw std::invalid_argument("Missing audio take directory/ID");
             if (config.microphoneAssetIds.empty()) for (std::size_t i = 0; i < logical.size(); ++i) config.microphoneAssetIds.push_back(newId());
             if (config.microphoneAssetIds.size() != logical.size()) throw std::invalid_argument("Audio asset IDs do not match armed microphones");
@@ -391,7 +400,7 @@ struct RecorderAudioEngine::Impl final : juce::AudioIODeviceCallback
         for (unsigned i = 0; i < std::min(count, unsigned(nativeTypes.size())); ++i) if (views) nativeTypes[i] = views[i].format.asioSampleType;
         bridge.enqueueStamp(stamp);
         auto inputStamp = stamp;
-        if (take && take->dubbing)
+        if (take && (take->dubbing || take->config.alignToOutput))
         {
             const auto corrected = clock_math::subtract(stamp.samplePosition, take->inputCorrection);
             if (!corrected) { take->signal(Error::clockDiscontinuity); boundary = Error::clockDiscontinuity; }
@@ -586,23 +595,25 @@ juce::Result RecorderAudioEngine::openDevice(const juce::String& name, unsigned 
     s.closePhysical();
     if (old.sampleRate)
     {
-        const auto restored = old.synthetic ? openSynthetic(old.sampleRate, old.bufferFrames, old.physicalInputs, old.physicalOutputs)
+        const auto restored = old.synthetic ? openSynthetic(old.sampleRate, old.bufferFrames, old.physicalInputs, old.physicalOutputs, old.inputLatency, old.outputLatency)
                                             : attempt(old.name, old.sampleRate, int(old.bufferFrames));
         if (restored.failed()) { s.info = {}; return juce::Result::fail(result.getErrorMessage() + "; previous device restore failed: " + restored.getErrorMessage()); }
     }
     else s.info = {};
     return result;
 }
-juce::Result RecorderAudioEngine::openSynthetic(unsigned Fs, unsigned block, int ins, int outs)
+juce::Result RecorderAudioEngine::openSynthetic(unsigned Fs, unsigned block, int ins, int outs, int inputLatency, int outputLatency)
 {
     auto& s = *impl;
     if (s.busy()) return failure("테이크가 끝난 뒤 샘플레이트를 변경하세요.");
-    if (Fs < 8000 || Fs > 768000 || !block || block > 16384 || ins < 0 || ins > 256 || outs < 1 || outs > 256)
+    if (Fs < 8000 || Fs > 768000 || !block || block > 16384 || ins < 0 || ins > 256 || outs < 1 || outs > 256
+        || inputLatency < 0 || outputLatency < 0)
         return failure("Invalid synthetic device configuration");
     for (auto p : s.selectedInputs()) if (p >= ins) return failure("Synthetic physical input unavailable");
     for (auto p : {s.outputs.left, s.outputs.right, s.outputs.monoChannel}) if (p >= outs) return failure("Synthetic physical output unavailable");
     s.closePhysical(); s.detach(); s.session.reset();
     s.info = {}; s.info.name = "synthetic-native-PCM"; s.info.sampleRate = Fs; s.info.bufferFrames = block;
+    s.info.inputLatency = inputLatency; s.info.outputLatency = outputLatency;
     s.info.physicalInputs = ins; s.info.physicalOutputs = outs; s.info.synthetic = true; s.prepareDeviceState();
     return juce::Result::ok();
 }
@@ -622,12 +633,12 @@ juce::Result RecorderAudioEngine::setInputMap(const std::array<int, 8>& map, con
     // The old device must stop before changing any callback-visible map.
     s.closePhysical(); s.inputs = map; s.stereoSlots = stereo;
     if (!old.sampleRate) return juce::Result::ok();
-    auto result = old.synthetic ? openSynthetic(old.sampleRate, old.bufferFrames, old.physicalInputs, old.physicalOutputs)
+    auto result = old.synthetic ? openSynthetic(old.sampleRate, old.bufferFrames, old.physicalInputs, old.physicalOutputs, old.inputLatency, old.outputLatency)
                                : openDevice(old.name, old.sampleRate, int(old.bufferFrames));
     if (result.failed())
     {
         s.closePhysical(); s.inputs = previous; s.stereoSlots = previousStereo;
-        const auto restored = old.synthetic ? openSynthetic(old.sampleRate, old.bufferFrames, old.physicalInputs, old.physicalOutputs)
+        const auto restored = old.synthetic ? openSynthetic(old.sampleRate, old.bufferFrames, old.physicalInputs, old.physicalOutputs, old.inputLatency, old.outputLatency)
                                            : openDevice(old.name, old.sampleRate, int(old.bufferFrames));
         if (restored.failed()) return juce::Result::fail(result.getErrorMessage() + "; map restore failed: " + restored.getErrorMessage());
     }
@@ -812,6 +823,7 @@ std::int64_t RecorderAudioEngine::currentSample() const noexcept { return impl->
 std::int64_t RecorderAudioEngine::startSample() const noexcept { return impl->session ? impl->session->n0.load() : -1; }
 bool RecorderAudioEngine::startCommitted() const noexcept { return impl->session && impl->session->scheduledStart.load(std::memory_order_acquire) >= 0; }
 std::int64_t RecorderAudioEngine::stopSample() const noexcept { return impl->session ? impl->session->nstop.load() : -1; }
+std::int64_t RecorderAudioEngine::requestedStopSample() const noexcept { return impl->session ? impl->session->requestStop.load(std::memory_order_acquire) : -1; }
 std::int64_t RecorderAudioEngine::acceptedEnd() const noexcept { return impl->session ? impl->session->end.load() : -1; }
 RecorderAudioEngine::Error RecorderAudioEngine::error() const noexcept { return impl->session ? impl->session->fatal.load() : Error::none; }
 bool RecorderAudioEngine::referenceFailed() const noexcept { return impl->session && impl->session->referenceError.load(); }
@@ -833,6 +845,7 @@ juce::var RecorderAudioEngine::telemetry() const
     }
     jsonSet(v, "device", s->device.name); jsonSet(v, "sampleRate", int(s->device.sampleRate)); jsonSet(v, "bufferFrames", int(s->device.bufferFrames));
     jsonSet(v, "inputLatencySamples", s->device.inputLatency); jsonSet(v, "outputLatencySamples", s->device.outputLatency);
+    if (s->config.alignToOutput) { jsonSet(v, "alignedToOutput", true); jsonSet(v, "inputCorrectionSamples", s->inputCorrection); }
     jsonSet(v, "activeIndexToPhysicalIndex", activeMap); jsonSet(v, "tracks", tracks);
     jsonSet(v, "N0", jsonInt(s->n0.load())); jsonSet(v, "Nstop", jsonInt(s->nstop.load())); jsonSet(v, "convertedSamples", jsonInt(s->converted));
     jsonSet(v, "rawQueueBlocks", jsonInt(s->raw.capacity())); jsonSet(v, "rawQueueHighWater", jsonInt(s->raw.highWater()));

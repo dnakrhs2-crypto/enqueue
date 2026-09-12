@@ -35,36 +35,48 @@ void writeDurable(const juce::File& f, const juce::var& value)
 class SelectedAudio final : public IPlaybackBlockProvider
 {
 public:
-    SelectedAudio(const RecorderProject& project, const juce::File& directory, const Id& track)
+    SelectedAudio(const RecorderProject& project, const juce::File& directory, const Id& track, Sample from = 0)
         : renderer(project.Fs, 4096), rate(project.Fs)
     {
         const auto audioPlan = compileAudioRenderPlan(project);
         auto clips = audioPlan->timeline->activeClips;
-        clips.erase(std::remove_if(clips.begin(), clips.end(), [&](const auto& c) { return c.trackId != track; }), clips.end());
+        if (track.isNotEmpty()) clips.erase(std::remove_if(clips.begin(), clips.end(), [&](const auto& c) { return c.trackId != track; }), clips.end());
         auto selected = std::make_shared<CompiledRenderPlan>(project, std::move(clips));
         selected->timelineEnd = audioPlan->timeline->timelineEnd;
         selected->tracks = audioPlan->timeline->tracks;
         selected->microfadeBoundaries = audioPlan->timeline->microfadeBoundaries;
-        selected->tracks.erase(std::remove_if(selected->tracks.begin(), selected->tracks.end(),
-            [&](const auto& t) { return t.trackId != track; }), selected->tracks.end());
-        need(selected->tracks.size() == 1 && selected->tracks[0].kind == TrackKind::importAudio,
-             "Select a completed audio track for dubbing");
-        selected->tracks[0].audible = !selected->tracks[0].mute;
-        selected->audibleTrackCount = selected->tracks[0].audible ? 1 : 0;
+        if (track.isNotEmpty())
+        {
+            selected->tracks.erase(std::remove_if(selected->tracks.begin(), selected->tracks.end(),
+                [&](const auto& t) { return t.trackId != track; }), selected->tracks.end());
+            need(selected->tracks.size() == 1 && selected->tracks[0].kind == TrackKind::importAudio,
+                 "Select a completed audio track for dubbing");
+            selected->tracks[0].audible = !selected->tracks[0].mute;
+        }
+        else
+        {
+            need(from >= 0, "Negative recording playback position");
+            // Keep even empty lanes: listeningMix's gain and solo rules must
+            // remain identical to ordinary timeline playback.
+            for (auto& lane : selected->tracks)
+                lane.spans.erase(std::remove_if(lane.spans.begin(), lane.spans.end(),
+                    [from](const auto& span) { return span.timeline.start + span.timeline.length <= from; }), lane.spans.end());
+        }
         AudioRenderPlan prepared; prepared.timeline = selected;
         for (const auto& asset : audioPlan->sources)
-            if (std::any_of(selected->activeClips.begin(), selected->activeClips.end(),
-                [&](const auto& c) { return c.assetId == asset.assetId; })) prepared.sources.push_back(asset);
+            if (std::any_of(selected->tracks.begin(), selected->tracks.end(), [&](const auto& lane)
+                { return lane.audible && std::any_of(lane.spans.begin(), lane.spans.end(),
+                    [&](const auto& span) { return !span.isGap() && span.assetId == asset.assetId; }); })) prepared.sources.push_back(asset);
         std::vector<CachedImportedAudio> caches; caches.reserve(prepared.sources.size());
         std::vector<ImportedAudioBinding> bindings; AudioImportControl control;
         for (const auto& asset : prepared.sources)
         {
+            if (asset.kind != AssetKind::importAudio) continue;
             caches.emplace_back();
             check(ImportedAudioCache::build(directory, asset, AudioImport::loadInfo(directory, asset), rate, control, caches.back()));
             bindings.push_back({asset.assetId, asset.mediaGeneration, &caches.back()});
         }
-        // One selected lane: the common renderer applies its mute, source ranges,
-        // gaps and microfade endpoints exactly as playback and export do.
+        // The common renderer applies mute/solo, source ranges, gaps and fades.
         renderer.setPlan(std::move(selected), openAudioSources(prepared, directory, bindings));
     }
     void render(float* stereo, unsigned frames, std::int64_t first, unsigned Fs) override
@@ -480,7 +492,9 @@ DubbingController::DubbingController(RecorderDocument& d, RecorderAudioEngine& a
     : impl(std::make_unique<Impl>(d, a, t, std::move(f), std::move(af))) {}
 DubbingController::~DubbingController() = default;
 std::unique_ptr<IPlaybackBlockProvider> DubbingController::prepareReferenceAudio(const RecorderProject& p, const juce::File& dir, const Id& track)
-{ return std::make_unique<SelectedAudio>(p, dir, track); }
+{ need(track.isNotEmpty(), "Select a completed audio track for dubbing"); return std::make_unique<SelectedAudio>(p, dir, track); }
+std::unique_ptr<IPlaybackBlockProvider> DubbingController::prepareTimelineAudio(const RecorderProject& p, const juce::File& dir, Sample at)
+{ return std::make_unique<SelectedAudio>(p, dir, Id{}, at); }
 juce::Result DubbingController::prepare(Config c)
 {
     auto& s = *impl;
