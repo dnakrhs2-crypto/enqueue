@@ -644,7 +644,7 @@ int runTimelineUxTests()
         for (std::size_t i = 0; i < RecorderShortcuts::count; ++i) legacy.removeValue(RecorderShortcuts::field(RecorderCommand(i)));
         require(settings.getFile().replaceWithText(legacy.createXml("RECORDER_SETTINGS")->toString()), "Legacy fixture write");
         require(loaded.load().wasOk() && loaded.get().shortcuts.keys == RecorderShortcuts{}.keys, "Legacy defaults missing");
-        legacy.setValue("shortcutRecordStart", "F10"); require(settings.getFile().replaceWithText(legacy.createXml("RECORDER_SETTINGS")->toString()), "Invalid fixture write");
+        legacy.setValue("shortcutRecordStart", "spacebar"); require(settings.getFile().replaceWithText(legacy.createXml("RECORDER_SETTINGS")->toString()), "Invalid fixture write");
         require(loaded.load().failed() && loaded.get().shortcuts.keys == RecorderShortcuts{}.keys, "Failed load damaged working bindings");
     });
     return suite.result("timeline-ux");
