@@ -40,11 +40,18 @@ juce::Result validateCameraSettings(const UserSettings& s, const std::vector<Cam
     const auto basic = s.validate(); if (basic.failed()) return basic;
     for (std::size_t i = 0; i < 2; ++i) if (s.cameraEnabled[i])
     {
+        const auto missing = k(i == 0 ? "캠1 장치와 입력 모드를 선택하세요." : "캠2 장치와 입력 모드를 선택하세요.");
+        if (s.cameraDeviceIds[i].isEmpty() || s.cameraModes[i].isEmpty()) return juce::Result::fail(missing);
+        CameraMode saved;
+        try { saved = CameraMode::parse(s.cameraModes[i].toStdString()); }
+        catch (const std::invalid_argument&) { return juce::Result::fail(missing); }
+        if (saved.width != 1920 || saved.height != 1080 || !isStandardFrameRate(saved.fps))
+            return juce::Result::fail(k(i == 0 ? "캠1 입력 모드를 30 또는 60fps로 선택하세요." : "캠2 입력 모드를 30 또는 60fps로 선택하세요."));
         bool found = false;
         for (const auto& camera : cameras) if (camera.symbolicLink == s.cameraDeviceIds[i].toStdString())
             for (const auto& mode : camera.modes)
                 if (mode.width == 1920 && mode.height == 1080 && mode.text() == s.cameraModes[i].toStdString()) found = true;
-        if (!found) return juce::Result::fail(k(i == 0 ? "캠1 장치와 입력 모드를 선택하세요." : "캠2 장치와 입력 모드를 선택하세요."));
+        if (!found) return juce::Result::fail(missing);
     }
     return juce::Result::ok();
 }

@@ -86,6 +86,12 @@ Rational Rational::parse(const std::string& text)
     return {parsePositive(text.substr(0, slash)), parsePositive(text.substr(slash + 1))};
 }
 std::string Rational::text() const { return std::to_string(numerator) + "/" + std::to_string(denominator); }
+bool isStandardFrameRate(const Rational& rate) noexcept
+{
+    if (rate.denominator == 0) return false;
+    const auto fps = rate.value();
+    return (fps >= 29.5 && fps <= 30.5) || (fps >= 59.5 && fps <= 60.5);
+}
 const char* subtypeName(CaptureSubtype subtype) noexcept
 {
     switch (subtype) { case CaptureSubtype::nv12: return "NV12"; case CaptureSubtype::yuy2: return "YUY2"; default: return "MJPEG"; }
@@ -102,7 +108,7 @@ int preferred1080pMode(const std::vector<CameraMode>& modes, unsigned projectFps
     int best = -1; double bestScore = 0;
     for (std::size_t i = 0; i < modes.size(); ++i)
     {
-        const auto& m = modes[i]; if (m.width != 1920 || m.height != 1080) continue;
+        const auto& m = modes[i]; if (m.width != 1920 || m.height != 1080 || !isStandardFrameRate(m.fps)) continue;
         const double distance = m.fps.value() - double(projectFps);
         const double score = (reachesProjectFps(m, projectFps) ? 0.0 : 1000.0) + (distance < 0 ? -distance : distance) * 10.0
             + (m.subtype == CaptureSubtype::mjpeg ? 0.0 : m.subtype == CaptureSubtype::nv12 ? 1.0 : 2.0);

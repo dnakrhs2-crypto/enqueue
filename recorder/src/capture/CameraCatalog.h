@@ -14,6 +14,8 @@ struct Rational
     double periodMs() const noexcept { return 1000.0 * denominator / numerator; }
     bool operator==(Rational rhs) const noexcept { return numerator == rhs.numerator && denominator == rhs.denominator; }
 };
+// Camera input rates within 0.5 fps of 30 or 60, including 29.97 and 59.94.
+bool isStandardFrameRate(const Rational&) noexcept;
 enum class CaptureSubtype { nv12, yuy2, mjpeg };
 const char* subtypeName(CaptureSubtype) noexcept;
 GUID subtypeGuid(CaptureSubtype) noexcept;
@@ -37,7 +39,7 @@ struct CameraMode
 // "1080p 60fps · MJPEG" for people; text() stays the stored/parsed form.
 juce::String friendlyModeText(const CameraMode&);
 // Index of the sensible 1080p default for a project fps: reaches the fps (59.94 counts for 60), closest to it,
-// MJPEG before NV12 before YUY2 (USB bandwidth). -1 when the device has no 1080p mode.
+// MJPEG before NV12 before YUY2 (USB bandwidth). -1 when no 1080p 30/60 fps mode is available.
 int preferred1080pMode(const std::vector<CameraMode>& modes, unsigned projectFps) noexcept;
 bool reachesProjectFps(const CameraMode&, unsigned projectFps) noexcept;
 struct CameraDevice

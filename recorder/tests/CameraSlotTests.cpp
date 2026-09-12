@@ -3,12 +3,17 @@
 #include "capture/CameraCatalog.h"
 #include "record/TakeController.h"
 #include "sync/CameraClockMapper.h"
+#include "ui/CameraSettingsPanel.h"
 #include "FramePatternSource.h"
 #include <chrono>
 #include <thread>
 
 using namespace gocue::recorder;
 using recorder_test::require;
+namespace gocue::recorder::exception_test
+{
+extern thread_local std::function<std::future<std::vector<CameraDevice>>()> cameraWorker;
+}
 namespace
 {
 void ok(const juce::Result& r) { if (r.failed()) throw std::runtime_error(r.getErrorMessage().toStdString()); }
@@ -23,6 +28,43 @@ CameraDevice device(const char* link, unsigned index = 0)
 UserSettings selections()
 {
     UserSettings s; s.cameraEnabled = {true, true}; s.cameraDeviceIds = {"uvc:A", "uvc:B"}; s.cameraModes = {mode().text(), mode().text()}; return s;
+}
+struct CameraEnumerationFixture
+{
+    decltype(exception_test::cameraWorker) previous = std::move(exception_test::cameraWorker);
+    explicit CameraEnumerationFixture(std::vector<CameraDevice> cameras)
+    {
+        exception_test::cameraWorker = [cameras = std::move(cameras)]
+        {
+            std::promise<std::vector<CameraDevice>> promise;
+            auto future = promise.get_future(); promise.set_value(cameras); return future;
+        };
+    }
+    ~CameraEnumerationFixture() { exception_test::cameraWorker = std::move(previous); }
+};
+void finishCameraScan(CameraSettingsPanel& panel)
+{
+    until([&]
+    {
+        MSG message{};
+        for (unsigned n = 0; n < 100 && PeekMessageW(&message, nullptr, 0, 0, PM_REMOVE); ++n)
+        { TranslateMessage(&message); DispatchMessageW(&message); }
+        return !panel.scanning();
+    });
+}
+const juce::ComboBox& cameraModeCombo(const CameraSettingsPanel& panel, unsigned slot)
+{
+    std::vector<const juce::ComboBox*> combos;
+    for (const auto* child : panel.getChildren())
+        if (const auto* combo = dynamic_cast<const juce::ComboBox*>(child)) combos.push_back(combo);
+    require(combos.size() == 4, "Both camera device/mode pairs are present");
+    return *combos.at(slot * 2 + 1);
+}
+bool cameraPanelHasLabel(const CameraSettingsPanel& panel, const juce::String& text)
+{
+    for (const auto* child : panel.getChildren())
+        if (const auto* label = dynamic_cast<const juce::Label*>(child); label && label->getText() == text) return true;
+    return false;
 }
 struct Lane
 {
@@ -107,6 +149,131 @@ struct Fixture
 int runCameraSlotTests()
 {
     recorder_test::Suite suite;
+    suite.test("Standard camera rates include both half-fps boundaries and NTSC fractions", []
+    {
+        const Rational accepted[]{{30,1}, {60,1}, {59,2}, {61,2}, {119,2}, {121,2}, {30000,1001}, {60000,1001}};
+        for (const auto& rate : accepted) require(isStandardFrameRate(rate), "30/60 fps tolerance must include its endpoints");
+    });
+    suite.test("Nonstandard camera rates and values just outside each boundary are rejected", []
+    {
+        const Rational rejected[]{{5,1}, {15,2}, {10,1}, {15,1}, {20,1}, {24,1}, {25,1}, {50,1}, {120,1},
+            {29499,1000}, {30501,1000}, {59499,1000}, {60501,1000}, {0,1}, {30,0}, {0,0}};
+        for (const auto& rate : rejected) require(!isStandardFrameRate(rate), "Only rates within 0.5 fps of 30 or 60 are allowed");
+    });
+    suite.test("Preferred camera mode returns none when only slow or non-1080p modes exist", []
+    {
+        const auto hd720 = CameraMode::parse("MJPEG 1280x720 60/1");
+        for (const auto fps : {30u, 60u})
+        {
+            require(preferred1080pMode({mode(20), mode(15)}, fps) == -1, "15/20 fps cannot be a fallback");
+            require(preferred1080pMode({mode(5), hd720}, fps) == -1, "Slow 1080p and standard 720p are both excluded");
+            require(preferred1080pMode({}, fps) == -1, "Empty camera has no default");
+            require(preferred1080pMode({mode(20), hd720, mode(30), mode(15)}, fps) == 2, "Fallback stays inside the standard 1080p set");
+        }
+    });
+    suite.test("Preferred standard modes preserve project cadence and MJPEG NV12 YUY2 priority", []
+    {
+        const auto mj30 = CameraMode::parse("MJPEG 1920x1080 30/1"), mj60 = CameraMode::parse("MJPEG 1920x1080 60/1");
+        const auto yuy30 = CameraMode::parse("YUY2 1920x1080 30/1"), yuy60 = CameraMode::parse("YUY2 1920x1080 60/1");
+        const std::vector<CameraMode> modes{mode(20), yuy30, mode(30), mj30, yuy60, mode(60), mj60, mode(15)};
+        require(preferred1080pMode(modes, 30) == 3 && preferred1080pMode(modes, 60) == 6, "Project fps then MJPEG win");
+        require(preferred1080pMode({yuy30, mode(30)}, 30) == 1, "NV12 wins over YUY2 at the same fps");
+        require(preferred1080pMode({mj30, yuy60}, 60) == 1, "Reaching project fps wins over compression preference");
+        require(preferred1080pMode({mode(20), CameraMode::parse("MJPEG 1920x1080 30000/1001")}, 30) == 1,
+                "29.97 remains a valid 30 fps default");
+        require(preferred1080pMode({mj30, CameraMode::parse("MJPEG 1920x1080 60000/1001")}, 60) == 1,
+                "59.94 reaches a 60 fps project");
+    });
+    suite.test("Saved nonstandard rates and resolutions get the exact camera-specific validation error", []
+    {
+        for (unsigned slot : {0u, 1u})
+        {
+            auto s = selections();
+            const auto expected = juce::String::fromUTF8(slot ? "캠2 입력 모드를 30 또는 60fps로 선택하세요." : "캠1 입력 모드를 30 또는 60fps로 선택하세요.");
+            for (const auto* text : {"NV12 1920x1080 20/1", "NV12 1920x1080 15/1", "MJPEG 1920x1080 24/1", "MJPEG 1280x720 30/1"})
+            {
+                std::vector<CameraDevice> cameras{device("uvc:A"), device("uvc:B")};
+                s.cameraModes[slot] = text; cameras[slot].modes = {CameraMode::parse(text)};
+                require(validateCameraSettings(s, cameras).getErrorMessage() == expected, "Reject the saved nonstandard mode for the right camera");
+                cameras[slot].modes.clear();
+                require(validateCameraSettings(s, cameras).getErrorMessage() == expected, "Saved invalid rates remain invalid after device modes change");
+            }
+        }
+    });
+    suite.test("Camera settings accept standard integer fractional and boundary rates", []
+    {
+        auto s = selections();
+        for (const auto* rate : {"30/1", "60/1", "30000/1001", "60000/1001", "59/2", "61/2", "119/2", "121/2"})
+        {
+            const auto selected = CameraMode::parse(std::string("MJPEG 1920x1080 ") + rate);
+            auto a = device("uvc:A"), b = device("uvc:B"); a.modes = b.modes = {selected};
+            s.cameraModes = {selected.text(), selected.text()}; ok(validateCameraSettings(s, {a, b}));
+        }
+    });
+    suite.test("Missing camera selections retain their original error and disabled slots are ignored", []
+    {
+        for (unsigned slot : {0u, 1u})
+        {
+            const auto expected = juce::String::fromUTF8(slot ? "캠2 장치와 입력 모드를 선택하세요." : "캠1 장치와 입력 모드를 선택하세요.");
+            const std::vector<CameraDevice> cameras{device("uvc:A"), device("uvc:B")};
+            auto s = selections(); s.cameraDeviceIds[slot].clear();
+            require(validateCameraSettings(s, cameras).getErrorMessage() == expected, "Missing device keeps existing message");
+            s = selections(); s.cameraModes[slot].clear();
+            require(validateCameraSettings(s, cameras).getErrorMessage() == expected, "Empty mode keeps existing message");
+            s.cameraModes[slot] = "invalid";
+            require(validateCameraSettings(s, cameras).getErrorMessage() == expected, "Malformed mode keeps existing message");
+            s.cameraModes[slot] = mode(60).text();
+            require(validateCameraSettings(s, cameras).getErrorMessage() == expected, "Unenumerated standard mode keeps existing message");
+            s = selections(); s.cameraDeviceIds[slot] = "uvc:disconnected";
+            require(validateCameraSettings(s, cameras).getErrorMessage() == expected, "Disconnected device keeps existing message");
+            s = selections(); s.cameraEnabled[slot] = false; s.cameraModes[slot] = mode(20).text();
+            ok(validateCameraSettings(s, cameras));
+        }
+    });
+    suite.test("Fractional camera labels and stored rational mode text remain unchanged", []
+    {
+        const auto ntsc = CameraMode::parse("MJPEG 1920x1080 30000/1001");
+        require(friendlyModeText(ntsc) == juce::String::fromUTF8("1080p 29.97fps · MJPEG"), "Keep the actual fractional fps in the label");
+        require(ntsc.text() == "MJPEG 1920x1080 30000/1001", "Persist the original rational fps");
+    });
+    suite.test("Camera catalog refresh still matches saved slow modes without substituting a rate", []
+    {
+        auto s = selections(); s.cameraModes[0] = mode(20).text();
+        auto a = device("uvc:A"); a.modes = {mode(60), mode(20)};
+        CameraCatalog c; ok(c.configure(s)); c.refresh({a, device("uvc:B")});
+        require(c.slot(0).ready() && c.slot(0).mode->fps == Rational{20,1}, "Recording catalog matching is independent of the settings filter");
+    });
+    suite.test("Camera panel filters input modes and replaces saved 20 fps with a project default", []
+    {
+        juce::ScopedJuceInitialiser_GUI gui;
+        auto a = device("uvc:A");
+        const auto mj30 = CameraMode::parse("MJPEG 1920x1080 30000/1001"), mj60 = CameraMode::parse("MJPEG 1920x1080 60000/1001");
+        a.modes = {mode(20), mj30, CameraMode::parse("MJPEG 1280x720 60/1"), mode(15), mj60};
+        CameraEnumerationFixture enumeration({a});
+        for (const auto fps : {30u, 60u})
+        {
+            auto s = selections(); s.cameraEnabled[1] = false; s.cameraModes[0] = mode(20).text();
+            RecorderProject project; project.fps = {fps, 1}; CameraSettingsPanel panel(s, project); finishCameraScan(panel);
+            const auto& combo = cameraModeCombo(panel, 0);
+            require(combo.getNumItems() == 2 && combo.getItemId(0) == 2 && combo.getItemId(1) == 5, "Only standard 1080p modes enter the combo with original indices");
+            require(combo.getItemText(0) == friendlyModeText(mj30) && combo.getItemText(1) == friendlyModeText(mj60), "Combo preserves fractional labels");
+            const auto read = panel.read(s);
+            require(read.cameraModes[0] == juce::String((fps == 30 ? mj30 : mj60).text()), "Saved 20 fps is replaced by the project default");
+            require(cameraPanelHasLabel(panel, juce::String::fromUTF8("입력 모드를 프로젝트 fps에 맞춰 다시 골랐습니다. 적용을 누르면 저장됩니다.")), "Replacement keeps the existing apply-to-save notice");
+            ok(validateCameraSettings(read, {a}));
+        }
+    });
+    suite.test("Camera panel leaves slow-only devices unselected with the 30/60 fps prompt", []
+    {
+        juce::ScopedJuceInitialiser_GUI gui;
+        auto a = device("uvc:A"); a.modes = {mode(20), mode(15)}; CameraEnumerationFixture enumeration({a});
+        auto s = selections(); s.cameraEnabled[1] = false; s.cameraModes[0] = mode(20).text();
+        CameraSettingsPanel panel(s, RecorderProject{}); finishCameraScan(panel);
+        const auto& combo = cameraModeCombo(panel, 0);
+        require(combo.getNumItems() == 0 && combo.getSelectedId() == 0, "Never select a slow fallback");
+        require(combo.getTextWhenNothingSelected() == juce::String::fromUTF8("1080p 30/60fps 입력 모드 선택"), "Empty combo names the supported frame rates");
+        require(panel.read(s).cameraModes[0].isEmpty(), "An unsupported saved mode cannot be applied from the panel");
+    });
     suite.test("Stable symbolic links survive enumeration reorder and native type index changes", []
     {
         CameraCatalog c; auto s = selections(); ok(c.configure(s)); c.refresh({device("uvc:A", 1), device("uvc:B", 9)});

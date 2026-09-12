@@ -131,7 +131,7 @@ int runLifecycleTests()
         const std::vector<CameraMode> modes{nv5, hd720, yuy30, nv60, mj60};
         require(preferred1080pMode(modes, 60) == 4, "60 fps project: MJPEG 60 before NV12 60");
         require(preferred1080pMode(modes, 30) == 2, "30 fps project: the exact 30 fps mode wins over faster ones");
-        require(preferred1080pMode({nv5, hd720}, 30) == 0, "Only a slow 1080p mode: still the best available");
+        require(preferred1080pMode({nv5, hd720}, 30) == -1, "No standard 1080p 30/60 fps mode is available (slow modes are no longer offered)");
         require(preferred1080pMode({hd720}, 30) == -1, "No 1080p mode");
         require(preferred1080pMode({nv5, mj5994}, 60) == 1 && reachesProjectFps(mj5994, 60) && !reachesProjectFps(nv5, 60), "59.94 counts as reaching 60");
         require(friendlyModeText(mj60) == juce::String::fromUTF8("1080p 60fps \xc2\xb7 MJPEG") && friendlyModeText(mj5994) == juce::String::fromUTF8("1080p 59.94fps \xc2\xb7 MJPEG"), "Friendly label");

@@ -11,7 +11,7 @@ CameraSettingsPanel::CameraSettingsPanel(const UserSettings& s, const RecorderPr
     {
         enabled[i].setButtonText(ko(i ? "캠2 사용" : "캠1 사용")); enabled[i].setToggleState(s.cameraEnabled[i], juce::dontSendNotification);
         addAndMakeVisible(enabled[i]); addAndMakeVisible(devices[i]); addAndMakeVisible(modes[i]); addAndMakeVisible(modeLabels[i]); addAndMakeVisible(ids[i]);
-        modeLabels[i].setText(ko("입력 모드"), juce::dontSendNotification); devices[i].setTextWhenNothingSelected(ko("장치 선택")); modes[i].setTextWhenNothingSelected(ko("1080p 입력 모드 선택"));
+        modeLabels[i].setText(ko("입력 모드"), juce::dontSendNotification); devices[i].setTextWhenNothingSelected(ko("장치 선택")); modes[i].setTextWhenNothingSelected(ko("1080p 30/60fps 입력 모드 선택"));
         devices[i].onChange = [this, i] { selectionChanged(i, false); }; enabled[i].onClick = [this, i] { selectionChanged(i, true); };
         modes[i].onChange = [this] { refreshCalibration(); };
     }
@@ -61,8 +61,8 @@ void CameraSettingsPanel::modesFor(unsigned i)
     if (n < 0 || n >= int(cameras.size()))
     { ids[i].setText(initial.cameraDeviceIds[i], juce::dontSendNotification); modes[i].setText(initial.cameraModes[i], juce::dontSendNotification); return; }
     const auto& c = cameras[std::size_t(n)]; ids[i].setText(juce::String(c.symbolicLink), juce::dontSendNotification); ids[i].setTooltip(juce::String(c.symbolicLink));
-    // Friendly labels; the stored form stays mode.text(). A saved choice below the project fps (a 5 fps leftover) is replaced by the sensible default.
-    for (unsigned m = 0; m < c.modes.size(); ++m) if (c.modes[m].width == 1920 && c.modes[m].height == 1080)
+    // Friendly labels; the stored form stays mode.text(). Replace saved choices outside 1080p 30/60 fps or below the project fps.
+    for (unsigned m = 0; m < c.modes.size(); ++m) if (c.modes[m].width == 1920 && c.modes[m].height == 1080 && isStandardFrameRate(c.modes[m].fps))
     {
         modes[i].addItem(friendlyModeText(c.modes[m]), int(m) + 1);
         if (juce::String(c.modes[m].text()) == initial.cameraModes[i] && reachesProjectFps(c.modes[m], projectFps)) modes[i].setSelectedId(int(m) + 1, juce::dontSendNotification);
