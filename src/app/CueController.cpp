@@ -1250,11 +1250,22 @@ int CueController::fireSequence (CueList& cues, int index, bool audition)
             if (rule == SecondTriggerAction::hardStopRestart)
             {
                 // the pre-wait starts over, and so does the sequence: the starts the earlier walk scheduled for the
-                // cues behind this one (auto-continue) go too, or they would come up twice
-                const int end = sequenceEnd (cues, index);
+                // cues behind this one (auto-continue) go too, or they would come up twice. The same walk as below -
+                // a disarmed cue is stepped over, the chain ends at the first cue that does not auto-continue - and a
+                // later cue that is already playing keeps its run (its follow, its duck): only its start was doubled
+                for (int k = index; k >= 0 && k < bound; k = cues.subtreeEnd (k))
+                {
+                    const auto& c = cues.get (k);
 
-                for (int k = index; k >= 0 && k < end; k = cues.subtreeEnd (k))
-                    cancelPendingFor (cues.get (k).id);
+                    if (! c.armed)
+                        continue;
+
+                    if (k == index || ! engine.isPlaying (c.id))
+                        cancelPendingFor (c.id);
+
+                    if (c.continueMode != ContinueMode::autoContinue)
+                        break;
+                }
             }
             else
             {

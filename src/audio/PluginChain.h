@@ -43,6 +43,8 @@ public:
         float wetMix = 1.0f;                     // audio thread: 1 = the plugin's output, 0 = the delayed dry signal; ramps when the bypass changes
         int skipped = 0;                         // audio thread: input samples the plugin has not seen (its callback lock was busy, it was suspended): fed to it from the ring, catchUpBlocks per callback, before it runs again - its own time never falls behind the show
         std::atomic<bool> overflow { false };    // the backlog outgrew the ring: the plugin is reset on the message thread (recoverAfterStalls) instead of catching up, dry until then
+        std::atomic<bool> resetPending { false }; // the message thread reset the plugin: the callback takes it from there (backlog dropped, delay line primed)
+        int prime = 0;                           // audio thread: dry samples still to pass after a reset while the plugin's own delay line fills from the show again
 
         bool isMissing() const noexcept { return plugin == nullptr; }
     };

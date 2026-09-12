@@ -513,6 +513,47 @@ public:
                 last = dc();
 
             expectWithinAbsoluteError (last, 0.5f, 1e-6f);   // wet again, its time the show's
+
+            beginTest ("delay compensation: the reset keeps the dry signal in flight - a bypassed plugin with latency never falls silent");
+            auto* lat = new TestGainPlugin (0.5f);
+            lat->latencySamples = 128;
+            chain.addPlugin (std::unique_ptr<juce::AudioPluginInstance> (lat));
+            chain.removePlugin (0);   // 'lat' alone
+            chain.setBypassed (0, true);
+
+            for (int i = 0; i < 8; ++i)
+                dc();   // the line and the plugin primed with DC
+
+            {
+                juce::WaitableEvent locked, release;
+                std::thread holder ([&] { const juce::ScopedLock held (lat->getCallbackLock()); locked.signal(); release.wait(); });
+                locked.wait();
+
+                for (int i = 0; i < 12; ++i)
+                    dc();   // overflow again
+
+                release.signal();
+                holder.join();
+            }
+
+            for (int i = 0; i < 3; ++i)
+                dc();
+
+            chain.recoverAfterStalls();
+            expectEquals (lat->resetCount, 1);
+
+            for (int i = 0; i < 6; ++i)
+            {
+                dc();   // the ring was not cleared: the delayed dry signal goes on without a gap
+                expectWithinAbsoluteError (block.findMinMax (0, 0, 64).getStart(), 1.0f, 1e-6f);
+            }
+
+            chain.setBypassed (0, false);
+
+            for (int i = 0; i < 12; ++i)
+                last = dc();   // 128 samples of priming (the plugin's line fills), then the crossfade
+
+            expectWithinAbsoluteError (last, 0.5f, 1e-6f);
         }
 
         beginTest ("engine: cue chain, master chain, tails and chain removal while playing");

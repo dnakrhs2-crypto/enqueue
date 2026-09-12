@@ -1084,22 +1084,29 @@ public:
             document.cues.removeIndices ({ document.cues.indexOf (g.id), document.cues.indexOf (z.id) });
         }
 
-        beginTest ("a restart during the pre-wait takes the sequence's earlier schedule with it (auto-continue)");
+        beginTest ("a restart during the pre-wait takes the sequence's earlier schedule with it (auto-continue, over a disarmed cue)");
         {
+            // a (pre-wait 1 s, auto-continue) -> b (disarmed: stepped over) -> the list's third cue ("c", left by the
+            // auto-continue test above): the earlier walk scheduled a and that cue
+            const auto thirdId = document.cues.get (2).id;
             document.cues.update (0, [] (Cue& x) { x.hotkey = "F9"; x.preWaitSeconds = 1.0; x.continueMode = ContinueMode::autoContinue; x.postWaitSeconds = 0.0; });
+            document.cues.update (1, [] (Cue& x) { x.armed = false; });
             now += 1.0;
-            expect (controller.handleHotkey (juce::KeyPress::createFromDescription ("F9")));   // a at +1.0, b right behind it
+            expect (controller.handleHotkey (juce::KeyPress::createFromDescription ("F9")));   // a at +1.0, the third cue right behind it
             expectEquals (controller.getNumPending(), 2);
             render (engine, scheduler, now, out, 43);                                            // ~0.5 s
-            expect (controller.handleHotkey (juce::KeyPress::createFromDescription ("F9")));   // restart: both schedules move
+            expect (controller.handleHotkey (juce::KeyPress::createFromDescription ("F9")));   // restart: both schedules move (the third cue's too, past the disarmed b)
             expectEquals (controller.getNumPending(), 2);
             render (engine, scheduler, now, out, 50);                                            // ~1.08 s: the first schedule would have fired at 1.0
-            expect (! engine.isPlaying (a.id) && ! engine.isPlaying (b.id));
+            expect (! engine.isPlaying (a.id) && ! engine.isPlaying (thirdId));
             render (engine, scheduler, now, out, 45);                                            // ~1.6 s: the restarted one
-            expect (engine.isPlaying (a.id) && engine.isPlaying (b.id));
+            expect (engine.isPlaying (a.id), "a did not start at the restarted time");
+            expect (engine.isPlaying (thirdId), "the auto-continued cue did not start behind a");
+            expect (! engine.isPlaying (b.id), "the disarmed b started");
             expectEquals (engine.getNumPlaying(), 2);
             stopEverything();
             document.cues.update (0, [] (Cue& x) { x.hotkey = ""; x.preWaitSeconds = 0.0; x.continueMode = ContinueMode::none; });
+            document.cues.update (1, [] (Cue& x) { x.armed = true; });
         }
 
         beginTest ("skipping a playlist to its next child keeps the group's own auto-follow");
