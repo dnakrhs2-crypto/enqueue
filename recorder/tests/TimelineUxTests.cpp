@@ -963,6 +963,10 @@ int runTimelineUxTests()
         require(submenu.isEnabled && submenu.subMenu && submenu.subMenu->getNumItems() == 4, "Hidden submenu count incorrect");
         for (const auto row : {0u, 2u, 3u})
             require(menuItem(*submenu.subMenu, before->tracks[row].name).isEnabled, "Hidden track name missing");
+        require(v.edits.setTrackListening(before->tracks[3].trackId, true).wasOk(), "Solo the hidden track"); v.refresh(false, 0, {});
+        const auto soloed = menuItem(*menuItem(TimelineUxTestAccess::menu(v), ko("숨긴 트랙 3개")).subMenu, before->tracks[3].name + ko(" · 솔로 켜짐"));
+        require(soloed.isEnabled, "Hidden soloed track must say so in the menu");
+        require(v.edits.setTrackListening(before->tracks[3].trackId, true).wasOk(), "Un-solo the hidden track"); v.refresh(false, 0, {});
         const auto hint = ko(" · 숨긴 트랙 3개는 편집 메뉴에서 보이기");
         require(TimelineUxTestAccess::status(v).contains(hint) && TimelineUxTestAccess::statusTooltip(v).contains(hint), "Hidden-track help or tooltip missing");
         int playbackChanges = 0; v.onListeningChanged = [&] { ++playbackChanges; };

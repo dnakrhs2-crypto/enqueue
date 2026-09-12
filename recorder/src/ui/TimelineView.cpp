@@ -282,7 +282,8 @@ juce::PopupMenu TimelineView::createEditMenu(const EditMenuContext& context) con
     else
     {
         juce::PopupMenu hidden; int itemId = firstHiddenTrackMenuId;
-        for (const auto& t : context.base->tracks) if (t.hidden) hidden.addItem(itemId++, t.name, !edits.isLocked());
+        for (const auto& t : context.base->tracks) if (t.hidden) // a hidden track still shapes the mix: say so next to its name
+            hidden.addItem(itemId++, t.name + (t.solo ? ko(" · 솔로 켜짐") : t.mute ? ko(" · 음소거") : juce::String()), !edits.isLocked());
         hidden.addSeparator(); hidden.addItem(showAllTracksMenuId, ko("모두 보이기"), !edits.isLocked());
         menu.addSubMenu(ko("숨긴 트랙 ") + juce::String(context.hiddenTracks.size()) + ko("개"), hidden, !edits.isLocked());
     }
