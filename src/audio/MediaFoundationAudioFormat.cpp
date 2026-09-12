@@ -14,6 +14,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <mutex>
 #include <vector>
 
@@ -452,15 +453,25 @@ namespace
             const juce::int64 target = std::max<juce::int64> (0, sample);
             // MF is positioned in raw media time; the preroll may reach back into the priming frame (raw 0), which the
             // decoder needs as overlap history for the first real frame, and skipUntil drops everything before 'target'.
-            const juce::int64 rawTarget = target + (rawMediaTimestamps ? editListStart : 0);
-            const juce::int64 rawFrom = std::max<juce::int64> (0, rawTarget - preroll);
+            // An absurd target (beyond int64 after the offset, or beyond the 100 ns LONGLONG range) fails like a rejected
+            // MF seek: silence, never a wrapped position.
+            const juce::int64 offset = rawMediaTimestamps ? editListStart : 0;
+            const bool inRange = target <= std::numeric_limits<juce::int64>::max() - offset;
+            const juce::int64 rawFrom = inRange ? std::max<juce::int64> (0, target + offset - preroll) : 0;
+            const double ticks = (double) rawFrom * (double) ticksPerSecond / sampleRate;
+            const bool ticksInRange = inRange && std::isfinite (ticks) && ticks >= 0.0 && ticks < 9.2e18;   // < 2^63
 
-            PROPVARIANT pos;
-            PropVariantInit (&pos);
-            pos.vt = VT_I8;
-            pos.hVal.QuadPart = (LONGLONG) ((double) rawFrom * (double) ticksPerSecond / sampleRate);
-            const bool ok = SUCCEEDED (reader->SetCurrentPosition (GUID_NULL, pos));
-            PropVariantClear (&pos);
+            bool ok = false;
+
+            if (ticksInRange)
+            {
+                PROPVARIANT pos;
+                PropVariantInit (&pos);
+                pos.vt = VT_I8;
+                pos.hVal.QuadPart = (LONGLONG) ticks;
+                ok = SUCCEEDED (reader->SetCurrentPosition (GUID_NULL, pos));
+                PropVariantClear (&pos);
+            }
 
             position = sample;
             seekFailed = ! ok;
