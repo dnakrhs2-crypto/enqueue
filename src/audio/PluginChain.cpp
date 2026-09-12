@@ -566,13 +566,18 @@ void PluginChain::recoverAfterStalls()
 
     for (auto& slot : slots)   // message thread only: no chain lock (the other slots keep running, this one passes dry meanwhile)
     {
-        if (slot->plugin == nullptr || ! slot->overflow.load (std::memory_order_relaxed)
-            || slot->resetPending.load (std::memory_order_relaxed) || slot->faulted.load (std::memory_order_relaxed))
+        if (slot->plugin == nullptr || ! slot->overflow.load (std::memory_order_relaxed))
             continue;
 
         // only the plugin's own history goes: the host's ring keeps the dry signal in flight (a bypassed plugin would
         // otherwise fall silent for its latency), and the callback drops the backlog itself when it sees the flag
         const juce::ScopedLock callbackLock (slot->plugin->getCallbackLock());
+
+        // looked at again under the lock: the callback (which acknowledges a reset only while holding this lock) may
+        // have just consumed the previous one, and a plugin is not reset twice for one overflow
+        if (! slot->overflow.load (std::memory_order_relaxed) || slot->resetPending.load (std::memory_order_relaxed)
+            || slot->faulted.load (std::memory_order_relaxed))
+            continue;
 
         if (slot->plugin->isSuspended())
         {

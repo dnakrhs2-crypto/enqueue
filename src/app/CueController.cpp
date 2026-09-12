@@ -1262,9 +1262,11 @@ int CueController::fireSequence (CueList& cues, int index, bool audition)
 
                     if (k == index || ! engine.isPlaying (c.id))
                         cancelPendingFor (c.id);
+                    else
+                        cancelPendingFor (c.id, true);   // playing: only its doubled start goes, its run (follow, duck) stays
 
-                    if (c.continueMode != ContinueMode::autoContinue)
-                        break;
+                    if (c.continueMode != ContinueMode::autoContinue || (c.isDevamp() && c.devamp.startNextCue))
+                        break;   // where the start walk ends too
                 }
             }
             else

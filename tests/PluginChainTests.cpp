@@ -551,7 +551,41 @@ public:
             chain.setBypassed (0, false);
 
             for (int i = 0; i < 12; ++i)
-                last = dc();   // 128 samples of priming (the plugin's line fills), then the crossfade
+                last = dc();   // the crossfade back to the plugin
+
+            expectWithinAbsoluteError (last, 0.5f, 1e-6f);
+
+            beginTest ("delay compensation: switched on while its line still fills after a reset, the plugin waits its latency out (dry) first");
+            chain.setBypassed (0, true);
+
+            for (int i = 0; i < 8; ++i)
+                dc();
+
+            {
+                juce::WaitableEvent locked, release;
+                std::thread holder ([&] { const juce::ScopedLock held (lat->getCallbackLock()); locked.signal(); release.wait(); });
+                locked.wait();
+
+                for (int i = 0; i < 12; ++i)
+                    dc();
+
+                release.signal();
+                holder.join();
+            }
+
+            dc();
+            chain.recoverAfterStalls();   // the plugin's delay line is empty now (the test plugin's reset clears it)
+            expectEquals (lat->resetCount, 2);
+            chain.setBypassed (0, false);   // switched on at once: with no priming, the empty line's zeros would be heard
+
+            for (int i = 0; i < 2; ++i)
+            {
+                dc();   // the 128 samples of priming: still the dry signal
+                expectWithinAbsoluteError (block.findMinMax (0, 0, 64).getStart(), 1.0f, 1e-6f);
+            }
+
+            for (int i = 0; i < 12; ++i)
+                last = dc();
 
             expectWithinAbsoluteError (last, 0.5f, 1e-6f);
         }

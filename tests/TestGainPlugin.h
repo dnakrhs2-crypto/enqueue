@@ -91,7 +91,7 @@ public:
     }
 
     double getTailLengthSeconds() const override { return tail; }
-    void reset() override { ++resetCount; }
+    void reset() override { ++resetCount; resetDelay(); }   // as a real plugin: its delay line starts empty
     bool acceptsMidi() const override { return false; }
     bool producesMidi() const override { return false; }
     juce::AudioProcessorEditor* createEditor() override { return nullptr; }
