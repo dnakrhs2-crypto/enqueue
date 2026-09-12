@@ -73,6 +73,146 @@ namespace
 
     constexpr juce::int64 ticksPerSecond = 10000000;   // Media Foundation time is in 100 ns units
 
+    /** Start of the first edit of the first audio track of an MP4/M4A file, in samples at 'sampleRate' (0 when the
+        file has no edit list, is not MP4, or cannot be read). The AAC encoder delay (priming, usually 1024 samples)
+        is expressed as this edit list start: presentation time 0 is media time 'editListStart'. */
+    juce::int64 mp4EditListStart (const juce::File& file, double sampleRate)
+    {
+        juce::FileInputStream in (file);
+
+        if (! in.openedOk() || sampleRate <= 0)
+            return 0;
+
+        const juce::int64 fileSize = in.getTotalLength();
+
+        struct Box { juce::int64 payload, end; juce::String type; };
+
+        // reads the box header at 'at' inside [at, limit)
+        auto readBox = [&] (juce::int64 at, juce::int64 limit, Box& box) -> bool
+        {
+            if (at < 0 || at + 8 > limit || ! in.setPosition (at))
+                return false;
+
+            juce::int64 size = (juce::uint32) in.readIntBigEndian();
+            char type[5] = {};
+
+            if (in.read (type, 4) != 4)
+                return false;
+
+            juce::int64 payload = at + 8;
+
+            if (size == 1)
+            {
+                size = in.readInt64BigEndian();
+                payload = at + 16;
+            }
+            else if (size == 0)
+            {
+                size = limit - at;
+            }
+
+            if (size < payload - at || at + size > limit)
+                return false;
+
+            box = { payload, at + size, juce::String (juce::CharPointer_ASCII (type)) };
+            return true;
+        };
+
+        auto findChild = [&] (const Box& parent, const char* wanted, Box& found) -> bool
+        {
+            for (juce::int64 at = parent.payload; at + 8 <= parent.end;)
+            {
+                Box child;
+
+                if (! readBox (at, parent.end, child))
+                    return false;
+
+                if (child.type == wanted)
+                {
+                    found = child;
+                    return true;
+                }
+
+                if (child.end <= at)
+                    return false;
+
+                at = child.end;
+            }
+
+            return false;
+        };
+
+        Box root { 0, fileSize, "" }, moov;
+
+        if (! findChild (root, "moov", moov))
+            return 0;
+
+        for (juce::int64 at = moov.payload; at + 8 <= moov.end;)
+        {
+            Box trak;
+
+            if (! readBox (at, moov.end, trak) || trak.end <= at)
+                return 0;
+
+            at = trak.end;
+
+            if (trak.type != "trak")
+                continue;
+
+            Box mdia, hdlr, mdhd, edts, elst;
+
+            if (! findChild (trak, "mdia", mdia) || ! findChild (mdia, "hdlr", hdlr) || ! findChild (mdia, "mdhd", mdhd))
+                continue;
+
+            char handler[5] = {};
+
+            if (! in.setPosition (hdlr.payload + 8) || in.read (handler, 4) != 4 || juce::String (juce::CharPointer_ASCII (handler)) != "soun")
+                continue;   // not the audio track
+
+            if (! in.setPosition (mdhd.payload))
+                return 0;
+
+            const int mdhdVersion = in.readByte();
+            in.skipNextBytes (3);
+            in.skipNextBytes (mdhdVersion == 1 ? 16 : 8);   // creation + modification time
+            const juce::int64 timescale = (juce::uint32) in.readIntBigEndian();
+
+            if (timescale <= 0 || ! findChild (trak, "edts", edts) || ! findChild (edts, "elst", elst) || ! in.setPosition (elst.payload))
+                return 0;
+
+            const int elstVersion = in.readByte();
+            in.skipNextBytes (3);
+            const int entries = in.readIntBigEndian();
+
+            for (int i = 0; i < entries; ++i)
+            {
+                juce::int64 mediaTime = 0;
+
+                if (elstVersion == 1)
+                {
+                    in.readInt64BigEndian();              // segment duration
+                    mediaTime = in.readInt64BigEndian();
+                }
+                else
+                {
+                    in.readIntBigEndian();
+                    mediaTime = in.readIntBigEndian();
+                }
+
+                in.readIntBigEndian();                    // media rate (16.16)
+
+                if (mediaTime < 0)
+                    continue;   // an empty edit (presentation delay) carries no media offset
+
+                return (juce::int64) std::llround ((double) mediaTime * sampleRate / (double) timescale);
+            }
+
+            return 0;
+        }
+
+        return 0;
+    }
+
     /** One decoded buffer: interleaved float frames with the file position of its first frame. */
     struct DecodedBuffer
     {
@@ -152,7 +292,27 @@ namespace
             valid = lengthInSamples > 0;
 
             if (valid)
+            {
                 seekTo (0);
+
+                // Windows before the 2026-09 update applied the MP4 edit list itself and handed the AAC priming frame
+                // over with the same timestamp as the first real frame (nextPending() drops that duplicate). Since that
+                // update the MP4 source hands out raw media timestamps: priming at 0, first real frame one frame later,
+                // and the presentation would start 1024 samples late. Read the edit list start from the file and tell the
+                // two behaviours apart from the first two buffers; in the raw case every position is shifted back by the
+                // edit list start so the priming frame lands before 0 and is skipped like a seek preroll.
+                editListStart = file.hasFileExtension ("m4a;mp4;m4b") ? mp4EditListStart (file, sampleRate) : 0;
+
+                if (editListStart > 0)
+                {
+                    DecodedBuffer first, second;
+
+                    if (readOne (first) && readOne (second) && second.position > first.position)
+                        rawMediaTimestamps = true;
+
+                    seekTo (0);
+                }
+            }
         }
 
         bool isValid() const noexcept { return valid; }
@@ -245,12 +405,15 @@ namespace
             // overlap-add and comes out wrong. Everything before 'sample' is discarded (skipUntil).
             constexpr juce::int64 preroll = 2048;
             const juce::int64 target = std::max<juce::int64> (0, sample);
-            const juce::int64 from = std::max<juce::int64> (0, target - preroll);
+            // MF is positioned in raw media time; the preroll may reach back into the priming frame (raw 0), which the
+            // decoder needs as overlap history for the first real frame, and skipUntil drops everything before 'target'.
+            const juce::int64 rawTarget = target + (rawMediaTimestamps ? editListStart : 0);
+            const juce::int64 rawFrom = std::max<juce::int64> (0, rawTarget - preroll);
 
             PROPVARIANT pos;
             PropVariantInit (&pos);
             pos.vt = VT_I8;
-            pos.hVal.QuadPart = (LONGLONG) ((double) from * (double) ticksPerSecond / sampleRate);
+            pos.hVal.QuadPart = (LONGLONG) ((double) rawFrom * (double) ticksPerSecond / sampleRate);
             const bool ok = SUCCEEDED (reader->SetCurrentPosition (GUID_NULL, pos));
             PropVariantClear (&pos);
 
@@ -316,7 +479,7 @@ namespace
                 out.data.resize ((size_t) out.frames * numChannels);
                 std::copy (reinterpret_cast<const float*> (data), reinterpret_cast<const float*> (data) + (size_t) out.frames * numChannels, out.data.begin());
                 buffer->Unlock();
-                out.position = toSamples (timestamp);
+                out.position = toSamples (timestamp) - (rawMediaTimestamps ? editListStart : 0);
 
                 if (out.frames > 0)
                     return true;
@@ -396,6 +559,8 @@ namespace
         bool seekFailed = false;
         int buffersSinceSeek = 0;
         int pendingOffset = 0;
+        juce::int64 editListStart = 0;      // MP4 edit list start (AAC priming) in samples, 0 without one
+        bool rawMediaTimestamps = false;    // this Windows hands out raw media timestamps (edit list not applied)
     };
 }
 
