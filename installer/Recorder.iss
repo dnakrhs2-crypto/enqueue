@@ -27,6 +27,8 @@ VersionInfoVersion={#AppVersion}
 DefaultDirName={localappdata}\Programs\{#SettingsFolder}
 DefaultGroupName={#AppName}
 UninstallDisplayIcon={app}\{#AppExe}
+; 0.1.9: the Setup executable carries the Tally icon (candidate 01, same PNG as the app's CMake ICON_BIG/SMALL).
+SetupIconFile=..\recorder\resources\Tally.ico
 OutputDir={#OutputDir}
 OutputBaseFilename={#PackageStem}-Setup-{#AppVersion}
 Compression=lzma2
