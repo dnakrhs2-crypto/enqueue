@@ -4,6 +4,7 @@
 #include "ui/TimelineView.automation.h"
 #include "ui/RecordView.h"
 #include "ui/ShortcutSettingsPanel.h"
+#include "playback/ImportedAudioCache.h"
 #include "CutSeamChecks.h"
 #include "PlaybackGapChecks.h"
 #include <limits>
@@ -12,6 +13,24 @@ namespace gocue::recorder
 {
 struct TimelineUxTestAccess
 {
+    static juce::TextButton* button(const TimelineView& view, TimelineAction action)
+    { const auto it = view.buttons.find(action); return it == view.buttons.end() ? nullptr : it->second.get(); }
+    static std::size_t buttonCount(const TimelineView& view) { return view.buttons.size(); }
+    static int menuCount(const TimelineView& view) { return view.createEditMenu().getNumItems(); }
+    static juce::Component& header(TimelineView& view, std::size_t row) { return *view.headers.at(row); }
+    static bool transportClearOfSnap(const TimelineView& view) { return view.transport.getRight() <= view.snapButton.getX(); }
+    static void selectRange(TimelineView& view, Sample start, Sample end)
+    { view.rangeStart.setText(juce::String(start)); view.rangeEnd.setText(juce::String(end)); view.rangeButton.onClick(); }
+    static juce::Image waveImage(TimelineView& view, const Clip& clip)
+    {
+        juce::Image image(juce::Image::ARGB, 800, 160, true, juce::SoftwareImageType{});
+        juce::Graphics g(image); view.drawWave(g, clip, {250, 20, 240, 100}); return image;
+    }
+    static juce::Image rowImage(TimelineView& view)
+    {
+        juce::Image image(juce::Image::ARGB, view.rows.getWidth(), view.rows.getHeight(), true, juce::SoftwareImageType{});
+        juce::Graphics g(image); view.rows.paint(g); return image;
+    }
     static juce::String status(const TimelineView& view) { return view.selectionInfo.getText(); }
     static std::optional<Sample> guide(const TimelineView& view) { return view.rows.snapGuide; }
     static Sample sample(const TimelineView& view, float x) { return view.sampleFor(x); }
@@ -84,6 +103,25 @@ void paint(TimelineView& view)
     juce::Image image(juce::Image::ARGB, view.getWidth(), view.getHeight(), true, juce::SoftwareImageType{});
     juce::Graphics graphics(image); view.paintEntireComponent(graphics, true);
 }
+RecorderProject stereoWaveFixture()
+{
+    auto p = makeTimelineUiFixture(); auto registry = std::make_shared<MediaRegistry>(*p.media); p.media = registry;
+    auto& take = registry->takes[0]; take.capture.physicalInputs = {0, 2}; take.capture.physicalInputsRight = {1, 3};
+    for (auto& asset : registry->assets)
+        if (std::find(take.microphoneAssetIds.begin(), take.microphoneAssetIds.end(), asset.assetId) != take.microphoneAssetIds.end()) asset.originalFormat.channels = 2;
+    auto imported = *registry->findAsset(take.microphoneAssetIds[1]); imported.assetId = newId(); imported.kind = AssetKind::importAudio;
+    imported.relativePath = "media/imports/" + imported.assetId + "/original.wav"; registry->assets.push_back(imported);
+    Track track; track.kind = TrackKind::importAudio; track.name = "Stereo import";
+    Clip clip; clip.assetId = imported.assetId; clip.trackId = track.trackId; clip.lengthSamples = imported.logicalLength;
+    track.clips.edit().push_back(clip); p.tracks.push_back(track);
+    require(p.validate().wasOk(), p.validate().getErrorMessage().toRawUTF8()); return p;
+}
+int greenPixels(const juce::Image& image, int top, int bottom)
+{
+    int count = 0;
+    for (int y = top; y < bottom; ++y) if (image.getPixelAt(350, y) == Palette::meterGreen) ++count;
+    return count;
+}
 RecorderProject extremeProject()
 {
     auto p = makeTimelineUiFixture(); const auto maximum = (std::numeric_limits<Sample>::max)();
@@ -103,6 +141,152 @@ int runTimelineUxTests()
 {
     juce::ScopedJuceInitialiser_GUI gui;
     Suite suite;
+    suite.test("toolbar and edit menu expose only the retained actions", []
+    {
+        RecorderDocument d; adopt(d); TimelineView v(d); v.setSize(1180, 620);
+        for (const bool locked : {false, true})
+        {
+            v.refresh(locked, 0, {});
+            require(TimelineUxTestAccess::buttonCount(v) == 7 && TimelineUxTestAccess::menuCount(v) == 7, "Unexpected edit action count");
+            for (const auto action : {TimelineAction::rippleAll, TimelineAction::rippleAudio, TimelineAction::earlier,
+                                     TimelineAction::later, TimelineAction::unlink, TimelineAction::link})
+                require(!TimelineUxTestAccess::button(v, action) && TimelineUxTestAccess::menuLabel(v, action).isEmpty(), "Removed action remains in toolbar/menu");
+            for (const auto action : {TimelineAction::split, TimelineAction::trimIn, TimelineAction::trimOut, TimelineAction::remove,
+                                     TimelineAction::undo, TimelineAction::redo, TimelineAction::addMarker})
+                require(TimelineUxTestAccess::button(v, action) && TimelineUxTestAccess::menuLabel(v, action).isNotEmpty(), "Retained action missing");
+        }
+        int requests = 0; v.onAddMarkerRequested = [&] { ++requests; };
+        TimelineUxTestAccess::button(v, TimelineAction::addMarker)->onClick();
+        require(requests == 1 && d.getProject().markers.empty(), "Marker toolbar bypassed the host hook");
+    });
+    suite.test("range inputs and delete preserve time with undo still available", []
+    {
+        RecorderDocument d; adopt(d); TimelineView v(d); v.setSize(1180, 620); const auto Fs = d.getProject().Fs;
+        TimelineUxTestAccess::selectRange(v, 2 * Fs, 3 * Fs);
+        auto* remove = TimelineUxTestAccess::button(v, TimelineAction::remove); require(remove->isEnabled(), "Range delete disabled"); remove->onClick();
+        for (const auto& track : d.getProject().tracks)
+        {
+            require(track.clips.items().size() == 3, "Range delete did not retain both sides");
+            require(track.clips.items()[1].timelineStartSample == 3 * Fs && track.clips.items().back().timelineStartSample == 12 * Fs,
+                "Delete pulled later material forward");
+        }
+        TimelineUxTestAccess::button(v, TimelineAction::undo)->onClick();
+        require(d.getProject().tracks[0].clips.items().size() == 2, "Range delete undo missing");
+    });
+    suite.test("track headers have red mute and yellow solo without target selection", []
+    {
+        RecorderDocument d; adopt(d); TimelineView v(d); v.setSize(1180, 620);
+        auto& header = TimelineUxTestAccess::header(v, 2); juce::TextButton* mute = nullptr; juce::TextButton* solo = nullptr; int count = 0;
+        for (auto* child : header.getChildren()) if (auto* button = dynamic_cast<juce::TextButton*>(child))
+        {
+            ++count;
+            if (button->getButtonText() == ko("음소거")) mute = button;
+            if (button->getButtonText() == ko("솔로")) solo = button;
+        }
+        require(count == 2 && mute && solo, "Target button remains or listening controls missing");
+        require(mute->findColour(juce::TextButton::buttonOnColourId) == Palette::danger
+            && mute->findColour(juce::TextButton::textColourOnId) == juce::Colours::white, "Mute active contrast");
+        require(solo->findColour(juce::TextButton::buttonOnColourId) == Palette::meterYellow
+            && solo->findColour(juce::TextButton::textColourOnId) == juce::Colours::black, "Solo active contrast");
+        require(mute->getWidth() >= 90 && solo->getWidth() >= 90 && mute->getRight() < solo->getX() && solo->getRight() <= header.getWidth(), "Listening controls overlap or overflow");
+        header.mouseDown(mouse(header, 10, 10, 10, 10)); mute->onClick(); solo->onClick();
+        require(d.getProject().tracks[2].mute && d.getProject().tracks[2].solo && mute->getToggleState() && solo->getToggleState(), "Listening controls stopped editing tracks");
+        require(v.edits.selectedTracks().empty() && d.getSelection().empty(), "Header selected a ripple target or clip");
+    });
+    suite.test("waveform buttons step through bounded session scale and stay clear of snap", []
+    {
+        RecorderDocument d; adopt(d); TimelineView v(d); const auto before = d.snapshot();
+        require(v.waveformScale() == 1 && !v.transport.waveOut.isEnabled(), "Initial waveform scale");
+        for (const auto size : {juce::Point<int>(960, 240), juce::Point<int>(1180, 620)})
+        {
+            v.setSize(size.x, size.y); require(TimelineUxTestAccess::transportClearOfSnap(v), "Snap covers waveform buttons");
+            require(v.transport.waveIn.getWidth() > 0 && v.transport.waveOut.getRight() < v.transport.waveIn.getX(), "Waveform controls overlap");
+        }
+        for (unsigned scale : {2u, 4u, 8u, 16u}) { v.transport.waveIn.onClick(); require(v.waveformScale() == scale, "Waveform increment skipped a step"); }
+        require(!v.transport.waveIn.isEnabled(), "Upper bound button enabled"); v.changeWaveformScale(true); require(v.waveformScale() == 16, "Upper bound exceeded");
+        bool label = false;
+        for (auto* child : v.transport.getChildren()) if (auto* l = dynamic_cast<juce::Label*>(child)) label |= l->getText() == ko("×16");
+        require(label && v.transport.waveOut.getButtonText() == ko("−") && v.transport.zoomOut.getButtonText() == ko("−"), "UTF-8 waveform/zoom labels are broken");
+        require(v.transport.play.getTooltip() == ko("재생 / 정지 · Space"), "Playback tooltip changed");
+        v.clearCaches(); v.refresh(false, 0, {}); require(v.waveformScale() == 16, "Cache refresh reset session waveform scale");
+        for (unsigned scale : {8u, 4u, 2u, 1u}) { v.transport.waveOut.onClick(); require(v.waveformScale() == scale, "Waveform decrement skipped a step"); }
+        v.changeWaveformScale(false); require(v.waveformScale() == 1 && !v.transport.waveOut.isEnabled(), "Lower bound exceeded");
+        TimelineView fresh(d); require(fresh.waveformScale() == 1 && d.snapshot() == before && d.getHistory().undoDepth() == 0, "Display scale persisted into the document");
+    });
+    suite.test("live and loaded stereo microphone peaks draw the physical L/R lanes", []
+    {
+        RecorderDocument d; require(d.adopt(stereoWaveFixture(), {}, {}).wasOk(), "Stereo fixture"); TimelineView v(d); v.setSize(1180, 620);
+        const auto& clip = d.getProject().tracks[3].clips.items()[0];
+        auto cache = std::make_shared<PeakCache>(48000, 4, 480);
+        std::vector<std::int32_t> block(480 * 4);
+        for (unsigned frame = 0; frame < 480; ++frame)
+        {
+            block[frame * 4] = -4194304; block[frame * 4 + 1] = 4194304;
+            block[frame * 4 + 2] = frame % 2 ? 1048576 : 0; block[frame * 4 + 3] = frame % 2 ? -2097152 : 0;
+        }
+        for (unsigned frame = 0; frame < 480000; frame += 480) cache->append(block.data(), 480, frame);
+        for (const bool loaded : {false, true})
+        {
+            v.clearCaches(); v.refresh(false, 0, {});
+            if (loaded) { cache->finish(); v.setLoadedPeaks(clip.assetId, cache->snapshot(), 1); }
+            else { v.setPeaks(clip.assetId, cache, 1); v.refresh(false, 0, {}); }
+            const auto image = TimelineUxTestAccess::waveImage(v, clip);
+            require(greenPixels(image, 20, 45) >= 2 && greenPixels(image, 46, 69) == 0, "Left lane is missing or uses the logical slot index");
+            require(greenPixels(image, 71, 94) == 0 && greenPixels(image, 96, 120) >= 4, "Right lane merged into left or reversed");
+            require(image.getPixelAt(350, 70) == Palette::line, "Stereo separator missing");
+            const auto normal = greenPixels(image, 20, 120); v.transport.waveIn.onClick();
+            require(greenPixels(TimelineUxTestAccess::waveImage(v, clip), 20, 120) > normal, "Microphone waveform scale was not applied");
+            v.transport.waveOut.onClick();
+        }
+    });
+    suite.test("imported stereo scaling stays inside both lanes and legacy mono snapshots paint", []
+    {
+        RecorderDocument d; require(d.adopt(stereoWaveFixture(), {}, {}).wasOk(), "Stereo fixture"); TimelineView v(d); v.setSize(1180, 620);
+        const auto& clip = d.getProject().tracks.back().clips.items()[0]; const auto before = d.snapshot();
+        CachedImportedAudio cache; cache.sampleRate = 48000; cache.channels = 2; cache.samples = 480000; cache.samplesPerPeak = 480;
+        cache.peaks.resize(1000); for (auto& bin : cache.peaks) { bin.minimum = {0, -.25f}; bin.maximum = {.125f, 0}; }
+        v.setLoadedPeaks(clip.assetId, ImportedAudioCache::peakSnapshot(cache), 0);
+        const auto initial = TimelineUxTestAccess::waveImage(v, clip);
+        require(greenPixels(initial, 20, 45) >= 2 && greenPixels(initial, 71, 94) == 0 && greenPixels(initial, 96, 120) >= 4, "Imported L/R envelope was merged");
+        v.transport.waveIn.onClick(); const auto doubled = TimelineUxTestAccess::waveImage(v, clip);
+        require(greenPixels(doubled, 20, 45) > greenPixels(initial, 20, 45), "Imported scale does not change waveform height");
+        for (unsigned i = 0; i < 3; ++i) v.transport.waveIn.onClick(); const auto largest = TimelineUxTestAccess::waveImage(v, clip);
+        require(greenPixels(largest, 20, 45) >= 22 && greenPixels(largest, 46, 69) == 0
+            && greenPixels(largest, 71, 94) == 0 && greenPixels(largest, 96, 120) >= 22, "Scaled channels overflow their own lanes");
+        for (int y = 0; y < largest.getHeight(); ++y) for (int x = 0; x < largest.getWidth(); ++x)
+            if (x < 250 || x >= 490 || y < 20 || y >= 120) require(largest.getPixelAt(x, y).isTransparent(), "Waveform escaped its clip box");
+        v.clearCaches(); v.refresh(false, 0, {}); cache.channels = 1;
+        v.setLoadedPeaks(clip.assetId, ImportedAudioCache::peakSnapshot(cache), 0);
+        require(greenPixels(TimelineUxTestAccess::waveImage(v, clip), 20, 120) > 0, "Legacy mono summary for stereo asset stopped painting");
+        require(d.snapshot() == before, "Waveform scale edited media");
+    });
+    suite.test("marker labels and two-pixel guides paint above clips across every row", []
+    {
+        RecorderDocument d; adopt(d); TimelineView v(d); v.setSize(1180, 620);
+        Marker primary; primary.sample = 2 * d.getProject().Fs; primary.name = ko("아주 긴 마커 이름의 말줄임과 한글 표시 확인"); primary.colour = "#4c8dff";
+        require(d.addMarker(primary).wasOk(), "Marker fixture");
+        for (unsigned i = 0; i < 60; ++i)
+        { Marker marker; marker.sample = (69 - i) * d.getProject().Fs; marker.name = "Marker " + juce::String(i); require(d.addMarker(marker).wasOk(), "Many markers fixture"); }
+        v.refresh(false, 0, {}); const auto before = d.snapshot(); const auto image = TimelineUxTestAccess::rowImage(v);
+        const int x = int(xAt(v, 2)); const auto colour = juce::Colour::fromString("ff4c8dff");
+        for (int row = 0; row < 4; ++row) require(image.getPixelAt(x, TimelineLayout::rulerHeight + row * TimelineLayout::rowHeight + 40) == colour, "Marker hidden behind a clip");
+        require(image.getPixelAt(x + 8, 2) == colour, "Marker coloured label missing");
+        require(image.getPixelAt(int(xAt(v, 11)) - 1, 2) != colour, "Dense marker label overlaps its neighbour");
+        require(image.getPixelAt(x, image.getHeight() - 2) == colour, "Marker guide stops above the last track");
+        paint(v); v.zoom(.1); paint(v); v.reveal(40 * d.getProject().Fs); paint(v); v.setSize(300, 620); paint(v);
+        require(d.snapshot() == before, "Marker paint changed the document");
+    });
+    suite.test("camera cards and ruler scrubbing paint without timeline video previews", []
+    {
+        RecorderDocument d; adopt(d); TimelineView v(d); v.setSize(1180, 620); auto* rows = rowsOf(v); const auto x = xAt(v, 4);
+        v.refresh(false, TimelineUxTestAccess::sample(v, x), {}); const auto before = TimelineUxTestAccess::rowImage(v);
+        require(before.getPixelAt(int(x) + 15, 85) == Palette::card2, "Camera card unexpectedly contains a filmstrip");
+        rows->mouseDown(mouse(*rows, x, 10, x, 10)); const auto during = TimelineUxTestAccess::rowImage(v);
+        for (int y = TimelineLayout::rulerHeight; y < TimelineLayout::rulerHeight + 2 * TimelineLayout::rowHeight; ++y)
+            for (int at = TimelineLayout::headerWidth; at < before.getWidth(); ++at)
+                require(before.getPixelAt(at, y) == during.getPixelAt(at, y), "Scrubbing added an inline video preview");
+        rows->mouseUp(mouse(*rows, x, 10, x, 10));
+    });
     suite.test("Rows magnet commits the exact off-grid neighbour end", []
     {
         RecorderDocument d; const auto p = offGridFixture(); require(d.adopt(p, {}, {}).wasOk(), "Off-grid adopt");

@@ -11,6 +11,24 @@ using namespace recorder_test;
 int runCutEditStabilityTests()
 {
     Suite suite;
+    suite.test("legacy stress model actions work after their toolbar buttons are removed", []
+    {
+        juce::ScopedJuceInitialiser_GUI runtime;
+        for (const auto action : {TimelineAction::rippleAll, TimelineAction::rippleAudio, TimelineAction::earlier,
+                                 TimelineAction::later, TimelineAction::unlink, TimelineAction::link})
+        {
+            RecorderDocument document; require(document.adopt(makeTimelineUiFixture(), {}, {}).wasOk(), "fixture");
+            TimelineView view(document); const auto id = document.getProject().tracks[0].clips.items()[0].clipId;
+            view.edits.clickClip(id); view.edits.setRange(48000, 96000);
+            StabilityTestAccess::button(view, action);
+            require(document.getProject().validate().wasOk(), "Legacy model action damaged the project");
+            if (action == TimelineAction::later || action == TimelineAction::unlink || action == TimelineAction::rippleAll)
+                require(document.getProject().editRevision > 0, "Legacy model action was silently skipped");
+        }
+        RecorderDocument document; TimelineView view(document); int requests = 0;
+        view.onAddMarkerRequested = [&] { ++requests; }; StabilityTestAccess::button(view, TimelineAction::addMarker);
+        require(requests == 1, "Retained marker button bypassed the host UI hook");
+    });
     for (const auto action : {TimelineAction::move, TimelineAction::trimIn})
         suite.test(action == TimelineAction::move ? "negative move preview paints and rejects commit" : "negative trim preview paints and rejects commit", [action]
         {

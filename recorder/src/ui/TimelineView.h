@@ -8,7 +8,6 @@
 #include "TrackHeader.h"
 #include "MarkerPanel.h"
 #include "media/PeakCache.h"
-#include "media/ThumbnailCache.h"
 #include <map>
 
 namespace gocue::recorder
@@ -26,11 +25,12 @@ public:
     void refresh(bool locked, Sample cursor, const juce::String& latestStatus);
     void setPeaks(const Id&, std::shared_ptr<PeakCache>, unsigned channel);
     void setLoadedPeaks(const Id&, PeakSnapshot, unsigned channel);
-    void setThumbnails(const Id&, std::vector<ThumbnailFrame>);
     void clearCaches();
     void zoom(double factor);
     void zoomAt(double factor, double rowX);
     void zoomToFit();
+    void changeWaveformScale(bool increase);
+    unsigned waveformScale() const noexcept { return waveScale; }
     void reveal(Sample);
     void setRecordingPreview(bool active, Sample placement, Sample elapsed, const RecordingPreviewTargets&, const UserSettings&);
     void setShortcuts(const RecorderShortcuts& value) { if (shortcuts.keys != value.keys) { shortcuts = value; updateControls(); } }
@@ -54,7 +54,6 @@ private:
     friend struct StabilityTestAccess;
     friend struct TimelineUxTestAccess;
     struct PeakDisplay { std::shared_ptr<PeakCache> live; std::shared_ptr<const PeakSnapshot> data; unsigned channel = 0; };
-    struct Thumb { Sample sample; juce::Image image; };
     class Rows : public juce::Component, private juce::Timer
     {
     public:
@@ -98,13 +97,10 @@ private:
     void showEditMenu(bool atMouse = false);
     juce::PopupMenu createEditMenu() const;
     bool isRecordingTrack(const Track&) const;
-    void showRipplePrompt();
     void updateControls();
     void setRangeFromInputs();
     bool keyPressed(const juce::KeyPress&, juce::Component*) override;
     void drawWave(juce::Graphics&, const Clip&, juce::Rectangle<float>);
-    juce::Image thumbnailFor(const Id&, Sample, bool priority = false);
-    void drawScrubPreview(juce::Graphics&);
     double xFor(Sample) const;
     Sample sampleFor(double x) const;
     static constexpr int headerWidth = TimelineLayout::headerWidth, rulerHeight = TimelineLayout::rulerHeight, rowHeight = TimelineLayout::rowHeight;
@@ -122,17 +118,14 @@ private:
     juce::TabbedComponent sidebar {juce::TabbedButtonBar::TabsAtTop};
     ClipInspector inspector;
     MarkerPanel markerPanel;
+    std::vector<Marker> displayMarkers;
     std::vector<Track> tracks;
     TimelineVisibleIndex visibleIndex, previewIndex;
     std::map<Id, const Take*> takeForAsset;
     std::map<Id, const MediaAsset*> assetById;
     std::vector<std::unique_ptr<TrackHeader>> headers;
     std::map<Id, PeakDisplay> peaks;
-    std::map<Id, std::vector<Thumb>> thumbnails;
-    struct Converted { std::shared_ptr<const ThumbnailFrame> source; juce::Image image; std::uint64_t used; };
-    std::map<const ThumbnailFrame*, Converted> convertedThumbnails;
-    ThumbnailCache progressiveThumbnails;
-    std::uint64_t thumbnailAccess = 0;
+    unsigned waveScale = 1;
     double viewStart = 0, viewSeconds = 20;
     Sample playhead = 0;
     bool locked = false;
@@ -147,7 +140,6 @@ private:
     } recordingPreview;
     juce::String latestStatus;
     juce::String editStatus;
-    std::unique_ptr<ClipEditResult> orderPreview;
     std::uint32_t lastPeakRefresh = 0;
 };
 std::unique_ptr<juce::DocumentWindow> createTimelineAutomationWindow(const juce::File&, std::function<void(int)>);

@@ -80,7 +80,19 @@ struct StabilityTestAccess
     { view.keyPressed(juce::KeyPress(code, juce::ModifierKeys(modifiers), 0), &view.rows); }
     static void menu(TimelineView& view) { view.menuButton.onClick(); }
     static void snap(TimelineView& view, bool on) { view.snapButton.setToggleState(on, juce::dontSendNotification); }
-    static void button(TimelineView& view, TimelineAction action) { view.buttons.at(action)->onClick(); }
+    static void button(TimelineView& view, TimelineAction action)
+    {
+        // Legacy stress operations still cover model edits whose UI was removed.
+        // Retained actions must continue to go through their real toolbar buttons.
+        switch (action)
+        {
+            case TimelineAction::rippleAll: case TimelineAction::rippleAudio:
+            case TimelineAction::earlier: case TimelineAction::later:
+            case TimelineAction::unlink: case TimelineAction::link:
+                view.invoke(action, view.edits.playhead()); return;
+            default: view.buttons.at(action)->onClick();
+        }
+    }
     static void mouse(TimelineView& view, int phase, juce::Point<float> point, juce::Point<float> down, int modifiers = 0)
     {
         auto& target = view.rows;
