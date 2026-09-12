@@ -1,4 +1,4 @@
-﻿; Recorder (가칭), generated ProductIdentity + audited staging directory only.
+﻿; Tally (formerly Recorder), generated ProductIdentity + audited staging directory only.
 ; Compile through tools/release.py --app recorder --package-only.
 #ifndef IdentityFile
   #error Recorder requires a generated IdentityFile from tools/release.py
@@ -74,6 +74,10 @@ Root: HKCU; Subkey: "Software\Classes\{#ProjectExtension}"; ValueType: string; V
 Root: HKCU; Subkey: "Software\Classes\{#FileType}"; ValueType: string; ValueName: ""; ValueData: "{#AppName} 프로젝트"; Flags: uninsdeletekey
 Root: HKCU; Subkey: "Software\Classes\{#FileType}\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: "{app}\{#AppExe},0"
 Root: HKCU; Subkey: "Software\Classes\{#FileType}\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\{#AppExe}"" ""%1"""
+
+[InstallDelete]
+; 0.1.8 renamed the executable Recorder.exe -> Tally.exe: remove the stale binary left by earlier installs.
+Type: files; Name: "{app}\Recorder.exe"
 
 [Run]
 ; also after a silent auto-update (WinSparkle runs Setup with /SILENT): the app comes back by itself.

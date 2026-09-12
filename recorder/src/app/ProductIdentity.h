@@ -2,24 +2,26 @@
 #include <juce_core/juce_core.h>
 
 // CMake reads these same definitions for the executable's resources.
-#define RECORDER_DISPLAY_NAME "Recorder (가칭)"
+// 2026-09-13: the CEO named the product Tally (탤리). The settings folder, project extension, file type, internal id
+// and the GitHub repository keep their "recorder" names so existing installs, settings, projects and updates carry over.
+#define RECORDER_DISPLAY_NAME "Tally"
 #define RECORDER_INTERNAL_ID "gocue.recorder"
 #define RECORDER_SETTINGS_FOLDER "Recorder"
 #define RECORDER_PROJECT_EXTENSION ".recorder"
 #define RECORDER_FILE_TYPE "Recorder.Project"
 #define RECORDER_APP_ID "{9BD0A267-2A38-47C1-9623-F1B76E2587D4}"
-#define RECORDER_VERSION "0.1.7"
+#define RECORDER_VERSION "0.1.8"
 #define RECORDER_COMPANY "Gomtwigim"
 // Confirmed by the CEO on 2026-09-10 (in-app updates): GitHub releases feed + gomtwigim.com page, like Enqueue/LiveMix.
-#define RECORDER_PACKAGE_STEM "Recorder"
+#define RECORDER_PACKAGE_STEM "Tally"
 #define RECORDER_RELEASE_REPO "dnakrhs2-crypto/recorder"
 #define RECORDER_RELEASE_REMOTE "recorder"
 #define RECORDER_TAG_PREFIX "recorder-v"
-#define RECORDER_SITE_DIR "recorder"
-#define RECORDER_SITE_URL "https://xn--jb0byyo90f.com/recorder/"
+#define RECORDER_SITE_DIR "tally"
+#define RECORDER_SITE_URL "https://xn--jb0byyo90f.com/tally/"
 #define RECORDER_APPCAST_URL "https://github.com/dnakrhs2-crypto/recorder/releases/latest/download/appcast.xml"
 #define RECORDER_RELEASE_BASE_URL "https://github.com/dnakrhs2-crypto/recorder/releases/download/"
-#define RECORDER_SOURCES_STEM "Recorder-sources"
+#define RECORDER_SOURCES_STEM "Tally-sources"
 #define RECORDER_PUBLICATION_CONFIRMED "1"
 
 namespace gocue::recorder

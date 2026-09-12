@@ -1,6 +1,6 @@
-# Recorder (가칭)
+# Tally (탤리)
 
-Windows x64용 웹캠/ASIO 녹화·편집 앱의 개발 트리다. 제품 이름·공개 저장소·지원 최소 OS는 아직 확정되지 않았다. 병행 라운드의 미디어 기능·종료 경로는 최종 본선에서 병합·재검증해야 한다.
+Windows x64용 웹캠/ASIO 녹화·편집 앱의 개발 트리다. 제품 이름은 Tally(탤리, 2026-09-13 확정)이고 공개 저장소는 dnakrhs2-crypto/recorder다. 지원 최소 OS는 아직 확정되지 않았다. 병행 라운드의 미디어 기능·종료 경로는 최종 본선에서 병합·재검증해야 한다.
 
 배포 준비는 [의존성·대응 소스](../docs/validation/recorder/dependencies.md), [설치·업데이트 검증](../docs/validation/recorder/install-update.md)을 따른다. FFmpeg LGPL v3-or-later 공유 DLL 7개와 헤더/아카이브를 [lock](third_party/ffmpeg.lock.json)으로 고정한다. 고지는 [licenses](licenses/NOTICE.txt)에 있다. JUCE/ASIO/AVC/AAC 계약은 **배포 담당·CEO 확인** 항목이다.
 

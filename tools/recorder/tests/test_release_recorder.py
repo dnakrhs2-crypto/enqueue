@@ -27,6 +27,7 @@ from recorder import validate_release as validate
 REPO = TOOLS.parent
 IDENTITY = release.recorder_identity()
 INSTALLER_NAME = IDENTITY["PACKAGE_STEM"] + "-Setup-" + IDENTITY["VERSION"] + ".exe"
+EXE = IDENTITY["PACKAGE_STEM"] + ".exe"  # 0.1.8: Tally.exe
 NOTES_RELATIVE = "docs/release-notes/recorder/" + IDENTITY["VERSION"] + ".html"
 KEY = base64.b64encode(b"k" * 32).decode()
 SIGNATURE = base64.b64encode(b"s" * 64).decode()
@@ -70,7 +71,7 @@ def refresh_manifest(bundle):
 
 def candidate(bundle):
     payload = bundle / "payload"
-    make_pe(payload / "Recorder.exe", ["avcodec-62.dll", "WinSparkle.dll", "USER32.dll"])
+    make_pe(payload / EXE, ["avcodec-62.dll", "WinSparkle.dll", "USER32.dll"])
     make_pe(payload / "WinSparkle.dll", ["KERNEL32.dll"])
     make_pe(payload / "avcodec-62.dll", ["avutil-60.dll"], ["api-ms-win-crt-runtime-l1-1-0.dll"])
     make_pe(payload / "avutil-60.dll", ["KERNEL32.dll"])
@@ -114,7 +115,7 @@ class PeAuditTests(unittest.TestCase):
 
     def test_dll_in_unrelated_subdirectory_cannot_satisfy_import(self):
         empty = {"imports": [], "delay_imports": []}
-        images = {"payload/Recorder.exe": {"imports": ["hidden.dll"], "delay_imports": []},
+        images = {"payload/" + EXE: {"imports": ["hidden.dll"], "delay_imports": []},
                   "payload/plugins/hidden.dll": empty}
         self.assertEqual(audit.dependency_closure(images)["missing"], ["hidden.dll"])
 
@@ -324,15 +325,15 @@ class LegacyRegressionTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             work, queried = self._deploy_site_dry(directory, confirmed=False)
             self.assertEqual(queried, [release.APPS[k]["repo"] for k in ("enqueue", "livemix")])
-            self.assertFalse((work / "pages/recorder").exists())
+            self.assertFalse((work / ("pages/" + IDENTITY["SITE_DIR"])).exists())  # the app page; site/recorder/ keeps a redirect
             self.assertTrue((work / "pages/livemix/index.html").is_file())
 
     def test_site_deploy_includes_confirmed_recorder(self):
         with tempfile.TemporaryDirectory() as directory:
             work, queried = self._deploy_site_dry(directory, confirmed=True)
             self.assertEqual(queried, [release.APPS[k]["repo"] for k in ("enqueue", "livemix", "recorder")])
-            self.assertTrue((work / "pages/recorder/index.html").is_file())
-            self.assertTrue((work / "pages/recorder/notes.html").is_file())
+            self.assertTrue((work / ("pages/" + IDENTITY["SITE_DIR"] + "/index.html")).is_file())
+            self.assertTrue((work / ("pages/" + IDENTITY["SITE_DIR"] + "/notes.html")).is_file())
 
 
 class RecorderReleaseRoutingTests(unittest.TestCase):
@@ -411,7 +412,7 @@ class RecorderReleaseRoutingTests(unittest.TestCase):
              mock.patch.dict(os.environ, {"CMAKE": "cmake.exe"}), mock.patch.object(release, "recorder_run") as run:
             root = Path(directory)
             build = root / "out/recorder-package-build/local"
-            exe = build / "future/output/Recorder.exe"
+            exe = build / ("future/output/" + EXE)
             exe.parent.mkdir(parents=True)
             exe.write_bytes(b"fixture")
             def configure(cmd, **kwargs):
@@ -447,8 +448,8 @@ class RecorderReleaseRoutingTests(unittest.TestCase):
                 order.append("audit+stage")
                 payload = output / "payload"
                 payload.mkdir()
-                (payload / "Recorder.exe").write_bytes(b"fixture")
-                return payload, [validate.file_record(payload / "Recorder.exe", output)]
+                (payload / EXE).write_bytes(b"fixture")
+                return payload, [validate.file_record(payload / EXE, output)]
             def local_run(cmd, **kwargs):
                 if cmd[1] == "public-key":
                     return KEY

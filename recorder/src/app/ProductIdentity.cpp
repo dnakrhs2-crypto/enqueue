@@ -26,6 +26,7 @@ juce::File ProductIdentity::settingsDirectory(const juce::File& testRoot)
 const std::vector<ProductIdentity::MigrationAlias>& ProductIdentity::migrationAliases()
 {
     // Add the previous public identifiers here before a rename; never regenerate AppId/project UUIDs.
+    // 0.1.8 (Tally): only the display name and the package stem changed, so nothing needs an alias yet.
     static const std::vector<MigrationAlias> aliases;
     return aliases;
 }

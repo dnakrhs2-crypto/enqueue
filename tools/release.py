@@ -344,7 +344,7 @@ def latest_from_github(gh, repo, app=None, allow_missing=False):
     if version.startswith(app["tag_prefix"]):
         version = version[len(app["tag_prefix"]):]
     version = version.lstrip("v")
-    installer = next((a for a in info["assets"] if re.match(r"(Enqueue|GoCue|LiveMix|Recorder)-Setup-[0-9.]+\.exe$", a["name"])), None)
+    installer = next((a for a in info["assets"] if re.match(r"(Enqueue|GoCue|LiveMix|Recorder|Tally)-Setup-[0-9.]+\.exe$", a["name"])), None)
     if installer is None:
         sys.exit("the latest release has no %s-Setup-x.y.z.exe asset" % app["name"])
     if "/releases/download/" not in installer["url"]:
