@@ -16,9 +16,9 @@ struct Fixture
 };
 void raw(const juce::File& file, const juce::MemoryBlock& bytes) { require(file.replaceWithData(bytes.getData(), bytes.getSize()), "Mutate isolated test fixture"); }
 juce::MemoryBlock bytes(const juce::File& f) { juce::MemoryBlock b; require(f.loadFileAsData(b), "Read test fixture"); return b; }
-juce::Uuid audio(Fixture& f, unsigned seconds = 2)
+juce::Uuid audio(Fixture& f, unsigned seconds = 2, Sample placement = 0)
 {
-    auto config = crashFixture::wavConfig(f.root, 2); WavTrackWriter writer(config); check(writer.start());
+    auto config = crashFixture::wavConfig(f.root, 2); config.pstart = placement; WavTrackWriter writer(config); check(writer.start());
     for (unsigned i = 0; i < seconds * 30; ++i)
     { crashFixture::push(writer, std::uint64_t(i) * 1600, 1600, 2); while (writer.queueFrames() > 48000) std::this_thread::sleep_for(std::chrono::milliseconds(1)); }
     check(writer.stop(Sample(seconds) * 48000, juce::Uuid())); return config.takeId;
@@ -35,6 +35,64 @@ int runRecoveryTests()
     av_log_set_level(AV_LOG_ERROR); unsigned passed = 0, failed = 0;
     const auto test = [&](const char* name, const std::function<void()>& run)
     { try { run(); ++passed; std::cout << "PASS " << name << '\n'; } catch (const std::exception& e) { ++failed; std::cerr << "FAIL " << name << ": " << e.what() << '\n'; } };
+    test("Recovery replays 5-second then 15-second placement with an empty interval and is idempotent", []
+    {
+        Fixture f; audio(f, 5); const auto later = audio(f, 2, 15 * 48000);
+        RecoveryReport a, b; check(RecoveryScanner().run(f.root, a));
+        require(a.project.media->findTake(later.toString())->placementSample == 15 * 48000, "Journal Pstart retained");
+        for (const auto& lane : a.project.tracks)
+            require(lane.clips.items().size() == 2 && lane.clips.items()[0].timelineEnd() == 5 * 48000
+                && lane.clips.items()[1].timelineStartSample == 15 * 48000, "Recovery leaves the requested timeline gap");
+        const auto state = RecorderSerializer::toJson(a.project); const auto files = crashFixture::hashes(f.root);
+        check(RecoveryScanner().run(f.root, b));
+        require(b.changedTakes == 0 && b.addedClips == 0 && RecorderSerializer::toJson(b.project) == state
+            && crashFixture::hashes(f.root) == files, "Second recovery neither shifts placement nor rewrites media");
+    });
+    test("Unfinished take without TakeStopped recovers durable prefix at the requested playhead", []
+    {
+        Fixture f; auto config = crashFixture::wavConfig(f.root, 1); config.pstart = 15 * 48000 + 37;
+        {
+            WavTrackWriter writer(config); check(writer.start());
+            for (unsigned i = 0; i < 3; ++i) crashFixture::push(writer, i * 1600, 1600, 1);
+            const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+            while (writer.writtenSamples() < 4800)
+            { require(std::chrono::steady_clock::now() < deadline, "Unfinished take writer timeout"); std::this_thread::sleep_for(std::chrono::milliseconds(1)); }
+            // The writer's failure/destruction path checkpoints its accepted
+            // prefix without inventing a Stop or placement transaction.
+        }
+        JournalReplay journal; check(RecordingJournal::replay(f.root.getChildFile("journal"), journal));
+        for (const auto& record : journal.records) require(record.kind != JournalKind::TakeStopped && record.kind != JournalKind::TakeFinalized,
+            "Unfinished fixture must have no normal stop/finalize record");
+        RecoveryReport report; check(RecoveryScanner().run(f.root, report));
+        const auto* take = report.project.media->findTake(config.takeId.toString());
+        require(take && take->state == TakeState::partial && take->placementSample == config.pstart && take->logicalLength == 4800,
+            "Crash prefix retains absolute placement independently of capture-clock length");
+        require(report.project.tracks[0].clips.items()[0].timelineStartSample == config.pstart, "Recovered clip begins after the leading empty interval");
+    });
+    for (const Sample placement : {Sample{0}, Sample{24037}})
+    {
+        const auto name = "Recovery overwrites sparse microphone at exact Pstart " + std::to_string(placement);
+        test(name.c_str(), [placement]
+        {
+            Fixture f; audio(f); RecoveryReport before; check(RecoveryScanner().run(f.root, before));
+            const auto untouched = before.project.tracks[0].clips.items()[0];
+            auto config = crashFixture::wavConfig(f.root, 1); config.logicalMicrophones = {2}; config.devices[0].mic = 2; config.pstart = placement;
+            WavTrackWriter writer(config); check(writer.start()); crashFixture::push(writer, 0, 1600, 1); check(writer.stop(1600, juce::Uuid()));
+            const auto originals = crashFixture::hashes(f.root, true); RecoveryReport after; check(RecoveryScanner().run(f.root, after));
+            const auto* take = after.project.media->findTake(config.takeId.toString());
+            require(take && take->placementSample == placement, "Zero is a real overwrite position, never an append sentinel");
+            const auto* kept = after.project.findClip(untouched.clipId);
+            require(kept && kept->timelineStartSample == untouched.timelineStartSample && kept->lengthSamples == untouched.lengthSamples,
+                "Recovery does not carve the linked unrecorded microphone");
+            const auto& lane = after.project.tracks[1];
+            require(lane.microphoneIndex == 1 && lane.clips.items().back().timelineStartSample == placement
+                && lane.clips.items().back().lengthSamples == 1600, "Sparse logical microphone and placement retained");
+            require(lane.clips.items().size() == (placement == 0 ? 2u : 3u), "Recovery uses trim or split on the recorded lane");
+            require(after.addedClips == 1 && originals == crashFixture::hashes(f.root, true), "Count newly placed clips without changing originals");
+            RecoveryReport again; check(RecoveryScanner().run(f.root, again));
+            require(again.changedTakes == 0 && RecorderSerializer::toJson(again.project) == RecorderSerializer::toJson(after.project), "Overwrite recovery is idempotent");
+        });
+    }
     test("Torn stereo right sample is excluded as a whole frame during recovery", []
     {
         Fixture f; auto c = crashFixture::wavConfig(f.root, 1); c.slotChannels = {2};

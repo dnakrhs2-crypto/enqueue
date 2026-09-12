@@ -75,6 +75,7 @@ private:
     friend struct StabilityTestAccess;
     friend struct ShortcutExceptionTestAccess;
     friend struct ImportUiTestAccess;
+    friend struct RecordingPlacementTestAccess;
     struct LiveCamera;
     struct Playback;
     struct PreparedPlan
@@ -92,6 +93,7 @@ private:
     void clearPlayback();
     void presentLive();
     void preparePlayback();
+    void configurePlacement(TakeController::Config&);
     std::unique_ptr<PreparedPlan> collectPreparedPlan();
     void playbackPreparationFailed(const juce::String&);
     juce::Result configurationFailed(const juce::String&);

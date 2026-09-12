@@ -1,12 +1,23 @@
 #include "TestSupport.h"
 #include "record/TakeController.h"
+#include "app/RecorderSession.h"
 #include "media/MediaIndex.h"
 #include <chrono>
+#include <limits>
 #include <thread>
 
 using namespace gocue::recorder;
 using recorder_test::require;
 namespace gocue::recorder::exception_test { extern thread_local std::function<void(const char*)> beforeTakeWorker; }
+namespace gocue::recorder
+{
+struct RecordingPlacementTestAccess
+{
+    static void configure(RecorderSession& session, TakeController::Config& config) { session.configurePlacement(config); }
+    // Marker entry/name UI belongs to another session; test only atomic placement metadata.
+    static void marker(RecorderSession& session, Marker marker) { session.recordedMarkers.push_back(std::move(marker)); }
+};
+}
 namespace
 {
 struct FailTakeLaunch
@@ -71,9 +82,10 @@ private:
 struct Fixture
 {
     RecorderDocument document;
-    RecorderAudioEngine audio;
     std::shared_ptr<DoubleState> video = std::make_shared<DoubleState>();
-    TakeController controller{document, audio, [this] { return std::make_unique<VideoDouble>(video); }};
+    RecorderSession session{document, [this] { return std::make_unique<VideoDouble>(video); }};
+    RecorderAudioEngine& audio = session.audioEngine();
+    TakeController& controller = session.takeController();
     TakeController::Config config;
     std::int64_t position = 0, qpc = qpcNow(); std::uint64_t sequence = 0;
     unsigned microphones; bool stereo;
@@ -173,6 +185,65 @@ struct FailWavTailFlush final : FileIoFaultAdapter
 int runTakeControllerTests()
 {
     recorder_test::Suite suite;
+    suite.test("Timeline cursor reserves off-grid placement, journal Pstart and one undo including markers", []
+    {
+        Fixture f; f.session.enterTimeline(true); constexpr Sample placement = 15 * 8000 + 37, length = 1601;
+        f.session.scrub(placement, true); require(f.session.playhead() == placement, "Empty timeline accepts a later cursor");
+        UserSettings names; names.microphoneNames[5] = "Recorded mic six"; f.session.updateMicrophoneSettings(names);
+        RecordingPlacementTestAccess::configure(f.session, f.config);
+        const auto before = RecorderSerializer::fingerprint(RecorderSerializer::editStateToVar(f.document.getProject()));
+        const auto n0 = f.begin(); require(f.controller.placementSample() == placement, "Controller reserves session cursor");
+        JournalReplay started; ok(RecordingJournal::replay(f.config.projectDirectory.getChildFile("journal"), started));
+        require(started.records.front().kind == JournalKind::TakeStarted && Sample(started.records.front().payload["Pstart"]) == placement,
+            "Requested placement is durable before placement or finalization");
+        Marker marker; marker.sample = placement + f.session.elapsed(); marker.name = "Recorded marker";
+        RecordingPlacementTestAccess::marker(f.session, std::move(marker));
+        require(f.document.getProject().tracks.empty() && f.document.getProject().markers.empty(), "Recording has not changed the edit structure");
+        f.video->release = false; ok(f.controller.stop(n0 + length));
+        until([&] { f.feed(); f.session.tick(); return f.controller.placementMetadata().ready; });
+        require(f.session.playhead() == placement + length, "Placement-ready moves cursor to recorded end before finalizer drain");
+        require(f.document.getHistory().undoDepth() == 1 && f.document.getProject().markers.size() == 1, "Placement and recorded marker share one history entry");
+        require(f.document.getProject().tracks.back().name == "Recorded mic six", "Microphone name belongs to the same edit");
+        f.video->release = true; f.complete(); ok(f.document.undo());
+        require(RecorderSerializer::fingerprint(RecorderSerializer::editStateToVar(f.document.getProject())) == before, "One undo removes placement, names and marker together");
+        const auto id = f.document.getProject().media->takes.back().takeId; ok(f.document.placeTake(id));
+        require(f.document.getProject().tracks.back().microphoneIndex == 5
+            && f.document.getProject().tracks.back().clips.items()[0].timelineStartSample == placement, "Registered take reinsertion retains sparse microphone and requested position");
+    });
+    suite.test("Recording tab appends at active end despite hidden cursor; project change resets cursor to end", []
+    {
+        Fixture f; auto n0 = f.begin(); ok(f.controller.stop(n0 + 401));
+        while (f.audio.stopSample() < 0) { f.feed(); f.controller.tick(); } f.complete();
+        f.session.projectChanged(); require(f.session.playhead() == 401, "Project change starts cursor at active end");
+        f.session.enterTimeline(false); f.session.scrub(100, true);
+        f.config.takeId = juce::Uuid(); RecordingPlacementTestAccess::configure(f.session, f.config);
+        require(f.config.placementSample == 401, "Recording tab ignores hidden cursor inside an existing clip");
+        n0 = f.begin(); ok(f.controller.stop(n0 + 211));
+        while (f.audio.stopSample() < 0) { f.feed(); f.controller.tick(); } f.complete();
+        require(f.document.getProject().tracks[0].clips.items().size() == 2 && f.document.getProject().activeTimelineEnd() == 612, "Recording tab retained previous take and appended");
+        f.session.projectChanged(); require(f.session.playhead() == 612, "Project reload uses new active end");
+        f.session.scrub(15 * 8000, true); f.session.play();
+        require(!f.session.playing() && f.session.playhead() == 15 * 8000 && f.session.error.isEmpty(), "Play beyond end completes without error or cursor loss");
+        f.session.scrub((std::numeric_limits<Sample>::max)(), true);
+        require(f.session.playhead() == Sample{8000} * 24 * 60 * 60, "Scrub is bounded to 24 hours");
+        f.session.scrub(-1, true); require(f.session.playhead() == 0, "Scrub clamps negative positions");
+        f.session.scrub(100, true); f.session.goToStart(); require(f.session.playhead() == 0, "Go to start is unchanged");
+    });
+    suite.test("Controller reserves overwrite position while capture leaves the existing structure locked", []
+    {
+        Fixture f; auto n0 = f.begin(); ok(f.controller.stop(n0 + 1601));
+        while (f.audio.stopSample() < 0) { f.feed(); f.controller.tick(); } f.complete();
+        const auto before = RecorderSerializer::fingerprint(RecorderSerializer::editStateToVar(f.document.getProject()));
+        const auto depth = f.document.getHistory().undoDepth();
+        f.config.takeId = juce::Uuid(); f.config.placementSample = 401; n0 = f.begin();
+        require(f.document.isRecordingStructureLocked() && RecorderSerializer::fingerprint(RecorderSerializer::editStateToVar(f.document.getProject())) == before,
+            "Preparing/recording never carves the old clips");
+        ok(f.controller.stop(n0 + 301)); while (f.audio.stopSample() < 0) { f.feed(); f.controller.tick(); } f.complete();
+        require(f.document.getProject().tracks[0].clips.items().size() == 3 && f.document.getHistory().undoDepth() == depth + 1,
+            "Stop splits old clip and inserts overwrite in one edit");
+        ok(f.document.undo()); require(RecorderSerializer::fingerprint(RecorderSerializer::editStateToVar(f.document.getProject())) == before,
+            "Controller overwrite restores with one undo");
+    });
     suite.test("Preparation launch failure restores idle and the structure lock", []
     {
         Fixture f;
@@ -349,7 +420,7 @@ int runTakeControllerTests()
         RecorderProject reopened; ok(RecorderSerializer::readCheckpoint(f.config.projectDirectory.getChildFile("project.recorder"), reopened));
         require(reopened.media->takes[0].state == TakeState::complete && reopened.validate().wasOk(), "Finalized project roundtrip");
     });
-    suite.test("Independent audio active end controls placement; markers excluded; zero microphones allowed", []
+    suite.test("Caller requests independent audio active end; markers excluded; zero microphones allowed", []
     {
         Fixture f(0); MediaAsset imported; imported.kind = AssetKind::importAudio; imported.relativePath = "media/imports/test.wav";
         imported.contentIdentity = imported.assetId; imported.logicalLength = 3000; imported.availableRanges = {{0,3000}};
@@ -360,7 +431,8 @@ int runTakeControllerTests()
             Track t; t.kind = TrackKind::importAudio; Clip c; c.trackId = t.trackId; c.assetId = imported.assetId; c.timelineStartSample = 1000; c.lengthSamples = 3000;
             t.clips.edit().push_back(c); e.tracks.push_back(t); Marker m; m.sample = 100000; e.markers.push_back(m);
         }));
-        const auto n0 = f.begin(); require(f.controller.placementSample() == 4000, "Audio end, not marker, is reserved");
+        f.config.placementSample = f.document.getProject().activeTimelineEnd();
+        const auto n0 = f.begin(); require(f.controller.placementSample() == 4000, "Requested audio end, not marker, is reserved");
         require(f.controller.warning().isNotEmpty(), "No-mic warning"); ok(f.controller.stop(n0 + 401));
         while (f.audio.stopSample() < 0) { f.feed(); f.controller.tick(); } f.complete();
         require(f.controller.state() == TakeController::State::done, "Output-only recording succeeds");
@@ -418,6 +490,7 @@ int runTakeControllerTests()
         for (int index = 0; index < 2; ++index)
         {
             f.config.takeId = juce::Uuid();
+            f.config.placementSample = f.document.getProject().activeTimelineEnd();
             const auto n0 = f.begin();
             require(!f.controller.placementMetadata().ready, "New take clears previous placement cache");
             require(f.controller.placementSample() == index * 401, "Next take follows previous active clip end");

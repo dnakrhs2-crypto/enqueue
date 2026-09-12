@@ -147,7 +147,8 @@ int runDualPlaybackTests()
         stamp = output.tick(transport); transport.service(audio, video, output, stamp.callbackQpc);
         eventually([&] { return video.ready(0, generation); });
         require(audio.length() == 48000 && video.displaySelection(1).frame->pts == 120, "A/V replacement mismatch");
-        require(transport.status().wasOk(), "Plan handoff failed"); rejects([&] { transport.seek(48001); });
+        require(transport.status().wasOk(), "Plan handoff failed"); transport.seek(48001);
+        require(transport.playhead(qpcNow()) == 48001 && audio.length() == 48000, "Cursor can pass the new end without extending the audio plan");
     });
     suite.test("10000 clips and long Korean names use visible intervals and logical DPI layout", []
     {

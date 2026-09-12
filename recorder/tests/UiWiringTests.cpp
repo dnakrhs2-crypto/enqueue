@@ -109,9 +109,10 @@ struct ReviewFolder
 };
 std::int32_t reviewPcm(Sample frame, unsigned channel)
 { return std::int32_t((frame % 29 + 1) * (channel + 1) * 65536) * (channel % 2 ? -1 : 1); }
-WavTrackWriter::Config writeReviewTake(const juce::File& folder, const std::vector<unsigned>& slots, Sample frames)
+WavTrackWriter::Config writeReviewTake(const juce::File& folder, const std::vector<unsigned>& slots, Sample frames, Sample placement = 0)
 {
     WavTrackWriter::Config c; c.projectDirectory = folder; c.sampleRate = 8000; c.framesPerBlock = 1024;
+    c.pstart = placement;
     c.mics = unsigned(slots.size()); c.slotChannels = slots;
     unsigned channels = 0;
     for (unsigned i = 0; i < slots.size(); ++i)
@@ -484,7 +485,7 @@ int runUiWiringTests()
             const auto lost = writeReviewTake(f.root, {channels}, 13);
             const auto missing = f.root.getChildFile(WavTrackWriter::chunkPath(lost.takeId, 1, 1));
             require(missing.deleteFile(), "Remove isolated take WAV before real recovery");
-            writeReviewTake(f.root, {channels}, 13);
+            writeReviewTake(f.root, {channels}, 13, 13);
             RecoveryReport recovered; const auto result = RecoveryScanner().run(f.root, recovered);
             require(result.wasOk(), result.getErrorMessage().toRawUTF8());
             require(recovered.project.media->takes.size() == 2 && recovered.project.activeTimelineEnd() == 26, "Recover both takes and preserve placement");

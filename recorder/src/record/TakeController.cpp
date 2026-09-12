@@ -767,7 +767,11 @@ struct TakeController::Impl
             for (auto& asset : assets) ++asset.mediaGeneration;
             take.state = partial ? TakeState::partial : TakeState::complete;
             if (!document.getProject().media->findTake(take.takeId))
-                return document.placeRecordedTake(take, assets, logicalIndices);
+            {
+                const auto result = document.placeRecordedTake(take, assets, logicalIndices, config.editPlacement);
+                placementMetadata.ready = result.wasOk();
+                return result;
+            }
             for (const auto& asset : assets) requireResult(document.updateMediaAsset(asset));
             return document.updateTakeState(take.takeId, take.state);
         }
@@ -778,7 +782,7 @@ struct TakeController::Impl
         if (!stopQpc) stopQpc = qpcNow();
         length = audio.stopSample() - audio.startSample();
         peakSnapshot = audio.peaks();
-        placementMetadata = {length > 0, false, audio.startSample(), audio.stopSample(), placement, deviceSnapshot.sampleRate, peakSnapshot,
+        placementMetadata = {false, false, audio.startSample(), audio.stopSample(), placement, deviceSnapshot.sampleRate, peakSnapshot,
                              cameras[0].video && cameras[0].video->thumbnailReady() ? takeFolder().getChildFile("index/first-thumbnail.bmp") : juce::File()};
         placementMetadata.waveform = audio.peakCache();
         if (length <= 0)
@@ -793,7 +797,8 @@ struct TakeController::Impl
             for (unsigned i = 0; i < cameraCount; ++i)
                 if (cameras[i].video->failed()) setRanges(assets[i], cameras[i].video->availableSamples());
             for (std::size_t i = 0; i < logicalMics.size(); ++i) setChunks(assets[i + cameraCount], logicalMics[i], length);
-            const auto result = document.placeRecordedTake(take, assets, logicalIndices);
+            const auto result = document.placeRecordedTake(take, assets, logicalIndices, config.editPlacement);
+            placementMetadata.ready = result.wasOk();
             if (result.failed()) { partial = true; failure = result.getErrorMessage(); }
             else { take = *document.getProject().media->findTake(take.takeId); placementEdit = juce::Uuid(document.lastEditTransaction()); }
         }
@@ -847,6 +852,7 @@ juce::Result TakeController::prepare(Config config)
     if (s.current != State::idle && s.current != State::done && s.current != State::partialFailure) return juce::Result::fail("Take controller is busy");
     if (s.work.valid()) return juce::Result::fail("Previous worker completion must be consumed");
     const auto device = s.audio.deviceInfo();
+    if (config.placementSample < 0) return juce::Result::fail("Recording placement cannot be negative");
     if (!device.sampleRate || config.projectDirectory == juce::File() || config.takeId.isNull()
         || (config.projectFps != 30 && config.projectFps != 60) || config.cameraMode.width != 1920 || config.cameraMode.height != 1080
         || !config.cameraMode.fps.numerator || !config.cameraMode.fps.denominator || (!config.synthetic && config.cameraSymbolicLink.empty()))
@@ -885,7 +891,7 @@ juce::Result TakeController::prepare(Config config)
     s.mappingSnapshot.clear(); s.deviceSnapshot = device; s.placementMetadata = {}; s.transitions = {State::idle}; s.current = State::idle;
     s.requestedN0 = -1; s.collectionOrigin = -1; s.masterEpoch = 0; s.length = 0; s.stopQpc = s.finalizationQpc = 0;
     s.placementMs = s.finalizationMs = s.mediaFinalizationMs = s.stopToDoneMs = 0; s.placementEdit = juce::Uuid();
-    s.placement = s.document.getProject().activeTimelineEnd(); s.preparationNotice.clear();
+    s.placement = s.config.placementSample; s.preparationNotice.clear();
     s.detachSink();
     for (auto& c : s.cameras) { c.active = false; c.disconnected = false; c.referenceFailed = false; c.staleOffers = 0; c.report = juce::var(); }
     s.cameras[0].generation = s.config.cameraGeneration; s.cameras[1].generation = s.config.camera2.generation;

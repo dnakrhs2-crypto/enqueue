@@ -59,6 +59,8 @@ public:
         };
         juce::File projectDirectory;
         juce::Uuid takeId;
+        Sample placementSample = 0; // reserved timeline position, independent of the capture clock
+        std::function<void(EditState&)> editPlacement; // owner-thread metadata, in the same undo/journal transaction
         std::string cameraSymbolicLink;
         CameraMode cameraMode;
         bool synthetic = false;

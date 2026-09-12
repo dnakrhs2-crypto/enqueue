@@ -108,7 +108,8 @@ public:
     void setRecordingStructureLock(bool locked) { assertOwner(); recordingStructureLock = locked; }
     bool isRecordingStructureLocked() const { return recordingStructureLock; }
     // Coordinator-only placement keeps the structure lock held through publication.
-    juce::Result placeRecordedTake(Take, std::vector<MediaAsset>, const std::vector<int>& logicalMicrophoneIndices);
+    juce::Result placeRecordedTake(Take, std::vector<MediaAsset>, const std::vector<int>& logicalMicrophoneIndices,
+                                  const std::function<void(EditState&)>& metadata = {});
     const Id& lastEditTransaction() const { return lastTransaction; }
     // Coordinator transaction: register captured originals and replace the complete
     // dubbing version in one publication/undo step, including while capture is locked.
@@ -141,6 +142,7 @@ private:
     const std::thread::id owner = std::this_thread::get_id();
     bool recordingStructureLock = false;
     std::vector<int> placementMicrophones;
+    std::function<void(EditState&)> placementMetadata;
     Id lastTransaction;
     void enqueueRegistry();
 };

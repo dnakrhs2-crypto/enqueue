@@ -359,7 +359,6 @@ juce::Result RecorderDocument::placeNewTake(Take take, std::vector<MediaAsset> a
         if (last == (std::numeric_limits<int>::max)()) return fail(juce::String::fromUTF8("테이크 번호 범위를 초과했습니다."));
         take.number = last + 1;
     }
-    if (take.mode == TakeMode::normal) take.placementSample = project->activeTimelineEnd();
     if (take.createdAt.isEmpty()) take.createdAt = juce::Time::getCurrentTime().toISO8601(true);
     if (take.name.isEmpty()) take.name = juce::String::fromUTF8("테이크 ") + juce::String(take.number).paddedLeft('0', 3) + " · " + take.createdAt;
     registry->assets.insert(registry->assets.end(), assets.begin(), assets.end()); registry->takes.push_back(take); next.media = registry;
@@ -371,10 +370,43 @@ juce::Result RecorderDocument::placeTake(const Id& id)
     assertOwner(); if (editing) return juce::Result::fail(juce::String::fromUTF8("편집 작업 중입니다."));
     const juce::ScopedValueSetter<bool> guard(editing, true);
     const auto* take = project->media->findTake(id); if (take == nullptr) return fail(juce::String::fromUTF8("테이크를 찾을 수 없습니다."));
-    return place(*project, *take, take->mode == TakeMode::normal ? project->activeTimelineEnd() : take->placementSample);
+    return place(*project, *take, take->placementSample);
 }
 juce::Result RecorderDocument::place(RecorderProject next, const Take& take, Sample placement, EditOrigin origin)
 {
+    auto microphones = placementMicrophones;
+    if (microphones.empty()) for (size_t i = 0; i < take.microphoneAssetIds.size(); ++i)
+    {
+        int logical = int(i);
+        // Registered originals survive undo. Their recorded chunk paths retain
+        // sparse logical lanes even when no placed clip remains to identify them.
+        if (const auto* asset = next.media->findAsset(take.microphoneAssetIds[i]))
+        {
+            const auto path = asset->chunks.empty() ? asset->relativePath : asset->chunks.front().relativePath;
+            const auto folder = path.upToLastOccurrenceOf("/", false, false).fromLastOccurrenceOf("/", false, false);
+            if (folder.length() == 5 && folder.startsWith("mic"))
+            {
+                const auto slot = folder.substring(3).getIntValue();
+                if (slot >= 1 && slot <= 8) logical = slot - 1;
+            }
+        }
+        microphones.push_back(logical);
+    }
+    if (take.mode == TakeMode::normal)
+    {
+        std::vector<Id> targets;
+        for (const auto& t : next.tracks)
+        {
+            bool recorded = (t.kind == TrackKind::cam1 && take.cam1AssetId.isNotEmpty())
+                || (t.kind == TrackKind::cam2 && take.cam2AssetId.isNotEmpty());
+            if (t.kind == TrackKind::mic) for (size_t i = 0; i < take.microphoneAssetIds.size(); ++i)
+                recorded |= t.microphoneIndex == microphones[i];
+            if (recorded) targets.push_back(t.trackId);
+        }
+        auto carved = ClipEdits::carveOut(next, targets, {placement, take.logicalLength});
+        if (carved.status.failed()) return fail(carved.status.getErrorMessage());
+        next = std::move(carved.project);
+    }
     LinkGroup group;
     const auto addClip = [&](const Id& assetId, TrackKind kind, int micIndex, const juce::String& name)
     {
@@ -389,11 +421,16 @@ juce::Result RecorderDocument::place(RecorderProject next, const Take& take, Sam
     addClip(take.cam2AssetId, TrackKind::cam2, -1, juce::String::fromUTF8("캠2"));
     for (size_t i = 0; i < take.microphoneAssetIds.size(); ++i)
     {
-        const int logical = placementMicrophones.empty() ? static_cast<int>(i) : placementMicrophones[i];
+        const int logical = microphones[i];
         addClip(take.microphoneAssetIds[i], TrackKind::mic, logical, juce::String::fromUTF8("마이크 ") + juce::String(logical + 1));
     }
     if (group.clipIds.size() >= 2) next.linkGroups.push_back(group);
     else for (auto& t : next.tracks) for (auto& c : t.clips.edit()) if (c.linkGroupId == group.linkGroupId) c.linkGroupId.clear();
+    if (origin == EditOrigin::coordinator && placementMetadata)
+    {
+        try { placementMetadata(next); }
+        catch (const std::exception& e) { return fail(juce::String::fromUTF8(e.what())); }
+    }
     return publishEdit(std::move(next), juce::String::fromUTF8("테이크 배치"), {}, true, group.clipIds, origin);
 }
 void RecorderDocument::acknowledgeJournal(const EditDelta& ticket, const juce::Result& result)
@@ -424,7 +461,8 @@ void RecorderDocument::acknowledgeJournalState(Snapshot written, const juce::Res
     dirty = checkpointRequired || savedRevision < project->editRevision;
     if (!dirty) error.clear(); notify();
 }
-juce::Result RecorderDocument::placeRecordedTake(Take take, std::vector<MediaAsset> assets, const std::vector<int>& microphones)
+juce::Result RecorderDocument::placeRecordedTake(Take take, std::vector<MediaAsset> assets, const std::vector<int>& microphones,
+    const std::function<void(EditState&)>& metadata)
 {
     assertOwner();
     if (microphones.size() != take.microphoneAssetIds.size() || !placementMicrophones.empty())
@@ -436,6 +474,7 @@ juce::Result RecorderDocument::placeRecordedTake(Take take, std::vector<MediaAss
         seen.push_back(mic);
     }
     const juce::ScopedValueSetter<std::vector<int>> mapping(placementMicrophones, microphones);
+    const juce::ScopedValueSetter<std::function<void(EditState&)>> annotations(placementMetadata, metadata);
     return placeNewTake(std::move(take), std::move(assets), EditOrigin::coordinator);
 }
 }

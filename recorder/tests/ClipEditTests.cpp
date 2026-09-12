@@ -57,6 +57,20 @@ int runClipEditTests()
 {
     int passed = 0, failed = 0;
     const auto test = [&](const char* name, auto body) { try { body(); ++passed; std::cout << "PASS clip " << name << '\n'; } catch (const std::exception& e) { ++failed; std::cerr << "FAIL clip " << name << ": " << e.what() << '\n'; } };
+    test("carve is deterministic, sample-exact and does not expand links or inactive versions", []
+    {
+        const auto p = stacked(); const std::vector<Id> lanes{p.tracks[0].trackId}; const SampleRange r{101, 203};
+        const auto q = result(ClipEdits::carveOut(p, lanes, r));
+        need(hash(q) == hash(result(ClipEdits::carveOut(p, lanes, r))) && q.media == p.media && q.editRevision == p.editRevision, "Pure deterministic carve");
+        need(clip(q, 0).lengthSamples == 101 && clip(q, 0, 1).timelineStartSample == 304 && clip(q, 0, 1).sourceIn == 304, "Exact fragments");
+        for (size_t lane = 1; lane < p.tracks.size(); ++lane) need(&q.tracks[lane].clips.items() == &p.tracks[lane].clips.items(), "Untargeted clip storage unchanged");
+        need(q.findClip(clip(p, 0, 1).clipId)->lengthSamples == 8*S, "Inactive version unchanged");
+        need(hash(result(ClipEdits::carveOut(p, {}, r))) == hash(p), "Empty target lanes are a no-op");
+        rejected(p, ClipEdits::carveOut(p, {newId()}, r));
+        rejected(p, ClipEdits::carveOut(p, lanes, {-1, 3}));
+        rejected(p, ClipEdits::carveOut(p, lanes, {0, 0}));
+        rejected(p, ClipEdits::carveOut(p, lanes, {(std::numeric_limits<Sample>::max)() - 2, 3}));
+    });
     test("split snaps all linked members and preserves source continuity", []
     {
         const auto p = fixture(); const auto before = hash(p); const auto q = result(ClipEdits::split(p, {clip(p, 2).clipId}, 12017));

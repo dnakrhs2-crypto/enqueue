@@ -270,8 +270,9 @@ juce::Result RecorderSession::record()
         return juce::Result::ok(); // endExclusive acknowledges the export checkpoint/join
     }
     if (!lifecycle->begin(RecorderLifecycle::recording)) return juce::Result::fail(recorderFaultText(RecorderFault::updateBusy));
-    clearPlayback(); presentLive(); error.clear(); notice.clear(); recordedMarkers.clear(); peaksPublished.clear();
+    clearPlayback(); wantPlay = pendingLatest = false; presentLive(); error.clear(); notice.clear(); recordedMarkers.clear(); peaksPublished.clear();
     TakeController::Config c; c.projectDirectory = document.getFile().getParentDirectory(); c.takeId = juce::Uuid();
+    configurePlacement(c);
     c.cameraSymbolicLink = current.cameraDeviceIds[0].toStdString(); c.cameraMode = cameras[0]->mode;
     c.projectFps = int(document.getProject().fps.numerator); c.externalCapture = true;
     c.cameraGeneration = cameras[0]->capture->generation();
@@ -293,6 +294,20 @@ juce::Result RecorderSession::record()
     const auto result = take.prepare(c); if (result.wasOk()) { autoStart = true; derivedWorker.setRecording(true); }
     else lifecycle->end(RecorderLifecycle::recording);
     return result;
+}
+void RecorderSession::configurePlacement(TakeController::Config& config)
+{
+    // The recording tab has no visible cursor: reserve the active end there.
+    config.placementSample = timeline ? playhead() : document.getProject().activeTimelineEnd();
+    config.editPlacement = [this](EditState& e)
+    {
+        for (auto& track : e.tracks) if (track.kind == TrackKind::mic && track.microphoneIndex >= 0 && track.microphoneIndex < 8)
+        {
+            const auto& name = current.microphoneNames[unsigned(track.microphoneIndex)];
+            if (name.isNotEmpty()) track.name = name;
+        }
+        e.markers.insert(e.markers.end(), recordedMarkers.begin(), recordedMarkers.end());
+    };
 }
 juce::Result RecorderSession::setCalibrationProfiles(std::vector<CalibrationProfile> profiles)
 {
@@ -329,7 +344,7 @@ void RecorderSession::preparePlayback()
     if (configuring() || recording() || take.state() == TakeController::State::finalizing || planWork.valid() || playback || !device.sampleRate) return;
     if (device.sampleRate != document.getProject().Fs) { error = rateMismatchText(document.getProject().Fs, device.sampleRate); return; }
     const auto snapshot = document.snapshot(); const auto folder = document.getFile().getParentDirectory();
-    if (!snapshot->activeTimelineEnd()) return;
+    if (!snapshot->activeTimelineEnd()) { wantPlay = pendingLatest = false; return; }
     notice = k("재생 준비 중");
     const auto generation = lifecycle->generation();
     planImportControl = std::make_shared<AudioImportControl>();
@@ -439,6 +454,12 @@ void RecorderSession::play(bool latest)
         if (take.state() == TakeController::State::idle && !document.getProject().media->takes.empty()) cursor = document.getProject().media->takes.back().placementSample;
     }
     timeline = true;
+    if (playhead() >= document.getProject().activeTimelineEnd())
+    {
+        wantPlay = pendingLatest = false;
+        if (playback) playback->transport.stop();
+        return;
+    }
     if (playback) { playback->transport.play(); pendingLatest = false; }
     else preparePlayback();
 }
@@ -458,13 +479,13 @@ void RecorderSession::scrub(Sample sample, bool released)
 {
     if (!lifecycle->acceptsCommands()) return;
     if (recording()) return; wantPlay = false;
-    cursor = std::clamp(sample, Sample{0}, document.getProject().activeTimelineEnd());
+    cursor = std::clamp(sample, Sample{0}, Sample(document.getProject().Fs) * 24 * 60 * 60);
     if (playback) playback->transport.scrub(cursor, released, qpcNow()); else preparePlayback();
 }
 bool RecorderSession::playing() const
 { if (!playback) return wantPlay; const auto s = playback->transport.snapshot().state; return wantPlay || s == TransportState::playing || s == TransportState::scheduled; }
 Sample RecorderSession::playhead() const
-{ return playback ? TimelineTransport::audibleCursor(playback->transport.snapshot(), device.sampleRate, qpcFrequency(), qpcNow()) : cursor; }
+{ return playback ? playback->transport.playhead(qpcNow()) : cursor; }
 Sample RecorderSession::elapsed() const
 { return recording() && !configuring() && audio.startSample() >= 0 ? std::max(Sample{0}, audio.acceptedEnd() - audio.startSample()) : take.logicalLength(); }
 void RecorderSession::setMonitoring(std::uint8_t mask) { audio.setInputMonitoring(mask != 0, mask); }
@@ -488,7 +509,7 @@ void RecorderSession::projectChanged()
     ++derivedGeneration;
     derivedWorker.invalidate();
     { const std::lock_guard<std::mutex> lock(derivedMutex); derivedResults.clear(); }
-    clearPlayback(); take.reset(); cursor = 0; wantPlay = false; pendingLatest = false; peaksPublished.clear(); error.clear(); notice.clear();
+    clearPlayback(); take.reset(); cursor = document.getProject().activeTimelineEnd(); wantPlay = false; pendingLatest = false; peaksPublished.clear(); error.clear(); notice.clear();
     if (planImportControl) planImportControl->cancelled.store(true);
     if (planWork.valid()) planWork.wait(); // project replacement is disabled while plan preparation is pending
     videoIndexes.clear(); wavIndexes.clear(); importedIndexes.clear(); derivedKeys.clear(); derivedProject = document.getProject().projectId;
@@ -606,20 +627,13 @@ void RecorderSession::tick()
     const auto& meta = take.placementMetadata();
     if (meta.ready && peaksPublished.isEmpty())
     {
+        if (!playing()) cursor = meta.timelineSample + (meta.Nstop - meta.N0);
         const auto& p = document.getProject();
         if (!p.media->takes.empty())
         {
             const auto& t = p.media->takes.back(); peaksPublished = t.takeId;
             for (unsigned i = 0; i < t.microphoneAssetIds.size(); ++i) if (onPeaks && meta.waveform) onPeaks(t.microphoneAssetIds[i], meta.waveform, i);
-            document.performEdit(k("녹화 마이크 이름과 마커"), [this](EditState& e)
-            {
-                for (auto& track : e.tracks) if (track.kind == TrackKind::mic && track.microphoneIndex >= 0 && track.microphoneIndex < 8)
-                {
-                    const auto& name = current.microphoneNames[unsigned(track.microphoneIndex)];
-                    if (name.isNotEmpty()) track.name = name;
-                }
-                e.markers.insert(e.markers.end(), recordedMarkers.begin(), recordedMarkers.end());
-            }); recordedMarkers.clear();
+            recordedMarkers.clear();
         }
     }
     derivedWorker.setRecording(recording());
@@ -668,7 +682,7 @@ void RecorderSession::tick()
                 else playback->renderer.setPlan(std::move(plan->tracks), plan->end);
                 playback->video.prepare(std::move(plan->videos));
                 for (unsigned i = 0; i < 2; ++i) if (hosts[i]) playback->video.attachPlaybackView(i, hosts[i]);
-                playback->output.start(playback->transport); playback->transport.seek(std::clamp(cursor, Sample{0}, plan->end));
+                playback->output.start(playback->transport); playback->transport.seek(std::max(cursor, Sample{0}));
                 if (wantPlay) playback->transport.play(); pendingLatest = false; notice.clear();
             }
             catch (const std::exception& e) { playbackPreparationFailed(juce::String::fromUTF8(e.what())); }

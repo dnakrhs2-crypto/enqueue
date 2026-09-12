@@ -36,7 +36,7 @@ void TimelineTransport::send(Command c)
 void TimelineTransport::seek(Sample sample)
 {
     if (dubbingLocked) throw std::logic_error("더빙 중에는 탐색할 수 없습니다.");
-    if (sample < 0 || sample > end) throw std::out_of_range("Seek outside timeline");
+    if (sample < 0) throw std::out_of_range("Negative timeline seek");
     send({Kind::prepare, requestedGeneration + 1, sample, 0});
     ++requestedGeneration; requestedSample = sample; armedGeneration = 0; stopAfterPrepare = false; scrubPending = false;
     timing = {}; timing.request = qpcNow();
@@ -46,6 +46,12 @@ void TimelineTransport::play()
     if (dubbingLocked) throw std::logic_error("더빙 중에는 재생을 변경할 수 없습니다.");
     if (scrubPending) seek(pendingScrub);
     wantPlay = true; const auto s = snapshot();
+    if (playhead(s.callbackQpc) >= end)
+    {
+        wantPlay = false;
+        if (s.generation == requestedGeneration) send({Kind::stopped, requestedGeneration, requestedSample, 0});
+        return;
+    }
     // A Play pressed immediately after Seek must keep that pending target.
     if (s.generation != requestedGeneration) return;
     if (s.state == TransportState::stopped || s.state == TransportState::paused)
@@ -65,8 +71,7 @@ void TimelineTransport::stop()
     if (dubbingLocked) throw std::logic_error("더빙 중에는 재생을 변경할 수 없습니다.");
     wantPlay = false;
     const auto s = snapshot();
-    const auto target = s.generation != requestedGeneration ? requestedSample
-        : s.outputOrigin >= 0 ? audibleCursor(s, rate, frequency, s.callbackQpc) : s.frozenSample;
+    const auto target = playhead(s.callbackQpc);
     seek(target); stopAfterPrepare = true;
 }
 void TimelineTransport::goToStart() { seek(0); wantPlay = false; }
@@ -86,7 +91,7 @@ void TimelineTransport::stagePlan(std::shared_ptr<const CompiledRenderPlan> plan
 void TimelineTransport::scrub(Sample sample, bool released, std::int64_t now)
 {
     if (dubbingLocked) throw std::logic_error("더빙 중에는 탐색할 수 없습니다.");
-    if (sample < 0 || sample > end) throw std::out_of_range("Scrub outside timeline");
+    if (sample < 0) throw std::out_of_range("Negative timeline scrub");
     wantPlay = false; pendingScrub = sample; scrubPending = true;
     ++scrubInputs;
     if (released || !lastScrubQpc || now - lastScrubQpc >= frequency / 15)
@@ -96,9 +101,17 @@ void TimelineTransport::prepared(std::int64_t output, bool start)
 {
     if (dubbingLocked) throw std::logic_error("더빙 중에는 출력을 변경할 수 없습니다.");
     if (snapshot().generation != requestedGeneration) throw std::logic_error("Prepare requires callback generation acknowledgement");
+    if (requestedSample >= end) { start = wantPlay = false; stopAfterPrepare = true; }
     send({start ? Kind::start : stopAfterPrepare ? Kind::stopped : Kind::ready, requestedGeneration, requestedSample, output});
     armedGeneration = requestedGeneration;
     timing.armed = qpcNow();
+}
+Sample TimelineTransport::playhead(std::int64_t now) const noexcept
+{
+    if (scrubPending) return pendingScrub;
+    const auto s = snapshot();
+    if (s.generation != requestedGeneration || s.state == TransportState::preparing) return requestedSample;
+    return audibleCursor(s, rate, frequency, now);
 }
 Sample TimelineTransport::audibleCursor(const TransportSnapshot& s, std::uint32_t Fs, std::int64_t hz,
                                        std::int64_t now, std::int64_t lead) noexcept
@@ -277,7 +290,9 @@ void TimelineTransport::service(TimelineAudioRenderer& audio, VideoPlaybackEngin
             if (preparingGeneration != s.generation)
             {
                 timing.callbackAck = s.callbackQpc; timing.audioBegin = qpcNow();
-                audio.prepare(requestedSample, s.generation); timing.audioEnd = qpcNow();
+                // A cursor beyond the last clip is valid for recording placement.
+                // Prepare an empty audio tail while video selects the actual gap.
+                audio.prepare((std::min)(requestedSample, end), s.generation); timing.audioEnd = qpcNow();
                 preparingGeneration = s.generation;
             }
             const auto audioStatus = audio.status(), videoStatus = video.status();

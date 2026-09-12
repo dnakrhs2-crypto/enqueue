@@ -534,13 +534,21 @@ private:
     {
         auto& self = *reinterpret_cast<PlaybackView*>(data);
         if (message == overlayMessage && l == reinterpret_cast<LPARAM>(&self)) { self.updateOverlay(int(w)); return 0; }
+        if (message == WM_CTLCOLORSTATIC && reinterpret_cast<HWND>(l) == self.placeholder)
+        {
+            auto dc = reinterpret_cast<HDC>(w); SetBkColor(dc, RGB(0, 0, 0)); SetTextColor(dc, RGB(170, 170, 170));
+            return reinterpret_cast<LRESULT>(GetStockObject(BLACK_BRUSH));
+        }
         if (message == WM_SIZE || message == WM_DPICHANGED) self.updateOverlay(self.overlayState);
         return DefSubclassProc(window, message, w, l);
     }
     void updateOverlay(int overlayMode) // HWND owner only; worker posts state, never touches UI/GDI
     {
         overlayState = overlayMode; RECT bounds{}; GetClientRect(hwnd, &bounds);
-        const auto height = MulDiv(36, int(GetDpiForWindow(hwnd)), 96);
+        // The first decoded texture supplies the presenter adapter. A leading
+        // gap has no texture yet, so cover the entire old/live HWND in black
+        // immediately, before a DXGI swapchain can exist.
+        const auto height = overlayMode == 1 ? bounds.bottom : MulDiv(36, int(GetDpiForWindow(hwnd)), 96);
         SetWindowPos(placeholder, HWND_TOP, 0, (bounds.bottom - height) / 2, bounds.right, height, SWP_NOACTIVATE);
         SetWindowTextW(placeholder, overlayMode == 1 ? L"영상 없음" : L"영상 준비 중");
         ShowWindow(placeholder, overlayMode ? SW_SHOWNOACTIVATE : SW_HIDE);

@@ -223,7 +223,6 @@ std::uint64_t copyWav(const juce::File& source, const juce::File& dest, const Jo
     if (bytes & 1) { const std::uint8_t pad = 0; check(output.write(&pad, 1)); }
     check(input.getStatus()); check(output.flushData()); check(output.close()); return samples;
 }
-std::size_t clips(const RecorderProject& p) { std::size_t n = 0; for (const auto& t : p.tracks) n += t.clips.items().size(); return n; }
 }
 juce::var RecoveryReport::toJson() const
 {
@@ -421,7 +420,6 @@ juce::Result RecoveryScanner::run(const juce::File& root, RecoveryReport& report
                 if (valid) completed.insert(take.takeId); else report.warnings.add("Completed take manifest/file mismatch: " + take.takeId);
             }
         }
-        const auto originalClipCount = clips(report.project);
         auto registry = std::make_shared<MediaRegistry>(*report.project.media); report.project.media = registry;
         juce::Array<juce::var> outputFiles;
         if (const auto* prior = chosenCommit["files"].getArray()) outputFiles = *prior;
@@ -446,8 +444,8 @@ juce::Result RecoveryScanner::run(const juce::File& root, RecoveryReport& report
                 take.mode = state.start["placementMode"].toString() == "dub" ? TakeMode::dub : TakeMode::normal;
                 if (!state.start.hasProperty("placementMode") && bool(state.start["usesOutputOrigin"]))
                     report.warnings.add("Legacy take has output-clock origin but no placement mode; preserving Pstart, using normal mode: " + takeId);
-                if (take.mode == TakeMode::normal && take.placementSample == 0
-                    && (state.start.hasProperty("placementMode") || !bool(state.start["usesOutputOrigin"]))) take.placementSample = report.project.activeTimelineEnd();
+                // Pstart is an absolute timeline position, including an intentional
+                // overwrite at zero. It is independent of the input/output origin.
             }
             JournalPcmFormat fmt; const auto pcm = state.start["pcm"]; fmt.sampleRate = u32(pcm["sampleRate"]); fmt.dataOffset = u32(pcm["dataOffset"]);
             require(fmt.sampleRate == report.project.Fs, "Take/project sample-rate mismatch");
@@ -579,6 +577,8 @@ juce::Result RecoveryScanner::run(const juce::File& root, RecoveryReport& report
             if (!existing && !transactions.count(state.placementTransaction))
             {
                 LinkGroup link;
+                std::vector<std::pair<Id, Id>> placements;
+                std::vector<Id> targets;
                 for (const auto& a : assets)
                 {
                     const auto kind = a.kind == AssetKind::mic ? TrackKind::mic : a.assetId == take.cam2AssetId ? TrackKind::cam2 : TrackKind::cam1;
@@ -595,9 +595,19 @@ juce::Result RecoveryScanner::run(const juce::File& root, RecoveryReport& report
                     }
                     auto lane = std::find_if(report.project.tracks.begin(), report.project.tracks.end(), [&](const auto& t) { return t.kind == kind && t.microphoneIndex == mic; });
                     if (lane == report.project.tracks.end()) { Track t; t.kind = kind; t.microphoneIndex = mic; t.name = kind == TrackKind::mic ? "Mic " + juce::String(mic + 1) : kind == TrackKind::cam2 ? "Cam 2" : "Cam 1"; report.project.tracks.push_back(t); lane = report.project.tracks.end() - 1; }
-                    Clip clip; clip.assetId = a.assetId; clip.trackId = lane->trackId; clip.timelineStartSample = take.placementSample; clip.lengthSamples = length;
+                    placements.emplace_back(a.assetId, lane->trackId); targets.push_back(lane->trackId);
+                }
+                if (take.mode == TakeMode::normal)
+                {
+                    auto carved = ClipEdits::carveOut(report.project, targets, {take.placementSample, length});
+                    check(carved.status); report.project = std::move(carved.project);
+                }
+                for (const auto& placement : placements)
+                {
+                    auto lane = std::find_if(report.project.tracks.begin(), report.project.tracks.end(), [&](const auto& t) { return t.trackId == placement.second; });
+                    Clip clip; clip.assetId = placement.first; clip.trackId = lane->trackId; clip.timelineStartSample = take.placementSample; clip.lengthSamples = length;
                     if (assets.size() > 1) { clip.linkGroupId = link.linkGroupId; link.clipIds.push_back(clip.clipId); }
-                    lane->clips.edit().push_back(clip);
+                    lane->clips.edit().push_back(clip); ++report.addedClips;
                 }
                 if (link.clipIds.size() > 1) report.project.linkGroups.push_back(link);
             }
@@ -610,7 +620,7 @@ juce::Result RecoveryScanner::run(const juce::File& root, RecoveryReport& report
             const auto name = rel(root, file); child(root, name);
             if (!referenced.count(name)) report.orphans.add(name);
         }
-        report.addedClips = clips(report.project) - originalClipCount; check(report.project.validate());
+        check(report.project.validate());
         if (report.changedTakes || report.project.editRevision != selectedRevision || report.registryCommits
             || report.ignoredEditTail || native.legacy)
         {
