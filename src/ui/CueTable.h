@@ -91,6 +91,7 @@ private:
     int getNumRows() override;
     void paintRowBackground (juce::Graphics&, int rowNumber, int width, int height, bool rowIsSelected) override;
     void paintCell (juce::Graphics&, int rowNumber, int columnId, int width, int height, bool rowIsSelected) override;
+    juce::String getCellTooltip (int rowNumber, int columnId) override;
     void cellClicked (int rowNumber, int columnId, const juce::MouseEvent&) override;
     void cellDoubleClicked (int rowNumber, int columnId, const juce::MouseEvent&) override;
     void selectedRowsChanged (int lastRowSelected) override;
@@ -119,6 +120,14 @@ private:
     void playheadChanged (int index) override;
 
     const AudioEngine::PlayingCue* findPlaying (const juce::Uuid& id) const;
+    struct Badge
+    {
+        juce::String text;
+        juce::Colour colour;
+        bool filled = false;
+    };
+    Badge badgeFor (int index) const;
+    static juce::String wallClockText (const Cue& cue);
     bool isGroupRunning (int index) const;
     void syncSelectionFromModel();
     /** Rows are the visible cues (collapsed groups hide their subtrees): row <-> model index. */

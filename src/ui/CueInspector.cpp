@@ -3297,9 +3297,18 @@ CueInspector::CueInspector (ProjectDocument& doc, AudioEngine& e, AppSettings& s
 {
     engine.getDeviceManager().addChangeListener (this);   // dead output columns follow the device
 
-    title.setFont (juce::Font (juce::FontOptions (16.0f, juce::Font::bold)));
-    title.setColour (juce::Label::textColourId, Palette::dimText);
+    title.setText (ko ("큐 인스펙터"), juce::dontSendNotification);
+    title.setFont (Palette::font (Palette::bodySize, true));
+    title.setColour (juce::Label::textColourId, Palette::text);
+    title.setBorderSize (juce::BorderSize<int> (0));
     addAndMakeVisible (title);
+
+    selectionDetails.setFont (Palette::font (Palette::fileSize));
+    selectionDetails.setColour (juce::Label::textColourId, Palette::muted);
+    selectionDetails.setJustificationType (juce::Justification::centredRight);
+    selectionDetails.setMinimumHorizontalScale (1.0f);
+    selectionDetails.setBorderSize (juce::BorderSize<int> (0));
+    addAndMakeVisible (selectionDetails);
 
     basicsPanel = std::make_unique<BasicsPanel> (document, engine, settings);
     basics = basicsPanel.get();
@@ -3333,7 +3342,7 @@ CueInspector::CueInspector (ProjectDocument& doc, AudioEngine& e, AppSettings& s
     controlPanel = std::make_unique<ControlPanel> (document);
     micPanel = std::make_unique<MicPanel> (document, engine);
 
-    tabs.setTabBarDepth (28);
+    tabs.setTabBarDepth (Palette::tabBarHeight);
     tabs.setOutline (0);
     tabs.setColour (juce::TabbedComponent::backgroundColourId, Palette::panel);
     tabs.onTabShown = [this]
@@ -3523,18 +3532,21 @@ void CueInspector::refresh()
 
     if (cue == nullptr)
     {
-        title.setText (ko ("큐 인스펙터 - 선택된 큐 없음"), juce::dontSendNotification);
+        selectionDetails.setText (ko ("선택된 큐 없음"), juce::dontSendNotification);
     }
     else
     {
         const int count = (int) cues.getSelectedIndices().size();
-        juce::String text = ko ("큐 인스펙터 - ") + (cue->number.isNotEmpty() ? cue->number + " " : juce::String()) + cue->name;
+        juce::String text = (cue->number.isNotEmpty() ? cue->number + ko (" · ") : juce::String()) + cue->name;
+        if (cue->file != juce::File())
+            text << ko (" · ") << cue->file.getFileName();
 
         if (count > 1)
             text << ko ("  (") << count << ko ("개 선택, 표에서 한꺼번에 편집)");
 
-        title.setText (text, juce::dontSendNotification);
+        selectionDetails.setText (text, juce::dontSendNotification);
     }
+    selectionDetails.setTooltip (selectionDetails.getText());
 
     rebuildTabs (cue == nullptr ? 0 : cue->isFade() ? 1 : cue->isDevamp() ? 2 : cue->isGroup() ? 3 : cue->isControl() ? 4 : cue->isMic() ? 5 : 0);
     basics->refresh();
@@ -3555,16 +3567,18 @@ void CueInspector::refresh()
 
 void CueInspector::resized()
 {
-    auto area = getLocalBounds();
-    title.setBounds (area.removeFromTop (24).reduced (12, 2));
+    auto area = getLocalBounds().reduced (1);
+    auto heading = area.removeFromTop (Palette::cardHeaderHeight - 1).reduced (14, 0);
+    title.setBounds (heading.removeFromLeft (110));
+    selectionDetails.setBounds (heading);
     tabs.setBounds (area);
 }
 
 void CueInspector::paint (juce::Graphics& g)
 {
-    g.fillAll (Palette::panel);
+    Palette::drawCard (g, getLocalBounds());
     g.setColour (Palette::outline);
-    g.drawLine (0.0f, 0.5f, (float) getWidth(), 0.5f);
+    g.fillRect (1, Palette::cardHeaderHeight - 1, getWidth() - 2, 1);
 }
 
 } // namespace gocue

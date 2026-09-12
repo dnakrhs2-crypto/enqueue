@@ -17,16 +17,19 @@ public:
     void setCueCount (int count);
     /** Number of broken cues (0 hides the button). */
     void setWarningCount (int count);
+    void setAudioStatus (juce::String text);
 
     std::function<void (bool showMode)> onShowModeChanged;
     std::function<void()> onWarningsClicked;
 
     void resized() override;
     void paint (juce::Graphics& g) override;
+    void paintOverChildren (juce::Graphics& g) override;
 
 private:
     juce::TextButton editButton, showButton, warningsButton;
-    juce::Label countLabel, modeHint;
+    juce::Label countLabel, modeHint, audioStatus;
+    juce::Rectangle<int> modeBounds;
     bool showMode = false;
 };
 

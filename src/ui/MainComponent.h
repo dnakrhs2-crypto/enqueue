@@ -200,6 +200,7 @@ private:
     void showYouTubeWindow();
     void showAlert (const juce::String& title, const juce::String& message, bool isError);
     void updateTransportStandby();
+    void updateAudioStatus();
 
     void timerCallback() override;
     void cueListStructureChanged() override;
@@ -256,6 +257,7 @@ private:
     CueInspector inspector;
     ActiveCuesPanel activeCues;
     FooterBar footer;
+    juce::Rectangle<int> listCardBounds;
     std::unique_ptr<juce::FileChooser> chooser;
     bool dragOverWindow = false;
     bool activeCuesVisible = true;

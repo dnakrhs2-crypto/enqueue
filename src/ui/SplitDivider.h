@@ -1,5 +1,7 @@
 #pragma once
 
+#include "ui/UiUtils.h"
+
 #include <juce_gui_basics/juce_gui_basics.h>
 
 #include <functional>
@@ -14,7 +16,7 @@ public:
     /** horizontal = spans the width, drags up / down (the pane is below); vertical = spans the height, the pane is to the right. */
     enum class Orientation { horizontal, vertical };
 
-    static constexpr int thickness = 10;
+    static constexpr int thickness = Palette::gap;
 
     explicit SplitDivider (Orientation orientation);
 
@@ -33,6 +35,8 @@ public:
     void mouseDrag (const juce::MouseEvent& e) override;
     void mouseUp (const juce::MouseEvent& e) override;
     void mouseDoubleClick (const juce::MouseEvent& e) override;
+    void mouseEnter (const juce::MouseEvent&) override { repaint(); }
+    void mouseExit (const juce::MouseEvent&) override { repaint(); }
 
 private:
     void updateShape();

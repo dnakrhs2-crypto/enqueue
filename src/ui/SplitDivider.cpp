@@ -6,7 +6,7 @@ namespace gocue
 {
 
 SplitDivider::SplitDivider (Orientation o)
-    : orientation (o), toggle ("fold", Palette::dimText, Palette::text, Palette::text)
+    : orientation (o), toggle ("fold", Palette::muted, Palette::accent, Palette::accent)
 {
     setMouseCursor (orientation == Orientation::horizontal ? juce::MouseCursor::UpDownResizeCursor
                                                            : juce::MouseCursor::LeftRightResizeCursor);
@@ -54,27 +54,22 @@ void SplitDivider::resized()
 
 void SplitDivider::paint (juce::Graphics& g)
 {
-    g.fillAll (Palette::panel);
+    g.fillAll (Palette::background);
 
     const auto b = getLocalBounds().toFloat();
-    g.setColour (Palette::outline);
-
-    if (orientation == Orientation::horizontal)
-    {
-        g.drawLine (0.0f, 0.5f, b.getWidth(), 0.5f);
-        g.drawLine (0.0f, b.getHeight() - 0.5f, b.getWidth(), b.getHeight() - 0.5f);
-    }
-    else
-    {
-        g.drawLine (0.5f, 0.0f, 0.5f, b.getHeight());
-        g.drawLine (b.getWidth() - 0.5f, 0.0f, b.getWidth() - 0.5f, b.getHeight());
-    }
-
-    // grip dots either side of the chevron
-    g.setColour (Palette::dimText.withAlpha (0.6f));
     const auto c = b.getCentre();
+    const bool hover = isMouseOver (true) || dragging;
+    if (hover)
+    {
+        g.setColour (Palette::accent);
+        if (orientation == Orientation::horizontal)
+            g.fillRoundedRectangle (c.x - 44.0f, c.y - 0.5f, 88.0f, 1.0f, Palette::pillRadius);
+        else
+            g.fillRoundedRectangle (c.x - 0.5f, c.y - 44.0f, 1.0f, 88.0f, Palette::pillRadius);
+    }
+    g.setColour (hover ? Palette::accent : Palette::muted.withAlpha (Palette::rowBorderAlpha));
 
-    for (const float off : { -40.0f, -34.0f, -28.0f, 28.0f, 34.0f, 40.0f })
+    for (const float off : { -36.0f, -30.0f, -24.0f })
     {
         const float x = orientation == Orientation::horizontal ? c.x + off : c.x;
         const float y = orientation == Orientation::horizontal ? c.y : c.y + off;
@@ -88,6 +83,7 @@ void SplitDivider::mouseDown (const juce::MouseEvent& e)
         return;   // nothing to resize: the chevron / a double-click brings the pane back
 
     dragging = true;
+    repaint();
     dragStart = orientation == Orientation::horizontal ? e.getScreenY() : e.getScreenX();
 
     if (onDragStart)
@@ -111,6 +107,7 @@ void SplitDivider::mouseUp (const juce::MouseEvent&)
         return;
 
     dragging = false;
+    repaint();
 
     if (onDragEnd)
         onDragEnd();

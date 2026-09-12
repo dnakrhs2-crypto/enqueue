@@ -14,8 +14,7 @@ namespace gocue
 namespace
 {
     const juce::String rowDragDescription ("gocue-rows");
-    constexpr int rowHeights[] = { 32, 38, 46 };   // 18 pt text (gom: bigger, 2026-09-03)
-    constexpr int indentPerLevel = 18;
+    constexpr int indentPerLevel = Palette::childIndent;
     constexpr int disclosureWidth = 16;
 }
 
@@ -23,14 +22,14 @@ juce::Colour CueTable::groupModeColour (GroupMode mode)
 {
     switch (mode)
     {
-        case GroupMode::timeline:        return juce::Colour (0xff3fa860);
-        case GroupMode::playlist:        return juce::Colour (0xffd8902c);
+        case GroupMode::timeline:        return Palette::playing;
+        case GroupMode::playlist:        return Palette::fadingOut;
         case GroupMode::startFirstEnter:
-        case GroupMode::startFirst:      return juce::Colour (0xff4a86d8);
-        case GroupMode::random:          return juce::Colour (0xffa462d8);
+        case GroupMode::startFirst:      return Palette::accent;
+        case GroupMode::random:          return Palette::selectionRing;
     }
 
-    return juce::Colours::grey;
+    return Palette::muted;
 }
 
 //==============================================================================
@@ -43,8 +42,8 @@ public:
     {
         setText (initial, false);
         setSelectAllWhenFocused (true);
-        setJustification (column == colName || column == colNumber ? juce::Justification::centredLeft : juce::Justification::centred);   // like the cells
-        setFont (juce::Font (juce::FontOptions (18.0f)));
+        setJustification (column == colName || column == colNumber ? juce::Justification::centredLeft : juce::Justification::centredRight);
+        setFont (column == colName ? Palette::font() : Palette::monoFont (Palette::timeSize));
         onReturnKey = [this] { commit(); };
         onEscapeKey = [this] { cancel(); };
         onFocusLost = [this] { commit(); };
@@ -136,23 +135,25 @@ CueTable::CueTable (CueList& c, juce::AudioFormatManager& f, juce::ApplicationCo
     const int columnFlags = juce::TableHeaderComponent::visible | juce::TableHeaderComponent::resizable;
 
     auto& header = table.getHeader();
-    header.addColumn ("",                  colStatus,   44,  36,  60,  juce::TableHeaderComponent::visible);
-    header.addColumn (ko ("번호"),         colNumber,   64,  40,  120, columnFlags);
+    header.addColumn ("",                  colStatus,   Palette::statusColumnWidth, Palette::statusColumnWidth, Palette::statusColumnWidth, juce::TableHeaderComponent::visible);
+    header.addColumn (ko ("번호"),         colNumber,   Palette::numberColumnWidth, 40, 120, columnFlags);
     header.addColumn (ko ("이름"),         colName,     260, 80,  -1,  columnFlags);
-    header.addColumn (ko ("파일"),         colFile,     240, 80,  -1,  columnFlags);
-    header.addColumn (ko ("프리웨이트"),   colPreWait,  84,  60,  120, columnFlags);
-    header.addColumn (ko ("길이"),         colDuration, 90,  60,  140, columnFlags);
-    header.addColumn (ko ("포스트웨이트"), colPostWait, 92,  60,  120, columnFlags);
-    header.addColumn (ko ("진행"),         colContinue, 48,  40,  60,  juce::TableHeaderComponent::visible);
-    header.setStretchToFitActive (true);
+    header.addColumn (ko ("파일"),         colFile,     Palette::fileColumnWidth, 80, -1, columnFlags);
+    header.addColumn (ko ("프리웨이트"),   colPreWait,  Palette::preWaitColumnWidth, 60, 120, columnFlags);
+    header.addColumn (ko ("길이"),         colDuration, Palette::durationColumnWidth, 60, 140, columnFlags);
+    header.addColumn (ko ("포스트웨이트"), colPostWait, Palette::postWaitColumnWidth, 60, 120, columnFlags);
+    header.addColumn (ko ("진행"),         colContinue, Palette::continueColumnWidth, Palette::continueColumnWidth, Palette::continueColumnWidth, juce::TableHeaderComponent::visible);
+    header.setStretchToFitActive (false);   // only the name flexes; the CSS widths stay exact
 
     table.setModel (this);
-    table.setRowHeight (rowHeights[1]);
+    table.setRowHeight (Palette::rowHeights[1]);
+    table.setHeaderHeight (Palette::tableHeaderHeight);
     table.setMultipleSelectionEnabled (true);
     table.setClickingTogglesRowSelection (false);
-    table.setColour (juce::ListBox::backgroundColourId, Palette::background);
+    table.setColour (juce::ListBox::backgroundColourId, Palette::panel);
     table.setColour (juce::ListBox::outlineColourId, Palette::outline);
-    table.setOutlineThickness (1);
+    table.setOutlineThickness (0);
+    table.getViewport()->setScrollBarThickness (Palette::scrollBarWidth);
     table.onKey = [this] (const juce::KeyPress& key) { return handleQuickEditKey (key); };
     addAndMakeVisible (table);
 
@@ -219,7 +220,7 @@ void CueTable::setEditable (bool shouldBeEditable)
 
 void CueTable::setRowSize (int size)
 {
-    table.setRowHeight (rowHeights[juce::jlimit (0, 2, size)]);
+    table.setRowHeight (Palette::rowHeights[juce::jlimit (0, 2, size)]);
 }
 
 void CueTable::focusTable()
@@ -245,6 +246,11 @@ void CueTable::finishEditing()
 void CueTable::resized()
 {
     table.setBounds (getLocalBounds());
+    auto& header = table.getHeader();
+    int otherWidth = 0;
+    for (const int column : { colStatus, colNumber, colFile, colPreWait, colDuration, colPostWait, colContinue })
+        otherWidth += header.getColumnWidth (column);
+    header.setColumnWidth (colName, juce::jmax (140, getWidth() - Palette::scrollBarWidth - otherWidth));
 
     if (cellEditor != nullptr)
         cellEditor.reset();
@@ -269,7 +275,7 @@ void CueTable::paintOverChildren (juce::Graphics& g)
         {
             const auto r = table.getRowPosition ((int) (it - visible.begin()), true).translated (table.getX(), table.getY());
             g.setColour (Palette::standby);
-            g.drawRoundedRectangle (r.toFloat().reduced (1.5f), 4.0f, 2.0f);
+            g.drawRoundedRectangle (r.toFloat().reduced (1.5f), Palette::colourBarRadius, Palette::selectionWidth);
         }
     }
 
@@ -304,142 +310,219 @@ const AudioEngine::PlayingCue* CueTable::findPlaying (const juce::Uuid& id) cons
 void CueTable::paintRowBackground (juce::Graphics& g, int rowNumber, int width, int height, bool)
 {
     const int index = modelIndex (rowNumber);
-
     if (! cues.isValidIndex (index))
         return;
 
     const auto& cue = cues.get (index);
     const auto* running = findPlaying (cue.id);
-    const bool isRunning = running != nullptr && ! running->loaded;
-    const bool groupRunning = isGroupRunning (index);
+    const bool active = running != nullptr && ! running->loaded;
+    auto background = Palette::panel;
+    if (active)
+        background = running->paused ? Palette::pausedRow : running->fadingOut ? Palette::fadingRow : Palette::playingRow;
+    else if (isGroupRunning (index))
+        background = Palette::playingRow;
 
-    juce::Colour background = (rowNumber % 2 == 0) ? Palette::rowEven : Palette::rowOdd;
-
-    const int colourIndex = cue.useSecondColor && cue.secondColor > 0 && hasPlayed && hasPlayed (cue.id) ? cue.secondColor : cue.color;
-
-    if (colourIndex > 0)
-        background = background.interpolatedWith (CueColors::get (colourIndex).darker (1.5f), 0.35f);   // a tint the grey text still reads on
-
-    if (isRunning)
-        background = running->paused ? Palette::pausedRow : (running->fadingOut ? Palette::fadingRow : Palette::playingRow);
-    else if (groupRunning)
-        background = background.interpolatedWith (Palette::playingRow, 0.6f);
-
-    g.fillAll (background);
-
-    if (isRunning && running->progress >= 0.0)
-    {
-        // a faint fill plus a bright bar along the bottom edge: the bar stays visible on every row colour
-        const double fraction = juce::jlimit (0.0, 1.0, running->progress);
-        const int reached = juce::roundToInt (width * fraction);
-        g.setColour (juce::Colours::white.withAlpha (0.16f));
-        g.fillRect (0, 0, reached, height);
-        g.setColour (running->paused ? Palette::paused : (running->fadingOut ? Palette::fadingOut : Palette::playing));
-        g.fillRect (0, height - 3, reached, 3);
-    }
-
+    if (cues.isSelected (index))
+        background = Palette::selected;
     if (! cue.armed)
-    {
-        g.setColour (juce::Colours::black.withAlpha (0.28f));
+        background = Palette::panel.interpolatedWith (background, Palette::disabledAlpha);
+    g.fillAll (background);
+    g.setColour (Palette::outline.withAlpha (Palette::rowBorderAlpha));
+    g.fillRect (0, height - 1, width, 1);
 
-        for (int x = -height; x < width; x += 10)
-            g.drawLine ((float) x, (float) height, (float) (x + height), 0.0f, 2.0f);
+    if (active && ! running->paused && running->progress >= 0.0)
+    {
+        g.setColour ((running->fadingOut ? Palette::fadingOut : Palette::playing).withMultipliedAlpha (cue.armed ? 1.0f : Palette::disabledAlpha));
+        g.fillRect (0, height - Palette::rowProgressHeight,
+                    juce::roundToInt (width * juce::jlimit (0.0, 1.0, running->progress)), Palette::rowProgressHeight);
     }
 
+    if (index == cues.getPlayheadIndex())
+    {
+        g.setColour (Palette::accent.withMultipliedAlpha (cue.armed ? 1.0f : Palette::disabledAlpha));
+        g.fillRect (0, 0, Palette::playheadWidth, height);
+    }
+
+    // Last: selection encloses even a running cue or the playhead.
     if (cues.isSelected (index))
     {
-        g.setColour (Palette::standby.withAlpha (isRunning ? 0.15f : 0.28f));
-        g.fillRect (0, 0, width, height);
+        g.setColour (Palette::selectionRing.withMultipliedAlpha (cue.armed ? 1.0f : Palette::disabledAlpha));
+        g.drawRect (0, 0, width, height, (int) Palette::selectionWidth);
     }
+}
 
-    // group rows and their children carry the group's mode colour down the left edge: over the overlays, with a dark
-    // edge so the colour reads on any background
-    {
-        const int depth = cues.depthOf (index);
-
-        auto bar = [&] (int x, juce::Colour colour)
-        {
-            g.setColour (juce::Colours::black.withAlpha (0.6f));
-            g.fillRect (x, 0, 5, height);
-            g.setColour (colour);
-            g.fillRect (x + 1, 0, 4, height);
-        };
-
-        if (cue.isGroup())
-            bar (depth * indentPerLevel, groupModeColour (cue.group.mode));
-
-        for (int level = 0, p = cues.parentIndexOf (index); p >= 0 && level < 32; p = cues.parentIndexOf (p), ++level)
-            bar (cues.depthOf (p) * indentPerLevel, groupModeColour (cues.get (p).group.mode).withAlpha (0.7f));
-    }
-
-    const bool isPlayhead = index == cues.getPlayheadIndex();
-
+CueTable::Badge CueTable::badgeFor (int index) const
+{
+    const auto& cue = cues.get (index);
+    const auto* p = findPlaying (cue.id);
+    if (p != nullptr && ! p->loaded)
+        return p->paused ? Badge { ko ("일시정지"), Palette::paused }
+                         : p->fadingOut ? Badge { ko ("페이드 아웃"), Palette::fadingOut }
+                                        : Badge { ko ("재생 중"), Palette::playing };
+    if (cue.isAudio() && (cue.fileMissing || cue.file == juce::File()))
+        return { ko ("누락 파일"), Palette::missing };
+    if (cue.hasTarget() && (cue.targetId().isNull() || cues.indexOf (cue.targetId()) < 0))
+        return { ko ("대상 없음"), Palette::missing };
+    if (! cue.armed)
+        return { ko ("비활성"), Palette::muted };
     if (cues.isSelected (index))
-    {
-        // a light ring (inside the playhead's when both apply) that reads on running / coloured rows too
-        g.setColour (Palette::selectionRing);
-        g.drawRect (isPlayhead ? juce::Rectangle<int> (2, 2, width - 4, height - 4) : juce::Rectangle<int> (0, 0, width, height), 2);
-    }
+        return { ko ("선택"), Palette::selectionRing, true };
+    if (index == cues.getPlayheadIndex())
+        return { ko ("다음 큐"), Palette::accent };
+    if (cue.isGroup())
+        return { ko ("자식 ") + juce::String ((int) cues.childrenOf (index).size()) + ko ("개 · ") + groupPresetName (cue.group), Palette::muted };
+    if (cue.wallClock.enabled)
+        return { wallClockText (cue), Palette::muted };
+    if (cue.hotkey.isNotEmpty())
+        return { ko ("핫키 ") + cue.hotkey, Palette::muted };
+    if (cue.isControl() && cue.control.kind == ControlKind::wait)
+        return { ko ("대기 ") + juce::String (cue.control.seconds, std::abs (cue.control.seconds - std::round (cue.control.seconds)) < 0.001 ? 0 : 2) + ko ("초"), Palette::muted };
+    return {};
+}
 
-    if (isPlayhead)
+juce::String CueTable::wallClockText (const Cue& cue)
+{
+    const auto& t = cue.wallClock;
+    juce::String days;
+    if ((t.daysMask & 0x7f) == 0x7f)
+        days = ko ("매일");
+    else
     {
-        g.setColour (Palette::standby);
-        g.drawRect (0, 0, width, height, 2);
+        static const char* const names[] = { "일", "월", "화", "수", "목", "금", "토" };
+        for (int d = 0; d < 7; ++d)
+            if ((t.daysMask & (1 << d)) != 0)
+                days += ko (names[d]);
     }
+    return juce::String::formatted ("%02d:%02d:%02d", t.hour, t.minute, t.second)
+             + (days.isEmpty() ? juce::String() : ko (" · ") + days);
+}
+
+juce::String CueTable::getCellTooltip (int rowNumber, int columnId)
+{
+    const int index = modelIndex (rowNumber);
+    if (! cues.isValidIndex (index))
+        return {};
+    const auto& cue = cues.get (index);
+    juce::StringArray parts;
+    parts.add ((cue.number + " " + cue.name).trim());
+    if (columnId == colFile && cue.file != juce::File())
+        parts.add (cue.file.getFullPathName());
+    parts.addIfNotAlreadyThere (badgeFor (index).text);
+    if (cue.isGroup())
+        parts.addIfNotAlreadyThere (ko ("자식 ") + juce::String ((int) cues.childrenOf (index).size()) + ko ("개 · ") + groupPresetName (cue.group));
+    if (cue.hotkey.isNotEmpty())
+        parts.addIfNotAlreadyThere (ko ("핫키 ") + cue.hotkey);
+    if (cue.wallClock.enabled)
+        parts.addIfNotAlreadyThere (wallClockText (cue));
+    if (cue.flagged)
+        parts.add (ko ("깃발"));
+    parts.removeEmptyStrings();
+    return parts.joinIntoString ("\n");
 }
 
 void CueTable::paintCell (juce::Graphics& g, int rowNumber, int columnId, int width, int height, bool)
 {
     const int index = modelIndex (rowNumber);
-
     if (! cues.isValidIndex (index))
         return;
 
     const auto& cue = cues.get (index);
     const auto* running = findPlaying (cue.id);
     const bool isRunning = running != nullptr && ! running->loaded;
+    const auto stateColour = isRunning ? (running->paused ? Palette::paused : running->fadingOut ? Palette::fadingOut : Palette::playing) : Palette::muted;
+    const float alpha = cue.armed ? 1.0f : Palette::disabledAlpha;
+    auto setColour = [&] (juce::Colour colour) { g.setColour (colour.withMultipliedAlpha (alpha)); };
 
     if (columnId == colStatus)
     {
         const float cy = height * 0.5f;
-        float x = 6.0f;
-
-        if (index == cues.getPlayheadIndex())
-        {
-            juce::Path playhead;
-            playhead.addTriangle (x, cy - 6.0f, x, cy + 6.0f, x + 9.0f, cy);
-            g.setColour (Palette::standby.brighter (0.5f));
-            g.fillPath (playhead);
-        }
-
-        x += 14.0f;
-
+        const float x = (float) (width - Palette::statusIconSize) * 0.5f + 2.0f;
+        const bool broken = (cue.isAudio() && (cue.fileMissing || cue.file == juce::File()))
+                              || (cue.hasTarget() && (cue.targetId().isNull() || cues.indexOf (cue.targetId()) < 0));
         if (isRunning)
         {
+            setColour (stateColour);
+            juce::Path icon;
             if (running->paused)
             {
-                g.setColour (juce::Colours::yellow.withAlpha (0.9f));
-                g.fillRect (x, cy - 6.0f, 3.0f, 12.0f);
-                g.fillRect (x + 5.0f, cy - 6.0f, 3.0f, 12.0f);
+                icon.addRectangle (x + 1.0f, cy - 5.0f, 3.0f, 10.0f);
+                icon.addRectangle (x + 7.0f, cy - 5.0f, 3.0f, 10.0f);
+                g.fillPath (icon);
+            }
+            else if (running->fadingOut)
+            {
+                icon.startNewSubPath (x, cy - 5.0f);
+                icon.lineTo (x + 4.0f, cy + 1.0f);
+                icon.lineTo (x + 11.0f, cy + 5.0f);
+                icon.lineTo (x, cy + 5.0f);
+                icon.closeSubPath();
+                g.strokePath (icon, juce::PathStrokeType (1.5f));
             }
             else
             {
-                juce::Path tri;
-                tri.addTriangle (x, cy - 6.0f, x, cy + 6.0f, x + 10.0f, cy);
-                g.setColour (running->fadingOut ? Palette::fadingOut : Palette::playing);
-                g.fillPath (tri);
+                icon.addTriangle (x + 1.0f, cy - 5.0f, x + 1.0f, cy + 5.0f, x + 10.0f, cy);
+                g.fillPath (icon);
             }
+        }
+        else if (broken)
+        {
+            setColour (Palette::missing);
+            juce::Path warning;
+            warning.addTriangle (x + 6.0f, cy - 6.0f, x, cy + 5.0f, x + 12.0f, cy + 5.0f);
+            g.strokePath (warning, juce::PathStrokeType (1.5f));
+            g.fillRect (x + 5.3f, cy - 2.5f, 1.4f, 4.0f);
+            g.fillEllipse (x + 5.2f, cy + 2.7f, 1.6f, 1.6f);
+        }
+        else if (! cue.armed)
+        {
+            setColour (Palette::muted);
+            g.drawLine (x, cy, x + 12.0f, cy, 1.5f);
+        }
+        else if (cue.isGroup())
+        {
+            setColour (Palette::accent);
+            juce::Path folder;
+            folder.addRoundedRectangle (x, cy - 3.0f, 12.0f, 9.0f, 1.5f);
+            folder.addRectangle (x, cy - 5.0f, 5.0f, 3.0f);
+            g.fillPath (folder);
+        }
+        else if (index == cues.getPlayheadIndex())
+        {
+            setColour (Palette::accent);
+            juce::Path playhead;
+            playhead.addTriangle (x, cy - 5.0f, x, cy + 5.0f, x + 8.0f, cy);
+            playhead.addRectangle (x + 10.0f, cy - 5.0f, 1.5f, 10.0f);
+            g.fillPath (playhead);
         }
         else if (running != nullptr && running->loaded)
         {
-            g.setColour (juce::Colours::yellow.withAlpha (0.85f));
-            g.fillEllipse (x, cy - 5.0f, 10.0f, 10.0f);
+            setColour (Palette::warn);
+            g.fillEllipse (x + 1.0f, cy - 5.0f, 10.0f, 10.0f);
+        }
+        else if (cue.wallClock.enabled || (cue.isControl() && cue.control.kind == ControlKind::wait))
+        {
+            setColour (Palette::muted);
+            juce::Path clock;
+            clock.addEllipse (x, cy - 6.0f, 12.0f, 12.0f);
+            clock.startNewSubPath (x + 6.0f, cy - 4.0f);
+            clock.lineTo (x + 6.0f, cy);
+            clock.lineTo (x + 9.0f, cy + 2.0f);
+            g.strokePath (clock, juce::PathStrokeType (1.4f));
+        }
+        else if (cue.hotkey.isNotEmpty())
+        {
+            setColour (Palette::muted);
+            juce::Path key;
+            key.addRoundedRectangle (x - 1.0f, cy - 5.0f, 14.0f, 10.0f, Palette::keyRadius);
+            key.startNewSubPath (x + 2.0f, cy + 2.0f);
+            key.lineTo (x + 10.0f, cy + 2.0f);
+            g.strokePath (key, juce::PathStrokeType (1.2f));
         }
         else if (cue.isFade())
         {
             // a fade: a slope; red when the target is missing
             const bool broken = cue.fade.targetId.isNull() || cues.indexOf (cue.fade.targetId) < 0;
-            g.setColour (broken ? Palette::missing : Palette::dimText);
+            setColour (broken ? Palette::missing : Palette::dimText);
             juce::Path slope;
 
             if (cue.fade.mode == FadeMode::fadeOut)
@@ -462,7 +545,7 @@ void CueTable::paintCell (juce::Graphics& g, int rowNumber, int columnId, int wi
         {
             // a devamp: a loop arc with a bar (the loop point)
             const bool broken = cue.devamp.targetId.isNull() || cues.indexOf (cue.devamp.targetId) < 0;
-            g.setColour (broken ? Palette::missing : Palette::dimText);
+            setColour (broken ? Palette::missing : Palette::dimText);
             juce::Path arc;
             arc.addCentredArc (x + 5.0f, cy, 4.5f, 4.5f, 0.0f, 0.4f, 5.9f, true);
             g.strokePath (arc, juce::PathStrokeType (1.8f));
@@ -472,7 +555,7 @@ void CueTable::paintCell (juce::Graphics& g, int rowNumber, int columnId, int wi
         {
             // control cues: one small glyph per kind; red when a needed target is missing
             const bool broken = cue.control.needsTarget() && (cue.control.targetId.isNull() || cues.indexOf (cue.control.targetId) < 0);
-            g.setColour (broken ? Palette::missing : Palette::dimText);
+            setColour (broken ? Palette::missing : Palette::dimText);
             juce::Path p;
 
             switch (cue.control.kind)
@@ -499,7 +582,7 @@ void CueTable::paintCell (juce::Graphics& g, int rowNumber, int columnId, int wi
         else if (cue.isMic())
         {
             // a mic: a capsule on a stand
-            g.setColour (Palette::dimText);
+            setColour (Palette::dimText);
             g.fillRoundedRectangle (x + 2.5f, cy - 7.0f, 5.0f, 9.0f, 2.5f);
             juce::Path stand;
             stand.addCentredArc (x + 5.0f, cy, 4.5f, 4.5f, 0.0f, 1.6f, 4.7f, true);
@@ -507,112 +590,121 @@ void CueTable::paintCell (juce::Graphics& g, int rowNumber, int columnId, int wi
             g.drawLine (x + 5.0f, cy + 4.5f, x + 5.0f, cy + 7.0f, 1.4f);
             g.drawLine (x + 2.0f, cy + 7.0f, x + 8.0f, cy + 7.0f, 1.4f);
         }
-        else if (cue.isGroup())
+        else
         {
-            // a group: a folder tab in the mode colour (running children = filled)
-            g.setColour (groupModeColour (cue.group.mode));
-            juce::Path folder;
-            folder.addRoundedRectangle (x, cy - 4.0f, 11.0f, 9.0f, 1.5f);
-            folder.addRectangle (x, cy - 6.0f, 5.0f, 3.0f);
-
-            if (isGroupRunning (index))
-                g.fillPath (folder);
-            else
-                g.strokePath (folder, juce::PathStrokeType (1.4f));
-        }
-        else if (cue.fileMissing || cue.file == juce::File())
-        {
-            g.setColour (Palette::missing);
-            g.drawLine (x, cy - 5.0f, x + 10.0f, cy + 5.0f, 2.0f);
-            g.drawLine (x, cy + 5.0f, x + 10.0f, cy - 5.0f, 2.0f);
+            setColour (Palette::muted);
+            juce::Path wave;
+            const float lengths[] = { 5.0f, 9.0f, 13.0f, 8.0f, 4.0f };
+            for (int i = 0; i < 5; ++i)
+                wave.addRoundedRectangle (x + (float) i * 3.0f, cy - lengths[i] * 0.5f, 1.5f, lengths[i], 0.7f);
+            g.fillPath (wave);
         }
 
+        // Flags and preloaded status remain visible as small corner marks beside the main icon.
         if (cue.flagged)
         {
-            x += 14.0f;
-            g.setColour (juce::Colours::yellow);
-            g.drawLine (x, cy - 7.0f, x, cy + 7.0f, 1.5f);
+            setColour (Palette::warn);
             juce::Path flag;
-            flag.addTriangle (x, cy - 7.0f, x + 8.0f, cy - 4.0f, x, cy - 1.0f);
+            flag.startNewSubPath ((float) width - 6.0f, 3.0f);
+            flag.lineTo ((float) width - 6.0f, 11.0f);
+            g.strokePath (flag, juce::PathStrokeType (1.0f));
+            flag.addTriangle ((float) width - 6.0f, 3.0f, (float) width - 2.0f, 5.0f, (float) width - 6.0f, 7.0f);
             g.fillPath (flag);
         }
-
+        if (running != nullptr && running->loaded && index == cues.getPlayheadIndex())
+        {
+            setColour (Palette::warn);
+            g.fillEllipse (2.0f, (float) height - 7.0f, 4.0f, 4.0f);
+        }
         return;
     }
 
     if (columnId == colContinue)
     {
-        if (cue.continueMode == ContinueMode::none)
-            return;
+        setColour (Palette::accent);
+        g.setFont (Palette::font (Palette::bodySize, true));
+        g.drawText (cue.continueMode == ContinueMode::autoContinue ? ko ("→") : cue.continueMode == ContinueMode::autoFollow ? ko ("↓") : juce::String(),
+                    juce::Rectangle<int> (width, height), juce::Justification::centred, false);
+        return;
+    }
 
-        const float cy = height * 0.5f;
-        const float x0 = 8.0f, x1 = (float) width - 10.0f;
-        g.setColour (Palette::text);
-        g.drawLine (x0, cy, x1, cy, 2.0f);
-        juce::Path head;
-        head.addTriangle (x1, cy - 5.0f, x1, cy + 5.0f, x1 + 6.0f, cy);
-        g.fillPath (head);
+    if (columnId == colName)
+    {
+        auto area = juce::Rectangle<int> (width, height).reduced (6, 0);
+        area.removeFromLeft (juce::jmin (area.getWidth(), cues.depthOf (index) * Palette::childIndent));
+        if (cue.isGroup())
+        {
+            const auto disclosure = area.removeFromLeft (disclosureWidth).toFloat();
+            const auto c = disclosure.getCentre();
+            juce::Path triangle;
+            if (cue.group.collapsed)
+                triangle.addTriangle (c.x - 2.0f, c.y - 4.0f, c.x - 2.0f, c.y + 4.0f, c.x + 3.0f, c.y);
+            else
+                triangle.addTriangle (c.x - 4.0f, c.y - 2.0f, c.x + 4.0f, c.y - 2.0f, c.x, c.y + 3.0f);
+            setColour (Palette::muted);
+            g.fillPath (triangle);
+        }
 
-        if (cue.continueMode == ContinueMode::autoFollow)   // a bar: "when the cue has finished"
-            g.fillRect (x0 - 3.0f, cy - 6.0f, 2.5f, 12.0f);
-
+        const int colourIndex = cue.useSecondColor && cue.secondColor > 0 && hasPlayed && hasPlayed (cue.id) ? cue.secondColor : cue.color;
+        if (colourIndex > 0)
+        {
+            setColour (CueColors::get (colourIndex));
+            g.fillRoundedRectangle (area.withWidth (Palette::colourBarWidth).withSizeKeepingCentre (Palette::colourBarWidth, Palette::colourBarHeight).toFloat(),
+                                    Palette::colourBarRadius);
+        }
+        area.removeFromLeft (Palette::colourBarWidth + 8);
+        const auto badge = badgeFor (index);
+        const auto badgeFont = Palette::font (Palette::pillSize, true);
+        if (badge.text.isNotEmpty())
+        {
+            const int wanted = juce::GlyphArrangement::getStringWidthInt (badgeFont, badge.text) + 14;
+            const int badgeWidth = juce::jmin (wanted, juce::jmax (0, area.getWidth() - 32));
+            if (badgeWidth > 0)
+            {
+                const auto pill = area.removeFromRight (badgeWidth).withSizeKeepingCentre (badgeWidth, Palette::pillHeight);
+                Palette::drawPill (g, pill, badge.colour.withMultipliedAlpha (alpha), badge.text, badgeFont, badge.filled);
+                area.removeFromRight (8);
+            }
+        }
+        const auto name = cue.name.isNotEmpty() ? cue.name : ko ("(이름 없음)");
+        const auto font = Palette::font (Palette::bodySize, true);
+        setColour (Palette::text);
+        g.setFont (font);
+        if (cue.isGroup())
+            Palette::drawHeavyText (g, name, area, font, juce::Justification::centredLeft, Palette::groupTextStroke);
+        else
+            g.drawText (name, area, juce::Justification::centredLeft, true);
+        if (! cue.armed)
+        {
+            const int length = juce::jmin (area.getWidth(), juce::GlyphArrangement::getStringWidthInt (font, name));
+            g.drawLine ((float) area.getX(), (float) area.getCentreY(), (float) (area.getX() + length), (float) area.getCentreY(), Palette::borderWidth);
+        }
         return;
     }
 
     juce::String text;
-    auto colour = Palette::text;
-    auto justification = juce::Justification::centredLeft;
-    int indent = 0;
-
+    auto colour = Palette::muted;
+    auto font = Palette::monoFont (Palette::timeSize);
+    auto justification = juce::Justification::centredRight;
     switch (columnId)
     {
         case colNumber:
             text = cue.number;
-            break;   // the number reads as strongly as the name
-
-        case colName:
-            text = cue.name.isNotEmpty() ? cue.name : ko ("(이름 없음)");
-            indent = cues.depthOf (index) * indentPerLevel;
-
-            if (cue.isGroup())
-            {
-                // disclosure triangle: right = collapsed, down = expanded
-                const float cy = height * 0.5f;
-                const float tx = 8.0f + (float) indent;
-                juce::Path tri;
-
-                if (cue.group.collapsed)
-                    tri.addTriangle (tx, cy - 5.0f, tx, cy + 5.0f, tx + 7.0f, cy);
-                else
-                    tri.addTriangle (tx, cy - 3.0f, tx + 9.0f, cy - 3.0f, tx + 4.5f, cy + 4.0f);
-
-                g.setColour (Palette::text);
-                g.fillPath (tri);
-                indent += disclosureWidth;
-            }
+            font = Palette::monoFont (Palette::bodySize).boldened();
+            justification = juce::Justification::centredLeft;
             break;
-
         case colFile:
+            font = Palette::monoFont (Palette::fileSize);
+            justification = juce::Justification::centredLeft;
             if (cue.isGroup())
-            {
-                const int count = (int) cues.childrenOf (index).size();
-                text = groupPresetName (cue.group) + ko (" · ") + juce::String (count) + ko ("개");
-                colour = Palette::dimText;
-            }
-            else if (cue.isMic())
-            {
+                break;   // child count and mode are the name cell's pill
+            if (cue.isMic())
                 text = ko ("입력 ") + juce::String (cue.mic.firstInput + 1) + (cue.mic.numInputs > 1 ? "-" + juce::String (cue.mic.firstInput + cue.mic.numInputs) : juce::String());
-                colour = Palette::dimText;
-            }
             else if (cue.isControl() && ! cue.control.needsTarget())
-            {
                 text = cue.control.kind == ControlKind::wait ? ko ("대기 ") + formatTimeMs (cue.control.seconds) : ko ("메모");
-                colour = Palette::dimText;
-            }
-            else if (cue.isFade() || cue.isDevamp() || cue.isControl())
+            else if (cue.hasTarget())
             {
                 const int target = cue.targetId().isNull() ? -1 : cues.indexOf (cue.targetId());
-
                 if (target < 0)
                 {
                     text = ko ("대상 없음");
@@ -621,8 +713,7 @@ void CueTable::paintCell (juce::Graphics& g, int rowNumber, int columnId, int wi
                 else
                 {
                     const auto& t = cues.get (target);
-                    text = juce::String::fromUTF8 ("\xE2\x86\x92 ") + (t.number.isNotEmpty() ? t.number + " " : juce::String()) + t.name;   // → target
-                    colour = Palette::dimText;
+                    text = ko ("→ ") + (t.number.isNotEmpty() ? t.number + " " : juce::String()) + t.name;
                 }
             }
             else if (cue.file == juce::File())
@@ -633,7 +724,6 @@ void CueTable::paintCell (juce::Graphics& g, int rowNumber, int columnId, int wi
             else
             {
                 text = cue.file.getFileName();
-
                 if (cue.fileMissing)
                 {
                     text = ko ("[없음] ") + text;
@@ -641,45 +731,32 @@ void CueTable::paintCell (juce::Graphics& g, int rowNumber, int columnId, int wi
                 }
             }
             break;
-
         case colPreWait:
             text = cue.preWaitSeconds > 0.0 ? formatTimeMs (cue.preWaitSeconds) : juce::String();
-            justification = juce::Justification::centred;   // centred like its header
             break;
-
         case colPostWait:
             text = cue.postWaitSeconds > 0.0 ? formatTimeMs (cue.postWaitSeconds) : juce::String();
-            colour = cue.continueMode == ContinueMode::autoContinue ? Palette::text : Palette::dimText;
-            justification = juce::Justification::centred;   // centred like its header
             break;
-
         case colDuration:
+            colour = Palette::text;
             if (isRunning && running->lengthSeconds != 0.0)
             {
-                if (running->lengthSeconds < 0.0)
-                    text = juce::String::fromUTF8 ("\xE2\x88\x9E ") + formatSeconds (running->positionSeconds);
-                else
-                    text = "-" + formatSeconds (juce::jmax (0.0, running->remainingSeconds));
-
-                colour = juce::Colours::white;
+                text = running->lengthSeconds < 0.0 ? ko ("∞ ") + formatSeconds (running->positionSeconds)
+                                                   : "-" + formatSeconds (juce::jmax (0.0, running->remainingSeconds));
+                colour = stateColour;
             }
             else
             {
                 const double effective = cues.effectiveLengthOf (index);
-                text = effective < 0.0 ? juce::String::fromUTF8 ("\xE2\x88\x9E") : formatSeconds (effective > 0.0 ? effective : cue.durationSeconds);
+                text = effective < 0.0 ? ko ("∞") : formatSeconds (effective > 0.0 ? effective : cue.durationSeconds);
             }
-
-            justification = juce::Justification::centred;   // centred like its header
+            font = font.boldened();
             break;
-
-        default:
-            break;
+        default: break;
     }
-
-    g.setColour (colour);
-    const bool strong = columnId == colName || columnId == colNumber;
-    g.setFont (juce::Font (juce::FontOptions (strong ? 18.0f : 17.0f, strong ? juce::Font::bold : juce::Font::plain)));
-    g.drawText (text, 8 + indent, 0, width - 16 - indent, height, justification, true);
+    setColour (colour);
+    g.setFont (font);
+    g.drawText (text, 6, 0, juce::jmax (0, width - 12), height, justification, true);
 }
 
 void CueTable::cellClicked (int rowNumber, int columnId, const juce::MouseEvent& e)
@@ -705,7 +782,8 @@ void CueTable::cellClicked (int rowNumber, int columnId, const juce::MouseEvent&
     else if (columnId == colContinue && editable)
         cycleContinueMode (index);
     else if (columnId == colName && cues.get (index).isGroup() && onToggleCollapse
-             && e.x < 8 + cues.depthOf (index) * indentPerLevel + disclosureWidth)
+             && e.x - table.getHeader().getColumnPosition (table.getHeader().getIndexOfColumnId (colName, true)).getX()
+                          < 6 + cues.depthOf (index) * indentPerLevel + disclosureWidth)
         onToggleCollapse (index, ! cues.get (index).group.collapsed);
 }
 

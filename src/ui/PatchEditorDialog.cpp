@@ -347,7 +347,7 @@ namespace
                 r->name.onFocusLost = [this, k, r] { commitOutputName (k, r->name.getText()); };
                 cueOutputsStrip.addAndMakeVisible (r->name);
 
-                r->pair.setButtonText (ko ("다음과 스테레오"));
+                r->pair.setButtonText (ko ("스테레오로 묶기"));
                 r->pair.setColour (juce::ToggleButton::textColourId, Palette::text);
                 r->pair.setColour (juce::ToggleButton::tickColourId, Palette::standby);
                 r->pair.setWantsKeyboardFocus (false);

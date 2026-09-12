@@ -24,6 +24,9 @@ public:
     std::function<juce::String (const Cue& fadeCue)> describeFadeTarget;
     /** Group cues: "mode · N children · length" for the standby display. */
     std::function<juce::String (const Cue& groupCue)> describeGroup;
+    /** The current project's patch name and output count. */
+    std::function<juce::String (const Cue&)> describePatch;
+    void setContextText (const juce::String& text);
     /** The gear next to the panic button: open the fade time menu at this screen position. */
     std::function<void (juce::Point<int> screenPosition)> onPanicSettings;
     /** Shows the panic fade time on the button. */
@@ -35,7 +38,7 @@ public:
     void setGoLocked (bool locked);
     /** Brief red flash: a GO was received but refused. */
     void flashGoRejected();
-    /** "항상 오디션": the GO button turns blue and says so. */
+    /** "항상 오디션": accent colour and tooltip, while the visible label remains GO. */
     void setAuditionMode (bool auditioning);
 
     void resized() override;
@@ -45,6 +48,7 @@ private:
     void timerCallback() override;
     void styleButton (juce::TextButton& button, juce::Colour colour);
     void updateGoLook();
+    void updateStandbyCue (int index, const Cue* cue);
 
     juce::ApplicationCommandManager& commands;
 
@@ -53,68 +57,39 @@ private:
     {
         using juce::TextButton::TextButton;
 
-        void paintButton (juce::Graphics& g, bool isMouseOver, bool isButtonDown) override
-        {
-            auto colour = findColour (juce::TextButton::buttonColourId);
-
-            if (isButtonDown)
-                colour = colour.darker (0.25f);
-            else if (isMouseOver)
-                colour = colour.brighter (0.12f);
-
-            const auto bounds = getLocalBounds().toFloat();
-            g.setGradientFill (Palette::buttonGradient (colour, bounds));
-            g.fillRoundedRectangle (bounds, 8.0f);
-            g.setColour (colour.darker (0.4f));
-            g.drawRoundedRectangle (bounds.reduced (0.5f), 8.0f, 1.0f);
-            g.setColour (findColour (juce::TextButton::textColourOffId));
-            const auto label = getButtonText();
-            const float size = juce::jmin ((float) getHeight() * 0.55f, label.length() > 3 ? 30.0f : 64.0f);
-            g.setFont (juce::Font (juce::FontOptions (size, juce::Font::bold)));
-            g.drawText (label, getLocalBounds(), juce::Justification::centred, false);
-        }
+        void paintButton (juce::Graphics&, bool isMouseOver, bool isButtonDown) override;
+        bool locked = false;
     };
 
-    /** The gear button: a ring with teeth, drawn like the other buttons. */
+    struct TransportButton : public juce::TextButton
+    {
+        enum class Icon { pause, fade, stop };
+        explicit TransportButton (Icon i) : icon (i) {}
+        void paintButton (juce::Graphics&, bool isMouseOver, bool isButtonDown) override;
+        Icon icon;
+        juce::String key, detail;
+    };
+
+    /** Keeps the complete existing metadata text, painting its labels and values separately. */
+    struct MetaLabel : public juce::Label
+    {
+        void paint (juce::Graphics&) override;
+    };
+
     struct GearButton : public juce::Button
     {
         GearButton() : juce::Button ("panicSettings") {}
 
-        void paintButton (juce::Graphics& g, bool isMouseOver, bool isButtonDown) override
-        {
-            auto colour = Palette::button;
-
-            if (isButtonDown)
-                colour = colour.darker (0.2f);
-            else if (isMouseOver)
-                colour = colour.brighter (0.08f);
-
-            const auto bounds = getLocalBounds().toFloat().reduced (0.5f);
-            g.setGradientFill (Palette::buttonGradient (colour, bounds));
-            g.fillRoundedRectangle (bounds, Palette::cornerRadius);
-            g.setColour (colour.darker (0.4f));
-            g.drawRoundedRectangle (bounds, Palette::cornerRadius, 1.0f);
-
-            const auto c = bounds.getCentre();
-            const float r = juce::jmin (bounds.getWidth(), bounds.getHeight()) * 0.26f;
-            g.setColour (Palette::text);
-            g.drawEllipse (c.x - r, c.y - r, 2.0f * r, 2.0f * r, 2.2f);
-            g.fillEllipse (c.x - r * 0.3f, c.y - r * 0.3f, r * 0.6f, r * 0.6f);
-
-            for (int i = 0; i < 8; ++i)
-            {
-                const float a = juce::MathConstants<float>::twoPi * (float) i / 8.0f;
-                g.drawLine (c.x + std::cos (a) * r, c.y + std::sin (a) * r,
-                            c.x + std::cos (a) * (r + 3.5f), c.y + std::sin (a) * (r + 3.5f), 2.4f);
-            }
-        }
+        void paintButton (juce::Graphics&, bool isMouseOver, bool isButtonDown) override;
     };
 
     GoButton goButton { "GO" };
     GearButton panicSettingsButton;
     double panicSeconds = 1.0;
-    juce::TextButton pauseButton, fadeOutButton, panicButton;
-    juce::Label standbyTitle, cueNumber, cueName, cueFile, cueMeta, playingLabel, statusLabel;
+    TransportButton pauseButton { TransportButton::Icon::pause }, fadeOutButton { TransportButton::Icon::fade }, panicButton { TransportButton::Icon::stop };
+    juce::Label standbyTitle, cueNumber, cueName, cueFile, playingLabel, statusLabel, contextLabel;
+    MetaLabel cueMeta;
+    juce::Rectangle<int> nextCard;
     bool goLocked = false;
     bool goFlashing = false;
     bool auditionMode = false;

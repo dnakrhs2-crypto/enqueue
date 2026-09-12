@@ -1,6 +1,5 @@
 #include "ui/ActiveCuesPanel.h"
 
-#include "model/CueColors.h"
 #include "ui/UiUtils.h"
 
 #include <algorithm>
@@ -8,18 +7,14 @@
 namespace gocue
 {
 
-namespace
-{
-    constexpr int rowHeight = 124;   // the big card (design pick 01, 2026-09-03)
-}
-
-//==============================================================================
 class ActiveCuesPanel::Row : public juce::Component
 {
 public:
     Row (ActiveCuesPanel& o, AudioEngine& e, const juce::Uuid& cueId) : owner (o), engine (e), id (cueId)
     {
         pauseButton.setWantsKeyboardFocus (false);
+        pauseButton.getProperties().set ("slateSmall", true);
+        pauseButton.setColour (juce::TextButton::buttonColourId, Palette::panel);
         pauseButton.onClick = [this]
         {
             if (owner.onPauseRequested)
@@ -31,9 +26,12 @@ public:
         };
         addAndMakeVisible (pauseButton);
 
-        panicButton.setButtonText ("x");
+        panicButton.setButtonText (ko ("×"));
         panicButton.setTooltip (ko ("이 큐 페이드 정지"));
-        panicButton.setColour (juce::TextButton::buttonColourId, Palette::stopButton.darker (0.12f));
+        panicButton.setColour (juce::TextButton::buttonColourId, Palette::panel);
+        panicButton.setColour (juce::TextButton::textColourOffId, Palette::stopButton);
+        panicButton.getProperties().set ("slateSmall", true);
+        panicButton.getProperties().set ("slateColourOutline", true);
         panicButton.setWantsKeyboardFocus (false);
         panicButton.onClick = [this]
         {
@@ -44,20 +42,21 @@ public:
         };
         addAndMakeVisible (panicButton);
 
-        nameLabel.setFont (juce::Font (juce::FontOptions (22.0f, juce::Font::bold)));
+        numberLabel.setFont (Palette::monoFont (Palette::bodySize).boldened());
+        numberLabel.setColour (juce::Label::textColourId, Palette::muted);
+        nameLabel.setFont (Palette::font (Palette::bodySize, true));
         nameLabel.setColour (juce::Label::textColourId, Palette::text);
-        nameLabel.setMinimumHorizontalScale (1.0f);   // never squash the glyphs: a long name is cut with an ellipsis instead
-        addAndMakeVisible (nameLabel);
-
-        timeLabel.setFont (juce::Font (juce::FontOptions (15.0f)));   // "position / length"
-        timeLabel.setColour (juce::Label::textColourId, Palette::dimText);
-        timeLabel.setJustificationType (juce::Justification::centredLeft);
-        addAndMakeVisible (timeLabel);
-
-        remainingLabel.setFont (juce::Font (juce::FontOptions (30.0f, juce::Font::bold)));   // the number the operator watches
-        remainingLabel.setJustificationType (juce::Justification::centredRight);
-        remainingLabel.setMinimumHorizontalScale (0.8f);
-        addAndMakeVisible (remainingLabel);
+        timeLabel.setFont (Palette::monoFont (Palette::headerSize));
+        timeLabel.setColour (juce::Label::textColourId, Palette::muted);
+        timeLabel.setJustificationType (juce::Justification::centredRight);
+        remainingLabel.setFont (Palette::monoFont (Palette::remainingSize).boldened());
+        remainingLabel.setJustificationType (juce::Justification::centredLeft);
+        for (auto* label : { &numberLabel, &nameLabel, &timeLabel, &remainingLabel })
+        {
+            label->setMinimumHorizontalScale (1.0f);
+            label->setBorderSize (juce::BorderSize<int> (0));
+            addAndMakeVisible (label);
+        }
     }
 
     const juce::Uuid& getId() const noexcept { return id; }
@@ -68,24 +67,21 @@ public:
         fadingOut = p.fadingOut;
         fraction = p.progress >= 0.0 ? juce::jlimit (0.0, 1.0, p.progress) : 0.0;
         infinite = p.progress < 0.0;
-        colour = cue != nullptr && cue->color > 0 ? CueColors::get (cue->color) : juce::Colour();
-
         pauseButton.setButtonText (paused ? ko ("재개") : ko ("일시정지"));
+        numberLabel.setText (cue != nullptr ? cue->number : juce::String(), juce::dontSendNotification);
+        nameLabel.setText (cue != nullptr ? cue->name : ko ("(삭제된 큐)"), juce::dontSendNotification);
+        nameLabel.setTooltip (nameLabel.getText());
+        stateText = paused ? ko ("일시정지") : fadingOut ? ko ("페이드 아웃") : ko ("재생 중");
 
-        juce::String name;
-
-        if (cue != nullptr)
-            name = (cue->number.isNotEmpty() ? cue->number + "  " : juce::String()) + cue->name;
-        else
-            name = ko ("(삭제된 큐)");
-
-        nameLabel.setText (name, juce::dontSendNotification);
-
-        const auto infinity = juce::String::fromUTF8 ("\xE2\x88\x9E");
-        timeLabel.setText (formatSeconds (p.positionSeconds) + " / " + (infinite ? infinity : formatSeconds (juce::jmax (0.0, p.lengthSeconds))),
+        const auto infinity = ko ("∞");
+        auto clock = [] (double seconds) { return seconds > 0.0 ? formatSeconds (seconds) : juce::String ("0:00.0"); };
+        timeLabel.setText (clock (p.positionSeconds) + " / " + (infinite ? infinity : clock (juce::jmax (0.0, p.lengthSeconds))),
                            juce::dontSendNotification);
-        remainingLabel.setText (infinite ? infinity : "-" + formatSeconds (juce::jmax (0.0, p.remainingSeconds)), juce::dontSendNotification);
+        remainingLabel.setText (infinite ? infinity : "-" + clock (juce::jmax (0.0, p.remainingSeconds)), juce::dontSendNotification);
         remainingLabel.setColour (juce::Label::textColourId, stateColour());
+        timeLabel.setTooltip (timeLabel.getText());
+        remainingLabel.setTooltip (remainingLabel.getText());
+        resized();
         repaint();
     }
 
@@ -96,53 +92,55 @@ public:
 
     void resized() override
     {
-        // [ 상태 띠 8 ] [ name ...................... x ]
-        //                [ pause | pos / length   -remaining ]
-        //                [ ==== progress ==== ]
-        // The name gets the whole first line (it was squeezed beside the pause button before).
-        auto area = getLocalBounds().reduced (12, 10);
-        area.removeFromLeft (10);   // the state stripe
-        auto top = area.removeFromTop (32);
-        panicButton.setBounds (top.removeFromRight (30));
+        auto area = getLocalBounds().reduced (16, Palette::cardInset);
+        auto top = area.removeFromTop (20);
+        const int stateWidth = juce::GlyphArrangement::getStringWidthInt (Palette::font (Palette::pillSize, true), stateText) + 14;
+        stateBounds = top.removeFromRight (juce::jmin (stateWidth, top.getWidth() / 2));
         top.removeFromRight (8);
+        const int numberWidth = juce::GlyphArrangement::getStringWidthInt (numberLabel.getFont(), numberLabel.getText());
+        numberLabel.setBounds (top.removeFromLeft (juce::jmin (numberWidth, top.getWidth() / 3)));
+        if (numberWidth > 0)
+            top.removeFromLeft (8);
         nameLabel.setBounds (top);
         area.removeFromTop (6);
-        auto middle = area.removeFromTop (36);
-        pauseButton.setBounds (middle.removeFromLeft (96).reduced (0, 3));
-        middle.removeFromLeft (10);
-        remainingLabel.setBounds (middle.removeFromRight (150));
-        timeLabel.setBounds (middle);
+        auto middle = area.removeFromTop (30);
+        const int timeWidth = juce::GlyphArrangement::getStringWidthInt (timeLabel.getFont(), timeLabel.getText());
+        timeLabel.setBounds (middle.removeFromRight (juce::jmin (timeWidth, middle.getWidth() / 2)).withTrimmedTop (12));
+        middle.removeFromRight (6);
+        remainingLabel.setBounds (middle);
         area.removeFromTop (6);
-        barArea = area.removeFromTop (14);
+        barArea = area.removeFromTop (Palette::progressHeight);
+        area.removeFromTop (6);
+        auto buttons = area.removeFromTop (Palette::miniButtonHeight);
+        panicButton.setBounds (buttons.removeFromRight (Palette::miniButtonHeight));
+        buttons.removeFromRight (6);
+        const int pauseWidth = juce::GlyphArrangement::getStringWidthInt (Palette::font (Palette::headerSize, true), pauseButton.getButtonText()) + 20;
+        pauseButton.setBounds (buttons.removeFromRight (pauseWidth));
     }
 
     void paint (juce::Graphics& g) override
     {
-        const auto card = getLocalBounds().toFloat().reduced (1.0f);
-        g.setColour (Palette::panel);
+        const auto card = getLocalBounds().toFloat().reduced (0.5f);
+        g.setColour (Palette::panel2);
         g.fillRoundedRectangle (card, Palette::cornerRadius);
         g.setColour (Palette::outline);
-        g.drawRoundedRectangle (card, Palette::cornerRadius, 1.0f);
-
-        // the state stripe down the left edge (green playing / yellow paused / orange fading)
+        g.drawRoundedRectangle (card, Palette::cornerRadius, Palette::borderWidth);
         {
             juce::Graphics::ScopedSaveState state (g);
-            g.reduceClipRegion (card.withWidth (9.0f).getSmallestIntegerContainer());
+            g.reduceClipRegion (getLocalBounds().withWidth (Palette::playheadWidth));
             g.setColour (stateColour());
             g.fillRoundedRectangle (card, Palette::cornerRadius);
         }
-
-        if (colour.getAlpha() > 0)   // the cue's own colour as a thin stripe next to it
-        {
-            g.setColour (colour);
-            g.fillRect (11, 8, 4, getHeight() - 16);
-        }
-
-        const auto track = barArea.toFloat();
-        g.setColour (Palette::outline);
-        g.fillRoundedRectangle (track, track.getHeight() * 0.5f);
+        g.setColour (stateColour().withAlpha (Palette::statePillAlpha));
+        g.fillRoundedRectangle (stateBounds.toFloat(), Palette::pillRadius);
         g.setColour (stateColour());
-        g.fillRoundedRectangle (track.withWidth (infinite ? track.getWidth() : (float) track.getWidth() * (float) fraction), track.getHeight() * 0.5f);
+        g.setFont (Palette::font (Palette::pillSize, true));
+        g.drawText (stateText, stateBounds.reduced (7, 0), juce::Justification::centred, true);
+        const auto track = barArea.toFloat();
+        g.setColour (Palette::outline.withAlpha (Palette::trackAlpha));
+        g.fillRoundedRectangle (track, Palette::pillRadius);
+        g.setColour (stateColour());
+        g.fillRoundedRectangle (track.withWidth (infinite ? track.getWidth() : track.getWidth() * (float) fraction), Palette::pillRadius);
     }
 
     void mouseDown (const juce::MouseEvent& e) override { scrub (e); }
@@ -153,7 +151,6 @@ private:
     {
         if (infinite || ! owner.isScrubEnabled() || ! barArea.expanded (0, 6).contains (e.getPosition()))
             return;
-
         const double f = juce::jlimit (0.0, 1.0, (double) (e.x - barArea.getX()) / (double) juce::jmax (1, barArea.getWidth()));
         engine.seekToFraction (id, f);
     }
@@ -162,9 +159,9 @@ private:
     AudioEngine& engine;
     const juce::Uuid id;
     juce::TextButton pauseButton, panicButton;
-    juce::Label nameLabel, timeLabel, remainingLabel;
-    juce::Rectangle<int> barArea;
-    juce::Colour colour;
+    juce::Label numberLabel, nameLabel, timeLabel, remainingLabel;
+    juce::Rectangle<int> barArea, stateBounds;
+    juce::String stateText;
     double fraction = 0.0;
     bool paused = false, fadingOut = false, infinite = false;
 };
@@ -173,19 +170,28 @@ private:
 ActiveCuesPanel::ActiveCuesPanel (AudioEngine& e, CueList& c) : engine (e), cues (c)
 {
     title.setText (ko ("활성 큐"), juce::dontSendNotification);
-    title.setFont (juce::Font (juce::FontOptions (15.0f, juce::Font::bold)));
-    title.setColour (juce::Label::textColourId, Palette::dimText);
+    title.setFont (Palette::font (Palette::bodySize, true));
+    title.setColour (juce::Label::textColourId, Palette::text);
+    title.setBorderSize (juce::BorderSize<int> (0));
     addAndMakeVisible (title);
 
+    playingLabel.setFont (Palette::font (Palette::fileSize));
+    playingLabel.setColour (juce::Label::textColourId, Palette::muted);
+    playingLabel.setJustificationType (juce::Justification::centredRight);
+    playingLabel.setMinimumHorizontalScale (1.0f);
+    playingLabel.setBorderSize (juce::BorderSize<int> (0));
+    addAndMakeVisible (playingLabel);
+    setPlayingCount (0, 0);
+
     emptyLabel.setText (ko ("재생 중인 큐 없음"), juce::dontSendNotification);
-    emptyLabel.setFont (juce::Font (juce::FontOptions (14.0f)));
+    emptyLabel.setFont (Palette::font());
     emptyLabel.setColour (juce::Label::textColourId, Palette::dimText);
     emptyLabel.setJustificationType (juce::Justification::centred);
     addAndMakeVisible (emptyLabel);
 
     viewport.setViewedComponent (&content, false);
     viewport.setScrollBarsShown (true, false, true, false);
-    viewport.setScrollBarThickness (8);
+    viewport.setScrollBarThickness (Palette::scrollBarWidth);
     addAndMakeVisible (viewport);
 }
 
@@ -199,6 +205,15 @@ void ActiveCuesPanel::setNewestFirst (bool shouldBeNewestFirst)
     newestFirst = shouldBeNewestFirst;
 }
 
+void ActiveCuesPanel::setPlayingCount (int numPlaying, int numPaused)
+{
+    auto text = ko ("재생 중 ") + juce::String (numPlaying);
+    if (numPaused > 0)
+        text << ko (" (일시정지 ") << numPaused << ")";
+    playingLabel.setText (text, juce::dontSendNotification);
+    playingLabel.setTooltip (text);
+}
+
 void ActiveCuesPanel::setPlayingCues (const std::vector<AudioEngine::PlayingCue>& playing)
 {
     std::vector<const AudioEngine::PlayingCue*> active;
@@ -206,6 +221,8 @@ void ActiveCuesPanel::setPlayingCues (const std::vector<AudioEngine::PlayingCue>
     for (const auto& p : playing)
         if (! p.loaded)
             active.push_back (&p);
+
+    setPlayingCount ((int) active.size(), (int) std::count_if (active.begin(), active.end(), [] (const auto* p) { return p->paused; }));
 
     std::sort (active.begin(), active.end(), [this] (const AudioEngine::PlayingCue* a, const AudioEngine::PlayingCue* b)
     {
@@ -241,18 +258,20 @@ void ActiveCuesPanel::setPlayingCues (const std::vector<AudioEngine::PlayingCue>
 
     for (auto& row : rows)
     {
-        row->setBounds (0, y, width, rowHeight);
-        y += rowHeight + 4;
+        row->setBounds (0, y, width, Palette::activeCardHeight);
+        y += Palette::activeCardHeight + Palette::cardInset;
     }
 
-    content.setSize (width, juce::jmax (1, y));
+    content.setSize (width, juce::jmax (1, y - Palette::cardInset));
 }
 
 void ActiveCuesPanel::resized()
 {
-    auto area = getLocalBounds();
-    title.setBounds (area.removeFromTop (22).reduced (8, 2));
-    viewport.setBounds (area.reduced (4, 2));
+    auto area = getLocalBounds().reduced (1);
+    auto heading = area.removeFromTop (Palette::cardHeaderHeight - 1).reduced (14, 0);
+    title.setBounds (heading.removeFromLeft (64));
+    playingLabel.setBounds (heading);
+    viewport.setBounds (area.reduced (Palette::cardInset));
     emptyLabel.setBounds (area);
 
     const int width = juce::jmax (1, viewport.getMaximumVisibleWidth());
@@ -260,18 +279,18 @@ void ActiveCuesPanel::resized()
 
     for (auto& row : rows)
     {
-        row->setBounds (0, y, width, rowHeight);
-        y += rowHeight + 4;
+        row->setBounds (0, y, width, Palette::activeCardHeight);
+        y += Palette::activeCardHeight + Palette::cardInset;
     }
 
-    content.setSize (width, juce::jmax (1, y));
+    content.setSize (width, juce::jmax (1, y - Palette::cardInset));
 }
 
 void ActiveCuesPanel::paint (juce::Graphics& g)
 {
-    g.fillAll (Palette::panel);
+    Palette::drawCard (g, getLocalBounds());
     g.setColour (Palette::outline);
-    g.drawLine (0.5f, 0.0f, 0.5f, (float) getHeight());
+    g.fillRect (1, Palette::cardHeaderHeight - 1, getWidth() - 2, 1);
 }
 
 } // namespace gocue

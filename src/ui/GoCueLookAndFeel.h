@@ -7,23 +7,21 @@
 namespace gocue
 {
 
-/** LookAndFeel_V4 in the 큐랩 스타일 palette (see Palette), with 5 px corners and a faint gradient on buttons,
-    and menus that can be read from the desk: 15 pt items, the shortcut text drawn at the same size as the item
-    (V4 shrinks it to 75 %, which is unreadable on a dark menu). */
+/** Enqueue's slate cards and controls. All theme tokens live in Palette. */
 class GoCueLookAndFeel : public juce::LookAndFeel_V4
 {
 public:
     GoCueLookAndFeel()
         : juce::LookAndFeel_V4 (juce::LookAndFeel_V4::ColourScheme (
               Palette::background, Palette::panel, Palette::panel, Palette::outline, Palette::text,
-              Palette::button, juce::Colours::white, Palette::standby, Palette::text))
+              Palette::button, Palette::accentInk, Palette::standby, Palette::text))
     {
-        setDefaultSansSerifTypefaceName ("Malgun Gothic");
+        setDefaultSansSerifTypefaceName (Palette::bodyTypeface);
 
         setColour (juce::TextButton::buttonColourId, Palette::button);
         setColour (juce::TextButton::buttonOnColourId, Palette::standby);
         setColour (juce::TextButton::textColourOffId, Palette::text);
-        setColour (juce::TextButton::textColourOnId, juce::Colours::white);
+        setColour (juce::TextButton::textColourOnId, Palette::accentInk);
         setColour (juce::ComboBox::backgroundColourId, Palette::field);
         setColour (juce::ComboBox::outlineColourId, Palette::outline);
         setColour (juce::ComboBox::arrowColourId, Palette::dimText);
@@ -40,18 +38,18 @@ public:
         setColour (juce::ToggleButton::tickColourId, Palette::standby);
         setColour (juce::ToggleButton::tickDisabledColourId, Palette::dimText);
         setColour (juce::TableHeaderComponent::backgroundColourId, Palette::header);
-        setColour (juce::TableHeaderComponent::textColourId, Palette::text);
+        setColour (juce::TableHeaderComponent::textColourId, Palette::muted);
         setColour (juce::TableHeaderComponent::outlineColourId, Palette::outline);
         setColour (juce::TableHeaderComponent::highlightColourId, Palette::standby.withAlpha (0.35f));
-        setColour (juce::ListBox::backgroundColourId, Palette::background);
+        setColour (juce::ListBox::backgroundColourId, Palette::panel);
         setColour (juce::ListBox::outlineColourId, Palette::outline);
-        setColour (juce::ScrollBar::thumbColourId, juce::Colour (0xff858585));   // 3.4:1 on the panel
-        setColour (juce::ScrollBar::backgroundColourId, Palette::background);
+        setColour (juce::ScrollBar::thumbColourId, Palette::muted);
+        setColour (juce::ScrollBar::backgroundColourId, juce::Colours::transparentBlack);
         setColour (juce::PopupMenu::backgroundColourId, Palette::panel);
         setColour (juce::PopupMenu::textColourId, Palette::text);
         setColour (juce::PopupMenu::headerTextColourId, Palette::dimText);
-        setColour (juce::PopupMenu::highlightedBackgroundColourId, Palette::standby.darker (0.25f));   // white text 5:1
-        setColour (juce::PopupMenu::highlightedTextColourId, juce::Colours::white);
+        setColour (juce::PopupMenu::highlightedBackgroundColourId, Palette::accent.withAlpha (Palette::menuHighlightAlpha));
+        setColour (juce::PopupMenu::highlightedTextColourId, Palette::text);
         setColour (juce::TabbedButtonBar::tabTextColourId, Palette::dimText);
         setColour (juce::TabbedButtonBar::frontTextColourId, Palette::text);
         setColour (juce::TabbedButtonBar::tabOutlineColourId, Palette::outline);
@@ -76,20 +74,21 @@ public:
         setColour (juce::ProgressBar::foregroundColourId, Palette::standby);
     }
 
-    /** Table headers: the time columns (프리웨이트 · 길이 · 포스트웨이트 · 진행) are centred like their cells; the rest left. */
+    void drawTableHeaderBackground (juce::Graphics& g, juce::TableHeaderComponent& header) override
+    {
+        g.fillAll (Palette::panel2);
+        g.setColour (Palette::outline);
+        g.fillRect (0, header.getHeight() - 1, header.getWidth(), 1);
+    }
+
+    /** Slate header typography applies to every column, including the number and name. */
     void drawTableHeaderColumn (juce::Graphics& g, juce::TableHeaderComponent& header, const juce::String& columnName,
-                                int columnId, int width, int height, bool isMouseOver, bool isMouseDown, int columnFlags) override
+                                int, int width, int height, bool isMouseOver, bool isMouseDown, int columnFlags) override
     {
         static const juce::StringArray centredColumns { juce::String::fromUTF8 ("\xED\x94\x84\xEB\xA6\xAC\xEC\x9B\xA8\xEC\x9D\xB4\xED\x8A\xB8"),   // 프리웨이트
                                                         juce::String::fromUTF8 ("\xEA\xB8\xB8\xEC\x9D\xB4"),                                         // 길이
                                                         juce::String::fromUTF8 ("\xED\x8F\xAC\xEC\x8A\xA4\xED\x8A\xB8\xEC\x9B\xA8\xEC\x9D\xB4\xED\x8A\xB8"),   // 포스트웨이트
                                                         juce::String::fromUTF8 ("\xEC\xA7\x84\xED\x96\x89") };                                       // 진행
-
-        if (! centredColumns.contains (columnName))
-        {
-            LookAndFeel_V4::drawTableHeaderColumn (g, header, columnName, columnId, width, height, isMouseOver, isMouseDown, columnFlags);
-            return;
-        }
 
         auto highlightColour = header.findColour (juce::TableHeaderComponent::highlightColourId);
 
@@ -105,26 +104,35 @@ public:
         {
             juce::Path sortArrow;
             sortArrow.addTriangle (0.0f, 0.0f, 0.5f, (columnFlags & juce::TableHeaderComponent::sortedForwards) != 0 ? -0.8f : 0.8f, 1.0f, 0.0f);
-            g.setColour (juce::Colour (0x99000000));
+            g.setColour (Palette::muted);
             g.fillPath (sortArrow, sortArrow.getTransformToScaleToFit (area.removeFromRight (height / 2).reduced (2).toFloat(), true));
         }
 
-        g.setColour (header.findColour (juce::TableHeaderComponent::textColourId));
-        g.setFont (juce::Font (juce::FontOptions ((float) height * 0.6f, juce::Font::bold)));
-        g.drawFittedText (columnName, area, juce::Justification::centred, 1);
+        g.setColour (columnName == ko ("진행") ? Palette::accent : header.findColour (juce::TableHeaderComponent::textColourId));
+        auto font = Palette::font (Palette::headerSize, true);
+        font.setExtraKerningFactor (Palette::headerTracking);
+        g.setFont (font);
+        g.drawText (columnName, area, centredColumns.contains (columnName) ? juce::Justification::centred : juce::Justification::centredLeft, true);
     }
 
-    /** Buttons: 5 px corners, a faint top-to-bottom gradient, a darker edge (V4 draws them flat with 6 px corners). */
+    juce::Font getTextButtonFont (juce::TextButton& button, int) override
+    {
+        if (button.getProperties().getWithDefault ("slateSegment", false))
+            return Palette::font (Palette::fileSize, button.getToggleState());
+        return Palette::font (button.getProperties().getWithDefault ("slateSmall", false) ? Palette::headerSize : Palette::bodySize, true);
+    }
+
+    /** Flat surfaces; connected mode segments share one perimeter drawn by their owner. */
     void drawButtonBackground (juce::Graphics& g, juce::Button& button, const juce::Colour& backgroundColour,
                                bool isMouseOverButton, bool isButtonDown) override
     {
         const auto bounds = button.getLocalBounds().toFloat().reduced (0.5f, 0.5f);
-        auto base = backgroundColour.withMultipliedAlpha (button.isEnabled() ? 1.0f : 0.5f);
+        auto base = backgroundColour.withMultipliedAlpha (button.isEnabled() ? 1.0f : Palette::disabledAlpha);
 
         if (isButtonDown)
-            base = base.darker (0.2f);
+            base = base.darker (Palette::pressedDarken);
         else if (isMouseOverButton)
-            base = base.brighter (0.08f);
+            base = base.brighter (Palette::hoverBrighten);
 
         // buttons glued to a neighbour (a plugin's generic editor, the plugin manager's path row) keep that side square
         const auto flags = button.getConnectedEdgeFlags();
@@ -133,20 +141,147 @@ public:
         const bool flatOnTop    = (flags & juce::Button::ConnectedOnTop) != 0;
         const bool flatOnBottom = (flags & juce::Button::ConnectedOnBottom) != 0;
 
+        const bool pill = button.getProperties().getWithDefault ("slatePill", false);
+        const bool small = button.getProperties().getWithDefault ("slateSmall", false);
+        const bool segment = button.getProperties().getWithDefault ("slateSegment", false);
+        const float radius = pill ? Palette::pillRadius : small ? Palette::fieldRadius : Palette::cornerRadius;
         juce::Path shape;
-        shape.addRoundedRectangle (bounds.getX(), bounds.getY(), bounds.getWidth(), bounds.getHeight(), Palette::cornerRadius, Palette::cornerRadius,
+        shape.addRoundedRectangle (bounds.getX(), bounds.getY(), bounds.getWidth(), bounds.getHeight(), radius, radius,
                                    ! (flatOnLeft || flatOnTop), ! (flatOnRight || flatOnTop), ! (flatOnLeft || flatOnBottom), ! (flatOnRight || flatOnBottom));
 
-        g.setGradientFill (Palette::buttonGradient (base, bounds));
+        if (! small && ! segment && ! pill)
+            juce::DropShadow { Palette::shadowColour, Palette::shadowRadius, { 0, Palette::shadowOffsetY } }.drawForPath (g, shape);
+        g.setColour (base);
         g.fillPath (shape);
-        g.setColour (base.darker (0.4f).withMultipliedAlpha (button.isEnabled() ? 1.0f : 0.5f));
-        g.strokePath (shape, juce::PathStrokeType (1.0f));
+        if (! segment)
+        {
+            g.setColour (button.getProperties().getWithDefault ("slateColourOutline", false)
+                             ? button.findColour (juce::TextButton::textColourOffId) : Palette::outline);
+            g.strokePath (shape, juce::PathStrokeType (Palette::borderWidth));
+            Palette::drawTopHighlight (g, shape, bounds);
+        }
 
         if (button.hasKeyboardFocus (true))   // the dialogs' buttons take focus: show which one Tab landed on
         {
-            g.setColour (Palette::selectionRing);
-            g.strokePath (shape, juce::PathStrokeType (2.0f));
+            g.setColour (Palette::accent);
+            g.strokePath (shape, juce::PathStrokeType (Palette::selectionWidth));
         }
+    }
+
+    void drawComboBox (juce::Graphics& g, int width, int height, bool, int buttonX, int buttonY, int buttonW, int buttonH,
+                       juce::ComboBox& box) override
+    {
+        const auto r = juce::Rectangle<int> (width, height).toFloat().reduced (0.5f);
+        g.setColour (box.findColour (juce::ComboBox::backgroundColourId));
+        g.fillRoundedRectangle (r, Palette::fieldRadius);
+        g.setColour (box.findColour (box.hasKeyboardFocus (true) ? juce::ComboBox::focusedOutlineColourId : juce::ComboBox::outlineColourId));
+        g.drawRoundedRectangle (r, Palette::fieldRadius, Palette::borderWidth);
+        const auto c = juce::Rectangle<int> (buttonX, buttonY, buttonW, buttonH).toFloat().getCentre();
+        juce::Path arrow;
+        arrow.startNewSubPath (c.x - 4.0f, c.y - 2.0f);
+        arrow.lineTo (c.x, c.y + 2.0f);
+        arrow.lineTo (c.x + 4.0f, c.y - 2.0f);
+        g.setColour (Palette::muted.withMultipliedAlpha (box.isEnabled() ? 1.0f : Palette::disabledAlpha));
+        g.strokePath (arrow, juce::PathStrokeType (1.5f));
+    }
+
+    juce::Font getComboBoxFont (juce::ComboBox&) override { return Palette::font (Palette::timeSize); }
+
+    void fillTextEditorBackground (juce::Graphics& g, int width, int height, juce::TextEditor& editor) override
+    {
+        g.setColour (editor.findColour (juce::TextEditor::backgroundColourId));
+        g.fillRoundedRectangle (juce::Rectangle<int> (width, height).toFloat().reduced (0.5f), Palette::fieldRadius);
+    }
+
+    void drawTextEditorOutline (juce::Graphics& g, int width, int height, juce::TextEditor& editor) override
+    {
+        g.setColour (editor.findColour (editor.hasKeyboardFocus (true) ? juce::TextEditor::focusedOutlineColourId : juce::TextEditor::outlineColourId));
+        g.drawRoundedRectangle (juce::Rectangle<int> (width, height).toFloat().reduced (0.5f), Palette::fieldRadius, Palette::borderWidth);
+    }
+
+    void drawToggleButton (juce::Graphics& g, juce::ToggleButton& button, bool over, bool down) override
+    {
+        const float size = Palette::tickSize;
+        drawTickBox (g, button, 0.5f, ((float) button.getHeight() - size) * 0.5f, size, size,
+                     button.getToggleState(), button.isEnabled(), over, down);
+        g.setColour (button.findColour (juce::ToggleButton::textColourId).withMultipliedAlpha (button.isEnabled() ? 1.0f : Palette::disabledAlpha));
+        g.setFont (Palette::font (Palette::timeSize));
+        g.drawText (button.getButtonText(), button.getLocalBounds().withTrimmedLeft (23), juce::Justification::centredLeft, true);
+    }
+
+    void drawTickBox (juce::Graphics& g, juce::Component&, float x, float y, float w, float h,
+                      bool ticked, bool enabled, bool over, bool) override
+    {
+        const auto r = juce::Rectangle<float> (x, y, w, h).reduced (0.5f);
+        g.setColour ((ticked ? Palette::accent : Palette::field).withMultipliedAlpha (enabled ? 1.0f : Palette::disabledAlpha));
+        g.fillRoundedRectangle (r, Palette::tickRadius);
+        g.setColour (ticked || over ? Palette::accent : Palette::muted);
+        g.drawRoundedRectangle (r, Palette::tickRadius, Palette::borderWidth);
+        if (ticked)
+        {
+            const auto tick = getTickShape (1.0f);
+            g.setColour (Palette::accentInk);
+            g.fillPath (tick, tick.getTransformToScaleToFit (r.reduced (3.0f), true));
+        }
+    }
+
+    int getDefaultScrollbarWidth() override { return Palette::scrollBarWidth; }
+
+    void drawScrollbar (juce::Graphics& g, juce::ScrollBar&, int x, int y, int width, int height, bool vertical,
+                         int thumbStart, int thumbSize, bool over, bool down) override
+    {
+        const auto thumb = vertical ? juce::Rectangle<int> (x + (width - Palette::scrollBarWidth) / 2, thumbStart, Palette::scrollBarWidth, thumbSize)
+                                    : juce::Rectangle<int> (thumbStart, y + (height - Palette::scrollBarWidth) / 2, thumbSize, Palette::scrollBarWidth);
+        g.setColour (over || down ? Palette::text : Palette::muted);
+        g.fillRoundedRectangle (thumb.toFloat(), Palette::pillRadius);
+    }
+
+    int getTabButtonOverlap (int) override { return 0; }
+    int getTabButtonBestWidth (juce::TabBarButton& button, int) override
+    {
+        return juce::GlyphArrangement::getStringWidthInt (Palette::font (Palette::tabSize, true), button.getButtonText()) + 28;
+    }
+
+    void createTabButtonShape (juce::TabBarButton& button, juce::Path& path, bool, bool) override
+    {
+        path = Palette::topTabShape (button.getLocalBounds().toFloat());
+    }
+
+    void drawTabButton (juce::TabBarButton& button, juce::Graphics& g, bool, bool) override
+    {
+        g.fillAll (Palette::panel2);
+        const auto r = button.getLocalBounds().withTrimmedTop (6).reduced (1, 0);
+        const bool active = button.isFrontTab();
+        Palette::drawTab (g, r, active);
+        g.setColour (active ? Palette::text : Palette::muted);
+        g.setFont (Palette::font (Palette::tabSize, active));
+        g.drawText (button.getButtonText(), r.reduced (12, 0), juce::Justification::centred, true);
+    }
+
+    void drawTabAreaBehindFrontButton (juce::TabbedButtonBar& bar, juce::Graphics& g, int w, int h) override
+    {
+        // JUCE paints this component over the inactive tabs: fill the gaps without erasing their text.
+        {
+            juce::Graphics::ScopedSaveState save (g);
+            for (int i = 0; i < bar.getNumTabs(); ++i)
+                if (auto* button = bar.getTabButton (i); button != nullptr && button->isVisible())
+                    g.excludeClipRegion (button->getBounds());
+            g.fillAll (Palette::panel2);
+        }
+        g.setColour (Palette::outline);
+        g.fillRect (0, h - 1, w, 1);
+    }
+
+    void drawPopupMenuBackground (juce::Graphics& g, int width, int height) override
+    {
+        Palette::drawCard (g, { width, height });
+    }
+
+    void drawMenuBarBackground (juce::Graphics& g, int width, int height, bool, juce::MenuBarComponent&) override
+    {
+        g.fillAll (Palette::panel);
+        g.setColour (Palette::outline);
+        g.fillRect (0, height - 1, width, 1);
     }
 
     /** A combo box shows a long entry (a cue name) cut with an ellipsis, never with squashed glyphs. */
@@ -159,11 +294,10 @@ public:
 
     juce::Font getPopupMenuFont() override
     {
-        return juce::Font (juce::FontOptions (18.0f));
+        return Palette::font();
     }
 
-    /** Taller items than V4's 1.3 x font: V4 caps the drawn font at item height / 1.3, so without this the 18 pt
-        font would be squeezed back to ~16. */
+    /** Keep the existing generous menu hit areas and full-size shortcut text. */
     void getIdealPopupMenuItemSize (const juce::String& text, bool isSeparator, int standardMenuItemHeight,
                                     int& idealWidth, int& idealHeight) override
     {
@@ -178,12 +312,12 @@ public:
 
     juce::Font getMenuBarFont (juce::MenuBarComponent&, int, const juce::String&) override
     {
-        return juce::Font (juce::FontOptions (17.0f));
+        return Palette::font();
     }
 
     int getDefaultMenuBarHeight() override
     {
-        return 30;
+        return Palette::menuBarHeight;
     }
 
     void drawPopupMenuItem (juce::Graphics& g, const juce::Rectangle<int>& area,

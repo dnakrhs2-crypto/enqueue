@@ -26,9 +26,6 @@ namespace
 {
     void focusAlertEditor (juce::AlertWindow& alert, const juce::String& editorName);   // defined further down
 
-    constexpr int menuBarHeight = 30;   // 17 pt menu titles
-    constexpr int transportHeight = 148;
-    constexpr int footerHeight = 30;
     constexpr double pluginChangeGraceMs = 1500.0;
 }
 
@@ -140,7 +137,7 @@ MainComponent::MainComponent (AudioEngine& e, AppSettings& s, juce::ApplicationC
     cart.onFilesDropped = [this] (const juce::StringArray& files, int slot) { addCuesFromFiles (files, slot); };
     cart.onStop = [this] (const juce::Uuid& id) { controller.stopCue (id, true); };   // pending follows go too
     table.isNumberTaken = [this] (const juce::String& number, const juce::Uuid& exceptId) { return document.isNumberTaken (number, exceptId); };
-    document.onPatchesChanged = [this] { inspector.refreshDeviceDependent(); };   // dead output columns follow the patch
+    document.onPatchesChanged = [this] { inspector.refreshDeviceDependent(); updateTransportStandby(); };   // output columns and next-cue metadata follow the patch
     document.onBeforeContainerSwitch = [this] { table.finishEditing(); inspector.finishEditing(); };   // a half-typed field belongs to the list that is leaving
     table.onEditCues = [this] (const std::vector<int>& rows, const juce::String& name, const std::function<void (Cue&)>& mutator)
     {
@@ -182,6 +179,11 @@ MainComponent::MainComponent (AudioEngine& e, AppSettings& s, juce::ApplicationC
 
         const auto& t = document.cues.get (index);
         return juce::String::fromUTF8 ("\xE2\x86\x92 ") + (t.number.isNotEmpty() ? t.number + " " : "#" + juce::String (index + 1) + " ") + t.name;
+    };
+    transport.describePatch = [this] (const Cue& cue)
+    {
+        const auto& patch = document.patchForCue (cue);
+        return patch.name + " (" + juce::String (patch.numCueOutputs) + ")";
     };
     table.onEditDuration = [this] (int) { ensureInspectorShown(); inspector.showTimeTab(); };
 
@@ -287,9 +289,11 @@ MainComponent::~MainComponent()
 void MainComponent::resized()
 {
     auto area = getLocalBounds();
-    menuBar.setBounds (area.removeFromTop (menuBarHeight));
-    transport.setBounds (area.removeFromTop (transportHeight));
-    footer.setBounds (area.removeFromBottom (footerHeight));
+    menuBar.setBounds (area.removeFromTop (Palette::menuBarHeight));
+    footer.setBounds (area.removeFromBottom (Palette::footerHeight));
+    area.reduce (Palette::gap, Palette::gap);
+    transport.setBounds (area.removeFromTop (Palette::transportHeight));
+    area.removeFromTop (Palette::gap);
 
     // below the transport: [ cue list | active cues ] over a divider over the inspector. The two secondary panes
     // take a share of the area (not a fixed size), so a resized window keeps the proportions.
@@ -307,6 +311,8 @@ void MainComponent::resized()
     activeCuesDivider.setCollapsed (! activeCuesVisible);
     activeCuesDivider.setBounds (area.removeFromRight (SplitDivider::thickness));
 
+    listCardBounds = area;
+    area.reduce (1, 1);
     containerTabs.setBounds (area.removeFromTop (ContainerTabs::height));
     table.setBounds (area);
     cart.setBounds (area);
@@ -376,10 +382,21 @@ void MainComponent::ensureInspectorShown()
 void MainComponent::paint (juce::Graphics& g)
 {
     g.fillAll (Palette::background);
+    // Draw shadows in the parent so they can extend into the gaps between the existing components.
+    Palette::drawCard (g, listCardBounds);
+    if (activeCues.isVisible())
+        Palette::drawCard (g, activeCues.getBounds());
+    if (inspector.isVisible())
+        Palette::drawCard (g, inspector.getBounds());
 }
 
 void MainComponent::paintOverChildren (juce::Graphics& g)
 {
+    Palette::finishCard (g, listCardBounds);
+    if (activeCues.isVisible())
+        Palette::finishCard (g, activeCues.getBounds());
+    if (inspector.isVisible())
+        Palette::finishCard (g, inspector.getBounds());
     if (dragOverWindow)
     {
         g.setColour (Palette::standby);
@@ -3045,6 +3062,45 @@ void MainComponent::showAlert (const juce::String& title, const juce::String& me
 void MainComponent::updateTransportStandby()
 {
     transport.setStandbyCue (document.cues.getPlayheadIndex(), document.cues.getPlayhead());
+    auto context = document.getContainerInfo (document.getActiveContainer()).name;
+    if (document.settings.lockPlayheadToSelection)
+        context << ko (" · 플레이헤드 잠금");
+    transport.setContextText (context);
+    auto number = [this] (int index)
+    {
+        if (! document.cues.isValidIndex (index))
+            return juce::String ("--");
+        const auto& cue = document.cues.get (index);
+        return cue.number.isNotEmpty() ? cue.number : "#" + juce::String (index + 1);
+    };
+    containerTabs.setInfoText (document.isActiveCart() ? ko ("카트: 버튼 클릭 = 실행")
+                                : ko ("선택 ") + number (document.cues.getSelectedIndex())
+                                    + ko (" · 다음 ") + number (document.cues.getPlayheadIndex()) + ko (" · Space = GO"));
+}
+
+void MainComponent::updateAudioStatus()
+{
+    auto& manager = engine.getDeviceManager();
+    auto* device = manager.getCurrentAudioDevice();
+    if (device == nullptr || ! device->isOpen())
+    {
+        footer.setAudioStatus (ko ("오디오 장치 없음"));
+        return;
+    }
+
+    const double rate = device->getCurrentSampleRate();
+    const int buffer = device->getCurrentBufferSizeSamples();
+    const int reportedLatency = device->getOutputLatencyInSamples();
+    juce::String status = manager.getCurrentAudioDeviceType() + ko (" · ") + device->getName();
+    if (rate > 0.0 && std::isfinite (rate))
+    {
+        status << ko (" · ") << juce::String (rate / 1000.0, std::fmod (rate, 1000.0) == 0.0 ? 0 : 1) << " kHz";
+        status << ko (" · ") << buffer << " samples";
+        const int latencySamples = reportedLatency > 0 ? reportedLatency : juce::jmax (0, buffer);
+        status << ko (" · 출력 지연 ") << juce::String ((double) latencySamples / rate * 1000.0, 1) << " ms";
+    }
+    status << ko (" · CPU ") << juce::String (manager.getCpuUsage() * 100.0, 1) << "%";
+    footer.setAudioStatus (status);
 }
 
 //==============================================================================
@@ -3153,6 +3209,7 @@ void MainComponent::timerCallback()
         windowScanCountdown = 30;   // once a second
         attachOperationalKeysToWindows();
         installEscapePolicy (inspector);
+        updateAudioStatus();
     }
 
     engine.reapIfNeeded();   // finished players are destroyed here, never from the audio thread's callback
@@ -3206,6 +3263,7 @@ void MainComponent::timerCallback()
     }
 
     transport.setPlayingCount (running, paused);
+    activeCues.setPlayingCount (running, paused);
     transport.setGoLocked (controller.isGoLocked());
     inspector.setPlayback (playing);
 
@@ -3251,8 +3309,7 @@ void MainComponent::cueListStructureChanged()
 
 void MainComponent::cueChanged (int index)
 {
-    if (index == document.cues.getPlayheadIndex())
-        updateTransportStandby();
+    updateTransportStandby();
 
     // a loaded instance holds a copy of the cue: after an edit it would play the old settings
     if (document.cues.isValidIndex (index))
@@ -3271,6 +3328,7 @@ void MainComponent::cueChanged (int index)
 
 void MainComponent::cueSelectionChanged (int)
 {
+    updateTransportStandby();
     commands.commandStatusChanged();
 }
 
@@ -3400,6 +3458,7 @@ void MainComponent::updateContainerView()
     cart.setVisible (isCart);
     table.setVisible (! isCart);
     containerTabs.refresh();
+    updateTransportStandby();
     commands.commandStatusChanged();
 
     if (isCart)
@@ -3422,6 +3481,7 @@ void MainComponent::documentStateChanged()
     table.setRowSize (document.settings.rowSize);
     transport.setPanicSeconds (document.settings.panicSeconds);
     transport.setAuditionMode (document.settings.alwaysAudition);
+    updateTransportStandby();
 
     if (onWindowTitleChanged)
         onWindowTitleChanged (document.getWindowTitle());

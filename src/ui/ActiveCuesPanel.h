@@ -22,6 +22,7 @@ public:
 
     /** Fed from the UI timer. */
     void setPlayingCues (const std::vector<AudioEngine::PlayingCue>& playing);
+    void setPlayingCount (int numPlaying, int numPaused);
     /** The row's stop button: the owner stops the cue wherever it runs (fade cues live outside the engine). */
     std::function<void (const juce::Uuid& cueId)> onStopRequested;
     /** The row's pause button: resume = true asks for a resume (the owner applies the panic latch). */
@@ -42,7 +43,7 @@ private:
     juce::Viewport viewport;
     juce::Component content;
     std::vector<std::unique_ptr<Row>> rows;
-    juce::Label title, emptyLabel;
+    juce::Label title, playingLabel, emptyLabel;
     bool newestFirst = false;
     bool scrubEnabled = true;
 
