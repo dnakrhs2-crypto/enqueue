@@ -45,7 +45,9 @@ struct ImportUiTestAccess
     {
         const auto& r = main.recordView;
         return r.importButton.isVisible() && r.importButton.getWidth() >= 140
-            && r.timelineTab.getRight() <= r.importButton.getX() && r.importButton.getRight() <= r.settingsButton.getX();
+            && r.importButton.getY() == r.markerButton.getY()
+            && r.markerButton.getRight() < main.audioImporter.getX()
+            && main.audioImporter.getWidth() >= 400 && main.audioImporter.getRight() < r.importButton.getX();
     }
 };
 }

@@ -90,6 +90,8 @@ juce::Result decode(const juce::String& text, UserSettings& out)
     s.calibration.calibrationDate = p.getValue("calibrationDate"); s.calibration.calibrationIdentity = p.getValue("calibrationIdentity"); s.calibration.asioDeviceId = p.getValue("calibrationAsioDeviceId");
     for (std::size_t i = 0; i < RecorderShortcuts::count; ++i)
         s.shortcuts.keys[i] = p.getValue(RecorderShortcuts::field(RecorderCommand(i)), s.shortcuts.keys[i]);
+    if (s.shortcuts[RecorderCommand::recordStop] == "F10" && s.shortcuts[RecorderCommand::playStop] == "spacebar")
+        s.shortcuts.keys[std::size_t(RecorderCommand::recordStop)] = "spacebar";
     s.windowState = p.getValue("windowState"); const auto valid = s.validate(); if (valid.wasOk()) out = std::move(s); return valid;
     }
     catch (const std::exception& e) { return juce::Result::fail(juce::String::fromUTF8(e.what())); }
@@ -113,7 +115,6 @@ const char* RecorderShortcuts::field(RecorderCommand c)
 }
 juce::Result RecorderShortcuts::validate() const
 {
-    std::set<juce::String> seen;
     for (std::size_t i = 0; i < count; ++i)
     {
         auto value = keys[i].trim().toLowerCase();
@@ -127,7 +128,10 @@ juce::Result RecorderShortcuts::validate() const
         if (!functionKey && !named && !printable && !extended) return juce::Result::fail(ko("키 입력 버튼으로 단축키를 지정하세요."));
         if (base == "escape" || base == "tab" || base == "return" || value == "delete" || value == "ctrl + z" || value == "ctrl + shift + z" || value == "alt + f4")
             return juce::Result::fail(ko("취소·탐색·편집에 사용 중인 키입니다: ") + keys[i]);
-        if (!seen.insert(value.removeCharacters(" ")).second) return juce::Result::fail(ko("다른 동작과 단축키가 겹칩니다: ") + keys[i]);
+        for (std::size_t j = 0; j < i; ++j)
+            if (value.removeCharacters(" ") == keys[j].trim().toLowerCase().removeCharacters(" ")
+                && !(RecorderCommand(j) == RecorderCommand::recordStop && RecorderCommand(i) == RecorderCommand::playStop))
+                return juce::Result::fail(ko("다른 동작과 단축키가 겹칩니다: ") + keys[i]);
     }
     return juce::Result::ok();
 }

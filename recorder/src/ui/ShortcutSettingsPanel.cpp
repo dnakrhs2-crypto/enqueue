@@ -5,7 +5,7 @@ namespace gocue::recorder
 ShortcutSettingsPanel::ShortcutSettingsPanel(const UserSettings& s) : bindings(s.shortcuts)
 {
     addAndMakeVisible(hint); addAndMakeVisible(error); addAndMakeVisible(reset);
-    hint.setText(ko("버튼을 누른 뒤 사용할 키를 입력하세요. Esc: 입력 취소\n텍스트를 입력하는 동안에는 단축키가 실행되지 않습니다."), juce::dontSendNotification);
+    hint.setText(ko("버튼을 누른 뒤 사용할 키를 입력하세요. Esc: 입력 취소\n텍스트를 입력하는 동안에는 단축키가 실행되지 않습니다.\n녹화 정지와 재생/정지는 같은 키를 쓸 수 있습니다(녹화 중엔 정지)"), juce::dontSendNotification);
     error.setColour(juce::Label::textColourId, Palette::danger);
     reset.onClick = [this] { bindings = {}; capturing = -1; error.setText({}, juce::dontSendNotification); update(); };
     for (std::size_t i = 0; i < captures.size(); ++i)
@@ -35,7 +35,7 @@ void ShortcutSettingsPanel::update()
 }
 void ShortcutSettingsPanel::resized()
 {
-    auto a = getLocalBounds().reduced(20); hint.setBounds(a.removeFromTop(64)); a.removeFromTop(12);
+    auto a = getLocalBounds().reduced(20); hint.setBounds(a.removeFromTop(88)); a.removeFromTop(12);
     for (std::size_t i = 0; i < captures.size(); ++i)
     { auto row = a.removeFromTop(48); labels[i].setBounds(row.removeFromLeft(180)); captures[i].setBounds(row.reduced(4)); }
     error.setBounds(a.removeFromTop(58)); reset.setBounds(a.removeFromTop(36).removeFromLeft(190));

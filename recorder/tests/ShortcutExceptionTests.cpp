@@ -40,6 +40,16 @@ struct ShortcutExceptionTestAccess
     static juce::String exceptionBanner(MainComponent& main) { return main.exceptionBanner; }
     static void releaseKey(MainComponent& main) { main.heldShortcut = {}; }
     static bool listenerOn(MainComponent& main, juce::Component* origin) { return main.shortcutFocus == origin; }
+    static juce::AlertWindow* marker(MainComponent& main) { return main.markerWindow.getComponent(); }
+    static void markerButton(MainComponent& main) { main.recordView.markerButton.onClick(); }
+    static void timelineMarker(MainComponent& main) { main.timelineView.onAddMarkerRequested(); }
+    static bool projectVisible(MainComponent& main) { return main.projectWindow && main.projectWindow->isVisible(); }
+    static NewProjectForm& projectForm(MainComponent& main) { return *static_cast<NewProjectForm*>(main.projectWindow->getContentComponent()); }
+    static void newProject(MainComponent& main) { main.newProjectDialog(); }
+    static juce::Rectangle<int> importProgress(MainComponent& main) { return main.audioImporter.getBounds(); }
+    static RecordView& recordView(MainComponent& main) { return main.recordView; }
+    static const std::vector<Marker>& queuedMarkers(MainComponent& main) { return main.session.recordedMarkers; }
+    static void cursor(MainComponent& main, Sample at) { main.session.cursor = at; }
     static void mockPreview(MainComponent& main)
     {
         std::promise<std::shared_ptr<ExportDialog::Preview>> promise;
@@ -115,6 +125,14 @@ juce::String labels(const juce::Component& component)
     if (const auto* label = dynamic_cast<const juce::Label*>(&component)) result += label->getText();
     for (auto* child : component.getChildren()) result += labels(*child);
     return result;
+}
+void snapshot(juce::Component& component, const char* name)
+{
+    const auto path = juce::SystemStats::getEnvironmentVariable("RECORDER_TEST_SCREENSHOT_ROOT", {});
+    if (!juce::File::isAbsolutePath(path)) return;
+    const juce::File folder(path); require(folder.createDirectory().wasOk(), "Screenshot directory");
+    juce::FileOutputStream output(folder.getChildFile(name));
+    require(output.openedOk() && juce::PNGImageFormat().writeImageToStream(component.createComponentSnapshot(component.getLocalBounds()), output), "Write UI screenshot");
 }
 struct CameraFixture
 {
@@ -227,18 +245,159 @@ int runShortcutExceptionTests()
     using namespace shortcut_exception_tests;
     recorder_test::Suite suite;
     juce::ScopedJuceInitialiser_GUI gui;
-    suite.test("Focused nonmodal export control forwards F10 to the live take stop", []
+    suite.test("Shared Space routes by recording state, suppresses repeats, and leaves text input alone", []
+    {
+        const juce::KeyPress space(juce::KeyPress::spaceKey);
+        RecorderShortcuts bindings;
+        require(shortcutCommand(bindings, space, nullptr, true) == RecorderCommand::recordStop, "Recording must select stop");
+        require(shortcutCommand(bindings, space, nullptr, false) == RecorderCommand::playStop, "Idle must select play/stop");
+        juce::TextEditor text; juce::Component child; text.addChildComponent(child);
+        require(!shortcutCommand(bindings, space, &text, true) && !shortcutCommand(bindings, space, &child, false), "Text consumes Space");
+        MainFixture f;
+        require(f.main.routeShortcut(space, &f.main) && f.session.playing(), "Idle Space did not request playback");
+        require(f.main.routeShortcut(space, &f.main) && f.session.playing(), "Held Space toggled playback twice");
+        Access::releaseKey(f.main);
+        require(f.main.routeShortcut(space, &f.main) && !f.session.playing(), "Released then pressed Space did not stop playback");
+    });
+    suite.test("Shortcut settings capture accepts the shared stop key and explains it", []
+    {
+        UserSettings settings; settings.shortcuts.keys[std::size_t(RecorderCommand::recordStop)] = "F8";
+        ShortcutSettingsPanel panel(settings);
+        juce::Button* stop = nullptr;
+        for (auto* child : panel.getChildren()) if (auto* button = dynamic_cast<juce::Button*>(child);
+            button && button->getTitle() == RecorderShortcuts::name(RecorderCommand::recordStop)) stop = button;
+        require(stop != nullptr, "Record stop capture exists"); stop->onClick();
+        require(static_cast<juce::Component*>(stop)->keyPressed(juce::KeyPress(juce::KeyPress::spaceKey)), "Capture did not accept Space");
+        require(panel.validate().wasOk() && panel.read(settings).shortcuts[RecorderCommand::recordStop] == "spacebar", "Shared key rejected");
+        require(labels(panel).contains(ko("녹화 중엔 정지")), "Shared-key hint missing");
+    });
+    suite.test("Marker button confirms the captured cursor and preserves the entered UTF-8 name", []
+    {
+        MainFixture f; Access::cursor(f.main, 2345); Access::markerButton(f.main);
+        auto* prompt = Access::marker(f.main); require(prompt && prompt->isCurrentlyModal(), "Asynchronous marker prompt missing");
+        auto* editor = prompt->getTextEditor("markerName"); focus(f.main, *editor);
+        require(editor->getText() == ko("마커 1") && editor->getHighlightedRegion().getLength() == editor->getText().length(), "Default name must be fully selected");
+        snapshot(*prompt, "marker-prompt.png");
+        const auto name = ko("  도입 · 후렴 → 끝  "); editor->setText(name); Access::cursor(f.main, 9876);
+        prompt->triggerButtonClick(ko("확인")); until([&] { pump(); return Access::marker(f.main) == nullptr; });
+        require(f.document.getProject().markers.size() == 1 && f.document.getProject().markers[0].sample == 2345
+            && f.document.getProject().markers[0].name == name, "Confirm changed the captured sample or trimmed the name");
+    });
+    suite.test("Timeline marker hook and M share one prompt; Enter defaults, Escape and cancel discard", []
+    {
+        MainFixture f; Access::timelineMarker(f.main); const juce::Component::SafePointer<juce::AlertWindow> first(Access::marker(f.main));
+        Access::markerButton(f.main); Access::timelineMarker(f.main); f.main.routeShortcut(juce::KeyPress('M'), &f.main);
+        require(first && Access::marker(f.main) == first.getComponent() && f.document.getProject().markers.empty(), "Repeated request opened or added twice");
+        auto* editor = first->getTextEditor("markerName"); focus(f.main, *editor); editor->setText("   ");
+        require(editor->getPeer()->handleKeyPress(juce::KeyPress::returnKey, 0), "Enter did not reach marker confirmation");
+        until([&] { pump(); return Access::marker(f.main) == nullptr; });
+        require(f.document.getProject().markers.size() == 1 && f.document.getProject().markers[0].name == ko("마커 1"), "Empty name fallback failed");
+        Access::releaseKey(f.main); require(f.main.routeShortcut(juce::KeyPress('M'), &f.main), "M did not request marker prompt");
+        auto* second = Access::marker(f.main); require(second && second->getTextEditorContents("markerName") == ko("마커 2"), "M default sequence");
+        editor = second->getTextEditor("markerName"); focus(f.main, *editor);
+        editor->getPeer()->handleKeyPress(juce::KeyPress::escapeKey, 0);
+        until([&] { pump(); return Access::marker(f.main) == nullptr; });
+        Access::markerButton(f.main); Access::marker(f.main)->triggerButtonClick(ko("취소"));
+        until([&] { pump(); return Access::marker(f.main) == nullptr; });
+        require(f.document.getProject().markers.size() == 1, "Cancel or Escape added a marker");
+    });
+    suite.test("Recording continues while naming a marker, Space stays text, and placement uses request time", []
+    {
+        recorder_audio_fixture::Fixture source(8000); auto project = source.project;
+        project.tracks.erase(project.tracks.begin(), project.tracks.begin() + 2);
+        MainFixture f; require(f.document.adopt(project, f.folder.root.getChildFile("project.recorder"), {}).wasOk(), "Existing timeline fixture");
+        f.begin();
+        require(f.session.takeController().placementSample() > 0, "Recording fixture needs a nonzero placement");
+        const auto at = f.session.takeController().placementSample() + f.session.elapsed();
+        Access::markerButton(f.main); auto* prompt = Access::marker(f.main); require(prompt != nullptr, "Recording marker prompt missing");
+        auto* editor = prompt->getTextEditor("markerName"); focus(f.main, *editor); editor->setText(ko("녹화 지점"));
+        editor->getPeer()->handleKeyPress(juce::KeyPress::spaceKey, ' ');
+        require(!f.main.routeShortcut(juce::KeyPress(juce::KeyPress::spaceKey), editor), "Marker text leaked Space");
+        for (unsigned n = 0; n < 40; ++n) { f.feed(); Access::tick(f.main); pump(); }
+        require(f.session.takeController().state() == TakeController::State::recording
+            && f.session.takeController().placementSample() + f.session.elapsed() > at, "Modal prompt blocked recording ticks");
+        const auto name = editor->getText(); prompt->triggerButtonClick(ko("확인"));
+        until([&] { pump(); return Access::marker(f.main) == nullptr; });
+        const auto& queued = Access::queuedMarkers(f.main);
+        require(queued.size() == 1 && queued[0].sample == at && queued[0].name == name, "Live marker used confirmation time");
+        require(f.document.getProject().markers.empty(), "Live marker published before placement");
+        f.finish(); Access::tick(f.main);
+        require(f.document.getProject().markers.size() == 1 && f.document.getProject().markers[0].sample == at
+            && f.document.getProject().markers[0].name == name, "Placed take lost the named marker");
+    });
+    suite.test("Project replacement and shutdown dismiss marker prompts and invalidate pending confirmation", []
+    {
+        MainFixture f; Access::markerButton(f.main);
+        const juce::Component::SafePointer<juce::AlertWindow> old(Access::marker(f.main));
+        old->triggerButtonClick(ko("확인")); f.document.newProject("replacement", 8000, {30, 1}); pump();
+        require(!old && !Access::marker(f.main) && f.document.getProject().markers.empty(), "Stale confirmation reached replacement project");
+        Access::markerButton(f.main); const juce::Component::SafePointer<juce::AlertWindow> closing(Access::marker(f.main));
+        bool closed = false; f.main.requestClose([&] { closed = true; });
+        until([&] { pump(); Access::tick(f.main); return closed; });
+        require(!closing && f.document.getProject().markers.empty(), "Closing retained or confirmed marker prompt");
+    });
+    suite.test("Startup without a project opens a focused form, cancel keeps recording gated, and layout fits", []
+    {
+        MainFixture f; f.main.initialiseProject({}, true, false);
+        require(Access::projectVisible(f.main), "First startup did not request a project");
+        auto& form = Access::projectForm(f.main); focus(f.main, form.name);
+        snapshot(form, "new-project-form.png");
+        require(form.folder.getText().isEmpty() && form.open.getButtonText() == ko("기존 프로젝트 열기…"), "First-run folder or open button wrong");
+        form.cancel.onClick(); Access::refresh(f.main);
+        require(!Access::projectVisible(f.main) && !f.session.readyToRecord() && labels(Access::recordView(f.main)).contains(ko("프로젝트 > 새 프로젝트")), "Cancel must keep project guidance and record gate");
+        for (const int width : {960, 1180, 1600})
+        {
+            f.main.setSize(width, 780); auto& view = Access::recordView(f.main); const auto progress = Access::importProgress(f.main);
+            require(progress.getX() > view.markerButton.getRight() && progress.getWidth() >= 400
+                && progress.getRight() < view.importButton.getX(), "Compact import overlaps buttons or has no usable width");
+            require(view.importButton.getY() == view.markerButton.getY(), "Import did not move into freed control row");
+        }
+        require(Access::recordView(f.main).stopButton.getTooltip() == ko("녹화 정지 · spacebar"), "Stop tooltip encoding/default");
+        require(RecorderUpdater::aboutText().startsWith(juce::String::fromUTF8(RECORDER_DISPLAY_NAME)), "About identity encoding");
+    });
+    suite.test("Failed recent startup opens a form with existing parent folder; suppressed modes stay quiet", []
+    {
+        for (const bool interactive : {true, false})
+        {
+            MainFixture f; require(f.folder.root.createDirectory().wasOk(), "Recent folder fixture");
+            f.settings.rememberProject(f.folder.root.getChildFile("missing.recorder"));
+            f.main.initialiseProject({}, interactive, false);
+            until([&] { Access::tick(f.main); pump(); return !Access::filePending(f.main); });
+            require(Access::projectVisible(f.main) == interactive, "Recent failure startup policy wrong");
+            if (interactive) require(Access::projectForm(f.main).folder.getText() == f.folder.root.getFullPathName(), "Recent parent not prefilled");
+            require(f.session.deviceInfo().sampleRate == 0, "Isolated startup opened audio");
+        }
+        MainFixture isolated; isolated.main.initialiseProject({}, false, false);
+        require(!Access::projectVisible(isolated.main), "Test/automation startup opened a form");
+        MainFixture explicitPath; explicitPath.main.initialiseProject(explicitPath.folder.root.getChildFile("absent.recorder"), true, false);
+        until([&] { Access::tick(explicitPath.main); pump(); return !Access::filePending(explicitPath.main); });
+        require(!Access::projectVisible(explicitPath.main), "Explicit open incorrectly fell back to startup prompt");
+    });
+    suite.test("Successful recent startup skips the form and a pending device connection does not block a new form", []
+    {
+        MainFixture recent; const auto path = recent.folder.root.getChildFile("project.recorder");
+        require(recent.document.saveCheckpoint(path).wasOk(), "Recent checkpoint fixture");
+        recent.settings.rememberProject(path); recent.main.initialiseProject({}, true, false);
+        until([&] { Access::tick(recent.main); pump(); return !Access::filePending(recent.main); });
+        require(recent.document.getFile() == path && !Access::projectVisible(recent.main), "Successful recent open displayed a startup prompt");
+        MainFixture connecting; Access::failDeviceGet(connecting.session, std::make_exception_ptr(std::runtime_error("synthetic startup connection")));
+        connecting.main.initialiseProject({}, true, false);
+        require(connecting.session.configuring() && Access::projectVisible(connecting.main), "Startup form waited for device completion");
+        Access::tick(connecting.main);
+        require(!connecting.session.configuring() && Access::projectVisible(connecting.main), "Device callback hid the project form");
+    });
+    suite.test("Focused nonmodal export control forwards Space to the live take stop", []
     {
         MainFixture f; f.begin();
         Access::settings(f.main); require(!Access::settingsVisible(f.main), "Settings opened during recording");
         auto& exporting = Access::exporting(f.main); exporting.show();
         auto& button = Access::exportFocus(f.main); focus(f.main, button);
         require(!f.main.isParentOf(&button) && exporting.ownsShortcutOrigin(&button), "Export must be a separate owned top-level window");
-        require(button.getPeer()->handleKeyPress(juce::KeyPress::F10Key, 0), "Native peer did not handle F10");
-        require(f.session.takeController().state() == TakeController::State::stopping, "F10 did not call TakeController::stop");
+        require(button.getPeer()->handleKeyPress(juce::KeyPress::spaceKey, 0), "Native peer did not handle Space");
+        require(f.session.takeController().state() == TakeController::State::stopping, "Space did not call TakeController::stop");
         f.finish();
     });
-    suite.test("Visible settings reject F9 and permit F10 from main and settings controls", []
+    suite.test("Visible settings reject F9 and permit Space from main and settings controls", []
     {
         CameraFixture camera;
         for (bool settingsFocus : {true, false})
@@ -250,27 +409,27 @@ int runShortcutExceptionTests()
             if (settingsFocus)
             {
                 auto& button = Access::settingsForm(f.main).close; focus(f.main, button);
-                require(button.getPeer()->handleKeyPress(juce::KeyPress::F10Key, 0), "Settings peer did not route F10");
+                require(button.getPeer()->handleKeyPress(juce::KeyPress::spaceKey, 0), "Settings peer did not route Space");
             }
-            else require(f.main.routeShortcut(juce::KeyPress(juce::KeyPress::F10Key), &f.main), "Settings visibility blocked main F10 routing");
-            require(f.session.takeController().state() == TakeController::State::stopping, "F10 did not stop while settings remained visible"); f.finish();
+            else require(f.main.routeShortcut(juce::KeyPress(juce::KeyPress::spaceKey), &f.main), "Settings visibility blocked main Space routing");
+            require(f.session.takeController().state() == TakeController::State::stopping, "Space did not stop while settings remained visible"); f.finish();
         }
     });
     suite.test("Export text input and shortcut capture focus do not execute recording keys", []
     {
         MainFixture f; f.begin(); auto& exporting = Access::exporting(f.main); exporting.show();
         auto& editor = Access::exportText(f.main); focus(f.main, editor);
-        editor.getPeer()->handleKeyPress(juce::KeyPress::F10Key, 0);
+        editor.getPeer()->handleKeyPress(juce::KeyPress::spaceKey, 0);
         require(f.session.takeController().state() == TakeController::State::recording, "Text input stopped recording");
         juce::Component child; editor.addChildComponent(child);
-        require(!f.main.routeShortcut(juce::KeyPress(juce::KeyPress::F10Key), &child), "Text editor descendant escaped exclusion");
+        require(!f.main.routeShortcut(juce::KeyPress(juce::KeyPress::spaceKey), &child), "Text editor descendant escaped exclusion");
         ShortcutSettingsPanel captures(f.settings.get()); exporting.addAndMakeVisible(captures);
         juce::Button* capture = nullptr;
         for (auto* c : captures.getChildren()) if (auto* button = dynamic_cast<juce::Button*>(c); button && button->getButtonText() == "F9") capture = button;
         require(capture && capture->onClick, "Capture button fixture"); capture->onClick();
-        require(!f.main.routeShortcut(juce::KeyPress(juce::KeyPress::F10Key), capture), "Capture widget executed stop");
+        require(!f.main.routeShortcut(juce::KeyPress(juce::KeyPress::spaceKey), capture), "Capture widget executed stop");
         juce::TextButton unrelated;
-        require(!f.main.routeShortcut(juce::KeyPress(juce::KeyPress::F10Key), &unrelated), "Unowned window routed a shortcut"); f.finish();
+        require(!f.main.routeShortcut(juce::KeyPress(juce::KeyPress::spaceKey), &unrelated), "Unowned window routed a shortcut"); f.finish();
     });
     suite.test("Export preview preparation retains its recording start gate", []
     {

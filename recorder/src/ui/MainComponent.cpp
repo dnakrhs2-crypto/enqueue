@@ -34,7 +34,8 @@ MainComponent::MainComponent(RecorderDocument& d, RecorderSettings& s, TakeContr
             }
     };
     recordView.startButton.onClick = [this] { recordClicked(); }; recordView.stopButton.onClick = [this] { stopClicked(); };
-    recordView.markerButton.onClick = [this] { session.addMarker(); refreshPending = true; };
+    recordView.markerButton.onClick = [this] { promptMarker(); };
+    timelineView.onAddMarkerRequested = [this] { promptMarker(); };
     recordView.onArm = [this](unsigned i, bool on)
     { const auto r = session.audioEngine().arm(i, on); if (r.failed()) showError(r.getErrorMessage()); else { auto next = settings.get(); next.microphoneArmed[i] = on; settings.set(next); session.updateMicrophoneSettings(next); persistSettings(); if (cameraPanel) cameraPanel->setSettings(next); } refreshPending = true; };
     recordView.onMonitor = [this, mask = std::uint8_t{0}](unsigned i, bool on) mutable { mask = std::uint8_t(on ? mask | (1u << i) : mask & ~(1u << i)); session.setMonitoring(mask); };
@@ -60,7 +61,11 @@ MainComponent::MainComponent(RecorderDocument& d, RecorderSettings& s, TakeContr
     };
     session.onPeaks = [this](const Id& id, auto peaks, unsigned channel) { timelineView.setPeaks(id, peaks, channel); };
     session.onLoadedPeaks = [this](const Id& id, auto peaks, unsigned channel) { timelineView.setLoadedPeaks(id, std::move(peaks), channel); };
-    document.onChanged = [this] { refreshPending = true; publishLifecycle(); };
+    document.onChanged = [this]
+    {
+        if (markerWindow && markerProject != document.getProject().projectId) dismissMarkerPrompt();
+        refreshPending = true; publishLifecycle();
+    };
     exportDialog = std::make_unique<ExportDialog>(document, session, recordView.exportButton, [this](const juce::String& text) { showError(text); });
     exportDialog->onShortcut = [this](const juce::KeyPress& key, juce::Component* origin) { return routeShortcut(key, origin); };
     aboutButton.setButtonText(ko("앱 정보")); updateButton.setButtonText(ko("업데이트")); retryButton.setButtonText(ko("마무리 재시도"));
@@ -73,7 +78,7 @@ MainComponent::MainComponent(RecorderDocument& d, RecorderSettings& s, TakeContr
 }
 MainComponent::~MainComponent()
 {
-    stopTimer(); document.onChanged = nullptr; removeKeyListener(this);
+    stopTimer(); dismissMarkerPrompt(); document.onChanged = nullptr; removeKeyListener(this);
     juce::Desktop::getInstance().removeFocusChangeListener(this);
     if (shortcutFocus) shortcutFocus->removeKeyListener(this);
     audioImporter.onImported = {}; audioImporter.onStatusChanged = {}; audioImporter.onBusyChanged = {};
@@ -102,7 +107,8 @@ void MainComponent::resized()
 {
     recordView.setBounds(getLocalBounds()); timelineView.setBounds(recordView.timelineBounds());
     const auto lastButton = recordView.markerButton.getBounds();
-    audioImporter.setBounds(lastButton.getRight() + 8, lastButton.getY(), juce::jmax(0, getWidth() - lastButton.getRight() - 20), lastButton.getHeight());
+    audioImporter.setBounds(lastButton.getRight() + 8, lastButton.getY(),
+        juce::jmax(0, recordView.importButton.getX() - lastButton.getRight() - 16), lastButton.getHeight());
     auto row = getLocalBounds().removeFromBottom(26).removeFromRight(320);
     updateButton.setBounds(row.removeFromRight(90)); aboutButton.setBounds(row.removeFromRight(90)); retryButton.setBounds(row);
 }
@@ -183,6 +189,9 @@ void MainComponent::refresh()
         : session.error.isNotEmpty() ? session.error : banner.isNotEmpty() ? banner : session.notice.isNotEmpty() ? session.notice
         : take.warning().isNotEmpty() ? take.warning() : document.getRecoveryMessage();
     const auto delayed = recorderFaultText(RecorderFault::processingDelay);
+    if (document.getFile() == juce::File() && !closeAction)
+        message = ko("프로젝트 > 새 프로젝트에서 저장할 폴더를 선택하세요.")
+            + (message.isNotEmpty() ? ko(" · ") + message : juce::String());
     if (exceptionBanner.isNotEmpty()) message = exceptionBanner + (message.isNotEmpty() ? " · " + message : juce::String());
     if (session.notice == delayed && !message.contains(delayed)) message = delayed + " · " + message;
     const auto takeStatus = session.takeController().statusText();
@@ -217,14 +226,14 @@ bool MainComponent::keyPressed(const juce::KeyPress& key, juce::Component* origi
 { return routeShortcut(key, origin); }
 bool MainComponent::routeShortcut(const juce::KeyPress& key, juce::Component* origin)
 {
-    if (!ownsShortcutOrigin(origin)) return false;
+    if (!ownsShortcutOrigin(origin) || shortcutTextFocus(origin) || markerWindow) return false;
     // Capture buttons carry the command's accessibility title. Other settings
     // controls (including Reset) still route Stop; focused capture buttons own keys.
     if (auto* panel = origin->findParentComponentOfClass<ShortcutSettingsPanel>())
         for (auto* control = origin; control && control != panel; control = control->getParentComponent())
             for (std::size_t i = 0; i < RecorderShortcuts::count; ++i)
                 if (control->getTitle() == RecorderShortcuts::name(RecorderCommand(i))) return false;
-    const auto command = shortcutCommand(settings.get().shortcuts, key, origin); if (!command) return false;
+    const auto command = shortcutCommand(settings.get().shortcuts, key, origin, session.recording()); if (!command) return false;
     // Stop remains available from every owned window even during settings/close.
     // Other settings-window commands are suspended; export preview owns ASIO output.
     if (*command != RecorderCommand::recordStop
@@ -239,7 +248,7 @@ bool MainComponent::routeShortcut(const juce::KeyPress& key, juce::Component* or
         case RecorderCommand::playStop:
             if (!session.recording() && !fileWork.valid()) { if (session.playing()) session.stopPlayback(); else { if (!timeline) setTimeline(true); session.play(); } } break;
         case RecorderCommand::split: if (timeline && !fileWork.valid() && timelineView.edits.enabled(TimelineAction::split)) timelineView.invoke(TimelineAction::split); break;
-        case RecorderCommand::marker: if (!fileWork.valid()) session.addMarker(); break;
+        case RecorderCommand::marker: promptMarker(); break;
         default: break;
     }
     refreshPending = true; return true;
@@ -249,7 +258,8 @@ bool MainComponent::keyStateChanged(bool, juce::Component*)
 void MainComponent::globalFocusChanged(juce::Component* focus)
 {
     if (shortcutFocus) shortcutFocus->removeKeyListener(this);
-    shortcutFocus = nullptr; heldShortcut = {};
+    shortcutFocus = nullptr;
+    if (!heldShortcut.isCurrentlyDown()) heldShortcut = {};
     // Listen before the focused widget consumes keys such as Space/arrow keys.
     // Owned top-level windows need the same listener before their widgets consume input.
     if (focus && focus != this && ownsShortcutOrigin(focus)) { shortcutFocus = focus; focus->addKeyListener(this); }
@@ -259,6 +269,7 @@ bool MainComponent::ownsShortcutOrigin(const juce::Component* origin) const
     if (!origin) return false;
     const auto inWindow = [origin](const auto& window) { return window && (origin == window.get() || window->isParentOf(origin)); };
     return origin == this || isParentOf(origin) || inWindow(settingsWindow) || inWindow(projectWindow)
+        || (markerWindow && (origin == markerWindow.getComponent() || markerWindow->isParentOf(origin)))
         || (exportDialog && exportDialog->ownsShortcutOrigin(origin));
 }
 void MainComponent::persistSettings()
@@ -294,6 +305,7 @@ void MainComponent::requestClose(std::function<void()> action)
 {
     if (closeAction) return;
     closeAction = std::move(action); closeCommitRequested = false;
+    dismissMarkerPrompt(); promptAfterStartupOpen = false;
     persistSettings();
     afterSave = {}; chooser.reset(); recordView.setEnabled(false); timelineView.setEnabled(false);
     audioImporter.cancelImport();
@@ -312,7 +324,7 @@ void MainComponent::continueClose()
 }
 void MainComponent::timerCallback()
 {
-    if (powerMonitor.poll() && !closeAction) session.resumeFromSleep();
+    if (powerMonitor.poll() && !closeAction && devicesEnabled) session.resumeFromSleep();
     session.setHosts(recordView.nativeHosts()); session.tick();
     // Updates: a quiet check 20 s after launch and then once a day, only while nothing is recording/exporting.
     if (!demo && !closeAction && RecorderUpdater::isAvailable() && !session.busy() && session.lifecycleState()->canShutdown())
@@ -345,7 +357,7 @@ void MainComponent::timerCallback()
             {
                 const auto result = document.adopt(std::move(r.loaded), r.file, r.info);
                 if (result.failed()) showError(result.getErrorMessage());
-                else { timelineView.clearCaches(); session.projectChanged(); if (!demo) session.configure(settings.get()); banner.clear(); setTimeline(false); }
+                else { timelineView.clearCaches(); session.projectChanged(); banner.clear(); setTimeline(false); }
             }
             else { document.checkpointFinished(r.written, r.file, r.result); closeCommitRequested = false; }
             settings.rememberProject(r.file); persistSettings();
@@ -354,8 +366,13 @@ void MainComponent::timerCallback()
         else
         {
             if (r.written) document.checkpointFinished(r.written, r.file, r.result); showError(recorderFaultText(RecorderFault::save) + " " + r.result.getErrorMessage()); afterSave = {}; closeCommitRequested = bool(closeAction);
-            if (r.opening && !closeAction && !demo) session.configure(settings.get()); // a missing recent project must not leave ASIO/cameras unconnected
         }
+        if (r.opening && promptAfterStartupOpen)
+        {
+            promptAfterStartupOpen = false;
+            if (document.getFile() == juce::File()) newProjectDialog();
+        }
+        if (r.opening && !closeAction) connectDevicesFromSettings();
         refreshPending = true;
     }
     if (completed(settingsWork))

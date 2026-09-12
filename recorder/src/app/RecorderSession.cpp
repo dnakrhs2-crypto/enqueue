@@ -472,7 +472,11 @@ void RecorderSession::updateMicrophoneSettings(const UserSettings& settings)
 { current.microphoneNames = settings.microphoneNames; current.microphoneArmed = settings.microphoneArmed; }
 void RecorderSession::addMarker()
 {
-    Marker m; m.name = k("마커"); m.sample = recording() ? take.placementSample() + elapsed() : playhead();
+    addMarker(k("마커"), recording() ? take.placementSample() + elapsed() : playhead());
+}
+void RecorderSession::addMarker(const juce::String& name, Sample at)
+{
+    Marker m; m.name = name; m.sample = at;
     if (recording()) recordedMarkers.push_back(m);
     else document.addMarker(std::move(m));
 }
