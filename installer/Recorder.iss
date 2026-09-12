@@ -79,13 +79,11 @@ Root: HKCU; Subkey: "Software\Classes\{#FileType}\shell\open\command"; ValueType
 ; 0.1.8 renamed the product Recorder (가칭) -> Tally: the old executable, its parked copy (see PrepareToInstall)
 ; and the shortcuts of the old name (group folder + optional desktop shortcut) are not carried over by Inno.
 Type: files; Name: "{app}\Recorder.exe"
-Type: files; Name: "{app}\Recorder.exe.old"
 Type: filesandordirs; Name: "{autoprograms}\Recorder (가칭)"
 Type: files; Name: "{autodesktop}\Recorder (가칭).lnk"
 
 [UninstallDelete]
 Type: files; Name: "{app}\Recorder.exe"
-Type: files; Name: "{app}\Recorder.exe.old"
 
 [Run]
 ; also after a silent auto-update (WinSparkle runs Setup with /SILENT): the app comes back by itself.
@@ -100,30 +98,28 @@ const
   CoupangShortcutUrl = 'https://xn--jb0byyo90f.com/coupang/';   { 곰튀김.com }
 
 { WinSparkle starts Setup and only then asks the running 0.1.7 Recorder.exe to shut down, so the old image can still
-  be mapped when [InstallDelete] runs. Retry the delete for a while; if the process is still alive, rename the file
-  (Windows allows renaming a running executable) so no Recorder.exe remains for old shortcuts to launch, and the
-  parked copy is removed by the next install/uninstall. }
+  be mapped when [InstallDelete] runs. Windows refuses to delete a mapped executable, so a successful delete is the
+  proof that the old process has exited. Wait for that (up to ~30 s: settings save, device release); if it never
+  happens (a recording in progress, a hung shutdown, a manual install with the app open) abort Setup instead of
+  installing next to a live Recorder.exe and relaunching Tally on top of it. }
 function PrepareToInstall(var NeedsRestart: Boolean): String;
 var
-  Old, Parked: String;
+  Old: String;
   Attempt: Integer;
 begin
   Result := '';
   Old := ExpandConstant('{app}\Recorder.exe');
-  if not FileExists(Old) then
-    Exit;
-  for Attempt := 0 to 30 do
+  for Attempt := 0 to 60 do
   begin
+    if not FileExists(Old) then
+      Exit;
     if DeleteFile(Old) then
       Exit;
     Sleep(500);
   end;
-  Parked := Old + '.old';
-  DeleteFile(Parked);
-  if RenameFile(Old, Parked) then
-    Log('Recorder.exe was still running; parked it as Recorder.exe.old')
-  else
-    Log('Recorder.exe is still in use and could not be removed or parked');
+  Log('Recorder.exe is still mapped by a running process after 30 s; aborting Setup');
+  Result := '이전 버전(Recorder)이 아직 실행 중입니다. 프로그램을 종료한 뒤 다시 설치하세요.'
+    + #13#10 + 'The previous version (Recorder) is still running. Close it and run Setup again.';
 end;
 
 function NoRunRequested: Boolean;

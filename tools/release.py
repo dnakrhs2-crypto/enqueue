@@ -435,8 +435,11 @@ def stage_recorder(description, output, identity):
     audited = audit(description["ffmpeg_root"], lock, lock["runtime"]["version"])
     if audited["status"] != "PASS":
         sys.exit("Recorder FFmpeg audit failed: " + str(audited["errors"]))
-    executable = pathlib.Path(description["exe"]).resolve()
-    source = executable.parent
+    declared = pathlib.Path(description["exe"])
+    if declared.is_symlink() or (hasattr(declared, "is_junction") and declared.is_junction()):
+        sys.exit("declared Recorder executable is a symlink/junction: " + str(declared))
+    executable = declared.resolve()
+    source = declared.parent
     payload = output / "payload"
     payload.mkdir()
     # Copy this target's runtime directory, never a guessed build/artefacts path.
