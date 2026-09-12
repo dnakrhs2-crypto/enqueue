@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Recorder (가칭)</title>
+<meta name="description" content="웹캠 영상과 ASIO 원본 오디오를 한 프로젝트에 기록하는 Windows용 Recorder (가칭). 내부 배포 버전.">
+<link rel="stylesheet" href="../style.css">
+</head>
+<body>
+<header class="site-header">
+  <nav class="tabs" aria-label="제품">
+    <a class="brand" href="../">곰튀김</a><i>|</i>
+    <a href="../">Enqueue</a><i>|</i>
+    <a href="../livemix/">LiveMix</a><i>|</i>
+    <span aria-current="page">Recorder (가칭)</span>
+  </nav>
+</header>
+<main><article>
+  <header class="product-head"><div>
+    <h1>Recorder <small>가칭 · 내부 배포</small></h1>
+    <p class="tagline">웹캠 영상과 원본 오디오를 하나의 프로젝트에</p>
+  </div></header>
+  <section class="download-row" aria-label="다운로드">
+    <a class="download-button" id="download" href="https://github.com/dnakrhs2-crypto/recorder/releases/download/recorder-v0.1.7/Recorder-Setup-0.1.7.exe">
+      <strong id="download-label">Recorder (가칭) 0.1.7 다운로드</strong>
+      <span id="download-meta">Windows 10 / 11 (64비트)</span>
+    </a>
+    <dl class="requirements">
+      <dt>개발 대상</dt><dd>Windows 64비트 · NVIDIA GPU · ASIO 오디오 인터페이스</dd>
+      <dt>기타</dt><dd><a href="notes.html">바뀐 점</a> · <a href="https://github.com/dnakrhs2-crypto/recorder/releases">GitHub 릴리스</a></dd>
+    </dl>
+  </section>
+  <section class="body-section">
+    <h2>준비 중인 기능</h2>
+    <ul class="features">
+      <li>웹캠 1~2대의 1080p 영상과 ASIO 원본 오디오를 함께 기록</li>
+      <li>녹화를 멈추면 테이크를 타임라인에 표시하고 다시 재생</li>
+      <li>영상·오디오 컷 편집과 완성 오디오에 맞춘 더빙·리테이크</li>
+      <li>캠별 영상·마이크별 소재와 선택한 캠의 최종 MP4 내보내기</li>
+    </ul>
+    <p>현재 개발 중인 범위입니다. 출시 기능과 검증된 장치 목록은 공개 시 확정합니다.</p>
+    <p>프로젝트는 사용자가 지정한 로컬 폴더에 저장합니다. 설치·업데이트·제거 시 프로젝트를 삭제하지 않습니다.</p>
+  </section>
+  <section class="body-section" id="sources">
+    <h2>오픈소스와 고지</h2>
+    <p>이 프로그램은 LGPL v3-or-later로 배포되는 FFmpeg 공유 라이브러리를 사용합니다.</p>
+    <p id="source-slot">같은 릴리스의 대응 소스: <a href="https://github.com/dnakrhs2-crypto/recorder">GitHub 저장소</a></p>
+    <p><a href="notices.html">라이선스·제3자 고지 안내</a></p>
+  </section>
+</article></main>
+<footer><div class="footer-inner">
+  <span>곰튀김</span><span>·</span><a href="../">Enqueue</a><span>·</span>
+  <a href="../livemix/">LiveMix</a><span>·</span><a href="https://open.kakao.com/o/pST4IRLi">오픈채팅 문의</a>
+</div></footer>
+<script>
+(function () {
+  fetch('latest.json', { cache: 'no-cache' }).then(function (r) { return r.ok ? r.json() : null; })
+    .then(function (info) {
+      // latest.json is written at deploy from the GitHub release: refresh the button with the newest version.
+      if (!info || !info.url || !info.version) return;
+      var binary = new URL(info.url);
+      if (binary.protocol !== 'https:' || binary.hostname !== 'github.com' || binary.pathname.indexOf('/releases/download/') < 0) return;
+      document.getElementById('download').href = binary.href;
+      document.getElementById('download-label').textContent = 'Recorder ' + info.version + ' 다운로드';
+    }).catch(function () {});
+})();
+</script>
+</body>
+</html>
