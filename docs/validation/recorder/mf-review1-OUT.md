@@ -2,19 +2,19 @@ fix first
 
 `integrate-016`, `8188f8b..57671da` 기준입니다. 제공하신 실측은 **새 Windows의 1024샘플 회귀가 해결됐다는 강한 근거**입니다. 다만 새 파서의 오류 처리와 보정 적용 범위는 배포 전에 수정하는 편이 맞습니다.
 
-1. **[P2] MP4 박스 내부 읽기가 경계와 실패를 검사하지 않습니다.**  
-   [MediaFoundationAudioFormat.cpp:169](C:/Users/claude/gocue-rec/src/audio/MediaFoundationAudioFormat.cpp:169), [183](C:/Users/claude/gocue-rec/src/audio/MediaFoundationAudioFormat.cpp:183), [202](C:/Users/claude/gocue-rec/src/audio/MediaFoundationAudioFormat.cpp:202)  
-   `hdlr`, `mdhd`, `elst`의 필드를 읽을 때 각 박스의 `end`를 확인하지 않습니다. `entry_count`가 실제 항목 수보다 크면 다음 박스까지 항목으로 해석할 수 있습니다. 또한 **양수 `media_time`까지 읽고 `media_rate`에서 EOF가 발생해도 양수 offset을 반환**합니다. JUCE의 EOF 반환값 0이 안전한 실패 처리를 대신하지 못합니다. 버전도 1 이외를 모두 0 형식으로 해석합니다.  
+1. **[P2] MP4 박스 내부 읽기가 경계와 실패를 검사하지 않습니다.**
+   [MediaFoundationAudioFormat.cpp:169](C:/Users/claude/gocue-rec/src/audio/MediaFoundationAudioFormat.cpp:169), [183](C:/Users/claude/gocue-rec/src/audio/MediaFoundationAudioFormat.cpp:183), [202](C:/Users/claude/gocue-rec/src/audio/MediaFoundationAudioFormat.cpp:202)
+   `hdlr`, `mdhd`, `elst`의 필드를 읽을 때 각 박스의 `end`를 확인하지 않습니다. `entry_count`가 실제 항목 수보다 크면 다음 박스까지 항목으로 해석할 수 있습니다. 또한 **양수 `media_time`까지 읽고 `media_rate`에서 EOF가 발생해도 양수 offset을 반환**합니다. JUCE의 EOF 반환값 0이 안전한 실패 처리를 대신하지 못합니다. 버전도 1 이외를 모두 0 형식으로 해석합니다.
    박스별 남은 길이, 지원 버전, 항목 크기·개수, 정확한 읽기 성공을 확인해야 합니다. 추가로 현재 JUCE의 [InputStream.cpp:249](C:/Users/claude/JUCE/modules/juce_core/streams/juce_InputStream.cpp:249)는 EOF 이전에 지속적으로 `read() == 0`이 되는 I/O 오류에서 `skipNextBytes()`가 진행하지 못합니다. 새 파서에서는 실패를 반환하는 읽기 방식이 적절합니다.
 
-2. **[P2] 경계 검사 자체에 정수 overflow 가능성이 있습니다.**  
-   [MediaFoundationAudioFormat.cpp:114](C:/Users/claude/gocue-rec/src/audio/MediaFoundationAudioFormat.cpp:114), [207](C:/Users/claude/gocue-rec/src/audio/MediaFoundationAudioFormat.cpp:207), [410](C:/Users/claude/gocue-rec/src/audio/MediaFoundationAudioFormat.cpp:410)  
-   작은 파일에서도 조작된 양수 `largesize`가 `INT64_MAX`에 가까우면 `at + size`가 signed overflow를 일으킵니다. 뒤의 `child.end <= at` 검사는 이를 방지하지 못합니다. version 1의 큰 `media_time`은 샘플 환산 후 `llround` 범위를 벗어날 수 있고, 큰 양수 offset은 seek 덧셈·100ns 환산에도 전달됩니다.  
+2. **[P2] 경계 검사 자체에 정수 overflow 가능성이 있습니다.**
+   [MediaFoundationAudioFormat.cpp:114](C:/Users/claude/gocue-rec/src/audio/MediaFoundationAudioFormat.cpp:114), [207](C:/Users/claude/gocue-rec/src/audio/MediaFoundationAudioFormat.cpp:207), [410](C:/Users/claude/gocue-rec/src/audio/MediaFoundationAudioFormat.cpp:410)
+   작은 파일에서도 조작된 양수 `largesize`가 `INT64_MAX`에 가까우면 `at + size`가 signed overflow를 일으킵니다. 뒤의 `child.end <= at` 검사는 이를 방지하지 못합니다. version 1의 큰 `media_time`은 샘플 환산 후 `llround` 범위를 벗어날 수 있고, 큰 양수 offset은 seek 덧셈·100ns 환산에도 전달됩니다.
    크기는 먼저 `size <= limit - at`으로 확인하고, 시간 환산과 seek 연산도 표현 가능한 범위를 검사해야 합니다.
 
-3. **[P2] 빈 edit와 복수 edit를 단순 priming offset으로 처리합니다.**  
-   [MediaFoundationAudioFormat.cpp:193](C:/Users/claude/gocue-rec/src/audio/MediaFoundationAudioFormat.cpp:193), [204](C:/Users/claude/gocue-rec/src/audio/MediaFoundationAudioFormat.cpp:204)  
-   앞에 길이 `E`인 빈 edit가 있고 다음 edit의 시작이 `D`라면, 그 구간의 presentation time은 `raw − D + E`입니다. 현재 코드는 `E`를 버리고 `raw − D`만 적용합니다. 예를 들어 1초짜리 빈 edit라면 새 raw 경로에서 그 지연이 사라집니다. 첫 비어 있지 않은 항목에서 즉시 반환하므로 이후 편집 구간과 `media_rate`도 반영하지 않습니다. 빈 edit가 트랙 시작 지연을 나타낸다는 것은 [Apple 문서](https://developer.apple.com/documentation/quicktime-file-format/edit_atom)에도 명시돼 있습니다.  
+3. **[P2] 빈 edit와 복수 edit를 단순 priming offset으로 처리합니다.**
+   [MediaFoundationAudioFormat.cpp:193](C:/Users/claude/gocue-rec/src/audio/MediaFoundationAudioFormat.cpp:193), [204](C:/Users/claude/gocue-rec/src/audio/MediaFoundationAudioFormat.cpp:204)
+   앞에 길이 `E`인 빈 edit가 있고 다음 edit의 시작이 `D`라면, 그 구간의 presentation time은 `raw − D + E`입니다. 현재 코드는 `E`를 버리고 `raw − D`만 적용합니다. 예를 들어 1초짜리 빈 edit라면 새 raw 경로에서 그 지연이 사라집니다. 첫 비어 있지 않은 항목에서 즉시 반환하므로 이후 편집 구간과 `media_rate`도 반영하지 않습니다. 빈 edit가 트랙 시작 지연을 나타낸다는 것은 [Apple 문서](https://developer.apple.com/documentation/quicktime-file-format/edit_atom)에도 명시돼 있습니다.
    이번 수정은 우선 **빈 edit 없는 단일 edit·정상 재생률**로 적용 범위를 제한하거나, 일반 edit의 시간 매핑까지 처리해야 합니다.
 
 ②의 프로브는 **구 Windows 호환성을 보장하는 판별법으로는 부족합니다**. [MediaFoundationAudioFormat.cpp:310](C:/Users/claude/gocue-rec/src/audio/MediaFoundationAudioFormat.cpp:310)의 조건은 이미 편집 목록이 적용된 정상 출력 `0 → 1024`와 raw 출력 `0 → 1024`를 구별하지 못합니다. 전자라면 실제 오디오 첫 1024샘플을 추가로 버립니다. 첫 timestamp가 음수인지, 첫 버퍼가 부분적으로 잘렸는지도 검사하지 않습니다.
