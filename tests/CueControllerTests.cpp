@@ -908,6 +908,150 @@ public:
             document.cues.remove (document.cues.indexOf (g.id));
         }
 
+        beginTest ("a hotkey aimed at a disarmed cue starts nothing - not the next cue either");
+        {
+            document.cues.update (0, [] (Cue& x) { x.hotkey = "F7"; x.armed = false; });
+            now += 1.0;
+            expect (controller.handleHotkey (juce::KeyPress::createFromDescription ("F7")));   // the key is taken...
+            render (engine, scheduler, now, out, 2);
+            expect (! engine.isPlaying (a.id) && ! engine.isPlaying (b.id));                  // ...but nothing starts (GO would pass on to b; a key aimed at a does not)
+            document.cues.update (0, [] (Cue& x) { x.hotkey = ""; x.armed = true; });
+            stopEverything();
+        }
+
+        beginTest ("a group with auto-follow: the cue after it starts when the group's children have ended");
+        {
+            Cue g;
+            g.name = "GF";
+            g.type = CueType::group;
+            g.continueMode = ContinueMode::autoFollow;
+            const int gi = document.cues.add (g);
+            Cue x;
+            x.name = "gx"; x.file = tone; x.parentId = g.id;
+            document.cues.add (x);
+            Cue after;
+            after.name = "after-g"; after.file = tone;
+            document.cues.add (after);
+            now += 1.0;
+            document.cues.setPlayheadIndex (gi);
+            expect (controller.go() == CueController::GoResult::started);
+            controller.goKeyReleased();
+            expect (engine.isPlaying (x.id));
+            expect (! engine.isPlaying (after.id));
+            engine.stop (x.id);
+            render (engine, scheduler, now, out, 3);
+            expect (! controller.isCueActive (g.id));   // nothing runs or waits inside: the follow watch itself does not count
+            expect (engine.isPlaying (after.id));       // the follow fired
+            stopEverything();
+            document.cues.removeIndices ({ document.cues.indexOf (g.id), document.cues.indexOf (after.id) });
+        }
+
+        beginTest ("a hotkey pressed again during the pre-wait is one start; a stop rule on a running cue does not re-arm its follow");
+        {
+            document.cues.update (0, [] (Cue& x) { x.hotkey = "F8"; x.preWaitSeconds = 0.5; });
+            now += 1.0;
+            expect (controller.handleHotkey (juce::KeyPress::createFromDescription ("F8")));
+            expect (controller.handleHotkey (juce::KeyPress::createFromDescription ("F8")));   // hardStopRestart: the pre-wait starts over, once
+            expectEquals (controller.getNumPending(), 1);
+            render (engine, scheduler, now, out, 50);   // 0.58 s
+            expect (engine.isPlaying (a.id));
+            expectEquals (engine.getNumPlaying(), 1);
+            stopEverything();
+
+            // a running cue with a hard-stop rule and an auto-follow: the second press stops it and b does not follow
+            document.cues.update (0, [] (Cue& x) { x.preWaitSeconds = 0.0; x.secondTrigger = SecondTriggerAction::hardStop; x.continueMode = ContinueMode::autoFollow; });
+            now += 1.0;
+            expect (controller.handleHotkey (juce::KeyPress::createFromDescription ("F8")));
+            expect (engine.isPlaying (a.id));
+            expect (controller.handleHotkey (juce::KeyPress::createFromDescription ("F8")));   // stops a
+            render (engine, scheduler, now, out, 3);
+            expect (! engine.isPlaying (a.id));
+            expect (! engine.isPlaying (b.id));   // the follow of the stopped run was cancelled, and no new one was put behind the stop
+            stopEverything();
+            document.cues.update (0, [] (Cue& x) { x.hotkey = ""; x.secondTrigger = SecondTriggerAction::hardStopRestart; x.continueMode = ContinueMode::none; });
+        }
+
+        beginTest ("wall-clock: a check up to 60 s late still fires the seconds it missed; a new project forgets the last check");
+        {
+            document.cues.update (1, [] (Cue& cue) { cue.wallClock.enabled = true; cue.wallClock.hour = 10; cue.wallClock.minute = 0; cue.wallClock.second = 0; cue.wallClock.daysMask = 0x7f; });
+            now += 1.0;
+            const juce::Time before (2026, 8, 2, 9, 59, 50, 0);   // 10 s before 10:00:00
+            controller.checkWallClock (before);
+            expect (! engine.isPlaying (b.id));
+            controller.checkWallClock (before + juce::RelativeTime::seconds (30.0));   // 10:00:20: the message thread was busy for 30 s
+            expect (engine.isPlaying (b.id));
+            stopEverything();
+
+            // a new project: its clocks start from the current second - the second already examined is examined afresh
+            controller.resetForNewProject();
+            now += 1.0;
+            document.cues.update (1, [] (Cue& cue) { cue.wallClock.enabled = true; cue.wallClock.hour = 10; cue.wallClock.minute = 0; cue.wallClock.second = 20; });
+            controller.checkWallClock (before + juce::RelativeTime::seconds (30.0));
+            expect (engine.isPlaying (b.id));
+            stopEverything();
+            document.cues.update (1, [] (Cue& cue) { cue.wallClock.enabled = false; });
+        }
+
+        beginTest ("fade-stop-others ends a playlist run in scope: its next child does not start behind the fade");
+        {
+            Cue g;
+            g.name = "PL";
+            g.type = CueType::group;
+            g.group.mode = GroupMode::playlist;
+            const int gi = document.cues.add (g);
+            Cue x, y;
+            x.name = "px"; x.file = tone; x.parentId = g.id;
+            y.name = "py"; y.file = tone; y.parentId = g.id;
+            document.cues.add (x);
+            document.cues.add (y);
+            Cue killer;
+            killer.name = "killer"; killer.file = tone;
+            killer.fadeStopOthers.enabled = true;
+            killer.fadeStopOthers.seconds = 0.01;
+            killer.fadeStopOthers.scope = FadeStopScope::all;
+            document.cues.add (killer);
+            now += 1.0;
+            document.cues.setPlayheadIndex (gi);
+            expect (controller.go() == CueController::GoResult::started);
+            controller.goKeyReleased();
+            expect (engine.isPlaying (x.id));
+            expect (controller.fire (killer.id) == CueController::GoResult::started);
+            render (engine, scheduler, now, out, 5);   // the 10 ms fade is over; the playlist's step would have fired
+            expect (! engine.isPlaying (x.id));
+            expect (! engine.isPlaying (y.id));        // the playlist did not go on to y
+            expect (! controller.isCueActive (g.id));
+            expect (engine.isPlaying (killer.id));
+            stopEverything();
+            document.cues.removeIndices ({ document.cues.indexOf (g.id), document.cues.indexOf (killer.id) });
+        }
+
+        beginTest ("a start control cue's fade-stop-others spares the group it starts");
+        {
+            Cue g;
+            g.name = "TG";
+            g.type = CueType::group;
+            const int gi = document.cues.add (g);
+            juce::ignoreUnused (gi);
+            Cue x;
+            x.name = "tx"; x.file = tone; x.parentId = g.id;
+            document.cues.add (x);
+            Cue starter;
+            starter.name = "starter";
+            starter.type = CueType::control;
+            starter.control.kind = ControlKind::start;
+            starter.control.targetId = g.id;
+            starter.fadeStopOthers.enabled = true;
+            starter.fadeStopOthers.seconds = 0.01;
+            starter.fadeStopOthers.scope = FadeStopScope::all;
+            document.cues.add (starter);
+            now += 1.0;
+            expect (controller.fire (starter.id) == CueController::GoResult::started);
+            render (engine, scheduler, now, out, 5);
+            expect (engine.isPlaying (x.id));   // the group's child was not faded out by the cue that started it
+            stopEverything();
+            document.cues.removeIndices ({ document.cues.indexOf (g.id), document.cues.indexOf (starter.id) });
+        }
+
         beginTest ("playlist crossfade: the next child starts before the current one ends");
         {
             Cue g;

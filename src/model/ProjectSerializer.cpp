@@ -958,6 +958,10 @@ juce::Result fromJson (const juce::String& json, Project& out, juce::StringArray
 
             if (cue.hotkey.isNotEmpty())
             {
+                // the description as JUCE writes it ("F5", not "f5"): what the key match and the duplicate check compare
+                if (const auto parsed = juce::KeyPress::createFromDescription (cue.hotkey); parsed.isValid())
+                    cue.hotkey = parsed.getTextDescription();
+
                 if (Hotkeys::isReservedDescription (cue.hotkey))
                 {
                     if (warnings != nullptr)

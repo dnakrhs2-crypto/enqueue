@@ -388,13 +388,12 @@ std::vector<PluginSlotState> PluginChain::getStates (bool* complete) const
                 if (const auto xml = description.createXml())
                     s.descriptionXml = xml->toString (juce::XmlElement::TextFormat().singleLine().withoutHeader());
 
+                // Read without the plugin's callback lock, as JUCE's own AudioPluginHost does while its graph plays: a
+                // VST3 handles getState alongside its processing itself. Holding the lock here made the callback pass
+                // the plugin for a block whenever a save or an undo snapshot coincided with it - and a plugin that
+                // misses a block of input keeps its delay lines that much behind the show from then on.
                 juce::MemoryBlock block;
-
-                {
-                    const juce::ScopedLock callbackLock (slot->plugin->getCallbackLock());   // not concurrently with processBlock()
-                    slot->plugin->getStateInformation (block);
-                }
-
+                slot->plugin->getStateInformation (block);
                 s.stateBase64 = block.getSize() > 0 ? juce::Base64::toBase64 (block.getData(), block.getSize()) : juce::String();
             }
             catch (...)
@@ -505,9 +504,9 @@ double PluginChain::getTailSeconds() const
 
 void PluginChain::updateTailCache()
 {
-    // message thread only: 'slots' is iterated without the chain lock (see takeNewFaults), and each plugin is asked
-    // under its own callback lock - not concurrently with its processBlock, and the callback passes that one slot
-    // through its delay line meanwhile instead of skipping the whole chain out of time
+    // message thread only: 'slots' is iterated without the chain lock (see takeNewFaults), and no plugin callback lock
+    // is taken either - a query the host may make while the plugin runs, and a lock here would make the callback pass
+    // the plugin for a block on every bypass switch and parameter poll (see getStates)
     double tail = 0.0;
 
     for (auto& slot : slots)
@@ -526,7 +525,6 @@ void PluginChain::updateTailCache()
 
         try
         {
-            const juce::ScopedLock callbackLock (slot->plugin->getCallbackLock());
             t = slot->plugin->getTailLengthSeconds();
         }
         catch (...) {}   // a plugin that throws here counts as the longest tail
@@ -546,24 +544,25 @@ void PluginChain::updateTailCache()
 
 void PluginChain::refreshPluginCaches()
 {
+    updateDelayLines();   // first: the tail counts the latency as it is now
     updateTailCache();
-    updateDelayLines();
 }
 
 void PluginChain::sizeDelayLine (Slot& slot, int newLatency, int block)
 {
     newLatency = juce::jmax (0, newLatency);
-    slot.dryDelay.setSize (2, newLatency + juce::jmax (1, block), false, true, true);
+    slot.dryDelay.setSize (2, newLatency + ringBlocks * juce::jmax (1, block), false, true, true);
     slot.dryDelay.clear();
     slot.dryDelayWrite = 0;
+    slot.skipped = 0;
     slot.latency.store (newLatency, std::memory_order_relaxed);
 }
 
 void PluginChain::updateDelayLines()
 {
-    // message thread only. The latencies are read first without the chain lock (the plugin under its callback lock,
-    // as in updateTailCache); the lock is taken - and the callback made to pass the chain dry for a block - only for a
-    // line that really has to be resized, which happens when a plugin's look-ahead / oversampling changed
+    // message thread only. The latencies are read first without the chain lock (getLatencySamples is what the plugin
+    // last reported - no call into it); the lock is taken - and the callback made to pass the chain dry for a block -
+    // only for a line that really has to be resized, which happens when a plugin's look-ahead / oversampling changed
     std::vector<std::pair<Slot*, int>> resize;
 
     for (auto& slot : slots)
@@ -576,7 +575,6 @@ void PluginChain::updateDelayLines()
 
         try
         {
-            const juce::ScopedLock callbackLock (slot->plugin->getCallbackLock());
             latency = juce::jmax (0, slot->plugin->getLatencySamples());
         }
         catch (...) {}   // a plugin that throws here keeps the latency it last reported
@@ -599,8 +597,8 @@ void PluginChain::delayDryInPlace (Slot& slot, juce::AudioBuffer<float>& dry, in
     const int latency = slot.latency.load (std::memory_order_relaxed);
     const int capacity = slot.dryDelay.getNumSamples();
 
-    if (latency <= 0 || slot.dryDelay.getNumChannels() < 2 || capacity <= latency)
-        return;   // nothing to delay by (or a line that is not ready): the signal passes as it is
+    if (slot.dryDelay.getNumChannels() < 2 || capacity <= latency || capacity < numSamples)
+        return;   // a line that is not ready: the signal passes as it is
 
     const int start = slot.dryDelayWrite;
 
@@ -612,14 +610,19 @@ void PluginChain::delayDryInPlace (Slot& slot, juce::AudioBuffer<float>& dry, in
 
         for (int i = 0; i < numSamples; ++i)
         {
-            int r = w - latency;
-
-            if (r < 0)
-                r += capacity;
-
             const float in = d[i];
-            d[i] = ring[r];
-            ring[w] = in;
+
+            if (latency > 0)
+            {
+                int r = w - latency;
+
+                if (r < 0)
+                    r += capacity;
+
+                d[i] = ring[r];
+            }
+
+            ring[w] = in;   // recorded even with no latency: what catchUpSkipped feeds the plugin after a missed block
 
             if (++w == capacity)
                 w = 0;
@@ -627,6 +630,71 @@ void PluginChain::delayDryInPlace (Slot& slot, juce::AudioBuffer<float>& dry, in
     }
 
     slot.dryDelayWrite = (start + numSamples) % capacity;
+}
+
+bool PluginChain::catchUpSkipped (Slot& slot) noexcept
+{
+    // The plugin missed 'skipped' input samples (its callback lock was busy, it was suspended). Without them its own
+    // time - delay lines, look-ahead buffers, envelopes - would stay that much behind the show for good, and every such
+    // block would add up. The ring keeps the recent input: those samples go through the plugin now, its output thrown
+    // away (the operator heard the delayed dry signal for them), so it is up to date when the current block follows.
+    const int capacity = slot.dryDelay.getNumSamples();
+    const int block = slot.scratch.getNumSamples();
+    int todo = juce::jmin (slot.skipped, capacity);
+    slot.skipped = 0;
+
+    if (todo <= 0 || slot.dryDelay.getNumChannels() < 2 || block <= 0)
+        return true;
+
+    int r = slot.dryDelayWrite - todo;   // the oldest of the missed samples
+
+    if (r < 0)
+        r += capacity;
+
+    while (todo > 0)
+    {
+        const int n = juce::jmin (todo, block);
+        slot.scratch.clear (0, n);
+
+        for (int ch = 0; ch < 2 && ch < slot.scratch.getNumChannels(); ++ch)
+        {
+            float* s = slot.scratch.getWritePointer (ch);
+            const float* ring = slot.dryDelay.getReadPointer (ch);
+            int idx = r;
+
+            for (int i = 0; i < n; ++i)
+            {
+                s[i] = ring[idx];
+
+                if (++idx == capacity)
+                    idx = 0;
+            }
+        }
+
+        juce::AudioBuffer<float> view (slot.scratch.getArrayOfWritePointers(), slot.numScratchChannels, 0, n);
+        midi.clear();
+
+        try
+        {
+            slot.plugin->processBlock (view, midi);
+        }
+        catch (...)
+        {
+            markFaulted (slot);
+            return false;
+        }
+
+        if (! isFinite (view, n))
+        {
+            markFaulted (slot);
+            return false;
+        }
+
+        r = (r + n) % capacity;
+        todo -= n;
+    }
+
+    return true;
 }
 
 bool PluginChain::isFinite (const juce::AudioBuffer<float>& buffer, int numSamples) noexcept
@@ -705,11 +773,18 @@ void PluginChain::processLocked (juce::AudioBuffer<float>& buffer, int numSample
             if (slot->busyBlocks.fetch_add (1, std::memory_order_relaxed) + 1 == stallBlocks)
                 stallRaised.store (true, std::memory_order_release);   // a second or two of dry passes: the operator hears of it
 
+            slot->skipped = juce::jmin (slot->skipped + numSamples, slot->dryDelay.getNumSamples());   // fed to the plugin when it is back
             delayDryInPlace (*slot, buffer, numSamples);
             continue;
         }
 
         slot->busyBlocks.store (0, std::memory_order_relaxed);
+
+        if (slot->skipped > 0 && ! catchUpSkipped (*slot))
+        {
+            delayDryInPlace (*slot, buffer, numSamples);   // it faulted on the input it had missed: dry, in time, from here on
+            continue;
+        }
 
         // The plugin runs on a copy when it needs more than two channels, otherwise in place with the dry input copied
         // aside first. Either way both signals are at hand afterwards - 'wet' (the plugin's output) and 'dry' (the
@@ -800,7 +875,17 @@ void PluginChain::resetProcessing() noexcept
 
     for (auto& slot : slots)
     {
-        if (slot->plugin == nullptr || slot->faulted.load (std::memory_order_relaxed))
+        if (slot->plugin == nullptr)
+            continue;
+
+        // the host's own memory of the signal goes first, whatever the plugin's state: a faulted or suspended plugin's
+        // dry line must not hand the sound from before the panic to the next start
+        slot->scratch.clear();
+        slot->dryDelay.clear();
+        slot->dryDelayWrite = 0;
+        slot->skipped = 0;
+
+        if (slot->faulted.load (std::memory_order_relaxed))
             continue;
 
         const juce::ScopedLock callbackLock (slot->plugin->getCallbackLock());
@@ -816,10 +901,6 @@ void PluginChain::resetProcessing() noexcept
         {
             markFaulted (*slot);   // and the operator hears of it, like any other fault
         }
-
-        slot->scratch.clear();
-        slot->dryDelay.clear();   // the compensation line starts over with the plugin's own
-        slot->dryDelayWrite = 0;
     }
 }
 

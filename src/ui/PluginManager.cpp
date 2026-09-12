@@ -168,6 +168,19 @@ public:
         juce::MessageManager::callAsync ([editor] { if (editor != nullptr && editor->isShowing()) editor->grabKeyboardFocus(); });
     }
 
+    /** Show mode: looking and searching only - the switches, the scan and the removal are off. */
+    void setLocked (bool shouldLock)
+    {
+        locked = shouldLock;
+
+        for (auto* b : { &scanButton, &enableAllButton, &disableAllButton })
+            b->setEnabled (! locked);
+
+        removeButton.setEnabled (! locked && table.getSelectedRow() >= 0);
+        table.repaint();
+        setStatus (locked ? ko ("쇼 모드: 편집 잠김 (보기와 검색만 됩니다)") : juce::String(), false);
+    }
+
 private:
     enum { colEnabled = 1, colName, colMaker, colFile };
 
@@ -234,7 +247,7 @@ private:
                 owner.toggle (owner.shown.getReference (row));   // a double-click anywhere on the row flips its switch too
         }
 
-        void selectedRowsChanged (int) override { owner.removeButton.setEnabled (owner.table.getSelectedRow() >= 0); }
+        void selectedRowsChanged (int) override { owner.removeButton.setEnabled (! owner.locked && owner.table.getSelectedRow() >= 0); }
 
         Content& owner;
     };
@@ -279,7 +292,7 @@ private:
                 }
 
         table.repaint();
-        removeButton.setEnabled (table.getSelectedRow() >= 0);
+        removeButton.setEnabled (! locked && table.getSelectedRow() >= 0);
         count.setText (! isSearching() ? ko ("플러그인 ") + juce::String (all.size()) + ko ("개")
                                        : ko ("검색 결과 ") + juce::String (shown.size()) + ko ("개 / 전체 ") + juce::String (all.size()) + ko ("개"),
                        juce::dontSendNotification);
@@ -287,6 +300,9 @@ private:
 
     void toggle (const juce::PluginDescription& d)
     {
+        if (locked)
+            return;
+
         host.setPluginEnabled (d, host.isPluginSwitchedOff (d));
         settings.setDisabledPlugins (host.getDisabledPlugins());
         table.repaint();
@@ -296,6 +312,9 @@ private:
     /** '전부 사용' / '전부 해제': the plugins the table shows - all of them, or the ones a search narrowed it to. */
     void setAll (bool enabled)
     {
+        if (locked)
+            return;
+
         for (const auto& d : shown)
             host.setPluginEnabled (d, enabled);
 
@@ -313,6 +332,9 @@ private:
 
     void scan()
     {
+        if (locked)
+            return;
+
         auto* format = host.getVST3Format();
 
         if (format == nullptr)
@@ -336,7 +358,7 @@ private:
     {
         const int row = table.getSelectedRow();
 
-        if (row < 0 || row >= shown.size())
+        if (locked || row < 0 || row >= shown.size())
             return;
 
         const auto name = shown.getReference (row).name;
@@ -354,6 +376,7 @@ private:
     juce::TextEditor search;
     juce::TableListBox table;
     juce::TextButton scanButton, enableAllButton, disableAllButton, removeButton;
+    bool locked = false;   // show mode
 };
 
 //==============================================================================
@@ -386,6 +409,12 @@ void PluginManagerWindow::open()
 void PluginManagerWindow::closeButtonPressed()
 {
     setVisible (false);   // kept: reopening is instant, and a scan in progress carries on
+}
+
+void PluginManagerWindow::setLocked (bool locked)
+{
+    if (content != nullptr)
+        content->setLocked (locked);
 }
 
 } // namespace gocue

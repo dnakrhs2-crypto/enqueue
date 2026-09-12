@@ -525,7 +525,14 @@ void MixDocument::markDirty (bool refreshViews)
 bool MixDocument::pollPluginEdits()
 {
     bool edited = false;
-    engine.forEachChain ([&edited] (PluginChain& chain) { if (chain.consumeStateChanged()) edited = true; });
+    engine.forEachChain ([&edited] (PluginChain& chain)
+    {
+        if (chain.consumeStateChanged())
+        {
+            chain.refreshPluginCaches();   // a changed tail, a changed latency (look-ahead / oversampling): what the callback reads follows
+            edited = true;
+        }
+    });
 
     if (edited)
         markDirty (false);

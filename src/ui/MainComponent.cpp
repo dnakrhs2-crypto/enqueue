@@ -34,6 +34,10 @@ namespace
 
 bool MainComponent::HotkeyListener::keyPressed (const juce::KeyPress& key, juce::Component*)
 {
+    // typing in a field: no cue hotkey fires (letters and digits never get here, but an F key passes a text editor)
+    if (dynamic_cast<juce::TextEditor*> (juce::Component::getCurrentlyFocusedComponent()) != nullptr)
+        return false;
+
     const int code = key.getKeyCode();
 
     if (heldKeys.count (code) != 0)
@@ -190,6 +194,7 @@ MainComponent::MainComponent (AudioEngine& e, AppSettings& s, juce::ApplicationC
         table.focusTable();   // on Windows the keyboard hook already turned this Esc into the panic
     };
     inspector.onReturnFocus = [this] { table.focusTable(); };
+    inspector.onHotkeyCaptured = [this] (int keyCode) { hotkeyListener.heldKeys.insert (keyCode); };   // the OS repeat of the key still held is not a first press
     activeCues.onPauseRequested = [this] (const juce::Uuid& id, bool resume)
     {
         if (resume)
@@ -246,8 +251,10 @@ MainComponent::MainComponent (AudioEngine& e, AppSettings& s, juce::ApplicationC
 
     commands.registerAllCommandsForTarget (this);
     commands.setFirstCommandTarget (this);
-    addKeyListener (&hotkeyListener);            // cue hotkeys first ...
-    addKeyListener (commands.getKeyMappings());  // ... then the command shortcuts
+    // JUCE asks key listeners last-added first: the command shortcuts go in first so the cue hotkeys are asked before
+    // them (the two never overlap - a hotkey may not be a key the app uses - but the order is what the name says)
+    addKeyListener (commands.getKeyMappings());
+    addKeyListener (&hotkeyListener);
     setApplicationCommandManagerToWatch (&commands);
 
     setSize (1100, 820);
@@ -889,6 +896,12 @@ bool MainComponent::perform (const InvocationInfo& info)
             if (info.invocationMethod == InvocationInfo::fromKeyPress && ! info.isKeyDown)
             {
                 controller.goKeyReleased();
+            }
+            else if (auto* focused = juce::Component::getCurrentlyFocusedComponent();
+                     info.invocationMethod == InvocationInfo::fromKeyPress && focused != nullptr && focused->getComponentID() == "hotkeyCapture")
+            {
+                // Space pressed into the inspector's "키를 누르세요" capture: the capture refuses it as a reserved key,
+                // and the key-state path that brings the GO command here must not fire the show meanwhile
             }
             else
             {
@@ -1913,6 +1926,10 @@ void MainComponent::setShowMode (bool shouldBeShowMode)
     containerTabs.setEditable (! showMode);
     inspector.setEditable (! showMode);
     footer.setShowMode (showMode);
+
+    if (pluginManagerWindow != nullptr)
+        pluginManagerWindow->setLocked (showMode);   // an open manager must not scan / switch plugins during the show either
+
     commands.commandStatusChanged();
     transport.showStatus (showMode ? ko ("쇼 모드: 편집 잠김") : ko ("편집 모드"), false);
     table.focusTable();
@@ -2979,6 +2996,7 @@ void MainComponent::showPluginManager()
         pluginManagerWindow->centreAroundComponent (this, pluginManagerWindow->getWidth(), pluginManagerWindow->getHeight());
     }
 
+    pluginManagerWindow->setLocked (showMode);
     pluginManagerWindow->open();
 }
 
@@ -3140,12 +3158,24 @@ void MainComponent::timerCallback()
     engine.reapIfNeeded();   // finished players are destroyed here, never from the audio thread's callback
     tryPendingStartOnOpen();
 
-    if (! juce::Process::isForegroundProcess())
+    // key-ups missed while another app - or another window of this one (a plugin editor, the manual) - had the focus
+    // must not look like auto-repeat, or the next press of that hotkey would be swallowed
+    if (auto* peer = getPeer(); ! juce::Process::isForegroundProcess() || peer == nullptr || ! peer->isFocused())
     {
-        hotkeyListener.heldKeys.clear();   // key-ups missed while another app had the focus must not look like auto-repeat
+        hotkeyListener.heldKeys.clear();
         operationalKeys.reset();
         escHeld = false;
         controller.goKeyReleased();
+    }
+
+    // nothing in this window holds the keyboard (a field gave the focus away on Enter): the list view takes it back,
+    // or the cue hotkeys and shortcuts - which live on this component - would be unreachable until the next click
+    if (auto* peer = getPeer(); peer != nullptr && peer->isFocused() && juce::Component::getCurrentlyFocusedComponent() == nullptr)
+    {
+        if (document.isActiveCart())
+            cart.grabKeyboardFocus();
+        else
+            table.focusTable();
     }
 
     auto playing = engine.getPlayingCues();

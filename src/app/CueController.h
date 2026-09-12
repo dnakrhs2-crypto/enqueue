@@ -93,6 +93,9 @@ public:
     void cancelPendingFor (const juce::Uuid& cueId);
     /** Number of scheduled starts / follows still pending (tests). */
     int getNumPending() const;
+    /** A scheduled start or a playlist step of this cue's run is still pending. The observer watches (an auto-follow
+        waiting for the cue to end, a duck restore) do not count: a group's own observers would otherwise keep the
+        group "active" forever and the observer could never fire. */
     bool hasPendingFor (const juce::Uuid& cueId) const;
     /** Scheduled starts / follows, running wait cues or playlist groups: something would still start. */
     bool hasPendingStarts() const noexcept { return ! pending.empty() || ! waits.empty() || ! playlists.empty(); }
@@ -107,6 +110,11 @@ public:
     bool handleHotkeyRepeat (const juce::KeyPress& key) const;
     /** Fires the cues whose wall-clock trigger matches 'now' (once per matching second). Call ~30x per second. */
     void checkWallClock (juce::Time now);
+    /** fireSequence() for a cue wherever it lives (hotkeys, wall clocks): the list and index are looked up now. */
+    void fireSequenceById (const juce::Uuid& id, bool audition = false);
+    /** A check that comes this late still examines every second since the previous one (a busy message thread must
+        not skip 12:00:00); a longer gap (sleep, a clock change) examines only the current second. */
+    static constexpr double wallClockCatchUpSeconds = 60.0;
     /** L: pre-loads the selected cue so GO starts it with no disk latency. */
     bool loadSelected (double startSeconds = 0.0);
 
@@ -155,8 +163,8 @@ private:
     static juce::String cueLabel (int index, const Cue& cue);
     /** Fires a cue by id at once (it may have been edited since it was scheduled). */
     GoResult startById (const juce::Uuid& id, bool audition);
-    /** False when an immediate start failed (a scheduled one is true). */
-    bool scheduleStart (const juce::Uuid& id, double atSeconds, bool audition);
+    /** The result of an immediate start (atSeconds is now or past); a scheduled one is 'started'. */
+    GoResult scheduleStart (const juce::Uuid& id, double atSeconds, bool audition);
     AudioEngine::PlayOptions playOptions (bool audition) const;
     double startOffsetForNextPlay = 0.0;   // previewFrom(): seconds into the region the next play begins at
     bool explicitStartForNextPlay = false;
@@ -167,7 +175,9 @@ private:
     void applyPendingGoto();
     /** Recomputes and applies the ducks of every target after a contribution changed. */
     void refreshDucks (double rampSeconds);
-    void track (int schedulerId, const juce::Uuid& owner);
+    /** Remembers a scheduler entry as part of 'owner's run (cancelled with it). 'observer' = a watch that only looks
+        at the run (its follow, its duck restore) rather than a start that belongs to it: see hasPendingFor(). */
+    void track (int schedulerId, const juce::Uuid& owner, bool observer = false);
     void playlistStep (const juce::Uuid& groupId);
     double remainingSecondsOf (const juce::Uuid& id) const;
 
@@ -178,7 +188,7 @@ private:
     GoResult triggerImpl (const Cue& cue, bool audition);
     GoResult firstTriggerResult = GoResult::started;
     bool firstTriggerSeen = true;
-    struct Pending { int id; juce::Uuid owner; };
+    struct Pending { int id; juce::Uuid owner; bool observer = false; };
     std::vector<Pending> pending;
     GoResult triggerControl (const Cue& cue, int index, bool audition);
     bool recording = false;

@@ -338,6 +338,16 @@ public:
             expectEquals (peakIndex(), 32);
             expectWithinAbsoluteError (block.getSample (0, 32), 1.0f, 1e-6f);
 
+            beginTest ("delay compensation: a latency change reaches the tail the cue plays on for");
+            expectWithinAbsoluteError (chain.getTailSeconds(), 32.0 / 48000.0, 1e-6);   // (the cache is a float) refreshPluginCaches sized the line first, then counted it
+            lat->setLatencyLive (4800);
+            expect (chain.consumeStateChanged());
+            chain.refreshPluginCaches();
+            expectWithinAbsoluteError (chain.getTailSeconds(), 0.1, 1e-6);
+            lat->setLatencyLive (32);
+            chain.refreshPluginCaches();
+            chain.consumeStateChanged();
+
             beginTest ("delay compensation: a faulted plugin's dry pass keeps the delay too");
             chain.setBypassed (0, false);
             silence (4);
@@ -348,6 +358,73 @@ public:
             expectEquals (peakIndex(), 32);
             expectWithinAbsoluteError (block.getSample (0, 32), 1.0f, 1e-6f);
             expectEquals (chain.getLatencySamples(), 32);
+
+            beginTest ("delay compensation: a panic reset clears a faulted slot's line too");
+            block.clear();
+            block.setSample (0, 60, 1.0f);   // this would come out 32 samples later, in the next block
+            chain.process (block, 64);
+            chain.resetProcessing();
+            silence (1);
+            expectEquals (peakIndex(), -1);   // nothing from before the panic
+        }
+
+        beginTest ("delay compensation: a block the plugin missed is fed to it afterwards - no repeat, no lasting shift");
+        {
+            PluginChain chain;
+            chain.prepare (48000.0, 64);
+            auto* lat = new TestGainPlugin (0.5f);
+            lat->latencySamples = 128;   // longer than a block: what it holds when a block is missed comes out later
+            chain.addPlugin (std::unique_ptr<juce::AudioPluginInstance> (lat));
+
+            juce::AudioBuffer<float> block (2, 64);
+            auto process = [&] (bool withImpulse)
+            {
+                block.clear();
+
+                if (withImpulse)
+                    block.setSample (0, 0, 1.0f);
+
+                chain.process (block, 64);
+            };
+            auto peak = [&]
+            {
+                int best = -1;
+                float bestValue = 0.0f;
+
+                for (int i = 0; i < 64; ++i)
+                    if (std::abs (block.getSample (0, i)) > bestValue)
+                    {
+                        bestValue = std::abs (block.getSample (0, i));
+                        best = i;
+                    }
+
+                return std::make_pair (best, bestValue);
+            };
+
+            process (true);                                                      // block A: the impulse goes in
+            expectEquals (peak().first, -1);
+            process (false);                                                     // block B: still inside the plugin
+            expectEquals (peak().first, -1);
+
+            {
+                juce::WaitableEvent locked, release;
+                std::thread holder ([&] { const juce::ScopedLock held (lat->getCallbackLock()); locked.signal(); release.wait(); });
+                locked.wait();
+                process (false);                                                 // block C, the plugin busy: the dry line delivers the impulse on time...
+                expectEquals (peak().first, 0);
+                expectWithinAbsoluteError (peak().second, 1.0f, 1e-6f);          // ...dry (the plugin's gain not on it)
+                release.signal();
+                holder.join();
+            }
+
+            process (false);                                                     // block D: the plugin is back, fed block C first
+            expectEquals (peak().first, -1);                                     // the impulse it still held is not played a second time
+
+            process (true);                                                      // block E: a new impulse
+            process (false);                                                     // F
+            process (false);                                                     // G: 128 samples after E
+            expectEquals (peak().first, 0);                                      // on time - the missed block did not set the plugin back
+            expectWithinAbsoluteError (peak().second, 0.5f, 1e-6f);              // and it is the plugin's output again
         }
 
         beginTest ("engine: cue chain, master chain, tails and chain removal while playing");

@@ -57,6 +57,9 @@ public:
     /** Called after a tab switch (click or cue-type rebuild) stole the keyboard focus into a panel field;
         the owner puts it back on the cue table so Space still means GO. */
     std::function<void()> onReturnFocus;
+    /** The 기본 tab captured a hotkey (key code): the owner marks it held, so the auto-repeat of the key still being
+        down does not fire the cue it was just given to. */
+    std::function<void (int keyCode)> onHotkeyCaptured;
     /** Commits (or drops) whatever field is being edited, synchronously: called before the active list changes so a
         half-typed number lands on the cue it was typed for. */
     void finishEditing();

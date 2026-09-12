@@ -52,6 +52,9 @@ public:
     HotkeyButton() { setWantsKeyboardFocus (false); }
 
     std::function<void (const juce::String& description)> onHotkeyChanged;
+    /** The key just captured (accepted): the owner marks it held, so the OS auto-repeat of a key that is still down
+        does not fire the cue it was just given to. */
+    std::function<void (const juce::KeyPress&)> onCaptured;
     /** Returns a reason to refuse the key, or an empty string. */
     std::function<juce::String (const juce::KeyPress&)> validate;
 
@@ -66,6 +69,7 @@ public:
     void clicked() override
     {
         capturing = true;
+        setComponentID ("hotkeyCapture");   // what the GO command looks for: Space pressed into the capture is a refused key, not a GO
         setWantsKeyboardFocus (true);
         grabKeyboardFocus();
         setButtonText (ko ("키를 누르세요... (Esc 취소)"));
@@ -100,6 +104,9 @@ public:
         if (onHotkeyChanged)
             onHotkeyChanged (key.getTextDescription());
 
+        if (onCaptured)
+            onCaptured (key);
+
         return true;
     }
 
@@ -113,6 +120,7 @@ private:
     void finishCapture()
     {
         capturing = false;
+        setComponentID ({});
         setWantsKeyboardFocus (false);
         setHotkey (hotkey);
     }
@@ -127,6 +135,8 @@ class CueInspector::BasicsPanel : public juce::Component,
                                   public juce::FileDragAndDropTarget
 {
 public:
+    std::function<void (int keyCode)> onKeyCaptured;   // the hotkey button took a key: see CueInspector::onHotkeyCaptured
+
     BasicsPanel (ProjectDocument& doc, AudioEngine& e, AppSettings& s)
         : document (doc), cues (doc.cues), engine (e), settings (s)
     {
@@ -213,6 +223,7 @@ public:
         {
             edit (ko ("핫키"), [description] (Cue& c) { c.hotkey = description; });
         };
+        hotkeyButton.onCaptured = [this] (const juce::KeyPress& key) { if (onKeyCaptured) onKeyCaptured (key.getKeyCode()); };
         hotkeyButton.validate = [this] (const juce::KeyPress& key) -> juce::String
         {
             if (key.getModifiers().isCommandDown() || key.getModifiers().isAltDown())
@@ -3282,6 +3293,7 @@ CueInspector::CueInspector (ProjectDocument& doc, AudioEngine& e, AppSettings& s
     basicsPanel = std::make_unique<BasicsPanel> (document, engine, settings);
     basics = basicsPanel.get();
     basics->onPanic = [this] { if (onPanic) onPanic(); };
+    basics->onKeyCaptured = [this] (int keyCode) { if (onHotkeyCaptured) onHotkeyCaptured (keyCode); };
 
     timeLoopsPanel = std::make_unique<TimeLoopsPanel> (document, engine, thumbnailCache);
     timeLoops = timeLoopsPanel.get();

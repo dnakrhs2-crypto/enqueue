@@ -21,6 +21,8 @@ public:
     /** Brings the window up; typing starts the search at once. */
     void open();
     void closeButtonPressed() override;
+    /** Show mode: the list can be looked at and searched, but no scan, switch or removal (the show must not change under it). */
+    void setLocked (bool locked);
 
 private:
     class Content;

@@ -62,7 +62,7 @@ struct FadeStopOthers
     FadeStopScope scope = FadeStopScope::list;
 };
 
-/** "Duck / boost the other cues in this list while this cue runs". */
+/** "Duck / boost the other cues (of every list) while this cue runs". */
 struct DuckSettings
 {
     bool enabled = false;

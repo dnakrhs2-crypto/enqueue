@@ -14,7 +14,7 @@ inline bool isReservedKey (const juce::KeyPress& key)
                                     juce::KeyPress::deleteKey, juce::KeyPress::backspaceKey, juce::KeyPress::insertKey,
                                     juce::KeyPress::upKey, juce::KeyPress::downKey, juce::KeyPress::leftKey, juce::KeyPress::rightKey,
                                     juce::KeyPress::pageUpKey, juce::KeyPress::pageDownKey, juce::KeyPress::homeKey, juce::KeyPress::endKey,
-                                    'P', 'F', 'V', 'L', 'N', 'Q', 'E', 'W', 'C', 'O', 'D', juce::KeyPress::F3Key };
+                                    'P', 'F', 'V', 'L', 'N', 'Q', 'E', 'W', 'C', 'O', 'D', 'I', 'M', juce::KeyPress::F3Key };   // I / M: the waveform's trim-in and slice marker
 
     if (key.getModifiers().isCommandDown() || key.getModifiers().isAltDown())
         return true;
