@@ -34,6 +34,7 @@ public:
     std::shared_ptr<RecorderLifecycle> lifecycleState() const { return session.lifecycleState(); }
     void updateShutdownRequested();
     void updateShutdownBlocked();
+    static juce::String updateBlockedText(std::uint32_t lifecycleFlags, bool captureBusy); // names what has to finish first
     void checkForUpdates();
     void connectDevicesFromSettings() { if (!demo && devicesEnabled) session.configure(settings.get()); }
 private:
