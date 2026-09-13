@@ -225,13 +225,19 @@ class BundleValidationTests(unittest.TestCase):
 
 class LegacyRegressionTests(unittest.TestCase):
     def test_existing_apps_and_version_sources_are_unchanged(self):
-        for key, prefix, repo, remote, version in (
-            ("enqueue", "v", "dnakrhs2-crypto/enqueue", "origin", "0.9.7"),
-            ("livemix", "livemix-v", "dnakrhs2-crypto/livemix", "livemix", "0.9.0")):
+        # The versions themselves move with every Enqueue/LiveMix release; what must not change is where they
+        # come from (CMakeLists.txt) and the release identifiers.
+        cmake = (REPO / "CMakeLists.txt").read_text(encoding="utf-8")
+        expected = {"enqueue": re.search(r"project\(Enqueue\s+VERSION\s+([0-9]+\.[0-9]+\.[0-9]+)", cmake).group(1),
+                    "livemix": re.search(r'set\(LIVEMIX_VERSION\s+"([0-9]+\.[0-9]+\.[0-9]+)"', cmake).group(1)}
+        for key, prefix, repo, remote in (
+            ("enqueue", "v", "dnakrhs2-crypto/enqueue", "origin"),
+            ("livemix", "livemix-v", "dnakrhs2-crypto/livemix", "livemix")):
             app = release.APPS[key]
             self.assertEqual((app["tag_prefix"], app["repo"], app["remote"]), (prefix, repo, remote))
             with mock.patch.object(release, "APP", app):
-                self.assertEqual(release.read_version(), version)
+                self.assertEqual(release.read_version(), expected[key])
+                self.assertRegex(release.read_version(), r"^[0-9]+\.[0-9]+\.[0-9]+$")
 
     def test_legacy_build_commands_stay_identical(self):
         for key in ("enqueue", "livemix"):
