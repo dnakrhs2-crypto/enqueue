@@ -158,7 +158,7 @@ namespace
             for (const int p : UiScale::allowedPercents)
                 scaleBox.addItem (juce::String (p) + "%" + (p == UiScale::defaultPercent ? ko (" (기본)") : juce::String()), p);
 
-            scaleBox.setSelectedId (appSettings.getUiScalePercent(), juce::dontSendNotification);
+            scaleBox.setSelectedId (UiScale::currentPercent(), juce::dontSendNotification);   // what is in force, not the stored wish
             scaleBox.onChange = [this]
             {
                 const int wanted = scaleBox.getSelectedId();
@@ -167,20 +167,31 @@ namespace
                     return;
 
                 appSettings.setUiScalePercent (wanted);
-                showScaleHint (wanted, applyUiScale ? applyUiScale (wanted) : wanted);
+                const int applied = applyUiScale ? applyUiScale (wanted) : wanted;
+                scaleBox.setSelectedId (applied, juce::dontSendNotification);
+                showScaleHint (wanted, applied);
             };
             addAndMakeVisible (scaleBox);
 
             scaleHint = &addLabel ({});
             scaleHint->setFont (Palette::font (Palette::kickerSize));
-            showScaleHint (appSettings.getUiScalePercent(), UiScale::fitPercent (appSettings.getUiScalePercent(), UiScale::workAreaAt100()));
+            showScaleHint (appSettings.getUiScalePercent(), UiScale::currentPercent());
         }
 
-        void showScaleHint (int wanted, int applied)
+        /** 'saved' is the stored choice, 'current' what is in force: they differ when the display could not fit the
+            choice (lowered) or when safe mode started at 100% without applying it. */
+        void showScaleHint (int saved, int current)
         {
-            scaleHint->setText (applied < wanted ? ko ("화면이 작아 ") + juce::String (applied) + ko ("%까지만 적용됩니다")
-                                                 : ko ("창 전체가 같은 비율로 커집니다"),
-                                juce::dontSendNotification);
+            juce::String text;
+
+            if (current == saved)
+                text = ko ("창 전체가 같은 비율로 커집니다");
+            else if (UiScale::lastRequestedPercent == saved)
+                text = ko ("화면이 작아 ") + juce::String (current) + ko ("%까지만 적용됩니다 (저장 ") + juce::String (saved) + "%)";
+            else
+                text = ko ("안전 모드 실행 중: 저장 ") + juce::String (saved) + ko ("%, 현재 ") + juce::String (current) + "%";
+
+            scaleHint->setText (text, juce::dontSendNotification);
         }
 
         void resized() override

@@ -101,6 +101,8 @@ private:
     void moveSelectedPoint (double deltaSeconds, double deltaLevel);
     void commitEnvelope (bool finished);
     void clearHover();
+    /** Ends the drag in progress (mouse up, or the view being disabled): the final 'finished' callback, then no drag. */
+    void finishDrag();
     void drawRuler (juce::Graphics& g) const;
     void drawEnvelope (juce::Graphics& g) const;
     void drawHandles (juce::Graphics& g) const;

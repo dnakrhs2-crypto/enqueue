@@ -599,7 +599,7 @@ void WaveformView::editSliceCount (int index)
     juce::Component::SafePointer<WaveformView> safeThis (this);
     alert->enterModalState (true, juce::ModalCallbackFunction::create ([safeThis, alert, index] (int result)
     {
-        if (safeThis == nullptr || result != 1 || ! safeThis->hasCue)
+        if (safeThis == nullptr || result != 1 || ! safeThis->hasCue || ! safeThis->isEnabled())   // show mode began meanwhile: no edit
             return;
 
         const auto text = alert->getTextEditorContents ("count").trim().toLowerCase();
@@ -723,9 +723,10 @@ void WaveformView::clearHover()
 
 void WaveformView::enablementChanged()
 {
-    // show mode began (or ended): a drag that was under way is dropped, not committed, and no handle stays lit
-    drag = Drag::none;
-    envelopeDirty = sliceDirty = false;
+    // show mode began (or ended) in the middle of a drag: the edit is already in the document (every drag step is
+    // written), so it is finished properly — the running cue gets its last envelope / trim — rather than left with
+    // the engine one step behind (Astra review). No handle stays lit either way.
+    finishDrag();
     clearHover();
 }
 
@@ -887,6 +888,12 @@ void WaveformView::mouseDrag (const juce::MouseEvent& e)
 
 void WaveformView::mouseUp (const juce::MouseEvent&)
 {
+    finishDrag();
+    repaint();
+}
+
+void WaveformView::finishDrag()
+{
     if (drag == Drag::startHandle || drag == Drag::endHandle)
     {
         if (onTrimChanged)
@@ -904,7 +911,6 @@ void WaveformView::mouseUp (const juce::MouseEvent&)
     envelopeDirty = false;
     sliceDirty = false;
     drag = Drag::none;
-    repaint();
 }
 
 void WaveformView::mouseWheelMove (const juce::MouseEvent& e, const juce::MouseWheelDetails& wheel)

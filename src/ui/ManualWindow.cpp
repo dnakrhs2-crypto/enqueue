@@ -1,5 +1,6 @@
 #include "ui/ManualWindow.h"
 
+#include "app/UiScale.h"
 #include "ui/UiUtils.h"
 
 namespace gocue
@@ -69,6 +70,7 @@ ManualWindow::ManualWindow()
     setResizable (true, false);
     setResizeLimits (640, 420, 10000, 10000);
     centreWithSize (getWidth(), getHeight());
+    UiScale::fitWindowIntoDisplay (*this);   // at 150% 글씨·화면 크기 the default size no longer fits a 1080p display
 }
 
 ManualWindow::~ManualWindow()

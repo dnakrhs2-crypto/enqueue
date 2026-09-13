@@ -283,8 +283,12 @@ private:
 
             if (state.isEmpty() || ! restoreWindowStateFromString (state))
                 centreWithSize (1100, 720);
-            else
-                UiScale::fitWindowIntoDisplay (*this);   // a bigger 글씨·화면 크기 (or a smaller monitor) than last time: all of the window stays in view
+
+            UiScale::fitWindowIntoDisplay (*this);   // a bigger 글씨·화면 크기 (or a smaller monitor) than last time: all of the window stays in view
+
+            // the launch scale was chosen for the primary display; the window may have come back on a smaller one
+            if (const int fitted = UiScale::fitPercent (UiScale::currentPercent(), UiScale::workAreaAt100 (this)); fitted < UiScale::currentPercent())
+                UiScale::apply (fitted, this, false);
 
             setName ("Enqueue " + JUCEApplication::getInstance()->getApplicationVersion() + " - " + ko ("제목 없음"));
             setVisible (true);
@@ -297,8 +301,23 @@ private:
             juce::JUCEApplication::getInstance()->systemRequestedQuit();
         }
 
+        void resized() override
+        {
+            DocumentWindow::resized();
+
+            // leaving the maximised state after a 글씨·화면 크기 change (JUCE brings the old logical size back at the
+            // new scale) or coming back on a smaller monitor: shrink into the display. Size only — a window may be
+            // dragged partly off-screen on purpose.
+            if (! fitting && isOnDesktop() && ! isFullScreen() && ! isMinimised())
+            {
+                const juce::ScopedValueSetter<bool> guard (fitting, true);
+                UiScale::fitWindowIntoDisplay (*this, false);
+            }
+        }
+
     private:
         MainComponent* mainComponent = nullptr;
+        bool fitting = false;
 
         JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (MainWindow)
     };

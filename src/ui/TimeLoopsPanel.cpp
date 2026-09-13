@@ -508,6 +508,8 @@ void TimeLoopsPanel::showContextMenu (juce::Point<int> screenPosition)
             safeThis->waveform.zoomToRegion();
         else if (result == 4)
             safeThis->waveform.zoomToFit();
+        else if (result >= 5 && result <= 7 && ! safeThis->isEnabled())
+            return;   // show mode began while the menu was open: the marker edits are off
         else if (result == 5)
             safeThis->waveform.addSliceAtCursor();
         else if (result == 6)

@@ -1,5 +1,6 @@
 #include "ui/PluginManager.h"
 
+#include "app/UiScale.h"
 #include "ui/UiUtils.h"
 
 #include <juce_audio_processors/juce_audio_processors.h>
@@ -393,6 +394,7 @@ PluginManagerWindow::PluginManagerWindow (PluginHost& host, AppSettings& setting
     setResizable (true, false);
     setResizeLimits (640, 420, 10000, 10000);
     centreWithSize (getWidth(), getHeight());   // the owner then centres it on its own display (centreAroundComponent)
+    UiScale::fitWindowIntoDisplay (*this);      // at 150% 글씨·화면 크기 the default size may not fit the display
 }
 
 PluginManagerWindow::~PluginManagerWindow()

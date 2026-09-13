@@ -68,10 +68,16 @@ inline juce::Rectangle<int> workAreaAt100 (const juce::Component* window = nullp
     return (display->userBounds * desktop.getGlobalScaleFactor()).toNearestInt();
 }
 
-/** After a scale change (or on a smaller monitor than last time): the window keeps its minimum size and is then
-    shrunk / moved so that all of it, frame included, stays inside its display's work area. A maximised or
-    minimised window is left alone. */
-inline void fitWindowIntoDisplay (juce::ResizableWindow& window)
+/** The percent last asked for through apply() with recordRequest (the saved setting at launch, a dialog choice):
+    the settings dialog compares it with what is in force to explain a difference (lowered for the display, or
+    safe mode never applied it). */
+inline int lastRequestedPercent = defaultPercent;
+
+/** After a scale change (or on a smaller monitor than last time): the window keeps its minimum size and is shrunk
+    to its display's work area when it is bigger than that (frame included); with 'moveIntoView' it is also moved
+    so all of it is on screen. A maximised or minimised window is left alone; a window that cannot be resized by the
+    user (a fixed-size dialog) is never shrunk, only moved. */
+inline void fitWindowIntoDisplay (juce::ResizableWindow& window, bool moveIntoView = true)
 {
     if (window.isFullScreen() || window.isMinimised())
         return;
@@ -85,18 +91,37 @@ inline void fitWindowIntoDisplay (juce::ResizableWindow& window)
         return;
 
     const auto frame = peer->getFrameSize();
-    const auto outer = frame.addedTo (window.getBounds()).constrainedWithin (display->userBounds.toNearestInt());
-    window.setBoundsConstrained (frame.subtractedFrom (outer));
+    const auto area = display->userBounds.toNearestInt();
+    const auto outer = frame.addedTo (window.getBounds());
+    const bool tooBig = window.isResizable() && (outer.getWidth() > area.getWidth() || outer.getHeight() > area.getHeight());
+
+    if (tooBig || moveIntoView)
+    {
+        auto fitted = tooBig ? outer.constrainedWithin (area) : outer;
+
+        if (moveIntoView)   // constrainedWithin() moves too; for a fixed-size window only the position changes
+            fitted.setPosition (juce::jlimit (area.getX(), juce::jmax (area.getX(), area.getRight() - fitted.getWidth()), fitted.getX()),
+                                juce::jlimit (area.getY(), juce::jmax (area.getY(), area.getBottom() - fitted.getHeight()), fitted.getY()));
+
+        if (fitted != outer)
+            window.setBoundsConstrained (frame.subtractedFrom (fitted));
+    }
 }
 
 /** Applies 'percent', lowered to what the display can fit, and returns what was applied. Every open window is
     re-laid out by JUCE at once (setGlobalScaleFactor refreshes the displays and tells every peer). JUCE keeps a
     window's size on screen, so its logical size would shrink and the layout with it: each window is given its old
-    logical bounds back instead (it grows on screen), then pulled back into its display. A maximised window simply
-    re-lays out into the same screen area. */
-inline int apply (int percent, const juce::Component* window = nullptr)
+    logical size back instead (it grows on screen) at the position JUCE recomputed for the new scale (an old
+    position would land on another monitor), then pulled back into its display. A maximised window simply re-lays
+    out into the same screen area. */
+inline int apply (int percent, const juce::Component* window = nullptr, bool recordRequest = true)
 {
-    const int fitted = fitPercent (normalise (percent), workAreaAt100 (window));
+    const int wanted = normalise (percent);
+
+    if (recordRequest)
+        lastRequestedPercent = wanted;
+
+    const int fitted = fitPercent (wanted, workAreaAt100 (window));
 
     std::vector<std::pair<juce::Component::SafePointer<juce::ResizableWindow>, juce::Rectangle<int>>> windows;
 
@@ -111,7 +136,7 @@ inline int apply (int percent, const juce::Component* window = nullptr)
         if (w == nullptr || w->isFullScreen() || w->isMinimised())
             continue;
 
-        w->setBoundsConstrained (bounds);
+        w->setBoundsConstrained (w->getBounds().withSize (bounds.getWidth(), bounds.getHeight()));
         fitWindowIntoDisplay (*w);
     }
 

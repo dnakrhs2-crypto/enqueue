@@ -1,6 +1,7 @@
 #include "ui/YouTubeWindow.h"
 
 #include "app/AppSettings.h"
+#include "app/UiScale.h"
 #include "ui/UiUtils.h"
 
 namespace gocue
@@ -239,6 +240,7 @@ YouTubeWindow::YouTubeWindow (AppSettings& settings, const juce::String& appVers
     setResizable (true, false);
     setResizeLimits (520, 400, 10000, 10000);
     centreWithSize (getWidth(), getHeight());
+    UiScale::fitWindowIntoDisplay (*this);   // at 150% 글씨·화면 크기 the default size may not fit the display
 }
 
 YouTubeWindow::~YouTubeWindow()
