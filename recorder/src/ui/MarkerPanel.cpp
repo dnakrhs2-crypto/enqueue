@@ -2,6 +2,10 @@
 #include "UiState.h"
 #include "model/MarkerExport.h"
 #include <algorithm>
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h> // ReplaceFileW with a backup name; juce::File::replaceFileIn passes none
 
 namespace gocue::recorder
 {
@@ -90,8 +94,8 @@ juce::File MarkerPanel::defaultExportFile() const
 {
     const auto& file = edits.document.getFile();
     const auto folder = file == juce::File() ? juce::File::getSpecialLocation(juce::File::userDocumentsDirectory) : file.getParentDirectory();
-    const auto name = juce::File::createLegalFileName(edits.document.getProject().name);
-    return folder.getChildFile((name.isEmpty() ? ko("프로젝트") : name) + ko(" 마커.txt"));
+    const auto stem = juce::File::createLegalFileName(edits.document.getProject().name); // not `name`: that is the editor member
+    return folder.getChildFile((stem.isEmpty() ? ko("프로젝트") : stem) + ko(" 마커.txt"));
 }
 void MarkerPanel::chooseExportFile()
 {
@@ -112,22 +116,42 @@ void MarkerPanel::chooseExportFile()
             if (file != juce::File()) safe->exportFile(file, *project);
         });
 }
+juce::Result MarkerPanel::landExport(const juce::File& target, const juce::File& temporary, const SwapFunction& swap)
+{
+    const auto cannotSave = juce::Result::fail(ko("마커를 저장할 수 없습니다. ") + target.getFullPathName());
+    if (!target.existsAsFile()) return temporary.moveFileTo(target) ? juce::Result::ok() : cannotSave;
+    // Swap *with* a backup name so the previous file survives every failure: the backup-less swap JUCE performs can lose
+    // the target on ERROR_UNABLE_TO_MOVE_REPLACEMENT, and a copy fallback deletes the target before copying. The name must
+    // not exist yet, because ReplaceFileW would overwrite an existing backup.
+    const auto backup = target.getParentDirectory().getNonexistentChildFile("." + target.getFileNameWithoutExtension() + "_backup", target.getFileExtension());
+    const SwapFunction replaceFile = [](const juce::File& t, const juce::File& n, const juce::File& b)
+    {
+        return ReplaceFileW(t.getFullPathName().toWideCharPointer(), n.getFullPathName().toWideCharPointer(), b.getFullPathName().toWideCharPointer(),
+                            REPLACEFILE_IGNORE_MERGE_ERRORS | 4 /*REPLACEFILE_IGNORE_ACL_ERRORS*/, nullptr, nullptr) != 0;
+    };
+    if ((swap ? swap : replaceFile)(target, temporary, backup)) { backup.deleteFile(); return juce::Result::ok(); }
+    // Failed swap: ERROR_UNABLE_TO_REMOVE_REPLACED / _MOVE_REPLACEMENT leave the previous file under its own name, but
+    // _MOVE_REPLACEMENT_2 leaves it under the backup name. Put it back, and when even that fails say where it survived.
+    if (target.existsAsFile() || !backup.existsAsFile() || backup.moveFileTo(target)) return cannotSave;
+    return juce::Result::fail(ko("마커를 저장할 수 없고 이전 파일을 원래 이름으로 되돌리지 못했습니다. 이전 파일은 여기에 남아 있습니다: ") + backup.getFullPathName());
+}
 void MarkerPanel::exportFile(const juce::File& file, const RecorderProject& project)
 {
     const auto text = markerExportText(project);
-    const auto write = [&]
+    const auto write = [&]() -> juce::Result
     {
         juce::TemporaryFile temporary(file, juce::TemporaryFile::useHiddenFile);
         {
             juce::FileOutputStream stream(temporary.getFile());
-            if (stream.failedToOpen() || !stream.write(text.toRawUTF8(), text.getNumBytesAsUTF8())) return false;
-            stream.flush(); if (stream.getStatus().failed()) return false;
+            const bool written = !stream.failedToOpen() && stream.write(text.toRawUTF8(), text.getNumBytesAsUTF8());
+            if (written) stream.flush();
+            if (!written || stream.getStatus().failed()) return juce::Result::fail(ko("마커를 저장할 수 없습니다. ") + file.getFullPathName());
         }
-        return temporary.overwriteTargetFileWithTemporary();
+        return landExport(file, temporary.getFile()); // a temporary that is still there afterwards is deleted by its owner
     };
-    if (!write())
+    if (const auto landed = write(); landed.failed())
     {
-        if (onEdit) onEdit(juce::Result::fail(ko("마커를 저장할 수 없습니다. ") + file.getFullPathName()));
+        if (onEdit) onEdit(landed);
         return;
     }
     if (onEdit) onEdit(juce::Result::ok());

@@ -102,6 +102,8 @@ public:
     juce::String warning() const;
     juce::String error() const;
     std::int64_t scheduledStart() const noexcept;
+    std::int64_t startLeadSamples() const; // default N0 distance from the current sample (startLeadFor with this take's measured durable write); after prepare
+    static std::int64_t startLeadFor(unsigned sampleRate, unsigned bufferFrames, double durableWriteMs) noexcept; // max(2 buffers, clamp(4 x write, 100 ms, 250 ms))
     std::int64_t logicalLength() const noexcept;
     std::int64_t placementSample() const noexcept;
     // Owner-thread cache is populated with placeTake, without scanning media.

@@ -9,6 +9,7 @@
 #include "app/RecorderLifecycle.h"
 #include "storage/IoHealth.h"
 #include <algorithm>
+#include <cmath>
 #include <chrono>
 #include <cstring>
 #include <deque>
@@ -505,6 +506,20 @@ struct TakeController::Impl
     RecorderDocument::Snapshot savedSnapshot;
     bool saving = false, partial = false, preparedAudio = false;
     std::int64_t requestedN0 = -1, length = 0, placement = 0, stopQpc = 0, prepareQpc = 0, finalizationQpc = 0;
+    std::int64_t armedQpc = 0, recordingQpc = 0, prepareDoneQpc = 0; // press-to-recording breakdown for the take report
+    double audioPrepareMs = 0; std::array<double, 2> videoPrepareMs{};
+    double durableWriteMs = 0; // the take.json durable write during preparation: a live sample of this disk's flush latency
+    static std::int64_t startLeadFor(unsigned sampleRate, unsigned bufferFrames, double durableWriteMs) noexcept
+    {
+        // Covers the durable TakeStarted journal append the audio worker performs before it can adopt N0 (a missed N0
+        // still aborts the take, see startJournal): 100 ms, stretched to four times the durable take.json write measured
+        // during this take's preparation on the same disk and capped at the former fixed 250 ms; and never under two device
+        // buffers, the floor the former rule had, so very large buffers keep the lead they always had.
+        const auto rate = std::int64_t(sampleRate);
+        const auto fromDisk = std::int64_t(std::llround(double(rate) * durableWriteMs * 4.0 / 1000.0));
+        return (std::max)(std::int64_t(bufferFrames) * 2, (std::min)(rate / 4, (std::max)(rate / 10, fromDisk)));
+    }
+    std::int64_t startLead(const RecorderAudioEngine::DeviceInfo& device) const { return startLeadFor(device.sampleRate, device.bufferFrames, durableWriteMs); }
     std::atomic<std::int64_t> collectionOrigin{-1};
     std::uint64_t masterEpoch = 0;
     double placementMs = 0, finalizationMs = 0, mediaFinalizationMs = 0, stopToDoneMs = 0;
@@ -630,6 +645,15 @@ struct TakeController::Impl
         jsonSet(v, "placementSample", placement); jsonSet(v, "logicalLength", length); jsonSet(v, "Fs", int(deviceSnapshot.sampleRate));
         jsonSet(v, "fpsNumerator", config.projectFps); jsonSet(v, "fpsDenominator", 1);
         jsonSet(v, "placementEditId", placementEdit.toDashedString());
+        // Press-to-recording breakdown (QPC wall time) in every take.json: prepare() call -> preparation worker done -> armed
+        // (first frame to the new sink, camera/ASIO clocks ready) -> N0 adopted. Zero until the step has happened.
+        const auto between = [](std::int64_t from, std::int64_t to) { return from && to && to >= from ? 1000.0 * double(to - from) / double(qpcFrequency()) : 0.0; };
+        jsonSet(v, "prepareWorkMs", between(prepareQpc, prepareDoneQpc)); jsonSet(v, "readyWaitMs", between(prepareDoneQpc, armedQpc));
+        jsonSet(v, "pressToArmedMs", between(prepareQpc, armedQpc)); jsonSet(v, "armedToRecordingMs", between(armedQpc, recordingQpc));
+        jsonSet(v, "pressToRecordingMs", between(prepareQpc, recordingQpc));
+        jsonSet(v, "audioPrepareMs", audioPrepareMs); jsonSet(v, "cam1PrepareMs", videoPrepareMs[0]); jsonSet(v, "cam2PrepareMs", videoPrepareMs[1]);
+        jsonSet(v, "durableWriteMs", durableWriteMs);
+        jsonSet(v, "startLeadMs", deviceSnapshot.sampleRate ? 1000.0 * double(startLead(deviceSnapshot)) / double(deviceSnapshot.sampleRate) : 0.0);
         jsonSet(v, "cameraDevice", config.synthetic ? "synthetic" : config.cameraSymbolicLink); jsonSet(v, "cameraMode", config.cameraMode.text());
         jsonSet(v, "cameraAssetId", take.cam1AssetId);
         juce::Array<juce::var> microphones, peakValues;
@@ -754,7 +778,7 @@ struct TakeController::Impl
                     catch (...) { c.referenceFailed = true; c.video->sourceFailed(c.video->availableSamples()); }
                 }
             };
-            requireResult(audio.prepare(std::move(audioConfig))); preparedAudio = true;
+            { const auto began = qpcNow(); requireResult(audio.prepare(std::move(audioConfig))); preparedAudio = true; audioPrepareMs = elapsedMs(began); }
             if (config.listeningAudio)
                 listening = std::make_unique<TakeListeningOutput>(audio, deviceSnapshot, config.listeningAudio(), placement, outputCorrection);
             for (unsigned i = 0; i < cameraCount; ++i)
@@ -763,7 +787,9 @@ struct TakeController::Impl
                 try
                 {
                     c.video->configureClock(audio.masterClock(), config.calibration[i] ? config.calibration[i]->cameraResidualLatency100ns : 0);
+                    const auto began = qpcNow();
                     c.video->prepare(takeFolder().getChildFile(cameraName(i) + ".mp4"), NvencProfile{config.projectFps}, mode(i).fps, *audio.referenceContext());
+                    videoPrepareMs[i] = elapsedMs(began);
                     c.sink.store(c.video.get());
                 }
                 catch (const std::exception& e)
@@ -773,7 +799,7 @@ struct TakeController::Impl
                     preparationNotice = juce::String::fromUTF8("캠2 녹화를 준비할 수 없습니다. 캠1과 원본 녹음은 계속됩니다. ") + juce::String::fromUTF8(e.what());
                 }
             }
-            writeJsonDurable(takeFolder().getChildFile("take.json"), manifest("preparing"));
+            { const auto began = qpcNow(); writeJsonDurable(takeFolder().getChildFile("take.json"), manifest("preparing")); durableWriteMs = elapsedMs(began); }
             return juce::Result::ok();
         }
         catch (...)
@@ -957,6 +983,7 @@ juce::Result TakeController::reset()
 juce::Result TakeController::prepare(Config config)
 {
     auto& s = *impl;
+    const auto pressedQpc = qpcNow(); // the record press: prepare() runs synchronously from the click handler (first-take checkpoint save included)
     if (s.shutdownRequested) return juce::Result::fail("Take shutdown blocks new commands");
     if (s.current != State::idle && s.current != State::done && s.current != State::partialFailure) return juce::Result::fail("Take controller is busy");
     if (s.work.valid()) return juce::Result::fail("Previous worker completion must be consumed");
@@ -1017,6 +1044,7 @@ juce::Result TakeController::prepare(Config config)
     s.audioReport = juce::var(); s.assets.clear(); s.take = Take{}; s.logicalMics.clear(); s.logicalIndices.clear();
     s.mappingSnapshot.clear(); s.deviceSnapshot = device; s.placementMetadata = {}; s.transitions = {State::idle}; s.current = State::idle;
     s.requestedN0 = -1; s.collectionOrigin = -1; s.masterEpoch = 0; s.length = 0; s.stopQpc = s.finalizationQpc = 0;
+    s.armedQpc = s.recordingQpc = s.prepareDoneQpc = 0; s.audioPrepareMs = 0; s.videoPrepareMs = {}; s.durableWriteMs = 0;
     s.detachListening(); s.listening.reset(); s.listeningReport = juce::var(); s.outputSubmission = -1;
     s.placementMs = s.finalizationMs = s.mediaFinalizationMs = s.stopToDoneMs = 0; s.placementEdit = juce::Uuid();
     s.placement = s.config.placementSample; s.preparationNotice.clear();
@@ -1026,7 +1054,7 @@ juce::Result TakeController::prepare(Config config)
     if (s.audio.armedMicrophones().empty()) s.warning = juce::String::fromUTF8("녹음 중인 마이크가 없습니다");
     try
     {
-        s.document.setRecordingStructureLock(true); s.transition(State::preparing); s.prepareQpc = qpcNow();
+        s.document.setRecordingStructureLock(true); s.transition(State::preparing); s.prepareQpc = pressedQpc;
         s.work = launchTakeWorker("prepare", [&s] { return s.prepareWorker(); }); return juce::Result::ok();
     }
     catch (...)
@@ -1046,7 +1074,7 @@ juce::Result TakeController::start(std::int64_t N0)
     {
         if (N0 < 0)
         {
-            N0 = checkedSample(clock_math::add(s.audio.currentSample(), std::max<std::int64_t>(device.sampleRate / 4, device.bufferFrames * 2)));
+            N0 = checkedSample(clock_math::add(s.audio.currentSample(), s.startLead(device))); // see Impl::startLead
             if (s.listening) N0 = checkedSample(clock_math::add(N0, s.outputCorrection));
         }
         if (!s.audio.clockReady()) return juce::Result::fail("ASIO clock is not stable");
@@ -1116,6 +1144,7 @@ void TakeController::tick()
         try { result = s.work.get(); }
         catch (...) { s.failedWorker(takeException("Take worker failed")); return; }
         if (result.failed()) { s.failure = result.getErrorMessage(); s.partial = true; }
+        if (s.current == State::preparing) s.prepareDoneQpc = qpcNow(); // worker finished: what follows is the wait for frames/clocks
         if (s.current == State::preparing && result.failed())
         { s.document.setRecordingStructureLock(false); s.transition(State::partialFailure); return; }
         if (s.current == State::preparing && s.preparationNotice.isNotEmpty()) s.warning = s.preparationNotice;
@@ -1177,7 +1206,7 @@ void TakeController::tick()
             if (s.cameras[i].capture && (s.cameras[i].capture->failureDetected() || s.cameras[i].capture->finished())) cameraFailed(i);
         const bool primaryReady = s.audio.clockReady() && s.cameras[0].video && s.cameras[0].video->ready();
         if (primaryReady && s.cameraCount == 2 && !s.cameras[1].video->ready() && elapsedMs(s.prepareQpc) > 10000) cameraFailed(1);
-        if (primaryReady && (s.cameraCount == 1 || s.cameras[1].video->ready() || s.cameras[1].video->failed())) s.transition(State::armed);
+        if (primaryReady && (s.cameraCount == 1 || s.cameras[1].video->ready() || s.cameras[1].video->failed())) { s.armedQpc = qpcNow(); s.transition(State::armed); }
         else if (elapsedMs(s.prepareQpc) > 10000)
         {
             s.failure = "ASIO clock/camera did not become ready within 10 seconds"; s.partial = true;
@@ -1215,7 +1244,7 @@ void TakeController::tick()
             if (s.cameraCount == 2) s.warning += juce::String::fromUTF8(i ? "캠1과 " : "캠2와 ");
             s.warning += juce::String::fromUTF8("원본 녹음은 계속됩니다.");
         }
-        if (s.current == State::armed && s.audio.startSample() >= 0) s.transition(State::recording);
+        if (s.current == State::armed && s.audio.startSample() >= 0) { s.recordingQpc = qpcNow(); s.transition(State::recording); }
         if (s.audio.error() != RecorderAudioEngine::Error::none)
         {
             using E = RecorderAudioEngine::Error;
@@ -1276,6 +1305,8 @@ TakeVideoQueues TakeController::cameraQueues(unsigned camera) const noexcept
     const auto* sink = c.sink.load(); const auto result = sink ? sink->queues() : TakeVideoQueues{};
     c.offers.fetch_sub(1); return result;
 }
+std::int64_t TakeController::startLeadSamples() const { return impl->startLead(impl->audio.deviceInfo()); }
+std::int64_t TakeController::startLeadFor(unsigned sampleRate, unsigned bufferFrames, double durableWriteMs) noexcept { return Impl::startLeadFor(sampleRate, bufferFrames, durableWriteMs); }
 juce::var TakeController::report() const
 {
     const auto& s = *impl;

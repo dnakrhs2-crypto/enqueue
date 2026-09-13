@@ -303,7 +303,56 @@ int runTimelineUxTests()
         require(TimelineUxTestAccess::status(v).contains(ko("마커를 저장할 수 없습니다. ") + bad.getFullPathName()), "Write failure did not reach timeline status");
         bytes.reset();
         require(output.getFile().loadFileAsData(bytes) && bytes == juce::MemoryBlock(expected.toRawUTF8(), expected.getNumBytesAsUTF8()) && d.snapshot() == before, "Failed export changed the source file or project");
+        // A target another program holds open: the atomic replace and the copy fallback both fail; the old content stays, no temporary remains.
+        TimelineUxTestAccess::markerExportFile(v, [&output] { return output.getFile(); });
+        {
+            juce::FileOutputStream held(output.getFile()); require(held.openedOk(), "Held-open fixture");
+            TimelineUxTestAccess::markerExport(v).onClick();
+        }
+        require(TimelineUxTestAccess::status(v).contains(ko("마커를 저장할 수 없습니다. ") + output.getFile().getFullPathName()), "Held-open target did not report failure");
+        bytes.reset();
+        require(output.getFile().loadFileAsData(bytes) && bytes == juce::MemoryBlock(expected.toRawUTF8(), expected.getNumBytesAsUTF8()), "Held-open target lost its content");
+        require(output.getFile().getParentDirectory().findChildFiles(juce::File::findFiles, false, "." + output.getFile().getFileNameWithoutExtension() + "_*").isEmpty(), "Temporary or backup export file left behind");
+        TimelineUxTestAccess::markerExport(v).onClick();
+        require(TimelineUxTestAccess::status(v).contains(message), "Export after the file was released failed"); bytes.reset();
+        require(output.getFile().loadFileAsData(bytes) && bytes == juce::MemoryBlock(expected.toRawUTF8(), expected.getNumBytesAsUTF8()), "Export after release wrote wrong content");
+        require(output.getFile().getParentDirectory().findChildFiles(juce::File::findFiles, false, "." + output.getFile().getFileNameWithoutExtension() + "_*").isEmpty(), "Backup left behind after a successful replace");
         d.setRecordingStructureLock(false);
+    });
+    suite.test("marker export landing: a failed swap puts the previous file back; a blocked restore names the surviving backup", []
+    {
+        juce::TemporaryFile target(".txt"); require(target.getFile().replaceWithText("old"), "Target fixture");
+        const auto backup = target.getFile().getParentDirectory().getNonexistentChildFile("." + target.getFile().getFileNameWithoutExtension() + "_backup", ".txt");
+        const auto fresh = [&] { const auto t = target.getFile().getSiblingFile(target.getFile().getFileNameWithoutExtension() + "_new.txt"); require(t.replaceWithText("new"), "Temporary fixture"); return t; };
+        // ERROR_UNABLE_TO_MOVE_REPLACEMENT_2 shape: the previous file was renamed to the backup, the new one did not move in.
+        auto temporary = fresh();
+        auto result = MarkerPanel::landExport(target.getFile(), temporary, [](const juce::File& t, const juce::File&, const juce::File& b) { return t.moveFileTo(b) && false; });
+        require(result.failed() && target.getFile().loadFileAsString() == "old" && !backup.existsAsFile() && !result.getErrorMessage().contains(backup.getFullPathName()), "Failed swap must put the previous file back");
+        require(temporary.deleteFile(), "Fixture cleanup");
+        // The same while the backup is held open: the restore fails and the message names where the previous file survived.
+        temporary = fresh();
+        {
+            HANDLE held = INVALID_HANDLE_VALUE; // share nothing: the restore's rename cannot open the backup (a JUCE stream shares read/write and lets it through)
+            result = MarkerPanel::landExport(target.getFile(), temporary, [&](const juce::File& t, const juce::File&, const juce::File& b)
+            {
+                require(t.moveFileTo(b), "Rename fixture");
+                held = CreateFileW(b.getFullPathName().toWideCharPointer(), GENERIC_READ, 0, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+                require(held != INVALID_HANDLE_VALUE, "Hold fixture"); return false;
+            });
+            const bool blocked = result.failed() && !target.getFile().existsAsFile() && backup.existsAsFile();
+            if (held != INVALID_HANDLE_VALUE) CloseHandle(held);
+            require(blocked && backup.loadFileAsString() == "old", "Blocked restore must leave the previous file as the backup");
+            require(result.getErrorMessage().contains(backup.getFullPathName()) && result.getErrorMessage().contains(ko("되돌리지 못했습니다")), "Message must name the surviving backup");
+        }
+        require(backup.deleteFile() && temporary.deleteFile(), "Fixture cleanup");
+        // A swap that simply fails (target locked, ERROR_UNABLE_TO_REMOVE_REPLACED shape) reports plainly and leaves everything.
+        require(target.getFile().replaceWithText("old"), "Target fixture"); temporary = fresh();
+        result = MarkerPanel::landExport(target.getFile(), temporary, [](const juce::File&, const juce::File&, const juce::File&) { return false; });
+        require(result.failed() && target.getFile().loadFileAsString() == "old" && !backup.existsAsFile() && temporary.loadFileAsString() == "new", "Plain failure must change nothing");
+        require(temporary.deleteFile(), "Fixture cleanup");
+        // Nothing at the target: a plain move.
+        require(target.getFile().deleteFile(), "Clear target"); temporary = fresh();
+        require(MarkerPanel::landExport(target.getFile(), temporary).wasOk() && target.getFile().loadFileAsString() == "new" && !temporary.existsAsFile(), "First export must move the temporary in");
     });
     suite.test("toolbar and edit menu expose only the retained actions", []
     {
@@ -1301,6 +1350,18 @@ int runTimelineUxTests()
         require(loaded.load().wasOk() && loaded.get().shortcuts.keys == RecorderShortcuts{}.keys, "Legacy defaults missing");
         legacy.setValue("shortcutRecordStart", "spacebar"); require(settings.getFile().replaceWithText(legacy.createXml("RECORDER_SETTINGS")->toString()), "Invalid fixture write");
         require(loaded.load().failed() && loaded.get().shortcuts.keys == RecorderShortcuts{}.keys, "Failed load damaged working bindings");
+        // A file from before the save shortcut whose user already bound Ctrl+S: that binding stays and save takes the next default.
+        legacy.removeValue("shortcutRecordStart"); legacy.setValue("shortcutSplit", "ctrl + S");
+        require(settings.getFile().replaceWithText(legacy.createXml("RECORDER_SETTINGS")->toString()), "Ctrl+S-taken fixture write");
+        require(loaded.load().wasOk() && loaded.get().shortcuts[RecorderCommand::split] == "ctrl + S"
+            && loaded.get().shortcuts[RecorderCommand::saveProject] == "ctrl + shift + S", "Older file with Ctrl+S already bound must keep it and move save");
+        legacy.setValue("shortcutRecordStart", "ctrl + S"); legacy.setValue("shortcutSplit", "ctrl + shift + S"); legacy.setValue("shortcutMarker", "ctrl + alt + S");
+        require(settings.getFile().replaceWithText(legacy.createXml("RECORDER_SETTINGS")->toString()), "Every-S-candidate-taken fixture write");
+        require(loaded.load().wasOk() && loaded.get().shortcuts[RecorderCommand::saveProject] == "ctrl + shift + alt + S", "Older file with every S candidate taken must still load with a free save key");
+        legacy.removeValue("shortcutRecordStart"); legacy.removeValue("shortcutMarker"); legacy.setValue("shortcutSplit", "ctrl + S");
+        legacy.setValue(RecorderShortcuts::field(RecorderCommand::saveProject), "ctrl + S"); // a newer file saying so explicitly is a real duplicate
+        require(settings.getFile().replaceWithText(legacy.createXml("RECORDER_SETTINGS")->toString()), "Explicit duplicate fixture write");
+        require(loaded.load().failed(), "Explicit duplicate save key accepted");
     });
     return suite.result("timeline-ux");
 }

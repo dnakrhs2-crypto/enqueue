@@ -70,6 +70,15 @@ foreach(_rec_lib IN ITEMS avcodec avformat avutil swscale swresample)
 endforeach()
 
 # Reuse only JSON/file support. No GoCueCore, audio engine or PluginHost dependency.
+# Release objects keep debug records (/Zi): RecorderTests links with /DEBUG below, so a crash dump from an
+# unattended run resolves to file:line. The app's link line is unchanged; no PDB is produced or shipped for it.
+add_compile_options("$<$<CONFIG:Release>:/Zi>")
+# Diagnostic only (configure a separate build directory with -DRECORDER_ASAN=ON): AddressSanitizer makes heap overruns and
+# use-after-free deterministic instead of an occasional access violation. Never part of a release build.
+option(RECORDER_ASAN "Build the recorder targets with AddressSanitizer (diagnostic builds only)" OFF)
+if(RECORDER_ASAN)
+    add_compile_options(/fsanitize=address /Zi)
+endif()
 add_library(RecorderCommon STATIC ../src/model/SafeFileWrite.cpp)
 target_link_libraries(RecorderCommon PRIVATE juce::juce_core)
 get_target_property(_rec_juce_includes juce::juce_core INTERFACE_INCLUDE_DIRECTORIES)
@@ -90,6 +99,9 @@ target_link_libraries(RecorderCore PUBLIC RecorderCommon RecorderFFmpeg_avcodec 
 target_compile_definitions(RecorderCore PUBLIC RECORDER_FFMPEG_VERSION="${_recorder_ffmpeg_version}")
 add_executable(RecorderProbe tools/RecorderProbe.cpp)
 add_executable(RecorderTests tests/TestMain.cpp tests/CaptureContractTests.cpp tests/CaptureReviewTests.cpp tests/CfrSchedulerTests.cpp tests/EncoderContractTests.cpp)
+target_sources(RecorderTests PRIVATE tests/TestCrashGuard.cpp) # no crash dialog on the CEO's desktop; minidump + running test name
+target_link_libraries(RecorderTests PRIVATE dbghelp)
+target_link_options(RecorderTests PRIVATE "$<$<CONFIG:Release>:/DEBUG;/OPT:REF;/OPT:ICF>")
 include(src/audio/RecorderAudio.cmake)
 target_sources(RecorderTests PRIVATE tests/AsioStampTests.cpp tests/NativePcmTests.cpp)
 foreach(_rec_target IN ITEMS RecorderCommon RecorderCore RecorderProbe RecorderTests)

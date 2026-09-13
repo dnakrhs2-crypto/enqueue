@@ -2,6 +2,7 @@
 // never another main(), never a CMake rename of main) so parallel rounds merge without linker clashes.
 //   RecorderTests                     -> every suite
 //   RecorderTests --suite <name>      -> one suite (see the table below)
+//   RecorderTests --suite <a>,<b>,... -> those suites in that order (reproduces cross-suite state without the whole run)
 //   RecorderTests --list              -> suite names
 #include <cstring>
 #include <exception>
@@ -9,6 +10,9 @@
 #include <string>
 #include <charconv>
 #include <cstdint>
+#include <algorithm>
+#include <iterator>
+#include <vector>
 
 // This review permits only compile-definition changes to recorder/CMakeLists.txt.
 // Keep the real window implementations in this one test translation unit.
@@ -99,6 +103,7 @@ int runSourceReanchorTests();
 int runCutEditStabilityTests();
 int runTimelineUxTests();
 int runShortcutExceptionTests();
+int runAccessViolationFixture(); // TestCrashGuard.cpp: deliberate fault for the crash-guard subprocess test
 
 namespace
 {
@@ -179,6 +184,7 @@ int usage()
 
 int main(int argc, char** argv)
 {
+    recorder_test::installCrashGuard(); // before anything can fault: a crash must exit, not wait behind a dialog
     std::cout << std::unitbuf;
     try
     {
@@ -212,6 +218,7 @@ int main(int argc, char** argv)
                 // Deliberately failing subprocess fixtures are excluded from --list/all.
                 if (selected == "inject-unhandled-async") return runUnexpectedJuceExceptionTests(false);
                 if (selected == "inject-unhandled-timer") return runUnexpectedJuceExceptionTests(true);
+                if (selected == "inject-access-violation") return runAccessViolationFixture();
                 if (selected == "all")
                 {
                     int failed = 0;
@@ -219,9 +226,21 @@ int main(int argc, char** argv)
                     std::cout << "RecorderTests: all suites " << (recorder_test::processResult(failed) ? "FAILED" : "passed") << '\n';
                     return failed;
                 }
-                for (const auto& s : suites) if (selected == s.name) return s.run();
-                std::cerr << "Unknown suite: " << selected << '\n';
-                return usage();
+                // One suite, or a comma-separated list run in order; every name is checked before the first suite runs.
+                std::vector<const Suite*> chosen;
+                for (std::size_t start = 0;; )
+                {
+                    const auto comma = selected.find(',', start);
+                    const auto name = selected.substr(start, comma == std::string::npos ? std::string::npos : comma - start);
+                    const auto* suite = std::find_if(std::begin(suites), std::end(suites), [&](const Suite& s) { return name == s.name; });
+                    if (suite == std::end(suites)) { std::cerr << "Unknown suite: " << name << '\n'; return usage(); }
+                    chosen.push_back(suite);
+                    if (comma == std::string::npos) break;
+                    start = comma + 1;
+                }
+                int failed = 0;
+                for (const auto* suite : chosen) failed |= suite->run();
+                return failed;
             };
             result = runSelected();
         }

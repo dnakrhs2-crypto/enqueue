@@ -238,7 +238,9 @@ void addTimelineRecordingTests(recorder_test::Suite& suite)
     {
         Fixture f(1, false, 173, 287); listeningLane(f, true, 1, 0, 16000); listenAt(f, 137); f.arm();
         const auto beforeStart = f.position; ok(f.controller.start()); const auto origin = f.controller.scheduledStart();
-        require(origin == beforeStart + 2000 + 287, "Default start reserves submission lead plus reported output latency");
+        const auto lead = f.controller.startLeadSamples(); const auto Fs = std::int64_t(f.audio.deviceInfo().sampleRate);
+        require(lead >= Fs / 10 && lead >= std::int64_t(f.block) * 2 && lead <= (std::max)(Fs / 4, std::int64_t(f.block) * 2), "Default start lead must stay between 100 ms (or two blocks) and 250 ms");
+        require(origin == beforeStart + lead + 287, "Default start reserves the submission lead plus reported output latency");
         until([&] { return f.audio.startCommitted(); });
         until([&] { f.feed(); f.session.tick(); return f.audio.acceptedEnd() >= origin + 401; });
         require(f.session.elapsed() == f.audio.acceptedEnd() - origin, "Recording UI elapsed is the corrected confirmed capture prefix");

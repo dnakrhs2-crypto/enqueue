@@ -534,5 +534,13 @@ int runTakeControllerTests()
         { starts += r.kind == JournalKind::TakeStarted; stops += r.kind == JournalKind::TakeStopped; finals += r.kind == JournalKind::TakeFinalized; }
         require(starts == 2 && stops == 2 && finals == 2, "Independent lifecycle commits for both takes");
     });
+    suite.test("Default start lead: 100 ms floor, four times the measured durable write, 250 ms cap, never under two buffers", []
+    {
+        require(TakeController::startLeadFor(48000, 256, 7.5) == 4800, "An SSD-class write keeps the 100 ms floor");
+        require(TakeController::startLeadFor(48000, 256, 40) == 7680, "A slow disk stretches the lead to four writes");
+        require(TakeController::startLeadFor(48000, 256, 200) == 12000, "The former 250 ms stays the cap");
+        require(TakeController::startLeadFor(48000, 16384, 0) == 32768, "Very large buffers keep the two-buffer floor above the cap");
+        require(TakeController::startLeadFor(8000, 80, 0) == 800, "Test-rate default");
+    });
     return suite.result("TakeControllerTests");
 }

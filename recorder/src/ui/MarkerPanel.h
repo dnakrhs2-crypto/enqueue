@@ -14,6 +14,10 @@ public:
     std::function<void(juce::Result)> onEdit;
     std::function<void(const juce::String&)> onStatusChanged;
     std::function<void()> onAddRequested; // set by the timeline view: routes "마커 추가" to the host's name dialog
+    // Lands a finished temporary at target: a plain move when nothing is there, otherwise a swap that keeps the previous file
+    // as a backup until the new one is in place. `swap` is Windows ReplaceFileW by default; tests inject its failure shapes.
+    using SwapFunction = std::function<bool(const juce::File& target, const juce::File& temporary, const juce::File& backup)>;
+    static juce::Result landExport(const juce::File& target, const juce::File& temporary, const SwapFunction& swap = {});
 private:
     friend struct TimelineUxTestAccess;
     int getNumRows() override { return int(markers.size()); }

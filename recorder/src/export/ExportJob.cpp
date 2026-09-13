@@ -155,8 +155,10 @@ void ExportPublication::commit(const juce::Array<juce::var>& files, ExportContro
     }
     const auto manifest = job.partialDirectory.getChildFile("export-manifest.json");
     DurableFile output(faults); exportCheck(output.open(manifest.getSiblingFile("export-manifest.json.partial"), DurableFile::OpenMode::createNew));
-    const auto bytes = juce::JSON::toString(job.manifest(files), false).toUTF8();
-    exportCheck(output.write(bytes.getAddress(), bytes.sizeInBytes() - 1)); exportCheck(output.flushData()); exportCheck(output.close());
+    // The String must outlive the write: a CharPointer taken from the temporary JSON string dangled here and the
+    // manifest write read freed memory (found by AddressSanitizer; it surfaced as an occasional access violation).
+    const auto json = juce::JSON::toString(job.manifest(files), false);
+    exportCheck(output.write(json.toRawUTF8(), json.getNumBytesAsUTF8())); exportCheck(output.flushData()); exportCheck(output.close());
     for (const auto& f : files) { const auto target = file(f["name"].toString()); exportRename(target.getSiblingFile(target.getFileName() + ".partial"), target); }
     exportRename(manifest.getSiblingFile("export-manifest.json.partial"), manifest);
     exportRename(job.partialDirectory, job.outputDirectory); published = true;

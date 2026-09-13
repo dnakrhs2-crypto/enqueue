@@ -208,7 +208,7 @@ void MainComponent::beforeSwitch(std::function<void()> action)
 }
 void MainComponent::projectMenu()
 {
-    juce::PopupMenu menu; menu.addItem(1, ko("새 프로젝트")); menu.addItem(2, ko("프로젝트 열기")); menu.addItem(3, ko("저장")); menu.addSeparator();
+    juce::PopupMenu menu; menu.addItem(1, ko("새 프로젝트")); menu.addItem(2, ko("프로젝트 열기")); menu.addItem(3, ko("저장") + " (" + settings.get().shortcuts[RecorderCommand::saveProject] + ")"); menu.addSeparator();
     int i = 100; for (const auto& file : settings.get().recentProjects) menu.addItem(i++, juce::File(file).getParentDirectory().getFileName());
     const juce::Component::SafePointer<MainComponent> safe(this);
     menu.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(recordView.projectButton), [safe](int id)

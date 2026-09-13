@@ -44,6 +44,10 @@ void onTerminate() { writeReport(nullptr, "std::terminate"); std::abort(); }
 void CrashHandler::install()
 {
     directory().createDirectory(); // prepared while the process is healthy
+    // A crashed Tally.exe must never wait behind a Windows dialog (automation runs it unattended on the CEO's desktop):
+    // the report written below is the evidence, and the next start shows it.
+    SetErrorMode(GetErrorMode() | SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX | SEM_NOOPENFILEERRORBOX);
+    _set_abort_behavior(0, _WRITE_ABORT_MSG | _CALL_REPORTFAULT);
     juce::SystemStats::setApplicationCrashHandler(onCrash); // SetUnhandledExceptionFilter underneath
     std::set_terminate(onTerminate);
 }

@@ -95,6 +95,15 @@ juce::Result decode(const juce::String& text, UserSettings& out)
     // stop key the user deliberately set back to F10 is kept.
     if (integer("shortcutRevision", 1) < 2 && s.shortcuts[RecorderCommand::recordStop] == "F10" && s.shortcuts[RecorderCommand::playStop] == "spacebar")
         s.shortcuts.keys[std::size_t(RecorderCommand::recordStop)] = "spacebar";
+    // 0.1.12 adds the save shortcut. A file written before it has no field for it: every other binding stays as the user set
+    // it, and save takes the first free candidate. Six distinct candidates against five other commands guarantee a free one,
+    // so a valid old file always loads; a duplicate among the other keys still fails validate() as before.
+    if (!p.containsKey(RecorderShortcuts::field(RecorderCommand::saveProject)))
+    {
+        static_assert(RecorderShortcuts::count - 1 < 6, "keep more save-key candidates than other commands");
+        for (const auto* candidate : {"ctrl + S", "ctrl + shift + S", "ctrl + alt + S", "ctrl + shift + alt + S", "F12", "ctrl + F12"})
+        { s.shortcuts.keys[std::size_t(RecorderCommand::saveProject)] = candidate; if (s.shortcuts.validate().wasOk()) break; }
+    }
     s.windowState = p.getValue("windowState"); const auto valid = s.validate(); if (valid.wasOk()) out = std::move(s); return valid;
     }
     catch (const std::exception& e) { return juce::Result::fail(juce::String::fromUTF8(e.what())); }
@@ -108,12 +117,12 @@ juce::Result OutputMapping::validate() const
 }
 juce::String RecorderShortcuts::name(RecorderCommand c)
 {
-    const char* names[] {"녹화 시작", "녹화 정지", "재생 / 정지", "스플릿", "마커 추가"};
+    const char* names[] {"녹화 시작", "녹화 정지", "재생 / 정지", "스플릿", "마커 추가", "프로젝트 저장"};
     return ko(names[std::size_t(c)]);
 }
 const char* RecorderShortcuts::field(RecorderCommand c)
 {
-    const char* fields[] {"shortcutRecordStart", "shortcutRecordStop", "shortcutPlayStop", "shortcutSplit", "shortcutMarker"};
+    const char* fields[] {"shortcutRecordStart", "shortcutRecordStop", "shortcutPlayStop", "shortcutSplit", "shortcutMarker", "shortcutSaveProject"};
     return fields[std::size_t(c)];
 }
 juce::Result RecorderShortcuts::validate() const

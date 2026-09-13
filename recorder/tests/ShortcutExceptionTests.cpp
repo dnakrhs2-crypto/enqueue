@@ -634,6 +634,44 @@ int runShortcutExceptionTests()
             require(output.contains("unhandled-injection: 1 passed, 1 failed") && output.contains("1 unexpected JUCE exceptions"), "GUI exception was not counted against its test and process");
             require(output.contains("injected unexpected") && output.contains("PASS Exception dispatch continued"), "Wrong failure or callbacks did not continue");
         });
+    suite.test("Ctrl+S saves the project by default and stays out of text fields", []
+    {
+        require(RecorderShortcuts{}[RecorderCommand::saveProject] == "ctrl + S" && RecorderShortcuts{}.validate().wasOk(), "Default save shortcut");
+        MainFixture f;
+        const auto file = f.folder.root.getChildFile("save/project.recorder"); require(f.document.saveCheckpoint(file).wasOk(), "Save the project");
+        Marker marker; marker.sample = 8000; marker.name = "saved-by-ctrl-s"; require(f.document.addMarker(marker).wasOk() && f.document.isDirty(), "Edit the saved project");
+        const juce::KeyPress save('S', juce::ModifierKeys::ctrlModifier, 0);
+        juce::TextEditor typing; require(!f.main.routeShortcut(save, &typing) && f.document.isDirty(), "Ctrl+S inside a text field must not save");
+        require(f.main.routeShortcut(save, &f.main), "Ctrl+S was not handled"); Access::releaseKey(f.main);
+        until([&] { Access::tick(f.main); return !f.document.isDirty(); });
+        RecorderProject reloaded;
+        require(RecorderSerializer::readCheckpoint(file, reloaded).wasOk() && reloaded.markers.size() == 1 && reloaded.markers[0].name == "saved-by-ctrl-s", "Ctrl+S did not write the edit to disk");
+    });
+    suite.test("A crashing test process exits with the exception code, reports the test and shows no dialog", []
+    {
+        const auto exe = juce::File::getSpecialLocation(juce::File::currentExecutableFile);
+        const auto crashDirectory = exe.getSiblingFile("crash");
+        const auto before = crashDirectory.findChildFiles(juce::File::findFiles, false, "RecorderTests-*.txt");
+        juce::ChildProcess child;
+        require(child.start(juce::StringArray{exe.getFullPathName(), "--suite", "inject-access-violation"}), "Start crash fixture");
+        // Without the guard a "memory could not be read" box would hold the child here until somebody clicks it.
+        require(child.waitForProcessToFinish(15000), "Crashed fixture did not exit within 15 s (a dialog is probably waiting)");
+        const auto output = child.readAllProcessOutput();
+#ifdef __SANITIZE_ADDRESS__
+        std::cout << "  (AddressSanitizer build: the sanitizer's own SEGV handler ends the child, so only the prompt exit is checked)\n";
+        return;
+#endif
+        require(child.getExitCode() == 0xC0000005u, "Exit status is not STATUS_ACCESS_VIOLATION");
+        require(output.contains("inject-access-violation: faulting deliberately")
+            && output.contains("RecorderTests CRASH (unhandled exception) in test: Deliberate access violation")
+            && output.contains("exception 0xC0000005 at"), "Crash report missing from the fixture output");
+        const auto after = crashDirectory.findChildFiles(juce::File::findFiles, false, "RecorderTests-*.txt");
+        require(after.size() == before.size() + 1, "Exactly one new crash report expected");
+        juce::File report; for (const auto& f : after) if (!before.contains(f)) report = f;
+        const auto dump = report.withFileExtension("dmp");
+        require(report.loadFileAsString().contains("in test: Deliberate access violation") && dump.getSize() > 4096, "Report text or minidump missing");
+        require(report.deleteFile() && dump.deleteFile(), "Fixture cleanup");
+    });
     suite.test("Exception reporter handles unwritable destination and notification reentry", []
     {
         Folder folder; require(folder.root.createDirectory().wasOk(), "Reporter fixture root");

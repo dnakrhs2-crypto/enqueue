@@ -22,7 +22,7 @@ void MainComponent::finishDemo(const juce::String& status, const juce::String& r
     jsonSet(report, "asioDeviceIndex", d.asioIndex); jsonSet(report, "asioDevice", session.deviceInfo().name); jsonSet(report, "sampleRate", session.deviceInfo().sampleRate);
     jsonSet(report, "bufferFrames", session.deviceInfo().bufferFrames); jsonSet(report, "appVersion", ProductIdentity::version()); jsonSet(report, "ffmpegVersion", RECORDER_FFMPEG_VERSION);
     jsonSet(report, "measurementDefinition", "QPC at the actual Stop button handler, including scheduled Nstop and finalization. Clip time is the first timeline paint containing the new take (not optical scanout). Video is successful D3D Present submission; audio is first timeline PCM block dispatched through the existing ASIO output. Audible time adds reported output latency, not DAC/loopback measurement. OS file cache is not purged.");
-    for (const auto* key : {"stopToClipMs", "stopToFirstVideoMs", "stopToFirstAudioMs", "stopToFirstAudibleEstimateMs", "stopToFirstPlaybackMs"})
+    for (const auto* key : {"stopToClipMs", "stopToFirstVideoMs", "stopToFirstAudioMs", "stopToFirstAudibleEstimateMs", "stopToFirstPlaybackMs", "recordButtonToRecordingMs"})
     {
         std::vector<double> values; for (const auto& row : d.rows) if (row[key].isDouble()) values.push_back(double(row[key]));
         auto statistics = jsonObject(); if (!values.empty()) { std::sort(values.begin(), values.end()); jsonSet(statistics, "max", values.back()); jsonSet(statistics, "p95", values[std::size_t(std::ceil(values.size() * .95)) - 1]); }
@@ -79,11 +79,13 @@ void MainComponent::demoTick()
         }
         if (!session.readyToRecord()) return;
         if (!d.timelineArmed) { setTimeline(false); d.expectedPlacement = -1; d.previousCam1Asset.clear(); }
-        d.timelineArmed = false; recordView.startButton.onClick(); d.step = Demo::Step::recording; d.phaseQpc = now;
+        d.timelineArmed = false; d.recordQpc = qpcNow(); d.recordingQpc = 0; // pressed: before the click handler's own synchronous work
+        recordView.startButton.onClick(); d.step = Demo::Step::recording; d.phaseQpc = now;
     }
     else if (d.step == Demo::Step::recording)
     {
         if (session.takeController().state() == TakeController::State::partialFailure) { finishDemo("FAIL", session.takeController().error()); return; }
+        if (!d.recordingQpc && session.takeController().state() == TakeController::State::recording) d.recordingQpc = qpcNow(); // first tick that sees N0 adopted
         // Exercise live tab switching while recording, without disturbing capture/present ownership.
         if (session.elapsed() >= Sample(session.deviceInfo().sampleRate) * 5 && !timeline) setTimeline(true);
         if (session.takeController().state() == TakeController::State::recording && session.elapsed() >= Sample(session.deviceInfo().sampleRate) * 10)
@@ -106,6 +108,7 @@ void MainComponent::demoTick()
             jsonSet(row, "stopToFirstVideoMs", ms(session.firstPlaybackVideoQpc)); jsonSet(row, "stopToFirstAudioMs", ms(session.firstPlaybackAudioQpc));
             jsonSet(row, "stopToFirstAudibleEstimateMs", ms(session.firstPlaybackAudibleQpc));
             jsonSet(row, "stopToFirstPlaybackMs", ms(std::max(session.firstPlaybackVideoQpc, session.firstPlaybackAudibleQpc)));
+            jsonSet(row, "recordButtonToRecordingMs", d.recordQpc && d.recordingQpc ? double(d.recordingQpc - d.recordQpc) * 1000 / qpcFrequency() : -1.0);
             bool placed = true;
             if (d.expectedPlacement >= 0)
             {

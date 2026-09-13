@@ -293,6 +293,7 @@ bool MainComponent::routeShortcut(const juce::KeyPress& key, juce::Component* or
             if (!session.recording() && !fileWork.valid()) { if (session.playing()) session.stopPlayback(); else { if (!timeline) setTimeline(true); session.play(); } } break;
         case RecorderCommand::split: if (timeline && !fileWork.valid() && timelineView.edits.enabled(TimelineAction::split)) timelineView.invoke(TimelineAction::split); break;
         case RecorderCommand::marker: promptMarker(); break;
+        case RecorderCommand::saveProject: if (!session.busy() && !fileWork.valid()) saveProject(); break; // same path as the File menu
         default: break;
     }
     refreshPending = true; return true;

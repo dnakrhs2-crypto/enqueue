@@ -52,7 +52,7 @@ private:
         int iterations = 20, iteration = 0, asioIndex = -1, returnCode = 1;
         juce::String timelineMode; bool timelineArmed = false; Sample expectedPlacement = -1; Id previousCam1Asset;
         juce::File devices, report, folder;
-        std::int64_t phaseQpc = qpcNow(), stopQpc = 0, clipQpc = 0;
+        std::int64_t phaseQpc = qpcNow(), stopQpc = 0, clipQpc = 0, recordQpc = 0, recordingQpc = 0;
         juce::Array<juce::var> rows;
         std::future<juce::Result> writing;
     };
