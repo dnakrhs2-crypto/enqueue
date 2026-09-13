@@ -38,6 +38,8 @@ struct ShortcutExceptionTestAccess
     static juce::TextEditor& exportText(MainComponent& main) { return main.exportDialog->folder; }
     static void allowStartButton(MainComponent& main) { main.recordView.startButton.setEnabled(true); }
     static juce::String banner(MainComponent& main) { return main.banner; }
+    static void publish(MainComponent& main) { main.publishLifecycle(); }
+    static void checkForUpdates(MainComponent& main) { main.checkForUpdates(); }
     static void clearBanner(MainComponent& main) { main.banner = {}; }
     static juce::Rectangle<int> timelineBounds(MainComponent& main) { return main.timelineView.getBounds(); }
     static juce::String exceptionBanner(MainComponent& main) { return main.exceptionBanner; }
@@ -481,6 +483,29 @@ int runShortcutExceptionTests()
             Access::clearBanner(f.main); Access::refresh(f.main);
             require(view.noticeBounds().getHeight() == 0 && view.timelineBounds() == plain && Access::timelineBounds(f.main) == plain, "Cleared notice did not give the row back");
         }
+    });
+    suite.test("An untouched app allows updates; unsaved recorded work blocks them and the reason names it", []
+    {
+        // RecorderDocument starts dirty and newProject() keeps it dirty, so the empty default project must not count
+        // as unsaved work for the update gate (the CEO hit '…복구와 저장이 끝난 뒤' without ever creating a project).
+        MainFixture f; auto& lifecycle = *f.session.lifecycleState();
+        require(f.document.isDirty() && f.document.getFile() == juce::File(), "Fixture is the empty never-saved project");
+        Access::publish(f.main); require(lifecycle.canShutdown(), "Empty default project blocked the updater");
+        Access::checkForUpdates(f.main); Access::refresh(f.main);
+        require(!Access::banner(f.main).contains(ko("끝난 뒤")) && !Access::banner(f.main).contains(ko("저장하지 않은")), ("Empty project refused the update: " + Access::banner(f.main)).toRawUTF8());
+        // Recording and importing both need a project folder, so unsaved work in practice is a saved project with edits.
+        const auto file = f.folder.root.getChildFile("gate/project.recorder"); require(f.document.saveCheckpoint(file).wasOk(), "Save the project");
+        Access::publish(f.main); require(!f.document.isDirty() && lifecycle.canShutdown(), "Freshly saved project blocked the updater");
+        Marker marker; marker.sample = 8000; marker.name = "m"; require(f.document.addMarker(marker).wasOk() && f.document.isDirty(), "Edit the saved project");
+        Access::publish(f.main); require(!lifecycle.canShutdown(), "Unsaved edits must block the updater");
+        Access::checkForUpdates(f.main); Access::refresh(f.main);
+        require(Access::banner(f.main).contains(ko("저장하지 않은 변경")) && !Access::banner(f.main).contains(ko("복구")), "Unsaved reason must name saving only");
+        require(f.document.saveCheckpoint(file).wasOk(), "Save again");
+        Access::publish(f.main); require(lifecycle.canShutdown(), "Saved project still blocked the updater");
+        using L = RecorderLifecycle;
+        const auto text = MainComponent::updateBlockedText(L::recording | L::fileWork | L::unsaved, false);
+        require(text.contains(ko("녹화")) && text.contains(ko("저장")) && text.contains(ko("저장하지 않은 변경")) && !text.contains(ko("더빙")), "Blocked text must list only the active blockers");
+        require(MainComponent::updateBlockedText(0, true).contains(ko("오디오 장치 사용")), "Capture ownership must be named");
     });
     suite.test("Device work launch and future exceptions clear configuring and notify failure", []
     {

@@ -452,10 +452,33 @@ void MainComponent::timerCallback()
 void MainComponent::publishLifecycle()
 {
     auto state = session.lifecycleState();
-    state->set(RecorderLifecycle::unsaved, document.isDirty());
+    state->set(RecorderLifecycle::unsaved, document.hasUnsavedWork());
     state->set(RecorderLifecycle::fileWork, fileWork.valid() || importBusy() || settingsWork.valid() || settingsPending);
 }
-void MainComponent::updateShutdownBlocked() { showError(recorderFaultText(RecorderFault::updateBusy)); }
+juce::String MainComponent::updateBlockedText(std::uint32_t flags, bool captureBusy)
+{
+    using L = RecorderLifecycle;
+    juce::StringArray busy;
+    if (flags & L::recording) busy.add(ko("녹화"));
+    if (flags & L::dubbing) busy.add(ko("더빙"));
+    if (flags & L::exporting) busy.add(ko("내보내기"));
+    if (flags & L::recovering) busy.add(ko("복구"));
+    if (flags & L::finalizing) busy.add(ko("테이크 마무리"));
+    if (flags & L::fileWork) busy.add(ko("저장"));
+    if (flags & L::configuring) busy.add(ko("장치 연결"));
+    if (flags & L::closing) busy.add(ko("종료"));
+    if (captureBusy) busy.add(ko("오디오 장치 사용"));
+    const bool unsaved = (flags & L::unsaved) != 0;
+    if (busy.isEmpty() && unsaved) return ko("프로젝트에 저장하지 않은 변경이 있습니다. 저장한 뒤 업데이트하세요.");
+    if (busy.isEmpty()) return recorderFaultText(RecorderFault::updateBusy);
+    return ko("업데이트 전에 먼저 끝내야 합니다: ") + busy.joinIntoString(ko(", "))
+        + (unsaved ? ko(" · 저장하지 않은 변경도 저장하세요.") : ko(". 끝난 뒤 다시 시도하세요."));
+}
+void MainComponent::updateShutdownBlocked()
+{
+    const auto state = session.lifecycleState();
+    showError(updateBlockedText(state->snapshot(), state->captureBusy()));
+}
 void MainComponent::updateShutdownRequested()
 {
     publishLifecycle(); if (!session.lifecycleState()->canShutdown()) { updateShutdownBlocked(); return; }

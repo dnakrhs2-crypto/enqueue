@@ -64,6 +64,9 @@ public:
     const EditHistory& getHistory() const { return history; }
     const juce::File& getFile() const { return file; }
     bool isDirty() const { return dirty; }
+    // Unsaved work worth protecting: a saved project with edits, or a never-saved project that already holds media.
+    // The empty default project the app starts with is dirty by construction but has nothing to lose (same rule as closing).
+    bool hasUnsavedWork() const { return dirty && (file != juce::File() || project->activeTimelineEnd() > 0); }
     Sample durableRevision() const { return savedRevision; }
     juce::String getStatusText() const;
     const juce::String& getError() const { return error; }
