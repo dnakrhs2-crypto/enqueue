@@ -48,10 +48,10 @@ def recorder_app():
 APPS = {
     "enqueue": dict(name="Enqueue", exe="Enqueue.exe", iss="Enqueue.iss", artefacts="Enqueue_artefacts", target="Enqueue",
                     fixed="Enqueue-Setup.exe", notes_dir="docs/release-notes", site_dir="", tag_prefix="v",
-                    repo="dnakrhs2-crypto/enqueue", remote="origin"),
+                    repo="dnakrhs2-crypto/enqueue", remote="origin", ctest_filter="^EnqueueUnitTests$"),
     "livemix": dict(name="LiveMix", exe="LiveMix.exe", iss="LiveMix.iss", artefacts="LiveMix_artefacts", target="LiveMix",
                     fixed="LiveMix-Setup.exe", notes_dir="docs/release-notes/livemix", site_dir="livemix", tag_prefix="livemix-v",
-                    repo="dnakrhs2-crypto/livemix", remote="livemix"),
+                    repo="dnakrhs2-crypto/livemix", remote="livemix", ctest_filter="^EnqueueUnitTests$"),
     "recorder": recorder_app(),
 }
 SITE_REPO = "dnakrhs2-crypto/enqueue"   # 곰튀김.com lives on this repo's gh-pages, both apps included
@@ -116,7 +116,9 @@ def build(preset, skip_tests):
     run(["cmake", "--preset", preset])
     run(["cmake", "--build", "--preset", preset + "-release", "--target", APP["target"], "EnqueueTests", "--", "-m", "-v:m", "-nologo"])
     if not skip_tests:
-        run(["ctest", "--preset", preset + "-release"])
+        # only this app's suites: the Recorder tests registered by recorder/CMakeLists.txt need RecorderTests.exe, which an
+        # Enqueue / LiveMix build does not make (2026-09-14: the 0.10.2 release stopped on 41 "Not Run" Recorder tests)
+        run(["ctest", "--preset", preset + "-release"] + (["-R", APP["ctest_filter"]] if APP.get("ctest_filter") else []))
 
 
 def make_installer(iscc, version, source_dir, output_dir, tools_dir=""):
