@@ -18,6 +18,7 @@ public:
     void open (int sectionIndex = -1);
 
     void closeButtonPressed() override;
+    void resized() override;
 
     struct Section
     {
@@ -31,6 +32,7 @@ public:
 private:
     class Content;
     Content* content = nullptr;
+    bool fitting = false;   // UiScale::fitOnResized re-entrancy guard
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (ManualWindow)
 };

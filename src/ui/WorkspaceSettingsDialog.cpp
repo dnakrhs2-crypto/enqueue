@@ -158,7 +158,9 @@ namespace
             for (const int p : UiScale::allowedPercents)
                 scaleBox.addItem (juce::String (p) + "%" + (p == UiScale::defaultPercent ? ko (" (기본)") : juce::String()), p);
 
-            scaleBox.setSelectedId (UiScale::currentPercent(), juce::dontSendNotification);   // what is in force, not the stored wish
+            // the combo shows the stored choice (so every choice, the one in force included, can be picked and saved —
+            // a combo does not report re-selecting its current item); the hint says what is actually in force
+            scaleBox.setSelectedId (appSettings.getUiScalePercent(), juce::dontSendNotification);
             scaleBox.onChange = [this]
             {
                 const int wanted = scaleBox.getSelectedId();
@@ -167,9 +169,7 @@ namespace
                     return;
 
                 appSettings.setUiScalePercent (wanted);
-                const int applied = applyUiScale ? applyUiScale (wanted) : wanted;
-                scaleBox.setSelectedId (applied, juce::dontSendNotification);
-                showScaleHint (wanted, applied);
+                showScaleHint (wanted, applyUiScale ? applyUiScale (wanted) : wanted);
             };
             addAndMakeVisible (scaleBox);
 
@@ -187,9 +187,9 @@ namespace
             if (current == saved)
                 text = ko ("창 전체가 같은 비율로 커집니다");
             else if (UiScale::lastRequestedPercent == saved)
-                text = ko ("화면이 작아 ") + juce::String (current) + ko ("%까지만 적용됩니다 (저장 ") + juce::String (saved) + "%)";
+                text = ko ("화면이 작아 지금은 ") + juce::String (current) + ko ("%로 적용 중입니다");
             else
-                text = ko ("안전 모드 실행 중: 저장 ") + juce::String (saved) + ko ("%, 현재 ") + juce::String (current) + "%";
+                text = ko ("안전 모드로 실행 중이라 지금은 ") + juce::String (current) + ko ("%입니다");
 
             scaleHint->setText (text, juce::dontSendNotification);
         }

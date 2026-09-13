@@ -26,6 +26,7 @@ public:
     /** Brings the window up (a running download keeps going while it is hidden). */
     void open();
     void closeButtonPressed() override;
+    void resized() override;
 
     /** Where the files go: Documents/Enqueue/유튜브다운. */
     static juce::File downloadDirectory();
@@ -33,6 +34,7 @@ public:
 private:
     class Content;
     Content* content = nullptr;
+    bool fitting = false;   // UiScale::fitOnResized re-entrancy guard
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (YouTubeWindow)
 };

@@ -304,15 +304,7 @@ private:
         void resized() override
         {
             DocumentWindow::resized();
-
-            // leaving the maximised state after a 글씨·화면 크기 change (JUCE brings the old logical size back at the
-            // new scale) or coming back on a smaller monitor: shrink into the display. Size only — a window may be
-            // dragged partly off-screen on purpose.
-            if (! fitting && isOnDesktop() && ! isFullScreen() && ! isMinimised())
-            {
-                const juce::ScopedValueSetter<bool> guard (fitting, true);
-                UiScale::fitWindowIntoDisplay (*this, false);
-            }
+            UiScale::fitOnResized (*this, fitting);   // back from maximised after a 글씨·화면 크기 change: no bigger than the screen
         }
 
     private:

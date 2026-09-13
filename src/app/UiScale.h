@@ -93,19 +93,29 @@ inline void fitWindowIntoDisplay (juce::ResizableWindow& window, bool moveIntoVi
     const auto frame = peer->getFrameSize();
     const auto area = display->userBounds.toNearestInt();
     const auto outer = frame.addedTo (window.getBounds());
-    const bool tooBig = window.isResizable() && (outer.getWidth() > area.getWidth() || outer.getHeight() > area.getHeight());
+    auto fitted = outer;
 
-    if (tooBig || moveIntoView)
-    {
-        auto fitted = tooBig ? outer.constrainedWithin (area) : outer;
+    if (window.isResizable())   // shrink in place: the position is only touched below, when asked
+        fitted.setSize (juce::jmin (outer.getWidth(), area.getWidth()), juce::jmin (outer.getHeight(), area.getHeight()));
 
-        if (moveIntoView)   // constrainedWithin() moves too; for a fixed-size window only the position changes
-            fitted.setPosition (juce::jlimit (area.getX(), juce::jmax (area.getX(), area.getRight() - fitted.getWidth()), fitted.getX()),
-                                juce::jlimit (area.getY(), juce::jmax (area.getY(), area.getBottom() - fitted.getHeight()), fitted.getY()));
+    if (moveIntoView)
+        fitted.setPosition (juce::jlimit (area.getX(), juce::jmax (area.getX(), area.getRight() - fitted.getWidth()), fitted.getX()),
+                            juce::jlimit (area.getY(), juce::jmax (area.getY(), area.getBottom() - fitted.getHeight()), fitted.getY()));
 
-        if (fitted != outer)
-            window.setBoundsConstrained (frame.subtractedFrom (fitted));
-    }
+    if (fitted != outer)
+        window.setBoundsConstrained (frame.subtractedFrom (fitted));
+}
+
+/** For a window's resized(): coming back from the maximised state after a scale change, JUCE restores the old
+    logical size at the new scale, which may be bigger than the screen — shrink it back in (size only, the window
+    may sit partly off-screen on purpose). 'guard' is the window's own re-entrancy flag. */
+inline void fitOnResized (juce::ResizableWindow& window, bool& guard)
+{
+    if (guard || ! window.isOnDesktop() || window.isFullScreen() || window.isMinimised())
+        return;
+
+    const juce::ScopedValueSetter<bool> setter (guard, true);
+    fitWindowIntoDisplay (window, false);
 }
 
 /** Applies 'percent', lowered to what the display can fit, and returns what was applied. Every open window is

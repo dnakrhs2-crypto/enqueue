@@ -256,6 +256,14 @@ void CuePlayer::setLiveRegion (double startSeconds, double endSeconds) noexcept
     if (endSample - startSample < 1)   // an empty region would divide by zero; ignore the edit until it is valid again
         return;
 
+    {
+        juce::int64 currentStart = 0, currentLength = 0;
+        source->getRegion (currentStart, currentLength);
+
+        if (currentStart == startSample && currentLength == endSample - startSample)
+            return;   // the same region again (a handle pressed and released in place, show mode entered mid-drag): no seek, the read-ahead stays
+    }
+
     // keep the audible file position: find it again in the new layout (same pass if it still exists)
     const auto pos = controlPosition();
     const auto where = source->locate (pos);

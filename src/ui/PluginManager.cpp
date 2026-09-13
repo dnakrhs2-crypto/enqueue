@@ -397,6 +397,12 @@ PluginManagerWindow::PluginManagerWindow (PluginHost& host, AppSettings& setting
     UiScale::fitWindowIntoDisplay (*this);      // at 150% 글씨·화면 크기 the default size may not fit the display
 }
 
+void PluginManagerWindow::resized()
+{
+    DocumentWindow::resized();
+    UiScale::fitOnResized (*this, fitting);   // back from maximised after a 글씨·화면 크기 change: no bigger than the screen
+}
+
 PluginManagerWindow::~PluginManagerWindow()
 {
     clearContentComponent();

@@ -21,12 +21,14 @@ public:
     /** Brings the window up; typing starts the search at once. */
     void open();
     void closeButtonPressed() override;
+    void resized() override;
     /** Show mode: the list can be looked at and searched, but no scan, switch or removal (the show must not change under it). */
     void setLocked (bool locked);
 
 private:
     class Content;
     Content* content = nullptr;
+    bool fitting = false;   // UiScale::fitOnResized re-entrancy guard
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (PluginManagerWindow)
 };

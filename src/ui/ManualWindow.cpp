@@ -73,6 +73,12 @@ ManualWindow::ManualWindow()
     UiScale::fitWindowIntoDisplay (*this);   // at 150% 글씨·화면 크기 the default size no longer fits a 1080p display
 }
 
+void ManualWindow::resized()
+{
+    DocumentWindow::resized();
+    UiScale::fitOnResized (*this, fitting);   // back from maximised after a 글씨·화면 크기 change: no bigger than the screen
+}
+
 ManualWindow::~ManualWindow()
 {
     clearContentComponent();
