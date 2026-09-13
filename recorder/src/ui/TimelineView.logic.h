@@ -61,6 +61,7 @@ public:
     Sample dragValue() const { return dragAt; }
     const std::vector<Id>& dragTargets() const { return dragIds; }
     static bool parseSample(const juce::String&, Sample&);
+    static bool parseTimecode(const juce::String&, unsigned Fs, Sample&);
     static std::vector<Id> expandLinks(const RecorderProject&, const std::vector<Id>&);
 private:
     ClipEditResult apply(const RecorderProject&, TimelineAction, const std::vector<Id>&, Sample, bool) const;
