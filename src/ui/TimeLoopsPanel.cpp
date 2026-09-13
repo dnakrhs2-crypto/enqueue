@@ -120,6 +120,11 @@ TimeLoopsPanel::TimeLoopsPanel (ProjectDocument& doc, AudioEngine& e, juce::Audi
     waveform.onContextMenu = [this] (juce::Point<int> screenPosition) { showContextMenu (screenPosition); };
     waveform.onSlicesChanged = [this] (const std::vector<Slice>& slices, int firstCount, bool finished) { commitSlices (slices, firstCount, finished); };
     waveform.onSeekPlay = [this] (double fileSeconds) { if (onSeekPlay) onSeekPlay (fileSeconds); };
+    waveform.onLockedClick = [this]
+    {
+        if (onStatus)
+            onStatus (ko ("쇼 모드: 파형 클릭으로 재생 위치를 옮기지 않습니다 (편집 모드 = Ctrl+Shift+M)"), false);
+    };
     addAndMakeVisible (waveform);
 
     refresh();
@@ -483,9 +488,10 @@ void TimeLoopsPanel::showContextMenu (juce::Point<int> screenPosition)
     menu.addItem (3, ko ("구간에 맞춰 줌"));
     menu.addItem (4, ko ("전체 보기"));
     menu.addSeparator();
-    menu.addItem (5, ko ("커서에 슬라이스 마커 추가 (M)"));
-    menu.addItem (6, ko ("슬라이스 마커 전부 삭제"), ! cue->audio.slices.empty());
-    menu.addItem (7, ko ("파일의 큐 마커를 슬라이스로 가져오기"), hasFile);
+    const bool editable = isEnabled();   // show mode: the view-only items stay, the marker edits do not
+    menu.addItem (5, ko ("커서에 슬라이스 마커 추가 (M)"), editable);
+    menu.addItem (6, ko ("슬라이스 마커 전부 삭제"), editable && ! cue->audio.slices.empty());
+    menu.addItem (7, ko ("파일의 큐 마커를 슬라이스로 가져오기"), editable && hasFile);
 
     juce::Component::SafePointer<TimeLoopsPanel> safeThis (this);
     menu.showMenuAsync (juce::PopupMenu::Options().withTargetScreenArea ({ screenPosition.x, screenPosition.y, 1, 1 }),

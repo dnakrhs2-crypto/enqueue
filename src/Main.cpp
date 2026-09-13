@@ -1,4 +1,5 @@
 #include "app/AppSettings.h"
+#include "app/UiScale.h"
 #include "app/Updater.h"
 #include "audio/AudioEngine.h"
 #include "audio/PluginHost.h"
@@ -56,6 +57,11 @@ public:
         safeMode = juce::ArgumentList ("Enqueue", commandLine).containsOption ("--safe-mode")
                    || juce::ModifierKeys::getCurrentModifiersRealtime().isShiftDown();
         PluginHost::setSafeMode (safeMode);
+
+        // 프로젝트 설정 > 일반 "글씨·화면 크기": the whole UI, set before any window exists. Safe mode starts at
+        // 100% (a scale that turned out too big for a new display is undone from the dialog).
+        if (! safeMode)
+            UiScale::apply (settings->getUiScalePercent());
 
         const auto savedDeviceState = safeMode ? nullptr : settings->getAudioDeviceState();
         const auto deviceError = engine->initialise (savedDeviceState.get());
@@ -277,6 +283,8 @@ private:
 
             if (state.isEmpty() || ! restoreWindowStateFromString (state))
                 centreWithSize (1100, 720);
+            else
+                UiScale::fitWindowIntoDisplay (*this);   // a bigger 글씨·화면 크기 (or a smaller monitor) than last time: all of the window stays in view
 
             setName ("Enqueue " + JUCEApplication::getInstance()->getApplicationVersion() + " - " + ko ("제목 없음"));
             setVisible (true);

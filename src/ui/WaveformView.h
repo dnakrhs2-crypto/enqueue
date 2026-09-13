@@ -50,6 +50,9 @@ public:
     std::function<void (juce::Point<int> screenPosition)> onContextMenu;
     /** A plain click on the wave or the ruler (nothing else under the mouse): play from there. File seconds. */
     std::function<void (double fileSeconds)> onSeekPlay;
+    /** A click while the view is disabled (show mode, CueInspector::setEditable): nothing moves, nothing plays and
+        nothing is edited; the owner may say so in the status line. */
+    std::function<void()> onLockedClick;
     /** Slice markers / counts edited (M adds one at the cursor, drag moves, double-click edits the count,
         Delete removes). 'finished' is false while a drag is in progress. */
     std::function<void (const std::vector<Slice>& slices, int firstSliceCount, bool finished)> onSlicesChanged;
@@ -70,6 +73,7 @@ public:
     void mouseDoubleClick (const juce::MouseEvent& e) override;
     void mouseWheelMove (const juce::MouseEvent& e, const juce::MouseWheelDetails& wheel) override;
     bool keyPressed (const juce::KeyPress& key) override;
+    void enablementChanged() override;
 
     static constexpr double minRegionSeconds = 0.01;
 
@@ -96,6 +100,7 @@ private:
     void zoomAround (double factor, double anchorSeconds);
     void moveSelectedPoint (double deltaSeconds, double deltaLevel);
     void commitEnvelope (bool finished);
+    void clearHover();
     void drawRuler (juce::Graphics& g) const;
     void drawEnvelope (juce::Graphics& g) const;
     void drawHandles (juce::Graphics& g) const;

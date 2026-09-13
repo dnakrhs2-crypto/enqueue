@@ -1,5 +1,6 @@
 #include "ui/WorkspaceSettingsDialog.h"
 
+#include "app/UiScale.h"
 #include "ui/UiUtils.h"
 
 namespace gocue::WorkspaceSettingsDialog
@@ -91,7 +92,8 @@ namespace
     class GeneralTab : public SettingsTab
     {
     public:
-        GeneralTab (ProjectDocument& doc) : SettingsTab (doc)
+        GeneralTab (ProjectDocument& doc, AppSettings& app, std::function<int (int)> applyScale)
+            : SettingsTab (doc), appSettings (app), applyUiScale (std::move (applyScale))
         {
             const auto& s = doc.settings;
 
@@ -149,6 +151,36 @@ namespace
                 document.setSettings (w);
             };
             addAndMakeVisible (rowSizeBox);
+
+            // this PC's, not the project's: the same show opens on a laptop and on a desk monitor
+            scaleLabel = &addLabel (ko ("글씨·화면 크기 (이 PC)"));
+
+            for (const int p : UiScale::allowedPercents)
+                scaleBox.addItem (juce::String (p) + "%" + (p == UiScale::defaultPercent ? ko (" (기본)") : juce::String()), p);
+
+            scaleBox.setSelectedId (appSettings.getUiScalePercent(), juce::dontSendNotification);
+            scaleBox.onChange = [this]
+            {
+                const int wanted = scaleBox.getSelectedId();
+
+                if (wanted <= 0)
+                    return;
+
+                appSettings.setUiScalePercent (wanted);
+                showScaleHint (wanted, applyUiScale ? applyUiScale (wanted) : wanted);
+            };
+            addAndMakeVisible (scaleBox);
+
+            scaleHint = &addLabel ({});
+            scaleHint->setFont (Palette::font (Palette::kickerSize));
+            showScaleHint (appSettings.getUiScalePercent(), UiScale::fitPercent (appSettings.getUiScalePercent(), UiScale::workAreaAt100()));
+        }
+
+        void showScaleHint (int wanted, int applied)
+        {
+            scaleHint->setText (applied < wanted ? ko ("화면이 작아 ") + juce::String (applied) + ko ("%까지만 적용됩니다")
+                                                 : ko ("창 전체가 같은 비율로 커집니다"),
+                                juce::dontSendNotification);
         }
 
         void resized() override
@@ -194,11 +226,18 @@ namespace
             row = next();
             rowSizeLabel->setBounds (row.take (230));
             rowSizeBox.setBounds (row.take (100));
+
+            row = next();
+            scaleLabel->setBounds (row.take (230));
+            scaleBox.setBounds (row.take (110));
+            scaleHint->setBounds (row.take (juce::jmax (0, row.area.getWidth() - row.x)));
         }
 
     private:
-        juce::Label *goLabel, *goHint, *panicLabel, *panicHint, *incrementLabel, *rowSizeLabel;
-        juce::ComboBox rowSizeBox;
+        juce::Label *goLabel, *goHint, *panicLabel, *panicHint, *incrementLabel, *rowSizeLabel, *scaleLabel, *scaleHint;
+        juce::ComboBox rowSizeBox, scaleBox;
+        AppSettings& appSettings;
+        std::function<int (int)> applyUiScale;
         juce::TextEditor *goEditor, *panicEditor, *incrementEditor, *openEditor, *closeEditor;
         juce::ToggleButton *hotkeysToggle, *keyUpToggle, *autoNumberToggle, *lockToggle, *openToggle, *closeToggle;
     };
@@ -358,11 +397,11 @@ namespace
     class Content : public juce::Component
     {
     public:
-        explicit Content (ProjectDocument& document)
+        Content (ProjectDocument& document, AppSettings& appSettings, std::function<int (int)> applyUiScale)
         {
             tabs.setTabBarDepth (Palette::tabBarHeight);
             tabs.setOutline (0);
-            tabs.addTab (ko ("일반"), Palette::panel, new GeneralTab (document), true);
+            tabs.addTab (ko ("일반"), Palette::panel, new GeneralTab (document, appSettings, std::move (applyUiScale)), true);
             tabs.addTab (ko ("파일"), Palette::panel, new FilesTab (document), true);
             tabs.addTab (ko ("오디오"), Palette::panel, new AudioTab (document), true);
             addAndMakeVisible (tabs);
@@ -377,7 +416,8 @@ namespace
     };
 }
 
-void show (ProjectDocument& document, juce::Component* centreAround)
+void show (ProjectDocument& document, AppSettings& appSettings, std::function<int (int percent)> applyUiScale,
+           juce::Component* centreAround)
 {
     if (dialog != nullptr)
     {
@@ -387,7 +427,7 @@ void show (ProjectDocument& document, juce::Component* centreAround)
 
     juce::DialogWindow::LaunchOptions options;
     options.dialogTitle = ko ("프로젝트 설정");
-    options.content.setOwned (new Content (document));
+    options.content.setOwned (new Content (document, appSettings, std::move (applyUiScale)));
     options.componentToCentreAround = centreAround;
     options.dialogBackgroundColour = Palette::background;
     options.escapeKeyTriggersCloseButton = true;

@@ -1,5 +1,6 @@
 #include "app/SettingsMigration.h"
 #include "app/AppSettings.h"
+#include "app/UiScale.h"
 
 namespace gocue
 {
@@ -20,6 +21,7 @@ namespace Keys
     constexpr const char* youtubeAddToQueue = "youtubeAddToQueue";
     constexpr const char* disabledPlugins   = "disabledPlugins";
     constexpr const char* lufsAverageSeconds = "lufsAverageSeconds";
+    constexpr const char* uiScalePercent    = "uiScalePercent";
 }
 
 AppSettings::AppSettings()
@@ -196,6 +198,17 @@ void AppSettings::setLufsAverageSeconds (int seconds)
             settings->setValue (Keys::lufsAverageSeconds, seconds);
             return;
         }
+}
+
+int AppSettings::getUiScalePercent() const
+{
+    return UiScale::normalise (settings->getIntValue (Keys::uiScalePercent, UiScale::defaultPercent));
+}
+
+void AppSettings::setUiScalePercent (int percent)
+{
+    if (UiScale::isAllowed (percent))
+        settings->setValue (Keys::uiScalePercent, percent);
 }
 
 void AppSettings::flush()

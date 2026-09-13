@@ -7,6 +7,7 @@
 
 #include "app/BackupManager.h"
 #include "app/Commands.h"
+#include "app/UiScale.h"
 #include "app/Updater.h"
 #include "audio/CueFileInfo.h"
 #include "model/CueNumbering.h"
@@ -214,9 +215,13 @@ MainComponent::MainComponent (AudioEngine& e, AppSettings& s, juce::ApplicationC
             controller.stopCue (id);
     };
     transport.onPanicSettings = [this] (juce::Point<int> screenPosition) { showPanicSecondsMenu (screenPosition); };
+    inspector.onStatus = [this] (const juce::String& message, bool isError) { transport.showStatus (message, isError); };
     inspector.onPreview = [this] { controller.preview(); };
     inspector.onSeekPlay = [this] (double fileSeconds)
     {
+        if (showMode)
+            return;   // the waveform refuses the click itself in show mode (WaveformView); kept here for any other caller
+
         const auto* cue = document.cues.getSelected();
 
         if (cue == nullptr || ! cue->isAudio())
@@ -1196,7 +1201,7 @@ bool MainComponent::perform (const InvocationInfo& info)
             break;
 
         case CommandIDs::workspaceSettings:
-            WorkspaceSettingsDialog::show (document, this);
+            WorkspaceSettingsDialog::show (document, settings, [this] (int percent) { return applyUiScale (percent); }, this);
             break;
 
         case CommandIDs::undo:
@@ -1943,6 +1948,19 @@ void MainComponent::editCues (const std::vector<int>& rows, const juce::String& 
         for (int row : rows)
             document.cues.update (row, mutator);
     });
+}
+
+int MainComponent::applyUiScale (int percent)
+{
+    pluginWindows.closeAll();   // a hosted editor is a native child window laid out for the old scale: reopened, it comes back right
+
+    const int applied = UiScale::apply (percent, getTopLevelComponent());
+
+    transport.showStatus (applied < UiScale::normalise (percent)
+                              ? ko ("글씨·화면 크기: 화면이 작아 ") + juce::String (applied) + ko ("%까지만 적용됩니다")
+                              : ko ("글씨·화면 크기 ") + juce::String (applied) + "%",
+                          false);
+    return applied;
 }
 
 void MainComponent::setShowMode (bool shouldBeShowMode)

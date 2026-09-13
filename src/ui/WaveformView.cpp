@@ -628,7 +628,7 @@ void WaveformView::editSliceCount (int index)
 
 void WaveformView::mouseDoubleClick (const juce::MouseEvent& e)
 {
-    if (! hasCue)
+    if (! hasCue || ! isEnabled())
         return;
 
     const int hit = findSliceNear (e.position);
@@ -665,6 +665,12 @@ void WaveformView::drawHandles (juce::Graphics& g) const
 //==============================================================================
 void WaveformView::mouseMove (const juce::MouseEvent& e)
 {
+    if (! isEnabled())   // show mode: no handle / point highlights, no resize cursors
+    {
+        clearHover();
+        return;
+    }
+
     {
         const int slice = hasCue ? findSliceNear (e.position) : -1;
 
@@ -706,6 +712,23 @@ void WaveformView::mouseExit (const juce::MouseEvent&)
     repaint();
 }
 
+void WaveformView::clearHover()
+{
+    hoverStart = hoverEnd = false;
+    hoverPoint = -1;
+    hoverSlice = -1;
+    setMouseCursor (juce::MouseCursor::NormalCursor);
+    repaint();
+}
+
+void WaveformView::enablementChanged()
+{
+    // show mode began (or ended): a drag that was under way is dropped, not committed, and no handle stays lit
+    drag = Drag::none;
+    envelopeDirty = sliceDirty = false;
+    clearHover();
+}
+
 void WaveformView::mouseDown (const juce::MouseEvent& e)
 {
     grabKeyboardFocus();
@@ -717,6 +740,17 @@ void WaveformView::mouseDown (const juce::MouseEvent& e)
     {
         if (onContextMenu)
             onContextMenu (e.getScreenPosition());
+
+        return;
+    }
+
+    if (! isEnabled())
+    {
+        // show mode (CueInspector::setEditable): display only. A stray click must neither jump a running cue nor
+        // start one, and the handles / envelope / markers are not edits either. JUCE still delivers mouse events to
+        // a disabled component (only wheel events are passed up), so this is where they stop.
+        if (onLockedClick)
+            onLockedClick();
 
         return;
     }
@@ -791,7 +825,7 @@ void WaveformView::mouseDown (const juce::MouseEvent& e)
 
 void WaveformView::mouseDrag (const juce::MouseEvent& e)
 {
-    if (! hasCue || drag == Drag::none)
+    if (! hasCue || drag == Drag::none || ! isEnabled())
         return;
 
     const double t = timeForX (e.position.x);
@@ -924,7 +958,7 @@ void WaveformView::moveSelectedPoint (double deltaSeconds, double deltaLevel)
 
 bool WaveformView::keyPressed (const juce::KeyPress& key)
 {
-    if (! hasCue)
+    if (! hasCue || ! isEnabled())
         return false;
 
     const auto mods = key.getModifiers();

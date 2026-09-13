@@ -3371,6 +3371,7 @@ CueInspector::CueInspector (ProjectDocument& doc, AudioEngine& e, AppSettings& s
     timeLoopsPanel = std::make_unique<TimeLoopsPanel> (document, engine, thumbnailCache);
     timeLoops = timeLoopsPanel.get();
     timeLoops->onPanic = [this] { if (onPanic) onPanic(); };
+    timeLoops->onStatus = [this] (const juce::String& message, bool isError) { if (onStatus) onStatus (message, isError); };
     timeLoops->onPreview = [this] { if (onPreview) onPreview(); };
     timeLoops->onSeekPlay = [this] (double fileSeconds) { if (onSeekPlay) onSeekPlay (fileSeconds); };
     timeLoops->onReset = [this] { if (onResetCue) onResetCue(); };

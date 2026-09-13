@@ -52,6 +52,8 @@ public:
     std::function<void()> onOpenPluginManager;
     /** Esc inside a text field: the edit is cancelled and this fires (wired to "stop all"). */
     std::function<void()> onPanic;
+    /** A line for the status bar (a locked click in show mode, a file without cue markers). */
+    std::function<void (const juce::String& message, bool isError)> onStatus;
     std::function<void()> onPreview;
     /** A click on the waveform: play the selected cue from that file position (a running one jumps there). */
     std::function<void (double fileSeconds)> onSeekPlay;
