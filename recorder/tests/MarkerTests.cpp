@@ -1,5 +1,7 @@
 #include "TestSupport.h"
 #include "ui/TimelineView.automation.h"
+#include "model/MarkerExport.h"
+#include <limits>
 
 using namespace gocue::recorder;
 using namespace recorder_test;
@@ -11,6 +13,52 @@ juce::String hash(const RecorderProject& p) { return RecorderSerializer::fingerp
 int runMarkerTests()
 {
     Suite suite;
+    suite.test("marker export empty and shuffled subsecond chapters use CRLF without mutating the project", []
+    {
+        RecorderProject p; p.Fs = 48000;
+        require(markerExportText(p).isEmpty(), "Empty project exported text");
+        Marker late; late.sample = 3910 * S + S - 1; late.name = juce::String::fromUTF8("마무리");
+        Marker first; first.sample = 2 * S + 1000; first.name = "Zulu";
+        Marker second; second.sample = 2 * S + 36000; second.name = "Alpha";
+        p.markers = {late, second, first}; const auto before = RecorderSerializer::toJson(p);
+        require(markerExportText(p) == juce::String::fromUTF8("00:02 Zulu\r\n00:02 Alpha\r\n1:05:10 마무리\r\n"), "Chapter order, flooring, hours or CRLF changed");
+        require(RecorderSerializer::toJson(p) == before, "Export reordered or edited the source project");
+    });
+    suite.test("marker export ties sort by name and embedded newlines become spaces", []
+    {
+        RecorderProject p; p.Fs = 48000;
+        Marker b; b.sample = 42 * S; b.name = juce::String::fromUTF8("나\r줄\n끝\v다음\f장\u0085NEL\u2028LS\u2029PS");
+        Marker a; a.sample = b.sample; a.name = juce::String::fromUTF8("가\r\n줄");
+        Marker spaces; spaces.sample = 0; spaces.name = "  unchanged  "; p.markers = {b, a, spaces};
+        require(markerExportText(p) == juce::String::fromUTF8("00:00   unchanged  \r\n00:42 가 줄\r\n00:42 나 줄 끝 다음 장 NEL LS PS\r\n"), "Tie order, whitespace preservation or newline sanitising changed");
+    });
+    suite.test("marker timecode accepts minutes hours and fractional seconds at the project rate", []
+    {
+        Sample at = -1, samples = -1;
+        require(TimelineEditController::parseTimecode("00:01.500", 60000, at) && at == 90000
+            && TimelineEditController::parseSample("90000", samples) && samples == at, "Time and sample positions disagree");
+        require(TimelineEditController::parseTimecode(" 00:42 ", 48000, at) && at == 42 * S, "Minute timecode failed");
+        require(TimelineEditController::parseTimecode("1:05:10.123", 48000, at) && at == 3910 * S + 5904, "Hour timecode failed");
+        require(TimelineEditController::parseTimecode("1:05:10", 48000, at) && at == 3910 * S, "Chapter timecode failed");
+        require(TimelineEditController::parseTimecode("1:05", 48000, at) && at == 65 * S, "Single-digit minutes must be accepted");
+        require(TimelineEditController::parseTimecode("1:5", 48000, at) && at == 65 * S, "Single-digit seconds must be accepted");
+        require(TimelineEditController::parseTimecode("1:5:7.25", 48000, at) && at == 3907 * S + 12000, "Single-digit hour fields must be accepted");
+        require(TimelineEditController::parseTimecode("00:00.005", 44100, at) && at == 221, "Fraction must round to the nearest sample");
+        require(TimelineEditController::parseTimecode("00:01.5", 60000, at) && at == 90000, "Short fraction must be decimal seconds");
+        require(TimelineEditController::parseTimecode("2562047788015215:30:07", 1, at) && at == (std::numeric_limits<Sample>::max)(), "Largest representable sample rejected");
+    });
+    suite.test("marker timecode rejects malformed out of range and overflowing input without changing the output", []
+    {
+        for (const auto* text : {"", "90000", "-00:01", "00:60", "60:00", "1:60:00", "000:01", "00:001", "00:01.", "00:01.1234", "00:01.2x", "00:01.2.3",
+                                 "1::02", ":01", "00:01:", "00: 01", "00:01 extra", "9223372036854775807:00:00", "2562047788015215:30:08"})
+        {
+            Sample at = 123;
+            require(!TimelineEditController::parseTimecode(text, 48000, at) && at == 123, text);
+        }
+        Sample at = 123;
+        require(!TimelineEditController::parseTimecode("00:01", 0, at) && at == 123, "Zero rate accepted");
+        require(!TimelineEditController::parseTimecode("2562047788015215:30:07.999", 1, at) && at == 123, "Fraction overflow accepted");
+    });
     suite.test("marker add rename colour position delete undo and jump mapping", []
     {
         RecorderDocument d; const auto p = makeTimelineUiFixture(); require(d.adopt(p, {}, {}).wasOk(), "Adopt"); TimelineEditController ui(d); Sample sought = -1;

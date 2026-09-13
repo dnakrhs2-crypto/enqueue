@@ -6,6 +6,14 @@ namespace gocue::recorder
 {
 namespace
 {
+class MarkerPrompt final : public juce::AlertWindow
+{
+public:
+    MarkerPrompt(Sample at, unsigned Fs, juce::Component* parent)
+        : AlertWindow(ko("마커 추가"), ko("마커 이름을 입력하세요. 위치 ") + formatMarkerTime(at, Fs), juce::MessageBoxIconType::NoIcon, parent)
+    {}
+    MarkerColourSwatches colours; // AlertWindow does not own its custom components.
+};
 class FormWindow : public juce::DocumentWindow
 {
 public:
@@ -83,21 +91,22 @@ void MainComponent::promptMarker()
     const auto at = session.recording() ? session.takeController().placementSample() + session.elapsed() : session.playhead();
     const auto defaultName = ko("마커 ") + juce::String(document.getProject().markers.size() + 1);
     const auto project = document.getProject().projectId;
-    auto window = std::make_unique<juce::AlertWindow>(ko("마커 추가"), ko("마커 이름을 입력하세요."), juce::MessageBoxIconType::NoIcon, this);
+    auto window = std::make_unique<MarkerPrompt>(at, document.getProject().Fs, this);
     window->addTextEditor("markerName", defaultName, ko("이름"));
+    window->addCustomComponent(&window->colours);
     window->addButton(ko("확인"), 1, juce::KeyPress(juce::KeyPress::returnKey));
     window->addButton(ko("취소"), 0, juce::KeyPress(juce::KeyPress::escapeKey));
     window->centreAroundComponent(this, window->getWidth(), window->getHeight());
     markerWindow = window.get(); markerProject = project;
     const juce::Component::SafePointer<MainComponent> safe(this);
-    const auto prompt = markerWindow;
+    const juce::Component::SafePointer<MarkerPrompt> prompt(window.get());
     window->enterModalState(true, juce::ModalCallbackFunction::create([safe, prompt, project, at, defaultName](int result)
     {
-        if (!safe || !prompt || safe->markerWindow != prompt) return;
+        if (!safe || !prompt || safe->markerWindow.getComponent() != prompt.getComponent()) return;
         safe->markerWindow = nullptr;
         if (result != 1 || safe->closeAction || project != safe->document.getProject().projectId) return;
         const auto name = prompt->getTextEditorContents("markerName");
-        safe->session.addMarker(name.trim().isEmpty() ? defaultName : name, at);
+        safe->session.addMarker(name.trim().isEmpty() ? defaultName : name, at, prompt->colours.selected());
         safe->refreshPending = true;
     }), true);
     auto* editor = window->getTextEditor("markerName");

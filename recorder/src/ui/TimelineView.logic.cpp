@@ -335,4 +335,36 @@ bool TimelineEditController::parseSample(const juce::String& input, Sample& valu
     const auto s = input.trim().toStdString(); Sample parsed = 0; const auto r = std::from_chars(s.data(), s.data() + s.size(), parsed);
     if (r.ec != std::errc{} || r.ptr != s.data() + s.size() || s.empty() || parsed < 0) return false; value = parsed; return true;
 }
+bool TimelineEditController::parseTimecode(const juce::String& input, unsigned Fs, Sample& value)
+{
+    if (Fs == 0) return false;
+    const auto parts = juce::StringArray::fromTokens(input.trim(), ":", "");
+    if (parts.size() != 2 && parts.size() != 3) return false;
+    const auto maximum = (std::numeric_limits<Sample>::max)();
+    Sample seconds = 0;
+    for (int i = 0; i < parts.size() - 1; ++i)
+    {
+        Sample field = 0;
+        if (parts[i].isEmpty() || !parts[i].containsOnly("0123456789") || !parseSample(parts[i], field)) return false;
+        // Minutes (the field before the seconds) may be typed as 1 or 2 digits and must stay below 60; hours are free-form.
+        if ((parts.size() == 2 || i == 1) && (parts[i].length() > 2 || field >= 60)) return false;
+        if (seconds > (maximum - field) / 60) return false;
+        seconds = seconds * 60 + field;
+    }
+    const auto last = parts[parts.size() - 1]; const auto dot = last.indexOfChar('.');
+    const auto whole = dot < 0 ? last : last.substring(0, dot);
+    Sample field = 0, millis = 0;
+    if (whole.isEmpty() || whole.length() > 2 || !whole.containsOnly("0123456789") || !parseSample(whole, field) || field >= 60) return false;
+    if (dot >= 0)
+    {
+        const auto fraction = last.substring(dot + 1);
+        if (fraction.isEmpty() || fraction.length() > 3 || !fraction.containsOnly("0123456789")
+            || !parseSample(fraction.paddedRight('0', 3), millis)) return false;
+    }
+    if (seconds > (maximum - field) / 60) return false;
+    seconds = seconds * 60 + field;
+    const auto fractionSamples = (millis * Fs + 500) / 1000; // nearest sample, without floating point or overflow
+    if (seconds > (maximum - fractionSamples) / Fs) return false;
+    value = seconds * Fs + fractionSamples; return true;
+}
 }

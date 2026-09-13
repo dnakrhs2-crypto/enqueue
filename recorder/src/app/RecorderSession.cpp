@@ -520,9 +520,9 @@ void RecorderSession::addMarker()
 {
     addMarker(k("마커"), recording() ? take.placementSample() + elapsed() : playhead());
 }
-void RecorderSession::addMarker(const juce::String& name, Sample at)
+void RecorderSession::addMarker(const juce::String& name, Sample at, const juce::String& colour)
 {
-    Marker m; m.name = name; m.sample = at;
+    Marker m; m.name = name; m.sample = at; m.colour = colour;
     if (recording()) recordedMarkers.push_back(m);
     else document.addMarker(std::move(m));
 }

@@ -102,4 +102,9 @@ juce::String formatRecorderTime(Sample sample, unsigned Fs)
     const auto millis = Fs ? (nonnegative % Fs) * 1000 / Fs : 0;
     return juce::String::formatted("%02lld:%02lld:%02lld.%03lld", seconds / 3600, seconds / 60 % 60, seconds % 60, millis);
 }
+juce::String formatMarkerTime(Sample sample, unsigned Fs)
+{
+    const auto time = formatRecorderTime(sample, Fs);
+    return time.startsWith("00:") ? time.substring(3) : time.startsWithChar('0') ? time.substring(1) : time;
+}
 }

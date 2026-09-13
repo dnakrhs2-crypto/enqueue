@@ -4,6 +4,7 @@
 #include "ui/TimelineView.automation.h"
 #include "ui/RecordView.h"
 #include "ui/ShortcutSettingsPanel.h"
+#include "model/MarkerExport.h"
 #include "playback/ImportedAudioCache.h"
 #include "export/TimelineExporter.h"
 #include "storage/EditJournal.h"
@@ -15,6 +16,16 @@ namespace gocue::recorder
 {
 struct TimelineUxTestAccess
 {
+    static MarkerPanel& markers(TimelineView& view) { return view.markerPanel; }
+    static void selectMarker(TimelineView& view, int row) { view.markerPanel.list.selectRow(row); }
+    static juce::String markerTime(TimelineView& view, int row) { return view.markerPanel.rowTimeText(row); }
+    static juce::TextEditor& markerPosition(TimelineView& view) { return view.markerPanel.position; }
+    static juce::TextEditor& markerName(TimelineView& view) { return view.markerPanel.name; }
+    static MarkerColourSwatches& markerColours(TimelineView& view) { return view.markerPanel.colours; }
+    static void applyMarker(TimelineView& view) { view.markerPanel.change.onClick(); }
+    static juce::TextButton& markerExport(TimelineView& view) { return view.markerPanel.exportText; }
+    static juce::File markerExportDefault(TimelineView& view) { return view.markerPanel.defaultExportFile(); }
+    static void markerExportFile(TimelineView& view, std::function<juce::File()> choose) { view.markerPanel.chooseExportFileForTesting = std::move(choose); }
     static juce::TextButton* button(const TimelineView& view, TimelineAction action)
     { const auto it = view.buttons.find(action); return it == view.buttons.end() ? nullptr : it->second.get(); }
     static std::size_t buttonCount(const TimelineView& view) { return view.buttons.size(); }
@@ -69,6 +80,11 @@ using namespace gocue::recorder;
 using namespace recorder_test;
 namespace
 {
+juce::Button& swatch(MarkerColourSwatches& colours, const juce::String& hex)
+{
+    for (auto* child : colours.getChildren()) if (auto* button = dynamic_cast<juce::Button*>(child); button && button->getComponentID() == hex) return *button;
+    throw std::runtime_error("Marker colour swatch missing");
+}
 juce::Component* rowsOf(TimelineView& view)
 {
     for (auto* child : view.getChildren()) if (auto* viewport = dynamic_cast<juce::Viewport*>(child))
@@ -168,6 +184,127 @@ int runTimelineUxTests()
 {
     juce::ScopedJuceInitialiser_GUI gui;
     Suite suite;
+    suite.test("marker panel shows compact time and accepts time or exact sample positions", []
+    {
+        RecorderDocument d; d.newProject("Markers", 60000); TimelineView v(d); v.setSize(1180, 620);
+        require(v.edits.addMarker(ko("인트로"), "#123456").wasOk(), "Marker fixture"); v.refresh(false, 0, {});
+        TimelineUxTestAccess::selectMarker(v, 0);
+        require(TimelineUxTestAccess::markerTime(v, 0) == "00:00.000" && TimelineUxTestAccess::markerPosition(v).getText() == "00:00.000", "Panel still shows sample numbers");
+        for (const auto* text : {"00:01.500", "90000"})
+        {
+            TimelineUxTestAccess::markerPosition(v).setText(text, false); TimelineUxTestAccess::applyMarker(v);
+            require(d.getProject().markers[0].sample == 90000 && d.getProject().markers[0].colour == "#123456", "Time/sample input or legacy colour changed");
+            require(TimelineUxTestAccess::markerPosition(v).getText() == "00:01.500" && TimelineUxTestAccess::markerTime(v, 0) == "00:01.500", "Selection or painted row is not time");
+        }
+        for (const auto* text : {"00:59", "59:59.999", "1:00:00.000", "10:00:00.001"})
+        {
+            TimelineUxTestAccess::markerPosition(v).setText(text, false); TimelineUxTestAccess::applyMarker(v);
+            require(TimelineUxTestAccess::markerTime(v, 0) == (juce::String(text).containsChar('.') ? juce::String(text) : juce::String(text) + ".000"), "Hour boundary or zero padding changed");
+        }
+        const auto before = d.snapshot(); const auto depth = d.getHistory().undoDepth();
+        for (const auto* text : {"00:61", "not a time", "-1", "1:02:03.0000"})
+        {
+            TimelineUxTestAccess::markerPosition(v).setText(text, false); TimelineUxTestAccess::applyMarker(v);
+            require(d.snapshot() == before && d.getHistory().undoDepth() == depth, "Invalid position edited the document");
+            require(TimelineUxTestAccess::status(v).contains(ko("마커 위치는 시간(mm:ss, mm:ss.mmm, h:mm:ss.mmm) 또는 정수 샘플로 입력하세요.")), "Position error omitted accepted formats");
+        }
+        const auto id = d.getProject().markers[0].markerId;
+        require(v.edits.editMarker(id, 90001, "Exact", "#123456").wasOk(), "Submillisecond fixture"); v.refresh(false, 0, {});
+        TimelineUxTestAccess::markerName(v).setText(ko("이름만 변경"), false); TimelineUxTestAccess::applyMarker(v);
+        require(d.getProject().markers[0].sample == 90001 && d.getProject().markers[0].name == ko("이름만 변경"), "Rename quantised the stored sample");
+    });
+    suite.test("marker swatches preserve legacy colours expose named focusable buttons and wrap at panel width", []
+    {
+        MarkerColourSwatches colours; int picks = 0; juce::String picked;
+        colours.onPick = [&](const juce::String& hex) { ++picks; picked = hex; };
+        const char* values[] = {"#4c8dff", "#e0443a", "#f28c28", "#e2a93b", "#4ec27a", "#2bb5b5", "#8b7cf6", "#e76fb1", "#ffffff", "#9a9a9a"};
+        const juce::String names[] = {ko("파랑"), ko("빨강"), ko("주황"), ko("노랑"), ko("초록"), ko("청록"), ko("보라"), ko("분홍"), ko("흰색"), ko("회색")};
+        require(colours.getNumChildComponents() == 10 && colours.selected() == values[0], "Default palette changed");
+        colours.setSize(246, colours.heightForWidth(246));
+        for (int i = 0; i < 10; ++i)
+        {
+            auto* button = dynamic_cast<juce::Button*>(colours.getChildComponent(i));
+            require(button && button->getComponentID() == values[i] && button->getTitle() == names[i] && button->getTooltip() == names[i]
+                && button->getWantsKeyboardFocus(), "Palette order, name or keyboard accessibility changed");
+            require(button->getWidth() == 22 && button->getHeight() == 22 && colours.getLocalBounds().contains(button->getBounds()), "Swatch outside panel bounds");
+        }
+        require(colours.getChildComponent(9)->getY() == 28, "Narrow palette must wrap to a second row");
+        colours.setSelected("#E0443A"); require(colours.selected() == "#E0443A" && picks == 0 && swatch(colours, "#e0443a").getToggleState(), "Selection emitted pick or lost hex casing");
+        colours.setSelected("#123456"); require(colours.selected() == "#123456" && picks == 0, "Legacy colour replaced");
+        for (auto* child : colours.getChildren()) require(!dynamic_cast<juce::Button*>(child)->getToggleState(), "Legacy colour selects a palette entry");
+        swatch(colours, "#ffffff").onClick();
+        require(picks == 1 && picked == "#ffffff" && colours.selected() == picked && swatch(colours, picked).getToggleState(), "Pick failed to update selection and callback");
+        juce::Image image(juce::Image::ARGB, 22, 22, true, juce::SoftwareImageType{}); juce::Graphics g(image);
+        swatch(colours, "#ffffff").paintEntireComponent(g, true);
+        require(image.getPixelAt(11, 11) == Palette::background && image.getPixelAt(5, 11) == juce::Colours::white, "White selection has no contrasting inner dot");
+        colours.setEnabled(false); swatch(colours, "#e0443a").onClick();
+        require(!swatch(colours, "#e0443a").isEnabled() && picks == 1 && colours.selected() == "#ffffff", "Disabled palette accepted a pick");
+    });
+    suite.test("marker swatch edit preserves name and exact sample in one journal transaction and obeys locks", []
+    {
+        struct Journal : IEditJournalSink
+        {
+            std::vector<EditDelta> entries;
+            juce::Result enqueue(const EditDelta& delta) override { entries.push_back(delta); return juce::Result::ok(); }
+        } journal;
+        RecorderDocument d; d.newProject("Markers", 60000); TimelineView v(d); v.setSize(1180, 620);
+        v.edits.followPlayhead(90001); require(v.edits.addMarker(ko("저장된 이름"), "#123456").wasOk(), "Colour edit fixture");
+        v.refresh(false, 0, {}); TimelineUxTestAccess::selectMarker(v, 0); d.setJournalSink(&journal);
+        const auto before = d.snapshot(); const auto depth = d.getHistory().undoDepth();
+        TimelineUxTestAccess::markerName(v).setText("Unsubmitted name", false); TimelineUxTestAccess::markerPosition(v).setText("00:42", false);
+        auto& colours = TimelineUxTestAccess::markerColours(v); swatch(colours, "#8b7cf6").onClick();
+        const auto& marker = d.getProject().markers[0];
+        require(marker.sample == 90001 && marker.name == ko("저장된 이름") && marker.colour == "#8b7cf6", "Swatch submitted pending name/position or lost precision");
+        require(journal.entries.size() == 1 && d.getHistory().undoDepth() == depth + 1, "Swatch created more than one edit");
+        const auto& delta = journal.entries[0];
+        require(delta.entities.size() == 1 && delta.entities[0].entityId == marker.markerId && delta.entities[0].value["colour"].toString() == "#8b7cf6", "Marker colour omitted from journal");
+        require(RecorderSerializer::toJson(EditJournal::apply(*before, EditJournal::payload(*before, delta, d.getProject()))) == RecorderSerializer::toJson(d.getProject()), "Colour journal replay changed the marker");
+        require(v.invoke(TimelineAction::undo).wasOk() && d.getProject().markers[0].colour == "#123456", "Colour undo lost legacy value");
+        require(v.invoke(TimelineAction::redo).wasOk() && d.getProject().markers[0].colour == "#8b7cf6", "Colour redo failed");
+        const auto locked = d.snapshot(); const auto count = journal.entries.size();
+        for (const bool documentLock : {false, true})
+        {
+            d.setRecordingStructureLock(documentLock); v.refresh(!documentLock, 0, {});
+            require(!colours.isEnabled() && !swatch(colours, "#e0443a").isEnabled(), "Locked swatches remain enabled");
+            swatch(colours, "#e0443a").onClick();
+            require(d.snapshot() == locked && journal.entries.size() == count, "Locked swatch edited the document");
+        }
+        d.setRecordingStructureLock(false); d.setJournalSink(nullptr);
+    });
+    suite.test("marker text export writes exact UTF-8 chapters and retains status while locked", []
+    {
+        RecorderDocument d; d.newProject(ko("챕터 프로젝트")); TimelineView v(d); v.setSize(1180, 620);
+        juce::TemporaryFile output(".txt"); int choices = 0;
+        TimelineUxTestAccess::markerExportFile(v, [&] { ++choices; return output.getFile(); });
+        require(!TimelineUxTestAccess::markerExport(v).isEnabled(), "Empty export enabled"); TimelineUxTestAccess::markerExport(v).onClick();
+        require(choices == 0 && !output.getFile().existsAsFile(), "Empty export invoked the chooser");
+        require(TimelineUxTestAccess::markerExportDefault(v) == juce::File::getSpecialLocation(juce::File::userDocumentsDirectory).getChildFile(ko("챕터 프로젝트 마커.txt")), "Unsaved project default path changed");
+        v.edits.followPlayhead(42 * 48000 + 47999); require(v.edits.addMarker(ko("본론\r\n시작")).wasOk(), "Export fixture");
+        v.edits.followPlayhead(2 * 48000); require(v.edits.addMarker(ko("인트로")).wasOk(), "Export fixture");
+        const auto projectFile = output.getFile().getSiblingFile("project.recorder"); require(d.adopt(d.getProject(), projectFile, {}).wasOk(), "Saved project context");
+        require(TimelineUxTestAccess::markerExportDefault(v) == projectFile.getSiblingFile(ko("챕터 프로젝트 마커.txt")), "Saved project default path changed");
+        d.setRecordingStructureLock(true); v.refresh(true, 0, {});
+        const auto before = d.snapshot(); const auto depth = d.getHistory().undoDepth();
+        require(TimelineUxTestAccess::markerExport(v).isEnabled(), "Recording lock blocked read-only export");
+        TimelineUxTestAccess::markerExport(v).onClick();
+        const auto expected = markerExportText(*before); juce::MemoryBlock bytes;
+        require(choices == 1 && output.getFile().loadFileAsData(bytes) && bytes == juce::MemoryBlock(expected.toRawUTF8(), expected.getNumBytesAsUTF8()), "File has BOM, wrong encoding, line endings or content");
+        const auto message = ko("마커 2개를 내보냈습니다: ") + output.getFile().getFileName();
+        require(TimelineUxTestAccess::status(v).contains(message) && TimelineUxTestAccess::statusTooltip(v).contains(message), "Export notice lost after finish");
+        v.refresh(true, 0, {}); require(TimelineUxTestAccess::status(v).contains(message), "Refresh erased export notice");
+        require(d.snapshot() == before && d.getHistory().undoDepth() == depth, "Read-only export edited the document");
+        require(output.getFile().replaceWithText("obsolete trailing data"), "Existing export fixture");
+        TimelineUxTestAccess::markerExport(v).onClick(); bytes.reset();
+        require(output.getFile().loadFileAsData(bytes) && bytes == juce::MemoryBlock(expected.toRawUTF8(), expected.getNumBytesAsUTF8()), "Export failed to replace existing content");
+        TimelineUxTestAccess::markerExportFile(v, [] { return juce::File(); }); TimelineUxTestAccess::markerExport(v).onClick();
+        require(TimelineUxTestAccess::status(v).contains(message), "Cancelled export changed the status");
+        const auto bad = output.getFile().getChildFile("unwritable.txt");
+        TimelineUxTestAccess::markerExportFile(v, [bad] { return bad; }); TimelineUxTestAccess::markerExport(v).onClick();
+        require(TimelineUxTestAccess::status(v).contains(ko("마커를 저장할 수 없습니다. ") + bad.getFullPathName()), "Write failure did not reach timeline status");
+        bytes.reset();
+        require(output.getFile().loadFileAsData(bytes) && bytes == juce::MemoryBlock(expected.toRawUTF8(), expected.getNumBytesAsUTF8()) && d.snapshot() == before, "Failed export changed the source file or project");
+        d.setRecordingStructureLock(false);
+    });
     suite.test("toolbar and edit menu expose only the retained actions", []
     {
         RecorderDocument d; adopt(d); TimelineView v(d); v.setSize(1180, 620);

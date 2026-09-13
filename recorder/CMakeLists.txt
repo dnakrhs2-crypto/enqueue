@@ -291,7 +291,7 @@ add_test(NAME RecorderQueueIsolation COMMAND RecorderTests --suite queue-isolati
 # Round 14: preserve round-13 declarations/ABI, compile its completed implementation
 # once from playback. No edits to the shared model or another round's source list.
 set_source_files_properties(src/model/RenderPlanCompiler.cpp PROPERTIES HEADER_FILE_ONLY TRUE)
-target_sources(RecorderModel PRIVATE src/playback/RenderPlanCompiler.cpp src/audio/MicroFade.cpp)
+target_sources(RecorderModel PRIVATE src/playback/RenderPlanCompiler.cpp src/audio/MicroFade.cpp src/model/MarkerExport.cpp)
 # The existing RecorderImport target owns juce_audio_formats. Recorder/Probe/Tests
 # already link it; do not compile a second copy with different MP3 definitions.
 target_sources(RecorderTests PRIVATE tests/AudioRenderFixtures.cpp tests/AudioCutRenderTests.cpp tests/PlaybackQueueTests.cpp)
@@ -303,7 +303,7 @@ add_library(RecorderTimelineLogic STATIC src/ui/TimelineView.logic.cpp src/ui/Ti
 target_link_libraries(RecorderTimelineLogic PUBLIC RecorderModel)
 set_property(TARGET RecorderTimelineLogic PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 target_compile_options(RecorderTimelineLogic PRIVATE /utf-8 /W4 /permissive- /EHsc)
-target_sources(Recorder PRIVATE src/ui/ClipInspector.cpp src/ui/TrackHeader.cpp src/ui/MarkerPanel.cpp src/ui/TimelineView.scenario.cpp)
+target_sources(Recorder PRIVATE src/ui/ClipInspector.cpp src/ui/TrackHeader.cpp src/ui/MarkerPanel.cpp src/ui/MarkerColourSwatches.cpp src/ui/TimelineView.scenario.cpp)
 target_link_libraries(Recorder PRIVATE RecorderTimelineLogic)
 target_sources(RecorderProbe PRIVATE tools/UiProbe.cpp)
 target_link_libraries(RecorderProbe PRIVATE RecorderTimelineLogic)
@@ -397,7 +397,7 @@ add_test(NAME RecorderDualPlayback COMMAND RecorderTests --suite dual-playback)
 add_test(NAME RecorderSeekGeneration COMMAND RecorderTests --suite seek-generation)
 # Headless component layout/paint uses the unchanged product widgets without HWNDs.
 target_sources(RecorderTests PRIVATE src/ui/TimelineView.cpp src/ui/RecorderTransportBar.cpp
-    src/ui/TrackHeader.cpp src/ui/ClipInspector.cpp src/ui/MarkerPanel.cpp src/ui/RecordView.cpp)
+    src/ui/TrackHeader.cpp src/ui/ClipInspector.cpp src/ui/MarkerPanel.cpp src/ui/MarkerColourSwatches.cpp src/ui/RecordView.cpp)
 target_link_libraries(RecorderTests PRIVATE juce::juce_gui_extra)
 target_sources(Recorder PRIVATE src/ui/ShortcutSettingsPanel.cpp)
 target_sources(Recorder PRIVATE src/ui/TimelineUxScenario.cpp)

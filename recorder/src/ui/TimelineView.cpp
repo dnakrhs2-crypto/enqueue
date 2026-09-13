@@ -76,6 +76,7 @@ TimelineView::TimelineView(RecorderDocument& d) : edits(d), rows(*this), documen
     for (auto* button : {&menuButton, &snapButton, &rangeButton}) button->getProperties().set("recorderFontSize", 12.0f);
     menuButton.getProperties().set("recorderMenuArrow", true);
     inspector.onEdit = [this](const juce::Result& r) { finish(r); }; markerPanel.onEdit = [this](const juce::Result& r) { finish(r, false); };
+    markerPanel.onStatusChanged = [this](const juce::String& text) { editStatus = text; updateControls(); };
     markerPanel.onAddRequested = [this] { if (onAddMarkerRequested) onAddMarkerRequested(); else finish(edits.addMarker(), false); };
     edits.onSeek = [this](Sample at, bool released) { playhead = at; if (onScrub) onScrub(at, released); reveal(at); };
     refresh(false, 0, {});
@@ -230,7 +231,7 @@ void TimelineView::updateControls()
     inspector.refresh(); markerPanel.refresh();
     juce::String info = editStatus.isNotEmpty() ? editStatus : ko("클립 위쪽 띠 드래그 = 이동 · 아래쪽 드래그 = 구간 선택(Delete로 잘라내기) · Shift/Ctrl 다중 선택 · 빈 곳/Shift+눈금 드래그도 구간 선택");
     if (const auto r = edits.selectedRange()) info = ko("선택 구간 [") + juce::String(r->start) + ", " + juce::String(r->start + r->length) + ko(") 샘플 · ") + info;
-    if (edits.isLocked()) info = ko("녹화 중 · 구조 편집·스크럽 잠금 · 프리뷰와 마커 추가 가능");
+    if (edits.isLocked()) info = ko("녹화 중 · 구조 편집·스크럽 잠금 · 프리뷰와 마커 추가 가능") + (editStatus.isNotEmpty() ? ko(" · ") + editStatus : juce::String());
     const auto& projectTracks = document.getProject().tracks;
     const auto hiddenCount = std::count_if(projectTracks.begin(), projectTracks.end(), [](const Track& t) { return t.hidden; });
     if (hiddenCount > 0) info += ko(" · 숨긴 트랙 ") + juce::String(hiddenCount) + ko("개는 편집 메뉴에서 보이기");

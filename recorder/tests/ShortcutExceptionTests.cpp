@@ -102,6 +102,18 @@ namespace shortcut_exception_tests
 using namespace gocue::recorder;
 using recorder_test::require;
 using Access = ShortcutExceptionTestAccess;
+MarkerColourSwatches& markerSwatches(juce::AlertWindow& prompt)
+{
+    require(prompt.getNumCustomComponents() == 1, "Marker dialog must contain its colour swatches");
+    auto* colours = dynamic_cast<MarkerColourSwatches*>(prompt.getCustomComponent(0));
+    require(colours != nullptr, "Marker custom component is not the colour palette"); return *colours;
+}
+juce::Button& markerSwatch(juce::AlertWindow& prompt, const juce::String& hex)
+{
+    for (auto* child : markerSwatches(prompt).getChildren())
+        if (auto* button = dynamic_cast<juce::Button*>(child); button && button->getComponentID() == hex) return *button;
+    throw std::runtime_error("Requested dialog swatch missing");
+}
 struct Folder
 {
     juce::File root = juce::File::getSpecialLocation(juce::File::tempDirectory).getChildFile("recorder-keys-" + newId());
@@ -288,13 +300,29 @@ int runShortcutExceptionTests()
     {
         MainFixture f; Access::cursor(f.main, 2345); Access::markerButton(f.main);
         auto* prompt = Access::marker(f.main); require(prompt && prompt->isCurrentlyModal(), "Asynchronous marker prompt missing");
+        require(markerSwatches(*prompt).selected() == "#4c8dff", "Marker dialog does not default to blue");
+        require(prompt->getDescription().contains(ko("마커 이름을 입력하세요. 위치 ") + formatMarkerTime(2345, f.document.getProject().Fs)), "Marker prompt omitted the captured time");
         auto* editor = prompt->getTextEditor("markerName"); focus(f.main, *editor);
         require(editor->getText() == ko("마커 1") && editor->getHighlightedRegion().getLength() == editor->getText().length(), "Default name must be fully selected");
         snapshot(*prompt, "marker-prompt.png");
         const auto name = ko("  도입 · 후렴 → 끝  "); editor->setText(name); Access::cursor(f.main, 9876);
         prompt->triggerButtonClick(ko("확인")); until([&] { pump(); return Access::marker(f.main) == nullptr; });
         require(f.document.getProject().markers.size() == 1 && f.document.getProject().markers[0].sample == 2345
-            && f.document.getProject().markers[0].name == name, "Confirm changed the captured sample or trimmed the name");
+            && f.document.getProject().markers[0].name == name && f.document.getProject().markers[0].colour == "#4c8dff", "Confirm changed the captured sample, name or default colour");
+    });
+    suite.test("Marker dialog colour swatch supports keyboard selection and confirms the chosen colour", []
+    {
+        MainFixture f; Access::cursor(f.main, 72000); Access::markerButton(f.main);
+        auto* prompt = Access::marker(f.main); require(prompt != nullptr, "Marker prompt missing");
+        require(markerSwatches(*prompt).selected() == "#4c8dff", "Default blue swatch missing");
+        auto& red = markerSwatch(*prompt, "#e0443a"); focus(f.main, red);
+        require(red.getWantsKeyboardFocus() && red.getTitle() == ko("빨강"), "Dialog colour is not keyboard accessible");
+        require(red.getPeer()->handleKeyPress(juce::KeyPress::returnKey, 0), "Swatch did not accept keyboard activation");
+        until([&] { pump(); require(Access::marker(f.main) == prompt, "Keyboard colour selection confirmed the dialog"); return markerSwatches(*prompt).selected() == "#e0443a"; });
+        require(Access::marker(f.main) == prompt && f.document.getProject().markers.empty(), "Choosing colour confirmed the dialog");
+        prompt->triggerButtonClick(ko("확인")); until([&] { pump(); return Access::marker(f.main) == nullptr; });
+        require(f.document.getProject().markers.size() == 1 && f.document.getProject().markers[0].sample == 72000
+            && f.document.getProject().markers[0].colour == "#e0443a", "Confirmed marker lost the picked colour or captured position");
     });
     suite.test("Timeline marker hook and M share one prompt; Enter defaults, Escape and cancel discard", []
     {
@@ -323,6 +351,7 @@ int runShortcutExceptionTests()
         require(f.session.takeController().placementSample() > 0, "Recording fixture needs a nonzero placement");
         const auto at = f.session.takeController().placementSample() + f.session.elapsed();
         Access::markerButton(f.main); auto* prompt = Access::marker(f.main); require(prompt != nullptr, "Recording marker prompt missing");
+        markerSwatch(*prompt, "#2bb5b5").onClick();
         auto* editor = prompt->getTextEditor("markerName"); focus(f.main, *editor); editor->setText(ko("녹화 지점"));
         editor->getPeer()->handleKeyPress(juce::KeyPress::spaceKey, ' ');
         require(!f.main.routeShortcut(juce::KeyPress(juce::KeyPress::spaceKey), editor), "Marker text leaked Space");
@@ -332,11 +361,11 @@ int runShortcutExceptionTests()
         const auto name = editor->getText(); prompt->triggerButtonClick(ko("확인"));
         until([&] { pump(); return Access::marker(f.main) == nullptr; });
         const auto& queued = Access::queuedMarkers(f.main);
-        require(queued.size() == 1 && queued[0].sample == at && queued[0].name == name, "Live marker used confirmation time");
+        require(queued.size() == 1 && queued[0].sample == at && queued[0].name == name && queued[0].colour == "#2bb5b5", "Live marker lost request time, name or colour");
         require(f.document.getProject().markers.empty(), "Live marker published before placement");
         f.finish(); Access::tick(f.main);
         require(f.document.getProject().markers.size() == 1 && f.document.getProject().markers[0].sample == at
-            && f.document.getProject().markers[0].name == name, "Placed take lost the named marker");
+            && f.document.getProject().markers[0].name == name && f.document.getProject().markers[0].colour == "#2bb5b5", "Placed take lost the named marker or colour");
     });
     suite.test("Project replacement and shutdown dismiss marker prompts and invalidate pending confirmation", []
     {

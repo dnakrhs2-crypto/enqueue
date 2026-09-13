@@ -23,4 +23,5 @@ CalibrationKey calibrationKey(const UserSettings&, unsigned camera);
 CalibrationMatch calibrationMatches(const UserSettings&, const std::vector<CalibrationProfile>&);
 juce::String calibrationStatusText(CalibrationMatch);
 juce::String formatRecorderTime(Sample, unsigned Fs);
+juce::String formatMarkerTime(Sample, unsigned Fs);
 }
