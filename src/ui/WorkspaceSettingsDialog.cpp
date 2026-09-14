@@ -384,7 +384,11 @@ namespace
         struct Tabs : public juce::TabbedComponent
         {
             explicit Tabs (Content& c) : juce::TabbedComponent (juce::TabbedButtonBar::TabsAtTop), owner (c) {}
-            void currentTabChanged (int, const juce::String&) override { owner.grabKeyboardFocus(); }
+            void currentTabChanged (int, const juce::String&) override
+            {
+                if (owner.isShowing())   // the first addTab() runs in the constructor, before the dialog exists
+                    owner.grabKeyboardFocus();
+            }
             Content& owner;
         };
 

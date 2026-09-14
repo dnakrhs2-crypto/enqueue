@@ -67,10 +67,11 @@ public:
     /** Cancels the cue's scheduled starts (a pre-wait, a pending restart) and the auto-continue starts put on behind
         them; a running instance of the cue is left alone. */
     void cancelScheduledStart (const juce::Uuid& cueId);
-    /** The active cues panel's × on a waiting card: a wait cue's wait is stopped (stopCue), the current child of a
-        running playlist takes the playlist with it (the list cannot go on without it), any other scheduled start is
-        cancelled with the chain behind it (cancelScheduledStart). */
-    void cancelWait (const juce::Uuid& cueId);
+    /** The active cues panel's × on a waiting card, by what the card showed: a post-wait = the scheduled start of the
+        cue given (the next cue) goes, a run of that cue started on its own stays; a wait cue's wait is stopped (stopCue);
+        a pre-wait = the current child of a running playlist takes the playlist with it (the list cannot go on without
+        it), any other scheduled start is cancelled with the chain behind it (cancelScheduledStart). */
+    void cancelWait (const juce::Uuid& cueId, WaitProgress::Kind kind);
     /** Fires one cue the way a hotkey / cart button does: the cue alone (no pre-wait, no sequence, no playhead move),
         with its fade-stop-others and duck. */
     GoResult fire (const juce::Uuid& cueId, bool audition = false);
@@ -219,8 +220,15 @@ private:
         (the follow a sequence walk put on right behind the scheduled start that is firing). */
     void cancelPreviousRun (const juce::Uuid& cueId);
     /** Cancels the auto-continue starts a sequence walk put on behind 'owner's start 'startId' (0 = an immediate start),
-        and the starts behind those in turn: scheduled relative to that start, they go with it. */
+        and the starts behind those in turn: scheduled relative to that start, they go with it (each with its own run). */
     void cancelChainBehind (const juce::Uuid& owner, int startId);
+    /** The same for every start of 'owner' at once (the cue's whole run goes) - all but the chain behind 'keepStartId'
+        (a restart keeps the run that is starting now; -1 = keep none). A fired start's own entry may have been swept
+        already, so the chains are found by their owner, not through that entry. */
+    void cancelChainsOf (const juce::Uuid& owner, int keepStartId = -1);
+    /** The observer / step entries the walk put on for 'owner's scheduled start 'startId' (its follow): a cancelled
+        start takes them with it, another run's follow (a different id) stays. Nothing for 0 (no run tag). */
+    void cancelRunOf (const juce::Uuid& owner, int startId);
     /** The contributions (duck cue -> dB) the running duck cues put on a cue that starts now. */
     std::map<juce::Uuid, double> ducksFor (const juce::Uuid& cueId) const;
     /** Takes a duck cue's contributions off everyone (over its duck time) and forgets it. */

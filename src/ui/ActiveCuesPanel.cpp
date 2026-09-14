@@ -56,7 +56,7 @@ public:
             const auto target = stopTarget.isNull() ? id : stopTarget;
 
             if (waiting && owner.onCancelWaitRequested)
-                owner.onCancelWaitRequested (target);
+                owner.onCancelWaitRequested (target, mainKind);
             else if (owner.onStopRequested)
                 owner.onStopRequested (target);
             else
@@ -96,7 +96,9 @@ public:
         infinite = p.progress < 0.0;
         pauseButton.setVisible (true);
         pauseButton.setButtonText (paused ? ko ("재개") : ko ("일시정지"));
-        panicButton.setTooltip (ko ("이 큐 페이드 정지"));
+        panicButton.setTooltip (extraWait != nullptr && extraWait->kind == WaitProgress::Kind::postWait
+                                    ? ko ("이 큐 페이드 정지 (뒤따르는 자동 계속은 그대로 진행)")
+                                    : ko ("이 큐 페이드 정지 (이 큐의 예약된 시작은 취소)"));
         setNames (cue);
         stateText = paused ? ko ("일시정지") : fadingOut ? ko ("페이드 아웃") : ko ("재생 중");
         extraText = extraWait != nullptr ? waitPillText (*extraWait, now) : juce::String();
@@ -114,6 +116,7 @@ public:
     void updateWait (const WaitProgress& w, const WaitProgress* extraWait, const Cue* cue, double now)
     {
         waiting = true;
+        mainKind = w.kind;
         stopTarget = w.kind == WaitProgress::Kind::postWait ? w.startsCueId : juce::Uuid::null();   // the next cue's start
         paused = false;
         fadingOut = false;
@@ -148,9 +151,10 @@ public:
         extraBounds = {};
         if (extraText.isNotEmpty())
         {
-            // the countdown pill keeps its whole text where it can: the name gives way first (it ellipsises)
+            // the countdown pill keeps its whole text: the name gives way (it ellipsises), down to a stub of it
+            constexpr int nameStub = 48;
             const int extraWidth = juce::GlyphArrangement::getStringWidthInt (pillFont, extraText) + 14;
-            extraBounds = top.removeFromRight (juce::jmin (extraWidth, juce::jmax (0, top.getWidth() * 3 / 5)));
+            extraBounds = top.removeFromRight (juce::jmin (extraWidth, juce::jmax (0, top.getWidth() - nameStub)));
             top.removeFromRight (8);
         }
         const int numberWidth = juce::GlyphArrangement::getStringWidthInt (numberLabel.getFont(), numberLabel.getText());
@@ -260,6 +264,7 @@ private:
     AudioEngine& engine;
     const juce::Uuid id;
     juce::Uuid stopTarget = juce::Uuid::null();   // what the panic button acts on when it is not this cue (a post-wait card: the next cue)
+    WaitProgress::Kind mainKind = WaitProgress::Kind::preWait;   // what a waiting card shows: the cancel is told
     juce::TextButton pauseButton, panicButton;
     juce::Label numberLabel, nameLabel, timeLabel, remainingLabel;
     juce::Rectangle<int> barArea, stateBounds, extraBounds, colourBounds;

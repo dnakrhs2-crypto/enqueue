@@ -73,6 +73,8 @@ public:
     std::function<void (int index, bool collapsed)> onToggleCollapse;
     /** Numbers are unique across every list / cart: the owner checks the whole project (default: this list). */
     std::function<bool (const juce::String& number, const juce::Uuid& exceptId)> isNumberTaken;
+    /** A fade / devamp / control target may live in another list: the owner looks it up project-wide (default: this list). */
+    std::function<bool (const juce::Uuid& id)> cueExists;
 
     /** Commits a cell edit in progress right now (before the list is swapped for another one). */
     void finishEditing();
@@ -124,6 +126,7 @@ private:
     void playheadChanged (int index) override;
 
     const AudioEngine::PlayingCue* findPlaying (const juce::Uuid& id) const;
+    bool targetExists (const juce::Uuid& id) const { return cueExists ? cueExists (id) : cues.indexOf (id) >= 0; }
     const WaitProgress* findWait (const juce::Uuid& id, WaitProgress::Kind kind) const;
     /** Any wait of the cue (pre-wait, post-wait or its own wait): the row is tinted. */
     const WaitProgress* anyWait (const juce::Uuid& id) const;

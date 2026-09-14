@@ -143,19 +143,23 @@ void Scheduler::tick()
 
         for (auto& e : watches)
         {
-            inFlight.erase (e.id);
-
             if (cancelAllDuringTick)
                 break;
 
             if (cancelledDuringTick.count (e.id) != 0)
+            {
+                inFlight.erase (e.id);
                 continue;
+            }
 
             if (e.condition && ! e.condition())
             {
+                inFlight.erase (e.id);
                 entries.push_back (std::move (e));   // an earlier action changed its mind: keep watching
                 continue;
             }
+
+            inFlight.erase (e.id);   // pending right up to its action (the re-check above included)
 
             if (e.action)
                 e.action();

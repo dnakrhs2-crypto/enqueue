@@ -737,26 +737,45 @@ void CueController::cancelPendingFor (const juce::Uuid& cueId, Cancel scope, int
         return true;
     };
 
-    std::vector<std::pair<juce::Uuid, int>> cancelledStarts;   // the auto-continue chain put on behind each of them goes too
+    // scheduled starts actually taken away (a fired one that lingers until the next sweep is not one): the follow the walk
+    // put on for each and the auto-continue chain behind each go too
+    std::vector<int> cancelledStarts;
 
     for (const auto& p : pending)
         if (matches (p))
         {
-            scheduler.cancel (p.id);
+            if (p.kind == PendingKind::start && scheduler.isPending (p.id))
+                cancelledStarts.push_back (p.id);
 
-            if (p.kind == PendingKind::start)
-                cancelledStarts.emplace_back (p.owner, p.id);
+            scheduler.cancel (p.id);
         }
 
     pending.erase (std::remove_if (pending.begin(), pending.end(), matches), pending.end());
 
-    for (const auto& [owner, startId] : cancelledStarts)
-        cancelChainBehind (owner, startId);
+    for (const int startId : cancelledStarts)
+    {
+        cancelRunOf (cueId, startId);
+        cancelChainBehind (cueId, startId);
+    }
 
     if (scope == Cancel::all)
-        cancelChainBehind (cueId, 0);   // the whole run goes: the auto-continue starts behind its immediate start too
+        cancelChainsOf (cueId, keepRunId != 0 ? keepRunId : -1);   // the whole cue goes: every chain behind any of its runs (a restart keeps the run starting now)
     // the duck this cue put on the others is not released here: its own watch lets go when the cue is really over
     // (after a stop fade too), over the cue's duck time - see applyDuck()
+}
+
+void CueController::cancelRunOf (const juce::Uuid& owner, int startId)
+{
+    if (startId == 0)
+        return;
+
+    auto ofRun = [&] (const Pending& p) { return p.owner == owner && p.runId == startId && p.kind != PendingKind::start; };
+
+    for (const auto& p : pending)
+        if (ofRun (p))
+            scheduler.cancel (p.id);
+
+    pending.erase (std::remove_if (pending.begin(), pending.end(), ofRun), pending.end());
 }
 
 void CueController::cancelChainBehind (const juce::Uuid& owner, int startId)
@@ -777,8 +796,26 @@ void CueController::cancelChainBehind (const juce::Uuid& owner, int startId)
         {
             scheduler.cancel (p.id);
             pending.erase (std::remove_if (pending.begin(), pending.end(), [&p] (const Pending& q) { return q.id == p.id; }), pending.end());
-            work.emplace_back (p.owner, p.id);   // and whatever hangs off that start
+            cancelRunOf (p.owner, p.id);         // the follow put on for that start
+            work.emplace_back (p.owner, p.id);   // and whatever hangs off it
         }
+    }
+}
+
+void CueController::cancelChainsOf (const juce::Uuid& owner, int keepStartId)
+{
+    std::vector<Pending> behind;
+
+    for (const auto& p : pending)
+        if (p.kind == PendingKind::start && p.postWaitOwner == owner && p.afterStartId != keepStartId)
+            behind.push_back (p);
+
+    for (const auto& p : behind)
+    {
+        scheduler.cancel (p.id);
+        pending.erase (std::remove_if (pending.begin(), pending.end(), [&p] (const Pending& q) { return q.id == p.id; }), pending.end());
+        cancelRunOf (p.owner, p.id);
+        cancelChainBehind (p.owner, p.id);
     }
 }
 
@@ -794,8 +831,22 @@ void CueController::cancelScheduledStart (const juce::Uuid& cueId)
         status (ko ("대기 취소: ") + cueLabel (index, list->get (index)));
 }
 
-void CueController::cancelWait (const juce::Uuid& cueId)
+void CueController::cancelWait (const juce::Uuid& cueId, WaitProgress::Kind kind)
 {
+    switch (kind)
+    {
+        case WaitProgress::Kind::postWait:
+            cancelScheduledStart (cueId);   // the next cue's scheduled start only: a run of it started on its own (a wait, a sound) stays
+            return;
+
+        case WaitProgress::Kind::waitCue:
+            stopCue (cueId);                // its wait and its follow
+            return;
+
+        case WaitProgress::Kind::preWait:
+            break;
+    }
+
     // the current child of a running playlist, still in its pre-wait: the list cannot go on without it
     for (const auto& run : playlists)
         if (run.second.current == cueId && ! engine.isPlaying (cueId))
@@ -808,12 +859,6 @@ void CueController::cancelWait (const juce::Uuid& cueId)
             status (ko ("플레이리스트 정지: ") + label);
             return;
         }
-
-    if (waits.count (cueId) != 0)
-    {
-        stopCue (cueId);   // a wait cue: its wait and its follow
-        return;
-    }
 
     cancelScheduledStart (cueId);
 }
@@ -1258,7 +1303,10 @@ void CueController::applyFadeStopOthers (const Cue& cue, const std::set<juce::Uu
             continue;
 
         if (inScope (p.id))
+        {
             engine.fadeOutAndStop (p.id, ms);
+            cancelChainsOf (p.id);   // the auto-continue starts put on behind it go with it - a spared cue's start among them too
+        }
     }
 
     // a run in scope must not carry on behind the fade: a playlist would start its next child, a follow its next cue,

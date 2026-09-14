@@ -396,7 +396,7 @@ CueTable::Badge CueTable::badgeFor (int index) const
     // a problem stays visible while the cue waits: a missing file would fail the start the countdown leads to
     if (cue.isAudio() && (cue.fileMissing || cue.file == juce::File()))
         return { ko ("누락 파일"), Palette::missing };
-    if (cue.hasTarget() && (cue.targetId().isNull() || cues.indexOf (cue.targetId()) < 0))
+    if (cue.hasTarget() && (cue.targetId().isNull() || ! targetExists (cue.targetId())))
         return { ko ("대상 없음"), Palette::missing };
     if (findWait (cue.id, WaitProgress::Kind::preWait) != nullptr)
         return { ko ("프리웨이트"), Palette::waiting };
@@ -479,7 +479,7 @@ void CueTable::paintCell (juce::Graphics& g, int rowNumber, int columnId, int wi
         const float cy = height * 0.5f;
         const float x = (float) (width - Palette::statusIconSize) * 0.5f + 2.0f;
         const bool broken = (cue.isAudio() && (cue.fileMissing || cue.file == juce::File()))
-                              || (cue.hasTarget() && (cue.targetId().isNull() || cues.indexOf (cue.targetId()) < 0));
+                              || (cue.hasTarget() && (cue.targetId().isNull() || ! targetExists (cue.targetId())));
         if (isRunning)
         {
             setColour (stateColour);
@@ -576,7 +576,7 @@ void CueTable::paintCell (juce::Graphics& g, int rowNumber, int columnId, int wi
         else if (cue.isFade())
         {
             // a fade: a slope; red when the target is missing
-            const bool broken = cue.fade.targetId.isNull() || cues.indexOf (cue.fade.targetId) < 0;
+            const bool broken = cue.fade.targetId.isNull() || ! targetExists (cue.fade.targetId);
             setColour (broken ? Palette::missing : Palette::dimText);
             juce::Path slope;
 
@@ -599,7 +599,7 @@ void CueTable::paintCell (juce::Graphics& g, int rowNumber, int columnId, int wi
         else if (cue.isDevamp())
         {
             // a devamp: a loop arc with a bar (the loop point)
-            const bool broken = cue.devamp.targetId.isNull() || cues.indexOf (cue.devamp.targetId) < 0;
+            const bool broken = cue.devamp.targetId.isNull() || ! targetExists (cue.devamp.targetId);
             setColour (broken ? Palette::missing : Palette::dimText);
             juce::Path arc;
             arc.addCentredArc (x + 5.0f, cy, 4.5f, 4.5f, 0.0f, 0.4f, 5.9f, true);
@@ -609,7 +609,7 @@ void CueTable::paintCell (juce::Graphics& g, int rowNumber, int columnId, int wi
         else if (cue.isControl())
         {
             // control cues: one small glyph per kind; red when a needed target is missing
-            const bool broken = cue.control.needsTarget() && (cue.control.targetId.isNull() || cues.indexOf (cue.control.targetId) < 0);
+            const bool broken = cue.control.needsTarget() && (cue.control.targetId.isNull() || ! targetExists (cue.control.targetId));
             setColour (broken ? Palette::missing : Palette::dimText);
             juce::Path p;
 
