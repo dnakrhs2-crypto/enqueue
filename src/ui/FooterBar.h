@@ -33,8 +33,8 @@ public:
     void setCueCount (int count);
     /** Number of broken cues (0 hides the button). */
     void setWarningCount (int count);
-    /** 'warning' paints the status in the stop colour (a clipped output or an xrun). */
-    void setAudioStatus (juce::String text, bool warning = false);
+    /** 'warning' paints the status in the stop colour (a clipped output or an xrun); 'tooltip' replaces the text as the tooltip. */
+    void setAudioStatus (juce::String text, bool warning = false, juce::String tooltip = {});
 
     std::function<void()> onWarningsClicked;
 

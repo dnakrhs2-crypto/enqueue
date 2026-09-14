@@ -1728,7 +1728,9 @@ void AudioEngine::prepare (double newSampleRate, int newBlockSize, int newNumDev
     forEachPatchChain ([this] (PluginChain& chain) { chain.prepare (sampleRate.load(), blockSize.load()); });
 }
 
-void AudioEngine::renderBlock (juce::AudioBuffer<float>& output, int numSamples, const float* const* inputs, int numInputs)
+static_assert (std::atomic<float>::is_always_lock_free, "the output peak hold is written on the audio thread");
+
+void AudioEngine::renderBlock (juce::AudioBuffer<float>& output, int numSamples, const float* const* inputs, int numInputs, int meteredChannels)
 {
     if (numSamples <= 0)
         return;
@@ -1794,8 +1796,9 @@ void AudioEngine::renderBlock (juce::AudioBuffer<float>& output, int numSamples,
 
         // the footer's output diagnostics: the peak of what goes to the device, and the blocks that went over 0 dBFS
         float peak = 0.0f;
+        const int metered = meteredChannels < 0 ? output.getNumChannels() : juce::jmin (meteredChannels, output.getNumChannels());
 
-        for (int ch = 0; ch < output.getNumChannels(); ++ch)
+        for (int ch = 0; ch < metered; ++ch)
             peak = juce::jmax (peak, output.getMagnitude (ch, offset, n));
 
         float held = outputPeakHold.load (std::memory_order_relaxed);
@@ -1899,7 +1902,7 @@ void AudioEngine::audioDeviceIOCallbackWithContext (const float* const* inputCha
         for (int ch = 0; ch < inputs; ++ch)
             inputPointers[(size_t) ch] = inputChannelData[ch] != nullptr ? inputChannelData[ch] + offset : nullptr;
 
-        renderBlock (deviceScratch, n, inputs > 0 ? inputPointers.data() : nullptr, inputs);
+        renderBlock (deviceScratch, n, inputs > 0 ? inputPointers.data() : nullptr, inputs, channelsToRender);   // the diagnostics see what goes out
 
         for (int ch = 0; ch < channelsToRender; ++ch)
         {
@@ -1916,6 +1919,7 @@ void AudioEngine::audioDeviceAboutToStart (juce::AudioIODevice* device)
     deviceRunning.store (true, std::memory_order_release);
     outputPeakHold.store (0.0f, std::memory_order_relaxed);
     outputClippedBlocks.store (0, std::memory_order_relaxed);   // a device that starts counts from zero
+    xrunBaseline.store (deviceManager.getXRunCount(), std::memory_order_relaxed);   // an ASIO device keeps its own count across a restart
     const bool multichannel = typeAllowsMultichannel (device->getTypeName());
     const int limit = multichannel ? maxDeviceOutputs : stereoOnlyOutputs;
     const auto active = device->getActiveOutputChannels();
@@ -1931,7 +1935,8 @@ AudioEngine::OutputDiagnostics AudioEngine::takeOutputDiagnostics() noexcept
     OutputDiagnostics d;
     d.peak = outputPeakHold.exchange (0.0f, std::memory_order_relaxed);
     d.clippedBlocks = outputClippedBlocks.load (std::memory_order_relaxed);
-    d.xruns = deviceManager.getXRunCount();   // the driver's overload reports plus the callbacks that ran over their budget
+    // the driver's overload reports plus the callbacks that ran over their budget, counted since the device started
+    d.xruns = juce::jmax (0, deviceManager.getXRunCount() - xrunBaseline.load (std::memory_order_relaxed));
     return d;
 }
 

@@ -128,14 +128,17 @@ void FooterBar::setWarningCount (int count)
     repaint();
 }
 
-void FooterBar::setAudioStatus (juce::String text, bool warning)
+void FooterBar::setAudioStatus (juce::String text, bool warning, juce::String tooltip)
 {
-    if (audioStatus.getText() == text && audioWarning == warning)
+    if (tooltip.isEmpty())
+        tooltip = text;
+
+    if (audioStatus.getText() == text && audioWarning == warning && audioStatus.getTooltip() == tooltip)
         return;
     audioWarning = warning;
     audioStatus.setColour (juce::Label::textColourId, warning ? Palette::stopButton : Palette::muted);
     audioStatus.setText (text, juce::dontSendNotification);
-    audioStatus.setTooltip (text);
+    audioStatus.setTooltip (tooltip);
     resized();
 }
 

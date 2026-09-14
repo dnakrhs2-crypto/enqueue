@@ -266,7 +266,10 @@ public:
 
     /** Renders one block into 'output' (device outputs; channels beyond the prepared count are cleared).
         'inputs' (device input channels, may be null) feed the mic cues. Audio thread, or the test harness. */
-    void renderBlock (juce::AudioBuffer<float>& output, int numSamples, const float* const* inputs = nullptr, int numInputs = 0);
+    /** 'meteredChannels' = how many of output's channels the output diagnostics look at (-1 = all): the device callback
+        passes what it really copies out, so a silenced device does not report a peak. */
+    void renderBlock (juce::AudioBuffer<float>& output, int numSamples, const float* const* inputs = nullptr, int numInputs = 0,
+                      int meteredChannels = -1);
 
     /** Destroys players that have finished. Called automatically on the message thread. */
     void reapFinishedPlayers();
@@ -353,6 +356,7 @@ private:
     livemix::LoudnessMeter loudness;
     std::atomic<float> outputPeakHold { 0.0f };      // the device outputs' sample peak since the last takeOutputDiagnostics()
     std::atomic<int> outputClippedBlocks { 0 };      // blocks with a device output over 0 dBFS since the device started
+    std::atomic<int> xrunBaseline { 0 };             // the manager's count when the device started: the footer shows the increase since
     std::map<juce::String, std::unique_ptr<PluginChain>> cueChains;   // keyed by Uuid string
     PluginChain::Listener* chainListener = nullptr;
 

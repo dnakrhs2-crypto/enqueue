@@ -3263,7 +3263,10 @@ void MainComponent::updateAudioStatus()
         status << ko (" · 클립 ") << diag.clippedBlocks << ko ("회");
 
     status << " · xrun " << diag.xruns;
-    footer.setAudioStatus (status, diag.clippedBlocks > 0 || diag.xruns > 0);
+    footer.setAudioStatus (status, diag.clippedBlocks > 0 || diag.xruns > 0,
+                           status + "\n" + ko ("피크 = 최근 갱신(약 1초) 구간에서 앱 출력이 낸 최고 샘플 레벨")
+                                  + "\n" + ko ("클립 = 장치를 연 뒤 앱 출력이 0 dBFS를 넘은 블록 수(누적, 장치의 변환 전 값)")
+                                  + "\n" + ko ("xrun = 장치를 연 뒤 드라이버가 보고한 끊김 + 시간 예산을 넘긴 콜백 수(누적). 0이어도 끊김이 없다는 뜻은 아닙니다"));
 }
 
 //==============================================================================

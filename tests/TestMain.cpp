@@ -31,6 +31,12 @@ int main (int argc, char** argv)
         if ((test->getCategory() == "Enqueue" || test->getCategory() == "LiveMix") && (only.isEmpty() || test->getName().containsIgnoreCase (only)))
             tests.add (test);
 
+    if (only.isNotEmpty() && tests.isEmpty())
+    {
+        std::cout << "no test name contains '" << only << "'" << std::endl;
+        return 2;
+    }
+
     runner.runTests (tests);
 
     int passes = 0;

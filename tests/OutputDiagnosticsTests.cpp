@@ -50,11 +50,10 @@ public:
 
     void runTest() override
     {
+        beginTest ("a cue pushed over 0 dBFS counts clipped blocks and reports the peak; silence reports nothing");   // first: expect() needs a result entry
         const auto dir = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("gocue_diag_" + juce::Uuid().toString());
         expect (dir.createDirectory().wasOk());
-        const auto tone = writeSine (dir, "tone.wav", 2.0, 0.9f);
-
-        beginTest ("a cue pushed over 0 dBFS counts clipped blocks and reports the peak; silence reports nothing");
+        const auto tone = writeSine (dir, "tone.wav", 4.0, 0.9f);
         {
             AudioEngine engine (0);
             engine.prepare (sampleRate, blockSize);
@@ -76,13 +75,47 @@ public:
             expect (d.clippedBlocks > 0, "blocks over 0 dBFS must be counted");
             const int clippedSoFar = d.clippedBlocks;
 
+            // a callback larger than the prepared block is rendered in prepared-size chunks: each chunk over 0 dBFS counts
+            juce::AudioBuffer<float> big (2, blockSize * 2);
+            engine.renderBlock (big, blockSize * 2);
+            d = engine.takeOutputDiagnostics();
+            expectEquals (d.clippedBlocks, clippedSoFar + 2);
+
+            // channels the device callback does not copy out are not metered: a silenced device reports no peak
+            engine.renderBlock (out, blockSize, nullptr, 0, 0);
+            d = engine.takeOutputDiagnostics();
+            expectWithinAbsoluteError (d.peak, 0.0f, 1.0e-6f);
+            expectEquals (d.clippedBlocks, clippedSoFar + 2);
+
             engine.stopAll();
             render (engine, out, 40);   // the stop fade runs out
             d = engine.takeOutputDiagnostics();
-            expect (d.clippedBlocks >= clippedSoFar, "the clip count keeps counting until a device starts again");
+            expect (d.clippedBlocks >= clippedSoFar + 2, "the clip count keeps counting until a device starts again");
             render (engine, out, 4);
             d = engine.takeOutputDiagnostics();
             expectWithinAbsoluteError (d.peak, 0.0f, 1.0e-6f);   // the peak is what went out since the last take: silence now
+        }
+
+        beginTest ("the peak is the highest level since the last take, whatever came later");
+        {
+            AudioEngine engine (0);
+            engine.prepare (sampleRate, blockSize);
+            juce::AudioBuffer<float> out (2, blockSize);
+            Cue cue;
+            cue.name = "cue"; cue.file = tone;   // peak 0.9
+            juce::String error;
+            expect (engine.play (cue, &error), error);
+            render (engine, out, 10);
+            engine.setLiveGainDb (cue.id, -20.0);   // 0.09 from here on (after the ramp)
+            render (engine, out, 40);
+            auto d = engine.takeOutputDiagnostics();
+            expect (d.peak > 0.85f, "the loud blocks before the gain change must still be the peak (" + juce::String (d.peak) + ")");
+            render (engine, out, 10);
+            d = engine.takeOutputDiagnostics();
+            expect (d.peak > 0.05f && d.peak < 0.2f, "after the take only the quiet blocks count (" + juce::String (d.peak) + ")");
+            expectEquals (d.clippedBlocks, 0);
+            engine.stopAll();
+            render (engine, out, 4);
         }
 
         beginTest ("a cue within 0 dBFS reports its peak and no clipped block");
