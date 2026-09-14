@@ -258,6 +258,60 @@ public:
             document.cues.update (0, [] (Cue& x) { x.preWaitSeconds = 0.0; });
         }
 
+        beginTest ("stopping a cue takes the auto-continue chain put on behind it (its waits and starts)");
+        {
+            // a (auto-continue, post-wait 0.4) -> b (pre-wait 0.3, auto-continue, post-wait 0.2) -> c: one GO puts b's and c's starts on
+            document.cues.update (0, [] (Cue& x) { x.continueMode = ContinueMode::autoContinue; x.postWaitSeconds = 0.4; });
+            document.cues.update (1, [] (Cue& x) { x.preWaitSeconds = 0.3; x.continueMode = ContinueMode::autoContinue; x.postWaitSeconds = 0.2; });
+            document.cues.setPlayheadIndex (0);
+            expect (controller.go() == CueController::GoResult::started);
+            controller.goKeyReleased();
+            expect (engine.isPlaying (a.id));
+            expectEquals (controller.getNumPending(), 2);
+            controller.stopCue (a.id);
+            expect (controller.getRunningWaits().empty(), "a stopped cue's post-wait still shows");
+            expectEquals (controller.getNumPending(), 0);
+            render (engine, scheduler, now, out, 100);   // 1.16 s: nothing behind a may start
+            expect (! engine.isPlaying (b.id) && ! engine.isPlaying (c.id), "the chain behind a stopped cue started");
+            stopEverything();
+
+            // the same chain, cancelled at b's pre-wait (the waiting card's x): a plays on, c goes with b
+            document.cues.setPlayheadIndex (0);
+            expect (controller.go() == CueController::GoResult::started);
+            controller.goKeyReleased();
+            render (engine, scheduler, now, out, 40);   // 0.46 s: b's pre-wait runs
+            expect (find (controller.getRunningWaits(), b.id, WaitProgress::Kind::preWait) != nullptr);
+            controller.cancelWait (b.id);
+            expect (engine.isPlaying (a.id), "cancelling b's wait stopped a");
+            expect (controller.getRunningWaits().empty());
+            expectEquals (controller.getNumPending(), 0);
+            render (engine, scheduler, now, out, 80);   // 1.4 s
+            expect (! engine.isPlaying (b.id) && ! engine.isPlaying (c.id), "a cancelled pre-wait's chain started");
+            stopEverything();
+            document.cues.update (0, [] (Cue& x) { x.continueMode = ContinueMode::none; x.postWaitSeconds = 0.0; });
+            document.cues.update (1, [] (Cue& x) { x.preWaitSeconds = 0.0; x.continueMode = ContinueMode::none; x.postWaitSeconds = 0.0; });
+        }
+
+        beginTest ("a restart pending while the cue plays: cancelScheduledStart drops it and the sound goes on");
+        {
+            document.cues.update (0, [] (Cue& x) { x.preWaitSeconds = 0.3; });
+            document.cues.setPlayheadIndex (0);
+            expect (controller.go() == CueController::GoResult::started);
+            controller.goKeyReleased();
+            render (engine, scheduler, now, out, 40);   // 0.46 s: playing
+            expect (engine.isPlaying (a.id));
+            controller.fireSequence (0);                 // hardStopRestart: a new start in 0.3 s, the instance plays on until then
+            expect (find (controller.getRunningWaits(), a.id, WaitProgress::Kind::preWait) != nullptr, "the pending restart is not reported");
+            controller.cancelScheduledStart (a.id);
+            expect (controller.getRunningWaits().empty());
+            expect (engine.isPlaying (a.id), "cancelling the restart stopped the sound");
+            render (engine, scheduler, now, out, 40);   // 0.46 s later: no restart
+            expect (engine.isPlaying (a.id));
+            expectEquals (controller.getNumPending(), 0);
+            stopEverything();
+            document.cues.update (0, [] (Cue& x) { x.preWaitSeconds = 0.0; });
+        }
+
         beginTest ("timeline group: every child's pre-wait counts from the group's start");
         {
             Cue g;

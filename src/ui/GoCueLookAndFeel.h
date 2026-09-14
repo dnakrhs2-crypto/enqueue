@@ -40,7 +40,7 @@ public:
         setColour (juce::TableHeaderComponent::backgroundColourId, Palette::header);
         setColour (juce::TableHeaderComponent::textColourId, Palette::muted);
         setColour (juce::TableHeaderComponent::outlineColourId, Palette::outline);
-        setColour (juce::TableHeaderComponent::highlightColourId, Palette::standby.withAlpha (0.35f));
+        setColour (juce::TableHeaderComponent::highlightColourId, Palette::accentInk.withAlpha (0.08f));   // a pressed / hovered column: a lighter surface, not a purple block
         setColour (juce::ListBox::backgroundColourId, Palette::panel);
         setColour (juce::ListBox::outlineColourId, Palette::outline);
         setColour (juce::ScrollBar::thumbColourId, Palette::muted);
@@ -396,6 +396,31 @@ public:
         g.fillAll (Palette::panel);
         g.setColour (Palette::outline);
         g.fillRect (0, height - 1, width, 1);
+    }
+
+    /** A hovered / open menu title: a slightly lighter surface and, when open, an accent underline. (LookAndFeel_V4 fills
+        the whole title with TextButton::buttonOnColourId - the opaque accent - so titles flashed purple as the mouse
+        moved along the bar.) */
+    void drawMenuBarItem (juce::Graphics& g, int width, int height, int itemIndex, const juce::String& itemText,
+                          bool isMouseOverItem, bool isMenuOpen, bool, juce::MenuBarComponent& menuBar) override
+    {
+        const bool lit = menuBar.isEnabled() && (isMenuOpen || isMouseOverItem);
+
+        if (lit)
+        {
+            g.setColour (Palette::panel2);
+            g.fillRoundedRectangle (juce::Rectangle<float> (3.0f, 4.0f, (float) width - 6.0f, (float) height - 8.0f), 6.0f);
+        }
+
+        if (menuBar.isEnabled() && isMenuOpen)
+        {
+            g.setColour (Palette::accent);
+            g.fillRect (10, height - 3, juce::jmax (0, width - 20), 2);
+        }
+
+        g.setColour (! menuBar.isEnabled() ? Palette::dimText.withMultipliedAlpha (0.5f) : lit ? Palette::accentInk : Palette::text);
+        g.setFont (getMenuBarFont (menuBar, itemIndex, itemText));
+        g.drawFittedText (itemText, 0, 0, width, height, juce::Justification::centred, 1);
     }
 
     /** A combo box shows a long entry (a cue name) cut with an ellipsis, never with squashed glyphs. */

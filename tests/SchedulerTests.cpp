@@ -49,11 +49,19 @@ public:
             log.clear();
 
             int later = 0;
-            scheduler.schedule (20.0, [&log, &scheduler, &later] { log.add ("first"); scheduler.cancel (later); });
+            scheduler.schedule (20.0, [this, &log, &scheduler, &later]
+                                      {
+                                          log.add ("first");
+                                          // due in this very tick and not run yet: still pending, so it can still be cancelled
+                                          expect (scheduler.isPending (later), "an entry due in the same tick reads as gone before it ran");
+                                          scheduler.cancel (later);
+                                          expect (! scheduler.isPending (later));
+                                      });
             later = scheduler.schedule (20.0, [&log] { log.add ("second"); });
             now = 20.0;
             scheduler.tick();
             expectEquals (log.joinIntoString (","), juce::String ("first"));   // cancelled by an earlier action of the same tick
+            expect (! scheduler.isPending (later));
             log.clear();
         }
 

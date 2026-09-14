@@ -366,6 +366,7 @@ namespace
     public:
         Content (ProjectDocument& document)
         {
+            setWantsKeyboardFocus (true);   // a tab switched by mouse leaves the focus here, not in the new tab's first field (its text selected)
             tabs.setTabBarDepth (Palette::tabBarHeight);
             tabs.setOutline (0);
             tabs.addTab (ko ("일반"), Palette::panel, new GeneralTab (document), true);
@@ -379,7 +380,15 @@ namespace
         void paint (juce::Graphics& g) override { Palette::drawDialog (g, getLocalBounds()); }
 
     private:
-        juce::TabbedComponent tabs { juce::TabbedButtonBar::TabsAtTop };
+        /** JUCE brings a newly selected tab's panel to the front with focus, which lands on its first field: taken back here. */
+        struct Tabs : public juce::TabbedComponent
+        {
+            explicit Tabs (Content& c) : juce::TabbedComponent (juce::TabbedButtonBar::TabsAtTop), owner (c) {}
+            void currentTabChanged (int, const juce::String&) override { owner.grabKeyboardFocus(); }
+            Content& owner;
+        };
+
+        Tabs tabs { *this };
     };
 }
 

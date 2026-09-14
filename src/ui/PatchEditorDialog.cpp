@@ -148,7 +148,7 @@ namespace
             deviceOutputsViewport.setViewedComponent (&deviceOutputsStrip, false);
             deviceOutputsViewport.setScrollBarsShown (true, false);
             deviceOutputsPage.addAndMakeVisible (deviceOutputsViewport);
-            styleLabel (deviceOutputsHint, ko ("장치 출력별 VST3 인서트 (이 패치의 소리에만 적용). 마스터 버스 인서트는 오디오 메뉴에 그대로 있습니다"));
+            styleLabel (deviceOutputsHint, ko ("장치 출력별 VST3 인서트 (이 패치의 소리에만 적용). 마스터 버스 인서트는 설정 메뉴에 그대로 있습니다"));
             deviceOutputsPage.addAndMakeVisible (deviceOutputsHint);
 
             reload();
@@ -272,7 +272,7 @@ namespace
             duplicateButton.setEnabled (has);
 
             const int deviceOutputs = engine.getNumDeviceOutputs();
-            deviceLabel.setText (ko ("장치 출력 ") + juce::String (deviceOutputs) + ko ("채널 (오디오 > 오디오 출력 설정에서 채널 수 변경)"), juce::dontSendNotification);
+            deviceLabel.setText (ko ("장치 출력 ") + juce::String (deviceOutputs) + ko ("채널 (설정 > 오디오 출력 설정에서 채널 수 변경)"), juce::dontSendNotification);
 
             if (! has)
             {

@@ -189,6 +189,10 @@ bool CueTable::isGroupRunning (int index) const
             if (const int i = cues.indexOf (p.id); i >= 0 && cues.isDescendantOf (i, id))
                 return true;
 
+    for (const auto& w : waits)   // a child's pre-wait counts down: the group is on its way (a collapsed group shows it here only)
+        if (const int i = cues.indexOf (w.cueId); i >= 0 && cues.isDescendantOf (i, id))
+            return true;
+
     return false;
 }
 
@@ -389,16 +393,17 @@ CueTable::Badge CueTable::badgeFor (int index) const
         return p->paused ? Badge { ko ("일시정지"), Palette::paused }
                          : p->fadingOut ? Badge { ko ("페이드 아웃"), Palette::fadingOut }
                                         : Badge { ko ("재생 중"), Palette::playing };
+    // a problem stays visible while the cue waits: a missing file would fail the start the countdown leads to
+    if (cue.isAudio() && (cue.fileMissing || cue.file == juce::File()))
+        return { ko ("누락 파일"), Palette::missing };
+    if (cue.hasTarget() && (cue.targetId().isNull() || cues.indexOf (cue.targetId()) < 0))
+        return { ko ("대상 없음"), Palette::missing };
     if (findWait (cue.id, WaitProgress::Kind::preWait) != nullptr)
         return { ko ("프리웨이트"), Palette::waiting };
     if (findWait (cue.id, WaitProgress::Kind::waitCue) != nullptr)
         return { ko ("대기 중"), Palette::waiting };
     if (findWait (cue.id, WaitProgress::Kind::postWait) != nullptr)
         return { ko ("포스트웨이트"), Palette::waiting };   // its sound is over, the next cue waits on it
-    if (cue.isAudio() && (cue.fileMissing || cue.file == juce::File()))
-        return { ko ("누락 파일"), Palette::missing };
-    if (cue.hasTarget() && (cue.targetId().isNull() || cues.indexOf (cue.targetId()) < 0))
-        return { ko ("대상 없음"), Palette::missing };
     if (! cue.armed)
         return { ko ("비활성"), Palette::muted };
     if (cues.isSelected (index))
@@ -500,7 +505,7 @@ void CueTable::paintCell (juce::Graphics& g, int rowNumber, int columnId, int wi
                 g.fillPath (icon);
             }
         }
-        else if (anyWait (cue.id) != nullptr)
+        else if (anyWait (cue.id) != nullptr && ! broken)   // a broken cue keeps its warning while it waits
         {
             // a wait counting down: an hourglass
             setColour (Palette::waiting);
@@ -834,8 +839,11 @@ void CueTable::paintCell (juce::Graphics& g, int rowNumber, int columnId, int wi
     }
     if (fillFraction >= 0.0)
     {
+        // inside the row's own decorations: the selection ring (top / bottom) and the progress bar over the border line
+        const int inset = (int) Palette::selectionWidth;
         setColour (Palette::waiting.withAlpha (Palette::waitFillAlpha));
-        g.fillRect (0, 0, juce::roundToInt ((double) width * juce::jlimit (0.0, 1.0, fillFraction)), height);
+        g.fillRect (0, inset, juce::roundToInt ((double) width * juce::jlimit (0.0, 1.0, fillFraction)),
+                    juce::jmax (0, height - inset - Palette::rowProgressHeight - 1));
     }
     setColour (colour);
     g.setFont (font);

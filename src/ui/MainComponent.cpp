@@ -208,12 +208,20 @@ MainComponent::MainComponent (AudioEngine& e, AppSettings& s, juce::ApplicationC
     };
     activeCues.onStopRequested = [this] (const juce::Uuid& id)
     {
-        // an audio cue fades out over its stop fade; anything else (fade / group / wait) is stopped by the controller
+        // an audio cue fades out over its stop fade (a restart of it still pending is dropped with it; the auto-continue
+        // behind the run goes on, as it always has); anything else (fade / group / wait) is stopped by the controller
         if (engine.isPlaying (id))
+        {
             engine.fadeOutAndStop (id);
+            controller.cancelScheduledStart (id);
+        }
         else
+        {
             controller.stopCue (id);
+        }
     };
+    activeCues.onCancelWaitRequested = [this] (const juce::Uuid& id) { controller.cancelWait (id); };
+    activeCues.findCue = [this] (const juce::Uuid& id) { return document.findCueAnywhere (id); };   // a cue of another list runs too
     transport.onPanicSettings = [this] (juce::Point<int> screenPosition) { showPanicSecondsMenu (screenPosition); };
     inspector.onStatus = [this] (const juce::String& message, bool isError) { transport.showStatus (message, isError); };
     inspector.onPreview = [this] { controller.preview(); };

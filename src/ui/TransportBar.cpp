@@ -518,7 +518,8 @@ void TransportBar::resized()
     // "평균 · LUFS" first, the average window ("20초 ▾") after it (gom: the seconds in front read wrong)
     auto averageHeading = readings.removeFromTop (Palette::loudnessLabelHeight);
     const int averageLabelWidth = juce::GlyphArrangement::getStringWidthInt (averageLabel.getFont(), averageLabel.getText()) + 2;
-    averageLabel.setBounds (averageHeading.removeFromLeft (juce::jlimit (0, juce::jmax (0, averageHeading.getWidth() - Palette::loudnessWindowWidth), averageLabelWidth)));
+    const int windowSpace = Palette::loudnessWindowWidth + Palette::buttonGap;   // the button and its gap are budgeted first: the label gives way
+    averageLabel.setBounds (averageHeading.removeFromLeft (juce::jlimit (0, juce::jmax (0, averageHeading.getWidth() - windowSpace), averageLabelWidth)));
     averageHeading.removeFromLeft (Palette::buttonGap);
     averageWindow.setBounds (averageHeading.removeFromLeft (Palette::loudnessWindowWidth));
     averageValue.setBounds (readings.removeFromTop (Palette::loudnessValueHeight));

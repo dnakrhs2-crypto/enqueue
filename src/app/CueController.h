@@ -64,6 +64,13 @@ public:
         its playlist run / children (a group), its wait, and the engine instance. Every UI stop goes through here.
         'fade' = an audio instance fades out over its stop fade instead of stopping at once. */
     void stopCue (const juce::Uuid& cueId, bool fade = false);
+    /** Cancels the cue's scheduled starts (a pre-wait, a pending restart) and the auto-continue starts put on behind
+        them; a running instance of the cue is left alone. */
+    void cancelScheduledStart (const juce::Uuid& cueId);
+    /** The active cues panel's × on a waiting card: a wait cue's wait is stopped (stopCue), the current child of a
+        running playlist takes the playlist with it (the list cannot go on without it), any other scheduled start is
+        cancelled with the chain behind it (cancelScheduledStart). */
+    void cancelWait (const juce::Uuid& cueId);
     /** Fires one cue the way a hotkey / cart button does: the cue alone (no pre-wait, no sequence, no playhead move),
         with its fade-stop-others and duck. */
     GoResult fire (const juce::Uuid& cueId, bool audition = false);
@@ -180,7 +187,13 @@ private:
     /** The moments a scheduled start's waits began, for getRunningWaits(): 'preWaitFrom' = when the cue's own pre-wait
         began (the GO, the group start, the end of the previous post-wait); < 0 = at the start itself (no pre-wait shown).
         'postWaitOwner' / 'postWaitFrom' = the auto-continue cue whose post-wait runs before this start, and when it started. */
-    struct StartTiming { double preWaitFrom = -1.0; juce::Uuid postWaitOwner = juce::Uuid::null(); double postWaitFrom = -1.0; };
+    struct StartTiming
+    {
+        double preWaitFrom = -1.0;
+        juce::Uuid postWaitOwner = juce::Uuid::null();
+        double postWaitFrom = -1.0;
+        int afterStartId = 0;   // the scheduler id of that cue's own scheduled start (0 = it started at once): the chain behind a cancelled start goes with it
+    };
     /** The result of an immediate start (atSeconds is now or past); a scheduled one is 'started'. 'scheduledId' receives the
         scheduler id of the start (0 when it ran at once): what a walk puts on for that run is tagged with it. */
     GoResult scheduleStart (const juce::Uuid& id, double atSeconds, bool audition, int* scheduledId = nullptr, StartTiming timing = {});
@@ -205,6 +218,9 @@ private:
     /** A restart (second-trigger) drops the previous run's pending entries - not those of the run that is starting right now
         (the follow a sequence walk put on right behind the scheduled start that is firing). */
     void cancelPreviousRun (const juce::Uuid& cueId);
+    /** Cancels the auto-continue starts a sequence walk put on behind 'owner's start 'startId' (0 = an immediate start),
+        and the starts behind those in turn: scheduled relative to that start, they go with it. */
+    void cancelChainBehind (const juce::Uuid& owner, int startId);
     /** The contributions (duck cue -> dB) the running duck cues put on a cue that starts now. */
     std::map<juce::Uuid, double> ducksFor (const juce::Uuid& cueId) const;
     /** Takes a duck cue's contributions off everyone (over its duck time) and forgets it. */
@@ -226,6 +242,7 @@ private:
         // a start's timing for getRunningWaits(): when it fires, when its cue's pre-wait began, the post-wait it waits out
         double at = 0.0, preWaitFrom = 0.0, postWaitFrom = -1.0;
         juce::Uuid postWaitOwner = juce::Uuid::null();
+        int afterStartId = 0;   // the post-wait owner's scheduled start this start was put on behind (0 = an immediate start): see cancelChainBehind()
         bool audition = false;
     };
     std::vector<Pending> pending;

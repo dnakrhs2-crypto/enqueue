@@ -30,6 +30,11 @@ public:
     void setPlayingCount (int numPlaying, int numPaused, int numWaiting = 0);
     /** The row's stop button: the owner stops the cue wherever it runs (fade cues and waits live outside the engine). */
     std::function<void (const juce::Uuid& cueId)> onStopRequested;
+    /** A waiting card's ×: cancel that wait - the scheduled start (and what was put on behind it) of the cue given: the
+        waiting cue itself, or, for a post-wait card, the next cue whose start the post-wait leads to. */
+    std::function<void (const juce::Uuid& cueId)> onCancelWaitRequested;
+    /** Looks a cue up anywhere in the project (the panel's own list is the active one; a cue of another list runs too). */
+    std::function<const Cue* (const juce::Uuid& cueId)> findCue;
     /** The row's pause button: resume = true asks for a resume (the owner applies the panic latch). */
     std::function<void (const juce::Uuid& cueId, bool resume)> onPauseRequested;
     void setNewestFirst (bool newestFirst);

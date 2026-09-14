@@ -52,6 +52,7 @@ private:
 
     Clock clock;
     std::vector<Entry> entries;
+    std::set<int> inFlight;   // due entries taken out of 'entries' for this tick and not run yet: still pending (an earlier action may cancel them)
     std::set<int> cancelledDuringTick;
     int nextId = 1;
     bool inTick = false;

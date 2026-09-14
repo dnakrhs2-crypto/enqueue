@@ -40,6 +40,7 @@ int Scheduler::watch (std::function<bool()> condition, std::function<void()> act
 void Scheduler::cancel (int id)
 {
     entries.erase (std::remove_if (entries.begin(), entries.end(), [id] (const Entry& e) { return e.id == id; }), entries.end());
+    inFlight.erase (id);
 
     if (inTick)
         cancelledDuringTick.insert (id);
@@ -55,10 +56,14 @@ void Scheduler::cancelAll()
         cancelAllDuringTick = true;   // the rest of this tick's due list is dropped too
 
     entries.clear();
+    inFlight.clear();
 }
 
 bool Scheduler::isPending (int id) const noexcept
 {
+    if (inFlight.count (id) != 0)
+        return true;   // due in the tick that runs right now, not run yet
+
     for (const auto& e : entries)
         if (e.id == id)
             return true;
@@ -94,8 +99,15 @@ void Scheduler::tick()
     cancelledDuringTick.clear();
     cancelAllDuringTick = false;
 
+    // a due entry counts as pending until its action runs: an earlier action of the same tick may still cancel it
+    // (a start that fade-stops the others must be able to take a start due in the same tick with it)
+    for (const auto& e : due)
+        inFlight.insert (e.id);
+
     for (auto& e : due)
     {
+        inFlight.erase (e.id);
+
         if (cancelAllDuringTick)
             break;
 
@@ -105,6 +117,8 @@ void Scheduler::tick()
         if (e.action)
             e.action();
     }
+
+    inFlight.clear();
 
     // 2. watches, evaluated after the timed starts so "cue A has ended" is not mistaken for "A never started"
     if (! cancelAllDuringTick)
@@ -124,8 +138,13 @@ void Scheduler::tick()
             }
         }
 
+        for (const auto& e : watches)
+            inFlight.insert (e.id);
+
         for (auto& e : watches)
         {
+            inFlight.erase (e.id);
+
             if (cancelAllDuringTick)
                 break;
 
@@ -141,6 +160,8 @@ void Scheduler::tick()
             if (e.action)
                 e.action();
         }
+
+        inFlight.clear();
     }
 
     inTick = false;

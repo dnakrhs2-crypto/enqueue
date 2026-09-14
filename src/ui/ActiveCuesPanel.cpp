@@ -8,6 +8,22 @@
 namespace gocue
 {
 
+namespace
+{
+    /** Which of a cue's waits is its card's main state: its own wait first, then its pre-wait, then a post-wait. */
+    int waitPriority (WaitProgress::Kind kind) noexcept
+    {
+        return kind == WaitProgress::Kind::waitCue ? 0 : kind == WaitProgress::Kind::preWait ? 1 : 2;
+    }
+
+    juce::String waitPillText (const WaitProgress& w, double now)
+    {
+        const auto name = w.kind == WaitProgress::Kind::waitCue ? ko ("대기 ")
+                        : w.kind == WaitProgress::Kind::preWait ? ko ("프리웨이트 ") : ko ("포스트웨이트 ");
+        return name + formatCountdown (w.remaining (now));
+    }
+}
+
 class ActiveCuesPanel::Row : public juce::Component
 {
 public:
@@ -36,10 +52,12 @@ public:
         panicButton.setWantsKeyboardFocus (false);
         panicButton.onClick = [this]
         {
-            // a post-wait card stops the start it leads to (the next cue's), everything else the card's own cue
+            // a waiting card cancels its wait (a post-wait card: the next cue's start); a running card stops its sound
             const auto target = stopTarget.isNull() ? id : stopTarget;
 
-            if (owner.onStopRequested)
+            if (waiting && owner.onCancelWaitRequested)
+                owner.onCancelWaitRequested (target);
+            else if (owner.onStopRequested)
                 owner.onStopRequested (target);
             else
                 engine.fadeOutAndStop (target);
@@ -81,8 +99,7 @@ public:
         panicButton.setTooltip (ko ("이 큐 페이드 정지"));
         setNames (cue);
         stateText = paused ? ko ("일시정지") : fadingOut ? ko ("페이드 아웃") : ko ("재생 중");
-        extraText = extraWait == nullptr ? juce::String()
-                  : (extraWait->kind == WaitProgress::Kind::postWait ? ko ("포스트웨이트 ") : ko ("프리웨이트 ")) + formatCountdown (extraWait->remaining (now));
+        extraText = extraWait != nullptr ? waitPillText (*extraWait, now) : juce::String();
 
         const auto infinity = ko ("∞");
         timeLabel.setText (clockText (p.positionSeconds) + " / " + (infinite ? infinity : clockText (juce::jmax (0.0, p.lengthSeconds))),
@@ -91,9 +108,10 @@ public:
         finishUpdate();
     }
 
-    /** A wait counting down for a cue that is not running (yet): its pre-wait, a wait cue's wait, or the post-wait left
-        after its sound. Elapsed / total of the wait, what is left of it, a bar; the panic button cancels it. */
-    void updateWait (const WaitProgress& w, const Cue* cue, double now)
+    /** A wait counting down for a cue that is not running: its own wait, its pre-wait, or the post-wait left after its
+        sound. 'extraWait' = a second wait of the same cue (a wait cue's post-wait), as a pill. Elapsed / total of the
+        wait, what is left of it, a bar; the panic button cancels it. */
+    void updateWait (const WaitProgress& w, const WaitProgress* extraWait, const Cue* cue, double now)
     {
         waiting = true;
         stopTarget = w.kind == WaitProgress::Kind::postWait ? w.startsCueId : juce::Uuid::null();   // the next cue's start
@@ -103,11 +121,12 @@ public:
         colourIndex = cue != nullptr ? cue->color : 0;
         fraction = w.fraction (now);
         pauseButton.setVisible (false);
-        panicButton.setTooltip (w.kind == WaitProgress::Kind::postWait ? ko ("다음 큐가 이어지지 않게 취소") : ko ("이 큐의 대기 취소"));
+        panicButton.setTooltip (w.kind == WaitProgress::Kind::postWait ? ko ("다음 큐가 이어지지 않게 취소")
+                                                                       : ko ("이 대기를 취소 (뒤에 예약된 자동 계속도 함께)"));
         setNames (cue);
         stateText = w.kind == WaitProgress::Kind::waitCue ? ko ("대기")
                   : w.kind == WaitProgress::Kind::preWait ? ko ("프리웨이트") : ko ("포스트웨이트");
-        extraText = {};
+        extraText = extraWait != nullptr ? waitPillText (*extraWait, now) : juce::String();
         timeLabel.setText (clockText (juce::jmax (0.0, now - w.startedAt)) + " / " + clockText (w.total()), juce::dontSendNotification);
         remainingLabel.setText (formatCountdown (w.remaining (now)), juce::dontSendNotification);
         finishUpdate();
@@ -129,8 +148,9 @@ public:
         extraBounds = {};
         if (extraText.isNotEmpty())
         {
+            // the countdown pill keeps its whole text where it can: the name gives way first (it ellipsises)
             const int extraWidth = juce::GlyphArrangement::getStringWidthInt (pillFont, extraText) + 14;
-            extraBounds = top.removeFromRight (juce::jmin (extraWidth, top.getWidth() / 2));
+            extraBounds = top.removeFromRight (juce::jmin (extraWidth, juce::jmax (0, top.getWidth() * 3 / 5)));
             top.removeFromRight (8);
         }
         const int numberWidth = juce::GlyphArrangement::getStringWidthInt (numberLabel.getFont(), numberLabel.getText());
@@ -239,7 +259,7 @@ private:
     ActiveCuesPanel& owner;
     AudioEngine& engine;
     const juce::Uuid id;
-    juce::Uuid stopTarget = juce::Uuid::null();   // what the panic button stops when it is not this cue (a post-wait card)
+    juce::Uuid stopTarget = juce::Uuid::null();   // what the panic button acts on when it is not this cue (a post-wait card: the next cue)
     juce::TextButton pauseButton, panicButton;
     juce::Label numberLabel, nameLabel, timeLabel, remainingLabel;
     juce::Rectangle<int> barArea, stateBounds, extraBounds, colourBounds;
@@ -312,17 +332,36 @@ void ActiveCuesPanel::setPlayingCues (const std::vector<AudioEngine::PlayingCue>
         return newestFirst ? a->startOrder > b->startOrder : a->startOrder < b->startOrder;
     });
 
-    // a wait of a cue that runs already rides on its card as a pill; every other wait is a card of its own (one per cue)
+    // a wait of a cue that runs already rides on its card as a pill; every other cue with waits gets one card, its
+    // main state being its own wait before its pre-wait before a post-wait, a second wait (a wait cue's post-wait) a pill
     auto isActive = [&active] (const juce::Uuid& id)
     {
         return std::any_of (active.begin(), active.end(), [&id] (const AudioEngine::PlayingCue* p) { return p->id == id; });
     };
-    std::vector<const WaitProgress*> waitingCards;
+    struct Waiting { juce::Uuid cueId; const WaitProgress* main = nullptr; const WaitProgress* extra = nullptr; };
+    std::vector<Waiting> waitingCards;   // in the order the waits were reported
 
     for (const auto& w : waits)
-        if (! isActive (w.cueId)
-            && std::none_of (waitingCards.begin(), waitingCards.end(), [&w] (const WaitProgress* c) { return c->cueId == w.cueId; }))
-            waitingCards.push_back (&w);
+    {
+        if (isActive (w.cueId))
+            continue;
+
+        auto it = std::find_if (waitingCards.begin(), waitingCards.end(), [&w] (const Waiting& c) { return c.cueId == w.cueId; });
+
+        if (it == waitingCards.end())
+        {
+            waitingCards.push_back ({ w.cueId, &w, nullptr });
+        }
+        else if (waitPriority (w.kind) < waitPriority (it->main->kind))
+        {
+            it->extra = it->main;
+            it->main = &w;
+        }
+        else if (it->extra == nullptr)
+        {
+            it->extra = &w;
+        }
+    }
 
     setPlayingCount ((int) active.size(), (int) std::count_if (active.begin(), active.end(), [] (const auto* p) { return p->paused; }),
                      (int) waitingCards.size());
@@ -347,26 +386,25 @@ void ActiveCuesPanel::setPlayingCues (const std::vector<AudioEngine::PlayingCue>
         return row;
     };
 
+    auto lookup = [this] (const juce::Uuid& id) { return findCue ? findCue (id) : cues.findById (id); };
+
     for (const auto* p : active)
     {
         auto row = takeRow (p->id);
-        const WaitProgress* extra = nullptr;
+        const WaitProgress* extra = nullptr;   // the pre-wait of a pending restart before the post-wait of the run
 
         for (const auto& w : waits)
-            if (w.cueId == p->id)
-            {
+            if (w.cueId == p->id && (extra == nullptr || waitPriority (w.kind) < waitPriority (extra->kind)))
                 extra = &w;
-                break;
-            }
 
-        row->update (*p, cues.findById (p->id), extra, now);
+        row->update (*p, lookup (p->id), extra, now);
         next.push_back (std::move (row));
     }
 
-    for (const auto* w : waitingCards)
+    for (const auto& c : waitingCards)
     {
-        auto row = takeRow (w->cueId);
-        row->updateWait (*w, cues.findById (w->cueId), now);
+        auto row = takeRow (c.cueId);
+        row->updateWait (*c.main, c.extra, lookup (c.cueId), now);
         next.push_back (std::move (row));
     }
 
