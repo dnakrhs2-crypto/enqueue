@@ -20,6 +20,9 @@ struct WaitProgress
     /** The cue whose scheduled start this wait leads to: the cue itself for a pre-wait, the next cue for a post-wait
         (cancelling that start is what "stopping" a post-wait means), null for a wait cue (its follow is its own). */
     juce::Uuid startsCueId = juce::Uuid::null();
+    /** The scheduler id of that scheduled start (0 for a wait cue): what a cancel names, so that only this start - not
+        another start of the same cue put on by another run - goes. */
+    int startId = 0;
 
     double total() const noexcept { return endsAt - startedAt; }
     double remaining (double now) const noexcept { return endsAt > now ? endsAt - now : 0.0; }

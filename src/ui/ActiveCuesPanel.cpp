@@ -56,7 +56,7 @@ public:
             const auto target = stopTarget.isNull() ? id : stopTarget;
 
             if (waiting && owner.onCancelWaitRequested)
-                owner.onCancelWaitRequested (target, mainKind);
+                owner.onCancelWaitRequested (target, mainKind, mainStartId);
             else if (owner.onStopRequested)
                 owner.onStopRequested (target);
             else
@@ -117,6 +117,7 @@ public:
     {
         waiting = true;
         mainKind = w.kind;
+        mainStartId = w.startId;
         stopTarget = w.kind == WaitProgress::Kind::postWait ? w.startsCueId : juce::Uuid::null();   // the next cue's start
         paused = false;
         fadingOut = false;
@@ -264,7 +265,8 @@ private:
     AudioEngine& engine;
     const juce::Uuid id;
     juce::Uuid stopTarget = juce::Uuid::null();   // what the panic button acts on when it is not this cue (a post-wait card: the next cue)
-    WaitProgress::Kind mainKind = WaitProgress::Kind::preWait;   // what a waiting card shows: the cancel is told
+    WaitProgress::Kind mainKind = WaitProgress::Kind::preWait;   // what a waiting card shows: the cancel is told ...
+    int mainStartId = 0;                                          // ... and which scheduled start it is
     juce::TextButton pauseButton, panicButton;
     juce::Label numberLabel, nameLabel, timeLabel, remainingLabel;
     juce::Rectangle<int> barArea, stateBounds, extraBounds, colourBounds;

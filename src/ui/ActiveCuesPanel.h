@@ -32,7 +32,7 @@ public:
     std::function<void (const juce::Uuid& cueId)> onStopRequested;
     /** A waiting card's ×: cancel that wait - for a pre-wait or a wait cue the cue itself, for a post-wait card the next
         cue whose scheduled start the post-wait leads to; 'kind' says which of these the card showed. */
-    std::function<void (const juce::Uuid& cueId, WaitProgress::Kind kind)> onCancelWaitRequested;
+    std::function<void (const juce::Uuid& cueId, WaitProgress::Kind kind, int startId)> onCancelWaitRequested;
     /** Looks a cue up anywhere in the project (the panel's own list is the active one; a cue of another list runs too). */
     std::function<const Cue* (const juce::Uuid& cueId)> findCue;
     /** The row's pause button: resume = true asks for a resume (the owner applies the panic latch). */

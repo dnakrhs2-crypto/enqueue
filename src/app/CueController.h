@@ -67,11 +67,14 @@ public:
     /** Cancels the cue's scheduled starts (a pre-wait, a pending restart) and the auto-continue starts put on behind
         them; a running instance of the cue is left alone. */
     void cancelScheduledStart (const juce::Uuid& cueId);
-    /** The active cues panel's × on a waiting card, by what the card showed: a post-wait = the scheduled start of the
-        cue given (the next cue) goes, a run of that cue started on its own stays; a wait cue's wait is stopped (stopCue);
-        a pre-wait = the current child of a running playlist takes the playlist with it (the list cannot go on without
-        it), any other scheduled start is cancelled with the chain behind it (cancelScheduledStart). */
-    void cancelWait (const juce::Uuid& cueId, WaitProgress::Kind kind);
+    /** Cancels one scheduled start by its scheduler id ('WaitProgress::startId') with the follow put on for it and the
+        auto-continue chain behind it - another start of the same cue, put on by another run, stays. */
+    void cancelStart (int startId);
+    /** The active cues panel's × on a waiting card, by what the card showed: a post-wait = that one scheduled start of the
+        next cue goes (cancelStart), a run of that cue started on its own stays; a wait cue's wait is stopped (stopCue) - as
+        the current child of a running playlist it takes the playlist with it (the list cannot go on without it); a pre-wait
+        of a playlist's current child that has not started yet does the same, any other pre-wait is that one start (cancelStart). */
+    void cancelWait (const juce::Uuid& cueId, WaitProgress::Kind kind, int startId);
     /** Fires one cue the way a hotkey / cart button does: the cue alone (no pre-wait, no sequence, no playhead move),
         with its fade-stop-others and duck. */
     GoResult fire (const juce::Uuid& cueId, bool audition = false);

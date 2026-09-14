@@ -220,7 +220,7 @@ MainComponent::MainComponent (AudioEngine& e, AppSettings& s, juce::ApplicationC
             controller.stopCue (id);
         }
     };
-    activeCues.onCancelWaitRequested = [this] (const juce::Uuid& id, WaitProgress::Kind kind) { controller.cancelWait (id, kind); };
+    activeCues.onCancelWaitRequested = [this] (const juce::Uuid& id, WaitProgress::Kind kind, int startId) { controller.cancelWait (id, kind, startId); };
     activeCues.findCue = [this] (const juce::Uuid& id) { return document.findCueAnywhere (id); };   // a cue of another list runs too
     table.cueExists = [this] (const juce::Uuid& id) { return document.findCueAnywhere (id) != nullptr; };   // a target in another list is not "missing"
     transport.onPanicSettings = [this] (juce::Point<int> screenPosition) { showPanicSecondsMenu (screenPosition); };
