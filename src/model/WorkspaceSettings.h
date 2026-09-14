@@ -52,6 +52,23 @@ struct WorkspaceSettings
     static constexpr double maxFadeOutSeconds = maxPanicSeconds;   // F: the same range as the panic time
     static constexpr double maxDoubleGoSeconds = 60.0;
 
+    /** A fade time is kept on a 0.01 s grid, so that its text (two decimals) reads back as exactly the value that is set. */
+    static double onGrid (double seconds) noexcept
+    {
+        return std::round (seconds * 100.0) / 100.0;
+    }
+
+    /** A fade time as text: two decimals at most, trailing zeros dropped ("1", "0.5", "0.25", "0"). */
+    static juce::String secondsText (double seconds)
+    {
+        auto text = juce::String (seconds, 2);
+
+        if (text.containsChar ('.'))
+            text = text.trimCharactersAtEnd ("0").trimCharactersAtEnd (".");
+
+        return text;
+    }
+
     void sanitise() noexcept
     {
         auto fix = [] (double& v, double lo, double hi, double fallback)
@@ -66,12 +83,19 @@ struct WorkspaceSettings
         fix (panicSeconds, 0.0, maxPanicSeconds, 1.0);
         fix (fadeOutSeconds, 0.0, maxFadeOutSeconds, 1.0);
 
-        // a positive fade time is at least 0.01 s: shown with two decimals it must never read back as 0 (= 즉시 정지 / 큐별)
-        if (panicSeconds > 0.0)
-            panicSeconds = juce::jmax (0.01, panicSeconds);
+        // a fade time sits on the 0.01 s grid, and a positive one stays positive (at least 0.01 s): shown with two decimals
+        // it must read back as exactly what is set, and never as 0 (= 즉시 정지 / 큐별)
+        auto grid = [] (double& v)
+        {
+            const bool positive = v > 0.0;
+            v = onGrid (v);
 
-        if (fadeOutSeconds > 0.0)
-            fadeOutSeconds = juce::jmax (0.01, fadeOutSeconds);
+            if (positive)
+                v = juce::jmax (0.01, v);
+        };
+
+        grid (panicSeconds);
+        grid (fadeOutSeconds);
         fix (numberIncrement, 0.001, 1000.0, 1.0);
         fix (maxLevelDb, -30.0, 24.0, 12.0);      // the matrix / main level clamp at +24 and -120 (LevelMatrix::maxDb / silentDb)
         fix (minLevelDb, -120.0, -40.0, -60.0);

@@ -79,6 +79,37 @@ namespace
             return *editor;
         }
 
+        /** A fade time in seconds (전체 페이드 정지 / 페이드아웃). The box filters nothing: the text is checked as typed by
+            parseSeconds (a character filter would turn "1,5" into "15" and cut a long value down to 0). A box that reads as
+            nothing (empty, half-typed, too long) or as the value already set changes nothing - and marks nothing dirty. */
+        juce::TextEditor& addSeconds (double WorkspaceSettings::* field)
+        {
+            auto* editor = editors.add (new juce::TextEditor());
+            editor->setFont (Palette::monoFont (Palette::fieldValueSize));
+            editor->setJustification (juce::Justification::centredRight);
+            editor->setSelectAllWhenFocused (true);
+            editor->setText (plainSeconds (document.settings.*field), false);
+
+            auto commit = [this, editor, field]
+            {
+                const auto typed = parseSeconds (editor->getText());
+
+                if (typed.has_value() && *typed != document.settings.*field)
+                {
+                    auto s = document.settings;
+                    s.*field = *typed;
+                    document.setSettings (s);
+                }
+
+                editor->setText (plainSeconds (document.settings.*field), false);
+            };
+            editor->onReturnKey = [commit, editor] { commit(); editor->giveAwayKeyboardFocus(); };
+            editor->onFocusLost = commit;
+            editor->onEscapeKey = [editor, field, this] { editor->setText (plainSeconds (document.settings.*field), false); editor->giveAwayKeyboardFocus(); };
+            addAndMakeVisible (editor);
+            return *editor;
+        }
+
         void paint (juce::Graphics& g) override { g.fillAll (Palette::panel); }
 
     protected:
@@ -109,26 +140,12 @@ namespace
                                       [] (WorkspaceSettings& w, bool v) { w.requireKeyUp = v; });
 
             panicLabel = &addLabel (ko ("전체 페이드 정지 시간 (초) - Esc"));
-            panicEditor = &addNumber (plainSeconds (s.panicSeconds), "0123456789.",
-                                      [] (WorkspaceSettings& w, const juce::String& t)
-                                      {
-                                          // an empty or half-typed box leaves the value; a positive value never rounds to 0 (= 즉시 정지)
-                                          if (const auto v = parseSeconds (t))
-                                              w.panicSeconds = *v;
-                                      },
-                                      [] (const WorkspaceSettings& w) { return plainSeconds (w.panicSeconds); });
+            panicEditor = &addSeconds (&WorkspaceSettings::panicSeconds);
             panicHint = &addLabel (ko ("Esc 한 번 = 이 시간 동안 전체 페이드아웃 후 정지, 0.5초 안에 두 번 = 즉시 정지"));
             panicHint->setFont (Palette::font (Palette::kickerSize));
 
             fadeLabel = &addLabel (ko ("페이드아웃 시간 (초) - F, 0 = 큐마다 정한 정지 페이드"));
-            fadeEditor = &addNumber (plainSeconds (s.fadeOutSeconds), "0123456789.",
-                                     [] (WorkspaceSettings& w, const juce::String& t)
-                                     {
-                                         // an empty or half-typed box leaves the value; a positive value never rounds to 0 (= 큐별)
-                                         if (const auto v = parseSeconds (t))
-                                             w.fadeOutSeconds = *v;
-                                     },
-                                     [] (const WorkspaceSettings& w) { return plainSeconds (w.fadeOutSeconds); });
+            fadeEditor = &addSeconds (&WorkspaceSettings::fadeOutSeconds);
 
             autoNumberToggle = &addToggle (ko ("새 큐에 자동 번호"), s.autoNumber,
                                            [] (WorkspaceSettings& w, bool v) { w.autoNumber = v; });

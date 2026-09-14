@@ -1,5 +1,7 @@
 #pragma once
 
+#include "model/WorkspaceSettings.h"
+
 #include <juce_graphics/juce_graphics.h>
 
 #include <cmath>
@@ -37,12 +39,7 @@ inline juce::String formatCountdown (double secondsLeft)
 /** A fade time as it is set: two decimals at most, trailing zeros dropped ("1", "0.5", "0.25", "0"). */
 inline juce::String plainSeconds (double seconds)
 {
-    auto text = juce::String (seconds, 2);
-
-    if (text.containsChar ('.'))
-        text = text.trimCharactersAtEnd ("0").trimCharactersAtEnd (".");
-
-    return text;
+    return WorkspaceSettings::secondsText (seconds);
 }
 
 /** plainSeconds + "초": "1초", "0.5초". */
@@ -51,18 +48,24 @@ inline juce::String secondsLabel (double seconds)
     return plainSeconds (seconds) + ko ("초");
 }
 
-/** A typed fade time in seconds. Nothing for an empty box, letters or a half-typed number ("", ".", "1..5", "abc") - the
-    setting must stay as it is rather than read as 0. A positive value is at least 0.01 so that, shown with two decimals and
-    edited again, it never rounds to 0 (= 즉시 정지 / 큐별). */
+/** A typed fade time in seconds, checked as typed (the boxes filter nothing, so "1,5" or "-1" cannot arrive as "15" or "1").
+    Nothing for an empty box, letters, a half-typed number or an over-long one ("", ".", "1..5", "abc", 13+ characters) - the
+    setting must stay as it is rather than read as 0. The value goes onto the 0.01 s grid (0.124 -> 0.12), and a positive one
+    stays positive (0.001 -> 0.01), so shown and edited again it reads back as exactly what is set, never as 0 (= 즉시 정지 / 큐별). */
 inline std::optional<double> parseSeconds (const juce::String& typed)
 {
     const auto text = typed.trim();
 
-    if (text.isEmpty() || text == "." || ! text.containsOnly ("0123456789.") || text.indexOfChar ('.') != text.lastIndexOfChar ('.'))
+    if (text.isEmpty() || text.length() > 12 || text == "." || ! text.containsOnly ("0123456789.")
+        || text.indexOfChar ('.') != text.lastIndexOfChar ('.'))
         return std::nullopt;
 
     const double v = text.getDoubleValue();
-    return v > 0.0 ? juce::jmax (0.01, v) : 0.0;
+
+    if (! std::isfinite (v) || (v <= 0.0 && text.containsAnyOf ("123456789")))   // a positive number the conversion lost
+        return std::nullopt;
+
+    return v > 0.0 ? juce::jmax (0.01, WorkspaceSettings::onGrid (v)) : 0.0;
 }
 
 /** m:ss.mmm (or m:ss when 'withMillis' is false). Negative -> 0. */

@@ -126,6 +126,13 @@ public:
             s.sanitise();
             expectWithinAbsoluteError (s.fadeOutSeconds, 0.01, 1.0e-9);
             expectWithinAbsoluteError (s.panicSeconds, 0.01, 1.0e-9);
+            s.fadeOutSeconds = 0.123;   // a file value lands on the 0.01 s grid
+            s.panicSeconds = 2.006;
+            s.sanitise();
+            expectWithinAbsoluteError (s.fadeOutSeconds, 0.12, 1.0e-9);
+            expectWithinAbsoluteError (s.panicSeconds, 2.01, 1.0e-9);
+            expectEquals (WorkspaceSettings::secondsText (s.fadeOutSeconds), juce::String ("0.12"));
+            expectEquals (WorkspaceSettings::secondsText (s.panicSeconds), juce::String ("2.01"));
             s.fadeOutSeconds = 0.0;     // 0 is a mode, not a time: it stays 0
             s.panicSeconds = 0.0;
             s.sanitise();
@@ -142,7 +149,8 @@ public:
             expectEquals (plainSeconds (0.0), juce::String ("0"));
             expectEquals (secondsLabel (2.5), ko ("2.5초"));
 
-            for (const char* bad : { "", " ", ".", "abc", "1..5", "1.2.3", "-1", "1e3", "1,5" })
+            for (const char* bad : { "", " ", ".", "abc", "1..5", "1.2.3", "-1", "1e3", "1,5", "nan", "inf",
+                                     "0.00000000001", "1234567890123", "0.000000000000000001" })
                 expect (! parseSeconds (bad).has_value(), juce::String ("'") + bad + "' must not read as a time");
 
             const auto typed = [] (const char* text) { return parseSeconds (text).value_or (-1.0); };
@@ -152,6 +160,13 @@ public:
             expectWithinAbsoluteError (typed ("0"), 0.0, 1.0e-9);        // 0 stays 0: 큐별 / 즉시 정지
             expectWithinAbsoluteError (typed ("0.004"), 0.01, 1.0e-9);   // a positive value never rounds back to 0
             expectEquals (plainSeconds (typed ("0.004")), juce::String ("0.01"));
+            expectWithinAbsoluteError (typed ("0.124"), 0.12, 1.0e-9);   // on the 0.01 s grid: the text reads back as the value
+            expectWithinAbsoluteError (typed ("0.125"), 0.13, 1.0e-9);
+            expectWithinAbsoluteError (typed ("601"), 601.0, 1.0e-9);    // the range is the model's (sanitise clamps to 600)
+            expectWithinAbsoluteError (typed ("0.0000000001"), 0.01, 1.0e-9);
+
+            for (const char* text : { "0.12", "1", "0.5", "10", "600", "0.01" })
+                expectEquals (plainSeconds (typed (text)), juce::String (text), juce::String ("'") + text + "' must read back as typed");
         }
 
         dir.deleteRecursively();

@@ -55,8 +55,7 @@ void TransportBar::TransportButton::paintButton (juce::Graphics& g, bool over, b
     drawSurface (g, getLocalBounds(), findColour (juce::TextButton::buttonColourId), colour, over, down);
     const auto font = Palette::font (Palette::bodySize, true);
     const int captionWidth = juce::GlyphArrangement::getStringWidthInt (font, getButtonText());
-    const bool stop = icon == Icon::stop;
-    const bool twoLine = stop || detail.isNotEmpty();   // the panic button, and the fade-out button with its time: key + time under the caption
+    const bool twoLine = key.isNotEmpty();   // pause, fade-out and panic alike: the caption on top, the key (and a time) under it, captions on one line
     const int totalWidth = Palette::statusIconSize + 8 + captionWidth + (twoLine ? 0 : 8 + keyWidth (key));
     auto line = getLocalBounds().withSizeKeepingCentre (juce::jmin (getWidth() - 16, totalWidth), 22);
     if (twoLine)
@@ -94,8 +93,8 @@ void TransportBar::TransportButton::paintButton (juce::Graphics& g, bool over, b
     g.drawText (getButtonText(), line, juce::Justification::centred, true);
     if (twoLine)
     {
-        const int detailWidth = juce::GlyphArrangement::getStringWidthInt (Palette::font (Palette::fileSize, true), detail);
-        auto bottom = getLocalBounds().withSizeKeepingCentre (keyWidth (key) + 4 + detailWidth, 16).translated (0, 11);
+        const int detailWidth = detail.isEmpty() ? 0 : 4 + juce::GlyphArrangement::getStringWidthInt (Palette::font (Palette::fileSize, true), detail);
+        auto bottom = getLocalBounds().withSizeKeepingCentre (keyWidth (key) + detailWidth, 16).translated (0, 11);
         drawKey (g, bottom.removeFromLeft (keyWidth (key)), colour, key);
         bottom.removeFromLeft (4);
         g.setColour (colour);
