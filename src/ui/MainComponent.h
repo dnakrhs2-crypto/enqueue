@@ -262,6 +262,7 @@ private:
     CueInspector inspector;
     ActiveCuesPanel activeCues;
     FooterBar footer;
+    juce::TooltipWindow tooltipWindow { this, 700 };   // shows every setTooltip() in the main window (the footer diagnostics, the transport buttons)
     ModeToggle modeToggle;
     Palette::CachedShadow listShadow, activeShadow, inspectorShadow;
     juce::Rectangle<int> listCardBounds;

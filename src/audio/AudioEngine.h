@@ -29,9 +29,11 @@ public:
     /** Device outputs 1-2 after the master inserts and output gate; poll from the message thread. */
     livemix::LoudnessMeter& getLoudnessMeter() noexcept { return loudness; }
 
-    /** What the device outputs did since the last take, for the footer: the highest sample peak (linear, 0 = silence), how
-        many blocks went over 0 dBFS (an ASIO driver clips there; Windows Audio's shared mode limits first, so the same show
-        can sound clean there and grainy on ASIO) and the device's xrun count. The counts start again when a device starts. */
+    /** What the device outputs did, for the footer: the highest sample peak since the last take (linear, 0 = silence), how
+        many blocks went over 0 dBFS before the device's own conversion (an integer-format ASIO driver clips there, a Float32
+        one passes it on, Windows Audio's shared mode handles it on its side) and the xruns the manager counted (the driver's
+        reports plus the callbacks over budget - a cumulative figure, and 0 is no proof of an unbroken output). The counts
+        start again when a device starts. */
     struct OutputDiagnostics
     {
         float peak = 0.0f;
