@@ -72,8 +72,8 @@ public:
     void cancelStart (int startId);
     /** The active cues panel's × on a waiting card, by what the card showed: a post-wait = that one scheduled start of the
         next cue goes (cancelStart), a run of that cue started on its own stays; a wait cue's wait is stopped (stopCue) - as
-        the current child of a running playlist it takes the playlist with it (the list cannot go on without it); a pre-wait
-        of a playlist's current child that has not started yet does the same, any other pre-wait is that one start (cancelStart). */
+        the current child of a running playlist it takes the playlist with it (the list cannot go on without it); the pre-wait
+        of the start a playlist put on for its current child does the same, any other pre-wait is that one start (cancelStart). */
     void cancelWait (const juce::Uuid& cueId, WaitProgress::Kind kind, int startId);
     /** Fires one cue the way a hotkey / cart button does: the cue alone (no pre-wait, no sequence, no playhead move),
         with its fade-stop-others and duck. */
@@ -263,7 +263,11 @@ private:
     std::vector<RecordedStart> recorded;
     struct WaitRun { double startedAt = 0.0, endsAt = 0.0; };
     std::map<juce::Uuid, WaitRun> waits;                           // wait cues: id -> the running wait
-    struct PlaylistRun { std::vector<juce::Uuid> order; int position = 0; bool audition = false; juce::Uuid current = juce::Uuid::null(); int failures = 0; };
+    struct PlaylistRun
+    {
+        std::vector<juce::Uuid> order; int position = 0; bool audition = false; juce::Uuid current = juce::Uuid::null(); int failures = 0;
+        int currentStartId = 0;   // the scheduled start of 'current' this run put on (0 = it started at once): cancelling that one start stops the list
+    };
     std::map<juce::Uuid, PlaylistRun> playlists;                  // running playlist groups
     std::map<juce::Uuid, std::set<juce::Uuid>> randomUsed;        // random groups: children played this round
     int lastGroupEnterIndex = -1;                                 // set by startGroup() for "start first and enter"

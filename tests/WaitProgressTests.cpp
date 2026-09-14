@@ -70,6 +70,7 @@ public:
         const auto dir = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("gocue_waits_" + juce::Uuid().toString());
         expect (dir.createDirectory().wasOk());
         const auto tone = writeSine (dir, "tone.wav", 2.0);
+        const auto tone1 = writeSine (dir, "tone1.wav", 1.0);
 
         AudioEngine engine (0);
         engine.prepare (sampleRate, blockSize);
@@ -280,7 +281,8 @@ public:
             expect (controller.go() == CueController::GoResult::started);
             controller.goKeyReleased();
             render (engine, scheduler, now, out, 40);   // 0.46 s: b's pre-wait runs
-            const auto* bPre = find (controller.getRunningWaits(), b.id, WaitProgress::Kind::preWait);
+            const auto bWaits = controller.getRunningWaits();   // kept: 'bPre' points into it
+            const auto* bPre = find (bWaits, b.id, WaitProgress::Kind::preWait);
             expect (bPre != nullptr);
             controller.cancelWait (b.id, WaitProgress::Kind::preWait, bPre != nullptr ? bPre->startId : 0);
             expect (engine.isPlaying (a.id), "cancelling b's wait stopped a");
@@ -320,7 +322,8 @@ public:
             expect (controller.go() == CueController::GoResult::started);
             controller.goKeyReleased();
             expect (controller.getNumPending() >= 2);   // a's start and its follow
-            const auto* aPre = find (controller.getRunningWaits(), a.id, WaitProgress::Kind::preWait);
+            const auto aWaits = controller.getRunningWaits();   // kept: 'aPre' points into it
+            const auto* aPre = find (aWaits, a.id, WaitProgress::Kind::preWait);
             expect (aPre != nullptr);
             controller.cancelWait (a.id, WaitProgress::Kind::preWait, aPre != nullptr ? aPre->startId : 0);
             expect (controller.getRunningWaits().empty());
@@ -438,8 +441,18 @@ public:
             controller.fireSequence (si);
             expect (engine.isPlaying (b.id));
             expect (! controller.isCueActive (a.id), "the wait cue was not ended by fade-stop-others");
-            render (engine, scheduler, now, out, 220);  // 2.75 s: b (2 s from 0.2 s) is over; a second start at 2.5 s would have it playing
-            expect (! engine.isPlaying (b.id), "b was started again by the start behind the ended wait cue");
+            auto startOrderOfB = [&engine, &b]
+            {
+                juce::int64 order = -1;
+                for (const auto& p : engine.getPlayingCues())
+                    if (p.id == b.id && ! p.loaded)
+                        order = p.startOrder;
+                return order;
+            };
+            const auto firstStart = startOrderOfB();
+            render (engine, scheduler, now, out, 60);   // 0.9 s: the start of b put on behind a (due at 0.5 s: a's post-wait counts from a's start) must not restart it
+            expect (engine.isPlaying (b.id));
+            expectEquals (startOrderOfB(), firstStart, "b was started again by the start behind the ended wait cue");
             stopEverything();
             document.cues.update (0, [] (Cue& x) { x.type = CueType::audio; x.control = {}; x.continueMode = ContinueMode::none; x.postWaitSeconds = 0.0; });
             document.cues.removeIndices ({ document.cues.indexOf (s.id) });
@@ -507,12 +520,74 @@ public:
             render (engine, scheduler, now, out, 35);   // 0.41 s: l plays inside h
             expect (engine.isPlaying (l.id));
             controller.fireSequence (document.cues.indexOf (h.id));   // a GO on h while it runs: a restart after its pre-wait
-            const auto* pre = find (controller.getRunningWaits(), h.id, WaitProgress::Kind::preWait);
+            const auto hWaits = controller.getRunningWaits();   // kept: 'pre' points into it
+            const auto* pre = find (hWaits, h.id, WaitProgress::Kind::preWait);
             expect (pre != nullptr, "the restart's pre-wait is not reported");
             controller.cancelWait (h.id, WaitProgress::Kind::preWait, pre != nullptr ? pre->startId : 0);
             expect (engine.isPlaying (l.id), "cancelling the restart stopped the running child");
             expect (controller.isCueActive (g.id), "cancelling the restart stopped the playlist");
             expect (find (controller.getRunningWaits(), h.id, WaitProgress::Kind::preWait) == nullptr);
+            stopEverything();
+            document.cues.removeIndices ({ document.cues.indexOf (g.id) });
+        }
+
+        beginTest ("cancelling the pre-wait of a playlist's child that has not started stops the playlist");
+        {
+            Cue g;
+            g.name = "PL3"; g.type = CueType::group; g.group.mode = GroupMode::playlist;
+            const int gi = document.cues.add (g);
+            Cue h, l, nb;
+            h.name = "H3"; h.type = CueType::group; h.parentId = g.id; h.preWaitSeconds = 0.5;
+            l.name = "L3"; l.file = tone; l.parentId = h.id;
+            nb.name = "B3"; nb.file = tone; nb.parentId = g.id;
+            document.cues.add (h);
+            document.cues.add (l);
+            document.cues.add (nb);
+            controller.fireSequence (gi);               // h is due at 0.5 s: the list's own start of it
+            const auto hWaits = controller.getRunningWaits();
+            const auto* pre = find (hWaits, h.id, WaitProgress::Kind::preWait);
+            expect (pre != nullptr);
+            controller.cancelWait (h.id, WaitProgress::Kind::preWait, pre != nullptr ? pre->startId : 0);
+            expect (! controller.isCueActive (g.id), "the playlist is still active after its child's first pre-wait was cancelled");
+            render (engine, scheduler, now, out, 100);  // 1.16 s
+            expect (! engine.isPlaying (l.id) && ! engine.isPlaying (nb.id), "the playlist went on after its child's pre-wait was cancelled");
+            stopEverything();
+            document.cues.removeIndices ({ document.cues.indexOf (g.id) });
+        }
+
+        beginTest ("cancelling another run's pre-wait of a playlist's current child leaves the playlist's own start");
+        {
+            // G: playlist [x (1 s), q (memo, auto-continue), w (pre-wait 2 s)]. A GO on q at 0.2 s puts w@2.2 on (a run of its own);
+            // once x is over the list itself steps through q and puts w@3.0 on. Cancelling the w@2.2 card must leave w@3.0.
+            Cue g;
+            g.name = "PL4"; g.type = CueType::group; g.group.mode = GroupMode::playlist;
+            const int gi = document.cues.add (g);
+            Cue x, q, w;
+            x.name = "X4"; x.file = tone1; x.parentId = g.id;
+            q.name = "Q4"; q.type = CueType::control; q.control.kind = ControlKind::memo; q.continueMode = ContinueMode::autoContinue; q.parentId = g.id;
+            w.name = "W4"; w.file = tone; w.preWaitSeconds = 2.0; w.parentId = g.id;
+            document.cues.add (x);
+            document.cues.add (q);
+            document.cues.add (w);
+            controller.fireSequence (gi);               // x plays (1 s)
+            render (engine, scheduler, now, out, 17);   // 0.2 s
+            controller.fireSequence (document.cues.indexOf (q.id));   // q at once, w@2.2 behind it
+            render (engine, scheduler, now, out, 86);   // 1.2 s: x is over, the list stepped through q and put w@3.0 on
+            const auto wWaits = controller.getRunningWaits();
+            const WaitProgress* separate = nullptr;
+            const WaitProgress* own = nullptr;
+            for (const auto& wp : wWaits)
+                if (wp.cueId == w.id && wp.kind == WaitProgress::Kind::preWait && (separate == nullptr || wp.endsAt < separate->endsAt))
+                    separate = &wp;
+            for (const auto& wp : wWaits)
+                if (wp.cueId == w.id && wp.kind == WaitProgress::Kind::preWait && &wp != separate)
+                    own = &wp;
+            expect (separate != nullptr && own != nullptr, "the two starts of w are not both reported");
+            controller.cancelWait (w.id, WaitProgress::Kind::preWait, separate != nullptr ? separate->startId : 0);
+            expect (controller.isCueActive (g.id), "cancelling the other run's start stopped the playlist");
+            expect (! engine.isPlaying (w.id));
+            render (engine, scheduler, now, out, 160);  // 3.06 s: the list's own w@3.0 fired
+            expect (engine.isPlaying (w.id), "the playlist's own start of w was cancelled too");
             stopEverything();
             document.cues.removeIndices ({ document.cues.indexOf (g.id) });
         }

@@ -448,7 +448,8 @@ void CueController::playlistStep (const juce::Uuid& groupId)
         const double startAt = from + child->preWaitSeconds;
         const bool audition = run.audition;
 
-        const bool started = scheduleStart (childId, startAt, audition, nullptr, { from }) != GoResult::failed;
+        int startId = 0;
+        const bool started = scheduleStart (childId, startAt, audition, &startId, { from }) != GoResult::failed;
 
         // scheduleStart runs a zero-pre-wait child at once, and that child may be a control cue that stops (and so
         // erases) this very playlist. From here 'run' and 'it' may be dangling: re-find the entry before any more use.
@@ -456,6 +457,8 @@ void CueController::playlistStep (const juce::Uuid& groupId)
 
         if (it == playlists.end())
             return;
+
+        it->second.currentStartId = startId;   // the list's own start of this child (a start of it put on by another run is not the list's)
 
         if (! started)
         {
@@ -862,10 +865,10 @@ void CueController::cancelWait (const juce::Uuid& cueId, WaitProgress::Kind kind
         return;
     }
 
-    // the current child of a running playlist: its own wait, or a pre-wait of a child that has not started yet (a
-    // pre-wait of a restart while the child runs is that start alone) - the list cannot go on without its child
+    // the current child of a running playlist: its own wait, or the very start the list put on for it (a start of the
+    // same child put on by another run - a restart, a GO on it - is that start alone) - the list cannot go on without its child
     for (const auto& run : playlists)
-        if (run.second.current == cueId && (kind == WaitProgress::Kind::waitCue || ! isCueActive (cueId)))
+        if (run.second.current == cueId && (kind == WaitProgress::Kind::waitCue || (startId != 0 && run.second.currentStartId == startId)))
         {
             const auto groupId = run.first;
             int index = -1;
