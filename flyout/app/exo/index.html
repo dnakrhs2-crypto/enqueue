@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Flyout 앱 받기</title>
+<meta name="robots" content="noindex">
+<meta name="description" content="Flyout 앱 다운로드 — 휴대폰 종류에 맞는 스토어로 이동합니다">
+<style>
+  :root{ --bg:#FFFFFF; --grey:#F2F4F6; --grey2:#E5E8EB; --ink:#191F28; --sub:#4E5968; --dim:#8B95A1; --blue:#8B5CF6; --blue-soft:#F1EBFF; --blue-ink:#6A3DE8; }
+  *{box-sizing:border-box}
+  html,body{margin:0;background:var(--bg);color:var(--ink);font-family:-apple-system,BlinkMacSystemFont,"Apple SD Gothic Neo","Malgun Gothic","Noto Sans KR",sans-serif;font-size:16px;line-height:1.6;-webkit-font-smoothing:antialiased;word-break:keep-all}
+  .wrap{max-width:420px;margin:0 auto;padding:48px 20px 40px;text-align:center}
+  .brand{display:flex;align-items:center;justify-content:center;gap:10px;font-weight:800;font-size:22px;letter-spacing:-.02em}
+  .brand img{height:40px;width:auto;display:block}
+  h1{font-size:22px;line-height:1.4;font-weight:800;letter-spacing:-.02em;margin:28px 0 8px}
+  p{margin:0;color:var(--sub);font-size:15px}
+  .spin{width:28px;height:28px;border:3px solid var(--grey2);border-top-color:var(--blue);border-radius:50%;margin:22px auto 0;animation:r .9s linear infinite}
+  @keyframes r{to{transform:rotate(360deg)}}
+  .btns{display:grid;gap:10px;margin-top:28px}
+  .btn{display:block;padding:15px 18px;border-radius:14px;font-weight:700;font-size:16px;text-decoration:none;color:#fff;background:var(--ink)}
+  .btn.play{background:var(--blue)}
+  .hint{margin-top:18px;color:var(--dim);font-size:13px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="brand"><img src="/flyout/logo.png" alt="" onerror="this.style.display='none'">flyout</div>
+  <h1 id="h">Flyout 앱으로 이동 중…</h1>
+  <p id="p">잠시만 기다려 주세요.</p>
+  <div class="spin" id="spin"></div>
+  <div class="btns" id="btns" hidden>
+    <a class="btn" id="ios" href="https://apps.apple.com/kr/app/flyout/id6770570785">App Store에서 받기</a>
+    <a class="btn play" id="android" href="https://play.google.com/store/apps/details?id=fun.flyout.app">Google Play에서 받기</a>
+  </div>
+  <p class="hint" id="hint" hidden>자동으로 열리지 않으면 위 버튼을 눌러 주세요.</p>
+</div>
+<script defer src="https://static.cloudflareinsights.com/beacon.min.js" data-cf-beacon='{"token": "ba5c97d4030f4886a543055e34721a3b"}'></script>
+<script>
+(function () {
+  var APP_STORE = 'https://apps.apple.com/kr/app/flyout/id6770570785';
+  var PLAY_ID = 'fun.flyout.app';
+  var IOS_PROVIDER_TOKEN = '';            // App Store Connect 캠페인 링크 pt 값이 나오면 여기에 (ct=캠페인 자동)
+  var q = new URLSearchParams(location.search);
+  // 캠페인 = /flyout/app/<이름>/ 의 마지막 경로 조각, 없으면 ?c=, 둘 다 없으면 direct
+  var parts = location.pathname.replace(/\/index\.html$/i, '').replace(/\/+$/, '').split('/');
+  var last = parts[parts.length - 1] || '';
+  var campaign = (last && last !== 'app') ? last : (q.get('c') || 'direct');
+  campaign = campaign.replace(/[^A-Za-z0-9_\-.]/g, '').slice(0, 40) || 'direct';
+  var source = (q.get('s') || campaign.split(/[_\-]/)[0] || 'smartlink').replace(/[^A-Za-z0-9]/g, '').slice(0, 20);
+  var ua = navigator.userAgent || '';
+  var isIOS = /iPhone|iPad|iPod/i.test(ua) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+  var isAndroid = /Android/i.test(ua);
+  var referrer = encodeURIComponent('utm_source=' + source + '&utm_medium=smartlink&utm_campaign=' + campaign);
+  var playUrl = 'https://play.google.com/store/apps/details?id=' + PLAY_ID + '&referrer=' + referrer;
+  var iosUrl = APP_STORE + (IOS_PROVIDER_TOKEN ? '?pt=' + IOS_PROVIDER_TOKEN + '&ct=' + encodeURIComponent(campaign) : '');
+  document.getElementById('ios').href = iosUrl;
+  document.getElementById('android').href = playUrl;
+  window.__smartlink = { campaign: campaign, source: source, isIOS: isIOS, isAndroid: isAndroid, iosUrl: iosUrl, playUrl: playUrl };
+
+  var target = isIOS ? iosUrl : (isAndroid ? playUrl : '');
+  var done = false;
+  function go() {
+    if (done) return; done = true;
+    if (target) { location.replace(target); }
+    showButtons(!target);
+  }
+  function showButtons(desktop) {
+    document.getElementById('spin').hidden = true;
+    document.getElementById('btns').hidden = false;
+    document.getElementById('hint').hidden = false;
+    if (desktop) {
+      document.getElementById('h').textContent = 'Flyout 앱 받기';
+      document.getElementById('p').textContent = '휴대폰에서 이 링크를 열면 스토어로 바로 이동합니다.';
+      document.getElementById('hint').textContent = 'PC에서는 아래 버튼으로 스토어 페이지를 열 수 있습니다.';
+    }
+  }
+  if (!target) { showButtons(true); return; }
+  // 방문 집계(비콘)가 나간 뒤 이동: load 후 300ms, 늦어도 1.5초
+  window.addEventListener('load', function () { setTimeout(go, 300); });
+  setTimeout(go, 1500);
+  setTimeout(function () { if (!done) return; showButtons(false); }, 2500);
+})();
+</script>
+</body>
+</html>
