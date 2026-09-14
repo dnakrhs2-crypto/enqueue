@@ -639,8 +639,10 @@ public:
             render (engine, scheduler, now, out, 35);   // 0.41 s: w started
             expect (engine.isPlaying (w.id));
             controller.cancelWait (w.id, WaitProgress::Kind::preWait, staleId);   // the card the screen still showed
+            render (engine, scheduler, now, out, 2);    // a stop request takes a render to show in isPlaying()
             expect (engine.isPlaying (w.id), "a stale pre-wait id stopped the cue that had just started");
             expect (controller.isCueActive (g.id), "a stale pre-wait id stopped the playlist");
+            expect (controller.getNumPending() > 0, "the playlist's step watch is gone");
             stopEverything();
             document.cues.removeIndices ({ document.cues.indexOf (g.id) });
         }
