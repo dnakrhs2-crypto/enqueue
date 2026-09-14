@@ -1,0 +1,191 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>헤르츠 스튜디오 크리에이터 안내</title>
+<meta name="robots" content="noindex">
+<meta name="description" content="헤르츠 스튜디오 크리에이터 영입 안내: 알플레이(RPLAY) 콘텐츠 제작·라이브 서포트, 독산·강남 스튜디오 무료 이용">
+<link rel="stylesheet" as="style" crossorigin href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css">
+<style>
+  :root{
+    --bg:#FFFFFF; --grey:#F2F4F6; --grey2:#E5E8EB; --ink:#191F28; --sub:#4E5968; --dim:#8B95A1;
+    --acc:#111827; --acc-soft:#EEF0F3; --acc-ink:#111827;   /* 로고가 흑백이라 포인트색 = 잉크 블랙 */
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;background:var(--bg);color:var(--ink);font-family:"Pretendard Variable",Pretendard,-apple-system,BlinkMacSystemFont,"Apple SD Gothic Neo","Malgun Gothic",sans-serif;font-size:16px;line-height:1.6;-webkit-font-smoothing:antialiased;word-break:keep-all}
+  .wrap{max-width:560px;margin:0 auto;padding:20px 20px 40px}
+  .top{display:flex;align-items:center;justify-content:space-between;padding:4px 0 26px}
+  .brand{display:flex;align-items:center;gap:10px;font-weight:800;font-size:21px;letter-spacing:-.02em}
+  .brand img{height:44px;width:auto;display:block}
+  .badge{font-size:13px;font-weight:600;color:var(--acc-ink);background:var(--acc-soft);padding:6px 10px;border-radius:8px;white-space:nowrap}
+  .hello{color:var(--dim);font-size:15px;margin:0 0 8px;font-weight:500}
+  h1{font-size:28px;line-height:1.35;font-weight:800;letter-spacing:-.03em;margin:0;text-wrap:balance}
+  h1 span{color:var(--acc)}
+  .lead{margin:12px 0 0;color:var(--sub);font-size:16px}
+  .money{margin-top:24px;background:var(--grey);border-radius:20px;padding:22px 20px}
+  .money .l{font-size:14px;color:var(--dim);font-weight:500}
+  .money .rows{margin-top:12px;display:grid;gap:0}
+  .money .r{display:flex;justify-content:space-between;align-items:baseline;padding:12px 0;border-bottom:1px solid var(--grey2);font-size:15px;color:var(--sub)}
+  .money .r:last-child{border-bottom:0}
+  .money .r b{color:var(--ink);font-size:20px;font-variant-numeric:tabular-nums;font-weight:700;letter-spacing:-.02em}
+  .money .r.hi span{color:var(--ink);font-weight:600}
+  .money .r.hi b{color:var(--acc);font-size:28px;font-weight:800}
+  .money .note{margin:12px 0 0;font-size:12.5px;color:var(--dim);line-height:1.5}
+  section{margin-top:40px}
+  h2{font-size:21px;font-weight:800;letter-spacing:-.02em;margin:0 0 16px}
+  .steps{display:grid;gap:14px}
+  .step{display:flex;gap:14px;align-items:flex-start}
+  .ico{flex:none;width:40px;height:40px;border-radius:12px;background:var(--acc-soft);display:grid;place-items:center}
+  .ico svg{width:20px;height:20px;stroke:var(--acc);fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+  .num{flex:none;width:40px;height:40px;border-radius:12px;background:var(--acc);color:#fff;display:grid;place-items:center;font-weight:800;font-size:17px}
+  .step b{display:block;font-size:16px;font-weight:700}
+  .step p{margin:2px 0 0;color:var(--sub);font-size:15px}
+  .list{display:grid;gap:10px;margin:0;padding:0;list-style:none}
+  .list li{display:flex;gap:10px;align-items:flex-start;color:var(--sub)}
+  .list li:before{content:"";flex:none;width:18px;height:18px;margin-top:4px;border-radius:50%;background:var(--acc) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='white' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M5 12l5 5L20 7'/%3E%3C/svg%3E") center/11px no-repeat}
+  .studio{margin-top:18px}
+  .studio + .studio{margin-top:26px}
+  .studio .h{display:flex;align-items:baseline;gap:8px;margin:0 0 10px}
+  .studio .h b{font-size:17px;font-weight:800}
+  .studio .h small{color:var(--dim);font-size:13.5px}
+  .gallery{display:flex;gap:10px;overflow-x:auto;scroll-snap-type:x mandatory;margin:0 -20px;padding:0 20px 6px;-webkit-overflow-scrolling:touch;scrollbar-width:none}
+  .gallery::-webkit-scrollbar{display:none}
+  .shot{flex:none;width:100%;aspect-ratio:4/3;border-radius:16px;overflow:hidden;background:var(--grey);scroll-snap-align:start;position:relative}
+  .gallery:has(.shot:nth-child(2)) .shot{width:82%;max-width:420px}
+  .shot img{width:100%;height:100%;object-fit:cover;display:block}
+  .shot.ph{display:grid;place-items:center;color:var(--dim);font-size:14px;font-weight:600;border:1.5px dashed var(--grey2)}
+  .studio p{margin:10px 0 0;color:var(--sub);font-size:15px}
+  .callout{margin-top:40px;background:var(--acc);color:#fff;border-radius:20px;padding:22px 20px}
+  .callout .l{font-size:14px;opacity:.85;font-weight:500}
+  .callout p{margin:6px 0 0;font-size:20px;font-weight:800;line-height:1.4;letter-spacing:-.02em}
+  .faq{display:grid;gap:0}
+  .qa{padding:16px 0;border-bottom:1px solid var(--grey)}
+  .qa:last-child{border-bottom:0}
+  .qa .q{font-weight:700;font-size:16px;display:flex;gap:8px}
+  .qa .q:before{content:"Q";color:var(--acc);font-weight:800}
+  .qa .a{margin:6px 0 0 22px;color:var(--sub);font-size:15.5px}
+  .close{margin-top:32px;background:var(--grey);border-radius:16px;padding:16px 18px;color:var(--sub);font-size:15px;text-align:center;font-weight:500}
+  .contact{margin-top:40px}
+  .kakao{display:flex;align-items:center;gap:16px;background:#FEE500;color:#191919;border-radius:18px;padding:20px 22px;text-decoration:none;border:1px solid #E6CF00}
+  .kakao:hover{filter:brightness(1.03)}
+  .kakao svg{width:64px;height:64px;fill:#191919;flex:none}
+  .kakao b{display:block;font-size:20px;font-weight:800;letter-spacing:-.02em;line-height:1.25}
+  .kakao small{display:block;font-size:14px;color:#3A3A2A;margin-top:4px;font-weight:500}
+  .alt{display:flex;justify-content:space-between;align-items:center;margin-top:12px;padding:14px 18px;border:1px solid var(--grey2);border-radius:14px;color:var(--sub);font-size:15px}
+  .alt b{color:var(--ink);font-weight:700;font-variant-numeric:tabular-nums}
+  .foot{margin-top:36px;color:var(--dim);font-size:12.5px;text-align:center}
+  @media (max-width:360px){ h1{font-size:25px} .money .r.hi b{font-size:25px} .kakao b{font-size:18px} }
+</style>
+<script defer src="https://static.cloudflareinsights.com/beacon.min.js" data-cf-beacon='{"token": "__CF_BEACON_TOKEN__"}'></script>
+</head>
+<body>
+<div class="wrap">
+  <div class="top">
+    <div class="brand"><img src="logo.png" alt="hertz STUDIO"></div>
+    <div class="badge">크리에이터 영입</div>
+  </div>
+
+  <p class="hello">안녕하세요! 헤르츠 스튜디오입니다 :)</p>
+  <h1>ASMR·보이스 크리에이터,<br><span>알플레이</span>에서 제대로 벌어보세요</h1>
+  <p class="lead">알플레이(RPLAY) 협업사 헤르츠 스튜디오가 콘텐츠 제작과 라이브를 서포트하고, 수익을 함께 나눠요.</p>
+
+  <div class="money">
+    <div class="l">활동 기간별 실제 수익 · 2026년</div>
+    <div class="rows">
+      <div class="r"><span>활동 3개월 차</span><b>월 636만원</b></div>
+      <div class="r"><span>활동 7개월 차</span><b>월 1,379만원</b></div>
+      <div class="r hi"><span>활동 8개월 차</span><b>월 1,739만원</b></div>
+    </div>
+    <p class="note">소속 크리에이터의 2026년 1~8월 실제 정산액 기준(알플레이 정산액, 수수료·분배 전, 익명). 콘텐츠와 활동량에 따라 크리에이터마다 달라요.</p>
+  </div>
+
+  <section>
+    <h2>헤르츠가 해드리는 것</h2>
+    <div class="steps">
+      <div class="step">
+        <div class="ico"><svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 4-6 8-6s8 2 8 6"/></svg></div>
+        <div><b>전담 매니저 1:1 케어</b><p>일정, 콘텐츠 방향, 정산까지 전담 매니저가 처음부터 끝까지 같이 챙겨요.</p></div>
+      </div>
+      <div class="step">
+        <div class="ico"><svg viewBox="0 0 24 24"><path d="M12 3l1.8 4.6L18 9l-4.2 1.4L12 15l-1.8-4.6L6 9l4.2-1.4z"/><path d="M5 18l.9 2.1L8 21l-2.1.9L5 24l-.9-2.1L2 21l2.1-.9z" transform="translate(0 -3)"/></svg></div>
+        <div><b>콘텐츠 기획 · 마케팅</b><p>대본과 기획을 같이 만들고, 채널 성장 전략과 홍보까지 함께 고민해요.</p></div>
+      </div>
+      <div class="step">
+        <div class="ico"><svg viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3M8 21h8"/></svg></div>
+        <div><b>스튜디오 무료 이용</b><p>독산·강남 2개 지점. NEUMANN KU100·U87 마이크와 고사양 PC로 녹음도 라이브도 최고 퀄리티로 진행해요.</p></div>
+      </div>
+      <div class="step">
+        <div class="ico"><svg viewBox="0 0 24 24"><path d="M4 14l6-6 4 4 6-6"/><path d="M14 6h6v6"/></svg></div>
+        <div><b>장비 투자 · 성장 지원</b><p>활동에 필요한 장비를 투자하고, 콘텐츠 판매와 라이브 두 축으로 수익을 키워요.</p></div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>스튜디오</h2>
+    <p class="lead" style="margin:0 0 6px">소속 크리에이터는 두 지점 모두 무료로 이용해요.</p>
+    <div class="studio">
+      <div class="h"><b>독산점</b><small>서울 금천구</small></div>
+      <div class="gallery">
+        <div class="shot"><img src="doksan-1.jpg" width="1400" height="1400" alt="독산점 라이브·녹음 룸" loading="lazy"></div>
+      </div>
+      <p>라이브·녹음 룸. 흡음 시공에 모니터 스피커와 고사양 PC까지 갖춰져 있어요.</p>
+    </div>
+    <div class="studio">
+      <div class="h"><b>강남점</b><small>서울 강남구</small></div>
+      <div class="gallery">
+        <div class="shot"><img src="gangnam-1.jpg" width="1400" height="1050" alt="강남점 라이브·녹음 룸" loading="lazy"></div>
+      </div>
+      <p>라이브·녹음 룸. 흡음 패널과 조명, 듀얼 모니터 세팅으로 방송과 녹음 모두 바로 시작할 수 있어요.</p>
+    </div>
+  </section>
+
+  <section>
+    <h2>진행 방식</h2>
+    <div class="steps">
+      <div class="step"><div class="num">1</div><div><b>오픈채팅으로 문의</b><p>아래 버튼으로 편하게 말 걸어 주세요. 채널 링크나 샘플이 있으면 같이 보내주시면 좋아요.</p></div></div>
+      <div class="step"><div class="num">2</div><div><b>수익 구조 · 활동 방식 상담</b><p>분배 구조, 콘텐츠 방향, 스튜디오 이용까지 궁금한 걸 전부 설명드려요.</p></div></div>
+      <div class="step"><div class="num">3</div><div><b>계약 후 활동 시작</b><p>알플레이 계정 세팅과 첫 콘텐츠 기획을 전담 매니저와 함께 시작해요.</p></div></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>이런 분이면 잘 맞아요</h2>
+    <ul class="list">
+      <li>ASMR·상황극·보이스 콘텐츠를 만들어 봤거나 해보고 싶은 분</li>
+      <li>치지직 등 기존 플랫폼의 수위 규제로 활동 방향이 고민인 분</li>
+      <li>콘텐츠 판매와 라이브 방송을 같이 해서 수익을 키우고 싶은 분</li>
+    </ul>
+  </section>
+
+  <div class="callout">
+    <div class="l">한 줄 요약</div>
+    <p>제작·라이브·마케팅은 헤르츠가 챙기고,<br>크리에이터는 콘텐츠에만 집중해요.</p>
+  </div>
+
+  <section>
+    <h2>자주 묻는 질문</h2>
+    <div class="faq">
+      <div class="qa"><div class="q">반드시 19금으로 해야 하나요?</div><div class="a">아니에요. 수위는 본인이 정하고, 원하는 범위 안에서 콘텐츠를 기획해요.</div></div>
+      <div class="qa"><div class="q">얼굴을 꼭 보여줘야 하나요?</div><div class="a">아니요. 목소리만으로 활동하는 크리에이터가 대부분이에요.</div></div>
+      <div class="qa"><div class="q">헤르츠 없이 알플레이에서 혼자 활동할 수도 있나요?</div><div class="a">네, 가능해요. 단독 활동 방향도 안내해 드리니 부담 없이 문의 주세요.</div></div>
+      <div class="qa"><div class="q">스튜디오는 어떻게 이용하나요?</div><div class="a">소속 크리에이터는 독산·강남 지점을 예약해서 녹음과 라이브에 무료로 이용해요.</div></div>
+      <div class="qa"><div class="q">계약서와 세금은요?</div><div class="a">활동 조건을 담은 계약서를 작성하고, 정산 때 사업자가 아닌 경우 3.3% 소득세를 공제한 뒤 지급돼요.</div></div>
+    </div>
+  </section>
+
+  <div class="close">궁금한 건 뭐든 편하게 물어봐 주세요. 헤르츠 스튜디오 담당자가 직접 답해요.</div>
+
+  <section class="contact">
+    <h2>문의하기</h2>
+    <a class="kakao" href="https://open.kakao.com/o/sn4RSYdf">
+      <svg viewBox="0 0 48 48" aria-hidden="true"><path d="M24 6C12.4 6 3 13.3 3 22.3c0 5.8 3.9 10.9 9.8 13.8-.4 1.4-1.5 5.3-1.7 6.1-.3 1 .4 1 .8.7.3-.2 5.1-3.4 7.2-4.8 1.6.2 3.2.4 4.9.4 11.6 0 21-7.3 21-16.2S35.6 6 24 6z"/></svg>
+      <span><b>카카오톡 오픈채팅으로 문의하기</b><small>헤르츠 스튜디오 크리에이터 문의 · 바로 답변</small></span>
+    </a>
+  </section>
+
+  <p class="foot">헤르츠 스튜디오 · 알플레이(RPLAY) 협업사</p>
+</div>
+</body>
+</html>
