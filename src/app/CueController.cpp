@@ -458,8 +458,6 @@ void CueController::playlistStep (const juce::Uuid& groupId)
         if (it == playlists.end())
             return;
 
-        it->second.currentStartId = startId;   // the list's own start of this child (a start of it put on by another run is not the list's)
-
         if (! started)
         {
             // could not start (file missing ...): on to the next, but a list where nothing starts must not spin forever
@@ -477,6 +475,10 @@ void CueController::playlistStep (const juce::Uuid& groupId)
         // dispatched, do not install a second watch (it would start the next child while the current one plays).
         if (it->second.current != childId)
             return;
+
+        // the list's own start of this child (a start of it put on by another run is not the list's) - recorded only now:
+        // a re-entrant step above has already moved the list on and set its own
+        it->second.currentStartId = startId;
 
         // the pre-wait of the child after this one: a crossfade must start that much earlier to land on time
         double nextPreWait = 0.0;
@@ -863,6 +865,17 @@ void CueController::cancelWait (const juce::Uuid& cueId, WaitProgress::Kind kind
     {
         cancelStart (startId);   // that one start of the next cue: a run of it started on its own, or put on by another run, stays
         return;
+    }
+
+    if (kind == WaitProgress::Kind::preWait)
+    {
+        // the card names a start: one that fired (or went) since the screen was drawn is nothing to act on - least of all
+        // by stopping the list that just started it
+        const auto entry = std::find_if (pending.begin(), pending.end(),
+                                         [&] (const Pending& p) { return p.id == startId && p.kind == PendingKind::start && p.owner == cueId; });
+
+        if (startId <= 0 || entry == pending.end() || ! scheduler.isPending (startId))
+            return;
     }
 
     // the current child of a running playlist: its own wait, or the very start the list put on for it (a start of the

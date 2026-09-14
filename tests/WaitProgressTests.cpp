@@ -592,6 +592,59 @@ public:
             document.cues.removeIndices ({ document.cues.indexOf (g.id) });
         }
 
+        beginTest ("a playlist re-entered by its own control child keeps the id of the start it put on next");
+        {
+            // G: playlist [x (1 s), s (start control -> G), w (pre-wait 0.5), nb]: after x, s runs at once and advances G to w (re-entrant);
+            // the outer step for s must not overwrite the id of w's start with its own (0). Cancelling w's card then stops the list.
+            Cue g;
+            g.name = "PL5"; g.type = CueType::group; g.group.mode = GroupMode::playlist;
+            const int gi = document.cues.add (g);
+            Cue x, s, w, nb;
+            x.name = "X5"; x.file = tone1; x.parentId = g.id;
+            s.name = "S5"; s.type = CueType::control; s.control.kind = ControlKind::start; s.control.targetId = g.id; s.parentId = g.id;
+            w.name = "W5"; w.file = tone; w.preWaitSeconds = 0.5; w.parentId = g.id;
+            nb.name = "B5"; nb.file = tone; nb.parentId = g.id;
+            document.cues.add (x);
+            document.cues.add (s);
+            document.cues.add (w);
+            document.cues.add (nb);
+            controller.fireSequence (gi);               // x plays (1 s)
+            render (engine, scheduler, now, out, 100);  // 1.16 s: x over, s ran and moved the list on to w (due at ~1.5 s)
+            const auto wWaits = controller.getRunningWaits();
+            const auto* pre = find (wWaits, w.id, WaitProgress::Kind::preWait);
+            expect (pre != nullptr, "w's pre-wait is not reported after the re-entrant step");
+            controller.cancelWait (w.id, WaitProgress::Kind::preWait, pre != nullptr ? pre->startId : 0);
+            expect (! controller.isCueActive (g.id), "the list's own start of w was not recognised (its id was overwritten by the re-entrant step)");
+            render (engine, scheduler, now, out, 100);  // 2.3 s
+            expect (! engine.isPlaying (w.id) && ! engine.isPlaying (nb.id), "the list went on after its child's pre-wait was cancelled");
+            stopEverything();
+            document.cues.removeIndices ({ document.cues.indexOf (g.id) });
+        }
+
+        beginTest ("a stale pre-wait id (the start fired since the screen was drawn) does nothing - least of all stop the playlist");
+        {
+            Cue g;
+            g.name = "PL6"; g.type = CueType::group; g.group.mode = GroupMode::playlist;
+            const int gi = document.cues.add (g);
+            Cue w, nb;
+            w.name = "W6"; w.file = tone; w.preWaitSeconds = 0.3; w.parentId = g.id;
+            nb.name = "B6"; nb.file = tone; nb.parentId = g.id;
+            document.cues.add (w);
+            document.cues.add (nb);
+            controller.fireSequence (gi);               // w due at 0.3 s
+            const auto wWaits = controller.getRunningWaits();
+            const auto* pre = find (wWaits, w.id, WaitProgress::Kind::preWait);
+            expect (pre != nullptr);
+            const int staleId = pre != nullptr ? pre->startId : 0;
+            render (engine, scheduler, now, out, 35);   // 0.41 s: w started
+            expect (engine.isPlaying (w.id));
+            controller.cancelWait (w.id, WaitProgress::Kind::preWait, staleId);   // the card the screen still showed
+            expect (engine.isPlaying (w.id), "a stale pre-wait id stopped the cue that had just started");
+            expect (controller.isCueActive (g.id), "a stale pre-wait id stopped the playlist");
+            stopEverything();
+            document.cues.removeIndices ({ document.cues.indexOf (g.id) });
+        }
+
         beginTest ("timeline group: every child's pre-wait counts from the group's start");
         {
             Cue g;
