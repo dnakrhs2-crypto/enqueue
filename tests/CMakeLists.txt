@@ -34,6 +34,7 @@ target_sources(EnqueueTests PRIVATE
     UiScaleTests.cpp
     WaitProgressTests.cpp
     FadeOutSettingTests.cpp
+    OutputDiagnosticsTests.cpp
     ResamplerTests.cpp
     CueListTests.cpp
     YouTubeDownloaderTests.cpp

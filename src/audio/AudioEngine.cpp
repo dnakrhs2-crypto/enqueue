@@ -1791,6 +1791,21 @@ void AudioEngine::renderBlock (juce::AudioBuffer<float>& output, int numSamples,
             else
                 output.clear (ch, offset, n);
         }
+
+        // the footer's output diagnostics: the peak of what goes to the device, and the blocks that went over 0 dBFS
+        float peak = 0.0f;
+
+        for (int ch = 0; ch < output.getNumChannels(); ++ch)
+            peak = juce::jmax (peak, output.getMagnitude (ch, offset, n));
+
+        float held = outputPeakHold.load (std::memory_order_relaxed);
+
+        while (peak > held && ! outputPeakHold.compare_exchange_weak (held, peak, std::memory_order_relaxed))
+        {
+        }
+
+        if (peak > 1.0f)
+            outputClippedBlocks.fetch_add (1, std::memory_order_relaxed);
     }
 
     if (anyFinished)
@@ -1899,6 +1914,8 @@ void AudioEngine::audioDeviceIOCallbackWithContext (const float* const* inputCha
 void AudioEngine::audioDeviceAboutToStart (juce::AudioIODevice* device)
 {
     deviceRunning.store (true, std::memory_order_release);
+    outputPeakHold.store (0.0f, std::memory_order_relaxed);
+    outputClippedBlocks.store (0, std::memory_order_relaxed);   // a device that starts counts from zero
     const bool multichannel = typeAllowsMultichannel (device->getTypeName());
     const int limit = multichannel ? maxDeviceOutputs : stereoOnlyOutputs;
     const auto active = device->getActiveOutputChannels();
@@ -1907,6 +1924,15 @@ void AudioEngine::audioDeviceAboutToStart (juce::AudioIODevice* device)
     numDeviceInputs.store (device->getActiveInputChannels().countNumberOfSetBits(), std::memory_order_relaxed);
     prepare (device->getCurrentSampleRate(), device->getCurrentBufferSizeSamples(),
              juce::jmax (1, juce::jmin (limit, active.countNumberOfSetBits())));
+}
+
+AudioEngine::OutputDiagnostics AudioEngine::takeOutputDiagnostics() noexcept
+{
+    OutputDiagnostics d;
+    d.peak = outputPeakHold.exchange (0.0f, std::memory_order_relaxed);
+    d.clippedBlocks = outputClippedBlocks.load (std::memory_order_relaxed);
+    d.xruns = deviceManager.getXRunCount();   // the driver's overload reports plus the callbacks that ran over their budget
+    return d;
 }
 
 void AudioEngine::audioDeviceStopped()

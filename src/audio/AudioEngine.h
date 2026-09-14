@@ -29,6 +29,18 @@ public:
     /** Device outputs 1-2 after the master inserts and output gate; poll from the message thread. */
     livemix::LoudnessMeter& getLoudnessMeter() noexcept { return loudness; }
 
+    /** What the device outputs did since the last take, for the footer: the highest sample peak (linear, 0 = silence), how
+        many blocks went over 0 dBFS (an ASIO driver clips there; Windows Audio's shared mode limits first, so the same show
+        can sound clean there and grainy on ASIO) and the device's xrun count. The counts start again when a device starts. */
+    struct OutputDiagnostics
+    {
+        float peak = 0.0f;
+        int clippedBlocks = 0;
+        int xruns = 0;
+    };
+
+    OutputDiagnostics takeOutputDiagnostics() noexcept;
+
     struct PlayingCue
     {
         juce::Uuid id;
@@ -339,6 +351,8 @@ private:
 
     PluginChain masterChain;
     livemix::LoudnessMeter loudness;
+    std::atomic<float> outputPeakHold { 0.0f };      // the device outputs' sample peak since the last takeOutputDiagnostics()
+    std::atomic<int> outputClippedBlocks { 0 };      // blocks with a device output over 0 dBFS since the device started
     std::map<juce::String, std::unique_ptr<PluginChain>> cueChains;   // keyed by Uuid string
     PluginChain::Listener* chainListener = nullptr;
 

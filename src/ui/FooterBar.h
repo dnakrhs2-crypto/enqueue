@@ -33,7 +33,8 @@ public:
     void setCueCount (int count);
     /** Number of broken cues (0 hides the button). */
     void setWarningCount (int count);
-    void setAudioStatus (juce::String text);
+    /** 'warning' paints the status in the stop colour (a clipped output or an xrun). */
+    void setAudioStatus (juce::String text, bool warning = false);
 
     std::function<void()> onWarningsClicked;
 
@@ -44,6 +45,7 @@ private:
     juce::TextButton warningsButton;
     juce::Label countLabel, modeHint, audioStatus;
     bool showMode = false;
+    bool audioWarning = false;
 };
 
 } // namespace gocue

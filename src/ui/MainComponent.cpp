@@ -3244,7 +3244,26 @@ void MainComponent::updateAudioStatus()
         status << ko (" · 출력 지연 ") << juce::String ((double) latencySamples / rate * 1000.0, 1) << " ms";
     }
     status << ko (" · CPU ") << juce::String (manager.getCpuUsage() * 100.0, 1) << "%";
-    footer.setAudioStatus (status);
+
+    // what went out since the last second: the peak, the blocks over 0 dBFS (an ASIO driver clips there) and the xruns
+    const auto diag = engine.takeOutputDiagnostics();
+    status << ko (" · 피크 ");
+
+    if (diag.peak > 0.0f)
+    {
+        const float db = juce::Decibels::gainToDecibels (diag.peak, -100.0f);
+        status << (db > 0.0f ? "+" : "") << juce::String (db, 1) << " dB";
+    }
+    else
+    {
+        status << "--";
+    }
+
+    if (diag.clippedBlocks > 0)
+        status << ko (" · 클립 ") << diag.clippedBlocks << ko ("회");
+
+    status << " · xrun " << diag.xruns;
+    footer.setAudioStatus (status, diag.clippedBlocks > 0 || diag.xruns > 0);
 }
 
 //==============================================================================
