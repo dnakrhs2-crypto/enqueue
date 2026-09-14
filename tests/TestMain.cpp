@@ -17,7 +17,7 @@ class ConsoleRunner : public juce::UnitTestRunner
 
 } // namespace
 
-int main (int, char**)
+int main (int argc, char** argv)
 {
     juce::ScopedJuceInitialiser_GUI juceInit;
 
@@ -25,9 +25,10 @@ int main (int, char**)
     runner.setAssertOnFailure (false);
     runner.setPassesAreLogged (false);
     juce::Array<juce::UnitTest*> tests;   // both apps in one run: one result list, one summary
+    const juce::String only = argc > 1 ? juce::String (argv[1]) : juce::String();   // optional: run only the tests whose name contains this
 
     for (auto* test : juce::UnitTest::getAllTests())
-        if (test->getCategory() == "Enqueue" || test->getCategory() == "LiveMix")
+        if ((test->getCategory() == "Enqueue" || test->getCategory() == "LiveMix") && (only.isEmpty() || test->getName().containsIgnoreCase (only)))
             tests.add (test);
 
     runner.runTests (tests);
