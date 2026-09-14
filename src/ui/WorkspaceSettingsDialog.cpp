@@ -92,13 +92,14 @@ namespace
 
             auto commit = [this, editor, field]
             {
-                const auto typed = parseSeconds (editor->getText());
-
-                if (typed.has_value() && *typed != document.settings.*field)
+                if (const auto typed = parseSeconds (editor->getText()))
                 {
                     auto s = document.settings;
                     s.*field = *typed;
-                    document.setSettings (s);
+                    s.sanitise();   // compare what would be kept (601 -> 600): a value already set changes nothing, and marks nothing dirty
+
+                    if (s.*field != document.settings.*field)
+                        document.setSettings (s);
                 }
 
                 editor->setText (plainSeconds (document.settings.*field), false);
