@@ -151,6 +151,26 @@ public:
             expectEquals (warnings.size(), 1);
         }
 
+        beginTest ("a file from before the fade-out time keeps F on the cue's own stop fade (0); a new project starts at 1 s");
+        {
+            Project fresh;
+            expectWithinAbsoluteError (fresh.settings.fadeOutSeconds, 1.0, 1e-9);
+
+            Project p;
+            auto json = ProjectSerializer::toJson (p);
+            expect (json.contains ("\"fadeOutSeconds\""));
+            json = json.replace ("\"fadeOutSeconds\"", "\"fadeOutSecondsOld\"");   // as written by 0.10.3 and before: no such key
+            Project q;
+            expect (ProjectSerializer::fromJson (json, q, nullptr).wasOk());
+            expectWithinAbsoluteError (q.settings.fadeOutSeconds, 0.0, 1e-9);
+
+            Project r;
+            r.settings.fadeOutSeconds = 0.75;
+            Project s;
+            expect (ProjectSerializer::fromJson (ProjectSerializer::toJson (r), s, nullptr).wasOk());
+            expectWithinAbsoluteError (s.settings.fadeOutSeconds, 0.75, 1e-9);
+        }
+
         beginTest ("workspace settings round trip, including the new-cue template and the row size");
         {
             Project p;

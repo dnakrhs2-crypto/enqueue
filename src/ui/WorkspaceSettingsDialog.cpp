@@ -116,9 +116,19 @@ namespace
             panicHint->setFont (Palette::font (Palette::kickerSize));
 
             fadeLabel = &addLabel (ko ("페이드아웃 시간 (초) - F, 0 = 큐마다 정한 정지 페이드"));
-            fadeEditor = &addNumber (juce::String (s.fadeOutSeconds, 1), "0123456789.",
-                                     [] (WorkspaceSettings& w, const juce::String& t) { w.fadeOutSeconds = t.getDoubleValue(); },
-                                     [] (const WorkspaceSettings& w) { return juce::String (w.fadeOutSeconds, 1); });
+            fadeEditor = &addNumber (juce::String (s.fadeOutSeconds, 2), "0123456789.",
+                                     [] (WorkspaceSettings& w, const juce::String& t)
+                                     {
+                                         // an empty or half-typed box leaves the value; a positive value never rounds to 0 (= 큐별)
+                                         const auto text = t.trim();
+
+                                         if (text.isEmpty() || text == "." || text.indexOfChar ('.') != text.lastIndexOfChar ('.'))
+                                             return;
+
+                                         const double v = text.getDoubleValue();
+                                         w.fadeOutSeconds = v > 0.0 ? juce::jmax (0.01, v) : 0.0;
+                                     },
+                                     [] (const WorkspaceSettings& w) { return juce::String (w.fadeOutSeconds, 2); });
 
             autoNumberToggle = &addToggle (ko ("새 큐에 자동 번호"), s.autoNumber,
                                            [] (WorkspaceSettings& w, bool v) { w.autoNumber = v; });

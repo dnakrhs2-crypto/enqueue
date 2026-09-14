@@ -665,6 +665,7 @@ namespace
     WorkspaceSettings settingsFromVar (const juce::var& v)
     {
         WorkspaceSettings s;
+        s.fadeOutSeconds = 0.0;   // a file from before 0.10.4 keeps F on the cue's own stop fade; only a new project (WorkspaceSettings{}) starts at 1 s
 
         if (v.getDynamicObject() == nullptr)
             return s;

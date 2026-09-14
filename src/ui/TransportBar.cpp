@@ -56,9 +56,10 @@ void TransportBar::TransportButton::paintButton (juce::Graphics& g, bool over, b
     const auto font = Palette::font (Palette::bodySize, true);
     const int captionWidth = juce::GlyphArrangement::getStringWidthInt (font, getButtonText());
     const bool stop = icon == Icon::stop;
-    const int totalWidth = Palette::statusIconSize + 8 + captionWidth + (stop ? 0 : 8 + keyWidth (key));
+    const bool twoLine = stop || detail.isNotEmpty();   // the panic button, and the fade-out button with its time: key + time under the caption
+    const int totalWidth = Palette::statusIconSize + 8 + captionWidth + (twoLine ? 0 : 8 + keyWidth (key));
     auto line = getLocalBounds().withSizeKeepingCentre (juce::jmin (getWidth() - 16, totalWidth), 22);
-    if (stop)
+    if (twoLine)
         line.translate (0, -8);
     const auto iconArea = line.removeFromLeft (Palette::statusIconSize).toFloat();
     const auto c = iconArea.getCentre();
@@ -83,7 +84,7 @@ void TransportBar::TransportButton::paintButton (juce::Graphics& g, bool over, b
         path.addRectangle (c.x - 3.0f, c.y - 3.0f, 6.0f, 6.0f);
     g.fillPath (path);
     line.removeFromLeft (8);
-    if (! stop)
+    if (! twoLine)
     {
         drawKey (g, line.removeFromRight (keyWidth (key)).withSizeKeepingCentre (keyWidth (key), 15), colour, key);
         line.removeFromRight (8);
@@ -91,7 +92,7 @@ void TransportBar::TransportButton::paintButton (juce::Graphics& g, bool over, b
     g.setColour (colour);
     g.setFont (font);
     g.drawText (getButtonText(), line, juce::Justification::centred, true);
-    if (stop)
+    if (twoLine)
     {
         const int detailWidth = juce::GlyphArrangement::getStringWidthInt (Palette::font (Palette::fileSize, true), detail);
         auto bottom = getLocalBounds().withSizeKeepingCentre (keyWidth (key) + 4 + detailWidth, 16).translated (0, 11);
@@ -178,7 +179,7 @@ TransportBar::TransportBar (juce::ApplicationCommandManager& cm)
     setPanicSeconds (panicSeconds);
     setFadeOutSeconds (fadeOutSeconds);
 
-    panicSettingsButton.setTooltip (ko ("전체 페이드 정지의 페이드아웃 시간 설정"));
+    panicSettingsButton.setTooltip (ko ("페이드 시간 설정: 전체 페이드 정지 (Esc) · 페이드아웃 (F)"));
     panicSettingsButton.setWantsKeyboardFocus (false);
     panicSettingsButton.onClick = [this]
     {
