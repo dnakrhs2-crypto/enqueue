@@ -65,6 +65,13 @@ struct WorkspaceSettings
         fix (doubleGoSeconds, 0.0, maxDoubleGoSeconds, 0.0);
         fix (panicSeconds, 0.0, maxPanicSeconds, 1.0);
         fix (fadeOutSeconds, 0.0, maxFadeOutSeconds, 1.0);
+
+        // a positive fade time is at least 0.01 s: shown with two decimals it must never read back as 0 (= 즉시 정지 / 큐별)
+        if (panicSeconds > 0.0)
+            panicSeconds = juce::jmax (0.01, panicSeconds);
+
+        if (fadeOutSeconds > 0.0)
+            fadeOutSeconds = juce::jmax (0.01, fadeOutSeconds);
         fix (numberIncrement, 0.001, 1000.0, 1.0);
         fix (maxLevelDb, -30.0, 24.0, 12.0);      // the matrix / main level clamp at +24 and -120 (LevelMatrix::maxDb / silentDb)
         fix (minLevelDb, -120.0, -40.0, -60.0);

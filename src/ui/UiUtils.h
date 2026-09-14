@@ -3,6 +3,7 @@
 #include <juce_graphics/juce_graphics.h>
 
 #include <cmath>
+#include <optional>
 
 namespace gocue
 {
@@ -31,6 +32,37 @@ inline juce::String formatSeconds (double seconds)
 inline juce::String formatCountdown (double secondsLeft)
 {
     return "-" + (secondsLeft > 0.0 ? formatSeconds (secondsLeft) : juce::String ("0:00.0"));
+}
+
+/** A fade time as it is set: two decimals at most, trailing zeros dropped ("1", "0.5", "0.25", "0"). */
+inline juce::String plainSeconds (double seconds)
+{
+    auto text = juce::String (seconds, 2);
+
+    if (text.containsChar ('.'))
+        text = text.trimCharactersAtEnd ("0").trimCharactersAtEnd (".");
+
+    return text;
+}
+
+/** plainSeconds + "초": "1초", "0.5초". */
+inline juce::String secondsLabel (double seconds)
+{
+    return plainSeconds (seconds) + ko ("초");
+}
+
+/** A typed fade time in seconds. Nothing for an empty box, letters or a half-typed number ("", ".", "1..5", "abc") - the
+    setting must stay as it is rather than read as 0. A positive value is at least 0.01 so that, shown with two decimals and
+    edited again, it never rounds to 0 (= 즉시 정지 / 큐별). */
+inline std::optional<double> parseSeconds (const juce::String& typed)
+{
+    const auto text = typed.trim();
+
+    if (text.isEmpty() || text == "." || ! text.containsOnly ("0123456789.") || text.indexOfChar ('.') != text.lastIndexOfChar ('.'))
+        return std::nullopt;
+
+    const double v = text.getDoubleValue();
+    return v > 0.0 ? juce::jmax (0.01, v) : 0.0;
 }
 
 /** m:ss.mmm (or m:ss when 'withMillis' is false). Negative -> 0. */

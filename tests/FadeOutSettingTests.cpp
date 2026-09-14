@@ -1,4 +1,5 @@
 #include "app/CueController.h"
+#include "ui/UiUtils.h"
 
 #include <juce_audio_formats/juce_audio_formats.h>
 #include <juce_core/juce_core.h>
@@ -120,6 +121,37 @@ public:
             s.fadeOutSeconds = 1.0e9;
             s.sanitise();
             expectWithinAbsoluteError (s.fadeOutSeconds, WorkspaceSettings::maxFadeOutSeconds, 1.0e-9);
+            s.fadeOutSeconds = 0.004;   // positive stays positive (and readable): never rounds back to 0 = 큐별
+            s.panicSeconds = 0.004;
+            s.sanitise();
+            expectWithinAbsoluteError (s.fadeOutSeconds, 0.01, 1.0e-9);
+            expectWithinAbsoluteError (s.panicSeconds, 0.01, 1.0e-9);
+            s.fadeOutSeconds = 0.0;     // 0 is a mode, not a time: it stays 0
+            s.panicSeconds = 0.0;
+            s.sanitise();
+            expectWithinAbsoluteError (s.fadeOutSeconds, 0.0, 1.0e-9);
+            expectWithinAbsoluteError (s.panicSeconds, 0.0, 1.0e-9);
+        }
+
+        beginTest ("a fade time reads back as it was set, and a typed one is a number or nothing");
+        {
+            expectEquals (plainSeconds (1.0), juce::String ("1"));
+            expectEquals (plainSeconds (0.5), juce::String ("0.5"));
+            expectEquals (plainSeconds (0.25), juce::String ("0.25"));
+            expectEquals (plainSeconds (10.0), juce::String ("10"));
+            expectEquals (plainSeconds (0.0), juce::String ("0"));
+            expectEquals (secondsLabel (2.5), ko ("2.5초"));
+
+            for (const char* bad : { "", " ", ".", "abc", "1..5", "1.2.3", "-1", "1e3", "1,5" })
+                expect (! parseSeconds (bad).has_value(), juce::String ("'") + bad + "' must not read as a time");
+
+            const auto typed = [] (const char* text) { return parseSeconds (text).value_or (-1.0); };
+            expectWithinAbsoluteError (typed (" 1.5 "), 1.5, 1.0e-9);
+            expectWithinAbsoluteError (typed (".5"), 0.5, 1.0e-9);
+            expectWithinAbsoluteError (typed ("2."), 2.0, 1.0e-9);
+            expectWithinAbsoluteError (typed ("0"), 0.0, 1.0e-9);        // 0 stays 0: 큐별 / 즉시 정지
+            expectWithinAbsoluteError (typed ("0.004"), 0.01, 1.0e-9);   // a positive value never rounds back to 0
+            expectEquals (plainSeconds (typed ("0.004")), juce::String ("0.01"));
         }
 
         dir.deleteRecursively();

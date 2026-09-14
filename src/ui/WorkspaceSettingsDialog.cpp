@@ -109,26 +109,26 @@ namespace
                                       [] (WorkspaceSettings& w, bool v) { w.requireKeyUp = v; });
 
             panicLabel = &addLabel (ko ("전체 페이드 정지 시간 (초) - Esc"));
-            panicEditor = &addNumber (juce::String (s.panicSeconds, 1), "0123456789.",
-                                      [] (WorkspaceSettings& w, const juce::String& t) { w.panicSeconds = t.getDoubleValue(); },
-                                      [] (const WorkspaceSettings& w) { return juce::String (w.panicSeconds, 1); });
+            panicEditor = &addNumber (plainSeconds (s.panicSeconds), "0123456789.",
+                                      [] (WorkspaceSettings& w, const juce::String& t)
+                                      {
+                                          // an empty or half-typed box leaves the value; a positive value never rounds to 0 (= 즉시 정지)
+                                          if (const auto v = parseSeconds (t))
+                                              w.panicSeconds = *v;
+                                      },
+                                      [] (const WorkspaceSettings& w) { return plainSeconds (w.panicSeconds); });
             panicHint = &addLabel (ko ("Esc 한 번 = 이 시간 동안 전체 페이드아웃 후 정지, 0.5초 안에 두 번 = 즉시 정지"));
             panicHint->setFont (Palette::font (Palette::kickerSize));
 
             fadeLabel = &addLabel (ko ("페이드아웃 시간 (초) - F, 0 = 큐마다 정한 정지 페이드"));
-            fadeEditor = &addNumber (juce::String (s.fadeOutSeconds, 2), "0123456789.",
+            fadeEditor = &addNumber (plainSeconds (s.fadeOutSeconds), "0123456789.",
                                      [] (WorkspaceSettings& w, const juce::String& t)
                                      {
                                          // an empty or half-typed box leaves the value; a positive value never rounds to 0 (= 큐별)
-                                         const auto text = t.trim();
-
-                                         if (text.isEmpty() || text == "." || text.indexOfChar ('.') != text.lastIndexOfChar ('.'))
-                                             return;
-
-                                         const double v = text.getDoubleValue();
-                                         w.fadeOutSeconds = v > 0.0 ? juce::jmax (0.01, v) : 0.0;
+                                         if (const auto v = parseSeconds (t))
+                                             w.fadeOutSeconds = *v;
                                      },
-                                     [] (const WorkspaceSettings& w) { return juce::String (w.fadeOutSeconds, 2); });
+                                     [] (const WorkspaceSettings& w) { return plainSeconds (w.fadeOutSeconds); });
 
             autoNumberToggle = &addToggle (ko ("새 큐에 자동 번호"), s.autoNumber,
                                            [] (WorkspaceSettings& w, bool v) { w.autoNumber = v; });
