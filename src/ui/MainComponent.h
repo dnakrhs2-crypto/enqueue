@@ -274,8 +274,10 @@ private:
     SplitDivider inspectorDivider { SplitDivider::Orientation::horizontal }, activeCuesDivider { SplitDivider::Orientation::vertical };
 
     void ensureInspectorShown();
+    /** The gear next to the panic button: the project's two fade times (전체 페이드 정지 / 페이드아웃), each with presets and a typed value. */
     void showPanicSecondsMenu (juce::Point<int> screenPosition);
     void applyPanicSeconds (double seconds);
+    void applyFadeOutSeconds (double seconds);
     std::unique_ptr<ManualWindow> manualWindow;   // made on first use, hidden on close
     std::unique_ptr<YouTubeWindow> youtubeWindow;   // the same
     std::unique_ptr<PluginManagerWindow> pluginManagerWindow;   // the same (Ctrl+P)

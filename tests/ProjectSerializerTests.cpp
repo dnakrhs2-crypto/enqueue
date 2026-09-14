@@ -157,6 +157,7 @@ public:
             p.settings.doubleGoSeconds = 1.5;
             p.settings.doubleGoHotkeys = false;
             p.settings.panicSeconds = 3.0;
+            p.settings.fadeOutSeconds = 2.5;
             p.settings.autoNumber = false;
             p.settings.rowSize = 2;
             p.settings.startOnClose = true;
@@ -175,6 +176,7 @@ public:
             expectWithinAbsoluteError (q.settings.doubleGoSeconds, 1.5, 1e-9);
             expect (! q.settings.doubleGoHotkeys);
             expectWithinAbsoluteError (q.settings.panicSeconds, 3.0, 1e-9);
+            expectWithinAbsoluteError (q.settings.fadeOutSeconds, 2.5, 1e-9);
             expect (! q.settings.autoNumber);
             expectEquals (q.settings.rowSize, 2);
             expect (q.settings.startOnClose);

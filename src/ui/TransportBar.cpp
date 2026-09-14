@@ -176,6 +176,7 @@ TransportBar::TransportBar (juce::ApplicationCommandManager& cm)
     panicButton.setColour (juce::TextButton::buttonColourId, Palette::panel2.interpolatedWith (Palette::stopButton, Palette::stopTintAlpha));
     panicButton.onClick = [this] { commands.invokeDirectly (CommandIDs::panicAll, true); };
     setPanicSeconds (panicSeconds);
+    setFadeOutSeconds (fadeOutSeconds);
 
     panicSettingsButton.setTooltip (ko ("전체 페이드 정지의 페이드아웃 시간 설정"));
     panicSettingsButton.setWantsKeyboardFocus (false);
@@ -452,6 +453,16 @@ void TransportBar::setPanicSeconds (double seconds)
     panicButton.detail = juce::String (seconds, whole ? 0 : 1) + ko ("초");
     panicButton.setTooltip (ko ("전체 페이드 정지 (Esc) ") + panicButton.detail);
     panicButton.repaint();
+}
+
+void TransportBar::setFadeOutSeconds (double seconds)
+{
+    fadeOutSeconds = seconds;
+    const bool whole = std::abs (seconds - std::round (seconds)) < 0.001;
+    fadeOutButton.detail = seconds > 0.0 ? juce::String (seconds, whole ? 0 : 1) + ko ("초") : ko ("큐별");
+    fadeOutButton.setTooltip (seconds > 0.0 ? ko ("페이드아웃 (F) ") + fadeOutButton.detail + ko (" — 톱니바퀴에서 변경")
+                                            : ko ("페이드아웃 (F): 큐마다 정한 정지 페이드 — 톱니바퀴에서 변경"));
+    fadeOutButton.repaint();
 }
 
 void TransportBar::setLoudness (bool momentaryValid, double momentaryLufs, bool averageValid, double averageLufs, int windowSeconds)

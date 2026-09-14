@@ -633,6 +633,7 @@ namespace
         obj->setProperty ("requireKeyUp", s.requireKeyUp);
         obj->setProperty ("doubleGoHotkeys", s.doubleGoHotkeys);
         obj->setProperty ("panicSeconds", s.panicSeconds);
+        obj->setProperty ("fadeOutSeconds", s.fadeOutSeconds);
         obj->setProperty ("autoNumber", s.autoNumber);
         obj->setProperty ("numberIncrement", s.numberIncrement);
         obj->setProperty ("autoLoadNewCues", s.autoLoadNewCues);
@@ -687,6 +688,7 @@ namespace
         s.requireKeyUp            = (bool) v.getProperty ("requireKeyUp", s.requireKeyUp);
         s.doubleGoHotkeys         = (bool) v.getProperty ("doubleGoHotkeys", s.doubleGoHotkeys);
         s.panicSeconds            = (double) v.getProperty ("panicSeconds", s.panicSeconds);
+        s.fadeOutSeconds          = (double) v.getProperty ("fadeOutSeconds", s.fadeOutSeconds);
         s.autoNumber              = (bool) v.getProperty ("autoNumber", s.autoNumber);
         s.numberIncrement         = (double) v.getProperty ("numberIncrement", s.numberIncrement);
         s.autoLoadNewCues         = (bool) v.getProperty ("autoLoadNewCues", s.autoLoadNewCues);

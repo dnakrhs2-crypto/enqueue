@@ -341,20 +341,38 @@ void MainComponent::resized()
 
 void MainComponent::showPanicSecondsMenu (juce::Point<int> screenPosition)
 {
-    const double current = document.settings.panicSeconds;
+    // the project's two fade times, one submenu each: 전체 페이드 정지 (Esc) and 페이드아웃 (F) - presets, and a typed value
+    const double panicNow = document.settings.panicSeconds;
+    const double fadeNow = document.settings.fadeOutSeconds;
     const std::array<double, 6> presets { 0.5, 1.0, 2.0, 3.0, 5.0, 10.0 };
-    juce::PopupMenu menu;
-    menu.addSectionHeader (ko ("전체 페이드 정지 (Esc): 페이드아웃 시간"));
+    auto secondsText = [] (double s) { return juce::String (s, std::abs (s - std::round (s)) < 0.001 ? 0 : 1) + ko ("초"); };
+
+    juce::PopupMenu panic;
+    panic.addSectionHeader (ko ("Esc: 재생 중인 모든 큐가 페이드아웃되는 시간"));
 
     for (size_t i = 0; i < presets.size(); ++i)
-        menu.addItem ((int) i + 1, juce::String (presets[i], presets[i] < 1.0 ? 1 : 0) + ko ("초"), true, std::abs (current - presets[i]) < 0.001);
+        panic.addItem ((int) i + 1, secondsText (presets[i]), true, std::abs (panicNow - presets[i]) < 0.001);
 
-    menu.addSeparator();
-    menu.addItem (100, ko ("직접 입력... (지금 ") + juce::String (current, 1) + ko ("초)"));
+    panic.addSeparator();
+    panic.addItem (100, ko ("직접 입력... (지금 ") + juce::String (panicNow, 1) + ko ("초)"));
+
+    juce::PopupMenu fade;
+    fade.addSectionHeader (ko ("F: 선택 큐가 페이드아웃되는 시간"));
+
+    for (size_t i = 0; i < presets.size(); ++i)
+        fade.addItem (200 + (int) i + 1, secondsText (presets[i]), true, fadeNow > 0.0 && std::abs (fadeNow - presets[i]) < 0.001);
+
+    fade.addSeparator();
+    fade.addItem (300, ko ("큐마다 정한 정지 페이드 사용"), true, fadeNow <= 0.0);
+    fade.addItem (301, ko ("직접 입력... (지금 ") + (fadeNow > 0.0 ? juce::String (fadeNow, 1) + ko ("초)") : ko ("큐별)")));
+
+    juce::PopupMenu menu;
+    menu.addSubMenu (ko ("전체 페이드 정지 (Esc) · ") + secondsText (panicNow), panic);
+    menu.addSubMenu (ko ("페이드아웃 (F) · ") + (fadeNow > 0.0 ? secondsText (fadeNow) : ko ("큐별")), fade);
 
     juce::Component::SafePointer<MainComponent> safeThis (this);
     menu.showMenuAsync (juce::PopupMenu::Options().withTargetScreenArea ({ screenPosition.x, screenPosition.y, 1, 1 }),
-                        [safeThis, presets, current] (int result)
+                        [safeThis, presets, panicNow, fadeNow] (int result)
     {
         if (safeThis == nullptr || result == 0)
             return;
@@ -365,16 +383,37 @@ void MainComponent::showPanicSecondsMenu (juce::Point<int> screenPosition)
             return;
         }
 
-        auto* alert = new juce::AlertWindow (ko ("전체 페이드 정지 시간"),
-                                             ko ("Esc를 눌렀을 때 재생 중인 모든 큐가 페이드아웃되는 시간 (초, 0 = 즉시 정지)"),
+        if (result >= 201 && result <= 200 + (int) presets.size())
+        {
+            safeThis->applyFadeOutSeconds (presets[(size_t) result - 201]);
+            return;
+        }
+
+        if (result == 300)
+        {
+            safeThis->applyFadeOutSeconds (0.0);
+            return;
+        }
+
+        const bool forPanic = result == 100;
+        auto* alert = new juce::AlertWindow (forPanic ? ko ("전체 페이드 정지 시간") : ko ("페이드아웃 시간"),
+                                             forPanic ? ko ("Esc를 눌렀을 때 재생 중인 모든 큐가 페이드아웃되는 시간 (초, 0 = 즉시 정지)")
+                                                      : ko ("F를 눌렀을 때 선택 큐가 페이드아웃되는 시간 (초, 0 = 큐마다 정한 정지 페이드)"),
                                              juce::MessageBoxIconType::NoIcon);
-        alert->addTextEditor ("seconds", juce::String (current, 1), ko ("초"));
+        alert->addTextEditor ("seconds", juce::String (forPanic ? panicNow : fadeNow, 1), ko ("초"));
         alert->addButton (ko ("확인"), 1, juce::KeyPress (juce::KeyPress::returnKey));
         alert->addButton (ko ("취소"), 0, juce::KeyPress (juce::KeyPress::escapeKey));
-        alert->enterModalState (true, juce::ModalCallbackFunction::create ([safeThis, alert] (int r)
+        alert->enterModalState (true, juce::ModalCallbackFunction::create ([safeThis, alert, forPanic] (int r)
         {
-            if (safeThis != nullptr && r == 1)
-                safeThis->applyPanicSeconds (alert->getTextEditorContents ("seconds").getDoubleValue());
+            if (safeThis == nullptr || r != 1)
+                return;
+
+            const double typed = alert->getTextEditorContents ("seconds").getDoubleValue();
+
+            if (forPanic)
+                safeThis->applyPanicSeconds (typed);
+            else
+                safeThis->applyFadeOutSeconds (typed);
         }), true);
         focusAlertEditor (*alert, "seconds");
     });
@@ -387,6 +426,16 @@ void MainComponent::applyPanicSeconds (double seconds)
     document.setSettings (updated);
     transport.setPanicSeconds (updated.panicSeconds);
     transport.showStatus (ko ("전체 페이드 정지 시간: ") + juce::String (updated.panicSeconds, 1) + ko ("초"), false);
+}
+
+void MainComponent::applyFadeOutSeconds (double seconds)
+{
+    auto updated = document.settings;
+    updated.fadeOutSeconds = juce::jlimit (0.0, WorkspaceSettings::maxFadeOutSeconds, seconds);
+    document.setSettings (updated);
+    transport.setFadeOutSeconds (updated.fadeOutSeconds);
+    transport.showStatus (updated.fadeOutSeconds > 0.0 ? ko ("페이드아웃 시간: ") + juce::String (updated.fadeOutSeconds, 1) + ko ("초")
+                                                       : ko ("페이드아웃: 큐마다 정한 정지 페이드"), false);
 }
 
 void MainComponent::ensureInspectorShown()
@@ -3592,6 +3641,7 @@ void MainComponent::documentStateChanged()
     document.cues.setLockPlayheadToSelection (document.settings.lockPlayheadToSelection);
     table.setRowSize (document.settings.rowSize);
     transport.setPanicSeconds (document.settings.panicSeconds);
+    transport.setFadeOutSeconds (document.settings.fadeOutSeconds);
     transport.setAuditionMode (document.settings.alwaysAudition);
     updateTransportStandby();
 

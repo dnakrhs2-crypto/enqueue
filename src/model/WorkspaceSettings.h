@@ -21,6 +21,7 @@ struct WorkspaceSettings
     bool requireKeyUp = false;             // the GO key must be released before it fires again
     bool doubleGoHotkeys = true;           // the GO window also refuses the same cue's hotkey / cart click inside it
     double panicSeconds = 1.0;             // Esc: fade everything out over this, then stop
+    double fadeOutSeconds = 1.0;           // F: the target cue fades out over this; 0 = the cue's own stop fade (fadeOutMs)
     bool autoNumber = true;
     double numberIncrement = 1.0;
     bool autoLoadNewCues = false;
@@ -48,6 +49,7 @@ struct WorkspaceSettings
     bool rotateBackups = true;
 
     static constexpr double maxPanicSeconds = 600.0;
+    static constexpr double maxFadeOutSeconds = maxPanicSeconds;   // F: the same range as the panic time
     static constexpr double maxDoubleGoSeconds = 60.0;
 
     void sanitise() noexcept
@@ -62,6 +64,7 @@ struct WorkspaceSettings
 
         fix (doubleGoSeconds, 0.0, maxDoubleGoSeconds, 0.0);
         fix (panicSeconds, 0.0, maxPanicSeconds, 1.0);
+        fix (fadeOutSeconds, 0.0, maxFadeOutSeconds, 1.0);
         fix (numberIncrement, 0.001, 1000.0, 1.0);
         fix (maxLevelDb, -30.0, 24.0, 12.0);      // the matrix / main level clamp at +24 and -120 (LevelMatrix::maxDb / silentDb)
         fix (minLevelDb, -120.0, -40.0, -60.0);

@@ -2035,10 +2035,16 @@ bool CueController::fadeOutTarget()
     if (id.isNull())
         return false;
 
-    engine.fadeOutAndStop (id);
+    // 페이드아웃 (F): over the project's fade-out time, or (0) the cue's own stop fade
+    const double seconds = document.settings.fadeOutSeconds;
+
+    if (seconds > 0.0)
+        engine.fadeOutAndStop (id, (int) std::lround (seconds * 1000.0));
+    else
+        engine.fadeOutAndStop (id);
 
     if (const int index = document.cues.indexOf (id); index >= 0)
-        status (ko ("페이드아웃: ") + cueLabel (index, document.cues.get (index)));
+        status (ko ("페이드아웃") + (seconds > 0.0 ? " (" + juce::String (seconds, 1) + ko ("초)") : juce::String()) + ": " + cueLabel (index, document.cues.get (index)));
 
     return true;
 }

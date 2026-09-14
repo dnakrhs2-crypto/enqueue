@@ -31,6 +31,8 @@ public:
     std::function<void (juce::Point<int> screenPosition)> onPanicSettings;
     /** Shows the panic fade time on the button. */
     void setPanicSeconds (double seconds);
+    /** Shows the project's fade-out time (F) on the button; 0 = the cue's own stop fade. */
+    void setFadeOutSeconds (double seconds);
     void setPlayingCount (int numPlaying, int numPaused);
     /** Shows a transient message (errors in red) for a few seconds. */
     void showStatus (const juce::String& message, bool isError);
@@ -89,6 +91,7 @@ private:
     GoButton goButton { "GO" };
     GearButton panicSettingsButton;
     double panicSeconds = 1.0;
+    double fadeOutSeconds = 1.0;
     TransportButton pauseButton { TransportButton::Icon::pause }, fadeOutButton { TransportButton::Icon::fade }, panicButton { TransportButton::Icon::stop };
     juce::Label standbyTitle, cueNumber, cueName, cueFile, playingLabel, statusLabel, contextLabel;
     MetaLabel cueMeta;

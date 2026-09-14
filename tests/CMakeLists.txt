@@ -33,6 +33,7 @@ target_sources(EnqueueTests PRIVATE
     LoudnessAverageTests.cpp
     UiScaleTests.cpp
     WaitProgressTests.cpp
+    FadeOutSettingTests.cpp
     ResamplerTests.cpp
     CueListTests.cpp
     YouTubeDownloaderTests.cpp

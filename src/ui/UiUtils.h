@@ -128,7 +128,7 @@ namespace Palette
     constexpr int inspectorControlWidth = 936, inspectorWideWidth = 1080;
     constexpr int modeToggleWidth = 164, loudnessWidth = 300, loudnessWindowWidth = 48, loudnessValueHeight = 46, loudnessLabelHeight = 18, weekdaySize = 26;
     constexpr int dialogInset = 8, pluginSlotWidth = 216, pluginSlotHeight = 72, pluginSlotGap = 26;
-    constexpr int settingsWidth = 640, settingsHeight = 535;   // General's last row (the 글씨·화면 크기 pointer) ends at y=511; leave 24px below it.
+    constexpr int settingsWidth = 640, settingsHeight = 571;   // General's last row (the 글씨·화면 크기 pointer) ends at y=547; leave 24px below it.
     constexpr int alertIconWidth = 80, alertIconSize = 36;
     constexpr float alertTitleSize = 18.0f, alertMessageSize = 14.0f, manualSize = 14.5f;
     constexpr float dividerChevronSize = 8.0f, dividerStroke = 1.0f;
