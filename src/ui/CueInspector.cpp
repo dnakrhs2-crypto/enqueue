@@ -870,7 +870,7 @@ public:
         duckSecondsEditor.onFocusLost = [this] { commitDuck(); };
         addAndMakeVisible (duckSecondsEditor);
 
-        styleLabel (hint, ko ("GO 사이 최소 시간(더블 GO 방지)과 전체 페이드 정지 시간은 파일 > 프로젝트 설정에 있습니다"), 13.0f);
+        styleLabel (hint, ko ("GO 사이 최소 시간(더블 GO 방지)과 전체 페이드 정지 시간은 설정 > 프로젝트 설정에 있습니다"), 13.0f);
         addAndMakeVisible (hint);
     }
 
@@ -1086,7 +1086,7 @@ public:
         styleLabel (patchLabel, ko ("패치"));
         addAndMakeVisible (patchLabel);
         patchCombo.setWantsKeyboardFocus (false);
-        patchCombo.setTooltip (ko ("이 큐의 출력이 지나가는 오디오 패치 (오디오 > 오디오 패치...)"));
+        patchCombo.setTooltip (ko ("이 큐의 출력이 지나가는 오디오 패치 (설정 > 오디오 패치...)"));
         patchCombo.onChange = [this] { commitPatch(); };
         addAndMakeVisible (patchCombo);
 

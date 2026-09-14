@@ -208,6 +208,34 @@ void CueTable::setPlayingCues (std::vector<AudioEngine::PlayingCue> newPlaying)
         table.repaint();
 }
 
+void CueTable::setRunningWaits (std::vector<WaitProgress> newWaits, double nowSeconds)
+{
+    const bool wasEmpty = waits.empty();
+    waits = std::move (newWaits);
+    waitClock = nowSeconds;
+
+    if (! (wasEmpty && waits.empty()))
+        table.repaint();
+}
+
+const WaitProgress* CueTable::findWait (const juce::Uuid& id, WaitProgress::Kind kind) const
+{
+    for (const auto& w : waits)
+        if (w.cueId == id && w.kind == kind)
+            return &w;
+
+    return nullptr;
+}
+
+const WaitProgress* CueTable::anyWait (const juce::Uuid& id) const
+{
+    for (const auto& w : waits)
+        if (w.cueId == id)
+            return &w;
+
+    return nullptr;
+}
+
 void CueTable::setEditable (bool shouldBeEditable)
 {
     editable = shouldBeEditable;
@@ -321,6 +349,8 @@ void CueTable::paintRowBackground (juce::Graphics& g, int rowNumber, int width, 
         background = running->paused ? Palette::pausedRow : running->fadingOut ? Palette::fadingRow : Palette::playingRow;
     else if (isGroupRunning (index))
         background = Palette::playingRow;
+    else if (anyWait (cue.id) != nullptr)
+        background = Palette::waitingRow;   // its pre-wait / post-wait / wait counts down
 
     if (cues.isSelected (index))
         background = Palette::selected;
@@ -359,6 +389,12 @@ CueTable::Badge CueTable::badgeFor (int index) const
         return p->paused ? Badge { ko ("일시정지"), Palette::paused }
                          : p->fadingOut ? Badge { ko ("페이드 아웃"), Palette::fadingOut }
                                         : Badge { ko ("재생 중"), Palette::playing };
+    if (findWait (cue.id, WaitProgress::Kind::preWait) != nullptr)
+        return { ko ("프리웨이트"), Palette::waiting };
+    if (findWait (cue.id, WaitProgress::Kind::waitCue) != nullptr)
+        return { ko ("대기 중"), Palette::waiting };
+    if (findWait (cue.id, WaitProgress::Kind::postWait) != nullptr)
+        return { ko ("포스트웨이트"), Palette::waiting };   // its sound is over, the next cue waits on it
     if (cue.isAudio() && (cue.fileMissing || cue.file == juce::File()))
         return { ko ("누락 파일"), Palette::missing };
     if (cue.hasTarget() && (cue.targetId().isNull() || cues.indexOf (cue.targetId()) < 0))
@@ -463,6 +499,20 @@ void CueTable::paintCell (juce::Graphics& g, int rowNumber, int columnId, int wi
                 icon.addTriangle (x + 1.0f, cy - 5.0f, x + 1.0f, cy + 5.0f, x + 10.0f, cy);
                 g.fillPath (icon);
             }
+        }
+        else if (anyWait (cue.id) != nullptr)
+        {
+            // a wait counting down: an hourglass
+            setColour (Palette::waiting);
+            juce::Path glass;
+            glass.startNewSubPath (x, cy - 6.0f);
+            glass.lineTo (x + 12.0f, cy - 6.0f);
+            glass.lineTo (x + 6.0f, cy);
+            glass.lineTo (x + 12.0f, cy + 6.0f);
+            glass.lineTo (x, cy + 6.0f);
+            glass.lineTo (x + 6.0f, cy);
+            glass.closeSubPath();
+            g.strokePath (glass, juce::PathStrokeType (1.4f));
         }
         else if (broken)
         {
@@ -686,6 +736,7 @@ void CueTable::paintCell (juce::Graphics& g, int rowNumber, int columnId, int wi
     auto colour = Palette::muted;
     auto font = Palette::monoFont (Palette::timeSize);
     auto justification = juce::Justification::centredRight;
+    double fillFraction = -1.0;   // >= 0: a wait counts down in this cell, filled this far from the left
     switch (columnId)
     {
         case colNumber:
@@ -737,10 +788,26 @@ void CueTable::paintCell (juce::Graphics& g, int rowNumber, int columnId, int wi
             }
             break;
         case colPreWait:
-            text = cue.preWaitSeconds > 0.0 ? formatTimeMs (cue.preWaitSeconds) : juce::String();
+            if (const auto* w = findWait (cue.id, WaitProgress::Kind::preWait))
+            {
+                text = formatCountdown (w->remaining (waitClock));   // the pre-wait runs: what is left of it
+                colour = Palette::waiting;
+                font = font.boldened();
+                fillFraction = w->fraction (waitClock);
+            }
+            else
+                text = cue.preWaitSeconds > 0.0 ? formatTimeMs (cue.preWaitSeconds) : juce::String();
             break;
         case colPostWait:
-            text = cue.postWaitSeconds > 0.0 ? formatTimeMs (cue.postWaitSeconds) : juce::String();
+            if (const auto* w = findWait (cue.id, WaitProgress::Kind::postWait))
+            {
+                text = formatCountdown (w->remaining (waitClock));   // the post-wait runs: the next cue starts when it is out
+                colour = Palette::waiting;
+                font = font.boldened();
+                fillFraction = w->fraction (waitClock);
+            }
+            else
+                text = cue.postWaitSeconds > 0.0 ? formatTimeMs (cue.postWaitSeconds) : juce::String();
             break;
         case colDuration:
             colour = Palette::text;
@@ -750,6 +817,12 @@ void CueTable::paintCell (juce::Graphics& g, int rowNumber, int columnId, int wi
                                                    : "-" + formatSeconds (juce::jmax (0.0, running->remainingSeconds));
                 colour = stateColour;
             }
+            else if (const auto* w = findWait (cue.id, WaitProgress::Kind::waitCue))
+            {
+                text = formatCountdown (w->remaining (waitClock));   // a wait cue: what is left of its wait
+                colour = Palette::waiting;
+                fillFraction = w->fraction (waitClock);
+            }
             else
             {
                 const double effective = cues.effectiveLengthOf (index);
@@ -758,6 +831,11 @@ void CueTable::paintCell (juce::Graphics& g, int rowNumber, int columnId, int wi
             font = font.boldened();
             break;
         default: break;
+    }
+    if (fillFraction >= 0.0)
+    {
+        setColour (Palette::waiting.withAlpha (Palette::waitFillAlpha));
+        g.fillRect (0, 0, juce::roundToInt ((double) width * juce::jlimit (0.0, 1.0, fillFraction)), height);
     }
     setColour (colour);
     g.setFont (font);

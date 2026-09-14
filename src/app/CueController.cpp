@@ -23,7 +23,7 @@ bool CueController::isCueActive (const juce::Uuid& id) const
     if (engine.isPlaying (id) || fadeRunner.isRunning (id))
         return true;
 
-    if (const auto w = waits.find (id); w != waits.end() && clock() < w->second)
+    if (const auto w = waits.find (id); w != waits.end() && clock() < w->second.endsAt)
         return true;
 
     int index = -1;
@@ -38,7 +38,7 @@ CueController::GoResult CueController::triggerControl (const Cue& cue, int index
     if (ctl.kind == ControlKind::wait)
     {
         // a wait that still runs follows the cue's second-trigger rule, as a playing audio cue does
-        if (const auto w = waits.find (cue.id); w != waits.end() && clock() < w->second)
+        if (const auto w = waits.find (cue.id); w != waits.end() && clock() < w->second.endsAt)
         {
             switch (cue.secondTrigger)
             {
@@ -61,7 +61,7 @@ CueController::GoResult CueController::triggerControl (const Cue& cue, int index
             }
         }
 
-        waits[cue.id] = clock() + ctl.seconds;
+        waits[cue.id] = { clock(), clock() + ctl.seconds };
         status (ko ("대기 ") + juce::String (ctl.seconds, 2) + ko ("초: ") + cueLabel (index, cue));
         played.insert (cue.id);
         return GoResult::started;
@@ -229,7 +229,7 @@ bool CueController::isGroupActive (const CueList& cues, int index) const
         if (engine.isPlaying (c.id) || fadeRunner.isRunning (c.id) || hasPendingFor (c.id, true) || playlists.count (c.id) != 0)
             return true;
 
-        if (const auto w = waits.find (c.id); w != waits.end() && clock() < w->second)
+        if (const auto w = waits.find (c.id); w != waits.end() && clock() < w->second.endsAt)
             return true;   // a wait cue inside the group is still running
     }
 
@@ -315,7 +315,7 @@ int CueController::startGroup (CueList& cues, int index, bool audition)
                 if (! c.armed)
                     continue;   // 비활성화
 
-                scheduleStart (c.id, t + c.preWaitSeconds, audition);
+                scheduleStart (c.id, t + c.preWaitSeconds, audition, nullptr, { t });   // its pre-wait counts from the group's start
             }
 
             break;
@@ -444,10 +444,11 @@ void CueController::playlistStep (const juce::Uuid& groupId)
         }
 
         run.current = childId;
-        const double startAt = clock() + child->preWaitSeconds;
+        const double from = clock();   // the child's pre-wait counts from now (getRunningWaits)
+        const double startAt = from + child->preWaitSeconds;
         const bool audition = run.audition;
 
-        const bool started = scheduleStart (childId, startAt, audition) != GoResult::failed;
+        const bool started = scheduleStart (childId, startAt, audition, nullptr, { from }) != GoResult::failed;
 
         // scheduleStart runs a zero-pre-wait child at once, and that child may be a control cue that stops (and so
         // erases) this very playlist. From here 'run' and 'it' may be dangling: re-find the entry before any more use.
@@ -670,6 +671,36 @@ int CueController::getNumPending() const
             ++n;
 
     return n;
+}
+
+std::vector<WaitProgress> CueController::getRunningWaits() const
+{
+    std::vector<WaitProgress> out;
+    const double now = clock();
+
+    for (const auto& p : pending)
+    {
+        // a start that is still to come (a fired or cancelled entry stays in 'pending' until track() sweeps it)
+        if (p.kind != PendingKind::start || ! scheduler.isPending (p.id) || now >= p.at)
+            continue;
+
+        if (now < p.preWaitFrom)
+        {
+            // still inside the previous cue's post-wait: that cue's countdown, once that cue has started
+            if (! p.postWaitOwner.isNull() && now >= p.postWaitFrom)
+                out.push_back ({ p.postWaitOwner, WaitProgress::Kind::postWait, p.postWaitFrom, p.preWaitFrom, p.audition, p.owner });
+        }
+        else if (p.at > p.preWaitFrom)
+        {
+            out.push_back ({ p.owner, WaitProgress::Kind::preWait, p.preWaitFrom, p.at, p.audition, p.owner });
+        }
+    }
+
+    for (const auto& w : waits)
+        if (now < w.second.endsAt)
+            out.push_back ({ w.first, WaitProgress::Kind::waitCue, w.second.startedAt, w.second.endsAt, false, juce::Uuid::null() });
+
+    return out;
 }
 
 bool CueController::hasPendingFor (const juce::Uuid& cueId, bool includeObservers) const
@@ -1284,7 +1315,7 @@ CueController::GoResult CueController::fire (const juce::Uuid& cueId, bool audit
     return startById (cueId, audition);
 }
 
-CueController::GoResult CueController::scheduleStart (const juce::Uuid& id, double atSeconds, bool audition, int* scheduledId)
+CueController::GoResult CueController::scheduleStart (const juce::Uuid& id, double atSeconds, bool audition, int* scheduledId, StartTiming timing)
 {
     if (scheduledId != nullptr)
         *scheduledId = 0;
@@ -1301,6 +1332,15 @@ CueController::GoResult CueController::scheduleStart (const juce::Uuid& id, doub
                                                   startById (id, audition);
                                               });
     track (*startId, id, PendingKind::start, *startId);
+
+    // what the UI shows while the start waits: the cue's pre-wait from the moment it began, and before that the
+    // post-wait of the auto-continue cue it follows (see getRunningWaits)
+    auto& entry = pending.back();   // the one track() just added
+    entry.at = atSeconds;
+    entry.preWaitFrom = timing.preWaitFrom >= 0.0 ? juce::jmin (timing.preWaitFrom, atSeconds) : atSeconds;
+    entry.postWaitOwner = timing.postWaitOwner;
+    entry.postWaitFrom = timing.postWaitFrom;
+    entry.audition = audition;
 
     if (scheduledId != nullptr)
         *scheduledId = *startId;
@@ -1359,6 +1399,8 @@ int CueController::fireSequence (CueList& cues, int index, bool audition)
     const int bound = parent >= 0 ? cues.subtreeEnd (parent) : cues.size();
     double t = clock();
     int i = index;
+    auto postWaitOwner = juce::Uuid::null();   // the auto-continue cue whose post-wait the next start waits out (getRunningWaits) ...
+    double postWaitFrom = -1.0;                // ... and when that cue started
 
     while (i >= 0 && i < bound)
     {
@@ -1431,7 +1473,7 @@ int CueController::fireSequence (CueList& cues, int index, bool audition)
         }
 
         int runId = 0;   // the scheduled start's id: the follow put on below is that run's own (a restart from it keeps it)
-        const auto result = scheduleStart (cue.id, startAt, audition, &runId);
+        const auto result = scheduleStart (cue.id, startAt, audition, &runId, { t, postWaitOwner, postWaitFrom });
 
         if (result == GoResult::ignored)
             return next;   // the second-trigger rule acted on (or kept) the running instance: its own sequence stands, no new one is put behind it
@@ -1442,6 +1484,8 @@ int CueController::fireSequence (CueList& cues, int index, bool audition)
 
         if (cue.continueMode == ContinueMode::autoContinue)
         {
+            postWaitOwner = cue.id;   // the next start shows as this cue's post-wait until t
+            postWaitFrom = startAt;
             t = startAt + cue.postWaitSeconds;
             i = next;
             continue;

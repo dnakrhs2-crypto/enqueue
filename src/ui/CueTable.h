@@ -1,5 +1,6 @@
 #pragma once
 
+#include "app/WaitProgress.h"
 #include "audio/AudioEngine.h"
 #include "model/CueList.h"
 
@@ -40,6 +41,9 @@ public:
 
     /** Called from a UI timer with the engine's current playback state. */
     void setPlayingCues (std::vector<AudioEngine::PlayingCue> playing);
+    /** The waits running now (pre-wait / post-wait / wait cue countdowns, 'nowSeconds' = the controller's clock): the
+        pre-wait and post-wait cells count down with a fill, the row is tinted while the cue waits. */
+    void setRunningWaits (std::vector<WaitProgress> waits, double nowSeconds);
     /** Show mode: no inline edits, drags or property changes from the table. */
     void setEditable (bool shouldBeEditable);
     bool isEditable() const noexcept { return editable; }
@@ -120,6 +124,9 @@ private:
     void playheadChanged (int index) override;
 
     const AudioEngine::PlayingCue* findPlaying (const juce::Uuid& id) const;
+    const WaitProgress* findWait (const juce::Uuid& id, WaitProgress::Kind kind) const;
+    /** Any wait of the cue (pre-wait, post-wait or its own wait): the row is tinted. */
+    const WaitProgress* anyWait (const juce::Uuid& id) const;
     struct Badge
     {
         juce::String text;
@@ -163,6 +170,8 @@ private:
     int editGeneration = 0;   // bumps for every cell editor so a stale async commit cannot close a newer one
     TableBox table;
     std::vector<AudioEngine::PlayingCue> playing;
+    std::vector<WaitProgress> waits;
+    double waitClock = 0.0;   // the controller clock the waits were read at (their countdowns are drawn against it)
     std::vector<int> visible;
     std::unique_ptr<CellEditor> cellEditor;
     bool dragOver = false;

@@ -82,7 +82,12 @@ enum : juce::CommandID
     showManual,           // Ctrl+F1
     feedbackChat,         // Help > 커뮤니티: the open-chat room
     about,
-    youtubeDownload       // 유튜브다운 > 유튜브 다운로드...: the site makes an mp3 out of a YouTube link, the app fetches it
+    youtubeDownload,      // 유튜브다운 > 유튜브 다운로드...: the site makes an mp3 out of a YouTube link, the app fetches it
+
+    uiScale100,           // 설정 > 글씨·화면 크기: this PC's UI scale, one command per choice (the saved one is ticked)
+    uiScale110,
+    uiScale125,
+    uiScale150
 };
 
 } // namespace gocue::CommandIDs

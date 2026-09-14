@@ -58,8 +58,8 @@ public:
                    || juce::ModifierKeys::getCurrentModifiersRealtime().isShiftDown();
         PluginHost::setSafeMode (safeMode);
 
-        // 프로젝트 설정 > 일반 "글씨·화면 크기": the whole UI, set before any window exists. Safe mode starts at
-        // 100% (a scale that turned out too big for a new display is undone from the dialog).
+        // 설정 > 글씨·화면 크기: the whole UI, set before any window exists. Safe mode starts at
+        // 100% (a scale that turned out too big for a new display is undone from the menu).
         if (! safeMode)
             UiScale::apply (settings->getUiScalePercent());
 
@@ -87,7 +87,7 @@ public:
             juce::AlertWindow::showAsync (juce::MessageBoxOptions()
                                               .withIconType (juce::MessageBoxIconType::WarningIcon)
                                               .withTitle (ko ("오디오 장치를 열지 못했습니다"))
-                                              .withMessage (deviceError + "\n\n" + ko ("메뉴 [오디오 > 오디오 출력 설정]에서 장치를 선택하세요."))
+                                              .withMessage (deviceError + "\n\n" + ko ("메뉴 [설정 > 오디오 출력 설정]에서 장치를 선택하세요."))
                                               .withButton (ko ("확인")),
                                           [] (int) {});
         }
@@ -108,11 +108,11 @@ public:
 
         if (safeMode)
             juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::InfoIcon, ko ("안전 모드"),
-                                                    ko ("Shift를 누른 채 실행해 안전 모드로 시작했습니다. 저장된 오디오 장치와 플러그인을 불러오지 않았습니다.\n메뉴 [오디오 > 오디오 출력 설정]에서 장치를 고르세요."), ko ("확인"));
+                                                    ko ("Shift를 누른 채 실행해 안전 모드로 시작했습니다. 저장된 오디오 장치와 플러그인을 불러오지 않았습니다.\n메뉴 [설정 > 오디오 출력 설정]에서 장치를 고르세요."), ko ("확인"));
         else if (deviceFallback)
             juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon, ko ("저장된 오디오 장치를 열지 못했습니다"),
                                                     ko ("저장된 출력 장치: ") + savedOutputName + "\n" + ko ("지금 열린 장치: ") + (openedOutputName.isNotEmpty() ? openedOutputName : ko ("없음"))
-                                                        + "\n\n" + ko ("공연 전에 [오디오 > 오디오 출력 설정]에서 장치를 확인하세요."), ko ("확인"));
+                                                        + "\n\n" + ko ("공연 전에 [설정 > 오디오 출력 설정]에서 장치를 확인하세요."), ko ("확인"));
 
         Updater::Callbacks updaterCallbacks;
         updaterCallbacks.canShutdown = [this]
@@ -242,7 +242,7 @@ private:
                 juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon,
                                                         ko ("오디오 출력"),
                                                         ko ("장치를 출력 1-2로 다시 열지 못했습니다.\n") + error
-                                                            + "\n\n" + ko ("메뉴 [오디오 > 오디오 출력 설정]에서 장치를 다시 선택하세요."),
+                                                            + "\n\n" + ko ("메뉴 [설정 > 오디오 출력 설정]에서 장치를 다시 선택하세요."),
                                                         ko ("확인"));
         }
 

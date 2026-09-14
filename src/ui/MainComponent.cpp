@@ -498,7 +498,8 @@ void MainComponent::getAllCommands (juce::Array<juce::CommandID>& ids)
                     CommandIDs::audioSettings, CommandIDs::audioPatches, CommandIDs::pluginManager, CommandIDs::masterInserts,
                     CommandIDs::workspaceSettings,
                     CommandIDs::checkForUpdates, CommandIDs::showManual, CommandIDs::feedbackChat, CommandIDs::about,
-                    CommandIDs::youtubeDownload });
+                    CommandIDs::youtubeDownload,
+                    CommandIDs::uiScale100, CommandIDs::uiScale110, CommandIDs::uiScale125, CommandIDs::uiScale150 });
 }
 
 void MainComponent::getCommandInfo (juce::CommandID commandID, juce::ApplicationCommandInfo& result)
@@ -507,7 +508,7 @@ void MainComponent::getCommandInfo (juce::CommandID commandID, juce::Application
     const auto cueMenu  = ko ("큐");
     const auto fileMenu = ko ("파일");
     const auto editMenu = ko ("편집");
-    const auto audio    = ko ("오디오");
+    const auto settingsMenu = ko ("설정");   // devices, patches, plugins, this PC's UI scale, the project settings
     const bool hasSelection = document.cues.getSelected() != nullptr;
     const bool canEdit = ! showMode;
     const auto& selectedRows = document.cues.getSelectedIndices();
@@ -832,10 +833,31 @@ void MainComponent::getCommandInfo (juce::CommandID commandID, juce::Application
             break;
 
         case CommandIDs::workspaceSettings:
-            result.setInfo (ko ("프로젝트 설정..."), ko ("GO 간격, 전체 페이드 정지 시간, 자동 번호, 백업 등"), fileMenu, 0);
+            result.setInfo (ko ("프로젝트 설정..."), ko ("GO 간격, 전체 페이드 정지 시간, 자동 번호, 백업, 레벨 한계, 오디션 방식 (프로젝트에 저장)"), settingsMenu, 0);
             result.setActive (canEdit);   // show mode: the project, devices, patches, plugins and updates are locked
             result.addDefaultKeypress (',', ModifierKeys::commandModifier | ModifierKeys::shiftModifier);
             break;
+
+        case CommandIDs::uiScale100:
+        case CommandIDs::uiScale110:
+        case CommandIDs::uiScale125:
+        case CommandIDs::uiScale150:
+        {
+            // 설정 > 글씨·화면 크기: one entry per choice; the saved choice is ticked, and when the display could not
+            // take it (or safe mode started at 100%) that entry says what is in force
+            const int percent = UiScale::allowedPercents[commandID - CommandIDs::uiScale100];
+            const int saved = settings.getUiScalePercent();
+            const int inForce = UiScale::currentPercent();
+            auto name = juce::String (percent) + "%" + (percent == UiScale::defaultPercent ? ko (" (기본)") : juce::String());
+
+            if (percent == saved && inForce != saved)
+                name << ko ("   — 지금은 ") << inForce << ko ("% (화면이 작거나 안전 모드)");
+
+            result.setInfo (name, ko ("창 전체(글씨·버튼·행·간격)가 같은 비율로 커집니다. 프로젝트가 아니라 이 PC에 저장"), settingsMenu, 0);
+            result.setTicked (percent == saved);
+            result.setActive (canEdit);   // show mode: the layout stays put during the show
+            break;
+        }
 
         case CommandIDs::undo:
             result.setInfo (document.canUndo() ? ko ("실행 취소: ") + document.getUndoName() : ko ("실행 취소"),
@@ -871,25 +893,25 @@ void MainComponent::getCommandInfo (juce::CommandID commandID, juce::Application
             break;
 
         case CommandIDs::audioSettings:
-            result.setInfo (ko ("오디오 출력 설정..."), ko ("출력 장치(ASIO / WASAPI) 선택"), audio, 0);
+            result.setInfo (ko ("오디오 출력 설정..."), ko ("출력 장치(ASIO / WASAPI) 선택"), settingsMenu, 0);
             result.setActive (canEdit);   // show mode: the project, devices, patches, plugins and updates are locked
             result.addDefaultKeypress (',', ModifierKeys::commandModifier);
             break;
 
         case CommandIDs::audioPatches:
-            result.setInfo (ko ("오디오 패치..."), ko ("큐 출력 → 장치 출력 라우팅, 출력 이름, 스테레오 묶기, 출력 인서트"), audio, 0);
+            result.setInfo (ko ("오디오 패치..."), ko ("큐 출력 → 장치 출력 라우팅, 출력 이름, 스테레오 묶기, 출력 인서트"), settingsMenu, 0);
             result.setActive (canEdit);   // show mode: the project, devices, patches, plugins and updates are locked
             result.addDefaultKeypress ('P', ModifierKeys::commandModifier | ModifierKeys::shiftModifier);
             break;
 
         case CommandIDs::pluginManager:
-            result.setInfo (ko ("VST3 플러그인 관리..."), ko ("VST3 플러그인 스캔 / 목록"), audio, 0);
+            result.setInfo (ko ("VST3 플러그인 관리..."), ko ("VST3 플러그인 스캔 / 목록"), settingsMenu, 0);
             result.setActive (canEdit);   // show mode: the project, devices, patches, plugins and updates are locked
             result.addDefaultKeypress ('P', ModifierKeys::commandModifier);
             break;
 
         case CommandIDs::masterInserts:
-            result.setInfo (ko ("마스터 버스 인서트..."), ko ("모든 큐가 통과하는 마스터 VST3 체인"), audio, 0);
+            result.setInfo (ko ("마스터 버스 인서트..."), ko ("모든 큐가 통과하는 마스터 VST3 체인"), settingsMenu, 0);
             result.setActive (canEdit);   // show mode: the project, devices, patches, plugins and updates are locked
             result.addDefaultKeypress ('M', ModifierKeys::commandModifier);
             break;
@@ -1201,8 +1223,19 @@ bool MainComponent::perform (const InvocationInfo& info)
             break;
 
         case CommandIDs::workspaceSettings:
-            WorkspaceSettingsDialog::show (document, settings, [this] (int percent) { return applyUiScale (percent); }, this);
+            WorkspaceSettingsDialog::show (document, this);
             break;
+
+        case CommandIDs::uiScale100:
+        case CommandIDs::uiScale110:
+        case CommandIDs::uiScale125:
+        case CommandIDs::uiScale150:
+        {
+            const int percent = UiScale::allowedPercents[info.commandID - CommandIDs::uiScale100];
+            settings.setUiScalePercent (percent);   // the choice is kept even when the display takes less of it now
+            applyUiScale (percent);
+            break;
+        }
 
         case CommandIDs::undo:
             if (document.undo())
@@ -1287,7 +1320,7 @@ bool MainComponent::perform (const InvocationInfo& info)
 //==============================================================================
 juce::StringArray MainComponent::getMenuBarNames()
 {
-    return { ko ("파일"), ko ("편집"), ko ("큐"), ko ("재생"), ko ("오디오"), ko ("유튜브다운"), ko ("도움말") };
+    return { ko ("파일"), ko ("편집"), ko ("큐"), ko ("재생"), ko ("설정"), ko ("유튜브다운"), ko ("도움말") };
 }
 
 juce::PopupMenu MainComponent::getMenuForIndex (int topLevelMenuIndex, const juce::String&)
@@ -1302,8 +1335,6 @@ juce::PopupMenu MainComponent::getMenuForIndex (int topLevelMenuIndex, const juc
             menu.addSeparator();
             menu.addCommandItem (&commands, CommandIDs::saveProject);
             menu.addCommandItem (&commands, CommandIDs::saveProjectAs);
-            menu.addSeparator();
-            menu.addCommandItem (&commands, CommandIDs::workspaceSettings);
             menu.addSeparator();
             menu.addCommandItem (&commands, juce::StandardApplicationCommandIDs::quit);
             break;
@@ -1390,12 +1421,25 @@ juce::PopupMenu MainComponent::getMenuForIndex (int topLevelMenuIndex, const juc
             menu.addCommandItem (&commands, CommandIDs::revertFade);
             break;
 
-        case 4:
+        case 4:   // 설정: the audio device and patches, plugins, this PC's UI scale, the project's own settings
             menu.addCommandItem (&commands, CommandIDs::audioSettings);
             menu.addCommandItem (&commands, CommandIDs::audioPatches);
             menu.addSeparator();
             menu.addCommandItem (&commands, CommandIDs::pluginManager);
             menu.addCommandItem (&commands, CommandIDs::masterInserts);
+            menu.addSeparator();
+
+            {
+                juce::PopupMenu scale;
+                scale.addCommandItem (&commands, CommandIDs::uiScale100);
+                scale.addCommandItem (&commands, CommandIDs::uiScale110);
+                scale.addCommandItem (&commands, CommandIDs::uiScale125);
+                scale.addCommandItem (&commands, CommandIDs::uiScale150);
+                menu.addSubMenu (ko ("글씨·화면 크기 (이 PC)"), scale, ! showMode);
+            }
+
+            menu.addSeparator();
+            menu.addCommandItem (&commands, CommandIDs::workspaceSettings);
             break;
 
         case 5:
@@ -3334,12 +3378,18 @@ void MainComponent::timerCallback()
         }
     }
 
+    // the waits counting down (pre-waits to a scheduled start, post-waits, wait cues): the table's wait cells and the
+    // active cues panel show them against the controller's clock
+    auto waits = controller.getRunningWaits();
+    const double waitClock = controller.clock();
+
     if (activeCuesVisible)
-        activeCues.setPlayingCues (playing);
+        activeCues.setPlayingCues (playing, waits, waitClock);
 
     if (cart.isVisible())
         cart.setPlayingCues (playing);
 
+    table.setRunningWaits (std::move (waits), waitClock);
     table.setPlayingCues (std::move (playing));
     footer.setCueCount (document.cues.size());
     footer.setWarningCount (countBrokenCues());

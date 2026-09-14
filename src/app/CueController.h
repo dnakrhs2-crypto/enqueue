@@ -3,6 +3,7 @@
 #include "app/FadeRunner.h"
 #include "app/ProjectDocument.h"
 #include "app/Scheduler.h"
+#include "app/WaitProgress.h"
 #include "audio/AudioEngine.h"
 
 #include <functional>
@@ -107,6 +108,10 @@ public:
     bool hasPendingFor (const juce::Uuid& cueId, bool includeObservers = false) const;
     /** Scheduled starts / follows, running wait cues or playlist groups: something would still start. */
     bool hasPendingStarts() const noexcept { return ! pending.empty() || ! waits.empty() || ! playlists.empty(); }
+    /** The waits running right now, for the UI: pre-waits counting down to a scheduled start, an auto-continue cue's
+        post-wait, a wait cue's wait. A start put on behind an auto-continue cue shows as that cue's post-wait until the
+        post-wait is over, then as its own pre-wait (when it has one). In the order they were put on. */
+    std::vector<WaitProgress> getRunningWaits() const;
     /** Cues that have been started at least once since the last reset (drives the "second colour"). */
     bool hasPlayed (const juce::Uuid& cueId) const { return played.count (cueId) != 0; }
     void clearPlayed() { played.clear(); }
@@ -172,9 +177,13 @@ private:
     static juce::String cueLabel (int index, const Cue& cue);
     /** Fires a cue by id at once (it may have been edited since it was scheduled). */
     GoResult startById (const juce::Uuid& id, bool audition);
+    /** The moments a scheduled start's waits began, for getRunningWaits(): 'preWaitFrom' = when the cue's own pre-wait
+        began (the GO, the group start, the end of the previous post-wait); < 0 = at the start itself (no pre-wait shown).
+        'postWaitOwner' / 'postWaitFrom' = the auto-continue cue whose post-wait runs before this start, and when it started. */
+    struct StartTiming { double preWaitFrom = -1.0; juce::Uuid postWaitOwner = juce::Uuid::null(); double postWaitFrom = -1.0; };
     /** The result of an immediate start (atSeconds is now or past); a scheduled one is 'started'. 'scheduledId' receives the
         scheduler id of the start (0 when it ran at once): what a walk puts on for that run is tagged with it. */
-    GoResult scheduleStart (const juce::Uuid& id, double atSeconds, bool audition, int* scheduledId = nullptr);
+    GoResult scheduleStart (const juce::Uuid& id, double atSeconds, bool audition, int* scheduledId = nullptr, StartTiming timing = {});
     AudioEngine::PlayOptions playOptions (bool audition) const;
     double startOffsetForNextPlay = 0.0;   // previewFrom(): seconds into the region the next play begins at
     bool explicitStartForNextPlay = false;
@@ -211,13 +220,21 @@ private:
     GoResult triggerImpl (const Cue& cue, bool audition);
     GoResult firstTriggerResult = GoResult::started;
     bool firstTriggerSeen = true;
-    struct Pending { int id; juce::Uuid owner; PendingKind kind = PendingKind::start; int runId = 0; };
+    struct Pending
+    {
+        int id; juce::Uuid owner; PendingKind kind = PendingKind::start; int runId = 0;
+        // a start's timing for getRunningWaits(): when it fires, when its cue's pre-wait began, the post-wait it waits out
+        double at = 0.0, preWaitFrom = 0.0, postWaitFrom = -1.0;
+        juce::Uuid postWaitOwner = juce::Uuid::null();
+        bool audition = false;
+    };
     std::vector<Pending> pending;
     GoResult triggerControl (const Cue& cue, int index, bool audition);
     bool recording = false;
     double recordingStart = 0.0;
     std::vector<RecordedStart> recorded;
-    std::map<juce::Uuid, double> waits;                            // wait cues: id -> end time
+    struct WaitRun { double startedAt = 0.0, endsAt = 0.0; };
+    std::map<juce::Uuid, WaitRun> waits;                           // wait cues: id -> the running wait
     struct PlaylistRun { std::vector<juce::Uuid> order; int position = 0; bool audition = false; juce::Uuid current = juce::Uuid::null(); int failures = 0; };
     std::map<juce::Uuid, PlaylistRun> playlists;                  // running playlist groups
     std::map<juce::Uuid, std::set<juce::Uuid>> randomUsed;        // random groups: children played this round

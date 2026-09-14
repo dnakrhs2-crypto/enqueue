@@ -1,6 +1,5 @@
 #include "ui/WorkspaceSettingsDialog.h"
 
-#include "app/UiScale.h"
 #include "ui/UiUtils.h"
 
 namespace gocue::WorkspaceSettingsDialog
@@ -92,8 +91,7 @@ namespace
     class GeneralTab : public SettingsTab
     {
     public:
-        GeneralTab (ProjectDocument& doc, AppSettings& app, std::function<int (int)> applyScale)
-            : SettingsTab (doc), appSettings (app), applyUiScale (std::move (applyScale))
+        GeneralTab (ProjectDocument& doc) : SettingsTab (doc)
         {
             const auto& s = doc.settings;
 
@@ -152,46 +150,8 @@ namespace
             };
             addAndMakeVisible (rowSizeBox);
 
-            // this PC's, not the project's: the same show opens on a laptop and on a desk monitor
-            scaleLabel = &addLabel (ko ("글씨·화면 크기 (이 PC)"));
-
-            for (const int p : UiScale::allowedPercents)
-                scaleBox.addItem (juce::String (p) + "%" + (p == UiScale::defaultPercent ? ko (" (기본)") : juce::String()), p);
-
-            // the combo shows the stored choice (so every choice, the one in force included, can be picked and saved —
-            // a combo does not report re-selecting its current item); the hint says what is actually in force
-            scaleBox.setSelectedId (appSettings.getUiScalePercent(), juce::dontSendNotification);
-            scaleBox.onChange = [this]
-            {
-                const int wanted = scaleBox.getSelectedId();
-
-                if (wanted <= 0)
-                    return;
-
-                appSettings.setUiScalePercent (wanted);
-                showScaleHint (wanted, applyUiScale ? applyUiScale (wanted) : wanted);
-            };
-            addAndMakeVisible (scaleBox);
-
-            scaleHint = &addLabel ({});
+            scaleHint = &addLabel (ko ("글씨·화면 크기(이 PC의 배율)는 설정 메뉴 > 글씨·화면 크기에 있습니다."));
             scaleHint->setFont (Palette::font (Palette::kickerSize));
-            showScaleHint (appSettings.getUiScalePercent(), UiScale::currentPercent());
-        }
-
-        /** 'saved' is the stored choice, 'current' what is in force: they differ when the display could not fit the
-            choice (lowered) or when safe mode started at 100% without applying it. */
-        void showScaleHint (int saved, int current)
-        {
-            juce::String text;
-
-            if (current == saved)
-                text = ko ("창 전체가 같은 비율로 커집니다");
-            else if (UiScale::lastRequestedPercent == saved)
-                text = ko ("화면이 작아 지금은 ") + juce::String (current) + ko ("%로 적용 중입니다");
-            else
-                text = ko ("안전 모드로 실행 중이라 지금은 ") + juce::String (current) + ko ("%입니다");
-
-            scaleHint->setText (text, juce::dontSendNotification);
         }
 
         void resized() override
@@ -239,16 +199,12 @@ namespace
             rowSizeBox.setBounds (row.take (100));
 
             row = next();
-            scaleLabel->setBounds (row.take (230));
-            scaleBox.setBounds (row.take (110));
-            scaleHint->setBounds (row.take (juce::jmax (0, row.area.getWidth() - row.x)));
+            scaleHint->setBounds (row.take (area.getWidth()));
         }
 
     private:
-        juce::Label *goLabel, *goHint, *panicLabel, *panicHint, *incrementLabel, *rowSizeLabel, *scaleLabel, *scaleHint;
-        juce::ComboBox rowSizeBox, scaleBox;
-        AppSettings& appSettings;
-        std::function<int (int)> applyUiScale;
+        juce::Label *goLabel, *goHint, *panicLabel, *panicHint, *incrementLabel, *rowSizeLabel, *scaleHint;
+        juce::ComboBox rowSizeBox;
         juce::TextEditor *goEditor, *panicEditor, *incrementEditor, *openEditor, *closeEditor;
         juce::ToggleButton *hotkeysToggle, *keyUpToggle, *autoNumberToggle, *lockToggle, *openToggle, *closeToggle;
     };
@@ -316,7 +272,7 @@ namespace
             minEditor = &addNumber (juce::String (s.minLevelDb, 1), "-0123456789.",
                                     [] (WorkspaceSettings& w, const juce::String& t) { w.minLevelDb = t.getDoubleValue(); },
                                     [] (const WorkspaceSettings& w) { return juce::String (w.minLevelDb, 1); });
-            hint = &addLabel (ko ("출력 라우팅·출력 이름·출력 인서트는 오디오 > 오디오 패치... 에서, 장치와 채널 수는 오디오 > 오디오 출력 설정에서 바꿉니다."));
+            hint = &addLabel (ko ("출력 라우팅·출력 이름·출력 인서트는 설정 > 오디오 패치... 에서, 장치와 채널 수는 설정 > 오디오 출력 설정에서 바꿉니다."));
             hint->setFont (Palette::font (Palette::kickerSize));
 
             auditionLabel = &addLabel (ko ("오디션 (Alt+Space / Alt+V) 방식"));
@@ -408,11 +364,11 @@ namespace
     class Content : public juce::Component
     {
     public:
-        Content (ProjectDocument& document, AppSettings& appSettings, std::function<int (int)> applyUiScale)
+        Content (ProjectDocument& document)
         {
             tabs.setTabBarDepth (Palette::tabBarHeight);
             tabs.setOutline (0);
-            tabs.addTab (ko ("일반"), Palette::panel, new GeneralTab (document, appSettings, std::move (applyUiScale)), true);
+            tabs.addTab (ko ("일반"), Palette::panel, new GeneralTab (document), true);
             tabs.addTab (ko ("파일"), Palette::panel, new FilesTab (document), true);
             tabs.addTab (ko ("오디오"), Palette::panel, new AudioTab (document), true);
             addAndMakeVisible (tabs);
@@ -427,8 +383,7 @@ namespace
     };
 }
 
-void show (ProjectDocument& document, AppSettings& appSettings, std::function<int (int percent)> applyUiScale,
-           juce::Component* centreAround)
+void show (ProjectDocument& document, juce::Component* centreAround)
 {
     if (dialog != nullptr)
     {
@@ -438,7 +393,7 @@ void show (ProjectDocument& document, AppSettings& appSettings, std::function<in
 
     juce::DialogWindow::LaunchOptions options;
     options.dialogTitle = ko ("프로젝트 설정");
-    options.content.setOwned (new Content (document, appSettings, std::move (applyUiScale)));
+    options.content.setOwned (new Content (document));
     options.componentToCentreAround = centreAround;
     options.dialogBackgroundColour = Palette::background;
     options.escapeKeyTriggersCloseButton = true;

@@ -162,7 +162,7 @@ private:
     void moveRowsInto (const std::vector<int>& rows, int groupIndex);
     void editCues (const std::vector<int>& rows, const juce::String& name, const std::function<void (Cue&)>& mutator);
     void setShowMode (bool shouldBeShowMode);
-    /** 프로젝트 설정 > 일반 "글씨·화면 크기": puts this PC's scale into effect now; returns the percent applied
+    /** 설정 > 글씨·화면 크기: puts this PC's scale into effect now; returns the percent applied
         (lower than asked when the display could not fit the minimum window). */
     int applyUiScale (int percent);
     void showLoadToTimeDialog();

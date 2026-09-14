@@ -52,7 +52,7 @@ public:
     int getLufsAverageSeconds() const;
     void setLufsAverageSeconds (int seconds);
 
-    /** 프로젝트 설정 > 일반 "글씨·화면 크기": the scale of the whole UI on this PC, in percent (one of
+    /** 설정 > 글씨·화면 크기: the scale of the whole UI on this PC, in percent (one of
         UiScale::allowedPercents; anything else reads as 100). Per PC on purpose, never in the project file. */
     int getUiScalePercent() const;
     void setUiScalePercent (int percent);

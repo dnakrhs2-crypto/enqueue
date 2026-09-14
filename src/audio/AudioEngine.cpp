@@ -697,7 +697,7 @@ bool AudioEngine::play (const Cue& cue, const PlayOptions& options, juce::String
     if (deviceExpected && ! deviceRunning.load (std::memory_order_acquire))
     {
         if (errorMessage != nullptr)
-            *errorMessage = juce::String::fromUTF8 ("오디오 장치가 열려 있지 않습니다. 메뉴 [오디오 > 오디오 출력 설정]에서 장치를 확인하세요.");
+            *errorMessage = juce::String::fromUTF8 ("오디오 장치가 열려 있지 않습니다. 메뉴 [설정 > 오디오 출력 설정]에서 장치를 확인하세요.");
 
         return false;
     }

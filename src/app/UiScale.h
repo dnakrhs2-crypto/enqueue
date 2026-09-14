@@ -8,7 +8,7 @@
 namespace gocue::UiScale
 {
 
-/** 프로젝트 설정 > 일반 "글씨·화면 크기": the whole UI (text, buttons, rows, spacing) is drawn this much larger, the
+/** 설정 > 글씨·화면 크기: the whole UI (text, buttons, rows, spacing) is drawn this much larger, the
     way a Windows display scale works, on top of the monitor's own DPI scale. Kept per PC (AppSettings), never in
     the project file: the same show opens on a laptop and on a desk monitor. */
 constexpr int allowedPercents[] = { 100, 110, 125, 150 };

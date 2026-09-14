@@ -27,6 +27,12 @@ inline juce::String formatSeconds (double seconds)
     return juce::String::formatted ("%d:%02d.%d", minutes, secs, tenths);
 }
 
+/** A countdown: "-m:ss.t", "-0:00.0" once it has run out (formatSeconds would read "--:--" there). */
+inline juce::String formatCountdown (double secondsLeft)
+{
+    return "-" + (secondsLeft > 0.0 ? formatSeconds (secondsLeft) : juce::String ("0:00.0"));
+}
+
 /** m:ss.mmm (or m:ss when 'withMillis' is false). Negative -> 0. */
 inline juce::String formatTimeMs (double seconds, bool withMillis = true)
 {
@@ -96,6 +102,8 @@ namespace Palette
     const juce::Colour pausedRow     { 0xff46443c };
     const juce::Colour missing       { 0xfff0605a };
     const juce::Colour onBright      { 0xff06210f };
+    const juce::Colour waiting       { 0xff60a5fa };   // a pre-wait / post-wait / wait cue counting down (blue: neither playing green nor selection purple)
+    const juce::Colour waitingRow    { 0xff313e51 };
     const juce::Colour rowEven = panel, rowOdd = panel, header = panel2, button = panel2;
     const juce::Colour muted = dimText, accent = standby, goButton = playing, stopButton = missing, warn = paused;
     const juce::Colour shadowColour { 0x59000000 };
@@ -106,7 +114,7 @@ namespace Palette
     constexpr float keyRadius = 3.0f, tickRadius = 4.0f, colourBarRadius = 2.0f;
     constexpr float borderWidth = 1.0f, selectionWidth = 2.0f;
     constexpr float rowBorderAlpha = 0.6f, disabledAlpha = 0.55f, keyAlpha = 0.7f;
-    constexpr float statePillAlpha = 0.15f, stopTintAlpha = 0.12f, trackAlpha = 0.7f, menuHighlightAlpha = 0.25f;
+    constexpr float statePillAlpha = 0.15f, stopTintAlpha = 0.12f, trackAlpha = 0.7f, menuHighlightAlpha = 0.25f, waitFillAlpha = 0.22f;
     constexpr float hoverBrighten = 0.08f, pressedDarken = 0.2f;
     constexpr float bodySize = 13.0f, headerSize = 11.5f, fileSize = 12.0f, timeSize = 12.5f;
     constexpr float tabSize = 12.5f, pillSize = 11.0f, kickerSize = 11.0f, keySize = 10.5f;
@@ -120,7 +128,7 @@ namespace Palette
     constexpr int inspectorControlWidth = 936, inspectorWideWidth = 1080;
     constexpr int modeToggleWidth = 164, loudnessWidth = 300, loudnessWindowWidth = 48, loudnessValueHeight = 46, loudnessLabelHeight = 18, weekdaySize = 26;
     constexpr int dialogInset = 8, pluginSlotWidth = 216, pluginSlotHeight = 72, pluginSlotGap = 26;
-    constexpr int settingsWidth = 640, settingsHeight = 535;   // General's last row (글씨·화면 크기) ends at y=511; leave 24px below it.
+    constexpr int settingsWidth = 640, settingsHeight = 535;   // General's last row (the 글씨·화면 크기 pointer) ends at y=511; leave 24px below it.
     constexpr int alertIconWidth = 80, alertIconSize = 36;
     constexpr float alertTitleSize = 18.0f, alertMessageSize = 14.0f, manualSize = 14.5f;
     constexpr float dividerChevronSize = 8.0f, dividerStroke = 1.0f;
