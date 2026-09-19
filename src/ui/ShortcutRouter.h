@@ -1,6 +1,7 @@
 #pragma once
 
 #include "app/ShortcutService.h"
+#include <deque>
 #include <map>
 #include <set>
 
@@ -24,6 +25,7 @@ public:
         std::function<void (double timeMs)> panic;
         std::function<bool()> requireGoKeyUp;
         std::function<bool (int keyCode)> keyDown;
+        std::function<bool (int virtualKey)> nativeKeyDown;
         std::function<bool()> applicationActive;
     };
     ShortcutRouter (ShortcutService&, juce::ApplicationCommandManager&, Callbacks);
@@ -59,6 +61,13 @@ private:
         juce::CommandID releaseCommand = 0;
         bool go = false, quarantined = false;
         double timeMs = 0;
+        int nativeVK = 0;
+        bool nativeObserved = false;
+    };
+    struct NativePress
+    {
+        PanicKeyBinding key;
+        bool repeat = false, released = false, panicOwned = false;
     };
     void watchTree (juce::Component&);
     void componentChildrenChanged (juce::Component&) override;
@@ -68,7 +77,8 @@ private:
     void shortcutsChanged() override;
     void captureStateChanged() override;
     void quarantineDownKeys();
-    void updateHeldKeys();
+    void updateHeldKeys (bool recoverNative = true);
+    void releaseKey (int identity);
     void invoke (juce::CommandID, const juce::KeyPress&, bool down, juce::Component*, double durationMs = 0);
     void flushReleases();
     juce::Component* componentOwner (juce::Component*) const;
@@ -81,7 +91,6 @@ private:
     std::vector<Press> pendingReleases;
     std::set<int> captureActivationKeys;
     bool active = true, goLatched = false;
-    int nativeVK = 0, nativeModifiers = 0;
-    bool nativeRepeating = false;
+    std::deque<NativePress> nativePresses;
 };
 }

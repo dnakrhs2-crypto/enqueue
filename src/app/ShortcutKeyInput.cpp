@@ -2,6 +2,34 @@
 
 namespace gocue::ShortcutKeyInput
 {
+const std::array<NumberPadAlias, 7>& numberPadAliases()
+{
+    using K = juce::KeyPress;
+    static const std::array<NumberPadAlias, 7> aliases {{
+        { K::numberPadMultiply, 0x6a, "*" }, { K::numberPadAdd, 0x6b, "+" },
+        { K::numberPadSeparator, 0x6c, "," }, { K::numberPadSubtract, 0x6d, "-" },
+        { K::numberPadDecimalPoint, 0x6e, ".," }, { K::numberPadDivide, 0x6f, "/" },
+        { K::numberPadEquals, 0x92, "=" }
+    }};
+    return aliases;
+}
+
+bool keysOverlap (const juce::KeyPress& a, const juce::KeyPress& b)
+{
+    if (a == b)
+        return true;
+    if (a.getModifiers() != b.getModifiers())
+        return false;
+    const auto characters = [] (const juce::KeyPress& key)
+    {
+        for (const auto& alias : numberPadAliases())
+            if (key.isKeyCode (alias.keyCode))
+                return juce::String (alias.characters);
+        return juce::String::charToString (static_cast<juce::juce_wchar> (key.getKeyCode()));
+    };
+    return characters (a).containsAnyOf (characters (b));
+}
+
 namespace
 {
 // Reuse JUCE's modifier/platform rules without changing text, selection or clipboard.

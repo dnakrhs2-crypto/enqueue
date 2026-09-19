@@ -54,6 +54,7 @@ struct ShortcutKeyContext
     /** Native observation disambiguates JUCE character aliases (e.g. keypad '+').
         It is used only for the panic owner; fixed component behavior is unchanged. */
     std::optional<PanicKeyBinding> nativeKey;
+    bool nativePanicOwned = false; // ownership observed before JUCE's asynchronous modifier query
     std::vector<CueHotkey> cueHotkeys; // may include every list/cart for conflict display; never modified
     std::function<bool (juce::CommandID)> commandEnabled;
     /** Execution availability only: false blocks/consumes the owned key, never releases it.

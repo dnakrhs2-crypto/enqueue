@@ -47,6 +47,7 @@ struct InputHarness : shortcut_test::Harness
         { panicTimes.push_back (time); hardPanics.push_back (hard); });
         ShortcutRouter::Callbacks callbacks;
         callbacks.keyDown = [this] (int code) { return physical.count (code) != 0; };
+        callbacks.nativeKeyDown = [this] (int vk) { return nativePhysical.count (vk) != 0; };
         callbacks.applicationActive = [this] { return foreground; };
         callbacks.requireGoKeyUp = [this] { return requireKeyUp; };
         callbacks.cueHotkey = [this] (const K& key, bool repeat)
@@ -63,7 +64,7 @@ struct InputHarness : shortcut_test::Harness
         return router->route (key, origin, context, now, repeat);
     }
     void release (int code) { physical.erase (code); router->pollKeyState(); }
-    void releaseAll() { physical.clear(); router->pollKeyState(); }
+    void releaseAll() { physical.clear(); nativePhysical.clear(); router->pollKeyState(); }
     int downs (juce::CommandID id) const
     {
         return static_cast<int> (std::count_if (target.invocations.begin(), target.invocations.end(), [id] (const auto& i)
@@ -80,6 +81,7 @@ struct InputHarness : shortcut_test::Harness
             panic->dispatch (*event);
     }
     std::set<int> physical;
+    std::set<int> nativePhysical; // VK state is independent of queued down/up observations
     std::unique_ptr<PanicKeyHook> panic;
     std::unique_ptr<ShortcutRouter> router;
     bool requireKeyUp = false, foreground = true;
@@ -246,6 +248,98 @@ public:
             expect (! h.router->anyGoKeyHeld());
             h.press (K (K::F13Key));
             expectEquals (h.downs (CommandIDs::go), 2);
+        }
+
+        beginTest ("keypad GO keeps VK_ADD held through polling and blocks a second GO alias");
+        {
+            InputHarness h;
+            h.requireKeyUp = true;
+            expect (h.service->setKeys ("transport.go", { K ('+'), K (K::F13Key) }).wasOk());
+            juce::Component origin;
+            h.router->attach (origin, Window::main);
+            h.nativePhysical.insert (0x6b); // VK_ADD; neither '+' nor VK_OEM_PLUS is down
+            h.router->prepareNativeEvent (0x6b, 0, true, false);
+            expect (h.router->keyPressed (K ('+', 0, '+'), &origin));
+            h.router->pollKeyState();
+            expect (h.router->anyGoKeyHeld());
+            expectEquals (h.ups (CommandIDs::go), 0);
+            h.press (K (K::F13Key));
+            expectEquals (h.downs (CommandIDs::go), 1);
+            h.release (K::F13Key);
+            h.router->pollKeyState();
+            h.press (K (K::F13Key));
+            expectEquals (h.downs (CommandIDs::go), 1);
+            h.releaseAll(); // physical polling recovers a missing native up
+            expect (! h.router->anyGoKeyHeld());
+            h.press (K (K::F13Key));
+            expectEquals (h.downs (CommandIDs::go), 2);
+        }
+
+        beginTest ("a keypad held before capture keeps its VK identity until physical release");
+        {
+            InputHarness h;
+            expect (h.service->setKeys ("transport.go", { K ('+') }).wasOk());
+            h.nativePhysical.insert (0x6b);
+            int token = 0, candidates = 0;
+            h.service->beginCapture (&token, [&] (const K&) { ++candidates; });
+            juce::Component origin;
+            h.router->attach (origin, Window::main);
+            h.router->keyPressed (K ('+', 0, '+'), &origin);
+            expectEquals (candidates, 0);
+            h.service->endCapture (&token);
+            h.router->keyPressed (K ('+', 0, '+'), &origin);
+            expectEquals (h.downs (CommandIDs::go), 0);
+            h.releaseAll();
+            h.nativePhysical.insert (0x6b);
+            h.router->keyPressed (K ('+', 0, '+'), &origin);
+            expectEquals (h.downs (CommandIDs::go), 1);
+        }
+
+        beginTest ("queued native up ends the first GO even when the second press is physically down");
+        {
+            InputHarness h;
+            expect (! h.requireKeyUp);
+            juce::Component origin;
+            h.router->attach (origin, Window::main);
+            h.nativePhysical.insert (0x20);
+            h.router->prepareNativeEvent (0x20, 0, true, false);
+            h.router->keyStateChanged (true, &origin);
+            h.router->keyPressed (K (K::spaceKey), &origin);
+            // The device already released and pressed again; the queue is behind it.
+            h.router->prepareNativeEvent (0x20, 0, false, false);
+            h.router->keyStateChanged (false, &origin);
+            expectEquals (h.ups (CommandIDs::go), 1);
+            expect (! h.router->anyGoKeyHeld());
+            h.router->prepareNativeEvent (0x20, 0, true, false);
+            h.router->keyStateChanged (true, &origin);
+            h.router->keyPressed (K (K::spaceKey), &origin);
+            expectEquals (h.downs (CommandIDs::go), 2);
+            h.router->prepareNativeEvent (0x20, 0, true, true);
+            h.router->keyPressed (K (K::spaceKey), &origin);
+            expectEquals (h.downs (CommandIDs::go), 2);
+        }
+
+        beginTest ("delayed character downs retain their own native up and modifier observations");
+        {
+            InputHarness h;
+            expect (h.service->setKeys ("transport.go", { K ('G'), K ('G', M::ctrlModifier, 0) },
+                                       ShortcutService::ConflictPolicy::move).wasOk());
+            juce::Component origin;
+            h.router->attach (origin, Window::main);
+            h.nativePhysical.insert ('G');
+            h.router->prepareNativeEvent ('G', M::ctrlModifier, true, false);
+            h.router->prepareNativeEvent ('H', 0, true, false); // an unrelated down cannot overwrite G
+            h.router->prepareNativeEvent ('G', M::ctrlModifier, false, false);
+            h.router->prepareNativeEvent ('G', 0, true, false);
+            h.router->keyPressed (K ('G', 0, 'g'), &origin); // first WM_CHAR arrives after its up
+            expectEquals (h.downs (CommandIDs::go), 1);
+            expectEquals (h.ups (CommandIDs::go), 1);
+            if (! h.target.invocations.empty())
+                expect (h.target.invocations.front().keyPress.getModifiers().isCtrlDown());
+            h.router->keyPressed (K ('G', 0, 'g'), &origin);
+            expectEquals (h.downs (CommandIDs::go), 2);
+            expectEquals (h.ups (CommandIDs::go), 1);
+            expect (h.router->anyGoKeyHeld());
         }
 
         beginTest ("GO focus/modifier changes and map replacement cannot manufacture a fresh down");
@@ -533,6 +627,36 @@ public:
             expectEquals (static_cast<int> (h.panicTimes.size()), 3);
         }
 
+        beginTest ("message creation times survive hook-entry delay and both Windows clock boundaries");
+        {
+            for (const uint32_t firstTick : { uint32_t (1000), uint32_t (0x7fffff00), uint32_t (0xffffff00) })
+            {
+                InputHarness h;
+                const uint32_t secondTick = firstTick + 601u;
+                const uint32_t hookTick = firstTick + 5000u;
+                // Both messages enter WH_KEYBOARD at once, seconds after creation.
+                const auto firstTime = PanicKeyHook::messageTimeToHiRes (firstTick, hookTick, 10000.0);
+                const auto secondTime = PanicKeyHook::messageTimeToHiRes (secondTick, hookTick, 10000.0);
+                expectEquals (firstTime, 5000.0);
+                expectEquals (secondTime - firstTime, 601.0);
+                const auto first = h.panic->observeWindowsEvent (0x1b, 0, 1, firstTime);
+                const auto second = h.panic->observeWindowsEvent (0x1b, 0, 1, secondTime);
+                expect (first.has_value() && second.has_value());
+                if (first) h.panic->dispatch (*first);
+                if (second) h.panic->dispatch (*second);
+                drainMessages();
+                expectEquals (static_cast<int> (h.hardPanics.size()), 2);
+                if (h.hardPanics.size() == 2)
+                {
+                    expect (! h.hardPanics[0]);
+                    expect (! h.hardPanics[1]);
+                }
+                h.panic->fromUi (secondTime + 500.0); // same time axis as UI/fallback input
+                expectEquals (static_cast<int> (h.hardPanics.size()), 3);
+                expect (h.hardPanics.back());
+            }
+        }
+
         beginTest ("Windows transition and previous-state bits are independent of the extended bit");
         {
             InputHarness h;
@@ -654,6 +778,25 @@ public:
             expectEquals (static_cast<int> (h.panicTimes.size()), 1);
         }
 
+        beginTest ("native Ctrl+F12 panic owns a JUCE F12 event whose asynchronous Ctrl is already up");
+        {
+            InputHarness h;
+            expect (h.panic->install().wasOk());
+            expect (h.service->setKeys ("transport.panicAll", { K (K::F12Key, M::ctrlModifier, 0) }).wasOk());
+            expect (h.service->setKeys ("transport.go", { K (K::F12Key) }).wasOk());
+            juce::Component origin;
+            h.router->attach (origin, Window::main);
+            h.nativePhysical.insert (0x7b);
+            h.native (0x7b, M::ctrlModifier);
+            h.router->prepareNativeEvent (0x7b, M::ctrlModifier, true, false);
+            h.router->prepareNativeEvent (0x11, 0, false, false); // queued Ctrl release
+            expect (h.router->keyPressed (K (K::F12Key), &origin));
+            drainMessages();
+            expectEquals (static_cast<int> (h.panicTimes.size()), 1);
+            expectEquals (h.downs (CommandIDs::go), 0);
+            expectEquals (h.target.invocationCount (CommandIDs::panicAll), 0);
+        }
+
         beginTest ("JUCE-only fallback is single-shot, supports chords and preserves dialog cancellation");
         {
             InputHarness h;
@@ -717,16 +860,16 @@ public:
         }
 
        #if JUCE_WINDOWS
-        beginTest ("keypad panic still owns JUCE's character alias instead of firing an overlapping command");
+        beginTest ("keypad panic character aliases conflict with commands and still belong to panic");
         {
             InputHarness h;
             expect (h.panic->install().wasOk());
             expect (h.service->setKeys ("transport.panicAll", { K (K::numberPadAdd) }).wasOk());
-            expect (h.service->setKeys ("transport.go", { K ('+') }).wasOk());
+            expect (h.service->setKeys ("transport.go", { K ('+') }).failed());
             juce::Component origin;
             h.router->attach (origin, Window::main);
             origin.addToDesktop (0);
-            h.physical.insert ('+');
+            h.nativePhysical.insert (0x6b);
             h.native (0x6b);
             h.router->prepareNativeEvent (0x6b, 0, true, false);
             origin.getPeer()->handleKeyPress (K ('+', 0, '+'));
@@ -735,6 +878,69 @@ public:
             expectEquals (static_cast<int> (h.panicTimes.size()), 1);
             expectEquals (h.target.invocationCount (CommandIDs::panicAll), 0);
             origin.removeFromDesktop();
+        }
+
+        beginTest ("failed-hook fallback fires each keypad operator panic once across repeats and polling");
+        {
+            InputHarness installed;
+            expect (installed.panic->install().wasOk());
+            struct Operator { int padCode, vk, character; };
+            const Operator operators[] {
+                { K::numberPadAdd, 0x6b, '+' }, { K::numberPadSubtract, 0x6d, '-' },
+                { K::numberPadMultiply, 0x6a, '*' }, { K::numberPadDivide, 0x6f, '/' },
+                { K::numberPadSeparator, 0x6c, ',' }, { K::numberPadDecimalPoint, 0x6e, '.' },
+                { K::numberPadDecimalPoint, 0x6e, ',' }, { K::numberPadEquals, 0x92, '=' }
+            };
+            for (const auto& op : operators)
+            {
+                InputHarness h;
+                expect (h.panic->install().failed());
+                expect (! h.panic->isInstalled());
+                expect (h.service->setKeys ("transport.panicAll", { K (op.padCode) }).wasOk());
+                juce::Component origin;
+                h.router->attach (origin, Window::main);
+                h.nativePhysical.insert (op.vk); // no native observation; real keypad VK only
+                for (int repeat = 0; repeat < 3; ++repeat)
+                {
+                    expect (h.router->keyPressed (K (op.character, 0, static_cast<juce::juce_wchar> (op.character)), &origin));
+                    h.router->pollKeyState();
+                }
+                expectEquals (static_cast<int> (h.panicTimes.size()), 1);
+                expectEquals (h.downs (CommandIDs::go), 0);
+                expectEquals (h.target.invocationCount (CommandIDs::panicAll), 0);
+                h.releaseAll();
+                h.nativePhysical.insert (op.vk);
+                h.router->keyPressed (K (op.character), &origin);
+                expectEquals (static_cast<int> (h.panicTimes.size()), 2);
+            }
+        }
+
+        beginTest ("keypad alias conflicts share reject, move, import and cue ownership rules");
+        {
+            InputHarness h;
+            expect (h.service->setKeys ("transport.panicAll", { K (K::numberPadAdd) }).wasOk());
+            expect (h.service->setKeys ("transport.go", { K ('+') }).failed());
+            ShortcutKeyContext context;
+            context.cueHotkeys.push_back ({ "cue", K ('+') });
+            const auto owner = h.service->resolveKeyOwner (K (K::numberPadAdd), context);
+            expectEquals (owner.commandID, static_cast<int> (CommandIDs::panicAll));
+            expectEquals (static_cast<int> (owner.conflicts.size()), 1);
+            expect (h.service->setKeys ("transport.go", { K ('+') }, ShortcutService::ConflictPolicy::move).wasOk());
+            expect (h.service->getKeys (CommandIDs::panicAll).isEmpty());
+            expect (h.service->setKeys ("transport.panicAll", { K (K::numberPadAdd) }).failed());
+            ShortcutProfile conflicting;
+            conflicting.overrides["transport.panicAll"] = { K (K::numberPadAdd) };
+            conflicting.overrides["transport.go"] = { K ('+') };
+            juce::String xml;
+            expect (conflicting.serialise (xml).wasOk());
+            expect (h.service->importProfile (xml).failed());
+            expect (h.service->setKeys ("transport.panicAll", { K (K::numberPadAdd, M::ctrlModifier, 0) }).wasOk());
+            expect (h.service->resolveKeyOwner (K ('+'), {}).commandID == CommandIDs::go);
+            expect (h.service->resolveKeyOwner (K ('+', M::ctrlModifier, 0), {}).commandID == CommandIDs::panicAll);
+            expect (h.service->setKeys ("transport.panicAll", { K (K::numberPadDecimalPoint) }).wasOk());
+            expect (h.service->setKeys ("transport.go", { K (K::numberPadSeparator) }).failed());
+            expect (h.service->setKeys ("transport.go", { K ('.') }).failed());
+            expect (h.service->setKeys ("transport.go", { K (',') }).failed());
         }
        #endif
 

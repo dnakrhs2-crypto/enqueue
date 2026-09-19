@@ -2,11 +2,36 @@
 #include "app/Commands.h"
 #include "app/ShortcutKeyInput.h"
 
+#if JUCE_WINDOWS
+ #include <windows.h>
+#endif
+
 namespace gocue
 {
 namespace
 {
 ShortcutRouter* desktopRouter = nullptr;
+bool matchesNativeKey (int code, int vk)
+{
+    for (const auto& alias : ShortcutKeyInput::numberPadAliases())
+        if (alias.virtualKey == vk && (code == alias.keyCode
+            || juce::String (alias.characters).containsChar (static_cast<juce::juce_wchar> (code))))
+            return true;
+    const auto converted = PanicKeyHook::convert (juce::KeyPress (code,
+        juce::ModifierKeys::ctrlModifier | juce::ModifierKeys::altModifier | juce::ModifierKeys::shiftModifier, 0));
+    return converted.binding && converted.binding->virtualKey == vk;
+}
+
+bool nativeMessagesPending()
+{
+   #if JUCE_WINDOWS
+    MSG message {};
+    return PeekMessageW (&message, nullptr, WM_KEYFIRST, WM_KEYLAST, PM_NOREMOVE) != 0;
+   #else
+    return false;
+   #endif
+}
+
 juce::Component* inputTarget()
 {
     auto* target = juce::Component::getCurrentlyFocusedComponent();
@@ -21,6 +46,16 @@ ShortcutRouter::ShortcutRouter (ShortcutService& s, juce::ApplicationCommandMana
 {
     if (! callbacks.keyDown)
         callbacks.keyDown = [] (int code) { return juce::KeyPress::isKeyCurrentlyDown (code); };
+    if (! callbacks.nativeKeyDown)
+        callbacks.nativeKeyDown = [] (int vk)
+        {
+           #if JUCE_WINDOWS
+            return (GetAsyncKeyState (vk) & 0x8000) != 0;
+           #else
+            juce::ignoreUnused (vk);
+            return false;
+           #endif
+        };
     if (! callbacks.applicationActive)
         callbacks.applicationActive = [] { return juce::Process::isForegroundProcess(); };
     service.addListener (this);
@@ -115,13 +150,20 @@ void ShortcutRouter::globalFocusChanged (juce::Component*)
 void ShortcutRouter::prepareNativeEvent (int vk, int modifiers, bool down, bool repeat)
 {
     refreshFocus();
-    // WM_CHAR can follow key-up in an already-populated message queue. Keep the
-    // last down observation until the next down, and match it to the JUCE key.
+    // Queue order is authoritative even when the device has already pressed the
+    // same key again. Keep released observations for delayed WM_CHAR delivery.
+    if (! down || ! repeat)
+    {
+        releaseKey (-vk);
+        for (auto& press : nativePresses)
+            if (press.key.virtualKey == vk)
+                press.released = true;
+    }
     if (down)
     {
-        nativeVK = vk;
-        nativeModifiers = modifiers;
-        nativeRepeating = repeat;
+        const bool panic = std::any_of (service.getPanicBindings().begin(), service.getPanicBindings().end(),
+            [&] (const auto& binding) { return binding.virtualKey == vk && binding.modifiers == modifiers; });
+        nativePresses.push_back ({ { vk, modifiers }, repeat, false, panic });
     }
 }
 
@@ -186,22 +228,33 @@ bool ShortcutRouter::keyPressed (const juce::KeyPress& key, juce::Component* ori
     if (focus != nullptr && origin != focus)
         return false; // standard UI event bubbling: already resolved at its focus owner
     applicationActiveChanged (callbacks.applicationActive());
-    auto context = contextFor (origin, key);
-    const auto converted = PanicKeyHook::convert (juce::KeyPress (key.getKeyCode(),
-        juce::ModifierKeys::ctrlModifier | juce::ModifierKeys::altModifier | juce::ModifierKeys::shiftModifier, 0));
-    const int code = key.getKeyCode();
-    const bool padCharacter = (nativeVK == 0x6a && code == '*') || (nativeVK == 0x6b && code == '+')
-        || (nativeVK == 0x6c && code == ',') || (nativeVK == 0x6d && code == '-')
-        || (nativeVK == 0x6e && (code == '.' || code == ',')) || (nativeVK == 0x6f && code == '/');
-    const bool matchedNative = nativeVK != 0 && nativeModifiers == key.getModifiers().getRawFlags()
-        && (padCharacter || (converted.binding && converted.binding->virtualKey == nativeVK));
-    if (matchedNative)
-        context.nativeKey = PanicKeyBinding { nativeVK, nativeModifiers };
-    return route (key, origin, context, juce::Time::getMillisecondCounterHiRes(), matchedNative && nativeRepeating);
+    const auto found = std::find_if (nativePresses.begin(), nativePresses.end(), [&] (const auto& press)
+    { return matchesNativeKey (key.getKeyCode(), press.key.virtualKey); });
+    const std::optional<NativePress> native = found != nativePresses.end() ? std::optional<NativePress> (*found) : std::nullopt;
+    if (found != nativePresses.end())
+        nativePresses.erase (found);
+    // JUCE queries asynchronous modifiers; use the modifiers of the matched down
+    // instead. A panic-owned event must never turn into an unmodified GO.
+    const auto observedKey = native ? juce::KeyPress (key.getKeyCode(), native->key.modifiers, key.getTextCharacter()) : key;
+    auto context = contextFor (origin, observedKey);
+    if (native)
+    {
+        context.nativeKey = native->key;
+        context.nativePanicOwned = native->panicOwned;
+    }
+    const bool consumed = route (observedKey, origin, context, juce::Time::getMillisecondCounterHiRes(), native && native->repeat);
+    if (native && native->released)
+    {
+        releaseKey (-native->key.virtualKey);
+        flushReleases();
+    }
+    return consumed;
 }
-bool ShortcutRouter::keyStateChanged (bool, juce::Component*)
+bool ShortcutRouter::keyStateChanged (bool isKeyDown, juce::Component*)
 {
-    pollKeyState();
+    if (! isKeyDown)
+        updateHeldKeys (false); // native releases were already observed in queue order
+    flushReleases();
     // Key-state must not reach default buttons/legacy shortcut listeners during
     // capture, nor while the captured key is still down after registration.
     return service.isCapturing() || std::any_of (held.begin(), held.end(), [] (const auto& p) { return p.second.quarantined; });
@@ -210,12 +263,22 @@ bool ShortcutRouter::keyStateChanged (bool, juce::Component*)
 bool ShortcutRouter::route (const juce::KeyPress& key, juce::Component* origin, ShortcutKeyContext context,
                             double timeMs, bool nativeRepeat)
 {
-    pollKeyState();
+    updateHeldKeys (false);
+    flushReleases();
     if (! context.applicationActive || context.window == Window::outsideApp)
         return false;
     const int code = key.getKeyCode();
-    const bool repeat = held.count (code) != 0 || nativeRepeat;
-    auto [it, inserted] = held.emplace (code, Press { key, 0, false, nativeRepeat, timeMs });
+    int vk = context.nativeKey ? context.nativeKey->virtualKey : 0;
+    if (vk == 0)
+        for (const auto& alias : ShortcutKeyInput::numberPadAliases())
+            if (matchesNativeKey (code, alias.virtualKey) && callbacks.nativeKeyDown (alias.virtualKey))
+            {
+                vk = alias.virtualKey;
+                break;
+            }
+    const int identity = vk != 0 ? -vk : code;
+    const bool repeat = held.count (identity) != 0 || nativeRepeat;
+    auto [it, inserted] = held.emplace (identity, Press { key, 0, false, nativeRepeat, timeMs, vk, context.nativeKey.has_value() });
     juce::ignoreUnused (inserted);
     context.captureActive = service.isCapturing();
     context.isRepeat = repeat;
@@ -311,44 +374,66 @@ void ShortcutRouter::flushReleases()
 }
 void ShortcutRouter::pollKeyState()
 {
-    updateHeldKeys();
+    updateHeldKeys (! nativeMessagesPending());
     flushReleases();
 }
-void ShortcutRouter::updateHeldKeys()
+void ShortcutRouter::releaseKey (int identity)
 {
-    for (auto it = held.begin(); it != held.end();)
-    {
-        if (! callbacks.keyDown (it->first))
-        {
-            if (it->second.releaseCommand != 0)
-                pendingReleases.push_back (it->second);
-            captureActivationKeys.erase (it->first);
-            it = held.erase (it);
-        }
-        else
-            ++it;
-    }
+    const auto it = held.find (identity);
+    if (it == held.end())
+        return;
+    if (it->second.releaseCommand != 0)
+        pendingReleases.push_back (it->second);
+    captureActivationKeys.erase (identity);
+    held.erase (it);
     if (! anyGoKeyHeld())
         goLatched = false;
 }
+void ShortcutRouter::updateHeldKeys (bool recoverNative)
+{
+    for (auto it = held.begin(); it != held.end();)
+    {
+        const auto& press = it->second;
+        if (press.nativeObserved && ! recoverNative)
+            ++it;
+        else if (! (press.nativeVK != 0 ? callbacks.nativeKeyDown (press.nativeVK) : callbacks.keyDown (press.key.getKeyCode())))
+            releaseKey ((it++)->first);
+        else
+            ++it;
+    }
+}
 void ShortcutRouter::quarantineDownKeys()
 {
-    updateHeldKeys();
+    updateHeldKeys (false);
     for (const auto& named : ShortcutKeyCodec::allowedKeys())
-        if (callbacks.keyDown (named.code))
+    {
+        int padVK = 0;
+        for (const auto& alias : ShortcutKeyInput::numberPadAliases())
+            if (named.code == alias.keyCode && callbacks.nativeKeyDown (alias.virtualKey))
+                padVK = alias.virtualKey;
+        if (padVK != 0 || callbacks.keyDown (named.code))
         {
-            auto& press = held[named.code];
+            // Do not create a second, character-based identity for an observed VK.
+            const auto existing = std::find_if (held.begin(), held.end(), [&] (const auto& p)
+            { return p.second.nativeVK != 0 && matchesNativeKey (named.code, p.second.nativeVK); });
+            auto& press = existing != held.end() ? existing->second : held[padVK != 0 ? -padVK : named.code];
             if (! press.key.isValid())
+            {
                 press.key = juce::KeyPress (named.code);
+                press.nativeVK = padVK;
+            }
             press.quarantined = true;
         }
+    }
     for (auto& [code, press] : held)
     {
+        juce::ignoreUnused (code);
         press.quarantined = true;
         // Mapping/capture transitions can introduce another held GO alias before
         // its first command down. It must keep an existing GO group closed too.
         if (std::any_of (service.getKeys (CommandIDs::go).begin(), service.getKeys (CommandIDs::go).end(),
-                         [code] (const auto& key) { return key.getKeyCode() == code; }))
+                         [&press] (const auto& key) { return ShortcutKeyInput::keysOverlap (
+                             juce::KeyPress (key.getKeyCode()), juce::KeyPress (press.key.getKeyCode())); }))
         {
             press.go = true;
             press.releaseCommand = CommandIDs::go;
@@ -380,6 +465,10 @@ void ShortcutRouter::applicationActiveChanged (bool value)
 }
 void ShortcutRouter::timerCallback()
 {
+    // Unmatched native/plugin downs must not be reused by a later JUCE event.
+    // At idle every translated WM_CHAR has already had a chance to match.
+    if (! nativeMessagesPending())
+        nativePresses.clear();
     refreshFocus();
     applicationActiveChanged (callbacks.applicationActive());
     pollKeyState();

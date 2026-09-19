@@ -68,6 +68,13 @@ PanicKeyHook::Conversion PanicKeyHook::convert (const juce::KeyPress& key, OemRe
     return mapped (vk);
 }
 
+double PanicKeyHook::messageTimeToHiRes (uint32_t messageTime, uint32_t tickCount, double nowMs)
+{
+    // Unsigned subtraction handles both LONG's sign boundary and the 32-bit wrap.
+    const uint32_t ageMs = tickCount - messageTime;
+    return nowMs - static_cast<double> (ageMs);
+}
+
 struct PanicKeyHook::State : ShortcutService::Listener
 {
     State (ShortcutService& s, Handler h) : service (s), handler (std::move (h)) { service.addListener (this); }
@@ -117,9 +124,13 @@ LRESULT CALLBACK keyboardProc (int code, WPARAM wParam, LPARAM lParam)
         // Win chords must not accidentally match a modifier-free panic binding.
         if (((GetKeyState (VK_LWIN) | GetKeyState (VK_RWIN)) & 0x8000) != 0) mods |= 0x100000;
         auto* owner = threadHookOwner;
+        const auto messageTime = static_cast<uint32_t> (GetMessageTime());
+        const auto tickCount = static_cast<uint32_t> (GetTickCount());
+        const auto timeMs = PanicKeyHook::messageTimeToHiRes (messageTime, tickCount,
+                                                           juce::Time::getMillisecondCounterHiRes());
         // Capture/generation/modifiers/time are all observed before any JUCE callback.
         if (const auto event = owner->observeWindowsEvent (static_cast<int> (wParam), mods, bits,
-                                               juce::Time::getMillisecondCounterHiRes(), juce::Process::isForegroundProcess()))
+                                                          timeMs, juce::Process::isForegroundProcess()))
             owner->dispatch (*event); // dispatch below queues native events through the lifetime-safe state
         if (owner->beforeDispatch)
             owner->beforeDispatch (static_cast<int> (wParam), mods, down, repeat);

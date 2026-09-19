@@ -28,6 +28,9 @@ public:
     // Same packed result as VkKeyScanExW, or -1. Injectable for layout tests.
     using OemResolver = std::function<int (juce::juce_wchar)>;
     static Conversion convert (const juce::KeyPress&, OemResolver = {});
+    /** Convert GetMessageTime's wrapping boot-clock milliseconds onto the same
+        high-resolution time axis as JUCE/menu panic input. Injectable clock samples. */
+    static double messageTimeToHiRes (uint32_t messageTime, uint32_t tickCount, double nowMs);
 
     struct Event
     {

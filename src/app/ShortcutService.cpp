@@ -24,6 +24,12 @@ bool inScope (ShortcutScope scope, ShortcutKeyContext::Window window)
     return window == Window::main;
 }
 
+bool containsKey (const ShortcutKeys& keys, const juce::KeyPress& key)
+{
+    return std::any_of (keys.begin(), keys.end(), [&] (const auto& binding)
+    { return ShortcutKeyInput::keysOverlap (binding, key); });
+}
+
 } // namespace
 
 ShortcutService::ShortcutService (juce::ApplicationCommandManager& m, SaveFunction s, const ShortcutCatalog& c)
@@ -64,7 +70,8 @@ ShortcutMappingResult ShortcutService::calculateMapping (const ShortcutCatalog& 
         }
         for (const auto& key : keys)
         {
-            const auto other = std::find_if (assigned.begin(), assigned.end(), [&key] (const Binding& b) { return b.key == key; });
+            const auto other = std::find_if (assigned.begin(), assigned.end(), [&] (const Binding& b)
+            { return b.id != id && ShortcutKeyInput::keysOverlap (b.key, key); });
             if (other != assigned.end())
             {
                 result.status = juce::Result::fail ("Key assigned to both " + other->id + " and " + id);
@@ -88,7 +95,8 @@ ShortcutMappingResult ShortcutService::calculateMapping (const ShortcutCatalog& 
                 result.status = checked;
                 return result;
             }
-            const auto other = std::find_if (assigned.begin(), assigned.end(), [&key] (const Binding& b) { return b.key == key; });
+            const auto other = std::find_if (assigned.begin(), assigned.end(), [&] (const Binding& b)
+            { return b.id != entry.id && ShortcutKeyInput::keysOverlap (b.key, key); });
             if (other != assigned.end())
             {
                 if (! other->user)
@@ -188,10 +196,11 @@ ShortcutKeyOwner ShortcutService::resolveKeyOwner (const juce::KeyPress& key, co
         return { Kind::capture, Reason::captureActive, {}, 0, {} };
 
     const ShortcutDefinition* command = nullptr;
-    const bool nativePanic = context.nativeKey && std::any_of (mapping.panicBindings.begin(), mapping.panicBindings.end(),
-        [&] (const auto& binding) { return binding.virtualKey == context.nativeKey->virtualKey && binding.modifiers == context.nativeKey->modifiers; });
+    const bool nativePanic = context.nativePanicOwned || (context.nativeKey && std::any_of (mapping.panicBindings.begin(), mapping.panicBindings.end(),
+        [&] (const auto& binding) { return binding.virtualKey == context.nativeKey->virtualKey && binding.modifiers == context.nativeKey->modifiers; }));
     for (const auto& entry : catalog.getCommands())
-        if ((nativePanic && entry.scope == ShortcutScope::application) || (! nativePanic && getKeys (entry.id).contains (key)))
+        if (entry.scope == ShortcutScope::application && context.nativeKey ? nativePanic
+            : (! nativePanic && containsKey (getKeys (entry.id), key)))
         {
             command = &entry;
             break; // calculateMapping guarantees global command-key uniqueness
@@ -204,7 +213,7 @@ ShortcutKeyOwner ShortcutService::resolveKeyOwner (const juce::KeyPress& key, co
             break;
         }
     for (const auto& cue : context.cueHotkeys)
-        if (cue.key == key)
+        if (ShortcutKeyInput::keysOverlap (cue.key, key))
             result.conflicts.push_back ({ Kind::cueHotkey, cue.id, 0 });
 
     const auto commandOwner = [&]
@@ -270,7 +279,7 @@ ShortcutKeyOwner ShortcutService::resolveKeyOwner (const juce::KeyPress& key, co
 
     const ShortcutKeyContext::CueHotkey* selected = nullptr;
     for (const auto& cue : context.cueHotkeys)
-        if (cue.key == key && cue.inActiveContainer)
+        if (ShortcutKeyInput::keysOverlap (cue.key, key) && cue.inActiveContainer)
         {
             if (selected != nullptr)
             {
@@ -321,14 +330,17 @@ ShortcutOperationResult ShortcutService::setKeys (const juce::String& id, const 
     candidate.overrides[id] = keys;
     for (const auto& key : keys)
         for (const auto& entry : catalog.getCommands())
-            if (entry.id != id && getKeys (entry.id).contains (key))
+            if (entry.id != id && containsKey (getKeys (entry.id), key))
             {
                 if (policy == ConflictPolicy::reject)
                     return { juce::Result::fail ("Key already assigned to " + entry.id),
                              { { ShortcutDiagnostic::Code::commandConflict, id, entry.id, key, "Move the key explicitly or choose another key" } } };
                 // Make the old owner explicit, even when it previously inherited defaults.
                 auto inserted = candidate.overrides.emplace (entry.id, getKeys (entry.id));
-                inserted.first->second.removeAllInstancesOf (key);
+                auto& oldKeys = inserted.first->second;
+                for (int i = oldKeys.size(); --i >= 0;)
+                    if (ShortcutKeyInput::keysOverlap (oldKeys[i], key))
+                        oldKeys.remove (i);
             }
     return commit (std::move (candidate));
 }
@@ -338,7 +350,7 @@ ShortcutOperationResult ShortcutService::addKey (const juce::String& id, const j
     if (auto checked = checkEditableCommand (id); checked.failed())
         return checked;
     auto keys = getKeys (id);
-    if (keys.contains (key))
+    if (containsKey (keys, key))
         return {}; // duplicate learning is a no-op, preserving inheritance
     keys.add (key);
     return setKeys (id, keys, policy);
