@@ -5,6 +5,7 @@
 #include "app/Commands.h"
 #include "audio/CueFileInfo.h"
 #include "model/CueColors.h"
+#include "ui/CueMenuIcons.h"
 #include "ui/GroupModeLabels.h"
 #include "ui/UiUtils.h"
 
@@ -943,7 +944,7 @@ void CueTable::addCueItems (juce::PopupMenu& menu)
 {
     for (auto id : { CommandIDs::addCue, CommandIDs::addFadeCue, CommandIDs::addFadeOutCue, CommandIDs::addDevampCue, CommandIDs::addGroupCue,
                      CommandIDs::addControlCue, CommandIDs::addWaitCue, CommandIDs::addMemoCue, CommandIDs::addMicCue })
-        menu.addCommandItem (&commands, id);
+        menu.addCommandItem (&commands, id, {}, CueMenuIcons::create (id));
 }
 
 void CueTable::showAddMenu (juce::Point<int> screenPosition)

@@ -464,27 +464,25 @@ public:
                             const juce::String& text, const juce::String& shortcutKeyText,
                             const juce::Drawable* icon, const juce::Colour* textColourToUse) override
     {
-        if (isSeparator || shortcutKeyText.isEmpty())
+        if (isSeparator)
         {
             LookAndFeel_V4::drawPopupMenuItem (g, area, isSeparator, isActive, isHighlighted, isTicked, hasSubMenu,
                                                text, shortcutKeyText, icon, textColourToUse);
             return;
         }
 
-        // V4's layout, with the shortcut in the item font
+        // One layout for items with and without shortcuts, with the shortcut in the item font.
         const auto textColour = textColourToUse == nullptr ? findColour (juce::PopupMenu::textColourId) : *textColourToUse;
+        const auto itemColour = isHighlighted && isActive ? findColour (juce::PopupMenu::highlightedTextColourId)
+                                                         : textColour.withMultipliedAlpha (isActive ? 1.0f : 0.5f);
         auto r = area.reduced (1);
 
         if (isHighlighted && isActive)
         {
             g.setColour (findColour (juce::PopupMenu::highlightedBackgroundColourId));
             g.fillRect (r);
-            g.setColour (findColour (juce::PopupMenu::highlightedTextColourId));
         }
-        else
-        {
-            g.setColour (textColour.withMultipliedAlpha (isActive ? 1.0f : 0.5f));
-        }
+        g.setColour (itemColour);
 
         r.reduce (juce::jmin (5, area.getWidth() / 20), 0);
 
@@ -497,11 +495,16 @@ public:
         g.setFont (font);
 
         const auto iconArea = r.removeFromLeft (juce::roundToInt (maxFontHeight)).toFloat();
+        // The tick and icon share one slot. Reserve its gap even when the slot is empty.
+        r.removeFromLeft (juce::roundToInt (maxFontHeight * 0.5f));
 
         if (icon != nullptr)
         {
-            icon->drawWithin (g, iconArea, juce::RectanglePlacement::centred | juce::RectanglePlacement::onlyReduceInSize, 1.0f);
-            r.removeFromLeft (juce::roundToInt (maxFontHeight * 0.5f));
+            // CueIcons uses white as its monochrome tint token. Tint a copy so highlighting cannot
+            // mutate the menu-owned original; opacity is already part of itemColour, just like text.
+            auto tintedIcon = icon->createCopy();
+            tintedIcon->replaceColour (juce::Colours::white, itemColour);
+            tintedIcon->drawWithin (g, iconArea, juce::RectanglePlacement::centred, 1.0f);
         }
         else if (isTicked)
         {
@@ -523,11 +526,14 @@ public:
         }
 
         r.removeFromRight (3);
-        const int shortcutWidth = juce::GlyphArrangement::getStringWidthInt (font, shortcutKeyText);
-        const auto shortcutArea = r.removeFromRight (shortcutWidth);
-        r.removeFromRight (12);
+        if (shortcutKeyText.isNotEmpty())
+        {
+            const int shortcutWidth = juce::GlyphArrangement::getStringWidthInt (font, shortcutKeyText);
+            const auto shortcutArea = r.removeFromRight (shortcutWidth);
+            r.removeFromRight (12);
+            g.drawText (shortcutKeyText, shortcutArea, juce::Justification::centredRight, true);
+        }
         g.drawFittedText (text, r, juce::Justification::centredLeft, 1);
-        g.drawText (shortcutKeyText, shortcutArea, juce::Justification::centredRight, true);
     }
 };
 

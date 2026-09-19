@@ -12,6 +12,7 @@
 #include "audio/CueFileInfo.h"
 #include "model/CueNumbering.h"
 #include "ui/AudioSettingsDialog.h"
+#include "ui/CueMenuIcons.h"
 #include "ui/PluginDialogs.h"
 #include "ui/UiUtils.h"
 #include "ui/PastePropertiesDialog.h"
@@ -1428,23 +1429,18 @@ juce::PopupMenu MainComponent::getMenuForIndex (int topLevelMenuIndex, const juc
             break;
 
         case 2:
-            menu.addCommandItem (&commands, CommandIDs::addCue);
-            menu.addCommandItem (&commands, CommandIDs::addFadeCue);
-            menu.addCommandItem (&commands, CommandIDs::addFadeOutCue);
-            menu.addCommandItem (&commands, CommandIDs::addDevampCue);
-            menu.addCommandItem (&commands, CommandIDs::addGroupCue);
-            menu.addCommandItem (&commands, CommandIDs::addControlCue);
-            menu.addCommandItem (&commands, CommandIDs::addWaitCue);
-            menu.addCommandItem (&commands, CommandIDs::addMemoCue);
-            menu.addCommandItem (&commands, CommandIDs::addMicCue);
+            for (auto id : { CommandIDs::addCue, CommandIDs::addFadeCue, CommandIDs::addFadeOutCue, CommandIDs::addDevampCue,
+                             CommandIDs::addGroupCue, CommandIDs::addControlCue, CommandIDs::addWaitCue,
+                             CommandIDs::addMemoCue, CommandIDs::addMicCue })
+                menu.addCommandItem (&commands, id, {}, CueMenuIcons::create (id));
             menu.addSeparator();
             menu.addCommandItem (&commands, CommandIDs::toggleSequenceRecording);
             menu.addSeparator();
 
             {
                 juce::PopupMenu lists;
-                lists.addCommandItem (&commands, CommandIDs::addCueList);
-                lists.addCommandItem (&commands, CommandIDs::addCart);
+                lists.addCommandItem (&commands, CommandIDs::addCueList, {}, CueMenuIcons::create (CommandIDs::addCueList));
+                lists.addCommandItem (&commands, CommandIDs::addCart, {}, CueMenuIcons::create (CommandIDs::addCart));
                 lists.addCommandItem (&commands, CommandIDs::nextContainer);
                 lists.addCommandItem (&commands, CommandIDs::previousContainer);
                 lists.addCommandItem (&commands, CommandIDs::renameContainer);

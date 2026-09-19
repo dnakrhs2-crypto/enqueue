@@ -1,5 +1,6 @@
 #include "ui/ContainerTabs.h"
 
+#include "ui/CueMenuIcons.h"
 #include "ui/UiUtils.h"
 
 namespace gocue
@@ -144,8 +145,10 @@ void ContainerTabs::mouseDoubleClick (const juce::MouseEvent& e)
 void ContainerTabs::showAddMenu()
 {
     juce::PopupMenu menu;
-    menu.addItem (1, juce::String::fromUTF8 ("새 큐 리스트"));
-    menu.addItem (2, juce::String::fromUTF8 ("새 카트 (버튼 격자)"));
+    menu.addItem (juce::PopupMenu::Item (juce::String::fromUTF8 ("새 큐 리스트"))
+                      .setID (1).setImage (CueMenuIcons::create (CommandIDs::addCueList)));
+    menu.addItem (juce::PopupMenu::Item (juce::String::fromUTF8 ("새 카트 (버튼 격자)"))
+                      .setID (2).setImage (CueMenuIcons::create (CommandIDs::addCart)));
     juce::Component::SafePointer<ContainerTabs> safeThis (this);
     menu.showMenuAsync (juce::PopupMenu::Options().withTargetScreenArea (localAreaToGlobal (addButton)), [safeThis] (int result)
     {
