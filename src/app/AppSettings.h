@@ -68,7 +68,10 @@ public:
     juce::StringArray getDisabledPlugins() const;
     void setDisabledPlugins (const juce::StringArray& keys);
 
-    /** Raw XML preserves malformed/future input; missing and present-but-empty are distinct. */
+    /** Returns the exact XML (missing and present-but-empty are distinct). On disk both values
+        use enqueue-shortcuts-base64-v1: plus Base64 UTF-8, preventing PropertiesFile XML parsing.
+        Legacy raw XML is read compatibly and wrapped on construction before any later save;
+        invalid encodings are returned unchanged so profile validation rejects them. */
     std::optional<juce::String> getKeyboardShortcutsXml() const;
     std::optional<juce::String> getKeyboardShortcutsLastGoodXml() const;
     /** Immediately saves the pair. Failure restores both in-memory properties and their dirty state,
@@ -86,6 +89,7 @@ public:
     juce::File getDeadMansPedalFile() const;
 
 private:
+    void protectShortcutXml();
     juce::File getFileValue (const char* key) const;
     void setFileValue (const char* key, const juce::File& file);
 

@@ -6,7 +6,7 @@
 
 namespace gocue::shortcut_test
 {
-inline juce::Array<juce::KeyPress> legacyDefaults (juce::CommandID id)
+inline juce::ApplicationCommandInfo legacyCommandInfo (juce::CommandID id)
 {
     using juce::KeyPress;
     using juce::ModifierKeys;
@@ -15,6 +15,7 @@ inline juce::Array<juce::KeyPress> legacyDefaults (juce::CommandID id)
     {
         case CommandIDs::go:
             result.addDefaultKeypress (KeyPress::spaceKey, ModifierKeys::noModifiers);
+            result.flags |= juce::ApplicationCommandInfo::wantsKeyUpDownCallbacks;
             break;
         case CommandIDs::pauseToggle:
             result.addDefaultKeypress ('P', ModifierKeys::noModifiers);
@@ -23,7 +24,10 @@ inline juce::Array<juce::KeyPress> legacyDefaults (juce::CommandID id)
             result.addDefaultKeypress ('F', ModifierKeys::noModifiers);
             break;
         case CommandIDs::panicAll:
+           #if ! JUCE_WINDOWS
             result.addDefaultKeypress (KeyPress::escapeKey, ModifierKeys::noModifiers);
+            result.flags |= juce::ApplicationCommandInfo::wantsKeyUpDownCallbacks;
+           #endif
             break;
         case CommandIDs::preview:
             result.addDefaultKeypress ('V', ModifierKeys::noModifiers);
@@ -169,6 +173,6 @@ inline juce::Array<juce::KeyPress> legacyDefaults (juce::CommandID id)
             break;
         default: break;
     }
-    return result.defaultKeypresses;
+    return result;
 }
 } // namespace gocue::shortcut_test

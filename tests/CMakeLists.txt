@@ -4,6 +4,8 @@ target_sources(EnqueueTests PRIVATE
     TestMain.cpp
     ShortcutTests.cpp
     ../src/app/AppSettings.cpp
+    ../src/ui/CueTable.cpp
+    ../src/ui/LevelMatrixComponent.cpp
     FadeEnvelopeTests.cpp
     EnvelopeTests.cpp
     ProjectHistoryTests.cpp

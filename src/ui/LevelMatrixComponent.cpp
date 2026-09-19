@@ -1,4 +1,5 @@
 #include "ui/LevelMatrixComponent.h"
+#include "app/ShortcutKeyInput.h"
 
 #include "ui/UiUtils.h"
 
@@ -592,11 +593,9 @@ bool LevelMatrixComponent::keyPressed (const juce::KeyPress& key)
         return true;
     }
 
-    const auto ch = key.getTextCharacter();
-
-    if ((ch >= '0' && ch <= '9') || ch == '-' || ch == '.' || ch == '+')
+    if (ShortcutKeyInput::isLevelMatrixValueKey (key))
     {
-        beginTyping (juce::String::charToString (ch));
+        beginTyping (juce::String::charToString (key.getTextCharacter()));
         return true;
     }
 

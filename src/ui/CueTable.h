@@ -101,7 +101,6 @@ private:
     void cellClicked (int rowNumber, int columnId, const juce::MouseEvent&) override;
     void cellDoubleClicked (int rowNumber, int columnId, const juce::MouseEvent&) override;
     void selectedRowsChanged (int lastRowSelected) override;
-    void deleteKeyPressed (int lastRowSelected) override;
     void backgroundClicked (const juce::MouseEvent&) override;
     juce::var getDragSourceDescription (const juce::SparseSet<int>& rowsToDescribe) override;
 

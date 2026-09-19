@@ -1,4 +1,5 @@
 #include "app/ShortcutService.h"
+#include "app/ShortcutKeyInput.h"
 
 namespace gocue
 {
@@ -21,32 +22,6 @@ bool inScope (ShortcutScope scope, ShortcutKeyContext::Window window)
     return window == Window::main;
 }
 
-bool isTextEditingKey (const juce::KeyPress& key)
-{
-    const int code = ShortcutKeyCodec::normalise (key).getKeyCode();
-    const auto mods = key.getModifiers();
-    if (! mods.isCtrlDown() && ! mods.isAltDown())
-    {
-        if (code >= 32 && code <= 126)
-            return true;
-        for (const int editingKey : { juce::KeyPress::returnKey, juce::KeyPress::tabKey, juce::KeyPress::escapeKey,
-                                      juce::KeyPress::backspaceKey, juce::KeyPress::deleteKey, juce::KeyPress::insertKey,
-                                      juce::KeyPress::leftKey, juce::KeyPress::rightKey, juce::KeyPress::upKey, juce::KeyPress::downKey,
-                                      juce::KeyPress::homeKey, juce::KeyPress::endKey, juce::KeyPress::pageUpKey, juce::KeyPress::pageDownKey })
-            if (code == editingKey)
-                return true;
-    }
-    if (mods.isCtrlDown() && ! mods.isAltDown())
-    {
-        for (const int editingKey : { static_cast<int> ('A'), static_cast<int> ('C'), static_cast<int> ('V'), static_cast<int> ('X'),
-                                      static_cast<int> ('Z'), static_cast<int> ('Y'), juce::KeyPress::leftKey, juce::KeyPress::rightKey,
-                                      juce::KeyPress::upKey, juce::KeyPress::downKey, juce::KeyPress::homeKey, juce::KeyPress::endKey,
-                                      juce::KeyPress::deleteKey, juce::KeyPress::backspaceKey })
-            if (code == editingKey)
-                return true;
-    }
-    return false;
-}
 } // namespace
 
 ShortcutService::ShortcutService (juce::ApplicationCommandManager& m, SaveFunction s, const ShortcutCatalog& c)
@@ -204,8 +179,7 @@ ShortcutKeyOwner ShortcutService::resolveKeyOwner (const juce::KeyPress& key, co
         }
     const ShortcutDefinition* component = nullptr;
     for (const auto& entry : catalog.getFixedComponents())
-        if (entry.scope == context.focus && entry.defaultKeys.contains (key)
-            && (! context.componentCanHandle || context.componentCanHandle (entry.id)))
+        if (entry.scope == context.focus && entry.matchesKey (key))
         {
             component = &entry;
             break;
@@ -245,7 +219,7 @@ ShortcutKeyOwner ShortcutService::resolveKeyOwner (const juce::KeyPress& key, co
             result.conflicts.push_back ({ Kind::fixedComponent, component->id, 0 });
         return commandOwner();
     }
-    if (context.standardUiConsumesKey || (context.textEditing && isTextEditingKey (key)))
+    if (context.standardUiConsumesKey || (context.textEditing && ShortcutKeyInput::isStandardTextEditorKey (key)))
     {
         if (command != nullptr)
             result.conflicts.push_back ({ Kind::command, command->id, command->commandID });
@@ -260,7 +234,12 @@ ShortcutKeyOwner ShortcutService::resolveKeyOwner (const juce::KeyPress& key, co
         result.id = component->id;
         if (command != nullptr)
             result.conflicts.push_back ({ Kind::command, command->id, command->commandID });
-        if (context.isRepeat && ! component->allowsRepeat)
+        if (context.componentCanHandle && ! context.componentCanHandle (component->id))
+        {
+            result.kind = Kind::blocked;
+            result.reason = Reason::disabled;
+        }
+        else if (context.isRepeat && ! component->allowsRepeat)
         {
             result.kind = Kind::blocked;
             result.reason = Reason::repeatSuppressed;

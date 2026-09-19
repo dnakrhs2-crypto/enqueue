@@ -47,11 +47,12 @@ struct ShortcutKeyContext
     bool applicationActive = true;
     bool captureActive = false;
     bool textEditing = false;
-    bool standardUiConsumesKey = false;
+    bool standardUiConsumesKey = false; // other standard controls/dialogs; text input is classified centrally
     bool isRepeat = false;
     std::vector<CueHotkey> cueHotkeys; // may include every list/cart for conflict display; never modified
     std::function<bool (juce::CommandID)> commandEnabled;
-    /** Optional refinement for selection/editability in the focused component. Omit for conflict previews. */
+    /** Execution availability only: false blocks/consumes the owned key, never releases it.
+        Omit for conflict previews. */
     std::function<bool (const juce::String&)> componentCanHandle;
 };
 
@@ -72,6 +73,10 @@ struct ShortcutKeyOwner
     juce::String id;
     juce::CommandID commandID = 0;
     std::vector<Conflict> conflicts;
+
+    /** Deliver exclusively to the owner; blocked owners consume without execution.
+        Unassigned keys and input outside the active app pass through. */
+    bool shouldConsume() const noexcept { return kind != Kind::none && reason != Reason::inactiveApp; }
 };
 
 /** Message-thread data service. Does not dispatch input or alter project/cue-hotkey data.
@@ -106,6 +111,8 @@ public:
     const ShortcutKeys& getKeys (const juce::String& actionID) const;
     const ShortcutKeys& getKeys (juce::CommandID commandID) const;
     const std::vector<ShortcutDiagnostic>& getDiagnostics() const noexcept { return mapping.diagnostics; }
+    /** Runtime callers preserve the original text character (numeric entry/text editor predicates).
+        Character-less bindings can also be queried for conflict previews. */
     ShortcutKeyOwner resolveKeyOwner (const juce::KeyPress& key, const ShortcutKeyContext& context) const;
 
     ShortcutOperationResult addKey (const juce::String& actionID, const juce::KeyPress& key, ConflictPolicy policy = ConflictPolicy::reject);

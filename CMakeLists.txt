@@ -79,6 +79,7 @@ target_sources(GoCueCore INTERFACE
     ${CMAKE_CURRENT_SOURCE_DIR}/src/app/BackupManager.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/app/SettingsMigration.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/app/ShortcutCatalog.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/app/ShortcutKeyInput.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/app/ShortcutProfile.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/app/ShortcutService.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/app/YouTubeDownloader.cpp

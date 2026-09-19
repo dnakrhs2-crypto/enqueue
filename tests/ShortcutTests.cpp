@@ -1,6 +1,10 @@
 #include "app/AppSettings.h"
 #include "app/ShortcutService.h"
+#include "app/ShortcutKeyInput.h"
 #include "ShortcutLegacyDefaults.h"
+#include "ShortcutTestHarness.h"
+#include "ui/CueTable.h"
+#include "ui/LevelMatrixComponent.h"
 
 #include <set>
 
@@ -11,6 +15,7 @@ namespace
 using juce::KeyPress;
 using juce::ModifierKeys;
 using Owner = ShortcutKeyOwner;
+using Harness = shortcut_test::Harness;
 constexpr int ctrl = ModifierKeys::ctrlModifier, alt = ModifierKeys::altModifier, shift = ModifierKeys::shiftModifier;
 
 KeyPress key (int code, int modifiers = 0) { return { code, modifiers, 0 }; }
@@ -18,57 +23,6 @@ juce::String xml (const juce::String& actions)
 {
     return "<ENQUEUE_SHORTCUTS schemaVersion=\"1\" platform=\"windows\">" + actions + "</ENQUEUE_SHORTCUTS>";
 }
-
-class CatalogTarget : public juce::ApplicationCommandTarget
-{
-public:
-    explicit CatalogTarget (const ShortcutCatalog& c) : catalog (c) {}
-    juce::ApplicationCommandTarget* getNextCommandTarget() override { return nullptr; }
-    void getAllCommands (juce::Array<juce::CommandID>& ids) override
-    {
-        for (const auto& entry : catalog.getCommands())
-            ids.add (entry.commandID);
-    }
-    void getCommandInfo (juce::CommandID id, juce::ApplicationCommandInfo& info) override { catalog.getCommandInfo (id, info); }
-    bool perform (const InvocationInfo& info) override { invoked = info.commandID; return true; }
-    juce::CommandID invoked = 0;
-private:
-    const ShortcutCatalog& catalog;
-};
-
-struct Harness : ShortcutService::Listener
-{
-    explicit Harness (const ShortcutCatalog& catalog = ShortcutCatalog::get()) : target (catalog)
-    {
-        manager.registerAllCommandsForTarget (&target);
-        manager.setFirstCommandTarget (&target);
-        service = std::make_unique<ShortcutService> (manager, [this] (const juce::String& current, const juce::String& previous)
-        {
-            ++saves;
-            if (onSave)
-                onSave();
-            if (failSave)
-                return juce::Result::fail ("injected disk failure");
-            currentXml = current;
-            lastGoodXml = previous;
-            return juce::Result::ok();
-        }, catalog);
-        service->addListener (this);
-    }
-    void shortcutsChanged() override
-    {
-        ++notifications;
-        if (onNotify)
-            onNotify();
-    }
-    CatalogTarget target;
-    juce::ApplicationCommandManager manager;
-    std::unique_ptr<ShortcutService> service;
-    bool failSave = false;
-    int saves = 0, notifications = 0;
-    juce::String currentXml, lastGoodXml;
-    std::function<void()> onSave, onNotify;
-};
 
 bool hasConflict (const Owner& owner, Owner::Kind kind, const juce::String& id)
 {
@@ -105,23 +59,44 @@ public:
             expect (ShortcutCatalog::scopeLabel (entry->scope).isNotEmpty());
         }
 
-        beginTest ("original 0.10.6 getCommandInfo defaults are unchanged, including hook-owned Windows Esc");
+        beginTest ("0.10.6 platform defaults and wantsKeyUpDownCallbacks match, apart from the approved Windows display Esc");
         for (const auto commandID : registered)
         {
             const auto* entry = catalog.find (commandID);
             if (entry == nullptr)
                 continue;
-            const auto legacy = shortcut_test::legacyDefaults (commandID);
-            expect (entry->defaultKeys == legacy, entry->id);
+            const auto legacy = shortcut_test::legacyCommandInfo (commandID);
+            auto expectedKeys = legacy.defaultKeypresses;
+           #if JUCE_WINDOWS
+            if (commandID == CommandIDs::panicAll)
+            {
+                expect (legacy.defaultKeypresses.isEmpty());
+                expectedKeys.add (key (KeyPress::escapeKey)); // separately approved display-only addition
+            }
+           #endif
+            expect (entry->defaultKeys == expectedKeys, entry->id);
             juce::ApplicationCommandInfo info (commandID);
             expect (catalog.getCommandInfo (commandID, info));
-            expect (info.defaultKeypresses == legacy, "command metadata: " + entry->id);
+            expect (info.defaultKeypresses == expectedKeys, "command metadata: " + entry->id);
+            constexpr int callbacks = juce::ApplicationCommandInfo::wantsKeyUpDownCallbacks;
+            expectEquals (entry->commandFlags & callbacks, legacy.flags & callbacks, entry->id);
+            expectEquals (info.flags & callbacks, legacy.flags & callbacks, "command metadata: " + entry->id);
         }
         expect (catalog.find ("transport.panicAll")->defaultKeys == ShortcutKeys { key (KeyPress::escapeKey) });
         expect (catalog.find ("edit.redo")->defaultKeys == ShortcutKeys { key ('Y', ctrl), key ('Z', ctrl | shift) });
         expect (catalog.find ("cue.addMic")->defaultKeys == ShortcutKeys { key ('6', ctrl) });
         expect (! catalog.find ("transport.go")->allowsRepeat);
         expect (catalog.find ("cue.moveUp")->allowsRepeat);
+
+       #if JUCE_WINDOWS
+        beginTest ("approved Windows panic Esc display addition is separate from the 0.10.6 baseline");
+        const auto legacyPanic = shortcut_test::legacyCommandInfo (CommandIDs::panicAll);
+        juce::ApplicationCommandInfo currentPanic (CommandIDs::panicAll);
+        expect (catalog.getCommandInfo (CommandIDs::panicAll, currentPanic));
+        expect (legacyPanic.defaultKeypresses.isEmpty());
+        expect (currentPanic.defaultKeypresses == ShortcutKeys { key (KeyPress::escapeKey) });
+        expectEquals (currentPanic.flags, legacyPanic.flags);
+       #endif
 
         beginTest ("fixed component bindings are read-only, scoped, unique and include legacy modifier predicates");
         for (const auto& entry : catalog.getFixedComponents())
@@ -136,10 +111,11 @@ public:
                 expect (ShortcutKeyCodec::validate (binding).wasOk());
         }
         expect (catalog.find ("cueTable.editNumber")->defaultKeys.contains (key ('N')));
-        expect (catalog.find ("cueTable.delete")->defaultKeys.contains (key (KeyPress::backspaceKey)));
+        expect (catalog.find ("cueTable.delete") == nullptr); // follows cue.remove's current mapping
         expect (catalog.find ("waveform.trimStart")->defaultKeys.contains (key ('I', shift | alt)));
         expect (catalog.find ("waveform.movePointFine")->defaultKeys.contains (key (KeyPress::leftKey, ctrl | alt | shift)));
         expect (catalog.find ("levelMatrix.edit")->defaultKeys.contains (key (KeyPress::F2Key)));
+        expect (catalog.find ("levelMatrix.typeValue")->defaultKeys.contains (key (KeyPress::numberPad1)));
         expect (catalog.find ("curveEditor.deletePoint")->defaultKeys.contains (key (KeyPress::deleteKey)));
         expect (catalog.find ("groupTimeline.selectChild")->defaultKeys.contains (key (KeyPress::upKey, ctrl)));
         expect (ShortcutService::calculateMapping (catalog, {}).wasOk());
@@ -444,11 +420,18 @@ public:
             expectEquals (item.getItem().text, juce::String ("GO"));
             expect (h.service->setKeys ("app.quit", { key (KeyPress::F15Key) }).wasOk());
             expectEquals (mappings->findCommandForKeyPress (key ('Q', ctrl)), static_cast<juce::CommandID> (0));
-            juce::ApplicationCommandTarget::InvocationInfo invocation (mappings->findCommandForKeyPress (key (KeyPress::F15Key)));
-            invocation.invocationMethod = juce::ApplicationCommandTarget::InvocationInfo::fromKeyPress;
-            invocation.keyPress = key (KeyPress::F15Key);
-            expect (h.manager.invoke (invocation, false));
-            expectEquals (h.target.invoked, static_cast<juce::CommandID> (juce::StandardApplicationCommandIDs::quit));
+            juce::Component origin;
+            expect (! h.pressKey (key ('Q', ctrl), origin));
+            expectEquals (h.target.invocationCount (juce::StandardApplicationCommandIDs::quit), 0);
+            expect (h.pressKey (key (KeyPress::F15Key), origin));
+            expectEquals (h.target.invocationCount (juce::StandardApplicationCommandIDs::quit), 1);
+            expectEquals (static_cast<int> (h.target.invocations.size()), 1);
+            expect (h.target.invocations.front().invocationMethod == juce::ApplicationCommandTarget::InvocationInfo::fromKeyPress);
+            expect (h.target.invocations.front().keyPress == key (KeyPress::F15Key));
+            expect (h.target.invocations.front().isKeyDown);
+            h.target.disabledCommands.insert (juce::StandardApplicationCommandIDs::quit);
+            expect (! h.pressKey (key (KeyPress::F15Key), origin));
+            expectEquals (h.target.invocationCount (juce::StandardApplicationCommandIDs::quit), 1);
         }
 
         beginTest ("show mode blocks all mutation paths at the service boundary");
@@ -465,9 +448,41 @@ public:
         }
 
         testOwnership();
+        testBlockedComponent();
     }
 
 private:
+    void testBlockedComponent()
+    {
+        beginTest ("a disabled waveform delete keeps ownership and consumes before command/cue fallback");
+        Harness h;
+        ShortcutKeyContext context;
+        context.focus = ShortcutScope::waveform;
+        context.componentCanHandle = [] (const juce::String&) { return false; };
+        context.cueHotkeys = { { "cue.delete", key (KeyPress::deleteKey), true, true } };
+        auto owner = h.service->resolveKeyOwner (key (KeyPress::deleteKey), context);
+        expect (owner.kind == Owner::Kind::blocked && owner.reason == Owner::Reason::disabled);
+        expectEquals (owner.id, juce::String ("waveform.deleteSelection"));
+        expectEquals (owner.commandID, 0);
+        expect (owner.shouldConsume());
+        expect (hasConflict (owner, Owner::Kind::command, "cue.remove"));
+        expect (hasConflict (owner, Owner::Kind::cueHotkey, "cue.delete"));
+        expect (h.service->setKeys ("cue.remove", {}).wasOk());
+        owner = h.service->resolveKeyOwner (key (KeyPress::deleteKey), context);
+        expect (owner.kind == Owner::Kind::blocked && owner.reason == Owner::Reason::disabled);
+        expectEquals (owner.id, juce::String ("waveform.deleteSelection"));
+        expect (owner.shouldConsume());
+        expect (hasConflict (owner, Owner::Kind::cueHotkey, "cue.delete"));
+        context.componentCanHandle = [] (const juce::String&) { return true; };
+        expect (h.service->resolveKeyOwner (key (KeyPress::deleteKey), context).kind == Owner::Kind::fixedComponent);
+        context.isRepeat = true;
+        owner = h.service->resolveKeyOwner (key (KeyPress::deleteKey), context);
+        expect (owner.reason == Owner::Reason::repeatSuppressed && owner.shouldConsume());
+        context.applicationActive = false;
+        expect (! h.service->resolveKeyOwner (key (KeyPress::deleteKey), context).shouldConsume());
+        expect (! h.service->resolveKeyOwner (key (KeyPress::F24Key), {}).shouldConsume());
+    }
+
     void testOwnership()
     {
         beginTest ("commands own conflicting cue keys even when disabled/outside their scope; cues retain their data");
@@ -517,12 +532,18 @@ private:
         expectEquals (h.service->resolveKeyOwner (key (KeyPress::leftKey, alt | shift), context).id, juce::String ("groupTimeline.movePreWaitFine"));
         context.focus = ShortcutScope::cueTable;
         context.componentCanHandle = [] (const juce::String&) { return false; };
-        expect (h.service->resolveKeyOwner (key ('N'), context).kind == Owner::Kind::command);
+        owner = h.service->resolveKeyOwner (key ('N'), context);
+        expect (owner.kind == Owner::Kind::blocked && owner.reason == Owner::Reason::disabled);
+        expectEquals (owner.id, juce::String ("cueTable.editNumber"));
+        expect (owner.shouldConsume());
+        expect (hasConflict (owner, Owner::Kind::command, "file.save"));
+        expect (hasConflict (owner, Owner::Kind::cueHotkey, "cue.n"));
         context.componentCanHandle = {};
 
         beginTest ("capture, panic, text editing, scope and repeat policies produce one explicit owner");
         context.textEditing = true;
         expect (h.service->resolveKeyOwner (key ('N'), context).kind == Owner::Kind::standardUi);
+        expect (h.service->resolveKeyOwner (KeyPress ('N', 0, 'n'), context).kind == Owner::Kind::standardUi);
         expect (h.service->resolveKeyOwner (key ('C', ctrl), context).kind == Owner::Kind::standardUi);
         expect (h.service->resolveKeyOwner (key (KeyPress::F2Key), context).kind == Owner::Kind::command);
         expect (h.service->resolveKeyOwner (key (KeyPress::escapeKey), context).kind == Owner::Kind::command);
@@ -543,6 +564,178 @@ private:
         context.cueHotkeys = { { "cue.one", key (KeyPress::F24Key), true, true }, { "cue.two", key (KeyPress::F24Key), true, true } };
         expect (h.service->resolveKeyOwner (key (KeyPress::F24Key), context).kind == Owner::Kind::conflict);
         expect (h.service->resolveKeyOwner (key (KeyPress::F23Key), context).kind == Owner::Kind::none);
+    }
+};
+
+class ShortcutInputTests : public juce::UnitTest
+{
+public:
+    ShortcutInputTests() : juce::UnitTest ("Shortcut component and standard input", "Enqueue") {}
+    void runTest() override
+    {
+        testTableDeletion();
+        testMatrixValueInput();
+        testStandardTextInput();
+    }
+
+private:
+    void testTableDeletion()
+    {
+        beginTest ("table delete uses only the current cue.remove mapping and executes each input at most once");
+        Harness h;
+        CueList cues;
+        cues.add (Cue());
+        cues.setSelection ({ 0 }, 0);
+        juce::AudioFormatManager formats;
+        CueTable table (cues, formats, h.manager);
+        juce::TableListBox* list = nullptr;
+        for (auto* child : table.getChildren())
+            if (auto* candidate = dynamic_cast<juce::TableListBox*> (child))
+                list = candidate;
+        expect (list != nullptr);
+        if (list == nullptr)
+            return;
+
+        ShortcutKeyContext context;
+        context.focus = ShortcutScope::cueTable;
+        expectEquals (h.service->resolveKeyOwner (key (KeyPress::deleteKey), context).id, juce::String ("cue.remove"));
+        expect (h.pressKey (key (KeyPress::deleteKey), *list));
+        expectEquals (h.target.invocationCount (CommandIDs::removeCue), 1);
+        h.target.invocations.clear();
+
+        expect (h.service->setKeys ("cue.remove", { key (KeyPress::F13Key) }).wasOk());
+        for (const auto& oldKey : { key (KeyPress::deleteKey), key (KeyPress::backspaceKey),
+                                   key (KeyPress::deleteKey, shift), key (KeyPress::backspaceKey, shift) })
+        {
+            expect (h.service->resolveKeyOwner (oldKey, context).kind == Owner::Kind::none);
+            expect (! h.pressKey (oldKey, *list));
+            expectEquals (h.target.invocationCount (CommandIDs::removeCue), 0);
+        }
+        expect (h.pressKey (key (KeyPress::F13Key), *list));
+        expectEquals (h.target.invocationCount (CommandIDs::removeCue), 1);
+        expectEquals (static_cast<int> (h.target.invocations.size()), 1);
+
+        expect (h.service->setKeys ("cue.remove", {}).wasOk());
+        h.target.invocations.clear();
+        expect (! h.pressKey (key (KeyPress::F13Key), *list));
+        expect (! h.pressKey (key (KeyPress::deleteKey), *list));
+        expect (! h.pressKey (key (KeyPress::backspaceKey), *list));
+        expectEquals (h.target.invocationCount (CommandIDs::removeCue), 0);
+
+        expect (h.service->restoreCommandDefaults ("cue.remove").wasOk());
+        expect (h.service->setKeys ("file.save", { key (KeyPress::deleteKey) }, ShortcutService::ConflictPolicy::move).wasOk());
+        expectEquals (h.service->resolveKeyOwner (key (KeyPress::deleteKey), context).id, juce::String ("file.save"));
+        expect (h.pressKey (key (KeyPress::deleteKey), *list));
+        expectEquals (h.target.invocationCount (CommandIDs::saveProject), 1);
+        expectEquals (h.target.invocationCount (CommandIDs::removeCue), 0);
+        expect (h.service->setKeys ("cue.remove", { key (KeyPress::backspaceKey), key (KeyPress::deleteKey, shift) }).wasOk());
+        expect (h.pressKey (key (KeyPress::backspaceKey), *list));
+        expect (h.pressKey (key (KeyPress::deleteKey, shift), *list));
+        expectEquals (h.target.invocationCount (CommandIDs::removeCue), 2);
+        h.target.disabledCommands.insert (CommandIDs::removeCue);
+        expect (! h.pressKey (key (KeyPress::backspaceKey), *list));
+        expectEquals (h.target.invocationCount (CommandIDs::removeCue), 2);
+    }
+
+    void testMatrixValueInput()
+    {
+        beginTest ("matrix direct entry shares actual character matching with ownership and conflict reporting");
+        Harness h;
+        ShortcutKeyContext context;
+        context.focus = ShortcutScope::levelMatrix;
+        ShortcutKeys inputs;
+        for (int digit = 0; digit <= 9; ++digit)
+        {
+            const auto character = static_cast<juce::juce_wchar> ('0' + digit);
+            inputs.add (KeyPress ('0' + digit, 0, character));
+            inputs.add (KeyPress (KeyPress::numberPad0 + digit, 0, character));
+        }
+        inputs.addArray ({ KeyPress ('-', 0, '-'), KeyPress ('.', 0, '.'), KeyPress ('=', shift, '+'),
+                           KeyPress (KeyPress::numberPadSubtract, 0, '-'), KeyPress (KeyPress::numberPadDecimalPoint, 0, '.'),
+                           KeyPress (KeyPress::numberPadAdd, 0, '+'), KeyPress ('1', shift, '1') });
+        for (const auto& input : inputs)
+        {
+            expect (h.service->setKeys ("transport.go", { input }).wasOk());
+            const auto owner = h.service->resolveKeyOwner (input, context);
+            expect (ShortcutKeyInput::isLevelMatrixValueKey (input));
+            expect (owner.kind == Owner::Kind::fixedComponent && owner.id == "levelMatrix.typeValue");
+            expect (hasConflict (owner, Owner::Kind::command, "transport.go"));
+
+            LevelMatrixComponent matrix;
+            matrix.setLevels (0.0, {});
+            const juce::Point<float> position { static_cast<float> (LevelMatrixComponent::headerWidth + LevelMatrixComponent::gap + 2),
+                                                static_cast<float> (LevelMatrixComponent::headerHeight + LevelMatrixComponent::gap + 2) };
+            const auto now = juce::Time::getCurrentTime();
+            const juce::MouseEvent click (juce::Desktop::getInstance().getMainMouseSource(), position, {},
+                                          1.0f, 0.0f, 0.0f, 0.0f, 0.0f, &matrix, &matrix, now, position, now, 1, false);
+            matrix.mouseDown (click);
+            matrix.mouseUp (click);
+            expect (matrix.keyPressed (input));
+            auto* editor = dynamic_cast<juce::TextEditor*> (matrix.getChildComponent (0));
+            expect (editor != nullptr);
+            if (editor != nullptr)
+                expectEquals (editor->getText(), juce::String::charToString (input.getTextCharacter()));
+        }
+        expect (h.service->setKeys ("transport.go", { key ('1'), key ('1', shift), key (KeyPress::numberPad1) }).wasOk());
+        expectEquals (h.service->resolveKeyOwner (key ('1'), context).id, juce::String ("levelMatrix.typeValue"));
+        for (const auto& input : { KeyPress ('1', shift, '!'), KeyPress (KeyPress::numberPad1, 0, ','), KeyPress ('1', ctrl, 0) })
+        {
+            expect (! ShortcutKeyInput::isLevelMatrixValueKey (input));
+            expect (h.service->resolveKeyOwner (input, context).kind != Owner::Kind::fixedComponent);
+        }
+        context.componentCanHandle = [] (const juce::String&) { return false; };
+        const auto blocked = h.service->resolveKeyOwner (KeyPress (KeyPress::numberPad1, 0, '1'), context);
+        expect (blocked.kind == Owner::Kind::blocked && blocked.reason == Owner::Reason::disabled);
+        expectEquals (blocked.id, juce::String ("levelMatrix.typeValue"));
+        expect (blocked.shouldConsume());
+        context.focus = ShortcutScope::mainWindow;
+        expect (h.service->resolveKeyOwner (KeyPress ('1', 0, '1'), context).kind == Owner::Kind::command);
+    }
+
+    void testStandardTextInput()
+    {
+        beginTest ("the common text-input probe covers JUCE NumPad, text characters and exact editing modifiers");
+        Harness h;
+        ShortcutKeyContext context;
+        context.textEditing = true;
+        ShortcutKeys editingKeys { key (KeyPress::insertKey, ctrl), key (KeyPress::insertKey, shift),
+                                   key (KeyPress::deleteKey, shift), key ('C', ctrl), key ('A', ctrl),
+                                   key ('Z', ctrl | shift), key (KeyPress::leftKey, alt | shift),
+                                   key (KeyPress::homeKey, alt), key (KeyPress::backspaceKey, alt),
+                                   key (KeyPress::upKey, ctrl), key (KeyPress::tabKey, shift),
+                                   key (KeyPress::returnKey), KeyPress ('2', ctrl | alt, '@'),
+                                   KeyPress (0xD55C, 0, 0xD55C) };
+        for (int digit = 0; digit <= 9; ++digit)
+        {
+            editingKeys.add (KeyPress (KeyPress::numberPad0 + digit, 0, static_cast<juce::juce_wchar> ('0' + digit)));
+            editingKeys.add (key (KeyPress::numberPad0 + digit)); // persisted binding / conflict preview
+        }
+        editingKeys.addArray ({ KeyPress (KeyPress::numberPadAdd, 0, '+'), KeyPress (KeyPress::numberPadSubtract, 0, '-'),
+                               KeyPress (KeyPress::numberPadDecimalPoint, 0, '.'), KeyPress (KeyPress::numberPadMultiply, 0, '*'),
+                               KeyPress (KeyPress::numberPadDivide, 0, '/') });
+        for (const auto& input : editingKeys)
+        {
+            expect (ShortcutKeyInput::isStandardTextEditorKey (input), input.getTextDescription());
+            if (ShortcutKeyCodec::validate (input).wasOk())
+            {
+                expect (h.service->setKeys ("transport.go", { input }, ShortcutService::ConflictPolicy::move).wasOk());
+                const auto owner = h.service->resolveKeyOwner (input, context);
+                expect (owner.kind == Owner::Kind::standardUi && owner.shouldConsume());
+                expect (hasConflict (owner, Owner::Kind::command, "transport.go"));
+            }
+        }
+        for (const auto& input : { key ('C', ctrl | shift), key ('A', ctrl | shift), key (KeyPress::insertKey, ctrl | shift),
+                                  key (KeyPress::insertKey), key (KeyPress::upKey, alt), key (KeyPress::leftKey, ctrl | alt),
+                                  key (KeyPress::F13Key), key ('N', ctrl), key (KeyPress::returnKey, ctrl) })
+        {
+            expect (! ShortcutKeyInput::isStandardTextEditorKey (input), input.getTextDescription());
+            expect (h.service->setKeys ("transport.go", { input }, ShortcutService::ConflictPolicy::move).wasOk());
+            expect (h.service->resolveKeyOwner (input, context).kind == Owner::Kind::command);
+        }
+        // An actual TextEditor receives the same NumPad text that the probe classifies.
+        juce::TextEditor editor;
+        expect (editor.keyPressed (KeyPress (KeyPress::numberPad1, 0, '1')));
+        expectEquals (editor.getText(), juce::String ("1"));
     }
 };
 
@@ -580,18 +773,113 @@ public:
             expectEquals (h.manager.getKeyMappings()->findCommandForKeyPress (key ('S', ctrl)), static_cast<juce::CommandID> (0));
         }
 
+        beginTest ("opaque and legacy raw XML survive unrelated PropertiesFile saves and restart byte for byte");
+        using Source = ShortcutService::RestoreReport::Source;
+        struct StoredPair { juce::String current, lastGood; Source source; };
+        const std::vector<StoredPair> pairs {
+            { custom + "garbage", xml (""), Source::lastGood },
+            { custom, xml ("") + "trailing garbage", Source::current },
+            { custom + "garbage", xml ("") + "also damaged", Source::defaults },
+            { " \n<ENQUEUE_SHORTCUTS schemaVersion=\"2\" platform=\"windows\"/>\n", xml (""), Source::lastGood },
+            { "", xml (""), Source::lastGood },
+            { "enqueue-shortcuts-base64-v1:not base64!", xml (""), Source::lastGood },
+            { custom, xml (""), Source::current },
+            { custom + juce::String::fromUTF8 ("\n손상 원문\t"), " ", Source::defaults }
+        };
+        int caseIndex = 0;
+        for (const bool legacy : { false, true })
+            for (const auto& pair : pairs)
+            {
+                const auto storedFile = root.getChildFile ("preserved-" + juce::String (caseIndex++) + ".settings");
+                if (legacy)
+                {
+                    // Write literal VALUE attributes: PropertiesFile::save would already truncate
+                    // the reproducer before AppSettings has had a chance to protect it.
+                    juce::XmlElement document ("PROPERTIES");
+                    auto* current = document.createNewChildElement ("VALUE");
+                    current->setAttribute ("name", "keyboardShortcuts");
+                    current->setAttribute ("val", pair.current);
+                    auto* lastGood = document.createNewChildElement ("VALUE");
+                    lastGood->setAttribute ("name", "keyboardShortcutsLastGood");
+                    lastGood->setAttribute ("val", pair.lastGood);
+                    expect (document.writeTo (storedFile));
+                }
+                {
+                    juce::PropertiesFile properties (storedFile, options);
+                    AppSettings settings (properties);
+                    if (! legacy)
+                        expect (settings.saveKeyboardShortcuts (pair.current, pair.lastGood));
+                    expectEquals (*settings.getKeyboardShortcutsXml(), pair.current);
+                    expectEquals (*settings.getKeyboardShortcutsLastGoodXml(), pair.lastGood);
+                    Harness h;
+                    expect (h.service->restore (settings.getKeyboardShortcutsXml(), settings.getKeyboardShortcutsLastGoodXml()).source == pair.source);
+                    expectEquals (h.saves, 0);
+                    settings.setWindowState ("ordinary window-position save");
+                    expect (properties.saveIfNeeded()); // also covers the direct delayed/automatic save path
+                    const auto onDisk = juce::parseXML (storedFile);
+                    expect (onDisk != nullptr);
+                    if (onDisk != nullptr)
+                        for (const auto* propertyName : { "keyboardShortcuts", "keyboardShortcutsLastGood" })
+                        {
+                            auto* value = onDisk->getChildByAttribute ("name", propertyName);
+                            expect (value != nullptr);
+                            if (value != nullptr)
+                            {
+                                expectEquals (value->getNumChildElements(), 0);
+                                expect (value->getStringAttribute ("val").startsWith ("enqueue-shortcuts-base64-v1:"));
+                            }
+                        }
+                }
+                {
+                    juce::PropertiesFile properties (storedFile, options);
+                    AppSettings settings (properties);
+                    expectEquals (*settings.getKeyboardShortcutsXml(), pair.current);
+                    expectEquals (*settings.getKeyboardShortcutsLastGoodXml(), pair.lastGood);
+                    expectEquals (settings.getWindowState(), juce::String ("ordinary window-position save"));
+                    Harness h;
+                    const auto report = h.service->restore (settings.getKeyboardShortcutsXml(), settings.getKeyboardShortcutsLastGoodXml());
+                    expect (report.source == pair.source);
+                    if (pair.source != Source::current)
+                        expectEquals (report.rejectedXml, pair.current);
+                    if (pair.source == Source::defaults)
+                        expectEquals (report.rejectedLastGoodXml, pair.lastGood);
+                    expectEquals (h.saves, 0);
+                }
+            }
+
+        beginTest ("legacy nested PropertiesFile XML remains readable after migration");
+        const auto nestedFile = root.getChildFile ("legacy-nested.settings");
+        {
+            juce::PropertiesFile properties (nestedFile, options);
+            properties.setValue ("keyboardShortcuts", custom);
+            properties.setValue ("keyboardShortcutsLastGood", xml (""));
+            expect (properties.saveIfNeeded());
+        }
+        {
+            juce::PropertiesFile properties (nestedFile, options);
+            AppSettings settings (properties);
+            Harness h;
+            expect (h.service->restore (settings.getKeyboardShortcutsXml(), settings.getKeyboardShortcutsLastGoodXml()).source == Source::current);
+            expect (h.service->getKeys ("file.save") == ShortcutKeys { key (KeyPress::F13Key) });
+            expect (settings.saveNow());
+        }
+
         beginTest ("save failure restores raw primary/last-good and unrelated pending settings before a later flush");
         const auto blocker = root.getChildFile ("blocked");
         expect (blocker.replaceWithText ("not a directory"));
         const auto blockedFile = blocker.getChildFile ("Enqueue.settings");
         {
             juce::PropertiesFile properties (blockedFile, options);
-            AppSettings settings (properties);
-            properties.setValue ("keyboardShortcuts", "broken original XML");
+            properties.setValue ("keyboardShortcuts", custom + "broken original XML");
             properties.setValue ("keyboardShortcutsLastGood", xml (""));
+            AppSettings settings (properties);
+            const auto before = properties.getValue ("keyboardShortcuts");
+            const auto beforeGood = properties.getValue ("keyboardShortcutsLastGood");
             settings.setWindowState ("unrelated pending state");
             expect (! settings.saveKeyboardShortcuts (custom, custom));
-            expectEquals (*settings.getKeyboardShortcutsXml(), juce::String ("broken original XML"));
+            expectEquals (properties.getValue ("keyboardShortcuts"), before);
+            expectEquals (properties.getValue ("keyboardShortcutsLastGood"), beforeGood);
+            expectEquals (*settings.getKeyboardShortcutsXml(), custom + "broken original XML");
             expectEquals (*settings.getKeyboardShortcutsLastGoodXml(), xml (""));
             expect (properties.needsToBeSaved());
             expectEquals (settings.getWindowState(), juce::String ("unrelated pending state"));
@@ -601,7 +889,7 @@ public:
         {
             juce::PropertiesFile properties (blockedFile, options);
             AppSettings settings (properties);
-            expectEquals (*settings.getKeyboardShortcutsXml(), juce::String ("broken original XML"));
+            expectEquals (*settings.getKeyboardShortcutsXml(), custom + "broken original XML");
             expect (ShortcutProfile::parse (*settings.getKeyboardShortcutsLastGoodXml()).profile.overrides.empty());
             expectEquals (settings.getWindowState(), juce::String ("unrelated pending state"));
         }
@@ -627,6 +915,7 @@ public:
 static ShortcutCatalogTests shortcutCatalogTests;
 static ShortcutProfileTests shortcutProfileTests;
 static ShortcutServiceTests shortcutServiceTests;
+static ShortcutInputTests shortcutInputTests;
 static ShortcutSettingsTests shortcutSettingsTests;
 
 } // namespace gocue::tests

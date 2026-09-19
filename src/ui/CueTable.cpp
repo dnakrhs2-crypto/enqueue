@@ -119,6 +119,11 @@ private:
 //==============================================================================
 bool CueTable::TableBox::keyPressed (const juce::KeyPress& key)
 {
+    // ListBox's deleteKeyPressed callback loses the original key/modifiers. Let the
+    // current command mappings own Delete/Backspace, just like a remapped F13.
+    if (key.isKeyCode (juce::KeyPress::deleteKey) || key.isKeyCode (juce::KeyPress::backspaceKey))
+        return false;
+
     const auto mods = key.getModifiers();
 
     if (mods.isCommandDown() || mods.isCtrlDown() || mods.isAltDown())
@@ -924,12 +929,6 @@ void CueTable::selectedRowsChanged (int lastRowSelected)
     }
 
     cues.setSelection (rows, modelIndex (lastRowSelected));
-}
-
-void CueTable::deleteKeyPressed (int)
-{
-    if (editable)
-        commands.invokeDirectly (CommandIDs::removeCue, true);
 }
 
 void CueTable::backgroundClicked (const juce::MouseEvent& e)

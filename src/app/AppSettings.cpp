@@ -26,6 +26,39 @@ namespace Keys
     constexpr const char* keyboardShortcutsLastGood = "keyboardShortcutsLastGood";
 }
 
+namespace
+{
+constexpr const char* shortcutStoragePrefix = "enqueue-shortcuts-base64-v1:";
+
+std::optional<juce::String> storedValue (const juce::PropertiesFile& settings, const char* key)
+{
+    if (settings.containsKey (key))
+        return settings.getValue (key);
+    return std::nullopt;
+}
+
+juce::String encodeShortcutXml (const juce::String& xml)
+{
+    return shortcutStoragePrefix + juce::Base64::toBase64 (xml.toRawUTF8(), xml.getNumBytesAsUTF8());
+}
+
+std::optional<juce::String> readShortcutXml (const juce::PropertiesFile& settings, const char* key)
+{
+    const auto stored = storedValue (settings, key);
+    if (! stored || ! stored->startsWith (shortcutStoragePrefix))
+        return stored; // pre-A2 raw XML, including empty/damaged values
+
+    juce::MemoryOutputStream decoded;
+    if (juce::Base64::convertFromBase64 (decoded, stored->substring (juce::String (shortcutStoragePrefix).length())))
+    {
+        const auto xml = decoded.toUTF8();
+        if (encodeShortcutXml (xml) == *stored)
+            return xml;
+    }
+    return stored; // invalid encoding must remain rejected, never turn into usable XML
+}
+}
+
 AppSettings::AppSettings()
 {
     juce::PropertiesFile::Options options;
@@ -42,9 +75,19 @@ AppSettings::AppSettings()
     juce::ignoreUnused (migrated);
     properties.setStorageParameters (options);
     settings = properties.getUserSettings();
+    protectShortcutXml();
 }
 
-AppSettings::AppSettings (juce::PropertiesFile& storage) : settings (&storage) {}
+AppSettings::AppSettings (juce::PropertiesFile& storage) : settings (&storage) { protectShortcutXml(); }
+
+void AppSettings::protectShortcutXml()
+{
+    // Wrap legacy values before ANY later PropertiesFile auto-save can parse/truncate them.
+    // This changes only the storage envelope, preserving the rejected XML byte for byte.
+    for (const auto* key : { Keys::keyboardShortcuts, Keys::keyboardShortcutsLastGood })
+        if (const auto value = storedValue (*settings, key); value && ! value->startsWith (shortcutStoragePrefix))
+            settings->setValue (key, encodeShortcutXml (*value));
+}
 
 std::unique_ptr<juce::XmlElement> AppSettings::getAudioDeviceState() const
 {
@@ -217,26 +260,22 @@ void AppSettings::setUiScalePercent (int percent)
 
 std::optional<juce::String> AppSettings::getKeyboardShortcutsXml() const
 {
-    if (settings->containsKey (Keys::keyboardShortcuts))
-        return settings->getValue (Keys::keyboardShortcuts);
-    return std::nullopt;
+    return readShortcutXml (*settings, Keys::keyboardShortcuts);
 }
 
 std::optional<juce::String> AppSettings::getKeyboardShortcutsLastGoodXml() const
 {
-    if (settings->containsKey (Keys::keyboardShortcutsLastGood))
-        return settings->getValue (Keys::keyboardShortcutsLastGood);
-    return std::nullopt;
+    return readShortcutXml (*settings, Keys::keyboardShortcutsLastGood);
 }
 
 bool AppSettings::saveKeyboardShortcuts (const juce::String& currentXml, const juce::String& lastGoodXml)
 {
     const juce::ScopedLock lock (settings->getLock());
-    const auto previous = getKeyboardShortcutsXml();
-    const auto previousGood = getKeyboardShortcutsLastGoodXml();
+    const auto previous = storedValue (*settings, Keys::keyboardShortcuts);
+    const auto previousGood = storedValue (*settings, Keys::keyboardShortcutsLastGood);
     const bool wasDirty = settings->needsToBeSaved();
-    settings->setValue (Keys::keyboardShortcuts, currentXml);
-    settings->setValue (Keys::keyboardShortcutsLastGood, lastGoodXml);
+    settings->setValue (Keys::keyboardShortcuts, encodeShortcutXml (currentXml));
+    settings->setValue (Keys::keyboardShortcutsLastGood, encodeShortcutXml (lastGoodXml));
     if (saveNow())
         return true;
 

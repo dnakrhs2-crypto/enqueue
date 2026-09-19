@@ -1,4 +1,5 @@
 #include "app/ShortcutCatalog.h"
+#include "app/ShortcutKeyInput.h"
 #include "app/Commands.h"
 
 namespace gocue
@@ -203,8 +204,6 @@ std::vector<ShortcutDefinition> makeFixedComponents()
     add ("cueTable.editDuration", "길이 편집", Scope::cueTable, { key ('D') });
     add ("cueTable.collapseGroup", "그룹 접기 / 부모 선택", Scope::cueTable, { key (KeyPress::leftKey) });
     add ("cueTable.expandGroup", "그룹 펼치기", Scope::cueTable, { key (KeyPress::rightKey) });
-    add ("cueTable.delete", "선택 큐 삭제 (표의 고정 키)", Scope::cueTable,
-         { key (KeyPress::deleteKey), key (KeyPress::backspaceKey), key (KeyPress::deleteKey, shift), key (KeyPress::backspaceKey, shift) });
     ShortcutKeys rows;
     for (const int code : { KeyPress::upKey, KeyPress::downKey, KeyPress::pageUpKey, KeyPress::pageDownKey, KeyPress::homeKey, KeyPress::endKey })
         for (const int modifiers : { 0, shift })
@@ -237,6 +236,19 @@ std::vector<ShortcutDefinition> makeFixedComponents()
          { key (KeyPress::leftKey), key (KeyPress::rightKey), key (KeyPress::upKey), key (KeyPress::downKey) }, true);
     add ("levelMatrix.mute", "선택 셀 무음", Scope::levelMatrix, { key (KeyPress::deleteKey), key (KeyPress::backspaceKey) });
     add ("levelMatrix.edit", "셀 편집 시작", Scope::levelMatrix, { key (KeyPress::returnKey), key (KeyPress::F2Key) });
+    ShortcutKeys valueInput;
+    for (int digit = 0; digit <= 9; ++digit)
+    {
+        valueInput.add (key ('0' + digit));
+        valueInput.add (key (KeyPress::numberPad0 + digit));
+    }
+    for (const int code : { static_cast<int> ('-'), static_cast<int> ('.'), static_cast<int> ('+'),
+                            KeyPress::numberPadSubtract, KeyPress::numberPadDecimalPoint, KeyPress::numberPadAdd })
+        valueInput.add (key (code));
+    valueInput.add (key ('=', shift));
+    valueInput.add (key ('+', shift));
+    add ("levelMatrix.typeValue", "셀 값 직접 입력", Scope::levelMatrix, valueInput);
+    result.back().textKeyMatcher = ShortcutKeyInput::isLevelMatrixValueKey;
     add ("curveEditor.deletePoint", "선택 점 삭제", Scope::curveEditor, { key (KeyPress::deleteKey), key (KeyPress::backspaceKey) });
     ShortcutKeys children, preWait, finePreWait;
     for (const int modifiers : { 0, shift, ctrl, alt, shift | ctrl, shift | alt, ctrl | alt, shift | ctrl | alt })

@@ -23,8 +23,16 @@ struct ShortcutDefinition
     ShortcutKeys defaultKeys;
     juce::String menuCategory;
     int commandFlags = 0;
+    bool (*textKeyMatcher) (const juce::KeyPress&) = nullptr;
 
     bool isCommand() const noexcept { return commandID != 0; }
+    /** Text-driven bindings use the actual event character. Character-less binding previews
+        use the listed keys (including distinct NumPad codes). */
+    bool matchesKey (const juce::KeyPress& key) const
+    {
+        return textKeyMatcher != nullptr && key.getTextCharacter() != 0
+                   ? textKeyMatcher (key) : defaultKeys.contains (key);
+    }
 };
 
 class ShortcutCatalog
