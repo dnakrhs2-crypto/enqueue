@@ -41,7 +41,8 @@ class MainComponent : public juce::Component,
                       public juce::FileDragAndDropTarget,
                       private juce::Timer,
                       private CueList::Listener,
-                      private ProjectDocument::Listener
+                      private ProjectDocument::Listener,
+                      private ShortcutService::Listener
 {
 public:
     MainComponent (AudioEngine& engine, AppSettings& settings, juce::ApplicationCommandManager& commands);
@@ -190,6 +191,7 @@ private:
     void cueSelectionChanged (int index) override;
     void playheadChanged (int index) override;
     void documentStateChanged() override;
+    void shortcutsChanged() override;
 
     AudioEngine& engine;
     AppSettings& settings;

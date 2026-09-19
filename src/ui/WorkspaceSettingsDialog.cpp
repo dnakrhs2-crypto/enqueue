@@ -2,6 +2,9 @@
 #include "ui/WorkspaceSettingsDialog.h"
 
 #include "ui/UiUtils.h"
+#include "ui/ShortcutSettingsTab.h"
+#include "app/ShortcutDisplay.h"
+#include "app/Commands.h"
 
 namespace gocue::WorkspaceSettingsDialog
 {
@@ -124,6 +127,15 @@ namespace
     class GeneralTab : public SettingsTab
     {
     public:
+        void refreshShortcutHints (const ShortcutService& service)
+        {
+            const auto panic = ShortcutDisplay::currentKeys (&service, CommandIDs::panicAll);
+            panicLabel->setText (ko ("전체 페이드 정지 시간 (초) - ") + panic, juce::dontSendNotification);
+            panicHint->setText (panic + ko (" 한 번 = 전체 페이드 정지, 0.5초 안에 두 번 = 즉시 정지"), juce::dontSendNotification);
+            fadeLabel->setText (ko ("페이드아웃 시간 (초) - ") + ShortcutDisplay::currentKeys (&service, CommandIDs::fadeOutSelected)
+                               + ko (", 0 = 큐별 정지 페이드"), juce::dontSendNotification);
+            for (auto* label : { panicLabel, panicHint, fadeLabel }) label->setTooltip (label->getText());
+        }
         GeneralTab (ProjectDocument& doc) : SettingsTab (doc)
         {
             const auto& s = doc.settings;
@@ -141,12 +153,12 @@ namespace
             keyUpToggle = &addToggle (ko ("키를 뗀 뒤에만 다시 GO"), s.requireKeyUp,
                                       [] (WorkspaceSettings& w, bool v) { w.requireKeyUp = v; });
 
-            panicLabel = &addLabel (ko ("전체 페이드 정지 시간 (초) - Esc"));
+            panicLabel = &addLabel ({});
             panicEditor = &addSeconds (&WorkspaceSettings::panicSeconds);
-            panicHint = &addLabel (ko ("Esc 한 번 = 이 시간 동안 전체 페이드아웃 후 정지, 0.5초 안에 두 번 = 즉시 정지"));
+            panicHint = &addLabel ({});
             panicHint->setFont (Palette::font (Palette::kickerSize));
 
-            fadeLabel = &addLabel (ko ("페이드아웃 시간 (초) - F, 0 = 큐마다 정한 정지 페이드"));
+            fadeLabel = &addLabel ({});
             fadeEditor = &addSeconds (&WorkspaceSettings::fadeOutSeconds);
 
             autoNumberToggle = &addToggle (ko ("새 큐에 자동 번호"), s.autoNumber,
@@ -298,6 +310,12 @@ namespace
     class AudioTab : public SettingsTab
     {
     public:
+        void refreshShortcutHints (const ShortcutService& service)
+        {
+            auditionLabel->setText (ko ("오디션 (") + ShortcutDisplay::currentKeys (&service, CommandIDs::auditionGo)
+                + " / " + ShortcutDisplay::currentKeys (&service, CommandIDs::auditionPreview) + ko (") 방식"), juce::dontSendNotification);
+            auditionLabel->setTooltip (auditionLabel->getText());
+        }
         AudioTab (ProjectDocument& doc) : SettingsTab (doc)
         {
             const auto& s = doc.settings;
@@ -312,7 +330,7 @@ namespace
             hint = &addLabel (ko ("출력 라우팅·출력 이름·출력 인서트는 설정 > 오디오 패치... 에서, 장치와 채널 수는 설정 > 오디오 출력 설정에서 바꿉니다."));
             hint->setFont (Palette::font (Palette::kickerSize));
 
-            auditionLabel = &addLabel (ko ("오디션 (Alt+Space / Alt+V) 방식"));
+            auditionLabel = &addLabel ({});
             auditionBox.addItem (ko ("그대로 재생 (표시만)"), 1);
             auditionBox.addItem (ko ("출력 없음 (소리 없이 진행)"), 2);
             auditionBox.addItem (ko ("대체 패치로 재생"), 3);
@@ -398,20 +416,29 @@ namespace
         juce::ComboBox auditionBox, patchBox;
     };
 
-    class Content : public juce::Component
+    class Content : public juce::Component, private ShortcutService::Listener
     {
     public:
-        Content (ProjectDocument& document)
+        Content (ProjectDocument& document, ShortcutService& s) : service (s)
         {
             setWantsKeyboardFocus (true);   // a tab switched by mouse leaves the focus here, not in the new tab's first field (its text selected)
             tabs.setTabBarDepth (Palette::tabBarHeight);
             tabs.setOutline (0);
-            tabs.addTab (ko ("일반"), Palette::panel, new GeneralTab (document), true);
+            general = new GeneralTab (document);
+            audio = new AudioTab (document);
+            shortcuts = new ShortcutSettingsTab (service, document);
+            tabs.addTab (ko ("일반"), Palette::panel, general, true);
             tabs.addTab (ko ("파일"), Palette::panel, new FilesTab (document), true);
-            tabs.addTab (ko ("오디오"), Palette::panel, new AudioTab (document), true);
+            tabs.addTab (ko ("오디오"), Palette::panel, audio, true);
+            tabs.addTab (ko ("단축키"), Palette::panel, shortcuts, true);
             addAndMakeVisible (tabs);
             setSize (Palette::settingsWidth, Palette::settingsHeight);
+            service.addListener (this);
+            shortcutsChanged();
         }
+
+        ~Content() override { service.removeListener (this); service.cancelCapture(); }
+        void shortcutsChanged() override { general->refreshShortcutHints (service); audio->refreshShortcutHints (service); }
 
         void resized() override { tabs.setBounds (getLocalBounds().reduced (Palette::dialogInset)); }
         void paint (juce::Graphics& g) override { Palette::drawDialog (g, getLocalBounds()); }
@@ -423,18 +450,25 @@ namespace
             explicit Tabs (Content& c) : juce::TabbedComponent (juce::TabbedButtonBar::TabsAtTop), owner (c) {}
             void currentTabChanged (int, const juce::String&) override
             {
+                owner.service.cancelCapture();
+                if (owner.shortcuts != nullptr) owner.shortcuts->cancelCapture();
                 if (owner.isShowing())   // the first addTab() runs in the constructor, before the dialog exists
                     owner.grabKeyboardFocus();
             }
             Content& owner;
         };
 
+        ShortcutService& service;
+        GeneralTab* general = nullptr;
+        AudioTab* audio = nullptr;
+        ShortcutSettingsTab* shortcuts = nullptr;
         Tabs tabs { *this };
     };
 }
 
-void show (ProjectDocument& document, juce::Component* centreAround)
+void show (ProjectDocument& document, ShortcutService& service, juce::Component* centreAround)
 {
+    if (service.isEditingLocked()) return;
     if (dialog != nullptr)
     {
         dialog->toFront (true);
@@ -443,7 +477,7 @@ void show (ProjectDocument& document, juce::Component* centreAround)
 
     juce::DialogWindow::LaunchOptions options;
     options.dialogTitle = ko ("프로젝트 설정");
-    options.content.setOwned (new Content (document));
+    options.content.setOwned (new Content (document, service));
     options.componentToCentreAround = centreAround;
     options.dialogBackgroundColour = Palette::background;
     options.escapeKeyTriggersCloseButton = true;

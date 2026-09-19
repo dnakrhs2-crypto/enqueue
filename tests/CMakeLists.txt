@@ -4,6 +4,9 @@ target_sources(EnqueueTests PRIVATE
     TestMain.cpp
     ShortcutTests.cpp
     ShortcutRouterTests.cpp
+    ShortcutUiTests.cpp
+    ../src/ui/KeyCapture.cpp
+    ../src/ui/ShortcutSettingsTab.cpp
     ../src/app/AppSettings.cpp
     ../src/ui/CueTable.cpp
     ../src/ui/LevelMatrixComponent.cpp

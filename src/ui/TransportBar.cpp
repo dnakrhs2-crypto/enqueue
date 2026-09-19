@@ -1,6 +1,7 @@
 #include "ui/TransportBar.h"
 
 #include "app/Commands.h"
+#include "app/ShortcutDisplay.h"
 #include "ui/GroupModeLabels.h"
 #include "ui/UiUtils.h"
 
@@ -94,8 +95,8 @@ void TransportBar::TransportButton::paintButton (juce::Graphics& g, bool over, b
     if (twoLine)
     {
         const int detailWidth = detail.isEmpty() ? 0 : 4 + juce::GlyphArrangement::getStringWidthInt (Palette::font (Palette::fileSize, true), detail);
-        auto bottom = getLocalBounds().withSizeKeepingCentre (keyWidth (key) + detailWidth, 16).translated (0, 11);
-        drawKey (g, bottom.removeFromLeft (keyWidth (key)), colour, key);
+        auto bottom = getLocalBounds().withSizeKeepingCentre (juce::jmin (getWidth() - 10, keyWidth (key) + detailWidth), 16).translated (0, 11);
+        drawKey (g, bottom.removeFromLeft (juce::jmax (16, bottom.getWidth() - detailWidth)), colour, key);
         bottom.removeFromLeft (4);
         g.setColour (colour);
         g.setFont (Palette::font (Palette::fileSize, true));
@@ -161,24 +162,24 @@ TransportBar::TransportBar (juce::ApplicationCommandManager& cm)
     addAndMakeVisible (goButton);
 
     pauseButton.setButtonText (ko ("일시정지"));
-    pauseButton.key = "P";
+
     styleButton (pauseButton, Palette::paused);
     pauseButton.onClick = [this] { commands.invokeDirectly (CommandIDs::pauseToggle, true); };
 
     fadeOutButton.setButtonText (ko ("페이드아웃"));
-    fadeOutButton.key = "F";
+
     styleButton (fadeOutButton, Palette::fadingOut);
     fadeOutButton.onClick = [this] { commands.invokeDirectly (CommandIDs::fadeOutSelected, true); };
 
     panicButton.setButtonText (ko ("전체 페이드 정지"));
-    panicButton.key = "Esc";
+
     styleButton (panicButton, Palette::stopButton);
     panicButton.setColour (juce::TextButton::buttonColourId, Palette::panel2.interpolatedWith (Palette::stopButton, Palette::stopTintAlpha));
     panicButton.onClick = [this] { commands.invokeDirectly (CommandIDs::panicAll, true); };
     setPanicSeconds (panicSeconds);
     setFadeOutSeconds (fadeOutSeconds);
 
-    panicSettingsButton.setTooltip (ko ("페이드 시간 설정: 전체 페이드 정지 (Esc) · 페이드아웃 (F)"));
+
     panicSettingsButton.setWantsKeyboardFocus (false);
     panicSettingsButton.onClick = [this]
     {
@@ -248,6 +249,7 @@ TransportBar::TransportBar (juce::ApplicationCommandManager& cm)
         label->setMinimumHorizontalScale (1.0f);
     }
 
+    refreshShortcutHints();
     setStandbyCue (-1, nullptr);
     setPlayingCount (0, 0);
 }
@@ -425,7 +427,7 @@ void TransportBar::setAuditionMode (bool auditioning)
         return;
 
     auditionMode = auditioning;
-    goButton.setTooltip (auditionMode ? ko ("GO (오디션)") : juce::String ("GO"));
+    refreshShortcutHints();
     updateGoLook();
 }
 
@@ -450,7 +452,7 @@ void TransportBar::setPanicSeconds (double seconds)
 {
     panicSeconds = seconds;
     panicButton.detail = secondsLabel (seconds);
-    panicButton.setTooltip (ko ("전체 페이드 정지 (Esc) ") + panicButton.detail);
+    panicButton.setTooltip (ko ("전체 페이드 정지 (") + ShortcutDisplay::currentKeys (shortcuts, CommandIDs::panicAll) + ") " + panicButton.detail);
     panicButton.repaint();
 }
 
@@ -458,9 +460,23 @@ void TransportBar::setFadeOutSeconds (double seconds)
 {
     fadeOutSeconds = seconds;
     fadeOutButton.detail = seconds > 0.0 ? secondsLabel (seconds) : ko ("큐별");
-    fadeOutButton.setTooltip (seconds > 0.0 ? ko ("페이드아웃 (F) ") + fadeOutButton.detail + ko (" — 톱니바퀴에서 변경")
-                                            : ko ("페이드아웃 (F): 큐마다 정한 정지 페이드 — 톱니바퀴에서 변경"));
+    fadeOutButton.setTooltip (ko ("페이드아웃 (") + ShortcutDisplay::currentKeys (shortcuts, CommandIDs::fadeOutSelected) + "): "
+                             + fadeOutButton.detail + ko (" — 톱니바퀴에서 변경"));
     fadeOutButton.repaint();
+}
+
+void TransportBar::refreshShortcutHints()
+{
+    pauseButton.key = ShortcutDisplay::currentKeys (shortcuts, CommandIDs::pauseToggle, 1, false);
+    fadeOutButton.key = ShortcutDisplay::currentKeys (shortcuts, CommandIDs::fadeOutSelected, 1, false);
+    panicButton.key = ShortcutDisplay::currentKeys (shortcuts, CommandIDs::panicAll, 1, false);
+    pauseButton.setTooltip (ko ("일시정지 / 재개 (") + ShortcutDisplay::currentKeys (shortcuts, CommandIDs::pauseToggle) + ")");
+    goButton.setTooltip ((auditionMode ? ko ("GO (오디션) · ") : ko ("GO · ")) + ShortcutDisplay::currentKeys (shortcuts, CommandIDs::go));
+    panicSettingsButton.setTooltip (ko ("페이드 시간 설정: 전체 페이드 정지 (") + ShortcutDisplay::currentKeys (shortcuts, CommandIDs::panicAll)
+        + ko (") · 페이드아웃 (") + ShortcutDisplay::currentKeys (shortcuts, CommandIDs::fadeOutSelected) + ")");
+    setPanicSeconds (panicSeconds);
+    setFadeOutSeconds (fadeOutSeconds);
+    repaint();
 }
 
 void TransportBar::setLoudness (bool momentaryValid, double momentaryLufs, bool averageValid, double averageLufs, int windowSeconds)

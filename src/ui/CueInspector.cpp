@@ -1,6 +1,9 @@
 #include "model/Hotkeys.h"
 #include "ui/CueInspector.h"
 #include "ui/ShortcutRouter.h"
+#include "ui/KeyCapture.h"
+#include "app/ShortcutDisplay.h"
+#include "app/Commands.h"
 
 #include "audio/CueFileInfo.h"
 #include "ui/CueTable.h"
@@ -75,116 +78,13 @@ namespace
 }
 
 //==============================================================================
-/** A button that captures the next key press as the cue's hotkey. */
-class HotkeyButton : public juce::TextButton
-{
-public:
-    HotkeyButton()
-    {
-        setWantsKeyboardFocus (false);
-        getProperties().set ("slateKeycap", true);
-    }
-    ~HotkeyButton() override { if (shortcuts != nullptr) shortcuts->endCapture (this); }
-
-    ShortcutService* shortcuts = nullptr;
-
-    std::function<void (const juce::String& description)> onHotkeyChanged;
-    /** Returns a reason to refuse the key, or an empty string. */
-    std::function<juce::String (const juce::KeyPress&)> validate;
-
-    void setHotkey (const juce::String& description)
-    {
-        hotkey = description;
-
-        if (! capturing)
-        {
-            setButtonText (hotkey.isEmpty() ? ko ("핫키: 없음") : ko ("핫키: ") + hotkey);
-            setTooltip (getButtonText());
-        }
-    }
-
-    void clicked() override
-    {
-        if (shortcuts == nullptr)
-            return;
-        juce::Component::SafePointer<HotkeyButton> safeThis (this);
-        shortcuts->beginCapture (this,
-            [safeThis] (const juce::KeyPress& key) { if (safeThis != nullptr) safeThis->acceptKey (key); },
-            [safeThis] { if (safeThis != nullptr) safeThis->finishCapture(); });
-        if (! shortcuts->isCapturing())
-            return;
-        capturing = true;
-        setComponentID ("hotkeyCapture");   // retained for UI discovery; safety uses ShortcutService
-        setWantsKeyboardFocus (true);
-        grabKeyboardFocus();
-        setButtonText (ko ("키를 누르세요... (Esc 취소)"));
-        setTooltip (getButtonText());
-    }
-
-    bool keyPressed (const juce::KeyPress&) override { return capturing; }
-
-    void acceptKey (const juce::KeyPress& key)
-    {
-        if (! capturing)
-            return;
-
-        finishCapture();
-
-        if (key.isKeyCode (juce::KeyPress::escapeKey))
-            return;
-
-        if (key.getModifiers().isAnyModifierKeyDown() && key.getKeyCode() == 0)
-            return;   // a lone modifier
-
-        if (validate)
-        {
-            const auto reason = validate (key);
-
-            if (reason.isNotEmpty())
-            {
-                setButtonText (reason);
-                setTooltip (reason);
-                juce::Component::SafePointer<HotkeyButton> safeThis (this);
-                juce::Timer::callAfterDelay (1500, [safeThis] { if (safeThis != nullptr) safeThis->setHotkey (safeThis->hotkey); });
-                return;
-            }
-        }
-
-        if (onHotkeyChanged)
-            onHotkeyChanged (key.getTextDescription());
-
-    }
-
-    void focusLost (FocusChangeType) override
-    {
-        if (capturing)
-            finishCapture();
-    }
-
-private:
-    void finishCapture()
-    {
-        capturing = false;
-        if (shortcuts != nullptr)
-            shortcuts->endCapture (this);
-        setComponentID ({});
-        setWantsKeyboardFocus (false);
-        setHotkey (hotkey);
-        if (hasKeyboardFocus (false))
-            giveAwayKeyboardFocus();
-    }
-
-    juce::String hotkey;
-    bool capturing = false;
-};
-
-//==============================================================================
 /** Tab "기본". */
 class CueInspector::BasicsPanel : public juce::Component,
                                   public juce::FileDragAndDropTarget
 {
 public:
-    void setShortcutService (ShortcutService& service) { hotkeyButton.shortcuts = &service; }
+    void setShortcutService (ShortcutService& service) { shortcuts = &service; hotkeyButton.setService (service); refresh(); }
+    void cancelCapture() { hotkeyButton.cancelCapture(); }
 
     BasicsPanel (ProjectDocument& doc, AudioEngine& e, AppSettings& s)
         : document (doc), cues (doc.cues), engine (e), settings (s)
@@ -283,6 +183,12 @@ public:
             if (Hotkeys::isReservedKey (key))   // the same list the project loader enforces
                 return ko ("앱이 쓰는 키입니다: ") + key.getTextDescription();
 
+            if (shortcuts != nullptr)
+            {
+                const auto owner = shortcuts->resolveKeyOwner (key, {}, true);
+                if (owner.commandID != 0)
+                    return ko ("이 PC의 ") + ShortcutCatalog::get().find (owner.id)->name + ko (" 단축키와 충돌 → 비활성");
+            }
             const auto description = key.getTextDescription();
             const auto* selected = cues.getSelected();
 
@@ -301,11 +207,15 @@ public:
             return {};
         };
         addAndMakeVisible (hotkeyButton);
+        hotkeyConflict.setFont (Palette::font());
+        hotkeyConflict.setColour (juce::Label::textColourId, Palette::warn);
+        hotkeyConflict.setMinimumHorizontalScale (1.0f);
+        addAndMakeVisible (hotkeyConflict);
 
         clearHotkeyButton.setButtonText (ko ("×"));
         clearHotkeyButton.setTooltip (ko ("핫키 지우기"));
         clearHotkeyButton.setWantsKeyboardFocus (false);
-        clearHotkeyButton.onClick = [this] { edit (ko ("핫키 지우기"), [] (Cue& c) { c.hotkey.clear(); }); };
+        clearHotkeyButton.onClick = [this] { hotkeyButton.cancelCapture(); edit (ko ("핫키 지우기"), [] (Cue& c) { c.hotkey.clear(); }); };
         addAndMakeVisible (clearHotkeyButton);
 
         auto toggle = [this] (juce::ToggleButton& t, const char* text, const char* editName, std::function<void (Cue&, bool)> apply)
@@ -379,7 +289,9 @@ public:
             colourCombo.setSelectedId (0, juce::dontSendNotification);
             secondColourCombo.setSelectedId (0, juce::dontSendNotification);
             continueCombo.setSelectedId (0, juce::dontSendNotification);
+            hotkeyButton.cancelCapture();
             hotkeyButton.setHotkey ({});
+            hotkeyConflict.setText ({}, juce::dontSendNotification);
             gainSlider.setValue (0.0, juce::dontSendNotification);
             return;
         }
@@ -393,6 +305,7 @@ public:
         if (editing && ! shownId.isNull() && shownId != cue->id && cues.indexOf (shownId) >= 0)
             return;
 
+        if (shownId != cue->id) hotkeyButton.cancelCapture();
         shownId = cue->id;
 
         auto setIfIdle = [] (juce::TextEditor& e, const juce::String& text) { if (! e.hasKeyboardFocus (true)) e.setText (text, false); };
@@ -409,6 +322,17 @@ public:
         secondColourCombo.setEnabled (enabled && cue->useSecondColor);
         continueCombo.setSelectedId ((int) cue->continueMode + 1, juce::dontSendNotification);
         hotkeyButton.setHotkey (cue->hotkey);
+        juce::String conflict;
+        if (shortcuts != nullptr && cue->hotkey.isNotEmpty())
+        {
+            const auto owner = shortcuts->resolveKeyOwner (juce::KeyPress::createFromDescription (cue->hotkey), {}, true);
+            if (owner.commandID != 0)
+                conflict = ko ("이 PC의 ") + ShortcutCatalog::get().find (owner.id)->name + ko (" 단축키와 충돌 → 비활성");
+        }
+        hotkeyConflict.setText (conflict, juce::dontSendNotification);
+        hotkeyConflict.setTooltip (conflict);
+        fadeOutEditor.setTooltip (ShortcutDisplay::currentKeys (shortcuts, CommandIDs::fadeOutSelected)
+                                 + ko (" (페이드아웃 정지)에 걸리는 시간. 0이면 5 ms 디클릭만"));
         flagToggle.setToggleState (cue->flagged, juce::dontSendNotification);
         armedToggle.setToggleState (! cue->armed, juce::dontSendNotification);
         autoLoadToggle.setToggleState (cue->autoLoad, juce::dontSendNotification);
@@ -482,6 +406,7 @@ public:
         gainLabel.setBounds (row.removeFromLeft (62));
         gainSlider.setBounds (row.removeFromLeft (juce::jmin (360, row.getWidth())));
 
+        hotkeyConflict.setBounds (area.removeFromTop (22));
         notesLabel.setBounds (area.removeFromLeft (36).withHeight (Palette::fieldHeight));
         notesEditor.setBounds (area);
     }
@@ -754,7 +679,9 @@ private:
     juce::TextEditor numberEditor, nameEditor, preEditor, postEditor, fadeOutEditor, notesEditor;
     juce::ComboBox colourCombo, secondColourCombo, continueCombo;
     juce::ToggleButton secondColourToggle, flagToggle, armedToggle, autoLoadToggle;
-    HotkeyButton hotkeyButton;
+    KeyCaptureButton hotkeyButton;
+    ShortcutService* shortcuts = nullptr;
+    juce::Label hotkeyConflict;
     juce::TextButton clearHotkeyButton, browseButton;
     juce::Slider gainSlider;
     std::unique_ptr<juce::FileChooser> chooser;
@@ -1468,6 +1395,12 @@ private:
 class CueInspector::FadePanel : public juce::Component
 {
 public:
+    void refreshShortcutHint (const ShortcutService* service)
+    {
+        fetchButton.setTooltip (ko ("대상 큐의 현재 레벨(재생 중이면 실시간 값)을 목표로 복사 (")
+                                + ShortcutDisplay::currentKeys (service, CommandIDs::fetchFadeLevels) + ")");
+    }
+
     FadePanel (ProjectDocument& doc, AudioEngine& e) : document (doc), cues (doc.cues), engine (e)
     {
         styleLabel (targetLabel, ko ("대상 큐"));
@@ -1521,7 +1454,7 @@ public:
         button (fetchButton, "대상에서 레벨 가져오기", [this] { fetchFromTarget(); });
         button (allOnButton, "전부 활성", [this] { setAllActive (true); });
         button (allOffButton, "전부 비활성", [this] { setAllActive (false); });
-        fetchButton.setTooltip (ko ("대상 큐의 현재 레벨(재생 중이면 실시간 값)을 목표로 복사 (Ctrl+Shift+T)"));
+        refreshShortcutHint (nullptr);
 
         styleToggle (previewToggle, ko ("라이브 미리보기"));
         previewToggle.setTooltip (ko ("켜면 편집하는 목표값이 재생 중인 대상에 바로 반영되고, 끄면 원래대로 돌아갑니다"));
@@ -3410,6 +3343,7 @@ CueInspector::CueInspector (ProjectDocument& doc, AudioEngine& e, AppSettings& s
     tabs.setColour (juce::TabbedComponent::backgroundColourId, Palette::panel);
     tabs.onTabShown = [this]
     {
+        basics->cancelCapture();
         auto* focused = juce::Component::getCurrentlyFocusedComponent();
 
         if (focused != nullptr && tabs.isParentOf (focused) && onReturnFocus)
@@ -3425,11 +3359,22 @@ CueInspector::CueInspector (ProjectDocument& doc, AudioEngine& e, AppSettings& s
 
 void CueInspector::setShortcutService (ShortcutService& service)
 {
+    if (shortcuts != nullptr) shortcuts->removeListener (this);
+    shortcuts = &service;
+    shortcuts->addListener (this);
     basics->setShortcutService (service);
+    shortcutsChanged();
+}
+
+void CueInspector::shortcutsChanged()
+{
+    basics->refresh();
+    fadePanel->refreshShortcutHint (shortcuts);
 }
 
 CueInspector::~CueInspector()
 {
+    if (shortcuts != nullptr) shortcuts->removeListener (this);
     cancelPendingUpdate();
     engine.getDeviceManager().removeChangeListener (this);
 

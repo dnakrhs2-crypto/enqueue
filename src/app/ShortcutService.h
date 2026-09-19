@@ -106,6 +106,7 @@ public:
         virtual ~Listener() = default;
         virtual void shortcutsChanged() = 0;
         virtual void captureStateChanged() {}
+        virtual void shortcutEditingLockChanged() {}
     };
 
     ShortcutService (juce::ApplicationCommandManager& manager, SaveFunction save,
@@ -132,18 +133,20 @@ public:
     void deliverCaptureKey (const juce::KeyPress&);
     /** Runtime callers preserve the original text character (numeric entry/text editor predicates).
         Character-less bindings can also be queried for conflict previews. */
-    ShortcutKeyOwner resolveKeyOwner (const juce::KeyPress& key, const ShortcutKeyContext& context) const;
+    // Preview ignores the live capture owner, but uses the same binding/scope rules.
+    ShortcutKeyOwner resolveKeyOwner (const juce::KeyPress& key, const ShortcutKeyContext& context, bool preview = false) const;
 
     ShortcutOperationResult addKey (const juce::String& actionID, const juce::KeyPress& key, ConflictPolicy policy = ConflictPolicy::reject);
     ShortcutOperationResult replaceKey (const juce::String& actionID, int index, const juce::KeyPress& key, ConflictPolicy policy = ConflictPolicy::reject);
     ShortcutOperationResult removeKey (const juce::String& actionID, int index);
     ShortcutOperationResult setKeys (const juce::String& actionID, const ShortcutKeys& keys, ConflictPolicy policy = ConflictPolicy::reject);
-    ShortcutOperationResult restoreCommandDefaults (const juce::String& actionID);
+    ShortcutOperationResult restoreCommandDefaults (const juce::String& actionID, ConflictPolicy policy = ConflictPolicy::reject);
     ShortcutOperationResult restoreAllDefaults();
     ShortcutOperationResult importProfile (const juce::String& xml); // replacement, never a partial merge
     juce::String exportProfile() const; // all resolved commands, including empty lists, plus unknown overrides
 
     void setEditingLocked (bool locked);
+    bool isEditingLocked() const noexcept { return editingLocked; }
     void addListener (Listener* listener) { listeners.add (listener); }
     void removeListener (Listener* listener) { listeners.remove (listener); }
 

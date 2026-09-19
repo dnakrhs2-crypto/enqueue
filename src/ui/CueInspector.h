@@ -4,6 +4,7 @@
 
 #include "app/AppSettings.h"
 #include "app/ProjectDocument.h"
+#include "app/ShortcutService.h"
 #include "audio/AudioEngine.h"
 #include "model/CueList.h"
 #include "ui/CurveEditor.h"
@@ -29,7 +30,8 @@ class ShortcutService;
 class CueInspector : public juce::Component,
                      private juce::ChangeListener,
                      private juce::AsyncUpdater,
-                     private CueList::Listener
+                     private CueList::Listener,
+                     private ShortcutService::Listener
 {
 public:
     CueInspector (ProjectDocument& document, AudioEngine& engine, AppSettings& settings, PluginWindowManager& windows);
@@ -89,6 +91,8 @@ public:
     class MicPanel;
 
 private:
+    void shortcutsChanged() override;
+    ShortcutService* shortcuts = nullptr;
     void refresh();
     /** Installs the tab set for the selected cue's type (0 audio / 1 fade / 2 devamp). */
     void rebuildTabs (int wanted);

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "model/Cue.h"
+#include "app/ShortcutService.h"
 
 #include "ui/UiUtils.h"
 
@@ -17,6 +18,8 @@ class TransportBar : public juce::Component,
 {
 public:
     explicit TransportBar (juce::ApplicationCommandManager& commands);
+    void setShortcutService (ShortcutService& s) { shortcuts = &s; refreshShortcutHints(); }
+    void refreshShortcutHints();
 
     /** index is 0-based; cue may be null when nothing is selected. */
     void setStandbyCue (int index, const Cue* cue);
@@ -56,6 +59,7 @@ private:
     void showLoudnessWindowMenu();
 
     juce::ApplicationCommandManager& commands;
+    ShortcutService* shortcuts = nullptr;
 
     /** The big GO button: fills its area and draws its text large (a plain TextButton keeps a small font). */
     struct GoButton : public juce::TextButton

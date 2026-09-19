@@ -36,7 +36,7 @@ std::vector<ShortcutDefinition> makeCommands()
                  Category::playback, Scope::playback, false, ko ("재생"), { key ('P', ModifierKeys::noModifiers) }),
         command ("transport.fadeOutSelected", CommandIDs::fadeOutSelected, ko ("페이드아웃 정지"), ko ("선택 큐(재생 중이 아니면 가장 최근 재생 큐)를 정지 페이드로 정지"),
                  Category::playback, Scope::playback, false, ko ("재생"), { key ('F', ModifierKeys::noModifiers) }),
-        command ("transport.panicAll", CommandIDs::panicAll, ko ("전체 페이드 정지 (Esc)"), ko ("재생 중인 모든 큐를 설정된 시간(기본 2초) 동안 페이드아웃 후 정지. 0.5초 안에 두 번 누르면 즉시 정지"),
+        command ("transport.panicAll", CommandIDs::panicAll, ko ("전체 페이드 정지"), ko ("재생 중인 모든 큐를 설정된 시간(기본 2초) 동안 페이드아웃 후 정지. 0.5초 안에 두 번 누르면 즉시 정지"),
                  Category::playback, Scope::application, false, ko ("재생"), { key (KeyPress::escapeKey, ModifierKeys::noModifiers) }),
         command ("transport.hardStopAll", CommandIDs::hardStopAll, ko ("전체 즉시 정지"), ko ("페이드 없이 모든 큐를 바로 정지"),
                  Category::playback, Scope::playback, false, ko ("재생"), {  }),

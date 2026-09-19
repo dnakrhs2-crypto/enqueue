@@ -185,14 +185,14 @@ const ShortcutKeys& ShortcutService::getKeys (juce::CommandID commandID) const
     return getKeys (entry != nullptr ? entry->id : juce::String());
 }
 
-ShortcutKeyOwner ShortcutService::resolveKeyOwner (const juce::KeyPress& key, const ShortcutKeyContext& context) const
+ShortcutKeyOwner ShortcutService::resolveKeyOwner (const juce::KeyPress& key, const ShortcutKeyContext& context, bool preview) const
 {
     using Kind = ShortcutKeyOwner::Kind;
     using Reason = ShortcutKeyOwner::Reason;
     ShortcutKeyOwner result;
     if (! context.applicationActive || context.window == ShortcutKeyContext::Window::outsideApp)
         return { Kind::blocked, Reason::inactiveApp, {}, 0, {} };
-    if (context.captureActive || isCapturing())
+    if (! preview && (context.captureActive || isCapturing()))
         return { Kind::capture, Reason::captureActive, {}, 0, {} };
 
     const ShortcutDefinition* command = nullptr;
@@ -378,11 +378,21 @@ ShortcutOperationResult ShortcutService::removeKey (const juce::String& id, int 
     return setKeys (id, keys);
 }
 
-ShortcutOperationResult ShortcutService::restoreCommandDefaults (const juce::String& id)
+ShortcutOperationResult ShortcutService::restoreCommandDefaults (const juce::String& id, ConflictPolicy policy)
 {
     if (auto checked = checkEditableCommand (id); checked.failed())
         return checked;
     auto candidate = profile;
+    if (policy == ConflictPolicy::move)
+        for (const auto& key : catalog.find (id)->defaultKeys)
+            for (const auto& entry : catalog.getCommands())
+                if (entry.id != id && containsKey (getKeys (entry.id), key))
+                {
+                    auto inserted = candidate.overrides.emplace (entry.id, getKeys (entry.id));
+                    auto& previousKeys = inserted.first->second;
+                    for (int i = previousKeys.size(); --i >= 0;)
+                        if (ShortcutKeyInput::keysOverlap (previousKeys[i], key)) previousKeys.remove (i);
+                }
     candidate.overrides.erase (id);
     return commit (std::move (candidate));
 }
@@ -476,9 +486,12 @@ void ShortcutService::deliverCaptureKey (const juce::KeyPress& key)
 
 void ShortcutService::setEditingLocked (bool locked)
 {
+    if (editingLocked == locked)
+        return;
     editingLocked = locked;
     if (locked)
         cancelCapture();
+    listeners.call ([] (Listener& l) { l.shortcutEditingLockChanged(); });
 }
 
 void ShortcutService::synchroniseMappings()

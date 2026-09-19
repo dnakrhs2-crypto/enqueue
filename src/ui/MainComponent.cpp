@@ -8,6 +8,7 @@
 #include "app/BackupManager.h"
 #include "app/Commands.h"
 #include "app/ShortcutCatalog.h"
+#include "app/ShortcutDisplay.h"
 #include "app/UiScale.h"
 #include "app/Updater.h"
 #include "audio/CueFileInfo.h"
@@ -268,6 +269,8 @@ MainComponent::MainComponent (AudioEngine& e, AppSettings& s, juce::ApplicationC
     shortcutRouter->activateDesktopRouting();
     shortcutRouter->attach (*this, ShortcutKeyContext::Window::main);
     inspector.setShortcutService (*shortcuts);
+    transport.setShortcutService (*shortcuts);
+    shortcuts->addListener (this);
     panicHook->beforeDispatch = [this] (int vk, int modifiers, bool down, bool repeat)
     { shortcutRouter->prepareNativeEvent (vk, modifiers, down, repeat); };
     if (const auto installed = panicHook->install(); installed.failed())
@@ -289,6 +292,7 @@ MainComponent::MainComponent (AudioEngine& e, AppSettings& s, juce::ApplicationC
 
 MainComponent::~MainComponent()
 {
+    shortcuts->removeListener (this);
     shortcuts->cancelCapture();
     panicHook.reset();
     shortcutRouter.reset();
@@ -344,6 +348,13 @@ void MainComponent::resized()
     cart.setBounds (area);
 }
 
+void MainComponent::shortcutsChanged()
+{
+    juce::PopupMenu::dismissAllActiveMenus();
+    transport.refreshShortcutHints();
+    menuItemsChanged();
+}
+
 void MainComponent::showPanicSecondsMenu (juce::Point<int> screenPosition)
 {
     // the project's two fade times, one submenu each: 전체 페이드 정지 (Esc) and 페이드아웃 (F) - presets, and a typed value
@@ -353,7 +364,7 @@ void MainComponent::showPanicSecondsMenu (juce::Point<int> screenPosition)
     auto secondsText = [] (double s) { return secondsLabel (s); };   // "1초", "0.5초", "0.25초" - the same text as the buttons and the status line
 
     juce::PopupMenu panic;
-    panic.addSectionHeader (ko ("Esc: 재생 중인 모든 큐가 페이드아웃되는 시간"));
+    panic.addSectionHeader (ShortcutDisplay::currentKeys (shortcuts.get(), CommandIDs::panicAll) + ko (": 재생 중인 모든 큐가 페이드아웃되는 시간"));
 
     for (size_t i = 0; i < presets.size(); ++i)
         panic.addItem ((int) i + 1, secondsText (presets[i]), true, std::abs (panicNow - presets[i]) < 0.001);
@@ -362,7 +373,7 @@ void MainComponent::showPanicSecondsMenu (juce::Point<int> screenPosition)
     panic.addItem (100, ko ("직접 입력... (지금 ") + secondsText (panicNow) + ")");
 
     juce::PopupMenu fade;
-    fade.addSectionHeader (ko ("F: 대상 큐(선택 큐, 재생 중이 아니면 최근 재생 큐)가 페이드아웃되는 시간"));
+    fade.addSectionHeader (ShortcutDisplay::currentKeys (shortcuts.get(), CommandIDs::fadeOutSelected) + ko (": 대상 큐(선택 큐, 재생 중이 아니면 최근 재생 큐)가 페이드아웃되는 시간"));
 
     for (size_t i = 0; i < presets.size(); ++i)
         fade.addItem (200 + (int) i + 1, secondsText (presets[i]), true, fadeNow > 0.0 && std::abs (fadeNow - presets[i]) < 0.001);
@@ -372,8 +383,8 @@ void MainComponent::showPanicSecondsMenu (juce::Point<int> screenPosition)
     fade.addItem (301, ko ("직접 입력... (지금 ") + (fadeNow > 0.0 ? secondsText (fadeNow) : ko ("큐별")) + ")");
 
     juce::PopupMenu menu;
-    menu.addSubMenu (ko ("전체 페이드 정지 (Esc) · ") + secondsText (panicNow), panic);
-    menu.addSubMenu (ko ("페이드아웃 (F) · ") + (fadeNow > 0.0 ? secondsText (fadeNow) : ko ("큐별")), fade);
+    menu.addSubMenu (ko ("전체 페이드 정지 (") + ShortcutDisplay::currentKeys (shortcuts.get(), CommandIDs::panicAll) + ko (") · ") + secondsText (panicNow), panic);
+    menu.addSubMenu (ko ("페이드아웃 (") + ShortcutDisplay::currentKeys (shortcuts.get(), CommandIDs::fadeOutSelected) + ko (") · ") + (fadeNow > 0.0 ? secondsText (fadeNow) : ko ("큐별")), fade);
 
     juce::Component::SafePointer<MainComponent> safeThis (this);
     menu.showMenuAsync (juce::PopupMenu::Options().withTargetScreenArea ({ screenPosition.x, screenPosition.y, 1, 1 }),
@@ -402,8 +413,8 @@ void MainComponent::showPanicSecondsMenu (juce::Point<int> screenPosition)
 
         const bool forPanic = result == 100;
         auto* alert = new juce::AlertWindow (forPanic ? ko ("전체 페이드 정지 시간") : ko ("페이드아웃 시간"),
-                                             forPanic ? ko ("Esc를 눌렀을 때 재생 중인 모든 큐가 페이드아웃되는 시간 (초, 0 = 즉시 정지)")
-                                                      : ko ("F를 눌렀을 때 대상 큐가 페이드아웃되는 시간 (초, 0 = 큐마다 정한 정지 페이드)"),
+                                             forPanic ? ShortcutDisplay::currentKeys (safeThis->shortcuts.get(), CommandIDs::panicAll) + ko ("를 눌렀을 때 전체 페이드아웃 시간 (초, 0 = 즉시 정지)")
+                                                      : ShortcutDisplay::currentKeys (safeThis->shortcuts.get(), CommandIDs::fadeOutSelected) + ko ("를 눌렀을 때 대상 큐 페이드아웃 시간 (초, 0 = 큐별)"),
                                              juce::MessageBoxIconType::NoIcon);
         alert->addTextEditor ("seconds", plainSeconds (forPanic ? panicNow : fadeNow), ko ("초"));
         alert->addButton (ko ("확인"), 1, juce::KeyPress (juce::KeyPress::returnKey));
@@ -563,6 +574,8 @@ void MainComponent::getCommandInfo (juce::CommandID commandID, juce::Application
     const int firstSelected = selectedRows.empty() ? -1 : selectedRows.front();
     const int lastSelected = selectedRows.empty() ? -1 : selectedRows.back();
     ShortcutCatalog::get().getCommandInfo (commandID, result);
+    if (commandID == CommandIDs::panicAll)
+        result.shortName = ko ("전체 페이드 정지 (") + ShortcutDisplay::currentKeys (shortcuts.get(), commandID) + ")";
 
     switch (commandID)
     {
@@ -1088,7 +1101,7 @@ bool MainComponent::perform (const InvocationInfo& info)
             break;
 
         case CommandIDs::workspaceSettings:
-            WorkspaceSettingsDialog::show (document, this);
+            WorkspaceSettingsDialog::show (document, *shortcuts, this);
             break;
 
         case CommandIDs::uiScale100:
@@ -3015,7 +3028,7 @@ void MainComponent::updateTransportStandby()
     };
     containerTabs.setInfoText (document.isActiveCart() ? ko ("카트: 버튼 클릭 = 실행")
                                 : ko ("선택 ") + number (document.cues.getSelectedIndex())
-                                    + ko (" · 다음 ") + number (document.cues.getPlayheadIndex()) + ko (" · Space = GO"));
+                                    + ko (" · 다음 ") + number (document.cues.getPlayheadIndex()) + ko (" · ") + ShortcutDisplay::currentKeys (shortcuts.get(), CommandIDs::go) + " = GO");
 }
 
 void MainComponent::updateAudioStatus()

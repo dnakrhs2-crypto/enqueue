@@ -82,6 +82,7 @@ target_sources(GoCueCore INTERFACE
     ${CMAKE_CURRENT_SOURCE_DIR}/src/app/ShortcutKeyInput.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/app/ShortcutProfile.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/app/ShortcutService.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/app/ShortcutDisplay.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/app/PanicKeyHook.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/ShortcutRouter.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/app/YouTubeDownloader.cpp
@@ -186,6 +187,8 @@ target_sources(Enqueue PRIVATE
     src/ui/TimeLoopsPanel.cpp
     src/ui/AudioSettingsDialog.cpp
     src/ui/WorkspaceSettingsDialog.cpp
+    src/ui/KeyCapture.cpp
+    src/ui/ShortcutSettingsTab.cpp
     src/ui/FooterBar.cpp
     src/ui/ActiveCuesPanel.cpp
     src/ui/ContainerTabs.cpp
