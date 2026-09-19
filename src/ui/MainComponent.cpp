@@ -7,6 +7,7 @@
 
 #include "app/BackupManager.h"
 #include "app/Commands.h"
+#include "app/ShortcutCatalog.h"
 #include "app/UiScale.h"
 #include "app/Updater.h"
 #include "audio/CueFileInfo.h"
@@ -270,6 +271,17 @@ MainComponent::MainComponent (AudioEngine& e, AppSettings& s, juce::ApplicationC
 
     commands.registerAllCommandsForTarget (this);
     commands.setFirstCommandTarget (this);
+    shortcuts = std::make_unique<ShortcutService> (commands, [this] (const juce::String& current, const juce::String& lastGood)
+    {
+        return settings.saveKeyboardShortcuts (current, lastGood) ? juce::Result::ok()
+                                                                 : juce::Result::fail (ko ("단축키 설정을 저장하지 못했습니다."));
+    });
+    const auto shortcutRestore = shortcuts->restore (settings.getKeyboardShortcutsXml(), settings.getKeyboardShortcutsLastGoodXml());
+    if (shortcutRestore.message.isNotEmpty())
+    {
+        juce::Logger::writeToLog ("Shortcuts: " + shortcutRestore.message);
+        transport.showStatus (ko ("단축키 설정을 읽지 못해 직전 정상 설정 또는 기본값을 사용합니다. 원문은 보존했습니다."), true);
+    }
     // JUCE asks key listeners last-added first: the command shortcuts go in first so the cue hotkeys are asked before
     // them (the two never overlap - a hotkey may not be a key the app uses - but the order is what the name says)
     addKeyListener (commands.getKeyMappings());
@@ -547,365 +559,204 @@ juce::ApplicationCommandTarget* MainComponent::getNextCommandTarget()
 
 void MainComponent::getAllCommands (juce::Array<juce::CommandID>& ids)
 {
-    ids.addArray ({ CommandIDs::go, CommandIDs::pauseToggle, CommandIDs::fadeOutSelected,
-                    CommandIDs::panicAll, CommandIDs::hardStopAll, CommandIDs::preview,
-                    CommandIDs::auditionGo, CommandIDs::auditionPreview, CommandIDs::toggleAlwaysAudition,
-                    CommandIDs::loadCue, CommandIDs::loadToTime, CommandIDs::resetCue, CommandIDs::resetAll,
-                    CommandIDs::addCue, CommandIDs::addFadeCue, CommandIDs::addFadeOutCue, CommandIDs::addDevampCue, CommandIDs::addGroupCue, CommandIDs::groupSelectedCues,
-                    CommandIDs::ungroupSelected, CommandIDs::collapseAllGroups, CommandIDs::expandAllGroups,
-                    CommandIDs::addControlCue, CommandIDs::addWaitCue, CommandIDs::addMemoCue, CommandIDs::addMicCue, CommandIDs::toggleSequenceRecording,
-                    CommandIDs::addCueList, CommandIDs::addCart, CommandIDs::nextContainer, CommandIDs::previousContainer,
-                    CommandIDs::renameContainer, CommandIDs::removeContainer,
-                    CommandIDs::revertFade, CommandIDs::fetchFadeLevels, CommandIDs::removeCue, CommandIDs::duplicateCue,
-                    CommandIDs::moveCueUp, CommandIDs::moveCueDown, CommandIDs::selectAll,
-                    CommandIDs::copyCues, CommandIDs::cutCues, CommandIDs::pasteCues, CommandIDs::pasteCueProperties,
-                    CommandIDs::find, CommandIDs::findNext,
-                    CommandIDs::renumber, CommandIDs::deleteNumbers, CommandIDs::findMissingFiles,
-                    CommandIDs::saveCueTemplate, CommandIDs::clearCueTemplate,
-                    CommandIDs::newProject, CommandIDs::openProject,
-                    CommandIDs::saveProject, CommandIDs::saveProjectAs,
-                    CommandIDs::undo, CommandIDs::redo, CommandIDs::toggleShowMode, CommandIDs::toggleActiveCues, CommandIDs::toggleInspector,
-                    CommandIDs::audioSettings, CommandIDs::audioPatches, CommandIDs::pluginManager, CommandIDs::masterInserts,
-                    CommandIDs::workspaceSettings,
-                    CommandIDs::checkForUpdates, CommandIDs::showManual, CommandIDs::feedbackChat, CommandIDs::about,
-                    CommandIDs::youtubeDownload,
-                    CommandIDs::uiScale100, CommandIDs::uiScale110, CommandIDs::uiScale125, CommandIDs::uiScale150 });
+    ids.addArray (CommandIDs::getAllMainCommands());
 }
 
 void MainComponent::getCommandInfo (juce::CommandID commandID, juce::ApplicationCommandInfo& result)
 {
-    const auto playback = ko ("재생");
-    const auto cueMenu  = ko ("큐");
-    const auto fileMenu = ko ("파일");
-    const auto editMenu = ko ("편집");
-    const auto settingsMenu = ko ("설정");   // devices, patches, plugins, this PC's UI scale, the project settings
     const bool hasSelection = document.cues.getSelected() != nullptr;
     const bool canEdit = ! showMode;
     const auto& selectedRows = document.cues.getSelectedIndices();
     const int firstSelected = selectedRows.empty() ? -1 : selectedRows.front();
     const int lastSelected = selectedRows.empty() ? -1 : selectedRows.back();
-    using juce::KeyPress;
-    using juce::ModifierKeys;
+    ShortcutCatalog::get().getCommandInfo (commandID, result);
 
     switch (commandID)
     {
-        case CommandIDs::go:
-            result.setInfo ("GO", ko ("플레이헤드 큐 재생(시퀀스 포함) 후 다음 큐로 이동 (일시정지된 큐가 있으면 재개)"), playback, 0);
-            result.addDefaultKeypress (KeyPress::spaceKey, ModifierKeys::noModifiers);
-            result.flags |= juce::ApplicationCommandInfo::wantsKeyUpDownCallbacks;
-            break;
-
-        case CommandIDs::pauseToggle:
-            result.setInfo (ko ("일시정지 / 재개"), ko ("선택 큐(재생 중이 아니면 가장 최근 재생 큐)를 일시정지하거나 재개"), playback, 0);
-            result.addDefaultKeypress ('P', ModifierKeys::noModifiers);
-            break;
-
-        case CommandIDs::fadeOutSelected:
-            result.setInfo (ko ("페이드아웃 정지"), ko ("선택 큐(재생 중이 아니면 가장 최근 재생 큐)를 정지 페이드로 정지"), playback, 0);
-            result.addDefaultKeypress ('F', ModifierKeys::noModifiers);
-            break;
-
-        case CommandIDs::panicAll:
-            result.setInfo (ko ("전체 페이드 정지 (Esc)"), ko ("재생 중인 모든 큐를 설정된 시간(기본 2초) 동안 페이드아웃 후 정지. 0.5초 안에 두 번 누르면 즉시 정지"), playback, 0);
-           #if ! JUCE_WINDOWS
-            result.addDefaultKeypress (KeyPress::escapeKey, ModifierKeys::noModifiers);   // on Windows the keyboard hook is the one Esc source
-            result.flags |= juce::ApplicationCommandInfo::wantsKeyUpDownCallbacks;   // the down edge only: a held Esc is one press
-           #endif
-            break;
-
-        case CommandIDs::hardStopAll:
-            result.setInfo (ko ("전체 즉시 정지"), ko ("페이드 없이 모든 큐를 바로 정지"), playback, 0);
-            break;
-
         case CommandIDs::preview:
-            result.setInfo (ko ("미리듣기"), ko ("선택 큐만 재생 (프리웨이트·시퀀스 없이, 플레이헤드는 그대로)"), playback, 0);
-            result.addDefaultKeypress ('V', ModifierKeys::noModifiers);
             result.setActive (hasSelection);
             break;
 
-        case CommandIDs::auditionGo:
-            result.setInfo (ko ("오디션 GO"), ko ("프로젝트 설정의 오디션 방식(그대로 / 출력 없음 / 대체 패치)으로 GO"), playback, 0);
-            result.addDefaultKeypress (KeyPress::spaceKey, ModifierKeys::altModifier);
-            break;
-
         case CommandIDs::auditionPreview:
-            result.setInfo (ko ("오디션 미리듣기"), ko ("선택 큐만 오디션 방식으로 재생"), playback, 0);
-            result.addDefaultKeypress ('V', ModifierKeys::altModifier);
             result.setActive (hasSelection);
             break;
 
         case CommandIDs::toggleAlwaysAudition:
-            result.setInfo (ko ("항상 오디션"), ko ("켜면 모든 GO / 미리듣기가 오디션 방식으로 재생됩니다 (GO 버튼이 파랗게)"), playback, 0);
             result.setTicked (document.settings.alwaysAudition);
             break;
 
         case CommandIDs::loadCue:
-            result.setInfo (ko ("로드"), ko ("선택 큐를 미리 로드해 GO 지연을 없앰"), playback, 0);
-            result.addDefaultKeypress ('L', ModifierKeys::noModifiers);
             result.setActive (hasSelection);
             break;
 
         case CommandIDs::loadToTime:
-            result.setInfo (ko ("시간으로 로드..."), ko ("선택 큐를 특정 위치에 로드 (음수 = 끝에서부터)"), playback, 0);
-            result.addDefaultKeypress ('T', ModifierKeys::commandModifier);
             result.setActive (hasSelection);
             break;
 
         case CommandIDs::resetCue:
-            result.setInfo (ko ("큐 리셋"), ko ("선택 큐를 정지하고 처음 상태로"), playback, 0);
             result.setActive (hasSelection);
             break;
 
-        case CommandIDs::resetAll:
-            result.setInfo (ko ("전체 리셋"), ko ("모든 큐를 즉시 정지하고 플레이헤드를 첫 큐로"), playback, 0);
-            break;
-
         case CommandIDs::addCue:
-            result.setInfo (ko ("큐 추가..."), ko ("오디오 파일을 골라 큐를 추가"), cueMenu, 0);
-            result.addDefaultKeypress (KeyPress::insertKey, ModifierKeys::noModifiers);
             result.setActive (canEdit);
             break;
 
         case CommandIDs::addFadeCue:
-            result.setInfo (ko ("페이드 인 큐 추가"), ko ("선택한 소리 큐를 대상으로: 실행하면 대상을 무음에서 시작해 설정 시간 동안 원래 레벨까지 올립니다"), cueMenu, 0);
-            result.addDefaultKeypress ('7', ModifierKeys::commandModifier);
             result.setActive (canEdit);
             break;
 
         case CommandIDs::addFadeOutCue:
-            result.setInfo (ko ("페이드 아웃 큐 추가"), ko ("선택한 소리 큐를 대상으로: 실행하면 대상을 설정 시간 동안 무음까지 내리고 정지합니다"), cueMenu, 0);
-            result.addDefaultKeypress ('7', ModifierKeys::commandModifier | ModifierKeys::shiftModifier);
             result.setActive (canEdit);
             break;
 
         case CommandIDs::addDevampCue:
-            result.setInfo (ko ("디밴프 큐 추가"), ko ("선택한 오디오 큐를 대상으로: 실행하면 대상이 지금 도는 반복을 마치고 이어가거나 멈추고, 그 순간 다음 큐를 시작"), cueMenu, 0);
-            result.addDefaultKeypress ('8', ModifierKeys::commandModifier);
             result.setActive (canEdit);
             break;
 
         case CommandIDs::addGroupCue:
-            result.setInfo (ko ("그룹 큐 추가"), ko ("빈 그룹을 선택 뒤에 추가 (자식은 그룹 아래로 끌어다 넣거나 Ctrl+G로 묶기)"), cueMenu, 0);
-            result.addDefaultKeypress ('0', ModifierKeys::commandModifier);
             result.setActive (canEdit && ! document.isActiveCart());   // a cart is flat
             break;
 
         case CommandIDs::groupSelectedCues:
-            result.setInfo (ko ("선택한 큐 그룹으로 묶기"), ko ("선택한 큐(하위 포함)를 새 그룹 안에 넣음"), cueMenu, 0);
-            result.addDefaultKeypress ('G', ModifierKeys::commandModifier);
             result.setActive (canEdit && document.cues.getSelectedIndex() >= 0 && ! document.isActiveCart());
             break;
 
         case CommandIDs::ungroupSelected:
-            result.setInfo (ko ("그룹 해제"), ko ("선택한 그룹을 없애고 자식을 한 단계 위로"), cueMenu, 0);
-            result.addDefaultKeypress ('G', ModifierKeys::commandModifier | ModifierKeys::shiftModifier);
             result.setActive (canEdit && document.cues.getSelected() != nullptr && document.cues.getSelected()->isGroup());
             break;
 
-        case CommandIDs::collapseAllGroups:
-            result.setInfo (ko ("모든 그룹 접기"), ko ("모든 그룹의 자식을 숨김"), cueMenu, 0);
-            break;
-
         case CommandIDs::addControlCue:
-            result.setInfo (ko ("제어 큐 추가"), ko ("선택한 큐를 대상으로 하는 제어 큐 (시작/정지/일시정지/로드/리셋/이동/활성화/비활성화/대상 변경 — 종류는 인스펙터에서)"), cueMenu, 0);
-            result.addDefaultKeypress ('9', ModifierKeys::commandModifier);
             result.setActive (canEdit);
             break;
 
         case CommandIDs::addWaitCue:
-            result.setInfo (ko ("대기 큐 추가"), ko ("정해진 시간 동안 아무것도 하지 않는 큐 (자동 팔로우 앞에 시간을 둘 때)"), cueMenu, 0);
             result.setActive (canEdit);
             break;
 
         case CommandIDs::addMicCue:
-            result.setInfo (ko ("마이크 큐 추가"), ko ("장치 입력을 레벨 매트릭스·인서트·패치로 보내는 큐 (정지할 때까지)"), cueMenu, 0);
-            result.addDefaultKeypress ('6', ModifierKeys::commandModifier);   // Ctrl+M is the master bus inserts
             result.setActive (canEdit);
             break;
 
         case CommandIDs::addMemoCue:
-            result.setInfo (ko ("메모 큐 추가"), ko ("아무것도 하지 않는 큐 (목록 안의 메모)"), cueMenu, 0);
             result.setActive (canEdit);
             break;
 
         case CommandIDs::addCueList:
-            result.setInfo (ko ("새 큐 리스트"), ko ("큐 리스트를 하나 더 추가 (위 탭)"), cueMenu, 0);
             result.setActive (canEdit);
             break;
 
         case CommandIDs::addCart:
-            result.setInfo (ko ("새 카트"), ko ("버튼 격자 카트를 추가 — 클릭하면 바로 재생, 플레이헤드/자동 진행 없음"), cueMenu, 0);
             result.setActive (canEdit);
             break;
 
         case CommandIDs::nextContainer:
-            result.setInfo (ko ("다음 리스트/카트"), ko ("오른쪽 탭으로"), cueMenu, 0);
-            result.addDefaultKeypress (juce::KeyPress::pageDownKey, ModifierKeys::commandModifier);
             result.setActive (document.getNumContainers() > 1 && canEdit);   // show mode: the GO target list stays
             break;
 
         case CommandIDs::previousContainer:
-            result.setInfo (ko ("이전 리스트/카트"), ko ("왼쪽 탭으로"), cueMenu, 0);
-            result.addDefaultKeypress (juce::KeyPress::pageUpKey, ModifierKeys::commandModifier);
             result.setActive (document.getNumContainers() > 1 && canEdit);   // show mode: the GO target list stays
             break;
 
         case CommandIDs::renameContainer:
-            result.setInfo (ko ("리스트/카트 이름 바꾸기..."), ko ("현재 탭의 이름"), cueMenu, 0);
             result.setActive (canEdit);
             break;
 
         case CommandIDs::removeContainer:
-            result.setInfo (ko ("리스트/카트 삭제"), ko ("현재 탭을 큐와 함께 삭제 (실행 취소 가능)"), cueMenu, 0);
             result.setActive (canEdit && document.getNumContainers() > 1);
             break;
 
         case CommandIDs::toggleSequenceRecording:
-            result.setInfo (controller.isRecording() ? ko ("시퀀스 녹음 정지 (") + juce::String (controller.getNumRecorded()) + ko ("개 기록됨)") : ko ("시퀀스 녹음 시작..."),
-                            ko ("녹음 중 시작되는 큐와 시각을 기록해 정지할 때 타임라인 그룹(시작 큐 + 프리웨이트)으로 만듦"), cueMenu, 0);
-            result.addDefaultKeypress ('E', ModifierKeys::commandModifier | ModifierKeys::shiftModifier);
+            result.shortName = controller.isRecording() ? ko ("시퀀스 녹음 정지 (") + juce::String (controller.getNumRecorded()) + ko ("개 기록됨)") : ko ("시퀀스 녹음 시작...");
             result.setActive (canEdit || controller.isRecording());
             result.setTicked (controller.isRecording());
             break;
 
-        case CommandIDs::expandAllGroups:
-            result.setInfo (ko ("모든 그룹 펼치기"), ko ("모든 그룹의 자식을 표시"), cueMenu, 0);
-            break;
-
         case CommandIDs::revertFade:
-            result.setInfo (ko ("페이드 되돌리기"), ko ("가장 최근 페이드의 대상을 페이드 전 레벨로 되돌림"), playback, 0);
-            result.addDefaultKeypress ('R', ModifierKeys::commandModifier | ModifierKeys::shiftModifier);
             result.setActive (controller.getFadeRunner().canRevert());
             break;
 
         case CommandIDs::fetchFadeLevels:
-            result.setInfo (ko ("대상에서 레벨 가져오기"), ko ("선택한 페이드 큐의 목표 레벨을 대상 큐의 현재 레벨로"), cueMenu, 0);
-            result.addDefaultKeypress ('T', ModifierKeys::commandModifier | ModifierKeys::shiftModifier);
             result.setActive (canEdit && hasSelection && document.cues.getSelected()->isFade());
             break;
 
         case CommandIDs::removeCue:
-            result.setInfo (selectedRows.size() > 1 ? ko ("큐 삭제 (") + juce::String (selectedRows.size()) + ")" : ko ("큐 삭제"),
-                            ko ("선택 큐 삭제"), cueMenu, 0);
-            result.addDefaultKeypress (KeyPress::deleteKey, ModifierKeys::noModifiers);
+            result.shortName = selectedRows.size() > 1 ? ko ("큐 삭제 (") + juce::String (selectedRows.size()) + ")" : ko ("큐 삭제");
             result.setActive (canEdit && hasSelection);
             break;
 
         case CommandIDs::duplicateCue:
-            result.setInfo (ko ("큐 복제"), ko ("선택 큐를 플러그인 체인까지 바로 아래에 복제"), cueMenu, 0);
-            result.addDefaultKeypress ('D', ModifierKeys::commandModifier);
             result.setActive (canEdit && hasSelection);
             break;
 
         case CommandIDs::moveCueUp:
-            result.setInfo (ko ("위로 이동"), ko ("선택 큐를 한 칸 위로"), cueMenu, 0);
-            result.addDefaultKeypress (KeyPress::upKey, ModifierKeys::commandModifier);
             result.setActive (canEdit && firstSelected > 0);
             break;
 
         case CommandIDs::moveCueDown:
-            result.setInfo (ko ("아래로 이동"), ko ("선택 큐를 한 칸 아래로"), cueMenu, 0);
-            result.addDefaultKeypress (KeyPress::downKey, ModifierKeys::commandModifier);
             result.setActive (canEdit && hasSelection && lastSelected < document.cues.size() - 1);
             break;
 
         case CommandIDs::selectAll:
-            result.setInfo (ko ("모두 선택"), ko ("모든 큐 선택"), editMenu, 0);
-            result.addDefaultKeypress ('A', ModifierKeys::commandModifier);
             result.setActive (! document.cues.isEmpty());
             break;
 
         case CommandIDs::copyCues:
-            result.setInfo (selectedRows.size() > 1 ? ko ("큐 복사 (") + juce::String (selectedRows.size()) + ")" : ko ("큐 복사"),
-                            ko ("선택 큐를 플러그인 체인까지 클립보드에 복사"), editMenu, 0);
-            result.addDefaultKeypress ('C', ModifierKeys::commandModifier);
+            result.shortName = selectedRows.size() > 1 ? ko ("큐 복사 (") + juce::String (selectedRows.size()) + ")" : ko ("큐 복사");
             result.setActive (hasSelection);
             break;
 
         case CommandIDs::cutCues:
-            result.setInfo (selectedRows.size() > 1 ? ko ("큐 잘라내기 (") + juce::String (selectedRows.size()) + ")" : ko ("큐 잘라내기"),
-                            ko ("선택 큐를 복사한 뒤 삭제"), editMenu, 0);
-            result.addDefaultKeypress ('X', ModifierKeys::commandModifier);
+            result.shortName = selectedRows.size() > 1 ? ko ("큐 잘라내기 (") + juce::String (selectedRows.size()) + ")" : ko ("큐 잘라내기");
             result.setActive (canEdit && hasSelection);
             break;
 
         case CommandIDs::pasteCues:
-            result.setInfo (clipboard.cues.size() > 1 ? ko ("큐 붙여넣기 (") + juce::String (clipboard.cues.size()) + ")" : ko ("큐 붙여넣기"),
-                            ko ("복사한 큐를 선택 큐 아래에 새 큐로 붙여넣기"), editMenu, 0);
-            result.addDefaultKeypress ('V', ModifierKeys::commandModifier);
+            result.shortName = clipboard.cues.size() > 1 ? ko ("큐 붙여넣기 (") + juce::String (clipboard.cues.size()) + ")" : ko ("큐 붙여넣기");
             result.setActive (canEdit && ! clipboard.cues.empty());
             break;
 
         case CommandIDs::pasteCueProperties:
-            result.setInfo (ko ("큐 속성 붙여넣기..."), ko ("복사한 큐의 속성(색·시간·트리거·트림·레벨·플러그인)만 선택 큐들에 적용"), editMenu, 0);
-            result.addDefaultKeypress ('V', ModifierKeys::commandModifier | ModifierKeys::shiftModifier);
             result.setActive (canEdit && hasSelection && ! clipboard.cues.empty());
             break;
 
         case CommandIDs::find:
-            result.setInfo (ko ("찾기..."), ko ("번호·이름·파일·메모로 큐 찾기"), editMenu, 0);
-            result.addDefaultKeypress ('F', ModifierKeys::commandModifier);
             result.setActive (! document.cues.isEmpty());
             break;
 
         case CommandIDs::findNext:
-            result.setInfo (ko ("다음 찾기"), ko ("같은 검색어로 다음 큐 찾기"), editMenu, 0);
-            result.addDefaultKeypress (KeyPress::F3Key, ModifierKeys::noModifiers);
             result.setActive (lastSearch.isNotEmpty() && ! document.cues.isEmpty());
             break;
 
         case CommandIDs::saveCueTemplate:
-            result.setInfo (ko ("선택 큐를 새 큐 기본값으로"), ko ("이후 추가하는 큐가 이 큐의 설정(페이드·게인·색·트리거·플러그인 등)을 물려받음 (프로젝트에 저장)"), cueMenu, 0);
             result.setActive (canEdit && hasSelection);
             break;
 
         case CommandIDs::clearCueTemplate:
-            result.setInfo (ko ("새 큐 기본값 초기화"), ko ("새 큐를 다시 기본 설정으로 추가"), cueMenu, 0);
             result.setActive (canEdit && document.settings.hasCueTemplate);
             break;
 
         case CommandIDs::renumber:
-            result.setInfo (ko ("선택 큐 재번호..."), ko ("선택한 큐에 순서대로 번호를 매김 (시작·증가·접두·접미)"), cueMenu, 0);
-            result.addDefaultKeypress ('R', ModifierKeys::commandModifier);
             result.setActive (canEdit && hasSelection);
             break;
 
         case CommandIDs::deleteNumbers:
-            result.setInfo (ko ("선택 큐 번호 삭제"), ko ("선택한 큐의 번호를 지움"), cueMenu, 0);
             result.setActive (canEdit && hasSelection);
             break;
 
         case CommandIDs::findMissingFiles:
-            result.setInfo (ko ("없어진 파일 찾기..."), ko ("폴더를 골라 같은 이름의 파일로 다시 연결"), cueMenu, 0);
             result.setActive (canEdit && countBrokenCues() > 0);
             break;
 
         case CommandIDs::newProject:
-            result.setInfo (ko ("새 프로젝트"), ko ("빈 큐 리스트로 시작"), fileMenu, 0);
             result.setActive (canEdit);   // show mode: the project, devices, patches, plugins and updates are locked
-            result.addDefaultKeypress ('N', ModifierKeys::commandModifier);
             break;
 
         case CommandIDs::openProject:
-            result.setInfo (ko ("열기..."), ko ("프로젝트 열기 (.enqueue, .gocue)"), fileMenu, 0);
             result.setActive (canEdit);   // show mode: the project, devices, patches, plugins and updates are locked
-            result.addDefaultKeypress ('O', ModifierKeys::commandModifier);
-            break;
-
-        case CommandIDs::saveProject:
-            result.setInfo (ko ("저장"), ko ("프로젝트 저장 (플러그인 상태 포함)"), fileMenu, 0);
-            result.addDefaultKeypress ('S', ModifierKeys::commandModifier);
-            break;
-
-        case CommandIDs::saveProjectAs:
-            result.setInfo (ko ("다른 이름으로 저장..."), ko ("프로젝트를 새 파일로 저장"), fileMenu, 0);
-            result.addDefaultKeypress ('S', ModifierKeys::commandModifier | ModifierKeys::shiftModifier);
             break;
 
         case CommandIDs::workspaceSettings:
-            result.setInfo (ko ("프로젝트 설정..."), ko ("GO 간격, 전체 페이드 정지 시간, 자동 번호, 백업, 레벨 한계, 오디션 방식 (프로젝트에 저장)"), settingsMenu, 0);
             result.setActive (canEdit);   // show mode: the project, devices, patches, plugins and updates are locked
-            result.addDefaultKeypress (',', ModifierKeys::commandModifier | ModifierKeys::shiftModifier);
             break;
 
         case CommandIDs::uiScale100:
@@ -922,91 +773,56 @@ void MainComponent::getCommandInfo (juce::CommandID commandID, juce::Application
 
             if (percent == saved && inForce != saved)
                 name << ko ("   — 지금은 ") << inForce << ko ("% (화면이 작거나 안전 모드)");
-
-            result.setInfo (name, ko ("창 전체(글씨·버튼·행·간격)가 같은 비율로 커집니다. 프로젝트가 아니라 이 PC에 저장"), settingsMenu, 0);
+            result.shortName = name;
             result.setTicked (percent == saved);
             result.setActive (canEdit);   // show mode: the layout stays put during the show
             break;
         }
 
         case CommandIDs::undo:
-            result.setInfo (document.canUndo() ? ko ("실행 취소: ") + document.getUndoName() : ko ("실행 취소"),
-                            ko ("마지막 편집을 되돌립니다"), editMenu, 0);
-            result.addDefaultKeypress ('Z', ModifierKeys::commandModifier);
+            result.shortName = document.canUndo() ? ko ("실행 취소: ") + document.getUndoName() : ko ("실행 취소");
             result.setActive (canEdit && document.canUndo());
             break;
 
         case CommandIDs::redo:
-            result.setInfo (document.canRedo() ? ko ("다시 실행: ") + document.getRedoName() : ko ("다시 실행"),
-                            ko ("되돌린 편집을 다시 적용합니다"), editMenu, 0);
-            result.addDefaultKeypress ('Y', ModifierKeys::commandModifier);
-            result.addDefaultKeypress ('Z', ModifierKeys::commandModifier | ModifierKeys::shiftModifier);
+            result.shortName = document.canRedo() ? ko ("다시 실행: ") + document.getRedoName() : ko ("다시 실행");
             result.setActive (canEdit && document.canRedo());
             break;
 
         case CommandIDs::toggleShowMode:
-            result.setInfo (showMode ? ko ("편집 모드로") : ko ("쇼 모드로 (편집 잠금)"),
-                            ko ("쇼 모드에서는 큐 추가·삭제·이동·속성 편집이 잠깁니다 (재생·저장은 그대로)"), editMenu, 0);
-            result.addDefaultKeypress ('M', ModifierKeys::commandModifier | ModifierKeys::shiftModifier);
+            result.shortName = showMode ? ko ("편집 모드로") : ko ("쇼 모드로 (편집 잠금)");
             break;
 
         case CommandIDs::toggleActiveCues:
-            result.setInfo (activeCuesVisible ? ko ("활성 큐 패널 접기") : ko ("활성 큐 패널 펴기"),
-                            ko ("재생 중인 큐 목록 (일시정지·스크럽·페이드 정지). 구분선을 끌면 너비가 바뀝니다"), editMenu, 0);
-            result.addDefaultKeypress ('L', ModifierKeys::commandModifier);
+            result.shortName = activeCuesVisible ? ko ("활성 큐 패널 접기") : ko ("활성 큐 패널 펴기");
             break;
 
         case CommandIDs::toggleInspector:
-            result.setInfo (inspectorCollapsed ? ko ("인스펙터 펴기") : ko ("인스펙터 접기"),
-                            ko ("아래 인스펙터 패널 접기 / 펴기. 구분선을 끌면 높이가 바뀝니다"), editMenu, 0);
-            result.addDefaultKeypress ('I', ModifierKeys::commandModifier);
+            result.shortName = inspectorCollapsed ? ko ("인스펙터 펴기") : ko ("인스펙터 접기");
             break;
 
         case CommandIDs::audioSettings:
-            result.setInfo (ko ("오디오 출력 설정..."), ko ("출력 장치(ASIO / WASAPI) 선택"), settingsMenu, 0);
             result.setActive (canEdit);   // show mode: the project, devices, patches, plugins and updates are locked
-            result.addDefaultKeypress (',', ModifierKeys::commandModifier);
             break;
 
         case CommandIDs::audioPatches:
-            result.setInfo (ko ("오디오 패치..."), ko ("큐 출력 → 장치 출력 라우팅, 출력 이름, 스테레오 묶기, 출력 인서트"), settingsMenu, 0);
             result.setActive (canEdit);   // show mode: the project, devices, patches, plugins and updates are locked
-            result.addDefaultKeypress ('P', ModifierKeys::commandModifier | ModifierKeys::shiftModifier);
             break;
 
         case CommandIDs::pluginManager:
-            result.setInfo (ko ("VST3 플러그인 관리..."), ko ("VST3 플러그인 스캔 / 목록"), settingsMenu, 0);
             result.setActive (canEdit);   // show mode: the project, devices, patches, plugins and updates are locked
-            result.addDefaultKeypress ('P', ModifierKeys::commandModifier);
             break;
 
         case CommandIDs::masterInserts:
-            result.setInfo (ko ("마스터 버스 인서트..."), ko ("모든 큐가 통과하는 마스터 VST3 체인"), settingsMenu, 0);
             result.setActive (canEdit);   // show mode: the project, devices, patches, plugins and updates are locked
-            result.addDefaultKeypress ('M', ModifierKeys::commandModifier);
             break;
 
         case CommandIDs::checkForUpdates:
-            result.setInfo (ko ("업데이트 확인..."), ko ("GitHub Releases에서 새 버전 확인"), ko ("도움말"), 0);
             result.setActive (canEdit && Updater::isAvailable());   // show mode: no update UI during a show
             break;
 
-        case CommandIDs::showManual:
-            result.setInfo (ko ("사용 설명서..."), ko ("기능 설명과 단축키"), ko ("도움말"), 0);
-            result.addDefaultKeypress (juce::KeyPress::F1Key, ModifierKeys::commandModifier);
-            break;
-
         case CommandIDs::feedbackChat:
-            result.setInfo (ko ("커뮤니티"), ko ("카카오톡 오픈채팅 열기"), ko ("도움말"), 0);
             result.setActive (juce::String (Links::feedbackChat).isNotEmpty());
-            break;
-
-        case CommandIDs::about:
-            result.setInfo (ko ("앤큐 정보"), ko ("버전 정보"), ko ("도움말"), 0);
-            break;
-
-        case CommandIDs::youtubeDownload:
-            result.setInfo (ko ("유튜브 다운로드..."), ko ("유튜브 링크의 소리를 mp3로 받아 큐에 넣기"), ko ("유튜브다운"), 0);
             break;
 
         default:
@@ -1049,6 +865,12 @@ bool MainComponent::perform (const InvocationInfo& info)
             break;
 
         case CommandIDs::panicAll:
+           #if JUCE_WINDOWS
+            // Session A installs Esc in the display mapping. Keyboard panic still belongs exclusively to the
+            // existing Esc hook until session B replaces it with the current panic-key list.
+            if (info.invocationMethod == InvocationInfo::fromKeyPress)
+                break;
+           #endif
            #if ! JUCE_WINDOWS
             if (info.invocationMethod == InvocationInfo::fromKeyPress)
             {
@@ -2075,6 +1897,7 @@ int MainComponent::applyUiScale (int percent)
 void MainComponent::setShowMode (bool shouldBeShowMode)
 {
     showMode = shouldBeShowMode;
+    shortcuts->setEditingLocked (showMode);
     showModeFlag.store (shouldBeShowMode, std::memory_order_release);
     activeCues.setScrubEnabled (! showMode);   // a stray click on a progress bar must not move a running cue
     table.setEditable (! showMode);

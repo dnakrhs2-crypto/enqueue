@@ -90,4 +90,33 @@ enum : juce::CommandID
     uiScale150
 };
 
+/** The registration path used by MainComponent, kept independent of the shortcut catalog. */
+inline const juce::Array<juce::CommandID>& getAllMainCommands()
+{
+    static const juce::Array<juce::CommandID> ids { CommandIDs::go, CommandIDs::pauseToggle, CommandIDs::fadeOutSelected,
+                    CommandIDs::panicAll, CommandIDs::hardStopAll, CommandIDs::preview,
+                    CommandIDs::auditionGo, CommandIDs::auditionPreview, CommandIDs::toggleAlwaysAudition,
+                    CommandIDs::loadCue, CommandIDs::loadToTime, CommandIDs::resetCue, CommandIDs::resetAll,
+                    CommandIDs::addCue, CommandIDs::addFadeCue, CommandIDs::addFadeOutCue, CommandIDs::addDevampCue, CommandIDs::addGroupCue, CommandIDs::groupSelectedCues,
+                    CommandIDs::ungroupSelected, CommandIDs::collapseAllGroups, CommandIDs::expandAllGroups,
+                    CommandIDs::addControlCue, CommandIDs::addWaitCue, CommandIDs::addMemoCue, CommandIDs::addMicCue, CommandIDs::toggleSequenceRecording,
+                    CommandIDs::addCueList, CommandIDs::addCart, CommandIDs::nextContainer, CommandIDs::previousContainer,
+                    CommandIDs::renameContainer, CommandIDs::removeContainer,
+                    CommandIDs::revertFade, CommandIDs::fetchFadeLevels, CommandIDs::removeCue, CommandIDs::duplicateCue,
+                    CommandIDs::moveCueUp, CommandIDs::moveCueDown, CommandIDs::selectAll,
+                    CommandIDs::copyCues, CommandIDs::cutCues, CommandIDs::pasteCues, CommandIDs::pasteCueProperties,
+                    CommandIDs::find, CommandIDs::findNext,
+                    CommandIDs::renumber, CommandIDs::deleteNumbers, CommandIDs::findMissingFiles,
+                    CommandIDs::saveCueTemplate, CommandIDs::clearCueTemplate,
+                    CommandIDs::newProject, CommandIDs::openProject,
+                    CommandIDs::saveProject, CommandIDs::saveProjectAs,
+                    CommandIDs::undo, CommandIDs::redo, CommandIDs::toggleShowMode, CommandIDs::toggleActiveCues, CommandIDs::toggleInspector,
+                    CommandIDs::audioSettings, CommandIDs::audioPatches, CommandIDs::pluginManager, CommandIDs::masterInserts,
+                    CommandIDs::workspaceSettings,
+                    CommandIDs::checkForUpdates, CommandIDs::showManual, CommandIDs::feedbackChat, CommandIDs::about,
+                    CommandIDs::youtubeDownload,
+                    CommandIDs::uiScale100, CommandIDs::uiScale110, CommandIDs::uiScale125, CommandIDs::uiScale150 };
+    return ids;
+}
+
 } // namespace gocue::CommandIDs

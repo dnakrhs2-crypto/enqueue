@@ -4,6 +4,7 @@
 #include "app/CueController.h"
 #include "app/ProjectDocument.h"
 #include "app/Scheduler.h"
+#include "app/ShortcutService.h"
 #include "audio/AudioEngine.h"
 #include "ui/ActiveCuesPanel.h"
 #include "ui/ContainerTabs.h"
@@ -44,6 +45,8 @@ class MainComponent : public juce::Component,
 public:
     MainComponent (AudioEngine& engine, AppSettings& settings, juce::ApplicationCommandManager& commands);
     ~MainComponent() override;
+
+    ShortcutService& getShortcutService() noexcept { return *shortcuts; }
 
     void resized() override;
     void paint (juce::Graphics& g) override;
@@ -215,6 +218,7 @@ private:
     AudioEngine& engine;
     AppSettings& settings;
     juce::ApplicationCommandManager& commands;
+    std::unique_ptr<ShortcutService> shortcuts;
     ProjectDocument document;
     PluginWindowManager pluginWindows;
     Scheduler scheduler;

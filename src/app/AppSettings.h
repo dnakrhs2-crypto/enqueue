@@ -3,6 +3,7 @@
 #include <juce_data_structures/juce_data_structures.h>
 
 #include <memory>
+#include <optional>
 
 namespace gocue
 {
@@ -13,6 +14,8 @@ class AppSettings
 {
 public:
     AppSettings();
+    /** Uses an externally owned file (e.g. an isolated test file), without touching AppData or migration. */
+    explicit AppSettings (juce::PropertiesFile& storage);
 
     std::unique_ptr<juce::XmlElement> getAudioDeviceState() const;
     void setAudioDeviceState (const juce::XmlElement* xml);
@@ -65,7 +68,16 @@ public:
     juce::StringArray getDisabledPlugins() const;
     void setDisabledPlugins (const juce::StringArray& keys);
 
-    /** Writes pending changes to disk now. */
+    /** Raw XML preserves malformed/future input; missing and present-but-empty are distinct. */
+    std::optional<juce::String> getKeyboardShortcutsXml() const;
+    std::optional<juce::String> getKeyboardShortcutsLastGoodXml() const;
+    /** Immediately saves the pair. Failure restores both in-memory properties and their dirty state,
+        so the normal delayed save/exit flush cannot commit the rejected candidate later. */
+    bool saveKeyboardShortcuts (const juce::String& currentXml, const juce::String& lastGoodXml);
+
+    /** Writes pending changes to disk now and reports PropertiesFile's result. */
+    bool saveNow();
+    /** Existing shutdown/automatic-save paths remain available. */
     void flush();
 
     /** The underlying file, for JUCE components that persist their own settings (plugin scanner). */

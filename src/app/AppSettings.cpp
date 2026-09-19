@@ -22,6 +22,8 @@ namespace Keys
     constexpr const char* disabledPlugins   = "disabledPlugins";
     constexpr const char* lufsAverageSeconds = "lufsAverageSeconds";
     constexpr const char* uiScalePercent    = "uiScalePercent";
+    constexpr const char* keyboardShortcuts = "keyboardShortcuts";
+    constexpr const char* keyboardShortcutsLastGood = "keyboardShortcutsLastGood";
 }
 
 AppSettings::AppSettings()
@@ -41,6 +43,8 @@ AppSettings::AppSettings()
     properties.setStorageParameters (options);
     settings = properties.getUserSettings();
 }
+
+AppSettings::AppSettings (juce::PropertiesFile& storage) : settings (&storage) {}
 
 std::unique_ptr<juce::XmlElement> AppSettings::getAudioDeviceState() const
 {
@@ -211,9 +215,52 @@ void AppSettings::setUiScalePercent (int percent)
         settings->setValue (Keys::uiScalePercent, percent);
 }
 
+std::optional<juce::String> AppSettings::getKeyboardShortcutsXml() const
+{
+    if (settings->containsKey (Keys::keyboardShortcuts))
+        return settings->getValue (Keys::keyboardShortcuts);
+    return std::nullopt;
+}
+
+std::optional<juce::String> AppSettings::getKeyboardShortcutsLastGoodXml() const
+{
+    if (settings->containsKey (Keys::keyboardShortcutsLastGood))
+        return settings->getValue (Keys::keyboardShortcutsLastGood);
+    return std::nullopt;
+}
+
+bool AppSettings::saveKeyboardShortcuts (const juce::String& currentXml, const juce::String& lastGoodXml)
+{
+    const juce::ScopedLock lock (settings->getLock());
+    const auto previous = getKeyboardShortcutsXml();
+    const auto previousGood = getKeyboardShortcutsLastGoodXml();
+    const bool wasDirty = settings->needsToBeSaved();
+    settings->setValue (Keys::keyboardShortcuts, currentXml);
+    settings->setValue (Keys::keyboardShortcutsLastGood, lastGoodXml);
+    if (saveNow())
+        return true;
+
+    const auto restore = [this] (const char* key, const std::optional<juce::String>& value)
+    {
+        if (value.has_value())
+            settings->setValue (key, *value);
+        else
+            settings->removeValue (key);
+    };
+    restore (Keys::keyboardShortcuts, previous);
+    restore (Keys::keyboardShortcutsLastGood, previousGood);
+    settings->setNeedsToBeSaved (wasDirty);
+    return false;
+}
+
+bool AppSettings::saveNow()
+{
+    return settings->saveIfNeeded();
+}
+
 void AppSettings::flush()
 {
-    settings->saveIfNeeded();
+    saveNow();
 }
 
 juce::File AppSettings::getDeadMansPedalFile() const
