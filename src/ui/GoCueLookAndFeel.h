@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ui/UiUtils.h"
+#include "ui/ShortcutRouter.h"
 
 #include <juce_gui_basics/juce_gui_basics.h>
 
@@ -11,6 +12,21 @@ namespace gocue
 class GoCueLookAndFeel : public juce::LookAndFeel_V4
 {
 public:
+    void preparePopupMenuWindow (juce::Component& window) override
+    {
+        juce::LookAndFeel_V4::preparePopupMenuWindow (window);
+        ShortcutRouter::watchWindow (&window);
+    }
+
+    juce::AlertWindow* createAlertWindow (const juce::String& title, const juce::String& message,
+                                        const juce::String& button1, const juce::String& button2, const juce::String& button3,
+                                        juce::MessageBoxIconType icon, int numButtons, juce::Component* associated) override
+    {
+        auto* window = juce::LookAndFeel_V4::createAlertWindow (title, message, button1, button2, button3, icon, numButtons, associated);
+        ShortcutRouter::watchWindow (window);
+        return window;
+    }
+
     GoCueLookAndFeel()
         : juce::LookAndFeel_V4 (juce::LookAndFeel_V4::ColourScheme (
               Palette::background, Palette::panel, Palette::panel, Palette::outline, Palette::text,

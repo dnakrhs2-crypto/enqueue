@@ -53,6 +53,8 @@ public:
     /** Esc: fades everything out over the panic time and cancels pending waits; a second Esc within
         doubleEscSeconds stops at once. */
     void panicAll();
+    /** A keyboard gesture already classified from its event timestamp. */
+    void panicAll (bool hardStop);
     void hardStopAll();
     /** V: fires the selected cue alone (no pre-wait, no sequence) without moving the playhead. Alt+V auditions. */
     GoResult preview (bool audition = false);

@@ -2051,6 +2051,13 @@ bool CueController::fadeOutTarget()
 
 void CueController::panicAll()
 {
+    const double now = clock();
+    panicAll (now - lastPanicTime <= doubleEscSeconds);
+    lastPanicTime = now;
+}
+
+void CueController::panicAll (bool hardStop)
+{
     fadeRunner.stopAll();
     const double now = clock();
     cancelPending();
@@ -2058,7 +2065,7 @@ void CueController::panicAll()
     playlists.clear();
     waits.clear();
 
-    if (now - lastPanicTime <= doubleEscSeconds)
+    if (hardStop)
     {
         engine.stopAll();
         panicLatchUntil = now + 0.1;   // the 5 ms gate close, with margin: nothing starts on top of the stop
@@ -2072,7 +2079,6 @@ void CueController::panicAll()
         status (ko ("전체 페이드 정지 (") + WorkspaceSettings::secondsText (seconds) + ko ("초)"));
     }
 
-    lastPanicTime = now;
 }
 
 bool CueController::isPanicLatched() const

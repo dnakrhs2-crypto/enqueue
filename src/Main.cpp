@@ -9,29 +9,8 @@
 
 #include <juce_gui_extra/juce_gui_extra.h>
 
-#if JUCE_WINDOWS
- #include <windows.h>
-#endif
-
 namespace gocue
 {
-
-#if JUCE_WINDOWS
-namespace
-{
-    std::function<void()> escapeHandler;
-    HHOOK escapeHook = nullptr;
-
-    LRESULT CALLBACK escapeHookProc (int code, WPARAM wParam, LPARAM lParam)
-    {
-        // a key-down that is not an auto-repeat (bit 30: previous state, bit 31: transition)
-        if (code == HC_ACTION && wParam == VK_ESCAPE && (lParam & 0xC0000000) == 0)
-            juce::MessageManager::callAsync ([] { if (escapeHandler) escapeHandler(); });
-
-        return CallNextHookEx (nullptr, code, wParam, lParam);
-    }
-}
-#endif
 
 class GoCueApplication : public juce::JUCEApplication,
                          private juce::ChangeListener,
@@ -94,7 +73,6 @@ public:
 
         const bool deviceFallback = savedOutputName.isNotEmpty() && savedOutputName != openedOutputName;
         mainWindow->getMainComponent().setAutoStartOnOpenAllowed (! safeMode && ! deviceFallback);   // a quiet launch: nothing starts by itself
-        installEscapeHook();
 
         mainWindow->getMainComponent().openProjectFromCommandLine (commandLine);
 
@@ -159,7 +137,6 @@ public:
 
     void shutdown() override
     {
-        removeEscapeHook();
         stopTimer();
         Updater::shutdown();
 
@@ -274,6 +251,7 @@ private:
                 setName (title.startsWith ("Enqueue") ? "Enqueue " + JUCEApplication::getInstance()->getApplicationVersion() + title.substring (7) : title);
             };
             setContentOwned (content, true);
+            ShortcutRouter::setWindowScope (*this, ShortcutKeyContext::Window::main);
             mainComponent = content;
 
             setResizable (true, false);
@@ -319,34 +297,6 @@ private:
     juce::Time launchedAt, lastQuietCheck;
     bool safeMode = false;
 
-    // Esc from anywhere: a plugin editor's own window takes the keyboard and JUCE never sees the key, so a
-    // thread-local keyboard hook watches every window of this thread. The press is not consumed (a dialog still
-    // cancels), the panic itself runs from the message queue.
-    void installEscapeHook()
-    {
-       #if JUCE_WINDOWS
-        escapeHandler = [this]
-        {
-            if (mainWindow != nullptr)
-                mainWindow->getMainComponent().panicFromAnywhere();
-        };
-
-        escapeHook = SetWindowsHookExW (WH_KEYBOARD, escapeHookProc, nullptr, GetCurrentThreadId());
-       #endif
-    }
-
-    void removeEscapeHook()
-    {
-       #if JUCE_WINDOWS
-        if (escapeHook != nullptr)
-        {
-            UnhookWindowsHookEx (escapeHook);
-            escapeHook = nullptr;
-        }
-
-        escapeHandler = nullptr;
-       #endif
-    }
     std::unique_ptr<AppSettings> settings;
     std::unique_ptr<AudioEngine> engine;
     std::unique_ptr<MainWindow> mainWindow;

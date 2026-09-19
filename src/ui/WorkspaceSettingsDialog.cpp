@@ -1,3 +1,4 @@
+#include "ui/ShortcutRouter.h"
 #include "ui/WorkspaceSettingsDialog.h"
 
 #include "ui/UiUtils.h"
@@ -449,6 +450,7 @@ void show (ProjectDocument& document, juce::Component* centreAround)
     options.useNativeTitleBar = true;
     options.resizable = false;
     dialog = options.launchAsync();
+    ShortcutRouter::watchWindow (dialog.getComponent());
 }
 
 void closeIfOpen()

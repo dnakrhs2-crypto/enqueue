@@ -14,16 +14,19 @@ public:
     void runTest() override
     {
         const auto stamp = juce::Uuid().toString().substring (0, 8);
-        const auto appData = juce::File::getSpecialLocation (juce::File::userApplicationDataDirectory);
+        // The migration operates on sibling folders supplied by Options. Keep
+        // the same real filesystem assertions without requiring user AppData access.
+        const auto fixture = juce::File::getSpecialLocation (juce::File::tempDirectory)
+                                 .getChildFile ("EnqueueMigration-" + stamp);
         const auto oldName = "EnqueueTestOld-" + stamp;
         const auto newName = "EnqueueTestNew-" + stamp;
-        const auto oldFolder = appData.getChildFile (oldName);
-        const auto newFolder = appData.getChildFile (newName);
+        const auto oldFolder = fixture.getChildFile (oldName);
+        const auto newFolder = fixture.getChildFile (newName);
 
         juce::PropertiesFile::Options options;
         options.applicationName = "Enqueue";
         options.filenameSuffix = "settings";
-        options.folderName = newName;
+        options.folderName = newFolder.getFullPathName();
         options.osxLibrarySubFolder = "Application Support";
         options.commonToAllUsers = false;
 
@@ -59,6 +62,7 @@ public:
 
         oldFolder.deleteRecursively();
         newFolder.deleteRecursively();
+        fixture.deleteRecursively();
     }
 };
 

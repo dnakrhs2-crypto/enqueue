@@ -5,6 +5,7 @@
 #include "app/ProjectDocument.h"
 #include "app/Scheduler.h"
 #include "app/ShortcutService.h"
+#include "ui/ShortcutRouter.h"
 #include "audio/AudioEngine.h"
 #include "ui/ActiveCuesPanel.h"
 #include "ui/ContainerTabs.h"
@@ -79,9 +80,8 @@ public:
         return engine.getNumPlaying() == 0 && ! showModeFlag.load (std::memory_order_acquire) && ! controller.hasPendingStarts();
     }
 
-    /** The keyboard hook (Main.cpp) saw an Esc press anywhere in the app, native plugin editors included: a panic when
-        something plays, is about to start, or show mode is on. A press the main window handled itself is not repeated. */
-    void panicFromAnywhere();
+    /** Current panic key, with its event-time gesture; retains the quiet-plugin gate path. */
+    void panicFromAnywhere (double eventTimeMs, bool hardStop);
     /** Off for a launch that must not start cues by itself (safe mode, an update restart, a fallback device). */
     void setAutoStartOnOpenAllowed (bool allowed) noexcept { autoStartOnOpenAllowed = allowed; }
 
@@ -93,31 +93,7 @@ public:
 
     std::function<void (const juce::String& title)> onWindowTitleChanged;
 
-    /** Esc (panic) and Space (GO) reach the show from every window the app owns: plugin editors, the manual, the
-        settings dialogs. Attached to each top-level window by the timer; text fields keep Space for typing. */
-    class OperationalKeys : public juce::KeyListener
-    {
-    public:
-        explicit OperationalKeys (MainComponent& o) : owner (o) {}
-        bool keyPressed (const juce::KeyPress& key, juce::Component* origin) override;
-        bool keyStateChanged (bool isKeyDown, juce::Component*) override;
-        void reset() noexcept { spaceHeld = false; }   // a key-up missed while another app had the focus
-    private:
-        MainComponent& owner;
-        bool spaceHeld = false;   // auto-repeat of a held Space is one GO, not many
-    };
-
 private:
-    /** Cue hotkeys are checked before the command shortcuts. */
-    struct HotkeyListener : public juce::KeyListener
-    {
-        explicit HotkeyListener (MainComponent& o) : owner (o) {}
-        bool keyPressed (const juce::KeyPress& key, juce::Component*) override;
-        bool keyStateChanged (bool isKeyDown, juce::Component*) override;
-        MainComponent& owner;
-        std::set<int> heldKeys;   // OS key repeat must not re-fire a hotkey while it is held
-    };
-
     // FileDragAndDropTarget: audio files / folders dropped anywhere else in the window are appended,
     // a .gocue file is opened.
     bool isInterestedInFileDrag (const juce::StringArray& files) override;
@@ -219,30 +195,25 @@ private:
     AppSettings& settings;
     juce::ApplicationCommandManager& commands;
     std::unique_ptr<ShortcutService> shortcuts;
+    std::unique_ptr<PanicKeyHook> panicHook;
+    std::unique_ptr<ShortcutRouter> shortcutRouter;
     ProjectDocument document;
     PluginWindowManager pluginWindows;
     Scheduler scheduler;
     CueController controller;
-    HotkeyListener hotkeyListener { *this };
     std::atomic<bool> unsavedChanges { false };
     double ignorePluginChangesUntilMs = 0.0;
     std::map<juce::String, double> lastSaveBackupByPath;
     double nextAutoBackupMs = 0.0;
     bool showMode = false;
     std::atomic<bool> showModeFlag { false };   // the same, for readers off the message thread (the updater's callbacks)
-    OperationalKeys operationalKeys { *this };
-    std::vector<juce::Component::SafePointer<juce::Component>> keyedWindows;   // top-level windows that carry operationalKeys
     int windowScanCountdown = 0;
     juce::int64 lastLoudnessSubBlockCount = 0;
     double lastLoudnessSubBlockMs = 0.0;
-    bool escHeld = false;                  // the Esc mapping fires on the down edge only (a held key must not hard-cut)
-    double lastPanicKeyMs = -1.0e9;        // when the main window last handled an Esc press (the hook skips that press)
-    double lastQuietEscMs = -1.0e9;        // an Esc with nothing playing: a second one within 0.5 s hard-closes the gate
     bool autoStartOnOpenAllowed = true;
     juce::String pendingStartOnOpenCue;        // "열 때 시작" waiting for the previous project's stop (its chain reset) to settle
     double pendingStartOnOpenDeadlineMs = 0.0;
     void tryPendingStartOnOpen();
-    void attachOperationalKeysToWindows();
     void installEscapePolicy (juce::Component& root);
 
     struct CueClipboard

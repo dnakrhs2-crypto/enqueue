@@ -1,3 +1,4 @@
+#include "ui/ShortcutRouter.h"
 #include "ui/PatchEditorDialog.h"
 
 #include "ui/LevelMatrixComponent.h"
@@ -71,7 +72,9 @@ namespace
         options.escapeKeyTriggersCloseButton = true;
         options.useNativeTitleBar = true;
         options.resizable = resizable;
-        return options.launchAsync();
+        auto* window = options.launchAsync();
+        ShortcutRouter::watchWindow (window);
+        return window;
     }
 
     //==========================================================================

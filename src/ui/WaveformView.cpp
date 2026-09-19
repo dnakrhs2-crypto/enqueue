@@ -1,3 +1,4 @@
+#include "ui/ShortcutRouter.h"
 #include "ui/WaveformView.h"
 
 #include "ui/UiUtils.h"
@@ -30,6 +31,7 @@ namespace
 WaveformView::WaveformView (juce::AudioFormatManager& f, juce::AudioThumbnailCache& cache)
     : formats (f), thumbnail (512, f, cache)
 {
+    ShortcutRouter::setComponentScope (*this, ShortcutScope::waveform);
     setWantsKeyboardFocus (true);
     setMouseClickGrabsKeyboardFocus (true);
     thumbnail.addChangeListener (this);
@@ -597,6 +599,7 @@ void WaveformView::editSliceCount (int index)
     alert->setVisible (true);
 
     juce::Component::SafePointer<WaveformView> safeThis (this);
+    ShortcutRouter::watchWindow (alert);
     alert->enterModalState (true, juce::ModalCallbackFunction::create ([safeThis, alert, index] (int result)
     {
         if (safeThis == nullptr || result != 1 || ! safeThis->hasCue || ! safeThis->isEnabled())   // show mode began meanwhile: no edit

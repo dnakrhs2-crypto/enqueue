@@ -1,3 +1,4 @@
+#include "ui/ShortcutRouter.h"
 #include "ui/PluginWindows.h"
 
 #include "ui/UiUtils.h"
@@ -11,6 +12,7 @@ PluginEditorWindow::PluginEditorWindow (juce::AudioPluginInstance& p, const juce
       plugin (p),
       onClose (std::move (closeCallback))
 {
+    ShortcutRouter::setWindowScope (*this, ShortcutKeyContext::Window::nativePlugin);
     setUsingNativeTitleBar (true);
 
     juce::AudioProcessorEditor* editor = nullptr;

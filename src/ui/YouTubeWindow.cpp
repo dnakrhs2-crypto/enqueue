@@ -1,3 +1,4 @@
+#include "ui/ShortcutRouter.h"
 #include "ui/YouTubeWindow.h"
 
 #include "app/AppSettings.h"
@@ -233,6 +234,7 @@ private:
 YouTubeWindow::YouTubeWindow (AppSettings& settings, const juce::String& appVersion)
     : DocumentWindow (ko ("유튜브 다운로드"), Palette::background, DocumentWindow::allButtons)
 {
+    ShortcutRouter::setWindowScope (*this, ShortcutKeyContext::Window::auxiliary);
     setUsingNativeTitleBar (true);
     auto* c = new Content (*this, settings, appVersion);
     content = c;

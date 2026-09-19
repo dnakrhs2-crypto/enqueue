@@ -1,5 +1,6 @@
 #include "model/Hotkeys.h"
 #include "ui/CueInspector.h"
+#include "ui/ShortcutRouter.h"
 
 #include "audio/CueFileInfo.h"
 #include "ui/CueTable.h"
@@ -83,11 +84,11 @@ public:
         setWantsKeyboardFocus (false);
         getProperties().set ("slateKeycap", true);
     }
+    ~HotkeyButton() override { if (shortcuts != nullptr) shortcuts->endCapture (this); }
+
+    ShortcutService* shortcuts = nullptr;
 
     std::function<void (const juce::String& description)> onHotkeyChanged;
-    /** The key just captured (accepted): the owner marks it held, so the OS auto-repeat of a key that is still down
-        does not fire the cue it was just given to. */
-    std::function<void (const juce::KeyPress&)> onCaptured;
     /** Returns a reason to refuse the key, or an empty string. */
     std::function<juce::String (const juce::KeyPress&)> validate;
 
@@ -104,26 +105,36 @@ public:
 
     void clicked() override
     {
+        if (shortcuts == nullptr)
+            return;
+        juce::Component::SafePointer<HotkeyButton> safeThis (this);
+        shortcuts->beginCapture (this,
+            [safeThis] (const juce::KeyPress& key) { if (safeThis != nullptr) safeThis->acceptKey (key); },
+            [safeThis] { if (safeThis != nullptr) safeThis->finishCapture(); });
+        if (! shortcuts->isCapturing())
+            return;
         capturing = true;
-        setComponentID ("hotkeyCapture");   // what the GO command looks for: Space pressed into the capture is a refused key, not a GO
+        setComponentID ("hotkeyCapture");   // retained for UI discovery; safety uses ShortcutService
         setWantsKeyboardFocus (true);
         grabKeyboardFocus();
         setButtonText (ko ("키를 누르세요... (Esc 취소)"));
         setTooltip (getButtonText());
     }
 
-    bool keyPressed (const juce::KeyPress& key) override
+    bool keyPressed (const juce::KeyPress&) override { return capturing; }
+
+    void acceptKey (const juce::KeyPress& key)
     {
         if (! capturing)
-            return false;
+            return;
 
         finishCapture();
 
         if (key.isKeyCode (juce::KeyPress::escapeKey))
-            return true;
+            return;
 
         if (key.getModifiers().isAnyModifierKeyDown() && key.getKeyCode() == 0)
-            return true;   // a lone modifier
+            return;   // a lone modifier
 
         if (validate)
         {
@@ -135,17 +146,13 @@ public:
                 setTooltip (reason);
                 juce::Component::SafePointer<HotkeyButton> safeThis (this);
                 juce::Timer::callAfterDelay (1500, [safeThis] { if (safeThis != nullptr) safeThis->setHotkey (safeThis->hotkey); });
-                return true;
+                return;
             }
         }
 
         if (onHotkeyChanged)
             onHotkeyChanged (key.getTextDescription());
 
-        if (onCaptured)
-            onCaptured (key);
-
-        return true;
     }
 
     void focusLost (FocusChangeType) override
@@ -158,9 +165,13 @@ private:
     void finishCapture()
     {
         capturing = false;
+        if (shortcuts != nullptr)
+            shortcuts->endCapture (this);
         setComponentID ({});
         setWantsKeyboardFocus (false);
         setHotkey (hotkey);
+        if (hasKeyboardFocus (false))
+            giveAwayKeyboardFocus();
     }
 
     juce::String hotkey;
@@ -173,7 +184,7 @@ class CueInspector::BasicsPanel : public juce::Component,
                                   public juce::FileDragAndDropTarget
 {
 public:
-    std::function<void (int keyCode)> onKeyCaptured;   // the hotkey button took a key: see CueInspector::onHotkeyCaptured
+    void setShortcutService (ShortcutService& service) { hotkeyButton.shortcuts = &service; }
 
     BasicsPanel (ProjectDocument& doc, AudioEngine& e, AppSettings& s)
         : document (doc), cues (doc.cues), engine (e), settings (s)
@@ -199,7 +210,7 @@ public:
             editor.setSelectAllWhenFocused (true);
             editor.onReturnKey = [commit, &editor] { commit(); editor.giveAwayKeyboardFocus(); };
             editor.onFocusLost = commit;
-            editor.onEscapeKey = [this] { cancelEditAndPanic(); };
+            editor.onEscapeKey = [this] { cancelEdit(); };
             addAndMakeVisible (editor);
         };
 
@@ -264,7 +275,6 @@ public:
         {
             edit (ko ("핫키"), [description] (Cue& c) { c.hotkey = description; });
         };
-        hotkeyButton.onCaptured = [this] (const juce::KeyPress& key) { if (onKeyCaptured) onKeyCaptured (key.getKeyCode()); };
         hotkeyButton.validate = [this] (const juce::KeyPress& key) -> juce::String
         {
             if (key.getModifiers().isCommandDown() || key.getModifiers().isAltDown())
@@ -329,11 +339,11 @@ public:
         notesEditor.setReturnKeyStartsNewLine (true);
         notesEditor.setScrollbarsShown (true);
         notesEditor.onFocusLost = [this] { commitNotes(); };
-        notesEditor.onEscapeKey = [this] { cancelEditAndPanic(); };
+        notesEditor.onEscapeKey = [this] { cancelEdit(); };
         addAndMakeVisible (notesEditor);
     }
 
-    std::function<void()> onPanic;
+    std::function<void()> onCancelEdit;
 
     void focusNotes()
     {
@@ -539,13 +549,13 @@ private:
         }
     }
 
-    void cancelEditAndPanic()
+    void cancelEdit()
     {
         {
             const juce::ScopedValueSetter<bool> guard (cancellingEdit, true);
 
-            if (onPanic)
-                onPanic();
+            if (onCancelEdit)
+                onCancelEdit();
             else
                 giveAwayKeyboardFocus();
         }
@@ -3061,7 +3071,7 @@ private:
     class TimelineEditor : public juce::Component
     {
     public:
-        explicit TimelineEditor (GroupPanel& o) : owner (o) { setWantsKeyboardFocus (true); }
+        explicit TimelineEditor (GroupPanel& o) : owner (o) { setWantsKeyboardFocus (true); ShortcutRouter::setComponentScope (*this, ShortcutScope::groupTimeline); }
 
         void refresh()
         {
@@ -3365,12 +3375,11 @@ CueInspector::CueInspector (ProjectDocument& doc, AudioEngine& e, AppSettings& s
 
     basicsPanel = std::make_unique<BasicsPanel> (document, engine, settings);
     basics = basicsPanel.get();
-    basics->onPanic = [this] { if (onPanic) onPanic(); };
-    basics->onKeyCaptured = [this] (int keyCode) { if (onHotkeyCaptured) onHotkeyCaptured (keyCode); };
+    basics->onCancelEdit = [this] { if (onCancelEdit) onCancelEdit(); };
 
     timeLoopsPanel = std::make_unique<TimeLoopsPanel> (document, engine, thumbnailCache);
     timeLoops = timeLoopsPanel.get();
-    timeLoops->onPanic = [this] { if (onPanic) onPanic(); };
+    timeLoops->onCancelEdit = [this] { if (onCancelEdit) onCancelEdit(); };
     timeLoops->onStatus = [this] (const juce::String& message, bool isError) { if (onStatus) onStatus (message, isError); };
     timeLoops->onPreview = [this] { if (onPreview) onPreview(); };
     timeLoops->onSeekPlay = [this] (double fileSeconds) { if (onSeekPlay) onSeekPlay (fileSeconds); };
@@ -3412,6 +3421,11 @@ CueInspector::CueInspector (ProjectDocument& doc, AudioEngine& e, AppSettings& s
 
     cues.addListener (this);
     refresh();
+}
+
+void CueInspector::setShortcutService (ShortcutService& service)
+{
+    basics->setShortcutService (service);
 }
 
 CueInspector::~CueInspector()

@@ -19,6 +19,7 @@
 
 namespace gocue
 {
+class ShortcutService;
 
 /** Bottom panel with tabs for the selected cue: 기본 (number, name, colour, file, waits, continue mode,
     hotkey, flags, stop fade, gain, notes) / 재생 (waveform, trim, loops, envelope) /
@@ -33,6 +34,7 @@ class CueInspector : public juce::Component,
 public:
     CueInspector (ProjectDocument& document, AudioEngine& engine, AppSettings& settings, PluginWindowManager& windows);
     ~CueInspector() override;
+    void setShortcutService (ShortcutService&);
 
     /** Rebuilds the plugin strip (after a project load / duplicate / undo). */
     void refreshPlugins();
@@ -50,8 +52,8 @@ public:
     void fetchFadeLevelsFromTarget();
 
     std::function<void()> onOpenPluginManager;
-    /** Esc inside a text field: the edit is cancelled and this fires (wired to "stop all"). */
-    std::function<void()> onPanic;
+    /** Return focus after cancelling a text edit. Panic is exclusively routed separately. */
+    std::function<void()> onCancelEdit;
     /** A line for the status bar (a locked click in show mode, a file without cue markers). */
     std::function<void (const juce::String& message, bool isError)> onStatus;
     std::function<void()> onPreview;
@@ -61,9 +63,6 @@ public:
     /** Called after a tab switch (click or cue-type rebuild) stole the keyboard focus into a panel field;
         the owner puts it back on the cue table so Space still means GO. */
     std::function<void()> onReturnFocus;
-    /** The 기본 tab captured a hotkey (key code): the owner marks it held, so the auto-repeat of the key still being
-        down does not fire the cue it was just given to. */
-    std::function<void (int keyCode)> onHotkeyCaptured;
     /** Commits (or drops) whatever field is being edited, synchronously: called before the active list changes so a
         half-typed number lands on the cue it was typed for. */
     void finishEditing();

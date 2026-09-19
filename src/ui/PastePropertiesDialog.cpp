@@ -1,3 +1,4 @@
+#include "ui/ShortcutRouter.h"
 #include "ui/PastePropertiesDialog.h"
 
 #include "ui/UiUtils.h"
@@ -105,7 +106,7 @@ void show (juce::Component* centreAround, const juce::String& sourceName, int ta
     options.escapeKeyTriggersCloseButton = true;
     options.useNativeTitleBar = true;
     options.resizable = false;
-    options.launchAsync();
+    ShortcutRouter::watchWindow (options.launchAsync());
 }
 
 } // namespace gocue::PastePropertiesDialog

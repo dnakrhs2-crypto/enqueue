@@ -1,3 +1,4 @@
+#include "ui/ShortcutRouter.h"
 #include "ui/LevelMatrixComponent.h"
 #include "app/ShortcutKeyInput.h"
 
@@ -10,6 +11,7 @@ namespace gocue
 
 LevelMatrixComponent::LevelMatrixComponent()
 {
+    ShortcutRouter::setComponentScope (*this, ShortcutScope::levelMatrix);
     setWantsKeyboardFocus (true);
     setMouseClickGrabsKeyboardFocus (true);
 }

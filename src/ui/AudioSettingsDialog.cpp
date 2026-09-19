@@ -1,3 +1,4 @@
+#include "ui/ShortcutRouter.h"
 #include "ui/AudioSettingsDialog.h"
 
 #include "audio/AudioEngine.h"
@@ -115,6 +116,7 @@ void show (juce::AudioDeviceManager& deviceManager, juce::Component* centreAroun
     options.resizable = false;
 
     openDialog = options.launchAsync();
+    ShortcutRouter::watchWindow (openDialog.getComponent());
 }
 
 void closeIfOpen()

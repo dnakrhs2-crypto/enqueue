@@ -32,38 +32,6 @@ namespace
     constexpr double pluginChangeGraceMs = 1500.0;
 }
 
-bool MainComponent::HotkeyListener::keyPressed (const juce::KeyPress& key, juce::Component*)
-{
-    // typing in a field: no cue hotkey fires (letters and digits never get here, but an F key passes a text editor)
-    if (dynamic_cast<juce::TextEditor*> (juce::Component::getCurrentlyFocusedComponent()) != nullptr)
-        return false;
-
-    const int code = key.getKeyCode();
-
-    if (heldKeys.count (code) != 0)
-        return owner.controller.handleHotkeyRepeat (key);   // auto-repeat of a held hotkey: swallowed
-
-    const bool handled = owner.controller.handleHotkey (key);
-
-    if (handled)
-        heldKeys.insert (code);
-
-    return handled;
-}
-
-bool MainComponent::HotkeyListener::keyStateChanged (bool, juce::Component*)
-{
-    for (auto it = heldKeys.begin(); it != heldKeys.end();)
-    {
-        if (! juce::KeyPress::isKeyCurrentlyDown (*it))
-            it = heldKeys.erase (it);
-        else
-            ++it;
-    }
-
-    return false;
-}
-
 MainComponent::MainComponent (AudioEngine& e, AppSettings& s, juce::ApplicationCommandManager& cm)
     : engine (e),
       settings (s),
@@ -192,15 +160,8 @@ MainComponent::MainComponent (AudioEngine& e, AppSettings& s, juce::ApplicationC
     table.onEditDuration = [this] (int) { ensureInspectorShown(); inspector.showTimeTab(); };
 
     inspector.onOpenPluginManager = [this] { showPluginManager(); };
-    inspector.onPanic = [this]
-    {
-       #if ! JUCE_WINDOWS
-        controller.panicAll();
-       #endif
-        table.focusTable();   // on Windows the keyboard hook already turned this Esc into the panic
-    };
+    inspector.onCancelEdit = [this] { table.focusTable(); };
     inspector.onReturnFocus = [this] { table.focusTable(); };
-    inspector.onHotkeyCaptured = [this] (int keyCode) { hotkeyListener.heldKeys.insert (keyCode); };   // the OS repeat of the key still held is not a first press
     activeCues.onPauseRequested = [this] (const juce::Uuid& id, bool resume)
     {
         if (resume)
@@ -282,10 +243,40 @@ MainComponent::MainComponent (AudioEngine& e, AppSettings& s, juce::ApplicationC
         juce::Logger::writeToLog ("Shortcuts: " + shortcutRestore.message);
         transport.showStatus (ko ("단축키 설정을 읽지 못해 직전 정상 설정 또는 기본값을 사용합니다. 원문은 보존했습니다."), true);
     }
-    // JUCE asks key listeners last-added first: the command shortcuts go in first so the cue hotkeys are asked before
-    // them (the two never overlap - a hotkey may not be a key the app uses - but the order is what the name says)
-    addKeyListener (commands.getKeyMappings());
-    addKeyListener (&hotkeyListener);
+    panicHook = std::make_unique<PanicKeyHook> (*shortcuts, [this] (double timeMs, bool hardStop)
+    {
+        panicFromAnywhere (timeMs, hardStop);
+    });
+    ShortcutRouter::Callbacks input;
+    input.context = [this] (ShortcutKeyContext& context)
+    {
+        document.forEachList ([&] (CueList& list)
+        {
+            for (const auto& cue : list.getAll())
+                if (cue.hotkey.isNotEmpty())
+                    context.cueHotkeys.push_back ({ cue.id.toString(), juce::KeyPress::createFromDescription (cue.hotkey), true, cue.armed });
+        });
+    };
+    input.cueHotkey = [this] (const juce::KeyPress& key, bool repeat)
+    {
+        if (repeat) controller.handleHotkeyRepeat (key);
+        else        controller.handleHotkey (key);
+    };
+    input.panic = [this] (double timeMs) { panicHook->fromJuce (timeMs); };
+    input.requireGoKeyUp = [this] { return document.settings.requireKeyUp; };
+    shortcutRouter = std::make_unique<ShortcutRouter> (*shortcuts, commands, std::move (input));
+    shortcutRouter->activateDesktopRouting();
+    shortcutRouter->attach (*this, ShortcutKeyContext::Window::main);
+    inspector.setShortcutService (*shortcuts);
+    panicHook->beforeDispatch = [this] (int vk, int modifiers, bool down, bool repeat)
+    { shortcutRouter->prepareNativeEvent (vk, modifiers, down, repeat); };
+    if (const auto installed = panicHook->install(); installed.failed())
+    {
+        juce::Logger::writeToLog ("Panic hook: " + installed.getErrorMessage());
+        juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon, ko ("전체 정지 단축키"),
+            ko ("키보드 훅을 설치하지 못했습니다. 전체 정지 단축키는 Enqueue의 JUCE 창 안에서만 동작합니다.\n")
+                + installed.getErrorMessage(), ko ("확인"));
+    }
     setApplicationCommandManagerToWatch (&commands);
 
     setSize (1100, 820);
@@ -298,6 +289,9 @@ MainComponent::MainComponent (AudioEngine& e, AppSettings& s, juce::ApplicationC
 
 MainComponent::~MainComponent()
 {
+    shortcuts->cancelCapture();
+    panicHook.reset();
+    shortcutRouter.reset();
     scheduler.stopTicking();
     controller.cancelPending();
     stopTimer();
@@ -311,8 +305,6 @@ MainComponent::~MainComponent()
     document.removeListener (this);
     document.cues.removeListener (this);
     commands.setFirstCommandTarget (nullptr);
-    removeKeyListener (commands.getKeyMappings());
-    removeKeyListener (&hotkeyListener);
 }
 
 void MainComponent::resized()
@@ -416,6 +408,7 @@ void MainComponent::showPanicSecondsMenu (juce::Point<int> screenPosition)
         alert->addTextEditor ("seconds", plainSeconds (forPanic ? panicNow : fadeNow), ko ("초"));
         alert->addButton (ko ("확인"), 1, juce::KeyPress (juce::KeyPress::returnKey));
         alert->addButton (ko ("취소"), 0, juce::KeyPress (juce::KeyPress::escapeKey));
+        ShortcutRouter::watchWindow (alert);
         alert->enterModalState (true, juce::ModalCallbackFunction::create ([safeThis, alert, forPanic] (int r)
         {
             if (safeThis == nullptr || r != 1)
@@ -832,26 +825,25 @@ void MainComponent::getCommandInfo (juce::CommandID commandID, juce::Application
 
 bool MainComponent::perform (const InvocationInfo& info)
 {
+    if (shortcuts->isCapturing())
+        return true;
+
     switch (info.commandID)
     {
         case CommandIDs::go:
             if (info.invocationMethod == InvocationInfo::fromKeyPress && ! info.isKeyDown)
             {
-                controller.goKeyReleased();
-            }
-            else if (auto* focused = juce::Component::getCurrentlyFocusedComponent();
-                     info.invocationMethod == InvocationInfo::fromKeyPress && focused != nullptr && focused->getComponentID() == "hotkeyCapture")
-            {
-                // Space pressed into the inspector's "키를 누르세요" capture: the capture refuses it as a reserved key,
-                // and the key-state path that brings the GO command here must not fire the show meanwhile
+                if (! shortcutRouter->anyGoKeyHeld())
+                    controller.goKeyReleased();
             }
             else
             {
                 controller.go();
-                table.focusTable();
-
-                if (info.invocationMethod != InvocationInfo::fromKeyPress)
-                    controller.goKeyReleased();   // a button click has no key to release
+                if (info.invocationMethod != InvocationInfo::fromKeyPress
+                    || (info.originatingComponent != nullptr && isParentOf (info.originatingComponent)))
+                    table.focusTable();
+                if (info.invocationMethod != InvocationInfo::fromKeyPress && ! shortcutRouter->anyGoKeyHeld())
+                    controller.goKeyReleased();
             }
             break;
 
@@ -865,29 +857,10 @@ bool MainComponent::perform (const InvocationInfo& info)
             break;
 
         case CommandIDs::panicAll:
-           #if JUCE_WINDOWS
-            // Session A installs Esc in the display mapping. Keyboard panic still belongs exclusively to the
-            // existing Esc hook until session B replaces it with the current panic-key list.
-            if (info.invocationMethod == InvocationInfo::fromKeyPress)
-                break;
-           #endif
-           #if ! JUCE_WINDOWS
-            if (info.invocationMethod == InvocationInfo::fromKeyPress)
-            {
-                if (! info.isKeyDown)
-                {
-                    escHeld = false;
-                    break;
-                }
-
-                if (escHeld)
-                    break;   // auto-repeat of a held Esc: not a second press (that would turn the fade into a hard cut)
-
-                escHeld = true;
-            }
-           #endif
-
-            controller.panicAll();
+            // Keyboard panic belongs exclusively to PanicKeyHook (or its router
+            // fallback). This applies to every mapping, including an empty list.
+            if (info.invocationMethod != InvocationInfo::fromKeyPress)
+                panicHook->fromUi (juce::Time::getMillisecondCounterHiRes());
             break;
 
         case CommandIDs::hardStopAll:
@@ -1943,6 +1916,7 @@ void MainComponent::showLoadToTimeDialog()
     alert->setVisible (true);
 
     juce::Component::SafePointer<MainComponent> safeThis (this);
+    ShortcutRouter::watchWindow (alert);
     alert->enterModalState (true, juce::ModalCallbackFunction::create ([safeThis, alert] (int result)
     {
         if (safeThis == nullptr || result != 1)
@@ -2008,6 +1982,7 @@ void MainComponent::showRenumberDialog()
     alert->setVisible (true);
 
     juce::Component::SafePointer<MainComponent> safeThis (this);
+    ShortcutRouter::watchWindow (alert);
     alert->enterModalState (true, juce::ModalCallbackFunction::create ([safeThis, alert, rows] (int result)
     {
         if (safeThis == nullptr || result != 1)
@@ -2211,6 +2186,7 @@ void MainComponent::showFindDialog()
     alert->setVisible (true);
 
     juce::Component::SafePointer<MainComponent> safeThis (this);
+    ShortcutRouter::watchWindow (alert);
     alert->enterModalState (true, juce::ModalCallbackFunction::create ([safeThis, alert] (int result)
     {
         if (safeThis == nullptr || result != 1)
@@ -2941,6 +2917,7 @@ void MainComponent::confirmDiscardChangesThen (std::function<void()> action)
     discardDialog = alert;
 
     juce::Component::SafePointer<MainComponent> safeThis (this);
+    ShortcutRouter::watchWindow (alert);
     alert->enterModalState (true, juce::ModalCallbackFunction::create ([safeThis, action] (int result)
     {
         if (safeThis == nullptr)
@@ -3089,81 +3066,25 @@ void MainComponent::updateAudioStatus()
 }
 
 //==============================================================================
-bool MainComponent::OperationalKeys::keyPressed (const juce::KeyPress& key, juce::Component* origin)
+void MainComponent::panicFromAnywhere (double eventTimeMs, bool hardStop)
 {
-    // Esc is the keyboard hook's business (Main.cpp): it sees every window, native plugin editors included.
-    if (key.getModifiers().isAnyModifierKeyDown() || key.getKeyCode() != juce::KeyPress::spaceKey)
-        return false;
-
-    // a text field that did not consume Space is not being typed into; anything else means GO
-    if (origin != nullptr && (dynamic_cast<juce::TextEditor*> (origin) != nullptr || origin->findParentComponentOfClass<juce::TextEditor>() != nullptr))
-        return false;
-
-    if (spaceHeld)
-        return true;   // auto-repeat: the key is still down, one GO already went out
-
-    spaceHeld = true;
-    owner.commands.invokeDirectly (CommandIDs::go, false);
-    return true;
-}
-
-bool MainComponent::OperationalKeys::keyStateChanged (bool, juce::Component*)
-{
-    if (spaceHeld && ! juce::KeyPress::isKeyCurrentlyDown (juce::KeyPress::spaceKey))
-        spaceHeld = false;
-
-    return false;
-}
-
-void MainComponent::panicFromAnywhere()
-{
-    // the one Esc source on Windows (the keyboard hook, every window, native plugin editors included). Nothing here
-    // waits for the engine lock: a stuck plugin must not delay the decision.
+    juce::ignoreUnused (eventTimeMs); // gesture was decided from observation times, before message-queue delay
     if (engine.mayBePlaying() || showMode || controller.hasPendingStarts() || controller.getFadeRunner().getNumRunning() > 0)
     {
-        controller.panicAll();
+        controller.panicAll (hardStop);
         return;
     }
-
-    // no cue at all: a self-generating plugin is muted at the gate, without the show latch; a second Esc within
-    // 0.5 s cuts at once instead of the 200 ms ramp (the same gesture as the hard panic)
-    const double now = juce::Time::getMillisecondCounterHiRes();
-
-    if (now - lastQuietEscMs < 500.0)
+    // With no cue, a self-generating plugin still needs the output gate closed.
+    if (hardStop)
         engine.stopAll();
     else
         engine.silenceOutput();
-
-    lastQuietEscMs = now;
-}
-
-void MainComponent::attachOperationalKeysToWindows()
-{
-    keyedWindows.erase (std::remove_if (keyedWindows.begin(), keyedWindows.end(), [] (const auto& w) { return w == nullptr; }), keyedWindows.end());
-
-    auto* ownWindow = getTopLevelComponent();
-
-    for (int i = 0; i < juce::TopLevelWindow::getNumTopLevelWindows(); ++i)
-    {
-        auto* window = juce::TopLevelWindow::getTopLevelWindow (i);
-
-        if (window == nullptr || window == ownWindow)
-            continue;
-
-        const bool known = std::any_of (keyedWindows.begin(), keyedWindows.end(), [window] (const auto& w) { return w.getComponent() == window; });
-
-        if (known)
-            continue;
-
-        window->addKeyListener (&operationalKeys);
-        keyedWindows.emplace_back (window);
-    }
 }
 
 void MainComponent::installEscapePolicy (juce::Component& root)
 {
-    // every text field cancels its edit on Esc and passes the panic on (the inspector's own panels do this already;
-    // this catches the rest, and fields created later)
+    // Every text field cancels its edit on Esc. Panic belongs to the current
+    // mapping's hook/router path, independently of this cancellation callback.
     for (auto* child : root.getChildren())
     {
         if (auto* editor = dynamic_cast<juce::TextEditor*> (child))
@@ -3171,14 +3092,10 @@ void MainComponent::installEscapePolicy (juce::Component& root)
             if (! editor->onEscapeKey)
             {
                 juce::Component::SafePointer<juce::TextEditor> safeEditor (editor);
-                editor->onEscapeKey = [this, safeEditor]
+                editor->onEscapeKey = [safeEditor]
                 {
                     if (safeEditor != nullptr)
                         safeEditor->giveAwayKeyboardFocus();
-
-                   #if ! JUCE_WINDOWS
-                    commands.invokeDirectly (CommandIDs::panicAll, false);   // Windows: the keyboard hook already did
-                   #endif
                 };
             }
         }
@@ -3214,23 +3131,12 @@ void MainComponent::timerCallback()
     if (--windowScanCountdown <= 0)
     {
         windowScanCountdown = 30;   // once a second
-        attachOperationalKeysToWindows();
         installEscapePolicy (inspector);
         updateAudioStatus();
     }
 
     engine.reapIfNeeded();   // finished players are destroyed here, never from the audio thread's callback
     tryPendingStartOnOpen();
-
-    // key-ups missed while another app - or another window of this one (a plugin editor, the manual) - had the focus
-    // must not look like auto-repeat, or the next press of that hotkey would be swallowed
-    if (auto* peer = getPeer(); ! juce::Process::isForegroundProcess() || peer == nullptr || ! peer->isFocused())
-    {
-        hotkeyListener.heldKeys.clear();
-        operationalKeys.reset();
-        escHeld = false;
-        controller.goKeyReleased();
-    }
 
     // nothing in this window holds the keyboard (a field gave the focus away on Enter): the list view takes it back,
     // or the cue hotkeys and shortcuts - which live on this component - would be unreachable until the next click
@@ -3391,6 +3297,7 @@ void MainComponent::renameContainer (int index)
     alert->addButton (ko ("확인"), 1, juce::KeyPress (juce::KeyPress::returnKey));
     alert->addButton (ko ("취소"), 0, juce::KeyPress (juce::KeyPress::escapeKey));
     juce::Component::SafePointer<MainComponent> safeThis (this);
+    ShortcutRouter::watchWindow (alert);
     alert->enterModalState (true, juce::ModalCallbackFunction::create ([safeThis, alert, index] (int result)
     {
         if (safeThis == nullptr || result != 1)
@@ -3447,6 +3354,7 @@ void MainComponent::setContainerGrid (int index)
     alert->addButton (ko ("확인"), 1, juce::KeyPress (juce::KeyPress::returnKey));
     alert->addButton (ko ("취소"), 0, juce::KeyPress (juce::KeyPress::escapeKey));
     juce::Component::SafePointer<MainComponent> safeThis (this);
+    ShortcutRouter::watchWindow (alert);
     alert->enterModalState (true, juce::ModalCallbackFunction::create ([safeThis, alert, index] (int result)
     {
         if (safeThis == nullptr || result != 1 || index >= safeThis->document.getNumContainers())

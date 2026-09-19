@@ -17,6 +17,8 @@ bool inScope (ShortcutScope scope, ShortcutKeyContext::Window window)
         return false;
     if (scope == ShortcutScope::application)
         return true;
+    if (window == Window::nativePlugin)
+        return false;
     if (scope == ShortcutScope::playback)
         return window != Window::modal;
     return window == Window::main;
@@ -104,6 +106,21 @@ ShortcutMappingResult ShortcutService::calculateMapping (const ShortcutCatalog& 
             assigned.push_back ({ normalised, entry.id, false });
         }
     }
+   #if JUCE_WINDOWS
+    for (const auto& entry : catalog.getCommands())
+        if (entry.scope == ShortcutScope::application)
+            for (const auto& key : result.keys[entry.id])
+            {
+                const auto converted = PanicKeyHook::convert (key);
+                if (! converted.binding)
+                {
+                    result.status = juce::Result::fail (converted.reason);
+                    result.diagnostics.push_back ({ ShortcutDiagnostic::Code::panicKeyUnsupported, entry.id, {}, key, converted.reason });
+                    return result;
+                }
+                result.panicBindings.push_back (*converted.binding);
+            }
+   #endif
     return result;
 }
 
@@ -167,12 +184,14 @@ ShortcutKeyOwner ShortcutService::resolveKeyOwner (const juce::KeyPress& key, co
     ShortcutKeyOwner result;
     if (! context.applicationActive || context.window == ShortcutKeyContext::Window::outsideApp)
         return { Kind::blocked, Reason::inactiveApp, {}, 0, {} };
-    if (context.captureActive)
+    if (context.captureActive || isCapturing())
         return { Kind::capture, Reason::captureActive, {}, 0, {} };
 
     const ShortcutDefinition* command = nullptr;
+    const bool nativePanic = context.nativeKey && std::any_of (mapping.panicBindings.begin(), mapping.panicBindings.end(),
+        [&] (const auto& binding) { return binding.virtualKey == context.nativeKey->virtualKey && binding.modifiers == context.nativeKey->modifiers; });
     for (const auto& entry : catalog.getCommands())
-        if (getKeys (entry.id).contains (key))
+        if ((nativePanic && entry.scope == ShortcutScope::application) || (! nativePanic && getKeys (entry.id).contains (key)))
         {
             command = &entry;
             break; // calculateMapping guarantees global command-key uniqueness
@@ -404,8 +423,55 @@ ShortcutOperationResult ShortcutService::commit (ShortcutProfile candidate)
     return { juce::Result::ok(), mapping.diagnostics };
 }
 
+void ShortcutService::beginCapture (CaptureToken token, std::function<void (const juce::KeyPress&)> receive,
+                                    std::function<void()> cancel)
+{
+    if (token == nullptr || editingLocked)
+        return;
+    cancelCapture();
+    captureToken = token;
+    captureReceiver = std::move (receive);
+    captureCancellation = std::move (cancel);
+    ++inputGeneration;
+    listeners.call ([] (Listener& l) { l.captureStateChanged(); });
+}
+
+void ShortcutService::endCapture (CaptureToken token)
+{
+    if (token == nullptr || captureToken != token)
+        return;
+    captureToken = nullptr;
+    captureReceiver = {};
+    captureCancellation = {};
+    ++inputGeneration;
+    listeners.call ([] (Listener& l) { l.captureStateChanged(); });
+}
+
+void ShortcutService::cancelCapture()
+{
+    auto cancel = captureCancellation;
+    endCapture (captureToken);
+    if (cancel)
+        cancel();
+}
+
+void ShortcutService::deliverCaptureKey (const juce::KeyPress& key)
+{
+    auto receive = captureReceiver; // callback may end capture and destroy its widget
+    if (isCapturing() && receive)
+        receive (key);
+}
+
+void ShortcutService::setEditingLocked (bool locked)
+{
+    editingLocked = locked;
+    if (locked)
+        cancelCapture();
+}
+
 void ShortcutService::synchroniseMappings()
 {
+    ++inputGeneration;
     auto* juceMappings = manager.getKeyMappings();
     // Two passes are essential: JUCE 8.0.15 addKeyPress does NOT remove another command's binding.
     for (const auto& entry : catalog.getCommands())

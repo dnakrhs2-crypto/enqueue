@@ -1,3 +1,4 @@
+#include "ui/ShortcutRouter.h"
 #include "ui/PluginManager.h"
 
 #include "app/UiScale.h"
@@ -387,6 +388,7 @@ private:
 PluginManagerWindow::PluginManagerWindow (PluginHost& host, AppSettings& settings)
     : DocumentWindow (ko ("플러그인 관리"), Palette::background, DocumentWindow::allButtons)
 {
+    ShortcutRouter::setWindowScope (*this, ShortcutKeyContext::Window::auxiliary);
     setUsingNativeTitleBar (true);
     auto* c = new Content (host, settings);
     content = c;

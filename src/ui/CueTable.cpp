@@ -1,3 +1,4 @@
+#include "ui/ShortcutRouter.h"
 #include "ui/CueTable.h"
 
 #include <algorithm>
@@ -101,9 +102,6 @@ public:
                 safeOwner->cellEditor.reset();
 
             safeOwner->focusTable();
-           #if ! JUCE_WINDOWS
-            safeOwner->commands.invokeDirectly (CommandIDs::panicAll, true);   // Esc is the panic key, editing or not (Windows: the keyboard hook does it)
-           #endif
         });
     }
 
@@ -138,6 +136,7 @@ bool CueTable::TableBox::keyPressed (const juce::KeyPress& key)
 CueTable::CueTable (CueList& c, juce::AudioFormatManager& f, juce::ApplicationCommandManager& cm)
     : cues (c), formats (f), commands (cm)
 {
+    ShortcutRouter::setComponentScope (table, ShortcutScope::cueTable);
     const int columnFlags = juce::TableHeaderComponent::visible | juce::TableHeaderComponent::resizable;
 
     auto& header = table.getHeader();

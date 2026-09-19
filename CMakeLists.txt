@@ -82,6 +82,8 @@ target_sources(GoCueCore INTERFACE
     ${CMAKE_CURRENT_SOURCE_DIR}/src/app/ShortcutKeyInput.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/app/ShortcutProfile.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/app/ShortcutService.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/app/PanicKeyHook.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/ShortcutRouter.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/app/YouTubeDownloader.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/app/YouTubeTools.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/audio/RegionLoopSource.cpp

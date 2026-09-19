@@ -28,8 +28,8 @@ public:
     /** A click on the waveform: play the cue from that file position (a running one jumps there). */
     std::function<void (double fileSeconds)> onSeekPlay;
     std::function<void()> onReset;
-    /** Esc inside a text field: cancel the edit and fire this (wired to "stop all"). */
-    std::function<void()> onPanic;
+    /** Return focus after cancelling an edit; panic is handled by the shortcut router/hook. */
+    std::function<void()> onCancelEdit;
     std::function<void (const juce::String& message, bool isError)> onStatus;
 
     void resized() override;
@@ -52,7 +52,7 @@ private:
     void commitRate();
     void setupEditor (juce::TextEditor& editor, const juce::String& allowed, int maxLength);
     void setupToggle (juce::ToggleButton& toggle, const char* text);
-    void cancelEditAndPanic();
+    void cancelEdit();
     void showContextMenu (juce::Point<int> screenPosition);
 
     ProjectDocument& document;

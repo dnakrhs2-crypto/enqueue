@@ -1,3 +1,4 @@
+#include "ui/ShortcutRouter.h"
 #include "ui/ManualWindow.h"
 
 #include "app/UiScale.h"
@@ -63,6 +64,7 @@ private:
 ManualWindow::ManualWindow()
     : DocumentWindow (ko ("앤큐 사용 설명서"), Palette::background, DocumentWindow::allButtons)
 {
+    ShortcutRouter::setWindowScope (*this, ShortcutKeyContext::Window::auxiliary);
     setUsingNativeTitleBar (true);
     auto* c = new Content();
     content = c;

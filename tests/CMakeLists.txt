@@ -3,6 +3,7 @@ juce_add_console_app(EnqueueTests PRODUCT_NAME "EnqueueTests")
 target_sources(EnqueueTests PRIVATE
     TestMain.cpp
     ShortcutTests.cpp
+    ShortcutRouterTests.cpp
     ../src/app/AppSettings.cpp
     ../src/ui/CueTable.cpp
     ../src/ui/LevelMatrixComponent.cpp

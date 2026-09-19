@@ -1,6 +1,7 @@
 #pragma once
 
 #include "app/ShortcutProfile.h"
+#include "app/PanicKeyHook.h"
 
 #include <functional>
 #include <optional>
@@ -10,7 +11,7 @@ namespace gocue
 
 struct ShortcutDiagnostic
 {
-    enum class Code { invalidProfile, unknownAction, readOnlyAction, commandConflict, defaultSuppressed };
+    enum class Code { invalidProfile, unknownAction, readOnlyAction, commandConflict, defaultSuppressed, panicKeyUnsupported };
     Code code;
     juce::String actionID, otherActionID;
     juce::KeyPress key;
@@ -29,6 +30,7 @@ struct ShortcutOperationResult
 struct ShortcutMappingResult : ShortcutOperationResult
 {
     ShortcutProfile::Overrides keys;
+    std::vector<PanicKeyBinding> panicBindings;
 };
 
 struct ShortcutKeyContext
@@ -49,6 +51,9 @@ struct ShortcutKeyContext
     bool textEditing = false;
     bool standardUiConsumesKey = false; // other standard controls/dialogs; text input is classified centrally
     bool isRepeat = false;
+    /** Native observation disambiguates JUCE character aliases (e.g. keypad '+').
+        It is used only for the panic owner; fixed component behavior is unchanged. */
+    std::optional<PanicKeyBinding> nativeKey;
     std::vector<CueHotkey> cueHotkeys; // may include every list/cart for conflict display; never modified
     std::function<bool (juce::CommandID)> commandEnabled;
     /** Execution availability only: false blocks/consumes the owned key, never releases it.
@@ -79,8 +84,8 @@ struct ShortcutKeyOwner
     bool shouldConsume() const noexcept { return kind != Kind::none && reason != Reason::inactiveApp; }
 };
 
-/** Message-thread data service. Does not dispatch input or alter project/cue-hotkey data.
-    The router in session B will use resolveKeyOwner; session A only installs JUCE mappings. */
+/** Message-thread mappings, ownership and shared capture state. JUCE mappings are
+    for display; ShortcutRouter is the only command/cue keyboard dispatcher. */
 class ShortcutService
 {
 public:
@@ -99,6 +104,7 @@ public:
     {
         virtual ~Listener() = default;
         virtual void shortcutsChanged() = 0;
+        virtual void captureStateChanged() {}
     };
 
     ShortcutService (juce::ApplicationCommandManager& manager, SaveFunction save,
@@ -111,6 +117,18 @@ public:
     const ShortcutKeys& getKeys (const juce::String& actionID) const;
     const ShortcutKeys& getKeys (juce::CommandID commandID) const;
     const std::vector<ShortcutDiagnostic>& getDiagnostics() const noexcept { return mapping.diagnostics; }
+    const std::vector<PanicKeyBinding>& getPanicBindings() const noexcept { return mapping.panicBindings; }
+    uint64_t getInputGeneration() const noexcept { return inputGeneration; }
+
+    /** Message-thread capture ownership. A stale widget cannot end another widget's
+        capture. The router waits for the activation keys to be released first. */
+    using CaptureToken = const void*;
+    void beginCapture (CaptureToken, std::function<void (const juce::KeyPress&)> receive = {},
+                       std::function<void()> cancel = {});
+    void endCapture (CaptureToken);
+    void cancelCapture();
+    bool isCapturing() const noexcept { return captureToken != nullptr; }
+    void deliverCaptureKey (const juce::KeyPress&);
     /** Runtime callers preserve the original text character (numeric entry/text editor predicates).
         Character-less bindings can also be queried for conflict previews. */
     ShortcutKeyOwner resolveKeyOwner (const juce::KeyPress& key, const ShortcutKeyContext& context) const;
@@ -124,7 +142,7 @@ public:
     ShortcutOperationResult importProfile (const juce::String& xml); // replacement, never a partial merge
     juce::String exportProfile() const; // all resolved commands, including empty lists, plus unknown overrides
 
-    void setEditingLocked (bool locked) noexcept { editingLocked = locked; }
+    void setEditingLocked (bool locked);
     void addListener (Listener* listener) { listeners.add (listener); }
     void removeListener (Listener* listener) { listeners.remove (listener); }
 
@@ -140,6 +158,10 @@ private:
     ShortcutMappingResult mapping;
     juce::ListenerList<Listener> listeners;
     bool editingLocked = false, inTransaction = false;
+    uint64_t inputGeneration = 0;
+    CaptureToken captureToken = nullptr;
+    std::function<void (const juce::KeyPress&)> captureReceiver;
+    std::function<void()> captureCancellation;
 };
 
 } // namespace gocue

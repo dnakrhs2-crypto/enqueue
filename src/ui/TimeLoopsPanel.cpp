@@ -138,7 +138,7 @@ void TimeLoopsPanel::setupEditor (juce::TextEditor& editor, const juce::String& 
     editor.setFont (Palette::monoFont (Palette::fieldValueSize));
     editor.setJustification (juce::Justification::centredRight);
     editor.setSelectAllWhenFocused (true);
-    editor.onEscapeKey = [this] { cancelEditAndPanic(); };
+    editor.onEscapeKey = [this] { cancelEdit(); };
     addAndMakeVisible (editor);
 }
 
@@ -151,13 +151,13 @@ void TimeLoopsPanel::setupToggle (juce::ToggleButton& toggle, const char* text)
     addAndMakeVisible (toggle);
 }
 
-void TimeLoopsPanel::cancelEditAndPanic()
+void TimeLoopsPanel::cancelEdit()
 {
     {
         const juce::ScopedValueSetter<bool> guard (cancellingEdit, true);
 
-        if (onPanic)
-            onPanic();
+        if (onCancelEdit)
+            onCancelEdit();
         else
             giveAwayKeyboardFocus();
     }

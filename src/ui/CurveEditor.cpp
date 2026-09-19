@@ -1,3 +1,4 @@
+#include "ui/ShortcutRouter.h"
 #include "ui/CurveEditor.h"
 
 #include "ui/UiUtils.h"
@@ -9,6 +10,7 @@ namespace gocue
 
 CurveEditor::CurveEditor()
 {
+    ShortcutRouter::setComponentScope (canvas, ShortcutScope::curveEditor);
     auto label = [this] (juce::Label& l, const char* text)
     {
         l.setText (ko (text), juce::dontSendNotification);
