@@ -59,7 +59,7 @@ public:
             expect (ShortcutCatalog::scopeLabel (entry->scope).isNotEmpty());
         }
 
-        beginTest ("0.10.6 platform defaults and wantsKeyUpDownCallbacks match, apart from the approved Windows display Esc");
+        beginTest ("0.10.6 defaults include the legacy table Backspace and approved Windows display Esc");
         for (const auto commandID : registered)
         {
             const auto* entry = catalog.find (commandID);
@@ -67,6 +67,8 @@ public:
                 continue;
             const auto legacy = shortcut_test::legacyCommandInfo (commandID);
             auto expectedKeys = legacy.defaultKeypresses;
+            if (commandID == CommandIDs::removeCue)
+                expectedKeys.add (key (KeyPress::backspaceKey)); // formerly ListBox::deleteKeyPressed, table focus only
            #if JUCE_WINDOWS
             if (commandID == CommandIDs::panicAll)
             {
@@ -598,10 +600,13 @@ private:
 
         ShortcutKeyContext context;
         context.focus = ShortcutScope::cueTable;
-        expectEquals (h.service->resolveKeyOwner (key (KeyPress::deleteKey), context).id, juce::String ("cue.remove"));
-        expect (h.pressKey (key (KeyPress::deleteKey), *list));
-        expectEquals (h.target.invocationCount (CommandIDs::removeCue), 1);
-        h.target.invocations.clear();
+        for (const auto code : { KeyPress::deleteKey, KeyPress::backspaceKey })
+        {
+            expectEquals (h.service->resolveKeyOwner (key (code), context).id, juce::String ("cue.remove"));
+            expect (h.pressKey (key (code), *list));
+            expectEquals (h.target.invocationCount (CommandIDs::removeCue), 1);
+            h.target.invocations.clear();
+        }
 
         expect (h.service->setKeys ("cue.remove", { key (KeyPress::F13Key) }).wasOk());
         for (const auto& oldKey : { key (KeyPress::deleteKey), key (KeyPress::backspaceKey),

@@ -425,7 +425,7 @@ R"(기본 단축키
   Ctrl+9 제어 큐 · Ctrl+6 마이크 큐 · Ctrl+Shift+E 시퀀스 녹음 시작/정지
 
 편집
-  Ctrl+Z / Ctrl+Y 실행 취소 / 다시 실행 · Delete 삭제 · Ctrl+D 복제 · Ctrl+↑/↓ 순서 · Ctrl+A 모두 선택
+  Ctrl+Z / Ctrl+Y 실행 취소 / 다시 실행 · Delete 삭제(큐 표에서는 Backspace도 가능) · Ctrl+D 복제 · Ctrl+↑/↓ 순서 · Ctrl+A 모두 선택
   Ctrl+C / Ctrl+X / Ctrl+V 복사 / 잘라내기 / 붙여넣기 · Ctrl+Shift+V 속성 붙여넣기 · Ctrl+F 찾기 · F3 다음 찾기 · Ctrl+R 재번호
   N Q E W C O D 표에서 바로 편집(번호 이름 프리웨이트 포스트웨이트 진행 메모 길이) · 그룹 행 ←/→ 접기/펼치기
 

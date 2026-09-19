@@ -24,6 +24,8 @@ struct ShortcutDefinition
     juce::String menuCategory;
     int commandFlags = 0;
     bool (*textKeyMatcher) (const juce::KeyPress&) = nullptr;
+    // Legacy table-only command bindings retain their focus scope after export/import.
+    ShortcutKeys cueTableOnlyKeys;
 
     bool isCommand() const noexcept { return commandID != 0; }
     /** Text-driven bindings use the actual event character. Character-less binding previews

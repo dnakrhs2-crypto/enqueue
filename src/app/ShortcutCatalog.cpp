@@ -16,7 +16,7 @@ juce::KeyPress key (int code, int modifiers = 0) { return { code, modifiers, 0 }
 
 ShortcutDefinition command (const char* id, juce::CommandID commandID, juce::String name,
                             juce::String description, Category category, Scope scope, bool repeat,
-                            juce::String menuCategory, ShortcutKeys keys)
+                            juce::String menuCategory, ShortcutKeys keys, ShortcutKeys cueTableOnlyKeys = {})
 {
     int flags = commandID == CommandIDs::go ? juce::ApplicationCommandInfo::wantsKeyUpDownCallbacks : 0;
    #if ! JUCE_WINDOWS
@@ -24,7 +24,7 @@ ShortcutDefinition command (const char* id, juce::CommandID commandID, juce::Str
         flags |= juce::ApplicationCommandInfo::wantsKeyUpDownCallbacks;
    #endif
     return { id, std::move (name), std::move (description), category, scope, repeat,
-             commandID, std::move (keys), std::move (menuCategory), flags };
+             commandID, std::move (keys), std::move (menuCategory), flags, nullptr, std::move (cueTableOnlyKeys) };
 }
 
 std::vector<ShortcutDefinition> makeCommands()
@@ -36,7 +36,7 @@ std::vector<ShortcutDefinition> makeCommands()
                  Category::playback, Scope::playback, false, ko ("재생"), { key ('P', ModifierKeys::noModifiers) }),
         command ("transport.fadeOutSelected", CommandIDs::fadeOutSelected, ko ("페이드아웃 정지"), ko ("선택 큐(재생 중이 아니면 가장 최근 재생 큐)를 정지 페이드로 정지"),
                  Category::playback, Scope::playback, false, ko ("재생"), { key ('F', ModifierKeys::noModifiers) }),
-        command ("transport.panicAll", CommandIDs::panicAll, ko ("전체 페이드 정지"), ko ("재생 중인 모든 큐를 설정된 시간(기본 2초) 동안 페이드아웃 후 정지. 0.5초 안에 두 번 누르면 즉시 정지"),
+        command ("transport.panicAll", CommandIDs::panicAll, ko ("전체 페이드 정지"), ko ("재생 중인 모든 큐를 설정된 시간(기본 1초) 동안 페이드아웃 후 정지. 0.5초 안에 두 번 누르면 즉시 정지"),
                  Category::playback, Scope::application, false, ko ("재생"), { key (KeyPress::escapeKey, ModifierKeys::noModifiers) }),
         command ("transport.hardStopAll", CommandIDs::hardStopAll, ko ("전체 즉시 정지"), ko ("페이드 없이 모든 큐를 바로 정지"),
                  Category::playback, Scope::playback, false, ko ("재생"), {  }),
@@ -64,7 +64,7 @@ std::vector<ShortcutDefinition> makeCommands()
                  Category::cue, Scope::mainWindow, false, ko ("큐"), { key ('7', ModifierKeys::commandModifier | ModifierKeys::shiftModifier) }),
         command ("cue.addDevamp", CommandIDs::addDevampCue, ko ("디밴프 큐 추가"), ko ("선택한 오디오 큐를 대상으로: 실행하면 대상이 지금 도는 반복을 마치고 이어가거나 멈추고, 그 순간 다음 큐를 시작"),
                  Category::cue, Scope::mainWindow, false, ko ("큐"), { key ('8', ModifierKeys::commandModifier) }),
-        command ("cue.addGroup", CommandIDs::addGroupCue, ko ("그룹 큐 추가"), ko ("빈 그룹을 선택 뒤에 추가 (자식은 그룹 아래로 끌어다 넣거나 Ctrl+G로 묶기)"),
+        command ("cue.addGroup", CommandIDs::addGroupCue, ko ("그룹 큐 추가"), ko ("빈 그룹을 선택 뒤에 추가 (자식은 그룹 아래로 끌어다 넣거나 선택한 큐 그룹으로 묶기 사용)"),
                  Category::cue, Scope::mainWindow, false, ko ("큐"), { key ('0', ModifierKeys::commandModifier) }),
         command ("cue.groupSelected", CommandIDs::groupSelectedCues, ko ("선택한 큐 그룹으로 묶기"), ko ("선택한 큐(하위 포함)를 새 그룹 안에 넣음"),
                  Category::cue, Scope::mainWindow, false, ko ("큐"), { key ('G', ModifierKeys::commandModifier) }),
@@ -101,7 +101,8 @@ std::vector<ShortcutDefinition> makeCommands()
         command ("cue.fetchFadeLevels", CommandIDs::fetchFadeLevels, ko ("대상에서 레벨 가져오기"), ko ("선택한 페이드 큐의 목표 레벨을 대상 큐의 현재 레벨로"),
                  Category::cue, Scope::mainWindow, false, ko ("큐"), { key ('T', ModifierKeys::commandModifier | ModifierKeys::shiftModifier) }),
         command ("cue.remove", CommandIDs::removeCue, ko ("큐 삭제"), ko ("선택 큐 삭제"),
-                 Category::cue, Scope::mainWindow, false, ko ("큐"), { key (KeyPress::deleteKey, ModifierKeys::noModifiers) }),
+                 Category::cue, Scope::mainWindow, false, ko ("큐"), { key (KeyPress::deleteKey), key (KeyPress::backspaceKey) },
+                 { key (KeyPress::backspaceKey) }),
         command ("cue.duplicate", CommandIDs::duplicateCue, ko ("큐 복제"), ko ("선택 큐를 플러그인 체인까지 바로 아래에 복제"),
                  Category::cue, Scope::mainWindow, false, ko ("큐"), { key ('D', ModifierKeys::commandModifier) }),
         command ("cue.moveUp", CommandIDs::moveCueUp, ko ("위로 이동"), ko ("선택 큐를 한 칸 위로"),

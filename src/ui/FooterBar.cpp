@@ -1,4 +1,6 @@
 #include "ui/FooterBar.h"
+#include "app/Commands.h"
+#include "app/ShortcutDisplay.h"
 
 #include "ui/UiUtils.h"
 
@@ -98,10 +100,11 @@ FooterBar::FooterBar()
     setCueCount (0);
 }
 
-void FooterBar::setShowMode (bool mode)
+void FooterBar::setShowMode (bool mode, const ShortcutService* shortcuts)
 {
     showMode = mode;
-    modeHint.setText (showMode ? ko ("쇼 모드: 편집 잠김 (Ctrl+Shift+M)") : ko ("편집 모드 · 쇼 모드 = Ctrl+Shift+M"), juce::dontSendNotification);
+    const auto keys = ShortcutDisplay::currentKeys (shortcuts, CommandIDs::toggleShowMode);
+    modeHint.setText (showMode ? ko ("쇼 모드: 편집 잠김 (") + keys + ")" : ko ("편집 모드 · 쇼 모드 = ") + keys, juce::dontSendNotification);
     modeHint.setTooltip (modeHint.getText());
     resized();
     repaint();

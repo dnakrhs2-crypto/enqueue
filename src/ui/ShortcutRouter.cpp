@@ -163,7 +163,8 @@ void ShortcutRouter::prepareNativeEvent (int vk, int modifiers, bool down, bool 
     {
         const bool panic = std::any_of (service.getPanicBindings().begin(), service.getPanicBindings().end(),
             [&] (const auto& binding) { return binding.virtualKey == vk && binding.modifiers == modifiers; });
-        nativePresses.push_back ({ { vk, modifiers }, repeat, false, panic });
+        nativePresses.push_back ({ { vk, modifiers }, repeat, false, panic,
+                                  service.isCapturing(), service.getInputGeneration() });
     }
 }
 
@@ -233,6 +234,11 @@ bool ShortcutRouter::keyPressed (const juce::KeyPress& key, juce::Component* ori
     const std::optional<NativePress> native = found != nativePresses.end() ? std::optional<NativePress> (*found) : std::nullopt;
     if (found != nativePresses.end())
         nativePresses.erase (found);
+    // A translated character can arrive after its native up and after capture or
+    // mapping changed. Its original owner/generation survives physical release.
+    if (native && (native->generation != service.getInputGeneration()
+                   || (native->captureOwned && ! service.isCapturing())))
+        return true;
     // JUCE queries asynchronous modifiers; use the modifiers of the matched down
     // instead. A panic-owned event must never turn into an unmodified GO.
     const auto observedKey = native ? juce::KeyPress (key.getKeyCode(), native->key.modifiers, key.getTextCharacter()) : key;
@@ -294,7 +300,16 @@ bool ShortcutRouter::route (const juce::KeyPress& key, juce::Component* origin, 
     {
         it->second.quarantined = true;
         if (! repeat && captureActivationKeys.empty() && code != 0)
-            service.deliverCaptureKey (key);
+        {
+            auto captured = key;
+            for (const auto& alias : ShortcutKeyInput::numberPadAliases())
+                if (vk == alias.virtualKey)
+                {
+                    captured = juce::KeyPress (alias.keyCode, key.getModifiers(), 0);
+                    break;
+                }
+            service.deliverCaptureKey (captured);
+        }
         return true;
     }
     if (it->second.quarantined)

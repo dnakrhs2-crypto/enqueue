@@ -6,6 +6,7 @@
 
 namespace gocue
 {
+class ShortcutService;
 
 /** Menu bar's edit / show mode segment, sharing MainComponent's existing mode action. */
 class ModeToggle : public juce::Component
@@ -29,7 +30,7 @@ class FooterBar : public juce::Component
 public:
     FooterBar();
 
-    void setShowMode (bool showMode);
+    void setShowMode (bool showMode, const ShortcutService* shortcuts = nullptr);
     void setCueCount (int count);
     /** Number of broken cues (0 hides the button). */
     void setWarningCount (int count);

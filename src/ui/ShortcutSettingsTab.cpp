@@ -45,6 +45,8 @@ Issues inspect (const ShortcutService& service, const juce::String& action, cons
         if (ShortcutKeyInput::keysOverlap (cue.key, key))
             issues.conflicts.addIfNotAlreadyThere (ko ("현재 프로젝트 큐와 충돌: ") + cue.id + ko (" → 큐 핫키 비활성"));
     const auto* entry = ShortcutCatalog::get().find (action);
+    if (entry != nullptr && entry->cueTableOnlyKeys.contains (key))
+        issues.limitations.add (ShortcutDisplay::key (key) + ko (": 큐 표에 포커스가 있을 때만 작동합니다."));
     const bool panic = entry != nullptr && entry->scope == ShortcutScope::application;
     if (ShortcutKeyInput::isStandardTextEditorKey (key))
         issues.limitations.add (panic ? ko ("입력창에서도 작동합니다.") : ko ("입력창에서는 문자·편집 조작이 우선입니다."));
@@ -246,6 +248,7 @@ ShortcutSettingsTab::ShortcutSettingsTab (ShortcutService& s, ProjectDocument& d
     for (const auto* name : { "전체 카테고리", "재생", "큐", "편집", "화면", "파일", "설정" }) category.addItem (ko (name), index++);
     index = 1;
     for (const auto* name : { "전체 상태", "변경됨", "미지정", "충돌", "제한 있음" }) status.addItem (ko (name), index++);
+    status.setTooltip (ko ("충돌·제한의 자세한 이유는 기능을 선택하면 표시됩니다. 제한 있음에는 입력창의 문자·편집 조작 우선도 포함됩니다."));
     category.setSelectedId (1, juce::dontSendNotification);
     status.setSelectedId (1, juce::dontSendNotification);
     category.onChange = status.onChange = [this] { cancelCapture(); refresh(); };
@@ -352,7 +355,7 @@ void ShortcutSettingsTab::paintListBoxItem (int row, juce::Graphics& g, int widt
     auto keysBounds = bounds.removeFromRight (190);
     g.setColour (Palette::text);
     g.setFont (Palette::font());
-    g.drawText (entry.name + (! entry.conflicts.isEmpty() ? ko (" [충돌]") : ! entry.limitations.isEmpty() ? ko (" [제한]") : juce::String())
+    g.drawText (entry.name + (! entry.conflicts.isEmpty() ? ko (" [충돌]") : juce::String())
                 + ko (" · ") + entry.scope, bounds, juce::Justification::centredLeft, true);
     const auto text = ShortcutSettingsModel::compactKeys (entry.keys, keysBounds.getWidth() - 8,
         [] (const juce::String& value) { return juce::GlyphArrangement::getStringWidthInt (Palette::font(), value); });

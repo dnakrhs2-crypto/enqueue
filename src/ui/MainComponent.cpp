@@ -270,6 +270,7 @@ MainComponent::MainComponent (AudioEngine& e, AppSettings& s, juce::ApplicationC
     shortcutRouter->attach (*this, ShortcutKeyContext::Window::main);
     inspector.setShortcutService (*shortcuts);
     transport.setShortcutService (*shortcuts);
+    footer.setShowMode (showMode, shortcuts.get());
     shortcuts->addListener (this);
     panicHook->beforeDispatch = [this] (int vk, int modifiers, bool down, bool repeat)
     { shortcutRouter->prepareNativeEvent (vk, modifiers, down, repeat); };
@@ -352,6 +353,8 @@ void MainComponent::shortcutsChanged()
 {
     juce::PopupMenu::dismissAllActiveMenus();
     transport.refreshShortcutHints();
+    updateTransportStandby();
+    footer.setShowMode (showMode, shortcuts.get());
     menuItemsChanged();
 }
 
@@ -574,8 +577,6 @@ void MainComponent::getCommandInfo (juce::CommandID commandID, juce::Application
     const int firstSelected = selectedRows.empty() ? -1 : selectedRows.front();
     const int lastSelected = selectedRows.empty() ? -1 : selectedRows.back();
     ShortcutCatalog::get().getCommandInfo (commandID, result);
-    if (commandID == CommandIDs::panicAll)
-        result.shortName = ko ("전체 페이드 정지 (") + ShortcutDisplay::currentKeys (shortcuts.get(), commandID) + ")";
 
     switch (commandID)
     {
@@ -1890,7 +1891,7 @@ void MainComponent::setShowMode (bool shouldBeShowMode)
     cart.setEditable (! showMode);
     containerTabs.setEditable (! showMode);
     inspector.setEditable (! showMode);
-    footer.setShowMode (showMode);
+    footer.setShowMode (showMode, shortcuts.get());
     modeToggle.setShowMode (showMode);
 
     if (pluginManagerWindow != nullptr)

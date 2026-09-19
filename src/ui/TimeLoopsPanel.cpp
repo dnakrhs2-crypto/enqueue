@@ -123,7 +123,7 @@ TimeLoopsPanel::TimeLoopsPanel (ProjectDocument& doc, AudioEngine& e, juce::Audi
     waveform.onLockedClick = [this]
     {
         if (onStatus)
-            onStatus (ko ("쇼 모드: 파형 클릭으로 재생 위치를 옮기지 않습니다 (편집 모드 = Ctrl+Shift+M)"), false);
+            onStatus (ko ("쇼 모드: 파형 클릭으로 재생 위치를 옮기지 않습니다. 편집 모드로 전환하세요."), false);
     };
     addAndMakeVisible (waveform);
 

@@ -2974,6 +2974,12 @@ public:
 
     void paint (juce::Graphics& g) override { g.fillAll (Palette::panel); }
 
+    void refreshShortcutHint (const ShortcutService* service)
+    {
+        groupKeys = ShortcutDisplay::currentKeys (service, CommandIDs::groupSelectedCues);
+        timeline.repaint();
+    }
+
     /** The selected group's index in the list (-1 when none). */
     int groupIndex() const
     {
@@ -3095,7 +3101,8 @@ private:
             {
                 g.setColour (Palette::dimText);
                 g.setFont (Palette::font (Palette::fieldLabelSize));
-                g.drawText (ko ("자식 큐가 없습니다 — 큐를 이 그룹 아래로 끌어다 넣거나, 큐를 선택하고 Ctrl+G로 묶으세요"), getLocalBounds(), juce::Justification::centred);
+                g.drawText (ko ("자식 큐가 없습니다 — 큐를 이 그룹 아래로 끌어다 넣거나, 큐를 선택하고 그룹으로 묶으세요 (")
+                            + owner.groupKeys + ")", getLocalBounds(), juce::Justification::centred);
             }
         }
 
@@ -3230,6 +3237,7 @@ private:
     juce::ToggleButton loopToggle, shuffleToggle, crossfadeToggle;
     juce::TextEditor crossfadeEditor;
     TimelineEditor timeline;
+    juce::String groupKeys = ShortcutDisplay::currentKeys (nullptr, CommandIDs::groupSelectedCues);
     juce::Uuid shownId = juce::Uuid::null();
     bool refreshing = false;
     bool editable = true;
@@ -3370,6 +3378,7 @@ void CueInspector::shortcutsChanged()
 {
     basics->refresh();
     fadePanel->refreshShortcutHint (shortcuts);
+    groupPanel->refreshShortcutHint (shortcuts);
 }
 
 CueInspector::~CueInspector()

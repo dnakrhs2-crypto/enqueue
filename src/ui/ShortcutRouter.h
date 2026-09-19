@@ -68,6 +68,8 @@ private:
     {
         PanicKeyBinding key;
         bool repeat = false, released = false, panicOwned = false;
+        bool captureOwned = false;
+        uint64_t generation = 0;
     };
     void watchTree (juce::Component&);
     void componentChildrenChanged (juce::Component&) override;

@@ -223,7 +223,8 @@ ShortcutKeyOwner ShortcutService::resolveKeyOwner (const juce::KeyPress& key, co
                             ? Reason::commandOverCue : Reason::commandBinding;
         result.id = command->id;
         result.commandID = command->commandID;
-        if (! inScope (command->scope, context.window))
+        if (! inScope (command->scope, context.window)
+            || (containsKey (command->cueTableOnlyKeys, key) && context.focus != ShortcutScope::cueTable))
         {
             result.kind = Kind::blocked;
             result.reason = Reason::outsideScope;

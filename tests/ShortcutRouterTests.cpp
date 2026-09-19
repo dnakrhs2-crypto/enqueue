@@ -1,6 +1,8 @@
 #include "ShortcutTestHarness.h"
 #include "app/Commands.h"
 #include "ui/ShortcutRouter.h"
+#include "ui/KeyCapture.h"
+#include "app/ShortcutKeyInput.h"
 #include "ui/CueTable.h"
 #include "ui/LevelMatrixComponent.h"
 #include "ui/GoCueLookAndFeel.h"
@@ -49,6 +51,7 @@ struct InputHarness : shortcut_test::Harness
         callbacks.keyDown = [this] (int code) { return physical.count (code) != 0; };
         callbacks.nativeKeyDown = [this] (int vk) { return nativePhysical.count (vk) != 0; };
         callbacks.applicationActive = [this] { return foreground; };
+        callbacks.context = [this] (ShortcutKeyContext& context) { context.cueHotkeys = cueBindings; };
         callbacks.requireGoKeyUp = [this] { return requireKeyUp; };
         callbacks.cueHotkey = [this] (const K& key, bool repeat)
         {
@@ -88,6 +91,7 @@ struct InputHarness : shortcut_test::Harness
     double now = 1000.0;
     int cueFires = 0, cueRepeats = 0;
     std::vector<K> cueKeys;
+    std::vector<ShortcutKeyContext::CueHotkey> cueBindings;
     std::vector<double> panicTimes;
     std::vector<bool> hardPanics;
 };
@@ -340,6 +344,57 @@ public:
             expectEquals (h.downs (CommandIDs::go), 2);
             expectEquals (h.ups (CommandIDs::go), 1);
             expect (h.router->anyGoKeyHeld());
+        }
+
+        beginTest ("released native input cannot escape capture or mapping transitions as a delayed character");
+        for (const bool replaceCapture : { false, true })
+            for (const int code : { K::spaceKey, K::F24Key, K::returnKey })
+            {
+                InputHarness h;
+                h.cueBindings = { { "cue", K (K::F24Key) } };
+                juce::TextButton button;
+                int clicks = 0, token = 0, nextToken = 0, candidates = 0;
+                button.onClick = [&] { ++clicks; };
+                button.addToDesktop (0);
+                h.router->attach (button, Window::main);
+                h.service->beginCapture (&token, [&] (const K&) { ++candidates; });
+                const int vk = PanicKeyHook::convert (K (code)).binding->virtualKey;
+                h.router->prepareNativeEvent (vk, 0, true, false);
+                h.router->prepareNativeEvent (vk, 0, true, true);
+                h.router->prepareNativeEvent (vk, 0, false, false);
+                h.service->endCapture (&token); // already physically up: no held-key quarantine
+                if (replaceCapture)
+                    h.service->beginCapture (&nextToken, [&] (const K&) { ++candidates; });
+                for (int delivery = 0; delivery < 2; ++delivery)
+                    button.getPeer()->handleKeyPress (K (code));
+                drainMessages();
+                expectEquals (h.downs (CommandIDs::go), 0);
+                expectEquals (h.cueFires, 0);
+                expectEquals (clicks, 0);
+                expectEquals (candidates, 0); // cannot become the next capture's candidate either
+                expect (h.target.invocations.empty());
+                h.service->endCapture (&nextToken);
+
+                // Fresh input still reaches the same command, cue or default button.
+                h.nativePhysical.insert (vk);
+                h.router->prepareNativeEvent (vk, 0, true, false);
+                button.getPeer()->handleKeyPress (K (code));
+                drainMessages();
+                expectEquals (h.downs (CommandIDs::go), code == K::spaceKey ? 1 : 0);
+                expectEquals (h.cueFires, code == K::F24Key ? 1 : 0);
+                expectEquals (clicks, code == K::returnKey ? 1 : 0);
+                h.releaseAll();
+                button.removeFromDesktop();
+            }
+        {
+            InputHarness h;
+            juce::Component origin;
+            h.router->attach (origin, Window::main);
+            h.router->prepareNativeEvent (0x20, 0, true, false);
+            h.router->prepareNativeEvent (0x20, 0, false, false);
+            expect (h.service->addKey ("transport.go", K (K::F13Key)).wasOk());
+            expect (h.router->keyPressed (K (K::spaceKey), &origin));
+            expectEquals (h.downs (CommandIDs::go), 0);
         }
 
         beginTest ("GO focus/modifier changes and map replacement cannot manufacture a fresh down");
@@ -860,6 +915,71 @@ public:
         }
 
        #if JUCE_WINDOWS
+        beginTest ("native keypad character learning registers the same VK and fires panic exactly once");
+        for (const auto& alias : ShortcutKeyInput::numberPadAliases())
+            for (const auto ch : juce::String (alias.characters))
+                for (const int mods : std::array<int, 2> { 0, M::ctrlModifier })
+                    for (const bool releasedBeforeCharacter : { false, true })
+                    {
+                        InputHarness h;
+                        expect (h.panic->install().wasOk());
+                        juce::Component origin;
+                        h.router->attach (origin, Window::main);
+                        KeyCapture capture (*h.service, [&] { return ! h.nativePhysical.empty(); });
+                        int registrations = 0;
+                        const K expected (alias.keyCode, mods, 0);
+                        capture.onRegister = [&] (const K& key)
+                        {
+                            ++registrations;
+                            expect (key == expected);
+                            expect (h.service->setKeys ("transport.panicAll", { key }, ShortcutService::ConflictPolicy::move).wasOk());
+                        };
+                        capture.start ("panic");
+                        h.nativePhysical.insert (alias.virtualKey);
+                        h.native (alias.virtualKey, mods);
+                        h.router->prepareNativeEvent (alias.virtualKey, mods, true, false);
+                        if (releasedBeforeCharacter)
+                        {
+                            h.nativePhysical.clear();
+                            h.router->prepareNativeEvent (alias.virtualKey, mods, false, false);
+                        }
+                        // JUCE's character and current modifiers no longer identify the keypad press.
+                        expect (h.router->keyPressed (K (static_cast<int> (ch), 0, ch), &origin));
+                        h.nativePhysical.clear();
+                        h.router->prepareNativeEvent (alias.virtualKey, mods, false, false);
+                        h.releaseAll();
+                        for (auto* child : capture.getChildren())
+                            if (auto* button = dynamic_cast<juce::TextButton*> (child);
+                                button != nullptr && button->getButtonText() == juce::String::fromUTF8 ("등록"))
+                            {
+                                expect (button->isEnabled());
+                                button->onClick();
+                            }
+                        expectEquals (registrations, 1);
+                        expect (! h.service->isCapturing());
+                        expect (h.service->getKeys (CommandIDs::panicAll) == ShortcutKeys { expected });
+                        expectEquals (h.service->getPanicBindings().front().virtualKey, alias.virtualKey);
+                        const auto stored = ShortcutProfile::parse (h.currentXml);
+                        expect (stored.wasOk());
+                        const auto saved = stored.profile.overrides.find ("transport.panicAll");
+                        expect (saved != stored.profile.overrides.end() && saved->second == ShortcutKeys { expected });
+                        drainMessages();
+                        expect (h.panicTimes.empty());
+
+                        h.nativePhysical.insert (alias.virtualKey);
+                        for (int repeat = 0; repeat < 3; ++repeat)
+                        {
+                            h.native (alias.virtualKey, mods, true, repeat != 0);
+                            h.router->prepareNativeEvent (alias.virtualKey, mods, true, repeat != 0);
+                            expect (h.router->keyPressed (K (static_cast<int> (ch), 0, ch), &origin));
+                        }
+                        drainMessages();
+                        expectEquals (static_cast<int> (h.panicTimes.size()), 1);
+                        expect (h.target.invocations.empty());
+                        expectEquals (h.cueFires, 0);
+                        h.releaseAll();
+                    }
+
         beginTest ("keypad panic character aliases conflict with commands and still belong to panic");
         {
             InputHarness h;
@@ -944,7 +1064,7 @@ public:
         }
        #endif
 
-        beginTest ("real cue table Delete follows mapping; old Delete/Backspace execute no command");
+        beginTest ("table Delete and Backspace defaults execute once; remapping and unassigning remove both");
         {
             InputHarness h;
             CueList cues;
@@ -955,16 +1075,45 @@ public:
             for (auto* child : table.getChildren())
                 if (dynamic_cast<juce::TableListBox*> (child) != nullptr) box = child;
             expect (box != nullptr);
-            expect (h.service->setKeys ("cue.remove", { K (K::F13Key) }).wasOk());
             if (box != nullptr)
             {
-                for (const auto key : { K (K::deleteKey), K (K::backspaceKey), K (K::F13Key) })
+                const auto pressTable = [&] (const K& key)
                 {
                     const bool consumed = h.press (key, h.router->contextFor (box, key), box);
                     if (! consumed) box->keyPressed (key);
                     h.releaseAll();
+                };
+                // Focus scope is stable even when defaults become explicit through export/import.
+                for (const bool imported : { false, true })
+                {
+                    if (imported) expect (h.service->importProfile (h.service->exportProfile()).wasOk());
+                    h.target.invocations.clear();
+                    h.press (K (K::backspaceKey)); // another main-window control never acquired table Backspace
+                    h.releaseAll();
+                    expectEquals (h.downs (CommandIDs::removeCue), 0);
+                    ShortcutKeyContext editing;
+                    editing.textEditing = true;
+                    editing.focus = ShortcutScope::cueTable;
+                    expect (! h.press (K (K::backspaceKey), editing, box));
+                    h.releaseAll();
+                    expectEquals (h.downs (CommandIDs::removeCue), 0);
+                    for (const auto key : { K (K::deleteKey), K (K::backspaceKey) })
+                    {
+                        h.target.invocations.clear();
+                        pressTable (key);
+                        expectEquals (h.downs (CommandIDs::removeCue), 1);
+                    }
                 }
-                expectEquals (h.downs (CommandIDs::removeCue), 1);
+                for (const auto& keys : { ShortcutKeys { K (K::F13Key) }, ShortcutKeys {} })
+                {
+                    expect (h.service->setKeys ("cue.remove", keys).wasOk());
+                    h.target.invocations.clear();
+                    pressTable (K (K::deleteKey));
+                    pressTable (K (K::backspaceKey));
+                    expectEquals (h.downs (CommandIDs::removeCue), 0);
+                    pressTable (K (K::F13Key));
+                    expectEquals (h.downs (CommandIDs::removeCue), keys.isEmpty() ? 0 : 1);
+                }
             }
         }
     }
