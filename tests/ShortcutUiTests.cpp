@@ -220,6 +220,38 @@ public:
             }
         }
 
+        beginTest ("comma and keypad separator GO previews agree with actual level matrix input");
+        {
+            for (const int code : { static_cast<int> (','), K::numberPadSeparator })
+            {
+                Harness h;
+                const K binding (code, 0, 0), runtime (',', 0, ',');
+                expect (h.service->setKeys ("transport.go", { binding }).wasOk());
+                const auto preview = Model::inspect (*h.service, "transport.go", binding, {});
+                const auto actual = Model::inspect (*h.service, "transport.go", runtime, {});
+                expect (preview.limitations == actual.limitations);
+                expect (! preview.limitations.joinIntoString (" ").contains (ShortcutCatalog::get().find ("levelMatrix.typeValue")->name));
+
+                ShortcutKeyContext context;
+                context.focus = ShortcutScope::levelMatrix;
+                const auto previewOwner = h.service->resolveKeyOwner (binding, context, true);
+                const auto runtimeOwner = h.service->resolveKeyOwner (runtime, context);
+                expect (previewOwner.kind == ShortcutKeyOwner::Kind::command);
+                expect (runtimeOwner.kind == previewOwner.kind);
+                expectEquals (previewOwner.id, juce::String ("transport.go"));
+                expectEquals (runtimeOwner.id, previewOwner.id);
+                expect (! ShortcutKeyInput::isLevelMatrixValueKey (runtime));
+
+                ShortcutRouter::Callbacks callbacks;
+                callbacks.keyDown = [] (int) { return true; };
+                callbacks.nativeKeyDown = [] (int) { return false; };
+                callbacks.applicationActive = [] { return true; };
+                ShortcutRouter router (*h.service, h.manager, callbacks);
+                expect (router.route (runtime, nullptr, context, 1000));
+                expectEquals (h.target.invocationCount (CommandIDs::go), 1);
+            }
+        }
+
         beginTest ("all 75 commands including unassigned appear; search combines name description and key tokens");
         {
             Harness h;

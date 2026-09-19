@@ -30,13 +30,14 @@ struct ShortcutDefinition
     ShortcutKeys cueTableOnlyKeys;
 
     bool isCommand() const noexcept { return commandID != 0; }
-    /** Text-driven bindings use the actual event character. Character-less binding previews
-        compare the listed keys with the same NumPad aliases as runtime input. */
+    /** Text-driven bindings use the actual event character, or the explicit key list for
+        character-less previews. Other fixed bindings also match NumPad aliases. */
     bool matchesKey (const juce::KeyPress& key) const
     {
-        return textKeyMatcher != nullptr && key.getTextCharacter() != 0
-                   ? textKeyMatcher (key) : std::any_of (defaultKeys.begin(), defaultKeys.end(), [&] (const auto& binding)
-                     { return ShortcutKeyInput::keysOverlap (binding, key); });
+        if (textKeyMatcher != nullptr)
+            return key.getTextCharacter() != 0 ? textKeyMatcher (key) : defaultKeys.contains (key);
+        return std::any_of (defaultKeys.begin(), defaultKeys.end(), [&] (const auto& binding)
+                           { return ShortcutKeyInput::keysOverlap (binding, key); });
     }
 };
 
