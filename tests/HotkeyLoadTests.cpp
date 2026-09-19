@@ -1,5 +1,6 @@
 #include "model/Hotkeys.h"
 #include "model/ProjectSerializer.h"
+#include "app/ShortcutKeyInput.h"
 
 #include <juce_core/juce_core.h>
 
@@ -28,6 +29,56 @@ public:
             expect (Hotkeys::isReservedDescription ("not a key at all"));
             expect (! Hotkeys::isReservedDescription ("F5"));
         }
+
+        beginTest ("loading clears keypad alias duplicates across lists and still rejects Ctrl and Alt");
+        for (const auto& alias : ShortcutKeyInput::numberPadAliases())
+            for (const auto ch : juce::String (alias.characters))
+                for (const bool padFirst : { false, true })
+                {
+                    using K = juce::KeyPress;
+                    using M = juce::ModifierKeys;
+                    const K pad (alias.keyCode), character (static_cast<int> (ch));
+                    const auto first = padFirst ? pad : character;
+                    const auto duplicate = padFirst ? character : pad;
+                    const K shifted (duplicate.getKeyCode(), M::shiftModifier, 0);
+                    auto cueFor = [] (const K& key)
+                    {
+                        Cue cue;
+                        cue.type = CueType::control;
+                        cue.control.kind = ControlKind::wait;
+                        cue.hotkey = key.getTextDescription();
+                        return cue;
+                    };
+                    Project project;
+                    project.cues().push_back (cueFor (first));
+                    project.cues().push_back (cueFor (duplicate));
+                    CueContainer cart;
+                    cart.isCart = true;
+                    cart.cues = { cueFor (duplicate), cueFor (shifted),
+                                  cueFor (K (alias.keyCode, M::ctrlModifier, 0)),
+                                  cueFor (K (alias.keyCode, M::altModifier, 0)) };
+                    project.lists.push_back (cart);
+                    const juce::TemporaryFile file (".enqueue");
+                    expect (ProjectSerializer::save (project, file.getFile()).wasOk());
+                    Project loaded;
+                    juce::StringArray warnings;
+                    expect (ProjectSerializer::load (file.getFile(), loaded, &warnings).wasOk());
+                    expectEquals (static_cast<int> (loaded.lists.size()), 2);
+                    if (loaded.lists.size() != 2) continue;
+                    expectEquals (static_cast<int> (loaded.cues().size()), 2);
+                    expectEquals (static_cast<int> (loaded.lists[1].cues.size()), 4);
+                    if (loaded.cues().size() != 2 || loaded.lists[1].cues.size() != 4) continue;
+                    expectEquals (loaded.cues()[0].hotkey, first.getTextDescription());
+                    expect (loaded.cues()[1].hotkey.isEmpty());
+                    expect (loaded.lists[1].cues[0].hotkey.isEmpty());
+                    expectEquals (loaded.lists[1].cues[1].hotkey, shifted.getTextDescription());
+                    expect (loaded.lists[1].cues[2].hotkey.isEmpty());
+                    expect (loaded.lists[1].cues[3].hotkey.isEmpty());
+                    int cleared = 0;
+                    for (const auto& warning : warnings)
+                        if (warning.contains ("Hotkey") && warning.contains ("cleared")) ++cleared;
+                    expectEquals (cleared, 4);
+                }
 
         beginTest ("loading clears reserved and duplicate hotkeys and keeps the rest");
         {

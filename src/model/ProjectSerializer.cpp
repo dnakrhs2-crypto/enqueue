@@ -1,7 +1,9 @@
 #include "model/Hotkeys.h"
 #include "model/ProjectSerializer.h"
 #include "model/SafeFileWrite.h"
+#include "app/ShortcutKeyInput.h"
 
+#include <algorithm>
 #include <cstring>
 
 #include <cmath>
@@ -931,7 +933,7 @@ juce::Result fromJson (const juce::String& json, Project& out, juce::StringArray
     project.name = root.getProperty ("name", "").toString();
 
     juce::StringArray seenIds;   // a cue id is unique across every list: they would share one player and one plugin chain
-    juce::StringArray seenHotkeys;   // a hotkey fires one cue; a reserved key (Space, Esc, ...) would fire next to GO / panic
+    juce::Array<juce::KeyPress> seenHotkeys;   // a hotkey fires one cue; a reserved key (Space, Esc, ...) would fire next to GO / panic
     auto readCues = [&] (const juce::var& array, std::vector<Cue>& into)
     {
         const auto* cues = array.getArray();
@@ -963,8 +965,9 @@ juce::Result fromJson (const juce::String& json, Project& out, juce::StringArray
 
             if (cue.hotkey.isNotEmpty())
             {
-                // the description as JUCE writes it ("F5", not "f5"): what the key match and the duplicate check compare
-                if (const auto parsed = juce::KeyPress::createFromDescription (cue.hotkey); parsed.isValid())
+                // Keep JUCE's canonical spelling for storage; compare input aliases below.
+                const auto parsed = juce::KeyPress::createFromDescription (cue.hotkey);
+                if (parsed.isValid())
                     cue.hotkey = parsed.getTextDescription();
 
                 if (Hotkeys::isReservedDescription (cue.hotkey))
@@ -974,7 +977,8 @@ juce::Result fromJson (const juce::String& json, Project& out, juce::StringArray
 
                     cue.hotkey.clear();
                 }
-                else if (seenHotkeys.contains (cue.hotkey))
+                else if (std::any_of (seenHotkeys.begin(), seenHotkeys.end(), [&] (const auto& seen)
+                         { return ShortcutKeyInput::keysOverlap (seen, parsed); }))
                 {
                     if (warnings != nullptr)
                         warnings->add ("Hotkey \"" + cue.hotkey + "\" of \"" + cue.name + "\" is already used by another cue - cleared");
@@ -982,7 +986,7 @@ juce::Result fromJson (const juce::String& json, Project& out, juce::StringArray
                     cue.hotkey.clear();
                 }
                 else
-                    seenHotkeys.add (cue.hotkey);
+                    seenHotkeys.add (parsed);
             }
 
             into.push_back (std::move (cue));

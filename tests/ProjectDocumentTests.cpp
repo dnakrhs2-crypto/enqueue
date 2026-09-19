@@ -1,4 +1,5 @@
 #include "app/ProjectDocument.h"
+#include "app/ShortcutKeyInput.h"
 
 #include <juce_core/juce_core.h>
 
@@ -30,6 +31,32 @@ public:
 
     void runTest() override
     {
+        beginTest ("hotkey registration rejects keypad aliases across lists, excluding self and different modifiers");
+        for (const auto& alias : ShortcutKeyInput::numberPadAliases())
+            for (const auto ch : juce::String (alias.characters))
+                for (const bool padFirst : { false, true })
+                {
+                    const juce::KeyPress pad (alias.keyCode), character (static_cast<int> (ch));
+                    const auto existing = padFirst ? pad : character;
+                    const auto candidate = padFirst ? character : pad;
+                    ProjectDocument document;
+                    auto owner = make ("owner");
+                    owner.hotkey = existing.getTextDescription();
+                    document.cues.add (owner);
+                    document.setActiveContainer (document.addContainer ("cart", true));
+                    const auto other = make ("other");
+                    document.cues.add (other);
+
+                    expect (document.isHotkeyTaken (candidate.getTextDescription(), other.id));
+                    expect (! document.isHotkeyTaken (candidate.getTextDescription(), owner.id));
+                    expect (! document.isHotkeyTaken (juce::KeyPress (candidate.getKeyCode(), juce::ModifierKeys::shiftModifier, 0)
+                                                          .getTextDescription(), other.id));
+                    expect (! document.isHotkeyTaken ({}, other.id));
+                    document.setActiveContainer (0);
+                    expect (document.isHotkeyTaken (candidate.getTextDescription(), other.id));
+                    expectEquals (document.cues.get (0).hotkey, existing.getTextDescription());
+                }
+
         beginTest ("a new document has one main list; adding a cart keeps the active list's cues in place");
         {
             ProjectDocument document;

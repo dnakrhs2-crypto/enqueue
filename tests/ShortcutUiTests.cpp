@@ -189,6 +189,37 @@ public:
             h.service->endCapture (&token);
         }
 
+        beginTest ("learned keypad GO previews the same waveform zoom restrictions as runtime characters");
+        {
+            struct ZoomKey { int pad, character; const char* action; };
+            for (const auto& zoom : { ZoomKey { K::numberPadSubtract, '-', "waveform.zoomOut" },
+                                      ZoomKey { K::numberPadAdd, '+', "waveform.zoomIn" },
+                                      ZoomKey { K::numberPadEquals, '=', "waveform.zoomIn" } })
+            {
+                Harness h;
+                const auto learned = KeyCaptureSession::input (K (zoom.pad, M::ctrlModifier, 0));
+                expect (learned.outcome == Outcome::candidate);
+                const K runtime (zoom.character, M::ctrlModifier, 0);
+                const auto preview = Model::inspect (*h.service, "transport.go", learned.key, {});
+                const auto expected = Model::inspect (*h.service, "transport.go", runtime, {});
+                const auto* fixed = ShortcutCatalog::get().find (zoom.action);
+                expect (preview.limitations == expected.limitations);
+                expect (preview.limitations.joinIntoString (" ").contains (fixed->name));
+                expect (! fixed->matchesKey (K (zoom.pad, M::ctrlModifier | M::shiftModifier, 0)));
+                expect (h.service->setKeys ("transport.go", { learned.key }).wasOk());
+                ShortcutKeyContext context;
+                context.focus = ShortcutScope::waveform;
+                for (const auto key : { learned.key, runtime })
+                {
+                    const auto owner = h.service->resolveKeyOwner (key, context);
+                    expect (owner.kind == ShortcutKeyOwner::Kind::fixedComponent);
+                    expectEquals (owner.id, juce::String (zoom.action));
+                }
+                const auto limited = Model::filter (Model::rows (*h.service, {}), "GO", Model::Category::all, Model::Status::limited);
+                expect (std::any_of (limited.begin(), limited.end(), [] (const auto& row) { return row.id == "transport.go"; }));
+            }
+        }
+
         beginTest ("all 75 commands including unassigned appear; search combines name description and key tokens");
         {
             Harness h;

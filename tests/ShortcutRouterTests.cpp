@@ -8,6 +8,7 @@
 #include "ui/GoCueLookAndFeel.h"
 #include "app/CueController.h"
 #include "audio/AudioEngine.h"
+#include "model/Hotkeys.h"
 
 #if JUCE_WINDOWS
  #include <windows.h>
@@ -915,6 +916,103 @@ public:
         }
 
        #if JUCE_WINDOWS
+        beginTest ("native keypad cue learning survives save/load and CueController executes once across repeats");
+        for (const auto& alias : ShortcutKeyInput::numberPadAliases())
+            for (const auto ch : juce::String (alias.characters))
+            {
+                shortcut_test::Harness h;
+                ProjectDocument document;
+                Cue cue;
+                cue.name = "learned keypad";
+                cue.type = CueType::control;
+                cue.control.kind = ControlKind::wait;
+                cue.control.seconds = 5.0;
+                cue.secondTrigger = SecondTriggerAction::stop;
+                document.cues.add (cue);
+                AudioEngine engine (0);
+                Scheduler scheduler ([] { return 0.0; });
+                CueController controller (engine, document, scheduler);
+                int fires = 0, repeats = 0;
+                controller.onStatus = [&] (const juce::String& status, bool)
+                { if (status.startsWith (juce::String::fromUTF8 ("핫키: "))) ++fires; };
+                std::set<int> nativeDown;
+                ShortcutRouter::Callbacks callbacks;
+                callbacks.keyDown = [] (int) { return false; };
+                callbacks.nativeKeyDown = [&] (int vk) { return nativeDown.count (vk) != 0; };
+                callbacks.applicationActive = [] { return true; };
+                callbacks.context = [&] (ShortcutKeyContext& context)
+                {
+                    for (const auto& savedCue : document.cues.getAll())
+                        if (savedCue.hotkey.isNotEmpty())
+                            context.cueHotkeys.push_back ({ savedCue.id.toString(), K::createFromDescription (savedCue.hotkey) });
+                };
+                callbacks.cueHotkey = [&] (const K& key, bool repeat)
+                {
+                    expect (key == K (static_cast<int> (ch)));
+                    if (repeat) { ++repeats; expect (controller.handleHotkeyRepeat (key)); }
+                    else expect (controller.handleHotkey (key));
+                };
+                ShortcutRouter router (*h.service, h.manager, callbacks);
+                juce::Component origin;
+                router.attach (origin, Window::main);
+                KeyCapture capture (*h.service, [&] { return ! nativeDown.empty(); });
+                const K expected (alias.keyCode);
+                int registrations = 0;
+                capture.validate = [&] (const K& key)
+                {
+                    return KeyCapture::Decision { ! Hotkeys::isReservedKey (key)
+                        && ! document.isHotkeyTaken (key.getTextDescription(), cue.id), {} };
+                };
+                capture.onRegister = [&] (const K& key)
+                {
+                    ++registrations;
+                    expect (key == expected);
+                    document.cues.update (0, [&] (Cue& saved) { saved.hotkey = key.getTextDescription(); });
+                };
+                capture.start ("cue");
+                nativeDown.insert (alias.virtualKey);
+                router.prepareNativeEvent (alias.virtualKey, 0, true, false);
+                expect (router.keyPressed (K (static_cast<int> (ch), 0, ch), &origin));
+                nativeDown.clear();
+                router.prepareNativeEvent (alias.virtualKey, 0, false, false);
+                router.pollKeyState();
+                for (auto* child : capture.getChildren())
+                    if (auto* button = dynamic_cast<juce::TextButton*> (child);
+                        button != nullptr && button->getButtonText() == juce::String::fromUTF8 ("등록"))
+                    {
+                        expect (button->isEnabled());
+                        button->onClick();
+                    }
+                expectEquals (registrations, 1);
+                expect (! h.service->isCapturing());
+                const juce::TemporaryFile file (".enqueue");
+                expect (document.save (file.getFile()).wasOk());
+                expect (document.load (file.getFile()).wasOk());
+                expectEquals (document.cues.get (0).hotkey, expected.getTextDescription());
+                expectEquals (fires, 0);
+                expect (! controller.isCueActive (cue.id));
+                const int playhead = document.cues.getPlayheadIndex();
+
+                nativeDown.insert (alias.virtualKey);
+                for (int repeat = 0; repeat < 3; ++repeat)
+                {
+                    router.prepareNativeEvent (alias.virtualKey, 0, true, repeat != 0);
+                    expect (router.keyPressed (K (static_cast<int> (ch), 0, ch), &origin));
+                }
+                expectEquals (fires, 1);
+                expectEquals (repeats, 2);
+                expect (controller.isCueActive (cue.id));
+                expectEquals (static_cast<int> (controller.getRunningWaits().size()), 1);
+                expectEquals (document.cues.getPlayheadIndex(), playhead);
+                expect (h.target.invocations.empty());
+                const K differentModifiers (static_cast<int> (ch), M::ctrlModifier, 0);
+                expect (! controller.handleHotkey (differentModifiers));
+                expect (! controller.handleHotkeyRepeat (differentModifiers));
+                nativeDown.clear();
+                router.prepareNativeEvent (alias.virtualKey, 0, false, false);
+                router.pollKeyState();
+            }
+
         beginTest ("native keypad character learning registers the same VK and fires panic exactly once");
         for (const auto& alias : ShortcutKeyInput::numberPadAliases())
             for (const auto ch : juce::String (alias.characters))

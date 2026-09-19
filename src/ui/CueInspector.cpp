@@ -3,6 +3,7 @@
 #include "ui/ShortcutRouter.h"
 #include "ui/KeyCapture.h"
 #include "app/ShortcutDisplay.h"
+#include "app/ShortcutKeyInput.h"
 #include "app/Commands.h"
 
 #include "audio/CueFileInfo.h"
@@ -198,7 +199,8 @@ public:
                 document.forEachList ([&] (CueList& list)
                 {
                     for (const auto& other : list.getAll())
-                        if (other.hotkey == description && (selected == nullptr || other.id != selected->id))
+                        if (other.hotkey.isNotEmpty() && (selected == nullptr || other.id != selected->id)
+                            && ShortcutKeyInput::keysOverlap (juce::KeyPress::createFromDescription (other.hotkey), key))
                             owner = other.name;
                 });
                 return ko ("이미 쓰는 핫키: ") + owner;

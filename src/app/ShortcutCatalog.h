@@ -1,7 +1,9 @@
 #pragma once
 
+#include "app/ShortcutKeyInput.h"
 #include <juce_gui_basics/juce_gui_basics.h>
 
+#include <algorithm>
 #include <vector>
 
 namespace gocue
@@ -29,11 +31,12 @@ struct ShortcutDefinition
 
     bool isCommand() const noexcept { return commandID != 0; }
     /** Text-driven bindings use the actual event character. Character-less binding previews
-        use the listed keys (including distinct NumPad codes). */
+        compare the listed keys with the same NumPad aliases as runtime input. */
     bool matchesKey (const juce::KeyPress& key) const
     {
         return textKeyMatcher != nullptr && key.getTextCharacter() != 0
-                   ? textKeyMatcher (key) : defaultKeys.contains (key);
+                   ? textKeyMatcher (key) : std::any_of (defaultKeys.begin(), defaultKeys.end(), [&] (const auto& binding)
+                     { return ShortcutKeyInput::keysOverlap (binding, key); });
     }
 };
 

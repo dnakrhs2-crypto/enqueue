@@ -1,4 +1,5 @@
 #include "app/ProjectDocument.h"
+#include "app/ShortcutKeyInput.h"
 
 namespace gocue
 {
@@ -50,11 +51,13 @@ bool ProjectDocument::isHotkeyTaken (const juce::String& hotkey, const juce::Uui
     if (hotkey.isEmpty())
         return false;
 
+    const auto key = juce::KeyPress::createFromDescription (hotkey);
     bool taken = false;
     const_cast<ProjectDocument*> (this)->forEachList ([&] (CueList& list)
     {
         for (const auto& c : list.getAll())
-            if (c.hotkey == hotkey && c.id != exceptId)
+            if (c.hotkey.isNotEmpty() && c.id != exceptId
+                && ShortcutKeyInput::keysOverlap (juce::KeyPress::createFromDescription (c.hotkey), key))
                 taken = true;
     });
     return taken;

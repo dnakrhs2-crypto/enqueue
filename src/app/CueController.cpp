@@ -1,4 +1,5 @@
 #include "app/CueController.h"
+#include "app/ShortcutKeyInput.h"
 
 #include <algorithm>
 
@@ -1829,7 +1830,7 @@ bool CueController::handleHotkey (const juce::KeyPress& key)
         {
             const auto& cue = cues.get (i);
 
-            if (cue.hotkey.isNotEmpty() && juce::KeyPress::createFromDescription (cue.hotkey) == key)
+            if (cue.hotkey.isNotEmpty() && ShortcutKeyInput::keysOverlap (juce::KeyPress::createFromDescription (cue.hotkey), key))
             {
                 matchId = cue.id;
                 label = cueLabel (i, cue);
@@ -1863,7 +1864,7 @@ bool CueController::handleHotkeyRepeat (const juce::KeyPress& key) const
     document.forEachList ([&] (CueList& cues)
     {
         for (const auto& cue : cues.getAll())
-            if (cue.hotkey.isNotEmpty() && juce::KeyPress::createFromDescription (cue.hotkey) == key)
+            if (cue.hotkey.isNotEmpty() && ShortcutKeyInput::keysOverlap (juce::KeyPress::createFromDescription (cue.hotkey), key))
                 found = true;
     });
 
