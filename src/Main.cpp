@@ -75,14 +75,21 @@ public:
         mainWindow->getMainComponent().setAutoStartOnOpenAllowed (! safeMode && ! deviceFallback);   // a quiet launch: nothing starts by itself
 
         mainWindow->getMainComponent().openProjectFromCommandLine (commandLine);
+        const bool openedFromCommandLine = mainWindow->getMainComponent().getProjectFile() != juce::File();
+        bool reopenedAfterUpdate = false;
 
         if (const auto reopen = settings->getReopenProjectAfterUpdate(); reopen != juce::File())
         {
             settings->setReopenProjectAfterUpdate ({});   // once
 
             if (! mainWindow->getMainComponent().getProjectFile().existsAsFile() && reopen.existsAsFile())
+            {
                 mainWindow->getMainComponent().openProjectFile (reopen, false);   // the show that was open when the update closed the app, without its auto-start
+                reopenedAfterUpdate = mainWindow->getMainComponent().getProjectFile() == reopen;
+            }
         }
+
+        mainWindow->getMainComponent().reopenLastProjectOnStartup (openedFromCommandLine, reopenedAfterUpdate, safeMode);
 
         if (safeMode)
             juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::InfoIcon, ko ("안전 모드"),

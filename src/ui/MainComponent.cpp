@@ -306,6 +306,8 @@ MainComponent::MainComponent (AudioEngine& e, AppSettings& s, juce::ApplicationC
 
 MainComponent::~MainComponent()
 {
+    settings.setLastSessionProject (document.getFile());
+    reopenDialog.reset();
     // Stop reception first, retaining queryable services through capture callbacks
     // and every UI owner that can still refresh or dismiss a learning callout.
     if (midiInput != nullptr) midiInput->shutdown();
@@ -805,6 +807,14 @@ void MainComponent::getCommandInfo (juce::CommandID commandID, juce::Application
             break;
         }
 
+        case CommandIDs::reopenLastProjectAsk:
+        case CommandIDs::reopenLastProjectAlways:
+        case CommandIDs::reopenLastProjectNever:
+            result.setTicked (settings.getReopenLastProjectPolicy()
+                             == reopenLastProjectPolicies[commandID - CommandIDs::reopenLastProjectAsk]);
+            result.setActive (canEdit);
+            break;
+
         case CommandIDs::undo:
             result.shortName = document.canUndo() ? ko ("실행 취소: ") + document.getUndoName() : ko ("실행 취소");
             result.setActive (canEdit && document.canUndo());
@@ -1138,6 +1148,13 @@ bool MainComponent::perform (const InvocationInfo& info)
             break;
         }
 
+        case CommandIDs::reopenLastProjectAsk:
+        case CommandIDs::reopenLastProjectAlways:
+        case CommandIDs::reopenLastProjectNever:
+            settings.setReopenLastProjectPolicy (reopenLastProjectPolicies[info.commandID - CommandIDs::reopenLastProjectAsk]);
+            commands.commandStatusChanged();
+            break;
+
         case CommandIDs::undo:
             if (document.undo())
                 transport.showStatus (ko ("실행 취소"), false);
@@ -1332,6 +1349,14 @@ juce::PopupMenu MainComponent::getMenuForIndex (int topLevelMenuIndex, const juc
                 scale.addCommandItem (&commands, CommandIDs::uiScale125);
                 scale.addCommandItem (&commands, CommandIDs::uiScale150);
                 menu.addSubMenu (ko ("글씨·화면 크기 (이 PC)"), scale, ! showMode);
+            }
+
+            {
+                juce::PopupMenu reopen;
+                reopen.addCommandItem (&commands, CommandIDs::reopenLastProjectAsk);
+                reopen.addCommandItem (&commands, CommandIDs::reopenLastProjectAlways);
+                reopen.addCommandItem (&commands, CommandIDs::reopenLastProjectNever);
+                menu.addSubMenu (ko ("시작할 때 최근 프로젝트 (이 PC)"), reopen, ! showMode);
             }
 
             menu.addSeparator();
@@ -2503,6 +2528,7 @@ void MainComponent::newProject()
     engine.clearCueChains();
     engine.getMasterChain().clear();
     document.newProject();
+    settings.setLastSessionProject ({});
     engine.setPatches (document.patches, true);
     controller.clearPlayed();
     autoLoadedId = juce::Uuid::null();
@@ -2561,6 +2587,7 @@ void MainComponent::openProjectFile (const juce::File& file, bool allowAutoStart
     document.cues.setLockPlayheadToSelection (document.settings.lockPlayheadToSelection);
 
     settings.setLastProjectFile (file);
+    settings.setLastSessionProject (file);
     refreshFileInfoForAllCues();
     restorePluginChainsFromDocument (warnings);
     ignorePluginChangesBriefly();   // restoring saved plugin state is not an edit
@@ -2585,6 +2612,65 @@ void MainComponent::openProjectFile (const juce::File& file, bool allowAutoStart
         pendingStartOnOpenDeadlineMs = juce::Time::getMillisecondCounterHiRes() + 3000.0;
         tryPendingStartOnOpen();
     }
+}
+
+void MainComponent::reopenLastProjectOnStartup (bool openedFromCommandLine, bool reopenedAfterUpdate, bool safeMode)
+{
+    const auto file = settings.getLastSessionProject();
+    const auto decision = decideReopenLastProject (settings.getReopenLastProjectPolicy(),
+        { openedFromCommandLine, reopenedAfterUpdate, safeMode,
+          file != juce::File(), file.existsAsFile(), document.hasFile() });
+
+    if (decision.clearLastSessionProject)
+        settings.setLastSessionProject ({});
+
+    if (decision.action == ReopenLastProjectDecision::Action::none)
+        return;
+
+    if (decision.action == ReopenLastProjectDecision::Action::open)
+    {
+        openProjectFile (file, true);
+        return;
+    }
+
+    if (reopenDialog != nullptr)
+        return;
+
+    reopenDialog = std::make_unique<juce::AlertWindow> (ko ("최근 프로젝트 다시 열기"),
+        "'" + file.getFileNameWithoutExtension() + ko ("'을(를) 다시 여시겠습니까?") + "\n" + file.getFullPathName(),
+        juce::MessageBoxIconType::QuestionIcon, this);
+    reopenDialog->addButton (ko ("열기"), 1, juce::KeyPress (juce::KeyPress::returnKey));
+    reopenDialog->addButton (ko ("항상 열기"), 2);
+    reopenDialog->addButton (ko ("새 프로젝트"), 0, juce::KeyPress (juce::KeyPress::escapeKey));
+    reopenDialog->setVisible (true);
+    ShortcutRouter::watchWindow (reopenDialog.get());
+
+    juce::Component::SafePointer<MainComponent> safeThis (this);
+    reopenDialog->enterModalState (true, juce::ModalCallbackFunction::create ([safeThis, file] (int result)
+    {
+        if (safeThis == nullptr)
+            return;
+
+        safeThis->reopenDialog.reset();
+        // Another instance may have delivered a project while the question was up.
+        if (safeThis->document.hasFile() || safeThis->document.isDirty())
+            return;
+
+        if (result == 1 || result == 2)
+        {
+            if (result == 2)
+            {
+                safeThis->settings.setReopenLastProjectPolicy (ReopenLastProjectPolicy::always);
+                safeThis->settings.flush();
+                safeThis->commands.commandStatusChanged();
+            }
+            safeThis->openProjectFile (file, true);
+        }
+        else
+        {
+            safeThis->newProject();
+        }
+    }));
 }
 
 void MainComponent::tryPendingStartOnOpen()
@@ -2810,6 +2896,28 @@ void MainComponent::autoBackupIfDue()
         BackupManager::rotate (target.getParentDirectory(), juce::Time::getCurrentTime());
 }
 
+bool MainComponent::writeProjectToFile (juce::File file)
+{
+    if (! file.hasFileExtension (ProjectSerializer::openableExtensions))
+        file = file.withFileExtension (ProjectSerializer::fileExtension);
+
+    backupBeforeSave (file);
+
+    const auto result = document.save (file, [this] (Project& project) { captureLivePluginStates (project); });
+    nextAutoBackupMs = juce::Time::getMillisecondCounterHiRes() + document.settings.backupIntervalSeconds * 1000.0;
+
+    if (result.failed())
+    {
+        showAlert (ko ("저장 실패"), result.getErrorMessage(), true);
+        return false;
+    }
+
+    settings.setLastProjectFile (file);
+    settings.setLastSessionProject (file);
+    transport.showStatus (ko ("저장됨: ") + file.getFileName(), false);
+    return true;
+}
+
 void MainComponent::saveProject (bool saveAs, std::function<void (bool)> then)
 {
     table.finishEditing();       // what is being typed is what gets saved
@@ -2817,29 +2925,10 @@ void MainComponent::saveProject (bool saveAs, std::function<void (bool)> then)
 
     auto writeTo = [this, then] (juce::File file)
     {
-        if (! file.hasFileExtension (ProjectSerializer::openableExtensions))
-            file = file.withFileExtension (ProjectSerializer::fileExtension);
-
-        backupBeforeSave (file);
-
-        const auto result = document.save (file, [this] (Project& project) { captureLivePluginStates (project); });
-        nextAutoBackupMs = juce::Time::getMillisecondCounterHiRes() + document.settings.backupIntervalSeconds * 1000.0;
-
-        if (result.failed())
-        {
-            showAlert (ko ("저장 실패"), result.getErrorMessage(), true);
-
-            if (then)
-                then (false);
-
-            return;
-        }
-
-        settings.setLastProjectFile (file);
-        transport.showStatus (ko ("저장됨: ") + file.getFileName(), false);
+        const bool ok = writeProjectToFile (file);
 
         if (then)
-            then (true);
+            then (ok);
     };
 
     if (! saveAs && document.hasFile())

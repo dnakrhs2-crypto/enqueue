@@ -68,6 +68,7 @@ target_sources(EnqueueTests PRIVATE
     LoudnessMeterTests.cpp
     LoudnessAverageTests.cpp
     UiScaleTests.cpp
+    ReopenLastProjectTests.cpp
     CueIconsTests.cpp
     WaitProgressTests.cpp
     FadeOutSettingTests.cpp

@@ -183,6 +183,15 @@ std::vector<ShortcutDefinition> makeCommands()
         command ("view.uiScale150", CommandIDs::uiScale150, ko ("150%"),
                  ko ("창 전체(글씨·버튼·행·간격)가 같은 비율로 커집니다. 프로젝트가 아니라 이 PC에 저장"),
                  Category::view, Scope::mainWindow, false, ko ("설정"), {}),
+        command ("view.reopenLastProjectAsk", CommandIDs::reopenLastProjectAsk, ko ("묻기"),
+                 ko ("시작할 때 최근 프로젝트를 다시 열지 묻습니다. 이 PC에 저장"),
+                 Category::view, Scope::mainWindow, false, ko ("설정"), {}),
+        command ("view.reopenLastProjectAlways", CommandIDs::reopenLastProjectAlways, ko ("항상 열기"),
+                 ko ("시작할 때 최근 프로젝트를 항상 엽니다. 이 PC에 저장"),
+                 Category::view, Scope::mainWindow, false, ko ("설정"), {}),
+        command ("view.reopenLastProjectNever", CommandIDs::reopenLastProjectNever, ko ("열지 않음"),
+                 ko ("시작할 때 최근 프로젝트를 열지 않습니다. 이 PC에 저장"),
+                 Category::view, Scope::mainWindow, false, ko ("설정"), {}),
         command ("app.quit", juce::StandardApplicationCommandIDs::quit, ko ("종료"), ko ("앱 종료"),
                  Category::fileSettings, Scope::mainWindow, false, "Application", { key ('Q', ModifierKeys::commandModifier) })
     };

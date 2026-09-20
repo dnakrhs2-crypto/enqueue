@@ -10,6 +10,8 @@ namespace Keys
     constexpr const char* audioDeviceState  = "audioDeviceState";
     constexpr const char* pluginList        = "pluginList";
     constexpr const char* lastProjectFile   = "lastProjectFile";
+    constexpr const char* lastSessionProject = "lastSessionProject";
+    constexpr const char* reopenLastProjectPolicy = "reopenLastProjectPolicy";
     constexpr const char* lastAudioDir      = "lastAudioDirectory";
     constexpr const char* windowState       = "windowState";
     constexpr const char* lastRunVersion    = "lastRunVersion";
@@ -128,6 +130,32 @@ juce::File AppSettings::getLastProjectFile() const
 void AppSettings::setLastProjectFile (const juce::File& file)
 {
     setFileValue (Keys::lastProjectFile, file);
+}
+
+juce::File AppSettings::getLastSessionProject() const
+{
+    return getFileValue (Keys::lastSessionProject);
+}
+
+void AppSettings::setLastSessionProject (const juce::File& file)
+{
+    setFileValue (Keys::lastSessionProject, file);
+    flush();
+}
+
+ReopenLastProjectPolicy AppSettings::getReopenLastProjectPolicy() const
+{
+    const auto value = settings->getValue (Keys::reopenLastProjectPolicy);
+    if (value == "always") return ReopenLastProjectPolicy::always;
+    if (value == "never") return ReopenLastProjectPolicy::never;
+    return ReopenLastProjectPolicy::ask;
+}
+
+void AppSettings::setReopenLastProjectPolicy (ReopenLastProjectPolicy policy)
+{
+    settings->setValue (Keys::reopenLastProjectPolicy,
+                        policy == ReopenLastProjectPolicy::always ? "always"
+                      : policy == ReopenLastProjectPolicy::never ? "never" : "ask");
 }
 
 juce::File AppSettings::getReopenProjectAfterUpdate() const

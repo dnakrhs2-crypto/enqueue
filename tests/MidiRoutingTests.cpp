@@ -13,7 +13,7 @@ public:
     MidiRoutingTests() : UnitTest ("MIDI routing, shared GO and panic", "Enqueue") {}
     void runTest() override
     {
-        beginTest ("first note-on routes all 75 commands exactly once without a preceding off or manufactured KeyPress");
+        beginTest ("first note-on routes all 78 commands exactly once without a preceding off or manufactured KeyPress");
         int count = 0;
         for (const auto& entry : ShortcutCatalog::get().getCommands())
         {
@@ -27,7 +27,7 @@ public:
             else expectEquals (h.downs (entry.commandID), 1, "disabled " + entry.id);
             ++count;
         }
-        expectEquals (count, 75);
+        expectEquals (count, 78);
 
         beginTest ("same command overlapping aliases execute once; command conflicts reject/move whole bindings and failed save rolls back");
         {

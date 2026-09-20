@@ -87,7 +87,11 @@ enum : juce::CommandID
     uiScale100,           // 설정 > 글씨·화면 크기: this PC's UI scale, one command per choice (the saved one is ticked)
     uiScale110,
     uiScale125,
-    uiScale150
+    uiScale150,
+
+    reopenLastProjectAsk, // 설정 > 시작할 때 최근 프로젝트 (이 PC)
+    reopenLastProjectAlways,
+    reopenLastProjectNever
 };
 
 /** The registration path used by MainComponent, kept independent of the shortcut catalog. */
@@ -115,7 +119,8 @@ inline const juce::Array<juce::CommandID>& getAllMainCommands()
                     CommandIDs::workspaceSettings,
                     CommandIDs::checkForUpdates, CommandIDs::showManual, CommandIDs::feedbackChat, CommandIDs::about,
                     CommandIDs::youtubeDownload,
-                    CommandIDs::uiScale100, CommandIDs::uiScale110, CommandIDs::uiScale125, CommandIDs::uiScale150 };
+                    CommandIDs::uiScale100, CommandIDs::uiScale110, CommandIDs::uiScale125, CommandIDs::uiScale150,
+                    CommandIDs::reopenLastProjectAsk, CommandIDs::reopenLastProjectAlways, CommandIDs::reopenLastProjectNever };
     return ids;
 }
 

@@ -393,7 +393,7 @@ public:
         const auto parsed = ShortcutProfile::parseExchange (combined);
         expect (parsed.wasOk()); expectEquals (parsed.midi.overrides.at ("transport.go")[0].source, juce::String ("absent"));
         expect (parsed.midi.overrides.count ("future.action") == 1);
-        expectEquals (static_cast<int> (parsed.keyboard.overrides.size()), 75);
+        expectEquals (static_cast<int> (parsed.keyboard.overrides.size()), 78);
         auto preview = Model::previewImport (*h.service, h.service->exportProfile(), {});
         expect (preview.applicable && ! preview.replacesMidi && preview.text().contains (ko ("키보드만 교체, MIDI 유지")));
         preview = Model::previewImport (*h.service, combined, {});

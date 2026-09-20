@@ -252,12 +252,12 @@ public:
             }
         }
 
-        beginTest ("all 75 commands including unassigned appear; search combines name description and key tokens");
+        beginTest ("all 78 commands including unassigned appear; search combines name description and key tokens");
         {
             Harness h;
             expect (h.service->addKey ("transport.go", K (K::F13Key, M::ctrlModifier | M::altModifier, 0)).wasOk());
             const auto rows = Model::rows (*h.service, {});
-            expectEquals (static_cast<int> (rows.size()), 75);
+            expectEquals (static_cast<int> (rows.size()), 78);
             for (const auto& search : { juce::String ("f13"), juce::String ("ctrl+alt"), juce::String ("GO F13"), ShortcutCatalog::get().find ("transport.go")->description })
             {
                 const auto found = Model::filter (rows, search, Model::Category::all, Model::Status::all);
@@ -282,7 +282,7 @@ public:
                 total += static_cast<int> (filtered.size());
                 for (const auto& row : filtered) expect (row.category == group);
             }
-            expectEquals (total, 75);
+            expectEquals (total, 78);
             expectEquals (static_cast<int> (Model::filter (rows, {}, Model::Category::all, Model::Status::changed).size()), 2);
             expectEquals (static_cast<int> (Model::filter (rows, {}, Model::Category::all, Model::Status::conflict).size()), 1);
             const auto empty = Model::filter (rows, {}, Model::Category::all, Model::Status::unassigned);

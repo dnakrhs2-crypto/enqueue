@@ -32,6 +32,8 @@
 namespace gocue
 {
 
+namespace tests { struct ReopenLastProjectTestAccess; }
+
 /** The single main window content: menu bar / transport / cue table / inspector / footer.
     Owns the project document, the scheduler, the cue controller, the plugin editor windows and
     dispatches every command. */
@@ -71,6 +73,8 @@ public:
     void openProjectFromCommandLine (const juce::String& commandLine);
     void openProjectFile (const juce::File& file, bool allowAutoStart = true);
     juce::File getProjectFile() const noexcept { return document.getFile(); }
+    /** After command-line/update opening, apply this PC's recent-project policy. */
+    void reopenLastProjectOnStartup (bool openedFromCommandLine, bool reopenedAfterUpdate, bool safeMode);
 
     /** Runs 'action' immediately, or once the user has saved / discarded unsaved changes. */
     void confirmDiscardChangesThen (std::function<void()> action);
@@ -97,6 +101,7 @@ public:
     std::function<void (const juce::String& title)> onWindowTitleChanged;
 
 private:
+    friend struct tests::ReopenLastProjectTestAccess;
     // FileDragAndDropTarget: audio files / folders dropped anywhere else in the window are appended,
     // a .gocue file is opened.
     bool isInterestedInFileDrag (const juce::StringArray& files) override;
@@ -168,6 +173,7 @@ private:
     void newProject();
     void openProjectViaDialog();
     void saveProject (bool saveAs, std::function<void (bool ok)> then = {});
+    bool writeProjectToFile (juce::File file);
     void restorePluginChainsFromDocument (juce::StringArray& errors);
     void refreshFileInfoForAllCues();
     /** Copies the file that is about to be overwritten into the backup folder (settings permitting, once a minute). */
@@ -234,6 +240,7 @@ private:
     juce::Uuid closeCueId = juce::Uuid::null();
     juce::Uuid autoLoadedId = juce::Uuid::null();   // the standby cue we loaded automatically (dropped when the playhead moves)
     juce::Component::SafePointer<juce::AlertWindow> discardDialog;
+    std::unique_ptr<juce::AlertWindow> reopenDialog;
 
     juce::MenuBarComponent menuBar;
     TransportBar transport;

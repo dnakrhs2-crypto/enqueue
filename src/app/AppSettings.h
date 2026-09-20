@@ -1,5 +1,6 @@
 #pragma once
 #include "app/MidiShortcutProfile.h"
+#include "app/ReopenLastProject.h"
 
 #include <juce_data_structures/juce_data_structures.h>
 
@@ -26,6 +27,13 @@ public:
 
     juce::File getLastProjectFile() const;
     void setLastProjectFile (const juce::File& file);
+
+    /** This PC's last session, independent of the file chooser path; empty means an unsaved new project.
+        Saved immediately on project changes so it survives a crash before shutdown. */
+    juce::File getLastSessionProject() const;
+    void setLastSessionProject (const juce::File& file);
+    ReopenLastProjectPolicy getReopenLastProjectPolicy() const;
+    void setReopenLastProjectPolicy (ReopenLastProjectPolicy policy);
 
     /** The project that was open when an update closed the app: opened again once, right after the update. */
     juce::File getReopenProjectAfterUpdate() const;
