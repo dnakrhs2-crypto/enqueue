@@ -67,7 +67,12 @@ void MidiTriggerRouter::connectionChanged (uint64_t input, uint64_t connection, 
     for (auto it = captureActivationInputs.begin(); it != captureActivationInputs.end();)
         if (it->source == input) it = captureActivationInputs.erase (it); else ++it;
     releaseGoSource (input);
-    for (auto& runtime : bindings) runtime.rules.forgetInput (input);
+    for (auto& runtime : bindings)
+    {
+        runtime.rules.forgetInput (input);
+        for (auto it = runtime.retiredGoHolds.begin(); it != runtime.retiredGoHolds.end();)
+            if (it->source == input) it = runtime.retiredGoHolds.erase (it); else ++it;
+    }
     for (auto it = lastObserved.begin(); it != lastObserved.end();)
         if (it->first.source == input) it = lastObserved.erase (it); else ++it;
     if (connected) connections[input] = connection; else connections.erase (input);
@@ -78,7 +83,12 @@ void MidiTriggerRouter::inputFault (uint64_t input, bool panic)
     // Ordinary loss preserves panic. Reserved packets also carry ordinary rules
     // (for example, falling GO on a rising-panic CC), so their loss resets both.
     for (auto& runtime : bindings)
-        if (panic || runtime.binding.commandID != CommandIDs::panicAll) runtime.rules.forgetInput (input);
+        if (panic || runtime.binding.commandID != CommandIDs::panicAll)
+        {
+            runtime.rules.forgetInput (input);
+            for (auto it = runtime.retiredGoHolds.begin(); it != runtime.retiredGoHolds.end();)
+                if (it->source == input) it = runtime.retiredGoHolds.erase (it); else ++it;
+        }
     for (auto it = lastObserved.begin(); it != lastObserved.end();)
     {
         // A held panic Note survived ordinary loss. Keep its observation for
@@ -106,6 +116,7 @@ void MidiTriggerRouter::projectReplaced()
     for (auto& runtime : bindings)
     {
         runtime.rules.clear();
+        runtime.retiredGoHolds.clear();
         synchroniseObserved (runtime);
     }
     for (const auto& p : connections) releaseGoSource (p.first);
@@ -156,24 +167,35 @@ void MidiTriggerRouter::refreshBindings()
     cues = std::move (nextCues);
     if (! changed) return;
     for (auto& runtime : bindings)
-        if (std::none_of (next.begin(), next.end(), [&] (const auto& b) { return same (runtime.binding, b); })) runtime.live = false;
+        if (runtime.live && std::none_of (next.begin(), next.end(), [&] (const auto& b) { return same (runtime.binding, b); }))
+        {
+            if (runtime.binding.commandID == CommandIDs::go)
+                for (const auto& [token, observed] : lastObserved)
+                {
+                    juce::ignoreUnused (observed);
+                    if (runtime.rules.isHeld (token)) runtime.retiredGoHolds.insert (token);
+                }
+            runtime.live = false;
+        }
     for (const auto& b : next)
     {
         auto found = std::find_if (bindings.begin(), bindings.end(), [&] (const auto& r) { return same (r.binding, b); });
         if (found == bindings.end())
         {
-            Runtime runtime { b, {}, true };
+            Runtime runtime { b, {}, true, {} };
             synchroniseObserved (runtime);
             bindings.push_back (std::move (runtime));
         }
         else
         {
             if (! found->live) synchroniseObserved (*found);
+            found->retiredGoHolds.clear();
             found->live = true;
             found->binding = b;
         }
     }
-    // Retired GO gates retain their release interpretation across a mapping edit.
+    // Keep retired observations while physically held, even if their old GO
+    // tokens have all released. Restoration needs the full hysteresis state.
     bindings.erase (std::remove_if (bindings.begin(), bindings.end(), [] (const auto& r)
         { return ! r.live && (r.binding.commandID != CommandIDs::go || ! r.rules.anyHeld()); }), bindings.end());
     shortcuts.invalidateInputRouting();
@@ -205,9 +227,6 @@ bool MidiTriggerRouter::route (const MidiInputEvent& event, const juce::String& 
     {
         const auto& b = runtime.binding;
         if (! MidiTriggerRules::matchesAddress (b.trigger, event, identifier)) continue;
-        // A retired gate can only finish a hold that existed at the edit. Other
-        // ports/presses on that address must not acquire new retired GO holds.
-        if (! runtime.live && ! runtime.rules.isHeld (event.token())) continue;
         const bool panic = b.commandID == CommandIDs::panicAll;
         if (! panic && ! event.ordinaryStateValid) continue;
         const auto owner = runtime.live ? shortcuts.resolveMidiOwner (b, context) : MidiOwner();
@@ -218,7 +237,10 @@ bool MidiTriggerRouter::route (const MidiInputEvent& event, const juce::String& 
         ready |= runtime.live && transition.ready;
         if (b.commandID == CommandIDs::go)
         {
-            goHeld |= transition.held;
+            // Observe every port for restoration, but a retired mapping may
+            // only retain an existing token until that physical hold releases.
+            if (! transition.held) runtime.retiredGoHolds.erase (event.token());
+            goHeld |= transition.held && (runtime.live || runtime.retiredGoHolds.count (event.token()) != 0);
             goEligible |= transition.activated && owner.kind == MidiOwner::Kind::command;
         }
         pending.push_back ({ b, owner, transition });

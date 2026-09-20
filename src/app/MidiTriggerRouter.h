@@ -29,7 +29,13 @@ public:
     juce::String bindingStatus (const MidiBinding&) const;
     int waitingBindings() const;
 private:
-    struct Runtime { MidiBinding binding; MidiTriggerRules rules; bool live = true; };
+    struct Runtime
+    {
+        MidiBinding binding;
+        MidiTriggerRules rules; // physical observations continue while retired, including CC hysteresis
+        bool live = true;
+        std::set<InputToken> retiredGoHolds; // only holds owned when this binding was removed
+    };
     struct Observed { MidiInputEvent event; juce::String identifier; bool carryGoHold = true; };
     void synchroniseObserved (Runtime&);
     void shortcutsChanged() override;

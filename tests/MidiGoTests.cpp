@@ -90,6 +90,7 @@ public:
         testFirstNotes();
         testNoteQuarantine();
         testRetiredMappingRestore();
+        testRetiredGateHysteresisRestore();
         testQuietPortFault();
         testCaptureRelease();
     }
@@ -211,13 +212,46 @@ private:
             h.tap (65); expectEquals (h.downs (CommandIDs::go), 2);
         }
     }
+    void testRetiredGateHysteresisRestore()
+    {
+        for (bool falling : { false, true })
+            for (bool releaseBeforeRestore : { false, true })
+            {
+                beginTest (juce::String ("retired GO gate hysteresis restoration: ") + (falling ? "falling 0->62" : "rising 127->62")
+                    + (releaseBeforeRestore ? ", A releases before restore" : ", A releases after restore"));
+                Harness h; h.requireKeyUp = true;
+                const auto trigger = cc (falling ? MidiTrigger::Edge::falling : MidiTrigger::Edge::rising);
+                const int pressed = falling ? 0 : 127, released = falling ? 64 : 60;
+                expect (h.service->setMidiTriggers ("transport.go", { trigger, note (65) }).wasOk());
+                h.send (control (released)); h.now += 25; h.send (control (pressed));
+                expectEquals (h.downs (CommandIDs::go), 1);
+                expect (h.service->setMidiTriggers ("transport.go", { note (65) }).wasOk());
+                h.send (control (pressed), 2, "B"); h.now += 25; h.send (control (62), 2, "B");
+                if (releaseBeforeRestore)
+                {
+                    h.send (control (released));
+                    expect (! h.service->activations().anyHeld(), "new retired observations must not acquire GO tokens");
+                }
+                expectEquals (h.downs (CommandIDs::go), 1, "retired observations never execute GO");
+                expect (h.service->setMidiTriggers ("transport.go", { trigger, note (65) }).wasOk());
+                expectEquals (h.downs (CommandIDs::go), 1, "restoration never executes GO");
+                if (! releaseBeforeRestore) h.send (control (released));
+                expect (h.service->activations().anyHeld(), "B stays held inside the hysteresis band after A releases");
+                h.tap (65); expectEquals (h.downs (CommandIDs::go), 1, "a mixed Note GO must wait for B's real release");
+                h.send (control (62), 2, "B");
+                h.tap (65); expectEquals (h.downs (CommandIDs::go), 1, "repeating the middle value is not a release");
+                h.send (control (released), 2, "B");
+                expect (! h.service->activations().anyHeld());
+                h.tap (65); expectEquals (h.downs (CommandIDs::go), 2);
+            }
+    }
     void testQuietPortFault()
     {
         for (bool notified : { false, true }) testQuietPortFault (notified);
     }
     void testQuietPortFault (bool notified)
     {
-        beginTest (juce::String ("quiet port A reserved GO-release loss with only B queued: ") + (notified ? "real notifier" : "manual drain"));
+        beginTest (juce::String ("quiet port A reserved GO-release loss with B traffic: ") + (notified ? "real notifier" : "manual drain"));
         ControllerHarness h; FakeDevices backend; backend.list = { { "A", "A" }, { "B", "B" } };
         MidiInputSettings settings; settings.autoUseAll = true;
         expect (h.service->setMidiInputSettings (settings).wasOk());
@@ -250,8 +284,11 @@ private:
         backend.now = 1025; backend.send ("A", control (0)); flush();
         expect (h.goTarget.results == std::vector { CueController::GoResult::started });
         expect (input.devices()[0].status == MidiInputService::Status::connected);
-        for (int i = 0; i < 8192; ++i) backend.send ("B", on (90));
-        for (int i = 0; i < 512; ++i) backend.send ("B", control (127));
+        // Capacity is per port: exhaust A, with B independently pending. No A
+        // packet after the lost release is needed to report its fault.
+        for (int i = 0; i < 8192; ++i) backend.send ("A", on (90));
+        for (int i = 0; i < 512; ++i) backend.send ("A", control (0));
+        backend.send ("B", on (90));
         backend.send ("A", control (127)); // the sole A release is lost; A sends nothing further
         expectEquals (static_cast<int> (input.counters().panicDropped), 1);
         expectEquals (static_cast<int> (input.counters().dropped), 0);
