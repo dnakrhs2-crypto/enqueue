@@ -107,6 +107,8 @@ public:
 
     std::function<void()> onStructureChanged;
     std::function<void()> onValueChanged;
+    /** Runtime bypass repair only: refresh the open chain without announcing a document edit. */
+    std::function<void (PluginChain&)> onChainRuntimeChanged;
 
 private:
     void bypassSlot (const juce::Uuid& channelId, const juce::Uuid& slotId, bool bypass);   // the live chain's slot with that id (none: nothing)

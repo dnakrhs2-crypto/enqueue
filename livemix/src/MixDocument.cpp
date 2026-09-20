@@ -374,6 +374,10 @@ void MixDocument::setPluginGroupMember (const juce::Uuid& channelId, int group, 
 
         g.slots.push_back (slotId);
 
+        if (g.slots.size() > 1)
+            if (auto* chain = engine.getChannelChain (channelId))
+                chain->prepareGroupBypass();
+
         if (g.off)
             bypassSlot (channelId, slotId, true);
     }
@@ -415,7 +419,9 @@ void MixDocument::setPluginGroupOff (const juce::Uuid& channelId, int group, boo
                 indices.push_back (i);
         }
         // Equal-value commands repair the audio state without turning a protocol no-op into a document edit.
-        chain->setBypassedTogether (indices, off, changed);
+        const bool repaired = chain->setBypassedTogether (indices, off, changed);
+        if (repaired && ! changed && onChainRuntimeChanged)
+            onChainRuntimeChanged (*chain);
     }
 
     if (changed)

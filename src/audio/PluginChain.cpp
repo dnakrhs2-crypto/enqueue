@@ -2,10 +2,47 @@
 
 #include <algorithm>
 #include <cmath>
+#include <optional>
 #include <set>
 
 namespace gocue
 {
+
+PluginChain::GroupParameterMirror::GroupParameterMirror (juce::AudioPluginInstance& from, juce::AudioPluginInstance& to)
+    : source (from), target (to), count (juce::jmin (from.getParameters().size(), to.getParameters().size())),
+      values (std::make_unique<std::atomic<float>[]> ((size_t) count)), applied ((size_t) count)
+{
+    for (int i = 0; i < count; ++i)
+    {
+        values[(size_t) i].store (source.getParameters()[i]->getValue());
+        applied[(size_t) i] = target.getParameters()[i]->getValue();
+    }
+    source.addListener (this);
+}
+
+PluginChain::GroupParameterMirror::~GroupParameterMirror()
+{
+    source.removeListener (this);
+}
+
+void PluginChain::GroupParameterMirror::audioProcessorParameterChanged (juce::AudioProcessor*, int index, float value)
+{
+    if (juce::isPositiveAndBelow (index, count))
+        values[(size_t) index].store (value, std::memory_order_relaxed);
+}
+
+void PluginChain::GroupParameterMirror::apply()
+{
+    for (int i = 0; i < count && i < target.getParameters().size(); ++i)
+    {
+        const auto value = values[(size_t) i].load (std::memory_order_relaxed);
+        if (value != applied[(size_t) i])
+        {
+            target.getParameters()[i]->setValue (value);
+            applied[(size_t) i] = value;
+        }
+    }
+}
 
 PluginChain::~PluginChain()
 {
@@ -27,12 +64,17 @@ void PluginChain::prepare (double newSampleRate, int newBlockSize)
                 prepareSlot (*slot);
 
         updateGroupDelayLines (true);
+        groupMix = 0.0f;
+        groupDestination = 0;
+        groupReadySamples[0] = groupReadySamples[1] = getLatencySamples();
+        if (groupBypassEnabled)
+            groupOutput.setSize (2, blockSize, false, false, true);
     }
 
     updateTailCache();
 }
 
-bool PluginChain::prepareSlot (Slot& slot)
+bool PluginChain::prepareSlot (Slot& slot, bool preparePeer)
 {
     auto& plugin = *slot.plugin;
     bool ok = true;
@@ -79,8 +121,22 @@ bool PluginChain::prepareSlot (Slot& slot)
     sizeDelayLine (slot, latency, blockSize);
     slot.wetMix = slot.bypassed.load() ? 0.0f : 1.0f;   // a fresh preparation starts where the switch is: no ramp
     slot.audioBypassed = slot.bypassed.load();
+    slot.requestedBypassed = slot.audioBypassed;
+    slot.requestedGroupRevision = slot.groupBypassRevision.load();
     slot.audioGroupRevision = slot.groupBypassRevision.load();
     slot.groupSwitchSamples = 0;
+    if (preparePeer && groupPathsPrepared && ok)
+    {
+        slot.groupMirror.reset();
+        if (slot.groupPeer != nullptr)
+            destroySlot (std::move (slot.groupPeer), false);
+        slot.groupPeer = createGroupPeer (slot);
+        if (slot.groupPeer != nullptr)
+        {
+            slot.groupMirror = std::make_unique<GroupParameterMirror> (*slot.plugin, *slot.groupPeer->plugin);
+            slot.groupPeer->incomingMirror = slot.groupMirror.get();
+        }
+    }
     return ok;
 }
 
@@ -160,13 +216,16 @@ void PluginChain::insertSlot (std::unique_ptr<Slot> slot, int insertAt)
     notifyChanged();
 }
 
-void PluginChain::destroySlot (std::unique_ptr<Slot> slot)
+void PluginChain::destroySlot (std::unique_ptr<Slot> slot, bool notifyEditor)
 {
+    slot->groupMirror.reset();
+    if (slot->groupPeer != nullptr)
+        destroySlot (std::move (slot->groupPeer), false);
     if (slot->plugin != nullptr)
     {
         slot->plugin->removeListener (this);
 
-        if (listener != nullptr)
+        if (notifyEditor && listener != nullptr)
             listener->pluginAboutToBeRemoved (*this, *slot->plugin);
 
         try
@@ -288,7 +347,7 @@ void PluginChain::setBypassed (int index, bool shouldBypass)
     notifyChanged();
 }
 
-void PluginChain::setBypassedTogether (const std::vector<int>& indices, bool shouldBypass, bool notifyListeners)
+bool PluginChain::setBypassedTogether (const std::vector<int>& indices, bool shouldBypass, bool notifyListeners)
 {
     jassert (groupBypassEnabled);
     std::vector<Slot*> changed;
@@ -302,7 +361,10 @@ void PluginChain::setBypassedTogether (const std::vector<int>& indices, bool sho
         }
 
     if (changed.empty())
-        return;
+        return false;
+
+    if (changed.size() > 1)
+        prepareGroupBypass();
 
     // No chain lock: the callback can finish its current configuration while these targets are published.
     const auto revision = bypassRevision.fetch_add (1) + 2;
@@ -318,6 +380,78 @@ void PluginChain::setBypassedTogether (const std::vector<int>& indices, bool sho
         notifyChanged();
     else
         updateTailCache();
+    return true;
+}
+
+bool PluginChain::groupPathsMatch() const noexcept
+{
+    if (! groupPathsPrepared)
+        return false;
+    for (const auto& slot : slots)
+        if (slot->plugin != nullptr && (slot->groupPeer == nullptr
+            || slot->latency.load (std::memory_order_relaxed) != slot->groupPeer->latency.load (std::memory_order_relaxed)))
+            return false;
+    return true;
+}
+
+std::unique_ptr<PluginChain::Slot> PluginChain::createGroupPeer (Slot& slot)
+{
+    if (! groupFactory || slot.plugin == nullptr)
+        return {};
+    bool complete = true;
+    const auto state = captureState (slot, &complete);
+    if (! complete)
+        return {};
+    juce::String error;
+    auto peer = std::make_unique<Slot>();
+    peer->state = state;
+    peer->bypassed.store (state.bypassed);
+    peer->plugin = groupFactory (state, error);
+    if (peer->plugin == nullptr)
+        return {};
+    juce::MemoryOutputStream decoded;
+    if (juce::Base64::convertFromBase64 (decoded, state.stateBase64) && decoded.getDataSize() > 0)
+    {
+        try { peer->plugin->setStateInformation (decoded.getData(), (int) decoded.getDataSize()); }
+        catch (...) { return {}; }
+    }
+    if (! prepareSlot (*peer, false))
+        return {};
+    return peer;
+}
+
+void PluginChain::prepareGroupBypass()
+{
+    if (! groupBypassEnabled || ! groupFactory || slots.size() < 2 || groupPathsMatch())
+        return;
+
+    std::vector<std::unique_ptr<Slot>> prepared (slots.size());
+    std::vector<std::unique_ptr<GroupParameterMirror>> mirrors (slots.size());
+    for (size_t i = 0; i < slots.size(); ++i)
+        if (slots[i]->plugin != nullptr)
+        {
+            prepared[i] = createGroupPeer (*slots[i]);
+            if (prepared[i] == nullptr)
+                return; // an unavailable instance must never replace a working path
+            mirrors[i] = std::make_unique<GroupParameterMirror> (*slots[i]->plugin, *prepared[i]->plugin);
+            prepared[i]->incomingMirror = mirrors[i].get();
+        }
+
+    {
+        const juce::ScopedLock sl (lock);
+        for (size_t i = 0; i < slots.size(); ++i)
+        {
+            slots[i]->groupPeer.swap (prepared[i]);
+            slots[i]->groupMirror.swap (mirrors[i]);
+        }
+        groupPathsPrepared = true;
+        updateGroupDelayLines();
+        groupMix = 0.0f;
+        groupDestination = 0;
+        groupReadySamples[0] = 0;
+        groupReadySamples[1] = getLatencySamples();
+        groupOutput.setSize (2, blockSize, false, false, true);
+    }
 }
 
 void PluginChain::clear()
@@ -413,71 +547,79 @@ void PluginChain::applyStates (const std::vector<PluginSlotState>& states)
         }
     }
 
+    if (groupPathsPrepared)
+    {
+        groupStateChanged.store (true, std::memory_order_release);
+        refreshPluginCaches();
+    }
     notifyChanged();
 }
 
 std::vector<PluginSlotState> PluginChain::getStates (bool* complete) const
 {
     std::vector<PluginSlotState> result;
-
     for (auto& slot : slots)   // only the message thread edits 'slots', so no lock is needed here
+        result.push_back (captureState (*slot, complete));
+    return result;
+}
+
+PluginSlotState PluginChain::captureState (Slot& slot, bool* complete) const
+{
+    PluginSlotState s = slot.state;
+    s.bypassed = slot.bypassed.load();
+
+    if (slot.plugin != nullptr)
     {
-        PluginSlotState s = slot->state;
-        s.bypassed = slot->bypassed.load();
+        bool captured = true;
 
-        if (slot->plugin != nullptr)
+        try
         {
-            bool captured = true;
+            const auto description = slot.plugin->getPluginDescription();
+            s.format = description.pluginFormatName;
+            s.name = description.name;
+            s.fileOrIdentifier = description.fileOrIdentifier;
+            s.uniqueId = description.uniqueId;
 
-            try
+            if (const auto xml = description.createXml())
+                s.descriptionXml = xml->toString (juce::XmlElement::TextFormat().singleLine().withoutHeader());
+
+            // A VST3 is read without its callback lock, as JUCE's own AudioPluginHost does while its graph plays:
+            // the VST3 contract has the plugin handle getState alongside its processing. Holding the lock made the
+            // callback pass the plugin for a block whenever a save or an undo snapshot coincided with it (the
+            // chain now feeds a plugin what it missed, but a skip is still a skip). A VST2's bank read walks its
+            // programs (setCurrentProgram) - not something to interleave with processBlock: it keeps the lock.
+            juce::MemoryBlock block;
+
+            if (description.pluginFormatName == "VST3")
             {
-                const auto description = slot->plugin->getPluginDescription();
-                s.format = description.pluginFormatName;
-                s.name = description.name;
-                s.fileOrIdentifier = description.fileOrIdentifier;
-                s.uniqueId = description.uniqueId;
-
-                if (const auto xml = description.createXml())
-                    s.descriptionXml = xml->toString (juce::XmlElement::TextFormat().singleLine().withoutHeader());
-
-                // A VST3 is read without its callback lock, as JUCE's own AudioPluginHost does while its graph plays:
-                // the VST3 contract has the plugin handle getState alongside its processing. Holding the lock made the
-                // callback pass the plugin for a block whenever a save or an undo snapshot coincided with it (the
-                // chain now feeds a plugin what it missed, but a skip is still a skip). A VST2's bank read walks its
-                // programs (setCurrentProgram) - not something to interleave with processBlock: it keeps the lock.
-                juce::MemoryBlock block;
-
-                if (description.pluginFormatName == "VST3")
-                {
-                    slot->plugin->getStateInformation (block);
-                }
-                else
-                {
-                    const juce::ScopedLock callbackLock (slot->plugin->getCallbackLock());
-                    slot->plugin->getStateInformation (block);
-                }
-
-                s.stateBase64 = block.getSize() > 0 ? juce::Base64::toBase64 (block.getData(), block.getSize()) : juce::String();
+                slot.plugin->getStateInformation (block);
             }
-            catch (...)
+            else
             {
-                captured = false;   // the last state that was read stays in 's' (the slot's cache): the caller is told
+                const juce::ScopedLock callbackLock (slot.plugin->getCallbackLock());
+                slot.plugin->getStateInformation (block);
             }
 
-            if (captured)
-                slot->state = s;   // the last good state, should a later read fail
-            else if (complete != nullptr)
-                *complete = false;
+            s.stateBase64 = block.getSize() > 0 ? juce::Base64::toBase64 (block.getData(), block.getSize()) : juce::String();
+        }
+        catch (...)
+        {
+            captured = false;   // the last state that was read stays in 's' (the slot's cache): the caller is told
         }
 
-        result.push_back (std::move (s));
+        if (captured)
+            slot.state = s;   // the last good state, should a later read fail
+        else if (complete != nullptr)
+            *complete = false;
     }
 
-    return result;
+    return s;
 }
 
 juce::StringArray PluginChain::restore (const std::vector<PluginSlotState>& states, const Factory& factory)
 {
+    if (groupBypassEnabled)
+        groupFactory = factory;
     return loadSlots (states, factory, false);
 }
 
@@ -633,6 +775,29 @@ void PluginChain::updateTailCache()
 
 void PluginChain::refreshPluginCaches()
 {
+    if (groupPathsPrepared && groupStateChanged.exchange (false, std::memory_order_acq_rel))
+    {
+        bool complete = true;
+        const auto states = getStates (&complete);
+        if (complete && groupPathsMatch())
+        {
+            const juce::ScopedLock sl (lock);
+            for (size_t i = 0; i < slots.size(); ++i)
+                if (slots[i]->plugin != nullptr)
+                {
+                    auto& peer = *slots[i]->groupPeer;
+                    juce::MemoryOutputStream decoded;
+                    if (juce::Base64::convertFromBase64 (decoded, states[i].stateBase64) && decoded.getDataSize() > 0)
+                    {
+                        const juce::ScopedLock callbackLock (peer.plugin->getCallbackLock());
+                        try { peer.plugin->setStateInformation (decoded.getData(), (int) decoded.getDataSize()); }
+                        catch (...) { markFaulted (*slots[i]); markFaulted (peer); }
+                    }
+                    slots[i]->groupMirror = std::make_unique<GroupParameterMirror> (*slots[i]->plugin, *peer.plugin);
+                    peer.incomingMirror = slots[i]->groupMirror.get();
+                }
+        }
+    }
     updateDelayLines();   // first: the tail counts the latency as it is now
     updateTailCache();
 }
@@ -642,42 +807,49 @@ void PluginChain::recoverAfterStalls()
     if (! overflowRaised.exchange (false, std::memory_order_acq_rel))
         return;
 
-    for (auto& slot : slots)   // message thread only: no chain lock (the other slots keep running, this one passes dry meanwhile)
-    {
-        // looked at before the lock so a slot that needs nothing (its reset already handed over, or faulted) does not
-        // make the message thread wait for the plugin's callback lock at all...
-        if (slot->plugin == nullptr || ! slot->overflow.load (std::memory_order_relaxed)
-            || slot->resetPending.load (std::memory_order_relaxed) || slot->faulted.load (std::memory_order_relaxed))
-            continue;
-
-        // only the plugin's own history goes: the host's ring keeps the dry signal in flight (a bypassed plugin would
-        // otherwise fall silent for its latency), and the callback drops the backlog itself when it sees the flag
-        const juce::ScopedLock callbackLock (slot->plugin->getCallbackLock());
-
-        // ...and again under the lock: the callback (which acknowledges a reset only while holding this lock) may have
-        // just consumed the previous one, and a plugin is not reset twice for one overflow
-        if (! slot->overflow.load (std::memory_order_relaxed) || slot->resetPending.load (std::memory_order_relaxed)
-            || slot->faulted.load (std::memory_order_relaxed))
-            continue;
-
-        if (slot->plugin->isSuspended())
+    for (auto& original : slots) // message thread only: neither signal path may retain a stalled backlog
+        for (auto* slot : { original.get(), original->groupPeer.get() })
         {
-            overflowRaised.store (true, std::memory_order_release);   // still loading a preset: next tick
-            continue;
-        }
+            // looked at before the lock so a slot that needs nothing (its reset already handed over, or faulted) does not
+            // make the message thread wait for the plugin's callback lock at all...
+            if (slot == nullptr || slot->plugin == nullptr || ! slot->overflow.load (std::memory_order_relaxed)
+                || slot->resetPending.load (std::memory_order_relaxed) || slot->faulted.load (std::memory_order_relaxed))
+                continue;
 
-        try
-        {
-            slot->plugin->reset();
-        }
-        catch (...)
-        {
-            markFaulted (*slot);
-            continue;
-        }
+            // Private peers are only processed under the chain lock; unlike editor-facing instances,
+            // they need no additional callback lock in processSlots(). Their rare reset uses that same guard.
+            std::optional<juce::ScopedLock> peerLock;
+            if (slot != original.get())
+                peerLock.emplace (lock);
 
-        slot->resetPending.store (true, std::memory_order_release);
-    }
+            // only the plugin's own history goes: the host's ring keeps the dry signal in flight (a bypassed plugin would
+            // otherwise fall silent for its latency), and the callback drops the backlog itself when it sees the flag
+            const juce::ScopedLock callbackLock (slot->plugin->getCallbackLock());
+
+            // ...and again under the lock: the callback (which acknowledges a reset only while holding this lock) may have
+            // just consumed the previous one, and a plugin is not reset twice for one overflow
+            if (! slot->overflow.load (std::memory_order_relaxed) || slot->resetPending.load (std::memory_order_relaxed)
+                || slot->faulted.load (std::memory_order_relaxed))
+                continue;
+
+            if (slot->plugin->isSuspended())
+            {
+                overflowRaised.store (true, std::memory_order_release);   // still loading a preset: next tick
+                continue;
+            }
+
+            try
+            {
+                slot->plugin->reset();
+            }
+            catch (...)
+            {
+                markFaulted (*slot);
+                continue;
+            }
+
+            slot->resetPending.store (true, std::memory_order_release);
+        }
 }
 
 void PluginChain::sizeDelayLine (Slot& slot, int newLatency, int block)
@@ -700,23 +872,24 @@ void PluginChain::updateDelayLines()
     // only for a line that really has to be resized, which happens when a plugin's look-ahead / oversampling changed
     std::vector<std::pair<Slot*, int>> resize;
 
-    for (auto& slot : slots)
-    {
-        if (slot->plugin == nullptr)
-            continue;
-
-        const int known = slot->latency.load (std::memory_order_relaxed);
-        int latency = known;
-
-        try
+    for (auto& original : slots)
+        for (auto* slot : { original.get(), original->groupPeer.get() })
         {
-            latency = juce::jmax (0, slot->plugin->getLatencySamples());
-        }
-        catch (...) {}   // a plugin that throws here keeps the latency it last reported
+            if (slot == nullptr || slot->plugin == nullptr)
+                continue;
 
-        if (latency != known || slot->dryDelay.getNumSamples() < latency + blockSize)
-            resize.emplace_back (slot.get(), latency);
-    }
+            const int known = slot->latency.load (std::memory_order_relaxed);
+            int latency = known;
+
+            try
+            {
+                latency = juce::jmax (0, slot->plugin->getLatencySamples());
+            }
+            catch (...) {}   // a plugin that throws here keeps the latency it last reported
+
+            if (latency != known || slot->dryDelay.getNumSamples() < latency + blockSize)
+                resize.emplace_back (slot, latency);
+        }
 
     if (resize.empty())
         return;
@@ -735,18 +908,23 @@ void PluginChain::updateGroupDelayLines (bool reset)
         return;
 
     size_t latency = 0;
-    for (auto& slot : slots)
+    for (auto& original : slots)
     {
-        if (slot->plugin != nullptr)
-            latency += (size_t) slot->latency.load (std::memory_order_relaxed);
+        if (original->plugin != nullptr)
+            latency += (size_t) original->latency.load (std::memory_order_relaxed);
 
-        if (reset || slot->groupBypassDelay.size() != latency)
+        for (auto* slot : { original.get(), original->groupPeer.get() })
         {
-            slot->groupBypassDelay.assign (latency, (unsigned char) slot->bypassed.load());
-            slot->groupBypassWrite = 0;
-            slot->groupSwitchSamples = 0;
+            if (slot == nullptr)
+                continue;
+            if (reset || slot->groupBypassDelay.size() != latency)
+            {
+                slot->groupBypassDelay.assign (latency, (unsigned char) slot->audioBypassed);
+                slot->groupBypassWrite = 0;
+                slot->groupSwitchSamples = 0;
+            }
+            slot->groupBypassTargets.resize ((size_t) blockSize);
         }
-        slot->groupBypassTargets.resize ((size_t) blockSize);
     }
 }
 
@@ -767,8 +945,13 @@ void PluginChain::snapshotBypassTargets() noexcept
     if (revision != bypassRevision.load())
         return;
 
+    const bool paired = groupPathsMatch();
     for (auto& slot : slots)
     {
+        slot->requestedBypassed = slot->pendingBypassed;
+        slot->requestedGroupRevision = slot->pendingGroupRevision;
+        if (paired)
+            continue;
         slot->audioBypassed = slot->pendingBypassed;
         if (slot->audioGroupRevision != slot->pendingGroupRevision)
         {
@@ -948,9 +1131,94 @@ void PluginChain::processLocked (juce::AudioBuffer<float>& buffer, int numSample
     if (groupBypassEnabled)
         snapshotBypassTargets();
 
-    for (auto& slot : slots)
+    if (groupPathsMatch())
+        processGroupPaths (buffer, numSamples);
+    else
+        processSlots (buffer, numSamples);
+}
+
+void PluginChain::setGroupPathTargets (int path, bool grouped) noexcept
+{
+    for (auto& original : slots)
     {
-        if (slot->plugin == nullptr)
+        auto& slot = path != 0 && original->groupPeer != nullptr ? *original->groupPeer : *original;
+        if (slot.audioBypassed == original->requestedBypassed)
+            continue;
+        slot.audioBypassed = original->requestedBypassed;
+        slot.groupSwitchSamples = grouped ? (int) slot.groupBypassDelay.size() + 1 : 0;
+    }
+}
+
+void PluginChain::processGroupPaths (juce::AudioBuffer<float>& buffer, int numSamples)
+{
+    bool matches[] { true, true };
+    for (int path = 0; path < 2; ++path)
+        for (auto& slot : slots)
+            if (slot->plugin != nullptr)
+                matches[path] = matches[path] && (path != 0 ? slot->groupPeer->audioBypassed : slot->audioBypassed) == slot->requestedBypassed;
+
+    const bool settled = groupMix == (float) groupDestination;
+    if (matches[0] || matches[1])
+    {
+        // A reversal reuses the two running endpoints and reverses the existing ramp, without a discontinuity.
+        if (! matches[groupDestination])
+        {
+            groupDestination = 1 - groupDestination;
+            groupReadySamples[groupDestination] = juce::jmax (groupReadySamples[groupDestination], getLatencySamples());
+        }
+    }
+    else if (settled)
+    {
+        bool grouped = false;
+        for (auto& slot : slots)
+            if (slot->plugin != nullptr && (groupDestination != 0 ? slot->groupPeer->audioBypassed : slot->audioBypassed) != slot->requestedBypassed)
+                grouped = grouped || slot->requestedGroupRevision != 0;
+        if (grouped)
+        {
+            groupDestination = 1 - groupDestination;
+            setGroupPathTargets (groupDestination, true);
+            groupReadySamples[groupDestination] = getLatencySamples();
+        }
+        else
+        {
+            // Ordinary single-slot edits keep the existing per-slot ramp on the audible path.
+            setGroupPathTargets (0, false);
+            setGroupPathTargets (1, false);
+        }
+    }
+
+    for (int ch = 0; ch < 2; ++ch)
+        groupOutput.copyFrom (ch, 0, buffer, ch, 0, numSamples);
+    processSlots (buffer, numSamples);
+    for (auto& slot : slots)
+        if (slot->groupPeer != nullptr && slot->faulted.load (std::memory_order_relaxed))
+            slot->groupPeer->faulted.store (true, std::memory_order_relaxed);
+    processSlots (groupOutput, numSamples, true);
+    for (auto& slot : slots)
+        if (slot->groupPeer != nullptr && slot->groupPeer->faulted.load (std::memory_order_relaxed)
+            && ! slot->faulted.load (std::memory_order_relaxed))
+            markFaulted (*slot);
+
+    const float step = 1.0f / (float) bypassRampSamples;
+    for (int i = 0; i < numSamples; ++i)
+    {
+        if (groupReadySamples[groupDestination] == 0)
+            groupMix = groupDestination != 0 ? juce::jmin (1.0f, groupMix + step)
+                                            : juce::jmax (0.0f, groupMix - step);
+        for (int ch = 0; ch < 2; ++ch)
+            buffer.setSample (ch, i, buffer.getSample (ch, i) * (1.0f - groupMix)
+                                    + groupOutput.getSample (ch, i) * groupMix);
+        for (auto& ready : groupReadySamples)
+            ready = juce::jmax (0, ready - 1);
+    }
+}
+
+void PluginChain::processSlots (juce::AudioBuffer<float>& buffer, int numSamples, bool peer)
+{
+    for (auto& original : slots)
+    {
+        auto* slot = peer ? original->groupPeer.get() : original.get();
+        if (slot == nullptr || slot->plugin == nullptr)
             continue;
 
         auto& plugin = *slot->plugin;
@@ -993,9 +1261,11 @@ void PluginChain::processLocked (juce::AudioBuffer<float>& buffer, int numSample
         // The plugin's callback lock is held while it runs (as juce::AudioProcessorPlayer does) - but never waited
         // for: the message thread holds it while it captures state for a save, and a slow plugin there must not stall
         // every channel. Busy, or suspended (loading a preset): a dry pass for this block, in time.
-        const juce::ScopedTryLock callbackLock (plugin.getCallbackLock());
+        std::optional<juce::ScopedTryLock> callbackLock;
+        if (! peer)
+            callbackLock.emplace (plugin.getCallbackLock()); // unchanged public-instance try-lock; private peers use the chain guard
 
-        if (! callbackLock.isLocked() || plugin.isSuspended())
+        if ((callbackLock.has_value() && ! callbackLock->isLocked()) || plugin.isSuspended())
         {
             if (slot->busyBlocks.fetch_add (1, std::memory_order_relaxed) + 1 == stallBlocks)
                 stallRaised.store (true, std::memory_order_release);   // a second or two of dry passes: the operator hears of it
@@ -1069,6 +1339,8 @@ void PluginChain::processLocked (juce::AudioBuffer<float>& buffer, int numSample
 
         try
         {
+            if (slot->incomingMirror != nullptr)
+                slot->incomingMirror->apply();
             plugin.processBlock (view, midi);
         }
         catch (...)
@@ -1154,41 +1426,48 @@ void PluginChain::resetProcessing() noexcept
     // message thread (the panic gate has closed): reset() may allocate or block, so it never runs in the callback
     const juce::ScopedLock sl (lock);
 
-    for (auto& slot : slots)
-    {
-        if (slot->plugin == nullptr)
-            continue;
+    groupMix = 0.0f;
+    groupDestination = 0;
+    groupReadySamples[0] = groupReadySamples[1] = 0;
+    groupOutput.clear();
 
-        // the host's own memory of the signal goes first, whatever the plugin's state: a faulted or suspended plugin's
-        // dry line must not hand the sound from before the panic to the next start
-        slot->scratch.clear();
-        slot->dryDelay.clear();
-        slot->dryDelayWrite = 0;
-        slot->skipped = 0;
-        slot->prime = 0;
-        slot->overflow.store (false, std::memory_order_relaxed);
-        slot->resetPending.store (false, std::memory_order_relaxed);
-        std::fill (slot->groupBypassDelay.begin(), slot->groupBypassDelay.end(), (unsigned char) slot->bypassed.load());
-        slot->groupBypassWrite = 0;
-        slot->groupSwitchSamples = 0;
-
-        if (slot->faulted.load (std::memory_order_relaxed))
-            continue;
-
-        const juce::ScopedLock callbackLock (slot->plugin->getCallbackLock());
-
-        if (slot->plugin->isSuspended())
-            continue;
-
-        try
+    for (auto& original : slots)
+        for (auto* slot : { original.get(), original->groupPeer.get() })
         {
-            slot->plugin->reset();
+            if (slot == nullptr || slot->plugin == nullptr)
+                continue;
+
+            // the host's own memory of the signal goes first, whatever the plugin's state: a faulted or suspended plugin's
+            // dry line must not hand the sound from before the panic to the next start
+            slot->scratch.clear();
+            slot->dryDelay.clear();
+            slot->dryDelayWrite = 0;
+            slot->skipped = 0;
+            slot->prime = 0;
+            slot->overflow.store (false, std::memory_order_relaxed);
+            slot->resetPending.store (false, std::memory_order_relaxed);
+            std::fill (slot->groupBypassDelay.begin(), slot->groupBypassDelay.end(), (unsigned char) original->bypassed.load());
+            slot->groupBypassWrite = 0;
+            slot->groupSwitchSamples = 0;
+            slot->audioBypassed = slot->requestedBypassed = original->bypassed.load();
+
+            if (slot->faulted.load (std::memory_order_relaxed))
+                continue;
+
+            const juce::ScopedLock callbackLock (slot->plugin->getCallbackLock());
+
+            if (slot->plugin->isSuspended())
+                continue;
+
+            try
+            {
+                slot->plugin->reset();
+            }
+            catch (...)
+            {
+                markFaulted (*slot);   // and the operator hears of it, like any other fault
+            }
         }
-        catch (...)
-        {
-            markFaulted (*slot);   // and the operator hears of it, like any other fault
-        }
-    }
 }
 
 void PluginChain::notifyChanged()
@@ -1206,14 +1485,15 @@ juce::StringArray PluginChain::takeNewStalls()
     if (! stallRaised.exchange (false, std::memory_order_acq_rel))
         return names;
 
-    for (auto& slot : slots)   // message thread only: no chain lock (see takeNewFaults)
-    {
-        if (slot->plugin != nullptr && ! slot->stallReported && slot->busyBlocks.load (std::memory_order_relaxed) >= stallBlocks)
+    for (auto& original : slots)   // message thread only: no chain lock (see takeNewFaults)
+        for (auto* slot : { original.get(), original->groupPeer.get() })
         {
-            slot->stallReported = true;
-            names.add (slot->plugin->getName());
+            if (slot != nullptr && slot->plugin != nullptr && ! slot->stallReported && slot->busyBlocks.load (std::memory_order_relaxed) >= stallBlocks)
+            {
+                slot->stallReported = true;
+                names.add (slot->plugin->getName());
+            }
         }
-    }
 
     return names;
 }
@@ -1223,9 +1503,11 @@ void PluginChain::audioProcessorParameterChanged (juce::AudioProcessor*, int, fl
     stateChanged.store (true, std::memory_order_release);
 }
 
-void PluginChain::audioProcessorChanged (juce::AudioProcessor*, const ChangeDetails&)
+void PluginChain::audioProcessorChanged (juce::AudioProcessor*, const ChangeDetails& details)
 {
     stateChanged.store (true, std::memory_order_release);
+    if (details.programChanged || details.nonParameterStateChanged || details.latencyChanged || details.parameterInfoChanged)
+        groupStateChanged.store (true, std::memory_order_release);
 }
 
 } // namespace gocue
