@@ -108,10 +108,6 @@ MainComponent::MainComponent (MixDocument& doc, LiveMixSettings& s)
         if (chainDrawer.getChain() == &chain)
             chainDrawer.refresh();
     };
-    document.onPluginGroupTransitionFailed = [this]
-    {
-        showStatus (ko ("플러그인 그룹 전환을 준비하지 못했습니다. 플러그인 사용 설정을 확인해 주세요."), true);
-    };
     engine.forEachChain ([this] (PluginChain& chain) { chain.setListener (&windows); });
 
     document.onStructureChanged = [this]
@@ -185,7 +181,6 @@ MainComponent::~MainComponent()
     document.onStructureChanged = nullptr;
     document.onValueChanged = nullptr;
     document.onChainRuntimeChanged = nullptr;
-    document.onPluginGroupTransitionFailed = nullptr;
 }
 
 void MainComponent::attachControlServer (ControlServer* server)
@@ -718,15 +713,7 @@ void MainComponent::timerCallback()
 
     // a plugin that faulted (threw, or produced NaN / Inf): dry from then on, and the operator is told once
     juce::StringArray faulted, stalled;
-    bool groupSyncFailed = false;
-    engine.forEachChain ([&] (PluginChain& chain)
-    {
-        faulted.addArray (chain.takeNewFaults());
-        stalled.addArray (chain.takeNewStalls());
-        groupSyncFailed = chain.consumeGroupSyncFailure() || groupSyncFailed;
-    });
-    if (groupSyncFailed)
-        showStatus (ko ("플러그인 상태 동기화 실패: 현재 프리셋의 출력으로 전환합니다. 그룹 전환은 동기화 후 다시 시도하세요."), true);
+    engine.forEachChain ([&] (PluginChain& chain) { faulted.addArray (chain.takeNewFaults()); stalled.addArray (chain.takeNewStalls()); });
     bool noteChanged = false;
 
     for (const auto& name : faulted)
@@ -1437,9 +1424,6 @@ void MainComponent::togglePluginGroupEverywhere (int group)
 {
     bool switchedOff = false;
     const int channels = document.toggleGroupOnEveryChannel (group, switchedOff);
-
-    if (channels < 0)
-        return; // the document already reported the preparation failure
 
     if (channels == 0)
     {

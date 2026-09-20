@@ -20,50 +20,12 @@ namespace gocue
     under its own callback lock and skipped while it is suspended, as JUCE's own hosts do. */
 class PluginChain : private juce::AudioProcessorListener
 {
-    /** A parameter edit reaches both DSP instances at the next block, including while the peer is audible.
-        The listener only writes preallocated atomics; apply() runs under the chain's existing callback guard. */
-    struct GroupParameterMirror final : private juce::AudioProcessorListener
-    {
-        GroupParameterMirror (juce::AudioPluginInstance&, juce::AudioPluginInstance&);
-        ~GroupParameterMirror() override;
-        void refresh();
-        void apply();
-        void audioProcessorParameterChanged (juce::AudioProcessor*, int, float) override;
-        void audioProcessorChanged (juce::AudioProcessor*, const ChangeDetails&) override {}
-        juce::AudioPluginInstance& source;
-        juce::AudioPluginInstance& target;
-        const int count;
-        std::unique_ptr<std::atomic<float>[]> values;
-        std::vector<float> applied;
-    };
-
 public:
     struct Slot
     {
         std::unique_ptr<juce::AudioPluginInstance> plugin;   // null when the plugin could not be created
         PluginSlotState state;                               // saved description + state (kept for missing plugins)
         std::atomic<bool> bypassed { false };
-        // A group edit publishes its targets together. The callback snapshots them without waiting, then
-        // delays the switch by the latency up to this slot so all members switch the same input frame.
-        std::atomic<unsigned> groupBypassRevision { 0 }; // zero: ordinary single-slot crossfade
-        bool audioBypassed = false, pendingBypassed = false;
-        bool requestedBypassed = false;
-        unsigned requestedGroupRevision = 0;
-        std::unique_ptr<Slot> groupPeer;        // second DSP history; moves / appends atomically with its slot
-        std::unique_ptr<GroupParameterMirror> groupMirror;
-        std::unique_ptr<Slot> pendingGroupPeer; // prepared replacement; ownership normalized on the message thread after handover
-        std::unique_ptr<GroupParameterMirror> pendingGroupMirror;
-        std::atomic<Slot*> activeGroupPeer { nullptr }; // callback selects a prepared peer; ownership stays on the message thread
-        Slot* getGroupPeer() const noexcept
-        {
-            auto* active = activeGroupPeer.load (std::memory_order_acquire);
-            return active != nullptr ? active : groupPeer.get();
-        }
-        GroupParameterMirror* incomingMirror = nullptr; // peer only; owned by the corresponding original slot
-        unsigned audioGroupRevision = 0, pendingGroupRevision = 0;
-        int groupSwitchSamples = 0;
-        std::vector<unsigned char> groupBypassDelay, groupBypassTargets;
-        size_t groupBypassWrite = 0;
         std::atomic<bool> faulted { false };    // threw (or produced NaN / Inf) in processBlock, or threw while preparing / loading state: dry from then on
         bool faultReported = false;             // message thread: the operator has been told
         std::atomic<int> busyBlocks { 0 };      // audio thread: blocks in a row its callback lock was busy (a dry pass each)
@@ -107,8 +69,7 @@ public:
     static constexpr int stallBlocks = 200;         // dry passes in a row before the operator hears of a plugin that does not answer
     static constexpr double bypassRampSeconds = 0.005;   // the wet <-> dry crossfade when a bypass switch moves (32 samples at least)
 
-    /** Group alignment is opt-in for LiveMix microphone chains; other hosts keep ordinary slot processing. */
-    explicit PluginChain (bool enableGroupBypass = false) : groupBypassEnabled (enableGroupBypass) {}
+    PluginChain() = default;
     ~PluginChain() override;
 
     void setListener (Listener* newListener) noexcept { listener = newListener; }
@@ -133,19 +94,6 @@ public:
     /** Bypassed plugins still run (so delays / reverbs keep time) but their output is discarded: the dry signal,
         delayed by the plugin's latency, goes on instead, with a short crossfade either way (no jump in time, no click). */
     void setBypassed (int index, bool shouldBypass);
-    /** One group edit: two complete, latency-aligned paths share one final 5 ms crossfade.
-        A single changed slot retains its ordinary crossfade. Failure leaves every bypass target untouched. Message thread.
-        Requires group alignment enabled at construction. Suppress notifications when repairing the
-        runtime state of an unchanged document group. */
-    enum class GroupBypassResult { unchanged, changed, failed };
-    GroupBypassResult setBypassedTogether (const std::vector<int>& indices, bool shouldBypass, bool notifyListeners = true);
-    /** Preflight for a command spanning multiple chains. Does not publish bypass targets. */
-    bool prepareBypassedTogether (const std::vector<int>& indices, bool shouldBypass);
-    /** Message thread: prepare the second complete signal path before a multi-slot group can be switched.
-        Both paths keep running to preserve independent plugin histories, including nonmembers between group slots.
-        Instances and buffers are created here, never in process(). The factory also serves later chain edits. */
-    void setGroupBypassFactory (Factory factory) { groupFactory = std::move (factory); }
-    bool prepareGroupBypass();
     void clear();
 
     /** Captures every slot's description + getStateInformation() as PluginSlotState. Message thread. */
@@ -156,8 +104,6 @@ public:
     /** Replaces the chain from saved states, instantiating through 'factory'. Failed slots are kept as
         missing. Returns one message per failure. */
     juce::StringArray restore (const std::vector<PluginSlotState>& states, const Factory& factory);
-    /** Prepares all saved slots before appending them in one edit. Existing instances keep their histories. */
-    juce::StringArray append (const std::vector<PluginSlotState>& states, const Factory& factory);
 
     /** True when the slots (count, plugin identity) match 'states'; parameter values and the bypass flags are not
         compared (applyStates sets both). Message thread. Used to decide whether an undo step must rebuild this chain. */
@@ -182,8 +128,6 @@ public:
     /** True once (since the previous call) when any hosted plugin reported a parameter / state change,
         e.g. the user turned a knob in an editor. Any thread. Used for dirty tracking. */
     bool consumeStateChanged() noexcept { return stateChanged.exchange (false, std::memory_order_acq_rel); }
-    /** Once per failed group-state synchronization: the original remains usable; the UI reports the fallback. */
-    bool consumeGroupSyncFailure() noexcept { return groupSyncFailure.exchange (false, std::memory_order_acq_rel); }
     /** The names of the plugins that faulted since the previous call (message thread): the operator is told once. */
     juce::StringArray takeNewFaults();
     /** Plugins whose callback lock has been busy for stallBlocks blocks in a row (passed dry meanwhile), once each. */
@@ -196,20 +140,10 @@ public:
     void process (juce::AudioBuffer<float>& buffer, int numSamples);
 
 private:
-    bool prepareSlot (Slot& slot, bool preparePeer = true);   // false when the plugin threw (or wants too many channels)
-    std::unique_ptr<Slot> createGroupPeer (Slot& slot, const PluginSlotState* captured = nullptr); // message thread only
-    void refreshGroupState(); // builds replacements outside the chain lock
-    void installGroupState() noexcept; // chain lock held, original path alone audible; selects prepared pointers only
-    PluginSlotState captureState (Slot& slot, bool* complete) const;
+    bool prepareSlot (Slot& slot);   // false when the plugin threw (or wants too many channels): the slot is faulted
     void processLocked (juce::AudioBuffer<float>& buffer, int numSamples);   // one block of at most the prepared size, the lock held
-    void processSlots (juce::AudioBuffer<float>& buffer, int numSamples, bool peer = false);
-    void processGroupPaths (juce::AudioBuffer<float>& buffer, int numSamples);
-    bool groupPathsMatch() const noexcept;
-    void setGroupPathTargets (int path, bool grouped) noexcept;
     void updateTailCache();          // message thread: the tail the callback reads without asking any plugin
     void updateDelayLines();         // message thread, under the lock: each slot's dry delay follows the plugin's latency
-    void updateGroupDelayLines (bool reset = false); // message thread, existing chain lock held: sizes the bypass control delays
-    void snapshotBypassTargets() noexcept; // audio thread: one bounded attempt; an in-flight edit keeps the previous targets
     static void sizeDelayLine (Slot& slot, int latency, int blockSize);   // (re)allocates and clears - never on the audio thread
     static void delayDryInPlace (Slot& slot, juce::AudioBuffer<float>& dry, int numSamples) noexcept;   // audio thread: records channels 0-1 in the slot's ring and, when the plugin has latency, replaces them with the delayed signal
     bool catchUpSkipped (Slot& slot, int budgetSamples) noexcept;   // audio thread, the plugin's callback lock held: feeds it up to 'budgetSamples' of the input it missed; false when it faulted doing so
@@ -220,8 +154,7 @@ private:
     static bool isFinite (const juce::AudioBuffer<float>& buffer, int numSamples) noexcept;
     void clearSlots (bool notify);   // the destructor clears without chainChanged (pluginAboutToBeRemoved still closes editors)
     void insertSlot (std::unique_ptr<Slot> slot, int insertAt);
-    juce::StringArray loadSlots (const std::vector<PluginSlotState>& states, const Factory& factory, bool append);
-    void destroySlot (std::unique_ptr<Slot> slot, bool notifyEditor = true);
+    void destroySlot (std::unique_ptr<Slot> slot);
     void notifyChanged();
 
     void audioProcessorParameterChanged (juce::AudioProcessor*, int, float) override;
@@ -230,19 +163,6 @@ private:
     mutable juce::CriticalSection lock;      // guards 'slots' between the audio thread and edits
     std::vector<std::unique_ptr<Slot>> slots;
     std::atomic<int> slotCount { 0 };        // slots.size(), for getNumSlots() from any thread without the lock
-    std::atomic<unsigned> bypassRevision { 0 }; // odd during a message-thread bypass edit, even after publication
-    const bool groupBypassEnabled;
-    Factory groupFactory;
-    bool groupPathsPrepared = false;
-    bool groupPeersStale = false;           // message-thread writes under the chain lock; callback may only fade these peers out
-    std::atomic<bool> groupSyncFailure { false };
-    juce::AudioBuffer<float> groupOutput;
-    float groupMix = 0.0f;                   // 0: original path, 1: peer; one final-output ramp
-    int groupDestination = 0;
-    int groupReadySamples[2] { 0, 0 };       // input-frame switch / fresh-instance latency in flight
-    std::atomic<bool> groupStateChanged { false }; // non-parameter state: copied on the message thread
-    enum class GroupStatePhase { idle, prepared, handover, retired };
-    std::atomic<GroupStatePhase> groupStatePhase { GroupStatePhase::idle };
     juce::MidiBuffer midi;
     double sampleRate = 44100.0;
     int blockSize = 512;

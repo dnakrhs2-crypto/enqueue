@@ -67,14 +67,13 @@ public:
     int addPluginGroup (const juce::Uuid& channelId);   // the new group's index, or -1 with maxPluginGroups there already
     void removePluginGroup (const juce::Uuid& channelId, int group);   // an OFF group's members come back on
     void setPluginGroupMember (const juce::Uuid& channelId, int group, const juce::Uuid& slotId, bool member);   // joining an OFF group switches the plugin off at once, leaving it switches it on
-    /** False if a safe transition could not be prepared; document and runtime targets stay unchanged. */
-    bool setPluginGroupOff (const juce::Uuid& channelId, int group, bool off);
+    void setPluginGroupOff (const juce::Uuid& channelId, int group, bool off);
     /** Sets the same numbered group (0-based) on every mic channel that has one, with one value announcement.
-        Returns how many channels have that group (0: nothing happened, -1: preparation failed, no channel changed). */
+        Returns how many channels have that group (0: nothing happened). */
     int setGroupOffOnEveryChannel (int group, bool off);
     /** The same numbered group on every mic channel that has one, for the global hotkey: a group that is on
         anywhere switches them all off, otherwise they all come on. Returns how many channels have that group
-        (0: nothing happened, -1: preparation failed) and, in 'switchedOff', which way they went. */
+        (0: nothing happened) and, in 'switchedOff', which way they went. */
     int toggleGroupOnEveryChannel (int group, bool& switchedOff);
 
     void setSessionName (const juce::String& name);
@@ -110,11 +109,9 @@ public:
     std::function<void()> onValueChanged;
     /** Runtime bypass repair only: refresh the open chain without announcing a document edit. */
     std::function<void (PluginChain&)> onChainRuntimeChanged;
-    std::function<void()> onPluginGroupTransitionFailed;
 
 private:
-    std::vector<int> pluginGroupIndices (const MixChannel&, int group, bool off) const;
-    void bypassSlot (const juce::Uuid& channelId, const juce::Uuid& slotId, bool bypass);   // the live chain's slot with that id (none: nothing)
+    bool bypassSlot (const juce::Uuid& channelId, const juce::Uuid& slotId, bool bypass);   // true when the live slot's bypass changed
     /** Another OFF group of the channel (not 'exceptGroup') holds the slot: switching one group on must not run it. */
     static bool heldOffElsewhere (const MixChannel& channel, const juce::Uuid& slotId, int exceptGroup);
     bool liveChainHas (const juce::Uuid& channelId, const juce::Uuid& slotId) const;
@@ -131,6 +128,7 @@ private:
     juce::File file;
     std::atomic<bool> dirty { false };
     bool graphApplied = false;
+    bool repairingGroupBypass = false;  // equal-value repair: the per-slot chain listener must not mark an edit
     int heldValueNotifications = 0;      // > 0: a ValueBatch is open
     bool valueNotificationHeld = false;  // something asked to announce while it was
 };

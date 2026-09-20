@@ -349,9 +349,10 @@ void MixDocument::removePluginGroup (const juce::Uuid& channelId, int group)
     if (c == nullptr || group < 0 || group >= (int) c->pluginGroups.size())
         return;
 
-    const ValueBatch batch (*this);
-    if (c->pluginGroups[(size_t) group].off && ! setPluginGroupOff (channelId, group, false))
-        return;
+    if (c->pluginGroups[(size_t) group].off)
+        for (const auto& slotId : c->pluginGroups[(size_t) group].slots)
+            if (! heldOffElsewhere (*c, slotId, group))
+                bypassSlot (channelId, slotId, false);   // a group that was off does not leave its plugins off behind it (unless another OFF group holds them)
 
     c->pluginGroups.erase (c->pluginGroups.begin() + group);
     valueChanged();
@@ -374,10 +375,6 @@ void MixDocument::setPluginGroupMember (const juce::Uuid& channelId, int group, 
 
         g.slots.push_back (slotId);
 
-        if (g.slots.size() > 1)
-            if (auto* chain = engine.getChannelChain (channelId))
-                chain->prepareGroupBypass();
-
         if (g.off)
             bypassSlot (channelId, slotId, true);
     }
@@ -396,49 +393,33 @@ void MixDocument::setPluginGroupMember (const juce::Uuid& channelId, int group, 
     valueChanged();
 }
 
-std::vector<int> MixDocument::pluginGroupIndices (const MixChannel& channel, int group, bool off) const
-{
-    std::vector<int> indices;
-    const auto& members = channel.pluginGroups[(size_t) group].slots;
-    if (auto* chain = engine.getChannelChain (channel.id))
-        for (int i = 0; i < chain->getNumSlots(); ++i)
-        {
-            const auto& slotId = chain->getSlot (i).state.slotId;
-            if (std::find (members.begin(), members.end(), slotId) != members.end()
-                && (off || ! heldOffElsewhere (channel, slotId, group)))
-                indices.push_back (i);
-        }
-    return indices;
-}
-
-bool MixDocument::setPluginGroupOff (const juce::Uuid& channelId, int group, bool off)
+void MixDocument::setPluginGroupOff (const juce::Uuid& channelId, int group, bool off)
 {
     auto* c = session.findChannel (channelId);
 
     if (c == nullptr || group < 0 || group >= (int) c->pluginGroups.size())
-        return false;
+        return;
 
     auto& g = c->pluginGroups[(size_t) group];
     const bool changed = g.off != off;
     const ValueBatch batch (*this);
+    g.off = off;
 
-    if (auto* chain = engine.getChannelChain (channelId))
+    bool runtimeChanged = false;
     {
-        // Equal-value commands repair the audio state without turning a protocol no-op into a document edit.
-        const auto result = chain->setBypassedTogether (pluginGroupIndices (*c, group, off), off, changed);
-        if (result == PluginChain::GroupBypassResult::failed)
-        {
-            if (onPluginGroupTransitionFailed) onPluginGroupTransitionFailed();
-            return false;
-        }
-        if (result == PluginChain::GroupBypassResult::changed && ! changed && onChainRuntimeChanged)
-            onChainRuntimeChanged (*chain);
+        // The original per-slot API notifies its listener. Equal-value repairs only restore the
+        // group's existing intent, so those notifications must not turn a protocol no-op into an edit.
+        const juce::ScopedValueSetter<bool> repairScope (repairingGroupBypass, ! changed);
+        for (const auto& slotId : g.slots)
+            if (off || ! heldOffElsewhere (*c, slotId, group))
+                runtimeChanged = bypassSlot (channelId, slotId, off) || runtimeChanged;
     }
 
-    g.off = off;
     if (changed)
         valueChanged();
-    return true;
+    else if (runtimeChanged && onChainRuntimeChanged)
+        if (auto* chain = engine.getChannelChain (channelId))
+            onChainRuntimeChanged (*chain);
 }
 
 bool MixDocument::heldOffElsewhere (const MixChannel& channel, const juce::Uuid& slotId, int exceptGroup)
@@ -468,21 +449,26 @@ bool MixDocument::liveChainHas (const juce::Uuid& channelId, const juce::Uuid& s
     return false;
 }
 
-void MixDocument::bypassSlot (const juce::Uuid& channelId, const juce::Uuid& slotId, bool bypass)
+bool MixDocument::bypassSlot (const juce::Uuid& channelId, const juce::Uuid& slotId, bool bypass)
 {
     auto* chain = engine.getChannelChain (channelId);
 
     if (chain == nullptr)
-        return;
+        return false;
 
     for (int i = 0; i < chain->getNumSlots(); ++i)
         if (chain->getSlot (i).state.slotId == slotId)
         {
             if (chain->getSlot (i).bypassed.load() != bypass)
+            {
                 chain->setBypassed (i, bypass);
+                return true;
+            }
 
-            return;
+            return false;
         }
+
+    return false;
 }
 
 int MixDocument::setGroupOffOnEveryChannel (int group, bool off)
@@ -498,16 +484,6 @@ int MixDocument::setGroupOffOnEveryChannel (int group, bool off)
 
     if (channels.empty())
         return 0;
-
-    // Prepare every chain before committing any channel, so a late refusal cannot leave a
-    // partially applied command or a successful ACK for a transition that was never possible.
-    for (const auto& id : channels)
-        if (auto* chain = engine.getChannelChain (id))
-            if (! chain->prepareBypassedTogether (pluginGroupIndices (*session.findChannel (id), group, off), off))
-            {
-                if (onPluginGroupTransitionFailed) onPluginGroupTransitionFailed();
-                return -1;
-            }
 
     {
         // one operation is one edit: the cards, the groups window and the Stream Deck never see half of it (each
@@ -557,6 +533,9 @@ void MixDocument::setDeviceInfo (const juce::String& name, int bufferSize, doubl
 
 void MixDocument::markDirty (bool refreshViews)
 {
+    if (repairingGroupBypass)
+        return;
+
     const bool wasDirty = dirty.exchange (true, std::memory_order_acq_rel);
 
     if (refreshViews || ! wasDirty)

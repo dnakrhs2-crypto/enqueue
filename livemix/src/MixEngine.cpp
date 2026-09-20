@@ -658,12 +658,6 @@ void MixEngine::applySession (const MixSession& session, juce::StringArray* erro
         node->onGain = c.on ? 1.0f : 0.0f;
         node->panCurrent = node->panTarget = channelPanGains (clampedPan (c.pan), c.stereo);
         restore (*node->chain, c.chain);
-        for (const auto& group : c.pluginGroups)
-            if (group.slots.size() > 1)
-            {
-                node->chain->prepareGroupBypass();
-                break;
-            }
         freshChannels.push_back (std::move (node));
     }
 
