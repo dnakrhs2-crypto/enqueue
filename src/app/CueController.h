@@ -21,11 +21,10 @@ namespace gocue
     post-wait, auto-continue, auto-follow), arming, fade-stop-others, ducking, applying the workspace
     settings (double-GO protection, key-up, panic time) and each cue's second-trigger rule.
     Message thread only. The UI is a thin layer over this so the rules are unit-testable. */
-class CueController : private CueList::Listener
+class CueController
 {
 public:
     CueController (AudioEngine& engine, ProjectDocument& document, Scheduler& scheduler);
-    ~CueController() override;
 
     enum class GoResult
     {
@@ -188,24 +187,14 @@ public:
     bool isPanicLatched() const;
 
 private:
-    // Only this GO's continuations may revise its anticipated destination. Any cursor move, list structure change/switch,
-    // goto or later GO relinquishes that ownership, even if the cursor subsequently returns to the same row.
-    struct GoSequence {};
-    std::shared_ptr<GoSequence> goSequence;
-    void playheadChanged (int) override { goSequence.reset(); }
-    void cueListStructureChanged() override { goSequence.reset(); }
-    void updateGoPlayhead (CueList& list, int after, const std::shared_ptr<GoSequence>& run);
-    int fireSequence (CueList& list, int index, bool audition, const std::shared_ptr<GoSequence>& run);
-    int startGroup (CueList& list, int index, bool audition, const std::shared_ptr<GoSequence>& run);
     /** A start-first-enter group's destination, from its actual child walk or a prediction before its pre-wait. */
     int groupEnterDestination (const CueList& list, int index, int childAfter = -1) const;
-    GoResult trigger (const Cue& cue, bool audition, int* groupEnterIndex, const std::shared_ptr<GoSequence>& run);
+    GoResult trigger (const Cue& cue, bool audition, int* groupEnterIndex);
     juce::Uuid resolveTarget (bool ignoreFadingOut) const;
     void status (const juce::String& message, bool isError = false);
     static juce::String cueLabel (int index, const Cue& cue);
     /** Fires a cue by id at once (it may have been edited since it was scheduled). */
-    GoResult startById (const juce::Uuid& id, bool audition, int* groupEnterIndex = nullptr,
-                        const std::shared_ptr<GoSequence>& run = {});
+    GoResult startById (const juce::Uuid& id, bool audition, int* groupEnterIndex = nullptr);
     /** The moments a scheduled start's waits began, for getRunningWaits(): 'preWaitFrom' = when the cue's own pre-wait
         began (the GO, the group start, the end of the previous post-wait); < 0 = at the start itself (no pre-wait shown).
         'postWaitOwner' / 'postWaitFrom' = the auto-continue cue whose post-wait runs before this start, and when it started. */
@@ -219,7 +208,7 @@ private:
     /** The result of an immediate start (atSeconds is now or past); a scheduled one is 'started'. 'scheduledId' receives the
         scheduler id of the start (0 when it ran at once): what a walk puts on for that run is tagged with it. */
     GoResult scheduleStart (const juce::Uuid& id, double atSeconds, bool audition, int* scheduledId = nullptr, StartTiming timing = {},
-                            int* groupEnterIndex = nullptr, const std::shared_ptr<GoSequence>& run = {});
+                            int* groupEnterIndex = nullptr);
     AudioEngine::PlayOptions playOptions (bool audition) const;
     double startOffsetForNextPlay = 0.0;   // previewFrom(): seconds into the region the next play begins at
     bool explicitStartForNextPlay = false;
@@ -263,7 +252,7 @@ private:
     ProjectDocument& document;
     Scheduler& scheduler;
     FadeRunner fadeRunner;
-    GoResult triggerImpl (const Cue& cue, bool audition, int* groupEnterIndex, const std::shared_ptr<GoSequence>& run);
+    GoResult triggerImpl (const Cue& cue, bool audition, int* groupEnterIndex);
     GoResult firstTriggerResult = GoResult::started;
     bool firstTriggerSeen = true;
     struct Pending

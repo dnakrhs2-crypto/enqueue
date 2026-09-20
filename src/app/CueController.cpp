@@ -17,12 +17,6 @@ CueController::CueController (AudioEngine& e, ProjectDocument& d, Scheduler& s)
     clock = [this] { return scheduler.now(); };
     fadeRunner.clock = [this] { return clock(); };
     randomChoice = [] (int count) { return juce::Random::getSystemRandom().nextInt (juce::jmax (1, count)); };
-    document.cues.addListener (this);
-}
-
-CueController::~CueController()
-{
-    document.cues.removeListener (this);
 }
 
 bool CueController::isCueActive (const juce::Uuid& id) const
@@ -292,11 +286,6 @@ int CueController::startGroup (int index, bool audition)
 
 int CueController::startGroup (CueList& cues, int index, bool audition)
 {
-    return startGroup (cues, index, audition, {});
-}
-
-int CueController::startGroup (CueList& cues, int index, bool audition, const std::shared_ptr<GoSequence>& sequenceRun)
-{
     if (! cues.isValidIndex (index) || ! cues.get (index).isGroup())
         return juce::jmin (index + 1, cues.size());
 
@@ -349,7 +338,7 @@ int CueController::startGroup (CueList& cues, int index, bool audition, const st
 
         case GroupMode::startFirstEnter:
         {
-            const int after = fireSequence (cues, children.front(), audition, sequenceRun);
+            const int after = fireSequence (cues, children.front(), audition);
             return groupEnterDestination (cues, index, after);
         }
 
@@ -727,7 +716,6 @@ bool CueController::hasPendingFor (const juce::Uuid& cueId, bool includeObserver
 
 void CueController::cancelPending()
 {
-    goSequence.reset();
     for (const auto& p : pending)
         scheduler.cancel (p.id);
 
@@ -949,11 +937,10 @@ AudioEngine::PlayOptions CueController::playOptions (bool audition) const
 
 CueController::GoResult CueController::trigger (const Cue& cue, bool audition)
 {
-    return trigger (cue, audition, nullptr, {});
+    return trigger (cue, audition, nullptr);
 }
 
-CueController::GoResult CueController::trigger (const Cue& cue, bool audition, int* groupEnterIndex,
-                                               const std::shared_ptr<GoSequence>& run)
+CueController::GoResult CueController::trigger (const Cue& cue, bool audition, int* groupEnterIndex)
 {
     // a cue that ends up starting itself (A -> start B -> start A, a group holding its own start cue) is refused
     for (const auto& d : dispatchStack)
@@ -983,7 +970,7 @@ CueController::GoResult CueController::trigger (const Cue& cue, bool audition, i
 
     const DepthGuard depth (*this);
     dispatchStack.push_back ({ cue.id, cue.isControl() });
-    const auto result = triggerImpl (cue, audition, groupEnterIndex, run);
+    const auto result = triggerImpl (cue, audition, groupEnterIndex);
     dispatchStack.pop_back();
 
     if (! firstTriggerSeen)
@@ -1012,7 +999,6 @@ void CueController::applyPendingGoto()
         return;
 
     pendingGoto.set = false;
-    goSequence.reset();   // a goto owns the cursor, including a goto to its current row
 
     if (pendingGoto.container >= 0 && pendingGoto.container != document.getActiveContainer())
         document.setActiveContainer (pendingGoto.container);   // a target in another list / cart brings that one to the front
@@ -1041,8 +1027,7 @@ std::vector<CueController::RecordedStart> CueController::stopRecording()
     return result;
 }
 
-CueController::GoResult CueController::triggerImpl (const Cue& cue, bool audition, int* groupEnterIndex,
-                                                   const std::shared_ptr<GoSequence>& run)
+CueController::GoResult CueController::triggerImpl (const Cue& cue, bool audition, int* groupEnterIndex)
 {
     int index = -1;
     CueList* listPtr = document.listContaining (cue.id, &index);
@@ -1101,7 +1086,7 @@ CueController::GoResult CueController::triggerImpl (const Cue& cue, bool auditio
             }
         }
 
-        const int after = startGroup (cues, index, audition, run);
+        const int after = startGroup (cues, index, audition);
         if (groupEnterIndex != nullptr && cue.group.mode == GroupMode::startFirstEnter)
             *groupEnterIndex = after;
         played.insert (cue.id);
@@ -1475,8 +1460,7 @@ std::set<juce::Uuid> CueController::familyOf (const Cue& cue) const
     return family;
 }
 
-CueController::GoResult CueController::startById (const juce::Uuid& id, bool audition, int* groupEnterIndex,
-                                                 const std::shared_ptr<GoSequence>& run)
+CueController::GoResult CueController::startById (const juce::Uuid& id, bool audition, int* groupEnterIndex)
 {
     const auto* cue = document.findCueAnywhere (id);
 
@@ -1484,7 +1468,7 @@ CueController::GoResult CueController::startById (const juce::Uuid& id, bool aud
         return GoResult::failed;   // deleted while it was waiting
 
     const Cue copy = *cue;
-    const auto result = trigger (copy, audition, groupEnterIndex, run);
+    const auto result = trigger (copy, audition, groupEnterIndex);
 
     if (result != GoResult::started)
         return result;
@@ -1512,25 +1496,21 @@ CueController::GoResult CueController::fire (const juce::Uuid& cueId, bool audit
 }
 
 CueController::GoResult CueController::scheduleStart (const juce::Uuid& id, double atSeconds, bool audition, int* scheduledId,
-                                                     StartTiming timing, int* groupEnterIndex, const std::shared_ptr<GoSequence>& run)
+                                                     StartTiming timing, int* groupEnterIndex)
 {
     if (scheduledId != nullptr)
         *scheduledId = 0;
 
     if (atSeconds <= clock())
-        return startById (id, audition, groupEnterIndex, run);
+        return startById (id, audition, groupEnterIndex);
 
     // the start is told its own scheduler id: a restart it causes must spare what the walk puts on for this very run
     auto startId = std::make_shared<int> (0);
-    *startId = scheduler.schedule (atSeconds, [this, id, audition, startId, run]
+    *startId = scheduler.schedule (atSeconds, [this, id, audition, startId]
                                               {
                                                   const juce::ScopedValueSetter<int> firing (firingStartId, *startId);
                                                   const juce::ScopedValueSetter<juce::Uuid> firingCue (firingStartCue, id);
-                                                  int enterAfter = -1;
-                                                  startById (id, audition, &enterAfter, run);
-                                                  if (enterAfter >= 0)
-                                                      if (auto* list = document.listContaining (id))
-                                                          updateGoPlayhead (*list, enterAfter, run);
+                                                  startById (id, audition);
                                               });
     track (*startId, id, PendingKind::start, *startId);
 
@@ -1579,7 +1559,7 @@ int CueController::sequenceEnd (const CueList& cues, int index) const
     {
         const auto& cue = cues.get (i);
         const int next = cues.subtreeEnd (i);
-        if (cue.armed && (cue.continueMode == ContinueMode::none || (cue.isDevamp() && cue.devamp.startNextCue)))
+        if (cue.armed && cue.continueMode == ContinueMode::none)
             return cue.isGroup() && cue.group.mode == GroupMode::startFirstEnter
                        ? groupEnterDestination (cues, i) : next;
 
@@ -1595,24 +1575,6 @@ int CueController::fireSequence (int index, bool audition)
 }
 
 int CueController::fireSequence (CueList& cues, int index, bool audition)
-{
-    return fireSequence (cues, index, audition, {});
-}
-
-void CueController::updateGoPlayhead (CueList& cues, int after, const std::shared_ptr<GoSequence>& run)
-{
-    if (run == nullptr || run != goSequence || &cues != &document.cues)
-        return;
-
-    const int destination = juce::jmin (after, cues.size() - 1);
-    if (cues.getPlayheadIndex() != destination)
-    {
-        cues.setPlayheadIndex (destination);
-        goSequence = run;   // this continuation's own cursor move retains ownership for later follows
-    }
-}
-
-int CueController::fireSequence (CueList& cues, int index, bool audition, const std::shared_ptr<GoSequence>& run)
 {
     if (! cues.isValidIndex (index))
         return juce::jmin (juce::jmax (index, 0), cues.size());
@@ -1707,7 +1669,7 @@ int CueController::fireSequence (CueList& cues, int index, bool audition, const 
                            && cue.continueMode == ContinueMode::none;
         int enterAfter = -1;   // belongs to this start alone; a nested group/control cannot supply its destination
         const auto result = scheduleStart (cue.id, startAt, audition, &runId, { t, postWaitOwner, postWaitFrom, postWaitStartId },
-                                           &enterAfter, enter ? run : nullptr);
+                                           &enterAfter);
 
         if (result == GoResult::ignored)
             return next;   // the second-trigger rule acted on (or kept) the running instance: its own sequence stands, no new one is put behind it
@@ -1735,15 +1697,12 @@ int CueController::fireSequence (CueList& cues, int index, bool audition, const 
 
         if (! nextId.isNull())
             track (scheduler.watch ([this, id, startAt, armed] { return clock() >= startAt && (! armed || ! isCueActive (id)); },
-                                    [this, nextId, audition, run]
+                                    [this, nextId, audition]
                                     {
                                         int nextIndex = -1;
 
                                         if (auto* nextList = document.listContaining (nextId, &nextIndex))
-                                        {
-                                            const int after = fireSequence (*nextList, nextIndex, audition, run);
-                                            updateGoPlayhead (*nextList, after, run);
-                                        }
+                                            fireSequence (*nextList, nextIndex, audition);
                                     }), id, PendingKind::observer, runId);
 
         return sequenceEnd (cues, index);
@@ -1800,7 +1759,6 @@ CueController::GoResult CueController::go (bool audition, double observedSeconds
 
     const int index = document.cues.getPlayheadIndex();
     const Cue copy = *cue;
-    goSequence.reset();   // a new GO supersedes any earlier sequence's anticipated cursor
 
     // a running cue that is fired again follows its second-trigger rule instead of starting a sequence
     // (unless it is auditioning and this is a normal GO: then it restarts for real)
@@ -1815,8 +1773,7 @@ CueController::GoResult CueController::go (bool audition, double observedSeconds
     firstTriggerSeen = false;
     firstTriggerResult = GoResult::started;
     gotoApplied = false;
-    const auto run = std::make_shared<GoSequence>();
-    const int after = fireSequence (document.cues, index, audition, run);
+    const int after = fireSequence (index, audition);
 
     if (gotoApplied)
     {
@@ -1834,7 +1791,6 @@ CueController::GoResult CueController::go (bool audition, double observedSeconds
         // the first cue could not be started (missing file, fade / devamp target not playing ...): trigger() already
         // reported it, and that message must stay visible instead of a "GO:" line
         document.cues.setPlayheadIndex (juce::jmin (after, document.cues.size() - 1));
-        goSequence = run;
         return GoResult::failed;
     }
 
@@ -1842,7 +1798,6 @@ CueController::GoResult CueController::go (bool audition, double observedSeconds
         status ((isAuditionRequested (audition) ? ko ("오디션 GO: ") : ko ("GO: ")) + cueLabel (index, copy));
 
     document.cues.setPlayheadIndex (juce::jmin (after, document.cues.size() - 1));
-    goSequence = run;
     return GoResult::started;
 }
 
@@ -2217,7 +2172,6 @@ void CueController::resetForNewProject()
     played.clear();
     recorded.clear();
     recording = false;
-    goSequence.reset();
     pendingGoto = {};
     gotoApplied = false;
     lastWallClockSecond = -1;   // the new project's clocks start from the current second: nothing from before it, nothing skipped

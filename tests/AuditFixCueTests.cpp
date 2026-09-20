@@ -149,6 +149,7 @@ public:
 
         firstEnter (tone.getFile());
         disabledFollow (tone.getFile());
+        devampFollow (tone.getFile());
         nestedEnter (tone.getFile());
         controlEnter (tone.getFile());
         retriggeredFollow (tone.getFile());
@@ -228,6 +229,52 @@ public:
                     + "; D playing=" + juce::String ((int) f.engine.isPlaying (d.id)));
     }
 
+    void devampFollow (const juce::File& tone)
+    {
+        for (const double preWait : { 0.0, 0.5 })
+        {
+            beginTest ("audit R3: " + juce::String (preWait > 0.0 ? "scheduled " : "immediate ")
+                       + "devamp auto-start keeps C ready without retriggering B");
+            Fixture f;
+            auto target = audio ("T", tone, 1.0);
+            target.audio.infiniteLoop = true;
+            auto a = audio ("A", tone, 0.2), b = audio ("B", tone), c = audio ("C", tone);
+            a.continueMode = ContinueMode::autoFollow;
+            Cue devamp;
+            devamp.name = "X";
+            devamp.type = CueType::devamp;
+            devamp.devamp.targetId = target.id;
+            devamp.devamp.startNextCue = true;
+            devamp.devamp.stopTarget = true;
+            devamp.continueMode = ContinueMode::autoContinue;
+            devamp.preWaitSeconds = preWait;
+            for (const auto& cue : { target, a, devamp, b, c })
+                f.document.cues.add (cue);
+
+            expect (f.controller.fire (target.id) == CueController::GoResult::started);
+            f.document.cues.setPlayheadIndex (1);
+            expect (f.go() == CueController::GoResult::started);
+            expect (f.playheadId() == c.id, "GO must anticipate B's automatic start and leave C ready");
+            f.renderUntil (preWait + 0.4);
+            expect (! f.engine.isPlaying (a.id));
+            expect (f.engine.isPlaying (target.id));
+            expect (! f.engine.isPlaying (b.id) && ! f.engine.isPlaying (c.id),
+                    "B must wait for the target's loop boundary");
+            expect (f.playheadId() == c.id, "The follow must keep the round-1 destination C");
+
+            f.renderUntil (1.2);
+            expect (! f.engine.isPlaying (target.id));
+            expect (f.engine.isPlaying (b.id), "The devamp must auto-start B at the loop boundary");
+            expect (! f.engine.isPlaying (c.id));
+            expectEquals (f.controller.getNumPending(), 0);
+            expect (f.playheadId() == c.id);
+            const auto firstOrder = f.engine.getStartOrder (b.id);
+            expect (f.go() == CueController::GoResult::started);
+            expect (f.engine.isPlaying (c.id), "The next GO must start C");
+            expectEquals (f.engine.getStartOrder (b.id), firstOrder, "The next GO must not restart B");
+        }
+    }
+
     void nestedEnter (const juce::File& tone)
     {
         for (const double preWait : { 0.0, 0.5 })
@@ -286,16 +333,17 @@ public:
     void retriggeredFollow (const juce::File& tone)
     {
         const juce::StringArray names {
-            "ignored follow corrects GO to the actual next cue",
+            "ignored follow keeps the round-1 destination (known limit)",
             "ignored follow preserves a moved playhead",
             "ignored follow preserves a playhead moved away and back",
             "ignored follow cannot undo a later GO on the last row",
             "ignored follow cannot undo a list switch and return",
-            "a sequence fired without GO cannot correct the playhead"
+            "a sequence fired without GO keeps the playhead",
+            "ignored pre-wait C keeps the round-1 destination (known limit)"
         };
         for (int cursorMove = 0; cursorMove < names.size(); ++cursorMove)
         {
-            beginTest ("audit R2-2: " + names[cursorMove]);
+            beginTest ("audit R3: " + names[cursorMove]);
             Fixture f;
             auto a = audio ("A", tone, 0.2), b = audio ("B", tone);
             auto c = audio ("C", tone), d = audio ("D", tone), e = audio ("E", tone);
@@ -303,6 +351,7 @@ public:
             b.armed = false;
             c.continueMode = ContinueMode::autoContinue;
             c.secondTrigger = SecondTriggerAction::hardStop;
+            c.preWaitSeconds = cursorMove == 6 ? 0.5 : 0.0;
             for (const auto& cue : { a, b, c, d, e })
                 f.document.cues.add (cue);
             const int otherList = f.document.addContainer ("other", false);
@@ -328,19 +377,20 @@ public:
                 f.document.setActiveContainer (0);
             }
 
-            f.renderUntil (0.4);
+            f.renderUntil (c.preWaitSeconds + 0.4);
             expect (! f.engine.isPlaying (a.id) && ! f.engine.isPlaying (b.id));
             expect (! f.engine.isPlaying (c.id), "The follow must hard-stop the previewed C");
             expect (! f.engine.isPlaying (d.id));
             expectEquals ((int) f.engine.isPlaying (e.id), (int) (cursorMove == 3));
             expectEquals (f.controller.getNumPending(), 0);
-            const auto expected = cursorMove == 0 ? d.id : cursorMove == 1 ? b.id : e.id;
+            const auto expected = cursorMove == 1 ? b.id : e.id;
             expect (f.playheadId() == expected, "Unexpected playhead after ignored follow: " + f.playheadName());
-            if (cursorMove == 0)
+            if (cursorMove == 0 || cursorMove == 6)
             {
+                // Known round-1 limit: ignored C ends/cancels the continuation, but the predicted cursor stays at E.
                 expect (f.go() == CueController::GoResult::started);
-                expect (f.engine.isPlaying (d.id), "The next GO must start the unplayed D");
-                expect (! f.engine.isPlaying (e.id));
+                expect (! f.engine.isPlaying (d.id), "The unplayed D remains skipped, as in round 1");
+                expect (f.engine.isPlaying (e.id));
             }
         }
     }
@@ -350,8 +400,8 @@ public:
         for (const bool enter : { false, true })
             for (const double preWait : { 0.0, 0.5 })
             {
-                beginTest ("audit R2-2: " + juce::String (preWait > 0.0 ? "scheduled " : "immediate ")
-                           + (enter ? "enter retains correction through successive child follows"
+                beginTest ("audit R3: " + juce::String (preWait > 0.0 ? "scheduled " : "immediate ")
+                           + (enter ? "enter leaves ignored child follows uncorrected (known limit)"
                                     : "start-first isolates child follow termination"));
                 Fixture f;
                 auto g = group (enter ? GroupMode::startFirstEnter : GroupMode::startFirst);
@@ -374,9 +424,10 @@ public:
                 f.renderUntil (preWait + 0.4);
                 expect (! f.engine.isPlaying (c.id) && ! f.engine.isPlaying (d.id));
                 expect (f.controller.hasPlayed (b.id), "The second child follow must have run");
-                expect (f.playheadId() == (enter ? d.id : outside.id));
+                expect (f.playheadId() == (enter ? e.id : outside.id));
                 expect (f.go() == CueController::GoResult::started);
-                expect (f.engine.isPlaying (enter ? d.id : outside.id));
+                expect (f.engine.isPlaying (enter ? e.id : outside.id));
+                expect (! f.engine.isPlaying (d.id));
             }
     }
 
@@ -402,7 +453,7 @@ public:
         expect (f.playheadId() == e.id);
         f.renderUntil (0.4);
         expect (! f.engine.isPlaying (c.id) && ! f.engine.isPlaying (d.id));
-        expect (f.playheadId() == e.id, "The explicit goto must beat the ignored follow's D destination");
+        expect (f.playheadId() == e.id, "The explicit goto must retain its destination after an ignored follow");
     }
 
     void followSelection (const juce::File& tone)
