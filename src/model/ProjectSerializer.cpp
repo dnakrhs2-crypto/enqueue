@@ -1121,7 +1121,14 @@ juce::Result save (const Project& project, const juce::File& file)
         for (const auto& cue : list.cues)
             for (const auto& trigger : cue.midiTriggers)
                 if (auto r = trigger.validate (true); r.failed()) return r;
-    const auto json = toJson (project, file.getParentDirectory());
+    const auto projectDir = file.getParentDirectory();
+
+    // Relative media paths need a directory even for the first automatic backup.
+    if (! projectDir.exists())
+        if (auto created = projectDir.createDirectory(); created.failed())
+            return created;
+
+    const auto json = toJson (project, projectDir);
 
     // written to a sibling, verified byte for byte and as JSON, then swapped in (SafeFileWrite): a full disk, a
     // dropped share or a crash mid-write leaves the previous file intact

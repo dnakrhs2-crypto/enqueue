@@ -492,6 +492,8 @@ ProjectSnapshot ProjectDocument::makeSnapshot (bool capturePluginStates) const
 
 void ProjectDocument::restoreSnapshot (const ProjectSnapshot& snapshot)
 {
+    const auto previous = onSnapshotRestored ? toProject() : Project {};
+
     // settings are deliberately left alone: they are not part of the undo history
     const bool containersDiffer = (int) snapshot.project.lists.size() != (int) containers.size() || snapshot.project.activeList != active
                                   || [&]
@@ -564,7 +566,7 @@ void ProjectDocument::restoreSnapshot (const ProjectSnapshot& snapshot)
         notifyContainers();
 
     if (onSnapshotRestored)
-        onSnapshotRestored (snapshot);
+        onSnapshotRestored (snapshot, previous);
 }
 
 void ProjectDocument::perform (const juce::String& name, const std::function<void()>& edit, const EditOptions& options)

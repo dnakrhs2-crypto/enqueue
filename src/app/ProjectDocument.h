@@ -136,8 +136,8 @@ public:
 
     /** Adds live state (plugin chain states) to a snapshot; only called for capturePluginStates edits. Set by the app. */
     std::function<void (Project&)> snapshotDecorator;
-    /** Called after undo / redo replaced the model so the app can reconcile live objects (plugin chains). */
-    std::function<void (const ProjectSnapshot&)> onSnapshotRestored;
+    /** Called after undo / redo with the restored snapshot and the previous model, so only changed live values are reconciled. */
+    std::function<void (const ProjectSnapshot&, const Project&)> onSnapshotRestored;
     /** Millisecond clock used for coalescing; tests inject a fake one. */
     std::function<double()> clock;
 

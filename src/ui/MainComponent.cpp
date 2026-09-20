@@ -219,7 +219,10 @@ MainComponent::MainComponent (AudioEngine& e, AppSettings& s, juce::ApplicationC
     footer.onWarningsClicked = [this] { showWarnings(); };
 
     document.snapshotDecorator = [this] (Project& project) { captureLivePluginStates (project); };
-    document.onSnapshotRestored = [this] (const ProjectSnapshot& snapshot) { reconcileChainsAfterRestore (snapshot); };
+    document.onSnapshotRestored = [this] (const ProjectSnapshot& snapshot, const Project& previous)
+    {
+        reconcileChainsAfterRestore (snapshot, previous);
+    };
 
     engine.setChainListener (&pluginWindows);
     pluginWindows.onChainChanged = [this] (PluginChain& chain)
@@ -2773,7 +2776,7 @@ void MainComponent::ignorePluginChangesBriefly()
     ignorePluginChangesUntilMs = juce::Time::getMillisecondCounterHiRes() + pluginChangeGraceMs;
 }
 
-void MainComponent::reconcileChainsAfterRestore (const ProjectSnapshot& snapshot)
+void MainComponent::reconcileChainsAfterRestore (const ProjectSnapshot& snapshot, const Project& previous)
 {
     const auto factory = engine.makePluginFactory();
     juce::StringArray errors;
@@ -2813,9 +2816,13 @@ void MainComponent::reconcileChainsAfterRestore (const ProjectSnapshot& snapshot
             errors.addArray (engine.getMasterChain().restore (document.masterPlugins, factory));
     }
 
-    // running players follow the restored model: orphans stop, the others take the restored live values
+    // Compare document values, not the live state: fades can intentionally differ from the document.
+    std::set<juce::Uuid> reconciledPlayers;
     for (const auto& p : engine.getPlayingCues())
     {
+        if (! reconciledPlayers.insert (p.id).second)
+            continue;   // the setters already apply to every instance of this cue
+
         const auto* cuePtr = document.findCueAnywhere (p.id);
 
         if (cuePtr == nullptr)
@@ -2825,12 +2832,50 @@ void MainComponent::reconcileChainsAfterRestore (const ProjectSnapshot& snapshot
         }
 
         const auto& cue = *cuePtr;
-        engine.setLiveGainDb (p.id, cue.gainDb);
-        engine.setLiveLevels (p.id, cue.levels, cue.trim);
-        engine.setLiveRate (p.id, cue.audio.rate);
-        engine.setLiveRegion (p.id, cue.audio.startSeconds, cue.audio.endSeconds);
-        engine.setLiveSlices (p.id, cue.audio.slices, cue.audio.firstSliceCount);
-        engine.setLivePlayCount (p.id, cue.audio.playCount, cue.audio.infiniteLoop);
+        const auto* before = previous.findCue (p.id);
+
+        // A loaded player owns its file reader; live setters cannot replace that reader.
+        if (engine.isLoaded (p.id) && (before == nullptr || before->file != cue.file))
+        {
+            engine.unload (p.id);
+
+            if (cue.makesSound() && ! cue.fileMissing && (cue.isMic() || cue.file != juce::File()))
+                engine.load (cue, 0.0);
+        }
+
+        if (before == nullptr || before->gainDb != cue.gainDb)
+            engine.setLiveGainDb (p.id, cue.gainDb);
+
+        const bool levelsChanged = before == nullptr || before->levels.inputDb != cue.levels.inputDb
+                                    || before->levels.outputDb != cue.levels.outputDb
+                                    || before->levels.crosspointDb != cue.levels.crosspointDb;
+        const bool trimChanged = before == nullptr || ! (before->trim == cue.trim);
+
+        if (levelsChanged || trimChanged)
+        {
+            AudioEngine::LiveState live;
+            const bool hasLive = engine.getLiveState (p.id, live);
+            engine.setLiveLevels (p.id, levelsChanged || ! hasLive ? cue.levels : live.levels,
+                                       trimChanged || ! hasLive ? cue.trim : live.trim);
+        }
+
+        if (before == nullptr || before->audio.rate != cue.audio.rate)
+            engine.setLiveRate (p.id, cue.audio.rate);
+        if (before == nullptr || before->audio.startSeconds != cue.audio.startSeconds || before->audio.endSeconds != cue.audio.endSeconds)
+            engine.setLiveRegion (p.id, cue.audio.startSeconds, cue.audio.endSeconds);
+        if (before == nullptr || before->audio.firstSliceCount != cue.audio.firstSliceCount
+            || ! std::equal (before->audio.slices.begin(), before->audio.slices.end(), cue.audio.slices.begin(), cue.audio.slices.end(),
+                             [] (const Slice& a, const Slice& b) { return a.seconds == b.seconds && a.playCount == b.playCount; }))
+            engine.setLiveSlices (p.id, cue.audio.slices, cue.audio.firstSliceCount);
+        if (before == nullptr || before->audio.playCount != cue.audio.playCount || before->audio.infiniteLoop != cue.audio.infiniteLoop)
+            engine.setLivePlayCount (p.id, cue.audio.playCount, cue.audio.infiniteLoop);
+
+        const auto& envelope = cue.audio.envelope;
+        if (before == nullptr || before->audio.envelope.enabled != envelope.enabled
+            || before->audio.envelope.linear != envelope.linear || before->audio.envelope.lockToTrim != envelope.lockToTrim
+            || ! std::equal (before->audio.envelope.points.begin(), before->audio.envelope.points.end(), envelope.points.begin(), envelope.points.end(),
+                             [] (const EnvelopePoint& a, const EnvelopePoint& b) { return a.x == b.x && a.level == b.level; }))
+            engine.setLiveEnvelope (p.id, envelope);
     }
 
     ignorePluginChangesBriefly();   // replaying saved state is not a new edit
@@ -3043,6 +3088,9 @@ void MainComponent::confirmReplaceProjectThen (std::function<void()> action, con
 
 void MainComponent::confirmDiscardChangesThen (std::function<void()> action)
 {
+    table.finishEditing();
+    inspector.finishEditing();
+
     if (! document.isDirty())
     {
         if (action)
@@ -3482,13 +3530,17 @@ void MainComponent::removeContainer (int index)
     const auto info = document.getContainerInfo (index);
     const auto ids = document.cueIdsOf (index);   // active or not: hotkeys / control cues may have started them
 
-    for (const auto& id : ids)
+    document.perform (ko ("리스트/카트 삭제: ") + info.name, [this, index, ids]
     {
-        controller.stopCue (id);
-        engine.removeCueChain (id);
-    }
+        // perform() captures the live plugin states before any chain is removed.
+        for (const auto& id : ids)
+        {
+            controller.stopCue (id);
+            engine.removeCueChain (id);
+        }
 
-    document.perform (ko ("리스트/카트 삭제: ") + info.name, [this, index] { document.removeContainer (index); }, { {}, true });
+        document.removeContainer (index);
+    }, { {}, true });
 }
 
 void MainComponent::toggleContainerCart (int index)
