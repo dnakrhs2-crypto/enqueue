@@ -63,12 +63,96 @@ public:
         testOverload();
         testPanicLoss();
         testPanicProjectLoss();
+        testPortCapacity();
+        testPortIsolation();
+        testQueueReconnect();
         testQueue();
         testTransport();
         testCaptureRace();
         testShutdown();
     }
 private:
+    void testPortCapacity()
+    {
+        beginTest ("each port admits 8192 ordinary plus 512 panic packets; only capacity exhaustion records loss");
+        Harness h; FakeDevices backend; backend.list = { { "A", "A" }, { "B", "B" } };
+        MidiInputSettings settings; settings.autoUseAll = true;
+        expect (h.service->setMidiInputSettings (settings).wasOk());
+        expect (h.service->setMidiTriggers ("transport.panicAll", { note (61) }).wasOk());
+        MidiInputService input (*h.service, h.router->inputCallbacks(), backend.backend(), false);
+        for (int i = 0; i < 8192; ++i) { backend.send ("A", on (90)); backend.send ("B", on (90)); }
+        expectEquals (static_cast<int> (input.counters().received), 16384);
+        expectEquals (static_cast<int> (input.counters().capacityDropped), 0);
+        expect (! input.hasInputFault());
+        backend.send ("A", on (90)); backend.send ("B", on (90));
+        expectEquals (static_cast<int> (input.counters().dropped), 2);
+        for (int i = 0; i < 512; ++i) { backend.send ("A", off (61)); backend.send ("B", off (61)); }
+        expectEquals (static_cast<int> (input.counters().panicDropped), 0, "ordinary loss cannot consume either port's reserve");
+        expectEquals (static_cast<int> (input.counters().capacityDropped), 2);
+        backend.send ("A", on (61)); backend.send ("B", on (61));
+        expectEquals (static_cast<int> (input.counters().panicDropped), 2);
+        expectEquals (static_cast<int> (input.counters().capacityDropped), 4);
+        expectEquals (static_cast<int> (input.counters().contentionDropped), 0);
+        expect (input.hasInputFault());
+        drain (input, backend.now);
+        expectEquals (static_cast<int> (input.counters().delivered), 17408);
+        expectEquals (static_cast<int> (input.counters().stale), 0);
+        expect (h.panics.empty(), "pre-loss reserved packets cannot rearm the lost Note");
+        backend.send ("A", on (90)); backend.send ("B", on (90)); drain (input, backend.now);
+        expectEquals (static_cast<int> (input.counters().delivered), 17410);
+        expectEquals (static_cast<int> (input.counters().capacityDropped), 4, "reused queue slots admit packets again");
+    }
+    void testPortIsolation()
+    {
+        beginTest ("a full B queue cannot drop or starve A's GO release and reserved panic");
+        Harness h; h.requireKeyUp = true;
+        FakeDevices backend; backend.list = { { "A", "A" }, { "B", "B" } };
+        MidiInputSettings settings; settings.autoUseAll = true;
+        expect (h.service->setMidiInputSettings (settings).wasOk());
+        expect (h.service->setMidiTriggers ("transport.go", { note() }).wasOk());
+        expect (h.service->setMidiTriggers ("transport.panicAll", { note (61) }).wasOk());
+        MidiInputService input (*h.service, h.router->inputCallbacks(), backend.backend(), false);
+        backend.send ("A", on()); drain (input, backend.now);
+        expect (h.service->activations().anyHeld());
+        for (int i = 0; i < 8192; ++i) backend.send ("B", on (90));
+        for (int i = 0; i < 512; ++i) backend.send ("B", off (61));
+        backend.send ("B", on (61)); // only B overflows
+        backend.send ("A", off()); backend.send ("A", on (61));
+        expectEquals (static_cast<int> (input.counters().dropped), 0);
+        expectEquals (static_cast<int> (input.counters().panicDropped), 1);
+        // Round-robin admission to the consumer reaches A without draining B's
+        // entire backlog. The time budget may limit each call to one packet.
+        for (int i = 0; i < 4; ++i) input.drain (backend.now);
+        expect (! h.service->activations().anyHeld());
+        expectEquals (static_cast<int> (h.panics.size()), 1);
+        expect (input.hasPending(), "B's full backlog remains after A was serviced");
+        drain (input, backend.now);
+        expectEquals (static_cast<int> (input.counters().capacityDropped), 1);
+        expectEquals (static_cast<int> (input.counters().contentionDropped), 0);
+    }
+    void testQueueReconnect()
+    {
+        beginTest ("closing a full port removes only its backlog; reconnect has fresh capacity and notifier accounting");
+        Harness h; FakeDevices backend; backend.list = { { "A", "A" }, { "B", "B" } };
+        MidiInputSettings settings; settings.autoUseAll = true;
+        expect (h.service->setMidiInputSettings (settings).wasOk());
+        expect (h.service->setMidiTriggers ("transport.preview", { note() }).wasOk());
+        MidiInputService input (*h.service, h.router->inputCallbacks(), backend.backend(), false);
+        for (int i = 0; i < 8192; ++i) backend.send ("A", on (90));
+        backend.send ("B", on());
+        backend.list.erase (backend.list.begin()); input.refresh();
+        expect (input.hasPending(), "B's packet survives closing A");
+        drain (input, backend.now);
+        expectEquals (static_cast<int> (input.counters().delivered), 1);
+        expectEquals (h.downs (CommandIDs::preview), 0, "connection changes still invalidate queued routing");
+        backend.list.push_back ({ "A", "A" }); input.refresh();
+        backend.send ("A", on()); drain (input, backend.now);
+        expectEquals (h.downs (CommandIDs::preview), 1, "the new connection's first Note fires");
+        expectEquals (static_cast<int> (input.counters().capacityDropped), 0);
+        expect (! input.hasPending());
+        backend.send ("A", off()); input.shutdown();
+        expect (! input.hasPending());
+    }
     void testPanicProjectLoss()
     {
         for (bool released : { false, true })
@@ -199,41 +283,75 @@ private:
     }
     void testQueue()
     {
-        beginTest ("MPSC simultaneous producers preserve each port's order with no normal loss/duplication");
-        auto queue = std::make_unique<MidiEventQueue<8192, 512>>();
-        constexpr int producers = 8, perProducer = 2000;
+        for (int round = 0; round < 32; ++round) testQueueRound (round);
+    }
+    void testQueueRound (int round)
+    {
+        beginTest ("simultaneous producers preserve port order without loss, round " + juce::String (round + 1) + "/32");
+        constexpr int producers = 32, perProducer = 2000;
+        Harness h; FakeDevices backend;
+        for (int p = 0; p < producers; ++p) backend.list.push_back ({ "Port " + juce::String (p), "port" + juce::String (p) });
+        MidiInputSettings settings; settings.autoUseAll = true;
+        expect (h.service->setMidiInputSettings (settings).wasOk());
         std::atomic<int> finished { 0 }, rejected { 0 };
-        std::atomic<bool> start { false };
+        std::atomic<bool> start { false }, abort { false };
         std::vector<std::thread> threads;
-        // Batches keep this test within the declared normal burst capacity.
+        // At most 65 outstanding packets per port, 2080 total: less than even
+        // the old shared queue's ordinary capacity. Any loss is a defect.
         std::array<std::atomic<int>, producers> consumed {};
+        std::array<uint64_t, producers> serials {};
+        int total = 0, orderErrors = 0;
+        MidiInputService::Callbacks callbacks;
+        callbacks.receive = [&] (const MidiInputEvent& e, const juce::String& id, bool execute)
+        {
+            const auto index = static_cast<size_t> (id.substring (4).getIntValue());
+            auto& expected = consumed[index];
+            if (! execute || e.value != expected.load() % 128 || e.eventID <= serials[index]) ++orderErrors;
+            serials[index] = e.eventID;
+            ++expected; ++total;
+            return true;
+        };
+        MidiInputService input (*h.service, callbacks, backend.backend(), false);
         for (int port = 0; port < producers; ++port)
-            threads.emplace_back ([&, port]
+        {
+            auto* callback = input.callbackFor ("port" + juce::String (port));
+            threads.emplace_back ([&, port, callback]
             {
                 while (! start.load()) std::this_thread::yield();
-                for (int i = 0; i < perProducer; ++i)
+                for (int i = 0; i < perProducer && ! abort.load(); ++i)
                 {
-                    while (i - consumed[static_cast<size_t> (port)].load() > 64) std::this_thread::yield();
-                    MidiInputEvent e; e.input = static_cast<uint64_t> (port); e.eventID = static_cast<uint64_t> (i);
-                    if (! queue->push (e, false)) ++rejected;
+                    while (i - consumed[static_cast<size_t> (port)].load() > 64 && ! abort.load()) std::this_thread::yield();
+                    if (abort.load()) break;
+                    callback->handleIncomingMidiMessage (nullptr, control (i % 128));
                 }
                 ++finished;
             });
+        }
         start = true;
-        int total = 0, orderErrors = 0;
-        while (finished.load() < producers || queue->pending())
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds (10);
+        bool timedOut = false;
+        while (finished.load() < producers || input.hasPending())
         {
-            MidiInputEvent e;
-            if (queue->pop (e))
-            {
-                auto& expected = consumed[static_cast<size_t> (e.input)];
-                if (e.eventID != static_cast<uint64_t> (expected.load())) ++orderErrors;
-                ++expected; ++total;
-            }
-            else std::this_thread::yield();
+            input.drain (backend.now);
+            const auto counters = input.counters();
+            rejected = static_cast<int> (counters.dropped + counters.panicDropped);
+            timedOut |= std::chrono::steady_clock::now() > deadline;
+            if (rejected.load() != 0 || timedOut) abort = true;
+            if (! input.hasPending()) std::this_thread::yield();
         }
         for (auto& t : threads) t.join();
+        if (rejected.load() != 0) logMessage ("capacity was bounded to 2080/8192; callback rejects=" + juce::String (rejected.load()));
+        expect (! timedOut, "concurrent callbacks and drain must finish without a stalled port");
         expectEquals (rejected.load(), 0); expectEquals (orderErrors, 0); expectEquals (total, producers * perProducer);
+        const auto counters = input.counters();
+        expectEquals (static_cast<int> (counters.received), producers * perProducer);
+        expectEquals (static_cast<int> (counters.delivered), producers * perProducer);
+        expectEquals (static_cast<int> (counters.stale), 0);
+        expectEquals (static_cast<int> (counters.capacityDropped), 0);
+        expectEquals (static_cast<int> (counters.contentionDropped), 0);
+        logMessage ("Concurrent MIDI round " + juce::String (round + 1) + ": received=" + juce::String (counters.received)
+            + " delivered=" + juce::String (counters.delivered) + " capacityDropped=" + juce::String (counters.capacityDropped)
+            + " contentionDropped=" + juce::String (counters.contentionDropped) + " orderErrors=" + juce::String (orderErrors));
     }
     void testShutdown()
     {
@@ -398,11 +516,13 @@ public:
         logMessage ("MIDI load: received=" + juce::String (counters.received) + " delivered=" + juce::String (counters.delivered)
             + " executed=" + juce::String (target.count) + " dropped=" + juce::String (counters.dropped)
             + " panicDropped=" + juce::String (counters.panicDropped) + " stale=" + juce::String (counters.stale)
+            + " capacityDropped=" + juce::String (counters.capacityDropped) + " contentionDropped=" + juce::String (counters.contentionDropped)
             + " orderErrors=" + juce::String (orderErrors));
         expectEquals (static_cast<int> (counters.received), producerCount * perProducer);
         expectEquals (static_cast<int> (counters.delivered), producerCount * perProducer);
         expectEquals (static_cast<int> (counters.dropped + counters.panicDropped + counters.stale), 0);
         expectEquals (orderErrors, 0); expectEquals (target.count, producerCount * (perProducer - 1)); expectEquals (target.unexpected, 0);
+        expectEquals (static_cast<int> (counters.capacityDropped + counters.contentionDropped), 0);
         for (int n : received) expectEquals (n, perProducer);
         std::sort (latencies.begin(), latencies.end());
         if (! latencies.empty())

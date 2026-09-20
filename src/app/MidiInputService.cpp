@@ -32,6 +32,7 @@ struct MidiInputService::Port final : juce::MidiInputCallback
     // 2 kinds * 16 channels * 128 numbers, atomically published words. Mapping
     // boundaries invalidate routing before a new table is installed.
     std::array<std::atomic<uint64_t>, 64> panicAddresses;
+    std::unique_ptr<MidiEventQueue<8704, 512>> queue;
     std::unique_ptr<Handle> handle;
     Status status = Status::disconnected;
 };
@@ -70,7 +71,7 @@ struct MidiInputService::Notifier final : juce::Thread
 };
 
 MidiInputService::MidiInputService (ShortcutService& s, Callbacks c, Backend b, bool runNotifier)
-    : shortcuts (s), callbacks (std::move (c)), backend (std::move (b)), queue (std::make_unique<MidiEventQueue<8704, 512>>())
+    : shortcuts (s), callbacks (std::move (c)), backend (std::move (b))
 {
     if (! backend.enumerate) backend.enumerate = []
     {
@@ -104,6 +105,11 @@ void MidiInputService::closePort (Port& port)
         port.handle->stop();
         port.handle.reset(); // driver destruction also joins any driver-owned callback
         while (port.inFlight.load (std::memory_order_acquire) != 0) juce::Thread::sleep (1);
+        // The sole producer has stopped. Remove its backlog before reconnecting
+        // so old packets cannot consume the next connection's capacity.
+        MidiInputEvent ignored;
+        while (port.queue->pop (ignored)) queued.fetch_sub (1, std::memory_order_release);
+        port.queue.reset();
         if (callbacks.connection) callbacks.connection (port.input, port.connection, false);
     }
 }
@@ -120,8 +126,6 @@ void MidiInputService::shutdown()
     shortcuts.removeListener (this);
     callbacks = {};
     ports.clear();
-    MidiInputEvent ignored;
-    while (queue->pop (ignored)) {}
     signals->faultPending.store (false, std::memory_order_release);
 }
 void MidiInputService::refresh()
@@ -154,8 +158,9 @@ void MidiInputService::refresh()
         p->panicFaultEpoch.store (0);
         p->observedFault = 0;
         p->observedPanicFault = 0;
+        p->queue = std::make_unique<MidiEventQueue<8704, 512>>();
         p->handle = backend.open (id, p.get());
-        if (! p->handle) { p->status = Status::unavailable; continue; }
+        if (! p->handle) { p->queue.reset(); p->status = Status::unavailable; continue; }
         p->status = Status::waiting;
         rebuildPanicAddresses();
         if (callbacks.connection) callbacks.connection (p->input, p->connection, true);
@@ -208,8 +213,10 @@ void MidiInputService::accept (Port& port, const juce::MidiMessage& message) noe
             event.panicReserved = (port.panicAddresses[address / 64].load (std::memory_order_acquire) & (uint64_t (1) << (address % 64))) != 0;
             event.ordinaryFaultEpoch = port.faultEpoch.load (std::memory_order_acquire);
             event.faultEpoch = event.panicReserved ? port.panicFaultEpoch.load (std::memory_order_acquire) : event.ordinaryFaultEpoch;
-            if (! queue->push (event, event.panicReserved))
+            queued.fetch_add (1, std::memory_order_relaxed);
+            if (! port.queue->push (event, event.panicReserved))
             {
+                queued.fetch_sub (1, std::memory_order_release);
                 (event.panicReserved ? panicDropped : dropped).fetch_add (1, std::memory_order_relaxed);
                 // Reserved addresses may also drive ordinary commands on the
                 // opposite CC edge. Discard their pre-loss ordinary state too.
@@ -239,6 +246,22 @@ MidiInputService::FaultEpochs MidiInputService::deliverFaults (Port& port)
     if (! lifetime->stopped.load() && panicChanged && fault) fault (input, true);
     return { ordinary, panic };
 }
+MidiInputService::Port* MidiInputService::popNext (MidiInputEvent& event)
+{
+    auto next = ports.upper_bound (lastDrainedPort);
+    for (size_t checked = 0; checked < ports.size(); ++checked, ++next)
+    {
+        if (next == ports.end()) next = ports.begin();
+        auto& port = *next->second;
+        if (port.queue && port.queue->pop (event))
+        {
+            queued.fetch_sub (1, std::memory_order_release);
+            lastDrainedPort = next->first;
+            return &port;
+        }
+    }
+    return nullptr;
+}
 void MidiInputService::drain (double nowMs)
 {
     if (stopped) return;
@@ -258,11 +281,11 @@ void MidiInputService::drain (double nowMs)
     const bool realtime = nowMs < 0.0;
     if (nowMs < 0.0) nowMs = start;
     MidiInputEvent event;
-    for (int count = 0; count < 256 && queue->pop (event); ++count)
+    for (int count = 0; count < 256; ++count)
     {
-        Port* port = nullptr;
-        for (auto& [id, p] : ports) { juce::ignoreUnused (id); if (p->input == event.input) { port = p.get(); break; } }
-        if (port == nullptr || ! port->enabled.load() || port->connection != event.connection) continue;
+        auto* port = popNext (event);
+        if (port == nullptr) break;
+        if (! port->enabled.load() || port->connection != event.connection) continue;
         // Also catch losses published during this bounded drain before routing
         // any post-loss packet from the same port.
         const auto faults = deliverFaults (*port);
@@ -293,7 +316,7 @@ void MidiInputService::drain (double nowMs)
     }
 }
 void MidiInputService::handleAsyncUpdate() { drain(); }
-bool MidiInputService::hasPending() const noexcept { return queue->pending() || signals->faultPending.load (std::memory_order_acquire); }
+bool MidiInputService::hasPending() const noexcept { return queued.load (std::memory_order_acquire) != 0 || signals->faultPending.load (std::memory_order_acquire); }
 std::vector<MidiInputService::Device> MidiInputService::devices() const
 {
     std::vector<Device> result;
@@ -302,7 +325,8 @@ std::vector<MidiInputService::Device> MidiInputService::devices() const
 }
 MidiInputService::Counters MidiInputService::counters() const noexcept
 {
-    return { received.load(), delivered.load(), dropped.load(), panicDropped.load(), stale.load(), unsupported.load() };
+    const auto ordinaryLoss = dropped.load(), panicLoss = panicDropped.load();
+    return { received.load(), delivered.load(), ordinaryLoss, panicLoss, stale.load(), unsupported.load(), ordinaryLoss + panicLoss, 0 };
 }
 juce::MidiInputCallback* MidiInputService::callbackFor (const juce::String& id) const
 {

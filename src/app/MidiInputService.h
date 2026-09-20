@@ -7,47 +7,32 @@
 
 namespace gocue
 {
-/** Bounded MPSC queue. The reservation CAS defines cross-port order; a consumer
-    never skips an unpublished reservation. Producers never wait for one another.
-    Normal admission leaves Reserved slots available for panic addresses. */
+/** Bounded per-port SPSC queue: one serial MIDI callback producer and one message
+    thread consumer. Admission has no CAS/retry path and fails only at capacity.
+    Normal admission leaves Reserved slots available for that port's panic. */
 template <size_t Capacity, size_t Reserved> class MidiEventQueue
 {
 public:
-    MidiEventQueue() { for (size_t i = 0; i < Capacity; ++i) cells[i].sequence.store (i); }
     bool push (const MidiInputEvent& event, bool panic) noexcept
     {
-        auto position = write.load (std::memory_order_relaxed);
-        for (int attempt = 0; attempt < 64; ++attempt)
-        {
-            const auto readPosition = read.load (std::memory_order_acquire);
-            if (position < readPosition) { position = write.load (std::memory_order_relaxed); continue; }
-            if (position - readPosition >= (panic ? Capacity : Capacity - Reserved)) return false;
-            auto& cell = cells[position % Capacity];
-            if (cell.sequence.load (std::memory_order_acquire) != position) { position = write.load (std::memory_order_relaxed); continue; }
-            if (write.compare_exchange_weak (position, position + 1, std::memory_order_relaxed))
-            {
-                cell.event = event;
-                cell.sequence.store (position + 1, std::memory_order_release);
-                return true;
-            }
-        }
-        return false; // bounded contention is also an explicit loss, never a callback spinlock
+        const auto position = write.load (std::memory_order_relaxed);
+        if (position - read.load (std::memory_order_acquire) >= (panic ? Capacity : Capacity - Reserved)) return false;
+        cells[position % Capacity] = event;
+        write.store (position + 1, std::memory_order_release);
+        return true;
     }
     bool pop (MidiInputEvent& event) noexcept
     {
         const auto position = read.load (std::memory_order_relaxed);
-        auto& cell = cells[position % Capacity];
-        if (cell.sequence.load (std::memory_order_acquire) != position + 1) return false;
-        event = cell.event;
-        cell.sequence.store (position + Capacity, std::memory_order_release);
+        if (position == write.load (std::memory_order_acquire)) return false;
+        event = cells[position % Capacity];
         read.store (position + 1, std::memory_order_release);
         return true;
     }
     bool pending() const noexcept { return read.load (std::memory_order_relaxed) != write.load (std::memory_order_acquire); }
 private:
     static_assert (Reserved < Capacity && std::atomic<uint64_t>::is_always_lock_free);
-    struct Cell { std::atomic<uint64_t> sequence { 0 }; MidiInputEvent event; };
-    std::array<Cell, Capacity> cells;
+    std::array<MidiInputEvent, Capacity> cells;
     std::atomic<uint64_t> read { 0 };
     std::array<char, 64> counterSeparation {};
     std::atomic<uint64_t> write { 0 };
@@ -67,6 +52,9 @@ public:
     {
         // stale counts observations older than 100ms; reserved panic remains executable.
         uint64_t received = 0, delivered = 0, dropped = 0, panicDropped = 0, stale = 0, unsupported = 0;
+        // Cause totals across ordinary/panic losses. SPSC has no contention
+        // exhaustion path, so contentionDropped is always zero.
+        uint64_t capacityDropped = 0, contentionDropped = 0;
     };
     struct Handle
     {
@@ -78,6 +66,8 @@ public:
     struct Backend
     {
         std::function<std::vector<juce::MidiDeviceInfo>()> enumerate;
+        // Each opened handle must deliver serial callbacks; different handles
+        // may call concurrently. Queues are allocated before open/start.
         std::function<std::unique_ptr<Handle> (const juce::String&, juce::MidiInputCallback*)> open;
         bool nativeNotifications = true;
         std::function<double()> clockMs; // deterministic tests; callback-safe, monotonic and nonblocking
@@ -110,6 +100,7 @@ private:
     struct Signals { std::atomic<bool> deviceChange { false }, stopped { false }, faultPending { false }; };
     struct FaultEpochs { uint64_t ordinary, panic; };
     FaultEpochs deliverFaults (Port&);
+    Port* popNext (MidiInputEvent&);
     void accept (Port&, const juce::MidiMessage&) noexcept;
     void rebuildPanicAddresses();
     void closePort (Port&);
@@ -126,8 +117,10 @@ private:
     std::unique_ptr<Notifier> notifier;
     std::map<juce::String, std::unique_ptr<Port>> ports;
     std::vector<juce::MidiDeviceInfo> available;
-    // Heap allocation happens at service creation, never in a callback.
-    std::unique_ptr<MidiEventQueue<8704, 512>> queue;
+    juce::String lastDrainedPort; // round-robin cursor, message thread only
+    // Increment before publishing to a port queue. The notifier only reads
+    // this count, never the message thread's mutable port list/queue pointers.
+    std::atomic<uint64_t> queued { 0 };
     std::atomic<bool> accepting { true };
     std::atomic<uint64_t> routing { 0 };
     std::atomic<uint64_t> received { 0 }, delivered { 0 }, dropped { 0 }, panicDropped { 0 }, stale { 0 }, unsupported { 0 };
