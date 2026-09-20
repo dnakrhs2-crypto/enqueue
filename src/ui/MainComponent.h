@@ -185,8 +185,8 @@ private:
     void autoBackupIfDue();
     /** Copies the live plugin chain states into a project (for saving and for undo snapshots). */
     void captureLivePluginStates (Project& project);
-    /** After undo / redo: makes the engine's plugin chains match the restored project. */
-    void reconcileChainsAfterRestore (const ProjectSnapshot& snapshot);
+    /** After undo / redo: restores plugin chains and the live values changed by the restored project. */
+    void reconcileChainsAfterRestore (const ProjectSnapshot& snapshot, const Project& previous);
     /** Plugins may report state changes right after their state was restored; ignore those for a moment. */
     void ignorePluginChangesBriefly();
     void showPluginManager();

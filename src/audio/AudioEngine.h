@@ -179,8 +179,12 @@ public:
     /** Live slice markers for a running cue. */
     void setLiveSlices (const juce::Uuid& cueId, const std::vector<Slice>& slices, int firstSliceCount);
     void setLiveGainDb (const juce::Uuid& cueId, double gainDb);
-    /** Live level matrix / trim for a running cue (ramped over ~10 ms). */
+    /** Live level matrix / trim for every unfinished instance, including LOAD (ramped over ~10 ms). Message thread. */
     void setLiveLevels (const juce::Uuid& cueId, const LevelMatrix& levels, const TrimLevels& trim);
+    /** Change only the matrix, preserving each instance's own trim. Message thread. */
+    void setLiveLevelMatrix (const juce::Uuid& cueId, const LevelMatrix& levels);
+    /** Change only the trim, preserving each instance's own matrix. Message thread. */
+    void setLiveTrim (const juce::Uuid& cueId, const TrimLevels& trim);
 
     struct LiveState
     {
@@ -277,6 +281,9 @@ public:
     void reapFinishedPlayers();
 
 private:
+    /** A null field keeps each player's own live value; allocations stay outside the audio lock. */
+    void updateLiveLevelFields (const juce::Uuid& cueId, const LevelMatrix* levels, const TrimLevels* trim);
+
     void audioDeviceIOCallbackWithContext (const float* const* inputChannelData, int numInputChannels,
                                            float* const* outputChannelData, int numOutputChannels,
                                            int numSamples, const juce::AudioIODeviceCallbackContext& context) override;

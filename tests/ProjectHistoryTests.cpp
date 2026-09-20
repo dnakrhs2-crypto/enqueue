@@ -115,7 +115,7 @@ public:
             expectEquals (doc.cues.get (0).name, juce::String ("renamed"));
 
             int restoredCalls = 0;
-            doc.onSnapshotRestored = [&restoredCalls] (const ProjectSnapshot&) { ++restoredCalls; };
+            doc.onSnapshotRestored = [&restoredCalls] (const ProjectSnapshot&, const Project&) { ++restoredCalls; };
 
             expect (doc.undo());
             expectEquals (doc.cues.get (0).name, juce::String ("a"));

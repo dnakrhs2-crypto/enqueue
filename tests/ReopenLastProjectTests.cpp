@@ -4,6 +4,7 @@
 #include "ui/GoCueLookAndFeel.h"
 #include "ui/MidiModalScope.h"
 #include "ui/UiUtils.h"
+#include "MainComponentTestAccess.h"
 
 #if JUCE_WINDOWS
  #include <windows.h>
@@ -11,14 +12,6 @@
 
 namespace gocue::tests
 {
-struct ReopenLastProjectTestAccess
-{
-    static bool saveAs (MainComponent& main, const juce::File& file) { return main.writeProjectToFile (file); }
-    static void rememberSession (MainComponent& main, const juce::File& file) { main.rememberLastSessionProject (file); }
-    static bool pendingAutoStart (const MainComponent& main) { return main.pendingStartOnOpenCue.isNotEmpty(); }
-    static ShortcutRouter& keyboard (MainComponent& main) { return *main.shortcutRouter; }
-};
-
 namespace
 {
 using Policy = ReopenLastProjectPolicy;
