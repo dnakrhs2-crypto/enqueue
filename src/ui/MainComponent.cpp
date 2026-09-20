@@ -47,7 +47,7 @@ MainComponent::MainComponent (AudioEngine& e, AppSettings& s, juce::ApplicationC
       containerTabs (document),
       cart (document.cues, e.getFormatManager())
 {
-    settings.onSaveSucceeded = [this] { sessionSaveFailureNotified = false; };
+    settings.onSaveSucceeded = [this] { notifiedFailedSession.reset(); };
     setWantsKeyboardFocus (true);
 
     addAndMakeVisible (menuBar);
@@ -2531,10 +2531,12 @@ void MainComponent::rememberLastSessionProject (const juce::File& file)
     if (settings.setLastSessionProject (file))
         return;
 
-    if (sessionSaveFailureNotified)
+    // Timer saves are unobserved; suppress only repeated failures of the same desired value.
+    const auto desired = file.getFullPathName();
+    if (notifiedFailedSession == desired)
         return;
 
-    sessionSaveFailureNotified = true;
+    notifiedFailedSession = desired;
     showAlert (ko ("최근 프로젝트 경로 저장 실패"),
                ko ("프로젝트 파일 저장과 별개로, 최근 프로젝트 경로를 저장하지 못했습니다.\n"
                    "다음 실행에는 이전 프로젝트가 열리고 시작 큐가 실행될 수 있습니다.\n"

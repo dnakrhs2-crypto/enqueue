@@ -27,6 +27,7 @@
 #include <functional>
 #include <map>
 #include <memory>
+#include <optional>
 #include <set>
 
 namespace gocue
@@ -243,7 +244,7 @@ private:
     juce::Uuid autoLoadedId = juce::Uuid::null();   // the standby cue we loaded automatically (dropped when the playhead moves)
     juce::Component::SafePointer<juce::AlertWindow> discardDialog;
     std::unique_ptr<juce::AlertWindow> reopenDialog;
-    bool sessionSaveFailureNotified = false;
+    std::optional<juce::String> notifiedFailedSession;
 
     juce::MenuBarComponent menuBar;
     TransportBar transport;

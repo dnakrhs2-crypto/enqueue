@@ -14,6 +14,7 @@ namespace gocue::tests
 struct ReopenLastProjectTestAccess
 {
     static bool saveAs (MainComponent& main, const juce::File& file) { return main.writeProjectToFile (file); }
+    static void rememberSession (MainComponent& main, const juce::File& file) { main.rememberLastSessionProject (file); }
     static bool pendingAutoStart (const MainComponent& main) { return main.pendingStartOnOpenCue.isNotEmpty(); }
     static ShortcutRouter& keyboard (MainComponent& main) { return *main.shortcutRouter; }
 };
@@ -37,6 +38,16 @@ void drainMessages()
     }
    #endif
 }
+
+// Keep the previous disk value readable while Windows refuses the atomic settings replacement.
+struct SettingsWriteBlock
+{
+    explicit SettingsWriteBlock (const juce::File& settingsFile)
+        : file (settingsFile), blocked (file.setReadOnly (true)) {}
+    ~SettingsWriteBlock() { file.setReadOnly (false); }
+    const juce::File file;
+    const bool blocked;
+};
 
 struct Fixture
 {
@@ -116,6 +127,9 @@ public:
         testLifecycle();
         testMenu();
         testSaveFailures();
+        testTimerSaveRecovery();
+        testRepeatedSessionFailures();
+        testSessionNoticeSequences();
        #if JUCE_WINDOWS
         testPrompt();
        #endif
@@ -400,7 +414,7 @@ private:
                 { false, false, false, true, restarted.getLastSessionProject().existsAsFile(), false }).action == Action::open);
         }
 
-        beginTest ("session save failure is reported once apart from project save success; shutdown is quiet and disk stays authoritative");
+        beginTest ("each changed session save failure is reported apart from project save success; shutdown is quiet and disk stays authoritative");
         {
             Fixture f (true);
             const auto previous = f.folder.getChildFile ("previous.enqueue");
@@ -431,10 +445,16 @@ private:
             expect (saved.load (savedAs).wasOk());
             expect (f.main->getProjectFile() == savedAs);
             expect (f.settings.getLastSessionProject() == savedAs);
+            drainMessages();
+            expectEquals (juce::Component::getNumCurrentlyModalComponents(), 1);
+            juce::ModalComponentManager::getInstance()->cancelAllModalComponents();
+            drainMessages();
             f.main->perform (juce::ApplicationCommandTarget::InvocationInfo (CommandIDs::newProject));
             expect (f.settings.getLastSessionProject() == juce::File());
             drainMessages();
-            expectEquals (juce::Component::getNumCurrentlyModalComponents(), 0);
+            expectEquals (juce::Component::getNumCurrentlyModalComponents(), 1);
+            juce::ModalComponentManager::getInstance()->cancelAllModalComponents();
+            drainMessages();
             f.main.reset();
             drainMessages();
             expectEquals (juce::Component::getNumCurrentlyModalComponents(), 0);
@@ -514,6 +534,160 @@ private:
             expectEquals (juce::Component::getNumCurrentlyModalComponents(), 0);
             expect (f.storage.getFile().deleteFile());
         }
+    }
+
+    void testTimerSaveRecovery()
+    {
+        beginTest ("timer save recovery allows a different failed session value to notify again");
+        Fixture f;
+        const auto previous = f.folder.getChildFile ("previous.enqueue");
+        const auto incoming = f.folder.getChildFile ("incoming.enqueue");
+        expect (f.makeProject (previous) && f.makeProject (incoming));
+        expect (f.seedSession (previous, Policy::always));
+        f.createMain();
+        {
+            SettingsWriteBlock block (f.storage.getFile());
+            expect (block.blocked);
+            f.main->openProjectFile (incoming);
+            expect (f.persistedSession() == previous);
+            expect (f.storage.needsToBeSaved());
+        }
+        expectSessionNotices (1);
+
+        f.settings.setUiScalePercent (125);
+        expect (f.storage.saveIfNeeded()); // JUCE's timer bypasses AppSettings::saveNow and its success callback.
+        expect (f.persistedSession() == incoming);
+        expect (! f.storage.needsToBeSaved());
+        expectSessionNotices (0);
+        {
+            SettingsWriteBlock block (f.storage.getFile());
+            expect (block.blocked);
+            f.main->perform (juce::ApplicationCommandTarget::InvocationInfo (CommandIDs::newProject));
+            expect (f.settings.getLastSessionProject() == juce::File());
+            expect (f.persistedSession() == incoming);
+            expect (f.storage.needsToBeSaved());
+        }
+        expectSessionNotices (1);
+    }
+
+    void testRepeatedSessionFailures()
+    {
+        beginTest ("repeated failures of the same desired session show only one notice, including an empty session");
+        for (const bool empty : { false, true })
+        {
+            Fixture f (true);
+            const auto previous = f.folder.getChildFile ("previous.enqueue");
+            const auto desired = empty ? juce::File() : f.folder.getChildFile ("incoming.enqueue");
+            expect (f.seedSession (previous, Policy::always));
+            f.createMain();
+            for (int attempt = 0; attempt < 3; ++attempt)
+            {
+                ReopenLastProjectTestAccess::rememberSession (*f.main, desired);
+                expect (f.settings.getLastSessionProject() == desired);
+                expect (f.persistedSession() == previous);
+                expect (f.storage.needsToBeSaved());
+                expectSessionNotices (attempt == 0 ? 1 : 0);
+            }
+        }
+    }
+
+    void testSessionNoticeSequences()
+    {
+        beginTest ("session save sequence table: every disk/desired mismatch has a notice for that pending value");
+        enum Step { failA, failB, failEmpty, saveA, saveB, saveEmpty, timerSave, policySave, flush, projectSave, inputSave };
+        struct Scenario
+        {
+            const char* name;
+            std::array<Step, 4> steps;
+            std::array<int, 4> notices;
+        };
+        const Scenario scenarios[] {
+            { "same path failures",              { failA, failA, failA, failA },             { 1, 0, 0, 0 } },
+            { "same empty failures",             { failEmpty, failEmpty, failEmpty, failEmpty }, { 1, 0, 0, 0 } },
+            { "changed failed values",           { failA, failB, failEmpty, failA },         { 1, 1, 1, 1 } },
+            { "timer then empty failure",        { failA, timerSave, failEmpty, failEmpty }, { 1, 0, 1, 0 } },
+            { "timer then other path failure",   { failEmpty, timerSave, failB, failB },     { 1, 0, 1, 0 } },
+            { "timer then same value failure",   { failA, timerSave, failA, failEmpty },     { 1, 0, 0, 1 } },
+            { "timer after changed failures",    { failA, failB, timerSave, failA },         { 1, 1, 0, 1 } },
+            { "session success clears notice",   { failA, saveA, failA, failA },             { 1, 0, 1, 0 } },
+            { "other path success clears notice",{ failA, saveB, failA, failA },             { 1, 0, 1, 0 } },
+            { "empty success clears notice",     { failEmpty, saveEmpty, failEmpty, failEmpty }, { 1, 0, 1, 0 } },
+            { "policy success clears notice",    { failA, policySave, failA, failA },        { 1, 0, 1, 0 } },
+            { "flush success clears notice",     { failEmpty, flush, failEmpty, failEmpty }, { 1, 0, 1, 0 } },
+            { "project success clears notice",   { failA, projectSave, failA, failA },       { 1, 0, 1, 0 } },
+            { "input success clears notice",     { failA, inputSave, failA, failA },         { 1, 0, 1, 0 } },
+            { "known success after timer",       { failA, timerSave, policySave, failA },    { 1, 0, 0, 1 } },
+        };
+        for (const auto& scenario : scenarios)
+        {
+            Fixture f;
+            const auto pathA = f.folder.getChildFile ("a.enqueue");
+            const auto pathB = f.folder.getChildFile ("b.enqueue");
+            auto desired = f.folder.getChildFile ("previous.enqueue");
+            auto expectedDisk = desired;
+            bool pendingMismatchWasReported = false;
+            expect (f.seedSession (desired, Policy::always));
+            f.createMain();
+            for (size_t i = 0; i < scenario.steps.size(); ++i)
+            {
+                const auto label = juce::String (scenario.name) + ", step " + juce::String (static_cast<int> (i + 1));
+                const auto previousDesired = desired;
+                const auto step = scenario.steps[i];
+                if (step == failA || step == saveA || step == projectSave) desired = pathA;
+                if (step == failB || step == saveB) desired = pathB;
+                if (step == failEmpty || step == saveEmpty) desired = {};
+                // Also exercise a failed retry after the timer made the same session value clean.
+                f.settings.setWindowState (label);
+                if (step == failA || step == failB || step == failEmpty)
+                {
+                    SettingsWriteBlock block (f.storage.getFile());
+                    expect (block.blocked, label);
+                    ReopenLastProjectTestAccess::rememberSession (*f.main, desired);
+                    expect (f.storage.needsToBeSaved(), label);
+                }
+                else
+                {
+                    switch (step)
+                    {
+                        case timerSave: expect (f.storage.saveIfNeeded(), label); break;
+                        case policySave: expect (f.settings.setReopenLastProjectPolicy (Policy::never), label); break;
+                        case flush: f.settings.flush(); break;
+                        case projectSave: expect (ReopenLastProjectTestAccess::saveAs (*f.main, desired), label); break;
+                        case inputSave:
+                        {
+                            InputSettingsTransaction transaction;
+                            transaction.keyboard = InputSettingsTransaction::Pair { "<keyboard/>", "<keyboard/>" };
+                            transaction.midi = InputSettingsTransaction::Pair { "<midi/>", "<midi/>" };
+                            expect (f.settings.saveInputSettings (transaction), label);
+                            break;
+                        }
+                        default: ReopenLastProjectTestAccess::rememberSession (*f.main, desired); break;
+                    }
+                    expectedDisk = desired;
+                    expect (! f.storage.needsToBeSaved(), label);
+                }
+                const int notices = expectSessionNotices (scenario.notices[i], label);
+                const auto disk = f.persistedSession();
+                expect (disk == expectedDisk, label);
+                expect (f.settings.getLastSessionProject() == desired, label);
+                if (desired != previousDesired) pendingMismatchWasReported = false;
+                if (notices > 0) pendingMismatchWasReported = true;
+                expect (disk == desired || pendingMismatchWasReported, label + ": unreported disk/desired mismatch");
+                if (disk == desired) pendingMismatchWasReported = false;
+            }
+        }
+    }
+
+    int expectSessionNotices (int expected, const juce::String& label = {})
+    {
+        drainMessages();
+        const int count = juce::Component::getNumCurrentlyModalComponents();
+        expectEquals (count, expected, label);
+        if (auto* notice = juce::Component::getCurrentlyModalComponent())
+            expectEquals (notice->getName(), ko ("최근 프로젝트 경로 저장 실패"), label);
+        juce::ModalComponentManager::getInstance()->cancelAllModalComponents();
+        drainMessages();
+        return count;
     }
 
     void testPrompt()
