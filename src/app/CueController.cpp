@@ -286,9 +286,6 @@ int CueController::startGroup (int index, bool audition)
 
 int CueController::startGroup (CueList& cues, int index, bool audition)
 {
-    lastGroupEnterIndex = -1;
-    lastGroupEnterList = &cues;
-
     if (! cues.isValidIndex (index) || ! cues.get (index).isGroup())
         return juce::jmin (index + 1, cues.size());
 
@@ -342,8 +339,7 @@ int CueController::startGroup (CueList& cues, int index, bool audition)
         case GroupMode::startFirstEnter:
         {
             const int after = fireSequence (cues, children.front(), audition);
-            lastGroupEnterIndex = after < end ? after : end;
-            break;
+            return groupEnterDestination (cues, index, after);
         }
 
         case GroupMode::startFirst:
@@ -941,6 +937,11 @@ AudioEngine::PlayOptions CueController::playOptions (bool audition) const
 
 CueController::GoResult CueController::trigger (const Cue& cue, bool audition)
 {
+    return trigger (cue, audition, nullptr);
+}
+
+CueController::GoResult CueController::trigger (const Cue& cue, bool audition, int* groupEnterIndex)
+{
     // a cue that ends up starting itself (A -> start B -> start A, a group holding its own start cue) is refused
     for (const auto& d : dispatchStack)
         if (d.id == cue.id)
@@ -969,7 +970,7 @@ CueController::GoResult CueController::trigger (const Cue& cue, bool audition)
 
     const DepthGuard depth (*this);
     dispatchStack.push_back ({ cue.id, cue.isControl() });
-    const auto result = triggerImpl (cue, audition);
+    const auto result = triggerImpl (cue, audition, groupEnterIndex);
     dispatchStack.pop_back();
 
     if (! firstTriggerSeen)
@@ -1026,7 +1027,7 @@ std::vector<CueController::RecordedStart> CueController::stopRecording()
     return result;
 }
 
-CueController::GoResult CueController::triggerImpl (const Cue& cue, bool audition)
+CueController::GoResult CueController::triggerImpl (const Cue& cue, bool audition, int* groupEnterIndex)
 {
     int index = -1;
     CueList* listPtr = document.listContaining (cue.id, &index);
@@ -1085,7 +1086,9 @@ CueController::GoResult CueController::triggerImpl (const Cue& cue, bool auditio
             }
         }
 
-        startGroup (cues, index, audition);
+        const int after = startGroup (cues, index, audition);
+        if (groupEnterIndex != nullptr && cue.group.mode == GroupMode::startFirstEnter)
+            *groupEnterIndex = after;
         played.insert (cue.id);
         return GoResult::started;
     }
@@ -1457,7 +1460,7 @@ std::set<juce::Uuid> CueController::familyOf (const Cue& cue) const
     return family;
 }
 
-CueController::GoResult CueController::startById (const juce::Uuid& id, bool audition)
+CueController::GoResult CueController::startById (const juce::Uuid& id, bool audition, int* groupEnterIndex)
 {
     const auto* cue = document.findCueAnywhere (id);
 
@@ -1465,7 +1468,7 @@ CueController::GoResult CueController::startById (const juce::Uuid& id, bool aud
         return GoResult::failed;   // deleted while it was waiting
 
     const Cue copy = *cue;
-    const auto result = trigger (copy, audition);
+    const auto result = trigger (copy, audition, groupEnterIndex);
 
     if (result != GoResult::started)
         return result;
@@ -1492,13 +1495,14 @@ CueController::GoResult CueController::fire (const juce::Uuid& cueId, bool audit
     return startById (cueId, audition);
 }
 
-CueController::GoResult CueController::scheduleStart (const juce::Uuid& id, double atSeconds, bool audition, int* scheduledId, StartTiming timing)
+CueController::GoResult CueController::scheduleStart (const juce::Uuid& id, double atSeconds, bool audition, int* scheduledId,
+                                                     StartTiming timing, int* groupEnterIndex)
 {
     if (scheduledId != nullptr)
         *scheduledId = 0;
 
     if (atSeconds <= clock())
-        return startById (id, audition);
+        return startById (id, audition, groupEnterIndex);
 
     // the start is told its own scheduler id: a restart it causes must spare what the walk puts on for this very run
     auto startId = std::make_shared<int> (0);
@@ -1524,6 +1528,34 @@ CueController::GoResult CueController::scheduleStart (const juce::Uuid& id, doub
         *scheduledId = *startId;
 
     return GoResult::started;
+}
+
+int CueController::groupEnterDestination (const CueList& cues, int index, int childAfter) const
+{
+    const int end = cues.subtreeEnd (index);
+    const auto children = cues.childrenOf (index);
+    if (children.empty())
+        return end;
+
+    if (childAfter >= 0)
+        return juce::jmin (childAfter, end);
+
+    // Predict only this group's entry before its pre-wait; follow destinations use the original sequence walk.
+    for (int child : children)
+    {
+        const auto& cue = cues.get (child);
+        if (! cue.armed)
+            continue;
+
+        if (cue.continueMode == ContinueMode::autoFollow)
+            return juce::jmin (sequenceEnd (cues, children.front()), end);
+
+        if (cue.continueMode == ContinueMode::none)
+            return cue.isGroup() && cue.group.mode == GroupMode::startFirstEnter
+                       ? groupEnterDestination (cues, child) : cues.subtreeEnd (child);
+    }
+
+    return end;
 }
 
 int CueController::sequenceEnd (int index) const
@@ -1593,8 +1625,6 @@ int CueController::fireSequence (CueList& cues, int index, bool audition)
         }
 
         const double startAt = t + cue.preWaitSeconds;
-        lastGroupEnterIndex = -1;
-        lastGroupEnterList = nullptr;
 
         // The cue this sequence starts with is fired again while its pre-wait still runs (or while it plays and has a
         // pre-wait): its second-trigger rule applies now, not after another pre-wait, and a pending start is never
@@ -1652,14 +1682,18 @@ int CueController::fireSequence (CueList& cues, int index, bool audition)
         }
 
         int runId = 0;   // the scheduled start's id: the follow put on below is that run's own (a restart from it keeps it)
-        const auto result = scheduleStart (cue.id, startAt, audition, &runId, { t, postWaitOwner, postWaitFrom, postWaitStartId });
+        const bool enter = cue.isGroup() && cue.group.mode == GroupMode::startFirstEnter
+                           && cue.continueMode == ContinueMode::none;
+        int enterAfter = -1;   // belongs to this start alone; a nested group/control cannot supply its destination
+        const auto result = scheduleStart (cue.id, startAt, audition, &runId, { t, postWaitOwner, postWaitFrom, postWaitStartId },
+                                           &enterAfter);
 
         if (result == GoResult::ignored)
             return next;   // the second-trigger rule acted on (or kept) the running instance: its own sequence stands, no new one is put behind it
 
         // a devamp that starts the next cue itself is its own continuation: its continue mode is ignored
         if (cue.continueMode == ContinueMode::none || (cue.isDevamp() && cue.devamp.startNextCue))
-            return lastGroupEnterIndex >= 0 && lastGroupEnterList == &cues ? lastGroupEnterIndex : next;   // "start first and enter": the playhead goes inside (this list only)
+            return enter && (enterAfter >= 0 || runId != 0) ? groupEnterDestination (cues, i, enterAfter) : next;
 
         if (cue.continueMode == ContinueMode::autoContinue)
         {
@@ -2155,8 +2189,6 @@ void CueController::resetForNewProject()
     played.clear();
     recorded.clear();
     recording = false;
-    lastGroupEnterIndex = -1;
-    lastGroupEnterList = nullptr;
     pendingGoto = {};
     gotoApplied = false;
     lastWallClockSecond = -1;   // the new project's clocks start from the current second: nothing from before it, nothing skipped

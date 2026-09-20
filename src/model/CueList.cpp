@@ -323,6 +323,7 @@ int CueList::wrapInGroup (std::vector<int> indices, Cue group)
     for (int i : indices)
         movedIds.push_back (cues[(size_t) i].id);
 
+    const juce::Uuid playheadId = isValidIndex (playhead) ? cues[(size_t) playhead].id : juce::Uuid::null();
     std::vector<Cue> block;
 
     for (auto it = indices.rbegin(); it != indices.rend(); ++it)
@@ -336,7 +337,6 @@ int CueList::wrapInGroup (std::vector<int> indices, Cue group)
             c.parentId = group.id;   // the top-level rows of the block become the group's children
 
     const auto groupId = group.id;
-    const juce::Uuid playheadId = isValidIndex (playhead) ? cues[(size_t) playhead].id : juce::Uuid::null();
     cues.insert (cues.begin() + first, std::move (group));
     cues.insert (cues.begin() + first + 1, std::make_move_iterator (block.begin()), std::make_move_iterator (block.end()));
     sanitiseTree();
