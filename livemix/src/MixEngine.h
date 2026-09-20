@@ -150,7 +150,7 @@ private:
         std::atomic<float> pan { 0.0f };
         std::atomic<bool> toMaster { true }, direct { false };
         std::atomic<int> directFirst { 2 };
-        std::unique_ptr<PluginChain> chain = std::make_unique<PluginChain>();
+        std::unique_ptr<PluginChain> chain = std::make_unique<PluginChain> (true);
         std::array<Send, (size_t) maxFx> sends;
         float onGain = 1.0f;   // audio thread
         std::array<float, 2> panCurrent { 1.0f, 1.0f }, panTarget { 1.0f, 1.0f };   // audio thread: gain ramps continue across blocks

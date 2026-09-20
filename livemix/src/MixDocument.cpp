@@ -349,10 +349,9 @@ void MixDocument::removePluginGroup (const juce::Uuid& channelId, int group)
     if (c == nullptr || group < 0 || group >= (int) c->pluginGroups.size())
         return;
 
+    const ValueBatch batch (*this);
     if (c->pluginGroups[(size_t) group].off)
-        for (const auto& slotId : c->pluginGroups[(size_t) group].slots)
-            if (! heldOffElsewhere (*c, slotId, group))
-                bypassSlot (channelId, slotId, false);   // a group that was off does not leave its plugins off behind it (unless another OFF group holds them)
+        setPluginGroupOff (channelId, group, false);
 
     c->pluginGroups.erase (c->pluginGroups.begin() + group);
     valueChanged();
@@ -401,13 +400,26 @@ void MixDocument::setPluginGroupOff (const juce::Uuid& channelId, int group, boo
         return;
 
     auto& g = c->pluginGroups[(size_t) group];
+    const bool changed = g.off != off;
+    const ValueBatch batch (*this);
     g.off = off;
 
-    for (const auto& slotId : g.slots)
-        if (off || ! heldOffElsewhere (*c, slotId, group))
-            bypassSlot (channelId, slotId, off);   // a plugin in another OFF group stays off when this one is switched on
+    if (auto* chain = engine.getChannelChain (channelId))
+    {
+        std::vector<int> indices;
+        for (int i = 0; i < chain->getNumSlots(); ++i)
+        {
+            const auto& slotId = chain->getSlot (i).state.slotId;
+            if (std::find (g.slots.begin(), g.slots.end(), slotId) != g.slots.end()
+                && (off || ! heldOffElsewhere (*c, slotId, group)))
+                indices.push_back (i);
+        }
+        // Equal-value commands repair the audio state without turning a protocol no-op into a document edit.
+        chain->setBypassedTogether (indices, off, changed);
+    }
 
-    valueChanged();
+    if (changed)
+        valueChanged();
 }
 
 bool MixDocument::heldOffElsewhere (const MixChannel& channel, const juce::Uuid& slotId, int exceptGroup)

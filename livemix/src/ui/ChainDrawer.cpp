@@ -2,6 +2,8 @@
 
 #include "PluginSearch.h"
 
+#include <algorithm>
+
 namespace gocue::livemix
 {
 
@@ -636,30 +638,35 @@ void ChainDrawer::applyPreset (const PluginPreset& preset, bool replace)
 
     if (replace)
     {
-        errors = chain->restore (preset.plugins, host.makeFactory (engine.getSampleRate(), engine.getBlockSize()));
+        auto states = preset.plugins;
+
+        // A preset deliberately omits momentary bypass. Apply the owning channel's OFF groups before
+        // restore publishes the new instances, so even the first audible block agrees with the cards.
+        for (const auto& channel : document.getSession().channels)
+            if (engine.getChannelChain (channel.id) == chain)
+                for (const auto& group : channel.pluginGroups)
+                    if (group.off)
+                        for (auto& state : states)
+                            if (std::find (group.slots.begin(), group.slots.end(), state.slotId) != group.slots.end())
+                                state.bypassed = true;
+
+        errors = chain->restore (states, host.makeFactory (engine.getSampleRate(), engine.getBlockSize()));
     }
     else
     {
+        std::vector<PluginSlotState> states;
         for (const auto& state : preset.plugins)
         {
-            if (chain->getNumSlots() >= MixSession::maxChainSlots)
+            if (chain->getNumSlots() + (int) states.size() >= MixSession::maxChainSlots)
             {
                 errors.add (state.name + ": " + ko ("체인이 가득 찼습니다 (") + juce::String (MixSession::maxChainSlots) + ko ("개)"));
                 continue;
             }
 
-            juce::String error;
-            auto instance = host.createInstance (state, engine.getSampleRate(), engine.getBlockSize(), error);
-
-            if (instance == nullptr)
-            {
-                chain->addMissingSlot (state);   // the slot stays, empty, like a missing plugin in a session
-                errors.add (state.name + ": " + (error.isNotEmpty() ? error : ko ("이 PC에 없는 플러그인입니다 (자리는 비워 둡니다)")));
-                continue;
-            }
-
-            chain->addPlugin (std::move (instance), state);
+            states.push_back (state);
         }
+
+        errors.addArray (chain->append (states, host.makeFactory (engine.getSampleRate(), engine.getBlockSize())));
     }
 
     refresh();

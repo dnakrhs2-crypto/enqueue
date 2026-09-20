@@ -66,7 +66,7 @@ ControlDispatcher::Result ControlDispatcher::dispatch (const ControlProtocol::Co
                     }
                 if (count == 0) return Code::pluginGroupNotFound;
                 if (! canAdvance()) return Code::internalError;
-                if (changed) document.setGroupOffOnEveryChannel (a.index - 1, a.off);
+                if (changed || a.off) document.setGroupOffOnEveryChannel (a.index - 1, a.off);
                 return P::CommandResult { P::PluginGroupEverywhereResult { a.index, a.off, count } };
             }
             else if constexpr (std::is_same_v<T, P::SetMuteGroup> || std::is_same_v<T, P::ToggleMuteGroup>)
@@ -106,7 +106,7 @@ ControlDispatcher::Result ControlDispatcher::dispatch (const ControlProtocol::Co
                     if (index >= channel->pluginGroups.size()) return Code::pluginGroupNotFound;
                     changed = channel->pluginGroups[index].off != a.off;
                     if (! canAdvance()) return Code::internalError;
-                    if (changed) document.setPluginGroupOff (a.channelId, (int) index, a.off);
+                    if (changed || a.off) document.setPluginGroupOff (a.channelId, (int) index, a.off);
                     return P::CommandResult { P::PluginGroupResult { a.index, a.off } };
                 }
                 else if constexpr (std::is_same_v<T, P::SetSend>)
