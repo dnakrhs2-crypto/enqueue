@@ -61,11 +61,52 @@ public:
         input.shutdown(); input.deviceListChanged(); input.drain(); input.refresh(); expect (input.devices().empty());
         expectEquals (backend.ports["A"].stops, 2); expectEquals (backend.ports["B"].stops, 1);
         testOverload();
+        testPanicLoss();
         testQueue();
+        testTransport();
         testCaptureRace();
         testShutdown();
     }
 private:
+    void testPanicLoss()
+    {
+        for (bool pulse : { false, true })
+        {
+            beginTest (juce::String ("panic reserved loss rebaselines opposite GO ") + (pulse ? "pulse" : "gate") + " and invalidates ordinary holds/backlog");
+            Harness h; FakeDevices backend; backend.list = { { "A", "A" } };
+            MidiInputSettings settings; settings.selected["A"] = "A";
+            expect (h.service->setMidiInputSettings (settings).wasOk());
+            expect (h.service->setMidiTriggers ("transport.panicAll", { cc() }).wasOk());
+            expect (h.service->setMidiTriggers ("transport.go", { note(), cc (MidiTrigger::Edge::falling,
+                pulse ? MidiTrigger::Behavior::pulse : MidiTrigger::Behavior::gate) }).wasOk());
+            expect (h.service->setMidiTriggers ("transport.preview", { note (62) }).wasOk());
+            MidiInputService input (*h.service, h.router->inputCallbacks(), backend.backend(), false);
+            backend.send ("A", control (127)); backend.send ("A", off()); backend.send ("A", off (62)); drain (input, backend.now);
+            backend.now = 1025; backend.send ("A", on()); drain (input, backend.now);
+            expectEquals (h.downs (CommandIDs::go), 1);
+            expect (h.service->activations().anyHeld());
+            // Fill the ordinary quota, then all reserved slots. The lost packet
+            // is the falling value, which must never be inferred on repetition.
+            backend.send ("A", off (62)); backend.send ("A", on (62));
+            for (int i = 2; i < 8192; ++i) backend.send ("A", on (90));
+            for (int i = 0; i < 512; ++i) backend.send ("A", control (127));
+            backend.send ("A", control (0));
+            expectEquals (static_cast<int> (input.counters().panicDropped), 1);
+            expectEquals (static_cast<int> (input.counters().dropped), 0);
+            drain (input, backend.now);
+            expect (! h.service->activations().anyHeld(), "lost reserved packets also invalidate GO tokens");
+            expectEquals (h.downs (CommandIDs::preview), 0, "ordinary packets preceding the loss cannot rearm inputs");
+            for (int i = 0; i < 3; ++i)
+            {
+                backend.now = 1050.0 + 25.0 * i; backend.send ("A", control (0)); drain (input, backend.now);
+                expectEquals (h.downs (CommandIDs::go), 1, "first post-loss value is only a baseline");
+            }
+            backend.now = 1125; backend.send ("A", control (127)); drain (input, backend.now);
+            backend.now = 1150; backend.send ("A", control (0)); drain (input, backend.now);
+            expectEquals (h.downs (CommandIDs::go), 2, "a fresh falling edge works after preparation");
+            expectEquals (static_cast<int> (h.panics.size()), 1);
+        }
+    }
     void testOverload()
     {
         beginTest ("normal overflow suppresses queued GO; reserved panic keeps state and ignores 100ms age limit");
@@ -165,6 +206,43 @@ private:
         while (sent.load() < 100) std::this_thread::yield();
         input.reset(); expectEquals (backend.ports["A"].stops, 1); expect (stop.load());
     }
+    void testTransport()
+    {
+        beginTest ("short deterministic eight-port callback/router transport preserves order and executes once per edge");
+        Harness h; FakeDevices backend;
+        constexpr int portCount = 8, perPort = 128;
+        for (int p = 0; p < portCount; ++p) backend.list.push_back ({ "Port " + juce::String (p), "port" + juce::String (p) });
+        auto trigger = cc (MidiTrigger::Edge::both, MidiTrigger::Behavior::pulse); trigger.debounceMs = 0;
+        expect (h.service->setMidiTriggers ("transport.preview", { trigger }).wasOk());
+        MidiInputSettings settings; settings.autoUseAll = true;
+        expect (h.service->setMidiInputSettings (settings).wasOk());
+        auto callbacks = h.router->inputCallbacks();
+        const auto receive = callbacks.receive;
+        std::array<int, portCount> received {};
+        std::array<uint64_t, portCount> serials {};
+        int orderErrors = 0;
+        callbacks.receive = [&] (const MidiInputEvent& e, const juce::String& id, bool execute)
+        {
+            const auto index = static_cast<size_t> (id.substring (4).getIntValue());
+            if (e.value != (received[index] % 2 == 0 ? 0 : 127) || e.eventID <= serials[index]) ++orderErrors;
+            serials[index] = e.eventID; ++received[index];
+            return receive (e, id, execute);
+        };
+        MidiInputService input (*h.service, callbacks, backend.backend(), false);
+        for (int i = 0; i < perPort; ++i)
+        {
+            backend.now = 1000.0 + 25.0 * i;
+            for (int p = 0; p < portCount; ++p) backend.send ("port" + juce::String (p), control (i % 2 == 0 ? 0 : 127));
+            drain (input, backend.now);
+        }
+        const auto counters = input.counters();
+        expectEquals (static_cast<int> (counters.received), portCount * perPort);
+        expectEquals (static_cast<int> (counters.delivered), portCount * perPort);
+        expectEquals (static_cast<int> (counters.dropped + counters.panicDropped + counters.stale), 0);
+        expectEquals (orderErrors, 0);
+        expectEquals (h.downs (CommandIDs::preview), portCount * (perPort - 1));
+        for (int n : received) expectEquals (n, perPort);
+    }
     void testCaptureRace()
     {
         beginTest ("capture boundaries concurrent with producer recording never replay into the following routing generation");
@@ -203,7 +281,7 @@ static MidiDeviceTests midiDeviceTests;
 class MidiLoadTests : public juce::UnitTest
 {
 public:
-    MidiLoadTests() : UnitTest ("MIDI 60-second transport load", "Enqueue") {}
+    MidiLoadTests() : UnitTest ("MIDI 60-second transport load", "EnqueueMidiLoad") {}
     void runTest() override
     {
         beginTest ("8 producers, 10,000 messages/second for 60 seconds through real notifier/router/command invocation");
@@ -271,6 +349,10 @@ public:
         }
         for (auto& producer : producers) producer.join();
         const auto counters = input.counters(); input.shutdown();
+        logMessage ("MIDI load: received=" + juce::String (counters.received) + " delivered=" + juce::String (counters.delivered)
+            + " executed=" + juce::String (target.count) + " dropped=" + juce::String (counters.dropped)
+            + " panicDropped=" + juce::String (counters.panicDropped) + " stale=" + juce::String (counters.stale)
+            + " orderErrors=" + juce::String (orderErrors));
         expectEquals (static_cast<int> (counters.received), producerCount * perProducer);
         expectEquals (static_cast<int> (counters.delivered), producerCount * perProducer);
         expectEquals (static_cast<int> (counters.dropped + counters.panicDropped + counters.stale), 0);

@@ -16,7 +16,7 @@ MidiTriggerRouter::~MidiTriggerRouter()
 {
     document.removeListener (this);
     shortcuts.removeListener (this);
-    for (const auto& p : connections) shortcuts.activations().releaseSource (InputKind::midi, p.first);
+    for (const auto& p : connections) releaseGoSource (p.first);
 }
 MidiInputService::Callbacks MidiTriggerRouter::inputCallbacks()
 {
@@ -35,7 +35,7 @@ void MidiTriggerRouter::releaseGo (const InputToken& token, const MidiInputEvent
         shortcuts.invokeInput (input);
     }
 }
-void MidiTriggerRouter::connectionChanged (uint64_t input, uint64_t connection, bool connected)
+void MidiTriggerRouter::releaseGoSource (uint64_t input)
 {
     const bool wasHeld = shortcuts.activations().anyHeld();
     shortcuts.activations().releaseSource (InputKind::midi, input);
@@ -44,6 +44,10 @@ void MidiTriggerRouter::connectionChanged (uint64_t input, uint64_t connection, 
         InputInvocation release { InputKind::midi, "transport.go", CommandIDs::go, false, {}, callbacks.clockMs(), InputInvocation::nextEventID() };
         shortcuts.invokeInput (release);
     }
+}
+void MidiTriggerRouter::connectionChanged (uint64_t input, uint64_t connection, bool connected)
+{
+    releaseGoSource (input);
     for (auto& runtime : bindings) runtime.rules.forgetInput (input);
     for (auto it = lastObserved.begin(); it != lastObserved.end();)
         if (it->first.source == input) it = lastObserved.erase (it); else ++it;
@@ -52,21 +56,20 @@ void MidiTriggerRouter::connectionChanged (uint64_t input, uint64_t connection, 
 }
 void MidiTriggerRouter::inputFault (uint64_t input, bool panic)
 {
-    // A normal overflow must not destroy the independently reserved panic state.
+    // Ordinary loss preserves panic. Reserved packets also carry ordinary rules
+    // (for example, falling GO on a rising-panic CC), so their loss resets both.
     for (auto& runtime : bindings)
-        if ((runtime.binding.commandID == CommandIDs::panicAll) == panic) runtime.rules.forgetInput (input);
+        if (panic || runtime.binding.commandID != CommandIDs::panicAll) runtime.rules.forgetInput (input);
     for (auto it = lastObserved.begin(); it != lastObserved.end();)
         if (it->first.source == input) it = lastObserved.erase (it); else ++it;
-    if (panic) { shortcuts.panicGestures().invalidate(); return; }
-    const bool wasHeld = shortcuts.activations().anyHeld();
-    shortcuts.activations().releaseSource (InputKind::midi, input);
-    if (wasHeld && ! shortcuts.activations().anyHeld())
-        shortcuts.invokeInput ({ InputKind::midi, "transport.go", CommandIDs::go, false, {}, callbacks.clockMs(), InputInvocation::nextEventID() });
+    if (panic) shortcuts.panicGestures().invalidate();
+    releaseGoSource (input);
 }
 void MidiTriggerRouter::projectReplaced()
 {
     for (auto& runtime : bindings) runtime.rules.clear();
-    for (const auto& p : connections) shortcuts.activations().releaseSource (InputKind::midi, p.first);
+    lastObserved.clear();
+    for (const auto& p : connections) releaseGoSource (p.first);
     shortcuts.invalidateInputRouting();
 }
 void MidiTriggerRouter::captureStateChanged()
@@ -102,8 +105,11 @@ void MidiTriggerRouter::refreshBindings()
             Runtime runtime { b, {}, true };
             for (const auto& [token, observed] : lastObserved)
             {
-                juce::ignoreUnused (token);
-                if (MidiTriggerRules::matchesAddress (b.trigger, observed.first, observed.second)) runtime.rules.observe (b.trigger, observed.first, false);
+                if (MidiTriggerRules::matchesAddress (b.trigger, observed.first, observed.second))
+                {
+                    const auto state = runtime.rules.observe (b.trigger, observed.first, false);
+                    if (b.commandID == CommandIDs::go && state.held) shortcuts.activations().hold (token);
+                }
             }
             bindings.push_back (std::move (runtime));
         }
@@ -131,11 +137,14 @@ bool MidiTriggerRouter::route (const MidiInputEvent& event, const juce::String& 
     };
     struct Pending { MidiBinding binding; MidiOwner owner; MidiTriggerRules::Transition transition; };
     std::vector<Pending> pending;
-    bool ready = false;
+    bool ready = false, goHeld = false, goEligible = false;
     for (auto& runtime : bindings)
     {
         const auto& b = runtime.binding;
         if (! MidiTriggerRules::matchesAddress (b.trigger, event, identifier)) continue;
+        // A retired gate can only finish a hold that existed at the edit. Other
+        // ports/presses on that address must not acquire new retired GO holds.
+        if (! runtime.live && ! runtime.rules.isHeld (event.token())) continue;
         const bool panic = b.commandID == CommandIDs::panicAll;
         if (! panic && ! event.ordinaryStateValid) continue;
         const auto owner = runtime.live ? shortcuts.resolveMidiOwner (b, context) : MidiOwner();
@@ -143,31 +152,36 @@ bool MidiTriggerRouter::route (const MidiInputEvent& event, const juce::String& 
         if (! execute || ! current || (! panic && ! event.ordinaryAllowed)) runtime.rules.quarantine (event.observedTimeMs);
         const auto transition = runtime.rules.observe (b.trigger, event, allowed);
         ready |= runtime.live && transition.ready;
+        if (b.commandID == CommandIDs::go)
+        {
+            goHeld |= transition.held;
+            goEligible |= transition.activated && owner.kind == MidiOwner::Kind::command;
+        }
         pending.push_back ({ b, owner, transition });
     }
     // Always finish all physical state updates/releases before invoking code that
     // may edit a mapping, replace the project or enter a nested modal loop.
-    if (event.kind == MidiTrigger::Kind::note && ! event.noteOn) releaseGo (event.token(), &event);
-    for (const auto& p : pending)
-        if (p.binding.commandID == CommandIDs::go && p.transition.released) releaseGo (event.token(), &event);
+    // Aggregate every gate on this physical token before touching the GO group.
+    // Dispatch deduplication must neither omit a held alias nor release one when
+    // only a different threshold has returned to its inactive region.
+    if (event.ordinaryStateValid && ! goHeld) releaseGo (event.token(), &event);
+    auto goToken = event.token();
+    const bool goPulse = goEligible && ! goHeld;
+    if (goPulse) goToken.control += 4096;
+    const bool activateGo = (goHeld || goPulse) && shortcuts.activations().press (goToken, goEligible,
+        callbacks.requireGoKeyUp ? callbacks.requireGoKeyUp() : document.settings.requireKeyUp);
     std::set<juce::String> fired;
     for (const auto& p : pending)
     {
         if (generation != shortcuts.getInputGeneration()) break;
         const bool eligible = p.transition.activated && (p.owner.kind == MidiOwner::Kind::command || p.owner.kind == MidiOwner::Kind::panic || p.owner.kind == MidiOwner::Kind::cue);
-        const bool pulse = p.binding.trigger.kind == MidiTrigger::Kind::cc && p.binding.trigger.behavior == MidiTrigger::Behavior::pulse;
-        auto token = event.token();
-        if (pulse) token.control += 4096; // temporary logical press cannot release a gate on the same CC address
-        bool activate = eligible;
-        if (p.binding.commandID == CommandIDs::go && p.owner.kind != MidiOwner::Kind::none && (p.transition.held || (pulse && eligible)))
-        {
-            // One physical packet can match several aliases of the same command.
-            if (fired.count (p.binding.id) != 0) continue;
-            activate = shortcuts.activations().press (token, eligible,
-                callbacks.requireGoKeyUp ? callbacks.requireGoKeyUp() : document.settings.requireKeyUp);
-        }
+        const bool go = p.binding.commandID == CommandIDs::go;
+        const bool activate = eligible && (! go || activateGo);
         if (activate && fired.insert (p.binding.id).second)
         {
+            auto token = go ? goToken : event.token();
+            if (! go && p.binding.trigger.kind == MidiTrigger::Kind::cc && p.binding.trigger.behavior == MidiTrigger::Behavior::pulse)
+                token.control += 4096;
             InputInvocation input { InputKind::midi, p.binding.id, p.binding.commandID, true, token, event.observedTimeMs, event.eventID };
             if (p.owner.kind == MidiOwner::Kind::panic)
             {
@@ -177,8 +191,8 @@ bool MidiTriggerRouter::route (const MidiInputEvent& event, const juce::String& 
             else if (p.owner.kind == MidiOwner::Kind::command) shortcuts.invokeInput (input);
             else if (p.owner.kind == MidiOwner::Kind::cue && callbacks.cue) callbacks.cue (juce::Uuid (p.binding.id), input);
         }
-        if (p.binding.commandID == CommandIDs::go && pulse && eligible) releaseGo (token, &event);
     }
+    if (goPulse) releaseGo (goToken, &event);
     if (current && shortcuts.isCapturing()) shortcuts.deliverCaptureMidi (event, identifier);
     bindings.erase (std::remove_if (bindings.begin(), bindings.end(), [] (const auto& r) { return ! r.live && ! r.rules.anyHeld(); }), bindings.end());
     return ready;

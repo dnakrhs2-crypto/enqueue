@@ -34,6 +34,11 @@ public:
     Transition observe (const MidiTrigger&, const MidiInputEvent&, bool allowActivation = true);
     void quarantine (double timeMs); // capture/mapping boundary; pulse must settle for 200ms
     void forgetInput (uint64_t input);
+    bool isHeld (const InputToken& token) const
+    {
+        const auto found = states.find (token);
+        return found != states.end() && found->second.down;
+    }
     bool anyHeld() const { return std::any_of (states.begin(), states.end(), [] (const auto& pair) { return pair.second.down; }); }
     void clear() { states.clear(); }
 private:

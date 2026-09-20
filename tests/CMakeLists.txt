@@ -7,6 +7,7 @@ target_sources(EnqueueTests PRIVATE
     ShortcutUiTests.cpp
     MidiModelTests.cpp
     MidiRoutingTests.cpp
+    MidiGoTests.cpp
     MidiDeviceTests.cpp
     ../src/ui/KeyCapture.cpp
     ../src/ui/ShortcutSettingsTab.cpp
@@ -76,3 +77,5 @@ target_link_libraries(EnqueueTests PRIVATE GoCueCore LiveMixUI)
 set_property(TARGET EnqueueTests PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 
 add_test(NAME EnqueueUnitTests COMMAND EnqueueTests)
+add_test(NAME EnqueueMidiLoadTests COMMAND EnqueueTests --midi-load)
+set_tests_properties(EnqueueMidiLoadTests PROPERTIES TIMEOUT 120 RUN_SERIAL TRUE LABELS "midi;load")

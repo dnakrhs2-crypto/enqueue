@@ -210,7 +210,10 @@ void MidiInputService::accept (Port& port, const juce::MidiMessage& message) noe
             if (! queue->push (event, event.panicReserved))
             {
                 (event.panicReserved ? panicDropped : dropped).fetch_add (1, std::memory_order_relaxed);
-                (event.panicReserved ? port.panicFaultEpoch : port.faultEpoch).fetch_add (1, std::memory_order_release);
+                // Reserved addresses may also drive ordinary commands on the
+                // opposite CC edge. Discard their pre-loss ordinary state too.
+                port.faultEpoch.fetch_add (1, std::memory_order_release);
+                if (event.panicReserved) port.panicFaultEpoch.fetch_add (1, std::memory_order_release);
             }
         }
         else unsupported.fetch_add (1, std::memory_order_relaxed);
@@ -231,6 +234,9 @@ void MidiInputService::drain (double nowMs)
         Port* port = nullptr;
         for (auto& [id, p] : ports) { juce::ignoreUnused (id); if (p->input == event.input) { port = p.get(); break; } }
         if (port == nullptr || ! port->enabled.load() || port->connection != event.connection) continue;
+        // Read panic first: observing its loss also observes the ordinary epoch
+        // published before it, even when a callback overflows during this drain.
+        const auto panicFault = port->panicFaultEpoch.load (std::memory_order_acquire);
         const auto fault = port->faultEpoch.load (std::memory_order_acquire);
         if (fault != port->observedFault)
         {
@@ -238,7 +244,6 @@ void MidiInputService::drain (double nowMs)
             port->status = Status::waiting;
             if (callbacks.fault) callbacks.fault (port->input, false);
         }
-        const auto panicFault = port->panicFaultEpoch.load (std::memory_order_acquire);
         if (panicFault != port->observedPanicFault)
         {
             port->observedPanicFault = panicFault;

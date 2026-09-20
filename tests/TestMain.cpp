@@ -25,10 +25,12 @@ int main (int argc, char** argv)
     runner.setAssertOnFailure (false);
     runner.setPassesAreLogged (false);
     juce::Array<juce::UnitTest*> tests;   // both apps in one run: one result list, one summary
-    const juce::String only = argc > 1 ? juce::String (argv[1]) : juce::String();   // optional: run only the tests whose name contains this
+    const bool midiLoad = argc > 1 && juce::String (argv[1]) == "--midi-load";
+    const juce::String only = argc > 1 && ! midiLoad ? juce::String (argv[1]) : juce::String();   // optional name filter
 
     for (auto* test : juce::UnitTest::getAllTests())
-        if ((test->getCategory() == "Enqueue" || test->getCategory() == "LiveMix") && (only.isEmpty() || test->getName().containsIgnoreCase (only)))
+        if ((midiLoad ? test->getCategory() == "EnqueueMidiLoad" : (test->getCategory() == "Enqueue" || test->getCategory() == "LiveMix"))
+            && (only.isEmpty() || test->getName().containsIgnoreCase (only)))
             tests.add (test);
 
     if (only.isNotEmpty() && tests.isEmpty())

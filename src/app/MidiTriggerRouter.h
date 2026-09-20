@@ -34,6 +34,7 @@ private:
     void containersChanged() override { refreshBindings(); }
     void projectReplaced() override;
     void releaseGo (const InputToken&, const MidiInputEvent* = nullptr);
+    void releaseGoSource (uint64_t input);
     ShortcutService& shortcuts;
     juce::ApplicationCommandManager& manager;
     ProjectDocument& document;
