@@ -415,7 +415,7 @@ PluginChain::GroupBypassResult PluginChain::setBypassedTogether (const std::vect
 
 bool PluginChain::groupPathsMatch() const noexcept
 {
-    if (! groupPathsPrepared)
+    if (! groupPathsPrepared || (groupPeersStale && groupStatePhase.load (std::memory_order_relaxed) == GroupStatePhase::idle))
         return false;
     for (const auto& slot : slots)
         if (slot->plugin != nullptr && (slot->getGroupPeer() == nullptr
@@ -455,6 +455,8 @@ std::unique_ptr<PluginChain::Slot> PluginChain::createGroupPeer (Slot& slot, con
 
 bool PluginChain::prepareGroupBypass()
 {
+    if (groupPeersStale)
+        return false; // latency matching alone cannot make an old preset a valid group endpoint
     if (groupPathsMatch())
         return true;
     if (! groupBypassEnabled || ! groupFactory || slots.size() < 2
@@ -504,6 +506,8 @@ void PluginChain::clearSlots (bool notify)
         const juce::ScopedLock sl (lock);
         dead.swap (slots);
         groupStatePhase.store (GroupStatePhase::idle, std::memory_order_relaxed);
+        groupPeersStale = false;
+        groupSyncFailure.store (false, std::memory_order_relaxed);
         slotCount.store (0, std::memory_order_relaxed);
     }
 
@@ -844,10 +848,28 @@ void PluginChain::refreshGroupState()
     if (groupStatePhase.load (std::memory_order_relaxed) != GroupStatePhase::idle)
         return; // a newer preset waits for the current handover; the UI tick services it below
     groupStateChanged.store (false, std::memory_order_release);
+    const auto failed = [this]
+    {
+        groupStateChanged.store (true, std::memory_order_release); // retry on a later UI tick, even without another edit
+        const juce::ScopedLock sl (lock);
+        if (! groupPeersStale)
+        {
+            groupPeersStale = true;
+            groupSyncFailure.store (true, std::memory_order_release);
+            // Use the same aligned handover even without a replacement. Once the original is
+            // audible, quarantine these peers until a complete state synchronization succeeds.
+            groupStatePhase.store (GroupStatePhase::prepared, std::memory_order_release);
+            if (groupMix == 0.0f)
+                installGroupState();
+        }
+    };
     bool complete = true;
     const auto states = getStates (&complete);
     if (! complete)
+    {
+        failed();
         return;
+    }
 
     std::vector<std::unique_ptr<Slot>> prepared (slots.size());
     std::vector<std::unique_ptr<GroupParameterMirror>> mirrors (slots.size());
@@ -863,7 +885,10 @@ void PluginChain::refreshGroupState()
             slot.groupMirror->refresh();
         prepared[i] = createGroupPeer (slot, &states[i]);
         if (prepared[i] == nullptr || prepared[i]->latency.load() != slot.latency.load())
-            return; // keep complete, aligned paths; a bad clone must not fault the live instances
+        {
+            failed();
+            return; // a bad clone must not fault the live instances or keep the old preset audible
+        }
         latency += (size_t) prepared[i]->latency.load();
         prepared[i]->groupBypassDelay.assign (latency, (unsigned char) prepared[i]->audioBypassed);
         prepared[i]->groupBypassTargets.resize ((size_t) blockSize);
@@ -878,6 +903,7 @@ void PluginChain::refreshGroupState()
             slots[i]->pendingGroupPeer.swap (prepared[i]);
             slots[i]->pendingGroupMirror.swap (mirrors[i]);
         }
+        groupPeersStale = false;
         groupStatePhase.store (GroupStatePhase::prepared, std::memory_order_release);
         if (groupMix == 0.0f)
             installGroupState();
@@ -888,12 +914,13 @@ void PluginChain::installGroupState() noexcept
 {
     // Original path alone is audible. No plugin calls, allocation, destruction, ownership edits,
     // or delay-line clearing here. New peers warm up before any later group fade can use them.
-    for (auto& slot : slots)
-        if (slot->pendingGroupPeer != nullptr)
-            slot->activeGroupPeer.store (slot->pendingGroupPeer.get(), std::memory_order_release);
+    if (! groupPeersStale)
+        for (auto& slot : slots)
+            if (slot->pendingGroupPeer != nullptr)
+                slot->activeGroupPeer.store (slot->pendingGroupPeer.get(), std::memory_order_release);
     groupDestination = 0;
     groupReadySamples[1] = getLatencySamples();
-    groupStatePhase.store (GroupStatePhase::retired, std::memory_order_release);
+    groupStatePhase.store (groupPeersStale ? GroupStatePhase::idle : GroupStatePhase::retired, std::memory_order_release);
 }
 
 void PluginChain::refreshPluginCaches()
@@ -906,8 +933,9 @@ void PluginChain::refreshPluginCaches()
 
 void PluginChain::recoverAfterStalls()
 {
-    if (groupPathsPrepared && groupStatePhase.load (std::memory_order_acquire) == GroupStatePhase::retired)
-        refreshGroupState(); // message-thread retirement, even when no further plugin edit arrives
+    if (groupPathsPrepared && (groupStatePhase.load (std::memory_order_acquire) == GroupStatePhase::retired
+        || (groupPeersStale && groupStateChanged.load (std::memory_order_acquire))))
+        refreshGroupState(); // retirement and failed-state retries, even when no further plugin edit arrives
 
     if (! overflowRaised.exchange (false, std::memory_order_acq_rel))
         return;
@@ -1239,7 +1267,16 @@ void PluginChain::processLocked (juce::AudioBuffer<float>& buffer, int numSample
     if (groupPathsMatch())
         processGroupPaths (buffer, numSamples);
     else
+    {
+        if (groupPeersStale && groupStatePhase.load (std::memory_order_relaxed) != GroupStatePhase::idle)
+        {
+            // A latency/structure edit can already force the original-only path. Finish the
+            // failed handover here too, so it cannot hold the preserved synchronization request.
+            groupMix = 0.0f;
+            installGroupState();
+        }
         processSlots (buffer, numSamples);
+    }
 }
 
 void PluginChain::setGroupPathTargets (int path, bool grouped) noexcept
@@ -1273,6 +1310,13 @@ void PluginChain::processGroupPaths (juce::AudioBuffer<float>& buffer, int numSa
         statePhase = groupStatePhase.load (std::memory_order_relaxed);
     }
 
+    if (groupPeersStale && statePhase == GroupStatePhase::idle)
+    {
+        setGroupPathTargets (0, false);
+        processSlots (buffer, numSamples);
+        return; // the fallback just completed; no old peer may be selected again
+    }
+
     bool matches[] { true, true };
     for (int path = 0; path < 2; ++path)
         for (auto& slot : slots)
@@ -1280,7 +1324,7 @@ void PluginChain::processGroupPaths (juce::AudioBuffer<float>& buffer, int numSa
                 matches[path] = matches[path] && (path != 0 ? slot->getGroupPeer()->audioBypassed : slot->audioBypassed) == slot->requestedBypassed;
 
     const bool settled = groupMix == (float) groupDestination;
-    if (statePhase == GroupStatePhase::handover)
+    if (statePhase == GroupStatePhase::handover || (groupPeersStale && statePhase == GroupStatePhase::prepared))
     {
         // New bypass requests stay in the snapshot until the old peer is inaudible. Changing
         // either endpoint mid-handover would reintroduce an abrupt multi-slot switch.

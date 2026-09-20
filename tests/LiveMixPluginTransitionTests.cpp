@@ -316,6 +316,114 @@ public:
             logMessage ("Preset handover: overlap error=" + juce::String (overlapError, 8) + ", max delta=" + juce::String (delta, 8));
         }
 
+        beginTest ("refused preset clones fall back to the current original and cannot be reselected before retry succeeds");
+        for (const bool peerAudible : { false, true })
+            for (const bool delayed : { false, true })
+            {
+                TransitionFixture f;
+                const int latencies[] { delayed ? 17 : 0, delayed ? 43 : 0, delayed ? 97 : 0 };
+                for (const int latency : latencies)
+                {
+                    auto plugin = std::make_unique<TestGainPlugin> (0.5f);
+                    plugin->latencySamples = latency;
+                    f.chain().addPlugin (std::move (plugin));
+                }
+                bool refuse = false;
+                int attempts = 0;
+                f.chain().setGroupBypassFactory ([&] (const PluginSlotState& state, juce::String& error)
+                    -> std::unique_ptr<juce::AudioPluginInstance>
+                {
+                    ++attempts;
+                    if (refuse && state.slotId == f.chain().getSlot (2).state.slotId)
+                    {
+                        error = "VST2 disabled after the live instances were created";
+                        return {};
+                    }
+                    auto plugin = std::make_unique<TestGainPlugin> (1.0f);
+                    for (int i = 0; i < 3; ++i)
+                        if (state.slotId == f.chain().getSlot (i).state.slotId) plugin->latencySamples = latencies[i];
+                    return plugin;
+                });
+                f.addGroup ({ 0, 2 });
+                expect (f.chain().prepareGroupBypass());
+                f.render (16);
+                if (peerAudible) f.document.setPluginGroupOff (f.channel(), 0, true);
+                float previous = f.render (16).getSample (0, 63);
+                expectWithinAbsoluteError (previous, peerAudible ? 0.2f : 0.05f, 1.0e-6f);
+                auto& source = *static_cast<TestGainPlugin*> (f.chain().getSlot (1).plugin.get());
+                auto* stale = f.chain().getSlot (1).getGroupPeer();
+                refuse = true;
+                const float preset = 0.25f; // no parameters: only the serialized preset carries this gain
+                source.setStateInformation (&preset, (int) sizeof (preset));
+                source.updateHostDisplay (juce::AudioProcessor::ChangeDetails().withNonParameterStateChanged (true));
+                expect (f.document.pollPluginEdits());
+                expect (f.chain().consumeGroupSyncFailure(), "The operator must be told about the fallback");
+                expect (! f.chain().consumeGroupSyncFailure());
+                expect (! f.chain().prepareBypassedTogether ({ 0, 2 }, ! peerAudible), "Stale peers must be unavailable even during the fallback fade");
+                expectEquals (f.chain().getStates()[1].stateBase64, juce::Base64::toBase64 (&preset, sizeof (preset)));
+                expectWithinAbsoluteError (static_cast<TestGainPlugin*> (stale->plugin.get())->gain, 0.5f, 1.0e-6f);
+                float fadeError = 0.0f, delta = 0.0f;
+                for (int block = 0; block < 16; ++block)
+                {
+                    const auto output = f.render();
+                    for (int i = 0; i < 64; ++i)
+                    {
+                        const float value = output.getSample (0, i);
+                        const float mix = juce::jlimit (0.0f, 1.0f, (float) (block * 64 + i - (delayed ? 157 : 0) + 1) / 240.0f);
+                        fadeError = juce::jmax (fadeError, std::abs (value - (0.2f - 0.1f * mix)));
+                        delta = juce::jmax (delta, std::abs (value - previous));
+                        previous = value;
+                    }
+                }
+                const float current = peerAudible ? 0.1f : 0.025f;
+                expectWithinAbsoluteError (previous, current, 1.0e-6f, "Output must follow the displayed preset even when cloning is refused");
+                if (peerAudible)
+                {
+                    expectLessThan (fadeError, 1.0e-6f, "The original must align for the total latency before the final 240-sample fade");
+                    expectLessThan (delta, 0.000418f);
+                }
+
+                const auto reply = f.dispatcher.dispatch ({ "1", f.instance, f.document.getSessionGeneration(), {},
+                    P::SetPluginGroupOff { f.channel(), 1, ! peerAudible } });
+                expect (std::get_if<P::ErrorResponse> (&reply) != nullptr, "An unsynchronized peer must not accept another group transition");
+                expect (f.document.getSession().channels[0].pluginGroups[0].off == peerAudible);
+                expectWithinAbsoluteError (f.render (16).getSample (0, 63), current, 1.0e-6f);
+                f.chain().setBypassed (1, true);
+                expectWithinAbsoluteError (f.render (16).getSample (0, 63), peerAudible ? 0.4f : 0.1f, 1.0e-6f);
+                f.chain().setBypassed (1, false);
+                expectWithinAbsoluteError (f.render (16).getSample (0, 63), current, 1.0e-6f, "Single-slot edits must not bring the stale preset back");
+                const int failedAttempts = attempts;
+                for (int tick = 0; tick < 3; ++tick)
+                {
+                    f.document.pollPluginEdits();
+                    expect (! f.chain().consumeGroupSyncFailure(), "Repeated refusal must not repeat the same notification");
+                    expectWithinAbsoluteError (f.render (16).getSample (0, 63), current, 1.0e-6f);
+                }
+                expectGreaterThan (attempts, failedAttempts, "A UI tick must retry the preserved state without another editor change");
+                expect (f.chain().takeNewFaults().isEmpty());
+                expect (! f.chain().getSlot (1).faulted.load());
+
+                refuse = false;
+                const int beforeRetry = attempts;
+                f.document.pollPluginEdits();
+                expectGreaterThan (attempts, beforeRetry);
+                expect (! f.chain().consumeGroupSyncFailure());
+                expect (f.chain().getSlot (1).getGroupPeer() != stale);
+                expectWithinAbsoluteError (static_cast<TestGainPlugin*> (f.chain().getSlot (1).getGroupPeer()->plugin.get())->gain, preset, 1.0e-6f);
+                expect (f.chain().getSlot (1).plugin.get() == &source, "The editor-facing instance must survive the fallback");
+                expectWithinAbsoluteError (f.render (16).getSample (0, 63), current, 1.0e-6f);
+                f.document.pollPluginEdits(); // retire the stale peers on the message thread
+                expect (f.chain().getSlot (1).pendingGroupPeer == nullptr);
+                for (const bool off : { false, true, false })
+                {
+                    f.document.setPluginGroupOff (f.channel(), 0, off);
+                    expect (f.document.getSession().channels[0].pluginGroups[0].off == off);
+                    expectWithinAbsoluteError (f.render (16).getSample (0, 63), off ? 0.1f : 0.025f, 1.0e-6f);
+                }
+                logMessage ("Refused preset clone: peer=" + juce::String ((int) peerAudible) + ", latency=" + juce::String (delayed ? 157 : 0)
+                    + ", final output=" + juce::String (previous, 8) + ", fade error=" + juce::String (fadeError, 8));
+            }
+
         beginTest ("clone refusal rejects group OFF before audio, document, dirty, revision or success ACK changes");
         for (const bool everywhere : { false, true })
         {

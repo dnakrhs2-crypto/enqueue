@@ -182,6 +182,8 @@ public:
     /** True once (since the previous call) when any hosted plugin reported a parameter / state change,
         e.g. the user turned a knob in an editor. Any thread. Used for dirty tracking. */
     bool consumeStateChanged() noexcept { return stateChanged.exchange (false, std::memory_order_acq_rel); }
+    /** Once per failed group-state synchronization: the original remains usable; the UI reports the fallback. */
+    bool consumeGroupSyncFailure() noexcept { return groupSyncFailure.exchange (false, std::memory_order_acq_rel); }
     /** The names of the plugins that faulted since the previous call (message thread): the operator is told once. */
     juce::StringArray takeNewFaults();
     /** Plugins whose callback lock has been busy for stallBlocks blocks in a row (passed dry meanwhile), once each. */
@@ -232,6 +234,8 @@ private:
     const bool groupBypassEnabled;
     Factory groupFactory;
     bool groupPathsPrepared = false;
+    bool groupPeersStale = false;           // message-thread writes under the chain lock; callback may only fade these peers out
+    std::atomic<bool> groupSyncFailure { false };
     juce::AudioBuffer<float> groupOutput;
     float groupMix = 0.0f;                   // 0: original path, 1: peer; one final-output ramp
     int groupDestination = 0;

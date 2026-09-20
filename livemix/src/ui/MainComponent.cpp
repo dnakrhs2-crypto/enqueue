@@ -718,7 +718,15 @@ void MainComponent::timerCallback()
 
     // a plugin that faulted (threw, or produced NaN / Inf): dry from then on, and the operator is told once
     juce::StringArray faulted, stalled;
-    engine.forEachChain ([&] (PluginChain& chain) { faulted.addArray (chain.takeNewFaults()); stalled.addArray (chain.takeNewStalls()); });
+    bool groupSyncFailed = false;
+    engine.forEachChain ([&] (PluginChain& chain)
+    {
+        faulted.addArray (chain.takeNewFaults());
+        stalled.addArray (chain.takeNewStalls());
+        groupSyncFailed = chain.consumeGroupSyncFailure() || groupSyncFailed;
+    });
+    if (groupSyncFailed)
+        showStatus (ko ("플러그인 상태 동기화 실패: 현재 프리셋의 출력으로 전환합니다. 그룹 전환은 동기화 후 다시 시도하세요."), true);
     bool noteChanged = false;
 
     for (const auto& name : faulted)
