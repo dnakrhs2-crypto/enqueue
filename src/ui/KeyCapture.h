@@ -103,6 +103,7 @@ public:
     KeyCaptureButton();
     ~KeyCaptureButton() override;
     void setService (ShortcutService& s) { service = &s; }
+    void detachService() { cancelCapture(); service = nullptr; }
     void setHotkey (const juce::String&);
     void cancelCapture();
     std::function<void (const juce::String&)> onHotkeyChanged;

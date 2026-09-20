@@ -12,7 +12,7 @@ CueMidiPanel::CueMidiPanel (ProjectDocument& d, ShortcutService& s, MidiInputSer
     for (auto* component : std::initializer_list<juce::Component*> { &list, &status, &add, &change, &erase }) addAndMakeVisible (component);
     status.setFont (Palette::font()); status.setMinimumHorizontalScale (1.0f);
     status.setColour (juce::Label::textColourId, Palette::warn);
-    list.setTextWhenNothingSelected (ko ("MIDI: 없음"));
+    list.setTextWhenNothingSelected (ko ("MIDI: 미지정"));
     list.onChange = [this]
     {
         change.cancelCapture();
@@ -23,6 +23,8 @@ CueMidiPanel::CueMidiPanel (ProjectDocument& d, ShortcutService& s, MidiInputSer
         refresh();
     };
     add.setButtonText (ko ("입력 추가")); change.setButtonText (ko ("변경")); erase.setButtonText (ko ("삭제"));
+    add.setTitle (ko ("MIDI 입력 추가")); add.setTooltip (ko ("키 또는 MIDI 입력 추가"));
+    change.setTitle (ko ("MIDI 변경")); erase.setTitle (ko ("MIDI 삭제"));
     for (auto* button : { &add, &change })
     {
         button->setService (service);
@@ -101,7 +103,7 @@ juce::String CueMidiPanel::statusFor (const MidiTrigger& trigger) const
     if (! service.getMidiInputSettings().allowBackgroundPlayback && ! juce::Process::isForegroundProcess())
         return ko ("백그라운드 재생 조작 꺼짐 — 실행 억제");
     const auto connection = ShortcutDisplay::midiState (service, trigger, MidiInputSettingsPanel::snapshot (service, input));
-    if (connection != ko ("연결") && connection != ko ("준비 대기")) return ko ("장치 ") + connection;
+    if (connection != ko ("연결")) return ko ("장치 ") + connection;
     return router != nullptr ? router->bindingStatus ({ cueID.toString(), trigger, 0, true }) : connection;
 }
 void CueMidiPanel::refresh()
@@ -112,8 +114,8 @@ void CueMidiPanel::refresh()
     juce::StringArray all;
     for (size_t i = 0; i < values.size(); ++i)
     {
-        const auto text = "MIDI: " + ShortcutDisplay::midi (service, { values[i] });
-        list.addItem (text, static_cast<int> (i) + 1); all.add (ShortcutDisplay::midiDetails (service, values[i]) + " — " + statusFor (values[i]));
+        const auto text = "MIDI: " + values[i].display();
+        list.addItem (text, static_cast<int> (i) + 1); all.add (ShortcutDisplay::midiDetails (service, values[i]) + ko (" — ") + statusFor (values[i]));
     }
     list.setSelectedId (values.empty() ? 0 : juce::jlimit (1, static_cast<int> (values.size()), selected), juce::dontSendNotification);
     list.setTooltip (all.joinIntoString ("\n"));
@@ -121,7 +123,10 @@ void CueMidiPanel::refresh()
     { editingIndex = list.getSelectedId() - 1; original = values[static_cast<size_t> (editingIndex)]; change.editMidi = original; }
     const bool enabled = selectedCue() != nullptr && isEnabled() && ! service.isEditingLocked();
     add.setEnabled (enabled); change.setEnabled (enabled && ! values.empty()); erase.setEnabled (enabled && ! values.empty());
+    add.setButtonText (values.empty() ? ko ("입력 추가") : juce::String ("+"));
+    change.setVisible (! values.empty()); erase.setVisible (! values.empty()); status.setVisible (! values.empty());
     timerCallback();
+    resized();
 }
 void CueMidiPanel::timerCallback()
 {
@@ -133,12 +138,16 @@ void CueMidiPanel::timerCallback()
 }
 void CueMidiPanel::resized()
 {
-    auto area = getLocalBounds();
-    auto row = area.removeFromTop (26);
-    erase.setBounds (row.removeFromRight (56)); row.removeFromRight (4);
-    change.setBounds (row.removeFromRight (56)); row.removeFromRight (4);
-    add.setBounds (row.removeFromRight (92)); row.removeFromRight (6);
+    auto row = getLocalBounds().withHeight (26);
+    const bool assigned = list.getNumItems() != 0;
+    if (assigned)
+    {
+        const bool compact = row.getWidth() < 500;
+        status.setBounds (row.removeFromRight (compact ? 64 : juce::jmin (210, row.getWidth() / 4))); row.removeFromRight (6);
+        erase.setBounds (row.removeFromRight (compact ? 44 : 48)); row.removeFromRight (4);
+        change.setBounds (row.removeFromRight (compact ? 44 : 48)); row.removeFromRight (4);
+    }
+    add.setBounds (row.removeFromRight (assigned ? 28 : 92)); row.removeFromRight (6);
     list.setBounds (row);
-    status.setBounds (area.removeFromTop (22));
 }
 }

@@ -164,7 +164,7 @@ void MidiInputService::refresh()
         p->queue = std::make_unique<MidiEventQueue<8704, 512>>();
         p->handle = backend.open (id, p.get());
         if (! p->handle) { p->queue.reset(); p->status = Status::unavailable; continue; }
-        p->status = Status::waiting;
+        p->status = Status::connected;
         rebuildPanicAddresses();
         if (callbacks.connection) callbacks.connection (p->input, p->connection, true);
         p->enabled.store (true, std::memory_order_release);
@@ -311,10 +311,13 @@ void MidiInputService::drain (double nowMs)
         if (callbacks.receive)
         {
             auto receive = callbacks.receive;
-            const bool ready = receive (event, port->identifier, execute);
+            receive (event, port->identifier, execute);
             if (lifetime->stopped.load()) return; // a command may have closed the application
-            if (execute && ready && port->enabled.load() && port->connection == event.connection) port->status = Status::connected;
         }
+        // Connection health is independent of mapping/CC baseline readiness.
+        // Only a fresh observation after the loss epoch clears the port warning.
+        if (event.ordinaryStateValid && event.ordinaryAllowed && port->enabled.load() && port->connection == event.connection)
+            port->status = Status::connected;
         ++delivered;
         if (juce::Time::getMillisecondCounterHiRes() - start >= 2.0) break;
     }

@@ -68,8 +68,8 @@ juce::String midiDetails (const ShortcutService& service, const MidiTrigger& tri
 {
     auto text = midi (service, { trigger });
     text += trigger.kind == MidiTrigger::Kind::note ? juce::String::fromUTF8 (" · 최소 velocity ") + juce::String (trigger.minVelocity)
-        : juce::String (" · high ") + juce::String (trigger.highThreshold) + " / low " + juce::String (trigger.lowThreshold)
-            + (trigger.behavior == MidiTrigger::Behavior::gate ? " · gate" : " · pulse");
+        : juce::String::fromUTF8 (" · high ") + juce::String (trigger.highThreshold) + " / low " + juce::String (trigger.lowThreshold)
+            + juce::String::fromUTF8 (trigger.behavior == MidiTrigger::Behavior::gate ? " · gate" : " · pulse");
     return text + juce::String::fromUTF8 (" · 바운스 ") + juce::String (trigger.debounceMs) + "ms";
 }
 juce::String deviceStatus (MidiInputService::Status status)

@@ -10,6 +10,27 @@ target_sources(EnqueueTests PRIVATE
     MidiGoTests.cpp
     MidiDeviceTests.cpp
     MidiUiTests.cpp
+    MidiMainComponentTests.cpp
+    ../src/ui/MainComponent.cpp
+    ../src/ui/TransportBar.cpp
+    ../src/ui/CueInspector.cpp
+    ../src/ui/WaveformView.cpp
+    ../src/ui/TimeLoopsPanel.cpp
+    ../src/ui/AudioSettingsDialog.cpp
+    ../src/ui/WorkspaceSettingsDialog.cpp
+    ../src/ui/FooterBar.cpp
+    ../src/ui/ActiveCuesPanel.cpp
+    ../src/ui/ContainerTabs.cpp
+    ../src/ui/SplitDivider.cpp
+    ../src/ui/ManualWindow.cpp
+    ../src/ui/YouTubeWindow.cpp
+    ../src/ui/CueCartView.cpp
+    ../src/ui/PastePropertiesDialog.cpp
+    ../src/ui/PatchEditorDialog.cpp
+    ../src/ui/CurveEditor.cpp
+    ../src/ui/PluginChainComponent.cpp
+    ../src/ui/PluginManager.cpp
+    ../src/ui/PluginDialogs.cpp
     ../src/ui/KeyCapture.cpp
     ../src/ui/ShortcutSettingsTab.cpp
     ../src/ui/MidiInputSettingsPanel.cpp

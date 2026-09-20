@@ -38,6 +38,7 @@ public:
     CueInspector (ProjectDocument& document, AudioEngine& engine, AppSettings& settings, PluginWindowManager& windows);
     ~CueInspector() override;
     void setShortcutService (ShortcutService&, MidiInputService* = nullptr, MidiTriggerRouter* = nullptr);
+    void detachShortcutService();
 
     /** Rebuilds the plugin strip (after a project load / duplicate / undo). */
     void refreshPlugins();

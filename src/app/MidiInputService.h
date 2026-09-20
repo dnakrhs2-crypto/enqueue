@@ -75,7 +75,7 @@ public:
     };
     struct Callbacks
     {
-        /** Message thread. false=state cleanup only; return per-address readiness. */
+        /** Message thread. false=state cleanup only; returned rule readiness does not determine port status. */
         std::function<bool (const MidiInputEvent&, const juce::String&, bool execute)> receive;
         std::function<void (uint64_t input, uint64_t connection, bool connected)> connection;
         std::function<void (uint64_t input, bool panic)> fault;

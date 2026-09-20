@@ -64,8 +64,8 @@ void MidiInputSettingsPanel::report (const ShortcutOperationResult& result)
 void MidiInputSettingsPanel::refresh()
 {
     devices = snapshot (service, input);
-    fold.setButtonText ((expanded ? "− " : "+ ") + ko ("MIDI 입력 — 이 PC")
-        + (input != nullptr ? "  ·  " + ShortcutDisplay::midiSummary (*input, &service) : juce::String()));
+    fold.setButtonText (ko (expanded ? "− " : "+ ") + ko ("MIDI 입력 — 이 PC")
+        + (input != nullptr ? ko ("  ·  ") + ShortcutDisplay::midiSummary (*input, &service) : juce::String()));
     automatic.setToggleState (service.getMidiInputSettings().autoUseAll, juce::dontSendNotification);
     background.setToggleState (service.getMidiInputSettings().allowBackgroundPlayback, juce::dontSendNotification);
     automatic.setEnabled (! service.isEditingLocked()); background.setEnabled (! service.isEditingLocked());
@@ -86,8 +86,8 @@ juce::Component* MidiInputSettingsPanel::refreshComponentForRow (int row, bool, 
     view->selected.setTooltip (device.name + "\n" + device.identifier);
     view->selected.setToggleState (service.getMidiInputSettings().autoUseAll || service.getMidiInputSettings().selected.count (device.identifier) != 0, juce::dontSendNotification);
     view->selected.setEnabled (! service.isEditingLocked() && ! service.getMidiInputSettings().autoUseAll);
-    view->state.setText (device.overloaded ? ko ("과부하") : ShortcutDisplay::deviceStatus (device.status), juce::dontSendNotification);
-    view->state.setTooltip (device.status == MidiInputService::Status::waiting ? ko ("준비 대기: 노트 첫 누름은 즉시 실행. CC 첫 값은 기준값. 눌린 채 학습한 입력은 놓으세요.") : view->state.getText());
+    view->state.setText (ShortcutDisplay::deviceStatus (device.status), juce::dontSendNotification);
+    view->state.setTooltip (device.status == MidiInputService::Status::waiting ? ko ("입력 손실 뒤 다음 MIDI 메시지를 기다리는 중입니다.") : view->state.getText());
     if (device.overloaded) view->state.setTooltip (ShortcutDisplay::deviceStatus (device.status) + ko (" · 이 연결의 과부하 기록 있음. 푸터에서 누계를 확인하세요."));
     view->reconnect.setEnabled (! service.isEditingLocked() && device.status == MidiInputService::Status::disconnected);
     const juce::Component::SafePointer<MidiInputSettingsPanel> safe (this);
@@ -106,7 +106,7 @@ void MidiInputSettingsPanel::reconnect (const juce::String& previous)
     if (service.isEditingLocked()) return;
     juce::PopupMenu menu;
     std::vector<std::pair<juce::String, juce::String>> available;
-    for (const auto& p : service.getAvailableMidiDevices()) { available.push_back (p); menu.addItem (static_cast<int> (available.size()), p.second + " · " + p.first); }
+    for (const auto& p : service.getAvailableMidiDevices()) { available.push_back (p); menu.addItem (static_cast<int> (available.size()), p.second + ko (" · ") + p.first); }
     if (available.empty()) { error = ko ("연결 가능한 입력이 없습니다. 장치를 연결하고 새로고침하세요."); refresh(); return; }
     const juce::Component::SafePointer<MidiInputSettingsPanel> safe (this);
     menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&list), [safe, previous, available] (int result)

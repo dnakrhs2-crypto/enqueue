@@ -85,7 +85,7 @@ KeyCaptureSession::Suggestion KeyCaptureSession::suggestion() const
         result.trigger.edge = MidiTrigger::Edge::rising;
         result.trigger.lowThreshold = juce::jmax (*lo, result.trigger.highThreshold - 4);
     }
-    result.text = ko ("관측 ") + juce::String (*lo) + "–" + juce::String (*hi) + ko (" · 제안: ")
+    result.text = ko ("관측 ") + juce::String (*lo) + ko ("–") + juce::String (*hi) + ko (" · 제안: ")
         + (continuous ? ko ("노브·페이더") : result.trigger.edge == MidiTrigger::Edge::falling ? ko ("하강 페달·버튼") : ko ("상승 페달·버튼"))
         + ko (" · high ") + juce::String (result.trigger.highThreshold) + " / low " + juce::String (result.trigger.lowThreshold)
         + ko (" (자동 확정 아님)");

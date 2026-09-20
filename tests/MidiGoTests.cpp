@@ -215,10 +215,10 @@ private:
     void testRetiredGateHysteresisRestore()
     {
         for (bool falling : { false, true })
-            for (bool releaseBeforeRestore : { false, true })
+            for (int releaseOrder : { 0, 1, 2 })
             {
                 beginTest (juce::String ("retired GO gate hysteresis restoration: ") + (falling ? "falling 0->62" : "rising 127->62")
-                    + (releaseBeforeRestore ? ", A releases before restore" : ", A releases after restore"));
+                    + (releaseOrder == 2 ? ", A releases before B's first input" : releaseOrder == 1 ? ", A releases before restore" : ", A releases after restore"));
                 Harness h; h.requireKeyUp = true;
                 const auto trigger = cc (falling ? MidiTrigger::Edge::falling : MidiTrigger::Edge::rising);
                 const int pressed = falling ? 0 : 127, released = falling ? 64 : 60;
@@ -226,8 +226,9 @@ private:
                 h.send (control (released)); h.now += 25; h.send (control (pressed));
                 expectEquals (h.downs (CommandIDs::go), 1);
                 expect (h.service->setMidiTriggers ("transport.go", { note (65) }).wasOk());
+                if (releaseOrder == 2) h.send (control (released));
                 h.send (control (pressed), 2, "B"); h.now += 25; h.send (control (62), 2, "B");
-                if (releaseBeforeRestore)
+                if (releaseOrder != 0)
                 {
                     h.send (control (released));
                     expect (! h.service->activations().anyHeld(), "new retired observations must not acquire GO tokens");
@@ -235,7 +236,7 @@ private:
                 expectEquals (h.downs (CommandIDs::go), 1, "retired observations never execute GO");
                 expect (h.service->setMidiTriggers ("transport.go", { trigger, note (65) }).wasOk());
                 expectEquals (h.downs (CommandIDs::go), 1, "restoration never executes GO");
-                if (! releaseBeforeRestore) h.send (control (released));
+                if (releaseOrder == 0) h.send (control (released));
                 expect (h.service->activations().anyHeld(), "B stays held inside the hysteresis band after A releases");
                 h.tap (65); expectEquals (h.downs (CommandIDs::go), 1, "a mixed Note GO must wait for B's real release");
                 h.send (control (62), 2, "B");
@@ -306,10 +307,11 @@ private:
     }
     void testCaptureRelease()
     {
+        for (bool disconnect : { false, true })
         for (bool midiFirst : { false, true })
         {
             beginTest (juce::String ("capture defers keyboard key-up but releases the real GO controller once: ")
-                + (midiFirst ? "MIDI first" : "keyboard first"));
+                + (midiFirst ? "MIDI first" : "keyboard first") + (disconnect ? ", disconnect cancels capture" : ", physical off retains capture"));
             ControllerHarness h;
             expect (h.service->setMidiTriggers ("transport.go", { note() }).wasOk());
             bool down = true;
@@ -325,11 +327,13 @@ private:
             h.send (off()); h.now += 25; h.send (on());
             expect (h.goTarget.results == std::vector { CueController::GoResult::started });
             int capture = 0; h.service->beginCapture (&capture);
-            if (midiFirst) h.router->connectionChanged (1, 1, false);
+            const auto releaseMidi = [&] { if (disconnect) h.router->connectionChanged (1, 1, false); else h.send (off()); };
+            if (midiFirst) releaseMidi();
             down = false; keyboard.prepareNativeEvent (32, 0, false, false, 1075); keyboard.keyStateChanged (false, &origin);
-            expectEquals (h.goTarget.releases, 0);
-            if (! midiFirst) h.router->connectionChanged (1, 1, false);
-            expectEquals (h.goTarget.releases, midiFirst ? 0 : 1);
+            expectEquals (h.goTarget.releases, midiFirst && disconnect ? 1 : 0);
+            if (! midiFirst) releaseMidi();
+            expectEquals (h.goTarget.releases, midiFirst && ! disconnect ? 0 : 1);
+            expect (h.service->isCapturing() == ! disconnect);
             h.service->endCapture (&capture); keyboard.pollKeyState();
             expectEquals (h.goTarget.releases, 1, "deferred key-up must not repeat the MIDI release");
             int keyboardUps = 0;

@@ -77,7 +77,7 @@ std::vector<Row> rows (const ShortcutService& service, const Cues& cues, const s
         for (const auto& trigger : row.midi)
         {
             auto state = ShortcutDisplay::midiState (service, trigger, devices);
-            if (router != nullptr && (state == ko ("연결") || state == ko ("준비 대기")))
+            if (router != nullptr && state == ko ("연결"))
                 state = router->bindingStatus ({ entry.id, trigger, entry.commandID, true });
             row.midiStates.addIfNotAlreadyThere (state);
             for (const auto& device : devices)

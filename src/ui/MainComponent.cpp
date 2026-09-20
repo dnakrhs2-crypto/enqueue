@@ -306,8 +306,9 @@ MainComponent::MainComponent (AudioEngine& e, AppSettings& s, juce::ApplicationC
 
 MainComponent::~MainComponent()
 {
-    midiInput.reset(); // receive -> devices -> callbacks -> notifier -> pending update, before the router
-    midiRouter.reset();
+    // Stop reception first, retaining queryable services through capture callbacks
+    // and every UI owner that can still refresh or dismiss a learning callout.
+    if (midiInput != nullptr) midiInput->shutdown();
     shortcuts->removeListener (this);
     shortcuts->cancelCapture();
     panicHook.reset();
@@ -318,6 +319,9 @@ MainComponent::~MainComponent()
     pluginManagerWindow.reset();   // listens to the plugin host's known-plugin list: gone before the engine is
     PluginDialogs::closeAll();
     WorkspaceSettingsDialog::closeIfOpen();
+    inspector.detachShortcutService();
+    midiInput.reset();
+    midiRouter.reset();
     AudioSettingsDialog::closeIfOpen();
     PatchEditorDialog::closeIfOpen();   // references the document, engine and plugin windows: before they go
     pluginWindows.closeAll();
@@ -3141,13 +3145,14 @@ void MainComponent::timerCallback()
 {
     if (midiInput != nullptr && midiRouter != nullptr)
     {
-        auto summary = ShortcutDisplay::midiSummary (*midiInput, shortcuts.get());
+        const auto summary = ShortcutDisplay::midiSummary (*midiInput, shortcuts.get());
         const int waiting = midiRouter->waitingBindings();
-        if (waiting > 0) summary += ko (" · 규칙 준비 대기 ") + juce::String (waiting);
+        auto detail = summary;
+        if (waiting > 0) detail += ko ("\n규칙 준비 대기 ") + juce::String (waiting);
         const auto counts = midiInput->counters();
-        footer.setMidiStatus (summary, summary + ko ("\nCC는 연결 뒤 첫 값은 기준값이라 실행되지 않음. 페달·버튼은 노트 권장.")
+        footer.setMidiStatus (summary, detail + ko ("\nCC는 연결 뒤 첫 값은 기준값이라 실행되지 않음. 페달·버튼은 노트 권장.")
             + ko ("\n과부하 누계: 손실 ") + juce::String (counts.dropped) + ko (" / 패닉 손실 ") + juce::String (counts.panicDropped)
-            + ko (" / 100ms 초과 ") + juce::String (counts.stale), midiInput->hasInputFault() || waiting > 0);
+            + ko (" / 100ms 초과 ") + juce::String (counts.stale), midiInput->hasInputFault());
     }
     auto& meter = engine.getLoudnessMeter();
     meter.poll();

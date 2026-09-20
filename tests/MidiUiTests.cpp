@@ -33,7 +33,7 @@ public:
     MidiUiTests() : juce::UnitTest ("MIDI capture, settings, inspector and exchange UI", "Enqueue") {}
     void runTest() override
     {
-        testCaptureModel(); testCaptureWidget(); testSettings(); testExchange(); testInspector();
+        testCaptureModel(); testCaptureWidget(); testCaptureBoundaries(); testSettings(); testExchange(); testInspector();
     }
     void testCaptureModel()
     {
@@ -188,9 +188,91 @@ public:
         expect (keys.route (juce::KeyPress (juce::KeyPress::escapeKey), &editor, {}, 10001));
         expect (! h.service->isCapturing()); expect (h.target.invocations.size() == count);
     }
+    void testCaptureBoundaries()
+    {
+        for (bool falling : { false, true })
+        {
+            beginTest (juce::String ("capture releases the initially held rule on opposite CC gates: ") + (falling ? "falling" : "rising"));
+            Harness h;
+            expect (h.service->setMidiTriggers ("transport.go", { cc() }).wasOk());
+            expect (h.service->setMidiTriggers ("transport.preview", { cc (MidiTrigger::Edge::falling) }).wasOk());
+            expect (h.service->setMidiTriggers ("transport.panicAll", { note (73) }).wasOk());
+            h.send (control (falling ? 0 : 127)); // baseline is physically held, without execution
+            KeyCapture widget (*h.service, [] { return false; });
+            widget.start ("opposite gates");
+            h.send (control (62)); // hysteresis is still held
+            h.send (on (72));
+            expect (std::holds_alternative<std::monostate> (widget.model().candidate()));
+            h.send (control (falling ? 127 : 0)); // first release of the rule held at capture start
+            h.send (off (72)); h.send (on (73));
+            const auto* learned = std::get_if<MidiTrigger> (&widget.model().candidate());
+            expect (learned != nullptr && learned->number == 73, "the opposite gate must not inherit the release wait");
+            expectEquals (h.downs (CommandIDs::go), 0);
+            expectEquals (h.downs (CommandIDs::preview), 0);
+            expect (h.panics.empty() && h.service->isCapturing());
+        }
+        for (bool fault : { false, true })
+        {
+            beginTest (fault ? "capture cancels pending registration on noncandidate port input loss"
+                             : "capture cancels pending registration on noncandidate port disconnect and reconnect");
+            Harness h; FakeDevices backend; backend.list = { { "A", "A" }, { "B", "B" } };
+            MidiInputSettings selected; selected.autoUseAll = true;
+            expect (h.service->setMidiInputSettings (selected).wasOk());
+            expect (h.service->setMidiTriggers ("transport.go", { note (61) }).wasOk());
+            MidiInputService input (*h.service, h.router->inputCallbacks(), backend.backend(), false);
+            KeyCapture widget (*h.service, [] { return false; });
+            int submitted = 0;
+            widget.onSubmit = [&] (const auto&, auto done) { ++submitted; done (juce::Result::ok()); };
+            widget.start ("port boundary");
+            backend.send ("A", on()); drain (input, backend.now);
+            backend.send ("B", on (61)); drain (input, backend.now);
+            backend.send ("A", off()); drain (input, backend.now);
+            expect (click (widget, ko ("등록")));
+            expect (widget.isCapturing() && h.service->activations().anyHeld());
+            expectEquals (submitted, 0);
+            if (fault)
+            {
+                for (int i = 0; i < 8193; ++i) backend.send ("B", on (61));
+                drain (input, backend.now);
+            }
+            else
+            {
+                backend.list.pop_back(); input.refresh();
+                backend.list.push_back ({ "B", "B" }); input.refresh();
+                backend.send ("B", off (61)); drain (input, backend.now);
+            }
+            widget.pollKeyRelease();
+            expect (! widget.isCapturing() && ! h.service->isCapturing(), "loss must retire every observation and capture token");
+            expect (! h.service->activations().anyHeld());
+            expectEquals (submitted, 0, "a lost release must cancel rather than silently register");
+            expectEquals (h.downs (CommandIDs::go), 0);
+            widget.start ("fresh capture");
+            backend.send ("A", on (74)); backend.send ("A", off (74)); drain (input, backend.now);
+            expect (click (widget, ko ("등록")));
+            expectEquals (submitted, 1);
+            expect (! h.service->isCapturing());
+        }
+    }
     void testSettings()
     {
         namespace Model = ShortcutSettingsModel;
+        beginTest ("MIDI headers, CC ranges and rule details preserve UTF-8 punctuation");
+        {
+            Harness textHarness; FakeDevices backend; backend.list = { { "A", "A" } };
+            MidiInputService input (*textHarness.service, textHarness.router->inputCallbacks(), backend.backend(), false);
+            MidiInputSettingsPanel panel (*textHarness.service, &input);
+            for (auto* child : panel.getChildren())
+                if (auto* fold = dynamic_cast<juce::TextButton*> (child); fold != nullptr && fold->getButtonText().contains (ko ("MIDI 입력")))
+                {
+                    expectEquals (fold->getButtonText(), ko ("+ MIDI 입력 — 이 PC  ·  MIDI 0"));
+                    fold->onClick();
+                    expectEquals (fold->getButtonText(), ko ("− MIDI 입력 — 이 PC  ·  MIDI 0"));
+                }
+            KeyCaptureSession model; model.reset();
+            model.observe (message (control (0)), "A"); model.observe (message (control (127)), "A");
+            expect (model.suggestion().text.contains (ko ("0–127")));
+            expect (ShortcutDisplay::midiDetails (*textHarness.service, cc()).contains (ko (" · high 64 / low 60 · gate")));
+        }
         beginTest ("MIDI display and status filters share device names, channel labels and compact counts");
         Harness h;
         h.service->setAvailableMidiDevices ({ { "A", ko ("무대 페달") } });

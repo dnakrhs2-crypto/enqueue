@@ -66,6 +66,9 @@ void MidiTriggerRouter::connectionChanged (uint64_t input, uint64_t connection, 
 {
     for (auto it = captureActivationInputs.begin(); it != captureActivationInputs.end();)
         if (it->source == input) it = captureActivationInputs.erase (it); else ++it;
+    for (auto& gate : captureActivationGates)
+        for (auto it = gate.held.begin(); it != gate.held.end();)
+            if (it->source == input) it = gate.held.erase (it); else ++it;
     releaseGoSource (input);
     for (auto& runtime : bindings)
     {
@@ -77,6 +80,9 @@ void MidiTriggerRouter::connectionChanged (uint64_t input, uint64_t connection, 
         if (it->first.source == input) it = lastObserved.erase (it); else ++it;
     if (connected) connections[input] = connection; else connections.erase (input);
     shortcuts.invalidateInputRouting();
+    // Every observed connection participates in capture release waiting, even
+    // when it did not provide the candidate. Its release can no longer be proven.
+    if (! connected) shortcuts.cancelCapture();
 }
 void MidiTriggerRouter::inputFault (uint64_t input, bool panic)
 {
@@ -100,9 +106,11 @@ void MidiTriggerRouter::inputFault (uint64_t input, bool panic)
     }
     if (panic) shortcuts.panicGestures().invalidate();
     releaseGoSource (input);
+    shortcuts.cancelCapture();
 }
 void MidiTriggerRouter::projectReplaced()
 {
+    bindings.erase (std::remove_if (bindings.begin(), bindings.end(), [] (const auto& r) { return ! r.live; }), bindings.end());
     // Preserve only physically held Notes as quarantine, including addresses that
     // may acquire a different cue/command owner in the next project. Old GO holds
     // and all CC baselines still end here; a fresh Note can fire immediately.
@@ -125,18 +133,44 @@ void MidiTriggerRouter::projectReplaced()
 void MidiTriggerRouter::captureStateChanged()
 {
     const bool active = shortcuts.isCapturing();
-    if (! active) captureActivationInputs.clear();
+    if (! active) { captureActivationInputs.clear(); captureActivationGates.clear(); }
     else if (! captureWasActive)
+    {
         for (const auto& [token, observed] : lastObserved)
         {
             const bool noteHeld = observed.event.kind == MidiTrigger::Kind::note && observed.event.noteOn && observed.event.value > 0;
-            const bool gateHeld = std::any_of (bindings.begin(), bindings.end(), [&] (const auto& runtime) { return runtime.rules.isHeld (token); });
-            if (noteHeld || gateHeld) captureActivationInputs.insert (token);
+            if (noteHeld) captureActivationInputs.insert (token);
         }
+        // Snapshot only the rules held now. An opposite gate pressing later
+        // must not inherit another rule's release wait on the same CC address.
+        for (const auto& runtime : bindings)
+            if (runtime.binding.trigger.kind == MidiTrigger::Kind::cc && runtime.binding.trigger.behavior == MidiTrigger::Behavior::gate)
+            {
+                CaptureGate gate { runtime.binding.trigger, {} };
+                for (const auto& [token, observed] : lastObserved)
+                {
+                    juce::ignoreUnused (observed);
+                    if (runtime.rules.isHeld (token) && (runtime.live || runtime.retiredGoHolds.count (token) != 0)) gate.held.insert (token);
+                }
+                if (! gate.held.empty()) captureActivationGates.push_back (std::move (gate));
+            }
+    }
     captureWasActive = active;
     for (auto& runtime : bindings) runtime.rules.quarantine (callbacks.clockMs());
 }
 void MidiTriggerRouter::shortcutsChanged() { refreshBindings(); captureStateChanged(); }
+void MidiTriggerRouter::discardRetiredBindings()
+{
+    // A released retired GO gate still needs to observe future ports/edges for
+    // restoration. Keep its bounded per-address hysteresis until project replace;
+    // retiredGoHolds alone decides whether it may retain an existing GO token.
+    bindings.erase (std::remove_if (bindings.begin(), bindings.end(), [] (const auto& r)
+    {
+        const bool restoreGate = r.binding.commandID == CommandIDs::go && r.binding.trigger.kind == MidiTrigger::Kind::cc
+            && r.binding.trigger.behavior == MidiTrigger::Behavior::gate;
+        return ! r.live && ! restoreGate && (r.binding.commandID != CommandIDs::go || ! r.rules.anyHeld());
+    }), bindings.end());
+}
 void MidiTriggerRouter::synchroniseObserved (Runtime& runtime)
 {
     for (const auto& [token, observed] : lastObserved)
@@ -194,10 +228,7 @@ void MidiTriggerRouter::refreshBindings()
             found->binding = b;
         }
     }
-    // Keep retired observations while physically held, even if their old GO
-    // tokens have all released. Restoration needs the full hysteresis state.
-    bindings.erase (std::remove_if (bindings.begin(), bindings.end(), [] (const auto& r)
-        { return ! r.live && (r.binding.commandID != CommandIDs::go || ! r.rules.anyHeld()); }), bindings.end());
+    discardRetiredBindings();
     shortcuts.invalidateInputRouting();
 }
 bool MidiTriggerRouter::route (const MidiInputEvent& event, const juce::String& identifier, bool execute)
@@ -211,7 +242,8 @@ bool MidiTriggerRouter::route (const MidiInputEvent& event, const juce::String& 
         lastObserved[event.token()] = { event, identifier };
     const auto generation = shortcuts.getInputGeneration();
     const bool current = event.routing == generation;
-    const bool capturePrepared = captureActivationInputs.empty();
+    const bool capturePrepared = captureActivationInputs.empty()
+        && std::all_of (captureActivationGates.begin(), captureActivationGates.end(), [] (const auto& gate) { return gate.held.empty(); });
     auto context = callbacks.context ? callbacks.context() : MidiRoutingContext();
     context.allowBackgroundPlayback = shortcuts.getMidiInputSettings().allowBackgroundPlayback;
     context.cues = cues;
@@ -222,7 +254,7 @@ bool MidiTriggerRouter::route (const MidiInputEvent& event, const juce::String& 
     };
     struct Pending { MidiBinding binding; MidiOwner owner; MidiTriggerRules::Transition transition; };
     std::vector<Pending> pending;
-    bool ready = false, goHeld = false, goEligible = false, gateHeld = false;
+    bool ready = false, goHeld = false, goEligible = false;
     for (auto& runtime : bindings)
     {
         const auto& b = runtime.binding;
@@ -233,7 +265,6 @@ bool MidiTriggerRouter::route (const MidiInputEvent& event, const juce::String& 
         const bool allowed = execute && current && runtime.live && ! shortcuts.isCapturing() && (panic || event.ordinaryAllowed);
         if (! execute || ! current || (! panic && ! event.ordinaryAllowed)) runtime.rules.quarantine (event.observedTimeMs);
         const auto transition = runtime.rules.observe (b.trigger, event, allowed);
-        gateHeld |= transition.held;
         ready |= runtime.live && transition.ready;
         if (b.commandID == CommandIDs::go)
         {
@@ -279,10 +310,13 @@ bool MidiTriggerRouter::route (const MidiInputEvent& event, const juce::String& 
         }
     }
     if (goPulse) releaseGo (goToken, &event);
-    const bool physicallyHeld = event.kind == MidiTrigger::Kind::note ? event.noteOn && event.value > 0 : gateHeld;
-    if (! physicallyHeld) captureActivationInputs.erase (event.token());
+    if (event.kind == MidiTrigger::Kind::note && (! event.noteOn || event.value == 0)) captureActivationInputs.erase (event.token());
+    if (event.kind == MidiTrigger::Kind::cc && event.ordinaryStateValid)
+        for (auto& gate : captureActivationGates)
+            if (gate.trigger.edge == MidiTrigger::Edge::rising ? event.value <= gate.trigger.lowThreshold : event.value >= gate.trigger.highThreshold)
+                gate.held.erase (event.token());
     if (current && shortcuts.isCapturing() && capturePrepared) shortcuts.deliverCaptureMidi (event, identifier);
-    bindings.erase (std::remove_if (bindings.begin(), bindings.end(), [] (const auto& r) { return ! r.live && ! r.rules.anyHeld(); }), bindings.end());
+    discardRetiredBindings();
     return ready;
 }
 }

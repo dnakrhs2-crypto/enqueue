@@ -37,7 +37,9 @@ private:
         std::set<InputToken> retiredGoHolds; // only holds owned when this binding was removed
     };
     struct Observed { MidiInputEvent event; juce::String identifier; bool carryGoHold = true; };
+    struct CaptureGate { MidiTrigger trigger; std::set<InputToken> held; };
     void synchroniseObserved (Runtime&);
+    void discardRetiredBindings();
     void shortcutsChanged() override;
     void captureStateChanged() override;
     void documentStateChanged() override {}
@@ -55,6 +57,7 @@ private:
     std::map<uint64_t, uint64_t> connections;
     std::map<InputToken, Observed> lastObserved;
     std::set<InputToken> captureActivationInputs;
+    std::vector<CaptureGate> captureActivationGates;
     bool captureWasActive = false;
     bool rebuilding = false;
 };

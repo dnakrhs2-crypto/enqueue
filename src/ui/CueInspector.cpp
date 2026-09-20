@@ -98,6 +98,14 @@ public:
         refresh(); resized();
     }
     void cancelCapture() { hotkeyButton.cancelCapture(); if (midi != nullptr) midi->cancelCapture(); }
+    void detachShortcutService()
+    {
+        hotkeyButton.detachService();
+        hotkeyButton.onMidiChanged = {};
+        hotkeyButton.validateMidi = {};
+        midi.reset();
+        shortcuts = nullptr;
+    }
 
     BasicsPanel (ProjectDocument& doc, AudioEngine& e, AppSettings& s)
         : document (doc), cues (doc.cues), engine (e), settings (s)
@@ -308,6 +316,7 @@ public:
             hotkeyButton.setHotkey ({});
             hotkeyConflict.setText ({}, juce::dontSendNotification);
             gainSlider.setValue (0.0, juce::dontSendNotification);
+            resized();
             return;
         }
 
@@ -346,6 +355,7 @@ public:
         }
         hotkeyConflict.setText (conflict, juce::dontSendNotification);
         hotkeyConflict.setTooltip (conflict);
+        resized();
         fadeOutEditor.setTooltip (ShortcutDisplay::currentKeys (shortcuts, CommandIDs::fadeOutSelected)
                                  + ko (" (페이드아웃 정지)에 걸리는 시간. 0이면 5 ms 디클릭만"));
         flagToggle.setToggleState (cue->flagged, juce::dontSendNotification);
@@ -397,18 +407,27 @@ public:
         dropArea = filePathLabel.getBounds();
 
         row = nextRow();
+        const bool compact = getWidth() < 1240;
         preLabel.setBounds (row.removeFromLeft (64));
-        preEditor.setBounds (row.removeFromLeft (110));
+        preEditor.setBounds (row.removeFromLeft (compact ? 90 : 110));
         row.removeFromLeft (8);
         postLabel.setBounds (row.removeFromLeft (76));
-        postEditor.setBounds (row.removeFromLeft (110));
+        postEditor.setBounds (row.removeFromLeft (compact ? 90 : 110));
         row.removeFromLeft (8);
         continueLabel.setBounds (row.removeFromLeft (28));
-        continueCombo.setBounds (row.removeFromLeft (150));
+        continueCombo.setBounds (row.removeFromLeft (compact ? 130 : 150));
         row.removeFromLeft (8);
         hotkeyButton.setBounds (row.removeFromLeft (120));
         row.removeFromLeft (4);
         clearHotkeyButton.setBounds (row.removeFromLeft (Palette::fieldHeight));
+        row.removeFromLeft (12);
+        if (midi != nullptr)
+        {
+            // With the app theme, a 1100px main window leaves a 1068px page.
+            // A narrow page uses the following row without enlarging the page.
+            if (getWidth() < 1068) row = nextRow();
+            midi->setBounds (row.withHeight (26));
+        }
 
         row = nextRow();
         flagToggle.setBounds (row.removeFromLeft (64));
@@ -421,8 +440,7 @@ public:
         gainLabel.setBounds (row.removeFromLeft (62));
         gainSlider.setBounds (row.removeFromLeft (juce::jmin (360, row.getWidth())));
 
-        hotkeyConflict.setBounds (area.removeFromTop (22));
-        if (midi != nullptr) { midi->setBounds (area.removeFromTop (48)); area.removeFromTop (4); }
+        hotkeyConflict.setBounds (area.removeFromTop (hotkeyConflict.getText().isEmpty() ? 0 : 22));
         notesLabel.setBounds (area.removeFromLeft (36).withHeight (Palette::fieldHeight));
         notesEditor.setBounds (area);
     }
@@ -3398,9 +3416,16 @@ void CueInspector::shortcutsChanged()
     groupPanel->refreshShortcutHint (shortcuts);
 }
 
-CueInspector::~CueInspector()
+void CueInspector::detachShortcutService()
 {
     if (shortcuts != nullptr) shortcuts->removeListener (this);
+    shortcuts = nullptr;
+    basics->detachShortcutService();
+}
+
+CueInspector::~CueInspector()
+{
+    detachShortcutService();
     cancelPendingUpdate();
     engine.getDeviceManager().removeChangeListener (this);
 
@@ -3501,7 +3526,7 @@ void CueInspector::rebuildTabs (int wanted)
 
     auto addTab = [this] (const juce::String& name, juce::Colour colour, juce::Component* panel, bool)
     {
-        const int height = panel == basics ? Palette::inspectorBasicHeight + 52
+        const int height = panel == basics ? Palette::inspectorBasicHeight
                          : panel == timeLoops || panel == curvePanel.get() ? Palette::inspectorPlotHeight : Palette::inspectorFormHeight;
         const int width = panel == curvePanel.get() || panel == fadePanel.get() ? Palette::inspectorWideWidth
                         : panel == controlPanel.get() ? Palette::inspectorControlWidth : Palette::inspectorPageWidth;

@@ -1,4 +1,5 @@
 #include "MidiTestHarness.h"
+#include "app/ShortcutDisplay.h"
 #include <thread>
 #include <chrono>
 #if JUCE_WINDOWS
@@ -27,7 +28,7 @@ public:
         expect (h.service->setMidiInputSettings (selected).wasOk());
         expect (input.devices()[0].status == MidiInputService::Status::unavailable);
         backend.ports["A"].fail = false; input.refresh();
-        expect (input.devices()[0].status == MidiInputService::Status::waiting); expectEquals (backend.ports["A"].opens, 2);
+        expect (input.devices()[0].status == MidiInputService::Status::connected); expectEquals (backend.ports["A"].opens, 2);
         for (int i = 0; i < 10; ++i) input.refresh(); expectEquals (backend.ports["A"].opens, 2);
         expectEquals (backend.ports["B"].opens, 0);
         h.service->setMidiTriggers ("transport.preview", { note (60, 1, "A") });
@@ -70,8 +71,32 @@ public:
         testTransport();
         testCaptureRace();
         testShutdown();
+        testConnectionStatus();
     }
 private:
+    void testConnectionStatus()
+    {
+        beginTest ("unmapped port connects on open; loss waits only until the next current message, independent of CC readiness");
+        Harness h; FakeDevices backend; backend.list = { { "A", "A" } };
+        MidiInputSettings selected; selected.autoUseAll = true;
+        expect (h.service->setMidiInputSettings (selected).wasOk());
+        MidiInputService input (*h.service, h.router->inputCallbacks(), backend.backend(), false);
+        expect (input.devices()[0].status == MidiInputService::Status::connected);
+        expect (! ShortcutDisplay::midiSummary (input, h.service.get()).contains (juce::String::fromUTF8 ("준비 대기")));
+        backend.send ("A", on (64)); drain (input, backend.now);
+        expect (input.devices()[0].status == MidiInputService::Status::connected);
+        expect (h.service->setMidiTriggers ("transport.preview", { cc() }).wasOk());
+        expect (h.router->bindingStatus ({ "transport.preview", cc(), CommandIDs::preview, true }).contains (juce::String::fromUTF8 ("CC 기준값 미수신")));
+        for (int i = 0; i < 8193; ++i) backend.send ("A", off (64));
+        drain (input, backend.now);
+        expect (input.devices()[0].status == MidiInputService::Status::waiting);
+        expect (ShortcutDisplay::midiSummary (input, h.service.get()).contains (juce::String::fromUTF8 ("준비 대기 1")));
+        backend.send ("A", off (64)); drain (input, backend.now);
+        expect (input.devices()[0].status == MidiInputService::Status::connected);
+        expect (! ShortcutDisplay::midiSummary (input, h.service.get()).contains (juce::String::fromUTF8 ("준비 대기")));
+        expect (h.router->bindingStatus ({ "transport.preview", cc(), CommandIDs::preview, true }).contains (juce::String::fromUTF8 ("CC 기준값 미수신")));
+        expectEquals (h.downs (CommandIDs::preview), 0);
+    }
     void testPortCapacity()
     {
         beginTest ("each port admits 8192 ordinary plus 512 panic packets; only capacity exhaustion records loss");
