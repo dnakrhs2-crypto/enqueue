@@ -661,11 +661,35 @@ ShortcutOperationResult ShortcutService::setMidiTriggers (const juce::String& id
                 list.erase (std::remove_if (list.begin(), list.end(), [&] (const auto& b)
                 { return std::any_of (unique.begin(), unique.end(), [&] (const auto& t) { return MidiTriggerRules::intersects (b, t); }); }), list.end());
     candidate.overrides[id] = std::move (unique);
+    for (const auto& trigger : candidate.overrides[id])
+        if (trigger.source != "any")
+            for (const auto* names : { &midiInputs.selected, &availableMidiDevices })
+                if (const auto found = names->find (trigger.source); found != names->end()) candidate.deviceNames[found->first] = found->second;
     if (candidate == midiProfile) return {};
     return replaceMidiProfile (std::move (candidate));
 }
 ShortcutOperationResult ShortcutService::replaceMidiProfile (MidiShortcutProfile candidate) { return commitInputs ({}, std::move (candidate), {}); }
 ShortcutOperationResult ShortcutService::setMidiInputSettings (MidiInputSettings candidate) { return commitInputs ({}, {}, std::move (candidate)); }
+
+ShortcutOperationResult ShortcutService::reconnectMidiInput (const juce::String& previous, const juce::String& identifier, const juce::String& name)
+{
+    if (previous == "any" || identifier == "any" || previous.isEmpty() || availableMidiDevices.count (identifier) == 0)
+        return failure ("MIDI input is no longer available");
+    auto midi = midiProfile;
+    for (auto& [id, triggers] : midi.overrides)
+    {
+        juce::ignoreUnused (id);
+        for (auto& trigger : triggers) if (trigger.source == previous) trigger.source = identifier;
+        MidiTriggers unique;
+        for (const auto& trigger : triggers) if (std::find (unique.begin(), unique.end(), trigger) == unique.end()) unique.push_back (trigger);
+        triggers = std::move (unique);
+    }
+    midi.deviceNames.erase (previous);
+    midi.deviceNames[identifier] = name;
+    auto inputs = midiInputs;
+    if (inputs.selected.erase (previous) != 0) inputs.selected[identifier] = name;
+    return commitInputs ({}, std::move (midi), std::move (inputs));
+}
 
 ShortcutOperationResult ShortcutService::commitInputs (std::optional<ShortcutProfile> keyboard, std::optional<MidiShortcutProfile> midi,
                                                      std::optional<MidiInputSettings> devices)
@@ -700,6 +724,17 @@ juce::String ShortcutService::exportCombinedProfile() const
 {
     auto keys = profile;
     auto midi = midiProfile;
+    for (const auto& [id, triggers] : midi.overrides)
+    {
+        juce::ignoreUnused (id);
+        for (const auto& trigger : triggers)
+            if (trigger.source != "any")
+            {
+                midi.deviceNames.try_emplace (trigger.source, trigger.source);
+                for (const auto* names : { &midiInputs.selected, &availableMidiDevices })
+                    if (const auto found = names->find (trigger.source); found != names->end()) midi.deviceNames[found->first] = found->second;
+            }
+    }
     for (const auto& [id, list] : mapping.keys) { keys.overrides[id] = list; midi.overrides.try_emplace (id); }
     juce::String xml;
     const auto r = keys.serialiseExchange (midi, xml);

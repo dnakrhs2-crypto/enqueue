@@ -619,9 +619,13 @@ juce::Result ProjectDocument::setMidiTriggers (const juce::Uuid& id, MidiTrigger
     auto* list = listContaining (id, &index);
     if (list == nullptr) return juce::Result::fail ("Unknown cue");
     const auto all = getMidiTriggers();
+    const auto previous = list->get (index).midiTriggers;
     for (const auto& trigger : triggers)
     {
         if (auto r = trigger.validate (true); r.failed()) return r;
+        // File/Undo conflicts remain stored and disabled. Removing another item
+        // must not force the user to discard an unchanged conflicting binding.
+        if (std::find (previous.begin(), previous.end(), trigger) != previous.end()) continue;
         for (const auto& other : all)
             if (other.id != id && MidiTriggerRules::intersects (trigger, other.trigger)) return juce::Result::fail ("Conflicting cue MIDI trigger");
     }

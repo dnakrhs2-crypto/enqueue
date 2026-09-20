@@ -196,6 +196,8 @@ target_sources(Enqueue PRIVATE
     src/ui/WorkspaceSettingsDialog.cpp
     src/ui/KeyCapture.cpp
     src/ui/ShortcutSettingsTab.cpp
+    src/ui/MidiInputSettingsPanel.cpp
+    src/ui/CueMidiPanel.cpp
     src/ui/FooterBar.cpp
     src/ui/ActiveCuesPanel.cpp
     src/ui/ContainerTabs.cpp

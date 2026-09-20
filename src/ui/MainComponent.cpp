@@ -281,7 +281,7 @@ MainComponent::MainComponent (AudioEngine& e, AppSettings& s, juce::ApplicationC
     midiCallbacks.requireGoKeyUp = [this] { return document.settings.requireKeyUp; };
     midiRouter = std::make_unique<MidiTriggerRouter> (*shortcuts, commands, document, std::move (midiCallbacks));
     midiInput = std::make_unique<MidiInputService> (*shortcuts, midiRouter->inputCallbacks());
-    inspector.setShortcutService (*shortcuts);
+    inspector.setShortcutService (*shortcuts, midiInput.get(), midiRouter.get());
     transport.setShortcutService (*shortcuts);
     footer.setShowMode (showMode, shortcuts.get());
     shortcuts->addListener (this);
@@ -1120,7 +1120,7 @@ bool MainComponent::perform (const InvocationInfo& info)
             break;
 
         case CommandIDs::workspaceSettings:
-            WorkspaceSettingsDialog::show (document, *shortcuts, this);
+            WorkspaceSettingsDialog::show (document, *shortcuts, this, midiInput.get(), midiRouter.get());
             break;
 
         case CommandIDs::uiScale100:
@@ -3139,6 +3139,16 @@ void MainComponent::installEscapePolicy (juce::Component& root)
 
 void MainComponent::timerCallback()
 {
+    if (midiInput != nullptr && midiRouter != nullptr)
+    {
+        auto summary = ShortcutDisplay::midiSummary (*midiInput, shortcuts.get());
+        const int waiting = midiRouter->waitingBindings();
+        if (waiting > 0) summary += ko (" · 규칙 준비 대기 ") + juce::String (waiting);
+        const auto counts = midiInput->counters();
+        footer.setMidiStatus (summary, summary + ko ("\nCC는 연결 뒤 첫 값은 기준값이라 실행되지 않음. 페달·버튼은 노트 권장.")
+            + ko ("\n과부하 누계: 손실 ") + juce::String (counts.dropped) + ko (" / 패닉 손실 ") + juce::String (counts.panicDropped)
+            + ko (" / 100ms 초과 ") + juce::String (counts.stale), midiInput->hasInputFault() || waiting > 0);
+    }
     auto& meter = engine.getLoudnessMeter();
     meter.poll();
     const auto& stats = meter.getStats();

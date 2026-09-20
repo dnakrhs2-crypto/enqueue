@@ -11,6 +11,7 @@
 #include "ui/LevelMatrixComponent.h"
 #include "ui/PluginWindows.h"
 #include "ui/TimeLoopsPanel.h"
+#include "app/MidiTriggerRouter.h"
 
 #include <juce_audio_utils/juce_audio_utils.h>
 #include <juce_gui_basics/juce_gui_basics.h>
@@ -36,7 +37,7 @@ class CueInspector : public juce::Component,
 public:
     CueInspector (ProjectDocument& document, AudioEngine& engine, AppSettings& settings, PluginWindowManager& windows);
     ~CueInspector() override;
-    void setShortcutService (ShortcutService&);
+    void setShortcutService (ShortcutService&, MidiInputService* = nullptr, MidiTriggerRouter* = nullptr);
 
     /** Rebuilds the plugin strip (after a project load / duplicate / undo). */
     void refreshPlugins();

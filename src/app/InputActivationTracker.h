@@ -13,6 +13,7 @@ struct InputToken
     uint64_t source = 0, connection = 0;
     int control = 0;
     bool operator< (const InputToken& b) const { return std::tie (kind, source, connection, control) < std::tie (b.kind, b.source, b.connection, b.control); }
+    bool operator== (const InputToken& b) const { return std::tie (kind, source, connection, control) == std::tie (b.kind, b.source, b.connection, b.control); }
 };
 struct InputInvocation
 {

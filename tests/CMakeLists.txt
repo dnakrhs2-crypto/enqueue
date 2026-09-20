@@ -9,8 +9,11 @@ target_sources(EnqueueTests PRIVATE
     MidiRoutingTests.cpp
     MidiGoTests.cpp
     MidiDeviceTests.cpp
+    MidiUiTests.cpp
     ../src/ui/KeyCapture.cpp
     ../src/ui/ShortcutSettingsTab.cpp
+    ../src/ui/MidiInputSettingsPanel.cpp
+    ../src/ui/CueMidiPanel.cpp
     ../src/app/AppSettings.cpp
     ../src/ui/CueTable.cpp
     ../src/ui/LevelMatrixComponent.cpp

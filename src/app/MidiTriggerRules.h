@@ -40,6 +40,8 @@ public:
         return found != states.end() && found->second.down;
     }
     bool anyHeld() const { return std::any_of (states.begin(), states.end(), [] (const auto& pair) { return pair.second.down; }); }
+    enum class Readiness { ready, baseline, release, motion };
+    Readiness readiness (const MidiTrigger&, double nowMs) const;
     void clear() { states.clear(); }
 private:
     struct State

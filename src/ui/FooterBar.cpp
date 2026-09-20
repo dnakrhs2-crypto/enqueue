@@ -90,7 +90,9 @@ FooterBar::FooterBar()
     audioStatus.setFont (Palette::monoFont (Palette::headerSize));
     audioStatus.setJustificationType (juce::Justification::centredRight);
     addAndMakeVisible (audioStatus);
-    for (auto* label : { &countLabel, &modeHint, &audioStatus })
+    midiStatus.setFont (Palette::font (Palette::fileSize));
+    addAndMakeVisible (midiStatus);
+    for (auto* label : { &countLabel, &modeHint, &audioStatus, &midiStatus })
     {
         label->setBorderSize (juce::BorderSize<int> (0));
         label->setMinimumHorizontalScale (1.0f);
@@ -162,7 +164,18 @@ void FooterBar::resized()
     const int hintWidth = juce::GlyphArrangement::getStringWidthInt (modeHint.getFont(), modeHint.getText());
     modeHint.setBounds (area.removeFromLeft (juce::jmin (hintWidth, area.getWidth() / 2)));
     area.removeFromLeft (juce::jmin (Palette::gap, area.getWidth()));
+    const int midiWidth = juce::GlyphArrangement::getStringWidthInt (midiStatus.getFont(), midiStatus.getText()) + 8;
+    midiStatus.setBounds (area.removeFromLeft (juce::jmin (midiWidth, area.getWidth() / 2)));
     audioStatus.setBounds (area);
+}
+
+void FooterBar::setMidiStatus (const juce::String& text, const juce::String& tooltip, bool warning)
+{
+    if (midiStatus.getText() == text && midiStatus.getTooltip() == tooltip) return;
+    midiStatus.setText (text, juce::dontSendNotification);
+    midiStatus.setTooltip (tooltip);
+    midiStatus.setColour (juce::Label::textColourId, warning ? Palette::warn : Palette::muted);
+    resized();
 }
 
 void FooterBar::paint (juce::Graphics& g)

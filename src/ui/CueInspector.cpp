@@ -1,4 +1,5 @@
 #include "ui/MidiModalScope.h"
+#include "ui/CueMidiPanel.h"
 #include "model/Hotkeys.h"
 #include "ui/CueInspector.h"
 #include "ui/ShortcutRouter.h"
@@ -85,8 +86,18 @@ class CueInspector::BasicsPanel : public juce::Component,
                                   public juce::FileDragAndDropTarget
 {
 public:
-    void setShortcutService (ShortcutService& service) { shortcuts = &service; hotkeyButton.setService (service); refresh(); }
-    void cancelCapture() { hotkeyButton.cancelCapture(); }
+    void setShortcutService (ShortcutService& service, MidiInputService* input, MidiTriggerRouter* router)
+    {
+        shortcuts = &service; hotkeyButton.setService (service);
+        midi = std::make_unique<CueMidiPanel> (document, service, input, router);
+        midi->validateKey = hotkeyButton.validate;
+        midi->onHotkeyChanged = hotkeyButton.onHotkeyChanged;
+        hotkeyButton.validateMidi = [this] (const MidiTrigger&) { return KeyCapture::Decision { true, ko ("MIDI는 큐 목록에 추가됩니다. 기존 키 핫키는 유지합니다.") }; };
+        hotkeyButton.onMidiChanged = [this] (const MidiTrigger& trigger) { return midi->apply (-1, trigger); };
+        addAndMakeVisible (*midi);
+        refresh(); resized();
+    }
+    void cancelCapture() { hotkeyButton.cancelCapture(); if (midi != nullptr) midi->cancelCapture(); }
 
     BasicsPanel (ProjectDocument& doc, AudioEngine& e, AppSettings& s)
         : document (doc), cues (doc.cues), engine (e), settings (s)
@@ -276,6 +287,7 @@ public:
         const juce::ScopedValueSetter<bool> guard (refreshing, true);
         const auto* cue = cues.getSelected();
         const bool enabled = cue != nullptr && editable;
+        if (midi != nullptr) { midi->setEnabled (enabled); midi->setCue (cue != nullptr ? cue->id : juce::Uuid::null()); }
 
         for (auto* c : std::initializer_list<juce::Component*> { &numberEditor, &nameEditor, &colourCombo, &secondColourToggle, &secondColourCombo,
                                                                  &preEditor, &postEditor, &continueCombo, &hotkeyButton, &clearHotkeyButton,
@@ -410,6 +422,7 @@ public:
         gainSlider.setBounds (row.removeFromLeft (juce::jmin (360, row.getWidth())));
 
         hotkeyConflict.setBounds (area.removeFromTop (22));
+        if (midi != nullptr) { midi->setBounds (area.removeFromTop (48)); area.removeFromTop (4); }
         notesLabel.setBounds (area.removeFromLeft (36).withHeight (Palette::fieldHeight));
         notesEditor.setBounds (area);
     }
@@ -683,6 +696,7 @@ private:
     juce::ComboBox colourCombo, secondColourCombo, continueCombo;
     juce::ToggleButton secondColourToggle, flagToggle, armedToggle, autoLoadToggle;
     KeyCaptureButton hotkeyButton;
+    std::unique_ptr<CueMidiPanel> midi;
     ShortcutService* shortcuts = nullptr;
     juce::Label hotkeyConflict;
     juce::TextButton clearHotkeyButton, browseButton;
@@ -3368,12 +3382,12 @@ CueInspector::CueInspector (ProjectDocument& doc, AudioEngine& e, AppSettings& s
     refresh();
 }
 
-void CueInspector::setShortcutService (ShortcutService& service)
+void CueInspector::setShortcutService (ShortcutService& service, MidiInputService* input, MidiTriggerRouter* router)
 {
     if (shortcuts != nullptr) shortcuts->removeListener (this);
     shortcuts = &service;
     shortcuts->addListener (this);
-    basics->setShortcutService (service);
+    basics->setShortcutService (service, input, router);
     shortcutsChanged();
 }
 
@@ -3487,7 +3501,7 @@ void CueInspector::rebuildTabs (int wanted)
 
     auto addTab = [this] (const juce::String& name, juce::Colour colour, juce::Component* panel, bool)
     {
-        const int height = panel == basics ? Palette::inspectorBasicHeight
+        const int height = panel == basics ? Palette::inspectorBasicHeight + 52
                          : panel == timeLoops || panel == curvePanel.get() ? Palette::inspectorPlotHeight : Palette::inspectorFormHeight;
         const int width = panel == curvePanel.get() || panel == fadePanel.get() ? Palette::inspectorWideWidth
                         : panel == controlPanel.get() ? Palette::inspectorControlWidth : Palette::inspectorPageWidth;

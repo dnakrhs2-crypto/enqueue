@@ -418,7 +418,7 @@ public:
             expect (! Model::moveRemovesLastPanic (*h.service, "transport.go", { K ('-') }));
         }
 
-        beginTest ("logical layout reserves footer, selection and eight rows at each supported scale");
+        beginTest ("logical layout reserves footer, selection and four keyboard/MIDI rows at each supported scale");
         {
             Harness h;
             ProjectDocument document;
@@ -435,8 +435,8 @@ public:
                         ++footers;
                     if (auto* table = dynamic_cast<juce::ListBox*> (child))
                     {
-                        expectEquals (table->getRowHeight(), 28);
-                        expectEquals ((table->getHeight() - 2) / table->getRowHeight(), 8);
+                        expectEquals (table->getRowHeight(), 48);
+                        expectEquals ((table->getHeight() - 2) / table->getRowHeight(), 4);
                     }
                 }
                 expectEquals (footers, 3);

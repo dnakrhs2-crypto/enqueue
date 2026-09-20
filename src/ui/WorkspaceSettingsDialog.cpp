@@ -419,18 +419,18 @@ namespace
     class Content : public juce::Component, private ShortcutService::Listener
     {
     public:
-        Content (ProjectDocument& document, ShortcutService& s) : service (s)
+        Content (ProjectDocument& document, ShortcutService& s, MidiInputService* input, MidiTriggerRouter* router) : service (s)
         {
             setWantsKeyboardFocus (true);   // a tab switched by mouse leaves the focus here, not in the new tab's first field (its text selected)
             tabs.setTabBarDepth (Palette::tabBarHeight);
             tabs.setOutline (0);
             general = new GeneralTab (document);
             audio = new AudioTab (document);
-            shortcuts = new ShortcutSettingsTab (service, document);
+            shortcuts = new ShortcutSettingsTab (service, document, input, router);
             tabs.addTab (ko ("일반"), Palette::panel, general, true);
             tabs.addTab (ko ("파일"), Palette::panel, new FilesTab (document), true);
             tabs.addTab (ko ("오디오"), Palette::panel, audio, true);
-            tabs.addTab (ko ("단축키"), Palette::panel, shortcuts, true);
+            tabs.addTab (ko ("단축키·MIDI"), Palette::panel, shortcuts, true);
             addAndMakeVisible (tabs);
             setSize (Palette::settingsWidth, Palette::settingsHeight);
             service.addListener (this);
@@ -466,7 +466,7 @@ namespace
     };
 }
 
-void show (ProjectDocument& document, ShortcutService& service, juce::Component* centreAround)
+void show (ProjectDocument& document, ShortcutService& service, juce::Component* centreAround, MidiInputService* input, MidiTriggerRouter* router)
 {
     if (service.isEditingLocked()) return;
     if (dialog != nullptr)
@@ -477,7 +477,7 @@ void show (ProjectDocument& document, ShortcutService& service, juce::Component*
 
     juce::DialogWindow::LaunchOptions options;
     options.dialogTitle = ko ("프로젝트 설정");
-    options.content.setOwned (new Content (document, service));
+    options.content.setOwned (new Content (document, service, input, router));
     options.componentToCentreAround = centreAround;
     options.dialogBackgroundColour = Palette::background;
     options.escapeKeyTriggersCloseButton = true;

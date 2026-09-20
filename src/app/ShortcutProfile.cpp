@@ -333,10 +333,24 @@ ShortcutExchangeParseResult ShortcutProfile::parseExchange (const juce::String& 
     keyboard.setAttribute ("schemaVersion", 1);
     keyboard.setAttribute ("platform", "windows");
     midi.setAttribute ("schemaVersion", 1);
+    std::map<juce::String, juce::String> deviceRefs;
+    for (const auto* device : xml->getChildIterator())
+        if (device->hasTagName ("DEVICE"))
+        {
+            auto copy = std::make_unique<juce::XmlElement> (*device);
+            if (copy->hasAttribute ("ref"))
+            {
+                const auto ref = copy->getStringAttribute ("ref");
+                if (! input_xml::id (ref) || ! deviceRefs.emplace (ref, copy->getStringAttribute ("identifier")).second)
+                    return fail ("Invalid/duplicate MIDI device reference");
+                copy->removeAttribute ("ref");
+            }
+            midi.addChildElement (copy.release());
+        }
     std::set<juce::String> ids;
     for (const auto* x : xml->getChildIterator())
     {
-        if (x->hasTagName ("DEVICE")) { midi.addChildElement (new juce::XmlElement (*x)); continue; }
+        if (x->hasTagName ("DEVICE")) continue;
         const auto id = x->getStringAttribute ("id");
         if (! x->hasTagName ("ACTION") || ! input_xml::attributes (*x, { "id" }) || ! input_xml::id (id) || ! ids.insert (id).second)
             return fail ("Invalid/duplicate exchange action");
@@ -349,7 +363,18 @@ ShortcutExchangeParseResult ShortcutProfile::parseExchange (const juce::String& 
             (k ? sawKeyboard : sawMidi) = true;
             auto* action = (k ? keyboard : midi).createNewChildElement ("ACTION");
             action->setAttribute ("id", id);
-            for (const auto* binding : section->getChildIterator()) action->addChildElement (new juce::XmlElement (*binding));
+            for (const auto* binding : section->getChildIterator())
+            {
+                auto copy = std::make_unique<juce::XmlElement> (*binding);
+                if (! k && copy->hasTagName ("TRIGGER") && copy->hasAttribute ("deviceRef"))
+                {
+                    const auto found = deviceRefs.find (copy->getStringAttribute ("deviceRef"));
+                    if (copy->getStringAttribute ("source") != "device" || found == deviceRefs.end()) return fail ("Unknown MIDI device reference");
+                    copy->removeAttribute ("deviceRef");
+                    copy->setAttribute ("source", found->second);
+                }
+                action->addChildElement (copy.release());
+            }
         }
         if (! sawKeyboard && ! sawMidi) return fail ("Exchange action needs KEYBOARD or MIDI");
     }
@@ -367,9 +392,17 @@ juce::Result ShortcutProfile::serialiseExchange (const MidiShortcutProfile& midi
     juce::XmlElement xml ("ENQUEUE_SHORTCUTS");
     xml.setAttribute ("schemaVersion", 2);
     xml.setAttribute ("platform", "windows");
-    for (const auto& [id, name] : midi.deviceNames)
+    auto names = midi.deviceNames;
+    for (const auto& p : midi.overrides)
+        for (const auto& trigger : p.second)
+            if (trigger.source != "any") names.try_emplace (trigger.source, trigger.source);
+    std::map<juce::String, juce::String> refs;
+    for (const auto& [id, name] : names)
     {
+        const auto ref = "device" + juce::String (static_cast<int> (refs.size()) + 1);
+        refs[id] = ref;
         auto* device = xml.createNewChildElement ("DEVICE");
+        device->setAttribute ("ref", ref);
         device->setAttribute ("identifier", id);
         device->setAttribute ("name", name);
     }
@@ -388,7 +421,12 @@ juce::Result ShortcutProfile::serialiseExchange (const MidiShortcutProfile& midi
         if (const auto it = midi.overrides.find (id); it != midi.overrides.end())
         {
             auto* triggers = action->createNewChildElement ("MIDI");
-            for (const auto& t : it->second) triggers->addChildElement (t.toXml().release());
+            for (const auto& t : it->second)
+            {
+                auto element = t.toXml();
+                if (t.source != "any") { element->setAttribute ("source", "device"); element->setAttribute ("deviceRef", refs.at (t.source)); }
+                triggers->addChildElement (element.release());
+            }
         }
     }
     output = xml.toString();

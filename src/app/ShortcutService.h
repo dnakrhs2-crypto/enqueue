@@ -165,6 +165,9 @@ public:
     ShortcutOperationResult setMidiTriggers (const juce::String&, MidiTriggers, ConflictPolicy = ConflictPolicy::reject);
     ShortcutOperationResult replaceMidiProfile (MidiShortcutProfile);
     ShortcutOperationResult setMidiInputSettings (MidiInputSettings);
+    ShortcutOperationResult reconnectMidiInput (const juce::String& previous, const juce::String& identifier, const juce::String& name);
+    void setAvailableMidiDevices (std::map<juce::String, juce::String> names) { availableMidiDevices = std::move (names); }
+    const std::map<juce::String, juce::String>& getAvailableMidiDevices() const { return availableMidiDevices; }
     juce::String exportCombinedProfile() const; // v2; exportProfile() remains the explicit keyboard-only v1 API
 
     /** Message-thread capture ownership. A stale widget cannot end another widget's
@@ -212,6 +215,7 @@ private:
     ShortcutMappingResult mapping;
     MidiShortcutProfile midiProfile;
     MidiInputSettings midiInputs;
+    std::map<juce::String, juce::String> availableMidiDevices;
     InputActivationTracker activationTracker;
     PanicGestureGate panicGate;
     const InputInvocation* invocation = nullptr;

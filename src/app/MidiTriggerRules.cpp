@@ -90,4 +90,16 @@ void MidiTriggerRules::forgetInput (uint64_t input)
     for (auto i = states.begin(); i != states.end();)
         if (i->first.source == input) i = states.erase (i); else ++i;
 }
+MidiTriggerRules::Readiness MidiTriggerRules::readiness (const MidiTrigger& trigger, double nowMs) const
+{
+    bool ready = trigger.kind == MidiTrigger::Kind::note;
+    for (const auto& [token, state] : states)
+    {
+        juce::ignoreUnused (token);
+        if (state.quarantined && ! state.pulse) return Readiness::release;
+        if (state.quarantined && state.pulse && nowMs - state.lastChange < 200.0) return Readiness::motion;
+        ready |= state.ready;
+    }
+    return ready ? Readiness::ready : Readiness::baseline;
+}
 }

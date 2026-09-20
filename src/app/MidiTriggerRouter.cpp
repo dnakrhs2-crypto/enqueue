@@ -24,6 +24,23 @@ MidiInputService::Callbacks MidiTriggerRouter::inputCallbacks()
              [this] (uint64_t input, uint64_t connection, bool connected) { connectionChanged (input, connection, connected); },
              [this] (uint64_t input, bool panic) { inputFault (input, panic); }, {} };
 }
+juce::String MidiTriggerRouter::bindingStatus (const MidiBinding& binding) const
+{
+    for (const auto& runtime : bindings)
+        if (runtime.live && runtime.binding.id == binding.id && runtime.binding.trigger == binding.trigger)
+        {
+            using R = MidiTriggerRules::Readiness;
+            const auto state = runtime.rules.readiness (binding.trigger, callbacks.clockMs());
+            return juce::String::fromUTF8 (state == R::motion ? "움직임 종료 대기" : state == R::release ? "준비 대기: 입력을 놓으세요"
+                : state == R::baseline ? "준비 대기: CC 기준값 미수신" : "실행 가능");
+        }
+    return {};
+}
+int MidiTriggerRouter::waitingBindings() const
+{
+    return static_cast<int> (std::count_if (bindings.begin(), bindings.end(), [this] (const auto& runtime)
+        { return runtime.live && runtime.rules.readiness (runtime.binding.trigger, callbacks.clockMs()) != MidiTriggerRules::Readiness::ready; }));
+}
 void MidiTriggerRouter::releaseGo (const InputToken& token, const MidiInputEvent* e)
 {
     const bool wasHeld = shortcuts.activations().anyHeld();
@@ -47,6 +64,8 @@ void MidiTriggerRouter::releaseGoSource (uint64_t input)
 }
 void MidiTriggerRouter::connectionChanged (uint64_t input, uint64_t connection, bool connected)
 {
+    for (auto it = captureActivationInputs.begin(); it != captureActivationInputs.end();)
+        if (it->source == input) it = captureActivationInputs.erase (it); else ++it;
     releaseGoSource (input);
     for (auto& runtime : bindings) runtime.rules.forgetInput (input);
     for (auto it = lastObserved.begin(); it != lastObserved.end();)
@@ -94,6 +113,16 @@ void MidiTriggerRouter::projectReplaced()
 }
 void MidiTriggerRouter::captureStateChanged()
 {
+    const bool active = shortcuts.isCapturing();
+    if (! active) captureActivationInputs.clear();
+    else if (! captureWasActive)
+        for (const auto& [token, observed] : lastObserved)
+        {
+            const bool noteHeld = observed.event.kind == MidiTrigger::Kind::note && observed.event.noteOn && observed.event.value > 0;
+            const bool gateHeld = std::any_of (bindings.begin(), bindings.end(), [&] (const auto& runtime) { return runtime.rules.isHeld (token); });
+            if (noteHeld || gateHeld) captureActivationInputs.insert (token);
+        }
+    captureWasActive = active;
     for (auto& runtime : bindings) runtime.rules.quarantine (callbacks.clockMs());
 }
 void MidiTriggerRouter::shortcutsChanged() { refreshBindings(); captureStateChanged(); }
@@ -160,6 +189,7 @@ bool MidiTriggerRouter::route (const MidiInputEvent& event, const juce::String& 
         lastObserved[event.token()] = { event, identifier };
     const auto generation = shortcuts.getInputGeneration();
     const bool current = event.routing == generation;
+    const bool capturePrepared = captureActivationInputs.empty();
     auto context = callbacks.context ? callbacks.context() : MidiRoutingContext();
     context.allowBackgroundPlayback = shortcuts.getMidiInputSettings().allowBackgroundPlayback;
     context.cues = cues;
@@ -170,7 +200,7 @@ bool MidiTriggerRouter::route (const MidiInputEvent& event, const juce::String& 
     };
     struct Pending { MidiBinding binding; MidiOwner owner; MidiTriggerRules::Transition transition; };
     std::vector<Pending> pending;
-    bool ready = false, goHeld = false, goEligible = false;
+    bool ready = false, goHeld = false, goEligible = false, gateHeld = false;
     for (auto& runtime : bindings)
     {
         const auto& b = runtime.binding;
@@ -184,6 +214,7 @@ bool MidiTriggerRouter::route (const MidiInputEvent& event, const juce::String& 
         const bool allowed = execute && current && runtime.live && ! shortcuts.isCapturing() && (panic || event.ordinaryAllowed);
         if (! execute || ! current || (! panic && ! event.ordinaryAllowed)) runtime.rules.quarantine (event.observedTimeMs);
         const auto transition = runtime.rules.observe (b.trigger, event, allowed);
+        gateHeld |= transition.held;
         ready |= runtime.live && transition.ready;
         if (b.commandID == CommandIDs::go)
         {
@@ -226,7 +257,9 @@ bool MidiTriggerRouter::route (const MidiInputEvent& event, const juce::String& 
         }
     }
     if (goPulse) releaseGo (goToken, &event);
-    if (current && shortcuts.isCapturing()) shortcuts.deliverCaptureMidi (event, identifier);
+    const bool physicallyHeld = event.kind == MidiTrigger::Kind::note ? event.noteOn && event.value > 0 : gateHeld;
+    if (! physicallyHeld) captureActivationInputs.erase (event.token());
+    if (current && shortcuts.isCapturing() && capturePrepared) shortcuts.deliverCaptureMidi (event, identifier);
     bindings.erase (std::remove_if (bindings.begin(), bindings.end(), [] (const auto& r) { return ! r.live && ! r.rules.anyHeld(); }), bindings.end());
     return ready;
 }

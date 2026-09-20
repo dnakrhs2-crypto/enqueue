@@ -62,6 +62,7 @@ public:
         juce::String identifier, name;
         Status status = Status::notSelected;
         uint64_t input = 0, connection = 0;
+        bool overloaded = false; // diagnostic for this connection; does not gate routing
     };
     struct Counters
     {

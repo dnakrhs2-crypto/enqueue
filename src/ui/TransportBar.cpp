@@ -452,7 +452,7 @@ void TransportBar::setPanicSeconds (double seconds)
 {
     panicSeconds = seconds;
     panicButton.detail = secondsLabel (seconds);
-    panicButton.setTooltip (ko ("전체 페이드 정지 (") + ShortcutDisplay::currentKeys (shortcuts, CommandIDs::panicAll) + ") " + panicButton.detail);
+    panicButton.setTooltip (ko ("전체 페이드 정지 (") + ShortcutDisplay::currentInputs (shortcuts, CommandIDs::panicAll) + ") " + panicButton.detail);
     panicButton.repaint();
 }
 
@@ -460,7 +460,7 @@ void TransportBar::setFadeOutSeconds (double seconds)
 {
     fadeOutSeconds = seconds;
     fadeOutButton.detail = seconds > 0.0 ? secondsLabel (seconds) : ko ("큐별");
-    fadeOutButton.setTooltip (ko ("페이드아웃 (") + ShortcutDisplay::currentKeys (shortcuts, CommandIDs::fadeOutSelected) + "): "
+    fadeOutButton.setTooltip (ko ("페이드아웃 (") + ShortcutDisplay::currentInputs (shortcuts, CommandIDs::fadeOutSelected) + "): "
                              + fadeOutButton.detail + ko (" — 톱니바퀴에서 변경"));
     fadeOutButton.repaint();
 }
@@ -470,10 +470,10 @@ void TransportBar::refreshShortcutHints()
     pauseButton.key = ShortcutDisplay::currentKeys (shortcuts, CommandIDs::pauseToggle, 1, false);
     fadeOutButton.key = ShortcutDisplay::currentKeys (shortcuts, CommandIDs::fadeOutSelected, 1, false);
     panicButton.key = ShortcutDisplay::currentKeys (shortcuts, CommandIDs::panicAll, 1, false);
-    pauseButton.setTooltip (ko ("일시정지 / 재개 (") + ShortcutDisplay::currentKeys (shortcuts, CommandIDs::pauseToggle) + ")");
-    goButton.setTooltip ((auditionMode ? ko ("GO (오디션) · ") : ko ("GO · ")) + ShortcutDisplay::currentKeys (shortcuts, CommandIDs::go));
-    panicSettingsButton.setTooltip (ko ("페이드 시간 설정: 전체 페이드 정지 (") + ShortcutDisplay::currentKeys (shortcuts, CommandIDs::panicAll)
-        + ko (") · 페이드아웃 (") + ShortcutDisplay::currentKeys (shortcuts, CommandIDs::fadeOutSelected) + ")");
+    pauseButton.setTooltip (ko ("일시정지 / 재개 (") + ShortcutDisplay::currentInputs (shortcuts, CommandIDs::pauseToggle) + ")");
+    goButton.setTooltip ((auditionMode ? ko ("GO (오디션) · ") : ko ("GO · ")) + ShortcutDisplay::currentInputs (shortcuts, CommandIDs::go));
+    panicSettingsButton.setTooltip (ko ("페이드 시간 설정: 전체 페이드 정지 (") + ShortcutDisplay::currentInputs (shortcuts, CommandIDs::panicAll)
+        + ko (") · 페이드아웃 (") + ShortcutDisplay::currentInputs (shortcuts, CommandIDs::fadeOutSelected) + ")");
     setPanicSeconds (panicSeconds);
     setFadeOutSeconds (fadeOutSeconds);
     repaint();

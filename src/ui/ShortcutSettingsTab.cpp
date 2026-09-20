@@ -64,13 +64,28 @@ Issues inspect (const ShortcutService& service, const juce::String& action, cons
     return issues;
 }
 
-std::vector<Row> rows (const ShortcutService& service, const Cues& cues)
+std::vector<Row> rows (const ShortcutService& service, const Cues& cues, const std::vector<MidiInputService::Device>& devices, const std::vector<MidiBinding>& midiCues, const MidiTriggerRouter* router)
 {
     std::vector<Row> result;
     for (const auto& entry : ShortcutCatalog::get().getCommands())
     {
         Row row { entry.id, entry.name, entry.description, ShortcutCatalog::scopeLabel (entry.scope), categoryFor (entry),
-                  service.getKeys (entry.id), service.getProfile().overrides.count (entry.id) != 0, {}, {} };
+                  service.getKeys (entry.id), service.getProfile().overrides.count (entry.id) != 0, {}, {}, {}, {}, {} };
+        row.midi = service.getMidiTriggers (entry.id);
+        row.changed |= ! row.midi.empty();
+        row.midiText = ShortcutDisplay::midi (service, row.midi);
+        for (const auto& trigger : row.midi)
+        {
+            auto state = ShortcutDisplay::midiState (service, trigger, devices);
+            if (router != nullptr && (state == ko ("연결") || state == ko ("준비 대기")))
+                state = router->bindingStatus ({ entry.id, trigger, entry.commandID, true });
+            row.midiStates.addIfNotAlreadyThere (state);
+            for (const auto& device : devices)
+                if (device.overloaded && (trigger.source == "any" || trigger.source == device.identifier)) row.midiStates.addIfNotAlreadyThere (ko ("과부하"));
+            for (const auto& cue : midiCues)
+                if (MidiTriggerRules::intersects (trigger, cue.trigger))
+                    row.conflicts.addIfNotAlreadyThere (ko ("현재 프로젝트 큐 MIDI와 충돌: ") + cue.id + ko (" → 큐 MIDI 비활성"));
+        }
         for (const auto& key : row.keys)
         {
             const auto issues = inspect (service, entry.id, key, cues);
@@ -100,9 +115,13 @@ std::vector<Row> filter (std::vector<Row> rows, const juce::String& search, Cate
     rows.erase (std::remove_if (rows.begin(), rows.end(), [&] (const Row& row)
     {
         if (category != Category::all && row.category != category) return true;
-        if ((status == Status::changed && ! row.changed) || (status == Status::unassigned && ! row.keys.isEmpty())
+        if ((status == Status::changed && ! row.changed) || (status == Status::unassigned && (! row.keys.isEmpty() || ! row.midi.empty()))
             || (status == Status::conflict && row.conflicts.isEmpty()) || (status == Status::limited && row.limitations.isEmpty())) return true;
-        const auto haystack = row.name + " " + row.description + " " + row.scope + " " + ShortcutDisplay::keys (row.keys);
+        if ((status == Status::disconnected && ! row.midiStates.contains (ko ("미연결")))
+            || (status == Status::waiting && ! row.midiStates.joinIntoString (" ").contains (ko ("준비 대기")) && ! row.midiStates.contains (ko ("움직임 종료 대기")))
+            || (status == Status::unavailable && ! row.midiStates.contains (ko ("사용 불가")) && ! row.midiStates.contains (ko ("선택 안 함")))
+            || (status == Status::overloaded && ! row.midiStates.contains (ko ("과부하")))) return true;
+        const auto haystack = row.name + " " + row.description + " " + row.scope + " " + ShortcutDisplay::keys (row.keys) + " " + row.midiText + " " + row.midiStates.joinIntoString (" ");
         return std::any_of (words.begin(), words.end(), [&] (const auto& word) { return ! haystack.containsIgnoreCase (word); });
     }), rows.end());
     std::stable_sort (rows.begin(), rows.end(), [] (const Row& a, const Row& b)
@@ -125,18 +144,30 @@ juce::String compactKeys (const ShortcutKeys& keys, int width, const std::functi
     return "+" + juce::String (keys.size()) + ko ("개");
 }
 
-ImportPreview previewImport (const ShortcutService& service, const juce::String& xml, const Cues& cues)
+juce::String compactMidi (const ShortcutService& service, const MidiTriggers& triggers, int width, const std::function<int (const juce::String&)>& measure)
+{
+    for (int count = static_cast<int> (triggers.size()); count > 0; --count)
+    {
+        const auto text = ShortcutDisplay::midi (service, triggers, count);
+        if (measure (text) <= width) return text;
+    }
+    return triggers.empty() ? ko ("미지정") : "+" + juce::String (static_cast<int> (triggers.size()));
+}
+
+ImportPreview previewImport (const ShortcutService& service, const juce::String& xml, const Cues& cues, const std::vector<MidiBinding>& midiCues)
 {
     ImportPreview preview;
-    const auto parsed = ShortcutProfile::parse (xml);
-    if (! parsed.wasOk()) { preview.error = parsed.message; return preview; }
-    const auto resolved = ShortcutService::calculateMapping (ShortcutCatalog::get(), parsed.profile);
+    const auto parsed = ShortcutProfile::parseExchange (xml);
+    if (! parsed.wasOk()) { preview.error = parsed.status.getErrorMessage(); return preview; }
+    preview.replacesMidi = parsed.replacesMidi;
+    preview.formatKnown = true;
+    const auto resolved = ShortcutService::calculateMapping (ShortcutCatalog::get(), parsed.keyboard);
     preview.applicable = resolved.wasOk();
     preview.error = resolved.getErrorMessage();
     // Do not use the incomplete mapping of a rejected file. Report all requested
     // command collisions, including ones after the first parser/mapping diagnostic.
     std::vector<std::pair<juce::String, juce::KeyPress>> explicitKeys;
-    for (const auto& [id, keys] : parsed.profile.overrides)
+    for (const auto& [id, keys] : parsed.keyboard.overrides)
         if (const auto* entry = ShortcutCatalog::get().find (id); entry != nullptr && entry->isCommand())
             for (const auto& key : keys)
             {
@@ -147,12 +178,14 @@ ImportPreview previewImport (const ShortcutService& service, const juce::String&
             }
     for (const auto& entry : ShortcutCatalog::get().getCommands())
     {
-        const auto found = parsed.profile.overrides.find (entry.id);
+        const auto found = parsed.keyboard.overrides.find (entry.id);
         const auto& next = preview.applicable ? resolved.keys.at (entry.id)
-                          : found != parsed.profile.overrides.end() ? found->second : entry.defaultKeys;
+                          : found != parsed.keyboard.overrides.end() ? found->second : entry.defaultKeys;
         if (next != service.getKeys (entry.id))
             preview.changes.add (entry.name + ": " + ShortcutDisplay::keys (service.getKeys (entry.id)) + ko (" → ") + ShortcutDisplay::keys (next));
-        if (next.isEmpty()) preview.unassigned.add (entry.name);
+        const auto nextMidi = parsed.midi.overrides.find (entry.id);
+        const bool midiEmpty = parsed.replacesMidi ? nextMidi == parsed.midi.overrides.end() || nextMidi->second.empty() : service.getMidiTriggers (entry.id).empty();
+        if (next.isEmpty() && midiEmpty) preview.unassigned.add (entry.name);
         if (entry.commandID == CommandIDs::panicAll)
             preview.removesLastPanic = ! service.getKeys (entry.id).isEmpty() && next.isEmpty();
     }
@@ -165,12 +198,23 @@ ImportPreview previewImport (const ShortcutService& service, const juce::String&
             ShortcutCatalog::get().getCommandInfo (entry.commandID, info);
             manager.registerCommand (info);
         }
-        ShortcutService prospective (manager, {});
-        prospective.restore (xml, {});
-        for (const auto& row : rows (prospective, cues))
+        ShortcutService prospective (manager, [] (const auto&, const auto&) { return juce::Result::ok(); });
+        prospective.setInputStorage ([] (const auto&) { return juce::Result::ok(); });
+        juce::String currentMidi;
+        service.getMidiProfile().serialise (currentMidi);
+        prospective.restoreMidi (currentMidi, {});
+        const auto applied = prospective.importProfile (xml);
+        if (applied.failed()) { preview.applicable = false; preview.error = applied.getErrorMessage(); return preview; }
+        if (parsed.replacesMidi)
+            for (const auto& entry : ShortcutCatalog::get().getCommands())
+                if (service.getMidiTriggers (entry.id) != prospective.getMidiTriggers (entry.id))
+                    preview.changes.add (entry.name + " MIDI: " + ShortcutDisplay::midi (service, service.getMidiTriggers (entry.id))
+                        + ko (" → ") + ShortcutDisplay::midi (prospective, prospective.getMidiTriggers (entry.id)));
+        for (const auto& row : rows (prospective, cues, MidiInputSettingsPanel::snapshot (service, nullptr), midiCues))
         {
             for (const auto& conflict : row.conflicts) preview.conflicts.add (row.name + ": " + conflict);
             for (const auto& limit : row.limitations) preview.limitations.add (row.name + ": " + limit);
+            for (const auto& state : row.midiStates) preview.limitations.add (row.name + " MIDI: " + state + ko (" (입력 선택은 유지)"));
         }
     }
     return preview;
@@ -178,7 +222,9 @@ ImportPreview previewImport (const ShortcutService& service, const juce::String&
 
 juce::String ImportPreview::text() const
 {
-    juce::String result = ko ("이 PC의 단축키 설정을 교체합니다.\n");
+    juce::String result = ! formatKnown ? ko ("가져오기 형식을 읽을 수 없습니다.\n")
+        : replacesMidi ? ko ("v2 — 키보드·MIDI 모두 교체\n") : ko ("v1 — 키보드만 교체, MIDI 유지\n");
+    result += ko ("활성 입력·백그라운드 옵션은 유지합니다. 장치가 없어도 매핑을 보존합니다.\n");
     if (error.isNotEmpty()) result += ko ("적용 불가: ") + error + "\n";
     if (removesLastPanic) result += ko ("키보드로 전체 정지를 할 수 없음 — 패닉 키가 모두 제거됩니다.\n");
     const auto section = [&result] (const juce::String& title, const juce::StringArray& lines)
@@ -228,8 +274,8 @@ private:
 };
 }
 
-ShortcutSettingsTab::ShortcutSettingsTab (ShortcutService& s, ProjectDocument& d)
-    : service (s), document (d), table ({}, this), capture (s)
+ShortcutSettingsTab::ShortcutSettingsTab (ShortcutService& s, ProjectDocument& d, MidiInputService* input, MidiTriggerRouter* router)
+    : service (s), document (d), midiInput (input), midiRouter (router), inputPanel (s, input), table ({}, this), capture (s)
 {
     for (auto* label : { &notice, &header, &detail })
     {
@@ -248,7 +294,7 @@ ShortcutSettingsTab::ShortcutSettingsTab (ShortcutService& s, ProjectDocument& d
     int index = 1;
     for (const auto* name : { "전체 카테고리", "재생", "큐", "편집", "화면", "파일", "설정" }) category.addItem (ko (name), index++);
     index = 1;
-    for (const auto* name : { "전체 상태", "변경됨", "미지정", "충돌", "제한 있음" }) status.addItem (ko (name), index++);
+    for (const auto* name : { "전체 상태", "변경됨", "미지정", "충돌", "제한 있음", "MIDI 미연결", "MIDI 준비 대기", "MIDI 사용 불가·선택 안 함", "MIDI 과부하" }) status.addItem (ko (name), index++);
     status.setTooltip (ko ("충돌·제한의 자세한 이유는 기능을 선택하면 표시됩니다. 제한 있음에는 입력창의 문자·편집 조작 우선도 포함됩니다."));
     category.setSelectedId (1, juce::dontSendNotification);
     status.setSelectedId (1, juce::dontSendNotification);
@@ -258,8 +304,10 @@ ShortcutSettingsTab::ShortcutSettingsTab (ShortcutService& s, ProjectDocument& d
         const bool enabled = ! service.isEditingLocked() && selectedKey.getSelectedId() > 0;
         replaceButton.setEnabled (enabled);
         deleteButton.setEnabled (enabled);
+        replaceButton.setButtonText (selectedKey.getSelectedId() >= 1000 ? ko ("MIDI 바꾸기") : ko ("키 바꾸기"));
+        restoreButton.setTooltip (selectedKey.getSelectedId() >= 1000 ? ko ("MIDI만 기본값(없음)으로 복원") : ko ("키보드만 기본값으로 복원"));
     };
-    table.setRowHeight (28);
+    table.setRowHeight (48);
     table.setColour (juce::ListBox::backgroundColourId, Palette::panel2);
     table.setColour (juce::ListBox::outlineColourId, Palette::outline);
     table.setOutlineThickness (1);
@@ -267,6 +315,9 @@ ShortcutSettingsTab::ShortcutSettingsTab (ShortcutService& s, ProjectDocument& d
     for (auto* c : std::initializer_list<juce::Component*> { &notice, &header, &search, &category, &status, &table, &detailView, &selectedKey,
                       &replaceButton, &deleteButton, &restoreButton, &importButton, &exportButton, &resetButton }) addAndMakeVisible (c);
     addChildComponent (capture);
+    addAndMakeVisible (inputPanel);
+    inputPanel.onHeightChanged = [this] { cancelCapture(); resized(); };
+    startTimerHz (4);
     replaceButton.setButtonText (ko ("키 바꾸기"));
     deleteButton.setButtonText (ko ("삭제"));
     restoreButton.setButtonText (ko ("이 기능 기본값"));
@@ -277,12 +328,29 @@ ShortcutSettingsTab::ShortcutSettingsTab (ShortcutService& s, ProjectDocument& d
     deleteButton.onClick = [this] { removeKey(); };
     restoreButton.onClick = [this] { restoreSelected(); };
     importButton.onClick = [this] { importFile(); };
-    exportButton.onClick = [this] { exportFile(); };
+    exportButton.onClick = [this]
+    {
+        juce::PopupMenu menu;
+        menu.addItem (1, ko ("키보드·MIDI 내보내기 — v2 (기본)"));
+        menu.addItem (2, ko ("키보드만 내보내기 — v1"));
+        const juce::Component::SafePointer<ShortcutSettingsTab> safe (this);
+        menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&exportButton), [safe] (int choice)
+        { if (safe != nullptr && choice != 0) safe->exportFile (choice == 2); });
+    };
     resetButton.onClick = [this]
     {
         cancelCapture();
-        confirm (ko ("전체 기본값"), ko ("이 PC의 모든 명령 단축키를 기본값으로 복원합니다."), ko ("복원"),
-                 [this] { report (service.restoreAllDefaults()); });
+        juce::PopupMenu menu;
+        menu.addItem (1, ko ("키보드 전체 기본값"));
+        menu.addItem (2, ko ("MIDI 전체 기본값 — 모두 삭제"));
+        const juce::Component::SafePointer<ShortcutSettingsTab> safe (this);
+        menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&resetButton), [safe] (int choice)
+        {
+            if (safe == nullptr || choice == 0) return;
+            safe->confirm (ko ("전체 기본값"), choice == 1 ? ko ("키보드만 기본값으로 복원합니다. MIDI는 유지합니다.")
+                : ko ("이 PC의 명령 MIDI를 모두 삭제합니다. 키보드는 유지합니다."), ko ("복원"), [safe, choice]
+                { if (safe != nullptr) safe->report (choice == 1 ? safe->service.restoreAllDefaults() : safe->service.replaceMidiProfile ({})); });
+        });
     };
     capture.validate = [this] (const juce::KeyPress& key)
     {
@@ -298,13 +366,26 @@ ShortcutSettingsTab::ShortcutSettingsTab (ShortcutService& s, ProjectDocument& d
         messages.addArray (issues.limitations);
         return KeyCapture::Decision { true, messages.joinIntoString ("\n") };
     };
-    capture.onRegister = [this] (const juce::KeyPress& key)
+    capture.validateMidi = [this] (const MidiTrigger& trigger)
     {
-        capture.setVisible (false);
-        showSelection();
-        registerKey (key); // preserve any save error after leaving the capture panel
+        juce::StringArray conflicts;
+        for (const auto& binding : service.midiCommandBindings())
+            if (binding.id != captureID && MidiTriggerRules::intersects (binding.trigger, trigger))
+                conflicts.add (ShortcutCatalog::get().find (binding.id)->name + ": " + ShortcutDisplay::midi (service, { binding.trigger }));
+        for (const auto& cue : midiCues())
+            if (MidiTriggerRules::intersects (trigger, cue.trigger)) conflicts.add (ko ("큐 MIDI 비활성: ") + cue.id);
+        return KeyCapture::Decision { true, conflicts.joinIntoString ("\n") };
     };
-    capture.onFinished = [this] { if (capture.isVisible()) { capture.setVisible (false); showSelection(); } };
+    capture.onSubmit = [this] (const KeyCaptureSession::Candidate& candidate, KeyCapture::Completion done)
+    {
+        if (const auto* key = std::get_if<juce::KeyPress> (&candidate)) registerKey (*key, std::move (done));
+        else if (const auto* trigger = std::get_if<MidiTrigger> (&candidate)) registerMidi (*trigger, std::move (done));
+    };
+    capture.onFinished = [this]
+    {
+        for (auto& dialog : dialogs) if (dialog != nullptr && dialog->isCurrentlyModal()) dialog->exitModalState (0);
+        capture.setVisible (false); refresh(); resized();
+    };
     service.addListener (this);
     document.addListener (this);
     refresh();
@@ -312,6 +393,7 @@ ShortcutSettingsTab::ShortcutSettingsTab (ShortcutService& s, ProjectDocument& d
 
 ShortcutSettingsTab::~ShortcutSettingsTab()
 {
+    stopTimer();
     ++operation;
     capture.cancel (false);
     for (auto& dialog : dialogs)
@@ -332,7 +414,7 @@ ShortcutSettingsModel::Cues ShortcutSettingsTab::cues() const
 }
 void ShortcutSettingsTab::refresh()
 {
-    visibleRows = ShortcutSettingsModel::filter (ShortcutSettingsModel::rows (service, cues()), search.getText(),
+    visibleRows = ShortcutSettingsModel::filter (ShortcutSettingsModel::rows (service, cues(), MidiInputSettingsPanel::snapshot (service, midiInput), midiCues(), midiRouter), search.getText(),
         static_cast<ShortcutSettingsModel::Category> (category.getSelectedId() - 1),
         static_cast<ShortcutSettingsModel::Status> (status.getSelectedId() - 1));
     table.updateContent();
@@ -344,6 +426,7 @@ void ShortcutSettingsTab::refresh()
     selectedID = selected >= 0 ? visibleRows[static_cast<size_t> (selected)].id : juce::String();
     showSelection();
     table.repaint();
+    resized();
 }
 int ShortcutSettingsTab::getNumRows() { return static_cast<int> (visibleRows.size()); }
 void ShortcutSettingsTab::paintListBoxItem (int row, juce::Graphics& g, int width, int height, bool selected)
@@ -353,15 +436,20 @@ void ShortcutSettingsTab::paintListBoxItem (int row, juce::Graphics& g, int widt
     g.fillAll (selected ? Palette::standby.withAlpha (0.16f) : Palette::panel2);
     auto bounds = juce::Rectangle<int> (6, 0, width - 12, height);
     bounds.removeFromRight (52);
-    auto keysBounds = bounds.removeFromRight (190);
+    auto inputBounds = bounds.removeFromRight (juce::jmin (330, width * 3 / 5));
     g.setColour (Palette::text);
     g.setFont (Palette::font());
-    g.drawText (entry.name + (! entry.conflicts.isEmpty() ? ko (" [충돌]") : juce::String())
-                + ko (" · ") + entry.scope, bounds, juce::Justification::centredLeft, true);
-    const auto text = ShortcutSettingsModel::compactKeys (entry.keys, keysBounds.getWidth() - 8,
-        [] (const juce::String& value) { return juce::GlyphArrangement::getStringWidthInt (Palette::font(), value); });
-    g.setColour (! entry.conflicts.isEmpty() || ! entry.limitations.isEmpty() ? Palette::warn : Palette::text);
-    g.drawText (text, keysBounds.reduced (4, 0), juce::Justification::centredLeft, true);
+    g.drawText (entry.name + (! entry.conflicts.isEmpty() ? ko (" [충돌]") : juce::String()),
+                bounds.removeFromTop (25), juce::Justification::centredLeft, true);
+    g.setColour (Palette::dimText);
+    g.drawText (entry.scope, bounds, juce::Justification::centredLeft, true);
+    const auto measure = [] (const juce::String& value) { return juce::GlyphArrangement::getStringWidthInt (Palette::font(), value); };
+    const auto keysText = ShortcutSettingsModel::compactKeys (entry.keys, inputBounds.getWidth() - 30, measure);
+    g.setColour (Palette::text);
+    g.drawText (ko ("키: ") + keysText, inputBounds.removeFromTop (24), juce::Justification::centredLeft, true);
+    const auto midiText = ShortcutSettingsModel::compactMidi (service, entry.midi, inputBounds.getWidth() - 42, measure);
+    g.setColour (! entry.midiStates.isEmpty() && ! entry.midiStates.contains (ko ("연결")) ? Palette::warn : Palette::dimText);
+    g.drawText ("MIDI: " + midiText, inputBounds, juce::Justification::centredLeft, true);
 }
 juce::Component* ShortcutSettingsTab::refreshComponentForRow (int row, bool, juce::Component* existing)
 {
@@ -403,38 +491,48 @@ juce::String ShortcutSettingsTab::getTooltipForRow (int row)
     if (! juce::isPositiveAndBelow (row, getNumRows())) return {};
     const auto& entry = visibleRows[static_cast<size_t> (row)];
     return entry.name + ko (" · ") + entry.scope + "\n" + ShortcutDisplay::keys (entry.keys)
+         + "\nMIDI: " + entry.midiText + "\n" + entry.midiStates.joinIntoString (", ")
          + "\n" + entry.conflicts.joinIntoString ("\n") + "\n" + entry.limitations.joinIntoString ("\n");
 }
 void ShortcutSettingsTab::showSelection()
 {
     const bool learning = capture.isVisible();
+    for (auto* c : std::initializer_list<juce::Component*> { &inputPanel, &table, &search, &category, &status, &header, &replaceButton, &deleteButton, &restoreButton })
+        c->setVisible (! learning);
     detailView.setVisible (! learning);
     selectedKey.setVisible (! learning);
     const auto previous = selectedKey.getSelectedId();
     selectedKey.clear (juce::dontSendNotification);
     const auto& keys = service.getKeys (selectedID);
-    for (int i = 0; i < keys.size(); ++i) selectedKey.addItem (ShortcutDisplay::key (keys[i]), i + 1);
+    for (int i = 0; i < keys.size(); ++i) selectedKey.addItem (ko ("키: ") + ShortcutDisplay::key (keys[i]), i + 1);
+    const auto& midi = service.getMidiTriggers (selectedID);
+    for (size_t i = 0; i < midi.size(); ++i) selectedKey.addItem ("MIDI: " + ShortcutDisplay::midi (service, { midi[i] }), 1000 + static_cast<int> (i));
     selectedKey.setTextWhenNothingSelected (ko ("미지정"));
-    selectedKey.setSelectedId (keys.isEmpty() ? 0 : juce::jlimit (1, keys.size(), previous), juce::dontSendNotification);
+    selectedKey.setSelectedId (previous >= 1000 && previous < 1000 + static_cast<int> (midi.size()) ? previous
+        : ! keys.isEmpty() ? juce::jlimit (1, keys.size(), previous) : ! midi.empty() ? 1000 : 0, juce::dontSendNotification);
+    replaceButton.setButtonText (selectedKey.getSelectedId() >= 1000 ? ko ("MIDI 바꾸기") : ko ("키 바꾸기"));
     const auto* entry = ShortcutCatalog::get().find (selectedID);
     juce::String text;
     if (entry != nullptr)
     {
         text = entry->name + ko (" · ") + ShortcutCatalog::scopeLabel (entry->scope)
-             + ko ("\n현재 키: ") + ShortcutDisplay::keys (keys) + "\n" + entry->description;
+             + ko ("\n현재 키: ") + ShortcutDisplay::keys (keys) + "\nMIDI: " + ShortcutDisplay::midi (service, midi) + "\n" + entry->description;
+        for (const auto& trigger : midi) text += "\n" + ShortcutDisplay::midiDetails (service, trigger);
         for (const auto& row : visibleRows)
             if (row.id == selectedID)
-                text += "\n" + row.conflicts.joinIntoString ("\n") + "\n" + row.limitations.joinIntoString ("\n");
+                text += "\n" + row.midiStates.joinIntoString (", ") + "\n" + row.conflicts.joinIntoString ("\n") + "\n" + row.limitations.joinIntoString ("\n");
     }
     setDetail (text);
     const bool editable = ! service.isEditingLocked() && ! learning;
-    replaceButton.setEnabled (editable && ! keys.isEmpty());
-    deleteButton.setEnabled (editable && ! keys.isEmpty());
+    replaceButton.setEnabled (editable && (! keys.isEmpty() || ! midi.empty()));
+    deleteButton.setEnabled (editable && (! keys.isEmpty() || ! midi.empty()));
     restoreButton.setEnabled (editable && entry != nullptr);
+    restoreButton.setTooltip (selectedKey.getSelectedId() >= 1000 ? ko ("이 기능의 MIDI만 기본값(없음)으로 복원. 키보드는 유지.")
+        : ko ("이 기능의 키보드만 기본값으로 복원. MIDI는 유지."));
     importButton.setEnabled (editable);
     resetButton.setEnabled (editable);
     notice.setText (service.isEditingLocked() ? ko ("쇼 모드 — 단축키 변경 잠김")
-                   : ko ("이 PC에 적용됩니다. 학습 = 키 추가 / 키 선택 후 바꾸기 = 교체"), juce::dontSendNotification);
+                   : ko ("이 PC에 적용됩니다. 학습 = 키·MIDI 추가 / 항목 선택 후 바꾸기 = 교체"), juce::dontSendNotification);
 }
 void ShortcutSettingsTab::setDetail (const juce::String& text)
 {
@@ -447,24 +545,35 @@ void ShortcutSettingsTab::learn (bool replace)
     if (service.isEditingLocked() || selectedID.isEmpty()) return;
     cancelCapture();
     captureID = selectedID;
-    replaceIndex = replace ? selectedKey.getSelectedId() - 1 : -1;
+    const int selected = selectedKey.getSelectedId();
+    replacedMidi.reset();
+    replaceIndex = replace && selected > 0 && selected < 1000 ? selected - 1 : -1;
     replacedKey = replaceIndex >= 0 ? service.getKeys (captureID)[replaceIndex] : juce::KeyPress();
+    if (replace && selected >= 1000)
+    {
+        replaceIndex = selected - 1000;
+        replacedMidi = service.getMidiTriggers (captureID)[static_cast<size_t> (replaceIndex)];
+    }
     capture.setVisible (true);
     showSelection();
-    capture.start ((replace ? ko ("키 바꾸기: ") : ko ("키 추가: ")) + ShortcutCatalog::get().find (captureID)->name);
+    resized();
+    capture.start ((replace ? ko ("입력 바꾸기: ") : ko ("입력 추가: ")) + ShortcutCatalog::get().find (captureID)->name, false, replacedMidi);
 }
-void ShortcutSettingsTab::registerKey (const juce::KeyPress& key)
+void ShortcutSettingsTab::registerKey (const juce::KeyPress& key, KeyCapture::Completion done)
 {
     const auto id = captureID;
-    const int index = replaceIndex;
+    const int index = replacedMidi ? -1 : replaceIndex;
     const auto oldKey = replacedKey;
     const auto issues = ShortcutSettingsModel::inspect (service, id, key, cues());
-    const auto apply = [this, id, index, oldKey, key, move = issues.commandOwner.isNotEmpty()]
+    const auto apply = [this, id, index, oldKey, key, done, move = issues.commandOwner.isNotEmpty()]
     {
         if (index >= 0 && (! juce::isPositiveAndBelow (index, service.getKeys (id).size()) || service.getKeys (id)[index] != oldKey))
-        { setDetail (ko ("키 목록이 바뀌었습니다. 다시 선택하세요.")); return; }
+        { done (juce::Result::fail (ko ("키 목록이 바뀌었습니다. 다시 선택하세요."))); return; }
         const auto policy = move ? ShortcutService::ConflictPolicy::move : ShortcutService::ConflictPolicy::reject;
-        report (index < 0 ? service.addKey (id, key, policy) : service.replaceKey (id, index, key, policy));
+        ShortcutOperationResult result;
+        { const juce::ScopedValueSetter<bool> guard (committingCapture, true);
+          result = index < 0 ? service.addKey (id, key, policy) : service.replaceKey (id, index, key, policy); }
+        done (result.status);
     };
     if (issues.commandOwner.isNotEmpty())
     {
@@ -473,13 +582,51 @@ void ShortcutSettingsTab::registerKey (const juce::KeyPress& key)
                     + ShortcutCatalog::get().find (issues.commandOwner)->name + ko (" → ") + ShortcutCatalog::get().find (id)->name
                     + "\n" + issues.conflicts.joinIntoString ("\n")
                     + (lastPanic ? ko ("\n키보드로 전체 정지를 할 수 없음 — 마지막 패닉 키를 이동합니다.") : juce::String()),
-                 ko ("기존 기능에서 이 키 이동"), apply);
+                 ko ("기존 기능에서 이 키 이동"), apply, true, [done] { done (juce::Result::fail (ko ("이동을 취소했습니다."))); });
     }
     else apply();
+}
+void ShortcutSettingsTab::registerMidi (const MidiTrigger& trigger, KeyCapture::Completion done)
+{
+    const auto id = captureID;
+    const auto original = replacedMidi;
+    const int index = original ? replaceIndex : -1;
+    juce::StringArray conflicts;
+    for (const auto& binding : service.midiCommandBindings())
+        if (binding.id != id && MidiTriggerRules::intersects (binding.trigger, trigger))
+            conflicts.add (ShortcutCatalog::get().find (binding.id)->name + ": " + ShortcutDisplay::midi (service, { binding.trigger }));
+    const auto apply = [this, id, trigger, original, index, done, move = ! conflicts.isEmpty()]
+    {
+        auto triggers = service.getMidiTriggers (id);
+        if (original)
+        {
+            if (! juce::isPositiveAndBelow (index, static_cast<int> (triggers.size())) || triggers[static_cast<size_t> (index)] != *original)
+            { done (juce::Result::fail (ko ("MIDI 목록이 바뀌었습니다. 다시 선택하세요."))); return; }
+            triggers[static_cast<size_t> (index)] = trigger;
+        }
+        else triggers.push_back (trigger);
+        ShortcutOperationResult result;
+        { const juce::ScopedValueSetter<bool> guard (committingCapture, true);
+          result = service.setMidiTriggers (id, std::move (triggers), move ? ShortcutService::ConflictPolicy::move : ShortcutService::ConflictPolicy::reject); }
+        done (result.status);
+    };
+    if (conflicts.isEmpty()) apply();
+    else confirm (ko ("다른 기능에서 사용"), conflicts.joinIntoString ("\n")
+        + ko ("\n위 기존 소유자의 겹치는 바인딩 전체를 제거하고 이동합니다. 전체 채널·장치 범위도 분할하지 않습니다."),
+        ko ("겹치는 바인딩 전체 이동"), apply, true, [done] { done (juce::Result::fail (ko ("이동을 취소했습니다."))); });
 }
 void ShortcutSettingsTab::removeKey()
 {
     const auto id = selectedID;
+    if (selectedKey.getSelectedId() >= 1000)
+    {
+        auto triggers = service.getMidiTriggers (id);
+        const int midiIndex = selectedKey.getSelectedId() - 1000;
+        if (service.isEditingLocked() || ! juce::isPositiveAndBelow (midiIndex, static_cast<int> (triggers.size()))) return;
+        triggers.erase (triggers.begin() + midiIndex);
+        report (service.setMidiTriggers (id, std::move (triggers)));
+        return;
+    }
     const int index = selectedKey.getSelectedId() - 1;
     if (index < 0 || service.isEditingLocked()) return;
     const auto apply = [this, id, index] { report (service.removeKey (id, index)); };
@@ -490,6 +637,12 @@ void ShortcutSettingsTab::restoreSelected()
 {
     const auto id = selectedID;
     if (id.isEmpty()) return;
+    if (selectedKey.getSelectedId() >= 1000)
+    {
+        confirm (ko ("이 기능 MIDI 기본값"), ko ("이 기능의 MIDI를 모두 삭제합니다. 키보드는 유지합니다."), ko ("복원"),
+            [this, id] { report (service.setMidiTriggers (id, {})); });
+        return;
+    }
     const auto& defaults = ShortcutCatalog::get().find (id)->defaultKeys;
     juce::StringArray conflicts;
     for (const auto& key : defaults)
@@ -520,20 +673,22 @@ void ShortcutSettingsTab::confirmPanicRemoval (std::function<void()> callback)
              ko ("제거"), std::move (callback));
 }
 void ShortcutSettingsTab::confirm (const juce::String& title, const juce::String& message, const juce::String& button,
-                                   std::function<void()> apply, bool editsMapping)
+                                   std::function<void()> apply, bool editsMapping, std::function<void()> cancelled)
 {
     const auto token = ++operation;
     const auto mapping = service.getInputGeneration();
     const juce::Component::SafePointer<ShortcutSettingsTab> safe (this);
     auto* alert = new juce::AlertWindow (title, message, juce::MessageBoxIconType::WarningIcon);
+    if (capture.isCapturing()) alert->getProperties().set ("inputCaptureField", true);
     dialogs.emplace_back (alert);
     alert->addButton (button, 1);
     alert->addButton (ko ("취소"), 0);
     ShortcutRouter::watchWindow (alert);
-    alert->enterModalState (true, juce::ModalCallbackFunction::create ([safe, token, mapping, apply, editsMapping] (int result)
+    alert->enterModalState (true, juce::ModalCallbackFunction::create ([safe, token, mapping, apply, editsMapping, cancelled] (int result)
     {
         if (safe != nullptr && safe->operation == token && (! editsMapping || ! safe->service.isEditingLocked())
             && safe->service.getInputGeneration() == mapping && result == 1) apply();
+        else if (safe != nullptr && safe->operation == token && cancelled) cancelled();
     }), true);
 }
 void ShortcutSettingsTab::report (const ShortcutOperationResult& result)
@@ -554,7 +709,7 @@ void ShortcutSettingsTab::importFile()
         const auto file = fileChooser.getResult();
         if (file == juce::File()) return;
         const auto xml = file.loadFileAsString();
-        const auto preview = ShortcutSettingsModel::previewImport (safe->service, xml, safe->cues());
+        const auto preview = ShortcutSettingsModel::previewImport (safe->service, xml, safe->cues(), safe->midiCues());
         const auto mapping = safe->service.getInputGeneration();
         auto* alert = new ImportAlert (preview);
         safe->dialogs.emplace_back (alert);
@@ -568,11 +723,11 @@ void ShortcutSettingsTab::importFile()
         }), true);
     });
 }
-void ShortcutSettingsTab::exportFile()
+void ShortcutSettingsTab::exportFile (bool keyboardOnly)
 {
     cancelCapture();
     const auto token = ++operation;
-    const auto xml = service.exportProfile();
+    const auto xml = keyboardOnly ? service.exportProfile() : service.exportCombinedProfile();
     const juce::Component::SafePointer<ShortcutSettingsTab> safe (this);
     chooser = std::make_unique<juce::FileChooser> (ko ("단축키 내보내기"), juce::File::getCurrentWorkingDirectory().getChildFile ("keys.enqueue-shortcuts.xml"), "*.enqueue-shortcuts.xml");
     launchMidiFileChooser (*chooser, juce::FileBrowserComponent::saveMode | juce::FileBrowserComponent::canSelectFiles | juce::FileBrowserComponent::warnAboutOverwriting,
@@ -604,60 +759,74 @@ void ShortcutSettingsTab::cancelCapture()
     capture.setVisible (false);
     if (wasVisible) showSelection();
 }
-void ShortcutSettingsTab::shortcutsChanged() { cancelCapture(); refresh(); }
+void ShortcutSettingsTab::shortcutsChanged() { if (! committingCapture) { cancelCapture(); refresh(); } }
 void ShortcutSettingsTab::shortcutEditingLockChanged() { cancelCapture(); refresh(); }
-void ShortcutSettingsTab::documentStateChanged() { cancelCapture(); refresh(); }
+void ShortcutSettingsTab::documentStateChanged() { if (! committingCapture) { cancelCapture(); refresh(); } }
 void ShortcutSettingsTab::visibilityChanged() { if (! isShowing()) cancelCapture(); }
 
+std::vector<MidiBinding> ShortcutSettingsTab::midiCues() const
+{
+    std::vector<MidiBinding> result;
+    for (const auto& cue : document.getMidiTriggers()) result.push_back ({ cue.id.toString(), cue.trigger, 0, cue.armed });
+    return result;
+}
+void ShortcutSettingsTab::timerCallback()
+{
+    juce::String signature;
+    for (const auto& device : MidiInputSettingsPanel::snapshot (service, midiInput))
+        signature += device.identifier + ":" + juce::String (static_cast<int> (device.status)) + (device.overloaded ? "!;" : ";");
+    if (midiRouter != nullptr)
+        for (const auto& binding : service.midiCommandBindings()) signature += midiRouter->bindingStatus (binding);
+    if (signature != deviceSignature && ! capture.isCapturing())
+    { deviceSignature = signature; refresh(); }
+}
 void ShortcutSettingsTab::resized()
 {
-    // Tab content: 624 x 514, inset 10. Footer is always reserved first.
+    // Logical tab 624x514 in the fixed 640x571 settings content.
     auto area = getLocalBounds().reduced (10);
     notice.setBounds (area.removeFromTop (18));
-    search.setBounds (area.removeFromTop (28));
-    area.removeFromTop (4);
-    auto filters = area.removeFromTop (28);
-    category.setBounds (filters.removeFromLeft (210));
-    filters.removeFromLeft (8);
-    status.setBounds (filters.removeFromLeft (180));
-    area.removeFromTop (4);
-    header.setBounds (area.removeFromTop (20));
     auto footer = area.removeFromBottom (28);
-    importButton.setBounds (footer.removeFromLeft (94));
-    footer.removeFromLeft (6);
+    importButton.setBounds (footer.removeFromLeft (94)); footer.removeFromLeft (6);
     exportButton.setBounds (footer.removeFromLeft (94));
     resetButton.setBounds (footer.removeFromRight (110));
     area.removeFromBottom (6);
-    auto actions = area.removeFromBottom (28);
-    replaceButton.setBounds (actions.removeFromLeft (100));
-    actions.removeFromLeft (6);
-    deleteButton.setBounds (actions.removeFromLeft (64));
-    actions.removeFromLeft (6);
+    capture.setBounds (area);
+    if (capture.isVisible()) return;
+    inputPanel.setBounds (area.removeFromTop (inputPanel.preferredHeight()));
+    area.removeFromTop (4);
+    search.setBounds (area.removeFromTop (26));
+    area.removeFromTop (4);
+    auto filters = area.removeFromTop (26);
+    category.setBounds (filters.removeFromLeft (200)); filters.removeFromLeft (8);
+    status.setBounds (filters.removeFromLeft (230));
+    header.setBounds (area.removeFromTop (18));
+    auto actions = area.removeFromBottom (26);
+    replaceButton.setBounds (actions.removeFromLeft (100)); actions.removeFromLeft (6);
+    deleteButton.setBounds (actions.removeFromLeft (64)); actions.removeFromLeft (6);
     restoreButton.setBounds (actions.removeFromLeft (122));
     area.removeFromBottom (4);
-    auto selection = area.removeFromBottom (96);
-    capture.setBounds (selection);
-    selectedKey.setBounds (selection.removeFromBottom (26));
-    selection.removeFromBottom (4);
-    detailView.setBounds (selection);
-    const int width = juce::jmax (40, selection.getWidth() - detailView.getScrollBarThickness());
+    selectedKey.setBounds (area.removeFromBottom (26));
+    area.removeFromBottom (4);
+    detailView.setBounds (area.removeFromBottom (inputPanel.preferredHeight() > 28 ? 32 : 54));
+    const int width = juce::jmax (40, detailView.getWidth() - detailView.getScrollBarThickness());
     juce::AttributedString text;
     text.append (detail.getText(), detail.getFont());
     juce::TextLayout layout;
     layout.createLayout (text, static_cast<float> (width - 8));
-    detail.setSize (width, juce::jmax (selection.getHeight(), juce::roundToInt (layout.getHeight()) + 10));
+    detail.setSize (width, juce::jmax (detailView.getHeight(), juce::roundToInt (layout.getHeight()) + 10));
     area.removeFromBottom (4);
     table.setBounds (area);
 }
 void ShortcutSettingsTab::paint (juce::Graphics& g)
 {
     g.fillAll (Palette::panel);
+    if (capture.isVisible()) return;
     auto columns = header.getBounds().reduced (6, 0);
     columns.removeFromRight (table.getVerticalScrollBar().getWidth());
     g.setColour (Palette::dimText);
     g.setFont (Palette::font());
     g.drawText (ko ("학습"), columns.removeFromRight (52), juce::Justification::centred);
-    g.drawText (ko ("현재 키"), columns.removeFromRight (190), juce::Justification::centredLeft);
+    g.drawText (ko ("키보드 / MIDI"), columns.removeFromRight (330), juce::Justification::centredLeft);
     g.drawText (ko ("기능 · 동작 범위"), columns, juce::Justification::centredLeft);
 }
 }

@@ -2,6 +2,7 @@
 
 #include "app/MidiInputService.h"
 #include "app/ProjectDocument.h"
+#include <set>
 
 namespace gocue
 {
@@ -25,6 +26,8 @@ public:
     void inputFault (uint64_t input, bool panic = false);
     void refreshBindings();
     const std::vector<MidiBinding>& cueBindings() const noexcept { return cues; }
+    juce::String bindingStatus (const MidiBinding&) const;
+    int waitingBindings() const;
 private:
     struct Runtime { MidiBinding binding; MidiTriggerRules rules; bool live = true; };
     struct Observed { MidiInputEvent event; juce::String identifier; bool carryGoHold = true; };
@@ -45,6 +48,8 @@ private:
     std::vector<MidiBinding> cues;
     std::map<uint64_t, uint64_t> connections;
     std::map<InputToken, Observed> lastObserved;
+    std::set<InputToken> captureActivationInputs;
+    bool captureWasActive = false;
     bool rebuilding = false;
 };
 }

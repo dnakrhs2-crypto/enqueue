@@ -304,6 +304,11 @@ bool ShortcutRouter::route (const juce::KeyPress& key, juce::Component* origin, 
     if (owner.kind == Kind::capture)
     {
         it->second.quarantined = true;
+        // Editing a capture rule is ordinary UI input, while execution remains
+        // owned by the capture token. Esc always reaches the cancellation path.
+        if (! key.isKeyCode (juce::KeyPress::escapeKey))
+            for (auto* component = origin; component != nullptr; component = component->getParentComponent())
+                if (static_cast<bool> (component->getProperties()["inputCaptureField"])) return false;
         if (! repeat && captureActivationKeys.empty() && code != 0)
         {
             auto captured = key;

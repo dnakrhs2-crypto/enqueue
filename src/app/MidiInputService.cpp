@@ -34,6 +34,7 @@ struct MidiInputService::Port final : juce::MidiInputCallback
     std::array<std::atomic<uint64_t>, 64> panicAddresses;
     std::unique_ptr<Handle> handle;
     Status status = Status::disconnected;
+    bool staleObserved = false;
 };
 struct MidiInputService::Notifier final : juce::Thread
 {
@@ -139,6 +140,7 @@ void MidiInputService::refresh()
         if (ports.count (id) == 0) ports[id] = std::make_unique<Port> (*this, id, ++nextInput);
         ports[id]->name = name;
     }
+    shortcuts.setAvailableMidiDevices (present);
     for (auto& [id, p] : ports)
     {
         const bool selected = settings.autoUseAll || settings.selected.count (id) != 0;
@@ -154,6 +156,7 @@ void MidiInputService::refresh()
         p->panicFaultEpoch.store (0);
         p->observedFault = 0;
         p->observedPanicFault = 0;
+        p->staleObserved = false;
         p->handle = backend.open (id, p.get());
         if (! p->handle) { p->status = Status::unavailable; continue; }
         p->status = Status::waiting;
@@ -275,6 +278,7 @@ void MidiInputService::drain (double nowMs)
         {
             ++stale;
             event.ordinaryAllowed = false;
+            port->staleObserved = true;
             if (! event.panicReserved) execute = false;
             port->status = Status::waiting;
         }
@@ -297,7 +301,8 @@ bool MidiInputService::hasPending() const noexcept { return queue->pending() || 
 std::vector<MidiInputService::Device> MidiInputService::devices() const
 {
     std::vector<Device> result;
-    for (const auto& [id, p] : ports) result.push_back ({ id, p->name, p->status, p->input, p->connection });
+    for (const auto& [id, p] : ports) result.push_back ({ id, p->name, p->status, p->input, p->connection,
+        p->staleObserved || p->faultEpoch.load() != 0 || p->panicFaultEpoch.load() != 0 });
     return result;
 }
 MidiInputService::Counters MidiInputService::counters() const noexcept
