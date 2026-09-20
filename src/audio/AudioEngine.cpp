@@ -1376,6 +1376,21 @@ void AudioEngine::setLiveSlices (const juce::Uuid& cueId, const std::vector<Slic
 
 void AudioEngine::setLiveLevels (const juce::Uuid& cueId, const LevelMatrix& levels, const TrimLevels& trim)
 {
+    updateLiveLevelFields (cueId, &levels, &trim);
+}
+
+void AudioEngine::setLiveLevelMatrix (const juce::Uuid& cueId, const LevelMatrix& levels)
+{
+    updateLiveLevelFields (cueId, &levels, nullptr);
+}
+
+void AudioEngine::setLiveTrim (const juce::Uuid& cueId, const TrimLevels& trim)
+{
+    updateLiveLevelFields (cueId, nullptr, &trim);
+}
+
+void AudioEngine::updateLiveLevelFields (const juce::Uuid& cueId, const LevelMatrix* levels, const TrimLevels* trim)
+{
     // the matrix copies and gain tables allocate: done outside the lock the audio callback shares
     // (players are only destroyed on this thread, so the pointers stay valid)
     CuePlayer* found[16];
@@ -1390,7 +1405,8 @@ void AudioEngine::setLiveLevels (const juce::Uuid& cueId, const LevelMatrix& lev
     }
 
     for (int i = 0; i < count; ++i)
-        found[i]->setLiveLevels (levels, trim);
+        found[i]->setLiveLevels (levels != nullptr ? *levels : found[i]->getLiveLevels(),
+                                trim != nullptr ? *trim : found[i]->getLiveTrim());
 }
 
 juce::int64 AudioEngine::getStartOrder (const juce::Uuid& cueId) const

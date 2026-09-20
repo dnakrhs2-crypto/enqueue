@@ -534,6 +534,8 @@ public:
     void runTest() override
     {
         testFadeUndo();
+        for (int historySteps : { 1, 2, 3 })
+            testTrimUndoLoadedMatrix (historySteps);
         testPendingMemoOnQuit();
         for (bool cart : { false, true })
             for (bool savedPlugin : { false, true })
@@ -615,6 +617,94 @@ private:
                     + "; RMS " + juce::String (rmsBefore, 6) + " -> " + juce::String (rmsAfter, 6));
         expectWithinAbsoluteError (after.gainDb, before.gainDb, 1.0e-6, "Unrelated Undo must preserve A live gain");
         expectWithinAbsoluteError (rmsAfter, rmsBefore, 0.003f, "Unrelated Undo must preserve rendered output level");
+    }
+
+    void testTrimUndoLoadedMatrix (int historySteps)
+    {
+        const juce::String history = historySteps == 1 ? "undo" : historySteps == 2 ? "undo/redo" : "undo/redo/undo";
+        beginTest ("audit round 2: trim " + history + " preserves the loaded player's matrix on GO");
+        Fixture f;
+        const auto tone = writeTone (f, "trim-loaded.wav");
+        if (! tone.existsAsFile()) return;
+        Cue a; a.name = "A"; a.file = tone; a.numChannels = 2; a.durationSeconds = 20.0;
+        a.levels.resize (2, 2);
+        a.trim.resize (2);
+        Cue fade; fade.name = "Mute matrix"; fade.type = CueType::fade;
+        fade.fade.targetId = a.id;
+        fade.fade.mode = FadeMode::custom;
+        fade.fade.durationSeconds = 0.1;
+        fade.fade.stopTargetWhenDone = false;
+        fade.fade.mainActive = false;
+        fade.fade.levels.resize (2, 2);
+        fade.fade.resizeActive (2, 2);
+        for (int ch = 0; ch < 2; ++ch)
+        {
+            fade.fade.levels.outputDb[(size_t) ch] = LevelMatrix::silentDb;
+            fade.fade.setOutputActive (ch, true);
+        }
+        f.document().cues.add (a);
+        f.document().cues.add (fade);
+        f.select (a.id);
+        auto* tabs = findChild<juce::TabbedComponent> (f.inspector());
+        if (! require (tabs != nullptr, "inspector tabs")) return;
+        const int trimTab = tabs->getTabNames().indexOf (ko ("트림"));
+        if (! require (trimTab >= 0, "trim tab")) return;
+        tabs->setCurrentTabIndex (trimTab);
+        auto* slider = findChild<juce::Slider> (*tabs->getTabContentComponent (trimTab), [] (const auto& s)
+        { return s.getSliderStyle() == juce::Slider::LinearHorizontal; });
+        if (! require (slider != nullptr && slider->isEnabled(), "real main trim slider")) return;
+        slider->setValue (-6.0, juce::sendNotificationSync);
+        if (! require (f.document().findCueAnywhere (a.id)->trim.mainDb == -6.0, "trim edit 0 -> -6 dB committed")) return;
+        if (! require (f.main->perform (juce::ApplicationCommandTarget::InvocationInfo (CommandIDs::go))
+                       && f.engine.isPlaying (a.id), "GO A after the trim edit")) return;
+        f.render (20);
+        if (! require (std::abs (f.out.getRMSLevel (0, 0, blockSize) - 0.1772f) < 0.005f,
+                       "A initially plays at -6 dB trim")) return;
+        if (! require (f.controller().fire (fade.id) == CueController::GoResult::started, "start custom matrix fade")) return;
+        f.render (40);
+        AudioEngine::LiveState faded;
+        if (! require (! f.controller().getFadeRunner().isRunning (fade.id) && f.engine.isPlaying (a.id)
+                       && f.engine.getLiveState (a.id, faded), "fade completed without stopping A")) return;
+        for (int ch = 0; ch < 2; ++ch)
+            if (! require (faded.levels.outputDb[(size_t) ch] == LevelMatrix::silentDb
+                           && f.out.getRMSLevel (ch, 0, blockSize) < 1.0e-6f, "running A has a silent output matrix")) return;
+        f.select (a.id);
+        if (! require (f.main->perform (juce::ApplicationCommandTarget::InvocationInfo (CommandIDs::loadCue))
+                       && f.engine.isLoaded (a.id) && f.engine.isPlaying (a.id), "LOAD A alongside the silent running instance")) return;
+
+        double expectedTrim = -6.0;
+        for (int step = 0; step < historySteps; ++step)
+        {
+            const auto command = step == 1 ? CommandIDs::redo : CommandIDs::undo;
+            expectedTrim = step == 1 ? -6.0 : 0.0;
+            if (! require (f.main->perform (juce::ApplicationCommandTarget::InvocationInfo (command)), "apply trim history")) return;
+            const auto* restored = f.document().findCueAnywhere (a.id);
+            expectWithinAbsoluteError (restored->trim.mainDb, expectedTrim, 1.0e-9, "document trim follows history");
+            expect (restored->levels == a.levels, "document matrix remains at its normal level");
+            AudioEngine::LiveState live;
+            if (! require (f.engine.isLoaded (a.id) && f.engine.getLiveState (a.id, live), "both instances survive history")) return;
+            expectWithinAbsoluteError (live.trim.mainDb, expectedTrim, 1.0e-9, "running trim follows history");
+            expect (live.levels == faded.levels, "running player keeps its own faded matrix");
+            f.render (20);
+            for (int ch = 0; ch < 2; ++ch)
+                expectWithinAbsoluteError (f.out.getRMSLevel (ch, 0, blockSize), 0.0f, 1.0e-6f,
+                                           "trim history must not unmute the running player");
+        }
+
+        f.select (a.id);
+        if (! require (f.main->perform (juce::ApplicationCommandTarget::InvocationInfo (CommandIDs::go))
+                       && ! f.engine.isLoaded (a.id) && f.engine.isPlaying (a.id), "GO starts the waiting instance")) return;
+        f.render (20);
+        AudioEngine::LiveState restarted;
+        if (! require (f.engine.getLiveState (a.id, restarted), "read the instance started by GO")) return;
+        expect (restarted.levels == a.levels, "GO keeps the loaded player's normal matrix");
+        expectWithinAbsoluteError (restarted.trim.mainDb, expectedTrim, 1.0e-9, "loaded trim follows history too");
+        const float expectedRms = 0.353553f * juce::Decibels::decibelsToGain ((float) expectedTrim);
+        logMessage ("OBS round 2 " + history + ": GO RMS=" + juce::String (f.out.getRMSLevel (0, 0, blockSize), 6)
+                    + "; expected=" + juce::String (expectedRms, 6));
+        for (int ch = 0; ch < 2; ++ch)
+            expectWithinAbsoluteError (f.out.getRMSLevel (ch, 0, blockSize), expectedRms, 0.005f,
+                                       "GO must be audible at the restored document trim");
     }
 
     void testPendingMemoOnQuit()

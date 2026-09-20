@@ -2851,13 +2851,12 @@ void MainComponent::reconcileChainsAfterRestore (const ProjectSnapshot& snapshot
                                     || before->levels.crosspointDb != cue.levels.crosspointDb;
         const bool trimChanged = before == nullptr || ! (before->trim == cue.trim);
 
-        if (levelsChanged || trimChanged)
-        {
-            AudioEngine::LiveState live;
-            const bool hasLive = engine.getLiveState (p.id, live);
-            engine.setLiveLevels (p.id, levelsChanged || ! hasLive ? cue.levels : live.levels,
-                                       trimChanged || ! hasLive ? cue.trim : live.trim);
-        }
+        if (levelsChanged && trimChanged)
+            engine.setLiveLevels (p.id, cue.levels, cue.trim);
+        else if (levelsChanged)
+            engine.setLiveLevelMatrix (p.id, cue.levels);
+        else if (trimChanged)
+            engine.setLiveTrim (p.id, cue.trim);
 
         if (before == nullptr || before->audio.rate != cue.audio.rate)
             engine.setLiveRate (p.id, cue.audio.rate);
