@@ -107,9 +107,11 @@ public:
 
     std::function<void()> onStructureChanged;
     std::function<void()> onValueChanged;
+    /** Runtime bypass repair only: refresh the open chain without announcing a document edit. */
+    std::function<void (PluginChain&)> onChainRuntimeChanged;
 
 private:
-    void bypassSlot (const juce::Uuid& channelId, const juce::Uuid& slotId, bool bypass);   // the live chain's slot with that id (none: nothing)
+    bool bypassSlot (const juce::Uuid& channelId, const juce::Uuid& slotId, bool bypass);   // true when the live slot's bypass changed
     /** Another OFF group of the channel (not 'exceptGroup') holds the slot: switching one group on must not run it. */
     static bool heldOffElsewhere (const MixChannel& channel, const juce::Uuid& slotId, int exceptGroup);
     bool liveChainHas (const juce::Uuid& channelId, const juce::Uuid& slotId) const;
@@ -126,6 +128,7 @@ private:
     juce::File file;
     std::atomic<bool> dirty { false };
     bool graphApplied = false;
+    bool repairingGroupBypass = false;  // equal-value repair: the per-slot chain listener must not mark an edit
     int heldValueNotifications = 0;      // > 0: a ValueBatch is open
     bool valueNotificationHeld = false;  // something asked to announce while it was
 };

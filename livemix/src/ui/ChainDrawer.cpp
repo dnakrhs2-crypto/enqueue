@@ -2,6 +2,8 @@
 
 #include "PluginSearch.h"
 
+#include <algorithm>
+
 namespace gocue::livemix
 {
 
@@ -636,7 +638,19 @@ void ChainDrawer::applyPreset (const PluginPreset& preset, bool replace)
 
     if (replace)
     {
-        errors = chain->restore (preset.plugins, host.makeFactory (engine.getSampleRate(), engine.getBlockSize()));
+        auto states = preset.plugins;
+
+        // A preset deliberately omits momentary bypass. Apply the owning channel's OFF groups before
+        // restore publishes the new instances, so even the first audible block agrees with the cards.
+        for (const auto& channel : document.getSession().channels)
+            if (engine.getChannelChain (channel.id) == chain)
+                for (const auto& group : channel.pluginGroups)
+                    if (group.off)
+                        for (auto& state : states)
+                            if (std::find (group.slots.begin(), group.slots.end(), state.slotId) != group.slots.end())
+                                state.bypassed = true;
+
+        errors = chain->restore (states, host.makeFactory (engine.getSampleRate(), engine.getBlockSize()));
     }
     else
     {

@@ -64,6 +64,8 @@ target_sources(EnqueueTests PRIVATE
     ControlDispatcherTests.cpp
     ControlStateTests.cpp
     ControlServerTests.cpp
+    AuditL1Tests.cpp
+    LiveMixPluginTransitionTests.cpp
     PluginPresetTests.cpp
     PluginSearchTests.cpp
     LoudnessMeterTests.cpp

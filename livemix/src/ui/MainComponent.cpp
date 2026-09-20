@@ -103,6 +103,11 @@ MainComponent::MainComponent (MixDocument& doc, LiveMixSettings& s)
     addChildComponent (noticeClose);
 
     windows.onChainChanged = [this] (PluginChain&) { document.markDirty(); };
+    document.onChainRuntimeChanged = [this] (PluginChain& chain)
+    {
+        if (chainDrawer.getChain() == &chain)
+            chainDrawer.refresh();
+    };
     engine.forEachChain ([this] (PluginChain& chain) { chain.setListener (&windows); });
 
     document.onStructureChanged = [this]
@@ -175,6 +180,7 @@ MainComponent::~MainComponent()
     engine.forEachChain ([] (PluginChain& chain) { chain.setListener (nullptr); });   // the window manager dies here: no chain may call it afterwards
     document.onStructureChanged = nullptr;
     document.onValueChanged = nullptr;
+    document.onChainRuntimeChanged = nullptr;
 }
 
 void MainComponent::attachControlServer (ControlServer* server)

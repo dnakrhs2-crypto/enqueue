@@ -401,13 +401,25 @@ void MixDocument::setPluginGroupOff (const juce::Uuid& channelId, int group, boo
         return;
 
     auto& g = c->pluginGroups[(size_t) group];
+    const bool changed = g.off != off;
+    const ValueBatch batch (*this);
     g.off = off;
 
-    for (const auto& slotId : g.slots)
-        if (off || ! heldOffElsewhere (*c, slotId, group))
-            bypassSlot (channelId, slotId, off);   // a plugin in another OFF group stays off when this one is switched on
+    bool runtimeChanged = false;
+    {
+        // The original per-slot API notifies its listener. Equal-value repairs only restore the
+        // group's existing intent, so those notifications must not turn a protocol no-op into an edit.
+        const juce::ScopedValueSetter<bool> repairScope (repairingGroupBypass, ! changed);
+        for (const auto& slotId : g.slots)
+            if (off || ! heldOffElsewhere (*c, slotId, group))
+                runtimeChanged = bypassSlot (channelId, slotId, off) || runtimeChanged;
+    }
 
-    valueChanged();
+    if (changed)
+        valueChanged();
+    else if (runtimeChanged && onChainRuntimeChanged)
+        if (auto* chain = engine.getChannelChain (channelId))
+            onChainRuntimeChanged (*chain);
 }
 
 bool MixDocument::heldOffElsewhere (const MixChannel& channel, const juce::Uuid& slotId, int exceptGroup)
@@ -437,21 +449,26 @@ bool MixDocument::liveChainHas (const juce::Uuid& channelId, const juce::Uuid& s
     return false;
 }
 
-void MixDocument::bypassSlot (const juce::Uuid& channelId, const juce::Uuid& slotId, bool bypass)
+bool MixDocument::bypassSlot (const juce::Uuid& channelId, const juce::Uuid& slotId, bool bypass)
 {
     auto* chain = engine.getChannelChain (channelId);
 
     if (chain == nullptr)
-        return;
+        return false;
 
     for (int i = 0; i < chain->getNumSlots(); ++i)
         if (chain->getSlot (i).state.slotId == slotId)
         {
             if (chain->getSlot (i).bypassed.load() != bypass)
+            {
                 chain->setBypassed (i, bypass);
+                return true;
+            }
 
-            return;
+            return false;
         }
+
+    return false;
 }
 
 int MixDocument::setGroupOffOnEveryChannel (int group, bool off)
@@ -516,6 +533,9 @@ void MixDocument::setDeviceInfo (const juce::String& name, int bufferSize, doubl
 
 void MixDocument::markDirty (bool refreshViews)
 {
+    if (repairingGroupBypass)
+        return;
+
     const bool wasDirty = dirty.exchange (true, std::memory_order_acq_rel);
 
     if (refreshViews || ! wasDirty)
