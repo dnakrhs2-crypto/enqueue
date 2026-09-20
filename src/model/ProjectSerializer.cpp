@@ -367,6 +367,9 @@ namespace
         obj->setProperty ("postWait", c.postWaitSeconds);
         obj->setProperty ("continueMode", continueModeToText (c.continueMode));
         obj->setProperty ("hotkey", c.hotkey);
+        juce::Array<juce::var> midi;
+        for (const auto& trigger : c.midiTriggers) midi.add (trigger.toVar());
+        obj->setProperty ("midiTriggers", midi);
 
         {
             auto* wc = new juce::DynamicObject();
@@ -932,6 +935,36 @@ juce::Result fromJson (const juce::String& json, Project& out, juce::StringArray
     Project project;
     project.name = root.getProperty ("name", "").toString();
 
+    // Validate all stored MIDI fields before adopting any cue. Even the legacy
+    // top-level mirror must not hide malformed MIDI behind a valid lists array.
+    const auto validateCueMidi = [] (const juce::var& cue) -> juce::Result
+    {
+        if (! cue.hasProperty ("midiTriggers")) return juce::Result::ok();
+        const auto value = cue.getProperty ("midiTriggers", {});
+        const auto* array = value.getArray();
+        if (array == nullptr) return juce::Result::fail ("midiTriggers must be an array");
+        for (const auto& item : *array)
+        {
+            MidiTrigger trigger;
+            if (auto r = MidiTrigger::fromVar (item, trigger, true); r.failed()) return r;
+        }
+        return juce::Result::ok();
+    };
+    const auto validateListMidi = [&] (const juce::var& value) -> juce::Result
+    {
+        if (const auto* array = value.getArray())
+            for (const auto& cue : *array) if (auto r = validateCueMidi (cue); r.failed()) return r;
+        return juce::Result::ok();
+    };
+    if (version >= 7)
+    {
+        if (auto r = validateListMidi (root.getProperty ("cues", {})); r.failed()) return r;
+        const auto listsValue = root.getProperty ("lists", {});
+        if (const auto* lists = listsValue.getArray())
+            for (const auto& list : *lists) if (auto r = validateListMidi (list.getProperty ("cues", {})); r.failed()) return r;
+        if (auto r = validateCueMidi (root.getProperty ("settings", {}).getProperty ("cueTemplate", {})); r.failed()) return r;
+    }
+
     juce::StringArray seenIds;   // a cue id is unique across every list: they would share one player and one plugin chain
     juce::Array<juce::KeyPress> seenHotkeys;   // a hotkey fires one cue; a reserved key (Space, Esc, ...) would fire next to GO / panic
     auto readCues = [&] (const juce::var& array, std::vector<Cue>& into)
@@ -952,6 +985,19 @@ juce::Result fromJson (const juce::String& json, Project& out, juce::StringArray
             }
 
             auto cue = cueFromVar (item, projectDir, warnings);
+            if (version >= 7)
+            {
+                const auto triggers = item.getProperty ("midiTriggers", {});
+                if (const auto* arrayOfTriggers = triggers.getArray())
+                    for (const auto& value : *arrayOfTriggers)
+                    {
+                        MidiTrigger trigger;
+                        const auto parsedTrigger = MidiTrigger::fromVar (value, trigger, true);
+                        jassert (parsedTrigger.wasOk()); // validated before the cue walk
+                        juce::ignoreUnused (parsedTrigger);
+                        cue.midiTriggers.push_back (trigger);
+                    }
+            }
 
             if (seenIds.contains (cue.id.toString()))
             {
@@ -1071,6 +1117,10 @@ juce::Result fromJson (const juce::String& json, Project& out, juce::StringArray
 
 juce::Result save (const Project& project, const juce::File& file)
 {
+    for (const auto& list : project.lists)
+        for (const auto& cue : list.cues)
+            for (const auto& trigger : cue.midiTriggers)
+                if (auto r = trigger.validate (true); r.failed()) return r;
     const auto json = toJson (project, file.getParentDirectory());
 
     // written to a sibling, verified byte for byte and as JSON, then swapped in (SafeFileWrite): a full disk, a

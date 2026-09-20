@@ -65,6 +65,7 @@ ShortcutRouter::ShortcutRouter (ShortcutService& s, juce::ApplicationCommandMana
 
 ShortcutRouter::~ShortcutRouter()
 {
+    service.activations().releaseSource (InputKind::keyboard, 0);
     if (desktopRouter == this)
         desktopRouter = nullptr;
     stopTimer();
@@ -147,24 +148,27 @@ void ShortcutRouter::globalFocusChanged (juce::Component*)
     applicationActiveChanged (callbacks.applicationActive());
     pollKeyState(); // window changes inside this app retain every physically-held key
 }
-void ShortcutRouter::prepareNativeEvent (int vk, int modifiers, bool down, bool repeat)
+void ShortcutRouter::prepareNativeEvent (int vk, int modifiers, bool down, bool repeat, double observedTimeMs)
 {
     refreshFocus();
     // Queue order is authoritative even when the device has already pressed the
     // same key again. Keep released observations for delayed WM_CHAR delivery.
     if (! down || ! repeat)
     {
-        releaseKey (-vk);
+        releaseKey (-vk, observedTimeMs);
         for (auto& press : nativePresses)
-            if (press.key.virtualKey == vk)
+            if (press.key.virtualKey == vk && ! press.released)
+            {
                 press.released = true;
+                press.releaseTimeMs = observedTimeMs;
+            }
     }
     if (down)
     {
         const bool panic = std::any_of (service.getPanicBindings().begin(), service.getPanicBindings().end(),
             [&] (const auto& binding) { return binding.virtualKey == vk && binding.modifiers == modifiers; });
         nativePresses.push_back ({ { vk, modifiers }, repeat, false, panic,
-                                  service.isCapturing(), service.getInputGeneration() });
+                                  service.isCapturing(), service.getInputGeneration(), observedTimeMs });
     }
 }
 
@@ -248,10 +252,11 @@ bool ShortcutRouter::keyPressed (const juce::KeyPress& key, juce::Component* ori
         context.nativeKey = native->key;
         context.nativePanicOwned = native->panicOwned;
     }
-    const bool consumed = route (observedKey, origin, context, juce::Time::getMillisecondCounterHiRes(), native && native->repeat);
+    const bool consumed = route (observedKey, origin, context, native && native->observedTimeMs >= 0.0 ? native->observedTimeMs
+        : juce::Time::getMillisecondCounterHiRes(), native && native->repeat);
     if (native && native->released)
     {
-        releaseKey (-native->key.virtualKey);
+        releaseKey (-native->key.virtualKey, native->releaseTimeMs);
         flushReleases();
     }
     return consumed;
@@ -284,7 +289,7 @@ bool ShortcutRouter::route (const juce::KeyPress& key, juce::Component* origin, 
             }
     const int identity = vk != 0 ? -vk : code;
     const bool repeat = held.count (identity) != 0 || nativeRepeat;
-    auto [it, inserted] = held.emplace (identity, Press { key, 0, false, nativeRepeat, timeMs, vk, context.nativeKey.has_value() });
+    auto [it, inserted] = held.emplace (identity, Press { key, 0, nativeRepeat, timeMs, vk, context.nativeKey.has_value() });
     juce::ignoreUnused (inserted);
     context.captureActive = service.isCapturing();
     context.isRepeat = repeat;
@@ -336,35 +341,36 @@ bool ShortcutRouter::route (const juce::KeyPress& key, juce::Component* origin, 
     }
     if (owner.commandID == CommandIDs::go)
     {
-        it->second.go = true;
         // A second alias can be out of scope after moving to a settings dialog.
         // It still belongs to the held GO group until its physical release.
-        if (goLatched || owner.kind == Kind::command)
+        if (service.activations().isLatched() || owner.kind == Kind::command)
             it->second.releaseCommand = owner.commandID;
-    }
-    if (owner.commandID == CommandIDs::go && owner.kind == Kind::command)
-    {
-        if (goLatched && callbacks.requireGoKeyUp && callbacks.requireGoKeyUp())
+        const bool allowed = service.activations().press ({ InputKind::keyboard, 0, 0, identity }, owner.kind == Kind::command,
+                                                          callbacks.requireGoKeyUp && callbacks.requireGoKeyUp());
+        if (! allowed && owner.kind == Kind::command)
             return true;
-        goLatched = true;
     }
     if (owner.kind == Kind::command)
     {
         const auto* definition = ShortcutCatalog::get().find (owner.commandID);
         if (definition != nullptr && (definition->commandFlags & juce::ApplicationCommandInfo::wantsKeyUpDownCallbacks) != 0)
             it->second.releaseCommand = owner.commandID;
-        invoke (owner.commandID, key, true, origin);
+        invoke (owner.commandID, key, true, origin, 0, timeMs, identity);
         return true;
     }
-    if (callbacks.cueHotkey && (owner.kind == Kind::cueHotkey
+    if ((callbacks.cueHotkey || callbacks.cueInput) && (owner.kind == Kind::cueHotkey
         || (owner.kind == Kind::blocked && owner.commandID == 0 && owner.reason == ShortcutKeyOwner::Reason::repeatSuppressed
             && ! context.textEditing && context.window == Window::main
             && std::any_of (context.cueHotkeys.begin(), context.cueHotkeys.end(), [&] (const auto& cue) { return cue.id == owner.id; }))))
-        callbacks.cueHotkey (key, repeat);
+    {
+        if (callbacks.cueInput)
+            callbacks.cueInput ({ InputKind::keyboard, owner.id, 0, true, { InputKind::keyboard, 0, 0, identity }, timeMs, InputInvocation::nextEventID() }, repeat);
+        else callbacks.cueHotkey (key, repeat);
+    }
     return owner.shouldConsume();
 }
 
-void ShortcutRouter::invoke (juce::CommandID id, const juce::KeyPress& key, bool down, juce::Component* origin, double durationMs)
+void ShortcutRouter::invoke (juce::CommandID id, const juce::KeyPress& key, bool down, juce::Component* origin, double durationMs, double observedMs, int identity)
 {
     juce::ApplicationCommandTarget::InvocationInfo info (id);
     info.invocationMethod = juce::ApplicationCommandTarget::InvocationInfo::fromKeyPress;
@@ -372,11 +378,15 @@ void ShortcutRouter::invoke (juce::CommandID id, const juce::KeyPress& key, bool
     info.isKeyDown = down;
     info.originatingComponent = origin;
     info.millisecsSinceKeyPressed = static_cast<int> (juce::jlimit (0.0, 2147483647.0, durationMs));
-    manager.invoke (info, false);
+    const auto* definition = ShortcutCatalog::get().find (id);
+    InputInvocation input { InputKind::keyboard, definition != nullptr ? definition->id : juce::String(), id, down,
+                            { InputKind::keyboard, 0, 0, identity }, observedMs >= 0.0 ? observedMs : juce::Time::getMillisecondCounterHiRes(),
+                            InputInvocation::nextEventID() };
+    service.invokeInput (input, &info);
 }
 bool ShortcutRouter::anyGoKeyHeld() const
 {
-    return std::any_of (held.begin(), held.end(), [] (const auto& p) { return p.second.go; });
+    return service.activations().anyHeld();
 }
 void ShortcutRouter::flushReleases()
 {
@@ -385,24 +395,27 @@ void ShortcutRouter::flushReleases()
     auto releases = std::move (pendingReleases);
     pendingReleases.clear();
     for (const auto& press : releases)
-        invoke (press.releaseCommand, press.key, false, nullptr, juce::Time::getMillisecondCounterHiRes() - press.timeMs);
+        invoke (press.releaseCommand, press.key, false, nullptr, juce::Time::getMillisecondCounterHiRes() - press.timeMs,
+                press.releaseTimeMs, press.nativeVK != 0 ? -press.nativeVK : press.key.getKeyCode());
 }
 void ShortcutRouter::pollKeyState()
 {
     updateHeldKeys (! nativeMessagesPending());
     flushReleases();
 }
-void ShortcutRouter::releaseKey (int identity)
+void ShortcutRouter::releaseKey (int identity, double observedTimeMs)
 {
     const auto it = held.find (identity);
     if (it == held.end())
         return;
     if (it->second.releaseCommand != 0)
+    {
+        it->second.releaseTimeMs = observedTimeMs >= 0.0 ? observedTimeMs : juce::Time::getMillisecondCounterHiRes();
         pendingReleases.push_back (it->second);
+    }
     captureActivationKeys.erase (identity);
+    service.activations().release ({ InputKind::keyboard, 0, 0, identity });
     held.erase (it);
-    if (! anyGoKeyHeld())
-        goLatched = false;
 }
 void ShortcutRouter::updateHeldKeys (bool recoverNative)
 {
@@ -450,12 +463,10 @@ void ShortcutRouter::quarantineDownKeys()
                          [&press] (const auto& key) { return ShortcutKeyInput::keysOverlap (
                              juce::KeyPress (key.getKeyCode()), juce::KeyPress (press.key.getKeyCode())); }))
         {
-            press.go = true;
             press.releaseCommand = CommandIDs::go;
+            service.activations().hold ({ InputKind::keyboard, 0, 0, code });
         }
     }
-    if (anyGoKeyHeld() && callbacks.requireGoKeyUp && callbacks.requireGoKeyUp())
-        goLatched = true;
     flushReleases();
 }
 void ShortcutRouter::shortcutsChanged() { quarantineDownKeys(); }

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "app/ShortcutCatalog.h"
+#include "app/MidiShortcutProfile.h"
 
 #include <map>
 
@@ -22,6 +23,7 @@ public:
 };
 
 struct ShortcutProfileParseResult;
+struct ShortcutExchangeParseResult;
 
 /** Only overrides are stored: missing action = inheritance, empty keys = explicitly unassigned.
     Unknown IDs use exactly the same schema and survive subsequent edits and exports. */
@@ -33,6 +35,8 @@ struct ShortcutProfile
     static ShortcutProfileParseResult parse (const juce::String& source);
     juce::Result validate() const;
     juce::Result serialise (juce::String& xml) const;
+    static ShortcutExchangeParseResult parseExchange (const juce::String&);
+    juce::Result serialiseExchange (const MidiShortcutProfile&, juce::String&) const;
 
     bool operator== (const ShortcutProfile& other) const { return overrides == other.overrides; }
     bool operator!= (const ShortcutProfile& other) const { return ! (*this == other); }
@@ -47,6 +51,16 @@ struct ShortcutProfileParseResult
     ShortcutProfile profile; // populated only on complete success
 
     bool wasOk() const noexcept { return error == Error::none; }
+};
+
+struct ShortcutExchangeParseResult
+{
+    juce::Result status = juce::Result::ok();
+    juce::String originalXml;
+    ShortcutProfile keyboard;
+    MidiShortcutProfile midi;
+    bool replacesMidi = false;
+    bool wasOk() const { return status.wasOk(); }
 };
 
 } // namespace gocue

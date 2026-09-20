@@ -1,3 +1,4 @@
+#include "ui/MidiModalScope.h"
 #include "ui/ShortcutSettingsTab.h"
 #include "app/ShortcutDisplay.h"
 #include "app/ShortcutKeyInput.h"
@@ -546,7 +547,7 @@ void ShortcutSettingsTab::importFile()
     const auto token = ++operation;
     const juce::Component::SafePointer<ShortcutSettingsTab> safe (this);
     chooser = std::make_unique<juce::FileChooser> (ko ("단축키 가져오기"), juce::File(), "*.enqueue-shortcuts.xml");
-    chooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles,
+    launchMidiFileChooser (*chooser, juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles,
         [safe, token] (const juce::FileChooser& fileChooser)
     {
         if (safe == nullptr || safe->operation != token || safe->service.isEditingLocked()) return;
@@ -574,7 +575,7 @@ void ShortcutSettingsTab::exportFile()
     const auto xml = service.exportProfile();
     const juce::Component::SafePointer<ShortcutSettingsTab> safe (this);
     chooser = std::make_unique<juce::FileChooser> (ko ("단축키 내보내기"), juce::File::getCurrentWorkingDirectory().getChildFile ("keys.enqueue-shortcuts.xml"), "*.enqueue-shortcuts.xml");
-    chooser->launchAsync (juce::FileBrowserComponent::saveMode | juce::FileBrowserComponent::canSelectFiles | juce::FileBrowserComponent::warnAboutOverwriting,
+    launchMidiFileChooser (*chooser, juce::FileBrowserComponent::saveMode | juce::FileBrowserComponent::canSelectFiles | juce::FileBrowserComponent::warnAboutOverwriting,
         [safe, token, xml] (const juce::FileChooser& fileChooser)
     {
         if (safe == nullptr || safe->operation != token) return;

@@ -79,31 +79,26 @@ struct PanicKeyHook::State : ShortcutService::Listener
 {
     State (ShortcutService& s, Handler h) : service (s), handler (std::move (h)) { service.addListener (this); }
     ~State() override { service.removeListener (this); }
-    void shortcutsChanged() override { lastTime = -1.0e9; }
-    void captureStateChanged() override { lastTime = -1.0e9; }
+    void shortcutsChanged() override { service.panicGestures().invalidate(); }
+    void captureStateChanged() override { service.panicGestures().invalidate(); }
     std::optional<Event> observe (int vk, int mods, bool down, bool repeat, double time, bool active)
     {
         if (! active || ! down || repeat || service.isCapturing())
             return {};
         for (const auto& binding : service.getPanicBindings())
             if (vk == binding.virtualKey && mods == binding.modifiers)
-                return Event { time, service.getInputGeneration(), ++serial };
+                return Event { time, service.getInputGeneration(), InputInvocation::nextEventID() };
         return {};
     }
     void dispatch (const Event& event)
     {
-        if (event.generation != service.getInputGeneration() || service.isCapturing() || event.serial <= delivered)
+        if (event.generation != service.getInputGeneration() || service.isCapturing())
             return;
-        delivered = event.serial;
-        const double gap = event.timeMs - lastTime;
-        lastTime = event.timeMs;
-        if (handler)
-            handler (event.timeMs, gap >= 0.0 && gap <= 500.0);
+        if (const auto hard = service.panicGestures().activate (event.serial, event.timeMs); hard && handler)
+            handler (event.timeMs, *hard);
     }
     ShortcutService& service;
     Handler handler;
-    uint64_t serial = 0, delivered = 0;
-    double lastTime = -1.0e9;
 };
 
 #if JUCE_WINDOWS
@@ -134,6 +129,8 @@ LRESULT CALLBACK keyboardProc (int code, WPARAM wParam, LPARAM lParam)
             owner->dispatch (*event); // dispatch below queues native events through the lifetime-safe state
         if (owner->beforeDispatch)
             owner->beforeDispatch (static_cast<int> (wParam), mods, down, repeat);
+        if (owner->beforeTimedDispatch)
+            owner->beforeTimedDispatch (static_cast<int> (wParam), mods, down, repeat, timeMs);
     }
     return CallNextHookEx (nullptr, code, wParam, lParam);
 }
@@ -183,6 +180,6 @@ void PanicKeyHook::dispatch (const Event& event)
 void PanicKeyHook::fromJuce (double timeMs) { if (! isInstalled()) fromUi (timeMs); }
 void PanicKeyHook::fromUi (double timeMs)
 {
-    state->dispatch ({ timeMs, state->service.getInputGeneration(), ++state->serial });
+    state->dispatch ({ timeMs, state->service.getInputGeneration(), InputInvocation::nextEventID() });
 }
 }

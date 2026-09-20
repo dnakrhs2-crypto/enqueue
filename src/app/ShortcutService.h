@@ -2,6 +2,8 @@
 
 #include "app/ShortcutProfile.h"
 #include "app/PanicKeyHook.h"
+#include "app/MidiTriggerRules.h"
+#include "app/PanicGestureGate.h"
 
 #include <functional>
 #include <optional>
@@ -85,6 +87,29 @@ struct ShortcutKeyOwner
     bool shouldConsume() const noexcept { return kind != Kind::none && reason != Reason::inactiveApp; }
 };
 
+struct MidiBinding
+{
+    juce::String id;
+    MidiTrigger trigger;
+    juce::CommandID commandID = 0; // zero = cue UUID
+    bool enabled = true;
+};
+struct MidiRoutingContext
+{
+    ShortcutKeyContext::Window window = ShortcutKeyContext::Window::main;
+    bool applicationActive = true, modal = false, textEditing = false, allowBackgroundPlayback = true;
+    std::vector<MidiBinding> cues;
+    std::function<bool (juce::CommandID)> commandEnabled;
+};
+struct MidiOwner
+{
+    enum class Kind { none, capture, panic, command, cue, blocked };
+    Kind kind = Kind::none;
+    juce::String id, reason;
+    juce::CommandID commandID = 0;
+    std::vector<juce::String> conflicts;
+};
+
 /** Message-thread mappings, ownership and shared capture state. JUCE mappings are
     for display; ShortcutRouter is the only command/cue keyboard dispatcher. */
 class ShortcutService
@@ -93,6 +118,7 @@ public:
     /** Must persist BOTH values atomically on success and leave storage unchanged on failure.
         AppSettings::saveKeyboardShortcuts supplies this contract, including automatic-save rollback. */
     using SaveFunction = std::function<juce::Result (const juce::String& currentXml, const juce::String& lastGoodXml)>;
+    using SaveInputsFunction = std::function<juce::Result (const InputSettingsTransaction&)>;
     enum class ConflictPolicy { reject, move }; // move explicitly removes keys from their previous command
     struct RestoreReport
     {
@@ -107,6 +133,7 @@ public:
         virtual void shortcutsChanged() = 0;
         virtual void captureStateChanged() {}
         virtual void shortcutEditingLockChanged() {}
+        virtual void midiInputSettingsChanged() {}
     };
 
     ShortcutService (juce::ApplicationCommandManager& manager, SaveFunction save,
@@ -121,6 +148,24 @@ public:
     const std::vector<ShortcutDiagnostic>& getDiagnostics() const noexcept { return mapping.diagnostics; }
     const std::vector<PanicKeyBinding>& getPanicBindings() const noexcept { return mapping.panicBindings; }
     uint64_t getInputGeneration() const noexcept { return inputGeneration; }
+    InputActivationTracker& activations() noexcept { return activationTracker; }
+    PanicGestureGate& panicGestures() noexcept { return panicGate; }
+    const InputInvocation* currentInvocation() const noexcept { return invocation; }
+    bool invokeInput (const InputInvocation&, const juce::ApplicationCommandTarget::InvocationInfo* keyboardInfo = nullptr);
+    /** Also used at project/input connection boundaries. Does not change stored mappings. */
+    void invalidateInputRouting();
+    void setInputStorage (SaveInputsFunction function) { saveInputs = std::move (function); }
+    RestoreReport restoreMidi (const std::optional<juce::String>&, const std::optional<juce::String>&);
+    RestoreReport restoreMidiInputs (const std::optional<juce::String>&, const std::optional<juce::String>&);
+    const MidiShortcutProfile& getMidiProfile() const noexcept { return midiProfile; }
+    const MidiInputSettings& getMidiInputSettings() const noexcept { return midiInputs; }
+    const MidiTriggers& getMidiTriggers (const juce::String&) const;
+    std::vector<MidiBinding> midiCommandBindings() const;
+    MidiOwner resolveMidiOwner (const MidiBinding&, const MidiRoutingContext&, bool preview = false) const;
+    ShortcutOperationResult setMidiTriggers (const juce::String&, MidiTriggers, ConflictPolicy = ConflictPolicy::reject);
+    ShortcutOperationResult replaceMidiProfile (MidiShortcutProfile);
+    ShortcutOperationResult setMidiInputSettings (MidiInputSettings);
+    juce::String exportCombinedProfile() const; // v2; exportProfile() remains the explicit keyboard-only v1 API
 
     /** Message-thread capture ownership. A stale widget cannot end another widget's
         capture. The router waits for the activation keys to be released first. */
@@ -131,6 +176,8 @@ public:
     void cancelCapture();
     bool isCapturing() const noexcept { return captureToken != nullptr; }
     void deliverCaptureKey (const juce::KeyPress&);
+    void setMidiCaptureReceiver (CaptureToken, std::function<void (const MidiInputEvent&, const juce::String&)>);
+    void deliverCaptureMidi (const MidiInputEvent&, const juce::String& identifier);
     /** Runtime callers preserve the original text character (numeric entry/text editor predicates).
         Character-less bindings can also be queried for conflict previews. */
     // Preview ignores the live capture owner, but uses the same binding/scope rules.
@@ -154,18 +201,27 @@ private:
     ShortcutOperationResult commit (ShortcutProfile candidate);
     ShortcutOperationResult checkEditableCommand (const juce::String& actionID) const;
     void synchroniseMappings();
+    juce::Result validateMidiMapping (const MidiShortcutProfile&) const;
+    ShortcutOperationResult commitInputs (std::optional<ShortcutProfile>, std::optional<MidiShortcutProfile>, std::optional<MidiInputSettings>);
 
     juce::ApplicationCommandManager& manager;
     SaveFunction save;
+    SaveInputsFunction saveInputs;
     const ShortcutCatalog& catalog;
     ShortcutProfile profile;
     ShortcutMappingResult mapping;
+    MidiShortcutProfile midiProfile;
+    MidiInputSettings midiInputs;
+    InputActivationTracker activationTracker;
+    PanicGestureGate panicGate;
+    const InputInvocation* invocation = nullptr;
     juce::ListenerList<Listener> listeners;
     bool editingLocked = false, inTransaction = false;
     uint64_t inputGeneration = 0;
     CaptureToken captureToken = nullptr;
     std::function<void (const juce::KeyPress&)> captureReceiver;
     std::function<void()> captureCancellation;
+    std::function<void (const MidiInputEvent&, const juce::String&)> midiCaptureReceiver;
 };
 
 } // namespace gocue

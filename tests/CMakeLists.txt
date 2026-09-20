@@ -5,6 +5,9 @@ target_sources(EnqueueTests PRIVATE
     ShortcutTests.cpp
     ShortcutRouterTests.cpp
     ShortcutUiTests.cpp
+    MidiModelTests.cpp
+    MidiRoutingTests.cpp
+    MidiDeviceTests.cpp
     ../src/ui/KeyCapture.cpp
     ../src/ui/ShortcutSettingsTab.cpp
     ../src/app/AppSettings.cpp

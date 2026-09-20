@@ -1,4 +1,5 @@
 #include "app/ProjectDocument.h"
+#include "app/MidiTriggerRules.h"
 #include "app/ShortcutKeyInput.h"
 
 namespace gocue
@@ -258,6 +259,7 @@ juce::String ProjectDocument::getWindowTitle() const
 
 void ProjectDocument::newProject()
 {
+    listeners.call ([] (Listener& l) { l.projectReplaced(); });
     history.clear();
     containers.clear();
     auto main = std::make_unique<Container>();
@@ -341,6 +343,7 @@ juce::Result ProjectDocument::parse (const juce::File& projectFile, Project& out
 
 void ProjectDocument::adopt (Project project, const juce::File& projectFile)
 {
+    listeners.call ([] (Listener& l) { l.projectReplaced(); });
     history.clear();
     project.ensureMainList();
     containers.clear();
@@ -598,7 +601,35 @@ bool ProjectDocument::redo()
 
 void ProjectDocument::notify()
 {
+    listeners.call ([] (Listener& l) { l.midiTriggersChanged(); });
     listeners.call ([] (Listener& l) { l.documentStateChanged(); });
+}
+
+std::vector<ProjectDocument::CueMidiTrigger> ProjectDocument::getMidiTriggers() const
+{
+    std::vector<CueMidiTrigger> result;
+    for (size_t i = 0; i < containers.size(); ++i)
+        for (const auto& cue : (static_cast<int> (i) == active ? cues : containers[i]->list).getAll())
+            for (const auto& trigger : cue.midiTriggers) result.push_back ({ cue.id, trigger, cue.armed });
+    return result;
+}
+juce::Result ProjectDocument::setMidiTriggers (const juce::Uuid& id, MidiTriggers triggers)
+{
+    int index = -1;
+    auto* list = listContaining (id, &index);
+    if (list == nullptr) return juce::Result::fail ("Unknown cue");
+    const auto all = getMidiTriggers();
+    for (const auto& trigger : triggers)
+    {
+        if (auto r = trigger.validate (true); r.failed()) return r;
+        for (const auto& other : all)
+            if (other.id != id && MidiTriggerRules::intersects (trigger, other.trigger)) return juce::Result::fail ("Conflicting cue MIDI trigger");
+    }
+    MidiTriggers unique;
+    for (const auto& trigger : triggers) if (std::find (unique.begin(), unique.end(), trigger) == unique.end()) unique.push_back (trigger);
+    if (unique == list->get (index).midiTriggers) return juce::Result::ok();
+    perform (juce::String::fromUTF8 ("MIDI 트리거"), [list, index, unique] { list->update (index, [&] (Cue& c) { c.midiTriggers = unique; }); });
+    return juce::Result::ok();
 }
 
 } // namespace gocue

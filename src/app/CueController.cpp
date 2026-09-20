@@ -593,7 +593,7 @@ bool CueController::isGoLocked() const
     return window > 0.0 && clock() - lastGoTime < window;
 }
 
-bool CueController::refusesDoubleFire (const juce::Uuid& cueId, const juce::String& label)
+bool CueController::refusesDoubleFire (const juce::Uuid& cueId, const juce::String& label, double observedSeconds)
 {
     // the GO window on a cue's hotkey / cart click (a setting): the same cue pressed again inside it is one press - another
     // cue is not held back (sound effects on neighbouring keys come fast on purpose)
@@ -602,7 +602,7 @@ bool CueController::refusesDoubleFire (const juce::Uuid& cueId, const juce::Stri
     if (! settings.doubleGoHotkeys || settings.doubleGoSeconds <= 0.0)
         return false;
 
-    const double now = clock();
+    const double now = observedSeconds >= 0.0 ? observedSeconds : clock();
 
     if (const auto it = lastFireTimes.find (cueId); it != lastFireTimes.end() && now - it->second < settings.doubleGoSeconds)
     {
@@ -1695,10 +1695,10 @@ int CueController::fireSequence (CueList& cues, int index, bool audition)
 }
 
 //==============================================================================
-CueController::GoResult CueController::go (bool audition)
+CueController::GoResult CueController::go (bool audition, double observedSeconds)
 {
     const auto& settings = document.settings;
-    const double now = clock();
+    const double now = observedSeconds >= 0.0 ? observedSeconds : clock();
 
     if (settings.requireKeyUp && goKeyDown)
     {
@@ -1818,8 +1818,6 @@ bool CueController::handleHotkey (const juce::KeyPress& key)
     // the match is found first and fired after the walk: the start may switch lists (a goto in the sequence), which
     // would pull the list - and the cue reference - out from under the walk
     juce::Uuid matchId = juce::Uuid::null();
-    juce::String label;
-    bool armed = true;
 
     document.forEachList ([&] (CueList& cues)   // hotkeys reach into every list and cart
     {
@@ -1833,8 +1831,6 @@ bool CueController::handleHotkey (const juce::KeyPress& key)
             if (cue.hotkey.isNotEmpty() && ShortcutKeyInput::keysOverlap (juce::KeyPress::createFromDescription (cue.hotkey), key))
             {
                 matchId = cue.id;
-                label = cueLabel (i, cue);
-                armed = cue.armed;
                 return;
             }
         }
@@ -1843,13 +1839,29 @@ bool CueController::handleHotkey (const juce::KeyPress& key)
     if (matchId.isNull())
         return false;
 
+    InputInvocation input;
+    input.id = matchId.toString();
+    input.observedTimeMs = clock() * 1000.0;
+    return triggerCueById (matchId, input);
+}
+
+bool CueController::triggerCueById (const juce::Uuid& matchId, const InputInvocation& input)
+{
+    int index = -1;
+    const auto* list = document.listContaining (matchId, &index);
+    if (list == nullptr) return false;
+    if (! input.active) return true; // release changes input state, never stops a cue
+    const auto& cue = list->get (index);
+    const auto label = cueLabel (index, cue);
+    const bool armed = cue.armed;
+
     if (! armed)
     {
         status (ko ("비활성 큐, 핫키 무시: ") + label);   // GO passes over a disarmed cue; a key aimed at it starts nothing (not the next cue either)
         return true;
     }
 
-    if (refusesDoubleFire (matchId, label))
+    if (refusesDoubleFire (matchId, label, input.observedTimeMs * 0.001))
         return true;   // the key is taken (nothing else may act on it), the cue is left alone
 
     status (ko ("핫키: ") + label);   // before the start: what goes wrong in it (a missing file, a panic) overwrites this

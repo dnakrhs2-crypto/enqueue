@@ -20,6 +20,8 @@ public:
         virtual void documentStateChanged() = 0;
         /** Lists / carts were added, removed, renamed, reconfigured, or another one became active. */
         virtual void containersChanged() {}
+        virtual void midiTriggersChanged() {}
+        virtual void projectReplaced() {}
     };
 
     /** What the document knows about one list / cart besides its cues. */
@@ -71,6 +73,9 @@ public:
     /** Project-wide uniqueness: numbers and hotkeys must not repeat across lists / carts. */
     bool isNumberTaken (const juce::String& number, const juce::Uuid& exceptId) const;
     bool isHotkeyTaken (const juce::String& hotkey, const juce::Uuid& exceptId) const;
+    struct CueMidiTrigger { juce::Uuid id; MidiTrigger trigger; bool armed = true; };
+    std::vector<CueMidiTrigger> getMidiTriggers() const;
+    juce::Result setMidiTriggers (const juce::Uuid&, MidiTriggers); // rejects new project-wide conflicts; undoable
     /** Called right before the active list is swapped out (commit pending edits). */
     std::function<void()> onBeforeContainerSwitch;
     std::vector<AudioPatch> patches;   // never empty; patches[0] is the default
@@ -156,9 +161,10 @@ private:
         }
 
         markDirty();
+        listeners.call ([] (Listener& l) { l.midiTriggersChanged(); });
     }
     bool flattening = false;
-    void cueChanged (int) override { markDirty(); }
+    void cueChanged (int) override { markDirty(); listeners.call ([] (Listener& l) { l.midiTriggersChanged(); }); }
     void notify();
     void notifyContainers();
     /** Puts 'cues' aside into the active container and takes container 'index' into 'cues'. */

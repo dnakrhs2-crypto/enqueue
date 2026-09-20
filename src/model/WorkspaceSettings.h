@@ -102,6 +102,7 @@ struct WorkspaceSettings
         backupIntervalSeconds = juce::jlimit (5, 600, backupIntervalSeconds);
         rowSize = juce::jlimit (0, 2, rowSize);
         cueTemplate.sanitise();
+        cueTemplate.midiTriggers.clear();
     }
 
     /** Copies the template's settings onto a fresh cue (identity, name, number, file and cached facts stay). */
@@ -126,6 +127,7 @@ struct WorkspaceSettings
         cue.fileMissing = missing;
         cue.parentId = parent;
         cue.hotkey.clear();               // a hotkey must stay unique
+        cue.midiTriggers.clear();
         cue.wallClock.enabled = false;
     }
 };

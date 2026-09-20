@@ -22,6 +22,7 @@ public:
     {
         std::function<void (ShortcutKeyContext&)> context;
         std::function<void (const juce::KeyPress&, bool repeat)> cueHotkey;
+        std::function<void (const InputInvocation&, bool repeat)> cueInput;
         std::function<void (double timeMs)> panic;
         std::function<bool()> requireGoKeyUp;
         std::function<bool (int keyCode)> keyDown;
@@ -37,7 +38,7 @@ public:
     void activateDesktopRouting();
     static void watchWindow (juce::Component*);
     void refreshFocus();
-    void prepareNativeEvent (int virtualKey, int modifiers, bool down, bool repeat);
+    void prepareNativeEvent (int virtualKey, int modifiers, bool down, bool repeat, double observedTimeMs = -1.0);
     bool keyPressed (const juce::KeyPress&, juce::Component* origin) override;
     bool keyStateChanged (bool, juce::Component*) override;
 
@@ -59,10 +60,11 @@ private:
     {
         juce::KeyPress key;
         juce::CommandID releaseCommand = 0;
-        bool go = false, quarantined = false;
+        bool quarantined = false;
         double timeMs = 0;
         int nativeVK = 0;
         bool nativeObserved = false;
+        double releaseTimeMs = -1.0;
     };
     struct NativePress
     {
@@ -70,6 +72,8 @@ private:
         bool repeat = false, released = false, panicOwned = false;
         bool captureOwned = false;
         uint64_t generation = 0;
+        double observedTimeMs = -1.0;
+        double releaseTimeMs = -1.0;
     };
     void watchTree (juce::Component&);
     void componentChildrenChanged (juce::Component&) override;
@@ -80,8 +84,8 @@ private:
     void captureStateChanged() override;
     void quarantineDownKeys();
     void updateHeldKeys (bool recoverNative = true);
-    void releaseKey (int identity);
-    void invoke (juce::CommandID, const juce::KeyPress&, bool down, juce::Component*, double durationMs = 0);
+    void releaseKey (int identity, double observedTimeMs = -1.0);
+    void invoke (juce::CommandID, const juce::KeyPress&, bool down, juce::Component*, double durationMs = 0, double observedMs = -1.0, int identity = 0);
     void flushReleases();
     juce::Component* componentOwner (juce::Component*) const;
 
@@ -92,7 +96,7 @@ private:
     std::map<int, Press> held;
     std::vector<Press> pendingReleases;
     std::set<int> captureActivationKeys;
-    bool active = true, goLatched = false;
+    bool active = true;
     std::deque<NativePress> nativePresses;
 };
 }

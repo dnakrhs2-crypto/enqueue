@@ -1,4 +1,5 @@
 #pragma once
+#include "model/MidiTrigger.h"
 
 #include "model/Envelope.h"
 #include "model/FadeCurve.h"
@@ -251,6 +252,7 @@ struct Cue
     double postWaitSeconds = 0.0;
     ContinueMode continueMode = ContinueMode::none;
     juce::String hotkey;             // juce::KeyPress description, "" = none
+    MidiTriggers midiTriggers;       // project bindings: source=any only in schema v7
     WallClockTrigger wallClock;
     FadeStopOthers fadeStopOthers;
     DuckSettings duck;

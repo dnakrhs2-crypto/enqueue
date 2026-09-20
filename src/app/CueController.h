@@ -4,6 +4,7 @@
 #include "app/ProjectDocument.h"
 #include "app/Scheduler.h"
 #include "app/WaitProgress.h"
+#include "app/InputActivationTracker.h"
 #include "audio/AudioEngine.h"
 
 #include <functional>
@@ -39,7 +40,7 @@ public:
     /** Space: resumes paused cues if there are any; otherwise fires the playhead cue (and the sequence it
         heads) and moves the playhead past the sequence. 'audition' (Alt+Space) plays the way the workspace
         audition setting says: unchanged / no output / an alternate patch. */
-    GoResult go (bool audition = false);
+    GoResult go (bool audition = false, double observedSeconds = -1.0);
     /** The GO key was released (for "require key up before the next GO"). */
     void goKeyReleased();
     /** P: pauses the target cue (the standby cue if it is playing, else the most recently started one);
@@ -132,6 +133,7 @@ public:
     /** A key that is not a command shortcut: fires the cues whose hotkey matches (with their sequences,
         without moving the playhead). Returns true when a cue took it. */
     bool handleHotkey (const juce::KeyPress& key);
+    bool triggerCueById (const juce::Uuid&, const InputInvocation&);
     /** An auto-repeat of a held hotkey: swallowed when the key is a cue hotkey (true), else passed on (false). */
     bool handleHotkeyRepeat (const juce::KeyPress& key) const;
     /** Fires the cues whose wall-clock trigger matches 'now' (once per matching second). Call ~30x per second. */
@@ -220,7 +222,7 @@ private:
         start the entry was put on for (a walk's follow behind its schedule), 0 = none: see cancelPreviousRun(). */
     void track (int schedulerId, const juce::Uuid& owner, PendingKind kind = PendingKind::start, int runId = 0);
     /** The GO window applied to a hotkey / cart click: true (and reported) when the same cue was fired inside it. */
-    bool refusesDoubleFire (const juce::Uuid& cueId, const juce::String& label);
+    bool refusesDoubleFire (const juce::Uuid& cueId, const juce::String& label, double observedSeconds = -1.0);
     /** A restart (second-trigger) drops the previous run's pending entries - not those of the run that is starting right now
         (the follow a sequence walk put on right behind the scheduled start that is firing). */
     void cancelPreviousRun (const juce::Uuid& cueId);

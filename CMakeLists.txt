@@ -64,6 +64,13 @@ add_library(GoCueCore INTERFACE)
 
 target_sources(GoCueCore INTERFACE
     ${CMAKE_CURRENT_SOURCE_DIR}/src/model/Cue.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/model/MidiTrigger.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/app/MidiTriggerRules.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/app/MidiShortcutProfile.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/app/MidiInputService.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/app/MidiTriggerRouter.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/app/InputActivationTracker.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/app/PanicGestureGate.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/model/CueList.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/model/ProjectSerializer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/model/SafeFileWrite.cpp

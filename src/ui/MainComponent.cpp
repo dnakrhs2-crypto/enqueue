@@ -8,6 +8,7 @@
 #include "app/BackupManager.h"
 #include "app/Commands.h"
 #include "app/ShortcutCatalog.h"
+#include "ui/MidiModalScope.h"
 #include "app/ShortcutDisplay.h"
 #include "app/UiScale.h"
 #include "app/Updater.h"
@@ -239,6 +240,12 @@ MainComponent::MainComponent (AudioEngine& e, AppSettings& s, juce::ApplicationC
                                                                  : juce::Result::fail (ko ("단축키 설정을 저장하지 못했습니다."));
     });
     const auto shortcutRestore = shortcuts->restore (settings.getKeyboardShortcutsXml(), settings.getKeyboardShortcutsLastGoodXml());
+    shortcuts->setInputStorage ([this] (const InputSettingsTransaction& transaction)
+    { return settings.saveInputSettings (transaction) ? juce::Result::ok() : juce::Result::fail ("Could not save MIDI input settings"); });
+    const auto midiRestore = shortcuts->restoreMidi (settings.getMidiShortcutsXml(), settings.getMidiShortcutsLastGoodXml());
+    const auto inputRestore = shortcuts->restoreMidiInputs (settings.getMidiInputSettingsXml(), settings.getMidiInputSettingsLastGoodXml());
+    if (midiRestore.message.isNotEmpty()) juce::Logger::writeToLog ("MIDI mappings: " + midiRestore.message);
+    if (inputRestore.message.isNotEmpty()) juce::Logger::writeToLog ("MIDI inputs: " + inputRestore.message);
     if (shortcutRestore.message.isNotEmpty())
     {
         juce::Logger::writeToLog ("Shortcuts: " + shortcutRestore.message);
@@ -258,22 +265,28 @@ MainComponent::MainComponent (AudioEngine& e, AppSettings& s, juce::ApplicationC
                     context.cueHotkeys.push_back ({ cue.id.toString(), juce::KeyPress::createFromDescription (cue.hotkey), true, cue.armed });
         });
     };
-    input.cueHotkey = [this] (const juce::KeyPress& key, bool repeat)
+    input.cueInput = [this] (const InputInvocation& invocation, bool repeat)
     {
-        if (repeat) controller.handleHotkeyRepeat (key);
-        else        controller.handleHotkey (key);
+        if (! repeat) controller.triggerCueById (juce::Uuid (invocation.id), invocation);
     };
     input.panic = [this] (double timeMs) { panicHook->fromJuce (timeMs); };
     input.requireGoKeyUp = [this] { return document.settings.requireKeyUp; };
     shortcutRouter = std::make_unique<ShortcutRouter> (*shortcuts, commands, std::move (input));
     shortcutRouter->activateDesktopRouting();
     shortcutRouter->attach (*this, ShortcutKeyContext::Window::main);
+    MidiTriggerRouter::Callbacks midiCallbacks;
+    midiCallbacks.context = [this] { return currentMidiContext (*this); };
+    midiCallbacks.cue = [this] (const juce::Uuid& id, const InputInvocation& invocation) { controller.triggerCueById (id, invocation); };
+    midiCallbacks.panic = [this] (double timeMs, bool hard) { panicFromAnywhere (timeMs, hard); };
+    midiCallbacks.requireGoKeyUp = [this] { return document.settings.requireKeyUp; };
+    midiRouter = std::make_unique<MidiTriggerRouter> (*shortcuts, commands, document, std::move (midiCallbacks));
+    midiInput = std::make_unique<MidiInputService> (*shortcuts, midiRouter->inputCallbacks());
     inspector.setShortcutService (*shortcuts);
     transport.setShortcutService (*shortcuts);
     footer.setShowMode (showMode, shortcuts.get());
     shortcuts->addListener (this);
-    panicHook->beforeDispatch = [this] (int vk, int modifiers, bool down, bool repeat)
-    { shortcutRouter->prepareNativeEvent (vk, modifiers, down, repeat); };
+    panicHook->beforeTimedDispatch = [this] (int vk, int modifiers, bool down, bool repeat, double timeMs)
+    { shortcutRouter->prepareNativeEvent (vk, modifiers, down, repeat, timeMs); };
     if (const auto installed = panicHook->install(); installed.failed())
     {
         juce::Logger::writeToLog ("Panic hook: " + installed.getErrorMessage());
@@ -293,6 +306,8 @@ MainComponent::MainComponent (AudioEngine& e, AppSettings& s, juce::ApplicationC
 
 MainComponent::~MainComponent()
 {
+    midiInput.reset(); // receive -> devices -> callbacks -> notifier -> pending update, before the router
+    midiRouter.reset();
     shortcuts->removeListener (this);
     shortcuts->cancelCapture();
     panicHook.reset();
@@ -839,24 +854,27 @@ void MainComponent::getCommandInfo (juce::CommandID commandID, juce::Application
 
 bool MainComponent::perform (const InvocationInfo& info)
 {
-    if (shortcuts->isCapturing())
+    if (shortcuts->isCapturing() && ! (info.commandID == CommandIDs::go && ! info.isKeyDown && shortcuts->currentInvocation() != nullptr))
         return true;
 
+    const auto* input = shortcuts->currentInvocation();
+    const bool midi = input != nullptr && input->kind == InputKind::midi;
+    const bool physical = midi || info.invocationMethod == InvocationInfo::fromKeyPress;
     switch (info.commandID)
     {
         case CommandIDs::go:
-            if (info.invocationMethod == InvocationInfo::fromKeyPress && ! info.isKeyDown)
+            if (physical && ! info.isKeyDown)
             {
                 if (! shortcutRouter->anyGoKeyHeld())
                     controller.goKeyReleased();
             }
             else
             {
-                controller.go();
-                if (info.invocationMethod != InvocationInfo::fromKeyPress
-                    || (info.originatingComponent != nullptr && isParentOf (info.originatingComponent)))
+                controller.go (false, input != nullptr ? input->observedTimeMs * 0.001 : -1.0);
+                if (! midi && (info.invocationMethod != InvocationInfo::fromKeyPress
+                    || (info.originatingComponent != nullptr && isParentOf (info.originatingComponent))))
                     table.focusTable();
-                if (info.invocationMethod != InvocationInfo::fromKeyPress && ! shortcutRouter->anyGoKeyHeld())
+                if (! physical && ! shortcutRouter->anyGoKeyHeld())
                     controller.goKeyReleased();
             }
             break;
@@ -886,9 +904,9 @@ bool MainComponent::perform (const InvocationInfo& info)
             break;
 
         case CommandIDs::auditionGo:
-            controller.go (true);
+            controller.go (true, input != nullptr ? input->observedTimeMs * 0.001 : -1.0);
             controller.goKeyReleased();
-            table.focusTable();
+            if (! midi) table.focusTable();
             break;
 
         case CommandIDs::auditionPreview:
@@ -1699,7 +1717,7 @@ void MainComponent::addCueViaDialog()
                           | juce::FileBrowserComponent::canSelectFiles
                           | juce::FileBrowserComponent::canSelectMultipleItems;
 
-    chooser->launchAsync (browseFlags, [this] (const juce::FileChooser& fc)
+    launchMidiFileChooser (*chooser, browseFlags, [this] (const juce::FileChooser& fc)
     {
         juce::StringArray files;
 
@@ -2108,6 +2126,7 @@ void MainComponent::pasteCues()
             if (cue.isControl() && newIds.count (cue.control.secondTargetId) != 0)
                 cue.control.secondTargetId = newIds[cue.control.secondTargetId];
             cue.hotkey.clear();                    // hotkeys stay unique
+            cue.midiTriggers.clear();
             cue.plugins = plugins[i];
 
             if (autoNumber)
@@ -2429,7 +2448,7 @@ void MainComponent::findMissingFiles()
     chooser = std::make_unique<juce::FileChooser> (ko ("없어진 파일을 찾을 폴더 선택 (하위 폴더까지 검색)"), startDir);
     const int browseFlags = juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectDirectories;
 
-    chooser->launchAsync (browseFlags, [this] (const juce::FileChooser& fc)
+    launchMidiFileChooser (*chooser, browseFlags, [this] (const juce::FileChooser& fc)
     {
         const auto dir = fc.getResult();
         chooser.reset();
@@ -2501,7 +2520,7 @@ void MainComponent::openProjectViaDialog()
 
     const int browseFlags = juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles;
 
-    chooser->launchAsync (browseFlags, [this] (const juce::FileChooser& fc)
+    launchMidiFileChooser (*chooser, browseFlags, [this] (const juce::FileChooser& fc)
     {
         const auto file = fc.getResult();
         chooser.reset();
@@ -2856,7 +2875,7 @@ void MainComponent::saveProject (bool saveAs, std::function<void (bool)> then)
                           | juce::FileBrowserComponent::canSelectFiles
                           | juce::FileBrowserComponent::warnAboutOverwriting;
 
-    chooser->launchAsync (browseFlags, [this, writeTo, then] (const juce::FileChooser& fc)
+    launchMidiFileChooser (*chooser, browseFlags, [this, writeTo, then] (const juce::FileChooser& fc)
     {
         const auto file = fc.getResult();
         chooser.reset();

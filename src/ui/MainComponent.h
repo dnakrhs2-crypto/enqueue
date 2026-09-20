@@ -5,6 +5,7 @@
 #include "app/ProjectDocument.h"
 #include "app/Scheduler.h"
 #include "app/ShortcutService.h"
+#include "app/MidiTriggerRouter.h"
 #include "ui/ShortcutRouter.h"
 #include "audio/AudioEngine.h"
 #include "ui/ActiveCuesPanel.h"
@@ -49,6 +50,7 @@ public:
     ~MainComponent() override;
 
     ShortcutService& getShortcutService() noexcept { return *shortcuts; }
+    MidiInputService& getMidiInputService() noexcept { return *midiInput; }
 
     void resized() override;
     void paint (juce::Graphics& g) override;
@@ -203,6 +205,8 @@ private:
     PluginWindowManager pluginWindows;
     Scheduler scheduler;
     CueController controller;
+    std::unique_ptr<MidiTriggerRouter> midiRouter;
+    std::unique_ptr<MidiInputService> midiInput;
     std::atomic<bool> unsavedChanges { false };
     double ignorePluginChangesUntilMs = 0.0;
     std::map<juce::String, double> lastSaveBackupByPath;

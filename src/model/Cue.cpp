@@ -18,6 +18,7 @@ Cue Cue::duplicated() const
 {
     Cue copy (*this);
     copy.id = juce::Uuid();
+    copy.midiTriggers.clear();
     return copy;
 }
 

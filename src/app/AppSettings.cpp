@@ -24,6 +24,10 @@ namespace Keys
     constexpr const char* uiScalePercent    = "uiScalePercent";
     constexpr const char* keyboardShortcuts = "keyboardShortcuts";
     constexpr const char* keyboardShortcutsLastGood = "keyboardShortcutsLastGood";
+    constexpr const char* midiShortcuts = "midiShortcuts";
+    constexpr const char* midiShortcutsLastGood = "midiShortcutsLastGood";
+    constexpr const char* midiInputSettings = "midiInputSettings";
+    constexpr const char* midiInputSettingsLastGood = "midiInputSettingsLastGood";
 }
 
 namespace
@@ -84,7 +88,8 @@ void AppSettings::protectShortcutXml()
 {
     // Wrap legacy values before ANY later PropertiesFile auto-save can parse/truncate them.
     // This changes only the storage envelope, preserving the rejected XML byte for byte.
-    for (const auto* key : { Keys::keyboardShortcuts, Keys::keyboardShortcutsLastGood })
+    for (const auto* key : { Keys::keyboardShortcuts, Keys::keyboardShortcutsLastGood,
+                            Keys::midiShortcuts, Keys::midiShortcutsLastGood, Keys::midiInputSettings, Keys::midiInputSettingsLastGood })
         if (const auto value = storedValue (*settings, key); value && ! value->startsWith (shortcutStoragePrefix))
             settings->setValue (key, encodeShortcutXml (*value));
 }
@@ -270,12 +275,32 @@ std::optional<juce::String> AppSettings::getKeyboardShortcutsLastGoodXml() const
 
 bool AppSettings::saveKeyboardShortcuts (const juce::String& currentXml, const juce::String& lastGoodXml)
 {
+    InputSettingsTransaction transaction;
+    transaction.keyboard = InputSettingsTransaction::Pair { currentXml, lastGoodXml };
+    return saveInputSettings (transaction);
+}
+
+std::optional<juce::String> AppSettings::getMidiShortcutsXml() const { return readShortcutXml (*settings, Keys::midiShortcuts); }
+std::optional<juce::String> AppSettings::getMidiShortcutsLastGoodXml() const { return readShortcutXml (*settings, Keys::midiShortcutsLastGood); }
+std::optional<juce::String> AppSettings::getMidiInputSettingsXml() const { return readShortcutXml (*settings, Keys::midiInputSettings); }
+std::optional<juce::String> AppSettings::getMidiInputSettingsLastGoodXml() const { return readShortcutXml (*settings, Keys::midiInputSettingsLastGood); }
+
+bool AppSettings::saveInputSettings (const InputSettingsTransaction& transaction)
+{
     const juce::ScopedLock lock (settings->getLock());
-    const auto previous = storedValue (*settings, Keys::keyboardShortcuts);
-    const auto previousGood = storedValue (*settings, Keys::keyboardShortcutsLastGood);
     const bool wasDirty = settings->needsToBeSaved();
-    settings->setValue (Keys::keyboardShortcuts, encodeShortcutXml (currentXml));
-    settings->setValue (Keys::keyboardShortcutsLastGood, encodeShortcutXml (lastGoodXml));
+    std::vector<std::pair<const char*, std::optional<juce::String>>> previous;
+    const auto stage = [&] (const std::optional<InputSettingsTransaction::Pair>& pair, const char* current, const char* good)
+    {
+        if (! pair) return;
+        previous.emplace_back (current, storedValue (*settings, current));
+        previous.emplace_back (good, storedValue (*settings, good));
+        settings->setValue (current, encodeShortcutXml (pair->current));
+        settings->setValue (good, encodeShortcutXml (pair->lastGood));
+    };
+    stage (transaction.keyboard, Keys::keyboardShortcuts, Keys::keyboardShortcutsLastGood);
+    stage (transaction.midi, Keys::midiShortcuts, Keys::midiShortcutsLastGood);
+    stage (transaction.devices, Keys::midiInputSettings, Keys::midiInputSettingsLastGood);
     if (saveNow())
         return true;
 
@@ -286,8 +311,7 @@ bool AppSettings::saveKeyboardShortcuts (const juce::String& currentXml, const j
         else
             settings->removeValue (key);
     };
-    restore (Keys::keyboardShortcuts, previous);
-    restore (Keys::keyboardShortcutsLastGood, previousGood);
+    for (const auto& [key, value] : previous) restore (key, value);
     settings->setNeedsToBeSaved (wasDirty);
     return false;
 }

@@ -1,5 +1,6 @@
 #include "app/ShortcutService.h"
 #include "app/ShortcutKeyInput.h"
+#include "app/Commands.h"
 
 namespace gocue
 {
@@ -402,10 +403,10 @@ ShortcutOperationResult ShortcutService::restoreAllDefaults() { return commit ({
 
 ShortcutOperationResult ShortcutService::importProfile (const juce::String& xml)
 {
-    const auto parsed = ShortcutProfile::parse (xml);
+    const auto parsed = ShortcutProfile::parseExchange (xml);
     if (! parsed.wasOk())
-        return failure (parsed.message);
-    return commit (parsed.profile);
+        return failure (parsed.status.getErrorMessage());
+    return parsed.replacesMidi ? commitInputs (parsed.keyboard, parsed.midi, {}) : commit (parsed.keyboard);
 }
 
 juce::String ShortcutService::exportProfile() const
@@ -456,6 +457,7 @@ void ShortcutService::beginCapture (CaptureToken token, std::function<void (cons
     captureReceiver = std::move (receive);
     captureCancellation = std::move (cancel);
     ++inputGeneration;
+    panicGate.invalidate();
     listeners.call ([] (Listener& l) { l.captureStateChanged(); });
 }
 
@@ -466,7 +468,9 @@ void ShortcutService::endCapture (CaptureToken token)
     captureToken = nullptr;
     captureReceiver = {};
     captureCancellation = {};
+    midiCaptureReceiver = {};
     ++inputGeneration;
+    panicGate.invalidate();
     listeners.call ([] (Listener& l) { l.captureStateChanged(); });
 }
 
@@ -498,6 +502,7 @@ void ShortcutService::setEditingLocked (bool locked)
 void ShortcutService::synchroniseMappings()
 {
     ++inputGeneration;
+    panicGate.invalidate();
     auto* juceMappings = manager.getKeyMappings();
     // Two passes are essential: JUCE 8.0.15 addKeyPress does NOT remove another command's binding.
     for (const auto& entry : catalog.getCommands())
@@ -506,6 +511,201 @@ void ShortcutService::synchroniseMappings()
         for (const auto& key : getKeys (entry.id))
             juceMappings->addKeyPress (entry.commandID, key);
     manager.commandStatusChanged();
+}
+
+void ShortcutService::invalidateInputRouting()
+{
+    ++inputGeneration;
+    panicGate.invalidate();
+    listeners.call ([] (Listener& l) { l.captureStateChanged(); });
+}
+
+bool ShortcutService::invokeInput (const InputInvocation& input, const juce::ApplicationCommandTarget::InvocationInfo* keyboardInfo)
+{
+    const juce::ScopedValueSetter<const InputInvocation*> guard (invocation, &input);
+    juce::ApplicationCommandTarget::InvocationInfo info (input.commandID);
+    if (keyboardInfo != nullptr) info = *keyboardInfo; // preserve JUCE origin/key/repeat-duration exactly
+    else info.isKeyDown = input.active;
+    return manager.invoke (info, false);
+}
+
+void ShortcutService::setMidiCaptureReceiver (CaptureToken token, std::function<void (const MidiInputEvent&, const juce::String&)> receiver)
+{
+    if (captureToken == token && token != nullptr) midiCaptureReceiver = std::move (receiver);
+}
+void ShortcutService::deliverCaptureMidi (const MidiInputEvent& event, const juce::String& identifier)
+{
+    auto receiver = midiCaptureReceiver;
+    if (isCapturing() && receiver) receiver (event, identifier);
+}
+
+juce::Result ShortcutService::validateMidiMapping (const MidiShortcutProfile& candidate) const
+{
+    if (auto r = candidate.validate(); r.failed()) return r;
+    std::vector<std::pair<juce::String, MidiTrigger>> assigned;
+    for (const auto& [id, triggers] : candidate.overrides)
+    {
+        const auto* definition = catalog.find (id);
+        if (definition == nullptr) continue;
+        if (! definition->isCommand()) return juce::Result::fail ("Component inputs are read-only: " + id);
+        for (const auto& t : triggers)
+        {
+            for (const auto& [other, binding] : assigned)
+                if (other != id && MidiTriggerRules::intersects (t, binding)) return juce::Result::fail ("MIDI conflict: " + other + " / " + id);
+            assigned.emplace_back (id, t);
+        }
+    }
+    return juce::Result::ok();
+}
+
+ShortcutService::RestoreReport ShortcutService::restoreMidi (const std::optional<juce::String>& current, const std::optional<juce::String>& good)
+{
+    RestoreReport report;
+    if (inTransaction) { report.message = "A shortcut transaction is in progress"; return report; }
+    const juce::ScopedValueSetter<bool> guard (inTransaction, true);
+    const auto load = [&] (const juce::String& text, RestoreReport::Source source, juce::String& rejected)
+    {
+        const auto parsed = MidiShortcutProfile::parse (text);
+        const auto r = parsed.wasOk() ? validateMidiMapping (parsed.profile) : parsed.status;
+        if (r.failed()) { rejected = text; report.message += r.getErrorMessage() + "\n"; return false; }
+        midiProfile = parsed.profile;
+        report.source = source;
+        return true;
+    };
+    if (! (current && load (*current, RestoreReport::Source::current, report.rejectedXml))
+        && ! (current && good && load (*good, RestoreReport::Source::lastGood, report.rejectedLastGoodXml))) midiProfile = {};
+    ++inputGeneration;
+    panicGate.invalidate();
+    listeners.call ([] (Listener& l) { l.shortcutsChanged(); });
+    return report;
+}
+ShortcutService::RestoreReport ShortcutService::restoreMidiInputs (const std::optional<juce::String>& current, const std::optional<juce::String>& good)
+{
+    RestoreReport report;
+    if (inTransaction) { report.message = "A shortcut transaction is in progress"; return report; }
+    const juce::ScopedValueSetter<bool> guard (inTransaction, true);
+    const auto load = [&] (const juce::String& text, RestoreReport::Source source, juce::String& rejected)
+    {
+        MidiInputSettings candidate;
+        const auto r = MidiInputSettings::parse (text, candidate);
+        if (r.failed()) { rejected = text; report.message += r.getErrorMessage() + "\n"; return false; }
+        midiInputs = std::move (candidate);
+        report.source = source;
+        return true;
+    };
+    if (! (current && load (*current, RestoreReport::Source::current, report.rejectedXml))
+        && ! (current && good && load (*good, RestoreReport::Source::lastGood, report.rejectedLastGoodXml))) midiInputs = {};
+    invalidateInputRouting();
+    listeners.call ([] (Listener& l) { l.midiInputSettingsChanged(); });
+    return report;
+}
+const MidiTriggers& ShortcutService::getMidiTriggers (const juce::String& id) const
+{
+    static const MidiTriggers empty;
+    const auto found = midiProfile.overrides.find (id);
+    return found == midiProfile.overrides.end() ? empty : found->second;
+}
+std::vector<MidiBinding> ShortcutService::midiCommandBindings() const
+{
+    std::vector<MidiBinding> bindings;
+    for (const auto& entry : catalog.getCommands())
+        for (const auto& t : getMidiTriggers (entry.id)) bindings.push_back ({ entry.id, t, entry.commandID, true });
+    return bindings;
+}
+
+MidiOwner ShortcutService::resolveMidiOwner (const MidiBinding& binding, const MidiRoutingContext& context, bool preview) const
+{
+    using Kind = MidiOwner::Kind;
+    if (! preview && isCapturing()) return { Kind::capture, {}, "capture", 0, {} };
+    MidiOwner owner { Kind::none, binding.id, {}, binding.commandID, {} };
+    if (binding.commandID != 0)
+    {
+        const auto* definition = catalog.find (binding.id);
+        if (definition == nullptr || ! definition->isCommand() || definition->commandID != binding.commandID) return owner;
+        if (binding.commandID == CommandIDs::panicAll)
+        {
+            owner.kind = Kind::panic;
+            if (context.commandEnabled && ! context.commandEnabled (binding.commandID)) { owner.kind = Kind::blocked; owner.reason = "disabled"; }
+            return owner;
+        }
+        owner.kind = Kind::command;
+        const bool playback = definition->scope == ShortcutScope::playback;
+        const bool allowed = ! context.modal && context.window != ShortcutKeyContext::Window::modal
+            && (playback ? (context.applicationActive || context.allowBackgroundPlayback)
+                         : (context.applicationActive && context.window == ShortcutKeyContext::Window::main && ! context.textEditing));
+        if (! allowed) { owner.kind = Kind::blocked; owner.reason = "outside scope"; }
+        else if (context.commandEnabled && ! context.commandEnabled (binding.commandID)) { owner.kind = Kind::blocked; owner.reason = "disabled"; }
+        return owner;
+    }
+    for (const auto& command : midiCommandBindings())
+        if (MidiTriggerRules::intersects (binding.trigger, command.trigger)) owner.conflicts.push_back (command.id);
+    for (const auto& cue : context.cues)
+        if (cue.id != binding.id && MidiTriggerRules::intersects (binding.trigger, cue.trigger)) owner.conflicts.push_back (cue.id);
+    owner.kind = Kind::cue;
+    if (! owner.conflicts.empty()) { owner.kind = Kind::blocked; owner.reason = "conflicting binding"; }
+    else if (! binding.enabled) { owner.kind = Kind::blocked; owner.reason = "disarmed"; }
+    else if (context.modal || context.window == ShortcutKeyContext::Window::modal || (! context.applicationActive && ! context.allowBackgroundPlayback))
+    { owner.kind = Kind::blocked; owner.reason = "outside scope"; }
+    return owner;
+}
+
+ShortcutOperationResult ShortcutService::setMidiTriggers (const juce::String& id, MidiTriggers triggers, ConflictPolicy policy)
+{
+    if (auto r = checkEditableCommand (id); r.failed()) return r;
+    MidiTriggers unique;
+    for (auto& t : triggers) if (std::find (unique.begin(), unique.end(), t) == unique.end()) unique.push_back (std::move (t));
+    auto candidate = midiProfile;
+    if (policy == ConflictPolicy::move)
+        for (auto& [other, list] : candidate.overrides)
+            if (other != id && catalog.find (other) != nullptr)
+                list.erase (std::remove_if (list.begin(), list.end(), [&] (const auto& b)
+                { return std::any_of (unique.begin(), unique.end(), [&] (const auto& t) { return MidiTriggerRules::intersects (b, t); }); }), list.end());
+    candidate.overrides[id] = std::move (unique);
+    if (candidate == midiProfile) return {};
+    return replaceMidiProfile (std::move (candidate));
+}
+ShortcutOperationResult ShortcutService::replaceMidiProfile (MidiShortcutProfile candidate) { return commitInputs ({}, std::move (candidate), {}); }
+ShortcutOperationResult ShortcutService::setMidiInputSettings (MidiInputSettings candidate) { return commitInputs ({}, {}, std::move (candidate)); }
+
+ShortcutOperationResult ShortcutService::commitInputs (std::optional<ShortcutProfile> keyboard, std::optional<MidiShortcutProfile> midi,
+                                                     std::optional<MidiInputSettings> devices)
+{
+    if (editingLocked || inTransaction) return failure ("Input settings are locked or a transaction is in progress");
+    const juce::ScopedValueSetter<bool> guard (inTransaction, true);
+    ShortcutMappingResult keys;
+    if (keyboard) { keys = calculateMapping (catalog, *keyboard); if (keys.failed()) return keys; }
+    if (midi) if (auto r = validateMidiMapping (*midi); r.failed()) return { r, {} };
+    if (devices) if (auto r = devices->validate(); r.failed()) return { r, {} };
+    InputSettingsTransaction transaction;
+    const auto serialise = [] (const auto& candidate, const auto& previous, auto& pair)
+    {
+        pair.emplace();
+        auto r = candidate.serialise (pair->current);
+        return r.failed() ? r : previous.serialise (pair->lastGood);
+    };
+    if (keyboard) if (auto r = serialise (*keyboard, profile, transaction.keyboard); r.failed()) return { r, {} };
+    if (midi) if (auto r = serialise (*midi, midiProfile, transaction.midi); r.failed()) return { r, {} };
+    if (devices) if (auto r = serialise (*devices, midiInputs, transaction.devices); r.failed()) return { r, {} };
+    if (! saveInputs) return failure ("No input settings transaction storage is available");
+    if (auto r = saveInputs (transaction); r.failed()) return { r, {} };
+    if (keyboard) { profile = std::move (*keyboard); mapping = std::move (keys); }
+    if (midi) midiProfile = std::move (*midi);
+    if (devices) midiInputs = std::move (*devices);
+    if (keyboard) synchroniseMappings(); else { ++inputGeneration; panicGate.invalidate(); }
+    listeners.call ([] (Listener& l) { l.shortcutsChanged(); });
+    if (devices) listeners.call ([] (Listener& l) { l.midiInputSettingsChanged(); });
+    return {};
+}
+juce::String ShortcutService::exportCombinedProfile() const
+{
+    auto keys = profile;
+    auto midi = midiProfile;
+    for (const auto& [id, list] : mapping.keys) { keys.overrides[id] = list; midi.overrides.try_emplace (id); }
+    juce::String xml;
+    const auto r = keys.serialiseExchange (midi, xml);
+    jassert (r.wasOk());
+    juce::ignoreUnused (r);
+    return xml;
 }
 
 } // namespace gocue

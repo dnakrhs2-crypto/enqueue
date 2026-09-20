@@ -1,4 +1,5 @@
 #include "app/ShortcutProfile.h"
+#include "model/InputProfileXml.h"
 
 #include <set>
 
@@ -305,6 +306,90 @@ juce::Result ShortcutProfile::serialise (juce::String& output) const
         action->setAttribute ("id", id);
         for (const auto& key : keys)
             action->addChildElement (ShortcutKeyCodec::toXml (key).release());
+    }
+    output = xml.toString();
+    return juce::Result::ok();
+}
+
+ShortcutExchangeParseResult ShortcutProfile::parseExchange (const juce::String& source)
+{
+    const auto fail = [&] (const juce::String& message)
+    { return ShortcutExchangeParseResult { juce::Result::fail (message), source, {}, {}, false }; };
+    if (! input_xml::structure (source, { "ENQUEUE_SHORTCUTS", "ACTION", "KEYBOARD", "KEY", "MIDI", "TRIGGER", "DEVICE" }, 4))
+        return fail ("Invalid shortcut exchange structure");
+    juce::XmlDocument doc (source);
+    auto xml = doc.getDocumentElement();
+    if (! xml || doc.getLastParseError().isNotEmpty() || ! xml->hasTagName ("ENQUEUE_SHORTCUTS")
+        || ! input_xml::attributes (*xml, { "schemaVersion", "platform" }) || xml->getStringAttribute ("platform") != "windows")
+        return fail ("Invalid shortcut exchange root/platform");
+    if (xml->getStringAttribute ("schemaVersion") == "1")
+    {
+        const auto legacy = parse (source);
+        if (! legacy.wasOk()) return fail (legacy.message);
+        return { juce::Result::ok(), source, legacy.profile, {}, false };
+    }
+    if (xml->getStringAttribute ("schemaVersion") != "2") return fail ("Unsupported shortcut exchange schemaVersion");
+    juce::XmlElement keyboard ("ENQUEUE_SHORTCUTS"), midi ("ENQUEUE_MIDI_SHORTCUTS");
+    keyboard.setAttribute ("schemaVersion", 1);
+    keyboard.setAttribute ("platform", "windows");
+    midi.setAttribute ("schemaVersion", 1);
+    std::set<juce::String> ids;
+    for (const auto* x : xml->getChildIterator())
+    {
+        if (x->hasTagName ("DEVICE")) { midi.addChildElement (new juce::XmlElement (*x)); continue; }
+        const auto id = x->getStringAttribute ("id");
+        if (! x->hasTagName ("ACTION") || ! input_xml::attributes (*x, { "id" }) || ! input_xml::id (id) || ! ids.insert (id).second)
+            return fail ("Invalid/duplicate exchange action");
+        bool sawKeyboard = false, sawMidi = false;
+        for (const auto* section : x->getChildIterator())
+        {
+            const bool k = section->hasTagName ("KEYBOARD");
+            if ((! k && ! section->hasTagName ("MIDI")) || section->getNumAttributes() != 0 || (k ? sawKeyboard : sawMidi))
+                return fail ("Invalid/duplicate exchange section");
+            (k ? sawKeyboard : sawMidi) = true;
+            auto* action = (k ? keyboard : midi).createNewChildElement ("ACTION");
+            action->setAttribute ("id", id);
+            for (const auto* binding : section->getChildIterator()) action->addChildElement (new juce::XmlElement (*binding));
+        }
+        if (! sawKeyboard && ! sawMidi) return fail ("Exchange action needs KEYBOARD or MIDI");
+    }
+    const auto keys = parse (keyboard.toString());
+    const auto triggers = MidiShortcutProfile::parse (midi.toString());
+    if (! keys.wasOk()) return fail (keys.message);
+    if (! triggers.wasOk()) return fail (triggers.status.getErrorMessage());
+    return { juce::Result::ok(), source, keys.profile, triggers.profile, true };
+}
+
+juce::Result ShortcutProfile::serialiseExchange (const MidiShortcutProfile& midi, juce::String& output) const
+{
+    if (auto r = validate(); r.failed()) return r;
+    if (auto r = midi.validate(); r.failed()) return r;
+    juce::XmlElement xml ("ENQUEUE_SHORTCUTS");
+    xml.setAttribute ("schemaVersion", 2);
+    xml.setAttribute ("platform", "windows");
+    for (const auto& [id, name] : midi.deviceNames)
+    {
+        auto* device = xml.createNewChildElement ("DEVICE");
+        device->setAttribute ("identifier", id);
+        device->setAttribute ("name", name);
+    }
+    std::set<juce::String> ids;
+    for (const auto& p : overrides) ids.insert (p.first);
+    for (const auto& p : midi.overrides) ids.insert (p.first);
+    for (const auto& id : ids)
+    {
+        auto* action = xml.createNewChildElement ("ACTION");
+        action->setAttribute ("id", id);
+        if (const auto it = overrides.find (id); it != overrides.end())
+        {
+            auto* keys = action->createNewChildElement ("KEYBOARD");
+            for (const auto& k : it->second) keys->addChildElement (ShortcutKeyCodec::toXml (k).release());
+        }
+        if (const auto it = midi.overrides.find (id); it != midi.overrides.end())
+        {
+            auto* triggers = action->createNewChildElement ("MIDI");
+            for (const auto& t : it->second) triggers->addChildElement (t.toXml().release());
+        }
     }
     output = xml.toString();
     return juce::Result::ok();

@@ -1,3 +1,4 @@
+#include "ui/MidiModalScope.h"
 #include "model/Hotkeys.h"
 #include "ui/CueInspector.h"
 #include "ui/ShortcutRouter.h"
@@ -662,7 +663,7 @@ private:
         chooser = std::make_unique<juce::FileChooser> (ko ("오디오 파일 선택"), startDir, engine.getFormatManager().getWildcardForAllFormats());
         const int browseFlags = juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles;
 
-        chooser->launchAsync (browseFlags, [this] (const juce::FileChooser& fc)
+        launchMidiFileChooser (*chooser, browseFlags, [this] (const juce::FileChooser& fc)
         {
             const auto file = fc.getResult();
             chooser.reset();

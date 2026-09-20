@@ -1,4 +1,5 @@
 #pragma once
+#include "app/MidiShortcutProfile.h"
 
 #include <juce_data_structures/juce_data_structures.h>
 
@@ -77,6 +78,11 @@ public:
     /** Immediately saves the pair. Failure restores both in-memory properties and their dirty state,
         so the normal delayed save/exit flush cannot commit the rejected candidate later. */
     bool saveKeyboardShortcuts (const juce::String& currentXml, const juce::String& lastGoodXml);
+    std::optional<juce::String> getMidiShortcutsXml() const;
+    std::optional<juce::String> getMidiShortcutsLastGoodXml() const;
+    std::optional<juce::String> getMidiInputSettingsXml() const;
+    std::optional<juce::String> getMidiInputSettingsLastGoodXml() const;
+    bool saveInputSettings (const InputSettingsTransaction&);
 
     /** Writes pending changes to disk now and reports PropertiesFile's result. */
     bool saveNow();

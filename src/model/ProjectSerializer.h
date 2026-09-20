@@ -47,13 +47,12 @@ struct Project
 };
 
 /** JSON <-> Project.
-    Tolerant by design: unknown fields are ignored, missing fields take their
-    defaults, and a file written by a newer version only produces a warning. */
+    Legacy fields are tolerant. MIDI fields are strict and future versions are refused. */
 namespace ProjectSerializer
 {
     /** 1: cues with fadeInMs / fadeOutMs / gainDb.  2: "audio" object (trim, loops, rate, envelope); fadeInMs migrates to the envelope.
         3: cue list fields (number, colours, waits, continue mode, hotkey, wall clock, fade-stop-others, duck), settings (template, row size). */
-    constexpr int currentVersion = 6;   // 4: levels / trim / patches / audition / fade / devamp / slices / groups / control cues. 5: cue lists / carts ("lists"). 6: fade mode (in / out / custom)
+    constexpr int currentVersion = 7;   // 4: expanded cues/patches. 5: lists/carts. 6: fade mode. 7: MIDI triggers.
     constexpr const char* fileExtension = ".enqueue";          // 0.9.0: the app was renamed from GoCue
     constexpr const char* openableExtensions = ".enqueue;.gocue";   // projects from before the rename still open
 
@@ -62,8 +61,7 @@ namespace ProjectSerializer
     juce::var toVar (const Project& project, const juce::File& projectDir = {});
     juce::String toJson (const Project& project, const juce::File& projectDir = {});
 
-    /** Fails only for unparsable input. Missing / bad fields fall back to defaults and
-        (where useful) add a line to 'warnings'. */
+    /** On failure, out is unchanged. MIDI values are never coerced to valid triggers. */
     juce::Result fromJson (const juce::String& json, Project& out,
                            juce::StringArray* warnings = nullptr,
                            const juce::File& projectDir = {});

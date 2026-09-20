@@ -57,6 +57,7 @@ public:
     /** Runs before JUCE dispatch, so even a newly-created native/modal window's
         focused JUCE component has its router listener before its first key. */
     std::function<void (int virtualKey, int modifiers, bool down, bool repeat)> beforeDispatch;
+    std::function<void (int virtualKey, int modifiers, bool down, bool repeat, double timeMs)> beforeTimedDispatch;
 
 private:
     struct State;
