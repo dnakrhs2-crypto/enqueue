@@ -682,6 +682,9 @@ bool CuePlayer::renderNextBlock (juce::AudioBuffer<float>& fullBuffer, int numSa
 
     if (resumeRequested.exchange (false, std::memory_order_relaxed) && (paused || pausing))
     {
+        if (paused)
+            gainLinear = targetGain.load (std::memory_order_relaxed);   // already silent: reopen at the current gain, without a ramp from the pre-pause level
+
         paused = false;
         pausing = false;
         pausedFlag.store (false, std::memory_order_relaxed);

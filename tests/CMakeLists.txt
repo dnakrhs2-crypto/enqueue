@@ -88,6 +88,7 @@ target_sources(EnqueueTests PRIVATE
     AudioEngineTests.cpp
     RegionPlaybackTests.cpp
     CueControllerTests.cpp
+    AuditFixCueTests.cpp
     BackupManagerTests.cpp
     PluginChainTests.cpp
     RealVst3Tests.cpp)

@@ -343,6 +343,7 @@ int CueController::startGroup (CueList& cues, int index, bool audition)
         {
             const int after = fireSequence (cues, children.front(), audition);
             lastGroupEnterIndex = after < end ? after : end;
+            lastGroupEnterList = &cues;   // the child sequence resets both parts of the enter destination
             break;
         }
 
@@ -1541,7 +1542,7 @@ int CueController::sequenceEnd (const CueList& cues, int index) const
     const int bound = parent >= 0 ? cues.subtreeEnd (parent) : cues.size();
     int i = index;
 
-    while (cues.get (i).continueMode != ContinueMode::none)
+    while (! cues.get (i).armed || cues.get (i).continueMode != ContinueMode::none)
     {
         const int next = cues.subtreeEnd (i);
 
