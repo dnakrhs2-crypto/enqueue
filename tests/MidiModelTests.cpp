@@ -44,10 +44,10 @@ public:
             expect (MidiTrigger::fromVar (v, t).failed());
         }
 
-        beginTest ("Note preparation, repeated on, zero velocity, minimum velocity, independent physical state");
+        beginTest ("first Note on fires without preparation; repeats, zero/minimum velocity and physical state stay independent");
         MidiTriggerRules rules;
         auto t = note(); t.minVelocity = 50;
-        expect (! rules.observe (t, message (on())).activated);
+        expect (rules.observe (t, message (on())).activated);
         expect (rules.observe (t, message (off(), 1010)).ready);
         expect (! rules.observe (t, message (on (60, 49), 1020)).activated);
         expect (! rules.observe (t, message (on (60, 80), 1030)).activated);
@@ -61,7 +61,7 @@ public:
         rules.observe (t, message (off(), 2011));
         expect (rules.observe (t, message (on(), 2022)).activated); // debounce inclusive boundary
         for (const auto& e : { message (on(), 2100, 2), message (on (60, 100, 2), 2100), message (on(), 2100, 1, 2) })
-            expect (! rules.observe (t, e).activated);
+            expect (rules.observe (t, e).activated);
         rules.observe (t, message (off(), 2200, 2));
         expect (rules.observe (t, message (on(), 2220, 2)).activated);
         rules.observe (t, message (off (60, 2), 2200));

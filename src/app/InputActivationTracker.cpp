@@ -12,11 +12,12 @@ uint64_t InputInvocation::nextEventID() noexcept
 bool InputActivationTracker::press (const InputToken& token, bool eligible, bool requireKeyUp)
 {
     held[token] = true;
+    releasePending = true;
     if (! eligible || (latched && requireKeyUp)) return false;
     latched = true;
     return true;
 }
-void InputActivationTracker::hold (const InputToken& token) { held[token] = true; latched = true; }
+void InputActivationTracker::hold (const InputToken& token) { held[token] = true; latched = true; releasePending = true; }
 void InputActivationTracker::release (const InputToken& token) { held.erase (token); if (held.empty()) latched = false; }
 void InputActivationTracker::releaseSource (InputKind kind, uint64_t source)
 {
@@ -24,5 +25,11 @@ void InputActivationTracker::releaseSource (InputKind kind, uint64_t source)
         if (it->first.kind == kind && it->first.source == source) it = held.erase (it); else ++it;
     if (held.empty()) latched = false;
 }
-void InputActivationTracker::clear() { held.clear(); latched = false; }
+bool InputActivationTracker::consumeRelease() noexcept
+{
+    if (! releasePending || ! held.empty()) return false;
+    releasePending = false;
+    return true;
+}
+void InputActivationTracker::clear() { held.clear(); latched = false; releasePending = false; }
 }

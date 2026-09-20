@@ -865,7 +865,7 @@ bool MainComponent::perform (const InvocationInfo& info)
         case CommandIDs::go:
             if (physical && ! info.isKeyDown)
             {
-                if (! shortcutRouter->anyGoKeyHeld())
+                if (shortcuts->activations().consumeRelease())
                     controller.goKeyReleased();
             }
             else

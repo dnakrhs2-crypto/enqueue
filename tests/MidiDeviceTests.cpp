@@ -31,22 +31,22 @@ public:
         for (int i = 0; i < 10; ++i) input.refresh(); expectEquals (backend.ports["A"].opens, 2);
         expectEquals (backend.ports["B"].opens, 0);
         h.service->setMidiTriggers ("transport.preview", { note (60, 1, "A") });
-        backend.send ("A", on()); drain (input, backend.now); expectEquals (h.downs (CommandIDs::preview), 0);
+        backend.send ("A", on()); drain (input, backend.now); expectEquals (h.downs (CommandIDs::preview), 1);
         backend.send ("A", off()); backend.now = 1025; backend.send ("A", on()); drain (input, backend.now);
-        expectEquals (h.downs (CommandIDs::preview), 1); expect (input.devices()[0].status == MidiInputService::Status::connected);
+        expectEquals (h.downs (CommandIDs::preview), 2); expect (input.devices()[0].status == MidiInputService::Status::connected);
 
         beginTest ("disconnect retains selection/mapping; changed identifier never replaces by name; reconnect starts a new generation");
         const auto oldConnection = input.devices()[0].connection;
         backend.send ("A", off()); backend.send ("A", on()); // queued before disappearing
         backend.list = { { "Same name", "B" }, { "Same name", "renamed-id" } }; input.refresh();
-        drain (input, backend.now); expectEquals (h.downs (CommandIDs::preview), 1);
+        drain (input, backend.now); expectEquals (h.downs (CommandIDs::preview), 2);
         expect (h.service->getMidiInputSettings().selected.count ("A") == 1); expect (! h.service->getMidiTriggers ("transport.preview").empty());
         expectEquals (backend.ports["renamed-id"].opens, 0); expect (input.devices()[0].status == MidiInputService::Status::disconnected);
         backend.list.push_back ({ "New display name", "A" }); input.refresh();
         expect (input.devices()[0].connection != oldConnection); expectEquals (backend.ports["A"].opens, 3);
-        backend.send ("A", on()); drain (input, backend.now); expectEquals (h.downs (CommandIDs::preview), 1);
+        backend.send ("A", on()); drain (input, backend.now); expectEquals (h.downs (CommandIDs::preview), 3);
         backend.send ("A", off()); backend.now = 1050; backend.send ("A", on()); drain (input, backend.now);
-        expectEquals (h.downs (CommandIDs::preview), 2);
+        expectEquals (h.downs (CommandIDs::preview), 4);
         selected.autoUseAll = true; h.service->setMidiInputSettings (selected);
         expectEquals (backend.ports["B"].opens, 1); expectEquals (backend.ports["renamed-id"].opens, 1);
         backend.list.push_back ({ "New", "C" }); input.deviceListChanged(); input.drain(); expectEquals (backend.ports["C"].opens, 1);
@@ -57,17 +57,45 @@ public:
         beginTest ("disabled input invalidates queued packets; shutdown closes every input once and late notifications cannot reopen");
         backend.send ("A", off()); backend.now = 1100; backend.send ("A", on());
         selected.autoUseAll = false; selected.selected.clear(); h.service->setMidiInputSettings (selected);
-        drain (input, backend.now); expectEquals (h.downs (CommandIDs::preview), 2);
+        drain (input, backend.now); expectEquals (h.downs (CommandIDs::preview), 4);
         input.shutdown(); input.deviceListChanged(); input.drain(); input.refresh(); expect (input.devices().empty());
         expectEquals (backend.ports["A"].stops, 2); expectEquals (backend.ports["B"].stops, 1);
         testOverload();
         testPanicLoss();
+        testPanicProjectLoss();
         testQueue();
         testTransport();
         testCaptureRace();
         testShutdown();
     }
 private:
+    void testPanicProjectLoss()
+    {
+        for (bool released : { false, true })
+        {
+            beginTest (juce::String ("ordinary loss then project replacement preserves panic Note ")
+                + (released ? "release from the reserved backlog" : "quarantine without another packet"));
+            Harness h; FakeDevices backend; backend.list = { { "A", "A" } };
+            MidiInputSettings settings; settings.selected["A"] = "A";
+            expect (h.service->setMidiInputSettings (settings).wasOk());
+            expect (h.service->setMidiTriggers ("transport.panicAll", { note (61) }).wasOk());
+            MidiInputService input (*h.service, h.router->inputCallbacks(), backend.backend(), false);
+            backend.send ("A", off (61)); backend.now = 1025; backend.send ("A", on (61)); drain (input, backend.now);
+            expectEquals (static_cast<int> (h.panics.size()), 1);
+            if (released) backend.send ("A", off (61));
+            for (int i = released ? 1 : 0; i < 8192; ++i) backend.send ("A", on (90));
+            backend.send ("A", on (90)); // ordinary loss must preserve the reserved Note state
+            expectEquals (static_cast<int> (input.counters().dropped), 1);
+            expectEquals (static_cast<int> (input.counters().panicDropped), 0);
+            drain (input, backend.now);
+            h.document.newProject();
+            backend.now = 1050; backend.send ("A", on (61)); drain (input, backend.now);
+            expectEquals (static_cast<int> (h.panics.size()), released ? 2 : 1,
+                "only a physically released panic may fire immediately in the new project");
+            backend.send ("A", off (61)); backend.now = 1075; backend.send ("A", on (61)); drain (input, backend.now);
+            expectEquals (static_cast<int> (h.panics.size()), released ? 3 : 2);
+        }
+    }
     void testPanicLoss()
     {
         for (bool pulse : { false, true })
@@ -122,11 +150,11 @@ private:
         expect (input.counters().dropped > 0 && input.counters().stale > 0 && input.hasInputFault());
         expectEquals (static_cast<int> (input.counters().panicDropped), 0);
         backend.now = 1300; backend.send ("A", on()); drain (input, backend.now);
-        expectEquals (h.downs (CommandIDs::go), 0); // old pre-loss offs cannot prepare a still-held input
+        expectEquals (h.downs (CommandIDs::go), 1); // a fresh post-loss Note on needs no preparatory off
         backend.send ("A", off (61)); backend.now = 1525; backend.send ("A", on (61)); drain (input, 6000);
         expectEquals (static_cast<int> (h.panics.size()), 2); expect (h.panics.back()); // inclusive 500ms observation gap despite delayed execution
         backend.now = 7000; backend.send ("A", off()); backend.now = 7025; backend.send ("A", on()); drain (input, backend.now);
-        expectEquals (h.downs (CommandIDs::go), 1);
+        expectEquals (h.downs (CommandIDs::go), 2);
 
         beginTest ("reserved capacity exhaustion is an explicit fault; unsupported messages never enter command routing");
         for (int i = 0; i < 9000; ++i) backend.send ("A", (i % 2 == 0) ? on (61) : off (61));
@@ -135,6 +163,23 @@ private:
         backend.send ("A", juce::MidiMessage::programChange (1, 2)); backend.send ("A", juce::MidiMessage::midiClock());
         const juce::uint8 bytes[] { 0x7d, 0x01 }; backend.send ("A", juce::MidiMessage::createSysExMessage (bytes, 2));
         expectEquals (static_cast<int> (input.counters().unsupported - before), 3);
+        beginTest ("ordinary loss preserves a held panic Note and its 500ms gesture history");
+        {
+            Harness held; FakeDevices device; device.list = { { "A", "A" } };
+            expect (held.service->setMidiInputSettings (settings).wasOk());
+            expect (held.service->setMidiTriggers ("transport.panicAll", { note (61) }).wasOk());
+            MidiInputService service (*held.service, held.router->inputCallbacks(), device.backend(), false);
+            device.send ("A", off (61)); device.now = 1025; device.send ("A", on (61)); drain (service, device.now);
+            expectEquals (static_cast<int> (held.panics.size()), 1);
+            for (int i = 0; i <= 8192; ++i) device.send ("A", on (90));
+            device.now = 1100; device.send ("A", on (61)); drain (service, device.now);
+            expectEquals (static_cast<int> (service.counters().dropped), 1);
+            expectEquals (static_cast<int> (service.counters().panicDropped), 0);
+            expectEquals (static_cast<int> (held.panics.size()), 1, "a repeated held panic must not become a fresh Note after ordinary loss");
+            device.send ("A", off (61)); device.now = 1525; device.send ("A", on (61)); drain (service, device.now);
+            expectEquals (static_cast<int> (held.panics.size()), 2);
+            expect (! held.panics.empty() && held.panics.back(), "ordinary loss must preserve the inclusive 500ms gesture");
+        }
         beginTest ("a CC address reserved for rising panic still expires its falling ordinary command after 100ms");
         {
             Harness shared; FakeDevices device; device.list = { { "A", "A" } };
@@ -204,6 +249,7 @@ private:
         });
         backend.ports["A"].onStop = [&] { stop = true; producer.join(); };
         while (sent.load() < 100) std::this_thread::yield();
+        input->shutdown(); expect (! input->hasPending());
         input.reset(); expectEquals (backend.ports["A"].stops, 1); expect (stop.load());
     }
     void testTransport()

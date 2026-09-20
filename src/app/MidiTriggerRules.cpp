@@ -45,8 +45,9 @@ MidiTriggerRules::Transition MidiTriggerRules::observe (const MidiTrigger& t, co
     {
         const bool down = e.noteOn && e.value != 0;
         r.changed = down != s.down;
-        if (! down) { s.ready = true; s.quarantined = false; }
-        candidate = down && ! s.down && s.ready && e.value >= t.minVelocity;
+        s.ready = true; // a fresh Note address needs no preparatory off; only quarantine waits for release
+        if (! down) s.quarantined = false;
+        candidate = down && ! s.down && e.value >= t.minVelocity;
         s.down = down; // includes on below minimum velocity, and blocked/captured input
         s.raw = e.value;
     }

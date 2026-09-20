@@ -27,6 +27,8 @@ public:
     const std::vector<MidiBinding>& cueBindings() const noexcept { return cues; }
 private:
     struct Runtime { MidiBinding binding; MidiTriggerRules rules; bool live = true; };
+    struct Observed { MidiInputEvent event; juce::String identifier; bool carryGoHold = true; };
+    void synchroniseObserved (Runtime&);
     void shortcutsChanged() override;
     void captureStateChanged() override;
     void documentStateChanged() override {}
@@ -42,7 +44,7 @@ private:
     std::vector<Runtime> bindings;
     std::vector<MidiBinding> cues;
     std::map<uint64_t, uint64_t> connections;
-    std::map<InputToken, std::pair<MidiInputEvent, juce::String>> lastObserved;
+    std::map<InputToken, Observed> lastObserved;
     bool rebuilding = false;
 };
 }

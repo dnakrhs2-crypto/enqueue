@@ -21,7 +21,9 @@
     { "name": "vs2022-release", "configurePreset": "vs2022", "configuration": "Release" }
   ],
   "testPresets": [
-    { "name": "vs2022-debug",   "configurePreset": "vs2022", "configuration": "Debug",   "output": { "outputOnFailure": true } },
-    { "name": "vs2022-release", "configurePreset": "vs2022", "configuration": "Release", "output": { "outputOnFailure": true } }
+    { "name": "vs2022-debug",   "configurePreset": "vs2022", "configuration": "Debug",   "output": { "outputOnFailure": true }, "filter": { "exclude": { "label": "^load$" } } },
+    { "name": "vs2022-release", "configurePreset": "vs2022", "configuration": "Release", "output": { "outputOnFailure": true }, "filter": { "exclude": { "label": "^load$" } } },
+    { "name": "vs2022-debug-midi-load",   "configurePreset": "vs2022", "configuration": "Debug",   "output": { "outputOnFailure": true }, "filter": { "include": { "label": "^load$" } } },
+    { "name": "vs2022-release-midi-load", "configurePreset": "vs2022", "configuration": "Release", "output": { "outputOnFailure": true }, "filter": { "include": { "label": "^load$" } } }
   ]
 }

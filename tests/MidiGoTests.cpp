@@ -1,4 +1,7 @@
 #include "MidiTestHarness.h"
+#if JUCE_WINDOWS
+ #include <windows.h>
+#endif
 
 namespace gocue::tests
 {
@@ -16,9 +19,11 @@ struct ControllerHarness : Harness
         {
             if (info.commandID != CommandIDs::go) return CatalogTarget::perform (info);
             const auto* input = harness.service->currentInvocation();
+            invocations.push_back (info);
+            if (input != nullptr) inputs.push_back (*input);
             if (info.isKeyDown)
                 results.push_back (harness.controller.go (false, input != nullptr ? input->observedTimeMs * 0.001 : -1.0));
-            else if (! harness.service->activations().anyHeld())
+            else if (harness.service->activations().consumeRelease())
             {
                 harness.controller.goKeyReleased();
                 ++releases;
@@ -27,6 +32,7 @@ struct ControllerHarness : Harness
         }
         ControllerHarness& harness;
         std::vector<CueController::GoResult> results;
+        std::vector<InputInvocation> inputs;
         int releases = 0;
     };
 
@@ -81,8 +87,233 @@ public:
         testProjectRelease();
         testMappingCarryOver();
         testInputRemoval();
+        testFirstNotes();
+        testNoteQuarantine();
+        testRetiredMappingRestore();
+        testQuietPortFault();
+        testCaptureRelease();
     }
 private:
+    void testFirstNotes()
+    {
+        for (const auto* boundary : { "connect", "reconnect", "project replace", "new project", "input loss" })
+        {
+            beginTest (juce::String ("first note-on after ") + boundary + " fires GO, panic and cue through the input service");
+            ControllerHarness h; FakeDevices backend; backend.list = { { "A", "A" } };
+            MidiInputSettings settings; settings.selected["A"] = "A";
+            expect (h.service->setMidiInputSettings (settings).wasOk());
+            expect (h.service->setMidiTriggers ("transport.go", { note() }).wasOk());
+            expect (h.service->setMidiTriggers ("transport.panicAll", { note (61) }).wasOk());
+            expect (h.service->setMidiTriggers ("transport.preview", { cc() }).wasOk());
+            MidiInputService input (*h.service, h.router->inputCallbacks(), backend.backend(), false);
+            const juce::String change (boundary);
+            if (change != "connect")
+            {
+                // The boundary must reset previously prepared addresses too;
+                // in particular an old CC low must not execute the new high.
+                backend.send ("A", off()); backend.send ("A", off (61)); backend.send ("A", control (0));
+                drain (input, backend.now);
+            }
+            if (change == "reconnect")
+            {
+                backend.list.clear(); input.refresh();
+                backend.list = { { "A", "A" } }; input.refresh();
+            }
+            else if (change == "project replace" || change == "new project") h.replaceProject (change == "project replace");
+            else if (change == "input loss")
+            {
+                for (int i = 0; i < 8192; ++i) backend.send ("A", on (90));
+                for (int i = 0; i < 512; ++i) backend.send ("A", off (61));
+                backend.send ("A", on (61)); // force a reserved loss, resetting both rule paths
+                expectEquals (static_cast<int> (input.counters().panicDropped), 1);
+                drain (input, backend.now);
+            }
+            const auto cue = h.document.cues.get (0).id;
+            expect (h.document.setMidiTriggers (cue, { note (62) }).wasOk());
+            h.onCue = [&] (const juce::Uuid& id, const InputInvocation& invocation)
+            { expect (h.controller.triggerCueById (id, invocation)); };
+            backend.now = h.now = 1100;
+            for (int n : { 60, 61, 62 })
+            {
+                backend.send ("A", on (n)); backend.send ("A", on (n));
+                drain (input, backend.now);
+            }
+            expect (h.goTarget.results == std::vector { CueController::GoResult::started });
+            expectEquals (static_cast<int> (h.panics.size()), 1);
+            expect (h.panics.empty() || ! h.panics.front());
+            expect (h.cues == std::vector { cue });
+            expect (! h.controller.getRunningWaits().empty());
+            expect (input.devices()[0].status == MidiInputService::Status::connected);
+            backend.send ("A", control (127)); backend.send ("A", control (127)); drain (input, backend.now);
+            expectEquals (h.goTarget.invocationCount (CommandIDs::preview), 0, "first CC value remains a baseline");
+            backend.send ("A", control (0)); backend.now = 1125; backend.send ("A", control (127)); drain (input, backend.now);
+            expectEquals (h.goTarget.invocationCount (CommandIDs::preview), 1);
+        }
+    }
+    void testNoteQuarantine()
+    {
+        for (const auto* boundary : { "capture", "mapping", "project replace", "new project" })
+        {
+            beginTest (juce::String ("held notes across ") + boundary + " remain quarantined for GO, panic and cue until off");
+            Harness h;
+            expect (h.service->setMidiTriggers ("transport.go", { note() }).wasOk());
+            expect (h.service->setMidiTriggers ("transport.panicAll", { note (61) }).wasOk());
+            Cue cue; cue.midiTriggers = { note (62) }; h.document.cues.add (cue);
+            for (int n : { 60, 61, 62, 63 }) { h.send (off (n)); h.now += 25; h.send (on (n)); }
+            expectEquals (h.downs (CommandIDs::go), 1);
+            expectEquals (static_cast<int> (h.panics.size()), 1);
+            expectEquals (static_cast<int> (h.cues.size()), 1);
+            const juce::String change (boundary);
+            if (change == "capture")
+            {
+                int token = 0; h.service->beginCapture (&token); h.service->endCapture (&token);
+            }
+            else if (change == "mapping")
+                expect (h.service->setMidiTriggers ("transport.go", { note(), note (64) }).wasOk());
+            else
+            {
+                if (change == "project replace") h.document.adopt (Project(), {});
+                else h.document.newProject();
+                // A new cue ID and a previously unmapped held address both inherit quarantine.
+                cue = Cue(); cue.midiTriggers = { note (62), note (63) }; h.document.cues.add (cue);
+                expect (! h.service->activations().anyHeld(), "project replacement releases the old MIDI GO group");
+            }
+            h.now += 25;
+            for (int n : { 60, 61, 62, 63 }) h.send (on (n));
+            expectEquals (h.downs (CommandIDs::go), 1);
+            expectEquals (static_cast<int> (h.panics.size()), 1);
+            expectEquals (static_cast<int> (h.cues.size()), 1);
+            for (int n : { 60, 61, 62 }) { h.send (off (n)); h.now += 25; h.send (on (n)); }
+            expectEquals (h.downs (CommandIDs::go), 2);
+            expectEquals (static_cast<int> (h.panics.size()), 2);
+            expectEquals (static_cast<int> (h.cues.size()), 2);
+        }
+    }
+    void testRetiredMappingRestore()
+    {
+        for (bool gate : { false, true })
+        {
+            beginTest (juce::String ("retired GO ") + (gate ? "gate" : "Note") + " restoration carries B hold until both ports release");
+            Harness h; h.requireKeyUp = true;
+            const auto trigger = gate ? cc() : note();
+            expect (h.service->setMidiTriggers ("transport.go", { trigger, note (65) }).wasOk());
+            h.send (gate ? control (0) : off()); h.now += 25; h.send (gate ? control (127) : on());
+            expectEquals (h.downs (CommandIDs::go), 1);
+            expect (h.service->setMidiTriggers ("transport.go", { note (65) }).wasOk());
+            h.send (gate ? control (127) : on(), 2, "B");
+            expect (h.service->setMidiTriggers ("transport.go", { trigger, note (65) }).wasOk());
+            expectEquals (h.downs (CommandIDs::go), 1, "restoration only synchronises state");
+            h.send (gate ? control (0) : off());
+            expect (h.service->activations().anyHeld(), "B remains physically held after A releases");
+            h.tap (65); expectEquals (h.downs (CommandIDs::go), 1);
+            h.send (gate ? control (0) : off(), 2, "B");
+            expect (! h.service->activations().anyHeld());
+            h.tap (65); expectEquals (h.downs (CommandIDs::go), 2);
+        }
+    }
+    void testQuietPortFault()
+    {
+        for (bool notified : { false, true }) testQuietPortFault (notified);
+    }
+    void testQuietPortFault (bool notified)
+    {
+        beginTest (juce::String ("quiet port A reserved GO-release loss with only B queued: ") + (notified ? "real notifier" : "manual drain"));
+        ControllerHarness h; FakeDevices backend; backend.list = { { "A", "A" }, { "B", "B" } };
+        MidiInputSettings settings; settings.autoUseAll = true;
+        expect (h.service->setMidiInputSettings (settings).wasOk());
+        expect (h.service->setMidiTriggers ("transport.panicAll", { cc() }).wasOk());
+        expect (h.service->setMidiTriggers ("transport.go", { cc (MidiTrigger::Edge::falling), note() }).wasOk());
+        int ordinaryFaults = 0, panicFaults = 0;
+        auto callbacks = h.router->inputCallbacks();
+        const auto fault = callbacks.fault;
+        callbacks.fault = [&] (uint64_t port, bool panic)
+        {
+            if (port == 1) ++(panic ? panicFaults : ordinaryFaults);
+            fault (port, panic);
+        };
+        MidiInputService input (*h.service, callbacks, backend.backend (! notified), notified);
+        const auto flush = [&]
+        {
+            if (! notified) { drain (input, backend.now); return; }
+            const auto deadline = juce::Time::getMillisecondCounterHiRes() + 3000.0;
+            while (input.hasPending() && juce::Time::getMillisecondCounterHiRes() < deadline)
+            {
+               #if JUCE_WINDOWS
+                MSG message {};
+                while (PeekMessageW (&message, nullptr, 0, 0, PM_REMOVE)) { TranslateMessage (&message); DispatchMessageW (&message); }
+                MsgWaitForMultipleObjectsEx (0, nullptr, 5, QS_ALLINPUT, MWMO_INPUTAVAILABLE);
+               #endif
+            }
+            expect (! input.hasPending(), "the notifier drains both packets and pending faults");
+        };
+        backend.send ("A", control (127)); flush();
+        backend.now = 1025; backend.send ("A", control (0)); flush();
+        expect (h.goTarget.results == std::vector { CueController::GoResult::started });
+        expect (input.devices()[0].status == MidiInputService::Status::connected);
+        for (int i = 0; i < 8192; ++i) backend.send ("B", on (90));
+        for (int i = 0; i < 512; ++i) backend.send ("B", control (127));
+        backend.send ("A", control (127)); // the sole A release is lost; A sends nothing further
+        expectEquals (static_cast<int> (input.counters().panicDropped), 1);
+        expectEquals (static_cast<int> (input.counters().dropped), 0);
+        flush();
+        expectEquals (ordinaryFaults, 1); expectEquals (panicFaults, 1);
+        expect (input.devices()[0].status == MidiInputService::Status::waiting);
+        expect (! h.service->activations().anyHeld());
+        expectEquals (h.goTarget.releases, 1);
+        input.drain (backend.now); input.drain (backend.now);
+        expectEquals (ordinaryFaults, 1); expectEquals (panicFaults, 1);
+        expectEquals (h.goTarget.releases, 1, "idle drains must not repeat the release");
+        h.document.cues.setPlayheadIndex (0);
+        backend.send ("B", off()); backend.now = 1050; backend.send ("B", on()); flush();
+        expect (h.goTarget.results == std::vector { CueController::GoResult::started, CueController::GoResult::started });
+    }
+    void testCaptureRelease()
+    {
+        for (bool midiFirst : { false, true })
+        {
+            beginTest (juce::String ("capture defers keyboard key-up but releases the real GO controller once: ")
+                + (midiFirst ? "MIDI first" : "keyboard first"));
+            ControllerHarness h;
+            expect (h.service->setMidiTriggers ("transport.go", { note() }).wasOk());
+            bool down = true;
+            ShortcutRouter::Callbacks callbacks;
+            callbacks.keyDown = [&] (int code) { return down && code == juce::KeyPress::spaceKey; };
+            callbacks.nativeKeyDown = [] (int) { return false; };
+            callbacks.applicationActive = [] { return true; };
+            callbacks.requireGoKeyUp = [] { return true; };
+            ShortcutRouter keyboard (*h.service, h.manager, callbacks);
+            keyboard.prepareNativeEvent (32, 0, true, false, 1000);
+            juce::Component origin; keyboard.attach (origin, ShortcutKeyContext::Window::main);
+            keyboard.keyPressed (juce::KeyPress (juce::KeyPress::spaceKey), &origin);
+            h.send (off()); h.now += 25; h.send (on());
+            expect (h.goTarget.results == std::vector { CueController::GoResult::started });
+            int capture = 0; h.service->beginCapture (&capture);
+            if (midiFirst) h.router->connectionChanged (1, 1, false);
+            down = false; keyboard.prepareNativeEvent (32, 0, false, false, 1075); keyboard.keyStateChanged (false, &origin);
+            expectEquals (h.goTarget.releases, 0);
+            if (! midiFirst) h.router->connectionChanged (1, 1, false);
+            expectEquals (h.goTarget.releases, midiFirst ? 0 : 1);
+            h.service->endCapture (&capture); keyboard.pollKeyState();
+            expectEquals (h.goTarget.releases, 1, "deferred key-up must not repeat the MIDI release");
+            int keyboardUps = 0;
+            for (size_t i = 0; i < h.goTarget.inputs.size(); ++i)
+                if (h.goTarget.inputs[i].kind == InputKind::keyboard && ! h.goTarget.inputs[i].active)
+                {
+                    ++keyboardUps;
+                    expectEquals (h.goTarget.inputs[i].token.control, -32);
+                    expectEquals (h.goTarget.inputs[i].observedTimeMs, 1075.0);
+                    expect (h.goTarget.invocations[i].keyPress == juce::KeyPress (juce::KeyPress::spaceKey));
+                    expect (h.goTarget.invocations[i].invocationMethod == juce::ApplicationCommandTarget::InvocationInfo::fromKeyPress);
+                }
+            expectEquals (keyboardUps, 1, "the original keyboard key-up is still delivered");
+            h.document.cues.setPlayheadIndex (0);
+            down = true;
+            keyboard.prepareNativeEvent (32, 0, true, false, 1100); keyboard.keyPressed (juce::KeyPress (juce::KeyPress::spaceKey), &origin);
+            expect (h.goTarget.results == std::vector { CueController::GoResult::started, CueController::GoResult::started });
+            down = false; keyboard.prepareNativeEvent (32, 0, false, false, 1150); keyboard.keyStateChanged (false, &origin);
+            expectEquals (h.goTarget.releases, 2, "the next physical group has its own release");
+        }
+    }
     void testAliases()
     {
         for (bool pulseFirst : { true, false })

@@ -35,9 +35,13 @@ public:
     void releaseSource (InputKind, uint64_t source);
     bool anyHeld() const noexcept { return ! held.empty(); }
     bool isLatched() const noexcept { return latched; }
+    /** Consume the common controller release once per physical GO group. Keyboard
+        key-up metadata can still be delivered later, for example after capture. */
+    bool consumeRelease() noexcept;
     void clear();
 private:
     std::map<InputToken, bool> held;
     bool latched = false;
+    bool releasePending = false;
 };
 }

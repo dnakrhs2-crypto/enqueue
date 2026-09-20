@@ -122,6 +122,7 @@ void MidiInputService::shutdown()
     ports.clear();
     MidiInputEvent ignored;
     while (queue->pop (ignored)) {}
+    signals->faultPending.store (false, std::memory_order_release);
 }
 void MidiInputService::refresh()
 {
@@ -214,11 +215,29 @@ void MidiInputService::accept (Port& port, const juce::MidiMessage& message) noe
                 // opposite CC edge. Discard their pre-loss ordinary state too.
                 port.faultEpoch.fetch_add (1, std::memory_order_release);
                 if (event.panicReserved) port.panicFaultEpoch.fetch_add (1, std::memory_order_release);
+                signals->faultPending.store (true, std::memory_order_release);
             }
         }
         else unsupported.fetch_add (1, std::memory_order_relaxed);
     }
     port.inFlight.fetch_sub (1, std::memory_order_release);
+}
+MidiInputService::FaultEpochs MidiInputService::deliverFaults (Port& port)
+{
+    // Read panic first: its loss also publishes the preceding ordinary epoch.
+    const auto panic = port.panicFaultEpoch.load (std::memory_order_acquire);
+    const auto ordinary = port.faultEpoch.load (std::memory_order_acquire);
+    const bool ordinaryChanged = ordinary != port.observedFault, panicChanged = panic != port.observedPanicFault;
+    if (! ordinaryChanged && ! panicChanged) return { ordinary, panic };
+    port.observedFault = ordinary;
+    port.observedPanicFault = panic;
+    port.status = Status::waiting;
+    const auto input = port.input;
+    const auto lifetime = signals;
+    const auto fault = callbacks.fault;
+    if (ordinaryChanged && fault) fault (input, false);
+    if (! lifetime->stopped.load() && panicChanged && fault) fault (input, true);
+    return { ordinary, panic };
 }
 void MidiInputService::drain (double nowMs)
 {
@@ -226,6 +245,16 @@ void MidiInputService::drain (double nowMs)
     const auto lifetime = signals;
     if (signals->deviceChange.load (std::memory_order_acquire)) refresh();
     const auto start = juce::Time::getMillisecondCounterHiRes();
+    // A lost release may be the last packet a port ever sends. Deliver its fault
+    // independently of dequeue; a concurrent loss leaves the flag set for the
+    // next notifier turn even if the last queued packet is consumed below.
+    if (signals->faultPending.exchange (false, std::memory_order_acq_rel))
+        for (auto& [id, port] : ports)
+        {
+            juce::ignoreUnused (id);
+            if (port->enabled.load (std::memory_order_acquire)) deliverFaults (*port);
+            if (lifetime->stopped.load()) return;
+        }
     const bool realtime = nowMs < 0.0;
     if (nowMs < 0.0) nowMs = start;
     MidiInputEvent event;
@@ -234,25 +263,13 @@ void MidiInputService::drain (double nowMs)
         Port* port = nullptr;
         for (auto& [id, p] : ports) { juce::ignoreUnused (id); if (p->input == event.input) { port = p.get(); break; } }
         if (port == nullptr || ! port->enabled.load() || port->connection != event.connection) continue;
-        // Read panic first: observing its loss also observes the ordinary epoch
-        // published before it, even when a callback overflows during this drain.
-        const auto panicFault = port->panicFaultEpoch.load (std::memory_order_acquire);
-        const auto fault = port->faultEpoch.load (std::memory_order_acquire);
-        if (fault != port->observedFault)
-        {
-            port->observedFault = fault;
-            port->status = Status::waiting;
-            if (callbacks.fault) callbacks.fault (port->input, false);
-        }
-        if (panicFault != port->observedPanicFault)
-        {
-            port->observedPanicFault = panicFault;
-            port->status = Status::waiting;
-            if (callbacks.fault) callbacks.fault (port->input, true);
-        }
-        const bool currentFaultEpoch = event.faultEpoch == (event.panicReserved ? panicFault : fault);
+        // Also catch losses published during this bounded drain before routing
+        // any post-loss packet from the same port.
+        const auto faults = deliverFaults (*port);
+        if (lifetime->stopped.load()) return;
+        const bool currentFaultEpoch = event.faultEpoch == (event.panicReserved ? faults.panic : faults.ordinary);
         bool execute = currentFaultEpoch;
-        event.ordinaryStateValid = event.ordinaryFaultEpoch == fault;
+        event.ordinaryStateValid = event.ordinaryFaultEpoch == faults.ordinary;
         event.ordinaryAllowed = event.ordinaryStateValid;
         if ((realtime ? juce::Time::getMillisecondCounterHiRes() : nowMs) - event.observedTimeMs > 100.0)
         {
@@ -276,7 +293,7 @@ void MidiInputService::drain (double nowMs)
     }
 }
 void MidiInputService::handleAsyncUpdate() { drain(); }
-bool MidiInputService::hasPending() const noexcept { return queue->pending(); }
+bool MidiInputService::hasPending() const noexcept { return queue->pending() || signals->faultPending.load (std::memory_order_acquire); }
 std::vector<MidiInputService::Device> MidiInputService::devices() const
 {
     std::vector<Device> result;

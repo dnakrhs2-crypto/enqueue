@@ -61,14 +61,34 @@ void MidiTriggerRouter::inputFault (uint64_t input, bool panic)
     for (auto& runtime : bindings)
         if (panic || runtime.binding.commandID != CommandIDs::panicAll) runtime.rules.forgetInput (input);
     for (auto it = lastObserved.begin(); it != lastObserved.end();)
-        if (it->first.source == input) it = lastObserved.erase (it); else ++it;
+    {
+        // A held panic Note survived ordinary loss. Keep its observation for
+        // quarantine if a project/mapping boundary occurs before its next packet.
+        const bool heldPanicNote = ! panic && it->second.event.kind == MidiTrigger::Kind::note
+            && std::any_of (bindings.begin(), bindings.end(), [&] (const auto& runtime)
+                { return runtime.binding.commandID == CommandIDs::panicAll && runtime.rules.isHeld (it->first); });
+        if (it->first.source == input && ! heldPanicNote) it = lastObserved.erase (it); else ++it;
+    }
     if (panic) shortcuts.panicGestures().invalidate();
     releaseGoSource (input);
 }
 void MidiTriggerRouter::projectReplaced()
 {
-    for (auto& runtime : bindings) runtime.rules.clear();
-    lastObserved.clear();
+    // Preserve only physically held Notes as quarantine, including addresses that
+    // may acquire a different cue/command owner in the next project. Old GO holds
+    // and all CC baselines still end here; a fresh Note can fire immediately.
+    for (auto it = lastObserved.begin(); it != lastObserved.end();)
+        if (it->second.event.kind == MidiTrigger::Kind::note && it->second.event.noteOn && it->second.event.value != 0)
+        {
+            it->second.carryGoHold = false;
+            ++it;
+        }
+        else it = lastObserved.erase (it);
+    for (auto& runtime : bindings)
+    {
+        runtime.rules.clear();
+        synchroniseObserved (runtime);
+    }
     for (const auto& p : connections) releaseGoSource (p.first);
     shortcuts.invalidateInputRouting();
 }
@@ -77,6 +97,16 @@ void MidiTriggerRouter::captureStateChanged()
     for (auto& runtime : bindings) runtime.rules.quarantine (callbacks.clockMs());
 }
 void MidiTriggerRouter::shortcutsChanged() { refreshBindings(); captureStateChanged(); }
+void MidiTriggerRouter::synchroniseObserved (Runtime& runtime)
+{
+    for (const auto& [token, observed] : lastObserved)
+        if (MidiTriggerRules::matchesAddress (runtime.binding.trigger, observed.event, observed.identifier))
+        {
+            const auto state = runtime.rules.observe (runtime.binding.trigger, observed.event, false);
+            if (runtime.binding.commandID == CommandIDs::go && state.held && observed.carryGoHold)
+                shortcuts.activations().hold (token);
+        }
+}
 void MidiTriggerRouter::refreshBindings()
 {
     if (rebuilding) return;
@@ -96,24 +126,23 @@ void MidiTriggerRouter::refreshBindings()
         if (std::none_of (bindings.begin(), bindings.end(), [&] (const auto& r) { return r.live && same (r.binding, b) && r.binding.enabled == b.enabled; })) changed = true;
     cues = std::move (nextCues);
     if (! changed) return;
-    for (auto& runtime : bindings) runtime.live = false;
+    for (auto& runtime : bindings)
+        if (std::none_of (next.begin(), next.end(), [&] (const auto& b) { return same (runtime.binding, b); })) runtime.live = false;
     for (const auto& b : next)
     {
         auto found = std::find_if (bindings.begin(), bindings.end(), [&] (const auto& r) { return same (r.binding, b); });
         if (found == bindings.end())
         {
             Runtime runtime { b, {}, true };
-            for (const auto& [token, observed] : lastObserved)
-            {
-                if (MidiTriggerRules::matchesAddress (b.trigger, observed.first, observed.second))
-                {
-                    const auto state = runtime.rules.observe (b.trigger, observed.first, false);
-                    if (b.commandID == CommandIDs::go && state.held) shortcuts.activations().hold (token);
-                }
-            }
+            synchroniseObserved (runtime);
             bindings.push_back (std::move (runtime));
         }
-        else { found->live = true; found->binding = b; }
+        else
+        {
+            if (! found->live) synchroniseObserved (*found);
+            found->live = true;
+            found->binding = b;
+        }
     }
     // Retired GO gates retain their release interpretation across a mapping edit.
     bindings.erase (std::remove_if (bindings.begin(), bindings.end(), [] (const auto& r)
@@ -124,7 +153,11 @@ bool MidiTriggerRouter::route (const MidiInputEvent& event, const juce::String& 
 {
     const auto connection = connections.find (event.input);
     if (connection == connections.end() || connection->second != event.connection) return false;
-    if (event.ordinaryStateValid) lastObserved[event.token()] = { event, identifier };
+    // Reserved Notes remain physically reliable across ordinary loss, including
+    // a queued off. CC observations still require the ordinary epoch because an
+    // opposite ordinary edge can share a reserved CC address.
+    if (event.ordinaryStateValid || (event.panicReserved && event.kind == MidiTrigger::Kind::note))
+        lastObserved[event.token()] = { event, identifier };
     const auto generation = shortcuts.getInputGeneration();
     const bool current = event.routing == generation;
     auto context = callbacks.context ? callbacks.context() : MidiRoutingContext();

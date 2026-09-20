@@ -107,7 +107,9 @@ public:
 private:
     struct Port;
     struct Notifier;
-    struct Signals { std::atomic<bool> deviceChange { false }, stopped { false }; };
+    struct Signals { std::atomic<bool> deviceChange { false }, stopped { false }, faultPending { false }; };
+    struct FaultEpochs { uint64_t ordinary, panic; };
+    FaultEpochs deliverFaults (Port&);
     void accept (Port&, const juce::MidiMessage&) noexcept;
     void rebuildPanicAddresses();
     void closePort (Port&);
