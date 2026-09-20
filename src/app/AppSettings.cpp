@@ -137,10 +137,10 @@ juce::File AppSettings::getLastSessionProject() const
     return getFileValue (Keys::lastSessionProject);
 }
 
-void AppSettings::setLastSessionProject (const juce::File& file)
+bool AppSettings::setLastSessionProject (const juce::File& file)
 {
     setFileValue (Keys::lastSessionProject, file);
-    flush();
+    return saveNow();
 }
 
 ReopenLastProjectPolicy AppSettings::getReopenLastProjectPolicy() const
@@ -151,11 +151,23 @@ ReopenLastProjectPolicy AppSettings::getReopenLastProjectPolicy() const
     return ReopenLastProjectPolicy::ask;
 }
 
-void AppSettings::setReopenLastProjectPolicy (ReopenLastProjectPolicy policy)
+bool AppSettings::setReopenLastProjectPolicy (ReopenLastProjectPolicy policy)
 {
+    const juce::ScopedLock lock (settings->getLock());
+    const auto previous = storedValue (*settings, Keys::reopenLastProjectPolicy);
+    const bool wasDirty = settings->needsToBeSaved();
     settings->setValue (Keys::reopenLastProjectPolicy,
                         policy == ReopenLastProjectPolicy::always ? "always"
                       : policy == ReopenLastProjectPolicy::never ? "never" : "ask");
+    if (saveNow())
+        return true;
+
+    if (previous.has_value())
+        settings->setValue (Keys::reopenLastProjectPolicy, *previous);
+    else
+        settings->removeValue (Keys::reopenLastProjectPolicy);
+    settings->setNeedsToBeSaved (wasDirty);
+    return false;
 }
 
 juce::File AppSettings::getReopenProjectAfterUpdate() const

@@ -174,6 +174,8 @@ private:
     void openProjectViaDialog();
     void saveProject (bool saveAs, std::function<void (bool ok)> then = {});
     bool writeProjectToFile (juce::File file);
+    void rememberLastSessionProject (const juce::File& file);
+    void applyReopenLastProjectPolicy (ReopenLastProjectPolicy policy);
     void restorePluginChainsFromDocument (juce::StringArray& errors);
     void refreshFileInfoForAllCues();
     /** Copies the file that is about to be overwritten into the backup folder (settings permitting, once a minute). */
@@ -241,6 +243,7 @@ private:
     juce::Uuid autoLoadedId = juce::Uuid::null();   // the standby cue we loaded automatically (dropped when the playhead moves)
     juce::Component::SafePointer<juce::AlertWindow> discardDialog;
     std::unique_ptr<juce::AlertWindow> reopenDialog;
+    bool sessionSaveFailureNotified = false;
 
     juce::MenuBarComponent menuBar;
     TransportBar transport;

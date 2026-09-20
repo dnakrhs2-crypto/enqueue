@@ -306,7 +306,7 @@ MainComponent::MainComponent (AudioEngine& e, AppSettings& s, juce::ApplicationC
 
 MainComponent::~MainComponent()
 {
-    settings.setLastSessionProject (document.getFile());
+    settings.setLastSessionProject (document.getFile()); // best effort on shutdown: no notice or interruption
     reopenDialog.reset();
     // Stop reception first, retaining queryable services through capture callbacks
     // and every UI owner that can still refresh or dismiss a learning callout.
@@ -1151,8 +1151,7 @@ bool MainComponent::perform (const InvocationInfo& info)
         case CommandIDs::reopenLastProjectAsk:
         case CommandIDs::reopenLastProjectAlways:
         case CommandIDs::reopenLastProjectNever:
-            settings.setReopenLastProjectPolicy (reopenLastProjectPolicies[info.commandID - CommandIDs::reopenLastProjectAsk]);
-            commands.commandStatusChanged();
+            applyReopenLastProjectPolicy (reopenLastProjectPolicies[info.commandID - CommandIDs::reopenLastProjectAsk]);
             break;
 
         case CommandIDs::undo:
@@ -2517,6 +2516,32 @@ void MainComponent::findMissingFiles()
     });
 }
 
+void MainComponent::applyReopenLastProjectPolicy (ReopenLastProjectPolicy policy)
+{
+    if (! settings.setReopenLastProjectPolicy (policy))
+        showAlert (ko ("최근 프로젝트 설정 저장 실패"),
+                   ko ("최근 프로젝트 설정을 저장하지 못했습니다. 이전 설정을 유지합니다."), true);
+    commands.commandStatusChanged();
+}
+
+void MainComponent::rememberLastSessionProject (const juce::File& file)
+{
+    if (settings.setLastSessionProject (file))
+    {
+        sessionSaveFailureNotified = false;
+        return;
+    }
+
+    if (sessionSaveFailureNotified)
+        return;
+
+    sessionSaveFailureNotified = true;
+    showAlert (ko ("최근 프로젝트 경로 저장 실패"),
+               ko ("프로젝트 파일 저장과 별개로, 최근 프로젝트 경로를 저장하지 못했습니다.\n"
+                   "다음 실행에는 이전 프로젝트가 열리고 시작 큐가 실행될 수 있습니다.\n"
+                   "프로젝트를 열거나 저장하거나 새로 만들 때 다시 시도합니다."), true);
+}
+
 void MainComponent::newProject()
 {
     WorkspaceSettingsDialog::closeIfOpen();   // it edits the document that is about to be replaced
@@ -2528,7 +2553,7 @@ void MainComponent::newProject()
     engine.clearCueChains();
     engine.getMasterChain().clear();
     document.newProject();
-    settings.setLastSessionProject ({});
+    rememberLastSessionProject ({});
     engine.setPatches (document.patches, true);
     controller.clearPlayed();
     autoLoadedId = juce::Uuid::null();
@@ -2582,12 +2607,13 @@ void MainComponent::openProjectFile (const juce::File& file, bool allowAutoStart
     engine.clearCueChains();
     engine.getMasterChain().clear();
     document.adopt (std::move (candidate), file);
+    reopenDialog.reset(); // dismiss and invalidate its queued response before any auto-start
     controller.clearPlayed();
     autoLoadedId = juce::Uuid::null();
     document.cues.setLockPlayheadToSelection (document.settings.lockPlayheadToSelection);
 
     settings.setLastProjectFile (file);
-    settings.setLastSessionProject (file);
+    rememberLastSessionProject (file);
     refreshFileInfoForAllCues();
     restorePluginChainsFromDocument (warnings);
     ignorePluginChangesBriefly();   // restoring saved plugin state is not an edit
@@ -2622,7 +2648,7 @@ void MainComponent::reopenLastProjectOnStartup (bool openedFromCommandLine, bool
           file != juce::File(), file.existsAsFile(), document.hasFile() });
 
     if (decision.clearLastSessionProject)
-        settings.setLastSessionProject ({});
+        rememberLastSessionProject ({});
 
     if (decision.action == ReopenLastProjectDecision::Action::none)
         return;
@@ -2646,9 +2672,10 @@ void MainComponent::reopenLastProjectOnStartup (bool openedFromCommandLine, bool
     ShortcutRouter::watchWindow (reopenDialog.get());
 
     juce::Component::SafePointer<MainComponent> safeThis (this);
-    reopenDialog->enterModalState (true, juce::ModalCallbackFunction::create ([safeThis, file] (int result)
+    juce::Component::SafePointer<juce::AlertWindow> prompt (reopenDialog.get());
+    reopenDialog->enterModalState (true, juce::ModalCallbackFunction::create ([safeThis, prompt, file] (int result)
     {
-        if (safeThis == nullptr)
+        if (safeThis == nullptr || prompt == nullptr || safeThis->reopenDialog.get() != prompt.getComponent())
             return;
 
         safeThis->reopenDialog.reset();
@@ -2659,11 +2686,7 @@ void MainComponent::reopenLastProjectOnStartup (bool openedFromCommandLine, bool
         if (result == 1 || result == 2)
         {
             if (result == 2)
-            {
-                safeThis->settings.setReopenLastProjectPolicy (ReopenLastProjectPolicy::always);
-                safeThis->settings.flush();
-                safeThis->commands.commandStatusChanged();
-            }
+                safeThis->applyReopenLastProjectPolicy (ReopenLastProjectPolicy::always);
             safeThis->openProjectFile (file, true);
         }
         else
@@ -2913,7 +2936,7 @@ bool MainComponent::writeProjectToFile (juce::File file)
     }
 
     settings.setLastProjectFile (file);
-    settings.setLastSessionProject (file);
+    rememberLastSessionProject (file);
     transport.showStatus (ko ("저장됨: ") + file.getFileName(), false);
     return true;
 }

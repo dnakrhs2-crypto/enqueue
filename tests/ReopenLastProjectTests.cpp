@@ -40,14 +40,16 @@ void drainMessages()
 
 struct Fixture
 {
-    static juce::PropertiesFile::Options options()
+    static juce::PropertiesFile::Options options (bool failSave = false)
     {
         juce::PropertiesFile::Options result;
         result.storageFormat = juce::PropertiesFile::storeAsXML;
         result.millisecondsBeforeSaving = -1;
+        result.doNotSave = failSave;
         return result;
     }
-    Fixture() : storage (folder.getChildFile ("test.settings"), options()), settings (storage) {}
+    explicit Fixture (bool failSave = false)
+        : storage (folder.getChildFile ("test.settings"), options (failSave)), settings (storage) {}
     ~Fixture()
     {
         main.reset();
@@ -67,6 +69,15 @@ struct Fixture
     {
         juce::PropertiesFile disk (storage.getFile(), options());
         return AppSettings (disk).getLastSessionProject();
+    }
+    bool seedSession (const juce::File& file, Policy policy)
+    {
+        juce::PropertiesFile disk (storage.getFile(), options());
+        AppSettings persisted (disk);
+        persisted.setLastProjectFile (file);
+        persisted.setReopenLastProjectPolicy (policy);
+        persisted.setLastSessionProject (file);
+        return persisted.saveNow() && storage.reload();
     }
     bool makeProject (const juce::File& file, bool autoStart = false)
     {
@@ -104,6 +115,7 @@ public:
         testDecisions();
         testLifecycle();
         testMenu();
+        testSaveFailures();
        #if JUCE_WINDOWS
         testPrompt();
        #endif
@@ -126,8 +138,8 @@ private:
         const std::array<juce::String, 3> values { "ask", "always", "never" };
         for (size_t i = 0; i < policies.size(); ++i)
         {
-            f.settings.setReopenLastProjectPolicy (policies[i]);
-            f.settings.setLastSessionProject (sessionFile);
+            expect (f.settings.setReopenLastProjectPolicy (policies[i]));
+            expect (f.settings.setLastSessionProject (sessionFile));
             juce::PropertiesFile disk (f.storage.getFile(), Fixture::options());
             AppSettings reloaded (disk);
             expectEquals (disk.getValue ("lastSessionProject"), sessionFile.getFullPathName());
@@ -318,6 +330,154 @@ private:
         }
     }
 
+    void testSaveFailures()
+    {
+        beginTest ("policy save failure restores the raw value and dirty state for a later flush");
+        for (const auto* raw : { static_cast<const char*> (nullptr), "future", "always" })
+            for (const bool dirty : { false, true })
+            {
+                Fixture f (true); // same PropertiesFile failure injection as the shortcut rollback tests
+                if (raw != nullptr) f.storage.setValue ("reopenLastProjectPolicy", raw);
+                f.storage.setNeedsToBeSaved (false);
+                if (dirty) f.settings.setWindowState ("unrelated pending state");
+                expect (! f.settings.setReopenLastProjectPolicy (Policy::never));
+                expect (f.storage.containsKey ("reopenLastProjectPolicy") == (raw != nullptr));
+                expectEquals (f.storage.getValue ("reopenLastProjectPolicy"), juce::String (raw));
+                expect (f.storage.needsToBeSaved() == dirty);
+                expectEquals (f.settings.getWindowState(), juce::String (dirty ? "unrelated pending state" : ""));
+                f.settings.flush();
+                expectEquals (f.storage.getValue ("reopenLastProjectPolicy"), juce::String (raw));
+            }
+
+        beginTest ("a later successful flush cannot commit a rejected policy");
+        {
+            Fixture f;
+            expect (f.storage.getFile().createDirectory().wasOk());
+            f.storage.setValue ("reopenLastProjectPolicy", "always");
+            f.settings.setWindowState ("unrelated pending state");
+            expect (! f.settings.setReopenLastProjectPolicy (Policy::never));
+            expect (f.settings.getReopenLastProjectPolicy() == Policy::always);
+            expect (f.storage.needsToBeSaved());
+            expect (f.storage.getFile().deleteFile());
+            expect (f.settings.saveNow());
+            juce::PropertiesFile disk (f.storage.getFile(), Fixture::options());
+            AppSettings restarted (disk);
+            expect (restarted.getReopenLastProjectPolicy() == Policy::always);
+            expectEquals (restarted.getWindowState(), juce::String ("unrelated pending state"));
+        }
+
+        beginTest ("menu policy save failure restores the saved choice and shows one notice; restart uses disk values");
+        {
+            Fixture f (true);
+            const auto previous = f.folder.getChildFile ("previous.enqueue");
+            expect (f.makeProject (previous, true));
+            expect (f.seedSession (previous, Policy::always));
+            f.createMain();
+            expect (f.commands.invokeDirectly (CommandIDs::reopenLastProjectNever, false));
+            expect (f.settings.getReopenLastProjectPolicy() == Policy::always);
+            juce::ApplicationCommandInfo info (CommandIDs::reopenLastProjectAlways);
+            f.main->getCommandInfo (info.commandID, info);
+            expect ((info.flags & juce::ApplicationCommandInfo::isTicked) != 0);
+            drainMessages();
+            expectEquals (juce::Component::getNumCurrentlyModalComponents(), 1);
+            auto* notice = dynamic_cast<juce::AlertWindow*> (juce::Component::getCurrentlyModalComponent());
+            expect (notice != nullptr);
+            if (notice != nullptr)
+            {
+                expectEquals (notice->getName(), ko ("최근 프로젝트 설정 저장 실패"));
+                expect (notice->getDescription().contains (ko ("이전 설정")));
+            }
+            juce::ModalComponentManager::getInstance()->cancelAllModalComponents();
+            drainMessages();
+            f.main.reset(); // a failed shutdown save must not issue another notice
+            drainMessages();
+            expectEquals (juce::Component::getNumCurrentlyModalComponents(), 0);
+            juce::PropertiesFile disk (f.storage.getFile(), Fixture::options());
+            AppSettings restarted (disk);
+            expect (restarted.getReopenLastProjectPolicy() == Policy::always);
+            expect (restarted.getLastSessionProject() == previous);
+            expect (decideReopenLastProject (restarted.getReopenLastProjectPolicy(),
+                { false, false, false, true, restarted.getLastSessionProject().existsAsFile(), false }).action == Action::open);
+        }
+
+        beginTest ("session save failure is reported once apart from project save success; shutdown is quiet and disk stays authoritative");
+        {
+            Fixture f (true);
+            const auto previous = f.folder.getChildFile ("previous.enqueue");
+            const auto incoming = f.folder.getChildFile ("incoming.enqueue");
+            const auto savedAs = f.folder.getChildFile ("saved-as.enqueue");
+            expect (f.makeProject (previous, true) && f.makeProject (incoming));
+            expect (f.seedSession (previous, Policy::always));
+            f.createMain();
+            f.main->openProjectFile (incoming);
+            expect (f.main->getProjectFile() == incoming);
+            expect (f.settings.getLastSessionProject() == incoming);
+            expect (f.persistedSession() == previous);
+            drainMessages();
+            expectEquals (juce::Component::getNumCurrentlyModalComponents(), 1);
+            auto* notice = dynamic_cast<juce::AlertWindow*> (juce::Component::getCurrentlyModalComponent());
+            expect (notice != nullptr);
+            if (notice != nullptr)
+            {
+                expectEquals (notice->getName(), ko ("최근 프로젝트 경로 저장 실패"));
+                expect (notice->getDescription().contains (ko ("프로젝트 파일")));
+                expect (notice->getDescription().contains (ko ("이전 프로젝트")));
+                expect (notice->getDescription().contains (ko ("시작 큐")));
+            }
+            juce::ModalComponentManager::getInstance()->cancelAllModalComponents();
+            drainMessages();
+            expect (ReopenLastProjectTestAccess::saveAs (*f.main, savedAs));
+            ProjectDocument saved;
+            expect (saved.load (savedAs).wasOk());
+            expect (f.main->getProjectFile() == savedAs);
+            expect (f.settings.getLastSessionProject() == savedAs);
+            f.main->perform (juce::ApplicationCommandTarget::InvocationInfo (CommandIDs::newProject));
+            expect (f.settings.getLastSessionProject() == juce::File());
+            drainMessages();
+            expectEquals (juce::Component::getNumCurrentlyModalComponents(), 0);
+            f.main.reset();
+            drainMessages();
+            expectEquals (juce::Component::getNumCurrentlyModalComponents(), 0);
+            expect (f.persistedSession() == previous);
+            juce::PropertiesFile disk (f.storage.getFile(), Fixture::options());
+            AppSettings restarted (disk);
+            expect (restarted.getReopenLastProjectPolicy() == Policy::always);
+            expect (decideReopenLastProject (restarted.getReopenLastProjectPolicy(),
+                { false, false, false, true, restarted.getLastSessionProject().existsAsFile(), false }).action == Action::open);
+        }
+
+        beginTest ("session persistence retries on the next change and a later failure can notify again");
+        {
+            Fixture f;
+            const auto project = f.folder.getChildFile ("session.enqueue");
+            expect (f.makeProject (project));
+            expect (f.storage.getFile().createDirectory().wasOk()); // directory blocks the settings write
+            f.createMain();
+            f.main->openProjectFile (project);
+            drainMessages();
+            expectEquals (juce::Component::getNumCurrentlyModalComponents(), 1);
+            juce::ModalComponentManager::getInstance()->cancelAllModalComponents();
+            drainMessages();
+            expect (f.storage.getFile().deleteFile());
+            expect (ReopenLastProjectTestAccess::saveAs (*f.main, project)); // unchanged path still retries
+            expect (f.persistedSession() == project);
+            expect (! f.storage.needsToBeSaved());
+            drainMessages();
+            expectEquals (juce::Component::getNumCurrentlyModalComponents(), 0);
+            expect (f.storage.getFile().deleteFile());
+            expect (f.storage.getFile().createDirectory().wasOk());
+            f.main->perform (juce::ApplicationCommandTarget::InvocationInfo (CommandIDs::newProject));
+            drainMessages();
+            expectEquals (juce::Component::getNumCurrentlyModalComponents(), 1);
+            juce::ModalComponentManager::getInstance()->cancelAllModalComponents();
+            drainMessages();
+            f.main.reset();
+            drainMessages();
+            expectEquals (juce::Component::getNumCurrentlyModalComponents(), 0);
+            expect (f.storage.getFile().deleteFile());
+        }
+    }
+
     void testPrompt()
     {
         beginTest ("ask presents exact buttons; normal keyboard/MIDI actions are blocked while panic is retained");
@@ -360,7 +520,63 @@ private:
             expect (ReopenLastProjectTestAccess::pendingAutoStart (*f.main) == opened);
         }
 
-        beginTest ("a late prompt response cannot replace a project delivered by another instance");
+        beginTest ("always-open prompt save failure keeps ask and reports once while opening the requested project");
+        {
+            Fixture f (true);
+            const auto previous = f.folder.getChildFile ("previous.enqueue");
+            expect (f.makeProject (previous));
+            expect (f.seedSession (previous, Policy::ask));
+            f.createMain();
+            f.main->reopenLastProjectOnStartup (false, false, false);
+            auto* prompt = dynamic_cast<juce::AlertWindow*> (juce::Component::getCurrentlyModalComponent());
+            expect (prompt != nullptr);
+            if (prompt != nullptr) prompt->triggerButtonClick (ko ("항상 열기"));
+            drainMessages();
+            expect (f.main->getProjectFile() == previous);
+            expect (f.settings.getReopenLastProjectPolicy() == Policy::ask);
+            expectEquals (juce::Component::getNumCurrentlyModalComponents(), 1);
+            auto* notice = juce::Component::getCurrentlyModalComponent();
+            expect (notice != nullptr);
+            if (notice != nullptr) expectEquals (notice->getName(), ko ("최근 프로젝트 설정 저장 실패"));
+        }
+
+        beginTest ("another open dismisses the prompt before auto-start and restores keyboard/MIDI without a response");
+        for (const bool commandLine : { true, false })
+        {
+            Fixture f;
+            const auto previous = f.folder.getChildFile ("previous.enqueue");
+            const auto incoming = f.folder.getChildFile ("incoming.enqueue");
+            expect (f.makeProject (previous) && f.makeProject (incoming, true));
+            f.settings.setLastSessionProject (previous);
+            f.createMain();
+            f.main->reopenLastProjectOnStartup (false, false, false);
+            juce::Component::SafePointer<juce::Component> prompt (juce::Component::getCurrentlyModalComponent());
+            expect (prompt != nullptr);
+            if (commandLine)
+                f.main->openProjectFromCommandLine ("\"" + incoming.getFullPathName() + "\"");
+            else
+                f.main->openProjectFile (incoming); // the menu chooser's completion uses the same path
+            expect (prompt == nullptr);
+            expectEquals (juce::Component::getNumCurrentlyModalComponents(), 0);
+            expect (ReopenLastProjectTestAccess::pendingAutoStart (*f.main));
+            auto& keyboard = ReopenLastProjectTestAccess::keyboard (*f.main);
+            keyboard.applicationActiveChanged (true);
+            const juce::KeyPress go (juce::KeyPress::spaceKey);
+            auto* origin = juce::Component::getCurrentlyModalComponent();
+            const auto keyContext = keyboard.contextFor (origin != nullptr ? origin : f.main.get(), go);
+            expectEquals (f.main->getShortcutService().resolveKeyOwner (go, keyContext).commandID, juce::CommandID (CommandIDs::go));
+            auto midi = currentMidiContext (*f.main);
+            expect (! midi.modal);
+            midi.applicationActive = true; // independent of whether the test console owns the foreground
+            midi.window = ShortcutKeyContext::Window::main;
+            expect (f.main->getShortcutService().resolveMidiOwner ({ "transport.go", {}, CommandIDs::go }, midi).kind == MidiOwner::Kind::command);
+            drainMessages(); // cancellation's queued callback must be inert too
+            expect (f.main->getProjectFile() == incoming);
+            expect (f.persistedSession() == incoming);
+            expect (f.settings.getReopenLastProjectPolicy() == Policy::ask);
+        }
+
+        beginTest ("a queued old prompt response cannot change the project or dismiss a replacement prompt");
         Fixture f;
         const auto previous = f.folder.getChildFile ("previous.enqueue");
         const auto incoming = f.folder.getChildFile ("incoming.enqueue");
@@ -372,16 +588,24 @@ private:
         expect (alert != nullptr);
         if (alert != nullptr)
         {
+            alert->exitModalState (2); // response queued, but not dispatched yet
             f.main->openProjectFromCommandLine ("\"" + incoming.getFullPathName() + "\"");
-            alert->triggerButtonClick (ko ("항상 열기"));
+            f.main->perform (juce::ApplicationCommandTarget::InvocationInfo (CommandIDs::newProject));
+            f.settings.setLastSessionProject (previous);
+            f.main->reopenLastProjectOnStartup (false, false, false);
+            juce::Component::SafePointer<juce::Component> replacement (juce::Component::getCurrentlyModalComponent());
+            expect (replacement != nullptr);
             drainMessages();
-            expect (f.main->getProjectFile() == incoming);
-            expect (f.persistedSession() == incoming);
+            expect (replacement != nullptr);
+            expect (juce::Component::getCurrentlyModalComponent() == replacement.getComponent());
+            expect (f.main->getProjectFile() == juce::File());
+            expect (f.persistedSession() == previous);
             expect (f.settings.getReopenLastProjectPolicy() == Policy::ask);
         }
 
         beginTest ("closing the owner while the async prompt is open dismisses it safely");
         f.main.reset();
+        f.settings.setReopenLastProjectPolicy (Policy::ask);
         f.settings.setLastSessionProject (previous);
         f.createMain();
         f.main->reopenLastProjectOnStartup (false, false, false);
