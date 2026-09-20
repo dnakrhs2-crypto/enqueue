@@ -1537,7 +1537,25 @@ int CueController::groupEnterDestination (const CueList& cues, int index, int ch
     if (children.empty())
         return end;
 
-    return juce::jmin (childAfter >= 0 ? childAfter : sequenceEnd (cues, children.front()), end);
+    if (childAfter >= 0)
+        return juce::jmin (childAfter, end);
+
+    // Predict only this group's entry before its pre-wait; follow destinations use the original sequence walk.
+    for (int child : children)
+    {
+        const auto& cue = cues.get (child);
+        if (! cue.armed)
+            continue;
+
+        if (cue.continueMode == ContinueMode::autoFollow)
+            return juce::jmin (sequenceEnd (cues, children.front()), end);
+
+        if (cue.continueMode == ContinueMode::none)
+            return cue.isGroup() && cue.group.mode == GroupMode::startFirstEnter
+                       ? groupEnterDestination (cues, child) : cues.subtreeEnd (child);
+    }
+
+    return end;
 }
 
 int CueController::sequenceEnd (int index) const
@@ -1555,18 +1573,17 @@ int CueController::sequenceEnd (const CueList& cues, int index) const
     const int bound = parent >= 0 ? cues.subtreeEnd (parent) : cues.size();
     int i = index;
 
-    while (i < bound)
+    while (cues.get (i).continueMode != ContinueMode::none)
     {
-        const auto& cue = cues.get (i);
         const int next = cues.subtreeEnd (i);
-        if (cue.armed && cue.continueMode == ContinueMode::none)
-            return cue.isGroup() && cue.group.mode == GroupMode::startFirstEnter
-                       ? groupEnterDestination (cues, i) : next;
+
+        if (next >= bound)
+            break;
 
         i = next;
     }
 
-    return juce::jmin (i, cues.size());
+    return juce::jmin (cues.subtreeEnd (i), cues.size());
 }
 
 int CueController::fireSequence (int index, bool audition)
