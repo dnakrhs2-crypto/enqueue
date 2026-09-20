@@ -273,6 +273,36 @@ public:
             expect (model.suggestion().text.contains (ko ("0–127")));
             expect (ShortcutDisplay::midiDetails (*textHarness.service, cc()).contains (ko (" · high 64 / low 60 · gate")));
         }
+        beginTest ("MIDI waiting tooltip preserves the next-message explanation alongside overload history");
+        {
+            Harness statusHarness; FakeDevices backend; backend.list = { { "A", "A" } };
+            MidiInputSettings selected; selected.autoUseAll = true;
+            expect (statusHarness.service->setMidiInputSettings (selected).wasOk());
+            MidiInputService input (*statusHarness.service, statusHarness.router->inputCallbacks(), backend.backend(), false);
+            MidiInputSettingsPanel panel (*statusHarness.service, &input);
+            juce::ListBox* devices = nullptr;
+            for (auto* child : panel.getChildren())
+                if (auto* list = dynamic_cast<juce::ListBox*> (child)) devices = list;
+            expect (devices != nullptr);
+            const auto checkState = [&] (const juce::String& state, const juce::String& tooltip)
+            {
+                if (devices == nullptr) return;
+                panel.refresh();
+                std::unique_ptr<juce::Component> row (devices->getListBoxModel()->refreshComponentForRow (0, false, nullptr));
+                juce::Label* label = nullptr;
+                for (auto* child : row->getChildren())
+                    if (auto* text = dynamic_cast<juce::Label*> (child)) label = text;
+                expect (label != nullptr);
+                if (label != nullptr) { expectEquals (label->getText(), state); expectEquals (label->getTooltip(), tooltip); }
+            };
+            checkState (ko ("연결"), ko ("연결"));
+            backend.send ("A", on()); drain (input, backend.now + 101);
+            expect (input.devices()[0].status == MidiInputService::Status::waiting && input.devices()[0].overloaded);
+            const auto overload = ko (" · 이 연결의 과부하 기록 있음. 푸터에서 누계를 확인하세요.");
+            checkState (ko ("준비 대기"), ko ("입력 손실 뒤 다음 MIDI 메시지를 기다리는 중입니다.") + overload);
+            backend.send ("A", off()); drain (input, backend.now);
+            checkState (ko ("연결"), ko ("연결") + overload);
+        }
         beginTest ("MIDI display and status filters share device names, channel labels and compact counts");
         Harness h;
         h.service->setAvailableMidiDevices ({ { "A", ko ("무대 페달") } });

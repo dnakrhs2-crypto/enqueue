@@ -51,9 +51,10 @@ public:
             if (auto* tabs = findChild<juce::TabbedComponent> (*inspector)) tabs->setCurrentTabIndex (0);
         auto* midi = findChild<CueMidiPanel> (*f.main);
         auto* hotkey = inspector != nullptr ? findChild<KeyCaptureButton> (*inspector) : nullptr;
-        beginTest ("inspector MIDI stays beside hotkey in short wide panes and wraps without increasing minimum page height");
+        beginTest ("inspector MIDI stays beside hotkey in short wide panes and wraps with a usable memo");
         expect (inspector != nullptr && midi != nullptr && hotkey != nullptr);
         if (inspector == nullptr || midi == nullptr || hotkey == nullptr) return;
+        expect (f.main->getShortcutService().setKeys ("transport.go", { juce::KeyPress ('A') }).wasOk());
         for (bool assigned : { false, true })
         {
             if (assigned)
@@ -63,16 +64,67 @@ public:
             }
             for (int width : { 1541, 1100, 1099, 1000 })
             {
+                beginTest ("inspector memo and controls remain usable with wrapped MIDI and hotkey conflict: "
+                    + juce::String (width) + (assigned ? " assigned" : " empty"));
                 f.main->setSize (width, 980);
                 inspector->setSize (inspector->getWidth(), 230);
                 auto* page = midi->getParentComponent();
-                expectEquals (page->getHeight(), Palette::inspectorBasicHeight);
+                expectEquals (page->getHeight(), width >= 1100 ? Palette::inspectorBasicHeight : 236);
                 if (width >= 1100) expectEquals (midi->getY(), hotkey->getY());
                 else expect (midi->getY() > hotkey->getY());
                 expect (inspector->getLocalBounds().contains (inspector->getLocalArea (midi, midi->getLocalBounds())));
                 if (width == 1541) expect (midi->getWidth() >= 500);
                 for (auto* child : midi->getChildren())
                     if (child->isVisible()) expect (midi->getLocalBounds().contains (child->getBounds()));
+                for (bool conflict : { false, true, false })
+                {
+                    // A stored cue hotkey can conflict with a command on this PC.
+                    hotkey->onHotkeyChanged (conflict ? "A" : juce::String());
+                    inspector->setEditable (true); // flush the inspector refresh without a window resize
+                    juce::TextEditor* memo = nullptr;
+                    juce::Label* notice = nullptr;
+                    for (auto* child : page->getChildren())
+                    {
+                        if (auto* editor = dynamic_cast<juce::TextEditor*> (child); editor != nullptr && editor->isMultiLine()) memo = editor;
+                        if (auto* label = dynamic_cast<juce::Label*> (child); label != nullptr
+                            && (label->getText().isEmpty() || label->getText().contains (ko ("단축키와 충돌")))) notice = label;
+                    }
+                    expect (notice != nullptr);
+                    if (notice != nullptr)
+                    {
+                        expect (notice->getText().isNotEmpty() == conflict, "conflict notice matches the stored hotkey: " + hotkey->getButtonText());
+                        expectEquals (notice->getHeight(), conflict ? 22 : 0);
+                    }
+                    expectEquals (page->getHeight(), width >= 1100 ? Palette::inspectorBasicHeight : conflict ? 258 : 236);
+                    expect (memo != nullptr);
+                    for (auto* child : page->getChildren())
+                    {
+                        if (child == notice && ! conflict) continue;
+                        const auto bounds = child->getBounds();
+                        expect (page->getLocalBounds().contains (bounds), "control outside page: " + bounds.toString());
+                        if (child != midi && child != notice)
+                            expect (child->getHeight() >= 30, "control below 30px: " + bounds.toString());
+                        for (auto* other : page->getChildren())
+                        {
+                            if (other == child) break;
+                            if (! other->getBounds().isEmpty())
+                                expect (! bounds.intersects (other->getBounds()), "overlapping controls: " + bounds.toString() + " / " + other->getBounds().toString());
+                        }
+                    }
+                    if (memo != nullptr)
+                    {
+                        expect (memo->getHeight() >= 30, "memo height=" + juce::String (memo->getHeight()));
+                        auto* viewport = page->findParentComponentOfClass<juce::Viewport>();
+                        expect (viewport != nullptr);
+                        if (viewport != nullptr)
+                        {
+                            viewport->setViewPosition (0, memo->getBottom());
+                            expect (viewport->getViewArea().contains (memo->getBounds()), "memo remains reachable by scrolling");
+                            expect (memo->getHeight() >= 30);
+                            viewport->setViewPosition (0, 0);
+                        }
+                    }
+                }
                 const auto output = juce::SystemStats::getEnvironmentVariable ("ENQUEUE_MIDI_REVIEW_IMAGES", {});
                 if (output.isNotEmpty())
                 {

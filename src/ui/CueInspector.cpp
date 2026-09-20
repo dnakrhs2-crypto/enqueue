@@ -31,6 +31,15 @@ namespace
             setScrollOnDragEnabled (false);   // field / waveform drags belong to their existing editors
         }
 
+        void setMinimumHeight (int height)
+        {
+            if (minHeight == height)
+                return;
+            minHeight = height;
+            // Apply content-driven changes even during the viewport's resize guard.
+            content.setSize (content.getWidth(), juce::jmax (minHeight, getHeight() - getScrollBarThickness()));
+        }
+
         void resized() override
         {
             if (sizing)
@@ -43,7 +52,8 @@ namespace
 
     private:
         juce::Component& content;
-        const int minHeight, minWidth;
+        int minHeight;
+        const int minWidth;
         bool sizing = false;
     };
 
@@ -386,6 +396,13 @@ public:
 
     void resized() override
     {
+        const bool wrapMidi = midi != nullptr && getWidth() < 1068;
+        const int conflictHeight = hotkeyConflict.getText().isEmpty() ? 0 : 22;
+        const int rowsHeight = (wrapMidi ? 5 : 4) * (Palette::fieldHeight + 8);
+        const int minimumHeight = juce::jmax (Palette::inspectorBasicHeight, 16 + rowsHeight + conflictHeight + Palette::fieldHeight);
+        if (auto* page = findParentComponentOfClass<InspectorPage>())
+            page->setMinimumHeight (minimumHeight);
+
         auto area = getLocalBounds().reduced (12, 8);
         auto nextRow = [&] { auto r = area.removeFromTop (Palette::fieldHeight); area.removeFromTop (8); return r; };
 
@@ -424,8 +441,8 @@ public:
         if (midi != nullptr)
         {
             // With the app theme, a 1100px main window leaves a 1068px page.
-            // A narrow page uses the following row without enlarging the page.
-            if (getWidth() < 1068) row = nextRow();
+            // A narrow page adds a row while keeping the memo at least one field high.
+            if (wrapMidi) row = nextRow();
             midi->setBounds (row.withHeight (26));
         }
 
@@ -440,7 +457,7 @@ public:
         gainLabel.setBounds (row.removeFromLeft (62));
         gainSlider.setBounds (row.removeFromLeft (juce::jmin (360, row.getWidth())));
 
-        hotkeyConflict.setBounds (area.removeFromTop (hotkeyConflict.getText().isEmpty() ? 0 : 22));
+        hotkeyConflict.setBounds (area.removeFromTop (conflictHeight));
         notesLabel.setBounds (area.removeFromLeft (36).withHeight (Palette::fieldHeight));
         notesEditor.setBounds (area);
     }

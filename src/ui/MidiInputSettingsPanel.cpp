@@ -88,7 +88,7 @@ juce::Component* MidiInputSettingsPanel::refreshComponentForRow (int row, bool, 
     view->selected.setEnabled (! service.isEditingLocked() && ! service.getMidiInputSettings().autoUseAll);
     view->state.setText (ShortcutDisplay::deviceStatus (device.status), juce::dontSendNotification);
     view->state.setTooltip (device.status == MidiInputService::Status::waiting ? ko ("입력 손실 뒤 다음 MIDI 메시지를 기다리는 중입니다.") : view->state.getText());
-    if (device.overloaded) view->state.setTooltip (ShortcutDisplay::deviceStatus (device.status) + ko (" · 이 연결의 과부하 기록 있음. 푸터에서 누계를 확인하세요."));
+    if (device.overloaded) view->state.setTooltip (view->state.getTooltip() + ko (" · 이 연결의 과부하 기록 있음. 푸터에서 누계를 확인하세요."));
     view->reconnect.setEnabled (! service.isEditingLocked() && device.status == MidiInputService::Status::disconnected);
     const juce::Component::SafePointer<MidiInputSettingsPanel> safe (this);
     view->selected.onClick = [safe, device]
