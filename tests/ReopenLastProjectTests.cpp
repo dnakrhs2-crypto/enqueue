@@ -476,6 +476,44 @@ private:
             expectEquals (juce::Component::getNumCurrentlyModalComponents(), 0);
             expect (f.storage.getFile().deleteFile());
         }
+
+        beginTest ("policy save recovery allows a later session save failure to notify again");
+        {
+            Fixture f;
+            const auto project = f.folder.getChildFile ("session.enqueue");
+            expect (f.makeProject (project, true));
+            expect (f.storage.getFile().createDirectory().wasOk());
+            f.createMain();
+            f.main->openProjectFile (project);
+            drainMessages();
+            expectEquals (juce::Component::getNumCurrentlyModalComponents(), 1);
+            juce::ModalComponentManager::getInstance()->cancelAllModalComponents();
+            drainMessages();
+
+            expect (f.storage.getFile().deleteFile());
+            expect (f.commands.invokeDirectly (CommandIDs::reopenLastProjectAlways, false));
+            expect (f.settings.getReopenLastProjectPolicy() == Policy::always);
+            expect (f.persistedSession() == project);
+            expect (! f.storage.needsToBeSaved());
+            drainMessages();
+            expectEquals (juce::Component::getNumCurrentlyModalComponents(), 0);
+
+            expect (f.storage.getFile().deleteFile());
+            expect (f.storage.getFile().createDirectory().wasOk());
+            f.main->perform (juce::ApplicationCommandTarget::InvocationInfo (CommandIDs::newProject));
+            expect (f.settings.getLastSessionProject() == juce::File());
+            expect (f.storage.needsToBeSaved());
+            drainMessages();
+            expectEquals (juce::Component::getNumCurrentlyModalComponents(), 1);
+            if (auto* notice = juce::Component::getCurrentlyModalComponent())
+                expectEquals (notice->getName(), ko ("최근 프로젝트 경로 저장 실패"));
+            juce::ModalComponentManager::getInstance()->cancelAllModalComponents();
+            drainMessages();
+            f.main.reset();
+            drainMessages();
+            expectEquals (juce::Component::getNumCurrentlyModalComponents(), 0);
+            expect (f.storage.getFile().deleteFile());
+        }
     }
 
     void testPrompt()

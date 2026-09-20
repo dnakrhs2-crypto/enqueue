@@ -47,6 +47,7 @@ MainComponent::MainComponent (AudioEngine& e, AppSettings& s, juce::ApplicationC
       containerTabs (document),
       cart (document.cues, e.getFormatManager())
 {
+    settings.onSaveSucceeded = [this] { sessionSaveFailureNotified = false; };
     setWantsKeyboardFocus (true);
 
     addAndMakeVisible (menuBar);
@@ -307,6 +308,7 @@ MainComponent::MainComponent (AudioEngine& e, AppSettings& s, juce::ApplicationC
 MainComponent::~MainComponent()
 {
     settings.setLastSessionProject (document.getFile()); // best effort on shutdown: no notice or interruption
+    settings.onSaveSucceeded = {};
     reopenDialog.reset();
     // Stop reception first, retaining queryable services through capture callbacks
     // and every UI owner that can still refresh or dismiss a learning callout.
@@ -2527,10 +2529,7 @@ void MainComponent::applyReopenLastProjectPolicy (ReopenLastProjectPolicy policy
 void MainComponent::rememberLastSessionProject (const juce::File& file)
 {
     if (settings.setLastSessionProject (file))
-    {
-        sessionSaveFailureNotified = false;
         return;
-    }
 
     if (sessionSaveFailureNotified)
         return;

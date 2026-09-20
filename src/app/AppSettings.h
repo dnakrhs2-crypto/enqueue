@@ -4,6 +4,7 @@
 
 #include <juce_data_structures/juce_data_structures.h>
 
+#include <functional>
 #include <memory>
 #include <optional>
 
@@ -96,6 +97,8 @@ public:
 
     /** Writes pending changes to disk now and reports PropertiesFile's result. */
     bool saveNow();
+    /** Successful saves include the pending session path, regardless of which setting triggered them. */
+    std::function<void()> onSaveSucceeded;
     /** Existing shutdown/automatic-save paths remain available. */
     void flush();
 

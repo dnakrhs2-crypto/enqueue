@@ -358,7 +358,11 @@ bool AppSettings::saveInputSettings (const InputSettingsTransaction& transaction
 
 bool AppSettings::saveNow()
 {
-    return settings->saveIfNeeded();
+    if (! settings->saveIfNeeded())
+        return false;
+    if (onSaveSucceeded)
+        onSaveSucceeded();
+    return true;
 }
 
 void AppSettings::flush()
