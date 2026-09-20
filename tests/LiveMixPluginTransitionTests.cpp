@@ -78,6 +78,29 @@ public:
     juce::AudioParameterFloat* parameter = nullptr;
 };
 
+struct StateRestoreGate
+{
+    std::atomic<bool> armed { false };
+    juce::WaitableEvent entered, release;
+    bool timedOut = false;
+};
+
+class SlowStateGain final : public TestGainPlugin
+{
+public:
+    explicit SlowStateGain (StateRestoreGate& g) : TestGainPlugin (0.5f), gate (g) {}
+    void setStateInformation (const void* state, int bytes) override
+    {
+        if (gate.armed.exchange (false))
+        {
+            gate.entered.signal();
+            gate.timedOut = ! gate.release.wait (5000);
+        }
+        TestGainPlugin::setStateInformation (state, bytes);
+    }
+    StateRestoreGate& gate;
+};
+
 struct TransitionFixture
 {
     MixEngine engine;
@@ -172,6 +195,244 @@ public:
 
     void runTest() override
     {
+        beginTest ("slow group state restore keeps the complete audible chain running, including latency");
+        for (const bool peerAudible : { false, true })
+            for (const int latency : { 0, 157 })
+            {
+                StateRestoreGate gate;
+                TransitionFixture f;
+                f.chain().setGroupBypassFactory ([&gate, latency] (const PluginSlotState&, juce::String&)
+                {
+                    auto plugin = std::make_unique<SlowStateGain> (gate);
+                    plugin->latencySamples = latency;
+                    return plugin;
+                });
+                for (int i = 0; i < 2; ++i)
+                {
+                    auto plugin = std::make_unique<SlowStateGain> (gate);
+                    plugin->latencySamples = latency;
+                    PluginSlotState initial;
+                    initial.bypassed = peerAudible;
+                    f.chain().addPlugin (std::move (plugin), initial);
+                }
+                f.addGroup ({ 0, 1 });
+                if (peerAudible) f.document.setPluginGroupOff (f.channel(), 0, false);
+                expectWithinAbsoluteError (f.render (16).getSample (0, 63), 0.1f, 1.0e-6f);
+                f.chain().getSlot (0).plugin->updateHostDisplay (
+                    juce::AudioProcessor::ChangeDetails().withNonParameterStateChanged (true));
+                gate.armed.store (true);
+                bool entered = false;
+                float duringError = 0.0f;
+                std::thread audio ([&]
+                {
+                    entered = gate.entered.wait (5000);
+                    if (entered)
+                        for (int block = 0; block < 4; ++block)
+                        {
+                            const auto output = f.render();
+                            for (int i = 0; i < 64; ++i)
+                                duringError = juce::jmax (duringError, std::abs (output.getSample (0, i) - 0.1f));
+                        }
+                    gate.release.signal();
+                });
+                f.chain().refreshPluginCaches();
+                audio.join();
+                expect (entered && ! gate.timedOut);
+                expectLessThan (duringError, 1.0e-6f, "Restore must keep 0.1 output, never raw 0.4");
+                float afterError = 0.0f;
+                for (int block = 0; block < 16; ++block)
+                {
+                    const auto output = f.render();
+                    for (int i = 0; i < 64; ++i)
+                        afterError = juce::jmax (afterError, std::abs (output.getSample (0, i) - 0.1f));
+                }
+                expectLessThan (afterError, 1.0e-6f, "A cold replacement must not interrupt the delayed output");
+                logMessage ("Slow restore: peer=" + juce::String ((int) peerAudible) + ", latency=" + juce::String (latency)
+                    + ", overlap error=" + juce::String (duringError, 8) + ", handover error=" + juce::String (afterError, 8));
+            }
+
+        beginTest ("an audible peer keeps its old preset until the prepared state can use the final fade");
+        {
+            StateRestoreGate gate;
+            TransitionFixture f;
+            const int latencies[] { 17, 43, 97 };
+            for (const int latency : latencies)
+            {
+                auto plugin = std::make_unique<SlowStateGain> (gate);
+                plugin->latencySamples = latency;
+                f.chain().addPlugin (std::move (plugin));
+            }
+            f.chain().setGroupBypassFactory ([&] (const PluginSlotState& state, juce::String&)
+            {
+                auto plugin = std::make_unique<SlowStateGain> (gate);
+                for (int i = 0; i < 3; ++i)
+                    if (state.slotId == f.chain().getSlot (i).state.slotId) plugin->latencySamples = latencies[i];
+                return plugin;
+            });
+            f.addGroup ({ 0, 2 });
+            f.render (16);
+            f.document.setPluginGroupOff (f.channel(), 0, true);
+            float previous = f.render (16).getSample (0, 63);
+            expectWithinAbsoluteError (previous, 0.2f, 1.0e-6f);
+            auto& source = *static_cast<SlowStateGain*> (f.chain().getSlot (1).plugin.get());
+            source.gain = 0.25f;
+            source.updateHostDisplay (juce::AudioProcessor::ChangeDetails().withNonParameterStateChanged (true));
+            gate.armed.store (true);
+            bool entered = false;
+            float overlapError = 0.0f;
+            std::thread audio ([&]
+            {
+                entered = gate.entered.wait (5000);
+                if (entered)
+                    for (int block = 0; block < 4; ++block)
+                    {
+                        const auto output = f.render();
+                        for (int i = 0; i < 64; ++i)
+                            overlapError = juce::jmax (overlapError, std::abs (output.getSample (0, i) - previous));
+                    }
+                gate.release.signal();
+            });
+            f.chain().refreshPluginCaches();
+            audio.join();
+            expect (entered && ! gate.timedOut);
+            expectLessThan (overlapError, 1.0e-6f);
+            float delta = 0.0f;
+            for (int block = 0; block < 16; ++block)
+            {
+                const auto output = f.render();
+                for (int i = 0; i < 64; ++i)
+                {
+                    const float value = output.getSample (0, i);
+                    delta = juce::jmax (delta, std::abs (value - previous));
+                    previous = value;
+                }
+            }
+            expectLessThan (delta, 0.000418f, "The preset change must use the final 240-sample fade");
+            expectWithinAbsoluteError (previous, 0.1f, 1.0e-6f);
+            f.chain().recoverAfterStalls(); // the normal UI tick retires peers without another plugin edit
+            expect (f.chain().getSlot (0).pendingGroupPeer == nullptr);
+            f.document.setPluginGroupOff (f.channel(), 0, false);
+            expectWithinAbsoluteError (f.render (16).getSample (0, 63), 0.025f, 1.0e-6f);
+            logMessage ("Preset handover: overlap error=" + juce::String (overlapError, 8) + ", max delta=" + juce::String (delta, 8));
+        }
+
+        beginTest ("clone refusal rejects group OFF before audio, document, dirty, revision or success ACK changes");
+        for (const bool everywhere : { false, true })
+        {
+            TransitionFixture f;
+            f.chain().addPlugin (std::make_unique<TestGainPlugin> (0.5f));
+            f.chain().addPlugin (std::make_unique<TestGainPlugin> (0.5f));
+            bool refuse = true;
+            f.chain().setGroupBypassFactory ([&] (const PluginSlotState& state, juce::String& error)
+                -> std::unique_ptr<juce::AudioPluginInstance>
+            {
+                if (refuse && state.slotId == f.chain().getSlot (1).state.slotId)
+                {
+                    error = "VST2 disabled after the live instances were created";
+                    return {};
+                }
+                return std::make_unique<TestGainPlugin> (1.0f);
+            });
+            f.addGroup ({ 0, 1 });
+            float previous = f.render (8).getSample (0, 63);
+            f.document.discardUnsavedChanges();
+            f.valueCalls = 0;
+            f.state.update (ControlState::capture (f.document, f.groups, false));
+            const auto revision = f.state.getCurrent().revision;
+            const P::CommandArgs args = everywhere ? P::CommandArgs { P::SetPluginGroupOffEverywhere { 1, true } }
+                                                   : P::CommandArgs { P::SetPluginGroupOff { f.channel(), 1, true } };
+            const auto reply = f.dispatcher.dispatch ({ "1", f.instance, f.document.getSessionGeneration(), {}, args });
+            expect (std::get_if<P::ErrorResponse> (&reply) != nullptr, "A failed preparation must not ACK success");
+            expect (! f.document.getSession().channels[0].pluginGroups[0].off);
+            expect (! f.chain().getSlot (0).bypassed.load() && ! f.chain().getSlot (1).bypassed.load());
+            expect (! f.chain().getSlot (0).state.bypassed && ! f.chain().getSlot (1).state.bypassed);
+            expect (! f.document.isDirty());
+            expectEquals (f.valueCalls, 0);
+            expectEquals (f.state.getCurrent().revision, revision);
+            float error = 0.0f;
+            const auto unchanged = f.render();
+            for (int i = 0; i < 64; ++i)
+                error = juce::jmax (error, std::abs (unchanged.getSample (0, i) - previous));
+            expectLessThan (error, 1.0e-6f, "A refused group transition must leave the complete chain audible");
+            refuse = false;
+            const auto retry = f.dispatcher.dispatch ({ "2", f.instance, f.document.getSessionGeneration(), {}, args });
+            const auto* ack = std::get_if<P::Ack> (&retry);
+            expect (ack != nullptr && ack->changed);
+            float delta = 0.0f;
+            for (int block = 0; block < 8; ++block)
+            {
+                const auto output = f.render();
+                for (int i = 0; i < 64; ++i)
+                {
+                    const float value = output.getSample (0, i);
+                    delta = juce::jmax (delta, std::abs (value - previous));
+                    previous = value;
+                }
+            }
+            expect (delta <= 0.001251f);
+            expectWithinAbsoluteError (previous, 0.4f, 1.0e-6f);
+        }
+
+        beginTest ("everywhere group preparation fails before committing any channel");
+        {
+            TransitionFixture f;
+            f.chain().addPlugin (std::make_unique<TestGainPlugin> (0.5f));
+            f.addGroup ({ 0 });
+            const auto second = f.document.addChannel();
+            auto* chain = f.engine.getChannelChain (second);
+            chain->setGroupBypassFactory ([] (const PluginSlotState&, juce::String&) -> std::unique_ptr<juce::AudioPluginInstance> { return {}; });
+            chain->addPlugin (std::make_unique<TestGainPlugin> (0.5f));
+            chain->addPlugin (std::make_unique<TestGainPlugin> (0.5f));
+            const auto group = f.document.addPluginGroup (second);
+            for (int i = 0; i < 2; ++i)
+                f.document.setPluginGroupMember (second, group, chain->getSlot (i).state.slotId, true);
+            f.document.discardUnsavedChanges();
+            f.valueCalls = 0;
+            f.state.update (ControlState::capture (f.document, f.groups, false));
+            const auto revision = f.state.getCurrent().revision;
+            const auto reply = f.dispatcher.dispatch ({ "1", f.instance, f.document.getSessionGeneration(), {}, P::SetPluginGroupOffEverywhere { 1, true } });
+            expect (std::get_if<P::ErrorResponse> (&reply) != nullptr);
+            for (const auto& channel : f.document.getSession().channels)
+            {
+                expect (! channel.pluginGroups[0].off);
+                const auto* live = f.engine.getChannelChain (channel.id);
+                for (int i = 0; i < live->getNumSlots(); ++i) expect (! live->getSlot (i).bypassed.load());
+            }
+            expect (! f.document.isDirty());
+            expectEquals (f.valueCalls, 0);
+            expectEquals (f.state.getCurrent().revision, revision);
+        }
+
+        beginTest ("clone factory, state, prepare and latency failures leave multi-slot targets untouched");
+        for (int failure = 0; failure < 4; ++failure)
+        {
+            struct BadState final : TestGainPlugin
+            {
+                BadState() : TestGainPlugin (1.0f) {}
+                void setStateInformation (const void*, int) override { throw std::runtime_error ("state refused"); }
+            };
+            PluginChain chain (true);
+            chain.prepare (48000.0, 64);
+            chain.addPlugin (std::make_unique<TestGainPlugin> (0.5f));
+            chain.addPlugin (std::make_unique<TestGainPlugin> (0.5f));
+            chain.setGroupBypassFactory ([failure] (const PluginSlotState&, juce::String&) -> std::unique_ptr<juce::AudioPluginInstance>
+            {
+                if (failure == 0) throw std::runtime_error ("factory refused");
+                if (failure == 1) return std::make_unique<BadState>();
+                auto plugin = std::make_unique<TestGainPlugin> (1.0f);
+                plugin->throwOnPrepare = failure == 2;
+                plugin->latencySamples = failure == 3 ? 17 : 0;
+                return plugin;
+            });
+            expect (chain.setBypassedTogether ({ 0, 1 }, true) == PluginChain::GroupBypassResult::failed);
+            expect (! chain.getSlot (0).bypassed.load() && ! chain.getSlot (1).bypassed.load());
+            expect (! chain.getSlot (0).faulted.load() && ! chain.getSlot (1).faulted.load());
+            juce::AudioBuffer<float> output (2, 64);
+            for (int ch = 0; ch < 2; ++ch) juce::FloatVectorOperations::fill (output.getWritePointer (ch), 0.4f, 64);
+            chain.process (output, 64);
+            expectWithinAbsoluteError (output.getSample (0, 0), 0.1f, 1.0e-6f);
+        }
+
         beginTest ("group final crossfade has no first-block click or peak with unequal endpoints");
         {
             TransitionFixture f;

@@ -108,6 +108,10 @@ MainComponent::MainComponent (MixDocument& doc, LiveMixSettings& s)
         if (chainDrawer.getChain() == &chain)
             chainDrawer.refresh();
     };
+    document.onPluginGroupTransitionFailed = [this]
+    {
+        showStatus (ko ("플러그인 그룹 전환을 준비하지 못했습니다. 플러그인 사용 설정을 확인해 주세요."), true);
+    };
     engine.forEachChain ([this] (PluginChain& chain) { chain.setListener (&windows); });
 
     document.onStructureChanged = [this]
@@ -181,6 +185,7 @@ MainComponent::~MainComponent()
     document.onStructureChanged = nullptr;
     document.onValueChanged = nullptr;
     document.onChainRuntimeChanged = nullptr;
+    document.onPluginGroupTransitionFailed = nullptr;
 }
 
 void MainComponent::attachControlServer (ControlServer* server)
@@ -1424,6 +1429,9 @@ void MainComponent::togglePluginGroupEverywhere (int group)
 {
     bool switchedOff = false;
     const int channels = document.toggleGroupOnEveryChannel (group, switchedOff);
+
+    if (channels < 0)
+        return; // the document already reported the preparation failure
 
     if (channels == 0)
     {

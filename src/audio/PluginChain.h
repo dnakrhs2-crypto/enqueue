@@ -26,6 +26,7 @@ class PluginChain : private juce::AudioProcessorListener
     {
         GroupParameterMirror (juce::AudioPluginInstance&, juce::AudioPluginInstance&);
         ~GroupParameterMirror() override;
+        void refresh();
         void apply();
         void audioProcessorParameterChanged (juce::AudioProcessor*, int, float) override;
         void audioProcessorChanged (juce::AudioProcessor*, const ChangeDetails&) override {}
@@ -50,6 +51,14 @@ public:
         unsigned requestedGroupRevision = 0;
         std::unique_ptr<Slot> groupPeer;        // second DSP history; moves / appends atomically with its slot
         std::unique_ptr<GroupParameterMirror> groupMirror;
+        std::unique_ptr<Slot> pendingGroupPeer; // prepared replacement; ownership normalized on the message thread after handover
+        std::unique_ptr<GroupParameterMirror> pendingGroupMirror;
+        std::atomic<Slot*> activeGroupPeer { nullptr }; // callback selects a prepared peer; ownership stays on the message thread
+        Slot* getGroupPeer() const noexcept
+        {
+            auto* active = activeGroupPeer.load (std::memory_order_acquire);
+            return active != nullptr ? active : groupPeer.get();
+        }
         GroupParameterMirror* incomingMirror = nullptr; // peer only; owned by the corresponding original slot
         unsigned audioGroupRevision = 0, pendingGroupRevision = 0;
         int groupSwitchSamples = 0;
@@ -125,15 +134,18 @@ public:
         delayed by the plugin's latency, goes on instead, with a short crossfade either way (no jump in time, no click). */
     void setBypassed (int index, bool shouldBypass);
     /** One group edit: two complete, latency-aligned paths share one final 5 ms crossfade.
-        A single changed slot retains its ordinary crossfade. Returns whether any actual bypass changed. Message thread.
+        A single changed slot retains its ordinary crossfade. Failure leaves every bypass target untouched. Message thread.
         Requires group alignment enabled at construction. Suppress notifications when repairing the
         runtime state of an unchanged document group. */
-    bool setBypassedTogether (const std::vector<int>& indices, bool shouldBypass, bool notifyListeners = true);
+    enum class GroupBypassResult { unchanged, changed, failed };
+    GroupBypassResult setBypassedTogether (const std::vector<int>& indices, bool shouldBypass, bool notifyListeners = true);
+    /** Preflight for a command spanning multiple chains. Does not publish bypass targets. */
+    bool prepareBypassedTogether (const std::vector<int>& indices, bool shouldBypass);
     /** Message thread: prepare the second complete signal path before a multi-slot group can be switched.
         Both paths keep running to preserve independent plugin histories, including nonmembers between group slots.
         Instances and buffers are created here, never in process(). The factory also serves later chain edits. */
     void setGroupBypassFactory (Factory factory) { groupFactory = std::move (factory); }
-    void prepareGroupBypass();
+    bool prepareGroupBypass();
     void clear();
 
     /** Captures every slot's description + getStateInformation() as PluginSlotState. Message thread. */
@@ -183,7 +195,9 @@ public:
 
 private:
     bool prepareSlot (Slot& slot, bool preparePeer = true);   // false when the plugin threw (or wants too many channels)
-    std::unique_ptr<Slot> createGroupPeer (Slot& slot); // message thread only
+    std::unique_ptr<Slot> createGroupPeer (Slot& slot, const PluginSlotState* captured = nullptr); // message thread only
+    void refreshGroupState(); // builds replacements outside the chain lock
+    void installGroupState() noexcept; // chain lock held, original path alone audible; selects prepared pointers only
     PluginSlotState captureState (Slot& slot, bool* complete) const;
     void processLocked (juce::AudioBuffer<float>& buffer, int numSamples);   // one block of at most the prepared size, the lock held
     void processSlots (juce::AudioBuffer<float>& buffer, int numSamples, bool peer = false);
@@ -223,6 +237,8 @@ private:
     int groupDestination = 0;
     int groupReadySamples[2] { 0, 0 };       // input-frame switch / fresh-instance latency in flight
     std::atomic<bool> groupStateChanged { false }; // non-parameter state: copied on the message thread
+    enum class GroupStatePhase { idle, prepared, handover, retired };
+    std::atomic<GroupStatePhase> groupStatePhase { GroupStatePhase::idle };
     juce::MidiBuffer midi;
     double sampleRate = 44100.0;
     int blockSize = 512;
