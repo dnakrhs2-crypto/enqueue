@@ -27,6 +27,7 @@ public:
     ShortcutUiTests() : juce::UnitTest ("Shortcut capture, settings and display", "Enqueue") {}
     void runTest() override
     {
+        const juce::ScopedValueSetter<std::function<bool()>> foregroundCheck (KeyCapture::foregroundProcessCheck, [] { return true; });
         beginTest ("every supported vocabulary/modifier combination is a candidate, typed Esc only cancels");
         for (const auto& named : ShortcutKeyCodec::allowedKeys())
             for (const int mods : std::array<int, 8> { 0, M::ctrlModifier, M::altModifier, M::shiftModifier,

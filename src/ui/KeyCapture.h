@@ -45,6 +45,8 @@ class KeyCapture : public juce::Component, private juce::Timer
 {
 public:
     struct Decision { bool allowed = true; juce::String message; };
+    /** Message-thread test seam; production uses the native foreground process check. */
+    static std::function<bool()> foregroundProcessCheck;
     explicit KeyCapture (ShortcutService&, std::function<bool()> keysHeld = {});
     ~KeyCapture() override;
     std::function<Decision (const juce::KeyPress&)> validate;

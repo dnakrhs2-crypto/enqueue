@@ -142,6 +142,8 @@ bool KeyCaptureSession::moving (double nowMs) const
         && ! values.empty() && nowMs - lastChange < 200.0;
 }
 
+std::function<bool()> KeyCapture::foregroundProcessCheck = juce::Process::isForegroundProcess;
+
 KeyCapture::KeyCapture (ShortcutService& s, std::function<bool()> held) : service (&s), keysHeld (std::move (held))
 {
     if (! keysHeld)
@@ -491,6 +493,13 @@ void KeyCapture::cancelIfFocusOutside()
     {
         if (safe == nullptr || safe->generation != token || ! safe->active
             || safe->hasKeyboardFocus (true) || safe->submitting) return;
+        // A popup can remain modal after Alt+Tab while the pointer is over it.
+        // App deactivation must release capture before applying the popup exception.
+        if (! foregroundProcessCheck())
+        {
+            safe->cancel();
+            return;
+        }
         auto* modal = juce::Component::getCurrentlyModalComponent();
         const bool popup = modal != nullptr && modal != safe.getComponent() && ! modal->isParentOf (safe.getComponent());
         // Popup dismissal may send no further focus event. Retry through the

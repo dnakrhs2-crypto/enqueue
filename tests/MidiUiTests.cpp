@@ -33,6 +33,7 @@ public:
     MidiUiTests() : juce::UnitTest ("MIDI capture, settings, inspector and exchange UI", "Enqueue") {}
     void runTest() override
     {
+        const juce::ScopedValueSetter<std::function<bool()>> foregroundCheck (KeyCapture::foregroundProcessCheck, [] { return true; });
         testCaptureModel(); testCaptureWidget(); testCaptureBoundaries(); testSettings(); testExchange(); testInspector();
     }
     void testCaptureModel()

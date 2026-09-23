@@ -447,6 +447,7 @@ private:
 
     void childFocus (bool withPopup = false)
     {
+        const juce::ScopedValueSetter<std::function<bool()>> foregroundCheck (KeyCapture::foregroundProcessCheck, [] { return true; });
         beginTest (withPopup ? "ED-3: popup closes with focus still outside and releases MIDI panic capture"
                              : "audit0923 ED-3: child MIDI editor loses focus and releases panic capture");
        #if JUCE_WINDOWS
@@ -571,6 +572,7 @@ private:
 
     void focusExceptions()
     {
+        const juce::ScopedValueSetter<std::function<bool()>> foregroundCheck (KeyCapture::foregroundProcessCheck, [] { return true; });
         beginTest ("ED-3: asynchronous focus recheck preserves returned focus, popup, submission and a new capture generation");
        #if JUCE_WINDOWS
         const auto foreground = GetForegroundWindow();
