@@ -139,6 +139,10 @@ public:
     /** Audio thread: processes channels 0-1 of buffer[0, numSamples) in place. */
     void process (juce::AudioBuffer<float>& buffer, int numSamples);
 
+    /** Audio thread, LiveMix: a silent mic skipped this chain. The next process() snaps bypass mixes to the
+        current switches and clears the host's dry history under its try-lock. Plugins keep their own state. */
+    void markProcessingSkipped() noexcept { resumePending = true; }
+
 private:
     bool prepareSlot (Slot& slot);   // false when the plugin threw (or wants too many channels): the slot is faulted
     void processLocked (juce::AudioBuffer<float>& buffer, int numSamples);   // one block of at most the prepared size, the lock held
@@ -167,6 +171,7 @@ private:
     double sampleRate = 44100.0;
     int blockSize = 512;
     int bypassRampSamples = 220;             // bypassRampSeconds at the prepared rate
+    bool resumePending = false;              // audio thread: LiveMix skipped a silent mic; consumed under the process try-lock
     Listener* listener = nullptr;
     std::atomic<bool> stateChanged { false };
     std::atomic<bool> faultRaised { false };   // a slot faulted since takeNewFaults()

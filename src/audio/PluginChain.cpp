@@ -797,6 +797,18 @@ void PluginChain::process (juce::AudioBuffer<float>& buffer, int numSamples)
     if (! sl.isLocked())
         return;
 
+    if (resumePending)
+    {
+        for (auto& slot : slots)
+        {
+            slot->wetMix = slot->bypassed.load (std::memory_order_relaxed) ? 0.0f : 1.0f;
+            slot->dryDelay.clear();   // downstream dry rings may still contain an effect switched off while silent
+            slot->dryDelayWrite = 0;
+        }
+
+        resumePending = false;   // a busy chain keeps this pending until a block can actually process it
+    }
+
     // a block larger than the chain was prepared for goes through in pieces: the scratch buffers never grow here
     const int chunk = juce::jmax (1, blockSize);
 

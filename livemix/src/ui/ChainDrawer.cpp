@@ -636,25 +636,29 @@ void ChainDrawer::applyPreset (const PluginPreset& preset, bool replace)
     auto& host = engine.getPluginHost();
     juce::StringArray errors;
 
-    if (replace)
+    // A preset deliberately omits momentary bypass. Apply the owning channel's OFF groups before
+    // either restore or append publishes an instance, including a deleted member whose slot ID returns.
+    const auto applyOffGroups = [&] (PluginSlotState& state)
     {
-        auto states = preset.plugins;
-
-        // A preset deliberately omits momentary bypass. Apply the owning channel's OFF groups before
-        // restore publishes the new instances, so even the first audible block agrees with the cards.
         for (const auto& channel : document.getSession().channels)
             if (engine.getChannelChain (channel.id) == chain)
                 for (const auto& group : channel.pluginGroups)
                     if (group.off)
-                        for (auto& state : states)
-                            if (std::find (group.slots.begin(), group.slots.end(), state.slotId) != group.slots.end())
-                                state.bypassed = true;
+                        if (std::find (group.slots.begin(), group.slots.end(), state.slotId) != group.slots.end())
+                            state.bypassed = true;
+    };
+
+    if (replace)
+    {
+        auto states = preset.plugins;
+        for (auto& state : states)
+            applyOffGroups (state);
 
         errors = chain->restore (states, host.makeFactory (engine.getSampleRate(), engine.getBlockSize()));
     }
     else
     {
-        for (const auto& state : preset.plugins)
+        for (auto state : preset.plugins)
         {
             if (chain->getNumSlots() >= MixSession::maxChainSlots)
             {
@@ -662,6 +666,16 @@ void ChainDrawer::applyPreset (const PluginPreset& preset, bool replace)
                 continue;
             }
 
+            // Match PluginChain::insertSlot's duplicate-ID rule before checking membership:
+            // a second copy gets its own ID and must not inherit the original's OFF group.
+            for (int i = 0; i < chain->getNumSlots(); ++i)
+                if (chain->getSlot (i).state.slotId == state.slotId)
+                {
+                    state.slotId = juce::Uuid();
+                    break;
+                }
+
+            applyOffGroups (state);
             juce::String error;
             auto instance = host.createInstance (state, engine.getSampleRate(), engine.getBlockSize(), error);
 

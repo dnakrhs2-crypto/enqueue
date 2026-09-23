@@ -103,7 +103,7 @@ private:
     void showAbout();
     void showBackupDialog();
     void showSettingsDialog();
-    void registerHotkeys();      // from the settings; a refused key goes to the status line
+    void registerHotkeys();      // from the settings; refused keys stay in the notice until retried or dismissed
     /** While one is alive the global hotkeys do nothing: a session (or its plugins) is going into the engine, and
         WM_HOTKEY arrives straight from the message loop - a plugin that pumps messages while it is built would
         otherwise let a keypress edit the incoming session against the graph still running. */
@@ -174,6 +174,7 @@ private:
     juce::TextButton noticeClose { juce::String::fromUTF8 ("\xE2\x9C\x95") };
     bool noticeVisible = false, noticeIsError = false;
     juce::String sessionNote, startupNote, saveErrorNote;   // the lines of the bar (see setSessionNote)
+    juce::String hotkeyErrorNote;   // registration failures survive session changes; a retry replaces this line
     juce::String pluginNote;    // plugins that faulted (dry from then on), accumulated until the bar is closed
     juce::String latencyNote;   // a plugin with latency in a mic chain
     bool sessionNoteIsError = false, startupNoteIsError = false, startupNoteIsSafeMode = false;
