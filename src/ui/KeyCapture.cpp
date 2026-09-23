@@ -261,7 +261,7 @@ void KeyCapture::relearn()
 void KeyCapture::cancel (bool notify)
 {
     stopTimer();
-    registrationPending = submitting = observedAvailableDevice = false;
+    registrationPending = submitting = observedAvailableDevice = focusRecheckPending = false;
     ++generation;
     const bool wasActive = active;
     active = false;
@@ -301,6 +301,17 @@ KeyCapture::Decision KeyCapture::decision() const
         return validateMidi ? validateMidi (*trigger) : Decision();
     }
     return { false, {} };
+}
+void KeyCapture::timerCallback()
+{
+    const juce::Component::SafePointer<KeyCapture> safe (this);
+    const auto token = generation;
+    pollKeyRelease();
+    if (safe != nullptr && safe->generation == token && safe->focusRecheckPending)
+    {
+        safe->focusRecheckPending = false;
+        safe->cancelIfFocusOutside();
+    }
 }
 void KeyCapture::pollKeyRelease()
 {
@@ -478,10 +489,14 @@ void KeyCapture::cancelIfFocusOutside()
     const auto token = generation;
     juce::MessageManager::callAsync ([safe, token]
     {
+        if (safe == nullptr || safe->generation != token || ! safe->active
+            || safe->hasKeyboardFocus (true) || safe->submitting) return;
         auto* modal = juce::Component::getCurrentlyModalComponent();
-        const bool popup = modal != nullptr && safe != nullptr && modal != safe.getComponent() && ! modal->isParentOf (safe.getComponent());
-        if (safe != nullptr && safe->generation == token && safe->active && ! safe->hasKeyboardFocus (true)
-            && ! safe->submitting && ! popup) safe->cancel();
+        const bool popup = modal != nullptr && modal != safe.getComponent() && ! modal->isParentOf (safe.getComponent());
+        // Popup dismissal may send no further focus event. Retry through the
+        // existing timer, retaining the asynchronous focus and generation checks.
+        if (popup) safe->focusRecheckPending = true;
+        else safe->cancel();
     });
 }
 void KeyCapture::visibilityChanged() { if (! isShowing()) cancel(); }

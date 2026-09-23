@@ -105,6 +105,11 @@ bool pumpUntil (const std::function<bool()>& ready, int timeoutMs = 3000)
     } while (juce::Time::getMillisecondCounterHiRes() < end);
     return ready();
 }
+void pumpFor (int durationMs)
+{
+    const auto end = juce::Time::getMillisecondCounterHiRes() + durationMs;
+    pumpUntil ([&] { return juce::Time::getMillisecondCounterHiRes() >= end; }, durationMs + 100);
+}
 
 struct Scratch
 {
@@ -317,6 +322,7 @@ public:
         firstInsert();
         chainOwnership();
         childFocus();
+        childFocus (true);
         focusExceptions();
     }
 private:
@@ -439,9 +445,10 @@ private:
         engine.shutdown();
     }
 
-    void childFocus()
+    void childFocus (bool withPopup = false)
     {
-        beginTest ("audit0923 ED-3: child MIDI editor loses focus and releases panic capture");
+        beginTest (withPopup ? "ED-3: popup closes with focus still outside and releases MIDI panic capture"
+                             : "audit0923 ED-3: child MIDI editor loses focus and releases panic capture");
        #if JUCE_WINDOWS
         const auto foreground = GetForegroundWindow();
         const auto nativeFocus = GetFocus();
@@ -511,11 +518,33 @@ private:
         expect (capture->isCapturing() && low->hasKeyboardFocus (false), "capture retained between numeric children");
         focusWithin (*high);
         drainMessages();
+        juce::Component popup, outside;
+        HiddenDesktop outsideDesktop (outside);
+        if (! require (outsideDesktop.isHidden(), "second hidden top-level component tree")) return;
+        if (withPopup)
+        {
+            // A peerless modal marker reproduces the numeric editor's popup
+            // without opening its native context menu or using system input.
+            popup.enterModalState (false);
+            if (! require (juce::Component::getCurrentlyModalComponent() == &popup, "popup is modal before focus leaves")) return;
+        }
         // Same public JUCE peer boundary used by WM_KILLFOCUS, without SetFocus.
         tab.getPeer()->handleFocusLoss();
+        if (withPopup) focusWithin (outside);
         if (! require (! capture->hasKeyboardFocus (true), "focus leaves the entire learning widget")) return;
         expect (capture->isCapturing(), "child focus cancellation waits for the asynchronous recheck");
         drainMessages();
+        if (withPopup)
+        {
+            pumpFor (100);
+            expect (capture->isCapturing() && service.isCapturing(), "modal popup defers cancellation");
+            expect (outside.hasKeyboardFocus (false), "focus stays in the other hidden top-level tree");
+            popup.exitModalState (0);
+            expect (pumpUntil ([&] { return ! capture->isCapturing() && ! service.isCapturing(); }, 1000),
+                    "closing the popup retries cancellation without another focus event");
+            expect (outside.hasKeyboardFocus (false) && ! capture->hasKeyboardFocus (true),
+                    "focus is never returned to the capture after closing the popup");
+        }
         const bool widgetCapture = capture->isCapturing(), serviceCapture = service.isCapturing();
         tapPanic();
         const bool stillPlaying = f.engine.isPlaying (cue.id);
@@ -535,7 +564,7 @@ private:
         if (! require (f.engine.isPlaying (cue.id), "control audio playing before post-cancel panic")) return;
         tapPanic();
         expect (! service.isCapturing() && ! f.engine.isPlaying (cue.id), "Control: cancel restores the same MIDI panic");
-        expect (desktop.isHidden() && GetForegroundWindow() == foreground && GetFocus() == nativeFocus,
+        expect (desktop.isHidden() && outsideDesktop.isHidden() && GetForegroundWindow() == foreground && GetFocus() == nativeFocus,
                 "test leaves every native window hidden and OS focus unchanged");
        #endif
     }
@@ -544,6 +573,8 @@ private:
     {
         beginTest ("ED-3: asynchronous focus recheck preserves returned focus, popup, submission and a new capture generation");
        #if JUCE_WINDOWS
+        const auto foreground = GetForegroundWindow();
+        const auto nativeFocus = GetFocus();
         Fixture f;
         auto& service = f.main->getShortcutService();
         KeyCapture capture (service, [] { return false; });
@@ -568,22 +599,36 @@ private:
         expect (capture.isCapturing() && service.isCapturing(), "returned focus survives asynchronous recheck");
 
         juce::Component popup; // a modal marker with no desktop peer or native window
-        popup.enterModalState (false);
+        auto* preset = findChild<juce::ComboBox> (capture, [] (const auto& c) { return c.getComponentID() == "midiPreset"; });
+        if (! require (preset != nullptr, "real MIDI preset combo")) return;
+        popup.enterModalState (false, juce::ModalCallbackFunction::create ([&] (int result)
+        {
+            preset->setSelectedId (result, juce::sendNotificationSync);
+            focusWithin (*high);
+        }));
         capture.getPeer()->handleFocusLoss();
-        drainMessages();
+        pumpFor (100);
         expect (capture.isCapturing() && service.isCapturing(), "popup focus keeps learning active");
-        popup.exitModalState (0);
-        focusWithin (*high);
-        drainMessages();
+        popup.exitModalState (2);
+        pumpFor (100);
+        expect (capture.isCapturing() && service.isCapturing() && high->hasKeyboardFocus (false),
+                "selecting an internal popup item and returning focus preserves learning after timer rechecks");
+        const auto* selected = std::get_if<MidiTrigger> (&capture.model().candidate());
+        expect (preset->getSelectedId() == 2 && selected != nullptr && selected->edge == MidiTrigger::Edge::both,
+                "the real combo callback applies the selected toggle preset");
 
         KeyCapture::Completion completion;
         capture.onSubmit = [&] (const auto&, auto done) { completion = std::move (done); };
         auto* submit = findChild<juce::TextButton> (capture, [] (const auto& b) { return b.getButtonText() == ko ("등록"); });
         if (! require (submit != nullptr && submit->isEnabled() && (bool) submit->onClick, "ready registration button")) return;
+        popup.enterModalState (false);
+        capture.getPeer()->handleFocusLoss();
+        pumpFor (100);
         submit->onClick();
         if (! require ((bool) completion, "asynchronous submission is pending")) return;
+        popup.exitModalState (0);
         capture.getPeer()->handleFocusLoss();
-        drainMessages();
+        pumpFor (100);
         expect (capture.isCapturing() && service.isCapturing(), "submitting capture survives focus loss");
         completion (juce::Result::ok());
         expect (! capture.isCapturing() && ! service.isCapturing());
@@ -594,6 +639,19 @@ private:
         drainMessages();
         expect (capture.isCapturing() && service.isCapturing(), "an old deferred loss cannot cancel a new generation");
         capture.cancel();
+
+        start();
+        popup.enterModalState (false);
+        capture.getPeer()->handleFocusLoss();
+        pumpFor (100);
+        expect (capture.isCapturing() && service.isCapturing(), "old generation is waiting for popup dismissal");
+        capture.start ("new generation after popup");
+        popup.exitModalState (0);
+        pumpFor (100);
+        expect (capture.isCapturing() && service.isCapturing(), "a popup retry cannot leak into the next capture generation");
+        capture.cancel();
+        expect (desktop.isHidden() && GetForegroundWindow() == foreground && GetFocus() == nativeFocus,
+                "popup selection, submission and restart keep OS windows hidden and focus unchanged");
        #endif
     }
 };

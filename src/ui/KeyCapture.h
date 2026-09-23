@@ -75,7 +75,7 @@ private:
     void cancelIfFocusOutside();
     void accept (KeyCaptureSession::Result);
     void chooseSpecial();
-    void timerCallback() override { pollKeyRelease(); }
+    void timerCallback() override;
     void showText (const juce::String&, bool warning);
     void updateCandidate (bool syncFields = false);
     void readFields();
@@ -96,6 +96,7 @@ private:
     std::function<bool()> keysHeld;
     bool active = false, registrationPending = false, submitting = false, projectCue = false, syncing = false, uiDirty = false;
     bool observedAvailableDevice = false;
+    bool focusRecheckPending = false;
 };
 
 /** Compact cue-inspector entry point; the callout contains the same KeyCapture. */
