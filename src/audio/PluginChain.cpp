@@ -608,6 +608,8 @@ void PluginChain::sizeDelayLine (Slot& slot, int newLatency, int block)
     slot.dryDelay.setSize (2, newLatency + ringBlocks * juce::jmax (1, block), false, true, true);
     slot.dryDelay.clear();
     slot.dryDelayWrite = 0;
+    slot.dryResumeWait = 0;
+    slot.dryResumeRemaining = 0;
     slot.skipped = 0;
     slot.prime = 0;
     slot.overflow.store (false, std::memory_order_relaxed);
@@ -687,6 +689,27 @@ void PluginChain::delayDryInPlace (Slot& slot, juce::AudioBuffer<float>& dry, in
     }
 
     slot.dryDelayWrite = (start + numSamples) % capacity;
+
+    if (slot.dryResumeRemaining > 0)
+    {
+        // LiveMix cleared the ring on resume. Start fading at the first fresh delayed sample,
+        // even when its latency spans blocks and the mic's own ON ramp has already finished.
+        const int wait = juce::jmin (numSamples, slot.dryResumeWait);
+        slot.dryResumeWait -= wait;
+        const int fade = juce::jmin (numSamples - wait, slot.dryResumeRemaining);
+
+        if (fade > 0)
+        {
+            const float from = 1.0f - (float) slot.dryResumeRemaining / (float) bypassRampSamples;
+            slot.dryResumeRemaining -= fade;
+            const float to = 1.0f - (float) slot.dryResumeRemaining / (float) bypassRampSamples;
+
+            // getWritePointer above marked this actual dry buffer non-clear (JUCE's isClear flag).
+            // Fade only the output: the ring must retain unscaled input for plugin catch-up.
+            for (int ch = 0; ch < 2 && ch < dry.getNumChannels(); ++ch)
+                dry.applyGainRamp (ch, wait, fade, from, to);
+        }
+    }
 }
 
 void PluginChain::noteSkipped (Slot& slot, int numSamples) noexcept
@@ -804,6 +827,8 @@ void PluginChain::process (juce::AudioBuffer<float>& buffer, int numSamples)
             slot->wetMix = slot->bypassed.load (std::memory_order_relaxed) ? 0.0f : 1.0f;
             slot->dryDelay.clear();   // downstream dry rings may still contain an effect switched off while silent
             slot->dryDelayWrite = 0;
+            slot->dryResumeWait = slot->latency.load (std::memory_order_relaxed);
+            slot->dryResumeRemaining = slot->dryResumeWait > 0 ? bypassRampSamples : 0;
         }
 
         resumePending = false;   // a busy chain keeps this pending until a block can actually process it
@@ -1011,6 +1036,8 @@ void PluginChain::resetProcessing() noexcept
         slot->scratch.clear();
         slot->dryDelay.clear();
         slot->dryDelayWrite = 0;
+        slot->dryResumeWait = 0;
+        slot->dryResumeRemaining = 0;
         slot->skipped = 0;
         slot->prime = 0;
         slot->overflow.store (false, std::memory_order_relaxed);

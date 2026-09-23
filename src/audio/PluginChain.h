@@ -40,6 +40,8 @@ public:
         std::atomic<int> latency { 0 };          // samples the plugin delays its output by, as it reported last
         juce::AudioBuffer<float> dryDelay;       // 2-channel ring of the recent input: latency + a few blocks
         int dryDelayWrite = 0;                   // audio thread: the ring's write index
+        int dryResumeWait = 0;                   // audio thread: cleared latency to wait out after a LiveMix resume
+        int dryResumeRemaining = 0;              // audio thread: fade in the fresh delayed dry output, never the wet signal
         float wetMix = 1.0f;                     // audio thread: 1 = the plugin's output, 0 = the delayed dry signal; ramps when the bypass changes
         int skipped = 0;                         // audio thread: input samples the plugin has not seen (its callback lock was busy, it was suspended): fed to it from the ring, catchUpBlocks per callback, before it runs again - its own time never falls behind the show
         std::atomic<bool> overflow { false };    // the backlog outgrew the ring: the plugin is reset on the message thread (recoverAfterStalls) instead of catching up, dry until then
@@ -149,7 +151,7 @@ private:
     void updateTailCache();          // message thread: the tail the callback reads without asking any plugin
     void updateDelayLines();         // message thread, under the lock: each slot's dry delay follows the plugin's latency
     static void sizeDelayLine (Slot& slot, int latency, int blockSize);   // (re)allocates and clears - never on the audio thread
-    static void delayDryInPlace (Slot& slot, juce::AudioBuffer<float>& dry, int numSamples) noexcept;   // audio thread: records channels 0-1 in the slot's ring and, when the plugin has latency, replaces them with the delayed signal
+    void delayDryInPlace (Slot& slot, juce::AudioBuffer<float>& dry, int numSamples) noexcept;   // audio thread: records channels 0-1 in the slot's ring and, when the plugin has latency, replaces them with the delayed signal
     bool catchUpSkipped (Slot& slot, int budgetSamples) noexcept;   // audio thread, the plugin's callback lock held: feeds it up to 'budgetSamples' of the input it missed; false when it faulted doing so
     void noteSkipped (Slot& slot, int numSamples) noexcept;         // audio thread: the plugin did not see this block (it is in the ring); flags an overflow when the ring cannot hold the backlog
     static constexpr int ringBlocks = 8;         // the ring holds latency + this many blocks: a stall of that many blocks is caught up in full
