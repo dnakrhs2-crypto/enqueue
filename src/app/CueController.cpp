@@ -90,15 +90,38 @@ CueController::GoResult CueController::triggerControl (const Cue& cue, int index
     switch (ctl.kind)
     {
         case ControlKind::start:
+        {
             if (! targetCue.armed)
             {
                 status (ko ("비활성 큐: 시작하지 않음: ") + targetLabel);
                 break;
             }
 
-            if (engine.isPaused (targetCue.id))
+            bool resumed = false;
+
+            if (targetCue.isGroup())
+            {
+                // Match group pause, including nested children; a loaded cue
+                // has not played yet and must not turn this start into a resume.
+                for (int i : cues.descendantsOf (target))
+                {
+                    const auto id = cues.get (i).id;
+
+                    if (engine.isPlaying (id) && engine.isPaused (id))
+                    {
+                        engine.resume (id);
+                        resumed = true;
+                    }
+                }
+            }
+            else if (engine.isPaused (targetCue.id))
             {
                 engine.resume (targetCue.id);
+                resumed = true;
+            }
+
+            if (resumed)
+            {
                 status (ko ("재개: ") + targetLabel);
             }
             else
@@ -107,6 +130,7 @@ CueController::GoResult CueController::triggerControl (const Cue& cue, int index
                 status (ko ("시작: ") + targetLabel);
             }
             break;
+        }
 
         case ControlKind::stop:
             cancelPendingFor (targetCue.id);
@@ -1153,11 +1177,16 @@ CueController::GoResult CueController::triggerImpl (const Cue& cue, bool auditio
         }
 
         // a running fade fired again restarts from where its target is now
+        const bool restarting = fadeRunner.isRunning (cue.id);
+
         if (! fadeRunner.start (cue, &error, targetAutoStarted))
         {
             status (error, true);
             return GoResult::failed;
         }
+
+        if (restarting)
+            cancelPreviousRun (cue.id);   // keep only the follow belonging to the run starting now
 
         played.insert (cue.id);   // the second colour applies to fades too
         return GoResult::started;
