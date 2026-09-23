@@ -1589,6 +1589,15 @@ PluginChain& AudioEngine::getCueChain (const juce::Uuid& cueId)
         slot = std::make_unique<PluginChain>();
         slot->setListener (chainListener);
         slot->prepare (getSampleRate(), getBlockSize());
+
+        // First selection/insertion can create the chain after playback or LOAD.
+        // Publish only after preparation, to the current instances; play/load
+        // mark their replaced instances as stopping so they must stay detached.
+        const juce::ScopedLock sl (lock);
+
+        for (auto& player : players)
+            if (player->getCueId() == cueId && ! player->hasFinished() && ! player->isStopPending())
+                player->setChain (slot.get());
     }
 
     return *slot;

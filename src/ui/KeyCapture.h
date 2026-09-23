@@ -68,9 +68,11 @@ public:
     bool keyPressed (const juce::KeyPress&) override;
     bool keyStateChanged (bool) override { return active; }
     void focusLost (FocusChangeType) override;
+    void focusOfChildComponentChanged (FocusChangeType) override;
     void visibilityChanged() override;
 
 private:
+    void cancelIfFocusOutside();
     void accept (KeyCaptureSession::Result);
     void chooseSpecial();
     void timerCallback() override { pollKeyRelease(); }

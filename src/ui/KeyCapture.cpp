@@ -468,7 +468,9 @@ bool KeyCapture::keyPressed (const juce::KeyPress& key)
     if (active && key.isKeyCode (juce::KeyPress::escapeKey)) { cancel(); return true; }
     return active && ! ruleFields.hasKeyboardFocus (true);
 }
-void KeyCapture::focusLost (FocusChangeType)
+void KeyCapture::focusLost (FocusChangeType) { cancelIfFocusOutside(); }
+void KeyCapture::focusOfChildComponentChanged (FocusChangeType) { cancelIfFocusOutside(); }
+void KeyCapture::cancelIfFocusOutside()
 {
     if (! active || hasKeyboardFocus (true) || submitting) return;
     if (! isShowing()) { cancel(); return; }
