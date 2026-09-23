@@ -44,6 +44,7 @@ public:
     MidiMainComponentTests() : UnitTest ("MIDI main component layout and accessibility", "Enqueue") {}
     void runTest() override
     {
+        const juce::ScopedValueSetter<std::function<bool()>> foregroundCheck (KeyCapture::foregroundProcessCheck, [] { return true; });
         Fixture f;
         f.main->perform (juce::ApplicationCommandTarget::InvocationInfo (CommandIDs::addMemoCue));
         auto* inspector = findChild<CueInspector> (*f.main);
@@ -171,6 +172,7 @@ public:
     MidiShutdownTests() : UnitTest ("MIDI main component capture shutdown lifetime", "Enqueue") {}
     void runTest() override
     {
+        const juce::ScopedValueSetter<std::function<bool()>> foregroundCheck (KeyCapture::foregroundProcessCheck, [] { return true; });
         beginTest ("closing MainComponent during settings learning cancels capture while MIDI services remain queryable");
         Fixture f;
         f.main->perform (juce::ApplicationCommandTarget::InvocationInfo (CommandIDs::workspaceSettings));

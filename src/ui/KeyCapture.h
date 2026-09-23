@@ -45,6 +45,8 @@ class KeyCapture : public juce::Component, private juce::Timer
 {
 public:
     struct Decision { bool allowed = true; juce::String message; };
+    /** Message-thread test seam; production uses the native foreground process check. */
+    static std::function<bool()> foregroundProcessCheck;
     explicit KeyCapture (ShortcutService&, std::function<bool()> keysHeld = {});
     ~KeyCapture() override;
     std::function<Decision (const juce::KeyPress&)> validate;
@@ -68,12 +70,14 @@ public:
     bool keyPressed (const juce::KeyPress&) override;
     bool keyStateChanged (bool) override { return active; }
     void focusLost (FocusChangeType) override;
+    void focusOfChildComponentChanged (FocusChangeType) override;
     void visibilityChanged() override;
 
 private:
+    void cancelIfFocusOutside();
     void accept (KeyCaptureSession::Result);
     void chooseSpecial();
-    void timerCallback() override { pollKeyRelease(); }
+    void timerCallback() override;
     void showText (const juce::String&, bool warning);
     void updateCandidate (bool syncFields = false);
     void readFields();
@@ -94,6 +98,7 @@ private:
     std::function<bool()> keysHeld;
     bool active = false, registrationPending = false, submitting = false, projectCue = false, syncing = false, uiDirty = false;
     bool observedAvailableDevice = false;
+    bool focusRecheckPending = false;
 };
 
 /** Compact cue-inspector entry point; the callout contains the same KeyCapture. */

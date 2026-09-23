@@ -142,6 +142,8 @@ bool KeyCaptureSession::moving (double nowMs) const
         && ! values.empty() && nowMs - lastChange < 200.0;
 }
 
+std::function<bool()> KeyCapture::foregroundProcessCheck = juce::Process::isForegroundProcess;
+
 KeyCapture::KeyCapture (ShortcutService& s, std::function<bool()> held) : service (&s), keysHeld (std::move (held))
 {
     if (! keysHeld)
@@ -261,7 +263,7 @@ void KeyCapture::relearn()
 void KeyCapture::cancel (bool notify)
 {
     stopTimer();
-    registrationPending = submitting = observedAvailableDevice = false;
+    registrationPending = submitting = observedAvailableDevice = focusRecheckPending = false;
     ++generation;
     const bool wasActive = active;
     active = false;
@@ -301,6 +303,17 @@ KeyCapture::Decision KeyCapture::decision() const
         return validateMidi ? validateMidi (*trigger) : Decision();
     }
     return { false, {} };
+}
+void KeyCapture::timerCallback()
+{
+    const juce::Component::SafePointer<KeyCapture> safe (this);
+    const auto token = generation;
+    pollKeyRelease();
+    if (safe != nullptr && safe->generation == token && safe->focusRecheckPending)
+    {
+        safe->focusRecheckPending = false;
+        safe->cancelIfFocusOutside();
+    }
 }
 void KeyCapture::pollKeyRelease()
 {
@@ -468,7 +481,9 @@ bool KeyCapture::keyPressed (const juce::KeyPress& key)
     if (active && key.isKeyCode (juce::KeyPress::escapeKey)) { cancel(); return true; }
     return active && ! ruleFields.hasKeyboardFocus (true);
 }
-void KeyCapture::focusLost (FocusChangeType)
+void KeyCapture::focusLost (FocusChangeType) { cancelIfFocusOutside(); }
+void KeyCapture::focusOfChildComponentChanged (FocusChangeType) { cancelIfFocusOutside(); }
+void KeyCapture::cancelIfFocusOutside()
 {
     if (! active || hasKeyboardFocus (true) || submitting) return;
     if (! isShowing()) { cancel(); return; }
@@ -476,10 +491,21 @@ void KeyCapture::focusLost (FocusChangeType)
     const auto token = generation;
     juce::MessageManager::callAsync ([safe, token]
     {
+        if (safe == nullptr || safe->generation != token || ! safe->active
+            || safe->hasKeyboardFocus (true) || safe->submitting) return;
+        // A popup can remain modal after Alt+Tab while the pointer is over it.
+        // App deactivation must release capture before applying the popup exception.
+        if (! foregroundProcessCheck())
+        {
+            safe->cancel();
+            return;
+        }
         auto* modal = juce::Component::getCurrentlyModalComponent();
-        const bool popup = modal != nullptr && safe != nullptr && modal != safe.getComponent() && ! modal->isParentOf (safe.getComponent());
-        if (safe != nullptr && safe->generation == token && safe->active && ! safe->hasKeyboardFocus (true)
-            && ! safe->submitting && ! popup) safe->cancel();
+        const bool popup = modal != nullptr && modal != safe.getComponent() && ! modal->isParentOf (safe.getComponent());
+        // Popup dismissal may send no further focus event. Retry through the
+        // existing timer, retaining the asynchronous focus and generation checks.
+        if (popup) safe->focusRecheckPending = true;
+        else safe->cancel();
     });
 }
 void KeyCapture::visibilityChanged() { if (! isShowing()) cancel(); }
