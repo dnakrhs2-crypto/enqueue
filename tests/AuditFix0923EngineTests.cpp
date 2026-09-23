@@ -197,7 +197,16 @@ struct Fixture
     CueInspector& inspector() { return *findChild<CueInspector> (*main); }
     juce::TableListBox& list() { return *findChild<juce::TableListBox> (*findChild<CueTable> (*main)); }
     bool command (juce::CommandID id) { return main->perform (juce::ApplicationCommandTarget::InvocationInfo (id)); }
-    bool key (const juce::KeyPress& keyPress) { return ReopenLastProjectTestAccess::keyboard (*main).keyPressed (keyPress, &list()); }
+    bool key (const juce::KeyPress& keyPress)
+    {
+        // keyPressed() re-reads the OS foreground, which this console never owns while
+        // someone else uses the desktop (release ctest). Same route, app treated as active.
+        auto& router = ReopenLastProjectTestAccess::keyboard (*main);
+        router.applicationActiveChanged (true);
+        auto context = router.contextFor (&list(), keyPress);
+        context.applicationActive = true;
+        return router.route (keyPress, &list(), context, juce::Time::getMillisecondCounterHiRes());
+    }
     void render (int blocks = 8)
     {
         for (int n = 0; n < blocks; ++n) engine.renderBlock (out, blockSize);

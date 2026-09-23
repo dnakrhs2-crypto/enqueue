@@ -656,7 +656,9 @@ private:
 
     void timerCallback() override
     {
-        if (document.isReplacingModel() || ! editable)
+        // Queued while editable. A click that enters show mode must not drop it
+        // (0.12.2 committed before that click's release).
+        if (document.isReplacingModel())
         {
             deferredNumbers.clear();
             stopTimer();

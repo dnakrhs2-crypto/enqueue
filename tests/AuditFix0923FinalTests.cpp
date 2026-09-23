@@ -27,6 +27,12 @@ struct DocumentMember
     friend Type memberOf (DocumentMember);
 };
 template struct MemberAccess<DocumentMember, &MainComponent::document>;
+struct ShowModeMember
+{
+    using Type = void (MainComponent::*) (bool);
+    friend Type memberOf (ShowModeMember);
+};
+template struct MemberAccess<ShowModeMember, &MainComponent::setShowMode>;
 
 template <typename T, typename Predicate>
 T* findChild (juce::Component& root, Predicate matches)
@@ -368,6 +374,7 @@ public:
             cancelledCommit (mode);
         conflictingCommit();
         inactiveListCommit();
+        showModeClick();
         for (int mode = 0; mode < 5; ++mode)
             cartSelectionMutation (mode);
     }
@@ -697,6 +704,23 @@ private:
         expectEquals (f.document().findCueAnywhere (p.cues()[1].id)->number, juce::String ("2"));
         expectEquals (f.document().cues.get (0).number, juce::String ("10"), "new list's editor is never the commit target");
         expectEquals (f.document().getHistory().getUndoDepth(), 1);
+    }
+    void showModeClick()
+    {
+        beginTest ("deferred number survives a click that enters show mode");
+        Fixture f;
+        const auto p = projectWith ({}, false);
+        if (! require (f.open (p), "open table")) return;
+        if (editNumber (f) == nullptr) return;
+        PointerPress press (f.table(), statusPoint (f.table()));
+        pumpTimers();
+        expectHeld (f, p);
+        ((*f.main).*memberOf (ShowModeMember {})) (true);   // the mode toggle switches before its release is done
+        press.release();
+        pumpTimers();
+        expectReordered (f, p);
+        expectEquals (f.document().getHistory().getUndoDepth(), 1, "the edit typed before show mode is one undo step");
+        ((*f.main).*memberOf (ShowModeMember {})) (false);
     }
     void cartSelectionMutation (int mode)
     {

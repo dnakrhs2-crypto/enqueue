@@ -197,9 +197,16 @@ struct Fixture0923
     CueInspector& inspector() { return *child0923<CueInspector> (*main); }
     juce::TableListBox& list() { return *child0923<juce::TableListBox> (*child0923<CueTable> (*main)); }
     bool command (juce::CommandID id) { return main->perform (juce::ApplicationCommandTarget::InvocationInfo (id)); }
-    bool key (const juce::KeyPress& k)
+    bool key (const juce::KeyPress& k, juce::Component* origin = nullptr)
     {
-        return ReopenLastProjectTestAccess::keyboard (*main).keyPressed (k, &list());
+        // keyPressed() re-reads the OS foreground, which this console never owns while
+        // someone else uses the desktop (release ctest). Same route, app treated as active.
+        if (origin == nullptr) origin = &list();
+        auto& router = ReopenLastProjectTestAccess::keyboard (*main);
+        router.applicationActiveChanged (true);
+        auto context = router.contextFor (origin, k);
+        context.applicationActive = true;
+        return router.route (k, origin, context, juce::Time::getMillisecondCounterHiRes());
     }
     void settle()
     {
@@ -1029,8 +1036,7 @@ private:
         const int rowHeight = juce::jlimit (16, 26, (timeline->getHeight() - 14) / 3);
         const juce::Point<int> start (220, 14 + 2 * rowHeight + rowHeight / 2);
         timeline->mouseDown (mouse0923 (*timeline, start, start)); // child at index 3
-        if (! require (ReopenLastProjectTestAccess::keyboard (*f.main).keyPressed (
-                juce::KeyPress (juce::KeyPress::pageDownKey, juce::ModifierKeys::ctrlModifier, 0), timeline),
+        if (! require (f.key (juce::KeyPress (juce::KeyPress::pageDownKey, juce::ModifierKeys::ctrlModifier, 0), timeline),
                 "Ctrl+PageDown through ShortcutRouter")) return;
         if (! require (f.document().getActiveContainer() == 1 && f.document().cues.getSelectedIndex() == 0,
                        "other list's group is selected before mouse release")) return;
