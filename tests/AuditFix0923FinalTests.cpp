@@ -398,6 +398,7 @@ public:
         showModeClick();
         for (const bool save : { true, false })
             heldNumberFlushed (save);
+        saveWhileHeld();
         cancelledContact();
         contextMenuAfterReorder();
         for (int mode = 0; mode < 5; ++mode)
@@ -750,8 +751,8 @@ private:
     }
     void heldNumberFlushed (bool save)
     {
-        beginTest (save ? "save writes a number that is still waiting for a held pointer"
-                        : "finishing edits before a project change applies a held number");
+        beginTest (save ? "save chosen by a click writes the number that click queued"
+                        : "finishing edits before a project change applies a number queued by the click");
         Fixture f;
         const auto p = projectWith ({}, false);
         if (! require (f.open (p), "open table")) return;
@@ -759,6 +760,7 @@ private:
         PointerPress press (f.table(), statusPoint (f.table()));   // e.g. the File menu pressed and dragged to Save
         pumpTimers();
         expectHeld (f, p);
+        press.release();   // the chosen command runs before the next timer tick
         if (save)
         {
             bool saved = false;
@@ -780,10 +782,32 @@ private:
             expect (f.document().isDirty(), "a clean project now asks before it is replaced");
         }
         expectReordered (f, p);
+        pumpTimers();
+        expectReordered (f, p);
+        expectEquals (f.document().getHistory().getUndoDepth(), 1, "applied once, not again by the timer");
+    }
+    void saveWhileHeld()
+    {
+        beginTest ("save while a pointer is still down on a selected row keeps that row's click target");
+        Fixture f;
+        const auto p = projectWith ({}, false);
+        if (! require (f.open (p), "open table")) return;
+        auto& doc = f.document();
+        doc.cues.setSelection ({ 0, 1 }, 0);
+        if (editNumber (f) == nullptr) return;
+        PointerPress press (f.table(), statusPoint (f.table()));   // B is already selected: JUCE selects on mouseUp
+        pumpTimers();
+        expectHeld (f, p);
+        bool saved = false;
+        ((*f.main).*memberOf (SaveProjectMember {})) (false, [&saved] (bool ok) { saved = ok; });   // Ctrl+S while pressing
+        expect (saved, "saved to the open project file");
+        expectHeld (f, p);
         press.release();
         pumpTimers();
         expectReordered (f, p);
-        expectEquals (f.document().getHistory().getUndoDepth(), 1, "applied once, not again at release");
+        expect (doc.cues.getSelected()->id == p.cues()[1].id, "B is selected at release");
+        expect (doc.cues.getPlayhead()->id == p.cues()[1].id, "the status click sets B as playhead");
+        expect (doc.isDirty(), "the number applied after that save is still marked unsaved");
     }
     void cancelledContact()
     {

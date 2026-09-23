@@ -687,7 +687,16 @@ private:
     }
 
 public:
-    /** Save, list switch and project replacement cannot wait for a held pointer. */
+    /** Save, discard check, list switch and file addition: a command chosen with a click runs
+        after that click's release but maybe before the timer, so apply the numbers now. While
+        a pointer is still down its row click is unresolved: the release applies them instead. */
+    void finishDeferredNumbers()
+    {
+        if (! pointerHeld())
+            flushDeferredNumbers();
+    }
+
+private:
     void flushDeferredNumbers()
     {
         stopTimer();
@@ -698,7 +707,6 @@ public:
                 applyNumber (edit.id, edit.number);
     }
 
-private:
 
     void commitName()
     {
@@ -3665,9 +3673,9 @@ void CueInspector::cueChanged (int index)
 
 void CueInspector::finishEditing()
 {
-    // A number waiting for a held pointer (applied at its release) is part of what gets saved, switched away from
-    // or replaced - so is one the focused field commits below while a pointer is down.
-    const juce::ScopeGuard flushNumbers { [this] { basics->flushDeferredNumbers(); } };
+    // A number queued by the click that chose this command (Save, New, a list tab...) is part of what gets saved,
+    // switched away from or replaced. One still waiting for a pointer that is down is applied at its release.
+    const juce::ScopeGuard finishNumbers { [this] { basics->finishDeferredNumbers(); } };
 
     auto* focused = juce::Component::getCurrentlyFocusedComponent();
 
