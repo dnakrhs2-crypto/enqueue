@@ -927,37 +927,6 @@ void CueController::cancelPreviousRun (const juce::Uuid& cueId)
     cancelPendingFor (cueId, Cancel::all, firingStartCue == cueId ? firingStartId : 0);
 }
 
-void CueController::cancelPreviousFadeRuns (const juce::Uuid& cueId)
-{
-    const auto previousRun = [&] (int runId)
-    {
-        // A scheduled start is no longer pending while it fires. Its own follow/chain must still survive.
-        return ! (firingStartCue == cueId && firingStartId == runId)
-               && (runId == 0 || ! scheduler.isPending (runId));
-    };
-    const auto previousEntry = [&] (const Pending& p)
-    {
-        return p.owner == cueId && p.kind != PendingKind::start && previousRun (p.runId);
-    };
-    std::set<int> previousChains;
-
-    for (const auto& p : pending)
-    {
-        if (previousEntry (p))
-            scheduler.cancel (p.id);
-
-        // The fade may have ended already: the next cue owns its remaining post-wait start.
-        if (p.kind == PendingKind::start && p.postWaitOwner == cueId && previousRun (p.afterStartId)
-            && scheduler.isPending (p.id))
-            previousChains.insert (p.afterStartId);
-    }
-
-    pending.erase (std::remove_if (pending.begin(), pending.end(), previousEntry), pending.end());
-
-    for (const int startId : previousChains)
-        cancelChainBehind (cueId, startId);
-}
-
 //==============================================================================
 bool CueController::isAuditionRequested (bool requested) const noexcept
 {
@@ -1213,8 +1182,6 @@ CueController::GoResult CueController::triggerImpl (const Cue& cue, bool auditio
             status (error, true);
             return GoResult::failed;
         }
-
-        cancelPreviousFadeRuns (cue.id);
 
         played.insert (cue.id);   // the second colour applies to fades too
         return GoResult::started;
@@ -1528,15 +1495,7 @@ CueController::GoResult CueController::startById (const juce::Uuid& id, bool aud
     const auto result = trigger (copy, audition, groupEnterIndex);
 
     if (result != GoResult::started)
-    {
-        if (copy.isFade() && result == GoResult::failed && firingStartCue == id)
-        {
-            // This scheduled fade failed: discard only the continuation reserved for this attempt.
-            cancelRunOf (id, firingStartId);
-            cancelChainBehind (id, firingStartId);
-        }
         return result;
-    }
 
     // a group's own fade-stop-others / duck must not hit the children it just started - nor may a control cue's hit
     // the group it just started (its children are what the operator hears of it)
@@ -1755,9 +1714,6 @@ int CueController::fireSequence (CueList& cues, int index, bool audition)
 
         if (result == GoResult::ignored)
             return next;   // the second-trigger rule acted on (or kept) the running instance: its own sequence stands, no new one is put behind it
-
-        if (cue.isFade() && result == GoResult::failed)
-            return sequenceEnd (cues, index);   // no new continuation; keep the walk's destination and the previous run's work
 
         // a devamp that starts the next cue itself is its own continuation: its continue mode is ignored
         if (cue.continueMode == ContinueMode::none || (cue.isDevamp() && cue.devamp.startNextCue))
