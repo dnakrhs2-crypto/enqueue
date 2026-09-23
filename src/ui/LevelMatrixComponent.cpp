@@ -622,7 +622,12 @@ void LevelMatrixComponent::beginTyping (const juce::String& initial)
     typingEditor->setText (initial.startsWithChar ('-') && initial.length() > 1 && ! juce::CharacterFunctions::isDigit (initial[1]) ? juce::String() : initial, false);
     typingEditor->setCaretPosition (typingEditor->getText().length());
     typingEditor->onReturnKey = [this] { commitTyping(); };
-    typingEditor->onEscapeKey = [this] { typingEditor.reset(); grabKeyboardFocus(); };
+    typingEditor->onEscapeKey = [this]
+    {
+        typingEditor.reset();
+        grabKeyboardFocus();
+        if (onTypingCancelled) onTypingCancelled();
+    };
     typingEditor->onFocusLost = [this] { commitTyping(); };
     addAndMakeVisible (*typingEditor);
     typingEditor->setBounds (boundsOf (selected));

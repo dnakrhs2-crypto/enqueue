@@ -2834,8 +2834,12 @@ void MainComponent::reconcileChainsAfterRestore (const ProjectSnapshot& snapshot
         const auto& cue = *cuePtr;
         const auto* before = previous.findCue (p.id);
 
-        // A loaded player owns its file reader; live setters cannot replace that reader.
-        if (engine.isLoaded (p.id) && (before == nullptr || before->file != cue.file))
+        // LOAD captures its reader, patch bus and input layout. Rebuild only
+        // waiting instances; started players keep their existing routing.
+        if (engine.isLoaded (p.id) && (before == nullptr || before->file != cue.file
+            || before->patchId != cue.patchId || before->type != cue.type
+            || before->numChannels != cue.numChannels
+            || before->mic.firstInput != cue.mic.firstInput || before->mic.numInputs != cue.mic.numInputs))
         {
             engine.unload (p.id);
 

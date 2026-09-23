@@ -95,6 +95,33 @@ namespace
 class CueInspector::BasicsPanel : public juce::Component,
                                   public juce::FileDragAndDropTarget
 {
+    class PendingEditor : public juce::TextEditor
+    {
+    public:
+        PendingEditor() { onTextChange = [this] { pending = getText() != syncedText; }; }
+
+        void syncText (const juce::String& text)
+        {
+            setText (text, false);
+            clearPending();
+        }
+
+        void clearPending() { pending = false; syncedText = getText(); }
+
+        bool takePendingEdit()
+        {
+            // Text-change notifications are queued too. Compare with the last UI
+            // sync, never with the model (which may just have been undone).
+            const bool changed = pending || getText() != syncedText;
+            clearPending();
+            return changed;
+        }
+
+    private:
+        juce::String syncedText;
+        bool pending = false;
+    };
+
 public:
     void setShortcutService (ShortcutService& service, MidiInputService* input, MidiTriggerRouter* router)
     {
@@ -300,8 +327,25 @@ public:
         refresh();
     }
 
-    void refresh()
+    void refresh (bool modelReplaced = false)
     {
+        if (committingPending)
+            return;
+
+        const auto* selected = cues.getSelected();
+        if (! modelReplaced && ! shownId.isNull() && (selected == nullptr || selected->id != shownId))
+        {
+            // Mouse focus moves before JUCE delivers onFocusLost. Finish genuine
+            // user input against shownId before any field is synced to the new cue.
+            const juce::ScopedValueSetter<bool> committing (committingPending, true);
+            commitNumber();
+            commitName();
+            commitWait (true);
+            commitWait (false);
+            commitStopFade();
+            commitNotes();
+        }
+
         const juce::ScopedValueSetter<bool> guard (refreshing, true);
         const auto* cue = cues.getSelected();
         const bool enabled = cue != nullptr && editable;
@@ -316,7 +360,9 @@ public:
         if (cue == nullptr)
         {
             for (auto* e : { &numberEditor, &nameEditor, &preEditor, &postEditor, &fadeOutEditor, &notesEditor })
-                e->setText ("", false);
+                e->syncText ("");
+
+            shownId = juce::Uuid::null();
 
             filePathLabel.setText ("", juce::dontSendNotification);
             colourCombo.setSelectedId (0, juce::dontSendNotification);
@@ -330,19 +376,16 @@ public:
             return;
         }
 
-        // while a field is being edited the panel keeps showing (and later commits to) the cue it started on
-        bool editing = false;
-
-        for (auto* e : { &numberEditor, &nameEditor, &preEditor, &postEditor, &fadeOutEditor, &notesEditor })
-            editing = editing || e->hasKeyboardFocus (true);
-
-        if (editing && ! shownId.isNull() && shownId != cue->id && cues.indexOf (shownId) >= 0)
-            return;
-
+        const bool selectionChanged = shownId != cue->id;
         if (shownId != cue->id) hotkeyButton.cancelCapture();
         shownId = cue->id;
 
-        auto setIfIdle = [] (juce::TextEditor& e, const juce::String& text) { if (! e.hasKeyboardFocus (true)) e.setText (text, false); };
+        auto setIfIdle = [selectionChanged, modelReplaced] (PendingEditor& e, const juce::String& text)
+        {
+            // Undo/redo replaces the model before restoring the selection. Drop
+            // stale input then; an ordinary property update keeps a focused edit.
+            if (modelReplaced || selectionChanged || ! e.hasKeyboardFocus (true)) e.syncText (text);
+        };
         setIfIdle (numberEditor, cue->number);
         setIfIdle (nameEditor, cue->name);
         setIfIdle (preEditor, formatTimeMs (cue->preWaitSeconds));
@@ -527,6 +570,9 @@ private:
 
     void cancelEdit()
     {
+        for (auto* e : { &numberEditor, &nameEditor, &preEditor, &postEditor, &fadeOutEditor, &notesEditor })
+            e->clearPending();
+
         {
             const juce::ScopedValueSetter<bool> guard (cancellingEdit, true);
 
@@ -544,7 +590,7 @@ private:
         const int index = shownId.isNull() ? cues.getSelectedIndex() : cues.indexOf (shownId);
         const auto* cue = cues.isValidIndex (index) ? &cues.get (index) : nullptr;
 
-        if (refreshing || cancellingEdit || cue == nullptr)
+        if (refreshing || cancellingEdit || cue == nullptr || ! numberEditor.takePendingEdit())
             return;
 
         const auto number = numberEditor.getText().trim();
@@ -555,7 +601,7 @@ private:
         if (document.isNumberTaken (number, cue->id))
         {
             juce::LookAndFeel::getDefaultLookAndFeel().playAlertSound();   // numbers are unique in the project (every list / cart)
-            numberEditor.setText (cue->number, false);
+            numberEditor.syncText (cue->number);
             return;
         }
 
@@ -567,7 +613,7 @@ private:
     {
         const auto* cue = shownCue();   // the cue this edit started on, even if the selection moved meanwhile
 
-        if (refreshing || cancellingEdit || cue == nullptr)
+        if (refreshing || cancellingEdit || cue == nullptr || ! nameEditor.takePendingEdit())
             return;
 
         const auto name = nameEditor.getText().trim();
@@ -582,7 +628,7 @@ private:
     {
         const auto* cue = shownCue();   // the cue this edit started on, even if the selection moved meanwhile
 
-        if (refreshing || cancellingEdit || cue == nullptr)
+        if (refreshing || cancellingEdit || cue == nullptr || ! notesEditor.takePendingEdit())
             return;
 
         const auto notes = notesEditor.getText();
@@ -596,17 +642,17 @@ private:
     void commitWait (bool pre)
     {
         const auto* cue = shownCue();   // the cue this edit started on, even if the selection moved meanwhile
+        auto& editor = pre ? preEditor : postEditor;
 
         if (refreshing || cancellingEdit || cue == nullptr)
             return;
 
-        auto& editor = pre ? preEditor : postEditor;
         const double current = pre ? cue->preWaitSeconds : cue->postWaitSeconds;
         const double value = parseTimeText (editor.getText());
 
-        if (value < 0.0 || juce::approximatelyEqual (value, current))
+        if (! editor.takePendingEdit() || value < 0.0 || juce::approximatelyEqual (value, current))
         {
-            editor.setText (formatTimeMs (current), false);
+            editor.syncText (formatTimeMs (current));
             return;
         }
 
@@ -645,9 +691,9 @@ private:
 
         const auto text = fadeOutEditor.getText().trim();
 
-        if (text.isEmpty())
+        if (! fadeOutEditor.takePendingEdit() || text.isEmpty())
         {
-            fadeOutEditor.setText (juce::String (cue->fadeOutMs), false);
+            fadeOutEditor.syncText (juce::String (cue->fadeOutMs));
             return;
         }
 
@@ -655,7 +701,7 @@ private:
 
         if (value == cue->fadeOutMs)
         {
-            fadeOutEditor.setText (juce::String (value), false);
+            fadeOutEditor.syncText (juce::String (value));
             return;
         }
 
@@ -727,7 +773,7 @@ private:
     AppSettings& settings;
 
     juce::Label numberLabel, nameLabel, colourLabel, fileLabel, preLabel, postLabel, continueLabel, fadeOutLabel, gainLabel, notesLabel, filePathLabel;
-    juce::TextEditor numberEditor, nameEditor, preEditor, postEditor, fadeOutEditor, notesEditor;
+    PendingEditor numberEditor, nameEditor, preEditor, postEditor, fadeOutEditor, notesEditor;
     juce::ComboBox colourCombo, secondColourCombo, continueCombo;
     juce::ToggleButton secondColourToggle, flagToggle, armedToggle, autoLoadToggle;
     KeyCaptureButton hotkeyButton;
@@ -743,6 +789,7 @@ private:
     const Cue* shownCue() const { return shownId.isNull() ? cues.getSelected() : cues.findById (shownId); }
     bool refreshing = false;
     bool cancellingEdit = false;
+    bool committingPending = false;
     bool dragOver = false;
     bool editable = true;
 };
@@ -1097,6 +1144,7 @@ public:
         addAndMakeVisible (viewport);
 
         grid.onChange = [this] (double mainDb, const LevelMatrix& m, bool finished) { commitLevels (mainDb, m, finished); };
+        grid.onTypingCancelled = [this] { refresh(); };
     }
 
     void setEditable (bool shouldBeEditable)
@@ -1138,7 +1186,7 @@ public:
             return;
         }
 
-        if (editing && ! shownId.isNull() && shownId != cue->id && cues.indexOf (shownId) >= 0)
+        if ((editing || grid.isTyping()) && ! shownId.isNull() && shownId != cue->id && cues.indexOf (shownId) >= 0)
             return;   // a drag / typing session is still on the previous cue
 
         shownId = cue->id;
@@ -1246,6 +1294,7 @@ private:
                           { "levels:" + id.toString(), false });
         engine.setLiveGainDb (id, mainDb);
         engine.setLiveLevels (id, m, trimCopy);
+        if (finished) refresh();
     }
 
     void commitPatch()
@@ -2982,6 +3031,7 @@ public:
         const juce::ScopedValueSetter<bool> guard (refreshing, true);
         const auto* cue = cues.getSelected();
         const bool enabled = cue != nullptr && cue->isGroup() && editable;
+        shownId = cue != nullptr && cue->isGroup() ? cue->id : juce::Uuid::null();
 
         for (auto* c : std::initializer_list<juce::Component*> { &modeCombo, &loopToggle, &shuffleToggle, &crossfadeToggle, &crossfadeEditor })
             c->setEnabled (enabled);
@@ -3067,7 +3117,17 @@ private:
         void refresh()
         {
             const int index = owner.groupIndex();
+            const auto listId = owner.document.getContainerInfo (owner.document.getActiveContainer()).id;
+            const auto groupId = index >= 0 ? owner.cues.get (index).id : juce::Uuid::null();
+            if (listId != shownList || groupId != shownGroup)
+            {
+                dragging = -1;
+                selectedChild = -1;
+            }
+            shownList = listId;
+            shownGroup = groupId;
             children = index >= 0 ? owner.cues.childrenOf (index) : std::vector<int>();
+            if (! validDrag()) dragging = -1;
 
             if (selectedChild >= 0 && std::find (children.begin(), children.end(), selectedChild) == children.end())
                 selectedChild = children.empty() ? -1 : children.front();
@@ -3173,7 +3233,7 @@ private:
             dragging = -1;
             const int child = childAt (e.y);
 
-            if (child < 0)
+            if (! isShownChild (child))
                 return;
 
             selectedChild = child;
@@ -3182,13 +3242,17 @@ private:
             dragStartSeconds = c.preWaitSeconds;
             dragOffset = secondsFor ((float) e.x) - c.preWaitSeconds;
             dragging = e.x >= barArea().getX() ? child : -1;
+            draggedId = c.id;
             repaint();
         }
 
         void mouseDrag (const juce::MouseEvent& e) override
         {
-            if (dragging < 0)
+            if (! validDrag())
+            {
+                dragging = -1;
                 return;
+            }
 
             double seconds = secondsFor ((float) e.x) - dragOffset;
 
@@ -3201,8 +3265,11 @@ private:
 
         void mouseUp (const juce::MouseEvent&) override
         {
-            if (dragging < 0)
+            if (! validDrag())
+            {
+                dragging = -1;
                 return;
+            }
 
             const double final = owner.cues.get (dragging).preWaitSeconds;
             const int child = dragging;
@@ -3249,12 +3316,27 @@ private:
         }
 
     private:
+        bool isShownChild (int child) const
+        {
+            const int group = owner.groupIndex();
+            return group >= 0 && owner.cues.isValidIndex (child)
+                && owner.cues.parentIndexOf (child) == group;
+        }
+
+        bool validDrag() const
+        {
+            return isShownChild (dragging) && owner.cues.get (dragging).id == draggedId
+                && owner.document.getContainerInfo (owner.document.getActiveContainer()).id == shownList
+                && owner.cues.get (owner.groupIndex()).id == shownGroup;
+        }
+
         static constexpr int labelWidth = 150;
         static constexpr int axisHeight = 14;
         GroupPanel& owner;
         std::vector<int> children;
         int selectedChild = -1;
         int dragging = -1;
+        juce::Uuid shownList = juce::Uuid::null(), shownGroup = juce::Uuid::null(), draggedId = juce::Uuid::null();
         double dragStartSeconds = 0.0, dragOffset = 0.0;
     };
 
@@ -3616,7 +3698,7 @@ void CueInspector::fetchFadeLevelsFromTarget()
     fadePanel->fetchFromTarget();
 }
 
-void CueInspector::refresh()
+void CueInspector::refresh (bool modelReplaced)
 {
     const auto* cue = cues.getSelected();
 
@@ -3639,7 +3721,7 @@ void CueInspector::refresh()
     selectionDetails.setTooltip (selectionDetails.getText());
 
     rebuildTabs (cue == nullptr ? 0 : cue->isFade() ? 1 : cue->isDevamp() ? 2 : cue->isGroup() ? 3 : cue->isControl() ? 4 : cue->isMic() ? 5 : 0);
-    basics->refresh();
+    basics->refresh (modelReplaced);
     timeLoops->refresh();
     levels->refresh();
     trim->refresh();
