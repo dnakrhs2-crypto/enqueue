@@ -259,6 +259,7 @@ juce::String ProjectDocument::getWindowTitle() const
 
 void ProjectDocument::newProject()
 {
+    const juce::ScopedValueSetter<bool> replacing (replacingModel, true);
     listeners.call ([] (Listener& l) { l.projectReplaced(); });
     history.clear();
     containers.clear();
@@ -343,6 +344,7 @@ juce::Result ProjectDocument::parse (const juce::File& projectFile, Project& out
 
 void ProjectDocument::adopt (Project project, const juce::File& projectFile)
 {
+    const juce::ScopedValueSetter<bool> replacing (replacingModel, true);
     listeners.call ([] (Listener& l) { l.projectReplaced(); });
     history.clear();
     project.ensureMainList();
@@ -492,6 +494,7 @@ ProjectSnapshot ProjectDocument::makeSnapshot (bool capturePluginStates) const
 
 void ProjectDocument::restoreSnapshot (const ProjectSnapshot& snapshot)
 {
+    const juce::ScopedValueSetter<bool> replacing (replacingModel, true);
     const auto previous = onSnapshotRestored ? toProject() : Project {};
 
     // settings are deliberately left alone: they are not part of the undo history

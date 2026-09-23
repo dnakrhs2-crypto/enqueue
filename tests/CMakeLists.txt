@@ -14,6 +14,7 @@ target_sources(EnqueueTests PRIVATE
     AuditFixUndoTests.cpp
     AuditFix0923EngineTests.cpp
     AuditFix0923CaptureFocusTests.cpp
+    AuditFix0923UiTests.cpp
     ../src/ui/MainComponent.cpp
     ../src/ui/TransportBar.cpp
     ../src/ui/CueInspector.cpp

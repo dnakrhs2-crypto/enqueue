@@ -40,6 +40,10 @@ public:
 
     double getMainDb() const noexcept { return mainDb; }
     const LevelMatrix& getMatrix() const noexcept { return matrix; }
+    bool isTyping() const noexcept { return typingEditor != nullptr; }
+
+    /** A cancelled text edit releases the owner's selection guard without changing levels. */
+    std::function<void()> onTypingCancelled;
 
     /** Every change (drag steps included). 'finished' is false while dragging: coalesce those. */
     std::function<void (double mainDb, const LevelMatrix& matrix, bool finished)> onChange;
