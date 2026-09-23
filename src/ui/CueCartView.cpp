@@ -163,7 +163,7 @@ void CueCartView::mouseDown (const juce::MouseEvent& e)
     {
         const auto& cue = cues.get (slot);
 
-        if (findPlaying (cue.id) != nullptr && onStop)
+        if (onStop)
             onStop (cue.id);
 
         return;
