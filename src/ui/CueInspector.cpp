@@ -327,11 +327,12 @@ public:
         refresh();
     }
 
-    void refresh (bool modelReplaced = false)
+    void refresh()
     {
         if (committingPending)
             return;
 
+        const bool modelReplaced = document.isReplacingModel();
         const auto* selected = cues.getSelected();
         if (! modelReplaced && ! shownId.isNull() && (selected == nullptr || selected->id != shownId))
         {
@@ -521,7 +522,7 @@ public:
 private:
     void edit (const juce::String& name, const std::function<void (Cue&)>& mutator, const juce::String& coalesceKey = {})
     {
-        if (refreshing || cancellingEdit || ! editable)
+        if (refreshing || cancellingEdit || document.isReplacingModel() || ! editable)
             return;
 
         // the cue whose values the fields show (a focus-lost commit may arrive after the selection moved on)
@@ -590,7 +591,7 @@ private:
         const int index = shownId.isNull() ? cues.getSelectedIndex() : cues.indexOf (shownId);
         const auto* cue = cues.isValidIndex (index) ? &cues.get (index) : nullptr;
 
-        if (refreshing || cancellingEdit || cue == nullptr || ! numberEditor.takePendingEdit())
+        if (refreshing || cancellingEdit || document.isReplacingModel() || cue == nullptr || ! numberEditor.takePendingEdit())
             return;
 
         const auto number = numberEditor.getText().trim();
@@ -613,7 +614,7 @@ private:
     {
         const auto* cue = shownCue();   // the cue this edit started on, even if the selection moved meanwhile
 
-        if (refreshing || cancellingEdit || cue == nullptr || ! nameEditor.takePendingEdit())
+        if (refreshing || cancellingEdit || document.isReplacingModel() || cue == nullptr || ! nameEditor.takePendingEdit())
             return;
 
         const auto name = nameEditor.getText().trim();
@@ -628,7 +629,7 @@ private:
     {
         const auto* cue = shownCue();   // the cue this edit started on, even if the selection moved meanwhile
 
-        if (refreshing || cancellingEdit || cue == nullptr || ! notesEditor.takePendingEdit())
+        if (refreshing || cancellingEdit || document.isReplacingModel() || cue == nullptr || ! notesEditor.takePendingEdit())
             return;
 
         const auto notes = notesEditor.getText();
@@ -644,7 +645,7 @@ private:
         const auto* cue = shownCue();   // the cue this edit started on, even if the selection moved meanwhile
         auto& editor = pre ? preEditor : postEditor;
 
-        if (refreshing || cancellingEdit || cue == nullptr)
+        if (refreshing || cancellingEdit || document.isReplacingModel() || cue == nullptr)
             return;
 
         const double current = pre ? cue->preWaitSeconds : cue->postWaitSeconds;
@@ -686,7 +687,7 @@ private:
     {
         const auto* cue = shownCue();   // the cue this edit started on, even if the selection moved meanwhile
 
-        if (refreshing || cancellingEdit || cue == nullptr)
+        if (refreshing || cancellingEdit || document.isReplacingModel() || cue == nullptr)
             return;
 
         const auto text = fadeOutEditor.getText().trim();
@@ -3121,13 +3122,13 @@ private:
             const auto groupId = index >= 0 ? owner.cues.get (index).id : juce::Uuid::null();
             if (listId != shownList || groupId != shownGroup)
             {
-                dragging = -1;
+                cancelDrag();
                 selectedChild = -1;
             }
             shownList = listId;
             shownGroup = groupId;
             children = index >= 0 ? owner.cues.childrenOf (index) : std::vector<int>();
-            if (! validDrag()) dragging = -1;
+            if (! validDrag()) cancelDrag();
 
             if (selectedChild >= 0 && std::find (children.begin(), children.end(), selectedChild) == children.end())
                 selectedChild = children.empty() ? -1 : children.front();
@@ -3230,7 +3231,7 @@ private:
         void mouseDown (const juce::MouseEvent& e) override
         {
             grabKeyboardFocus();
-            dragging = -1;
+            cancelDrag();
             const int child = childAt (e.y);
 
             if (! isShownChild (child))
@@ -3250,7 +3251,7 @@ private:
         {
             if (! validDrag())
             {
-                dragging = -1;
+                cancelDrag();
                 return;
             }
 
@@ -3267,7 +3268,7 @@ private:
         {
             if (! validDrag())
             {
-                dragging = -1;
+                cancelDrag();
                 return;
             }
 
@@ -3316,6 +3317,21 @@ private:
         }
 
     private:
+        void cancelDrag()
+        {
+            if (dragging < 0)
+                return;
+
+            dragging = -1; // rollback notifies listeners and can re-enter refresh()
+            if (owner.document.isReplacingModel())
+                return; // the snapshot already replaced the preview
+
+            int index = -1;
+            if (auto* list = owner.document.listContaining (draggedId, &index))
+                if (! juce::approximatelyEqual (list->get (index).preWaitSeconds, dragStartSeconds))
+                    list->update (index, [start = dragStartSeconds] (Cue& cue) { cue.preWaitSeconds = start; });
+        }
+
         bool isShownChild (int child) const
         {
             const int group = owner.groupIndex();
@@ -3698,7 +3714,7 @@ void CueInspector::fetchFadeLevelsFromTarget()
     fadePanel->fetchFromTarget();
 }
 
-void CueInspector::refresh (bool modelReplaced)
+void CueInspector::refresh()
 {
     const auto* cue = cues.getSelected();
 
@@ -3721,7 +3737,7 @@ void CueInspector::refresh (bool modelReplaced)
     selectionDetails.setTooltip (selectionDetails.getText());
 
     rebuildTabs (cue == nullptr ? 0 : cue->isFade() ? 1 : cue->isDevamp() ? 2 : cue->isGroup() ? 3 : cue->isControl() ? 4 : cue->isMic() ? 5 : 0);
-    basics->refresh (modelReplaced);
+    basics->refresh();
     timeLoops->refresh();
     levels->refresh();
     trim->refresh();

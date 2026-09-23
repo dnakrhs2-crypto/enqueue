@@ -143,6 +143,9 @@ public:
 
     ProjectSnapshot makeSnapshot (bool capturePluginStates) const;
     void restoreSnapshot (const ProjectSnapshot& snapshot);
+    /** True throughout undo/redo or project replacement, including structure and cursor notifications.
+        Pending inspector input must yield to the restored model during this interval. */
+    bool isReplacingModel() const noexcept { return replacingModel; }
 
     void addListener (Listener* l) { listeners.add (l); }
     void removeListener (Listener* l) { listeners.remove (l); }
@@ -179,6 +182,7 @@ private:
     std::vector<std::unique_ptr<Container>> containers;   // never empty
     int active = 0;
     bool switching = false;
+    bool replacingModel = false;
 
     juce::File file;
     bool dirty = false;

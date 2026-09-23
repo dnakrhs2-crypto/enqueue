@@ -972,6 +972,9 @@ juce::var CueTable::getDragSourceDescription (const juce::SparseSet<int>& rowsTo
 //==============================================================================
 void CueTable::cueListStructureChanged()
 {
+    // updateContent() can remove selected rows and call selectedRowsChanged().
+    // Those are view adjustments; the model owns selection throughout the sync.
+    const juce::ScopedValueSetter<bool> guard (syncingSelection, true);
     cellEditor.reset();
     rebuildVisible();
     table.updateContent();

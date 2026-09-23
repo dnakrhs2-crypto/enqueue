@@ -95,7 +95,7 @@ public:
 private:
     void shortcutsChanged() override;
     ShortcutService* shortcuts = nullptr;
-    void refresh (bool modelReplaced = false);
+    void refresh();
     /** Installs the tab set for the selected cue's type (0 audio / 1 fade / 2 devamp). */
     void rebuildTabs (int wanted);
 
@@ -103,7 +103,7 @@ private:
     void handleAsyncUpdate() override;
     void cueSelectionChanged (int) override { refresh(); }
     void cueChanged (int index) override;
-    void cueListStructureChanged() override { refresh (true); }
+    void cueListStructureChanged() override { refresh(); }
 
     ProjectDocument& document;
     CueList& cues;

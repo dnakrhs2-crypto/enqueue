@@ -1397,6 +1397,10 @@ void MainComponent::addCuesFromFiles (const juce::StringArray& files, int insert
     if (files.isEmpty() || showMode)
         return;
 
+    // Download completion may arrive while a field still has focus. Its edit
+    // belongs before the addition's snapshot, which will select the new cue.
+    inspector.finishEditing();
+
     const bool copyIn = document.settings.copyFilesIntoProject && document.hasFile();
     const auto projectDir = document.getFile().getParentDirectory();
     const bool autoNumber = document.settings.autoNumber;

@@ -13,8 +13,8 @@
 #endif
 
 // EE-2, EE-3 and EC-3 from audit0923_ref/Audit0923EnqTests.cpp.
-// Visible-peer variants are deliberately omitted: the hidden component tree
-// queues JUCE's public focusLost event before synchronous table selection.
+// Visible-peer variants are deliberately omitted: the windowless peer lets
+// grabKeyboardFocus drive JUCE's real focus state and queued focusLost events.
 // No production completion callback or OS input is substituted.
 namespace gocue::tests
 {
@@ -122,6 +122,52 @@ Project project0923 (const juce::File& file, int count = 2)
     return p;
 }
 
+// Only the native window boundary is substituted. JUCE still owns the component
+// focus, TextEditor notifications, message dispatch and table selection ordering.
+// No HWND is created, shown or focused, even when a component requests visibility.
+class HiddenFocusPeer0923 final : public juce::ComponentPeer
+{
+public:
+    HiddenFocusPeer0923 (juce::Component& component, int flags) : ComponentPeer (component, flags) {}
+    void* getNativeHandle() const override { return nullptr; }
+    void setVisible (bool) override {}
+    void setTitle (const juce::String&) override {}
+    void setBounds (const juce::Rectangle<int>& value, bool) override { bounds = value; }
+    juce::Rectangle<int> getBounds() const override { return bounds; }
+    juce::Point<float> localToGlobal (juce::Point<float> p) override { return p + bounds.getPosition().toFloat(); }
+    juce::Point<float> globalToLocal (juce::Point<float> p) override { return p - bounds.getPosition().toFloat(); }
+    void setMinimised (bool) override {}
+    bool isMinimised() const override { return false; }
+    bool isShowing() const override { return false; }
+    void setFullScreen (bool) override {}
+    bool isFullScreen() const override { return false; }
+    void setIcon (const juce::Image&) override {}
+    bool contains (juce::Point<int> p, bool) const override { return bounds.withZeroOrigin().contains (p); }
+    OptionalBorderSize getFrameSizeIfPresent() const override { return OptionalBorderSize (juce::BorderSize<int>()); }
+    juce::BorderSize<int> getFrameSize() const override { return {}; }
+    bool setAlwaysOnTop (bool) override { return false; }
+    void toFront (bool) override {}
+    void toBehind (juce::ComponentPeer*) override {}
+    bool isFocused() const override { return focused; }
+    void grabFocus() override { focused = true; }
+    void repaint (const juce::Rectangle<int>&) override {}
+    void performAnyPendingRepaintsNow() override {}
+    void setAlpha (float) override {}
+    juce::StringArray getAvailableRenderingEngines() override { return {}; }
+    void textInputRequired (juce::Point<int>, juce::TextInputTarget&) override {}
+private:
+    juce::Rectangle<int> bounds;
+    bool focused = false;
+};
+
+class HiddenMain0923 final : public MainComponent
+{
+public:
+    using MainComponent::MainComponent;
+private:
+    juce::ComponentPeer* createNewPeer (int peerFlags, void*) override { return new HiddenFocusPeer0923 (*this, peerFlags); }
+};
+
 struct Fixture0923
 {
     static juce::PropertiesFile::Options options()
@@ -134,7 +180,7 @@ struct Fixture0923
         : storage (scratch.folder.getChildFile ("test.settings"), options()), settings (storage), numOutputs (outputs)
     {
         engine.prepare (sampleRate0923, blockSize0923, outputs);
-        main = std::make_unique<MainComponent> (engine, settings, commands);
+        main = std::make_unique<HiddenMain0923> (engine, settings, commands);
         main->setLookAndFeel (&theme);
         main->setSize (1541, 980);
     }
@@ -172,14 +218,13 @@ struct Fixture0923
     }
     void hiddenPeer()
     {
-        main->addToDesktop (0); // stays invisible; never grabs OS focus
-        main->setVisible (false);
+        main->addToDesktop (0);
+        main->setVisible (true); // logical component visibility only; HiddenFocusPeer0923 never creates a window
         dispatch0923();
     }
     void focus (juce::TextEditor& editor)
     {
-        pendingFocus = &editor;
-        editor.focusGained (juce::Component::focusChangedDirectly);
+        editor.grabKeyboardFocus();
     }
     bool tab (const juce::String& name)
     {
@@ -195,13 +240,10 @@ struct Fixture0923
         // Component::internalMouseDown moves focus first (juce_Component.cpp:2536).
         // TextEditor::focusLost posts onFocusLost (juce_TextEditor.cpp:1987/2041).
         // Selection and CueInspector refresh finish BEFORE that message is drained.
-        if (pendingFocus != nullptr)
-            pendingFocus->focusLost (juce::Component::focusChangedByMouseClick);
-        pendingFocus = nullptr;
+        list().grabKeyboardFocus();
         list().selectRowsBasedOnModifierKeys (index, {}, false);
         return document().cues.getSelectedIndex() == index;
     }
-    juce::Component::SafePointer<juce::TextEditor> pendingFocus;
     std::array<double, 4> rms()
     {
         settle();
@@ -328,7 +370,15 @@ public:
         ShellFolders0923 folders (sandbox.folder);
         beginTest ("temporary user folders and hidden peers");
         if (! require (folders.ok(), "isolate Windows shell folders")) return;
-        for (int field = 0; field < 4; ++field) basics (field);
+        for (int field = 0; field < 6; ++field)
+        {
+            basics (field);
+            basicsStructure (field);
+            basicsStructuralUndo (field);
+        }
+        basicsDeleted();
+        basicsFileAddition();
+        basicsProjectReplacement();
         basicsCancelAndInvalid();
         basicsModelRefresh();
         levels();
@@ -339,6 +389,7 @@ public:
         patchUndo (false, true);
         patchUndo (true, true);
         for (int count : { 1, 5 }) timelineSwitch (count);
+        for (int change = 0; change < 4; ++change) timelineMovedCancellation (change);
        #else
         logMessage ("Windows JUCE message dispatch is required for these UI regressions.");
        #endif
@@ -351,7 +402,7 @@ private:
     }
     void basics (int field)
     {
-        const char* fields[] { "notes", "name", "pre-wait", "post-wait" };
+        const char* fields[] { "notes", "name", "pre-wait", "post-wait", "number", "stop fade" };
         beginTest ("audit0923 EE-3: " + juce::String (fields[field]) + " survives " + juce::String ("hidden focus then table selection"));
         Fixture0923 f;
         const auto tone = f.scratch.folder.getChildFile ("tone.wav");
@@ -361,19 +412,25 @@ private:
         p.cues()[0].postWaitSeconds = 2.5;
         p.cues()[1].preWaitSeconds = 3.25;
         p.cues()[1].postWaitSeconds = 4.5;
+        p.cues()[0].fadeOutMs = 450;
+        p.cues()[1].fadeOutMs = 650;
         if (! require (f.open (p), "open saved A/B project clean")) return;
         f.hiddenPeer();
         if (! require (f.tab (ko ("기본")), "open Basics tab")) return;
         const auto original = field == 0 ? p.cues()[0].notes : field == 1 ? p.cues()[0].name
+                              : field == 4 ? p.cues()[0].number : field == 5 ? juce::String (450)
                               : formatTimeMs (field == 2 ? 1.25 : 2.5);
         auto* editor = child0923<juce::TextEditor> (f.inspector(), [&] (const auto& e) { return e.getText() == original; });
         if (! require (editor != nullptr, "find actual Basics editor")) return;
         if (field == 0) f.inspector().showNotes();
         f.focus (*editor);
         dispatch0923();
-        if (! require (! f.main->isVisible() && f.main->getPeer() != nullptr, "hidden peer never owns OS focus")) return;
+        if (! require (editor->hasKeyboardFocus (false) && f.main->getPeer() != nullptr
+                       && ! f.main->getPeer()->isShowing() && f.main->getWindowHandle() == nullptr,
+                       "real JUCE focus with no native window or OS focus")) return;
         FocusWitness0923 witness (*editor, f.document());
-        const juce::String wanted = field == 0 ? "A edited notes" : field == 1 ? "A edited name" : "7.75";
+        const juce::String wanted = field == 0 ? "A edited notes" : field == 1 ? "A edited name"
+                                  : field == 4 ? "1.5" : field == 5 ? "875" : "7.75";
         editor->selectAll();
         editor->insertTextAtCaret (wanted);
         dispatch0923(); // normal typing messages; still focused, no focus-loss callback
@@ -386,6 +443,7 @@ private:
         const auto a = *f.document().findCueAnywhere (p.cues()[0].id);
         const bool dirty = f.document().isDirty(), undo = f.document().canUndo();
         const bool changed = field == 0 ? a.notes == wanted : field == 1 ? a.name == wanted
+                             : field == 4 ? a.number == wanted : field == 5 ? a.fadeOutMs == 875
                              : std::abs ((field == 2 ? a.preWaitSeconds : a.postWaitSeconds) - 7.75) < 1.0e-9;
         if (! require (f.row (0), "return to A using table")) return;
         dispatch0923();
@@ -396,12 +454,13 @@ private:
         expect (changed, "A must retain the input when B is clicked");
         expect (dirty, "the committed A edit must dirty the saved project");
         expect (undo, "the committed A edit must create project undo history");
-        if (field < 2) expectEquals (editor->getText(), wanted, "A inspector must redisplay the edit");
+        if (field < 2 || field >= 4) expectEquals (editor->getText(), wanted, "A inspector must redisplay the edit");
         else expectEquals (editor->getText(), formatTimeMs (7.75), "A inspector must redisplay the wait edit");
 
         const auto* b = f.document().findCueAnywhere (p.cues()[1].id);
         expect (b != nullptr && b->notes == p.cues()[1].notes && b->name == p.cues()[1].name
-                && b->preWaitSeconds == 3.25 && b->postWaitSeconds == 4.5, "B fields stay unchanged");
+                && b->preWaitSeconds == 3.25 && b->postWaitSeconds == 4.5
+                && b->number == p.cues()[1].number && b->fadeOutMs == 650, "B fields stay unchanged");
         if (! require (f.command (CommandIDs::undo), "undo committed field")) return;
         f.row (0);
         // The model's restored value is not pending user input, including a late focus loss.
@@ -413,8 +472,186 @@ private:
         f.row (0);
         editor->focusLost (juce::Component::focusChangedDirectly);
         dispatch0923();
-        expectEquals (editor->getText(), field < 2 ? wanted : formatTimeMs (7.75), "redo is not overwritten by stale UI text");
+        expectEquals (editor->getText(), field < 2 || field >= 4 ? wanted : formatTimeMs (7.75), "redo is not overwritten by stale UI text");
         expect (! f.document().canRedo(), "redo adds no extra history");
+    }
+
+    static juce::String fieldText (const Cue& c, int field)
+    {
+        return field == 0 ? c.notes : field == 1 ? c.name : field == 4 ? c.number
+             : field == 5 ? juce::String (c.fadeOutMs) : formatTimeMs (field == 2 ? c.preWaitSeconds : c.postWaitSeconds);
+    }
+
+    static juce::String fieldInput (int field)
+    {
+        return field == 0 ? "pending notes" : field == 1 ? "pending name"
+             : field == 4 ? "1.5" : field == 5 ? "875" : "7.75";
+    }
+
+    static Project fieldProject()
+    {
+        auto p = project0923 ({});
+        p.cues()[0].preWaitSeconds = 1.25;
+        p.cues()[0].postWaitSeconds = 2.5;
+        p.cues()[0].fadeOutMs = 450;
+        p.cues()[1].preWaitSeconds = 3.25;
+        p.cues()[1].postWaitSeconds = 4.5;
+        p.cues()[1].fadeOutMs = 650;
+        return p;
+    }
+
+    juce::TextEditor* typeField (Fixture0923& f, const Cue& cue, int field)
+    {
+        if (! require (f.tab (ko ("기본")), "Basics tab")) return nullptr;
+        if (field == 0) f.inspector().showNotes();
+        auto* editor = child0923<juce::TextEditor> (f.inspector(), [&] (const auto& e) { return e.getText() == fieldText (cue, field); });
+        if (! require (editor != nullptr, "find pending field")) return nullptr;
+        f.focus (*editor);
+        editor->selectAll();
+        editor->insertTextAtCaret (fieldInput (field));
+        dispatch0923();
+        if (! require (editor->hasKeyboardFocus (false) && editor->getText() == fieldInput (field), "actual focused pending input")) return nullptr;
+        return editor;
+    }
+
+    void basicsStructure (int field)
+    {
+        beginTest ("audit0923 EE-3: focused field " + juce::String (field) + " survives add, reorder and delete");
+        Fixture0923 f;
+        const auto p = fieldProject();
+        if (! require (f.open (p), "open A/B")) return;
+        f.hiddenPeer();
+        auto* editor = typeField (f, p.cues()[0], field);
+        if (editor == nullptr) return;
+        Cue added; added.name = "C"; added.number = "3";
+        auto& doc = f.document();
+        for (int change = 0; change < 3; ++change)
+        {
+            if (change == 0) doc.cues.add (added);
+            if (change == 1) doc.cues.move (1, 2);
+            if (change == 2) doc.cues.remove (doc.cues.indexOf (added.id));
+            dispatch0923();
+            expect (editor->hasKeyboardFocus (false), "structure refresh keeps the editor focused");
+            expectEquals (editor->getText(), fieldInput (field), "ordinary structure refresh preserves uncommitted input");
+            expectEquals (fieldText (*doc.findCueAnywhere (p.cues()[0].id), field), fieldText (p.cues()[0], field), "unchanged selection does not commit input");
+            expect (! doc.canUndo(), "structure notification creates no phantom field edit");
+        }
+        if (! require (f.row (doc.cues.indexOf (p.cues()[1].id)), "select B after structure changes")) return;
+        dispatch0923();
+        const auto wanted = field == 2 || field == 3 ? formatTimeMs (7.75) : fieldInput (field);
+        expectEquals (fieldText (*doc.findCueAnywhere (p.cues()[0].id), field), wanted, "selection commits the preserved text to A");
+        expectEquals (fieldText (*doc.findCueAnywhere (p.cues()[1].id), field), fieldText (p.cues()[1], field), "B remains untouched");
+        expectEquals (doc.getHistory().getUndoDepth(), 1, "one field edit after all structure notifications");
+    }
+
+    void basicsStructuralUndo (int field)
+    {
+        beginTest ("audit0923 EE-3: structural undo/redo discard focused field " + juce::String (field) + " and preserve history");
+        Fixture0923 f;
+        const auto p = fieldProject();
+        if (! require (f.open (p), "open A/B")) return;
+        f.hiddenPeer();
+        auto& doc = f.document();
+        Cue added; added.name = "C"; added.number = "3";
+        doc.perform ("Add C", [&] { doc.cues.add (added); });
+        doc.cues.setSelection ({ 0, 1, 2 }, 1); // updateContent removes C during undo; B was primary
+        auto* editor = typeField (f, p.cues()[1], field);
+        if (editor == nullptr) return;
+        if (! require (f.command (CommandIDs::undo), "undo C while B has pending input")) return;
+        dispatch0923();
+        expectEquals (doc.cues.size(), 2, "C removed by undo");
+        expectEquals (doc.cues.getSelectedIndex(), 0, "snapshot primary restored to A");
+        expect (doc.cues.getSelectedIndices() == std::vector<int> { 0 }, "snapshot selection restored");
+        for (int i = 0; i < 2; ++i)
+            expectEquals (fieldText (*doc.findCueAnywhere (p.cues()[(size_t) i].id), field), fieldText (p.cues()[(size_t) i], field), "undo never commits pending B text");
+        expectEquals (editor->getText(), fieldText (p.cues()[0], field), "focused editor discards stale text on restoration");
+        expectEquals (doc.getHistory().getUndoDepth(), 0, "restore creates no extra edit");
+        expectEquals (doc.getHistory().getRedoDepth(), 1, "redo survives structure and cursor notifications");
+        if (! require (editor->hasKeyboardFocus (false), "focus is still held after undo")) return;
+        editor->selectAll();
+        editor->insertTextAtCaret (fieldInput (field)); // redo also takes priority over fresh pending input
+        if (! require (f.command (CommandIDs::redo), "redo C")) return;
+        dispatch0923();
+        expectEquals (doc.cues.size(), 3, "C restored by redo");
+        expectEquals (doc.cues.getSelectedIndex(), 1, "redo restores B as primary");
+        expect (doc.cues.getSelectedIndices() == std::vector<int> ({ 0, 1, 2 }), "redo restores the full multiselection");
+        f.list().grabKeyboardFocus();
+        dispatch0923();
+        for (int i = 0; i < 2; ++i)
+            expectEquals (fieldText (*doc.findCueAnywhere (p.cues()[(size_t) i].id), field), fieldText (p.cues()[(size_t) i], field), "late focus loss cannot overwrite restored fields");
+        expectEquals (doc.getHistory().getUndoDepth(), 1, "only the original addition is undoable");
+        expectEquals (doc.getHistory().getRedoDepth(), 0, "redo completed without a phantom edit");
+    }
+
+    void basicsDeleted()
+    {
+        beginTest ("audit0923 EE-3: deleting the edited cue discards its pending input");
+        Fixture0923 f;
+        const auto p = fieldProject();
+        if (! require (f.open (p), "open A/B")) return;
+        f.hiddenPeer();
+        if (typeField (f, p.cues()[0], 0) == nullptr) return;
+        auto& doc = f.document();
+        doc.perform ("Delete A", [&] { doc.cues.remove (0); });
+        f.list().grabKeyboardFocus();
+        dispatch0923();
+        expect (doc.findCueAnywhere (p.cues()[0].id) == nullptr, "A stays deleted");
+        expectEquals (doc.cues.get (0).notes, p.cues()[1].notes, "B never receives deleted A's pending memo");
+        expectEquals (doc.getHistory().getUndoDepth(), 1, "deletion is the only history entry");
+        if (! require (doc.undo(), "undo deletion")) return;
+        dispatch0923();
+        expectEquals (doc.cues.get (0).notes, p.cues()[0].notes, "deleted pending input was discarded");
+        expect (! doc.canUndo() && doc.canRedo(), "late notifications preserve deletion redo");
+    }
+
+    void basicsFileAddition()
+    {
+        beginTest ("audit0923 EE-3: asynchronous file addition snapshots the committed original cue");
+        Fixture0923 f;
+        const auto tone = f.scratch.folder.getChildFile ("download.wav");
+        const auto p = fieldProject();
+        if (! require (writeTone0923 (tone) && f.open (p), "open A/B with temporary downloaded audio")) return;
+        f.hiddenPeer();
+        if (typeField (f, p.cues()[0], 1) == nullptr) return;
+        // Public file-drop path reaches the same addCuesFromFiles used by download completion.
+        static_cast<juce::FileDragAndDropTarget&> (*f.main).filesDropped ({ tone.getFullPathName() }, 0, 0);
+        dispatch0923();
+        auto& doc = f.document();
+        expectEquals (doc.cues.size(), 3, "file added and selected");
+        expectEquals (doc.cues.getSelectedIndex(), 2, "new cue selected");
+        expectEquals (doc.cues.get (0).name, fieldInput (1), "pending A name committed before selecting new cue");
+        expectEquals (doc.cues.get (1).name, p.cues()[1].name, "B unchanged");
+        if (! require (doc.undo(), "undo file addition first")) return;
+        dispatch0923();
+        expectEquals (doc.cues.size(), 2, "one undo removes the addition");
+        expectEquals (doc.cues.get (0).name, fieldInput (1), "addition snapshot includes the previous field commit");
+        if (! require (doc.undo(), "undo original field edit second")) return;
+        dispatch0923();
+        expectEquals (doc.cues.get (0).name, p.cues()[0].name, "field edit has its own preceding history entry");
+        expect (! doc.canUndo() && doc.getHistory().getRedoDepth() == 2, "exactly two ordered history entries");
+    }
+
+    void basicsProjectReplacement()
+    {
+        beginTest ("audit0923 EE-3: project replacement with matching cue IDs discards focused input");
+        Fixture0923 f;
+        auto p = fieldProject();
+        if (! require (f.open (p), "open A/B")) return;
+        f.hiddenPeer();
+        auto* editor = typeField (f, p.cues()[0], 0);
+        if (editor == nullptr) return;
+        p.cues()[0].notes = "replacement notes";
+        f.document().adopt (p, f.scratch.folder.getChildFile ("replacement.enqueue"));
+        dispatch0923();
+        expectEquals (editor->getText(), p.cues()[0].notes, "same-ID replacement replaces focused text too");
+        f.list().grabKeyboardFocus();
+        dispatch0923();
+        expectEquals (f.document().cues.get (0).notes, p.cues()[0].notes, "late focus loss cannot edit replacement");
+        expect (! f.document().isDirty() && ! f.document().canUndo(), "replacement remains clean without phantom history");
+        if (typeField (f, p.cues()[0], 0) == nullptr) return;
+        f.document().newProject();
+        dispatch0923();
+        expect (f.document().cues.isEmpty() && ! f.document().isDirty() && ! f.document().canUndo(), "new project discards pending input");
     }
 
     void basicsCancelAndInvalid()
@@ -522,9 +759,10 @@ private:
                                       + LevelMatrixComponent::cellWidth + LevelMatrixComponent::gap + LevelMatrixComponent::cellWidth / 2,
                                     LevelMatrixComponent::headerHeight + LevelMatrixComponent::gap
                                       + LevelMatrixComponent::cellHeight + LevelMatrixComponent::gap + LevelMatrixComponent::cellHeight / 2);
+        grid->grabKeyboardFocus(); // Component::internalMouseDown focuses the target before its mouseDown override
         grid->mouseDown (mouse0923 (*grid, cell, cell));
         grid->mouseUp (mouse0923 (*grid, cell, cell));
-        if (! require (ReopenLastProjectTestAccess::keyboard (*f.main).keyPressed (juce::KeyPress ('6', 0, '6'), grid), "type 6 through ShortcutRouter")) return;
+        if (! require (f.main->getPeer()->handleKeyPress (juce::KeyPress ('6', 0, '6')), "type 6 through peer, ShortcutRouter and focused matrix")) return;
         auto* editor = child0923<juce::TextEditor> (*grid);
         if (! require (editor != nullptr && editor->getText() == "6", "matrix typing active")) return;
         f.focus (*editor);
@@ -578,7 +816,8 @@ private:
         if (! require (grid->keyPressed (juce::KeyPress ('6', 0, '6')), "begin numeric entry")) return;
         auto* editor = child0923<juce::TextEditor> (*grid);
         if (! require (editor != nullptr, "numeric editor exists")) return;
-        f.row (1); // selection may also move through auto-follow while typing
+        f.document().cues.setSelectedIndex (1); // auto-follow changes selection without transferring editor focus
+        if (! require (editor->hasKeyboardFocus (false), "auto-follow keeps the typing session focused")) return;
         editor->keyPressed (juce::KeyPress (cancel ? juce::KeyPress::escapeKey : juce::KeyPress::returnKey));
         dispatch0923();
         expect (child0923<juce::TextEditor> (*grid) == nullptr, "numeric session ended");
@@ -675,6 +914,68 @@ private:
         expectGreaterThan (heard[1], 0.3, "restored A must feed output 2");
         expectWithinAbsoluteError (heard[2], 0.0, 1.0e-7, "output 3 must stay silent after undo");
         expectWithinAbsoluteError (heard[3], 0.0, 1.0e-7, "output 4 must stay silent after undo");
+    }
+
+    void timelineMovedCancellation (int change)
+    {
+        const char* changes[] { "list switch", "group switch", "earlier child deletion", "dragged child deletion" };
+        beginTest ("audit0923 EE-1: moved drag rolls back on " + juce::String (changes[change]));
+        Fixture0923 f;
+        auto p = project0923 ({}, 0);
+        Cue group; group.type = CueType::group; group.group.mode = GroupMode::timeline; group.name = "Timeline";
+        p.cues().push_back (group);
+        for (int i = 0; i < 3; ++i)
+        {
+            Cue child; child.name = "Child " + juce::String (i); child.parentId = group.id;
+            child.preWaitSeconds = i + 1.0; child.durationSeconds = 10.0;
+            p.cues().push_back (child);
+        }
+        Cue otherGroup; otherGroup.type = CueType::group; otherGroup.group.mode = GroupMode::timeline;
+        p.cues().push_back (otherGroup);
+        Cue otherChild; otherChild.parentId = otherGroup.id; otherChild.preWaitSeconds = 5.0;
+        p.cues().push_back (otherChild);
+        CueContainer otherList;
+        otherList.cues = { otherGroup, otherChild };
+        // Keep IDs unique across lists so rollback must find the original child.
+        otherList.cues[0].id = juce::Uuid();
+        otherList.cues[1].id = juce::Uuid();
+        otherList.cues[1].parentId = otherList.cues[0].id;
+        p.lists.push_back (otherList);
+        if (! require (f.open (p), "open timeline groups and lists")) return;
+        f.hiddenPeer();
+        if (! require (f.row (0) && f.tab (ko ("그룹")), "open timeline")) return;
+        auto* timeline = child0923<juce::Component> (f.inspector(), [] (const auto& c)
+        {
+            return c.getProperties().contains ("shortcutScope")
+                && static_cast<int> (c.getProperties()["shortcutScope"]) == static_cast<int> (ShortcutScope::groupTimeline);
+        });
+        if (! require (timeline != nullptr && timeline->getHeight() > 60, "find timeline")) return;
+        const int rowHeight = juce::jlimit (16, 26, (timeline->getHeight() - 14) / 3);
+        const juce::Point<int> start (220, 14 + 2 * rowHeight + rowHeight / 2), end = start.translated (100, 0);
+        const auto draggedId = p.cues()[3].id;
+        auto& doc = f.document();
+        timeline->mouseDown (mouse0923 (*timeline, start, start));
+        timeline->mouseDrag (mouse0923 (*timeline, end, start, true));
+        if (! require (doc.findCueAnywhere (draggedId)->preWaitSeconds > 3.0 && ! doc.canUndo(), "preview actually moved before cancellation")) return;
+        if (change == 0) doc.setActiveContainer (1);
+        if (change == 1) f.row (4);
+        if (change == 2) doc.cues.remove (1);
+        if (change == 3) doc.cues.remove (3);
+        timeline->mouseDrag (mouse0923 (*timeline, end.translated (50, 0), start, true));
+        timeline->mouseUp (mouse0923 (*timeline, end, start, true));
+        dispatch0923();
+        for (const auto& list : p.lists)
+            for (const auto& original : list.cues)
+            {
+                const bool deleted = (change == 2 && original.id == p.cues()[1].id)
+                                  || (change == 3 && original.id == draggedId);
+                const auto* cue = doc.findCueAnywhere (original.id);
+                expect (deleted ? cue == nullptr : cue != nullptr, "only the requested child may disappear");
+                if (cue != nullptr)
+                    expectWithinAbsoluteError (cue->preWaitSeconds, original.preWaitSeconds, 1.0e-9,
+                                               "cancel restores original UUID and leaves every other cue untouched");
+            }
+        expect (! doc.canUndo() && ! doc.canRedo(), "rollback and late mouseUp create no history");
     }
 
     void timelineSwitch (int nextChildren)
