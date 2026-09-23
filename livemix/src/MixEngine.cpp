@@ -412,6 +412,7 @@ void MixEngine::renderBlock (const float* const* inputs, int numInputs, float* c
 
             if (fullyOff && skipChainWhenOff.load (std::memory_order_relaxed))
             {
+                node->chain->markProcessingSkipped();   // bypass changes made while silent must be settled before audio returns
                 node->meter.push (chBuf.getMagnitude (0, 0, n), chBuf.getMagnitude (1, 0, n));   // the mic itself: it is alive
 
                 for (int f = 0; f < numFx; ++f)   // a send fader moved while off: no ramp from a stale level when the mic returns

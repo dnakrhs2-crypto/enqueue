@@ -839,11 +839,15 @@ void MainComponent::refreshNotice()
     if (saveErrorNote.isNotEmpty())
         lines.add (saveErrorNote);
 
+    if (hotkeyErrorNote.isNotEmpty())
+        lines.add (hotkeyErrorNote);
+
     noticeVisible = ! lines.isEmpty();
     noticeIsError = (sessionNote.isNotEmpty() && sessionNoteIsError)
                     || (startupNote.isNotEmpty() && startupNoteIsError)
                     || pluginNote.isNotEmpty()
-                    || saveErrorNote.isNotEmpty();
+                    || saveErrorNote.isNotEmpty()
+                    || hotkeyErrorNote.isNotEmpty();
     noticeText.setText (lines.joinIntoString ("\n"), false);
     resized();
     repaint();
@@ -927,6 +931,7 @@ void MainComponent::hideNotice()
     pluginNote.clear();
     latencyNote.clear();
     saveErrorNote.clear();
+    hotkeyErrorNote.clear();
     refreshNotice();
 }
 
@@ -1397,7 +1402,8 @@ void MainComponent::showBackupDialog()
 
 void MainComponent::registerHotkeys()
 {
-    const auto apply = [this] (int id, const juce::String& description, const juce::String& what)
+    juce::StringArray failures;
+    const auto apply = [this, &failures] (int id, const juce::String& description, const juce::String& what)
     {
         if (description.isEmpty())
         {
@@ -1408,7 +1414,7 @@ void MainComponent::registerHotkeys()
         juce::String error;
 
         if (! hotkeys.set (id, juce::KeyPress::createFromDescription (description), error))
-            showStatus (what + ko (" 핫키(") + description + ko (") 등록 실패: ") + error, true);
+            failures.add (what + ko (" 핫키(") + description + ko (") 등록 실패: ") + error);
     };
 
     apply (1, settings.getMicMuteHotkey(), ko ("마이크 뮤트그룹"));
@@ -1418,6 +1424,11 @@ void MainComponent::registerHotkeys()
     for (int group = 1; group <= MixSession::maxPluginGroups; ++group)
         apply (firstPluginGroupHotkeyId + group - 1, settings.getPluginGroupHotkey (group),
                ko ("플러그인 그룹 ") + juce::String (group));
+
+    hotkeyErrorNote = failures.joinIntoString (" / ");
+    if (hotkeyErrorNote.isNotEmpty())
+        hotkeyErrorNote += ko (" 설정에서 다른 키로 바꿔 주세요.");
+    refreshNotice();
 }
 
 void MainComponent::togglePluginGroupEverywhere (int group)
