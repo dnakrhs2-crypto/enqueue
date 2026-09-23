@@ -621,6 +621,9 @@ private:
         capture.getPeer()->handleFocusLoss();
         pumpFor (100);
         expect (capture.isCapturing() && service.isCapturing(), "popup focus keeps learning active");
+        // pumpFor can return right after a timer queued the next recheck. Run it while the popup is still
+        // modal (it only re-arms): queued after the dismissal it would run before the selection callback.
+        drainMessages();
         popup.exitModalState (2);
         pumpFor (100);
         expect (capture.isCapturing() && service.isCapturing() && high->hasKeyboardFocus (false),

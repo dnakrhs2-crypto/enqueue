@@ -396,6 +396,9 @@ private:
         pumpFor (100);
         expect (juce::Component::getCurrentlyModalComponent() == &popup && ! capture.hasKeyboardFocus (true), "popup owns the modal while capture focus is outside");
         expect (capture.isCapturing() && service.isCapturing(), "foreground internal popup preserves learning through timer rechecks");
+        // pumpFor can return right after a timer queued the next recheck. Run it while the popup is still
+        // modal (it only re-arms): queued after the dismissal it would run before the selection callback.
+        drainMessages();
         popup.exitModalState (2);
         pumpFor (100);
         expect (capture.isCapturing() && service.isCapturing() && high->hasKeyboardFocus (false), "popup selection and focus return preserve learning");
