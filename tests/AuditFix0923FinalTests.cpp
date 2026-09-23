@@ -33,6 +33,18 @@ struct ShowModeMember
     friend Type memberOf (ShowModeMember);
 };
 template struct MemberAccess<ShowModeMember, &MainComponent::setShowMode>;
+struct SaveProjectMember
+{
+    using Type = void (MainComponent::*) (bool, std::function<void (bool)>);
+    friend Type memberOf (SaveProjectMember);
+};
+template struct MemberAccess<SaveProjectMember, &MainComponent::saveProject>;
+struct MenuItemMember
+{
+    using Type = void (CueTable::*) (int, const juce::Uuid&, const std::vector<juce::Uuid>&);
+    friend Type memberOf (MenuItemMember);
+};
+template struct MemberAccess<MenuItemMember, &CueTable::runContextMenuItem>;
 
 template <typename T, typename Predicate>
 T* findChild (juce::Component& root, Predicate matches)
@@ -272,14 +284,19 @@ class PointerPress
 public:
     PointerPress (juce::Component& target, juce::Point<int> position,
                   int modifiers = juce::ModifierKeys::leftButtonModifier,
-                  SourceType type = SourceType::mouse, int finger = 0)
+                  SourceType type = SourceType::mouse, int finger = 0, juce::int64 downTime = 0)
         : modifierState (juce::ModifierKeys::currentModifiers, juce::ModifierKeys (modifiers).withoutMouseButtons()),
           top (target.getTopLevelComponent()), point (top->getLocalPoint (&target, position).toFloat()),
           source (type), touchIndex (finger)
     {
         static juce::int64 eventTime = juce::Time::currentTimeMillis();
-        eventTime = juce::jmax (eventTime + 1000, juce::Time::currentTimeMillis());
-        time = eventTime;
+        if (downTime != 0)
+            time = downTime;   // a contact that went down long ago
+        else
+        {
+            eventTime = juce::jmax (eventTime + 1000, juce::Time::currentTimeMillis());
+            time = eventTime;
+        }
         send ({});
         send (modifiers);
     }
@@ -343,6 +360,10 @@ juce::Point<int> statusPoint (juce::TableListBox& table)
     return table.getCellPosition (CueTable::colStatus, 1, true).getCentre();
 }
 
+// The main window's own left margin beside the transport: no child, so a press
+// there opens nothing (the top-left corner is the menu bar, which opens a menu).
+const juce::Point<int> marginPoint { 4, 52 };
+
 class AuditFix0923FinalTests final : public juce::UnitTest
 {
 public:
@@ -375,6 +396,10 @@ public:
         conflictingCommit();
         inactiveListCommit();
         showModeClick();
+        for (const bool save : { true, false })
+            heldNumberFlushed (save);
+        cancelledContact();
+        contextMenuAfterReorder();
         for (int mode = 0; mode < 5; ++mode)
             cartSelectionMutation (mode);
     }
@@ -609,7 +634,8 @@ private:
         }
         else
         {
-            PointerPress touch (*f.main, { 2, 2 }, juce::ModifierKeys::leftButtonModifier, SourceType::touch, 1);
+            if (! require (f.main->getComponentAt (marginPoint) == f.main.get(), "margin press opens no menu")) return;
+            PointerPress touch (*f.main, marginPoint, juce::ModifierKeys::leftButtonModifier, SourceType::touch, 1);
             expectEquals (juce::Desktop::getInstance().getNumDraggingMouseSources(), 2, "mouse and touch are both active");
             press.release();
             pumpTimers();
@@ -721,6 +747,87 @@ private:
         expectReordered (f, p);
         expectEquals (f.document().getHistory().getUndoDepth(), 1, "the edit typed before show mode is one undo step");
         ((*f.main).*memberOf (ShowModeMember {})) (false);
+    }
+    void heldNumberFlushed (bool save)
+    {
+        beginTest (save ? "save writes a number that is still waiting for a held pointer"
+                        : "finishing edits before a project change applies a held number");
+        Fixture f;
+        const auto p = projectWith ({}, false);
+        if (! require (f.open (p), "open table")) return;
+        if (editNumber (f) == nullptr) return;
+        PointerPress press (f.table(), statusPoint (f.table()));   // e.g. the File menu pressed and dragged to Save
+        pumpTimers();
+        expectHeld (f, p);
+        if (save)
+        {
+            bool saved = false;
+            ((*f.main).*memberOf (SaveProjectMember {})) (false, [&saved] (bool ok) { saved = ok; });
+            Project written;
+            if (! require (saved && ProjectSerializer::load (f.main->getProjectFile(), written).wasOk(), "save and read back")) return;
+            const auto numberIn = [&written] (const juce::Uuid& id)
+            {
+                for (const auto& cue : written.cues())
+                    if (cue.id == id) return cue.number;
+                return juce::String ("missing");
+            };
+            expectEquals (numberIn (p.cues()[0].id), juce::String ("3"), "the file has A's new number");
+            expect (! f.document().isDirty(), "nothing is left unsaved");
+        }
+        else
+        {
+            f.inspector().finishEditing();   // confirmDiscardChangesThen / list switch / file addition run this first
+            expect (f.document().isDirty(), "a clean project now asks before it is replaced");
+        }
+        expectReordered (f, p);
+        press.release();
+        pumpTimers();
+        expectReordered (f, p);
+        expectEquals (f.document().getHistory().getUndoDepth(), 1, "applied once, not again at release");
+    }
+    void cancelledContact()
+    {
+        beginTest ("a pen/touch contact cancelled without an up does not hold numbers back");
+        Fixture f;
+        const auto p = projectWith ({}, false);
+        if (! require (f.open (p), "open table")) return;
+        // Windows can end a contact with WM_POINTERCAPTURECHANGED and no up; JUCE keeps it pressed.
+        if (! require (f.main->getComponentAt (marginPoint) == f.main.get(), "margin press opens no menu")) return;
+        PointerPress cancelled (*f.main, marginPoint, juce::ModifierKeys::leftButtonModifier, SourceType::touch, 1,
+                                juce::Time::currentTimeMillis() - 60000);
+        if (! require (juce::Desktop::getInstance().getNumDraggingMouseSources() == 1, "JUCE still sees the old contact")) return;
+        if (editNumber (f) == nullptr) return;
+        f.main->getPeer()->handleKeyPress (juce::KeyPress (juce::KeyPress::returnKey));
+        drainMessages(); // TextEditor return notification only, no timer wait
+        expectReordered (f, p);
+        expectEquals (f.document().getHistory().getUndoDepth(), 1, "Enter commits at once");
+        cancelled.release();
+    }
+    void contextMenuAfterReorder()
+    {
+        beginTest ("table menu items act on the right-clicked cue after the number reorder");
+        Fixture f;
+        const auto p = projectWith ({}, false);
+        if (! require (f.open (p), "open table")) return;
+        const auto a = p.cues()[0].id, b = p.cues()[1].id;
+        auto& doc = f.document();
+        auto& table = *findChild<CueTable> (*f.main);
+        const auto item = [&table] (int result, const juce::Uuid& clicked) { (table.*memberOf (MenuItemMember {})) (result, clicked, { clicked }); };
+        // B was in row 1 when its menu opened; the number typed for A is applied after the click.
+        doc.setCueNumber (a, "3");
+        if (! require (doc.cues.get (0).id == b && doc.cues.get (1).id == a, "A now occupies B's old row")) return;
+        item (20, b);   // 플레이헤드를 여기로
+        expectEquals (doc.cues.getPlayheadIndex(), doc.cues.indexOf (b), "playhead goes to B, not to A in B's old row");
+        item (2, b);    // 비활성화
+        expect (! doc.findCueAnywhere (b)->armed && doc.findCueAnywhere (a)->armed, "only B is disarmed");
+        item (11, b);   // 자동 계속
+        expect (doc.findCueAnywhere (b)->continueMode == ContinueMode::autoContinue
+                && doc.findCueAnywhere (a)->continueMode == ContinueMode::none, "only B changes mode");
+        const int depth = doc.getHistory().getUndoDepth();
+        doc.perform ("Delete B", [&] { doc.cues.remove (doc.cues.indexOf (b)); });
+        item (2, b);
+        expect (doc.findCueAnywhere (a)->armed, "a menu for a deleted cue does nothing");
+        expectEquals (doc.getHistory().getUndoDepth(), depth + 1, "only the deletion is recorded");
     }
     void cartSelectionMutation (int mode)
     {

@@ -1217,43 +1217,62 @@ void CueTable::showContextMenu (int row, juce::Point<int> screenPosition)
     menu.addCommandItem (&commands, CommandIDs::duplicateCue);
     menu.addCommandItem (&commands, CommandIDs::removeCue);
 
+    // Rows can move while the menu is open (a number typed before this click is applied
+    // when the button is released), so the chosen item acts on these cues, not on rows.
+    std::vector<juce::Uuid> ids;
+
+    for (int r : rows)
+        if (cues.isValidIndex (r))
+            ids.push_back (cues.get (r).id);
+
     juce::Component::SafePointer<CueTable> safeThis (this);
     menu.showMenuAsync (juce::PopupMenu::Options().withTargetScreenArea ({ screenPosition.x, screenPosition.y, 1, 1 }),
-                        [safeThis, rows, row] (int result)
+                        [safeThis, clickedId = cue.id, ids] (int result)
     {
-        if (safeThis == nullptr || result == 0 || ! safeThis->cues.isValidIndex (row))
-            return;
-
-        auto& self = *safeThis;
-
-        if (! self.onEditCues)
-            return;
-
-        if (result >= 100 && result <= 100 + CueColors::numColors)
-        {
-            const int colour = result - 100;
-            self.onEditCues (rows, ko ("색상"), [colour] (Cue& c) { c.color = colour; });
-        }
-        else if (result == 1)
-        {
-            const bool flagged = ! self.cues.get (row).flagged;
-            self.onEditCues (rows, flagged ? ko ("깃발") : ko ("깃발 해제"), [flagged] (Cue& c) { c.flagged = flagged; });
-        }
-        else if (result == 2)
-        {
-            const bool armed = ! self.cues.get (row).armed;
-            self.onEditCues (rows, armed ? ko ("활성화") : ko ("비활성화"), [armed] (Cue& c) { c.armed = armed; if (! armed) c.skipIfDisarmed = true; });   // older readers skip it too
-        }
-        else if (result >= 10 && result <= 12)
-        {
-            const auto mode = (ContinueMode) (result - 10);
-            self.onEditCues (rows, ko ("진행 모드"), [mode] (Cue& c) { c.continueMode = mode; });
-        }
-        else if (result == 20)
-        {
-            self.cues.setPlayheadIndex (row);
-        }
+        if (safeThis != nullptr)
+            safeThis->runContextMenuItem (result, clickedId, ids);
     });
+}
+
+void CueTable::runContextMenuItem (int result, const juce::Uuid& clickedId, const std::vector<juce::Uuid>& ids)
+{
+    const int row = cues.indexOf (clickedId);
+
+    if (result == 0 || ! cues.isValidIndex (row) || ! onEditCues)
+        return;   // dismissed, or the clicked cue is gone
+
+    std::vector<int> rows;
+
+    for (const auto& id : ids)
+        if (const int index = cues.indexOf (id); cues.isValidIndex (index))
+            rows.push_back (index);
+
+    std::sort (rows.begin(), rows.end());
+
+    if (result >= 100 && result <= 100 + CueColors::numColors)
+    {
+        const int colour = result - 100;
+        onEditCues (rows, ko ("색상"), [colour] (Cue& c) { c.color = colour; });
+    }
+    else if (result == 1)
+    {
+        const bool flagged = ! cues.get (row).flagged;
+        onEditCues (rows, flagged ? ko ("깃발") : ko ("깃발 해제"), [flagged] (Cue& c) { c.flagged = flagged; });
+    }
+    else if (result == 2)
+    {
+        const bool armed = ! cues.get (row).armed;
+        onEditCues (rows, armed ? ko ("활성화") : ko ("비활성화"), [armed] (Cue& c) { c.armed = armed; if (! armed) c.skipIfDisarmed = true; });   // older readers skip it too
+    }
+    else if (result >= 10 && result <= 12)
+    {
+        const auto mode = (ContinueMode) (result - 10);
+        onEditCues (rows, ko ("진행 모드"), [mode] (Cue& c) { c.continueMode = mode; });
+    }
+    else if (result == 20)
+    {
+        cues.setPlayheadIndex (row);
+    }
 }
 
 //==============================================================================

@@ -146,6 +146,7 @@ private:
     int insertionRowForY (int y) const;
     bool handleQuickEditKey (const juce::KeyPress& key);
     void showContextMenu (int row, juce::Point<int> screenPosition);
+    void runContextMenuItem (int result, const juce::Uuid& clickedId, const std::vector<juce::Uuid>& ids);
     void showAddMenu (juce::Point<int> screenPosition);
     void addCueItems (juce::PopupMenu& menu);
     /** The group cue under a drag position (its middle band), -1 when the drop goes between rows. */

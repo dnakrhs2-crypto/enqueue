@@ -615,7 +615,7 @@ private:
 
         const auto number = numberEditor.getText().trim();
 
-        if (juce::Desktop::getInstance().getNumDraggingMouseSources() > 0 || ! deferredNumbers.empty())
+        if (pointerHeld() || ! deferredNumbers.empty())
         {
             // Keep each edit attached to its cue while the inspector follows the
             // selection. A later input for the same cue replaces the queued value.
@@ -665,16 +665,40 @@ private:
             return;
         }
 
-        // Includes every mouse button, pen and touch source. Run after the
-        // release event has finished selecting/triggering the original row.
-        if (juce::Desktop::getInstance().getNumDraggingMouseSources() > 0)
+        // Run after the release event has finished selecting/triggering the original row.
+        if (pointerHeld())
             return;
 
+        flushDeferredNumbers();
+    }
+
+    // Every mouse button, pen and touch source. Lost mouse capture already ends a
+    // JUCE drag; a pen/touch contact Windows cancels (WM_POINTERCAPTURECHANGED) gets
+    // no up in JUCE, so after 5 s such a contact no longer holds numbers back.
+    static bool pointerHeld()
+    {
+        const auto now = juce::Time::getCurrentTime();
+
+        for (const auto& source : juce::Desktop::getInstance().getMouseSources())
+            if (source.isDragging() && (source.isMouse() || now - source.getLastMouseDownTime() < juce::RelativeTime::seconds (5.0)))
+                return true;
+
+        return false;
+    }
+
+public:
+    /** Save, list switch and project replacement cannot wait for a held pointer. */
+    void flushDeferredNumbers()
+    {
         stopTimer();
         const auto edits = std::exchange (deferredNumbers, {});
-        for (const auto& edit : edits)
-            applyNumber (edit.id, edit.number);
+
+        if (! document.isReplacingModel())   // an undo/redo or project restore discards them
+            for (const auto& edit : edits)
+                applyNumber (edit.id, edit.number);
     }
+
+private:
 
     void commitName()
     {
@@ -3641,6 +3665,10 @@ void CueInspector::cueChanged (int index)
 
 void CueInspector::finishEditing()
 {
+    // A number waiting for a held pointer (applied at its release) is part of what gets saved, switched away from
+    // or replaced - so is one the focused field commits below while a pointer is down.
+    const juce::ScopeGuard flushNumbers { [this] { basics->flushDeferredNumbers(); } };
+
     auto* focused = juce::Component::getCurrentlyFocusedComponent();
 
     if (focused == nullptr || ! isParentOf (focused))
