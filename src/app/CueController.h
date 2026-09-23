@@ -230,6 +230,9 @@ private:
     /** A restart (second-trigger) drops the previous run's pending entries - not those of the run that is starting right now
         (the follow a sequence walk put on right behind the scheduled start that is firing). */
     void cancelPreviousRun (const juce::Uuid& cueId);
+    /** A successful fade start replaces only continuations of runs that have already started, including their
+        remaining post-waits. Future starts and their continuations, and the start firing now, stay intact. */
+    void cancelPreviousFadeRuns (const juce::Uuid& cueId);
     /** Cancels the auto-continue starts a sequence walk put on behind 'owner's start 'startId' (0 = an immediate start),
         and the starts behind those in turn: scheduled relative to that start, they go with it (each with its own run). */
     void cancelChainBehind (const juce::Uuid& owner, int startId);

@@ -27,11 +27,13 @@ struct Fixture
     Scheduler scheduler { [this] { return now; } };
     CueController controller { engine, document, scheduler };
     juce::AudioBuffer<float> out { 2, blockSize };
+    int errors = 0;
 
     Fixture()
     {
         engine.prepare (sampleRate, blockSize);
         document.clock = [this] { return now * 1000.0; };
+        controller.onStatus = [this] (const juce::String&, bool error) { if (error) ++errors; };
         controller.startRecording();
     }
 
@@ -243,6 +245,21 @@ public:
         beginTest ("EB-2 regression: fade restart after pre/post-wait keeps its own follow");
         scheduledFade (tone.getFile(), true);
 
+        for (const auto mode : { ContinueMode::autoFollow, ContinueMode::autoContinue })
+        {
+            const juce::String modeName = mode == ContinueMode::autoFollow ? "auto-follow" : "auto-continue";
+            beginTest ("EB-2: two direct fades preserve a future scheduled fade and its " + modeName);
+            futureFade (tone.getFile(), mode);
+            beginTest ("EB-2: failed direct fade preserves only the previous " + modeName);
+            failedFade (tone.getFile(), mode, false);
+            beginTest ("EB-2: failed scheduled fade preserves only the previous " + modeName);
+            failedFade (tone.getFile(), mode, true);
+        }
+        beginTest ("EB-2: completed direct fade restart replaces its pending post-wait chain");
+        finishedFadePostWait (tone.getFile(), false);
+        beginTest ("EB-2: completed scheduled fade restart replaces its pending post-wait chain");
+        finishedFadePostWait (tone.getFile(), true);
+
         beginTest ("EB-3 regression: timeline resumes paused children without restarting other children");
         resumeTimeline (tone.getFile(), false);
         beginTest ("EB-3 regression: nested timeline resumes descendants and preserves pending starts");
@@ -422,6 +439,179 @@ private:
             + "; A paused=" + juce::String ((int) f.engine.isPaused (a.id))
             + "; A position=" + juce::String (pausedPosition) + "->" + juce::String (f.engine.getVirtualPosition (a.id))
             + "; B order=" + juce::String (bOrder) + "; B playing=" + juce::String ((int) f.engine.isPlaying (b.id)));
+
+        f.renderUntil (31.0); // let the resumed A finish naturally and allow every follow to run
+        expect (! f.engine.isPlaying (a.id), "Resumed A must finish naturally");
+        expect (f.engine.isPlaying (b.id), "B must start after the resumed A finishes");
+        const auto starts = f.controller.stopRecording();
+        expectEquals (startsOf (starts, a.id), 1, "Resume must preserve A's original start");
+        expectEquals (startsOf (starts, b.id), 1, "The resumed playlist must start B exactly once");
+    }
+
+    void futureFade (const juce::File& tone, ContinueMode mode)
+    {
+        Fixture f;
+        auto a = audio ("A", tone);
+        const auto b = audio ("B", tone);
+        auto source = control ("S", ControlKind::wait, juce::Uuid::null());
+        source.control.seconds = 0.1;
+        source.continueMode = ContinueMode::autoContinue;
+        source.postWaitSeconds = 10.0;
+        Cue fade;
+        fade.name = "F";
+        fade.type = CueType::fade;
+        fade.fade.targetId = a.id;
+        fade.fade.mainDb = -12.0;
+        fade.fade.durationSeconds = 5.0;
+        fade.continueMode = mode;
+        fade.postWaitSeconds = 10.0;
+        const juce::KeyPress audioKey (juce::KeyPress::F6Key), sourceKey (juce::KeyPress::F7Key), fadeKey (juce::KeyPress::F8Key);
+        a.hotkey = audioKey.getTextDescription();
+        source.hotkey = sourceKey.getTextDescription();
+        fade.hotkey = fadeKey.getTextDescription();
+        for (const auto& cue : { a, source, fade, b })
+            f.document.cues.add (cue);
+        expect (f.controller.handleHotkey (audioKey));
+        expect (f.controller.handleHotkey (sourceKey));
+        expect (f.controller.hasPendingFor (fade.id), "S must schedule F at 10 seconds");
+
+        f.renderUntil (1.0);
+        expect (f.controller.handleHotkey (fadeKey));
+        f.renderUntil (2.0);
+        expect (f.controller.handleHotkey (fadeKey));
+        expect (f.controller.hasPendingFor (fade.id), "Both direct runs must preserve F's future start");
+        f.renderUntil (6.8);
+        expect (! f.engine.isPlaying (b.id), "No superseded run may start B early");
+        f.renderUntil (9.8);
+        expect (! f.controller.getFadeRunner().isRunning (fade.id), "The direct fade must have ended");
+        expect (f.controller.hasPendingFor (fade.id), "F must still be scheduled after the direct fade ends");
+        const auto bBefore = f.engine.getStartOrder (b.id);
+        expect ((bBefore >= 0) == (mode == ContinueMode::autoFollow));
+
+        f.renderUntil (10.2);
+        expect (f.controller.getFadeRunner().isRunning (fade.id), "The preserved F must start at 10 seconds");
+        const double nextAt = mode == ContinueMode::autoFollow ? 15.0 : 20.0;
+        f.renderUntil (nextAt - 0.2);
+        expectEquals (f.engine.getStartOrder (b.id), bBefore, "B must wait for the scheduled run's continuation");
+        f.renderUntil (nextAt + 0.3);
+        expect (f.engine.isPlaying (b.id));
+        const auto starts = f.controller.stopRecording();
+        expectEquals (startsOf (starts, fade.id), 3, "F must start at 1, 2 and 10 seconds");
+        expectEquals (startsOf (starts, b.id), mode == ContinueMode::autoFollow ? 2 : 1);
+        const int scheduledFollows = (int) std::count_if (starts.begin(), starts.end(), [&] (const auto& start)
+        {
+            return start.cueId == b.id && start.seconds >= 10.0;
+        });
+        expectEquals (scheduledFollows, 1, "The preserved scheduled fade must start B exactly once");
+        expectEquals (f.controller.getNumPending(), 0);
+    }
+
+    void finishedFadePostWait (const juce::File& tone, bool scheduledFirst)
+    {
+        Fixture f;
+        auto a = audio ("A", tone), b = audio ("B", tone);
+        b.audio.endSeconds = 0.5;
+        b.continueMode = ContinueMode::autoFollow;
+        const auto c = audio ("C", tone);
+        auto source = control ("S", ControlKind::wait, juce::Uuid::null());
+        source.control.seconds = 0.1;
+        source.continueMode = ContinueMode::autoContinue;
+        source.postWaitSeconds = 0.25;
+        Cue fade;
+        fade.name = "F";
+        fade.type = CueType::fade;
+        fade.fade.targetId = a.id;
+        fade.fade.mainDb = -12.0;
+        fade.fade.durationSeconds = 1.0;
+        fade.continueMode = ContinueMode::autoContinue;
+        fade.postWaitSeconds = 10.0;
+        const juce::KeyPress audioKey (juce::KeyPress::F6Key), sourceKey (juce::KeyPress::F7Key), fadeKey (juce::KeyPress::F8Key);
+        a.hotkey = audioKey.getTextDescription();
+        source.hotkey = sourceKey.getTextDescription();
+        fade.hotkey = fadeKey.getTextDescription();
+        for (const auto& cue : { a, source, fade, b, c })
+            f.document.cues.add (cue);
+        expect (f.controller.handleHotkey (audioKey));
+        expect (f.controller.handleHotkey (scheduledFirst ? sourceKey : fadeKey));
+        f.renderUntil (2.0);
+        expect (! f.controller.getFadeRunner().isRunning (fade.id), "The first F must have finished before the restart");
+        expect (! f.controller.hasPendingFor (fade.id), "The remaining start belongs to B, not F");
+        expect (f.controller.hasPendingFor (b.id), "The first F's post-wait must still be pending");
+        expect (f.controller.handleHotkey (fadeKey));
+        expect (f.controller.getFadeRunner().isRunning (fade.id));
+        f.renderUntil (11.5);
+        expect (! f.engine.isPlaying (b.id) && ! f.engine.isPlaying (c.id), "The replaced post-wait and B's follow must not fire");
+        f.renderUntil (13.0);
+        const auto starts = f.controller.stopRecording();
+        expectEquals (startsOf (starts, fade.id), 2);
+        expectEquals (startsOf (starts, b.id), 1, "Only the new 12-second start of B may fire");
+        expectEquals (startsOf (starts, c.id), 1, "Only the new B's follow may fire");
+        for (const auto& start : starts)
+            if (start.cueId == b.id)
+                expectWithinAbsoluteError (start.seconds, 12.0, 2.0 * blockSeconds);
+        expectEquals (f.controller.getNumPending(), 0);
+    }
+
+    void failedFade (const juce::File& tone, ContinueMode mode, bool scheduledFailure)
+    {
+        Fixture f;
+        auto a = audio ("A", tone);
+        const auto b = audio ("B", tone), x = audio ("X", tone);
+        auto source = control ("S", ControlKind::wait, juce::Uuid::null());
+        source.control.seconds = 0.1;
+        source.continueMode = ContinueMode::autoContinue;
+        source.postWaitSeconds = 2.0;
+        Cue fade;
+        fade.name = "F";
+        fade.type = CueType::fade;
+        fade.fade.targetId = a.id;
+        fade.fade.mainDb = -12.0;
+        fade.fade.durationSeconds = 5.0;
+        fade.continueMode = mode;
+        fade.postWaitSeconds = 10.0;
+        auto retarget = control ("Retarget F to X", ControlKind::target, fade.id);
+        retarget.control.secondTargetId = x.id;
+        const juce::KeyPress audioKey (juce::KeyPress::F6Key), sourceKey (juce::KeyPress::F7Key),
+                             fadeKey (juce::KeyPress::F8Key), targetKey (juce::KeyPress::F9Key);
+        a.hotkey = audioKey.getTextDescription();
+        source.hotkey = sourceKey.getTextDescription();
+        fade.hotkey = fadeKey.getTextDescription();
+        retarget.hotkey = targetKey.getTextDescription();
+        for (const auto& cue : { a, source, fade, b, x, retarget })
+            f.document.cues.add (cue);
+        expect (f.controller.handleHotkey (audioKey));
+        expect (f.controller.handleHotkey (fadeKey));
+        const int previousPending = f.controller.getNumPending();
+        expectEquals (previousPending, 1, "The successful fade must have one continuation");
+        if (scheduledFailure)
+        {
+            expect (f.controller.handleHotkey (sourceKey));
+            expect (f.controller.hasPendingFor (fade.id));
+        }
+        f.renderUntil (1.0);
+        expect (f.controller.handleHotkey (targetKey));
+        expect (f.document.findCueAnywhere (fade.id)->fade.targetId == x.id);
+        expect (! f.engine.isPlaying (x.id), "The new target must be stopped, making FadeRunner::start fail");
+        expectEquals (f.errors, 0);
+        if (scheduledFailure)
+            f.renderUntil (2.2);
+        else
+            expect (f.controller.handleHotkey (fadeKey));
+        expectEquals (f.errors, 1, "The replacement fade must really fail");
+        expect (f.controller.getFadeRunner().isRunning (fade.id), "A failed replacement must preserve the running fade");
+        expectEquals (f.controller.getNumPending(), previousPending, "Only the original continuation must remain");
+        f.renderUntil (4.8);
+        expect (! f.engine.isPlaying (b.id), "A failed start must not fire B early");
+        f.renderUntil (mode == ContinueMode::autoFollow ? 5.3 : 12.3);
+        const auto starts = f.controller.stopRecording();
+        expectEquals (startsOf (starts, fade.id), 1, "Only the original successful F may be recorded");
+        expectEquals (startsOf (starts, b.id), 1, "Only the successful F's continuation may start B");
+        expect (f.engine.isPlaying (b.id));
+        AudioEngine::LiveState live;
+        expect (f.engine.getLiveState (a.id, live));
+        expectWithinAbsoluteError (live.gainDb, -12.0, 1.0e-6,
+                                   "The original fade must finish normally on A");
+        expectEquals (f.controller.getNumPending(), 0);
     }
 
     void scheduledFade (const juce::File& tone, bool preWait)
