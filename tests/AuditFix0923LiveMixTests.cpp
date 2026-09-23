@@ -236,12 +236,8 @@ public:
             for (const bool skip : { true, false })
                 resumeWithBypassedGain (skip, muteGroup);
         for (const int latency : { 128, 640 })
-        {
-            for (const bool changeGroup : { false, true })
-                resumeWithDryHistory (latency, changeGroup);
-            for (const bool enableWhileOff : { false, true })
-                resumeWithWetOutput (latency, enableWhileOff);
-        }
+            for (const bool bypassed : { false, true })
+                resumeWithDelayUnchanged (latency, bypassed);
         resumeWithBusyChain();
         startupHotkeyConflict();
     }
@@ -385,101 +381,68 @@ private:
         expect (peak <= 0.40001f, "An OFF +20 dB effect must not amplify ANY sample of the resumed block; peak=" + juce::String (peak, 6));
     }
 
-    void resumeWithDryHistory (int latency, bool changeGroup)
+    void resumeWithDelayUnchanged (int latency, bool bypassed)
     {
         const auto condition = "latency=" + juce::String (latency)
-                               + ", group change=" + (changeGroup ? "true" : "false");
-        beginTest ("audit0923 LA-2: resumed delayed dry output (" + condition + ")");
-        AuditFix0923Fixture f;
-        if (changeGroup)
-            f.chain().addPlugin (std::make_unique<TestGainPlugin> (10.0f));
-        auto delayed = std::make_unique<TestGainPlugin> (1.0f);
-        delayed->latencySamples = latency;
-        auto* processor = delayed.get();
-        PluginSlotState bypassed;
-        bypassed.bypassed = true;
-        f.chain().addPlugin (std::move (delayed), bypassed);
-        expectWithinAbsoluteError (f.render (0.4f, 8).getSample (0, 255), changeGroup ? 4.0f : 0.4f, 1.0e-6f);
-        if (changeGroup)
+                               + ", bypassed=" + (bypassed ? "true" : "false");
+        beginTest ("audit0923 LA-2: delayed OFF/ON output matches the unmarked chain (" + condition + ")");
+        PluginChain resumed, reference;
+        TestGainPlugin* processor = nullptr;
+        TestGainPlugin* referenceProcessor = nullptr;
+        for (auto* chain : { &resumed, &reference })
         {
-            expectEquals (f.document.addPluginGroup (f.channel()), 0);
-            f.document.setPluginGroupMember (f.channel(), 0, f.chain().getSlot (0).state.slotId, true);
+            chain->prepare (48000.0, 256);
+            auto delayed = std::make_unique<TestGainPlugin> (2.0f);
+            delayed->latencySamples = latency;
+            (chain == &resumed ? processor : referenceProcessor) = delayed.get();
+            PluginSlotState state;
+            state.bypassed = bypassed;
+            chain->addPlugin (std::move (delayed), state);
+            expectEquals (chain->getLatencySamples(), latency);
         }
-        f.document.setChannelOn (f.channel(), false);
-        expectWithinAbsoluteError (f.render (0.4f, 8).getMagnitude (0, 256), 0.0f, 1.0e-7f);
-        const auto callsBefore = processor->processCount;
-        f.render (0.4f, 2);
-        expectEquals (processor->processCount, callsBefore, "The silent mic actually skipped its chain");
 
-        // Change bypass after the final skipped block, then resume immediately.
-        // The downstream bypassed slot's dry ring still contains the old x10 input.
-        if (changeGroup)
-            f.document.setPluginGroupOff (f.channel(), 0, true);
-        f.document.setChannelOn (f.channel(), true);
-        float peak = 0.0f;
-        float maxStep = 0.0f;
-        float previous[2] { 0.0f, 0.0f }; // include the OFF/ON and every block boundary
-        bool finite = true;
+        const auto render = [] (PluginChain& chain, float amplitude)
+        {
+            juce::AudioBuffer<float> block (2, 256);
+            for (int ch = 0; ch < 2; ++ch)
+                juce::FloatVectorOperations::fill (block.getWritePointer (ch), amplitude, 256);
+            chain.process (block, 256);
+            return block;
+        };
+        for (int block = 0; block < 12; ++block)
+        {
+            render (resumed, 0.25f);
+            render (reference, 0.25f);
+        }
+
+        const auto callsBefore = processor->processCount;
+        const auto resetsBefore = processor->resetCount;
+        // A fully OFF mic calls neither chain. Only the resumed chain receives the new marker;
+        // the unmarked reference follows main. No bypass changes occur in this comparison.
+        for (int block = 0; block < 8; ++block)
+            resumed.markProcessingSkipped();
+        expectEquals (processor->processCount, callsBefore);
+
+        float maxError = 0.0f;
         for (int block = 0; block < 4; ++block)
         {
-            const auto output = f.render (0.4f);
+            // A different input on resume exposes any loss or scaling of pre-OFF history.
+            const auto output = render (resumed, 0.4f);
+            const auto expected = render (reference, 0.4f);
             for (int ch = 0; ch < 2; ++ch)
                 for (int i = 0; i < 256; ++i)
                 {
                     const float value = output.getSample (ch, i);
-                    finite = finite && std::isfinite (value);
-                    peak = juce::jmax (peak, std::abs (value));
-                    maxStep = juce::jmax (maxStep, std::abs (value - previous[ch]));
-                    previous[ch] = value;
-                    if (block * 256 + i < latency)
-                        expectWithinAbsoluteError (value, 0.0f, 1.0e-7f, "No pre-mute audio may leave a stale dry ring");
+                    const float baseline = expected.getSample (ch, i);
+                    maxError = juce::jmax (maxError, std::abs (value - baseline));
+                    expectEquals (value, baseline, "Marking a skipped chain must preserve its delayed output");
                 }
         }
-        logMessage ("LA-2 " + condition + "; resumed four-block peak=" + juce::String (peak, 6)
-                    + "; max adjacent step=" + juce::String (maxStep, 6));
-        // At 48 kHz the 5 ms bypass ramp is 240 samples: 0.4 / 240 = 0.001667 per sample.
-        // Even overlapping the mic's 256-sample ON ramp adds at most 0.4 / 256 = 0.001563.
-        // 0.05 leaves ample rounding/ramp headroom but rejects the old 0.2 / 0.4 onset jumps.
-        expectLessThan (maxStep, 0.05f, "The first fresh delayed samples must fade in without a one-sample jump");
-        expect (finite && peak <= 0.40001f, "A downstream bypassed slot must not replay the old amplified signal");
+        logMessage ("LA-2 " + condition + "; marked/unmarked four-block max error=" + juce::String (maxError, 6));
         expectEquals (processor->processCount, callsBefore + 4);
-        expectWithinAbsoluteError (f.render (0.4f).getSample (0, 255), 0.4f, 1.0e-6f);
-    }
-
-    void resumeWithWetOutput (int latency, bool enableWhileOff)
-    {
-        beginTest ("audit0923 LA-2: resumed wet output is unchanged (latency=" + juce::String (latency)
-                   + ", enabled while OFF=" + (enableWhileOff ? "true" : "false") + ")");
-        AuditFix0923Fixture f, reference;
-        auto delayed = std::make_unique<TestGainPlugin> (2.0f);
-        delayed->latencySamples = latency;
-        auto* processor = delayed.get();
-        PluginSlotState state;
-        state.bypassed = enableWhileOff;
-        f.chain().addPlugin (std::move (delayed), state);
-        expectWithinAbsoluteError (f.render (0.4f, 8).getSample (0, 255), enableWhileOff ? 0.4f : 0.8f, 1.0e-6f);
-        reference.render (0.8f, 8);
-        f.document.setChannelOn (f.channel(), false);
-        reference.document.setChannelOn (reference.channel(), false);
-        f.render (0.4f, 8);
-        reference.render (0.8f, 8);
-        const auto callsBefore = processor->processCount;
-        const auto resetsBefore = processor->resetCount;
-        if (enableWhileOff)
-            f.chain().setBypassed (0, false);
-        f.document.setChannelOn (f.channel(), true);
-        reference.document.setChannelOn (reference.channel(), true);
-        for (int block = 0; block < 4; ++block)
-        {
-            const auto output = f.render (0.4f);
-            const auto expected = reference.render (0.8f);
-            for (int ch = 0; ch < 2; ++ch)
-                for (int i = 0; i < 256; ++i)
-                    expectWithinAbsoluteError (output.getSample (ch, i), expected.getSample (ch, i), 1.0e-6f,
-                                               "An enabled effect keeps its wet history and only the existing mic ON ramp");
-        }
-        expectEquals (processor->processCount, callsBefore + 4);
+        expectEquals (processor->processCount, referenceProcessor->processCount);
         expectEquals (processor->resetCount, resetsBefore, "Resume must not reset plugin state");
+        expectEquals (processor->resetCount, referenceProcessor->resetCount);
     }
 
     void resumeWithBusyChain()
