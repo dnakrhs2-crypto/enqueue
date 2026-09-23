@@ -183,9 +183,6 @@ private:
     bool rowDragOver = false;
     int rowDropIndex = -1;
     bool syncingSelection = false;
-    juce::Uuid selectionClickCueId = juce::Uuid::null();
-    juce::Time selectionClickTime;
-    int selectionClickSource = -1;
     bool editable = true;
 };
 

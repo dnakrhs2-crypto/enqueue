@@ -44,7 +44,15 @@ private:
     void fileDragExit (const juce::StringArray& files) override;
     void filesDropped (const juce::StringArray& files, int x, int y) override;
 
-    void cueListStructureChanged() override { repaint(); }
+    void cueListStructureChanged() override
+    {
+        if (cues.findById (pressedCueId) == nullptr)
+        {
+            pressedCueId = juce::Uuid::null();
+            pressedSlot = -1;
+        }
+        repaint();
+    }
     void cueChanged (int) override { repaint(); }
     void cueSelectionChanged (int) override { repaint(); }
 
@@ -57,6 +65,7 @@ private:
     std::vector<AudioEngine::PlayingCue> playing;
     int rows = 4, cols = 4;
     juce::Uuid pressedCueId = juce::Uuid::null();
+    int pressedSlot = -1;
     int dropSlot = -1;
     bool editable = true;
 

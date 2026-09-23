@@ -53,6 +53,18 @@ void drainMessages()
    #endif
 }
 
+void pumpTimers()
+{
+    const auto until = juce::Time::getMillisecondCounterHiRes() + 60.0;
+    do
+    {
+        drainMessages();
+        juce::Timer::callPendingTimersSynchronously();
+        juce::Thread::sleep (1);
+    }
+    while (juce::Time::getMillisecondCounterHiRes() < until);
+}
+
 struct ScratchDirectory
 {
     const juce::File base = juce::File::getSpecialLocation (juce::File::tempDirectory);
@@ -244,23 +256,85 @@ juce::MouseEvent mouse (juce::Component& component, juce::Point<int> point, bool
              1.0f, 0.0f, 0.0f, 0.0f, 0.0f, &component, &component, now, point.toFloat(), now, 1, false };
 }
 
-// Reference click0923: use JUCE hit testing and the actual TableListBox row.
-// The native boundary is the windowless peer above; no system input is sent.
+using SourceType = juce::MouseInputSource::InputSourceType;
+
+// Reference click0923, split at down/up so queued focus loss and timers can run
+// during a press. The windowless peer exercises JUCE hit testing, real source
+// button state and the actual TableListBox row without OS input or an HWND.
+class PointerPress
+{
+public:
+    PointerPress (juce::Component& target, juce::Point<int> position,
+                  int modifiers = juce::ModifierKeys::leftButtonModifier,
+                  SourceType type = SourceType::mouse, int finger = 0)
+        : modifierState (juce::ModifierKeys::currentModifiers, juce::ModifierKeys (modifiers).withoutMouseButtons()),
+          top (target.getTopLevelComponent()), point (top->getLocalPoint (&target, position).toFloat()),
+          source (type), touchIndex (finger)
+    {
+        static juce::int64 eventTime = juce::Time::currentTimeMillis();
+        eventTime = juce::jmax (eventTime + 1000, juce::Time::currentTimeMillis());
+        time = eventTime;
+        send ({});
+        send (modifiers);
+    }
+    ~PointerPress() { release(); }
+    void buttons (int modifiers) { send (modifiers); }
+    void release()
+    {
+        if (! released)
+        {
+            released = true;
+            send ({});
+        }
+    }
+    void releaseAt (juce::Component& target, juce::Point<int> position)
+    {
+        point = top->getLocalPoint (&target, position).toFloat();
+        release();
+    }
+private:
+    void send (juce::ModifierKeys modifiers)
+    {
+        if (top != nullptr && top->getPeer() != nullptr)
+            top->getPeer()->handleMouseEvent (source, point, modifiers, 0.0f, 0.0f, time++, {}, touchIndex);
+    }
+    juce::ScopedValueSetter<juce::ModifierKeys> modifierState;
+    juce::Component::SafePointer<juce::Component> top;
+    juce::Point<float> point;
+    SourceType source;
+    int touchIndex;
+    juce::int64 time = 0;
+    bool released = false;
+};
+
 void clickRow (juce::TableListBox& table, int column, int row = 1, int modifiers = 0)
 {
-    // The native backend normally updates this before delivering the event.
-    // handleMouseEvent itself accepts only the mouse-button portion of mods.
-    const juce::ScopedValueSetter<juce::ModifierKeys> modifierState (juce::ModifierKeys::currentModifiers,
-                                                                   juce::ModifierKeys (modifiers));
-    auto* top = table.getTopLevelComponent();
-    const auto point = top->getLocalPoint (&table, table.getCellPosition (column, row, true).getCentre()).toFloat();
-    static juce::int64 time = juce::Time::currentTimeMillis();
-    time = juce::jmax (time + 1000, juce::Time::currentTimeMillis());
-    const auto source = juce::MouseInputSource::InputSourceType::mouse;
-    auto* peer = top->getPeer();
-    peer->handleMouseEvent (source, point, {}, 0.0f, 0.0f, time);
-    peer->handleMouseEvent (source, point, juce::ModifierKeys::leftButtonModifier | modifiers, 0.0f, 0.0f, time + 1);
-    peer->handleMouseEvent (source, point, {}, 0.0f, 0.0f, time + 2);
+    PointerPress press (table, table.getCellPosition (column, row, true).getCentre(),
+                        juce::ModifierKeys::leftButtonModifier | modifiers);
+    press.release();
+}
+
+struct FocusWitness final : juce::TextEditor::Listener
+{
+    explicit FocusWitness (juce::TextEditor& e) : editor (e) { editor.addListener (this); }
+    ~FocusWitness() override { editor.removeListener (this); }
+    void textEditorFocusLost (juce::TextEditor&) override { ++losses; }
+    juce::TextEditor& editor;
+    int losses = 0;
+};
+
+struct QuietAlerts final : juce::LookAndFeel_V4
+{
+    QuietAlerts() : previous (&getDefaultLookAndFeel()) { setDefaultLookAndFeel (this); }
+    ~QuietAlerts() override { setDefaultLookAndFeel (previous); }
+    void playAlertSound() override { ++alerts; }
+    juce::LookAndFeel* previous;
+    int alerts = 0;
+};
+
+juce::Point<int> statusPoint (juce::TableListBox& table)
+{
+    return table.getCellPosition (CueTable::colStatus, 1, true).getCentre();
 }
 
 class AuditFix0923FinalTests final : public juce::UnitTest
@@ -282,6 +356,20 @@ public:
             tableSelection (tone.getFile(), column);
         tableSelection (tone.getFile(), CueTable::colName, juce::ModifierKeys::ctrlModifier);
         tableSelection (tone.getFile(), CueTable::colName, juce::ModifierKeys::shiftModifier);
+        for (const auto source : { SourceType::mouse, SourceType::touch })
+            for (const bool processMessages : { false, true })
+                delayedSelection (source, processMessages);
+        keyboardCommit (false);
+        keyboardCommit (true);
+        enterWhilePressed();
+        allPointersReleased (false);
+        allPointersReleased (true);
+        for (int mode = 0; mode < 4; ++mode)
+            cancelledCommit (mode);
+        conflictingCommit();
+        inactiveListCommit();
+        for (int mode = 0; mode < 5; ++mode)
+            cartSelectionMutation (mode);
     }
 private:
     bool require (bool condition, const juce::String& reason)
@@ -307,8 +395,15 @@ private:
     void expectReordered (Fixture& f, const Project& p)
     {
         expect (f.document().cues.get (0).id == p.cues()[1].id && f.document().cues.get (1).id == p.cues()[0].id,
-                "the real inspector commit must reorder A/B to B/A synchronously");
+                "the real inspector commit must reorder A/B to B/A after release");
         expectEquals (f.document().cues.get (1).number, juce::String ("3"));
+    }
+    void expectHeld (Fixture& f, const Project& p)
+    {
+        expect (f.document().cues.get (0).id == p.cues()[0].id && f.document().cues.get (1).id == p.cues()[1].id,
+                "holding a pointer must preserve A/B row order");
+        expectEquals (f.document().cues.get (0).number, juce::String ("1"), "A number waits for every pointer to be released");
+        expect (! f.document().canUndo(), "deferred input creates no history before release");
     }
     void cartStop (const juce::File& tone, bool pending)
     {
@@ -333,11 +428,13 @@ private:
         if (editNumber (f) == nullptr) return;
         auto& cart = f.cart();
         if (! require ((bool) cart.onStop && cart.isShowing(), "MainComponent's actual cart stop callback")) return;
-        const auto click = mouse (cart, cartPoint (cart, 1), true);
-        cart.mouseDown (click);
-        cart.mouseUp (click);
-        expectReordered (f, p);
+        PointerPress press (cart, cartPoint (cart, 1), juce::ModifierKeys::rightButtonModifier);
         expect (! controller.hasPendingFor (b), "right-click must cancel B's pending start immediately");
+        pumpTimers();
+        expectHeld (f, p);
+        press.release();
+        pumpTimers();
+        expectReordered (f, p);
         f.render();
         expect (! f.engine.isPlaying (b), "right-click must stop B");
         expect (f.engine.isPlaying (a) && f.engine.getStartOrder (a) == aOrder, "A must be unaffected");
@@ -349,8 +446,8 @@ private:
     }
     void cartRelease (const juce::File& tone, int mode)
     {
-        beginTest (mode == 0 ? "cart release over moved B fires B exactly once, never A"
-                   : mode == 1 ? "cart release over A at B's old slot does nothing"
+        beginTest (mode == 0 ? "cart release in the pressed slot fires B exactly once, then commits A number"
+                   : mode == 1 ? "cart release in another slot does nothing"
                                : "cart release after pressed B is removed does nothing");
         Fixture f;
         const auto p = projectWith (tone);
@@ -358,8 +455,9 @@ private:
         if (editNumber (f) == nullptr) return;
         auto& cart = f.cart();
         f.controller().startRecording();
-        cart.mouseDown (mouse (cart, cartPoint (cart, 1)));
-        expectReordered (f, p);
+        PointerPress press (cart, cartPoint (cart, 1));
+        pumpTimers();
+        expectHeld (f, p);
         if (mode == 2)
         {
             f.document().cues.remove (f.document().cues.indexOf (p.cues()[1].id));
@@ -367,13 +465,16 @@ private:
             replacement.name = "C";
             f.document().cues.add (replacement); // C occupies the old pressed slot
         }
-        cart.mouseUp (mouse (cart, cartPoint (cart, mode == 0 ? 0 : 1)));
+        press.releaseAt (cart, cartPoint (cart, mode == 1 ? 0 : 1));
         cart.mouseUp (mouse (cart, cartPoint (cart, 0))); // no second trigger without another press
+        pumpTimers();
+        if (mode != 2) expectReordered (f, p);
+        expectEquals (f.document().findCueAnywhere (p.cues()[0].id)->number, juce::String ("3"), "A commits after release");
         f.render();
         const auto starts = f.controller().stopRecording();
         expectEquals ((int) starts.size(), mode == 0 ? 1 : 0, "a replacement cue must not inherit the press");
         expectEquals (startsOf (starts, p.cues()[0].id), 0, "A must never fire");
-        expectEquals (startsOf (starts, p.cues()[1].id), mode == 0 ? 1 : 0, "only release over the same surviving UUID fires B");
+        expectEquals (startsOf (starts, p.cues()[1].id), mode == 0 ? 1 : 0, "only release in the pressed slot fires the surviving B");
         expect (! f.engine.isPlaying (p.cues()[0].id), "A remains silent");
         expect (f.engine.isPlaying (p.cues()[1].id) == (mode == 0), "B plays only after its own valid release");
         expectEquals (f.controller().getNumPending(), 0, "cancelled clicks must not schedule anything");
@@ -410,6 +511,231 @@ private:
         expectEquals (stops, 0, "no stop callback for a removed UUID or its replacement");
         expectEquals (starts, 0, "right-click cannot trigger the replacement");
     }
+    void delayedSelection (SourceType source, bool processMessages)
+    {
+        beginTest ("selected B status row keeps selection/playhead through "
+                   + juce::String (source == SourceType::touch ? "touch" : "mouse")
+                   + (processMessages ? " down/messages/up" : " down/up without queued callbacks"));
+        Fixture f;
+        const auto p = projectWith ({}, false);
+        if (! require (f.open (p), "open table")) return;
+        auto& doc = f.document();
+        doc.cues.setSelection ({ 0, 1 }, 0);
+        auto* editor = editNumber (f);
+        if (editor == nullptr) return;
+        FocusWitness focus (*editor);
+        PointerPress press (f.table(), statusPoint (f.table()), juce::ModifierKeys::leftButtonModifier, source);
+        expectEquals (juce::Desktop::getInstance().getNumDraggingMouseSources(), 1, "real JUCE source holds the press");
+        expectEquals (f.table().getNumSelectedRows(), 2, "JUCE postpones collapsing the selection until mouseUp");
+        expect (doc.cues.getSelected()->id == p.cues()[0].id, "A is still primary before release");
+        if (processMessages)
+        {
+            pumpTimers();
+            expectEquals (focus.losses, 1, "queued TextEditor focus loss ran while still pressed");
+        }
+        expectHeld (f, p);
+        press.release();
+        pumpTimers();
+        expectReordered (f, p);
+        expect (doc.cues.getSelected()->id == p.cues()[1].id, "B is selected after delayed mouseUp selection");
+        expect (doc.cues.getPlayhead()->id == p.cues()[1].id, "the status click sets B as playhead");
+        expectEquals (f.table().getSelectedRow(), 0, "B's reordered row is highlighted");
+        expectEquals (f.table().getNumSelectedRows(), 1, "mouseUp leaves exactly B selected");
+        expectEquals (editor->getText(), juce::String ("2"), "B remains in the inspector");
+        expectEquals (doc.getHistory().getUndoDepth(), 1, "deferred number is exactly one undo step");
+        expect (doc.undo(), "undo the deferred number");
+        pumpTimers();
+        expectEquals (doc.findCueAnywhere (p.cues()[0].id)->number, juce::String ("1"));
+        expect (! doc.canUndo() && doc.canRedo(), "late focus/timer notifications preserve redo");
+        expect (doc.redo(), "redo the deferred number");
+        expectReordered (f, p);
+    }
+    void keyboardCommit (bool enter)
+    {
+        beginTest (enter ? "number Enter commits without waiting for a pointer timer"
+                         : "number Tab commits without waiting for a pointer timer");
+        Fixture f;
+        const auto p = projectWith ({}, false);
+        if (! require (f.open (p), "open table")) return;
+        auto* editor = editNumber (f);
+        if (editor == nullptr) return;
+        expectEquals (juce::Desktop::getInstance().getNumDraggingMouseSources(), 0);
+        f.main->getPeer()->handleKeyPress (juce::KeyPress (enter ? juce::KeyPress::returnKey : juce::KeyPress::tabKey));
+        drainMessages(); // TextEditor return/focus notifications only, no timer wait
+        expectReordered (f, p);
+        expect (! editor->hasKeyboardFocus (false), "keyboard completion leaves the number editor");
+        expectEquals (f.document().getHistory().getUndoDepth(), 1);
+    }
+    void enterWhilePressed()
+    {
+        beginTest ("Enter while a pointer is held defers number movement");
+        Fixture f;
+        const auto p = projectWith ({}, false);
+        if (! require (f.open (p), "open table")) return;
+        auto* editor = editNumber (f);
+        if (editor == nullptr) return;
+        PointerPress press (*editor, editor->getLocalBounds().getCentre());
+        f.main->getPeer()->handleKeyPress (juce::KeyPress (juce::KeyPress::returnKey));
+        pumpTimers();
+        expectHeld (f, p);
+        press.release();
+        pumpTimers();
+        expectReordered (f, p);
+        expectEquals (f.document().getHistory().getUndoDepth(), 1);
+    }
+    void allPointersReleased (bool twoButtons)
+    {
+        beginTest (twoButtons ? "number waits for the last mouse button"
+                              : "number waits for a second touch after the mouse releases");
+        Fixture f;
+        const auto p = projectWith ({}, false);
+        if (! require (f.open (p), "open table")) return;
+        if (editNumber (f) == nullptr) return;
+        PointerPress press (f.table(), statusPoint (f.table()));
+        if (twoButtons)
+        {
+            press.buttons (juce::ModifierKeys::leftButtonModifier | juce::ModifierKeys::rightButtonModifier);
+            press.buttons (juce::ModifierKeys::rightButtonModifier);
+            pumpTimers();
+            expectHeld (f, p);
+            press.release();
+        }
+        else
+        {
+            PointerPress touch (*f.main, { 2, 2 }, juce::ModifierKeys::leftButtonModifier, SourceType::touch, 1);
+            expectEquals (juce::Desktop::getInstance().getNumDraggingMouseSources(), 2, "mouse and touch are both active");
+            press.release();
+            pumpTimers();
+            expectHeld (f, p);
+            touch.release();
+        }
+        pumpTimers();
+        expectReordered (f, p);
+        expectEquals (f.document().getHistory().getUndoDepth(), 1);
+    }
+    void cancelledCommit (int mode)
+    {
+        const char* names[] { "target deletion", "target deletion then undo", "property undo", "project replacement with identical UUIDs" };
+        beginTest ("deferred number is discarded after " + juce::String (names[mode]));
+        Fixture f;
+        const auto p = projectWith ({}, false);
+        if (! require (f.open (p), "open table")) return;
+        if (editNumber (f) == nullptr) return;
+        PointerPress press (f.table(), statusPoint (f.table()));
+        pumpTimers();
+        expectHeld (f, p);
+        auto& doc = f.document();
+        if (mode <= 1)
+        {
+            doc.perform ("Delete A", [&] { doc.cues.remove (doc.cues.indexOf (p.cues()[0].id)); });
+            if (mode == 1) expect (doc.undo(), "restore A while still pressed");
+        }
+        else if (mode == 2)
+        {
+            doc.perform ("Rename B", [&] { doc.cues.update (1, [] (Cue& cue) { cue.name = "changed"; }); });
+            expect (doc.undo(), "undo a property while A's number is deferred");
+        }
+        else
+            doc.adopt (p, f.scratch.folder.getChildFile ("replacement.enqueue"));
+        press.release();
+        pumpTimers();
+        const auto* a = doc.findCueAnywhere (p.cues()[0].id);
+        if (mode == 0)
+            expect (a == nullptr, "deleted A is not recreated");
+        else
+        {
+            expect (a != nullptr, "restored A exists");
+            if (a != nullptr) expectEquals (a->number, juce::String ("1"), "deferred number cannot overwrite restored A");
+        }
+        expectEquals (doc.findCueAnywhere (p.cues()[1].id)->number, juce::String ("2"), "B never receives A's deferred input");
+        expectEquals (doc.getHistory().getUndoDepth(), mode == 0 ? 1 : 0, "no deferred edit is added");
+        expectEquals (doc.getHistory().getRedoDepth(), mode == 1 || mode == 2 ? 1 : 0, "undo keeps redo available");
+        if (mode == 3) expect (! doc.isDirty(), "replacement stays clean");
+    }
+    void conflictingCommit()
+    {
+        beginTest ("deferred number rechecks uniqueness at release and preserves the next editor");
+        QuietAlerts alerts;
+        Fixture f;
+        const auto p = projectWith ({}, false);
+        if (! require (f.open (p), "open table")) return;
+        auto* editor = editNumber (f);
+        if (editor == nullptr) return;
+        PointerPress press (f.table(), statusPoint (f.table()));
+        pumpTimers();
+        expectHeld (f, p);
+        f.document().setCueNumber (p.cues()[1].id, "3");
+        press.release();
+        pumpTimers();
+        expectEquals (f.document().findCueAnywhere (p.cues()[0].id)->number, juce::String ("1"), "conflict keeps A's original number");
+        expectEquals (f.document().findCueAnywhere (p.cues()[1].id)->number, juce::String ("3"), "existing number owner keeps it");
+        expectEquals (editor->getText(), juce::String ("3"), "rejecting A never resets B's displayed number");
+        expectEquals (alerts.alerts, 1, "one alert at deferred validation");
+        expectEquals (f.document().getHistory().getUndoDepth(), 1, "only B's explicit edit is in history");
+    }
+    void inactiveListCommit()
+    {
+        beginTest ("deferred number follows its UUID to an inactive list");
+        Fixture f;
+        auto p = projectWith ({}, false);
+        Cue c; c.name = "C"; c.number = "10";
+        auto second = p.lists.front();
+        second.id = juce::Uuid();
+        second.name = "Second";
+        second.cues = { c };
+        p.lists.push_back (second);
+        if (! require (f.open (p), "open two lists")) return;
+        if (editNumber (f) == nullptr) return;
+        PointerPress press (f.table(), statusPoint (f.table()));
+        pumpTimers();
+        expectHeld (f, p);
+        f.document().setActiveContainer (1);
+        press.release();
+        pumpTimers();
+        expectEquals (f.document().getActiveContainer(), 1);
+        expectEquals (f.document().findCueAnywhere (p.cues()[0].id)->number, juce::String ("3"));
+        expectEquals (f.document().findCueAnywhere (p.cues()[1].id)->number, juce::String ("2"));
+        expectEquals (f.document().cues.get (0).number, juce::String ("10"), "new list's editor is never the commit target");
+        expectEquals (f.document().getHistory().getUndoDepth(), 1);
+    }
+    void cartSelectionMutation (int mode)
+    {
+        const char* names[] { "same slot after reorder", "different slot after reorder", "changed grid", "switched away and back", "right-click after reorder" };
+        beginTest ("cart preserves pressed position and UUID: " + juce::String (names[mode]));
+        CueList cues;
+        Cue a, b;
+        cues.add (a); cues.add (b);
+        cues.setSelectedIndex (0);
+        juce::AudioFormatManager formats;
+        CueCartView cart (cues, formats);
+        cart.setGrid (1, 2);
+        cart.setSize (600, 200);
+        struct MoveSelected final : CueList::Listener
+        {
+            explicit MoveSelected (CueList& list) : model (list) { model.addListener (this); }
+            ~MoveSelected() override { model.removeListener (this); }
+            void cueSelectionChanged (int index) override
+            {
+                if (index == 1 && ! moved) { moved = true; model.move (1, 0); }
+            }
+            CueList& model;
+            bool moved = false;
+        } moveSelected (cues);
+        std::vector<juce::Uuid> starts, stops;
+        cart.onTrigger = [&] (const Cue& cue) { starts.push_back (cue.id); };
+        cart.onStop = [&] (const juce::Uuid& id) { stops.push_back (id); };
+        cart.mouseDown (mouse (cart, cartPoint (cart, 1), mode == 4));
+        expect (cues.get (0).id == b.id, "selection callback moved B");
+        if (mode == 2) cart.setGrid (2, 1);
+        if (mode == 3) { cues.replaceAll ({ a }); cues.replaceAll ({ b, a }); }
+        const auto release = mode == 2 ? juce::Point<int> (300, 150) : cartPoint (cart, mode == 1 ? 0 : 1);
+        cart.mouseUp (mouse (cart, release, mode == 4));
+        cart.mouseUp (mouse (cart, release));
+        expectEquals ((int) starts.size(), mode == 0 ? 1 : 0);
+        if (! starts.empty()) expect (starts.front() == b.id, "only original B fires, despite A now occupying the slot");
+        expectEquals ((int) stops.size(), mode == 4 ? 1 : 0);
+        if (! stops.empty()) expect (stops.front() == b.id, "right-click stop still targets original B by UUID");
+    }
     void tableSelection (const juce::File& tone, int column, int modifiers = 0)
     {
         beginTest ("table row click preserves B and its inspector across number reorder, column " + juce::String (column)
@@ -420,6 +746,7 @@ private:
         auto* editor = editNumber (f);
         if (editor == nullptr) return;
         clickRow (f.table(), column, 1, modifiers);
+        pumpTimers();
         expectReordered (f, p);
         expect (f.document().cues.getSelected() != nullptr && f.document().cues.getSelected()->id == p.cues()[1].id,
                 "the clicked B must remain the model selection");

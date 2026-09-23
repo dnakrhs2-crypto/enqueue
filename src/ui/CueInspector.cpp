@@ -93,7 +93,8 @@ namespace
 //==============================================================================
 /** Tab "기본". */
 class CueInspector::BasicsPanel : public juce::Component,
-                                  public juce::FileDragAndDropTarget
+                                  public juce::FileDragAndDropTarget,
+                                  private juce::Timer
 {
     class PendingEditor : public juce::TextEditor
     {
@@ -120,6 +121,18 @@ class CueInspector::BasicsPanel : public juce::Component,
     private:
         juce::String syncedText;
         bool pending = false;
+    };
+
+    class NumberEditor final : public PendingEditor
+    {
+        void focusLost (FocusChangeType cause) override
+        {
+            // Capture before the click reaches the row. Touch/selected rows may
+            // select on mouseUp, when JUCE has already cleared its button state.
+            if (onFocusLost)
+                onFocusLost();
+            PendingEditor::focusLost (cause);
+        }
     };
 
 public:
@@ -329,10 +342,16 @@ public:
 
     void refresh()
     {
+        const bool modelReplaced = document.isReplacingModel();
+        if (modelReplaced)
+        {
+            deferredNumbers.clear();
+            stopTimer();
+        }
+
         if (committingPending)
             return;
 
-        const bool modelReplaced = document.isReplacingModel();
         const auto* selected = cues.getSelected();
         if (! modelReplaced && ! shownId.isNull() && (selected == nullptr || selected->id != shownId))
         {
@@ -360,7 +379,7 @@ public:
 
         if (cue == nullptr)
         {
-            for (auto* e : { &numberEditor, &nameEditor, &preEditor, &postEditor, &fadeOutEditor, &notesEditor })
+            for (auto* e : std::initializer_list<PendingEditor*> { &numberEditor, &nameEditor, &preEditor, &postEditor, &fadeOutEditor, &notesEditor })
                 e->syncText ("");
 
             shownId = juce::Uuid::null();
@@ -571,7 +590,7 @@ private:
 
     void cancelEdit()
     {
-        for (auto* e : { &numberEditor, &nameEditor, &preEditor, &postEditor, &fadeOutEditor, &notesEditor })
+        for (auto* e : std::initializer_list<PendingEditor*> { &numberEditor, &nameEditor, &preEditor, &postEditor, &fadeOutEditor, &notesEditor })
             e->clearPending();
 
         {
@@ -591,23 +610,68 @@ private:
         const int index = shownId.isNull() ? cues.getSelectedIndex() : cues.indexOf (shownId);
         const auto* cue = cues.isValidIndex (index) ? &cues.get (index) : nullptr;
 
-        if (refreshing || cancellingEdit || document.isReplacingModel() || cue == nullptr || ! numberEditor.takePendingEdit())
+        if (refreshing || cancellingEdit || document.isReplacingModel() || ! editable || cue == nullptr || ! numberEditor.takePendingEdit())
             return;
 
         const auto number = numberEditor.getText().trim();
 
-        if (number == cue->number)
-            return;
-
-        if (document.isNumberTaken (number, cue->id))
+        if (juce::Desktop::getInstance().getNumDraggingMouseSources() > 0 || ! deferredNumbers.empty())
         {
-            juce::LookAndFeel::getDefaultLookAndFeel().playAlertSound();   // numbers are unique in the project (every list / cart)
-            numberEditor.syncText (cue->number);
+            // Keep each edit attached to its cue while the inspector follows the
+            // selection. A later input for the same cue replaces the queued value.
+            for (auto& edit : deferredNumbers)
+                if (edit.id == cue->id)
+                {
+                    edit.number = number;
+                    return;
+                }
+
+            deferredNumbers.push_back ({ cue->id, number });
+            startTimer (20);
             return;
         }
 
-        if (! refreshing && ! cancellingEdit && editable)
-            document.setCueNumber (cue->id, number);   // renumbers and moves the row into numeric order (one undo step)
+        applyNumber (cue->id, number);
+    }
+
+    void applyNumber (const juce::Uuid& id, const juce::String& number)
+    {
+        const auto* cue = document.findCueAnywhere (id);
+        if (cue == nullptr)
+            return;
+
+        if (number == cue->number)
+            return;
+
+        if (document.isNumberTaken (number, id))
+        {
+            juce::LookAndFeel::getDefaultLookAndFeel().playAlertSound();   // numbers are unique in the project (every list / cart)
+            if (shownId == id)
+                numberEditor.syncText (cue->number);
+            return;
+        }
+
+        document.setCueNumber (id, number);   // renumbers and moves the row into numeric order (one undo step)
+    }
+
+    void timerCallback() override
+    {
+        if (document.isReplacingModel() || ! editable)
+        {
+            deferredNumbers.clear();
+            stopTimer();
+            return;
+        }
+
+        // Includes every mouse button, pen and touch source. Run after the
+        // release event has finished selecting/triggering the original row.
+        if (juce::Desktop::getInstance().getNumDraggingMouseSources() > 0)
+            return;
+
+        stopTimer();
+        const auto edits = std::exchange (deferredNumbers, {});
+        for (const auto& edit : edits)
+            applyNumber (edit.id, edit.number);
     }
 
     void commitName()
@@ -774,7 +838,10 @@ private:
     AppSettings& settings;
 
     juce::Label numberLabel, nameLabel, colourLabel, fileLabel, preLabel, postLabel, continueLabel, fadeOutLabel, gainLabel, notesLabel, filePathLabel;
-    PendingEditor numberEditor, nameEditor, preEditor, postEditor, fadeOutEditor, notesEditor;
+    NumberEditor numberEditor;
+    PendingEditor nameEditor, preEditor, postEditor, fadeOutEditor, notesEditor;
+    struct DeferredNumber { juce::Uuid id; juce::String number; };
+    std::vector<DeferredNumber> deferredNumbers;
     juce::ComboBox colourCombo, secondColourCombo, continueCombo;
     juce::ToggleButton secondColourToggle, flagToggle, armedToggle, autoLoadToggle;
     KeyCaptureButton hotkeyButton;

@@ -20,6 +20,11 @@ CueCartView::~CueCartView()
 
 void CueCartView::setGrid (int newRows, int newCols)
 {
+    if (rows != juce::jlimit (1, 15, newRows) || cols != juce::jlimit (1, 15, newCols))
+    {
+        pressedCueId = juce::Uuid::null();
+        pressedSlot = -1;
+    }
     rows = juce::jlimit (1, 15, newRows);
     cols = juce::jlimit (1, 15, newCols);
     repaint();
@@ -151,14 +156,16 @@ void CueCartView::paint (juce::Graphics& g)
 
 void CueCartView::mouseDown (const juce::MouseEvent& e)
 {
+    pressedCueId = juce::Uuid::null();
+    pressedSlot = -1;
     grabKeyboardFocus();
     const int slot = slotAt (e.getPosition());
 
     if (slot < 0 || ! cues.isValidIndex (slot))
         return;
 
-    // Selection can synchronously commit an inspector number edit and reorder
-    // the list. Keep the pressed cue's identity across that notification.
+    // Selection listeners can reorder or remove rows. Keep the pressed cue's
+    // identity across that notification.
     const auto id = cues.get (slot).id;
     cues.setSelectedIndex (slot);   // the inspector follows the button
 
@@ -174,22 +181,25 @@ void CueCartView::mouseDown (const juce::MouseEvent& e)
     }
 
     pressedCueId = id;
+    pressedSlot = slot;
     repaint();
 }
 
 void CueCartView::mouseUp (const juce::MouseEvent& e)
 {
     const auto id = pressedCueId;
+    const int downSlot = pressedSlot;
     pressedCueId = juce::Uuid::null();
+    pressedSlot = -1;
     repaint();
 
     const int slot = slotAt (e.getPosition());
 
-    if (id.isNull() || e.mods.isPopupMenu() || ! cues.isValidIndex (slot))
+    if (id.isNull() || e.mods.isPopupMenu() || slot != downSlot)
         return;
 
-    if (cues.get (slot).id == id && onTrigger)
-        onTrigger (cues.get (slot));   // release over the same surviving cue fires it
+    if (const auto* cue = cues.findById (id); cue != nullptr && onTrigger)
+        onTrigger (*cue);   // release in the pressed slot fires its surviving UUID
 }
 
 bool CueCartView::isInterestedInFileDrag (const juce::StringArray& files)
