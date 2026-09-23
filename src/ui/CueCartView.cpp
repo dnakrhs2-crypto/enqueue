@@ -102,7 +102,7 @@ void CueCartView::paint (juce::Graphics& g)
         if (isRunning)
             fill = running->paused ? Palette::pausedRow : (running->fadingOut ? Palette::fadingRow : Palette::playingRow);
 
-        if (slot == pressedSlot)
+        if (cue.id == pressedCueId)
             fill = fill.brighter (0.3f);
 
         g.setColour (fill);
@@ -157,33 +157,39 @@ void CueCartView::mouseDown (const juce::MouseEvent& e)
     if (slot < 0 || ! cues.isValidIndex (slot))
         return;
 
+    // Selection can synchronously commit an inspector number edit and reorder
+    // the list. Keep the pressed cue's identity across that notification.
+    const auto id = cues.get (slot).id;
     cues.setSelectedIndex (slot);   // the inspector follows the button
+
+    if (cues.findById (id) == nullptr)
+        return;
 
     if (e.mods.isPopupMenu())
     {
-        const auto& cue = cues.get (slot);
-
         if (onStop)
-            onStop (cue.id);
+            onStop (id);
 
         return;
     }
 
-    pressedSlot = slot;
+    pressedCueId = id;
     repaint();
 }
 
 void CueCartView::mouseUp (const juce::MouseEvent& e)
 {
-    const int slot = pressedSlot;
-    pressedSlot = -1;
+    const auto id = pressedCueId;
+    pressedCueId = juce::Uuid::null();
     repaint();
 
-    if (slot < 0 || e.mods.isPopupMenu() || ! cues.isValidIndex (slot))
+    const int slot = slotAt (e.getPosition());
+
+    if (id.isNull() || e.mods.isPopupMenu() || ! cues.isValidIndex (slot))
         return;
 
-    if (slotAt (e.getPosition()) == slot && onTrigger)
-        onTrigger (cues.get (slot));   // release inside the same button fires it
+    if (cues.get (slot).id == id && onTrigger)
+        onTrigger (cues.get (slot));   // release over the same surviving cue fires it
 }
 
 bool CueCartView::isInterestedInFileDrag (const juce::StringArray& files)

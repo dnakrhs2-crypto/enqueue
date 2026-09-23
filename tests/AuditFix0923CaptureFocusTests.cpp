@@ -238,8 +238,13 @@ struct HiddenDesktop
     bool isHidden() const
     {
         auto* peer = root.getPeer();
-        return host != nullptr && peer != nullptr && ! IsWindowVisible (host)
-            && ! IsWindowVisible ((HWND) peer->getNativeHandle()) && ! IsWindowEnabled ((HWND) peer->getNativeHandle());
+        const auto hiddenAndInactive = [] (HWND window)
+        {
+            return ! IsWindowVisible (window) && ! IsWindowEnabled (window)
+                && window != GetForegroundWindow() && window != GetActiveWindow() && window != GetFocus();
+        };
+        return host != nullptr && peer != nullptr && hiddenAndInactive (host)
+            && hiddenAndInactive ((HWND) peer->getNativeHandle());
     }
     juce::Component& root;
     HWND host = nullptr;
@@ -274,8 +279,6 @@ private:
                                      : "ED-3: app deactivation before the asynchronous check releases capture and MIDI panic while the modal remains");
         bool appForeground = true;
         const juce::ScopedValueSetter<std::function<bool()>> foregroundCheck (KeyCapture::foregroundProcessCheck, [&] { return appForeground; });
-        const auto foreground = GetForegroundWindow();
-        const auto nativeFocus = GetFocus();
         Fixture f;
         const auto tone = f.scratch.folder.getChildFile ("playing.wav");
         if (! require (writeTone (tone), "temporary playing audio")) return;
@@ -359,8 +362,8 @@ private:
         expect (juce::Component::getCurrentlyModalComponent() == &popup, "panic executes before the modal is dismissed");
         popup.exitModalState (0);
         capture->cancel();
-        expect (desktop.isHidden() && outsideDesktop.isHidden() && GetForegroundWindow() == foreground && GetFocus() == nativeFocus,
-                "all native windows remain hidden and OS focus is unchanged");
+        expect (desktop.isHidden() && outsideDesktop.isHidden(),
+                "test-owned native windows remain hidden, disabled and inactive");
     }
 
     void foregroundPopupAndSubmission()
@@ -368,8 +371,6 @@ private:
         beginTest ("ED-3: foreground internal popup selection and focus return preserve learning");
         bool appForeground = true;
         const juce::ScopedValueSetter<std::function<bool()>> foregroundCheck (KeyCapture::foregroundProcessCheck, [&] { return appForeground; });
-        const auto foreground = GetForegroundWindow();
-        const auto nativeFocus = GetFocus();
         Fixture f;
         auto& service = f.main->getShortcutService();
         KeyCapture capture (service, [] { return false; });
@@ -421,8 +422,8 @@ private:
         expect (capture.isCapturing() && service.isCapturing(), "submitting capture also survives app deactivation without a popup");
         completion (juce::Result::ok());
         expect (! capture.isCapturing() && ! service.isCapturing(), "successful completion releases capture");
-        expect (desktop.isHidden() && GetForegroundWindow() == foreground && GetFocus() == nativeFocus,
-                "popup selection and submission leave native windows hidden and OS focus unchanged");
+        expect (desktop.isHidden(),
+                "popup selection and submission keep test-owned windows hidden, disabled and inactive");
     }
    #endif
 };

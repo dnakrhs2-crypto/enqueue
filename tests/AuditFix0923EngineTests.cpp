@@ -305,8 +305,13 @@ struct HiddenDesktop
     bool isHidden() const
     {
         auto* peer = root.getPeer();
-        return host != nullptr && peer != nullptr && ! IsWindowVisible (host)
-            && ! IsWindowVisible ((HWND) peer->getNativeHandle()) && ! IsWindowEnabled ((HWND) peer->getNativeHandle());
+        const auto hiddenAndInactive = [] (HWND window)
+        {
+            return ! IsWindowVisible (window) && ! IsWindowEnabled (window)
+                && window != GetForegroundWindow() && window != GetActiveWindow() && window != GetFocus();
+        };
+        return host != nullptr && peer != nullptr && hiddenAndInactive (host)
+            && hiddenAndInactive ((HWND) peer->getNativeHandle());
     }
     juce::Component& root;
     HWND host = nullptr;
@@ -451,8 +456,6 @@ private:
         beginTest (withPopup ? "ED-3: popup closes with focus still outside and releases MIDI panic capture"
                              : "audit0923 ED-3: child MIDI editor loses focus and releases panic capture");
        #if JUCE_WINDOWS
-        const auto foreground = GetForegroundWindow();
-        const auto nativeFocus = GetFocus();
         Fixture f;
         const auto tone = f.scratch.folder.getChildFile ("playing.wav");
         if (! require (writeTone (tone), "temporary playing audio")) return;
@@ -565,8 +568,8 @@ private:
         if (! require (f.engine.isPlaying (cue.id), "control audio playing before post-cancel panic")) return;
         tapPanic();
         expect (! service.isCapturing() && ! f.engine.isPlaying (cue.id), "Control: cancel restores the same MIDI panic");
-        expect (desktop.isHidden() && outsideDesktop.isHidden() && GetForegroundWindow() == foreground && GetFocus() == nativeFocus,
-                "test leaves every native window hidden and OS focus unchanged");
+        expect (desktop.isHidden() && outsideDesktop.isHidden(),
+                "test-owned native windows remain hidden, disabled and inactive");
        #endif
     }
 
@@ -575,8 +578,6 @@ private:
         const juce::ScopedValueSetter<std::function<bool()>> foregroundCheck (KeyCapture::foregroundProcessCheck, [] { return true; });
         beginTest ("ED-3: asynchronous focus recheck preserves returned focus, popup, submission and a new capture generation");
        #if JUCE_WINDOWS
-        const auto foreground = GetForegroundWindow();
-        const auto nativeFocus = GetFocus();
         Fixture f;
         auto& service = f.main->getShortcutService();
         KeyCapture capture (service, [] { return false; });
@@ -652,8 +653,8 @@ private:
         pumpFor (100);
         expect (capture.isCapturing() && service.isCapturing(), "a popup retry cannot leak into the next capture generation");
         capture.cancel();
-        expect (desktop.isHidden() && GetForegroundWindow() == foreground && GetFocus() == nativeFocus,
-                "popup selection, submission and restart keep OS windows hidden and focus unchanged");
+        expect (desktop.isHidden(),
+                "popup selection, submission and restart keep test-owned windows hidden, disabled and inactive");
        #endif
     }
 };

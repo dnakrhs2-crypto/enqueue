@@ -857,7 +857,12 @@ void CueTable::paintCell (juce::Graphics& g, int rowNumber, int columnId, int wi
 
 void CueTable::cellClicked (int rowNumber, int columnId, const juce::MouseEvent& e)
 {
-    const int index = modelIndex (rowNumber);
+    // JUCE selects the row before calling cellClicked. That selection may have
+    // committed an inspector number edit, so the row now contains another cue.
+    const int index = ! selectionClickCueId.isNull() && selectionClickTime == e.mouseDownTime
+                          && selectionClickSource == e.source.getIndex()
+                        ? cues.indexOf (selectionClickCueId) : modelIndex (rowNumber);
+    selectionClickCueId = juce::Uuid::null();
 
     if (! cues.isValidIndex (index))
         return;
@@ -926,6 +931,23 @@ void CueTable::selectedRowsChanged (int lastRowSelected)
         syncSelectionFromModel();   // keep the model's selection: clicking empty space must not clear the next cue
         return;
     }
+
+    // Capture the actual mouse row, including modifier clicks whose primary
+    // selection may be a different row. Match the event so keyboard selection
+    // cannot leave a stale target for a later click.
+    selectionClickCueId = juce::Uuid::null();
+    for (const auto& source : juce::Desktop::getInstance().getMouseSources())
+        for (auto* component = source.getComponentUnderMouse(); component != nullptr && component != &table; component = component->getParentComponent())
+            if (const int index = modelIndex (table.getRowNumberOfComponent (component)); cues.isValidIndex (index))
+            {
+                if (selectionClickCueId.isNull() || source.getLastMouseDownTime() > selectionClickTime)
+                {
+                    selectionClickCueId = cues.get (index).id;
+                    selectionClickTime = source.getLastMouseDownTime();
+                    selectionClickSource = source.getIndex();
+                }
+                break;
+            }
 
     cues.setSelection (rows, modelIndex (lastRowSelected));
 }

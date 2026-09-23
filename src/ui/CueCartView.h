@@ -56,7 +56,7 @@ private:
     juce::AudioFormatManager& formats;
     std::vector<AudioEngine::PlayingCue> playing;
     int rows = 4, cols = 4;
-    int pressedSlot = -1;
+    juce::Uuid pressedCueId = juce::Uuid::null();
     int dropSlot = -1;
     bool editable = true;
 
