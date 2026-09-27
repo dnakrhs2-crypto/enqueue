@@ -42,7 +42,7 @@ def setup():
           "SceneCollection=LiveMixTest\nSceneCollectionFile=LiveMixTest\n")
     write(os.path.join(CFG, "basic", "profiles", "LiveMixTest", "basic.ini"),
           "[General]\nName=LiveMixTest\n\n[Output]\nMode=Advanced\n\n[AdvOut]\nRecType=Standard\n"
-          "RecFilePath=" + REC + "\nRecFormat2=mkv\nRecEncoder=obs_x264\nRecAudioEncoder=ffmpeg_pcm_f32le\n"
+          "RecFilePath=" + REC + "\nRecFormat2=mkv\nRecEncoder=obs_x264\nRecAudioEncoder=ffmpeg_flac\n"
           "RecTracks=1\nTrackIndex=1\n\n[Audio]\nSampleRate=48000\nChannelSetup=Stereo\n\n"
           "[Video]\nBaseCX=640\nBaseCY=360\nOutputCX=640\nOutputCY=360\nFPSType=0\nFPSCommon=30\n")
     write(os.path.join(CFG, "plugin_config", "obs-websocket", "config.json"),
