@@ -7,10 +7,27 @@ Records in 30-minute segments (FLAC in MKV), analyses each one with record_and_c
 recordings, keeps faulty ones, and writes %LOCALAPPDATA%\\LiveMixObsTest\\soak_report.json after every segment plus the
 plugin's own [livemix-obs] statistics lines from the OBS log at the end.
 """
-import argparse, json, os, subprocess, sys, time
+import argparse, json, os, shutil, subprocess, sys, time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
+
+# an isolated test OBS (its own folder, port, ring and plugin copy) is chosen before portable_obs reads the environment
+_pre = argparse.ArgumentParser(add_help=False)
+_pre.add_argument("--isolated", default="", help="folder name under %%LOCALAPPDATA%% for a second test OBS")
+_pre.add_argument("--port", default="4467")
+_pre.add_argument("--priority", default="High")
+_known, _ = _pre.parse_known_args()
+if _known.isolated:
+    _root = os.path.join(os.environ["LOCALAPPDATA"], _known.isolated)
+    _plugin = os.path.join(_root, "plugin")
+    _rundir = os.path.normpath(os.path.join(HERE, "..", "..", "obs-plugin", "build_x64", "rundir", "RelWithDebInfo"))
+    if os.path.isdir(_plugin):
+        shutil.rmtree(_plugin)
+    shutil.copytree(_rundir, _plugin, ignore=shutil.ignore_patterns("*.pdb"))
+    os.environ.update(LMOBS_TEST_ROOT=_root, LMOBS_TEST_PORT=_known.port, LMOBS_TEST_PLUGIN_DIR=_plugin,
+                      LMOBS_TEST_RING="Local\\LiveMix.ObsAudio." + _known.isolated, LMOBS_TEST_PRIORITY=_known.priority)
+
 import portable_obs  # noqa: E402
 from obsws import Obs  # noqa: E402
 from record_and_check import prepare, extract, analyze  # noqa: E402
@@ -31,6 +48,9 @@ def main():
     ap.add_argument("--ppm", type=float, default=150.0)
     ap.add_argument("--mode", choices=["source", "filter"], default="source")
     ap.add_argument("--segment", type=float, default=1800.0)
+    ap.add_argument("--isolated", default="")
+    ap.add_argument("--port", default="4467")
+    ap.add_argument("--priority", default="High")
     a = ap.parse_args()
 
     total = a.hours * 3600.0

@@ -20,7 +20,9 @@ CFG = os.path.join(OBS, "config", "obs-studio")
 REC = os.path.join(ROOT, "rec")
 PIDFILE = os.path.join(ROOT, "obs.pid")
 HERE = os.path.dirname(os.path.abspath(__file__))
-RUNDIR = os.path.normpath(os.path.join(HERE, "..", "..", "obs-plugin", "build_x64", "rundir", "RelWithDebInfo"))
+# LMOBS_TEST_PLUGIN_DIR: load a copied plugin (a long test must not lock the build's rundir DLL against rebuilds)
+RUNDIR = os.environ.get("LMOBS_TEST_PLUGIN_DIR") or os.path.normpath(
+    os.path.join(HERE, "..", "..", "obs-plugin", "build_x64", "rundir", "RelWithDebInfo"))
 PORT = int(os.environ.get("LMOBS_TEST_PORT", "4466"))
 RING = os.environ.get("LMOBS_TEST_RING", "")
 
