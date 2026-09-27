@@ -68,8 +68,8 @@ static DWORD WINAPI source_worker(void *opaque)
 		if (now >= next_log) {
 			lm_receiver_stats stats;
 			lm_receiver_get_stats(s->receiver, &stats);
-			blog(LOG_INFO, "[livemix-obs] fill=%.2fms ppm=%.2f under=%llu over=%llu resync=%llu epoch=%lld",
-			     stats.fill_ms, stats.ppm, (unsigned long long)stats.underruns,
+			blog(LOG_INFO, "[livemix-obs] fill=%.2fms target=%.2fms ppm=%.2f under=%llu over=%llu resync=%llu epoch=%lld",
+			     stats.fill_ms, stats.target_ms, stats.ppm, (unsigned long long)stats.underruns,
 			     (unsigned long long)stats.overruns, (unsigned long long)stats.resyncs, (long long)stats.epoch);
 			next_log = now + 10 * LM_NANOSECONDS;
 		}

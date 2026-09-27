@@ -13,6 +13,9 @@
 #define LM_MIN_RATE 8000
 #define LM_MAX_RATE 384000
 #define LM_TARGET_SECONDS 0.030
+#define LM_MAX_TARGET_SECONDS 0.200
+#define LM_HEADROOM_SECONDS 0.003
+#define LM_HEADROOM_BUCKETS 201 /* Two seconds, in 10 ms buckets. */
 #define LM_FADE_SECONDS 0.010
 #define LM_RING_BYTES (sizeof(lm_obs_ring_header) + LM_OBS_CAPACITY_FRAMES * 2u * sizeof(float))
 
@@ -27,6 +30,11 @@ typedef struct lm_asrc_bank {
 	lm_asrc *state;
 	int64_t format;
 } lm_asrc_bank;
+
+typedef struct lm_fill_minimum {
+	int64_t bucket;
+	double relative_fill;
+} lm_fill_minimum;
 
 struct lm_connection {
 	lm_connection_config config;
@@ -60,10 +68,12 @@ struct lm_receiver {
 	int64_t epoch, read_pos;
 	int input_rate, output_rate;
 	double target;
+	lm_fill_minimum fill_minima[LM_HEADROOM_BUCKETS];
+	bool headroom_active;
 	bool online, playing;
 	int fade_frames, fade_in, tail_left;
 	float tail[2], last[2];
-	volatile int64_t stat_fill_us, stat_ppm_milli;
+	volatile int64_t stat_fill_us, stat_target_us, stat_ppm_milli;
 	volatile int64_t stat_under, stat_over, stat_resync, stat_epoch, stat_connected;
 };
 
@@ -427,6 +437,7 @@ lm_receiver *lm_receiver_create(lm_connection *c, enum lm_receiver_kind kind, do
 	r->prepared_format = r->bank[0].format;
 	r->requested_format = r->bank[0].format;
 	r->output_rate = output_rate;
+	r->stat_target_us = 30000;
 	r->fade_frames = (int)(out_rate * LM_FADE_SECONDS);
 	AcquireSRWLockExclusive(&c->receivers_lock);
 	r->next = c->receivers;
@@ -521,6 +532,61 @@ static void record_fill(lm_receiver *r, double fill)
 	lm_obs_store_release(&r->connection->last_fill_us, fill_us);
 }
 
+static void grow_target(lm_receiver *r, double seconds)
+{
+	/* At the highest supported rates the ring itself is smaller than 200 ms. */
+	double limit = fmin(r->input_rate * LM_MAX_TARGET_SECONDS, LM_OBS_CAPACITY_FRAMES - 1.0);
+	double target = fmin(r->target + r->input_rate * seconds, limit);
+	if (target <= r->target)
+		return;
+	if (r->playing) {
+		/* Keep the integrator, correction and acquisition clock. Rebase the
+		 * filtered error and gain scaling; update still applies its usual slew. */
+		r->drift.lp -= target - r->target;
+		r->drift.kp *= r->target / target;
+		r->drift.ki *= r->target / target;
+		r->drift.target = target;
+	}
+	r->target = target;
+	lm_obs_store_release(&r->stat_target_us, (int64_t)llround(target * 1000000.0 / r->input_rate));
+}
+
+static void check_headroom(lm_receiver *r, double fill, int frames, int64_t now)
+{
+	if (!r->headroom_active)
+		return; /* Initial prefill is not evidence of insufficient headroom. */
+	int64_t width = (r->connection->frequency + 99) / 100;
+	int64_t bucket = now / width + 1; /* Zero denotes an unused entry. */
+	lm_fill_minimum *sample = &r->fill_minima[bucket % LM_HEADROOM_BUCKETS];
+	double relative_fill = fill - r->target;
+	if (r->playing)
+		relative_fill -= r->drift.lp;
+	if (sample->bucket != bucket) {
+		sample->bucket = bucket;
+		sample->relative_fill = relative_fill;
+	} else {
+		sample->relative_fill = fmin(sample->relative_fill, relative_fill);
+	}
+	/* Project the observed minimum to the controller's target: subtract its
+	 * filtered fill error while playing, and credit later target increases.
+	 * This accounts for headroom already requested but not yet accumulated,
+	 * and protects against the controller draining an initially fuller queue.
+	 * A retained minimum cannot request the same headroom repeatedly. Low pulls
+	 * can still grow the target while an underrun waits for the writer. The
+	 * oldest bucket is retained until fully expired (at most 10 ms extra).
+	 * Storage and work are bounded regardless of callback size or rate. */
+	double minimum = relative_fill;
+	for (int i = 0; i < LM_HEADROOM_BUCKETS; ++i) {
+		const lm_fill_minimum *entry = &r->fill_minima[i];
+		if (entry->bucket > 0 && bucket >= entry->bucket &&
+		    bucket - entry->bucket <= 2 * r->connection->frequency / width)
+			minimum = fmin(minimum, entry->relative_fill);
+	}
+	double required = r->input_rate * (frames / (double)r->output_rate + LM_HEADROOM_SECONDS);
+	if (minimum + r->target < required)
+		grow_target(r, 0.005);
+}
+
 void lm_receiver_pull(lm_receiver *r, float *out_l, float *out_r, int frames, double out_rate)
 {
 	if (frames <= 0)
@@ -569,6 +635,9 @@ void lm_receiver_pull(lm_receiver *r, float *out_l, float *out_r, int frames, do
 		r->input_rate = input_rate;
 		r->output_rate = output_rate;
 		r->target = input_rate * LM_TARGET_SECONDS;
+		r->headroom_active = false;
+		memset(r->fill_minima, 0, sizeof(r->fill_minima));
+		lm_obs_store_release(&r->stat_target_us, 30000);
 		r->fade_frames = (int)(output_rate * LM_FADE_SECONDS);
 		begin_prefill(r, written, false);
 		if (!changed && same_epoch && !r->online)
@@ -590,6 +659,8 @@ void lm_receiver_pull(lm_receiver *r, float *out_l, float *out_r, int frames, do
 		lm_obs_store_release(&r->stat_resync, lm_obs_load_acquire(&r->stat_resync) + 1);
 		begin_prefill(r, written, false);
 	}
+	double fill = (double)(written - r->read_pos) + r->fifo_frames + lm_asrc_latency_input_frames(asrc);
+	check_headroom(r, fill, frames, now);
 	if (!r->playing) {
 		double available = (double)(written - r->read_pos);
 		record_fill(r, available);
@@ -602,9 +673,10 @@ void lm_receiver_pull(lm_receiver *r, float *out_l, float *out_r, int frames, do
 		lm_asrc_set_correction_ppm(asrc, 0.0);
 		lm_drift_init(&r->drift, r->target, out_rate / frames);
 		r->playing = true;
+		r->headroom_active = true;
 		r->fade_in = 0;
 	}
-	double fill = (double)(written - r->read_pos) + r->fifo_frames + lm_asrc_latency_input_frames(asrc);
+	fill = (double)(written - r->read_pos) + r->fifo_frames + lm_asrc_latency_input_frames(asrc);
 	record_fill(r, fill);
 	double ppm = lm_drift_update(&r->drift, fill, frames / out_rate);
 	lm_asrc_set_correction_ppm(asrc, ppm);
@@ -645,6 +717,7 @@ void lm_receiver_pull(lm_receiver *r, float *out_l, float *out_r, int frames, do
 		if (made < count) {
 			lm_obs_store_release(&r->stat_under, lm_obs_load_acquire(&r->stat_under) + 1);
 			lm_obs_store_release(&r->stat_resync, lm_obs_load_acquire(&r->stat_resync) + 1);
+			grow_target(r, 0.010);
 			begin_prefill(r, lm_obs_load_acquire(&h->write_frames), true);
 			break;
 		}
@@ -667,6 +740,7 @@ void lm_receiver_get_stats(const lm_receiver *r, lm_receiver_stats *stats)
 	if (!r)
 		return;
 	stats->fill_ms = (double)lm_obs_load_acquire(&r->stat_fill_us) / 1000.0;
+	stats->target_ms = (double)lm_obs_load_acquire(&r->stat_target_us) / 1000.0;
 	stats->ppm = (double)lm_obs_load_acquire(&r->stat_ppm_milli) / 1000.0;
 	stats->underruns = (uint64_t)lm_obs_load_acquire(&r->stat_under);
 	stats->overruns = (uint64_t)lm_obs_load_acquire(&r->stat_over);

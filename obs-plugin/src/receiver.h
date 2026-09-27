@@ -26,7 +26,7 @@ typedef struct lm_connection_config {
 } lm_connection_config;
 
 typedef struct lm_receiver_stats {
-	double fill_ms, ppm;
+	double fill_ms, target_ms, ppm;
 	uint64_t underruns, overruns, resyncs;
 	int64_t epoch;
 	bool connected;

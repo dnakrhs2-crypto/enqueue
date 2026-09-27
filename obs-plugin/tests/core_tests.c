@@ -27,6 +27,7 @@ typedef struct fixture {
 
 static unsigned name_serial;
 static int tests_run, tests_failed;
+static const char *test_filter;
 
 #define CHECK(condition) do { \
 	if (!(condition)) { \
@@ -556,6 +557,210 @@ done:
 	return ok;
 }
 
+/* Independent block clocks: publish only complete writer blocks, and catch up
+ * all delayed blocks on the first writer callback after a starvation interval.
+ * QPC is simulated, while the real ring, receiver and ASRC handle every sample. */
+static bool simulate_blocks(fixture *f, int writer_frames, int reader_frames, int seconds,
+			    int starvation_ms, lm_receiver_stats *result)
+{
+	float left[1024], right[1024], samples[2048];
+	lm_receiver_stats previous = {0}, locked = {0}, stats = {0};
+	bool ok = true;
+	int64_t origin = f->now, last_resync = origin;
+	int64_t writer_tick = 1, published_blocks = 0;
+	int64_t input_rate = (int64_t)f->rate;
+	CHECK(writer_frames <= 2048 && reader_frames <= 1024);
+	for (int i = 0; i < writer_frames; ++i)
+		samples[i] = f->value;
+	lm_receiver_get_stats(f->receiver, &previous);
+	for (int64_t pull = 1; pull * reader_frames <= (int64_t)seconds * TEST_RATE; ++pull) {
+		int64_t elapsed = pull * reader_frames * TEST_QPC / TEST_RATE;
+		int64_t write_time;
+		while ((write_time = writer_tick * writer_frames * TEST_QPC / input_rate) <= elapsed) {
+			lm_obs_store_release(&f->now, origin + write_time);
+			bool starved = write_time >= 2 * TEST_QPC &&
+				write_time % (2 * TEST_QPC) < starvation_ms * (TEST_QPC / 1000);
+			if (!starved) {
+				while (published_blocks < writer_tick) {
+					lm_obs_write(f->header, f->pcm, samples, samples, (uint32_t)writer_frames);
+					++published_blocks;
+				}
+				lm_obs_store_release(&f->header->heartbeat_qpc, f->now);
+			}
+			++writer_tick;
+		}
+		lm_obs_store_release(&f->now, origin + elapsed);
+		lm_connection_poll(f->connection);
+		lm_receiver_pull(f->receiver, left, right, reader_frames, TEST_RATE);
+		lm_receiver_get_stats(f->receiver, &stats);
+		CHECK(stats.fill_ms >= 0.0 && stats.fill_ms <= LM_OBS_CAPACITY_FRAMES * 1000.0 / f->rate);
+		CHECK(stats.target_ms >= previous.target_ms && stats.target_ms <= 200.0);
+		CHECK(stats.overruns == 0);
+		if (stats.resyncs != previous.resyncs)
+			last_resync = f->now;
+		else {
+			double slew = f->now - last_resync > 11 * TEST_QPC ? 20.0 : 200.0;
+			CHECK(fabs(stats.ppm - previous.ppm) <= slew * reader_frames / TEST_RATE + 0.002);
+		}
+		int settle_seconds = starvation_ms ? 10 : 5;
+		if (elapsed < settle_seconds * TEST_QPC) {
+			locked = stats;
+		} else {
+			CHECK(stats.underruns == locked.underruns);
+			for (int i = 0; i < reader_frames; ++i)
+				CHECK(isfinite(left[i]) && fabsf(left[i] - f->value) < 0.002f &&
+				      isfinite(right[i]) && fabsf(right[i] - f->value) < 0.002f);
+		}
+		previous = stats;
+	}
+done:
+	*result = stats;
+	printf("  %d-frame writer at %.0f Hz, %d-frame reader, %d ms starvation: "
+	       "target=%.3f ms fill=%.3f ms under=%llu over=%llu\n",
+	       writer_frames, f->rate, reader_frames, starvation_ms, stats.target_ms, stats.fill_ms,
+	       (unsigned long long)stats.underruns, (unsigned long long)stats.overruns);
+	return ok;
+}
+
+static bool test_adaptive_blocks(double input_rate, int writer_frames, int reader_frames, int starvation_ms)
+{
+	fixture f;
+	bool ok = true;
+	CHECK(fixture_open(&f));
+	f.rate = input_rate;
+	CHECK(writer_open(&f, (DWORD)RING_BYTES));
+	if (reader_frames == 1024) {
+		lm_receiver_destroy(f.receiver);
+		f.receiver = lm_receiver_create(f.connection, LM_RECEIVER_FILTER, TEST_RATE);
+		CHECK(f.receiver != NULL);
+	}
+	lm_receiver_stats stats;
+	CHECK(simulate_blocks(&f, writer_frames, reader_frames, 60, starvation_ms, &stats));
+	if (starvation_ms) {
+		CHECK(stats.underruns <= 3 && stats.target_ms <= 200.0);
+	} else if (reader_frames == 1024) {
+		CHECK(stats.underruns == 0 && stats.target_ms <= 45.0);
+	} else {
+		CHECK(stats.target_ms >= 35.0 && stats.target_ms <= 60.0);
+	}
+done:
+	fixture_close(&f);
+	return ok;
+}
+
+static bool test_blocks_48000(void) { return test_adaptive_blocks(48000.0, 2048, 480, 0); }
+static bool test_blocks_44100(void) { return test_adaptive_blocks(44100.0, 2048, 480, 0); }
+static bool test_filter_blocks(void) { return test_adaptive_blocks(48000.0, 256, 1024, 0); }
+static bool test_periodic_starvation(void) { return test_adaptive_blocks(48000.0, 480, 480, 80); }
+
+static bool grow_target(fixture *f)
+{
+	lm_receiver_stats stats;
+	for (int i = 0; i < 8; ++i)
+		tick(f, false, true);
+	for (int i = 0; i < 300; ++i)
+		tick(f, true, true);
+	lm_receiver_get_stats(f->receiver, &stats);
+	return settled(f, f->value) && stats.target_ms > 30.0;
+}
+
+static bool test_target_resets(void)
+{
+	fixture f;
+	bool ok = true;
+	CHECK(fixture_open(&f));
+	lm_receiver_stats stats;
+	lm_receiver_get_stats(f.receiver, &stats);
+	CHECK(stats.target_ms == 30.0);
+	CHECK(writer_open(&f, (DWORD)RING_BYTES));
+	CHECK(warm_up(&f));
+	CHECK(grow_target(&f));
+	writer_restart(&f, TEST_RATE, 0.25f);
+	tick(&f, true, true);
+	lm_receiver_get_stats(f.receiver, &stats);
+	CHECK(stats.epoch == 2 && stats.target_ms == 30.0);
+	CHECK(warm_up(&f));
+	CHECK(grow_target(&f));
+	/* A same-epoch input format change must also reset the target. */
+	f.rate = 44100.0;
+	lm_obs_store_release(&f.header->sample_rate, 44100);
+	tick(&f, true, true);
+	lm_receiver_get_stats(f.receiver, &stats);
+	CHECK(stats.epoch == 2 && stats.target_ms == 30.0);
+	CHECK(warm_up(&f));
+	CHECK(grow_target(&f));
+	lm_receiver_pull(f.receiver, f.left, f.right, 441, 44100.0);
+	lm_receiver_get_stats(f.receiver, &stats);
+	CHECK(stats.target_ms == 30.0);
+	CHECK(warm_up(&f));
+	CHECK(grow_target(&f));
+	/* No epoch bump: a stale heartbeat followed by fresh audio is a reconnect. */
+	for (int i = 0; i < 60; ++i)
+		tick(&f, false, true);
+	CHECK(!lm_receiver_connected(f.receiver));
+	tick(&f, true, true);
+	lm_receiver_get_stats(f.receiver, &stats);
+	CHECK(stats.connected && stats.epoch == 2 && stats.target_ms == 30.0);
+	CHECK(warm_up(&f));
+	lm_receiver_get_stats(f.receiver, &stats);
+	CHECK(stats.target_ms == 30.0);
+done:
+	fixture_close(&f);
+	return ok;
+}
+
+static bool test_target_slew(void)
+{
+	fixture f;
+	bool ok = true;
+	CHECK(fixture_open(&f));
+	CHECK(writer_open(&f, (DWORD)RING_BYTES));
+	f.ppm = 200.0;
+	for (int i = 0; i < 3000; ++i)
+		tick(&f, true, true);
+	/* An 18 ms writer delay takes the fill just below the headroom threshold,
+	 * with enough PCM left to keep playing. Acquisition has already finished. */
+	f.now += 8 * TEST_QPC / 1000;
+	lm_receiver_pull(f.receiver, f.left, f.right, 384, TEST_RATE);
+	lm_receiver_stats before, after;
+	lm_receiver_get_stats(f.receiver, &before);
+	CHECK(before.target_ms == 30.0 && before.ppm > 100.0);
+	f.now += TEST_QPC / 100;
+	lm_receiver_pull(f.receiver, f.left, f.right, TEST_FRAMES, TEST_RATE);
+	lm_receiver_get_stats(f.receiver, &after);
+	CHECK(after.target_ms == 35.0 && after.underruns == before.underruns);
+	CHECK(after.resyncs == before.resyncs && settled(&f, f.value));
+	CHECK(fabs(after.ppm - before.ppm) <= 20.0 / 100.0 + 0.002);
+done:
+	fixture_close(&f);
+	return ok;
+}
+
+static bool test_target_cap(void)
+{
+	fixture f;
+	bool ok = true;
+	CHECK(fixture_open(&f));
+	CHECK(writer_open(&f, (DWORD)RING_BYTES));
+	CHECK(warm_up(&f));
+	double previous_target = 30.0;
+	lm_receiver_stats stats = {0};
+	for (int cycle = 0; cycle < 25; ++cycle) {
+		for (int i = 0; i < 80; ++i) {
+			tick(&f, i >= 30, true);
+			lm_receiver_get_stats(f.receiver, &stats);
+			CHECK(stats.target_ms >= previous_target && stats.target_ms <= 200.0);
+			CHECK(stats.connected && stats.overruns == 0);
+			previous_target = stats.target_ms;
+		}
+		CHECK(settled(&f, f.value));
+	}
+	CHECK(stats.target_ms == 200.0);
+done:
+	fixture_close(&f);
+	return ok;
+}
+
 static bool test_soak(double ppm)
 {
 	fixture f;
@@ -600,6 +805,8 @@ static bool test_soak_negative(void) { return test_soak(-1000.0); }
 
 static void run_test(const char *name, bool (*test)(void))
 {
+	if (test_filter && !strstr(name, test_filter))
+		return;
 	++tests_run;
 	printf("RUN %s\n", name);
 	fflush(stdout);
@@ -612,8 +819,10 @@ static void run_test(const char *name, bool (*test)(void))
 	fflush(stdout);
 }
 
-int main(void)
+int main(int argc, char **argv)
 {
+	/* An optional name substring keeps focused regression runs inexpensive. */
+	test_filter = argc > 1 ? argv[1] : NULL;
 	run_test("connect after writer starts", test_late_connect);
 	run_test("writer restart, retained mapping and bounded fade", test_restart_fade);
 	run_test("input and output rate changes", test_rate_change);
@@ -627,6 +836,13 @@ int main(void)
 	run_test("independent receivers sharing one process slot", test_independent_receivers);
 	run_test("large pull bounds, exact length and silence", test_large_pull);
 	run_test("background manager and concurrent ASRC handoff", test_threaded_format_handoff);
+	run_test("adaptive target: 2048-frame writer at 48 kHz", test_blocks_48000);
+	run_test("adaptive target: 2048-frame writer at 44.1 kHz", test_blocks_44100);
+	run_test("adaptive target: 1024-frame filter pulls and 256-frame writer", test_filter_blocks);
+	run_test("adaptive target: recurring 80 ms writer starvation", test_periodic_starvation);
+	run_test("adaptive target: epoch, rate and reconnect resets", test_target_resets);
+	run_test("adaptive target: headroom step preserves settled ppm slew", test_target_slew);
+	run_test("adaptive target: monotonic growth capped at 200 ms", test_target_cap);
 	run_test("+1000 ppm for two simulated hours", test_soak_positive);
 	run_test("-1000 ppm for two simulated hours", test_soak_negative);
 	printf("LiveMix OBS core tests: %d passed, %d failed (%d total)\n",
