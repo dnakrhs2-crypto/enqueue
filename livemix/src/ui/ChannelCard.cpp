@@ -409,7 +409,8 @@ void ChannelCard::commitOutput (bool pairSelected)
     // picks on a running ASIO device is stored - even the device's only pair (a 2-output interface whose session asked
     // for 3-4 shows 없음 until 1-2 is chosen).
     auto& engine = document.getEngine();
-    if (pairSelected && sel > 0 && directCombo.isEnabled() && engine.isDeviceRunning() && engine.getOpenDevice().isAsio())
+    if (pairSelected && sel > 0 && directCombo.isEnabled() && engine.isDeviceRunning() && engine.getOpenDevice().isAsio()
+        && sel + 1 <= engine.getNumDeviceOutputs())   // the pair must exist (an output-less ASIO device lists placeholders)
         output.directFirst = sel - 1;
     document.setChannelOutput (channelId, output);
 }

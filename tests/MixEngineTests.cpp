@@ -1163,6 +1163,7 @@ public:
             engine.getDeviceManager().addAudioDeviceType (std::make_unique<MixFakeType> ("ASIO"));
             engine.getDeviceManager().addAudioDeviceType (std::make_unique<MixFakeType> (typeName));
             engine.getDeviceManager().addAudioDeviceType (std::make_unique<MixFakeType> ("ASIO Stereo", 2));
+            engine.getDeviceManager().addAudioDeviceType (std::make_unique<MixFakeType> ("ASIO NoOut", 0));
             MixDocument document (engine);
             auto& session = document.getSession();
             session.device = { "ASIO", "Good", "Good", 256, 48000.0 };
@@ -1243,6 +1244,14 @@ public:
             }
             // an explicit pick on a running ASIO device is stored even when it is the device's only pair (Astra R10:
             // ignoring it left a direct-only channel silent on a 2-output interface)
+            expectEquals (session.channels[0].output.directFirst, 0);
+            expectEquals (session.fx[0].output.directFirst, 0);
+            // an output-less ASIO device lists placeholder pairs: picking one stores nothing (Astra R11)
+            expect (engine.openDevice ({ "ASIO NoOut", "Good", "Good", 256, 48000.0 }).isEmpty());
+            refreshDevices();
+            expectEquals (engine.getNumDeviceOutputs(), 0);
+            outputCombo (card)->setSelectedId (3, juce::sendNotificationSync);
+            outputCombo (drawer)->setSelectedId (5, juce::sendNotificationSync);
             expectEquals (session.channels[0].output.directFirst, 0);
             expectEquals (session.fx[0].output.directFirst, 0);
             engine.shutdown();

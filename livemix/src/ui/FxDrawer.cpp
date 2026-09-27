@@ -309,7 +309,8 @@ void FxDrawer::commitOutput (bool pairSelected)
     // The effective Windows pair is display-only. Toggle clicks always retain the saved ASIO pair. A pair the operator
     // picks on a running ASIO device is stored - even the device's only pair.
     auto& engine = document.getEngine();
-    if (pairSelected && sel > 0 && directCombo.isEnabled() && engine.isDeviceRunning() && engine.getOpenDevice().isAsio())
+    if (pairSelected && sel > 0 && directCombo.isEnabled() && engine.isDeviceRunning() && engine.getOpenDevice().isAsio()
+        && sel + 1 <= engine.getNumDeviceOutputs())   // the pair must exist (an output-less ASIO device lists placeholders)
         output.directFirst = sel - 1;
     document.setFxOutput (selected, output);
 }
