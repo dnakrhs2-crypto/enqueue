@@ -2,6 +2,7 @@
 #include "ControlServer.h"
 #include "MixDocument.h"
 #include "MixEngine.h"
+#include "ObsPluginInstaller.h"
 #include "app/Updater.h"
 #include "ui/LiveMixLookAndFeel.h"
 #include "ui/MainComponent.h"
@@ -141,10 +142,25 @@ class LiveMixApplication : public juce::JUCEApplication,
 public:
     const juce::String getApplicationName() override { return "LiveMix"; }
     const juce::String getApplicationVersion() override { return JUCE_APPLICATION_VERSION_STRING; }
-    bool moreThanOneInstanceAllowed() override { return false; }
+    bool moreThanOneInstanceAllowed() override
+    {
+        return ObsPluginInstaller::isInstallCommandLine (getCommandLineParameters());
+    }
 
     void initialise (const juce::String& commandLine) override
     {
+        if (ObsPluginInstaller::isInstallCommandLine (commandLine))
+        {
+            juce::String message;
+            const auto result = ObsPluginInstaller::install (ObsPluginInstaller::systemRoots(), message);
+            const bool reported = ObsPluginInstaller::writeResult (ObsPluginInstaller::resultFile(), result, message);
+            using Result = ObsPluginInstaller::Result;
+            setApplicationReturnValue (reported && (result == Result::alreadyCurrent || result == Result::installed
+                                                    || result == Result::installedRestartObs) ? 0 : 1);
+            quit();
+            return; // no window, audio device, settings, session, tray or updater in this process
+        }
+
         lookAndFeel = std::make_unique<LiveMixLookAndFeel>();
         juce::LookAndFeel::setDefaultLookAndFeel (lookAndFeel.get());
 
@@ -272,8 +288,7 @@ public:
     {
         stopTimer();
 
-        // a second instance: initialise() never ran (JUCE handed its command line to the running instance and quits
-        // through here) - there is nothing to close, and settings is null
+        // A second normal instance or the headless OBS installer owns none of the regular app objects.
         if (settings == nullptr)
             return;
 

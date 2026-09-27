@@ -59,7 +59,12 @@ MasterCard::MasterCard (MixDocument& doc) : document (doc)
 
     obsToggle.setButtonText (ko ("OBS로 보내기"));
     obsToggle.setWantsKeyboardFocus (false);
-    obsToggle.onClick = [this] { document.setSendToObs (obsToggle.getToggleState()); };
+    obsToggle.onClick = [this]
+    {
+        const bool enabled = obsToggle.getToggleState();
+        document.setSendToObs (enabled);
+        if (enabled && onObsEnabled) onObsEnabled();
+    };
     addAndMakeVisible (obsToggle);
     styleCaption (obsStatusLabel, "");
     obsStatusLabel.setFont (bodyFont (12.5f));
@@ -94,7 +99,7 @@ void MasterCard::setStrip (bool folded)
         return;
 
     strip = folded;
-    obsToggle.setButtonText (strip ? juce::String ("OBS") : ko ("OBS로 보내기"));
+    refreshObsToggle();
     refreshObsStatus();
     resized();
 }
@@ -115,14 +120,30 @@ void MasterCard::setObsStatus (ObsStatus status)
     resized();
 }
 
+void MasterCard::setObsInstalling (bool installing)
+{
+    if (obsInstalling == installing) return;
+    obsInstalling = installing;
+    refreshObsToggle();
+    resized();
+}
+
+void MasterCard::refreshObsToggle()
+{
+    obsToggle.setButtonText (obsInstalling ? ko ("설치 중...") : strip ? juce::String ("OBS") : ko ("OBS로 보내기"));
+}
+
 void MasterCard::refreshObsStatus()
 {
     const auto text = obsStatus == ObsStatus::audioStopped ? ko ("오디오 멈춤")
+                    : obsStatus == ObsStatus::installNeeded ? ko ("OBS 플러그인 설치 필요")
+                    : obsStatus == ObsStatus::restartObs ? ko ("OBS를 다시 시작하세요")
                     : obsStatus == ObsStatus::connected ? ko ("OBS 연결됨") : ko ("OBS 대기 중");
     obsStatusLabel.setText (strip ? juce::String::fromUTF8 ("●") : text, juce::dontSendNotification);
     obsStatusLabel.setTooltip (text);
     obsStatusLabel.setJustificationType (strip ? juce::Justification::centred : juce::Justification::centredLeft);
     obsStatusLabel.setColour (juce::Label::textColourId, obsStatus == ObsStatus::audioStopped ? Palette::danger
+                              : obsStatus == ObsStatus::installNeeded || obsStatus == ObsStatus::restartObs ? juce::Colour (0xffffb454)
                               : obsStatus == ObsStatus::connected ? Palette::lampOn : Palette::dimText);
 }
 

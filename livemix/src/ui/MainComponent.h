@@ -10,6 +10,7 @@
 #include "MasterCard.h"
 #include "MixDocument.h"
 #include "MuteGroups.h"
+#include "ObsPluginInstaller.h"
 #include "PluginGroupsWindow.h"
 #include "PluginManagerWindow.h"
 #include "PluginPreset.h"
@@ -25,6 +26,13 @@
 namespace gocue::livemix
 {
 
+/** Injectable boundaries keep UI installer tests on temporary roots and avoid an actual UAC prompt. */
+struct ObsPluginActions
+{
+    std::function<ObsPluginInstaller::Roots()> roots = ObsPluginInstaller::systemRoots;
+    std::function<ObsPluginInstaller::Result (juce::String&)> elevate = ObsPluginInstaller::installElevated;
+};
+
 /** The window's content: top bar, the scrolling channel cards, the docked master, the drawers, the status bar.
     Everything the operator does goes through the document; the timer feeds the meters. */
 class MainComponent : public juce::Component,
@@ -33,7 +41,7 @@ class MainComponent : public juce::Component,
                       private juce::Timer
 {
 public:
-    MainComponent (MixDocument& document, LiveMixSettings& settings);
+    MainComponent (MixDocument& document, LiveMixSettings& settings, ObsPluginActions obsActions = {});
     ~MainComponent() override;
 
     /** Session files. new / open first secure what is open (see withSessionSecured). */
@@ -93,6 +101,9 @@ private:
     enum class Drawer { none, chain, fx };
 
     void timerCallback() override;
+    void startObsPluginCheck (bool installIfNeeded);
+    void finishObsPluginCheck();
+    void refreshObsStatus();
     void rebuildCards();
     void refreshValues();
     void layoutCards();
@@ -184,6 +195,13 @@ private:
     juce::String statusText;
     double statusUntilMs = 0.0;
     double nextObsPollMs = 0.0;
+    struct ObsInstallWork;
+    ObsPluginActions obsPluginActions;
+    std::shared_ptr<ObsInstallWork> obsInstallWork;
+    bool obsInstallRequested = false, obsPluginCurrent = false;
+    bool obsNeedsRestart = false, obsRestartSawDisconnect = false;
+    juce::String obsInstallNote;
+    bool obsInstallError = false;
     std::unique_ptr<juce::FileChooser> chooser;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (MainComponent)

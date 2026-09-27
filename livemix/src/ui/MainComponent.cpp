@@ -7,12 +7,22 @@
 #include "app/Updater.h"
 
 #include <cmath>
+#include <atomic>
 
 namespace gocue::livemix
 {
 
-MainComponent::MainComponent (MixDocument& doc, LiveMixSettings& s)
-    : document (doc), settings (s), engine (doc.getEngine()), topBar (doc), menuBar (this), masterCard (doc), chainDrawer (doc, windows), fxDrawer (doc)
+struct MainComponent::ObsInstallWork
+{
+    std::atomic<bool> complete { false };
+    bool install = false, current = false;
+    ObsPluginInstaller::Result result = ObsPluginInstaller::Result::failed;
+    juce::String message;
+};
+
+MainComponent::MainComponent (MixDocument& doc, LiveMixSettings& s, ObsPluginActions obsActions)
+    : document (doc), settings (s), engine (doc.getEngine()), topBar (doc), menuBar (this), masterCard (doc), chainDrawer (doc, windows), fxDrawer (doc),
+      obsPluginActions (std::move (obsActions))
 {
     setOpaque (true);
     addAndMakeVisible (menuBar);
@@ -36,6 +46,7 @@ MainComponent::MainComponent (MixDocument& doc, LiveMixSettings& s)
     masterCard.onOpenChain = [this] { openChainFor (&engine.getMasterChain(), ko ("마스터")); };
     masterCard.onAddPlugin = [this] { addPluginTo (&engine.getMasterChain(), ko ("마스터"), &masterCard.getAddPluginButton()); };
     masterCard.onOpenLoudness = [this] { showLoudnessWindow(); };
+    masterCard.onObsEnabled = [this] { startObsPluginCheck (true); };
     masterCard.onOpenPluginEditor = [this] (int slot)
     {
         auto& chain = engine.getMasterChain();
@@ -162,6 +173,7 @@ MainComponent::MainComponent (MixDocument& doc, LiveMixSettings& s)
 
     updateDeviceNames();
     rebuildCards();
+    startObsPluginCheck (false);
     startTimerHz (30);
 }
 
@@ -182,6 +194,101 @@ MainComponent::~MainComponent()
     document.onStructureChanged = nullptr;
     document.onValueChanged = nullptr;
     document.onChainRuntimeChanged = nullptr;
+}
+
+void MainComponent::startObsPluginCheck (bool installIfNeeded)
+{
+    if (obsInstallWork != nullptr)
+    {
+        // An enable during the initial read-only check gets one install afterwards. Repeated enables while
+        // installing do not queue another UAC prompt. Switching OFF still immediately stops the sender.
+        if (installIfNeeded && ! obsInstallWork->install)
+        {
+            obsInstallRequested = true;
+            masterCard.setObsInstalling (true);
+        }
+        return;
+    }
+    auto work = std::make_shared<ObsInstallWork>();
+    work->install = installIfNeeded;
+    obsInstallWork = work;
+    masterCard.setObsInstalling (installIfNeeded);
+    if (installIfNeeded)
+    {
+        obsInstallNote.clear();
+        refreshNotice();
+    }
+    // The worker owns its inputs/results, never the component, engine or document. Closing the window can
+    // discard its shared result immediately, even while Windows is displaying UAC or the helper is running.
+    const bool started = juce::Thread::launch ([work, actions = obsPluginActions]
+    {
+        try
+        {
+            const auto roots = actions.roots();
+            work->current = ObsPluginInstaller::isInstalledAndCurrent (roots);
+            if (work->install)
+            {
+                // install() is a no-op for a current version except for cleaning retired DLLs after OBS exits.
+                work->result = ObsPluginInstaller::install (roots, work->message);
+                if (work->result == ObsPluginInstaller::Result::needsElevation)
+                    work->result = actions.elevate (work->message); // exactly one retry, on this same worker
+                work->current = ObsPluginInstaller::isInstalledAndCurrent (roots);
+            }
+        }
+        catch (const std::exception& error)
+        {
+            work->message = ko ("OBS 플러그인을 설치하지 못했습니다: ") + juce::String::fromUTF8 (error.what());
+            work->result = ObsPluginInstaller::Result::failed;
+        }
+        work->complete.store (true, std::memory_order_release);
+    });
+    if (! started)
+    {
+        work->message = ko ("OBS 플러그인을 설치하지 못했습니다: 설치 작업을 시작할 수 없습니다.");
+        work->complete.store (true, std::memory_order_release);
+    }
+}
+
+void MainComponent::finishObsPluginCheck()
+{
+    if (obsInstallWork == nullptr || ! obsInstallWork->complete.load (std::memory_order_acquire)) return;
+    const auto work = std::move (obsInstallWork);
+    obsPluginCurrent = work->current;
+    if (obsInstallRequested)
+    {
+        obsInstallRequested = false;
+        startObsPluginCheck (true);
+        return;
+    }
+    masterCard.setObsInstalling (false);
+    if (work->install)
+    {
+        using Result = ObsPluginInstaller::Result;
+        if (work->result == Result::installedRestartObs)
+        {
+            obsNeedsRestart = true;
+            obsRestartSawDisconnect = engine.getObsSender().readerState() == ObsSender::ReaderState::none;
+        }
+        obsInstallNote = work->result == Result::alreadyCurrent ? juce::String() : work->message;
+        obsInstallError = work->result == Result::failed || work->result == Result::noBundledFiles || work->result == Result::obsBusyCloseIt;
+        if (obsInstallNote.isNotEmpty()) showStatus (obsInstallNote, obsInstallError);
+        refreshNotice();
+    }
+    refreshObsStatus();
+}
+
+void MainComponent::refreshObsStatus()
+{
+    const auto readers = engine.getObsSender().readerState();
+    if (obsNeedsRestart)
+    {
+        if (readers == ObsSender::ReaderState::none) obsRestartSawDisconnect = true;
+        else if (obsRestartSawDisconnect) obsNeedsRestart = false;
+    }
+    masterCard.setObsStatus (! obsPluginCurrent ? MasterCard::ObsStatus::installNeeded
+        : obsNeedsRestart ? MasterCard::ObsStatus::restartObs
+        : ! engine.isDeviceRunning() ? MasterCard::ObsStatus::audioStopped
+        : readers == ObsSender::ReaderState::connected ? MasterCard::ObsStatus::connected : MasterCard::ObsStatus::waiting);
 }
 
 void MainComponent::attachControlServer (ControlServer* server)
@@ -707,12 +814,11 @@ void MainComponent::timerCallback()
 
     const double now = juce::Time::getMillisecondCounterHiRes();
 
+    finishObsPluginCheck();
     if (now >= nextObsPollMs)
     {
         nextObsPollMs = now + 500.0;
-        const auto readers = engine.getObsSender().readerState();
-        masterCard.setObsStatus (! running ? MasterCard::ObsStatus::audioStopped
-            : readers == ObsSender::ReaderState::connected ? MasterCard::ObsStatus::connected : MasterCard::ObsStatus::waiting);
+        refreshObsStatus();
     }
 
     if (now < statusUntilMs)
@@ -859,12 +965,16 @@ void MainComponent::refreshNotice()
     if (hotkeyErrorNote.isNotEmpty())
         lines.add (hotkeyErrorNote);
 
+    if (obsInstallNote.isNotEmpty())
+        lines.add (obsInstallNote);
+
     noticeVisible = ! lines.isEmpty();
     noticeIsError = (sessionNote.isNotEmpty() && sessionNoteIsError)
                     || (startupNote.isNotEmpty() && startupNoteIsError)
                     || pluginNote.isNotEmpty()
                     || saveErrorNote.isNotEmpty()
-                    || hotkeyErrorNote.isNotEmpty();
+                    || hotkeyErrorNote.isNotEmpty()
+                    || (obsInstallNote.isNotEmpty() && obsInstallError);
     noticeText.setText (lines.joinIntoString ("\n"), false);
     resized();
     repaint();
@@ -949,6 +1059,7 @@ void MainComponent::hideNotice()
     latencyNote.clear();
     saveErrorNote.clear();
     hotkeyErrorNote.clear();
+    obsInstallNote.clear();
     refreshNotice();
 }
 

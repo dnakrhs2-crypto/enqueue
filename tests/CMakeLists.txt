@@ -63,6 +63,7 @@ target_sources(EnqueueTests PRIVATE
     LiveMixMonitorTests.cpp
     MixEngineTests.cpp
     LiveMixObsSenderTests.cpp
+    LiveMixObsInstallerTests.cpp
     WebDavBackupTests.cpp
     MixDocumentTests.cpp
     ChannelCardTests.cpp
@@ -112,6 +113,29 @@ target_compile_definitions(EnqueueTests PRIVATE
     JUCE_APPLICATION_VERSION_STRING="${PROJECT_VERSION}")
 
 target_link_libraries(EnqueueTests PRIVATE GoCueCore LiveMixUI)
+
+# Tiny real VERSIONINFO-bearing DLLs: installer tests exercise the Windows version reader,
+# copy them only into temporary roots, and never load OBS or depend on a plugin build.
+file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/obs_installer_fixture.c"
+    "__declspec(dllexport) int fixture(void) { return 1; }\n")
+foreach(_fixture IN ITEMS OLD CURRENT OBS32 OBS33)
+    if(_fixture STREQUAL "OLD")
+        set(_fixture_version "0,10,0,0")
+    elseif(_fixture STREQUAL "CURRENT")
+        set(_fixture_version "0,11,0,0")
+    elseif(_fixture STREQUAL "OBS32")
+        set(_fixture_version "32,1,2,0")
+    else()
+        set(_fixture_version "33,0,0,0")
+    endif()
+    set(_fixture_rc "${CMAKE_CURRENT_BINARY_DIR}/obs_installer_${_fixture}.rc")
+    file(WRITE "${_fixture_rc}"
+        "#include <windows.h>\n1 VERSIONINFO\nFILEVERSION ${_fixture_version}\nPRODUCTVERSION ${_fixture_version}\nFILEOS VOS_NT_WINDOWS32\nFILETYPE VFT_DLL\nBEGIN\nEND\n")
+    add_library(ObsInstallerFixture${_fixture} SHARED "${CMAKE_CURRENT_BINARY_DIR}/obs_installer_fixture.c" "${_fixture_rc}")
+    set_property(TARGET ObsInstallerFixture${_fixture} PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+    add_dependencies(EnqueueTests ObsInstallerFixture${_fixture})
+    target_compile_definitions(EnqueueTests PRIVATE "LM_OBS_TEST_${_fixture}_DLL=\"$<TARGET_FILE:ObsInstallerFixture${_fixture}>\"")
+endforeach()
 
 # Compile the same C17 implementation with allocator hooks, including in Release.
 # No global allocator overrides: unrelated JUCE and UI tests retain their allocator.

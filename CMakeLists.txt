@@ -249,6 +249,7 @@ target_sources(LiveMixCore INTERFACE
     ${CMAKE_CURRENT_SOURCE_DIR}/livemix/src/AudioBackends.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/livemix/src/MonitorOutput.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/livemix/src/ObsSender.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/livemix/src/ObsPluginInstaller.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/livemix/src/MixDocument.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/livemix/src/MuteGroups.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/livemix/src/ControlProtocol.cpp
@@ -266,7 +267,7 @@ target_include_directories(LiveMixCore INTERFACE
     ${CMAKE_CURRENT_SOURCE_DIR}/livemix/shared)
 target_link_libraries(LiveMixCore INTERFACE GoCueCore)
 if(WIN32)
-    target_link_libraries(LiveMixCore INTERFACE bcrypt advapi32)
+    target_link_libraries(LiveMixCore INTERFACE bcrypt advapi32 version shell32 ole32)
 endif()
 target_sources(LiveMixCore INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/livemix/src/WebDavBackup.cpp)
 

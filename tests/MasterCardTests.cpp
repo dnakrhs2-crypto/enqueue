@@ -106,6 +106,52 @@ public:
                     stopped = label->findColour (juce::Label::textColourId) == livemix::Palette::danger;
             expect (stopped);
         }
+        beginTest ("Install and restart states are orange; installing fits every master form and still allows sending");
+        for (auto state : { MasterCard::ObsStatus::installNeeded, MasterCard::ObsStatus::restartObs })
+        {
+            const auto text = state == MasterCard::ObsStatus::installNeeded ? ko ("OBS 플러그인 설치 필요") : ko ("OBS를 다시 시작하세요");
+            card.setObsStatus (state);
+            for (bool folded : { false, true })
+            {
+                card.setStrip (folded);
+                for (bool installing : { false, true })
+                {
+                    card.setObsInstalling (installing);
+                    for (int width : { 364, 988, 1400 })
+                    {
+                        card.setSize (width, card.getPreferredHeight (width));
+                        bool found = false;
+                        for (auto* child : card.getChildren())
+                        {
+                            if (child->isVisible()) expect (card.getLocalBounds().contains (child->getBounds()));
+                            if (auto* label = dynamic_cast<juce::Label*> (child); label != nullptr && label->getTooltip() == text)
+                            {
+                                found = true;
+                                expect (label->findColour (juce::Label::textColourId) == juce::Colour (0xffffb454));
+                            }
+                        }
+                        expect (found);
+                        expect (toggle != nullptr && toggle->isEnabled());
+                        if (toggle != nullptr && installing) expectEquals (toggle->getButtonText(), ko ("설치 중..."));
+                    }
+                }
+            }
+        }
+        int enabledCallbacks = 0;
+        card.onObsEnabled = [&]
+        {
+            expect (document.getSession().master.sendToObs && engine.getObsSender().isEnabled());
+            ++enabledCallbacks;
+        };
+        if (toggle != nullptr)
+        {
+            toggle->setToggleState (false, juce::dontSendNotification);
+            toggle->onClick();
+            expectEquals (enabledCallbacks, 0);
+            toggle->setToggleState (true, juce::dontSendNotification);
+            toggle->onClick();
+            expectEquals (enabledCallbacks, 1);
+        }
         card.setLookAndFeel (nullptr);
     }
 };

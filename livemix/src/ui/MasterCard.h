@@ -18,9 +18,10 @@ public:
     void setDeviceChannels (const juce::StringArray& outputNames);
     void setLatency (double ms, int bufferSize, double sampleRate);
     void pushMeter (MixEngine::Meter meter) { meter_.push (meter); }
-    // Task 5 can add installer states here without changing the card's three layouts.
-    enum class ObsStatus { waiting, connected, audioStopped };
+    enum class ObsStatus { waiting, connected, audioStopped, installNeeded, restartObs };
     void setObsStatus (ObsStatus status);
+    void setObsInstalling (bool installing);
+    std::function<void()> onObsEnabled; // document/sender are already enabled when this runs
 
     std::function<void()> onOpenChain;
     std::function<void()> onAddPlugin;
@@ -48,6 +49,7 @@ private:
     void rebuildChain();
     int obsToggleWidth() const;
     void refreshObsStatus();
+    void refreshObsToggle();
     static constexpr int obsRowHeight = 28, obsRowGap = 8;
 
     MixDocument& document;
@@ -59,6 +61,7 @@ private:
     juce::ToggleButton obsToggle;
     juce::Label obsStatusLabel;
     ObsStatus obsStatus = ObsStatus::waiting;
+    bool obsInstalling = false;
     MeterBar meter_ { true };
     bool refreshing = false;
     bool strip = false;
