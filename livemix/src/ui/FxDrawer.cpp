@@ -95,7 +95,7 @@ FxDrawer::FxDrawer (MixDocument& doc) : document (doc)
     directChip.onClick = [this] { commitOutput(); };
     addAndMakeVisible (directChip);
     directCombo.setWantsKeyboardFocus (false);
-    directCombo.onChange = [this] { commitOutput(); };
+    directCombo.onChange = [this] { commitOutput (true); };
     addAndMakeVisible (directCombo);
     monoChip.setTooltip (ko ("켜면 이 FX의 소리를 좌우 합쳐 양쪽에 똑같이 내보냅니다"));
     monoChip.onClick = [this]
@@ -293,17 +293,24 @@ void FxDrawer::rebuildSenders()
     }
 }
 
-void FxDrawer::commitOutput()
+void FxDrawer::commitOutput (bool pairSelected)
 {
     if (refreshing || selected.isNull())
         return;
 
     const auto* f = fx();
+    if (f == nullptr)
+        return;
+
     const int sel = directCombo.getSelectedId();
-    MixOutput output;
+    auto output = f->output;
     output.master = masterChip.getToggleState();
     output.direct = directChip.getToggleState();
-    output.directFirst = sel > 0 ? sel - 1 : (f != nullptr ? f->output.directFirst : 2);   // keep the saved pair when the picker has no matching item
+    // The effective Windows pair is display-only. Toggle clicks always retain the saved ASIO pair.
+    auto& engine = document.getEngine();
+    if (pairSelected && sel > 0 && directCombo.isEnabled() && directCombo.getNumItems() > 1
+        && engine.isDeviceRunning() && engine.getNumDeviceOutputs() >= 4 && engine.getOpenDevice().isAsio())
+        output.directFirst = sel - 1;
     document.setFxOutput (selected, output);
 }
 

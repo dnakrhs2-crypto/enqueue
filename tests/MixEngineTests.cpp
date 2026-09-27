@@ -5,6 +5,9 @@
 #include "ui/SettingsDialog.h"
 #include "ui/TopBar.h"
 #include "ui/LiveMixLookAndFeel.h"
+#include "ui/ChannelCard.h"
+#include "ui/FxDrawer.h"
+#include "lm_obs_protocol.h"
 #include "../livemix/src/ui/MainComponent.h"
 
 #include <atomic>
@@ -34,7 +37,9 @@ namespace
         juce::AudioIODevice* device = nullptr;
         double rate = 48000.0;
         int buffer = 256;
+        int asioOutputs = 72;
         juce::AudioIODeviceCallback* callback = nullptr;
+        std::function<void()> onOutputLifecycle;
     };
 
     class MixFakeDevice : public juce::AudioIODevice
@@ -47,7 +52,7 @@ namespace
         {
             juce::StringArray names;
             if ((input ? record->input : record->output).isNotEmpty())
-                for (int i = 0; i < (getTypeName().contains ("ASIO") ? 72 : 8); ++i) names.add (juce::String (i + 1));
+                for (int i = 0; i < (getTypeName().contains ("ASIO") ? (input ? 72 : record->asioOutputs) : 8); ++i) names.add (juce::String (i + 1));
             return names;
         }
         juce::StringArray getInputChannelNames() override { return channelNames (true); }
@@ -58,6 +63,7 @@ namespace
         juce::String open (const juce::BigInteger& ins, const juce::BigInteger& outs, double sr, int bs) override
         {
             close();
+            if (record->onOutputLifecycle) record->onOutputLifecycle();
             if (record->input == "Broken" || record->output == "Broken" || bs == 1024)
                 return "deliberate fake open failure";
             record->inputs = ins;
@@ -73,6 +79,7 @@ namespace
         bool isOpen() override { return opened; }
         void start (juce::AudioIODeviceCallback* cb) override
         {
+            if (record->onOutputLifecycle) record->onOutputLifecycle();
             callback = cb;
             record->callback = cb;
             record->playing = cb != nullptr && opened;
@@ -80,6 +87,7 @@ namespace
         }
         void stop() override
         {
+            if (record->onOutputLifecycle) record->onOutputLifecycle();
             if (callback != nullptr) callback->audioDeviceStopped();
             callback = nullptr;
             record->callback = nullptr;
@@ -103,7 +111,7 @@ namespace
     class MixFakeType : public juce::AudioIODeviceType
     {
     public:
-        explicit MixFakeType (const juce::String& name) : AudioIODeviceType (name) {}
+        explicit MixFakeType (const juce::String& name, int outputs = 72) : AudioIODeviceType (name), asioOutputs (outputs) {}
         void scanForDevices() override {}
         juce::StringArray getDeviceNames (bool input) const override
         {
@@ -120,6 +128,8 @@ namespace
             auto r = std::make_shared<MixDeviceRecord>();
             r->input = input;
             r->output = output;
+            r->asioOutputs = asioOutputs;
+            if (input.isEmpty() && output.isNotEmpty()) r->onOutputLifecycle = onOutputLifecycle;
             if (failOutputs && output.isNotEmpty()) r->output = "Broken";
             records.push_back (r);
             return new MixFakeDevice (getTypeName(), std::move (r));
@@ -132,7 +142,20 @@ namespace
         }
         std::vector<std::shared_ptr<MixDeviceRecord>> records;
         bool failOutputs = false;
+        int asioOutputs = 72;
+        std::function<void()> onOutputLifecycle;
     };
+
+    // The same private-method access pattern as the UI transition tests: run one maintenance tick
+    // at a precise callback checkpoint without sleeping or adding a production test hook.
+    struct PollMonitorMaintenance
+    {
+        using Type = void (MixEngine::*)();
+        friend Type member (PollMonitorMaintenance);
+    };
+    template <typename Tag, typename Tag::Type method>
+    struct MixPrivateMethod { friend typename Tag::Type member (Tag) { return method; } };
+    template struct MixPrivateMethod<PollMonitorMaintenance, &MixEngine::timerCallback>;
 
     void removeRealMixDeviceTypes (MixEngine& engine)
     {
@@ -1092,6 +1115,341 @@ public:
 };
 
 static MixEngineTests mixEngineTests;
+
+class LiveMixRound9Tests : public juce::UnitTest
+{
+public:
+    LiveMixRound9Tests() : juce::UnitTest ("LiveMix Round 9 routing and monitor restarts", "LiveMix") {}
+
+    static void dispatchMessages()
+    {
+        MSG message;
+        while (PeekMessageW (&message, nullptr, 0, 0, PM_REMOVE))
+        {
+            TranslateMessage (&message);
+            DispatchMessageW (&message);
+        }
+    }
+
+    static juce::Button* button (juce::Component& component, const juce::String& text)
+    {
+        for (auto* child : component.getChildren())
+            if (auto* b = dynamic_cast<juce::Button*> (child); b != nullptr && b->getButtonText() == text) return b;
+        return nullptr;
+    }
+
+    static juce::ComboBox* outputCombo (juce::Component& component)
+    {
+        juce::ComboBox* result = nullptr;
+        for (auto* child : component.getChildren())
+            if (auto* combo = dynamic_cast<juce::ComboBox*> (child)) result = combo;
+        return result;
+    }
+
+    void click (juce::Button& b)
+    {
+        b.triggerClick(); // JUCE dispatches the real button's toggle and onClick asynchronously.
+        dispatchMessages();
+    }
+
+    void runTest() override
+    {
+        beginTest ("N1: real channel/FX toggle clicks preserve 3-4/5-6 through Windows and back to ASIO");
+        for (const auto* typeName : { "Windows Audio", "Windows Audio (Low Latency Mode)", "Windows Audio (Exclusive Mode)" })
+        for (bool hasOutput : { true, false })
+        {
+            MixEngine engine;
+            removeRealMixDeviceTypes (engine);
+            engine.getDeviceManager().addAudioDeviceType (std::make_unique<MixFakeType> ("ASIO"));
+            engine.getDeviceManager().addAudioDeviceType (std::make_unique<MixFakeType> (typeName));
+            engine.getDeviceManager().addAudioDeviceType (std::make_unique<MixFakeType> ("ASIO Stereo", 2));
+            MixDocument document (engine);
+            auto& session = document.getSession();
+            session.device = { "ASIO", "Good", "Good", 256, 48000.0 };
+            session.channels[0].output = { false, true, 2 };
+            session.channels[0].sends[0].amount = 0.5;
+            session.fx[0].output = { false, true, 4 };
+            document.applyToEngine();
+            expect (engine.openDevice (session.device).isEmpty());
+            ChannelCard card (document, session.channels[0].id);
+            FxDrawer drawer (document);
+            document.onValueChanged = [&] { card.refresh(); drawer.refresh(); };
+            auto refreshDevices = [&]
+            {
+                auto* device = engine.getDeviceManager().getCurrentAudioDevice();
+                const auto names = engine.isSplitMonitor() ? juce::StringArray { "1", "2" } : device->getOutputChannelNames();
+                card.setDeviceChannels (device->getInputChannelNames(), names);
+                drawer.setDeviceChannels (names);
+            };
+            refreshDevices();
+            expect (engine.openDevice ({ typeName, "Capture", hasOutput ? "Headphones" : "", 256, 48000.0 }).isEmpty());
+            refreshDevices(); // Saved device is still ASIO: the controls must use the RUNNING backend.
+            for (auto* component : std::initializer_list<juce::Component*> { &card, &drawer })
+            {
+                const bool channel = component == &card;
+                const int pair = channel ? 2 : 4;
+                auto read = [&] { return channel ? session.channels[0].output : session.fx[0].output; };
+                auto* master = button (*component, ko ("마스터"));
+                auto* direct = button (*component, ko ("직접 출력"));
+                auto* combo = outputCombo (*component);
+                expect (master != nullptr && direct != nullptr && combo != nullptr);
+                if (master == nullptr || direct == nullptr || combo == nullptr) continue;
+                expectEquals (combo->getSelectedId(), 1);
+                for (int i = 0; i < 2; ++i)
+                {
+                    click (*master);
+                    expect (read().master == (i == 0));
+                    expect (read().direct);
+                    expectEquals (read().directFirst, pair);
+                }
+                expect (direct->isEnabled() == hasOutput);
+                for (int i = 0; i < 2; ++i)
+                {
+                    click (*direct);
+                    expect (read().direct == (! hasOutput || i == 1)); // no-output control stays disabled
+                    expect (! read().master);
+                    expectEquals (read().directFirst, pair);
+                }
+                // A notification from the one effective Windows pair also cannot become a saved pair edit.
+                combo->setSelectedId (0, juce::dontSendNotification);
+                combo->setSelectedId (1, juce::sendNotificationSync);
+                expectEquals (read().directFirst, pair);
+            }
+            expect (engine.openDevice (session.device).isEmpty());
+            refreshDevices();
+            expectEquals (session.channels[0].output.directFirst, 2);
+            expectEquals (session.fx[0].output.directFirst, 4);
+            MixEngineTests::Io io;
+            io.in.clear();
+            io.setInput (0, 0.25f);
+            MixEngineTests::render (engine, io, 3);
+            for (int out = 0; out < MixEngineTests::numOuts; ++out)
+                expectWithinAbsoluteError (io.last (out), out < 2 ? 0.0f : out < 4 ? 0.25f : 0.125f, 1.0e-6f);
+
+            // An explicit selection on a running multi-pair ASIO device is the one action that changes the pair.
+            outputCombo (card)->setSelectedId (5, juce::sendNotificationSync);
+            outputCombo (drawer)->setSelectedId (3, juce::sendNotificationSync);
+            expectEquals (session.channels[0].output.directFirst, 4);
+            expectEquals (session.fx[0].output.directFirst, 2);
+            expect (engine.openDevice ({ "ASIO Stereo", "Good", "Good", 256, 48000.0 }).isEmpty());
+            refreshDevices();
+            expectEquals (engine.getNumDeviceOutputs(), 2);
+            for (auto* component : std::initializer_list<juce::Component*> { &card, &drawer })
+            {
+                outputCombo (*component)->setSelectedId (1, juce::sendNotificationSync);
+                click (*button (*component, ko ("마스터")));
+                click (*button (*component, ko ("마스터")));
+            }
+            expectEquals (session.channels[0].output.directFirst, 4);
+            expectEquals (session.fx[0].output.directFirst, 2);
+            engine.shutdown();
+            card.setDeviceChannels ({ "1", "2" }, { "1", "2", "3", "4", "5", "6" });
+            drawer.setDeviceChannels ({ "1", "2", "3", "4", "5", "6" });
+            outputCombo (card)->setSelectedId (1, juce::sendNotificationSync);
+            outputCombo (drawer)->setSelectedId (1, juce::sendNotificationSync);
+            expectEquals (session.channels[0].output.directFirst, 4);
+            expectEquals (session.fx[0].output.directFirst, 2);
+        }
+
+        beginTest ("N2: output-only format/period rebuild keeps OBS epoch, every input block and plugin prepares");
+        {
+            const auto mapping = "Local\\LiveMix.ObsTest.Round9." + juce::Uuid().toString();
+            MixEngine engine (mapping);
+            removeRealMixDeviceTypes (engine);
+            auto type = std::make_unique<MixFakeType> ("Windows Audio");
+            auto* fake = type.get();
+            engine.getDeviceManager().addAudioDeviceType (std::move (type));
+            expect (engine.openDevice ({ "Windows Audio", "Capture", "Headphones", 256, 48000.0 }).isEmpty());
+            std::shared_ptr<MixDeviceRecord> input;
+            for (const auto& record : fake->records)
+                if (record->device == engine.getDeviceManager().getCurrentAudioDevice()) input = record;
+            expect (input != nullptr && input->callback != nullptr);
+            if (input == nullptr || input->callback == nullptr) return;
+            MixSession session;
+            session.addChannel();
+            session.addFx();
+            session.channels[0].sends[0].amount = 0.5;
+            session.fx[0].output = { false, false, 4 };
+            engine.applySession (session);
+            struct ProbePlugin : TestGainPlugin
+            {
+                ProbePlugin() : TestGainPlugin (1.0f) {}
+                void processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midi) override
+                {
+                    if (checkpoint) checkpoint();
+                    TestGainPlugin::processBlock (buffer, midi);
+                }
+                std::function<void()> checkpoint;
+            };
+            std::array<ProbePlugin*, 3> plugins {};
+            int index = 0;
+            for (auto* chain : { engine.getChannelChain (session.channels[0].id), engine.getFxChain (session.fx[0].id), &engine.getMasterChain() })
+            {
+                auto plugin = std::make_unique<ProbePlugin>();
+                plugins[(size_t) index++] = plugin.get();
+                chain->addPlugin (std::move (plugin));
+            }
+            engine.getObsSender().setEnabled (true);
+            struct Ring
+            {
+                HANDLE handle = nullptr;
+                lm_obs_ring_header* header = nullptr;
+                ~Ring() { if (header != nullptr) UnmapViewOfFile (header); if (handle != nullptr) CloseHandle (handle); }
+            } ring;
+            ring.handle = OpenFileMappingW (FILE_MAP_READ, FALSE, mapping.toWideCharPointer());
+            if (ring.handle != nullptr) ring.header = static_cast<lm_obs_ring_header*> (MapViewOfFile (ring.handle, FILE_MAP_READ, 0, 0, 0));
+            expect (ring.header != nullptr);
+            if (ring.header == nullptr) return;
+            std::array<float, 1024> samples;
+            samples.fill (0.25f);
+            const float* inputs[] { samples.data() };
+            auto inputBlock = [&] { input->callback->audioDeviceIOCallbackWithContext (inputs, 1, nullptr, 0, input->buffer, {}); };
+            for (int i = 0; i < 32; ++i) inputBlock();
+            auto expectedEpoch = lm_obs_load_acquire (&ring.header->epoch);
+            std::array<int, 3> prepares {}, releases {};
+            for (size_t i = 0; i < plugins.size(); ++i)
+            {
+                prepares[i] = plugins[i]->prepareCount;
+                releases[i] = plugins[i]->releaseCount;
+            }
+            int inputBlocks = 0, lifecycleCalls = 0, lostBlocks = 0, changedEpochs = 0, damagedBlocks = 0;
+            auto probeInput = [&]
+            {
+                const auto before = lm_obs_load_acquire (&ring.header->write_frames);
+                inputBlock();
+                ++inputBlocks;
+                if (lm_obs_load_acquire (&ring.header->write_frames) != before + input->buffer) ++lostBlocks;
+                else
+                {
+                    const auto* pcm = reinterpret_cast<const float*> (reinterpret_cast<const char*> (ring.header) + ring.header->data_offset);
+                    for (int i = 0; i < input->buffer; ++i)
+                    {
+                        const auto offset = (size_t) ((before + i) % LM_OBS_CAPACITY_FRAMES) * 2;
+                        if (std::abs (pcm[offset] - 0.25f) > 1.0e-5f || std::abs (pcm[offset + 1] - 0.25f) > 1.0e-5f)
+                        {
+                            ++damagedBlocks;
+                            break;
+                        }
+                    }
+                }
+                if (lm_obs_load_acquire (&ring.header->epoch) != expectedEpoch) ++changedEpochs;
+            };
+            fake->onOutputLifecycle = [&] { ++lifecycleCalls; probeInput(); };
+            for (const auto& record : fake->records)
+                if (record->input.isEmpty() && record->output.isNotEmpty()) record->onOutputLifecycle = fake->onOutputLifecycle;
+            auto recover = [&]
+            {
+                const auto deadline = juce::Time::getMillisecondCounterHiRes() + 1500.0;
+                while (! engine.isMonitorRunning() && juce::Time::getMillisecondCounterHiRes() < deadline)
+                {
+                    probeInput();
+                    dispatchMessages();
+                    juce::Thread::sleep (2);
+                }
+                expect (engine.isMonitorRunning());
+            };
+            auto checkMonitorAudio = [&]
+            {
+                const auto output = fake->playingOutput();
+                expect (output != nullptr && output->callback != nullptr);
+                if (output == nullptr || output->callback == nullptr) return;
+                juce::AudioBuffer<float> audio (2, output->buffer);
+                double nextInput = 0.0;
+                for (int block = 0; block < 120; ++block)
+                {
+                    const double time = block * output->buffer / output->rate;
+                    while (nextInput <= time)
+                    {
+                        probeInput();
+                        nextInput += input->buffer / input->rate;
+                    }
+                    output->callback->audioDeviceIOCallbackWithContext (nullptr, 0, audio.getArrayOfWritePointers(), 2, output->buffer, {});
+                }
+                expectWithinAbsoluteError (audio.getSample (0, output->buffer - 1), 0.25f, 1.0e-5f);
+                expectWithinAbsoluteError (audio.getSample (1, output->buffer - 1), 0.25f, 1.0e-5f);
+            };
+            for (const auto format : { std::pair<double, int> { 48000.0, 512 }, { 44100.0, 512 } })
+            {
+                const auto oldOutput = fake->playingOutput();
+                const auto before = lm_obs_load_acquire (&ring.header->write_frames);
+                const int blocksBefore = inputBlocks, callsBefore = lifecycleCalls;
+                oldOutput->callback->audioDeviceStopped();
+                oldOutput->rate = format.first;
+                oldOutput->buffer = format.second;
+                oldOutput->callback->audioDeviceAboutToStart (oldOutput->device);
+                expect (! engine.isMonitorRunning());
+                recover();
+                const auto output = fake->playingOutput();
+                expect (output != nullptr && output != oldOutput);
+                if (output != nullptr)
+                {
+                    expectEquals (output->buffer, format.second);
+                    expectEquals (output->rate, format.first);
+                }
+                expectEquals (lm_obs_load_acquire (&ring.header->epoch), expectedEpoch);
+                expectGreaterThan (lifecycleCalls, callsBefore);
+                expectEquals (lm_obs_load_acquire (&ring.header->write_frames), before + int64_t (inputBlocks - blocksBefore) * input->buffer);
+                for (size_t i = 0; i < plugins.size(); ++i)
+                {
+                    expectEquals (plugins[i]->prepareCount, prepares[i]);
+                    expectEquals (plugins[i]->releaseCount, releases[i]);
+                }
+                checkMonitorAudio();
+            }
+            expectEquals (lostBlocks, 0);
+            expectEquals (changedEpochs, 0);
+            expectEquals (damagedBlocks, 0);
+
+            beginTest ("N2: monitor retirement waits for the graph's last reference without detaching or waiting");
+            const auto retiring = fake->playingOutput();
+            retiring->callback->audioDeviceStopped();
+            retiring->buffer = 128;
+            retiring->callback->audioDeviceAboutToStart (retiring->device);
+            const auto devicesBefore = fake->records.size();
+            bool checkpointReached = false;
+            plugins[0]->checkpoint = [&]
+            {
+                if (checkpointReached) return;
+                checkpointReached = true;
+                (engine.*member (PollMonitorMaintenance {}))();
+                expect (retiring->callback != nullptr && retiring->playing, "The in-flight graph still owns the old monitor");
+                expect (fake->records.size() == devicesBefore, "A maintenance tick must defer while the callback holds a reference");
+            };
+            probeInput();
+            plugins[0]->checkpoint = {};
+            expect (checkpointReached);
+            (engine.*member (PollMonitorMaintenance {}))();
+            expect (retiring->callback == nullptr && ! retiring->playing);
+            expect (engine.isMonitorRunning());
+            expectEquals (lm_obs_load_acquire (&ring.header->epoch), expectedEpoch);
+            expectEquals (lostBlocks, 0);
+            expectEquals (damagedBlocks, 0);
+            checkMonitorAudio();
+
+            beginTest ("N2: an input format change still prepares DSP and bumps OBS epoch exactly once");
+            expectedEpoch = lm_obs_load_acquire (&ring.header->epoch);
+            input->callback->audioDeviceStopped();
+            input->rate = 44100.0;
+            input->buffer = 128;
+            input->callback->audioDeviceAboutToStart (input->device);
+            ++expectedEpoch;
+            expectEquals (lm_obs_load_acquire (&ring.header->epoch), expectedEpoch);
+            recover();
+            expectEquals (lm_obs_load_acquire (&ring.header->epoch), expectedEpoch);
+            expectEquals (lm_obs_load_acquire (&ring.header->sample_rate), int64_t (44100));
+            for (size_t i = 0; i < plugins.size(); ++i)
+            {
+                expectEquals (plugins[i]->prepareCount, prepares[i] + 1);
+                expectEquals (plugins[i]->releaseCount, releases[i] + 1);
+            }
+            checkMonitorAudio();
+            // Clear captures before the engine and fake devices are destroyed.
+            fake->onOutputLifecycle = {};
+            for (const auto& record : fake->records) record->onOutputLifecycle = {};
+        }
+    }
+};
+static LiveMixRound9Tests liveMixRound9Tests;
 
 class LiveMixDeviceUiTests : public juce::UnitTest
 {

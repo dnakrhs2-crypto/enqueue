@@ -195,6 +195,7 @@ private:
     juce::AudioIODeviceType* findType (const juce::String& name);
     void ensureCallback();
     void removeCallback();
+    struct MonitorAccess;
     void timerCallback() override; // device lifecycle work, never posted from either audio callback
     int outputFirst (int requested) const noexcept;
     ChannelNode* findChannel (const juce::Uuid& id) const noexcept;
@@ -205,8 +206,12 @@ private:
     PluginHost pluginHost;
     ObsSender obsSender;
     bool callbackAdded = false;
-    // Replaced only with the graph callback detached; the monitor consumer never touches the graph.
+    // Ownership stays on the message thread. Unpublish, then observe no readers before stop/destruction.
+    // The graph and input lifecycle callbacks only use MonitorAccess; neither waits for a rebuild.
     std::unique_ptr<MonitorOutput> monitor;
+    std::atomic<MonitorOutput*> publishedMonitor { nullptr };
+    std::atomic<unsigned> monitorReaders { 0 };
+    std::atomic<bool> monitorRestartRequested { false }; // an input restart while the monitor is unpublished
     MixDevice openedDevice;
     std::atomic<bool> splitMonitor { false }, stereoOutputsOnly { false };
 

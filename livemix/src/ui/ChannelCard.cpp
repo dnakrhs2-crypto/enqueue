@@ -211,7 +211,7 @@ ChannelCard::ChannelCard (MixDocument& doc, const juce::Uuid& id) : document (do
     directChip.onClick = [this] { commitOutput(); };
     addAndMakeVisible (directChip);
     directCombo.setWantsKeyboardFocus (false);
-    directCombo.onChange = [this] { commitOutput(); };
+    directCombo.onChange = [this] { commitOutput (true); };
     addAndMakeVisible (directCombo);
     muteGroupChip.setTooltip (ko ("켜 두면 마이크 뮤트그룹 핫키가 이 마이크를 함께 뮤트합니다 (핫키는 설정에서)"));
     muteGroupChip.onClick = [this]
@@ -392,18 +392,24 @@ void ChannelCard::commitInput()
     document.setChannelInput (channelId, first, stereoToggle.getToggleState());
 }
 
-void ChannelCard::commitOutput()
+void ChannelCard::commitOutput (bool pairSelected)
 {
     if (refreshing)
         return;
 
     const auto* c = channel();
+    if (c == nullptr)
+        return;
+
     const int sel = directCombo.getSelectedId();
-    MixOutput output;
+    auto output = c->output;
     output.master = masterChip.getToggleState();
     output.direct = directChip.getToggleState();
-    // no matching pair (e.g. a saved 7-8 on a 4-out device): keep the saved pair, do not fall to 1-2
-    output.directFirst = sel > 0 ? sel - 1 : (c != nullptr ? c->output.directFirst : 2);
+    // The effective Windows pair is display-only. Toggle clicks always retain the saved ASIO pair.
+    auto& engine = document.getEngine();
+    if (pairSelected && sel > 0 && directCombo.isEnabled() && directCombo.getNumItems() > 1
+        && engine.isDeviceRunning() && engine.getNumDeviceOutputs() >= 4 && engine.getOpenDevice().isAsio())
+        output.directFirst = sel - 1;
     document.setChannelOutput (channelId, output);
 }
 

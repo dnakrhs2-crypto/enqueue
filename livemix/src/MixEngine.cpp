@@ -45,6 +45,22 @@ namespace
     }
 }
 
+// Sequential consistency orders reader entry before pointer acquisition and unpublishing before the
+// reader-count check. A reader of the old pointer must finish before the message thread can reclaim it.
+// No retry, allocation, lock or wait on the audio thread (including the busy-graph silence path).
+struct MixEngine::MonitorAccess
+{
+    explicit MonitorAccess (MixEngine& e) noexcept : engine (e)
+    {
+        engine.monitorReaders.fetch_add (1);
+        output = engine.publishedMonitor.load();
+    }
+    ~MonitorAccess() { engine.monitorReaders.fetch_sub (1); }
+    MixEngine& engine;
+    MonitorOutput* output = nullptr;
+};
+static_assert (std::atomic<MonitorOutput*>::is_always_lock_free && std::atomic<unsigned>::is_always_lock_free);
+
 MixEngine::MixEngine (const juce::String& obsMappingName) : obsSender (obsMappingName)
 {
     prepare (48000.0, 256);
@@ -99,6 +115,8 @@ void MixEngine::ensureCallback()
     startTimer (50);
     if (! callbackAdded)
     {
+        monitorRestartRequested.store (false, std::memory_order_release);
+        publishedMonitor.store (monitor.get());
         deviceManager.addAudioCallback (this);
         callbackAdded = true;
     }
@@ -111,6 +129,8 @@ void MixEngine::removeCallback()
         deviceManager.removeAudioCallback (this);
         callbackAdded = false;
     }
+    publishedMonitor.store (nullptr);
+    monitorRestartRequested.store (false, std::memory_order_release);
 }
 
 juce::String MixEngine::openAllChannels()
@@ -323,24 +343,35 @@ void MixEngine::shutdown()
 
 bool MixEngine::isMonitorRunning() const noexcept
 {
-    return isDeviceRunning() && (isSplitMonitor() ? monitor != nullptr && monitor->isRunning() : getNumDeviceOutputs() > 0);
+    return isDeviceRunning() && (isSplitMonitor() ? monitor != nullptr && monitor->isRunning()
+                                && publishedMonitor.load() != nullptr && ! monitorRestartRequested.load (std::memory_order_acquire)
+                                : getNumDeviceOutputs() > 0);
 }
 
 void MixEngine::timerCallback()
 {
-    if (! isSplitMonitor() || monitor == nullptr || ! monitor->needsRestart() || ! isDeviceRunning()) return;
+    if (! isSplitMonitor() || monitor == nullptr || ! isDeviceRunning()) return;
     auto* input = deviceManager.getCurrentAudioDevice();
     auto* type = findType (openedDevice.type);
     if (input == nullptr || type == nullptr || ! input->isOpen()) return;
+    // Consume only requests made before this attempt; input restarts during close/open must survive it.
+    const bool inputRestart = monitorRestartRequested.exchange (false, std::memory_order_acq_rel);
+    if (! monitor->needsRestart() && ! inputRestart) return;
 
-    // Joining the graph first makes replacing the producer's monitor pointer and all ASRC storage safe.
-    removeCallback();
+    // Leave input DSP and OBS running throughout output close/open/start. A callback holding the old
+    // pointer finishes normally; new callbacks skip monitor delivery until the replacement is ready.
+    publishedMonitor.store (nullptr);
+    if (monitorReaders.load() != 0)
+    {
+        monitorRestartRequested.store (true, std::memory_order_release);
+        return; // retry on the next timer tick, never wait for the graph
+    }
     monitor->stop(); // join the output callback before reading its last announced format
     const auto rate = monitor->getRestartOutputRate();
     const auto period = monitor->getRestartOutputPeriod();
     monitor = std::make_unique<MonitorOutput>();
     monitor->start (*type, openedDevice.output, input->getCurrentSampleRate(), input->getCurrentBufferSizeSamples(), period, rate);
-    ensureCallback(); // a failed rebuild stays stopped and is visible until the operator retries
+    publishedMonitor.store (monitor.get()); // a failed rebuild stays stopped and visible until the operator retries
     openedDevice = getOpenDevice();
 }
 
@@ -407,6 +438,8 @@ void MixEngine::renderBlock (const float* const* inputs, int numInputs, float* c
     if (numSamples <= 0)
         return;
 
+    const MonitorAccess monitorAccess (*this);
+    auto* const monitorOutput = monitorAccess.output;
     // the graph is swapped on the message thread under this lock (a structural edit, a session): the callback never
     // waits for it - this block stays silent (the outputs are cleared above) rather than stalling the driver
     const juce::ScopedTryLock sl (lock);
@@ -414,8 +447,8 @@ void MixEngine::renderBlock (const float* const* inputs, int numInputs, float* c
     if (! sl.isLocked())
     {
         obsSender.writeSilence (numSamples);
-        if (isSplitMonitor() && monitor != nullptr)
-            monitor->push (nullptr, nullptr, numSamples);
+        if (isSplitMonitor() && monitorOutput != nullptr)
+            monitorOutput->push (nullptr, nullptr, numSamples);
         return;
     }
 
@@ -427,7 +460,7 @@ void MixEngine::renderBlock (const float* const* inputs, int numInputs, float* c
     for (int offset = 0; offset < numSamples; offset += chunkSize)
     {
         const int n = juce::jmin (chunkSize, numSamples - offset);
-        const bool split = isSplitMonitor() && monitor != nullptr;
+        const bool split = isSplitMonitor();
         if (split) monitorStage.clear (0, n);
         auto* const* routedOutputs = split ? monitorStage.getArrayOfWritePointers() : outputs;
         const int routedCount = split ? 2 : numOutputs;
@@ -627,7 +660,8 @@ void MixEngine::renderBlock (const float* const* inputs, int numInputs, float* c
         loudness.process (masterBus.getReadPointer (0), masterBus.getReadPointer (1), n);
         obsSender.write (masterBus.getReadPointer (0), masterBus.getReadPointer (1), n);
         addToOutputs (routedOutputs, routedCount, outputFirst (master.outputFirst.load (std::memory_order_relaxed)), masterBus, routedOffset, n);
-        if (split) monitor->push (monitorStage.getReadPointer (0), monitorStage.getReadPointer (1), n);
+        if (split && monitorOutput != nullptr)
+            monitorOutput->push (monitorStage.getReadPointer (0), monitorStage.getReadPointer (1), n);
     }
 }
 
@@ -648,9 +682,17 @@ void MixEngine::audioDeviceAboutToStart (juce::AudioIODevice* device)
 {
     const double sr = device->getCurrentSampleRate();
     const int bs = device->getCurrentBufferSizeSamples();
-    if (isSplitMonitor() && monitor != nullptr
-        && (monitor->getInputSampleRate() != sr || monitor->getInputPeriod() != bs))
-        monitor->requestRestart();
+    const MonitorAccess monitorAccess (*this);
+    if (isSplitMonitor())
+    {
+        if (auto* output = monitorAccess.output)
+        {
+            if (output->getInputSampleRate() != sr || output->getInputPeriod() != bs)
+                output->requestRestart();
+        }
+        else
+            monitorRestartRequested.store (true, std::memory_order_release);
+    }
     prepare (sr > 0.0 ? sr : 48000.0, bs > 0 ? bs : 256);
     numDeviceInputs.store (device->getActiveInputChannels().countNumberOfSetBits(), std::memory_order_relaxed);
     numDeviceOutputs.store (isSplitMonitor() ? 2 : device->getActiveOutputChannels().countNumberOfSetBits(), std::memory_order_relaxed);
@@ -662,14 +704,24 @@ void MixEngine::audioDeviceAboutToStart (juce::AudioIODevice* device)
 void MixEngine::audioDeviceStopped()
 {
     deviceRunning.store (false, std::memory_order_release);
-    if (isSplitMonitor() && monitor != nullptr) monitor->requestRestart();
+    const MonitorAccess monitorAccess (*this);
+    if (isSplitMonitor())
+    {
+        if (auto* output = monitorAccess.output) output->requestRestart();
+        else monitorRestartRequested.store (true, std::memory_order_release);
+    }
     dspLoad.store (0.0, std::memory_order_relaxed);
 }
 
 void MixEngine::audioDeviceError (const juce::String&)
 {
     deviceRunning.store (false, std::memory_order_release);   // the status line says "오디오 멈춤" instead of pretending
-    if (isSplitMonitor() && monitor != nullptr) monitor->requestRestart();
+    const MonitorAccess monitorAccess (*this);
+    if (isSplitMonitor())
+    {
+        if (auto* output = monitorAccess.output) output->requestRestart();
+        else monitorRestartRequested.store (true, std::memory_order_release);
+    }
 }
 
 //==============================================================================
