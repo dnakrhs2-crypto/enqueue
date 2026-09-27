@@ -58,7 +58,10 @@ def record(mode, seconds, writer_args):
 
 
 def extract(path):
-    wav = os.path.join(tempfile.gettempdir(), "livemix_obs_check.wav")
+    # one file per call: two soaks ending a segment at the same moment once shared a fixed name and analysed each
+    # other's half-written audio (14:42 run: 720 s and 19577 false faults)
+    fd, wav = tempfile.mkstemp(prefix="livemix_obs_check_%d_" % os.getpid(), suffix=".wav")
+    os.close(fd)
     subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-i", path, "-vn", "-acodec", "pcm_f32le", wav],
                    check=True, creationflags=subprocess.CREATE_NO_WINDOW)
     return wav
@@ -123,7 +126,11 @@ def main():
     ap.add_argument("--analyze", default="", help="analyse this recording instead of recording")
     a = ap.parse_args()
     path = a.analyze or record(a.mode, a.seconds, ["--ppm", str(a.ppm)] + a.writer.split())
-    result = analyze(extract(path))
+    wav = extract(path)
+    try:
+        result = analyze(wav)
+    finally:
+        os.remove(wav)
     result.update({"recording": path, "mode": a.mode, "ppm": a.ppm})
     print(json.dumps(result, ensure_ascii=False, indent=1))
 

@@ -75,7 +75,11 @@ def main():
             with Obs() as obs:
                 path = obs.call("StopRecord")["outputPath"]
             time.sleep(2.0)
-            result = analyze(extract(path))
+            wav = extract(path)
+            try:
+                result = analyze(wav)
+            finally:
+                os.remove(wav)
             result["file"] = path
             result["at_hours"] = round((done + length) / 3600.0, 2)
             report["segments"].append(result)
