@@ -121,7 +121,42 @@ def build(preset, skip_tests):
         run(["ctest", "--preset", preset + "-release"] + (["-R", APP["ctest_filter"]] if APP.get("ctest_filter") else []))
 
 
+def stage_obs_plugin(source_dir):
+    """Build and bundle LiveMix's OBS plugin for both local packages and releases."""
+    import ctypes
+    from ctypes import wintypes
+
+    plugin_dir = ROOT / "obs-plugin"
+    if not (plugin_dir / "build_x64").exists():
+        run(["cmake", "--preset", "windows-x64"], cwd=plugin_dir)
+    run(["cmake", "--build", "--preset", "windows-x64"], cwd=plugin_dir)
+
+    rundir = plugin_dir / "build_x64/rundir/RelWithDebInfo"
+    dll = rundir / "livemix-obs.dll"
+    locale_dir = rundir / "livemix-obs/locale"
+    for required in (dll, locale_dir / "en-US.ini", locale_dir / "ko-KR.ini"):
+        if not required.is_file():
+            sys.exit("LiveMix OBS plugin build is incomplete: missing %s" % required)
+    locales = sorted(locale_dir.glob("*.ini"))
+
+    # The app compares VERSIONINFO when deciding whether to install or update the plugin.
+    version_size = ctypes.WinDLL("version").GetFileVersionInfoSizeW
+    version_size.argtypes = [wintypes.LPCWSTR, ctypes.POINTER(wintypes.DWORD)]
+    version_size.restype = wintypes.DWORD
+    if not version_size(str(dll), None):
+        sys.exit("LiveMix OBS plugin DLL has no VERSIONINFO: %s (rebuild the plugin with its version resource)" % dll)
+
+    destination = pathlib.Path(source_dir) / "obs-plugin/livemix-obs"
+    staged_locales = destination / "data/locale"
+    staged_locales.mkdir(parents=True, exist_ok=True)
+    for original, copied in [(dll, destination / dll.name)] + [(p, staged_locales / p.name) for p in locales]:
+        shutil.copy2(original, copied)
+        print("staged OBS plugin:", original, "->", copied, flush=True)
+
+
 def make_installer(iscc, version, source_dir, output_dir, tools_dir=""):
+    if APP["name"] == "LiveMix":
+        stage_obs_plugin(source_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     defines = ["/DAppVersion=" + version, "/DSourceDir=" + str(source_dir), "/DOutputDir=" + str(output_dir)]
     if tools_dir and os.path.isdir(tools_dir):
