@@ -24,7 +24,10 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 RUNDIR = os.environ.get("LMOBS_TEST_PLUGIN_DIR") or os.path.normpath(
     os.path.join(HERE, "..", "..", "obs-plugin", "build_x64", "rundir", "RelWithDebInfo"))
 PORT = int(os.environ.get("LMOBS_TEST_PORT", "4466"))
-RING = os.environ.get("LMOBS_TEST_RING", "")
+# The test OBS reads a TEST ring unless told otherwise: a test must never read (or a fake writer write) the ring of a
+# LiveMix that is live on this PC. LMOBS_TEST_RING=real reads the real ring (a real LiveMix end-to-end check).
+_ring_env = os.environ.get("LMOBS_TEST_RING", "")
+RING = "" if _ring_env.lower() == "real" else (_ring_env or "Local\\LiveMix.ObsAudio.test")
 
 
 def write(path, text):

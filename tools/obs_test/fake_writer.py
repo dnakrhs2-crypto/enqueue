@@ -8,11 +8,14 @@ The tone is written against the writer's own frame counter while the frames are 
 second, i.e. like an audio interface whose crystal runs ppm fast. Layout = livemix/shared/lm_obs_protocol.h (v1):
 header 256 bytes (epoch @32, sample_rate @40, write_frames @48, heartbeat_qpc @56, qpc_frequency @64,
 send_enabled @72, writer_pid @80, silent_frames @88, in-flight end @96), PCM float32 interleaved stereo after it.
-The mapping name is the real one, so a running LiveMix must not be sending at the same time.
+It writes a test ring (Local\\LiveMix.ObsAudio.test) that the portable test OBS reads; LMOBS_TEST_RING overrides it.
 """
 import argparse, ctypes, math, mmap, os, struct, sys, time
 
-NAME = os.environ.get("LMOBS_TEST_RING") or "Local\\LiveMix.ObsAudio.v1"   # a test OBS can read another ring
+# A test ring by default (the portable test OBS reads the same one); LMOBS_TEST_RING=real writes the real LiveMix ring
+# - only for a deliberate check with no LiveMix running, since two writers on one ring corrupt each other.
+_ring_env = os.environ.get("LMOBS_TEST_RING", "")
+NAME = "Local\\LiveMix.ObsAudio.v1" if _ring_env.lower() == "real" else (_ring_env or "Local\\LiveMix.ObsAudio.test")
 MAGIC, MAJOR, MINOR = 0x424F4D4C, 1, 0
 HEADER, CAPACITY, CHANNELS = 256, 32768, 2
 OFF = dict(epoch=32, sample_rate=40, write_frames=48, heartbeat_qpc=56, qpc_frequency=64,
