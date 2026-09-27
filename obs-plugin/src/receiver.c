@@ -16,6 +16,7 @@
 #define LM_MAX_TARGET_SECONDS 0.200
 #define LM_HEADROOM_SECONDS 0.003
 #define LM_HEADROOM_BUCKETS 201 /* Two seconds, in 10 ms buckets. */
+#define LM_UNDERRUN_GROWTHS 20 /* At most 200 ms / 10 ms of provisional growth. */
 #define LM_FADE_SECONDS 0.010
 #define LM_RING_BYTES (sizeof(lm_obs_ring_header) + LM_OBS_CAPACITY_FRAMES * 2u * sizeof(float))
 
@@ -35,6 +36,11 @@ typedef struct lm_fill_minimum {
 	int64_t bucket;
 	double relative_fill;
 } lm_fill_minimum;
+
+typedef struct lm_target_growth {
+	int64_t when;
+	double frames;
+} lm_target_growth;
 
 struct lm_connection {
 	lm_connection_config config;
@@ -69,7 +75,10 @@ struct lm_receiver {
 	int input_rate, output_rate;
 	double target;
 	lm_fill_minimum fill_minima[LM_HEADROOM_BUCKETS];
-	bool headroom_active;
+	lm_target_growth underrun_growth[LM_UNDERRUN_GROWTHS];
+	int64_t playing_since, last_written, last_block;
+	int64_t last_write_heartbeat;
+	double pending_writer_wait, writer_headroom;
 	bool online, playing;
 	int fade_frames, fade_in, tail_left;
 	float tail[2], last[2];
@@ -477,6 +486,8 @@ static void begin_prefill(lm_receiver *r, int64_t written, bool fresh_only)
 	if (r->playing)
 		start_tail(r);
 	r->playing = false;
+	r->playing_since = 0;
+	memset(r->fill_minima, 0, sizeof(r->fill_minima));
 	r->fifo_frames = 0;
 	lm_asrc *asrc = r->bank[(int)lm_obs_load_acquire(&r->active_bank)].state;
 	int64_t queue_target = (int64_t)ceil(r->target - lm_asrc_latency_input_frames(asrc));
@@ -532,12 +543,9 @@ static void record_fill(lm_receiver *r, double fill)
 	lm_obs_store_release(&r->connection->last_fill_us, fill_us);
 }
 
-static void grow_target(lm_receiver *r, double seconds)
+static void set_target(lm_receiver *r, double target)
 {
-	/* At the highest supported rates the ring itself is smaller than 200 ms. */
-	double limit = fmin(r->input_rate * LM_MAX_TARGET_SECONDS, LM_OBS_CAPACITY_FRAMES - 1.0);
-	double target = fmin(r->target + r->input_rate * seconds, limit);
-	if (target <= r->target)
+	if (target == r->target)
 		return;
 	if (r->playing) {
 		/* Keep the integrator, correction and acquisition clock. Rebase the
@@ -548,19 +556,98 @@ static void grow_target(lm_receiver *r, double seconds)
 		r->drift.target = target;
 	}
 	r->target = target;
+	memset(r->fill_minima, 0, sizeof(r->fill_minima));
 	lm_obs_store_release(&r->stat_target_us, (int64_t)llround(target * 1000000.0 / r->input_rate));
 }
 
-static void check_headroom(lm_receiver *r, double fill, int frames, int64_t now)
+static void grow_target(lm_receiver *r, double seconds)
 {
-	if (!r->headroom_active)
-		return; /* Initial prefill is not evidence of insufficient headroom. */
+	/* At the highest supported rates the ring itself is smaller than 200 ms. */
+	double limit = fmin(r->input_rate * LM_MAX_TARGET_SECONDS, LM_OBS_CAPACITY_FRAMES - 1.0);
+	set_target(r, fmin(r->target + r->input_rate * seconds, limit));
+}
+
+static void settle_underrun_growth(lm_receiver *r, int64_t now)
+{
+	const lm_obs_ring_header *h = r->view ? r->view->header : NULL;
+	if (!h || !valid_header(h) || lm_obs_load_acquire(&h->epoch) != r->epoch ||
+	    lm_obs_load_acquire(&h->sample_rate) != r->input_rate)
+		return;
+	int64_t frequency = r->connection->frequency;
+	int64_t heartbeat = lm_obs_load_acquire(&h->heartbeat_qpc);
+	bool stale = heartbeat >= 0 && now > heartbeat && now - heartbeat > frequency / 2;
+	double undo = 0.0;
+	for (int i = 0; i < LM_UNDERRUN_GROWTHS; ++i) {
+		lm_target_growth *growth = &r->underrun_growth[i];
+		if (growth->frames == 0.0)
+			continue;
+		/* Check when the heartbeat became stale, even if pulls were paused.
+		 * Each increment expires separately if several underruns occur. */
+		if (stale && heartbeat - growth->when <= frequency / 2) {
+			undo += growth->frames;
+			growth->frames = 0.0;
+		} else if (now >= growth->when && now - growth->when > frequency) {
+			growth->frames = 0.0;
+		}
+	}
+	if (undo > 0.0)
+		set_target(r, r->target - undo);
+}
+
+static void grow_after_underrun(lm_receiver *r, int64_t now)
+{
+	double before = r->target;
+	grow_target(r, 0.010);
+	if (r->target == before)
+		return;
+	for (int i = 0; i < LM_UNDERRUN_GROWTHS; ++i) {
+		if (r->underrun_growth[i].frames == 0.0) {
+			r->underrun_growth[i].when = now;
+			r->underrun_growth[i].frames = r->target - before;
+			break;
+		}
+	}
+}
+
+static double writer_advance(lm_receiver *r, int64_t written, int64_t heartbeat, int64_t now)
+{
+	double age = now > heartbeat ? (double)(now - heartbeat) * r->input_rate / r->connection->frequency : 0.0;
+	if (written > r->last_written) {
+		int64_t block = written - r->last_written;
+		r->last_block = block < LM_OBS_CAPACITY_FRAMES ? block : LM_OBS_CAPACITY_FRAMES - 1;
+		/* Smoothing hides the time for which a block has not yet been
+		 * published. Reserve that observed headroom only after more PCM
+		 * confirms a live writer delay; an offline stall proves nothing
+		 * about the buffer needed during normal playback. */
+		if (heartbeat >= r->last_write_heartbeat &&
+		    heartbeat - r->last_write_heartbeat <= r->connection->frequency / 2)
+			r->writer_headroom = fmax(r->writer_headroom, r->pending_writer_wait);
+		r->pending_writer_wait = 0.0;
+		r->last_write_heartbeat = heartbeat;
+	} else if (written < r->last_written) {
+		r->last_block = 0;
+		r->pending_writer_wait = r->writer_headroom = 0.0;
+		r->last_write_heartbeat = heartbeat;
+	}
+	r->last_written = written;
+	r->pending_writer_wait = fmax(r->pending_writer_wait, age);
+	/* Only the controller's measurement is extrapolated. The ring reader,
+	 * FIFO and prefill continue to use exclusively published audio frames. */
+	return fmin(age, (double)r->last_block);
+}
+
+static void check_headroom(lm_receiver *r, double fill, int frames, int64_t now, int64_t heartbeat)
+{
+	if (!r->online || !r->playing || now < r->playing_since ||
+	    now - r->playing_since < r->connection->frequency)
+		return; /* Prefill, waits and the first second of playback are not steady audio. */
+	if (now > heartbeat &&
+	    (double)(now - heartbeat) * r->input_rate / r->connection->frequency > r->last_block)
+		return; /* An overdue writer may be stopped; wait for confirmed live delay. */
 	int64_t width = (r->connection->frequency + 99) / 100;
 	int64_t bucket = now / width + 1; /* Zero denotes an unused entry. */
 	lm_fill_minimum *sample = &r->fill_minima[bucket % LM_HEADROOM_BUCKETS];
-	double relative_fill = fill - r->target;
-	if (r->playing)
-		relative_fill -= r->drift.lp;
+	double relative_fill = fill - r->target - r->drift.lp;
 	if (sample->bucket != bucket) {
 		sample->bucket = bucket;
 		sample->relative_fill = relative_fill;
@@ -571,8 +658,7 @@ static void check_headroom(lm_receiver *r, double fill, int frames, int64_t now)
 	 * filtered fill error while playing, and credit later target increases.
 	 * This accounts for headroom already requested but not yet accumulated,
 	 * and protects against the controller draining an initially fuller queue.
-	 * A retained minimum cannot request the same headroom repeatedly. Low pulls
-	 * can still grow the target while an underrun waits for the writer. The
+	 * Growth clears the window so an old minimum cannot request it again. The
 	 * oldest bucket is retained until fully expired (at most 10 ms extra).
 	 * Storage and work are bounded regardless of callback size or rate. */
 	double minimum = relative_fill;
@@ -583,7 +669,9 @@ static void check_headroom(lm_receiver *r, double fill, int frames, int64_t now)
 			minimum = fmin(minimum, entry->relative_fill);
 	}
 	double required = r->input_rate * (frames / (double)r->output_rate + LM_HEADROOM_SECONDS);
-	if (minimum + r->target < required)
+	/* Unpublished block time and measured low fill are separate lower bounds,
+	 * not additive: the same writer delay must not count twice. */
+	if (fmin(minimum + r->target, r->target - r->writer_headroom) < required)
 		grow_target(r, 0.005);
 }
 
@@ -602,6 +690,7 @@ void lm_receiver_pull(lm_receiver *r, float *out_l, float *out_r, int frames, do
 	lm_obs_store_release(&c->last_kind, r->kind);
 	lm_obs_store_release(&c->last_pull, now);
 	lm_view *view = current_view(c);
+	settle_underrun_growth(r, now);
 	if (!view || !live_header(c, view->header, now)) {
 		if (r->online) {
 			int64_t written = r->view ? lm_obs_load_acquire(&r->view->header->write_frames) : 0;
@@ -634,10 +723,15 @@ void lm_receiver_pull(lm_receiver *r, float *out_l, float *out_r, int frames, do
 		r->epoch = epoch;
 		r->input_rate = input_rate;
 		r->output_rate = output_rate;
-		r->target = input_rate * LM_TARGET_SECONDS;
-		r->headroom_active = false;
-		memset(r->fill_minima, 0, sizeof(r->fill_minima));
-		lm_obs_store_release(&r->stat_target_us, 30000);
+		if (changed) {
+			r->target = input_rate * LM_TARGET_SECONDS;
+			r->last_written = written;
+			r->last_block = 0;
+			r->last_write_heartbeat = lm_obs_load_acquire(&h->heartbeat_qpc);
+			r->pending_writer_wait = r->writer_headroom = 0.0;
+			memset(r->underrun_growth, 0, sizeof(r->underrun_growth));
+			lm_obs_store_release(&r->stat_target_us, 30000);
+		}
 		r->fade_frames = (int)(output_rate * LM_FADE_SECONDS);
 		begin_prefill(r, written, false);
 		if (!changed && same_epoch && !r->online)
@@ -647,6 +741,8 @@ void lm_receiver_pull(lm_receiver *r, float *out_l, float *out_r, int frames, do
 		lm_obs_store_release(&r->stat_resync, lm_obs_load_acquire(&r->stat_resync) + 1);
 	}
 	lm_obs_store_release(&r->stat_connected, 1);
+	int64_t heartbeat = lm_obs_load_acquire(&h->heartbeat_qpc);
+	double advance = writer_advance(r, written, heartbeat, now);
 	if (!adopt_format(r, format_key(input_rate, output_rate))) {
 		emit(r, out_l, out_r, NULL, frames);
 		return;
@@ -659,8 +755,6 @@ void lm_receiver_pull(lm_receiver *r, float *out_l, float *out_r, int frames, do
 		lm_obs_store_release(&r->stat_resync, lm_obs_load_acquire(&r->stat_resync) + 1);
 		begin_prefill(r, written, false);
 	}
-	double fill = (double)(written - r->read_pos) + r->fifo_frames + lm_asrc_latency_input_frames(asrc);
-	check_headroom(r, fill, frames, now);
 	if (!r->playing) {
 		double available = (double)(written - r->read_pos);
 		record_fill(r, available);
@@ -673,10 +767,11 @@ void lm_receiver_pull(lm_receiver *r, float *out_l, float *out_r, int frames, do
 		lm_asrc_set_correction_ppm(asrc, 0.0);
 		lm_drift_init(&r->drift, r->target, out_rate / frames);
 		r->playing = true;
-		r->headroom_active = true;
+		r->playing_since = now;
 		r->fade_in = 0;
 	}
-	fill = (double)(written - r->read_pos) + r->fifo_frames + lm_asrc_latency_input_frames(asrc);
+	double fill = (double)(written - r->read_pos) + advance + r->fifo_frames +
+		      lm_asrc_latency_input_frames(asrc);
 	record_fill(r, fill);
 	double ppm = lm_drift_update(&r->drift, fill, frames / out_rate);
 	lm_asrc_set_correction_ppm(asrc, ppm);
@@ -717,13 +812,15 @@ void lm_receiver_pull(lm_receiver *r, float *out_l, float *out_r, int frames, do
 		if (made < count) {
 			lm_obs_store_release(&r->stat_under, lm_obs_load_acquire(&r->stat_under) + 1);
 			lm_obs_store_release(&r->stat_resync, lm_obs_load_acquire(&r->stat_resync) + 1);
-			grow_target(r, 0.010);
+			grow_after_underrun(r, now);
 			begin_prefill(r, lm_obs_load_acquire(&h->write_frames), true);
 			break;
 		}
 	}
 	if (offset < frames)
 		emit(r, out_l + offset, out_r + offset, NULL, frames - offset);
+	else
+		check_headroom(r, fill, frames, now, heartbeat); /* Only a fully played pull establishes headroom. */
 }
 
 bool lm_receiver_connected(const lm_receiver *r)

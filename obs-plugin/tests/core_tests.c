@@ -251,10 +251,20 @@ static bool test_stall_and_recovery(void)
 	bool ok = true;
 	CHECK(fixture_open(&f));
 	CHECK(writer_open(&f, (DWORD)RING_BYTES));
-	CHECK(warm_up(&f));
+	f.ppm = 100.0;
+	for (int i = 0; i < 3000; ++i)
+		tick(&f, true, true);
+	lm_receiver_stats saved, before, after;
+	lm_receiver_get_stats(f.receiver, &saved);
+	CHECK(settled(&f, f.value) && saved.target_ms == 30.0);
 	float previous = f.left[TEST_FRAMES - 1];
 	for (int i = 0; i < 300; ++i) {
 		tick(&f, false, true);
+		lm_receiver_get_stats(f.receiver, &before);
+		CHECK(before.target_ms <= saved.target_ms + 10.0);
+		CHECK(fabs(before.ppm) <= 300.0);
+		if (!before.connected)
+			CHECK(before.target_ms == saved.target_ms);
 		for (int j = 0; j < TEST_FRAMES; ++j) {
 			CHECK(fabsf(f.left[j] - previous) < 0.02f);
 			previous = f.left[j];
@@ -262,14 +272,185 @@ static bool test_stall_and_recovery(void)
 		if (i >= 10)
 			CHECK(silent(&f));
 	}
-	lm_receiver_stats before, after;
 	lm_receiver_get_stats(f.receiver, &before);
 	CHECK(!before.connected && before.underruns == 1);
 	f.value = -0.25f;
-	CHECK(warm_up(&f));
+	for (int i = 0; i < 1000; ++i) {
+		tick(&f, true, true);
+		lm_receiver_get_stats(f.receiver, &after);
+		CHECK(after.epoch == saved.epoch && after.target_ms == saved.target_ms);
+		CHECK(fabs(after.ppm) <= 300.0);
+		if (i >= 499) {
+			CHECK(fabs(after.fill_ms - after.target_ms) <= 3.0);
+			CHECK(settled(&f, f.value) && after.underruns == before.underruns);
+		}
+	}
 	CHECK(settled(&f, -0.25f));
 	lm_receiver_get_stats(f.receiver, &after);
 	CHECK(after.connected && after.resyncs > before.resyncs);
+	printf("  3 s stall: target %.3f -> %.3f ms, recovered fill=%.3f ms ppm=%.3f\n",
+	       saved.target_ms, after.target_ms, after.fill_ms, after.ppm);
+done:
+	fixture_close(&f);
+	return ok;
+}
+
+static bool test_recurring_stalls(void)
+{
+	fixture f;
+	bool ok = true;
+	lm_receiver_stats stats = {0};
+	double max_target = 0.0, max_ppm = 0.0;
+	CHECK(fixture_open(&f));
+	CHECK(writer_open(&f, (DWORD)RING_BYTES));
+	f.ppm = 100.0;
+	for (int i = 0; i < 30000; ++i) {
+		bool stalled = i >= 2000 && i % 2000 < 100;
+		tick(&f, !stalled, true);
+		lm_receiver_get_stats(f.receiver, &stats);
+		max_target = fmax(max_target, stats.target_ms);
+		max_ppm = fmax(max_ppm, fabs(stats.ppm));
+		CHECK(stats.target_ms <= 40.0 && fabs(stats.ppm) <= 300.0);
+		CHECK(stats.overruns == 0);
+		if (i >= 2000 && i % 2000 >= 600) {
+			CHECK(stats.target_ms == 30.0 && fabs(stats.fill_ms - stats.target_ms) <= 3.0);
+			CHECK(settled(&f, f.value));
+		}
+	}
+	CHECK(stats.underruns == 14 && stats.epoch == 1);
+done:
+	printf("  1 s stalls every 20 s for 5 min: max target=%.3f ms max |ppm|=%.3f, under=%llu\n",
+	       max_target, max_ppm, (unsigned long long)stats.underruns);
+	fixture_close(&f);
+	return ok;
+}
+
+static bool test_phase_locked_blocks(void)
+{
+	fixture f;
+	bool ok = true;
+	float samples[TEST_FRAMES];
+	lm_receiver_stats previous = {0}, stats = {0};
+	double min_ppm = 1000.0, max_ppm = -1000.0, max_step = 0.0;
+	CHECK(fixture_open(&f));
+	CHECK(writer_open(&f, (DWORD)RING_BYTES));
+	for (int i = 0; i < TEST_FRAMES; ++i)
+		samples[i] = f.value;
+	int64_t origin = f.now, block = 1;
+	for (int i = 1; i <= 360000; ++i) {
+		int64_t elapsed = i * (TEST_QPC / 100);
+		int64_t write_time;
+		/* 480 frames at 48000 * (1 + 20e-6) Hz, independent of the reader.
+		 * The phase crosses a complete 10 ms block every 500 seconds. */
+		while ((write_time = block * INT64_C(500000000000) / 50001) <= elapsed) {
+			lm_obs_write(f.header, f.pcm, samples, samples, TEST_FRAMES);
+			lm_obs_store_release(&f.header->heartbeat_qpc, origin + write_time);
+			++block;
+		}
+		lm_obs_store_release(&f.now, origin + elapsed);
+		lm_connection_poll(f.connection);
+		lm_receiver_pull(f.receiver, f.left, f.right, TEST_FRAMES, TEST_RATE);
+		lm_receiver_get_stats(f.receiver, &stats);
+		CHECK(stats.underruns == 0 && stats.overruns == 0 && stats.target_ms == 30.0);
+		if (i >= 6000) {
+			min_ppm = fmin(min_ppm, stats.ppm);
+			max_ppm = fmax(max_ppm, stats.ppm);
+			max_step = fmax(max_step, fabs(stats.fill_ms - previous.fill_ms));
+			CHECK(fabs(stats.ppm - 20.0) <= 30.0);
+			CHECK(fabs(stats.fill_ms - previous.fill_ms) <= 0.05);
+			CHECK(fabs(stats.fill_ms - stats.target_ms) <= 3.0 && settled(&f, f.value));
+		}
+		previous = stats;
+	}
+done:
+	printf("  +20 ppm, 480-frame blocks for 1 h: correction %.3f..%.3f ppm, max fill step=%.3f ms\n",
+	       min_ppm, max_ppm, max_step);
+	fixture_close(&f);
+	return ok;
+}
+
+static bool test_headroom_grace(void)
+{
+	fixture f;
+	bool ok = true;
+	CHECK(fixture_open(&f));
+	CHECK(writer_open(&f, (DWORD)RING_BYTES));
+	/* The connection first sees the mapping at one second: playback has
+	 * just started, although ample audio is already in the ring. */
+	for (int i = 0; i < 100; ++i)
+		tick(&f, true, true);
+	for (int pass = 0; pass < 2; ++pass) {
+		lm_receiver_stats before, after;
+		lm_receiver_get_stats(f.receiver, &before);
+		CHECK(before.connected && before.target_ms == (pass ? 40.0 : 30.0));
+		/* Leave 12 ms for a 10 ms pull: safe PCM, but below the 3 ms
+		 * headroom margin. A live heartbeat makes the fill unambiguous. */
+		int missing = (int)llround((before.target_ms - 12.0) * TEST_RATE / 1000.0);
+		int extra = missing - TEST_FRAMES;
+		while (extra > 0) {
+			int count = extra < TEST_FRAMES ? extra : TEST_FRAMES;
+			f.now += count * TEST_QPC / TEST_RATE;
+			lm_obs_store_release(&f.header->heartbeat_qpc, f.now);
+			lm_receiver_pull(f.receiver, f.left, f.right, count, TEST_RATE);
+			extra -= count;
+		}
+		f.now += TEST_QPC / 100;
+		lm_obs_store_release(&f.header->heartbeat_qpc, f.now);
+		lm_receiver_pull(f.receiver, f.left, f.right, TEST_FRAMES, TEST_RATE);
+		lm_receiver_get_stats(f.receiver, &after);
+		CHECK(after.target_ms == before.target_ms && after.underruns == before.underruns);
+		CHECK(settled(&f, f.value));
+		float samples[TEST_FRAMES];
+		for (int i = 0; i < TEST_FRAMES; ++i)
+			samples[i] = f.value;
+		while (missing > 0) {
+			int count = missing < TEST_FRAMES ? missing : TEST_FRAMES;
+			lm_obs_write(f.header, f.pcm, samples, samples, (uint32_t)count);
+			missing -= count;
+		}
+		if (pass == 0) {
+			for (int i = 0; i < 8; ++i) {
+				lm_obs_store_release(&f.header->heartbeat_qpc, f.now + TEST_QPC / 100);
+				tick(&f, false, true);
+			}
+			for (int i = 0; i < 10; ++i)
+				tick(&f, true, true);
+		}
+	}
+done:
+	fixture_close(&f);
+	return ok;
+}
+
+static bool test_live_underrun_wait(void)
+{
+	fixture f;
+	bool ok = true;
+	CHECK(fixture_open(&f));
+	CHECK(writer_open(&f, (DWORD)RING_BYTES));
+	CHECK(warm_up(&f));
+	lm_receiver_stats stats;
+	/* This writer remains alive but provides no PCM. Prefill cannot grow
+	 * the target, and the +10 ms becomes permanent after one live second. */
+	for (int i = 0; i < 120; ++i) {
+		lm_obs_store_release(&f.header->heartbeat_qpc, f.now + TEST_QPC / 100);
+		tick(&f, false, true);
+		lm_receiver_get_stats(f.receiver, &stats);
+		CHECK(stats.connected && stats.target_ms <= 40.0);
+		if (stats.underruns)
+			CHECK(stats.underruns == 1 && stats.target_ms == 40.0);
+	}
+	CHECK(stats.underruns == 1);
+	/* A later, unrelated stop must not undo that committed headroom. */
+	for (int i = 0; i < 300; ++i) {
+		tick(&f, false, true);
+		lm_receiver_get_stats(f.receiver, &stats);
+		CHECK(stats.target_ms == 40.0);
+	}
+	CHECK(!stats.connected);
+	CHECK(warm_up(&f));
+	lm_receiver_get_stats(f.receiver, &stats);
+	CHECK(stats.connected && stats.target_ms == 40.0 && stats.underruns == 1);
 done:
 	fixture_close(&f);
 	return ok;
@@ -695,15 +876,19 @@ static bool test_target_resets(void)
 	CHECK(warm_up(&f));
 	CHECK(grow_target(&f));
 	/* No epoch bump: a stale heartbeat followed by fresh audio is a reconnect. */
+	lm_receiver_get_stats(f.receiver, &stats);
+	double saved_target = stats.target_ms;
 	for (int i = 0; i < 60; ++i)
 		tick(&f, false, true);
 	CHECK(!lm_receiver_connected(f.receiver));
+	lm_receiver_get_stats(f.receiver, &stats);
+	CHECK(stats.target_ms == saved_target);
 	tick(&f, true, true);
 	lm_receiver_get_stats(f.receiver, &stats);
-	CHECK(stats.connected && stats.epoch == 2 && stats.target_ms == 30.0);
+	CHECK(stats.connected && stats.epoch == 2 && stats.target_ms == saved_target);
 	CHECK(warm_up(&f));
 	lm_receiver_get_stats(f.receiver, &stats);
-	CHECK(stats.target_ms == 30.0);
+	CHECK(stats.target_ms == saved_target);
 done:
 	fixture_close(&f);
 	return ok;
@@ -718,19 +903,25 @@ static bool test_target_slew(void)
 	f.ppm = 200.0;
 	for (int i = 0; i < 3000; ++i)
 		tick(&f, true, true);
-	/* An 18 ms writer delay takes the fill just below the headroom threshold,
-	 * with enough PCM left to keep playing. Acquisition has already finished. */
+	/* Audio is 18 ms late while the writer still heartbeats. There is enough
+	 * PCM left to keep playing. Acquisition has already finished. */
 	f.now += 8 * TEST_QPC / 1000;
 	lm_receiver_pull(f.receiver, f.left, f.right, 384, TEST_RATE);
 	lm_receiver_stats before, after;
 	lm_receiver_get_stats(f.receiver, &before);
 	CHECK(before.target_ms == 30.0 && before.ppm > 100.0);
 	f.now += TEST_QPC / 100;
+	lm_obs_store_release(&f.header->heartbeat_qpc, f.now);
 	lm_receiver_pull(f.receiver, f.left, f.right, TEST_FRAMES, TEST_RATE);
 	lm_receiver_get_stats(f.receiver, &after);
 	CHECK(after.target_ms == 35.0 && after.underruns == before.underruns);
 	CHECK(after.resyncs == before.resyncs && settled(&f, f.value));
 	CHECK(fabs(after.ppm - before.ppm) <= 20.0 / 100.0 + 0.002);
+	for (int i = 0; i < 20; ++i) {
+		tick(&f, true, true);
+		lm_receiver_get_stats(f.receiver, &after);
+		CHECK(after.target_ms == 35.0 && after.underruns == before.underruns);
+	}
 done:
 	fixture_close(&f);
 	return ok;
@@ -827,6 +1018,10 @@ int main(int argc, char **argv)
 	run_test("writer restart, retained mapping and bounded fade", test_restart_fade);
 	run_test("input and output rate changes", test_rate_change);
 	run_test("three-second writer stall and recovery without replay", test_stall_and_recovery);
+	run_test("recurring one-second writer stalls for five simulated minutes", test_recurring_stalls);
+	run_test("phase-locked 480-frame blocks at +20 ppm for one simulated hour", test_phase_locked_blocks);
+	run_test("headroom grace after initial playback and underrun recovery", test_headroom_grace);
+	run_test("live underrun wait and committed growth survives a later stop", test_live_underrun_wait);
 	run_test("one-second reader pause and overrun resync", test_overrun);
 	run_test("send disabled and re-enabled", test_send_disabled);
 	run_test("invalid mapping metadata", test_invalid_mapping);
@@ -840,7 +1035,7 @@ int main(int argc, char **argv)
 	run_test("adaptive target: 2048-frame writer at 44.1 kHz", test_blocks_44100);
 	run_test("adaptive target: 1024-frame filter pulls and 256-frame writer", test_filter_blocks);
 	run_test("adaptive target: recurring 80 ms writer starvation", test_periodic_starvation);
-	run_test("adaptive target: epoch, rate and reconnect resets", test_target_resets);
+	run_test("adaptive target: epoch/rate resets and same-epoch stall retention", test_target_resets);
 	run_test("adaptive target: headroom step preserves settled ppm slew", test_target_slew);
 	run_test("adaptive target: monotonic growth capped at 200 ms", test_target_cap);
 	run_test("+1000 ppm for two simulated hours", test_soak_positive);
