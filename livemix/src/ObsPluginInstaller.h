@@ -2,6 +2,8 @@
 
 #include <juce_core/juce_core.h>
 #include <functional>
+#include <map>
+#include <vector>
 
 namespace gocue::livemix
 {
@@ -22,6 +24,16 @@ struct ObsPluginInstaller
     static bool isInstalledAndCurrent (const Roots&);
     static Result install (const Roots&, juce::String& message);
 
+    struct RunningObs
+    {
+        juce::File image;
+        juce::uint64 version = 0; // native VERSIONINFO; 0 = unknown
+        bool portable = false;
+        bool needsUpdate() const noexcept;
+        juce::String versionString() const;
+    };
+    static RunningObs runningObsInfo (const juce::File& image, juce::uint64 version);
+
     // Shared by Main's single-instance decision, headless mode and the UI's elevation worker.
     static bool isInstallCommandLine (const juce::String&);
     static const char* resultName (Result);
@@ -32,5 +44,22 @@ struct ObsPluginInstaller
     static juce::String elevatedCommandLine (const juce::File& report);
     static Result runInstallCommandLine (const juce::String&, const Roots&, juce::String& message, bool& reported,
                                          const std::function<Result (juce::String&)>& elevate = installElevated);
+};
+
+/** Message-thread discovery, throttled to two seconds. Metadata lives only as long as its image is running. */
+class RunningObsDetector
+{
+public:
+    using ImageQuery = std::function<std::vector<juce::File>()>;
+    using VersionQuery = std::function<juce::uint64 (const juce::File&)>;
+    explicit RunningObsDetector (ImageQuery images = {}, VersionQuery version = {});
+    const std::vector<ObsPluginInstaller::RunningObs>& scan (double nowMs = juce::Time::getMillisecondCounterHiRes());
+
+private:
+    ImageQuery images;
+    VersionQuery version;
+    double nextScan = 0.0;
+    std::map<juce::String, ObsPluginInstaller::RunningObs> byImage;
+    std::vector<ObsPluginInstaller::RunningObs> running;
 };
 }

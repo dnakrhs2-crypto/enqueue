@@ -9,9 +9,54 @@ enum filter_mode { LM_REPLACE = 0, LM_MIX = 1 };
 
 typedef struct livemix_filter {
 	lm_receiver *receiver;
+	obs_source_t *source;
+	struct livemix_filter *next;
+	volatile LONG64 last_audio;
+	int64_t frequency;
+	bool reported_idle; /* management thread, under filters_lock */
 	volatile LONG mode;
 	float left[LM_FILTER_FRAMES], right[LM_FILTER_FRAMES];
 } livemix_filter;
+
+static SRWLOCK filters_lock = SRWLOCK_INIT;
+static livemix_filter *filters;
+
+static bool filter_is_idle(livemix_filter *f, int64_t now)
+{
+	return !f || lm_filter_is_idle(InterlockedCompareExchange64(&f->last_audio, 0, 0), now, f->frequency);
+}
+
+void livemix_filter_probe(void *context)
+{
+	(void)context;
+	LARGE_INTEGER now;
+	QueryPerformanceCounter(&now);
+	AcquireSRWLockExclusive(&filters_lock);
+	size_t count = 0, changed = 0;
+	for (livemix_filter *f = filters; f; f = f->next)
+		++count;
+	obs_source_t **sources = count ? calloc(count, sizeof(*sources)) : NULL;
+	if (sources) {
+		for (livemix_filter *f = filters; f; f = f->next) {
+			bool idle = filter_is_idle(f, now.QuadPart);
+			if (idle == f->reported_idle)
+				continue;
+			/* Retain each source while its filter data is protected. Release only
+			 * after unlocking: releasing the last reference can destroy a filter. */
+			obs_source_t *source = obs_source_get_ref(f->source);
+			if (source) {
+				f->reported_idle = idle;
+				sources[changed++] = source;
+			}
+		}
+	}
+	ReleaseSRWLockExclusive(&filters_lock);
+	for (size_t i = 0; i < changed; ++i) {
+		obs_source_update_properties(sources[i]);
+		obs_source_release(sources[i]);
+	}
+	free(sources);
+}
 
 static const char *filter_name(void *type_data)
 {
@@ -35,13 +80,19 @@ static void filter_destroy(void *data)
 	livemix_filter *f = data;
 	if (!f)
 		return;
+	AcquireSRWLockExclusive(&filters_lock);
+	livemix_filter **link = &filters;
+	while (*link && *link != f)
+		link = &(*link)->next;
+	if (*link)
+		*link = f->next;
+	ReleaseSRWLockExclusive(&filters_lock);
 	lm_receiver_destroy(f->receiver);
 	free(f);
 }
 
 static void *filter_create(obs_data_t *settings, obs_source_t *source)
 {
-	(void)source;
 	livemix_filter *f = calloc(1, sizeof(*f));
 	if (!f)
 		return NULL;
@@ -53,23 +104,41 @@ static void *filter_create(obs_data_t *settings, obs_source_t *source)
 		return NULL;
 	}
 	filter_update(f, settings);
+	LARGE_INTEGER frequency;
+	QueryPerformanceFrequency(&frequency);
+	f->frequency = frequency.QuadPart;
+	f->source = source;
+	f->reported_idle = true;
+	AcquireSRWLockExclusive(&filters_lock);
+	f->next = filters;
+	filters = f;
+	ReleaseSRWLockExclusive(&filters_lock);
 	return f;
 }
 
 static obs_properties_t *filter_properties(void *data)
 {
-	(void)data;
+	livemix_filter *f = data;
 	obs_properties_t *properties = obs_properties_create();
 	obs_property_t *mode = obs_properties_add_list(properties, "mode", obs_module_text("Filter.Mode"),
 						    OBS_COMBO_TYPE_LIST, OBS_COMBO_FORMAT_INT);
 	obs_property_list_add_int(mode, obs_module_text("Filter.Mode.Replace"), LM_REPLACE);
 	obs_property_list_add_int(mode, obs_module_text("Filter.Mode.Mix"), LM_MIX);
+	obs_properties_add_text(properties, "usage", obs_module_text("Filter.Usage"), OBS_TEXT_INFO);
+	obs_property_t *warning = obs_properties_add_text(properties, "idle_warning", obs_module_text("Filter.IdleWarning"), OBS_TEXT_INFO);
+	obs_property_text_set_info_type(warning, OBS_TEXT_INFO_WARNING);
+	LARGE_INTEGER now;
+	QueryPerformanceCounter(&now);
+	obs_property_set_visible(warning, filter_is_idle(f, now.QuadPart));
 	return properties;
 }
 
 static struct obs_audio_data *filter_audio(void *data, struct obs_audio_data *audio)
 {
 	livemix_filter *f = data;
+	LARGE_INTEGER now;
+	QueryPerformanceCounter(&now);
+	InterlockedExchange64(&f->last_audio, now.QuadPart);
 	audio_t *output = obs_get_audio();
 	uint32_t rate = output ? audio_output_get_sample_rate(output) : 48000;
 	size_t channels = output ? audio_output_get_channels(output) : 2;

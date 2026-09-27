@@ -87,7 +87,6 @@ MainComponent::MainComponent (MixDocument& doc, LiveMixSettings& s, ObsPluginAct
     topBar.onDeviceChosen = [this] (const juce::String& name) { chooseDevice (name); };
     topBar.onFxPanel = [this] { showDrawer (drawer == Drawer::fx ? Drawer::none : Drawer::fx); };
     topBar.onPluginManager = [this] { showPluginManager(); };
-    topBar.onHeightChanged = [this] { resized(); };
 
     statusLeft.setFont (bodyFont (12.5f));
     statusLeft.setColour (juce::Label::textColourId, Palette::dimText);
@@ -291,11 +290,10 @@ void MainComponent::refreshObsStatus()
         else if (obsRestartSawDisconnect) obsNeedsRestart = false;
     }
     const auto sendError = document.getSession().master.sendToObs ? engine.getObsSender().getError() : juce::String();
-    masterCard.setObsStatus (sendError.isNotEmpty() ? MasterCard::ObsStatus::sendFailed
-        : ! obsPluginCurrent ? MasterCard::ObsStatus::installNeeded
-        : obsNeedsRestart ? MasterCard::ObsStatus::restartObs
-        : ! engine.isDeviceRunning() ? MasterCard::ObsStatus::audioStopped
-        : readers == ObsSender::ReaderState::connected ? MasterCard::ObsStatus::connected : MasterCard::ObsStatus::waiting, sendError);
+    const auto advice = MasterCard::obsStatusFor (sendError, obsPluginCurrent, obsNeedsRestart, engine.isDeviceRunning(),
+                                                 readers, runningObsDetector.scan());
+    masterCard.setObsStatus (advice.status, advice.reason);
+    if (masterCard.getHeight() != masterCard.getPreferredHeight (masterCard.getWidth())) resized();
 }
 
 void MainComponent::attachControlServer (ControlServer* server)

@@ -44,6 +44,7 @@ bool obs_module_load(void)
 {
 	lm_connection_config config = {0};
 	config.log = receiver_log;
+	config.probe = livemix_filter_probe;
 	/* Test instances only: LIVEMIX_OBS_RING=<name> reads another ring (a fake LiveMix) so a long unattended test never
 	 * shares the real ring with a LiveMix running on the same PC. Unset in normal use. */
 	wchar_t test_ring[128];

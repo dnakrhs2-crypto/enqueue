@@ -1929,41 +1929,67 @@ public:
                 }
             }
             beginTest ("top bar measures status text in all layouts down to 420 px without shrinking the device below 120 px");
-            for (const int width : { 420, 480, 699, 700, 900, 1219, 1220, 1360, 1440, 1920 })
-                for (bool muted : { false, true })
-                    for (bool large : { false, true })
-                    {
-                        bar.setMuteGroups (muted, muted);
-                        bar.setSize (width, bar.preferredHeight (width));
-                        bar.setStatus (large ? 384000.0 : 48000.0, large ? 8192 : 256, large ? 432.1 : 10.7, 0.2, true, format);
-                        if (status != nullptr)
+            for (int sessionState = 0; sessionState < 3; ++sessionState)
+            {
+                if (sessionState == 1) expect (document.save (directory.getChildFile ("Top bar session.livemix")).wasOk());
+                if (sessionState == 2) document.markDirty (false);
+                bar.refresh();
+                auto* state = dynamic_cast<juce::Label*> (bar.findChildWithID ("session-state"));
+                expect (state != nullptr);
+                if (state != nullptr) expectEquals (state->getText(), sessionState == 0 ? ko ("아직 파일 없음") : sessionState == 1 ? ko ("저장됨") : ko ("저장 안 됨"));
+                for (const int width : { 420, 480, 580, 699, 700, 900, 1219, 1220, 1280, 1366, 1400, 1439, 1440, 1920 })
+                    for (bool muted : { false, true })
+                        for (bool large : { false, true })
                         {
-                            expectGreaterOrEqual (status->getWidth(), labelWidthForText (*status, status->getText()),
-                                                  "status fit at " + juce::String (width) + ": " + status->getText());
-                            expectEquals (status->getMinimumHorizontalScale(), 1.0f);
-                        }
-                        for (auto* child : bar.getChildren())
-                        {
-                            if (! child->isVisible() || child->getBounds().isEmpty()) continue;
-                            expect (bar.getLocalBounds().contains (child->getBounds()), "top bar child outside at " + juce::String (width));
-                            if (auto* box = dynamic_cast<juce::ComboBox*> (child)) expectGreaterOrEqual (box->getWidth(), 120);
-                            for (auto* other : bar.getChildren())
-                                if (other != child && other->isVisible() && ! other->getBounds().isEmpty())
-                                    expect (! child->getBounds().intersects (other->getBounds()), "top bar overlap at " + juce::String (width));
-                        }
-                        const auto folder = juce::SystemStats::getEnvironmentVariable ("LIVEMIX_UI_SCREENSHOT_DIR", {});
-                        if (folder.isNotEmpty() && muted && large && (width == 420 || width == 700 || width == 1440))
-                        {
-                            juce::FileOutputStream image (juce::File (folder).getChildFile ("topbar-" + juce::String (width) + ".png"));
-                            expect (image.openedOk());
-                            if (image.openedOk())
+                            bar.setMuteGroups (muted, muted);
+                            expect (bar.modeFor (width) == (width >= 1220 ? TopBar::Mode::wide : width >= 700 ? TopBar::Mode::compact : TopBar::Mode::narrow));
+                            bar.setSize (width, bar.preferredHeight (width));
+                            bar.setStatus (large ? 384000.0 : 48000.0, large ? 8192 : 256, large ? 432.1 : 10.7, 0.2, true, format);
+                            const auto full = TopBar::buildStatusText (large ? 384000.0 : 48000.0, large ? 8192 : 256, large ? 432.1 : 10.7, true, format);
+                            const auto shortText = TopBar::buildStatusText (large ? 384000.0 : 48000.0, large ? 8192 : 256, large ? 432.1 : 10.7, true, format, false);
+                            const auto minimal = TopBar::buildStatusText (large ? 384000.0 : 48000.0, large ? 8192 : 256, large ? 432.1 : 10.7, true, {}, false);
+                            if (status != nullptr)
                             {
-                                expect (image.setPosition (0));
-                                expect (image.truncate().wasOk());
-                                expect (juce::PNGImageFormat().writeImageToStream (bar.createComponentSnapshot (bar.getLocalBounds()), image));
+                                expect (status->getText() == full || status->getText() == shortText || status->getText() == minimal);
+                                if (width == 1920) expectEquals (status->getText(), full);
+                                expect (status->getTooltip().startsWith (full));
+                                expectGreaterOrEqual (status->getWidth(), labelWidthForText (*status, status->getText()),
+                                                      "status fit at " + juce::String (width) + ": " + status->getText());
+                                expectEquals (status->getMinimumHorizontalScale(), 1.0f);
+                            }
+                            for (auto* child : bar.getChildren())
+                            {
+                                if (! child->isVisible() || child->getBounds().isEmpty()) continue;
+                                expect (bar.getLocalBounds().contains (child->getBounds()), "top bar child outside at " + juce::String (width));
+                                if (auto* box = dynamic_cast<juce::ComboBox*> (child)) expectGreaterOrEqual (box->getWidth(), 120);
+                                if (auto* label = dynamic_cast<juce::Label*> (child))
+                                {
+                                    if (label->getTooltip() == ko ("열린 세션. 세션 버튼에서 저장·열기"))
+                                        expectGreaterOrEqual (label->getWidth(), 160, "session name at " + juce::String (width));
+                                    if (label->getText() == ko ("아직 파일 없음") || label->getText() == ko ("저장 안 됨") || label->getText() == ko ("저장됨"))
+                                        expectGreaterOrEqual (label->getWidth(), labelWidthForText (*label, label->getText()), "session state at " + juce::String (width));
+                                }
+                                for (auto* other : bar.getChildren())
+                                    if (other != child && other->isVisible() && ! other->getBounds().isEmpty())
+                                        expect (! child->getBounds().intersects (other->getBounds()), "top bar overlap at " + juce::String (width));
+                            }
+                            const auto folder = juce::SystemStats::getEnvironmentVariable ("LIVEMIX_UI_SCREENSHOT_DIR", {});
+                            if (folder.isNotEmpty())
+                            {
+                                auto shotDirectory = sessionState == 0 ? juce::File (folder) : juce::File (folder).getChildFile (sessionState == 1 ? "saved" : "dirty");
+                                if (large) shotDirectory = shotDirectory.getChildFile ("extreme");
+                                expect (shotDirectory.createDirectory().wasOk());
+                                juce::FileOutputStream image (shotDirectory.getChildFile ("topbar-" + juce::String (width) + (muted ? "-both" : "-none") + ".png"));
+                                expect (image.openedOk());
+                                if (image.openedOk())
+                                {
+                                    expect (image.setPosition (0));
+                                    expect (image.truncate().wasOk());
+                                    expect (juce::PNGImageFormat().writeImageToStream (bar.createComponentSnapshot (bar.getLocalBounds()), image));
+                                }
                             }
                         }
-                    }
+            }
             beginTest ("a stopped split monitor is omitted from status detail even while its saved endpoint is retained");
             failMonitor();
             bar.setStatus (engine.getSampleRate(), engine.getBlockSize(), engine.getLatencyMs(), 0.0, true, engine.getDeviceFormat());

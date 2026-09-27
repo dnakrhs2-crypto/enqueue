@@ -31,6 +31,8 @@ typedef struct fixture {
 	int events[2][EVENT_COUNT], summaries[2], log_calls, suppressed, repeats, previous_sum;
 	const char *previous_format;
 	bool repeated_format;
+	int probes;
+	bool audio_probed;
 } fixture;
 
 static unsigned name_serial;
@@ -95,6 +97,14 @@ static void checked_pull(fixture *f)
 	f->in_audio = false;
 }
 
+static void capture_probe(void *context)
+{
+	fixture *f = context;
+	++f->probes;
+	if (GetCurrentThreadId() == f->audio_thread && f->in_audio)
+		f->audio_probed = true;
+}
+
 static bool fixture_open(fixture *f)
 {
 	memset(f, 0, sizeof(*f));
@@ -112,6 +122,8 @@ static bool fixture_open(fixture *f)
 	config.qpc_frequency = TEST_QPC;
 	config.log = capture_log;
 	config.log_context = f;
+	config.probe = capture_probe;
+	config.probe_context = f;
 	f->connection = lm_connection_create(&config);
 	if (!f->connection)
 		return false;
@@ -1385,10 +1397,53 @@ static void run_test(const char *name, bool (*test)(void))
 	fflush(stdout);
 }
 
+static bool test_management_probe(void)
+{
+	fixture f;
+	bool ok = true;
+	CHECK(fixture_open(&f));
+	CHECK(f.probes == 1);
+	checked_pull(&f);
+	lm_connection_poll(f.connection);
+	CHECK(f.probes == 1 && !f.audio_probed);
+	f.now += TEST_QPC - 1;
+	lm_connection_poll(f.connection);
+	CHECK(f.probes == 1);
+	++f.now;
+	lm_connection_poll(f.connection);
+	CHECK(f.probes == 2);
+	f.now += 3 * TEST_QPC;
+	checked_pull(&f);
+	CHECK(f.probes == 2 && !f.audio_probed);
+	lm_connection_poll(f.connection);
+	CHECK(f.probes == 3);
+done:
+	fixture_close(&f);
+	return ok;
+}
+
+static bool test_filter_idle(void)
+{
+	bool ok = true;
+	int64_t last = 20 * TEST_QPC;
+	CHECK(lm_filter_is_idle(0, last, TEST_QPC));
+	CHECK(!lm_filter_is_idle(last, last, TEST_QPC));
+	CHECK(!lm_filter_is_idle(last, last + TEST_QPC * 3 / 2, TEST_QPC));
+	CHECK(lm_filter_is_idle(last, last + TEST_QPC * 3 / 2 + 1, TEST_QPC));
+	CHECK(!lm_filter_is_idle(last + 2 * TEST_QPC, last + 2 * TEST_QPC, TEST_QPC));
+	/* Audio can publish a newer tick between the manager reading QPC and reading last_audio. */
+	CHECK(!lm_filter_is_idle(last, last - 1, TEST_QPC));
+	CHECK(lm_filter_is_idle(last, last, 0));
+done:
+	return ok;
+}
+
 int main(int argc, char **argv)
 {
 	/* An optional name substring keeps focused regression runs inexpensive. */
 	test_filter = argc > 1 ? argv[1] : NULL;
+	run_test("filter idle warning: never called, 1.5-second boundary and recovery", test_filter_idle);
+	run_test("management probe: once per second and never from audio", test_management_probe);
 	run_test("source mixing: unity mono, stereo and six-channel OBS layouts", test_source_layout);
 	run_test("connect after writer starts", test_late_connect);
 	run_test("writer restart, retained mapping and bounded fade", test_restart_fade);

@@ -208,19 +208,25 @@ ObsSender::ReaderState ObsSender::readerState() const
 {
     if (readers == nullptr || frequency <= 0) return ReaderState::none;
     LARGE_INTEGER now {}; QueryPerformanceCounter (&now);
+    auto state = ReaderState::none;
     for (const auto& slot : readers->slot)
     {
         const auto pid = lm_obs_load_acquire (&slot.pid);
         const auto beat = lm_obs_load_acquire (&slot.heartbeat_qpc);
-        if (pid <= 0 || pid > MAXDWORD || beat <= 0 || std::abs (double (now.QuadPart) - double (beat)) >= 2.0 * double (frequency)) continue;
+        if (pid <= 0 || pid > MAXDWORD) continue;
         if (HANDLE process = OpenProcess (PROCESS_QUERY_LIMITED_INFORMATION, FALSE, (DWORD) pid))
         {
             DWORD code = 0;
             const bool alive = GetExitCodeProcess (process, &code) && code == STILL_ACTIVE;
             CloseHandle (process);
-            if (alive && lm_obs_load_acquire (&slot.pid) == pid) return ReaderState::connected;
+            if (alive && lm_obs_load_acquire (&slot.pid) == pid)
+            {
+                if (beat > 0 && std::abs (double (now.QuadPart) - double (beat)) < 2.0 * double (frequency))
+                    return ReaderState::connected;
+                state = ReaderState::idle;
+            }
         }
     }
-    return ReaderState::none;
+    return state;
 }
 }

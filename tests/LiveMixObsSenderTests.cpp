@@ -236,7 +236,7 @@ public:
             }
         }
 
-        beginTest ("presence requires a recent heartbeat and a process which is still alive");
+        beginTest ("presence distinguishes idle plugins, pulling readers and dead processes");
         {
             const auto testName = mappingName();
             ObsSender sender (testName); sender.setEnabled (true);
@@ -247,11 +247,17 @@ public:
                 auto& slot = static_cast<lm_obs_readers*> (readers.view)->slot[0];
                 expect (sender.readerState() == ObsSender::ReaderState::none);
                 lm_obs_store_release (&slot.pid, GetCurrentProcessId());
+                expect (sender.readerState() == ObsSender::ReaderState::idle);
                 lm_obs_store_release (&slot.heartbeat_qpc, nowQpc());
                 expect (sender.readerState() == ObsSender::ReaderState::connected);
                 LARGE_INTEGER frequency {}; QueryPerformanceFrequency (&frequency);
                 lm_obs_store_release (&slot.heartbeat_qpc, nowQpc() - 3 * frequency.QuadPart);
-                expect (sender.readerState() == ObsSender::ReaderState::none);
+                expect (sender.readerState() == ObsSender::ReaderState::idle);
+                auto& active = static_cast<lm_obs_readers*> (readers.view)->slot[1];
+                lm_obs_store_release (&active.pid, GetCurrentProcessId());
+                lm_obs_store_release (&active.heartbeat_qpc, nowQpc());
+                expect (sender.readerState() == ObsSender::ReaderState::connected); // an earlier idle slot cannot hide it
+                lm_obs_store_release (&active.pid, 0);
                 // Hold a finished process handle so Windows cannot reuse its pid during this assertion.
                 wchar_t systemPath[MAX_PATH] {}; GetSystemDirectoryW (systemPath, MAX_PATH);
                 const auto executable = juce::String (systemPath) + "\\cmd.exe";
@@ -266,6 +272,8 @@ public:
                     expectEquals ((int) WaitForSingleObject (process.hProcess, 5000), (int) WAIT_OBJECT_0);
                     lm_obs_store_release (&slot.pid, process.dwProcessId);
                     lm_obs_store_release (&slot.heartbeat_qpc, nowQpc());
+                    expect (sender.readerState() == ObsSender::ReaderState::none);
+                    lm_obs_store_release (&slot.heartbeat_qpc, 0);
                     expect (sender.readerState() == ObsSender::ReaderState::none);
                     CloseHandle (process.hThread); CloseHandle (process.hProcess);
                 }

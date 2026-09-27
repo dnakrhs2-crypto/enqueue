@@ -1,6 +1,7 @@
 #pragma once
 
 #include "MixDocument.h"
+#include "ObsPluginInstaller.h"
 #include "Widgets.h"
 
 #include <juce_gui_basics/juce_gui_basics.h>
@@ -18,7 +19,11 @@ public:
     void setDeviceChannels (const juce::StringArray& outputNames);
     void setLatency (double ms, int bufferSize, double sampleRate);
     void pushMeter (MixEngine::Meter meter) { meter_.push (meter); }
-    enum class ObsStatus { waiting, connected, audioStopped, installNeeded, restartObs, sendFailed };
+    enum class ObsStatus { waiting, connected, audioStopped, installNeeded, restartObs, sendFailed, addSource, updateObs, portableObs };
+    struct ObsAdvice { ObsStatus status; juce::String text, reason; };
+    static ObsAdvice obsStatusFor (const juce::String& sendError, bool pluginCurrent, bool restartNeeded, bool deviceRunning,
+                                   ObsSender::ReaderState reader, const std::vector<ObsPluginInstaller::RunningObs>& runningObs);
+    static juce::String obsStatusText (ObsStatus);
     void setObsStatus (ObsStatus status, const juce::String& reason = {});
     void setObsInstalling (bool installing);
     std::function<void()> onObsEnabled; // document/sender are already enabled when this runs
@@ -50,6 +55,7 @@ private:
     struct Chip;
     void rebuildChain();
     int obsToggleWidth() const;
+    int obsControlsHeight (int width) const;
     void refreshObsStatus();
     void refreshObsToggle();
     static constexpr int obsRowHeight = 28, obsRowGap = 8;

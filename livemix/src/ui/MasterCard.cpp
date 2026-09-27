@@ -67,6 +67,7 @@ MasterCard::MasterCard (MixDocument& doc) : document (doc)
     };
     addAndMakeVisible (obsToggle);
     styleCaption (obsStatusLabel, "");
+    obsStatusLabel.setComponentID ("obs-status");
     obsStatusLabel.setFont (bodyFont (12.5f));
     obsStatusLabel.setMinimumHorizontalScale (1.0f);
     addAndMakeVisible (obsStatusLabel);
@@ -142,19 +143,56 @@ void MasterCard::refreshObsToggle()
     obsToggle.setButtonText (obsInstalling ? ko ("설치 중...") : strip ? juce::String ("OBS") : ko ("OBS로 보내기"));
 }
 
+juce::String MasterCard::obsStatusText (ObsStatus status)
+{
+    switch (status)
+    {
+        case ObsStatus::audioStopped: return ko ("오디오 멈춤");
+        case ObsStatus::sendFailed: return ko ("OBS 보내기 실패");
+        case ObsStatus::installNeeded: return ko ("OBS 플러그인 설치 필요");
+        case ObsStatus::restartObs: return ko ("OBS를 다시 시작하세요");
+        case ObsStatus::connected: return ko ("OBS 연결됨");
+        case ObsStatus::addSource: return ko ("OBS에 소스 추가 필요");
+        case ObsStatus::updateObs: return ko ("OBS 31.1 이상 필요");
+        case ObsStatus::portableObs: return ko ("휴대용 OBS: 플러그인 복사 필요");
+        case ObsStatus::waiting: return ko ("OBS 대기 중");
+    }
+    return {};
+}
+
+MasterCard::ObsAdvice MasterCard::obsStatusFor (const juce::String& sendError, bool pluginCurrent, bool restartNeeded,
+                                              bool deviceRunning, ObsSender::ReaderState reader,
+                                              const std::vector<ObsPluginInstaller::RunningObs>& runningObs)
+{
+    const auto advice = [] (ObsStatus status, const juce::String& reason = {}) { return ObsAdvice { status, obsStatusText (status), reason }; };
+    if (sendError.isNotEmpty()) return advice (ObsStatus::sendFailed, sendError);
+    if (! pluginCurrent) return advice (ObsStatus::installNeeded);
+    if (reader == ObsSender::ReaderState::connected) return advice (ObsStatus::connected);
+    if (restartNeeded) return advice (ObsStatus::restartObs);
+    if (! deviceRunning) return advice (ObsStatus::audioStopped);
+    if (reader == ObsSender::ReaderState::idle)
+        return advice (ObsStatus::addSource, ko ("OBS에 LiveMix 플러그인은 올라와 있지만 소리를 받는 곳이 없습니다. OBS 소스(+)에서 'LiveMix'를 추가하세요. 필터로 붙였다면 그 소스에서 소리가 나오고 있어야 동작합니다 (ASIO가 잡고 있는 마이크 소스에 붙이면 멈춰 있습니다)."));
+    for (const auto& obs : runningObs)
+        if (obs.needsUpdate())
+            return advice (ObsStatus::updateObs, ko ("실행 중인 OBS ") + obs.versionString() + ko ("에서는 LiveMix 플러그인을 읽을 수 없습니다. OBS를 31.1 이상으로 업데이트하세요."));
+    for (const auto& obs : runningObs)
+        if (obs.portable)
+            return advice (ObsStatus::portableObs, ko ("휴대용(포터블) OBS는 자동 설치 대상이 아닙니다. LiveMix 설치 폴더의 obs-plugin\\livemix-obs\\livemix-obs.dll을 포터블 OBS 폴더의 obs-plugins\\64bit\\에, obs-plugin\\livemix-obs\\data\\locale\\을 data\\obs-plugins\\livemix-obs\\locale\\에 복사한 뒤 OBS를 다시 시작하세요."));
+    if (! runningObs.empty())
+        return advice (ObsStatus::restartObs, ko ("켜져 있는 OBS가 LiveMix 플러그인을 읽지 않았습니다. OBS를 완전히 끄고 다시 켜세요."));
+    return advice (ObsStatus::waiting, ko ("OBS를 켜고 소스(+)에서 'LiveMix'를 추가하세요."));
+}
+
 void MasterCard::refreshObsStatus()
 {
-    const auto text = obsStatus == ObsStatus::audioStopped ? ko ("오디오 멈춤")
-                    : obsStatus == ObsStatus::sendFailed ? ko ("OBS 보내기 실패")
-                    : obsStatus == ObsStatus::installNeeded ? ko ("OBS 플러그인 설치 필요")
-                    : obsStatus == ObsStatus::restartObs ? ko ("OBS를 다시 시작하세요")
-                    : obsStatus == ObsStatus::connected ? ko ("OBS 연결됨") : ko ("OBS 대기 중");
+    const auto text = obsStatusText (obsStatus);
     obsStatusLabel.setText (strip ? juce::String::fromUTF8 ("●") : text, juce::dontSendNotification);
     obsStatusLabel.setTooltip (text + (obsStatusReason.isEmpty() ? juce::String() : "\n" + obsStatusReason));
     obsStatusLabel.setMouseCursor (obsStatus == ObsStatus::installNeeded ? juce::MouseCursor::PointingHandCursor : juce::MouseCursor::NormalCursor);
     obsStatusLabel.setJustificationType (strip ? juce::Justification::centred : juce::Justification::centredLeft);
     obsStatusLabel.setColour (juce::Label::textColourId, obsStatus == ObsStatus::audioStopped || obsStatus == ObsStatus::sendFailed ? Palette::danger
-                              : obsStatus == ObsStatus::installNeeded || obsStatus == ObsStatus::restartObs ? juce::Colour (0xffffb454)
+                              : obsStatus == ObsStatus::installNeeded || obsStatus == ObsStatus::restartObs || obsStatus == ObsStatus::addSource
+                                || obsStatus == ObsStatus::updateObs || obsStatus == ObsStatus::portableObs ? juce::Colour (0xffffb454)
                               : obsStatus == ObsStatus::connected ? Palette::lampOn : Palette::dimText);
 }
 
@@ -202,20 +240,26 @@ int MasterCard::getPreferredHeight (int width) const
     return strip ? stripHeight : getUnfoldedHeight (width);
 }
 
+int MasterCard::obsControlsHeight (int width) const
+{
+    return obsToggleWidth() + 8 + labelWidthForText (obsStatusLabel, obsStatusText (obsStatus)) <= width - 28
+        ? obsRowHeight : 2 * obsRowHeight + obsRowGap;
+}
+
 int MasterCard::getUnfoldedHeight (int width) const
 {
     if (width < narrowBelow)
     {
         // the compact stack: the head row (with the output pair), the chain row and its chips (none: no row), the meter's caption row, the meter
         const int rows = chips.empty() ? 0 : ChipFlow::layout (chips, juce::Rectangle<int> (0, 0, juce::jmax (1, width - 28), 1), 30, false);
-        return 24 + 34 + 8 + 30 + (rows > 0 ? 6 + rows * ChipFlow::rowStep : 0) + 10 + 18 + 46 + obsRowGap + obsRowHeight;
+        return 24 + 34 + 8 + 30 + (rows > 0 ? 6 + rows * ChipFlow::rowStep : 0) + 10 + 18 + 46 + obsRowGap + obsControlsHeight (width);
     }
 
     // the chain column's width in resized() at this card width, then the rows the chips take in it
     const int afterHeadAndOut = width - 28 - 230 - 18 - 250 - 18;
     const int chainW = afterHeadAndOut - juce::jlimit (160, 300, afterHeadAndOut / 3) - 18;
     const int rows = ChipFlow::layout (chips, juce::Rectangle<int> (0, 0, juce::jmax (1, chainW), 1), 30, false);
-    return juce::jmax (176, 24 + 22 + rows * ChipFlow::rowStep + 6 + 30) + obsRowGap + obsRowHeight;
+    return juce::jmax (176, 24 + 22 + rows * ChipFlow::rowStep + 6 + 30) + obsRowGap + obsControlsHeight (width);
 }
 
 void MasterCard::resized()
@@ -247,7 +291,7 @@ void MasterCard::resized()
         auto row = area.withSizeKeepingCentre (area.getWidth(), 34);
         badge.setBounds (row.removeFromLeft (32).reduced (0, 2));
         row.removeFromLeft (8);
-        obsStatusLabel.setBounds (row.removeFromRight (20));
+        obsStatusLabel.setBounds (row.removeFromRight (labelWidthForText (obsStatusLabel, obsStatusLabel.getText())));
         row.removeFromRight (4);
         obsToggle.setBounds (row.removeFromRight (obsToggleWidth()).withSizeKeepingCentre (obsToggleWidth(), obsRowHeight));
         row.removeFromRight (8);
@@ -280,10 +324,12 @@ void MasterCard::resized()
         return;
     }
 
-    auto obsRow = area.removeFromBottom (obsRowHeight);
+    auto obsArea = area.removeFromBottom (obsControlsHeight (getWidth()));
     area.removeFromBottom (obsRowGap);
+    auto obsRow = obsArea.removeFromTop (obsRowHeight);
     obsToggle.setBounds (obsRow.removeFromLeft (obsToggleWidth()));
     obsRow.removeFromLeft (8);
+    if (! obsArea.isEmpty()) obsRow = obsArea.removeFromBottom (obsRowHeight);
     obsStatusLabel.setBounds (obsRow.removeFromLeft (labelWidthForText (obsStatusLabel, obsStatusLabel.getText())));
 
     if (stacked)

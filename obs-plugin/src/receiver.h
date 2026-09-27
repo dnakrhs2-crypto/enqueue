@@ -26,6 +26,9 @@ typedef struct lm_connection_config {
 	int64_t (*now)(void *context);
 	void *clock_context;
 	int64_t qpc_frequency;
+	/* Optional host maintenance on the manager's one-second probe, outside receiver locks. */
+	void (*probe)(void *context);
+	void *probe_context;
 } lm_connection_config;
 
 typedef struct lm_receiver_stats {
@@ -65,5 +68,7 @@ size_t lm_mix_stereo_for_layout(float *left, const float *right, int frames, siz
 /* Atomic diagnostic snapshots; safe from a UI/worker thread. */
 void lm_receiver_get_stats(const lm_receiver *receiver, lm_receiver_stats *stats);
 bool lm_receiver_connected(const lm_receiver *receiver);
+/* Pure filter activity decision. Zero means filter_audio has never run. */
+bool lm_filter_is_idle(int64_t last_audio, int64_t now, int64_t frequency);
 
 #endif

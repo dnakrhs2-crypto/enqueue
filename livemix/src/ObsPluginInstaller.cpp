@@ -184,14 +184,14 @@ namespace
         return result;
     }
 
-    bool obsRunningIn (const juce::File& directory)
+    std::vector<juce::File> runningObsImages()
     {
+        std::vector<juce::File> images;
         HANDLE snapshot = CreateToolhelp32Snapshot (TH32CS_SNAPPROCESS, 0);
-        if (snapshot == INVALID_HANDLE_VALUE) return false;
+        if (snapshot == INVALID_HANDLE_VALUE) return images;
         PROCESSENTRY32W entry {};
         entry.dwSize = sizeof (entry);
-        bool running = false;
-        for (BOOL found = Process32FirstW (snapshot, &entry); found && ! running; found = Process32NextW (snapshot, &entry))
+        for (BOOL found = Process32FirstW (snapshot, &entry); found; found = Process32NextW (snapshot, &entry))
         {
             if (_wcsicmp (entry.szExeFile, L"obs64.exe") != 0) continue;
             HANDLE process = OpenProcess (PROCESS_QUERY_LIMITED_INFORMATION, FALSE, entry.th32ProcessID);
@@ -202,13 +202,67 @@ namespace
             {
                 auto image = juce::String (path.data());
                 if (image.startsWith ("\\\\?\\")) image = image.substring (4);
-                running = juce::File (image).isAChildOf (directory);
+                images.emplace_back (image);
             }
             CloseHandle (process);
         }
         CloseHandle (snapshot);
-        return running;
+        return images;
     }
+
+    bool obsRunningIn (const juce::File& directory)
+    {
+        for (const auto& image : runningObsImages())
+            if (image.isAChildOf (directory)) return true;
+        return false;
+    }
+}
+
+bool ObsPluginInstaller::RunningObs::needsUpdate() const noexcept
+{
+    return version != 0 && version < ((juce::uint64 (31) << 48) | (juce::uint64 (1) << 32));
+}
+
+juce::String ObsPluginInstaller::RunningObs::versionString() const
+{
+    auto text = juce::String (int (version >> 48)) + "." + juce::String (int ((version >> 32) & 0xffff))
+        + "." + juce::String (int ((version >> 16) & 0xffff));
+    if ((version & 0xffff) != 0) text += "." + juce::String (int (version & 0xffff));
+    return text;
+}
+
+ObsPluginInstaller::RunningObs ObsPluginInstaller::runningObsInfo (const juce::File& image, juce::uint64 version)
+{
+    RunningObs info { image, version, false };
+    const auto root = image.getParentDirectory().getParentDirectory().getParentDirectory();
+    for (const auto* marker : { "portable_mode", "obs_portable_mode", "portable_mode.txt", "obs_portable_mode.txt" })
+        info.portable |= root.getChildFile (marker).existsAsFile();
+    return info;
+}
+
+RunningObsDetector::RunningObsDetector (ImageQuery imageQuery, VersionQuery versionQuery)
+    : images (imageQuery ? std::move (imageQuery) : runningObsImages),
+      version (versionQuery ? std::move (versionQuery) : fileVersion)
+{
+}
+
+const std::vector<ObsPluginInstaller::RunningObs>& RunningObsDetector::scan (double nowMs)
+{
+    if (nowMs < nextScan) return running;
+    nextScan = nowMs + 2000.0;
+    running.clear();
+    std::map<juce::String, ObsPluginInstaller::RunningObs> active;
+    for (const auto& image : images())
+    {
+        const auto key = image.getFullPathName().toLowerCase();
+        auto cached = byImage.find (key);
+        if (cached == byImage.end())
+            cached = byImage.emplace (key, ObsPluginInstaller::runningObsInfo (image, version (image))).first;
+        running.push_back (cached->second);
+        active.emplace (key, cached->second);
+    }
+    byImage = std::move (active);
+    return running;
 }
 
 ObsPluginInstaller::Roots ObsPluginInstaller::systemRoots()
@@ -335,7 +389,7 @@ ObsPluginInstaller::Result ObsPluginInstaller::install (const Roots& roots, juce
 
     message = major == 0 ? ko ("OBS를 찾지 못했습니다. OBS를 설치하면 바로 쓸 수 있게 플러그인을 넣어 두었습니다.")
             : running ? ko ("OBS 플러그인을 설치했습니다. OBS를 다시 시작하면 연결됩니다.")
-                      : ko ("OBS 플러그인을 설치했습니다. OBS를 켜고 소스(+)에서 'LiveMix 마스터'를 추가하거나, 오디오 소스의 필터에서 'LiveMix 마스터 받기'를 추가하세요.");
+                      : ko ("OBS 플러그인을 설치했습니다. OBS를 켜고 소스(+)에서 'LiveMix'를 추가하세요. (필터 'LiveMix'는 소리가 나오는 소스에 붙일 때만 동작합니다.)");
     return running ? Result::installedRestartObs : Result::installed;
 }
 

@@ -15,13 +15,11 @@ class TopBar : public juce::Component
 public:
     explicit TopBar (MixDocument& document);
 
-    /** One row in a wide window; two below 1440 px; three below 700 px (the device and buttons share a row,
+    /** One row in a wide window; two below 1220 px; three below 700 px (the device and buttons share a row,
         leaving the status its own row) - the portrait mode of a tall, narrow window. */
     enum class Mode { wide, compact, narrow };
-    Mode modeFor (int width) const noexcept;        // the single row needs more room while a mute badge shows
+    Mode modeFor (int width) const noexcept;
     int preferredHeight (int width) const noexcept;
-    /** The bar's height changed with its content (a badge came or went): the owner lays out again. */
-    std::function<void()> onHeightChanged;
 
     void refresh();                                   // session name / dirty flag / device
     void setDevices (const juce::StringArray& deviceNames, const juce::String& current, const juce::String& typeName);
@@ -51,7 +49,7 @@ private:
     juce::ComboBox deviceCombo;
     DspMeter dspMeter;
     juce::TextButton fxButton, pluginsButton;
-    juce::String fullStatusText, shortStatusText;
+    juce::String fullStatusText, shortStatusText, minimalStatusText;
     bool refreshing = false;
 };
 

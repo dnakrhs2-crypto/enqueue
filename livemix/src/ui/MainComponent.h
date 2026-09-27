@@ -197,6 +197,7 @@ private:
     double nextObsPollMs = 0.0;
     struct ObsInstallWork;
     ObsPluginActions obsPluginActions;
+    RunningObsDetector runningObsDetector;
     std::shared_ptr<ObsInstallWork> obsInstallWork;
     bool obsInstallRequested = false, obsPluginCurrent = false;
     bool obsElevationRequested = false;

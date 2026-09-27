@@ -459,9 +459,16 @@ void lm_connection_poll(lm_connection *c)
 		c->next_probe = now + c->frequency;
 		open_ring(c);
 		update_presence(c, now);
+		if (c->config.probe)
+			c->config.probe(c->config.probe_context);
 	}
 	prepare_formats(c);
 	report_receivers(c, now);
+}
+
+bool lm_filter_is_idle(int64_t last_audio, int64_t now, int64_t frequency)
+{
+	return last_audio <= 0 || frequency <= 0 || (now >= last_audio && (double)(now - last_audio) / (double)frequency > 1.5);
 }
 
 static DWORD WINAPI connection_thread(void *opaque)

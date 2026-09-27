@@ -19,6 +19,60 @@ public:
         MasterCard card (document);
         card.setLookAndFeel (&lookAndFeel);
         document.onValueChanged = [&] { card.refresh(); };
+        beginTest ("OBS advice explains every waiting reason in priority order");
+        using State = MasterCard::ObsStatus;
+        using Reader = ObsSender::ReaderState;
+        using Info = ObsPluginInstaller::RunningObs;
+        const Info old { {}, (juce::uint64 (31) << 48) | (juce::uint64 (4) << 16), false };
+        const Info portable { {}, (juce::uint64 (32) << 48) | (juce::uint64 (1) << 32), true };
+        const Info installed { {}, portable.version, false };
+        auto checkAdvice = [&] (const juce::String& error, bool current, bool restart, bool running, Reader reader,
+                               const std::vector<Info>& processes, State expected, const char* text, const char* reason)
+        {
+            const auto advice = MasterCard::obsStatusFor (error, current, restart, running, reader, processes);
+            expect (advice.status == expected);
+            expectEquals (advice.text, ko (text));
+            if (reason != nullptr) expect (advice.reason.contains (ko (reason)), advice.reason);
+            card.setObsStatus (advice.status, advice.reason);
+            for (bool folded : { false, true })
+                for (int width : { 364, 400, 580, 987, 988, 1400 })
+                {
+                    card.setStrip (folded);
+                    card.setSize (width, card.getPreferredHeight (width));
+                    auto* label = dynamic_cast<juce::Label*> (card.findChildWithID ("obs-status"));
+                    expect (label != nullptr);
+                    if (label == nullptr) continue;
+                    expectEquals (label->getText(), folded ? ko ("●") : advice.text);
+                    expectGreaterOrEqual (label->getWidth(), labelWidthForText (*label, label->getText()));
+                    const auto colour = expected == State::sendFailed || expected == State::audioStopped ? livemix::Palette::danger
+                        : expected == State::connected ? livemix::Palette::lampOn
+                        : expected == State::waiting ? livemix::Palette::dimText : juce::Colour (0xffffb454);
+                    expect (label->findColour (juce::Label::textColourId) == colour);
+                    expect (label->getTooltip().contains (advice.text) && label->getTooltip().contains (advice.reason));
+                    for (auto* child : card.getChildren())
+                    {
+                        if (! child->isVisible() || child->getBounds().isEmpty()) continue;
+                        expect (card.getLocalBounds().contains (child->getBounds()));
+                        if (child != label) expect (! child->getBounds().intersects (label->getBounds()));
+                    }
+                }
+        };
+        checkAdvice ("Win32 5", false, true, false, Reader::connected, { old, portable }, State::sendFailed, "OBS 보내기 실패", "Win32 5");
+        checkAdvice ({}, false, true, false, Reader::connected, { old }, State::installNeeded, "OBS 플러그인 설치 필요", nullptr);
+        checkAdvice ({}, true, true, false, Reader::connected, { old, portable }, State::connected, "OBS 연결됨", nullptr);
+        checkAdvice ({}, true, true, false, Reader::idle, { old }, State::restartObs, "OBS를 다시 시작하세요", nullptr);
+        checkAdvice ({}, true, false, false, Reader::idle, { old }, State::audioStopped, "오디오 멈춤", nullptr);
+        checkAdvice ({}, true, false, true, Reader::idle, { old, portable }, State::addSource, "OBS에 소스 추가 필요",
+                     "OBS에 LiveMix 플러그인은 올라와 있지만 소리를 받는 곳이 없습니다. OBS 소스(+)에서 'LiveMix'를 추가하세요. 필터로 붙였다면 그 소스에서 소리가 나오고 있어야 동작합니다 (ASIO가 잡고 있는 마이크 소스에 붙이면 멈춰 있습니다).");
+        checkAdvice ({}, true, false, true, Reader::none, { portable, old }, State::updateObs, "OBS 31.1 이상 필요", "31.0.4");
+        checkAdvice ({}, true, false, true, Reader::none, { installed, portable }, State::portableObs, "휴대용 OBS: 플러그인 복사 필요", "obs-plugins\\64bit\\");
+        const auto copy = MasterCard::obsStatusFor ({}, true, false, true, Reader::none, { portable }).reason;
+        expect (copy.contains ("obs-plugin\\livemix-obs\\livemix-obs.dll") && copy.contains ("obs-plugin\\livemix-obs\\data\\locale\\")
+                && copy.contains ("data\\obs-plugins\\livemix-obs\\locale\\") && copy.contains (ko ("다시 시작")));
+        checkAdvice ({}, true, false, true, Reader::none, { installed }, State::restartObs, "OBS를 다시 시작하세요",
+                     "켜져 있는 OBS가 LiveMix 플러그인을 읽지 않았습니다. OBS를 완전히 끄고 다시 켜세요.");
+        checkAdvice ({}, true, false, true, Reader::none, {}, State::waiting, "OBS 대기 중", "OBS를 켜고 소스(+)에서 'LiveMix'를 추가하세요.");
+        card.setStrip (false);
         beginTest ("OBS controls and full meter fit every form and strip visibility threshold");
         for (int plugins : { 0, 7 })
         {

@@ -29,8 +29,8 @@ namespace
             put (juce::File (LM_OBS_TEST_CURRENT_DLL), roots.bundledPlugin.getChildFile ("livemix-obs.dll"));
             auto locale = roots.bundledPlugin.getChildFile ("data/locale");
             ready &= locale.createDirectory().wasOk();
-            ready &= locale.getChildFile ("ko-KR.ini").replaceWithText (juce::String::fromUTF8 ("Name=LiveMix 마스터\n"));
-            ready &= locale.getChildFile ("en-US.ini").replaceWithText ("Name=LiveMix Master\n");
+            ready &= locale.getChildFile ("ko-KR.ini").replaceWithText (juce::String::fromUTF8 ("Source.Name=LiveMix\nFilter.Name=LiveMix\nFilter.Mode=방식\n"));
+            ready &= locale.getChildFile ("en-US.ini").replaceWithText ("Source.Name=LiveMix\nFilter.Name=LiveMix\nFilter.Mode=Mode\n");
             if (major != 0)
                 put (juce::File (major >= 33 ? LM_OBS_TEST_OBS33_DLL : LM_OBS_TEST_OBS32_DLL),
                      roots.obsInstallDir.getChildFile ("bin/64bit/obs64.exe"));
@@ -105,6 +105,60 @@ public:
 
     void runTest() override
     {
+        beginTest ("running OBS metadata uses the image's root, all portable markers and injected file versions");
+        {
+            Fixture f;
+            expect (f.ready);
+            const auto image = f.roots.obsInstallDir.getChildFile ("bin/64bit/obs64.exe");
+            const auto version = [] (int major, int minor, int patch)
+            {
+                return (juce::uint64 (major) << 48) | (juce::uint64 (minor) << 32) | (juce::uint64 (patch) << 16);
+            };
+            for (const auto v : { version (30, 2, 3), version (31, 0, 4), version (31, 1, 0), version (32, 1, 2), juce::uint64 (0) })
+            {
+                const auto info = Installer::runningObsInfo (image, v);
+                expect (info.image == image && info.version == v && ! info.portable);
+                expect (info.needsUpdate() == (v != 0 && v < version (31, 1, 0)));
+            }
+            expectEquals (Installer::runningObsInfo (image, version (32, 1, 2)).versionString(), juce::String ("32.1.2"));
+            for (const auto* marker : { "portable_mode", "obs_portable_mode", "portable_mode.txt", "obs_portable_mode.txt" })
+            {
+                const auto file = f.roots.obsInstallDir.getChildFile (marker);
+                expect (file.replaceWithText (""));
+                expect (Installer::runningObsInfo (image, version (32, 1, 2)).portable);
+                expect (file.deleteFile());
+            }
+            expect (image.getParentDirectory().getChildFile ("portable_mode.txt").replaceWithText (""));
+            expect (! Installer::runningObsInfo (image, version (32, 1, 2)).portable);
+
+            beginTest ("running OBS scans at most every two seconds and caches metadata by image path");
+            const auto steam = f.temp.getChildFile ("Steam/OBS/bin/64bit/obs64.exe");
+            const auto portable = f.temp.getChildFile ("Portable OBS/bin/64bit/obs64.exe");
+            expect (portable.getParentDirectory().getParentDirectory().getParentDirectory().createDirectory().wasOk());
+            expect (f.temp.getChildFile ("Portable OBS/portable_mode").replaceWithText (""));
+            std::vector<juce::File> images { image, steam, portable, image };
+            int scans = 0, versions = 0;
+            RunningObsDetector detector ([&] { ++scans; return images; }, [&] (const juce::File& path)
+            {
+                ++versions;
+                return path == steam ? version (31, 0, 4) : version (32, 1, 2);
+            });
+            const auto first = detector.scan (100.0);
+            expectEquals ((int) first.size(), 4);
+            expectEquals (scans, 1);
+            expectEquals (versions, 3);
+            expect (first[1].needsUpdate() && first[2].portable);
+            detector.scan (2099.0);
+            expectEquals (scans, 1);
+            detector.scan (2100.0);
+            expectEquals (scans, 2);
+            expectEquals (versions, 3);
+            images.clear();
+            expect (detector.scan (4100.0).empty());
+            images = { image };
+            detector.scan (6100.0);
+            expectEquals (versions, 4); // a restarted image is inspected again
+        }
         juce::String message;
         beginTest ("OBS 32 uses the legacy layout and native VERSIONINFO; Korean paths and locales survive");
         {
@@ -116,10 +170,10 @@ public:
             expect (f.legacy().existsAsFile() && ! f.modern().exists());
             expect (Installer::isInstalledAndCurrent (f.roots));
             expectEquals (f.plugin().getChildFile ("data/locale/ko-KR.ini").loadFileAsString().replace ("\r\n", "\n"),
-                          juce::String::fromUTF8 ("Name=LiveMix 마스터\n"));
+                          juce::String::fromUTF8 ("Source.Name=LiveMix\nFilter.Name=LiveMix\nFilter.Mode=방식\n"));
             expect (f.plugin().getChildFile ("data/locale/ko-KR.ini").hasIdenticalContentTo (f.roots.bundledPlugin.getChildFile ("data/locale/ko-KR.ini")));
             expect (f.plugin().getChildFile ("data/locale/en-US.ini").existsAsFile());
-            expectEquals (message, juce::String::fromUTF8 ("OBS 플러그인을 설치했습니다. OBS를 켜고 소스(+)에서 'LiveMix 마스터'를 추가하거나, 오디오 소스의 필터에서 'LiveMix 마스터 받기'를 추가하세요."));
+            expectEquals (message, juce::String::fromUTF8 ("OBS 플러그인을 설치했습니다. OBS를 켜고 소스(+)에서 'LiveMix'를 추가하세요. (필터 'LiveMix'는 소리가 나오는 소스에 붙일 때만 동작합니다.)"));
         }
 
         beginTest ("OBS 33 migrates legacy to the new layout; OBS 32 migrates back without duplicate DLLs");
@@ -430,7 +484,7 @@ public:
         {
             beginTest (mode == 0 ? "A blocked install leaves the message thread and sender running"
                        : mode == 1 ? "UAC decline stays orange, preserves sending and permits a retry"
-                                   : "Elevation runs once on a worker; an old reader cannot clear the restart notice");
+                                   : "Elevation runs once; connected readers take priority while restart tracking survives idle pulls");
             Fixture f;
             f.running = mode == 2;
             const auto mapping = "Local\\LiveMix.ObsInstallerTest." + juce::Uuid().toString();
@@ -522,14 +576,21 @@ public:
             }
             else if (mode == 2)
             {
-                expect (hasObsStatus (main, "OBS를 다시 시작하세요"));
-                until ([&] { connect(); return false; }, 650);
-                expect (hasObsStatus (main, "OBS를 다시 시작하세요"));
+                expect (hasObsStatus (main, "OBS 연결됨"));
+                if (readers != nullptr) lm_obs_store_release (&readers->slot[0].heartbeat_qpc, 0);
+                expect (until ([&] { return hasObsStatus (main, "OBS를 다시 시작하세요"); }));
+                expect (until ([&] { connect(); return hasObsStatus (main, "OBS 연결됨"); }));
                 if (readers != nullptr) lm_obs_store_release (&readers->slot[0].pid, 0);
                 until ([] { return false; }, 650);
-                connect();
-                // This offline engine has no device: once a new reader connects the restart notice gives way to audio-stopped.
-                expect (until ([&] { connect(); return hasObsStatus (main, "오디오 멈춤"); }));
+                expect (hasObsStatus (main, "OBS를 다시 시작하세요"));
+                if (readers != nullptr)
+                {
+                    lm_obs_store_release (&readers->slot[0].heartbeat_qpc, 0);
+                    lm_obs_store_release (&readers->slot[0].pid, GetCurrentProcessId());
+                }
+                // A newly loaded idle plugin clears restart tracking; a fresh pull outranks this stopped device too.
+                expect (until ([&] { return hasObsStatus (main, "오디오 멈춤"); }));
+                expect (until ([&] { connect(); return hasObsStatus (main, "OBS 연결됨"); }));
             }
             else
                 expect (Installer::isInstalledAndCurrent (f.roots));

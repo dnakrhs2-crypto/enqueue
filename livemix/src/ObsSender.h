@@ -22,7 +22,7 @@ public:
     void write (const float* left, const float* right, int frames) noexcept;
     void writeSilence (int frames) noexcept;
 
-    enum class ReaderState { none, connected };
+    enum class ReaderState { none, idle, connected };
     ReaderState readerState() const; // message thread; at most 16 process liveness checks
     juce::String getError() const; // control/UI only
 

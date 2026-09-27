@@ -28,6 +28,7 @@ TopBar::TopBar (MixDocument& doc) : document (doc)
     addAndMakeVisible (logoText);
 
     sessionName.setFont (juce::Font (juce::FontOptions (pt (15.0f), juce::Font::bold)));
+    sessionName.setComponentID ("session-name");
     sessionName.setJustificationType (juce::Justification::centredLeft);
     sessionName.setMinimumHorizontalScale (1.0f);
     sessionName.setColour (juce::Label::backgroundColourId, Palette::card2);
@@ -35,6 +36,7 @@ TopBar::TopBar (MixDocument& doc) : document (doc)
     sessionName.setTooltip (ko ("열린 세션. 세션 버튼에서 저장·열기"));
     addAndMakeVisible (sessionName);
     styleCaption (sessionState, "");
+    sessionState.setComponentID ("session-state");
     addAndMakeVisible (sessionState);
 
     styleCaption (deviceLabel, "");
@@ -92,6 +94,7 @@ void TopBar::refresh()
     sessionName.setText (document.getDisplayName(), juce::dontSendNotification);
     sessionState.setText (document.isDirty() ? ko ("저장 안 됨") : document.hasFile() ? ko ("저장됨") : ko ("아직 파일 없음"), juce::dontSendNotification);
     sessionState.setColour (juce::Label::textColourId, document.isDirty() ? Palette::meterYellow : Palette::dimText);
+    resized();
 }
 
 void TopBar::setDevices (const juce::StringArray& names, const juce::String& current, const juce::String& typeName)
@@ -100,6 +103,7 @@ void TopBar::setDevices (const juce::StringArray& names, const juce::String& cur
     const auto label = AudioBackends::label (typeName);
     deviceLabel.setText (label.upToFirstOccurrenceOf (" ", false, false), juce::dontSendNotification);
     deviceLabel.setTooltip (label);
+    deviceCombo.setTooltip (label);
     deviceCombo.clear (juce::dontSendNotification);
 
     for (int i = 0; i < names.size(); ++i)
@@ -122,11 +126,13 @@ juce::String TopBar::buildStatusText (double sampleRate, int bufferSize, double 
 void TopBar::setStatus (double sampleRate, int bufferSize, double latencyMs, double dspLoad, bool running, const MixEngine::DeviceFormat& format)
 {
     const auto text = buildStatusText (sampleRate, bufferSize, latencyMs, running, format);
+    const auto cpu = "CPU " + juce::String ((int) std::lround (dspLoad * 100.0)) + "%";
+    const bool changed = fullStatusText != text || dspLabel.getText() != cpu;
     if (fullStatusText != text)
     {
         fullStatusText = text;
         shortStatusText = buildStatusText (sampleRate, bufferSize, latencyMs, running, format, false);
-        resized();
+        minimalStatusText = buildStatusText (sampleRate, bufferSize, latencyMs, running, {}, false);
     }
     auto tooltip = fullStatusText;
     if (running && format.kind != MixEngine::DeviceFormat::Kind::none)
@@ -139,32 +145,29 @@ void TopBar::setStatus (double sampleRate, int bufferSize, double latencyMs, dou
 
     statusLabel.setColour (juce::Label::textColourId, running ? Palette::text : Palette::danger);
     dspMeter.load = dspLoad;
-    dspLabel.setText ("CPU " + juce::String ((int) std::lround (dspLoad * 100.0)) + "%", juce::dontSendNotification);
+    dspLabel.setText (cpu, juce::dontSendNotification);
+    if (changed) resized();
     dspMeter.repaint();
 }
 
 void TopBar::setFxCount (int count)
 {
     fxButton.setButtonText (ko ("FX 채널") + (count > 0 ? "  " + juce::String (count) : juce::String()));
+    resized();
 }
 
 void TopBar::setMuteGroups (bool micMuted, bool fxMuted)
 {
-    const int before = preferredHeight (getWidth());
     micMuteBadge.setVisible (micMuted);
     fxMuteBadge.setVisible (fxMuted);
-
-    if (preferredHeight (getWidth()) != before && onHeightChanged)
-        onHeightChanged();   // the owner gives the bar its new height (and lays everything out)
-    else
-        resized();
+    resized();
 }
 
 TopBar::Mode TopBar::modeFor (int width) const noexcept
 {
     // Keep room for measured status text, a 120 px device, a 160 px session and both mute badges.
     // The badges never change the mode: a mute hotkey must not move the whole layout.
-    return width >= 1440 ? Mode::wide : width >= 700 ? Mode::compact : Mode::narrow;
+    return width >= 1220 ? Mode::wide : width >= 700 ? Mode::compact : Mode::narrow;
 }
 
 int TopBar::preferredHeight (int width) const noexcept
@@ -181,6 +184,7 @@ int TopBar::preferredHeight (int width) const noexcept
 
 void TopBar::resized()
 {
+    if (getWidth() <= 0) return;
     const auto mode = modeFor (getWidth());
     const int h = 34, gap = 8;
     const int rows = mode == Mode::wide ? 1 : mode == Mode::compact ? 2 : 3;
@@ -192,91 +196,96 @@ void TopBar::resized()
     column.removeFromTop (gap);
     auto row3 = rows >= 3 ? column.removeFromTop (h) : juce::Rectangle<int>();
 
-    logoMark.setBounds (row1.removeFromLeft (28).reduced (0, 3));
-    row1.removeFromLeft (8);
-    logoText.setBounds (row1.removeFromLeft (84));
-    row1.removeFromLeft (10);
-
-    if (mode == Mode::narrow)
+    const int stateWidth = labelWidthForText (sessionState, sessionState.getText());
+    const int sessionMinimum = 160 + gap + stateWidth;
+    const int typeWidth = labelWidthForText (deviceLabel, deviceLabel.getText());
+    const int cpuWidth = labelWidthForText (dspLabel, dspLabel.getText());
+    const int minimumStatus = labelWidthForText (statusLabel, minimalStatusText);
+    const int badgeReservation = labelWidthForText (micMuteBadge, micMuteBadge.getText())
+                               + labelWidthForText (fxMuteBadge, fxMuteBadge.getText()) + 2 * gap;
+    const auto buttonWidth = [&] (juce::TextButton& button, int minimum)
     {
-        // The device shares the buttons' row so the full audio status fits even at 420 px.
-        auto r = row2;
-        pluginsButton.setBounds (r.removeFromRight (120));
-        r.removeFromRight (8);
-        fxButton.setBounds (r.removeFromRight (100));
-        r.removeFromRight (8);
-        deviceCombo.setBounds (r);
-    }
-    else
-    {
-        // the right end of the first row
-        pluginsButton.setBounds (row1.removeFromRight (120));
-        row1.removeFromRight (8);
-        fxButton.setBounds (row1.removeFromRight (100));
-        row1.removeFromRight (14);
-    }
+        const auto font = getLookAndFeel().getTextButtonFont (button, h);
+        return juce::jmax (minimum, juce::GlyphArrangement::getStringWidthInt (font, button.getButtonText()) + 24);
+    };
+    const int fxWidth = buttonWidth (fxButton, 100), pluginsWidth = buttonWidth (pluginsButton, 120);
+    auto& buttonRow = mode == Mode::narrow ? row2 : row1;
+    pluginsButton.setBounds (buttonRow.removeFromRight (pluginsWidth));
+    buttonRow.removeFromRight (gap);
+    fxButton.setBounds (buttonRow.removeFromRight (fxWidth));
+    buttonRow.removeFromRight (gap);
 
-    // the device / status part: the same row in the wide bar, its own row below
     auto& statusRow = mode == Mode::wide ? row1 : mode == Mode::compact ? row2 : row3;
-    const bool showCpu = mode != Mode::narrow;   // the narrow bar's device row has no room for it
-    dspMeter.setVisible (showCpu);
-    dspLabel.setVisible (showCpu);
+    const int deviceMinimum = mode == Mode::narrow ? 0 : 120 + gap;
+    int required = minimumStatus + badgeReservation + typeWidth + gap + deviceMinimum;
+    if (mode == Mode::wide) required += 36 + sessionMinimum + gap;
+    bool showCpu = mode != Mode::narrow;
+    bool showMeter = showCpu;
+    bool showLogo = true;
+    if (showCpu) required += cpuWidth + gap;
+    if (showMeter) required += 70 + gap;
+    if (mode == Mode::wide) required += 84 + gap;
+    // Decorative widths yield only when even the shortest status and minimum device cannot fit.
+    if (required > statusRow.getWidth() && showMeter) { showMeter = false; required -= 70 + gap; }
+    if (mode == Mode::wide && required > statusRow.getWidth()) { showLogo = false; required -= 84 + gap; }
+    if (required > statusRow.getWidth() && showCpu) { showCpu = false; required -= cpuWidth + gap; }
+    const bool showType = required <= statusRow.getWidth();
+    if (mode != Mode::wide) showLogo = row1.getWidth() >= 36 + 84 + gap + sessionMinimum;
 
-    if (showCpu)
+    logoMark.setBounds (row1.removeFromLeft (28).reduced (0, 3));
+    row1.removeFromLeft (gap);
+    logoText.setVisible (showLogo);
+    if (showLogo)
+    {
+        logoText.setBounds (row1.removeFromLeft (84));
+        row1.removeFromLeft (gap);
+    }
+    auto session = mode == Mode::wide ? row1.removeFromLeft (sessionMinimum) : row1;
+    sessionState.setBounds (session.removeFromRight (stateWidth));
+    session.removeFromRight (gap);
+    sessionName.setBounds (session);
+    if (mode == Mode::wide) row1.removeFromLeft (gap);
+
+    dspMeter.setVisible (showMeter);
+    dspLabel.setVisible (showCpu);
+    if (showMeter)
     {
         dspMeter.setBounds (statusRow.removeFromRight (70));
-        statusRow.removeFromRight (6);
-        dspLabel.setBounds (statusRow.removeFromRight (62));
-        statusRow.removeFromRight (10);
+        statusRow.removeFromRight (gap);
     }
-
-    // the mute badges: in the one-row bar next to the status (its width keeps their room); in the two- and three-row
-    // bars at the right end of the first row, where only the session name gives - the device box keeps its width
-    auto& badgeRow = mode == Mode::wide ? statusRow : row1;
-
+    if (showCpu)
+    {
+        dspLabel.setBounds (statusRow.removeFromRight (cpuWidth));
+        statusRow.removeFromRight (gap);
+    }
     for (auto* badge : { &fxMuteBadge, &micMuteBadge })
         if (badge->isVisible())
         {
-            badge->setBounds (badgeRow.removeFromRight (mode == Mode::narrow ? 76 : 92).reduced (0, 5));
-            badgeRow.removeFromRight (8);
+            badge->setBounds (statusRow.removeFromRight (labelWidthForText (*badge, badge->getText())).reduced (0, 5));
+            statusRow.removeFromRight (gap);
         }
 
-    auto statusWidth = [&] (int available)
+    deviceLabel.setVisible (showType);
+    deviceLabel.setJustificationType (juce::Justification::centredLeft);
+    if (showType)
     {
-        const auto text = labelWidthForText (statusLabel, fullStatusText) <= available ? fullStatusText : shortStatusText;
-        statusLabel.setText (text, juce::dontSendNotification);
-        return juce::jmin (available, labelWidthForText (statusLabel, text));
-    };
-    const int typeWidth = labelWidthForText (deviceLabel, deviceLabel.getText());
-    if (mode == Mode::wide)
-    {
-        deviceLabel.setJustificationType (juce::Justification::centredRight);
-        statusLabel.setBounds (statusRow.removeFromRight (statusWidth (statusRow.getWidth() - 160 - 120 - typeWidth - 24)));
-        statusRow.removeFromRight (8);
-        const int deviceWidth = juce::jmin (juce::jlimit (120, 260, statusRow.getWidth() / 3), statusRow.getWidth() - 160 - typeWidth - 16);
-        deviceCombo.setBounds (statusRow.removeFromRight (deviceWidth));
-        statusRow.removeFromRight (6);
-        deviceLabel.setBounds (statusRow.removeFromRight (typeWidth));
-        statusRow.removeFromRight (10);
+        deviceLabel.setBounds (statusRow.removeFromLeft (typeWidth));
+        statusRow.removeFromLeft (gap);
     }
+    // The device selector gives way to 160 px before the status drops anything (the bit depth and the word 샘플 are
+    // worth more than the rest of a long endpoint name); it then takes whatever the status leaves.
+    const int available = statusRow.getWidth() - (mode == Mode::narrow ? 0 : 160 + gap);
+    const auto text = labelWidthForText (statusLabel, fullStatusText) <= available ? fullStatusText
+                    : labelWidthForText (statusLabel, shortStatusText) <= available ? shortStatusText : minimalStatusText;
+    statusLabel.setText (text, juce::dontSendNotification);
+    statusLabel.setBounds (statusRow.removeFromRight (labelWidthForText (statusLabel, text)));
+    if (mode == Mode::narrow)
+        deviceCombo.setBounds (row2);
     else
     {
-        deviceLabel.setJustificationType (juce::Justification::centredLeft);
-        deviceLabel.setBounds (statusRow.removeFromLeft (typeWidth));
-        statusRow.removeFromLeft (6);
-        statusLabel.setBounds (statusRow.removeFromRight (statusWidth (statusRow.getWidth() - (mode == Mode::compact ? 128 : 0))));
-        if (mode == Mode::compact)
-        {
-            statusRow.removeFromRight (8);
-            deviceCombo.setBounds (statusRow);
-        }
+        statusRow.removeFromRight (gap);
+        deviceCombo.setBounds (statusRow);
     }
-
-    // the session name and state take what is left of the first row
-    auto session = mode == Mode::wide ? row1.removeFromLeft (juce::jlimit (160, 320, row1.getWidth())) : row1;
-    sessionName.setBounds (session.removeFromLeft (juce::jmax (100, session.getWidth() - 90)));
-    session.removeFromLeft (8);
-    sessionState.setBounds (session);
 }
 
 void TopBar::paint (juce::Graphics& g)
