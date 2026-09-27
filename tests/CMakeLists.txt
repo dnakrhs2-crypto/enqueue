@@ -59,6 +59,7 @@ target_sources(EnqueueTests PRIVATE
     HotkeyLoadTests.cpp
     SafeSaveTests.cpp
     MixSessionTests.cpp
+    LiveMixAsrcTests.cpp
     MixEngineTests.cpp
     WebDavBackupTests.cpp
     MixDocumentTests.cpp
@@ -108,6 +109,32 @@ target_compile_definitions(EnqueueTests PRIVATE
     JUCE_APPLICATION_VERSION_STRING="${PROJECT_VERSION}")
 
 target_link_libraries(EnqueueTests PRIVATE GoCueCore LiveMixUI)
+
+# Compile the same C17 implementation with allocator hooks, including in Release.
+# No global allocator overrides: unrelated JUCE and UI tests retain their allocator.
+set(_asrc_probe "${CMAKE_CURRENT_BINARY_DIR}/lm_asrc_allocation_probe.c")
+file(GENERATE OUTPUT "${_asrc_probe}" CONTENT "
+#include <stdlib.h>
+#include \"lm_obs_protocol.h\"
+void* lm_test_malloc(size_t);
+void* lm_test_calloc(size_t, size_t);
+void* lm_test_realloc(void*, size_t);
+void lm_test_free(void*);
+#define malloc lm_test_malloc
+#define calloc lm_test_calloc
+#define realloc lm_test_realloc
+#define free lm_test_free
+#define lm_asrc_size lm_test_asrc_size
+#define lm_asrc_init lm_test_asrc_init
+#define lm_asrc_reset lm_test_asrc_reset
+#define lm_asrc_set_correction_ppm lm_test_asrc_set_correction_ppm
+#define lm_asrc_process lm_test_asrc_process
+#define lm_asrc_latency_input_frames lm_test_asrc_latency_input_frames
+#define lm_drift_init lm_test_drift_init
+#define lm_drift_update lm_test_drift_update
+#include \"${PROJECT_SOURCE_DIR}/livemix/shared/lm_asrc.c\"
+")
+target_sources(EnqueueTests PRIVATE "${_asrc_probe}")
 
 set_property(TARGET EnqueueTests PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 

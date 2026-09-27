@@ -67,19 +67,23 @@ struct MixMaster
 {
     std::vector<PluginSlotState> chain;
     int outputFirst = 0;   // the main output pair
+    bool sendToObs = false;
 };
 
 struct MixDevice
 {
-    juce::String name;      // ASIO device name ("" = whatever opens)
+    juce::String type = "ASIO";   // JUCE AudioIODeviceType name
+    juce::String input;           // ASIO device or Windows capture endpoint
+    juce::String output;          // ASIO: same as input; Windows: render endpoint, "" = none
     int bufferSize = 256;
     double sampleRate = 48000.0;
+    bool isAsio() const noexcept { return type.containsIgnoreCase ("ASIO"); }
 };
 
 /** The session file (.livemix): everything the app needs to come back exactly as it was. */
 struct MixSession
 {
-    static constexpr int currentVersion = 3;   // 3 (0.7.0): pan - older LiveMix refuses the file rather than losing it on save
+    static constexpr int currentVersion = 4;   // 4 (0.11.0): device type/endpoints and OBS sending; older LiveMix refuses the file
     static constexpr int maxChannels = 8;
     static constexpr int maxFx = 4;
     static constexpr int maxDeviceChannels = 64;

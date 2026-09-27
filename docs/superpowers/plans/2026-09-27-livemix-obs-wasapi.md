@@ -60,7 +60,8 @@ Design choices made by Claude (binding for the implementer):
 - ASRC: our own C module (no allocation after init, no locks): 32-tap Kaiser-windowed sinc (beta 8.6), 512 phases with
   linear phase interpolation, cutoff `0.45 * min(fsIn, fsOut)`, variable ratio per call. PI controller on the fill:
   target 30 ms (OBS) / `2 x output period + input period + 3 ms` (monitor), low-pass 1 s, correction clamp +-1000 ppm,
-  slew <= 20 ppm per second. A change of 100 ppm is 0.17 cent - inaudible.
+  slew <= 200 ppm per second for the first 10 s after init (acquisition), then <= 20 ppm per second (Claude, after
+  Round 1: a 20 ppm/s cold start needed 50 s and lost 25 ms of fill at 1000 ppm). 100 ppm is 0.17 cent - inaudible.
 - Plugin install locations: OBS 33+ -> `%ProgramData%\obs-studio\plugins\livemix-obs\livemix-obs.dll` +
   `...\livemix-obs\data\locale\*.ini`; OBS <= 32 or not found -> legacy `...\livemix-obs\bin\64bit\livemix-obs.dll` +
   `...\livemix-obs\data\locale\*.ini`. Never both layouts at once (installing one removes the other's DLL).

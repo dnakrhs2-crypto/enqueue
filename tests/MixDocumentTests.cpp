@@ -16,6 +16,104 @@ public:
 
     void runTest() override
     {
+        beginTest ("Send to OBS is a value edit, notifies once, and persists through save and load");
+        {
+            MixEngine engine;
+            engine.prepare (48000.0, 256);
+            MixDocument document (engine);
+            int values = 0, structures = 0;
+            bool dirtyAtNotification = false;
+            document.onValueChanged = [&]
+            {
+                ++values;
+                dirtyAtNotification = document.isDirty();
+            };
+            document.onStructureChanged = [&] { ++structures; };
+            expect (! document.getSession().master.sendToObs);
+            document.setSendToObs (false);
+            expect (! document.isDirty());
+            expectEquals (values, 0);
+            document.setSendToObs (true);
+            expect (document.isDirty());
+            expect (dirtyAtNotification);
+            expect (document.getSession().master.sendToObs);
+            expectEquals (values, 1);
+            expectEquals (structures, 0);
+            document.setSendToObs (true);
+            expectEquals (values, 1);
+
+            const auto file = juce::File::createTempFile (".livemix");
+            expect (document.save (file).wasOk());
+            expect (! document.isDirty());
+            values = 0;
+            document.setSendToObs (true);
+            expectEquals (values, 0);
+            expect (! document.isDirty());
+            document.setSendToObs (false);
+            expectEquals (values, 1);
+            expect (document.isDirty());
+            expect (document.load (file).wasOk());
+            expect (document.getSession().master.sendToObs);
+            expect (! document.isDirty());
+            document.newSession();
+            expect (! document.getSession().master.sendToObs);
+            expect (! document.isDirty());
+            expect (file.deleteFile());
+        }
+
+        beginTest ("device info compares every v4 field and batches value announcements");
+        {
+            MixEngine engine;
+            engine.prepare (48000.0, 256);
+            MixDocument document (engine);
+            int values = 0, structures = 0;
+            document.onValueChanged = [&] { ++values; };
+            document.onStructureChanged = [&] { ++structures; };
+            MixDevice device { "Windows Audio", "USB Microphone", "Headphones", 480, 48000.0 };
+            document.setDeviceInfo (device);
+            expect (document.isDirty());
+            expectEquals (values, 1);
+            expectEquals (structures, 0);
+            document.discardUnsavedChanges();
+            document.setDeviceInfo (device);
+            expect (! document.isDirty());
+            expectEquals (values, 1);
+
+            device.output.clear();
+            document.setDeviceInfo (device);
+            expectEquals (values, 2);
+            expect (document.isDirty());
+            expect (document.getSession().device.output.isEmpty());
+            device.type = "Windows Audio (Low Latency Mode)";
+            document.setDeviceInfo (device);
+            expectEquals (values, 3);
+            device.input = "Other Microphone";
+            document.setDeviceInfo (device);
+            expectEquals (values, 4);
+            device.bufferSize = 128;
+            document.setDeviceInfo (device);
+            expectEquals (values, 5);
+            device.sampleRate = 44100.0;
+            document.setDeviceInfo (device);
+            expectEquals (values, 6);
+            const auto& stored = document.getSession().device;
+            expectEquals (stored.type, device.type);
+            expectEquals (stored.input, device.input);
+            expectEquals (stored.output, device.output);
+            expectEquals (stored.bufferSize, device.bufferSize);
+            expectWithinAbsoluteError (stored.sampleRate, device.sampleRate, 1.0e-9);
+
+            {
+                const MixDocument::ValueBatch batch (document);
+                device.output = "New Headphones";
+                document.setDeviceInfo (device);
+                document.setSendToObs (true);
+                expectEquals (values, 6);
+            }
+            expectEquals (values, 7);
+            expectEquals (structures, 0);
+        }
+
         beginTest ("the graph stays empty until the document applies a session (no raw mic before the saved session is in)");
         {
             MixEngine quiet;
@@ -388,7 +486,7 @@ public:
             expect (back.channels[0].chain[0].slotId == chain->getSlot (0).state.slotId);
             expect (back.channels[0].pluginGroups[0].off);
             expectEquals ((int) back.channels[0].pluginGroups[0].slots.size(), 1);   // the removed member is not in the file, the remaining one is
-            expect (copy.toJson().contains ("\"version\": 3"));   // older LiveMix refuses it instead of losing the saved pan
+            expectEquals ((int) juce::JSON::parse (copy.toJson())["version"], MixSession::currentVersion);
         }
 
         beginTest ("a plugin's own state change is picked up on demand and settled by a save");

@@ -248,11 +248,11 @@ juce::String MixEngine::restartDevice()
 
 juce::String MixEngine::openSessionDevice (const MixDevice& device)
 {
-    if (device.name.isEmpty())
+    if (device.input.isEmpty())
         return {};
 
     auto* current = deviceManager.getCurrentAudioDevice();
-    const bool sameDevice = current != nullptr && current->isOpen() && current->getName() == device.name;   // a device object that failed to reopen is not "the same device running"
+    const bool sameDevice = current != nullptr && current->isOpen() && current->getName() == device.input;   // a device object that failed to reopen is not "the same device running"
 
     if (sameDevice && (device.bufferSize <= 0 || current->getCurrentBufferSizeSamples() == device.bufferSize)
         && (device.sampleRate <= 0.0 || juce::approximatelyEqual (current->getCurrentSampleRate(), device.sampleRate)))
@@ -262,7 +262,7 @@ juce::String MixEngine::openSessionDevice (const MixDevice& device)
         return widened.isEmpty() ? juce::String() : juce::String::fromUTF8 ("세션의 장치는 열려 있지만 ") + widened;
     }
 
-    const auto error = openDevice (device.name, device.sampleRate, device.bufferSize);
+    const auto error = openDevice (device.input, device.sampleRate, device.bufferSize);
     return error.isEmpty() ? juce::String() : juce::String::fromUTF8 ("세션의 ") + error;
 }
 

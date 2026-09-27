@@ -330,6 +330,15 @@ void MixDocument::setMasterOutput (int first)
     valueChanged();
 }
 
+void MixDocument::setSendToObs (bool enabled)
+{
+    if (session.master.sendToObs == enabled)
+        return;
+
+    session.master.sendToObs = enabled;
+    valueChanged();
+}
+
 int MixDocument::addPluginGroup (const juce::Uuid& channelId)
 {
     auto* c = session.findChannel (channelId);
@@ -520,14 +529,13 @@ void MixDocument::setSessionName (const juce::String& name)
     valueChanged();
 }
 
-void MixDocument::setDeviceInfo (const juce::String& name, int bufferSize, double sampleRate)
+void MixDocument::setDeviceInfo (const MixDevice& device)
 {
-    if (session.device.name == name && session.device.bufferSize == bufferSize && juce::approximatelyEqual (session.device.sampleRate, sampleRate))
+    if (session.device.type == device.type && session.device.input == device.input && session.device.output == device.output
+        && session.device.bufferSize == device.bufferSize && juce::approximatelyEqual (session.device.sampleRate, device.sampleRate))
         return;
 
-    session.device.name = name;
-    session.device.bufferSize = bufferSize;
-    session.device.sampleRate = sampleRate;
+    session.device = device;
     valueChanged();
 }
 

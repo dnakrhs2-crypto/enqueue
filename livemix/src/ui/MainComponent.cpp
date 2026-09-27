@@ -670,7 +670,8 @@ void MainComponent::deviceChosen()
 
     if (auto* device = engine.getDeviceManager().getCurrentAudioDevice())
         if (device->getTypeName().containsIgnoreCase ("ASIO"))
-            document.setDeviceInfo (device->getName(), device->getCurrentBufferSizeSamples(), device->getCurrentSampleRate());
+            document.setDeviceInfo ({ device->getTypeName(), device->getName(), device->getName(),
+                                      device->getCurrentBufferSizeSamples(), device->getCurrentSampleRate() });
 }
 
 //==============================================================================

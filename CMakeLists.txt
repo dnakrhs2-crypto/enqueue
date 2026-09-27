@@ -241,7 +241,9 @@ set_property(DIRECTORY PROPERTY VS_STARTUP_PROJECT Enqueue)
 enable_testing()
 # LiveMix (the live mic VST3 host) shares the core: its model and engine are a second interface library
 add_library(LiveMixCore INTERFACE)
+target_compile_features(LiveMixCore INTERFACE c_std_17)
 target_sources(LiveMixCore INTERFACE
+    ${CMAKE_CURRENT_SOURCE_DIR}/livemix/shared/lm_asrc.c
     ${CMAKE_CURRENT_SOURCE_DIR}/livemix/src/MixModel.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/livemix/src/MixEngine.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/livemix/src/MixDocument.cpp
@@ -256,7 +258,9 @@ target_sources(LiveMixCore INTERFACE
     ${CMAKE_CURRENT_SOURCE_DIR}/livemix/src/LiveMixSettings.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/livemix/src/GlobalHotkeys.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/livemix/src/PluginPreset.cpp)
-target_include_directories(LiveMixCore INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/livemix/src)
+target_include_directories(LiveMixCore INTERFACE
+    ${CMAKE_CURRENT_SOURCE_DIR}/livemix/src
+    ${CMAKE_CURRENT_SOURCE_DIR}/livemix/shared)
 target_link_libraries(LiveMixCore INTERFACE GoCueCore)
 if(WIN32)
     target_link_libraries(LiveMixCore INTERFACE bcrypt)

@@ -279,7 +279,7 @@ public:
             }
         }
 
-        beginTest ("constructor/new/every successful reload have fresh generations, save/failed loads retain them and session version is 3");
+        beginTest ("constructor/new/every successful reload have fresh generations, save/failed loads retain them and session version is current");
         {
             Fixture f;
             Fixture other;
@@ -302,7 +302,7 @@ public:
             expect (state.update (f.capture()));
             expect (ControlState::diff (dirty, state.getCurrent()).changes.sessionDirty == std::optional<bool> (false));
             const auto fileJson = juce::JSON::parse (file.loadFileAsString());
-            expectEquals ((int) fileJson["version"], 3);
+            expectEquals ((int) fileJson["version"], MixSession::currentVersion);
             expect (! fileJson.hasProperty ("sessionGeneration") && ! fileJson.hasProperty ("sessionId"));
             const auto channel = f.channel();
             for (int i = 0; i < 2; ++i)

@@ -61,6 +61,7 @@ public:
     void setFxMuteGroup (const juce::Uuid& id, bool inGroup);
     void setFxOutput (const juce::Uuid& id, const MixOutput& output);
     void setMasterOutput (int first);
+    void setSendToObs (bool enabled);   // per-session preference
 
     /** A mic channel's plugin groups (MixPluginGroup): made, dropped, their members picked among the chain's slots
         (by slot id), and switched off / on - off bypasses every member in the live chain at once. */
@@ -77,7 +78,7 @@ public:
     int toggleGroupOnEveryChannel (int group, bool& switchedOff);
 
     void setSessionName (const juce::String& name);
-    void setDeviceInfo (const juce::String& name, int bufferSize, double sampleRate);
+    void setDeviceInfo (const MixDevice& device);
 
     /** A plugin chain was edited live (the engine is the truth): the file is out of date. 'refreshViews' false is for
         a parameter turned in a plugin editor: the views need no refresh, only the dirty state (announced once). */
