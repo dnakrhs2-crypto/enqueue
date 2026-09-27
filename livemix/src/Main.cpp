@@ -152,8 +152,8 @@ public:
         if (ObsPluginInstaller::isInstallCommandLine (commandLine))
         {
             juce::String message;
-            const auto result = ObsPluginInstaller::install (ObsPluginInstaller::systemRoots(), message);
-            const bool reported = ObsPluginInstaller::writeResult (ObsPluginInstaller::resultFile(), result, message);
+            bool reported = false;
+            const auto result = ObsPluginInstaller::runInstallCommandLine (commandLine, ObsPluginInstaller::systemRoots(), message, reported);
             using Result = ObsPluginInstaller::Result;
             setApplicationReturnValue (reported && (result == Result::alreadyCurrent || result == Result::installed
                                                     || result == Result::installedRestartObs) ? 0 : 1);

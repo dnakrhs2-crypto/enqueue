@@ -24,6 +24,7 @@ public:
 
     enum class ReaderState { none, connected };
     ReaderState readerState() const; // message thread; at most 16 process liveness checks
+    juce::String getError() const; // control/UI only
 
 private:
     bool openMappings();
@@ -39,7 +40,8 @@ private:
     std::atomic<bool> enabled { false };
     // Bit 0: one copy in flight; bit 1: owner resetting or disabled. Audio makes ONE CAS attempt, never waits.
     std::atomic<unsigned> writerState { 2 };
-    juce::CriticalSection ownerLock; // control methods only, never the audio callback
+    mutable juce::CriticalSection ownerLock; // control methods only, never the audio callback
+    juce::String lastError;
     double sampleRate = 48000.0;
     int64_t frequency = 0;
 

@@ -15,7 +15,7 @@ namespace gocue::livemix
 struct MainComponent::ObsInstallWork
 {
     std::atomic<bool> complete { false };
-    bool install = false, current = false;
+    bool install = false, current = false, allowElevation = false;
     ObsPluginInstaller::Result result = ObsPluginInstaller::Result::failed;
     juce::String message;
 };
@@ -46,7 +46,8 @@ MainComponent::MainComponent (MixDocument& doc, LiveMixSettings& s, ObsPluginAct
     masterCard.onOpenChain = [this] { openChainFor (&engine.getMasterChain(), ko ("마스터")); };
     masterCard.onAddPlugin = [this] { addPluginTo (&engine.getMasterChain(), ko ("마스터"), &masterCard.getAddPluginButton()); };
     masterCard.onOpenLoudness = [this] { showLoudnessWindow(); };
-    masterCard.onObsEnabled = [this] { startObsPluginCheck (true); };
+    masterCard.onObsEnabled = [this] { startObsPluginCheck (true, true); };
+    masterCard.onObsInstallRequested = [this] { startObsPluginCheck (true, true); };
     masterCard.onOpenPluginEditor = [this] (int slot)
     {
         auto& chain = engine.getMasterChain();
@@ -130,6 +131,7 @@ MainComponent::MainComponent (MixDocument& doc, LiveMixSettings& s, ObsPluginAct
         {
             sessionGeneration = document.getSessionGeneration();
             muteGroups.reset();   // a new session is observed only after its runtime groups have been released
+            if (document.getSession().master.sendToObs) startObsPluginCheck (true);
         }
         else
             muteGroups.apply();   // rebuilt nodes start unmuted: the groups' state goes back in
@@ -173,7 +175,7 @@ MainComponent::MainComponent (MixDocument& doc, LiveMixSettings& s, ObsPluginAct
 
     updateDeviceNames();
     rebuildCards();
-    startObsPluginCheck (false);
+    startObsPluginCheck (document.getSession().master.sendToObs);
     startTimerHz (30);
 }
 
@@ -196,7 +198,7 @@ MainComponent::~MainComponent()
     document.onChainRuntimeChanged = nullptr;
 }
 
-void MainComponent::startObsPluginCheck (bool installIfNeeded)
+void MainComponent::startObsPluginCheck (bool installIfNeeded, bool allowElevation)
 {
     if (obsInstallWork != nullptr)
     {
@@ -205,12 +207,14 @@ void MainComponent::startObsPluginCheck (bool installIfNeeded)
         if (installIfNeeded && ! obsInstallWork->install)
         {
             obsInstallRequested = true;
+            obsElevationRequested = obsElevationRequested || allowElevation;
             masterCard.setObsInstalling (true);
         }
         return;
     }
     auto work = std::make_shared<ObsInstallWork>();
     work->install = installIfNeeded;
+    work->allowElevation = allowElevation;
     obsInstallWork = work;
     masterCard.setObsInstalling (installIfNeeded);
     if (installIfNeeded)
@@ -230,7 +234,7 @@ void MainComponent::startObsPluginCheck (bool installIfNeeded)
             {
                 // install() is a no-op for a current version except for cleaning retired DLLs after OBS exits.
                 work->result = ObsPluginInstaller::install (roots, work->message);
-                if (work->result == ObsPluginInstaller::Result::needsElevation)
+                if (work->result == ObsPluginInstaller::Result::needsElevation && work->allowElevation)
                     work->result = actions.elevate (work->message); // exactly one retry, on this same worker
                 work->current = ObsPluginInstaller::isInstalledAndCurrent (roots);
             }
@@ -257,7 +261,8 @@ void MainComponent::finishObsPluginCheck()
     if (obsInstallRequested)
     {
         obsInstallRequested = false;
-        startObsPluginCheck (true);
+        const bool allowElevation = std::exchange (obsElevationRequested, false);
+        startObsPluginCheck (true, allowElevation);
         return;
     }
     masterCard.setObsInstalling (false);
@@ -285,10 +290,12 @@ void MainComponent::refreshObsStatus()
         if (readers == ObsSender::ReaderState::none) obsRestartSawDisconnect = true;
         else if (obsRestartSawDisconnect) obsNeedsRestart = false;
     }
-    masterCard.setObsStatus (! obsPluginCurrent ? MasterCard::ObsStatus::installNeeded
+    const auto sendError = document.getSession().master.sendToObs ? engine.getObsSender().getError() : juce::String();
+    masterCard.setObsStatus (sendError.isNotEmpty() ? MasterCard::ObsStatus::sendFailed
+        : ! obsPluginCurrent ? MasterCard::ObsStatus::installNeeded
         : obsNeedsRestart ? MasterCard::ObsStatus::restartObs
         : ! engine.isDeviceRunning() ? MasterCard::ObsStatus::audioStopped
-        : readers == ObsSender::ReaderState::connected ? MasterCard::ObsStatus::connected : MasterCard::ObsStatus::waiting);
+        : readers == ObsSender::ReaderState::connected ? MasterCard::ObsStatus::connected : MasterCard::ObsStatus::waiting, sendError);
 }
 
 void MainComponent::attachControlServer (ControlServer* server)
@@ -821,7 +828,12 @@ void MainComponent::timerCallback()
         refreshObsStatus();
     }
 
-    if (now < statusUntilMs)
+    if (running && engine.isSplitMonitor() && ! engine.isMonitorRunning())
+    {
+        statusLeft.setColour (juce::Label::textColourId, Palette::danger);
+        statusLeft.setText (ko ("모니터 출력 멈춤 - 설정에서 출력 장치를 확인하세요"), juce::dontSendNotification);
+    }
+    else if (now < statusUntilMs)
     {
         statusLeft.setText (statusText, juce::dontSendNotification);
     }

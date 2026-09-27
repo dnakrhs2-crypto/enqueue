@@ -362,13 +362,41 @@ const char* ObsPluginInstaller::resultName (Result result)
     return "failed";
 }
 
-juce::File ObsPluginInstaller::resultFile()
+juce::File ObsPluginInstaller::resultFile (const juce::String& commandLine)
 {
+    const juce::ArgumentList args ("LiveMix", commandLine);
+    for (int i = 0; i < args.size(); ++i)
+        if (args[i].text == "--result")
+            return i + 1 < args.size() && juce::File::isAbsolutePath (args[i + 1].text)
+                ? juce::File (args[i + 1].text) : juce::File();
     return juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("LiveMix/obs-install-result.txt");
+}
+
+juce::String ObsPluginInstaller::elevatedCommandLine (const juce::File& report)
+{
+    return "--install-obs-plugin --elevated-helper --result " + report.getFullPathName().quoted();
+}
+
+ObsPluginInstaller::Result ObsPluginInstaller::runInstallCommandLine (const juce::String& commandLine, const Roots& roots,
+    juce::String& message, bool& reported, const std::function<Result (juce::String&)>& elevate)
+{
+    const juce::ArgumentList args ("LiveMix", commandLine);
+    bool allowElevation = false, elevatedHelper = false;
+    for (int i = 0; i < args.size(); ++i)
+    {
+        allowElevation |= args[i].text == "--allow-elevation";
+        elevatedHelper |= args[i].text == "--elevated-helper";
+    }
+    auto result = install (roots, message);
+    if (result == Result::needsElevation && allowElevation && ! elevatedHelper)
+        result = elevate (message);
+    reported = writeResult (resultFile (commandLine), result, message);
+    return result;
 }
 
 bool ObsPluginInstaller::writeResult (const juce::File& file, Result result, const juce::String& message)
 {
+    if (file == juce::File()) return false;
     if (file.getParentDirectory().createDirectory().failed()) return false;
     const auto line = juce::String (resultName (result)) + "\t" + message.replaceCharacters ("\r\n\t", "   ") + "\n";
     return file.replaceWithData (line.toRawUTF8(), line.getNumBytesAsUTF8());
@@ -393,21 +421,21 @@ ObsPluginInstaller::Result ObsPluginInstaller::readResult (const juce::File& fil
 
 ObsPluginInstaller::Result ObsPluginInstaller::installElevated (juce::String& message)
 {
-    // Called only on the UI worker. Clear the previous reply BEFORE launching so a crash cannot look successful.
-    const auto report = resultFile();
-    const auto error = createDirectory (report.getParentDirectory());
-    if (error != ERROR_SUCCESS) return fileFailure (error, report, message);
-    if (report.exists() && ! DeleteFileW (report.getFullPathName().toWideCharPointer()))
+    // The caller owns a unique reply file even when runas uses another administrator's TEMP.
+    const juce::TemporaryFile reply (".obs-install-result.txt");
+    const auto report = reply.getFile();
+    if (! writeResult (report, Result::failed, ko ("설치 결과를 받지 못했습니다.")))
         return fileFailure (GetLastError(), report, message);
 
     const auto exe = juce::File::getSpecialLocation (juce::File::currentExecutableFile).getFullPathName();
+    const auto parameters = elevatedCommandLine (report);
     const auto com = CoInitializeEx (nullptr, COINIT_APARTMENTTHREADED);
     SHELLEXECUTEINFOW execute {};
     execute.cbSize = sizeof (execute);
     execute.fMask = SEE_MASK_NOCLOSEPROCESS | SEE_MASK_NOASYNC | SEE_MASK_FLAG_NO_UI;
     execute.lpVerb = L"runas";
     execute.lpFile = exe.toWideCharPointer();
-    execute.lpParameters = L"--install-obs-plugin";
+    execute.lpParameters = parameters.toWideCharPointer();
     execute.nShow = SW_HIDE;
     const bool launched = ShellExecuteExW (&execute) != FALSE;
     const auto launchError = GetLastError();

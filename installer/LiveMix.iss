@@ -81,7 +81,8 @@ Root: HKA; Subkey: "Software\Classes\LiveMix.Session\shell\open\command"; ValueT
 
 [Run]
 ; Install/update the plugin during silent updates too, independently of /NORUN.
-Filename: "{app}\{#AppExe}"; Parameters: "--install-obs-plugin"; StatusMsg: "{cm:ObsPluginInstalling}"; Flags: runhidden waituntilterminated; Tasks: obsplugin
+Filename: "{app}\{#AppExe}"; Parameters: "--install-obs-plugin --allow-elevation"; StatusMsg: "{cm:ObsPluginInstalling}"; Flags: runhidden waituntilterminated; Tasks: obsplugin; Check: InteractiveObsInstall
+Filename: "{app}\{#AppExe}"; Parameters: "--install-obs-plugin"; StatusMsg: "{cm:ObsPluginInstalling}"; Flags: runhidden waituntilterminated; Tasks: obsplugin; Check: SilentObsInstall
 ; also after a silent auto-update (WinSparkle runs Setup with /SILENT): the app comes back by itself.
 ; Scripted installs pass /NORUN=1 to keep it closed.
 Filename: "{app}\{#AppExe}"; Description: "{cm:LaunchProgram,{#StringChange(AppName, '&', '&&')}}"; Flags: nowait postinstall; Check: not NoRunRequested
@@ -100,6 +101,16 @@ const
 function NoRunRequested: Boolean;
 begin
   Result := ExpandConstant('{param:NORUN|0}') = '1';
+end;
+
+function InteractiveObsInstall: Boolean;
+begin
+  Result := not WizardSilent;
+end;
+
+function SilentObsInstall: Boolean;
+begin
+  Result := WizardSilent;
 end;
 
 function CoupangShortcutPath: String;

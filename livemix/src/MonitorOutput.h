@@ -3,6 +3,7 @@
 #include "lm_asrc.h"
 #include <juce_audio_devices/juce_audio_devices.h>
 #include <atomic>
+#include <array>
 #include <cstdint>
 #include <memory>
 #include <vector>
@@ -30,20 +31,29 @@ public:
     double getOutputSampleRate() const noexcept { return outputRate; }
     int getOutputPeriod() const noexcept { return outputPeriod; }
     bool isRunning() const noexcept { return running.load (std::memory_order_acquire); }
+    double getInputSampleRate() const noexcept { return inputRate; }
+    int getInputPeriod() const noexcept { return inputPeriod; }
+    void requestRestart() noexcept;
+    bool needsRestart() const noexcept { return restartRequested.load (std::memory_order_acquire); }
+    double getRestartOutputRate() const noexcept { return restartOutputRate.load (std::memory_order_acquire); }
+    int getRestartOutputPeriod() const noexcept { return restartOutputPeriod.load (std::memory_order_acquire); }
 
     /** Offline seam: no AudioIODevice. The nominal rates configure the ASRC; callers schedule independent clocks. */
     void prepareForTest (double producerRate, int producerPeriod, double consumerRate, int consumerPeriod);
     void pullForTest (float* interleavedOutput, int frames) noexcept { pull (interleavedOutput, frames); }
 
 private:
+    friend struct MonitorOutputTestAccess;
     void prepare (double producerRate, int producerPeriod, double consumerRate, int consumerPeriod, int outputLatency);
     void resetConsumer() noexcept;
+    void fadeOut (float* output, int made, int frames) noexcept;
+    void releaseTail (float* output, int offset, int frames) noexcept;
     void pull (float* interleavedOutput, int frames) noexcept;
     void audioDeviceIOCallbackWithContext (const float* const*, int, float* const*, int, int,
                                            const juce::AudioIODeviceCallbackContext&) override;
     void audioDeviceAboutToStart (juce::AudioIODevice*) override;
-    void audioDeviceStopped() override { running.store (false, std::memory_order_release); }
-    void audioDeviceError (const juce::String&) override { running.store (false, std::memory_order_release); }
+    void audioDeviceStopped() override { requestRestart(); }
+    void audioDeviceError (const juce::String&) override { requestRestart(); }
 
     std::unique_ptr<juce::AudioIODevice> device;
     std::vector<float> fifo, outputScratch;
@@ -51,14 +61,21 @@ private:
     lm_asrc* asrc = nullptr;
     lm_drift drift {};
     double inputRate = 48000.0, outputRate = 48000.0, target = 0.0, latencyMs = 0.0;
-    int outputPeriod = 256;
+    int inputPeriod = 256, outputPeriod = 256;
+    int fadeFrames = 240, fadeInRemaining = 0, fadeOutRemaining = 0;
+    std::array<float, 2> lastOutput {}, tail {};
     std::uint64_t capacity = 0;
     std::atomic<std::uint64_t> writePosition { 0 };
     std::atomic<std::uint64_t> readPosition { 0 };
     std::atomic<std::uint64_t> underruns { 0 }, overruns { 0 };
     std::atomic<bool> running { false };
+    std::atomic<bool> restartRequested { false };
+    std::atomic<double> restartOutputRate { 48000.0 };
+    std::atomic<int> restartOutputPeriod { 256 };
     std::uint64_t observedOverruns = 0; // consumer only
     bool prefill = true;              // consumer only
+    bool reseatingFill = false;
+    double fillBias = 0.0, reseatSum = 0.0, reseatSeconds = 0.0;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (MonitorOutput)
 };

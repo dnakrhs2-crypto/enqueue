@@ -185,9 +185,10 @@ void FxDrawer::refresh()
         returnValue.setColour (juce::Label::textColourId, mutedNow ? Palette::danger : Palette::text);
         masterChip.setToggleState (f->output.master, juce::dontSendNotification);
         directChip.setToggleState (f->output.direct, juce::dontSendNotification);
-        fillChannelCombo (directCombo, outputNames, true, MixSession::maxDeviceChannels);
-        directCombo.setSelectedId (f->output.directFirst + 1, juce::dontSendNotification);
-        directCombo.setEnabled (f->output.direct);
+        const auto runningDevice = document.getEngine().getOpenDevice();
+        const auto device = runningDevice.input.isNotEmpty() ? runningDevice : session.device;
+        fillDirectOutputCombo (directCombo, directChip, outputNames, device.isAsio(), device.output.isNotEmpty(),
+                               f->output.directFirst, f->output.direct);
         monoChip.setToggleState (f->mono, juce::dontSendNotification);
         muteGroupChip.setToggleState (f->muteGroup, juce::dontSendNotification);
     }

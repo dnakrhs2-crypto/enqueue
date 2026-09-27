@@ -6,6 +6,14 @@
 #include <cmath>
 #include <vector>
 
+namespace gocue::livemix
+{
+struct MonitorOutputTestAccess
+{
+    static lm_drift state (const MonitorOutput& monitor) { return monitor.drift; }
+};
+}
+
 namespace gocue::tests
 {
 using namespace gocue::livemix;
@@ -90,7 +98,7 @@ public:
             for (int b = 0; b < 40; ++b)
             {
                 monitor.pullForTest (output.data(), 240);
-                if (monitor.getUnderruns() != 0)
+                if (b > 5) // the partial block and at most 5 ms of release are retained
                     expect (std::all_of (output.begin(), output.end(), [] (float x) { return x == 0.0f; }));
             }
             expect (monitor.getUnderruns() == 1);
@@ -117,6 +125,70 @@ public:
             expectWithinAbsoluteError (output.back(), -0.125f, 1.0e-5f);
             expect (monitor.getUnderruns() == 1);
             expect (monitor.getOverruns() == 0);
+        }
+
+        beginTest ("200 ms stall preserves learned clock and has smooth release and recovery edges");
+        for (double truePpm : { -300.0, 300.0 })
+        {
+            MonitorOutput monitor;
+            constexpr int period = 240;
+            constexpr int producerPeriod = 96;
+            monitor.prepareForTest (48000.0, producerPeriod, 48000.0, period);
+            std::array<float, producerPeriod> input;
+            std::array<float, period * 2> output;
+            const double producerRate = 48000.0 * (1.0 + truePpm * 1.0e-6);
+            double nextInput = 0.0, maxStep = 0.0, maxPpmDeviation = 0.0;
+            float previous = 0.0f;
+            int sample = 0;
+            lm_drift before {};
+            for (int b = 0; b < 13200; ++b)
+            {
+                const double time = b * 0.005;
+                while (nextInput <= time + 1.0e-10)
+                {
+                    for (auto& x : input)
+                        x = 0.5f * (float) std::sin (juce::MathConstants<double>::twoPi * 137.0 * sample++ / 48000.0);
+                    if (nextInput < 60.0 || nextInput >= 60.2)
+                        monitor.push (input.data(), input.data(), producerPeriod);
+                    nextInput += producerPeriod / producerRate;
+                }
+                if (b == 12000) before = MonitorOutputTestAccess::state (monitor);
+                monitor.pullForTest (output.data(), period);
+                for (int i = 0; i < period; ++i)
+                {
+                    const auto value = output[(size_t) i * 2];
+                    if (time >= 60.0) maxStep = std::max (maxStep, (double) std::abs (value - previous));
+                    previous = value;
+                }
+                if (time >= 60.0)
+                    maxPpmDeviation = std::max (maxPpmDeviation, std::abs (MonitorOutputTestAccess::state (monitor).ppm - before.ppm));
+            }
+            expectWithinAbsoluteError (before.ppm, truePpm, 50.0);
+            expectLessOrEqual (maxPpmDeviation, 50.0);
+            expectLessOrEqual (maxStep, 2.0 * 0.5 * std::sin (juce::MathConstants<double>::pi * 137.0 / 48000.0) + 0.01);
+            expect (monitor.getUnderruns() == 1 && monitor.getOverruns() == 0);
+            const auto recovered = MonitorOutputTestAccess::state (monitor);
+            logMessage ("stall " + juce::String (truePpm) + " ppm: before=" + juce::String (before.ppm, 3)
+                        + ", recovered=" + juce::String (recovered.ppm, 3) + ", max change=" + juce::String (maxPpmDeviation, 3)
+                        + ", max sample step=" + juce::String (maxStep, 6));
+            expectGreaterOrEqual (recovered.elapsed, before.elapsed);
+            // Overflow re-prefill preserves the same three learned quantities exactly.
+            for (int b = 0; b < 200; ++b) monitor.push (input.data(), input.data(), producerPeriod);
+            monitor.pullForTest (output.data(), period);
+            const auto overflow = MonitorOutputTestAccess::state (monitor);
+            expectWithinAbsoluteError (overflow.ppm, recovered.ppm, 1.0e-9);
+            expectWithinAbsoluteError (overflow.integ, recovered.integ, 1.0e-9);
+            expectWithinAbsoluteError (overflow.elapsed, recovered.elapsed, 1.0e-9);
+            for (int b = 0; b < 8; ++b) monitor.push (input.data(), input.data(), producerPeriod);
+            monitor.pullForTest (output.data(), period);
+            const auto refilled = MonitorOutputTestAccess::state (monitor);
+            expectWithinAbsoluteError (refilled.ppm, recovered.ppm, 1.0e-9);
+            expectWithinAbsoluteError (refilled.integ, recovered.integ, 1.0e-9);
+            expectGreaterThan (refilled.elapsed, recovered.elapsed);
+            expect (std::any_of (output.begin(), output.end(), [] (float x) { return std::abs (x) > 0.01f; }));
+            monitor.prepareForTest (44100.0, period, 48000.0, period);
+            const auto restarted = MonitorOutputTestAccess::state (monitor);
+            expect (restarted.ppm == 0.0 && restarted.integ == 0.0 && restarted.elapsed == 0.0);
         }
 
         beginTest ("a stopped consumer cannot block the producer; overflow discards stale audio on resume");

@@ -5,6 +5,8 @@
 
 #include <array>
 #include <thread>
+#include <sddl.h>
+#include <aclapi.h>
 
 namespace gocue::livemix
 {
@@ -49,6 +51,65 @@ public:
 
     void runTest() override
     {
+        beginTest ("a denied readers mapping never prevents the audio ring from sending");
+        {
+            const auto testName = mappingName();
+            PSECURITY_DESCRIPTOR descriptor = nullptr;
+            expect (ConvertStringSecurityDescriptorToSecurityDescriptorW (L"D:P(D;;GA;;;WD)", SDDL_REVISION_1, &descriptor, nullptr) != FALSE);
+            SECURITY_ATTRIBUTES security { sizeof (security), descriptor, FALSE };
+            HANDLE denied = CreateFileMappingW (INVALID_HANDLE_VALUE, &security, PAGE_READWRITE, 0,
+                                               sizeof (lm_obs_readers), (testName + ".Readers").toWideCharPointer());
+            expect (denied != nullptr);
+            if (descriptor != nullptr) LocalFree (descriptor);
+            ObsSender sender (testName);
+            sender.setEnabled (true);
+            expect (sender.isEnabled());
+            expect (sender.readerState() == ObsSender::ReaderState::none);
+            Mapping ring (testName, ringBytes, false, true);
+            expect (ring.view != nullptr);
+            if (ring.view != nullptr)
+            {
+                const std::array<float, 3> tone { 0.2f, -0.4f, 0.6f };
+                sender.write (tone.data(), tone.data(), (int) tone.size());
+                expectEquals (lm_obs_load_acquire (&ring.header()->write_frames), int64_t (tone.size()));
+                expectEquals (ring.pcm()[4], tone[2]);
+            }
+            if (denied != nullptr) CloseHandle (denied);
+        }
+
+        beginTest ("both mappings grant interactive users access in their protected DACL");
+        {
+            const auto testName = mappingName();
+            ObsSender sender (testName);
+            sender.setEnabled (true);
+            for (const auto& mapping : { testName, testName + ".Readers" })
+            {
+                HANDLE handle = OpenFileMappingW (READ_CONTROL, FALSE, mapping.toWideCharPointer());
+                expect (handle != nullptr);
+                if (handle == nullptr) continue;
+                PSECURITY_DESCRIPTOR descriptor = nullptr;
+                PACL acl = nullptr;
+                expectEquals ((int) GetSecurityInfo (handle, SE_KERNEL_OBJECT, DACL_SECURITY_INFORMATION, nullptr, nullptr, &acl, nullptr, &descriptor), (int) ERROR_SUCCESS);
+                BYTE interactive[SECURITY_MAX_SID_SIZE];
+                DWORD bytes = sizeof (interactive);
+                CreateWellKnownSid (WinInteractiveSid, nullptr, interactive, &bytes);
+                bool found = false;
+                if (acl != nullptr)
+                    for (DWORD i = 0; i < acl->AceCount; ++i)
+                    {
+                        void* raw = nullptr;
+                        if (GetAce (acl, i, &raw))
+                        {
+                            const auto* ace = static_cast<ACCESS_ALLOWED_ACE*> (raw);
+                            found |= ace->Header.AceType == ACCESS_ALLOWED_ACE_TYPE && EqualSid ((PSID) &ace->SidStart, interactive) != FALSE;
+                        }
+                    }
+                expect (found);
+                if (descriptor != nullptr) LocalFree (descriptor);
+                CloseHandle (handle);
+            }
+        }
+
         beginTest ("read-only mapping exposes the complete v1 header; OFF retains it and ON increments the epoch");
         {
             const auto testName = mappingName();

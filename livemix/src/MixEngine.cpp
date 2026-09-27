@@ -96,6 +96,7 @@ juce::AudioIODeviceType* MixEngine::findType (const juce::String& name)
 
 void MixEngine::ensureCallback()
 {
+    startTimer (50);
     if (! callbackAdded)
     {
         deviceManager.addAudioCallback (this);
@@ -254,13 +255,6 @@ juce::String MixEngine::openDevice (const MixDevice& requested)
     openedDevice = wanted;
     splitMonitor.store (split, std::memory_order_release);
     stereoOutputsOnly.store (! wanted.isAsio(), std::memory_order_relaxed);
-    if (! wanted.isAsio())
-    {
-        const juce::ScopedLock sl (lock);
-        master.outputFirst.store (0, std::memory_order_relaxed);
-        for (auto& channel : channels) channel->directFirst.store (0, std::memory_order_relaxed);
-        for (auto& fx : fxNodes) fx->directFirst.store (0, std::memory_order_relaxed);
-    }
     ensureCallback();
     openedDevice = getOpenDevice();
     return {};
@@ -318,12 +312,36 @@ juce::String MixEngine::openSessionDevice (const MixDevice& device)
 
 void MixEngine::shutdown()
 {
+    stopTimer();
     removeCallback();
     obsSender.setEnabled (false);
     deviceManager.closeAudioDevice();
     if (monitor != nullptr) monitor->stop();
     monitor.reset();
     splitMonitor.store (false, std::memory_order_release);
+}
+
+bool MixEngine::isMonitorRunning() const noexcept
+{
+    return isDeviceRunning() && (isSplitMonitor() ? monitor != nullptr && monitor->isRunning() : getNumDeviceOutputs() > 0);
+}
+
+void MixEngine::timerCallback()
+{
+    if (! isSplitMonitor() || monitor == nullptr || ! monitor->needsRestart() || ! isDeviceRunning()) return;
+    auto* input = deviceManager.getCurrentAudioDevice();
+    auto* type = findType (openedDevice.type);
+    if (input == nullptr || type == nullptr || ! input->isOpen()) return;
+
+    // Joining the graph first makes replacing the producer's monitor pointer and all ASRC storage safe.
+    removeCallback();
+    monitor->stop(); // join the output callback before reading its last announced format
+    const auto rate = monitor->getRestartOutputRate();
+    const auto period = monitor->getRestartOutputPeriod();
+    monitor = std::make_unique<MonitorOutput>();
+    monitor->start (*type, openedDevice.output, input->getCurrentSampleRate(), input->getCurrentBufferSizeSamples(), period, rate);
+    ensureCallback(); // a failed rebuild stays stopped and is visible until the operator retries
+    openedDevice = getOpenDevice();
 }
 
 double MixEngine::getLatencyMs() const
@@ -630,6 +648,9 @@ void MixEngine::audioDeviceAboutToStart (juce::AudioIODevice* device)
 {
     const double sr = device->getCurrentSampleRate();
     const int bs = device->getCurrentBufferSizeSamples();
+    if (isSplitMonitor() && monitor != nullptr
+        && (monitor->getInputSampleRate() != sr || monitor->getInputPeriod() != bs))
+        monitor->requestRestart();
     prepare (sr > 0.0 ? sr : 48000.0, bs > 0 ? bs : 256);
     numDeviceInputs.store (device->getActiveInputChannels().countNumberOfSetBits(), std::memory_order_relaxed);
     numDeviceOutputs.store (isSplitMonitor() ? 2 : device->getActiveOutputChannels().countNumberOfSetBits(), std::memory_order_relaxed);
@@ -641,12 +662,14 @@ void MixEngine::audioDeviceAboutToStart (juce::AudioIODevice* device)
 void MixEngine::audioDeviceStopped()
 {
     deviceRunning.store (false, std::memory_order_release);
+    if (isSplitMonitor() && monitor != nullptr) monitor->requestRestart();
     dspLoad.store (0.0, std::memory_order_relaxed);
 }
 
 void MixEngine::audioDeviceError (const juce::String&)
 {
     deviceRunning.store (false, std::memory_order_release);   // the status line says "오디오 멈춤" instead of pretending
+    if (isSplitMonitor() && monitor != nullptr) monitor->requestRestart();
 }
 
 //==============================================================================
@@ -675,7 +698,7 @@ int MixEngine::outputFirst (int requested) const noexcept
 
 void MixEngine::applyOutput (const MixOutput& output, std::atomic<bool>& toMaster, std::atomic<bool>& direct, std::atomic<int>& directFirst)
 {
-    directFirst.store (outputFirst (output.directFirst), std::memory_order_relaxed);
+    directFirst.store (juce::jlimit (0, maxDeviceChannels - 2, output.directFirst), std::memory_order_relaxed);
     toMaster.store (output.master, std::memory_order_relaxed);
     direct.store (output.direct, std::memory_order_relaxed);
 }
@@ -835,7 +858,7 @@ void MixEngine::applySession (const MixSession& session, juce::StringArray* erro
                 break;
         }
 
-        master.outputFirst.store (outputFirst (session.master.outputFirst), std::memory_order_relaxed);
+        master.outputFirst.store (juce::jlimit (0, maxDeviceChannels - 2, session.master.outputFirst), std::memory_order_relaxed);
 
         if (freshMaster != nullptr)
         {
@@ -960,7 +983,7 @@ void MixEngine::setFxOutput (const juce::Uuid& fxId, const MixOutput& output)
 
 void MixEngine::setMasterOutput (int first)
 {
-    master.outputFirst.store (outputFirst (first), std::memory_order_relaxed);
+    master.outputFirst.store (juce::jlimit (0, maxDeviceChannels - 2, first), std::memory_order_relaxed);
 }
 
 PluginChain* MixEngine::getChannelChain (const juce::Uuid& id) const noexcept

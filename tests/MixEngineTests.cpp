@@ -5,6 +5,7 @@
 #include "ui/SettingsDialog.h"
 #include "ui/TopBar.h"
 #include "ui/LiveMixLookAndFeel.h"
+#include "../livemix/src/ui/MainComponent.h"
 
 #include <atomic>
 #include <chrono>
@@ -16,6 +17,7 @@
 #include <array>
 #include <cmath>
 #include <vector>
+#include <windows.h>
 
 namespace gocue::tests
 {
@@ -29,6 +31,7 @@ namespace
         juce::String input, output;
         juce::BigInteger inputs, outputs;
         bool playing = false;
+        juce::AudioIODevice* device = nullptr;
         double rate = 48000.0;
         int buffer = 256;
         juce::AudioIODeviceCallback* callback = nullptr;
@@ -38,7 +41,7 @@ namespace
     {
     public:
         MixFakeDevice (const juce::String& type, std::shared_ptr<MixDeviceRecord> r)
-            : AudioIODevice (r->output.isNotEmpty() ? r->output : r->input, type), record (std::move (r)) {}
+            : AudioIODevice (r->output.isNotEmpty() ? r->output : r->input, type), record (std::move (r)) { record->device = this; }
         ~MixFakeDevice() override { stop(); }
         juce::StringArray channelNames (bool input) const
         {
@@ -117,6 +120,7 @@ namespace
             auto r = std::make_shared<MixDeviceRecord>();
             r->input = input;
             r->output = output;
+            if (failOutputs && output.isNotEmpty()) r->output = "Broken";
             records.push_back (r);
             return new MixFakeDevice (getTypeName(), std::move (r));
         }
@@ -127,6 +131,7 @@ namespace
             return {};
         }
         std::vector<std::shared_ptr<MixDeviceRecord>> records;
+        bool failOutputs = false;
     };
 
     void removeRealMixDeviceTypes (MixEngine& engine)
@@ -632,7 +637,181 @@ public:
             expectEquals (engine.getOpenDevice().bufferSize, 512);
         }
 
-        beginTest ("Windows routing sanitises master, channel direct and FX direct to outputs 1-2");
+        beginTest ("split monitor is rebuilt after input rate and output period restarts, retaining 1 kHz pitch");
+        {
+            MixEngine engine;
+            removeRealMixDeviceTypes (engine);
+            auto type = std::make_unique<MixFakeType> ("Windows Audio");
+            auto* fake = type.get();
+            engine.getDeviceManager().addAudioDeviceType (std::move (type));
+            expect (engine.openDevice ({ "Windows Audio", "Capture", "Headphones", 256, 48000.0 }).isEmpty());
+            MixSession s;
+            s.addChannel();
+            engine.applySession (s);
+            auto originalOutput = fake->playingOutput();
+            auto* inputDevice = engine.getDeviceManager().getCurrentAudioDevice();
+            std::shared_ptr<MixDeviceRecord> inputRecord;
+            for (const auto& record : fake->records)
+                if (record->device == inputDevice)
+                {
+                    inputRecord = record;
+                    record->callback->audioDeviceStopped();
+                    record->rate = 44100.0;
+                    record->callback->audioDeviceAboutToStart (inputDevice);
+                    break;
+                }
+            expect (! engine.isMonitorRunning());
+            auto pump = [&]
+            {
+                const auto deadline = juce::Time::getMillisecondCounterHiRes() + 1500.0;
+                while (! engine.isMonitorRunning() && juce::Time::getMillisecondCounterHiRes() < deadline)
+                {
+                    MSG message;
+                    while (PeekMessageW (&message, nullptr, 0, 0, PM_REMOVE))
+                    {
+                        TranslateMessage (&message);
+                        DispatchMessageW (&message);
+                    }
+                    juce::Thread::sleep (2);
+                }
+                expect (engine.isMonitorRunning());
+            };
+            pump();
+            auto outputDevice = fake->playingOutput();
+            expect (outputDevice != nullptr && outputDevice != originalOutput);
+            if (outputDevice != nullptr && outputDevice->callback != nullptr)
+            {
+                // Schedule the actual engine and monitor callbacks on their two independent nominal clocks.
+                std::array<float, 256> input;
+                const float* inputs[] { input.data() };
+                juce::AudioBuffer<float> output (2, outputDevice->buffer);
+                double nextInput = 0.0, firstCrossing = -1.0, lastCrossing = -1.0;
+                int inputSample = 0, crossings = 0, outputSample = 0;
+                float previous = 0.0f;
+                for (int block = 0; block < 1200; ++block)
+                {
+                    const double time = block * outputDevice->buffer / outputDevice->rate;
+                    while (nextInput <= time)
+                    {
+                        for (auto& x : input) x = 0.5f * (float) std::sin (juce::MathConstants<double>::twoPi * 1000.0 * inputSample++ / 44100.0);
+                        inputRecord->callback->audioDeviceIOCallbackWithContext (inputs, 1, nullptr, 0, (int) input.size(), {});
+                        nextInput += input.size() / 44100.0;
+                    }
+                    outputDevice->callback->audioDeviceIOCallbackWithContext (nullptr, 0, output.getArrayOfWritePointers(), 2, output.getNumSamples(), {});
+                    for (int i = 0; i < output.getNumSamples(); ++i, ++outputSample)
+                    {
+                        const float current = output.getSample (0, i);
+                        if (time > 1.0 && previous < 0.0f && current >= 0.0f)
+                        {
+                            const double crossing = outputSample - current / (current - previous);
+                            if (firstCrossing < 0.0) firstCrossing = crossing;
+                            lastCrossing = crossing;
+                            ++crossings;
+                        }
+                        previous = current;
+                    }
+                }
+                expectGreaterThan (crossings, 1000);
+                const double hz = (crossings - 1) * outputDevice->rate / (lastCrossing - firstCrossing);
+                expectWithinAbsoluteError (1200.0 * std::log2 (hz / 1000.0), 0.0, 1.0);
+                outputDevice->callback->audioDeviceStopped();
+                outputDevice->buffer = 512;
+                outputDevice->rate = 44100.0;
+                outputDevice->callback->audioDeviceAboutToStart (outputDevice->device);
+                expect (! engine.isMonitorRunning());
+                pump();
+                const auto rebuilt = fake->playingOutput();
+                expect (rebuilt != nullptr && rebuilt != outputDevice);
+                if (rebuilt != nullptr)
+                {
+                    expectEquals (rebuilt->buffer, 512);
+                    expectWithinAbsoluteError (rebuilt->rate, 44100.0, 0.01);
+                    struct IsolatedFolder
+                    {
+                        juce::File file = juce::File::createTempFile ("-monitor-status");
+                        ~IsolatedFolder() { file.deleteRecursively(); }
+                    } isolated;
+                    const auto folder = isolated.file;
+                    LiveMixSettings settings (folder);
+                    MixDocument document (engine);
+                    document.applyToEngine();
+                    ObsPluginActions actions;
+                    actions.roots = [folder] { return ObsPluginInstaller::Roots { folder, folder, folder, [] { return false; }, {} }; };
+                    actions.elevate = [] (juce::String&) { return ObsPluginInstaller::Result::needsElevation; };
+                    gocue::livemix::MainComponent main (document, settings, actions);
+                    fake->failOutputs = true;
+                    rebuilt->callback->audioDeviceStopped();
+                    rebuilt->buffer = 128;
+                    rebuilt->callback->audioDeviceAboutToStart (rebuilt->device);
+                    bool stoppedStatus = false;
+                    const auto deadline = juce::Time::getMillisecondCounterHiRes() + 500.0;
+                    while (juce::Time::getMillisecondCounterHiRes() < deadline)
+                    {
+                        MSG message;
+                        while (PeekMessageW (&message, nullptr, 0, 0, PM_REMOVE))
+                        {
+                            TranslateMessage (&message);
+                            DispatchMessageW (&message);
+                        }
+                        for (auto* child : main.getChildren())
+                            if (auto* label = dynamic_cast<juce::Label*> (child))
+                                stoppedStatus |= label->getText() == ko ("모니터 출력 멈춤 - 설정에서 출력 장치를 확인하세요");
+                        juce::Thread::sleep (2);
+                    }
+                    expect (engine.isDeviceRunning() && ! engine.isMonitorRunning());
+                    expect (stoppedStatus);
+                    fake->failOutputs = false;
+                    expect (engine.restartDevice().isEmpty());
+                    expect (engine.isMonitorRunning());
+                }
+            }
+        }
+
+        beginTest ("ASIO routing survives Windows opens and a session applied before its ASIO device opens");
+        for (int scenario : { 0, 1, 2 }) // device round trip, session load, live routing edits
+        {
+            MixEngine engine;
+            removeRealMixDeviceTypes (engine);
+            engine.getDeviceManager().addAudioDeviceType (std::make_unique<MixFakeType> ("ASIO"));
+            engine.getDeviceManager().addAudioDeviceType (std::make_unique<MixFakeType> ("Windows Audio"));
+            MixDocument document (engine);
+            auto& s = document.getSession();
+            s.device = { "ASIO", "Good", "Good", 256, 48000.0 };
+            s.master.outputFirst = 2;
+            s.channels[0].output = { true, true, 4 };
+            s.channels[0].sends[0].amount = 0.5;
+            s.fx[0].output = { false, true, 4 };
+            expect (engine.openDevice (s.device).isEmpty());
+            document.applyToEngine();
+            const juce::TemporaryFile sessionFile (".livemix");
+            expect (document.save (sessionFile.getFile()).wasOk());
+            expect (engine.openDevice ({ "Windows Audio", "Capture", "", 256, 48000.0 }).isEmpty());
+            if (scenario == 1) expect (document.load (sessionFile.getFile()).wasOk());
+            // Live parameter edits must preserve requests too, while rendering remains limited to 1-2.
+            if (scenario == 2)
+            {
+                engine.setMasterOutput (2);
+                engine.setChannelOutput (s.channels[0].id, s.channels[0].output);
+                engine.setFxOutput (s.fx[0].id, s.fx[0].output);
+            }
+            Io io;
+            io.in.clear();
+            io.setInput (0, 0.25f);
+            render (engine, io, 3);
+            expectWithinAbsoluteError (io.last (0), 0.625f, 1.0e-6f);
+            expect (engine.openSessionDevice (s.device).isEmpty());
+            render (engine, io, 3);
+            expectWithinAbsoluteError (io.last (0), 0.0f, 1.0e-6f);
+            expectWithinAbsoluteError (io.last (2), 0.25f, 1.0e-6f);
+            expectWithinAbsoluteError (io.last (3), 0.25f, 1.0e-6f);
+            expectWithinAbsoluteError (io.last (4), 0.375f, 1.0e-6f);
+            expectWithinAbsoluteError (io.last (5), 0.375f, 1.0e-6f);
+            expectEquals (s.master.outputFirst, 2);
+            expectEquals (s.channels[0].output.directFirst, 4);
+            expectEquals (s.fx[0].output.directFirst, 4);
+        }
+
+        beginTest ("Windows rendering limits master, channel direct and FX direct to outputs 1-2");
         for (const bool windows : { false, true })
         {
             MixEngine engine;

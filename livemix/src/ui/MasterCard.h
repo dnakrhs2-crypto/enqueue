@@ -18,10 +18,12 @@ public:
     void setDeviceChannels (const juce::StringArray& outputNames);
     void setLatency (double ms, int bufferSize, double sampleRate);
     void pushMeter (MixEngine::Meter meter) { meter_.push (meter); }
-    enum class ObsStatus { waiting, connected, audioStopped, installNeeded, restartObs };
-    void setObsStatus (ObsStatus status);
+    enum class ObsStatus { waiting, connected, audioStopped, installNeeded, restartObs, sendFailed };
+    void setObsStatus (ObsStatus status, const juce::String& reason = {});
     void setObsInstalling (bool installing);
     std::function<void()> onObsEnabled; // document/sender are already enabled when this runs
+    std::function<void()> onObsInstallRequested;
+    void mouseUp (const juce::MouseEvent&) override;
 
     std::function<void()> onOpenChain;
     std::function<void()> onAddPlugin;
@@ -61,6 +63,7 @@ private:
     juce::ToggleButton obsToggle;
     juce::Label obsStatusLabel;
     ObsStatus obsStatus = ObsStatus::waiting;
+    juce::String obsStatusReason;
     bool obsInstalling = false;
     MeterBar meter_ { true };
     bool refreshing = false;

@@ -284,9 +284,10 @@ void ChannelCard::refresh()
 
     masterChip.setToggleState (c->output.master, juce::dontSendNotification);
     directChip.setToggleState (c->output.direct, juce::dontSendNotification);
-    fillChannelCombo (directCombo, outputNames, true, MixSession::maxDeviceChannels);
-    directCombo.setSelectedId (c->output.directFirst + 1, juce::dontSendNotification);
-    directCombo.setEnabled (c->output.direct);
+    const auto runningDevice = document.getEngine().getOpenDevice();
+    const auto device = runningDevice.input.isNotEmpty() ? runningDevice : session.device;
+    fillDirectOutputCombo (directCombo, directChip, outputNames, device.isAsio(), device.output.isNotEmpty(),
+                           c->output.directFirst, c->output.direct);
     muteGroupChip.setToggleState (c->muteGroup, juce::dontSendNotification);
     micButton.setMuted (groupMuted && c->muteGroup);
     meter_.setStereo (c->stereo);

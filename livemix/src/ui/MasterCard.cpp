@@ -70,6 +70,7 @@ MasterCard::MasterCard (MixDocument& doc) : document (doc)
     obsStatusLabel.setFont (bodyFont (12.5f));
     obsStatusLabel.setMinimumHorizontalScale (1.0f);
     addAndMakeVisible (obsStatusLabel);
+    obsStatusLabel.addMouseListener (this, false);
     refreshObsStatus();
 
     styleCaption (meterCaption, ko ("출력 미터 L / R"));
@@ -112,10 +113,18 @@ int MasterCard::obsToggleWidth() const
            + juce::roundToInt (size * 1.1f) + 12;
 }
 
-void MasterCard::setObsStatus (ObsStatus status)
+void MasterCard::mouseUp (const juce::MouseEvent& event)
 {
-    if (obsStatus == status) return;
+    if (event.eventComponent == &obsStatusLabel && ! event.mods.isPopupMenu()
+        && obsStatus == ObsStatus::installNeeded && ! obsInstalling && onObsInstallRequested)
+        onObsInstallRequested();
+}
+
+void MasterCard::setObsStatus (ObsStatus status, const juce::String& reason)
+{
+    if (obsStatus == status && obsStatusReason == reason) return;
     obsStatus = status;
+    obsStatusReason = reason;
     refreshObsStatus();
     resized();
 }
@@ -136,13 +145,15 @@ void MasterCard::refreshObsToggle()
 void MasterCard::refreshObsStatus()
 {
     const auto text = obsStatus == ObsStatus::audioStopped ? ko ("오디오 멈춤")
+                    : obsStatus == ObsStatus::sendFailed ? ko ("OBS 보내기 실패")
                     : obsStatus == ObsStatus::installNeeded ? ko ("OBS 플러그인 설치 필요")
                     : obsStatus == ObsStatus::restartObs ? ko ("OBS를 다시 시작하세요")
                     : obsStatus == ObsStatus::connected ? ko ("OBS 연결됨") : ko ("OBS 대기 중");
     obsStatusLabel.setText (strip ? juce::String::fromUTF8 ("●") : text, juce::dontSendNotification);
-    obsStatusLabel.setTooltip (text);
+    obsStatusLabel.setTooltip (text + (obsStatusReason.isEmpty() ? juce::String() : "\n" + obsStatusReason));
+    obsStatusLabel.setMouseCursor (obsStatus == ObsStatus::installNeeded ? juce::MouseCursor::PointingHandCursor : juce::MouseCursor::NormalCursor);
     obsStatusLabel.setJustificationType (strip ? juce::Justification::centred : juce::Justification::centredLeft);
-    obsStatusLabel.setColour (juce::Label::textColourId, obsStatus == ObsStatus::audioStopped ? Palette::danger
+    obsStatusLabel.setColour (juce::Label::textColourId, obsStatus == ObsStatus::audioStopped || obsStatus == ObsStatus::sendFailed ? Palette::danger
                               : obsStatus == ObsStatus::installNeeded || obsStatus == ObsStatus::restartObs ? juce::Colour (0xffffb454)
                               : obsStatus == ObsStatus::connected ? Palette::lampOn : Palette::dimText);
 }

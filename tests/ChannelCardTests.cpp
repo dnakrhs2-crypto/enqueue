@@ -1,5 +1,6 @@
 #include "MixDocument.h"
 #include "ui/ChannelCard.h"
+#include "ui/FxDrawer.h"
 #include "ui/LiveMixLookAndFeel.h"
 
 namespace gocue::tests
@@ -149,6 +150,43 @@ public:
             expect (slider->getBottom() < meterCaption->getY());
         }
         card.setLookAndFeel (nullptr);
+
+        beginTest ("channel and FX direct output controls show effective Windows routing and preserve ASIO requests");
+        FxDrawer fx (document);
+        juce::ComboBox* channelOutput = nullptr;
+        for (auto* child : card.getChildren())
+            if (auto* combo = dynamic_cast<juce::ComboBox*> (child)) channelOutput = combo;
+        auto* fxOutput = childOfType<juce::ComboBox> (fx);
+        auto* fxDirect = withText (fx, ko ("직접 출력"));
+        expect (channelOutput != nullptr && fxOutput != nullptr && fxDirect != nullptr);
+        if (channelOutput != nullptr && fxOutput != nullptr && fxDirect != nullptr)
+        {
+            document.setChannelOutput (id, { true, true, 2 });
+            document.setFxOutput (document.getSession().fx[0].id, { false, true, 4 });
+            for (int mode : { 0, 1, 2 })
+            {
+                document.getSession().device = { mode == 0 ? "ASIO" : "Windows Audio", "Input", mode == 2 ? "" : "Output", 256, 48000.0 };
+                juce::StringArray names;
+                for (int i = 0; i < (mode == 0 ? 8 : mode == 1 ? 2 : 0); ++i) names.add (juce::String (i + 1));
+                card.setDeviceChannels ({ "1", "2" }, names);
+                fx.setDeviceChannels (names);
+                expectEquals (channelOutput->getNumItems(), mode == 0 ? 4 : 1);
+                expectEquals (fxOutput->getNumItems(), mode == 0 ? 4 : 1);
+                expect (channelOutput->isEnabled() == (mode != 2));
+                expect (fxOutput->isEnabled() == (mode != 2));
+                expect (direct->isEnabled() == (mode != 2));
+                expect (fxDirect->isEnabled() == (mode != 2));
+                expect (channelOutput->getText().startsWith (mode == 0 ? "3-4" : mode == 1 ? "1-2" : ko ("없음")));
+                expect (fxOutput->getText().startsWith (mode == 0 ? "5-6" : mode == 1 ? "1-2" : ko ("없음")));
+                if (mode == 1)
+                {
+                    expect (channelOutput->getTooltip().contains (ko ("ASIO에서는 3-4로 나갑니다")));
+                    expect (fxOutput->getTooltip().contains (ko ("ASIO에서는 5-6로 나갑니다")));
+                }
+                expectEquals (document.getSession().channels[0].output.directFirst, 2);
+                expectEquals (document.getSession().fx[0].output.directFirst, 4);
+            }
+        }
     }
 };
 

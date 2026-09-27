@@ -195,6 +195,33 @@ public:
             expectEquals (f.count ("*.old-*"), 0);
         }
 
+        beginTest ("headless result paths and single elevation retry are shared with the UI helper");
+        for (const auto& flags : { "", " --allow-elevation", " --allow-elevation --elevated-helper" })
+        {
+            Fixture f;
+            f.roots.copyFile = [] (const juce::File&, const juce::File&) -> juce::uint32 { return ERROR_ACCESS_DENIED; };
+            const auto report = f.temp.getChildFile (ko ("caller TEMP/고유 결과.txt"));
+            const auto command = juce::String ("--install-obs-plugin") + flags + " --result " + report.getFullPathName().quoted();
+            int elevations = 0;
+            bool reported = false;
+            const auto result = Installer::runInstallCommandLine (command, f.roots, message, reported, [&] (juce::String& reply)
+            {
+                ++elevations;
+                reply = ko ("OBS를 다시 시작하세요");
+                return Result::installedRestartObs;
+            });
+            const bool mayElevate = juce::String (flags) == " --allow-elevation";
+            expectEquals (elevations, mayElevate ? 1 : 0);
+            expect (reported && report.existsAsFile());
+            expect (result == (mayElevate ? Result::installedRestartObs : Result::needsElevation));
+            expect (Installer::readResult (report, message) == result);
+            expect (Installer::resultFile (command) == report);
+            expect (Installer::resultFile ("--install-obs-plugin") == Installer::resultFile());
+            const auto elevated = Installer::elevatedCommandLine (report);
+            expect (elevated.contains ("--elevated-helper") && ! elevated.contains ("--allow-elevation"));
+            expect (Installer::resultFile (elevated) == report);
+        }
+
         beginTest ("Access denied, including a partial locale copy, requests elevation and preserves the old layout");
         for (int failCopy : { 1, 3 })
         {
@@ -315,6 +342,90 @@ public:
     LiveMixObsInstallerUiTests() : juce::UnitTest ("LiveMix OBS installer UI", "LiveMix") {}
     void runTest() override
     {
+        beginTest ("startup and session load with OBS enabled install once without unattended elevation");
+        for (bool atStartup : { true, false })
+        for (bool denied : { false, true })
+        {
+            Fixture f;
+            if (! atStartup) f.oldDll (f.legacy());
+            MixEngine engine ("Local\\LiveMix.ObsStartupTest." + juce::Uuid().toString());
+            MixDocument document (engine);
+            document.getSession().master.sendToObs = true;
+            const auto sessionFile = f.temp.getChildFile ("enabled.livemix");
+            expect (document.save (sessionFile).wasOk());
+            document.getSession().master.sendToObs = atStartup;
+            document.applyToEngine();
+            LiveMixSettings settings (f.temp.getChildFile ("settings"));
+            std::atomic<int> copies { 0 }, elevations { 0 };
+            f.roots.copyFile = [&] (const juce::File& from, const juce::File& to) -> juce::uint32
+            {
+                ++copies;
+                if (denied) return ERROR_ACCESS_DENIED;
+                return CopyFileW (from.getFullPathName().toWideCharPointer(), to.getFullPathName().toWideCharPointer(), TRUE)
+                    ? ERROR_SUCCESS : GetLastError();
+            };
+            ObsPluginActions actions;
+            actions.roots = [&] { return f.roots; };
+            actions.elevate = [&] (juce::String&) { ++elevations; return Result::needsElevation; };
+            gocue::livemix::MainComponent main (document, settings, actions);
+            if (! atStartup) expect (document.load (sessionFile).wasOk());
+            auto* toggle = obsToggle (main);
+            expect (until ([&] { return copies.load() > 0 && toggle != nullptr && toggle->getButtonText() != ko ("설치 중..."); }));
+            const int once = copies.load();
+            until ([] { return false; }, 650);
+            expectEquals (copies.load(), once);
+            expectEquals (elevations.load(), 0);
+            if (denied)
+            {
+                expect (hasObsStatus (main, "OBS 플러그인 설치 필요"));
+                for (auto* child : main.getChildren())
+                    if (auto* master = dynamic_cast<MasterCard*> (child))
+                        for (auto* control : master->getChildren())
+                            if (auto* label = dynamic_cast<juce::Label*> (control); label != nullptr && label->getTooltip() == ko ("OBS 플러그인 설치 필요"))
+                            {
+                                const auto now = juce::Time::getCurrentTime();
+                                const juce::MouseEvent click (juce::Desktop::getInstance().getMainMouseSource(), { 1.0f, 1.0f }, {},
+                                    1.0f, 0.0f, 0.0f, 0.0f, 0.0f, label, label, now, { 1.0f, 1.0f }, now, 1, false);
+                                master->mouseUp (click);
+                            }
+                expect (until ([&] { return elevations.load() == 1 && toggle->getButtonText() != ko ("설치 중..."); }));
+            }
+            else
+                expect (Installer::isInstalledAndCurrent (f.roots));
+        }
+
+        beginTest ("ring creation failure is shown on the master card with its reason");
+        {
+            Fixture f;
+            juce::String installMessage;
+            expect (Installer::install (f.roots, installMessage) == Result::installed);
+            const auto mapping = "Local\\LiveMix.ObsFailureTest." + juce::Uuid().toString();
+            HANDLE tiny = CreateFileMappingW (INVALID_HANDLE_VALUE, nullptr, PAGE_READWRITE, 0, 64, mapping.toWideCharPointer());
+            expect (tiny != nullptr);
+            {
+                MixEngine engine (mapping);
+                MixDocument document (engine);
+                document.getSession().master.sendToObs = true;
+                document.applyToEngine();
+                LiveMixSettings settings (f.temp.getChildFile ("settings"));
+                ObsPluginActions actions;
+                actions.roots = [&] { return f.roots; };
+                actions.elevate = [] (juce::String&) { return Result::needsElevation; };
+                gocue::livemix::MainComponent main (document, settings, actions);
+                expect (until ([&]
+                {
+                    for (auto* child : main.getChildren())
+                        if (auto* master = dynamic_cast<MasterCard*> (child))
+                            for (auto* control : master->getChildren())
+                                if (auto* label = dynamic_cast<juce::Label*> (control); label != nullptr
+                                    && label->getTooltip().contains (ko ("OBS 보내기 실패")) && label->getTooltip().contains ("Win32")) return true;
+                    return false;
+                }));
+                expect (! engine.getObsSender().isEnabled());
+            }
+            if (tiny != nullptr) CloseHandle (tiny);
+        }
+
         for (int mode : { 0, 1, 2 })
         {
             beginTest (mode == 0 ? "A blocked install leaves the message thread and sender running"

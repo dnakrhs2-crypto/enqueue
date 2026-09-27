@@ -29,7 +29,7 @@ class MonitorOutput;
     Parameters are atomics (no lock for a live change); the graph's node lists change under a short lock (a pointer
     swap); plugins are created and destroyed on the message thread outside it. renderBlock() is the whole callback
     and runs offline in the tests. */
-class MixEngine : private juce::AudioIODeviceCallback
+class MixEngine : private juce::AudioIODeviceCallback, private juce::Timer
 {
 public:
     static constexpr int maxChannels = MixSession::maxChannels;
@@ -48,6 +48,7 @@ public:
     juce::String openDevice (const MixDevice& wanted);
     MixDevice getOpenDevice() const;
     bool isSplitMonitor() const noexcept { return splitMonitor.load (std::memory_order_acquire); }
+    bool isMonitorRunning() const noexcept;
     /** A new buffer size on the running device (every channel kept). */
     juce::String setBufferSize (int samples);
     /** Closes and reopens the current device (the driver's control panel asked for a restart). "" on success. */
@@ -194,6 +195,7 @@ private:
     juce::AudioIODeviceType* findType (const juce::String& name);
     void ensureCallback();
     void removeCallback();
+    void timerCallback() override; // device lifecycle work, never posted from either audio callback
     int outputFirst (int requested) const noexcept;
     ChannelNode* findChannel (const juce::Uuid& id) const noexcept;
     FxNode* findFx (const juce::Uuid& id) const noexcept;

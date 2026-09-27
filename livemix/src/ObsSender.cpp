@@ -25,7 +25,7 @@ namespace
             if (bytes > 0 && GetTokenInformation (token, TokenUser, storage.data(), bytes, &bytes)
                 && ConvertSidToStringSidW (reinterpret_cast<TOKEN_USER*> (storage.data())->User.Sid, &sid))
             {
-                const auto sddl = juce::String (L"D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;GA;;;") + juce::String (sid) + ")S:(ML;;NW;;;ME)";
+                const auto sddl = juce::String (L"D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;GA;;;IU)(A;;GA;;;") + juce::String (sid) + ")S:(ML;;NW;;;ME)";
                 ConvertStringSecurityDescriptorToSecurityDescriptorW (sddl.toWideCharPointer(), SDDL_REVISION_1, &descriptor, nullptr);
                 LocalFree (sid);
             }
@@ -35,7 +35,8 @@ namespace
         PSECURITY_DESCRIPTOR descriptor = nullptr;
     };
 
-    bool map (const juce::String& name, DWORD bytes, PSECURITY_DESCRIPTOR security, void*& handle, void*& view, bool& existed)
+    bool map (const juce::String& name, DWORD bytes, PSECURITY_DESCRIPTOR security, void*& handle, void*& view, bool& existed,
+              juce::String& reason)
     {
         SECURITY_ATTRIBUTES attributes { sizeof (attributes), security, FALSE };
         handle = CreateFileMappingW (INVALID_HANDLE_VALUE, &attributes, PAGE_READWRITE, 0, bytes, name.toWideCharPointer());
@@ -46,7 +47,8 @@ namespace
         const auto error = GetLastError();
         if (handle != nullptr) CloseHandle (handle);
         handle = nullptr;
-        juce::Logger::writeToLog ("OBS sender: cannot map " + name + " (layout too small or access failed, Win32 " + juce::String ((int) error) + ")");
+        reason = juce::String::fromUTF8 ("공유 메모리를 열지 못했습니다: ") + name + " (Win32 " + juce::String ((int) error) + ")";
+        juce::Logger::writeToLog ("OBS sender: " + reason);
         return false;
     }
 }
@@ -71,38 +73,43 @@ ObsSender::~ObsSender()
 bool ObsSender::openMappings()
 {
     if (published.load (std::memory_order_acquire) != nullptr) return true;
+    lastError.clear();
     MappingSecurity security;
     if (security.descriptor == nullptr)
     {
-        juce::Logger::writeToLog ("OBS sender: cannot build the current user's mapping security descriptor");
+        lastError = juce::String::fromUTF8 ("공유 메모리의 접근 권한을 만들지 못했습니다.");
+        juce::Logger::writeToLog ("OBS sender: " + lastError);
         return false; // do not fall back to an ACL which breaks cross-integrity OBS connections
     }
     if (readers == nullptr)
     {
         void* view = nullptr;
         bool existed = false;
-        if (! map (readersName, sizeof (lm_obs_readers), security.descriptor, readersHandle, view, existed)) return false;
-        auto* presence = static_cast<lm_obs_readers*> (view);
-        if (! existed)
+        juce::String presenceError; // presence is advisory; a denied mapping must never gate audio
+        if (map (readersName, sizeof (lm_obs_readers), security.descriptor, readersHandle, view, existed, presenceError))
         {
-            std::memset (presence, 0, sizeof (*presence));
-            presence->protocol_major = LM_OBS_PROTOCOL_MAJOR;
-            presence->slot_count = LM_OBS_MAX_READERS;
-            InterlockedExchange (reinterpret_cast<volatile LONG*> (&presence->magic), (LONG) LM_OBS_MAGIC);
+            auto* presence = static_cast<lm_obs_readers*> (view);
+            if (! existed)
+            {
+                std::memset (presence, 0, sizeof (*presence));
+                presence->protocol_major = LM_OBS_PROTOCOL_MAJOR;
+                presence->slot_count = LM_OBS_MAX_READERS;
+                InterlockedExchange (reinterpret_cast<volatile LONG*> (&presence->magic), (LONG) LM_OBS_MAGIC);
+            }
+            MemoryBarrier();
+            if (presence->magic != LM_OBS_MAGIC || presence->protocol_major != LM_OBS_PROTOCOL_MAJOR || presence->slot_count != LM_OBS_MAX_READERS)
+            {
+                juce::Logger::writeToLog ("OBS sender: incompatible readers mapping");
+                UnmapViewOfFile (view); CloseHandle (readersHandle); readersHandle = nullptr;
+            }
+            else
+                readers = presence; // preserve existing slots, including those owned by elevated OBS
         }
-        MemoryBarrier();
-        if (presence->magic != LM_OBS_MAGIC || presence->protocol_major != LM_OBS_PROTOCOL_MAJOR || presence->slot_count != LM_OBS_MAX_READERS)
-        {
-            juce::Logger::writeToLog ("OBS sender: incompatible readers mapping");
-            UnmapViewOfFile (view); CloseHandle (readersHandle); readersHandle = nullptr;
-            return false;
-        }
-        readers = presence; // preserve all existing slots, including those owned by an elevated OBS
     }
 
     void* view = nullptr;
     bool existed = false;
-    if (! map (ringName, ringBytes, security.descriptor, ringHandle, view, existed)) return false;
+    if (! map (ringName, ringBytes, security.descriptor, ringHandle, view, existed, lastError)) return false;
     auto* h = static_cast<lm_obs_ring_header*> (view);
     // Never zero an existing epoch: a reader may retain this exact object across LiveMix restarts.
     lm_obs_store_release (&h->send_enabled, 0);
@@ -144,6 +151,7 @@ void ObsSender::resetEpoch (lm_obs_ring_header& h)
 void ObsSender::setEnabled (bool on)
 {
     const juce::ScopedLock lock (ownerLock);
+    if (! on) lastError.clear();
     if (on == enabled.load (std::memory_order_acquire)) return;
     stopWrites();
     if (on && ! openMappings()) return; // gate remains disabled; a later enable can retry
@@ -154,6 +162,12 @@ void ObsSender::setEnabled (bool on)
     }
     enabled.store (on, std::memory_order_release);
     writerState.store (on ? 0u : 2u, std::memory_order_release);
+}
+
+juce::String ObsSender::getError() const
+{
+    const juce::ScopedLock lock (ownerLock);
+    return lastError;
 }
 
 void ObsSender::deviceStarted (double rate)

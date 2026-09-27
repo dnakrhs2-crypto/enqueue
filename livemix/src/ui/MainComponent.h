@@ -101,7 +101,7 @@ private:
     enum class Drawer { none, chain, fx };
 
     void timerCallback() override;
-    void startObsPluginCheck (bool installIfNeeded);
+    void startObsPluginCheck (bool installIfNeeded, bool allowElevation = false);
     void finishObsPluginCheck();
     void refreshObsStatus();
     void rebuildCards();
@@ -199,6 +199,7 @@ private:
     ObsPluginActions obsPluginActions;
     std::shared_ptr<ObsInstallWork> obsInstallWork;
     bool obsInstallRequested = false, obsPluginCurrent = false;
+    bool obsElevationRequested = false;
     bool obsNeedsRestart = false, obsRestartSawDisconnect = false;
     juce::String obsInstallNote;
     bool obsInstallError = false;
