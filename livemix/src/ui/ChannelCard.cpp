@@ -405,10 +405,11 @@ void ChannelCard::commitOutput (bool pairSelected)
     auto output = c->output;
     output.master = masterChip.getToggleState();
     output.direct = directChip.getToggleState();
-    // The effective Windows pair is display-only. Toggle clicks always retain the saved ASIO pair.
+    // The effective Windows pair is display-only. Toggle clicks always retain the saved ASIO pair. A pair the operator
+    // picks on a running ASIO device is stored - even the device's only pair (a 2-output interface whose session asked
+    // for 3-4 shows 없음 until 1-2 is chosen).
     auto& engine = document.getEngine();
-    if (pairSelected && sel > 0 && directCombo.isEnabled() && directCombo.getNumItems() > 1
-        && engine.isDeviceRunning() && engine.getNumDeviceOutputs() >= 4 && engine.getOpenDevice().isAsio())
+    if (pairSelected && sel > 0 && directCombo.isEnabled() && engine.isDeviceRunning() && engine.getOpenDevice().isAsio())
         output.directFirst = sel - 1;
     document.setChannelOutput (channelId, output);
 }

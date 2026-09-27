@@ -1236,19 +1236,23 @@ public:
             expectEquals (engine.getNumDeviceOutputs(), 2);
             for (auto* component : std::initializer_list<juce::Component*> { &card, &drawer })
             {
+                // the saved 5-6 / 3-4 do not exist on this 2-output device (the combo shows 없음): the operator picks 1-2
                 outputCombo (*component)->setSelectedId (1, juce::sendNotificationSync);
                 click (*button (*component, ko ("마스터")));
                 click (*button (*component, ko ("마스터")));
             }
-            expectEquals (session.channels[0].output.directFirst, 4);
-            expectEquals (session.fx[0].output.directFirst, 2);
+            // an explicit pick on a running ASIO device is stored even when it is the device's only pair (Astra R10:
+            // ignoring it left a direct-only channel silent on a 2-output interface)
+            expectEquals (session.channels[0].output.directFirst, 0);
+            expectEquals (session.fx[0].output.directFirst, 0);
             engine.shutdown();
             card.setDeviceChannels ({ "1", "2" }, { "1", "2", "3", "4", "5", "6" });
             drawer.setDeviceChannels ({ "1", "2", "3", "4", "5", "6" });
-            outputCombo (card)->setSelectedId (1, juce::sendNotificationSync);
-            outputCombo (drawer)->setSelectedId (1, juce::sendNotificationSync);
-            expectEquals (session.channels[0].output.directFirst, 4);
-            expectEquals (session.fx[0].output.directFirst, 2);
+            outputCombo (card)->setSelectedId (3, juce::sendNotificationSync);
+            outputCombo (drawer)->setSelectedId (5, juce::sendNotificationSync);
+            // no device runs: a combo change stores nothing
+            expectEquals (session.channels[0].output.directFirst, 0);
+            expectEquals (session.fx[0].output.directFirst, 0);
         }
 
         beginTest ("N2: output-only format/period rebuild keeps OBS epoch, every input block and plugin prepares");
