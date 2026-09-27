@@ -37,8 +37,10 @@ def setup():
                        creationflags=subprocess.CREATE_NO_WINDOW)
     write(os.path.join(OBS, "portable_mode.txt"), "")
     os.makedirs(REC, exist_ok=True)
+    # ProcessPriority: OBS's own Advanced setting (many streamers pick High); LMOBS_TEST_PRIORITY overrides Normal
     write(os.path.join(CFG, "global.ini"),
-          "[General]\nLastVersion=536936450\nEnableAutoUpdates=false\nMaxLogs=20\n")
+          "[General]\nLastVersion=536936450\nEnableAutoUpdates=false\nMaxLogs=20\nProcessPriority="
+          + os.environ.get("LMOBS_TEST_PRIORITY", "Normal") + "\n")
     write(os.path.join(CFG, "user.ini"),
           "[General]\nFirstRun=true\n\n[Basic]\nProfile=LiveMixTest\nProfileDir=LiveMixTest\n"
           "SceneCollection=LiveMixTest\nSceneCollectionFile=LiveMixTest\n")

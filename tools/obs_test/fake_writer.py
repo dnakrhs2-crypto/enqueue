@@ -81,7 +81,16 @@ def main():
     ap.add_argument("--restart-at", type=float, default=-1)
     ap.add_argument("--rate-change-at", default="")
     ap.add_argument("--stall-at", default="")
+    ap.add_argument("--normal-priority", action="store_true",
+                    help="run like an ordinary process (default: like an audio callback - high class, time-critical thread)")
     a = ap.parse_args()
+
+    if not a.normal_priority:
+        # LiveMix writes from its audio device thread, which the OS schedules ahead of builds and browsers. A plain Python
+        # process gets starved by a busy CPU (13:47 run: MSBuild -> 108 receiver underruns that LiveMix would never cause).
+        k32.SetPriorityClass(k32.GetCurrentProcess(), 0x00000080)          # HIGH_PRIORITY_CLASS
+        k32.SetThreadPriority(k32.GetCurrentThread(), 15)                  # THREAD_PRIORITY_TIME_CRITICAL
+        ctypes.windll.winmm.timeBeginPeriod(1)                             # 1 ms sleeps
 
     ring = Ring()
     rate = a.rate
