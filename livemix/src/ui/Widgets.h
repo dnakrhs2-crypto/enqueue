@@ -517,4 +517,27 @@ inline void fillChannelCombo (juce::ComboBox& combo, const juce::StringArray& na
     }
 }
 
+/** Display the effective pair without changing the session's requested ASIO routing. */
+inline void fillDirectOutputCombo (juce::ComboBox& combo, juce::Button& toggle, const juce::StringArray& names,
+                                   bool asio, bool hasOutput, int requested, bool enabled)
+{
+    combo.setTooltip ({});
+    if (asio)
+    {
+        fillChannelCombo (combo, names, true, MixSession::maxDeviceChannels);
+        combo.setSelectedId (requested + 1, juce::dontSendNotification);
+        if (combo.getSelectedId() == 0) combo.setText (ko ("없음"), juce::dontSendNotification);
+    }
+    else
+    {
+        combo.clear (juce::dontSendNotification);
+        combo.addItem (hasOutput ? juce::String ("1-2") : ko ("없음"), 1);
+        combo.setSelectedId (1, juce::dontSendNotification);
+        if (requested != 0)
+            combo.setTooltip (ko ("ASIO에서는 ") + juce::String (requested + 1) + "-" + juce::String (requested + 2) + ko ("로 나갑니다"));
+    }
+    toggle.setEnabled (asio || hasOutput);
+    combo.setEnabled ((asio || hasOutput) && enabled);
+}
+
 } // namespace gocue::livemix

@@ -95,7 +95,7 @@ FxDrawer::FxDrawer (MixDocument& doc) : document (doc)
     directChip.onClick = [this] { commitOutput(); };
     addAndMakeVisible (directChip);
     directCombo.setWantsKeyboardFocus (false);
-    directCombo.onChange = [this] { commitOutput(); };
+    directCombo.onChange = [this] { commitOutput (true); };
     addAndMakeVisible (directCombo);
     monoChip.setTooltip (ko ("켜면 이 FX의 소리를 좌우 합쳐 양쪽에 똑같이 내보냅니다"));
     monoChip.onClick = [this]
@@ -185,9 +185,10 @@ void FxDrawer::refresh()
         returnValue.setColour (juce::Label::textColourId, mutedNow ? Palette::danger : Palette::text);
         masterChip.setToggleState (f->output.master, juce::dontSendNotification);
         directChip.setToggleState (f->output.direct, juce::dontSendNotification);
-        fillChannelCombo (directCombo, outputNames, true, MixSession::maxDeviceChannels);
-        directCombo.setSelectedId (f->output.directFirst + 1, juce::dontSendNotification);
-        directCombo.setEnabled (f->output.direct);
+        const auto runningDevice = document.getEngine().getOpenDevice();
+        const auto device = runningDevice.input.isNotEmpty() ? runningDevice : session.device;
+        fillDirectOutputCombo (directCombo, directChip, outputNames, device.isAsio(), device.output.isNotEmpty(),
+                               f->output.directFirst, f->output.direct);
         monoChip.setToggleState (f->mono, juce::dontSendNotification);
         muteGroupChip.setToggleState (f->muteGroup, juce::dontSendNotification);
     }
@@ -292,17 +293,25 @@ void FxDrawer::rebuildSenders()
     }
 }
 
-void FxDrawer::commitOutput()
+void FxDrawer::commitOutput (bool pairSelected)
 {
     if (refreshing || selected.isNull())
         return;
 
     const auto* f = fx();
+    if (f == nullptr)
+        return;
+
     const int sel = directCombo.getSelectedId();
-    MixOutput output;
+    auto output = f->output;
     output.master = masterChip.getToggleState();
     output.direct = directChip.getToggleState();
-    output.directFirst = sel > 0 ? sel - 1 : (f != nullptr ? f->output.directFirst : 2);   // keep the saved pair when the picker has no matching item
+    // The effective Windows pair is display-only. Toggle clicks always retain the saved ASIO pair. A pair the operator
+    // picks on a running ASIO device is stored - even the device's only pair.
+    auto& engine = document.getEngine();
+    if (pairSelected && sel > 0 && directCombo.isEnabled() && engine.isDeviceRunning() && engine.getOpenDevice().isAsio()
+        && sel + 1 <= engine.getNumDeviceOutputs())   // the pair must exist (an output-less ASIO device lists placeholders)
+        output.directFirst = sel - 1;
     document.setFxOutput (selected, output);
 }
 

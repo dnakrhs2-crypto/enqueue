@@ -1,0 +1,6 @@
+# OBS SDK downloads and build output (made by cmake --preset windows-x64)
+/.deps/
+/build_x64/
+/release/
+*.lock.json
+/cmake/.CMakeBuildNumber

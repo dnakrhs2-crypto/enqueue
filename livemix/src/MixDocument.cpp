@@ -47,7 +47,9 @@ MixDocument::MixDocument (MixEngine& e) : engine (e)
 
 void MixDocument::applyToEngine()
 {
+    if (PluginHost::isSafeMode()) session.master.sendToObs = false;
     engine.applySession (session, nullptr, true);
+    engine.getObsSender().setEnabled (session.master.sendToObs);
     graphApplied = true;
     notifyStructure();   // the views (and the chain listeners that close a removed plugin's editor) learn of the graph
 }
@@ -62,6 +64,7 @@ juce::String MixDocument::getDisplayName() const
 
 void MixDocument::newSession()
 {
+    engine.getObsSender().setEnabled (false);
     session = defaultSession();
     sessionGeneration = juce::Uuid();
     file = juce::File();
@@ -80,7 +83,9 @@ juce::Result MixDocument::load (const juce::File& newFile, juce::StringArray* wa
     if (result.failed())
         return result;
 
+    engine.getObsSender().setEnabled (false);
     session = std::move (loaded);
+    if (PluginHost::isSafeMode()) session.master.sendToObs = false;
     sessionGeneration = juce::Uuid();
     file = newFile;
     if (! session.nameChosen)
@@ -88,6 +93,7 @@ juce::Result MixDocument::load (const juce::File& newFile, juce::StringArray* wa
     dirty = false;
     juce::StringArray restoreErrors;
     engine.applySession (session, &restoreErrors, true);
+    engine.getObsSender().setEnabled (session.master.sendToObs);
     graphApplied = true;
 
     if (pluginErrors != nullptr)
@@ -330,6 +336,16 @@ void MixDocument::setMasterOutput (int first)
     valueChanged();
 }
 
+void MixDocument::setSendToObs (bool enabled)
+{
+    engine.getObsSender().setEnabled (enabled);
+    if (session.master.sendToObs == enabled)
+        return;
+
+    session.master.sendToObs = enabled;
+    valueChanged();
+}
+
 int MixDocument::addPluginGroup (const juce::Uuid& channelId)
 {
     auto* c = session.findChannel (channelId);
@@ -520,14 +536,13 @@ void MixDocument::setSessionName (const juce::String& name)
     valueChanged();
 }
 
-void MixDocument::setDeviceInfo (const juce::String& name, int bufferSize, double sampleRate)
+void MixDocument::setDeviceInfo (const MixDevice& device)
 {
-    if (session.device.name == name && session.device.bufferSize == bufferSize && juce::approximatelyEqual (session.device.sampleRate, sampleRate))
+    if (session.device.type == device.type && session.device.input == device.input && session.device.output == device.output
+        && session.device.bufferSize == device.bufferSize && juce::approximatelyEqual (session.device.sampleRate, device.sampleRate))
         return;
 
-    session.device.name = name;
-    session.device.bufferSize = bufferSize;
-    session.device.sampleRate = sampleRate;
+    session.device = device;
     valueChanged();
 }
 

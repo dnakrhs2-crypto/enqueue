@@ -231,6 +231,13 @@ void MixSession::sanitise()
     }
 
     master.outputFirst = juce::jlimit (0, maxDeviceChannels - 2, master.outputFirst);
+
+    if (device.type.isEmpty())
+        device.type = "ASIO";
+
+    if (device.isAsio())
+        device.output = device.input;
+
     device.bufferSize = juce::jlimit (16, 8192, device.bufferSize);
     device.sampleRate = juce::jlimit (8000.0, 384000.0, finiteOr (device.sampleRate, 48000.0));
 }
@@ -244,7 +251,9 @@ juce::String MixSession::toJson() const
     root->setProperty ("nameChosen", nameChosen);
 
     auto* dev = new juce::DynamicObject();
-    dev->setProperty ("name", device.name);
+    dev->setProperty ("type", device.type);
+    dev->setProperty ("input", device.input);
+    dev->setProperty ("output", device.output);
     dev->setProperty ("bufferSize", device.bufferSize);
     dev->setProperty ("sampleRate", device.sampleRate);
     root->setProperty ("device", dev);
@@ -320,6 +329,7 @@ juce::String MixSession::toJson() const
     auto* m = new juce::DynamicObject();
     m->setProperty ("chain", ProjectSerializer::pluginSlotsToVar (master.chain));
     m->setProperty ("outputFirst", master.outputFirst);
+    m->setProperty ("sendToObs", master.sendToObs);
     root->setProperty ("master", m);
 
     return juce::JSON::toString (juce::var (root), false);
@@ -361,7 +371,17 @@ juce::Result MixSession::fromJson (const juce::String& json, MixSession& out, ju
 
     if (const auto dev = root.getProperty ("device", juce::var()); dev.getDynamicObject() != nullptr)
     {
-        s.device.name = dev.getProperty ("name", "").toString();
+        if (version >= 4)
+        {
+            s.device.type = dev.getProperty ("type", "ASIO").toString();
+            s.device.input = dev.getProperty ("input", "").toString();
+            s.device.output = dev.getProperty ("output", "").toString();
+        }
+        else
+        {
+            s.device.type = "ASIO";
+            s.device.input = s.device.output = dev.getProperty ("name", "").toString();
+        }
         s.device.bufferSize = (int) dev.getProperty ("bufferSize", 256);
         s.device.sampleRate = (double) dev.getProperty ("sampleRate", 48000.0);
     }
@@ -446,6 +466,7 @@ juce::Result MixSession::fromJson (const juce::String& json, MixSession& out, ju
     {
         s.master.chain = ProjectSerializer::pluginSlotsFromVar (m.getProperty ("chain", juce::var()));
         s.master.outputFirst = (int) m.getProperty ("outputFirst", 0);
+        s.master.sendToObs = version >= 4 && (bool) m.getProperty ("sendToObs", false);
     }
 
     const auto channelsBefore = s.channels.size();

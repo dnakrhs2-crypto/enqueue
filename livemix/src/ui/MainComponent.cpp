@@ -2,16 +2,27 @@
 
 #include "BackupDialog.h"
 #include "SettingsDialog.h"
+#include "AudioBackends.h"
 #include "app/Links.h"
 #include "app/Updater.h"
 
 #include <cmath>
+#include <atomic>
 
 namespace gocue::livemix
 {
 
-MainComponent::MainComponent (MixDocument& doc, LiveMixSettings& s)
-    : document (doc), settings (s), engine (doc.getEngine()), topBar (doc), menuBar (this), masterCard (doc), chainDrawer (doc, windows), fxDrawer (doc)
+struct MainComponent::ObsInstallWork
+{
+    std::atomic<bool> complete { false };
+    bool install = false, current = false, allowElevation = false;
+    ObsPluginInstaller::Result result = ObsPluginInstaller::Result::failed;
+    juce::String message;
+};
+
+MainComponent::MainComponent (MixDocument& doc, LiveMixSettings& s, ObsPluginActions obsActions)
+    : document (doc), settings (s), engine (doc.getEngine()), topBar (doc), menuBar (this), masterCard (doc), chainDrawer (doc, windows), fxDrawer (doc),
+      obsPluginActions (std::move (obsActions))
 {
     setOpaque (true);
     addAndMakeVisible (menuBar);
@@ -35,6 +46,8 @@ MainComponent::MainComponent (MixDocument& doc, LiveMixSettings& s)
     masterCard.onOpenChain = [this] { openChainFor (&engine.getMasterChain(), ko ("마스터")); };
     masterCard.onAddPlugin = [this] { addPluginTo (&engine.getMasterChain(), ko ("마스터"), &masterCard.getAddPluginButton()); };
     masterCard.onOpenLoudness = [this] { showLoudnessWindow(); };
+    masterCard.onObsEnabled = [this] { startObsPluginCheck (true, true); };
+    masterCard.onObsInstallRequested = [this] { startObsPluginCheck (true, true); };
     masterCard.onOpenPluginEditor = [this] (int slot)
     {
         auto& chain = engine.getMasterChain();
@@ -118,6 +131,7 @@ MainComponent::MainComponent (MixDocument& doc, LiveMixSettings& s)
         {
             sessionGeneration = document.getSessionGeneration();
             muteGroups.reset();   // a new session is observed only after its runtime groups have been released
+            if (document.getSession().master.sendToObs) startObsPluginCheck (true);
         }
         else
             muteGroups.apply();   // rebuilt nodes start unmuted: the groups' state goes back in
@@ -161,6 +175,7 @@ MainComponent::MainComponent (MixDocument& doc, LiveMixSettings& s)
 
     updateDeviceNames();
     rebuildCards();
+    startObsPluginCheck (document.getSession().master.sendToObs);
     startTimerHz (30);
 }
 
@@ -181,6 +196,106 @@ MainComponent::~MainComponent()
     document.onStructureChanged = nullptr;
     document.onValueChanged = nullptr;
     document.onChainRuntimeChanged = nullptr;
+}
+
+void MainComponent::startObsPluginCheck (bool installIfNeeded, bool allowElevation)
+{
+    if (obsInstallWork != nullptr)
+    {
+        // An enable during the initial read-only check gets one install afterwards. Repeated enables while
+        // installing do not queue another UAC prompt. Switching OFF still immediately stops the sender.
+        if (installIfNeeded && ! obsInstallWork->install)
+        {
+            obsInstallRequested = true;
+            obsElevationRequested = obsElevationRequested || allowElevation;
+            masterCard.setObsInstalling (true);
+        }
+        return;
+    }
+    auto work = std::make_shared<ObsInstallWork>();
+    work->install = installIfNeeded;
+    work->allowElevation = allowElevation;
+    obsInstallWork = work;
+    masterCard.setObsInstalling (installIfNeeded);
+    if (installIfNeeded)
+    {
+        obsInstallNote.clear();
+        refreshNotice();
+    }
+    // The worker owns its inputs/results, never the component, engine or document. Closing the window can
+    // discard its shared result immediately, even while Windows is displaying UAC or the helper is running.
+    const bool started = juce::Thread::launch ([work, actions = obsPluginActions]
+    {
+        try
+        {
+            const auto roots = actions.roots();
+            work->current = ObsPluginInstaller::isInstalledAndCurrent (roots);
+            if (work->install)
+            {
+                // install() is a no-op for a current version except for cleaning retired DLLs after OBS exits.
+                work->result = ObsPluginInstaller::install (roots, work->message);
+                if (work->result == ObsPluginInstaller::Result::needsElevation && work->allowElevation)
+                    work->result = actions.elevate (work->message); // exactly one retry, on this same worker
+                work->current = ObsPluginInstaller::isInstalledAndCurrent (roots);
+            }
+        }
+        catch (const std::exception& error)
+        {
+            work->message = ko ("OBS 플러그인을 설치하지 못했습니다: ") + juce::String::fromUTF8 (error.what());
+            work->result = ObsPluginInstaller::Result::failed;
+        }
+        work->complete.store (true, std::memory_order_release);
+    });
+    if (! started)
+    {
+        work->message = ko ("OBS 플러그인을 설치하지 못했습니다: 설치 작업을 시작할 수 없습니다.");
+        work->complete.store (true, std::memory_order_release);
+    }
+}
+
+void MainComponent::finishObsPluginCheck()
+{
+    if (obsInstallWork == nullptr || ! obsInstallWork->complete.load (std::memory_order_acquire)) return;
+    const auto work = std::move (obsInstallWork);
+    obsPluginCurrent = work->current;
+    if (obsInstallRequested)
+    {
+        obsInstallRequested = false;
+        const bool allowElevation = std::exchange (obsElevationRequested, false);
+        startObsPluginCheck (true, allowElevation);
+        return;
+    }
+    masterCard.setObsInstalling (false);
+    if (work->install)
+    {
+        using Result = ObsPluginInstaller::Result;
+        if (work->result == Result::installedRestartObs)
+        {
+            obsNeedsRestart = true;
+            obsRestartSawDisconnect = engine.getObsSender().readerState() == ObsSender::ReaderState::none;
+        }
+        obsInstallNote = work->result == Result::alreadyCurrent ? juce::String() : work->message;
+        obsInstallError = work->result == Result::failed || work->result == Result::noBundledFiles || work->result == Result::obsBusyCloseIt;
+        if (obsInstallNote.isNotEmpty()) showStatus (obsInstallNote, obsInstallError);
+        refreshNotice();
+    }
+    refreshObsStatus();
+}
+
+void MainComponent::refreshObsStatus()
+{
+    const auto readers = engine.getObsSender().readerState();
+    if (obsNeedsRestart)
+    {
+        if (readers == ObsSender::ReaderState::none) obsRestartSawDisconnect = true;
+        else if (obsRestartSawDisconnect) obsNeedsRestart = false;
+    }
+    const auto sendError = document.getSession().master.sendToObs ? engine.getObsSender().getError() : juce::String();
+    masterCard.setObsStatus (sendError.isNotEmpty() ? MasterCard::ObsStatus::sendFailed
+        : ! obsPluginCurrent ? MasterCard::ObsStatus::installNeeded
+        : obsNeedsRestart ? MasterCard::ObsStatus::restartObs
+        : ! engine.isDeviceRunning() ? MasterCard::ObsStatus::audioStopped
+        : readers == ObsSender::ReaderState::connected ? MasterCard::ObsStatus::connected : MasterCard::ObsStatus::waiting, sendError);
 }
 
 void MainComponent::attachControlServer (ControlServer* server)
@@ -608,39 +723,48 @@ void MainComponent::updateDeviceNames()
 {
     inputNames.clear();
     outputNames.clear();
-    juce::StringArray asio;
-    juce::String current;
+    juce::StringArray names;
+    const auto current = engine.getOpenDevice();
+    auto typeName = current.type;
+    const auto types = AudioBackends::availableTypes (engine.getDeviceManager());
+    if (! types.contains (typeName) && ! types.isEmpty()) typeName = types[0];
 
     for (auto* type : engine.getDeviceManager().getAvailableDeviceTypes())
     {
-        if (! type->getTypeName().containsIgnoreCase ("ASIO"))
+        if (type->getTypeName() != typeName)
             continue;
 
         type->scanForDevices();
-        asio = type->getDeviceNames (false);
+        names = type->getDeviceNames (! typeName.containsIgnoreCase ("ASIO"));
     }
 
     if (auto* device = engine.getDeviceManager().getCurrentAudioDevice())
     {
-        if (device->getTypeName().containsIgnoreCase ("ASIO"))   // another type's device (never opened by us) stays out of the pickers
-        {
-            current = device->getName();
-            inputNames = device->getInputChannelNames();
-            outputNames = device->getOutputChannelNames();
-            inputNames.removeRange (maxDeviceChannelsShown, inputNames.size());     // the graph opens 64 at most: no picker beyond them
-            outputNames.removeRange (maxDeviceChannelsShown, outputNames.size());
-        }
+        inputNames = device->getInputChannelNames();
+        outputNames = current.isAsio() ? device->getOutputChannelNames()
+                                     : current.output.isEmpty() ? juce::StringArray() : juce::StringArray { "1", "2" };
+        inputNames.removeRange (maxDeviceChannelsShown, inputNames.size());
+        outputNames.removeRange (current.isAsio() ? maxDeviceChannelsShown : 2, outputNames.size());
     }
 
-    topBar.setDevices (asio, current);
+    topBar.setDevices (names, current.input, typeName);
 }
 
 void MainComponent::chooseDevice (const juce::String& name)
 {
-    if (auto* device = engine.getDeviceManager().getCurrentAudioDevice(); device != nullptr && device->getName() == name && engine.isDeviceRunning())
+    auto wanted = engine.getOpenDevice();
+    if (wanted.input == name && engine.isDeviceRunning())
         return;
-
-    const auto error = engine.openDevice (name);   // the ASIO type, every channel and the callback, whatever ran before (safe mode included)
+    if (wanted.input.isEmpty())
+    {
+        const auto types = AudioBackends::availableTypes (engine.getDeviceManager());
+        if (! types.contains (wanted.type) && ! types.isEmpty()) wanted.type = types[0];
+        wanted.bufferSize = 0;
+        wanted.sampleRate = wanted.isAsio() ? 0.0 : 48000.0;
+    }
+    wanted.input = name;
+    if (wanted.isAsio()) wanted.output = name;
+    const auto error = engine.openDevice (wanted);
 
     if (error.isNotEmpty())
     {
@@ -656,7 +780,7 @@ void MainComponent::deviceChanged()
 {
     // any change of the device manager (a pick, a fallback, a hot-plug): names, pickers, the saved state - not the
     // session, which keeps asking for the device it was saved with until the operator picks another one
-    settings.setAudioDeviceState (engine.getDeviceManager().createStateXml().get());
+    if (engine.isDeviceRunning()) settings.setLastDevice (engine.getOpenDevice());
     updateDeviceNames();
     rebuildCards();
 }
@@ -666,11 +790,10 @@ void MainComponent::deviceChosen()
     deviceChanged();
 
     if (startupNote.isNotEmpty() && ! startupNoteIsSafeMode && engine.isDeviceRunning())
-        setStartupNote ({}, false, false);   // the startup "ASIO 장치를 열지 못했습니다" is over: a device runs
+        setStartupNote ({}, false, false);   // the startup device error is over: a device runs
 
-    if (auto* device = engine.getDeviceManager().getCurrentAudioDevice())
-        if (device->getTypeName().containsIgnoreCase ("ASIO"))
-            document.setDeviceInfo (device->getName(), device->getCurrentBufferSizeSamples(), device->getCurrentSampleRate());
+    if (engine.isDeviceRunning())
+        document.setDeviceInfo (engine.getOpenDevice());
 }
 
 //==============================================================================
@@ -698,14 +821,26 @@ void MainComponent::timerCallback()
 
     const double now = juce::Time::getMillisecondCounterHiRes();
 
-    if (now < statusUntilMs)
+    finishObsPluginCheck();
+    if (now >= nextObsPollMs)
+    {
+        nextObsPollMs = now + 500.0;
+        refreshObsStatus();
+    }
+
+    if (running && engine.isSplitMonitor() && ! engine.isMonitorRunning())
+    {
+        statusLeft.setColour (juce::Label::textColourId, Palette::danger);
+        statusLeft.setText (ko ("모니터 출력 멈춤 - 설정에서 출력 장치를 확인하세요"), juce::dontSendNotification);
+    }
+    else if (now < statusUntilMs)
     {
         statusLeft.setText (statusText, juce::dontSendNotification);
     }
     else
     {
         statusLeft.setColour (juce::Label::textColourId, Palette::dimText);   // an error's red goes with its text
-        statusLeft.setText ((running ? ko ("오디오 동작 중") : ko ("오디오 멈춤 - 설정에서 ASIO 장치를 확인하세요")) + "   " + ko ("끊김 ") + juce::String (engine.getXRunCount()) + ko ("회"),
+        statusLeft.setText ((running ? ko ("오디오 동작 중") : ko ("오디오 멈춤 - 설정에서 오디오 장치를 확인하세요")) + "   " + ko ("끊김 ") + juce::String (engine.getXRunCount()) + ko ("회"),
                             juce::dontSendNotification);
     }
 
@@ -842,12 +977,16 @@ void MainComponent::refreshNotice()
     if (hotkeyErrorNote.isNotEmpty())
         lines.add (hotkeyErrorNote);
 
+    if (obsInstallNote.isNotEmpty())
+        lines.add (obsInstallNote);
+
     noticeVisible = ! lines.isEmpty();
     noticeIsError = (sessionNote.isNotEmpty() && sessionNoteIsError)
                     || (startupNote.isNotEmpty() && startupNoteIsError)
                     || pluginNote.isNotEmpty()
                     || saveErrorNote.isNotEmpty()
-                    || hotkeyErrorNote.isNotEmpty();
+                    || hotkeyErrorNote.isNotEmpty()
+                    || (obsInstallNote.isNotEmpty() && obsInstallError);
     noticeText.setText (lines.joinIntoString ("\n"), false);
     resized();
     repaint();
@@ -932,6 +1071,7 @@ void MainComponent::hideNotice()
     latencyNote.clear();
     saveErrorNote.clear();
     hotkeyErrorNote.clear();
+    obsInstallNote.clear();
     refreshNotice();
 }
 

@@ -57,7 +57,7 @@ private:
     void rebuildSends();
     void rebuildChain();
     void commitInput();
-    void commitOutput();
+    void commitOutput (bool pairSelected = false);
     void showMenu();
     const MixChannel* channel() const;
 

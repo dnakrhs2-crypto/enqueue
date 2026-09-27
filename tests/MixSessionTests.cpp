@@ -15,6 +15,96 @@ public:
 
     void runTest() override
     {
+        beginTest ("v1-v3 devices migrate to ASIO and OBS sending always starts disabled");
+        for (int version : { 1, 2, 3 })
+        {
+            const auto legacy = "{\"app\":\"LiveMix\",\"version\":" + juce::String (version)
+                + R"(,"device":{"name":"Focusrite USB ASIO","bufferSize":128,"sampleRate":44100,
+                     "type":"Windows Audio","input":"ignored","output":"ignored"},"master":{"sendToObs":true}})";
+            MixSession loaded;
+            juce::StringArray warnings;
+            expect (MixSession::fromJson (legacy, loaded, &warnings).wasOk());
+            expectEquals (warnings.size(), 0);
+            expectEquals (loaded.device.type, juce::String ("ASIO"));
+            expect (loaded.device.isAsio());
+            expectEquals (loaded.device.input, juce::String ("Focusrite USB ASIO"));
+            expectEquals (loaded.device.output, loaded.device.input);
+            expectEquals (loaded.device.bufferSize, 128);
+            expectWithinAbsoluteError (loaded.device.sampleRate, 44100.0, 1.0e-9);
+            expect (! loaded.master.sendToObs);
+
+            const auto upgraded = juce::JSON::parse (loaded.toJson());
+            expectEquals ((int) upgraded["version"], 4);
+            expect (! upgraded["device"].hasProperty ("name"));
+            expectEquals (upgraded["device"]["input"].toString(), loaded.device.input);
+            expectEquals (upgraded["device"]["output"].toString(), loaded.device.input);
+            expect (! (bool) upgraded["master"]["sendToObs"]);
+        }
+
+        beginTest ("v4 preserves Windows type, capture and render endpoints, output none, and OBS sending");
+        for (const auto* type : { "Windows Audio", "Windows Audio (Low Latency Mode)", "Windows Audio (Exclusive Mode)" })
+        {
+            for (const auto* output : { "Headphones", "" })
+            {
+                for (bool send : { false, true })
+                {
+                    MixSession original, loaded;
+                    original.device = { type, "USB Microphone", output, 480, 48000.0 };
+                    original.master.sendToObs = send;
+                    const auto json = original.toJson();
+                    const auto root = juce::JSON::parse (json);
+                    expectEquals ((int) root["version"], 4);
+                    expectEquals (root["device"]["type"].toString(), original.device.type);
+                    expectEquals (root["device"]["input"].toString(), original.device.input);
+                    expectEquals (root["device"]["output"].toString(), original.device.output);
+                    expectEquals (root["device"].getDynamicObject()->getProperties().size(), 5);
+                    expect (root["master"].hasProperty ("sendToObs"));
+                    expect ((bool) root["master"]["sendToObs"] == send);
+                    expect (MixSession::fromJson (json, loaded).wasOk());
+                    expectEquals (loaded.device.type, original.device.type);
+                    expect (! loaded.device.isAsio());
+                    expectEquals (loaded.device.input, original.device.input);
+                    expectEquals (loaded.device.output, original.device.output);
+                    expectEquals (loaded.device.bufferSize, 480);
+                    expectWithinAbsoluteError (loaded.device.sampleRate, 48000.0, 1.0e-9);
+                    expect (loaded.master.sendToObs == send);
+                }
+            }
+        }
+
+        beginTest ("device defaults and ASIO sanitisation retain one device for both directions");
+        {
+            MixSession session;
+            expectEquals (session.device.type, juce::String ("ASIO"));
+            expect (session.device.input.isEmpty() && session.device.output.isEmpty());
+            expect (! session.master.sendToObs);
+            session.device = { "asio", "Focusrite USB ASIO", "Another device", 128, 44100.0 };
+            session.sanitise();
+            expect (session.device.isAsio());
+            expectEquals (session.device.output, session.device.input);
+
+            session.device.type = "Windows Audio";
+            session.device.output.clear();
+            session.sanitise();
+            expect (session.device.output.isEmpty());
+            expect (MixSession::fromJson (R"({"app":"LiveMix","version":4,"device":{"input":"ASIO device","output":"wrong"}})", session).wasOk());
+            expectEquals (session.device.type, juce::String ("ASIO"));
+            expectEquals (session.device.output, juce::String ("ASIO device"));
+            expect (! session.master.sendToObs);
+        }
+
+        beginTest ("v5 is refused with the newer LiveMix message and leaves the open session intact");
+        {
+            MixSession session;
+            session.device = { "Windows Audio", "Mic", "", 480, 48000.0 };
+            session.master.sendToObs = true;
+            const auto before = session.toJson();
+            const auto result = MixSession::fromJson (R"({"app":"LiveMix","version":5})", session);
+            expect (result.failed());
+            expect (result.getErrorMessage().contains (juce::String::fromUTF8 ("더 새로운 LiveMix로 저장한 세션입니다")));
+            expectEquals (session.toJson(), before);
+        }
+
         beginTest ("a file beyond the size limit is refused before it is read; a chain is capped at 16 plugins");
         {
             expect (MixSession::checkFileSize (MixSession::maxFileBytes).wasOk());
@@ -102,7 +192,7 @@ public:
         {
             MixSession s;
             s.name = juce::String::fromUTF8 ("방송 세팅 A");
-            s.device.name = "Focusrite USB ASIO";
+            s.device.input = s.device.output = "Focusrite USB ASIO";
             s.device.bufferSize = 128;
             s.device.sampleRate = 44100.0;
             s.addFx (juce::String::fromUTF8 ("리버브"));
@@ -134,7 +224,7 @@ public:
             s.master.outputFirst = 2;
 
             const auto json = s.toJson();
-            expectEquals ((int) juce::JSON::parse (json)["version"], 3);
+            expectEquals ((int) juce::JSON::parse (json)["version"], 4);
             expectWithinAbsoluteError ((double) juce::JSON::parse (json)["channels"][0]["pan"], -0.3, 1e-12);
             expect (json.contains ("\"app\": \"LiveMix\"") || json.contains ("\"app\":\"LiveMix\""));
 
@@ -143,7 +233,9 @@ public:
             expect (MixSession::fromJson (json, q, &warnings).wasOk());
             expectEquals (warnings.size(), 0);
             expectEquals (q.name, s.name);
-            expectEquals (q.device.name, s.device.name);
+            expectEquals (q.device.type, s.device.type);
+            expectEquals (q.device.input, s.device.input);
+            expectEquals (q.device.output, s.device.output);
             expectEquals (q.device.bufferSize, 128);
             expectWithinAbsoluteError (q.device.sampleRate, 44100.0, 1e-9);
             expectEquals ((int) q.channels.size(), 1);
@@ -190,7 +282,7 @@ public:
                 expectWithinAbsoluteError (s.channels[0].pan, version >= 3 ? -1.0 : 0.0, 1e-12);
                 expectWithinAbsoluteError (s.channels[1].pan, version >= 3 ? 1.0 : 0.0, 1e-12);
                 const auto before = s.toJson();
-                expect (MixSession::fromJson ("{\"app\":\"LiveMix\",\"version\":4}", s).failed());
+                expect (MixSession::fromJson ("{\"app\":\"LiveMix\",\"version\":5}", s).failed());
                 expectEquals (s.toJson(), before);
             }
         }

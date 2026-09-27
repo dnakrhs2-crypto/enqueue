@@ -10,6 +10,7 @@
 #include "MasterCard.h"
 #include "MixDocument.h"
 #include "MuteGroups.h"
+#include "ObsPluginInstaller.h"
 #include "PluginGroupsWindow.h"
 #include "PluginManagerWindow.h"
 #include "PluginPreset.h"
@@ -25,6 +26,13 @@
 namespace gocue::livemix
 {
 
+/** Injectable boundaries keep UI installer tests on temporary roots and avoid an actual UAC prompt. */
+struct ObsPluginActions
+{
+    std::function<ObsPluginInstaller::Roots()> roots = ObsPluginInstaller::systemRoots;
+    std::function<ObsPluginInstaller::Result (juce::String&)> elevate = ObsPluginInstaller::installElevated;
+};
+
 /** The window's content: top bar, the scrolling channel cards, the docked master, the drawers, the status bar.
     Everything the operator does goes through the document; the timer feeds the meters. */
 class MainComponent : public juce::Component,
@@ -33,7 +41,7 @@ class MainComponent : public juce::Component,
                       private juce::Timer
 {
 public:
-    MainComponent (MixDocument& document, LiveMixSettings& settings);
+    MainComponent (MixDocument& document, LiveMixSettings& settings, ObsPluginActions obsActions = {});
     ~MainComponent() override;
 
     /** Session files. new / open first secure what is open (see withSessionSecured). */
@@ -56,7 +64,7 @@ public:
     /** Safe mode (Shift / --safe-mode): a session's device is not opened and plugins are not loaded. */
     void setSafeMode (bool on) noexcept { safeMode = on; }
 
-    /** The ASIO device list changed (settings / hot-plug): refresh names and pickers. */
+    /** The audio device list changed (settings / hot-plug): refresh names and pickers. */
     void deviceChanged();
     /** The two mute groups (the tray menu toggles them too). */
     MuteGroups& getMuteGroups() noexcept { return muteGroups; }
@@ -68,7 +76,7 @@ public:
     /** The notice bar under the top bar, with a close button - never a modal dialog: a modal alert freezes the whole
         window (no resizing, no mic buttons) until it is dismissed, which is wrong for a live tool. Three lines that
         come and go on their own: the session note (the last open: its failure, or its warnings), the startup note
-        (the ASIO error until a device runs, or the safe-mode note), the save-failure note (until a save succeeds).
+        (the audio device error until a device runs, or the safe-mode note), the save-failure note (until a save succeeds).
         The close button clears them all. An empty text clears that line. */
     void setSessionNote (const juce::String& text, bool error);
     void setStartupNote (const juce::String& text, bool error, bool safeModeNote);
@@ -93,6 +101,9 @@ private:
     enum class Drawer { none, chain, fx };
 
     void timerCallback() override;
+    void startObsPluginCheck (bool installIfNeeded, bool allowElevation = false);
+    void finishObsPluginCheck();
+    void refreshObsStatus();
     void rebuildCards();
     void refreshValues();
     void layoutCards();
@@ -183,6 +194,15 @@ private:
     juce::StringArray inputNames, outputNames;
     juce::String statusText;
     double statusUntilMs = 0.0;
+    double nextObsPollMs = 0.0;
+    struct ObsInstallWork;
+    ObsPluginActions obsPluginActions;
+    std::shared_ptr<ObsInstallWork> obsInstallWork;
+    bool obsInstallRequested = false, obsPluginCurrent = false;
+    bool obsElevationRequested = false;
+    bool obsNeedsRestart = false, obsRestartSawDisconnect = false;
+    juce::String obsInstallNote;
+    bool obsInstallError = false;
     std::unique_ptr<juce::FileChooser> chooser;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (MainComponent)

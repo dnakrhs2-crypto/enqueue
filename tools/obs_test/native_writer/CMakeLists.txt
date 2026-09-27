@@ -1,0 +1,6 @@
+cmake_minimum_required(VERSION 3.21)
+project(livemix_fake_writer C)
+add_executable(livemix-fake-writer main.c)
+target_include_directories(livemix-fake-writer PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../../livemix/shared)
+target_compile_features(livemix-fake-writer PRIVATE c_std_17)
+target_link_libraries(livemix-fake-writer PRIVATE avrt)

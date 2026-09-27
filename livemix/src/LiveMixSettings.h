@@ -1,8 +1,11 @@
 #pragma once
 
+#include "MixModel.h"
+
 #include <juce_data_structures/juce_data_structures.h>
 
 #include <memory>
+#include <optional>
 
 namespace gocue::livemix
 {
@@ -15,8 +18,8 @@ public:
     /** An empty directory uses the normal per-user location; tests can use an isolated directory. */
     explicit LiveMixSettings (const juce::File& directory = {});
 
-    std::unique_ptr<juce::XmlElement> getAudioDeviceState() const;
-    void setAudioDeviceState (const juce::XmlElement* xml);
+    std::optional<MixDevice> getLastDevice() const;
+    void setLastDevice (const MixDevice& device);
     std::unique_ptr<juce::XmlElement> getPluginList() const;
     void setPluginList (const juce::XmlElement* xml);
 

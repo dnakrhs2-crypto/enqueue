@@ -211,7 +211,7 @@ ChannelCard::ChannelCard (MixDocument& doc, const juce::Uuid& id) : document (do
     directChip.onClick = [this] { commitOutput(); };
     addAndMakeVisible (directChip);
     directCombo.setWantsKeyboardFocus (false);
-    directCombo.onChange = [this] { commitOutput(); };
+    directCombo.onChange = [this] { commitOutput (true); };
     addAndMakeVisible (directCombo);
     muteGroupChip.setTooltip (ko ("켜 두면 마이크 뮤트그룹 핫키가 이 마이크를 함께 뮤트합니다 (핫키는 설정에서)"));
     muteGroupChip.onClick = [this]
@@ -284,9 +284,10 @@ void ChannelCard::refresh()
 
     masterChip.setToggleState (c->output.master, juce::dontSendNotification);
     directChip.setToggleState (c->output.direct, juce::dontSendNotification);
-    fillChannelCombo (directCombo, outputNames, true, MixSession::maxDeviceChannels);
-    directCombo.setSelectedId (c->output.directFirst + 1, juce::dontSendNotification);
-    directCombo.setEnabled (c->output.direct);
+    const auto runningDevice = document.getEngine().getOpenDevice();
+    const auto device = runningDevice.input.isNotEmpty() ? runningDevice : session.device;
+    fillDirectOutputCombo (directCombo, directChip, outputNames, device.isAsio(), device.output.isNotEmpty(),
+                           c->output.directFirst, c->output.direct);
     muteGroupChip.setToggleState (c->muteGroup, juce::dontSendNotification);
     micButton.setMuted (groupMuted && c->muteGroup);
     meter_.setStereo (c->stereo);
@@ -391,18 +392,26 @@ void ChannelCard::commitInput()
     document.setChannelInput (channelId, first, stereoToggle.getToggleState());
 }
 
-void ChannelCard::commitOutput()
+void ChannelCard::commitOutput (bool pairSelected)
 {
     if (refreshing)
         return;
 
     const auto* c = channel();
+    if (c == nullptr)
+        return;
+
     const int sel = directCombo.getSelectedId();
-    MixOutput output;
+    auto output = c->output;
     output.master = masterChip.getToggleState();
     output.direct = directChip.getToggleState();
-    // no matching pair (e.g. a saved 7-8 on a 4-out device): keep the saved pair, do not fall to 1-2
-    output.directFirst = sel > 0 ? sel - 1 : (c != nullptr ? c->output.directFirst : 2);
+    // The effective Windows pair is display-only. Toggle clicks always retain the saved ASIO pair. A pair the operator
+    // picks on a running ASIO device is stored - even the device's only pair (a 2-output interface whose session asked
+    // for 3-4 shows 없음 until 1-2 is chosen).
+    auto& engine = document.getEngine();
+    if (pairSelected && sel > 0 && directCombo.isEnabled() && engine.isDeviceRunning() && engine.getOpenDevice().isAsio()
+        && sel + 1 <= engine.getNumDeviceOutputs())   // the pair must exist (an output-less ASIO device lists placeholders)
+        output.directFirst = sel - 1;
     document.setChannelOutput (channelId, output);
 }
 

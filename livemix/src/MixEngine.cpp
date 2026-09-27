@@ -1,4 +1,6 @@
 #include "MixEngine.h"
+#include "AudioBackends.h"
+#include "MonitorOutput.h"
 
 #include <algorithm>
 
@@ -7,6 +9,17 @@ namespace gocue::livemix
 
 namespace
 {
+    void selectDeviceType (juce::AudioDeviceManager& manager, const juce::String& type)
+    {
+        if (manager.getCurrentAudioDeviceType() == type) return;
+        // JUCE's setCurrentAudioDeviceType opens remembered/default endpoints, possibly a duplex pair with
+        // independent clocks. An empty internal setup selects ONLY the type; the explicit setup follows.
+        // This is never persisted: LiveMix settings and its public startup API use MixDevice JSON.
+        juce::XmlElement typeOnly ("DEVICESETUP");
+        typeOnly.setAttribute ("deviceType", type);
+        manager.initialise (0, 0, &typeOnly, false);
+    }
+
     float clampedPan (double pan) noexcept
     {
         return (float) juce::jlimit (-1.0, 1.0, std::isfinite (pan) ? pan : 0.0);
@@ -32,7 +45,23 @@ namespace
     }
 }
 
-MixEngine::MixEngine()
+// Sequential consistency orders reader entry before pointer acquisition and unpublishing before the
+// reader-count check. A reader of the old pointer must finish before the message thread can reclaim it.
+// No retry, allocation, lock or wait on the audio thread (including the busy-graph silence path).
+struct MixEngine::MonitorAccess
+{
+    explicit MonitorAccess (MixEngine& e) noexcept : engine (e)
+    {
+        engine.monitorReaders.fetch_add (1);
+        output = engine.publishedMonitor.load();
+    }
+    ~MonitorAccess() { engine.monitorReaders.fetch_sub (1); }
+    MixEngine& engine;
+    MonitorOutput* output = nullptr;
+};
+static_assert (std::atomic<MonitorOutput*>::is_always_lock_free && std::atomic<unsigned>::is_always_lock_free);
+
+MixEngine::MixEngine (const juce::String& obsMappingName) : obsSender (obsMappingName)
 {
     prepare (48000.0, 256);
 }
@@ -43,62 +72,65 @@ MixEngine::~MixEngine()
 }
 
 //==============================================================================
-juce::String MixEngine::initialise (const juce::XmlElement* savedDeviceState)
+juce::String MixEngine::initialise (const MixDevice* saved)
 {
-    // ASIO only: the other types are never listed, never opened
-    auto* asio = findAsioType();
-
-    if (asio == nullptr)
-        return juce::String::fromUTF8 ("ASIO 장치 타입을 쓸 수 없습니다 (ASIO 드라이버가 설치된 오디오 인터페이스가 필요합니다).");
-
-    deviceManager.setCurrentAudioDeviceType (asio->getTypeName(), false);
-
-    juce::String error = deviceManager.initialise (maxDeviceChannels, maxDeviceChannels, savedDeviceState, false, asio->getTypeName());
-
-    if (deviceManager.getCurrentAudioDevice() == nullptr || deviceManager.getCurrentAudioDeviceType() != asio->getTypeName())
+    juce::String error;
+    if (saved != nullptr && saved->input.isNotEmpty())
     {
-        // nothing (or the wrong type) opened: the first ASIO device
-        asio->scanForDevices();
-        const auto names = asio->getDeviceNames (false);
-
-        if (names.isEmpty())
-            return error.isNotEmpty() ? error : juce::String::fromUTF8 ("ASIO 장치가 없습니다. 오디오 인터페이스를 연결하고 드라이버를 설치하세요.");
-
-        deviceManager.setCurrentAudioDeviceType (asio->getTypeName(), false);
-        juce::AudioDeviceManager::AudioDeviceSetup setup;
-        setup.outputDeviceName = names[0];
-        setup.inputDeviceName = names[0];
-        setup.useDefaultInputChannels = true;
-        setup.useDefaultOutputChannels = true;
-        error = deviceManager.setAudioDeviceSetup (setup, true);
+        error = openDevice (*saved);
+        if (error.isEmpty()) return {};
     }
-
-    if (deviceManager.getCurrentAudioDevice() == nullptr)
-        return error.isNotEmpty() ? error : juce::String::fromUTF8 ("ASIO 장치를 열지 못했습니다.");
-
-    const auto widened = openAllChannels();
-    ensureCallback();
-    return widened;
+    for (const auto& name : AudioBackends::availableTypes (deviceManager))
+        if (name.containsIgnoreCase ("ASIO"))
+        {
+            auto* type = findType (name);
+            type->scanForDevices();
+            const auto names = type->getDeviceNames (false);
+            if (! names.isEmpty())
+            {
+                error = openDevice ({ name, names[0], names[0], 0, 0.0 });
+                if (error.isEmpty()) return {};
+            }
+        }
+    if (auto* type = findType ("Windows Audio"))
+    {
+        type->scanForDevices();
+        const auto inputs = type->getDeviceNames (true), outputs = type->getDeviceNames (false);
+        if (! inputs.isEmpty())
+            return openDevice ({ type->getTypeName(), inputs[juce::jmax (0, type->getDefaultDeviceIndex (true))],
+                                 outputs[juce::jmax (0, type->getDefaultDeviceIndex (false))], 0, 0.0 });
+    }
+    return error.isNotEmpty() ? error : juce::String::fromUTF8 ("오디오 장치를 열지 못했습니다.");
 }
 
-juce::AudioIODeviceType* MixEngine::findAsioType()
+juce::AudioIODeviceType* MixEngine::findType (const juce::String& name)
 {
-    juce::AudioIODeviceType* asio = nullptr;
-
     for (auto* type : deviceManager.getAvailableDeviceTypes())
-        if (type->getTypeName().containsIgnoreCase ("ASIO"))
-            asio = type;
-
-    return asio;
+        if (type->getTypeName() == name) return type;
+    return nullptr;
 }
 
 void MixEngine::ensureCallback()
 {
+    startTimer (50);
     if (! callbackAdded)
     {
+        monitorRestartRequested.store (false, std::memory_order_release);
+        publishedMonitor.store (monitor.get());
         deviceManager.addAudioCallback (this);
         callbackAdded = true;
     }
+}
+
+void MixEngine::removeCallback()
+{
+    if (callbackAdded)
+    {
+        deviceManager.removeAudioCallback (this);
+        callbackAdded = false;
+    }
+    publishedMonitor.store (nullptr);
+    monitorRestartRequested.store (false, std::memory_order_release);
 }
 
 juce::String MixEngine::openAllChannels()
@@ -112,8 +144,10 @@ juce::String MixEngine::openAllChannels()
     const int outs = device->getOutputChannelNames().size();
     auto setup = deviceManager.getAudioDeviceSetup();
     juce::BigInteger allIn, allOut;
-    allIn.setRange (0, juce::jmin (ins, maxDeviceChannels), true);
-    allOut.setRange (0, juce::jmin (outs, maxDeviceChannels), true);
+    if (setup.inputDeviceName.isNotEmpty())
+        allIn.setRange (0, juce::jmin (ins, maxDeviceChannels), true);
+    if (setup.outputDeviceName.isNotEmpty())
+        allOut.setRange (0, juce::jmin (outs, device->getTypeName().containsIgnoreCase ("ASIO") ? maxDeviceChannels : 2), true);
 
     if (setup.inputChannels == allIn && setup.outputChannels == allOut && ! setup.useDefaultInputChannels && ! setup.useDefaultOutputChannels)
         return {};
@@ -135,159 +169,226 @@ juce::String MixEngine::openAllChannels()
                                     : juce::String::fromUTF8 (" (이전 채널 구성을 유지합니다)"));
 }
 
-juce::String MixEngine::openDevice (const juce::String& name, double newSampleRate, int newBufferSize)
+juce::String MixEngine::openDevice (const MixDevice& requested)
 {
-    auto* asio = findAsioType();
+    MixDevice wanted = requested;
+    if (wanted.isAsio())
+    {
+        if (wanted.input.isEmpty()) wanted.input = getOpenDevice().input;
+        wanted.output = wanted.input;
+    }
+    auto* type = findType (wanted.type);
+    if (type == nullptr || (! wanted.isAsio() && ! AudioBackends::isWindows (wanted.type)))
+        return juce::String::fromUTF8 ("오디오 장치 타입을 쓸 수 없습니다: ") + wanted.type;
+    if (wanted.input.isEmpty())
+        return juce::String::fromUTF8 ("입력 장치를 선택하세요.");
+    type->scanForDevices();
+    if (! type->getDeviceNames (true).contains (wanted.input)
+        || (wanted.output.isNotEmpty() && ! type->getDeviceNames (false).contains (wanted.output)))
+        return juce::String::fromUTF8 ("선택한 오디오 장치가 이 PC에 없습니다.");
 
-    if (asio == nullptr)
-        return juce::String::fromUTF8 ("ASIO 장치 타입을 쓸 수 없습니다 (ASIO 드라이버가 설치된 오디오 인터페이스가 필요합니다).");
-
-    asio->scanForDevices();
-
-    if (name.isNotEmpty() && ! asio->getDeviceNames (false).contains (name))
-        return juce::String::fromUTF8 ("ASIO 장치 '") + name + juce::String::fromUTF8 ("'가 이 PC에 없습니다.");
-
-    // what runs now, to come back to when the new setup fails (JUCE closes a device whose reconfiguration is refused)
-    const bool hadDevice = deviceManager.getCurrentAudioDevice() != nullptr;
+    const bool split = ! wanted.isAsio() && wanted.output.isNotEmpty()
+                       && ! AudioBackends::sameContainer (wanted.input, wanted.output);
+    auto* previousDevice = deviceManager.getCurrentAudioDevice();
+    const bool hadDevice = previousDevice != nullptr && previousDevice->isOpen();
     const auto previousType = deviceManager.getCurrentAudioDeviceType();
     const auto previous = deviceManager.getAudioDeviceSetup();
+    const auto previousInfo = getOpenDevice();
+    const bool previousSplit = isSplitMonitor();
+    const bool previousStereoOnly = stereoOutputsOnly.load (std::memory_order_relaxed);
 
-    if (deviceManager.getCurrentAudioDeviceType() != asio->getTypeName())
-        deviceManager.setCurrentAudioDeviceType (asio->getTypeName(), false);
+    removeCallback(); // joins the producer before replacing its monitor or staging storage
+    auto previousMonitor = std::move (monitor);
+    const double previousMonitorRate = previousMonitor != nullptr ? previousMonitor->getOutputSampleRate() : 0.0;
+    const int previousMonitorPeriod = previousMonitor != nullptr ? previousMonitor->getOutputPeriod() : 0;
+    if (previousMonitor != nullptr) previousMonitor->stop();
+    deviceManager.closeAudioDevice();
+    splitMonitor.store (false, std::memory_order_release);
 
-    auto setup = deviceManager.getAudioDeviceSetup();
-
-    if (name.isNotEmpty())
-        setup.inputDeviceName = setup.outputDeviceName = name;
-
-    if (setup.outputDeviceName.isEmpty())
-        return juce::String::fromUTF8 ("열 ASIO 장치가 없습니다.");
-
-    if (newSampleRate > 0.0)
-        setup.sampleRate = newSampleRate;
-
-    if (newBufferSize > 0)
-        setup.bufferSize = newBufferSize;
-
-    setup.useDefaultInputChannels = setup.useDefaultOutputChannels = true;
+    selectDeviceType (deviceManager, wanted.type);
+    juce::AudioDeviceManager::AudioDeviceSetup setup;
+    setup.inputDeviceName = wanted.input;
+    setup.outputDeviceName = split ? juce::String() : wanted.output;
+    setup.sampleRate = wanted.sampleRate;
+    setup.bufferSize = wanted.bufferSize;
+    setup.useDefaultInputChannels = setup.useDefaultOutputChannels = false;
+    setup.inputChannels.setRange (0, maxDeviceChannels, true);
+    if (setup.outputDeviceName.isNotEmpty())
+        setup.outputChannels.setRange (0, wanted.isAsio() ? maxDeviceChannels : 2, true);
     auto error = deviceManager.setAudioDeviceSetup (setup, true);
-
     if (error.isEmpty())
-        error = openAllChannels();
-
+    {
+        auto* opened = deviceManager.getCurrentAudioDevice();
+        if (opened == nullptr || ! opened->isOpen())
+            error = juce::String::fromUTF8 ("오디오 장치를 시작하지 못했습니다.");
+        else
+            error = openAllChannels();
+    }
+    if (error.isEmpty() && split)
+    {
+        auto* input = deviceManager.getCurrentAudioDevice();
+        monitor = std::make_unique<MonitorOutput>();
+        error = monitor->start (*type, wanted.output, input->getCurrentSampleRate(), input->getCurrentBufferSizeSamples());
+    }
     if (error.isNotEmpty())
     {
+        if (monitor != nullptr) monitor->stop();
+        monitor.reset();
+        deviceManager.closeAudioDevice();
         juce::String rollback;
-
+        if (deviceManager.getCurrentAudioDeviceType() != previousType && findType (previousType) != nullptr)
+            selectDeviceType (deviceManager, previousType);
         if (hadDevice)
         {
-            if (previousType != asio->getTypeName())
-                deviceManager.setCurrentAudioDeviceType (previousType, false);
-
             rollback = deviceManager.setAudioDeviceSetup (previous, true);
+            if (rollback.isEmpty() && deviceManager.getAudioDeviceSetup() != previous)
+                rollback = juce::String::fromUTF8 ("이전 장치의 샘플레이트, 버퍼 또는 채널을 복원하지 못했습니다.");
+            if (rollback.isEmpty() && previousMonitor != nullptr)
+            {
+                if (auto* oldType = findType (previousType))
+                    rollback = previousMonitor->start (*oldType, previousInfo.output, previousInfo.sampleRate,
+                                                        previousInfo.bufferSize, previousMonitorPeriod, previousMonitorRate);
+                else
+                    rollback = juce::String::fromUTF8 ("이전 모니터 장치 타입이 없습니다.");
+                if (rollback.isEmpty() && (previousMonitor->getOutputSampleRate() != previousMonitorRate
+                                           || previousMonitor->getOutputPeriod() != previousMonitorPeriod))
+                    rollback = juce::String::fromUTF8 ("이전 모니터의 샘플레이트 또는 버퍼를 복원하지 못했습니다.");
+            }
         }
-        else
+        monitor = std::move (previousMonitor);
+        openedDevice = previousInfo;
+        splitMonitor.store (previousSplit && hadDevice, std::memory_order_release);
+        stereoOutputsOnly.store (previousStereoOnly, std::memory_order_relaxed);
+        // A failed rollback must not leave a half-working split graph that the UI reports as running.
+        if (rollback.isNotEmpty())
         {
-            deviceManager.closeAudioDevice();   // nothing ran before: a half-opened device (default channels only) must not stay
+            deviceManager.closeAudioDevice();
+            if (monitor != nullptr) monitor->stop();
         }
-
         ensureCallback();
-        return juce::String::fromUTF8 ("ASIO 장치 '") + setup.outputDeviceName + juce::String::fromUTF8 ("'를 열지 못했습니다: ") + error
-               + (! hadDevice ? juce::String()
-                  : rollback.isNotEmpty() ? juce::String::fromUTF8 (" (이전 장치로 되돌리기도 실패: ") + rollback + ")"
-                                          : juce::String::fromUTF8 (" (이전 장치로 되돌렸습니다)"));
+        return juce::String::fromUTF8 ("오디오 장치를 열지 못했습니다: ") + error
+            + (! hadDevice ? juce::String()
+               : rollback.isNotEmpty() ? juce::String::fromUTF8 (" (이전 장치로 되돌리기도 실패: ") + rollback + ")"
+                                       : juce::String::fromUTF8 (" (이전 장치로 되돌렸습니다)"));
     }
 
+    openedDevice = wanted;
+    splitMonitor.store (split, std::memory_order_release);
+    stereoOutputsOnly.store (! wanted.isAsio(), std::memory_order_relaxed);
     ensureCallback();
+    openedDevice = getOpenDevice();
+    return {};
+}
+
+MixDevice MixEngine::getOpenDevice() const
+{
+    if (auto* device = deviceManager.getCurrentAudioDevice(); device != nullptr && device->isOpen())
+    {
+        const auto setup = deviceManager.getAudioDeviceSetup();
+        return { deviceManager.getCurrentAudioDeviceType(), setup.inputDeviceName,
+                 isSplitMonitor() ? openedDevice.output : setup.outputDeviceName,
+                 device->getCurrentBufferSizeSamples(), device->getCurrentSampleRate() };
+    }
     return {};
 }
 
 juce::String MixEngine::setBufferSize (int samples)
 {
-    auto* device = deviceManager.getCurrentAudioDevice();
-
-    if (device == nullptr)
-        return juce::String::fromUTF8 ("열린 ASIO 장치가 없습니다.");
-
-    if (samples <= 0 || device->getCurrentBufferSizeSamples() == samples)
-        return {};
-
-    const auto previous = deviceManager.getAudioDeviceSetup();
-    auto setup = previous;
-    setup.bufferSize = samples;
-    auto error = deviceManager.setAudioDeviceSetup (setup, true);
-
-    if (error.isEmpty())
-        error = openAllChannels();
-
-    if (error.isNotEmpty())
-    {
-        const auto rollback = deviceManager.setAudioDeviceSetup (previous, true);
-        ensureCallback();
-        return juce::String::fromUTF8 ("버퍼 크기를 바꾸지 못했습니다: ") + error
-               + (rollback.isNotEmpty() ? juce::String::fromUTF8 (" (이전 설정으로 되돌리기도 실패: ") + rollback + ")"
-                                        : juce::String::fromUTF8 (" (이전 설정으로 되돌렸습니다)"));
-    }
-
-    ensureCallback();
-    return {};
+    const auto current = getOpenDevice();
+    if (current.type == "Windows Audio") return {}; // the shared-mode period is chosen by Windows
+    if (current.input.isEmpty())
+        return juce::String::fromUTF8 ("열린 오디오 장치가 없습니다.");
+    if (samples <= 0 || current.bufferSize == samples) return {};
+    auto wanted = current;
+    wanted.bufferSize = samples;
+    return openDevice (wanted);
 }
 
 juce::String MixEngine::restartDevice()
 {
-    deviceManager.closeAudioDevice();
-    deviceManager.restartLastAudioDevice();
-
-    if (deviceManager.getCurrentAudioDevice() == nullptr || ! deviceManager.getCurrentAudioDevice()->isOpen())
+    auto current = getOpenDevice();
+    if (current.input.isEmpty()) current = openedDevice;
+    if (current.input.isEmpty())
         return juce::String::fromUTF8 ("장치를 다시 열지 못했습니다. 설정에서 장치를 다시 고르세요.");
-
-    const auto widened = openAllChannels();
-    ensureCallback();
-    return widened;
+    return openDevice (current);
 }
 
 juce::String MixEngine::openSessionDevice (const MixDevice& device)
 {
-    if (device.name.isEmpty())
-        return {};
-
-    auto* current = deviceManager.getCurrentAudioDevice();
-    const bool sameDevice = current != nullptr && current->isOpen() && current->getName() == device.name;   // a device object that failed to reopen is not "the same device running"
-
-    if (sameDevice && (device.bufferSize <= 0 || current->getCurrentBufferSizeSamples() == device.bufferSize)
-        && (device.sampleRate <= 0.0 || juce::approximatelyEqual (current->getCurrentSampleRate(), device.sampleRate)))
+    if (device.input.isEmpty()) return {};
+    const auto current = getOpenDevice();
+    if (current.type == device.type && current.input == device.input
+        && current.output == (device.isAsio() ? device.input : device.output)
+        && (device.bufferSize <= 0 || device.type == "Windows Audio" || current.bufferSize == device.bufferSize)
+        && (device.sampleRate <= 0.0 || juce::approximatelyEqual (current.sampleRate, device.sampleRate)))
     {
-        const auto widened = openAllChannels();
+        const auto error = openAllChannels();
         ensureCallback();
-        return widened.isEmpty() ? juce::String() : juce::String::fromUTF8 ("세션의 장치는 열려 있지만 ") + widened;
+        return error;
     }
-
-    const auto error = openDevice (device.name, device.sampleRate, device.bufferSize);
+    const auto error = openDevice (device);
     return error.isEmpty() ? juce::String() : juce::String::fromUTF8 ("세션의 ") + error;
 }
 
 void MixEngine::shutdown()
 {
-    if (callbackAdded)
-    {
-        deviceManager.removeAudioCallback (this);
-        callbackAdded = false;
-    }
-
+    stopTimer();
+    removeCallback();
+    obsSender.setEnabled (false);
     deviceManager.closeAudioDevice();
+    if (monitor != nullptr) monitor->stop();
+    monitor.reset();
+    splitMonitor.store (false, std::memory_order_release);
+}
+
+bool MixEngine::isMonitorRunning() const noexcept
+{
+    return isDeviceRunning() && (isSplitMonitor() ? monitor != nullptr && monitor->isRunning()
+                                && publishedMonitor.load() != nullptr && ! monitorRestartRequested.load (std::memory_order_acquire)
+                                : getNumDeviceOutputs() > 0);
+}
+
+void MixEngine::timerCallback()
+{
+    if (! isSplitMonitor() || monitor == nullptr || ! isDeviceRunning()) return;
+    auto* input = deviceManager.getCurrentAudioDevice();
+    auto* type = findType (openedDevice.type);
+    if (input == nullptr || type == nullptr || ! input->isOpen()) return;
+    // Consume only requests made before this attempt; input restarts during close/open must survive it.
+    const bool inputRestart = monitorRestartRequested.exchange (false, std::memory_order_acq_rel);
+    if (! monitor->needsRestart() && ! inputRestart) return;
+
+    // Leave input DSP and OBS running throughout output close/open/start. A callback holding the old
+    // pointer finishes normally; new callbacks skip monitor delivery until the replacement is ready.
+    publishedMonitor.store (nullptr);
+    if (monitorReaders.load() != 0)
+    {
+        monitorRestartRequested.store (true, std::memory_order_release);
+        return; // retry on the next timer tick, never wait for the graph
+    }
+    monitor->stop(); // join the output callback before reading its last announced format
+    const auto rate = monitor->getRestartOutputRate();
+    const auto period = monitor->getRestartOutputPeriod();
+    monitor = std::make_unique<MonitorOutput>();
+    monitor->start (*type, openedDevice.output, input->getCurrentSampleRate(), input->getCurrentBufferSizeSamples(), period, rate);
+    publishedMonitor.store (monitor.get()); // a failed rebuild stays stopped and visible until the operator retries
+    openedDevice = getOpenDevice();
 }
 
 double MixEngine::getLatencyMs() const
 {
-    return inputLatencyMs.load (std::memory_order_relaxed) + outputLatencyMs.load (std::memory_order_relaxed);
+    return inputLatencyMs.load (std::memory_order_relaxed) + outputLatencyMs.load (std::memory_order_relaxed)
+           + (isSplitMonitor() && monitor != nullptr ? monitor->getLatencyMs() : 0.0);
 }
 
 int MixEngine::getXRunCount() const
 {
+    int count = 0;
     if (auto* device = deviceManager.getCurrentAudioDevice())
-        return juce::jmax (0, device->getXRunCount());
-
-    return 0;
+        count = juce::jmax (0, device->getXRunCount());
+    if (isSplitMonitor() && monitor != nullptr)
+        count += (int) juce::jmin<std::uint64_t> (1000000000, monitor->getUnderruns() + monitor->getOverruns());
+    return count;
 }
 
 //==============================================================================
@@ -300,6 +401,7 @@ void MixEngine::prepare (double newSampleRate, int newBlockSize)
     chBuf.setSize (2, newBlockSize, false, true, true);
     preBuf.setSize (2, newBlockSize, false, true, true);
     masterBus.setSize (2, newBlockSize, false, true, true);
+    monitorStage.setSize (2, newBlockSize, false, true, true);
 
     for (auto& b : fxBus)
         b.setSize (2, newBlockSize, false, true, true);
@@ -312,6 +414,7 @@ void MixEngine::prepare (double newSampleRate, int newBlockSize)
 
     master.chain->prepare (newSampleRate, newBlockSize);
     loudness.prepare (newSampleRate);
+    obsSender.deviceStarted (newSampleRate);
 }
 
 void MixEngine::addToOutputs (float* const* outputs, int numOutputs, int first, const juce::AudioBuffer<float>& source, int offset, int numSamples) noexcept
@@ -335,12 +438,19 @@ void MixEngine::renderBlock (const float* const* inputs, int numInputs, float* c
     if (numSamples <= 0)
         return;
 
+    const MonitorAccess monitorAccess (*this);
+    auto* const monitorOutput = monitorAccess.output;
     // the graph is swapped on the message thread under this lock (a structural edit, a session): the callback never
     // waits for it - this block stays silent (the outputs are cleared above) rather than stalling the driver
     const juce::ScopedTryLock sl (lock);
 
     if (! sl.isLocked())
+    {
+        obsSender.writeSilence (numSamples);
+        if (isSplitMonitor() && monitorOutput != nullptr)
+            monitorOutput->push (nullptr, nullptr, numSamples);
         return;
+    }
 
     const int chunkSize = juce::jmax (1, masterBus.getNumSamples());   // a driver may deliver more than announced: chunk, never grow
     const double sr = sampleRate.load (std::memory_order_relaxed);
@@ -350,6 +460,11 @@ void MixEngine::renderBlock (const float* const* inputs, int numInputs, float* c
     for (int offset = 0; offset < numSamples; offset += chunkSize)
     {
         const int n = juce::jmin (chunkSize, numSamples - offset);
+        const bool split = isSplitMonitor();
+        if (split) monitorStage.clear (0, n);
+        auto* const* routedOutputs = split ? monitorStage.getArrayOfWritePointers() : outputs;
+        const int routedCount = split ? 2 : numOutputs;
+        const int routedOffset = split ? 0 : offset;
         masterBus.clear (0, n);
         const int numFx = juce::jmin (maxFx, (int) fxNodes.size());
 
@@ -505,7 +620,7 @@ void MixEngine::renderBlock (const float* const* inputs, int numInputs, float* c
             }
 
             if (node->direct.load (std::memory_order_relaxed))
-                addToOutputs (outputs, numOutputs, node->directFirst.load (std::memory_order_relaxed), chBuf, offset, n);
+                addToOutputs (routedOutputs, routedCount, outputFirst (node->directFirst.load (std::memory_order_relaxed)), chBuf, routedOffset, n);
         }
 
         for (int f = 0; f < numFx; ++f)
@@ -537,13 +652,16 @@ void MixEngine::renderBlock (const float* const* inputs, int numInputs, float* c
             }
 
             if (fx.direct.load (std::memory_order_relaxed))
-                addToOutputs (outputs, numOutputs, fx.directFirst.load (std::memory_order_relaxed), bus, offset, n);
+                addToOutputs (routedOutputs, routedCount, outputFirst (fx.directFirst.load (std::memory_order_relaxed)), bus, routedOffset, n);
         }
 
         master.chain->process (masterBus, n);
         master.meter.push (masterBus.getMagnitude (0, 0, n), masterBus.getMagnitude (1, 0, n));
         loudness.process (masterBus.getReadPointer (0), masterBus.getReadPointer (1), n);
-        addToOutputs (outputs, numOutputs, master.outputFirst.load (std::memory_order_relaxed), masterBus, offset, n);
+        obsSender.write (masterBus.getReadPointer (0), masterBus.getReadPointer (1), n);
+        addToOutputs (routedOutputs, routedCount, outputFirst (master.outputFirst.load (std::memory_order_relaxed)), masterBus, routedOffset, n);
+        if (split && monitorOutput != nullptr)
+            monitorOutput->push (monitorStage.getReadPointer (0), monitorStage.getReadPointer (1), n);
     }
 }
 
@@ -564,9 +682,20 @@ void MixEngine::audioDeviceAboutToStart (juce::AudioIODevice* device)
 {
     const double sr = device->getCurrentSampleRate();
     const int bs = device->getCurrentBufferSizeSamples();
+    const MonitorAccess monitorAccess (*this);
+    if (isSplitMonitor())
+    {
+        if (auto* output = monitorAccess.output)
+        {
+            if (output->getInputSampleRate() != sr || output->getInputPeriod() != bs)
+                output->requestRestart();
+        }
+        else
+            monitorRestartRequested.store (true, std::memory_order_release);
+    }
     prepare (sr > 0.0 ? sr : 48000.0, bs > 0 ? bs : 256);
     numDeviceInputs.store (device->getActiveInputChannels().countNumberOfSetBits(), std::memory_order_relaxed);
-    numDeviceOutputs.store (device->getActiveOutputChannels().countNumberOfSetBits(), std::memory_order_relaxed);
+    numDeviceOutputs.store (isSplitMonitor() ? 2 : device->getActiveOutputChannels().countNumberOfSetBits(), std::memory_order_relaxed);
     inputLatencyMs.store (1000.0 * device->getInputLatencyInSamples() / juce::jmax (1.0, sr), std::memory_order_relaxed);
     outputLatencyMs.store (1000.0 * device->getOutputLatencyInSamples() / juce::jmax (1.0, sr), std::memory_order_relaxed);
     deviceRunning.store (device->isOpen(), std::memory_order_release);   // JUCE's ASIO reset starts the callback even when the reopen failed
@@ -575,13 +704,24 @@ void MixEngine::audioDeviceAboutToStart (juce::AudioIODevice* device)
 void MixEngine::audioDeviceStopped()
 {
     deviceRunning.store (false, std::memory_order_release);
+    const MonitorAccess monitorAccess (*this);
+    if (isSplitMonitor())
+    {
+        if (auto* output = monitorAccess.output) output->requestRestart();
+        else monitorRestartRequested.store (true, std::memory_order_release);
+    }
     dspLoad.store (0.0, std::memory_order_relaxed);
 }
 
-void MixEngine::audioDeviceError (const juce::String& errorMessage)
+void MixEngine::audioDeviceError (const juce::String&)
 {
     deviceRunning.store (false, std::memory_order_release);   // the status line says "오디오 멈춤" instead of pretending
-    juce::Logger::writeToLog ("LiveMix audio device error: " + errorMessage);
+    const MonitorAccess monitorAccess (*this);
+    if (isSplitMonitor())
+    {
+        if (auto* output = monitorAccess.output) output->requestRestart();
+        else monitorRestartRequested.store (true, std::memory_order_release);
+    }
 }
 
 //==============================================================================
@@ -603,6 +743,11 @@ MixEngine::FxNode* MixEngine::findFx (const juce::Uuid& id) const noexcept
     return nullptr;
 }
 
+int MixEngine::outputFirst (int requested) const noexcept
+{
+    return stereoOutputsOnly.load (std::memory_order_relaxed) ? 0 : juce::jlimit (0, maxDeviceChannels - 2, requested);
+}
+
 void MixEngine::applyOutput (const MixOutput& output, std::atomic<bool>& toMaster, std::atomic<bool>& direct, std::atomic<int>& directFirst)
 {
     directFirst.store (juce::jlimit (0, maxDeviceChannels - 2, output.directFirst), std::memory_order_relaxed);
@@ -612,6 +757,8 @@ void MixEngine::applyOutput (const MixOutput& output, std::atomic<bool>& toMaste
 
 void MixEngine::applySession (const MixSession& session, juce::StringArray* errors, bool restoreChains)
 {
+    if (deviceManager.getCurrentAudioDevice() == nullptr)
+        stereoOutputsOnly.store (! session.device.isAsio(), std::memory_order_relaxed);
     const double sr = getSampleRate();
     const int bs = getBlockSize();
     const auto factory = pluginHost.makeFactory (sr, bs);

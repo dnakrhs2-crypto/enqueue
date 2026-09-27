@@ -1,4 +1,5 @@
 #include "TopBar.h"
+#include "AudioBackends.h"
 
 namespace gocue::livemix
 {
@@ -35,11 +36,11 @@ TopBar::TopBar (MixDocument& doc) : document (doc)
     styleCaption (sessionState, "");
     addAndMakeVisible (sessionState);
 
-    styleCaption (asioLabel, "ASIO");
-    asioLabel.setJustificationType (juce::Justification::centredRight);
-    addAndMakeVisible (asioLabel);
+    styleCaption (deviceLabel, "");
+    deviceLabel.setJustificationType (juce::Justification::centredRight);
+    addAndMakeVisible (deviceLabel);
     deviceCombo.setWantsKeyboardFocus (false);
-    deviceCombo.setTextWhenNothingSelected (ko ("ASIO 장치 없음"));
+    deviceCombo.setTextWhenNothingSelected (ko ("오디오 장치 없음"));
     deviceCombo.onChange = [this]
     {
         if (! refreshing && onDeviceChosen && deviceCombo.getSelectedId() > 0)
@@ -90,9 +91,12 @@ void TopBar::refresh()
     sessionState.setColour (juce::Label::textColourId, document.isDirty() ? Palette::meterYellow : Palette::dimText);
 }
 
-void TopBar::setDevices (const juce::StringArray& names, const juce::String& current)
+void TopBar::setDevices (const juce::StringArray& names, const juce::String& current, const juce::String& typeName)
 {
     const juce::ScopedValueSetter<bool> guard (refreshing, true);
+    const auto label = AudioBackends::label (typeName);
+    deviceLabel.setText (label.upToFirstOccurrenceOf (" ", false, false), juce::dontSendNotification);
+    deviceLabel.setTooltip (label);
     deviceCombo.clear (juce::dontSendNotification);
 
     for (int i = 0; i < names.size(); ++i)
@@ -100,6 +104,7 @@ void TopBar::setDevices (const juce::StringArray& names, const juce::String& cur
 
     const int index = names.indexOf (current);
     deviceCombo.setSelectedId (index >= 0 ? index + 1 : 0, juce::dontSendNotification);
+    resized();
 }
 
 void TopBar::setStatus (double sampleRate, int bufferSize, double latencyMs, double dspLoad, bool running)
@@ -135,7 +140,7 @@ void TopBar::setMuteGroups (bool micMuted, bool fxMuted)
 
 TopBar::Mode TopBar::modeFor (int width) const noexcept
 {
-    // one row: the logo (130), the two buttons (242), status (up to 230), device (160+), ASIO (56), a session name of
+    // one row: the logo (130), the two buttons (242), status (up to 230), device (160+), type (56), a session name of
     // at least 160 and room kept for both mute badges (200) - about 1220. The badges never change the mode: a mute
     // hotkey pressed mid-stream must not move the whole layout.
     return width >= 1220 ? Mode::wide : width >= 700 ? Mode::compact : Mode::narrow;
@@ -216,18 +221,18 @@ void TopBar::resized()
 
     if (mode == Mode::wide)
     {
-        asioLabel.setJustificationType (juce::Justification::centredRight);
+        deviceLabel.setJustificationType (juce::Justification::centredRight);
         statusLabel.setBounds (statusRow.removeFromRight (juce::jlimit (120, 230, statusRow.getWidth() / 4)));   // both give a little with two badges up: the session name keeps its 160
         statusRow.removeFromRight (8);
         deviceCombo.setBounds (statusRow.removeFromRight (juce::jlimit (120, 260, statusRow.getWidth() / 3)));
         statusRow.removeFromRight (6);
-        asioLabel.setBounds (statusRow.removeFromRight (40));
+        deviceLabel.setBounds (statusRow.removeFromRight (labelWidthForText (deviceLabel, deviceLabel.getText())));
         statusRow.removeFromRight (10);
     }
     else
     {
-        asioLabel.setJustificationType (juce::Justification::centredLeft);
-        asioLabel.setBounds (statusRow.removeFromLeft (40));
+        deviceLabel.setJustificationType (juce::Justification::centredLeft);
+        deviceLabel.setBounds (statusRow.removeFromLeft (labelWidthForText (deviceLabel, deviceLabel.getText())));
         statusRow.removeFromLeft (6);
         statusLabel.setBounds (statusRow.removeFromRight (juce::jlimit (120, 230, statusRow.getWidth() * 2 / 5)));
         statusRow.removeFromRight (8);

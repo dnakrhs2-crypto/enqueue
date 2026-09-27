@@ -47,7 +47,7 @@ private:
     void rebuildTabs();
     void rebuildChain();
     void rebuildSenders();
-    void commitOutput();
+    void commitOutput (bool pairSelected = false);
     void removeSelected();
     const MixFx* fx() const;
 

@@ -41,6 +41,7 @@ PrivilegesRequired=lowest
 PrivilegesRequiredOverridesAllowed=commandline
 ChangesAssociations=yes
 CloseApplications=yes
+CloseApplicationsFilter={#AppExe}
 RestartApplications=no
 DisableProgramGroupPage=yes
 UsePreviousGroup=no
@@ -51,16 +52,20 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 
 ; localised strings of our own (UTF-8 with BOM); this file itself stays ASCII apart from the publisher
 #include "Enqueue.messages.iss"
+#include "LiveMix.messages.iss"
 
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"
 ; Coupang Partners desktop shortcut: an affiliate link, offered with the disclosure and the way to remove it.
 ; Checked by default; the shortcut file is written by [Code] so a silent auto-update never recreates one the user deleted.
 Name: "coupang"; Description: "{cm:CoupangTask}"; GroupDescription: "{cm:CoupangGroup}"
+Name: "obsplugin"; Description: "{cm:ObsPluginTask}"; GroupDescription: "{cm:ObsPluginGroup}"
 
 [Files]
 Source: "{#SourceDir}\{#AppExe}"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#SourceDir}\WinSparkle.dll"; DestDir: "{app}"; Flags: ignoreversion skipifsourcedoesntexist
+Source: "{#SourceDir}\obs-plugin\livemix-obs\livemix-obs.dll"; DestDir: "{app}\obs-plugin\livemix-obs"; Flags: ignoreversion
+Source: "{#SourceDir}\obs-plugin\livemix-obs\data\locale\*.ini"; DestDir: "{app}\obs-plugin\livemix-obs\data\locale"; Flags: ignoreversion recursesubdirs
 Source: "coupang.ico"; DestDir: "{app}"; Flags: ignoreversion; Tasks: coupang
 
 [Icons]
@@ -75,6 +80,9 @@ Root: HKA; Subkey: "Software\Classes\LiveMix.Session\DefaultIcon"; ValueType: st
 Root: HKA; Subkey: "Software\Classes\LiveMix.Session\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\{#AppExe}"" ""%1"""
 
 [Run]
+; Install/update the plugin during silent updates too, independently of /NORUN.
+Filename: "{app}\{#AppExe}"; Parameters: "--install-obs-plugin --allow-elevation"; StatusMsg: "{cm:ObsPluginInstalling}"; Flags: runhidden waituntilterminated; Tasks: obsplugin; Check: InteractiveObsInstall
+Filename: "{app}\{#AppExe}"; Parameters: "--install-obs-plugin"; StatusMsg: "{cm:ObsPluginInstalling}"; Flags: runhidden waituntilterminated; Tasks: obsplugin; Check: SilentObsInstall
 ; also after a silent auto-update (WinSparkle runs Setup with /SILENT): the app comes back by itself.
 ; Scripted installs pass /NORUN=1 to keep it closed.
 Filename: "{app}\{#AppExe}"; Description: "{cm:LaunchProgram,{#StringChange(AppName, '&', '&&')}}"; Flags: nowait postinstall; Check: not NoRunRequested
@@ -83,6 +91,9 @@ Filename: "{app}\{#AppExe}"; Description: "{cm:LaunchProgram,{#StringChange(AppN
 ; the "start with Windows" entry the app may have written
 Filename: "reg.exe"; Parameters: "delete HKCU\Software\Microsoft\Windows\CurrentVersion\Run /v LiveMix /f"; Flags: runhidden; RunOnceId: "LiveMixRunKey"
 
+[UninstallDelete]
+Type: filesandordirs; Name: "{commonappdata}\obs-studio\plugins\livemix-obs"
+
 [Code]
 const
   CoupangShortcutUrl = 'https://xn--jb0byyo90f.com/coupang/';   { 곰튀김.com }
@@ -90,6 +101,16 @@ const
 function NoRunRequested: Boolean;
 begin
   Result := ExpandConstant('{param:NORUN|0}') = '1';
+end;
+
+function InteractiveObsInstall: Boolean;
+begin
+  Result := not WizardSilent;
+end;
+
+function SilentObsInstall: Boolean;
+begin
+  Result := WizardSilent;
 end;
 
 function CoupangShortcutPath: String;

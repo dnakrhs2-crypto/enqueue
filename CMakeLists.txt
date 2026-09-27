@@ -241,9 +241,15 @@ set_property(DIRECTORY PROPERTY VS_STARTUP_PROJECT Enqueue)
 enable_testing()
 # LiveMix (the live mic VST3 host) shares the core: its model and engine are a second interface library
 add_library(LiveMixCore INTERFACE)
+target_compile_features(LiveMixCore INTERFACE c_std_17)
 target_sources(LiveMixCore INTERFACE
+    ${CMAKE_CURRENT_SOURCE_DIR}/livemix/shared/lm_asrc.c
     ${CMAKE_CURRENT_SOURCE_DIR}/livemix/src/MixModel.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/livemix/src/MixEngine.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/livemix/src/AudioBackends.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/livemix/src/MonitorOutput.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/livemix/src/ObsSender.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/livemix/src/ObsPluginInstaller.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/livemix/src/MixDocument.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/livemix/src/MuteGroups.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/livemix/src/ControlProtocol.cpp
@@ -256,14 +262,16 @@ target_sources(LiveMixCore INTERFACE
     ${CMAKE_CURRENT_SOURCE_DIR}/livemix/src/LiveMixSettings.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/livemix/src/GlobalHotkeys.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/livemix/src/PluginPreset.cpp)
-target_include_directories(LiveMixCore INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/livemix/src)
+target_include_directories(LiveMixCore INTERFACE
+    ${CMAKE_CURRENT_SOURCE_DIR}/livemix/src
+    ${CMAKE_CURRENT_SOURCE_DIR}/livemix/shared)
 target_link_libraries(LiveMixCore INTERFACE GoCueCore)
 if(WIN32)
-    target_link_libraries(LiveMixCore INTERFACE bcrypt)
+    target_link_libraries(LiveMixCore INTERFACE bcrypt advapi32 version shell32 ole32)
 endif()
 target_sources(LiveMixCore INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/livemix/src/WebDavBackup.cpp)
 
-set(LIVEMIX_VERSION "0.10.2")   # LiveMix version (the Enqueue version is the project version); not a cache variable: a bump must reach existing build trees
+set(LIVEMIX_VERSION "0.11.0")   # LiveMix version (the Enqueue version is the project version); not a cache variable: a bump must reach existing build trees
 set(LIVEMIX_APPCAST_URL "" CACHE STRING "LiveMix WinSparkle appcast URL (empty disables update checks)")
 
 # The online backup's server account is built into the app from a JSON file that lives outside the repository

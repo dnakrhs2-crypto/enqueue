@@ -14,6 +14,7 @@ namespace gocue::livemix
 namespace Keys
 {
     constexpr const char* audioDeviceState = "audioDeviceState";
+    constexpr const char* lastDevice = "lastDevice";
     constexpr const char* pluginList = "pluginList";
     constexpr const char* lastSession = "lastSession";
     constexpr const char* recent = "recentSessions";
@@ -53,12 +54,44 @@ LiveMixSettings::LiveMixSettings (const juce::File& directory)
     options.millisecondsBeforeSaving = 1000;
     properties.setStorageParameters (options);
     settings = properties.getUserSettings();
+
+    if (! settings->containsKey (Keys::lastDevice))
+        if (auto xml = settings->getXmlValue (Keys::audioDeviceState); xml != nullptr && xml->hasTagName ("DEVICESETUP"))
+        {
+            MixDevice device;
+            device.input = xml->getStringAttribute ("audioDeviceName");
+            if (device.input.isEmpty()) device.input = xml->getStringAttribute ("audioInputDeviceName");
+            if (device.input.isEmpty()) device.input = xml->getStringAttribute ("audioOutputDeviceName");
+            device.output = device.input;
+            device.bufferSize = xml->getIntAttribute ("audioDeviceBufferSize", 256);
+            device.sampleRate = xml->getDoubleAttribute ("audioDeviceRate", 48000.0);
+            if (device.input.isNotEmpty()) setLastDevice (device);
+        }
 }
 
-std::unique_ptr<juce::XmlElement> LiveMixSettings::getAudioDeviceState() const { return settings->getXmlValue (Keys::audioDeviceState); }
-void LiveMixSettings::setAudioDeviceState (const juce::XmlElement* xml)
+std::optional<MixDevice> LiveMixSettings::getLastDevice() const
 {
-    if (xml != nullptr) settings->setValue (Keys::audioDeviceState, xml); else settings->removeValue (Keys::audioDeviceState);
+    const auto value = juce::JSON::parse (settings->getValue (Keys::lastDevice));
+    if (value.getDynamicObject() == nullptr) return std::nullopt;
+    MixDevice device;
+    device.type = value.getProperty ("type", "ASIO").toString();
+    device.input = value.getProperty ("input", "").toString();
+    device.output = value.getProperty ("output", "").toString();
+    device.bufferSize = (int) value.getProperty ("bufferSize", 256);
+    device.sampleRate = (double) value.getProperty ("sampleRate", 48000.0);
+    if (device.isAsio()) device.output = device.input;
+    return device.input.isEmpty() ? std::nullopt : std::optional<MixDevice> (device);
+}
+
+void LiveMixSettings::setLastDevice (const MixDevice& device)
+{
+    auto value = std::make_unique<juce::DynamicObject>();
+    value->setProperty ("type", device.type);
+    value->setProperty ("input", device.input);
+    value->setProperty ("output", device.isAsio() ? device.input : device.output);
+    value->setProperty ("bufferSize", device.bufferSize);
+    value->setProperty ("sampleRate", device.sampleRate);
+    settings->setValue (Keys::lastDevice, juce::JSON::toString (juce::var (value.release()), true));
 }
 
 std::unique_ptr<juce::XmlElement> LiveMixSettings::getPluginList() const { return settings->getXmlValue (Keys::pluginList); }

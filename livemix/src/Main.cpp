@@ -2,6 +2,7 @@
 #include "ControlServer.h"
 #include "MixDocument.h"
 #include "MixEngine.h"
+#include "ObsPluginInstaller.h"
 #include "app/Updater.h"
 #include "ui/LiveMixLookAndFeel.h"
 #include "ui/MainComponent.h"
@@ -141,10 +142,25 @@ class LiveMixApplication : public juce::JUCEApplication,
 public:
     const juce::String getApplicationName() override { return "LiveMix"; }
     const juce::String getApplicationVersion() override { return JUCE_APPLICATION_VERSION_STRING; }
-    bool moreThanOneInstanceAllowed() override { return false; }
+    bool moreThanOneInstanceAllowed() override
+    {
+        return ObsPluginInstaller::isInstallCommandLine (getCommandLineParameters());
+    }
 
     void initialise (const juce::String& commandLine) override
     {
+        if (ObsPluginInstaller::isInstallCommandLine (commandLine))
+        {
+            juce::String message;
+            bool reported = false;
+            const auto result = ObsPluginInstaller::runInstallCommandLine (commandLine, ObsPluginInstaller::systemRoots(), message, reported);
+            using Result = ObsPluginInstaller::Result;
+            setApplicationReturnValue (reported && (result == Result::alreadyCurrent || result == Result::installed
+                                                    || result == Result::installedRestartObs) ? 0 : 1);
+            quit();
+            return; // no window, audio device, settings, session, tray or updater in this process
+        }
+
         lookAndFeel = std::make_unique<LiveMixLookAndFeel>();
         juce::LookAndFeel::setDefaultLookAndFeel (lookAndFeel.get());
 
@@ -168,8 +184,8 @@ public:
                    || juce::ModifierKeys::getCurrentModifiersRealtime().isShiftDown();
         PluginHost::setSafeMode (safeMode);
 
-        const std::unique_ptr<juce::XmlElement> savedDevice = safeMode ? nullptr : settings->getAudioDeviceState();
-        const auto deviceError = safeMode ? juce::String() : engine->initialise (savedDevice.get());
+        const auto savedDevice = settings->getLastDevice();
+        const auto deviceError = safeMode ? juce::String() : engine->initialise (savedDevice ? &*savedDevice : nullptr);
         engine->getDeviceManager().addChangeListener (this);
 
         document = std::make_unique<MixDocument> (*engine);
@@ -220,9 +236,9 @@ public:
         // in the window, not a modal alert: a modal would freeze the frame (no resizing) and the mic buttons until
         // dismissed. Its own line under a session warning, never replacing it.
         if (safeMode)
-            main.setStartupNote (ko ("안전 모드로 시작했습니다 (Shift): 저장된 ASIO 장치와 플러그인을 불러오지 않았습니다. 플러그인 설정은 세션에 그대로 남습니다. 설정에서 장치를 고르세요."), false, true);
+            main.setStartupNote (ko ("안전 모드로 시작했습니다 (Shift): 저장된 오디오 장치와 플러그인을 불러오지 않았습니다. 플러그인 설정은 세션에 그대로 남습니다. 설정에서 장치를 고르세요."), false, true);
         else if (deviceError.isNotEmpty())
-            main.setStartupNote (ko ("ASIO 장치를 열지 못했습니다: ") + deviceError + " " + ko ("설정에서 장치를 고르거나 오디오 인터페이스 연결을 확인하세요."), true, false);
+            main.setStartupNote (ko ("오디오 장치를 열지 못했습니다: ") + deviceError + " " + ko ("설정에서 장치를 고르거나 오디오 인터페이스 연결을 확인하세요."), true, false);
 
         Updater::Callbacks callbacks;
         callbacks.canShutdown = [this]
@@ -272,8 +288,7 @@ public:
     {
         stopTimer();
 
-        // a second instance: initialise() never ran (JUCE handed its command line to the running instance and quits
-        // through here) - there is nothing to close, and settings is null
+        // A second normal instance or the headless OBS installer owns none of the regular app objects.
         if (settings == nullptr)
             return;
 
@@ -299,7 +314,7 @@ public:
         if (engine != nullptr)
         {
             engine->getDeviceManager().removeChangeListener (this);
-            settings->setAudioDeviceState (engine->getDeviceManager().createStateXml().get());
+            if (engine->isDeviceRunning()) settings->setLastDevice (engine->getOpenDevice());
             engine->shutdown();
         }
 
