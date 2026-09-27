@@ -129,6 +129,24 @@ public:
             expectEquals (structures, 0);
         }
 
+        beginTest ("a bit depth choice alone dirties the device and repeating it does not notify");
+        {
+            MixEngine engine;
+            MixDocument document (engine);
+            int values = 0;
+            document.onValueChanged = [&] { ++values; };
+            auto device = document.getSession().device;
+            device.sampleFormat = "int24";
+            document.setDeviceInfo (device);
+            expect (document.isDirty());
+            expectEquals (values, 1);
+            expectEquals (document.getSession().device.sampleFormat, juce::String ("int24"));
+            document.discardUnsavedChanges();
+            document.setDeviceInfo (device);
+            expect (! document.isDirty());
+            expectEquals (values, 1);
+        }
+
         beginTest ("the graph stays empty until the document applies a session (no raw mic before the saved session is in)");
         {
             MixEngine quiet;

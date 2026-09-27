@@ -3,12 +3,32 @@
 #include "MonitorOutput.h"
 
 #include <algorithm>
+#include <utility>
 
 namespace gocue::livemix
 {
 
 namespace
 {
+    std::pair<int, bool> preferredFormat (const juce::String& choice)
+    {
+        if (choice == "int16") return { 16, false };
+        if (choice == "int24") return { 24, false };
+        if (choice == "int32") return { 32, false };
+        if (choice == "float32") return { 32, true };
+        return { 0, false };
+    }
+
+    void applySampleFormat (const juce::String& choice)
+    {
+       #if JUCE_WINDOWS && JUCE_WASAPI
+        const auto [bits, isFloat] = preferredFormat (choice);
+        juce::setWasapiExclusivePreferredFormat (bits, isFloat);
+       #else
+        juce::ignoreUnused (choice);
+       #endif
+    }
+
     void selectDeviceType (juce::AudioDeviceManager& manager, const juce::String& type)
     {
         if (manager.getCurrentAudioDeviceType() == type) return;
@@ -205,6 +225,7 @@ juce::String MixEngine::openDevice (const MixDevice& requested)
     deviceManager.closeAudioDevice();
     splitMonitor.store (false, std::memory_order_release);
 
+    applySampleFormat (wanted.sampleFormat);
     selectDeviceType (deviceManager, wanted.type);
     juce::AudioDeviceManager::AudioDeviceSetup setup;
     setup.inputDeviceName = wanted.input;
@@ -236,6 +257,7 @@ juce::String MixEngine::openDevice (const MixDevice& requested)
         monitor.reset();
         deviceManager.closeAudioDevice();
         juce::String rollback;
+        applySampleFormat (previousInfo.sampleFormat);
         if (deviceManager.getCurrentAudioDeviceType() != previousType && findType (previousType) != nullptr)
             selectDeviceType (deviceManager, previousType);
         if (hadDevice)
@@ -287,9 +309,84 @@ MixDevice MixEngine::getOpenDevice() const
         const auto setup = deviceManager.getAudioDeviceSetup();
         return { deviceManager.getCurrentAudioDeviceType(), setup.inputDeviceName,
                  isSplitMonitor() ? openedDevice.output : setup.outputDeviceName,
-                 device->getCurrentBufferSizeSamples(), device->getCurrentSampleRate() };
+                 device->getCurrentBufferSizeSamples(), device->getCurrentSampleRate(), openedDevice.sampleFormat };
     }
     return {};
+}
+
+#if JUCE_WINDOWS && JUCE_WASAPI
+MixEngine::DeviceFormat MixEngine::describeDeviceFormat (DeviceFormat::Kind kind, const juce::WasapiFormatInfo& input,
+                                                        const juce::WasapiFormatInfo& output, const juce::String& choice, int asioBits)
+{
+    DeviceFormat result;
+    result.kind = kind;
+    if (kind == DeviceFormat::Kind::none) return result;
+    if (kind == DeviceFormat::Kind::asio)
+    {
+        result.inputBits = result.outputBits = asioBits;
+        return result;
+    }
+    const auto [wantedBits, wantedFloat] = preferredFormat (choice);
+    auto direction = [&] (const juce::WasapiFormatInfo& info, int& bits, bool& isFloat, double& rate, int& accepted, bool& refused)
+    {
+        if (info.streamBits <= 0) return;
+        if (kind == DeviceFormat::Kind::windowsShared)
+        {
+            bits = info.deviceBits;
+            isFloat = bits > 0 && info.deviceIsFloat;
+            rate = info.deviceSampleRate;
+        }
+        else
+        {
+            bits = info.streamBits;
+            isFloat = info.streamIsFloat;
+            accepted = info.exclusiveFormats;
+            refused = wantedBits > 0 && (bits != wantedBits || isFloat != wantedFloat);
+        }
+    };
+    direction (input, result.inputBits, result.inputFloat, result.inputDeviceRate, result.inputAccepted, result.inputRefused);
+    direction (output, result.outputBits, result.outputFloat, result.outputDeviceRate, result.outputAccepted, result.outputRefused);
+    return result;
+}
+#endif
+
+MixEngine::DeviceFormat MixEngine::getDeviceFormat() const
+{
+    DeviceFormat result;
+    auto* inputDevice = deviceManager.getCurrentAudioDevice();
+    if (inputDevice == nullptr || ! inputDevice->isOpen() || ! isDeviceRunning()) return result;
+    const auto type = inputDevice->getTypeName();
+    if (type.containsIgnoreCase ("ASIO"))
+    {
+        result.kind = DeviceFormat::Kind::asio;
+        result.inputBits = result.outputBits = inputDevice->getCurrentBitDepth();
+        return result;
+    }
+    if (! AudioBackends::isWindows (type)) return result;
+    result.kind = type == "Windows Audio (Exclusive Mode)" ? DeviceFormat::Kind::windowsExclusive : DeviceFormat::Kind::windowsShared;
+    auto* outputDevice = isSplitMonitor() ? (monitor != nullptr ? monitor->getDevice() : nullptr) : inputDevice;
+    bool inputKnown = false, outputKnown = false;
+   #if JUCE_WINDOWS && JUCE_WASAPI
+    juce::WasapiFormatInfo input, output;
+    inputKnown = outputKnown = juce::getWasapiFormatInfo (*inputDevice, input, output);
+    if (isSplitMonitor())
+    {
+        output = {};
+        juce::WasapiFormatInfo unused;
+        outputKnown = outputDevice != nullptr && outputDevice->isOpen()
+                      && juce::getWasapiFormatInfo (*outputDevice, unused, output);
+    }
+    result = describeDeviceFormat (result.kind, input, output, openedDevice.sampleFormat);
+   #endif
+    if (result.kind == DeviceFormat::Kind::windowsExclusive)
+    {
+        // Non-WASAPI devices (test fakes) know only their bit count, never supported formats or refusal.
+        if (! inputKnown && ! inputDevice->getActiveInputChannels().isZero())
+            result.inputBits = inputDevice->getCurrentBitDepth();
+        if (! outputKnown && outputDevice != nullptr && outputDevice->isOpen() && ! outputDevice->getActiveOutputChannels().isZero())
+            result.outputBits = outputDevice->getCurrentBitDepth();
+    }
+    return result;
 }
 
 juce::String MixEngine::setBufferSize (int samples)
@@ -319,9 +416,12 @@ juce::String MixEngine::openSessionDevice (const MixDevice& device)
     const auto current = getOpenDevice();
     if (current.type == device.type && current.input == device.input
         && current.output == (device.isAsio() ? device.input : device.output)
+        && (device.type != "Windows Audio (Exclusive Mode)" || current.sampleFormat == device.sampleFormat)
         && (device.bufferSize <= 0 || device.type == "Windows Audio" || current.bufferSize == device.bufferSize)
         && (device.sampleRate <= 0.0 || juce::approximatelyEqual (current.sampleRate, device.sampleRate)))
     {
+        applySampleFormat (device.sampleFormat);
+        openedDevice.sampleFormat = device.sampleFormat;
         const auto error = openAllChannels();
         ensureCallback();
         return error;

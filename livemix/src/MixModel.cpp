@@ -39,6 +39,16 @@ namespace
     double finiteOr (double value, double fallback) { return std::isfinite (value) ? value : fallback; }
 }
 
+juce::String MixDevice::readSampleFormat (const juce::var& value)
+{
+    if (value.isString())
+    {
+        const auto text = value.toString();
+        if (text == "int16" || text == "int24" || text == "int32" || text == "float32") return text;
+    }
+    return {};
+}
+
 MixChannel* MixSession::findChannel (const juce::Uuid& id) noexcept
 {
     for (auto& c : channels)
@@ -256,6 +266,7 @@ juce::String MixSession::toJson() const
     dev->setProperty ("output", device.output);
     dev->setProperty ("bufferSize", device.bufferSize);
     dev->setProperty ("sampleRate", device.sampleRate);
+    dev->setProperty ("sampleFormat", device.sampleFormat);
     root->setProperty ("device", dev);
 
     juce::Array<juce::var> channelArray;
@@ -384,6 +395,7 @@ juce::Result MixSession::fromJson (const juce::String& json, MixSession& out, ju
         }
         s.device.bufferSize = (int) dev.getProperty ("bufferSize", 256);
         s.device.sampleRate = (double) dev.getProperty ("sampleRate", 48000.0);
+        s.device.sampleFormat = MixDevice::readSampleFormat (dev.getProperty ("sampleFormat", {}));
     }
 
     if (const auto* fxArray = root.getProperty ("fx", juce::var()).getArray())

@@ -3,6 +3,7 @@
 #include "LiveMixSettings.h"
 #include "TestGainPlugin.h"
 #include "ui/SettingsDialog.h"
+#include "ui/DeviceFormatText.h"
 #include "ui/TopBar.h"
 #include "ui/LiveMixLookAndFeel.h"
 #include "ui/ChannelCard.h"
@@ -38,6 +39,9 @@ namespace
         double rate = 48000.0;
         int buffer = 256;
         int asioOutputs = 72;
+        int bits = 32;
+        int createdBits = 0, openedBits = 0;
+        bool createdFloat = false, openedFloat = false;
         juce::AudioIODeviceCallback* callback = nullptr;
         std::function<void()> onOutputLifecycle;
     };
@@ -62,6 +66,7 @@ namespace
         int getDefaultBufferSize() override { return 256; }
         juce::String open (const juce::BigInteger& ins, const juce::BigInteger& outs, double sr, int bs) override
         {
+            juce::getWasapiExclusivePreferredFormat (record->openedBits, record->openedFloat);
             close();
             if (record->onOutputLifecycle) record->onOutputLifecycle();
             if (record->input == "Broken" || record->output == "Broken" || bs == 1024)
@@ -97,7 +102,7 @@ namespace
         juce::String getLastError() override { return {}; }
         int getCurrentBufferSizeSamples() override { return record->buffer; }
         double getCurrentSampleRate() override { return record->rate; }
-        int getCurrentBitDepth() override { return 32; }
+        int getCurrentBitDepth() override { return record->bits; }
         juce::BigInteger getActiveInputChannels() const override { return record->inputs; }
         juce::BigInteger getActiveOutputChannels() const override { return record->outputs; }
         int getInputLatencyInSamples() override { return record->input.isEmpty() ? 0 : 48; }
@@ -126,6 +131,7 @@ namespace
         juce::AudioIODevice* createDevice (const juce::String& output, const juce::String& input) override
         {
             auto r = std::make_shared<MixDeviceRecord>();
+            juce::getWasapiExclusivePreferredFormat (r->createdBits, r->createdFloat);
             r->input = input;
             r->output = output;
             r->asioOutputs = asioOutputs;
@@ -163,6 +169,14 @@ namespace
         while (! manager.getAvailableDeviceTypes().isEmpty())
             manager.removeAudioDeviceType (manager.getAvailableDeviceTypes().getLast());
     }
+
+    struct ScopedWasapiPreference
+    {
+        ScopedWasapiPreference() { juce::getWasapiExclusivePreferredFormat (bits, isFloat); }
+        ~ScopedWasapiPreference() { juce::setWasapiExclusivePreferredFormat (bits, isFloat); }
+        int bits = 0;
+        bool isFloat = false;
+    };
 }
 
 /** The LiveMix graph rendered offline with DC inputs: routing, sends, the ON/OFF ramp, meters. */
@@ -526,6 +540,8 @@ public:
 
     void runDeviceTests()
     {
+        runBitDepthChoiceTests();
+        runDeviceFormatTests();
         beginTest ("input-only rendering still advances channel/master meters and loudness");
         {
             MixEngine engine;
@@ -937,6 +953,237 @@ public:
                 }
             }
             directory.deleteRecursively();
+        }
+    }
+
+    void runBitDepthChoiceTests()
+    {
+        const ScopedWasapiPreference preference;
+        auto expectPreference = [this] (int expectedBits, bool expectedFloat)
+        {
+            int bits = -1;
+            bool isFloat = false;
+            juce::getWasapiExclusivePreferredFormat (bits, isFloat);
+            expectEquals (bits, expectedBits);
+            expect (isFloat == expectedFloat);
+        };
+        beginTest ("bit depth preference reaches both devices before create/open and survives buffer changes and restart");
+        for (const auto* choice : { "", "int16", "int24", "int32", "float32" })
+        {
+            MixEngine engine;
+            removeRealMixDeviceTypes (engine);
+            auto type = std::make_unique<MixFakeType> ("Windows Audio (Exclusive Mode)");
+            auto* fake = type.get();
+            engine.getDeviceManager().addAudioDeviceType (std::move (type));
+            const juce::String format (choice);
+            const int bits = format.isEmpty() ? 0 : format == "int16" ? 16 : format == "int24" ? 24 : 32;
+            const bool isFloat = format == "float32";
+            juce::setWasapiExclusivePreferredFormat (20, false);
+            expect (engine.openDevice ({ fake->getTypeName(), "Capture", "Headphones", 256, 48000.0, format }).isEmpty());
+            expectPreference (bits, isFloat);
+            expectEquals (engine.getOpenDevice().sampleFormat, format);
+            expect (engine.isSplitMonitor() && engine.isMonitorRunning());
+            expect (engine.setBufferSize (512).isEmpty());
+            expectEquals (engine.getOpenDevice().bufferSize, 512);
+            expectEquals (engine.getOpenDevice().sampleFormat, format);
+            expectPreference (bits, isFloat);
+            expect (engine.restartDevice().isEmpty());
+            expectEquals (engine.getOpenDevice().sampleFormat, format);
+            expectPreference (bits, isFloat);
+            for (const auto& record : fake->records)
+            {
+                expectEquals (record->createdBits, bits);
+                expectEquals (record->openedBits, bits);
+                expect (record->createdFloat == isFloat && record->openedFloat == isFloat);
+            }
+        }
+
+        beginTest ("failed input and split-output opens restore the previous bit depth before rollback");
+        {
+            MixEngine engine;
+            removeRealMixDeviceTypes (engine);
+            auto type = std::make_unique<MixFakeType> ("Windows Audio (Exclusive Mode)");
+            auto* fake = type.get();
+            engine.getDeviceManager().addAudioDeviceType (std::move (type));
+            const MixDevice previous { fake->getTypeName(), "Capture", "Headphones", 256, 48000.0, "int16" };
+            expect (engine.openDevice (previous).isEmpty());
+            for (bool failInput : { true, false })
+            {
+                auto wanted = previous;
+                wanted.sampleFormat = "float32";
+                if (failInput) wanted.input = "Broken"; else wanted.output = "Broken";
+                expect (engine.openDevice (wanted).isNotEmpty());
+                expectPreference (16, false);
+                const auto restored = engine.getOpenDevice();
+                expectEquals (restored.sampleFormat, previous.sampleFormat);
+                expectEquals (restored.type, previous.type);
+                expectEquals (restored.input, previous.input);
+                expectEquals (restored.output, previous.output);
+                expect (engine.isDeviceRunning() && engine.isMonitorRunning());
+                for (const auto& record : fake->records)
+                    if (record->playing)
+                    {
+                        expectEquals (record->createdBits, 16);
+                        expectEquals (record->openedBits, 16);
+                        expect (! record->createdFloat && ! record->openedFloat);
+                    }
+            }
+        }
+
+        beginTest ("a session choice alone reopens exclusive, but is only recorded for ASIO/shared/low latency");
+        for (const auto* typeName : { "ASIO", "Windows Audio", "Windows Audio (Low Latency Mode)", "Windows Audio (Exclusive Mode)" })
+        {
+            MixEngine engine;
+            removeRealMixDeviceTypes (engine);
+            auto type = std::make_unique<MixFakeType> (typeName);
+            auto* fake = type.get();
+            engine.getDeviceManager().addAudioDeviceType (std::move (type));
+            MixDevice wanted { typeName, juce::String (typeName) == "ASIO" ? "Good" : "Capture", "", 256, 48000.0, "int16" };
+            expect (engine.openDevice (wanted).isEmpty());
+            const auto before = fake->records.size();
+            wanted.sampleFormat = "int24";
+            expect (engine.openSessionDevice (wanted).isEmpty());
+            expect ((fake->records.size() > before) == (juce::String (typeName) == "Windows Audio (Exclusive Mode)"));
+            expectEquals (engine.getOpenDevice().sampleFormat, juce::String ("int24"));
+            expectPreference (24, false);
+            const auto opened = fake->records.size();
+            expect (engine.openSessionDevice (wanted).isEmpty());
+            expect (fake->records.size() == opened);
+            expect (engine.restartDevice().isEmpty());
+            expectEquals (engine.getOpenDevice().sampleFormat, juce::String ("int24"));
+            expectPreference (24, false);
+        }
+
+        beginTest ("startup uses the saved bit depth and both ASIO and Windows fallbacks reset it to automatic");
+        for (bool asioFallback : { true, false })
+        {
+            MixEngine engine;
+            removeRealMixDeviceTypes (engine);
+            auto& manager = engine.getDeviceManager();
+            manager.addAudioDeviceType (std::make_unique<MixFakeType> ("Windows Audio (Exclusive Mode)"));
+            manager.addAudioDeviceType (std::make_unique<MixFakeType> (asioFallback ? "ASIO" : "Windows Audio"));
+            MixDevice saved { "Windows Audio (Exclusive Mode)", "Capture", "", 256, 48000.0, "float32" };
+            expect (engine.initialise (&saved).isEmpty());
+            expectEquals (engine.getOpenDevice().sampleFormat, saved.sampleFormat);
+            expectPreference (32, true);
+            engine.shutdown();
+            saved.input = "Broken";
+            expect (engine.initialise (&saved).isEmpty());
+            expectEquals (engine.getOpenDevice().type, juce::String (asioFallback ? "ASIO" : "Windows Audio"));
+            expect (engine.getOpenDevice().sampleFormat.isEmpty());
+            expectPreference (0, false);
+        }
+    }
+
+    void runDeviceFormatTests()
+    {
+        using Format = MixEngine::DeviceFormat;
+        using Kind = Format::Kind;
+        using Info = juce::WasapiFormatInfo;
+        beginTest ("device format mapping distinguishes Windows settings, exclusive streams and ASIO driver bits");
+        {
+            Info input { 32, true, 16, false, 44100.0, Info::exclusiveInt16 };
+            Info output { 32, true, 24, false, 48000.0, Info::exclusiveInt16 | Info::exclusiveInt24 };
+            auto format = MixEngine::describeDeviceFormat (Kind::none, input, output, "int24", 24);
+            expect (format.kind == Kind::none);
+            expectEquals (format.inputBits, 0);
+            expectEquals (format.outputBits, 0);
+            format = MixEngine::describeDeviceFormat (Kind::asio, input, output, "float32", 24);
+            expect (format.kind == Kind::asio);
+            expectEquals (format.inputBits, 24);
+            expectEquals (format.outputBits, 24);
+            expect (! format.inputFloat && ! format.outputFloat);
+            expectEquals (format.inputAccepted | format.outputAccepted, 0);
+            expect (! format.inputRefused && ! format.outputRefused);
+
+            format = MixEngine::describeDeviceFormat (Kind::windowsShared, input, output, "int24");
+            expectEquals (format.inputBits, 16);
+            expectEquals (format.outputBits, 24);
+            expect (! format.inputFloat && ! format.outputFloat);
+            expectEquals (format.inputDeviceRate, 44100.0);
+            expectEquals (format.outputDeviceRate, 48000.0);
+            expectEquals (format.inputAccepted | format.outputAccepted, 0);
+            expect (! format.inputRefused && ! format.outputRefused);
+            input.deviceBits = 32;
+            input.deviceIsFloat = true;
+            format = MixEngine::describeDeviceFormat (Kind::windowsShared, input, output, "");
+            expect (format.inputFloat && format.inputBits == 32);
+            input.deviceBits = 0;
+            input.deviceSampleRate = 0;
+            output.streamBits = 0; // a closed direction must not report stale endpoint properties
+            format = MixEngine::describeDeviceFormat (Kind::windowsShared, input, output, "");
+            expectEquals (format.inputBits, 0);
+            expectEquals (format.outputBits, 0);
+            expectEquals (format.inputDeviceRate, 0.0);
+            expectEquals (format.outputDeviceRate, 0.0);
+        }
+
+        beginTest ("exclusive accepted masks and refusal use each direction's actual stream, including a separate monitor");
+        {
+            Info input { 16, false, 32, true, 44100.0, Info::exclusiveInt16 };
+            Info monitorOutput { 24, false, 16, false, 48000.0, Info::exclusiveInt16 | Info::exclusiveInt24 };
+            auto format = MixEngine::describeDeviceFormat (Kind::windowsExclusive, input, monitorOutput, "int24");
+            expectEquals (format.inputBits, 16);
+            expectEquals (format.outputBits, 24);
+            expectEquals (format.inputAccepted, (int) Info::exclusiveInt16);
+            expectEquals (format.outputAccepted, (int) (Info::exclusiveInt16 | Info::exclusiveInt24));
+            expect (format.inputRefused && ! format.outputRefused);
+            expectEquals (format.inputDeviceRate, 0.0);
+            expectEquals (format.outputDeviceRate, 0.0);
+            format = MixEngine::describeDeviceFormat (Kind::windowsExclusive, input, monitorOutput, "");
+            expect (! format.inputRefused && ! format.outputRefused);
+            format = MixEngine::describeDeviceFormat (Kind::windowsExclusive, input, monitorOutput, "int32");
+            expect (format.inputRefused && format.outputRefused);
+            input.streamBits = monitorOutput.streamBits = 32;
+            input.streamIsFloat = true;
+            input.exclusiveFormats = Info::exclusiveFloat32;
+            monitorOutput.exclusiveFormats = Info::exclusiveInt32;
+            format = MixEngine::describeDeviceFormat (Kind::windowsExclusive, input, monitorOutput, "float32");
+            expect (format.inputFloat && ! format.outputFloat);
+            expect (! format.inputRefused && format.outputRefused);
+            expectEquals (format.inputAccepted, (int) Info::exclusiveFloat32);
+            expectEquals (format.outputAccepted, (int) Info::exclusiveInt32);
+            format = MixEngine::describeDeviceFormat (Kind::windowsExclusive, input, {}, "int32");
+            expect (format.inputRefused && ! format.outputRefused);
+            expectEquals (format.outputBits, 0);
+            expectEquals (format.outputAccepted, 0);
+        }
+
+        beginTest ("running fake formats stay unknown in shared mode, use driver bits in exclusive/ASIO and use the split output's device");
+        const ScopedWasapiPreference preference;
+        for (const auto* typeName : { "ASIO", "Windows Audio", "Windows Audio (Low Latency Mode)", "Windows Audio (Exclusive Mode)" })
+        {
+            MixEngine engine;
+            expect (engine.getDeviceFormat().kind == Kind::none);
+            removeRealMixDeviceTypes (engine);
+            auto type = std::make_unique<MixFakeType> (typeName);
+            auto* fake = type.get();
+            engine.getDeviceManager().addAudioDeviceType (std::move (type));
+            const bool asio = juce::String (typeName) == "ASIO";
+            const bool exclusive = juce::String (typeName) == "Windows Audio (Exclusive Mode)";
+            expect (engine.openDevice ({ typeName, asio ? "Good" : "Capture", asio ? "Good" : "Headphones", 256, 48000.0, "int32" }).isEmpty());
+            for (auto& record : fake->records)
+                record->bits = record->input.isNotEmpty() ? 16 : 24;
+            const auto format = engine.getDeviceFormat();
+            expect (format.kind == (asio ? Kind::asio : exclusive ? Kind::windowsExclusive : Kind::windowsShared));
+            expectEquals (format.inputBits, asio || exclusive ? 16 : 0);
+            expectEquals (format.outputBits, asio ? 16 : exclusive ? 24 : 0);
+            expect (! format.inputFloat && ! format.outputFloat);
+            expect (! format.inputRefused && ! format.outputRefused);
+            expectEquals (format.inputAccepted | format.outputAccepted, 0);
+            expectEquals (format.inputDeviceRate, 0.0);
+            expectEquals (format.outputDeviceRate, 0.0);
+            if (! asio)
+            {
+                auto wanted = engine.getOpenDevice();
+                wanted.output.clear();
+                expect (engine.openDevice (wanted).isEmpty());
+                expectEquals (engine.getDeviceFormat().outputBits, 0);
+            }
+            engine.shutdown();
+            expect (engine.getDeviceFormat().kind == Kind::none);
+            expectEquals (engine.getDeviceFormat().inputBits, 0);
+            expectEquals (engine.getDeviceFormat().outputBits, 0);
         }
     }
 
@@ -1468,8 +1715,24 @@ class LiveMixDeviceUiTests : public juce::UnitTest
 {
 public:
     LiveMixDeviceUiTests() : juce::UnitTest ("LiveMix device settings UI", "LiveMix") {}
+
+    static void dispatchFor (int milliseconds)
+    {
+        const auto deadline = juce::Time::getMillisecondCounterHiRes() + milliseconds;
+        do
+        {
+            MSG message {};
+            for (int i = 0; i < 100 && PeekMessageW (&message, nullptr, 0, 0, PM_REMOVE); ++i)
+            {
+                TranslateMessage (&message);
+                DispatchMessageW (&message);
+            }
+            juce::Thread::sleep (5);
+        } while (juce::Time::getMillisecondCounterHiRes() < deadline);
+    }
     void runTest() override
     {
+        runFormatTextTests();
         beginTest ("device settings follow the running backend and apply input, monitor, rate and buffer immediately");
         const auto directory = juce::File::createTempFile ("-device-ui");
         expect (directory.deleteFile());
@@ -1478,8 +1741,29 @@ public:
             LiveMixLookAndFeel lookAndFeel;
             MixEngine engine;
             removeRealMixDeviceTypes (engine);
+            MixFakeType* asioType = nullptr;
+            MixFakeType* exclusiveType = nullptr;
             for (const auto* type : { "ASIO", "Windows Audio", "Windows Audio (Low Latency Mode)", "Windows Audio (Exclusive Mode)" })
-                engine.getDeviceManager().addAudioDeviceType (std::make_unique<MixFakeType> (type));
+            {
+                auto fake = std::make_unique<MixFakeType> (type);
+                if (juce::String (type) == "ASIO") asioType = fake.get();
+                if (juce::String (type) == "Windows Audio (Exclusive Mode)") exclusiveType = fake.get();
+                engine.getDeviceManager().addAudioDeviceType (std::move (fake));
+            }
+            auto failMonitor = [&]
+            {
+                const auto monitor = exclusiveType->playingOutput();
+                expect (monitor != nullptr && monitor->callback != nullptr);
+                if (monitor != nullptr && monitor->callback != nullptr)
+                {
+                    exclusiveType->failOutputs = true;
+                    monitor->callback->audioDeviceError ("deliberate output restart failure");
+                    (engine.*member (PollMonitorMaintenance {}))();
+                }
+                expect (engine.isDeviceRunning() && ! engine.isMonitorRunning());
+                expectEquals (engine.getOpenDevice().output, juce::String ("Headphones"));
+                expectEquals (engine.getDeviceFormat().outputBits, 0);
+            };
             expect (engine.openDevice ({ "ASIO", "Good", "Good", 256, 48000.0 }).isEmpty());
             LiveMixSettings settings (directory);
             int changes = 0;
@@ -1499,6 +1783,10 @@ public:
                 auto* output = combo ("device-output");
                 auto* rate = combo ("device-rate");
                 auto* buffer = combo ("device-buffer");
+                auto* bitDepth = combo ("device-bitdepth");
+                auto* bitDepthText = dynamic_cast<juce::Label*> (content->findChildWithID ("device-bitdepth-detail"));
+                auto* soundSettings = dynamic_cast<juce::TextButton*> (content->findChildWithID ("windows-sound-settings"));
+                expect (bitDepth != nullptr && bitDepthText != nullptr && soundSettings != nullptr);
                 expect (type != nullptr && input != nullptr && output != nullptr && rate != nullptr && buffer != nullptr);
                 if (type != nullptr && input != nullptr && output != nullptr && rate != nullptr && buffer != nullptr)
                 {
@@ -1516,8 +1804,37 @@ public:
                         expect (output->isVisible() == (mode != 1));
                         expect (rate->isVisible() == (mode != 1));
                         expect (buffer->isVisible() == (mode != 2));
+                        if (bitDepth != nullptr && bitDepthText != nullptr && soundSettings != nullptr)
+                        {
+                            expect (bitDepth->isVisible() == (mode == 4));
+                            expect (bitDepthText->isVisible());
+                            expect (soundSettings->isVisible() == (mode == 2 || mode == 3)); // never click: launches control.exe
+                            if (mode == 1) expect (bitDepthText->getText().contains (ko ("32비트 · ASIO 드라이버가 정합니다")));
+                            if (mode == 2 || mode == 3)
+                                expect (bitDepthText->getText().contains (ko ("입력 알 수 없음, 출력 알 수 없음")));
+                            if (mode == 4)
+                            {
+                                expectEquals (bitDepth->getNumItems(), 5);
+                                expectEquals (bitDepth->getSelectedId(), 1);
+                                expect (bitDepth->isItemEnabled (3)); // the fake's unknown capabilities cannot rule out a choice
+                                bitDepth->setSelectedId (3, juce::sendNotificationSync);
+                                expectEquals (engine.getOpenDevice().sampleFormat, juce::String ("int24"));
+                                int bits = 0;
+                                bool isFloat = true;
+                                juce::getWasapiExclusivePreferredFormat (bits, isFloat);
+                                expectEquals (bits, 24);
+                                expect (! isFloat);
+                                expectEquals (bitDepthText->getText(), ko ("지금: 입력 32비트, 출력 32비트"));
+                            }
+                        }
                         for (auto* child : content->getChildren())
-                            if (child->isVisible()) expect (content->getLocalBounds().contains (child->getBounds()));
+                            if (child->isVisible())
+                            {
+                                expect (content->getLocalBounds().contains (child->getBounds()));
+                                for (auto* other : content->getChildren())
+                                    if (other != child && other->isVisible())
+                                        expect (! child->getBounds().intersects (other->getBounds()), child->getComponentID() + " overlaps " + other->getComponentID());
+                            }
                         const auto folder = juce::SystemStats::getEnvironmentVariable ("LIVEMIX_UI_SCREENSHOT_DIR", {});
                         if (folder.isNotEmpty())
                         {
@@ -1542,11 +1859,30 @@ public:
                     expectEquals ((int) engine.getOpenDevice().sampleRate, 44100);
                     buffer->setSelectedId (512, juce::sendNotificationSync);
                     expectEquals (engine.getOpenDevice().bufferSize, 512);
-                    expectEquals (changes, 7);
+                    expectEquals (changes, 8);
                     type->setSelectedId (1, juce::sendNotificationSync);
                     expectEquals (engine.getOpenDevice().type, juce::String ("ASIO"));
                     expectEquals (input->getText(), juce::String ("Good"));
                     expect (! output->isVisible());
+                    expectEquals (engine.getOpenDevice().sampleFormat, juce::String ("int24"));
+                    if (bitDepthText != nullptr && asioType != nullptr)
+                    {
+                        for (const auto& record : asioType->records) if (record->playing) record->bits = 24;
+                        input->addItem ("timer must keep this item", 999);
+                        const int inputItems = input->getNumItems();
+                        const int selected = input->getSelectedId();
+                        dispatchFor (650);
+                        expect (bitDepthText->getText().contains (ko ("24비트 · ASIO 드라이버가 정합니다")));
+                        expectEquals (input->getNumItems(), inputItems);
+                        expectEquals (input->getSelectedId(), selected);
+                    }
+                    type->setSelectedId (4, juce::sendNotificationSync);
+                    if (bitDepth != nullptr) expectEquals (bitDepth->getSelectedId(), 3);
+                    failMonitor();
+                    dispatchFor (650);
+                    if (bitDepthText != nullptr) expectEquals (bitDepthText->getText(), ko ("지금: 입력 32비트"));
+                    exclusiveType->failOutputs = false;
+                    expect (engine.restartDevice().isEmpty());
                 }
                 content->setLookAndFeel (nullptr);
             }
@@ -1566,9 +1902,140 @@ public:
                 if (auto* box = dynamic_cast<juce::ComboBox*> (child)) selected = box->getNumItems() == 2 && box->getText() == "Capture 2";
             }
             expect (captionFound && selected);
+            beginTest ("top bar status includes actual input bits, omits unknown bits and gives both directions in its tooltip");
+            MixEngine::DeviceFormat format;
+            format.kind = MixEngine::DeviceFormat::Kind::windowsShared;
+            format.inputBits = 24;
+            format.outputBits = 32;
+            format.outputFloat = true;
+            format.inputDeviceRate = 44100.0;
+            format.outputDeviceRate = 48000.0;
+            expectEquals (TopBar::buildStatusText (48000.0, 256, 10.7, true, format), ko ("48.0 kHz · 24비트 · 256 샘플  10.7 ms"));
+            expectEquals (TopBar::buildStatusText (48000.0, 256, 10.7, true, format, false), ko ("48.0 kHz · 24비트 · 256  10.7 ms"));
+            expectEquals (TopBar::buildStatusText (48000.0, 256, 10.7, false, format), ko ("오디오 멈춤"));
+            expectEquals (TopBar::buildStatusText (44100.0, 128, 5.8, true, {}), ko ("44.1 kHz · 128 샘플  5.8 ms"));
+            bar.setStatus (48000.0, 256, 10.7, 0.2, true, format);
+            auto* status = dynamic_cast<juce::Label*> (bar.findChildWithID ("device-status"));
+            expect (status != nullptr);
+            if (status != nullptr)
+            {
+                expect (status->getTooltip().contains (ko ("입력 24비트 · 44.1 kHz, 출력 32비트 부동소수점 · 48 kHz")));
+                expect (status->getTooltip().contains (ko ("(윈도우 설정)")));
+                for (const auto kind : { MixEngine::DeviceFormat::Kind::asio, MixEngine::DeviceFormat::Kind::windowsExclusive })
+                {
+                    format.kind = kind;
+                    bar.setStatus (48000.0, 256, 10.7, 0.2, true, format);
+                    expect (status->getTooltip().contains (kind == MixEngine::DeviceFormat::Kind::asio ? ko ("(ASIO 드라이버)") : ko ("(독점)")));
+                }
+            }
+            beginTest ("top bar measures status text in all layouts down to 420 px without shrinking the device below 120 px");
+            for (const int width : { 420, 480, 699, 700, 900, 1219, 1220, 1360, 1440, 1920 })
+                for (bool muted : { false, true })
+                    for (bool large : { false, true })
+                    {
+                        bar.setMuteGroups (muted, muted);
+                        bar.setSize (width, bar.preferredHeight (width));
+                        bar.setStatus (large ? 384000.0 : 48000.0, large ? 8192 : 256, large ? 432.1 : 10.7, 0.2, true, format);
+                        if (status != nullptr)
+                        {
+                            expectGreaterOrEqual (status->getWidth(), labelWidthForText (*status, status->getText()),
+                                                  "status fit at " + juce::String (width) + ": " + status->getText());
+                            expectEquals (status->getMinimumHorizontalScale(), 1.0f);
+                        }
+                        for (auto* child : bar.getChildren())
+                        {
+                            if (! child->isVisible() || child->getBounds().isEmpty()) continue;
+                            expect (bar.getLocalBounds().contains (child->getBounds()), "top bar child outside at " + juce::String (width));
+                            if (auto* box = dynamic_cast<juce::ComboBox*> (child)) expectGreaterOrEqual (box->getWidth(), 120);
+                            for (auto* other : bar.getChildren())
+                                if (other != child && other->isVisible() && ! other->getBounds().isEmpty())
+                                    expect (! child->getBounds().intersects (other->getBounds()), "top bar overlap at " + juce::String (width));
+                        }
+                        const auto folder = juce::SystemStats::getEnvironmentVariable ("LIVEMIX_UI_SCREENSHOT_DIR", {});
+                        if (folder.isNotEmpty() && muted && large && (width == 420 || width == 700 || width == 1440))
+                        {
+                            juce::FileOutputStream image (juce::File (folder).getChildFile ("topbar-" + juce::String (width) + ".png"));
+                            expect (image.openedOk());
+                            if (image.openedOk())
+                            {
+                                expect (image.setPosition (0));
+                                expect (image.truncate().wasOk());
+                                expect (juce::PNGImageFormat().writeImageToStream (bar.createComponentSnapshot (bar.getLocalBounds()), image));
+                            }
+                        }
+                    }
+            beginTest ("a stopped split monitor is omitted from status detail even while its saved endpoint is retained");
+            failMonitor();
+            bar.setStatus (engine.getSampleRate(), engine.getBlockSize(), engine.getLatencyMs(), 0.0, true, engine.getDeviceFormat());
+            if (status != nullptr)
+            {
+                expect (status->getTooltip().contains (ko ("입력 32비트")));
+                expect (! status->getTooltip().contains (ko ("출력")));
+            }
             bar.setLookAndFeel (nullptr);
         }
         expect (directory.deleteRecursively());
+    }
+
+    void runFormatTextTests()
+    {
+        using Kind = MixEngine::DeviceFormat::Kind;
+        beginTest ("Korean bit depth text explains ASIO control, Windows conversion directions and exclusive refusal");
+        MixDevice device { "Windows Audio", "Capture", "Headphones", 256, 48000.0, "int24" };
+        MixEngine::DeviceFormat format;
+        expectEquals (DeviceFormatText::settings (format, device, false).detail, ko ("장치가 열려 있지 않습니다"));
+        format.kind = Kind::asio;
+        format.inputBits = format.outputBits = 24;
+        expectEquals (DeviceFormatText::settings (format, device, false).detail, ko ("24비트 · ASIO 드라이버가 정합니다"));
+        expectEquals (DeviceFormatText::settings (format, device, true).detail,
+                      ko ("24비트 · ASIO 드라이버가 정합니다 (바꿀 수 있는 장치는 ASIO 제어판에서)"));
+        format.kind = Kind::windowsShared;
+        format.inputBits = 16;
+        format.inputDeviceRate = 44100.0;
+        format.outputDeviceRate = 96000.0;
+        auto text = DeviceFormatText::settings (format, device, false);
+        expectEquals (text.detail, ko ("입력 16비트 · 44.1 kHz, 출력 24비트 · 96 kHz (윈도우 소리 설정의 '기본 형식')"));
+        expect (text.hint.contains (ko ("녹음/재생 탭 → 장치 더블클릭 → 고급 → 기본 형식에서 바꿉니다.")));
+        expect (text.hint.contains (ko ("입력: 윈도우가 44.1 kHz → 48 kHz로 변환 중")));
+        expect (text.hint.contains (ko ("출력: 윈도우가 48 kHz → 96 kHz로 변환 중")));
+        format.inputDeviceRate = format.outputDeviceRate = 48000.0;
+        text = DeviceFormatText::settings (format, device, false);
+        expect (! text.hint.contains (ko ("변환 중")));
+        format.inputBits = 0;
+        format.inputDeviceRate = 0;
+        device.output.clear();
+        text = DeviceFormatText::settings (format, device, false);
+        expectEquals (text.detail, ko ("입력 알 수 없음 (윈도우 소리 설정의 '기본 형식')"));
+        expect (! text.hint.contains (ko ("변환 중")));
+        device.output = "Headphones";
+        format.kind = Kind::windowsExclusive;
+        format.inputBits = 16;
+        format.inputRefused = true;
+        text = DeviceFormatText::settings (format, device, false);
+        expectEquals (text.detail, ko ("지금: 입력 16비트, 출력 24비트"));
+        expectEquals (text.warning, ko ("입력 장치가 24비트를 받지 않아 16비트로 열었습니다."));
+        device.sampleFormat = "float32";
+        format.outputRefused = true;
+        text = DeviceFormatText::settings (format, device, false);
+        expect (text.warning.contains (ko ("출력 장치가 32비트 부동소수점을 받지 않아 24비트로 열었습니다.")));
+        expectEquals (DeviceFormatText::bitDepth (32, true), ko ("32비트 부동소수점"));
+
+        beginTest ("exclusive choices name one-sided support, disable unsupported formats and leave unknown capabilities selectable");
+        format.inputAccepted = juce::WasapiFormatInfo::exclusiveInt16;
+        format.outputAccepted = juce::WasapiFormatInfo::exclusiveInt16 | juce::WasapiFormatInfo::exclusiveInt24;
+        expect (DeviceFormatText::exclusiveItem (1, format, true, true).enabled);
+        expectEquals (DeviceFormatText::exclusiveItem (1, format, true, true).text, ko ("자동 (장치가 받는 가장 높은 형식)"));
+        expectEquals (DeviceFormatText::exclusiveItem (2, format, true, true).text, ko ("16비트"));
+        expectEquals (DeviceFormatText::exclusiveItem (3, format, true, true).text, ko ("24비트 — 출력만"));
+        expect (DeviceFormatText::exclusiveItem (3, format, true, true).enabled);
+        expectEquals (DeviceFormatText::exclusiveItem (4, format, true, true).text, ko ("32비트 — 이 장치 지원 안 함"));
+        expect (! DeviceFormatText::exclusiveItem (4, format, true, true).enabled);
+        expect (! DeviceFormatText::exclusiveItem (5, format, true, true).enabled);
+        format.inputAccepted = juce::WasapiFormatInfo::exclusiveInt24;
+        expectEquals (DeviceFormatText::exclusiveItem (3, format, true, false).text, ko ("24비트 — 입력만"));
+        expect (! DeviceFormatText::exclusiveItem (2, format, true, false).enabled);
+        format.inputAccepted = format.outputAccepted = 0;
+        for (int id = 1; id <= 5; ++id) expect (DeviceFormatText::exclusiveItem (id, format, true, true).enabled);
     }
 };
 static LiveMixDeviceUiTests liveMixDeviceUiTests;

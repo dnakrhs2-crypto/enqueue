@@ -77,7 +77,9 @@ struct MixDevice
     juce::String output;          // ASIO: same as input; Windows: render endpoint, "" = none
     int bufferSize = 256;
     double sampleRate = 48000.0;
+    juce::String sampleFormat;    // "" = automatic; int16 / int24 / int32 / float32 (exclusive mode only)
     bool isAsio() const noexcept { return type.containsIgnoreCase ("ASIO"); }
+    static juce::String readSampleFormat (const juce::var& value);
 };
 
 /** The session file (.livemix): everything the app needs to come back exactly as it was. */

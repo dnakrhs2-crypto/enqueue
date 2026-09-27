@@ -1,6 +1,7 @@
 #include "SettingsDialog.h"
 
 #include "AudioBackends.h"
+#include "DeviceFormatText.h"
 #include "GlobalHotkeys.h"
 #include "Widgets.h"
 
@@ -80,6 +81,34 @@ namespace
             styleCaption (sharedBufferNote, ko ("버퍼: 윈도우가 정함 (보통 10 ms)"));
             sharedBufferNote.setFont (bodyFont (12.5f));
             addAndMakeVisible (sharedBufferNote);
+            styleCaption (bitDepthCaption, ko ("비트뎁스"));
+            addAndMakeVisible (bitDepthCaption);
+            bitDepthCombo.setComponentID ("device-bitdepth");
+            bitDepthCombo.setWantsKeyboardFocus (false);
+            for (int id = 1; id <= 5; ++id) bitDepthCombo.addItem (DeviceFormatText::choiceName (id), id);
+            bitDepthCombo.onChange = [this] { applySelection(); };
+            addAndMakeVisible (bitDepthCombo);
+            bitDepthDetail.setComponentID ("device-bitdepth-detail");
+            bitDepthHint.setComponentID ("device-bitdepth-hint");
+            bitDepthWarning.setComponentID ("device-bitdepth-warning");
+            for (auto* label : { &bitDepthDetail, &bitDepthHint, &bitDepthWarning })
+            {
+                styleCaption (*label, {});
+                label->setFont (bodyFont (12.5f));
+                label->setJustificationType (juce::Justification::topLeft);
+                addAndMakeVisible (*label);
+            }
+            bitDepthDetail.setColour (juce::Label::textColourId, Palette::text);
+            bitDepthWarning.setColour (juce::Label::textColourId, Palette::meterYellow);
+            soundSettingsButton.setComponentID ("windows-sound-settings");
+            soundSettingsButton.setButtonText (ko ("윈도우 소리 설정..."));
+            soundSettingsButton.onClick = []
+            {
+               #if JUCE_WINDOWS
+                juce::File::getSpecialLocation (juce::File::windowsSystemDirectory).getChildFile ("control.exe").startAsProcess ("mmsys.cpl,,1");
+               #endif
+            };
+            addAndMakeVisible (soundSettingsButton);
             styleCaption (deviceNote, ko ("ASIO 장치만 씁니다. 버퍼가 작을수록 지연이 짧고 끊길 위험이 큽니다 (128~256 권장)."));
             deviceNote.setFont (bodyFont (12.5f));
             addAndMakeVisible (deviceNote);
@@ -269,6 +298,8 @@ namespace
             if (shownType == "Windows Audio (Low Latency Mode)") note += ko (" 지원하지 않는 장치면 일반 모드로 여세요.");
             if (shownType == "Windows Audio (Exclusive Mode)") note += ko (" 독점 모드에서는 OBS 등 다른 프로그램이 같은 마이크를 쓸 수 없습니다.");
             deviceNote.setText (asio ? ko ("ASIO 장치만 씁니다. 버퍼가 작을수록 지연이 짧고 끊길 위험이 큽니다 (128~256 권장).") : note, juce::dontSendNotification);
+            bitDepthCombo.setSelectedId (DeviceFormatText::choiceId (current.sampleFormat), juce::dontSendNotification);
+            refreshBitDepth();
             updateContentSize();
             resized();
         }
@@ -285,6 +316,7 @@ namespace
             if (refreshing || typeCombo.getSelectedId() <= 0) return;
             const auto current = engine.getOpenDevice();
             MixDevice wanted;
+            wanted.sampleFormat = current.sampleFormat;
             wanted.type = types[typeCombo.getSelectedId() - 1];
             wanted.bufferSize = 0;
             wanted.sampleRate = wanted.isAsio() ? 0.0 : 48000.0;
@@ -310,6 +342,8 @@ namespace
             wanted.output = wanted.isAsio() ? wanted.input : outputNames[outputCombo.getSelectedId() - 2];
             wanted.sampleRate = wanted.isAsio() ? (hadDevice ? wanted.sampleRate : 0.0) : (double) rateCombo.getSelectedId();
             wanted.bufferSize = shownType == "Windows Audio" ? 0 : bufferCombo.getSelectedId();
+            if (shownType == "Windows Audio (Exclusive Mode)")
+                wanted.sampleFormat = DeviceFormatText::choice (bitDepthCombo.getSelectedId());
             applyDevice (wanted);
         }
 
@@ -331,9 +365,56 @@ namespace
             return juce::jmax (36, juce::roundToInt (std::ceil (layout.getHeight())) + 8);
         }
 
+        static int textHeight (const juce::Label& label)
+        {
+            juce::AttributedString text;
+            text.append (label.getText(), label.getFont());
+            juce::TextLayout layout;
+            layout.createLayout (text, 510.0f);
+            return juce::jmax (22, (int) std::ceil (layout.getHeight()) + 8);
+        }
+
+        int bitDepthHeight() const
+        {
+            return 20 + (bitDepthCombo.isVisible() ? 38 : 0) + textHeight (bitDepthDetail)
+                + (bitDepthWarning.isVisible() ? textHeight (bitDepthWarning) : 0)
+                + (soundSettingsButton.isVisible() ? 38 : 0)
+                + (bitDepthHint.isVisible() ? textHeight (bitDepthHint) : 0) + 8;
+        }
+
+        void refreshBitDepth()
+        {
+            const int previousHeight = bitDepthHeight();
+            auto current = engine.getOpenDevice();
+            auto format = engine.getDeviceFormat();
+            if (! engine.isMonitorRunning()) current.output.clear();
+            if (current.type != shownType) format = {};
+            current.type = shownType;
+            auto* device = engine.getDeviceManager().getCurrentAudioDevice();
+            const auto text = DeviceFormatText::settings (format, current, device != nullptr && device->hasControlPanel());
+            bitDepthCombo.setVisible (shownType == "Windows Audio (Exclusive Mode)");
+            soundSettingsButton.setVisible (shownType == "Windows Audio" || shownType == "Windows Audio (Low Latency Mode)");
+            bitDepthDetail.setText (text.detail, juce::dontSendNotification);
+            bitDepthHint.setText (text.hint, juce::dontSendNotification);
+            bitDepthHint.setVisible (text.hint.isNotEmpty());
+            bitDepthWarning.setText (text.warning, juce::dontSendNotification);
+            bitDepthWarning.setVisible (text.warning.isNotEmpty());
+            for (int id = 1; id <= 5; ++id)
+            {
+                const auto item = DeviceFormatText::exclusiveItem (id, format, current.input.isNotEmpty(), current.output.isNotEmpty());
+                bitDepthCombo.changeItemText (id, item.text);
+                bitDepthCombo.setItemEnabled (id, item.enabled);
+            }
+            if (previousHeight != bitDepthHeight())
+            {
+                updateContentSize();
+                resized();
+            }
+        }
+
         void updateContentSize()
         {
-            const int deviceHeight = (shownType.containsIgnoreCase ("ASIO") ? 3 : 4) * 58 + deviceNoteHeight() + 12;
+            const int deviceHeight = (shownType.containsIgnoreCase ("ASIO") ? 3 : 4) * 58 + bitDepthHeight() + deviceNoteHeight() + 12;
             setSize (560, 848 + MixSession::maxPluginGroups * 36 - 160 + deviceHeight);
         }
 
@@ -383,6 +464,21 @@ namespace
                 bufferCombo.setBounds (format);
             }
             area.removeFromTop (8);
+            bitDepthCaption.setBounds (area.removeFromTop (20));
+            if (bitDepthCombo.isVisible())
+            {
+                bitDepthCombo.setBounds (area.removeFromTop (30));
+                area.removeFromTop (8);
+            }
+            bitDepthDetail.setBounds (area.removeFromTop (textHeight (bitDepthDetail)));
+            if (bitDepthWarning.isVisible()) bitDepthWarning.setBounds (area.removeFromTop (textHeight (bitDepthWarning)));
+            if (soundSettingsButton.isVisible())
+            {
+                soundSettingsButton.setBounds (area.removeFromTop (30).withWidth (220));
+                area.removeFromTop (8);
+            }
+            if (bitDepthHint.isVisible()) bitDepthHint.setBounds (area.removeFromTop (textHeight (bitDepthHint)));
+            area.removeFromTop (8);
             deviceNote.setBounds (area.removeFromTop (deviceNoteHeight()));
             area.removeFromTop (12);
             minimiseToTray.setBounds (area.removeFromTop (28));
@@ -426,7 +522,7 @@ namespace
         void paint (juce::Graphics& g) override { g.fillAll (Palette::card); }
 
     private:
-        void timerCallback() override { refreshControlStatus(); }
+        void timerCallback() override { refreshControlStatus(); refreshBitDepth(); }
 
         void refreshControlStatus()
         {
@@ -454,6 +550,7 @@ namespace
         std::vector<Row> rows;   // the hotkey rows in the order they are drawn
         juce::Label deviceCaption, bufferCaption, deviceNote, backupCaption, backupNote, hotkeyCaption, hotkeyNote, micHotkeyLabel, fxHotkeyLabel, windowHotkeyLabel;
         juce::Label typeCaption, outputCaption, rateCaption, sharedBufferNote;
+        juce::Label bitDepthCaption, bitDepthDetail, bitDepthHint, bitDepthWarning;
         juce::Label groupHotkeyLabel[MixSession::maxPluginGroups];
         juce::Label controlCaption, controlNote, controlAddress, controlState;
         juce::HyperlinkButton controlHelp;
@@ -461,8 +558,8 @@ namespace
         HotkeyButton groupHotkey[MixSession::maxPluginGroups];
         juce::TextButton micHotkeyClear { "x" }, fxHotkeyClear { "x" }, windowHotkeyClear { "x" };
         juce::TextButton groupHotkeyClear[MixSession::maxPluginGroups];
-        juce::ComboBox typeCombo, deviceCombo, outputCombo, rateCombo, bufferCombo;
-        juce::TextButton panelButton;
+        juce::ComboBox typeCombo, deviceCombo, outputCombo, rateCombo, bufferCombo, bitDepthCombo;
+        juce::TextButton panelButton, soundSettingsButton;
         juce::ToggleButton minimiseToTray, closeAsk, closeToTray, startWithWindows, skipWhenOff, externalControl;
         bool refreshing = false;
     };

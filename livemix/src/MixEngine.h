@@ -47,6 +47,23 @@ public:
         All device lifecycle methods run on the message thread. Non-positive rate/buffer use driver defaults. */
     juce::String openDevice (const MixDevice& wanted);
     MixDevice getOpenDevice() const;
+    struct DeviceFormat
+    {
+        enum class Kind { none, asio, windowsShared, windowsExclusive };
+        Kind kind = Kind::none;
+        int inputBits = 0;   bool inputFloat = false;
+        int outputBits = 0;  bool outputFloat = false;
+        double inputDeviceRate = 0, outputDeviceRate = 0;
+        int inputAccepted = 0, outputAccepted = 0;
+        bool inputRefused = false, outputRefused = false;
+    };
+    /** Message thread: the open directions' hardware format, including the independent monitor. */
+    DeviceFormat getDeviceFormat() const;
+   #if JUCE_WINDOWS && JUCE_WASAPI
+    /** Pure mapping; the output info may come from the split monitor instead of the capture device. */
+    static DeviceFormat describeDeviceFormat (DeviceFormat::Kind kind, const juce::WasapiFormatInfo& input,
+                                              const juce::WasapiFormatInfo& output, const juce::String& choice, int asioBits = 0);
+   #endif
     bool isSplitMonitor() const noexcept { return splitMonitor.load (std::memory_order_acquire); }
     bool isMonitorRunning() const noexcept;
     /** A new buffer size on the running device (every channel kept). */

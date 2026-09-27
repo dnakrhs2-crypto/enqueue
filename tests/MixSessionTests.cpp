@@ -1,4 +1,5 @@
 #include "MixModel.h"
+#include "LiveMixSettings.h"
 
 #include <juce_core/juce_core.h>
 #include <limits>
@@ -15,6 +16,62 @@ public:
 
     void runTest() override
     {
+        beginTest ("bit depth choices survive v4 JSON and isolated last-device settings; invalid choices become automatic");
+        {
+            const auto directory = juce::File::createTempFile ("-bitdepth-settings");
+            expect (directory.deleteFile());
+            expect (directory.createDirectory().wasOk());
+            for (const auto* value : { "\"\"", "\"int16\"", "\"int24\"", "\"int32\"", "\"float32\"",
+                                      "\"int20\"", "24", "true", "null", "{}", "[]", "" })
+            {
+                const juce::String raw (value);
+                const auto expected = raw == "\"int16\"" || raw == "\"int24\"" || raw == "\"int32\"" || raw == "\"float32\""
+                    ? juce::JSON::fromString (raw).toString() : juce::String();
+                const auto deviceJson = juce::String (R"json({"type":"Windows Audio (Exclusive Mode)","input":"Capture","output":"Headphones")json")
+                    + (raw.isEmpty() ? juce::String() : ",\"sampleFormat\":" + raw) + "}";
+                MixSession session;
+                expect (MixSession::fromJson ("{\"app\":\"LiveMix\",\"version\":4,\"device\":" + deviceJson + "}", session).wasOk());
+                expectEquals (session.device.sampleFormat, expected);
+                MixSession reloaded;
+                expect (MixSession::fromJson (session.toJson(), reloaded).wasOk());
+                expectEquals (reloaded.device.sampleFormat, expected);
+                auto saved = juce::JSON::parse (session.toJson());
+                expectEquals ((int) saved["version"], 4);
+                expect (saved["device"].hasProperty ("sampleFormat"));
+                expectEquals (saved["device"]["sampleFormat"].toString(), expected);
+                {
+                    juce::PropertiesFile::Options options;
+                    options.storageFormat = juce::PropertiesFile::storeAsXML;
+                    juce::PropertiesFile file (directory.getChildFile ("LiveMix.settings"), options);
+                    file.setValue ("lastDevice", deviceJson);
+                    expect (file.save());
+                }
+                {
+                    LiveMixSettings settings (directory);
+                    const auto last = settings.getLastDevice();
+                    expect (last.has_value());
+                    if (last.has_value())
+                    {
+                        session.device = *last;
+                        expectEquals (juce::JSON::parse (session.toJson())["device"]["sampleFormat"].toString(), expected);
+                    }
+                    settings.setLastDevice (session.device);
+                    settings.saveIfNeeded();
+                }
+                {
+                    LiveMixSettings settings (directory);
+                    const auto last = settings.getLastDevice();
+                    expect (last.has_value());
+                    if (last.has_value())
+                    {
+                        session.device = *last;
+                        expectEquals (juce::JSON::parse (session.toJson())["device"]["sampleFormat"].toString(), expected);
+                    }
+                }
+            }
+            expect (directory.deleteRecursively());
+        }
+
         beginTest ("v1-v3 devices migrate to ASIO and OBS sending always starts disabled");
         for (int version : { 1, 2, 3 })
         {
@@ -57,7 +114,7 @@ public:
                     expectEquals (root["device"]["type"].toString(), original.device.type);
                     expectEquals (root["device"]["input"].toString(), original.device.input);
                     expectEquals (root["device"]["output"].toString(), original.device.output);
-                    expectEquals (root["device"].getDynamicObject()->getProperties().size(), 5);
+                    expectEquals (root["device"].getDynamicObject()->getProperties().size(), 6);
                     expect (root["master"].hasProperty ("sendToObs"));
                     expect ((bool) root["master"]["sendToObs"] == send);
                     expect (MixSession::fromJson (json, loaded).wasOk());

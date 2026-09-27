@@ -1,5 +1,6 @@
 #include "TopBar.h"
 #include "AudioBackends.h"
+#include "DeviceFormatText.h"
 
 namespace gocue::livemix
 {
@@ -49,6 +50,8 @@ TopBar::TopBar (MixDocument& doc) : document (doc)
     addAndMakeVisible (deviceCombo);
 
     statusLabel.setFont (bodyFont (14.0f));
+    statusLabel.setComponentID ("device-status");
+    statusLabel.setMinimumHorizontalScale (1.0f);
     statusLabel.setJustificationType (juce::Justification::centred);
     statusLabel.setColour (juce::Label::backgroundColourId, Palette::card2);
     statusLabel.setColour (juce::Label::outlineColourId, Palette::line);
@@ -107,13 +110,32 @@ void TopBar::setDevices (const juce::StringArray& names, const juce::String& cur
     resized();
 }
 
-void TopBar::setStatus (double sampleRate, int bufferSize, double latencyMs, double dspLoad, bool running)
+juce::String TopBar::buildStatusText (double sampleRate, int bufferSize, double latencyMs, bool running,
+                                     const MixEngine::DeviceFormat& format, bool showSampleWord)
 {
-    if (! running)
-        statusLabel.setText (ko ("오디오 멈춤"), juce::dontSendNotification);
-    else
-        statusLabel.setText (juce::String (sampleRate / 1000.0, 1) + " kHz · " + juce::String (bufferSize) + ko (" 샘플") + "  " + juce::String (latencyMs, 1) + " ms",
-                             juce::dontSendNotification);
+    if (! running) return ko ("오디오 멈춤");
+    return juce::String (sampleRate / 1000.0, 1) + ko (" kHz · ")
+        + (format.inputBits > 0 ? DeviceFormatText::bitDepth (format.inputBits, false) + ko (" · ") : juce::String())
+        + juce::String (bufferSize) + (showSampleWord ? ko (" 샘플") : juce::String()) + "  " + juce::String (latencyMs, 1) + " ms";
+}
+
+void TopBar::setStatus (double sampleRate, int bufferSize, double latencyMs, double dspLoad, bool running, const MixEngine::DeviceFormat& format)
+{
+    const auto text = buildStatusText (sampleRate, bufferSize, latencyMs, running, format);
+    if (fullStatusText != text)
+    {
+        fullStatusText = text;
+        shortStatusText = buildStatusText (sampleRate, bufferSize, latencyMs, running, format, false);
+        resized();
+    }
+    auto tooltip = fullStatusText;
+    if (running && format.kind != MixEngine::DeviceFormat::Kind::none)
+    {
+        const bool shared = format.kind == MixEngine::DeviceFormat::Kind::windowsShared;
+        tooltip += "\n" + DeviceFormatText::directions (format, true, document.getEngine().isMonitorRunning(), shared)
+            + (shared ? ko (" (윈도우 설정)") : format.kind == MixEngine::DeviceFormat::Kind::asio ? ko (" (ASIO 드라이버)") : ko (" (독점)"));
+    }
+    statusLabel.setTooltip (tooltip);
 
     statusLabel.setColour (juce::Label::textColourId, running ? Palette::text : Palette::danger);
     dspMeter.load = dspLoad;
@@ -140,10 +162,9 @@ void TopBar::setMuteGroups (bool micMuted, bool fxMuted)
 
 TopBar::Mode TopBar::modeFor (int width) const noexcept
 {
-    // one row: the logo (130), the two buttons (242), status (up to 230), device (160+), type (56), a session name of
-    // at least 160 and room kept for both mute badges (200) - about 1220. The badges never change the mode: a mute
-    // hotkey pressed mid-stream must not move the whole layout.
-    return width >= 1220 ? Mode::wide : width >= 700 ? Mode::compact : Mode::narrow;
+    // Keep room for measured status text, a 120 px device, a 160 px session and both mute badges.
+    // The badges never change the mode: a mute hotkey must not move the whole layout.
+    return width >= 1440 ? Mode::wide : width >= 700 ? Mode::compact : Mode::narrow;
 }
 
 int TopBar::preferredHeight (int width) const noexcept
@@ -178,12 +199,13 @@ void TopBar::resized()
 
     if (mode == Mode::narrow)
     {
-        // the two buttons share their own row
+        // The device shares the buttons' row so the full audio status fits even at 420 px.
         auto r = row2;
-        const int w = juce::jmax (40, (r.getWidth() - 6) / 2);
-        fxButton.setBounds (r.removeFromLeft (w));
-        r.removeFromLeft (6);
-        pluginsButton.setBounds (r.removeFromLeft (w));
+        pluginsButton.setBounds (r.removeFromRight (120));
+        r.removeFromRight (8);
+        fxButton.setBounds (r.removeFromRight (100));
+        r.removeFromRight (8);
+        deviceCombo.setBounds (r);
     }
     else
     {
@@ -219,24 +241,35 @@ void TopBar::resized()
             badgeRow.removeFromRight (8);
         }
 
+    auto statusWidth = [&] (int available)
+    {
+        const auto text = labelWidthForText (statusLabel, fullStatusText) <= available ? fullStatusText : shortStatusText;
+        statusLabel.setText (text, juce::dontSendNotification);
+        return juce::jmin (available, labelWidthForText (statusLabel, text));
+    };
+    const int typeWidth = labelWidthForText (deviceLabel, deviceLabel.getText());
     if (mode == Mode::wide)
     {
         deviceLabel.setJustificationType (juce::Justification::centredRight);
-        statusLabel.setBounds (statusRow.removeFromRight (juce::jlimit (120, 230, statusRow.getWidth() / 4)));   // both give a little with two badges up: the session name keeps its 160
+        statusLabel.setBounds (statusRow.removeFromRight (statusWidth (statusRow.getWidth() - 160 - 120 - typeWidth - 24)));
         statusRow.removeFromRight (8);
-        deviceCombo.setBounds (statusRow.removeFromRight (juce::jlimit (120, 260, statusRow.getWidth() / 3)));
+        const int deviceWidth = juce::jmin (juce::jlimit (120, 260, statusRow.getWidth() / 3), statusRow.getWidth() - 160 - typeWidth - 16);
+        deviceCombo.setBounds (statusRow.removeFromRight (deviceWidth));
         statusRow.removeFromRight (6);
-        deviceLabel.setBounds (statusRow.removeFromRight (labelWidthForText (deviceLabel, deviceLabel.getText())));
+        deviceLabel.setBounds (statusRow.removeFromRight (typeWidth));
         statusRow.removeFromRight (10);
     }
     else
     {
         deviceLabel.setJustificationType (juce::Justification::centredLeft);
-        deviceLabel.setBounds (statusRow.removeFromLeft (labelWidthForText (deviceLabel, deviceLabel.getText())));
+        deviceLabel.setBounds (statusRow.removeFromLeft (typeWidth));
         statusRow.removeFromLeft (6);
-        statusLabel.setBounds (statusRow.removeFromRight (juce::jlimit (120, 230, statusRow.getWidth() * 2 / 5)));
-        statusRow.removeFromRight (8);
-        deviceCombo.setBounds (statusRow);
+        statusLabel.setBounds (statusRow.removeFromRight (statusWidth (statusRow.getWidth() - (mode == Mode::compact ? 128 : 0))));
+        if (mode == Mode::compact)
+        {
+            statusRow.removeFromRight (8);
+            deviceCombo.setBounds (statusRow);
+        }
     }
 
     // the session name and state take what is left of the first row

@@ -62,6 +62,7 @@ target_sources(EnqueueTests PRIVATE
     LiveMixAsrcTests.cpp
     LiveMixMonitorTests.cpp
     MixEngineTests.cpp
+    LiveMixRealDeviceTests.cpp
     LiveMixObsSenderTests.cpp
     LiveMixObsInstallerTests.cpp
     WebDavBackupTests.cpp

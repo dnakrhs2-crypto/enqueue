@@ -31,6 +31,8 @@ public:
     double getOutputSampleRate() const noexcept { return outputRate; }
     int getOutputPeriod() const noexcept { return outputPeriod; }
     bool isRunning() const noexcept { return running.load (std::memory_order_acquire); }
+    /** Message thread only, for the format shown by the UI. */
+    juce::AudioIODevice* getDevice() const noexcept { return device.get(); }
     double getInputSampleRate() const noexcept { return inputRate; }
     int getInputPeriod() const noexcept { return inputPeriod; }
     void requestRestart() noexcept;

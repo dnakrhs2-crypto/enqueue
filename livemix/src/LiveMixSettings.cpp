@@ -79,6 +79,7 @@ std::optional<MixDevice> LiveMixSettings::getLastDevice() const
     device.output = value.getProperty ("output", "").toString();
     device.bufferSize = (int) value.getProperty ("bufferSize", 256);
     device.sampleRate = (double) value.getProperty ("sampleRate", 48000.0);
+    device.sampleFormat = MixDevice::readSampleFormat (value.getProperty ("sampleFormat", {}));
     if (device.isAsio()) device.output = device.input;
     return device.input.isEmpty() ? std::nullopt : std::optional<MixDevice> (device);
 }
@@ -91,6 +92,7 @@ void LiveMixSettings::setLastDevice (const MixDevice& device)
     value->setProperty ("output", device.isAsio() ? device.input : device.output);
     value->setProperty ("bufferSize", device.bufferSize);
     value->setProperty ("sampleRate", device.sampleRate);
+    value->setProperty ("sampleFormat", device.sampleFormat);
     settings->setValue (Keys::lastDevice, juce::JSON::toString (juce::var (value.release()), true));
 }
 

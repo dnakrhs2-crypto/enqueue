@@ -539,7 +539,8 @@ void MixDocument::setSessionName (const juce::String& name)
 void MixDocument::setDeviceInfo (const MixDevice& device)
 {
     if (session.device.type == device.type && session.device.input == device.input && session.device.output == device.output
-        && session.device.bufferSize == device.bufferSize && juce::approximatelyEqual (session.device.sampleRate, device.sampleRate))
+        && session.device.bufferSize == device.bufferSize && juce::approximatelyEqual (session.device.sampleRate, device.sampleRate)
+        && session.device.sampleFormat == device.sampleFormat)
         return;
 
     session.device = device;

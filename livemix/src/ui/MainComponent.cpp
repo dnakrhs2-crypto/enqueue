@@ -816,7 +816,7 @@ void MainComponent::timerCallback()
     masterCard.pushMeter (engine.readMasterMeter());
 
     const bool running = engine.isDeviceRunning();
-    topBar.setStatus (engine.getSampleRate(), engine.getBlockSize(), engine.getLatencyMs(), engine.getDspLoad(), running);
+    topBar.setStatus (engine.getSampleRate(), engine.getBlockSize(), engine.getLatencyMs(), engine.getDspLoad(), running, engine.getDeviceFormat());
     masterCard.setLatency (running ? engine.getLatencyMs() : 0.0, running ? engine.getBlockSize() : 0, engine.getSampleRate());
 
     const double now = juce::Time::getMillisecondCounterHiRes();
