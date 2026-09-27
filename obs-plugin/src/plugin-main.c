@@ -1,6 +1,6 @@
 /*
-Plugin Name
-Copyright (C) <Year> <Developer> <Email Address>
+LiveMix for OBS
+Copyright (C) 2026 LiveMix contributors
 
 This program is free software; you can redistribute it and/or modify
 it under the terms of the GNU General Public License as published by
@@ -16,19 +16,49 @@ You should have received a copy of the GNU General Public License along
 with this program. If not, see <https://www.gnu.org/licenses/>
 */
 
-#include <obs-module.h>
+#include "livemix-obs.h"
 #include <plugin-support.h>
 
 OBS_DECLARE_MODULE()
-OBS_MODULE_USE_DEFAULT_LOCALE(PLUGIN_NAME, "en-US")
+OBS_MODULE_USE_DEFAULT_LOCALE("livemix-obs", "en-US")
+
+static lm_connection *connection;
+
+lm_connection *livemix_obs_connection(void)
+{
+	return connection;
+}
+
+static void receiver_log(void *context, enum lm_log_level level, const char *message)
+{
+	(void)context;
+	blog(level == LM_LOG_WARNING ? LOG_WARNING : LOG_INFO, "[livemix-obs] %s", message);
+}
+
+MODULE_EXPORT const char *obs_module_description(void)
+{
+	return "LiveMix master audio for OBS";
+}
 
 bool obs_module_load(void)
 {
-	obs_log(LOG_INFO, "plugin loaded successfully (version %s)", PLUGIN_VERSION);
+	lm_connection_config config = {0};
+	config.log = receiver_log;
+	connection = lm_connection_create(&config);
+	if (!connection || !lm_connection_start(connection)) {
+		lm_connection_destroy(connection);
+		connection = NULL;
+		blog(LOG_ERROR, "[livemix-obs] Could not start the connection manager");
+		return false;
+	}
+	obs_register_source(&livemix_master_source);
+	obs_register_source(&livemix_master_filter);
+	blog(LOG_INFO, "[livemix-obs] Loaded version %s", PLUGIN_VERSION);
 	return true;
 }
 
 void obs_module_unload(void)
 {
-	obs_log(LOG_INFO, "plugin unloaded");
+	lm_connection_destroy(connection);
+	connection = NULL;
 }
