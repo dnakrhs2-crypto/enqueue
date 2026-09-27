@@ -299,6 +299,7 @@ namespace
             if (shownType == "Windows Audio (Exclusive Mode)") note += ko (" 독점 모드에서는 OBS 등 다른 프로그램이 같은 마이크를 쓸 수 없습니다.");
             deviceNote.setText (asio ? ko ("ASIO 장치만 씁니다. 버퍼가 작을수록 지연이 짧고 끊길 위험이 큽니다 (128~256 권장).") : note, juce::dontSendNotification);
             bitDepthCombo.setSelectedId (DeviceFormatText::choiceId (current.sampleFormat), juce::dontSendNotification);
+            syncedChoiceId = DeviceFormatText::choiceId (current.sampleFormat);
             refreshBitDepth();
             updateContentSize();
             resized();
@@ -405,13 +406,21 @@ namespace
             bitDepthHint.setVisible (text.hint.isNotEmpty());
             bitDepthWarning.setText (text.warning, juce::dontSendNotification);
             bitDepthWarning.setVisible (text.warning.isNotEmpty());
+            // Changing an item's text leaves the old text shown and getSelectedId() at 0, so a choice is selected again
+            // afterwards: the running device's, unless the operator has just picked another one whose asynchronous
+            // onChange has not run yet (it differs from what was last synced) - that pick is kept for its onChange.
+            const int runningChoice = DeviceFormatText::choiceId (engine.getOpenDevice().sampleFormat);
+            const int shownChoice = bitDepthCombo.getSelectedId();
+            const int choice = shownChoice > 0 && shownChoice != syncedChoiceId ? shownChoice : runningChoice;
             for (int id = 1; id <= 5; ++id)
             {
                 const auto item = DeviceFormatText::exclusiveItem (id, format, current.input.isNotEmpty(), current.output.isNotEmpty());
                 bitDepthCombo.changeItemText (id, item.text);
                 bitDepthCombo.setItemEnabled (id, item.enabled);
             }
-            bitDepthCombo.setSelectedId (DeviceFormatText::choiceId (engine.getOpenDevice().sampleFormat), juce::dontSendNotification);
+            bitDepthCombo.setSelectedId (choice, juce::dontSendNotification);
+            if (choice == runningChoice)
+                syncedChoiceId = runningChoice;
             if (previousHeight != bitDepthHeight())
             {
                 updateContentSize();
@@ -570,6 +579,7 @@ namespace
         juce::TextButton panelButton, soundSettingsButton;
         juce::ToggleButton minimiseToTray, closeAsk, closeToTray, startWithWindows, skipWhenOff, externalControl;
         bool refreshing = false;
+        int syncedChoiceId = 0;   // the bit-depth choice the combo was last synced to from the running device
     };
 
     juce::Component::SafePointer<juce::DialogWindow> openDialog;
