@@ -127,8 +127,10 @@ def stage_obs_plugin(source_dir):
     from ctypes import wintypes
 
     plugin_dir = ROOT / "obs-plugin"
-    if not (plugin_dir / "build_x64").exists():
-        run(["cmake", "--preset", "windows-x64"], cwd=plugin_dir)
+    # Always configure: the plugin's version (buildspec.json -> VERSIONINFO) is read at configure time only, so the
+    # build tree of the previous release would ship the new code under the old version, and the app's "install or
+    # update?" check would then skip the update (2026-09-27, 0.11.1). Offline once .deps exists.
+    run(["cmake", "--preset", "windows-x64"], cwd=plugin_dir)
     run(["cmake", "--build", "--preset", "windows-x64"], cwd=plugin_dir)
 
     rundir = plugin_dir / "build_x64/rundir/RelWithDebInfo"
@@ -139,12 +141,28 @@ def stage_obs_plugin(source_dir):
             sys.exit("LiveMix OBS plugin build is incomplete: missing %s" % required)
     locales = sorted(locale_dir.glob("*.ini"))
 
-    # The app compares VERSIONINFO when deciding whether to install or update the plugin.
-    version_size = ctypes.WinDLL("version").GetFileVersionInfoSizeW
-    version_size.argtypes = [wintypes.LPCWSTR, ctypes.POINTER(wintypes.DWORD)]
-    version_size.restype = wintypes.DWORD
-    if not version_size(str(dll), None):
+    # The app compares VERSIONINFO when deciding whether to install or update the plugin: it must be buildspec's.
+    api = ctypes.WinDLL("version")
+    api.GetFileVersionInfoSizeW.argtypes = [wintypes.LPCWSTR, ctypes.POINTER(wintypes.DWORD)]
+    api.GetFileVersionInfoSizeW.restype = wintypes.DWORD
+    api.GetFileVersionInfoW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, ctypes.c_void_p]
+    api.GetFileVersionInfoW.restype = wintypes.BOOL
+    api.VerQueryValueW.argtypes = [ctypes.c_void_p, wintypes.LPCWSTR, ctypes.POINTER(ctypes.c_void_p), ctypes.POINTER(wintypes.UINT)]
+    api.VerQueryValueW.restype = wintypes.BOOL
+    size = api.GetFileVersionInfoSizeW(str(dll), None)
+    if not size:
         sys.exit("LiveMix OBS plugin DLL has no VERSIONINFO: %s (rebuild the plugin with its version resource)" % dll)
+    block = ctypes.create_string_buffer(size)
+    fixed, fixed_size = ctypes.c_void_p(), wintypes.UINT()
+    if not (api.GetFileVersionInfoW(str(dll), 0, size, block)
+            and api.VerQueryValueW(block, "\\", ctypes.byref(fixed), ctypes.byref(fixed_size)) and fixed.value):
+        sys.exit("LiveMix OBS plugin DLL: VERSIONINFO unreadable: %s" % dll)
+    words = ctypes.cast(fixed, ctypes.POINTER(wintypes.DWORD * 4)).contents   # dwSignature, dwStrucVersion, MS, LS
+    built = "%d.%d.%d" % (words[2] >> 16, words[2] & 0xFFFF, words[3] >> 16)
+    wanted = json.loads((plugin_dir / "buildspec.json").read_text(encoding="utf-8"))["version"]
+    if built != wanted:
+        sys.exit("LiveMix OBS plugin DLL is version %s but obs-plugin/buildspec.json says %s: %s" % (built, wanted, dll))
+    print("OBS plugin version:", built, flush=True)
 
     destination = pathlib.Path(source_dir) / "obs-plugin/livemix-obs"
     staged_locales = destination / "data/locale"
