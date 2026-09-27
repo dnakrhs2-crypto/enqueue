@@ -246,6 +246,8 @@ target_sources(LiveMixCore INTERFACE
     ${CMAKE_CURRENT_SOURCE_DIR}/livemix/shared/lm_asrc.c
     ${CMAKE_CURRENT_SOURCE_DIR}/livemix/src/MixModel.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/livemix/src/MixEngine.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/livemix/src/AudioBackends.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/livemix/src/MonitorOutput.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/livemix/src/MixDocument.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/livemix/src/MuteGroups.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/livemix/src/ControlProtocol.cpp

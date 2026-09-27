@@ -17,7 +17,9 @@
 namespace gocue::livemix
 {
 
-/** The live graph on one ASIO device:
+class MonitorOutput;
+
+/** The live graph driven by one capture device, with an optional independent monitor:
 
         input(s) -> [pre tap] -> channel VST3 chain -> [post tap] -> mic ON/OFF ramp -> pan -> master bus / direct output pair
         FX channel: sum of sends -> FX chain -> return amount -> master bus / direct output pair
@@ -38,12 +40,13 @@ public:
     MixEngine();
     ~MixEngine() override;
 
-    /** Opens the saved ASIO device (or the first ASIO device) with every input and output. "" on success. */
-    juce::String initialise (const juce::XmlElement* savedDeviceState);
-    /** Opens an ASIO device by name (an empty name keeps the current one) with an optional rate / buffer and every
-        channel, and registers the callback. On failure the device that was running is restored; the message says
-        what failed (and whether the rollback did too). Message thread. */
-    juce::String openDevice (const juce::String& name, double sampleRate = 0.0, int bufferSize = 0);
+    /** Saved device, then first ASIO device, then the Windows default capture/render endpoints. */
+    juce::String initialise (const MixDevice* saved);
+    /** Opens the requested backend/endpoints. A failed change restores both devices and their channel masks.
+        All device lifecycle methods run on the message thread. Non-positive rate/buffer use driver defaults. */
+    juce::String openDevice (const MixDevice& wanted);
+    MixDevice getOpenDevice() const;
+    bool isSplitMonitor() const noexcept { return splitMonitor.load (std::memory_order_acquire); }
     /** A new buffer size on the running device (every channel kept). */
     juce::String setBufferSize (int samples);
     /** Closes and reopens the current device (the driver's control panel asked for a restart). "" on success. */
@@ -185,15 +188,21 @@ private:
     void audioDeviceStopped() override;
     void audioDeviceError (const juce::String& errorMessage) override;
 
-    juce::AudioIODeviceType* findAsioType();
+    juce::AudioIODeviceType* findType (const juce::String& name);
     void ensureCallback();
+    void removeCallback();
+    int outputFirst (int requested) const noexcept;
     ChannelNode* findChannel (const juce::Uuid& id) const noexcept;
     FxNode* findFx (const juce::Uuid& id) const noexcept;
-    static void applyOutput (const MixOutput& output, std::atomic<bool>& toMaster, std::atomic<bool>& direct, std::atomic<int>& directFirst);
+    void applyOutput (const MixOutput& output, std::atomic<bool>& toMaster, std::atomic<bool>& direct, std::atomic<int>& directFirst);
     static void addToOutputs (float* const* outputs, int numOutputs, int first, const juce::AudioBuffer<float>& source, int offset, int numSamples) noexcept;
     juce::AudioDeviceManager deviceManager;
     PluginHost pluginHost;
     bool callbackAdded = false;
+    // Replaced only with the graph callback detached; the monitor consumer never touches the graph.
+    std::unique_ptr<MonitorOutput> monitor;
+    MixDevice openedDevice;
+    std::atomic<bool> splitMonitor { false }, stereoOutputsOnly { false };
 
     juce::CriticalSection lock;   // the node lists and the buffers: held by the callback, taken briefly by edits
     std::vector<std::unique_ptr<ChannelNode>> channels;
@@ -201,7 +210,7 @@ private:
     MasterNode master;
     LoudnessMeter loudness;   // the master output, K-weighted: what the LUFS window shows
 
-    juce::AudioBuffer<float> chBuf, preBuf, masterBus;
+    juce::AudioBuffer<float> chBuf, preBuf, masterBus, monitorStage;
     std::array<juce::AudioBuffer<float>, (size_t) maxFx> fxBus;
 
     std::atomic<double> sampleRate { 48000.0 };

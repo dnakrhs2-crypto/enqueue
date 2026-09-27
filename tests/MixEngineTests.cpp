@@ -1,4 +1,6 @@
 #include "MixEngine.h"
+#include "AudioBackends.h"
+#include "LiveMixSettings.h"
 #include "TestGainPlugin.h"
 
 #include <atomic>
@@ -16,6 +18,121 @@ namespace gocue::tests
 {
 
 using namespace gocue::livemix;
+
+namespace
+{
+    struct MixDeviceRecord
+    {
+        juce::String input, output;
+        juce::BigInteger inputs, outputs;
+        bool playing = false;
+        double rate = 48000.0;
+        int buffer = 256;
+        juce::AudioIODeviceCallback* callback = nullptr;
+    };
+
+    class MixFakeDevice : public juce::AudioIODevice
+    {
+    public:
+        MixFakeDevice (const juce::String& type, std::shared_ptr<MixDeviceRecord> r)
+            : AudioIODevice (r->output.isNotEmpty() ? r->output : r->input, type), record (std::move (r)) {}
+        ~MixFakeDevice() override { stop(); }
+        juce::StringArray channelNames (bool input) const
+        {
+            juce::StringArray names;
+            if ((input ? record->input : record->output).isNotEmpty())
+                for (int i = 0; i < (getTypeName().contains ("ASIO") ? 72 : 8); ++i) names.add (juce::String (i + 1));
+            return names;
+        }
+        juce::StringArray getInputChannelNames() override { return channelNames (true); }
+        juce::StringArray getOutputChannelNames() override { return channelNames (false); }
+        juce::Array<double> getAvailableSampleRates() override { return { 48000.0, 44100.0 }; }
+        juce::Array<int> getAvailableBufferSizes() override { return { 128, 256, 512, 1024 }; }
+        int getDefaultBufferSize() override { return 256; }
+        juce::String open (const juce::BigInteger& ins, const juce::BigInteger& outs, double sr, int bs) override
+        {
+            close();
+            if (record->input == "Broken" || record->output == "Broken" || bs == 1024)
+                return "deliberate fake open failure";
+            record->inputs = ins;
+            record->outputs = outs;
+            record->inputs.setRange (getInputChannelNames().size(), 128, false);
+            record->outputs.setRange (getOutputChannelNames().size(), 128, false);
+            record->rate = sr;
+            record->buffer = bs;
+            opened = true;
+            return {};
+        }
+        void close() override { stop(); opened = false; }
+        bool isOpen() override { return opened; }
+        void start (juce::AudioIODeviceCallback* cb) override
+        {
+            callback = cb;
+            record->callback = cb;
+            record->playing = cb != nullptr && opened;
+            if (cb != nullptr) cb->audioDeviceAboutToStart (this);
+        }
+        void stop() override
+        {
+            if (callback != nullptr) callback->audioDeviceStopped();
+            callback = nullptr;
+            record->callback = nullptr;
+            record->playing = false;
+        }
+        bool isPlaying() override { return record->playing; }
+        juce::String getLastError() override { return {}; }
+        int getCurrentBufferSizeSamples() override { return record->buffer; }
+        double getCurrentSampleRate() override { return record->rate; }
+        int getCurrentBitDepth() override { return 32; }
+        juce::BigInteger getActiveInputChannels() const override { return record->inputs; }
+        juce::BigInteger getActiveOutputChannels() const override { return record->outputs; }
+        int getInputLatencyInSamples() override { return record->input.isEmpty() ? 0 : 48; }
+        int getOutputLatencyInSamples() override { return record->output.isEmpty() ? 0 : 96; }
+    private:
+        std::shared_ptr<MixDeviceRecord> record;
+        juce::AudioIODeviceCallback* callback = nullptr;
+        bool opened = false;
+    };
+
+    class MixFakeType : public juce::AudioIODeviceType
+    {
+    public:
+        explicit MixFakeType (const juce::String& name) : AudioIODeviceType (name) {}
+        void scanForDevices() override {}
+        juce::StringArray getDeviceNames (bool input) const override
+        {
+            if (getTypeName().contains ("ASIO")) return { "Good", "Broken" };
+            return input ? juce::StringArray { "Capture", "Capture 2", "Broken" }
+                         : juce::StringArray { "Headphones", "Broken" };
+        }
+        int getDefaultDeviceIndex (bool) const override { return 0; }
+        bool hasSeparateInputsAndOutputs() const override { return ! getTypeName().contains ("ASIO"); }
+        int getIndexOfDevice (juce::AudioIODevice* d, bool input) const override
+        { return d == nullptr ? -1 : getDeviceNames (input).indexOf (d->getName()); }
+        juce::AudioIODevice* createDevice (const juce::String& output, const juce::String& input) override
+        {
+            auto r = std::make_shared<MixDeviceRecord>();
+            r->input = input;
+            r->output = output;
+            records.push_back (r);
+            return new MixFakeDevice (getTypeName(), std::move (r));
+        }
+        std::shared_ptr<MixDeviceRecord> playingOutput() const
+        {
+            for (auto& r : records)
+                if (r->playing && r->output.isNotEmpty()) return r;
+            return {};
+        }
+        std::vector<std::shared_ptr<MixDeviceRecord>> records;
+    };
+
+    void removeRealMixDeviceTypes (MixEngine& engine)
+    {
+        auto& manager = engine.getDeviceManager();
+        while (! manager.getAvailableDeviceTypes().isEmpty())
+            manager.removeAudioDeviceType (manager.getAvailableDeviceTypes().getLast());
+    }
+}
 
 /** The LiveMix graph rendered offline with DC inputs: routing, sends, the ON/OFF ramp, meters. */
 class MixEngineTests : public juce::UnitTest
@@ -44,6 +161,7 @@ public:
 
     void runTest() override
     {
+        runDeviceTests();
         MixEngine engine;
         engine.prepare (sampleRate, blockSize);
 
@@ -373,6 +491,248 @@ public:
         }
 
         runPanTests();
+    }
+
+    void runDeviceTests()
+    {
+        beginTest ("input-only rendering still advances channel/master meters and loudness");
+        {
+            MixEngine engine;
+            MixSession s;
+            s.addChannel();
+            engine.applySession (s);
+            juce::AudioBuffer<float> input (1, 256);
+            int sample = 0;
+            for (int b = 0; b < 200; ++b)
+            {
+                for (int i = 0; i < 256; ++i)
+                    input.setSample (0, i, 0.5f * (float) std::sin (juce::MathConstants<double>::twoPi * sample++ / 48.0));
+                engine.renderBlock (input.getArrayOfReadPointers(), 1, nullptr, 0, 256);
+                engine.getLoudnessMeter().poll();
+            }
+            expectGreaterThan (engine.readChannelMeter (s.channels[0].id).left, 0.49f);
+            expectGreaterThan (engine.readMasterMeter().right, 0.49f);
+            expectGreaterOrEqual (engine.getLoudnessMeter().getStats().elapsedSeconds(), 1.0);
+            expect (engine.getLoudnessMeter().getStats().integrated().valid);
+        }
+
+        beginTest ("failed device changes restore type, both endpoints, channel masks and monitor");
+        {
+            MixEngine engine;
+            removeRealMixDeviceTypes (engine);
+            auto& manager = engine.getDeviceManager();
+            manager.addAudioDeviceType (std::make_unique<MixFakeType> ("ASIO"));
+            auto windows = std::make_unique<MixFakeType> ("Windows Audio");
+            auto* windowsType = windows.get();
+            manager.addAudioDeviceType (std::move (windows));
+            expect (engine.openDevice ({ "ASIO", "Good", "Good", 256, 48000.0 }).isEmpty());
+            expect (engine.isDeviceRunning());
+            expectEquals (engine.getNumDeviceInputs(), 64);
+            expectEquals (engine.getNumDeviceOutputs(), 64);
+            auto previous = manager.getAudioDeviceSetup();
+            previous.inputChannels.clear();
+            previous.inputChannels.setBit (0);
+            previous.inputChannels.setBit (3);
+            previous.outputChannels.clear();
+            previous.outputChannels.setRange (2, 2, true);
+            expect (manager.setAudioDeviceSetup (previous, true).isEmpty());
+            previous = manager.getAudioDeviceSetup();
+            expect (engine.openDevice ({ "ASIO", "Broken", "Broken", 256, 48000.0 }).isNotEmpty());
+            expect (engine.isDeviceRunning() && manager.getCurrentAudioDevice()->isPlaying());
+            expect (manager.getAudioDeviceSetup() == previous);
+            expectEquals (engine.getOpenDevice().input, juce::String ("Good"));
+
+            expect (engine.openDevice ({ "Windows Audio", "Capture", "Broken", 256, 48000.0 }).isNotEmpty());
+            expectEquals (engine.getOpenDevice().type, juce::String ("ASIO"));
+            expect (manager.getAudioDeviceSetup() == previous);
+            expect (engine.isDeviceRunning() && ! engine.isSplitMonitor());
+
+            const MixDevice split { "Windows Audio", "Capture", "Headphones", 256, 48000.0 };
+            expect (engine.openDevice (split).isEmpty());
+            expect (engine.isDeviceRunning() && engine.isSplitMonitor());
+            expect (manager.getAudioDeviceSetup().outputDeviceName.isEmpty());
+            expectEquals (manager.getCurrentAudioDevice()->getActiveOutputChannels().countNumberOfSetBits(), 0);
+            expectEquals (engine.getNumDeviceOutputs(), 2);
+            auto monitor = windowsType->playingOutput();
+            expect (monitor != nullptr);
+            if (monitor != nullptr)
+            {
+                expect (monitor->input.isEmpty());
+                expectEquals (monitor->outputs.toInteger(), 3);
+            }
+            expectWithinAbsoluteError (engine.getLatencyMs(), 1.0 + 2.0 + 3.0 * 256.0 / 48.0 + 3.0, 0.001);
+            if (monitor != nullptr && monitor->callback != nullptr)
+            {
+                MixSession session;
+                session.addChannel();
+                session.channels[0].output = { true, true, 4 };
+                session.master.outputFirst = 4;
+                engine.applySession (session, nullptr, true);
+                Io io;
+                io.in.clear();
+                io.setInput (0, 0.25f);
+                // The graph has zero physical outputs. Its master AND direct pair reach the second device.
+                for (int b = 0; b < 100; ++b)
+                {
+                    engine.renderBlock (io.in.getArrayOfReadPointers(), numIns, nullptr, 0, blockSize);
+                    monitor->callback->audioDeviceIOCallbackWithContext (nullptr, 0, io.out.getArrayOfWritePointers(), 2, blockSize, {});
+                }
+                expectWithinAbsoluteError (io.last (0), 0.5f, 1.0e-5f);
+                expectWithinAbsoluteError (io.last (1), 0.5f, 1.0e-5f);
+            }
+            previous = manager.getAudioDeviceSetup();
+            expect (engine.openDevice ({ "Windows Audio", "Capture 2", "Broken", 512, 44100.0 }).isNotEmpty());
+            expect (engine.isDeviceRunning() && engine.isSplitMonitor());
+            expect (manager.getAudioDeviceSetup() == previous);
+            expectEquals (engine.getOpenDevice().output, juce::String ("Headphones"));
+            monitor = windowsType->playingOutput();
+            expect (monitor != nullptr);
+            if (monitor != nullptr)
+            {
+                expectEquals (monitor->buffer, 256);
+                expectWithinAbsoluteError (monitor->rate, 48000.0, 0.01);
+            }
+            const auto openedBefore = windowsType->records.size();
+            expect (engine.setBufferSize (512).isEmpty());
+            expectEquals (engine.getOpenDevice().bufferSize, 256);
+            expect (openedBefore == windowsType->records.size());
+            expect (engine.restartDevice().isEmpty());
+            expect (engine.isSplitMonitor() && engine.isDeviceRunning());
+            expect (windowsType->playingOutput() != nullptr);
+
+            expect (engine.openDevice ({ "Windows Audio", "Capture", "", 256, 48000.0 }).isEmpty());
+            expect (! engine.isSplitMonitor() && engine.isDeviceRunning());
+            expectEquals (engine.getNumDeviceOutputs(), 0);
+            expect (windowsType->playingOutput() == nullptr);
+            expect (engine.getOpenDevice().output.isEmpty());
+            expect (engine.openDevice ({ "Windows Audio", "", "Headphones", 256, 48000.0 }).isNotEmpty());
+            expect (engine.isDeviceRunning() && engine.getOpenDevice().output.isEmpty());
+            for (const auto& record : windowsType->records)
+                expect (record->input.isEmpty() || record->output.isEmpty(), "a split type switch must never open a default duplex device");
+        }
+
+        beginTest ("low-latency and exclusive split monitors keep working through buffer changes, failures and restart");
+        for (const auto* typeName : { "Windows Audio (Low Latency Mode)", "Windows Audio (Exclusive Mode)" })
+        {
+            MixEngine engine;
+            removeRealMixDeviceTypes (engine);
+            engine.getDeviceManager().addAudioDeviceType (std::make_unique<MixFakeType> (typeName));
+            expect (engine.openDevice ({ typeName, "Capture", "Headphones", 256, 48000.0 }).isEmpty());
+            expect (engine.setBufferSize (512).isEmpty());
+            expectEquals (engine.getOpenDevice().bufferSize, 512);
+            expect (engine.isSplitMonitor() && engine.isDeviceRunning());
+            expect (engine.setBufferSize (1024).isNotEmpty());
+            expectEquals (engine.getOpenDevice().bufferSize, 512);
+            expect (engine.isSplitMonitor() && engine.isDeviceRunning());
+            expect (engine.restartDevice().isEmpty());
+            expectEquals (engine.getOpenDevice().type, juce::String (typeName));
+            expectEquals (engine.getOpenDevice().bufferSize, 512);
+        }
+
+        beginTest ("Windows routing sanitises master, channel direct and FX direct to outputs 1-2");
+        for (const bool windows : { false, true })
+        {
+            MixEngine engine;
+            MixSession s;
+            if (windows) s.device.type = "Windows Audio";
+            s.addChannel();
+            s.addFx();
+            s.master.outputFirst = 4;
+            s.channels[0].output = { true, true, 4 };
+            s.channels[0].sends[0].amount = 0.5;
+            s.fx[0].output = { false, true, 4 };
+            engine.applySession (s, nullptr, true);
+            Io io;
+            io.in.clear();
+            io.setInput (0, 0.25f);
+            render (engine, io, 3);
+            expectWithinAbsoluteError (io.last (windows ? 0 : 4), 0.625f, 1.0e-6f);
+            expectWithinAbsoluteError (io.last (windows ? 4 : 0), 0.0f, 1.0e-6f);
+            engine.setMasterOutput (4);
+            engine.setChannelOutput (s.channels[0].id, { true, true, 4 });
+            engine.setFxOutput (s.fx[0].id, { false, true, 4 });
+            render (engine, io, 3);
+            expectWithinAbsoluteError (io.last (windows ? 0 : 4), 0.625f, 1.0e-6f);
+            expectWithinAbsoluteError (io.last (windows ? 4 : 0), 0.0f, 1.0e-6f);
+        }
+
+        beginTest ("startup fallback, type ordering and buffer rollback use only the fake device manager");
+        {
+            MixEngine engine;
+            removeRealMixDeviceTypes (engine);
+            auto& manager = engine.getDeviceManager();
+            for (const auto* typeName : { "DirectSound", "Windows Audio (Exclusive Mode)", "Windows Audio (Low Latency Mode)", "Windows Audio", "ASIO" })
+                manager.addAudioDeviceType (std::make_unique<MixFakeType> (typeName));
+            expectEquals (AudioBackends::availableTypes (manager).joinIntoString ("|"),
+                          juce::String ("ASIO|Windows Audio|Windows Audio (Low Latency Mode)|Windows Audio (Exclusive Mode)"));
+            expectEquals (AudioBackends::label ("Windows Audio"), juce::String::fromUTF8 ("윈도우 오디오"));
+            expect (! AudioBackends::sameContainer ("missing capture", "missing render"));
+            const MixDevice missing { "ASIO", "Broken", "Broken", 256, 48000.0 };
+            expect (engine.initialise (&missing).isEmpty());
+            expectEquals (engine.getOpenDevice().input, juce::String ("Good"));
+            expect (engine.setBufferSize (512).isEmpty());
+            expectEquals (engine.getOpenDevice().bufferSize, 512);
+            expect (engine.setBufferSize (1024).isNotEmpty());
+            expectEquals (engine.getOpenDevice().bufferSize, 512);
+            expect (engine.isDeviceRunning());
+            engine.shutdown();
+            for (auto* type : manager.getAvailableDeviceTypes())
+                if (type->getTypeName() == "ASIO") { manager.removeAudioDeviceType (type); break; }
+            expect (engine.initialise (nullptr).isEmpty());
+            expectEquals (engine.getOpenDevice().type, juce::String ("Windows Audio"));
+            expectEquals (engine.getOpenDevice().input, juce::String ("Capture"));
+            expectEquals (engine.getOpenDevice().output, juce::String ("Headphones"));
+        }
+
+        beginTest ("lastDevice JSON round trip and one-time ASIO XML migration use an isolated settings folder");
+        {
+            const auto directory = juce::File::createTempFile ("-mix-device-settings");
+            directory.deleteFile();
+            directory.createDirectory();
+            juce::PropertiesFile::Options options;
+            options.applicationName = "LiveMix";
+            options.filenameSuffix = "settings";
+            options.folderName = directory.getFullPathName();
+            options.storageFormat = juce::PropertiesFile::storeAsXML;
+            {
+                juce::PropertiesFile file (options);
+                juce::XmlElement legacy ("DEVICESETUP");
+                legacy.setAttribute ("audioInputDeviceName", "Old ASIO");
+                legacy.setAttribute ("audioOutputDeviceName", "Old ASIO");
+                legacy.setAttribute ("audioDeviceRate", 44100.0);
+                legacy.setAttribute ("audioDeviceBufferSize", 512);
+                file.setValue ("audioDeviceState", &legacy);
+                file.saveIfNeeded();
+            }
+            {
+                LiveMixSettings settings (directory);
+                const auto saved = settings.getLastDevice();
+                expect (saved.has_value());
+                if (saved)
+                {
+                    expectEquals (saved->type, juce::String ("ASIO"));
+                    expectEquals (saved->input, juce::String ("Old ASIO"));
+                    expectEquals (saved->output, saved->input);
+                    expectEquals (saved->bufferSize, 512);
+                    expectWithinAbsoluteError (saved->sampleRate, 44100.0, 0.01);
+                }
+                settings.setLastDevice ({ "Windows Audio", juce::String::fromUTF8 ("마이크"), "", 480, 48000.0 });
+                settings.saveIfNeeded();
+            }
+            {
+                LiveMixSettings settings (directory);
+                const auto saved = settings.getLastDevice();
+                expect (saved.has_value());
+                if (saved)
+                {
+                    expectEquals (saved->type, juce::String ("Windows Audio"));
+                    expectEquals (saved->input, juce::String::fromUTF8 ("마이크"));
+                    expect (saved->output.isEmpty());
+                    expectEquals (saved->bufferSize, 480);
+                }
+            }
+            directory.deleteRecursively();
+        }
     }
 
     void runPanTests()

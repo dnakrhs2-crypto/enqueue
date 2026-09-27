@@ -168,8 +168,8 @@ public:
                    || juce::ModifierKeys::getCurrentModifiersRealtime().isShiftDown();
         PluginHost::setSafeMode (safeMode);
 
-        const std::unique_ptr<juce::XmlElement> savedDevice = safeMode ? nullptr : settings->getAudioDeviceState();
-        const auto deviceError = safeMode ? juce::String() : engine->initialise (savedDevice.get());
+        const auto savedDevice = settings->getLastDevice();
+        const auto deviceError = safeMode ? juce::String() : engine->initialise (savedDevice ? &*savedDevice : nullptr);
         engine->getDeviceManager().addChangeListener (this);
 
         document = std::make_unique<MixDocument> (*engine);
@@ -299,7 +299,7 @@ public:
         if (engine != nullptr)
         {
             engine->getDeviceManager().removeChangeListener (this);
-            settings->setAudioDeviceState (engine->getDeviceManager().createStateXml().get());
+            if (engine->isDeviceRunning()) settings->setLastDevice (engine->getOpenDevice());
             engine->shutdown();
         }
 

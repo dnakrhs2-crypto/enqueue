@@ -60,6 +60,7 @@ target_sources(EnqueueTests PRIVATE
     SafeSaveTests.cpp
     MixSessionTests.cpp
     LiveMixAsrcTests.cpp
+    LiveMixMonitorTests.cpp
     MixEngineTests.cpp
     WebDavBackupTests.cpp
     MixDocumentTests.cpp

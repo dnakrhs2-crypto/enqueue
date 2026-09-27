@@ -228,7 +228,14 @@ namespace
                 return;
 
             // through the engine: the ASIO type, every channel and the callback (safe mode never opened anything)
-            if (const auto error = engine.openDevice (deviceCombo.getText()); error.isNotEmpty())
+            MixDevice wanted { "ASIO", deviceCombo.getText(), deviceCombo.getText(), 0, 0.0 };
+            const auto current = engine.getOpenDevice();
+            if (current.isAsio() && current.input.isNotEmpty())
+            {
+                wanted.bufferSize = current.bufferSize;
+                wanted.sampleRate = current.sampleRate;
+            }
+            if (const auto error = engine.openDevice (wanted); error.isNotEmpty())
                 juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon, ko ("장치를 열지 못했습니다"), error, ko ("확인"));
 
             refreshDevices();

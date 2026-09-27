@@ -637,10 +637,19 @@ void MainComponent::updateDeviceNames()
 
 void MainComponent::chooseDevice (const juce::String& name)
 {
-    if (auto* device = engine.getDeviceManager().getCurrentAudioDevice(); device != nullptr && device->getName() == name && engine.isDeviceRunning())
+    if (auto* device = engine.getDeviceManager().getCurrentAudioDevice(); device != nullptr
+        && device->getTypeName().containsIgnoreCase ("ASIO") && device->getName() == name && engine.isDeviceRunning())
         return;
 
-    const auto error = engine.openDevice (name);   // the ASIO type, every channel and the callback, whatever ran before (safe mode included)
+    // This picker still lists ASIO devices; the Windows device UI is added in the next round.
+    MixDevice wanted { "ASIO", name, name, 0, 0.0 };
+    const auto current = engine.getOpenDevice();
+    if (current.isAsio() && current.input.isNotEmpty())
+    {
+        wanted.bufferSize = current.bufferSize;
+        wanted.sampleRate = current.sampleRate;
+    }
+    const auto error = engine.openDevice (wanted);
 
     if (error.isNotEmpty())
     {
@@ -656,7 +665,7 @@ void MainComponent::deviceChanged()
 {
     // any change of the device manager (a pick, a fallback, a hot-plug): names, pickers, the saved state - not the
     // session, which keeps asking for the device it was saved with until the operator picks another one
-    settings.setAudioDeviceState (engine.getDeviceManager().createStateXml().get());
+    if (engine.isDeviceRunning()) settings.setLastDevice (engine.getOpenDevice());
     updateDeviceNames();
     rebuildCards();
 }
@@ -668,10 +677,8 @@ void MainComponent::deviceChosen()
     if (startupNote.isNotEmpty() && ! startupNoteIsSafeMode && engine.isDeviceRunning())
         setStartupNote ({}, false, false);   // the startup "ASIO 장치를 열지 못했습니다" is over: a device runs
 
-    if (auto* device = engine.getDeviceManager().getCurrentAudioDevice())
-        if (device->getTypeName().containsIgnoreCase ("ASIO"))
-            document.setDeviceInfo ({ device->getTypeName(), device->getName(), device->getName(),
-                                      device->getCurrentBufferSizeSamples(), device->getCurrentSampleRate() });
+    if (engine.isDeviceRunning())
+        document.setDeviceInfo (engine.getOpenDevice());
 }
 
 //==============================================================================
