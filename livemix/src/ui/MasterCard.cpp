@@ -57,6 +57,16 @@ MasterCard::MasterCard (MixDocument& doc) : document (doc)
     };
     addAndMakeVisible (outputCombo);
 
+    obsToggle.setButtonText (ko ("OBS로 보내기"));
+    obsToggle.setWantsKeyboardFocus (false);
+    obsToggle.onClick = [this] { document.setSendToObs (obsToggle.getToggleState()); };
+    addAndMakeVisible (obsToggle);
+    styleCaption (obsStatusLabel, "");
+    obsStatusLabel.setFont (bodyFont (12.5f));
+    obsStatusLabel.setMinimumHorizontalScale (1.0f);
+    addAndMakeVisible (obsStatusLabel);
+    refreshObsStatus();
+
     styleCaption (meterCaption, ko ("출력 미터 L / R"));
     addAndMakeVisible (meterCaption);
     addAndMakeVisible (meter_);
@@ -84,14 +94,55 @@ void MasterCard::setStrip (bool folded)
         return;
 
     strip = folded;
+    obsToggle.setButtonText (strip ? juce::String ("OBS") : ko ("OBS로 보내기"));
+    refreshObsStatus();
     resized();
+}
+
+int MasterCard::obsToggleWidth() const
+{
+    // Match LiveMixLookAndFeel::drawToggleButton: 18 px text at this row height, tick + left/right margins.
+    const float size = juce::jmin (pt (15.0f), (float) obsRowHeight * 0.75f);
+    return juce::GlyphArrangement::getStringWidthInt (juce::Font (juce::FontOptions (size)), obsToggle.getButtonText())
+           + juce::roundToInt (size * 1.1f) + 12;
+}
+
+void MasterCard::setObsStatus (ObsStatus status)
+{
+    if (obsStatus == status) return;
+    obsStatus = status;
+    refreshObsStatus();
+    resized();
+}
+
+void MasterCard::refreshObsStatus()
+{
+    const auto text = obsStatus == ObsStatus::audioStopped ? ko ("오디오 멈춤")
+                    : obsStatus == ObsStatus::connected ? ko ("OBS 연결됨") : ko ("OBS 대기 중");
+    obsStatusLabel.setText (strip ? juce::String::fromUTF8 ("●") : text, juce::dontSendNotification);
+    obsStatusLabel.setTooltip (text);
+    obsStatusLabel.setJustificationType (strip ? juce::Justification::centred : juce::Justification::centredLeft);
+    obsStatusLabel.setColour (juce::Label::textColourId, obsStatus == ObsStatus::audioStopped ? Palette::danger
+                              : obsStatus == ObsStatus::connected ? Palette::lampOn : Palette::dimText);
 }
 
 void MasterCard::refresh()
 {
     const juce::ScopedValueSetter<bool> guard (refreshing, true);
-    fillChannelCombo (outputCombo, outputNames, true, MixSession::maxDeviceChannels);
-    outputCombo.setSelectedId (document.getSession().master.outputFirst + 1, juce::dontSendNotification);
+    const auto running = document.getEngine().getOpenDevice();
+    const auto device = running.input.isNotEmpty() ? running : document.getSession().device;
+    if (device.isAsio())
+    {
+        fillChannelCombo (outputCombo, outputNames, true, MixSession::maxDeviceChannels);
+        outputCombo.setSelectedId (document.getSession().master.outputFirst + 1, juce::dontSendNotification);
+    }
+    else
+    {
+        outputCombo.clear (juce::dontSendNotification);
+        outputCombo.addItem (device.output.isEmpty() ? ko ("없음 (OBS로만)") : juce::String ("1-2"), 1);
+        outputCombo.setSelectedId (1, juce::dontSendNotification);
+    }
+    obsToggle.setToggleState (document.getSession().master.sendToObs, juce::dontSendNotification);
     rebuildChain();
     resized();
 }
@@ -125,14 +176,14 @@ int MasterCard::getUnfoldedHeight (int width) const
     {
         // the compact stack: the head row (with the output pair), the chain row and its chips (none: no row), the meter's caption row, the meter
         const int rows = chips.empty() ? 0 : ChipFlow::layout (chips, juce::Rectangle<int> (0, 0, juce::jmax (1, width - 28), 1), 30, false);
-        return 24 + 34 + 8 + 30 + (rows > 0 ? 6 + rows * ChipFlow::rowStep : 0) + 10 + 18 + 46;
+        return 24 + 34 + 8 + 30 + (rows > 0 ? 6 + rows * ChipFlow::rowStep : 0) + 10 + 18 + 46 + obsRowGap + obsRowHeight;
     }
 
     // the chain column's width in resized() at this card width, then the rows the chips take in it
     const int afterHeadAndOut = width - 28 - 230 - 18 - 250 - 18;
     const int chainW = afterHeadAndOut - juce::jlimit (160, 300, afterHeadAndOut / 3) - 18;
     const int rows = ChipFlow::layout (chips, juce::Rectangle<int> (0, 0, juce::jmax (1, chainW), 1), 30, false);
-    return juce::jmax (176, 24 + 22 + rows * ChipFlow::rowStep + 6 + 30);   // margins, caption, chips, gap, buttons
+    return juce::jmax (176, 24 + 22 + rows * ChipFlow::rowStep + 6 + 30) + obsRowGap + obsRowHeight;
 }
 
 void MasterCard::resized()
@@ -152,34 +203,56 @@ void MasterCard::resized()
     meterCaption.setVisible (! strip);
     outputCaption.setVisible (! strip);
     outputCombo.setVisible (true);   // the strip may hide it below
+    title.setVisible (true);
+    lufsButton.setVisible (true);
 
     for (auto& chip : chips)
         chip->setVisible (! strip);
 
     if (strip)
     {
-        // one row: badge, title, the meter across the middle, the chain button, the output pair
+        // Reserve the measured OBS controls and a usable meter before optional title, LUFS and output controls.
         auto row = area.withSizeKeepingCentre (area.getWidth(), 34);
         badge.setBounds (row.removeFromLeft (32).reduced (0, 2));
         row.removeFromLeft (8);
-        title.setBounds (row.removeFromLeft (64));
-        row.removeFromLeft (8);
-        const bool withOutput = row.getWidth() >= 404;   // the output pair only where the meter keeps its room
-        outputCombo.setVisible (withOutput);
-
-        if (withOutput)
-        {
-            outputCombo.setBounds (row.removeFromRight (juce::jmin (110, juce::jmax (90, row.getWidth() / 4))).reduced (0, 2));
-            row.removeFromRight (8);
-        }
-
+        obsStatusLabel.setBounds (row.removeFromRight (20));
+        row.removeFromRight (4);
+        obsToggle.setBounds (row.removeFromRight (obsToggleWidth()).withSizeKeepingCentre (obsToggleWidth(), obsRowHeight));
+        row.removeFromRight (8);
         openChainButton.setBounds (row.removeFromRight (88));
         row.removeFromRight (8);
-        lufsButton.setBounds (row.removeFromRight (56));
-        row.removeFromRight (10);
+        constexpr int meterMinimum = 64;
+        const bool withLufs = row.getWidth() >= meterMinimum + 56 + 8;
+        lufsButton.setVisible (withLufs);
+        if (withLufs)
+        {
+            lufsButton.setBounds (row.removeFromRight (56));
+            row.removeFromRight (8);
+        }
+        const bool withTitle = row.getWidth() >= meterMinimum + 64 + 8;
+        title.setVisible (withTitle);
+        if (withTitle)
+        {
+            title.setBounds (row.removeFromLeft (64));
+            row.removeFromLeft (8);
+        }
+        const int outputWidth = juce::jmax (110, juce::GlyphArrangement::getStringWidthInt (bodyFont(), outputCombo.getText()) + 38);
+        const bool withOutput = row.getWidth() >= meterMinimum + outputWidth + 8;
+        outputCombo.setVisible (withOutput);
+        if (withOutput)
+        {
+            outputCombo.setBounds (row.removeFromRight (outputWidth).reduced (0, 2));
+            row.removeFromRight (8);
+        }
         meter_.setBounds (row.reduced (0, 3));
         return;
     }
+
+    auto obsRow = area.removeFromBottom (obsRowHeight);
+    area.removeFromBottom (obsRowGap);
+    obsToggle.setBounds (obsRow.removeFromLeft (obsToggleWidth()));
+    obsRow.removeFromLeft (8);
+    obsStatusLabel.setBounds (obsRow.removeFromLeft (labelWidthForText (obsStatusLabel, obsStatusLabel.getText())));
 
     if (stacked)
     {

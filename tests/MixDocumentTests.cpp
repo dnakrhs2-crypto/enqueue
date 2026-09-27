@@ -18,7 +18,7 @@ public:
     {
         beginTest ("Send to OBS is a value edit, notifies once, and persists through save and load");
         {
-            MixEngine engine;
+            MixEngine engine ("Local\\LiveMix.DocumentObsTest." + juce::Uuid().toString());
             engine.prepare (48000.0, 256);
             MixDocument document (engine);
             int values = 0, structures = 0;
@@ -37,6 +37,7 @@ public:
             expect (document.isDirty());
             expect (dirtyAtNotification);
             expect (document.getSession().master.sendToObs);
+            expect (engine.getObsSender().isEnabled());
             expectEquals (values, 1);
             expectEquals (structures, 0);
             document.setSendToObs (true);
@@ -54,16 +55,30 @@ public:
             expect (document.isDirty());
             expect (document.load (file).wasOk());
             expect (document.getSession().master.sendToObs);
+            expect (engine.getObsSender().isEnabled());
             expect (! document.isDirty());
             document.newSession();
             expect (! document.getSession().master.sendToObs);
+            expect (! engine.getObsSender().isEnabled());
             expect (! document.isDirty());
+            {
+                const bool wasSafe = PluginHost::isSafeMode();
+                PluginHost::setSafeMode (true);
+                expect (document.load (file).wasOk());
+                expect (! document.getSession().master.sendToObs);
+                expect (! engine.getObsSender().isEnabled());
+                document.getSession().master.sendToObs = true;
+                document.applyToEngine();
+                expect (! document.getSession().master.sendToObs);
+                expect (! engine.getObsSender().isEnabled());
+                PluginHost::setSafeMode (wasSafe);
+            }
             expect (file.deleteFile());
         }
 
         beginTest ("device info compares every v4 field and batches value announcements");
         {
-            MixEngine engine;
+            MixEngine engine ("Local\\LiveMix.DocumentObsTest." + juce::Uuid().toString());
             engine.prepare (48000.0, 256);
             MixDocument document (engine);
             int values = 0, structures = 0;

@@ -56,7 +56,7 @@ public:
     /** Safe mode (Shift / --safe-mode): a session's device is not opened and plugins are not loaded. */
     void setSafeMode (bool on) noexcept { safeMode = on; }
 
-    /** The ASIO device list changed (settings / hot-plug): refresh names and pickers. */
+    /** The audio device list changed (settings / hot-plug): refresh names and pickers. */
     void deviceChanged();
     /** The two mute groups (the tray menu toggles them too). */
     MuteGroups& getMuteGroups() noexcept { return muteGroups; }
@@ -68,7 +68,7 @@ public:
     /** The notice bar under the top bar, with a close button - never a modal dialog: a modal alert freezes the whole
         window (no resizing, no mic buttons) until it is dismissed, which is wrong for a live tool. Three lines that
         come and go on their own: the session note (the last open: its failure, or its warnings), the startup note
-        (the ASIO error until a device runs, or the safe-mode note), the save-failure note (until a save succeeds).
+        (the audio device error until a device runs, or the safe-mode note), the save-failure note (until a save succeeds).
         The close button clears them all. An empty text clears that line. */
     void setSessionNote (const juce::String& text, bool error);
     void setStartupNote (const juce::String& text, bool error, bool safeModeNote);
@@ -183,6 +183,7 @@ private:
     juce::StringArray inputNames, outputNames;
     juce::String statusText;
     double statusUntilMs = 0.0;
+    double nextObsPollMs = 0.0;
     std::unique_ptr<juce::FileChooser> chooser;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (MainComponent)

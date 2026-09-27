@@ -220,9 +220,9 @@ public:
         // in the window, not a modal alert: a modal would freeze the frame (no resizing) and the mic buttons until
         // dismissed. Its own line under a session warning, never replacing it.
         if (safeMode)
-            main.setStartupNote (ko ("안전 모드로 시작했습니다 (Shift): 저장된 ASIO 장치와 플러그인을 불러오지 않았습니다. 플러그인 설정은 세션에 그대로 남습니다. 설정에서 장치를 고르세요."), false, true);
+            main.setStartupNote (ko ("안전 모드로 시작했습니다 (Shift): 저장된 오디오 장치와 플러그인을 불러오지 않았습니다. 플러그인 설정은 세션에 그대로 남습니다. 설정에서 장치를 고르세요."), false, true);
         else if (deviceError.isNotEmpty())
-            main.setStartupNote (ko ("ASIO 장치를 열지 못했습니다: ") + deviceError + " " + ko ("설정에서 장치를 고르거나 오디오 인터페이스 연결을 확인하세요."), true, false);
+            main.setStartupNote (ko ("오디오 장치를 열지 못했습니다: ") + deviceError + " " + ko ("설정에서 장치를 고르거나 오디오 인터페이스 연결을 확인하세요."), true, false);
 
         Updater::Callbacks callbacks;
         callbacks.canShutdown = [this]

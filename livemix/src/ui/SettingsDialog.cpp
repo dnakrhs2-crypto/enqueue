@@ -1,9 +1,11 @@
 #include "SettingsDialog.h"
 
+#include "AudioBackends.h"
 #include "GlobalHotkeys.h"
 #include "Widgets.h"
 
 #include <algorithm>
+#include <cmath>
 #include <functional>
 #include <vector>
 
@@ -23,11 +25,30 @@ namespace
               onHotkeyCapture (std::move (hotkeyCapture)), getControlStatus (std::move (controlStatus)),
               onControlEnabled (std::move (controlEnabled))
         {
+            styleCaption (typeCaption, ko ("장치 종류"));
+            addAndMakeVisible (typeCaption);
+            typeCombo.setComponentID ("device-type");
+            typeCombo.setWantsKeyboardFocus (false);
+            typeCombo.onChange = [this] { applyType(); };
+            addAndMakeVisible (typeCombo);
             styleCaption (deviceCaption, ko ("ASIO 장치"));
             addAndMakeVisible (deviceCaption);
+            deviceCombo.setComponentID ("device-input");
             deviceCombo.setWantsKeyboardFocus (false);
-            deviceCombo.onChange = [this] { applyDevice(); };
+            deviceCombo.onChange = [this] { applySelection(); };
             addAndMakeVisible (deviceCombo);
+            styleCaption (outputCaption, ko ("출력 (모니터)"));
+            addAndMakeVisible (outputCaption);
+            outputCombo.setComponentID ("device-output");
+            outputCombo.setWantsKeyboardFocus (false);
+            outputCombo.onChange = [this] { applySelection(); };
+            addAndMakeVisible (outputCombo);
+            styleCaption (rateCaption, ko ("샘플레이트"));
+            addAndMakeVisible (rateCaption);
+            rateCombo.setComponentID ("device-rate");
+            rateCombo.setWantsKeyboardFocus (false);
+            rateCombo.onChange = [this] { applySelection(); };
+            addAndMakeVisible (rateCombo);
             panelButton.setButtonText (ko ("ASIO 제어판 (버퍼 크기)..."));
             panelButton.onClick = [this]
             {
@@ -50,11 +71,15 @@ namespace
                     onDeviceChanged();
             };
             addAndMakeVisible (panelButton);
-            styleCaption (bufferCaption, ko ("버퍼 크기"));
+            styleCaption (bufferCaption, ko ("버퍼"));
             addAndMakeVisible (bufferCaption);
+            bufferCombo.setComponentID ("device-buffer");
             bufferCombo.setWantsKeyboardFocus (false);
-            bufferCombo.onChange = [this] { applyBuffer(); };
+            bufferCombo.onChange = [this] { applySelection(); };
             addAndMakeVisible (bufferCombo);
+            styleCaption (sharedBufferNote, ko ("버퍼: 윈도우가 정함 (보통 10 ms)"));
+            sharedBufferNote.setFont (bodyFont (12.5f));
+            addAndMakeVisible (sharedBufferNote);
             styleCaption (deviceNote, ko ("ASIO 장치만 씁니다. 버퍼가 작을수록 지연이 짧고 끊길 위험이 큽니다 (128~256 권장)."));
             deviceNote.setFont (bodyFont (12.5f));
             addAndMakeVisible (deviceNote);
@@ -180,82 +205,136 @@ namespace
 
             refreshDevices();
             refreshControlStatus();
-            setSize (560, 848 + MixSession::maxPluginGroups * 36);
+            updateContentSize();
             startTimer (500);
         }
 
         void refreshDevices()
         {
             const juce::ScopedValueSetter<bool> guard (refreshing, true);
+            const auto current = engine.getOpenDevice();
+            types = AudioBackends::availableTypes (engine.getDeviceManager());
+            typeCombo.clear (juce::dontSendNotification);
+            for (int i = 0; i < types.size(); ++i)
+                typeCombo.addItem (AudioBackends::label (types[i]), i + 1);
+            // With no open device (including safe mode), offer the first available type without opening it.
+            const int typeIndex = types.contains (current.type) ? types.indexOf (current.type) : (types.isEmpty() ? -1 : 0);
+            typeCombo.setSelectedId (typeIndex + 1, juce::dontSendNotification);
+            shownType = types[typeIndex];
+            const bool asio = shownType.containsIgnoreCase ("ASIO");
+            const bool shared = shownType == "Windows Audio";
+            deviceCaption.setText (asio ? ko ("ASIO 장치") : ko ("입력 (마이크)"), juce::dontSendNotification);
             deviceCombo.clear (juce::dontSendNotification);
             names.clear();
-
-            for (auto* type : engine.getDeviceManager().getAvailableDeviceTypes())
+            outputNames.clear();
+            if (auto* type = findType (shownType))
             {
-                if (! type->getTypeName().containsIgnoreCase ("ASIO"))
-                    continue;
-
                 type->scanForDevices();
-                names = type->getDeviceNames (false);
+                names = type->getDeviceNames (! asio);
+                outputNames = type->getDeviceNames (false);
             }
-
             for (int i = 0; i < names.size(); ++i)
                 deviceCombo.addItem (names[i], i + 1);
-
+            deviceCombo.setSelectedId (names.indexOf (current.input) + 1, juce::dontSendNotification);
+            deviceCombo.setTextWhenNothingSelected (asio ? ko ("ASIO 장치 없음") : ko ("입력 장치 없음"));
+            outputCombo.clear (juce::dontSendNotification);
+            outputCombo.addItem (ko ("없음 (OBS로만 보내기)"), 1);
+            for (int i = 0; i < outputNames.size(); ++i) outputCombo.addItem (outputNames[i], i + 2);
+            outputCombo.setSelectedId (current.output.isEmpty() ? 1 : outputNames.indexOf (current.output) + 2, juce::dontSendNotification);
+            outputCaption.setVisible (! asio);
+            outputCombo.setVisible (! asio);
+            rateCaption.setVisible (! asio);
+            rateCombo.setVisible (! asio);
+            bufferCaption.setVisible (! shared);
+            bufferCombo.setVisible (! shared);
+            sharedBufferNote.setVisible (shared);
             bufferCombo.clear (juce::dontSendNotification);
-
+            juce::Array<double> rates { 44100.0, 48000.0 };
+            panelButton.setVisible (false);
             if (auto* device = engine.getDeviceManager().getCurrentAudioDevice())
             {
-                deviceCombo.setSelectedId (names.indexOf (device->getName()) + 1, juce::dontSendNotification);
                 const auto sizes = device->getAvailableBufferSizes();
-
                 for (int i = 0; i < sizes.size(); ++i)
                     bufferCombo.addItem (juce::String (sizes[i]) + ko (" 샘플") + "  (" + juce::String (1000.0 * sizes[i] / juce::jmax (1.0, device->getCurrentSampleRate()), 1) + " ms)", sizes[i]);
-
-                bufferCombo.setSelectedId (device->getCurrentBufferSizeSamples(), juce::dontSendNotification);
-                panelButton.setEnabled (device->hasControlPanel());
+                bufferCombo.setSelectedId (current.bufferSize, juce::dontSendNotification);
+                for (auto rate : device->getAvailableSampleRates()) if (rate > 0.0) rates.addIfNotAlreadyThere (rate);
+                if (current.sampleRate > 0.0) rates.addIfNotAlreadyThere (current.sampleRate);
+                panelButton.setVisible (asio && device->hasControlPanel());
             }
-            else
-            {
-                deviceCombo.setTextWhenNothingSelected (ko ("ASIO 장치 없음"));
-                panelButton.setEnabled (false);
-            }
+            rates.sort();
+            rateCombo.clear (juce::dontSendNotification);
+            for (auto rate : rates) rateCombo.addItem (juce::String (juce::roundToInt (rate)) + " Hz", juce::roundToInt (rate));
+            rateCombo.setSelectedId (juce::roundToInt (current.sampleRate > 0.0 ? current.sampleRate : 48000.0), juce::dontSendNotification);
+            juce::String note = ko ("USB 마이크·헤드셋 같은 일반 장치를 씁니다. 마이크와 모니터가 서로 다른 장치면 샘플레이트 차이를 자동으로 맞춥니다 (모니터 지연이 조금 늘어납니다).");
+            if (shownType == "Windows Audio (Low Latency Mode)") note += ko (" 지원하지 않는 장치면 일반 모드로 여세요.");
+            if (shownType == "Windows Audio (Exclusive Mode)") note += ko (" 독점 모드에서는 OBS 등 다른 프로그램이 같은 마이크를 쓸 수 없습니다.");
+            deviceNote.setText (asio ? ko ("ASIO 장치만 씁니다. 버퍼가 작을수록 지연이 짧고 끊길 위험이 큽니다 (128~256 권장).") : note, juce::dontSendNotification);
+            updateContentSize();
+            resized();
         }
 
-        void applyDevice()
+        juce::AudioIODeviceType* findType (const juce::String& typeName)
         {
-            if (refreshing || deviceCombo.getSelectedId() <= 0)
-                return;
+            for (auto* type : engine.getDeviceManager().getAvailableDeviceTypes())
+                if (type->getTypeName() == typeName) return type;
+            return nullptr;
+        }
 
-            // through the engine: the ASIO type, every channel and the callback (safe mode never opened anything)
-            MixDevice wanted { "ASIO", deviceCombo.getText(), deviceCombo.getText(), 0, 0.0 };
+        void applyType()
+        {
+            if (refreshing || typeCombo.getSelectedId() <= 0) return;
             const auto current = engine.getOpenDevice();
-            if (current.isAsio() && current.input.isNotEmpty())
+            MixDevice wanted;
+            wanted.type = types[typeCombo.getSelectedId() - 1];
+            wanted.bufferSize = 0;
+            wanted.sampleRate = wanted.isAsio() ? 0.0 : 48000.0;
+            if (auto* type = findType (wanted.type))
             {
-                wanted.bufferSize = current.bufferSize;
-                wanted.sampleRate = current.sampleRate;
+                type->scanForDevices();
+                const auto ins = type->getDeviceNames (! wanted.isAsio()), outs = type->getDeviceNames (false);
+                wanted.input = ins.contains (current.input) ? current.input : ins[juce::jmax (0, type->getDefaultDeviceIndex (true))];
+                wanted.output = wanted.isAsio() ? wanted.input
+                    : (! current.isAsio() && current.output.isEmpty()) ? juce::String()
+                    : outs.contains (current.output) ? current.output : outs[juce::jmax (0, type->getDefaultDeviceIndex (false))];
             }
+            applyDevice (wanted);
+        }
+
+        void applySelection()
+        {
+            if (refreshing) return;
+            auto wanted = engine.getOpenDevice();
+            const bool hadDevice = wanted.input.isNotEmpty();
+            wanted.type = shownType;
+            wanted.input = deviceCombo.getSelectedId() > 0 ? deviceCombo.getText() : juce::String();
+            wanted.output = wanted.isAsio() ? wanted.input : outputNames[outputCombo.getSelectedId() - 2];
+            wanted.sampleRate = wanted.isAsio() ? (hadDevice ? wanted.sampleRate : 0.0) : (double) rateCombo.getSelectedId();
+            wanted.bufferSize = shownType == "Windows Audio" ? 0 : bufferCombo.getSelectedId();
+            applyDevice (wanted);
+        }
+
+        void applyDevice (const MixDevice& wanted)
+        {
             if (const auto error = engine.openDevice (wanted); error.isNotEmpty())
-                juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon, ko ("장치를 열지 못했습니다"), error, ko ("확인"));
-
+                juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon, ko ("오디오 장치를 열지 못했습니다"), error, ko ("확인"));
             refreshDevices();
-
             if (onDeviceChanged)
                 onDeviceChanged();
         }
 
-        void applyBuffer()
+        int deviceNoteHeight() const
         {
-            if (refreshing || bufferCombo.getSelectedId() <= 0)
-                return;
+            juce::AttributedString text;
+            text.append (deviceNote.getText(), deviceNote.getFont());
+            juce::TextLayout layout;
+            layout.createLayout (text, 510.0f);
+            return juce::jmax (36, juce::roundToInt (std::ceil (layout.getHeight())) + 8);
+        }
 
-            if (const auto error = engine.setBufferSize (bufferCombo.getSelectedId()); error.isNotEmpty())
-                juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon, ko ("버퍼 크기를 바꾸지 못했습니다"), error, ko ("확인"));
-
-            refreshDevices();
-
-            if (onDeviceChanged)
-                onDeviceChanged();
+        void updateContentSize()
+        {
+            const int deviceHeight = (shownType.containsIgnoreCase ("ASIO") ? 3 : 4) * 58 + deviceNoteHeight() + 12;
+            setSize (560, 848 + MixSession::maxPluginGroups * 36 - 160 + deviceHeight);
         }
 
         ~SettingsContent() override
@@ -270,16 +349,41 @@ namespace
         void resized() override
         {
             auto area = getLocalBounds().reduced (20, 16);
+            typeCaption.setBounds (area.removeFromTop (20));
+            typeCombo.setBounds (area.removeFromTop (30));
+            area.removeFromTop (8);
             deviceCaption.setBounds (area.removeFromTop (20));
             auto row = area.removeFromTop (30);
-            panelButton.setBounds (row.removeFromRight (200));
-            row.removeFromRight (8);
+            if (panelButton.isVisible())
+            {
+                panelButton.setBounds (row.removeFromRight (250));
+                row.removeFromRight (8);
+            }
             deviceCombo.setBounds (row);
             area.removeFromTop (8);
-            bufferCaption.setBounds (area.removeFromTop (20));
-            bufferCombo.setBounds (area.removeFromTop (30).withWidth (260));
-            area.removeFromTop (4);
-            deviceNote.setBounds (area.removeFromTop (36));
+            if (outputCombo.isVisible())
+            {
+                outputCaption.setBounds (area.removeFromTop (20));
+                outputCombo.setBounds (area.removeFromTop (30));
+                area.removeFromTop (8);
+            }
+            auto format = area.removeFromTop (50);
+            if (rateCombo.isVisible())
+            {
+                auto rate = format.removeFromLeft (sharedBufferNote.isVisible() ? 210 : 250);
+                rateCaption.setBounds (rate.removeFromTop (20));
+                rateCombo.setBounds (rate);
+                format.removeFromLeft (12);
+            }
+            if (sharedBufferNote.isVisible())
+                sharedBufferNote.setBounds (format.withTrimmedTop (20));
+            else
+            {
+                bufferCaption.setBounds (format.removeFromTop (20));
+                bufferCombo.setBounds (format);
+            }
+            area.removeFromTop (8);
+            deviceNote.setBounds (area.removeFromTop (deviceNoteHeight()));
             area.removeFromTop (12);
             minimiseToTray.setBounds (area.removeFromTop (28));
             closeAsk.setBounds (area.removeFromTop (28));
@@ -344,10 +448,12 @@ namespace
         std::function<void (bool)> onHotkeyCapture;
         std::function<ControlServer::Status()> getControlStatus;
         std::function<void (bool)> onControlEnabled;
-        juce::StringArray names;
+        juce::StringArray types, names, outputNames;
+        juce::String shownType;
         struct Row { juce::Label* label; HotkeyButton* button; juce::TextButton* clear; };
         std::vector<Row> rows;   // the hotkey rows in the order they are drawn
         juce::Label deviceCaption, bufferCaption, deviceNote, backupCaption, backupNote, hotkeyCaption, hotkeyNote, micHotkeyLabel, fxHotkeyLabel, windowHotkeyLabel;
+        juce::Label typeCaption, outputCaption, rateCaption, sharedBufferNote;
         juce::Label groupHotkeyLabel[MixSession::maxPluginGroups];
         juce::Label controlCaption, controlNote, controlAddress, controlState;
         juce::HyperlinkButton controlHelp;
@@ -355,7 +461,7 @@ namespace
         HotkeyButton groupHotkey[MixSession::maxPluginGroups];
         juce::TextButton micHotkeyClear { "x" }, fxHotkeyClear { "x" }, windowHotkeyClear { "x" };
         juce::TextButton groupHotkeyClear[MixSession::maxPluginGroups];
-        juce::ComboBox deviceCombo, bufferCombo;
+        juce::ComboBox typeCombo, deviceCombo, outputCombo, rateCombo, bufferCombo;
         juce::TextButton panelButton;
         juce::ToggleButton minimiseToTray, closeAsk, closeToTray, startWithWindows, skipWhenOff, externalControl;
         bool refreshing = false;

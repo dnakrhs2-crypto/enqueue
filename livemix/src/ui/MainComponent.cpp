@@ -2,6 +2,7 @@
 
 #include "BackupDialog.h"
 #include "SettingsDialog.h"
+#include "AudioBackends.h"
 #include "app/Links.h"
 #include "app/Updater.h"
 
@@ -608,47 +609,47 @@ void MainComponent::updateDeviceNames()
 {
     inputNames.clear();
     outputNames.clear();
-    juce::StringArray asio;
-    juce::String current;
+    juce::StringArray names;
+    const auto current = engine.getOpenDevice();
+    auto typeName = current.type;
+    const auto types = AudioBackends::availableTypes (engine.getDeviceManager());
+    if (! types.contains (typeName) && ! types.isEmpty()) typeName = types[0];
 
     for (auto* type : engine.getDeviceManager().getAvailableDeviceTypes())
     {
-        if (! type->getTypeName().containsIgnoreCase ("ASIO"))
+        if (type->getTypeName() != typeName)
             continue;
 
         type->scanForDevices();
-        asio = type->getDeviceNames (false);
+        names = type->getDeviceNames (! typeName.containsIgnoreCase ("ASIO"));
     }
 
     if (auto* device = engine.getDeviceManager().getCurrentAudioDevice())
     {
-        if (device->getTypeName().containsIgnoreCase ("ASIO"))   // another type's device (never opened by us) stays out of the pickers
-        {
-            current = device->getName();
-            inputNames = device->getInputChannelNames();
-            outputNames = device->getOutputChannelNames();
-            inputNames.removeRange (maxDeviceChannelsShown, inputNames.size());     // the graph opens 64 at most: no picker beyond them
-            outputNames.removeRange (maxDeviceChannelsShown, outputNames.size());
-        }
+        inputNames = device->getInputChannelNames();
+        outputNames = current.isAsio() ? device->getOutputChannelNames()
+                                     : current.output.isEmpty() ? juce::StringArray() : juce::StringArray { "1", "2" };
+        inputNames.removeRange (maxDeviceChannelsShown, inputNames.size());
+        outputNames.removeRange (current.isAsio() ? maxDeviceChannelsShown : 2, outputNames.size());
     }
 
-    topBar.setDevices (asio, current);
+    topBar.setDevices (names, current.input, typeName);
 }
 
 void MainComponent::chooseDevice (const juce::String& name)
 {
-    if (auto* device = engine.getDeviceManager().getCurrentAudioDevice(); device != nullptr
-        && device->getTypeName().containsIgnoreCase ("ASIO") && device->getName() == name && engine.isDeviceRunning())
+    auto wanted = engine.getOpenDevice();
+    if (wanted.input == name && engine.isDeviceRunning())
         return;
-
-    // This picker still lists ASIO devices; the Windows device UI is added in the next round.
-    MixDevice wanted { "ASIO", name, name, 0, 0.0 };
-    const auto current = engine.getOpenDevice();
-    if (current.isAsio() && current.input.isNotEmpty())
+    if (wanted.input.isEmpty())
     {
-        wanted.bufferSize = current.bufferSize;
-        wanted.sampleRate = current.sampleRate;
+        const auto types = AudioBackends::availableTypes (engine.getDeviceManager());
+        if (! types.contains (wanted.type) && ! types.isEmpty()) wanted.type = types[0];
+        wanted.bufferSize = 0;
+        wanted.sampleRate = wanted.isAsio() ? 0.0 : 48000.0;
     }
+    wanted.input = name;
+    if (wanted.isAsio()) wanted.output = name;
     const auto error = engine.openDevice (wanted);
 
     if (error.isNotEmpty())
@@ -675,7 +676,7 @@ void MainComponent::deviceChosen()
     deviceChanged();
 
     if (startupNote.isNotEmpty() && ! startupNoteIsSafeMode && engine.isDeviceRunning())
-        setStartupNote ({}, false, false);   // the startup "ASIO 장치를 열지 못했습니다" is over: a device runs
+        setStartupNote ({}, false, false);   // the startup device error is over: a device runs
 
     if (engine.isDeviceRunning())
         document.setDeviceInfo (engine.getOpenDevice());
@@ -706,6 +707,14 @@ void MainComponent::timerCallback()
 
     const double now = juce::Time::getMillisecondCounterHiRes();
 
+    if (now >= nextObsPollMs)
+    {
+        nextObsPollMs = now + 500.0;
+        const auto readers = engine.getObsSender().readerState();
+        masterCard.setObsStatus (! running ? MasterCard::ObsStatus::audioStopped
+            : readers == ObsSender::ReaderState::connected ? MasterCard::ObsStatus::connected : MasterCard::ObsStatus::waiting);
+    }
+
     if (now < statusUntilMs)
     {
         statusLeft.setText (statusText, juce::dontSendNotification);
@@ -713,7 +722,7 @@ void MainComponent::timerCallback()
     else
     {
         statusLeft.setColour (juce::Label::textColourId, Palette::dimText);   // an error's red goes with its text
-        statusLeft.setText ((running ? ko ("오디오 동작 중") : ko ("오디오 멈춤 - 설정에서 ASIO 장치를 확인하세요")) + "   " + ko ("끊김 ") + juce::String (engine.getXRunCount()) + ko ("회"),
+        statusLeft.setText ((running ? ko ("오디오 동작 중") : ko ("오디오 멈춤 - 설정에서 오디오 장치를 확인하세요")) + "   " + ko ("끊김 ") + juce::String (engine.getXRunCount()) + ko ("회"),
                             juce::dontSendNotification);
     }
 

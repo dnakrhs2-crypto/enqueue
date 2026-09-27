@@ -45,7 +45,7 @@ namespace
     }
 }
 
-MixEngine::MixEngine()
+MixEngine::MixEngine (const juce::String& obsMappingName) : obsSender (obsMappingName)
 {
     prepare (48000.0, 256);
 }
@@ -319,6 +319,7 @@ juce::String MixEngine::openSessionDevice (const MixDevice& device)
 void MixEngine::shutdown()
 {
     removeCallback();
+    obsSender.setEnabled (false);
     deviceManager.closeAudioDevice();
     if (monitor != nullptr) monitor->stop();
     monitor.reset();
@@ -364,6 +365,7 @@ void MixEngine::prepare (double newSampleRate, int newBlockSize)
 
     master.chain->prepare (newSampleRate, newBlockSize);
     loudness.prepare (newSampleRate);
+    obsSender.deviceStarted (newSampleRate);
 }
 
 void MixEngine::addToOutputs (float* const* outputs, int numOutputs, int first, const juce::AudioBuffer<float>& source, int offset, int numSamples) noexcept
@@ -393,6 +395,7 @@ void MixEngine::renderBlock (const float* const* inputs, int numInputs, float* c
 
     if (! sl.isLocked())
     {
+        obsSender.writeSilence (numSamples);
         if (isSplitMonitor() && monitor != nullptr)
             monitor->push (nullptr, nullptr, numSamples);
         return;
@@ -604,6 +607,7 @@ void MixEngine::renderBlock (const float* const* inputs, int numInputs, float* c
         master.chain->process (masterBus, n);
         master.meter.push (masterBus.getMagnitude (0, 0, n), masterBus.getMagnitude (1, 0, n));
         loudness.process (masterBus.getReadPointer (0), masterBus.getReadPointer (1), n);
+        obsSender.write (masterBus.getReadPointer (0), masterBus.getReadPointer (1), n);
         addToOutputs (routedOutputs, routedCount, outputFirst (master.outputFirst.load (std::memory_order_relaxed)), masterBus, routedOffset, n);
         if (split) monitor->push (monitorStage.getReadPointer (0), monitorStage.getReadPointer (1), n);
     }

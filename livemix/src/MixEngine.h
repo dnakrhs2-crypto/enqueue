@@ -2,6 +2,7 @@
 
 #include "audio/LoudnessMeter.h"
 #include "MixModel.h"
+#include "ObsSender.h"
 #include "audio/PluginChain.h"
 #include "audio/PluginHost.h"
 
@@ -37,7 +38,7 @@ public:
     static constexpr double onOffRampSeconds = 0.005;
     static constexpr double panRampSeconds = 0.010;
 
-    MixEngine();
+    explicit MixEngine (const juce::String& obsMappingName = {});
     ~MixEngine() override;
 
     /** Saved device, then first ASIO device, then the Windows default capture/render endpoints. */
@@ -60,6 +61,7 @@ public:
     void shutdown();
     juce::AudioDeviceManager& getDeviceManager() noexcept { return deviceManager; }
     PluginHost& getPluginHost() noexcept { return pluginHost; }
+    ObsSender& getObsSender() noexcept { return obsSender; }
     bool isDeviceRunning() const noexcept { return deviceRunning.load (std::memory_order_acquire); }
     double getSampleRate() const noexcept { return sampleRate.load (std::memory_order_relaxed); }
     int getBlockSize() const noexcept { return blockSize.load (std::memory_order_relaxed); }
@@ -119,6 +121,7 @@ public:
     Meter readMasterMeter();
 
 private:
+    friend struct MixEngineTestAccess;
     struct MeterCell
     {
         std::atomic<float> left { 0.0f }, right { 0.0f };
@@ -198,6 +201,7 @@ private:
     static void addToOutputs (float* const* outputs, int numOutputs, int first, const juce::AudioBuffer<float>& source, int offset, int numSamples) noexcept;
     juce::AudioDeviceManager deviceManager;
     PluginHost pluginHost;
+    ObsSender obsSender;
     bool callbackAdded = false;
     // Replaced only with the graph callback detached; the monitor consumer never touches the graph.
     std::unique_ptr<MonitorOutput> monitor;

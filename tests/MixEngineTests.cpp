@@ -2,6 +2,9 @@
 #include "AudioBackends.h"
 #include "LiveMixSettings.h"
 #include "TestGainPlugin.h"
+#include "ui/SettingsDialog.h"
+#include "ui/TopBar.h"
+#include "ui/LiveMixLookAndFeel.h"
 
 #include <atomic>
 #include <chrono>
@@ -910,5 +913,114 @@ public:
 };
 
 static MixEngineTests mixEngineTests;
+
+class LiveMixDeviceUiTests : public juce::UnitTest
+{
+public:
+    LiveMixDeviceUiTests() : juce::UnitTest ("LiveMix device settings UI", "LiveMix") {}
+    void runTest() override
+    {
+        beginTest ("device settings follow the running backend and apply input, monitor, rate and buffer immediately");
+        const auto directory = juce::File::createTempFile ("-device-ui");
+        expect (directory.deleteFile());
+        expect (directory.createDirectory().wasOk());
+        {
+            LiveMixLookAndFeel lookAndFeel;
+            MixEngine engine;
+            removeRealMixDeviceTypes (engine);
+            for (const auto* type : { "ASIO", "Windows Audio", "Windows Audio (Low Latency Mode)", "Windows Audio (Exclusive Mode)" })
+                engine.getDeviceManager().addAudioDeviceType (std::make_unique<MixFakeType> (type));
+            expect (engine.openDevice ({ "ASIO", "Good", "Good", 256, 48000.0 }).isEmpty());
+            LiveMixSettings settings (directory);
+            int changes = 0;
+            SettingsDialog::show (engine, settings, nullptr, [&] { ++changes; }, {}, {}, {}, {});
+            juce::Component* content = nullptr;
+            auto& desktop = juce::Desktop::getInstance();
+            for (int i = 0; i < desktop.getNumComponents(); ++i)
+                if (auto* dialog = dynamic_cast<juce::DialogWindow*> (desktop.getComponent (i)); dialog != nullptr && dialog->getName() == ko ("설정"))
+                    if (auto* viewport = dynamic_cast<juce::Viewport*> (dialog->getContentComponent())) content = viewport->getViewedComponent();
+            expect (content != nullptr);
+            if (content != nullptr)
+            {
+                content->setLookAndFeel (&lookAndFeel);
+                auto combo = [&] (const char* id) { return dynamic_cast<juce::ComboBox*> (content->findChildWithID (id)); };
+                auto* type = combo ("device-type");
+                auto* input = combo ("device-input");
+                auto* output = combo ("device-output");
+                auto* rate = combo ("device-rate");
+                auto* buffer = combo ("device-buffer");
+                expect (type != nullptr && input != nullptr && output != nullptr && rate != nullptr && buffer != nullptr);
+                if (type != nullptr && input != nullptr && output != nullptr && rate != nullptr && buffer != nullptr)
+                {
+                    expectEquals (type->getNumItems(), 4);
+                    expectEquals (input->getText(), juce::String ("Good"));
+                    expect (! output->isVisible() && ! rate->isVisible() && buffer->isVisible());
+                    for (int mode = 1; mode <= 4; ++mode)
+                    {
+                        if (mode > 1) type->setSelectedId (mode, juce::sendNotificationSync);
+                        const auto actual = engine.getOpenDevice();
+                        expectEquals (type->getText(), AudioBackends::label (actual.type));
+                        expectEquals (input->getText(), actual.input);
+                        expectEquals (rate->getSelectedId(), (int) actual.sampleRate);
+                        expectEquals (buffer->getSelectedId(), actual.bufferSize);
+                        expect (output->isVisible() == (mode != 1));
+                        expect (rate->isVisible() == (mode != 1));
+                        expect (buffer->isVisible() == (mode != 2));
+                        for (auto* child : content->getChildren())
+                            if (child->isVisible()) expect (content->getLocalBounds().contains (child->getBounds()));
+                        const auto folder = juce::SystemStats::getEnvironmentVariable ("LIVEMIX_UI_SCREENSHOT_DIR", {});
+                        if (folder.isNotEmpty())
+                        {
+                            const juce::File shots (folder);
+                            expect (shots.createDirectory().wasOk());
+                            juce::FileOutputStream image (shots.getChildFile ("settings-" + juce::String (mode) + ".png"));
+                            if (image.openedOk())
+                            {
+                                expect (image.setPosition (0));
+                                expect (image.truncate().wasOk());
+                                expect (juce::PNGImageFormat().writeImageToStream (content->createComponentSnapshot (content->getLocalBounds()), image));
+                            }
+                        }
+                    }
+                    input->setSelectedId (2, juce::sendNotificationSync);
+                    expectEquals (engine.getOpenDevice().input, juce::String ("Capture 2"));
+                    expectEquals (engine.getOpenDevice().output, juce::String ("Headphones"));
+                    output->setSelectedId (1, juce::sendNotificationSync);
+                    expect (engine.getOpenDevice().output.isEmpty());
+                    expectEquals (output->getText(), ko ("없음 (OBS로만 보내기)"));
+                    rate->setSelectedId (44100, juce::sendNotificationSync);
+                    expectEquals ((int) engine.getOpenDevice().sampleRate, 44100);
+                    buffer->setSelectedId (512, juce::sendNotificationSync);
+                    expectEquals (engine.getOpenDevice().bufferSize, 512);
+                    expectEquals (changes, 7);
+                    type->setSelectedId (1, juce::sendNotificationSync);
+                    expectEquals (engine.getOpenDevice().type, juce::String ("ASIO"));
+                    expectEquals (input->getText(), juce::String ("Good"));
+                    expect (! output->isVisible());
+                }
+                content->setLookAndFeel (nullptr);
+            }
+            SettingsDialog::closeIfOpen();
+
+            beginTest ("top bar uses a short backend caption and lists the supplied capture endpoints");
+            MixDocument document (engine);
+            TopBar bar (document);
+            bar.setLookAndFeel (&lookAndFeel);
+            bar.setSize (700, bar.preferredHeight (700));
+            bar.setDevices ({ "Capture", "Capture 2" }, "Capture 2", "Windows Audio (Low Latency Mode)");
+            bool captionFound = false, selected = false;
+            for (auto* child : bar.getChildren())
+            {
+                if (auto* label = dynamic_cast<juce::Label*> (child))
+                    captionFound = captionFound || (label->getText() == ko ("윈도우") && label->getTooltip() == ko ("윈도우 오디오 (저지연)"));
+                if (auto* box = dynamic_cast<juce::ComboBox*> (child)) selected = box->getNumItems() == 2 && box->getText() == "Capture 2";
+            }
+            expect (captionFound && selected);
+            bar.setLookAndFeel (nullptr);
+        }
+        expect (directory.deleteRecursively());
+    }
+};
+static LiveMixDeviceUiTests liveMixDeviceUiTests;
 
 } // namespace gocue::tests
