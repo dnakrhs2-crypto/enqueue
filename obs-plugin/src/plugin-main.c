@@ -44,6 +44,14 @@ bool obs_module_load(void)
 {
 	lm_connection_config config = {0};
 	config.log = receiver_log;
+	/* Test instances only: LIVEMIX_OBS_RING=<name> reads another ring (a fake LiveMix) so a long unattended test never
+	 * shares the real ring with a LiveMix running on the same PC. Unset in normal use. */
+	wchar_t test_ring[128];
+	DWORD test_ring_length = GetEnvironmentVariableW(L"LIVEMIX_OBS_RING", test_ring, 128);
+	if (test_ring_length > 0 && test_ring_length < 128) {
+		config.ring_name = test_ring;
+		blog(LOG_INFO, "[livemix-obs] Test ring from LIVEMIX_OBS_RING");
+	}
 	connection = lm_connection_create(&config);
 	if (!connection || !lm_connection_start(connection)) {
 		lm_connection_destroy(connection);

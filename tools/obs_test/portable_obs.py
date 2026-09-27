@@ -12,7 +12,8 @@ OBS_PLUGINS_PATH / OBS_PLUGINS_DATA_PATH (frontend/widgets/OBSBasic.cpp AddExtra
 """
 import ctypes, ctypes.wintypes as wt, json, os, shutil, subprocess, sys, time
 
-ROOT = os.path.join(os.environ["LOCALAPPDATA"], "LiveMixObsTest")
+# a second, independent test OBS: LMOBS_TEST_ROOT / LMOBS_TEST_PORT / LMOBS_TEST_RING (its plugin then reads that ring)
+ROOT = os.environ.get("LMOBS_TEST_ROOT") or os.path.join(os.environ["LOCALAPPDATA"], "LiveMixObsTest")
 OBS = os.path.join(ROOT, "obs")
 BIN = os.path.join(OBS, "bin", "64bit")
 CFG = os.path.join(OBS, "config", "obs-studio")
@@ -20,7 +21,8 @@ REC = os.path.join(ROOT, "rec")
 PIDFILE = os.path.join(ROOT, "obs.pid")
 HERE = os.path.dirname(os.path.abspath(__file__))
 RUNDIR = os.path.normpath(os.path.join(HERE, "..", "..", "obs-plugin", "build_x64", "rundir", "RelWithDebInfo"))
-PORT = 4466
+PORT = int(os.environ.get("LMOBS_TEST_PORT", "4466"))
+RING = os.environ.get("LMOBS_TEST_RING", "")
 
 
 def write(path, text):
@@ -42,7 +44,8 @@ def setup():
           "SceneCollection=LiveMixTest\nSceneCollectionFile=LiveMixTest\n")
     write(os.path.join(CFG, "basic", "profiles", "LiveMixTest", "basic.ini"),
           "[General]\nName=LiveMixTest\n\n[Output]\nMode=Advanced\n\n[AdvOut]\nRecType=Standard\n"
-          "RecFilePath=" + REC + "\nRecFormat2=mkv\nRecEncoder=obs_x264\nRecAudioEncoder=ffmpeg_flac\n"
+          # forward slashes: OBS ini values unescape backslashes ("\rec" became a carriage return + "ec")
+          "RecFilePath=" + REC.replace("\\", "/") + "\nRecFormat2=mkv\nRecEncoder=obs_x264\nRecAudioEncoder=ffmpeg_flac\n"
           "RecTracks=1\nTrackIndex=1\n\n[Audio]\nSampleRate=48000\nChannelSetup=Stereo\n\n"
           "[Video]\nBaseCX=640\nBaseCY=360\nOutputCX=640\nOutputCY=360\nFPSType=0\nFPSCommon=30\n")
     write(os.path.join(CFG, "plugin_config", "obs-websocket", "config.json"),
@@ -62,6 +65,8 @@ def start(visible=False):
             if f.startswith("run_"):
                 os.remove(os.path.join(sentinel, f))
     env = dict(os.environ, OBS_PLUGINS_PATH=RUNDIR, OBS_PLUGINS_DATA_PATH=RUNDIR)
+    if RING:
+        env["LIVEMIX_OBS_RING"] = RING
     args = [os.path.join(BIN, "obs64.exe"), "--portable", "--disable-updater", "--multi",
             "--collection", "LiveMixTest", "--profile", "LiveMixTest"]
     for attempt in (1, 2):   # the very first start of a fresh portable copy has been seen to exit at once

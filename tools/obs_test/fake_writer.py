@@ -12,7 +12,7 @@ The mapping name is the real one, so a running LiveMix must not be sending at th
 """
 import argparse, ctypes, math, mmap, os, struct, sys, time
 
-NAME = "Local\\LiveMix.ObsAudio.v1"
+NAME = os.environ.get("LMOBS_TEST_RING") or "Local\\LiveMix.ObsAudio.v1"   # a test OBS can read another ring
 MAGIC, MAJOR, MINOR = 0x424F4D4C, 1, 0
 HEADER, CAPACITY, CHANNELS = 256, 32768, 2
 OFF = dict(epoch=32, sample_rate=40, write_frames=48, heartbeat_qpc=56, qpc_frequency=64,

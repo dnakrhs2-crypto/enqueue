@@ -14,7 +14,9 @@ class ObsError(RuntimeError):
 
 
 class Obs:
-    def __init__(self, host="127.0.0.1", port=4466, timeout=10.0):
+    def __init__(self, host="127.0.0.1", port=None, timeout=10.0):
+        import os
+        port = port or int(os.environ.get("LMOBS_TEST_PORT", "4466"))
         self.url = "ws://%s:%d" % (host, port)
         self.timeout = timeout
         self.ws = None
