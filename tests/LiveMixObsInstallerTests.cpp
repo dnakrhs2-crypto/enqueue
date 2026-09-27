@@ -29,8 +29,8 @@ namespace
             put (juce::File (LM_OBS_TEST_CURRENT_DLL), roots.bundledPlugin.getChildFile ("livemix-obs.dll"));
             auto locale = roots.bundledPlugin.getChildFile ("data/locale");
             ready &= locale.createDirectory().wasOk();
-            ready &= locale.getChildFile ("ko-KR.ini").replaceWithText (juce::String::fromUTF8 ("Source.Name=LiveMix\nFilter.Name=LiveMix\nFilter.Mode=방식\n"));
-            ready &= locale.getChildFile ("en-US.ini").replaceWithText ("Source.Name=LiveMix\nFilter.Name=LiveMix\nFilter.Mode=Mode\n");
+            ready &= locale.getChildFile ("ko-KR.ini").replaceWithText (juce::String::fromUTF8 ("Source.Name=LiveMix\nFilter.Name=LiveMix\nFilter.Retired=이 필터는 더 이상 쓰지 않습니다.\n"));
+            ready &= locale.getChildFile ("en-US.ini").replaceWithText ("Source.Name=LiveMix\nFilter.Name=LiveMix\nFilter.Retired=This filter is no longer used.\n");
             if (major != 0)
                 put (juce::File (major >= 33 ? LM_OBS_TEST_OBS33_DLL : LM_OBS_TEST_OBS32_DLL),
                      roots.obsInstallDir.getChildFile ("bin/64bit/obs64.exe"));
@@ -131,33 +131,86 @@ public:
             expect (image.getParentDirectory().getChildFile ("portable_mode.txt").replaceWithText (""));
             expect (! Installer::runningObsInfo (image, version (32, 1, 2)).portable);
 
-            beginTest ("running OBS scans at most every two seconds and caches metadata by image path");
+            beginTest ("portable switches must be whole arguments, including quoted executable paths and case variants");
+            for (const auto* line : { "obs64.exe -p", "obs64.exe --portable", "obs64.exe --PORTABLE", "obs64.exe -P",
+                                     "\"C:\\OBS with spaces\\bin\\64bit\\obs64.exe\" --portable --profile \"Live show\"",
+                                     "obs64.exe \"-p\"" })
+                expect (Installer::runningObsInfo (image, version (32, 1, 2), line).portable, line);
+            for (const auto* line : { "obs64.exe --portable-foo", "obs64.exe -profile", "obs64.exe --profile \"show -p\"",
+                                     "\"C:\\OBS -p folder\\obs64.exe\"", "obs64.exe --profile=--portable", "obs64.exe", "" })
+                expect (! Installer::runningObsInfo (image, version (32, 1, 2), line).portable, line);
+
+            beginTest ("running OBS scans at most every two seconds and caches portable state by pid and creation time");
             const auto steam = f.temp.getChildFile ("Steam/OBS/bin/64bit/obs64.exe");
             const auto portable = f.temp.getChildFile ("Portable OBS/bin/64bit/obs64.exe");
             expect (portable.getParentDirectory().getParentDirectory().getParentDirectory().createDirectory().wasOk());
             expect (f.temp.getChildFile ("Portable OBS/portable_mode").replaceWithText (""));
-            std::vector<juce::File> images { image, steam, portable, image };
-            int scans = 0, versions = 0;
-            RunningObsDetector detector ([&] { ++scans; return images; }, [&] (const juce::File& path)
+            std::vector<RunningObsDetector::Process> processes { { image, 1, 10 }, { steam, 2, 20 }, { portable, 3, 30 }, { image, 4, 40 } };
+            int scans = 0, versions = 0, commands = 0;
+            juce::String portableCommand = "obs64.exe -p";
+            RunningObsDetector detector ([&] { ++scans; return processes; }, [&] (const juce::File& path)
             {
                 ++versions;
                 return path == steam ? version (31, 0, 4) : version (32, 1, 2);
+            }, [&] (const RunningObsDetector::Process& process)
+            {
+                ++commands;
+                return process.pid == 4 ? portableCommand : juce::String(); // unreadable commands fall back to markers
             });
             const auto first = detector.scan (100.0);
             expectEquals ((int) first.size(), 4);
             expectEquals (scans, 1);
-            expectEquals (versions, 3);
-            expect (first[1].needsUpdate() && first[2].portable);
+            expectEquals (versions, 4);
+            expectEquals (commands, 4);
+            expect (! first[0].portable && first[1].needsUpdate() && first[2].portable && first[3].portable);
             detector.scan (2099.0);
             expectEquals (scans, 1);
             detector.scan (2100.0);
             expectEquals (scans, 2);
-            expectEquals (versions, 3);
-            images.clear();
-            expect (detector.scan (4100.0).empty());
-            images = { image };
-            detector.scan (6100.0);
-            expectEquals (versions, 4); // a restarted image is inspected again
+            expectEquals (versions, 4);
+            expectEquals (commands, 4);
+            processes[3].creationTime = 41; // the same pid and image now belong to another instance
+            portableCommand = "obs64.exe";
+            expect (! detector.scan (4100.0)[3].portable);
+            expectEquals (commands, 5);
+            expectEquals (versions, 5);
+            processes.clear();
+            expect (detector.scan (6100.0).empty());
+            processes = { { image, 5, 50 } };
+            detector.scan (8100.0);
+            expectEquals (versions, 6);
+            expectEquals (commands, 6);
+        }
+        beginTest ("native process command lines use the limited-information handle and reject a reused pid");
+        {
+            Fixture f;
+            wchar_t systemPath[MAX_PATH] {};
+            GetSystemDirectoryW (systemPath, MAX_PATH);
+            const auto executable = juce::File (juce::String (systemPath)).getChildFile ("cmd.exe");
+            for (const auto* argument : { "-p", "--portable", "--portable-foo" })
+            {
+                const auto command = executable.getFullPathName().quoted() + " " + argument;
+                std::wstring writableCommand (command.toWideCharPointer());
+                STARTUPINFOW startup {};
+                startup.cb = sizeof (startup);
+                PROCESS_INFORMATION child {};
+                const bool created = CreateProcessW (executable.getFullPathName().toWideCharPointer(), writableCommand.data(), nullptr, nullptr,
+                    FALSE, CREATE_SUSPENDED | CREATE_NO_WINDOW, nullptr, f.temp.getFullPathName().toWideCharPointer(), &startup, &child) != FALSE;
+                expect (created);
+                if (! created) continue;
+                FILETIME start {}, exit {}, kernel {}, user {};
+                expect (GetProcessTimes (child.hProcess, &start, &exit, &kernel, &user) != FALSE);
+                RunningObsDetector::Process process { f.roots.obsInstallDir.getChildFile ("bin/64bit/obs64.exe"), child.dwProcessId,
+                    (juce::uint64 (start.dwHighDateTime) << 32) | start.dwLowDateTime };
+                RunningObsDetector detector ([&] { return std::vector<RunningObsDetector::Process> { process }; }, [] (const juce::File&) { return juce::uint64 (0); });
+                expect (detector.scan (0)[0].portable == (juce::String (argument) != "--portable-foo"));
+                ++process.creationTime;
+                expect (! detector.scan (2000)[0].portable);
+                expect (TerminateProcess (child.hProcess, 0) != FALSE);
+                expectEquals ((int) WaitForSingleObject (child.hProcess, 5000), (int) WAIT_OBJECT_0);
+                CloseHandle (child.hThread);
+                CloseHandle (child.hProcess);
+            }
         }
         juce::String message;
         beginTest ("OBS 32 uses the legacy layout and native VERSIONINFO; Korean paths and locales survive");
@@ -170,10 +223,10 @@ public:
             expect (f.legacy().existsAsFile() && ! f.modern().exists());
             expect (Installer::isInstalledAndCurrent (f.roots));
             expectEquals (f.plugin().getChildFile ("data/locale/ko-KR.ini").loadFileAsString().replace ("\r\n", "\n"),
-                          juce::String::fromUTF8 ("Source.Name=LiveMix\nFilter.Name=LiveMix\nFilter.Mode=방식\n"));
+                          juce::String::fromUTF8 ("Source.Name=LiveMix\nFilter.Name=LiveMix\nFilter.Retired=이 필터는 더 이상 쓰지 않습니다.\n"));
             expect (f.plugin().getChildFile ("data/locale/ko-KR.ini").hasIdenticalContentTo (f.roots.bundledPlugin.getChildFile ("data/locale/ko-KR.ini")));
             expect (f.plugin().getChildFile ("data/locale/en-US.ini").existsAsFile());
-            expectEquals (message, juce::String::fromUTF8 ("OBS 플러그인을 설치했습니다. OBS를 켜고 소스(+)에서 'LiveMix'를 추가하세요. (필터 'LiveMix'는 소리가 나오는 소스에 붙일 때만 동작합니다.)"));
+            expectEquals (message, juce::String::fromUTF8 ("OBS 플러그인을 설치했습니다. OBS를 켜고 소스(+)에서 'LiveMix'를 추가하세요."));
         }
 
         beginTest ("OBS 33 migrates legacy to the new layout; OBS 32 migrates back without duplicate DLLs");
@@ -489,6 +542,7 @@ public:
             f.running = mode == 2;
             const auto mapping = "Local\\LiveMix.ObsInstallerTest." + juce::Uuid().toString();
             MixEngine engine (mapping);
+            engine.getObsSender().setReaderProcessCheck ([] (juce::uint32 pid) { return pid == GetCurrentProcessId(); });
             MixDocument document (engine);
             document.applyToEngine();
             LiveMixSettings settings (f.temp.getChildFile ("settings"));

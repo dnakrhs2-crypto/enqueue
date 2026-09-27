@@ -1,5 +1,7 @@
 #include "MasterCard.h"
 
+#include <cmath>
+
 namespace gocue::livemix
 {
 
@@ -58,6 +60,7 @@ MasterCard::MasterCard (MixDocument& doc) : document (doc)
     addAndMakeVisible (outputCombo);
 
     obsToggle.setButtonText (ko ("OBS로 보내기"));
+    obsToggle.setTooltip (ko ("OBS에서 반드시 소스 추가(+)로 'LiveMix'를 추가해 주세요"));
     obsToggle.setWantsKeyboardFocus (false);
     obsToggle.onClick = [this]
     {
@@ -72,6 +75,11 @@ MasterCard::MasterCard (MixDocument& doc) : document (doc)
     obsStatusLabel.setMinimumHorizontalScale (1.0f);
     addAndMakeVisible (obsStatusLabel);
     obsStatusLabel.addMouseListener (this, false);
+    styleCaption (obsSourceHint, obsToggle.getTooltip());
+    obsSourceHint.setComponentID ("obs-source-hint");
+    obsSourceHint.setFont (bodyFont (12.5f));
+    obsSourceHint.setMinimumHorizontalScale (1.0f);
+    addAndMakeVisible (obsSourceHint);
     refreshObsStatus();
 
     styleCaption (meterCaption, ko ("출력 미터 L / R"));
@@ -171,7 +179,7 @@ MasterCard::ObsAdvice MasterCard::obsStatusFor (const juce::String& sendError, b
     if (restartNeeded) return advice (ObsStatus::restartObs);
     if (! deviceRunning) return advice (ObsStatus::audioStopped);
     if (reader == ObsSender::ReaderState::idle)
-        return advice (ObsStatus::addSource, ko ("OBS에 LiveMix 플러그인은 올라와 있지만 소리를 받는 곳이 없습니다. OBS 소스(+)에서 'LiveMix'를 추가하세요. 필터로 붙였다면 그 소스에서 소리가 나오고 있어야 동작합니다 (ASIO가 잡고 있는 마이크 소스에 붙이면 멈춰 있습니다)."));
+        return advice (ObsStatus::addSource, ko ("OBS에 LiveMix 플러그인은 올라와 있지만 소리를 받는 곳이 없습니다. OBS 소스(+)에서 'LiveMix'를 추가하세요."));
     for (const auto& obs : runningObs)
         if (obs.needsUpdate())
             return advice (ObsStatus::updateObs, ko ("실행 중인 OBS ") + obs.versionString() + ko ("에서는 LiveMix 플러그인을 읽을 수 없습니다. OBS를 31.1 이상으로 업데이트하세요."));
@@ -240,10 +248,21 @@ int MasterCard::getPreferredHeight (int width) const
     return strip ? stripHeight : getUnfoldedHeight (width);
 }
 
+int MasterCard::obsHintHeight (int width) const
+{
+    juce::AttributedString text;
+    text.append (obsSourceHint.getText(), obsSourceHint.getFont());
+    juce::TextLayout layout;
+    layout.createLayout (text, (float) juce::jmax (1, width - obsSourceHint.getBorderSize().getLeftAndRight()));
+    return juce::jmax (obsRowHeight, (int) std::ceil (layout.getHeight()) + obsSourceHint.getBorderSize().getTopAndBottom() + 4);
+}
+
 int MasterCard::obsControlsHeight (int width) const
 {
-    return obsToggleWidth() + 8 + labelWidthForText (obsStatusLabel, obsStatusText (obsStatus)) <= width - 28
-        ? obsRowHeight : 2 * obsRowHeight + obsRowGap;
+    const int available = width - 28;
+    const int controls = obsToggleWidth() + 8 + labelWidthForText (obsStatusLabel, obsStatusText (obsStatus));
+    if (controls + 8 + labelWidthForText (obsSourceHint, obsSourceHint.getText()) <= available) return obsRowHeight;
+    return (controls <= available ? obsRowHeight : 2 * obsRowHeight + obsRowGap) + obsRowGap + obsHintHeight (available);
 }
 
 int MasterCard::getUnfoldedHeight (int width) const
@@ -281,6 +300,7 @@ void MasterCard::resized()
     outputCombo.setVisible (true);   // the strip may hide it below
     title.setVisible (true);
     lufsButton.setVisible (true);
+    obsSourceHint.setVisible (! strip);
 
     for (auto& chip : chips)
         chip->setVisible (! strip);
@@ -329,8 +349,23 @@ void MasterCard::resized()
     auto obsRow = obsArea.removeFromTop (obsRowHeight);
     obsToggle.setBounds (obsRow.removeFromLeft (obsToggleWidth()));
     obsRow.removeFromLeft (8);
-    if (! obsArea.isEmpty()) obsRow = obsArea.removeFromBottom (obsRowHeight);
-    obsStatusLabel.setBounds (obsRow.removeFromLeft (labelWidthForText (obsStatusLabel, obsStatusLabel.getText())));
+    const int statusWidth = labelWidthForText (obsStatusLabel, obsStatusLabel.getText());
+    if (obsRow.getWidth() < statusWidth)
+    {
+        obsArea.removeFromTop (obsRowGap);
+        obsRow = obsArea.removeFromTop (obsRowHeight);
+    }
+    obsStatusLabel.setBounds (obsRow.removeFromLeft (statusWidth));
+    if (obsArea.isEmpty())
+    {
+        obsRow.removeFromLeft (8);
+        obsSourceHint.setBounds (obsRow.removeFromLeft (labelWidthForText (obsSourceHint, obsSourceHint.getText())));
+    }
+    else
+    {
+        obsArea.removeFromTop (obsRowGap);
+        obsSourceHint.setBounds (obsArea);
+    }
 
     if (stacked)
     {

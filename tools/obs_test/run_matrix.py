@@ -4,12 +4,11 @@ import json, os, subprocess, sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 CASES = [
-    ("source +200 ppm", ["--mode", "source", "--seconds", "60", "--ppm", "200"]),
-    ("source -200 ppm", ["--mode", "source", "--seconds", "60", "--ppm", "-200"]),
-    ("filter +150 ppm", ["--mode", "filter", "--seconds", "60", "--ppm", "150"]),
-    ("source restart@20 stall@40:3", ["--mode", "source", "--seconds", "60", "--ppm", "100",
+    ("source +200 ppm", ["--seconds", "60", "--ppm", "200"]),
+    ("source -200 ppm", ["--seconds", "60", "--ppm", "-200"]),
+    ("source restart@20 stall@40:3", ["--seconds", "60", "--ppm", "100",
                                       "--writer", "--restart-at 23 --stall-at 43:3"]),
-    ("source 44.1k->48k@25", ["--mode", "source", "--seconds", "60", "--ppm", "0",
+    ("source 44.1k->48k@25", ["--seconds", "60", "--ppm", "0",
                               "--writer", "--rate 44100 --rate-change-at 28:48000"]),
 ]
 only = sys.argv[1:]

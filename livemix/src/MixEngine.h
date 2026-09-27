@@ -54,6 +54,7 @@ public:
         int inputBits = 0;   bool inputFloat = false;
         int outputBits = 0;  bool outputFloat = false;
         double inputDeviceRate = 0, outputDeviceRate = 0;
+        double inputStreamRate = 0, outputStreamRate = 0;
         int inputAccepted = 0, outputAccepted = 0;
         bool inputRefused = false, outputRefused = false;
     };

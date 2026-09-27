@@ -21,10 +21,10 @@ namespace
     public:
         SettingsContent (MixEngine& e, LiveMixSettings& s, std::function<void()> deviceChanged, std::function<void()> hotkeysChanged,
                          std::function<void (bool)> hotkeyCapture, std::function<ControlServer::Status()> controlStatus,
-                         std::function<void (bool)> controlEnabled)
+                         std::function<void (bool)> controlEnabled, SettingsDialog::AcceptedFormatsQuery acceptedFormats)
             : engine (e), settings (s), onDeviceChanged (std::move (deviceChanged)), onHotkeysChanged (std::move (hotkeysChanged)),
               onHotkeyCapture (std::move (hotkeyCapture)), getControlStatus (std::move (controlStatus)),
-              onControlEnabled (std::move (controlEnabled))
+              onControlEnabled (std::move (controlEnabled)), getAcceptedFormats (std::move (acceptedFormats))
         {
             styleCaption (typeCaption, ko ("장치 종류"));
             addAndMakeVisible (typeCaption);
@@ -387,6 +387,12 @@ namespace
             const int previousHeight = bitDepthHeight();
             auto current = engine.getOpenDevice();
             auto format = engine.getDeviceFormat();
+            if (getAcceptedFormats)
+            {
+                const auto accepted = getAcceptedFormats();
+                format.inputAccepted = accepted.first;
+                format.outputAccepted = accepted.second;
+            }
             if (! engine.isMonitorRunning()) current.output.clear();
             if (current.type != shownType) format = {};
             current.type = shownType;
@@ -405,6 +411,7 @@ namespace
                 bitDepthCombo.changeItemText (id, item.text);
                 bitDepthCombo.setItemEnabled (id, item.enabled);
             }
+            bitDepthCombo.setSelectedId (DeviceFormatText::choiceId (engine.getOpenDevice().sampleFormat), juce::dontSendNotification);
             if (previousHeight != bitDepthHeight())
             {
                 updateContentSize();
@@ -544,6 +551,7 @@ namespace
         std::function<void (bool)> onHotkeyCapture;
         std::function<ControlServer::Status()> getControlStatus;
         std::function<void (bool)> onControlEnabled;
+        SettingsDialog::AcceptedFormatsQuery getAcceptedFormats;
         juce::StringArray types, names, outputNames;
         juce::String shownType;
         struct Row { juce::Label* label; HotkeyButton* button; juce::TextButton* clear; };
@@ -595,7 +603,8 @@ namespace
 
 void SettingsDialog::show (MixEngine& engine, LiveMixSettings& settings, juce::Component* centreAround, std::function<void()> onDeviceChanged,
                            std::function<void()> onHotkeysChanged, std::function<void (bool capturing)> onHotkeyCapture,
-                           std::function<ControlServer::Status()> controlStatus, std::function<void (bool)> controlEnabled)
+                           std::function<ControlServer::Status()> controlStatus, std::function<void (bool)> controlEnabled,
+                           AcceptedFormatsQuery acceptedFormats)
 {
     if (openDialog != nullptr)
     {
@@ -604,7 +613,7 @@ void SettingsDialog::show (MixEngine& engine, LiveMixSettings& settings, juce::C
     }
 
     auto* content = new SettingsContent (engine, settings, std::move (onDeviceChanged), std::move (onHotkeysChanged), std::move (onHotkeyCapture),
-                                         std::move (controlStatus), std::move (controlEnabled));
+                                         std::move (controlStatus), std::move (controlEnabled), std::move (acceptedFormats));
     auto* scroller = new juce::Viewport();
     scroller->setViewedComponent (content, true);
     scroller->setScrollBarsShown (true, true);   // sideways only when a narrow display squeezed the window under the content's width

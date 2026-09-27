@@ -74,7 +74,6 @@ struct lm_connection {
 struct lm_receiver {
 	lm_connection *connection;
 	lm_receiver *next;
-	enum lm_receiver_kind kind;
 	lm_asrc_bank bank[2];
 	volatile int64_t requested_format, ready_bank, active_bank;
 	int64_t prepared_format; /* management thread only */
@@ -405,7 +404,7 @@ static void report_event(lm_receiver *r, const lm_diagnostic_event *event)
 		break;
 	}
 	snprintf(message, sizeof(message), "receiver=%llu kind=%s event=%s %s",
-		 (unsigned long long)r->diagnostic_id, r->kind == LM_RECEIVER_SOURCE ? "source" : "filter", name, detail);
+		 (unsigned long long)r->diagnostic_id, "source", name, detail);
 	connection_log(r->connection, LM_LOG_INFO, message);
 }
 
@@ -422,14 +421,13 @@ static void report_receivers(lm_connection *c, int64_t now)
 		}
 		lm_receiver_stats stats;
 		lm_receiver_get_stats(r, &stats);
-		/* Filters may stop being called while their parent is inactive. Still
-		 * report a stopped/resumed writer without waiting for another pull. */
+		/* Report a stopped/resumed writer even while the source worker is paused. */
 		if (r->logged_connected != stats.connected) {
 			lm_diagnostic_event event = {LM_EVENT_CONNECTION, stats.connected, stats.epoch};
 			report_event(r, &event);
 		}
 		char message[512];
-		const char *kind = r->kind == LM_RECEIVER_SOURCE ? "source" : "filter";
+		const char *kind = "source";
 		int64_t lost = lm_obs_load_acquire(&r->event_lost);
 		if (lost != r->reported_lost) {
 			snprintf(message, sizeof(message), "receiver=%llu kind=%s diagnostic queue overflow: lost=%lld",
@@ -459,16 +457,9 @@ void lm_connection_poll(lm_connection *c)
 		c->next_probe = now + c->frequency;
 		open_ring(c);
 		update_presence(c, now);
-		if (c->config.probe)
-			c->config.probe(c->config.probe_context);
 	}
 	prepare_formats(c);
 	report_receivers(c, now);
-}
-
-bool lm_filter_is_idle(int64_t last_audio, int64_t now, int64_t frequency)
-{
-	return last_audio <= 0 || frequency <= 0 || (now >= last_audio && (double)(now - last_audio) / (double)frequency > 1.5);
 }
 
 static DWORD WINAPI connection_thread(void *opaque)
@@ -562,16 +553,15 @@ void lm_connection_destroy(lm_connection *c)
 	free(c);
 }
 
-lm_receiver *lm_receiver_create(lm_connection *c, enum lm_receiver_kind kind, double out_rate)
+lm_receiver *lm_receiver_create(lm_connection *c, double out_rate)
 {
 	int output_rate = valid_output_rate(out_rate);
-	if (!c || !output_rate || (kind != LM_RECEIVER_SOURCE && kind != LM_RECEIVER_FILTER))
+	if (!c || !output_rate)
 		return NULL;
 	lm_receiver *r = calloc(1, sizeof(*r));
 	if (!r)
 		return NULL;
 	r->connection = c;
-	r->kind = kind;
 	r->ready_bank = -1;
 	r->fifo = malloc(LM_OBS_CAPACITY_FRAMES * 2u * sizeof(float));
 	r->bank[0].state = malloc(lm_asrc_size(2));
@@ -833,7 +823,7 @@ void lm_receiver_pull(lm_receiver *r, float *out_l, float *out_r, int frames, do
 	}
 	lm_connection *c = r->connection;
 	int64_t now = connection_now(c);
-	lm_obs_store_release(&c->last_kind, r->kind);
+	lm_obs_store_release(&c->last_kind, 1); /* v1 presence: source */
 	lm_obs_store_release(&c->last_pull, now);
 	lm_view *view = current_view(c);
 	settle_underrun_growth(r, now);

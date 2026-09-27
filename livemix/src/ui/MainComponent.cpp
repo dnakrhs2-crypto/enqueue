@@ -532,7 +532,7 @@ void MainComponent::resized()
     // the master takes its full form only while the mics keep a card's worth of room; otherwise it folds to a strip
     const int cardWidth = area.getWidth() - 32;
     masterCard.setStrip (false);
-    masterUnfoldedH = masterCard.getPreferredHeight (cardWidth);   // grows with its chip rows
+    masterUnfoldedH = masterCard.getPreferredHeight (cardWidth);   // includes wrapped chips, OBS status and source hint
     int masterH = masterUnfoldedH;
 
     if (area.getHeight() - (masterH + 16) - 24 < minCardsRoom)   // 24: the viewport's margins below

@@ -223,12 +223,14 @@ public:
                 lm_obs_store_release (&presence->slot[3].heartbeat_qpc, nowQpc());
                 {
                     ObsSender sender (testName);
+                    sender.setReaderProcessCheck ([] (juce::uint32 pid) { return pid == GetCurrentProcessId(); });
                     sender.setEnabled (true);
                     expectEquals (lm_obs_load_acquire (&oldRing.header()->epoch), int64_t (82));
                     expect (sender.readerState() == ObsSender::ReaderState::connected);
                     sender.writeSilence (9);
                 }
                 ObsSender restarted (testName);
+                restarted.setReaderProcessCheck ([] (juce::uint32 pid) { return pid == GetCurrentProcessId(); });
                 restarted.setEnabled (true);
                 expectEquals (lm_obs_load_acquire (&oldRing.header()->epoch), int64_t (83));
                 expectEquals (lm_obs_load_acquire (&oldRing.header()->write_frames), int64_t (0));
@@ -236,10 +238,70 @@ public:
             }
         }
 
+        beginTest ("a reused slot owned by a live non-OBS process is neither idle nor connected");
+        {
+            const auto testName = mappingName();
+            ObsSender sender (testName);
+            sender.setEnabled (true);
+            Mapping readers (testName + ".Readers", sizeof (lm_obs_readers));
+            expect (readers.view != nullptr);
+            if (readers.view != nullptr)
+            {
+                auto& slot = static_cast<lm_obs_readers*> (readers.view)->slot[0];
+                lm_obs_store_release (&slot.pid, GetCurrentProcessId());
+                for (const auto beat : { int64_t (0), nowQpc() })
+                {
+                    lm_obs_store_release (&slot.heartbeat_qpc, beat);
+                    expect (sender.readerState() == ObsSender::ReaderState::none);
+                }
+            }
+        }
+
+        beginTest ("the native identity check accepts a live OBS64.EXE and rejects it after exit");
+        {
+            const auto directory = juce::File::createTempFile ("-obs-process");
+            expect (directory.deleteFile());
+            expect (directory.createDirectory().wasOk());
+            wchar_t systemPath[MAX_PATH] {};
+            GetSystemDirectoryW (systemPath, MAX_PATH);
+            const auto executable = directory.getChildFile ("OBS64.EXE");
+            expect (juce::File (juce::String (systemPath)).getChildFile ("cmd.exe").copyFileTo (executable));
+            std::wstring command (executable.getFullPathName().quoted().toWideCharPointer());
+            STARTUPINFOW startup {};
+            startup.cb = sizeof (startup);
+            PROCESS_INFORMATION child {};
+            const bool created = CreateProcessW (executable.getFullPathName().toWideCharPointer(), command.data(), nullptr, nullptr, FALSE,
+                CREATE_SUSPENDED | CREATE_NO_WINDOW, nullptr, directory.getFullPathName().toWideCharPointer(), &startup, &child) != FALSE;
+            expect (created);
+            if (created)
+            {
+                const auto testName = mappingName();
+                ObsSender sender (testName);
+                sender.setEnabled (true);
+                Mapping readers (testName + ".Readers", sizeof (lm_obs_readers));
+                expect (readers.view != nullptr);
+                if (readers.view != nullptr)
+                {
+                    auto& slot = static_cast<lm_obs_readers*> (readers.view)->slot[0];
+                    lm_obs_store_release (&slot.pid, child.dwProcessId);
+                    expect (sender.readerState() == ObsSender::ReaderState::idle);
+                    lm_obs_store_release (&slot.heartbeat_qpc, nowQpc());
+                    expect (sender.readerState() == ObsSender::ReaderState::connected);
+                }
+                expect (TerminateProcess (child.hProcess, 0) != FALSE);
+                expectEquals ((int) WaitForSingleObject (child.hProcess, 5000), (int) WAIT_OBJECT_0);
+                expect (sender.readerState() == ObsSender::ReaderState::none);
+                CloseHandle (child.hThread);
+                CloseHandle (child.hProcess);
+            }
+            expect (directory.deleteRecursively());
+        }
+
         beginTest ("presence distinguishes idle plugins, pulling readers and dead processes");
         {
             const auto testName = mappingName();
             ObsSender sender (testName); sender.setEnabled (true);
+            sender.setReaderProcessCheck ([] (juce::uint32 pid) { return pid == GetCurrentProcessId(); });
             Mapping readers (testName + ".Readers", sizeof (lm_obs_readers));
             expect (readers.view != nullptr);
             if (readers.view != nullptr)
@@ -258,6 +320,7 @@ public:
                 lm_obs_store_release (&active.heartbeat_qpc, nowQpc());
                 expect (sender.readerState() == ObsSender::ReaderState::connected); // an earlier idle slot cannot hide it
                 lm_obs_store_release (&active.pid, 0);
+                sender.setReaderProcessCheck ({});
                 // Hold a finished process handle so Windows cannot reuse its pid during this assertion.
                 wchar_t systemPath[MAX_PATH] {}; GetSystemDirectoryW (systemPath, MAX_PATH);
                 const auto executable = juce::String (systemPath) + "\\cmd.exe";

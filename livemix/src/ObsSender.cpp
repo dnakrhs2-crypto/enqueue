@@ -12,6 +12,19 @@ namespace
     constexpr DWORD ringBytes = sizeof (lm_obs_ring_header) + LM_OBS_CAPACITY_FRAMES * LM_OBS_CHANNELS * sizeof (float);
     static_assert (std::atomic<lm_obs_ring_header*>::is_always_lock_free && std::atomic<unsigned>::is_always_lock_free);
 
+    bool isLiveObsProcess (juce::uint32 pid)
+    {
+        HANDLE process = OpenProcess (PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
+        if (process == nullptr) return false;
+        DWORD code = 0, length = 32768;
+        wchar_t path[32768];
+        const bool obs = GetExitCodeProcess (process, &code) && code == STILL_ACTIVE
+            && QueryFullProcessImageNameW (process, 0, path, &length)
+            && juce::String (path, length).fromLastOccurrenceOf ("\\", false, false).equalsIgnoreCase ("obs64.exe");
+        CloseHandle (process);
+        return obs;
+    }
+
     struct MappingSecurity
     {
         MappingSecurity()
@@ -214,17 +227,12 @@ ObsSender::ReaderState ObsSender::readerState() const
         const auto pid = lm_obs_load_acquire (&slot.pid);
         const auto beat = lm_obs_load_acquire (&slot.heartbeat_qpc);
         if (pid <= 0 || pid > MAXDWORD) continue;
-        if (HANDLE process = OpenProcess (PROCESS_QUERY_LIMITED_INFORMATION, FALSE, (DWORD) pid))
+        if ((readerProcessCheck ? readerProcessCheck ((juce::uint32) pid) : isLiveObsProcess ((juce::uint32) pid))
+            && lm_obs_load_acquire (&slot.pid) == pid)
         {
-            DWORD code = 0;
-            const bool alive = GetExitCodeProcess (process, &code) && code == STILL_ACTIVE;
-            CloseHandle (process);
-            if (alive && lm_obs_load_acquire (&slot.pid) == pid)
-            {
-                if (beat > 0 && std::abs (double (now.QuadPart) - double (beat)) < 2.0 * double (frequency))
-                    return ReaderState::connected;
-                state = ReaderState::idle;
-            }
+            if (beat > 0 && std::abs (double (now.QuadPart) - double (beat)) < 2.0 * double (frequency))
+                return ReaderState::connected;
+            state = ReaderState::idle;
         }
     }
     return state;

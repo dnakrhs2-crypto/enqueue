@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """Long unattended run of the LiveMix OBS plugin: fake LiveMix at a wrong clock -> test OBS -> recordings checked.
 
-    python soak.py --hours 4 --ppm 150 --mode source      (start it with tools\\detach_run.py so it outlives the session)
+    python soak.py --hours 4 --ppm 150      (start it with tools\\detach_run.py so it outlives the session)
 
 Records in 30-minute segments (FLAC in MKV), analyses each one with record_and_check.analyze, deletes clean
 recordings, keeps faulty ones, and writes %LOCALAPPDATA%\\LiveMixObsTest\\soak_report.json after every segment plus the
@@ -46,7 +46,6 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--hours", type=float, default=4.0)
     ap.add_argument("--ppm", type=float, default=150.0)
-    ap.add_argument("--mode", choices=["source", "filter"], default="source")
     ap.add_argument("--segment", type=float, default=1800.0)
     ap.add_argument("--isolated", default="")
     ap.add_argument("--port", default="4467")
@@ -54,7 +53,7 @@ def main():
     a = ap.parse_args()
 
     total = a.hours * 3600.0
-    report = {"started": time.strftime("%Y-%m-%d %H:%M:%S"), "hours": a.hours, "ppm": a.ppm, "mode": a.mode,
+    report = {"started": time.strftime("%Y-%m-%d %H:%M:%S"), "hours": a.hours, "ppm": a.ppm,
               "segments": [], "faults_total": 0, "state": "running"}
     save(report)
     portable_obs.stop()
@@ -66,7 +65,7 @@ def main():
                               stderr=subprocess.STDOUT, creationflags=subprocess.CREATE_NO_WINDOW)
     try:
         with Obs() as obs:
-            prepare(obs, a.mode)
+            prepare(obs)
         time.sleep(5.0)
         done = 0.0
         while done < total:

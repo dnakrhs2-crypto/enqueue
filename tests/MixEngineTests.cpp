@@ -778,6 +778,22 @@ public:
                     actions.roots = [folder] { return ObsPluginInstaller::Roots { folder, folder, folder, [] { return false; }, {} }; };
                     actions.elevate = [] (juce::String&) { return ObsPluginInstaller::Result::needsElevation; };
                     gocue::livemix::MainComponent main (document, settings, actions);
+                    for (auto* child : main.getChildren())
+                        if (auto* master = dynamic_cast<MasterCard*> (child))
+                            for (int width : { 364, 988, 1400 })
+                                for (int state = 0; state <= (int) MasterCard::ObsStatus::portableObs; ++state)
+                                    for (int height : { 480, 1100 })
+                                    {
+                                        master->setObsStatus ((MasterCard::ObsStatus) state);
+                                        main.setSize (width + 32, height);
+                                        main.resized();
+                                        expectEquals (master->getWidth(), width);
+                                        expectEquals (master->getHeight(), master->getPreferredHeight (width));
+                                        expect (main.getLocalBounds().contains (master->getBounds()));
+                                        for (auto* other : main.getChildren())
+                                            if (auto* viewport = dynamic_cast<juce::Viewport*> (other); viewport != nullptr && viewport->isVisible())
+                                                expect (! viewport->getBounds().intersects (master->getBounds()));
+                                    }
                     fake->failOutputs = true;
                     rebuilt->callback->audioDeviceStopped();
                     rebuilt->buffer = 128;
@@ -1163,7 +1179,10 @@ public:
             const bool exclusive = juce::String (typeName) == "Windows Audio (Exclusive Mode)";
             expect (engine.openDevice ({ typeName, asio ? "Good" : "Capture", asio ? "Good" : "Headphones", 256, 48000.0, "int32" }).isEmpty());
             for (auto& record : fake->records)
+            {
                 record->bits = record->input.isNotEmpty() ? 16 : 24;
+                record->rate = record->input.isNotEmpty() ? 48000.0 : 44100.0;
+            }
             const auto format = engine.getDeviceFormat();
             expect (format.kind == (asio ? Kind::asio : exclusive ? Kind::windowsExclusive : Kind::windowsShared));
             expectEquals (format.inputBits, asio || exclusive ? 16 : 0);
@@ -1173,17 +1192,37 @@ public:
             expectEquals (format.inputAccepted | format.outputAccepted, 0);
             expectEquals (format.inputDeviceRate, 0.0);
             expectEquals (format.outputDeviceRate, 0.0);
+            expectEquals (format.inputStreamRate, 48000.0);
+            expectEquals (format.outputStreamRate, asio ? 48000.0 : 44100.0);
             if (! asio)
             {
                 auto wanted = engine.getOpenDevice();
                 wanted.output.clear();
                 expect (engine.openDevice (wanted).isEmpty());
                 expectEquals (engine.getDeviceFormat().outputBits, 0);
+                expectEquals (engine.getDeviceFormat().outputStreamRate, 0.0);
+                // Drive the same-device duplex path without relying on this PC's endpoint container ids.
+                auto duplex = engine.getDeviceManager().getAudioDeviceSetup();
+                duplex.outputDeviceName = "Headphones";
+                duplex.useDefaultOutputChannels = false;
+                duplex.outputChannels.setRange (0, 2, true);
+                expect (engine.getDeviceManager().setAudioDeviceSetup (duplex, true).isEmpty());
+                expect (! engine.isSplitMonitor() && engine.isMonitorRunning());
+                auto running = fake->playingOutput();
+                expect (running != nullptr);
+                if (running != nullptr)
+                {
+                    running->rate = 96000.0;
+                    expectEquals (engine.getDeviceFormat().inputStreamRate, 96000.0);
+                    expectEquals (engine.getDeviceFormat().outputStreamRate, 96000.0);
+                }
             }
             engine.shutdown();
             expect (engine.getDeviceFormat().kind == Kind::none);
             expectEquals (engine.getDeviceFormat().inputBits, 0);
             expectEquals (engine.getDeviceFormat().outputBits, 0);
+            expectEquals (engine.getDeviceFormat().inputStreamRate, 0.0);
+            expectEquals (engine.getDeviceFormat().outputStreamRate, 0.0);
         }
     }
 
@@ -1737,6 +1776,7 @@ public:
         const auto directory = juce::File::createTempFile ("-device-ui");
         expect (directory.deleteFile());
         expect (directory.createDirectory().wasOk());
+        runSelectionRefreshTests (directory.getChildFile ("selection-refresh"));
         {
             LiveMixLookAndFeel lookAndFeel;
             MixEngine engine;
@@ -2003,6 +2043,63 @@ public:
         expect (directory.deleteRecursively());
     }
 
+    void runSelectionRefreshTests (const juce::File& directory)
+    {
+        beginTest ("saved int24 survives one-sided capability labels, the 500 ms refresh and a buffer reopen");
+        const ScopedWasapiPreference preference;
+        for (bool inputOnly : { false, true })
+        {
+            const MixDevice saved { "Windows Audio (Exclusive Mode)", "Capture", "Headphones", 256, 48000.0, "int24" };
+            { LiveMixSettings initial (directory); initial.setLastDevice (saved); }
+            LiveMixSettings settings (directory);
+            MixEngine engine;
+            removeRealMixDeviceTypes (engine);
+            engine.getDeviceManager().addAudioDeviceType (std::make_unique<MixFakeType> (saved.type));
+            expect (settings.getLastDevice().has_value());
+            expect (engine.openDevice (*settings.getLastDevice()).isEmpty());
+            std::pair<int, int> accepted {};
+            int changes = 0;
+            for (int reopen = 0; reopen < 2; ++reopen)
+            {
+                SettingsDialog::show (engine, settings, nullptr, [&]
+                {
+                    ++changes;
+                    settings.setLastDevice (engine.getOpenDevice());
+                }, {}, {}, {}, {}, [&] { return accepted; });
+                juce::Component* content = nullptr;
+                auto& desktop = juce::Desktop::getInstance();
+                for (int i = 0; i < desktop.getNumComponents(); ++i)
+                    if (auto* dialog = dynamic_cast<juce::DialogWindow*> (desktop.getComponent (i)); dialog != nullptr && dialog->getName() == ko ("설정"))
+                        if (auto* viewport = dynamic_cast<juce::Viewport*> (dialog->getContentComponent())) content = viewport->getViewedComponent();
+                expect (content != nullptr);
+                if (content != nullptr)
+                {
+                    auto* depth = dynamic_cast<juce::ComboBox*> (content->findChildWithID ("device-bitdepth"));
+                    auto* buffer = dynamic_cast<juce::ComboBox*> (content->findChildWithID ("device-buffer"));
+                    expect (depth != nullptr && buffer != nullptr);
+                    if (depth != nullptr && buffer != nullptr)
+                    {
+                        expectEquals (depth->getSelectedId(), 3);
+                        accepted = inputOnly ? std::make_pair (juce::WasapiFormatInfo::exclusiveInt24, juce::WasapiFormatInfo::exclusiveInt16)
+                                             : std::make_pair (juce::WasapiFormatInfo::exclusiveInt16, juce::WasapiFormatInfo::exclusiveInt24);
+                        dispatchFor (650);
+                        expectEquals (changes, reopen);
+                        expectEquals (depth->getSelectedId(), 3);
+                        expectEquals (depth->getText(), inputOnly ? ko ("24비트 — 입력만") : ko ("24비트 — 출력만"));
+                        expect (! depth->isItemEnabled (4));
+                        buffer->setSelectedId (reopen == 0 ? 512 : 256, juce::sendNotificationSync);
+                        expectEquals (changes, reopen + 1);
+                        expectEquals (engine.getOpenDevice().bufferSize, reopen == 0 ? 512 : 256);
+                        expectEquals (engine.getOpenDevice().sampleFormat, juce::String ("int24"));
+                        expectEquals (settings.getLastDevice()->sampleFormat, juce::String ("int24"));
+                        expectEquals (depth->getSelectedId(), 3);
+                    }
+                }
+                SettingsDialog::closeIfOpen();
+            }
+        }
+    }
+
     void runFormatTextTests()
     {
         using Kind = MixEngine::DeviceFormat::Kind;
@@ -2019,11 +2116,23 @@ public:
         format.inputBits = 16;
         format.inputDeviceRate = 44100.0;
         format.outputDeviceRate = 96000.0;
+        format.inputStreamRate = format.outputStreamRate = 48000.0;
         auto text = DeviceFormatText::settings (format, device, false);
         expectEquals (text.detail, ko ("입력 16비트 · 44.1 kHz, 출력 24비트 · 96 kHz (윈도우 소리 설정의 '기본 형식')"));
         expect (text.hint.contains (ko ("녹음/재생 탭 → 장치 더블클릭 → 고급 → 기본 형식에서 바꿉니다.")));
         expect (text.hint.contains (ko ("입력: 윈도우가 44.1 kHz → 48 kHz로 변환 중")));
         expect (text.hint.contains (ko ("출력: 윈도우가 48 kHz → 96 kHz로 변환 중")));
+        format.outputStreamRate = 44100.0;
+        text = DeviceFormatText::settings (format, device, false);
+        expect (text.hint.contains (ko ("출력: 윈도우가 44.1 kHz → 96 kHz로 변환 중")));
+        expect (! text.hint.contains (ko ("출력: 윈도우가 48 kHz")));
+        format.outputDeviceRate = 44100.0;
+        text = DeviceFormatText::settings (format, device, false);
+        expect (! text.hint.contains (ko ("출력: 윈도우가")), "LiveMix's split monitor resampling is not Windows conversion");
+        format.inputStreamRate = 96000.0;
+        text = DeviceFormatText::settings (format, device, false);
+        expect (text.hint.contains (ko ("입력: 윈도우가 44.1 kHz → 96 kHz로 변환 중")));
+        format.inputStreamRate = format.outputStreamRate = 48000.0;
         format.inputDeviceRate = format.outputDeviceRate = 48000.0;
         text = DeviceFormatText::settings (format, device, false);
         expect (! text.hint.contains (ko ("변환 중")));

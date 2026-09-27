@@ -360,6 +360,8 @@ MixEngine::DeviceFormat MixEngine::getDeviceFormat() const
     {
         result.kind = DeviceFormat::Kind::asio;
         result.inputBits = result.outputBits = inputDevice->getCurrentBitDepth();
+        if (! inputDevice->getActiveInputChannels().isZero()) result.inputStreamRate = inputDevice->getCurrentSampleRate();
+        if (! inputDevice->getActiveOutputChannels().isZero()) result.outputStreamRate = inputDevice->getCurrentSampleRate();
         return result;
     }
     if (! AudioBackends::isWindows (type)) return result;
@@ -378,6 +380,9 @@ MixEngine::DeviceFormat MixEngine::getDeviceFormat() const
     }
     result = describeDeviceFormat (result.kind, input, output, openedDevice.sampleFormat);
    #endif
+    if (! inputDevice->getActiveInputChannels().isZero()) result.inputStreamRate = inputDevice->getCurrentSampleRate();
+    if (outputDevice != nullptr && outputDevice->isOpen() && isMonitorRunning() && ! outputDevice->getActiveOutputChannels().isZero())
+        result.outputStreamRate = outputDevice->getCurrentSampleRate();
     if (result.kind == DeviceFormat::Kind::windowsExclusive)
     {
         // Non-WASAPI devices (test fakes) know only their bit count, never supported formats or refusal.

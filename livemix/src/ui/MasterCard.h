@@ -55,6 +55,7 @@ private:
     struct Chip;
     void rebuildChain();
     int obsToggleWidth() const;
+    int obsHintHeight (int width) const;
     int obsControlsHeight (int width) const;
     void refreshObsStatus();
     void refreshObsToggle();
@@ -67,7 +68,7 @@ private:
     juce::TextButton openChainButton, addPluginButton, lufsButton;
     juce::ComboBox outputCombo;
     juce::ToggleButton obsToggle;
-    juce::Label obsStatusLabel;
+    juce::Label obsStatusLabel, obsSourceHint;
     ObsStatus obsStatus = ObsStatus::waiting;
     juce::String obsStatusReason;
     bool obsInstalling = false;

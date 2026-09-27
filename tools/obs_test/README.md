@@ -7,8 +7,8 @@ port 4466 without a password) started on an invisible desktop, so the real OBS o
 |---|---|
 | `portable_obs.py setup / start / stop / log` | copy OBS once, write the test profile (FLAC-in-MKV recordings to `...\LiveMixObsTest\rec`), start it with the plugin from `obs-plugin\build_x64\rundir\RelWithDebInfo`, stop only the OBS it started |
 | `fake_writer.py` | pretends to be LiveMix: a 997 Hz tone at a chosen clock error (`--ppm`), restarts, rate changes, stalls |
-| `record_and_check.py` | adds the source (or a filter on a capture host), records, and checks every 10 ms block for clicks, gaps, skips and repeats |
-| `run_matrix.py` | the short real-OBS checks (+-200 ppm, filter, restart + stall, 44.1 -> 48 kHz) |
+| `record_and_check.py` | adds the LiveMix source, records, and checks every 10 ms block for clicks, gaps, skips and repeats |
+| `run_matrix.py` | the short real-OBS source checks (+-200 ppm, restart + stall, 44.1 -> 48 kHz) |
 | `soak.py --isolated NAME --port P --hours H` | long run on a second, isolated test OBS (own folder, port, ring and plugin copy) in 30-minute segments; start it with `tools\detach_run.py` so it outlives the session |
 
 ## Rings

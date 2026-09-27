@@ -105,7 +105,7 @@ static void *source_create(obs_data_t *settings, obs_source_t *source)
 	s->source = source;
 	audio_t *audio = obs_get_audio();
 	uint32_t rate = audio ? audio_output_get_sample_rate(audio) : 48000;
-	s->receiver = lm_receiver_create(livemix_obs_connection(), LM_RECEIVER_SOURCE, rate);
+	s->receiver = lm_receiver_create(livemix_obs_connection(), rate);
 	if (s->receiver)
 		s->thread = CreateThread(NULL, 0, source_worker, s, 0, NULL);
 	if (!s->thread) {

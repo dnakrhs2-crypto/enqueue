@@ -79,8 +79,8 @@ inline SettingsText settings (const MixEngine::DeviceFormat& format, const MixDe
             if (from > 0 && to > 0 && ! juce::approximatelyEqual (from, to))
                 text.hint += "\n" + prefix + ko ("윈도우가 ") + sampleRate (from) + ko (" → ") + sampleRate (to) + ko ("로 변환 중");
         };
-        if (inputOpen) conversion (ko ("입력: "), format.inputDeviceRate, device.sampleRate);
-        if (outputOpen) conversion (ko ("출력: "), device.sampleRate, format.outputDeviceRate);
+        if (inputOpen) conversion (ko ("입력: "), format.inputDeviceRate, format.inputStreamRate);
+        if (outputOpen) conversion (ko ("출력: "), format.outputStreamRate, format.outputDeviceRate);
     }
     else
     {

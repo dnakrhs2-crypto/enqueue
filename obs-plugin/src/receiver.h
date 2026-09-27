@@ -9,7 +9,6 @@
 typedef struct lm_connection lm_connection;
 typedef struct lm_receiver lm_receiver;
 
-enum lm_receiver_kind { LM_RECEIVER_SOURCE = 1, LM_RECEIVER_FILTER = 2 };
 enum lm_log_level { LM_LOG_INFO, LM_LOG_WARNING };
 
 typedef struct lm_connection_config {
@@ -26,9 +25,6 @@ typedef struct lm_connection_config {
 	int64_t (*now)(void *context);
 	void *clock_context;
 	int64_t qpc_frequency;
-	/* Optional host maintenance on the manager's one-second probe, outside receiver locks. */
-	void (*probe)(void *context);
-	void *probe_context;
 } lm_connection_config;
 
 typedef struct lm_receiver_stats {
@@ -51,7 +47,7 @@ void lm_connection_destroy(lm_connection *connection);
  * and prepares any requested ASRC format on each call. */
 void lm_connection_poll(lm_connection *connection);
 
-lm_receiver *lm_receiver_create(lm_connection *connection, enum lm_receiver_kind kind, double out_rate);
+lm_receiver *lm_receiver_create(lm_connection *connection, double out_rate);
 void lm_receiver_destroy(lm_receiver *receiver);
 /* Single audio caller per instance. Planar stereo, exactly frames written.
  * No allocation, locks, logging or waits. Integer Hz rates 8000..384000 are
@@ -68,7 +64,5 @@ size_t lm_mix_stereo_for_layout(float *left, const float *right, int frames, siz
 /* Atomic diagnostic snapshots; safe from a UI/worker thread. */
 void lm_receiver_get_stats(const lm_receiver *receiver, lm_receiver_stats *stats);
 bool lm_receiver_connected(const lm_receiver *receiver);
-/* Pure filter activity decision. Zero means filter_audio has never run. */
-bool lm_filter_is_idle(int64_t last_audio, int64_t now, int64_t frequency);
 
 #endif

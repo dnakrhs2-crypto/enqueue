@@ -32,7 +32,7 @@ struct ObsPluginInstaller
         bool needsUpdate() const noexcept;
         juce::String versionString() const;
     };
-    static RunningObs runningObsInfo (const juce::File& image, juce::uint64 version);
+    static RunningObs runningObsInfo (const juce::File& image, juce::uint64 version, const juce::String& commandLine = {});
 
     // Shared by Main's single-instance decision, headless mode and the UI's elevation worker.
     static bool isInstallCommandLine (const juce::String&);
@@ -46,20 +46,29 @@ struct ObsPluginInstaller
                                          const std::function<Result (juce::String&)>& elevate = installElevated);
 };
 
-/** Message-thread discovery, throttled to two seconds. Metadata lives only as long as its image is running. */
+/** Message-thread discovery, throttled to two seconds. Metadata is cached for each process instance. */
 class RunningObsDetector
 {
 public:
-    using ImageQuery = std::function<std::vector<juce::File>()>;
+    struct Process
+    {
+        juce::File image;
+        juce::uint32 pid = 0;
+        juce::uint64 creationTime = 0;
+    };
+    using ProcessQuery = std::function<std::vector<Process>()>;
     using VersionQuery = std::function<juce::uint64 (const juce::File&)>;
-    explicit RunningObsDetector (ImageQuery images = {}, VersionQuery version = {});
+    using CommandLineQuery = std::function<juce::String (const Process&)>;
+    explicit RunningObsDetector (ProcessQuery processes = {}, VersionQuery version = {}, CommandLineQuery commandLine = {});
     const std::vector<ObsPluginInstaller::RunningObs>& scan (double nowMs = juce::Time::getMillisecondCounterHiRes());
 
 private:
-    ImageQuery images;
+    ProcessQuery processes;
     VersionQuery version;
+    CommandLineQuery commandLine;
     double nextScan = 0.0;
-    std::map<juce::String, ObsPluginInstaller::RunningObs> byImage;
+    using ProcessKey = std::pair<juce::uint32, juce::uint64>;
+    std::map<ProcessKey, ObsPluginInstaller::RunningObs> byProcess;
     std::vector<ObsPluginInstaller::RunningObs> running;
 };
 }

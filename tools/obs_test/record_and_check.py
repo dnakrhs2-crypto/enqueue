@@ -1,8 +1,7 @@
 # -*- coding: utf-8 -*-
 """Records the LiveMix plugin's output in the portable test OBS and looks for clicks / dropouts.
 
-    python record_and_check.py --mode source --seconds 300 --ppm 200 [--writer "--restart-at 120"]
-    python record_and_check.py --mode filter --seconds 300 --ppm -200
+    python record_and_check.py --seconds 300 --ppm 200 [--writer "--restart-at 120"]
     python record_and_check.py --analyze some.mkv --ppm 200       # only analyse an existing recording
 
 Needs the test OBS running (portable_obs.py start). Every other audio input in the scene collection is muted so the
@@ -18,27 +17,18 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from obsws import Obs  # noqa: E402
 
-SOURCE_KIND, FILTER_KIND = "livemix_master_source", "livemix_master_filter"
-SOURCE_NAME, HOST_NAME, FILTER_NAME = "LiveMix Test Source", "LiveMix Filter Host", "LiveMix Test Filter"
+SOURCE_KIND = "livemix_master_source"
+SOURCE_NAME = "LiveMix Test Source"
 
 
-def prepare(obs, mode):
+def prepare(obs):
     scene = obs.call("GetCurrentProgramScene")["currentProgramSceneName"]
     names = [i["inputName"] for i in obs.call("GetInputList")["inputs"]]
-    if mode == "source" and SOURCE_NAME not in names:
+    if SOURCE_NAME not in names:
         obs.call("CreateInput", {"sceneName": scene, "inputName": SOURCE_NAME, "inputKind": SOURCE_KIND,
                                  "inputSettings": {}, "sceneItemEnabled": True})
-    if mode == "filter":
-        if HOST_NAME not in names:   # any capture that keeps delivering packets hosts the filter
-            obs.call("CreateInput", {"sceneName": scene, "inputName": HOST_NAME, "inputKind": "wasapi_input_capture",
-                                     "inputSettings": {"device_id": "default"}, "sceneItemEnabled": True})
-        filters = [f["filterName"] for f in obs.call("GetSourceFilterList", {"sourceName": HOST_NAME})["filters"]]
-        if FILTER_NAME not in filters:
-            obs.call("CreateSourceFilter", {"sourceName": HOST_NAME, "filterName": FILTER_NAME,
-                                            "filterKind": FILTER_KIND, "filterSettings": {"mode": "replace"}})
-    keep = SOURCE_NAME if mode == "source" else HOST_NAME
     for i in obs.call("GetInputList")["inputs"]:
-        obs.call("SetInputMute", {"inputName": i["inputName"], "inputMuted": i["inputName"] != keep}, check=False)
+        obs.call("SetInputMute", {"inputName": i["inputName"], "inputMuted": i["inputName"] != SOURCE_NAME}, check=False)
 
 
 NATIVE_WRITER = os.path.join(HERE, "native_writer", "build", "Release", "livemix-fake-writer.exe")
@@ -54,11 +44,11 @@ def writer_command(seconds, writer_args):
     return [sys.executable, os.path.join(HERE, "fake_writer.py"), "--seconds", str(seconds)] + writer_args
 
 
-def record(mode, seconds, writer_args):
+def record(seconds, writer_args):
     writer = subprocess.Popen(writer_command(seconds + 8, writer_args), creationflags=subprocess.CREATE_NO_WINDOW)
     try:
         with Obs() as obs:
-            prepare(obs, mode)
+            prepare(obs)
             time.sleep(3.0)                      # connect + prefill before the recording starts
             obs.call("StartRecord")
             time.sleep(seconds)
@@ -131,19 +121,18 @@ def analyze(wav, level=0.25, skip=1.0, block_ms=10.0):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--mode", choices=["source", "filter"], default="source")
     ap.add_argument("--seconds", type=float, default=60)
     ap.add_argument("--ppm", type=float, default=0.0)
     ap.add_argument("--writer", default="", help="extra fake_writer.py arguments")
     ap.add_argument("--analyze", default="", help="analyse this recording instead of recording")
     a = ap.parse_args()
-    path = a.analyze or record(a.mode, a.seconds, ["--ppm", str(a.ppm)] + a.writer.split())
+    path = a.analyze or record(a.seconds, ["--ppm", str(a.ppm)] + a.writer.split())
     wav = extract(path)
     try:
         result = analyze(wav)
     finally:
         os.remove(wav)
-    result.update({"recording": path, "mode": a.mode, "ppm": a.ppm})
+    result.update({"recording": path, "ppm": a.ppm})
     print(json.dumps(result, ensure_ascii=False, indent=1))
 
 

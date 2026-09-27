@@ -13,7 +13,6 @@
 #include "receiver.h"
 
 lm_connection *livemix_obs_connection(void);
-void livemix_filter_probe(void *context);
 extern struct obs_source_info livemix_master_source;
 extern struct obs_source_info livemix_master_filter;
 

@@ -2,6 +2,7 @@
 
 #include <juce_core/juce_core.h>
 #include <atomic>
+#include <functional>
 
 struct lm_obs_ring_header;
 struct lm_obs_readers;
@@ -24,6 +25,8 @@ public:
 
     enum class ReaderState { none, idle, connected };
     ReaderState readerState() const; // message thread; at most 16 process liveness checks
+    /** Message thread: optional process-identity check for isolated test mappings. Empty restores the OS query. */
+    void setReaderProcessCheck (std::function<bool (juce::uint32)> check) { readerProcessCheck = std::move (check); }
     juce::String getError() const; // control/UI only
 
 private:
@@ -44,6 +47,7 @@ private:
     juce::String lastError;
     double sampleRate = 48000.0;
     int64_t frequency = 0;
+    std::function<bool (juce::uint32)> readerProcessCheck;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (ObsSender)
 };

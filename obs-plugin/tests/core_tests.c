@@ -28,11 +28,9 @@ typedef struct fixture {
 	bool threaded, position_signal;
 	bool capture_logs, in_audio, audio_logged;
 	DWORD audio_thread;
-	int events[2][EVENT_COUNT], summaries[2], log_calls, suppressed, repeats, previous_sum;
+	int events[EVENT_COUNT], summaries, log_calls, suppressed, repeats, previous_sum;
 	const char *previous_format;
 	bool repeated_format;
-	int probes;
-	bool audio_probed;
 } fixture;
 
 static unsigned name_serial;
@@ -78,16 +76,15 @@ static void capture_log(void *opaque, enum lm_log_level level, const char *forma
 		f->repeated_format = true;
 	f->previous_format = format;
 	++f->log_calls;
-	int kind = strstr(message, "kind=source ") ? 0 : (strstr(message, "kind=filter ") ? 1 : -1);
-	if (kind < 0)
+	if (!strstr(message, "kind=source "))
 		return;
 	if (strstr(message, " summary "))
-		++f->summaries[kind];
+		++f->summaries;
 	const char *events[EVENT_COUNT] = {"event=connect ", "event=disconnect ", "event=epoch ", "event=rate ",
 		"event=underrun ", "event=overrun ", "event=resync ", "event=target "};
 	for (int i = 0; i < EVENT_COUNT; ++i)
 		if (strstr(message, events[i]))
-			++f->events[kind][i];
+			++f->events[i];
 }
 
 static void checked_pull(fixture *f)
@@ -95,14 +92,6 @@ static void checked_pull(fixture *f)
 	f->in_audio = true;
 	lm_receiver_pull(f->receiver, f->left, f->right, TEST_FRAMES, TEST_RATE);
 	f->in_audio = false;
-}
-
-static void capture_probe(void *context)
-{
-	fixture *f = context;
-	++f->probes;
-	if (GetCurrentThreadId() == f->audio_thread && f->in_audio)
-		f->audio_probed = true;
 }
 
 static bool fixture_open(fixture *f)
@@ -122,12 +111,10 @@ static bool fixture_open(fixture *f)
 	config.qpc_frequency = TEST_QPC;
 	config.log = capture_log;
 	config.log_context = f;
-	config.probe = capture_probe;
-	config.probe_context = f;
 	f->connection = lm_connection_create(&config);
 	if (!f->connection)
 		return false;
-	f->receiver = lm_receiver_create(f->connection, LM_RECEIVER_SOURCE, TEST_RATE);
+	f->receiver = lm_receiver_create(f->connection, TEST_RATE);
 	return f->receiver != NULL;
 }
 
@@ -788,7 +775,7 @@ static bool test_reader_presence(void)
 		}
 	}
 	CHECK(claimed == 1 && slot != NULL);
-	CHECK(lm_obs_load_acquire(&slot->kind) == LM_RECEIVER_SOURCE);
+	CHECK(lm_obs_load_acquire(&slot->kind) == 1);
 	CHECK(f.now - lm_obs_load_acquire(&slot->heartbeat_qpc) <= TEST_QPC);
 	for (int i = 0; i < 200; ++i)
 		tick(&f, true, false);
@@ -871,7 +858,7 @@ static bool test_presence_optional(void)
 	config.qpc_frequency = TEST_QPC;
 	f.connection = lm_connection_create(&config);
 	CHECK(f.connection != NULL);
-	f.receiver = lm_receiver_create(f.connection, LM_RECEIVER_SOURCE, TEST_RATE);
+	f.receiver = lm_receiver_create(f.connection, TEST_RATE);
 	CHECK(f.receiver != NULL);
 	CHECK(writer_open(&f, (DWORD)RING_BYTES));
 	CHECK(warm_up(&f) && lm_receiver_connected(f.receiver));
@@ -920,7 +907,7 @@ static bool test_independent_receivers(void)
 	bool ok = true;
 	CHECK(fixture_open(&f));
 	CHECK(writer_open(&f, (DWORD)RING_BYTES));
-	second = lm_receiver_create(f.connection, LM_RECEIVER_FILTER, 44100.0);
+	second = lm_receiver_create(f.connection, 44100.0);
 	CHECK(second != NULL);
 	for (int i = 0; i < 300; ++i) {
 		tick(&f, true, true);
@@ -1023,23 +1010,17 @@ done:
 	return ok;
 }
 
-static bool test_diagnostic_events(enum lm_receiver_kind kind)
+static bool test_source_events(void)
 {
 	fixture f;
 	bool ok = true;
 	CHECK(fixture_open(&f));
-	if (kind == LM_RECEIVER_FILTER) {
-		lm_receiver_destroy(f.receiver);
-		f.receiver = lm_receiver_create(f.connection, kind, TEST_RATE);
-		CHECK(f.receiver != NULL);
-	}
 	f.capture_logs = true;
 	CHECK(writer_open(&f, (DWORD)RING_BYTES));
 	CHECK(warm_up(&f));
 	lm_connection_poll(f.connection);
-	int index = (int)kind - 1;
 	int calls = f.log_calls;
-	int connects = f.events[index][CONNECT], disconnects = f.events[index][DISCONNECT];
+	int connects = f.events[CONNECT], disconnects = f.events[DISCONNECT];
 	/* Several transitions between manager polls must all survive, and none
 	 * may invoke the logger from pull. Snapshot-only logging loses this burst. */
 	for (int i = 0; i < 2; ++i) {
@@ -1050,7 +1031,7 @@ static bool test_diagnostic_events(enum lm_receiver_kind kind)
 	}
 	CHECK(f.log_calls == calls && !f.audio_logged);
 	lm_connection_poll(f.connection);
-	CHECK(f.events[index][CONNECT] == connects + 2 && f.events[index][DISCONNECT] == disconnects + 2);
+	CHECK(f.events[CONNECT] == connects + 2 && f.events[DISCONNECT] == disconnects + 2);
 	CHECK(warm_up(&f));
 	for (int i = 0; i < 8; ++i)
 		tick(&f, false, true);
@@ -1059,43 +1040,38 @@ static bool test_diagnostic_events(enum lm_receiver_kind kind)
 		tick(&f, true, false);
 	checked_pull(&f);
 	lm_connection_poll(f.connection);
-	int resyncs = f.events[index][RESYNC];
+	int resyncs = f.events[RESYNC];
 	lm_receiver_resync(f.receiver);
 	checked_pull(&f);
 	lm_connection_poll(f.connection);
-	CHECK(f.events[index][RESYNC] == resyncs + 1);
+	CHECK(f.events[RESYNC] == resyncs + 1);
 	writer_restart(&f, 44100.0, 0.25f);
 	CHECK(warm_up(&f));
 	lm_connection_poll(f.connection);
 	for (int i = 0; i < EVENT_COUNT; ++i)
-		CHECK(f.events[index][i] > 0);
-	CHECK(f.events[index][EPOCH] == 2 && f.events[index][RATE] == 2);
-	/* Inactive filter parents can stop pulling completely. The manager must
+		CHECK(f.events[i] > 0);
+	CHECK(f.events[EPOCH] == 2 && f.events[RATE] == 2);
+	/* A paused source worker can stop pulling completely. The manager must
 	 * still report both the stale writer and its return, in the same epoch. */
-	connects = f.events[index][CONNECT];
-	disconnects = f.events[index][DISCONNECT];
+	connects = f.events[CONNECT];
+	disconnects = f.events[DISCONNECT];
 	f.now += TEST_QPC;
 	lm_connection_poll(f.connection);
-	CHECK(f.events[index][DISCONNECT] == disconnects + 1);
+	CHECK(f.events[DISCONNECT] == disconnects + 1);
 	lm_obs_store_release(&f.header->heartbeat_qpc, f.now);
 	lm_connection_poll(f.connection);
-	CHECK(f.events[index][CONNECT] == connects + 1);
-	CHECK(f.summaries[index] == 0 && !f.audio_logged);
+	CHECK(f.events[CONNECT] == connects + 1);
+	CHECK(f.summaries == 0 && !f.audio_logged);
 done:
 	fixture_close(&f);
 	return ok;
 }
 
-static bool test_diagnostic_summaries(enum lm_receiver_kind kind)
+static bool test_source_summaries(void)
 {
 	fixture f;
 	bool ok = true;
 	CHECK(fixture_open(&f));
-	if (kind == LM_RECEIVER_FILTER) {
-		lm_receiver_destroy(f.receiver);
-		f.receiver = lm_receiver_create(f.connection, kind, TEST_RATE);
-		CHECK(f.receiver != NULL);
-	}
 	int64_t created = f.now;
 	f.capture_logs = true;
 	CHECK(writer_open(&f, (DWORD)RING_BYTES));
@@ -1104,14 +1080,13 @@ static bool test_diagnostic_summaries(enum lm_receiver_kind kind)
 	f.now = created + 600 * TEST_QPC - 1;
 	lm_obs_store_release(&f.header->heartbeat_qpc, f.now);
 	lm_connection_poll(f.connection);
-	int index = (int)kind - 1;
-	CHECK(f.summaries[index] == 0);
+	CHECK(f.summaries == 0);
 	++f.now;
 	int calls = f.log_calls;
 	for (int i = 0; i < 65; ++i) {
 		lm_obs_store_release(&f.header->heartbeat_qpc, f.now);
 		lm_connection_poll(f.connection);
-		CHECK(f.summaries[index] == i + 1);
+		CHECK(f.summaries == i + 1);
 		f.now += 600 * TEST_QPC;
 	}
 	CHECK(f.log_calls == calls + 65 && f.suppressed == 0 && !f.repeated_format && !f.audio_logged);
@@ -1119,11 +1094,6 @@ done:
 	fixture_close(&f);
 	return ok;
 }
-
-static bool test_source_events(void) { return test_diagnostic_events(LM_RECEIVER_SOURCE); }
-static bool test_filter_events(void) { return test_diagnostic_events(LM_RECEIVER_FILTER); }
-static bool test_source_summaries(void) { return test_diagnostic_summaries(LM_RECEIVER_SOURCE); }
-static bool test_filter_summaries(void) { return test_diagnostic_summaries(LM_RECEIVER_FILTER); }
 
 /* Independent block clocks: publish only complete writer blocks, and catch up
  * all delayed blocks on the first writer callback after a starvation interval.
@@ -1197,11 +1167,6 @@ static bool test_adaptive_blocks(double input_rate, int writer_frames, int reade
 	CHECK(fixture_open(&f));
 	f.rate = input_rate;
 	CHECK(writer_open(&f, (DWORD)RING_BYTES));
-	if (reader_frames == 1024) {
-		lm_receiver_destroy(f.receiver);
-		f.receiver = lm_receiver_create(f.connection, LM_RECEIVER_FILTER, TEST_RATE);
-		CHECK(f.receiver != NULL);
-	}
 	lm_receiver_stats stats;
 	CHECK(simulate_blocks(&f, writer_frames, reader_frames, 60, starvation_ms, &stats));
 	if (starvation_ms) {
@@ -1218,7 +1183,7 @@ done:
 
 static bool test_blocks_48000(void) { return test_adaptive_blocks(48000.0, 2048, 480, 0); }
 static bool test_blocks_44100(void) { return test_adaptive_blocks(44100.0, 2048, 480, 0); }
-static bool test_filter_blocks(void) { return test_adaptive_blocks(48000.0, 256, 1024, 0); }
+static bool test_large_reader_blocks(void) { return test_adaptive_blocks(48000.0, 256, 1024, 0); }
 static bool test_periodic_starvation(void) { return test_adaptive_blocks(48000.0, 480, 480, 80); }
 
 static bool grow_target(fixture *f)
@@ -1397,53 +1362,10 @@ static void run_test(const char *name, bool (*test)(void))
 	fflush(stdout);
 }
 
-static bool test_management_probe(void)
-{
-	fixture f;
-	bool ok = true;
-	CHECK(fixture_open(&f));
-	CHECK(f.probes == 1);
-	checked_pull(&f);
-	lm_connection_poll(f.connection);
-	CHECK(f.probes == 1 && !f.audio_probed);
-	f.now += TEST_QPC - 1;
-	lm_connection_poll(f.connection);
-	CHECK(f.probes == 1);
-	++f.now;
-	lm_connection_poll(f.connection);
-	CHECK(f.probes == 2);
-	f.now += 3 * TEST_QPC;
-	checked_pull(&f);
-	CHECK(f.probes == 2 && !f.audio_probed);
-	lm_connection_poll(f.connection);
-	CHECK(f.probes == 3);
-done:
-	fixture_close(&f);
-	return ok;
-}
-
-static bool test_filter_idle(void)
-{
-	bool ok = true;
-	int64_t last = 20 * TEST_QPC;
-	CHECK(lm_filter_is_idle(0, last, TEST_QPC));
-	CHECK(!lm_filter_is_idle(last, last, TEST_QPC));
-	CHECK(!lm_filter_is_idle(last, last + TEST_QPC * 3 / 2, TEST_QPC));
-	CHECK(lm_filter_is_idle(last, last + TEST_QPC * 3 / 2 + 1, TEST_QPC));
-	CHECK(!lm_filter_is_idle(last + 2 * TEST_QPC, last + 2 * TEST_QPC, TEST_QPC));
-	/* Audio can publish a newer tick between the manager reading QPC and reading last_audio. */
-	CHECK(!lm_filter_is_idle(last, last - 1, TEST_QPC));
-	CHECK(lm_filter_is_idle(last, last, 0));
-done:
-	return ok;
-}
-
 int main(int argc, char **argv)
 {
 	/* An optional name substring keeps focused regression runs inexpensive. */
 	test_filter = argc > 1 ? argv[1] : NULL;
-	run_test("filter idle warning: never called, 1.5-second boundary and recovery", test_filter_idle);
-	run_test("management probe: once per second and never from audio", test_management_probe);
 	run_test("source mixing: unity mono, stereo and six-channel OBS layouts", test_source_layout);
 	run_test("connect after writer starts", test_late_connect);
 	run_test("writer restart, retained mapping and bounded fade", test_restart_fade);
@@ -1470,12 +1392,10 @@ int main(int argc, char **argv)
 	run_test("large pull bounds, exact length and silence", test_large_pull);
 	run_test("background manager and concurrent ASRC handoff", test_threaded_format_handoff);
 	run_test("diagnostics: source events survive bursts outside audio pulls", test_source_events);
-	run_test("diagnostics: filter events survive bursts outside audio pulls", test_filter_events);
 	run_test("diagnostics: source ten-minute summaries survive OBS repeated-line filtering", test_source_summaries);
-	run_test("diagnostics: filter ten-minute summaries survive OBS repeated-line filtering", test_filter_summaries);
 	run_test("adaptive target: 2048-frame writer at 48 kHz", test_blocks_48000);
 	run_test("adaptive target: 2048-frame writer at 44.1 kHz", test_blocks_44100);
-	run_test("adaptive target: 1024-frame filter pulls and 256-frame writer", test_filter_blocks);
+	run_test("adaptive target: 1024-frame receiver pulls and 256-frame writer", test_large_reader_blocks);
 	run_test("adaptive target: recurring 80 ms writer starvation", test_periodic_starvation);
 	run_test("adaptive target: epoch/rate resets and same-epoch stall retention", test_target_resets);
 	run_test("adaptive target: headroom step preserves settled ppm slew", test_target_slew);

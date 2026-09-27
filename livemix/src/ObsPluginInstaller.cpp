@@ -4,6 +4,7 @@
 #include <shlobj.h>
 #include <shellapi.h>
 #include <tlhelp32.h>
+#include <winternl.h>
 #include <atomic>
 #include <vector>
 
@@ -184,11 +185,50 @@ namespace
         return result;
     }
 
-    std::vector<juce::File> runningObsImages()
+    juce::uint64 processCreationTime (HANDLE process)
     {
-        std::vector<juce::File> images;
+        FILETIME created {}, exited {}, kernel {}, user {};
+        if (! GetProcessTimes (process, &created, &exited, &kernel, &user)) return 0;
+        return (juce::uint64 (created.dwHighDateTime) << 32) | created.dwLowDateTime;
+    }
+
+    juce::String processCommandLine (const RunningObsDetector::Process& info)
+    {
+        using QueryProcess = NTSTATUS (NTAPI*) (HANDLE, PROCESSINFOCLASS, PVOID, ULONG, PULONG);
+        static const auto query = reinterpret_cast<QueryProcess> (GetProcAddress (GetModuleHandleW (L"ntdll.dll"), "NtQueryInformationProcess"));
+        if (query == nullptr) return {};
+        HANDLE process = OpenProcess (PROCESS_QUERY_LIMITED_INFORMATION, FALSE, info.pid);
+        if (process == nullptr) return {};
+        juce::String result;
+        if (processCreationTime (process) == info.creationTime)
+        {
+            constexpr auto commandLineInformation = static_cast<PROCESSINFOCLASS> (60); // Windows 8.1+
+            ULONG bytes = 0;
+            query (process, commandLineInformation, nullptr, 0, &bytes);
+            if (bytes >= sizeof (UNICODE_STRING) && bytes <= 1024 * 1024)
+            {
+                std::vector<unsigned char> storage (bytes);
+                if (query (process, commandLineInformation, storage.data(), bytes, &bytes) >= 0)
+                {
+                    const auto& text = *reinterpret_cast<const UNICODE_STRING*> (storage.data());
+                    const auto begin = reinterpret_cast<uintptr_t> (storage.data());
+                    const auto end = begin + storage.size();
+                    const auto buffer = reinterpret_cast<uintptr_t> (text.Buffer);
+                    if (buffer >= begin + sizeof (UNICODE_STRING) && buffer <= end
+                        && text.Length <= end - buffer && text.Length % sizeof (wchar_t) == 0)
+                        result = juce::String (text.Buffer, text.Length / sizeof (wchar_t));
+                }
+            }
+        }
+        CloseHandle (process);
+        return result;
+    }
+
+    std::vector<RunningObsDetector::Process> runningObsProcesses()
+    {
+        std::vector<RunningObsDetector::Process> processes;
         HANDLE snapshot = CreateToolhelp32Snapshot (TH32CS_SNAPPROCESS, 0);
-        if (snapshot == INVALID_HANDLE_VALUE) return images;
+        if (snapshot == INVALID_HANDLE_VALUE) return processes;
         PROCESSENTRY32W entry {};
         entry.dwSize = sizeof (entry);
         for (BOOL found = Process32FirstW (snapshot, &entry); found; found = Process32NextW (snapshot, &entry))
@@ -202,18 +242,20 @@ namespace
             {
                 auto image = juce::String (path.data());
                 if (image.startsWith ("\\\\?\\")) image = image.substring (4);
-                images.emplace_back (image);
+                const auto created = processCreationTime (process);
+                if (created != 0 && juce::File (image).getFileName().equalsIgnoreCase ("obs64.exe"))
+                    processes.push_back ({ juce::File (image), entry.th32ProcessID, created });
             }
             CloseHandle (process);
         }
         CloseHandle (snapshot);
-        return images;
+        return processes;
     }
 
     bool obsRunningIn (const juce::File& directory)
     {
-        for (const auto& image : runningObsImages())
-            if (image.isAChildOf (directory)) return true;
+        for (const auto& process : runningObsProcesses())
+            if (process.image.isAChildOf (directory)) return true;
         return false;
     }
 }
@@ -231,18 +273,29 @@ juce::String ObsPluginInstaller::RunningObs::versionString() const
     return text;
 }
 
-ObsPluginInstaller::RunningObs ObsPluginInstaller::runningObsInfo (const juce::File& image, juce::uint64 version)
+ObsPluginInstaller::RunningObs ObsPluginInstaller::runningObsInfo (const juce::File& image, juce::uint64 version, const juce::String& commandLine)
 {
     RunningObs info { image, version, false };
+    if (commandLine.isNotEmpty())
+    {
+        int count = 0;
+        if (auto** arguments = CommandLineToArgvW (commandLine.toWideCharPointer(), &count))
+        {
+            for (int i = 1; i < count; ++i)
+                info.portable |= _wcsicmp (arguments[i], L"--portable") == 0 || _wcsicmp (arguments[i], L"-p") == 0;
+            LocalFree (arguments);
+        }
+    }
     const auto root = image.getParentDirectory().getParentDirectory().getParentDirectory();
     for (const auto* marker : { "portable_mode", "obs_portable_mode", "portable_mode.txt", "obs_portable_mode.txt" })
         info.portable |= root.getChildFile (marker).existsAsFile();
     return info;
 }
 
-RunningObsDetector::RunningObsDetector (ImageQuery imageQuery, VersionQuery versionQuery)
-    : images (imageQuery ? std::move (imageQuery) : runningObsImages),
-      version (versionQuery ? std::move (versionQuery) : fileVersion)
+RunningObsDetector::RunningObsDetector (ProcessQuery processQuery, VersionQuery versionQuery, CommandLineQuery commandLineQuery)
+    : processes (processQuery ? std::move (processQuery) : runningObsProcesses),
+      version (versionQuery ? std::move (versionQuery) : fileVersion),
+      commandLine (commandLineQuery ? std::move (commandLineQuery) : processCommandLine)
 {
 }
 
@@ -251,17 +304,18 @@ const std::vector<ObsPluginInstaller::RunningObs>& RunningObsDetector::scan (dou
     if (nowMs < nextScan) return running;
     nextScan = nowMs + 2000.0;
     running.clear();
-    std::map<juce::String, ObsPluginInstaller::RunningObs> active;
-    for (const auto& image : images())
+    std::map<ProcessKey, ObsPluginInstaller::RunningObs> active;
+    for (const auto& process : processes())
     {
-        const auto key = image.getFullPathName().toLowerCase();
-        auto cached = byImage.find (key);
-        if (cached == byImage.end())
-            cached = byImage.emplace (key, ObsPluginInstaller::runningObsInfo (image, version (image))).first;
+        const auto& image = process.image;
+        const ProcessKey key { process.pid, process.creationTime };
+        auto cached = byProcess.find (key);
+        if (cached == byProcess.end())
+            cached = byProcess.emplace (key, ObsPluginInstaller::runningObsInfo (image, version (image), commandLine (process))).first;
         running.push_back (cached->second);
         active.emplace (key, cached->second);
     }
-    byImage = std::move (active);
+    byProcess = std::move (active);
     return running;
 }
 
@@ -389,7 +443,7 @@ ObsPluginInstaller::Result ObsPluginInstaller::install (const Roots& roots, juce
 
     message = major == 0 ? ko ("OBS를 찾지 못했습니다. OBS를 설치하면 바로 쓸 수 있게 플러그인을 넣어 두었습니다.")
             : running ? ko ("OBS 플러그인을 설치했습니다. OBS를 다시 시작하면 연결됩니다.")
-                      : ko ("OBS 플러그인을 설치했습니다. OBS를 켜고 소스(+)에서 'LiveMix'를 추가하세요. (필터 'LiveMix'는 소리가 나오는 소스에 붙일 때만 동작합니다.)");
+                      : ko ("OBS 플러그인을 설치했습니다. OBS를 켜고 소스(+)에서 'LiveMix'를 추가하세요.");
     return running ? Result::installedRestartObs : Result::installed;
 }
 
