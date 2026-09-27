@@ -18,6 +18,8 @@
 #define LM_HEADROOM_BUCKETS 201 /* Two seconds, in 10 ms buckets. */
 #define LM_UNDERRUN_GROWTHS 20 /* At most 200 ms / 10 ms of provisional growth. */
 #define LM_FADE_SECONDS 0.010
+#define LM_DIAGNOSTIC_EVENTS 256
+#define LM_SUMMARY_SECONDS 600
 #define LM_RING_BYTES (sizeof(lm_obs_ring_header) + LM_OBS_CAPACITY_FRAMES * 2u * sizeof(float))
 
 typedef struct lm_view {
@@ -42,6 +44,14 @@ typedef struct lm_target_growth {
 	double frames;
 } lm_target_growth;
 
+enum lm_event_kind { LM_EVENT_CONNECTION, LM_EVENT_EPOCH, LM_EVENT_RATE, LM_EVENT_UNDER,
+	LM_EVENT_OVER, LM_EVENT_RESYNC, LM_EVENT_TARGET };
+
+typedef struct lm_diagnostic_event {
+	enum lm_event_kind kind;
+	int64_t value, other;
+} lm_diagnostic_event;
+
 struct lm_connection {
 	lm_connection_config config;
 	wchar_t *ring_name, *readers_name;
@@ -57,6 +67,8 @@ struct lm_connection {
 	int64_t pid;
 	volatile int64_t last_pull, last_kind, last_fill_us;
 	bool rejected;
+	bool alternate_log; /* management thread only */
+	uint64_t next_receiver_id;
 };
 
 struct lm_receiver {
@@ -79,11 +91,19 @@ struct lm_receiver {
 	int64_t playing_since, last_written, last_block;
 	int64_t last_write_heartbeat;
 	double pending_writer_wait, writer_headroom;
-	bool online, playing;
+	bool online, playing, drift_valid, resync_requested;
 	int fade_frames, fade_in, tail_left;
 	float tail[2], last[2];
 	volatile int64_t stat_fill_us, stat_target_us, stat_ppm_milli;
 	volatile int64_t stat_under, stat_over, stat_resync, stat_epoch, stat_connected;
+	volatile int64_t stat_format;
+	/* Single audio producer / single manager consumer. No logger, allocation,
+	 * locks or notifications on the producer. Publication protects each slot. */
+	lm_diagnostic_event events[LM_DIAGNOSTIC_EVENTS];
+	volatile int64_t event_write, event_read, event_lost;
+	uint64_t diagnostic_id;
+	int64_t next_summary, reported_lost; /* management thread only */
+	bool logged_connected;
 };
 
 static int64_t qpc_now(void *context)
@@ -101,8 +121,44 @@ static int64_t connection_now(const lm_connection *c)
 
 static void connection_log(lm_connection *c, enum lm_log_level level, const char *message)
 {
-	if (c->config.log)
-		c->config.log(c->config.log_context, level, message);
+	/* Distinct contents also prevent string pooling from merging the pointers.
+	 * Alternate ALL lines, including consecutive summaries of several receivers. */
+	static const char formats[2][32] = {"[livemix-obs] %s", "[livemix-obs] %s "};
+	if (c->config.log) {
+		c->config.log(c->config.log_context, level, formats[c->alternate_log ? 1 : 0], message);
+		c->alternate_log = !c->alternate_log;
+	}
+}
+
+static void queue_event(lm_receiver *r, enum lm_event_kind kind, int64_t value, int64_t other)
+{
+	int64_t write = lm_obs_load_acquire(&r->event_write);
+	if (write - lm_obs_load_acquire(&r->event_read) >= LM_DIAGNOSTIC_EVENTS) {
+		/* A stalled manager must never stall audio. Make any exhausted queue
+		 * visible when the manager returns; lifetime counters remain exact. */
+		lm_obs_store_release(&r->event_lost, lm_obs_load_acquire(&r->event_lost) + 1);
+		return;
+	}
+	lm_diagnostic_event *event = &r->events[write % LM_DIAGNOSTIC_EVENTS];
+	event->kind = kind;
+	event->value = value;
+	event->other = other;
+	lm_obs_store_release(&r->event_write, write + 1);
+}
+
+static void increment_counter(lm_receiver *r, volatile int64_t *counter, enum lm_event_kind kind)
+{
+	int64_t value = lm_obs_load_acquire(counter) + 1;
+	lm_obs_store_release(counter, value);
+	queue_event(r, kind, value, 0);
+}
+
+static void set_connected(lm_receiver *r, bool connected)
+{
+	if (lm_obs_load_acquire(&r->stat_connected) == (int64_t)connected)
+		return;
+	lm_obs_store_release(&r->stat_connected, connected);
+	queue_event(r, LM_EVENT_CONNECTION, connected, r->epoch);
 }
 
 static int64_t compare_exchange(volatile int64_t *value, int64_t next, int64_t expected)
@@ -195,7 +251,7 @@ static PSECURITY_DESCRIPTOR mapping_security(void)
 	user = malloc(bytes);
 	if (user && GetTokenInformation(token, TokenUser, user, bytes, &bytes) &&
 	    ConvertSidToStringSidW(user->User.Sid, &sid)) {
-		int length = swprintf(sddl, 256, L"D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;GA;;;%ls)S:(ML;;NW;;;ME)", sid);
+		int length = swprintf(sddl, 256, L"D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;GA;;;IU)(A;;GA;;;%ls)S:(ML;;NW;;;ME)", sid);
 		if (length > 0 && length < 256)
 			ConvertStringSecurityDescriptorToSecurityDescriptorW(sddl, SDDL_REVISION_1, &descriptor, NULL);
 	}
@@ -315,6 +371,85 @@ static void prepare_formats(lm_connection *c)
 	ReleaseSRWLockExclusive(&c->receivers_lock);
 }
 
+static void report_event(lm_receiver *r, const lm_diagnostic_event *event)
+{
+	char detail[160], message[256];
+	const char *name = NULL;
+	switch (event->kind) {
+	case LM_EVENT_CONNECTION:
+		if (r->logged_connected == (event->value != 0))
+			return;
+		r->logged_connected = event->value != 0;
+		name = event->value ? "connect" : "disconnect";
+		snprintf(detail, sizeof(detail), "epoch=%lld", (long long)event->other);
+		break;
+	case LM_EVENT_EPOCH:
+		name = "epoch";
+		snprintf(detail, sizeof(detail), "epoch=%lld", (long long)event->value);
+		break;
+	case LM_EVENT_RATE:
+		name = "rate";
+		snprintf(detail, sizeof(detail), "input=%lldHz output=%lldHz",
+			 (long long)event->value, (long long)event->other);
+		break;
+	case LM_EVENT_TARGET:
+		name = "target";
+		snprintf(detail, sizeof(detail), "target=%.3fms", event->value / 1000.0);
+		break;
+	case LM_EVENT_UNDER:
+	case LM_EVENT_OVER:
+	case LM_EVENT_RESYNC:
+		name = event->kind == LM_EVENT_UNDER ? "underrun" :
+		       event->kind == LM_EVENT_OVER ? "overrun" : "resync";
+		snprintf(detail, sizeof(detail), "count=%lld", (long long)event->value);
+		break;
+	}
+	snprintf(message, sizeof(message), "receiver=%llu kind=%s event=%s %s",
+		 (unsigned long long)r->diagnostic_id, r->kind == LM_RECEIVER_SOURCE ? "source" : "filter", name, detail);
+	connection_log(r->connection, LM_LOG_INFO, message);
+}
+
+static void report_receivers(lm_connection *c, int64_t now)
+{
+	AcquireSRWLockExclusive(&c->receivers_lock);
+	for (lm_receiver *r = c->receivers; r; r = r->next) {
+		int64_t read = lm_obs_load_acquire(&r->event_read);
+		int64_t write = lm_obs_load_acquire(&r->event_write);
+		while (read < write) {
+			lm_diagnostic_event event = r->events[read % LM_DIAGNOSTIC_EVENTS];
+			lm_obs_store_release(&r->event_read, ++read);
+			report_event(r, &event);
+		}
+		lm_receiver_stats stats;
+		lm_receiver_get_stats(r, &stats);
+		/* Filters may stop being called while their parent is inactive. Still
+		 * report a stopped/resumed writer without waiting for another pull. */
+		if (r->logged_connected != stats.connected) {
+			lm_diagnostic_event event = {LM_EVENT_CONNECTION, stats.connected, stats.epoch};
+			report_event(r, &event);
+		}
+		char message[512];
+		const char *kind = r->kind == LM_RECEIVER_SOURCE ? "source" : "filter";
+		int64_t lost = lm_obs_load_acquire(&r->event_lost);
+		if (lost != r->reported_lost) {
+			snprintf(message, sizeof(message), "receiver=%llu kind=%s diagnostic queue overflow: lost=%lld",
+				 (unsigned long long)r->diagnostic_id, kind, (long long)(lost - r->reported_lost));
+			connection_log(c, LM_LOG_WARNING, message);
+			r->reported_lost = lost;
+		}
+		if (now < r->next_summary)
+			continue;
+		r->next_summary = now + LM_SUMMARY_SECONDS * c->frequency;
+		snprintf(message, sizeof(message), "receiver=%llu kind=%s summary connected=%d input=%dHz output=%dHz "
+			 "fill=%.2fms target=%.2fms ppm=%.2f under=%llu over=%llu resync=%llu epoch=%lld",
+			 (unsigned long long)r->diagnostic_id, kind, (int)stats.connected, stats.input_rate, stats.output_rate,
+			 stats.fill_ms, stats.target_ms, stats.ppm, (unsigned long long)stats.underruns,
+			 (unsigned long long)stats.overruns, (unsigned long long)stats.resyncs, (long long)stats.epoch);
+		connection_log(c, LM_LOG_INFO, message);
+	}
+	ReleaseSRWLockExclusive(&c->receivers_lock);
+}
+
 void lm_connection_poll(lm_connection *c)
 {
 	if (!c)
@@ -326,6 +461,7 @@ void lm_connection_poll(lm_connection *c)
 		update_presence(c, now);
 	}
 	prepare_formats(c);
+	report_receivers(c, now);
 }
 
 static DWORD WINAPI connection_thread(void *opaque)
@@ -447,8 +583,11 @@ lm_receiver *lm_receiver_create(lm_connection *c, enum lm_receiver_kind kind, do
 	r->requested_format = r->bank[0].format;
 	r->output_rate = output_rate;
 	r->stat_target_us = 30000;
+	r->stat_format = format_key(0, output_rate);
+	r->next_summary = connection_now(c) + LM_SUMMARY_SECONDS * c->frequency;
 	r->fade_frames = (int)(out_rate * LM_FADE_SECONDS);
 	AcquireSRWLockExclusive(&c->receivers_lock);
+	r->diagnostic_id = ++c->next_receiver_id;
 	r->next = c->receivers;
 	c->receivers = r;
 	ReleaseSRWLockExclusive(&c->receivers_lock);
@@ -496,7 +635,6 @@ static void begin_prefill(lm_receiver *r, int64_t written, bool fresh_only)
 	if (!fresh_only && written < queue_target)
 		r->read_pos = 0;
 	lm_obs_store_release(&r->stat_fill_us, 0);
-	lm_obs_store_release(&r->stat_ppm_milli, 0);
 }
 
 static void emit(lm_receiver *r, float *left, float *right, const float *pcm, int frames)
@@ -547,7 +685,7 @@ static void set_target(lm_receiver *r, double target)
 {
 	if (target == r->target)
 		return;
-	if (r->playing) {
+	if (r->drift_valid) {
 		/* Keep the integrator, correction and acquisition clock. Rebase the
 		 * filtered error and gain scaling; update still applies its usual slew. */
 		r->drift.lp -= target - r->target;
@@ -558,6 +696,7 @@ static void set_target(lm_receiver *r, double target)
 	r->target = target;
 	memset(r->fill_minima, 0, sizeof(r->fill_minima));
 	lm_obs_store_release(&r->stat_target_us, (int64_t)llround(target * 1000000.0 / r->input_rate));
+	queue_event(r, LM_EVENT_TARGET, lm_obs_load_acquire(&r->stat_target_us), 0);
 }
 
 static void grow_target(lm_receiver *r, double seconds)
@@ -697,7 +836,7 @@ void lm_receiver_pull(lm_receiver *r, float *out_l, float *out_r, int frames, do
 			begin_prefill(r, written >= 0 ? written : 0, true);
 		}
 		r->online = false;
-		lm_obs_store_release(&r->stat_connected, 0);
+		set_connected(r, false);
 		emit(r, out_l, out_r, NULL, frames);
 		return;
 	}
@@ -710,7 +849,7 @@ void lm_receiver_pull(lm_receiver *r, float *out_l, float *out_r, int frames, do
 		if (r->online)
 			begin_prefill(r, written >= 0 ? written : 0, true);
 		r->online = false;
-		lm_obs_store_release(&r->stat_connected, 0);
+		set_connected(r, false);
 		emit(r, out_l, out_r, NULL, frames);
 		return;
 	}
@@ -719,11 +858,20 @@ void lm_receiver_pull(lm_receiver *r, float *out_l, float *out_r, int frames, do
 	if (changed || !r->online) {
 		bool same_epoch = view == r->view && epoch == r->epoch;
 		int64_t resume_position = r->read_pos;
+		if (view != r->view || epoch != r->epoch)
+			queue_event(r, LM_EVENT_EPOCH, epoch, 0);
+		if (input_rate != r->input_rate || output_rate != r->output_rate)
+			queue_event(r, LM_EVENT_RATE, input_rate, output_rate);
+		if (!r->view || (changed && lm_obs_load_acquire(&r->stat_target_us) != 30000))
+			queue_event(r, LM_EVENT_TARGET, 30000, 0);
 		r->view = view;
 		r->epoch = epoch;
 		r->input_rate = input_rate;
 		r->output_rate = output_rate;
+		lm_obs_store_release(&r->stat_format, format_key(input_rate, output_rate));
 		if (changed) {
+			r->drift_valid = false;
+			lm_obs_store_release(&r->stat_ppm_milli, 0);
 			r->target = input_rate * LM_TARGET_SECONDS;
 			r->last_written = written;
 			r->last_block = 0;
@@ -738,9 +886,10 @@ void lm_receiver_pull(lm_receiver *r, float *out_l, float *out_r, int frames, do
 			r->read_pos = resume_position; /* Reconnect cannot replay pre-stall/disabled audio. */
 		r->online = true;
 		lm_obs_store_release(&r->stat_epoch, epoch);
-		lm_obs_store_release(&r->stat_resync, lm_obs_load_acquire(&r->stat_resync) + 1);
+		increment_counter(r, &r->stat_resync, LM_EVENT_RESYNC);
+		r->resync_requested = false; /* This prefill also satisfies a late-worker reset. */
 	}
-	lm_obs_store_release(&r->stat_connected, 1);
+	set_connected(r, true);
 	int64_t heartbeat = lm_obs_load_acquire(&h->heartbeat_qpc);
 	double advance = writer_advance(r, written, heartbeat, now);
 	if (!adopt_format(r, format_key(input_rate, output_rate))) {
@@ -748,11 +897,16 @@ void lm_receiver_pull(lm_receiver *r, float *out_l, float *out_r, int frames, do
 		return;
 	}
 	lm_asrc *asrc = r->bank[(int)lm_obs_load_acquire(&r->active_bank)].state;
+	if (r->resync_requested) {
+		begin_prefill(r, written, false);
+		increment_counter(r, &r->stat_resync, LM_EVENT_RESYNC);
+		r->resync_requested = false;
+	}
 	int64_t reserved = lm_obs_load_acquire((const volatile int64_t *)h->reserved);
 	if (written < r->read_pos || written - r->read_pos >= LM_OBS_CAPACITY_FRAMES ||
 	    reserved - r->read_pos >= LM_OBS_CAPACITY_FRAMES) {
-		lm_obs_store_release(&r->stat_over, lm_obs_load_acquire(&r->stat_over) + 1);
-		lm_obs_store_release(&r->stat_resync, lm_obs_load_acquire(&r->stat_resync) + 1);
+		increment_counter(r, &r->stat_over, LM_EVENT_OVER);
+		increment_counter(r, &r->stat_resync, LM_EVENT_RESYNC);
 		begin_prefill(r, written, false);
 	}
 	if (!r->playing) {
@@ -764,8 +918,16 @@ void lm_receiver_pull(lm_receiver *r, float *out_l, float *out_r, int frames, do
 		}
 		r->read_pos = written - (int64_t)ceil(r->target - lm_asrc_latency_input_frames(asrc));
 		lm_asrc_reset(asrc);
-		lm_asrc_set_correction_ppm(asrc, 0.0);
-		lm_drift_init(&r->drift, r->target, out_rate / frames);
+		if (!r->drift_valid) {
+			lm_drift_init(&r->drift, r->target, out_rate / frames);
+			r->drift_valid = true;
+		} else {
+			/* A prefill changes queue position, not the two hardware clocks.
+			 * Discard the old fill error; keep ppm, integral and acquisition age. */
+			r->drift.lp = 0.0;
+			r->drift.primed = 0;
+		}
+		lm_asrc_set_correction_ppm(asrc, r->drift.ppm);
 		r->playing = true;
 		r->playing_since = now;
 		r->fade_in = 0;
@@ -789,8 +951,8 @@ void lm_receiver_pull(lm_receiver *r, float *out_l, float *out_r, int frames, do
 					    LM_OBS_CAPACITY_FRAMES - (uint32_t)r->fifo_frames);
 		if (copied < 0) {
 			if (lm_obs_load_acquire(&h->epoch) == epoch) {
-				lm_obs_store_release(&r->stat_over, lm_obs_load_acquire(&r->stat_over) + 1);
-				lm_obs_store_release(&r->stat_resync, lm_obs_load_acquire(&r->stat_resync) + 1);
+				increment_counter(r, &r->stat_over, LM_EVENT_OVER);
+				increment_counter(r, &r->stat_resync, LM_EVENT_RESYNC);
 			}
 			begin_prefill(r, lm_obs_load_acquire(&h->write_frames), false);
 			break;
@@ -810,8 +972,8 @@ void lm_receiver_pull(lm_receiver *r, float *out_l, float *out_r, int frames, do
 		emit(r, out_l + offset, out_r + offset, r->output, made);
 		offset += made;
 		if (made < count) {
-			lm_obs_store_release(&r->stat_under, lm_obs_load_acquire(&r->stat_under) + 1);
-			lm_obs_store_release(&r->stat_resync, lm_obs_load_acquire(&r->stat_resync) + 1);
+			increment_counter(r, &r->stat_under, LM_EVENT_UNDER);
+			increment_counter(r, &r->stat_resync, LM_EVENT_RESYNC);
 			grow_after_underrun(r, now);
 			begin_prefill(r, lm_obs_load_acquire(&h->write_frames), true);
 			break;
@@ -821,6 +983,21 @@ void lm_receiver_pull(lm_receiver *r, float *out_l, float *out_r, int frames, do
 		emit(r, out_l + offset, out_r + offset, NULL, frames - offset);
 	else
 		check_headroom(r, fill, frames, now, heartbeat); /* Only a fully played pull establishes headroom. */
+}
+
+void lm_receiver_resync(lm_receiver *r)
+{
+	if (r)
+		r->resync_requested = true;
+}
+
+size_t lm_mix_stereo_for_layout(float *left, const float *right, int frames, size_t channels)
+{
+	if (channels != 1)
+		return 2;
+	for (int i = 0; i < frames; ++i)
+		left[i] = (left[i] + right[i]) * 0.5f;
+	return 1;
 }
 
 bool lm_receiver_connected(const lm_receiver *r)
@@ -843,5 +1020,8 @@ void lm_receiver_get_stats(const lm_receiver *r, lm_receiver_stats *stats)
 	stats->overruns = (uint64_t)lm_obs_load_acquire(&r->stat_over);
 	stats->resyncs = (uint64_t)lm_obs_load_acquire(&r->stat_resync);
 	stats->epoch = lm_obs_load_acquire(&r->stat_epoch);
+	int64_t format = lm_obs_load_acquire(&r->stat_format);
+	stats->input_rate = (int)((uint64_t)format >> 32);
+	stats->output_rate = (int)((uint64_t)format & UINT32_MAX);
 	stats->connected = lm_receiver_connected(r);
 }

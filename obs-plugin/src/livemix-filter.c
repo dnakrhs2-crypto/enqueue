@@ -81,6 +81,7 @@ static struct obs_audio_data *filter_audio(void *data, struct obs_audio_data *au
 		if (frames > LM_FILTER_FRAMES)
 			frames = LM_FILTER_FRAMES;
 		lm_receiver_pull(f->receiver, f->left, f->right, (int)frames, rate);
+		lm_mix_stereo_for_layout(f->left, f->right, (int)frames, channels);
 		for (size_t channel = 0; channel < channels; ++channel) {
 			if (!audio->data[channel])
 				continue;
@@ -91,8 +92,7 @@ static struct obs_audio_data *filter_audio(void *data, struct obs_audio_data *au
 				continue;
 			}
 			for (uint32_t i = 0; i < frames; ++i) {
-				float sample = channels == 1 ? (f->left[i] + f->right[i]) * 0.5f
-							    : (channel == 0 ? f->left[i] : f->right[i]);
+				float sample = channel == 0 ? f->left[i] : f->right[i];
 				plane[i] = mix ? plane[i] + sample : sample;
 			}
 		}

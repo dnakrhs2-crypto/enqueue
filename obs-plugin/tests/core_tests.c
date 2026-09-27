@@ -3,6 +3,7 @@
 #include "lm_obs_protocol.h"
 
 #include <math.h>
+#include <sddl.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <wchar.h>
@@ -11,6 +12,8 @@
 #define TEST_FRAMES 480
 #define TEST_QPC INT64_C(1000000000)
 #define RING_BYTES (sizeof(lm_obs_ring_header) + LM_OBS_CAPACITY_FRAMES * 2u * sizeof(float))
+
+enum diagnostic_event { CONNECT, DISCONNECT, EPOCH, RATE, UNDERRUN, OVERRUN, RESYNC, TARGET, EVENT_COUNT };
 
 typedef struct fixture {
 	wchar_t ring_name[128], readers_name[144];
@@ -22,7 +25,12 @@ typedef struct fixture {
 	float *pcm;
 	double rate, fraction, ppm;
 	float value, left[TEST_FRAMES], right[TEST_FRAMES];
-	bool threaded;
+	bool threaded, position_signal;
+	bool capture_logs, in_audio, audio_logged;
+	DWORD audio_thread;
+	int events[2][EVENT_COUNT], summaries[2], log_calls, suppressed, repeats, previous_sum;
+	const char *previous_format;
+	bool repeated_format;
 } fixture;
 
 static unsigned name_serial;
@@ -42,12 +50,58 @@ static int64_t test_now(void *opaque)
 	return lm_obs_load_acquire(&((fixture *)opaque)->now);
 }
 
+static void capture_log(void *opaque, enum lm_log_level level, const char *format, const char *message)
+{
+	fixture *f = opaque;
+	(void)level;
+	if (!f->capture_logs)
+		return;
+	if (GetCurrentThreadId() == f->audio_thread && f->in_audio)
+		f->audio_logged = true;
+	char rendered[1024];
+	snprintf(rendered, sizeof(rendered), format, message);
+	int sum = 0;
+	for (const unsigned char *p = (const unsigned char *)rendered; *p; ++p)
+		sum += *p;
+	/* Reproduce the relevant OBS repeated-line predicate, including its
+	 * format pointer check. Changing just the numbers/interval is insufficient. */
+	if (format == f->previous_format && abs(sum - f->previous_sum) < 765) {
+		if (f->repeats++ >= 30)
+			++f->suppressed;
+	} else {
+		f->repeats = 0;
+		f->previous_sum = sum;
+	}
+	if (format == f->previous_format)
+		f->repeated_format = true;
+	f->previous_format = format;
+	++f->log_calls;
+	int kind = strstr(message, "kind=source ") ? 0 : (strstr(message, "kind=filter ") ? 1 : -1);
+	if (kind < 0)
+		return;
+	if (strstr(message, " summary "))
+		++f->summaries[kind];
+	const char *events[EVENT_COUNT] = {"event=connect ", "event=disconnect ", "event=epoch ", "event=rate ",
+		"event=underrun ", "event=overrun ", "event=resync ", "event=target "};
+	for (int i = 0; i < EVENT_COUNT; ++i)
+		if (strstr(message, events[i]))
+			++f->events[kind][i];
+}
+
+static void checked_pull(fixture *f)
+{
+	f->in_audio = true;
+	lm_receiver_pull(f->receiver, f->left, f->right, TEST_FRAMES, TEST_RATE);
+	f->in_audio = false;
+}
+
 static bool fixture_open(fixture *f)
 {
 	memset(f, 0, sizeof(*f));
 	f->now = 20 * TEST_QPC;
 	f->rate = TEST_RATE;
 	f->value = 0.5f;
+	f->audio_thread = GetCurrentThreadId();
 	swprintf(f->ring_name, 128, L"Local\\LiveMix.ObsCoreTests.%lu.%u", GetCurrentProcessId(), ++name_serial);
 	swprintf(f->readers_name, 144, L"%ls.Readers", f->ring_name);
 	lm_connection_config config = {0};
@@ -56,6 +110,8 @@ static bool fixture_open(fixture *f)
 	config.now = test_now;
 	config.clock_context = f;
 	config.qpc_frequency = TEST_QPC;
+	config.log = capture_log;
+	config.log_context = f;
 	f->connection = lm_connection_create(&config);
 	if (!f->connection)
 		return false;
@@ -127,6 +183,11 @@ static void tick(fixture *f, bool write_audio, bool read_audio)
 			samples[i] = f->value;
 		while (frames) {
 			uint32_t count = frames < 1024 ? frames : 1024;
+			if (f->position_signal) {
+				int64_t written = lm_obs_load_acquire(&f->header->write_frames);
+				for (uint32_t i = 0; i < count; ++i)
+					samples[i] = (float)((written + i) / 10000000.0);
+			}
 			lm_obs_write(f->header, f->pcm, samples, samples, count);
 			frames -= count;
 		}
@@ -135,7 +196,7 @@ static void tick(fixture *f, bool write_audio, bool read_audio)
 	if (!f->threaded)
 		lm_connection_poll(f->connection);
 	if (read_audio)
-		lm_receiver_pull(f->receiver, f->left, f->right, TEST_FRAMES, TEST_RATE);
+		checked_pull(f);
 }
 
 static bool silent(const fixture *f)
@@ -160,6 +221,29 @@ static bool warm_up(fixture *f)
 	for (int i = 0; i < 300; ++i)
 		tick(f, true, true);
 	return settled(f, f->value);
+}
+
+static bool test_source_layout(void)
+{
+	bool ok = true;
+	const float original_left[] = {1.0f, -1.0f, 0.75f, 0.5f, -0.25f};
+	const float original_right[] = {1.0f, -1.0f, -0.75f, 0.0f, 0.75f};
+	const size_t layouts[] = {1, 2, 6};
+	for (size_t layout = 0; layout < 3; ++layout) {
+		float left[5], right[5];
+		memcpy(left, original_left, sizeof(left));
+		memcpy(right, original_right, sizeof(right));
+		size_t submitted = lm_mix_stereo_for_layout(left, right, 5, layouts[layout]);
+		CHECK(submitted == (layouts[layout] == 1 ? 1 : 2));
+		for (int i = 0; i < 5; ++i) {
+			float expected = layouts[layout] == 1 ? (original_left[i] + original_right[i]) * 0.5f
+							   : original_left[i];
+			CHECK(left[i] == expected && right[i] == original_right[i]);
+		}
+		CHECK(left[0] == 1.0f && left[1] == -1.0f);
+	}
+done:
+	return ok;
 }
 
 static bool test_late_connect(void)
@@ -279,7 +363,7 @@ static bool test_stall_and_recovery(void)
 		tick(&f, true, true);
 		lm_receiver_get_stats(f.receiver, &after);
 		CHECK(after.epoch == saved.epoch && after.target_ms == saved.target_ms);
-		CHECK(fabs(after.ppm) <= 300.0);
+		CHECK(fabs(after.ppm - f.ppm) <= 50.0);
 		if (i >= 499) {
 			CHECK(fabs(after.fill_ms - after.target_ms) <= 3.0);
 			CHECK(settled(&f, f.value) && after.underruns == before.underruns);
@@ -294,6 +378,45 @@ done:
 	fixture_close(&f);
 	return ok;
 }
+
+static bool test_clock_retention(double ppm)
+{
+	fixture f;
+	bool ok = true;
+	lm_receiver_stats before, previous, stats;
+	CHECK(fixture_open(&f));
+	CHECK(writer_open(&f, (DWORD)RING_BYTES));
+	f.ppm = ppm;
+	for (int i = 0; i < 9000; ++i)
+		tick(&f, true, true);
+	lm_receiver_get_stats(f.receiver, &before);
+	CHECK(fabs(before.ppm - ppm) <= 10.0);
+	previous = before;
+	/* The learned clock survives an underrun, stale heartbeat and re-prefill.
+	 * Slow slew throughout recovery pins the acquisition clock as well. */
+	for (int i = 0; i < 2300; ++i) {
+		tick(&f, i >= 300, true);
+		lm_receiver_get_stats(f.receiver, &stats);
+		CHECK(stats.epoch == before.epoch && fabs(stats.ppm - ppm) <= 50.0);
+		CHECK(fabs(stats.ppm - previous.ppm) <= 0.202);
+		if (i >= 400)
+			CHECK(settled(&f, f.value));
+		previous = stats;
+	}
+	CHECK(stats.underruns == before.underruns + 1 && stats.overruns == before.overruns);
+	/* A new epoch really does discard the old clock. */
+	writer_restart(&f, TEST_RATE, f.value);
+	for (int i = 0; i < 5; ++i)
+		tick(&f, true, true);
+	lm_receiver_get_stats(f.receiver, &stats);
+	CHECK(stats.epoch == before.epoch + 1 && fabs(stats.ppm) < 10.0);
+done:
+	fixture_close(&f);
+	return ok;
+}
+
+static bool test_clock_positive(void) { return test_clock_retention(300.0); }
+static bool test_clock_negative(void) { return test_clock_retention(-300.0); }
 
 static bool test_recurring_stalls(void)
 {
@@ -476,6 +599,86 @@ done:
 	return ok;
 }
 
+static bool test_reader_resync(int pause_ticks, bool explicit_resync)
+{
+	fixture f;
+	bool ok = true;
+	lm_receiver_stats before, previous, stats;
+	CHECK(fixture_open(&f));
+	CHECK(writer_open(&f, (DWORD)RING_BYTES));
+	f.ppm = 300.0;
+	f.position_signal = true;
+	for (int i = 0; i < 9000; ++i)
+		tick(&f, true, true);
+	lm_receiver_get_stats(f.receiver, &before);
+	CHECK(fabs(before.ppm - f.ppm) <= 10.0);
+	float last = f.left[TEST_FRAMES - 1];
+	for (int i = 0; i < pause_ticks; ++i)
+		tick(&f, true, false);
+	if (explicit_resync)
+		lm_receiver_resync(f.receiver);
+	previous = before;
+	for (int pull = 0; pull < 20; ++pull) {
+		if (pull == 0)
+			lm_receiver_pull(f.receiver, f.left, f.right, TEST_FRAMES, TEST_RATE);
+		else
+			tick(&f, true, true);
+		lm_receiver_get_stats(f.receiver, &stats);
+		CHECK(stats.resyncs == before.resyncs + 1);
+		CHECK(stats.overruns == before.overruns + (explicit_resync ? 0 : 1));
+		CHECK(stats.underruns == before.underruns && fabs(stats.fill_ms - stats.target_ms) <= 5.0);
+		CHECK(fabs(stats.ppm - f.ppm) <= 50.0 && fabs(stats.ppm - previous.ppm) <= 0.202);
+		for (int i = 0; i < TEST_FRAMES; ++i) {
+			CHECK(isfinite(f.left[i]) && fabsf(f.left[i] - last) < 0.02f);
+			last = f.left[i];
+		}
+		if (pull > 0) {
+			/* PCM encodes its absolute ring position. Once the <=10 ms fade
+			 * ends, the first delivered sample must be target +/-5 ms old. */
+			double position = f.left[0] * 10000000.0;
+			double lag_ms = (lm_obs_load_acquire(&f.header->write_frames) - position) * 1000.0 / f.rate;
+			CHECK(fabs(lag_ms - stats.target_ms) <= 5.0);
+		}
+		previous = stats;
+	}
+done:
+	fixture_close(&f);
+	return ok;
+}
+
+static bool test_late_worker_resync(void) { return test_reader_resync(20, true); }
+static bool test_overrun_clock(void) { return test_reader_resync(100, false); }
+
+static bool test_clock_rate_reset(void)
+{
+	fixture f;
+	bool ok = true;
+	lm_receiver_stats stats;
+	CHECK(fixture_open(&f));
+	CHECK(writer_open(&f, (DWORD)RING_BYTES));
+	f.ppm = 300.0;
+	for (int pass = 0; pass < 2; ++pass) {
+		for (int i = 0; i < 9000; ++i)
+			tick(&f, true, true);
+		lm_receiver_get_stats(f.receiver, &stats);
+		CHECK(fabs(stats.ppm - f.ppm) <= 10.0);
+		if (pass == 0) {
+			f.rate = 44100.0;
+			lm_obs_store_release(&f.header->sample_rate, 44100);
+		}
+		for (int i = 0; i < 5; ++i) {
+			tick(&f, true, pass == 0);
+			if (pass == 1)
+				lm_receiver_pull(f.receiver, f.left, f.right, 441, 44100.0);
+		}
+		lm_receiver_get_stats(f.receiver, &stats);
+		CHECK(stats.epoch == 1 && fabs(stats.ppm) < 10.0);
+	}
+done:
+	fixture_close(&f);
+	return ok;
+}
+
 static bool test_send_disabled(void)
 {
 	fixture f;
@@ -595,6 +798,76 @@ static bool test_reader_presence(void)
 done:
 	if (readers)
 		UnmapViewOfFile(readers);
+	if (mapping)
+		CloseHandle(mapping);
+	fixture_close(&f);
+	return ok;
+}
+
+static bool test_presence_security(void)
+{
+	fixture f;
+	HANDLE mapping = NULL;
+	bool ok = true;
+	BYTE security[4096], interactive[SECURITY_MAX_SID_SIZE];
+	DWORD bytes = 0, sid_bytes = sizeof(interactive);
+	PACL dacl = NULL;
+	BOOL present = FALSE, defaulted = FALSE;
+	CHECK(fixture_open(&f));
+	mapping = OpenFileMappingW(FILE_MAP_ALL_ACCESS, FALSE, f.readers_name);
+	CHECK(mapping != NULL);
+	CHECK(GetKernelObjectSecurity(mapping, DACL_SECURITY_INFORMATION, security, sizeof(security), &bytes));
+	CHECK(GetSecurityDescriptorDacl(security, &present, &dacl, &defaulted) && present && dacl);
+	CHECK(CreateWellKnownSid(WinInteractiveSid, NULL, interactive, &sid_bytes));
+	bool allowed = false;
+	for (DWORD i = 0; i < dacl->AceCount; ++i) {
+		ACCESS_ALLOWED_ACE *ace = NULL;
+		CHECK(GetAce(dacl, i, (void **)&ace));
+		if (ace->Header.AceType == ACCESS_ALLOWED_ACE_TYPE && EqualSid(&ace->SidStart, interactive))
+			allowed = (ace->Mask & GENERIC_ALL) || (ace->Mask & FILE_MAP_ALL_ACCESS) == FILE_MAP_ALL_ACCESS;
+	}
+	CHECK(allowed);
+done:
+	if (mapping)
+		CloseHandle(mapping);
+	fixture_close(&f);
+	return ok;
+}
+
+static bool test_presence_optional(void)
+{
+	fixture f;
+	HANDLE mapping = NULL, denied = NULL;
+	PSECURITY_DESCRIPTOR security = NULL;
+	bool ok = true;
+	CHECK(fixture_open(&f));
+	mapping = OpenFileMappingW(FILE_MAP_ALL_ACCESS, FALSE, f.readers_name);
+	CHECK(mapping != NULL);
+	lm_receiver_destroy(f.receiver);
+	f.receiver = NULL;
+	lm_connection_destroy(f.connection);
+	f.connection = NULL;
+	CHECK(ConvertStringSecurityDescriptorToSecurityDescriptorW(L"D:P", SDDL_REVISION_1, &security, NULL));
+	CHECK(SetKernelObjectSecurity(mapping, DACL_SECURITY_INFORMATION, security));
+	denied = OpenFileMappingW(FILE_MAP_READ | FILE_MAP_WRITE, FALSE, f.readers_name);
+	CHECK(denied == NULL && GetLastError() == ERROR_ACCESS_DENIED);
+	lm_connection_config config = {0};
+	config.ring_name = f.ring_name;
+	config.readers_name = f.readers_name;
+	config.now = test_now;
+	config.clock_context = &f;
+	config.qpc_frequency = TEST_QPC;
+	f.connection = lm_connection_create(&config);
+	CHECK(f.connection != NULL);
+	f.receiver = lm_receiver_create(f.connection, LM_RECEIVER_SOURCE, TEST_RATE);
+	CHECK(f.receiver != NULL);
+	CHECK(writer_open(&f, (DWORD)RING_BYTES));
+	CHECK(warm_up(&f) && lm_receiver_connected(f.receiver));
+done:
+	if (denied)
+		CloseHandle(denied);
+	if (security)
+		LocalFree(security);
 	if (mapping)
 		CloseHandle(mapping);
 	fixture_close(&f);
@@ -737,6 +1010,108 @@ done:
 	fixture_close(&f);
 	return ok;
 }
+
+static bool test_diagnostic_events(enum lm_receiver_kind kind)
+{
+	fixture f;
+	bool ok = true;
+	CHECK(fixture_open(&f));
+	if (kind == LM_RECEIVER_FILTER) {
+		lm_receiver_destroy(f.receiver);
+		f.receiver = lm_receiver_create(f.connection, kind, TEST_RATE);
+		CHECK(f.receiver != NULL);
+	}
+	f.capture_logs = true;
+	CHECK(writer_open(&f, (DWORD)RING_BYTES));
+	CHECK(warm_up(&f));
+	lm_connection_poll(f.connection);
+	int index = (int)kind - 1;
+	int calls = f.log_calls;
+	int connects = f.events[index][CONNECT], disconnects = f.events[index][DISCONNECT];
+	/* Several transitions between manager polls must all survive, and none
+	 * may invoke the logger from pull. Snapshot-only logging loses this burst. */
+	for (int i = 0; i < 2; ++i) {
+		lm_obs_store_release(&f.header->send_enabled, 0);
+		checked_pull(&f);
+		lm_obs_store_release(&f.header->send_enabled, 1);
+		checked_pull(&f);
+	}
+	CHECK(f.log_calls == calls && !f.audio_logged);
+	lm_connection_poll(f.connection);
+	CHECK(f.events[index][CONNECT] == connects + 2 && f.events[index][DISCONNECT] == disconnects + 2);
+	CHECK(warm_up(&f));
+	for (int i = 0; i < 8; ++i)
+		tick(&f, false, true);
+	CHECK(warm_up(&f));
+	for (int i = 0; i < 100; ++i)
+		tick(&f, true, false);
+	checked_pull(&f);
+	lm_connection_poll(f.connection);
+	int resyncs = f.events[index][RESYNC];
+	lm_receiver_resync(f.receiver);
+	checked_pull(&f);
+	lm_connection_poll(f.connection);
+	CHECK(f.events[index][RESYNC] == resyncs + 1);
+	writer_restart(&f, 44100.0, 0.25f);
+	CHECK(warm_up(&f));
+	lm_connection_poll(f.connection);
+	for (int i = 0; i < EVENT_COUNT; ++i)
+		CHECK(f.events[index][i] > 0);
+	CHECK(f.events[index][EPOCH] == 2 && f.events[index][RATE] == 2);
+	/* Inactive filter parents can stop pulling completely. The manager must
+	 * still report both the stale writer and its return, in the same epoch. */
+	connects = f.events[index][CONNECT];
+	disconnects = f.events[index][DISCONNECT];
+	f.now += TEST_QPC;
+	lm_connection_poll(f.connection);
+	CHECK(f.events[index][DISCONNECT] == disconnects + 1);
+	lm_obs_store_release(&f.header->heartbeat_qpc, f.now);
+	lm_connection_poll(f.connection);
+	CHECK(f.events[index][CONNECT] == connects + 1);
+	CHECK(f.summaries[index] == 0 && !f.audio_logged);
+done:
+	fixture_close(&f);
+	return ok;
+}
+
+static bool test_diagnostic_summaries(enum lm_receiver_kind kind)
+{
+	fixture f;
+	bool ok = true;
+	CHECK(fixture_open(&f));
+	if (kind == LM_RECEIVER_FILTER) {
+		lm_receiver_destroy(f.receiver);
+		f.receiver = lm_receiver_create(f.connection, kind, TEST_RATE);
+		CHECK(f.receiver != NULL);
+	}
+	int64_t created = f.now;
+	f.capture_logs = true;
+	CHECK(writer_open(&f, (DWORD)RING_BYTES));
+	CHECK(warm_up(&f));
+	lm_connection_poll(f.connection);
+	f.now = created + 600 * TEST_QPC - 1;
+	lm_obs_store_release(&f.header->heartbeat_qpc, f.now);
+	lm_connection_poll(f.connection);
+	int index = (int)kind - 1;
+	CHECK(f.summaries[index] == 0);
+	++f.now;
+	int calls = f.log_calls;
+	for (int i = 0; i < 65; ++i) {
+		lm_obs_store_release(&f.header->heartbeat_qpc, f.now);
+		lm_connection_poll(f.connection);
+		CHECK(f.summaries[index] == i + 1);
+		f.now += 600 * TEST_QPC;
+	}
+	CHECK(f.log_calls == calls + 65 && f.suppressed == 0 && !f.repeated_format && !f.audio_logged);
+done:
+	fixture_close(&f);
+	return ok;
+}
+
+static bool test_source_events(void) { return test_diagnostic_events(LM_RECEIVER_SOURCE); }
+static bool test_filter_events(void) { return test_diagnostic_events(LM_RECEIVER_FILTER); }
+static bool test_source_summaries(void) { return test_diagnostic_summaries(LM_RECEIVER_SOURCE); }
+static bool test_filter_summaries(void) { return test_diagnostic_summaries(LM_RECEIVER_FILTER); }
 
 /* Independent block clocks: publish only complete writer blocks, and catch up
  * all delayed blocks on the first writer callback after a starvation interval.
@@ -1014,23 +1389,35 @@ int main(int argc, char **argv)
 {
 	/* An optional name substring keeps focused regression runs inexpensive. */
 	test_filter = argc > 1 ? argv[1] : NULL;
+	run_test("source mixing: unity mono, stereo and six-channel OBS layouts", test_source_layout);
 	run_test("connect after writer starts", test_late_connect);
 	run_test("writer restart, retained mapping and bounded fade", test_restart_fade);
 	run_test("input and output rate changes", test_rate_change);
 	run_test("three-second writer stall and recovery without replay", test_stall_and_recovery);
+	run_test("learned clock: +300 ppm survives a three-second stall", test_clock_positive);
+	run_test("learned clock: -300 ppm survives a three-second stall", test_clock_negative);
 	run_test("recurring one-second writer stalls for five simulated minutes", test_recurring_stalls);
 	run_test("phase-locked 480-frame blocks at +20 ppm for one simulated hour", test_phase_locked_blocks);
 	run_test("headroom grace after initial playback and underrun recovery", test_headroom_grace);
 	run_test("live underrun wait and committed growth survives a later stop", test_live_underrun_wait);
 	run_test("one-second reader pause and overrun resync", test_overrun);
+	run_test("200 ms late worker resync follows current ring PCM within target +/-5 ms", test_late_worker_resync);
+	run_test("learned clock and current ring PCM survive an overrun", test_overrun_clock);
+	run_test("learned clock resets for same-epoch input and output rate changes", test_clock_rate_reset);
 	run_test("send disabled and re-enabled", test_send_disabled);
 	run_test("invalid mapping metadata", test_invalid_mapping);
 	run_test("truncated mapping", test_short_mapping);
 	run_test("reader slot activity, reclamation and unload", test_reader_presence);
+	run_test("readers mapping grants interactive users full access", test_presence_security);
+	run_test("audio continues when readers mapping access is denied", test_presence_optional);
 	run_test("concurrent heartbeat and stale buffered audio", test_heartbeat_boundaries);
 	run_test("independent receivers sharing one process slot", test_independent_receivers);
 	run_test("large pull bounds, exact length and silence", test_large_pull);
 	run_test("background manager and concurrent ASRC handoff", test_threaded_format_handoff);
+	run_test("diagnostics: source events survive bursts outside audio pulls", test_source_events);
+	run_test("diagnostics: filter events survive bursts outside audio pulls", test_filter_events);
+	run_test("diagnostics: source ten-minute summaries survive OBS repeated-line filtering", test_source_summaries);
+	run_test("diagnostics: filter ten-minute summaries survive OBS repeated-line filtering", test_filter_summaries);
 	run_test("adaptive target: 2048-frame writer at 48 kHz", test_blocks_48000);
 	run_test("adaptive target: 2048-frame writer at 44.1 kHz", test_blocks_44100);
 	run_test("adaptive target: 1024-frame filter pulls and 256-frame writer", test_filter_blocks);

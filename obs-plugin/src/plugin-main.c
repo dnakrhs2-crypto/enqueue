@@ -29,10 +29,10 @@ lm_connection *livemix_obs_connection(void)
 	return connection;
 }
 
-static void receiver_log(void *context, enum lm_log_level level, const char *message)
+static void receiver_log(void *context, enum lm_log_level level, const char *format, const char *message)
 {
 	(void)context;
-	blog(level == LM_LOG_WARNING ? LOG_WARNING : LOG_INFO, "[livemix-obs] %s", message);
+	blog(level == LM_LOG_WARNING ? LOG_WARNING : LOG_INFO, format, message);
 }
 
 MODULE_EXPORT const char *obs_module_description(void)

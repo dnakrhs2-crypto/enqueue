@@ -24,7 +24,7 @@ static DWORD WINAPI source_worker(void *opaque)
 {
 	livemix_source *s = opaque;
 	uint32_t rate = 0;
-	uint64_t t0 = os_gettime_ns(), sent = 0, next_log = t0 + 10 * LM_NANOSECONDS;
+	uint64_t t0 = os_gettime_ns(), sent = 0;
 	bool connected = false;
 	while (!InterlockedCompareExchange(&s->stop, 0, 0)) {
 		audio_t *obs_audio = obs_get_audio();
@@ -48,13 +48,20 @@ static DWORD WINAPI source_worker(void *opaque)
 			/* Drop missed periods: the next iteration is one period away. */
 			t0 = now - frames_to_ns(frames, rate);
 			sent = 0;
+			lm_receiver_resync(s->receiver);
 		}
 		lm_receiver_pull(s->receiver, s->left, s->right, (int)frames, rate);
+		/* Re-read the layout each period. Submit mono ourselves so OBS's
+		 * stereo downmix cannot add 3 dB to a centred L=R signal. */
+		obs_audio = obs_get_audio();
+		size_t channels = obs_audio ? audio_output_get_channels(obs_audio) : 2;
+		size_t planes = lm_mix_stereo_for_layout(s->left, s->right, (int)frames, channels);
 		struct obs_source_audio audio = {0};
 		audio.data[0] = (const uint8_t *)s->left;
-		audio.data[1] = (const uint8_t *)s->right;
+		if (planes == 2)
+			audio.data[1] = (const uint8_t *)s->right;
 		audio.frames = frames;
-		audio.speakers = SPEAKERS_STEREO;
+		audio.speakers = planes == 1 ? SPEAKERS_MONO : SPEAKERS_STEREO;
 		audio.format = AUDIO_FORMAT_FLOAT_PLANAR;
 		audio.samples_per_sec = rate;
 		audio.timestamp = t0 + frames_to_ns(sent, rate);
@@ -64,14 +71,6 @@ static DWORD WINAPI source_worker(void *opaque)
 		if (connected != current_connected) {
 			connected = current_connected;
 			obs_source_update_properties(s->source);
-		}
-		if (now >= next_log) {
-			lm_receiver_stats stats;
-			lm_receiver_get_stats(s->receiver, &stats);
-			blog(LOG_INFO, "[livemix-obs] fill=%.2fms target=%.2fms ppm=%.2f under=%llu over=%llu resync=%llu epoch=%lld",
-			     stats.fill_ms, stats.target_ms, stats.ppm, (unsigned long long)stats.underruns,
-			     (unsigned long long)stats.overruns, (unsigned long long)stats.resyncs, (long long)stats.epoch);
-			next_log = now + 10 * LM_NANOSECONDS;
 		}
 	}
 	return 0;

@@ -17,7 +17,10 @@ typedef struct lm_connection_config {
 	 * readers_name gets a private "<ring_name>.Readers" mapping automatically. */
 	const wchar_t *ring_name;
 	const wchar_t *readers_name;
-	void (*log)(void *context, enum lm_log_level level, const char *message);
+	/* Management thread only (or explicit poll in tests). Pass format directly
+	 * to the host logger with message as its single %s argument: its alternating
+	 * pointer is part of the contract, to defeat OBS's repeated-line filter. */
+	void (*log)(void *context, enum lm_log_level level, const char *format, const char *message);
 	void *log_context;
 	/* Tests inject QPC ticks and their frequency. NULL uses the real QPC. */
 	int64_t (*now)(void *context);
@@ -29,6 +32,7 @@ typedef struct lm_receiver_stats {
 	double fill_ms, target_ms, ppm;
 	uint64_t underruns, overruns, resyncs;
 	int64_t epoch;
+	int input_rate, output_rate;
 	bool connected;
 } lm_receiver_stats;
 
@@ -51,6 +55,13 @@ void lm_receiver_destroy(lm_receiver *receiver);
  * supported; a format change is silent until the manager prepares the ASRC.
  * Discontinuities use a bounded 10 ms tail/fade, then exact digital silence. */
 void lm_receiver_pull(lm_receiver *receiver, float *out_l, float *out_r, int frames, double out_rate);
+/* Call from the same single audio caller when output periods are dropped.
+ * The next pull skips to the current writer minus target, clears ASRC history
+ * and crossfades for <=10 ms. Same-epoch/rate clock learning is retained. */
+void lm_receiver_resync(lm_receiver *receiver);
+/* Pure in-place layout conversion. Mono averages L/R into left; other OBS
+ * layouts keep stereo. Returns the number of planes to submit (1 or 2). */
+size_t lm_mix_stereo_for_layout(float *left, const float *right, int frames, size_t channels);
 /* Atomic diagnostic snapshots; safe from a UI/worker thread. */
 void lm_receiver_get_stats(const lm_receiver *receiver, lm_receiver_stats *stats);
 bool lm_receiver_connected(const lm_receiver *receiver);
