@@ -41,9 +41,21 @@ def prepare(obs, mode):
         obs.call("SetInputMute", {"inputName": i["inputName"], "inputMuted": i["inputName"] != keep}, check=False)
 
 
+NATIVE_WRITER = os.path.join(HERE, "native_writer", "build", "Release", "livemix-fake-writer.exe")
+
+
+def writer_command(seconds, writer_args):
+    """The native writer (MMCSS thread + high-resolution timer, like LiveMix's audio callback) when it is built; the
+    Python writer only as a fallback - a busy CPU starves a Python loop (27 Sep: 17 minutes of 2.5 s gaps)."""
+    if os.path.exists(NATIVE_WRITER):
+        ring_env = os.environ.get("LMOBS_TEST_RING", "")
+        ring = "Local\\LiveMix.ObsAudio.v1" if ring_env.lower() == "real" else (ring_env or "Local\\LiveMix.ObsAudio.test")
+        return [NATIVE_WRITER, "--ring", ring, "--seconds", str(seconds)] + writer_args
+    return [sys.executable, os.path.join(HERE, "fake_writer.py"), "--seconds", str(seconds)] + writer_args
+
+
 def record(mode, seconds, writer_args):
-    writer = subprocess.Popen([sys.executable, os.path.join(HERE, "fake_writer.py"), "--seconds", str(seconds + 8)]
-                              + writer_args, creationflags=subprocess.CREATE_NO_WINDOW)
+    writer = subprocess.Popen(writer_command(seconds + 8, writer_args), creationflags=subprocess.CREATE_NO_WINDOW)
     try:
         with Obs() as obs:
             prepare(obs, mode)

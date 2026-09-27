@@ -30,7 +30,7 @@ if _known.isolated:
 
 import portable_obs  # noqa: E402
 from obsws import Obs  # noqa: E402
-from record_and_check import prepare, extract, analyze  # noqa: E402
+from record_and_check import prepare, extract, analyze, writer_command  # noqa: E402
 
 REPORT = os.path.join(portable_obs.ROOT, "soak_report.json")
 
@@ -60,8 +60,10 @@ def main():
     portable_obs.stop()
     portable_obs.setup()
     portable_obs.start()
-    writer = subprocess.Popen([sys.executable, os.path.join(HERE, "fake_writer.py"), "--seconds", str(total + 120),
-                               "--ppm", str(a.ppm)], creationflags=subprocess.CREATE_NO_WINDOW)
+    # the writer's own 5 s lines (written vs due, largest wake-up gap, late blocks) go to writer.log next to the report
+    writer_log = open(os.path.join(portable_obs.ROOT, "writer.log"), "w", encoding="utf-8")
+    writer = subprocess.Popen(writer_command(total + 120, ["--ppm", str(a.ppm)]), stdout=writer_log,
+                              stderr=subprocess.STDOUT, creationflags=subprocess.CREATE_NO_WINDOW)
     try:
         with Obs() as obs:
             prepare(obs, a.mode)
