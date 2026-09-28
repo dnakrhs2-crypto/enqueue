@@ -70,6 +70,11 @@ juce::Result createOn (const juce::File& desktop, const juce::File& iconFile)
     if (juce::String (verified) != url)
         return fail ("저장한 바로가기 주소를 확인할 수 없습니다.");
 
+    // Everything is finished on the temporary name, the hidden attribute included (a rename keeps attributes): the
+    // rename below is the last step, so nothing ever touches the final path afterwards.
+    if (! SetFileAttributesW (path.toWideCharPointer(), FILE_ATTRIBUTE_NORMAL))
+        return fail ("바로가기 파일을 쓸 수 없습니다.");
+
     // Another program may have made either name meanwhile: theirs stays, ours goes.
     if (existsOn (desktop))
     {
@@ -79,21 +84,13 @@ juce::Result createOn (const juce::File& desktop, const juce::File& iconFile)
 
     // A plain rename in one folder: no MOVEFILE_COPY_ALLOWED, and no MOVEFILE_REPLACE_EXISTING - the rename fails
     // rather than overwrite a shortcut that appeared at the last moment.
-    const auto file = koreanShortcut (desktop);
-    const auto finalPath = file.getFullPathName();
+    const auto finalPath = koreanShortcut (desktop).getFullPathName();
     if (! MoveFileExW (path.toWideCharPointer(), finalPath.toWideCharPointer(), MOVEFILE_WRITE_THROUGH))
     {
         const bool someoneElses = existsOn (desktop);
         temp.deleteFile();
         return someoneElses ? juce::Result::ok()
                             : juce::Result::fail (juce::String::fromUTF8 ("바로가기 파일을 쓸 수 없습니다."));
-    }
-
-    // the rename kept the temporary file's hidden attribute: the shortcut itself must be an ordinary visible file
-    if (! SetFileAttributesW (finalPath.toWideCharPointer(), FILE_ATTRIBUTE_NORMAL))
-    {
-        file.deleteFile(); // our own file, renamed a moment ago: an invisible shortcut would block every later offer
-        return juce::Result::fail (juce::String::fromUTF8 ("바로가기 파일을 쓸 수 없습니다."));
     }
 
     SHChangeNotify (SHCNE_CREATE, SHCNF_PATHW, finalPath.toWideCharPointer(), nullptr);
