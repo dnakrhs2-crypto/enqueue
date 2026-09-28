@@ -53,9 +53,10 @@ juce::String badgeText (const Cue& cue, const AudioEngine::PlayingCue& playing, 
 Badges badgesFor (const std::vector<AudioEngine::PlayingCue>& playing, const std::vector<FadeRunner::Info>& fades,
                   const std::function<const Cue* (const juce::Uuid&)>& findCue)
 {
+    // the kind the running fade started with (editing the cue meanwhile, or deleting it, does not change what runs)
     std::set<juce::Uuid> otherTargets;
     for (const auto& fade : fades)
-        if (const auto* cue = findCue (fade.fadeId); cue != nullptr && cue->isFade() && cue->fade.mode != FadeMode::volume)
+        if (fade.mode != FadeMode::volume)
             otherTargets.insert (fade.targetId);
     Badges result;
     for (const auto& p : playing)

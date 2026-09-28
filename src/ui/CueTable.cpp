@@ -48,13 +48,7 @@ public:
         setFont (column == colName ? Palette::font() : Palette::monoFont (Palette::timeSize));
         onReturnKey = [this] { commit(); };
         onEscapeKey = [this] { cancel(); };
-        onFocusLost = [this]
-        {
-            const auto* focused = juce::Component::getCurrentlyFocusedComponent();
-            if (focused != nullptr && (bool) focused->getTopLevelComponent()->getProperties()["activeCuesBigView"])
-                return;   // looking at the second monitor must not finish the main table's edit
-            commit();
-        };
+        onFocusLost = [this] { commit(); };   // also when the big view takes the focus: an edit is never left pending
     }
 
     void commit()
@@ -82,7 +76,12 @@ public:
             if (currentRow >= 0)
                 safeOwner->commitCellEdit (currentRow, c, text);
 
-            if (safeOwner->editGeneration == gen)   // a newer editor keeps its focus
+            // a newer editor keeps its focus; so does another window the operator went to (the big view): the edit is
+            // saved, but pulling the focus back would bring the main window up over it
+            const auto* focused = juce::Component::getCurrentlyFocusedComponent();
+            const bool inAnotherWindow = focused != nullptr && focused->getTopLevelComponent() != safeOwner->getTopLevelComponent();
+
+            if (safeOwner->editGeneration == gen && ! inAnotherWindow)
                 safeOwner->focusTable();
         });
     }

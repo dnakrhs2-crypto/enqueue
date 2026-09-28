@@ -423,7 +423,7 @@ std::vector<FadeRunner::Info> FadeRunner::getRunning() const
     const double now = clock();
 
     for (const auto& f : fades)
-        result.push_back ({ f.fadeId, f.targetId, juce::jlimit (0.0, f.duration, now - f.startTime), f.duration });
+        result.push_back ({ f.fadeId, f.targetId, juce::jlimit (0.0, f.duration, now - f.startTime), f.duration, f.data.mode });
 
     return result;
 }

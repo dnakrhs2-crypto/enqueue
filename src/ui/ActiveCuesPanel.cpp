@@ -195,7 +195,9 @@ public:
         remainingLabel.setBounds (middle);
         area.removeFromTop (6);
         barArea = area.removeFromTop (Palette::progressHeight);
-        area.removeFromTop (6);
+        if (owner.isViewOnly())
+            return;   // no button row: the card is that much shorter (Palette::activeViewCardHeight)
+        area.removeFromTop (Palette::activeCardButtonGap);
         auto buttons = area.removeFromTop (Palette::miniButtonHeight);
         panicButton.setBounds (buttons.removeFromRight (Palette::miniButtonHeight));
         buttons.removeFromRight (6);
@@ -463,12 +465,13 @@ void ActiveCuesPanel::setPlayingCues (const std::vector<AudioEngine::PlayingCue>
 void ActiveCuesPanel::layoutRows()
 {
     const int width = juce::jmax (1, viewport.getMaximumVisibleWidth());
+    const int cardHeight = viewOnly ? Palette::activeViewCardHeight : Palette::activeCardHeight;
     int y = 0;
 
     for (auto& row : rows)
     {
-        row->setBounds (0, y, width, Palette::activeCardHeight);
-        y += Palette::activeCardHeight + Palette::cardInset;
+        row->setBounds (0, y, width, cardHeight);
+        y += cardHeight + Palette::cardInset;
     }
 
     content.setSize (width, juce::jmax (1, y - Palette::cardInset));

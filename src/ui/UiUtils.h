@@ -186,6 +186,8 @@ namespace Palette
     constexpr int childIndent = 24, statusIconSize = 16, colourBarWidth = 3, colourBarHeight = 18;
     constexpr int playheadWidth = 4, rowProgressHeight = 2, progressHeight = 6, scrollBarWidth = 6;
     constexpr int activeCardHeight = 122, miniButtonHeight = 26, pillHeight = 22;
+    constexpr int activeCardButtonGap = 6;   // above a card's pause / × row
+    constexpr int activeViewCardHeight = activeCardHeight - activeCardButtonGap - miniButtonHeight;   // view-only card: no button row
     constexpr int pillPadding = 14, pillGap = 8, nameStub = 48;
     constexpr int activeViewWidth = 420, activeViewMinWidth = 360, activeViewMinHeight = 240;
     constexpr int activeViewDefaultWidth = 840, activeViewDefaultHeight = 600, windowMaxSize = 10000;

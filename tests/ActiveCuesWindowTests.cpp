@@ -43,6 +43,7 @@ public:
         expect (! f.engine.isPaused (sound.id) && ! f.engine.isStopping (sound.id));
         expectEquals (opened, 1);
         auto& row = *pause->getParentComponent();
+        expectEquals (row.getHeight(), Palette::activeViewCardHeight, "a view-only card has no button row");
         const juce::Point<float> point ((float) row.getWidth() * 0.75f, 75.0f);
         const auto event = juce::MouseEvent (juce::Desktop::getInstance().getMainMouseSource(), point,
             juce::ModifierKeys::leftButtonModifier, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f,
@@ -53,17 +54,18 @@ public:
         panel.setScrubEnabled (true); expect (! panel.isScrubEnabled());
         panel.setPlayingCues (playing); expect (! pause->isVisible() && ! stop->isVisible());
         panel.setViewOnly (false); expect (pause->isVisible() && stop->isVisible() && big->isVisible());
+        expectEquals (row.getHeight(), Palette::activeCardHeight);
         panel.setScrubEnabled (false); expect (! panel.isScrubEnabled());
 
         beginTest ("scale is limited by both axes and card count, clamped from one to four");
-        const int needed = Palette::cardHeaderHeight + Palette::activeCardHeight + 3 * Palette::cardInset;
+        const int needed = Palette::cardHeaderHeight + Palette::activeViewCardHeight + 3 * Palette::cardInset;
         expectEquals (ActiveCuesWindow::scaleFor (0, 0, 0), 1.0f);
         expectEquals (ActiveCuesWindow::scaleFor (420, needed, 0), 1.0f);
         expectEquals (ActiveCuesWindow::scaleFor (840, needed * 2, 1), 2.0f);
         expectEquals (ActiveCuesWindow::scaleFor (420, needed * 4, 1), 1.0f);
         expectEquals (ActiveCuesWindow::scaleFor (1680, needed, 1), 1.0f);
         expectEquals (ActiveCuesWindow::scaleFor (4200, needed * 10, 1), 4.0f);
-        const int two = Palette::cardHeaderHeight + 2 * (Palette::activeCardHeight + Palette::cardInset) + 2 * Palette::cardInset;
+        const int two = Palette::cardHeaderHeight + 2 * (Palette::activeViewCardHeight + Palette::cardInset) + 2 * Palette::cardInset;
         expectEquals (ActiveCuesWindow::scaleFor (840, two * 2, 2), 2.0f);
         expect (ActiveCuesWindow::scaleFor (840, needed * 2, 2) < 2.0f);
         expectEquals (ActiveCuesWindow::scaleFor (840, 600, 100000), 1.0f);
@@ -97,7 +99,7 @@ public:
         expect (original.getParentComponent() == parent && original.getBounds() == bounds && original.isVisible() == visible);
         expect (f.settings.getActiveCuesWindowState().isNotEmpty());
 
-        beginTest ("focus in the big view leaves a main-table edit and selection intact");
+        beginTest ("focus moving to the big view commits a main-table edit (never left pending) and keeps the selection");
         f.table().beginCellEdit (0, CueTable::colName);
         auto* editor = child<juce::TextEditor> (f.table());
         expect (editor != nullptr);
@@ -108,12 +110,12 @@ public:
             window.open();
             editor->focusLost (juce::Component::focusChangedDirectly);
             dispatch();
-            expect (child<juce::TextEditor> (f.table()) == editor);
-            expectEquals (f.document().cues.get (0).name, sound.name);
+            expectEquals (f.document().cues.get (0).name, juce::String ("Pending music name"));
             expectEquals (f.document().cues.getSelectedIndex(), 0);
             ReopenLastProjectTestAccess::refreshPlayback (*f.main);
             expect (window.isParentOf (juce::Component::getCurrentlyFocusedComponent()));
             f.table().finishEditing(); dispatch();
+            expectEquals (f.document().cues.get (0).name, juce::String ("Pending music name"));
         }
 
         beginTest ("collapsed main panel, waits, show mode and list/cart changes continue updating the copy");
@@ -156,6 +158,7 @@ public:
         window.closeButtonPressed();
         auto restored = std::make_unique<HiddenWindow> (f.engine, f.document().cues, f.settings);
         expect (! restored->isVisible());
+        restored->open();   // the saved state comes back once the window is on the desktop (a maximised one needs its peer)
         expect (restored->getBounds() == savedBounds);
         restored.reset();
         window.setBounds (-20000, -20000, 640, 480);

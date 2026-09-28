@@ -2,6 +2,7 @@
 
 #include "app/Commands.h"
 #include "app/ShortcutDisplay.h"
+#include "app/VolumeCue.h"
 #include "ui/GroupModeLabels.h"
 #include "ui/UiUtils.h"
 
@@ -341,12 +342,28 @@ void TransportBar::updateStandbyCue (int index, const Cue* cue)
         cueFile.setText (target.isNotEmpty() ? target : ko ("페이드 대상 없음"), juce::dontSendNotification);
         cueFile.setColour (juce::Label::textColourId, target.isNotEmpty() ? Palette::dimText : Palette::missing);
 
+        // the kinds made from the menu say what they do; the stored level / rate fields only drive the older custom fade
         juce::String meta;
-        meta << ko ("페이드 ") << formatSeconds (cue->fade.durationSeconds)
-             << (cue->fade.relative ? ko ("   상대") : ko ("   절대"))
-             << (cue->fade.fadeLevels ? ko ("   레벨") : juce::String())
-             << (cue->fade.fadeRate ? ko ("   속도 → ") + juce::String (cue->fade.rate, 2) : juce::String())
-             << (cue->fade.stopTargetWhenDone ? ko ("   완료 시 정지") : juce::String());
+        switch (cue->fade.mode)
+        {
+            case FadeMode::volume:
+                meta << ko ("볼륨 조절 ") << (cue->fade.mainDb == 0.0 ? ko ("원래 볼륨으로") : ko ("원래 볼륨 대비 ") + VolumeCue::formatDb (cue->fade.mainDb))
+                     << ko ("   시간 ") << formatSeconds (cue->fade.durationSeconds) << ko ("   재생 유지");
+                break;
+            case FadeMode::fadeIn:
+                meta << ko ("페이드 인   시간 ") << formatSeconds (cue->fade.durationSeconds);
+                break;
+            case FadeMode::fadeOut:
+                meta << ko ("페이드 아웃   시간 ") << formatSeconds (cue->fade.durationSeconds) << ko ("   완료 시 정지");
+                break;
+            case FadeMode::custom:
+                meta << ko ("페이드 ") << formatSeconds (cue->fade.durationSeconds)
+                     << (cue->fade.relative ? ko ("   상대") : ko ("   절대"))
+                     << (cue->fade.fadeLevels ? ko ("   레벨") : juce::String())
+                     << (cue->fade.fadeRate ? ko ("   속도 → ") + juce::String (cue->fade.rate, 2) : juce::String())
+                     << (cue->fade.stopTargetWhenDone ? ko ("   완료 시 정지") : juce::String());
+                break;
+        }
         cueMeta.setText (meta, juce::dontSendNotification);
         return;
     }

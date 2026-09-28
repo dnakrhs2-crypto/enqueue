@@ -2178,9 +2178,9 @@ public:
             button->setWantsKeyboardFocus (false);
             button->getProperties().set ("slateSmall", true);
         }
-        minus3.onClick = [this] { setOffset (-3.0); };
-        minus6.onClick = [this] { setOffset (-6.0); };
-        restore.onClick = [this] { setOffset (0.0); };
+        minus3.onClick = [this] { applyQuickOffset (-3.0); };
+        minus6.onClick = [this] { applyQuickOffset (-6.0); };
+        restore.onClick = [this] { applyQuickOffset (0.0); };
 
         styleLabel (hint, ko ("페이드 인: 실행하면 대상을 무음에서 시작해 이 시간 동안 원래 레벨까지 올립니다 (이미 재생 중이면 지금 레벨에서). "
                               "페이드 아웃: 대상을 이 시간 동안 무음까지 내리고 정지합니다. 모양은 커브 탭에서. "
@@ -2190,6 +2190,14 @@ public:
 
     void setEditable (bool shouldBeEditable)
     {
+        if (editable && ! shouldBeEditable)
+        {
+            // show mode locks the fields: what was typed without Enter is kept, as a focus change would keep it
+            commitOffset();
+            if (durationEditor.hasKeyboardFocus (true))
+                commitDuration();
+        }
+
         editable = shouldBeEditable;
         refresh();
     }
@@ -2344,6 +2352,17 @@ private:
             && ! juce::approximatelyEqual (cue->fade.mainDb, value))
             edit (ko ("볼륨 큐 오프셋"), [value] (Cue& c) { c.fade.mainDb = value; });
         resetOffsetText();
+    }
+
+    /** A quick button replaces whatever was typed; the field then lets go of the keyboard (the buttons never take it),
+        so Space is GO again instead of a character in the field. */
+    void applyQuickOffset (double value)
+    {
+        offsetEditor.takePendingEdit();
+        setOffset (value);
+
+        if (offsetEditor.hasKeyboardFocus (true))
+            offsetEditor.giveAwayKeyboardFocus();
     }
 
     void commitOffset()

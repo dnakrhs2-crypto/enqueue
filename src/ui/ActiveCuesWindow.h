@@ -31,6 +31,7 @@ private:
     AppSettings& settings;
     Content* content = nullptr;
     bool fitting = false, ready = false;
+    bool opened = false;   // until the first open() the saved place is not ours to overwrite (restored there)
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (ActiveCuesWindow)
 };
 }

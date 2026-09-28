@@ -40,7 +40,7 @@ private:
 float ActiveCuesWindow::scaleFor (int width, int height, int cards) noexcept
 {
     const double needed = Palette::cardHeaderHeight + (double) juce::jmax (1, cards)
-                        * (Palette::activeCardHeight + Palette::cardInset) + 2 * Palette::cardInset;
+                        * (Palette::activeViewCardHeight + Palette::cardInset) + 2 * Palette::cardInset;
     return juce::jlimit (Palette::activeViewMinScale, Palette::activeViewMaxScale,
                         (float) juce::jmin ((double) width / Palette::activeViewWidth, (double) height / needed));
 }
@@ -59,8 +59,8 @@ ActiveCuesWindow::ActiveCuesWindow (AudioEngine& engine, CueList& cues, AppSetti
     setResizable (true, false);
     setResizeLimits (Palette::activeViewMinWidth, Palette::activeViewMinHeight, Palette::windowMaxSize, Palette::windowMaxSize);
     centreWithSize (Palette::activeViewDefaultWidth, Palette::activeViewDefaultHeight);
-    const auto state = settings.getActiveCuesWindowState();
-    if (state.isNotEmpty()) restoreWindowStateFromString (state);
+    // the saved state is restored in open(), once the native window exists: before that JUCE cannot bring back a
+    // maximised window (it would come back as a normal window on the main monitor)
     ready = true;
 }
 
@@ -74,7 +74,18 @@ ActiveCuesWindow::~ActiveCuesWindow()
 
 void ActiveCuesWindow::open()
 {
-    if (! isOnDesktop()) addToDesktop (getDesktopWindowStyleFlags());
+    if (! isOnDesktop())
+    {
+        addToDesktop (getDesktopWindowStyleFlags());
+
+        if (! opened)
+        {
+            const juce::ScopedValueSetter<bool> restoring (ready, false);   // the steps of the restore are not new states
+            if (const auto state = settings.getActiveCuesWindowState(); state.isNotEmpty())
+                restoreWindowStateFromString (state);
+        }
+    }
+    opened = true;   // from now on this window's own place is the one to keep
     setMinimised (false);
     UiScale::fitWindowIntoDisplay (*this);
     setVisible (true);
@@ -85,7 +96,7 @@ void ActiveCuesWindow::open()
 void ActiveCuesWindow::closeButtonPressed() { saveState(); setVisible (false); }
 void ActiveCuesWindow::moved() { saveState(); }
 void ActiveCuesWindow::visibilityChanged() { if (! isVisible()) saveState(); }
-void ActiveCuesWindow::saveState() { if (ready) settings.setActiveCuesWindowState (getWindowStateAsString()); }
+void ActiveCuesWindow::saveState() { if (ready && opened) settings.setActiveCuesWindowState (getWindowStateAsString()); }
 
 void ActiveCuesWindow::resized()
 {

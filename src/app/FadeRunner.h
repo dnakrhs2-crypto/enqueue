@@ -29,6 +29,7 @@ public:
     {
         juce::Uuid fadeId = juce::Uuid::null(), targetId = juce::Uuid::null();
         double elapsedSeconds = 0.0, durationSeconds = 0.0;
+        FadeMode mode = FadeMode::custom;   // as it was when the fade started (editing the cue does not change a running fade)
     };
 
     /** Starts (or restarts) 'fadeCue' on its target. False with a message when there is no target or the

@@ -168,6 +168,17 @@ public:
             expect (fadeRunner.start (volume)); f.step (2.0);
             expectWithinAbsoluteError (f.level(), offset < 0 ? Cue::minGainDb : Cue::maxGainDb, 1.0e-6);
         }
+
+        beginTest ("a running fade reports the kind it started with, whatever the cue is edited to meanwhile");
+        f.document.cues.update (0, [] (Cue& cue) { cue.gainDb = -3.0; });
+        expect (fadeRunner.start (f.volume)); f.step (0.5);
+        f.document.cues.update (1, [] (Cue& cue) { cue.fade.mode = FadeMode::fadeIn; });
+        const auto running = fadeRunner.getRunning();
+        expectEquals ((int) running.size(), 1);
+        if (! running.empty())
+            expect (running.front().mode == FadeMode::volume && running.front().fadeId == f.volume.id);
+        f.step (2.0);
+        f.document.cues.update (1, [] (Cue& cue) { cue.fade.mode = FadeMode::volume; });
     }
 };
 
@@ -345,9 +356,15 @@ public:
         const auto lookup = [&] (const juce::Uuid& id) -> const Cue* { return id == sound.id ? &sound : id == fade.id ? &fade : nullptr; };
         for (const auto mode : { FadeMode::fadeIn, FadeMode::fadeOut, FadeMode::custom, FadeMode::volume })
         {
-            fade.fade.mode = mode;
-            const auto badges = VolumeCue::badgesFor ({ p }, { { fade.id, sound.id, 0.5, 2.0 } }, lookup);
+            // the running fade's own kind decides; the cue edited to another kind meanwhile does not
+            fade.fade.mode = mode == FadeMode::volume ? FadeMode::fadeOut : FadeMode::volume;
+            const auto badges = VolumeCue::badgesFor ({ p }, { { fade.id, sound.id, 0.5, 2.0, mode } }, lookup);
             expect (badges.empty() == (mode != FadeMode::volume));
+        }
+        {
+            // a running fade whose cue was deleted still counts by its own kind
+            const auto badges = VolumeCue::badgesFor ({ p }, { { juce::Uuid(), sound.id, 0.5, 2.0, FadeMode::fadeIn } }, lookup);
+            expect (badges.empty());
         }
         auto retiring = p; retiring.startOrder = -1; retiring.fadingOut = true;
         const auto badges = VolumeCue::badgesFor ({ retiring, p }, {}, lookup);

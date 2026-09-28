@@ -95,6 +95,37 @@ public:
         f.document().cues.setSelectedIndex (1);
         f.inspector().showTimeTab();
 
+        beginTest ("a quick button while the field has the keyboard: the button's value wins and the field lets go (Space is GO again)");
+        offset->grabKeyboardFocus();
+        expect (offset->hasKeyboardFocus (false));
+        offset->setText ("-12", false);
+        if (auto* minus3 = child<juce::TextButton> (f.inspector(), [] (const auto& b) { return b.getButtonText() == "-3"; }))
+        {
+            minus3->onClick();
+            expectWithinAbsoluteError (level(), -3.0, 1.0e-9);
+            expect (! offset->hasKeyboardFocus (true), "the field gives the keyboard back");
+            dispatch();
+            expectWithinAbsoluteError (level(), -3.0, 1.0e-9);   // the focus loss that followed did not commit the typed -12
+            undo();
+        }
+        else
+        {
+            expect (false, "-3 button");
+        }
+        expectWithinAbsoluteError (level(), -6.0, 1.0e-9);
+
+        beginTest ("show mode keeps what was typed without Enter (like a focus change) before it locks the field");
+        offset->grabKeyboardFocus();
+        offset->setText ("-12", false);
+        expect (f.command (CommandIDs::toggleShowMode));
+        expectWithinAbsoluteError (level(), -12.0, 1.0e-9);
+        expect (f.command (CommandIDs::toggleShowMode));
+        expectWithinAbsoluteError (level(), -12.0, 1.0e-9);
+        expectEquals (offset->getText(), juce::String ("-12"));
+        undo();
+        dispatch();
+        expectWithinAbsoluteError (level(), -6.0, 1.0e-9);
+
         beginTest ("quick buttons and show mode lock all volume controls without extra history");
         const char* names[] { "-3", "-6", "원래대로" };
         const double goals[] { -3, -6, 0 };
