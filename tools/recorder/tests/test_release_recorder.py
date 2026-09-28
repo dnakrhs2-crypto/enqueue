@@ -549,5 +549,74 @@ class RealWinSparkleSignatureTests(unittest.TestCase):
             self.assertTrue(json.loads((root / "release.json").read_text(encoding="utf-8"))["signature_verified"])
 
 
+class NetworkRetryTests(unittest.TestCase):
+    """2026-09-29: a timed-out gh request left LiveMix 0.12.0 tagged without its release - network calls retry."""
+
+    def failure(self, stderr=""):
+        return subprocess.CalledProcessError(1, "gh", stderr=stderr)
+
+    def setUp(self):
+        patcher = mock.patch.object(release.time, "sleep")
+        self.sleep = patcher.start()
+        self.addCleanup(patcher.stop)
+        out = redirect_stdout(io.StringIO())
+        out.__enter__()
+        self.addCleanup(out.__exit__, None, None, None)
+
+    def test_a_glitch_is_tried_again(self):
+        with mock.patch.object(release, "run", side_effect=[self.failure(), "ok"]) as run:
+            self.assertEqual(release.run_network(["git", "push", "origin", "main"], capture=True), "ok")
+        self.assertEqual(run.call_count, 2)
+        self.sleep.assert_called_once_with(release.NETWORK_RETRY_WAIT)
+
+    def test_it_gives_up_after_the_last_attempt(self):
+        with mock.patch.object(release, "run", side_effect=self.failure()) as run:
+            with self.assertRaises(subprocess.CalledProcessError):
+                release.run_network(["git", "push", "origin", "main"])
+        self.assertEqual(run.call_count, release.NETWORK_ATTEMPTS)
+
+    def test_an_answer_is_not_retried(self):
+        with mock.patch.object(release, "run", side_effect=self.failure("release not found")) as run:
+            with self.assertRaises(subprocess.CalledProcessError):
+                release.run_network(["gh", "release", "view"], capture=True,
+                                    give_up=lambda e: "release not found" in (e.stderr or "").lower())
+        self.assertEqual(run.call_count, 1)
+        self.sleep.assert_not_called()
+
+    def test_before_retry_cleans_up_a_half_attempt(self):
+        cleaned = []
+        with mock.patch.object(release, "run", side_effect=[self.failure(), ""]):
+            release.run_network(["git", "clone"], before_retry=lambda: cleaned.append(True))
+        self.assertEqual(cleaned, [True])
+
+    def test_create_whose_answer_was_lost_uploads_instead_of_creating_twice(self):
+        calls = []
+
+        def fake_run(cmd, cwd=None, capture=False):
+            calls.append(list(map(str, cmd[:3])))
+            if cmd[1:3] == ["release", "create"]:
+                raise self.failure()   # it reached GitHub, but the answer timed out
+            return ""                   # release view: it exists; upload: fine
+
+        with mock.patch.object(release, "run", side_effect=fake_run):
+            release.create_release("gh", "livemix-v9.9.9", ["a.exe", "appcast.xml"], "o/r", ["--title", "t", "--verify-tag"])
+        self.assertEqual(calls, [["gh", "release", "create"], ["gh", "release", "view"], ["gh", "release", "upload"]])
+
+    def test_create_that_never_arrived_is_created_again(self):
+        calls = []
+
+        def fake_run(cmd, cwd=None, capture=False):
+            calls.append(list(map(str, cmd[:3])))
+            if cmd[1:3] == ["release", "create"] and calls.count(["gh", "release", "create"]) == 1:
+                raise self.failure()
+            if cmd[1:3] == ["release", "view"]:
+                raise self.failure("release not found")
+            return ""
+
+        with mock.patch.object(release, "run", side_effect=fake_run):
+            release.create_release("gh", "v9.9.9", ["a.exe"], "o/r", ["--verify-tag"])
+        self.assertEqual(calls, [["gh", "release", "create"], ["gh", "release", "view"], ["gh", "release", "create"]])
+
+
 if __name__ == "__main__":
     unittest.main()

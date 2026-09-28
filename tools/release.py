@@ -26,6 +26,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 from xml.sax.saxutils import escape
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -110,6 +111,55 @@ def run(cmd, cwd=ROOT, capture=False):
     result = subprocess.run([str(c) for c in cmd], cwd=str(cwd), check=True,
                             capture_output=capture, text=True)
     return result.stdout if capture else ""
+
+
+# 2026-09-29: one timed-out request to api.github.com left LiveMix 0.12.0 tagged and pushed but without its release,
+# and it had to be finished by hand. Calls that go over the network are tried again instead.
+NETWORK_ATTEMPTS = 3
+NETWORK_RETRY_WAIT = 20   # seconds between attempts
+
+
+def retry_pause(what, attempt):
+    print("%s failed (attempt %d of %d) - trying again in %d s" % (what, attempt, NETWORK_ATTEMPTS, NETWORK_RETRY_WAIT), flush=True)
+    time.sleep(NETWORK_RETRY_WAIT)
+
+
+def run_network(cmd, cwd=ROOT, capture=False, give_up=None, before_retry=None):
+    """run() for a git push / clone or a gh call: a failure is tried again (NETWORK_ATTEMPTS in all). 'give_up(error)'
+    marks a failure that is an answer, not a glitch ('release not found'); 'before_retry()' undoes a half-done attempt."""
+    for attempt in range(1, NETWORK_ATTEMPTS + 1):
+        try:
+            return run(cmd, cwd=cwd, capture=capture)
+        except subprocess.CalledProcessError as e:
+            if attempt == NETWORK_ATTEMPTS or (give_up is not None and give_up(e)):
+                raise
+            retry_pause(" ".join(str(c) for c in cmd[:3]), attempt)
+            if before_retry is not None:
+                before_retry()
+
+
+def release_exists(gh, tag, repo):
+    try:
+        run([gh, "release", "view", tag, "--repo", repo, "--json", "tagName"], capture=True)
+        return True
+    except subprocess.CalledProcessError:
+        return False
+
+
+def create_release(gh, tag, assets, repo, options):
+    """gh release create, tried again like run_network. A create whose answer was lost may still have made the
+    release on GitHub, so a retry looks first: when the release is there, its files are uploaded (--clobber) instead."""
+    for attempt in range(1, NETWORK_ATTEMPTS + 1):
+        try:
+            if attempt > 1 and release_exists(gh, tag, repo):
+                run([gh, "release", "upload", tag] + [str(a) for a in assets] + ["--repo", repo, "--clobber"])
+            else:
+                run([gh, "release", "create", tag] + [str(a) for a in assets] + ["--repo", repo] + list(options))
+            return
+        except subprocess.CalledProcessError:
+            if attempt == NETWORK_ATTEMPTS:
+                raise
+            retry_pause("gh release create " + tag, attempt)
 
 
 def build(preset, skip_tests):
@@ -352,7 +402,8 @@ def deploy_site(repo, latest):
     work = pathlib.Path(tempfile.mkdtemp(prefix="gocue-site-"))
     try:
         remote = "https://github.com/%s.git" % repo
-        run(["git", "clone", "--quiet", "--branch", "gh-pages", "--depth", "1", remote, str(work / "pages")], cwd=work)
+        run_network(["git", "clone", "--quiet", "--branch", "gh-pages", "--depth", "1", remote, str(work / "pages")], cwd=work,
+                    before_retry=lambda: shutil.rmtree(work / "pages", ignore_errors=True))   # a half clone blocks the next
         pages = work / "pages"
         for item in pages.iterdir():
             if item.name != ".git":
@@ -377,7 +428,7 @@ def deploy_site(repo, latest):
             return
         run(["git", "-c", "user.name=Enqueue release", "-c", "user.email=release@gocue.invalid",
              "commit", "--quiet", "-m", "site: %s %s" % (APP["name"], (latest or {}).get("version", "refresh"))], cwd=pages)
-        run(["git", "push", "--quiet", "origin", "gh-pages"], cwd=pages)
+        run_network(["git", "push", "--quiet", "origin", "gh-pages"], cwd=pages)
         print("site      : https://%s.github.io/%s/" % tuple(repo.split("/", 1)))
     finally:
         shutil.rmtree(work, ignore_errors=True)
@@ -387,7 +438,8 @@ def latest_from_github(gh, repo, app=None, allow_missing=False):
     """latest.json content for --site-only: read from the newest GitHub release (None when the repo has none yet)."""
     app = app or APP
     try:
-        out = run([gh, "release", "view", "--repo", repo, "--json", "tagName,publishedAt,assets"], capture=True)
+        out = run_network([gh, "release", "view", "--repo", repo, "--json", "tagName,publishedAt,assets"], capture=True,
+                          give_up=lambda e: "release not found" in (e.stderr or "").lower())
     except subprocess.CalledProcessError as e:
         stderr = (e.stderr or "").strip()
         if allow_missing and "release not found" in stderr.lower():
@@ -706,16 +758,15 @@ def publish_recorder(args, candidate):
             sys.exit("tag %s is on %s, HEAD is %s - bump RECORDER_VERSION" % (tag_name, tagged[:10], head[:10]))
     else:
         run(["git", "tag", "-a", tag_name, "-m", APP["name"] + " " + candidate["version"]], cwd=ROOT)
-    run(["git", "push", APP["remote"], "HEAD:main"], cwd=ROOT)
-    run(["git", "push", APP["remote"], tag_name], cwd=ROOT)
+    run_network(["git", "push", APP["remote"], "HEAD:main"], cwd=ROOT)
+    run_network(["git", "push", APP["remote"], tag_name], cwd=ROOT)
     gh = find_gh()
-    run([gh, "release", "create", tag_name, str(candidate["installer"]), str(candidate["appcast"]), str(source),
-         "--repo", APP["repo"], "--title", APP["name"] + " " + candidate["version"], "--verify-tag",
-         "--notes-file", str(candidate["notes"])])
+    create_release(gh, tag_name, [candidate["installer"], candidate["appcast"], source], APP["repo"],
+                   ["--title", APP["name"] + " " + candidate["version"], "--verify-tag", "--notes-file", str(candidate["notes"])])
     print("published :", "https://github.com/%s/releases/tag/%s" % (APP["repo"], tag_name))
     fixed = candidate["output"] / APP["fixed"]
     shutil.copyfile(candidate["installer"], fixed)
-    run([gh, "release", "upload", tag_name, str(fixed), "--repo", APP["repo"], "--clobber"])
+    run_network([gh, "release", "upload", tag_name, str(fixed), "--repo", APP["repo"], "--clobber"])
     if not args.skip_site:
         deploy_site(SITE_REPO, {
             "version": candidate["version"], "tag": tag_name, "url": candidate["url"], "size": candidate["installer"].stat().st_size,
@@ -867,20 +918,19 @@ def main():
         # the release lives in the app's repo: LiveMix's is a mirror of this one (remote "livemix"); an overridden
         # --repo is pushed to by URL so the tag and the release land in the same place
         remote = APP["remote"] if args.repo == APP["repo"] else "https://github.com/%s.git" % args.repo
-        run(["git", "push", remote, "HEAD:main"], cwd=ROOT)
-        run(["git", "push", remote, tag_name], cwd=ROOT)
+        run_network(["git", "push", remote, "HEAD:main"], cwd=ROOT)
+        run_network(["git", "push", remote, tag_name], cwd=ROOT)
 
         gh = find_gh()
-        cmd = [gh, "release", "create", tag_name, str(installer), str(appcast),
-               "--repo", args.repo, "--title", APP["name"] + " " + version, "--verify-tag"]
-        cmd += ["--notes-file", args.notes] if args.notes else ["--generate-notes"]
-        run(cmd)
+        options = ["--title", APP["name"] + " " + version, "--verify-tag"]
+        options += ["--notes-file", args.notes] if args.notes else ["--generate-notes"]
+        create_release(gh, tag_name, [installer, appcast], args.repo, options)
         print("published :", "https://github.com/%s/releases/tag/%s" % (args.repo, tag_name))
 
         # the same installer under a fixed name: /releases/latest/download/<App>-Setup.exe always gives the newest
         fixed = output_dir / APP["fixed"]
         shutil.copyfile(installer, fixed)
-        run([gh, "release", "upload", tag_name, str(fixed), "--repo", args.repo, "--clobber"])
+        run_network([gh, "release", "upload", tag_name, str(fixed), "--repo", args.repo, "--clobber"])
 
         if not args.skip_site:
             deploy_site(SITE_REPO, {
