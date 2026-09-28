@@ -113,6 +113,77 @@ def run(cmd, cwd=ROOT, capture=False):
     return result.stdout if capture else ""
 
 
+# The CEO, 2026-09-28: when several changes to one app are under way at once, release it once, after the last one -
+# not a version per change minutes apart (that night Enqueue 0.12.5 went out while another session's volume cue work
+# for Enqueue 0.13.0 was in another worktree, and 0.13.0 followed within the hour). Before publishing, the other
+# worktrees are looked at: recent work there on this app's files that is not in this release stops it, until the
+# operator has decided (bundle it, or --other-work-checked when it really belongs to a later version).
+IN_PROGRESS_HOURS = 24
+APP_PATHS = {
+    "enqueue": ["src/", "installer/Enqueue", "docs/release-notes/0", "site/index.html", "site/assets/"],
+    "livemix": ["livemix/", "installer/LiveMix", "docs/release-notes/livemix/", "site/livemix/", "obs-plugin/"],
+    "recorder": ["recorder/", "installer/Recorder", "docs/release-notes/recorder/", "site/tally/"],
+}
+
+
+def list_worktrees():
+    """[{'worktree': path, 'HEAD': sha, 'branch': 'refs/heads/x'}] from git worktree list --porcelain."""
+    items, current = [], {}
+    for line in run(["git", "worktree", "list", "--porcelain"], cwd=ROOT, capture=True).splitlines():
+        if not line.strip():
+            if current:
+                items.append(current)
+            current = {}
+            continue
+        key, _, value = line.partition(" ")
+        current[key] = value
+    if current:
+        items.append(current)
+    return items
+
+
+def other_work_in_progress(app_key, now=None):
+    """Lines describing recent work on this app's files in the other worktrees that this release (HEAD) lacks:
+    commits not in HEAD made within IN_PROGRESS_HOURS, and uncommitted changes saved within that time."""
+    now = now or time.time()
+    since = now - IN_PROGRESS_HOURS * 3600
+    paths = APP_PATHS[app_key]
+    here = os.path.normcase(os.path.realpath(str(ROOT)))
+    found = []
+    for tree in list_worktrees():
+        path = tree.get("worktree", "")
+        if not path or os.path.normcase(os.path.realpath(path)) == here or not os.path.isdir(path):
+            continue
+        name = "%s [%s]" % (path, tree.get("branch", "detached").replace("refs/heads/", ""))
+        head = tree.get("HEAD", "")
+        if head:
+            commits = run(["git", "log", "--since=@%d" % int(since), "--format=%h %cd %s", "--date=format:%m-%d %H:%M",
+                           "HEAD.." + head, "--"] + paths, cwd=ROOT, capture=True).strip().splitlines()
+            if commits:
+                found.append("%s: %d commit(s) not in this release, newest %s" % (name, len(commits), commits[0]))
+        changed = []
+        for line in run(["git", "status", "--porcelain", "--"] + paths, cwd=path, capture=True).splitlines():
+            file = line[3:].split(" -> ")[-1].strip().strip('"')
+            full = os.path.join(path, file)
+            if not os.path.exists(full) or os.path.getmtime(full) >= since:
+                changed.append(file)
+        if changed:
+            found.append("%s: uncommitted changes in %s" % (name, ", ".join(changed[:5]) + (" ..." if len(changed) > 5 else "")))
+    return found
+
+
+def check_other_work(app_key, checked):
+    found = other_work_in_progress(app_key)
+    if not found:
+        return
+    message = ("other work on %s is in progress and not in this release (the CEO: several changes to one app go out "
+               "once, after the last one):\n  - %s\nBundle it into this version, or pass --other-work-checked once "
+               "it is decided that it belongs to a later version." % (app_key, "\n  - ".join(found)))
+    if not checked:
+        sys.exit("release stopped: " + message)
+    print("--other-work-checked:", message, flush=True)
+
+
 # 2026-09-29: one timed-out request to api.github.com left LiveMix 0.12.0 tagged and pushed but without its release,
 # and it had to be finished by hand. Calls that go over the network are tried again instead.
 NETWORK_ATTEMPTS = 3
@@ -813,6 +884,9 @@ def main():
     parser.add_argument("--source-bundle", default="", help="Recorder exact-source ZIP with source-manifest.json (optional for a blocked local candidate)")
     parser.add_argument("--allow-dirty", action="store_true", help="release from a working tree with uncommitted changes (not for real releases)")
     parser.add_argument("--accept-blocked-gates", action="store_true", help="Recorder --publish: publish a technically PASS candidate whose release gates are still BLOCKED (release owner decision)")
+    parser.add_argument("--other-work-checked", action="store_true",
+                        help="--publish although other worktrees hold recent work on this app that is not in this release "
+                             "(only once it is decided that the work belongs to a later version)")
     args = parser.parse_args()
     global APP
     APP = APPS[args.app]
@@ -839,6 +913,7 @@ def main():
         dirty = run(["git", "status", "--porcelain"], cwd=ROOT, capture=True)
         if dirty.strip():
             sys.exit("the working tree has uncommitted changes - commit first:\n" + dirty)
+        check_other_work(args.app, args.other_work_checked)   # before the long build
         recorder_tag_preflight(APP["tag_prefix"] + recorder_identity()["VERSION"])
         publish_recorder(args, package_recorder(args))
         return
@@ -867,6 +942,9 @@ def main():
         dirty = run(["git", "status", "--porcelain"], cwd=ROOT, capture=True)
         if dirty.strip():
             sys.exit("the working tree has uncommitted changes - commit first (or --allow-dirty for a test build):\n" + dirty)
+
+    if args.publish:
+        check_other_work(args.app, args.other_work_checked)   # before the long build
 
     # a tag that already exists must be this commit: a second "v0.9.4" on another commit would ship two different builds under one version
     if run(["git", "tag", "--list", APP["tag_prefix"] + version], cwd=ROOT, capture=True).strip():

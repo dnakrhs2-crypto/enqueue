@@ -305,6 +305,7 @@ class LegacyRegressionTests(unittest.TestCase):
                 stack.enter_context(mock.patch.object(release, "release_exists", return_value=False))
                 stack.enter_context(mock.patch.object(release, "release_state",
                                                       return_value=(False, {installer.name, "appcast.xml"})))
+                other = stack.enter_context(mock.patch.object(release, "check_other_work"))   # OtherWorkTests cover it
                 stack.enter_context(mock.patch.dict(os.environ, {"GITHUB_REF_NAME": "", "GOCUE_GITHUB_REPO": ""}))
                 stack.enter_context(mock.patch.object(sys, "argv", ["release.py", "--app", key, "--publish", "--skip-site",
                     "--key", str(keyfile), "--tools-dir", str(root)]))
@@ -318,6 +319,7 @@ class LegacyRegressionTests(unittest.TestCase):
                 self.assertIn(app["repo"], uploads[0])
                 self.assertTrue(any(c.endswith(app["fixed"]) for c in uploads[0]))
                 site.assert_not_called()
+                other.assert_called_once_with(key, False)   # looked at before building
 
     def test_site_only_does_not_build(self):
         for key in ("enqueue", "livemix"):
@@ -406,11 +408,12 @@ class RecorderReleaseRoutingTests(unittest.TestCase):
         with mock.patch.dict(release.APPS["recorder"], {"publication_confirmed": True}), \
              mock.patch.object(sys, "argv", ["release.py", "--app", "recorder", "--publish"]), \
              mock.patch.object(release, "run", return_value="") as run, \
+             mock.patch.object(release, "check_other_work", side_effect=lambda app, checked: order.append(("other", app, checked))), \
              mock.patch.object(release, "recorder_tag_preflight", side_effect=lambda tag: order.append(("preflight", tag))), \
              mock.patch.object(release, "package_recorder", side_effect=lambda a: order.append("package") or candidate), \
              mock.patch.object(release, "publish_recorder", side_effect=lambda a, c: order.append(("publish", c))):
             release.main()
-            self.assertEqual(order, [("preflight", "recorder-v" + IDENTITY["VERSION"]), "package", ("publish", candidate)])
+            self.assertEqual(order, [("other", "recorder", False), ("preflight", "recorder-v" + IDENTITY["VERSION"]), "package", ("publish", candidate)])
             self.assertEqual(list(run.call_args_list[0].args[0]), ["git", "status", "--porcelain"])
         with mock.patch.dict(release.APPS["recorder"], {"publication_confirmed": True}), \
              mock.patch.object(sys, "argv", ["release.py", "--app", "recorder", "--publish"]), \
@@ -676,6 +679,76 @@ class NetworkRetryTests(unittest.TestCase):
             with self.assertRaises(subprocess.CalledProcessError):
                 release.create_release("gh", "v9.9.9", ["a.exe"], "o/r", ["--verify-tag"])
         self.assertEqual(self.sleep.call_count, release.NETWORK_ATTEMPTS - 1)
+
+
+class OtherWorkTests(unittest.TestCase):
+    """The CEO (2026-09-28): several changes to one app under way at once go out once, after the last one."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        base = Path(self.tmp.name)
+        self.main_tree, self.other = base / "gocue", base / "gocue-volume"
+        for tree in (self.main_tree, self.other):
+            tree.mkdir()
+        (self.other / "livemix").mkdir()
+        self.edited = self.other / "livemix" / "Edited.cpp"
+        self.edited.write_text("x")
+        self.log_lines = ""
+        self.status_lines = ""
+
+    def fake_run(self, cmd, cwd=None, capture=False):
+        cmd = list(map(str, cmd))
+        if cmd[:2] == ["git", "log"]:
+            return self.log_lines
+        if cmd[:2] == ["git", "status"]:
+            return self.status_lines if str(cwd) == str(self.other) else ""
+        return ""
+
+    def check(self, app="livemix"):
+        trees = [{"worktree": str(self.main_tree), "HEAD": "aaa", "branch": "refs/heads/main"},
+                 {"worktree": str(self.other), "HEAD": "bbb", "branch": "refs/heads/volume-cue"}]
+        with mock.patch.object(release, "ROOT", self.main_tree), \
+             mock.patch.object(release, "list_worktrees", return_value=trees), \
+             mock.patch.object(release, "run", side_effect=self.fake_run) as run:
+            found = release.other_work_in_progress(app)
+        return found, run
+
+    def test_nothing_under_way_lets_the_release_go(self):
+        found, run = self.check()
+        self.assertEqual(found, [])
+        logs = [list(map(str, c.args[0])) for c in run.call_args_list if list(map(str, c.args[0]))[:2] == ["git", "log"]]
+        self.assertEqual(len(logs), 1)                  # only the other worktree is looked at
+        self.assertIn("HEAD..bbb", logs[0])
+        self.assertIn("livemix/", logs[0])              # this app's files only
+
+    def test_recent_commits_elsewhere_are_reported(self):
+        self.log_lines = "1a2b3c4 09-29 00:20 Volume cue / big view\n5d6e7f8 09-28 23:10 start\n"
+        found, _ = self.check()
+        self.assertEqual(len(found), 1)
+        self.assertIn("gocue-volume [volume-cue]", found[0])
+        self.assertIn("2 commit(s)", found[0])
+
+    def test_recent_uncommitted_changes_are_reported_old_ones_are_not(self):
+        self.status_lines = " M livemix/Edited.cpp\n"
+        found, _ = self.check()
+        self.assertEqual(len(found), 1)
+        self.assertIn("livemix/Edited.cpp", found[0])
+        old = release.time.time() - (release.IN_PROGRESS_HOURS + 1) * 3600
+        os.utime(self.edited, (old, old))                # an abandoned edit from days ago is not work in progress
+        found, _ = self.check()
+        self.assertEqual(found, [])
+
+    def test_the_check_stops_the_release_unless_it_was_decided(self):
+        with mock.patch.object(release, "other_work_in_progress", return_value=["C:/gocue-volume [volume-cue]: 3 commit(s)"]):
+            with self.assertRaises(SystemExit) as stopped:
+                release.check_other_work("enqueue", False)
+            self.assertIn("gocue-volume", str(stopped.exception))
+            with redirect_stdout(io.StringIO()) as out:
+                release.check_other_work("enqueue", True)
+            self.assertIn("--other-work-checked", out.getvalue())
+        with mock.patch.object(release, "other_work_in_progress", return_value=[]):
+            release.check_other_work("enqueue", False)   # nothing under way: silent
 
 
 if __name__ == "__main__":
