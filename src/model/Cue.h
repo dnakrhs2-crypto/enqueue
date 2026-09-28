@@ -154,7 +154,7 @@ struct ParamFade
 /** What a fade cue does. 페이드 인 starts its target from the fade floor and lifts it to the cue's own level; 페이드 아웃
     takes it to silence and stops it. 'custom' is the older general fade (level / rate / parameter goals), kept so that
     files from before 0.9.4 still play the same. */
-enum class FadeMode { fadeIn, fadeOut, custom };
+enum class FadeMode { fadeIn, fadeOut, custom, volume };
 
 struct FadeCueData
 {
@@ -164,7 +164,7 @@ struct FadeCueData
     bool relative = false;                 // goals are offsets from the target's current levels
     bool stopTargetWhenDone = false;
     bool fadeLevels = true;                // apply the level goals below
-    double mainDb = 0.0;                   // goal (or offset) for the target's main level
+    double mainDb = 0.0;                   // goal (or offset); volume mode: offset from the target cue's own gainDb
     LevelMatrix levels;                    // goals per input / output / crosspoint
     bool mainActive = true;                // which cells the fade touches (QLab "active" cells)
     std::vector<char> inputActive, outputActive;

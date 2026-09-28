@@ -2,6 +2,7 @@
 #include "ui/CueMidiPanel.h"
 #include "model/Hotkeys.h"
 #include "ui/CueInspector.h"
+#include "app/VolumeCue.h"
 #include "ui/ShortcutRouter.h"
 #include "ui/KeyCapture.h"
 #include "app/ShortcutDisplay.h"
@@ -1869,6 +1870,13 @@ public:
             fetched = live.levels;
         }
 
+        if (cue->fade.mode == FadeMode::volume)
+        {
+            const double offset = juce::jlimit (Cue::minGainDb, Cue::maxGainDb, mainDb - target->gainDb);
+            edit (ko ("대상에서 레벨 가져오기"), [offset] (Cue& c) { c.fade.mainDb = offset; });
+            return;
+        }
+
         const int inputs = target->numChannels > 0 ? target->numChannels : juce::jmax (1, fetched.numInputs());
         const int outputs = document.cueOutputsFor (*target);
         fetched.resize (inputs, outputs);
@@ -2110,6 +2118,26 @@ private:
 /** 페이드 tab of a fade cue: target, 페이드 인 / 페이드 아웃, time. The shape lives in the 커브 tab. */
 class CueInspector::FadeInOutPanel : public juce::Component
 {
+    class OffsetEditor final : public juce::TextEditor
+    {
+    public:
+        void syncText (const juce::String& value) { setText (value, false); syncedText = value; }
+        bool takePendingEdit()
+        {
+            const bool changed = getText() != syncedText;
+            syncedText = getText();
+            return changed;
+        }
+    private:
+        void focusLost (FocusChangeType cause) override
+        {
+            // Commit before a clicked row changes the inspector's selected cue.
+            if (onFocusLost) onFocusLost();
+            TextEditor::focusLost (cause);
+        }
+        juce::String syncedText;
+    };
+
 public:
     explicit FadeInOutPanel (ProjectDocument& doc) : document (doc), cues (doc.cues)
     {
@@ -2134,8 +2162,29 @@ public:
         durationEditor.onFocusLost = [this] { commitDuration(); };
         addAndMakeVisible (durationEditor);
 
+        styleLabel (offsetLabel, ko ("원래 볼륨 대비"));
+        styleLabel (offsetUnit, "dB");
+        styleNumberEditor (offsetEditor, {}, 12);
+        offsetEditor.setTooltip (ko ("원래 볼륨 대비 (dB, 0 = 원래 볼륨으로)"));
+        offsetEditor.onReturnKey = [this] { commitOffset(); offsetEditor.giveAwayKeyboardFocus(); };
+        offsetEditor.onFocusLost = [this] { commitOffset(); };
+        for (auto* c : std::initializer_list<juce::Component*> { &offsetLabel, &offsetEditor, &offsetUnit, &minus3, &minus6, &restore })
+            addChildComponent (*c);
+        minus3.setButtonText ("-3");
+        minus6.setButtonText ("-6");
+        restore.setButtonText (ko ("원래대로"));
+        for (auto* button : { &minus3, &minus6, &restore })
+        {
+            button->setWantsKeyboardFocus (false);
+            button->getProperties().set ("slateSmall", true);
+        }
+        minus3.onClick = [this] { setOffset (-3.0); };
+        minus6.onClick = [this] { setOffset (-6.0); };
+        restore.onClick = [this] { setOffset (0.0); };
+
         styleLabel (hint, ko ("페이드 인: 실행하면 대상을 무음에서 시작해 이 시간 동안 원래 레벨까지 올립니다 (이미 재생 중이면 지금 레벨에서). "
-                              "페이드 아웃: 대상을 이 시간 동안 무음까지 내리고 정지합니다. 모양은 커브 탭에서."), 13.0f);
+                              "페이드 아웃: 대상을 이 시간 동안 무음까지 내리고 정지합니다. 모양은 커브 탭에서. "
+                              "볼륨 조절: 대상을 멈추지 않고 이 시간 동안 원래 볼륨 대비 설정한 dB로 바꿉니다 (0 = 원래 볼륨으로, 음수 = 내리기, 양수 = 올리기). 대상이 재생 중이 아니면 아무것도 하지 않습니다."), Palette::fileSize);
         addAndMakeVisible (hint);
     }
 
@@ -2181,21 +2230,28 @@ public:
         modeCombo.clear (juce::dontSendNotification);
         modeCombo.addItem (ko ("페이드 인 (무음에서 올리기)"), 1);
         modeCombo.addItem (ko ("페이드 아웃 (무음까지 내리고 정지)"), 2);
+        modeCombo.addItem (ko ("볼륨 조절 (재생 유지)"), 3);
 
         if (cue != nullptr && cue->isFade() && cue->fade.mode == FadeMode::custom)
-            modeCombo.addItem (ko ("사용자 지정 (이전 버전의 레벨·속도·파라미터 페이드)"), 3);
+            modeCombo.addItem (ko ("사용자 지정 (이전 버전의 레벨·속도·파라미터 페이드)"), 4);
 
-        for (auto* c : std::initializer_list<juce::Component*> { &targetCombo, &modeCombo, &durationEditor })
+        for (auto* c : std::initializer_list<juce::Component*> { &targetCombo, &modeCombo, &durationEditor, &offsetEditor, &minus3, &minus6, &restore })
             c->setEnabled (enabled);
+
+        const bool volume = cue != nullptr && cue->isFade() && cue->fade.mode == FadeMode::volume;
+        for (auto* c : std::initializer_list<juce::Component*> { &offsetLabel, &offsetEditor, &offsetUnit, &minus3, &minus6, &restore })
+            c->setVisible (volume);
+        resized();
 
         if (cue != nullptr && cue->isFade())
         {
-            if (durationEditor.hasKeyboardFocus (true))
+            modeCombo.setSelectedId (cue->fade.mode == FadeMode::fadeIn ? 1 : cue->fade.mode == FadeMode::fadeOut ? 2 : volume ? 3 : 4, juce::dontSendNotification);
+            if (durationEditor.hasKeyboardFocus (true) || offsetEditor.hasKeyboardFocus (true))
                 return;   // typing: the field (and the cue it belongs to) stays as it is until the commit
 
             shownId = cue->id;
-            modeCombo.setSelectedId (cue->fade.mode == FadeMode::fadeIn ? 1 : cue->fade.mode == FadeMode::fadeOut ? 2 : 3, juce::dontSendNotification);
             durationEditor.setText (formatTimeMs (cue->fade.durationSeconds), false);
+            offsetEditor.syncText (VolumeCue::formatDb (cue->fade.mainDb).upToFirstOccurrenceOf (" dB", false, false));
         }
     }
 
@@ -2213,7 +2269,20 @@ public:
         durationLabel.setBounds (row.removeFromLeft (40));
         durationEditor.setBounds (row.removeFromLeft (84));
         area.removeFromTop (8);
-        hint.setBounds (area.removeFromTop (40));
+        if (offsetEditor.isVisible())
+        {
+            row = area.removeFromTop (Palette::fieldHeight);
+            offsetLabel.setBounds (row.removeFromLeft (Palette::volumeLabelWidth));
+            offsetEditor.setBounds (row.removeFromLeft (Palette::volumeEditorWidth));
+            offsetUnit.setBounds (row.removeFromLeft (Palette::volumeUnitWidth));
+            for (auto* button : { &minus3, &minus6, &restore })
+            {
+                row.removeFromLeft (Palette::pillGap);
+                button->setBounds (row.removeFromLeft (button == &restore ? Palette::volumeResetWidth : Palette::volumePresetWidth));
+            }
+            area.removeFromTop (Palette::pillGap);
+        }
+        hint.setBounds (area.removeFromTop (Palette::volumeHintHeight));
     }
 
     void paint (juce::Graphics& g) override { g.fillAll (Palette::panel); }
@@ -2252,9 +2321,36 @@ private:
             return;
 
         const int id = modeCombo.getSelectedId();
-        const FadeMode mode = id == 1 ? FadeMode::fadeIn : id == 2 ? FadeMode::fadeOut : FadeMode::custom;
-        edit (ko ("페이드 종류"), [mode] (Cue& c) { c.fade.mode = mode; });
+        if (id < 1 || id > 4) return;
+        const FadeMode mode = id == 1 ? FadeMode::fadeIn : id == 2 ? FadeMode::fadeOut : id == 3 ? FadeMode::volume : FadeMode::custom;
+        edit (ko ("페이드 종류"), [mode] (Cue& c)
+        {
+            if (mode == FadeMode::volume && c.fade.mode != mode) c.fade.mainDb = -6.0;
+            c.fade.mode = mode;
+        });
         refresh();
+    }
+
+    void resetOffsetText()
+    {
+        if (const auto* cue = cues.findById (shownId))
+            offsetEditor.syncText (VolumeCue::formatDb (cue->fade.mainDb).upToFirstOccurrenceOf (" dB", false, false));
+    }
+
+    void setOffset (double value)
+    {
+        const auto* cue = cues.findById (shownId);
+        if (! refreshing && editable && cue != nullptr && cue->isFade() && cue->fade.mode == FadeMode::volume
+            && ! juce::approximatelyEqual (cue->fade.mainDb, value))
+            edit (ko ("볼륨 큐 오프셋"), [value] (Cue& c) { c.fade.mainDb = value; });
+        resetOffsetText();
+    }
+
+    void commitOffset()
+    {
+        if (refreshing || ! offsetEditor.takePendingEdit()) return;
+        if (const auto value = VolumeCue::parseOffset (offsetEditor.getText())) setOffset (*value);
+        else resetOffsetText();
     }
 
     void commitDuration()
@@ -2282,9 +2378,12 @@ private:
     ProjectDocument& document;
     CueList& cues;
     juce::Label targetLabel, modeLabel, durationLabel, hint;
+    juce::Label offsetLabel, offsetUnit;
     juce::ComboBox targetCombo, modeCombo;
     std::vector<juce::Uuid> targetIds;
     juce::TextEditor durationEditor;
+    OffsetEditor offsetEditor;
+    juce::TextButton minus3, minus6, restore;
     juce::Uuid shownId = juce::Uuid::null();
     bool refreshing = false;
     bool editable = true;

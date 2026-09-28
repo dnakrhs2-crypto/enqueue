@@ -57,6 +57,7 @@ public:
         bool audition = false;              // started by an audition GO / preview
         double progress = 0.0;              // 0..1 through the total length (all passes); -1 while looping forever
         juce::int64 startOrder = 0;         // increases with every start (ordering the active-cues list)
+        double liveGainDb = 0.0;            // this instance's main level, before the separate duck / boost gain
     };
 
     struct PlayOptions

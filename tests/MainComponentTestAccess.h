@@ -14,6 +14,16 @@ struct ReopenLastProjectTestAccess
     static ShortcutRouter& keyboard (MainComponent& main) { return *main.shortcutRouter; }
 
     static CueController& controller (MainComponent& main) { return main.controller; }
+    static ProjectDocument& document (MainComponent& main) { return main.document; }
+    static ActiveCuesPanel& activePanel (MainComponent& main) { return main.activeCues; }
+    static ActiveCuesWindow* bigView (MainComponent& main) { return main.activeCuesWindow.get(); }
+    static void installBigView (MainComponent& main, std::unique_ptr<ActiveCuesWindow> window) { main.activeCuesWindow = std::move (window); }
+    static void refreshPlayback (MainComponent& main) { main.timerCallback(); }
+    static void useJucePanicFallback (MainComponent& main)
+    {
+        main.panicHook = std::make_unique<PanicKeyHook> (*main.shortcuts,
+            [&main] (double time, bool hard) { main.panicFromAnywhere (time, hard); });
+    }
     static PanicKeyHook& panicKeyHook (MainComponent& main) { return *main.panicHook; }
     static MidiInputService::Callbacks midiCallbacks (MainComponent& main) { return main.midiRouter->inputCallbacks(); }
 };

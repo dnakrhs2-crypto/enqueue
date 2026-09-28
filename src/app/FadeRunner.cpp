@@ -99,6 +99,7 @@ namespace
         if (d.mode == FadeMode::custom)
             return;
 
+        const double offsetDb = d.mainDb;
         d.relative = false;
         d.fadeLevels = true;
         d.fadeRate = false;
@@ -113,7 +114,9 @@ namespace
         }
         else
         {
-            d.mainDb = target.gainDb;   // up to the cue's own level
+            d.mainDb = d.mode == FadeMode::volume
+                           ? juce::jlimit (Cue::minGainDb, Cue::maxGainDb, target.gainDb + offsetDb)
+                           : target.gainDb;   // up to the cue's own level
             d.stopTargetWhenDone = false;
         }
     }

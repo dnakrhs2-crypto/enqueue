@@ -132,14 +132,14 @@ private:
                                 juce::String ("<ENQUEUE_MIDI_SHORTCUTS schemaVersion='1'><ACTION id='a'/><ACTION id='a'/></ENQUEUE_MIDI_SHORTCUTS>") })
         { const auto r = MidiShortcutProfile::parse (bad); expect (! r.wasOk(), bad); expectEquals (r.originalXml, bad); }
 
-        beginTest ("combined v2 atomic import; v1 keyboard-only import preserves MIDI; complete 78-command export");
+        beginTest ("combined v2 atomic import; v1 keyboard-only import preserves MIDI; complete 80-command export");
         Harness h;
         expect (h.service->replaceMidiProfile (p).wasOk());
         const auto combined = h.service->exportCombinedProfile();
         const auto exchange = ShortcutProfile::parseExchange (combined);
         expect (exchange.wasOk() && exchange.replacesMidi);
-        expectEquals (static_cast<int> (exchange.keyboard.overrides.size()), 78);
-        expectEquals (static_cast<int> (exchange.midi.overrides.size()), 79);
+        expectEquals (static_cast<int> (exchange.keyboard.overrides.size()), 80);
+        expectEquals (static_cast<int> (exchange.midi.overrides.size()), 81);
         expect (h.service->importProfile (combined).wasOk());
         expect (h.lastTransaction.keyboard && h.lastTransaction.midi && ! h.lastTransaction.devices);
         const auto midiBefore = h.service->getMidiProfile();

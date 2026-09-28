@@ -48,7 +48,13 @@ public:
         setFont (column == colName ? Palette::font() : Palette::monoFont (Palette::timeSize));
         onReturnKey = [this] { commit(); };
         onEscapeKey = [this] { cancel(); };
-        onFocusLost = [this] { commit(); };
+        onFocusLost = [this]
+        {
+            const auto* focused = juce::Component::getCurrentlyFocusedComponent();
+            if (focused != nullptr && (bool) focused->getTopLevelComponent()->getProperties()["activeCuesBigView"])
+                return;   // looking at the second monitor must not finish the main table's edit
+            commit();
+        };
     }
 
     void commit()
@@ -208,10 +214,11 @@ CueTable::~CueTable()
     table.setModel (nullptr);
 }
 
-void CueTable::setPlayingCues (std::vector<AudioEngine::PlayingCue> newPlaying)
+void CueTable::setPlayingCues (std::vector<AudioEngine::PlayingCue> newPlaying, VolumeCue::Badges badges)
 {
     const bool wasEmpty = playing.empty();
     playing = std::move (newPlaying);
+    volumeBadges = std::move (badges);
 
     if (! (wasEmpty && playing.empty()))
         table.repaint();
@@ -585,7 +592,13 @@ void CueTable::paintCell (juce::Graphics& g, int rowNumber, int columnId, int wi
             setColour (broken ? Palette::missing : Palette::dimText);
             juce::Path slope;
 
-            if (cue.fade.mode == FadeMode::fadeOut)
+            if (cue.fade.mode == FadeMode::volume)
+            {
+                if (const auto* path = CueIcons::pathFor ({ CueType::fade, FadeMode::volume }))
+                    g.fillPath (*path, juce::AffineTransform::scale (Palette::volumeStatusScale)
+                                          .translated (x - Palette::volumeStatusInset, cy - Palette::volumeStatusHalfHeight));
+            }
+            else if (cue.fade.mode == FadeMode::fadeOut)
             {
                 slope.startNewSubPath (x, cy - 5.0f);
                 slope.lineTo (x + 10.0f, cy + 5.0f);
@@ -715,6 +728,14 @@ void CueTable::paintCell (juce::Graphics& g, int rowNumber, int columnId, int wi
         area.removeFromLeft (Palette::colourBarWidth + 8);
         const auto badge = badgeFor (index);
         const auto badgeFont = Palette::font (Palette::pillSize, true);
+        if (const auto it = running != nullptr ? volumeBadges.find ({ cue.id, running->startOrder }) : volumeBadges.end(); it != volumeBadges.end())
+        {
+            const int wanted = juce::GlyphArrangement::getStringWidthInt (badgeFont, it->second) + Palette::pillPadding;
+            const int badgeWidth = juce::jmin (wanted, juce::jmax (0, area.getWidth() - Palette::nameStub));
+            const auto pill = area.removeFromRight (badgeWidth).withSizeKeepingCentre (badgeWidth, Palette::pillHeight);
+            Palette::drawPill (g, pill, Palette::accent.withMultipliedAlpha (alpha), it->second, badgeFont, false);
+            area.removeFromRight (Palette::pillGap);
+        }
         if (badge.text.isNotEmpty())
         {
             const int wanted = juce::GlyphArrangement::getStringWidthInt (badgeFont, badge.text) + 14;
@@ -770,6 +791,13 @@ void CueTable::paintCell (juce::Graphics& g, int rowNumber, int columnId, int wi
                 text = cue.control.kind == ControlKind::wait ? ko ("대기 ") + formatTimeMs (cue.control.seconds) : ko ("메모");
             else if (cue.hasTarget())
             {
+                if (cue.isFade() && cue.fade.mode == FadeMode::volume)
+                {
+                    const auto* targetCue = findCue ? findCue (cue.targetId()) : cues.findById (cue.targetId());
+                    text = VolumeCue::targetText (targetCue, cue.fade.mainDb);
+                    if (targetCue == nullptr) colour = Palette::missing;
+                    break;
+                }
                 const int target = cue.targetId().isNull() ? -1 : cues.indexOf (cue.targetId());
                 if (target < 0)
                 {
@@ -940,7 +968,7 @@ void CueTable::backgroundClicked (const juce::MouseEvent& e)
 
 void CueTable::addCueItems (juce::PopupMenu& menu)
 {
-    for (auto id : { CommandIDs::addCue, CommandIDs::addFadeCue, CommandIDs::addFadeOutCue, CommandIDs::addDevampCue, CommandIDs::addGroupCue,
+    for (auto id : { CommandIDs::addCue, CommandIDs::addFadeCue, CommandIDs::addFadeOutCue, CommandIDs::addVolumeCue, CommandIDs::addDevampCue, CommandIDs::addGroupCue,
                      CommandIDs::addControlCue, CommandIDs::addWaitCue, CommandIDs::addMemoCue, CommandIDs::addMicCue })
         menu.addCommandItem (&commands, id, {}, CueMenuIcons::create (id));
 }

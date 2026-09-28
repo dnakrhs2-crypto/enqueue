@@ -61,6 +61,16 @@ namespace detail
         return path;
     }
 
+    inline juce::Path volume()
+    {
+        juce::Path path;
+        path.startNewSubPath (3.0f, 6.0f);
+        path.lineTo (8.0f, 6.0f);
+        path.lineTo (14.0f, 18.0f);
+        path.lineTo (21.0f, 18.0f);
+        return filledStroke (path);
+    }
+
     inline juce::Path customFade()
     {
         // A bent envelope distinguishes legacy/custom goals from the two directional ramps.
@@ -188,13 +198,14 @@ namespace detail
 
     struct Entry { Key key; juce::Path path; };
 
-    inline const std::array<Entry, 10>& registry()
+    inline const std::array<Entry, 11>& registry()
     {
-        static const std::array<Entry, 10> entries {{
+        static const std::array<Entry, 11> entries {{
             { { CueType::audio }, audio() },
             { { CueType::fade, FadeMode::fadeIn }, fadeIn() },
             { { CueType::fade, FadeMode::fadeOut }, fadeOut() },
             { { CueType::fade, FadeMode::custom }, customFade() },
+            { { CueType::fade, FadeMode::volume }, volume() },
             { { CueType::devamp }, devamp() },
             { { CueType::group }, group() },
             { { CueType::control }, control() },

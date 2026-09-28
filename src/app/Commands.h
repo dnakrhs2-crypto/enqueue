@@ -91,7 +91,11 @@ enum : juce::CommandID
 
     reopenLastProjectAsk, // 설정 > 시작할 때 최근 프로젝트 (이 PC)
     reopenLastProjectAlways,
-    reopenLastProjectNever
+    reopenLastProjectNever,
+
+    // Append only: numeric IDs also belong to JUCE command/key mappings.
+    addVolumeCue,          // Ctrl+Alt+7
+    showActiveCuesWindow   // no default key
 };
 
 /** The registration path used by MainComponent, kept independent of the shortcut catalog. */
@@ -120,7 +124,8 @@ inline const juce::Array<juce::CommandID>& getAllMainCommands()
                     CommandIDs::checkForUpdates, CommandIDs::showManual, CommandIDs::feedbackChat, CommandIDs::about,
                     CommandIDs::youtubeDownload,
                     CommandIDs::uiScale100, CommandIDs::uiScale110, CommandIDs::uiScale125, CommandIDs::uiScale150,
-                    CommandIDs::reopenLastProjectAsk, CommandIDs::reopenLastProjectAlways, CommandIDs::reopenLastProjectNever };
+                    CommandIDs::reopenLastProjectAsk, CommandIDs::reopenLastProjectAlways, CommandIDs::reopenLastProjectNever,
+                    CommandIDs::addVolumeCue, CommandIDs::showActiveCuesWindow };
     return ids;
 }
 

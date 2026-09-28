@@ -26,6 +26,7 @@ target_sources(EnqueueTests PRIVATE
     ../src/ui/WorkspaceSettingsDialog.cpp
     ../src/ui/FooterBar.cpp
     ../src/ui/ActiveCuesPanel.cpp
+    ../src/ui/ActiveCuesWindow.cpp
     ../src/ui/ContainerTabs.cpp
     ../src/ui/SplitDivider.cpp
     ../src/ui/ManualWindow.cpp
@@ -101,6 +102,9 @@ target_sources(EnqueueTests PRIVATE
     MediaFoundationTests.cpp
     FadeCurveTests.cpp
     FadeRunnerTests.cpp
+    VolumeCueTests.cpp
+    VolumeCueInspectorTests.cpp
+    ActiveCuesWindowTests.cpp
     SchedulerTests.cpp
     ProjectSerializerTests.cpp
     AudioEngineTests.cpp

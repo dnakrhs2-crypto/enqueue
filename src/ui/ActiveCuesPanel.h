@@ -1,6 +1,7 @@
 #pragma once
 
 #include "app/WaitProgress.h"
+#include "app/VolumeCue.h"
 #include "audio/AudioEngine.h"
 #include "model/CueList.h"
 
@@ -26,7 +27,7 @@ public:
     /** Fed from the UI timer: the engine's instances and the waits running now ('nowSeconds' = the controller's clock
         the waits were read at). */
     void setPlayingCues (const std::vector<AudioEngine::PlayingCue>& playing, const std::vector<WaitProgress>& waits = {},
-                         double nowSeconds = 0.0);
+                         double nowSeconds = 0.0, const VolumeCue::Badges& badges = {});
     void setPlayingCount (int numPlaying, int numPaused, int numWaiting = 0);
     /** The row's stop button: the owner stops the cue wherever it runs (fade cues and waits live outside the engine). */
     std::function<void (const juce::Uuid& cueId)> onStopRequested;
@@ -38,9 +39,14 @@ public:
     /** The row's pause button: resume = true asks for a resume (the owner applies the panic latch). */
     std::function<void (const juce::Uuid& cueId, bool resume)> onPauseRequested;
     void setNewestFirst (bool newestFirst);
+    bool isNewestFirst() const noexcept { return newestFirst; }
+    std::function<void()> onBigViewRequested;
+    void setViewOnly (bool viewOnly);
+    bool isViewOnly() const noexcept { return viewOnly; }
+    int getCardCount() const noexcept { return (int) rows.size(); }
     /** Off in show mode: clicking a progress bar must not seek a running cue. */
     void setScrubEnabled (bool enabled) noexcept { scrubEnabled = enabled; }
-    bool isScrubEnabled() const noexcept { return scrubEnabled; }
+    bool isScrubEnabled() const noexcept { return scrubEnabled && ! viewOnly; }
 
     void resized() override;
     void paint (juce::Graphics& g) override;
@@ -56,8 +62,10 @@ private:
     juce::Component content;
     std::vector<std::unique_ptr<Row>> rows;
     juce::Label title, playingLabel, emptyLabel;
+    juce::TextButton bigViewButton;
     bool newestFirst = false;
     bool scrubEnabled = true;
+    bool viewOnly = false;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (ActiveCuesPanel)
 };

@@ -253,18 +253,21 @@ public:
             }
         }
 
-        beginTest ("all 78 commands including unassigned appear; search combines name description and key tokens");
+        beginTest ("all 80 commands including unassigned appear; search combines name description and key tokens");
         {
             Harness h;
             expect (h.service->addKey ("transport.go", K (K::F13Key, M::ctrlModifier | M::altModifier, 0)).wasOk());
             const auto rows = Model::rows (*h.service, {});
-            expectEquals (static_cast<int> (rows.size()), 78);
-            for (const auto& search : { juce::String ("f13"), juce::String ("ctrl+alt"), juce::String ("GO F13"), ShortcutCatalog::get().find ("transport.go")->description })
+            expectEquals (static_cast<int> (rows.size()), 80);
+            for (const auto& search : { juce::String ("f13"), juce::String ("GO F13"), ShortcutCatalog::get().find ("transport.go")->description })
             {
                 const auto found = Model::filter (rows, search, Model::Category::all, Model::Status::all);
                 expectEquals (static_cast<int> (found.size()), 1, search);
                 if (! found.empty()) expectEquals (found[0].id, juce::String ("transport.go"));
             }
+            const auto ctrlAlt = Model::filter (rows, "ctrl+alt", Model::Category::all, Model::Status::all);
+            expectEquals (static_cast<int> (ctrlAlt.size()), 2);
+            for (const auto& row : ctrlAlt) expect (row.id == "transport.go" || row.id == "cue.addVolume");
             expect (Model::filter (rows, "does-not-exist", Model::Category::all, Model::Status::all).empty());
         }
 
@@ -283,7 +286,7 @@ public:
                 total += static_cast<int> (filtered.size());
                 for (const auto& row : filtered) expect (row.category == group);
             }
-            expectEquals (total, 78);
+            expectEquals (total, 80);
             expectEquals (static_cast<int> (Model::filter (rows, {}, Model::Category::all, Model::Status::changed).size()), 2);
             expectEquals (static_cast<int> (Model::filter (rows, {}, Model::Category::all, Model::Status::conflict).size()), 1);
             const auto empty = Model::filter (rows, {}, Model::Category::all, Model::Status::unassigned);

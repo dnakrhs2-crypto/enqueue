@@ -1531,6 +1531,7 @@ std::vector<AudioEngine::PlayingCue> AudioEngine::getPlayingCues() const
         info.audition = p->isAudition();
         info.progress = p->getProgressFraction();
         info.startOrder = p->getStartOrder();
+        info.liveGainDb = p->getLiveGainDb();
         result.push_back (info);
     }
 

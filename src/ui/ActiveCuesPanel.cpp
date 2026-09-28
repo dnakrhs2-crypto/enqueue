@@ -34,6 +34,7 @@ public:
         pauseButton.setColour (juce::TextButton::buttonColourId, Palette::panel);
         pauseButton.onClick = [this]
         {
+            if (owner.isViewOnly()) return;
             if (owner.onPauseRequested)
                 owner.onPauseRequested (id, paused);
             else if (paused)
@@ -52,6 +53,7 @@ public:
         panicButton.setWantsKeyboardFocus (false);
         panicButton.onClick = [this]
         {
+            if (owner.isViewOnly()) return;
             // a waiting card cancels its wait (a post-wait card: the next cue's start); a running card stops its sound
             const auto target = stopTarget.isNull() ? id : stopTarget;
 
@@ -85,7 +87,7 @@ public:
 
     /** A running instance. 'extraWait' = a wait of this very cue running alongside (its post-wait, or the pre-wait of a
         restart put on while it plays): a countdown pill next to the state. */
-    void update (const AudioEngine::PlayingCue& p, const Cue* cue, const WaitProgress* extraWait, double now)
+    void update (const AudioEngine::PlayingCue& p, const Cue* cue, const WaitProgress* extraWait, double now, const juce::String& volume)
     {
         waiting = false;
         stopTarget = juce::Uuid::null();
@@ -94,7 +96,7 @@ public:
         colourIndex = cue != nullptr ? cue->color : 0;
         fraction = p.progress >= 0.0 ? juce::jlimit (0.0, 1.0, p.progress) : 0.0;
         infinite = p.progress < 0.0;
-        pauseButton.setVisible (true);
+        updateControls();
         pauseButton.setButtonText (paused ? ko ("재개") : ko ("일시정지"));
         panicButton.setTooltip (extraWait != nullptr && extraWait->kind == WaitProgress::Kind::postWait
                                     ? ko ("이 큐 페이드 정지 (뒤따르는 자동 계속은 그대로 진행)")
@@ -102,6 +104,7 @@ public:
         setNames (cue);
         stateText = paused ? ko ("일시정지") : fadingOut ? ko ("페이드 아웃") : ko ("재생 중");
         extraText = extraWait != nullptr ? waitPillText (*extraWait, now) : juce::String();
+        volumeText = volume;
 
         const auto infinity = ko ("∞");
         timeLabel.setText (clockText (p.positionSeconds) + " / " + (infinite ? infinity : clockText (juce::jmax (0.0, p.lengthSeconds))),
@@ -124,7 +127,8 @@ public:
         infinite = false;
         colourIndex = cue != nullptr ? cue->color : 0;
         fraction = w.fraction (now);
-        pauseButton.setVisible (false);
+        updateControls();
+        volumeText.clear();
         panicButton.setTooltip (w.kind == WaitProgress::Kind::postWait ? ko ("다음 큐가 이어지지 않게 취소")
                                                                        : ko ("이 대기를 취소 (뒤에 예약된 자동 계속도 함께)"));
         setNames (cue);
@@ -141,6 +145,12 @@ public:
         return waiting ? Palette::waiting : paused ? Palette::paused : (fadingOut ? Palette::fadingOut : Palette::playing);
     }
 
+    void updateControls()
+    {
+        pauseButton.setVisible (! owner.isViewOnly() && ! waiting);
+        panicButton.setVisible (! owner.isViewOnly());
+    }
+
     void resized() override
     {
         auto area = getLocalBounds().reduced (16, Palette::cardInset);
@@ -149,6 +159,13 @@ public:
         const int stateWidth = juce::GlyphArrangement::getStringWidthInt (pillFont, stateText) + 14;
         stateBounds = top.removeFromRight (juce::jmin (stateWidth, top.getWidth() / 2));
         top.removeFromRight (8);
+        volumeBounds = {};
+        if (volumeText.isNotEmpty())
+        {
+            const int wanted = juce::GlyphArrangement::getStringWidthInt (pillFont, volumeText) + Palette::pillPadding;
+            volumeBounds = top.removeFromRight (juce::jmin (wanted, juce::jmax (0, top.getWidth() - Palette::nameStub)));
+            top.removeFromRight (Palette::pillGap);
+        }
         extraBounds = {};
         if (extraText.isNotEmpty())
         {
@@ -211,6 +228,14 @@ public:
         g.setColour (stateColour());
         g.setFont (pillFont);
         g.drawText (stateText, stateBounds.reduced (7, 0), juce::Justification::centred, true);
+        if (! volumeBounds.isEmpty())
+        {
+            const auto pill = volumeBounds.toFloat();
+            g.setColour (Palette::accent.withAlpha (Palette::statePillAlpha));
+            g.fillRoundedRectangle (pill, Palette::pillRadius (pill));
+            g.setColour (Palette::accent);
+            g.drawText (volumeText, volumeBounds.reduced (Palette::pillPadding / 2, 0), juce::Justification::centred, true);
+        }
         if (! extraBounds.isEmpty())
         {
             const auto extraPill = extraBounds.toFloat();
@@ -269,8 +294,8 @@ private:
     int mainStartId = 0;                                          // ... and which scheduled start it is
     juce::TextButton pauseButton, panicButton;
     juce::Label numberLabel, nameLabel, timeLabel, remainingLabel;
-    juce::Rectangle<int> barArea, stateBounds, extraBounds, colourBounds;
-    juce::String stateText, extraText;
+    juce::Rectangle<int> barArea, stateBounds, extraBounds, volumeBounds, colourBounds;
+    juce::String stateText, extraText, volumeText;
     int colourIndex = 0;
     double fraction = 0.0;
     bool paused = false, fadingOut = false, infinite = false, waiting = false;
@@ -279,6 +304,12 @@ private:
 //==============================================================================
 ActiveCuesPanel::ActiveCuesPanel (AudioEngine& e, CueList& c) : engine (e), cues (c)
 {
+    bigViewButton.setButtonText (ko ("크게보기"));
+    bigViewButton.getProperties().set ("slateSmall", true);
+    bigViewButton.setWantsKeyboardFocus (false);
+    bigViewButton.setTooltip (ko ("활성 큐를 별도 창으로 크게 띄웁니다 (다른 모니터용, 이 창의 활성 큐는 그대로)"));
+    bigViewButton.onClick = [this] { if (! viewOnly && onBigViewRequested) onBigViewRequested(); };
+    addChildComponent (bigViewButton);
     title.setText (ko ("활성 큐"), juce::dontSendNotification);
     title.setFont (Palette::font (Palette::bodySize, true));
     title.setColour (juce::Label::textColourId, Palette::text);
@@ -315,6 +346,13 @@ void ActiveCuesPanel::setNewestFirst (bool shouldBeNewestFirst)
     newestFirst = shouldBeNewestFirst;
 }
 
+void ActiveCuesPanel::setViewOnly (bool shouldBeViewOnly)
+{
+    viewOnly = shouldBeViewOnly;
+    for (auto& row : rows) row->updateControls();
+    resized();
+}
+
 void ActiveCuesPanel::setPlayingCount (int numPlaying, int numPaused, int numWaiting)
 {
     auto text = ko ("재생 중 ") + juce::String (numPlaying);
@@ -326,7 +364,8 @@ void ActiveCuesPanel::setPlayingCount (int numPlaying, int numPaused, int numWai
     playingLabel.setTooltip (text);
 }
 
-void ActiveCuesPanel::setPlayingCues (const std::vector<AudioEngine::PlayingCue>& playing, const std::vector<WaitProgress>& waits, double now)
+void ActiveCuesPanel::setPlayingCues (const std::vector<AudioEngine::PlayingCue>& playing, const std::vector<WaitProgress>& waits,
+                                      double now, const VolumeCue::Badges& badges)
 {
     std::vector<const AudioEngine::PlayingCue*> active;
 
@@ -404,7 +443,8 @@ void ActiveCuesPanel::setPlayingCues (const std::vector<AudioEngine::PlayingCue>
             if (w.cueId == p->id && (extra == nullptr || waitPriority (w.kind) < waitPriority (extra->kind)))
                 extra = &w;
 
-        row->update (*p, lookup (p->id), extra, now);
+        const auto badge = badges.find ({ p->id, p->startOrder });
+        row->update (*p, lookup (p->id), extra, now, badge != badges.end() ? badge->second : juce::String());
         next.push_back (std::move (row));
     }
 
@@ -438,6 +478,13 @@ void ActiveCuesPanel::resized()
 {
     auto area = getLocalBounds().reduced (1);
     auto heading = area.removeFromTop (Palette::cardHeaderHeight - 1).reduced (14, 0);
+    bigViewButton.setVisible (! viewOnly && (bool) onBigViewRequested);
+    if (bigViewButton.isVisible())
+    {
+        bigViewButton.setBounds (heading.removeFromRight (Palette::bigViewButtonWidth)
+                                       .withSizeKeepingCentre (Palette::bigViewButtonWidth, Palette::miniButtonHeight));
+        heading.removeFromRight (Palette::pillGap);
+    }
     title.setBounds (heading.removeFromLeft (64));
     playingLabel.setBounds (heading);
     viewport.setBounds (area.reduced (Palette::cardInset));

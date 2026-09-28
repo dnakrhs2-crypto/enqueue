@@ -188,6 +188,8 @@ MainComponent::MainComponent (AudioEngine& e, AppSettings& s, juce::ApplicationC
     };
     activeCues.onCancelWaitRequested = [this] (const juce::Uuid& id, WaitProgress::Kind kind, int startId) { controller.cancelWait (id, kind, startId); };
     activeCues.findCue = [this] (const juce::Uuid& id) { return document.findCueAnywhere (id); };   // a cue of another list runs too
+    activeCues.onBigViewRequested = [this] { showActiveCuesWindow(); };
+    table.findCue = activeCues.findCue;
     table.cueExists = [this] (const juce::Uuid& id) { return document.findCueAnywhere (id) != nullptr; };   // a target in another list is not "missing"
     transport.onPanicSettings = [this] (juce::Point<int> screenPosition) { showPanicSecondsMenu (screenPosition); };
     inspector.onStatus = [this] (const juce::String& message, bool isError) { transport.showStatus (message, isError); };
@@ -310,6 +312,7 @@ MainComponent::MainComponent (AudioEngine& e, AppSettings& s, juce::ApplicationC
 
 MainComponent::~MainComponent()
 {
+    activeCuesWindow.reset();   // its panel refers to the engine, document and this command target
     settings.setLastSessionProject (document.getFile()); // best effort on shutdown: no notice or interruption
     settings.onSaveSucceeded = {};
     reopenDialog.reset();
@@ -639,6 +642,7 @@ void MainComponent::getCommandInfo (juce::CommandID commandID, juce::Application
             break;
 
         case CommandIDs::addFadeOutCue:
+        case CommandIDs::addVolumeCue:
             result.setActive (canEdit);
             break;
 
@@ -971,6 +975,10 @@ bool MainComponent::perform (const InvocationInfo& info)
             addFadeOutCue();
             break;
 
+        case CommandIDs::addVolumeCue:
+            addFadeCueOfMode (FadeMode::volume);
+            break;
+
         case CommandIDs::addDevampCue:
             addDevampCue();
             break;
@@ -1180,6 +1188,10 @@ bool MainComponent::perform (const InvocationInfo& info)
             commands.commandStatusChanged();
             break;
 
+        case CommandIDs::showActiveCuesWindow:
+            showActiveCuesWindow();
+            break;
+
         case CommandIDs::toggleInspector:
             inspectorCollapsed = ! inspectorCollapsed;
             settings.setInspectorCollapsed (inspectorCollapsed);
@@ -1277,11 +1289,12 @@ juce::PopupMenu MainComponent::getMenuForIndex (int topLevelMenuIndex, const juc
             menu.addSeparator();
             menu.addCommandItem (&commands, CommandIDs::toggleShowMode);
             menu.addCommandItem (&commands, CommandIDs::toggleActiveCues);
+            menu.addCommandItem (&commands, CommandIDs::showActiveCuesWindow);
             menu.addCommandItem (&commands, CommandIDs::toggleInspector);
             break;
 
         case 2:
-            for (auto id : { CommandIDs::addCue, CommandIDs::addFadeCue, CommandIDs::addFadeOutCue, CommandIDs::addDevampCue,
+            for (auto id : { CommandIDs::addCue, CommandIDs::addFadeCue, CommandIDs::addFadeOutCue, CommandIDs::addVolumeCue, CommandIDs::addDevampCue,
                              CommandIDs::addGroupCue, CommandIDs::addControlCue, CommandIDs::addWaitCue,
                              CommandIDs::addMemoCue, CommandIDs::addMicCue })
                 menu.addCommandItem (&commands, id, {}, CueMenuIcons::create (id));
@@ -1453,6 +1466,16 @@ void MainComponent::addCuesFromFiles (const juce::StringArray& files, int insert
     settings.setLastAudioDirectory (juce::File (files[0]).getParentDirectory());
 }
 
+void MainComponent::showActiveCuesWindow()
+{
+    if (activeCuesWindow == nullptr)
+        activeCuesWindow = std::make_unique<ActiveCuesWindow> (engine, document.cues, settings);
+    activeCuesWindow->getPanel().findCue = activeCues.findCue;
+    activeCuesWindow->getPanel().setNewestFirst (activeCues.isNewestFirst());
+    activeCuesWindow->onTableKey = [this] (const juce::KeyPress& key) { return table.routeTableKey (key); };
+    activeCuesWindow->open();
+}
+
 void MainComponent::addFadeCue()
 {
     addFadeCueOfMode (FadeMode::fadeIn);
@@ -1474,7 +1497,7 @@ void MainComponent::addFadeCueOfMode (FadeMode mode)
     const double increment = document.settings.numberIncrement;
     const juce::Uuid target = selectedCue != nullptr && selectedCue->makesSound() ? selectedCue->id
                             : selectedCue != nullptr && selectedCue->isFade() ? selectedCue->fade.targetId : juce::Uuid::null();
-    const auto kind = mode == FadeMode::fadeIn ? ko ("페이드 인") : ko ("페이드 아웃");
+    const auto kind = mode == FadeMode::fadeIn ? ko ("페이드 인") : mode == FadeMode::volume ? ko ("볼륨") : ko ("페이드 아웃");
 
     document.perform (kind + ko (" 큐 추가"), [this, selected, target, autoNumber, increment, mode, kind]
     {
@@ -1482,10 +1505,12 @@ void MainComponent::addFadeCueOfMode (FadeMode mode)
         fade.type = CueType::fade;
         fade.fade.mode = mode;
         fade.fade.targetId = target;
-        fade.fade.durationSeconds = mode == FadeMode::fadeIn ? 3.0 : 5.0;
+        fade.fade.durationSeconds = mode == FadeMode::fadeIn ? 3.0 : mode == FadeMode::volume ? 2.0 : 5.0;
+        if (mode == FadeMode::volume)
+            fade.fade.mainDb = -6.0;
         fade.name = kind;
 
-        if (const auto* t = document.cues.findById (target))
+        if (const auto* t = document.findCueAnywhere (target))
             fade.name = kind + ": " + t->name;
 
         const int at = selected >= 0 ? document.cues.subtreeEnd (selected) : document.cues.size();
@@ -3363,10 +3388,16 @@ void MainComponent::timerCallback()
         else
             table.focusTable();
     }
+    if (activeCuesWindow != nullptr && activeCuesWindow->isVisible())
+        if (auto* peer = activeCuesWindow->getPeer(); peer != nullptr && peer->isFocused()
+            && juce::Component::getCurrentlyFocusedComponent() == nullptr)
+            activeCuesWindow->focusContent();
 
     auto playing = engine.getPlayingCues();
+    const auto fades = controller.getFadeRunner().getRunning();
+    const auto volumeBadges = VolumeCue::badgesFor (playing, fades, activeCues.findCue);
 
-    for (const auto& fade : controller.getFadeRunner().getRunning())
+    for (const auto& fade : fades)
     {
         AudioEngine::PlayingCue p;
         p.id = fade.fadeId;
@@ -3416,13 +3447,19 @@ void MainComponent::timerCallback()
     const double waitClock = controller.clock();
 
     if (activeCuesVisible)
-        activeCues.setPlayingCues (playing, waits, waitClock);
+        activeCues.setPlayingCues (playing, waits, waitClock, volumeBadges);
+
+    if (activeCuesWindow != nullptr && activeCuesWindow->isVisible())
+    {
+        activeCuesWindow->getPanel().setNewestFirst (activeCues.isNewestFirst());
+        activeCuesWindow->setPlayingCues (playing, waits, waitClock, volumeBadges);
+    }
 
     if (cart.isVisible())
         cart.setPlayingCues (playing);
 
     table.setRunningWaits (std::move (waits), waitClock);
-    table.setPlayingCues (std::move (playing));
+    table.setPlayingCues (std::move (playing), volumeBadges);
     footer.setCueCount (document.cues.size());
     footer.setWarningCount (countBrokenCues());
     controller.checkWallClock (juce::Time::getCurrentTime());

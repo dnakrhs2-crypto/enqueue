@@ -9,6 +9,7 @@
 #include "ui/ShortcutRouter.h"
 #include "audio/AudioEngine.h"
 #include "ui/ActiveCuesPanel.h"
+#include "ui/ActiveCuesWindow.h"
 #include "ui/ContainerTabs.h"
 #include "ui/CueCartView.h"
 #include "ui/CueInspector.h"
@@ -192,6 +193,7 @@ private:
     void showPluginManager();
     void showAbout();
     void showYouTubeWindow();
+    void showActiveCuesWindow();
     void showAlert (const juce::String& title, const juce::String& message, bool isError);
     void updateTransportStandby();
     void updateAudioStatus();
@@ -272,6 +274,7 @@ private:
     void applyPanicSeconds (double seconds);
     void applyFadeOutSeconds (double seconds);
     std::unique_ptr<ManualWindow> manualWindow;   // made on first use, hidden on close
+    std::unique_ptr<ActiveCuesWindow> activeCuesWindow;
     std::unique_ptr<YouTubeWindow> youtubeWindow;   // the same
     std::unique_ptr<PluginManagerWindow> pluginManagerWindow;   // the same (Ctrl+P)
 

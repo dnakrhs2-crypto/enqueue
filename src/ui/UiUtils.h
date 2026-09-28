@@ -186,6 +186,13 @@ namespace Palette
     constexpr int childIndent = 24, statusIconSize = 16, colourBarWidth = 3, colourBarHeight = 18;
     constexpr int playheadWidth = 4, rowProgressHeight = 2, progressHeight = 6, scrollBarWidth = 6;
     constexpr int activeCardHeight = 122, miniButtonHeight = 26, pillHeight = 22;
+    constexpr int pillPadding = 14, pillGap = 8, nameStub = 48;
+    constexpr int activeViewWidth = 420, activeViewMinWidth = 360, activeViewMinHeight = 240;
+    constexpr int activeViewDefaultWidth = 840, activeViewDefaultHeight = 600, windowMaxSize = 10000;
+    constexpr float activeViewMinScale = 1.0f, activeViewMaxScale = 4.0f;
+    constexpr int bigViewButtonWidth = 72, volumeLabelWidth = 104, volumeEditorWidth = 84, volumeUnitWidth = 32;
+    constexpr int volumePresetWidth = 48, volumeResetWidth = 88, volumeHintHeight = 68;
+    constexpr float volumeStatusScale = 0.6f, volumeStatusInset = 1.0f, volumeStatusHalfHeight = 7.2f;
     constexpr int shadowRadius = 24, shadowOffsetY = 8;
     constexpr const char* bodyTypeface = "Malgun Gothic";
     constexpr const char* preferredMonoTypeface = "Cascadia Mono";

@@ -84,6 +84,7 @@ target_sources(GoCueCore INTERFACE
     ${CMAKE_CURRENT_SOURCE_DIR}/src/app/CueController.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/app/Scheduler.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/app/FadeRunner.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/app/VolumeCue.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/app/BackupManager.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/app/SettingsMigration.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/app/ShortcutCatalog.cpp
@@ -201,6 +202,7 @@ target_sources(Enqueue PRIVATE
     src/ui/CueMidiPanel.cpp
     src/ui/FooterBar.cpp
     src/ui/ActiveCuesPanel.cpp
+    src/ui/ActiveCuesWindow.cpp
     src/ui/ContainerTabs.cpp
     src/ui/SplitDivider.cpp
     src/ui/ManualWindow.cpp

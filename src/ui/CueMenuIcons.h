@@ -16,6 +16,7 @@ inline std::unique_ptr<juce::Drawable> create (juce::CommandID command)
         case addCue:        return CueIcons::create (Key { CueType::audio });
         case addFadeCue:    return CueIcons::create (Key { CueType::fade, FadeMode::fadeIn });
         case addFadeOutCue: return CueIcons::create (Key { CueType::fade, FadeMode::fadeOut });
+        case addVolumeCue:  return CueIcons::create (Key { CueType::fade, FadeMode::volume });
         case addDevampCue:  return CueIcons::create (Key { CueType::devamp });
         case addGroupCue:   return CueIcons::create (Key { CueType::group });
         case addControlCue: return CueIcons::create (Key { CueType::control });

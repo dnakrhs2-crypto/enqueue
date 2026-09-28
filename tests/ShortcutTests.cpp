@@ -37,9 +37,9 @@ public:
     void runTest() override
     {
         const auto& catalog = ShortcutCatalog::get();
-        beginTest ("all 77 MainComponent registration IDs and JUCE quit have unique stable catalog entries");
+        beginTest ("all 79 MainComponent registration IDs and JUCE quit have unique stable catalog entries");
         auto registered = CommandIDs::getAllMainCommands(); // the exact path called by MainComponent::getAllCommands
-        expectEquals (registered.size(), 77);
+        expectEquals (registered.size(), 79);
         registered.add (juce::StandardApplicationCommandIDs::quit);
         expectEquals (static_cast<int> (catalog.getCommands().size()), registered.size());
         std::set<juce::String> ids;
@@ -67,6 +67,8 @@ public:
                 continue;
             const auto legacy = shortcut_test::legacyCommandInfo (commandID);
             auto expectedKeys = legacy.defaultKeypresses;
+            if (commandID == CommandIDs::addVolumeCue)
+                expectedKeys.add (key ('7', ctrl | juce::ModifierKeys::altModifier)); // added in 0.13, old IDs/defaults unchanged
             if (commandID == CommandIDs::removeCue)
                 expectedKeys.add (key (KeyPress::backspaceKey)); // formerly ListBox::deleteKeyPressed, table focus only
            #if JUCE_WINDOWS
@@ -308,7 +310,7 @@ public:
             const auto exported = source.service->exportProfile();
             const auto parsed = ShortcutProfile::parse (exported);
             expect (parsed.wasOk());
-            expectEquals (static_cast<int> (parsed.profile.overrides.size()), 79);
+            expectEquals (static_cast<int> (parsed.profile.overrides.size()), 81);
             Harness destination;
             expect (destination.service->setKeys ("file.save", { key (KeyPress::F14Key) }).wasOk());
             expect (destination.service->importProfile (exported).wasOk());

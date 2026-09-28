@@ -14,6 +14,7 @@ namespace Keys
     constexpr const char* reopenLastProjectPolicy = "reopenLastProjectPolicy";
     constexpr const char* lastAudioDir      = "lastAudioDirectory";
     constexpr const char* windowState       = "windowState";
+    constexpr const char* activeCuesWindowState = "activeCuesWindowState";
     constexpr const char* lastRunVersion    = "lastRunVersion";
     constexpr const char* inspectorFraction = "inspectorFraction";
     constexpr const char* inspectorFolded   = "inspectorCollapsed";
@@ -198,6 +199,16 @@ juce::String AppSettings::getWindowState() const
 void AppSettings::setWindowState (const juce::String& state)
 {
     settings->setValue (Keys::windowState, state);
+}
+
+juce::String AppSettings::getActiveCuesWindowState() const
+{
+    return settings->getValue (Keys::activeCuesWindowState);
+}
+
+void AppSettings::setActiveCuesWindowState (const juce::String& state)
+{
+    settings->setValue (Keys::activeCuesWindowState, state);
 }
 
 double AppSettings::getInspectorFraction() const

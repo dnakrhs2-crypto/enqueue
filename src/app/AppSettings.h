@@ -47,6 +47,8 @@ public:
 
     juce::String getWindowState() const;
     void setWindowState (const juce::String& state);
+    juce::String getActiveCuesWindowState() const;
+    void setActiveCuesWindowState (const juce::String& state);
 
     /** The app version that ran last time (empty on a fresh install): a change means an update just landed. */
     juce::String getLastRunVersion() const;

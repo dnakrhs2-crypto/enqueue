@@ -194,12 +194,23 @@ namespace
         return result;
     }
 
-    juce::var fadeToVar (const FadeCueData& f)
+    juce::var fadeToVar (FadeCueData f)
     {
+        // Older readers treat an unknown mode as custom: leave only the main absolute lane enabled.
+        if (f.mode == FadeMode::volume)
+        {
+            f.relative = false;
+            f.stopTargetWhenDone = false;
+            f.fadeLevels = true;
+            f.setAllActive (false);
+            f.mainActive = true;
+            f.fadeRate = false;
+            f.params.clear();
+        }
         auto* obj = new juce::DynamicObject();
         obj->setProperty ("target", f.targetId.isNull() ? juce::String() : f.targetId.toString());
         obj->setProperty ("duration", f.durationSeconds);
-        obj->setProperty ("mode", f.mode == FadeMode::fadeIn ? "in" : f.mode == FadeMode::fadeOut ? "out" : "custom");
+        obj->setProperty ("mode", f.mode == FadeMode::fadeIn ? "in" : f.mode == FadeMode::fadeOut ? "out" : f.mode == FadeMode::volume ? "volume" : "custom");
         obj->setProperty ("relative", f.relative);
         obj->setProperty ("stopTargetWhenDone", f.stopTargetWhenDone);
         obj->setProperty ("fadeLevels", f.fadeLevels);
@@ -245,9 +256,9 @@ namespace
         f.targetId = juce::Uuid (v.getProperty ("target", "").toString());
         f.durationSeconds = (double) v.getProperty ("duration", 5.0);
         const auto mode = v.getProperty ("mode", "custom").toString();   // files before 0.9.4: the general fade
-        f.mode = mode == "in" ? FadeMode::fadeIn : mode == "out" ? FadeMode::fadeOut : FadeMode::custom;
+        f.mode = mode == "in" ? FadeMode::fadeIn : mode == "out" ? FadeMode::fadeOut : mode == "volume" ? FadeMode::volume : FadeMode::custom;
 
-        if (warnings != nullptr && mode != "in" && mode != "out" && mode != "custom")
+        if (warnings != nullptr && mode != "in" && mode != "out" && mode != "custom" && mode != "volume")
             warnings->add ("Unknown fade mode \"" + mode + "\" - treated as a custom fade");
         f.relative = (bool) v.getProperty ("relative", false);
         f.stopTargetWhenDone = (bool) v.getProperty ("stopTargetWhenDone", false);

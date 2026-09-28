@@ -1,6 +1,7 @@
 #pragma once
 
 #include "app/WaitProgress.h"
+#include "app/VolumeCue.h"
 #include "audio/AudioEngine.h"
 #include "model/CueList.h"
 
@@ -40,7 +41,7 @@ public:
     ~CueTable() override;
 
     /** Called from a UI timer with the engine's current playback state. */
-    void setPlayingCues (std::vector<AudioEngine::PlayingCue> playing);
+    void setPlayingCues (std::vector<AudioEngine::PlayingCue> playing, VolumeCue::Badges badges = {});
     /** The waits running now (pre-wait / post-wait / wait cue countdowns, 'nowSeconds' = the controller's clock): the
         pre-wait and post-wait cells count down with a fill, the row is tinted while the cue waits. */
     void setRunningWaits (std::vector<WaitProgress> waits, double nowSeconds);
@@ -75,6 +76,7 @@ public:
     std::function<bool (const juce::String& number, const juce::Uuid& exceptId)> isNumberTaken;
     /** A fade / devamp / control target may live in another list: the owner looks it up project-wide (default: this list). */
     std::function<bool (const juce::Uuid& id)> cueExists;
+    std::function<const Cue* (const juce::Uuid& id)> findCue;
 
     /** Commits a cell edit in progress right now (before the list is swapped for another one). */
     void finishEditing();
@@ -85,11 +87,14 @@ public:
     /** Opens the inline editor for a cell (number / name / pre-wait / post-wait). */
     void beginCellEdit (int row, ColumnId column);
     void focusTable();
+    /** Fixed table keys from the big view use the existing owner without moving focus on a mere click. */
+    bool routeTableKey (const juce::KeyPress& key) { return table.keyPressed (key); }
     void resized() override;
     void paint (juce::Graphics& g) override;
     void paintOverChildren (juce::Graphics& g) override;
 
 private:
+    VolumeCue::Badges volumeBadges;
     class CellEditor;
 
     // TableListBoxModel

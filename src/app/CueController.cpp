@@ -1135,6 +1135,14 @@ CueController::GoResult CueController::triggerImpl (const Cue& cue, bool auditio
         juce::String error;
         bool targetAutoStarted = false;
 
+        // a volume cue never starts its target; one without a target falls through to the missing-target error below
+        if (cue.fade.mode == FadeMode::volume && document.findCueAnywhere (cue.fade.targetId) != nullptr
+            && (! engine.isPlaying (cue.fade.targetId) || engine.isStopping (cue.fade.targetId)))
+        {
+            status (ko ("볼륨 큐 대상이 재생 중이 아니라 건너뜀: ") + cueLabel (index, cue));
+            return GoResult::failed;
+        }
+
         if (cue.fade.mode == FadeMode::fadeIn)
         {
             const auto* target = document.findCueAnywhere (cue.fade.targetId);
