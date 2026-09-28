@@ -80,6 +80,8 @@ public:
         The close button clears them all. An empty text clears that line. */
     void setSessionNote (const juce::String& text, bool error);
     void setStartupNote (const juce::String& text, bool error, bool safeModeNote);
+    void setUpdateNotice (const juce::String& previous, const juce::String& current,
+                          const juce::File& desktop, const juce::File& iconFile);
     void hideNotice();
     void refreshAll();
 
@@ -98,6 +100,7 @@ public:
     void menuItemSelected (int menuItemID, int topLevelMenuIndex) override;
 
 private:
+    friend struct UpdateNoticeTestAccess;
     enum class Drawer { none, chain, fx };
 
     void timerCallback() override;
@@ -183,7 +186,11 @@ private:
     juce::TextEditor noticeText;   // read-only: wraps by word, breaks a long token, scrolls when long
     std::unique_ptr<juce::ResizableCornerComponent> cornerGrip;   // a visible handle: the frame's own edge is thin (and hard to hit over remote desktop)
     juce::TextButton noticeClose { juce::String::fromUTF8 ("\xE2\x9C\x95") };
+    juce::TextButton noticeCoupang;
     bool noticeVisible = false, noticeIsError = false;
+    juce::String updateVersionText, updateNote;
+    juce::File updateDesktop, updateIcon;
+    bool updateShortcutOffered = false, updateNoteIsError = false;
     juce::String sessionNote, startupNote, saveErrorNote;   // the lines of the bar (see setSessionNote)
     juce::String hotkeyErrorNote;   // registration failures survive session changes; a retry replaces this line
     juce::String pluginNote;    // plugins that faulted (dry from then on), accumulated until the bar is closed

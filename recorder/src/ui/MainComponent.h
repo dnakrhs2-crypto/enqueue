@@ -36,11 +36,13 @@ public:
     void updateShutdownBlocked();
     static juce::String updateBlockedText(std::uint32_t lifecycleFlags, bool captureBusy); // names what has to finish first
     void checkForUpdates();
+    bool canShowUpdateNotice() const;
     void connectDevicesFromSettings() { if (!demo && devicesEnabled) session.configure(settings.get()); }
 private:
     friend struct StabilityTestAccess;
     friend struct ShortcutExceptionTestAccess;
     friend struct ImportUiTestAccess;
+    friend struct UpdateNoticeTestAccess;
     struct FileResult
     {
         juce::Result result = juce::Result::ok(); bool opening = false, recovered = false;

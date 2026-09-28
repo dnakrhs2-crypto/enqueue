@@ -2,6 +2,7 @@ juce_add_console_app(EnqueueTests PRODUCT_NAME "EnqueueTests")
 
 target_sources(EnqueueTests PRIVATE
     TestMain.cpp
+    CoupangShortcutTests.cpp
     ShortcutTests.cpp
     ShortcutRouterTests.cpp
     ShortcutUiTests.cpp

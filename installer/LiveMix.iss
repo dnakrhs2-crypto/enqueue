@@ -66,7 +66,7 @@ Source: "{#SourceDir}\{#AppExe}"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#SourceDir}\WinSparkle.dll"; DestDir: "{app}"; Flags: ignoreversion skipifsourcedoesntexist
 Source: "{#SourceDir}\obs-plugin\livemix-obs\livemix-obs.dll"; DestDir: "{app}\obs-plugin\livemix-obs"; Flags: ignoreversion
 Source: "{#SourceDir}\obs-plugin\livemix-obs\data\locale\*.ini"; DestDir: "{app}\obs-plugin\livemix-obs\data\locale"; Flags: ignoreversion recursesubdirs
-Source: "coupang.ico"; DestDir: "{app}"; Flags: ignoreversion; Tasks: coupang
+Source: "coupang.ico"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
 Name: "{group}\{#AppName}"; Filename: "{app}\{#AppExe}"
@@ -140,7 +140,15 @@ begin
 end;
 
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
+var
+  OtherPath: String;
 begin
   if CurUninstallStep = usPostUninstall then
+  begin
     DeleteFile(CoupangShortcutPath);
+    OtherPath := ExpandConstant('{userdesktop}\') + CustomMessage('CoupangOtherShortcutName') + '.url';
+    if (OtherPath <> CoupangShortcutPath)
+      and (GetIniString('InternetShortcut', 'URL', '', OtherPath) = CoupangShortcutUrl) then
+      DeleteFile(OtherPath);
+  end;
 end;

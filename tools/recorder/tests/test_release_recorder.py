@@ -247,7 +247,8 @@ class LegacyRegressionTests(unittest.TestCase):
                     mock.call(["cmake", "--preset", "local"]),
                     mock.call(["cmake", "--build", "--preset", "local-release", "--target", release.APPS[key]["target"],
                                "EnqueueTests", "--", "-m", "-v:m", "-nologo"]),
-                    mock.call(["ctest", "--preset", "local-release"])])
+                    # only the app's own suites since 5ec12fe (Recorder's ctest entries need RecorderTests.exe)
+                    mock.call(["ctest", "--preset", "local-release", "-R", release.APPS[key]["ctest_filter"]])])
 
     def test_legacy_appcast_and_latest_schema(self):
         for key in ("enqueue", "livemix"):

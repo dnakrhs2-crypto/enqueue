@@ -1,2 +1,2 @@
-recorder/licenses/** -text
-recorder/third_party/** -text
+licenses/** -text
+third_party/** -text

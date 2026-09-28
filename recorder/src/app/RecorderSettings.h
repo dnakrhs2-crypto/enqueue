@@ -32,6 +32,7 @@ struct UserSettings
     CaptureSnapshot calibration;
     juce::StringArray recentProjects;
     juce::String windowState;
+    juce::String lastRunVersion;
     RecorderShortcuts shortcuts;
     juce::Result validate(int deviceInputCount = 256) const;
 };
