@@ -4,7 +4,6 @@
 #include "MixEngine.h"
 #include "ObsPluginInstaller.h"
 #include "app/Updater.h"
-#include "app/CoupangShortcut.h"
 #include "ui/LiveMixLookAndFeel.h"
 #include "ui/MainComponent.h"
 
@@ -261,10 +260,7 @@ public:
         launchedAt = juce::Time::getCurrentTime();
         startTimer (30 * 1000);
 
-        const auto previous = settings->getLastRunVersion();
-        if (CoupangShortcut::decideUpdate (previous, getApplicationVersion(), false).announce)
-            main.setUpdateNotice (previous, getApplicationVersion(), CoupangShortcut::userDesktop(), CoupangShortcut::installedIcon());
-        if (previous != getApplicationVersion())
+        if (settings->getLastRunVersion() != getApplicationVersion())
             settings->setLastRunVersion (getApplicationVersion());
     }
 

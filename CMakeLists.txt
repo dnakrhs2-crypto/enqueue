@@ -63,7 +63,6 @@ set(GOCUE_EDDSA_PUBLIC_KEY "" CACHE STRING "Base64 EdDSA public key that verifie
 add_library(GoCueCore INTERFACE)
 
 target_sources(GoCueCore INTERFACE
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/app/CoupangShortcut.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/model/Cue.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/model/MidiTrigger.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/app/MidiTriggerRules.cpp
@@ -152,7 +151,7 @@ target_link_libraries(GoCueCore INTERFACE
     juce::juce_gui_extra
     juce::juce_recommended_config_flags
     juce::juce_recommended_warning_flags
-    mfplat mfreadwrite mfuuid propsys ole32 delayimp shell32)   # Media Foundation AAC / M4A / WMA reader (delay-loaded: optional on Windows N)
+    mfplat mfreadwrite mfuuid propsys ole32 delayimp)   # Media Foundation AAC / M4A / WMA reader (delay-loaded: optional on Windows N)
 
 # mfplat / mfreadwrite are missing on Windows N editions without the Media Feature Pack: delay-load them so the app
 # still starts (MediaFoundationAudioFormat::isAvailable() probes the DLLs before touching them)
