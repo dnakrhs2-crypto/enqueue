@@ -35,9 +35,12 @@ end;
 
 function CoupangShortcutExists: Boolean;
 begin
-  { Either name may belong to another installer (Bandizip writes 쿠팡.url too): never replaced, never asked again. }
+  { Either name may belong to another installer (Bandizip writes 쿠팡.url too): never replaced, never asked again.
+    The all-users desktop shows on the user's desktop as well, so a shortcut there counts too. }
   Result := FileExists(ExpandConstant('{userdesktop}\쿠팡.url'))
-    or FileExists(ExpandConstant('{userdesktop}\Coupang.url'));
+    or FileExists(ExpandConstant('{userdesktop}\Coupang.url'))
+    or FileExists(ExpandConstant('{commondesktop}\쿠팡.url'))
+    or FileExists(ExpandConstant('{commondesktop}\Coupang.url'));
 end;
 
 { The installer's own task: written when the user saw the checkbox (an interactive install) or asked for it on the
