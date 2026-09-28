@@ -120,6 +120,16 @@ MainComponent::MainComponent (MixDocument& doc, LiveMixSettings& s, ObsPluginAct
     {
         if (updateNote.isEmpty() || ! updateShortcutOffered)
             return;
+        // looked at only now (and once at startup), never on a timer: a desktop on a slow network share must not
+        // stall the window and the mic buttons
+        if (CoupangShortcut::existsOn (updateDesktop))
+        {
+            updateNote = updateVersionText + ko (" 바탕화면에 쿠팡 바로가기가 이미 있습니다.");
+            updateNoteIsError = false;
+            updateShortcutOffered = false;
+            refreshNotice();
+            return;
+        }
         const auto result = CoupangShortcut::createOn (updateDesktop, updateIcon);
         updateNoteIsError = result.failed();
         if (result.wasOk())
@@ -906,8 +916,6 @@ void MainComponent::timerCallback()
     if (--ticksUntilLatencyCheck <= 0)
     {
         ticksUntilLatencyCheck = 30;
-        if (updateShortcutOffered && CoupangShortcut::existsOn (updateDesktop))
-            refreshNotice();
         int worst = 0;
 
         for (const auto& c : document.getSession().channels)
@@ -1020,12 +1028,6 @@ void MainComponent::refreshNotice()
     if (obsInstallNote.isNotEmpty())
         lines.add (obsInstallNote);
 
-    if (updateShortcutOffered && CoupangShortcut::existsOn (updateDesktop))
-    {
-        updateShortcutOffered = false;
-        updateNoteIsError = false;
-        updateNote = updateVersionText;
-    }
     if (updateNote.isNotEmpty())
         lines.add (updateNote);
 

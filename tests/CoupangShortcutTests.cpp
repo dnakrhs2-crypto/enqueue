@@ -63,9 +63,14 @@ public:
             expect (icon.getParentDirectory().createDirectory().wasOk());
             expect (icon.replaceWithText ("test icon"));
             expect (! existsOn (desktop));
+            const auto tempDir = juce::File::getSpecialLocation (juce::File::tempDirectory);
+            const int tempsBefore = tempDir.getNumberOfChildFiles (juce::File::findFiles, "coupang-shortcut*.tmp");
             const auto result = createOn (desktop, icon);
             expect (result.wasOk(), result.getErrorMessage());
             expect (existsOn (desktop));
+            // only the finished shortcut lands on the desktop; the temporary file it was written as is gone
+            expectEquals (desktop.getNumberOfChildFiles (juce::File::findFilesAndDirectories), 1);
+            expectEquals (tempDir.getNumberOfChildFiles (juce::File::findFiles, "coupang-shortcut*.tmp"), tempsBefore);
             const auto shortcut = desktop.getChildFile (ko ("쿠팡.url"));
             const auto contents = shortcut.loadFileAsString();
             expect (contents.contains ("[InternetShortcut]"));
@@ -247,6 +252,19 @@ private:
         main.setUpdateNotice ("1.0", "2.0", foreign, {});
         expectEquals (Access::text (main), versionText);
         expect (! button.isVisible());
+
+        beginTest ("LiveMix: a shortcut another program makes after the offer is reported on click and left alone");
+        const auto later = temp.root.getChildFile ("later-desktop");
+        expect (later.createDirectory().wasOk());
+        main.setUpdateNotice ("1.0", "2.0", later, {});
+        expect (button.isVisible());
+        expect (later.getChildFile ("Coupang.url").replaceWithText ("made by another program"));
+        button.onClick();
+        expect (! button.isVisible());
+        expect (! Access::isError (main));
+        expectEquals (Access::text (main), versionText + ko (" 바탕화면에 쿠팡 바로가기가 이미 있습니다."));
+        expectEquals (later.getChildFile ("Coupang.url").loadFileAsString(), juce::String ("made by another program"));
+        expect (! later.getChildFile (ko ("쿠팡.url")).exists());
         expectEquals (juce::Component::getNumCurrentlyModalComponents(), modals);
     }
 };
