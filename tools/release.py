@@ -146,17 +146,36 @@ def release_exists(gh, tag, repo):
         return False
 
 
+def release_state(gh, tag, repo):
+    """(is it still a draft, the names of its files) for the release of 'tag'."""
+    info = json.loads(run([gh, "release", "view", tag, "--repo", repo, "--json", "isDraft,assets"], capture=True))
+    return bool(info["isDraft"]), {asset["name"] for asset in info["assets"]}
+
+
 def create_release(gh, tag, assets, repo, options):
-    """gh release create, tried again like run_network. A create whose answer was lost may still have made the
-    release on GitHub, so a retry looks first: when the release is there, its files are uploaded (--clobber) instead."""
+    """gh release create, tried again like run_network, and done only when the release is published with every file.
+    - a release that is already there before the first try is not this run's (another run, one made by hand): stop
+      rather than overwrite its files under its old title and notes
+    - a create whose answer was lost may still have made the release (gh makes it a draft, uploads, then publishes),
+      so a retry looks first: when this run's release is there, every file goes up again (--clobber) and it is
+      published"""
+    if release_exists(gh, tag, repo):
+        sys.exit("a GitHub release for %s already exists in %s - it is not this run's, so nothing was changed; "
+                 "look at it on GitHub first" % (tag, repo))
+    names = {pathlib.Path(str(a)).name for a in assets}
     for attempt in range(1, NETWORK_ATTEMPTS + 1):
         try:
             if attempt > 1 and release_exists(gh, tag, repo):
                 run([gh, "release", "upload", tag] + [str(a) for a in assets] + ["--repo", repo, "--clobber"])
+                run([gh, "release", "edit", tag, "--repo", repo, "--draft=false"])
             else:
                 run([gh, "release", "create", tag] + [str(a) for a in assets] + ["--repo", repo] + list(options))
+            draft, present = release_state(gh, tag, repo)
+            if draft or not names <= present:
+                raise subprocess.CalledProcessError(1, "gh release view", stderr="%s is %s; missing files: %s"
+                                                    % (tag, "still a draft" if draft else "published", sorted(names - present)))
             return
-        except subprocess.CalledProcessError:
+        except (subprocess.CalledProcessError, ValueError, KeyError):
             if attempt == NETWORK_ATTEMPTS:
                 raise
             retry_pause("gh release create " + tag, attempt)

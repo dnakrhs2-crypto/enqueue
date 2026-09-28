@@ -301,6 +301,10 @@ class LegacyRegressionTests(unittest.TestCase):
                 stack.enter_context(mock.patch.object(release, "sign", return_value=SIGNATURE))
                 run = stack.enter_context(mock.patch.object(release, "run", return_value=""))
                 site = stack.enter_context(mock.patch.object(release, "deploy_site"))
+                # GitHub as create_release sees it: no release for the tag yet, then the published one with its files
+                stack.enter_context(mock.patch.object(release, "release_exists", return_value=False))
+                stack.enter_context(mock.patch.object(release, "release_state",
+                                                      return_value=(False, {installer.name, "appcast.xml"})))
                 stack.enter_context(mock.patch.dict(os.environ, {"GITHUB_REF_NAME": "", "GOCUE_GITHUB_REPO": ""}))
                 stack.enter_context(mock.patch.object(sys, "argv", ["release.py", "--app", key, "--publish", "--skip-site",
                     "--key", str(keyfile), "--tools-dir", str(root)]))
@@ -589,33 +593,89 @@ class NetworkRetryTests(unittest.TestCase):
             release.run_network(["git", "clone"], before_retry=lambda: cleaned.append(True))
         self.assertEqual(cleaned, [True])
 
-    def test_create_whose_answer_was_lost_uploads_instead_of_creating_twice(self):
+    def fake_github(self, create_fails=1, exists_before=False, draft_states=None):
+        """A GitHub for create_release: 'create' fails the first N times but (after the first) leaves the release
+        behind as a draft; 'view --json tagName' answers whether it exists; 'view --json isDraft,assets' reports it."""
+        state = {"exists": exists_before, "draft": False, "creates": 0, "assets": set()}
+        drafts = list(draft_states or [])
         calls = []
 
         def fake_run(cmd, cwd=None, capture=False):
-            calls.append(list(map(str, cmd[:3])))
+            cmd = list(map(str, cmd))
+            calls.append(cmd[1:3] + ([cmd[-1]] if cmd[1:3] == ["release", "view"] else []))
             if cmd[1:3] == ["release", "create"]:
-                raise self.failure()   # it reached GitHub, but the answer timed out
-            return ""                   # release view: it exists; upload: fine
-
-        with mock.patch.object(release, "run", side_effect=fake_run):
-            release.create_release("gh", "livemix-v9.9.9", ["a.exe", "appcast.xml"], "o/r", ["--title", "t", "--verify-tag"])
-        self.assertEqual(calls, [["gh", "release", "create"], ["gh", "release", "view"], ["gh", "release", "upload"]])
-
-    def test_create_that_never_arrived_is_created_again(self):
-        calls = []
-
-        def fake_run(cmd, cwd=None, capture=False):
-            calls.append(list(map(str, cmd[:3])))
-            if cmd[1:3] == ["release", "create"] and calls.count(["gh", "release", "create"]) == 1:
-                raise self.failure()
+                state["creates"] += 1
+                assets = [c for c in cmd[4:] if not c.startswith("--") and c not in ("o/r", "t")]
+                if state["creates"] <= create_fails:
+                    state.update(exists=True, draft=True, assets={Path(assets[0]).name})   # half done, answer lost
+                    raise self.failure()
+                state.update(exists=True, draft=False, assets={Path(a).name for a in assets})
+                return ""
+            if cmd[1:3] == ["release", "view"] and cmd[-1] == "tagName":
+                if not state["exists"]:
+                    raise self.failure("release not found")
+                return "{}"
             if cmd[1:3] == ["release", "view"]:
-                raise self.failure("release not found")
+                draft = drafts.pop(0) if drafts else state["draft"]
+                return json.dumps({"isDraft": draft, "assets": [{"name": n} for n in sorted(state["assets"])]})
+            if cmd[1:3] == ["release", "upload"]:
+                state["assets"] |= {Path(c).name for c in cmd[4:] if not c.startswith("--") and c != "o/r"}
+                return ""
+            if cmd[1:3] == ["release", "edit"]:
+                state["draft"] = False
+                return ""
             return ""
 
+        return fake_run, calls, state
+
+    def test_a_first_create_that_works_is_checked_once(self):
+        fake_run, calls, state = self.fake_github(create_fails=0)
         with mock.patch.object(release, "run", side_effect=fake_run):
+            release.create_release("gh", "v9.9.9", ["a.exe", "appcast.xml"], "o/r", ["--title", "t", "--verify-tag"])
+        self.assertEqual(calls, [["release", "view", "tagName"], ["release", "create"], ["release", "view", "isDraft,assets"]])
+        self.sleep.assert_not_called()
+
+    def test_a_create_whose_answer_was_lost_is_finished_not_made_twice(self):
+        fake_run, calls, state = self.fake_github(create_fails=1)   # left behind as a draft with part of the files
+        with mock.patch.object(release, "run", side_effect=fake_run):
+            release.create_release("gh", "livemix-v9.9.9", ["a.exe", "appcast.xml"], "o/r", ["--title", "t", "--verify-tag"])
+        self.assertEqual(calls, [["release", "view", "tagName"], ["release", "create"], ["release", "view", "tagName"],
+                                 ["release", "upload"], ["release", "edit"], ["release", "view", "isDraft,assets"]])
+        self.assertFalse(state["draft"])
+        self.assertEqual(state["assets"], {"a.exe", "appcast.xml"})
+        self.assertEqual(state["creates"], 1)
+
+    def test_a_create_that_never_arrived_is_made_again(self):
+        fake_run, calls, state = self.fake_github(create_fails=0)
+        original = fake_run
+        first = {"done": False}
+
+        def lost_before_github(cmd, cwd=None, capture=False):
+            if list(map(str, cmd[1:3])) == ["release", "create"] and not first["done"]:
+                first["done"] = True
+                calls.append(["release", "create"])
+                raise self.failure()   # never reached GitHub: nothing was made
+            return original(cmd, cwd, capture)
+
+        with mock.patch.object(release, "run", side_effect=lost_before_github):
             release.create_release("gh", "v9.9.9", ["a.exe"], "o/r", ["--verify-tag"])
-        self.assertEqual(calls, [["gh", "release", "create"], ["gh", "release", "view"], ["gh", "release", "create"]])
+        self.assertEqual(calls, [["release", "view", "tagName"], ["release", "create"], ["release", "view", "tagName"],
+                                 ["release", "create"], ["release", "view", "isDraft,assets"]])
+
+    def test_a_release_that_was_already_there_is_not_touched(self):
+        fake_run, calls, state = self.fake_github(create_fails=0, exists_before=True)
+        with mock.patch.object(release, "run", side_effect=fake_run):
+            with self.assertRaises(SystemExit) as stopped:
+                release.create_release("gh", "v9.9.9", ["a.exe"], "o/r", ["--verify-tag"])
+        self.assertIn("already exists", str(stopped.exception))
+        self.assertEqual(calls, [["release", "view", "tagName"]])   # no create, no upload, no edit
+
+    def test_a_release_still_a_draft_is_not_reported_done(self):
+        fake_run, calls, state = self.fake_github(create_fails=0, draft_states=[True, True, True])
+        with mock.patch.object(release, "run", side_effect=fake_run):
+            with self.assertRaises(subprocess.CalledProcessError):
+                release.create_release("gh", "v9.9.9", ["a.exe"], "o/r", ["--verify-tag"])
+        self.assertEqual(self.sleep.call_count, release.NETWORK_ATTEMPTS - 1)
 
 
 if __name__ == "__main__":
