@@ -47,7 +47,6 @@ MainComponent::MainComponent(RecorderDocument& d, RecorderSettings& s, TakeContr
     session.onConfigured = [this](const juce::Result& result, const UserSettings& s)
     {
         auto applied = s; applied.shortcuts = settings.get().shortcuts;
-        applied.lastRunVersion = settings.get().lastRunVersion; // device snapshots must not roll back the launch record
         settings.set(applied); persistSettings(); if (result.failed()) showError(result.getErrorMessage()); else banner.clear();
         if (audioPanel && !pendingConfigure) { audioPanel->setSettings(s); audioPanel->setDeviceInfo(session.deviceInfo()); } // a queued edit keeps the user's latest choices on screen
         if (cameraPanel) cameraPanel->setSettings(s);
@@ -485,19 +484,6 @@ void MainComponent::updateShutdownRequested()
 {
     publishLifecycle(); if (!session.lifecycleState()->canShutdown()) { updateShutdownBlocked(); return; }
     if (auto* app = juce::JUCEApplication::getInstance()) app->systemRequestedQuit();
-}
-bool MainComponent::canShowUpdateNotice() const
-{
-    const auto state = session.lifecycleState();
-    // Unsaved edits alone are fine; active capture/work and a closing window are not.
-    return (state->snapshot() & ~std::uint32_t(RecorderLifecycle::unsaved)) == 0
-        && !state->captureBusy() && !session.busy() && !fileWork.valid() && !importBusy()
-        && !settingsWork.valid() && !settingsPending && !pendingConfigure && !closeAction
-        && !promptAfterStartupOpen && chooser == nullptr
-        && !(settingsWindow && settingsWindow->isVisible())
-        && !(projectWindow && projectWindow->isVisible())
-        && !(exportDialog && (exportDialog->isShowing() || exportDialog->previewActive()))
-        && juce::Component::getNumCurrentlyModalComponents() == 0;
 }
 void MainComponent::checkForUpdates()
 {

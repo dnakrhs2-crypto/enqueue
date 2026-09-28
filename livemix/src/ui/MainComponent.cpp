@@ -4,7 +4,6 @@
 #include "SettingsDialog.h"
 #include "AudioBackends.h"
 #include "app/Links.h"
-#include "app/CoupangShortcut.h"
 #include "app/Updater.h"
 
 #include <cmath>
@@ -114,35 +113,6 @@ MainComponent::MainComponent (MixDocument& doc, LiveMixSettings& s, ObsPluginAct
     noticeClose.setTooltip (ko ("닫기"));
     noticeClose.onClick = [this] { hideNotice(); };
     addChildComponent (noticeClose);
-    noticeCoupang.setButtonText (CoupangShortcut::buttonText);
-    noticeCoupang.setWantsKeyboardFocus (false);
-    noticeCoupang.onClick = [this]
-    {
-        if (updateNote.isEmpty() || ! updateShortcutOffered)
-            return;
-        // looked at only now (and once at startup), never on a timer: a desktop on a slow network share must not
-        // stall the window and the mic buttons
-        if (CoupangShortcut::existsOn (updateDesktop))
-        {
-            updateNote = updateVersionText + ko (" 바탕화면에 쿠팡 바로가기가 이미 있습니다.");
-            updateNoteIsError = false;
-            updateShortcutOffered = false;
-            refreshNotice();
-            return;
-        }
-        const auto result = CoupangShortcut::createOn (updateDesktop, updateIcon);
-        updateNoteIsError = result.failed();
-        if (result.wasOk())
-        {
-            updateNote = updateVersionText + ko (" 바탕화면에 쿠팡 바로가기를 만들었습니다.");
-            updateShortcutOffered = false;
-        }
-        else
-            updateNote = updateVersionText + " " + CoupangShortcut::guidance + " " + CoupangShortcut::disclosure
-                         + ko (" 바탕화면에 쿠팡 바로가기를 만들지 못했습니다. ") + result.getErrorMessage();
-        refreshNotice();
-    };
-    addChildComponent (noticeCoupang);
 
     windows.onChainChanged = [this] (PluginChain&) { document.markDirty(); };
     windows.onWindowClosed = [this] (juce::AudioPluginInstance& plugin) { document.checkPluginState (plugin); };
@@ -515,9 +485,8 @@ void MainComponent::resized()
     if (noticeVisible)
     {
         // the height the text really takes at this width (measured by the editor itself, no scrollbar), up to about
-        // five lines; a longer notice scrolls. The action sits just left of the close button.
-        const int actionWidth = updateShortcutOffered ? 184 : 0;
-        const int textWidth = juce::jmax (100, area.getWidth() - 32 - 48 - actionWidth);
+        // five lines; a longer notice scrolls. The close button sits on the right.
+        const int textWidth = juce::jmax (100, area.getWidth() - 32 - 44);
         const int maxTextHeight = 128;   // about five lines
         noticeText.setScrollbarsShown (false);
         noticeText.setBounds (16, area.getY() + 7, textWidth, 1);   // lays the text out at this width
@@ -526,14 +495,11 @@ void MainComponent::resized()
         noticeText.setScrollbarsShown (needed > maxTextHeight);
         auto bar = area.removeFromTop (textHeight + 14);
         noticeClose.setBounds (bar.removeFromRight (48).reduced (7, juce::jmax (0, (bar.getHeight() - 34) / 2)));
-        if (updateShortcutOffered)
-            noticeCoupang.setBounds (bar.removeFromRight (actionWidth).withSizeKeepingCentre (176, 34));
         noticeText.setBounds (bar.reduced (16, 7));
     }
 
     noticeText.setVisible (noticeVisible);
     noticeClose.setVisible (noticeVisible);
-    noticeCoupang.setVisible (noticeVisible && updateShortcutOffered);
     auto status = area.removeFromBottom (30);
     const bool narrowStatus = getWidth() < 700;   // portrait: a short tray hint, the rest of the line for the status
     statusRight.setText (narrowStatus ? ko ("최소화·X → 트레이") : ko ("최소화하면 트레이에서 계속 동작합니다"), juce::dontSendNotification);
@@ -981,22 +947,6 @@ void MainComponent::setStartupNote (const juce::String& text, bool error, bool s
     refreshNotice();
 }
 
-void MainComponent::setUpdateNotice (const juce::String& previous, const juce::String& current,
-                                     const juce::File& desktop, const juce::File& iconFile)
-{
-    const auto decision = CoupangShortcut::decideUpdate (previous, current, CoupangShortcut::existsOn (desktop));
-    updateVersionText = decision.announce ? ko ("LiveMix가 ") + previous + " → " + current + ko ("(으)로 업데이트되었습니다.")
-                                          : juce::String();
-    updateNote = updateVersionText;
-    updateDesktop = desktop;
-    updateIcon = iconFile;
-    updateShortcutOffered = decision.offerShortcut;
-    updateNoteIsError = false;
-    if (updateShortcutOffered)
-        updateNote += " " + CoupangShortcut::guidance + " " + CoupangShortcut::disclosure;
-    refreshNotice();
-}
-
 void MainComponent::setSaveError (const juce::String& message)
 {
     if (saveErrorNote == message)
@@ -1031,17 +981,13 @@ void MainComponent::refreshNotice()
     if (obsInstallNote.isNotEmpty())
         lines.add (obsInstallNote);
 
-    if (updateNote.isNotEmpty())
-        lines.add (updateNote);
-
     noticeVisible = ! lines.isEmpty();
     noticeIsError = (sessionNote.isNotEmpty() && sessionNoteIsError)
                     || (startupNote.isNotEmpty() && startupNoteIsError)
                     || pluginNote.isNotEmpty()
                     || saveErrorNote.isNotEmpty()
                     || hotkeyErrorNote.isNotEmpty()
-                    || (obsInstallNote.isNotEmpty() && obsInstallError)
-                    || (updateNote.isNotEmpty() && updateNoteIsError);
+                    || (obsInstallNote.isNotEmpty() && obsInstallError);
     noticeText.setText (lines.joinIntoString ("\n"), false);
     resized();
     repaint();
@@ -1127,10 +1073,6 @@ void MainComponent::hideNotice()
     saveErrorNote.clear();
     hotkeyErrorNote.clear();
     obsInstallNote.clear();
-    updateNote.clear();
-    updateVersionText.clear();
-    updateShortcutOffered = false;
-    updateNoteIsError = false;
     refreshNotice();
 }
 
