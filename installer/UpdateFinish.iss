@@ -91,7 +91,9 @@ var
   Margin, Y: Integer;
 begin
   Margin := ScaleX(16);
-  Form := CreateCustomForm(ScaleX(460), ScaleY(150), False, True);
+  { Unscaled on purpose: CreateCustomForm scales the size itself (InitializeFont), so ScaleX here would scale twice
+    on a high-DPI screen. The controls below are placed from the form's final ClientWidth. }
+  Form := CreateCustomForm(460, 150, False, True);
   try
     Form.Caption := FmtMessage(CustomMessage('UpdateDoneTitle'), ['{#AppName}']);
 
