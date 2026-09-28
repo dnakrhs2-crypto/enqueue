@@ -889,11 +889,22 @@ void ChainDrawer::saveChainAsSet (const PluginSetEntry& entry)
     juce::Component::SafePointer<ChainDrawer> safeThis (this);
     const int forRevision = revision;
     const auto generation = document.getSessionGeneration();
-    alert->enterModalState (true, juce::ModalCallbackFunction::create ([safeThis, alert, number, forRevision, generation] (int result)
+    alert->enterModalState (true, juce::ModalCallbackFunction::create ([safeThis, alert, number, forRevision, generation, shown = entry] (int result)
     {
         if (result != 1 || safeThis == nullptr || safeThis->revision != forRevision || safeThis->chain == nullptr
             || safeThis->document.getSessionGeneration() != generation || safeThis->chain->getNumSlots() == 0)
             return;
+
+        // the slot as the dialog described it: a file that appeared or changed meanwhile (copied in, saved from
+        // elsewhere) is not overwritten without asking again
+        const auto now = listPluginSets (PluginSet::defaultFolder())[(size_t) (number - 1)];
+        if (now.state != shown.state
+            || (now.state == PluginSetEntry::State::ready && now.set.toJson() != shown.set.toJson()))
+        {
+            juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon, ko ("세트를 저장하지 않았습니다"),
+                ko ("세트 ") + juce::String (number) + ko (" 파일이 이 창을 연 사이에 바뀌었습니다. 다시 저장해 주세요."), ko ("확인"));
+            return;
+        }
 
         bool complete = true;
         auto states = safeThis->chain->getStates (&complete);
