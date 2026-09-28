@@ -9,6 +9,24 @@ namespace gocue::livemix
 
 namespace
 {
+    std::map<juce::Uuid, std::vector<PluginSlotState>> pluginStates (const MixSession& session)
+    {
+        std::map<juce::Uuid, std::vector<PluginSlotState>> result;
+        result.emplace (juce::Uuid::null(), session.master.chain);
+        for (const auto& channel : session.channels)
+            result.emplace (channel.id, channel.chain);
+        for (const auto& fx : session.fx)
+            result.emplace (fx.id, fx.chain);
+        return result;
+    }
+
+    bool matchesSavedPlugin (const PluginSlotState& live, const std::vector<PluginSlotState>& saved)
+    {
+        const auto found = std::find_if (saved.begin(), saved.end(), [&] (const PluginSlotState& s) { return s.slotId == live.slotId; });
+        return found != saved.end() && found->format == live.format && found->fileOrIdentifier == live.fileOrIdentifier
+            && found->uniqueId == live.uniqueId && found->stateBase64 == live.stateBase64;
+    }
+
     MixSession defaultSession()
     {
         MixSession fresh;   // no name: an unsaved session is "새 세션", and once saved it goes by its file
@@ -43,6 +61,7 @@ MixDocument::MixDocument (MixEngine& e) : engine (e)
     // the model only: the graph stays empty until a session is applied, so no raw microphone reaches the outputs
     // while the saved session (and its plugins) is still loading
     session = defaultSession();
+    savedPluginStates = pluginStates (session);
 }
 
 void MixDocument::applyToEngine()
@@ -68,6 +87,8 @@ void MixDocument::newSession()
     session = defaultSession();
     sessionGeneration = juce::Uuid();
     file = juce::File();
+    savedPluginStates = pluginStates (session);
+    pluginEditsDiscarded = false;
     dirty = false;
     engine.applySession (session, nullptr, true);
     graphApplied = true;
@@ -81,10 +102,17 @@ juce::Result MixDocument::load (const juce::File& newFile, juce::StringArray* wa
     const auto result = MixSession::load (newFile, loaded, warnings);
 
     if (result.failed())
+    {
+        // "버리고 계속" was for leaving this session: the open failed, the session stays, and the plugin edits made in
+        // it from now on (and at the next boundary check) count again - otherwise they would never be saved
+        pluginEditsDiscarded = false;
         return result;
+    }
 
     engine.getObsSender().setEnabled (false);
     session = std::move (loaded);
+    savedPluginStates = pluginStates (session);
+    pluginEditsDiscarded = false;
     if (PluginHost::isSafeMode()) session.master.sendToObs = false;
     sessionGeneration = juce::Uuid();
     file = newFile;
@@ -108,13 +136,27 @@ juce::Result MixDocument::load (const juce::File& newFile, juce::StringArray* wa
 
 juce::Result MixDocument::save (const juce::File& newFile)
 {
+    return save (newFile, nullptr);
+}
+
+juce::Result MixDocument::save (const juce::File& newFile, const MixSession* captureForSave)
+{
     // the name is left exactly as it is: a session with none goes by whatever file it is saved into, and one the
     // operator typed is theirs whatever the file is called (a save that fails then has nothing to undo)
     for (int attempt = 0;; ++attempt)
     {
-        pollPluginEdits();   // edits reported so far are captured below (and keep the document dirty should the write fail)
+        const bool edited = pollPluginEdits(); // an edit since the boundary capture needs a fresh read
 
-        if (! engine.captureLivePluginStates (session))
+        const bool reuse = attempt == 0 && ! edited && captureForSave != nullptr
+            && std::all_of (session.channels.begin(), session.channels.end(), [&] (const MixChannel& c) { return captureForSave->findChannel (c.id) != nullptr; })
+            && std::all_of (session.fx.begin(), session.fx.end(), [&] (const MixFx& f) { return captureForSave->findFx (f.id) != nullptr; });
+        if (reuse)
+        {
+            for (auto& c : session.channels) c.chain = captureForSave->findChannel (c.id)->chain;
+            for (auto& f : session.fx) f.chain = captureForSave->findFx (f.id)->chain;
+            session.master.chain = captureForSave->master.chain;
+        }
+        else if (! engine.captureLivePluginStates (session))
             return juce::Result::fail (juce::String::fromUTF8 ("플러그인 설정을 읽지 못해 저장하지 않았습니다 (플러그인이 오류를 냈습니다). 다시 시도하거나 그 플러그인을 체인에서 빼세요."));
 
         session.sanitise();
@@ -124,6 +166,8 @@ juce::Result MixDocument::save (const juce::File& newFile)
             return result;
 
         file = newFile;
+        savedPluginStates = pluginStates (session); // only after this write succeeded, even if a later retry fails
+        pluginEditsDiscarded = false;
         dirty = false;
 
         // an edit that arrived during the capture / write is not in the file: written again, twice at most (a knob
@@ -144,12 +188,12 @@ juce::Result MixDocument::save (const juce::File& newFile)
     return juce::Result::ok();
 }
 
-juce::Result MixDocument::saveIfPossible()
+juce::Result MixDocument::saveIfPossible (const MixSession* captureForSave)
 {
     if (! hasFile())
         return juce::Result::fail (juce::String::fromUTF8 ("저장할 파일이 정해지지 않았습니다"));
 
-    return save (file);
+    return save (file, captureForSave);
 }
 
 //==============================================================================
@@ -552,6 +596,7 @@ void MixDocument::markDirty (bool refreshViews)
     if (repairingGroupBypass)
         return;
 
+    pluginEditsDiscarded = false;
     const bool wasDirty = dirty.exchange (true, std::memory_order_acq_rel);
 
     if (refreshViews || ! wasDirty)
@@ -572,20 +617,75 @@ bool MixDocument::pollPluginEdits()
         }
     });
 
-    if (edited)
+    if (edited && ! pluginEditsDiscarded)
         markDirty (false);
 
     return edited;
 }
 
+bool MixDocument::checkPluginStates (std::optional<MixSession>* captureForSave)
+{
+    if (captureForSave != nullptr)
+        captureForSave->reset();
+    if (pluginEditsDiscarded)
+        return false;
+
+    auto captured = session;
+    if (! engine.captureLivePluginStates (captured))
+        return false;
+
+    const auto live = pluginStates (captured);
+    const bool changed = live.size() != savedPluginStates.size() || std::any_of (live.begin(), live.end(), [&] (const auto& chain)
+    {
+        const auto saved = savedPluginStates.find (chain.first);
+        return saved == savedPluginStates.end() || chain.second.size() != saved->second.size()
+            || std::any_of (chain.second.begin(), chain.second.end(), [&] (const PluginSlotState& s) { return ! matchesSavedPlugin (s, saved->second); });
+    });
+    // Some plugins change their bytes on every read. They will be dirty on every editor close and saved at exit:
+    // acceptable, but never keep reading until equal or put this comparison in save's three-write retry loop.
+    if (changed)
+        markDirty (false);
+    if (captureForSave != nullptr)
+        *captureForSave = std::move (captured);
+    return changed;
+}
+
+bool MixDocument::checkPluginState (juce::AudioPluginInstance& plugin)
+{
+    if (pluginEditsDiscarded)
+        return false;
+
+    bool changed = false;
+    const auto check = [&] (PluginChain* chain, const juce::Uuid& id)
+    {
+        if (chain == nullptr) return;
+        for (int i = 0; i < chain->getNumSlots(); ++i)
+            if (chain->getSlot (i).plugin.get() == &plugin)
+            {
+                bool complete = true;
+                const auto live = chain->getState (i, &complete);
+                const auto saved = savedPluginStates.find (id);
+                changed = complete && (saved == savedPluginStates.end() || ! matchesSavedPlugin (live, saved->second));
+            }
+    };
+    for (const auto& channel : session.channels) check (engine.getChannelChain (channel.id), channel.id);
+    for (const auto& fx : session.fx) check (engine.getFxChain (fx.id), fx.id);
+    check (&engine.getMasterChain(), juce::Uuid::null());
+    if (changed)
+        markDirty (false);
+    return changed;
+}
+
 void MixDocument::structureChanged()
 {
+    pluginEditsDiscarded = false;
     dirty = true;
     notifyStructure();
 }
 
 void MixDocument::valueChanged()
 {
+    pluginEditsDiscarded = false;
     dirty = true;
     notifyValue();
 }

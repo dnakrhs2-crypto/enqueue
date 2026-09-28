@@ -45,6 +45,8 @@ public:
 
     /** Forwarded from every chain, e.g. to mark the project dirty. */
     std::function<void (PluginChain&)> onChainChanged;
+    /** User closed an editor, before it is destroyed. Optional; Enqueue leaves this unset. */
+    std::function<void (juce::AudioPluginInstance&)> onWindowClosed;
 
     void pluginAboutToBeRemoved (PluginChain&, juce::AudioPluginInstance& plugin) override;
     void chainChanged (PluginChain& chain) override;

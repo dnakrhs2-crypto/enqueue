@@ -2,6 +2,7 @@
 
 #include "audio/LoudnessMeter.h"
 #include "MixModel.h"
+#include "HostTransport.h"
 #include "ObsSender.h"
 #include "audio/PluginChain.h"
 #include "audio/PluginHost.h"
@@ -95,6 +96,8 @@ public:
         the old sound out when the mic comes back on - the reason this can be turned off. */
     void setSkipChainWhenOff (bool skip) noexcept { skipChainWhenOff.store (skip, std::memory_order_relaxed); }
     bool getSkipChainWhenOff() const noexcept { return skipChainWhenOff.load (std::memory_order_relaxed); }
+    void setSendTransport (bool enabled) noexcept { transport.setSendTransport (enabled); }
+    bool getSendTransport() const noexcept { return transport.getSendTransport(); }
     int getXRunCount() const;
 
     /** Offline preparation (the callback does the same when the device starts). */
@@ -141,6 +144,7 @@ public:
 
 private:
     friend struct MixEngineTestAccess;
+    friend struct MixTransportTestAccess;
     struct MeterCell
     {
         std::atomic<float> left { 0.0f }, right { 0.0f };
@@ -234,6 +238,7 @@ private:
     std::atomic<bool> splitMonitor { false }, stereoOutputsOnly { false };
 
     juce::CriticalSection lock;   // the node lists and the buffers: held by the callback, taken briefly by edits
+    HostTransport transport;     // outlives every chain's optional timing hook
     std::vector<std::unique_ptr<ChannelNode>> channels;
     std::vector<std::unique_ptr<FxNode>> fxNodes;
     MasterNode master;

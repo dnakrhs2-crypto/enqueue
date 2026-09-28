@@ -83,6 +83,7 @@ static_assert (std::atomic<MonitorOutput*>::is_always_lock_free && std::atomic<u
 
 MixEngine::MixEngine (const juce::String& obsMappingName) : obsSender (obsMappingName)
 {
+    master.chain->setTimingHook (&transport);
     prepare (48000.0, 256);
 }
 
@@ -501,6 +502,7 @@ void MixEngine::prepare (double newSampleRate, int newBlockSize)
 {
     newBlockSize = juce::jmax (16, newBlockSize);
     const juce::ScopedLock sl (lock);
+    transport.prepare (newSampleRate);
     sampleRate.store (newSampleRate, std::memory_order_relaxed);
     blockSize.store (newBlockSize, std::memory_order_relaxed);
     chBuf.setSize (2, newBlockSize, false, true, true);
@@ -554,16 +556,18 @@ void MixEngine::renderBlock (const float* const* inputs, int numInputs, float* c
         obsSender.writeSilence (numSamples);
         if (isSplitMonitor() && monitorOutput != nullptr)
             monitorOutput->push (nullptr, nullptr, numSamples);
-        return;
+        return; // the graph did not run: the sample clock does not advance
     }
 
     const int chunkSize = juce::jmax (1, masterBus.getNumSamples());   // a driver may deliver more than announced: chunk, never grow
+    transport.beginBlock(); // only the graph callback, after the early return on a busy graph
     const double sr = sampleRate.load (std::memory_order_relaxed);
     const float rampStepPerSample = (float) (1.0 / juce::jmax (1.0, onOffRampSeconds * sr));
     const int panRampSamples = juce::jmax (1, juce::roundToInt (panRampSeconds * sr));
 
     for (int offset = 0; offset < numSamples; offset += chunkSize)
     {
+        transport.setChunkOffset (offset);
         const int n = juce::jmin (chunkSize, numSamples - offset);
         const bool split = isSplitMonitor();
         if (split) monitorStage.clear (0, n);
@@ -768,6 +772,7 @@ void MixEngine::renderBlock (const float* const* inputs, int numInputs, float* c
         if (split && monitorOutput != nullptr)
             monitorOutput->push (monitorStage.getReadPointer (0), monitorStage.getReadPointer (1), n);
     }
+    transport.advance (numSamples); // once for the full device callback, never per chain or chunk
 }
 
 //==============================================================================
@@ -875,6 +880,7 @@ void MixEngine::applySession (const MixSession& session, juce::StringArray* erro
 
     auto restore = [&] (PluginChain& chain, const std::vector<PluginSlotState>& states)
     {
+        chain.setTimingHook (&transport);
         chain.prepare (sr, bs);
         const auto chainErrors = chain.restore (states, factory);
 

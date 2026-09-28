@@ -11,6 +11,15 @@ PluginChain::~PluginChain()
     clearSlots (false);   // an owner being torn down must not be told about it (a retired chain is not an edit)
 }
 
+void PluginChain::setTimingHook (TimingHook* hook)
+{
+    const juce::ScopedLock sl (lock);
+    timingHook = hook;
+    for (auto& slot : slots)
+        if (slot->plugin != nullptr)
+            slot->plugin->setPlayHead (hook != nullptr ? &playHead : nullptr);
+}
+
 void PluginChain::prepare (double newSampleRate, int newBlockSize)
 {
     sampleRate = newSampleRate > 0.0 ? newSampleRate : 44100.0;
@@ -32,6 +41,8 @@ void PluginChain::prepare (double newSampleRate, int newBlockSize)
 bool PluginChain::prepareSlot (Slot& slot)
 {
     auto& plugin = *slot.plugin;
+    if (timingHook != nullptr)
+        plugin.setPlayHead (&playHead); // before prepare, for addPlugin and restore as well as existing slots
     bool ok = true;
     int wanted = 2;
     int latency = 0;
@@ -367,61 +378,62 @@ void PluginChain::applyStates (const std::vector<PluginSlotState>& states)
 std::vector<PluginSlotState> PluginChain::getStates (bool* complete) const
 {
     std::vector<PluginSlotState> result;
+    for (int i = 0; i < (int) slots.size(); ++i)
+        result.push_back (getState (i, complete));
+    return result;
+}
 
-    for (auto& slot : slots)   // only the message thread edits 'slots', so no lock is needed here
+PluginSlotState PluginChain::getState (int index, bool* complete) const
+{
+    const auto& slot = slots[(size_t) index]; // only the message thread edits 'slots', so no lock is needed here
+    PluginSlotState s = slot->state;
+    s.bypassed = slot->bypassed.load();
+
+    if (slot->plugin != nullptr)
     {
-        PluginSlotState s = slot->state;
-        s.bypassed = slot->bypassed.load();
+        bool captured = true;
 
-        if (slot->plugin != nullptr)
+        try
         {
-            bool captured = true;
+            const auto description = slot->plugin->getPluginDescription();
+            s.format = description.pluginFormatName;
+            s.name = description.name;
+            s.fileOrIdentifier = description.fileOrIdentifier;
+            s.uniqueId = description.uniqueId;
 
-            try
+            if (const auto xml = description.createXml())
+                s.descriptionXml = xml->toString (juce::XmlElement::TextFormat().singleLine().withoutHeader());
+
+            // A VST3 is read without its callback lock, as JUCE's own AudioPluginHost does while its graph plays:
+            // the VST3 contract has the plugin handle getState alongside its processing. Holding the lock made the
+            // callback pass the plugin for a block whenever a save or an undo snapshot coincided with it (the
+            // chain now feeds a plugin what it missed, but a skip is still a skip). A VST2's bank read walks its
+            // programs (setCurrentProgram) - not something to interleave with processBlock: it keeps the lock.
+            juce::MemoryBlock block;
+
+            if (description.pluginFormatName == "VST3")
             {
-                const auto description = slot->plugin->getPluginDescription();
-                s.format = description.pluginFormatName;
-                s.name = description.name;
-                s.fileOrIdentifier = description.fileOrIdentifier;
-                s.uniqueId = description.uniqueId;
-
-                if (const auto xml = description.createXml())
-                    s.descriptionXml = xml->toString (juce::XmlElement::TextFormat().singleLine().withoutHeader());
-
-                // A VST3 is read without its callback lock, as JUCE's own AudioPluginHost does while its graph plays:
-                // the VST3 contract has the plugin handle getState alongside its processing. Holding the lock made the
-                // callback pass the plugin for a block whenever a save or an undo snapshot coincided with it (the
-                // chain now feeds a plugin what it missed, but a skip is still a skip). A VST2's bank read walks its
-                // programs (setCurrentProgram) - not something to interleave with processBlock: it keeps the lock.
-                juce::MemoryBlock block;
-
-                if (description.pluginFormatName == "VST3")
-                {
-                    slot->plugin->getStateInformation (block);
-                }
-                else
-                {
-                    const juce::ScopedLock callbackLock (slot->plugin->getCallbackLock());
-                    slot->plugin->getStateInformation (block);
-                }
-
-                s.stateBase64 = block.getSize() > 0 ? juce::Base64::toBase64 (block.getData(), block.getSize()) : juce::String();
+                slot->plugin->getStateInformation (block);
             }
-            catch (...)
+            else
             {
-                captured = false;   // the last state that was read stays in 's' (the slot's cache): the caller is told
+                const juce::ScopedLock callbackLock (slot->plugin->getCallbackLock());
+                slot->plugin->getStateInformation (block);
             }
 
-            if (captured)
-                slot->state = s;   // the last good state, should a later read fail
-            else if (complete != nullptr)
-                *complete = false;
+            s.stateBase64 = block.getSize() > 0 ? juce::Base64::toBase64 (block.getData(), block.getSize()) : juce::String();
+        }
+        catch (...)
+        {
+            captured = false;   // the last state that was read stays in 's' (the slot's cache): the caller is told
         }
 
-        result.push_back (std::move (s));
+        if (captured)
+            slot->state = s;   // the last good state, should a later read fail
+        else if (complete != nullptr)
+            *complete = false;
     }
-
-    return result;
+    return s;
 }
 
 juce::StringArray PluginChain::restore (const std::vector<PluginSlotState>& states, const Factory& factory)
@@ -707,7 +719,7 @@ void PluginChain::noteSkipped (Slot& slot, int numSamples) noexcept
     }
 }
 
-bool PluginChain::catchUpSkipped (Slot& slot, int budgetSamples) noexcept
+bool PluginChain::catchUpSkipped (Slot& slot, int budgetSamples, juce::int64 blockStart) noexcept
 {
     // The plugin missed 'skipped' input samples (its callback lock was busy, it was suspended). Without them its own
     // time - delay lines, look-ahead buffers, envelopes - would stay that much behind the show for good, and every such
@@ -726,6 +738,10 @@ bool PluginChain::catchUpSkipped (Slot& slot, int budgetSamples) noexcept
     if (r < 0)
         r += capacity;
 
+    // Use the backlog before this catch-up to label the missed samples. After a chain / graph lock or OFF gap,
+    // older stored input is labelled just before now; the timing hook must not change which audio is caught up.
+    const int backlog = slot.skipped;
+    int fed = 0;
     slot.skipped -= todo;
 
     while (todo > 0)
@@ -753,6 +769,8 @@ bool PluginChain::catchUpSkipped (Slot& slot, int budgetSamples) noexcept
 
         try
         {
+            if (timingHook != nullptr)
+                playHead.position = timingHook->getPositionAt (blockStart - backlog + fed);
             slot.plugin->processBlock (view, midi);
         }
         catch (...)
@@ -768,6 +786,8 @@ bool PluginChain::catchUpSkipped (Slot& slot, int budgetSamples) noexcept
         }
 
         r = (r + n) % capacity;
+        if (timingHook != nullptr)
+            fed += n;
         todo -= n;
     }
 
@@ -797,6 +817,8 @@ void PluginChain::process (juce::AudioBuffer<float>& buffer, int numSamples)
     if (! sl.isLocked())
         return;
 
+    const juce::int64 blockStart = timingHook != nullptr ? timingHook->getBlockStart() : 0;
+
     if (resumePending)
     {
         for (auto& slot : slots)
@@ -810,7 +832,7 @@ void PluginChain::process (juce::AudioBuffer<float>& buffer, int numSamples)
 
     if (numSamples <= chunk)
     {
-        processLocked (buffer, numSamples);
+        processLocked (buffer, numSamples, blockStart);
         return;
     }
 
@@ -818,11 +840,11 @@ void PluginChain::process (juce::AudioBuffer<float>& buffer, int numSamples)
     {
         const int n = juce::jmin (chunk, numSamples - offset);
         juce::AudioBuffer<float> part (buffer.getArrayOfWritePointers(), buffer.getNumChannels(), offset, n);   // a view: no allocation
-        processLocked (part, n);
+        processLocked (part, n, timingHook != nullptr ? blockStart + offset : 0);
     }
 }
 
-void PluginChain::processLocked (juce::AudioBuffer<float>& buffer, int numSamples)
+void PluginChain::processLocked (juce::AudioBuffer<float>& buffer, int numSamples, juce::int64 blockStart)
 {
     for (auto& slot : slots)
     {
@@ -889,7 +911,7 @@ void PluginChain::processLocked (juce::AudioBuffer<float>& buffer, int numSample
         {
             // behind the show: part of the backlog goes through the plugin now; this block joins the backlog (the
             // delayed dry signal is heard) until the backlog is gone
-            const bool ok = catchUpSkipped (*slot, catchUpBlocks * juce::jmax (1, scratch.getNumSamples()));
+            const bool ok = catchUpSkipped (*slot, catchUpBlocks * juce::jmax (1, scratch.getNumSamples()), blockStart);
             midi.clear();   // what the fed-back blocks produced must not enter the current block as input
 
             if (! ok)
@@ -927,6 +949,8 @@ void PluginChain::processLocked (juce::AudioBuffer<float>& buffer, int numSample
 
         try
         {
+            if (timingHook != nullptr)
+                playHead.position = timingHook->getPositionAt (blockStart);
             plugin.processBlock (view, midi);
         }
         catch (...)

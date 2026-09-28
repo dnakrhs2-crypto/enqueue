@@ -5,6 +5,8 @@
 
 #include <atomic>
 #include <functional>
+#include <map>
+#include <optional>
 
 namespace gocue::livemix
 {
@@ -38,7 +40,9 @@ public:
     /** 'warnings' gets what the parser had to skip; plugin restore errors go to 'pluginErrors' (or to 'warnings' when null). */
     juce::Result load (const juce::File& file, juce::StringArray* warnings = nullptr, juce::StringArray* pluginErrors = nullptr);
     juce::Result save (const juce::File& file);
-    juce::Result saveIfPossible();   // to the current file (no-op without one)
+    /** To the current file. An optional complete snapshot from the immediately preceding checkPluginStates can
+        be reused in this same message-thread call; never retain it across user actions or a message-loop turn. */
+    juce::Result saveIfPossible (const MixSession* captureForSave = nullptr);
 
     // structure
     juce::Uuid addChannel();
@@ -101,10 +105,15 @@ public:
     };
     /** The operator discarded unsaved changes (a save that failed on quit, then "discard and continue"): the session
         is no longer dirty, so the shutdown save does not bring the discarded edits back. */
-    void discardUnsavedChanges() noexcept { dirty.store (false, std::memory_order_release); }
+    void discardUnsavedChanges() noexcept { pluginEditsDiscarded = true; dirty.store (false, std::memory_order_release); }
     /** Asks every chain whether a plugin reported a parameter / state change since the last poll; true (and dirty)
         when one did. The timer polls; anything that decides on the dirty state asks first. */
     bool pollPluginEdits();
+    /** Message thread, at save/leave boundaries only: compare a complete live capture with the last file written
+        or loaded, never the chain's read cache. True means a difference was found and the document is dirty. */
+    bool checkPluginStates (std::optional<MixSession>* captureForSave = nullptr);
+    /** Editor close: capture only this instance. Missing/retired instances and failed reads change nothing. */
+    bool checkPluginState (juce::AudioPluginInstance& plugin);
 
     std::function<void()> onStructureChanged;
     std::function<void()> onValueChanged;
@@ -112,6 +121,7 @@ public:
     std::function<void (PluginChain&)> onChainRuntimeChanged;
 
 private:
+    juce::Result save (const juce::File& file, const MixSession* captureForSave);
     bool bypassSlot (const juce::Uuid& channelId, const juce::Uuid& slotId, bool bypass);   // true when the live slot's bypass changed
     /** Another OFF group of the channel (not 'exceptGroup') holds the slot: switching one group on must not run it. */
     static bool heldOffElsewhere (const MixChannel& channel, const juce::Uuid& slotId, int exceptGroup);
@@ -125,6 +135,8 @@ private:
 
     MixEngine& engine;
     MixSession session;
+    std::map<juce::Uuid, std::vector<PluginSlotState>> savedPluginStates; // chain id, then stable slot id (presets can share ids across chains)
+    bool pluginEditsDiscarded = false; // survives late plugin notifications and the shutdown save; a new edit rearms it
     juce::Uuid sessionGeneration;   // Uuid's default constructor creates a fresh non-null identity
     juce::File file;
     std::atomic<bool> dirty { false };

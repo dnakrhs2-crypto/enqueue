@@ -167,6 +167,7 @@ public:
         settings = std::make_unique<LiveMixSettings>();
         engine = std::make_unique<MixEngine>();
         engine->setSkipChainWhenOff (settings->getSkipPluginsWhenOff());
+        engine->setSendTransport (settings->getSendTransport());
         engine->getPluginHost().setVst2Enabled (settings->getVst2Enabled());          // before the session's chains come back
         engine->getPluginHost().setDisabledPlugins (settings->getDisabledPlugins());
         auto& host = engine->getPluginHost();

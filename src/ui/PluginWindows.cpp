@@ -104,6 +104,8 @@ void PluginWindowManager::closeWindow (PluginEditorWindow& window)
     {
         if (it->get() == &window)
         {
+            if (onWindowClosed)
+                onWindowClosed (window.getPlugin());
             windows.erase (it);
             return;
         }

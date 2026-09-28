@@ -134,6 +134,11 @@ namespace
                 settings.setSkipPluginsWhenOff (on);
                 engine.setSkipChainWhenOff (on);
             });
+            toggle (sendTransport, ko ("재생 신호 보내기 (학습 플러그인 사용)"), settings.getSendTransport(), [this] (bool on)
+            {
+                settings.setSendTransport (on);
+                engine.setSendTransport (on);
+            });
 
             styleCaption (hotkeyCaption, ko ("전역 핫키"));
             addAndMakeVisible (hotkeyCaption);
@@ -431,7 +436,7 @@ namespace
         void updateContentSize()
         {
             const int deviceHeight = (shownType.containsIgnoreCase ("ASIO") ? 3 : 4) * 58 + bitDepthHeight() + deviceNoteHeight() + 12;
-            setSize (560, 848 + MixSession::maxPluginGroups * 36 - 160 + deviceHeight);
+            setSize (560, 848 + 28 + MixSession::maxPluginGroups * 36 - 160 + deviceHeight);
         }
 
         ~SettingsContent() override
@@ -502,6 +507,7 @@ namespace
             closeToTray.setBounds (area.removeFromTop (28));
             startWithWindows.setBounds (area.removeFromTop (28));
             skipWhenOff.setBounds (area.removeFromTop (28));
+            sendTransport.setBounds (area.removeFromTop (28));
             area.removeFromTop (16);
             hotkeyCaption.setBounds (area.removeFromTop (20));
             hotkeyNote.setBounds (area.removeFromTop (90));
@@ -577,7 +583,7 @@ namespace
         juce::TextButton groupHotkeyClear[MixSession::maxPluginGroups];
         juce::ComboBox typeCombo, deviceCombo, outputCombo, rateCombo, bufferCombo, bitDepthCombo;
         juce::TextButton panelButton, soundSettingsButton;
-        juce::ToggleButton minimiseToTray, closeAsk, closeToTray, startWithWindows, skipWhenOff, externalControl;
+        juce::ToggleButton minimiseToTray, closeAsk, closeToTray, startWithWindows, skipWhenOff, sendTransport, externalControl;
         bool refreshing = false;
         int syncedChoiceId = 0;   // the bit-depth choice the combo was last synced to from the running device
     };

@@ -44,6 +44,8 @@ public:
     /** A mic that is OFF skips its plugins (see MixEngine::setSkipChainWhenOff). */
     bool getSkipPluginsWhenOff() const;
     void setSkipPluginsWhenOff (bool on);
+    bool getSendTransport() const;
+    void setSendTransport (bool on);
 
     /** Local Stream Deck / external control is opt-in. Only this preference is persisted. */
     bool getExternalControlEnabled() const;

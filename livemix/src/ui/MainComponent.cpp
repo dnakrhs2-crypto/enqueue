@@ -115,6 +115,7 @@ MainComponent::MainComponent (MixDocument& doc, LiveMixSettings& s, ObsPluginAct
     addChildComponent (noticeClose);
 
     windows.onChainChanged = [this] (PluginChain&) { document.markDirty(); };
+    windows.onWindowClosed = [this] (juce::AudioPluginInstance& plugin) { document.checkPluginState (plugin); };
     document.onChainRuntimeChanged = [this] (PluginChain& chain)
     {
         if (chainDrawer.getChain() == &chain)
@@ -912,10 +913,12 @@ void MainComponent::timerCallback()
 
 bool MainComponent::saveIfDirty()
 {
+    std::optional<MixSession> captured;
+    document.checkPluginStates (&captured);
     if (! document.isDirty() || ! document.hasFile())
         return true;   // nothing to write
 
-    const auto result = document.saveIfPossible();
+    const auto result = document.saveIfPossible (captured ? &*captured : nullptr);
 
     if (result.failed())
     {
@@ -1092,6 +1095,8 @@ juce::File MainComponent::defaultSessionFolder() const
 void MainComponent::withSessionSecured (std::function<void()> action)
 {
     document.pollPluginEdits();   // a knob turned since the last timer tick counts
+    std::optional<MixSession> captured;
+    document.checkPluginStates (&captured);
 
     if (! document.isDirty())
     {
@@ -1103,7 +1108,7 @@ void MainComponent::withSessionSecured (std::function<void()> action)
 
     if (document.hasFile())
     {
-        const auto result = document.saveIfPossible();
+        const auto result = document.saveIfPossible (captured ? &*captured : nullptr);
 
         if (result.wasOk())
         {

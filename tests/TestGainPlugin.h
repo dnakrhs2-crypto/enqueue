@@ -3,6 +3,7 @@
 #include <juce_audio_processors/juce_audio_processors.h>
 
 #include <cstring>
+#include <array>
 #include <limits>
 #include <stdexcept>
 
@@ -30,6 +31,7 @@ public:
         preparedSampleRate = sr;
         preparedBlockSize = bs;
         ++prepareCount;
+        playHeadAtPrepare = getPlayHead() != nullptr;
 
         if (throwOnPrepare)
             throw std::runtime_error ("prepare failed");
@@ -44,6 +46,13 @@ public:
         lastNumChannels = buffer.getNumChannels();
         lastNumSamples = buffer.getNumSamples();
         ++processCount;
+        if (recordPositions && positionCount < (int) positions.size())
+        {
+            auto& seen = positions[(size_t) positionCount++];
+            seen.hasPlayHead = getPlayHead() != nullptr;
+            seen.position = seen.hasPlayHead ? getPlayHead()->getPosition() : juce::nullopt;
+            seen.numSamples = buffer.getNumSamples();
+        }
         const int n = buffer.getNumSamples();
 
         if (latencySamples > 0)
@@ -104,6 +113,9 @@ public:
 
     void getStateInformation (juce::MemoryBlock& destData) override
     {
+        ++stateReads;
+        if (throwOnGetState)
+            throw std::runtime_error ("state failed");
         destData.setSize (sizeof (float));
         std::memcpy (destData.getData(), &gain, sizeof (float));
     }
@@ -125,6 +137,15 @@ public:
     }
 
     float gain;
+    struct PositionSeen
+    {
+        bool hasPlayHead = false;
+        juce::Optional<juce::AudioPlayHead::PositionInfo> position;
+        int numSamples = 0;
+    };
+    std::array<PositionSeen, 256> positions;
+    bool recordPositions = false, playHeadAtPrepare = false, throwOnGetState = false;
+    int positionCount = 0, stateReads = 0;
     double tail;
     double preparedSampleRate = 0.0;
     int preparedBlockSize = 0;

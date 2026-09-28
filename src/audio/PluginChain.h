@@ -21,6 +21,17 @@ namespace gocue
 class PluginChain : private juce::AudioProcessorListener
 {
 public:
+    /** Optional graph clock, owned by the host and outliving the chain. Null keeps Enqueue's playhead untouched.
+        Audio thread only: no locks or allocation in these methods. The block start includes the host's chunking. */
+    struct TimingHook
+    {
+        virtual ~TimingHook() = default;
+        virtual juce::int64 getBlockStart() const noexcept = 0;
+        virtual juce::AudioPlayHead::PositionInfo getPositionAt (juce::int64 sample) const noexcept = 0;
+    };
+    /** Message thread, before publication or under the chain lock: attaches existing and future plugins. */
+    void setTimingHook (TimingHook* hook);
+
     struct Slot
     {
         std::unique_ptr<juce::AudioPluginInstance> plugin;   // null when the plugin could not be created
@@ -100,6 +111,8 @@ public:
     /** 'complete' (when given) is cleared when a plugin could not report its state: the caller must not treat the
         result as a faithful save. A state that was read updates the slot's cached state. */
     std::vector<PluginSlotState> getStates (bool* complete = nullptr) const;
+    /** The same capture for one slot (editor-close checks must not serialise unrelated plugins). Message thread. */
+    PluginSlotState getState (int index, bool* complete = nullptr) const;
 
     /** Replaces the chain from saved states, instantiating through 'factory'. Failed slots are kept as
         missing. Returns one message per failure. */
@@ -144,13 +157,20 @@ public:
     void markProcessingSkipped() noexcept { resumePending = true; }
 
 private:
+    friend struct TransportTestAccess;
+    struct PlayHead final : juce::AudioPlayHead
+    {
+        PlayHead() { position.setTimeInSamples (0); }
+        juce::Optional<PositionInfo> getPosition() const override { return position; }
+        PositionInfo position;   // written immediately before processBlock; read from inside that call only
+    };
     bool prepareSlot (Slot& slot);   // false when the plugin threw (or wants too many channels): the slot is faulted
-    void processLocked (juce::AudioBuffer<float>& buffer, int numSamples);   // one block of at most the prepared size, the lock held
+    void processLocked (juce::AudioBuffer<float>& buffer, int numSamples, juce::int64 blockStart);   // one block of at most the prepared size, the lock held
     void updateTailCache();          // message thread: the tail the callback reads without asking any plugin
     void updateDelayLines();         // message thread, under the lock: each slot's dry delay follows the plugin's latency
     static void sizeDelayLine (Slot& slot, int latency, int blockSize);   // (re)allocates and clears - never on the audio thread
     static void delayDryInPlace (Slot& slot, juce::AudioBuffer<float>& dry, int numSamples) noexcept;   // audio thread: records channels 0-1 in the slot's ring and, when the plugin has latency, replaces them with the delayed signal
-    bool catchUpSkipped (Slot& slot, int budgetSamples) noexcept;   // audio thread, the plugin's callback lock held: feeds it up to 'budgetSamples' of the input it missed; false when it faulted doing so
+    bool catchUpSkipped (Slot& slot, int budgetSamples, juce::int64 blockStart) noexcept;   // audio thread, the plugin's callback lock held: feeds it up to 'budgetSamples' of the input it missed; false when it faulted doing so
     void noteSkipped (Slot& slot, int numSamples) noexcept;         // audio thread: the plugin did not see this block (it is in the ring); flags an overflow when the ring cannot hold the backlog
     static constexpr int ringBlocks = 8;         // the ring holds latency + this many blocks: a stall of that many blocks is caught up in full
     static constexpr int catchUpBlocks = 2;      // missed input fed per callback (so a callback runs the plugin three times at most): a backlog drains by one block per callback
@@ -165,6 +185,8 @@ private:
     void audioProcessorChanged (juce::AudioProcessor*, const ChangeDetails&) override;
 
     mutable juce::CriticalSection lock;      // guards 'slots' between the audio thread and edits
+    TimingHook* timingHook = nullptr;
+    PlayHead playHead;                       // outlives all attached plugins, including retired slots
     std::vector<std::unique_ptr<Slot>> slots;
     std::atomic<int> slotCount { 0 };        // slots.size(), for getNumSlots() from any thread without the lock
     juce::MidiBuffer midi;

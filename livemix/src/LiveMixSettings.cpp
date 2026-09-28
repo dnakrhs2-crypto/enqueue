@@ -24,6 +24,7 @@ namespace Keys
     constexpr const char* closeAsk = "closeAsk";
     constexpr const char* startWithWindows = "startWithWindows";
     constexpr const char* skipPluginsWhenOff = "skipPluginsWhenOff";
+    constexpr const char* sendTransportToPlugins = "sendTransportToPlugins";
     constexpr const char* externalControlEnabled = "externalControlEnabled";
     constexpr const char* backupUrl = "backupUrl";
     constexpr const char* backupFolder = "backupFolder";
@@ -146,6 +147,8 @@ bool LiveMixSettings::getStartWithWindows() const { return settings->getBoolValu
 void LiveMixSettings::setStartWithWindows (bool on) { settings->setValue (Keys::startWithWindows, on); }
 bool LiveMixSettings::getSkipPluginsWhenOff() const { return settings->getBoolValue (Keys::skipPluginsWhenOff, true); }
 void LiveMixSettings::setSkipPluginsWhenOff (bool on) { settings->setValue (Keys::skipPluginsWhenOff, on); }
+bool LiveMixSettings::getSendTransport() const { return settings->getBoolValue (Keys::sendTransportToPlugins, true); }
+void LiveMixSettings::setSendTransport (bool on) { settings->setValue (Keys::sendTransportToPlugins, on); }
 
 bool LiveMixSettings::getExternalControlEnabled() const { return settings->getBoolValue (Keys::externalControlEnabled, false); }
 void LiveMixSettings::setExternalControlEnabled (bool on) { settings->setValue (Keys::externalControlEnabled, on); }
