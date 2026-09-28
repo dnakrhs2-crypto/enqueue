@@ -38,8 +38,8 @@ twq('config','rfy4b');
     </header>
 
     <section class="download-row">
-      <a class="download-button" id="download" href="https://github.com/dnakrhs2-crypto/livemix/releases/download/livemix-v0.11.4/LiveMix-Setup-0.11.4.exe">
-        <strong id="download-label">LiveMix 0.11.4 다운로드</strong>
+      <a class="download-button" id="download" href="https://github.com/dnakrhs2-crypto/livemix/releases/download/livemix-v0.12.0/LiveMix-Setup-0.12.0.exe">
+        <strong id="download-label">LiveMix 0.12.0 다운로드</strong>
         <span id="download-meta">Windows 10 / 11 (64비트)</span>
       </a>
       <dl class="requirements">
@@ -65,6 +65,7 @@ twq('config','rfy4b');
         <li>직관적인 마이크 ON/OFF 버튼과 샌드 조절 버튼</li>
         <li>VST3 (옵션으로 VST2) 플러그인 체인, 플러그인 프리셋, 검색이 되는 플러그인 관리</li>
         <li>채널별 플러그인 그룹: 체인의 플러그인을 골라 묶어 두고 번호 하나로 한꺼번에 끄고 켜기 (최대 5개)</li>
+        <li>플러그인 세트: 잘 잡아 둔 체인을 세트 1~5에 저장해 두고 새 채널에서 바로 불러오기 (FX 샌드값·플러그인 그룹까지 선택해서 저장)</li>
         <li>마스터 출력 LUFS 미터 (ITU-R BS.1770-4 / EBU R128: 순간·단기·통합·범위·트루 피크, 목표 대비 표시)</li>
       </ul>
       <p class="cost">비용 : 완전 무료</p>
@@ -139,7 +140,7 @@ twq('config','rfy4b');
 
 <script>
 (function () {
-  fetch('latest.json?rev=0.11.4', { cache: 'no-cache' })
+  fetch('latest.json?rev=0.12.0', { cache: 'no-cache' })
     .then(function (r) { return r.ok ? r.json() : null; })
     .then(function (info) {
       if (!info || !info.url || info.url.indexOf('/releases/download/') < 0) return;
