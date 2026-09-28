@@ -673,6 +673,18 @@ class NetworkRetryTests(unittest.TestCase):
         self.assertIn("already exists", str(stopped.exception))
         self.assertEqual(calls, [["release", "view", "tagName"]])   # no create, no upload, no edit
 
+    def test_a_lookup_that_times_out_is_not_taken_as_no_release(self):
+        calls = []
+
+        def timing_out(cmd, cwd=None, capture=False):
+            calls.append(list(map(str, cmd[1:3])))
+            raise self.failure("Post https://api.github.com/graphql: i/o timeout")
+
+        with mock.patch.object(release, "run", side_effect=timing_out):
+            with self.assertRaises(subprocess.CalledProcessError):
+                release.create_release("gh", "v9.9.9", ["a.exe"], "o/r", ["--verify-tag"])
+        self.assertEqual(calls, [["release", "view"]] * release.NETWORK_ATTEMPTS)   # never created, never uploaded
+
     def test_a_release_still_a_draft_is_not_reported_done(self):
         fake_run, calls, state = self.fake_github(create_fails=0, draft_states=[True, True, True])
         with mock.patch.object(release, "run", side_effect=fake_run):
@@ -719,8 +731,10 @@ class OtherWorkTests(unittest.TestCase):
         self.assertEqual(found, [])
         logs = [list(map(str, c.args[0])) for c in run.call_args_list if list(map(str, c.args[0]))[:2] == ["git", "log"]]
         self.assertEqual(len(logs), 1)                  # only the other worktree is looked at
-        self.assertIn("HEAD..bbb", logs[0])
+        self.assertIn("HEAD...bbb", logs[0])
+        self.assertIn("--cherry-pick", logs[0])         # a cherry-picked commit is not work still to come
         self.assertIn("livemix/", logs[0])              # this app's files only
+        self.assertIn(":(glob)installer/LiveMix*", logs[0])   # matches LiveMix.iss / LiveMix.messages.iss
 
     def test_recent_commits_elsewhere_are_reported(self):
         self.log_lines = "1a2b3c4 09-29 00:20 Volume cue / big view\n5d6e7f8 09-28 23:10 start\n"
@@ -730,7 +744,7 @@ class OtherWorkTests(unittest.TestCase):
         self.assertIn("2 commit(s)", found[0])
 
     def test_recent_uncommitted_changes_are_reported_old_ones_are_not(self):
-        self.status_lines = " M livemix/Edited.cpp\n"
+        self.status_lines = " M livemix/Edited.cpp\0"
         found, _ = self.check()
         self.assertEqual(len(found), 1)
         self.assertIn("livemix/Edited.cpp", found[0])
@@ -738,6 +752,28 @@ class OtherWorkTests(unittest.TestCase):
         os.utime(self.edited, (old, old))                # an abandoned edit from days ago is not work in progress
         found, _ = self.check()
         self.assertEqual(found, [])
+
+    def test_a_deletion_counts_by_its_folder_time(self):
+        gone = self.other / "livemix" / "Removed.cpp"   # deleted, not committed: no file to take a time from
+        self.status_lines = " D livemix/Removed.cpp\0"
+        found, _ = self.check()
+        self.assertEqual(len(found), 1)                  # the folder was just touched
+        old = release.time.time() - (release.IN_PROGRESS_HOURS + 1) * 3600
+        os.utime(self.other / "livemix", (old, old))     # deleted days ago: not work in progress
+        found, _ = self.check()
+        self.assertEqual(found, [])
+        self.assertFalse(gone.exists())
+
+    def test_untracked_files_are_listed_one_by_one_and_renames_parse(self):
+        (self.other / "livemix" / "newdir").mkdir()
+        (self.other / "livemix" / "newdir" / "Fresh.cpp").write_text("y")
+        self.status_lines = "?? livemix/newdir/Fresh.cpp\0R  livemix/Renamed.cpp\0livemix/Old.cpp\0"
+        (self.other / "livemix" / "Renamed.cpp").write_text("z")
+        found, _ = self.check()
+        self.assertEqual(len(found), 1)
+        self.assertIn("livemix/newdir/Fresh.cpp", found[0])
+        self.assertIn("livemix/Renamed.cpp", found[0])
+        self.assertNotIn("Old.cpp", found[0])            # a rename's old name is not a change of its own
 
     def test_the_check_stops_the_release_unless_it_was_decided(self):
         with mock.patch.object(release, "other_work_in_progress", return_value=["C:/gocue-volume [volume-cue]: 3 commit(s)"]):

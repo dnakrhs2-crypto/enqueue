@@ -119,11 +119,39 @@ def run(cmd, cwd=ROOT, capture=False):
 # worktrees are looked at: recent work there on this app's files that is not in this release stops it, until the
 # operator has decided (bundle it, or --other-work-checked when it really belongs to a later version).
 IN_PROGRESS_HOURS = 24
+# git pathspecs: a plain entry is a file or a whole folder; ':(glob)' for name patterns ('*' stays inside one folder,
+# so docs/release-notes/*.html is Enqueue's notes only)
 APP_PATHS = {
-    "enqueue": ["src/", "installer/Enqueue", "docs/release-notes/0", "site/index.html", "site/assets/"],
-    "livemix": ["livemix/", "installer/LiveMix", "docs/release-notes/livemix/", "site/livemix/", "obs-plugin/"],
-    "recorder": ["recorder/", "installer/Recorder", "docs/release-notes/recorder/", "site/tally/"],
+    "enqueue": ["src/", ":(glob)installer/Enqueue*", ":(glob)docs/release-notes/*.html", "site/index.html", "site/assets/"],
+    "livemix": ["livemix/", ":(glob)installer/LiveMix*", "docs/release-notes/livemix/", "site/livemix/", "obs-plugin/"],
+    "recorder": ["recorder/", ":(glob)installer/Recorder*", "docs/release-notes/recorder/", "site/tally/"],
 }
+
+
+def changed_recently(worktree, file, since):
+    """An uncommitted change saved after 'since'. A deleted file has no time of its own: its folder's (a deletion
+    touches it) - the nearest folder still there."""
+    full = os.path.join(worktree, file)
+    while not os.path.exists(full) and os.path.dirname(full) != full:
+        full = os.path.dirname(full)
+    return os.path.exists(full) and os.path.getmtime(full) >= since
+
+
+def uncommitted_files(worktree, paths):
+    """Every changed or untracked file under 'paths' (untracked folders listed file by file), from
+    git status --porcelain -z (a rename's second field, the old name, is skipped)."""
+    out = run(["git", "status", "--porcelain", "-z", "--untracked-files=all", "--"] + paths, cwd=worktree, capture=True)
+    fields = out.split("\0")
+    files, i = [], 0
+    while i < len(fields):
+        entry = fields[i]
+        i += 1
+        if len(entry) < 4:
+            continue
+        files.append(entry[3:])
+        if entry[0] in "RC":
+            i += 1
+    return files
 
 
 def list_worktrees():
@@ -157,16 +185,14 @@ def other_work_in_progress(app_key, now=None):
         name = "%s [%s]" % (path, tree.get("branch", "detached").replace("refs/heads/", ""))
         head = tree.get("HEAD", "")
         if head:
-            commits = run(["git", "log", "--since=@%d" % int(since), "--format=%h %cd %s", "--date=format:%m-%d %H:%M",
-                           "HEAD.." + head, "--"] + paths, cwd=ROOT, capture=True).strip().splitlines()
+            # --cherry-pick --right-only: a commit already brought over by cherry-pick (another SHA, same patch) is
+            # not work still to come
+            commits = run(["git", "log", "--cherry-pick", "--right-only", "--no-merges", "--since=@%d" % int(since),
+                           "--format=%h %cd %s", "--date=format:%m-%d %H:%M", "HEAD..." + head, "--"] + paths,
+                          cwd=ROOT, capture=True).strip().splitlines()
             if commits:
                 found.append("%s: %d commit(s) not in this release, newest %s" % (name, len(commits), commits[0]))
-        changed = []
-        for line in run(["git", "status", "--porcelain", "--"] + paths, cwd=path, capture=True).splitlines():
-            file = line[3:].split(" -> ")[-1].strip().strip('"')
-            full = os.path.join(path, file)
-            if not os.path.exists(full) or os.path.getmtime(full) >= since:
-                changed.append(file)
+        changed = [f for f in uncommitted_files(path, paths) if changed_recently(path, f, since)]
         if changed:
             found.append("%s: uncommitted changes in %s" % (name, ", ".join(changed[:5]) + (" ..." if len(changed) > 5 else "")))
     return found
@@ -209,12 +235,21 @@ def run_network(cmd, cwd=ROOT, capture=False, give_up=None, before_retry=None):
                 before_retry()
 
 
+def release_not_found(error):
+    return "release not found" in (error.stderr or "").lower()
+
+
 def release_exists(gh, tag, repo):
+    """True / False from GitHub's answer. A lookup that fails otherwise (a timeout) is tried again and then raises:
+    taking it as 'not there' could let a retry overwrite a release this run did not make."""
     try:
-        run([gh, "release", "view", tag, "--repo", repo, "--json", "tagName"], capture=True)
+        run_network([gh, "release", "view", tag, "--repo", repo, "--json", "tagName"], capture=True,
+                    give_up=release_not_found)
         return True
-    except subprocess.CalledProcessError:
-        return False
+    except subprocess.CalledProcessError as e:
+        if release_not_found(e):
+            return False
+        raise
 
 
 def release_state(gh, tag, repo):
