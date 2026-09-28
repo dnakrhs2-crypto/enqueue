@@ -9,6 +9,51 @@ namespace gocue::livemix
 
 namespace
 {
+    /** "1. EQ\n2. Comp\n3. Gate": one plugin a line, so a dialog never breaks a name in two. */
+    juce::String pluginLines (const PluginSet& set)
+    {
+        juce::StringArray lines;
+        for (size_t i = 0; i < set.plugins.size(); ++i)
+            lines.add (juce::String ((int) i + 1) + ". " + set.plugins[i].name);
+        return lines.joinIntoString ("\n");
+    }
+
+    /** "세트 3으로" but "세트 1로" (일·이·사·오 end in a vowel or ㄹ, 삼 does not). */
+    juce::String setWithRo (int number)
+    {
+        return ko ("세트 ") + juce::String (number) + (number == 3 ? ko ("으로") : ko ("로"));
+    }
+
+    class SetSaveAlert : public juce::AlertWindow
+    {
+    public:
+        SetSaveAlert (const juce::String& title, const juce::String& message, const MixChannel* channel, bool hasFx)
+            : AlertWindow (title, message, juce::MessageBoxIconType::NoIcon)
+        {
+            if (channel != nullptr)
+            {
+                sends.setButtonText (hasFx ? ko ("FX 샌드값도 저장") : ko ("FX 샌드값도 저장 (FX 채널 없음)"));
+                groups.setButtonText (! channel->pluginGroups.empty() ? ko ("플러그인 그룹도 저장") : ko ("플러그인 그룹도 저장 (그룹 없음)"));
+                sends.setEnabled (hasFx);
+                groups.setEnabled (! channel->pluginGroups.empty());
+                for (auto* button : { &sends, &groups })
+                {
+                    button->setToggleState (true, juce::dontSendNotification);
+                    button->setSize (360, 30);
+                    addCustomComponent (button);
+                }
+            }
+            addButton (ko ("저장"), 1, juce::KeyPress (juce::KeyPress::returnKey));
+            addButton (ko ("취소"), 0, juce::KeyPress (juce::KeyPress::escapeKey));
+        }
+
+        bool includeSends() const { return sends.isVisible() && sends.isEnabled() && sends.getToggleState(); }
+        bool includeGroups() const { return groups.isVisible() && groups.isEnabled() && groups.getToggleState(); }
+
+    private:
+        juce::ToggleButton sends, groups;
+    };
+
     /** The search box of 플러그인 검색: the arrow keys move the list under it instead of the caret in the text. */
     class SearchBox : public juce::TextEditor
     {
@@ -215,6 +260,20 @@ namespace
     };
 }
 
+void ChainDrawer::FooterButton::paintButton (juce::Graphics& g, bool highlighted, bool down)
+{
+    auto& look = getLookAndFeel();
+    look.drawButtonBackground (g, *this, findColour (juce::TextButton::buttonColourId), highlighted, down);
+    auto font = look.getTextButtonFont (*this, getHeight());
+    const auto textArea = getLocalBounds().reduced (8, 0);
+    const float textWidth = juce::GlyphArrangement::getStringWidth (font, getButtonText());
+    if (textWidth > (float) textArea.getWidth() && textWidth > 0.0f)
+        font = font.withHeight (font.getHeight() * (float) textArea.getWidth() / (textWidth + 1.0f));
+    g.setFont (font);
+    g.setColour (findColour (juce::TextButton::textColourOffId).withMultipliedAlpha (isEnabled() ? 1.0f : 0.5f));
+    g.drawText (getButtonText(), textArea, juce::Justification::centred, false);
+}
+
 /** One plugin in the list. Dragging its number reorders the chain (the row follows the mouse). */
 struct ChainDrawer::Row : public juce::Component
 {
@@ -379,6 +438,12 @@ ChainDrawer::ChainDrawer (MixDocument& doc, PluginWindowManager& w) : document (
     addButton.onClick = [this] { showAddMenu (&addButton); };
     addAndMakeVisible (addButton);
 
+    setButton.setButtonText (ko ("플러그인 세트"));
+    setButton.setTooltip (ko ("지금 체인을 세트 1~5에 저장해 두고, 어느 채널에서든 불러옵니다 (프로그램 전체 공용)"));
+    setButton.setWantsKeyboardFocus (false);
+    setButton.onClick = [this] { showSetMenu(); };
+    addAndMakeVisible (setButton);
+
     styleCaption (legend, ko ("스위치 켜짐 = 동작 · 꺼짐 = 바이패스 (소리는 그대로 통과)"));
     legend.setFont (bodyFont (12.0f));
     addAndMakeVisible (legend);
@@ -397,6 +462,7 @@ void ChainDrawer::setChain (PluginChain* newChain, const juce::String& newTitle)
 void ChainDrawer::refresh()
 {
     rows.clear();
+    setButton.setEnabled (chain != nullptr);
 
     if (chain != nullptr)
     {
@@ -769,6 +835,133 @@ void ChainDrawer::saveChainAsPreset()
     focusAlertTextEditor (*alert, "name");
 }
 
+const MixChannel* ChainDrawer::owningChannel() const
+{
+    for (const auto& channel : document.getSession().channels)
+        if (document.getEngine().getChannelChain (channel.id) == chain)
+            return &channel;
+    return nullptr;
+}
+
+void ChainDrawer::showSetMenu()
+{
+    if (chain == nullptr)
+        return;
+
+    const auto entries = listPluginSets (PluginSet::defaultFolder());
+    juce::PopupMenu menu, saveMenu;
+    for (const auto& entry : entries)
+    {
+        menu.addItem (entry.set.number, entry.menuText (false), entry.state == PluginSetEntry::State::ready);
+        saveMenu.addItem (100 + entry.set.number, entry.menuText (true));
+    }
+    menu.addSeparator();
+    menu.addSubMenu (ko ("지금 체인을 세트로 저장"), saveMenu, chain->getNumSlots() > 0);
+
+    juce::Component::SafePointer<ChainDrawer> safeThis (this);
+    const int forRevision = revision;
+    const auto generation = document.getSessionGeneration();
+    menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&setButton), [safeThis, entries, forRevision, generation] (int result)
+    {
+        if (safeThis == nullptr || safeThis->chain == nullptr || safeThis->revision != forRevision
+            || safeThis->document.getSessionGeneration() != generation)
+            return;
+        if (result >= 1 && result <= PluginSet::numSets)
+            safeThis->loadSet (entries[(size_t) (result - 1)].set);
+        else if (result >= 101 && result <= 100 + PluginSet::numSets)
+            safeThis->saveChainAsSet (entries[(size_t) (result - 101)]);
+    });
+}
+
+void ChainDrawer::saveChainAsSet (const PluginSetEntry& entry)
+{
+    if (chain == nullptr || chain->getNumSlots() == 0)
+        return;
+
+    const int number = entry.set.number;
+    const auto label = ko ("세트 ") + juce::String (number);
+    auto message = ko ("지금 체인의 플러그인 ") + juce::String (chain->getNumSlots()) + ko ("개를\n순서와 설정값 그대로\n") + label + ko ("에 저장합니다.");
+    if (entry.state == PluginSetEntry::State::ready)
+        message += "\n\n" + label + ko ("에 있던 것은 지워집니다:\n") + pluginLines (entry.set);
+    else if (entry.state == PluginSetEntry::State::unreadable)
+        message += "\n\n" + label + ko ("의 읽을 수 없는 파일은 지워집니다.");
+    auto* alert = new SetSaveAlert (label + ko ("에 저장"), message, owningChannel(), ! document.getSession().fx.empty());
+    juce::Component::SafePointer<ChainDrawer> safeThis (this);
+    const int forRevision = revision;
+    const auto generation = document.getSessionGeneration();
+    alert->enterModalState (true, juce::ModalCallbackFunction::create ([safeThis, alert, number, forRevision, generation] (int result)
+    {
+        if (result != 1 || safeThis == nullptr || safeThis->revision != forRevision || safeThis->chain == nullptr
+            || safeThis->document.getSessionGeneration() != generation || safeThis->chain->getNumSlots() == 0)
+            return;
+
+        bool complete = true;
+        auto states = safeThis->chain->getStates (&complete);
+        if (! complete)
+        {
+            juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon, ko ("세트를 저장하지 않았습니다"),
+                ko ("일부 플러그인의 설정을 읽지 못했습니다. 그 플러그인의 창을 닫거나 세션을 다시 연 뒤 다시 저장하세요."), ko ("확인"));
+            return;
+        }
+
+        const auto set = capturePluginSet (number, safeThis->ownerTitle, juce::Time::getCurrentTime().toISO8601 (true),
+            std::move (states), safeThis->owningChannel(), safeThis->document.getSession().fx, alert->includeSends(), alert->includeGroups());
+        if (const auto saved = set.save (PluginSet::fileFor (number, PluginSet::defaultFolder())); saved.failed())
+        {
+            juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon, ko ("세트를 저장하지 못했습니다"), saved.getErrorMessage(), ko ("확인"));
+            return;
+        }
+        if (safeThis->onStatus)
+            safeThis->onStatus (ko ("세트 ") + juce::String (number) + ko (" 저장: ") + set.summary(), false);
+    }), true);
+}
+
+void ChainDrawer::loadSet (const PluginSet& set)
+{
+    if (chain == nullptr)
+        return;
+    if (chain->getNumSlots() == 0)
+    {
+        applySet (set);
+        return;
+    }
+
+    const auto label = ko ("세트 ") + juce::String (set.number);
+    auto message = ko ("지금 체인을 ") + setWithRo (set.number) + ko (" 바꿀까요?\n\n") + pluginLines (set);
+    if (owningChannel() != nullptr && (set.sends || set.groups))
+        message += set.sends && set.groups ? ko ("\n\nFX 샌드값과 플러그인 그룹도 세트에 저장된 값으로 바뀝니다.")
+                 : set.sends ? ko ("\n\nFX 샌드값도 세트에 저장된 값으로 바뀝니다.")
+                             : ko ("\n\n플러그인 그룹도 세트에 저장된 값으로 바뀝니다.");
+    auto* alert = new juce::AlertWindow (label + ko (" 불러오기"), message, juce::MessageBoxIconType::QuestionIcon);
+    alert->addButton (ko ("바꾸기"), 1, juce::KeyPress (juce::KeyPress::returnKey));
+    alert->addButton (ko ("취소"), 0, juce::KeyPress (juce::KeyPress::escapeKey));
+    juce::Component::SafePointer<ChainDrawer> safeThis (this);
+    const int forRevision = revision;
+    const auto generation = document.getSessionGeneration();
+    alert->enterModalState (true, juce::ModalCallbackFunction::create ([safeThis, set, forRevision, generation] (int result)
+    {
+        if (result == 1 && safeThis != nullptr && safeThis->revision == forRevision
+            && safeThis->document.getSessionGeneration() == generation)
+            safeThis->applySet (set);
+    }), true);
+}
+
+void ChainDrawer::applySet (const PluginSet& set)
+{
+    if (chain == nullptr)
+        return;
+    const bool pluginsOnly = owningChannel() == nullptr && (set.sends || set.groups);
+    const auto errors = document.applyPluginSet (*chain, set);
+    refresh();
+    if (onChainEdited)
+        onChainEdited();
+    if (onStatus)
+        onStatus (ko ("세트 ") + juce::String (set.number) + ko (" 불러옴: ") + set.summary()
+            + (pluginsOnly ? ko (" (FX·마스터 체인에는 플러그인만 넣었습니다)") : juce::String()), false);
+    if (! errors.isEmpty())
+        juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon, ko ("세트의 일부를 넣지 못했습니다"), errors.joinIntoString ("\n"), ko ("확인"));
+}
+
 void ChainDrawer::addPlugin (const juce::PluginDescription& description)
 {
     if (chain == nullptr)
@@ -895,7 +1088,11 @@ void ChainDrawer::resized()
     area.removeFromTop (8);
     legend.setBounds (area.removeFromBottom (20));
     area.removeFromBottom (8);
-    addButton.setBounds (area.removeFromBottom (40));
+    auto buttons = area.removeFromBottom (40);
+    const int gap = 8;
+    addButton.setBounds (buttons.removeFromLeft (juce::roundToInt ((float) (buttons.getWidth() - gap) * 0.6f)));
+    buttons.removeFromLeft (gap);
+    setButton.setBounds (buttons);   // both footer labels fit their full text, including a 320 px drawer
     area.removeFromBottom (10);
     viewport.setBounds (area);
     layoutRows();

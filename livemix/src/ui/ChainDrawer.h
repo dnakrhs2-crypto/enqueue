@@ -2,6 +2,7 @@
 
 #include "MixDocument.h"
 #include "PluginPreset.h"
+#include "PluginSet.h"
 #include "Widgets.h"
 #include "ui/PluginWindows.h"
 
@@ -47,6 +48,10 @@ public:
 
 private:
     struct Row;
+    struct FooterButton : juce::TextButton
+    {
+        void paintButton (juce::Graphics&, bool highlighted, bool down) override;
+    };
 
     void removeSlot (int index);
     void moveSlot (int from, int to);
@@ -62,6 +67,11 @@ private:
     void applyPreset (const PluginPreset& preset, bool replace);
     /** The chain as it is, states included, under a name asked for. */
     void saveChainAsPreset();
+    const MixChannel* owningChannel() const;
+    void showSetMenu();
+    void saveChainAsSet (const PluginSetEntry& entry);
+    void loadSet (const PluginSet& set);
+    void applySet (const PluginSet& set);
 
     MixDocument& document;
     PluginWindowManager& windows;
@@ -70,7 +80,7 @@ private:
 
     juce::Label title, note, legend;
     juce::TextButton closeButton { juce::String::fromUTF8 ("\xE2\x9C\x95") };   // ✕
-    juce::TextButton addButton;
+    FooterButton addButton, setButton;
     juce::Viewport viewport;
     juce::Component rowsHolder;
     std::vector<std::unique_ptr<Row>> rows;
