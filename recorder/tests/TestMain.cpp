@@ -62,7 +62,6 @@ int runClockMapperTests();       // round 04: clocks / epochs / calibration / CF
 int runJournalTests();           // round 06: recording journal / durable file
 int runWavChunkTests();          // round 06: WAV chunk writer
 int runProjectTests();           // round 08: project model / serializer / document / undo
-int runRecorderUpdateTests();
 int runRecorderAudioTests();
 int runTakeControllerTests();
 int runRecoveryTests();          // round 07: recovery and commit replay
@@ -130,7 +129,6 @@ int runAudioImport() { const int a = runAudioImportTests(), b = runImportedClipT
 int runRippleReorderMarkers() { const int a = runRippleTests(), b = runReorderTests(), c = runMarkerTests(); return (a || b || c) ? 1 : 0; }
 int runRecoveryIdempotence() { const int a = runRecoveryTests(), b = runRetakeRecoveryTests(); return (a || b) ? 1 : 0; }
 const Suite suites[] = {
-    {"update-notice", runRecorderUpdateTests},
     {"shortcut-exceptions", runShortcutExceptionTests},
     {"cut-edit-stability", runCutEditStabilityTests},
     {"timeline-ux", runTimelineUxTests},

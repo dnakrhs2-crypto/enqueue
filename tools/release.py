@@ -223,7 +223,7 @@ def write_appcast(path, repo, version, installer, signature, notes_html):
       <enclosure url="%s"
                  sparkle:version="%s"
                  sparkle:os="windows"
-                 sparkle:installerArguments="/SILENT /SP- /NORESTART"
+                 sparkle:installerArguments="/SILENT /SP- /NORESTART /AUTOUPDATE=1"
                  length="%d"
                  type="application/octet-stream"
                  sparkle:edSignature="%s" />

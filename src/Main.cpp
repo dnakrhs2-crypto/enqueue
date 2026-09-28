@@ -6,7 +6,6 @@
 #include "ui/GoCueLookAndFeel.h"
 #include "ui/MainComponent.h"
 #include "ui/UiUtils.h"
-#include "ui/UpdateNotice.h"
 
 #include <juce_gui_extra/juce_gui_extra.h>
 
@@ -137,11 +136,10 @@ public:
         if (previous.isEmpty())
             return;
 
-        const auto decision = CoupangShortcut::decideUpdate (previous, current,
-            CoupangShortcut::existsOn (CoupangShortcut::userDesktop()));
-        UpdateNotice::show (mainWindow->getLookAndFeel(),
-            ko ("앤큐가 ") + previous + " → " + current + ko ("(으)로 업데이트되었습니다.\n바뀐 점은 도움말 > 사용 설명서와 GitHub 릴리스 노트에 있습니다."),
-            decision.offerShortcut);
+        juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::InfoIcon,
+                                                ko ("업데이트 완료"),
+                                                ko ("앤큐가 ") + previous + " → " + current + ko ("(으)로 업데이트되었습니다.\n바뀐 점은 도움말 > 사용 설명서와 GitHub 릴리스 노트에 있습니다."),
+                                                ko ("확인"));
     }
 
     void shutdown() override

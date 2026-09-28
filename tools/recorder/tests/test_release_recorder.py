@@ -158,6 +158,10 @@ class BundleValidationTests(unittest.TestCase):
         self.assertIn("same-release source archive missing", result["blockers"])
         self.verify.assert_called_once()
 
+    def test_recorder_appcast_marks_the_automatic_update(self):
+        enc = ET.parse(self.bundle / "appcast.xml").find("./channel/item/enclosure")
+        self.assertEqual(enc.get(validate.SPARKLE + "installerArguments"), "/SILENT /SP- /NORESTART /AUTOUPDATE=1")
+
     def test_tampered_installer_does_not_reach_signature_check(self):
         with (self.bundle / INSTALLER_NAME).open("ab") as stream:
             stream.write(b"tampered")
@@ -262,6 +266,7 @@ class LegacyRegressionTests(unittest.TestCase):
                 self.assertEqual(feed, "https://github.com/" + app["repo"] + "/releases/latest/download/appcast.xml")
                 enc = ET.parse(Path(directory) / "appcast.xml").find("./channel/item/enclosure")
                 self.assertEqual(enc.get(validate.SPARKLE + "edSignature"), SIGNATURE)
+                self.assertEqual(enc.get(validate.SPARKLE + "installerArguments"), "/SILENT /SP- /NORESTART /AUTOUPDATE=1")
                 github = {"tagName": app["tag_prefix"] + "1.2.3", "publishedAt": "2026-09-09T00:00:00Z", "assets": [
                     {"name": installer.name, "url": expected, "size": 9}, {"name": app["fixed"], "url": "unused", "size": 9}]}
                 with mock.patch.object(release, "run", return_value=json.dumps(github)), \

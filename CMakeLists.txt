@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.22)
 
-project(Enqueue VERSION 0.12.4 LANGUAGES C CXX)
+project(Enqueue VERSION 0.12.5 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -63,7 +63,6 @@ set(GOCUE_EDDSA_PUBLIC_KEY "" CACHE STRING "Base64 EdDSA public key that verifie
 add_library(GoCueCore INTERFACE)
 
 target_sources(GoCueCore INTERFACE
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/app/CoupangShortcut.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/model/Cue.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/model/MidiTrigger.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/app/MidiTriggerRules.cpp
@@ -153,7 +152,7 @@ target_link_libraries(GoCueCore INTERFACE
     juce::juce_gui_extra
     juce::juce_recommended_config_flags
     juce::juce_recommended_warning_flags
-    mfplat mfreadwrite mfuuid propsys ole32 delayimp shell32)   # Media Foundation AAC / M4A / WMA reader (delay-loaded: optional on Windows N)
+    mfplat mfreadwrite mfuuid propsys ole32 delayimp)   # Media Foundation AAC / M4A / WMA reader (delay-loaded: optional on Windows N)
 
 # mfplat / mfreadwrite are missing on Windows N editions without the Media Feature Pack: delay-load them so the app
 # still starts (MediaFoundationAudioFormat::isAvailable() probes the DLLs before touching them)
@@ -275,7 +274,7 @@ if(WIN32)
 endif()
 target_sources(LiveMixCore INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/livemix/src/WebDavBackup.cpp)
 
-set(LIVEMIX_VERSION "0.11.3")   # LiveMix version (the Enqueue version is the project version); not a cache variable: a bump must reach existing build trees
+set(LIVEMIX_VERSION "0.11.4")   # LiveMix version (the Enqueue version is the project version); not a cache variable: a bump must reach existing build trees
 set(LIVEMIX_APPCAST_URL "" CACHE STRING "LiveMix WinSparkle appcast URL (empty disables update checks)")
 
 # The online backup's server account is built into the app from a JSON file that lives outside the repository

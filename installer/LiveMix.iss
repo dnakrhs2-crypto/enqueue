@@ -83,7 +83,8 @@ Root: HKA; Subkey: "Software\Classes\LiveMix.Session\shell\open\command"; ValueT
 ; Install/update the plugin during silent updates too, independently of /NORUN.
 Filename: "{app}\{#AppExe}"; Parameters: "--install-obs-plugin --allow-elevation"; StatusMsg: "{cm:ObsPluginInstalling}"; Flags: runhidden waituntilterminated; Tasks: obsplugin; Check: InteractiveObsInstall
 Filename: "{app}\{#AppExe}"; Parameters: "--install-obs-plugin"; StatusMsg: "{cm:ObsPluginInstalling}"; Flags: runhidden waituntilterminated; Tasks: obsplugin; Check: SilentObsInstall
-; also after a silent auto-update (WinSparkle runs Setup with /SILENT): the app comes back by itself.
+; also after a silent auto-update (WinSparkle runs Setup with /SILENT): the app comes back by itself (after the
+; Coupang question window, when it shows).
 ; Scripted installs pass /NORUN=1 to keep it closed.
 Filename: "{app}\{#AppExe}"; Description: "{cm:LaunchProgram,{#StringChange(AppName, '&', '&&')}}"; Flags: nowait postinstall; Check: not NoRunRequested
 
@@ -95,60 +96,14 @@ Filename: "reg.exe"; Parameters: "delete HKCU\Software\Microsoft\Windows\Current
 Type: filesandordirs; Name: "{commonappdata}\obs-studio\plugins\livemix-obs"
 
 [Code]
-const
-  CoupangShortcutUrl = 'https://xn--jb0byyo90f.com/coupang/';   { 곰튀김.com }
-
-function NoRunRequested: Boolean;
-begin
-  Result := ExpandConstant('{param:NORUN|0}') = '1';
-end;
+#include "UpdateFinish.iss"
 
 function InteractiveObsInstall: Boolean;
 begin
-  Result := not WizardSilent;
+  Result := (not WizardSilent) and (not IsAutoUpdate);
 end;
 
 function SilentObsInstall: Boolean;
 begin
-  Result := WizardSilent;
-end;
-
-function CoupangShortcutPath: String;
-begin
-  Result := ExpandConstant('{userdesktop}\') + CustomMessage('CoupangShortcutName') + '.url';
-end;
-
-{ The shortcut is written when the user saw the checkbox (an interactive install) or asked for it on the command
-  line (/TASKS=coupang). A silent auto-update remembers the task but must not bring back a deleted shortcut. }
-function CoupangShortcutWanted: Boolean;
-begin
-  Result := WizardIsTaskSelected('coupang')
-    and ((not WizardSilent) or (Pos('coupang', Lowercase(ExpandConstant('{param:TASKS|}'))) > 0));
-end;
-
-procedure CurStepChanged(CurStep: TSetupStep);
-var
-  Path: String;
-begin
-  if (CurStep = ssPostInstall) and CoupangShortcutWanted then
-  begin
-    Path := CoupangShortcutPath;
-    SetIniString('InternetShortcut', 'URL', CoupangShortcutUrl, Path);
-    SetIniString('InternetShortcut', 'IconFile', ExpandConstant('{app}\coupang.ico'), Path);
-    SetIniString('InternetShortcut', 'IconIndex', '0', Path);
-  end;
-end;
-
-procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
-var
-  OtherPath: String;
-begin
-  if CurUninstallStep = usPostUninstall then
-  begin
-    DeleteFile(CoupangShortcutPath);
-    OtherPath := ExpandConstant('{userdesktop}\') + CustomMessage('CoupangOtherShortcutName') + '.url';
-    if (OtherPath <> CoupangShortcutPath)
-      and (GetIniString('InternetShortcut', 'URL', '', OtherPath) = CoupangShortcutUrl) then
-      DeleteFile(OtherPath);
-  end;
+  Result := WizardSilent or IsAutoUpdate;
 end;
