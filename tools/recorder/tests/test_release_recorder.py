@@ -737,11 +737,21 @@ class OtherWorkTests(unittest.TestCase):
         self.assertIn(":(glob)installer/LiveMix*", logs[0])   # matches LiveMix.iss / LiveMix.messages.iss
 
     def test_recent_commits_elsewhere_are_reported(self):
-        self.log_lines = "1a2b3c4 09-29 00:20 Volume cue / big view\n5d6e7f8 09-28 23:10 start\n"
+        now = int(release.time.time())
+        old = now - (release.IN_PROGRESS_HOURS + 1) * 3600
+        self.log_lines = ("%d 1a2b3c4 09-29 00:20 Volume cue / big view\n%d 5d6e7f8 09-28 23:10 start\n"
+                          "%d 9f9f9f9 09-20 10:00 an abandoned try from days ago\n" % (now - 60, now - 3600, old))
         found, _ = self.check()
         self.assertEqual(len(found), 1)
         self.assertIn("gocue-volume [volume-cue]", found[0])
-        self.assertIn("2 commit(s)", found[0])
+        self.assertIn("2 commit(s)", found[0])            # the 24 hours are applied after git's comparison
+        self.assertIn("1a2b3c4 09-29 00:20 Volume cue", found[0])
+
+    def test_git_compares_the_whole_history_before_the_24_hours(self):
+        found, run = self.check()
+        logs = [list(map(str, c.args[0])) for c in run.call_args_list if list(map(str, c.args[0]))[:2] == ["git", "log"]]
+        self.assertFalse(any(a.startswith("--since") for a in logs[0]))   # would hide an older twin from --cherry-pick
+        self.assertNotIn("--no-merges", logs[0])                         # a merge can carry changes of its own
 
     def test_recent_uncommitted_changes_are_reported_old_ones_are_not(self):
         self.status_lines = " M livemix/Edited.cpp\0"

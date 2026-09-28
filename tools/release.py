@@ -186,10 +186,15 @@ def other_work_in_progress(app_key, now=None):
         head = tree.get("HEAD", "")
         if head:
             # --cherry-pick --right-only: a commit already brought over by cherry-pick (another SHA, same patch) is
-            # not work still to come
-            commits = run(["git", "log", "--cherry-pick", "--right-only", "--no-merges", "--since=@%d" % int(since),
-                           "--format=%h %cd %s", "--date=format:%m-%d %H:%M", "HEAD..." + head, "--"] + paths,
-                          cwd=ROOT, capture=True).strip().splitlines()
+            # not work still to come. No --since for git (it would drop an older twin on this side from the
+            # comparison) and no --no-merges (a merge can carry changes of its own); the 24 hours are applied here.
+            out = run(["git", "log", "--cherry-pick", "--right-only", "--format=%ct %h %cd %s",
+                       "--date=format:%m-%d %H:%M", "HEAD..." + head, "--"] + paths, cwd=ROOT, capture=True)
+            commits = []
+            for line in out.splitlines():
+                stamp, _, rest = line.strip().partition(" ")
+                if stamp.isdigit() and int(stamp) >= since:
+                    commits.append(rest)
             if commits:
                 found.append("%s: %d commit(s) not in this release, newest %s" % (name, len(commits), commits[0]))
         changed = [f for f in uncommitted_files(path, paths) if changed_recently(path, f, since)]
