@@ -79,8 +79,8 @@ option(RECORDER_ASAN "Build the recorder targets with AddressSanitizer (diagnost
 if(RECORDER_ASAN)
     add_compile_options(/fsanitize=address /Zi)
 endif()
-add_library(RecorderCommon STATIC ../src/model/SafeFileWrite.cpp)
-target_link_libraries(RecorderCommon PRIVATE juce::juce_core)
+add_library(RecorderCommon STATIC ../src/model/SafeFileWrite.cpp ../src/app/CoupangShortcut.cpp)
+target_link_libraries(RecorderCommon PRIVATE juce::juce_core shell32)
 get_target_property(_rec_juce_includes juce::juce_core INTERFACE_INCLUDE_DIRECTORIES)
 target_include_directories(RecorderCommon PUBLIC ../src ${_rec_juce_includes})
 target_compile_definitions(RecorderCommon PUBLIC
@@ -187,6 +187,7 @@ endforeach()
 # rename just its entry point so the new test file can dispatch both suites.
 # Suite routing: tests/TestMain.cpp registry (no per-round main renames).
 target_sources(RecorderTests PRIVATE tests/RecorderProjectTests.cpp)
+target_sources(RecorderTests PRIVATE tests/RecorderUpdateTests.cpp)
 target_link_libraries(RecorderTests PRIVATE RecorderModel)
 add_test(NAME RecorderProjectRoundtrip COMMAND RecorderTests --suite project-roundtrip)
 # END Recorder round 08.

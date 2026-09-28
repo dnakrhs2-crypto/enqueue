@@ -4,6 +4,7 @@
 #include "app/RecorderUpdater.h"
 #include "support/CrashHandler.h"
 #include "ui/MainComponent.h"
+#include "ui/UpdateNotice.h"
 #include "model/SafeFileWrite.h"
 #include <juce_gui_basics/juce_gui_basics.h>
 #include <charconv>
@@ -48,7 +49,7 @@ int roundtrip(const juce::File& testRoot, const juce::File& folder)
     return result.wasOk() && written.wasOk() ? 0 : 1;
 }
 }
-class RecorderApplication : public juce::JUCEApplication
+class RecorderApplication : public juce::JUCEApplication, private juce::Timer
 {
 public:
     const juce::String getApplicationName() override { return ProductIdentity::displayName(); }
@@ -115,7 +116,9 @@ public:
         lookAndFeel = std::make_unique<RecorderLookAndFeel>(); juce::LookAndFeel::setDefaultLookAndFeel(lookAndFeel.get());
         if ((automation || demoArguments) && (demoIterations < 1 || demoIterations > 1000 || demoAsio < 0 || demoDevices.isEmpty() || demoReport.isEmpty() || openPath.isNotEmpty() || projectPath.isNotEmpty())) { setApplicationReturnValue(2); quit(); return; }
         if (demoIterations && rootPath.isEmpty()) rootPath = juce::File::getCurrentWorkingDirectory().getChildFile(demoReport).getParentDirectory().getChildFile("demo-settings-" + juce::Uuid().toString()).getFullPathName();
-        settings = std::make_unique<RecorderSettings>(rootPath.isEmpty() ? juce::File() : juce::File(rootPath)); const auto loaded = settings->load();
+        settings = std::make_unique<RecorderSettings>(rootPath.isEmpty() ? juce::File() : juce::File(rootPath));
+        const bool hadSettingsFile = settings->getFile().existsAsFile();
+        const auto loaded = settings->load();
         document = std::make_unique<RecorderDocument>(); window = std::make_unique<MainWindow>(*document, *settings);
         if (exceptionReported) { window->content().showUnhandledException(lastExceptionReport); if (lastExceptionReport != juce::File()) CrashHandler::markSeen(lastExceptionReport); }
         if (demoIterations) { window->content().startDemo(demoIterations, juce::File::getCurrentWorkingDirectory().getChildFile(demoDevices), demoAsio, juce::File::getCurrentWorkingDirectory().getChildFile(demoReport), demoTimeline); return; }
@@ -125,6 +128,18 @@ public:
             if (loaded.failed()) window->content().showError(loaded.getErrorMessage());
             window->content().initialiseProject(openPath.isEmpty() ? juce::File() : juce::File(openPath), false, false);
             return; // no startup prompt, devices, updater or previous-crash dialog
+        }
+        const auto previous = settings->get().lastRunVersion;
+        const auto current = getApplicationVersion();
+        // An unreadable settings file stays as it is: no notice from a guessed version, and no early write of defaults over it.
+        if (loaded.wasOk() && CoupangShortcut::decideUpdate(previous, current, false, hadSettingsFile).announce)
+            pendingUpdateNotice = ProductIdentity::displayName() + ko("가 ")
+                + (previous.isEmpty() ? current : previous + " → " + current) + ko("(으)로 업데이트되었습니다.");
+        // Record before device startup takes a settings snapshot, even if the notice must wait.
+        if (loaded.wasOk() && previous != current)
+        {
+            auto next = settings->get(); next.lastRunVersion = current;
+            if (settings->set(std::move(next)).wasOk()) versionSave = settings->save();
         }
         const auto lifecycle = window->content().lifecycleState();
         const juce::Component::SafePointer<MainComponent> content(&window->content());
@@ -142,9 +157,11 @@ public:
                 [report](int result) { if (result == 1) report.revealToUser(); });
         }
         window->content().initialiseProject(openPath.isEmpty() ? juce::File() : juce::File(openPath), true);
+        if (pendingUpdateNotice.isNotEmpty() || versionSave.valid()) startTimer(250);
     }
     void shutdown() override
     {
+        stopTimer(); pendingUpdateNotice.clear();
         RecorderUpdater::shutdown(); // deactivate queued thunks, join WinSparkle before host destruction
         timelineAutomation.reset(); window.reset(); document.reset(); settings.reset(); juce::LookAndFeel::setDefaultLookAndFeel(nullptr); lookAndFeel.reset();
     }
@@ -162,6 +179,25 @@ public:
         if (juce::File::isAbsolutePath(path) && path.endsWithIgnoreCase(ProductIdentity::projectExtension())) window->content().openProject(juce::File(path));
     }
 private:
+    void timerCallback() override
+    {
+        if (!window || !window->content().lifecycleState()->acceptsCommands())
+        {
+            stopTimer(); pendingUpdateNotice.clear(); return;
+        }
+        if (versionSave.valid())
+        {
+            if (versionSave.wait_for(std::chrono::seconds(0)) != std::future_status::ready) return;
+            const auto result = versionSave.get();
+            if (result.failed()) window->content().showError(result.getErrorMessage());
+        }
+        if (pendingUpdateNotice.isEmpty()) { stopTimer(); return; }
+        if (!window->content().canShowUpdateNotice()) return;
+        stopTimer();
+        const auto message = std::move(pendingUpdateNotice); pendingUpdateNotice.clear();
+        UpdateNotice::show(window->getLookAndFeel(), message,
+            !CoupangShortcut::existsOn(CoupangShortcut::userDesktop()));
+    }
     class MainWindow : public juce::DocumentWindow
     {
     public:
@@ -182,6 +218,8 @@ private:
     std::unique_ptr<MainWindow> window;
     std::unique_ptr<juce::DocumentWindow> timelineAutomation;
     juce::File lastExceptionReport;
+    juce::String pendingUpdateNotice;
+    std::future<juce::Result> versionSave;
     bool exceptionReported = false;
 };
 }

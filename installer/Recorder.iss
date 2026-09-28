@@ -64,7 +64,7 @@ Name: "coupang"; Description: "{cm:CoupangTask}"; GroupDescription: "{cm:Coupang
 [Files]
 ; SourceDir contains only the manifest-enumerated payload, including FFmpeg/WinSparkle and notices.
 Source: "{#SourceDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
-Source: "coupang.ico"; DestDir: "{app}"; Flags: ignoreversion; Tasks: coupang
+Source: "coupang.ico"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
 Name: "{group}\{#AppName}"; Filename: "{app}\{#AppExe}"
@@ -156,7 +156,15 @@ begin
 end;
 
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
+var
+  OtherPath: String;
 begin
   if CurUninstallStep = usPostUninstall then
+  begin
     DeleteFile(CoupangShortcutPath);
+    OtherPath := ExpandConstant('{userdesktop}\') + CustomMessage('CoupangOtherShortcutName') + '.url';
+    if (OtherPath <> CoupangShortcutPath)
+      and (GetIniString('InternetShortcut', 'URL', '', OtherPath) = CoupangShortcutUrl) then
+      DeleteFile(OtherPath);
+  end;
 end;

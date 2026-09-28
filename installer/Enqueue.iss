@@ -69,7 +69,7 @@ Name: "coupang"; Description: "{cm:CoupangTask}"; GroupDescription: "{cm:Coupang
 [Files]
 Source: "{#SourceDir}\{#AppExe}"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#SourceDir}\WinSparkle.dll"; DestDir: "{app}"; Flags: ignoreversion skipifsourcedoesntexist
-Source: "coupang.ico"; DestDir: "{app}"; Flags: ignoreversion; Tasks: coupang
+Source: "coupang.ico"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#ToolsDir}\*"; DestDir: "{app}\tools"; Flags: ignoreversion
 
 [Icons]
@@ -139,9 +139,17 @@ begin
 end;
 
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
+var
+  OtherPath: String;
 begin
   if CurUninstallStep = usPostUninstall then
+  begin
     DeleteFile(CoupangShortcutPath);
+    OtherPath := ExpandConstant('{userdesktop}\') + CustomMessage('CoupangOtherShortcutName') + '.url';
+    if (OtherPath <> CoupangShortcutPath)
+      and (GetIniString('InternetShortcut', 'URL', '', OtherPath) = CoupangShortcutUrl) then
+      DeleteFile(OtherPath);
+  end;
 end;
 
 [UninstallDelete]
