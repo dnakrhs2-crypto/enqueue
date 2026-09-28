@@ -161,6 +161,28 @@ public:
         restored->open();   // the saved state comes back once the window is on the desktop (a maximised one needs its peer)
         expect (restored->getBounds() == savedBounds);
         restored.reset();
+        {
+            // minimised, the window saves nothing (Windows reports a minimised window as not maximised): the last real
+            // state is kept
+            window.open();
+            window.setBounds (60, 70, 700, 500);
+            window.closeButtonPressed();
+            const auto kept = f.settings.getActiveCuesWindowState();
+            window.open();
+            window.setMinimised (true);
+            window.setBounds (300, 300, 500, 400);   // a move while minimised
+            expectEquals (f.settings.getActiveCuesWindowState(), kept);
+            window.setMinimised (false);
+        }
+        {
+            // a maximised state comes back maximised (the normal place is restored first, then maximised)
+            auto maximisedState = "fs " + juce::Rectangle<int> (80, 90, 720, 520).toString();
+            f.settings.setActiveCuesWindowState (maximisedState);
+            auto again = std::make_unique<HiddenWindow> (f.engine, f.document().cues, f.settings);
+            again->open();
+            expect (again->isFullScreen());
+            again.reset();
+        }
         window.setBounds (-20000, -20000, 640, 480);
         window.open();
         if (const auto* display = juce::Desktop::getInstance().getDisplays().getDisplayForRect (window.getScreenBounds()))

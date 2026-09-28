@@ -2361,8 +2361,23 @@ private:
         offsetEditor.takePendingEdit();
         setOffset (value);
 
+        bool released = false;
+
+        if (durationEditor.hasKeyboardFocus (true))
+        {
+            commitDuration();   // what was typed in the time field is kept, as a focus change would keep it
+            durationEditor.giveAwayKeyboardFocus();
+            released = true;
+        }
+
         if (offsetEditor.hasKeyboardFocus (true))
+        {
             offsetEditor.giveAwayKeyboardFocus();
+            released = true;
+        }
+
+        if (released)
+            refresh();   // typing held the panel on the cue it began with: from here it follows the selection again
     }
 
     void commitOffset()

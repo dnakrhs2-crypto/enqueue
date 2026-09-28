@@ -114,6 +114,63 @@ public:
         }
         expectWithinAbsoluteError (level(), -6.0, 1.0e-9);
 
+        beginTest ("a quick button while the time field has the keyboard: the typed time is kept and that field lets go too");
+        {
+            auto* time = child<juce::TextEditor> (f.inspector(), [] (auto& c) { return c.getTooltip() == ko ("페이드에 걸리는 시간 (초, 또는 분:초)"); });
+            auto* minus3 = child<juce::TextButton> (f.inspector(), [] (const auto& b) { return b.getButtonText() == "-3"; });
+            expect (time != nullptr && minus3 != nullptr);
+            if (time != nullptr && minus3 != nullptr)
+            {
+                const auto seconds = [&] { return f.document().cues.get (1).fade.durationSeconds; };
+                const double before = seconds();
+                time->grabKeyboardFocus();
+                expect (time->hasKeyboardFocus (false));
+                time->setText ("5", false);
+                minus3->onClick();
+                expectWithinAbsoluteError (level(), -3.0, 1.0e-9);
+                expectWithinAbsoluteError (seconds(), 5.0, 1.0e-9);
+                expect (! time->hasKeyboardFocus (true) && ! offset->hasKeyboardFocus (true), "no field keeps the keyboard: Space is GO");
+                dispatch();
+                f.document().undo();
+                f.document().undo();
+                expect (! f.document().canUndo());
+                expectWithinAbsoluteError (level(), -6.0, 1.0e-9);
+                expectWithinAbsoluteError (seconds(), before, 1.0e-9);
+            }
+        }
+
+        beginTest ("the selection moved on while a field had the keyboard: the first quick button edits the shown cue, the next one the selected cue");
+        {
+            auto second = f.document().cues.get (1).duplicated();
+            second.name = "Second volume";
+            const int b = f.document().cues.add (second);
+            f.document().cues.setSelectedIndex (1);
+            f.inspector().showTimeTab();
+            dispatch();
+            auto* minus3 = child<juce::TextButton> (f.inspector(), [] (const auto& btn) { return btn.getButtonText() == "-3"; });
+            auto* original = child<juce::TextButton> (f.inspector(), [] (const auto& btn) { return btn.getButtonText() == ko ("원래대로"); });
+            expect (minus3 != nullptr && original != nullptr);
+            if (minus3 != nullptr && original != nullptr)
+            {
+                offset->grabKeyboardFocus();
+                f.document().cues.setSelectedIndex (b);   // e.g. a MIDI GO moved the playhead-linked selection meanwhile
+                dispatch();
+                minus3->onClick();
+                expectWithinAbsoluteError (level(), -3.0, 1.0e-9);                                 // the cue on screen when the button was pressed
+                original->onClick();
+                expectWithinAbsoluteError (f.document().cues.get (b).fade.mainDb, 0.0, 1.0e-9);   // then the selected one
+                expectWithinAbsoluteError (level(), -3.0, 1.0e-9);
+                f.document().undo();
+                f.document().undo();
+                expect (! f.document().canUndo());
+            }
+            f.document().cues.remove (b);
+            f.document().cues.setSelectedIndex (1);
+            f.inspector().showTimeTab();
+            dispatch();
+            expectWithinAbsoluteError (level(), -6.0, 1.0e-9);
+        }
+
         beginTest ("show mode keeps what was typed without Enter (like a focus change) before it locks the field");
         offset->grabKeyboardFocus();
         offset->setText ("-12", false);

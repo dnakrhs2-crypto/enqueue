@@ -74,14 +74,25 @@ ActiveCuesWindow::~ActiveCuesWindow()
 
 void ActiveCuesWindow::open()
 {
+    bool maximise = false;
+
     if (! isOnDesktop())
     {
         addToDesktop (getDesktopWindowStyleFlags());
 
         if (! opened)
         {
+            // the normal place first, and maximised only once the window shows: JUCE keeps as the normal place the one
+            // it had at the moment of maximising, so maximising the still hidden window would keep the default place
+            // (and the next save would put the window back on the main monitor)
             const juce::ScopedValueSetter<bool> restoring (ready, false);   // the steps of the restore are not new states
-            if (const auto state = settings.getActiveCuesWindowState(); state.isNotEmpty())
+            auto state = settings.getActiveCuesWindowState().trim();
+            maximise = state.startsWithIgnoreCase ("fs");
+
+            if (maximise)
+                state = state.substring (2).trim();
+
+            if (state.isNotEmpty())
                 restoreWindowStateFromString (state);
         }
     }
@@ -89,14 +100,20 @@ void ActiveCuesWindow::open()
     setMinimised (false);
     UiScale::fitWindowIntoDisplay (*this);
     setVisible (true);
+
+    if (maximise)
+        setFullScreen (true);
+
     toFront (true);
     focusContent();
 }
 
 void ActiveCuesWindow::closeButtonPressed() { saveState(); setVisible (false); }
-void ActiveCuesWindow::moved() { saveState(); }
-void ActiveCuesWindow::visibilityChanged() { if (! isVisible()) saveState(); }
-void ActiveCuesWindow::saveState() { if (ready && opened) settings.setActiveCuesWindowState (getWindowStateAsString()); }
+// the base classes keep the window's normal place up to date (and bring a shown window forward): call them first
+void ActiveCuesWindow::moved() { DocumentWindow::moved(); saveState(); }
+void ActiveCuesWindow::visibilityChanged() { DocumentWindow::visibilityChanged(); if (! isVisible()) saveState(); }
+// not while minimised: Windows reports a minimised window as not maximised, which would forget a maximised big view
+void ActiveCuesWindow::saveState() { if (ready && opened && ! isMinimised()) settings.setActiveCuesWindowState (getWindowStateAsString()); }
 
 void ActiveCuesWindow::resized()
 {
