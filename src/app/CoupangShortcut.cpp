@@ -32,13 +32,13 @@ juce::Result createOn (const juce::File& desktop, const juce::File& iconFile)
     if (existsOn (desktop))
         return juce::Result::ok();
 
-    // Written and verified as a temporary file first, then moved onto the desktop without replacing anything: a
-    // failure never leaves a half-written 쿠팡.url there, and a shortcut another program makes meanwhile is never touched.
-    const auto temp = juce::File::getSpecialLocation (juce::File::tempDirectory)
-                          .getNonexistentChildFile ("coupang-shortcut", ".tmp", false);
+    // Written and verified as a hidden temporary file in the desktop folder itself, then renamed without replacing
+    // anything: the same folder keeps the rename atomic (a move across volumes would be a copy that shows a half-made
+    // 쿠팡.url), a failure never leaves a half-written shortcut, and one another program makes meanwhile is never touched.
+    const auto temp = desktop.getNonexistentChildFile (".coupang-shortcut", ".tmp", false);
     const auto path = temp.getFullPathName();
     const auto handle = CreateFileW (path.toWideCharPointer(), GENERIC_WRITE, 0, nullptr,
-                                     CREATE_NEW, FILE_ATTRIBUTE_NORMAL, nullptr);
+                                     CREATE_NEW, FILE_ATTRIBUTE_HIDDEN, nullptr);
     if (handle == INVALID_HANDLE_VALUE)
         return juce::Result::fail (juce::String::fromUTF8 ("바로가기 파일을 쓸 수 없습니다."));
 
@@ -49,7 +49,7 @@ juce::Result createOn (const juce::File& desktop, const juce::File& iconFile)
     CloseHandle (handle);
     const auto fail = [&temp] (const char* reason)
     {
-        temp.deleteFile(); // only this call's temporary file (a leftover in the temp folder is harmless)
+        temp.deleteFile(); // only this call's temporary file (a leftover stays hidden)
         return juce::Result::fail (juce::String::fromUTF8 (reason));
     };
     if (! initialised)
@@ -77,10 +77,11 @@ juce::Result createOn (const juce::File& desktop, const juce::File& iconFile)
         return juce::Result::ok();
     }
 
-    // No MOVEFILE_REPLACE_EXISTING: the move fails rather than overwrite a shortcut that appeared at the last moment.
+    // A plain rename in one folder: no MOVEFILE_COPY_ALLOWED, and no MOVEFILE_REPLACE_EXISTING - the rename fails
+    // rather than overwrite a shortcut that appeared at the last moment.
     const auto file = koreanShortcut (desktop);
-    if (! MoveFileExW (path.toWideCharPointer(), file.getFullPathName().toWideCharPointer(),
-                       MOVEFILE_COPY_ALLOWED | MOVEFILE_WRITE_THROUGH))
+    const auto finalPath = file.getFullPathName();
+    if (! MoveFileExW (path.toWideCharPointer(), finalPath.toWideCharPointer(), MOVEFILE_WRITE_THROUGH))
     {
         const bool someoneElses = existsOn (desktop);
         temp.deleteFile();
@@ -88,7 +89,14 @@ juce::Result createOn (const juce::File& desktop, const juce::File& iconFile)
                             : juce::Result::fail (juce::String::fromUTF8 ("바로가기 파일을 쓸 수 없습니다."));
     }
 
-    SHChangeNotify (SHCNE_CREATE, SHCNF_PATHW, file.getFullPathName().toWideCharPointer(), nullptr);
+    // the rename kept the temporary file's hidden attribute: the shortcut itself must be an ordinary visible file
+    if (! SetFileAttributesW (finalPath.toWideCharPointer(), FILE_ATTRIBUTE_NORMAL))
+    {
+        file.deleteFile(); // our own file, renamed a moment ago: an invisible shortcut would block every later offer
+        return juce::Result::fail (juce::String::fromUTF8 ("바로가기 파일을 쓸 수 없습니다."));
+    }
+
+    SHChangeNotify (SHCNE_CREATE, SHCNF_PATHW, finalPath.toWideCharPointer(), nullptr);
     return juce::Result::ok();
    #else
     juce::ignoreUnused (desktop, iconFile);

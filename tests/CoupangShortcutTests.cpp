@@ -63,15 +63,14 @@ public:
             expect (icon.getParentDirectory().createDirectory().wasOk());
             expect (icon.replaceWithText ("test icon"));
             expect (! existsOn (desktop));
-            const auto tempDir = juce::File::getSpecialLocation (juce::File::tempDirectory);
-            const int tempsBefore = tempDir.getNumberOfChildFiles (juce::File::findFiles, "coupang-shortcut*.tmp");
             const auto result = createOn (desktop, icon);
             expect (result.wasOk(), result.getErrorMessage());
             expect (existsOn (desktop));
-            // only the finished shortcut lands on the desktop; the temporary file it was written as is gone
+            // only the finished shortcut is left in the folder (the count includes hidden files: the hidden temporary
+            // file it was written as is gone), and it is an ordinary visible file
             expectEquals (desktop.getNumberOfChildFiles (juce::File::findFilesAndDirectories), 1);
-            expectEquals (tempDir.getNumberOfChildFiles (juce::File::findFiles, "coupang-shortcut*.tmp"), tempsBefore);
             const auto shortcut = desktop.getChildFile (ko ("쿠팡.url"));
+            expect (! shortcut.isHidden());
             const auto contents = shortcut.loadFileAsString();
             expect (contents.contains ("[InternetShortcut]"));
             expect (contents.contains (juce::String ("URL=") + Links::coupangShortcut));
