@@ -11,6 +11,8 @@
 namespace gocue::livemix
 {
 
+struct PluginSet;
+
 /** The open session: the model, its file, the dirty flag, and every edit (each one also reaches the engine live).
     Structure changes (channels / FX added, removed, reordered, a file loaded) fire onStructureChanged; value changes
     fire onValueChanged. Both on the message thread. */
@@ -80,6 +82,10 @@ public:
         anywhere switches them all off, otherwise they all come on. Returns how many channels have that group
         (0: nothing happened) and, in 'switchedOff', which way they went. */
     int toggleGroupOnEveryChannel (int group, bool& switchedOff);
+
+    /** Replaces a live mic/FX/master chain using restore's atomic publication. Mic groups and sends
+        follow the set's optional data; all edits, including chain listener calls, announce once. */
+    juce::StringArray applyPluginSet (PluginChain& chain, const PluginSet& set);
 
     void setSessionName (const juce::String& name);
     void setDeviceInfo (const MixDevice& device);

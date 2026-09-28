@@ -82,6 +82,7 @@ target_sources(EnqueueTests PRIVATE
     LiveMixSilentPluginEditsTests.cpp
     LiveMixTransportProbeTests.cpp
     PluginPresetTests.cpp
+    PluginSetTests.cpp
     PluginSearchTests.cpp
     LoudnessMeterTests.cpp
     LoudnessAverageTests.cpp

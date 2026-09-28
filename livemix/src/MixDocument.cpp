@@ -1,5 +1,7 @@
 #include "MixDocument.h"
 
+#include "PluginSet.h"
+
 #include <algorithm>
 #include <cmath>
 #include <utility>
@@ -571,6 +573,46 @@ int MixDocument::toggleGroupOnEveryChannel (int group, bool& switchedOff)
     // one group still running anywhere means the key switches them off: the first press always does something
     switchedOff = anyOn;
     return setGroupOffOnEveryChannel (group, anyOn);
+}
+
+juce::StringArray MixDocument::applyPluginSet (PluginChain& chain, const PluginSet& set)
+{
+    MixChannel* channel = nullptr;
+    for (auto& candidate : session.channels)
+        if (engine.getChannelChain (candidate.id) == &chain)
+        {
+            channel = &candidate;
+            break;
+        }
+
+    const auto plan = planPluginSet (set, channel, session.fx);
+    const ValueBatch batch (*this);
+    auto errors = chain.restore (plan.plugins, engine.getPluginHost().makeFactory (engine.getSampleRate(), engine.getBlockSize()));
+
+    if (channel != nullptr)
+    {
+        if (plan.groups)
+        {
+            channel->pluginGroups = *plan.groups;
+            for (auto& group : channel->pluginGroups)
+            {
+                // Check the actual published slots too (restore repairs duplicate/null IDs).
+                group.slots.erase (std::remove_if (group.slots.begin(), group.slots.end(), [&] (const auto& id)
+                {
+                    return ! liveChainHas (channel->id, id);
+                }), group.slots.end());
+                if (group.off)
+                    for (const auto& id : group.slots)
+                        bypassSlot (channel->id, id, true);
+            }
+        }
+        for (const auto& send : plan.sends.sends)
+            setSend (channel->id, send.fx, send.amount, send.pre);
+        errors.addArray (plan.sends.warnings);
+    }
+
+    markDirty();
+    return errors;
 }
 
 void MixDocument::setSessionName (const juce::String& name)
