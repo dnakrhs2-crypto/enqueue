@@ -247,6 +247,7 @@ namespace
         {
             const juce::ScopedValueSetter<bool> guard (refreshing, true);
             const auto current = engine.getOpenDevice();
+            shownDevice = current;
             types = AudioBackends::availableTypes (engine.getDeviceManager());
             typeCombo.clear (juce::dontSendNotification);
             for (int i = 0; i < types.size(); ++i)
@@ -298,8 +299,8 @@ namespace
                 for (int i = 0; i < sizes.size(); ++i)
                     bufferCombo.addItem (juce::String (sizes[i]) + ko (" 샘플") + "  (" + juce::String (1000.0 * sizes[i] / juce::jmax (1.0, device->getCurrentSampleRate()), 1) + " ms)", sizes[i]);
                 bufferCombo.setSelectedId (current.bufferSize, juce::dontSendNotification);
-                for (auto rate : device->getAvailableSampleRates())
-                    if (rate > 0.0 && (! asio || (rate >= 44100.0 && rate <= 192000.0))) rates.addIfNotAlreadyThere (rate);
+                for (auto rate : device->getAvailableSampleRates())   // a closed ASIO device (a failed reset) offers none
+                    if (rate > 0.0 && (! asio || (device->isOpen() && rate >= 44100.0 && rate <= 192000.0))) rates.addIfNotAlreadyThere (rate);
                 panelButton.setVisible (asio && device->hasControlPanel());
             }
             if (shownRate > 0.0)
@@ -330,6 +331,7 @@ namespace
         void applyType()
         {
             if (refreshing || typeCombo.getSelectedId() <= 0) return;
+            pendingRate = 0.0;
             const auto current = engine.getOpenDevice();
             MixDevice wanted;
             wanted.sampleFormat = current.sampleFormat;
@@ -366,17 +368,58 @@ namespace
             wanted.bufferSize = shownType == "Windows Audio" ? 0 : bufferCombo.getSelectedId();
             if (shownType == "Windows Audio (Exclusive Mode)")
                 wanted.sampleFormat = DeviceFormatText::choice (bitDepthCombo.getSelectedId());
+            pendingRate = 0.0;
             const bool opened = applyDevice (wanted);
 
             // a driver may list a rate and still not switch to it (an external clock, a fixed rate): say what it runs at.
-            // A failed open has said so already (and rolled back).
+            // A failed open has said so already (and rolled back). One that switched can still be undone by the reset
+            // many drivers ask for after a rate change: followDevice() watches for that a few seconds.
             if (opened && rateChosen && wanted.isAsio() && wanted.sampleRate > 0.0)
-                if (auto* device = engine.getDeviceManager().getCurrentAudioDevice())
-                    if (device->isOpen() && juce::roundToInt (device->getCurrentSampleRate()) != juce::roundToInt (wanted.sampleRate))
-                        juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon, ko ("샘플레이트를 바꾸지 못했습니다"),
-                            ko ("ASIO 드라이버가 ") + juce::String (juce::roundToInt (wanted.sampleRate)) + ko (" Hz로 바꾸지 않아 지금 ")
-                                + juce::String (juce::roundToInt (device->getCurrentSampleRate())) + ko (" Hz로 동작합니다. 장치의 클럭(외부 동기) 설정이나 ASIO 제어판을 확인하세요."),
-                            ko ("확인"));
+                if (auto* device = engine.getDeviceManager().getCurrentAudioDevice(); device != nullptr && device->isOpen())
+                {
+                    if (juce::roundToInt (device->getCurrentSampleRate()) != juce::roundToInt (wanted.sampleRate))
+                    {
+                        showRateNotApplied (wanted.sampleRate, device->getCurrentSampleRate());
+                    }
+                    else
+                    {
+                        pendingRate = wanted.sampleRate;
+                        pendingSince = juce::Time::getMillisecondCounter();
+                    }
+                }
+        }
+
+        void showRateNotApplied (double wantedRate, double actualRate)
+        {
+            juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon, ko ("샘플레이트를 바꾸지 못했습니다"),
+                ko ("ASIO 드라이버가 ") + juce::String (juce::roundToInt (wantedRate)) + ko (" Hz로 바꾸지 않아 지금 ")
+                    + juce::String (juce::roundToInt (actualRate)) + ko (" Hz로 동작합니다. 장치의 클럭(외부 동기) 설정이나 ASIO 제어판을 확인하세요."),
+                ko ("확인"));
+        }
+
+        /** The device can change under the open dialog (a driver reset, a session opened from Explorer): show what runs,
+            unless a list is open. A rate asked for moments ago that a reset then left is said like a refused one. */
+        void followDevice()
+        {
+            const auto now = engine.getOpenDevice();
+
+            if (pendingRate > 0.0 && juce::Time::getMillisecondCounter() - pendingSince > 3000)
+                pendingRate = 0.0;
+
+            if (pendingRate > 0.0 && now.isAsio() && now.input.isNotEmpty() && juce::roundToInt (now.sampleRate) != juce::roundToInt (pendingRate))
+            {
+                showRateNotApplied (pendingRate, now.sampleRate);
+                pendingRate = 0.0;
+            }
+
+            const bool changed = now.type != shownDevice.type || now.input != shownDevice.input || now.output != shownDevice.output
+                                 || now.bufferSize != shownDevice.bufferSize || juce::roundToInt (now.sampleRate) != juce::roundToInt (shownDevice.sampleRate);
+            bool choosing = false;
+            for (auto* box : { &typeCombo, &deviceCombo, &outputCombo, &rateCombo, &bufferCombo, &bitDepthCombo })
+                choosing = choosing || box->isPopupActive();
+
+            if (changed && ! choosing)
+                refreshDevices();
         }
 
         bool applyDevice (const MixDevice& wanted)
@@ -572,7 +615,7 @@ namespace
         void paint (juce::Graphics& g) override { g.fillAll (Palette::card); }
 
     private:
-        void timerCallback() override { refreshControlStatus(); refreshBitDepth(); }
+        void timerCallback() override { refreshControlStatus(); followDevice(); refreshBitDepth(); }
 
         void refreshControlStatus()
         {
@@ -597,6 +640,9 @@ namespace
         SettingsDialog::AcceptedFormatsQuery getAcceptedFormats;
         juce::StringArray types, names, outputNames;
         juce::String shownType;
+        MixDevice shownDevice;          // what refreshDevices() last showed; followDevice() compares the running one
+        double pendingRate = 0.0;       // an ASIO rate that just opened, watched for a reset that leaves it (3 s)
+        juce::uint32 pendingSince = 0;
         struct Row { juce::Label* label; HotkeyButton* button; juce::TextButton* clear; };
         std::vector<Row> rows;   // the hotkey rows in the order they are drawn
         juce::Label deviceCaption, bufferCaption, deviceNote, backupCaption, backupNote, hotkeyCaption, hotkeyNote, micHotkeyLabel, fxHotkeyLabel, windowHotkeyLabel;

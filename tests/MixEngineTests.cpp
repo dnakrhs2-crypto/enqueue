@@ -2254,6 +2254,72 @@ public:
             }
             SettingsDialog::closeIfOpen();
         }
+
+        beginTest ("ASIO: the dialog follows a device changed under it, says when a reset soon undoes a chosen rate, a closed device offers none");
+        {
+            MixEngine engine;
+            removeRealMixDeviceTypes (engine);
+            auto fake = std::make_unique<MixFakeType> ("ASIO");
+            fake->rates = { 48000.0, 96000.0 };
+            engine.getDeviceManager().addAudioDeviceType (std::move (fake));
+            expect (engine.openDevice ({ "ASIO", "Good", "Good", 256, 48000.0 }).isEmpty());
+            LiveMixSettings settings (directory);
+            auto* content = openSettingsContent (engine, settings, {});
+            auto* rate = content != nullptr ? dynamic_cast<juce::ComboBox*> (content->findChildWithID ("device-rate")) : nullptr;
+            auto* buffer = content != nullptr ? dynamic_cast<juce::ComboBox*> (content->findChildWithID ("device-buffer")) : nullptr;
+            expect (rate != nullptr && buffer != nullptr);
+            if (rate != nullptr && buffer != nullptr)
+            {
+                auto noAlert = [] { return dynamic_cast<juce::AlertWindow*> (juce::Component::getCurrentlyModalComponent()) == nullptr; };
+                expectEquals (rate->getSelectedId(), 48000);
+
+                // changed under the dialog (a session opened from Explorer, a driver reset): shown by the 500 ms refresh
+                expect (engine.openDevice ({ "ASIO", "Good", "Good", 512, 96000.0 }).isEmpty());
+                dispatchFor (650);
+                expectEquals (rate->getSelectedId(), 96000);
+                expectEquals (buffer->getSelectedId(), 512);
+                expect (noAlert());
+
+                // chosen, then undone by a reset moments later: said like a refused rate
+                rate->setSelectedId (48000, juce::sendNotificationSync);
+                expectEquals (juce::roundToInt (engine.getOpenDevice().sampleRate), 48000);
+                expect (noAlert());
+                expect (engine.openDevice ({ "ASIO", "Good", "Good", 512, 96000.0 }).isEmpty());
+                dispatchFor (650);
+                auto* alert = dynamic_cast<juce::AlertWindow*> (juce::Component::getCurrentlyModalComponent());
+                expect (alert != nullptr);
+                if (alert != nullptr)
+                {
+                    expectEquals (alert->getName(), ko ("샘플레이트를 바꾸지 못했습니다"));
+                    alert->exitModalState (0);
+                }
+                dispatchFor (50);
+                expectEquals (rate->getSelectedId(), 96000);
+
+                // seconds later a change is only shown, never blamed on the choice
+                rate->setSelectedId (48000, juce::sendNotificationSync);
+                dispatchFor (3300);
+                expect (noAlert());
+                expect (engine.openDevice ({ "ASIO", "Good", "Good", 512, 96000.0 }).isEmpty());
+                dispatchFor (650);
+                expect (noAlert());
+                expectEquals (rate->getSelectedId(), 96000);
+            }
+            SettingsDialog::closeIfOpen();
+
+            // a device object left closed (a failed driver reset) offers no rate to pick
+            if (auto* device = engine.getDeviceManager().getCurrentAudioDevice())
+                device->close();
+            content = openSettingsContent (engine, settings, {});
+            rate = content != nullptr ? dynamic_cast<juce::ComboBox*> (content->findChildWithID ("device-rate")) : nullptr;
+            expect (rate != nullptr);
+            if (rate != nullptr)
+            {
+                expectEquals (rate->getNumItems(), 0);
+                expectEquals (rate->getSelectedId(), 0);
+            }
+            SettingsDialog::closeIfOpen();
+        }
     }
 
     void runFormatTextTests()
