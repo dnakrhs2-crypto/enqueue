@@ -48,7 +48,7 @@ namespace
             addAndMakeVisible (rateCaption);
             rateCombo.setComponentID ("device-rate");
             rateCombo.setWantsKeyboardFocus (false);
-            rateCombo.onChange = [this] { applySelection(); };
+            rateCombo.onChange = [this] { applySelection (true); };
             addAndMakeVisible (rateCombo);
             panelButton.setButtonText (ko ("ASIO 제어판 (버퍼 크기)..."));
             panelButton.onClick = [this]
@@ -277,13 +277,20 @@ namespace
             outputCombo.setSelectedId (current.output.isEmpty() ? 1 : outputNames.indexOf (current.output) + 2, juce::dontSendNotification);
             outputCaption.setVisible (! asio);
             outputCombo.setVisible (! asio);
-            rateCaption.setVisible (! asio);
-            rateCombo.setVisible (! asio);
+            rateCaption.setVisible (true);   // ASIO too: some drivers' own panels cannot change the rate (2026-09-29)
+            rateCombo.setVisible (true);
             bufferCaption.setVisible (! shared);
             bufferCombo.setVisible (! shared);
             sharedBufferNote.setVisible (shared);
             bufferCombo.clear (juce::dontSendNotification);
-            juce::Array<double> rates { 44100.0, 48000.0 };
+            // Windows audio converts, so 44.1k / 48k are always offered; an ASIO driver offers only its own rates (JUCE
+            // would open a rate it does not list at another one), within 44.1 - 192 kHz: FlexASIO claims all 21 from 8k
+            // to 768k. The rate it runs at is shown even outside. With nothing open getOpenDevice() says 48 kHz, but no
+            // ASIO rate is known then.
+            juce::Array<double> rates;
+            if (! asio)
+                rates.addArray ({ 44100.0, 48000.0 });
+            const double shownRate = asio && current.input.isEmpty() ? 0.0 : current.sampleRate;
             panelButton.setVisible (false);
             if (auto* device = engine.getDeviceManager().getCurrentAudioDevice())
             {
@@ -291,14 +298,17 @@ namespace
                 for (int i = 0; i < sizes.size(); ++i)
                     bufferCombo.addItem (juce::String (sizes[i]) + ko (" 샘플") + "  (" + juce::String (1000.0 * sizes[i] / juce::jmax (1.0, device->getCurrentSampleRate()), 1) + " ms)", sizes[i]);
                 bufferCombo.setSelectedId (current.bufferSize, juce::dontSendNotification);
-                for (auto rate : device->getAvailableSampleRates()) if (rate > 0.0) rates.addIfNotAlreadyThere (rate);
-                if (current.sampleRate > 0.0) rates.addIfNotAlreadyThere (current.sampleRate);
+                for (auto rate : device->getAvailableSampleRates())
+                    if (rate > 0.0 && (! asio || (rate >= 44100.0 && rate <= 192000.0))) rates.addIfNotAlreadyThere (rate);
                 panelButton.setVisible (asio && device->hasControlPanel());
             }
+            if (shownRate > 0.0)
+                rates.addIfNotAlreadyThere (shownRate);
             rates.sort();
             rateCombo.clear (juce::dontSendNotification);
             for (auto rate : rates) rateCombo.addItem (juce::String (juce::roundToInt (rate)) + " Hz", juce::roundToInt (rate));
-            rateCombo.setSelectedId (juce::roundToInt (current.sampleRate > 0.0 ? current.sampleRate : 48000.0), juce::dontSendNotification);
+            rateCombo.setTextWhenNothingSelected (ko ("장치 없음"));
+            rateCombo.setSelectedId (juce::roundToInt (shownRate > 0.0 ? shownRate : (asio ? 0.0 : 48000.0)), juce::dontSendNotification);
             juce::String note = ko ("USB 마이크·헤드셋 같은 일반 장치를 씁니다. 마이크와 모니터가 서로 다른 장치면 샘플레이트 차이를 자동으로 맞춥니다 (모니터 지연이 조금 늘어납니다).");
             if (shownType == "Windows Audio (Low Latency Mode)") note += ko (" 지원하지 않는 장치면 일반 모드로 여세요.");
             if (shownType == "Windows Audio (Exclusive Mode)") note += ko (" 독점 모드에서는 OBS 등 다른 프로그램이 같은 마이크를 쓸 수 없습니다.");
@@ -338,7 +348,9 @@ namespace
             applyDevice (wanted);
         }
 
-        void applySelection()
+        /** 'rateChosen': the sample rate box changed. For ASIO that rate is asked of the driver; another change (device,
+            buffer) keeps the rate it runs at, as before. */
+        void applySelection (bool rateChosen = false)
         {
             if (refreshing) return;
             auto wanted = engine.getOpenDevice();
@@ -346,20 +358,36 @@ namespace
             wanted.type = shownType;
             wanted.input = deviceCombo.getSelectedId() > 0 ? deviceCombo.getText() : juce::String();
             wanted.output = wanted.isAsio() ? wanted.input : outputNames[outputCombo.getSelectedId() - 2];
-            wanted.sampleRate = wanted.isAsio() ? (hadDevice ? wanted.sampleRate : 0.0) : (double) rateCombo.getSelectedId();
+            if (wanted.isAsio())
+                wanted.sampleRate = rateChosen && rateCombo.getSelectedId() > 0 ? (double) rateCombo.getSelectedId()
+                                                                                 : (hadDevice ? wanted.sampleRate : 0.0);
+            else
+                wanted.sampleRate = (double) rateCombo.getSelectedId();
             wanted.bufferSize = shownType == "Windows Audio" ? 0 : bufferCombo.getSelectedId();
             if (shownType == "Windows Audio (Exclusive Mode)")
                 wanted.sampleFormat = DeviceFormatText::choice (bitDepthCombo.getSelectedId());
-            applyDevice (wanted);
+            const bool opened = applyDevice (wanted);
+
+            // a driver may list a rate and still not switch to it (an external clock, a fixed rate): say what it runs at.
+            // A failed open has said so already (and rolled back).
+            if (opened && rateChosen && wanted.isAsio() && wanted.sampleRate > 0.0)
+                if (auto* device = engine.getDeviceManager().getCurrentAudioDevice())
+                    if (device->isOpen() && juce::roundToInt (device->getCurrentSampleRate()) != juce::roundToInt (wanted.sampleRate))
+                        juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon, ko ("샘플레이트를 바꾸지 못했습니다"),
+                            ko ("ASIO 드라이버가 ") + juce::String (juce::roundToInt (wanted.sampleRate)) + ko (" Hz로 바꾸지 않아 지금 ")
+                                + juce::String (juce::roundToInt (device->getCurrentSampleRate())) + ko (" Hz로 동작합니다. 장치의 클럭(외부 동기) 설정이나 ASIO 제어판을 확인하세요."),
+                            ko ("확인"));
         }
 
-        void applyDevice (const MixDevice& wanted)
+        bool applyDevice (const MixDevice& wanted)
         {
-            if (const auto error = engine.openDevice (wanted); error.isNotEmpty())
+            const auto error = engine.openDevice (wanted);
+            if (error.isNotEmpty())
                 juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon, ko ("오디오 장치를 열지 못했습니다"), error, ko ("확인"));
             refreshDevices();
             if (onDeviceChanged)
                 onDeviceChanged();
+            return error.isEmpty();
         }
 
         int deviceNoteHeight() const

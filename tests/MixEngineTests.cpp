@@ -37,6 +37,9 @@ namespace
         bool playing = false;
         juce::AudioIODevice* device = nullptr;
         double rate = 48000.0;
+        juce::Array<double> rates { 48000.0, 44100.0 };
+        double refusedRate = 0.0;   // listed, but open() keeps running at the rate it had (an ASIO driver on an external clock)
+        double failedRate = 0.0;    // listed, but open() fails at it
         int buffer = 256;
         int asioOutputs = 72;
         int bits = 32;
@@ -61,7 +64,7 @@ namespace
         }
         juce::StringArray getInputChannelNames() override { return channelNames (true); }
         juce::StringArray getOutputChannelNames() override { return channelNames (false); }
-        juce::Array<double> getAvailableSampleRates() override { return { 48000.0, 44100.0 }; }
+        juce::Array<double> getAvailableSampleRates() override { return record->rates; }
         juce::Array<int> getAvailableBufferSizes() override { return { 128, 256, 512, 1024 }; }
         int getDefaultBufferSize() override { return 256; }
         juce::String open (const juce::BigInteger& ins, const juce::BigInteger& outs, double sr, int bs) override
@@ -69,13 +72,15 @@ namespace
             juce::getWasapiExclusivePreferredFormat (record->openedBits, record->openedFloat);
             close();
             if (record->onOutputLifecycle) record->onOutputLifecycle();
-            if (record->input == "Broken" || record->output == "Broken" || bs == 1024)
+            if (record->input == "Broken" || record->output == "Broken" || bs == 1024
+                || (record->failedRate > 0.0 && juce::approximatelyEqual (sr, record->failedRate)))
                 return "deliberate fake open failure";
             record->inputs = ins;
             record->outputs = outs;
             record->inputs.setRange (getInputChannelNames().size(), 128, false);
             record->outputs.setRange (getOutputChannelNames().size(), 128, false);
-            record->rate = sr;
+            if (record->refusedRate <= 0.0 || ! juce::approximatelyEqual (sr, record->refusedRate))
+                record->rate = sr;
             record->buffer = bs;
             opened = true;
             return {};
@@ -135,6 +140,10 @@ namespace
             r->input = input;
             r->output = output;
             r->asioOutputs = asioOutputs;
+            r->rates = rates;
+            r->refusedRate = refusedRate;
+            r->failedRate = failedRate;
+            if (refusedRate > 0.0 && ! records.empty()) r->rate = records.back()->rate;   // the driver keeps its clock across reopens
             if (input.isEmpty() && output.isNotEmpty()) r->onOutputLifecycle = onOutputLifecycle;
             if (failOutputs && output.isNotEmpty()) r->output = "Broken";
             records.push_back (r);
@@ -147,6 +156,8 @@ namespace
             return {};
         }
         std::vector<std::shared_ptr<MixDeviceRecord>> records;
+        juce::Array<double> rates { 48000.0, 44100.0 };
+        double refusedRate = 0.0, failedRate = 0.0;
         bool failOutputs = false;
         int asioOutputs = 72;
         std::function<void()> onOutputLifecycle;
@@ -1777,6 +1788,7 @@ public:
         expect (directory.deleteFile());
         expect (directory.createDirectory().wasOk());
         runSelectionRefreshTests (directory.getChildFile ("selection-refresh"));
+        runAsioRateTests (directory.getChildFile ("asio-rate"));
         {
             LiveMixLookAndFeel lookAndFeel;
             MixEngine engine;
@@ -1832,7 +1844,7 @@ public:
                 {
                     expectEquals (type->getNumItems(), 4);
                     expectEquals (input->getText(), juce::String ("Good"));
-                    expect (! output->isVisible() && ! rate->isVisible() && buffer->isVisible());
+                    expect (! output->isVisible() && rate->isVisible() && buffer->isVisible());
                     for (int mode = 1; mode <= 4; ++mode)
                     {
                         if (mode > 1) type->setSelectedId (mode, juce::sendNotificationSync);
@@ -1842,7 +1854,7 @@ public:
                         expectEquals (rate->getSelectedId(), (int) actual.sampleRate);
                         expectEquals (buffer->getSelectedId(), actual.bufferSize);
                         expect (output->isVisible() == (mode != 1));
-                        expect (rate->isVisible() == (mode != 1));
+                        expect (rate->isVisible());   // ASIO too (0.12.1)
                         expect (buffer->isVisible() == (mode != 2));
                         if (bitDepth != nullptr && bitDepthText != nullptr && soundSettings != nullptr)
                         {
@@ -2097,6 +2109,150 @@ public:
                 }
                 SettingsDialog::closeIfOpen();
             }
+        }
+    }
+
+    static juce::Component* openSettingsContent (MixEngine& engine, LiveMixSettings& settings, std::function<void()> deviceChanged)
+    {
+        SettingsDialog::show (engine, settings, nullptr, std::move (deviceChanged), {}, {}, {}, {});
+        auto& desktop = juce::Desktop::getInstance();
+        for (int i = 0; i < desktop.getNumComponents(); ++i)
+            if (auto* dialog = dynamic_cast<juce::DialogWindow*> (desktop.getComponent (i)); dialog != nullptr && dialog->getName() == ko ("설정"))
+                if (auto* viewport = dynamic_cast<juce::Viewport*> (dialog->getContentComponent())) return viewport->getViewedComponent();
+        return nullptr;
+    }
+
+    void runAsioRateTests (const juce::File& directory)
+    {
+        beginTest ("ASIO rate box: only the driver's rates, the chosen one opens and survives a buffer change, a refused one is said");
+        expect (directory.createDirectory().wasOk());
+        {
+            MixEngine engine;
+            removeRealMixDeviceTypes (engine);
+            auto fake = std::make_unique<MixFakeType> ("ASIO");
+            auto* asio = fake.get();
+            // no 44.1 kHz: the Windows pair is not offered for ASIO; 8k and 384k are outside the 44.1 - 192 kHz shown
+            asio->rates = { 96000.0, 48000.0, 8000.0, 88200.0, 384000.0, 192000.0 };
+            asio->refusedRate = 88200.0;
+            asio->failedRate = 192000.0;
+            engine.getDeviceManager().addAudioDeviceType (std::move (fake));
+            expect (engine.openDevice ({ "ASIO", "Good", "Good", 256, 0.0 }).isEmpty());
+            expectEquals (juce::roundToInt (engine.getOpenDevice().sampleRate), 48000);
+            LiveMixSettings settings (directory);
+            int changes = 0;
+            auto* content = openSettingsContent (engine, settings, [&]
+            {
+                ++changes;
+                settings.setLastDevice (engine.getOpenDevice());
+            });
+            expect (content != nullptr);
+            auto* rate = content != nullptr ? dynamic_cast<juce::ComboBox*> (content->findChildWithID ("device-rate")) : nullptr;
+            auto* buffer = content != nullptr ? dynamic_cast<juce::ComboBox*> (content->findChildWithID ("device-buffer")) : nullptr;
+            expect (rate != nullptr && buffer != nullptr);
+            if (rate != nullptr && buffer != nullptr)
+            {
+                expect (rate->isVisible());
+                expectEquals (rate->getNumItems(), 4);
+                expectEquals (rate->getItemId (0), 48000);
+                expectEquals (rate->getItemId (1), 88200);
+                expectEquals (rate->getItemId (2), 96000);
+                expectEquals (rate->getItemId (3), 192000);
+                expectEquals (rate->getSelectedId(), 48000);
+
+                rate->setSelectedId (96000, juce::sendNotificationSync);
+                expectEquals (juce::roundToInt (engine.getOpenDevice().sampleRate), 96000);
+                expectEquals (rate->getSelectedId(), 96000);
+                expectEquals (changes, 1);
+                expect (settings.getLastDevice().has_value() && juce::roundToInt (settings.getLastDevice()->sampleRate) == 96000);
+                dispatchFor (50);
+                expect (dynamic_cast<juce::AlertWindow*> (juce::Component::getCurrentlyModalComponent()) == nullptr);
+
+                buffer->setSelectedId (512, juce::sendNotificationSync);
+                expectEquals (engine.getOpenDevice().bufferSize, 512);
+                expectEquals (juce::roundToInt (engine.getOpenDevice().sampleRate), 96000);   // a buffer change keeps the chosen rate
+                expectEquals (rate->getSelectedId(), 96000);
+
+                rate->setSelectedId (88200, juce::sendNotificationSync);
+                expectEquals (juce::roundToInt (engine.getOpenDevice().sampleRate), 96000);   // refused: it runs on at 96 kHz
+                expectEquals (rate->getSelectedId(), 96000);
+                expect (juce::roundToInt (settings.getLastDevice()->sampleRate) == 96000);
+                dispatchFor (50);
+                auto* alert = dynamic_cast<juce::AlertWindow*> (juce::Component::getCurrentlyModalComponent());
+                expect (alert != nullptr);
+                if (alert != nullptr)
+                {
+                    expectEquals (alert->getName(), ko ("샘플레이트를 바꾸지 못했습니다"));
+                    alert->exitModalState (0);
+                }
+                dispatchFor (50);
+
+                // a failed open rolls back and says so once: no rate notice on top of the error
+                rate->setSelectedId (192000, juce::sendNotificationSync);
+                expectEquals (juce::roundToInt (engine.getOpenDevice().sampleRate), 96000);
+                expectEquals (rate->getSelectedId(), 96000);
+                dispatchFor (50);
+                alert = dynamic_cast<juce::AlertWindow*> (juce::Component::getCurrentlyModalComponent());
+                expect (alert != nullptr);
+                if (alert != nullptr)
+                {
+                    expectEquals (alert->getName(), ko ("오디오 장치를 열지 못했습니다"));
+                    alert->exitModalState (0);
+                }
+                dispatchFor (50);
+                expect (dynamic_cast<juce::AlertWindow*> (juce::Component::getCurrentlyModalComponent()) == nullptr);
+            }
+            SettingsDialog::closeIfOpen();
+
+            // running outside the range (set elsewhere): that rate is still shown, the others outside stay hidden
+            expect (engine.openDevice ({ "ASIO", "Good", "Good", 256, 8000.0 }).isEmpty());
+            expectEquals (juce::roundToInt (engine.getOpenDevice().sampleRate), 8000);
+            content = openSettingsContent (engine, settings, {});
+            rate = content != nullptr ? dynamic_cast<juce::ComboBox*> (content->findChildWithID ("device-rate")) : nullptr;
+            expect (rate != nullptr);
+            if (rate != nullptr)
+            {
+                expectEquals (rate->getNumItems(), 5);
+                expectEquals (rate->getItemId (0), 8000);
+                expectEquals (rate->getItemId (3), 96000);
+                expectEquals (rate->getItemId (4), 192000);
+                expectEquals (rate->getSelectedId(), 8000);
+            }
+            SettingsDialog::closeIfOpen();
+        }
+
+        beginTest ("ASIO with no device open shows no rate rather than a made-up 48 kHz; Windows audio still offers 44.1 / 48 kHz");
+        {
+            MixEngine engine;
+            removeRealMixDeviceTypes (engine);
+            engine.getDeviceManager().addAudioDeviceType (std::make_unique<MixFakeType> ("ASIO"));
+            LiveMixSettings settings (directory);
+            auto* content = openSettingsContent (engine, settings, {});
+            auto* rate = content != nullptr ? dynamic_cast<juce::ComboBox*> (content->findChildWithID ("device-rate")) : nullptr;
+            expect (rate != nullptr);
+            if (rate != nullptr)
+            {
+                expect (engine.getOpenDevice().input.isEmpty());
+                expect (rate->isVisible());
+                expectEquals (rate->getNumItems(), 0);
+                expectEquals (rate->getSelectedId(), 0);
+            }
+            SettingsDialog::closeIfOpen();
+
+            auto windows = std::make_unique<MixFakeType> ("Windows Audio");
+            windows->rates = { 96000.0 };
+            engine.getDeviceManager().addAudioDeviceType (std::move (windows));
+            expect (engine.openDevice ({ "Windows Audio", "Capture", "Headphones", 0, 96000.0 }).isEmpty());
+            content = openSettingsContent (engine, settings, {});
+            rate = content != nullptr ? dynamic_cast<juce::ComboBox*> (content->findChildWithID ("device-rate")) : nullptr;
+            expect (rate != nullptr);
+            if (rate != nullptr)
+            {
+                expectEquals (rate->getNumItems(), 3);
+                expectEquals (rate->getItemId (0), 44100);
+                expectEquals (rate->getItemId (1), 48000);
+                expectEquals (rate->getSelectedId(), 96000);
+            }
+            SettingsDialog::closeIfOpen();
         }
     }
 
