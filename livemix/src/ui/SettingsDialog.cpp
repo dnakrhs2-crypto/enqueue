@@ -385,6 +385,7 @@ namespace
                     {
                         pendingRate = wanted.sampleRate;
                         pendingSince = juce::Time::getMillisecondCounter();
+                        pendingOpenCount = engine.getOpenCount();
                     }
                 }
         }
@@ -403,7 +404,8 @@ namespace
         {
             const auto now = engine.getOpenDevice();
 
-            if (pendingRate > 0.0 && juce::Time::getMillisecondCounter() - pendingSince > 3000)
+            // a reopen the app asked for since (a session, another choice) is no reset; after 3 s neither is anything
+            if (pendingRate > 0.0 && (engine.getOpenCount() != pendingOpenCount || juce::Time::getMillisecondCounter() - pendingSince > 3000))
                 pendingRate = 0.0;
 
             if (pendingRate > 0.0 && now.isAsio() && now.input.isNotEmpty() && juce::roundToInt (now.sampleRate) != juce::roundToInt (pendingRate))
@@ -412,14 +414,24 @@ namespace
                 pendingRate = 0.0;
             }
 
+            // queued behind what is already waiting: a choice just made in a list posts its onChange, which goes first
+            if (deviceChangedUnderDialog())
+                juce::MessageManager::callAsync ([safe = juce::Component::SafePointer<SettingsContent> (this)]
+                {
+                    if (safe != nullptr && safe->deviceChangedUnderDialog())
+                        safe->refreshDevices();
+                });
+        }
+
+        bool deviceChangedUnderDialog()
+        {
+            const auto now = engine.getOpenDevice();
             const bool changed = now.type != shownDevice.type || now.input != shownDevice.input || now.output != shownDevice.output
                                  || now.bufferSize != shownDevice.bufferSize || juce::roundToInt (now.sampleRate) != juce::roundToInt (shownDevice.sampleRate);
             bool choosing = false;
             for (auto* box : { &typeCombo, &deviceCombo, &outputCombo, &rateCombo, &bufferCombo, &bitDepthCombo })
                 choosing = choosing || box->isPopupActive();
-
-            if (changed && ! choosing)
-                refreshDevices();
+            return changed && ! choosing;
         }
 
         bool applyDevice (const MixDevice& wanted)
@@ -643,6 +655,7 @@ namespace
         MixDevice shownDevice;          // what refreshDevices() last showed; followDevice() compares the running one
         double pendingRate = 0.0;       // an ASIO rate that just opened, watched for a reset that leaves it (3 s)
         juce::uint32 pendingSince = 0;
+        int pendingOpenCount = 0;       // engine.getOpenCount() then: any later openDevice() is no reset
         struct Row { juce::Label* label; HotkeyButton* button; juce::TextButton* clear; };
         std::vector<Row> rows;   // the hotkey rows in the order they are drawn
         juce::Label deviceCaption, bufferCaption, deviceNote, backupCaption, backupNote, hotkeyCaption, hotkeyNote, micHotkeyLabel, fxHotkeyLabel, windowHotkeyLabel;

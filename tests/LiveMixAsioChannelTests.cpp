@@ -11,7 +11,9 @@
  #include <atomic>
  #include <cstdio>
  #include <cstring>
+ #include <cwchar>
  #include <memory>
+ #include <string>
  #include <thread>
  #include <vector>
 #endif
@@ -215,6 +217,7 @@ namespace
     {
         FakeAsioRegistration()
         {
+            removeStaleKeys();
             const bool comReady = SUCCEEDED (comResult = CoInitializeEx (nullptr, COINIT_APARTMENTTHREADED)) || comResult == RPC_E_CHANGED_MODE;
             ok = comReady
                  && createKey (root + L"\\LM\\software\\asio\\LiveMix Fake ASIO",
@@ -240,6 +243,40 @@ namespace
             type.scanForDevices();
             RegOverridePredefKey (HKEY_CLASSES_ROOT, nullptr);
             RegOverridePredefKey (HKEY_LOCAL_MACHINE, nullptr);
+        }
+
+        /** A run that crashed (as the unpatched JUCE did) never removed its keys, and volatile keys last until logoff:
+            remove those of processes that are gone - never a running one's. */
+        static void removeStaleKeys()
+        {
+            HKEY software = nullptr;
+            if (RegOpenKeyExW (HKEY_CURRENT_USER, L"Software", 0, KEY_READ | KEY_WRITE | DELETE, &software) != ERROR_SUCCESS)
+                return;
+            const std::wstring prefix = L"LiveMixFakeAsio_";
+            std::vector<std::wstring> stale;
+            for (DWORD i = 0;; ++i)
+            {
+                wchar_t name[256] = {};
+                DWORD length = 256;
+                if (RegEnumKeyExW (software, i, name, &length, nullptr, nullptr, nullptr, nullptr) != ERROR_SUCCESS)
+                    break;
+                const std::wstring key (name, length);
+                if (key.rfind (prefix, 0) != 0)
+                    continue;
+                const auto pid = (DWORD) std::wcstoul (key.c_str() + prefix.size(), nullptr, 10);
+                if (auto* process = OpenProcess (PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid))
+                {
+                    DWORD code = 0;
+                    const bool running = GetExitCodeProcess (process, &code) && code == STILL_ACTIVE;
+                    CloseHandle (process);
+                    if (running)
+                        continue;
+                }
+                stale.push_back (key);
+            }
+            for (const auto& key : stale)
+                RegDeleteTreeW (software, key.c_str());
+            RegCloseKey (software);
         }
 
         static bool createKey (const std::wstring& path, std::initializer_list<std::pair<const wchar_t*, const wchar_t*>> values)

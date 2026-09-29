@@ -2260,8 +2260,11 @@ public:
             MixEngine engine;
             removeRealMixDeviceTypes (engine);
             auto fake = std::make_unique<MixFakeType> ("ASIO");
+            auto* asio = fake.get();
             fake->rates = { 48000.0, 96000.0 };
             engine.getDeviceManager().addAudioDeviceType (std::move (fake));
+            // a driver reset (JUCE reopens by itself, never through openDevice) that leaves the device at 96 kHz
+            auto resetTo96 = [asio] { for (auto& record : asio->records) if (record->playing) record->rate = 96000.0; };
             expect (engine.openDevice ({ "ASIO", "Good", "Good", 256, 48000.0 }).isEmpty());
             LiveMixSettings settings (directory);
             auto* content = openSettingsContent (engine, settings, {});
@@ -2284,7 +2287,7 @@ public:
                 rate->setSelectedId (48000, juce::sendNotificationSync);
                 expectEquals (juce::roundToInt (engine.getOpenDevice().sampleRate), 48000);
                 expect (noAlert());
-                expect (engine.openDevice ({ "ASIO", "Good", "Good", 512, 96000.0 }).isEmpty());
+                resetTo96();
                 dispatchFor (650);
                 auto* alert = dynamic_cast<juce::AlertWindow*> (juce::Component::getCurrentlyModalComponent());
                 expect (alert != nullptr);
@@ -2296,11 +2299,19 @@ public:
                 dispatchFor (50);
                 expectEquals (rate->getSelectedId(), 96000);
 
-                // seconds later a change is only shown, never blamed on the choice
+                // a reopen the app asks for right after (a session opened) is shown, not blamed on the choice
+                rate->setSelectedId (48000, juce::sendNotificationSync);
+                expectEquals (juce::roundToInt (engine.getOpenDevice().sampleRate), 48000);
+                expect (engine.openDevice ({ "ASIO", "Good", "Good", 512, 96000.0 }).isEmpty());
+                dispatchFor (650);
+                expect (noAlert());
+                expectEquals (rate->getSelectedId(), 96000);
+
+                // seconds later a reset is only shown too
                 rate->setSelectedId (48000, juce::sendNotificationSync);
                 dispatchFor (3300);
                 expect (noAlert());
-                expect (engine.openDevice ({ "ASIO", "Good", "Good", 512, 96000.0 }).isEmpty());
+                resetTo96();
                 dispatchFor (650);
                 expect (noAlert());
                 expectEquals (rate->getSelectedId(), 96000);

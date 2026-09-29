@@ -48,6 +48,8 @@ public:
         All device lifecycle methods run on the message thread. Non-positive rate/buffer use driver defaults. */
     juce::String openDevice (const MixDevice& wanted);
     MixDevice getOpenDevice() const;
+    /** Message thread: how many times openDevice() ran - a device change the app asked for, unlike a driver reset. */
+    int getOpenCount() const noexcept { return openCount; }
     struct DeviceFormat
     {
         enum class Kind { none, asio, windowsShared, windowsExclusive };
@@ -235,6 +237,7 @@ private:
     std::atomic<unsigned> monitorReaders { 0 };
     std::atomic<bool> monitorRestartRequested { false }; // an input restart while the monitor is unpublished
     MixDevice openedDevice;
+    int openCount = 0;   // openDevice() calls (message thread)
     std::atomic<bool> splitMonitor { false }, stereoOutputsOnly { false };
 
     juce::CriticalSection lock;   // the node lists and the buffers: held by the callback, taken briefly by edits

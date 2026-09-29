@@ -192,6 +192,7 @@ juce::String MixEngine::openAllChannels()
 
 juce::String MixEngine::openDevice (const MixDevice& requested)
 {
+    ++openCount;
     MixDevice wanted = requested;
     if (wanted.isAsio())
     {
