@@ -264,15 +264,19 @@ namespace
                 if (key.rfind (prefix, 0) != 0)
                     continue;
                 const auto pid = (DWORD) std::wcstoul (key.c_str() + prefix.size(), nullptr, 10);
+                bool gone = false;   // only when known: no such process, or it has exited - a failed query keeps the key
                 if (auto* process = OpenProcess (PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid))
                 {
                     DWORD code = 0;
-                    const bool running = GetExitCodeProcess (process, &code) && code == STILL_ACTIVE;
+                    gone = GetExitCodeProcess (process, &code) && code != STILL_ACTIVE;
                     CloseHandle (process);
-                    if (running)
-                        continue;
                 }
-                stale.push_back (key);
+                else
+                {
+                    gone = GetLastError() == ERROR_INVALID_PARAMETER;
+                }
+                if (gone)
+                    stale.push_back (key);
             }
             for (const auto& key : stale)
                 RegDeleteTreeW (software, key.c_str());
