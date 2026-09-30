@@ -77,11 +77,17 @@ public:
         if (format == nullptr)
             return;
 
-        auto searchPaths = format->getDefaultLocationsToSearch();
+        // Only the per-user folders the test plugins (DPF) are installed in. The system folder holds whatever else this PC
+        // has - Waves 17 since 2026-10-01, whose shell takes minutes and can stop on an alert box - and an unattended
+        // test (the release gate runs this) must not load it.
+        juce::FileSearchPath searchPaths;
         const auto localAppData = juce::SystemStats::getEnvironmentVariable ("LOCALAPPDATA", {});
 
         if (localAppData.isNotEmpty())
             searchPaths.addIfNotAlreadyThere (juce::File (localAppData).getChildFile ("Programs").getChildFile ("Common").getChildFile ("VST3"));
+
+        searchPaths.addIfNotAlreadyThere (juce::File::getSpecialLocation (juce::File::windowsLocalAppData)
+                                              .getChildFile ("Programs").getChildFile ("Common").getChildFile ("VST3"));
 
         logMessage ("Search paths: " + searchPaths.toString());
         const auto files = format->searchPathsForPlugins (searchPaths, true, false);
