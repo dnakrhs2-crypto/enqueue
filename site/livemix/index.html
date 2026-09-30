@@ -6,6 +6,8 @@
 <title>LiveMix</title>
 <meta name="description" content="LiveMix(라이브믹스): 마이크에 VST3를 걸어 방송으로 보내는 Windows용 프로그램">
 <link rel="icon" href="assets/icon.png">
+<link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/sun-typeface/SUIT@2/fonts/static/woff2/SUIT.css">
 <link rel="stylesheet" href="../style.css">
 <script defer src="https://static.cloudflareinsights.com/beacon.min.js" data-cf-beacon='{"token": "__CF_BEACON_TOKEN__"}'></script>
 <!-- X conversion tracking base code (LiveMix ad account, pixel rfy4b) -->
@@ -17,139 +19,123 @@ twq('config','rfy4b');
 </script>
 <!-- End X conversion tracking base code -->
 </head>
-<body>
+<body class="page-livemix">
 <header class="site-header">
-  <nav class="tabs">
-    <a class="brand" href="../">곰튀김</a><i>|</i>
-    <a href="../">Enqueue</a><i>|</i>
-    <span aria-current="page">LiveMix</span><i>|</i>
-    <a href="../tally/">Tally</a>
-  </nav>
+  <nav class="deck" aria-label="프로그램">
+    <a class="key key-brand" href="../"><span class="lcd"><span class="label">곰튀김</span></span></a>
+<a class="key" href="../"><span class="lcd"><img src="../assets/icon.png" width="44" height="44" alt=""><span class="label">Enqueue</span></span></a><span class="key is-current" aria-current="page"><span class="lcd"><img src="../livemix/assets/icon.png" width="44" height="44" alt=""><span class="label">LiveMix</span></span></span><a class="key" href="../tally/"><span class="lcd"><img src="../tally/assets/icon.png" width="44" height="44" alt=""><span class="label">Tally</span></span></a>  </nav>
 </header>
 
 <main>
-  <article>
-    <header class="product-head">
-      <img class="app-icon" src="assets/icon.png" width="82" height="82" alt="">
-      <div>
-        <h1>LiveMix <small>라이브믹스</small></h1>
-        <p class="tagline">마이크에 VST3를 걸어 방송으로 보내는 프로그램</p>
-      </div>
-    </header>
+  <header class="product-head">
+    <img class="app-icon" src="assets/icon.png" width="82" height="82" alt="">
+    <div class="head-text">
+      <h1>LiveMix <small>라이브믹스</small></h1>
+      <p class="tagline">마이크에 VST3를 걸어 방송으로 보내는 프로그램</p>
+    </div>
+  </header>
 
-    <section class="download-row">
+  <section class="download-row">
+    <div class="bigkeys">
       <a class="download-button" id="download" href="__DOWNLOAD_URL__">
         <strong id="download-label">__DOWNLOAD_LABEL__</strong>
-        <span id="download-meta">Windows 10 / 11 (64비트)</span>
+        <span class="meta" id="download-meta"><span class="nb">Windows 10 / 11 (64비트)</span></span>
       </a>
-      <dl class="requirements">
-        <dt>요구 사항</dt><dd>Windows 10 / 11 (64비트) · ASIO 또는 일반 윈도우 오디오 장치</dd>
-        <dt>기타</dt><dd><a href="notes.html">바뀐 점</a> · <a href="https://github.com/dnakrhs2-crypto/livemix/releases">GitHub 릴리스</a></dd>
-      </dl>
-    </section>
-
-    <a class="kakao" id="feedback-button" href="https://open.kakao.com/o/pST4IRLi">
-      <svg viewBox="0 0 48 48" aria-hidden="true"><path d="M24 6C12.4 6 3 13.3 3 22.3c0 5.8 3.9 10.9 9.8 13.8-.4 1.4-1.5 5.3-1.7 6.1-.3 1 .4 1 .8.7.3-.2 5.1-3.4 7.2-4.8 1.6.2 3.2.4 4.9.4 11.6 0 21-7.3 21-16.2S35.6 6 24 6z"/></svg>
-      <span><b>카카오톡 오픈채팅 바로가기</b><small>문의 · 커뮤니티</small></span>
-    </a>
-
-    <section class="body-section">
-      <h2>주요기능</h2>
-      <ul class="features">
-        <li>ASIO와 일반 윈도우 오디오 장치(USB 마이크·헤드셋·메인보드) 모두 지원</li>
-        <li>장치 비트뎁스 표시와 윈도우 독점 모드의 비트뎁스 선택 (자동 · 16/24/32비트 · 32비트 부동소수점)</li>
-        <li>마스터 소리를 OBS로 바로 보내기 (OBS 플러그인 자동 설치 · LiveMix 소스로 받기 · 샘플레이트 차이 자동 보정)</li>
-        <li>인풋 채널 스테레오 기준 최대 4개 지원 (모노 8개)</li>
-        <li>FX 채널 최대 4개의 사용 가능 (프리페이더,포스트페이더 지원)</li>
-        <li>라이브 방송에 최적화되어 어떤 DAW보다 가볍고 안정적인 시스템</li>
-        <li>직관적인 마이크 ON/OFF 버튼과 샌드 조절 버튼</li>
-        <li>VST3 (옵션으로 VST2) 플러그인 체인, 플러그인 프리셋, 검색이 되는 플러그인 관리</li>
-        <li>채널별 플러그인 그룹: 체인의 플러그인을 골라 묶어 두고 번호 하나로 한꺼번에 끄고 켜기 (최대 5개)</li>
-        <li>플러그인 세트: 잘 잡아 둔 체인을 세트 1~5에 저장해 두고 새 채널에서 바로 불러오기 (FX 샌드값·플러그인 그룹까지 선택해서 저장)</li>
-        <li>마스터 출력 LUFS 미터 (ITU-R BS.1770-4 / EBU R128: 순간·단기·통합·범위·트루 피크, 목표 대비 표시)</li>
-      </ul>
-      <p class="cost">비용 : 완전 무료</p>
-
-      <figure class="screen">
-        <img src="assets/screenshot.png" width="1440" height="900" alt="LiveMix 화면">
-      </figure>
-      <p class="notice">설치할 때 Windows가 ‘알 수 없는 게시자’ 경고를 띄웁니다. 추가 정보 → 실행을 누르면 됩니다. 아직 코드 서명을 하지 않아서 그렇습니다.</p>
-    </section>
-
-    <section class="body-section" id="obs">
-      <h2>OBS로 보내기</h2>
-      <p>LiveMix 마스터 소리를 가상 케이블이나 오디오 인터페이스 루프백 없이 OBS로 바로 보냅니다. LiveMix와 OBS의 샘플레이트가 달라도 자동으로 맞춥니다.</p>
-      <ol class="features">
-        <li>마스터 카드의 <b>OBS로 보내기</b>를 켭니다. 플러그인이 없으면 자동으로 설치합니다</li>
-        <li>OBS를 켜거나, 이미 켜져 있으면 다시 시작합니다</li>
-        <li>OBS 소스(+)에서 <b>'LiveMix'</b>를 반드시 추가하세요. OBS는 이 소스를 통해 LiveMix 소리를 받습니다</li>
-        <li>OBS 오디오 믹서의 미터와 녹화로 소리가 들어오는지 확인합니다</li>
-      </ol>
-      <ul class="features">
-        <li>OBS가 같은 마이크를 직접 잡고 있으면 처리 전 소리가 섞입니다. 그 마이크를 직접 받는 별도 소스는 음소거하세요</li>
-        <li>OBS 31.1 이상이 필요합니다. 휴대용(포터블) OBS는 자동 설치 대상이 아닙니다. LiveMix 설치 폴더의 <code>obs-plugin\livemix-obs\livemix-obs.dll</code>을 포터블 OBS 폴더의 <code>obs-plugins\64bit\</code>에, <code>obs-plugin\livemix-obs\data\locale\</code>을 <code>data\obs-plugins\livemix-obs\locale\</code>에 복사한 뒤 OBS를 다시 시작하세요</li>
-        <li>OBS와 LiveMix 사이 지연은 보통 수십 ms입니다. 영상과 소리가 어긋나면 OBS 오디오 고급 설정의 <b>싱크 오프셋</b>으로 맞추세요</li>
-      </ul>
-      <h3 id="obs-support">문제가 생기면</h3>
-      <ul class="features">
-        <li>OBS 소스에 ‘LiveMix 기다리는 중’: LiveMix가 꺼져 있거나 ‘OBS로 보내기’가 꺼져 있습니다</li>
-        <li>‘OBS에 소스 추가 필요’: 플러그인은 올라와 있지만 소리를 받는 곳이 없습니다. OBS 소스(+)에서 <b>'LiveMix'</b>를 추가하세요.</li>
-        <li>0.11.0에서 필터 'LiveMix'(또는 'LiveMix 마스터 받기')를 붙여 두었다면: 그 필터는 이제 동작하지 않습니다. 필터를 지우고 소스(+)에서 'LiveMix'를 추가하세요. 그 소스의 원래 소리는 그대로 나가니, LiveMix와 같은 마이크를 받는 소스라면 음소거하세요.</li>
-        <li>‘OBS 31.1 이상 필요’: 실행 중인 OBS가 오래된 버전입니다. OBS를 31.1 이상으로 업데이트하세요</li>
-        <li>‘휴대용 OBS: 플러그인 복사 필요’: 위의 휴대용 OBS 복사 안내대로 DLL과 locale 폴더를 넣은 뒤 OBS를 다시 시작하세요</li>
-        <li>‘OBS를 다시 시작하세요’: 켜져 있는 OBS가 LiveMix 플러그인을 읽지 않았거나 플러그인 설치 뒤 다시 시작해야 합니다. OBS를 완전히 끄고 다시 켜세요</li>
-        <li>‘OBS 대기 중’: OBS를 켜고 소스(+)에서 <b>'LiveMix'</b>를 추가하세요</li>
-        <li>설치 권한 창: 이 PC의 ProgramData 폴더에 쓰기 권한이 없을 때 한 번 뜹니다. 허용하면 플러그인 설치를 이어갑니다</li>
-      </ul>
-    </section>
-
-    <section class="body-section" id="streamdeck">
-      <h2>Stream Deck 연동</h2>
-      <p>LiveMix 0.6.0부터 Elgato Stream Deck(하드웨어, Stream Deck +, 휴대폰의 Stream Deck Mobile)에서 마이크 ON/OFF, 전체 마이크, 마이크·FX 뮤트그룹, 플러그인 그룹을 키로 조작하고 Stream Deck +의 다이얼로 FX 보내는 양을 조절할 수 있습니다.</p>
-      <a class="download-button" id="streamdeck-download" href="https://github.com/dnakrhs2-crypto/livemix/releases/download/streamdeck-v1.2.0/com.gomtwigim.livemix.streamDeckPlugin">
-        <strong>Stream Deck 플러그인 1.2.0 다운로드</strong>
-        <span>Stream Deck 앱 7.1 이상 · Windows 전용 · 파일을 열면 Stream Deck 앱이 설치를 안내합니다</span>
+      <a class="kakao" id="feedback-button" href="https://open.kakao.com/o/pST4IRLi">
+        <svg viewBox="0 0 48 48" aria-hidden="true"><path d="M24 6C12.4 6 3 13.3 3 22.3c0 5.8 3.9 10.9 9.8 13.8-.4 1.4-1.5 5.3-1.7 6.1-.3 1 .4 1 .8.7.3-.2 5.1-3.4 7.2-4.8 1.6.2 3.2.4 4.9.4 11.6 0 21-7.3 21-16.2S35.6 6 24 6z"/></svg>
+        <span><b>카카오톡 오픈채팅 바로가기</b><small>문의 · 커뮤니티</small></span>
       </a>
-      <ul class="features">
-        <li>LiveMix 0.6.0 이상 설치 → 설정 → <b>외부 제어 (Stream Deck)</b> → ‘외부 제어 사용’ 켜기 (주소와 ‘연결 대기 중’이 표시됩니다)</li>
-        <li>위 플러그인 파일을 열어 설치 → Stream Deck 앱의 <b>LiveMix</b> 항목에서 키를 끌어다 놓고, 키 설정에서 마이크·FX를 고릅니다</li>
-        <li>휴대폰: Stream Deck Mobile(무료 6키)을 같은 와이파이의 PC Stream Deck 앱에 연결하면 같은 키를 쓸 수 있습니다</li>
-        <li>플러그인 1.2.0: 키 8개를 Stream Deck <b>다중 동작</b>에 넣을 수 있습니다 — 방송 시작 키 하나에 마이크 켜기·플러그인 그룹 켜기·다른 프로그램 동작을 같이 묶어 쓰세요. 다중 동작 안에서는 키 그림과 상태 표시가 없고 키 설정의 ‘동작’이 그대로 실행됩니다. FX 보내는 양 다이얼은 제외이며, 키로는 ‘FX 보내는 양 ±’를 쓰면 됩니다</li>
-        <li>플러그인 1.1.0: <b>플러그인 그룹 (전체 마이크)</b> 키 — 그 번호의 그룹을 마이크 전체에서 한꺼번에 껐다 켭니다(설정의 그룹 핫키와 같음). 이 키만 LiveMix 0.10.0 이상이 필요하고, 나머지 키는 0.6.0 이상에서 그대로 동작합니다</li>
-        <li>제어는 이 PC 안에서만 통합니다(127.0.0.1). 외부 제어를 끄면 아무것도 달라지지 않습니다</li>
-      </ul>
-      <h3 id="streamdeck-support">문제가 생기면</h3>
-      <ul class="features">
-        <li>키에 ‘LiveMix 미연결’: LiveMix가 꺼져 있거나 아직 연결 중입니다. LiveMix를 실행하면 자동으로 이어집니다</li>
-        <li>키에 ‘제어 꺼짐’: LiveMix 설정에서 ‘외부 제어 사용’이 꺼져 있습니다</li>
-        <li>키에 ‘채널 없음’: 세션이 바뀌어 고른 마이크가 없어졌습니다. 키 설정에서 다시 고르세요 (같은 이름이 하나뿐이면 자동으로 이어집니다)</li>
-        <li>기록: <code>%APPDATA%\LiveMix\logs\control.log</code> (토큰·세션 내용은 기록되지 않습니다). 문의는 위 카카오톡 오픈채팅으로</li>
-      </ul>
-    </section>
-  </article>
+    </div>
+    <dl class="requirements">
+<div class="req"><dt>요구 사항</dt><dd>Windows 10 / 11 (64비트) · ASIO 또는 일반 윈도우 오디오 장치</dd></div><div class="req"><dt>기타</dt><dd><a href="notes.html">바뀐 점</a> · <a href="https://github.com/dnakrhs2-crypto/livemix/releases">GitHub 릴리스</a></dd></div>    </dl>
+    <p class="notice">설치할 때 Windows가 ‘알 수 없는 게시자’ 경고를 띄웁니다. 추가 정보 → 실행을 누르면 됩니다. 아직 코드 서명을 하지 않아서 그렇습니다.</p>
+  </section>
+
+  <section class="body-section features-section">
+    <h2>주요기능</h2>
+    <ul class="features features-main">
+<li>ASIO와 일반 윈도우 오디오 장치(USB 마이크·헤드셋·메인보드) 모두 지원</li><li>장치 비트뎁스 표시와 윈도우 독점 모드의 비트뎁스 선택 (자동 · 16/24/32비트 · 32비트 부동소수점)</li><li>마스터 소리를 OBS로 바로 보내기 (OBS 플러그인 자동 설치 · LiveMix 소스로 받기 · 샘플레이트 차이 자동 보정)</li><li>인풋 채널 스테레오 기준 최대 4개 지원 (모노 8개)</li><li>FX 채널 최대 4개의 사용 가능 (프리페이더,포스트페이더 지원)</li><li>라이브 방송에 최적화되어 어떤 DAW보다 가볍고 안정적인 시스템</li><li>직관적인 마이크 ON/OFF 버튼과 샌드 조절 버튼</li><li>VST3 (옵션으로 VST2) 플러그인 체인, 플러그인 프리셋, 검색이 되는 플러그인 관리</li><li>채널별 플러그인 그룹: 체인의 플러그인을 골라 묶어 두고 번호 하나로 한꺼번에 끄고 켜기 (최대 5개)</li><li>플러그인 세트: 잘 잡아 둔 체인을 세트 1~5에 저장해 두고 새 채널에서 바로 불러오기 (FX 샌드값·플러그인 그룹까지 선택해서 저장)</li><li>마스터 출력 LUFS 미터 (ITU-R BS.1770-4 / EBU R128: 순간·단기·통합·범위·트루 피크, 목표 대비 표시)</li>    </ul>
+    <p class="cost">비용 : 완전 무료</p>
+    <figure class="screen"><img src="assets/screenshot.png" width="1440" height="900" alt="LiveMix 화면"></figure>
+  </section>
+
+  <section class="body-section" id="obs">
+    <h2>OBS로 보내기</h2>
+    <p>LiveMix 마스터 소리를 가상 케이블이나 오디오 인터페이스 루프백 없이 OBS로 바로 보냅니다. LiveMix와 OBS의 샘플레이트가 달라도 자동으로 맞춥니다.</p>
+<ol class="features">
+<li>마스터 카드의 <b>OBS로 보내기</b>를 켭니다. 플러그인이 없으면 자동으로 설치합니다</li>
+<li>OBS를 켜거나, 이미 켜져 있으면 다시 시작합니다</li>
+<li>OBS 소스(+)에서 <b>'LiveMix'</b>를 반드시 추가하세요. OBS는 이 소스를 통해 LiveMix 소리를 받습니다</li>
+<li>OBS 오디오 믹서의 미터와 녹화로 소리가 들어오는지 확인합니다</li>
+</ol>
+<ul class="features">
+<li>OBS가 같은 마이크를 직접 잡고 있으면 처리 전 소리가 섞입니다. 그 마이크를 직접 받는 별도 소스는 음소거하세요</li>
+<li>OBS 31.1 이상이 필요합니다. 휴대용(포터블) OBS는 자동 설치 대상이 아닙니다. LiveMix 설치 폴더의 <code>obs-plugin\livemix-obs\livemix-obs.dll</code>을 포터블 OBS 폴더의 <code>obs-plugins\64bit\</code>에, <code>obs-plugin\livemix-obs\data\locale\</code>을 <code>data\obs-plugins\livemix-obs\locale\</code>에 복사한 뒤 OBS를 다시 시작하세요</li>
+<li>OBS와 LiveMix 사이 지연은 보통 수십 ms입니다. 영상과 소리가 어긋나면 OBS 오디오 고급 설정의 <b>싱크 오프셋</b>으로 맞추세요</li>
+</ul>
+<h3 id="obs-support">문제가 생기면</h3>
+<ul class="features">
+<li>OBS 소스에 ‘LiveMix 기다리는 중’: LiveMix가 꺼져 있거나 ‘OBS로 보내기’가 꺼져 있습니다</li>
+<li>‘OBS에 소스 추가 필요’: 플러그인은 올라와 있지만 소리를 받는 곳이 없습니다. OBS 소스(+)에서 <b>'LiveMix'</b>를 추가하세요.</li>
+<li>0.11.0에서 필터 'LiveMix'(또는 'LiveMix 마스터 받기')를 붙여 두었다면: 그 필터는 이제 동작하지 않습니다. 필터를 지우고 소스(+)에서 'LiveMix'를 추가하세요. 그 소스의 원래 소리는 그대로 나가니, LiveMix와 같은 마이크를 받는 소스라면 음소거하세요.</li>
+<li>‘OBS 31.1 이상 필요’: 실행 중인 OBS가 오래된 버전입니다. OBS를 31.1 이상으로 업데이트하세요</li>
+<li>‘휴대용 OBS: 플러그인 복사 필요’: 위의 휴대용 OBS 복사 안내대로 DLL과 locale 폴더를 넣은 뒤 OBS를 다시 시작하세요</li>
+<li>‘OBS를 다시 시작하세요’: 켜져 있는 OBS가 LiveMix 플러그인을 읽지 않았거나 플러그인 설치 뒤 다시 시작해야 합니다. OBS를 완전히 끄고 다시 켜세요</li>
+<li>‘OBS 대기 중’: OBS를 켜고 소스(+)에서 <b>'LiveMix'</b>를 추가하세요</li>
+<li>설치 권한 창: 이 PC의 ProgramData 폴더에 쓰기 권한이 없을 때 한 번 뜹니다. 허용하면 플러그인 설치를 이어갑니다</li>
+</ul>
+  </section>
+  <section class="body-section" id="streamdeck">
+    <h2>Stream Deck 연동</h2>
+    <p>LiveMix 0.6.0부터 Elgato Stream Deck(하드웨어, Stream Deck +, 휴대폰의 Stream Deck Mobile)에서 마이크 ON/OFF, 전체 마이크, 마이크·FX 뮤트그룹, 플러그인 그룹을 키로 조작하고 Stream Deck +의 다이얼로 FX 보내는 양을 조절할 수 있습니다.</p>
+<a class="download-button" href="https://github.com/dnakrhs2-crypto/livemix/releases/download/streamdeck-v1.2.0/com.gomtwigim.livemix.streamDeckPlugin" id="streamdeck-download">
+<strong>Stream Deck 플러그인 1.2.0 다운로드</strong>
+<span>Stream Deck 앱 7.1 이상 · Windows 전용 · 파일을 열면 Stream Deck 앱이 설치를 안내합니다</span>
+</a>
+<ul class="features">
+<li>LiveMix 0.6.0 이상 설치 → 설정 → <b>외부 제어 (Stream Deck)</b> → ‘외부 제어 사용’ 켜기 (주소와 ‘연결 대기 중’이 표시됩니다)</li>
+<li>위 플러그인 파일을 열어 설치 → Stream Deck 앱의 <b>LiveMix</b> 항목에서 키를 끌어다 놓고, 키 설정에서 마이크·FX를 고릅니다</li>
+<li>휴대폰: Stream Deck Mobile(무료 6키)을 같은 와이파이의 PC Stream Deck 앱에 연결하면 같은 키를 쓸 수 있습니다</li>
+<li>플러그인 1.2.0: 키 8개를 Stream Deck <b>다중 동작</b>에 넣을 수 있습니다 — 방송 시작 키 하나에 마이크 켜기·플러그인 그룹 켜기·다른 프로그램 동작을 같이 묶어 쓰세요. 다중 동작 안에서는 키 그림과 상태 표시가 없고 키 설정의 ‘동작’이 그대로 실행됩니다. FX 보내는 양 다이얼은 제외이며, 키로는 ‘FX 보내는 양 ±’를 쓰면 됩니다</li>
+<li>플러그인 1.1.0: <b>플러그인 그룹 (전체 마이크)</b> 키 — 그 번호의 그룹을 마이크 전체에서 한꺼번에 껐다 켭니다(설정의 그룹 핫키와 같음). 이 키만 LiveMix 0.10.0 이상이 필요하고, 나머지 키는 0.6.0 이상에서 그대로 동작합니다</li>
+<li>제어는 이 PC 안에서만 통합니다(127.0.0.1). 외부 제어를 끄면 아무것도 달라지지 않습니다</li>
+</ul>
+<h3 id="streamdeck-support">문제가 생기면</h3>
+<ul class="features">
+<li>키에 ‘LiveMix 미연결’: LiveMix가 꺼져 있거나 아직 연결 중입니다. LiveMix를 실행하면 자동으로 이어집니다</li>
+<li>키에 ‘제어 꺼짐’: LiveMix 설정에서 ‘외부 제어 사용’이 꺼져 있습니다</li>
+<li>키에 ‘채널 없음’: 세션이 바뀌어 고른 마이크가 없어졌습니다. 키 설정에서 다시 고르세요 (같은 이름이 하나뿐이면 자동으로 이어집니다)</li>
+<li>기록: <code>%APPDATA%\LiveMix\logs\control.log</code> (토큰·세션 내용은 기록되지 않습니다). 문의는 위 카카오톡 오픈채팅으로</li>
+</ul>
+  </section>
 </main>
 
-<footer>
+<footer class="site-footer">
   <div class="footer-inner">
-    <span>곰튀김</span><span>·</span>
-    <a href="https://open.kakao.com/o/pST4IRLi">오픈채팅 문의</a><span>·</span>
-    <a href="notes.html">바뀐 점</a><span>·</span>
-    <a href="https://github.com/dnakrhs2-crypto/livemix/releases">GitHub</a><span>·</span>
-    <span>VST is a trademark of Steinberg Media Technologies GmbH.</span>
-  </div>
+<span>곰튀김</span><a href="https://open.kakao.com/o/pST4IRLi">오픈채팅 문의</a><a href="notes.html">바뀐 점</a><a href="https://github.com/dnakrhs2-crypto/livemix/releases">GitHub</a><span>VST is a trademark of Steinberg Media Technologies GmbH.</span>  </div>
 </footer>
 
 <script>
 (function () {
+  // latest.json is written by tools/release.py at every release: exact installer URL, size and date.
   fetch('latest.json?rev=__SITE_REV__', { cache: 'no-cache' })
     .then(function (r) { return r.ok ? r.json() : null; })
     .then(function (info) {
-      if (!info || !info.url || info.url.indexOf('/releases/download/') < 0) return;
+      if (!info || !info.url || info.url.indexOf('/releases/download/') < 0) return;   // only a direct asset link counts as a download
       document.getElementById('download').href = info.url;
       document.getElementById('download-label').textContent = 'LiveMix ' + info.version + ' 다운로드';
       var mb = info.size ? (info.size / 1048576).toFixed(1) + ' MB' : '';
       var date = info.date ? info.date.slice(0, 10) : '';
-      document.getElementById('download-meta').textContent = ['버전 ' + info.version, mb, date, 'Windows 10 / 11 (64비트)'].filter(Boolean).join(' · ');
+      // each part is its own no-wrap span, so a narrow screen breaks the line between parts, never inside one
+      var meta = document.getElementById('download-meta');
+      meta.textContent = '';
+      ['버전 ' + info.version, mb, date, 'Windows 10 / 11 (64비트)'].filter(Boolean).forEach(function (part, i) {
+        if (i) meta.appendChild(document.createTextNode(' · '));
+        var span = document.createElement('span');
+        span.className = 'nb';
+        span.textContent = part;
+        meta.appendChild(span);
+      });
       if (info.feedback)
         document.getElementById('feedback-button').href = info.feedback;
     })
