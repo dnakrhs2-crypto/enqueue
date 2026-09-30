@@ -1,4 +1,6 @@
 #include "ui/PluginManagerWindow.h"
+#include "PluginScan.h"
+#include "ui/PluginScanListComponent.h"
 
 #include "PluginSearch.h"
 #include "Widgets.h"
@@ -392,12 +394,15 @@ public:
         button (scanVst2Button, ko ("VST2 스캔"), [this] { scan ("VST"); });
         button (removeButton, ko ("목록에서 빼기"), [this] { removeSelectedPlugin(); });
         button (enableAllButton, ko ("전부 사용"), [this] { setAll (true); });
+        button (resetListButton, ko ("목록 초기화"), [this] { resetList(); });
 
-        // JUCE's scanner (its progress window and the crash guard) drives the scan; the component itself stays hidden
-        scanner = std::make_unique<juce::PluginListComponent> (host.getFormatManager(), host.getKnownPlugins(),
-                                                               juce::File::getSpecialLocation (juce::File::userApplicationDataDirectory).getChildFile ("LiveMix").getChildFile ("scan.crashed"),
-                                                               nullptr, false);
-        scanner->setNumberOfThreadsForScanning (1);
+        auto isolatedScanner = std::make_unique<PluginScanCoordinator>();
+        scanCoordinator = isolatedScanner.get();
+        host.getKnownPlugins().setCustomScanner (std::move (isolatedScanner));
+
+        // JUCE drives progress/cancellation; plugin code runs on the worker's message thread.
+        scanner = std::make_unique<PluginScanListComponent> (host.getFormatManager(), host.getKnownPlugins(),
+                                                            crashMarker, *scanCoordinator);
         addChildComponent (*scanner);
 
         styleCaption (presetsCaption, ko ("플러그인 프리셋"));
@@ -470,6 +475,8 @@ public:
         scanVst2Button.setBounds (pluginButtons.removeFromLeft (100));
         pluginButtons.removeFromLeft (8);
         enableAllButton.setBounds (pluginButtons.removeFromLeft (90));
+        pluginButtons.removeFromLeft (8);
+        resetListButton.setBounds (pluginButtons.removeFromLeft (100));
         removeButton.setBounds (pluginButtons.removeFromRight (120));
         area.removeFromBottom (8);
         pluginTable.setBounds (area);
@@ -654,7 +661,11 @@ private:
 
         stopTimer();
         refreshPlugins();
-        setStatus (ko ("스캔 끝: 플러그인 ") + juce::String (allTypes.size()) + ko ("개 (스캔 창에서 고른 폴더 기준)"), false);
+        const auto skipped = scanCoordinator->getSkippedMessage();
+        setStatus (skipped.isNotEmpty() ? skipped
+                                       : ko ("스캔 끝: 플러그인 ") + juce::String (allTypes.size()) + ko ("개 (스캔 창에서 고른 폴더 기준)"),
+                   skipped.isNotEmpty());
+        statusLabel.setTooltip (skipped);
     }
 
     void refreshPlugins()
@@ -754,9 +765,44 @@ private:
             return;
         }
 
+        scanCoordinator->prepareForScan (host.getKnownPlugins(), crashMarker);
+        statusLabel.setTooltip ({});
         setStatus (formatLabel (formatName) + ko (" 플러그인을 찾는 중... (창이 뜹니다)"), false);
         scanner->scanFor (*format);
         startTimer (250);
+    }
+
+    /** '목록 초기화': the scanned list, the files a crash put on the skip list and the crash marker all go, so the next
+        scan looks at every file afresh (a rescan alone skips files already in the list). The '사용' switches and every
+        chain stay as they are: a chain keeps its own description of each plugin. */
+    void resetList()
+    {
+        if (scanner->isScanning())
+        {
+            setStatus (ko ("스캔 중에는 초기화할 수 없습니다 - 스캔 창을 먼저 끝내세요."), true);
+            return;
+        }
+
+        juce::Component::SafePointer<Content> safe (this);
+        juce::AlertWindow::showAsync (juce::MessageBoxOptions()
+                                          .withIconType (juce::MessageBoxIconType::QuestionIcon)
+                                          .withTitle (ko ("플러그인 목록 초기화"))
+                                          .withMessage (ko ("찾아 둔 플러그인 목록과 '문제 파일' 기록을 모두 지웁니다. 초기화한 뒤 [VST3 스캔]으로 다시 찾으세요.\n"
+                                                            "체인에 넣어 둔 플러그인과 '사용' 체크는 그대로입니다."))
+                                          .withButton (ko ("초기화"))
+                                          .withButton (ko ("취소")),
+                                      [safe] (int result)
+        {
+            if (safe == nullptr || result != 1 || safe->scanner->isScanning())
+                return;
+
+            auto& list = safe->host.getKnownPlugins();
+            list.clear();
+            list.clearBlacklistedFiles();
+            safe->crashMarker.deleteFile();
+            safe->statusLabel.setTooltip ({});
+            safe->setStatus (ko ("플러그인 목록을 비웠습니다 - [VST3 스캔]으로 다시 찾으세요."), false);
+        });
     }
 
     void removeSelectedPlugin()
@@ -1042,13 +1088,16 @@ private:
 
     PluginManagerWindow& owner;
     PluginHost& host;
+    PluginScanCoordinator* scanCoordinator = nullptr; // owned by host's KnownPluginList
+    const juce::File crashMarker = juce::File::getSpecialLocation (juce::File::userApplicationDataDirectory)
+                                      .getChildFile ("LiveMix/scan.crashed");
     LiveMixSettings& settings;
     juce::File presetsFolder;
     juce::Array<juce::PluginDescription> allTypes, types;   // every known effect plugin; the ones the search shows (the table's rows)
     std::vector<PluginPreset> presets;
     PluginModel pluginModel;
     PresetModel presetModel;
-    std::unique_ptr<juce::PluginListComponent> scanner;
+    std::unique_ptr<PluginScanListComponent> scanner;
     std::unique_ptr<juce::FileChooser> chooser;
     juce::Component::SafePointer<juce::DialogWindow> builderWindow;
 
@@ -1056,7 +1105,7 @@ private:
     juce::TextEditor pluginSearch;
     juce::ToggleButton vst2Toggle;
     juce::TableListBox pluginTable, presetTable;
-    juce::TextButton scanVst3Button, scanVst2Button, removeButton, enableAllButton;
+    juce::TextButton scanVst3Button, scanVst2Button, removeButton, enableAllButton, resetListButton;
     juce::TextButton newPresetButton, renamePresetButton, deletePresetButton, exportPresetButton, importPresetButton, openFolderButton;
 };
 

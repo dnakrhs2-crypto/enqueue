@@ -67,6 +67,8 @@ target_sources(EnqueueTests PRIVATE
     LiveMixAsioChannelTests.cpp
     LiveMixObsSenderTests.cpp
     LiveMixObsInstallerTests.cpp
+    LiveMixShellPluginTests.cpp
+    LiveMixRealPluginScanTests.cpp
     WebDavBackupTests.cpp
     MixDocumentTests.cpp
     ChannelCardTests.cpp
@@ -146,6 +148,32 @@ foreach(_fixture IN ITEMS OLD CURRENT OBS32 OBS33)
     add_dependencies(EnqueueTests ObsInstallerFixture${_fixture})
     target_compile_definitions(EnqueueTests PRIVATE "LM_OBS_TEST_${_fixture}_DLL=\"$<TARGET_FILE:ObsInstallerFixture${_fixture}>\"")
 endforeach()
+
+# Real multi-class VST3 modules built from the SDK interfaces, without JUCE's plugin client.
+set_property(SOURCE LiveMixShellPluginTests.cpp APPEND PROPERTY INCLUDE_DIRECTORIES
+    "${juce_SOURCE_DIR}/modules/juce_audio_processors_headless/format_types/VST3_SDK")
+set(_fixture_kind 0)
+foreach(_fixture IN ITEMS Shell Crasher Hang Empty)
+    set(_fixture_target LiveMixVst3${_fixture})
+    set(_fixture_name "LiveMix Test ${_fixture}")
+    set(_fixture_bundle "${CMAKE_CURRENT_BINARY_DIR}/vst3-fixtures/$<CONFIG>/${_fixture_name}.vst3")
+    add_library(${_fixture_target} SHARED LiveMixVst3Fixture.cpp)
+    target_include_directories(${_fixture_target} PRIVATE
+        "${juce_SOURCE_DIR}/modules/juce_audio_processors_headless/format_types/VST3_SDK")
+    target_compile_definitions(${_fixture_target} PRIVATE LM_FIXTURE_KIND=${_fixture_kind} NOMINMAX)
+    set_property(TARGET ${_fixture_target} PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+    add_custom_command(TARGET ${_fixture_target} POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E make_directory "${_fixture_bundle}/Contents/x86_64-win"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different "$<TARGET_FILE:${_fixture_target}>"
+            "${_fixture_bundle}/Contents/x86_64-win/${_fixture_name}.vst3"
+        VERBATIM)
+    add_dependencies(EnqueueTests ${_fixture_target})
+    string(TOUPPER "${_fixture}" _fixture_upper)
+    target_compile_definitions(EnqueueTests PRIVATE "LM_VST3_${_fixture_upper}=\"${_fixture_bundle}\"")
+    math(EXPR _fixture_kind "${_fixture_kind} + 1")
+endforeach()
+add_dependencies(EnqueueTests LiveMix)
+target_compile_definitions(EnqueueTests PRIVATE "LM_SCAN_WORKER_EXE=\"$<TARGET_FILE:LiveMix>\"")
 
 # Compile the same C17 implementation with allocator hooks, including in Release.
 # No global allocator overrides: unrelated JUCE and UI tests retain their allocator.

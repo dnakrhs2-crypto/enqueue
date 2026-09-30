@@ -3,6 +3,7 @@
 #include "MixDocument.h"
 #include "MixEngine.h"
 #include "ObsPluginInstaller.h"
+#include "PluginScan.h"
 #include "app/Updater.h"
 #include "ui/LiveMixLookAndFeel.h"
 #include "ui/MainComponent.h"
@@ -144,11 +145,24 @@ public:
     const juce::String getApplicationVersion() override { return JUCE_APPLICATION_VERSION_STRING; }
     bool moreThanOneInstanceAllowed() override
     {
-        return ObsPluginInstaller::isInstallCommandLine (getCommandLineParameters());
+        return PluginScanWorker::isWorkerCommandLine (getCommandLineParameters())
+            || ObsPluginInstaller::isInstallCommandLine (getCommandLineParameters());
     }
 
     void initialise (const juce::String& commandLine) override
     {
+        if (PluginScanWorker::isWorkerCommandLine (commandLine))
+        {
+            PluginScanWorker::suppressCrashDialogs();
+            scanWorker = std::make_unique<PluginScanWorker>();
+            if (! scanWorker->start (commandLine))
+            {
+                setApplicationReturnValue (1);
+                quit();
+            }
+            return;
+        }
+
         if (ObsPluginInstaller::isInstallCommandLine (commandLine))
         {
             juce::String message;
@@ -287,6 +301,7 @@ public:
 
     void shutdown() override
     {
+        scanWorker = nullptr;
         stopTimer();
 
         // A second normal instance or the headless OBS installer owns none of the regular app objects.
@@ -353,6 +368,7 @@ public:
 
     void anotherInstanceStarted (const juce::String& commandLine) override
     {
+        if (PluginScanWorker::isWorkerCommandLine (commandLine)) return;
         if (mainWindow != nullptr)
         {
             showWindow();
@@ -537,6 +553,7 @@ private:
         }
     }
 
+    std::unique_ptr<PluginScanWorker> scanWorker;
     std::unique_ptr<LiveMixLookAndFeel> lookAndFeel;
     std::unique_ptr<LiveMixSettings> settings;
     std::unique_ptr<MixEngine> engine;
