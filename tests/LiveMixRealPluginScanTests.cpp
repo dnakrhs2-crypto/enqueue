@@ -64,7 +64,10 @@ public:
 
         PluginHost host;
         PluginScanCoordinator::Options options;
-        options.executable = juce::File (LM_SCAN_WORKER_EXE);
+        // LIVEMIX_REAL_WORKER=enqueue runs the same check through Enqueue.exe's worker
+        const bool enqueueWorker = juce::SystemStats::getEnvironmentVariable ("LIVEMIX_REAL_WORKER", {}) == "enqueue";
+        options.executable = juce::File (enqueueWorker ? ENQUEUE_SCAN_WORKER_EXE : LM_SCAN_WORKER_EXE);
+        logMessage ("worker: " + options.executable.getFullPathName());
         options.logFile = workDir.getChildFile ("plugin-scan.log");
         options.timeoutMs = 60 * 60 * 1000;
         auto owned = std::make_unique<PluginScanCoordinator> (options);
