@@ -3,7 +3,7 @@
 #include <windows.h>
 #include <werapi.h>
 
-namespace gocue::livemix
+namespace gocue
 {
 namespace
 {
@@ -32,7 +32,7 @@ public:
     // JUCE ChildProcessWorker's framing and control messages (juce_ConnectedChildProcess.cpp).
     // Owning the pipe/process here allows disconnect before teardown: ChildProcessCoordinator's
     // killWorkerProcess writes to the dead pipe and can wait its full 8 s reconnect timeout.
-    Connection() : InterprocessConnection (false, 0x712baf04), Thread ("LiveMix scan ping") {}
+    Connection() : InterprocessConnection (false, 0x712baf04), Thread ("Plugin scan ping") {}
     ~Connection() override
     {
         signalThreadShouldExit();
@@ -54,7 +54,7 @@ public:
         limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
         if (job == nullptr || ! SetInformationJobObject (job, JobObjectExtendedLimitInformation, &limits, sizeof (limits)))
             return false;
-        const auto pipeName = "livemix-scan-" + juce::Uuid().toString();
+        const auto pipeName = "gocue-scan-" + juce::Uuid().toString();
         if (! createPipe (pipeName, 8000)) return false;
         const auto command = executable.getFullPathName().quoted() + " " + workerPrefix + pipeName;
         std::wstring mutableCommand (command.toWideCharPointer());
@@ -141,7 +141,6 @@ private:
     bool lost = false;
 };
 
-PluginScanCoordinator::PluginScanCoordinator() : PluginScanCoordinator (Options {}) {}
 PluginScanCoordinator::PluginScanCoordinator (Options o) : options (std::move (o)) {}
 PluginScanCoordinator::~PluginScanCoordinator() = default;
 
@@ -253,7 +252,7 @@ void PluginScanCoordinator::record (const Result& result)
 bool PluginScanWorker::isWorkerCommandLine (const juce::String& line)
 {
     return line.trimStart().startsWith (workerPrefix)
-        || juce::ArgumentList ("LiveMix", line).containsOption ("--plugin-scan-worker");
+        || juce::ArgumentList (workerId, line).containsOption ("--plugin-scan-worker");
 }
 void PluginScanWorker::suppressCrashDialogs()
 {
@@ -323,4 +322,4 @@ void PluginScanWorker::handleAsyncUpdate()
         send (reply);
     }
 }
-} // namespace gocue::livemix
+} // namespace gocue

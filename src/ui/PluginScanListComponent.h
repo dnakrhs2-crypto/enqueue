@@ -1,7 +1,7 @@
 #pragma once
-#include "PluginScan.h"
+#include "audio/PluginScan.h"
 
-namespace gocue::livemix
+namespace gocue
 {
 /** JUCE 8.0.15's progress dialog sets a private stop flag, but doesn't signal the current
     ThreadPoolJob until that file returns. Forward modal dismissal to our interruptible scanner. */
@@ -9,8 +9,10 @@ class PluginScanListComponent final : public juce::PluginListComponent, private 
 {
 public:
     PluginScanListComponent (juce::AudioPluginFormatManager& formats, juce::KnownPluginList& list,
-                             const juce::File& crashMarker, PluginScanCoordinator& c)
-        : PluginListComponent (formats, list, crashMarker, nullptr, false), coordinator (c)
+                             const juce::File& crashMarker, PluginScanCoordinator& c,
+                             juce::String title, juce::PropertiesFile* properties = nullptr)
+        : PluginListComponent (formats, list, crashMarker, properties, false),
+          progressTitle (std::move (title)), coordinator (c)
     {
         setScanDialogText (progressTitle, juce::String::fromUTF8 ("플러그인을 찾는 중입니다."));
         setNumberOfThreadsForScanning (1);
@@ -51,9 +53,9 @@ private:
                 }));
         }
     }
-    const juce::String progressTitle = juce::String::fromUTF8 ("LiveMix 플러그인 스캔");
+    const juce::String progressTitle;
     PluginScanCoordinator& coordinator;
     juce::Component::SafePointer<juce::Component> watched;
     unsigned generation = 0;
 };
-} // namespace gocue::livemix
+} // namespace gocue

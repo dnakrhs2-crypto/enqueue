@@ -108,6 +108,8 @@ public:
     juce::PropertiesFile* getPropertiesFile() noexcept { return settings; }
     /** File the plugin scanner uses to blacklist plugins that crashed a previous scan. */
     juce::File getDeadMansPedalFile() const;
+    /** Scan coordinator log in this app's settings folder (%APPDATA%/Enqueue by default). */
+    juce::File getPluginScanLogFile() const;
 
 private:
     void protectShortcutXml();

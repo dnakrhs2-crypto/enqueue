@@ -1,5 +1,5 @@
 #include "audio/PluginHost.h"
-#include "PluginScan.h"
+#include "audio/PluginScan.h"
 #include "ui/PluginScanListComponent.h"
 #include <pluginterfaces/base/ipluginbase.h>
 #include <pluginterfaces/vst/ivstcomponent.h>
@@ -12,7 +12,7 @@ namespace gocue::tests
 {
 namespace
 {
-    using Scanner = livemix::PluginScanCoordinator;
+    using Scanner = PluginScanCoordinator;
     using Outcome = Scanner::Outcome;
 
     struct ScanFixture
@@ -260,9 +260,9 @@ public:
     void runTest() override
     {
         beginTest ("worker command line does not enter the normal application");
-        expect (livemix::PluginScanWorker::isWorkerCommandLine ("--plugin-scan-worker:p123"));
-        expect (livemix::PluginScanWorker::isWorkerCommandLine ("--plugin-scan-worker"));
-        expect (! livemix::PluginScanWorker::isWorkerCommandLine ("--safe-mode"));
+        expect (PluginScanWorker::isWorkerCommandLine ("--plugin-scan-worker:p123"));
+        expect (PluginScanWorker::isWorkerCommandLine ("--plugin-scan-worker"));
+        expect (! PluginScanWorker::isWorkerCommandLine ("--safe-mode"));
         expect (juce::File (LM_SCAN_WORKER_EXE).existsAsFile());
         expectEquals (workerCount(), 0);
 
@@ -397,8 +397,9 @@ public:
             cancel.scan (LM_VST3_EMPTY, warmup);
             const auto pid = cancel.scanner->getResults().back().workerPid;
             cancel.scanner->prepareForScan (cancel.host.getKnownPlugins());
-            livemix::PluginScanListComponent list (cancel.host.getFormatManager(), cancel.host.getKnownPlugins(),
-                                                  cancel.directory.getChildFile ("scan.crashed"), *cancel.scanner);
+            PluginScanListComponent list (cancel.host.getFormatManager(), cancel.host.getKnownPlugins(),
+                                          cancel.directory.getChildFile ("scan.crashed"), *cancel.scanner,
+                                          juce::String::fromUTF8 ("LiveMix 플러그인 스캔"));
             list.scanFor (*cancel.host.getVST3Format(), { LM_VST3_HANG });
             auto* progress = juce::Component::getCurrentlyModalComponent();
             expect (progress != nullptr);

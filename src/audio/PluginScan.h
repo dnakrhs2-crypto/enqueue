@@ -5,17 +5,16 @@
 #include <queue>
 #include <vector>
 
-namespace gocue::livemix
+namespace gocue
 {
-/** Installed only on LiveMix's list; the shared Enqueue PluginHost stays unchanged. */
+/** Installed on the application's PluginHost list; plugin code runs in its scan worker. */
 class PluginScanCoordinator final : public juce::KnownPluginList::CustomScanner
 {
 public:
     struct Options
     {
-        juce::File executable = juce::File::getSpecialLocation (juce::File::currentExecutableFile);
-        juce::File logFile = juce::File::getSpecialLocation (juce::File::userApplicationDataDirectory)
-                                 .getChildFile ("LiveMix/logs/plugin-scan.log");
+        juce::File executable;
+        juce::File logFile;
         int timeoutMs = 60 * 60 * 1000;   // Waves 17's WaveShell (718 plugins) took about 6 minutes on 2026-09-30; the scan window cancels
     };
     enum class Outcome { completed, crashed, timedOut, cancelled, workerFailed };
@@ -29,7 +28,6 @@ public:
         bool onMessageThread = false;
     };
 
-    PluginScanCoordinator();
     explicit PluginScanCoordinator (Options);
     ~PluginScanCoordinator() override;
     bool findPluginTypesFor (juce::AudioPluginFormat&, juce::OwnedArray<juce::PluginDescription>&,
@@ -69,4 +67,4 @@ private:
     std::queue<juce::MemoryBlock> pending;
     bool readySent = false;
 };
-} // namespace gocue::livemix
+} // namespace gocue

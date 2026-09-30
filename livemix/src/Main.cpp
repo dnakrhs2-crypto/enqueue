@@ -3,7 +3,7 @@
 #include "MixDocument.h"
 #include "MixEngine.h"
 #include "ObsPluginInstaller.h"
-#include "PluginScan.h"
+#include "audio/PluginScan.h"
 #include "app/Updater.h"
 #include "ui/LiveMixLookAndFeel.h"
 #include "ui/MainComponent.h"

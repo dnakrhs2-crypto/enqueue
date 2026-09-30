@@ -4,7 +4,7 @@
 // Runs only when LIVEMIX_REAL_VST3 names a module; LIVEMIX_REAL_LOAD picks the instances ("name:Rhapsody|first:2",
 // default "first:2"). 2026-09-30: Waves 17 crashed LiveMix when its WaveShell was scanned on a background thread.
 #include "audio/PluginHost.h"
-#include "PluginScan.h"
+#include "audio/PluginScan.h"
 
 #include <windows.h>
 
@@ -63,11 +63,11 @@ public:
         workDir.createDirectory();
 
         PluginHost host;
-        livemix::PluginScanCoordinator::Options options;
+        PluginScanCoordinator::Options options;
         options.executable = juce::File (LM_SCAN_WORKER_EXE);
         options.logFile = workDir.getChildFile ("plugin-scan.log");
         options.timeoutMs = 60 * 60 * 1000;
-        auto owned = std::make_unique<livemix::PluginScanCoordinator> (options);
+        auto owned = std::make_unique<PluginScanCoordinator> (options);
         auto* coordinator = owned.get();
         host.getKnownPlugins().setCustomScanner (std::move (owned));
 

@@ -103,6 +103,7 @@ target_sources(GoCueCore INTERFACE
     ${CMAKE_CURRENT_SOURCE_DIR}/src/audio/LoudnessMeter.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/audio/PluginChain.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/audio/PluginHost.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/audio/PluginScan.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/audio/MediaFoundationAudioFormat.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/audio/StretchSource.cpp)
 
@@ -152,7 +153,8 @@ target_link_libraries(GoCueCore INTERFACE
     juce::juce_gui_extra
     juce::juce_recommended_config_flags
     juce::juce_recommended_warning_flags
-    mfplat mfreadwrite mfuuid propsys ole32 delayimp)   # Media Foundation AAC / M4A / WMA reader (delay-loaded: optional on Windows N)
+    mfplat mfreadwrite mfuuid propsys ole32 delayimp   # Media Foundation AAC / M4A / WMA reader (delay-loaded: optional on Windows N)
+    wer)   # Scan worker crash dialog suppression
 
 # mfplat / mfreadwrite are missing on Windows N editions without the Media Feature Pack: delay-load them so the app
 # still starts (MediaFoundationAudioFormat::isAvailable() probes the DLLs before touching them)
@@ -265,14 +267,13 @@ target_sources(LiveMixCore INTERFACE
     ${CMAKE_CURRENT_SOURCE_DIR}/livemix/src/LiveMixSettings.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/livemix/src/GlobalHotkeys.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/livemix/src/PluginPreset.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/livemix/src/PluginScan.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/livemix/src/PluginSet.cpp)
 target_include_directories(LiveMixCore INTERFACE
     ${CMAKE_CURRENT_SOURCE_DIR}/livemix/src
     ${CMAKE_CURRENT_SOURCE_DIR}/livemix/shared)
 target_link_libraries(LiveMixCore INTERFACE GoCueCore)
 if(WIN32)
-    target_link_libraries(LiveMixCore INTERFACE bcrypt advapi32 version shell32 ole32 wer)
+    target_link_libraries(LiveMixCore INTERFACE bcrypt advapi32 version shell32 ole32)
 endif()
 target_sources(LiveMixCore INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/livemix/src/WebDavBackup.cpp)
 

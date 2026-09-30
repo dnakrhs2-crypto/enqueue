@@ -386,6 +386,11 @@ juce::File AppSettings::getDeadMansPedalFile() const
     return settings->getFile().getSiblingFile ("RecentlyCrashedPluginsList");
 }
 
+juce::File AppSettings::getPluginScanLogFile() const
+{
+    return settings->getFile().getParentDirectory().getChildFile ("logs/plugin-scan.log");
+}
+
 juce::File AppSettings::getFileValue (const char* key) const
 {
     const auto path = settings->getValue (key);

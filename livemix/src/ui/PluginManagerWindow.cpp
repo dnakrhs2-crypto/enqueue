@@ -1,5 +1,5 @@
 #include "ui/PluginManagerWindow.h"
-#include "PluginScan.h"
+#include "audio/PluginScan.h"
 #include "ui/PluginScanListComponent.h"
 
 #include "PluginSearch.h"
@@ -396,13 +396,17 @@ public:
         button (enableAllButton, ko ("전부 사용"), [this] { setAll (true); });
         button (resetListButton, ko ("목록 초기화"), [this] { resetList(); });
 
-        auto isolatedScanner = std::make_unique<PluginScanCoordinator>();
+        PluginScanCoordinator::Options scanOptions;
+        scanOptions.executable = juce::File::getSpecialLocation (juce::File::currentExecutableFile);
+        scanOptions.logFile = juce::File::getSpecialLocation (juce::File::userApplicationDataDirectory)
+                                  .getChildFile ("LiveMix/logs/plugin-scan.log");
+        auto isolatedScanner = std::make_unique<PluginScanCoordinator> (scanOptions);
         scanCoordinator = isolatedScanner.get();
         host.getKnownPlugins().setCustomScanner (std::move (isolatedScanner));
 
         // JUCE drives progress/cancellation; plugin code runs on the worker's message thread.
         scanner = std::make_unique<PluginScanListComponent> (host.getFormatManager(), host.getKnownPlugins(),
-                                                            crashMarker, *scanCoordinator);
+                                                            crashMarker, *scanCoordinator, ko ("LiveMix 플러그인 스캔"));
         addChildComponent (*scanner);
 
         styleCaption (presetsCaption, ko ("플러그인 프리셋"));

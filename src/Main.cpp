@@ -3,6 +3,7 @@
 #include "app/Updater.h"
 #include "audio/AudioEngine.h"
 #include "audio/PluginHost.h"
+#include "audio/PluginScan.h"
 #include "ui/GoCueLookAndFeel.h"
 #include "ui/MainComponent.h"
 #include "ui/UiUtils.h"
@@ -21,10 +22,27 @@ public:
 
     const juce::String getApplicationName() override       { return JUCE_APPLICATION_NAME_STRING; }
     const juce::String getApplicationVersion() override    { return JUCE_APPLICATION_VERSION_STRING; }
-    bool moreThanOneInstanceAllowed() override             { return false; }   // a project file opened from Explorer lands in the running window
+    bool moreThanOneInstanceAllowed() override
+    {
+        // Only scan workers bypass forwarding Explorer project opens to the running window.
+        return PluginScanWorker::isWorkerCommandLine (getCommandLineParameters());
+    }
 
     void initialise (const juce::String& commandLine) override
     {
+        if (PluginScanWorker::isWorkerCommandLine (commandLine))
+        {
+            PluginScanWorker::suppressCrashDialogs();
+            scanWorker = std::make_unique<PluginScanWorker>();
+            if (! scanWorker->start (commandLine))
+            {
+                setApplicationReturnValue (1);
+                quit();
+            }
+            return;
+        }
+
+        commandManager = std::make_unique<juce::ApplicationCommandManager>();
         lookAndFeel = std::make_unique<GoCueLookAndFeel>();
         juce::LookAndFeel::setDefaultLookAndFeel (lookAndFeel.get());
 
@@ -57,8 +75,8 @@ public:
                 settings->setPluginList (engine->getPluginHost().createKnownPluginsXml().get());
         };
 
-        commandManager.registerAllCommandsForTarget (this);
-        mainWindow = std::make_unique<MainWindow> (getApplicationName(), *engine, *settings, commandManager);
+        commandManager->registerAllCommandsForTarget (this);
+        mainWindow = std::make_unique<MainWindow> (getApplicationName(), *engine, *settings, *commandManager);
         announceVersionChange();
 
         if (deviceError.isNotEmpty())
@@ -144,7 +162,13 @@ public:
 
     void shutdown() override
     {
+        scanWorker = nullptr;
         stopTimer();
+
+        // A scan worker or a forwarded second instance owns no regular app objects.
+        if (settings == nullptr)
+            return;
+
         Updater::shutdown();
 
         if (engine != nullptr)
@@ -156,6 +180,7 @@ public:
             settings->setWindowState (mainWindow->getWindowStateAsString());
 
         mainWindow = nullptr;
+        commandManager = nullptr;
 
         if (engine != nullptr)
             engine->shutdown();
@@ -187,6 +212,9 @@ public:
 
     void anotherInstanceStarted (const juce::String& commandLine) override
     {
+        if (PluginScanWorker::isWorkerCommandLine (commandLine))
+            return;
+
         if (mainWindow == nullptr)
             return;
 
@@ -299,7 +327,8 @@ private:
         JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (MainWindow)
     };
 
-    juce::ApplicationCommandManager commandManager;
+    std::unique_ptr<PluginScanWorker> scanWorker;
+    std::unique_ptr<juce::ApplicationCommandManager> commandManager;
     std::unique_ptr<GoCueLookAndFeel> lookAndFeel;
     juce::Time launchedAt, lastQuietCheck;
     bool safeMode = false;

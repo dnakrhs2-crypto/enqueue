@@ -68,6 +68,7 @@ target_sources(EnqueueTests PRIVATE
     LiveMixObsSenderTests.cpp
     LiveMixObsInstallerTests.cpp
     LiveMixShellPluginTests.cpp
+    EnqueuePluginScanTests.cpp
     LiveMixRealPluginScanTests.cpp
     WebDavBackupTests.cpp
     MixDocumentTests.cpp
@@ -172,8 +173,10 @@ foreach(_fixture IN ITEMS Shell Crasher Hang Empty)
     target_compile_definitions(EnqueueTests PRIVATE "LM_VST3_${_fixture_upper}=\"${_fixture_bundle}\"")
     math(EXPR _fixture_kind "${_fixture_kind} + 1")
 endforeach()
-add_dependencies(EnqueueTests LiveMix)
-target_compile_definitions(EnqueueTests PRIVATE "LM_SCAN_WORKER_EXE=\"$<TARGET_FILE:LiveMix>\"")
+add_dependencies(EnqueueTests LiveMix Enqueue)
+target_compile_definitions(EnqueueTests PRIVATE
+    "LM_SCAN_WORKER_EXE=\"$<TARGET_FILE:LiveMix>\""
+    "ENQUEUE_SCAN_WORKER_EXE=\"$<TARGET_FILE:Enqueue>\"")
 
 # Compile the same C17 implementation with allocator hooks, including in Release.
 # No global allocator overrides: unrelated JUCE and UI tests retain their allocator.
