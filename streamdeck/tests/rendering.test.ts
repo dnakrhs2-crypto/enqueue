@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
 import { performance } from "node:perf_hooks";
+import { setTimeout as delay } from "node:timers/promises";
 import { KeyRenderer, keyImage, actionImage, xml, type KeyOutput, type KeyVisual } from "../src/ui/key-renderer.js";
 import { FeedbackRenderer } from "../src/ui/feedback.js";
 import { strings } from "../src/ui/strings.js";
@@ -28,6 +29,48 @@ test("renderer sends only changed values in state/image/title order and shares i
   assert.equal(keyImage("on", "ko"), on.image); assert.equal(xml('<&"\''), "&lt;&amp;&quot;&apos;");
 });
 
+test("silent renderer sends only alerts and spends its rolling 10/s budget only on alerts", async t => {
+  const output = new Output(), history: number[] = [], renderer = new KeyRenderer(output, history, { silent: true });
+  t.after(() => renderer.dispose());
+  renderer.alert(); await until(output, "call", () => output.calls.length === 1);
+  for (let n = 0; n < 30; n++) {
+    renderer.render({ state: n % 2 ? 1 : 0, image: `image-${n}`, title: `title-${n}` });
+    await Promise.resolve();
+  }
+  assert.deepEqual(output.calls.map(c => c.method), ["alert"]); assert.equal(history.length, 1);
+  for (let n = 2; n <= 10; n++) {
+    renderer.alert(); await until(output, "call", () => output.calls.length === n);
+  }
+  renderer.render(on); renderer.alert();
+  assert.equal(output.calls.length, 10, "An eleventh alert waits for the rolling budget");
+  await until(output, "call", () => output.calls.length === 11);
+  assert.deepEqual(output.calls.map(c => c.method), Array(11).fill("alert"));
+  for (const call of output.calls) assert.ok(output.calls.filter(c => c.at <= call.at && c.at > call.at - 1000).length <= 10);
+  renderer.dispose(); renderer.render(on); renderer.alert(); await Promise.resolve();
+  assert.equal(output.calls.length, 11);
+});
+
+test("key budget tolerates a short delivery delay before the host receives the first batch", async t => {
+  const output = new Output(), dispatched = new EventEmitter();
+  const receipts: Promise<void>[] = [];
+  const renderer = new KeyRenderer({
+    setState: value => output.setState(value), setImage: value => output.setImage(value), setTitle: value => output.setTitle(value),
+    showAlert: async () => {
+      // Like the SDK, resolve when queued; host receipt can happen later.
+      receipts.push(delay(receipts.length < 10 ? 8 : 0).then(() => output.showAlert()));
+      dispatched.emit("send");
+    }
+  }, [], { silent: true });
+  t.after(async () => { renderer.dispose(); await Promise.all(receipts); });
+  for (let n = 1; n <= 11; n++) {
+    renderer.alert(); await until(dispatched, "send", () => receipts.length === n);
+  }
+  await Promise.all(receipts);
+  assert.deepEqual(output.calls.map(c => c.method), Array(11).fill("alert"));
+  for (const call of output.calls) assert.ok(output.calls.filter(c => c.at <= call.at && c.at > call.at - 1000).length <= 10,
+    "The host must still receive at most 10 calls in every rolling second");
+});
+
 test("release images have localized labels, distinct group shapes and independent state colors", () => {
   for (const language of ["ko", "en"] as const) {
     const t = strings[language];
@@ -46,7 +89,7 @@ test("release images have localized labels, distinct group shapes and independen
 
 test("nine manifest actions have required controllers/states, translated triggers and all assets", async () => {
   const manifest = JSON.parse(await readFile(resolve(pluginRoot, "manifest.json"), "utf8"));
-  assert.equal(manifest.Version, "1.1.0.0");
+  assert.equal(manifest.Version, "1.2.0.0");
   // The actual static previews and runtime rendering share the same geometry.
   const samples = [
     ["mic/on", micSvg("on", strings.en)],
@@ -77,7 +120,8 @@ test("nine manifest actions have required controllers/states, translated trigger
       assert.deepEqual(a.States.map((s: any) => s.Name), ["All OFF", "All ON"]);
     }
     for (const property of ["DisableAutomaticStates", "DisableCaching"]) assert.equal(a[property], true);
-    for (const property of ["UserTitleEnabled", "SupportedInMultiActions", "SupportedInKeyLogicActions"]) assert.equal(a[property], false);
+    for (const property of ["UserTitleEnabled", "SupportedInKeyLogicActions"]) assert.equal(a[property], false);
+    assert.equal(a.SupportedInMultiActions, !dial);
     for (const locale of [ko, en]) { assert.ok(locale[a.UUID].Name); assert.ok(locale[a.UUID].Tooltip); assert.ok(locale[a.UUID].States.every((s: any) => s.Name)); }
     for (const [path, size] of [[a.Icon, 20], ...a.States.map((s: any) => [s.Image, 72]), ...(dial ? [[a.Encoder.Icon, 72]] : [])]) {
       for (const [suffix, scale] of [["", 1], ["@2x", 2]] as const) {

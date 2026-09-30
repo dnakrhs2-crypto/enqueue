@@ -1,5 +1,25 @@
 # LiveMix Stream Deck changelog
 
+## 1.2.0 — 2026-09-30
+
+### 한국어
+
+- 키 액션 8개를 Stream Deck 다중 동작에서 사용할 수 있게 했습니다. 일반 목록에는 보이지만 다중 동작 목록에는 없다는 사용자 보고에 따라, 처음 설계에서 명시적으로 꺼 둔 지원 옵션을 수정했습니다.
+- FX 보내는 양 다이얼은 제외합니다. 회전이 본체인 다이얼 동작은 순서대로 실행하는 다중 동작에 맞지 않고, 키로 쓰는 몫은 이미 'FX 보내는 양 ±' 키가 맡고 있습니다. Key Logic 지원은 9개 모두 계속 꺼져 있습니다.
+- 다중 동작 인스턴스는 키 상태·이미지·제목을 보내지 않으며, 실패 알림 `showAlert`만 기존 초당 10회 호출 예산을 사용합니다. 일반 키 표시와 기존 명령·바인딩·큐 동작은 유지합니다.
+- 키 출력의 호출 기록을 20ms 더 유지해 짧은 전달 지연으로 호스트 수신 시각의 초당 10회 예산을 넘는 경계 문제를 보정했습니다.
+- PI의 동작(mode) 설정을 그대로 실행합니다. 토글·뮤트·증감·지정 동작은 키의 두 상태와 1:1로 대응하지 않아 호스트의 `userDesiredState`를 사용하지 않습니다. 다중 동작 PI의 기존 안내문에 한국어/영어 설명을 덧붙였습니다.
+- 실제 배포물을 실행하는 가짜 호스트 테스트로 무출력, 상태 갱신, 명령 실행, 실패 알림, 일반 키와의 공존 및 ko/en PI 안내를 검증합니다.
+
+### English
+
+- Enabled all eight Keypad actions in Stream Deck Multi Actions. A user report that actions appeared only in the ordinary list exposed the original design's explicit opt-out.
+- FX Send Amount remains excluded: a dial whose point is rotation does not fit a sequence of steps, and the existing FX Send ± key already covers keys. Key Logic support remains disabled for all nine actions.
+- Multi Action instances send no key state, image or title. Failure alerts still use `showAlert` and the existing 10 calls/second budget. Ordinary rendering, commands, bindings and queue behavior are preserved.
+- Key output retains its call history for an extra 20 ms to protect the 10 calls/second boundary against short host-delivery delays.
+- The PI Mode setting remains authoritative. Toggle, mute, increase/decrease and set modes do not map one-to-one to two key states, so the host's `userDesiredState` is ignored. The Korean/English PI appends an explanation to its existing notes.
+- Built-plugin fake-host tests cover silent output, state refresh, command execution, failure alerts, ordinary keys alongside Multi Actions and localized PI guidance.
+
 ## 1.1.0 — 2026-09-09
 
 ### 한국어

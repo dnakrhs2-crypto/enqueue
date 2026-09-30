@@ -132,6 +132,7 @@
     "choose": "Select a microphone",
     "offlineHelp": "Start LiveMix and enable Settings → External control (Stream Deck).",
     "disabledHelp": "In LiveMix, enable Settings → External control (Stream Deck).",
+    "multiActionNote": "In a multi-action there is no key artwork or state. The Mode above is what runs.",
     "failure": "The command failed. Check the connection and selected target.",
     "delayed": "Input delayed",
     "invalidSettings": "Check the action settings.",

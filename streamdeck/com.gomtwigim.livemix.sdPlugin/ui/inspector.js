@@ -3,7 +3,7 @@
   "use strict";
   const byId = id => document.getElementById(id);
   let socket, context, uuid, kind = "mic", settings = {}, channels = [], fx = [], groupIndices = [], counts;
-  let request = 0, requestId = "", sequence = -1, session, revision = -1, ready = false;
+  let request = 0, requestId = "", sequence = -1, session, revision = -1, ready = false, isInMultiAction = false;
   let t = window.LiveMixStrings.en;
   const isMute = () => kind.endsWith("mute-group");
   const isSendStep = () => kind === "fx-send-step";
@@ -45,7 +45,10 @@
     }
     for (const n of indices) group.append(option(n, t.group + " " + n + (isGroupAll() ? " · " + (groupCounts.get(n) === 1 ? t.groupMicCountOne : t.groupMicCount).replace("{count}", String(groupCounts.get(n))) : "")));
     group.value = String(index);
-    if (isMute()) byId("note").textContent = t.membershipNote + "\n" + t.targets.replace("{count}", String(ready && counts ? counts[kind === "mic-mute-group" ? "mic" : "fx"] : "—"));
+    const note = isMute() ? t.membershipNote + "\n" + t.targets.replace("{count}", String(ready && counts ? counts[kind === "mic-mute-group" ? "mic" : "fx"] : "—"))
+      : isGroupAll() ? t.groupAllNote + "\n" + t.groupNote : kind === "plugin-group" ? t.groupNote : kind === "fx-send" ? t.dialNote : "";
+    byId("note").textContent = [note, isInMultiAction ? t.multiActionNote : ""].filter(Boolean).join("\n");
+    byId("note").hidden = !byId("note").textContent;
   }
   function save(patch) {
     settings = { ...settings, settingsVersion: 1, ...patch };
@@ -87,8 +90,7 @@
     choices("step", (isSendStep() ? [1, 5, 10] : [1, 5]).map(value => [value, value + "%"]));
     choices("press", [["pre-post", t.prePost], ["none", t.pressNone]]);
     choices("display", [["connection", t.connection], ["session", t.session], ["audio", t.audio]]);
-    byId("note").hidden = !isMute() && !["plugin-group", "plugin-group-all", "fx-send"].includes(kind);
-    byId("note").textContent = isGroupAll() ? t.groupAllNote + "\n" + t.groupNote : kind === "plugin-group" ? t.groupNote : kind === "fx-send" ? t.dialNote : "";
+    isInMultiAction = false;
     byId("status").textContent = t.offlineHelp;
     showSettings(); updateLists();
     socket = new WebSocket("ws://127.0.0.1:" + port);
@@ -105,7 +107,7 @@
       if (message.event !== "sendToPropertyInspector" || !p || p.op !== "options" || p.context !== context || p.requestId !== requestId || !Number.isSafeInteger(p.sequence) || p.sequence <= sequence) return;
       const nextSession = p.instanceId + "/" + p.sessionId;
       if (p.connection === "ready" && (!Number.isSafeInteger(p.revision) || (session === nextSession && p.revision < revision))) return;
-      sequence = p.sequence; ready = p.connection === "ready";
+      sequence = p.sequence; ready = p.connection === "ready"; isInMultiAction = p.isInMultiAction === true;
       if (ready) { session = nextSession; revision = p.revision; }
       channels = ready && Array.isArray(p.channels) ? p.channels : [];
       fx = ready && Array.isArray(p.fx) ? p.fx : [];

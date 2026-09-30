@@ -74,7 +74,7 @@ manifest.Version = pkg.version + ".0";
 manifest.Description = "Control LiveMix microphones, mute groups, plugin groups and FX sends on this Windows PC.";
 manifest.Actions = actions.map(a => ({ UUID: `com.gomtwigim.livemix.${a.id}`, Name: locales.en[a.name], Tooltip: locales.en[a.tooltip],
   Icon: `imgs/actions/${a.id}/icon`, PropertyInspectorPath: "ui/inspector.html", Controllers: [a.id === "fx-send" ? "Encoder" : "Keypad"],
-  DisableAutomaticStates: true, DisableCaching: true, UserTitleEnabled: false, SupportedInMultiActions: false, SupportedInKeyLogicActions: false,
+  DisableAutomaticStates: true, DisableCaching: true, UserTitleEnabled: false, SupportedInMultiActions: a.id !== "fx-send", SupportedInKeyLogicActions: false,
   States: a.states.map((state, i) => ({ Name: locales.en[state], Image: `imgs/actions/${a.id}/${i ? "on" : "off"}`, TitleAlignment: "bottom", FontSize: 12 })),
   ...(a.id === "fx-send" ? { Encoder: { layout: "layouts/fx-send.json", Icon: "imgs/actions/fx-send/encoder", TriggerDescription: triggers(locales.en) } } : {}) }));
 await write(resolve(plugin, "manifest.json"), JSON.stringify(manifest, null, 2) + "\n");

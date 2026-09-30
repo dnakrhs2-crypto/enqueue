@@ -9,7 +9,7 @@ import { FeedbackRenderer } from "../ui/feedback.js";
 import { translator, type Language, type StringKey } from "../ui/i18n.js";
 
 export type ActionContext = {
-  id: string; device: string; handle: KeyAction<ActionSettings> | DialAction<ActionSettings>;
+  id: string; device: string; handle: KeyAction<ActionSettings> | DialAction<ActionSettings>; isInMultiAction: boolean;
   key?: KeyRenderer; feedback?: FeedbackRenderer; binding: MicBinding; fxBinding: FxBinding;
   settings: ActionSettings; valid: boolean; generation: number; error?: string; problem?: string; saveQueued?: boolean;
   press?: { at: number; rotated: boolean; session: string };
@@ -37,8 +37,9 @@ export abstract class LiveMixAction extends SingletonAction<ActionSettings> {
     const history = this.history.get(ev.action.id) ?? { calls: [] }; clearTimeout(history.expiry); this.history.set(ev.action.id, history);
     const binding = this.bindings.get(ev.action.id) ?? { mic: new MicBinding(settings), fx: new FxBinding(settings) };
     binding.mic.update(settings); binding.fx.update(settings); this.bindings.set(ev.action.id, binding);
-    const c: ActionContext = { id: ev.action.id, device: ev.action.device.id, handle: ev.action,
-      ...(ev.action.isKey() ? { key: new KeyRenderer(ev.action, history.calls) } : { feedback: new FeedbackRenderer(ev.action, history.calls) }),
+    const isInMultiAction = ev.action.isKey() && ev.payload.isInMultiAction === true;
+    const c: ActionContext = { id: ev.action.id, device: ev.action.device.id, handle: ev.action, isInMultiAction,
+      ...(ev.action.isKey() ? { key: new KeyRenderer(ev.action, history.calls, { silent: isInMultiAction }) } : { feedback: new FeedbackRenderer(ev.action, history.calls) }),
       binding: binding.mic, fxBinding: binding.fx, settings, valid: migrated.valid, generation: 0 };
     this.contexts.set(c.id, c); this.render(c);
     if (migrated.changed) void c.handle.setSettings(settings).catch(() => {});
@@ -161,7 +162,7 @@ export abstract class LiveMixAction extends SingletonAction<ActionSettings> {
     const snapshot = this.connection.store.snapshot, ready = this.connection.ready && !!snapshot;
     const binding = ready ? c.binding.resolve(snapshot) : undefined;
     void streamDeck.ui.sendToPropertyInspector({ op: "options", context: pi.context, requestId: pi.requestId, sequence: ++pi.sequence,
-      connection: ready ? "ready" : this.connection.status === "ready" ? "checking" : this.connection.status, language: this.language, settings: c.settings,
+      connection: ready ? "ready" : this.connection.status === "ready" ? "checking" : this.connection.status, language: this.language, settings: c.settings, isInMultiAction: c.isInMultiAction,
       message: ready ? c.error ?? c.problem ?? this.t("connected")
         : (c.error ? c.error + "\n" : "") + this.t(this.connection.status === "disabled" ? "disabledHelp" : "offlineHelp"),
       ...(ready ? { instanceId: snapshot.instanceId, sessionId: snapshot.sessionId, revision: snapshot.revision,

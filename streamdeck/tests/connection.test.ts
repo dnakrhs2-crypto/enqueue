@@ -22,7 +22,7 @@ test("hello token, v1, instance and complete snapshot gate readiness", async t =
   assert.equal(connection.ready, false);
   await assert.rejects(connection.command(mic(server.snapshot.state.channels[0].id)), /DISCONNECTED/);
   assert.equal(server.received[0].token, server.token); assert.deepEqual(server.received[0].supportedVersions, [1]);
-  assert.equal(server.received[0].client.version, "1.1.0"); assert.ok(connection.capabilities.includes("pluginGroupsEverywhere"));
+  assert.equal(server.received[0].client.version, "1.2.0"); assert.ok(connection.capabilities.includes("pluginGroupsEverywhere"));
   server.broadcastState("initial"); await ready();
   assert.equal(connection.store.snapshot?.instanceId, server.snapshot.instanceId);
 });

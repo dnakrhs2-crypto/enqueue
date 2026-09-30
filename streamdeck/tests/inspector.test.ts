@@ -25,6 +25,48 @@ class Socket {
   close(): void { this.onclose(); }
   receive(value: unknown): void { this.onmessage({ data: JSON.stringify(value) }); }
 }
+test("multi-action PI appends the exact ko/en note for all eight keys and preserves existing notes across updates/offline", async () => {
+  const [strings, script] = await Promise.all(["strings.js", "inspector.js"].map(file => readFile(resolve(pluginRoot, "ui", file), "utf8")));
+  const notes = {
+    ko: "다중 동작에서는 키 그림과 상태 표시가 없습니다. 위 ‘동작’ 설정이 그대로 실행됩니다.",
+    en: "In a multi-action there is no key artwork or state. The Mode above is what runs."
+  };
+  for (const language of ["ko", "en"] as const) for (const kind of ["mic", "all-mics", "mic-mute-group", "fx-mute-group", "plugin-group", "plugin-group-all", "fx-send-step", "status"]) {
+    const fields = ["channel", "fx", "group", "mode", "step", "target", "press", "display", "fallback", "title"];
+    const elements = Object.fromEntries([...fields.flatMap(id => [id, `${id}-row`, `${id}-label`]), "short-title", "status", "note"].map(id => [id, new Element()]));
+    const document = { documentElement: new Element(), getElementById: (id: string) => elements[id], createElement: () => new Element() };
+    const window: Record<string, any> = { addEventListener() {} }, environment = { window, document, WebSocket: Socket };
+    runInNewContext(strings!, environment); runInNewContext(script!, environment);
+    const settings = { mode: kind === "fx-send-step" ? "down" : "off", groupIndex: 1 };
+    window.connectElgatoStreamDeckSocket(1234, "pi", "registerPropertyInspector", JSON.stringify({ application: { language } }),
+      JSON.stringify({ context: "key", action: `com.gomtwigim.livemix.${kind}`, payload: { settings } }));
+    const socket = Socket.current; socket.onopen();
+    const offlineNote = elements.note!.textContent;
+    const dto = { op: "options", context: "key", requestId: "pi1", sequence: 1, connection: "ready", instanceId: "i", sessionId: "s", revision: 1,
+      language, message: window.LiveMixStrings[language].connected, isInMultiAction: false, muteGroupCounts: { mic: 2, fx: 1 } };
+    socket.receive({ event: "sendToPropertyInspector", context: "pi", payload: dto });
+    const regularNote = elements.note!.textContent, mode = elements.mode!.value;
+    assert.ok(!regularNote.includes(notes[language]));
+    const expected = [regularNote, notes[language]].filter(Boolean).join("\n");
+    for (const sequence of [2, 3]) {
+      socket.receive({ event: "sendToPropertyInspector", context: "pi", payload: { ...dto, sequence, isInMultiAction: true } });
+      assert.equal(elements.note!.textContent, expected); assert.equal(elements.note!.hidden, false);
+      assert.equal(elements.status!.textContent, dto.message); assert.equal(elements.mode!.value, mode);
+    }
+    socket.receive({ event: "sendToPropertyInspector", context: "pi", payload: { ...dto, sequence: 2 } });
+    assert.equal(elements.note!.textContent, expected, "A stale DTO cannot remove the note");
+    socket.receive({ event: "didReceiveSettings", context: "pi", payload: { settings } });
+    assert.equal(elements.note!.textContent, expected);
+    socket.receive({ event: "sendToPropertyInspector", context: "pi", payload: { ...dto, sequence: 4, isInMultiAction: true,
+      connection: "disconnected", message: window.LiveMixStrings[language].offlineHelp } });
+    assert.equal(elements.note!.textContent, [offlineNote, notes[language]].filter(Boolean).join("\n"));
+    socket.close();
+    assert.equal(elements.note!.textContent, [offlineNote, notes[language]].filter(Boolean).join("\n"));
+    assert.equal(elements.note!.hidden, false);
+    assert.equal(socket.sent.filter(m => m.event === "setSettings").length, 0);
+  }
+});
+
 test("shipped PI script: text-only names, offline preservation, auto-save, stale-response rejection and ko/en", async () => {
   const [strings, script, html] = await Promise.all(["strings.js", "inspector.js", "inspector.html"].map(file => readFile(resolve(pluginRoot, "ui", file), "utf8")));
   assert.ok(!html!.includes("https://"));

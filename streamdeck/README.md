@@ -1,8 +1,8 @@
-# LiveMix Stream Deck 1.1.0
+# LiveMix Stream Deck 1.2.0
 
-Windows release `com.gomtwigim.livemix`, manifest version `1.1.0.0`
-(npm package `1.1.0`). Requires LiveMix 0.6.0+ on Windows 10/11 x64;
-the new **Plugin Group (All Mics)** key requires **LiveMix 0.10.0+**.
+Windows release `com.gomtwigim.livemix`, manifest version `1.2.0.0`
+(npm package `1.2.0`). Requires LiveMix 0.6.0+ on Windows 10/11 x64;
+the **Plugin Group (All Mics)** key requires **LiveMix 0.10.0+**.
 The other eight actions still work with LiveMix 0.6.0+.
 This package implements nine actions, a shared LiveMix connection and a
 hardware-free test harness. Node 24 and Stream Deck 7.1+ are the runtime baseline.
@@ -23,7 +23,7 @@ npm.cmd run pack -- -f
 The dependencies in this worktree are already installed; retain them and the
 existing lockfile. Do not run npm install or rewrite package-lock.json for
 this release. Its preview package metadata is intentionally retained under that
-constraint; package.json, manifest and runtime hello advertise 1.1.0.
+constraint; package.json, manifest and runtime hello advertise 1.2.0.
 All direct dependencies use exact versions.
 The test script builds the actual distributable first, compiles the TypeScript
 tests with `tsconfig.test.json`, then runs `node:test` serially. No physical Stream
@@ -72,6 +72,15 @@ the new artwork and physical Stream Deck + remain separate visual/device checks.
 All keypad releases are inert. The PI saves changes immediately and preserves
 selected channel/FX/slot values while offline. Offline send keys and encoders show
 `—`; encoders also disable the bar. Amount and pre/post commands update only their respective fields.
+
+All eight Keypad actions are available in Stream Deck Multi Actions. FX Send
+Amount remains excluded because Multi Actions accept keys, not Encoder actions.
+Within a Multi Action, each step executes its existing PI Mode setting and
+sends no key state, image or title; failures still call `showAlert` on the host.
+The host's `userDesiredState` is ignored: toggle, mute and amount modes do not map
+one-to-one to the two key states. The Korean/English PI explains this alongside
+the existing notes. Ordinary keys keep their normal artwork and state display.
+Key Logic support remains disabled for all nine actions.
 
 Plugin Group (All Mics) exposes only group, mode and display name in its PI.
 Group choices combine the slots on all microphones and show the number of

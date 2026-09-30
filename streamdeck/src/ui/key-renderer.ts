@@ -52,7 +52,9 @@ export function actionImage(lamp: ActionLamp, language: Language, count = 0, tot
   images.set(key, image); return image;
 }
 
-/** A coalesced update is sent state → image → title. The 10/s budget includes showAlert. */
+// Keep a small delivery margin: the SDK resolves sends before the host receives them.
+const callWindowMs = 1020;
+/** A coalesced update is sent state → image → title. Silent keys only send/budget showAlert. */
 export class KeyRenderer {
   private desired: KeyVisual | undefined;
   private sent: Partial<KeyVisual> = {};
@@ -60,7 +62,7 @@ export class KeyRenderer {
   private sending = false;
   private disposed = false;
   private alertPending = false;
-  constructor(private readonly output: KeyOutput, private readonly calls: number[] = []) {}
+  constructor(private readonly output: KeyOutput, private readonly calls: number[] = [], private readonly options: { silent?: boolean } = {}) {}
   render(visual: KeyVisual): void { this.desired = visual; void this.flush(); }
   alert(): void { this.alertPending = true; void this.flush(); }
   dispose(): void { this.disposed = true; clearTimeout(this.timer); }
@@ -69,17 +71,17 @@ export class KeyRenderer {
     this.sending = true;
     try {
       while (!this.disposed) {
-        const v = this.desired; if (!v) break;
-        const stateChanged = this.sent.state !== v.state;
-        const imageChanged = this.sent.image !== v.image;
-        const titleChanged = this.sent.title !== v.title;
+        const v = this.options.silent ? undefined : this.desired;
+        const stateChanged = v !== undefined && this.sent.state !== v.state;
+        const imageChanged = v !== undefined && this.sent.image !== v.image;
+        const titleChanged = v !== undefined && this.sent.title !== v.title;
         const showAlert = this.alertPending;
         const count = Number(stateChanged) + Number(imageChanged) + Number(titleChanged) + Number(showAlert);
         if (!count) break;
         const now = performance.now();
-        while (this.calls.length && now - this.calls[0]! >= 1000) this.calls.shift();
+        while (this.calls.length && now - this.calls[0]! >= callWindowMs) this.calls.shift();
         if (this.calls.length + count > 10) {
-          this.timer = setTimeout(() => { this.timer = undefined; void this.flush(); }, Math.max(1, 1001 - (now - this.calls[0]!)));
+          this.timer = setTimeout(() => { this.timer = undefined; void this.flush(); }, Math.max(1, callWindowMs + 1 - (now - this.calls[0]!)));
           break;
         }
         const invoke = async (fn: () => Promise<void>): Promise<void> => { this.calls.push(performance.now()); await fn(); };

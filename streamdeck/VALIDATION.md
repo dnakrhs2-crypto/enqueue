@@ -1,3 +1,138 @@
+# 1.2.0 validation — 2026-09-30
+
+Enabled Multi Actions on `livemix-sd-multiaction` in
+`C:\Users\claude\gocue-sd-multi\streamdeck`. Manifest/package versions:
+**1.2.0.0 / 1.2.0**; runtime hello: **1.2.0**. Reused the installed
+dependencies, including SDK **2.1.2** and CLI **1.9.0**.
+
+| Exact command | Actual result |
+|---|---|
+| `npm.cmd run typecheck` | Exit 0; source and test TypeScript checks passed, including after the delivery-margin fix. |
+| `npm.cmd test` | Exit 0; **153 tests, 153 passed, 0 failed, 0 cancelled, 0 skipped, 0 todo**, **202741.2818 ms**. Includes 134 existing tests and 19 new tests. The script rebuilt the distributable (Rollup **2.3 s**) and compiled the tests before the serial run. |
+| `npm.cmd run validate -- --no-update-check` | Exit 0; **28 manifest image references / 56 files**, **158 packaged images** match design sources, ko/en complete; **Validation successful**, without remote-schema warnings. |
+
+The first test invocation built the plugin, then stopped at test compilation
+because the new PI test had one extra closing brace. The brace was corrected;
+the subsequent source/test typecheck passed. No assertion was relaxed.
+
+The first two complete suites each reported **152 tests, 151 passed, 1 failed**
+(**201300.8387 / 200894.541 ms**). Existing plugin-group and disabled/missing-mic
+tests respectively observed 11 calls in a host-receipt rolling second. All 18
+new tests passed both runs. Isolated reruns passed, so their timing alone did
+not explain the full-suite failures. A new delayed-receipt regression test
+then reproduced the same budget failure: SDK sends resolve before host receipt,
+and the previous 1 ms boundary margin could compress adjacent batches at the
+receiver. KeyRenderer now retains call history for **1020 ms**, allowing a
+**20 ms delivery margin** while preserving the strict **at most 10 calls in
+any 1000 ms** assertions. No command, queue or Encoder feedback logic changed.
+All **8 rendering tests** passed after the fix; the complete final run is
+recorded in the table above. Fake-host budget failures now include receipt ages
+to make any future timing failure diagnosable.
+
+## Multi Action support
+
+| Action UUID suffix | Controller | SupportedInMultiActions |
+|---|---|---|
+| `mic` | Keypad | `true` |
+| `all-mics` | Keypad | `true` |
+| `mic-mute-group` | Keypad | `true` |
+| `fx-mute-group` | Keypad | `true` |
+| `plugin-group` | Keypad | `true` |
+| `plugin-group-all` | Keypad | `true` |
+| `fx-send-step` | Keypad | `true` |
+| `status` | Keypad | `true` |
+| `fx-send` | Encoder | `false` — Multi Actions accept key actions only. |
+
+All nine retain `SupportedInKeyLogicActions:false`, `UserTitleEnabled:false`,
+`DisableAutomaticStates:true` and `DisableCaching:true`.
+
+The recommended silent `KeyRenderer` design is used. Both `base.ts` and the
+separate `mic.ts` keep a renderer and record `willAppear.isInMultiAction` in
+their contexts. This preserves the base class's key-input gate, `status.ts`'s
+non-null renderer, binding resolution, rename tracking and settings migration.
+`flush()` skips state/image/title output and charges the rolling 10/s budget
+only for actual alerts. A 20 ms delivery margin protects the key-output budget
+at the host boundary. Encoder feedback is unchanged. Actions continue to
+use the PI Mode; production code never reads `userDesiredState` because toggle,
+mute and amount modes do not map one-to-one to the host's two key states.
+
+`op:"options"` carries `isInMultiAction` for both PI bridges. The shipped PI
+appends the exact localized guidance in its existing note area, preserving
+membership counts and numbered-group notes, including while offline.
+The text lives in `tools/locales.mjs`, the existing source for all generated
+ko/en strings. The manifest rule also lives in its generator so a build cannot
+restore the old opt-out.
+
+## New automated evidence
+
+- `tests/multi-action.test.ts`: each of the eight actions appears with
+  `isInMultiAction:true`, sends zero `setState`/`setImage`/`setTitle` messages on
+  appearance, full snapshot refresh and input, and still sends its expected
+  LiveMix command. A normal instance of that same action renders alongside it.
+- Four command tests exercise microphone, all-mics, plugin-group and
+  plugin-group-all toggle/ON/OFF modes with conflicting `userDesiredState`
+  values. They check exact commands and arguments after canonical state updates.
+- Missing-channel and disconnected tests cover both the mic class and shared
+  base: explicit input sends `showAlert`, no edit command and no visual output.
+- Both languages exercise real SDK PI registration/relay for the mic and shared
+  base, including normal/multi flags and offline options.
+- `tests/inspector.test.ts` executes the shipped PI for all eight key views in
+  ko/en. It checks the exact guidance, existing notes, mode preservation,
+  repeated/stale replies, settings echoes and disconnection.
+- `tests/rendering.test.ts` checks the nine-action manifest support matrix and
+  ko/en key parity. Its silent-renderer test verifies alerts without artwork,
+  no visual budget consumption, rolling 10/s alert throttling, delayed host
+  receipt and disposal. There are 19 new tests in total.
+
+## Changed files and decisions
+
+- `src/ui/key-renderer.ts`: optional silent output and a conservative 20 ms
+  delivery margin for the existing 10/s budget, added after reproducing failures.
+- `src/actions/base.ts`, `src/actions/mic.ts`: create silent renderers for
+  Multi Action contexts and include the PI flag, keeping all lifecycle logic.
+- `tools/generate-assets.mjs`, generated plugin `manifest.json`: reproducible
+  Keypad-only Multi Action support and manifest version **1.2.0.0**.
+- `tools/locales.mjs`, generated `src/ui/strings.ts`, plugin `en.json`, `ko.json`
+  and `ui/strings.js`: the exact matching ko/en guidance keys.
+- Plugin `ui/inspector.js`: append guidance without overwriting existing notes.
+  `inspector.html` already contains the required note element.
+- `package.json`, `src/livemix/connection.ts`: release **1.2.0**, including the
+  advertised hello version. No connection behavior changed.
+- `tests/fake-host.mjs`: optional Multi Action contexts (default `false`),
+  key-down payload injection, matching host plugin version and receipt-age
+  diagnostics on budget assertion failures.
+- `tests/multi-action.test.ts`, `tests/rendering.test.ts`,
+  `tests/inspector.test.ts`, `tests/connection.test.ts`: the new coverage and
+  updated manifest/hello version expectations.
+- `README.md`, `CHANGELOG.md`, this report and the design document's §4.6:
+  release behavior, validation and correction of the original design choice.
+
+Builds regenerate the bundle and existing assets through the normal build
+script. No icon or SVG source was edited. The lockfile SHA-256 remains
+`b3dd589d26d6e66d5ee2d2ee771a6a7f4aed89de5aae22889ca76509c16b9c1a`.
+No dependency installation, dependency changes or LiveMix C++ edits were made.
+
+## Remaining real-host and physical-device checks
+
+The real Stream Deck application is still needed to verify the eight keys in
+the Multi Action picker, the excluded Encoder, drag/save/reopen behavior and
+Korean/English PI layout. Fake hosts verify protocol messages, not that UI.
+
+Physical Stream Deck/Mobile/Stream Deck + checks remain:
+
+- Press a Multi Action key containing several LiveMix steps and host delays;
+  verify physical execution order/timing and the saved modes against LiveMix.
+- Trigger an offline/missing-target failure and verify `showAlert` appears on
+  the parent Multi Action key, including its visible duration.
+- Verify parent-key artwork and ordinary LiveMix keys on the same profile
+  remain readable and update correctly through profile/device changes.
+- Verify Stream Deck + dial rotation, press and feedback remain unchanged.
+
+No real device or LiveMix executable was used, and no installation or package
+publication is claimed for this release. Earlier release reports follow.
+
+---
+
 # 1.1.0 validation — 2026-09-09
 
 Implemented the Stream Deck half of the all-mics plugin-group feature in this

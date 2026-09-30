@@ -510,9 +510,11 @@ HTML/CSS/번역은 배포물 안에 넣어 인터넷 없이도 PI가 열린다. 
 | `Category`, `CategoryIcon`, `Icon` | `LiveMix`, `imgs/category`, `imgs/plugin`. 확장자 생략 규칙 준수 |
 | `URL`, `SupportURL` | `https://곰튀김.com/livemix/#streamdeck`, `https://곰튀김.com/livemix/#streamdeck-support` — Round 4에서 실제 section 생성 |
 | `Actions[].Controllers` | key action은 `["Keypad"]`, FX 보내는 양은 `["Encoder"]` |
-| 공통 action 옵션 | `DisableAutomaticStates:true`, `DisableCaching:true`, `UserTitleEnabled:false`, `SupportedInMultiActions:false`, `SupportedInKeyLogicActions:false` |
+| 공통 action 옵션 | `DisableAutomaticStates:true`, `DisableCaching:true`, `UserTitleEnabled:false`, `SupportedInMultiActions`: Keypad 8개는 `true`, Encoder(`fx-send`)는 `false`, `SupportedInKeyLogicActions:false` |
 | Encoder | `layout:"layouts/fx-send.json"`, `Icon:"imgs/actions/fx-send/encoder"`, `TriggerDescription`의 Push/Rotate/Touch/LongTouch 번역 |
 | `States` | 마이크·전체·플러그인 그룹은 0=OFF/일부, 1=ON. 뮤트그룹은 0=해제, 1=뮤트. 상태 key·Encoder는 단일 기본 state |
+
+2026-09-30 수정: “기본에서는 뜨는데 다중 동작에서만 안 뜬다”는 사용자 보고와 `SupportedInMultiActions`의 스키마 기본값이 `true`라는 근거에 따라, 키 액션을 일괄 제외했던 최초 설계 판단을 바로잡았다. 다이얼(FX 보내는 양)은 회전이 본체라 순서대로 실행하는 다중 동작에 맞지 않고 키 몫은 'FX 보내는 양 ±'가 이미 맡고 있어 제외하며(호스트가 Encoder 전용 액션을 다중 동작에서 어떻게 다루는지는 공식 문서에 없어 실물로 확인 전까지 단정하지 않는다), 내부 인스턴스는 시각 출력을 생략하고 PI의 동작(mode) 설정과 실패 알림을 유지한다.
 
 설치 직후 state image는 연결 확인용으로 시작하고 runtime에서 실제 상태를 덮어쓴다. 위 `Category`는 App의 action 목록 그룹이다. Marketplace의 분류 `Audio`와 같은 설정으로 착각하지 않는다. 현재 schema의 `Encoder.layout`은 소문자, `TriggerDescription`은 단수형이다. 공식 manifest 예제에 남아 있는 Node 20/SDKVersion 2를 그대로 복사하지 않고 이 표와 현재 validator를 기준으로 한다. [manifest 규격](https://docs.elgato.com/streamdeck/sdk/references/manifest/)
 

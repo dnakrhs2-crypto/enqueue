@@ -8,7 +8,7 @@ import { displayName, statusTitle, keyImage, KeyRenderer, type KeyOutput, type L
 import { translator, type Language } from "../ui/i18n.js";
 
 type KeyHandle = KeyOutput & { setSettings(settings: MicSettings): Promise<void> };
-type KeyContext = { device: string; handle: KeyHandle; renderer: KeyRenderer; binding: MicBinding; settings: MicSettings; valid: boolean; error?: string };
+type KeyContext = { device: string; handle: KeyHandle; renderer: KeyRenderer; isInMultiAction: boolean; binding: MicBinding; settings: MicSettings; valid: boolean; error?: string };
 
 @action({ UUID: "com.gomtwigim.livemix.mic" })
 export class MicrophoneAction extends SingletonAction<MicSettings> {
@@ -36,7 +36,9 @@ export class MicrophoneAction extends SingletonAction<MicSettings> {
     const migrated = migrateSettings(ev.payload.settings), settings = migrated.settings;
     const binding = this.bindings.get(ev.action.id) ?? new MicBinding(settings);
     binding.update(settings); this.bindings.set(ev.action.id, binding);
-    const context: KeyContext = { device: ev.action.device.id, handle: ev.action, renderer: new KeyRenderer(ev.action, history.calls), binding, settings, valid: migrated.valid };
+    const isInMultiAction = ev.payload.isInMultiAction === true;
+    const context: KeyContext = { device: ev.action.device.id, handle: ev.action, renderer: new KeyRenderer(ev.action, history.calls, { silent: isInMultiAction }),
+      isInMultiAction, binding, settings, valid: migrated.valid };
     this.contexts.set(ev.action.id, context);
     this.render(context);
     if (migrated.changed) void context.handle.setSettings(settings).catch(() => {});
@@ -134,7 +136,7 @@ export class MicrophoneAction extends SingletonAction<MicSettings> {
     // This is a PI DTO, never discovery or a raw wire snapshot. Sequence also orders session changes.
     void streamDeck.ui.sendToPropertyInspector({
       op: "options", context: pi.context, requestId: pi.requestId, sequence: ++pi.sequence,
-      connection: this.connection.status, language: this.language, settings: context.settings,
+      connection: this.connection.status, language: this.language, settings: context.settings, isInMultiAction: context.isInMultiAction,
       message: context.error ?? this.t(ready ? "connected" : this.connection.status === "disabled" ? "disabledHelp" : "offlineHelp"),
       ...(ready ? {
         instanceId: snapshot.instanceId, sessionId: snapshot.sessionId, revision: snapshot.revision,

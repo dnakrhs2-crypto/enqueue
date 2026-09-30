@@ -23,7 +23,7 @@ export class FakeHost extends EventEmitter {
     devicePixelRatio: 2,
     devices: [{ id: "fake-mobile", name: "Fake Mobile", size: { columns: 3, rows: 2 }, type: DeviceType.StreamDeckMobile },
       { id: "fake-plus", name: "Fake Stream Deck +", size: { columns: 4, rows: 2 }, type: DeviceType.StreamDeckPlus }],
-    plugin: { uuid: "com.gomtwigim.livemix", version: "1.1.0.0" }
+    plugin: { uuid: "com.gomtwigim.livemix", version: "1.2.0.0" }
   };
   async start(appdata, language = "ko") {
     this.info.application.language = language;
@@ -68,11 +68,11 @@ export class FakeHost extends EventEmitter {
   send(message) { this.pluginSocket.send(JSON.stringify(message)); }
   event(event, context, payload = {}, extra = {}) {
     const c = this.contexts.get(context); assert.ok(c, `Known context ${context}`);
-    this.send({ event, action: c.action, context, device: c.device, payload: { controller: c.controller, coordinates: c.coordinates, isInMultiAction: false, resources: {}, settings: c.settings, state: c.state, ...payload }, ...extra });
+    this.send({ event, action: c.action, context, device: c.device, payload: { controller: c.controller, coordinates: c.coordinates, isInMultiAction: c.isInMultiAction, resources: {}, settings: c.settings, state: c.state, ...payload }, ...extra });
   }
-  appear(context, settings, column = 0, action = "mic", controller = "Keypad") {
+  appear(context, settings, column = 0, action = "mic", controller = "Keypad", { isInMultiAction = false } = {}) {
     this.contexts.set(context, { device: controller === "Encoder" ? "fake-plus" : "fake-mobile", action: `com.gomtwigim.livemix.${action}`, controller,
-      coordinates: { column, row: 0 }, settings, state: 0, visible: true, images: {}, titles: {}, feedback: {} });
+      coordinates: isInMultiAction ? undefined : { column, row: 0 }, isInMultiAction, settings, state: 0, visible: true, images: {}, titles: {}, feedback: {} });
     this.event("willAppear", context);
   }
   appearDial(context, settings, column = 0) { this.appear(context, settings, column, "fx-send", "Encoder"); }
@@ -80,7 +80,7 @@ export class FakeHost extends EventEmitter {
   dialDown(context) { this.event("dialDown", context); }
   dialUp(context) { this.event("dialUp", context); }
   touch(context, hold = false) { this.event("touchTap", context, { hold, tapPos: [150, 40] }); }
-  keyDown(context) { this.event("keyDown", context); }
+  keyDown(context, payload = {}) { this.event("keyDown", context, payload); }
   keyUp(context) { this.event("keyUp", context); }
   settings(context, settings) { const c = this.contexts.get(context); c.settings = settings; this.event("didReceiveSettings", context); }
   disappear(context) {
@@ -165,7 +165,7 @@ export class FakeHost extends EventEmitter {
   assertBudget() {
     for (const record of this.records) {
       const window = this.records.filter(r => r.context === record.context && r.at <= record.at && r.at > record.at - 1000);
-      assert.ok(window.length <= 10, `10 calls/s budget exceeded: ${window.map(r => r.event).join(", ")}`);
+      assert.ok(window.length <= 10, `10 calls/s budget exceeded: ${window.map(r => `${r.event} (${(record.at - r.at).toFixed(3)} ms ago)`).join(", ")}`);
     }
   }
   async close() {

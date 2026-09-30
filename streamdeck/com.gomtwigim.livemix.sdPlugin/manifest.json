@@ -3,7 +3,7 @@
   "UUID": "com.gomtwigim.livemix",
   "Name": "LiveMix",
   "Author": "Gomtwigim",
-  "Version": "1.1.0.0",
+  "Version": "1.2.0.0",
   "Description": "Control LiveMix microphones, mute groups, plugin groups and FX sends on this Windows PC.",
   "Category": "LiveMix",
   "CategoryIcon": "imgs/category",
@@ -35,7 +35,7 @@
       "DisableAutomaticStates": true,
       "DisableCaching": true,
       "UserTitleEnabled": false,
-      "SupportedInMultiActions": false,
+      "SupportedInMultiActions": true,
       "SupportedInKeyLogicActions": false,
       "States": [
         {
@@ -64,7 +64,7 @@
       "DisableAutomaticStates": true,
       "DisableCaching": true,
       "UserTitleEnabled": false,
-      "SupportedInMultiActions": false,
+      "SupportedInMultiActions": true,
       "SupportedInKeyLogicActions": false,
       "States": [
         {
@@ -93,7 +93,7 @@
       "DisableAutomaticStates": true,
       "DisableCaching": true,
       "UserTitleEnabled": false,
-      "SupportedInMultiActions": false,
+      "SupportedInMultiActions": true,
       "SupportedInKeyLogicActions": false,
       "States": [
         {
@@ -122,7 +122,7 @@
       "DisableAutomaticStates": true,
       "DisableCaching": true,
       "UserTitleEnabled": false,
-      "SupportedInMultiActions": false,
+      "SupportedInMultiActions": true,
       "SupportedInKeyLogicActions": false,
       "States": [
         {
@@ -151,7 +151,7 @@
       "DisableAutomaticStates": true,
       "DisableCaching": true,
       "UserTitleEnabled": false,
-      "SupportedInMultiActions": false,
+      "SupportedInMultiActions": true,
       "SupportedInKeyLogicActions": false,
       "States": [
         {
@@ -180,7 +180,7 @@
       "DisableAutomaticStates": true,
       "DisableCaching": true,
       "UserTitleEnabled": false,
-      "SupportedInMultiActions": false,
+      "SupportedInMultiActions": true,
       "SupportedInKeyLogicActions": false,
       "States": [
         {
@@ -242,7 +242,7 @@
       "DisableAutomaticStates": true,
       "DisableCaching": true,
       "UserTitleEnabled": false,
-      "SupportedInMultiActions": false,
+      "SupportedInMultiActions": true,
       "SupportedInKeyLogicActions": false,
       "States": [
         {
@@ -265,7 +265,7 @@
       "DisableAutomaticStates": true,
       "DisableCaching": true,
       "UserTitleEnabled": false,
-      "SupportedInMultiActions": false,
+      "SupportedInMultiActions": true,
       "SupportedInKeyLogicActions": false,
       "States": [
         {
