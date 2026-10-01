@@ -2,6 +2,8 @@
 // Included inside [Code]. Keep this file UTF-8 with BOM.
 const
   CoupangShortcutUrl = 'https://xn--jb0byyo90f.com/coupang/';   { 곰튀김.com }
+  { Enqueue 0.9.0-0.9.3 wrote this address; it died with the repository rename (GitHub Pages keeps no redirect). }
+  OldCoupangShortcutUrl = 'https://dnakrhs2-crypto.github.io/gocue/coupang/';
 
 { WinSparkle runs Setup with /SILENT /SP- /NORESTART /AUTOUPDATE=1 (tools/release.py writes the appcast): only the
   progress window shows, the running app is closed by Setup, and the app comes back by itself at the end. }
@@ -149,10 +151,21 @@ begin
   end;
 end;
 
+{ Our own shortcut from 0.9.0-0.9.3 still points at the dead address: point it at the live one. Only a file whose URL
+  is exactly the old address is touched (another installer's 쿠팡.url never is), and nothing is created. }
+procedure RepairOldCoupangShortcut(const Path: String);
+begin
+  if FileExists(Path) and (GetIniString('InternetShortcut', 'URL', '', Path) = OldCoupangShortcutUrl) then
+    if not SetIniString('InternetShortcut', 'URL', CoupangShortcutUrl, Path) then
+      Log('Could not repair the old Coupang desktop shortcut: ' + Path);
+end;
+
 procedure CurStepChanged(CurStep: TSetupStep);
 begin
   if CurStep <> ssPostInstall then
     Exit;
+  RepairOldCoupangShortcut(ExpandConstant('{userdesktop}\쿠팡.url'));
+  RepairOldCoupangShortcut(ExpandConstant('{userdesktop}\Coupang.url'));
   if CoupangShortcutWanted then
     WriteCoupangShortcut(CoupangShortcutPath)
   else if IsAutoUpdate and WizardSilent and (not IsVerySilent) and (not CoupangShortcutExists) then
