@@ -4,12 +4,11 @@
 <meta charset="utf-8">
 <meta name="robots" content="noindex">
 <title>쿠팡으로 이동</title>
-<link rel="stylesheet" href="../style.css">
-<noscript><meta http-equiv="refresh" content="0; url=https://link.coupang.com/a/gJIOd2FuJU"></noscript>
 <script>
 // Count the visit first: the Cloudflare beacon below sends its page view right after "load" (navigator.sendBeacon,
 // which survives the navigation), so the page moves on a moment later. A blocked or failing beacon still lets "load"
-// fire, and 3 s is the upper bound either way.
+// fire, and 3 s is the upper bound either way. This script stays above the stylesheet: a stylesheet still loading
+// (style.css @imports a font CSS from another host) would otherwise hold it back, the 3 s timer included.
 (function () {
   var target = "https://link.coupang.com/a/gJIOd2FuJU", gone = false;
   function go() { if (!gone) { gone = true; location.replace(target); } }
@@ -17,6 +16,8 @@
   setTimeout(go, 3000);
 })();
 </script>
+<noscript><meta http-equiv="refresh" content="0; url=https://link.coupang.com/a/gJIOd2FuJU"></noscript>
+<link rel="stylesheet" href="../style.css">
 <script defer src="https://static.cloudflareinsights.com/beacon.min.js" data-cf-beacon='{"token": "__CF_BEACON_TOKEN__"}'></script>
 </head>
 <body>
