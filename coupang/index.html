@@ -3,10 +3,20 @@
 <head>
 <meta charset="utf-8">
 <meta name="robots" content="noindex">
-<meta http-equiv="refresh" content="0; url=https://link.coupang.com/a/gJIOd2FuJU">
 <title>쿠팡으로 이동</title>
 <link rel="stylesheet" href="../style.css">
-<script>location.replace("https://link.coupang.com/a/gJIOd2FuJU");</script>
+<noscript><meta http-equiv="refresh" content="0; url=https://link.coupang.com/a/gJIOd2FuJU"></noscript>
+<script>
+// Count the visit first: the Cloudflare beacon below sends its page view right after "load" (navigator.sendBeacon,
+// which survives the navigation), so the page moves on a moment later. A blocked or failing beacon still lets "load"
+// fire, and 3 s is the upper bound either way.
+(function () {
+  var target = "https://link.coupang.com/a/gJIOd2FuJU", gone = false;
+  function go() { if (!gone) { gone = true; location.replace(target); } }
+  addEventListener("load", function () { setTimeout(go, 300); });
+  setTimeout(go, 3000);
+})();
+</script>
 <script defer src="https://static.cloudflareinsights.com/beacon.min.js" data-cf-beacon='{"token": "ba5c97d4030f4886a543055e34721a3b"}'></script>
 </head>
 <body>
