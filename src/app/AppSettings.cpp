@@ -213,7 +213,7 @@ void AppSettings::setActiveCuesWindowState (const juce::String& state)
 
 double AppSettings::getInspectorFraction() const
 {
-    return settings->getDoubleValue (Keys::inspectorFraction, 0.45);
+    return settings->getDoubleValue (Keys::inspectorFraction, 0.319);
 }
 
 void AppSettings::setInspectorFraction (double fraction)

@@ -141,14 +141,39 @@ FooterBar::FooterBar()
     setCueCount (0);
 }
 
+void FooterBar::attachAudioStatus (juce::Component& host)
+{
+    host.addAndMakeVisible (audioStatus);
+}
+
+void FooterBar::setAudioBounds (juce::Rectangle<int> bounds)
+{
+    audioStatus.setBounds (bounds);
+}
+
+int FooterBar::getPreferredWidth() const
+{
+    const auto width = [] (const juce::Label& label)
+    { return juce::GlyphArrangement::getStringWidthInt (label.getFont(), label.getText()); };
+    return width (countLabel) + 18 + 16 + width (modeHint) + 16 + width (midiStatus)
+        + (warningsButton.isVisible() ? 16 + juce::GlyphArrangement::getStringWidthInt (
+            Palette::font (Palette::headerSize, true), warningsButton.getButtonText()) + 18 : 0);
+}
+
+void FooterBar::updateLayout()
+{
+    if (auto* host = getParentComponent()) host->resized();
+    resized();
+    repaint();
+}
+
 void FooterBar::setShowMode (bool mode, const ShortcutService* shortcuts)
 {
     showMode = mode;
     const auto keys = ShortcutDisplay::currentKeys (shortcuts, CommandIDs::toggleShowMode);
     modeHint.setText (showMode ? ko ("쇼 모드: 편집 잠김 (") + keys + ")" : ko ("편집 모드 · 쇼 모드 = ") + keys, juce::dontSendNotification);
     modeHint.setTooltip (modeHint.getText());
-    resized();
-    repaint();
+    updateLayout();
 }
 
 void FooterBar::setCueCount (int count)
@@ -157,8 +182,7 @@ void FooterBar::setCueCount (int count)
     if (countLabel.getText() == text)
         return;
     countLabel.setText (text, juce::dontSendNotification);
-    resized();
-    repaint();
+    updateLayout();
 }
 
 void FooterBar::setWarningCount (int count)
@@ -168,8 +192,7 @@ void FooterBar::setWarningCount (int count)
         return;
     warningsButton.setVisible (count > 0);
     warningsButton.setButtonText (text);
-    resized();
-    repaint();
+    updateLayout();
 }
 
 void FooterBar::setAudioStatus (juce::String text, bool warning, juce::String tooltip)
@@ -183,45 +206,44 @@ void FooterBar::setAudioStatus (juce::String text, bool warning, juce::String to
     audioStatus.setColour (juce::Label::textColourId, warning ? Palette::stopButton : Palette::muted);
     audioStatus.setText (text, juce::dontSendNotification);
     audioStatus.setTooltip (tooltip);
-    resized();
 }
 
 void FooterBar::resized()
 {
     if (getWidth() <= 0 || getHeight() <= 0)
         return;
-    auto area = getLocalBounds().reduced (14, 3);
+    auto area = getLocalBounds();
     const int countWidth = juce::GlyphArrangement::getStringWidthInt (countLabel.getFont(), countLabel.getText()) + 18;
-    countLabel.setBounds (area.removeFromLeft (countWidth));
-    area.removeFromLeft (Palette::gap);
+    const int gap = getWidth() >= getPreferredWidth() ? 16 : 8;
+    countLabel.setBounds (area.removeFromLeft (juce::jmin (countWidth, area.getWidth() / 3)).withSizeKeepingCentre (
+        juce::jmin (countWidth, getWidth() / 3), 24).translated (0, 1));
+    area.removeFromLeft (gap);
     if (warningsButton.isVisible())
     {
         const int warningWidth = juce::GlyphArrangement::getStringWidthInt (Palette::font (Palette::headerSize, true), warningsButton.getButtonText()) + 18;
-        warningsButton.setBounds (area.removeFromLeft (warningWidth));
-        area.removeFromLeft (Palette::gap);
+        warningsButton.setBounds (area.removeFromLeft (juce::jmin (warningWidth, area.getWidth() / 2)).withHeight (24).withY (6));
+        area.removeFromLeft (gap);
     }
-    const int hintWidth = juce::GlyphArrangement::getStringWidthInt (modeHint.getFont(), modeHint.getText());
-    modeHint.setBounds (area.removeFromLeft (juce::jmin (hintWidth, area.getWidth() / 2)));
-    area.removeFromLeft (juce::jmin (Palette::gap, area.getWidth()));
-    const int midiWidth = juce::GlyphArrangement::getStringWidthInt (midiStatus.getFont(), midiStatus.getText()) + 8;
-    midiStatus.setBounds (area.removeFromLeft (juce::jmin (midiWidth, area.getWidth() / 2)));
-    audioStatus.setBounds (area);
+    const int midiWidth = juce::GlyphArrangement::getStringWidthInt (midiStatus.getFont(), midiStatus.getText());
+    midiStatus.setBounds (area.removeFromRight (juce::jmin (midiWidth, area.getWidth() / 3)));
+    area.removeFromRight (gap);
+    modeHint.setBounds (area);
 }
 
 void FooterBar::setMidiStatus (const juce::String& text, const juce::String& tooltip, bool warning)
 {
-    if (midiStatus.getText() == text && midiStatus.getTooltip() == tooltip) return;
+    const auto colour = warning ? Palette::warn : Palette::muted;
+    if (midiStatus.getText() == text && midiStatus.getTooltip() == tooltip
+        && midiStatus.findColour (juce::Label::textColourId) == colour) return;
     midiStatus.setText (text, juce::dontSendNotification);
     midiStatus.setTooltip (tooltip);
-    midiStatus.setColour (juce::Label::textColourId, warning ? Palette::warn : Palette::muted);
-    resized();
+    midiStatus.setColour (juce::Label::textColourId, colour);
+    updateLayout();
 }
 
 void FooterBar::paint (juce::Graphics& g)
 {
-    g.fillAll (Palette::panel);
     g.setColour (Palette::outline);
-    g.drawLine (0.0f, 0.5f, (float) getWidth(), 0.5f);
     const auto countBounds = countLabel.getBounds().toFloat().reduced (0.5f);
     g.drawRoundedRectangle (countBounds, Palette::pillRadius (countBounds), Palette::borderWidth);
 }

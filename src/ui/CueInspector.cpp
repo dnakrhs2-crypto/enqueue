@@ -15,49 +15,13 @@
 #include "ui/GroupModeLabels.h"
 #include "ui/PluginChainComponent.h"
 #include "ui/UiUtils.h"
+#include "ui/InspectorLayout.h"
 
 namespace gocue
 {
 
 namespace
 {
-    /** Keep the 30px fields reachable when the inspector is reduced to a short or narrow pane. */
-    class InspectorPage : public juce::Viewport
-    {
-    public:
-        InspectorPage (juce::Component& c, int height, int width) : content (c), minHeight (height), minWidth (width)
-        {
-            setViewedComponent (&content, false);
-            setScrollBarsShown (true, true);
-            setScrollOnDragEnabled (false);   // field / waveform drags belong to their existing editors
-        }
-
-        void setMinimumHeight (int height)
-        {
-            if (minHeight == height)
-                return;
-            minHeight = height;
-            // Apply content-driven changes even during the viewport's resize guard.
-            content.setSize (content.getWidth(), juce::jmax (minHeight, getHeight() - getScrollBarThickness()));
-        }
-
-        void resized() override
-        {
-            if (sizing)
-                return;
-            const juce::ScopedValueSetter<bool> guard (sizing, true);
-            juce::Viewport::resized();
-            const int scroll = getScrollBarThickness();
-            content.setSize (juce::jmax (minWidth, getWidth() - scroll), juce::jmax (minHeight, getHeight() - scroll));
-        }
-
-    private:
-        juce::Component& content;
-        int minHeight;
-        const int minWidth;
-        bool sizing = false;
-    };
-
     void styleLabel (juce::Label& label, const juce::String& text, float size = Palette::fieldLabelSize)
     {
         label.setText (text, juce::dontSendNotification);
@@ -312,7 +276,7 @@ public:
 
         gainSlider.setSliderStyle (juce::Slider::LinearHorizontal);
         gainSlider.setRange (Cue::minGainDb, Cue::maxGainDb, 0.1);
-        gainSlider.setTextBoxStyle (juce::Slider::TextBoxRight, false, 80, Palette::fieldHeight);
+        gainSlider.setTextBoxStyle (juce::Slider::TextBoxRight, false, 90, Palette::fieldHeight);
         gainSlider.setTextValueSuffix (" dB");
         gainSlider.setDoubleClickReturnValue (true, 0.0);
         gainSlider.setWantsKeyboardFocus (false);
@@ -465,24 +429,22 @@ public:
 
     void resized() override
     {
-        const bool wrapMidi = midi != nullptr && getWidth() < 1068;
+        const InspectorClusters clusters (getWidth(), 3);
         const int conflictHeight = hotkeyConflict.getText().isEmpty() ? 0 : 22;
-        const int rowsHeight = (wrapMidi ? 5 : 4) * (Palette::fieldHeight + 8);
-        const int minimumHeight = juce::jmax (Palette::inspectorBasicHeight, 16 + rowsHeight + conflictHeight + Palette::fieldHeight);
+        const int minimumHeight = juce::jmax (Palette::inspectorBasicHeight, clusters.bottom + conflictHeight + 30 + 8);
         if (auto* page = findParentComponentOfClass<InspectorPage>())
             page->setMinimumHeight (minimumHeight);
 
-        auto area = getLocalBounds().reduced (12, 8);
-        auto nextRow = [&] { auto r = area.removeFromTop (Palette::fieldHeight); area.removeFromTop (8); return r; };
+        auto area = clusters.cue;
+        auto nextRow = [&] { auto r = area.removeFromTop (30); area.removeFromTop (8); return r; };
 
         auto row = nextRow();
         numberLabel.setBounds (row.removeFromLeft (36));
         numberEditor.setBounds (row.removeFromLeft (80));
-        row.removeFromLeft (8);
-        nameLabel.setBounds (row.removeFromLeft (36));
-        colourCombo.setBounds (row.removeFromRight (120));
+        colourCombo.setBounds (row.removeFromRight (100));
         colourLabel.setBounds (row.removeFromRight (28));
-        row.removeFromRight (8);
+        row = nextRow();
+        nameLabel.setBounds (row.removeFromLeft (36));
         nameEditor.setBounds (row);
 
         row = nextRow();
@@ -492,40 +454,34 @@ public:
         filePathLabel.setBounds (row);
         dropArea = filePathLabel.getBounds();
 
+        area = clusters.playback;
         row = nextRow();
-        const bool compact = getWidth() < 1240;
         preLabel.setBounds (row.removeFromLeft (64));
-        preEditor.setBounds (row.removeFromLeft (compact ? 90 : 110));
-        row.removeFromLeft (8);
-        postLabel.setBounds (row.removeFromLeft (76));
-        postEditor.setBounds (row.removeFromLeft (compact ? 90 : 110));
-        row.removeFromLeft (8);
-        continueLabel.setBounds (row.removeFromLeft (28));
-        continueCombo.setBounds (row.removeFromLeft (compact ? 130 : 150));
-        row.removeFromLeft (8);
-        hotkeyButton.setBounds (row.removeFromLeft (120));
-        row.removeFromLeft (4);
-        clearHotkeyButton.setBounds (row.removeFromLeft (Palette::fieldHeight));
-        row.removeFromLeft (12);
-        if (midi != nullptr)
-        {
-            // With the app theme, a 1100px main window leaves a 1068px page.
-            // A narrow page adds a row while keeping the memo at least one field high.
-            if (wrapMidi) row = nextRow();
-            midi->setBounds (row.withHeight (26));
-        }
-
+        preEditor.setBounds (row.removeFromLeft (90));
+        postEditor.setBounds (row.removeFromRight (90));
+        postLabel.setBounds (row.removeFromRight (104));
         row = nextRow();
-        flagToggle.setBounds (row.removeFromLeft (64));
-        armedToggle.setBounds (row.removeFromLeft (96));
-        autoLoadToggle.setBounds (row.removeFromLeft (88));
-        row.removeFromLeft (8);
-        fadeOutLabel.setBounds (row.removeFromLeft (104));
-        fadeOutEditor.setBounds (row.removeFromLeft (90));
-        row.removeFromLeft (8);
-        gainLabel.setBounds (row.removeFromLeft (62));
-        gainSlider.setBounds (row.removeFromLeft (juce::jmin (360, row.getWidth())));
+        continueLabel.setBounds (row.removeFromLeft (64));
+        continueCombo.setBounds (row.removeFromLeft (130));
+        fadeOutEditor.setBounds (row.removeFromRight (90));
+        fadeOutLabel.setBounds (row.removeFromRight (104));
+        row = nextRow();
+        gainLabel.setBounds (row.removeFromLeft (64));
+        gainSlider.setBounds (row);
 
+        area = clusters.trigger;
+        row = nextRow();
+        hotkeyButton.setBounds (row.removeFromLeft (190));
+        row.removeFromLeft (6);
+        clearHotkeyButton.setBounds (row.removeFromLeft (30));
+        row = nextRow();
+        if (midi != nullptr) midi->setBounds (row.withHeight (26).translated (0, 2));
+        row = nextRow();
+        flagToggle.setBounds (row.removeFromLeft (66));
+        armedToggle.setBounds (row.removeFromLeft (85));
+        autoLoadToggle.setBounds (row.removeFromLeft (88));
+
+        area = getLocalBounds().reduced (12, 8).withTop (clusters.bottom);
         hotkeyConflict.setBounds (area.removeFromTop (conflictHeight));
         notesLabel.setBounds (area.removeFromLeft (36).withHeight (Palette::fieldHeight));
         notesEditor.setBounds (area);
@@ -534,6 +490,8 @@ public:
     void paint (juce::Graphics& g) override
     {
         g.fillAll (Palette::panel);
+
+        InspectorClusters (getWidth(), 3).paint (g);
 
         if (dragOver)
         {
@@ -1088,19 +1046,19 @@ public:
 
     void resized() override
     {
-        auto area = getLocalBounds().reduced (12, 6);
+        auto area = getLocalBounds().reduced (12, 0).withTrimmedTop (8);
         const int rowHeight = Palette::fieldHeight;
-        auto nextRow = [&] { auto r = area.removeFromTop (rowHeight); area.removeFromTop (6); return r; };
+        auto nextRow = [&] { auto r = area.removeFromTop (rowHeight); area.removeFromTop (8); return r; };
 
         auto row = nextRow();
-        secondLabel.setBounds (row.removeFromLeft (160));
+        secondLabel.setBounds (row.removeFromLeft (184));
         secondCombo.setBounds (row.removeFromLeft (260));
 
         row.removeFromLeft (12);
         playlistHint.setBounds (row);
 
         row = nextRow();
-        wallToggle.setBounds (row.removeFromLeft (180));
+        wallToggle.setBounds (row.removeFromLeft (184));
         hourEditor.setBounds (row.removeFromLeft (50));
         row.removeFromLeft (4);
         minuteEditor.setBounds (row.removeFromLeft (50));
@@ -1115,7 +1073,7 @@ public:
         }
 
         row = nextRow();
-        fadeStopToggle.setBounds (row.removeFromLeft (230));
+        fadeStopToggle.setBounds (row.removeFromLeft (184));
         fadeStopSecondsLabel.setBounds (row.removeFromLeft (60));
         fadeStopSecondsEditor.setBounds (row.removeFromLeft (70));
         row.removeFromLeft (14);
@@ -1123,12 +1081,12 @@ public:
         fadeStopScopeCombo.setBounds (row.removeFromLeft (120));
 
         row = nextRow();
-        duckToggle.setBounds (row.removeFromLeft (230));
-        duckLevelLabel.setBounds (row.removeFromLeft (130));
-        duckLevelEditor.setBounds (row.removeFromLeft (70));
-        row.removeFromLeft (14);
+        duckToggle.setBounds (row.removeFromLeft (184));
         duckSecondsLabel.setBounds (row.removeFromLeft (60));
         duckSecondsEditor.setBounds (row.removeFromLeft (70));
+        row.removeFromLeft (14);
+        duckLevelLabel.setBounds (row.removeFromLeft (94));
+        duckLevelEditor.setBounds (row.removeFromLeft (70));
 
         row = nextRow();
         hint.setBounds (row);
@@ -1329,17 +1287,18 @@ public:
 
     void resized() override
     {
-        auto area = getLocalBounds().reduced (12, 6);
+        auto area = getLocalBounds().reduced (12, 6).withTrimmedTop (2);
         auto row = area.removeFromTop (Palette::fieldHeight);
-        patchLabel.setBounds (row.removeFromLeft (36));
-        patchCombo.setBounds (row.removeFromLeft (220));
-        row.removeFromLeft (12);
-        defaultsButton.setBounds (row.removeFromLeft (100));
-        row.removeFromLeft (6);
+        patchLabel.setBounds (10, 8, 39, 30); // stop at the combo's x=49; the final pixel is blank padding
+        row.removeFromLeft (37);
+        patchCombo.setBounds (row.removeFromLeft (218));
+        row.removeFromLeft (13);
+        defaultsButton.setBounds (row.removeFromLeft (98));
+        row.removeFromLeft (8);
         silenceButton.setBounds (row.removeFromLeft (90));
-        area.removeFromTop (4);
-        hint.setBounds (area.removeFromTop (18));
-        area.removeFromTop (4);
+        row.removeFromLeft (14);
+        hint.setBounds (row);
+        area.removeFromTop (8);
         viewport.setBounds (area);
     }
 
@@ -1525,12 +1484,12 @@ public:
 
     void resized() override
     {
-        auto area = getLocalBounds().reduced (12, 6);
-        hint.setBounds (area.removeFromTop (18));
-        area.removeFromTop (6);
+        auto area = getLocalBounds().reduced (12, 6).withTrimmedTop (2);
         auto row = area.removeFromTop (Palette::fieldHeight);
-        mainLabel.setBounds (row.removeFromLeft (110));
-        mainSlider.setBounds (row.removeFromLeft (juce::jmin (400, row.getWidth())));
+        mainLabel.setBounds (row.removeFromLeft (120));
+        mainSlider.setBounds (row.removeFromLeft (juce::jmin (391, row.getWidth())));
+        row.removeFromLeft (24);
+        hint.setBounds (row);
         area.removeFromTop (6);
         viewport.setBounds (area);
         layoutStrip();
@@ -1552,13 +1511,13 @@ private:
     void layoutStrip()
     {
         const int w = 72;
-        const int h = juce::jmax (80, viewport.getHeight() - 4);
+        const int h = juce::jmax (80, viewport.getHeight());
         strip.setSize (juce::jmax (viewport.getWidth(), sliders.size() * w), h);
 
         for (int k = 0; k < sliders.size(); ++k)
         {
             juce::Rectangle<int> col (k * w, 0, w, h);
-            labels[k]->setBounds (col.removeFromTop (18));
+            labels[k]->setBounds (col.removeFromTop (22).reduced (4, 0));
             sliders[k]->setBounds (col.reduced (2, 0));
         }
     }
@@ -3670,8 +3629,11 @@ public:
     void resized() override
     {
         auto area = getLocalBounds().reduced (12, 8);
-        hint.setBounds (area.removeFromTop (18));
-        area.removeFromTop (6);
+        auto header = area.removeFromTop (30);
+        chainStrip.placeHeaderButtons (*this, header.removeFromRight (208));
+        header.removeFromRight (16);
+        hint.setBounds (header);
+        area.removeFromTop (8);
         chainStrip.setBounds (area.removeFromTop (Palette::pluginSlotHeight + Palette::scrollBarWidth));
     }
 
@@ -3740,6 +3702,7 @@ CueInspector::CueInspector (ProjectDocument& doc, AudioEngine& e, AppSettings& s
     tabs.setColour (juce::TabbedComponent::backgroundColourId, Palette::panel);
     tabs.onTabShown = [this]
     {
+        resized();
         basics->cancelCapture();
         auto* focused = juce::Component::getCurrentlyFocusedComponent();
 
@@ -3749,6 +3712,8 @@ CueInspector::CueInspector (ProjectDocument& doc, AudioEngine& e, AppSettings& s
 
     rebuildTabs (0);
     addAndMakeVisible (tabs);
+    title.toFront (false);
+    selectionDetails.toFront (false);
 
     cues.addListener (this);
     refresh();
@@ -3885,7 +3850,9 @@ void CueInspector::rebuildTabs (int wanted)
     auto addTab = [this] (const juce::String& name, juce::Colour colour, juce::Component* panel, bool)
     {
         const int height = panel == basics ? Palette::inspectorBasicHeight
-                         : panel == timeLoops || panel == curvePanel.get() ? Palette::inspectorPlotHeight : Palette::inspectorFormHeight;
+                         : panel == timeLoops ? Palette::inspectorPlotHeight
+                         : panel == curvePanel.get() ? 250
+                         : panel == levels || panel == trim || panel == triggers || panel == effects ? Palette::inspectorFormHeight : 208;
         const int width = panel == curvePanel.get() || panel == fadePanel.get() ? Palette::inspectorWideWidth
                         : panel == controlPanel.get() ? Palette::inspectorControlWidth : Palette::inspectorPageWidth;
         tabs.addTab (name, colour, new InspectorPage (*panel, height, width), true);
@@ -3999,17 +3966,17 @@ void CueInspector::refresh()
 void CueInspector::resized()
 {
     auto area = getLocalBounds().reduced (1);
-    auto heading = area.removeFromTop (Palette::cardHeaderHeight - 1).reduced (14, 0);
-    title.setBounds (heading.removeFromLeft (110));
-    selectionDetails.setBounds (heading);
     tabs.setBounds (area);
+    tabs.resized();
+    auto heading = area.removeFromTop (Palette::tabBarHeight).withTrimmedTop (6);
+    title.setBounds (heading.withX (18).withWidth (73));
+    const int detailsLeft = 1 + tabs.getTabbedButtonBar().getRight() + 24;
+    selectionDetails.setBounds (heading.withX (detailsLeft).withRight (juce::jmax (detailsLeft, getWidth() - 19)));
 }
 
 void CueInspector::paint (juce::Graphics& g)
 {
     Palette::drawCard (g, getLocalBounds());
-    g.setColour (Palette::outline);
-    g.fillRect (1, Palette::cardHeaderHeight - 1, getWidth() - 2, 1);
 }
 
 } // namespace gocue

@@ -56,7 +56,8 @@ MainComponent::MainComponent (AudioEngine& e, AppSettings& s, juce::ApplicationC
     addAndMakeVisible (table);
     addAndMakeVisible (inspector);
     addAndMakeVisible (activeCues);
-    addAndMakeVisible (footer);
+    containerTabs.setStatusBar (footer);
+    footer.attachAudioStatus (menuBar);
 
     inspectorFraction = settings.getInspectorFraction();
     inspectorCollapsed = settings.getInspectorCollapsed();
@@ -350,7 +351,13 @@ void MainComponent::resized()
     auto menuArea = area.removeFromTop (Palette::menuBarHeight);
     modeToggle.setBounds (menuArea.removeFromRight (modeToggle.getIdealWidth()));
     menuBar.setBounds (menuArea);
-    footer.setBounds (area.removeFromBottom (Palette::footerHeight));
+    int menuEnd = 0;
+    const auto menuNames = getMenuBarNames();
+    for (int i = 0; i < menuNames.size(); ++i)
+        menuEnd += menuBar.getLookAndFeel().getMenuBarItemWidth (menuBar, i, menuNames[i]);
+    // ModeToggle's first button starts 12px inside its bounds: leave 16px before that button.
+    const int audioLeft = juce::jmin (menuArea.getWidth(), menuEnd + 16);
+    footer.setAudioBounds ({ audioLeft, 3, juce::jmax (0, menuArea.getWidth() + Palette::gap - 16 - audioLeft), 26 });
     area.reduce (Palette::gap, Palette::gap);
     transport.setBounds (area.removeFromTop (Palette::transportHeight));
     area.removeFromTop (Palette::gap);
@@ -3280,8 +3287,8 @@ void MainComponent::updateTransportStandby()
 
 void MainComponent::updateAudioStatus()
 {
-    auto& manager = engine.getDeviceManager();
-    auto* device = manager.getCurrentAudioDevice();
+    auto& devices = engine.getDeviceManager();
+    auto* device = devices.getCurrentAudioDevice();
     if (device == nullptr || ! device->isOpen())
     {
         footer.setAudioStatus (ko ("오디오 장치 없음"));
@@ -3291,7 +3298,7 @@ void MainComponent::updateAudioStatus()
     const double rate = device->getCurrentSampleRate();
     const int buffer = device->getCurrentBufferSizeSamples();
     const int reportedLatency = device->getOutputLatencyInSamples();
-    juce::String status = manager.getCurrentAudioDeviceType() + ko (" · ") + device->getName();
+    juce::String status = devices.getCurrentAudioDeviceType() + ko (" · ") + device->getName();
     if (rate > 0.0 && std::isfinite (rate))
     {
         status << ko (" · ") << juce::String (rate / 1000.0, std::fmod (rate, 1000.0) == 0.0 ? 0 : 1) << " kHz";
@@ -3299,7 +3306,7 @@ void MainComponent::updateAudioStatus()
         const int latencySamples = reportedLatency > 0 ? reportedLatency : juce::jmax (0, buffer);
         status << ko (" · 출력 지연 ") << juce::String ((double) latencySamples / rate * 1000.0, 1) << " ms";
     }
-    status << ko (" · CPU ") << juce::String (manager.getCpuUsage() * 100.0, 1) << "%";
+    status << ko (" · CPU ") << juce::String (devices.getCpuUsage() * 100.0, 1) << "%";
 
     // what went out since the last second: the peak, the blocks over 0 dBFS (an ASIO driver clips there) and the xruns
     const auto diag = engine.takeOutputDiagnostics();

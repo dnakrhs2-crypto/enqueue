@@ -378,14 +378,30 @@ void PluginChainComponent::toggleBypass (int index)
     runEdit (bypass ? ko ("바이패스") : ko ("바이패스 해제"), [target, index, bypass] { target->setBypassed (index, bypass); });
 }
 
+void PluginChainComponent::placeHeaderButtons (juce::Component& host, juce::Rectangle<int> bounds)
+{
+    if (addButton.getParentComponent() != &host)
+    {
+        host.addAndMakeVisible (addButton);
+        host.addAndMakeVisible (manageButton);
+    }
+    manageButton.setBounds (bounds.removeFromRight (100));
+    bounds.removeFromRight (8);
+    addButton.setBounds (bounds.removeFromRight (100));
+    resized();
+}
+
 void PluginChainComponent::resized()
 {
     auto area = getLocalBounds();
-    auto buttons = area.removeFromRight (100);
-    manageButton.setBounds (buttons.removeFromBottom (Palette::fieldHeight));
-    buttons.removeFromBottom (4);
-    addButton.setBounds (buttons.removeFromBottom (Palette::fieldHeight));
-    area.removeFromRight (8);
+    if (addButton.getParentComponent() == this)
+    {
+        auto buttons = area.removeFromRight (100);
+        manageButton.setBounds (buttons.removeFromBottom (Palette::fieldHeight));
+        buttons.removeFromBottom (4);
+        addButton.setBounds (buttons.removeFromBottom (Palette::fieldHeight));
+        area.removeFromRight (8);
+    }
 
     viewport.setBounds (area);
     emptyLabel.setBounds (area.withHeight (slotHeight));

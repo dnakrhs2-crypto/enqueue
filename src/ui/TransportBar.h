@@ -102,7 +102,7 @@ private:
     juce::Label momentaryLabel, momentaryValue, averageLabel, averageValue;
     juce::TextButton averageWindow;
     int averageSeconds = 20;
-    juce::Rectangle<int> nextCard;
+    juce::Rectangle<int> nextCard, nextDivider;
     Palette::CachedShadow shadows[6];
     bool goLocked = false;
     bool goFlashing = false;

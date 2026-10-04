@@ -159,7 +159,7 @@ namespace Palette
     constexpr float crosspointAlpha = 0.22f, waveDimAlpha = 0.35f, envelopeAlpha = 0.9f;
     constexpr int fieldHeight = 30, formRowHeight = 38, matrixCellSize = 38;
     constexpr int matrixCellWidth = 62, matrixHeaderWidth = 104, matrixGap = 1;
-    constexpr int inspectorPageWidth = 860, inspectorBasicHeight = 232, inspectorPlotHeight = 250, inspectorFormHeight = 208;
+    constexpr int inspectorPageWidth = 860, inspectorBasicHeight = 192, inspectorPlotHeight = 192, inspectorFormHeight = 192;
     constexpr int inspectorControlWidth = 936, inspectorWideWidth = 1080;
     constexpr int modeToggleWidth = 164, loudnessWidth = 300, loudnessWindowWidth = 48, loudnessValueHeight = 46, loudnessLabelHeight = 18, weekdaySize = 26;
     constexpr int dialogInset = 8, pluginSlotWidth = 216, pluginSlotHeight = 72, pluginSlotGap = 26;
@@ -178,7 +178,7 @@ namespace Palette
     constexpr float tickSize = 15.0f;
     constexpr float groupTextStroke = 0.25f, goTextStroke = 0.8f;
     constexpr int gap = 12, cardInset = 10, cardHeaderHeight = 40, tabBarHeight = 41;
-    constexpr int menuBarHeight = 32, transportHeight = 128, footerHeight = 30;
+    constexpr int menuBarHeight = 32, transportHeight = 96, footerHeight = 30;
     constexpr int goWidth = 220, transportWidth = 360, minTransportWidth = 260, buttonGap = 8;
     constexpr int tableHeaderHeight = 30, rowHeights[] = { 28, 32, 40 };
     constexpr int statusColumnWidth = 34, numberColumnWidth = 52, fileColumnWidth = 250;

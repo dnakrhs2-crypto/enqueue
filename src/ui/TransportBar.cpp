@@ -57,11 +57,12 @@ void TransportBar::TransportButton::paintButton (juce::Graphics& g, bool over, b
     drawSurface (g, getLocalBounds(), findColour (juce::TextButton::buttonColourId), colour, over, down);
     const auto font = Palette::font (Palette::bodySize, true);
     const int captionWidth = juce::GlyphArrangement::getStringWidthInt (font, getButtonText());
-    const bool twoLine = key.isNotEmpty();   // pause, fade-out and panic alike: the caption on top, the key (and a time) under it, captions on one line
-    const int totalWidth = Palette::statusIconSize + 8 + captionWidth + (twoLine ? 0 : 8 + keyWidth (key));
-    auto line = getLocalBounds().withSizeKeepingCentre (juce::jmin (getWidth() - 16, totalWidth), 22);
-    if (twoLine)
-        line.translate (0, -8);
+    const int keySpace = key.isEmpty() ? 0 : juce::jmin (keyWidth (key), getWidth() / 3);
+    const int detailWidth = detail.isEmpty() ? 0 : juce::jmin (juce::GlyphArrangement::getStringWidthInt (
+        Palette::font (Palette::fileSize, true), detail), getWidth() / 4);
+    const int suffixWidth = (keySpace > 0 ? 10 + keySpace : 0) + (detailWidth > 0 ? 4 + detailWidth : 0);
+    const int totalWidth = Palette::statusIconSize + 8 + captionWidth + suffixWidth;
+    auto line = getLocalBounds().withSizeKeepingCentre (juce::jmin (getWidth() - 12, totalWidth), 22);
     const auto iconArea = line.removeFromLeft (Palette::statusIconSize).toFloat();
     const auto c = iconArea.getCentre();
     juce::Path path;
@@ -85,23 +86,21 @@ void TransportBar::TransportButton::paintButton (juce::Graphics& g, bool over, b
         path.addRectangle (c.x - 3.0f, c.y - 3.0f, 6.0f, 6.0f);
     g.fillPath (path);
     line.removeFromLeft (8);
-    if (! twoLine)
-    {
-        drawKey (g, line.removeFromRight (keyWidth (key)).withSizeKeepingCentre (keyWidth (key), 15), colour, key);
-        line.removeFromRight (8);
-    }
+    auto suffix = line.removeFromRight (suffixWidth);
     g.setColour (colour);
     g.setFont (font);
     g.drawText (getButtonText(), line, juce::Justification::centred, true);
-    if (twoLine)
+    if (keySpace > 0)
     {
-        const int detailWidth = detail.isEmpty() ? 0 : 4 + juce::GlyphArrangement::getStringWidthInt (Palette::font (Palette::fileSize, true), detail);
-        auto bottom = getLocalBounds().withSizeKeepingCentre (juce::jmin (getWidth() - 10, keyWidth (key) + detailWidth), 16).translated (0, 11);
-        drawKey (g, bottom.removeFromLeft (juce::jmax (16, bottom.getWidth() - detailWidth)), colour, key);
-        bottom.removeFromLeft (4);
+        suffix.removeFromLeft (10);
+        drawKey (g, suffix.removeFromLeft (keySpace).withSizeKeepingCentre (keySpace, 15), colour, key);
+    }
+    if (detailWidth > 0)
+    {
+        suffix.removeFromLeft (4);
         g.setColour (colour);
         g.setFont (Palette::font (Palette::fileSize, true));
-        g.drawText (detail, bottom, juce::Justification::centredLeft, true);
+        g.drawText (detail, suffix, juce::Justification::centredLeft, true);
     }
 }
 
@@ -266,12 +265,13 @@ void TransportBar::styleButton (juce::TextButton& button, juce::Colour colour)
 void TransportBar::setStandbyCue (int index, const Cue* cue)
 {
     const auto previousNumber = cueNumber.getText();
+    const auto previousFile = cueFile.getText();
     updateStandbyCue (index, cue);
     cueNumber.setTooltip (cueNumber.getText());
     cueName.setTooltip (cueName.getText());
     cueFile.setTooltip (cueFile.getText());
     cueMeta.setTooltip (cueMeta.getText());
-    if (cueNumber.getText() != previousNumber)
+    if (cueNumber.getText() != previousNumber || cueFile.getText() != previousFile)
         resized();
 }
 
@@ -530,51 +530,61 @@ void TransportBar::resized()
     auto area = getLocalBounds();
     goButton.setBounds (area.removeFromLeft (juce::jmin (Palette::goWidth, getWidth() / 6)));
     area.removeFromLeft (Palette::gap);
-    auto right = area.removeFromRight (juce::jlimit (Palette::minTransportWidth, Palette::transportWidth, getWidth() / 4));
-    const int halfWidth = juce::jmax (0, (right.getWidth() - Palette::buttonGap) / 2);
-    auto top = right.removeFromTop (juce::jmax (0, (right.getHeight() - Palette::buttonGap) / 2));
-    pauseButton.setBounds (top.removeFromLeft (halfWidth));
-    top.removeFromLeft (Palette::buttonGap);
-    fadeOutButton.setBounds (top);
-    right.removeFromTop (Palette::buttonGap);
-    panicButton.setBounds (right.removeFromLeft (halfWidth));
-    right.removeFromLeft (Palette::buttonGap);
-    panicSettingsButton.setBounds (right);
+    auto right = area.removeFromRight (332);
+    auto leftColumn = right.removeFromLeft (146);
+    right.removeFromLeft (8);
+    pauseButton.setBounds (leftColumn.removeFromTop (juce::jmax (0, (leftColumn.getHeight() - 8) / 2)));
+    leftColumn.removeFromTop (8);
+    fadeOutButton.setBounds (leftColumn);
+    panicSettingsButton.setBounds (right.removeFromBottom (26));
+    right.removeFromBottom (8);
+    panicButton.setBounds (right);
     area.removeFromRight (Palette::gap);
     nextCard = area;
     const juce::Rectangle<int> surfaces[] = { nextCard, goButton.getBounds(), pauseButton.getBounds(), fadeOutButton.getBounds(),
                                              panicButton.getBounds(), panicSettingsButton.getBounds() };
     for (int i = 0; i < 6; ++i)
         shadows[i].resize (surfaces[i]);
-    area.reduce (16, 12);
+    area.reduce (16, 9);
+    const bool showReadings = area.getWidth() >= 500;
+    for (auto* component : std::initializer_list<juce::Component*> { &momentaryLabel, &momentaryValue, &averageLabel, &averageValue, &averageWindow })
+        component->setVisible (showReadings);
+    nextDivider = {};
+    if (showReadings)
+    {
+        auto readings = area.removeFromRight (214);
+        area.removeFromRight (15);
+        nextDivider = area.removeFromRight (1);
+        area.removeFromRight (15);
+        auto live = readings.removeFromLeft (92);
+        readings.removeFromLeft (16);
+        momentaryLabel.setBounds (live.removeFromTop (18));
+        live.removeFromTop (2);
+        momentaryValue.setBounds (live.removeFromTop (37));
+        auto averageHeading = readings.removeFromTop (18);
+        averageLabel.setBounds (averageHeading.removeFromLeft (50));
+        averageHeading.removeFromLeft (8);
+        averageWindow.setBounds (averageHeading);
+        readings.removeFromTop (2);
+        averageValue.setBounds (readings.removeFromTop (37));
+    }
     auto heading = area.removeFromTop (18);
-    standbyTitle.setBounds (heading.removeFromLeft (60));
+    standbyTitle.setBounds (heading.removeFromLeft (40));
+    heading.removeFromLeft (8);
     contextLabel.setBounds (heading);
     statusLabel.setBounds (heading);
     area.removeFromTop (4);
-    auto readings = area.removeFromRight (juce::jmin (Palette::loudnessWidth, area.getWidth() / 2));
-    auto live = readings.removeFromLeft (readings.getWidth() / 2);
-    live.removeFromRight (Palette::buttonGap);
-    momentaryLabel.setBounds (live.removeFromTop (Palette::loudnessLabelHeight));
-    momentaryValue.setBounds (live.removeFromTop (Palette::loudnessValueHeight));
-    // "평균 · LUFS" first, the average window ("20초 ▾") after it (gom: the seconds in front read wrong)
-    auto averageHeading = readings.removeFromTop (Palette::loudnessLabelHeight);
-    const int averageLabelWidth = juce::GlyphArrangement::getStringWidthInt (averageLabel.getFont(), averageLabel.getText()) + 2;
-    const int windowSpace = Palette::loudnessWindowWidth + Palette::buttonGap;   // the button and its gap are budgeted first: the label gives way
-    averageLabel.setBounds (averageHeading.removeFromLeft (juce::jlimit (0, juce::jmax (0, averageHeading.getWidth() - windowSpace), averageLabelWidth)));
-    averageHeading.removeFromLeft (Palette::buttonGap);
-    averageWindow.setBounds (averageHeading.removeFromLeft (Palette::loudnessWindowWidth));
-    averageValue.setBounds (readings.removeFromTop (Palette::loudnessValueHeight));
-    area.removeFromRight (Palette::buttonGap);
     auto main = area.removeFromTop (33);
     const int numberWidth = juce::GlyphArrangement::getStringWidthInt (cueNumber.getFont(), cueNumber.getText());
     cueNumber.setBounds (main.removeFromLeft (juce::jmin (numberWidth, juce::jmax (0, main.getWidth() / 3))));
     main.removeFromLeft (10);
     cueName.setBounds (main);
     area.removeFromTop (4);
-    cueFile.setBounds (area.removeFromTop (18));
-    area.removeFromTop (4);
-    cueMeta.setBounds (area.removeFromTop (18));
+    auto fileLine = area.removeFromTop (18);
+    const int fileWidth = juce::GlyphArrangement::getStringWidthInt (cueFile.getFont(), cueFile.getText());
+    cueFile.setBounds (fileLine.removeFromLeft (juce::jmin (fileWidth, fileLine.getWidth() / 2)));
+    fileLine.removeFromLeft (16);
+    cueMeta.setBounds (fileLine);
 }
 
 void TransportBar::paint (juce::Graphics& g)
@@ -582,6 +592,8 @@ void TransportBar::paint (juce::Graphics& g)
     for (const auto& shadow : shadows)
         shadow.draw (g);
     Palette::drawCard (g, nextCard);
+    g.setColour (Palette::outline);
+    g.fillRect (nextDivider);
 }
 
 } // namespace gocue

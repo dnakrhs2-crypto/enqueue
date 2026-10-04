@@ -6,11 +6,11 @@
 
 namespace gocue::SplitLayout
 {
-    constexpr int minInspectorHeight = 236;   // 26 px rows (2026-09-03)
+    constexpr int minInspectorHeight = 197;   // one 41px header; short pages remain scrollable
     constexpr int minTableHeight = 140;
     constexpr int minActiveCuesWidth = 260;
     constexpr int minTableWidth = 420;
-    constexpr double defaultInspectorFraction = 0.45;
+    constexpr double defaultInspectorFraction = 0.319;
     constexpr double defaultActiveCuesFraction = 0.27;
 
     /** Size of a secondary pane (inspector below, active cues to the right): its share of the split area,

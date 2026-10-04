@@ -32,11 +32,14 @@ private:
     juce::Rectangle<int> modeBounds;
 };
 
-/** Bottom strip: cue count, broken-cue warnings, mode hint and audio status. */
+/** Owns the status controls: this strip lives in ContainerTabs; audio lives in the menu bar. */
 class FooterBar : public juce::Component
 {
 public:
     FooterBar();
+    void attachAudioStatus (juce::Component& host);
+    void setAudioBounds (juce::Rectangle<int> bounds);
+    int getPreferredWidth() const;
 
     void setShowMode (bool showMode, const ShortcutService* shortcuts = nullptr);
     void setCueCount (int count);
@@ -52,6 +55,7 @@ public:
     void paint (juce::Graphics& g) override;
 
 private:
+    void updateLayout();
     juce::TextButton warningsButton;
     juce::Label countLabel, modeHint, audioStatus, midiStatus;
     bool showMode = false;

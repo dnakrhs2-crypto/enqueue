@@ -9,6 +9,7 @@
 
 namespace gocue
 {
+class FooterBar;
 
 /** The strip above the cue list: one tab per cue list / cart of the project, the active one highlighted,
     and a "+" that adds a list or a cart. Right-click (or double-click) a tab for rename / cart / grid / delete. */
@@ -21,6 +22,7 @@ public:
     void refresh();
     void setEditable (bool shouldBeEditable);
     void setInfoText (juce::String text);
+    void setStatusBar (FooterBar& status);
 
     std::function<void (int index)> onSelect;
     std::function<void()> onAddList;
@@ -56,6 +58,7 @@ private:
     juce::Rectangle<int> infoBounds;
     juce::String infoText;
     bool editable = true;
+    FooterBar* statusBar = nullptr;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (ContainerTabs)
 };

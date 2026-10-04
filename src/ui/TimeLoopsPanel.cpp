@@ -1,6 +1,7 @@
 #include "ui/TimeLoopsPanel.h"
 
 #include "ui/UiUtils.h"
+#include "ui/InspectorLayout.h"
 
 namespace gocue
 {
@@ -526,19 +527,20 @@ void TimeLoopsPanel::showContextMenu (juce::Point<int> screenPosition)
 //==============================================================================
 void TimeLoopsPanel::resized()
 {
-    auto area = getLocalBounds().reduced (10, 6);
-    const int rowHeight = Palette::fieldHeight;
-
-    auto row = area.removeFromTop (rowHeight);
-    // 834 px in total: fits the 840 px inside the minimum window width
-    startLabel.setBounds (row.removeFromLeft (34));
+    const InspectorClusters clusters (getWidth(), 2);
+    if (auto* page = findParentComponentOfClass<InspectorPage>())
+        page->setMinimumHeight (clusters.wrapped ? 268 : Palette::inspectorPlotHeight);
+    auto area = clusters.cue;
+    auto nextRow = [&] { auto r = area.removeFromTop (30); area.removeFromTop (8); return r; };
+    auto row = nextRow();
+    startLabel.setBounds (row.removeFromLeft (64));
     startEditor.setBounds (row.removeFromLeft (84));
     row.removeFromLeft (8);
     endLabel.setBounds (row.removeFromLeft (24));
     endEditor.setBounds (row.removeFromLeft (84));
     row.removeFromLeft (8);
     lengthLabel.setBounds (row.removeFromLeft (190));
-    row.removeFromLeft (8);
+    row = nextRow();
     countLabel.setBounds (row.removeFromLeft (64));
     countEditor.setBounds (row.removeFromLeft (52));
     row.removeFromLeft (6);
@@ -549,34 +551,36 @@ void TimeLoopsPanel::resized()
     row.removeFromLeft (6);
     pitchToggle.setBounds (row.removeFromLeft (84));
 
-    area.removeFromTop (4);
-    row = area.removeFromTop (rowHeight);
+    area = clusters.playback;
+    row = nextRow();
     envelopeLabel.setBounds (row.removeFromLeft (104));
     envelopeToggle.setBounds (row.removeFromLeft (60));
+    row = nextRow();
+    row.removeFromLeft (104);
     linearToggle.setBounds (row.removeFromLeft (140));
     lockToggle.setBounds (row.removeFromLeft (130));
-    row.removeFromLeft (12);
+
+    area = clusters.trigger;
+    row = nextRow();
     resetButton.setBounds (row.removeFromLeft (60));
+    row = nextRow();
+    sizeLabel.setBounds (row.removeFromLeft (34));
+    sizeUpButton.setBounds (row.removeFromLeft (28));
+    row.removeFromLeft (4);
+    sizeDownButton.setBounds (row.removeFromLeft (28));
+    row.removeFromLeft (12);
+    zoomLabel.setBounds (row.removeFromLeft (34));
+    zoomInButton.setBounds (row.removeFromLeft (28));
+    row.removeFromLeft (4);
+    zoomOutButton.setBounds (row.removeFromLeft (28));
 
-    zoomOutButton.setBounds (row.removeFromRight (28));
-    row.removeFromRight (4);
-    zoomInButton.setBounds (row.removeFromRight (28));
-    row.removeFromRight (4);
-    zoomLabel.setBounds (row.removeFromRight (34));
-    row.removeFromRight (12);
-    sizeDownButton.setBounds (row.removeFromRight (28));
-    row.removeFromRight (4);
-    sizeUpButton.setBounds (row.removeFromRight (28));
-    row.removeFromRight (4);
-    sizeLabel.setBounds (row.removeFromRight (34));
-
-    area.removeFromTop (6);
-    waveform.setBounds (area);
+    waveform.setBounds (getLocalBounds().reduced (10, 0).withTrimmedTop (clusters.bottom).withTrimmedBottom (6));
 }
 
 void TimeLoopsPanel::paint (juce::Graphics& g)
 {
     g.fillAll (Palette::panel);
+    InspectorClusters (getWidth(), 2).paint (g);
 }
 
 } // namespace gocue

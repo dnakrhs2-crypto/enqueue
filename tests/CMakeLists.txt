@@ -49,6 +49,7 @@ target_sources(EnqueueTests PRIVATE
     ProjectHistoryTests.cpp
     ProjectDocumentTests.cpp
     SplitLayoutTests.cpp
+    E06LayoutTests.cpp
     CueOrderTests.cpp
     DeviceProbeTests.cpp
     OutputLimitTests.cpp
