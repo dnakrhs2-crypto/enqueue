@@ -54,6 +54,16 @@ juce::String desktopName()
     return juce::String (name);
 }
 
+// On the Default desktop the operator keeps working while the tests run (the release gate takes minutes), so
+// another app may come to the front at any moment. What must never happen is this process taking the foreground.
+bool foregroundIsThisProcess()
+{
+    DWORD process = 0;
+    if (const auto window = GetForegroundWindow())
+        GetWindowThreadProcessId (window, &process);
+    return process == GetCurrentProcessId();
+}
+
 void dispatchMessages()
 {
     MSG message {};
@@ -123,7 +133,6 @@ public:
         const auto bounds = physicalBounds (window);
         const auto hwnd = handle (window);
         const auto style = GetWindowLongPtrW (hwnd, GWL_STYLE);
-        const auto foreground = GetForegroundWindow();
 
         beginTest ("hidden window covers physical monitor with no caption/frame; saves only its original state");
         expect (! window.isVisible() && ! IsWindowVisible (hwnd));
@@ -143,7 +152,7 @@ public:
         dispatchMessages();
         expect (window.isKioskMode() && window.mode.isActive() && physicalBounds (window) == monitorBounds (window),
                 "JUCE must include tools/juce-patches/0003-kiosk-mode-survives-app-switch.patch");
-        expect (! IsWindowVisible (hwnd) && GetForegroundWindow() == foreground);
+        expect (! IsWindowVisible (hwnd) && ! foregroundIsThisProcess());
 
         beginTest ("repeated enter/exit are harmless and restore exact geometry, style and state");
         window.mode.enter();
@@ -155,7 +164,7 @@ public:
         expect (physicalBounds (window) == bounds);
         expect (GetWindowLongPtrW (hwnd, GWL_STYLE) == style);
         expectEquals (window.getWindowStateAsString(), original);
-        expect (GetForegroundWindow() == foreground);
+        expect (! foregroundIsThisProcess());
         expect (! IsWindowVisible (hwnd));
 
         beginTest ("external kiosk release restores asynchronously, notifies once and permits re-entry");
@@ -304,7 +313,7 @@ public:
                 mode.shutdown();
                 expect (! mode.isActive() && ! closing.isKioskMode());
                 expect (! closing.getProperties().contains (FullScreenMode::keepKioskModeWhenAppInactive));
-                expect (! IsWindowVisible (handle (closing)) && GetForegroundWindow() == foreground);
+                expect (! IsWindowVisible (handle (closing)) && ! foregroundIsThisProcess());
                 mode.enter(); // leave the fallback destructor a kiosk to release
             }
             expect (! closing.isKioskMode());
@@ -323,7 +332,7 @@ public:
             const auto afterShutdown = physicalBounds (*closing);
             dispatchMessages();
             expect (physicalBounds (*closing) == afterShutdown, "a cancelled restore must not change the window");
-            expect (! IsWindowVisible (handle (*closing)) && GetForegroundWindow() == foreground);
+            expect (! IsWindowVisible (handle (*closing)) && ! foregroundIsThisProcess());
             closing->mode.enter();
             juce::Desktop::getInstance().setKioskModeComponent (nullptr);
             closing.reset();
