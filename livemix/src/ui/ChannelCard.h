@@ -53,7 +53,8 @@ private:
     struct SendRow;
     struct ChainChip;
 
-    int chainRowsForWidth (int width) const;
+    int chainWidthForWidth (int width) const;
+    int chainHeightForWidth (int width) const;
     void rebuildSends();
     void rebuildChain();
     void commitInput();
@@ -79,7 +80,8 @@ private:
     juce::TextButton openChainButton, addPluginButton, pluginGroupsButton;
     juce::Label groupsCaption;
     std::array<std::unique_ptr<juce::TextButton>, (size_t) MixSession::maxPluginGroups> groupButtons;   // 1..5 under the chain: enabled once the group exists, lit (red) while it is off
-    static constexpr int chainFooter = 3 + 26 + 6 + 30;   // after the chip row step: groups, then buttons
+    static constexpr int chainFooter = 1 + 30 + 6 + 30;   // after the chip row step: chain actions, then group actions
+    static constexpr int groupRowWidth = 112 + 8 + 66 + 5 * 30 + 4 * 4;
     std::vector<std::unique_ptr<SendRow>> sends;
     Chip masterChip, directChip, muteGroupChip { ko ("뮤트그룹") };
     juce::ComboBox directCombo;

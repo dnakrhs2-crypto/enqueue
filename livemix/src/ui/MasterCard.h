@@ -39,7 +39,7 @@ public:
     std::function<void (int slotIndex)> onOpenPluginEditor;
 
     void resized() override;
-    /** The height the card needs at 'width': the columns' height (more when the chips take more than two rows),
+    /** The height the card needs at 'width': the columns' height (including wrapped chips and actions),
         the compact stack's height below narrowBelow, or the strip's when folded. */
     int getPreferredHeight (int width) const;
     /** The height of the columns or the compact stack at 'width', whether or not the card is folded right now. */
@@ -58,7 +58,14 @@ private:
     int obsToggleWidth() const;
     int obsHintHeight (int width) const;
     int obsControlsHeight (int width, int hintGap) const;
-    int chainRowsForWidth (int width) const;
+    struct ChainLayout
+    {
+        juce::Rectangle<int> caption, open, add;
+        std::vector<juce::Rectangle<int>> chips;
+        int bottom = 0;
+    };
+    ChainLayout measureChain (int width) const;
+    static bool mediumLatencyFitsBesideChain (int width);
     void refreshObsStatus();
     void refreshObsToggle();
     static constexpr int obsRowHeight = 28, obsRowGap = 8;

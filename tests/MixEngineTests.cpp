@@ -791,7 +791,7 @@ public:
                     gocue::livemix::MainComponent main (document, settings, actions);
                     for (auto* child : main.getChildren())
                         if (auto* master = dynamic_cast<MasterCard*> (child))
-                            for (int width : { 364, 988, 1400 })
+                            for (int width : { 364, 388, 768, 936, 988, 1400, 1408, 1920 })
                                 for (int state = 0; state <= (int) MasterCard::ObsStatus::portableObs; ++state)
                                     for (int height : { 480, 1100 })
                                     {
@@ -804,10 +804,14 @@ public:
                                                 masterWidth = width - viewport->getScrollBarThickness();
                                         expectEquals (master->getWidth(), masterWidth);
                                         expectEquals (master->getHeight(), master->getPreferredHeight (masterWidth));
+                                        expectEquals (master->getBottom(), height - 38);   // l06: 8 px above the 30 px status bar
                                         expect (main.getLocalBounds().contains (master->getBounds()));
                                         for (auto* other : main.getChildren())
                                             if (auto* viewport = dynamic_cast<juce::Viewport*> (other); viewport != nullptr && viewport->isVisible())
+                                            {
                                                 expect (! viewport->getBounds().intersects (master->getBounds()));
+                                                expectEquals (master->getY() - viewport->getBottom(), 20);
+                                            }
                                     }
                     fake->failOutputs = true;
                     rebuilt->callback->audioDeviceStopped();

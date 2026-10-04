@@ -42,7 +42,7 @@ public:
             if (reason != nullptr) expect (advice.reason.contains (ko (reason)), advice.reason);
             card.setObsStatus (advice.status, advice.reason);
             for (bool folded : { false, true })
-                for (int width : { 364, 400, 428, 500, 580, 640, 700, 759, 760, 960, 987, 988, 1000, 1384, 1385, 1400 })
+                for (int width : { 364, 388, 399, 400, 428, 500, 580, 640, 700, 759, 760, 927, 928, 960, 987, 988, 1000, 1384, 1385, 1400, 1920 })
                 {
                     card.setStrip (folded);
                     card.setSize (width, card.getPreferredHeight (width));
@@ -121,7 +121,7 @@ public:
                      "켜져 있는 OBS가 LiveMix 플러그인을 읽지 않았습니다. OBS를 완전히 끄고 다시 켜세요.");
         checkAdvice ({}, true, false, true, Reader::none, {}, State::waiting, "OBS 대기 중", "OBS를 켜고 소스(+)에서 'LiveMix'를 추가하세요.");
         card.setStrip (false);
-        beginTest ("l03 master columns, two tiers and narrow stack match the mockup rectangles");
+        beginTest ("l06 master columns, two tiers and narrow stack match the mockup rectangles");
         engine.getMasterChain().addPlugin (std::make_unique<TestGainPlugin> (1.0f));
         card.refresh();
         card.setLatency (53.0, 480, 48000.0);
@@ -142,36 +142,59 @@ public:
         for (int width : { 1400, 960, 428 })
         {
             const bool wide = width == 1400, narrow = width == 428;
-            expectEquals (card.getPreferredHeight (width), wide ? 154 : narrow ? 308 : 238);
+            expectEquals (card.getPreferredHeight (width), wide ? 192 : narrow ? 310 : 202);
             card.setSize (width, card.getPreferredHeight (width));
             rect (withText ("M"), { 14, 14, 32, 30 });
             rect (withText (ko ("마스터")), { 56, 12, narrow ? 160 : 152, 34 });
-            rect (withText (ko ("체인 열기")), { narrow ? 132 : 226, wide ? 112 : narrow ? 54 : 78, 92, 30 });
-            rect (withText ("LUFS"), { narrow ? 14 : 605, wide ? 112 : narrow ? 130 : 40, 56, 30 });
-            rect (withText (ko ("OBS로 보내기")), { wide ? 1077 : narrow ? 14 : 404, wide ? 11 : narrow ? 240 : 125, 117, 28 });
-            rect (card.findChildWithID ("obs-source-hint"), { wide ? 1077 : narrow ? 14 : 404, wide ? 41 : narrow ? 268 : 157, narrow ? 400 : 309, 28 });
+            rect (withText (ko ("VST3 체인")), { narrow ? 14 : 404, narrow ? 55 : 12, narrow ? 70 : 361, narrow ? 30 : 26 });
+            rect (withText ("1  TestGain"), { narrow ? 92 : 404, narrow ? 54 : 39, 110, 32 });
+            rect (withText (ko ("체인 열기")), { narrow ? 210 : 522, narrow ? 55 : 40, 92, 30 });
+            rect (withText (ko ("+ 추가")), { narrow ? 310 : 622, narrow ? 55 : 40, 76, 30 });
+            rect (withText ("LUFS"), { wide ? 895 : narrow ? 156 : 890, narrow ? 94 : 40, 56, 30 });
+            if (wide)
+            {
+                rect (withText (ko ("지연")), { 783, 12, 168, 26 });
+                rect (withText ("53.0 ms"), { 783, 38, 104, 34 });
+                rect (withText (ko ("480 샘플") + " · 48.0 kHz"), { 783, 72, 168, 20 });
+            }
+            else
+                rect (withText (ko ("지연 53.0 ms · 480 샘플")), { narrow ? 14 : 748, narrow ? 94 : 40, 134, 30 });
+            rect (withText (ko ("메인 출력")), { wide ? 1152 : 14, wide ? 12 : narrow ? 132 : 88, 60, wide ? 26 : 30 });
+            rect (withText (ko ("출력 미터 L / R")), { wide ? 1152 : 14, wide ? 46 : narrow ? 170 : 126, wide ? 234 : narrow ? 400 : 372, 18 });
+            rect (withText (ko ("OBS로 보내기")), { wide ? 1152 : narrow ? 14 : 404, wide ? 118 : narrow ? 242 : 89, 117, 28 });
+            rect (card.findChildWithID ("obs-status"), { wide ? 1277 : narrow ? 139 : 529, wide ? 118 : narrow ? 242 : 89, 78, 28 });
+            // Preserve obsHintHeight's native font measurement: 37 px fits with a 7 px bottom inset.
+            rect (card.findChildWithID ("obs-source-hint"), { wide ? 1152 : narrow ? 14 : 404, wide ? 148 : narrow ? 270 : 121, wide ? 234 : narrow ? 400 : 542, wide ? 37 : 28 });
             for (auto* child : card.getChildren())
             {
                 if (dynamic_cast<juce::ComboBox*> (child) != nullptr)
-                    rect (child, wide ? juce::Rectangle<int> { 783, 40, 276, 30 }
-                                     : narrow ? juce::Rectangle<int> { 296, 130, 118, 30 } : juce::Rectangle<int> { 80, 124, 306, 30 });
+                    rect (child, wide ? juce::Rectangle<int> { 1218, 10, 168, 30 }
+                                     : narrow ? juce::Rectangle<int> { 80, 132, 334, 30 } : juce::Rectangle<int> { 80, 88, 306, 30 });
                 if (dynamic_cast<MeterBar*> (child) != nullptr)
-                    rect (child, wide ? juce::Rectangle<int> { 783, 96, 276, 46 }
-                                     : narrow ? juce::Rectangle<int> { 14, 186, 400, 46 } : juce::Rectangle<int> { 14, 180, 372, 46 });
+                    rect (child, wide ? juce::Rectangle<int> { 1152, 64, 234, 46 }
+                                     : narrow ? juce::Rectangle<int> { 14, 188, 400, 46 } : juce::Rectangle<int> { 14, 144, 372, 46 });
             }
         }
         engine.getMasterChain().clear();
         card.refresh();
         beginTest ("OBS controls and full meter fit every form and strip visibility threshold");
-        for (int plugins : { 0, 7 })
+        struct LongPlugin : TestGainPlugin
         {
+            LongPlugin() : TestGainPlugin (1.0f) {}
+            const juce::String getName() const override { return "A long plugin name that fills a complete chain column"; }
+        };
+        for (int pluginCase : { 0, 1, 2, 3, 7, -1, -7 })
+        {
+            engine.getMasterChain().clear();
+            const int plugins = std::abs (pluginCase);
             for (int i = 0; i < plugins; ++i)
-                engine.getMasterChain().addPlugin (std::make_unique<TestGainPlugin> (1.0f));
+                if (pluginCase < 0) engine.getMasterChain().addPlugin (std::make_unique<LongPlugin>());
+                else engine.getMasterChain().addPlugin (std::make_unique<TestGainPlugin> (1.0f));
             card.refresh();
             for (bool folded : { false, true })
             {
                 card.setStrip (folded);
-                for (int width : { 364, 400, 428, 500, 580, 640, 700, 759, 760, 960, 987, 988, 1000, 1384, 1385, 1400 })
+                for (int width : { 364, 388, 399, 400, 428, 500, 580, 640, 700, 759, 760, 927, 928, 960, 987, 988, 1000, 1384, 1385, 1400, 1920 })
                 {
                     card.setSize (width, card.getPreferredHeight (width));
                     juce::ToggleButton* toggle = nullptr;
@@ -213,7 +236,7 @@ public:
                     {
                         const juce::File directory (folder);
                         expect (directory.createDirectory().wasOk());
-                        juce::FileOutputStream output (directory.getChildFile ("master-" + juce::String (width) + "-" + juce::String (plugins) + (folded ? "-strip.png" : ".png")));
+                        juce::FileOutputStream output (directory.getChildFile ("master-" + juce::String (width) + "-" + juce::String (pluginCase) + (folded ? "-strip.png" : ".png")));
                         if (output.openedOk())
                         {
                             expect (output.setPosition (0));
@@ -306,7 +329,7 @@ public:
 
     void runLayoutIntegration()
     {
-        beginTest ("l03 window geometry, scrollbar auto-hide, both drawers, strip folding and UI scales");
+        beginTest ("l06 window geometry, scrollbar auto-hide, both drawers, strip folding and UI scales");
         struct IsolatedFolder
         {
             juce::File file = juce::File::createTempFile ("-livemix-layout");
@@ -358,36 +381,47 @@ public:
             main.setTransform (juce::AffineTransform::scale (scale));
             main.setSize (1440, 900);
             main.resized();
-            rect (*master, { 16, 710, 1400, 154 });
-            rect (*viewport, { 16, 106, 1408, 584 });
-            rect (*first, { 0, 0, 1400, 154 });
-            rect (*add, { 0, 498, 1400, 56 });
-            expectEquals (viewport->getViewedComponent()->getHeight(), 554);
+            rect (*master, { 16, 670, 1400, 192 });
+            rect (*viewport, { 16, 106, 1408, 544 });
+            rect (*first, { 0, 0, 1400, 156 });
+            rect (*add, { 0, 504, 1400, 56 });
+            expectEquals (viewport->getViewedComponent()->getHeight(), 560);
+            expect (viewport->getVerticalScrollBar().isVisible());
+            main.setSize (1440, 1000);
             expect (! viewport->getVerticalScrollBar().isVisible());
+            expectEquals (first->getWidth(), 1400);
+            main.setSize (1440, 900);
             for (bool fx : { false, true })
             {
                 if (fx) top->onFxPanel();
                 else first->onOpenChain (first->getChannelId());
-                rect (*master, { 16, 624, 960, 238 });
-                rect (*viewport, { 16, 106, 968, 498 });
-                rect (*first, { 0, 0, 960, 270 });
-                rect (*add, { 0, 846, 960, 56 });
+                rect (*master, { 16, 660, 960, 202 });
+                rect (*viewport, { 16, 106, 968, 534 });
+                rect (*first, { 0, 0, 960, 272 });
+                rect (*add, { 0, 852, 960, 56 });
+                expectEquals (viewport->getViewedComponent()->getHeight(), 908);
                 expect (viewport->getVerticalScrollBar().isVisible());
                 if (fx) top->onFxPanel();
                 else drawer->onClose();
                 expectEquals (first->getWidth(), 1400);
-                expect (! viewport->getVerticalScrollBar().isVisible());
+                expect (viewport->getVerticalScrollBar().isVisible());
             }
             main.setSize (460, 993);
-            rect (*master, { 16, 647, 428, 308 });
-            rect (*viewport, { 16, 190, 428, 437 });
-            rect (*first, { 0, 0, 420, 616 });
+            rect (*master, { 16, 645, 428, 310 });
+            rect (*viewport, { 16, 190, 428, 435 });
+            rect (*first, { 0, 0, 420, 618 });
+            rect (*add, { 0, 1890, 420, 56 });
+            expectEquals (viewport->getViewedComponent()->getHeight(), 1946);
             expect (viewport->getVerticalScrollBar().isVisible());
             first->onOpenChain (first->getChannelId());
             expect (main.getLocalBounds().contains (master->getBounds()));
             expect (main.getLocalBounds().contains (viewport->getBounds()));
             expectEquals (drawer->getWidth(), 460);
             drawer->onClose();
+            main.setSize (420, 993);
+            rect (*master, { 16, 607, 388, 348 });
+            rect (*first, { 0, 0, 380, 618 });
+            expect (! master->isStrip());
             main.setSize (460, 650);
             expect (master->isStrip());
             expectEquals (master->getHeight(), MasterCard::stripHeight);

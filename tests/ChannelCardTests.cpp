@@ -86,18 +86,22 @@ public:
 
         struct Layout { CardLayout mode; int width, height; const char* name; };
         const Layout layouts[] {
-            { CardLayout::wide, 1400, 154, "pan-wide" },
-            { CardLayout::wide, 1385, 154, "pan-wide-min" },
-            { CardLayout::medium, 1384, 270, "pan-medium-max" },
-            { CardLayout::medium, 1140, 270, "pan-medium-1140" },
-            { CardLayout::medium, 960, 270, "pan-medium" },
-            { CardLayout::medium, 760, 270, "pan-medium-min" },
-            { CardLayout::narrow, 759, 578, "pan-narrow-max" },
-            { CardLayout::narrow, 640, 578, "pan-narrow" },
-            { CardLayout::narrow, 421, 578, "pan-narrow-421" },
-            { CardLayout::narrow, 420, 578, "pan-portrait-420" },
-            { CardLayout::narrow, 380, 578, "pan-portrait-380" },
-            { CardLayout::narrow, 364, 578, "pan-portrait-364" }
+            { CardLayout::wide, 1920, 156, "pan-wide-1920" },
+            { CardLayout::wide, 1400, 156, "pan-wide" },
+            { CardLayout::wide, 1385, 156, "pan-wide-min" },
+            { CardLayout::medium, 1384, 272, "pan-medium-max" },
+            { CardLayout::medium, 1140, 272, "pan-medium-1140" },
+            { CardLayout::medium, 960, 272, "pan-medium" },
+            { CardLayout::medium, 770, 272, "pan-medium-group-fit" },
+            { CardLayout::medium, 769, 308, "pan-medium-group-wrap" },
+            { CardLayout::medium, 760, 308, "pan-medium-min" },
+            { CardLayout::narrow, 759, 580, "pan-narrow-max" },
+            { CardLayout::narrow, 640, 580, "pan-narrow" },
+            { CardLayout::narrow, 421, 580, "pan-narrow-421" },
+            { CardLayout::narrow, 420, 580, "pan-portrait-420" },
+            { CardLayout::narrow, 380, 580, "pan-portrait-380" },
+            { CardLayout::narrow, 379, 616, "pan-portrait-group-wrap" },
+            { CardLayout::narrow, 364, 616, "pan-portrait-364" }
         };
         document.setChannelPan (id, -0.3);
         for (const auto& layout : layouts)
@@ -154,17 +158,25 @@ public:
         expect (withText (card, "C") != nullptr);
         screenshot (card, "pan-stereo-centre");
 
-        beginTest ("l03 mockup rectangles at 1400, 960 and 420 with two FX sends");
+        beginTest ("l06 mockup rectangles at 1400, 960 and 420 with two FX sends");
         document.addFx();
+        struct NamedPlugin : TestGainPlugin
+        {
+            explicit NamedPlugin (const char* text) : TestGainPlugin (1.0f), name (text) {}
+            const juce::String getName() const override { return name; }
+            juce::String name;
+        };
+        for (const auto* text : { "3 Band EQ", "MaBitcrush", "Ping Pong Pan" })
+            engine.getChannelChain (id)->addPlugin (std::make_unique<NamedPlugin> (text));
         card.refresh();
         const auto rect = [&] (juce::Component* component, juce::Rectangle<int> expected)
         {
             expect (component != nullptr);
             if (component != nullptr) expectEquals (component->getBounds().toString(), expected.toString());
         };
-        for (const auto& example : { Layout { CardLayout::wide, 1400, 154, "l03-wide" },
-                                     Layout { CardLayout::medium, 960, 270, "l03-medium" },
-                                     Layout { CardLayout::narrow, 420, 616, "l03-narrow" } })
+        for (const auto& example : { Layout { CardLayout::wide, 1400, 156, "l06-wide" },
+                                     Layout { CardLayout::medium, 960, 272, "l06-medium" },
+                                     Layout { CardLayout::narrow, 420, 618, "l06-narrow" } })
         {
             card.setLayout (example.mode);
             expectEquals (card.getPreferredHeight (example.width), example.height);
@@ -175,17 +187,32 @@ public:
             rect (mute, { 14, 102, 100, 24 });
             rect (input, narrow ? juce::Rectangle<int> { 48, 140, 266, 30 } : juce::Rectangle<int> { 226, 40, 160, 30 });
             rect (withText (card, ko ("스테레오")), narrow ? juce::Rectangle<int> { 318, 140, 88, 30 } : juce::Rectangle<int> { 298, 10, 88, 30 });
-            rect (meter, narrow ? juce::Rectangle<int> { 14, 196, 392, 40 } : juce::Rectangle<int> { 226, 102, 160, 40 });
-            rect (withText (card, ko ("체인 열기")), { narrow ? 14 : 404, narrow ? 350 : 112, 92, 30 });
-            rect (withText (card, ko ("플러그인 그룹")), { narrow ? 198 : 588, narrow ? 350 : 112, 112, 30 });
-            rect (master, { wide ? 1152 : narrow ? 14 : 404, wide ? 38 : narrow ? 530 : 184, 72, 34 });
+            rect (meterCaption, narrow ? juce::Rectangle<int> { 14, 178, 392, 18 } : juce::Rectangle<int> { 226, 86, 160, 18 });
+            rect (meter, narrow ? juce::Rectangle<int> { 14, 196, 392, 40 } : juce::Rectangle<int> { 226, 104, 160, 40 });
+            rect (withText (card, ko ("체인 열기")), { narrow ? 14 : 404, narrow ? 316 : 78, 92, 30 });
+            rect (withText (card, ko ("+ 추가")), { narrow ? 114 : 504, narrow ? 316 : 78, 76, 30 });
+            rect (withText (card, ko ("플러그인 그룹")), { narrow ? 14 : 404, narrow ? 352 : 114, 112, 30 });
+            rect (withText (card, ko ("그룹 OFF")), { narrow ? 134 : 524, narrow ? 354 : 116, 66, 26 });
+            int groupCount = 0;
+            for (int i = 0; i < 5; ++i)
+                for (auto* child : card.getChildren())
+                    if (auto* button = dynamic_cast<juce::TextButton*> (child); button != nullptr && button->getButtonText() == juce::String (i + 1))
+                    {
+                        rect (button, { (narrow ? 200 : 590) + 34 * i, narrow ? 355 : 117, 30, 24 });
+                        ++groupCount;
+                    }
+            expectEquals (groupCount, 5);
+            rect (withText (card, "3 Band EQ"), { narrow ? 14 : 404, narrow ? 277 : 39, 110, 32 });
+            rect (withText (card, "MaBitcrush"), { narrow ? 130 : 520, narrow ? 277 : 39, 110, 32 });
+            rect (withText (card, "Ping Pong Pan"), { narrow ? 246 : 636, narrow ? 277 : 39, 129, 32 });
+            rect (master, { wide ? 1152 : narrow ? 14 : 404, wide ? 38 : narrow ? 532 : 186, 72, 34 });
             rect (slider, wide ? juce::Rectangle<int> { 1186, 76, 136, 34 }
-                              : narrow ? juce::Rectangle<int> { 48, 568, 294, 34 } : juce::Rectangle<int> { 438, 222, 444, 34 });
+                              : narrow ? juce::Rectangle<int> { 48, 570, 294, 34 } : juce::Rectangle<int> { 438, 224, 444, 34 });
             for (auto* child : card.getChildren())
                 if (withText (*child, "FX1") != nullptr)
                 {
                     rect (child, wide ? juce::Rectangle<int> { 783, 40, 351, 30 }
-                                      : narrow ? juce::Rectangle<int> { 14, 422, 392, 30 } : juce::Rectangle<int> { 14, 186, 372, 30 });
+                                      : narrow ? juce::Rectangle<int> { 14, 424, 392, 30 } : juce::Rectangle<int> { 14, 188, 372, 30 });
                     rect (childOfType<juce::Slider> (*child), { 102, 0, wide ? 115 : narrow ? 156 : 136, 30 });
                 }
             screenshot (card, example.name);

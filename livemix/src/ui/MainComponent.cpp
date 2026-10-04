@@ -531,7 +531,7 @@ void MainComponent::resized()
     masterCard.setStrip (false);
     masterUnfoldedH = masterCard.getPreferredHeight (cardWidth);   // includes wrapped chips, OBS status and source hint
     int masterH = masterUnfoldedH;
-    const int masterMargin = cardWidth >= MasterCard::wideBelow ? 14 : 16;   // wide: 8 above, 6 below; stack: 8 each
+    const int masterMargin = 16;   // 8 px above and below in every form
 
     if (area.getHeight() - (masterH + masterMargin) - 24 < minCardsRoom)   // 24: the viewport's margins below
     {
