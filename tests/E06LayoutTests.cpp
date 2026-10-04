@@ -441,6 +441,58 @@ public:
                 expectEquals (document.getActiveContainer(), activeAfterRemove, "no selection change after the pressed list went away");
                 containers->onRename = keep;
             }
+            // a narrower window keeps the active list in view (it was in view before); a strip the wheel moved away
+            // from the active list stays where the wheel left it, through a status relayout, a resize and the removal
+            // of another list; a list that takes over the selection is brought into view
+            {
+                const int listsBefore = document.getNumContainers();
+                for (int i = 0; i < 8; ++i)
+                    document.addContainer ("More " + juce::String (i + 1), false);
+                main.setSize (1440, 900);
+                document.setActiveContainer (document.getNumContainers() - 1);
+                dispatch();
+                status->setWarningCount (3);
+                auto activeBounds = [&] { return containers->getTabBounds (document.getActiveContainer()); };
+                auto inView = [&]
+                {
+                    // a scrolling strip clips the tabs 16 px before the status strip
+                    const auto r = activeBounds();
+                    const auto statusLeft = containers->getLocalArea (status, status->getLocalBounds()).getX();
+                    return ! r.isEmpty() && r.getX() >= 8 && r.getRight() <= statusLeft - 16;
+                };
+                auto mouse = [&] (juce::Point<float> at, int clicks)
+                {
+                    return juce::MouseEvent (juce::Desktop::getInstance().getMainMouseSource(), at, juce::ModifierKeys::leftButtonModifier,
+                                             1.0f, 0.0f, 0.0f, 0.0f, 0.0f, containers, containers, juce::Time::getCurrentTime(), at,
+                                             juce::Time::getCurrentTime(), clicks, false);
+                };
+                expect (inView(), "active tab in view at 1440: " + activeBounds().toString());
+                main.setSize (860, 640);
+                dispatch();
+                expect (inView(), "the narrower window keeps the active tab in view: " + activeBounds().toString());
+                juce::MouseWheelDetails wheel {};
+                wheel.deltaY = 50.0f;
+                containers->mouseWheelMove (mouse ({ 60.0f, 20.0f }, 1), wheel);   // back to the first lists
+                expect (! inView(), "the wheel moved the strip away from the active list");
+                const int browsedX = containers->getTabBounds (0).getX();
+                status->setCueCount (12345);   // a status relayout while browsing
+                main.setSize (900, 640);
+                dispatch();
+                expectEquals (containers->getTabBounds (0).getX(), browsedX, "no jump back to the active list");
+                expect (! inView(), "the strip stays where the wheel left it");
+                const auto activeName = document.getContainerInfo (document.getActiveContainer()).name;
+                expect (document.removeContainer (listsBefore), "remove a list before the active one");
+                dispatch();
+                expectEquals (document.getContainerInfo (document.getActiveContainer()).name, activeName);
+                expect (! inView(), "removing a list before the active one does not pull the strip back");
+                expect (document.removeContainer (document.getActiveContainer()), "remove the active list");
+                dispatch();
+                expect (inView(), "the list that takes over is brought into view: " + activeBounds().toString());
+                while (document.getNumContainers() > listsBefore)
+                    document.removeContainer (document.getNumContainers() - 1);
+                main.setSize (1440, 900);
+                dispatch();
+            }
             document.setActiveContainer (0);
             status->setWarningCount (0);
             dispatch();
@@ -481,6 +533,47 @@ public:
         f.main->setLookAndFeel (&f.theme);
         f.main->setSize (1440, 900);
         expectEquals (f.inspector().getHeight(), 324);   // round (720 * 0.45): the split area is 720 px under a 112 px transport
+
+        // last in this run: it removes list 0, whose cues the earlier steps use
+        beginTest ("a different list taking over the active tab's index is brought into view");
+        {
+            auto& doc = f.document();   // the main (and its document) was recreated above
+            auto* bar = child<ContainerTabs> (*f.main);
+            auto* footer = child<FooterBar> (*f.main);
+            expect (bar != nullptr && footer != nullptr);
+            if (bar != nullptr && footer != nullptr)
+            {
+                for (int i = 0; i < 12; ++i)
+                    doc.addContainer ("Take " + juce::String (i + 1), false);
+                f.main->setSize (860, 640);
+                doc.setActiveContainer (0);
+                dispatch();
+                auto inView = [&]
+                {
+                    // a scrolling strip clips the tabs 16 px before the status strip
+                    const auto r = bar->getTabBounds (doc.getActiveContainer());
+                    const auto statusLeft = bar->getLocalArea (footer, footer->getLocalBounds()).getX();
+                    return ! r.isEmpty() && r.getX() >= 8 && r.getRight() <= statusLeft - 16;
+                };
+                auto mouse = [&] (juce::Point<float> at, int clicks)
+                {
+                    return juce::MouseEvent (juce::Desktop::getInstance().getMainMouseSource(), at, juce::ModifierKeys::leftButtonModifier,
+                                             1.0f, 0.0f, 0.0f, 0.0f, 0.0f, bar, bar, juce::Time::getCurrentTime(), at,
+                                             juce::Time::getCurrentTime(), clicks, false);
+                };
+                expect (inView(), "the first list is active and in view: " + bar->getTabBounds (0).toString());
+                juce::MouseWheelDetails wheel {};
+                wheel.deltaY = -50.0f;
+                bar->mouseWheelMove (mouse ({ 60.0f, 20.0f }, 1), wheel);   // to the far end: the first list scrolls out
+                expect (! inView(), "the wheel moved the first list out of view");
+                const auto removedId = doc.getContainerInfo (0).id;
+                expect (doc.removeContainer (0), "remove the active first list");
+                dispatch();
+                expectEquals (doc.getActiveContainer(), 0, "its neighbour takes over the same index");
+                expect (doc.getContainerInfo (0).id != removedId, "a different list");
+                expect (inView(), "the list that takes over index 0 is brought into view: " + bar->getTabBounds (0).toString());
+            }
+        }
     }
 
 private:

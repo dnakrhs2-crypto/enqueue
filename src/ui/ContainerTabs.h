@@ -63,7 +63,8 @@ private:
     juce::Rectangle<int> infoBounds;
     int tabsRight = 0;   // tabs and the + button draw and take clicks only left of this
     int tabsScroll = 0, maxTabsScroll = 0;   // px the tab strip is scrolled left (only when it does not fit)
-    int revealedTab = -1;                    // the active tab last scrolled into view
+    juce::Uuid revealedId = juce::Uuid::null();   // the active list last scrolled into view (by id: indices shift)
+    bool followActive = true;                // the active tab was in view after the last layout: keep it there
     juce::Uuid pressedId = juce::Uuid::null();   // the list the first click of the current gesture landed on
     int indexOf (const juce::Uuid& id) const;
     juce::String infoText;

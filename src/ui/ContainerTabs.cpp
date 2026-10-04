@@ -81,16 +81,23 @@ void ContainerTabs::resized()
         if (tabs[i].active) activeTab = (int) i;
     }
 
-    // when even 60 px tabs do not fit, the strip scrolls (wheel); a newly active list is brought into view
+    // when even 60 px tabs do not fit, the strip scrolls (wheel); a newly active list is brought into view, and an
+    // active list that was in view stays in view when the strip narrows (unless the wheel had moved away from it)
     maxTabsScroll = juce::jmax (0, x + 2 + 26 - tabsRight);
-    if (activeTab >= 0 && activeTab != revealedTab)
+    const auto revealingScroll = [&] (int scroll)
     {
         const auto& active = tabs[(size_t) activeTab].bounds;
-        if (active.getRight() - tabsScroll > tabsRight) tabsScroll = active.getRight() - tabsRight;
-        if (active.getX() - tabsScroll < 8) tabsScroll = active.getX() - 8;
-        revealedTab = activeTab;
+        if (active.getRight() - scroll > tabsRight) scroll = active.getRight() - tabsRight;
+        if (active.getX() - scroll < 8) scroll = active.getX() - 8;
+        return juce::jlimit (0, maxTabsScroll, scroll);
+    };
+    if (activeTab >= 0 && (tabs[(size_t) activeTab].id != revealedId || followActive))
+    {
+        tabsScroll = revealingScroll (tabsScroll);
+        revealedId = tabs[(size_t) activeTab].id;
     }
     tabsScroll = juce::jlimit (0, maxTabsScroll, tabsScroll);
+    followActive = activeTab < 0 || revealingScroll (tabsScroll) == tabsScroll;
     for (auto& t : tabs)
         t.bounds.translate (-tabsScroll, 0);
     x -= tabsScroll;
@@ -213,6 +220,7 @@ void ContainerTabs::mouseWheelMove (const juce::MouseEvent& e, const juce::Mouse
     }
     const float delta = std::abs (wheel.deltaX) > std::abs (wheel.deltaY) ? wheel.deltaX : wheel.deltaY;
     tabsScroll = juce::jlimit (0, maxTabsScroll, tabsScroll - juce::roundToInt (delta * 160.0f));
+    followActive = false;   // the wheel moves the strip on purpose: this relayout does not pull it back
     resized();
 }
 
