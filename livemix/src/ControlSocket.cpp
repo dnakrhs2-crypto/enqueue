@@ -42,6 +42,16 @@ namespace
        #endif
     }
 
+    // Closing a socket that still holds unread input sends a reset instead of a FIN, and the peer then drops
+    // whatever it has not read yet: the final errors and serverStatus. Read and discard what has arrived first.
+    void discardArrivedInput (juce::StreamingSocket& socket)
+    {
+        std::array<char, 4096> scratch {};
+        for (int i = 0; i < 64 && socket.waitUntilReady (true, 0) > 0; ++i)
+            if (socket.read (scratch.data(), (int) scratch.size(), false) <= 0)
+                break;
+    }
+
     size_t textCost (const juce::String& s)
     {
         // JSON's largest UTF-8 expansion is an ASCII control character -> six bytes. Non-ASCII codepoints
@@ -260,6 +270,7 @@ void ControlSocket::Connection::run()
         }
     }
     catch (...) { failure ("TRANSPORT_FAILED"); }
+    discardArrivedInput (*socket);
     socket->close();
     cancelled = true;
     if (closed) closed();
