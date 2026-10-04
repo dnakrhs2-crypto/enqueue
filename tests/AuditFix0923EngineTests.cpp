@@ -374,7 +374,7 @@ private:
         f.list().selectRowsBasedOnModifierKeys (1, {}, false);
         if (! require (f.document().cues.getSelectedIndex() == 1 && f.tab (ko ("플러그인")), "select B and open inspector Plugins tab")) return;
         auto* strip = findChild<PluginChainComponent> (f.inspector());
-        auto* add = strip != nullptr ? findChild<juce::TextButton> (*strip, [] (const auto& b) { return b.getButtonText() == ko ("+ 플러그인"); }) : nullptr;
+        auto* add = strip != nullptr ? findChild<juce::TextButton> (f.inspector(), [] (const auto& b) { return b.getButtonText() == ko ("+ 플러그인"); }) : nullptr;
         if (! require (add != nullptr && add->isEnabled() && (bool) strip->performEdit, "real inspector plugin edit callback")) return;
         auto* chain = f.engine.findCueChain (id);
         if (! require (chain != nullptr && chain == strip->getChain() && chain->getNumSlots() == 0, "selection creates B's first empty chain")) return;

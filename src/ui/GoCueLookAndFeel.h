@@ -259,7 +259,20 @@ public:
         {
             g.setColour (label.findColour (juce::Label::textColourId).withMultipliedAlpha (label.isEnabled() ? 1.0f : Palette::disabledAlpha));
             g.setFont (label.getFont());
-            g.drawText (label.getText(), label.getLocalBounds().reduced (8, 0), label.getJustificationType(), true);
+            auto text = label.getText();
+            const auto area = label.getLocalBounds().reduced (8, 0);
+            // a path in a narrow field: keep its end (the file name) and drop the front, not the other way round
+            if (label.getProperties().getWithDefault ("slateElideStart", false)
+                && juce::GlyphArrangement::getStringWidth (label.getFont(), text) > (float) area.getWidth())
+            {
+                const auto ellipsis = juce::String::charToString ((juce::juce_wchar) 0x2026);
+                int start = 0;
+                while (start < text.length()
+                       && juce::GlyphArrangement::getStringWidth (label.getFont(), ellipsis + text.substring (start)) > (float) area.getWidth())
+                    ++start;
+                text = ellipsis + text.substring (start);
+            }
+            g.drawText (text, area, label.getJustificationType(), true);
         }
     }
 

@@ -10,7 +10,7 @@ namespace gocue::SplitLayout
     constexpr int minTableHeight = 140;
     constexpr int minActiveCuesWidth = 260;
     constexpr int minTableWidth = 420;
-    constexpr double defaultInspectorFraction = 0.319;
+    constexpr double defaultInspectorFraction = 0.326;
     constexpr double defaultActiveCuesFraction = 0.27;
 
     /** Size of a secondary pane (inspector below, active cues to the right): its share of the split area,

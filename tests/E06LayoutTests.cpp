@@ -36,35 +36,35 @@ public:
         auto* status = child<FooterBar> (main);
         auto* containers = child<ContainerTabs> (main);
         auto* tabs = child<juce::TabbedComponent> (f.inspector());
-        beginTest ("1440x900 default split frees thirteen full cue rows and removes the footer strip");
+        beginTest ("1440x900 default split frees twelve full cue rows and removes the footer strip");
         expect (transport != nullptr && status != nullptr && containers != nullptr && tabs != nullptr);
         if (transport == nullptr || status == nullptr || containers == nullptr || tabs == nullptr) return;
-        expectWithinAbsoluteError (f.settings.getInspectorFraction(), 0.319, 1.0e-9);
-        expectWithinAbsoluteError (SplitLayout::defaultInspectorFraction, 0.319, 1.0e-9);
-        rect (*transport, { 12, 44, 1416, 96 });
+        expectWithinAbsoluteError (f.settings.getInspectorFraction(), 0.326, 1.0e-9);
+        expectWithinAbsoluteError (SplitLayout::defaultInspectorFraction, 0.326, 1.0e-9);
+        rect (*transport, { 12, 44, 1416, 112 });
         rect (f.inspector(), { 12, 653, 1416, 235 });
-        rect (f.active(), { 1046, 152, 382, 489 });
-        rect (*containers, { 13, 153, 1020, 41 });
-        rect (f.table(), { 13, 194, 1020, 446 });
+        rect (f.active(), { 1046, 168, 382, 473 });
+        rect (*containers, { 13, 169, 1020, 41 });
+        rect (f.table(), { 13, 210, 1020, 430 });
         expect (status->getParentComponent() == containers);
-        expectEquals ((f.table().getHeight() - Palette::tableHeaderHeight) / 32, 13);
+        expectEquals ((f.table().getHeight() - Palette::tableHeaderHeight) / 32, 12);
 
         beginTest ("transport columns and three cue lines match e06");
         transport->setStandbyCue (0, &cue);
-        checkButton (*transport, "GO", { 0, 0, 220, 96 });
-        checkButton (*transport, ko ("일시정지"), { 1084, 0, 146, 44 });
-        checkButton (*transport, ko ("페이드아웃"), { 1084, 52, 146, 44 });
-        checkButton (*transport, ko ("전체 페이드 정지"), { 1238, 0, 178, 62 });
+        checkButton (*transport, "GO", { 0, 0, 112, 112 });   // square
+        checkButton (*transport, ko ("일시정지"), { 1084, 0, 146, 52 });
+        checkButton (*transport, ko ("페이드아웃"), { 1084, 60, 146, 52 });
+        checkButton (*transport, ko ("전체 페이드 정지"), { 1238, 0, 178, 78 });
         auto* gear = child<juce::Button> (*transport, [] (const auto& b) { return b.getName() == "panicSettings"; });
         expect (gear != nullptr);
-        if (gear != nullptr) rect (*gear, { 1238, 70, 178, 26 });
-        checkLabel (*transport, ko ("다음 큐"), { 248, 9, 40, 18 });
-        checkLabel (*transport, "2", { 248, 31, 15, 33 });
-        checkLabel (*transport, cue.name, { 273, 31, 538, 33 });
-        checkLabel (*transport, "title_signal.wav", { 248, 68, 97, 18 });
-        checkLabel (*transport, ko ("실시간 · LUFS"), { 842, 9, 92, 18 });
-        checkLabel (*transport, ko ("평균 · LUFS"), { 950, 9, 50, 18 });
-        checkButton (*transport, ko ("20초 ▾"), { 1008, 9, 48, 18 });
+        if (gear != nullptr) rect (*gear, { 1238, 86, 178, 26 });
+        checkLabel (*transport, ko ("다음 큐"), { 140, 17, 40, 18 });
+        checkLabel (*transport, "2", { 140, 39, 15, 33 });
+        checkLabel (*transport, cue.name, { 165, 39, 646, 33 });
+        checkLabel (*transport, "title_signal.wav", { 140, 76, 97, 18 });
+        checkLabel (*transport, ko ("실시간 · LUFS"), { 842, 17, 92, 18 });
+        checkLabel (*transport, ko ("평균 · LUFS"), { 950, 17, 50, 18 });
+        checkButton (*transport, ko ("20초 ▾"), { 1008, 17, 48, 18 });
         cue.file = f.scratch.folder.getChildFile ("different_long_filename.wav");
         transport->setStandbyCue (0, &cue); // same cue number: file width must still update
         auto* file = label (*transport, cue.file.getFileName());
@@ -96,10 +96,10 @@ public:
         auto* mode = child<juce::Label> (*status, [] (const auto& l) { return l.getText().startsWith (ko ("편집 모드")); });
         expect (count != nullptr && midi != nullptr && mode != nullptr);
         if (count == nullptr || midi == nullptr || mode == nullptr) return;
-        rectIn (main, *count, { 635, 165, 49, 24 });
+        rectIn (main, *count, { 635, 181, 49, 24 });
         // Native glyph metrics: mode hint is 145px and selection info 114px (mock: 144/115).
-        rectIn (main, *mode, { 700, 159, 145, 35 });
-        rectIn (main, *midi, { 861, 159, 28, 35 });
+        rectIn (main, *mode, { 700, 175, 145, 35 });
+        rectIn (main, *midi, { 861, 175, 28, 35 });
         expect (count->isVisible() && mode->isVisible() && midi->isVisible());
         status->setMidiStatus ("MIDI 0", "MIDI detail", true);
         expect (midi->findColour (juce::Label::textColourId) == Palette::warn);
@@ -312,7 +312,7 @@ public:
         f.main = std::make_unique<HiddenMain> (f.engine, f.settings, f.commands);
         f.main->setLookAndFeel (&f.theme);
         f.main->setSize (1440, 900);
-        expectEquals (f.inspector().getHeight(), 331);
+        expectEquals (f.inspector().getHeight(), 324);   // round (720 * 0.45): the split area is 720 px under a 112 px transport
     }
 
 private:

@@ -528,7 +528,7 @@ void TransportBar::resized()
     if (getWidth() <= 0 || getHeight() <= 0)
         return;
     auto area = getLocalBounds();
-    goButton.setBounds (area.removeFromLeft (juce::jmin (Palette::goWidth, getWidth() / 6)));
+    goButton.setBounds (area.removeFromLeft (juce::jmin (getHeight(), getWidth() / 6)));   // a square GO: the button is the app's symbol
     area.removeFromLeft (Palette::gap);
     auto right = area.removeFromRight (332);
     auto leftColumn = right.removeFromLeft (146);
@@ -546,6 +546,12 @@ void TransportBar::resized()
     for (int i = 0; i < 6; ++i)
         shadows[i].resize (surfaces[i]);
     area.reduce (16, 9);
+    {
+        // the card's lines (18 + 4 + 33 + 4 + 18) sit in the middle of a taller transport
+        const int spare = juce::jmax (0, (area.getHeight() - 77) / 2);
+        area.removeFromTop (spare);
+        area.removeFromBottom (spare);
+    }
     const bool showReadings = area.getWidth() >= 500;
     for (auto* component : std::initializer_list<juce::Component*> { &momentaryLabel, &momentaryValue, &averageLabel, &averageValue, &averageWindow })
         component->setVisible (showReadings);

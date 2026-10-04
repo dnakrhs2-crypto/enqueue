@@ -183,6 +183,7 @@ public:
         filePathLabel.setColour (juce::Label::textColourId, Palette::text);
         filePathLabel.setFont (Palette::monoFont (Palette::fileSize));
         filePathLabel.getProperties().set ("slateField", true);
+        filePathLabel.getProperties().set ("slateElideStart", true);   // the cue cluster is narrower than the old full-width row
         filePathLabel.setMinimumHorizontalScale (1.0f);
         filePathLabel.setTooltip (ko ("파일을 여기에 끌어다 놓으면 교체됩니다"));
         addAndMakeVisible (filePathLabel);

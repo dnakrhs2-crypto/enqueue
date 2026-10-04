@@ -178,7 +178,7 @@ namespace Palette
     constexpr float tickSize = 15.0f;
     constexpr float groupTextStroke = 0.25f, goTextStroke = 0.8f;
     constexpr int gap = 12, cardInset = 10, cardHeaderHeight = 40, tabBarHeight = 41;
-    constexpr int menuBarHeight = 32, transportHeight = 96, footerHeight = 30;
+    constexpr int menuBarHeight = 32, transportHeight = 112, footerHeight = 30;
     constexpr int goWidth = 220, transportWidth = 360, minTransportWidth = 260, buttonGap = 8;
     constexpr int tableHeaderHeight = 30, rowHeights[] = { 28, 32, 40 };
     constexpr int statusColumnWidth = 34, numberColumnWidth = 52, fileColumnWidth = 250;
