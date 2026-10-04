@@ -160,6 +160,13 @@ int FooterBar::getPreferredWidth() const
             Palette::font (Palette::headerSize, true), warningsButton.getButtonText()) + 18 : 0);
 }
 
+int FooterBar::getEssentialWidth() const
+{
+    return juce::GlyphArrangement::getStringWidthInt (countLabel.getFont(), countLabel.getText()) + 18
+        + (warningsButton.isVisible() ? 8 + juce::GlyphArrangement::getStringWidthInt (
+            Palette::font (Palette::headerSize, true), warningsButton.getButtonText()) + 18 : 0);
+}
+
 void FooterBar::updateLayout()
 {
     if (auto* host = getParentComponent()) host->resized();
@@ -215,18 +222,20 @@ void FooterBar::resized()
     auto area = getLocalBounds();
     const int countWidth = juce::GlyphArrangement::getStringWidthInt (countLabel.getFont(), countLabel.getText()) + 18;
     const int gap = getWidth() >= getPreferredWidth() ? 16 : 8;
-    countLabel.setBounds (area.removeFromLeft (juce::jmin (countWidth, area.getWidth() / 3)).withSizeKeepingCentre (
-        juce::jmin (countWidth, getWidth() / 3), 24).translated (0, 1));
-    area.removeFromLeft (gap);
+    // the count and the warnings button first, whole (the host always leaves getEssentialWidth()); MIDI next; the
+    // mode hint takes what is left and shortens with an ellipsis (its tooltip has the full text)
+    const int countShown = juce::jmin (countWidth, area.getWidth());
+    countLabel.setBounds (area.removeFromLeft (countShown).withSizeKeepingCentre (countShown, 24).translated (0, 1));
+    area.removeFromLeft (juce::jmin (gap, area.getWidth()));   // 16 with room, 8 when only the essential part fits
     if (warningsButton.isVisible())
     {
         const int warningWidth = juce::GlyphArrangement::getStringWidthInt (Palette::font (Palette::headerSize, true), warningsButton.getButtonText()) + 18;
-        warningsButton.setBounds (area.removeFromLeft (juce::jmin (warningWidth, area.getWidth() / 2)).withHeight (24).withY (6));
-        area.removeFromLeft (gap);
+        warningsButton.setBounds (area.removeFromLeft (juce::jmin (warningWidth, area.getWidth())).withHeight (24).withY (6));
+        area.removeFromLeft (juce::jmin (gap, area.getWidth()));
     }
     const int midiWidth = juce::GlyphArrangement::getStringWidthInt (midiStatus.getFont(), midiStatus.getText());
-    midiStatus.setBounds (area.removeFromRight (juce::jmin (midiWidth, area.getWidth() / 3)));
-    area.removeFromRight (gap);
+    midiStatus.setBounds (area.removeFromRight (juce::jmin (midiWidth, area.getWidth())));
+    area.removeFromRight (juce::jmin (gap, area.getWidth()));
     modeHint.setBounds (area);
 }
 

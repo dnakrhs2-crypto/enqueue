@@ -3907,6 +3907,10 @@ void CueInspector::rebuildTabs (int wanted)
         addTab (ko ("플러그인"), Palette::panel, effects, false);
         tabs.setCurrentTabIndex (0);
     }
+
+    // the header row (title | tabs | cue identity) follows the new tab bar's width: setCurrentTabIndex does not
+    // call back when the index stays the same, and a stale identity label would cover (and swallow clicks on) tabs
+    resized();
 }
 
 void CueInspector::showNotes()

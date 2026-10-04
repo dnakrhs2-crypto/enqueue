@@ -43,6 +43,7 @@ void ContainerTabs::refresh()
     {
         const auto info = document.getContainerInfo (i);
         Tab t;
+        t.id = info.id;
         t.name = info.name;
         t.isCart = info.isCart;
         t.active = i == document.getActiveContainer();
@@ -56,36 +57,61 @@ void ContainerTabs::refresh()
 void ContainerTabs::resized()
 {
     const auto font = Palette::font (Palette::tabSize, true);
-    const int infoWidth = juce::GlyphArrangement::getStringWidthInt (Palette::font (Palette::headerSize), infoText);
-    const int statusWidth = statusBar != nullptr ? statusBar->getPreferredWidth() : 0;
-    const int desired = infoWidth + (statusBar != nullptr ? 16 + statusWidth : 0);
-    auto right = getLocalBounds().withTrimmedRight (14).withY (6).withHeight (juce::jmax (0, getHeight() - 6));
-    right = right.removeFromRight (juce::jmin (desired, juce::jmax (0, getWidth() * 3 / 5)));
-    const int tabsRight = juce::jmax (8, right.getX() - 16);
-    infoBounds = right.removeFromRight (right.getWidth() >= desired ? infoWidth
-        : juce::jmin (infoWidth, right.getWidth() / (statusBar != nullptr ? 3 : 1)));
-    if (statusBar != nullptr)
-    {
-        right.removeFromRight (16);
-        statusBar->setBounds (right);
-    }
+    const int edge = juce::jmax (0, getWidth() - 14);
+    // the cue count and the broken-cue warnings button always keep their room at the right
+    const int essential = statusBar != nullptr ? statusBar->getEssentialWidth() : 0;
+    tabsRight = juce::jmax (8, edge - (essential > 0 ? essential + 16 : 0));
 
-    int preferredTabsWidth = 0;
+    // the lists' tabs at their own widths (as before the status moved in); when they do not fit they shrink, never
+    // below 60 px, and anything past tabsRight is clipped (the status stays readable and clickable)
+    std::vector<int> widths;
+    int total = 0;
     for (const auto& t : tabs)
-        preferredTabsWidth += juce::jlimit (60, 220, juce::GlyphArrangement::getStringWidthInt (font, t.name) + 44) + 2;
-    const int available = juce::jmax (0, tabsRight - 8 - 28);
-    int x = 8;
-
-    for (auto& t : tabs)
     {
-        const int preferred = juce::jlimit (60, 220, juce::GlyphArrangement::getStringWidthInt (font, t.name) + 44);
-        const int width = preferredTabsWidth <= available ? preferred
-            : juce::jmax (0, (preferred + 2) * available / juce::jmax (1, preferredTabsWidth) - 2);
-        t.bounds = { x, 6, width, getHeight() - 6 };
-        x += width + 2;
+        widths.push_back (juce::jlimit (60, 220, juce::GlyphArrangement::getStringWidthInt (font, t.name) + 44));
+        total += widths.back() + 2;
     }
+    const int room = juce::jmax (0, tabsRight - 16 - 28 - 8);
+    int x = 8, activeTab = -1;
+    for (size_t i = 0; i < tabs.size(); ++i)
+    {
+        const int width = total <= room ? widths[i] : juce::jmax (60, (widths[i] + 2) * room / juce::jmax (1, total) - 2);
+        tabs[i].bounds = { x, 6, width, getHeight() - 6 };
+        x += width + 2;
+        if (tabs[i].active) activeTab = (int) i;
+    }
+
+    // when even 60 px tabs do not fit, the strip scrolls (wheel); a newly active list is brought into view
+    maxTabsScroll = juce::jmax (0, x + 2 + 26 - tabsRight);
+    if (activeTab >= 0 && activeTab != revealedTab)
+    {
+        const auto& active = tabs[(size_t) activeTab].bounds;
+        if (active.getRight() - tabsScroll > tabsRight) tabsScroll = active.getRight() - tabsRight;
+        if (active.getX() - tabsScroll < 8) tabsScroll = active.getX() - 8;
+        revealedTab = activeTab;
+    }
+    tabsScroll = juce::jlimit (0, maxTabsScroll, tabsScroll);
+    for (auto& t : tabs)
+        t.bounds.translate (-tabsScroll, 0);
+    x -= tabsScroll;
 
     addButton = { x + 2, 6, 26, getHeight() - 6 };
+
+    // the status (its essential part whole) and the selection info at the right end share what the tabs leave;
+    // the selection info and then the status's mode hint give way first
+    auto right = juce::Rectangle<int> (0, 6, edge, juce::jmax (0, getHeight() - 6));
+    right.setLeft (juce::jlimit (0, edge, juce::jmin (addButton.getRight() + 16, edge - essential)));
+    const int infoWidth = juce::GlyphArrangement::getStringWidthInt (Palette::font (Palette::headerSize), infoText);
+    const int statusWidth = statusBar == nullptr ? 0
+        : juce::jlimit (juce::jmin (essential, right.getWidth()), juce::jmax (juce::jmin (essential, right.getWidth()), statusBar->getPreferredWidth()),
+                        right.getWidth() - 16 - infoWidth);
+    infoBounds = right.removeFromRight (juce::jlimit (0, infoWidth, right.getWidth() - statusWidth - (statusWidth > 0 ? 16 : 0)));
+    if (statusBar != nullptr)
+    {
+        right.removeFromRight (juce::jmin (statusWidth > 0 && infoBounds.getWidth() > 0 ? 16 : 0, right.getWidth()));
+        statusBar->setBounds (right.removeFromRight (juce::jmin (statusWidth, right.getWidth())));
+    }
+    repaint();   // the tabs are painted from these bounds: any relayout (a status change too) must redraw them
 }
 
 void ContainerTabs::paint (juce::Graphics& g)
@@ -97,7 +123,8 @@ void ContainerTabs::paint (juce::Graphics& g)
     for (const auto& t : tabs)
     {
         juce::Graphics::ScopedSaveState clip (g);
-        g.reduceClipRegion (t.bounds);
+        // the tab strip shows x = 8 .. tabsRight: 8 is where a revealed tab lands, so what is drawn is what is hit
+        g.reduceClipRegion (t.bounds.getIntersection ({ 8, 0, juce::jmax (0, tabsRight - 8), getHeight() }));
         auto r = t.bounds;
         Palette::drawTab (g, r, t.active);
         int textX = r.getX() + 12;
@@ -124,7 +151,8 @@ void ContainerTabs::paint (juce::Graphics& g)
 
     g.setColour (Palette::accent.withMultipliedAlpha (editable ? 1.0f : Palette::disabledAlpha));
     g.setFont (Palette::font (Palette::bodySize, true));
-    g.drawText ("+", addButton, juce::Justification::centred, false);
+    if (addButton.getRight() <= tabsRight)
+        g.drawText ("+", addButton, juce::Justification::centred, false);
     g.setColour (Palette::muted);
     g.setFont (Palette::font (Palette::headerSize));
     g.drawText (infoText, infoBounds, juce::Justification::centredRight, true);
@@ -132,6 +160,8 @@ void ContainerTabs::paint (juce::Graphics& g)
 
 int ContainerTabs::tabAt (juce::Point<int> p) const
 {
+    if (p.x < 8 || p.x >= tabsRight)
+        return -1;   // a scrolled-out part of a tab, or a clipped tab under the status strip
     for (int i = 0; i < (int) tabs.size(); ++i)
         if (tabs[(size_t) i].bounds.contains (p))
             return i;
@@ -141,7 +171,18 @@ int ContainerTabs::tabAt (juce::Point<int> p) const
 
 void ContainerTabs::mouseDown (const juce::MouseEvent& e)
 {
-    const int tab = tabAt (e.getPosition());
+    int tab = tabAt (e.getPosition());
+    // the second click of a double-click means the first click's list, found again by its id: the bar may have
+    // relaid out in between (the newly selected list's cue count is measured into it) or lists come and gone;
+    // if that list is gone the gesture ends
+    if (e.getNumberOfClicks() > 1 && ! pressedId.isNull())
+    {
+        tab = indexOf (pressedId);
+        if (tab < 0)
+            return;
+    }
+    else
+        pressedId = juce::isPositiveAndBelow (tab, (int) tabs.size()) ? tabs[(size_t) tab].id : juce::Uuid::null();
 
     if (e.mods.isPopupMenu())
     {
@@ -159,13 +200,38 @@ void ContainerTabs::mouseDown (const juce::MouseEvent& e)
         return;
     }
 
-    if (addButton.contains (e.getPosition()) && editable)
+    if (addButton.contains (e.getPosition()) && addButton.getRight() <= tabsRight && editable)
         showAddMenu();
+}
+
+void ContainerTabs::mouseWheelMove (const juce::MouseEvent& e, const juce::MouseWheelDetails& wheel)
+{
+    if (maxTabsScroll <= 0 || e.x >= tabsRight)
+    {
+        juce::Component::mouseWheelMove (e, wheel);
+        return;
+    }
+    const float delta = std::abs (wheel.deltaX) > std::abs (wheel.deltaY) ? wheel.deltaX : wheel.deltaY;
+    tabsScroll = juce::jlimit (0, maxTabsScroll, tabsScroll - juce::roundToInt (delta * 160.0f));
+    resized();
+}
+
+int ContainerTabs::indexOf (const juce::Uuid& id) const
+{
+    for (int i = 0; i < (int) tabs.size(); ++i)
+        if (tabs[(size_t) i].id == id)
+            return i;
+    return -1;
+}
+
+juce::Rectangle<int> ContainerTabs::getTabBounds (int index) const
+{
+    return juce::isPositiveAndBelow (index, (int) tabs.size()) ? tabs[(size_t) index].bounds : juce::Rectangle<int>();
 }
 
 void ContainerTabs::mouseDoubleClick (const juce::MouseEvent& e)
 {
-    const int tab = tabAt (e.getPosition());
+    const int tab = ! pressedId.isNull() ? indexOf (pressedId) : tabAt (e.getPosition());
 
     if (tab >= 0 && editable && onRename)
         onRename (tab);

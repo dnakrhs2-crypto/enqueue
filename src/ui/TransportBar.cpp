@@ -552,25 +552,26 @@ void TransportBar::resized()
         area.removeFromTop (spare);
         area.removeFromBottom (spare);
     }
-    const bool showReadings = area.getWidth() >= 500;
+    // the loudness readings stay at every width - they shrink, as they always did - and the cue lines get the rest
     for (auto* component : std::initializer_list<juce::Component*> { &momentaryLabel, &momentaryValue, &averageLabel, &averageValue, &averageWindow })
-        component->setVisible (showReadings);
-    nextDivider = {};
-    if (showReadings)
+        component->setVisible (true);
     {
-        auto readings = area.removeFromRight (214);
-        area.removeFromRight (15);
-        nextDivider = area.removeFromRight (1);
-        area.removeFromRight (15);
-        auto live = readings.removeFromLeft (92);
-        readings.removeFromLeft (16);
+        // 214 px at full width; never under 160 px (each value needs room for '-23.0'), the cue lines give way first
+        auto readings = area.removeFromRight (juce::jlimit (0, juce::jmax (0, area.getWidth() - 31 - 60),
+                                                            juce::jmax (160, juce::jmin (214, area.getWidth() / 2 - 31))));
+        area.removeFromRight (juce::jmin (15, area.getWidth()));
+        nextDivider = area.removeFromRight (juce::jmin (1, area.getWidth()));
+        area.removeFromRight (juce::jmin (15, area.getWidth()));
+        auto live = readings.removeFromLeft (juce::jmax (0, (readings.getWidth() - 16) * 92 / 198));   // 92 | 16 | 106 at full width
+        readings.removeFromLeft (juce::jmin (16, readings.getWidth()));
         momentaryLabel.setBounds (live.removeFromTop (18));
         live.removeFromTop (2);
         momentaryValue.setBounds (live.removeFromTop (37));
         auto averageHeading = readings.removeFromTop (18);
-        averageLabel.setBounds (averageHeading.removeFromLeft (50));
-        averageHeading.removeFromLeft (8);
-        averageWindow.setBounds (averageHeading);
+        const int windowWidth = juce::jmin (48, averageHeading.getWidth());   // the window button first: the label gives way
+        averageLabel.setBounds (averageHeading.removeFromLeft (juce::jmin (50, juce::jmax (0, averageHeading.getWidth() - windowWidth - 8))));
+        averageHeading.removeFromLeft (juce::jmin (8, averageHeading.getWidth()));
+        averageWindow.setBounds (averageHeading.removeFromLeft (windowWidth));
         readings.removeFromTop (2);
         averageValue.setBounds (readings.removeFromTop (37));
     }

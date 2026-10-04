@@ -266,11 +266,17 @@ public:
                 && juce::GlyphArrangement::getStringWidth (label.getFont(), text) > (float) area.getWidth())
             {
                 const auto ellipsis = juce::String::charToString ((juce::juce_wchar) 0x2026);
-                int start = 0;
-                while (start < text.length()
-                       && juce::GlyphArrangement::getStringWidth (label.getFont(), ellipsis + text.substring (start)) > (float) area.getWidth())
-                    ++start;
-                text = ellipsis + text.substring (start);
+                text = text.getLastCharacters (512);   // no field shows more; bounds the work for absurd imported paths
+                int lo = 0, hi = text.length();        // the shortest dropped front that fits (width only shrinks as it grows)
+                while (lo < hi)
+                {
+                    const int mid = (lo + hi) / 2;
+                    if (juce::GlyphArrangement::getStringWidth (label.getFont(), ellipsis + text.substring (mid)) <= (float) area.getWidth())
+                        hi = mid;
+                    else
+                        lo = mid + 1;
+                }
+                text = ellipsis + text.substring (lo);
             }
             g.drawText (text, area, label.getJustificationType(), true);
         }

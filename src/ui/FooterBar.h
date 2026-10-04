@@ -40,6 +40,8 @@ public:
     void attachAudioStatus (juce::Component& host);
     void setAudioBounds (juce::Rectangle<int> bounds);
     int getPreferredWidth() const;
+    /** The cue count and, when shown, the broken-cue warnings button: the part that never gives way. */
+    int getEssentialWidth() const;
 
     void setShowMode (bool showMode, const ShortcutService* shortcuts = nullptr);
     void setCueCount (int count);

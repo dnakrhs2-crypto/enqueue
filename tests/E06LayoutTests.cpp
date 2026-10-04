@@ -304,6 +304,174 @@ public:
         main.onToggleFullScreen = {};
         main.isFullScreenActive = {};
 
+        beginTest ("many lists at the minimum window keep the cue count and the warnings button whole and clickable");
+        {
+            for (const char* name : { "A", "B", "C", "D", "E", "F" })
+                document.addContainer (name, false);
+            document.setActiveContainer (0);
+            main.setSize (860, 640);
+            dispatch();
+            status->setWarningCount (3);   // after the refresh (it recounts the project's broken cues); relays the host out
+            auto* warn = child<juce::TextButton> (*status, [] (const auto& b) { return b.isVisible(); });
+            auto* countLabel = child<juce::Label> (*status, [] (const auto& l) { return l.getText().startsWith (ko ("큐 ")); });
+            expect (warn != nullptr && countLabel != nullptr);
+            if (warn != nullptr && countLabel != nullptr)
+            {
+                const auto warnArea = containers->getLocalArea (warn, warn->getLocalBounds());
+                const auto countArea = containers->getLocalArea (countLabel, countLabel->getLocalBounds());
+                expect (warnArea.getWidth() >= juce::GlyphArrangement::getStringWidthInt (Palette::font (Palette::headerSize, true), warn->getButtonText()) + 18,
+                        "warnings button whole: " + warnArea.toString());
+                expect (countArea.getWidth() >= juce::GlyphArrangement::getStringWidthInt (countLabel->getFont(), countLabel->getText()) + 18,
+                        "count whole: " + countArea.toString());
+                expect (containers->getLocalBounds().contains (warnArea) && containers->getLocalBounds().contains (countArea));
+                auto* hit = containers->getComponentAt (warnArea.getCentre());
+                expect (hit == warn || (hit != nullptr && warn->isParentOf (hit)), "the warnings button takes the click");
+            }
+            // the last list made active (as Ctrl+PageDown would) is scrolled into view, clear of the status strip
+            document.addContainer ("G", false);
+            document.addContainer ("H", false);
+            document.setActiveContainer (document.getNumContainers() - 1);
+            dispatch();
+            status->setWarningCount (3);
+            if (warn != nullptr)
+            {
+                const auto last = containers->getTabBounds (document.getNumContainers() - 1);
+                const auto warnArea = containers->getLocalArea (warn, warn->getLocalBounds());
+                expect (! last.isEmpty() && last.getX() >= 0 && last.getRight() <= warnArea.getX(),
+                        "active last tab in view: " + last.toString() + " / warnings at " + warnArea.toString());
+            }
+            // scrolled to the end: a click left of x = 8 hits nothing, and a double-click on a partly hidden tab
+            // renames that tab even though the first click scrolls it into view
+            {
+                auto mouse = [&] (juce::Point<float> at, int clicks)
+                {
+                    return juce::MouseEvent (juce::Desktop::getInstance().getMainMouseSource(), at, juce::ModifierKeys::leftButtonModifier,
+                                             1.0f, 0.0f, 0.0f, 0.0f, 0.0f, containers, containers, juce::Time::getCurrentTime(), at,
+                                             juce::Time::getCurrentTime(), clicks, false);
+                };
+                juce::MouseWheelDetails wheel {};
+                wheel.deltaY = -50.0f;
+                containers->mouseWheelMove (mouse ({ 60.0f, 20.0f }, 1), wheel);   // to the far end
+                const int before = document.getActiveContainer();
+                containers->mouseDown (mouse ({ 2.0f, 20.0f }, 1));
+                dispatch();
+                expectEquals (document.getActiveContainer(), before, "x < 8 is not a tab");
+                int partial = -1;
+                for (int i = 0; i < document.getNumContainers(); ++i)
+                    if (const auto r = containers->getTabBounds (i); r.getX() < 8 && r.getRight() > 14) { partial = i; break; }
+                if (partial >= 0)
+                {
+                    int renamed = -1;
+                    auto keep = containers->onRename;
+                    containers->onRename = [&] (int i) { renamed = i; };
+                    containers->mouseDown (mouse ({ 10.0f, 20.0f }, 1));
+                    dispatch();
+                    containers->mouseDoubleClick (mouse ({ 10.0f, 20.0f }, 2));
+                    expectEquals (document.getActiveContainer(), partial, "the first click selects the partly hidden tab");
+                    expectEquals (renamed, partial, "the double-click renames the same tab after it scrolled into view");
+                    containers->onRename = keep;
+                }
+            }
+            // squeezed long tabs at 1440: the first click selects a list whose cue count widens the status, the tabs
+            // shrink a little before the second click - the double-click still renames the first click's list
+            {
+                main.setSize (1440, 900);
+                for (int i = 0; i < document.getNumContainers(); ++i)
+                    document.renameContainer (i, "Long cue list " + juce::String (i + 1));
+                document.setActiveContainer (0);
+                dispatch();
+                status->setWarningCount (3);
+                status->setCueCount (10);
+                auto mouse = [&] (juce::Point<float> at, int clicks)
+                {
+                    return juce::MouseEvent (juce::Desktop::getInstance().getMainMouseSource(), at, juce::ModifierKeys::leftButtonModifier,
+                                             1.0f, 0.0f, 0.0f, 0.0f, 0.0f, containers, containers, juce::Time::getCurrentTime(), at,
+                                             juce::Time::getCurrentTime(), clicks, false);
+                };
+                const int k = 4;
+                const auto first = containers->getTabBounds (k);
+                const juce::Point<float> at ((float) first.getRight() - 2.0f, 20.0f);
+                int renamed = -1;
+                auto keep = containers->onRename;
+                containers->onRename = [&] (int i) { renamed = i; };
+                containers->mouseDown (mouse (at, 1));
+                dispatch();
+                status->setCueCount (100000);   // a much wider count between the clicks
+                if (containers->getTabBounds (k).getRight() <= (int) at.x)   // the edge did move past the pointer
+                {
+                    containers->mouseDown (mouse (at, 2));
+                    dispatch();
+                    containers->mouseDoubleClick (mouse (at, 2));
+                    expectEquals (document.getActiveContainer(), k, "the second click keeps the first click's list");
+                    expectEquals (renamed, k, "the double-click renames the first click's list");
+                }
+                else
+                    expect (false, "the count change should move the tab edge: " + containers->getTabBounds (k).toString());
+
+                // a list before the pressed one goes away between the clicks: the gesture follows the pressed list
+                document.setActiveContainer (0);
+                dispatch();
+                renamed = -1;
+                const auto pressedName = document.getContainerInfo (k).name;
+                const auto pressedAt = containers->getTabBounds (k).toFloat().getCentre();
+                containers->mouseDown (mouse (pressedAt, 1));
+                dispatch();
+                expect (document.removeContainer (2), "remove a list before the pressed one");
+                dispatch();
+                containers->mouseDown (mouse (pressedAt, 2));
+                dispatch();
+                containers->mouseDoubleClick (mouse (pressedAt, 2));
+                expect (juce::isPositiveAndBelow (renamed, document.getNumContainers())
+                            && document.getContainerInfo (renamed).name == pressedName, "the double-click renames the pressed list");
+                expectEquals (document.getContainerInfo (document.getActiveContainer()).name, pressedName);
+
+                // the pressed list itself goes away between the clicks: the second click and the double-click do nothing
+                renamed = -1;
+                const int victim = document.getActiveContainer();
+                const auto victimAt = containers->getTabBounds (victim).toFloat().getCentre();
+                containers->mouseDown (mouse (victimAt, 1));
+                dispatch();
+                expect (document.removeContainer (victim), "remove the pressed list");
+                dispatch();
+                const int activeAfterRemove = document.getActiveContainer();
+                containers->mouseDown (mouse (victimAt, 2));
+                dispatch();
+                containers->mouseDoubleClick (mouse (victimAt, 2));
+                expectEquals (renamed, -1, "no rename after the pressed list went away");
+                expectEquals (document.getActiveContainer(), activeAfterRemove, "no selection change after the pressed list went away");
+                containers->onRename = keep;
+            }
+            document.setActiveContainer (0);
+            status->setWarningCount (0);
+            dispatch();
+        }
+
+        beginTest ("switching cue types keeps every inspector tab clickable (the header text never covers a tab)");
+        document.setActiveContainer (0);
+        main.setSize (1440, 900);
+        dispatch();
+        Cue groupCue;
+        groupCue.number = "3";
+        groupCue.name = ko ("그룹");
+        groupCue.type = CueType::group;
+        document.cues.add (groupCue);
+        dispatch();
+        for (int pick : { 1, 0, 1, 0 })   // the group cue (3 tabs), then the audio cue (6 tabs), with no resize in between
+        {
+            document.cues.setSelectedIndex (pick);
+            dispatch();
+            auto& bar = tabs->getTabbedButtonBar();
+            expect (bar.getNumTabs() == (pick == 0 ? 6 : 3));
+            for (int i = 0; i < bar.getNumTabs(); ++i)
+                if (auto* button = bar.getTabButton (i))
+                {
+                    const auto centre = f.inspector().getLocalArea (button, button->getLocalBounds()).getCentre();
+                    auto* hit = f.inspector().getComponentAt (centre);
+                    expect (hit == button || (hit != nullptr && button->isParentOf (hit)),
+                            "tab " + juce::String (i) + " takes the click after selecting cue " + juce::String (pick));
+                }
+        }
+
         beginTest ("saved split fractions still override the new default");
         f.settings.setInspectorFraction (0.45);
         expectWithinAbsoluteError (f.settings.getInspectorFraction(), 0.45, 1.0e-9);
