@@ -680,11 +680,28 @@ namespace
 
 namespace
 {
+    constexpr int shortestHeight = 320;   // its resize limit
+    constexpr int tallestOpening = 640;   // the device and the window switches show; the hotkeys and below scroll
+
+    struct WindowLimits { SettingsDialog::ClientLimits limits; };   // a base before the window's: alive through all of its teardown
+
     /** The settings' own window: closing it (the title bar, Esc) deletes it - not modal, so the mics stay usable meanwhile. */
-    class SettingsWindow : public juce::DialogWindow
+    class SettingsWindow : private WindowLimits,
+                           public juce::DialogWindow
     {
     public:
-        SettingsWindow() : DialogWindow (ko ("설정"), Palette::card, true, true) {}
+        SettingsWindow() : DialogWindow (ko ("설정"), Palette::card, true, true)
+        {
+            limits.frameNow = [this] { return getPeer() != nullptr ? getPeer()->getFrameSize() : juce::BorderSize<int>(); };
+        }
+
+        ~SettingsWindow() override { limits.frameNow = nullptr; }   // the window's own teardown must not ask a half-gone window
+
+        void useClientLimits (const SettingsDialog::Placement& place)
+        {
+            limits.setClientLimits (place.minWidth, place.maxWidth, place.minHeight, place.maxHeight);
+            setConstrainer (&limits);
+        }
 
         void closeButtonPressed() override
         {
@@ -724,14 +741,20 @@ void SettingsDialog::show (MixEngine& engine, LiveMixSettings& settings, juce::C
 
     auto* window = new SettingsWindow();
     window->setUsingNativeTitleBar (true);
-    window->setContentOwned (scroller, true);   // the window may be shorter than the settings: they scroll
+    window->setContentOwned (scroller, true);   // the window is shorter than the settings: they scroll
     window->setResizable (true, false);
-    window->setResizeLimits (scroller->getWidth(), 320, scroller->getWidth(), content->getHeight() + 40);
 
-    if (centreAround != nullptr)
-        window->centreAroundComponent (centreAround, window->getWidth(), window->getHeight());   // on its display, inside it
-    else
-        window->centreWithSize (window->getWidth(), window->getHeight());
+    // centred on the app (none: on the main screen), on its screen title bar and all; the limits are for the inside
+    // (setResizeLimits holds the whole window, frame included: the bare width squeezed the settings 16 px narrower)
+    const auto frame = window->getPeer() != nullptr ? window->getPeer()->getFrameSize() : juce::BorderSize<int> (31, 8, 8, 8);
+    const auto& displays = juce::Desktop::getInstance().getDisplays();
+    const auto around = centreAround != nullptr ? centreAround->getScreenBounds() : juce::Rectangle<int>();
+    const auto* display = around.isEmpty() ? displays.getPrimaryDisplay() : displays.getDisplayForRect (around);
+    const auto screen = display != nullptr ? display->userBounds.toNearestInt() : juce::Rectangle<int> (0, 0, 1920, 1032);
+    const auto place = placement (content->getWidth() + scroller->getScrollBarThickness(), content->getHeight(),
+                                  around.isEmpty() ? screen.getCentre() : around.getCentre(), screen, frame);
+    window->useClientLimits (place);
+    window->setBounds (place.bounds);
 
     window->setVisible (true);
     window->toFront (true);
@@ -741,6 +764,43 @@ void SettingsDialog::show (MixEngine& engine, LiveMixSettings& settings, juce::C
 void SettingsDialog::closeIfOpen()
 {
     openDialog.deleteAndZero();
+}
+
+SettingsDialog::Placement SettingsDialog::placement (int width, int contentHeight, juce::Point<int> centre, juce::Rectangle<int> screen,
+                                                     juce::BorderSize<int> frame)
+{
+    const auto room = screen.reduced (12);
+    const int tallest = juce::jmin (tallestOpening, juce::jmax (shortestHeight, juce::roundToInt (screen.getHeight() * 0.7)));
+    const int w = juce::jmax (1, juce::jmin (width, room.getWidth() - frame.getLeftAndRight()));   // narrower only on a screen narrower than the settings: they scroll sideways
+    const int h = juce::jmax (1, juce::jmin (contentHeight, tallest, room.getHeight() - frame.getTopAndBottom()));
+    Placement p;
+    p.bounds = frame.subtractedFrom (frame.addedTo (juce::Rectangle<int> (w, h)).withCentre (centre).constrainedWithin (room));
+    p.minWidth = w;
+    p.maxWidth = width;
+    p.minHeight = juce::jmin (shortestHeight, h);   // a tiny screen's fitted height, not pushed back off it
+    p.maxHeight = juce::jmax (contentHeight, h);
+    return p;
+}
+
+SettingsDialog::ClientLimits::ClientLimits()
+{
+    setMinimumOnscreenAmounts (0x10000, 16, 24, 16);   // as ResizableWindow's own constrainer: the title bar stays reachable
+}
+
+void SettingsDialog::ClientLimits::setClientLimits (int minWidth, int maxWidth, int minHeight, int maxHeight)
+{
+    minW = minWidth;
+    maxW = maxWidth;
+    minH = minHeight;
+    maxH = maxHeight;
+}
+
+void SettingsDialog::ClientLimits::checkBounds (juce::Rectangle<int>& bounds, const juce::Rectangle<int>& previous, const juce::Rectangle<int>& limits,
+                                                bool stretchingTop, bool stretchingLeft, bool stretchingBottom, bool stretchingRight)
+{
+    const auto frame = frameNow ? frameNow() : juce::BorderSize<int>();
+    setSizeLimits (minW + frame.getLeftAndRight(), minH + frame.getTopAndBottom(), maxW + frame.getLeftAndRight(), maxH + frame.getTopAndBottom());
+    ComponentBoundsConstrainer::checkBounds (bounds, previous, limits, stretchingTop, stretchingLeft, stretchingBottom, stretchingRight);
 }
 
 void SettingsDialog::setStartWithWindows (bool on)

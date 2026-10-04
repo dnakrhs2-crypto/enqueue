@@ -1797,6 +1797,7 @@ public:
         expect (directory.createDirectory().wasOk());
         runSelectionRefreshTests (directory.getChildFile ("selection-refresh"));
         runAsioRateTests (directory.getChildFile ("asio-rate"));
+        runSettingsWindowTests (directory.getChildFile ("settings-window"));
         {
             LiveMixLookAndFeel lookAndFeel;
             MixEngine engine;
@@ -2128,6 +2129,128 @@ public:
             if (auto* dialog = dynamic_cast<juce::DialogWindow*> (desktop.getComponent (i)); dialog != nullptr && dialog->getName() == ko ("설정"))
                 if (auto* viewport = dynamic_cast<juce::Viewport*> (dialog->getContentComponent())) return viewport->getViewedComponent();
         return nullptr;
+    }
+
+    // 10/4 gom: the settings opened glued to the top of the screen, as tall as the screen with the title bar off it -
+    // they open centred and short (640 px, or 70% of a small screen) and the wheel scrolls the rest
+    void runSettingsWindowTests (const juce::File& directory)
+    {
+        beginTest ("settings opening place: 100% and 125% screens, the app near an edge, a monitor above, short settings, tiny and narrow screens");
+        {
+            const juce::BorderSize<int> frame (31, 8, 8, 8);
+            const juce::Rectangle<int> fullHd (0, 0, 1920, 1032), scaled (0, 0, 1536, 816), upper (1920, -1012, 1920, 1080),
+                                       tiny (0, 0, 800, 300), narrow (0, 0, 500, 1000);
+            const auto place = [&] (int contentHeight, juce::Point<int> centre, juce::Rectangle<int> screen)
+            {
+                const auto p = SettingsDialog::placement (568, contentHeight, centre, screen, frame);
+                const auto framed = frame.addedTo (p.bounds);
+                expect (screen.reduced (12).contains (framed), "frame on screen: " + framed.toString() + " in " + screen.toString());
+                // the resize limits let the opening size stand: JUCE would otherwise force it back off screen
+                expect (p.minWidth <= p.bounds.getWidth() && p.bounds.getWidth() <= p.maxWidth
+                        && p.minHeight <= p.bounds.getHeight() && p.bounds.getHeight() <= p.maxHeight, "limits admit " + p.bounds.toString());
+                return p;
+            };
+            const auto p = place (1170, fullHd.getCentre(), fullHd);
+            expectEquals (p.bounds.getWidth(), 568);
+            expectEquals (p.bounds.getHeight(), 640);
+            expect (frame.addedTo (p.bounds).getCentre() == fullHd.getCentre(), "centred: " + frame.addedTo (p.bounds).toString());
+            expect (p.minWidth == 568 && p.maxWidth == 568 && p.minHeight == 320 && p.maxHeight == 1170);   // dragged taller: up to all the settings
+            expectEquals (place (1170, scaled.getCentre(), scaled).bounds.getHeight(), 571);         // 70% of a 125% screen's 816
+            expectEquals (place (500, fullHd.getCentre(), fullHd).bounds.getHeight(), 500);         // short settings: no empty space
+            expectEquals (frame.addedTo (place (1170, { 960, 100 }, fullHd).bounds).getY(), 12);     // the app high up: down until the title bar shows
+            expectEquals (frame.addedTo (place (1170, { 960, 1000 }, fullHd).bounds).getBottom(), 1020);
+            const auto above = place (1170, upper.getCentre(), upper);                                // a monitor above the main one
+            expectEquals (above.bounds.getHeight(), 640);
+            expect (frame.addedTo (above.bounds).getCentre() == upper.getCentre(), "centred above: " + frame.addedTo (above.bounds).toString());
+            expectEquals (place (1170, tiny.getCentre(), tiny).bounds.getHeight(), 300 - 24 - 39);    // as tall as fits, under the usual 320
+            expectEquals (place (1170, narrow.getCentre(), narrow).bounds.getWidth(), 500 - 24 - 16); // narrower than the settings: they scroll sideways
+        }
+
+        beginTest ("settings resize limits hold the inside: borders a monitor's scale rounds wider or narrower never squeeze or widen it");
+        {
+            SettingsDialog::ClientLimits limits;
+            limits.setClientLimits (568, 568, 320, 1170);
+            const juce::Rectangle<int> everywhere (-10000, -10000, 20000, 20000);
+            for (int side = 5; side <= 12; ++side)   // the limits made with 8 px side borders once squeezed 9 px ones to 566
+            {
+                const juce::BorderSize<int> frame (31, side, side, side);
+                limits.frameNow = [frame] { return frame; };
+                const auto before = frame.addedTo (juce::Rectangle<int> (100, 100, 568, 640));
+                for (const int width : { 400, 568, 900 })   // dragged narrower, left alone, dragged wider
+                {
+                    auto r = frame.addedTo (juce::Rectangle<int> (100, 100, width, 640));
+                    limits.checkBounds (r, before, everywhere, false, false, false, true);
+                    expectEquals (frame.subtractedFrom (r).getWidth(), 568, "borders " + juce::String (side) + ", " + juce::String (width) + " wide");
+                }
+                for (const int height : { 100, 2000 })
+                {
+                    auto r = frame.addedTo (juce::Rectangle<int> (100, 100, 568, height));
+                    limits.checkBounds (r, before, everywhere, false, false, true, false);
+                    expectEquals (frame.subtractedFrom (r).getHeight(), height < 640 ? 320 : 1170);
+                }
+            }
+        }
+
+        beginTest ("settings open centred and no taller than 640 px or 70% of the screen, the title bar on screen; the wheel scrolls the rest");
+        expect (directory.createDirectory().wasOk());
+        MixEngine engine;
+        removeRealMixDeviceTypes (engine);
+        engine.getDeviceManager().addAudioDeviceType (std::make_unique<MixFakeType> ("ASIO"));
+        expect (engine.openDevice ({ "ASIO", "Good", "Good", 256, 48000.0 }).isEmpty());
+        LiveMixSettings settings (directory);
+        SettingsDialog::show (engine, settings, nullptr, {}, {}, {}, {}, {});
+        auto& desktop = juce::Desktop::getInstance();
+        juce::DialogWindow* window = nullptr;
+        for (int i = 0; i < desktop.getNumComponents(); ++i)
+            if (auto* dialog = dynamic_cast<juce::DialogWindow*> (desktop.getComponent (i)); dialog != nullptr && dialog->getName() == ko ("설정"))
+                window = dialog;
+        auto* viewport = window != nullptr ? dynamic_cast<juce::Viewport*> (window->getContentComponent()) : nullptr;
+        auto* content = viewport != nullptr ? viewport->getViewedComponent() : nullptr;
+        const auto* display = desktop.getDisplays().getPrimaryDisplay();
+        expect (window != nullptr && window->getPeer() != nullptr && viewport != nullptr && content != nullptr && display != nullptr);
+        if (window != nullptr && window->getPeer() != nullptr && viewport != nullptr && content != nullptr && display != nullptr)
+        {
+            const auto screen = display->userBounds.toNearestInt();
+            const auto bounds = window->getScreenBounds();
+            const auto frame = window->getPeer()->getFrameSize();
+            const auto framed = frame.addedTo (bounds);
+            const int fullWidth = content->getWidth() + viewport->getScrollBarThickness();
+            const auto expected = SettingsDialog::placement (fullWidth, content->getHeight(), screen.getCentre(), screen, frame);
+            expect (bounds == expected.bounds, "opened at " + bounds.toString() + ", placed at " + expected.bounds.toString());
+            expect (bounds.getHeight() <= 640 && content->getHeight() > bounds.getHeight(), "short, the settings scroll: " + bounds.toString());
+            if (screen.getHeight() >= 1032)
+                expectEquals (bounds.getHeight(), 640);   // 1080p at 100% and taller screens
+            expect (screen.reduced (12).contains (framed), "title bar and borders on screen: " + framed.toString() + " in " + screen.toString());
+            expect (std::abs (framed.getCentreX() - screen.getCentreX()) <= 1 && std::abs (framed.getCentreY() - screen.getCentreY()) <= 1,
+                    "centred: " + framed.toString() + " in " + screen.toString());
+
+            // the wheel over a box (which takes no wheel) scrolls the settings and leaves the box alone, down to the end
+            auto* type = dynamic_cast<juce::ComboBox*> (content->findChildWithID ("device-type"));
+            expect (type != nullptr);
+            expect (viewport->getVerticalScrollBar().isVisible(), "a scroll bar down the side");
+            if (expected.bounds.getWidth() == fullWidth)   // a screen as wide as the settings shows them whole: limits of the
+            {                                              // bare width once squeezed the window 16 px narrower than its settings
+                expectEquals (window->getWidth(), fullWidth);
+                expect (! viewport->getHorizontalScrollBar().isVisible(), "no sideways scroll bar: view " + juce::String (viewport->getViewWidth())
+                        + " for " + juce::String (content->getWidth()) + " px of settings");
+            }
+            if (type != nullptr)
+            {
+                const int selected = type->getSelectedId();
+                const auto now = juce::Time::getCurrentTime();
+                const juce::MouseEvent event (desktop.getMainMouseSource(), { 20.0f, 10.0f }, {}, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f,
+                                              type, type, now, { 20.0f, 10.0f }, now, 0, false);
+                juce::MouseWheelDetails wheel {};
+                wheel.deltaY = -60.0f / 256.0f;   // one notch down, as JUCE reads a WM_MOUSEWHEEL of 120
+                type->mouseWheelMove (event, wheel);
+                expect (viewport->getViewPositionY() > 0, "one notch scrolled " + juce::String (viewport->getViewPositionY()) + " px");
+                expectEquals (type->getSelectedId(), selected);
+                for (int i = 0; i < 100 && viewport->getViewPositionY() < content->getHeight() - viewport->getViewHeight(); ++i)
+                    type->mouseWheelMove (event, wheel);
+                expectEquals (viewport->getViewPositionY(), content->getHeight() - viewport->getViewHeight());
+            }
+        }
+        SettingsDialog::closeIfOpen();
     }
 
     void runAsioRateTests (const juce::File& directory)
