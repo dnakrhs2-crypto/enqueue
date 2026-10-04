@@ -8,19 +8,27 @@ namespace gocue
 {
 class ShortcutService;
 
-/** Menu bar's edit / show mode segment, sharing MainComponent's existing mode action. */
+/** Menu bar's right end: the edit / show mode segment, then the full screen button at the far right. Both only
+    call MainComponent's existing actions (show mode, the full screen command). */
 class ModeToggle : public juce::Component
 {
 public:
     ModeToggle();
     void setShowMode (bool showMode);
+    /** "전체 화면", or "전체 화면 종료" while the main window is full screen; 'keys' is the command's current
+        shortcut text for the tooltip (empty: none). */
+    void setFullScreen (bool fullScreen, const juce::String& keys);
+    /** Room for the segment and for the longer of the button's two labels, so the button never changes width when
+        it toggles. */
+    int getIdealWidth() const;
     std::function<void (bool showMode)> onShowModeChanged;
+    std::function<void()> onFullScreenClicked;
     void resized() override;
     void paint (juce::Graphics&) override;
     void paintOverChildren (juce::Graphics&) override;
 
 private:
-    juce::TextButton editButton, showButton;
+    juce::TextButton editButton, showButton, fullScreenButton;
     juce::Rectangle<int> modeBounds;
 };
 

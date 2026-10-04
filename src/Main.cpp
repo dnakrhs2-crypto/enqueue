@@ -295,7 +295,7 @@ private:
                 toFront (true);
             };
             content->isFullScreenActive = [this] { return fullScreen.isActive(); };
-            fullScreen.onExternalExit = [&commands] { commands.commandStatusChanged(); };
+            fullScreen.onExternalExit = [this] { mainComponent->fullScreenChanged(); };   // the button and the menu follow
 
             setResizable (true, false);
             setResizeLimits (860, 640, 10000, 10000);   // room for the transport, a few rows and the inspector's minimum

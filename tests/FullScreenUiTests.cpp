@@ -24,14 +24,15 @@ public:
         f.main->onToggleFullScreen = [&] { active = ! active; ++toggles; };
         f.main->isFullScreenActive = [&] { return active; };
 
-        beginTest ("edit menu follows inspector; constant label and tick follow the main-window callback");
-        const auto checkMenu = [&] (bool ticked)
+        beginTest ("edit menu follows inspector; it reads 전체 화면 / 전체 화면 종료 with the main-window state, no tick");
+        const auto checkMenu = [&] (bool fullScreen)
         {
+            const auto label = fullScreen ? ko ("전체 화면 종료") : ko ("전체 화면");
             juce::ApplicationCommandInfo info (CommandIDs::toggleFullScreen);
             f.main->getCommandInfo (CommandIDs::toggleFullScreen, info);
-            expectEquals (info.shortName, ko ("전체 화면"));
+            expectEquals (info.shortName, label);
             expect ((info.flags & juce::ApplicationCommandInfo::isDisabled) == 0);
-            expect (((info.flags & juce::ApplicationCommandInfo::isTicked) != 0) == ticked);
+            expect ((info.flags & juce::ApplicationCommandInfo::isTicked) == 0);
             auto menu = f.main->getMenuForIndex (1, ko ("편집"));
             juce::CommandID previous = 0;
             int found = 0;
@@ -42,8 +43,8 @@ public:
                 {
                     ++found;
                     expectEquals (previous, juce::CommandID (CommandIDs::toggleInspector));
-                    expectEquals (item.text, ko ("전체 화면"));
-                    expect (item.isEnabled && item.isTicked == ticked);
+                    expectEquals (item.text, label);
+                    expect (item.isEnabled && ! item.isTicked);
                 }
                 previous = item.itemID;
             }
@@ -60,11 +61,85 @@ public:
         checkMenu (false);
         f.command (CommandIDs::toggleShowMode);
 
+        beginTest ("menu bar button: far right after the mode segment; one click per toggle; reads 전체 화면 종료 while full screen");
+        {
+            const auto byText = [] (const char* text)
+            {
+                return [label = ko (text)] (const juce::TextButton& b) { return b.getButtonText() == label; };
+            };
+            auto* edit = child<juce::TextButton> (*f.main, byText ("편집 모드"));
+            auto* show = child<juce::TextButton> (*f.main, byText ("쇼 모드"));
+            auto* button = child<juce::TextButton> (*f.main, byText ("전체 화면"));
+            expect (edit != nullptr && show != nullptr && button != nullptr);
+            if (edit == nullptr || show == nullptr || button == nullptr) return;
+            const auto inMain = [&] (juce::Component& c) { return f.main->getLocalArea (&c, c.getLocalBounds()); };
+            expect (inMain (*edit).getRight() <= inMain (*show).getX() && inMain (*show).getRight() < inMain (*button).getX(),
+                    "편집 모드 | 쇼 모드, then the button");
+            expect (inMain (*button).getRight() >= f.main->getWidth() - Palette::gap && inMain (*button).getRight() <= f.main->getWidth(),
+                    "the far right end");
+            expect (inMain (*button).getBottom() <= Palette::menuBarHeight, "in the menu bar row");
+            expect (! button->getWantsKeyboardFocus(), "Space stays GO after a click");
+            const auto bold = Palette::font (Palette::fileSize, true);
+            expect (button->getWidth() >= juce::GlyphArrangement::getStringWidthInt (bold, ko ("전체 화면 종료")) + Palette::gap,
+                    "both labels fit without a width change");
+            const int width = button->getWidth();
+
+            const auto checkButton = [&] (bool fullScreen)
+            {
+                const auto label = fullScreen ? ko ("전체 화면 종료") : ko ("전체 화면");
+                expectEquals (button->getButtonText(), label);
+                expect (button->getToggleState() == fullScreen);
+                expectEquals (button->getTooltip(), label + " (F11)");
+                expectEquals (button->getWidth(), width);
+            };
+            checkButton (false);
+            const int before = toggles;
+            button->triggerClick();   // the click, then the command posted to the command manager
+            dispatch();
+            dispatch();
+            expectEquals (toggles, before + 1);
+            checkButton (true);
+            checkMenu (true);
+            button->triggerClick();
+            dispatch();
+            dispatch();
+            expectEquals (toggles, before + 2);
+            checkButton (false);
+
+            f.command (CommandIDs::toggleShowMode);   // show mode does not lock the view
+            button->triggerClick();
+            dispatch();
+            dispatch();
+            expectEquals (toggles, before + 3);
+            checkButton (true);
+            button->triggerClick();
+            dispatch();
+            dispatch();
+            checkButton (false);
+            f.command (CommandIDs::toggleShowMode);
+
+            active = true;                 // left or entered elsewhere (an external kiosk release, for one)
+            f.main->fullScreenChanged();
+            checkButton (true);
+            active = false;
+            f.main->fullScreenChanged();
+            checkButton (false);
+
+            expect (service.setKeys (fullScreenID, {}).wasOk());   // no key: the tooltip has none
+            dispatch();
+            expectEquals (button->getTooltip(), ko ("전체 화면"));
+            expect (service.restoreCommandDefaults (fullScreenID).wasOk());
+            dispatch();
+            expectEquals (button->getTooltip(), ko ("전체 화면 (F11)"));
+            expectEquals (toggles, before + 4);
+        }
+
         beginTest ("F11 routed from the big-view scope invokes the main-window callback");
         {
             HiddenWindow bigView (f.engine, f.document().cues, f.settings);
+            const int beforeBigView = toggles;
             expect (f.key (K (K::F11Key), bigView));
-            expectEquals (toggles, 3);
+            expectEquals (toggles, beforeBigView + 1);
             expect (! bigView.isKioskMode());
             f.release (K (K::F11Key));
         }

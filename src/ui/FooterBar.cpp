@@ -6,6 +6,28 @@
 
 namespace gocue
 {
+namespace
+{
+// the segment's look: panel when off, accent when on (the full screen button shares it, so "on" reads the same)
+void styleSegmentButton (juce::TextButton& button)
+{
+    button.setColour (juce::TextButton::buttonColourId, Palette::panel);
+    button.setColour (juce::TextButton::buttonOnColourId, Palette::accent);
+    button.setColour (juce::TextButton::textColourOffId, Palette::muted);
+    button.setColour (juce::TextButton::textColourOnId, Palette::accentInk);
+}
+
+juce::String fullScreenLabel (bool fullScreen) { return fullScreen ? ko ("전체 화면 종료") : ko ("전체 화면"); }
+
+int fullScreenButtonWidth()
+{
+    const auto font = Palette::font (Palette::fileSize, true);   // the "on" face is bold, the wider one
+    return juce::jmax (juce::GlyphArrangement::getStringWidthInt (font, fullScreenLabel (false)),
+                       juce::GlyphArrangement::getStringWidthInt (font, fullScreenLabel (true))) + 2 * Palette::gap;
+}
+
+constexpr int modeSegmentWidth = Palette::modeToggleWidth - 2 * Palette::gap;
+}
 
 ModeToggle::ModeToggle()
 {
@@ -19,32 +41,48 @@ ModeToggle::ModeToggle()
 
     setup (editButton, "편집 모드");
     setup (showButton, "쇼 모드");
+    setup (fullScreenButton, "전체 화면");
 
     editButton.onClick = [this] { if (onShowModeChanged) onShowModeChanged (false); };
     showButton.onClick = [this] { if (onShowModeChanged) onShowModeChanged (true); };
+    fullScreenButton.onClick = [this] { if (onFullScreenClicked) onFullScreenClicked(); };
     editButton.setConnectedEdges (juce::Button::ConnectedOnRight);
     showButton.setConnectedEdges (juce::Button::ConnectedOnLeft);
     editButton.getProperties().set ("slateSegment", true);
     showButton.getProperties().set ("slateSegment", true);
+    fullScreenButton.getProperties().set ("slateSegment", true);   // a one-piece segment: same shape, font and outline
     setShowMode (false);
+    setFullScreen (false, {});
 }
 
 void ModeToggle::setShowMode (bool showMode)
 {
     editButton.setToggleState (! showMode, juce::dontSendNotification);
     showButton.setToggleState (showMode, juce::dontSendNotification);
-    for (auto* button : { &editButton, &showButton })
-    {
-        button->setColour (juce::TextButton::buttonColourId, Palette::panel);
-        button->setColour (juce::TextButton::buttonOnColourId, Palette::accent);
-        button->setColour (juce::TextButton::textColourOffId, Palette::muted);
-        button->setColour (juce::TextButton::textColourOnId, Palette::accentInk);
-    }
+    styleSegmentButton (editButton);
+    styleSegmentButton (showButton);
+}
+
+void ModeToggle::setFullScreen (bool fullScreen, const juce::String& keys)
+{
+    const auto label = fullScreenLabel (fullScreen);
+    fullScreenButton.setButtonText (label);
+    fullScreenButton.setToggleState (fullScreen, juce::dontSendNotification);
+    fullScreenButton.setTooltip (keys.isNotEmpty() ? label + " (" + keys + ")" : label);
+    styleSegmentButton (fullScreenButton);
+}
+
+int ModeToggle::getIdealWidth() const
+{
+    return Palette::gap + modeSegmentWidth + Palette::buttonGap + fullScreenButtonWidth() + Palette::gap;
 }
 
 void ModeToggle::resized()
 {
-    modeBounds = getLocalBounds().reduced (Palette::gap, 3);
+    auto area = getLocalBounds().reduced (Palette::gap, 3);
+    fullScreenButton.setBounds (area.removeFromRight (fullScreenButtonWidth()));   // the far right end
+    area.removeFromRight (Palette::buttonGap);
+    modeBounds = area.removeFromRight (modeSegmentWidth);
     auto modes = modeBounds;
     editButton.setBounds (modes.removeFromLeft (modes.getWidth() / 2));
     showButton.setBounds (modes);
@@ -61,6 +99,7 @@ void ModeToggle::paintOverChildren (juce::Graphics& g)
 {
     g.setColour (Palette::outline);
     g.drawRoundedRectangle (modeBounds.toFloat().reduced (0.5f), Palette::cornerRadius, Palette::borderWidth);
+    g.drawRoundedRectangle (fullScreenButton.getBounds().toFloat().reduced (0.5f), Palette::cornerRadius, Palette::borderWidth);
 }
 
 FooterBar::FooterBar()

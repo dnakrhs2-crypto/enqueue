@@ -103,6 +103,9 @@ public:
     std::function<void (const juce::String& title)> onWindowTitleChanged;
     std::function<void()> onToggleFullScreen;
     std::function<bool()> isFullScreenActive;
+    /** The window entered or left full screen (also when that happened outside the command): the menu bar's button
+        and the Edit menu follow. */
+    void fullScreenChanged();
 
 private:
     friend struct tests::ReopenLastProjectTestAccess;

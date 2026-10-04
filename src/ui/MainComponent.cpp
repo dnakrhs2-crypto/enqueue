@@ -217,6 +217,8 @@ MainComponent::MainComponent (AudioEngine& e, AppSettings& s, juce::ApplicationC
     inspector.onResetCue = [this] { controller.resetSelected(); };
 
     modeToggle.onShowModeChanged = [this] (bool mode) { setShowMode (mode); };
+    // the menu bar's full screen button runs the same command as F11 and the Edit menu (after this click is done)
+    modeToggle.onFullScreenClicked = [this] { commands.invokeDirectly (CommandIDs::toggleFullScreen, true); };
     transport.onLufsAverageSecondsChanged = [this] (int seconds) { settings.setLufsAverageSeconds (seconds); };
     footer.onWarningsClicked = [this] { showWarnings(); };
 
@@ -345,7 +347,7 @@ void MainComponent::resized()
 {
     auto area = getLocalBounds();
     auto menuArea = area.removeFromTop (Palette::menuBarHeight);
-    modeToggle.setBounds (menuArea.removeFromRight (Palette::modeToggleWidth));
+    modeToggle.setBounds (menuArea.removeFromRight (modeToggle.getIdealWidth()));
     menuBar.setBounds (menuArea);
     footer.setBounds (area.removeFromBottom (Palette::footerHeight));
     area.reduce (Palette::gap, Palette::gap);
@@ -384,7 +386,16 @@ void MainComponent::shortcutsChanged()
     transport.refreshShortcutHints();
     updateTransportStandby();
     footer.setShowMode (showMode, shortcuts.get());
+    fullScreenChanged();   // the button's tooltip names the current key
     menuItemsChanged();
+}
+
+void MainComponent::fullScreenChanged()
+{
+    const bool hasKey = shortcuts != nullptr && ! shortcuts->getKeys (CommandIDs::toggleFullScreen).isEmpty();   // none: no "(미지정)"
+    modeToggle.setFullScreen (isFullScreenActive && isFullScreenActive(),
+                              hasKey ? ShortcutDisplay::currentKeys (shortcuts.get(), CommandIDs::toggleFullScreen) : juce::String());
+    commands.commandStatusChanged();
 }
 
 void MainComponent::showPanicSecondsMenu (juce::Point<int> screenPosition)
@@ -846,9 +857,9 @@ void MainComponent::getCommandInfo (juce::CommandID commandID, juce::Application
             result.shortName = inspectorCollapsed ? ko ("인스펙터 펴기") : ko ("인스펙터 접기");
             break;
 
-        case CommandIDs::toggleFullScreen:
+        case CommandIDs::toggleFullScreen:   // the same words as the menu bar's button
+            result.shortName = isFullScreenActive && isFullScreenActive() ? ko ("전체 화면 종료") : ko ("전체 화면");
             result.setActive (onToggleFullScreen != nullptr);
-            result.setTicked (isFullScreenActive && isFullScreenActive());
             break;
 
         case CommandIDs::audioSettings:
@@ -1212,7 +1223,7 @@ bool MainComponent::perform (const InvocationInfo& info)
                     cart.grabKeyboardFocus();
                 else
                     table.focusTable();
-                commands.commandStatusChanged();
+                fullScreenChanged();
             }
             break;
 
