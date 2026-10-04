@@ -1,0 +1,36 @@
+From 36ec91dccbc1e00cc055a8a5ee03a0231c8aa573 Mon Sep 17 00:00:00 2001
+From: gom <sound@letsplax.com>
+Date: Sun, 4 Oct 2026 10:33:28 +0900
+Subject: [PATCH] Enqueue patch: a kiosk component can keep kiosk mode while
+ another app is in front
+
+JUCE turns kiosk mode off on WM_ACTIVATEAPP(FALSE). Enqueue's F11 full screen is a kiosk window that has to stay
+full screen when the operator switches to another app (OBS, a browser) and back, as a browser's F11 does. A kiosk
+component whose properties hold keepKioskModeWhenAppInactive = true is now left in kiosk mode; every other kiosk
+component is turned off on deactivation as before.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01WAnoj5AMTc51uQ3XeSj7Kq
+---
+ modules/juce_gui_basics/native/juce_Windowing_windows.cpp | 5 ++++-
+ 1 file changed, 4 insertions(+), 1 deletion(-)
+
+diff --git a/modules/juce_gui_basics/native/juce_Windowing_windows.cpp b/modules/juce_gui_basics/native/juce_Windowing_windows.cpp
+index 98859c50a1..f1b210b848 100644
+--- a/modules/juce_gui_basics/native/juce_Windowing_windows.cpp
++++ b/modules/juce_gui_basics/native/juce_Windowing_windows.cpp
+@@ -3943,7 +3943,10 @@ private:
+                 // so this forces an update when the app is brought to the front
+                 if (wParam != FALSE)
+                     juce_repeatLastProcessPriority();
+-                else
++                // Enqueue patch: a kiosk component whose properties hold keepKioskModeWhenAppInactive = true stays in
++                // kiosk mode while another app is in front (Enqueue's F11 full screen survives Alt+Tab, like a browser's)
++                else if (auto* kiosk = Desktop::getInstance().getKioskModeComponent();
++                         kiosk == nullptr || ! static_cast<bool> (kiosk->getProperties().getWithDefault ("keepKioskModeWhenAppInactive", false)))
+                     Desktop::getInstance().setKioskModeComponent (nullptr); // turn kiosk mode off if we lose focus
+ 
+                 detail::TopLevelWindowManager::checkCurrentlyFocusedTopLevelWindow();
+-- 
+2.53.0.windows.1
+

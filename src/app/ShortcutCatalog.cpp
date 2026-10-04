@@ -17,7 +17,7 @@ juce::KeyPress key (int code, int modifiers = 0) { return { code, modifiers, 0 }
 ShortcutDefinition command (const char* id, juce::CommandID commandID, juce::String name,
                             juce::String description, Category category, Scope scope, bool repeat,
                             juce::String menuCategory, ShortcutKeys keys, ShortcutKeys cueTableOnlyKeys = {},
-                            bool defaultKeysYieldToCueHotkeys = false)
+                            bool yieldsToCueHotkeys = false)
 {
     int flags = commandID == CommandIDs::go ? juce::ApplicationCommandInfo::wantsKeyUpDownCallbacks : 0;
    #if ! JUCE_WINDOWS
@@ -25,7 +25,7 @@ ShortcutDefinition command (const char* id, juce::CommandID commandID, juce::Str
         flags |= juce::ApplicationCommandInfo::wantsKeyUpDownCallbacks;
    #endif
     return { id, std::move (name), std::move (description), category, scope, repeat,
-             commandID, std::move (keys), std::move (menuCategory), flags, nullptr, std::move (cueTableOnlyKeys), defaultKeysYieldToCueHotkeys };
+             commandID, std::move (keys), std::move (menuCategory), flags, nullptr, std::move (cueTableOnlyKeys), yieldsToCueHotkeys };
 }
 
 std::vector<ShortcutDefinition> makeCommands()

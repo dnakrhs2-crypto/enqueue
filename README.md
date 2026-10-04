@@ -45,7 +45,8 @@ Windows용 오디오 큐 플레이어. QLab의 오디오 기능을 단계적으�
 | `Ctrl+F1` | 사용 설명서 (도움말 메뉴: 기능 설명·단축키, 탭별) |
 | `Ctrl+I` | 인스펙터 접기 / 펴기 (큐 목록과 인스펙터, 활성 큐 패널 사이 구분선을 끌면 크기가 바뀌고, 구분선의 화살표나 더블클릭으로 접힙니다) |
 | `Ctrl+Shift+M` | 쇼 모드 ↔ 편집 모드 (푸터 버튼과 같음) |
-| 큐 핫키 | 인스펙터 기본 탭에서 지정한 키(F1~F24(F3 제외), 숫자·글자 등 — 예약 키·Ctrl/Alt 조합 불가)로 그 큐 GO. 입력창 편집 중에는 무시 |
+| `F11` | 전체 화면 (편집 > 전체 화면과 같음) — 메인 창이 작업표시줄까지 덮고 모니터를 꽉 채움. 다시 누르면 원래 창, 다른 앱으로 전환해도 유지, 다음 실행은 창으로. Esc로는 꺼지지 않음 |
+| 큐 핫키 | 인스펙터 기본 탭에서 지정한 키(F1~F24(F3 제외), 숫자·글자 등 — 예약 키·Ctrl/Alt 조합 불가)로 그 큐 GO. 입력창 편집 중에는 무시. 전체 화면 단축키와 겹치면 큐 핫키가 우선(전체 화면은 편집 메뉴로) |
 | `Ctrl+Z` / `Ctrl+Y` | 실행 취소 / 다시 실행 |
 | `Insert` | 큐 추가 (파일 선택) |
 | `Delete` / `Backspace`(큐 표) / `Ctrl+D` | 큐 삭제 / 큐 삭제(표 포커스) / 큐 복제(플러그인 체인 포함) |
@@ -161,7 +162,7 @@ ctest --preset vs2022-release        :: 단위 테스트, load 제외 (VST3 설�
 | WinSparkle 0.9.4 | https://github.com/vslavik/winsparkle/releases | `WINSPARKLE_DIR` (`include/winsparkle.h`, `x64/Release/WinSparkle.dll`) | 자동 업데이트 없이 빌드 |
 | 로컬 JUCE 체크아웃(선택) | https://github.com/juce-framework/JUCE (태그 8.0.15) | `FETCHCONTENT_SOURCE_DIR_JUCE` | GitHub에서 자동 다운로드 |
 
-JUCE에는 Enqueue 패치가 하나 있다: `tools/juce-patches/0001-wasapi-exclusive-channel-masks.patch` (WASAPI exclusive 모드에서 표준 스피커 마스크로 다채널을 찾음). 로컬 체크아웃에 `git apply --ignore-whitespace`로 적용해 빌드한다(자동 다운로드 JUCE로 빌드하면 exclusive 모드가 스테레오로 제한된다).
+JUCE에는 Enqueue 패치가 있다: `tools/juce-patches/0001-wasapi-exclusive-channel-masks.patch` (WASAPI exclusive 모드에서 표준 스피커 마스크로 다채널을 찾음), `tools/juce-patches/0003-kiosk-mode-survives-app-switch.patch` (전체 화면(키오스크) 창이 다른 앱으로 전환해도 풀리지 않음 — 없으면 Alt+Tab 때 전체 화면이 풀리고 `FullScreen windows` 테스트가 실패한다). 로컬 체크아웃에 `git apply --ignore-whitespace`로 적용해 빌드한다(자동 다운로드 JUCE로 빌드하면 exclusive 모드가 스테레오로 제한된다).
 
 `CMakeUserPresets.json`(git 무시됨)에 `local` 프리셋으로 적어 두면 `cmake --preset local` 한 번으로 끝난다:
 

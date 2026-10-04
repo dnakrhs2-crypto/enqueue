@@ -34,17 +34,15 @@ Category categoryFor (const ShortcutDefinition& entry)
 Issues inspect (const ShortcutService& service, const juce::String& action, const juce::KeyPress& key, const Cues& cues)
 {
     Issues issues;
-    ShortcutKeyContext context;
-    context.cueHotkeys = cues;
-    const auto owner = service.resolveKeyOwner (key, context, true);
+    // Command moves follow the key mapping, before any yielding to project cues.
+    const auto owner = service.resolveKeyOwner (key, {}, true);
     if (owner.commandID != 0 && owner.id != action)
     {
         issues.commandOwner = owner.id;
         issues.conflicts.add (ko ("다른 기능에서 사용: ") + nameFor (owner.id));
     }
     const auto* entry = ShortcutCatalog::get().find (action);
-    const bool yields = entry != nullptr && entry->defaultKeysYieldToCueHotkeys
-        && service.getProfile().overrides.count (action) == 0 && entry->matchesKey (key);
+    const bool yields = entry != nullptr && entry->yieldsToCueHotkeys;
     for (const auto& cue : cues)
         if (ShortcutKeyInput::keysOverlap (cue.key, key))
             issues.conflicts.addIfNotAlreadyThere (yields
@@ -53,6 +51,8 @@ Issues inspect (const ShortcutService& service, const juce::String& action, cons
     if (entry != nullptr && entry->cueTableOnlyKeys.contains (key))
         issues.limitations.add (ShortcutDisplay::key (key) + ko (": 큐 표에 포커스가 있을 때만 작동합니다."));
     const bool panic = entry != nullptr && entry->scope == ShortcutScope::application;
+    ShortcutKeyContext context;
+    context.cueHotkeys = cues;
     if (ShortcutKeyInput::isStandardTextEditorKey (key))
         issues.limitations.add (panic ? ko ("입력창에서도 작동합니다.") : ko ("입력창에서는 문자·편집 조작이 우선입니다."));
     if (! panic)

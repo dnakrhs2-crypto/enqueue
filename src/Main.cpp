@@ -295,6 +295,7 @@ private:
                 toFront (true);
             };
             content->isFullScreenActive = [this] { return fullScreen.isActive(); };
+            fullScreen.onExternalExit = [&commands] { commands.commandStatusChanged(); };
 
             setResizable (true, false);
             setResizeLimits (860, 640, 10000, 10000);   // room for the transport, a few rows and the inspector's minimum
@@ -316,10 +317,10 @@ private:
 
         ~MainWindow() override
         {
+            fullScreen.onExternalExit = {};
+            fullScreen.shutdown();
             mainComponent->onToggleFullScreen = {};
             mainComponent->isFullScreenActive = {};
-            if (fullScreen.isActive())
-                setVisible (false);
         }
 
         MainComponent& getMainComponent() { return *mainComponent; }

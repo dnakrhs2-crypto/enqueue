@@ -54,6 +54,16 @@ juce::String desktopName()
     return juce::String (name);
 }
 
+void dispatchMessages()
+{
+    MSG message {};
+    for (int n = 0; n < 2000 && PeekMessageW (&message, nullptr, 0, 0, PM_REMOVE); ++n)
+    {
+        TranslateMessage (&message);
+        DispatchMessageW (&message);
+    }
+}
+
 class QuietWindow : public juce::DocumentWindow
 {
 public:
@@ -66,6 +76,7 @@ public:
         addToDesktop (getDesktopWindowStyleFlags()); // never show or activate this native window
         seedState();
     }
+    ~QuietWindow() override { mode.shutdown(); }
     void seedState() { restoreWindowStateFromString (getBounds().toString()); }
     void closeButtonPressed() override {}
     void resized() override
@@ -120,11 +131,19 @@ public:
         expectEquals (window.mode.restorableState(), original);
         window.mode.enter();
         expect (window.mode.isActive() && window.isKioskMode());
+        expect (static_cast<bool> (window.getProperties()[FullScreenMode::keepKioskModeWhenAppInactive]));
         expect (handle (window) == hwnd);
         expect (physicalBounds (window) == monitorBounds (window));
         expect ((GetWindowLongPtrW (hwnd, GWL_STYLE) & (WS_CAPTION | WS_THICKFRAME | WS_MAXIMIZE)) == 0);
         expectEquals (window.mode.restorableState(), original);
         expect (! IsWindowVisible (hwnd));
+
+        beginTest ("WM_ACTIVATEAPP(FALSE) retains kiosk mode, physical coverage and active state");
+        SendMessageW (hwnd, WM_ACTIVATEAPP, FALSE, 0);
+        dispatchMessages();
+        expect (window.isKioskMode() && window.mode.isActive() && physicalBounds (window) == monitorBounds (window),
+                "JUCE must include tools/juce-patches/0003-kiosk-mode-survives-app-switch.patch");
+        expect (! IsWindowVisible (hwnd) && GetForegroundWindow() == foreground);
 
         beginTest ("repeated enter/exit are harmless and restore exact geometry, style and state");
         window.mode.enter();
@@ -132,11 +151,79 @@ public:
         window.mode.exit();
         window.mode.exit();
         expect (! window.mode.isActive() && ! window.isKioskMode());
+        expect (! window.getProperties().contains (FullScreenMode::keepKioskModeWhenAppInactive));
         expect (physicalBounds (window) == bounds);
         expect (GetWindowLongPtrW (hwnd, GWL_STYLE) == style);
         expectEquals (window.getWindowStateAsString(), original);
         expect (GetForegroundWindow() == foreground);
         expect (! IsWindowVisible (hwnd));
+
+        beginTest ("external kiosk release restores asynchronously, notifies once and permits re-entry");
+        for (const bool deactivate : { true, false })
+        {
+            int notifications = 0;
+            window.mode.onExternalExit = [&] { ++notifications; };
+            window.mode.enter();
+            if (deactivate)
+            {
+                window.getProperties().remove (FullScreenMode::keepKioskModeWhenAppInactive);
+                SendMessageW (hwnd, WM_ACTIVATEAPP, FALSE, 0);
+            }
+            else
+                juce::Desktop::getInstance().setKioskModeComponent (nullptr);
+            expect (! window.mode.isActive(), "resized/moved detects external release without a manual refit");
+            expectEquals (window.mode.restorableState(), original);
+            dispatchMessages();
+            window.mode.refit();
+            window.parentSizeChanged();
+            expectEquals (notifications, 1);
+            expect (! window.isKioskMode() && ! window.mode.isActive());
+            expect (! window.getProperties().contains (FullScreenMode::keepKioskModeWhenAppInactive));
+            expectEquals (window.getWindowStateAsString(), original);
+            expect (physicalBounds (window) == bounds && GetWindowLongPtrW (hwnd, GWL_STYLE) == style);
+            window.mode.enter();
+            expect (window.isKioskMode() && window.mode.isActive());
+            expect (physicalBounds (window) == monitorBounds (window));
+            window.mode.exit();
+            expectEquals (notifications, 1);
+            window.mode.onExternalExit = {};
+        }
+
+        beginTest ("JUCE reentrant entry refusal clears active state and the opt-in property immediately");
+        {
+            QuietWindow blocker;
+            auto& desktop = juce::Desktop::getInstance();
+            desktop.setKioskModeComponent (&blocker, false);
+            struct TryDuringRelease : juce::ComponentListener
+            {
+                explicit TryDuringRelease (QuietWindow& w) : target (w) {}
+                void componentMovedOrResized (juce::Component& component, bool, bool) override
+                {
+                    if (! attempted && juce::Desktop::getInstance().getKioskModeComponent() != &component)
+                    {
+                        attempted = true;
+                        target.mode.enter(); // Desktop is still inside its kiosk reentrancy guard
+                    }
+                }
+                QuietWindow& target;
+                bool attempted = false;
+            } attempt (window);
+            blocker.addComponentListener (&attempt);
+            int notifications = 0;
+            window.mode.onExternalExit = [&] { ++notifications; };
+            desktop.setKioskModeComponent (nullptr);
+            blocker.removeComponentListener (&attempt);
+            expect (attempt.attempted);
+            expect (! window.mode.isActive() && ! window.isKioskMode());
+            expect (! window.getProperties().contains (FullScreenMode::keepKioskModeWhenAppInactive));
+            expectEquals (notifications, 1);
+            dispatchMessages();
+            expectEquals (window.getWindowStateAsString(), original);
+            window.mode.enter();
+            expect (window.mode.isActive() && window.isKioskMode());
+            window.mode.exit();
+            window.mode.onExternalExit = {};
+        }
 
         beginTest ("UI fitting leaves kiosk bounds alone; refit repairs physical changes without logical rounding loops");
         window.mode.toggle();
@@ -204,7 +291,7 @@ public:
             window.mode.exit();
         }
 
-        beginTest ("destruction hides and releases the kiosk without restoring/activating a window");
+        beginTest ("shutdown explicitly releases the kiosk and property without activation; destructor is a fallback");
         {
             juce::DocumentWindow closing ("FullScreen shutdown", juce::Colours::black, 0, false);
             closing.setBounds (100, 100, 960, 680);
@@ -213,9 +300,34 @@ public:
                 FullScreenMode mode (closing);
                 mode.enter();
                 expect (closing.isKioskMode());
+                mode.shutdown();
+                mode.shutdown();
+                expect (! mode.isActive() && ! closing.isKioskMode());
+                expect (! closing.getProperties().contains (FullScreenMode::keepKioskModeWhenAppInactive));
+                expect (! IsWindowVisible (handle (closing)) && GetForegroundWindow() == foreground);
+                mode.enter(); // leave the fallback destructor a kiosk to release
             }
             expect (! closing.isKioskMode());
+            expect (! closing.getProperties().contains (FullScreenMode::keepKioskModeWhenAppInactive));
             expect (! IsWindowVisible (handle (closing)));
+            expect (juce::Desktop::getInstance().getKioskModeComponent() == nullptr);
+        }
+
+        beginTest ("shutdown cancels a pending external restore and queued restoration survives window deletion");
+        {
+            auto closing = std::make_unique<QuietWindow>();
+            closing->mode.enter();
+            juce::Desktop::getInstance().setKioskModeComponent (nullptr);
+            closing->mode.shutdown();
+            physicalBounds (*closing, bounds.translated (20, 20));
+            const auto afterShutdown = physicalBounds (*closing);
+            dispatchMessages();
+            expect (physicalBounds (*closing) == afterShutdown, "a cancelled restore must not change the window");
+            expect (! IsWindowVisible (handle (*closing)) && GetForegroundWindow() == foreground);
+            closing->mode.enter();
+            juce::Desktop::getInstance().setKioskModeComponent (nullptr);
+            closing.reset();
+            dispatchMessages();
             expect (juce::Desktop::getInstance().getKioskModeComponent() == nullptr);
         }
 
@@ -224,7 +336,8 @@ public:
         if (desktop.isEmpty() || desktop.equalsIgnoreCase ("Default"))
         {
             logMessage ("SKIP on Default/unknown desktop: maximise -> enter/exit -> normal placement; "
-                        "minimise -> enter; refit while minimised; shutdown from maximised fullscreen. "
+                        "minimise -> enter; refit while minimised; external release from maximised fullscreen; "
+                        "maximised primary -> secondary monitor entry; shutdown from maximised fullscreen. "
                         "These Win32 operations can show a window. No activation test runs here.");
             return;
         }
@@ -247,6 +360,53 @@ public:
         expectEquals (window.getWindowStateAsString(), normalState);
         expect (window.getBounds() == juce::Rectangle<int>::fromString (normalState));
 
+        beginTest ("external release restores maximised state and normal placement after message dispatch (hidden desktop only)");
+        window.setFullScreen (true);
+        const auto beforeExternalExit = window.getWindowStateAsString();
+        int notifications = 0;
+        window.mode.onExternalExit = [&] { ++notifications; };
+        window.mode.enter();
+        window.getProperties().remove (FullScreenMode::keepKioskModeWhenAppInactive);
+        SendMessageW (hwnd, WM_ACTIVATEAPP, FALSE, 0);
+        expect (! window.mode.isActive() && ! window.isFullScreen(), "maximisation must wait until after the native message");
+        expectEquals (window.mode.restorableState(), beforeExternalExit);
+        dispatchMessages();
+        expect (window.isFullScreen());
+        expectEquals (window.getWindowStateAsString(), beforeExternalExit);
+        expectEquals (notifications, 1);
+        window.mode.onExternalExit = {};
+        window.setFullScreen (false);
+
+        beginTest ("maximised window moved from primary to secondary enters on its current physical monitor (hidden desktop only)");
+        const auto primary = std::find_if (monitors.begin(), monitors.end(), [] (const auto& info)
+            { return (info.dwFlags & MONITORINFOF_PRIMARY) != 0; });
+        if (monitors.size() < 2 || primary == monitors.end())
+            logMessage ("SKIP: primary and secondary monitors are required");
+        else
+            for (const auto& monitor : monitors)
+            {
+                if ((monitor.dwFlags & MONITORINFOF_PRIMARY) != 0) continue;
+                const auto primaryArea = rectangle (primary->rcWork);
+                physicalBounds (window, { primaryArea.getX() + 100, primaryArea.getY() + 100, 960, 680 });
+                window.seedState();
+                window.setFullScreen (true);
+                WINDOWPLACEMENT placement { sizeof (WINDOWPLACEMENT) };
+                GetWindowPlacement (hwnd, &placement);
+                const auto primaryPlacement = rectangle (placement.rcNormalPosition);
+                physicalBounds (window, rectangle (monitor.rcWork)); // retain WS_MAXIMIZE and the old normal placement
+                GetWindowPlacement (hwnd, &placement);
+                expect (window.isFullScreen() && rectangle (placement.rcNormalPosition) == primaryPlacement);
+                expect (monitorBounds (window) == rectangle (monitor.rcMonitor));
+                const auto savedOnSecondary = window.getWindowStateAsString();
+                window.mode.enter();
+                expect (window.mode.isActive() && window.isKioskMode());
+                expect (physicalBounds (window) == rectangle (monitor.rcMonitor));
+                expectEquals (window.mode.restorableState(), savedOnSecondary);
+                window.mode.exit();
+                window.setFullScreen (false);
+            }
+
+        beginTest ("minimised entry and refit (hidden desktop only)");
         window.setMinimised (true);
         window.mode.enter();
         expect (! window.isMinimised() && window.isKioskMode());
@@ -257,11 +417,18 @@ public:
         expect (window.isMinimised() && physicalBounds (window) == minimisedBounds);
         window.setMinimised (false);
         window.mode.exit();
+
+        beginTest ("shutdown from maximised fullscreen hides without restoring or activating (hidden desktop only)");
+        const auto foregroundBeforeShutdown = GetForegroundWindow();
         window.setFullScreen (true);
-        {
-            FullScreenMode closingMode (window);
-            closingMode.enter();
-        }
+        window.mode.enter();
+        expect (window.mode.restorableState().startsWith ("fs "));
+        window.mode.shutdown();
+        dispatchMessages();
+        expect (! window.mode.isActive() && ! window.isFullScreen());
+        expect ((GetWindowLongPtrW (hwnd, GWL_STYLE) & WS_MAXIMIZE) == 0);
+        expect (! window.getProperties().contains (FullScreenMode::keepKioskModeWhenAppInactive));
+        expect (GetForegroundWindow() == foregroundBeforeShutdown);
         expect (! IsWindowVisible (hwnd));
         expect (! window.isKioskMode());
     }
@@ -280,7 +447,7 @@ public:
         ShortcutKeyContext context;
         auto resolve = [&] { return h.service->resolveKeyOwner (f11, context); };
 
-        beginTest ("catalog contract: only fullscreen's unmodified default F11 yields to project cues");
+        beginTest ("catalog contract: only fullscreen's keyboard shortcuts yield to project cues");
         const auto* definition = ShortcutCatalog::get().find (CommandIDs::toggleFullScreen);
         expect (definition != nullptr);
         if (definition == nullptr) return;
@@ -291,7 +458,7 @@ public:
         expect (definition->category == ShortcutCategory::view && definition->scope == ShortcutScope::mainWindow);
         expect (! definition->allowsRepeat && definition->defaultKeys == ShortcutKeys { f11 });
         for (const auto& entry : ShortcutCatalog::get().getCommands())
-            expect (entry.defaultKeysYieldToCueHotkeys == (entry.id == fullScreenID), entry.id);
+            expect (entry.yieldsToCueHotkeys == (entry.id == fullScreenID), entry.id);
         expect (resolve().kind == Owner::Kind::command && resolve().commandID == CommandIDs::toggleFullScreen);
 
         beginTest ("enabled, disabled and duplicate F11 cues retain their existing routing rules");
@@ -309,11 +476,30 @@ public:
         expect (resolve().kind == Owner::Kind::blocked && resolve().reason == Owner::Reason::repeatSuppressed);
         context.isRepeat = false;
 
-        beginTest ("explicit override wins, and restoring defaults resumes yielding");
+        beginTest ("explicit F11 and ordinary-key overrides always yield, as do restored defaults");
         expect (h.service->setKeys (fullScreenID, { f11 }).wasOk());
-        expect (resolve().kind == Owner::Kind::command && resolve().reason == Owner::Reason::commandOverCue);
-        expect (h.service->restoreCommandDefaults (fullScreenID).wasOk());
         expect (resolve().kind == Owner::Kind::cueHotkey);
+        const K letter ('J');
+        expect (h.service->setKeys (fullScreenID, { letter }).wasOk());
+        context.cueHotkeys = { { "cue.letter", letter } };
+        owner = h.service->resolveKeyOwner (letter, context);
+        expect (owner.kind == Owner::Kind::cueHotkey && owner.id == "cue.letter" && owner.commandID == 0);
+        expect (h.service->resolveKeyOwner (letter, {}).commandID == CommandIDs::toggleFullScreen);
+        expect (h.service->restoreCommandDefaults (fullScreenID).wasOk());
+        context.cueHotkeys = { { "cue.f11", f11 } };
+        expect (resolve().kind == Owner::Kind::cueHotkey);
+
+        beginTest ("v1 and v2 export/import round trips preserve F11 cue priority despite frozen default overrides");
+        for (const auto& xml : { h.service->exportProfile(), h.service->exportCombinedProfile() })
+        {
+            shortcut_test::Harness imported;
+            imported.service->setInputStorage ([] (const auto&) { return juce::Result::ok(); });
+            expect (imported.service->importProfile (xml).wasOk());
+            expect (imported.service->getProfile().overrides.count (fullScreenID) == 1);
+            expect (imported.service->getKeys (fullScreenID) == ShortcutKeys { f11 });
+            owner = imported.service->resolveKeyOwner (f11, context);
+            expect (owner.kind == Owner::Kind::cueHotkey && owner.id == "cue.f11" && owner.commandID == 0);
+        }
 
         beginTest ("text editing and auxiliary windows block F11 cues instead of toggling fullscreen");
         context.textEditing = true;

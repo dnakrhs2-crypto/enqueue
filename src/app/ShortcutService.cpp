@@ -217,9 +217,7 @@ ShortcutKeyOwner ShortcutService::resolveKeyOwner (const juce::KeyPress& key, co
         if (ShortcutKeyInput::keysOverlap (cue.key, key))
             result.conflicts.push_back ({ Kind::cueHotkey, cue.id, 0 });
 
-    if (command != nullptr && command->defaultKeysYieldToCueHotkeys
-        && profile.overrides.count (command->id) == 0 && command->matchesKey (key)
-        && ! result.conflicts.empty())
+    if (command != nullptr && command->yieldsToCueHotkeys && ! result.conflicts.empty())
     {
         result.conflicts.push_back ({ Kind::command, command->id, command->commandID });
         command = nullptr; // continue through the existing component/cue scope and blocking rules

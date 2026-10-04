@@ -28,9 +28,9 @@ struct ShortcutDefinition
     bool (*textKeyMatcher) (const juce::KeyPress&) = nullptr;
     // Legacy table-only command bindings retain their focus scope after export/import.
     ShortcutKeys cueTableOnlyKeys;
-    // Compatibility for a newly added default: an existing project cue keeps its key.
-    // Explicit user overrides always retain the normal command priority.
-    bool defaultKeysYieldToCueHotkeys = false;
+    // This command's keyboard shortcuts never take a project's cue hotkey,
+    // including user overrides and exported/imported mappings. MIDI is unchanged.
+    bool yieldsToCueHotkeys = false;
 
     bool isCommand() const noexcept { return commandID != 0; }
     /** Text-driven bindings use the actual event character, or the explicit key list for

@@ -107,22 +107,46 @@ public:
         expect (ReopenLastProjectTestAccess::controller (*f.main).hasPendingStarts());
         ReopenLastProjectTestAccess::controller (*f.main).cancelPending();
 
-        beginTest ("settings explains the yielding default, explicit override, and default restoration exactly");
+        beginTest ("settings and inspector keep cue priority for defaults and all fullscreen overrides");
         const ShortcutSettingsModel::Cues cues { { "1 F11 wait", f11 } };
         const auto inspect = [&] { return ShortcutSettingsModel::inspect (service, fullScreenID, f11, cues); };
         const auto yielding = ko ("현재 프로젝트 큐 핫키가 우선: 1 F11 wait → 이 프로젝트에서는 이 키로 실행되지 않음");
-        const auto overridden = ko ("현재 프로젝트 큐와 충돌: 1 F11 wait → 큐 핫키 비활성");
+        const auto cueDisabled = ko ("현재 프로젝트 큐와 충돌: 1 F11 wait → 큐 핫키 비활성");
         expect (inspect().conflicts == juce::StringArray { yielding });
         expect (service.setKeys (fullScreenID, { f11 }).wasOk());
         dispatch();
-        expect (inspect().conflicts == juce::StringArray { overridden });
-        expectEquals (button->validate (f11), ko ("이 PC의 전체 화면 단축키와 충돌 → 비활성"));
-        auto* label = conflictLabel();
-        expect (label != nullptr && label->getText() == ko ("이 PC의 전체 화면 단축키와 충돌 → 비활성"));
+        expect (inspect().conflicts == juce::StringArray { yielding });
+        expect (button->validate (f11).isEmpty() && conflictLabel() == nullptr);
+        const K letter ('J');
+        expect (service.setKeys (fullScreenID, { letter }).wasOk());
+        expect (ShortcutSettingsModel::inspect (service, fullScreenID, letter, { { "3 Letter", letter } }).conflicts
+                == juce::StringArray { ko ("현재 프로젝트 큐 핫키가 우선: 3 Letter → 이 프로젝트에서는 이 키로 실행되지 않음") });
+        expect (button->validate (letter).isEmpty());
         expect (service.restoreCommandDefaults (fullScreenID).wasOk());
         dispatch();
         expect (inspect().conflicts == juce::StringArray { yielding });
         expect (button->validate (f11).isEmpty() && conflictLabel() == nullptr);
+
+        beginTest ("F11 learn detects the yielding fullscreen mapping, then move assigns preview and disables the cue");
+        const auto moveIssues = ShortcutSettingsModel::inspect (service, "transport.preview", f11, cues);
+        expectEquals (moveIssues.commandOwner, juce::String (fullScreenID));
+        expect (moveIssues.conflicts.contains (ko ("다른 기능에서 사용: 전체 화면")));
+        expect (moveIssues.conflicts.contains (cueDisabled));
+        expect (service.setKeys ("transport.preview", { f11 }, ShortcutService::ConflictPolicy::reject).failed());
+        expect (service.setKeys ("transport.preview", { f11 }, ShortcutService::ConflictPolicy::move).wasOk());
+        dispatch();
+        expect (service.getKeys ("transport.preview") == ShortcutKeys { f11 });
+        expect (service.getKeys (fullScreenID).isEmpty());
+        const auto movedIssues = ShortcutSettingsModel::inspect (service, "transport.preview", f11, cues);
+        expect (movedIssues.commandOwner.isEmpty());
+        expect (movedIssues.conflicts == juce::StringArray { cueDisabled });
+        ShortcutKeyContext context;
+        context.cueHotkeys = cues;
+        const auto owner = service.resolveKeyOwner (f11, context);
+        expect (owner.commandID == CommandIDs::preview && owner.reason == ShortcutKeyOwner::Reason::commandOverCue);
+        expectEquals (button->validate (f11), ko ("이 PC의 미리듣기 단축키와 충돌 → 비활성"));
+        auto* label = conflictLabel();
+        expect (label != nullptr && label->getText() == ko ("이 PC의 미리듣기 단축키와 충돌 → 비활성"));
 
         beginTest ("other command conflicts and reserved-key rejection keep the previous wording");
         const K f12 (K::F12Key);
