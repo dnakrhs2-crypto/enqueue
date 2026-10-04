@@ -439,7 +439,7 @@ void MainComponent::refreshAll()
 
 CardLayout MainComponent::layoutForWidth (int width) const
 {
-    if (width >= 1180)
+    if (width >= ChannelCard::wideMinWidth + 40)
         return CardLayout::wide;
 
     if (width >= 800)
@@ -450,7 +450,9 @@ CardLayout MainComponent::layoutForWidth (int width) const
 
 void MainComponent::layoutCards()
 {
-    const int width = juce::jmax (100, viewport.getMaximumVisibleWidth());
+    // Reserve the scrollbar gutter even when the default Viewport auto-hides it. Cards must not change width
+    // (and wrap their chips differently) as the scrollbar appears, and the master shares their right edge.
+    const int width = juce::jmax (100, viewport.getWidth() - viewport.getScrollBarThickness());
     const auto mode = layoutForWidth (width + 40);
     int y = 0;
     const int gap = 12;
@@ -465,15 +467,8 @@ void MainComponent::layoutCards()
 
     addChannelButton.setBounds (0, y, width, 56);
     addChannelButton.setEnabled ((int) cards.size() < MixSession::maxChannels);
-    y += 56 + gap;
+    y += 56;
     cardsHolder.setSize (width, juce::jmax (1, y));
-
-    // the new height may have brought the scrollbar (or taken it): the width changed, so once more at that width
-    if (! relayingOutCards && juce::jmax (100, viewport.getMaximumVisibleWidth()) != width)
-    {
-        const juce::ScopedValueSetter<bool> once (relayingOutCards, true);
-        layoutCards();
-    }
 }
 
 void MainComponent::resized()
@@ -527,22 +522,25 @@ void MainComponent::resized()
     if (drawer == Drawer::fx)
         layoutFxDrawer();   // (a hidden drawer is laid out when it opens)
 
-    if (drawer != Drawer::none)
+    if (drawer != Drawer::none && sideDrawer)
         area.setRight (getWidth() - drawerW);
 
     // the master takes its full form only while the mics keep a card's worth of room; otherwise it folds to a strip
-    const int cardWidth = area.getWidth() - 32;
+    const int cardWidth = area.getWidth() - 32
+                          - (layoutForWidth (area.getWidth()) == CardLayout::narrow ? 0 : viewport.getScrollBarThickness());
     masterCard.setStrip (false);
     masterUnfoldedH = masterCard.getPreferredHeight (cardWidth);   // includes wrapped chips, OBS status and source hint
     int masterH = masterUnfoldedH;
+    const int masterMargin = cardWidth >= MasterCard::wideBelow ? 14 : 16;   // wide: 8 above, 6 below; stack: 8 each
 
-    if (area.getHeight() - (masterH + 16) - 24 < minCardsRoom)   // 24: the viewport's margins below
+    if (area.getHeight() - (masterH + masterMargin) - 24 < minCardsRoom)   // 24: the viewport's margins below
     {
         masterCard.setStrip (true);
         masterH = masterCard.getPreferredHeight (cardWidth);
     }
 
-    masterCard.setBounds (area.removeFromBottom (masterH + 16).reduced (16, 8));   // the 8 px above and below are the layout's, not the card's
+    auto masterArea = area.removeFromBottom (masterH + masterMargin);
+    masterCard.setBounds (masterArea.getX() + 16, masterArea.getY() + 8, cardWidth, masterH);
     viewport.setBounds (area.reduced (16, 12));
     layoutCards();
 }
@@ -564,7 +562,7 @@ void MainComponent::paint (juce::Graphics& g)
     g.fillRect (status);
     g.setColour (Palette::line);
     g.fillRect (status.removeFromTop (1));
-    g.fillRect (juce::Rectangle<int> (0, masterCard.getY() - 8, masterCard.getRight() + 16, 1));   // above the master, whatever its height
+    g.fillRect (juce::Rectangle<int> (0, masterCard.getY() - 8, viewport.getRight() + 16, 1));   // above the master, whatever its height
 }
 
 //==============================================================================

@@ -2,6 +2,7 @@
 #include "ui/ChannelCard.h"
 #include "ui/FxDrawer.h"
 #include "ui/LiveMixLookAndFeel.h"
+#include "TestGainPlugin.h"
 
 namespace gocue::tests
 {
@@ -55,6 +56,12 @@ public:
     void runTest() override
     {
         LiveMixLookAndFeel lookAndFeel;
+        struct RestoreLookAndFeel
+        {
+            juce::LookAndFeel* previous = &juce::LookAndFeel::getDefaultLookAndFeel();
+            ~RestoreLookAndFeel() { juce::LookAndFeel::setDefaultLookAndFeel (previous); }
+        } restoreLookAndFeel;
+        juce::LookAndFeel::setDefaultLookAndFeel (&lookAndFeel);   // app startup also installs the measured Malgun Gothic typeface globally
         MixEngine engine;
         MixDocument document (engine);
         document.applyToEngine();
@@ -63,27 +70,34 @@ public:
         card.setLookAndFeel (&lookAndFeel);
         document.onValueChanged = [&] { card.refresh(); };
 
-        beginTest ("pan is below every output control and above the input meter in every layout, including portrait stacking");
+        beginTest ("input meter follows the input; output controls share one row with pan underneath in every layout");
         auto* slider = childOfType<PanSlider> (card);
         auto* meter = childOfType<MeterBar> (card);
         auto* master = withText (card, ko ("마스터"));
         auto* direct = withText (card, ko ("직접 출력"));
         auto* caption = withText (card, ko ("팬"));
         auto* meterCaption = withText (card, ko ("입력 미터"));
+        auto* input = childOfType<juce::ComboBox> (card);
+        auto* mute = withText (card, ko ("뮤트그룹"));
+        auto* mic = childOfType<LampButton> (card);
         expect (slider != nullptr && meter != nullptr && master != nullptr && direct != nullptr && caption != nullptr && meterCaption != nullptr);
         if (slider == nullptr || meter == nullptr || master == nullptr || direct == nullptr || caption == nullptr || meterCaption == nullptr)
             return;
 
         struct Layout { CardLayout mode; int width, height; const char* name; };
         const Layout layouts[] {
-            { CardLayout::wide, 1400, 198, "pan-wide" },
-            { CardLayout::wide, 1140, 198, "pan-wide-min" },
-            { CardLayout::medium, 960, 338, "pan-medium" },
-            { CardLayout::medium, 760, 338, "pan-medium-min" },
-            { CardLayout::narrow, 640, 544, "pan-narrow" },
-            { CardLayout::narrow, 421, 544, "pan-narrow-421" },
-            { CardLayout::narrow, 420, 584, "pan-portrait-420" },
-            { CardLayout::narrow, 364, 584, "pan-portrait-364" }
+            { CardLayout::wide, 1400, 154, "pan-wide" },
+            { CardLayout::wide, 1385, 154, "pan-wide-min" },
+            { CardLayout::medium, 1384, 270, "pan-medium-max" },
+            { CardLayout::medium, 1140, 270, "pan-medium-1140" },
+            { CardLayout::medium, 960, 270, "pan-medium" },
+            { CardLayout::medium, 760, 270, "pan-medium-min" },
+            { CardLayout::narrow, 759, 578, "pan-narrow-max" },
+            { CardLayout::narrow, 640, 578, "pan-narrow" },
+            { CardLayout::narrow, 421, 578, "pan-narrow-421" },
+            { CardLayout::narrow, 420, 578, "pan-portrait-420" },
+            { CardLayout::narrow, 380, 578, "pan-portrait-380" },
+            { CardLayout::narrow, 364, 578, "pan-portrait-364" }
         };
         document.setChannelPan (id, -0.3);
         for (const auto& layout : layouts)
@@ -92,15 +106,18 @@ public:
             expectEquals (card.getPreferredHeight (layout.width), layout.height);
             card.setSize (layout.width, card.getPreferredHeight (layout.width));
             expect (slider->getY() > master->getBottom() && slider->getY() > direct->getBottom());
-            expect (slider->getBottom() < meterCaption->getY());
+            expect (input != nullptr && mute != nullptr && mic != nullptr);
+            if (input != nullptr) expect (meterCaption->getY() > input->getBottom());
+            if (mute != nullptr && mic != nullptr) expect (mute->getY() > mic->getBottom());
+            if (layout.mode == CardLayout::wide)
+                expect (meter->getRight() < master->getX());
+            else
+                expect (meter->getBottom() < master->getY());
             expectEquals (caption->getY(), slider->getY());
             expectEquals (meter->getHeight(), 40);
             expect (card.getLocalBounds().contains (meter->getBounds()));
             expectGreaterThan (slider->getWidth(), 100);
-            if (layout.width <= 420)
-                expect (direct->getY() > master->getBottom());
-            else
-                expectEquals (direct->getY(), master->getY());
+            expectEquals (direct->getY(), master->getY());
             auto* value = withText (card, "L30");
             expect (value != nullptr && value->getX() > slider->getRight());
             for (auto* child : card.getChildren())
@@ -137,17 +154,79 @@ public:
         expect (withText (card, "C") != nullptr);
         screenshot (card, "pan-stereo-centre");
 
-        beginTest ("four FX send rows still leave room for pan and the complete meter");
-        for (int i = 1; i < MixSession::maxFx; ++i)
-            document.addFx();
+        beginTest ("l03 mockup rectangles at 1400, 960 and 420 with two FX sends");
+        document.addFx();
         card.refresh();
-        for (const auto& layout : layouts)
+        const auto rect = [&] (juce::Component* component, juce::Rectangle<int> expected)
         {
-            card.setLayout (layout.mode);
-            card.setSize (layout.width, card.getPreferredHeight (layout.width));
-            expectEquals (meter->getHeight(), 40);
-            expect (card.getLocalBounds().contains (meter->getBounds()));
-            expect (slider->getBottom() < meterCaption->getY());
+            expect (component != nullptr);
+            if (component != nullptr) expectEquals (component->getBounds().toString(), expected.toString());
+        };
+        for (const auto& example : { Layout { CardLayout::wide, 1400, 154, "l03-wide" },
+                                     Layout { CardLayout::medium, 960, 270, "l03-medium" },
+                                     Layout { CardLayout::narrow, 420, 616, "l03-narrow" } })
+        {
+            card.setLayout (example.mode);
+            expectEquals (card.getPreferredHeight (example.width), example.height);
+            card.setSize (example.width, example.height);
+            const bool narrow = example.mode == CardLayout::narrow;
+            const bool wide = example.mode == CardLayout::wide;
+            rect (mic, { 14, 54, narrow ? 392 : 194, 40 });
+            rect (mute, { 14, 102, 100, 24 });
+            rect (input, narrow ? juce::Rectangle<int> { 48, 140, 266, 30 } : juce::Rectangle<int> { 226, 40, 160, 30 });
+            rect (withText (card, ko ("스테레오")), narrow ? juce::Rectangle<int> { 318, 140, 88, 30 } : juce::Rectangle<int> { 298, 10, 88, 30 });
+            rect (meter, narrow ? juce::Rectangle<int> { 14, 196, 392, 40 } : juce::Rectangle<int> { 226, 102, 160, 40 });
+            rect (withText (card, ko ("체인 열기")), { narrow ? 14 : 404, narrow ? 350 : 112, 92, 30 });
+            rect (withText (card, ko ("플러그인 그룹")), { narrow ? 198 : 588, narrow ? 350 : 112, 112, 30 });
+            rect (master, { wide ? 1152 : narrow ? 14 : 404, wide ? 38 : narrow ? 530 : 184, 72, 34 });
+            rect (slider, wide ? juce::Rectangle<int> { 1186, 76, 136, 34 }
+                              : narrow ? juce::Rectangle<int> { 48, 568, 294, 34 } : juce::Rectangle<int> { 438, 222, 444, 34 });
+            for (auto* child : card.getChildren())
+                if (withText (*child, "FX1") != nullptr)
+                {
+                    rect (child, wide ? juce::Rectangle<int> { 783, 40, 351, 30 }
+                                      : narrow ? juce::Rectangle<int> { 14, 422, 392, 30 } : juce::Rectangle<int> { 14, 186, 372, 30 });
+                    rect (childOfType<juce::Slider> (*child), { 102, 0, wide ? 115 : narrow ? 156 : 136, 30 });
+                }
+            screenshot (card, example.name);
+        }
+
+        beginTest ("up to four FX sends and wrapped long chains keep every control inside and disjoint");
+        struct LongPlugin : TestGainPlugin
+        {
+            LongPlugin() : TestGainPlugin (1.0f) {}
+            const juce::String getName() const override { return "A long plugin name that fills a complete chain column"; }
+        };
+        for (int fxCount = 2; fxCount <= MixSession::maxFx; ++fxCount)
+        {
+            if (fxCount > 2) document.addFx();
+            for (bool wrapped : { false, true })
+            {
+                auto* chain = engine.getChannelChain (id);
+                if (chain != nullptr)
+                {
+                    chain->clear();
+                    if (wrapped)
+                        for (int i = 0; i < 7; ++i) chain->addPlugin (std::make_unique<LongPlugin>());
+                }
+                card.refresh();
+                for (const auto& layout : layouts)
+                {
+                    card.setLayout (layout.mode);
+                    card.setSize (layout.width, card.getPreferredHeight (layout.width));
+                    expectEquals (meter->getHeight(), 40);
+                    for (auto* child : card.getChildren())
+                    {
+                        if (! child->isVisible()) continue;
+                        expect (card.getLocalBounds().contains (child->getBounds()), "Outside card at " + juce::String (layout.width));
+                        for (auto* other : card.getChildren())
+                            if (other != child && other->isVisible()) expect (! child->getBounds().intersects (other->getBounds()));
+                        if (childOfType<juce::Slider> (*child) != nullptr)
+                            for (auto* control : child->getChildren())
+                                expect (child->getLocalBounds().contains (control->getBounds()), "Outside send row");
+                    }
+                }
+            }
         }
         card.setLookAndFeel (nullptr);
 

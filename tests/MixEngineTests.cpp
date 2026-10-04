@@ -798,8 +798,12 @@ public:
                                         master->setObsStatus ((MasterCard::ObsStatus) state);
                                         main.setSize (width + 32, height);
                                         main.resized();
-                                        expectEquals (master->getWidth(), width);
-                                        expectEquals (master->getHeight(), master->getPreferredHeight (width));
+                                        int masterWidth = width;
+                                        for (auto* other : main.getChildren())
+                                            if (auto* viewport = dynamic_cast<juce::Viewport*> (other); viewport != nullptr && viewport->isVisible() && width + 32 >= 800)
+                                                masterWidth = width - viewport->getScrollBarThickness();
+                                        expectEquals (master->getWidth(), masterWidth);
+                                        expectEquals (master->getHeight(), master->getPreferredHeight (masterWidth));
                                         expect (main.getLocalBounds().contains (master->getBounds()));
                                         for (auto* other : main.getChildren())
                                             if (auto* viewport = dynamic_cast<juce::Viewport*> (other); viewport != nullptr && viewport->isVisible())

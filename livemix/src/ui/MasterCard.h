@@ -44,7 +44,8 @@ public:
     int getPreferredHeight (int width) const;
     /** The height of the columns or the compact stack at 'width', whether or not the card is folded right now. */
     int getUnfoldedHeight (int width) const;
-    static constexpr int narrowBelow = 988;    // narrower than this: the compact stack (head with the output pair, the chain row, the meter row) - 988 = the top bar's one-row width less the card margins, so both change at once
+    static constexpr int narrowBelow = 760;    // below this: the compact stack; otherwise two tiers until wideBelow
+    static constexpr int wideBelow = 1385;     // the five signal-flow columns, matching the channel cards
     static constexpr int stripHeight = 58;     // folded: one row - badge, title, meter, chain button, output pair
     /** Folded to one row: a short window gives the mics their room and keeps the master's meter and output in view. */
     void setStrip (bool folded);
@@ -56,7 +57,8 @@ private:
     void rebuildChain();
     int obsToggleWidth() const;
     int obsHintHeight (int width) const;
-    int obsControlsHeight (int width) const;
+    int obsControlsHeight (int width, int hintGap) const;
+    int chainRowsForWidth (int width) const;
     void refreshObsStatus();
     void refreshObsToggle();
     static constexpr int obsRowHeight = 28, obsRowGap = 8;

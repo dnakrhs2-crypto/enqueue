@@ -1,4 +1,5 @@
 #include "ui/MasterCard.h"
+#include "../livemix/src/ui/MainComponent.h"
 #include "ui/LiveMixLookAndFeel.h"
 #include "TestGainPlugin.h"
 
@@ -13,6 +14,12 @@ public:
     void runTest() override
     {
         LiveMixLookAndFeel lookAndFeel;
+        struct RestoreLookAndFeel
+        {
+            juce::LookAndFeel* previous = &juce::LookAndFeel::getDefaultLookAndFeel();
+            ~RestoreLookAndFeel() { juce::LookAndFeel::setDefaultLookAndFeel (previous); }
+        } restoreLookAndFeel;
+        juce::LookAndFeel::setDefaultLookAndFeel (&lookAndFeel);   // match LiveMix startup for text measurements as well as painting
         MixEngine engine ("Local\\LiveMix.MasterObsTest." + juce::Uuid().toString());
         MixDocument document (engine);
         document.applyToEngine();
@@ -35,7 +42,7 @@ public:
             if (reason != nullptr) expect (advice.reason.contains (ko (reason)), advice.reason);
             card.setObsStatus (advice.status, advice.reason);
             for (bool folded : { false, true })
-                for (int width : { 364, 400, 500, 580, 640, 700, 987, 988, 1000, 1400 })
+                for (int width : { 364, 400, 428, 500, 580, 640, 700, 759, 760, 960, 987, 988, 1000, 1384, 1385, 1400 })
                 {
                     card.setStrip (folded);
                     card.setSize (width, card.getPreferredHeight (width));
@@ -65,15 +72,9 @@ public:
                             layout.createLayout (hintText, (float) hint->getWidth() - hint->getBorderSize().getLeftAndRight());
                             expectGreaterOrEqual ((float) hint->getHeight() - hint->getBorderSize().getTopAndBottom(), layout.getHeight());
                             expectEquals (hint->getMinimumHorizontalScale(), 1.0f);
-                            const int needed = labelWidthForText (*hint, hint->getText()) + label->getWidth() + 16;
                             for (auto* child : card.getChildren())
                                 if (auto* toggle = dynamic_cast<juce::ToggleButton*> (child))
-                                {
-                                    if (toggle->getWidth() + needed <= width - 28)
-                                        expectEquals (hint->getY(), toggle->getY());
-                                    else
-                                        expect (hint->getY() >= juce::jmax (toggle->getBottom(), label->getBottom()));
-                                }
+                                    expect (hint->getY() >= juce::jmax (toggle->getBottom(), label->getBottom()));
                             for (auto* child : card.getChildren())
                                 if (child != hint && child->isVisible()) expect (! hint->getBounds().intersects (child->getBounds()));
                         }
@@ -120,6 +121,47 @@ public:
                      "켜져 있는 OBS가 LiveMix 플러그인을 읽지 않았습니다. OBS를 완전히 끄고 다시 켜세요.");
         checkAdvice ({}, true, false, true, Reader::none, {}, State::waiting, "OBS 대기 중", "OBS를 켜고 소스(+)에서 'LiveMix'를 추가하세요.");
         card.setStrip (false);
+        beginTest ("l03 master columns, two tiers and narrow stack match the mockup rectangles");
+        engine.getMasterChain().addPlugin (std::make_unique<TestGainPlugin> (1.0f));
+        card.refresh();
+        card.setLatency (53.0, 480, 48000.0);
+        const auto withText = [&] (const juce::String& text) -> juce::Component*
+        {
+            for (auto* child : card.getChildren())
+            {
+                if (auto* label = dynamic_cast<juce::Label*> (child); label != nullptr && label->getText() == text) return child;
+                if (auto* button = dynamic_cast<juce::Button*> (child); button != nullptr && button->getButtonText() == text) return child;
+            }
+            return nullptr;
+        };
+        const auto rect = [&] (juce::Component* component, juce::Rectangle<int> expected)
+        {
+            expect (component != nullptr);
+            if (component != nullptr) expectEquals (component->getBounds().toString(), expected.toString());
+        };
+        for (int width : { 1400, 960, 428 })
+        {
+            const bool wide = width == 1400, narrow = width == 428;
+            expectEquals (card.getPreferredHeight (width), wide ? 154 : narrow ? 308 : 238);
+            card.setSize (width, card.getPreferredHeight (width));
+            rect (withText ("M"), { 14, 14, 32, 30 });
+            rect (withText (ko ("마스터")), { 56, 12, narrow ? 160 : 152, 34 });
+            rect (withText (ko ("체인 열기")), { narrow ? 132 : 226, wide ? 112 : narrow ? 54 : 78, 92, 30 });
+            rect (withText ("LUFS"), { narrow ? 14 : 605, wide ? 112 : narrow ? 130 : 40, 56, 30 });
+            rect (withText (ko ("OBS로 보내기")), { wide ? 1077 : narrow ? 14 : 404, wide ? 11 : narrow ? 240 : 125, 117, 28 });
+            rect (card.findChildWithID ("obs-source-hint"), { wide ? 1077 : narrow ? 14 : 404, wide ? 41 : narrow ? 268 : 157, narrow ? 400 : 309, 28 });
+            for (auto* child : card.getChildren())
+            {
+                if (dynamic_cast<juce::ComboBox*> (child) != nullptr)
+                    rect (child, wide ? juce::Rectangle<int> { 783, 40, 276, 30 }
+                                     : narrow ? juce::Rectangle<int> { 296, 130, 118, 30 } : juce::Rectangle<int> { 80, 124, 306, 30 });
+                if (dynamic_cast<MeterBar*> (child) != nullptr)
+                    rect (child, wide ? juce::Rectangle<int> { 783, 96, 276, 46 }
+                                     : narrow ? juce::Rectangle<int> { 14, 186, 400, 46 } : juce::Rectangle<int> { 14, 180, 372, 46 });
+            }
+        }
+        engine.getMasterChain().clear();
+        card.refresh();
         beginTest ("OBS controls and full meter fit every form and strip visibility threshold");
         for (int plugins : { 0, 7 })
         {
@@ -129,7 +171,7 @@ public:
             for (bool folded : { false, true })
             {
                 card.setStrip (folded);
-                for (int width : { 364, 400, 500, 580, 640, 700, 987, 988, 1000, 1400 })
+                for (int width : { 364, 400, 428, 500, 580, 640, 700, 759, 760, 960, 987, 988, 1000, 1384, 1385, 1400 })
                 {
                     card.setSize (width, card.getPreferredHeight (width));
                     juce::ToggleButton* toggle = nullptr;
@@ -141,7 +183,12 @@ public:
                         if (auto* m = dynamic_cast<MeterBar*> (child)) meter = m;
                         if (auto* label = dynamic_cast<juce::Label*> (child); label != nullptr && label->getTooltip() == ko ("OBS 연결됨")) status = label;
                         if (child->isVisible())
+                        {
                             expect (card.getLocalBounds().contains (child->getBounds()), "Control outside master at " + juce::String (width));
+                            for (auto* other : card.getChildren())
+                                if (other != child && other->isVisible())
+                                    expect (! child->getBounds().intersects (other->getBounds()), "Master overlap at " + juce::String (width));
+                        }
                     }
                     expect (toggle != nullptr && meter != nullptr);
                     if (toggle != nullptr && meter != nullptr)
@@ -254,6 +301,117 @@ public:
             expectEquals (enabledCallbacks, 1);
         }
         card.setLookAndFeel (nullptr);
+        runLayoutIntegration();
+    }
+
+    void runLayoutIntegration()
+    {
+        beginTest ("l03 window geometry, scrollbar auto-hide, both drawers, strip folding and UI scales");
+        struct IsolatedFolder
+        {
+            juce::File file = juce::File::createTempFile ("-livemix-layout");
+            ~IsolatedFolder() { file.deleteRecursively(); }
+        } folder;
+        LiveMixSettings settings (folder.file);
+        settings.setMicMuteHotkey ({});
+        settings.setFxMuteHotkey ({});
+        settings.setWindowHotkey ({});
+        MixEngine engine ("Local\\LiveMix.LayoutTest." + juce::Uuid().toString());
+        MixDocument document (engine);
+        document.applyToEngine();
+        document.addChannel();
+        document.addChannel();
+        document.addFx();
+        engine.getMasterChain().addPlugin (std::make_unique<TestGainPlugin> (1.0f));
+        ObsPluginActions actions;
+        actions.roots = [path = folder.file] { return ObsPluginInstaller::Roots { path, path, path, [] { return false; }, {} }; };
+        actions.elevate = [] (juce::String&) { return ObsPluginInstaller::Result::needsElevation; };
+        gocue::livemix::MainComponent main (document, settings, actions);   // no native window or audio device is opened
+        juce::Viewport* viewport = nullptr;
+        MasterCard* master = nullptr;
+        TopBar* top = nullptr;
+        ChainDrawer* drawer = nullptr;
+        for (auto* child : main.getChildren())
+        {
+            if (auto* v = dynamic_cast<juce::Viewport*> (child); v != nullptr && v->isVisible()) viewport = v;
+            if (auto* m = dynamic_cast<MasterCard*> (child)) master = m;
+            if (auto* t = dynamic_cast<TopBar*> (child)) top = t;
+            if (auto* d = dynamic_cast<ChainDrawer*> (child)) drawer = d;
+        }
+        expect (viewport != nullptr && master != nullptr && top != nullptr && drawer != nullptr);
+        if (viewport == nullptr || master == nullptr || top == nullptr || drawer == nullptr) return;
+        ChannelCard* first = nullptr;
+        juce::Component* add = nullptr;
+        for (auto* child : viewport->getViewedComponent()->getChildren())
+        {
+            if (auto* c = dynamic_cast<ChannelCard*> (child); c != nullptr && first == nullptr) first = c;
+            if (dynamic_cast<juce::TextButton*> (child) != nullptr) add = child;
+        }
+        expect (first != nullptr && add != nullptr);
+        if (first == nullptr || add == nullptr) return;
+        const auto rect = [&] (juce::Component& component, juce::Rectangle<int> expected)
+        {
+            expectEquals (component.getBounds().toString(), expected.toString());
+        };
+        for (float scale : { 1.0f, 1.1f, 1.25f, 1.5f })
+        {
+            main.setTransform (juce::AffineTransform::scale (scale));
+            main.setSize (1440, 900);
+            main.resized();
+            rect (*master, { 16, 710, 1400, 154 });
+            rect (*viewport, { 16, 106, 1408, 584 });
+            rect (*first, { 0, 0, 1400, 154 });
+            rect (*add, { 0, 498, 1400, 56 });
+            expectEquals (viewport->getViewedComponent()->getHeight(), 554);
+            expect (! viewport->getVerticalScrollBar().isVisible());
+            for (bool fx : { false, true })
+            {
+                if (fx) top->onFxPanel();
+                else first->onOpenChain (first->getChannelId());
+                rect (*master, { 16, 624, 960, 238 });
+                rect (*viewport, { 16, 106, 968, 498 });
+                rect (*first, { 0, 0, 960, 270 });
+                rect (*add, { 0, 846, 960, 56 });
+                expect (viewport->getVerticalScrollBar().isVisible());
+                if (fx) top->onFxPanel();
+                else drawer->onClose();
+                expectEquals (first->getWidth(), 1400);
+                expect (! viewport->getVerticalScrollBar().isVisible());
+            }
+            main.setSize (460, 993);
+            rect (*master, { 16, 647, 428, 308 });
+            rect (*viewport, { 16, 190, 428, 437 });
+            rect (*first, { 0, 0, 420, 616 });
+            expect (viewport->getVerticalScrollBar().isVisible());
+            first->onOpenChain (first->getChannelId());
+            expect (main.getLocalBounds().contains (master->getBounds()));
+            expect (main.getLocalBounds().contains (viewport->getBounds()));
+            expectEquals (drawer->getWidth(), 460);
+            drawer->onClose();
+            main.setSize (460, 650);
+            expect (master->isStrip());
+            expectEquals (master->getHeight(), MasterCard::stripHeight);
+            expectGreaterOrEqual (viewport->getHeight(), 250);
+            main.setSize (1440, 900);
+            expect (! master->isStrip());
+        }
+        main.setTransform ({});
+        beginTest ("l03 top bar uses 24 px between groups and a 330 px device at the mockup status");
+        MixEngine::DeviceFormat format;
+        format.kind = MixEngine::DeviceFormat::Kind::windowsShared;
+        format.inputBits = 16;
+        top->setDevices ({ "HDMI(StreamLine Mini+ GC311G2)" }, "HDMI(StreamLine Mini+ GC311G2)", "Windows Audio");
+        top->setStatus (48000.0, 480, 53.0, 0.03, true, format);
+        for (auto* child : top->getChildren())
+        {
+            if (dynamic_cast<juce::ComboBox*> (child) != nullptr) rect (*child, { 460, 15, 330, 34 });
+            if (auto* label = dynamic_cast<juce::Label*> (child))
+            {
+                if (label->getText() == ko ("윈도우")) rect (*child, { 404, 15, 48, 34 });
+                if (label->getText() == "CPU 3%") rect (*child, { 1037, 15, 57, 34 });
+                if (label->getText() == ko ("저장 안 됨")) rect (*child, { 312, 15, 68, 34 });
+            }
+        }
     }
 };
 static MasterCardTests masterCardTests;

@@ -225,6 +225,14 @@ void TopBar::resized()
     if (showCpu) required += cpuWidth + gap;
     if (showMeter) required += 70 + gap;
     if (mode == Mode::wide) required += 84 + gap;
+    // Keep the existing measured-text fallbacks at tight widths. Where all the reserved controls fit, separate
+    // session | device/status/CPU | actions by 24 px (the 1440 px mockup), keeping 8 px inside each group.
+    const int groupGap = mode == Mode::wide && required + 2 * (24 - gap) <= statusRow.getWidth() ? 24 : gap;
+    if (mode == Mode::wide)
+    {
+        buttonRow.removeFromRight (groupGap - gap);
+        required += groupGap - gap;
+    }
     // Decorative widths yield only when even the shortest status and minimum device cannot fit.
     if (required > statusRow.getWidth() && showMeter) { showMeter = false; required -= 70 + gap; }
     if (mode == Mode::wide && required > statusRow.getWidth()) { showLogo = false; required -= 84 + gap; }
@@ -244,7 +252,7 @@ void TopBar::resized()
     sessionState.setBounds (session.removeFromRight (stateWidth));
     session.removeFromRight (gap);
     sessionName.setBounds (session);
-    if (mode == Mode::wide) row1.removeFromLeft (gap);
+    if (mode == Mode::wide) row1.removeFromLeft (groupGap);
 
     dspMeter.setVisible (showMeter);
     dspLabel.setVisible (showCpu);

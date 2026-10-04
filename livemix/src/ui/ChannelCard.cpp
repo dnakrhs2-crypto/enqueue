@@ -73,7 +73,7 @@ struct ChannelCard::SendRow : public juce::Component
         auto r = getLocalBounds();
         badge.setBounds (r.removeFromLeft (34).reduced (0, 6));
         r.removeFromLeft (6);
-        const int nameWidth = editingName ? juce::jmax (120, r.getWidth() / 2) : juce::jmin (70, r.getWidth() / 4);
+        const int nameWidth = editingName ? juce::jmax (120, r.getWidth() / 2) : 56;
         preToggle.setBounds (r.removeFromRight (58).reduced (0, 5));
         r.removeFromRight (8);
         value.setBounds (r.removeFromRight (labelWidthForText (value, "100%")));
@@ -454,14 +454,9 @@ int ChannelCard::chainRowsForWidth (int width) const
     int chainW = inner;
 
     if (layout == CardLayout::wide)
-    {
-        const int afterHeadAndOut = inner - 230 - 18 - 250 - 18;
-        chainW = afterHeadAndOut - juce::jlimit (300, 430, afterHeadAndOut / 2) - 18;
-    }
+        chainW = 361;
     else if (layout == CardLayout::medium)
-    {
-        chainW = inner - juce::jmax (230, inner * 2 / 5) - 18;
-    }
+        chainW = inner - 194 - 18 - 160 - 18;
 
     return ChipFlow::layout (chips, juce::Rectangle<int> (0, 0, juce::jmax (1, chainW), 1), 44, false);
 }
@@ -469,17 +464,16 @@ int ChannelCard::chainRowsForWidth (int width) const
 int ChannelCard::getPreferredHeight (int width) const
 {
     const int sendRows = juce::jmax (1, (int) sends.size());
-    const int fxH = 22 + sendRows * 34 + 4;
-    const int headH = 34 + 8 + 40 + 8 + 30 + 8;
+    const int fxH = 28 + sendRows * 38 - 8;
     const int chainRows = chainRowsForWidth (width);
-    const int chainH = 22 + chainRows * ChipFlow::rowStep + chainFooter;
-    const int outH = 26 + 34 + (stackOutputControls (width) ? 40 : 0) + 6 + 34 + 12 + 18 + 40;
+    const int chainH = 27 + chainRows * ChipFlow::rowStep + chainFooter;
+    const int outH = 26 + 34 + 4 + 34;
 
     switch (layout)
     {
-        case CardLayout::wide:   return juce::jmax (juce::jmax (headH, chainH), juce::jmax (fxH, outH)) + 28;
-        case CardLayout::medium: return juce::jmax (headH, chainH) + juce::jmax (fxH, outH) + 40;
-        case CardLayout::narrow: return headH + chainH + fxH + outH + 58;   // 24 px outer padding + three 14 px gaps, less the head's 8 px allowance
+        case CardLayout::wide:   return juce::jmax (130, juce::jmax (chainH, fxH)) + 24;
+        case CardLayout::medium: return juce::jmax (130, chainH) + 16 + juce::jmax (fxH, outH) + 26;
+        case CardLayout::narrow: return 114 + 96 + chainH + fxH + outH + 4 * 14 + 26;
     }
 
     return 200;
@@ -500,16 +494,37 @@ void ChannelCard::resized()
         r.removeFromTop (8);
         micButton.setBounds (r.removeFromTop (40));
         r.removeFromTop (8);
-        auto in = r.removeFromTop (30);
-        inputCaption.setBounds (in.removeFromLeft (34));
-        stereoToggle.setBounds (in.removeFromRight (84));
-        in.removeFromRight (4);
-        inputCombo.setBounds (in);
+        muteGroupChip.setBounds (r.removeFromTop (24).withWidth (100));
+    };
+
+    auto layoutInput = [this] (juce::Rectangle<int> r, bool stacked)
+    {
+        if (stacked)
+        {
+            auto row = r.removeFromTop (30);
+            inputCaption.setBounds (row.removeFromLeft (34));
+            stereoToggle.setBounds (row.removeFromRight (88));
+            row.removeFromRight (4);
+            inputCombo.setBounds (row);
+            r.removeFromTop (8);
+        }
+        else
+        {
+            auto row = r.removeFromTop (26);
+            inputCaption.setBounds (row.removeFromLeft (34));
+            stereoToggle.setBounds (row.removeFromRight (88).expanded (0, 2));
+            r.removeFromTop (2);
+            inputCombo.setBounds (r.removeFromTop (30));
+            r.removeFromTop (14);
+        }
+        meterCaption.setBounds (r.removeFromTop (18));
+        meter_.setBounds (r.removeFromTop (40));
     };
 
     auto layoutChain = [this] (juce::Rectangle<int> r)
     {
-        chainCaption.setBounds (r.removeFromTop (22));
+        chainCaption.setBounds (r.removeFromTop (26));
+        r.removeFromTop (1);
         auto buttons = r.removeFromBottom (30);
         openChainButton.setBounds (buttons.removeFromLeft (92));
         buttons.removeFromLeft (8);
@@ -528,7 +543,7 @@ void ChannelCard::resized()
             groupsRow.removeFromLeft (4);
         }
 
-        r.removeFromBottom (6);
+        r.removeFromBottom (3);
 
         // chips flow left to right, wrapping (the same flow counts the rows for the height)
         ChipFlow::layout (chips, r, 44, true);
@@ -536,81 +551,76 @@ void ChannelCard::resized()
 
     auto layoutFx = [this] (juce::Rectangle<int> r)
     {
-        fxCaption.setBounds (r.removeFromTop (22));
+        fxCaption.setBounds (r.removeFromTop (26));
+        r.removeFromTop (2);
 
         for (auto& row : sends)
         {
             row->setBounds (r.removeFromTop (30));
-            r.removeFromTop (4);
+            r.removeFromTop (8);
         }
     };
 
     auto layoutOut = [this] (juce::Rectangle<int> r)
     {
-        auto captionRow = r.removeFromTop (26);
-        muteGroupChip.setBounds (captionRow.removeFromRight (100).reduced (0, 1));   // next to the output caption
-        outputCaption.setBounds (captionRow);
+        outputCaption.setBounds (r.removeFromTop (26));
         auto chipsRow = r.removeFromTop (34);
-        if (stackOutputControls (getWidth()))
-        {
-            masterChip.setBounds (chipsRow);
-            r.removeFromTop (6);
-            chipsRow = r.removeFromTop (34);
-        }
-        else
-        {
-            masterChip.setBounds (chipsRow.removeFromLeft (72));
-            chipsRow.removeFromLeft (8);
-        }
+        masterChip.setBounds (chipsRow.removeFromLeft (72));
+        chipsRow.removeFromLeft (8);
         directChip.setBounds (chipsRow.removeFromLeft (84));
         chipsRow.removeFromLeft (6);
         directCombo.setBounds (chipsRow.withHeight (30).withY (chipsRow.getY() + 2));
-        r.removeFromTop (6);
+        r.removeFromTop (4);
         auto panRow = r.removeFromTop (34);
         panCaption.setBounds (panRow.removeFromLeft (34));
         panValue.setBounds (panRow.removeFromRight (labelWidthForText (panValue, "R100")));
         panRow.removeFromRight (6);
         panSlider.setBounds (panRow);
-        r.removeFromTop (12);
-        meterCaption.setBounds (r.removeFromTop (18));
-        meter_.setBounds (r.removeFromTop (juce::jmin (40, r.getHeight())));
     };
 
+    const int chainH = 27 + chainRowsForWidth (getWidth()) * ChipFlow::rowStep + chainFooter;
     if (layout == CardLayout::wide)
     {
-        auto head = area.removeFromLeft (230);
+        auto head = area.removeFromLeft (194);
         area.removeFromLeft (18);
-        auto out = area.removeFromRight (250);
-        area.removeFromRight (18);
-        auto fx = area.removeFromRight (juce::jlimit (300, 430, area.getWidth() / 2));
+        auto input = area.removeFromLeft (160);
+        area.removeFromLeft (18);
+        auto chain = area.removeFromLeft (361);
+        area.removeFromLeft (18);
+        auto out = area.removeFromRight (234);
         area.removeFromRight (18);
         layoutHead (head);
-        layoutChain (area);
-        layoutFx (fx);
+        layoutInput (input, false);
+        layoutChain (chain.withHeight (chainH));
+        layoutFx (area);
         layoutOut (out);
     }
     else if (layout == CardLayout::medium)
     {
-        const int topH = juce::jmax (34 + 8 + 40 + 8 + 30, 22 + chainRowsForWidth (getWidth()) * ChipFlow::rowStep + chainFooter);
+        const int topH = juce::jmax (130, chainH);
         auto top = area.removeFromTop (topH);
         area.removeFromTop (16);
-        auto head = top.removeFromLeft (juce::jmax (230, top.getWidth() * 2 / 5));
+        auto head = top.removeFromLeft (194);
+        top.removeFromLeft (18);
+        auto input = top.removeFromLeft (160);
         top.removeFromLeft (18);
         layoutHead (head);
-        layoutChain (top);
-        auto fx = area.removeFromLeft (juce::jmax (300, area.getWidth() / 2));
+        layoutInput (input, false);
+        layoutChain (top.withHeight (chainH));
+        auto fx = area.removeFromLeft (194 + 18 + 160);
         area.removeFromLeft (18);
         layoutFx (fx);
         layoutOut (area);
     }
     else
     {
-        layoutHead (area.removeFromTop (34 + 8 + 40 + 8 + 30));
+        layoutHead (area.removeFromTop (114));
         area.removeFromTop (14);
-        const int chainH = 22 + chainRowsForWidth (getWidth()) * ChipFlow::rowStep + chainFooter;
+        layoutInput (area.removeFromTop (96), true);
+        area.removeFromTop (14);
         layoutChain (area.removeFromTop (chainH));
         area.removeFromTop (14);
-        layoutFx (area.removeFromTop (22 + juce::jmax (1, (int) sends.size()) * 34 + 4));
+        layoutFx (area.removeFromTop (28 + juce::jmax (1, (int) sends.size()) * 38 - 8));
         area.removeFromTop (14);
         layoutOut (area);
     }

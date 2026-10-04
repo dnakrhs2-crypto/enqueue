@@ -257,34 +257,42 @@ int MasterCard::obsHintHeight (int width) const
     return juce::jmax (obsRowHeight, (int) std::ceil (layout.getHeight()) + obsSourceHint.getBorderSize().getTopAndBottom() + 4);
 }
 
-int MasterCard::obsControlsHeight (int width) const
+int MasterCard::obsControlsHeight (int width, int hintGap) const
 {
-    const int available = width - 28;
     const int controls = obsToggleWidth() + 8 + labelWidthForText (obsStatusLabel, obsStatusText (obsStatus));
-    if (controls + 8 + labelWidthForText (obsSourceHint, obsSourceHint.getText()) <= available) return obsRowHeight;
-    return (controls <= available ? obsRowHeight : 2 * obsRowHeight + obsRowGap) + obsRowGap + obsHintHeight (available);
+    return (controls <= width ? obsRowHeight : 2 * obsRowHeight + obsRowGap) + hintGap + obsHintHeight (width);
+}
+
+int MasterCard::chainRowsForWidth (int width) const
+{
+    if (width < narrowBelow && chips.empty()) return 0;
+    const int inner = width - 28;
+    const int chainW = width < narrowBelow ? inner : width < wideBelow ? juce::jmin (361, inner - 194 - 160 - 36) : 361;
+    return ChipFlow::layout (chips, juce::Rectangle<int> (0, 0, juce::jmax (1, chainW), 1), 30, false);
 }
 
 int MasterCard::getUnfoldedHeight (int width) const
 {
+    const int rows = chainRowsForWidth (width);
+    const int inner = width - 28;
     if (width < narrowBelow)
     {
-        // the compact stack: the head row (with the output pair), the chain row and its chips (none: no row), the meter's caption row, the meter
-        const int rows = chips.empty() ? 0 : ChipFlow::layout (chips, juce::Rectangle<int> (0, 0, juce::jmax (1, width - 28), 1), 30, false);
-        return 24 + 34 + 8 + 30 + (rows > 0 ? 6 + rows * ChipFlow::rowStep : 0) + 10 + 18 + 46 + obsRowGap + obsControlsHeight (width);
+        return 24 + 34 + 8 + 30 + (rows > 0 ? 6 + rows * ChipFlow::rowStep : 0)
+               + 2 + 30 + 8 + 18 + 46 + 8 + obsControlsHeight (inner, 0);
     }
 
-    // the chain column's width in resized() at this card width, then the rows the chips take in it
-    const int afterHeadAndOut = width - 28 - 230 - 18 - 250 - 18;
-    const int chainW = afterHeadAndOut - juce::jlimit (160, 300, afterHeadAndOut / 3) - 18;
-    const int rows = ChipFlow::layout (chips, juce::Rectangle<int> (0, 0, juce::jmax (1, chainW), 1), 30, false);
-    return juce::jmax (176, 24 + 22 + rows * ChipFlow::rowStep + 6 + 30) + obsRowGap + obsControlsHeight (width);
+    if (width < wideBelow)
+        return 24 + 96 + (rows - 1) * ChipFlow::rowStep + 16
+               + juce::jmax (102, 1 + obsControlsHeight (inner - 390, 4));
+
+    // Two chip rows fit above the third-row buttons. Longer chains grow in the same 38 px steps.
+    return 24 + juce::jmax (130 + juce::jmax (0, rows - 2) * ChipFlow::rowStep, obsControlsHeight (309, 2) - 1);
 }
 
 void MasterCard::resized()
 {
     auto area = getLocalBounds().reduced (14, 12);
-    const bool stacked = ! strip && getWidth() < narrowBelow;
+    const bool stacked = ! strip && getWidth() < wideBelow;
 
     // what each form shows: the columns everything; the stack no note and no latency block (the latency goes on the
     // meter's caption row); the strip only the badge, title, meter, chain button and output pair
@@ -344,50 +352,38 @@ void MasterCard::resized()
         return;
     }
 
-    auto obsArea = area.removeFromBottom (obsControlsHeight (getWidth()));
-    area.removeFromBottom (obsRowGap);
-    auto obsRow = obsArea.removeFromTop (obsRowHeight);
-    obsToggle.setBounds (obsRow.removeFromLeft (obsToggleWidth()));
-    obsRow.removeFromLeft (8);
-    const int statusWidth = labelWidthForText (obsStatusLabel, obsStatusLabel.getText());
-    if (obsRow.getWidth() < statusWidth)
+    auto layoutObs = [this] (juce::Rectangle<int> r, int hintGap, bool fullWidthHint)
     {
-        obsArea.removeFromTop (obsRowGap);
-        obsRow = obsArea.removeFromTop (obsRowHeight);
-    }
-    obsStatusLabel.setBounds (obsRow.removeFromLeft (statusWidth));
-    if (obsArea.isEmpty())
-    {
-        obsRow.removeFromLeft (8);
-        obsSourceHint.setBounds (obsRow.removeFromLeft (labelWidthForText (obsSourceHint, obsSourceHint.getText())));
-    }
-    else
-    {
-        obsArea.removeFromTop (obsRowGap);
-        obsSourceHint.setBounds (obsArea);
-    }
+        auto row = r.removeFromTop (obsRowHeight);
+        obsToggle.setBounds (row.removeFromLeft (obsToggleWidth()));
+        row.removeFromLeft (8);
+        const int statusWidth = labelWidthForText (obsStatusLabel, obsStatusLabel.getText());
+        if (row.getWidth() < statusWidth)
+        {
+            r.removeFromTop (obsRowGap);
+            row = r.removeFromTop (obsRowHeight);
+        }
+        obsStatusLabel.setBounds (row.removeFromLeft (statusWidth));
+        r.removeFromTop (hintGap);
+        const int hintWidth = fullWidthHint ? r.getWidth() : juce::jmin (r.getWidth(), labelWidthForText (obsSourceHint, obsSourceHint.getText()));
+        obsSourceHint.setBounds (r.withSize (hintWidth, obsHintHeight (hintWidth)));
+    };
 
-    if (stacked)
+    if (getWidth() < narrowBelow)
     {
-        // a narrow window: the head row carries the output pair, the chain row its buttons, then the chips and the meter
+        // Head, chain, latency + output, meter, OBS: the same signal order in a single stack.
         auto headRow = area.removeFromTop (34);
         badge.setBounds (headRow.removeFromLeft (32).reduced (0, 2));
         headRow.removeFromLeft (10);
-        outputCombo.setBounds (headRow.removeFromRight (juce::jmin (150, juce::jmax (90, headRow.getWidth() / 3))).reduced (0, 2));
-        headRow.removeFromRight (6);
-        outputCaption.setBounds (headRow.removeFromRight (60));
-        headRow.removeFromRight (6);
-        title.setBounds (headRow);
+        title.setBounds (headRow.withWidth (juce::jmin (160, headRow.getWidth())));
         area.removeFromTop (8);
 
         auto chainRow = area.removeFromTop (30);
-        chainCaption.setBounds (chainRow.removeFromLeft (juce::jmin (110, juce::jmax (60, chainRow.getWidth() - 92 - 76 - 56 - 24))));
+        chainCaption.setBounds (chainRow.removeFromLeft (juce::jmin (110, juce::jmax (60, chainRow.getWidth() - 92 - 76 - 16))));
         chainRow.removeFromLeft (8);
         openChainButton.setBounds (chainRow.removeFromLeft (92));
         chainRow.removeFromLeft (8);
         addPluginButton.setBounds (chainRow.removeFromLeft (76));
-        chainRow.removeFromLeft (8);
-        lufsButton.setBounds (chainRow.removeFromLeft (56));
 
         if (! chips.empty())
         {
@@ -396,15 +392,26 @@ void MasterCard::resized()
             area.removeFromTop (rows * ChipFlow::rowStep);
         }
 
-        area.removeFromTop (10);
-        auto captionRow = area.removeFromTop (18);
-        compactLatency.setBounds (captionRow.removeFromRight (juce::jmin (220, captionRow.getWidth() / 2)));
-        meterCaption.setBounds (captionRow);
-        meter_.setBounds (area.removeFromTop (juce::jmin (46, juce::jmax (0, area.getHeight()))));
+        area.removeFromTop (2);
+        auto routing = area.removeFromTop (30);
+        const int outputWidth = juce::jlimit (90, 150, (routing.getWidth() - 44) / 3);
+        outputCombo.setBounds (routing.removeFromRight (outputWidth));
+        routing.removeFromRight (6);
+        outputCaption.setBounds (routing.removeFromRight (60));
+        routing.removeFromRight (18);
+        lufsButton.setBounds (routing.removeFromLeft (56));
+        routing.removeFromLeft (8);
+        compactLatency.setBounds (routing);
+        area.removeFromTop (8);
+        meterCaption.setBounds (area.removeFromTop (18));
+        meter_.setBounds (area.removeFromTop (46));
+        area.removeFromTop (8);
+        layoutObs (area, 0, true);
         return;
     }
 
-    auto head = area.removeFromLeft (230);
+    const auto content = area;
+    auto head = area.removeFromLeft (194);
     auto row = head.removeFromTop (34);
     badge.setBounds (row.removeFromLeft (32).reduced (0, 2));
     row.removeFromLeft (10);
@@ -413,30 +420,54 @@ void MasterCard::resized()
     note.setBounds (head.removeFromTop (20));
     area.removeFromLeft (18);
 
-    auto out = area.removeFromRight (250);
-    area.removeFromRight (18);
-    auto lat = area.removeFromRight (juce::jlimit (160, 300, area.getWidth() / 3));
-    area.removeFromRight (18);
-
-    chainCaption.setBounds (area.removeFromTop (22));
-    auto buttons = area.removeFromBottom (30);
+    auto chain = area.removeFromLeft (getWidth() < wideBelow ? juce::jmin (361, content.getWidth() - 194 - 160 - 36) : 361);
+    area.removeFromLeft (18);
+    auto lat = area.removeFromLeft (160);
+    const int rows = chainRowsForWidth (getWidth());
+    const int extra = juce::jmax (0, rows - (stacked ? 1 : 2)) * ChipFlow::rowStep;
+    chainCaption.setBounds (chain.removeFromTop (26));
+    chain.removeFromTop (1);
+    ChipFlow::layout (chips, chain, 30, true);
+    auto buttons = chain.withY ((stacked ? 78 : 112) + extra).withHeight (30);
     openChainButton.setBounds (buttons.removeFromLeft (92));
     buttons.removeFromLeft (8);
     addPluginButton.setBounds (buttons.removeFromLeft (76));
-    buttons.removeFromLeft (8);
-    lufsButton.setBounds (buttons.removeFromLeft (56));
-    area.removeFromBottom (6);
-    ChipFlow::layout (chips, area, 30, true);
+    if (stacked)
+    {
+        compactLatency.setBounds (lat.removeFromTop (26).withWidth (140));
+        lat.removeFromTop (2);
+        lufsButton.setBounds (lat.removeFromTop (30).withWidth (56));
+        auto lower = content.withY (124 + extra).withHeight (getHeight() - 12 - 124 - extra);
+        auto out = lower.removeFromLeft (372);
+        lower.removeFromLeft (18);
+        auto outputRow = out.removeFromTop (30);
+        outputCaption.setBounds (outputRow.removeFromLeft (60));
+        outputRow.removeFromLeft (6);
+        outputCombo.setBounds (outputRow);
+        out.removeFromTop (8);
+        meterCaption.setBounds (out.removeFromTop (18));
+        meter_.setBounds (out.removeFromTop (46));
+        lower.removeFromTop (1);
+        layoutObs (lower, 4, false);
+        return;
+    }
 
-    latencyCaption.setBounds (lat.removeFromTop (22));
+    latencyCaption.setBounds (lat.removeFromTop (26));
     latencyValue.setBounds (lat.removeFromTop (34));
     latencyNote.setBounds (lat.removeFromTop (20));
+    lufsButton.setBounds (lat.withY (112 + extra).withSize (56, 30));
 
-    outputCaption.setBounds (out.removeFromTop (22));
-    outputCombo.setBounds (out.removeFromTop (30).withWidth (juce::jmin (180, out.getWidth())));
-    out.removeFromTop (10);
+    area.removeFromLeft (18);
+    auto obs = area.removeFromRight (309);
+    area.removeFromRight (18);
+    auto out = area;
+    outputCaption.setBounds (out.removeFromTop (26));
+    out.removeFromTop (2);
+    outputCombo.setBounds (out.removeFromTop (30));
+    out.removeFromTop (8);
     meterCaption.setBounds (out.removeFromTop (18));
-    meter_.setBounds (out.removeFromTop (juce::jmin (46, out.getHeight())));
+    meter_.setBounds (out.removeFromTop (46));
+    layoutObs (obs.withY (11), 2, false);
 }
 
 void MasterCard::paint (juce::Graphics& g)

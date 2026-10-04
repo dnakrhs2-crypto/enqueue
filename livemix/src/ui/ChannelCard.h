@@ -13,7 +13,7 @@ namespace gocue::livemix
 {
 
 /** How a card lays itself out for the window width (MainComponent decides). */
-enum class CardLayout { wide, medium, narrow };   // 4 columns / 2 rows / 1 column
+enum class CardLayout { wide, medium, narrow };   // 5 columns / 2 tiers / 1 column
 
 /** One mic channel: name (double-click edits), mic ON/OFF, input, VST3 chain summary, sends (one row per FX),
     outputs, pan, meter. Edits go through the document; the meter is pushed by the owner's timer. */
@@ -33,6 +33,7 @@ public:
     /** The height this card wants for the layout. */
     /** The height the card needs at 'width' in its current layout (the chip rows depend on the width). */
     int getPreferredHeight (int width) const;
+    static constexpr int wideMinWidth = 1385;   // fixed signal-flow columns plus a 336 px send row (100 px fader)
     void pushMeter (MixEngine::Meter meter, bool paint = true) { meter_.push (meter, paint); }
     /** The mic mute group's state: a member shows itself muted while it is on. */
     void setGroupMuted (bool muted);
@@ -53,7 +54,6 @@ private:
     struct ChainChip;
 
     int chainRowsForWidth (int width) const;
-    bool stackOutputControls (int width) const { return layout == CardLayout::narrow && width <= 420; }
     void rebuildSends();
     void rebuildChain();
     void commitInput();
@@ -79,7 +79,7 @@ private:
     juce::TextButton openChainButton, addPluginButton, pluginGroupsButton;
     juce::Label groupsCaption;
     std::array<std::unique_ptr<juce::TextButton>, (size_t) MixSession::maxPluginGroups> groupButtons;   // 1..5 under the chain: enabled once the group exists, lit (red) while it is off
-    static constexpr int chainFooter = 6 + 26 + 6 + 30;   // under the chips: the groups row, then the buttons row
+    static constexpr int chainFooter = 3 + 26 + 6 + 30;   // after the chip row step: groups, then buttons
     std::vector<std::unique_ptr<SendRow>> sends;
     Chip masterChip, directChip, muteGroupChip { ko ("뮤트그룹") };
     juce::ComboBox directCombo;
