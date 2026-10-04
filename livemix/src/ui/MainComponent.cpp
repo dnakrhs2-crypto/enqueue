@@ -294,7 +294,11 @@ void MainComponent::refreshObsStatus()
     const auto advice = MasterCard::obsStatusFor (sendError, obsPluginCurrent, obsNeedsRestart, engine.isDeviceRunning(),
                                                  readers, runningObsDetector.scan());
     masterCard.setObsStatus (advice.status, advice.reason);
-    if (masterCard.getHeight() != masterCard.getPreferredHeight (masterCard.getWidth())) resized();
+    // a folded master compares only folded heights: also re-check the unfolded one, or a status that got shorter
+    // (OBS connected) would leave it folded although it fits again
+    if (masterCard.getHeight() != masterCard.getPreferredHeight (masterCard.getWidth())
+        || masterCard.getUnfoldedHeight (masterCard.getWidth()) != masterUnfoldedH)
+        resized();
 }
 
 void MainComponent::attachControlServer (ControlServer* server)

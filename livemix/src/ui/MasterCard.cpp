@@ -116,9 +116,14 @@ void MasterCard::setStrip (bool folded)
 
 int MasterCard::obsToggleWidth() const
 {
+    return obsToggleWidthFor (obsToggle.getButtonText());
+}
+
+int MasterCard::obsToggleWidthFor (const juce::String& text) const
+{
     // Match LiveMixLookAndFeel::drawToggleButton: 18 px text at this row height, tick + left/right margins.
     const float size = juce::jmin (pt (15.0f), (float) obsRowHeight * 0.75f);
-    return juce::GlyphArrangement::getStringWidthInt (juce::Font (juce::FontOptions (size)), obsToggle.getButtonText())
+    return juce::GlyphArrangement::getStringWidthInt (juce::Font (juce::FontOptions (size)), text)
            + juce::roundToInt (size * 1.1f) + 12;
 }
 
@@ -259,7 +264,10 @@ int MasterCard::obsHintHeight (int width) const
 
 int MasterCard::obsControlsHeight (int width, int hintGap) const
 {
-    const int controls = obsToggleWidth() + 8 + labelWidthForText (obsStatusLabel, obsStatusText (obsStatus));
+    // measured with the unfolded toggle text even while folded (the strip says only 'OBS'), so the unfolded height
+    // the main window compares against does not change with the fold itself
+    const int controls = obsToggleWidthFor (obsInstalling ? ko ("설치 중...") : ko ("OBS로 보내기")) + 8
+                         + labelWidthForText (obsStatusLabel, obsStatusText (obsStatus));
     return (controls <= width ? obsRowHeight : 2 * obsRowHeight + obsRowGap) + hintGap + obsHintHeight (width);
 }
 
@@ -319,7 +327,7 @@ int MasterCard::getUnfoldedHeight (int width) const
 
     // The native two-line hint measures 37 px, versus the mockup's 32. It still fits the 192 px card
     // with 7 px below it; retain the measured text height and grow for longer statuses or chains.
-    return juce::jmax (192, chain.bottom + 12, 118 + obsControlsHeight (234, 2) + 7);
+    return juce::jmax (192, chain.bottom + 12, 118 + obsControlsHeight (250, 2) + 7);
 }
 
 void MasterCard::resized()
@@ -468,7 +476,7 @@ void MasterCard::resized()
     latencyNote.setBounds (783, 72, 168, 20);
     lufsButton.setBounds (895, 40, 56, 30);
 
-    auto out = content.withLeft (getWidth() - 248);
+    auto out = content.withLeft (getWidth() - 264);   // under the cards' 250 px output column
     auto outputRow = out.removeFromTop (26);
     outputCaption.setBounds (outputRow.removeFromLeft (60));
     outputRow.removeFromLeft (6);

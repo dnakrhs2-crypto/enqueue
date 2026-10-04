@@ -56,6 +56,7 @@ private:
     struct Chip;
     void rebuildChain();
     int obsToggleWidth() const;
+    int obsToggleWidthFor (const juce::String& text) const;
     int obsHintHeight (int width) const;
     int obsControlsHeight (int width, int hintGap) const;
     struct ChainLayout

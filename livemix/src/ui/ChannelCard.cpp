@@ -567,13 +567,15 @@ void ChannelCard::resized()
         }
     };
 
-    auto layoutOut = [this] (juce::Rectangle<int> r)
+    auto layoutOut = [this] (juce::Rectangle<int> r, bool tight)
     {
         outputCaption.setBounds (r.removeFromTop (26));
         auto chipsRow = r.removeFromTop (34);
-        masterChip.setBounds (chipsRow.removeFromLeft (72));
-        chipsRow.removeFromLeft (8);
-        directChip.setBounds (chipsRow.removeFromLeft (84));
+        // the wide column is 250 px: slightly narrower chips leave the pair box 88 px, so a named ASIO pair
+        // ('31-32  <name>') still shows its whole number before the ellipsis
+        masterChip.setBounds (chipsRow.removeFromLeft (tight ? 70 : 72));
+        chipsRow.removeFromLeft (tight ? 6 : 8);
+        directChip.setBounds (chipsRow.removeFromLeft (tight ? 80 : 84));
         chipsRow.removeFromLeft (6);
         directCombo.setBounds (chipsRow.withHeight (30).withY (chipsRow.getY() + 2));
         r.removeFromTop (4);
@@ -593,13 +595,13 @@ void ChannelCard::resized()
         area.removeFromLeft (18);
         auto chain = area.removeFromLeft (361);
         area.removeFromLeft (18);
-        auto out = area.removeFromRight (234);
+        auto out = area.removeFromRight (250);   // the pair box keeps 80 px: '31-32' reads in full
         area.removeFromRight (18);
         layoutHead (head);
         layoutInput (input, false);
         layoutChain (chain.withHeight (chainH));
         layoutFx (area);
-        layoutOut (out);
+        layoutOut (out, true);
     }
     else if (layout == CardLayout::medium)
     {
@@ -616,7 +618,7 @@ void ChannelCard::resized()
         auto fx = area.removeFromLeft (194 + 18 + 160);
         area.removeFromLeft (18);
         layoutFx (fx);
-        layoutOut (area);
+        layoutOut (area, false);
     }
     else
     {
@@ -628,7 +630,7 @@ void ChannelCard::resized()
         area.removeFromTop (14);
         layoutFx (area.removeFromTop (28 + juce::jmax (1, (int) sends.size()) * 38 - 8));
         area.removeFromTop (14);
-        layoutOut (area);
+        layoutOut (area, false);
     }
 }
 

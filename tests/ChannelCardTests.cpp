@@ -205,16 +205,27 @@ public:
             rect (withText (card, "3 Band EQ"), { narrow ? 14 : 404, narrow ? 277 : 39, 110, 32 });
             rect (withText (card, "MaBitcrush"), { narrow ? 130 : 520, narrow ? 277 : 39, 110, 32 });
             rect (withText (card, "Ping Pong Pan"), { narrow ? 246 : 636, narrow ? 277 : 39, 129, 32 });
-            rect (master, { wide ? 1152 : narrow ? 14 : 404, wide ? 38 : narrow ? 532 : 186, 72, 34 });
-            rect (slider, wide ? juce::Rectangle<int> { 1186, 76, 136, 34 }
+            rect (master, { wide ? 1136 : narrow ? 14 : 404, wide ? 38 : narrow ? 532 : 186, wide ? 70 : 72, 34 });
+            rect (slider, wide ? juce::Rectangle<int> { 1170, 76, 152, 34 }
                               : narrow ? juce::Rectangle<int> { 48, 570, 294, 34 } : juce::Rectangle<int> { 438, 224, 444, 34 });
             for (auto* child : card.getChildren())
                 if (withText (*child, "FX1") != nullptr)
                 {
-                    rect (child, wide ? juce::Rectangle<int> { 783, 40, 351, 30 }
+                    rect (child, wide ? juce::Rectangle<int> { 783, 40, 335, 30 }
                                       : narrow ? juce::Rectangle<int> { 14, 424, 392, 30 } : juce::Rectangle<int> { 14, 188, 372, 30 });
-                    rect (childOfType<juce::Slider> (*child), { 102, 0, wide ? 115 : narrow ? 156 : 136, 30 });
+                    rect (childOfType<juce::Slider> (*child), wide ? juce::Rectangle<int> { 101, 0, 100, 30 }   // the row keeps a 100 px fader: the name gives 1 px
+                                                                       : juce::Rectangle<int> { 102, 0, narrow ? 156 : 136, 30 });
                 }
+            if (wide)   // the direct-output pair box: the rendered pair text (up to '31-32') must fit, not just the bounds
+                for (auto* child : card.getChildren())
+                    if (auto* combo = dynamic_cast<juce::ComboBox*> (child); combo != nullptr && combo->getX() >= 1136)
+                    {
+                        rect (combo, { 1298, 40, 88, 30 });
+                        // a named ASIO pair ('31-32  Out 31') shows the whole number and the ellipsis
+                        if (auto* text = childOfType<juce::Label> (*combo))
+                            expect (juce::GlyphArrangement::getStringWidthInt (text->getFont(), "31-32 ...")
+                                        <= text->getWidth() - text->getBorderSize().getLeftAndRight(), "the widest pair reads in full");
+                    }
             screenshot (card, example.name);
         }
 

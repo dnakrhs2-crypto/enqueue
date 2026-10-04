@@ -159,19 +159,19 @@ public:
             }
             else
                 rect (withText (ko ("지연 53.0 ms · 480 샘플")), { narrow ? 14 : 748, narrow ? 94 : 40, 134, 30 });
-            rect (withText (ko ("메인 출력")), { wide ? 1152 : 14, wide ? 12 : narrow ? 132 : 88, 60, wide ? 26 : 30 });
-            rect (withText (ko ("출력 미터 L / R")), { wide ? 1152 : 14, wide ? 46 : narrow ? 170 : 126, wide ? 234 : narrow ? 400 : 372, 18 });
-            rect (withText (ko ("OBS로 보내기")), { wide ? 1152 : narrow ? 14 : 404, wide ? 118 : narrow ? 242 : 89, 117, 28 });
-            rect (card.findChildWithID ("obs-status"), { wide ? 1277 : narrow ? 139 : 529, wide ? 118 : narrow ? 242 : 89, 78, 28 });
+            rect (withText (ko ("메인 출력")), { wide ? 1136 : 14, wide ? 12 : narrow ? 132 : 88, 60, wide ? 26 : 30 });
+            rect (withText (ko ("출력 미터 L / R")), { wide ? 1136 : 14, wide ? 46 : narrow ? 170 : 126, wide ? 250 : narrow ? 400 : 372, 18 });
+            rect (withText (ko ("OBS로 보내기")), { wide ? 1136 : narrow ? 14 : 404, wide ? 118 : narrow ? 242 : 89, 117, 28 });
+            rect (card.findChildWithID ("obs-status"), { wide ? 1261 : narrow ? 139 : 529, wide ? 118 : narrow ? 242 : 89, 78, 28 });
             // Preserve obsHintHeight's native font measurement: 37 px fits with a 7 px bottom inset.
-            rect (card.findChildWithID ("obs-source-hint"), { wide ? 1152 : narrow ? 14 : 404, wide ? 148 : narrow ? 270 : 121, wide ? 234 : narrow ? 400 : 542, wide ? 37 : 28 });
+            rect (card.findChildWithID ("obs-source-hint"), { wide ? 1136 : narrow ? 14 : 404, wide ? 148 : narrow ? 270 : 121, wide ? 250 : narrow ? 400 : 542, wide ? 37 : 28 });
             for (auto* child : card.getChildren())
             {
                 if (dynamic_cast<juce::ComboBox*> (child) != nullptr)
-                    rect (child, wide ? juce::Rectangle<int> { 1218, 10, 168, 30 }
+                    rect (child, wide ? juce::Rectangle<int> { 1202, 10, 184, 30 }
                                      : narrow ? juce::Rectangle<int> { 80, 132, 334, 30 } : juce::Rectangle<int> { 80, 88, 306, 30 });
                 if (dynamic_cast<MeterBar*> (child) != nullptr)
-                    rect (child, wide ? juce::Rectangle<int> { 1152, 64, 234, 46 }
+                    rect (child, wide ? juce::Rectangle<int> { 1136, 64, 250, 46 }
                                      : narrow ? juce::Rectangle<int> { 14, 188, 400, 46 } : juce::Rectangle<int> { 14, 144, 372, 46 });
             }
         }
