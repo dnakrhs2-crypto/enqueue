@@ -135,7 +135,11 @@ private:
         {
             juce::TabbedComponent::resized();
             auto& bar = getTabbedButtonBar();
-            bar.setBounds (bar.getBounds().withTrimmedLeft (Palette::cardInset).withTrimmedRight (Palette::cardInset));
+            int width = 0;
+            for (int i = 0; i < bar.getNumTabs(); ++i)
+                if (auto* button = bar.getTabButton (i))
+                    width += button->getBestTabLength (getTabBarDepth());
+            bar.setBounds (94, 0, juce::jmin (width, juce::jmax (0, getWidth() - 94)), getTabBarDepth());
         }
     };
 

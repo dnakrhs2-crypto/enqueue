@@ -31,6 +31,8 @@ public:
 
     /** Call when any chain changed (project switch, restore, edits elsewhere): refreshes if it is ours. */
     void chainChanged (PluginChain* changed);
+    /** Inspector layout: keep the existing buttons/callbacks, hosted beside the page's hint. */
+    void placeHeaderButtons (juce::Component& host, juce::Rectangle<int> bounds);
 
     std::function<void()> onOpenPluginManager;
     /** Routes chain edits (add / remove / bypass) through the document so they are undoable.

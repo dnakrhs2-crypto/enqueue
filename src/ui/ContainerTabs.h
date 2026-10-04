@@ -9,6 +9,7 @@
 
 namespace gocue
 {
+class FooterBar;
 
 /** The strip above the cue list: one tab per cue list / cart of the project, the active one highlighted,
     and a "+" that adds a list or a cart. Right-click (or double-click) a tab for rename / cart / grid / delete. */
@@ -21,6 +22,7 @@ public:
     void refresh();
     void setEditable (bool shouldBeEditable);
     void setInfoText (juce::String text);
+    void setStatusBar (FooterBar& status);
 
     std::function<void (int index)> onSelect;
     std::function<void()> onAddList;
@@ -34,12 +36,17 @@ public:
     void resized() override;
     void mouseDown (const juce::MouseEvent& e) override;
     void mouseDoubleClick (const juce::MouseEvent& e) override;
+    /** Tabs past the reserved status strip scroll sideways with the wheel. */
+    void mouseWheelMove (const juce::MouseEvent& e, const juce::MouseWheelDetails& wheel) override;
+    /** A tab's area in this component (tests: where a click lands). */
+    juce::Rectangle<int> getTabBounds (int index) const;
 
     static constexpr int height = Palette::tabBarHeight;
 
 private:
     struct Tab
     {
+        juce::Uuid id = juce::Uuid::null();
         juce::Rectangle<int> bounds;
         juce::String name;
         bool isCart = false;
@@ -54,8 +61,14 @@ private:
     std::vector<Tab> tabs;
     juce::Rectangle<int> addButton;
     juce::Rectangle<int> infoBounds;
+    int tabsRight = 0;   // tabs and the + button draw and take clicks only left of this
+    int tabsScroll = 0, maxTabsScroll = 0;   // px the tab strip is scrolled left (only when it does not fit)
+    int revealedTab = -1;                    // the active tab last scrolled into view
+    juce::Uuid pressedId = juce::Uuid::null();   // the list the first click of the current gesture landed on
+    int indexOf (const juce::Uuid& id) const;
     juce::String infoText;
     bool editable = true;
+    FooterBar* statusBar = nullptr;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (ContainerTabs)
 };

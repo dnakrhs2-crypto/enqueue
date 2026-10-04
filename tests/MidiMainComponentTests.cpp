@@ -52,7 +52,7 @@ public:
             if (auto* tabs = findChild<juce::TabbedComponent> (*inspector)) tabs->setCurrentTabIndex (0);
         auto* midi = findChild<CueMidiPanel> (*f.main);
         auto* hotkey = inspector != nullptr ? findChild<KeyCaptureButton> (*inspector) : nullptr;
-        beginTest ("inspector MIDI stays beside hotkey in short wide panes and wraps with a usable memo");
+        beginTest ("inspector MIDI stays below hotkey in its cluster and wraps with a usable memo");
         expect (inspector != nullptr && midi != nullptr && hotkey != nullptr);
         if (inspector == nullptr || midi == nullptr || hotkey == nullptr) return;
         expect (f.main->getShortcutService().setKeys ("transport.go", { juce::KeyPress ('A') }).wasOk());
@@ -70,11 +70,11 @@ public:
                 f.main->setSize (width, 980);
                 inspector->setSize (inspector->getWidth(), 230);
                 auto* page = midi->getParentComponent();
-                expectEquals (page->getHeight(), width >= 1100 ? Palette::inspectorBasicHeight : 236);
-                if (width >= 1100) expectEquals (midi->getY(), hotkey->getY());
-                else expect (midi->getY() > hotkey->getY());
+                expectEquals (page->getHeight(), width >= 1212 ? Palette::inspectorBasicHeight : 274);
+                expectEquals (midi->getY(), hotkey->getY() + 40);
+                expectEquals (midi->getX(), hotkey->getX());
                 expect (inspector->getLocalBounds().contains (inspector->getLocalArea (midi, midi->getLocalBounds())));
-                if (width == 1541) expect (midi->getWidth() >= 500);
+                expectEquals (midi->getWidth(), 288);
                 for (auto* child : midi->getChildren())
                     if (child->isVisible()) expect (midi->getLocalBounds().contains (child->getBounds()));
                 for (bool conflict : { false, true, false })
@@ -96,7 +96,7 @@ public:
                         expect (notice->getText().isNotEmpty() == conflict, "conflict notice matches the stored hotkey: " + hotkey->getButtonText());
                         expectEquals (notice->getHeight(), conflict ? 22 : 0);
                     }
-                    expectEquals (page->getHeight(), width >= 1100 ? Palette::inspectorBasicHeight : conflict ? 258 : 236);
+                    expectEquals (page->getHeight(), width >= 1212 ? Palette::inspectorBasicHeight : conflict ? 296 : 274);
                     expect (memo != nullptr);
                     for (auto* child : page->getChildren())
                     {
