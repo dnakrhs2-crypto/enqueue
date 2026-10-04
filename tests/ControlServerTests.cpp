@@ -1051,10 +1051,12 @@ void ControlServerTests::settingsAndWiring()
         if (! authenticate (f, racing)) return;
         std::string batch;
         for (int id = 2; id < 18; ++id) batch += wire (racing.toggle (id, channel));
+        const auto racingRefreshes = f.titleRefreshes;
         expect (racing.send (batch));
         f.main->onExternalControlEnabled (false);   // receive may still be in flight when input is locked
         expectEquals (racing.take ("serverStatus")["status"].toString(), juce::String ("disabled"));
         expect (racing.closed());
+        expectEquals (f.titleRefreshes, racingRefreshes, "no toggle of the racing batch was applied");
         expect (f.document.getSession().channels[0].on);
         expect (f.allOnMessageThread);
     }

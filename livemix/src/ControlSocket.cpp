@@ -43,7 +43,8 @@ namespace
     }
 
     // Closing a socket that still holds unread input sends a reset instead of a FIN, and the peer then drops
-    // whatever it has not read yet: the final errors and serverStatus. Read and discard what has arrived first.
+    // whatever it has not read yet: the final errors and serverStatus. Read and discard what has arrived first
+    // (best effort: input arriving after this, or beyond the cap, can still turn the close into a reset).
     void discardArrivedInput (juce::StreamingSocket& socket)
     {
         std::array<char, 4096> scratch {};
@@ -193,8 +194,11 @@ void ControlSocket::Connection::run()
             {
                 std::optional<Outgoing> next;
                 {
+                    // An empty queue and the close decision are read together: send() queues the final notices
+                    // before closeAfterFlush() sets closing, both under this mutex.
                     std::lock_guard<std::mutex> lock (mutex);
                     if (! outgoing.empty()) { next = std::move (outgoing.front()); outgoing.pop_front(); }
+                    else if (closing) break;
                 }
                 if (next)
                 {
@@ -211,10 +215,7 @@ void ControlSocket::Connection::run()
                     offset = 0;
                 }
                 else
-                {
-                    if (closing) break;
                     lastProgress = time; // no outstanding data is not a stalled write
-                }
             }
 
             bool progressed = false;
