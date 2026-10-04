@@ -37,8 +37,8 @@ twq('config','rfy4b');
 
   <section class="download-row">
     <div class="bigkeys">
-      <a class="download-button" id="download" href="https://github.com/dnakrhs2-crypto/livemix/releases/download/livemix-v0.12.3/LiveMix-Setup-0.12.3.exe">
-        <strong id="download-label">LiveMix 0.12.3 다운로드</strong>
+      <a class="download-button" id="download" href="https://github.com/dnakrhs2-crypto/livemix/releases/download/livemix-v0.13.0/LiveMix-Setup-0.13.0.exe">
+        <strong id="download-label">LiveMix 0.13.0 다운로드</strong>
         <span class="meta" id="download-meta"><span class="nb">Windows 10 / 11 (64비트)</span></span>
       </a>
       <a class="kakao" id="feedback-button" href="https://open.kakao.com/o/pST4IRLi">
@@ -118,7 +118,7 @@ twq('config','rfy4b');
 <script>
 (function () {
   // latest.json is written by tools/release.py at every release: exact installer URL, size and date.
-  fetch('latest.json?rev=0.12.3', { cache: 'no-cache' })
+  fetch('latest.json?rev=0.13.0', { cache: 'no-cache' })
     .then(function (r) { return r.ok ? r.json() : null; })
     .then(function (info) {
       if (!info || !info.url || info.url.indexOf('/releases/download/') < 0) return;   // only a direct asset link counts as a download
