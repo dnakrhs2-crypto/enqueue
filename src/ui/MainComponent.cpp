@@ -846,6 +846,11 @@ void MainComponent::getCommandInfo (juce::CommandID commandID, juce::Application
             result.shortName = inspectorCollapsed ? ko ("인스펙터 펴기") : ko ("인스펙터 접기");
             break;
 
+        case CommandIDs::toggleFullScreen:
+            result.setActive (onToggleFullScreen != nullptr);
+            result.setTicked (isFullScreenActive && isFullScreenActive());
+            break;
+
         case CommandIDs::audioSettings:
             result.setActive (canEdit);   // show mode: the project, devices, patches, plugins and updates are locked
             break;
@@ -1199,6 +1204,18 @@ bool MainComponent::perform (const InvocationInfo& info)
             commands.commandStatusChanged();
             break;
 
+        case CommandIDs::toggleFullScreen:
+            if (onToggleFullScreen)
+            {
+                onToggleFullScreen();
+                if (document.isActiveCart())
+                    cart.grabKeyboardFocus();
+                else
+                    table.focusTable();
+                commands.commandStatusChanged();
+            }
+            break;
+
         case CommandIDs::audioSettings:
             AudioSettingsDialog::show (engine.getDeviceManager(), this);
             break;
@@ -1291,6 +1308,7 @@ juce::PopupMenu MainComponent::getMenuForIndex (int topLevelMenuIndex, const juc
             menu.addCommandItem (&commands, CommandIDs::toggleActiveCues);
             menu.addCommandItem (&commands, CommandIDs::showActiveCuesWindow);
             menu.addCommandItem (&commands, CommandIDs::toggleInspector);
+            menu.addCommandItem (&commands, CommandIDs::toggleFullScreen);
             break;
 
         case 2:

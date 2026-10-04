@@ -255,14 +255,16 @@ public:
             if (Hotkeys::isReservedKey (key))   // the same list the project loader enforces
                 return ko ("앱이 쓰는 키입니다: ") + key.getTextDescription();
 
+            const auto* selected = cues.getSelected();
             if (shortcuts != nullptr)
             {
-                const auto owner = shortcuts->resolveKeyOwner (key, {}, true);
+                ShortcutKeyContext context;
+                context.cueHotkeys.push_back ({ selected != nullptr ? selected->id.toString() : juce::String(), key });
+                const auto owner = shortcuts->resolveKeyOwner (key, context, true);
                 if (owner.commandID != 0)
                     return ko ("이 PC의 ") + ShortcutCatalog::get().find (owner.id)->name + ko (" 단축키와 충돌 → 비활성");
             }
             const auto description = key.getTextDescription();
-            const auto* selected = cues.getSelected();
 
             if (document.isHotkeyTaken (description, selected != nullptr ? selected->id : juce::Uuid::null()))   // every list / cart
             {
@@ -423,7 +425,10 @@ public:
         juce::String conflict;
         if (shortcuts != nullptr && cue->hotkey.isNotEmpty())
         {
-            const auto owner = shortcuts->resolveKeyOwner (juce::KeyPress::createFromDescription (cue->hotkey), {}, true);
+            const auto key = juce::KeyPress::createFromDescription (cue->hotkey);
+            ShortcutKeyContext context;
+            context.cueHotkeys.push_back ({ cue->id.toString(), key, true, cue->armed });
+            const auto owner = shortcuts->resolveKeyOwner (key, context, true);
             if (owner.commandID != 0)
                 conflict = ko ("이 PC의 ") + ShortcutCatalog::get().find (owner.id)->name + ko (" 단축키와 충돌 → 비활성");
         }

@@ -42,10 +42,14 @@ Issues inspect (const ShortcutService& service, const juce::String& action, cons
         issues.commandOwner = owner.id;
         issues.conflicts.add (ko ("다른 기능에서 사용: ") + nameFor (owner.id));
     }
+    const auto* entry = ShortcutCatalog::get().find (action);
+    const bool yields = entry != nullptr && entry->defaultKeysYieldToCueHotkeys
+        && service.getProfile().overrides.count (action) == 0 && entry->matchesKey (key);
     for (const auto& cue : cues)
         if (ShortcutKeyInput::keysOverlap (cue.key, key))
-            issues.conflicts.addIfNotAlreadyThere (ko ("현재 프로젝트 큐와 충돌: ") + cue.id + ko (" → 큐 핫키 비활성"));
-    const auto* entry = ShortcutCatalog::get().find (action);
+            issues.conflicts.addIfNotAlreadyThere (yields
+                ? ko ("현재 프로젝트 큐 핫키가 우선: ") + cue.id + ko (" → 이 프로젝트에서는 이 키로 실행되지 않음")
+                : ko ("현재 프로젝트 큐와 충돌: ") + cue.id + ko (" → 큐 핫키 비활성"));
     if (entry != nullptr && entry->cueTableOnlyKeys.contains (key))
         issues.limitations.add (ShortcutDisplay::key (key) + ko (": 큐 표에 포커스가 있을 때만 작동합니다."));
     const bool panic = entry != nullptr && entry->scope == ShortcutScope::application;

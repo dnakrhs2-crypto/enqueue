@@ -101,6 +101,8 @@ public:
     bool hasUnsavedChanges() const noexcept { return unsavedChanges.load (std::memory_order_relaxed); }
 
     std::function<void (const juce::String& title)> onWindowTitleChanged;
+    std::function<void()> onToggleFullScreen;
+    std::function<bool()> isFullScreenActive;
 
 private:
     friend struct tests::ReopenLastProjectTestAccess;

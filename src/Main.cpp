@@ -6,6 +6,7 @@
 #include "audio/PluginScan.h"
 #include "ui/GoCueLookAndFeel.h"
 #include "ui/MainComponent.h"
+#include "ui/FullScreenMode.h"
 #include "ui/UiUtils.h"
 
 #include <juce_gui_extra/juce_gui_extra.h>
@@ -177,7 +178,7 @@ public:
         saveDeviceState();
 
         if (mainWindow != nullptr && settings != nullptr)
-            settings->setWindowState (mainWindow->getWindowStateAsString());
+            settings->setWindowState (mainWindow->restorableWindowState());
 
         mainWindow = nullptr;
         commandManager = nullptr;
@@ -288,6 +289,12 @@ private:
             setContentOwned (content, true);
             ShortcutRouter::setWindowScope (*this, ShortcutKeyContext::Window::main);
             mainComponent = content;
+            content->onToggleFullScreen = [this]
+            {
+                fullScreen.toggle();
+                toFront (true);
+            };
+            content->isFullScreenActive = [this] { return fullScreen.isActive(); };
 
             setResizable (true, false);
             setResizeLimits (860, 640, 10000, 10000);   // room for the transport, a few rows and the inspector's minimum
@@ -307,7 +314,16 @@ private:
             setVisible (true);
         }
 
+        ~MainWindow() override
+        {
+            mainComponent->onToggleFullScreen = {};
+            mainComponent->isFullScreenActive = {};
+            if (fullScreen.isActive())
+                setVisible (false);
+        }
+
         MainComponent& getMainComponent() { return *mainComponent; }
+        juce::String restorableWindowState() { return fullScreen.restorableState(); }
 
         void closeButtonPressed() override
         {
@@ -317,10 +333,24 @@ private:
         void resized() override
         {
             DocumentWindow::resized();
+            fullScreen.refit();
             UiScale::fitOnResized (*this, fitting);   // back from maximised after a 글씨·화면 크기 change: no bigger than the screen
         }
 
+        void moved() override
+        {
+            DocumentWindow::moved();
+            fullScreen.refit();
+        }
+
+        void parentSizeChanged() override
+        {
+            DocumentWindow::parentSizeChanged();
+            fullScreen.refit();
+        }
+
     private:
+        FullScreenMode fullScreen { *this };
         MainComponent* mainComponent = nullptr;
         bool fitting = false;
 

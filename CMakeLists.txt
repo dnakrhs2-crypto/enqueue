@@ -93,6 +93,7 @@ target_sources(GoCueCore INTERFACE
     ${CMAKE_CURRENT_SOURCE_DIR}/src/app/ShortcutDisplay.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/app/PanicKeyHook.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/ShortcutRouter.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/FullScreenMode.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/app/YouTubeDownloader.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/app/YouTubeTools.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/audio/RegionLoopSource.cpp

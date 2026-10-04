@@ -91,6 +91,8 @@ target_sources(EnqueueTests PRIVATE
     LoudnessMeterTests.cpp
     LoudnessAverageTests.cpp
     UiScaleTests.cpp
+    FullScreenTests.cpp
+    FullScreenUiTests.cpp
     ReopenLastProjectTests.cpp
     CueIconsTests.cpp
     WaitProgressTests.cpp

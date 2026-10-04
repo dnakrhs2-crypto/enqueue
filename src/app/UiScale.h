@@ -79,7 +79,7 @@ inline int lastRequestedPercent = defaultPercent;
     user (a fixed-size dialog) is never shrunk, only moved. */
 inline void fitWindowIntoDisplay (juce::ResizableWindow& window, bool moveIntoView = true)
 {
-    if (window.isFullScreen() || window.isMinimised())
+    if (window.isFullScreen() || window.isMinimised() || window.isKioskMode())
         return;
 
     window.setBoundsConstrained (window.getBounds());   // the minimum size first
@@ -111,7 +111,7 @@ inline void fitWindowIntoDisplay (juce::ResizableWindow& window, bool moveIntoVi
     may sit partly off-screen on purpose). 'guard' is the window's own re-entrancy flag. */
 inline void fitOnResized (juce::ResizableWindow& window, bool& guard)
 {
-    if (guard || ! window.isOnDesktop() || window.isFullScreen() || window.isMinimised())
+    if (guard || ! window.isOnDesktop() || window.isFullScreen() || window.isMinimised() || window.isKioskMode())
         return;
 
     const juce::ScopedValueSetter<bool> setter (guard, true);
@@ -143,7 +143,7 @@ inline int apply (int percent, const juce::Component* window = nullptr, bool rec
 
     for (auto& [w, bounds] : windows)
     {
-        if (w == nullptr || w->isFullScreen() || w->isMinimised())
+        if (w == nullptr || w->isFullScreen() || w->isMinimised() || w->isKioskMode())
             continue;
 
         w->setBoundsConstrained (w->getBounds().withSize (bounds.getWidth(), bounds.getHeight()));

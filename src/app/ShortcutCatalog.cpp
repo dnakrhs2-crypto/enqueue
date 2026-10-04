@@ -16,7 +16,8 @@ juce::KeyPress key (int code, int modifiers = 0) { return { code, modifiers, 0 }
 
 ShortcutDefinition command (const char* id, juce::CommandID commandID, juce::String name,
                             juce::String description, Category category, Scope scope, bool repeat,
-                            juce::String menuCategory, ShortcutKeys keys, ShortcutKeys cueTableOnlyKeys = {})
+                            juce::String menuCategory, ShortcutKeys keys, ShortcutKeys cueTableOnlyKeys = {},
+                            bool defaultKeysYieldToCueHotkeys = false)
 {
     int flags = commandID == CommandIDs::go ? juce::ApplicationCommandInfo::wantsKeyUpDownCallbacks : 0;
    #if ! JUCE_WINDOWS
@@ -24,7 +25,7 @@ ShortcutDefinition command (const char* id, juce::CommandID commandID, juce::Str
         flags |= juce::ApplicationCommandInfo::wantsKeyUpDownCallbacks;
    #endif
     return { id, std::move (name), std::move (description), category, scope, repeat,
-             commandID, std::move (keys), std::move (menuCategory), flags, nullptr, std::move (cueTableOnlyKeys) };
+             commandID, std::move (keys), std::move (menuCategory), flags, nullptr, std::move (cueTableOnlyKeys), defaultKeysYieldToCueHotkeys };
 }
 
 std::vector<ShortcutDefinition> makeCommands()
@@ -157,6 +158,8 @@ std::vector<ShortcutDefinition> makeCommands()
                  Category::view, Scope::mainWindow, false, ko ("편집"), {}),
         command ("view.toggleInspector", CommandIDs::toggleInspector, ko ("인스펙터 접기"), ko ("아래 인스펙터 패널 접기 / 펴기. 구분선을 끌면 높이가 바뀝니다"),
                  Category::view, Scope::mainWindow, false, ko ("편집"), { key ('I', ModifierKeys::commandModifier) }),
+        command ("view.toggleFullScreen", CommandIDs::toggleFullScreen, ko ("전체 화면"), ko ("메인 창이 작업표시줄까지 덮고 모니터를 꽉 채웁니다. 한 번 더 하면 원래 창으로"),
+                 Category::view, Scope::mainWindow, false, ko ("편집"), { key (KeyPress::F11Key) }, {}, true),
         command ("settings.audio", CommandIDs::audioSettings, ko ("오디오 출력 설정..."), ko ("출력 장치(ASIO / WASAPI) 선택"),
                  Category::fileSettings, Scope::mainWindow, false, ko ("설정"), { key (',', ModifierKeys::commandModifier) }),
         command ("settings.audioPatches", CommandIDs::audioPatches, ko ("오디오 패치..."), ko ("큐 출력 → 장치 출력 라우팅, 출력 이름, 스테레오 묶기, 출력 인서트"),

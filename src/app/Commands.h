@@ -95,7 +95,8 @@ enum : juce::CommandID
 
     // Append only: numeric IDs also belong to JUCE command/key mappings.
     addVolumeCue,          // Ctrl+Alt+7
-    showActiveCuesWindow   // no default key
+    showActiveCuesWindow,  // no default key
+    toggleFullScreen      // F11
 };
 
 /** The registration path used by MainComponent, kept independent of the shortcut catalog. */
@@ -125,7 +126,7 @@ inline const juce::Array<juce::CommandID>& getAllMainCommands()
                     CommandIDs::youtubeDownload,
                     CommandIDs::uiScale100, CommandIDs::uiScale110, CommandIDs::uiScale125, CommandIDs::uiScale150,
                     CommandIDs::reopenLastProjectAsk, CommandIDs::reopenLastProjectAlways, CommandIDs::reopenLastProjectNever,
-                    CommandIDs::addVolumeCue, CommandIDs::showActiveCuesWindow };
+                    CommandIDs::addVolumeCue, CommandIDs::showActiveCuesWindow, CommandIDs::toggleFullScreen };
     return ids;
 }
 
