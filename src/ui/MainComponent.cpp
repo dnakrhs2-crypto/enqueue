@@ -292,6 +292,7 @@ MainComponent::MainComponent (AudioEngine& e, AppSettings& s, juce::ApplicationC
     inspector.setShortcutService (*shortcuts, midiInput.get(), midiRouter.get());
     transport.setShortcutService (*shortcuts);
     footer.setShowMode (showMode, shortcuts.get());
+    fullScreenChanged();   // the button's tooltip names the restored key from the start
     shortcuts->addListener (this);
     panicHook->beforeTimedDispatch = [this] (int vk, int modifiers, bool down, bool repeat, double timeMs)
     { shortcutRouter->prepareNativeEvent (vk, modifiers, down, repeat, timeMs); };

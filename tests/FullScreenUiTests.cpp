@@ -19,6 +19,15 @@ public:
     {
         Fixture f; // no native window, visibility or activation calls
         auto& service = f.main->getShortcutService();
+
+        beginTest ("from the start, before any toggle or key change, the button names the restored key");
+        {
+            auto* initial = child<juce::TextButton> (*f.main, [label = ko ("전체 화면")] (const juce::TextButton& b) { return b.getButtonText() == label; });
+            expect (initial != nullptr);
+            if (initial != nullptr)
+                expectEquals (initial->getTooltip(), ko ("전체 화면 (F11)"));
+        }
+
         bool active = false;
         int toggles = 0;
         f.main->onToggleFullScreen = [&] { active = ! active; ++toggles; };
