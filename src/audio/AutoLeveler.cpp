@@ -351,7 +351,7 @@ void AutoLeveler::finishMeasurement() noexcept
         // with a gap between them) is the limiter's job, not the hand's.
         urgent = false;
         if (blare && takeBackTo > -99.0)
-            goal = juce::jmin (goal, takeBackTo);   // a rest in a loud song that was let go too soon: back where it was (after a stop too)
+            goal = juce::jmin (goal, takeBackTo + (wanted - releaseTarget));   // a rest in a loud song let go too soon: back where it was (after a stop too)
         if (quick >= 3)
         {
             if (urgentRun >= 7)
@@ -364,7 +364,7 @@ void AutoLeveler::finishMeasurement() noexcept
         }
         else if (blare && blareBlock && haveDecision)
         {
-            goal = juce::jmin (goal, desired);   // still blaring after a stop: the last ceiling holds until 0.3 s is heard again
+            goal = juce::jmin (goal, desired + (wanted - desiredTarget));   // still blaring after a stop: the last ceiling holds until 0.3 s is heard again
         }
 
         goal = juce::jlimit (-20.0, 12.0, goal);
@@ -406,6 +406,7 @@ void AutoLeveler::finishMeasurement() noexcept
         }
 
         desired = goal;
+        desiredTarget = wanted;
         haveDecision = true;
         moveTowards (goal, true);
         moving = true;
@@ -415,13 +416,15 @@ void AutoLeveler::finishMeasurement() noexcept
         // back up after an effect that filled the S window: towards the song's own level until there is S to judge -
         // worked out afresh every block (the target may change on the way)
         desired = releaseGoal();
+        desiredTarget = wanted;
         moveTowards (desired, false);
         moving = true;
     }
     else if (! blockHeld && haveDecision && inactive > 0 && inactive < 5)
     {
-        // A gap shorter than 0.5 s inside the music (between words, a rest): the hand keeps going, the waits pause.
-        moveTowards (desired, false);
+        // A gap shorter than 0.5 s inside the music (between words, a rest): the hand keeps going, the waits pause - to where
+        // the last decision put it, moved along with the target if that has changed since.
+        moveTowards (desired + (wanted - desiredTarget), false);
         moving = true;
     }
     else if (! blockHeld && inactive >= 20 && ! paused.load (std::memory_order_relaxed))
@@ -495,6 +498,7 @@ void AutoLeveler::endBlareAsEffect() noexcept
     urgent = false;
     releaseRide = true;
     releaseFrom = gain;
+    releaseTarget = desiredTarget = target.load (std::memory_order_relaxed);
     desired = releaseGoal();
     haveDecision = true;
     // over - unless it is loud again within 1.5 s: until then its held blocks are kept for taking it back

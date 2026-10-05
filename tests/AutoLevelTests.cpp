@@ -841,6 +841,85 @@ public:
             slopes (std::vector<double> (flicked.begin() + (std::ptrdiff_t) at, flicked.end()), 20.05, 30.1, 2.05);   // from the switch on
         }
 
+        beginTest ("34c. the target is raised during a stop in a blare: what holds through the stop follows the new target");
+        for (const int changeAt : { 10, 30 })   // 0.1 s into the stop (its first block, the sound's end, was decided as before), or as it ends
+        {
+            Rig raised;
+            raised.feed (20.0, -26);   // +10 dB at -16
+            raised.feed (0.8, -6);     // far too loud: pulled down towards -9 dB
+            raised.feed (changeAt / 100.0, -300);
+            const auto raisedAt = raised.leveler.getGainDb();
+            raised.leveler.setTargetLufs (-6.0);   // 10 LU louder: the sound's place is now +1 dB
+            const auto raisedFrom = raised.gains.size();
+            raised.feed ((30 - changeAt) / 100.0, -300);   // the rest of the 0.3 s stop
+            raised.feed (7.0, -6);     // the loud sound goes on
+            double raisedLowest = 100.0;
+            for (size_t i = raisedFrom; i < raised.gains.size(); ++i) raisedLowest = juce::jmin (raisedLowest, raised.gains[i]);
+            const auto label = changeAt == 10 ? juce::String ("0.1 s into the stop") : juce::String ("as the stop ends");
+            metric ("target raised " + label + ": gain then (dB)", raisedAt);
+            metric ("lowest after that (dB)", raisedLowest);
+            metric ("7 s later (dB)", raised.leveler.getGainDb());
+            // as it ends the fast hand is already under +1 dB on its way to -9: its braking takes it about 4 dB further, no more
+            expect (raisedLowest >= (changeAt == 10 ? 0.0 : -5.0), "nothing pulls on towards the old target's ceiling: " + label);
+            expect (raised.leveler.getGainDb() >= -1.0, "and it rides back up to the new target: " + label);
+        }
+
+        beginTest ("37d. switched off for good on the fast way back up, then on again: exactly a fresh start");
+        Rig gone;
+        gone.feed (20.0, -26);
+        gone.feed (3.0, -6);
+        gone.feed (0.8, -26);   // the fast way back up
+        gone.leveler.setEnabled (false);
+        gone.feed (0.1, -26);   // all the way off (the 20 ms fade is over)
+        gone.leveler.setEnabled (true);
+        Rig anew;
+        anew.signal.position = gone.signal.position;
+        const auto goneOn = gone.gains.size();
+        gone.feed (6.0, -26);
+        anew.feed (6.0, -26);
+        double goneWorst = 0.0;
+        for (size_t i = 0; i < anew.gains.size(); ++i) goneWorst = juce::jmax (goneWorst, std::abs (gone.gains[goneOn + i] - anew.gains[i]));
+        metric ("switched on again: largest gain difference from a fresh leveler (dB)", goneWorst);
+        expect (goneWorst <= 1.0e-9, "nothing of the way back up survives switching off");
+
+        beginTest ("37e. a 10 ms off-on while the user's own fade holds the way back up: nothing changes");
+        const auto heldWayBack = [] (bool flick)
+        {
+            Rig r;
+            r.feed (20.0, -26);
+            r.feed (3.0, -6);
+            r.feed (0.8, -26);   // the fast way back up
+            r.leveler.setHold (true);
+            r.feed (1.8, -26);   // the glide to a halt is over
+            if (flick) r.leveler.setEnabled (false);
+            r.step (-26);
+            if (flick) r.leveler.setEnabled (true);
+            r.feed (1.0, -26);
+            r.leveler.setHold (false);
+            r.feed (14.0, -26);
+            return r.gains;
+        };
+        {
+            // switched off, nothing is measured for those 10 ms: the 0.1 s blocks after it sit 10 ms later, so the ride after
+            // the fade may start one block later - the same ride otherwise
+            const auto heldPlain = heldWayBack (false), heldFlicked = heldWayBack (true);
+            const size_t letGoAt = heldPlain.size() - 1400;
+            double heldMoved = 0.0, stillAfter = 0.0, upAfter = 0.0;
+            for (size_t i = letGoAt - 120; i < letGoAt; ++i) heldMoved = juce::jmax (heldMoved, std::abs (heldFlicked[i] - heldPlain[i]));
+            for (size_t i = letGoAt; i < letGoAt + 290; ++i) stillAfter = juce::jmax (stillAfter, std::abs (heldFlicked[i] - heldFlicked[letGoAt]));
+            for (size_t i = letGoAt + 1; i < heldFlicked.size(); ++i) upAfter = juce::jmax (upAfter, (heldFlicked[i] - heldFlicked[i - 1]) * 100.0);
+            const auto backAt = [&] (const std::vector<double>& g) { for (size_t i = letGoAt; i < g.size(); ++i) if (g[i] >= heldPlain[1999] - 0.5) return (int) (i - letGoAt); return -1; };
+            const int plainBack = backAt (heldPlain), flickedBack = backAt (heldFlicked);
+            metric ("a 10 ms off-on during the fade: movement while held (dB)", heldMoved);
+            metric ("back within 0.5 dB after the fade, without / with it (s)", plainBack * 0.01);
+            metric ("with it", flickedBack * 0.01);
+            expect (heldMoved <= 0.001, "the held fader stays put");
+            expect (stillAfter <= 0.01, "after the fade the hand waits as for any ride up");
+            expect (upAfter <= 4.05, "then rides up at the ordinary hand's pace");
+            expect (plainBack >= 0 && flickedBack >= 0 && std::abs (flickedBack - plainBack) <= 20, "and gets back when it would have (one block either way)");
+            slopes (heldFlicked, 20.05, 30.1, 2.05);
+        }
+
         beginTest ("27d. a new song opening with knock-knock-knock while the fader is still up from the last one: no pull-down");
         Rig carried;
         carried.feed (20.0, -30);   // +12 dB

@@ -97,6 +97,8 @@ private:
     double blareLoud = 0.0;        // as block power: 6 LU over that - a blare block
     double releaseFrom = -100.0;   // where the hand was when it let a blare go as an effect: a take-back returns it there
     double takeBackTo = -100.0;    // after a take-back, the fader goes no higher than that while the blare is open
+    double releaseTarget = 0.0;    // the target when releaseFrom was taken (a changed target moves the take-back bound along)
+    double desiredTarget = 0.0;    // the target the last decision (desired) was made for (a held ceiling moves along with it)
     std::array<double, 64> blareHeld {};
     std::array<int, 64> blareSlot {};   // where each held block sits in the flow (zeroed while it waits)
     std::array<double, 4> recentEnergy {};              // the last 0.4 s (0 = not active): far too loud right now
