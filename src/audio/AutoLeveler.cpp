@@ -96,6 +96,8 @@ void AutoLeveler::clearMeasurement() noexcept
     recentEnergy.fill (0.0);
     recentPos = linger = sectionBlocks = urgentRun = urgentLatch = 0;
     earlyHold = -100.0;
+    pullDown = fastHand = blaring = false;
+    forgetBlare();
 }
 
 void AutoLeveler::reset() noexcept
@@ -119,6 +121,7 @@ void AutoLeveler::freezeGain() noexcept
     // Switched off: the ride stops where it is (the crossfade to the bypass hides it).
     gain = stopAt = smooth1 = smooth2 = 20.0 * std::log10 (linear);
     slewSpeed = wantSpeed = 0.0;
+    pullDown = fastHand = releaseRide = snapBack = false;
     earlyHold = -100.0;   // the hand moved to where the gain really is: a stop point set before means nothing now
     rampLeft = upWait = downWait = 0;
     linearStep = 0.0;
@@ -136,6 +139,7 @@ void AutoLeveler::easeOut() noexcept
     wantSpeed = 0.0;
     easing = true;
     travelling = false;
+    pullDown = releaseRide = false;   // a fast hand still brakes fast (fastHand) until it rests
 }
 
 void AutoLeveler::moveTowards (double goal, bool countWaits) noexcept
@@ -151,6 +155,14 @@ void AutoLeveler::moveTowards (double goal, bool countWaits) noexcept
         // follows on without a new wait - one continuous ride, not move-stop-move. Turned round: a new move waits.
         linger = size < 0.1 ? 30 : 0;
         travelling = false;
+        pullDown = false;
+        if (travelUp)
+            releaseRide = false;   // the ride back up after an effect has landed (a pull-down turned round keeps it)
+    }
+    if (travelling && ! travelUp && (blaring || snapBack))
+    {
+        pullDown = fastHand = true;   // an ordinary move down that turns out far too loud speeds up
+        snapBack = false;
     }
 
     if (countWaits)
@@ -163,9 +175,11 @@ void AutoLeveler::moveTowards (double goal, bool countWaits) noexcept
 
     if (! travelling)
     {
-        if (! (linger > 0 && up == travelUp && size > 0.3))
+        const bool goBack = releaseRide && up && size > 0.3;   // after an effect: straight back, no wait
+        if (! goBack && ! (linger > 0 && up == travelUp && size > 0.3))
         {
-            if (size <= 1.5)
+            releaseRide = false;
+            if (size <= 1.5 && ! (snapBack && ! up))   // a take-back goes back down at once, however little it is
             {
                 // Settled: a small difference is followed at 0.1 dB/s - what a hand leaves alone, a machine would chase.
                 wantSpeed = size > 1.0e-6 ? std::copysign (0.1, error) : 0.0;
@@ -173,10 +187,10 @@ void AutoLeveler::moveTowards (double goal, bool countWaits) noexcept
             }
 
             // A bigger difference has to last: 3 s before turning up inside a song, 2 s at the start of a new one, 0.5 s
-            // before turning down (0.1 s when it is far too loud right now). The first observation starts the clock
-            // (the 100 ms before it had no such known difference).
+            // before turning down - none when it is far too loud right now (that took 0.7 s to tell from an effect).
+            // The first observation starts the clock (the 100 ms before it had no such known difference).
             const int upNeeded = sectionBlocks < 100 ? 20 : 30;
-            if ((up && upWait <= upNeeded) || (! up && downWait <= (urgent ? 1 : 5)))
+            if ((up && upWait <= upNeeded) || (! up && ! blaring && ! snapBack && downWait <= 5))
             {
                 wantSpeed = 0.0;
                 return;
@@ -185,6 +199,10 @@ void AutoLeveler::moveTowards (double goal, bool countWaits) noexcept
 
         travelling = true;
         travelUp = up;
+        pullDown = ! up && (blaring || snapBack);
+        fastHand = fastHand || pullDown || goBack;
+        if (pullDown)
+            snapBack = false;
     }
 
     // A move in progress goes on until it lands: as fast as the difference asks, slower as it closes (1 dB/s per dB
@@ -193,7 +211,9 @@ void AutoLeveler::moveTowards (double goal, bool countWaits) noexcept
     // (a hand pulls a blaring fader down fast, then eases in).
     const double cap = up ? juce::jlimit (2.0, 4.0, 2.0 + 0.25 * (size - 8.0))
                           : juce::jlimit (4.0, 10.0, 4.0 + 1.5 * (size - 6.0));
-    wantSpeed = std::copysign (juce::jlimit (0.1, cap, size), error);
+    wantSpeed = pullDown ? -juce::jlimit (0.1, pullDownSpeed, pullDownRate * size)
+              : releaseRide && up ? juce::jlimit (0.1, 20.0, 3.0 * size)   // back up after an effect: 3 dB/s per dB, at most 20
+              : std::copysign (juce::jlimit (0.1, cap, size), error);
 }
 
 void AutoLeveler::finishMeasurement() noexcept
@@ -236,8 +256,9 @@ void AutoLeveler::finishMeasurement() noexcept
         flowEnergy.fill (0.0);
         flowCount = flowPos = 0;
         inactive = 20;
-        haveDecision = travelling = false;
+        haveDecision = travelling = pullDown = false;
         upWait = downWait = linger = sectionBlocks = urgentRun = urgentLatch = 0;
+        forgetBlare();   // its held blocks were in the flow that has just gone
         peaks.fill (0.0f);   // nor the last song's peaks: one of its effects and one of the new song's are no pattern
         peakPos = 0;
         earlyHold = -100.0;
@@ -257,6 +278,48 @@ void AutoLeveler::finishMeasurement() noexcept
     // 'far too loud' is blocks in a row: a gap, a quieter block or the user's own fade starts the count again
     const double applied = 20.0 * std::log10 (linear);
     urgentRun = active && -0.691 + 10.0 * std::log10 (power) + applied > wanted + 8.0 ? urgentRun + 1 : 0;
+
+    const bool blareBlock = active && power > blareLoud;
+    if (blare)
+    {
+        ++blareBlocks;
+        if (blockHeld)
+            forgetBlare();            // the user's own fade: theirs to judge
+        else if (blareBlock)
+            holdBackBlareBlock();
+        if (blare && blareBlocks > 50 && (blareBlock || blareBlocks > 70))
+            endBlareAsMaterial();     // still loud after 5 s (anything but back after 7 s): loud material, not an effect
+    }
+    else if (blareEnding > 0)
+    {
+        ++blareBlocks;
+        --blareEnding;
+        if (blockHeld)
+            forgetBlare();
+        else if (blareBlock)
+            takeBackRelease();        // loud again within 1.5 s: it was a rest in a loud song
+        else if (blareEnding == 0)
+            forgetBlare();            // it stays over: its held blocks go for good
+    }
+    else if (active && urgentRun == 7 && flowCount >= 37)
+    {
+        startBlare();
+    }
+
+    // the last 0.4 s heard (active blocks): 'far too loud right now', and whether a blare is over
+    int quick = 0;
+    double quickSum = 0.0;
+    for (const double p : recentEnergy)
+        if (p > 0.0) { quickSum += p; ++quick; }
+    const double momentary = quick > 0 ? -0.691 + 10.0 * std::log10 (quickSum / quick) : -100.0;
+    if (blare)
+    {
+        const double songPower = std::pow (10.0, (blareReference + 3.0 + 0.691) / 10.0);
+        quietRun = active ? (power <= songPower ? quietRun + 1 : 0) : quietRun;   // silence neither counts nor breaks it
+        if (quietRun >= 5)
+            endBlareAsEffect();      // 0.5 s back at the song's level: it was a sound effect
+    }
+    blaring = urgentRun >= 7;
 
     int count = 0;
     for (const double p : shortEnergy)
@@ -285,17 +348,14 @@ void AutoLeveler::finishMeasurement() noexcept
         // wherever it falls; e.g. a blaring song straight after a quiet one): come down at once to 1 LU over the last
         // 0.4 s, and keep that ceiling for 3 s, until the 3 s window has caught up. A shorter blast (an effect, two
         // with a gap between them) is the limiter's job, not the hand's.
-        int quick = 0;
-        double quickSum = 0.0;
-        for (const double p : recentEnergy)
-            if (p > 0.0) { quickSum += p; ++quick; }
         urgent = false;
         if (quick >= 3)
         {
-            const double momentary = -0.691 + 10.0 * std::log10 (quickSum / quick);
             if (urgentRun >= 7)
                 urgentLatch = 30;
-            if (urgentLatch > 0)
+            if (blare && takeBackTo > -99.0)
+                goal = juce::jmin (goal, takeBackTo);   // a rest in a loud song that was let go too soon: back where it was
+            if (urgentLatch > 0 || blare)   // a blare keeps the ceiling until it is clear what it was
             {
                 goal = juce::jmin (goal, wanted + 1.0 - momentary);
                 urgent = true;
@@ -327,7 +387,7 @@ void AutoLeveler::finishMeasurement() noexcept
             {
                 if (earlyHold < gain)   // none yet, or one the hand is already above: it never pulls the hand down
                 {
-                    earlyHold = gain + (slewSpeed > 0.0 ? slewSpeed * slewSpeed / (2.0 * handAcceleration) : 0.0);
+                    earlyHold = gain + (slewSpeed > 0.0 ? slewSpeed * slewSpeed / (2.0 * (fastHand ? pullDownBraking : handAcceleration)) : 0.0);
                     earlyHoldRide = travelling && travelUp;
                 }
                 if (earlyHoldRide)
@@ -343,6 +403,14 @@ void AutoLeveler::finishMeasurement() noexcept
         desired = goal;
         haveDecision = true;
         moveTowards (goal, true);
+        moving = true;
+    }
+    else if (! blockHeld && active && releaseRide)
+    {
+        // back up after an effect that filled the S window: towards the song's own level until there is S to judge -
+        // worked out afresh every block (the target may change on the way)
+        desired = releaseGoal();
+        moveTowards (desired, false);
         moving = true;
     }
     else if (! blockHeld && haveDecision && inactive > 0 && inactive < 5)
@@ -369,6 +437,103 @@ void AutoLeveler::finishMeasurement() noexcept
     energy = 0.0;
     inputPeak = 0.0f;
     blockHeld = false;
+}
+
+void AutoLeveler::startBlare() noexcept
+{
+    // the 7 loud blocks just heard are the flow's newest entries: they leave it and wait
+    const int size = (int) flowEnergy.size();
+    blareHeldCount = 0;
+    for (int k = 7; k >= 1; --k)
+    {
+        const int slot = (flowPos - k + size) % size;
+        blareHeld[(size_t) blareHeldCount] = flowEnergy[(size_t) slot];
+        blareSlot[(size_t) blareHeldCount++] = slot;
+        flowEnergy[(size_t) slot] = 0.0;
+    }
+    blareReference = flowLoudness();
+    blareLoud = std::pow (10.0, (blareReference + 6.0 + 0.691) / 10.0);
+    blareBlocks = 7;
+    blare = true;
+}
+
+void AutoLeveler::holdBackBlareBlock() noexcept
+{
+    if (blareHeldCount >= (int) blareHeld.size())
+        return;
+    const int size = (int) flowEnergy.size();
+    const int slot = (flowPos - 1 + size) % size;   // this block's own entry
+    blareHeld[(size_t) blareHeldCount] = flowEnergy[(size_t) slot];
+    blareSlot[(size_t) blareHeldCount++] = slot;
+    flowEnergy[(size_t) slot] = 0.0;
+}
+
+void AutoLeveler::endBlareAsEffect() noexcept
+{
+    // forget it: its blocks leave the S and 0.4 s windows too, its ceiling goes, and the fader goes straight back up
+    const int size = (int) shortEnergy.size();
+    for (int i = 0; i < juce::jmin (blareBlocks, size); ++i)
+    {
+        auto& p = shortEnergy[(size_t) ((shortPos - 1 - i + 2 * size) % size)];
+        if (p > blareLoud)
+            p = 0.0;
+    }
+    for (auto& p : recentEnergy)
+        if (p > blareLoud)
+            p = 0.0;
+    // its peaks leave the history too (one long effect's own peaks are no pattern to cap a boost): from its first block
+    // (blareBlocks - 1 blocks ago) to the block before the two that ended it
+    const int peakSize = (int) peaks.size();
+    for (int age = 2; age < juce::jmin (blareBlocks, peakSize); ++age)
+        peaks[(size_t) ((peakPos - 1 - age + 2 * peakSize) % peakSize)] = 0.0f;
+    urgentLatch = urgentRun = 0;
+    urgent = false;
+    releaseRide = true;
+    releaseFrom = gain;
+    desired = releaseGoal();
+    haveDecision = true;
+    // over - unless it is loud again within 1.5 s: until then its held blocks are kept for taking it back
+    blare = false;
+    blareEnding = 15;
+    quietRun = 0;
+}
+
+void AutoLeveler::takeBackRelease() noexcept
+{
+    // a rest in a loud song, not the end of an effect: the blare goes on and the fader goes straight back down
+    blare = true;
+    blareEnding = 0;
+    releaseRide = false;
+    urgentLatch = 30;
+    snapBack = true;
+    takeBackTo = releaseFrom;   // back to where the hand was, however little it rose
+    holdBackBlareBlock();   // this loud block too
+}
+
+double AutoLeveler::releaseGoal() noexcept
+{
+    double back = juce::jlimit (-20.0, 12.0, target.load (std::memory_order_relaxed) - flowLoudness());
+    const float recurring = recurringPeak (30);
+    if (recurring >= 0.001f)
+        back = juce::jmin (back, 2.0 - 20.0 * std::log10 ((double) recurring));
+    return back;
+}
+
+void AutoLeveler::endBlareAsMaterial() noexcept
+{
+    // loud material: its blocks take their places in the flow (at most 64 blocks back, the flow keeps 150), and the
+    // ceiling stays a little longer while the flow catches up
+    for (int i = 0; i < blareHeldCount; ++i)
+        flowEnergy[(size_t) blareSlot[(size_t) i]] = blareHeld[(size_t) i];
+    urgentLatch = 30;
+    forgetBlare();
+}
+
+void AutoLeveler::forgetBlare() noexcept
+{
+    blare = snapBack = false;
+    blareBlocks = blareHeldCount = blareEnding = quietRun = 0;
+    releaseFrom = takeBackTo = -100.0;
 }
 
 float AutoLeveler::recurringPeak (int apart) const noexcept
@@ -412,10 +577,15 @@ void AutoLeveler::planGainRamp() noexcept
 {
     rampLeft = juce::jmin (32, blockLength - measured);
 
-    // The hand moves the slew continuously: its speed changes by at most handAcceleration, and it stops where the
-    // decision said (landing exactly, never past it).
+    // The hand moves the slew continuously: its speed changes by at most handAcceleration (the fast hand of a pull-down:
+    // pullDownAcceleration, braking by pullDownBraking), and it stops where the decision said (landing exactly, never
+    // past it).
     const double dt = (double) rampLeft / rate;
-    slewSpeed += juce::jlimit (-handAcceleration * dt, handAcceleration * dt, wantSpeed - slewSpeed);
+    const bool braking = slewSpeed != 0.0 && (wantSpeed * slewSpeed < 0.0 || std::abs (wantSpeed) < std::abs (slewSpeed));
+    const double limit = ! fastHand ? handAcceleration
+                       : braking ? pullDownBraking
+                       : releaseRide ? releaseAcceleration : pullDownAcceleration;
+    slewSpeed += juce::jlimit (-limit * dt, limit * dt, wantSpeed - slewSpeed);
     const double before = gain;
     gain += slewSpeed * dt;
     if ((slewSpeed > 0.0 && before <= stopAt && gain > stopAt) || (slewSpeed < 0.0 && before >= stopAt && gain < stopAt))
@@ -423,6 +593,9 @@ void AutoLeveler::planGainRamp() noexcept
         gain = stopAt;
         slewSpeed = wantSpeed = 0.0;
     }
+
+    if (fastHand && ! pullDown && ! releaseRide && std::abs (slewSpeed) < 0.05)
+        fastHand = false;   // at rest after a pull-down (or the way back up): the ordinary hand again
 
     // Exact evolution of two identical continuous one-poles for a constant G, then <=32-sample
     // linear interpolation of their linear-gain endpoints. No sample-rate-dependent time constants.

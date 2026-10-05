@@ -24,9 +24,9 @@ public:
         slopes (ride.gains, 2.55, 10.1);   // 10 dB too quiet: 2.5 dB/s
         Rig down;
         down.feed (20, -6);
-        slopes (down.gains, 2.55, 10.1);
+        slopes (down.gains, 2.55, 30.1, 2.05);   // far too loud: the hand pulls the fader down fast
         gentleStart (ride.gains, 2.5, 2.0);   // a new song is judged after 2 s
-        gentleStart (down.gains, 10.0, 0.1);  // 10 LU over the target: far too loud, 0.1 s
+        gentleStart (down.gains, 30.0, 0.0);  // 10 LU over the target: far too loud, no further wait
         Rig mild;
         mild.feed (20, -11);
         slopes (mild.gains, 2.55, 10.1);
@@ -57,7 +57,7 @@ public:
         for (int i = 0; i < 2400; ++i) { loud.step (-6); lowest = juce::jmin (lowest, loud.output.lufs()); }
         metric ("loud step lowest settled S", lowest);
         expect (lowest >= -17.0);
-        slopes (loud.gains, 2.55, 10.1);
+        slopes (loud.gains, 2.55, 30.1, 2.05);
 
         beginTest ("7. flow preserves a 5 s quiet passage within the song");
         Rig passage;
@@ -447,6 +447,177 @@ public:
         expect (flickerAtOn - flickerLowest <= 0.3, "the target wants more: nothing pulls the fader further down");
         expect (flicker.leveler.getGainDb() >= 11.5, "and it rides back up");
 
+        beginTest ("34. a blaring song right after a quiet one is pulled down fast once it is clearly no effect");
+        for (const double gap : { 0.0, 2.5 })   // straight on, and after a gap that makes it a new song
+        {
+            Rig blare;
+            blare.feed (20.0, -26);   // +10 dB
+            blare.feed (gap, -300);
+            const auto onset = blare.gains.size();
+            const auto startGain = blare.leveler.getGainDb();
+            blare.feed (6.0, -12);    // 14 LU over the target with the boost still on
+            const auto finalGain = blare.leveler.getGainDb();
+            double sixDown = -1.0, landed = -1.0, lowest = 100.0;
+            for (size_t i = onset; i < blare.gains.size(); ++i)
+            {
+                const double s = (double) (i - onset + 1) * 0.01;
+                if (sixDown < 0.0 && blare.gains[i] <= startGain - 6.0) sixDown = s;
+                if (landed < 0.0 && blare.gains[i] <= finalGain + 1.0) landed = s;
+                lowest = juce::jmin (lowest, blare.gains[i]);
+            }
+            const auto label = gap > 0.0 ? juce::String (" after a 2.5 s gap") : juce::String (" straight on");
+            double threeDown = -1.0;
+            for (size_t i = onset; i < blare.gains.size() && threeDown < 0.0; ++i)
+                if (blare.gains[i] <= startGain - 3.0) threeDown = (double) (i - onset + 1) * 0.01;
+            metric ("blare" + label + ": 3 dB down after (s)", threeDown);
+            metric ("blare" + label + ": 6 dB down after (s)", sixDown);
+            metric ("blare" + label + ": within 1 dB of where it settles after (s)", landed);
+            metric ("blare" + label + ": settles at (dB)", finalGain);
+            expect (sixDown > 0.0 && sixDown <= 1.45, "6 dB down within 1.45 s (was 2.0 s)" + label);
+            expect (landed > 0.0 && landed <= 2.0, "and nearly all the way within 2 s" + label);
+            expect (lowest >= finalGain - 0.5, "without going past it" + label);
+            slopes (blare.gains, 4.05, 30.1, 2.05);
+        }
+
+        beginTest ("35. a long loud effect (0.8 to 3 s) inside a song is ducked and then the fader goes straight back");
+        for (const double seconds : { 0.8, 1.5, 3.0 })
+        {
+            Rig longFx;
+            longFx.feed (20.0, -26);   // +10 dB
+            const auto before = longFx.leveler.getGainDb();
+            longFx.feed (seconds, -6); // 20 LU over the target once boosted: an airhorn over quiet talk
+            double lowestFx = before;
+            int backAt = -1;
+            for (int i = 0; i < 1000; ++i)
+            {
+                longFx.step (-26);
+                lowestFx = juce::jmin (lowestFx, longFx.leveler.getGainDb());
+                if (backAt < 0 && lowestFx < before - 0.5 && longFx.leveler.getGainDb() >= before - 0.5) backAt = i;
+            }
+            const auto label = juce::String (seconds) + " s effect";
+            metric ("a " + label + " 20 LU over: deepest dip (dB)", before - lowestFx);
+            metric ("a " + label + " 20 LU over: back within 0.5 dB after it ends (s)", backAt < 0 ? -1.0 : (backAt + 1) * 0.01);
+            metric ("a " + label + ": gain 10 s after it ends vs before (dB)", longFx.leveler.getGainDb() - before);
+            expect (backAt >= 0 && backAt + 1 <= 350, "the " + label + " is let go: back within 3.5 s after it ends");
+            expect (std::abs (longFx.leveler.getGainDb() - before) <= 0.3, "and nothing of it stays in the level: " + label);
+            if (seconds > 2.0)
+            {
+                juce::String ride;
+                for (size_t i = longFx.gains.size() - 1000; i < longFx.gains.size(); i += 50)
+                    ride << juce::String ((double) (i - (longFx.gains.size() - 1000)) * 0.01, 1) << "s " << juce::String (longFx.gains[i], 2) << "  ";
+                logMessage ("after the 3 s effect: " + ride);
+            }
+            slopes (longFx.gains, 20.05, 30.1, 2.05);
+        }
+
+        beginTest ("35b. an effect that ends just before the 5 s mark is still an effect");
+        Rig nearly;
+        nearly.feed (20.0, -26);
+        const auto nearlyBefore = nearly.leveler.getGainDb();
+        nearly.feed (4.9, -6);
+        int nearlyBack = -1;
+        double nearlyLowest = nearlyBefore;
+        for (int i = 0; i < 1000; ++i)
+        {
+            nearly.step (-26);
+            nearlyLowest = juce::jmin (nearlyLowest, nearly.leveler.getGainDb());
+            if (nearlyBack < 0 && nearlyLowest < nearlyBefore - 0.5 && nearly.leveler.getGainDb() >= nearlyBefore - 0.5) nearlyBack = i;
+        }
+        metric ("a 4.9 s effect: back within 0.5 dB after it ends (s)", nearlyBack < 0 ? -1.0 : (nearlyBack + 1) * 0.01);
+        expect (nearlyBack >= 0 && nearlyBack + 1 <= 350, "let go like any effect");
+        expect (std::abs (nearly.leveler.getGainDb() - nearlyBefore) <= 0.3, "and nothing of it stays");
+
+        beginTest ("35c. a short rest inside a loud song does not let the fader back up");
+        for (const int rest : { 2, 6 })   // 0.2 s and 0.6 s
+        {
+            Rig resting;
+            resting.feed (20.0, -26);   // +10 dB
+            resting.feed (2.0, -12);    // a much louder song: pulled down
+            const auto restStart = resting.leveler.getGainDb();
+            double restHighest = restStart;
+            for (int i = 0; i < rest * 10; ++i) { resting.step (-26); restHighest = juce::jmax (restHighest, resting.leveler.getGainDb()); }
+            for (int i = 0; i < 150; ++i) { resting.step (-12); restHighest = juce::jmax (restHighest, resting.leveler.getGainDb()); }
+            const auto afterRest = resting.leveler.getGainDb();
+            resting.feed (4.0, -12);
+            const auto label = juce::String (rest / 10.0) + " s rest";
+            metric ("a " + label + " in a loud song: highest gain above where it was (dB)", restHighest - restStart);
+            metric ("a " + label + ": 1.5 s after the song goes on, vs before (dB)", afterRest - restStart);
+            expect (restHighest - restStart <= 3.0, "at most a brief lift: " + label);
+            expect (afterRest - restStart <= 0.5, "and back down within 1.5 s: " + label);
+            expect (resting.leveler.getGainDb() - restStart <= 0.5, "and it stays down: " + label);
+        }
+
+        beginTest ("35d. the target changes while the fader goes back up after an effect: it follows the new target");
+        Rig retarget;
+        retarget.feed (20.0, -26);
+        retarget.feed (3.0, -6);    // fills the whole 3 s window
+        double atChange = 0.0, highestAfter = -100.0;
+        for (int i = 0; i < 800; ++i)
+        {
+            if (i == 50)   // 0.5 s after it ends: the way back up is under way
+            {
+                retarget.leveler.setTargetLufs (-40.0);
+                atChange = retarget.leveler.getGainDb();
+            }
+            retarget.step (-26);
+            if (i >= 50)
+                highestAfter = juce::jmax (highestAfter, retarget.leveler.getGainDb());
+        }
+        metric ("gain when the target drops to -40 (dB)", atChange);
+        metric ("highest gain after that (dB)", highestAfter);
+        metric ("gain 7.5 s later (dB)", retarget.leveler.getGainDb());
+        expect (highestAfter <= atChange + 2.5, "it turns round instead of going on to the old target");
+        expect (retarget.leveler.getGainDb() <= -13.0, "and gets to the new one (-14 dB)");
+
+        beginTest ("27j. a recurring peak met on the fast way back up after an effect still stops the ride where it can");
+        const auto backUp = [] (int tapAt)
+        {
+            Rig r;
+            const float full = 1.0f;
+            r.feed (20.0, -26);
+            for (int b = 0; b < 10; ++b) { r.signal.fill (r.buffer, -26); if (b == 9) r.buffer.setSample (0, 17, full); r.leveler.process (r.buffer, block); r.gains.push_back (r.leveler.getGainDb()); }
+            r.feed (1.0, -6);   // a 1 s effect
+            for (int b = 0; b < 600; ++b)
+            {
+                r.signal.fill (r.buffer, -26);
+                if (b == tapAt) r.buffer.setSample (0, 17, full);
+                r.leveler.process (r.buffer, block);
+                r.gains.push_back (r.leveler.getGainDb());
+            }
+            return r.gains;
+        };
+        const auto plainBack = backUp (-1);
+        const size_t effectEnd = plainBack.size() - 600;
+        size_t bottom = effectEnd;   // the bottom of the dip, then 2 dB up on the fast way back
+        for (size_t i = effectEnd; i < plainBack.size(); ++i)
+            if (plainBack[i] < plainBack[bottom]) bottom = i;
+        int crossing = -1;
+        for (size_t i = bottom; i < plainBack.size() && crossing < 0; ++i)
+            if (plainBack[i] >= plainBack[bottom] + 3.0) crossing = (int) (i - effectEnd);
+        metric ("the dip's bottom (dB)", plainBack[bottom]);
+        expect (crossing > 0, "the way back up passes 3 dB over the bottom");
+        if (crossing > 0)
+        {
+            const auto tapped = backUp (crossing);
+            double plainTop = -100.0, tappedTop = -100.0;
+            const size_t from = effectEnd + (size_t) crossing, to = juce::jmin (plainBack.size(), from + 250);   // while the bound is on
+            for (size_t i = from; i < to; ++i) { plainTop = juce::jmax (plainTop, plainBack[i]); tappedTop = juce::jmax (tappedTop, tapped[i]); }
+            metric ("way back up without / with a 0 dBFS tap 1 s+ after the last one, highest gain (dB)", tappedTop);
+            metric ("without", plainTop);
+            expect (tappedTop <= plainTop - 2.0, "the tap's bound stops the fast ride well short of the top");
+        }
+
+        beginTest ("36. loud for more than 5 s is loud material, not an effect: the fader stays down");
+        Rig louder;
+        louder.feed (20.0, -26);   // +10 dB
+        louder.feed (8.0, -12);    // a much louder song straight on
+        const auto louderAt8 = louder.leveler.getGainDb();
+        louder.feed (4.0, -12);
+        metric ("gain 8 s into a much louder song (dB)", louderAt8);
+        metric ("and 4 s later (dB)", louder.leveler.getGainDb());
+        expect (louderAt8 <= -2.0, "it came down for the louder song");
+        expect (louder.leveler.getGainDb() <= louderAt8 + 0.5, "and stays down: no going back up as if it were an effect");
+
         beginTest ("27d. a new song opening with knock-knock-knock while the fader is still up from the last one: no pull-down");
         Rig carried;
         carried.feed (20.0, -30);   // +12 dB
@@ -624,15 +795,15 @@ public:
         beginTest ("20. a 1.9 s pause mid-move eases out and back in, never a corner");
         Rig paused;
         paused.feed (30, -26);
-        paused.feed (2, -6);   // a much louder song: the ride down is under way
+        paused.feed (0.9, -6);   // a much louder song: the (fast) ride down is under way
         const auto pauseStart = paused.gains.size() - 1;
         paused.feed (1.9, -300);   // just short of the 2 s that would make the next music a new section
         paused.feed (6, -6);
-        slopes (paused.gains, 2.55, 10.1);
+        slopes (paused.gains, 2.55, 30.1, 2.05);
         double during = 0.0;
         for (size_t i = pauseStart + 161; i <= pauseStart + 190; ++i) during += std::abs (paused.gains[i] - paused.gains[i - 1]);
         metric ("movement in the last 0.3 s of the pause dB", during);
-        expect (during <= 0.02, "halted before the pause ends");
+        expect (during <= 0.05, "halted before the pause ends");   // the fast hand's braking leaves a 0.15 s smoothing tail
         expect (paused.leveler.getGainDb() <= paused.gains[pauseStart] - 4.0, "and the ride down went on after it");
 
         extraCoverage();
@@ -641,7 +812,7 @@ public:
 
 private:
     void metric (const juce::String& label, double value) { logMessage (label + " = " + juce::String (value, 6)); }
-    void slopes (const std::vector<double>& gains, double up, double down)
+    void slopes (const std::vector<double>& gains, double up, double down, double corner = 0.2)
     {
         double maxUp = 0, maxDown = 0, maxChange = 0, previousSlope = 0;
         size_t worst = 0;
@@ -652,7 +823,7 @@ private:
             if (std::abs (slope - previousSlope) > maxChange) { maxChange = std::abs (slope - previousSlope); worst = i; }
             previousSlope = slope;
         }
-        if (maxChange > 0.2)
+        if (maxChange > corner)
         {
             juce::String around;
             for (size_t i = worst > 6 ? worst - 6 : 1; i < juce::jmin (gains.size(), worst + 6); ++i)
@@ -660,7 +831,7 @@ private:
             metric ("corner at index " + juce::String ((int) worst) + " of " + juce::String ((int) gains.size()) + ", slopes: " + around, maxChange);
         }
         metric ("max up dB/s", maxUp); metric ("max down dB/s", maxDown); metric ("adjacent slope difference dB/s", maxChange);
-        expect (maxUp <= up); expect (maxDown <= down); expect (maxChange <= 0.2);
+        expect (maxUp <= up); expect (maxDown <= down); expect (maxChange <= corner);
     }
     /** From 'from' on: the fader may still travel 'maxTravel' dB (the glide), is still 0.6 s after that glide began
         (allowing 'leadSeconds' of going on first), and its slope never turns a corner (checked by slopes()). */

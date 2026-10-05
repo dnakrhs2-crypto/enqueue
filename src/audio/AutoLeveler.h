@@ -65,6 +65,39 @@ private:
     // it speeds up and slows down like a hand on a fader - towards wantSpeed (this 0.1 s decision), and stops at stopAt.
     double slewSpeed = 0.0, wantSpeed = 0.0, stopAt = 0.0;
     static constexpr double handAcceleration = 20.0;   // dB/s per second
+    // Far too loud (a blaring song after a quiet one): once it is clearly no effect, the hand pulls the fader down fast -
+    // 4 dB/s per dB left up to 30 dB/s, speeding up by up to 100 and braking by up to 120 dB/s per second (what easing
+    // in at 4 dB/s per dB from 30 dB/s needs). Rides up and ordinary moves keep the slow hand.
+    static constexpr double pullDownRate = 4.0, pullDownSpeed = 30.0, pullDownAcceleration = 100.0, pullDownBraking = 120.0;
+    // The way back up after an effect sets off gently (a hand eases the fader back), up to 20 dB/s.
+    static constexpr double releaseAcceleration = 40.0;
+    bool pullDown = false;   // a fast pull-down is the move in progress
+    bool fastHand = false;   // the hand still moves at the fast rates (also braking after a pull-down) until it rests
+    bool blaring = false;    // this decision: far too loud right now, 7 blocks in a row (not just the ceiling's 3 s after)
+
+    // A blare inside a song (far too loud 7 blocks in a row, with at least 3 s of the song before it): the fader is
+    // pulled down at once and the blare's loud blocks wait outside the flow (blareHeld) until it is clear what it was.
+    // 0.5 s back near the song's level (within 5 s, or later if it is not loud by then) = a sound effect (an airhorn
+    // over talk): its blocks leave the S window and the fader goes straight back up (releaseRide, no wait); loud again
+    // within 1.5 s (blareEnding) = it was a rest in a loud song: taken back, straight down again (snapBack). Still loud
+    // after 5 s (anything but back after 7 s) = loud material: its blocks join the flow. The ceiling stays on while open.
+    void startBlare() noexcept;
+    void holdBackBlareBlock() noexcept;
+    void endBlareAsEffect() noexcept;
+    void takeBackRelease() noexcept;
+    void endBlareAsMaterial() noexcept;
+    void forgetBlare() noexcept;
+    /** Where the song's own level puts the fader: the target over the flow (which never had the blare in it), under the
+        recurring peak's cap - the way back after an effect, also while the S window is too empty to judge. */
+    double releaseGoal() noexcept;
+    bool blare = false, releaseRide = false, snapBack = false;
+    int blareBlocks = 0, blareHeldCount = 0, blareEnding = 0, quietRun = 0;
+    double blareReference = 0.0;   // the song's level before it (LUFS, input)
+    double blareLoud = 0.0;        // as block power: 6 LU over that - a blare block
+    double releaseFrom = -100.0;   // where the hand was when it let a blare go as an effect: a take-back returns it there
+    double takeBackTo = -100.0;    // after a take-back, the fader goes no higher than that while the blare is open
+    std::array<double, 64> blareHeld {};
+    std::array<int, 64> blareSlot {};   // where each held block sits in the flow (zeroed while it waits)
     std::array<double, 4> recentEnergy {};              // the last 0.4 s (0 = not active): far too loud right now
     int recentPos = 0;
     int linger = 0;          // 0.1 s blocks after a landing in which the same direction goes on without a new wait
