@@ -864,6 +864,43 @@ public:
             expect (raised.leveler.getGainDb() >= -1.0, "and it rides back up to the new target: " + label);
         }
 
+        beginTest ("34d. the target is lowered during a stop in a blare near the bottom of the range: the held place stays in it");
+        Rig nearFloor;
+        nearFloor.leveler.setTargetLufs (-30.0);
+        nearFloor.feed (20.0, -40);   // +10 dB
+        nearFloor.feed (1.5, -6);     // far too loud: pulled down towards the -20 dB end of the range
+        nearFloor.feed (0.1, -300);   // a stop (its first block, the sound's end, is decided as before)
+        nearFloor.leveler.setTargetLufs (-40.0);   // 10 LU quieter: still -20 dB, the range ends there
+        const auto nearFloorFrom = nearFloor.gains.size();
+        nearFloor.feed (0.3, -300);
+        nearFloor.feed (3.0, -6);
+        double nearFloorLowest = 100.0;
+        for (size_t i = nearFloorFrom; i < nearFloor.gains.size(); ++i) nearFloorLowest = juce::jmin (nearFloorLowest, nearFloor.gains[i]);
+        metric ("target lowered in the stop near the bottom: lowest after it (dB)", nearFloorLowest);
+        expect (nearFloorLowest >= -20.05, "the ride through the stop keeps to the -20 dB end of the range");
+
+        beginTest ("35i. the target is raised in a pause on the fast way back up: the recurring peaks still cap it");
+        Rig capped;
+        capped.feed (20.0, -26);   // +10 dB
+        for (int b = 0; b < 10; ++b) { capped.signal.fill (capped.buffer, -26); if (b == 9) capped.buffer.setSample (0, 17, 1.0f); capped.leveler.process (capped.buffer, block); capped.gains.push_back (capped.leveler.getGainDb()); }
+        capped.feed (3.0, -6);     // a 3 s effect
+        const auto cappedEnd = capped.gains.size();
+        for (int b = 0; b < 130; ++b)   // the song is back with the same tap 0.2 s in: the pair caps the way back up at +2 dB
+        {
+            capped.signal.fill (capped.buffer, -26);
+            if (b == 20) capped.buffer.setSample (0, 17, 1.0f);
+            capped.leveler.process (capped.buffer, block);
+            capped.gains.push_back (capped.leveler.getGainDb());
+        }
+        capped.feed (0.1, -300);   // a pause in the talk, 0.8 s into the way back up (a little under +2, still rising)
+        capped.leveler.setTargetLufs (-6.0);   // 10 LU louder: the flow would put it at +12, the taps still allow +2
+        capped.feed (0.2, -300);
+        capped.feed (4.0, -26);
+        double cappedTop = -100.0;
+        for (size_t i = cappedEnd; i < capped.gains.size(); ++i) cappedTop = juce::jmax (cappedTop, capped.gains[i]);
+        metric ("target raised in a pause on the way back up: highest gain (dB)", cappedTop);
+        expect (cappedTop <= 2.1, "the taps' +2 dB cap holds through the pause and the new target");
+
         beginTest ("37d. switched off for good on the fast way back up, then on again: exactly a fresh start");
         Rig gone;
         gone.feed (20.0, -26);

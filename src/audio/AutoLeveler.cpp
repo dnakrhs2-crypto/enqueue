@@ -318,7 +318,7 @@ void AutoLeveler::finishMeasurement() noexcept
         quietRun = active ? (power <= songPower ? quietRun + 1 : 0) : quietRun;   // silence neither counts nor breaks it
         sinceLoud = active && power > songPower ? 0 : sinceLoud + 1;
         if (quietRun >= 5)
-            endBlareAsEffect();      // 0.5 s back at the song's level: it was a sound effect
+            endBlareAsEffect (wanted);   // 0.5 s back at the song's level: it was a sound effect
     }
     blaring = urgentRun >= 7;
 
@@ -372,8 +372,7 @@ void AutoLeveler::finishMeasurement() noexcept
         // under 3 dB of work. One effect's peaks (a bang, a knock-knock-knock) are the limiter's job: by the time the hand
         // could move the effect is over, and only the music would dip.
         const float peak = recurringPeak (30);
-        if (peak >= 0.001f)
-            goal = juce::jmin (goal, 2.0 - 20.0 * std::log10 ((double) peak));
+        double headroom = peak >= 0.001f ? 2.0 - 20.0 * std::log10 ((double) peak) : 12.0;
         // A louder level reached twice at least 1 s apart (more than one effect's own blocks) and heard again within the
         // last 3 s may be a pattern the 3 s test cannot see yet - a song's first beats, drums coming in. Until that test
         // takes it over, or it stops coming back (a knock-knock-knock), it bounds the ride up: below it the hand goes no
@@ -398,15 +397,17 @@ void AutoLeveler::finishMeasurement() noexcept
                 if (earlyHoldRide)
                     linger = juce::jmax (linger, 30);   // a ride it stopped goes on at once when it lets go, no new wait
             }
-            goal = juce::jmin (goal, cap >= gain ? cap : earlyHold);
+            headroom = juce::jmin (headroom, cap >= gain ? cap : earlyHold);
         }
         else
         {
             earlyHold = -100.0;
         }
 
+        goal = juce::jmin (goal, headroom);
         desired = goal;
         desiredTarget = wanted;
+        desiredCap = headroom;
         haveDecision = true;
         moveTowards (goal, true);
         moving = true;
@@ -415,16 +416,17 @@ void AutoLeveler::finishMeasurement() noexcept
     {
         // back up after an effect that filled the S window: towards the song's own level until there is S to judge -
         // worked out afresh every block (the target may change on the way)
-        desired = releaseGoal();
-        desiredTarget = wanted;
+        aimBackUp (wanted);
         moveTowards (desired, false);
         moving = true;
     }
     else if (! blockHeld && haveDecision && inactive > 0 && inactive < 5)
     {
         // A gap shorter than 0.5 s inside the music (between words, a rest): the hand keeps going, the waits pause - to where
-        // the last decision put it, moved along with the target if that has changed since.
-        moveTowards (desired + (wanted - desiredTarget), false);
+        // the last decision put it, moved along with the target if that has changed since (within the range, under the peaks).
+        moveTowards (wanted == desiredTarget ? desired
+                                             : juce::jmin (juce::jlimit (-20.0, 12.0, desired + (wanted - desiredTarget)), desiredCap),
+                     false);
         moving = true;
     }
     else if (! blockHeld && inactive >= 20 && ! paused.load (std::memory_order_relaxed))
@@ -476,7 +478,7 @@ void AutoLeveler::holdBackBlareBlock() noexcept
     flowEnergy[(size_t) slot] = 0.0;
 }
 
-void AutoLeveler::endBlareAsEffect() noexcept
+void AutoLeveler::endBlareAsEffect (double wanted) noexcept
 {
     // forget it: its blocks leave the S and 0.4 s windows too, its ceiling goes, and the fader goes straight back up
     const int size = (int) shortEnergy.size();
@@ -498,8 +500,8 @@ void AutoLeveler::endBlareAsEffect() noexcept
     urgent = false;
     releaseRide = true;
     releaseFrom = gain;
-    releaseTarget = desiredTarget = target.load (std::memory_order_relaxed);
-    desired = releaseGoal();
+    releaseTarget = wanted;
+    aimBackUp (wanted);
     haveDecision = true;
     // over - unless it is loud again within 1.5 s: until then its held blocks are kept for taking it back
     blare = false;
@@ -519,13 +521,12 @@ void AutoLeveler::takeBackRelease() noexcept
     holdBackBlareBlock();   // this loud block too
 }
 
-double AutoLeveler::releaseGoal() noexcept
+void AutoLeveler::aimBackUp (double wanted) noexcept
 {
-    double back = juce::jlimit (-20.0, 12.0, target.load (std::memory_order_relaxed) - flowLoudness());
     const float recurring = recurringPeak (30);
-    if (recurring >= 0.001f)
-        back = juce::jmin (back, 2.0 - 20.0 * std::log10 ((double) recurring));
-    return back;
+    desiredCap = recurring >= 0.001f ? 2.0 - 20.0 * std::log10 ((double) recurring) : 12.0;
+    desired = juce::jmin (juce::jlimit (-20.0, 12.0, wanted - flowLoudness()), desiredCap);
+    desiredTarget = wanted;
 }
 
 void AutoLeveler::endBlareAsMaterial() noexcept

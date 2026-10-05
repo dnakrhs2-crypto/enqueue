@@ -83,13 +83,14 @@ private:
     // after 5 s (anything but back after 7 s) = loud material: its blocks join the flow. The ceiling stays on while open.
     void startBlare() noexcept;
     void holdBackBlareBlock() noexcept;
-    void endBlareAsEffect() noexcept;
+    void endBlareAsEffect (double wanted) noexcept;
     void takeBackRelease() noexcept;
     void endBlareAsMaterial() noexcept;
     void forgetBlare() noexcept;
-    /** Where the song's own level puts the fader: the target over the flow (which never had the blare in it), under the
-        recurring peak's cap - the way back after an effect, also while the S window is too empty to judge. */
-    double releaseGoal() noexcept;
+    /** Aims the hand where the song's own level puts the fader (desired, with the target and the cap it was set for): the
+        target over the flow (which never had the blare in it), under the recurring peak's cap - the way back after an
+        effect, also while the S window is too empty to judge. */
+    void aimBackUp (double wanted) noexcept;
     bool blare = false, releaseRide = false, snapBack = false;
     int blareBlocks = 0, blareHeldCount = 0, blareEnding = 0, quietRun = 0;
     int sinceLoud = 0;   // blocks since the blare was last over the song's level: the song (and silence) after it
@@ -99,6 +100,7 @@ private:
     double takeBackTo = -100.0;    // after a take-back, the fader goes no higher than that while the blare is open
     double releaseTarget = 0.0;    // the target when releaseFrom was taken (a changed target moves the take-back bound along)
     double desiredTarget = 0.0;    // the target the last decision (desired) was made for (a held ceiling moves along with it)
+    double desiredCap = 12.0;      // that decision's peak caps - not the target's, so a moved position stays under them
     std::array<double, 64> blareHeld {};
     std::array<int, 64> blareSlot {};   // where each held block sits in the flow (zeroed while it waits)
     std::array<double, 4> recentEnergy {};              // the last 0.4 s (0 = not active): far too loud right now
