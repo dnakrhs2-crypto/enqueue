@@ -29,8 +29,8 @@
 
   <section class="download-row">
     <div class="bigkeys">
-      <a class="download-button" id="download" href="https://github.com/dnakrhs2-crypto/enqueue/releases/download/v0.14.1/Enqueue-Setup-0.14.1.exe">
-        <strong id="download-label">Enqueue 0.14.1 다운로드</strong>
+      <a class="download-button" id="download" href="https://github.com/dnakrhs2-crypto/enqueue/releases/download/v0.15.0/Enqueue-Setup-0.15.0.exe">
+        <strong id="download-label">Enqueue 0.15.0 다운로드</strong>
         <span class="meta" id="download-meta"><span class="nb">Windows 10 / 11 (64비트)</span></span>
       </a>
       <a class="kakao" id="feedback-button" href="https://open.kakao.com/o/pST4IRLi">
@@ -61,7 +61,7 @@
 <script>
 (function () {
   // latest.json is written by tools/release.py at every release: exact installer URL, size and date.
-  fetch('latest.json?rev=0.14.1', { cache: 'no-cache' })
+  fetch('latest.json?rev=0.15.0', { cache: 'no-cache' })
     .then(function (r) { return r.ok ? r.json() : null; })
     .then(function (info) {
       if (!info || !info.url || info.url.indexOf('/releases/download/') < 0) return;   // only a direct asset link counts as a download
