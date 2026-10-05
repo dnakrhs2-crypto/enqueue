@@ -164,6 +164,8 @@ std::vector<ShortcutDefinition> makeCommands()
                  Category::fileSettings, Scope::mainWindow, false, ko ("설정"), { key (',', ModifierKeys::commandModifier) }),
         command ("settings.audioPatches", CommandIDs::audioPatches, ko ("오디오 패치..."), ko ("큐 출력 → 장치 출력 라우팅, 출력 이름, 스테레오 묶기, 출력 인서트"),
                  Category::fileSettings, Scope::mainWindow, false, ko ("설정"), { key ('P', ModifierKeys::commandModifier | ModifierKeys::shiftModifier) }),
+        command ("settings.autoLevel", CommandIDs::autoLevelSettings, ko ("자동 레벨 맞추기..."), ko ("마스터로 나가는 소리를 목표 LUFS에 맞춰 천천히 자동 조절 (프로젝트에 저장)"),
+                 Category::fileSettings, Scope::mainWindow, false, ko ("설정"), {}),
         command ("settings.pluginManager", CommandIDs::pluginManager, ko ("VST3 플러그인 관리..."), ko ("VST3 플러그인 스캔 / 목록"),
                  Category::fileSettings, Scope::mainWindow, false, ko ("설정"), { key ('P', ModifierKeys::commandModifier) }),
         command ("settings.masterInserts", CommandIDs::masterInserts, ko ("마스터 버스 인서트..."), ko ("모든 큐가 통과하는 마스터 VST3 체인"),

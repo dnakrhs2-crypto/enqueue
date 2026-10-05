@@ -28,7 +28,7 @@ CuePlayer::CuePlayer (const Cue& c, juce::AudioFormatManager& formats,
         computeGains (cue.levels, cue.trim, currentGains);
         targetGains = currentGains;
         publishedGains = currentGains;
-        liveGainDb = cue.gainDb;
+        liveGainDb = baseGainDb = cue.gainDb;
         liveLevels = cue.levels;
         liveTrim = cue.trim;
         return;
@@ -66,7 +66,7 @@ CuePlayer::CuePlayer (const Cue& c, juce::AudioFormatManager& formats,
     computeGains (cue.levels, cue.trim, currentGains);
     targetGains = currentGains;
     publishedGains = currentGains;
-    liveGainDb = cue.gainDb;
+    liveGainDb = baseGainDb = cue.gainDb;
     liveLevels = cue.levels;
     liveTrim = cue.trim;
 
@@ -592,6 +592,7 @@ void CuePlayer::updatePositionInfo (double rate) noexcept
 
 bool CuePlayer::renderNextBlock (juce::AudioBuffer<float>& fullBuffer, int numSamples)
 {
+    autoLevelHeld = false;
     // the player's channels only (no allocation: the channel-pointer array lives inside the view)
     juce::AudioBuffer<float> buffer (fullBuffer.getArrayOfWritePointers(), juce::jmin (numChannels, fullBuffer.getNumChannels()), 0, numSamples);
 
@@ -694,6 +695,9 @@ bool CuePlayer::renderNextBlock (juce::AudioBuffer<float>& fullBuffer, int numSa
     auto* activeChain = chain.load (std::memory_order_acquire);
     const double rate = liveRate.load (std::memory_order_relaxed);
 
+    autoLevelHeld = isFadingOut() || std::abs (liveGainDb - baseGainDb) > 0.05
+                    || getDuckDb() != 0.0 || duckSamplesLeft > 0 || duckLevel != 1.0f;
+
     if (paused && ! inTail)
     {
         // Frozen and already silent: a stop / fade request or a trim that ended before the position ends it now.
@@ -726,6 +730,9 @@ bool CuePlayer::renderNextBlock (juce::AudioBuffer<float>& fullBuffer, int numSa
     }
 
     const double ratio = micMode ? 1.0 : ratioFor (rate);
+
+    if (autoLevelWatch && ! autoLevelHeld && ! micMode && ! inTail && source != nullptr)
+        autoLevelHeld = source->isEnvelopeAttenuated (virtualPosition.load (std::memory_order_relaxed), numSamples * advanceFor (rate));
 
     if (! inTail)
     {
@@ -801,6 +808,10 @@ bool CuePlayer::renderNextBlock (juce::AudioBuffer<float>& fullBuffer, int numSa
             duckGoalSeen = duckGoal;
             duckSamplesLeft = (juce::int64) std::llround (duckRampSeconds.load (std::memory_order_relaxed) * currentSampleRate);
         }
+
+        // A queued initial duck can be released before the very first render. Its goal is already
+        // 0 dB, but this block still contains the release, even if the ramp ends inside this block.
+        autoLevelHeld = autoLevelHeld || duckLevel != 1.0f || duckGoal != 1.0f || duckSamplesLeft > 0;
 
         if (! juce::approximatelyEqual (duckGoal, duckLevel))
         {

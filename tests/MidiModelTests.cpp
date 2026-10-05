@@ -132,14 +132,14 @@ private:
                                 juce::String ("<ENQUEUE_MIDI_SHORTCUTS schemaVersion='1'><ACTION id='a'/><ACTION id='a'/></ENQUEUE_MIDI_SHORTCUTS>") })
         { const auto r = MidiShortcutProfile::parse (bad); expect (! r.wasOk(), bad); expectEquals (r.originalXml, bad); }
 
-        beginTest ("combined v2 atomic import; v1 keyboard-only import preserves MIDI; complete 81-command export");
+        beginTest ("combined v2 atomic import; v1 keyboard-only import preserves MIDI; complete 83-command export");
         Harness h;
         expect (h.service->replaceMidiProfile (p).wasOk());
         const auto combined = h.service->exportCombinedProfile();
         const auto exchange = ShortcutProfile::parseExchange (combined);
         expect (exchange.wasOk() && exchange.replacesMidi);
-        expectEquals (static_cast<int> (exchange.keyboard.overrides.size()), 81);
-        expectEquals (static_cast<int> (exchange.midi.overrides.size()), 82);
+        expectEquals (static_cast<int> (exchange.keyboard.overrides.size()), 83);
+        expectEquals (static_cast<int> (exchange.midi.overrides.size()), 84);
         expect (h.service->importProfile (combined).wasOk());
         expect (h.lastTransaction.keyboard && h.lastTransaction.midi && ! h.lastTransaction.devices);
         const auto midiBefore = h.service->getMidiProfile();
@@ -199,7 +199,9 @@ private:
             expect (ProjectSerializer::fromJson (juce::JSON::toString (v), restored).wasOk());
             expect (restored.cues()[0].midiTriggers.empty() && restored.lists[1].cues[0].midiTriggers.empty());
         }
-        expect (ProjectSerializer::fromJson (json.replace ("\"version\": 7", "\"version\": 8"), restored).failed());
+        // a newer file version than this build reads is refused (8 is this build's own since the auto level)
+        expect (ProjectSerializer::fromJson (json.replace ("\"version\": 7", "\"version\": " + juce::String (ProjectSerializer::currentVersion + 1)),
+                                             restored).failed());
 
         beginTest ("duplicate, template and property paste do not copy MIDI; undo/redo preserves originals and notifications");
         expect (c.duplicated().midiTriggers.empty());

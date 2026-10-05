@@ -213,6 +213,7 @@ private:
 
     AudioEngine& engine;
     AppSettings& settings;
+    bool releaseGoWhenSpaceUp = false;   // 스페이스바 재생/일시정지 with Space on 일시정지 / 재개: the GO it made ends at key up
     juce::ApplicationCommandManager& commands;
     std::unique_ptr<ShortcutService> shortcuts;
     std::unique_ptr<PanicKeyHook> panicHook;

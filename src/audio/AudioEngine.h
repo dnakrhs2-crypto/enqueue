@@ -1,5 +1,7 @@
 #pragma once
 
+#include "audio/AutoLeveler.h"
+
 #include "audio/CuePlayer.h"
 #include "audio/LoudnessMeter.h"
 #include "audio/PluginChain.h"
@@ -246,6 +248,14 @@ public:
     // Plugin chains (all owned by the engine so they outlive the players that use them)
 
     PluginChain& getMasterChain() noexcept { return masterChain; }
+    void setAutoLevel (bool enabled, double targetLufs) noexcept
+    {
+        autoLeveler.setTargetLufs (targetLufs);
+        autoLeveler.setEnabled (enabled);
+    }
+    double getAutoLevelGainDb() const noexcept { return autoLeveler.getGainDb(); }
+    /** The last rendered block held the auto level (a fade, duck, volume change or panic was under way). */
+    bool isAutoLevelHeld() const noexcept { return autoLeveler.isHeld(); }
     /** The cue's insert chain, created on demand. */
     PluginChain& getCueChain (const juce::Uuid& cueId);
     PluginChain* findCueChain (const juce::Uuid& cueId) const;
@@ -363,6 +373,7 @@ private:
     std::array<const float*, maxDeviceInputs> inputPointers {};   // >=32-output path: input block pointers, no allocation
 
     PluginChain masterChain;
+    AutoLeveler autoLeveler;
     livemix::LoudnessMeter loudness;
     std::atomic<float> outputPeakHold { 0.0f };      // the device outputs' sample peak since the last takeOutputDiagnostics()
     std::atomic<int> outputClippedBlocks { 0 };      // blocks with a device output over 0 dBFS since the device started

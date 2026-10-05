@@ -3,6 +3,7 @@
 #include "app/Scheduler.h"
 #include "audio/AudioEngine.h"
 #include "ui/UiUtils.h"
+#include "ui/ContainerTabs.h"
 
 #include <optional>
 
@@ -206,6 +207,7 @@ private:
             f.now += 1.0;
             const bool consumed = f.key (key, origin);
             f.release (key);
+            ReopenLastProjectTestAccess::refreshPlayback (*f.main);   // the app's timer tick (sees Space up)
             f.settle();
             dispatch();
             return consumed;
@@ -248,6 +250,20 @@ private:
             item = menuItem();
             expect (item.has_value() && ! item->isEnabled);
             f.command (CommandIDs::toggleShowMode);
+        }
+
+        beginTest ("the list's key hint says Space = 재생/일시정지 while the setting is on");
+        {
+            auto* tabs = child<ContainerTabs> (*f.main);
+            expect (tabs != nullptr);
+            if (tabs != nullptr)
+            {
+                expect (tabs->getInfoText().endsWith (ko ("Space = 재생/일시정지")), tabs->getInfoText());
+                f.command (CommandIDs::toggleSpaceBarPlayPause);
+                expect (tabs->getInfoText().endsWith ("Space = GO"), tabs->getInfoText());
+                f.command (CommandIDs::toggleSpaceBarPlayPause);
+                expect (tabs->getInfoText().endsWith (ko ("Space = 재생/일시정지")), tabs->getInfoText());
+            }
         }
 
         beginTest ("setting on: Space plays, pauses and resumes - the next cue never starts");
@@ -309,17 +325,81 @@ private:
         {
             expect (service.setKeys ("transport.pauseToggle", { K ('P', 0, 0), space }, ShortcutService::ConflictPolicy::move).wasOk());
             expect (service.getKeys ("transport.go").isEmpty());
+            expect (service.setKeys ("transport.go", { K ('G', 0, 0) }).wasOk());
 
             expect (press (space, f.table()));   // setting off: pause / resume only, nothing starts from silence (unchanged)
             expectEquals (f.engine.getNumPlaying(), 0);
 
             expect (f.command (CommandIDs::toggleSpaceBarPlayPause));
+            if (auto* tabs = child<ContainerTabs> (*f.main))
+                expect (tabs->getInfoText().endsWith (ko ("Space = 재생/일시정지 · G = GO")), tabs->getInfoText());
             expect (press (space, f.table()));
             expect (f.engine.isPlaying (a.id) && ! f.engine.isPaused (a.id));
             expect (press (space, f.table()));
             expect (f.engine.isPaused (a.id) && ! f.engine.isPlaying (b.id));
             expect (press (space, f.table()));
             expect (f.engine.isPlaying (a.id) && ! f.engine.isPaused (a.id) && ! f.engine.isPlaying (b.id));
+            stopEverything();
+
+            // "release the GO key first" (프로젝트 설정): Space's GO counts as held until Space is up for real
+            auto withKeyUp = f.document().settings;
+            withKeyUp.requireKeyUp = true;
+            f.document().setSettings (withKeyUp);
+            f.now += 1.0;
+            expect (f.key (space, f.table()));   // Space down: GO, nothing was playing
+            f.settle();
+            expect (f.engine.isPlaying (a.id));
+            f.now += 1.0;
+            expect (f.key (K ('G', 0, 0), f.table()));   // G while Space has not been seen up yet: refused
+            f.release (K ('G', 0, 0));
+            f.settle();
+            expect (! f.engine.isPlaying (b.id), "require key up holds while Space is down");
+            f.release (space);
+            ReopenLastProjectTestAccess::refreshPlayback (*f.main);   // the timer sees Space up
+            f.now += 1.0;
+            expect (f.key (K ('G', 0, 0), f.table()));
+            f.release (K ('G', 0, 0));
+            f.settle();
+            expect (f.engine.isPlaying (b.id), "and lets the next GO through once it is up");
+            stopEverything();
+
+            // Space (on 일시정지 / 재개) and G are one GO group: it opens once both are up, whichever comes up first
+            f.now += 1.0;
+            expect (f.key (space, f.table()));            // Space down: GO
+            f.settle();
+            expect (f.engine.isPlaying (a.id));
+            f.now += 1.0;
+            expect (f.key (K ('G', 0, 0), f.table()));    // G down and up while Space stays down
+            f.release (K ('G', 0, 0));
+            ReopenLastProjectTestAccess::refreshPlayback (*f.main);
+            f.now += 1.0;
+            f.command (CommandIDs::go);                    // the GO button, Space still down
+            f.settle();
+            expect (! f.engine.isPlaying (b.id), "G coming up leaves the group closed while Space is down");
+            f.release (space);
+            ReopenLastProjectTestAccess::refreshPlayback (*f.main);
+            stopEverything();
+
+            f.now += 1.0;
+            expect (f.key (K ('G', 0, 0), f.table()));    // G down: GO
+            f.settle();
+            expect (f.engine.isPlaying (a.id));
+            f.now += 1.0;
+            expect (f.key (space, f.table()));            // Space down and up while G stays down
+            f.release (space);
+            ReopenLastProjectTestAccess::refreshPlayback (*f.main);
+            f.now += 1.0;
+            f.command (CommandIDs::go);
+            f.settle();
+            expect (! f.engine.isPlaying (b.id), "Space coming up leaves the group closed while G is down");
+            f.release (K ('G', 0, 0));
+            ReopenLastProjectTestAccess::refreshPlayback (*f.main);
+            f.now += 1.0;
+            f.command (CommandIDs::go);
+            f.settle();
+            expect (f.engine.isPlaying (b.id), "both up: the next GO goes");
+            withKeyUp.requireKeyUp = false;
+            f.document().setSettings (withKeyUp);
             stopEverything();
 
             expect (service.restoreAllDefaults().wasOk());

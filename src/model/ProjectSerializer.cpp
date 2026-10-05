@@ -660,6 +660,8 @@ namespace
         obj->setProperty ("startOnCloseCue", s.startOnCloseCue);
         obj->setProperty ("maxLevelDb", s.maxLevelDb);
         obj->setProperty ("minLevelDb", s.minLevelDb);
+        obj->setProperty ("autoLevelEnabled", s.autoLevelEnabled);
+        obj->setProperty ("autoLevelTargetLufs", s.autoLevelTargetLufs);
         obj->setProperty ("copyFilesIntoProject", s.copyFilesIntoProject);
         obj->setProperty ("autoBackup", s.autoBackup);
         obj->setProperty ("backupIntervalSeconds", s.backupIntervalSeconds);
@@ -716,6 +718,10 @@ namespace
         s.startOnCloseCue         = v.getProperty ("startOnCloseCue", s.startOnCloseCue).toString();
         s.maxLevelDb              = (double) v.getProperty ("maxLevelDb", s.maxLevelDb);
         s.minLevelDb              = (double) v.getProperty ("minLevelDb", s.minLevelDb);
+        s.autoLevelEnabled        = (bool) v.getProperty ("autoLevelEnabled", s.autoLevelEnabled);
+        const auto autoLevelTarget = v.getProperty ("autoLevelTargetLufs", s.autoLevelTargetLufs);
+        if (autoLevelTarget.isInt() || autoLevelTarget.isInt64() || autoLevelTarget.isDouble())
+            s.autoLevelTargetLufs = (double) autoLevelTarget;
         s.copyFilesIntoProject    = (bool) v.getProperty ("copyFilesIntoProject", s.copyFilesIntoProject);
         s.autoBackup              = (bool) v.getProperty ("autoBackup", s.autoBackup);
         s.backupIntervalSeconds   = intProperty (v, "backupIntervalSeconds", s.backupIntervalSeconds);
@@ -801,11 +807,16 @@ const AudioPatch* Project::patchForCue (const Cue& cue) const noexcept
 namespace ProjectSerializer
 {
 
+int versionFor (const Project& project) noexcept
+{
+    return project.settings.autoLevelEnabled ? 8 : 7;
+}
+
 juce::var toVar (const Project& project, const juce::File& projectDir)
 {
     auto* root = new juce::DynamicObject();
     root->setProperty ("app", "Enqueue");
-    root->setProperty ("version", currentVersion);
+    root->setProperty ("version", versionFor (project));
     root->setProperty ("name", project.name);
 
     // "cues" stays the main list (older builds read that); "lists" carries every list / cart

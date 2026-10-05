@@ -97,7 +97,8 @@ enum : juce::CommandID
     addVolumeCue,          // Ctrl+Alt+7
     showActiveCuesWindow,  // no default key
     toggleFullScreen,     // F11
-    toggleSpaceBarPlayPause   // 설정 > 스페이스바 재생/일시정지 (this PC): Space pauses / resumes / plays
+    toggleSpaceBarPlayPause,  // 설정 > 스페이스바 재생/일시정지 (this PC): Space pauses / resumes / plays
+    autoLevelSettings
 };
 
 /** The registration path used by MainComponent, kept independent of the shortcut catalog. */
@@ -128,7 +129,7 @@ inline const juce::Array<juce::CommandID>& getAllMainCommands()
                     CommandIDs::uiScale100, CommandIDs::uiScale110, CommandIDs::uiScale125, CommandIDs::uiScale150,
                     CommandIDs::reopenLastProjectAsk, CommandIDs::reopenLastProjectAlways, CommandIDs::reopenLastProjectNever,
                     CommandIDs::addVolumeCue, CommandIDs::showActiveCuesWindow, CommandIDs::toggleFullScreen,
-                    CommandIDs::toggleSpaceBarPlayPause };
+                    CommandIDs::toggleSpaceBarPlayPause, CommandIDs::autoLevelSettings };
     return ids;
 }
 

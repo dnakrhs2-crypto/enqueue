@@ -83,7 +83,15 @@ public:
             p.masterPlugins.push_back (master);
 
             const auto json = ProjectSerializer::toJson (p);
-            expect (json.contains ("\"version\": " + juce::String (ProjectSerializer::currentVersion)) || json.contains ("\"version\":" + juce::String (ProjectSerializer::currentVersion)));
+            expectEquals (ProjectSerializer::versionFor (p), 7);   // nothing of version 8 in use: 0.14 and older still open it
+            expect (json.contains ("\"version\": 7") || json.contains ("\"version\":7"));
+            auto withAutoLevel = p;
+            withAutoLevel.settings.autoLevelEnabled = true;
+            const auto json8 = ProjectSerializer::toJson (withAutoLevel);
+            expect (json8.contains ("\"version\": 8") || json8.contains ("\"version\":8"), "auto level on: an older build refuses instead of dropping it");
+            Project back8;
+            expect (ProjectSerializer::fromJson (json8, back8).wasOk());
+            expect (back8.settings.autoLevelEnabled);
             expect (json.contains ("\"lists\""));
             expect (! json.contains ("fadeInMs"));
 

@@ -37,9 +37,9 @@ public:
     void runTest() override
     {
         const auto& catalog = ShortcutCatalog::get();
-        beginTest ("all 81 MainComponent registration IDs and JUCE quit have unique stable catalog entries");
+        beginTest ("all 82 MainComponent registration IDs and JUCE quit have unique stable catalog entries");
         auto registered = CommandIDs::getAllMainCommands(); // the exact path called by MainComponent::getAllCommands
-        expectEquals (registered.size(), 81);
+        expectEquals (registered.size(), 82);
         registered.add (juce::StandardApplicationCommandIDs::quit);
         expectEquals (static_cast<int> (catalog.getCommands().size()), registered.size());
         std::set<juce::String> ids;
@@ -312,7 +312,7 @@ public:
             const auto exported = source.service->exportProfile();
             const auto parsed = ShortcutProfile::parse (exported);
             expect (parsed.wasOk());
-            expectEquals (static_cast<int> (parsed.profile.overrides.size()), 82);
+            expectEquals (static_cast<int> (parsed.profile.overrides.size()), 84);
             Harness destination;
             expect (destination.service->setKeys ("file.save", { key (KeyPress::F14Key) }).wasOk());
             expect (destination.service->importProfile (exported).wasOk());

@@ -16,6 +16,7 @@ AudioEngine::AudioEngine (int readAhead)
     mixBuffer.setSize (2, blockSize.load());
     playerBuffer.setSize (CuePlayer::maxChannels, blockSize.load());
     loudness.prepare (sampleRate.load());
+    autoLeveler.prepare (sampleRate.load(), blockSize.load(), mixBuffer.getNumChannels());
     players.reserve (maxPlayers);   // push_back under the audio lock must not reallocate (play() refuses beyond this)
 
     muteRuntime = std::make_unique<PatchRuntime>();
@@ -736,6 +737,7 @@ bool AudioEngine::play (const Cue& cue, const PlayOptions& options, juce::String
                 if (options.explicitStart)
                     existing->seekToFileSeconds (cue.regionStart() + options.startSeconds);   // an explicit start place wins over the loaded one
 
+                existing->setBaseGainDb (cue.gainDb);   // a gain edited since the load is the level it plays at
                 if (options.hasStartGain)
                     existing->setInitialGainDb (options.startGainDb);
 
@@ -1727,6 +1729,7 @@ void AudioEngine::prepare (double newSampleRate, int newBlockSize, int newNumDev
         const juce::ScopedLock sl (lock);
 
         mixBuffer.setSize (juce::jmax (2, getNumDeviceOutputs()), blockSize.load(), false, false, true);
+        autoLeveler.prepare (sampleRate.load(), blockSize.load(), getNumDeviceOutputs());
         playerBuffer.setSize (CuePlayer::maxChannels, blockSize.load(), false, false, true);
         // the scratch serves devices with 32 or more channels; it carries what the engine mixes (never more than the
         // output limit), the callback clears the rest
@@ -1772,9 +1775,14 @@ void AudioEngine::renderBlock (juce::AudioBuffer<float>& output, int numSamples,
     {
         const int n = juce::jmin (chunkSize, numSamples - offset);
         mixBuffer.clear (0, n);
+        bool autoLevelHold = false, anyPaused = false;
+        const bool autoLevelOn = autoLeveler.isEnabled();
 
         {
             const juce::ScopedLock sl (lock);
+            autoLevelHold = outputGateTarget.load (std::memory_order_relaxed) == 0
+                            || outputGateCloseCountdown.load (std::memory_order_relaxed) >= 0
+                            || outputGateGain < 1.0f || isResetOutstanding();
 
             for (auto& r : patchRuntimes)
                 r->bus.clear (0, n);
@@ -1791,7 +1799,13 @@ void AudioEngine::renderBlock (juce::AudioBuffer<float>& output, int numSamples,
                 if (p->isMic())
                     p->setInputBlock (inputs, numInputs, offset);
 
+                p->setAutoLevelWatch (autoLevelOn);
                 const bool stillRunning = p->renderNextBlock (playerBuffer, n);
+                if (! p->isLoadedNotStarted())
+                {
+                    autoLevelHold = autoLevelHold || p->isAutoLevelHeld(); // includes the final fade block
+                    anyPaused = anyPaused || (p->isPaused() && ! p->hasFinished());
+                }
                 auto* r = static_cast<PatchRuntime*> (p->getBusTag());
                 p->mixIntoBus (r != nullptr ? r->bus : mixBuffer, playerBuffer, n);
 
@@ -1808,6 +1822,9 @@ void AudioEngine::renderBlock (juce::AudioBuffer<float>& output, int numSamples,
         }
 
         masterChain.process (mixBuffer, n);   // legacy master inserts on device outputs 1-2
+        autoLeveler.setHold (autoLevelHold);
+        autoLeveler.setPaused (anyPaused);
+        autoLeveler.process (mixBuffer, n);
         applyOutputGate (mixBuffer, n);       // the panic gate: closed = silence, whatever the chains still ring with
         if (output.getNumChannels() > 0)
             loudness.process (mixBuffer.getReadPointer (0), output.getNumChannels() > 1 ? mixBuffer.getReadPointer (1) : nullptr, n);

@@ -2,6 +2,9 @@ juce_add_console_app(EnqueueTests PRODUCT_NAME "EnqueueTests")
 
 target_sources(EnqueueTests PRIVATE
     TestMain.cpp
+    AutoLevelTests.cpp
+    AutoLevelRenderTests.cpp
+    AutoLevelIntegrationTests.cpp
     ShortcutTests.cpp
     ShortcutRouterTests.cpp
     ShortcutUiTests.cpp
@@ -33,6 +36,7 @@ target_sources(EnqueueTests PRIVATE
     ../src/ui/CueCartView.cpp
     ../src/ui/PastePropertiesDialog.cpp
     ../src/ui/PatchEditorDialog.cpp
+    ../src/ui/AutoLevelDialog.cpp
     ../src/ui/CurveEditor.cpp
     ../src/ui/PluginChainComponent.cpp
     ../src/ui/PluginManager.cpp

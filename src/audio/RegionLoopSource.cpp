@@ -341,7 +341,39 @@ void RegionLoopSource::setLiveEnvelope (Envelope newEnvelope)
     {
         const juce::SpinLock::ScopedLockType sl (envelopeLock);
         std::swap (envelope, newEnvelope);   // no allocation under the lock; the old one dies here, after it
+        envelopeActive.store (envelope.isActive(), std::memory_order_release);
     }
+}
+
+bool RegionLoopSource::isEnvelopeAttenuated (double virtualPosition, double fileSamples) const noexcept
+{
+    if (! envelopeActive.load (std::memory_order_acquire))
+        return lastEnvelopeAttenuated = false;
+
+    // Audio thread: never wait for the read-ahead thread (it holds envelopeLock while it applies the envelope) nor for
+    // a layout edit - when either is busy, the previous block's answer stands.
+    Layout layout;
+    {
+        const juce::SpinLock::ScopedTryLockType layoutTry (layoutLock);
+        if (! layoutTry.isLocked())
+            return lastEnvelopeAttenuated;
+        layout = published;
+    }
+    const juce::SpinLock::ScopedTryLockType sl (envelopeLock);
+    if (! sl.isLocked())
+        return lastEnvelopeAttenuated;
+
+    const double sr = reader->sampleRate > 0.0 ? reader->sampleRate : 44100.0;
+    for (double done = 0.0;; done = juce::jmin (fileSamples, done + 32.0))
+    {
+        const auto location = layout.locate ((juce::int64) (virtualPosition + done));
+        if (! location.beyondEnd
+            && envelope.levelAt ((double) (location.fileSample - layout.regionStart) / sr,
+                                 (double) layout.regionLength / sr) < 0.999f)
+            return lastEnvelopeAttenuated = true;
+        if (done >= fileSamples) break;
+    }
+    return lastEnvelopeAttenuated = false;
 }
 
 //==============================================================================

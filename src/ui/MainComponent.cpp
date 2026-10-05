@@ -20,6 +20,7 @@
 #include "ui/UiUtils.h"
 #include "ui/PastePropertiesDialog.h"
 #include "ui/PatchEditorDialog.h"
+#include "ui/AutoLevelDialog.h"
 #include "ui/WorkspaceSettingsDialog.h"
 
 #include <set>
@@ -338,6 +339,7 @@ MainComponent::~MainComponent()
     midiRouter.reset();
     AudioSettingsDialog::closeIfOpen();
     PatchEditorDialog::closeIfOpen();   // references the document, engine and plugin windows: before they go
+    AutoLevelDialog::closeIfOpen();
     pluginWindows.closeAll();
     engine.setChainListener (nullptr);
     document.removeListener (this);
@@ -883,6 +885,11 @@ void MainComponent::getCommandInfo (juce::CommandID commandID, juce::Application
             result.setActive (canEdit);   // show mode: the project, devices, patches, plugins and updates are locked
             break;
 
+        case CommandIDs::autoLevelSettings:
+            result.setActive (canEdit);
+            result.setTicked (document.settings.autoLevelEnabled);
+            break;
+
         case CommandIDs::pluginManager:
             result.setActive (canEdit);   // show mode: the project, devices, patches, plugins and updates are locked
             break;
@@ -939,9 +946,13 @@ bool MainComponent::perform (const InvocationInfo& info)
         case CommandIDs::pauseToggle:
             if (spaceBarPlayPause)
             {
-                // Space moved onto 일시정지 / 재개 in the shortcut settings: the same play / pause / resume as on GO
+                // Space moved onto 일시정지 / 재개 in the shortcut settings: the same play / pause / resume as on GO.
+                // This command gets no key-up callback: Space joins the held GO keys until it is really up, so "release
+                // the GO key first" opens once every GO key - Space and the others, whichever comes up first - is up.
+                if (input != nullptr)
+                    shortcuts->activations().hold (input->token);
                 controller.go (false, input != nullptr ? input->observedTimeMs * 0.001 : -1.0, true);
-                controller.goKeyReleased();   // this command gets no key-up callback
+                releaseGoWhenSpaceUp = true;
                 break;
             }
             if (! controller.togglePause())
@@ -1213,6 +1224,7 @@ bool MainComponent::perform (const InvocationInfo& info)
             const bool on = ! settings.getSpaceBarPlayPause();
             settings.setSpaceBarPlayPause (on);
             commands.commandStatusChanged();
+            updateTransportStandby();   // the list's key hint names what Space does now
             transport.showStatus (on ? ko ("스페이스바 재생/일시정지: 켜짐") : ko ("스페이스바 재생/일시정지: 꺼짐"), false);
             break;
         }
@@ -1267,6 +1279,10 @@ bool MainComponent::perform (const InvocationInfo& info)
 
         case CommandIDs::audioPatches:
             PatchEditorDialog::show (document, engine, pluginWindows, [this] { showPluginManager(); }, this);
+            break;
+
+        case CommandIDs::autoLevelSettings:
+            if (! showMode) AutoLevelDialog::show (document, engine, this);
             break;
 
         case CommandIDs::pluginManager:
@@ -1417,6 +1433,7 @@ juce::PopupMenu MainComponent::getMenuForIndex (int topLevelMenuIndex, const juc
         case 4:   // 설정: the audio device and patches, plugins, this PC's UI scale, the project's own settings
             menu.addCommandItem (&commands, CommandIDs::audioSettings);
             menu.addCommandItem (&commands, CommandIDs::audioPatches);
+            menu.addCommandItem (&commands, CommandIDs::autoLevelSettings);
             menu.addSeparator();
             menu.addCommandItem (&commands, CommandIDs::pluginManager);
             menu.addCommandItem (&commands, CommandIDs::masterInserts);
@@ -2027,6 +2044,7 @@ int MainComponent::applyUiScale (int percent)
 
 void MainComponent::setShowMode (bool shouldBeShowMode)
 {
+    if (shouldBeShowMode) AutoLevelDialog::closeIfOpen();
     showMode = shouldBeShowMode;
     shortcuts->setEditingLocked (showMode);
     showModeFlag.store (shouldBeShowMode, std::memory_order_release);
@@ -2643,6 +2661,7 @@ void MainComponent::newProject()
 {
     WorkspaceSettingsDialog::closeIfOpen();   // it edits the document that is about to be replaced
     PatchEditorDialog::closeIfOpen();
+    AutoLevelDialog::closeIfOpen();
     pendingStartOnOpenCue.clear();
     controller.resetForNewProject();   // fades, revert history, playlists, waits: nothing of this project survives
     pluginWindows.closeAll();
@@ -2697,6 +2716,7 @@ void MainComponent::openProjectFile (const juce::File& file, bool allowAutoStart
 
     WorkspaceSettingsDialog::closeIfOpen();
     PatchEditorDialog::closeIfOpen();
+    AutoLevelDialog::closeIfOpen();
     pendingStartOnOpenCue.clear();
     controller.resetForNewProject();   // fades, revert history, playlists, waits: nothing of this project survives
     pluginWindows.closeAll();
@@ -3307,9 +3327,19 @@ void MainComponent::updateTransportStandby()
         const auto& cue = document.cues.get (index);
         return cue.number.isNotEmpty() ? cue.number : "#" + juce::String (index + 1);
     };
+    auto goKeysHint = [this]
+    {
+        // 설정 > 스페이스바 재생/일시정지: a plain Space is no longer plain GO - the hint says what it does now
+        const juce::KeyPress space (juce::KeyPress::spaceKey);
+        auto goKeys = shortcuts->getKeys ("transport.go");
+        if (! (settings.getSpaceBarPlayPause() && (goKeys.contains (space) || shortcuts->getKeys ("transport.pauseToggle").contains (space))))
+            return ShortcutDisplay::currentKeys (shortcuts.get(), CommandIDs::go) + " = GO";
+        goKeys.removeAllInstancesOf (space);
+        return ko ("Space = 재생/일시정지") + (goKeys.isEmpty() ? juce::String() : ko (" · ") + ShortcutDisplay::keys (goKeys) + " = GO");
+    };
     containerTabs.setInfoText (document.isActiveCart() ? ko ("카트: 버튼 클릭 = 실행")
                                 : ko ("선택 ") + number (document.cues.getSelectedIndex())
-                                    + ko (" · 다음 ") + number (document.cues.getPlayheadIndex()) + ko (" · ") + ShortcutDisplay::currentKeys (shortcuts.get(), CommandIDs::go) + " = GO");
+                                    + ko (" · 다음 ") + number (document.cues.getPlayheadIndex()) + ko (" · ") + goKeysHint());
 }
 
 void MainComponent::updateAudioStatus()
@@ -3400,6 +3430,13 @@ void MainComponent::installEscapePolicy (juce::Component& root)
 
 void MainComponent::timerCallback()
 {
+    if (releaseGoWhenSpaceUp && ! juce::KeyPress::isKeyCurrentlyDown (juce::KeyPress::spaceKey) && ! shortcutRouter->anyGoKeyHeld())
+    {
+        releaseGoWhenSpaceUp = false;
+        shortcuts->activations().consumeRelease();
+        controller.goKeyReleased();
+    }
+
     if (midiInput != nullptr && midiRouter != nullptr)
     {
         const auto summary = ShortcutDisplay::midiSummary (*midiInput, shortcuts.get());
@@ -3716,6 +3753,7 @@ void MainComponent::containersChanged()
 
 void MainComponent::documentStateChanged()
 {
+    engine.setAutoLevel (document.settings.autoLevelEnabled, document.settings.autoLevelTargetLufs);
     unsavedChanges.store (document.isDirty(), std::memory_order_relaxed);
     updateInputsWanted();
     commands.commandStatusChanged();   // undo / redo names and availability

@@ -52,7 +52,11 @@ namespace ProjectSerializer
 {
     /** 1: cues with fadeInMs / fadeOutMs / gainDb.  2: "audio" object (trim, loops, rate, envelope); fadeInMs migrates to the envelope.
         3: cue list fields (number, colours, waits, continue mode, hotkey, wall clock, fade-stop-others, duck), settings (template, row size). */
-    constexpr int currentVersion = 7;   // 4: expanded cues/patches. 5: lists/carts. 6: fade mode. 7: MIDI triggers.
+    constexpr int currentVersion = 8;   // 4: expanded cues/patches. 5: lists/carts. 6: fade mode. 7: MIDI triggers. 8: auto level.
+    /** The version a save writes: the oldest that keeps everything the project uses. 자동 레벨 맞추기 on = 8, so an older
+        Enqueue says "update" instead of playing it without the leveler and dropping the setting on its next save;
+        anything else still writes 7 and keeps opening in 0.14 and older. */
+    int versionFor (const Project& project) noexcept;
     constexpr const char* fileExtension = ".enqueue";          // 0.9.0: the app was renamed from GoCue
     constexpr const char* openableExtensions = ".enqueue;.gocue";   // projects from before the rename still open
 

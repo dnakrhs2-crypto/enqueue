@@ -76,6 +76,9 @@ public:
     void setEnvelope (const Envelope& newEnvelope);
     /** Live envelope edit: swapped in under a spin lock, heard from the next block. Message thread. */
     void setLiveEnvelope (Envelope newEnvelope);
+    /** Whether the audible span crosses attenuation. The read-ahead cursor is deliberately ignored.
+        Uses the renderer's existing layout/envelope snapshots; no allocation. */
+    bool isEnvelopeAttenuated (double virtualPosition, double fileSamples) const noexcept;
 
     /** Consistent snapshot of the region (start, length) in file samples. Any thread. */
     void getRegion (juce::int64& startSample, juce::int64& lengthSamples) const noexcept;
@@ -161,6 +164,8 @@ private:
     std::atomic<bool> reachedEnd { false };
     Envelope envelope;                    // read on the audio thread under envelopeLock
     mutable juce::SpinLock envelopeLock;
+    std::atomic<bool> envelopeActive { false };
+    mutable bool lastEnvelopeAttenuated = false;   // audio thread only: the answer while a lock is busy
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (RegionLoopSource)
 };

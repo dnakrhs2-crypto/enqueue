@@ -22,6 +22,7 @@ public:
     void refresh();
     void setEditable (bool shouldBeEditable);
     void setInfoText (juce::String text);
+    const juce::String& getInfoText() const noexcept { return infoText; }
     void setStatusBar (FooterBar& status);
 
     std::function<void (int index)> onSelect;

@@ -126,6 +126,14 @@ public:
     /** Before start(): the duck the instance begins at (a cue that starts while a duck cue runs). Message thread. */
     void setInitialDuckDb (double duckDb) noexcept;
     double getDuckDb() const noexcept { return duckDb.load (std::memory_order_relaxed); }
+    /** Audio thread, after rendering, under the engine lock: intentional level changes in this block. */
+    bool isAutoLevelHeld() const noexcept { return autoLevelHeld; }
+    /** Engine, audio thread, before renderNextBlock: whether the auto level listens (off = no envelope query at all). */
+    void setAutoLevelWatch (bool on) noexcept { autoLevelWatch = on; }
+    /** The cue's own level (its gainDb) the auto level compares the live gain with: a fade-in cue, a volume cue or a
+        live edit moves the live gain away from it (held); the end of a fade-in brings it back (released). Engine,
+        under its lock or before the instance renders. */
+    void setBaseGainDb (double gainDb) noexcept { baseGainDb = juce::jlimit (Cue::minGainDb, Cue::maxGainDb, gainDb); }
     /** Live level matrix / trim from the inspector; the audio thread ramps to the new gains over ~10 ms. Message thread. */
     void setLiveLevels (const LevelMatrix& levels, const TrimLevels& trim);
     /** The values last given to setLiveGainDb / setLiveLevels (or the cue's own at start). Message thread. */
@@ -202,6 +210,9 @@ private:
     int numChannels = 2;
     int numOutputs = 2;
     double liveGainDb = 0.0;          // message-thread mirrors of the live levels (for fade cues)
+    double baseGainDb = 0.0;          // the cue's own level: a live gain away from it is the user's move (auto level holds)
+    bool autoLevelHeld = false;
+    bool autoLevelWatch = false;
     LevelMatrix liveLevels;
     TrimLevels liveTrim;
     std::vector<float> currentGains, targetGains, publishedGains;   // [input * numOutputs + output]

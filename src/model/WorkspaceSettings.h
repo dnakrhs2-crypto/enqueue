@@ -34,6 +34,8 @@ struct WorkspaceSettings
     // 오디오
     double maxLevelDb = 12.0;
     double minLevelDb = -60.0;
+    bool autoLevelEnabled = false;
+    double autoLevelTargetLufs = -16.0;
 
     // 오디션: how an audition GO (Alt+Space) / audition preview (Alt+V) plays
     enum class Audition { unchanged, none, alternatePatch };
@@ -99,6 +101,8 @@ struct WorkspaceSettings
         fix (numberIncrement, 0.001, 1000.0, 1.0);
         fix (maxLevelDb, -30.0, 24.0, 12.0);      // the matrix / main level clamp at +24 and -120 (LevelMatrix::maxDb / silentDb)
         fix (minLevelDb, -120.0, -40.0, -60.0);
+        fix (autoLevelTargetLufs, -40.0, -6.0, -16.0);
+        autoLevelTargetLufs = std::round (autoLevelTargetLufs * 10.0) / 10.0;
         backupIntervalSeconds = juce::jlimit (5, 600, backupIntervalSeconds);
         rowSize = juce::jlimit (0, 2, rowSize);
         cueTemplate.sanitise();

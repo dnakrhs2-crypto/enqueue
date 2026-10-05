@@ -102,6 +102,7 @@ target_sources(GoCueCore INTERFACE
     ${CMAKE_CURRENT_SOURCE_DIR}/src/audio/HighQualityResampler.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/audio/AudioEngine.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/audio/LoudnessMeter.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/audio/AutoLeveler.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/audio/PluginChain.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/audio/PluginHost.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/audio/PluginScan.cpp
@@ -213,6 +214,7 @@ target_sources(Enqueue PRIVATE
     src/ui/PastePropertiesDialog.cpp
     src/ui/LevelMatrixComponent.cpp
     src/ui/PatchEditorDialog.cpp
+    src/ui/AutoLevelDialog.cpp
     src/ui/CurveEditor.cpp
     src/ui/PluginWindows.cpp
     src/ui/PluginChainComponent.cpp
