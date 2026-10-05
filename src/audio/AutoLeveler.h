@@ -92,6 +92,7 @@ private:
     double releaseGoal() noexcept;
     bool blare = false, releaseRide = false, snapBack = false;
     int blareBlocks = 0, blareHeldCount = 0, blareEnding = 0, quietRun = 0;
+    int sinceLoud = 0;   // blocks since the blare was last over the song's level: the song (and silence) after it
     double blareReference = 0.0;   // the song's level before it (LUFS, input)
     double blareLoud = 0.0;        // as block power: 6 LU over that - a blare block
     double releaseFrom = -100.0;   // where the hand was when it let a blare go as an effect: a take-back returns it there

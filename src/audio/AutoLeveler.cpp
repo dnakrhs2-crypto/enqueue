@@ -96,7 +96,7 @@ void AutoLeveler::clearMeasurement() noexcept
     recentEnergy.fill (0.0);
     recentPos = linger = sectionBlocks = urgentRun = urgentLatch = 0;
     earlyHold = -100.0;
-    pullDown = fastHand = blaring = false;
+    pullDown = fastHand = blaring = releaseRide = false;
     forgetBlare();
 }
 
@@ -121,7 +121,7 @@ void AutoLeveler::freezeGain() noexcept
     // Switched off: the ride stops where it is (the crossfade to the bypass hides it).
     gain = stopAt = smooth1 = smooth2 = 20.0 * std::log10 (linear);
     slewSpeed = wantSpeed = 0.0;
-    pullDown = fastHand = releaseRide = snapBack = false;
+    pullDown = fastHand = snapBack = false;   // the way back up after an effect (releaseRide) carries on if switched on within the fade
     earlyHold = -100.0;   // the hand moved to where the gain really is: a stop point set before means nothing now
     rampLeft = upWait = downWait = 0;
     linearStep = 0.0;
@@ -316,6 +316,7 @@ void AutoLeveler::finishMeasurement() noexcept
     {
         const double songPower = std::pow (10.0, (blareReference + 3.0 + 0.691) / 10.0);
         quietRun = active ? (power <= songPower ? quietRun + 1 : 0) : quietRun;   // silence neither counts nor breaks it
+        sinceLoud = active && power > songPower ? 0 : sinceLoud + 1;
         if (quietRun >= 5)
             endBlareAsEffect();      // 0.5 s back at the song's level: it was a sound effect
     }
@@ -349,17 +350,21 @@ void AutoLeveler::finishMeasurement() noexcept
         // 0.4 s, and keep that ceiling for 3 s, until the 3 s window has caught up. A shorter blast (an effect, two
         // with a gap between them) is the limiter's job, not the hand's.
         urgent = false;
+        if (blare && takeBackTo > -99.0)
+            goal = juce::jmin (goal, takeBackTo);   // a rest in a loud song that was let go too soon: back where it was (after a stop too)
         if (quick >= 3)
         {
             if (urgentRun >= 7)
                 urgentLatch = 30;
-            if (blare && takeBackTo > -99.0)
-                goal = juce::jmin (goal, takeBackTo);   // a rest in a loud song that was let go too soon: back where it was
             if (urgentLatch > 0 || blare)   // a blare keeps the ceiling until it is clear what it was
             {
                 goal = juce::jmin (goal, wanted + 1.0 - momentary);
                 urgent = true;
             }
+        }
+        else if (blare && blareBlock && haveDecision)
+        {
+            goal = juce::jmin (goal, desired);   // still blaring after a stop: the last ceiling holds until 0.3 s is heard again
         }
 
         goal = juce::jlimit (-20.0, 12.0, goal);
@@ -482,9 +487,9 @@ void AutoLeveler::endBlareAsEffect() noexcept
         if (p > blareLoud)
             p = 0.0;
     // its peaks leave the history too (one long effect's own peaks are no pattern to cap a boost): from its first block
-    // (blareBlocks - 1 blocks ago) to the block before the two that ended it
+    // (blareBlocks - 1 blocks ago) to its last one over the song's level - the song after it keeps its own
     const int peakSize = (int) peaks.size();
-    for (int age = 2; age < juce::jmin (blareBlocks, peakSize); ++age)
+    for (int age = sinceLoud; age < juce::jmin (blareBlocks, peakSize); ++age)
         peaks[(size_t) ((peakPos - 1 - age + 2 * peakSize) % peakSize)] = 0.0f;
     urgentLatch = urgentRun = 0;
     urgent = false;
@@ -532,7 +537,7 @@ void AutoLeveler::endBlareAsMaterial() noexcept
 void AutoLeveler::forgetBlare() noexcept
 {
     blare = snapBack = false;
-    blareBlocks = blareHeldCount = blareEnding = quietRun = 0;
+    blareBlocks = blareHeldCount = blareEnding = quietRun = sinceLoud = 0;
     releaseFrom = takeBackTo = -100.0;
 }
 
