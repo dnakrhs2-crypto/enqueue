@@ -1761,7 +1761,7 @@ int CueController::fireSequence (CueList& cues, int index, bool audition)
 }
 
 //==============================================================================
-CueController::GoResult CueController::go (bool audition, double observedSeconds)
+CueController::GoResult CueController::go (bool audition, double observedSeconds, bool pauseWhenPlaying)
 {
     const auto& settings = document.settings;
     const double now = observedSeconds >= 0.0 ? observedSeconds : clock();
@@ -1796,6 +1796,25 @@ CueController::GoResult CueController::go (bool audition, double observedSeconds
         engine.resumeAll();
         status (ko ("재개"));
         return GoResult::resumed;
+    }
+
+    if (pauseWhenPlaying)
+    {
+        // 스페이스바 재생/일시정지: what plays is paused (a loaded cue is not playing yet); a resume is the branch above
+        bool pausedAny = false;
+
+        for (const auto& p : engine.getPlayingCues())
+            if (! p.loaded && ! p.paused)
+            {
+                engine.pause (p.id);
+                pausedAny = true;
+            }
+
+        if (pausedAny)
+        {
+            status (ko ("일시정지"));
+            return GoResult::paused;
+        }
     }
 
     if (document.isActiveCart())

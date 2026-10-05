@@ -96,7 +96,8 @@ enum : juce::CommandID
     // Append only: numeric IDs also belong to JUCE command/key mappings.
     addVolumeCue,          // Ctrl+Alt+7
     showActiveCuesWindow,  // no default key
-    toggleFullScreen      // F11
+    toggleFullScreen,     // F11
+    toggleSpaceBarPlayPause   // 설정 > 스페이스바 재생/일시정지 (this PC): Space pauses / resumes / plays
 };
 
 /** The registration path used by MainComponent, kept independent of the shortcut catalog. */
@@ -126,7 +127,8 @@ inline const juce::Array<juce::CommandID>& getAllMainCommands()
                     CommandIDs::youtubeDownload,
                     CommandIDs::uiScale100, CommandIDs::uiScale110, CommandIDs::uiScale125, CommandIDs::uiScale150,
                     CommandIDs::reopenLastProjectAsk, CommandIDs::reopenLastProjectAlways, CommandIDs::reopenLastProjectNever,
-                    CommandIDs::addVolumeCue, CommandIDs::showActiveCuesWindow, CommandIDs::toggleFullScreen };
+                    CommandIDs::addVolumeCue, CommandIDs::showActiveCuesWindow, CommandIDs::toggleFullScreen,
+                    CommandIDs::toggleSpaceBarPlayPause };
     return ids;
 }
 

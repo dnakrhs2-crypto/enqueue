@@ -235,6 +235,20 @@ void WaveformView::zoomVertical (float factor)
     repaint();
 }
 
+float WaveformView::getWaveScale (int channel) const noexcept
+{
+    if (! hasCue)
+        return verticalZoom;
+
+    // what reaches the matrix: the main level and this file channel's input level (crosspoints / outputs route it on)
+    float level = cue.gainLinear();
+
+    if (juce::isPositiveAndBelow (channel, cue.levels.numInputs()))
+        level *= LevelMatrix::linear (cue.levels.inputDb[(size_t) channel]);
+
+    return verticalZoom * level;   // a wave taller than its lane is cut flat at the lane edge, like a clip
+}
+
 void WaveformView::scrollBarMoved (juce::ScrollBar*, double newRangeStart)
 {
     const double span = viewEnd - viewStart;
@@ -291,7 +305,7 @@ void WaveformView::paint (juce::Graphics& g)
 
             if (viewChannel >= 0 && viewChannel < numChannels)
             {
-                thumbnail.drawChannel (g, waveArea.reduced (0, 4), viewStart, viewEnd, viewChannel, verticalZoom);
+                thumbnail.drawChannel (g, waveArea.reduced (0, 4), viewStart, viewEnd, viewChannel, getWaveScale (viewChannel));
             }
             else
             {
@@ -301,7 +315,7 @@ void WaveformView::paint (juce::Graphics& g)
                     const int bottom = waveArea.getY() + (ch + 1) * waveArea.getHeight() / numChannels;
                     thumbnail.drawChannel (g, juce::Rectangle<int> (waveArea.getX(), top, waveArea.getWidth(), bottom - top)
                                                   .reduced (0, juce::jmin (4, (bottom - top) / 4)),
-                                           viewStart, viewEnd, ch, verticalZoom);
+                                           viewStart, viewEnd, ch, getWaveScale (ch));
                 }
             }
         };

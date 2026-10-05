@@ -78,6 +78,11 @@ public:
     bool getYouTubeAddToQueue() const;
     void setYouTubeAddToQueue (bool add);
 
+    /** 설정 > 스페이스바 재생/일시정지 (off by default): a plain Space pauses what plays, resumes what is paused and
+        GOes only when nothing plays. Per PC on purpose, like the keyboard shortcuts. */
+    bool getSpaceBarPlayPause() const;
+    void setSpaceBarPlayPause (bool on);
+
     /** 플러그인 관리: the plugins whose "사용" switch is off (PluginHost::keyFor keys), out of every '+ 추가' menu. */
     juce::StringArray getDisabledPlugins() const;
     void setDisabledPlugins (const juce::StringArray& keys);

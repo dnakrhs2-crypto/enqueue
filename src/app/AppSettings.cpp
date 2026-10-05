@@ -22,6 +22,7 @@ namespace Keys
     constexpr const char* activeCuesFolded  = "activeCuesCollapsed";
     constexpr const char* reopenAfterUpdate = "reopenProjectAfterUpdate";
     constexpr const char* youtubeAddToQueue = "youtubeAddToQueue";
+    constexpr const char* spaceBarPlayPause = "spaceBarPlayPause";
     constexpr const char* disabledPlugins   = "disabledPlugins";
     constexpr const char* lufsAverageSeconds = "lufsAverageSeconds";
     constexpr const char* uiScalePercent    = "uiScalePercent";
@@ -229,6 +230,16 @@ bool AppSettings::getYouTubeAddToQueue() const
 void AppSettings::setYouTubeAddToQueue (bool add)
 {
     settings->setValue (Keys::youtubeAddToQueue, add);
+}
+
+bool AppSettings::getSpaceBarPlayPause() const
+{
+    return settings->getBoolValue (Keys::spaceBarPlayPause, false);
+}
+
+void AppSettings::setSpaceBarPlayPause (bool on)
+{
+    settings->setValue (Keys::spaceBarPlayPause, on);
 }
 
 juce::StringArray AppSettings::getDisabledPlugins() const

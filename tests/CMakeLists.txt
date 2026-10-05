@@ -94,6 +94,8 @@ target_sources(EnqueueTests PRIVATE
     UiScaleTests.cpp
     FullScreenTests.cpp
     FullScreenUiTests.cpp
+    SpaceBarPlayPauseTests.cpp
+    WaveHeightTests.cpp
     ReopenLastProjectTests.cpp
     CueIconsTests.cpp
     WaitProgressTests.cpp

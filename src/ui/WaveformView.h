@@ -39,6 +39,9 @@ public:
     /** Vertical size of the wave drawing (1 = a full-scale signal fills the height); multiplied by 'factor', kept 0.25..16. */
     void zoomVertical (float factor);
     float getVerticalZoom() const noexcept { return verticalZoom; }
+    /** The vertical scale a file channel's wave is drawn with: the vertical zoom times the cue's level (the main
+        level and that channel's input level), so turning the cue up or down makes its wave taller or flatter. */
+    float getWaveScale (int channel) const noexcept;
     /** The click cursor, in file seconds (used by Shift+I / Shift+O / M). */
     double getCursorSeconds() const noexcept { return cursor; }
 

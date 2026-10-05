@@ -37,9 +37,9 @@ public:
     void runTest() override
     {
         const auto& catalog = ShortcutCatalog::get();
-        beginTest ("all 80 MainComponent registration IDs and JUCE quit have unique stable catalog entries");
+        beginTest ("all 81 MainComponent registration IDs and JUCE quit have unique stable catalog entries");
         auto registered = CommandIDs::getAllMainCommands(); // the exact path called by MainComponent::getAllCommands
-        expectEquals (registered.size(), 80);
+        expectEquals (registered.size(), 81);
         registered.add (juce::StandardApplicationCommandIDs::quit);
         expectEquals (static_cast<int> (catalog.getCommands().size()), registered.size());
         std::set<juce::String> ids;

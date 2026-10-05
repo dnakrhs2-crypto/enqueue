@@ -199,6 +199,9 @@ std::vector<ShortcutDefinition> makeCommands()
         command ("view.reopenLastProjectNever", CommandIDs::reopenLastProjectNever, ko ("열지 않음"),
                  ko ("시작할 때 최근 프로젝트를 열지 않습니다. 이 PC에 저장"),
                  Category::view, Scope::mainWindow, false, ko ("설정"), {}),
+        command ("view.spaceBarPlayPause", CommandIDs::toggleSpaceBarPlayPause, ko ("스페이스바 재생/일시정지"),
+                 ko ("켜면 Space가 재생 중에는 일시정지, 일시정지 중에는 재개, 멈춰 있을 때는 GO. GO 버튼·MIDI는 그대로. 이 PC에 저장"),
+                 Category::view, Scope::mainWindow, false, ko ("설정"), {}),
         command ("app.quit", juce::StandardApplicationCommandIDs::quit, ko ("종료"), ko ("앱 종료"),
                  Category::fileSettings, Scope::mainWindow, false, "Application", { key ('Q', ModifierKeys::commandModifier) })
     };

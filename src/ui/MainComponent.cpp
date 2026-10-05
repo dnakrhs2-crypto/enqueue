@@ -843,6 +843,11 @@ void MainComponent::getCommandInfo (juce::CommandID commandID, juce::Application
             result.setActive (canEdit);
             break;
 
+        case CommandIDs::toggleSpaceBarPlayPause:
+            result.setTicked (settings.getSpaceBarPlayPause());
+            result.setActive (canEdit);   // show mode: locked like the other 설정 choices
+            break;
+
         case CommandIDs::undo:
             result.shortName = document.canUndo() ? ko ("실행 취소: ") + document.getUndoName() : ko ("실행 취소");
             result.setActive (canEdit && document.canUndo());
@@ -907,6 +912,11 @@ bool MainComponent::perform (const InvocationInfo& info)
     const auto* input = shortcuts->currentInvocation();
     const bool midi = input != nullptr && input->kind == InputKind::midi;
     const bool physical = midi || info.invocationMethod == InvocationInfo::fromKeyPress;
+    // 설정 > 스페이스바 재생/일시정지: a plain Space key only - the GO button, MIDI and Alt+Space stay what they were
+    const bool spaceBarPlayPause = settings.getSpaceBarPlayPause() && ! midi
+                                   && info.invocationMethod == InvocationInfo::fromKeyPress
+                                   && info.keyPress.isKeyCode (juce::KeyPress::spaceKey)
+                                   && ! info.keyPress.getModifiers().isAnyModifierKeyDown();
     switch (info.commandID)
     {
         case CommandIDs::go:
@@ -917,7 +927,7 @@ bool MainComponent::perform (const InvocationInfo& info)
             }
             else
             {
-                controller.go (false, input != nullptr ? input->observedTimeMs * 0.001 : -1.0);
+                controller.go (false, input != nullptr ? input->observedTimeMs * 0.001 : -1.0, spaceBarPlayPause);
                 if (! midi && (info.invocationMethod != InvocationInfo::fromKeyPress
                     || (info.originatingComponent != nullptr && isParentOf (info.originatingComponent))))
                     table.focusTable();
@@ -927,6 +937,13 @@ bool MainComponent::perform (const InvocationInfo& info)
             break;
 
         case CommandIDs::pauseToggle:
+            if (spaceBarPlayPause)
+            {
+                // Space moved onto 일시정지 / 재개 in the shortcut settings: the same play / pause / resume as on GO
+                controller.go (false, input != nullptr ? input->observedTimeMs * 0.001 : -1.0, true);
+                controller.goKeyReleased();   // this command gets no key-up callback
+                break;
+            }
             if (! controller.togglePause())
                 transport.showStatus (ko ("재생 중인 큐가 없습니다"), false);
             break;
@@ -1191,6 +1208,15 @@ bool MainComponent::perform (const InvocationInfo& info)
             applyReopenLastProjectPolicy (reopenLastProjectPolicies[info.commandID - CommandIDs::reopenLastProjectAsk]);
             break;
 
+        case CommandIDs::toggleSpaceBarPlayPause:
+        {
+            const bool on = ! settings.getSpaceBarPlayPause();
+            settings.setSpaceBarPlayPause (on);
+            commands.commandStatusChanged();
+            transport.showStatus (on ? ko ("스페이스바 재생/일시정지: 켜짐") : ko ("스페이스바 재생/일시정지: 꺼짐"), false);
+            break;
+        }
+
         case CommandIDs::undo:
             if (document.undo())
                 transport.showStatus (ko ("실행 취소"), false);
@@ -1413,6 +1439,7 @@ juce::PopupMenu MainComponent::getMenuForIndex (int topLevelMenuIndex, const juc
                 menu.addSubMenu (ko ("시작할 때 최근 프로젝트 (이 PC)"), reopen, ! showMode);
             }
 
+            menu.addCommandItem (&commands, CommandIDs::toggleSpaceBarPlayPause);
             menu.addSeparator();
             menu.addCommandItem (&commands, CommandIDs::workspaceSettings);
             break;

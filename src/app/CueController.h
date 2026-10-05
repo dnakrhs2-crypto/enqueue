@@ -30,6 +30,7 @@ public:
     {
         started,          // a cue (or sequence) was fired
         resumed,          // paused cues were resumed instead
+        paused,           // 스페이스바 재생/일시정지: the playing cues were paused instead
         ignored,          // the cue's second-trigger rule swallowed the GO (or acted on the running instance)
         rejectedDoubleGo, // within the minimum time between GOs
         rejectedKeyUp,    // the GO key has not been released yet
@@ -39,8 +40,10 @@ public:
 
     /** Space: resumes paused cues if there are any; otherwise fires the playhead cue (and the sequence it
         heads) and moves the playhead past the sequence. 'audition' (Alt+Space) plays the way the workspace
-        audition setting says: unchanged / no output / an alternate patch. */
-    GoResult go (bool audition = false, double observedSeconds = -1.0);
+        audition setting says: unchanged / no output / an alternate patch.
+        'pauseWhenPlaying' (설정 > 스페이스바 재생/일시정지, a plain Space only): with nothing paused, the cues that
+        play are paused instead of firing anything - the same double-GO / key-up / panic gates come first. */
+    GoResult go (bool audition = false, double observedSeconds = -1.0, bool pauseWhenPlaying = false);
     /** The GO key was released (for "require key up before the next GO"). */
     void goKeyReleased();
     /** P: pauses the target cue (the standby cue if it is playing, else the most recently started one);
