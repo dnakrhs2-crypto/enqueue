@@ -47,6 +47,11 @@ public:
     static constexpr int recheckSliceFiles = 16;   // files looked at between two regions measured
 
     LoudnessScan (juce::AudioFormatManager& formats, const juce::File& cacheFile);
+    /** The app's: the scan owns its formats, so one left to the process end in a read that does not return (stopForExit)
+        never touches what the rest of the app has already destroyed. */
+    LoudnessScan (std::unique_ptr<juce::AudioFormatManager> ownFormats, const juce::File& cacheFile);
+    /** The formats the engine reads cues with (WAV, AIFF, FLAC, Ogg, MP3, and AAC/M4A/WMA through Media Foundation). */
+    static std::unique_ptr<juce::AudioFormatManager> makeFormats();
     ~LoudnessScan() override;
 
     /** The result for this file region once confirmed this session (measured, or the file unchanged since an earlier
@@ -107,7 +112,10 @@ private:
     /** Until the next round is due (10 .. 2000 ms). Scan thread. */
     int msToNextRecheck() const noexcept;
 
+    void begin();
+    std::unique_ptr<juce::AudioFormatManager> ownedFormats;   // (before 'formats', which may refer to it)
     juce::AudioFormatManager& formats;
+    std::map<juce::String, juce::uint32> pathChanges;          // scan thread: how often each file was seen to change
     const juce::File cacheFile;
     juce::CriticalSection lock;             // entries / queue / checked / inQueue - never taken by the audio thread
     std::map<Key, Entry> entries;

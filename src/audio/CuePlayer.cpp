@@ -543,32 +543,39 @@ void CuePlayer::mixIntoBus (juce::AudioBuffer<float>& bus, const juce::AudioBuff
     const float alpha = (float) juce::jmin (1.0, (double) numSamples / (0.010 * currentSampleRate));   // ~10 ms level ramps
 
     // the loudness match, decided with the master's switch of this very block (setMatchContext): started while on, at its
-    // match from the first sample, made up for the hand as it is now; switched off back to the file, switched on again to
-    // the match made up for the hand then - each at most 40 dB/s
-    const float full = matchFull.load (std::memory_order_relaxed);
+    // match from the first sample, made up for the hand as it is now. A switch - also one that went off and on again
+    // between two blocks, which its generation tells - takes the cue's match as handed over then: on, made up for the
+    // hand of that block; off, back to the file - each at most 40 dB/s. Only a cue whose source plays its region straight
+    // through gets one (no slice skipped, repeated or looping, as the layout really is).
+    const float full = matchFull.load (std::memory_order_acquire);
+    const auto adopt = [&]
+    {
+        matchActive = contextOn && full > 0.0f && (source == nullptr || source->playsStraightThrough());
+        matchAdopted = matchActive ? full : 1.0f;
+        matchComp = 1.0f / contextHand;
+        matchOn = contextOn;
+        matchGeneration = contextGeneration;
+    };
 
     if (matchRebasePending.exchange (false, std::memory_order_acq_rel))
     {
-        matchComp = 1.0f;                          // the master's hand is back at 0 dB: the cue's own match,
-        matchLevel = matchActive ? full : 1.0f;    // at once (the output was interrupted anyway)
+        matchComp = 1.0f;                                  // a new format: the master starts at 0 dB, the cue's own match
+        matchLevel = matchActive ? matchAdopted : 1.0f;    // at once (the output was interrupted anyway)
     }
 
     if (matchStartPending.exchange (false, std::memory_order_acq_rel))
     {
-        matchActive = contextOn && full > 0.0f;
-        matchComp = 1.0f / contextHand;
-        matchLevel = matchActive ? juce::jlimit (0.01f, 100.0f, full * matchComp) : 1.0f;
+        adopt();
+        matchLevel = matchActive ? juce::jlimit (0.01f, 100.0f, matchAdopted * matchComp) : 1.0f;   // from the first sample
     }
-    else if (contextOn != matchOn)
+    else if (contextOn != matchOn || contextGeneration != matchGeneration)
     {
-        matchActive = contextOn && full > 0.0f;
-        matchComp = 1.0f / contextHand;
+        adopt();
     }
 
-    matchOn = contextOn;
     const float matchStart = matchLevel;
     // the match (-20 .. +12) made up for a hand of -20 .. +12: -32 .. +32 dB
-    const float matchGoal = matchActive ? juce::jlimit (0.01f, 100.0f, full * matchComp) : 1.0f;
+    const float matchGoal = matchActive ? juce::jlimit (0.01f, 100.0f, matchAdopted * matchComp) : 1.0f;
 
     if (matchGoal != matchLevel)
     {

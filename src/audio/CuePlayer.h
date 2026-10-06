@@ -141,10 +141,11 @@ public:
         its cue's own match at once (the output was interrupted anyway). Under the engine lock. */
     void rebaseMatch() noexcept { matchRebasePending.store (true, std::memory_order_release); }
     /** Audio thread, before mixIntoBus: the master's switch for this block and its hand's gain at the block's start. */
-    void setMatchContext (bool on, double handDb) noexcept
+    void setMatchContext (bool on, double handDb, juce::uint32 generation) noexcept
     {
         contextOn = on;
         contextHand = (float) juce::Decibels::decibelsToGain (juce::jlimit (-40.0, 40.0, handDb), -1000.0);
+        contextGeneration = generation;
     }
     /** Audio thread: the instance plays at its match, or is still on its way back to 0 dB. */
     bool isMatchApplied() const noexcept { return matchActive || matchLevel != 1.0f; }
@@ -282,8 +283,11 @@ private:
     std::atomic<bool> matchStartPending { false };  // startMatch(): the next mix is the instance's start
     std::atomic<bool> matchRebasePending { false }; // rebaseMatch(): the master leveler started again
     bool contextOn = false;                         // audio thread: this block's master switch (setMatchContext) ...
-    float contextHand = 1.0f;                       // ... and its hand's gain (linear)
-    bool matchOn = false;                           // audio thread: the switch the last mix saw
+    float contextHand = 1.0f;                       // ... its hand's gain (linear) ...
+    juce::uint32 contextGeneration = 0;             // ... and the switch's generation (AudioEngine::setAutoLevel)
+    bool matchOn = false;                           // audio thread: the switch the last mix saw ...
+    juce::uint32 matchGeneration = 0;               // ... and its generation
+    float matchAdopted = 1.0f;                      // audio thread: the cue's match taken at the start / the last switch
     bool matchActive = false;                       // audio thread: the instance plays at its match
     float matchComp = 1.0f;                         // audio thread: what its activation made up for the hand (linear)
     float matchLevel = 1.0f;                        // audio thread: the match the last mix ended at

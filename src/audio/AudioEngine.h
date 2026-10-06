@@ -250,11 +250,10 @@ public:
     // Plugin chains (all owned by the engine so they outlive the players that use them)
 
     PluginChain& getMasterChain() noexcept { return masterChain; }
-    void setAutoLevel (bool enabled, double targetLufs) noexcept
-    {
-        autoLeveler.setTargetLufs (targetLufs);
-        autoLeveler.setEnabled (enabled);
-    }
+    /** 자동 레벨 on or off and its target. A switch moves the generation the cues re-adopt their match by (also when it
+        goes off and on again before a block sees it); switching off also sizes the release's wait: the latency of the
+        inserts after the cues (patch and master chains). Message thread. */
+    void setAutoLevel (bool enabled, double targetLufs);
     double getAutoLevelGainDb() const noexcept { return autoLeveler.getGainDb(); }
     /** The last rendered block held the auto level (a fade, duck, volume change or panic was under way). */
     bool isAutoLevelHeld() const noexcept { return autoLeveler.isHeld(); }
@@ -392,6 +391,10 @@ private:
     AutoLeveler autoLeveler;
     std::map<juce::Uuid, double> matchByCue;   // message thread
     bool matchActive = false;                  // message thread
+    std::atomic<juce::uint32> switchGeneration { 0 };   // 자동 레벨 switched (setAutoLevel): the cues re-adopt their match
+    std::atomic<int> matchReleaseLatency { 0 };         // the inserts' latency after the cues, taken at a switch-off
+    /** The latency the inserts after the cues add (a patch's cue-output and device-output chains, the master inserts). */
+    int insertLatencyAfterCues();
     /** The cue's measured match, or nothing (matching off, not measured, no audio cue): what its instances are handed -
         they make up for the master's hand themselves, on the audio thread, with the switch of the very block. */
     std::optional<double> fullMatchFor (const Cue& cue) const;

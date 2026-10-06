@@ -1,6 +1,7 @@
 #include "audio/LoudnessScan.h"
 
 #include "audio/LoudnessMeter.h"
+#include "audio/MediaFoundationAudioFormat.h"
 #include "model/SafeFileWrite.h"
 
 #include <algorithm>
@@ -46,6 +47,28 @@ LoudnessScan::Key LoudnessScan::keyFor (const juce::File& file, double regionSta
 
 LoudnessScan::LoudnessScan (juce::AudioFormatManager& formatsToUse, const juce::File& cacheFileToUse)
     : juce::Thread ("Enqueue loudness scan"), formats (formatsToUse), cacheFile (cacheFileToUse)
+{
+    begin();
+}
+
+LoudnessScan::LoudnessScan (std::unique_ptr<juce::AudioFormatManager> ownFormats, const juce::File& cacheFileToUse)
+    : juce::Thread ("Enqueue loudness scan"), ownedFormats (std::move (ownFormats)), formats (*ownedFormats), cacheFile (cacheFileToUse)
+{
+    begin();
+}
+
+std::unique_ptr<juce::AudioFormatManager> LoudnessScan::makeFormats()
+{
+    auto made = std::make_unique<juce::AudioFormatManager>();
+    made->registerBasicFormats();
+
+    if (MediaFoundationAudioFormat::isAvailable())
+        made->registerFormat (new MediaFoundationAudioFormat(), false);   // as the engine registers them
+
+    return made;
+}
+
+void LoudnessScan::begin()
 {
     loadCache();
     lastRecheck = juce::Time::currentTimeMillis();
@@ -121,6 +144,9 @@ LoudnessScanResult LoudnessScan::measure (juce::AudioFormatManager& formatsToUse
 {
     LoudnessScanResult result;
     std::unique_ptr<juce::AudioFormatReader> reader (formatsToUse.createReaderFor (file));
+
+    if (keepGoing && ! keepGoing())
+        return {};   // the open itself may have waited on a share: an exit meanwhile wants nothing more
 
     if (reader == nullptr || ! (reader->sampleRate > 0.0) || reader->numChannels == 0)
     {
@@ -261,6 +287,9 @@ void LoudnessScan::run()
         const juce::int64 modified = size >= 0 ? file.getLastModificationTime().toMilliseconds() : 0;
         bool known = false;
 
+        if (threadShouldExit())
+            break;
+
         {
             const juce::ScopedLock sl (lock);
 
@@ -271,6 +300,8 @@ void LoudnessScan::run()
         if (! known)
         {
             LoudnessScanResult result;
+
+            const juce::uint32 changesBefore = pathChanges[key.path];
 
             if (size >= 0)
             {
@@ -286,6 +317,19 @@ void LoudnessScan::run()
 
                 if (threadShouldExit())
                     break;
+
+                // the file changed while it was read (seen here, or by the recheck through another region of it): what
+                // came out mixes two files - no answer; it is measured again, first
+                const juce::int64 sizeAfter = file.existsAsFile() ? file.getSize() : -1;
+                const juce::int64 modifiedAfter = sizeAfter >= 0 ? file.getLastModificationTime().toMilliseconds() : 0;
+
+                if (sizeAfter != size || modifiedAfter != modified || pathChanges[key.path] != changesBefore)
+                {
+                    const juce::ScopedLock sl (lock);
+                    queue.push_front (key);   // still in inQueue
+                    measuring.store (0, std::memory_order_relaxed);
+                    continue;
+                }
             }
 
             const juce::ScopedLock sl (lock);
@@ -345,6 +389,9 @@ bool LoudnessScan::recheckSome()
         const juce::int64 size = file.existsAsFile() ? file.getSize() : -1;
         const juce::int64 modified = size >= 0 ? file.getLastModificationTime().toMilliseconds() : 0;
 
+        if (threadShouldExit())
+            return false;
+
         {
             const juce::ScopedLock sl (lock);
             Key first;
@@ -362,6 +409,7 @@ bool LoudnessScan::recheckSome()
 
             if (differs)
             {
+                ++pathChanges[path];              // a region of it being measured now gives no answer either
                 for (const auto& key : regions)   // every region of the file: no answer until measured again - and first
                 {
                     checked.erase (key);

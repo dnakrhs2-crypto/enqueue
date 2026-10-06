@@ -66,8 +66,12 @@ int ReadAheadSource::getNumSamplesReady() const
 
 void ReadAheadSource::setNextReadPosition (juce::int64 newPosition)
 {
-    refilling.store (true, std::memory_order_relaxed);
-    playPos.store (newPosition, std::memory_order_relaxed);
+    {
+        const juce::ScopedLock sl (rangeLock);   // with the callback's judgement of the ring: no grace lost in between
+        refilling.store (true, std::memory_order_relaxed);
+        playPos.store (newPosition, std::memory_order_relaxed);
+    }
+
     thread.moveToFrontOfQueue (this);
 }
 
@@ -114,20 +118,22 @@ void ReadAheadSource::getNextAudioBlock (const juce::AudioSourceChannelInfo& inf
         pos = playPos.load (std::memory_order_relaxed);
         vStart = validStart;
         vEnd = validEnd;
+
+        // what this block should have had (nothing past the end of the material) against what the ring holds - judged
+        // under the lock, so an edit that empties the ring right after keeps its refill's grace
+        const juce::int64 total = knownTotal.load (std::memory_order_relaxed);
+        const juce::int64 wanted = total < 0 ? (juce::int64) info.numSamples
+                                             : juce::jlimit ((juce::int64) 0, (juce::int64) info.numSamples, total - pos);
+        const juce::int64 held = juce::jmin (pos + (juce::int64) info.numSamples, vEnd) - juce::jmax (pos, vStart);
+
+        if (juce::jmax ((juce::int64) 0, held) >= wanted)
+            refilling.store (false, std::memory_order_relaxed);
+        else if (! refilling.load (std::memory_order_relaxed))
+            shortfalls().fetch_add (1, std::memory_order_relaxed);
     }
 
     const juce::int64 from = juce::jmax (pos, vStart);
     const juce::int64 to = juce::jmin (pos + (juce::int64) info.numSamples, vEnd);
-
-    // what this block should have had (nothing past the end of the material) against what the ring held
-    const juce::int64 total = knownTotal.load (std::memory_order_relaxed);
-    const juce::int64 wanted = total < 0 ? (juce::int64) info.numSamples
-                                         : juce::jlimit ((juce::int64) 0, (juce::int64) info.numSamples, total - pos);
-
-    if ((to > from ? to - from : 0) >= wanted)
-        refilling.store (false, std::memory_order_relaxed);
-    else if (! refilling.load (std::memory_order_relaxed))
-        shortfalls().fetch_add (1, std::memory_order_relaxed);
 
     if (to <= from || ring.getNumSamples() == 0)
     {

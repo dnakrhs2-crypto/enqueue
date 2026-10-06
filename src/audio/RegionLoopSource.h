@@ -80,6 +80,9 @@ public:
         Uses the renderer's existing layout/envelope snapshots; no allocation. */
     bool isEnvelopeAttenuated (double virtualPosition, double fileSamples) const noexcept;
 
+    /** Every slice of the region plays once a pass (none skipped, repeated or looping forever), as the layout really is.
+        Any thread. */
+    bool playsStraightThrough() const noexcept;
     /** Consistent snapshot of the region (start, length) in file samples. Any thread. */
     void getRegion (juce::int64& startSample, juce::int64& lengthSamples) const noexcept;
     juce::int64 getRegionStart() const noexcept;

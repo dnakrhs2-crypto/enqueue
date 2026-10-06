@@ -454,6 +454,17 @@ juce::int64 RegionLoopSource::virtualPositionFor (juce::int64 fileSample, const 
     return std::max<juce::int64> (0, std::min (base, std::max<juce::int64> (0, l.totalLength() - 1)));
 }
 
+bool RegionLoopSource::playsStraightThrough() const noexcept
+{
+    const auto l = snapshot();
+
+    for (int i = 0; i < l.numRuns; ++i)
+        if (l.runs[i].count != 1)
+            return false;
+
+    return l.numRuns > 0;
+}
+
 juce::int64 RegionLoopSource::getTotalLength() const
 {
     return snapshot().totalLength();

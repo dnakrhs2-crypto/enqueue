@@ -310,7 +310,7 @@ MainComponent::MainComponent (AudioEngine& e, AppSettings& s, juce::ApplicationC
     setSize (1100, 820);
     updateTransportStandby();
     engine.setPatches (document.patches, true);   // the default patch of the empty project
-    loudnessScan = std::make_unique<LoudnessScan> (engine.getFormatManager(), settings.getLoudnessCacheFile());
+    loudnessScan = std::make_unique<LoudnessScan> (LoudnessScan::makeFormats(), settings.getLoudnessCacheFile());
     loudnessScan->onResults = [this] { refreshLoudnessMatches(); };
     startTimerHz (30);
     scheduler.startTicking (1);   // pre-waits, post-waits, auto-follows

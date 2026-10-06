@@ -1470,6 +1470,43 @@ void AudioEngine::seekToFileSeconds (const juce::Uuid& cueId, double fileSeconds
             p->seekToFileSeconds (fileSeconds);
 }
 
+void AudioEngine::setAutoLevel (bool enabled, double targetLufs)
+{
+    autoLeveler.setTargetLufs (targetLufs);
+
+    if (enabled == autoLeveler.isEnabled())
+        return;
+
+    if (! enabled)
+        matchReleaseLatency.store (insertLatencyAfterCues(), std::memory_order_relaxed);
+
+    switchGeneration.fetch_add (1, std::memory_order_release);
+    autoLeveler.setEnabled (enabled);
+}
+
+int AudioEngine::insertLatencyAfterCues()
+{
+    const juce::ScopedLock sl (lock);
+    int patches = 0;
+
+    for (const auto& r : patchRuntimes)
+    {
+        int cueOutputs = 0, deviceOutputs = 0;
+
+        for (const auto& [index, chain] : r->cueOutputChains)
+            if (chain != nullptr)
+                cueOutputs = juce::jmax (cueOutputs, chain->getLatencySamples());
+
+        for (const auto& [index, chain] : r->deviceOutputChains)
+            if (chain != nullptr)
+                deviceOutputs = juce::jmax (deviceOutputs, chain->getLatencySamples());
+
+        patches = juce::jmax (patches, cueOutputs + deviceOutputs);
+    }
+
+    return masterChain.getLatencySamples() + patches;
+}
+
 std::optional<double> AudioEngine::fullMatchFor (const Cue& cue) const
 {
     if (! matchActive || ! cue.isAudio())
@@ -1781,11 +1818,22 @@ void AudioEngine::prepare (double newSampleRate, int newBlockSize, int newNumDev
         const juce::ScopedLock sl (lock);
 
         mixBuffer.setSize (juce::jmax (2, getNumDeviceOutputs()), blockSize.load(), false, false, true);
-        autoLeveler.prepare (sampleRate.load(), blockSize.load(), getNumDeviceOutputs());
 
-        // the leveler starts again at 0 dB: what a running cue's start made up for it would now play bare
-        for (auto& p : players)
-            p->rebaseMatch();
+        // the same rate and block size (a device that merely opened again, perhaps with other channels): the leveler goes
+        // on as it was, like the players and the inserts - the cues made up for its hand, and the inserts' audio on its
+        // way, stay in step. A new format prepares everything again: the leveler starts at 0 dB, the cues take their own
+        // match at once
+        if (sameFormat)
+        {
+            autoLeveler.reshape (getNumDeviceOutputs());
+        }
+        else
+        {
+            autoLeveler.prepare (sampleRate.load(), blockSize.load(), getNumDeviceOutputs());
+
+            for (auto& p : players)
+                p->rebaseMatch();
+        }
 
         playerBuffer.setSize (CuePlayer::maxChannels, blockSize.load(), false, false, true);
         // the scratch serves devices with 32 or more channels; it carries what the engine mixes (never more than the
@@ -1833,7 +1881,8 @@ void AudioEngine::renderBlock (juce::AudioBuffer<float>& output, int numSamples,
         const int n = juce::jmin (chunkSize, numSamples - offset);
         mixBuffer.clear (0, n);
         bool autoLevelHold = false, anyPaused = false;
-        const bool autoLevelOn = autoLeveler.isEnabled();   // the master's switch, taken once for the block
+        const bool autoLevelOn = autoLeveler.isEnabled();   // the master's switch, taken once for the block ...
+        const juce::uint32 generation = switchGeneration.load (std::memory_order_acquire);   // ... and its generation
 
         {
             const juce::ScopedLock sl (lock);
@@ -1847,14 +1896,14 @@ void AudioEngine::renderBlock (juce::AudioBuffer<float>& output, int numSamples,
             muteRuntime->bus.clear (0, n);   // auditions with no output mix in here and go nowhere
 
             // the cues and the master agree on the switch for the whole block: a cue's match made up for the hand at its
-            // start, and a switch-off's glide home with the limiter on while any match (as the block begins) is applied
+            // start; a switch-off's way home with the limiter on while any match (as the block begins) is applied
             bool anyMatched = false;
 
             for (auto& p : players)
                 if (! (p->hasFinished() && ! p->hasPendingLiveEdit()) && ! p->isLoadedNotStarted() && p->isMatchApplied())
                     anyMatched = true;
 
-            const double handDb = autoLeveler.beginBlock (autoLevelOn, anyMatched);
+            const double handDb = autoLeveler.beginBlock (autoLevelOn, anyMatched, matchReleaseLatency.load (std::memory_order_relaxed));
             int running = 0;
 
             for (auto& p : players)
@@ -1873,7 +1922,7 @@ void AudioEngine::renderBlock (juce::AudioBuffer<float>& output, int numSamples,
                     anyPaused = anyPaused || (p->isPaused() && ! p->hasFinished());
                 }
                 auto* r = static_cast<PatchRuntime*> (p->getBusTag());
-                p->setMatchContext (autoLevelOn, handDb);
+                p->setMatchContext (autoLevelOn, handDb, generation);
                 p->mixIntoBus (r != nullptr ? r->bus : mixBuffer, playerBuffer, n);
 
                 if (! stillRunning)
