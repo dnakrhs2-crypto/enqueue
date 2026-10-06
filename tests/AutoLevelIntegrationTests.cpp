@@ -162,10 +162,10 @@ public:
         expect (std::abs (envelopeLetGo - beforeEnvelope) <= 1.0, "a glide, not a ride on");
         envelope.feed (4.0);
         expectWithinAbsoluteError (envelope.engine.getAutoLevelGainDb(), envelopeLetGo, 0.01);
-        envelope.engine.setLiveEnvelope (sound.id, {}); envelope.feed (6);
-        expect (envelope.engine.getAutoLevelGainDb() > beforeEnvelope + 0.5);
+        envelope.engine.setLiveEnvelope (sound.id, {}); envelope.feed (0.5);
+        expect (! envelope.engine.isAutoLevelHeld(), "the envelope gone, the fader is the hand's again");
         envelope.engine.stopAll(); envelope.feed (0.1);
-        expect (envelope.engine.play (cue)); envelope.feed (6);
+        expect (envelope.engine.play (cue)); envelope.feed (6, -36);   // a much quieter cue: ridden up again
         expect (envelope.engine.getAutoLevelGainDb() > beforeEnvelope + 1);
 
         EngineRig loaded;

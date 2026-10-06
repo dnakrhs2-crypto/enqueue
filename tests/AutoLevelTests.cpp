@@ -21,11 +21,11 @@ public:
         expectWithinAbsoluteError (ride.output.lufs(), -16.0, 0.7);
 
         beginTest ("2-3. 10 ms slopes, acceleration, and a gentle start in both directions");
-        slopes (ride.gains, 2.55, 10.1);   // 10 dB too quiet: 2.5 dB/s
+        slopes (ride.gains, 30.1, 10.1, 2.05);   // 10 LU under the target: far too quiet, the hand pushes the fader up fast
         Rig down;
         down.feed (20, -6);
         slopes (down.gains, 2.55, 30.1, 2.05);   // far too loud: the hand pulls the fader down fast
-        gentleStart (ride.gains, 2.5, 2.0);   // a new song is judged after 2 s
+        gentleStart (ride.gains, 30.0, 0.0);  // 10 LU under the target: far too quiet, no further wait
         gentleStart (down.gains, 30.0, 0.0);  // 10 LU over the target: far too loud, no further wait
         Rig mild;
         mild.feed (20, -11);
@@ -87,13 +87,13 @@ public:
         juce::ignoreUnused (beforeSilence);
 
         Rig movingSilence;
-        movingSilence.feed (6, -26);   // mid-ride: about 2 dB/s upwards
+        movingSilence.feed (2.0, -21);   // mid-ride: 4 dB/s upwards (5 LU under: the ordinary hand)
         const auto silenceStart = movingSilence.gains.size() - 1;
         movingSilence.feed (20, -300);
         metric ("silence glide after a moving ride", movingSilence.leveler.getGainDb() - movingSilence.gains[silenceStart]);
         // 0.4 s as a short gap, then the glide; checked up to the 2 s after which a long stop drifts back to 0 dB
         const std::vector<double> firstTwoSeconds (movingSilence.gains.begin(), movingSilence.gains.begin() + (long) silenceStart + 200);
-        glideThenStill (firstTwoSeconds, silenceStart, 0.5 + 0.4, 2.0);
+        glideThenStill (firstTwoSeconds, silenceStart, 0.5 + 0.4, 3.0);   // 0.4 s on at 4 dB/s, the glide and the smoothing
         const auto beforeNoise = movingSilence.leveler.getGainDb();
         movingSilence.feed (20, -70);
         expect (movingSilence.leveler.getGainDb() <= beforeNoise, "noise never lifts it");
@@ -119,11 +119,11 @@ public:
 
         beginTest ("10. hold lets go of a moving fader without a corner, excludes fading blocks, and releases gently");
         Rig held;
-        held.feed (6, -26);
+        held.feed (2.0, -21);   // mid-ride: 4 dB/s upwards
         const auto holdStart = held.gains.size() - 1;
         held.leveler.setHold (true);
         for (int i = 0; i < 500; ++i) held.step (-26.0 - 20.0 * i / 499.0);
-        glideThenStill (held.gains, holdStart, 0.6);
+        glideThenStill (held.gains, holdStart, 0.6, 2.0);   // from 4 dB/s up: the glide and the 0.15 s smoothing carry it about 1.5 dB
         const auto beforeHold = held.leveler.getGainDb();
         held.leveler.setHold (false);
         held.feed (1, -16.0 - beforeHold);
@@ -205,7 +205,7 @@ public:
         for (int i = 0; i < 2500; ++i) gappy.step (i % 40 < 30 ? -26.0 : -300.0);
         metric ("gappy ride gain at 25 s", gappy.leveler.getGainDb());
         expect (gappy.leveler.getGainDb() >= 9.0, "the rests do not stop it from reaching the target");
-        slopes (gappy.gains, 2.55, 10.1);
+        slopes (gappy.gains, 30.1, 10.1, 2.05);   // far too quiet through its rests: the fast hand
         size_t from = 0, to = 0;
         for (size_t i = 0; i < gappy.gains.size(); ++i)
         {
@@ -223,7 +223,7 @@ public:
         for (int i = 0; i < 2500; ++i) soft.step (i < 300 ? -36.0 : (i / 37) % 3 == 0 ? -44.0 : -34.0);   // soft moments under -41
         metric ("very quiet song gain at 25 s", soft.leveler.getGainDb());
         expect (soft.leveler.getGainDb() >= 11.0, "it reaches the boost it needs");
-        slopes (soft.gains, 4.05, 10.1);
+        slopes (soft.gains, 30.1, 10.1, 2.05);
         size_t rideFrom = 0, rideTo = 0;
         for (size_t i = 0; i < soft.gains.size(); ++i)
         {
@@ -394,10 +394,10 @@ public:
             rested.signal.fill (rested.buffer, -26);
             if (b == 2000 || b == 2090 || b == 2180) rested.buffer.setSample (0, 17, 1.0f);
             rested.leveler.process (rested.buffer, block);
-            if (b == 2699)
+            if (b == 2519)
                 restedAt27 = rested.leveler.getGainDb();
         }
-        metric ("gain at 27 s, 2.3 s after the bigger target (dB)", restedAt27);
+        metric ("gain at 25.2 s, 0.4 s after the bound lets go (dB)", restedAt27);
         metric ("gain at 35 s (dB)", rested.leveler.getGainDb());
         expect (restedAt27 <= 10.1, "no move without the usual wait: the hand was not riding when the bound caught it");
         expect (rested.leveler.getGainDb() >= 11.5, "and then it does move");
@@ -476,7 +476,7 @@ public:
             expect (sixDown > 0.0 && sixDown <= 1.45, "6 dB down within 1.45 s (was 2.0 s)" + label);
             expect (landed > 0.0 && landed <= 2.0, "and nearly all the way within 2 s" + label);
             expect (lowest >= finalGain - 0.5, "without going past it" + label);
-            slopes (blare.gains, 4.05, 30.1, 2.05);
+            slopes (blare.gains, 30.1, 30.1, 2.05);   // the quiet song before it came up fast too
         }
 
         beginTest ("35. a long loud effect (0.8 to 3 s) inside a song is ducked and then the fader goes straight back");
@@ -703,7 +703,7 @@ public:
             // may cost at most its own length (2.85 s before the last ceiling held through it)
             expect (landed > 0.0 && landed <= (silence > 0.0 ? landedStraight + silence : 2.0), "nearly all the way within 2 s, a stop costing at most its length: " + label);
             expect (lowest >= finalGain - 0.5, "without going past it: " + label);
-            slopes (stop.gains, 4.05, 30.1, 2.05);
+            slopes (stop.gains, 30.1, 30.1, 2.05);
         }
 
         beginTest ("35g. an effect that ends in a pause before the talk goes on is let go like any effect");
@@ -808,10 +808,9 @@ public:
             metric ("back within 0.5 dB after the fade (s)", backAt < 0 ? -1.0 : backAt * 0.01);
             expect (glide <= 3.0, "the fast ride glides to a halt");
             expect (stillHeld <= 0.01, "and stays put while the user fades");
-            expect (stillAfter <= 0.01, "after the fade the hand waits as for any ride up");
-            expect (upAfter <= 4.05, "then rides up at the ordinary hand's pace");
-            expect (backAt >= 0 && backAt <= 1200, "and gets back to the song's level");
-            slopes (handed.gains, 20.05, 30.1, 2.05);
+            expect (upAfter <= 30.1, "after the fade the song is far too quiet: the fast hand takes it up at once");
+            expect (backAt >= 0 && backAt <= 400, "and gets back to the song's level");
+            slopes (handed.gains, 30.1, 30.1, 2.05);
         }
 
         beginTest ("37c. switched off and on within the 20 ms fade-out on the fast way back up: it carries on");
@@ -951,10 +950,9 @@ public:
             metric ("back within 0.5 dB after the fade, without / with it (s)", plainBack * 0.01);
             metric ("with it", flickedBack * 0.01);
             expect (heldMoved <= 0.001, "the held fader stays put");
-            expect (stillAfter <= 0.01, "after the fade the hand waits as for any ride up");
-            expect (upAfter <= 4.05, "then rides up at the ordinary hand's pace");
+            expect (upAfter <= 30.1, "after the fade the song is far too quiet: the fast hand takes it up at once");
             expect (plainBack >= 0 && flickedBack >= 0 && std::abs (flickedBack - plainBack) <= 20, "and gets back when it would have (one block either way)");
-            slopes (heldFlicked, 20.05, 30.1, 2.05);
+            slopes (heldFlicked, 30.1, 30.1, 2.05);
         }
 
         beginTest ("27d. a new song opening with knock-knock-knock while the fader is still up from the last one: no pull-down");
@@ -1138,19 +1136,178 @@ public:
         const auto pauseStart = paused.gains.size() - 1;
         paused.feed (1.9, -300);   // just short of the 2 s that would make the next music a new section
         paused.feed (6, -6);
-        slopes (paused.gains, 2.55, 30.1, 2.05);
+        slopes (paused.gains, 30.1, 30.1, 2.05);
         double during = 0.0;
         for (size_t i = pauseStart + 161; i <= pauseStart + 190; ++i) during += std::abs (paused.gains[i] - paused.gains[i - 1]);
         metric ("movement in the last 0.3 s of the pause dB", during);
         expect (during <= 0.05, "halted before the pause ends");   // the fast hand's braking leaves a 0.15 s smoothing tail
         expect (paused.leveler.getGainDb() <= paused.gains[pauseStart] - 4.0, "and the ride down went on after it");
 
+        fastRise();
         extraCoverage();
         trace();
     }
 
 private:
     void metric (const juce::String& label, double value) { logMessage (label + " = " + juce::String (value, 6)); }
+    /** Seconds from 'from' until the gain is first within 'tolerance' dB of 'goal' (-1 = never). */
+    static double reached (const std::vector<double>& gains, size_t from, double goal, double tolerance)
+    {
+        for (size_t i = from; i < gains.size(); ++i)
+            if (std::abs (gains[i] - goal) <= tolerance)
+                return (double) (i - from + 1) * 0.01;
+        return -1.0;
+    }
+    /** Changes of direction (rising to falling or back, each faster than 0.3 dB/s) from 'from' on. */
+    static int reversals (const std::vector<double>& gains, size_t from)
+    {
+        int turns = 0, direction = 0;
+        for (size_t i = from + 1; i < gains.size(); ++i)
+        {
+            const double slope = (gains[i] - gains[i - 1]) * 100.0;
+            const int now = slope > 0.3 ? 1 : slope < -0.3 ? -1 : 0;
+            if (now != 0 && direction != 0 && now != direction)
+                ++turns;
+            if (now != 0)
+                direction = now;
+        }
+        return turns;
+    }
+    void fastRise()
+    {
+        beginTest ("38. a much quieter song after a gap comes up as fast as a blaring one comes down, once its beat is known");
+        {
+            Rig quiet;
+            quiet.feed (10.0, -26);   // 10 LU under the target: +10 dB
+            const double three = reached (quiet.gains, 0, 10.0, 3.0), one = reached (quiet.gains, 0, 10.0, 1.0);
+            double highest = -100.0;
+            for (const auto g : quiet.gains) highest = juce::jmax (highest, g);
+            metric ("quiet song: within 3 dB after (s)", three);
+            metric ("quiet song: within 1 dB after (s)", one);
+            metric ("quiet song: highest gain (dB)", highest);
+            expect (one > 0.0 && one <= 3.3, "within 1 dB in 3.3 s (2 s to hear its beat, then the fast hand)");
+            expect (highest <= 10.3, "without going past it");
+            slopes (quiet.gains, 30.1, 10.1, 2.05);
+        }
+
+        beginTest ("39. a much quieter song straight after a loud one (no gap, or a gap too short for a new section)");
+        for (const double gap : { 0.0, 1.0 })
+        {
+            Rig change;
+            change.feed (20.0, -12);   // -4 dB
+            change.feed (gap, -300);
+            const auto onset = change.gains.size();
+            change.feed (12.0, -26);   // +10 dB wanted: heard 18 LU under the target at first
+            const double one = reached (change.gains, onset, 10.0, 1.0);
+            double highest = -100.0;
+            for (size_t i = onset; i < change.gains.size(); ++i) highest = juce::jmax (highest, change.gains[i]);
+            const auto label = gap > 0.0 ? juce::String (" after a 1 s gap") : juce::String (" straight on");
+            metric ("quieter song" + label + ": within 1 dB after (s)", one);
+            metric ("quieter song" + label + ": gain 12 s later (dB)", change.leveler.getGainDb());
+            expect (one > 0.0 && one <= 3.6, "within 1 dB in 3.6 s (2.1 s far too quiet, then the fast hand)" + label);
+            expect (highest <= 10.3, "without going past it" + label);
+            slopes (change.gains, 30.1, 30.1, 2.05);
+        }
+
+        beginTest ("39b. the loud song's beat does not cap the quieter song after it");
+        {
+            Rig beat;
+            for (int b = 0; b < 2000; ++b)   // 20 s of a loud song with a 0 dBFS beat every 1.2 s (it would cap a boost at +2)
+            {
+                beat.signal.fill (beat.buffer, -12);
+                if (b % 120 == 60) beat.buffer.setSample (0, 17, 1.0f);
+                beat.leveler.process (beat.buffer, block);
+                beat.gains.push_back (beat.leveler.getGainDb());
+            }
+            const auto onset = beat.gains.size();
+            beat.feed (12.0, -26);   // a quieter song without that beat: +10 dB
+            const double one = reached (beat.gains, onset, 10.0, 1.0);
+            metric ("quieter song after a loud one with a beat: within 1 dB after (s)", one);
+            expect (one > 0.0 && one <= 3.6, "the last song's peaks went with it");
+        }
+
+        beginTest ("40. a song's fade-out is not pulled up");
+        for (const double seconds : { 3.0, 6.0, 12.0 })
+        {
+            Rig fading;
+            fading.feed (20.0, -26);   // +10 dB
+            const auto start = fading.gains.size();
+            const auto before = fading.leveler.getGainDb();
+            const int steps = (int) std::llround (seconds * 100.0);
+            for (int i = 0; i < steps; ++i) fading.step (-26.0 - 44.0 * i / steps);   // to -70 LUFS
+            fading.feed (3.0, -300);
+            double highest = -100.0;
+            for (size_t i = start; i < fading.gains.size(); ++i) highest = juce::jmax (highest, fading.gains[i]);
+            const auto label = juce::String (seconds) + " s fade-out";
+            metric (label + ": highest gain over the gain before it (dB)", highest - before);
+            expect (highest - before <= 0.3, "the fade is not chased: " + label);
+        }
+
+        beginTest ("41. a song that falls to a long quiet part comes up once it settles");
+        {
+            Rig settle;
+            settle.feed (20.0, -16);   // at the target: 0 dB
+            const auto start = settle.gains.size();
+            for (int i = 0; i < 400; ++i) settle.step (-16.0 - 10.0 * i / 400.0);   // 4 s down to -26
+            settle.feed (12.0, -26);
+            const double one = reached (settle.gains, start, 10.0, 1.0);
+            metric ("quiet part after a 4 s fall: within 1 dB of +10 after (s, from the fall's start)", one);
+            metric ("gain 16 s after the fall's start (dB)", settle.leveler.getGainDb());
+            expect (one > 0.0 && one <= 9.0, "it comes up within 5 s of settling");
+            expectWithinAbsoluteError (settle.leveler.getGainDb(), 10.0, 0.5);
+            slopes (settle.gains, 30.1, 10.1, 2.05);
+        }
+
+        beginTest ("42. a 2 s dip far under the target inside a song does not start a ride");
+        {
+            Rig dip;
+            dip.feed (30.0, -16);
+            const auto before = dip.leveler.getGainDb();
+            dip.feed (2.0, -34);       // 18 LU under, still music (over the activity gate)
+            dip.feed (6.0, -16);
+            double highest = -100.0, fastest = 0.0;
+            for (size_t i = 1; i < dip.gains.size(); ++i)
+            {
+                highest = juce::jmax (highest, dip.gains[i]);
+                fastest = juce::jmax (fastest, (dip.gains[i] - dip.gains[i - 1]) * 100.0);
+            }
+            metric ("2 s deep dip: highest gain over the gain before it (dB)", highest - before);
+            metric ("2 s deep dip: fastest rise (dB/s)", fastest);
+            expect (fastest <= 0.12, "a 2 s dip stays a dip: no ride, only the settled 0.1 dB/s towards the flow");
+        }
+
+        beginTest ("44. a swell out of a quiet moment in a loud part: the fader does not go up while the music is loud again");
+        {
+            Rig swell;
+            swell.feed (30.0, -24);   // +8 dB
+            swell.feed (8.0, -12);    // a loud part, staying: down to about -3
+            swell.feed (2.0, -19);    // a quieter moment: the 3 s ceiling lets go, the 15 s flow still wants more
+            const auto from = swell.gains.size();
+            const auto atSwell = swell.gains[from - 1];
+            for (int i = 0; i < 50; ++i) swell.step (-19.0 + 9.0 * i / 50.0);   // 0.5 s swell back up
+            swell.feed (4.0, -11);
+            double highest = -100.0;
+            for (size_t i = from; i < swell.gains.size(); ++i) highest = juce::jmax (highest, swell.gains[i]);
+            metric ("swell out of a quiet moment: gain before it (dB)", atSwell);
+            metric ("swell out of a quiet moment: highest gain over that (dB)", highest - atSwell);
+            expect (highest - atSwell <= 0.3, "no ride up into a loud part");
+        }
+
+        beginTest ("43. a quiet song that turns loud: the ceiling holds, no up-down hunting");
+        for (const double louder : { -18.0, -20.0 })
+        {
+            Rig turn;
+            turn.feed (20.0, -26);     // +10 dB
+            const auto onset = turn.gains.size();
+            turn.feed (20.0, louder);  // 6 or 8 LU over the target with the boost on: the 3 s ceiling's job
+            const int turns = reversals (turn.gains, onset);
+            const auto label = juce::String (louder) + " LUFS";
+            metric ("quiet song turning to " + label + ": direction changes", (double) turns);
+            metric ("gain 20 s later (dB)", turn.leveler.getGainDb());
+            expect (turns <= 1, "no hunting: " + label);
+            expectWithinAbsoluteError (turn.leveler.getGainDb(), -16.0 - louder, 1.6);
+        }
+    }
     void slopes (const std::vector<double>& gains, double up, double down, double corner = 0.2)
     {
         double maxUp = 0, maxDown = 0, maxChange = 0, previousSlope = 0;

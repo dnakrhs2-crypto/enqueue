@@ -34,6 +34,20 @@ private:
         (waits) before a move starts; a started move goes on until it lands, slowing as it closes. 'countWaits' = false
         in a short gap: the waits pause instead of starting over. */
     void moveTowards (double goal, bool countWaits) noexcept;
+    /** The newest second of the S window is more than 2 dB under the second before it (each with at least 5 active
+        blocks, one burst - an effect - left out as in programPower): the program is still falling - a fade-out, a
+        decay, the first second after a drop. */
+    bool fallingNow() const noexcept;
+    /** The loudest input peak of this section's program so far (its last 3 s at most), one burst - an effect, a bang -
+        left out as in programPower. While a section is young (sectionYoungBlocks) any such peak may be its beat. */
+    float sectionPeak() const noexcept;
+    /** Far too quiet for 2.1 s (hushSectionBlocks), no longer falling, and the flow more than 3 LU over the run: the
+        music has changed to a much quieter song (or part) - not a fader the recurring peaks keep under the target. The
+        windows keep only that quiet run - the louder music's level, peaks and effects go, as after a gap - so the fader
+        goes up at once instead of waiting for the 15 s flow to forget them. */
+    void startQuietSection() noexcept;
+    /** The quiet run's loudness (LUFS, input): its blocks are the flow's newest entries. */
+    double hushLoudness() const noexcept;
     void planGainRamp() noexcept;
     /** The song's flow (LUFS): one short burst left out (see programPower in the .cpp), then without its loudest 5 %
         (at least one block). An effect or a single hit is not the song's level. Audio thread: sorts a fixed scratch
@@ -74,6 +88,19 @@ private:
     bool pullDown = false;   // a fast pull-down is the move in progress
     bool fastHand = false;   // the hand still moves at the fast rates (also braking after a pull-down) until it rests
     bool blaring = false;    // this decision: far too loud right now, 7 blocks in a row (not just the ceiling's 3 s after)
+    // Far too quiet (heard more than 8 LU under the target) is the same hand the other way: no wait, 4 dB/s per dB up to
+    // 30 dB/s. A gap neither counts nor breaks the run (quiet talk has its pauses); a louder block or the user's own fade
+    // starts it again.
+    bool riseUp = false;     // a fast ride up is the move in progress
+    bool hushed = false;     // this decision: far too quiet right now, 7 blocks of the run
+    bool hushSectionTaken = false;   // this quiet run has already become a section
+    bool ceilingOn = false;  // the 3 s ceiling, held while most of the 3 s is still heard over the target
+    bool loudNow = false;    // the last decision heard its last 0.4 s at the target or over it: no ride up starts
+    int hushRun = 0;         // active blocks of the run
+    int hushSpan = 0;        // blocks since the run began, its gaps included
+    static constexpr int hushSectionBlocks = 21;   // 2.1 s: a 2 s dip in a song stays a dip
+    // A section's first 4 s: its peaks so far bound the ride up before two of them can show a beat (sectionPeak).
+    static constexpr int sectionYoungBlocks = 40;
 
     // A blare inside a song (far too loud 7 blocks in a row, with at least 3 s of the song before it): the fader is
     // pulled down at once and the blare's loud blocks wait outside the flow (blareHeld) until it is clear what it was.
@@ -108,7 +135,8 @@ private:
     int linger = 0;          // 0.1 s blocks after a landing in which the same direction goes on without a new wait
     int urgentRun = 0;       // blocks in a row heard far too loud (a 0.5 s effect touches at most 6 of the 7 needed)
     int urgentLatch = 0;     // blocks the 0.4 s ceiling still applies, until the 3 s window has caught up
-    int sectionBlocks = 0;   // active blocks since this section (song) began: a new song is judged sooner
+    int sectionBlocks = 0;   // active blocks since this section (song) began
+    int sectionClock = 0;    // blocks (time, gaps included) since this section's first sound
     double earlyHold = -100.0;   // where the early peak bound stopped a hand that was already above it (-100 = none)
     bool earlyHoldRide = false;  // ...and it stopped a ride up in progress: that ride goes on when the bound lets go
     double energy = 0.0, desired = 0.0, gain = 0.0, smooth1 = 0.0, smooth2 = 0.0;
