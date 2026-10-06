@@ -4,6 +4,7 @@
 #include "LiveMixSettings.h"
 #include "MixDocument.h"
 #include "MuteGroups.h"
+#include "app/AppVersion.h"
 #include "../livemix/src/ui/MainComponent.h"
 
 #include <juce_events/juce_events.h>
@@ -282,6 +283,8 @@ public:
         expect (c.send (wire (c.hello (readDiscovery (f.options.discoveryDirectory)["token"].toString(), { 2, 1 })), chunk));
         const auto hello = c.take ("helloAck", "1");
         expectEquals (hello["type"].toString(), juce::String ("helloAck"));
+        expectEquals (hello["server"]["version"].toString(),
+                      f.options.appVersion.isEmpty() ? appVersionString() : f.options.appVersion);
         c.initial = c.take ("state");
         expectEquals (c.initial["reason"].toString(), juce::String ("initial"));
         c.instance = hello["instanceId"].toString(); c.session = c.initial["sessionId"].toString();
@@ -296,6 +299,7 @@ public:
     }
     void runTest() override
     {
+        appVersions();
         handshake();
         orderingAndState();
         duplicates();
@@ -311,6 +315,22 @@ public:
 
     void settingsAndWiring();
     void logging();
+
+    void appVersions()
+    {
+        beginTest ("empty versions use the target version; explicit versions survive growth, shrinkage and restart");
+        Fixture f;
+        const juce::String versions[] { {}, " ", "override-123.456.789", "x", {} };
+        for (const auto& version : versions)
+        {
+            f.options.appVersion = version;
+            if (! start (f)) return;
+            const auto expected = version.isEmpty() ? appVersionString() : version;
+            expectEquals (readDiscovery (f.directory)["appVersion"].toString(), expected);
+            Client c;
+            if (! authenticate (f, c)) return;
+        }
+    }
 
     void handshake()
     {

@@ -4,6 +4,7 @@
 #include "MixEngine.h"
 #include "ObsPluginInstaller.h"
 #include "audio/PluginScan.h"
+#include "app/AppVersion.h"
 #include "app/Updater.h"
 #include "ui/LiveMixLookAndFeel.h"
 #include "ui/MainComponent.h"
@@ -142,7 +143,7 @@ class LiveMixApplication : public juce::JUCEApplication,
 {
 public:
     const juce::String getApplicationName() override { return "LiveMix"; }
-    const juce::String getApplicationVersion() override { return JUCE_APPLICATION_VERSION_STRING; }
+    const juce::String getApplicationVersion() override { return appVersionString(); }
     bool moreThanOneInstanceAllowed() override
     {
         return PluginScanWorker::isWorkerCommandLine (getCommandLineParameters())
