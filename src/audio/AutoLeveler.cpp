@@ -143,7 +143,9 @@ void AutoLeveler::reset() noexcept
     linearStep = 0.0;
     rampLeft = delayPos = maxHead = maxCount = attackPos = 0;
     sampleIndex = 0;
-    wasEnabled = false;
+    wasEnabled = releasing = false;
+    homeDb = 0.0;
+    handGain.store (0.0, std::memory_order_relaxed);
     delay.clear();
     std::fill (attack.begin(), attack.end(), 1.0);
     attackSum = (double) delayLength;
@@ -859,6 +861,7 @@ void AutoLeveler::process (juce::AudioBuffer<float>& buffer, int numSamples) noe
     const juce::ScopedNoDenormals noDenormals;
     const bool on = enabled.load (std::memory_order_relaxed);
     const bool held = hold.load (std::memory_order_relaxed);
+    const bool matchedCues = cuesMatched.load (std::memory_order_relaxed);
     if (on && ! wasEnabled && wet == 0.0)   // fully off before: start fresh (back on mid-fade-out: carry on, no jump)
     {
         clearMeasurement();
@@ -870,7 +873,15 @@ void AutoLeveler::process (juce::AudioBuffer<float>& buffer, int numSamples) noe
         sampleIndex = 0;
         std::fill (attack.begin(), attack.end(), 1.0);
         attackSum = (double) delayLength;
+        homeDb = 0.0;
+        releasing = false;
     }
+    // switched off while cues play with a loudness match: the fader glides home (below) as the matches glide back, the
+    // limiter on until both are done - a match that made up for the fader would otherwise play bare for a moment
+    if (! on && wasEnabled && wet > 0.0 && matchedCues)
+        releasing = true;
+    if (on)
+        releasing = false;   // back on: the glide home goes back too, the hand carries on
     wasEnabled = on;
     if (! on && moving) freezeGain();
     if (on && held) easeOut();   // the user's own fade starts now: let go at once, without a corner
@@ -878,8 +889,19 @@ void AutoLeveler::process (juce::AudioBuffer<float>& buffer, int numSamples) noe
     {
         fillDelay (buffer, 0, numSamples); // bypass is zero latency and bit-for-bit, including signed zero
         displayedGain.store (0.0, std::memory_order_relaxed);
+        handGain.store (0.0, std::memory_order_relaxed);
         return;
     }
+    // the glide home on top of the hand, 40 dB/s, a straight ramp across the block (1.0 throughout when there is none)
+    const double handDb = 20.0 * std::log10 (linear);
+    const double homeGoal = on ? 0.0 : (releasing || homeDb != 0.0 ? -handDb : 0.0);
+    if (releasing && ! matchedCues && homeDb == homeGoal)
+        releasing = false;   // home, and every match back at 0 dB: now the bypass crossfade
+    const double homeFrom = homeDb, homeStep = homeSpeed * (double) numSamples / rate;
+    homeDb = homeGoal > homeDb ? juce::jmin (homeGoal, homeDb + homeStep) : juce::jmax (homeGoal, homeDb - homeStep);
+    const double home0 = homeFrom == 0.0 ? 1.0 : std::pow (10.0, homeFrom / 20.0);
+    const double home1 = homeDb == 0.0 ? 1.0 : std::pow (10.0, homeDb / 20.0);
+    const double homeSlope = (home1 - home0) / (double) numSamples;
     const int used = juce::jmin (channels, buffer.getNumChannels());
     for (int i = 0; i < numSamples; ++i)
     {
@@ -900,22 +922,23 @@ void AutoLeveler::process (juce::AudioBuffer<float>& buffer, int numSamples) noe
                 --rampLeft;
             }
         }
+        const double applied = homeSlope == 0.0 ? linear * home1 : linear * (home0 + homeSlope * (double) (i + 1));
         float peak = 0.0f;
         for (int ch = 0; ch < used; ++ch)
         {
             const float raw = buffer.getSample (ch, i);
             inputPeak = juce::jmax (inputPeak, std::abs (raw));
-            peak = juce::jmax (peak, std::abs ((float) (raw * linear)));
+            peak = juce::jmax (peak, std::abs ((float) (raw * applied)));
         }
         const double attenuation = limit (peak);
-        wet = on ? juce::jmin (1.0, wet + 1.0 / transitionLength) : juce::jmax (0.0, wet - 1.0 / transitionLength);
+        wet = on || releasing ? juce::jmin (1.0, wet + 1.0 / transitionLength) : juce::jmax (0.0, wet - 1.0 / transitionLength);
         if (wet < 1.0e-12) wet = 0.0;
         if (wet > 1.0 - 1.0e-12) wet = 1.0;
         for (int ch = 0; ch < used; ++ch)
         {
             const float raw = buffer.getSample (ch, i);
             const float delayed = delay.getSample (ch, delayPos);
-            delay.setSample (ch, delayPos, (float) (raw * linear));
+            delay.setSample (ch, delayPos, (float) (raw * applied));
             const float limited = juce::jlimit (-ceiling, ceiling, (float) (delayed * attenuation));
             buffer.setSample (ch, i, wet == 0.0 ? raw : wet == 1.0 ? limited : (float) (raw + wet * (limited - raw)));
         }
@@ -927,7 +950,8 @@ void AutoLeveler::process (juce::AudioBuffer<float>& buffer, int numSamples) noe
             break;
         }
     }
-    displayedGain.store (wet > 0.0 ? 20.0 * std::log10 (linear) : 0.0, std::memory_order_relaxed);
+    displayedGain.store (wet > 0.0 ? 20.0 * std::log10 (linear * home1) : 0.0, std::memory_order_relaxed);
+    handGain.store (wet > 0.0 ? 20.0 * std::log10 (linear) : 0.0, std::memory_order_relaxed);
 }
 
 } // namespace gocue

@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <vector>
 
 namespace gocue
@@ -75,6 +76,9 @@ std::optional<LoudnessScanResult> LoudnessScan::lookup (const juce::File& file, 
 
     if (const auto it = entries.find (key); it != entries.end())
     {
+        if (it->second.used < sessionStart)
+            dirty = true;   // its first use this session: kept on disk (the oldest go first when the cache is full)
+
         it->second.used = juce::Time::currentTimeMillis();
 
         if (checked.count (key) > 0)
@@ -202,6 +206,9 @@ void LoudnessScan::run()
 {
     while (! threadShouldExit())
     {
+        // a few answered files looked at again before each region: a busy queue never holds the recheck back
+        const bool rechecking = recheckSome();
+
         Key key;
         bool have = false;
         bool save = false;
@@ -228,19 +235,9 @@ void LoudnessScan::run()
             if (save)
                 saveCache();   // the queue ran dry: keep what was learned
 
-            // the answered files again now and then: one saved over while the app runs is measured again
-            const juce::int64 interval = busyFlag.load (std::memory_order_relaxed) ? recheckBusy.load (std::memory_order_relaxed)
-                                                                                    : recheckIdle.load (std::memory_order_relaxed);
-            const juce::int64 since = juce::Time::currentTimeMillis() - lastRecheck;
+            if (! rechecking)
+                work.wait (msToNextRecheck());
 
-            if (since >= interval)
-            {
-                lastRecheck = juce::Time::currentTimeMillis();
-                recheckFiles();
-                continue;
-            }
-
-            work.wait ((int) juce::jlimit<juce::int64> (10, 2000, interval - since));
             continue;
         }
 
@@ -292,45 +289,69 @@ void LoudnessScan::run()
     }
 }
 
-void LoudnessScan::recheckFiles()
+int LoudnessScan::msToNextRecheck() const noexcept
 {
-    std::vector<std::pair<Key, std::pair<juce::int64, juce::int64>>> answered;
+    const juce::int64 interval = busyFlag.load (std::memory_order_relaxed) ? recheckBusy.load (std::memory_order_relaxed)
+                                                                            : recheckIdle.load (std::memory_order_relaxed);
+    return (int) juce::jlimit<juce::int64> (10, 2000, interval - (juce::Time::currentTimeMillis() - lastRecheck));
+}
 
+bool LoudnessScan::recheckSome()
+{
+    if (recheckNext >= recheckPaths.size())
     {
+        const juce::int64 interval = busyFlag.load (std::memory_order_relaxed) ? recheckBusy.load (std::memory_order_relaxed)
+                                                                                : recheckIdle.load (std::memory_order_relaxed);
+
+        if (juce::Time::currentTimeMillis() - lastRecheck < interval)
+            return false;
+
+        lastRecheck = juce::Time::currentTimeMillis();
+        recheckPaths.clear();
+        recheckNext = 0;
         const juce::ScopedLock sl (lock);
 
-        for (const auto& key : checked)
-            if (const auto it = entries.find (key); it != entries.end())
-                answered.push_back ({ key, { it->second.size, it->second.modified } });
+        for (const auto& key : checked)   // ordered by path: each file once
+            if (recheckPaths.empty() || recheckPaths.back() != key.path)
+                recheckPaths.push_back (key.path);
     }
 
     bool changed = false;
 
-    for (const auto& [key, was] : answered)
+    for (int n = 0; n < recheckSliceFiles && recheckNext < recheckPaths.size() && ! threadShouldExit(); ++n)
     {
-        if (threadShouldExit())
-            return;
-
-        {
-            const juce::ScopedLock sl (lock);
-
-            if (! queue.empty())
-                break;   // new regions first, the rest at the next round
-        }
-
-        const juce::File file (key.path);
+        const juce::String path = recheckPaths[recheckNext++];
+        const juce::File file (path);
         const juce::int64 size = file.existsAsFile() ? file.getSize() : -1;
         const juce::int64 modified = size >= 0 ? file.getLastModificationTime().toMilliseconds() : 0;
 
-        if (size != was.first || modified != was.second)
         {
             const juce::ScopedLock sl (lock);
-            checked.erase (key);   // no answer until it is measured again: the leveler rides the cue meanwhile
+            Key first;
+            first.path = path;
+            first.startMs = first.endMs = std::numeric_limits<juce::int64>::min();
+            std::vector<Key> regions;
+            bool differs = false;
 
-            if (inQueue.insert (key).second)
-                queue.push_back (key);
+            for (auto it = checked.lower_bound (first); it != checked.end() && it->path == path; ++it)
+            {
+                regions.push_back (*it);
+                const auto entry = entries.find (*it);
+                differs = differs || entry == entries.end() || entry->second.size != size || entry->second.modified != modified;
+            }
 
-            changed = true;
+            if (differs)
+            {
+                for (const auto& key : regions)   // every region of the file: no answer until measured again - and first
+                {
+                    checked.erase (key);
+
+                    if (inQueue.insert (key).second)
+                        queue.push_front (key);
+                }
+
+                changed = true;
+            }
         }
 
         if (busyFlag.load (std::memory_order_relaxed))
@@ -339,6 +360,8 @@ void LoudnessScan::recheckFiles()
 
     if (changed)
         triggerAsyncUpdate();   // the main component drops those matches until they are measured again
+
+    return recheckNext < recheckPaths.size();
 }
 
 void LoudnessScan::handleAsyncUpdate()

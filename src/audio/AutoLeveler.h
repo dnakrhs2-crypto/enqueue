@@ -20,6 +20,13 @@ public:
     /** A cue is paused: a long silence then keeps the fader where it is (the resume must sound as before). */
     void setPaused (bool value) noexcept { paused.store (value, std::memory_order_relaxed); }
     double getGainDb() const noexcept { return displayedGain.load (std::memory_order_relaxed); }
+    /** The hand's own gain (dB): where the fader is, without the glide home after a switch-off - where it carries on from
+        when switched back on (0 dB once fully off). */
+    double getHandGainDb() const noexcept { return handGain.load (std::memory_order_relaxed); }
+    /** Cues are playing with a loudness match (CuePlayer). Switched off now, the fader glides home at the match's own
+        40 dB/s with the limiter still on, and the bypass waits until it is home and every match is back at 0 dB too:
+        the two move together, so no cue plays louder than before the switch. Audio thread, every block before process(). */
+    void setCuesMatched (bool value) noexcept { cuesMatched.store (value, std::memory_order_relaxed); }
     /** The last block's hold: the user's own level change was in progress (the hand let go). */
     bool isHeld() const noexcept { return hold.load (std::memory_order_relaxed); }
     void process (juce::AudioBuffer<float>& buffer, int numSamples) noexcept;
@@ -66,8 +73,11 @@ private:
     void fillDelay (const juce::AudioBuffer<float>& buffer, int start, int count) noexcept;
     double limit (float peak) noexcept;
 
-    std::atomic<bool> enabled { false }, hold { false }, paused { false };
-    std::atomic<double> target { -16.0 }, displayedGain { 0.0 };
+    std::atomic<bool> enabled { false }, hold { false }, paused { false }, cuesMatched { false };
+    std::atomic<double> target { -16.0 }, displayedGain { 0.0 }, handGain { 0.0 };
+    bool releasing = false;   // switched off with matched cues playing: gliding home before the bypass crossfade
+    double homeDb = 0.0;      // the glide home on top of the hand (dB): minus the hand once home, 0 when none
+    static constexpr double homeSpeed = 40.0;   // dB/s: the loudness match's own rate
     double rate = 48000.0;
     int channels = 0, blockLength = 4800, delayLength = 240, transitionLength = 960;
     bool wasEnabled = false, moving = false, blockHeld = false;

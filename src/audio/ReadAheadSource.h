@@ -63,6 +63,7 @@ private:
     juce::uint32 generation = 0;                 // bumped by invalidate(): a fill from before it is thrown away
     std::atomic<juce::int64> playPos { 0 };
     std::atomic<bool> prepared { false };
+    std::atomic<juce::int64> knownTotal { -1 };   // the upstream's length, read where the ring is filled (no lock in the callback)
     std::atomic<bool> refilling { false };   // jumped: until the ring holds the play position again, a gap is the jump's
     static std::atomic<int>& shortfalls() noexcept { static std::atomic<int> count { 0 }; return count; }
 

@@ -738,6 +738,7 @@ bool AudioEngine::play (const Cue& cue, const PlayOptions& options, juce::String
                     existing->seekToFileSeconds (cue.regionStart() + options.startSeconds);   // an explicit start place wins over the loaded one
 
                 existing->setBaseGainDb (cue.gainDb);   // a gain edited since the load is the level it plays at
+                existing->setFullMatchDb (fullMatchFor (cue));
                 existing->setInitialMatchDb (matchFor (cue));
                 if (options.hasStartGain)
                     existing->setInitialGainDb (options.startGainDb);
@@ -780,6 +781,7 @@ bool AudioEngine::play (const Cue& cue, const PlayOptions& options, juce::String
     }
 
     player->prepare (getSampleRate(), getBlockSize());
+    player->setFullMatchDb (fullMatchFor (cue));
     player->setInitialMatchDb (matchFor (cue));
     if (options.hasStartGain)
         player->setInitialGainDb (options.startGainDb);
@@ -835,6 +837,7 @@ bool AudioEngine::load (const Cue& cue, double startSeconds, juce::String* error
     }
 
     player->prepare (getSampleRate(), getBlockSize());
+    player->setFullMatchDb (fullMatchFor (cue));
     player->setInitialMatchDb (matchFor (cue));
     player->setChain (findCueChain (cue.id));
     player->setBusTag (runtime);
@@ -1479,7 +1482,17 @@ double AudioEngine::matchFor (const Cue& cue) const
         return 0.0;   // not measured: the leveler's gain applies to it as to any other sound
 
     // the leveler's gain on top makes up the rest: together exactly the match, so the leveler finds the cue in place
-    return it->second - (autoLeveler.isEnabled() ? autoLeveler.getGainDb() : 0.0);
+    // (the hand's gain: a fader gliding home after a switch-off carries on from the hand when switched back on)
+    return it->second - (autoLeveler.isEnabled() ? autoLeveler.getHandGainDb() : 0.0);
+}
+
+double AudioEngine::fullMatchFor (const Cue& cue) const
+{
+    if (! matchActive || ! cue.isAudio())
+        return 0.0;
+
+    const auto it = matchByCue.find (cue.id);
+    return it != matchByCue.end() ? it->second : 0.0;
 }
 
 void AudioEngine::setLoudnessMatchDb (const juce::Uuid& cueId, double matchDb)
@@ -1510,8 +1523,13 @@ void AudioEngine::setLoudnessMatchActive (bool active)
     const juce::ScopedLock sl (lock);
 
     for (auto& p : players)
+    {
         if (! p->hasFinished())
+        {
+            p->setFullMatchDb (fullMatchFor (p->getCue()));
             p->setMatchDb (matchFor (p->getCue()));   // moves there at most 40 dB/s: no step either way
+        }
+    }
 }
 
 void AudioEngine::setDuckDb (const juce::Uuid& cueId, double duckDb, double rampSeconds)
@@ -1779,6 +1797,11 @@ void AudioEngine::prepare (double newSampleRate, int newBlockSize, int newNumDev
 
         mixBuffer.setSize (juce::jmax (2, getNumDeviceOutputs()), blockSize.load(), false, false, true);
         autoLeveler.prepare (sampleRate.load(), blockSize.load(), getNumDeviceOutputs());
+
+        // the leveler starts again at 0 dB: what a running cue's start made up for it would now play bare
+        for (auto& p : players)
+            p->rebaseMatch();
+
         playerBuffer.setSize (CuePlayer::maxChannels, blockSize.load(), false, false, true);
         // the scratch serves devices with 32 or more channels; it carries what the engine mixes (never more than the
         // output limit), the callback clears the rest
@@ -1824,7 +1847,7 @@ void AudioEngine::renderBlock (juce::AudioBuffer<float>& output, int numSamples,
     {
         const int n = juce::jmin (chunkSize, numSamples - offset);
         mixBuffer.clear (0, n);
-        bool autoLevelHold = false, anyPaused = false;
+        bool autoLevelHold = false, anyPaused = false, anyMatched = false;
         const bool autoLevelOn = autoLeveler.isEnabled();
 
         {
@@ -1857,6 +1880,7 @@ void AudioEngine::renderBlock (juce::AudioBuffer<float>& output, int numSamples,
                 }
                 auto* r = static_cast<PatchRuntime*> (p->getBusTag());
                 p->mixIntoBus (r != nullptr ? r->bus : mixBuffer, playerBuffer, n);
+                anyMatched = anyMatched || (! p->isLoadedNotStarted() && p->isMatchApplied());
 
                 if (! stillRunning)
                     anyFinished = true;
@@ -1873,6 +1897,7 @@ void AudioEngine::renderBlock (juce::AudioBuffer<float>& output, int numSamples,
         masterChain.process (mixBuffer, n);   // legacy master inserts on device outputs 1-2
         autoLeveler.setHold (autoLevelHold);
         autoLeveler.setPaused (anyPaused);
+        autoLeveler.setCuesMatched (anyMatched);
         autoLeveler.process (mixBuffer, n);
         applyOutputGate (mixBuffer, n);       // the panic gate: closed = silence, whatever the chains still ring with
         if (output.getNumChannels() > 0)

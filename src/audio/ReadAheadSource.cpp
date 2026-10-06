@@ -118,8 +118,9 @@ void ReadAheadSource::getNextAudioBlock (const juce::AudioSourceChannelInfo& inf
     const juce::int64 to = juce::jmin (pos + (juce::int64) info.numSamples, vEnd);
 
     // what this block should have had (nothing past the end of the material) against what the ring held
-    const juce::int64 total = upstream.getTotalLength();
-    const juce::int64 wanted = juce::jlimit ((juce::int64) 0, (juce::int64) info.numSamples, total - pos);
+    const juce::int64 total = knownTotal.load (std::memory_order_relaxed);
+    const juce::int64 wanted = total < 0 ? (juce::int64) info.numSamples
+                                         : juce::jlimit ((juce::int64) 0, (juce::int64) info.numSamples, total - pos);
 
     if ((to > from ? to - from : 0) >= wanted)
         refilling.store (false, std::memory_order_relaxed);
@@ -179,6 +180,7 @@ bool ReadAheadSource::fillChunk()
     if (! prepared.load (std::memory_order_acquire) || ring.getNumSamples() == 0)
         return false;
 
+    knownTotal.store (upstream.getTotalLength(), std::memory_order_relaxed);
     juce::int64 readStart = 0, readEnd = 0;
     bool restart = false;
     juce::uint32 startedIn = 0;

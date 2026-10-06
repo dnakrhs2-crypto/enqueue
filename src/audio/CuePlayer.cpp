@@ -425,8 +425,21 @@ void CuePlayer::setInitialDuckDb (double db) noexcept
 
 void CuePlayer::setMatchDb (double matchDb) noexcept
 {
-    const double db = std::isfinite (matchDb) ? juce::jlimit (-40.0, 24.0, matchDb) : 0.0;
+    // the match (-20 .. +12) less the master leveler's gain at the start (-20 .. +12): -32 .. +32 dB
+    const double db = std::isfinite (matchDb) ? juce::jlimit (-40.0, 40.0, matchDb) : 0.0;
     matchTarget.store ((float) juce::Decibels::decibelsToGain (db, -1000.0), std::memory_order_relaxed);
+}
+
+void CuePlayer::setFullMatchDb (double matchDb) noexcept
+{
+    const double db = std::isfinite (matchDb) ? juce::jlimit (-40.0, 40.0, matchDb) : 0.0;
+    matchFull.store ((float) juce::Decibels::decibelsToGain (db, -1000.0), std::memory_order_relaxed);
+}
+
+void CuePlayer::rebaseMatch() noexcept
+{
+    matchTarget.store (matchFull.load (std::memory_order_relaxed), std::memory_order_relaxed);
+    matchJump.store (true, std::memory_order_release);
 }
 
 void CuePlayer::setInitialMatchDb (double matchDb) noexcept

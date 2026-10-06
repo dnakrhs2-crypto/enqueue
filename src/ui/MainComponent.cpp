@@ -3767,6 +3767,7 @@ void MainComponent::updateContainerView()
 void MainComponent::containersChanged()
 {
     updateContainerView();
+    refreshLoudnessMatches();   // a list switched or removed: counted again once it is done
 }
 
 void MainComponent::refreshLoudnessMatches()
@@ -3778,12 +3779,15 @@ void MainComponent::refreshLoudnessMatches()
     if (on)
     {
         const double target = document.settings.autoLevelTargetLufs;
+        std::set<juce::Uuid> seen;   // a list being switched is briefly in two places: each cue once
 
-        document.forEachList ([this, target] (CueList& list)
+        document.forEachList ([this, target, &seen] (CueList& list)
         {
             for (const auto& c : list.getAll())
             {
-                if (! c.isAudio() || c.file == juce::File())
+                // slices that skip, repeat or loop a part play something else than the region: the leveler rides those
+                if (! c.isAudio() || c.file == juce::File() || ! c.audio.playsStraightThrough (c.audio.startSeconds, c.audio.endSeconds)
+                    || ! seen.insert (c.id).second)
                     continue;
 
                 ++matchAudioCues;

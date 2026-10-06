@@ -131,6 +131,14 @@ public:
     void setMatchDb (double matchDb) noexcept;
     /** Before start(): the match the instance begins at, from its first sample. Message thread. */
     void setInitialMatchDb (double matchDb) noexcept;
+    /** The cue's own measured match (dB), without what its start made up for the master leveler: where the instance
+        goes when the device restarts (rebaseMatch). Any thread. */
+    void setFullMatchDb (double matchDb) noexcept;
+    /** The device restarted, the master leveler is back at 0 dB: the instance takes the cue's own match at once (the
+        output was interrupted anyway). Under the engine lock. */
+    void rebaseMatch() noexcept;
+    /** Audio thread, after mixIntoBus: a match is applied, or still on its way back to 0 dB. */
+    bool isMatchApplied() const noexcept { return matchLevel != 1.0f || matchTarget.load (std::memory_order_relaxed) != 1.0f; }
     double getDuckDb() const noexcept { return duckDb.load (std::memory_order_relaxed); }
     /** Audio thread, after rendering, under the engine lock: intentional level changes in this block. */
     bool isAutoLevelHeld() const noexcept { return autoLevelHeld; }
@@ -262,6 +270,7 @@ private:
     std::atomic<float> targetGain { 1.0f };
     std::atomic<float> duckTarget { 1.0f };
     std::atomic<float> matchTarget { 1.0f };    // the loudness match (linear)
+    std::atomic<float> matchFull { 1.0f };      // the cue's own match, for a device restart (linear)
     std::atomic<bool> matchJump { false };      // ... taken as it is by the next mix (the instance's first block)
     float matchLevel = 1.0f;                    // audio thread: the match the last mix ended at
     std::atomic<bool> duckJump { false };      // setInitialDuckDb(): the audio thread puts duckInitial in place at once (a start, nothing to click) ...

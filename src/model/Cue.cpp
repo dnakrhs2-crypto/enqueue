@@ -79,6 +79,18 @@ int AudioCueData::firstCountFor (double regionStart) const noexcept
     return count;
 }
 
+bool AudioCueData::playsStraightThrough (double regionStart, double regionEnd) const noexcept
+{
+    if (firstCountFor (regionStart) != 1)
+        return false;
+
+    for (const auto& s : slices)
+        if (s.seconds > regionStart && (regionEnd < 0.0 || s.seconds < regionEnd) && s.playCount != 1)
+            return false;
+
+    return true;
+}
+
 bool AudioCueData::hasEndlessSlice (double regionStart, double regionEnd) const noexcept
 {
     if (slices.empty())

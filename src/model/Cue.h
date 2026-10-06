@@ -230,6 +230,9 @@ struct AudioCueData
     bool hasEndlessSlice() const noexcept { return hasEndlessSlice (0.0, std::numeric_limits<double>::max()); }
     /** Play count of the slice the region starts in: the last marker at or before 'regionStart', else firstSliceCount. */
     int firstCountFor (double regionStart) const noexcept;
+    /** True when every slice of the region [regionStart, regionEnd) plays once a pass - no marker skips, repeats or loops
+        a part of it (regionEnd < 0 = the end of the file). */
+    bool playsStraightThrough (double regionStart, double regionEnd) const noexcept;
     /** Seconds of one pass of the whole slice sequence inside [start, end) (skips count 0, infinite counted once); -1 when endless. */
     double sliceSequenceSeconds (double regionStart, double regionEnd) const noexcept;
 };

@@ -4,6 +4,8 @@
 #include "audio/LoudnessScan.h"
 #include "audio/ReadAheadSource.h"
 #include "audio/MediaFoundationAudioFormat.h"
+#include "ui/AutoLevelDialog.h"
+#include "MainComponentTestAccess.h"
 #include <deque>
 
 namespace gocue::tests
@@ -65,6 +67,83 @@ struct ConstantSource : juce::PositionableAudioSource
     juce::int64 getTotalLength() const override { return length; }
     bool isLooping() const override { return false; }
     juce::int64 length, position = 0;
+};
+
+/** An audio cue for 'file' (two channels, default levels). */
+Cue audioCueFor (const juce::File& file, double seconds)
+{
+    Cue c;
+    c.file = file;
+    c.durationSeconds = seconds;
+    c.numChannels = 2;
+    c.levels.resize (2, 2);
+    c.levels.setDefaults();
+    return c;
+}
+
+/** A two-input mic cue (the test feeds its input). */
+Cue micCueFor()
+{
+    Cue c;
+    c.type = CueType::mic;
+    c.mic.numInputs = 2;
+    c.levels.resize (2, 2);
+    c.levels.setDefaults();
+    return c;
+}
+
+/** Power of the first output channel over 'count' blocks from 'from', dB. */
+double windowDb (const std::vector<float>& rms, size_t from, size_t count)
+{
+    double sum = 0.0;
+    for (size_t b = from; b < from + count && b < rms.size(); ++b)
+        sum += (double) rms[b] * (double) rms[b];
+    return 10.0 * std::log10 (juce::jmax (1.0e-30, sum / (double) juce::jmax<size_t> (1, count)));
+}
+
+/** A loud mic has the master leveler cut it for 15 s; then it stops and a measured cue starts straight on - its match
+    makes up for the master still being down. Renders block by block, keeping each block's RMS (first channel). */
+struct CutScene
+{
+    CutScene (const juce::File& file, double fileSeconds, double target, double micLufs, double matchDb)
+    {
+        engine.prepare (rate, block);
+        engine.setAutoLevel (true, target);
+        cue = audioCueFor (file, fileSeconds);
+        engine.setLoudnessMatchDb (cue.id, matchDb);
+        engine.setLoudnessMatchActive (true);
+        engine.play (mic);
+        for (int b = 0; b < 1500; ++b)
+            render (micLufs);
+        cut = engine.getAutoLevelGainDb();
+        engine.stop (mic.id);
+        started = engine.play (cue);
+        cueStart = rms.size();
+    }
+    void render (double micLufs = -200.0)
+    {
+        if (micLufs > -100.0)
+            loud.fill (input, micLufs);
+        else
+            input.clear();
+        engine.renderBlock (out, block, input.getArrayOfReadPointers(), 2);
+        rms.push_back (out.getRMSLevel (0, 0, block));
+    }
+    double loudestFrom (size_t from) const
+    {
+        double loudest = -200.0;
+        for (size_t b = from; b + 5 <= rms.size(); ++b)
+            loudest = juce::jmax (loudest, windowDb (rms, b, 5));
+        return loudest;
+    }
+    AudioEngine engine { 0 };
+    Cue mic = micCueFor(), cue;
+    Signal loud;
+    juce::AudioBuffer<float> input { 2, block }, out { 2, block };
+    std::vector<float> rms;
+    double cut = 0.0;
+    bool started = false;
+    size_t cueStart = 0;
 };
 } // namespace
 
@@ -445,6 +524,188 @@ public:
             expectWithinAbsoluteError (matchedEnd, -16.0, 0.5);
         }
 
+        beginTest ("switched off while a matched cue plays under a cutting master: never louder than before the switch");
+        {
+            const auto file = writeTone (scratch.folder.getChildFile ("under.wav"), { { 30.0, -26.0 } });
+            CutScene s (file, 30.0, -16.0, -6.0, 10.0);
+            expect (s.started);
+            for (int b = 0; b < 100; ++b)
+                s.render();
+            const size_t at = s.rms.size();
+            const double before = windowDb (s.rms, at - 10, 10);
+            s.engine.setAutoLevel (false, -16.0);   // the main component's order: the leveler, then the matches
+            s.engine.setLoudnessMatchActive (false);
+            for (int b = 0; b < 200; ++b)
+                s.render();
+            const double loudest = s.loudestFrom (at), after = windowDb (s.rms, s.rms.size() - 10, 10);
+            logMessage ("master " + juce::String (s.cut, 2) + " dB; the cue " + juce::String (before, 2) + " dB before the switch, its loudest 50 ms after "
+                        + juce::String (loudest, 2) + ", 2 s later " + juce::String (after, 2));
+            expect (s.cut < -8.0, "the loud mic had the master down");
+            expect (loudest <= before + 0.5, "never louder than before the switch");
+            expectWithinAbsoluteError (after, before - 10.0, 0.5, "then the file as it is (the match was +10)");
+        }
+
+        beginTest ("the device restarts while a matched cue plays under a cutting master: the cue keeps its level");
+        {
+            const auto file = writeTone (scratch.folder.getChildFile ("restart.wav"), { { 30.0, -26.0 } });
+            CutScene s (file, 30.0, -16.0, -6.0, 10.0);
+            expect (s.started);
+            for (int b = 0; b < 100; ++b)
+                s.render();
+            const size_t at = s.rms.size();
+            const double before = windowDb (s.rms, at - 10, 10);
+            s.engine.prepare (rate, block);          // the device opened again, same format: the leveler starts over
+            for (int b = 0; b < 100; ++b)
+                s.render();
+            const double loudest = s.loudestFrom (at), after = windowDb (s.rms, s.rms.size() - 10, 10);
+            logMessage ("the cue " + juce::String (before, 2) + " dB before the restart, its loudest 50 ms after " + juce::String (loudest, 2)
+                        + ", 1 s later " + juce::String (after, 2));
+            expect (loudest <= before + 0.5, "never louder than before the restart");
+            expectWithinAbsoluteError (after, before, 0.5, "the cue at its match again");
+        }
+
+        beginTest ("a match and a master far apart still add up at the start (+12 on a master at -20)");
+        {
+            const auto file = writeTone (scratch.folder.getChildFile ("far.wav"), { { 30.0, -42.0 } });
+            CutScene s (file, 30.0, -30.0, -6.0, 12.0);
+            expect (s.started);
+            for (int b = 0; b < 40; ++b)
+                s.render();                          // 0.4 s: before the leveler judges the new sound
+            AudioEngine plainEngine (0);             // the file as it is, the same moment of its run
+            plainEngine.prepare (rate, block);
+            expect (plainEngine.play (audioCueFor (file, 30.0)));
+            std::vector<float> plain;
+            juce::AudioBuffer<float> out (2, block);
+            for (int b = 0; b < 40; ++b)
+            {
+                plainEngine.renderBlock (out, block, nullptr, 0);
+                plain.push_back (out.getRMSLevel (0, 0, block));
+            }
+            const double gain = windowDb (s.rms, s.cueStart + 20, 20) - windowDb (plain, 20, 20);
+            logMessage ("master " + juce::String (s.cut, 2) + " dB; the cue starts " + juce::String (gain, 2) + " dB over the file (its match +12)");
+            expect (s.cut < -19.0, "the master at its -20 dB floor");
+            expectWithinAbsoluteError (gain, 12.0, 0.5, "the match and the master add up exactly");
+        }
+
+        beginTest ("a cue whose slices skip or repeat parts gets no match - the leveler rides it; a plain one does");
+        {
+            volume_ui::Fixture fixture;
+            const auto file = writeTone (fixture.scratch.folder.getChildFile ("sliced.wav"), { { 8.0, -26.0 } });
+            const auto plain = audioCueFor (file, 8.0);
+            auto skipping = audioCueFor (file, 8.0);
+            skipping.audio.slices.push_back ({ 4.0, 0 });       // the second half skipped
+            auto repeating = audioCueFor (file, 8.0);
+            repeating.audio.firstSliceCount = 3;               // the first half three times
+            repeating.audio.slices.push_back ({ 4.0, 1 });
+            for (const auto& c : { plain, skipping, repeating })
+                fixture.document().cues.add (c);
+            AutoLevelDialog::Content dialog (fixture.document(), fixture.engine);
+            auto* on = volume_ui::child<juce::TextButton> (dialog, [] (const auto& b) { return b.getButtonText() == ko ("켜기"); });
+            expect (on != nullptr);
+            if (on != nullptr)
+                on->onClick();
+            for (int i = 0; i < 1000 && ! fixture.engine.getLoudnessMatchDb (plain.id).has_value(); ++i)
+            {
+                volume_ui::dispatch();
+                juce::Thread::sleep (20);
+            }
+            const auto counts = ReopenLastProjectTestAccess::loudnessMatchCounts (*fixture.main);
+            logMessage ("counts " + juce::String (counts[0]) + "/" + juce::String (counts[1]) + "/" + juce::String (counts[2]));
+            expect (fixture.engine.getLoudnessMatchDb (plain.id).has_value(), "the plain cue is matched");
+            expect (! fixture.engine.getLoudnessMatchDb (skipping.id).has_value(), "a skipped slice: no match");
+            expect (! fixture.engine.getLoudnessMatchDb (repeating.id).has_value(), "a repeated slice: no match");
+            expectEquals (counts[0], 1, "only the plain cue is one to match");
+        }
+
+        beginTest ("the cues to match are counted once each when lists are switched, and again when one is removed");
+        {
+            volume_ui::Fixture fixture;
+            auto& document = fixture.document();
+            const auto fileA = writeTone (fixture.scratch.folder.getChildFile ("listA.wav"), { { 5.0, -26.0 } });
+            const auto fileB = writeTone (fixture.scratch.folder.getChildFile ("listB.wav"), { { 5.0, -20.0 } });
+            document.cues.add (audioCueFor (fileA, 5.0));
+            const int second = document.addContainer ("B", false);
+            document.setActiveContainer (second);
+            document.cues.add (audioCueFor (fileB, 5.0));
+            document.setActiveContainer (0);
+            AutoLevelDialog::Content dialog (document, fixture.engine);
+            auto* on = volume_ui::child<juce::TextButton> (dialog, [] (const auto& b) { return b.getButtonText() == ko ("켜기"); });
+            expect (on != nullptr);
+            if (on != nullptr)
+                on->onClick();
+            const auto counts = [&fixture]
+            {
+                volume_ui::dispatch();
+                return ReopenLastProjectTestAccess::loudnessMatchCounts (*fixture.main);
+            };
+            const auto show = [] (const std::array<int, 3>& c) { return juce::String (c[0]) + "/" + juce::String (c[1]) + "/" + juce::String (c[2]); };
+            for (int i = 0; i < 1000 && counts()[1] < 2; ++i)
+                juce::Thread::sleep (20);
+            const std::array<int, 3> both { 2, 2, 0 }, one { 1, 1, 0 };
+            auto now = counts();
+            expect (now == both, "both lists' cues measured: " + show (now));
+            document.setActiveContainer (second);
+            now = counts();
+            expect (now == both, "the other list shown: still two, " + show (now));
+            document.setActiveContainer (0);
+            now = counts();
+            expect (now == both, "and back: " + show (now));
+            document.removeContainer (second);
+            now = counts();
+            expect (now == one, "the other list removed: " + show (now));
+        }
+
+        beginTest ("a session that only reads the cache keeps the use times (the oldest go first when it is full)");
+        {
+            const auto cache = scratch.folder.getChildFile ("used-cache.json");
+            const auto song = writeTone (scratch.folder.getChildFile ("used.wav"), { { 4.0, -20.0 } });
+            const auto usedOnDisk = [&cache]
+            {
+                const auto parsed = juce::JSON::parse (cache.loadFileAsString());
+                const auto* list = parsed.getProperty ("entries", juce::var()).getArray();
+                return list != nullptr && ! list->isEmpty() ? (juce::int64) list->getReference (0).getProperty ("used", 0) : (juce::int64) 0;
+            };
+            {
+                LoudnessScan scan (formats, cache);
+                awaitResult (scan, song);
+            }
+            const auto first = usedOnDisk();
+            juce::Thread::sleep (30);
+            {
+                LoudnessScan scan (formats, cache);
+                expect (awaitResult (scan, song).has_value());
+                expectEquals (scan.getMeasuredCount(), 0);
+            }
+            expect (first > 0 && usedOnDisk() > first, "this session's use is on disk: " + juce::String (first) + " -> " + juce::String (usedOnDisk()));
+        }
+
+        beginTest ("a file saved over: every region of it measured again, first, not held back by a busy queue");
+        {
+            LoudnessScan scan (formats, scratch.folder.getChildFile ("regions-cache.json"));
+            scan.setRecheckInterval (100, 100);
+            const auto file = writeTone (scratch.folder.getChildFile ("regions.wav"), { { 10.0, -26.0 } });
+            expect (awaitResult (scan, file).has_value() && awaitResult (scan, file, 2.0, 6.0).has_value());
+            std::vector<juce::File> longOnes;
+            for (int i = 0; i < 3; ++i)
+                longOnes.push_back (writeTone (scratch.folder.getChildFile ("long" + juce::String (i) + ".wav"), { { 20.0, -20.0 } }));
+            writeTone (file, { { 11.0, -14.0 } });   // saved over, louder
+            scan.setBusy (true);                     // cues playing: the long files take about 2 s each
+            for (const auto& f : longOnes)
+                scan.lookup (f, 0.0, -1.0);
+            std::optional<LoudnessScanResult> whole, part;
+            for (int i = 0; i < 1500 && ! (whole && part); ++i)
+            {
+                if (const auto w = scan.lookup (file, 0.0, -1.0); w && std::abs (w->integratedLufs + 14.0) < 0.05) whole = w;
+                if (const auto p = scan.lookup (file, 2.0, 6.0); p && std::abs (p->integratedLufs + 14.0) < 0.05) part = p;
+                juce::Thread::sleep (10);
+            }
+            const int pending = scan.getPendingCount();
+            logMessage ("both regions new with " + juce::String (pending) + " long file(s) still to measure");
+            expect (whole.has_value() && part.has_value(), "both regions of the file measured again");
+            expect (pending > 0, "before the long files queued after them: the recheck is not starved");
+            scan.setBusy (false);
+        }
+
         beginTest ("the read-ahead counts the blocks it had not filled in time, not the refill after a jump");
         {
             ConstantSource upstream (48000 * 4);
@@ -465,6 +726,21 @@ public:
             const int atJump = ReadAheadSource::getShortfallCount();
             for (int b = 0; b < 5; ++b) readAhead.getNextAudioBlock (info);
             expectEquals (ReadAheadSource::getShortfallCount() - atJump, 0);
+            readAhead.releaseResources();
+        }
+
+        beginTest ("the read-ahead: the end of the material is no shortfall");
+        {
+            ConstantSource upstream (9600);                       // 0.2 s
+            juce::TimeSliceThread idleThread ("never started");
+            ReadAheadSource readAhead (upstream, idleThread, 48000, 2);
+            readAhead.prepareToPlay (block, rate);                // all of it prefilled
+            juce::AudioBuffer<float> buffer (2, block);
+            juce::AudioSourceChannelInfo info (&buffer, 0, block);
+            const int before = ReadAheadSource::getShortfallCount();
+            for (int b = 0; b < 40; ++b)
+                readAhead.getNextAudioBlock (info);               // 0.4 s: past the end
+            expectEquals (ReadAheadSource::getShortfallCount() - before, 0);
             readAhead.releaseResources();
         }
     }

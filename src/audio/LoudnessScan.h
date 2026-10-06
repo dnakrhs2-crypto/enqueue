@@ -9,6 +9,7 @@
 #include <map>
 #include <optional>
 #include <set>
+#include <vector>
 
 namespace gocue
 {
@@ -43,6 +44,7 @@ public:
     static constexpr double minSeconds = 3.0;       // shorter regions (a short effect) are not matched
     static constexpr int maxCacheEntries = 5000;
     static constexpr int recheckIdleMs = 5000, recheckBusyMs = 15000;   // how often answered files are looked at again
+    static constexpr int recheckSliceFiles = 16;   // files looked at between two regions measured
 
     LoudnessScan (juce::AudioFormatManager& formats, const juce::File& cacheFile);
     ~LoudnessScan() override;
@@ -93,8 +95,12 @@ private:
     void handleAsyncUpdate() override;
     void loadCache();
     void saveCache();
-    /** Looks at the answered files again (size and modification time) and queues those that changed. Scan thread. */
-    void recheckFiles();
+    /** A slice of the recheck round (up to recheckSliceFiles files, size and modification time): starts a round when one
+        is due, else goes on with the one in progress. A changed file has every region withdrawn and queued first.
+        True while a round is in progress. Scan thread. */
+    bool recheckSome();
+    /** Until the next round is due (10 .. 2000 ms). Scan thread. */
+    int msToNextRecheck() const noexcept;
 
     juce::AudioFormatManager& formats;
     const juce::File cacheFile;
@@ -107,7 +113,10 @@ private:
     std::atomic<int> measuredCount { 0 };
     std::atomic<int> recheckIdle { recheckIdleMs }, recheckBusy { recheckBusyMs };
     bool dirty = false;
-    juce::int64 lastRecheck = 0;            // scan thread: when the answered files were last looked at
+    juce::int64 lastRecheck = 0;            // scan thread: when the last round began
+    std::vector<juce::String> recheckPaths; // scan thread: this round's files (each once)...
+    size_t recheckNext = 0;                 // ... and how far it has got
+    const juce::int64 sessionStart = juce::Time::currentTimeMillis();   // a use time older than this is an earlier session's
     juce::WaitableEvent work;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (LoudnessScan)

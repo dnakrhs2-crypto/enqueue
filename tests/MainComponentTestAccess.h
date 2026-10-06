@@ -2,6 +2,8 @@
 
 #include "ui/MainComponent.h"
 
+#include <array>
+
 namespace gocue::tests
 {
 // Share the existing friend definition across test translation units. Keeping
@@ -26,5 +28,10 @@ struct ReopenLastProjectTestAccess
     }
     static PanicKeyHook& panicKeyHook (MainComponent& main) { return *main.panicHook; }
     static MidiInputService::Callbacks midiCallbacks (MainComponent& main) { return main.midiRouter->inputCallbacks(); }
+    /** The 자동 레벨 dialog's counts: audio cues to match, matched, still waiting to be measured. */
+    static std::array<int, 3> loudnessMatchCounts (const MainComponent& main)
+    {
+        return { main.matchAudioCues, main.matchMatched, main.matchWaiting };
+    }
 };
 }

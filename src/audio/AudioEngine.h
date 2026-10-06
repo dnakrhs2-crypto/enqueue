@@ -390,9 +390,11 @@ private:
     AutoLeveler autoLeveler;
     std::map<juce::Uuid, double> matchByCue;   // message thread
     bool matchActive = false;                  // message thread
-    /** The match a start of this cue gets now: its measured match less the master leveler's gain (0 dB when matching is
-        off, the cue is not measured or is no audio cue). */
+    /** The match a start of this cue gets now: its measured match less the master leveler's (hand) gain (0 dB when
+        matching is off, the cue is not measured or is no audio cue). */
     double matchFor (const Cue& cue) const;
+    /** The cue's own measured match (0 dB as above): what an instance goes back to when the device restarts. */
+    double fullMatchFor (const Cue& cue) const;
     livemix::LoudnessMeter loudness;
     std::atomic<float> outputPeakHold { 0.0f };      // the device outputs' sample peak since the last takeOutputDiagnostics()
     std::atomic<int> outputClippedBlocks { 0 };      // blocks with a device output over 0 dBFS since the device started
