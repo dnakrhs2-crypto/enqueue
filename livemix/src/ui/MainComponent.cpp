@@ -85,6 +85,8 @@ MainComponent::MainComponent (MixDocument& doc, LiveMixSettings& s, ObsPluginAct
     };
 
     topBar.onDeviceChosen = [this] (const juce::String& name) { chooseDevice (name); };
+    topBar.onDeviceRepicked = [this] (const juce::String& name) { reopenIfStopped (name); };
+    topBar.onDevicesWanted = [this] { updateDeviceNames(); };
     topBar.onFxPanel = [this] { showDrawer (drawer == Drawer::fx ? Drawer::none : Drawer::fx); };
     topBar.onPluginManager = [this] { showPluginManager(); };
 
@@ -754,7 +756,7 @@ void MainComponent::updateDeviceNames()
 void MainComponent::chooseDevice (const juce::String& name)
 {
     auto wanted = engine.getOpenDevice();
-    if (wanted.input == name && engine.isDeviceRunning())
+    if (wanted.input == name && engine.isRunningWhole())   // with a part stopped it is reopened below
         return;
     if (wanted.input.isEmpty())
     {
@@ -766,6 +768,26 @@ void MainComponent::chooseDevice (const juce::String& name)
     wanted.input = name;
     if (wanted.isAsio()) wanted.output = name;
     const auto error = engine.openDevice (wanted);
+
+    if (error.isNotEmpty())
+    {
+        showStatus (error, true);
+        updateDeviceNames();
+        return;
+    }
+
+    deviceChosen();
+}
+
+void MainComponent::reopenIfStopped (const juce::String& name)
+{
+    // the device that runs, picked again: reopened as it is when part of it stopped (the status line's advice). One no
+    // longer open is not reopened from a list that showed it before: the bar lists what there is to pick afresh.
+    const auto current = engine.getOpenDevice();
+    if (current.input != name || engine.isRunningWhole())
+        return;
+
+    const auto error = engine.openDevice (current);
 
     if (error.isNotEmpty())
     {
@@ -815,6 +837,9 @@ void MainComponent::timerCallback()
     }
 
     masterCard.pushMeter (engine.readMasterMeter());
+
+    if (topBar.devicesWaiting())   // the devices changed in the middle of a pick from the bar's list
+        updateDeviceNames();
 
     const bool running = engine.isDeviceRunning();
     topBar.setStatus (engine.getSampleRate(), engine.getBlockSize(), engine.getLatencyMs(), engine.getDspLoad(), running, engine.getDeviceFormat());
@@ -1634,7 +1659,9 @@ void MainComponent::showSettingsDialog()
                           {
                               if (safe != nullptr && safe->onExternalControlEnabled)
                                   safe->onExternalControlEnabled (on);
-                          });
+                          },
+                          {},
+                          [safe] { if (safe != nullptr) safe->deviceChanged(); });   // a failed open: shown, not chosen
 }
 
 } // namespace gocue::livemix

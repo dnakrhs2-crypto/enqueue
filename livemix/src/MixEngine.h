@@ -70,6 +70,9 @@ public:
    #endif
     bool isSplitMonitor() const noexcept { return splitMonitor.load (std::memory_order_acquire); }
     bool isMonitorRunning() const noexcept;
+    /** The open device plays as it was opened: its input, and the separate monitor output when it has one. Only then is
+        it reused as it is (the same device picked again, a session saved with it); a stopped part is reopened. */
+    bool isRunningWhole() const noexcept { return isDeviceRunning() && (! isSplitMonitor() || isMonitorRunning()); }
     /** A new buffer size on the running device (every channel kept). */
     juce::String setBufferSize (int samples);
     /** Closes and reopens the current device (the driver's control panel asked for a restart). "" on success. */

@@ -495,6 +495,61 @@ private:
     bool capturing = false;
 };
 
+/** A picker whose owner refills it only while the operator is not in the middle of a pick from it - busy(): its list is
+    open, or an item is selected whose change the owner has not handled yet. JUCE hands back the number of the item
+    picked in the list as it opened, and sends the change after the list has closed: a refill in between gives the pick
+    to another item, or loses it. The owner brings it up to date as its list is about to open (beforeListOpens), and
+    calls settle() in onChange and after selecting from code. It also says when the list picks the item already
+    selected, which JUCE sends no change for (onRepick): the operator asking for the same device again - how the status
+    line's "check the device in the settings" is followed once it is plugged back in. */
+class RepickComboBox : public juce::ComboBox
+{
+public:
+    std::function<void()> onRepick;
+    std::function<void()> beforeListOpens;
+
+    /** An item whose pick, when it is the item already selected, is told to onRepick. */
+    void addRepickableItem (const juce::String& text, int id)
+    {
+        jassert (text.isNotEmpty() && id != 0);
+        getRootMenu()->addItem (juce::PopupMenu::Item (text).setID (id).setAction (
+            [safe = juce::Component::SafePointer<RepickComboBox> (this), id]
+            {
+                // JUCE runs this after it has selected the pick (another item: its onChange follows, not handled yet), so
+                // the pick is compared with the selection the owner handled last - also one an arrow key made in the
+                // open list - and only that item picked again is a repick
+                if (safe != nullptr && id == safe->settledId && safe->onRepick)
+                    safe->onRepick();
+            }));
+    }
+
+    void showPopup() override
+    {
+        {
+            // A click or Enter has JUCE mark the list open first and show it a message later: until the copy below is
+            // made, this box may still be brought up to date
+            const juce::ScopedValueSetter<bool> preparing (opening, true);
+            if (beforeListOpens)
+                beforeListOpens();
+        }
+        if (! isShowing())   // brought up to date into a layout without it: no list
+        {
+            hidePopup();
+            return;
+        }
+        juce::ComboBox::showPopup();
+    }
+
+    /** The operator is in the middle of a pick: the list is open, or an item is selected whose change is unhandled. */
+    bool busy() const noexcept { return (isPopupActive() && ! opening) || getSelectedId() != settledId; }
+    /** What is selected now has been handled (or was selected from code). */
+    void settle() noexcept { settledId = getSelectedId(); }
+
+private:
+    int settledId = 0;
+    bool opening = false;
+};
+
 /** A device input / output picker filled from the device's channel names. */
 inline void fillChannelCombo (juce::ComboBox& combo, const juce::StringArray& names, bool pairs, int fallbackCount)
 {

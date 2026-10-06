@@ -47,6 +47,8 @@ namespace
         bool createdFloat = false, openedFloat = false;
         juce::AudioIODeviceCallback* callback = nullptr;
         std::function<void()> onOutputLifecycle;
+        bool panel = false, panelAsksRestart = false;   // an ASIO driver's control panel, and whether closing it asks for a restart
+        int* failNextOpens = nullptr;                    // the type's count of opens to fail from now on (a one-off failure)
     };
 
     class MixFakeDevice : public juce::AudioIODevice
@@ -75,6 +77,11 @@ namespace
             if (record->input == "Broken" || record->output == "Broken" || bs == 1024
                 || (record->failedRate > 0.0 && juce::approximatelyEqual (sr, record->failedRate)))
                 return "deliberate fake open failure";
+            if (record->failNextOpens != nullptr && *record->failNextOpens > 0)
+            {
+                --*record->failNextOpens;
+                return "deliberate one-off open failure";
+            }
             record->inputs = ins;
             record->outputs = outs;
             record->inputs.setRange (getInputChannelNames().size(), 128, false);
@@ -112,6 +119,8 @@ namespace
         juce::BigInteger getActiveOutputChannels() const override { return record->outputs; }
         int getInputLatencyInSamples() override { return record->input.isEmpty() ? 0 : 48; }
         int getOutputLatencyInSamples() override { return record->output.isEmpty() ? 0 : 96; }
+        bool hasControlPanel() const override { return record->panel; }
+        bool showControlPanel() override { return record->panelAsksRestart; }
     private:
         std::shared_ptr<MixDeviceRecord> record;
         juce::AudioIODeviceCallback* callback = nullptr;
@@ -125,7 +134,7 @@ namespace
         void scanForDevices() override {}
         juce::StringArray getDeviceNames (bool input) const override
         {
-            if (getTypeName().contains ("ASIO")) return { "Good", "Broken" };
+            if (getTypeName().contains ("ASIO")) return asioNames;
             return input ? juce::StringArray { "Capture", "Capture 2", "Broken" }
                          : juce::StringArray { "Headphones", "Broken" };
         }
@@ -143,6 +152,9 @@ namespace
             r->rates = rates;
             r->refusedRate = refusedRate;
             r->failedRate = failedRate;
+            r->panel = panel;
+            r->panelAsksRestart = panelAsksRestart;
+            r->failNextOpens = &failNextOpens;
             if (refusedRate > 0.0 && ! records.empty()) r->rate = records.back()->rate;   // the driver keeps its clock across reopens
             if (input.isEmpty() && output.isNotEmpty()) r->onOutputLifecycle = onOutputLifecycle;
             if (failOutputs && output.isNotEmpty()) r->output = "Broken";
@@ -156,9 +168,12 @@ namespace
             return {};
         }
         std::vector<std::shared_ptr<MixDeviceRecord>> records;
+        juce::StringArray asioNames { "Good", "Broken" };   // registry order: the first is what a switch to ASIO tries
         juce::Array<double> rates { 48000.0, 44100.0 };
         double refusedRate = 0.0, failedRate = 0.0;
         bool failOutputs = false;
+        bool panel = false, panelAsksRestart = false;
+        int failNextOpens = 0;
         int asioOutputs = 72;
         std::function<void()> onOutputLifecycle;
     };
@@ -174,6 +189,13 @@ namespace
     struct MixPrivateMethod { friend typename Tag::Type member (Tag) { return method; } };
     template struct MixPrivateMethod<PollMonitorMaintenance, &MixEngine::timerCallback>;
 
+    // the settings as the app's 설정 menu opens them, wired to its own device callbacks
+    struct ShowAppSettings
+    {
+        using Type = void (MainComponent::*)();
+        friend Type member (ShowAppSettings);
+    };
+    template struct MixPrivateMethod<ShowAppSettings, &MainComponent::showSettingsDialog>;
     void removeRealMixDeviceTypes (MixEngine& engine)
     {
         auto& manager = engine.getDeviceManager();
@@ -1797,6 +1819,7 @@ public:
         expect (directory.createDirectory().wasOk());
         runSelectionRefreshTests (directory.getChildFile ("selection-refresh"));
         runAsioRateTests (directory.getChildFile ("asio-rate"));
+        runAsioFirstDriverAbsentTests (directory.getChildFile ("asio-first-absent"));
         runSettingsWindowTests (directory.getChildFile ("settings-window"));
         {
             LiveMixLookAndFeel lookAndFeel;
@@ -2121,14 +2144,20 @@ public:
         }
     }
 
-    static juce::Component* openSettingsContent (MixEngine& engine, LiveMixSettings& settings, std::function<void()> deviceChanged)
+    static juce::Component* shownSettingsContent()
     {
-        SettingsDialog::show (engine, settings, nullptr, std::move (deviceChanged), {}, {}, {}, {});
         auto& desktop = juce::Desktop::getInstance();
         for (int i = 0; i < desktop.getNumComponents(); ++i)
             if (auto* dialog = dynamic_cast<juce::DialogWindow*> (desktop.getComponent (i)); dialog != nullptr && dialog->getName() == ko ("설정"))
                 if (auto* viewport = dynamic_cast<juce::Viewport*> (dialog->getContentComponent())) return viewport->getViewedComponent();
         return nullptr;
+    }
+
+    static juce::Component* openSettingsContent (MixEngine& engine, LiveMixSettings& settings, std::function<void()> deviceChanged,
+                                                 std::function<void()> openFailed = {})
+    {
+        SettingsDialog::show (engine, settings, nullptr, std::move (deviceChanged), {}, {}, {}, {}, {}, std::move (openFailed));
+        return shownSettingsContent();
     }
 
     // 10/4 gom: the settings opened glued to the top of the screen, as tall as the screen with the title bar off it -
@@ -2462,6 +2491,747 @@ public:
             }
             SettingsDialog::closeIfOpen();
         }
+    }
+
+    // 10/6: a PC with Ableton's ASIO driver installed and nothing of Ableton plugged in lists that driver first. Switching
+    // the settings to ASIO tried it, failed ("No device is connected to the PC.") and threw the dialog back to Windows
+    // audio, so the TOPPING interface's driver could never be picked. A first driver that does not open now leaves the
+    // ASIO list up to pick another, the running device kept.
+    void runAsioFirstDriverAbsentTests (const juce::File& directory)
+    {
+        beginTest ("switching to ASIO: a first driver that does not open leaves the ASIO list up and the running device on, unannounced");
+        expect (directory.createDirectory().wasOk());
+        const MixDevice windows { "Windows Audio (Low Latency Mode)", "Capture", "Headphones", 512, 44100.0 };
+        auto noAlert = [] { return dynamic_cast<juce::AlertWindow*> (juce::Component::getCurrentlyModalComponent()) == nullptr; };
+        auto sayAlert = [this] (const juce::String& title)
+        {
+            auto* alert = dynamic_cast<juce::AlertWindow*> (juce::Component::getCurrentlyModalComponent());
+            expect (alert != nullptr, "an alert: " + title);
+            if (alert != nullptr)
+            {
+                expectEquals (alert->getName(), title);
+                alert->exitModalState (0);
+            }
+            dispatchFor (50);
+        };
+        // ASIO (with these drivers, in this order) and the Windows low latency backend running 'windows'
+        auto makeEngine = [&] (MixEngine& engine, const juce::StringArray& asioNames) -> MixFakeType*
+        {
+            removeRealMixDeviceTypes (engine);
+            auto asio = std::make_unique<MixFakeType> ("ASIO");
+            asio->asioNames = asioNames;
+            engine.getDeviceManager().addAudioDeviceType (std::move (asio));
+            auto lowLatency = std::make_unique<MixFakeType> (windows.type);
+            auto* windowsType = lowLatency.get();
+            engine.getDeviceManager().addAudioDeviceType (std::move (lowLatency));
+            expect (engine.openDevice (windows).isEmpty());
+            return windowsType;
+        };
+        struct Boxes { juce::ComboBox *type = nullptr, *input = nullptr, *rate = nullptr, *buffer = nullptr; };
+        auto boxes = [this] (juce::Component* content)
+        {
+            Boxes b;
+            if (content != nullptr)
+            {
+                b.type = dynamic_cast<juce::ComboBox*> (content->findChildWithID ("device-type"));
+                b.input = dynamic_cast<juce::ComboBox*> (content->findChildWithID ("device-input"));
+                b.rate = dynamic_cast<juce::ComboBox*> (content->findChildWithID ("device-rate"));
+                b.buffer = dynamic_cast<juce::ComboBox*> (content->findChildWithID ("device-buffer"));
+            }
+            expect (b.type != nullptr && b.input != nullptr && b.rate != nullptr && b.buffer != nullptr);
+            return b;
+        };
+        // the ASIO list is up for a pick while 'windows' plays on
+        auto expectChoosing = [&] (const Boxes& b, int drivers)
+        {
+            expectEquals (b.type->getText(), juce::String ("ASIO"));
+            expectEquals (b.input->getNumItems(), drivers);
+            expectEquals (b.input->getSelectedId(), 0);
+            expectEquals (b.input->getTextWhenNothingSelected(), ko ("ASIO 장치를 고르세요"));
+            expectEquals (b.rate->getNumItems(), 0);     // the Windows device's rates and buffers are not ASIO's
+            expectEquals (b.buffer->getNumItems(), 0);
+        };
+
+        // LIVEMIX_UI_SCREENSHOT_DIR: the dialog as the app draws it, for a look at the states
+        auto snapshot = [this] (juce::Component* content, const juce::String& file)
+        {
+            const auto folder = juce::SystemStats::getEnvironmentVariable ("LIVEMIX_UI_SCREENSHOT_DIR", {});
+            if (folder.isEmpty() || content == nullptr) return;
+            LiveMixLookAndFeel lookAndFeel;
+            content->setLookAndFeel (&lookAndFeel);
+            const juce::File shots (folder);
+            expect (shots.createDirectory().wasOk());
+            shots.getChildFile (file).deleteFile();
+            juce::FileOutputStream image (shots.getChildFile (file));
+            if (image.openedOk())
+                expect (juce::PNGImageFormat().writeImageToStream (content->createComponentSnapshot (content->getLocalBounds().withHeight (420)), image));
+            content->setLookAndFeel (nullptr);
+        };
+
+        {
+            MixEngine engine;
+            makeEngine (engine, { "Broken", "Good" });   // the driver of hardware not plugged in sorts first
+            LiveMixSettings settings (directory);
+            int chosen = 0, failed = 0;   // the app takes an opened device as chosen; a failed open is only shown
+            auto* content = openSettingsContent (engine, settings, [&] { ++chosen; }, [&] { ++failed; });
+            const auto b = boxes (content);
+            if (b.type != nullptr && b.input != nullptr && b.rate != nullptr && b.buffer != nullptr)
+            {
+                snapshot (content, "asio-choice-0-windows.png");
+                expectEquals (b.type->getText(), AudioBackends::label (windows.type));
+                expectEquals (b.type->getItemText (0), juce::String ("ASIO"));
+                b.type->setSelectedId (1, juce::sendNotificationSync);
+                dispatchFor (50);
+                expect (noAlert(), "nothing said about a driver nobody picked");
+                expect (chosen == 0 && failed == 1, "the failed try is shown, not chosen: " + juce::String (chosen) + "/" + juce::String (failed));
+                expect (engine.isDeviceRunning());
+                expectEquals (engine.getOpenDevice().type, windows.type);   // the failed try rolled back
+                expectEquals (engine.getOpenDevice().input, windows.input);
+                expectChoosing (b, 2);
+                expectEquals (b.input->getItemText (0), juce::String ("Broken"));
+                expectEquals (b.input->getItemText (1), juce::String ("Good"));
+                snapshot (content, "asio-choice-1-choosing.png");
+                dispatchFor (650);                                          // the 500 ms refresh leaves the choice up
+                expectChoosing (b, 2);
+                expect (noAlert());
+
+                // the absent one picked: why it failed is said, and the list stays
+                b.input->setSelectedId (1, juce::sendNotificationSync);
+                dispatchFor (50);
+                sayAlert (ko ("오디오 장치를 열지 못했습니다"));
+                expectEquals (engine.getOpenDevice().input, windows.input);
+                expectChoosing (b, 2);
+                expect (chosen == 0 && failed == 2, "a failed pick is not chosen either: " + juce::String (chosen) + "/" + juce::String (failed));
+
+                // the one that works opens at the driver's own rate and buffer, not the Windows device's 44.1 kHz / 512
+                b.input->setSelectedId (2, juce::sendNotificationSync);
+                dispatchFor (50);
+                expect (noAlert());
+                const auto opened = engine.getOpenDevice();
+                expectEquals (opened.type, juce::String ("ASIO"));
+                expectEquals (opened.input, juce::String ("Good"));
+                expectEquals (juce::roundToInt (opened.sampleRate), 48000);
+                expectEquals (opened.bufferSize, 256);
+                expectEquals (b.type->getText(), juce::String ("ASIO"));
+                expectEquals (b.input->getText(), juce::String ("Good"));
+                expectEquals (b.rate->getSelectedId(), 48000);
+                expectEquals (b.buffer->getSelectedId(), 256);
+                expect (chosen == 1 && failed == 2, "the opened one is chosen: " + juce::String (chosen) + "/" + juce::String (failed));
+                snapshot (content, "asio-choice-2-opened.png");
+            }
+            SettingsDialog::closeIfOpen();
+        }
+
+        beginTest ("switching to ASIO: back to the running type reopens nothing; a lone driver that opens still opens at once, a lone absent one waits");
+        {
+            MixEngine engine;
+            makeEngine (engine, { "Broken", "Good" });
+            LiveMixSettings settings (directory);
+            const auto b = boxes (openSettingsContent (engine, settings, {}));
+            if (b.type != nullptr && b.input != nullptr && b.rate != nullptr && b.buffer != nullptr)
+            {
+                b.type->setSelectedId (1, juce::sendNotificationSync);
+                dispatchFor (50);
+                expectChoosing (b, 2);
+                const int opens = engine.getOpenCount();
+                b.type->setSelectedId (2, juce::sendNotificationSync);       // the low latency backend that plays
+                dispatchFor (50);
+                expect (noAlert());
+                expectEquals (engine.getOpenCount(), opens);
+                expectEquals (b.type->getText(), AudioBackends::label (windows.type));
+                expectEquals (b.input->getText(), windows.input);
+                expectEquals (b.rate->getSelectedId(), 44100);
+                expectEquals (b.buffer->getSelectedId(), 512);
+            }
+            SettingsDialog::closeIfOpen();
+        }
+        {
+            MixEngine engine;
+            makeEngine (engine, { "Good" });
+            LiveMixSettings settings (directory);
+            const auto b = boxes (openSettingsContent (engine, settings, {}));
+            if (b.type != nullptr && b.input != nullptr && b.rate != nullptr && b.buffer != nullptr)
+            {
+                b.type->setSelectedId (1, juce::sendNotificationSync);
+                dispatchFor (50);
+                expect (noAlert());
+                expectEquals (engine.getOpenDevice().type, juce::String ("ASIO"));
+                expectEquals (engine.getOpenDevice().input, juce::String ("Good"));
+                expectEquals (b.input->getText(), juce::String ("Good"));
+            }
+            SettingsDialog::closeIfOpen();
+        }
+        {
+            MixEngine engine;
+            makeEngine (engine, { "Broken" });
+            LiveMixSettings settings (directory);
+            const auto b = boxes (openSettingsContent (engine, settings, {}));
+            if (b.type != nullptr && b.input != nullptr && b.rate != nullptr && b.buffer != nullptr)
+            {
+                b.type->setSelectedId (1, juce::sendNotificationSync);
+                dispatchFor (50);
+                expect (noAlert());
+                expectEquals (engine.getOpenDevice().input, windows.input);
+                expectChoosing (b, 1);
+            }
+            SettingsDialog::closeIfOpen();
+        }
+        {
+            MixEngine engine;
+            makeEngine (engine, {});   // no ASIO driver at all
+            LiveMixSettings settings (directory);
+            const auto b = boxes (openSettingsContent (engine, settings, {}));
+            if (b.type != nullptr && b.input != nullptr && b.rate != nullptr && b.buffer != nullptr)
+            {
+                b.type->setSelectedId (1, juce::sendNotificationSync);
+                dispatchFor (50);
+                expect (noAlert());
+                expectEquals (engine.getOpenDevice().input, windows.input);
+                expectEquals (b.type->getText(), juce::String ("ASIO"));
+                expectEquals (b.input->getNumItems(), 0);
+                expectEquals (b.input->getTextWhenNothingSelected(), ko ("ASIO 장치 없음"));
+            }
+            SettingsDialog::closeIfOpen();
+        }
+
+        // the separate monitor output is unplugged, does not come back by itself, then is plugged in again
+        auto stopMonitor = [&] (MixEngine& engine, MixFakeType& windowsType)
+        {
+            const auto monitor = windowsType.playingOutput();
+            expect (monitor != nullptr && monitor->callback != nullptr);
+            if (monitor != nullptr && monitor->callback != nullptr)
+            {
+                windowsType.failOutputs = true;
+                monitor->callback->audioDeviceError ("deliberate output restart failure");
+                (engine.*member (PollMonitorMaintenance {}))();
+            }
+            expect (engine.isDeviceRunning() && ! engine.isMonitorRunning() && ! engine.isRunningWhole());
+            windowsType.failOutputs = false;
+        };
+
+        beginTest ("switching to ASIO: back to the running type reopens a separate monitor output that stopped meanwhile");
+        {
+            MixEngine engine;
+            auto* windowsType = makeEngine (engine, { "Broken", "Good" });
+            LiveMixSettings settings (directory);
+            const auto b = boxes (openSettingsContent (engine, settings, {}));
+            if (b.type != nullptr && b.input != nullptr && b.rate != nullptr && b.buffer != nullptr && windowsType != nullptr)
+            {
+                expect (engine.isSplitMonitor() && engine.isMonitorRunning(), "the test pair plays through a separate monitor");
+                b.type->setSelectedId (1, juce::sendNotificationSync);
+                dispatchFor (50);
+                expectChoosing (b, 2);
+                expect (engine.isMonitorRunning());   // the failed try brought it back with the input
+                stopMonitor (engine, *windowsType);
+                const int opens = engine.getOpenCount();
+                b.type->setSelectedId (2, juce::sendNotificationSync);
+                dispatchFor (50);
+                expect (noAlert());
+                expectEquals (engine.getOpenCount(), opens + 1);
+                expect (engine.isDeviceRunning() && engine.isMonitorRunning(), "the monitor plays again");
+                expectEquals (engine.getOpenDevice().input, windows.input);
+                expectEquals (engine.getOpenDevice().output, windows.output);
+                expectEquals (b.type->getText(), AudioBackends::label (windows.type));
+            }
+            SettingsDialog::closeIfOpen();
+        }
+
+        // a pick from a box's list as JUCE makes it: the list opens, the pick is selected (a change is sent after), then
+        // the item's action runs - for the item already selected JUCE sends no change, only the action tells
+        // a click on a box as the mouse makes it: JUCE marks its list open at once and shows it a message later
+        auto clickOpen = [&] (juce::ComboBox& box)
+        {
+            const auto now = juce::Time::getCurrentTime();
+            const juce::MouseEvent down (juce::Desktop::getInstance().getMainMouseSource(), { 8.0f, 8.0f }, {}, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f,
+                                         &box, &box, now, { 8.0f, 8.0f }, now, 1, false);
+            box.mouseDown (down);
+            expect (box.isPopupActive(), "marked open as the button goes down");
+            dispatchFor (50);
+            // with another app in front (the release run on the operator's desktop) JUCE closes a list by itself: what
+            // needs it open is checked only while it is
+            return box.isPopupActive();
+        };
+        auto pickFromList = [&] (RepickComboBox& box, int id)
+        {
+            box.setSelectedId (id, juce::sendNotificationAsync);
+            for (juce::PopupMenu::MenuItemIterator it (*box.getRootMenu()); it.next();)
+                if (it.getItem().itemID == id && it.getItem().action != nullptr)
+                    it.getItem().action();
+            dispatchFor (50);
+        };
+
+        beginTest ("a list's pick of the item already selected is told apart from another; a pick is 'busy' until its change is handled");
+        {
+            RepickComboBox box;
+            box.addRepickableItem ("A", 1);
+            box.addRepickableItem ("B", 2);
+            int changes = 0, repicks = 0;
+            box.onChange = [&] { box.settle(); ++changes; };
+            box.onRepick = [&] { ++repicks; };
+            expect (! box.busy());
+            pickFromList (box, 1);   // nothing selected yet: a change
+            expect (changes == 1 && repicks == 0, juce::String (changes) + "/" + juce::String (repicks));
+            pickFromList (box, 1);   // the same again: no change, a repick
+            expect (changes == 1 && repicks == 1, juce::String (changes) + "/" + juce::String (repicks));
+            pickFromList (box, 2);   // another one: a change only
+            expect (changes == 2 && repicks == 1, juce::String (changes) + "/" + juce::String (repicks));
+            expect (! box.busy());
+            box.setSelectedId (1, juce::sendNotificationAsync);   // picked as the list closed, its change on its way
+            expect (box.busy(), "a pick whose change is unhandled");
+            dispatchFor (50);
+            expect (! box.busy() && changes == 3, "handled: " + juce::String (changes));
+            box.setSelectedId (2, juce::dontSendNotification);   // selected from code, then settled
+            box.settle();
+            expect (! box.busy());
+
+            // one open list: an arrow key makes it B (handled), then B is clicked: a repick only; an arrow back to A
+            // (handled), then B clicked: a change only
+            box.setSelectedId (1, juce::sendNotificationSync);
+            changes = repicks = 0;
+            box.setSelectedId (2, juce::sendNotificationSync);   // the arrow key
+            pickFromList (box, 2);
+            expect (changes == 1 && repicks == 1, "arrow to B, B clicked: " + juce::String (changes) + "/" + juce::String (repicks));
+            box.setSelectedId (1, juce::sendNotificationSync);   // the arrow key back
+            pickFromList (box, 2);
+            expect (changes == 3 && repicks == 1, "arrow to A, B clicked: " + juce::String (changes) + "/" + juce::String (repicks));
+        }
+
+        beginTest ("the top bar: an arrow key's pick opens that device; its list is not refilled in the middle of a pick, and is brought up to date as it opens");
+        {
+            MixEngine engine;
+            MixDocument document (engine);
+            TopBar bar (document);
+            bar.setSize (1300, bar.preferredHeight (1300));
+            bar.addToDesktop (juce::ComponentPeer::windowIsTemporary);   // a list opens from a box on screen
+            bar.setVisible (true);
+            RepickComboBox* box = nullptr;
+            for (auto* child : bar.getChildren())
+                if (auto* found = dynamic_cast<RepickComboBox*> (child)) box = found;
+            expect (box != nullptr, "the top bar's device box");
+            juce::StringArray chosen, repicked;
+            int wanted = 0;
+            bar.onDeviceChosen = [&] (const juce::String& device) { chosen.add (device); };
+            bar.onDeviceRepicked = [&] (const juce::String& device) { repicked.add (device); };
+            if (box != nullptr)
+            {
+                const juce::String type ("Windows Audio (Low Latency Mode)");
+                bar.setDevices ({ "X", "A", "B" }, "A", type);
+                box->setSelectedId (3, juce::sendNotificationSync);   // what an arrow key in the open list does: no item action
+                expectEquals (chosen.joinIntoString (","), juce::String ("B"));
+
+                // the list open: a refill waits
+                bar.setDevices ({ "X", "A", "B" }, "A", type);
+                if (clickOpen (*box))
+                {
+                    bar.setDevices ({ "A", "B" }, "A", type);         // X unplugged while the list is open
+                    if (box->isPopupActive())
+                    {
+                        expectEquals (box->getNumItems(), 3);
+                        expectEquals (box->getItemText (1), juce::String ("A"));
+                        expect (! bar.devicesWaiting(), "nothing to ask again while the list is open");
+                        pickFromList (*box, 2);                        // A, still number 2 as shown: picked again
+                        expectEquals (repicked.joinIntoString (","), juce::String ("A"));
+                    }
+                }
+                box->hidePopup();
+                dispatchFor (50);
+                bar.setDevices ({ "A", "B" }, "A", type);
+                expectEquals (box->getNumItems(), 2);
+                expectEquals (box->getText(), juce::String ("A"));
+                expect (! bar.devicesWaiting());
+
+                // a pick whose change is on its way (the list just closed): a refill now would lose it
+                chosen.clear();
+                box->setSelectedId (2, juce::sendNotificationAsync);   // B, picked as the list closed
+                bar.setDevices ({ "A", "B", "C" }, "A", type);         // a device plugged in at that moment
+                expectEquals (box->getNumItems(), 2);
+                expectEquals (box->getText(), juce::String ("B"));
+                dispatchFor (50);
+                expectEquals (chosen.joinIntoString (","), juce::String ("B"));
+                expect (bar.devicesWaiting());
+                bar.setDevices ({ "A", "B", "C" }, "B", type);
+                expectEquals (box->getNumItems(), 3);
+
+                // the list opening with a refill waiting asks for it first, and shows it
+                bar.onDevicesWanted = [&] { ++wanted; bar.setDevices ({ "A", "B", "C", "D" }, "B", type); };
+                box->setSelectedId (3, juce::sendNotificationAsync);   // C picked, its change on its way
+                bar.setDevices ({ "A", "B", "C", "D" }, "B", type);   // D plugged in at that moment: waits
+                expect (! bar.devicesWaiting());
+                dispatchFor (50);
+                expect (bar.devicesWaiting(), "the pick handled: a refill waits");
+                clickOpen (*box);                                       // the list opened with the refill waiting
+                expectEquals (wanted, 1);
+                expectEquals (box->getNumItems(), 4);
+                box->hidePopup();
+                dispatchFor (50);
+            }
+            bar.removeFromDesktop();
+        }
+
+        beginTest ("the settings: no list is refilled in the middle of a pick; a list about to open shows the type just chosen");
+        {
+            MixEngine engine;
+            makeEngine (engine, { "Broken", "Good" });
+            LiveMixSettings settings (directory);
+            auto* content = openSettingsContent (engine, settings, {});
+            auto* input = content != nullptr ? dynamic_cast<RepickComboBox*> (content->findChildWithID ("device-input")) : nullptr;
+            auto* type = content != nullptr ? dynamic_cast<RepickComboBox*> (content->findChildWithID ("device-type")) : nullptr;
+            expect (input != nullptr && type != nullptr);
+            if (input != nullptr && type != nullptr)
+            {
+                // an arrow key in the open input list opens Capture 2; the list shown stays as it is until it closes
+                const bool open = clickOpen (*input);
+                const int items = input->getNumItems();
+                input->addItem ("a refill removes this", 999);
+                input->setSelectedId (2, juce::sendNotificationSync);
+                expectEquals (engine.getOpenDevice().input, juce::String ("Capture 2"));
+                if (open && input->isPopupActive())
+                {
+                    expectEquals (input->getNumItems(), items + 1);
+                    dispatchFor (650);
+                    if (input->isPopupActive())
+                        expectEquals (input->getNumItems(), items + 1);
+                }
+                input->hidePopup();
+                dispatchFor (650);
+                expectEquals (input->getNumItems(), items);
+                expectEquals (input->getText(), juce::String ("Capture 2"));
+
+                // the type changed to ASIO by arrow key in its open list (the first driver does not open), then the
+                // input list opened before the timer came round: it shows the ASIO drivers, not the Windows inputs
+                const bool typeOpen = clickOpen (*type);
+                type->setSelectedId (1, juce::sendNotificationSync);
+                expectEquals (engine.getOpenDevice().input, juce::String ("Capture 2"));   // kept: the try rolled back
+                if (typeOpen && type->isPopupActive())
+                    expectEquals (input->getItemText (0), juce::String ("Capture"));      // not refilled while it is open
+                type->hidePopup();
+                clickOpen (*input);   // at once: from the click on, the timer cannot refill under it
+                expectEquals (input->getNumItems(), 2);
+                expectEquals (input->getItemText (0), juce::String ("Broken"));
+                expectEquals (input->getItemText (1), juce::String ("Good"));
+                expectEquals (input->getSelectedId(), 0);
+                input->hidePopup();
+                dispatchFor (50);
+                expect (noAlert());
+            }
+            SettingsDialog::closeIfOpen();
+        }
+
+        beginTest ("the settings: a bit depth picked as its list closed is not undone by a waiting refill whose timer comes first");
+        {
+            const ScopedWasapiPreference preference;
+            MixEngine engine;
+            removeRealMixDeviceTypes (engine);
+            engine.getDeviceManager().addAudioDeviceType (std::make_unique<MixFakeType> ("Windows Audio (Exclusive Mode)"));
+            expect (engine.openDevice ({ "Windows Audio (Exclusive Mode)", "Capture", "Headphones", 256, 48000.0 }).isEmpty());
+            LiveMixSettings settings (directory);
+            auto* content = openSettingsContent (engine, settings, {});
+            auto* input = content != nullptr ? dynamic_cast<RepickComboBox*> (content->findChildWithID ("device-input")) : nullptr;
+            auto* depth = content != nullptr ? dynamic_cast<RepickComboBox*> (content->findChildWithID ("device-bitdepth")) : nullptr;
+            expect (input != nullptr && depth != nullptr);
+            if (input != nullptr && depth != nullptr)
+            {
+                expectEquals (depth->getSelectedId(), 1);
+                clickOpen (*input);
+                input->setSelectedId (2, juce::sendNotificationSync);   // an arrow key: Capture 2 opens, the refill waits
+                expectEquals (engine.getOpenDevice().input, juce::String ("Capture 2"));
+                input->hidePopup();
+                depth->setSelectedId (3, juce::sendNotificationAsync);  // 24 bit, picked as its list closed: on its way
+                juce::Thread::sleep (550);
+                juce::Timer::callPendingTimersSynchronously();          // the 500 ms timer before the pick is handled
+                expectEquals (depth->getSelectedId(), 3);
+                dispatchFor (50);
+                expectEquals (engine.getOpenDevice().sampleFormat, juce::String ("int24"));
+                dispatchFor (650);
+                expectEquals (depth->getSelectedId(), 3);
+                expectEquals (input->getText(), juce::String ("Capture 2"));
+                expect (noAlert());
+            }
+            SettingsDialog::closeIfOpen();
+        }
+
+        beginTest ("the device or monitor output picked again reopens what runs when part of it stopped, and nothing while it plays whole");
+        {
+            // the top bar's device box, in the app
+            MixEngine engine;
+            auto* windowsType = makeEngine (engine, { "Good" });
+            LiveMixSettings settings (directory);
+            MixDocument document (engine);
+            MainComponent main (document, settings);
+            main.setSize (1200, 800);
+            std::function<RepickComboBox* (juce::Component&)> findRepick = [&] (juce::Component& c) -> RepickComboBox*
+            {
+                if (auto* box = dynamic_cast<RepickComboBox*> (&c)) return box;
+                for (auto* child : c.getChildren())
+                    if (auto* found = findRepick (*child)) return found;
+                return nullptr;
+            };
+            auto* topBox = findRepick (main);
+            expect (topBox != nullptr, "the top bar's device box");
+            if (windowsType != nullptr && topBox != nullptr)
+            {
+                expect (engine.isSplitMonitor() && engine.isRunningWhole());
+                const int selected = topBox->getSelectedId();
+                expectEquals (topBox->getText(), windows.input);
+                int opens = engine.getOpenCount();
+                pickFromList (*topBox, selected);   // the input that plays whole, picked again: nothing to do
+                expectEquals (engine.getOpenCount(), opens);
+                stopMonitor (engine, *windowsType);
+                pickFromList (*topBox, selected);   // picked again with its monitor stopped
+                expectEquals (engine.getOpenCount(), opens + 1);
+                expect (engine.isRunningWhole(), "the top bar pick brought the monitor back");
+                expectEquals (engine.getOpenDevice().output, windows.output);
+
+                // a session saved with it: reused while it plays whole, reopened with its monitor stopped
+                opens = engine.getOpenCount();
+                expect (engine.openSessionDevice (windows).isEmpty());
+                expectEquals (engine.getOpenCount(), opens);
+                stopMonitor (engine, *windowsType);
+                expect (engine.openSessionDevice (windows).isEmpty());
+                expectEquals (engine.getOpenCount(), opens + 1);
+                expect (engine.isRunningWhole(), "the session brought the monitor back");
+
+                // an arrow key in the open list opens Capture 2; its monitor stops; Capture 2 clicked in that list
+                topBox->setSelectedId (2, juce::sendNotificationSync);
+                expectEquals (engine.getOpenDevice().input, juce::String ("Capture 2"));
+                stopMonitor (engine, *windowsType);
+                opens = engine.getOpenCount();
+                pickFromList (*topBox, 2);
+                expectEquals (engine.getOpenCount(), opens + 1);
+                expect (engine.isRunningWhole(), "Capture 2 clicked after the arrow key brought its monitor back");
+            }
+        }
+        {
+            // the settings' output and input boxes - where the status line "모니터 출력 멈춤 - 설정에서 출력 장치를
+            // 확인하세요" sends the operator
+            MixEngine engine;
+            auto* windowsType = makeEngine (engine, { "Good" });
+            LiveMixSettings settings (directory);
+            auto* content = openSettingsContent (engine, settings, {});
+            auto* output = content != nullptr ? dynamic_cast<RepickComboBox*> (content->findChildWithID ("device-output")) : nullptr;
+            auto* input = content != nullptr ? dynamic_cast<RepickComboBox*> (content->findChildWithID ("device-input")) : nullptr;
+            expect (output != nullptr && input != nullptr);
+            if (windowsType != nullptr && output != nullptr && input != nullptr)
+            {
+                expectEquals (output->getText(), windows.output);
+                int opens = engine.getOpenCount();
+                pickFromList (*output, output->getSelectedId());
+                pickFromList (*input, input->getSelectedId());
+                expectEquals (engine.getOpenCount(), opens);
+                expect (noAlert());
+                stopMonitor (engine, *windowsType);
+                pickFromList (*output, output->getSelectedId());
+                expectEquals (engine.getOpenCount(), opens + 1);
+                expect (engine.isRunningWhole(), "the output picked again brought the monitor back");
+                expectEquals (engine.getOpenDevice().output, windows.output);
+                expectEquals (engine.getOpenDevice().input, windows.input);
+                expectEquals (engine.getOpenDevice().bufferSize, windows.bufferSize);
+                expectEquals (juce::roundToInt (engine.getOpenDevice().sampleRate), juce::roundToInt (windows.sampleRate));
+                stopMonitor (engine, *windowsType);
+                pickFromList (*input, input->getSelectedId());
+                expectEquals (engine.getOpenCount(), opens + 2);
+                expect (engine.isRunningWhole(), "the input picked again brought the monitor back");
+
+                // an arrow key in the open input list opens Capture 2; its monitor stops; Capture 2 clicked in that list
+                input->setSelectedId (2, juce::sendNotificationSync);
+                expectEquals (engine.getOpenDevice().input, juce::String ("Capture 2"));
+                stopMonitor (engine, *windowsType);
+                opens = engine.getOpenCount();
+                pickFromList (*input, 2);
+                expectEquals (engine.getOpenCount(), opens + 1);
+                expect (engine.isRunningWhole(), "Capture 2 clicked after the arrow key brought its monitor back");
+                expect (noAlert());
+
+                // closed under a list left open (a reset that failed): not reopened from what that list showed - at the
+                // driver's defaults it would lose its rate and buffer - the refresh lists what there is to pick afresh
+                const int selected = input->getSelectedId();
+                if (auto* device = engine.getDeviceManager().getCurrentAudioDevice()) device->close();
+                opens = engine.getOpenCount();
+                pickFromList (*input, selected);
+                expectEquals (engine.getOpenCount(), opens);
+                expect (noAlert());
+                dispatchFor (650);
+                expectEquals (input->getSelectedId(), 0);
+            }
+            SettingsDialog::closeIfOpen();
+        }
+
+        beginTest ("the ASIO control panel: what a restart opens is chosen; no restart, or one that failed, leaves the session's own device");
+        {
+            MixEngine engine;
+            removeRealMixDeviceTypes (engine);
+            auto fake = std::make_unique<MixFakeType> ("ASIO");
+            auto* asio = fake.get();
+            asio->panel = true;
+            engine.getDeviceManager().addAudioDeviceType (std::move (fake));
+            expect (engine.openDevice ({ "ASIO", "Good", "Good", 256, 48000.0 }).isEmpty());
+            LiveMixSettings settings (directory);
+            MixDocument document (engine);
+            const MixDevice asked { "ASIO", "Unplugged Interface", "Unplugged Interface", 256, 48000.0 };
+            document.setDeviceInfo (asked);
+            MainComponent main (document, settings);
+            main.setSize (1200, 800);
+            (main.*member (ShowAppSettings {})) ();
+            auto* content = shownSettingsContent();
+            auto* panel = content != nullptr ? dynamic_cast<juce::TextButton*> (content->findChildWithID ("asio-panel")) : nullptr;
+            expect (panel != nullptr && panel->isVisible());
+            if (panel != nullptr && panel->onClick != nullptr)
+            {
+                const int opens = engine.getOpenCount();
+                panel->onClick();   // closed without asking for a restart: nothing changed, nothing chosen
+                dispatchFor (50);
+                expectEquals (engine.getOpenCount(), opens);
+                expectEquals (document.getSession().device.input, asked.input);
+
+                asio->panelAsksRestart = true;
+                asio->failedRate = 48000.0;   // the restart fails, and so does the way back
+                for (auto& record : asio->records) { record->panelAsksRestart = true; record->failedRate = 48000.0; }
+                panel->onClick();
+                dispatchFor (50);
+                sayAlert (ko ("장치를 다시 열지 못했습니다"));
+                expectEquals (document.getSession().device.input, asked.input);
+                expect (! engine.isDeviceRunning());
+
+                asio->failedRate = 0.0;
+                expect (engine.openDevice ({ "ASIO", "Good", "Good", 256, 48000.0 }).isEmpty());
+                document.setDeviceInfo (asked);
+                SettingsDialog::closeIfOpen();
+                (main.*member (ShowAppSettings {})) ();
+                content = shownSettingsContent();
+                panel = content != nullptr ? dynamic_cast<juce::TextButton*> (content->findChildWithID ("asio-panel")) : nullptr;
+                expect (panel != nullptr);
+                if (panel != nullptr && panel->onClick != nullptr)
+                {
+                    panel->onClick();   // a restart that worked: what it opened is the operator's choice
+                    dispatchFor (50);
+                    expect (noAlert());
+                    expect (engine.isDeviceRunning());
+                    expectEquals (document.getSession().device.input, juce::String ("Good"));
+                }
+            }
+            SettingsDialog::closeIfOpen();
+        }
+        {
+            // the restart fails and the way back works: the device plays on, so only the callback tells the failure
+            MixEngine engine;
+            removeRealMixDeviceTypes (engine);
+            auto fake = std::make_unique<MixFakeType> ("ASIO");
+            auto* asio = fake.get();
+            asio->panel = asio->panelAsksRestart = true;
+            engine.getDeviceManager().addAudioDeviceType (std::move (fake));
+            expect (engine.openDevice ({ "ASIO", "Good", "Good", 256, 48000.0 }).isEmpty());
+            LiveMixSettings settings (directory);
+            int chosen = 0, failed = 0;
+            auto* content = openSettingsContent (engine, settings, [&] { ++chosen; }, [&] { ++failed; });
+            auto* panel = content != nullptr ? dynamic_cast<juce::TextButton*> (content->findChildWithID ("asio-panel")) : nullptr;
+            expect (panel != nullptr);
+            if (panel != nullptr && panel->onClick != nullptr)
+            {
+                asio->failNextOpens = 1;
+                panel->onClick();
+                dispatchFor (50);
+                sayAlert (ko ("장치를 다시 열지 못했습니다"));
+                expect (engine.isDeviceRunning(), "the way back worked");
+                expect (chosen == 0 && failed == 1, "a failed restart is not chosen: " + juce::String (chosen) + "/" + juce::String (failed));
+                panel->onClick();   // and one that works is
+                dispatchFor (50);
+                expect (noAlert());
+                expect (chosen == 1 && failed == 1, "a restart that worked is chosen: " + juce::String (chosen) + "/" + juce::String (failed));
+                for (auto& record : asio->records) record->panelAsksRestart = false;
+                asio->panelAsksRestart = false;
+                panel->onClick();   // closed without asking for a restart: nothing to tell
+                dispatchFor (50);
+                expect (chosen == 1 && failed == 1, "no restart, no callback: " + juce::String (chosen) + "/" + juce::String (failed));
+            }
+            SettingsDialog::closeIfOpen();
+        }
+
+        beginTest ("switching to ASIO: while choosing, a device changed elsewhere is shown and the choice stays; an ASIO one ends it");
+        {
+            MixEngine engine;
+            makeEngine (engine, { "Broken", "Good" });
+            LiveMixSettings settings (directory);
+            const auto b = boxes (openSettingsContent (engine, settings, {}));
+            if (b.type != nullptr && b.input != nullptr && b.rate != nullptr && b.buffer != nullptr)
+            {
+                b.type->setSelectedId (1, juce::sendNotificationSync);
+                dispatchFor (50);
+                expectChoosing (b, 2);
+                // a session opened from Explorer runs another Windows input: redrawn, still choosing
+                b.input->addItem ("a redraw removes this", 999);
+                expect (engine.openDevice ({ windows.type, "Capture 2", windows.output, 512, 44100.0 }).isEmpty());
+                dispatchFor (650);
+                expectChoosing (b, 2);
+                // one that opens an ASIO device ends the choice: that device is shown
+                expect (engine.openDevice ({ "ASIO", "Good", "Good", 256, 48000.0 }).isEmpty());
+                dispatchFor (650);
+                expectEquals (b.type->getText(), juce::String ("ASIO"));
+                expectEquals (b.input->getText(), juce::String ("Good"));
+                expectEquals (b.rate->getSelectedId(), 48000);
+                expectEquals (b.buffer->getSelectedId(), 256);
+                expect (noAlert());
+            }
+            SettingsDialog::closeIfOpen();
+        }
+
+        beginTest ("switching to ASIO in the app: a failed try keeps the session's own device, the device then picked is saved with it");
+        {
+            MixEngine engine;
+            makeEngine (engine, { "Broken", "Good" });
+            LiveMixSettings settings (directory);
+            MixDocument document (engine);
+            // the session was saved with an interface that is unplugged now: Windows audio runs, the session still asks for it
+            const MixDevice asked { "ASIO", "Unplugged Interface", "Unplugged Interface", 256, 48000.0 };
+            document.setDeviceInfo (asked);
+            MainComponent main (document, settings);
+            main.setSize (1200, 800);
+            (main.*member (ShowAppSettings {})) ();
+            const auto b = boxes (shownSettingsContent());
+            if (b.type != nullptr && b.input != nullptr && b.rate != nullptr && b.buffer != nullptr)
+            {
+                b.type->setSelectedId (1, juce::sendNotificationSync);
+                dispatchFor (50);
+                expectChoosing (b, 2);
+                expectEquals (document.getSession().device.input, asked.input);
+                b.input->setSelectedId (1, juce::sendNotificationSync);   // the absent one, picked
+                dispatchFor (50);
+                sayAlert (ko ("오디오 장치를 열지 못했습니다"));
+                expectEquals (document.getSession().device.type, asked.type);
+                expectEquals (document.getSession().device.input, asked.input);
+                b.input->setSelectedId (2, juce::sendNotificationSync);
+                dispatchFor (50);
+                expect (noAlert());
+                expectEquals (document.getSession().device.type, juce::String ("ASIO"));
+                expectEquals (document.getSession().device.input, juce::String ("Good"));
+                expect (settings.getLastDevice().has_value() && settings.getLastDevice()->input == "Good");
+            }
+            SettingsDialog::closeIfOpen();
+        }
+
+        beginTest ("switching to ASIO: a try that leaves nothing playing - the running device would not come back - is said");
+        {
+            MixEngine engine;
+            auto* windowsType = makeEngine (engine, { "Broken", "Good" });
+            LiveMixSettings settings (directory);
+            const auto b = boxes (openSettingsContent (engine, settings, {}));
+            if (b.type != nullptr && b.input != nullptr && b.rate != nullptr && b.buffer != nullptr && windowsType != nullptr)
+            {
+                windowsType->failedRate = windows.sampleRate;   // reopening the Windows device fails from now on
+                b.type->setSelectedId (1, juce::sendNotificationSync);
+                dispatchFor (50);
+                sayAlert (ko ("오디오 장치를 열지 못했습니다"));
+                expect (! engine.isDeviceRunning());
+                expectChoosing (b, 2);
+                windowsType->failedRate = 0.0;
+                b.input->setSelectedId (2, juce::sendNotificationSync);   // and the working driver still opens from there
+                dispatchFor (50);
+                expect (noAlert());
+                expectEquals (engine.getOpenDevice().input, juce::String ("Good"));
+                expect (engine.isDeviceRunning());
+            }
+            SettingsDialog::closeIfOpen();
+        }
+        expect (directory.deleteRecursively());
     }
 
     void runFormatTextTests()

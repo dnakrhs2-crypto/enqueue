@@ -46,8 +46,19 @@ TopBar::TopBar (MixDocument& doc) : document (doc)
     deviceCombo.setTextWhenNothingSelected (ko ("오디오 장치 없음"));
     deviceCombo.onChange = [this]
     {
+        deviceCombo.settle();
         if (! refreshing && onDeviceChosen && deviceCombo.getSelectedId() > 0)
             onDeviceChosen (deviceCombo.getText());
+    };
+    deviceCombo.onRepick = [this]
+    {
+        if (! refreshing && onDeviceRepicked && deviceCombo.getSelectedId() > 0)
+            onDeviceRepicked (deviceCombo.getText());
+    };
+    deviceCombo.beforeListOpens = [this]   // the devices that changed in the middle of a pick, before the list shows
+    {
+        if (waitingDevices && onDevicesWanted)
+            onDevicesWanted();
     };
     addAndMakeVisible (deviceCombo);
 
@@ -99,6 +110,12 @@ void TopBar::refresh()
 
 void TopBar::setDevices (const juce::StringArray& names, const juce::String& current, const juce::String& typeName)
 {
+    // Not in the middle of a pick (the list open, or a pick whose change is on its way): a refill (a device unplugged
+    // meanwhile) would give it to another device or lose it. The app asks again once the pick is through.
+    waitingDevices = deviceCombo.busy();
+    if (waitingDevices)
+        return;
+
     const juce::ScopedValueSetter<bool> guard (refreshing, true);
     const auto label = AudioBackends::label (typeName);
     deviceLabel.setText (label.upToFirstOccurrenceOf (" ", false, false), juce::dontSendNotification);
@@ -107,10 +124,11 @@ void TopBar::setDevices (const juce::StringArray& names, const juce::String& cur
     deviceCombo.clear (juce::dontSendNotification);
 
     for (int i = 0; i < names.size(); ++i)
-        deviceCombo.addItem (names[i], i + 1);
+        deviceCombo.addRepickableItem (names[i], i + 1);
 
     const int index = names.indexOf (current);
     deviceCombo.setSelectedId (index >= 0 ? index + 1 : 0, juce::dontSendNotification);
+    deviceCombo.settle();
     resized();
 }
 
