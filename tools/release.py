@@ -292,10 +292,64 @@ def create_release(gh, tag, assets, repo, options):
             retry_pause("gh release create " + tag, attempt)
 
 
-def build(preset, skip_tests):
+GATE_IDLE_S = 20          # start the test gate only after this many seconds without keyboard/mouse input (0 = off)
+GATE_IDLE_MAX_MIN = 30.0  # ... but start anyway when the PC never went idle for that long within this many minutes
+
+
+def seconds_since_input():
+    """Seconds since the last keyboard/mouse input in this desktop session (GetLastInputInfo), None if unknown."""
+    import ctypes
+    from ctypes import wintypes
+
+    class LastInput(ctypes.Structure):
+        _fields_ = [("cbSize", wintypes.UINT), ("dwTime", wintypes.DWORD)]
+
+    try:
+        user32, kernel32 = ctypes.WinDLL("user32"), ctypes.WinDLL("kernel32")
+        kernel32.GetTickCount.restype = wintypes.DWORD
+        info = LastInput(cbSize=ctypes.sizeof(LastInput))
+        if not user32.GetLastInputInfo(ctypes.byref(info)):
+            return None
+        return ((kernel32.GetTickCount() - info.dwTime) & 0xFFFFFFFF) / 1000.0
+    except (AttributeError, OSError):
+        return None
+
+
+def wait_for_gate_idle(idle_s=GATE_IDLE_S, max_min=GATE_IDLE_MAX_MIN, idle_fn=seconds_since_input, sleep=time.sleep,
+                       clock=time.monotonic):
+    """The ctest gate runs on gom's own desktop on purpose: another app owns the foreground there, which the hidden
+    desktop cannot reproduce (2026-09-23: 8 gate-only failures; 2026-10-06: JUCE popups close themselves). gom typing
+    during the gate fails the focus tests instead (AuditFix0923 ED-3, 2026-10-06 LiveMix 0.13.3 x2), so the gate starts
+    at a quiet moment - what was done by hand with wait_idle_then.py. Never blocks a release: unknown idle state starts
+    at once, and after max_min minutes it starts anyway. -> 'off' | 'idle' | 'unknown' | 'timeout'."""
+    if not idle_s:
+        return "off"
+    deadline, told = clock() + max_min * 60, False
+    while True:
+        idle = idle_fn()
+        if idle is None:
+            print("GATE_WAIT: idle time unknown - starting the test gate now", flush=True)
+            return "unknown"
+        if idle >= idle_s:
+            print("GATE_START: no keyboard/mouse input for %.0f s at %s - running the test gate on this desktop (about 4 min; "
+                  "input during it can fail focus tests)" % (idle, time.strftime("%H:%M:%S")), flush=True)
+            return "idle"
+        if clock() >= deadline:
+            print("GATE_WAIT: the PC never went %d s without input in %.0f min - starting the test gate anyway"
+                  % (idle_s, max_min), flush=True)
+            return "timeout"
+        if not told:
+            print("GATE_WAIT: waiting for %d s without keyboard/mouse input before the test gate (at most %.0f min)"
+                  % (idle_s, max_min), flush=True)
+            told = True
+        sleep(min(5.0, max(0.5, idle_s - idle)))
+
+
+def build(preset, skip_tests, gate_idle=GATE_IDLE_S, gate_idle_max_min=GATE_IDLE_MAX_MIN):
     run(["cmake", "--preset", preset])
     run(["cmake", "--build", "--preset", preset + "-release", "--target", APP["target"], "EnqueueTests", "--", "-m", "-v:m", "-nologo"])
     if not skip_tests:
+        wait_for_gate_idle(gate_idle, gate_idle_max_min)
         # only this app's suites: the Recorder tests registered by recorder/CMakeLists.txt need RecorderTests.exe, which an
         # Enqueue / LiveMix build does not make (2026-09-14: the 0.10.2 release stopped on 41 "Not Run" Recorder tests)
         run(["ctest", "--preset", preset + "-release"] + (["-R", APP["ctest_filter"]] if APP.get("ctest_filter") else []))
@@ -595,7 +649,7 @@ def latest_from_github(gh, repo, app=None, allow_missing=False):
 
 def package_legacy(args, version):
     """Opt-in local mode; the existing legacy release path below is unchanged."""
-    build(args.preset, False)
+    build(args.preset, False, args.gate_idle, args.gate_idle_max_min)
     source = ROOT / "build/vs2022" / APP["artefacts"] / "Release"
     for name in (APP["exe"], "WinSparkle.dll"):
         if not (source / name).is_file():
@@ -917,6 +971,10 @@ def main():
                         help="folder with yt-dlp.exe, qjs.exe, lame.exe (+ libsndfile-1.dll) bundled into the Enqueue installer (default: ENQUEUE_TOOLS_DIR)")
     parser.add_argument("--skip-build", action="store_true")
     parser.add_argument("--skip-tests", action="store_true")
+    parser.add_argument("--gate-idle", type=int, default=GATE_IDLE_S,
+                        help="start the test gate after this many seconds without keyboard/mouse input (default %d, 0 = off)" % GATE_IDLE_S)
+    parser.add_argument("--gate-idle-max-min", type=float, default=GATE_IDLE_MAX_MIN,
+                        help="start the test gate anyway after this many minutes of waiting (default %.0f)" % GATE_IDLE_MAX_MIN)
     parser.add_argument("--publish", action="store_true", help="create the GitHub release with gh and upload installer + appcast")
     parser.add_argument("--site-only", action="store_true", help="only redeploy the website from the latest GitHub release")
     parser.add_argument("--skip-site", action="store_true", help="publish without touching the website")
@@ -1002,7 +1060,7 @@ def main():
     output_dir = ROOT / "installer" / "output"
 
     if not args.skip_build:
-        build(args.preset, args.skip_tests)
+        build(args.preset, args.skip_tests, args.gate_idle, args.gate_idle_max_min)
 
     for required in (APP["exe"], "WinSparkle.dll"):
         if not (source_dir / required).is_file():
