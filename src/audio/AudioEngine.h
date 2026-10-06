@@ -267,7 +267,9 @@ public:
     void clearLoudnessMatches();
     /** The measured match of a cue, or nothing when it has none (not measured, or matching is not running for it). */
     std::optional<double> getLoudnessMatchDb (const juce::Uuid& cueId) const;
-    /** Matching on (with 자동 레벨) or off: playing instances move to their match, or back to the file as it is. Message thread. */
+    /** Matching on or off, with 자동 레벨 - the main component sets this before the master's switch. On, the instances
+        playing are handed their cue's match now and take it once the switch reaches the audio thread; off, they go back
+        to the file with the switch (CuePlayer). Message thread. */
     void setLoudnessMatchActive (bool active);
     bool isLoudnessMatchActive() const noexcept { return matchActive; }
     /** The cue's insert chain, created on demand. */
@@ -390,11 +392,9 @@ private:
     AutoLeveler autoLeveler;
     std::map<juce::Uuid, double> matchByCue;   // message thread
     bool matchActive = false;                  // message thread
-    /** The match a start of this cue gets now: its measured match less the master leveler's (hand) gain (0 dB when
-        matching is off, the cue is not measured or is no audio cue). */
-    double matchFor (const Cue& cue) const;
-    /** The cue's own measured match (0 dB as above): what an instance goes back to when the device restarts. */
-    double fullMatchFor (const Cue& cue) const;
+    /** The cue's measured match, or nothing (matching off, not measured, no audio cue): what its instances are handed -
+        they make up for the master's hand themselves, on the audio thread, with the switch of the very block. */
+    std::optional<double> fullMatchFor (const Cue& cue) const;
     livemix::LoudnessMeter loudness;
     std::atomic<float> outputPeakHold { 0.0f };      // the device outputs' sample peak since the last takeOutputDiagnostics()
     std::atomic<int> outputClippedBlocks { 0 };      // blocks with a device output over 0 dBFS since the device started

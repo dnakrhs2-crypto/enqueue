@@ -78,6 +78,7 @@ void ReadAheadSource::invalidate (juce::int64 fromPosition)
         validStart = validEnd = 0;   // nothing in the ring describes the new content
         ++generation;                // a background fill that is still reading the old content will not publish
         refilling.store (true, std::memory_order_relaxed);
+        knownTotal.store (-1, std::memory_order_relaxed);   // nor its length: until a fill of the new content, unknown
         playPos.store (fromPosition, std::memory_order_relaxed);
     }
 
@@ -93,6 +94,7 @@ void ReadAheadSource::invalidateCurrent()
         validStart = validEnd = 0;
         ++generation;              // playPos untouched: the audio thread keeps its place
         refilling.store (true, std::memory_order_relaxed);
+        knownTotal.store (-1, std::memory_order_relaxed);
     }
 
     thread.moveToFrontOfQueue (this);
@@ -180,7 +182,6 @@ bool ReadAheadSource::fillChunk()
     if (! prepared.load (std::memory_order_acquire) || ring.getNumSamples() == 0)
         return false;
 
-    knownTotal.store (upstream.getTotalLength(), std::memory_order_relaxed);
     juce::int64 readStart = 0, readEnd = 0;
     bool restart = false;
     juce::uint32 startedIn = 0;
@@ -212,6 +213,8 @@ bool ReadAheadSource::fillChunk()
     if (readEnd <= readStart)
         return false;
 
+    // the length, read after this fill took its generation: published with the data below only if no edit came between
+    const juce::int64 total = upstream.getTotalLength();
     readIntoRing (readStart, (int) (readEnd - readStart));
 
     {
@@ -220,6 +223,7 @@ bool ReadAheadSource::fillChunk()
         if (generation != startedIn)
             return true;   // invalidated meanwhile: what we read describes the old content
 
+        knownTotal.store (total, std::memory_order_relaxed);
         const auto pos = playPos.load (std::memory_order_relaxed);
 
         if (restart)

@@ -319,6 +319,11 @@ MainComponent::MainComponent (AudioEngine& e, AppSettings& s, juce::ApplicationC
 
 MainComponent::~MainComponent()
 {
+    // the loudness scan first, before the engine whose formats it reads with: a read that does not return (a share that
+    // stopped answering) is left to the process end - its results saved - rather than the thread killed mid-read
+    if (loudnessScan != nullptr && ! loudnessScan->stopForExit (3000))
+        static_cast<void> (loudnessScan.release());
+
     activeCuesWindow.reset();   // its panel refers to the engine, document and this command target
     settings.setLastSessionProject (document.getFile()); // best effort on shutdown: no notice or interruption
     settings.onSaveSucceeded = {};
@@ -3786,7 +3791,8 @@ void MainComponent::refreshLoudnessMatches()
             for (const auto& c : list.getAll())
             {
                 // slices that skip, repeat or loop a part play something else than the region: the leveler rides those
-                if (! c.isAudio() || c.file == juce::File() || ! c.audio.playsStraightThrough (c.audio.startSeconds, c.audio.endSeconds)
+                if (! c.isAudio() || c.file == juce::File()
+                    || ! c.audio.playsStraightThrough (c.regionStart(), c.regionEnd() > c.regionStart() ? c.regionEnd() : -1.0)
                     || ! seen.insert (c.id).second)
                     continue;
 
@@ -3813,8 +3819,8 @@ void MainComponent::refreshLoudnessMatches()
 
 void MainComponent::documentStateChanged()
 {
+    refreshLoudnessMatches();   // first: switched on, the cues know their matches before the master's switch turns
     engine.setAutoLevel (document.settings.autoLevelEnabled, document.settings.autoLevelTargetLufs);
-    refreshLoudnessMatches();
     unsavedChanges.store (document.isDirty(), std::memory_order_relaxed);
     updateInputsWanted();
     commands.commandStatusChanged();   // undo / redo names and availability

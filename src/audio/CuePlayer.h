@@ -1,5 +1,7 @@
 #pragma once
 
+#include <optional>
+
 #include "audio/FadeEnvelope.h"
 #include "audio/HighQualityResampler.h"
 #include "audio/PluginChain.h"
@@ -125,20 +127,27 @@ public:
     void setDuckDb (double duckDb, double rampSeconds) noexcept;
     /** Before start(): the duck the instance begins at (a cue that starts while a duck cue runs). Message thread. */
     void setInitialDuckDb (double duckDb) noexcept;
-    /** 자동 레벨's loudness match: the cue measured beforehand and brought to the target. A gain apart from the cue's own
-        levels, applied as the block is mixed into the bus - after the inserts, so a plugin hears the file as it is - and,
-        when it changes while playing, moved at most 40 dB a second (no step). 0 dB = none. Any thread. */
-    void setMatchDb (double matchDb) noexcept;
-    /** Before start(): the match the instance begins at, from its first sample. Message thread. */
-    void setInitialMatchDb (double matchDb) noexcept;
-    /** The cue's own measured match (dB), without what its start made up for the master leveler: where the instance
-        goes when the device restarts (rebaseMatch). Any thread. */
-    void setFullMatchDb (double matchDb) noexcept;
-    /** The device restarted, the master leveler is back at 0 dB: the instance takes the cue's own match at once (the
-        output was interrupted anyway). Under the engine lock. */
-    void rebaseMatch() noexcept;
-    /** Audio thread, after mixIntoBus: a match is applied, or still on its way back to 0 dB. */
-    bool isMatchApplied() const noexcept { return matchLevel != 1.0f || matchTarget.load (std::memory_order_relaxed) != 1.0f; }
+    /** 자동 레벨's loudness match: the cue measured beforehand and brought to the target - a gain apart from the cue's own
+        levels, applied as the block is mixed into the bus (after the inserts: a plugin hears the file as it is). Whether
+        it applies is decided on the audio thread with the master leveler's switch of that very block (setMatchContext),
+        so the cue and the master always agree: started while on, it is there from the first sample, made up for the
+        master's hand at that moment; switched off it goes back to the file, switched on again to its match (made up for
+        the hand then) - both at most 40 dB a second, no step. This is the cue's measured match (dB), or nothing (not
+        measured). Message thread: before start(), or before the master is switched on. */
+    void setFullMatch (std::optional<double> matchDb) noexcept;
+    /** play(): the next mix is this instance's start. Message thread. */
+    void startMatch() noexcept { matchStartPending.store (true, std::memory_order_release); }
+    /** The device restarted, and the master leveler with it (its hand back at 0 dB): the next mix puts the instance at
+        its cue's own match at once (the output was interrupted anyway). Under the engine lock. */
+    void rebaseMatch() noexcept { matchRebasePending.store (true, std::memory_order_release); }
+    /** Audio thread, before mixIntoBus: the master's switch for this block and its hand's gain at the block's start. */
+    void setMatchContext (bool on, double handDb) noexcept
+    {
+        contextOn = on;
+        contextHand = (float) juce::Decibels::decibelsToGain (juce::jlimit (-40.0, 40.0, handDb), -1000.0);
+    }
+    /** Audio thread: the instance plays at its match, or is still on its way back to 0 dB. */
+    bool isMatchApplied() const noexcept { return matchActive || matchLevel != 1.0f; }
     double getDuckDb() const noexcept { return duckDb.load (std::memory_order_relaxed); }
     /** Audio thread, after rendering, under the engine lock: intentional level changes in this block. */
     bool isAutoLevelHeld() const noexcept { return autoLevelHeld; }
@@ -269,10 +278,15 @@ private:
     std::atomic<double> liveRate { 1.0 };
     std::atomic<float> targetGain { 1.0f };
     std::atomic<float> duckTarget { 1.0f };
-    std::atomic<float> matchTarget { 1.0f };    // the loudness match (linear)
-    std::atomic<float> matchFull { 1.0f };      // the cue's own match, for a device restart (linear)
-    std::atomic<bool> matchJump { false };      // ... taken as it is by the next mix (the instance's first block)
-    float matchLevel = 1.0f;                    // audio thread: the match the last mix ended at
+    std::atomic<float> matchFull { 0.0f };          // the cue's measured match (linear); 0 = not measured
+    std::atomic<bool> matchStartPending { false };  // startMatch(): the next mix is the instance's start
+    std::atomic<bool> matchRebasePending { false }; // rebaseMatch(): the master leveler started again
+    bool contextOn = false;                         // audio thread: this block's master switch (setMatchContext) ...
+    float contextHand = 1.0f;                       // ... and its hand's gain (linear)
+    bool matchOn = false;                           // audio thread: the switch the last mix saw
+    bool matchActive = false;                       // audio thread: the instance plays at its match
+    float matchComp = 1.0f;                         // audio thread: what its activation made up for the hand (linear)
+    float matchLevel = 1.0f;                        // audio thread: the match the last mix ended at
     std::atomic<bool> duckJump { false };      // setInitialDuckDb(): the audio thread puts duckInitial in place at once (a start, nothing to click) ...
     std::atomic<float> duckInitial { 1.0f };   // ... and then ramps to whatever goal came in since (a release sent before the first block)
     std::atomic<double> duckRampSeconds { 0.0 };

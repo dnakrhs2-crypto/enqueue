@@ -423,29 +423,12 @@ void CuePlayer::setInitialDuckDb (double db) noexcept
     duckJump.store (true, std::memory_order_release);
 }
 
-void CuePlayer::setMatchDb (double matchDb) noexcept
+void CuePlayer::setFullMatch (std::optional<double> matchDb) noexcept
 {
-    // the match (-20 .. +12) less the master leveler's gain at the start (-20 .. +12): -32 .. +32 dB
-    const double db = std::isfinite (matchDb) ? juce::jlimit (-40.0, 40.0, matchDb) : 0.0;
-    matchTarget.store ((float) juce::Decibels::decibelsToGain (db, -1000.0), std::memory_order_relaxed);
-}
-
-void CuePlayer::setFullMatchDb (double matchDb) noexcept
-{
-    const double db = std::isfinite (matchDb) ? juce::jlimit (-40.0, 40.0, matchDb) : 0.0;
-    matchFull.store ((float) juce::Decibels::decibelsToGain (db, -1000.0), std::memory_order_relaxed);
-}
-
-void CuePlayer::rebaseMatch() noexcept
-{
-    matchTarget.store (matchFull.load (std::memory_order_relaxed), std::memory_order_relaxed);
-    matchJump.store (true, std::memory_order_release);
-}
-
-void CuePlayer::setInitialMatchDb (double matchDb) noexcept
-{
-    setMatchDb (matchDb);
-    matchJump.store (true, std::memory_order_release);
+    // a gain of exactly 0 never comes out of a match (-20 .. +12 dB): it stands for "not measured"
+    const bool known = matchDb.has_value() && std::isfinite (*matchDb);
+    matchFull.store (known ? (float) juce::Decibels::decibelsToGain (juce::jlimit (-40.0, 40.0, *matchDb), -1000.0) : 0.0f,
+                     std::memory_order_relaxed);
 }
 
 double CuePlayer::getLengthSeconds() const noexcept
@@ -559,12 +542,33 @@ void CuePlayer::mixIntoBus (juce::AudioBuffer<float>& bus, const juce::AudioBuff
     const int outs = juce::jmin (numOutputs, bus.getNumChannels());
     const float alpha = (float) juce::jmin (1.0, (double) numSamples / (0.010 * currentSampleRate));   // ~10 ms level ramps
 
-    // the loudness match: from the first block at its starting value; a change while playing moves at most 40 dB/s
-    if (matchJump.exchange (false, std::memory_order_acq_rel))
-        matchLevel = matchTarget.load (std::memory_order_relaxed);
+    // the loudness match, decided with the master's switch of this very block (setMatchContext): started while on, at its
+    // match from the first sample, made up for the hand as it is now; switched off back to the file, switched on again to
+    // the match made up for the hand then - each at most 40 dB/s
+    const float full = matchFull.load (std::memory_order_relaxed);
 
+    if (matchRebasePending.exchange (false, std::memory_order_acq_rel))
+    {
+        matchComp = 1.0f;                          // the master's hand is back at 0 dB: the cue's own match,
+        matchLevel = matchActive ? full : 1.0f;    // at once (the output was interrupted anyway)
+    }
+
+    if (matchStartPending.exchange (false, std::memory_order_acq_rel))
+    {
+        matchActive = contextOn && full > 0.0f;
+        matchComp = 1.0f / contextHand;
+        matchLevel = matchActive ? juce::jlimit (0.01f, 100.0f, full * matchComp) : 1.0f;
+    }
+    else if (contextOn != matchOn)
+    {
+        matchActive = contextOn && full > 0.0f;
+        matchComp = 1.0f / contextHand;
+    }
+
+    matchOn = contextOn;
     const float matchStart = matchLevel;
-    const float matchGoal = matchTarget.load (std::memory_order_relaxed);
+    // the match (-20 .. +12) made up for a hand of -20 .. +12: -32 .. +32 dB
+    const float matchGoal = matchActive ? juce::jlimit (0.01f, 100.0f, full * matchComp) : 1.0f;
 
     if (matchGoal != matchLevel)
     {

@@ -67,6 +67,11 @@ public:
     int getMeasuredCount() const noexcept { return measuredCount.load (std::memory_order_relaxed); }
     /** Called on the message thread when results have changed. */
     std::function<void()> onResults;
+    /** App exit: asks the scan to stop and waits up to 'ms'. False when it is still inside a read that does not return (a
+        share that stopped answering): what was learned is saved now and nothing reaches onResults any more - the owner
+        then lets the process end take the thread (releases the object) rather than killing it in the middle of the
+        read. Message thread. */
+    bool stopForExit (int ms);
 
     /** Measures a region on the calling thread. 'pace' runs between 0.5 s chunks (the worker sleeps there while busy);
         'keepGoing' false stops it (no result). */

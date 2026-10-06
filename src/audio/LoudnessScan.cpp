@@ -65,6 +65,21 @@ LoudnessScan::~LoudnessScan()
         saveCache();
 }
 
+bool LoudnessScan::stopForExit (int ms)
+{
+    signalThreadShouldExit();
+    work.signal();
+    notify();
+
+    if (waitForThreadToExit (ms))
+        return true;
+
+    onResults = nullptr;   // nothing reaches the owner from here on
+    cancelPendingUpdate();
+    saveCache();           // the thread takes the lock only for moments, never while it reads
+    return false;
+}
+
 std::optional<LoudnessScanResult> LoudnessScan::lookup (const juce::File& file, double regionStart, double regionEnd)
 {
     if (file == juce::File())
@@ -262,7 +277,12 @@ void LoudnessScan::run()
                 measuredCount.fetch_add (1, std::memory_order_relaxed);
                 result = measure (formats, file, (double) key.startMs / 1000.0, key.endMs < 0 ? -1.0 : (double) key.endMs / 1000.0,
                                   [this] { return ! threadShouldExit(); },
-                                  [this] { if (busyFlag.load (std::memory_order_relaxed)) wait (50); });   // ~10x real time while cues play
+                                  [this]
+                                  {
+                                      recheckSome();   // a long region does not hold the recheck back either
+                                      if (busyFlag.load (std::memory_order_relaxed))
+                                          wait (50);   // ~10x real time while cues play
+                                  });
 
                 if (threadShouldExit())
                     break;
@@ -358,7 +378,7 @@ bool LoudnessScan::recheckSome()
             wait (20);   // cues playing: a light touch on the disk or the share
     }
 
-    if (changed)
+    if (changed && ! threadShouldExit())
         triggerAsyncUpdate();   // the main component drops those matches until they are measured again
 
     return recheckNext < recheckPaths.size();

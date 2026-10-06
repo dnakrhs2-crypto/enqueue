@@ -84,8 +84,9 @@ bool AudioCueData::playsStraightThrough (double regionStart, double regionEnd) c
     if (firstCountFor (regionStart) != 1)
         return false;
 
+    // a marker at the region's end (a file that got shorter puts it right there) starts nothing that plays
     for (const auto& s : slices)
-        if (s.seconds > regionStart && (regionEnd < 0.0 || s.seconds < regionEnd) && s.playCount != 1)
+        if (s.seconds > regionStart && (regionEnd < 0.0 || s.seconds < regionEnd - 0.001) && s.playCount != 1)
             return false;
 
     return true;

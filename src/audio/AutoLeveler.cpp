@@ -143,7 +143,7 @@ void AutoLeveler::reset() noexcept
     linearStep = 0.0;
     rampLeft = delayPos = maxHead = maxCount = attackPos = 0;
     sampleIndex = 0;
-    wasEnabled = releasing = false;
+    wasEnabled = releasing = blockBegun = blockOn = false;
     homeDb = 0.0;
     handGain.store (0.0, std::memory_order_relaxed);
     delay.clear();
@@ -855,13 +855,10 @@ double AutoLeveler::limit (float peak) noexcept
     return juce::jlimit (0.0, 1.0, attackSum / delayLength);
 }
 
-void AutoLeveler::process (juce::AudioBuffer<float>& buffer, int numSamples) noexcept
+double AutoLeveler::beginBlock (bool on, bool matchedCues) noexcept
 {
-    if (numSamples <= 0 || channels == 0) return;
-    const juce::ScopedNoDenormals noDenormals;
-    const bool on = enabled.load (std::memory_order_relaxed);
-    const bool held = hold.load (std::memory_order_relaxed);
-    const bool matchedCues = cuesMatched.load (std::memory_order_relaxed);
+    blockBegun = true;
+    blockOn = on;
     if (on && ! wasEnabled && wet == 0.0)   // fully off before: start fresh (back on mid-fade-out: carry on, no jump)
     {
         clearMeasurement();
@@ -876,14 +873,39 @@ void AutoLeveler::process (juce::AudioBuffer<float>& buffer, int numSamples) noe
         homeDb = 0.0;
         releasing = false;
     }
-    // switched off while cues play with a loudness match: the fader glides home (below) as the matches glide back, the
+    if (on && homeDb != 0.0)
+    {
+        // back on while gliding home: start afresh from where the master is - the hand takes the master's gain over (a
+        // glide back would carry the cues that start meanwhile, made up for this hand, past their match) and listens
+        // anew (what it heard before belongs to a fader somewhere else: it would pull the hand back there)
+        linear *= std::pow (10.0, homeDb / 20.0);
+        homeDb = 0.0;
+        freezeGain();
+        clearMeasurement();
+        desired = gain;
+    }
+    // switched off while cues play with a loudness match: the fader glides home (process) as the matches glide back, the
     // limiter on until both are done - a match that made up for the fader would otherwise play bare for a moment
     if (! on && wasEnabled && wet > 0.0 && matchedCues)
         releasing = true;
     if (on)
-        releasing = false;   // back on: the glide home goes back too, the hand carries on
+        releasing = false;
     wasEnabled = on;
     if (! on && moving) freezeGain();
+    if (releasing && ! matchedCues && homeDb == -20.0 * std::log10 (linear))
+        releasing = false;   // home, and every match back at 0 dB: now the bypass crossfade
+    return 20.0 * std::log10 (linear);
+}
+
+void AutoLeveler::process (juce::AudioBuffer<float>& buffer, int numSamples) noexcept
+{
+    if (! blockBegun)
+        beginBlock (enabled.load (std::memory_order_relaxed), false);   // no engine around it: the switch as it is now
+    blockBegun = false;
+    if (numSamples <= 0 || channels == 0) return;
+    const juce::ScopedNoDenormals noDenormals;
+    const bool on = blockOn;
+    const bool held = hold.load (std::memory_order_relaxed);
     if (on && held) easeOut();   // the user's own fade starts now: let go at once, without a corner
     if (! on && wet == 0.0)
     {
@@ -892,11 +914,9 @@ void AutoLeveler::process (juce::AudioBuffer<float>& buffer, int numSamples) noe
         handGain.store (0.0, std::memory_order_relaxed);
         return;
     }
-    // the glide home on top of the hand, 40 dB/s, a straight ramp across the block (1.0 throughout when there is none)
-    const double handDb = 20.0 * std::log10 (linear);
-    const double homeGoal = on ? 0.0 : (releasing || homeDb != 0.0 ? -handDb : 0.0);
-    if (releasing && ! matchedCues && homeDb == homeGoal)
-        releasing = false;   // home, and every match back at 0 dB: now the bypass crossfade
+    // the glide home after a switch-off, on top of the hand (never while on: beginBlock hands it to the hand), 40 dB/s, a
+    // straight ramp across the block (1.0 throughout when there is none)
+    const double homeGoal = ! on && (releasing || homeDb != 0.0) ? -20.0 * std::log10 (linear) : 0.0;
     const double homeFrom = homeDb, homeStep = homeSpeed * (double) numSamples / rate;
     homeDb = homeGoal > homeDb ? juce::jmin (homeGoal, homeDb + homeStep) : juce::jmax (homeGoal, homeDb - homeStep);
     const double home0 = homeFrom == 0.0 ? 1.0 : std::pow (10.0, homeFrom / 20.0);

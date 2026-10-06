@@ -23,10 +23,13 @@ public:
     /** The hand's own gain (dB): where the fader is, without the glide home after a switch-off - where it carries on from
         when switched back on (0 dB once fully off). */
     double getHandGainDb() const noexcept { return handGain.load (std::memory_order_relaxed); }
-    /** Cues are playing with a loudness match (CuePlayer). Switched off now, the fader glides home at the match's own
-        40 dB/s with the limiter still on, and the bypass waits until it is home and every match is back at 0 dB too:
-        the two move together, so no cue plays louder than before the switch. Audio thread, every block before process(). */
-    void setCuesMatched (bool value) noexcept { cuesMatched.store (value, std::memory_order_relaxed); }
+    /** The block's switch, taken once before the cues are mixed (AudioEngine) so they and the master agree on it for the
+        whole block. 'matchedCues': cues play with a loudness match at the block's start - switched off now, the fader
+        glides home at the match's own 40 dB/s with the limiter on, and the bypass waits until it is home and every match
+        is back at 0 dB (no cue louder than before the switch). Switched back on while gliding home, the hand takes over
+        where the master is (no glide back). Returns the hand's gain (dB) for the block - while on, exactly what the
+        master applies: what a cue starting now makes up for. process() takes the switch itself when this was not called. */
+    double beginBlock (bool on, bool matchedCues) noexcept;
     /** The last block's hold: the user's own level change was in progress (the hand let go). */
     bool isHeld() const noexcept { return hold.load (std::memory_order_relaxed); }
     void process (juce::AudioBuffer<float>& buffer, int numSamples) noexcept;
@@ -73,9 +76,10 @@ private:
     void fillDelay (const juce::AudioBuffer<float>& buffer, int start, int count) noexcept;
     double limit (float peak) noexcept;
 
-    std::atomic<bool> enabled { false }, hold { false }, paused { false }, cuesMatched { false };
+    std::atomic<bool> enabled { false }, hold { false }, paused { false };
     std::atomic<double> target { -16.0 }, displayedGain { 0.0 }, handGain { 0.0 };
     bool releasing = false;   // switched off with matched cues playing: gliding home before the bypass crossfade
+    bool blockBegun = false, blockOn = false;   // beginBlock() ran for this block, and the switch it took
     double homeDb = 0.0;      // the glide home on top of the hand (dB): minus the hand once home, 0 when none
     static constexpr double homeSpeed = 40.0;   // dB/s: the loudness match's own rate
     double rate = 48000.0;
