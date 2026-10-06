@@ -403,6 +403,25 @@ public:
         expect (rested.leveler.getGainDb() >= 11.5, "and then it does move");
         expect (knocked.leveler.getGainDb() >= 11.5, "and the song still gets its level");
 
+        beginTest ("27k. a song's first beat bounds the first ride until its second hit, up to 5 s apart");
+        for (const int first : { 0, 60 })   // the first hit as the song starts, or 0.6 s in; then every 4.8 s
+        {
+            Rig slowBeat;
+            double slowBeatHighest = -100.0;
+            for (int b = 0; b < 2000; ++b)
+            {
+                slowBeat.signal.fill (slowBeat.buffer, -28);
+                if (b >= first && (b - first) % 480 == 0) slowBeat.buffer.setSample (0, 17, 1.0f);
+                slowBeat.leveler.process (slowBeat.buffer, block);
+                slowBeatHighest = juce::jmax (slowBeatHighest, slowBeat.leveler.getGainDb());
+            }
+            const auto label = juce::String (first / 100.0) + " s";
+            metric ("0 dBFS hit every 4.8 s from " + label + ": highest gain (dB)", slowBeatHighest);
+            metric ("gain at 20 s (dB)", slowBeat.leveler.getGainDb());
+            expect (slowBeatHighest <= 2.3, "never over the +2 dB the beat allows, first hit at " + label);
+            expect (slowBeat.leveler.getGainDb() >= 1.7, "and it gets there, first hit at " + label);
+        }
+
         beginTest ("27g. a louder pair that has gone quiet does not hide the taps still coming just under it");
         Rig masked;
         double maskedHighest = -100.0, maskedPeak = -100.0, maskedDrop = 0.0;
@@ -605,6 +624,37 @@ public:
             metric ("way back up without / with a 0 dBFS tap 1 s+ after the last one, highest gain (dB)", tappedTop);
             metric ("without", plainTop);
             expect (tappedTop <= plainTop - 2.0, "the tap's bound stops the fast ride well short of the top");
+        }
+
+        beginTest ("35j. a big effect's tail and a pause after it do not make the song a new, quieter one: its taps still cap the boost");
+        {
+            Rig tail;
+            int tick = 0;
+            const auto play = [&tail, &tick] (double seconds, const std::function<double (double)>& level)
+            {
+                const int steps = (int) std::llround (seconds * 100.0);
+                for (int i = 0; i < steps; ++i, ++tick)
+                {
+                    const double lufs = level (i / 100.0);
+                    tail.signal.fill (tail.buffer, lufs);
+                    if (lufs > -200.0 && tick % 120 == 60) tail.buffer.setSample (0, 17, 1.0f);   // a 0 dBFS tap every 1.2 s: +2 dB at most
+                    tail.leveler.process (tail.buffer, block);
+                    tail.gains.push_back (tail.leveler.getGainDb());
+                }
+            };
+            play (20.0, [] (double) { return -26.0; });                        // the song, at the +2 dB its taps allow
+            const auto tailBefore = tail.gains.back();
+            const auto tailFrom = tail.gains.size();
+            play (1.5, [] (double) { return -6.0; });                          // a big effect: pulled down fast
+            play (1.2, [] (double t) { return -6.0 - 20.0 * t / 1.2; });       // its tail dies away
+            play (0.3, [] (double) { return -26.0; });                         // the song again: it was an effect
+            play (0.6, [] (double) { return -300.0; });                        // a pause that stops the way back up
+            play (6.0, [] (double) { return -26.0; });                         // the song goes on, its taps with it
+            double tailHighest = -100.0;
+            for (size_t i = tailFrom; i < tail.gains.size(); ++i) tailHighest = juce::jmax (tailHighest, tail.gains[i]);
+            metric ("gain before the effect (dB)", tailBefore);
+            metric ("highest gain after it (dB)", tailHighest);
+            expect (tailHighest <= tailBefore + 0.3, "the taps' cap still holds after the effect and the pause");
         }
 
         beginTest ("36. loud for more than 5 s is loud material, not an effect: the fader stays down");
@@ -1279,13 +1329,13 @@ private:
         beginTest ("44. a swell out of a quiet moment in a loud part: the fader does not go up while the music is loud again");
         {
             Rig swell;
-            swell.feed (30.0, -24);   // +8 dB
-            swell.feed (8.0, -12);    // a loud part, staying: down to about -3
-            swell.feed (2.0, -19);    // a quieter moment: the 3 s ceiling lets go, the 15 s flow still wants more
+            swell.feed (20.0, -18);   // +2 dB
+            swell.feed (4.0, -13);    // a louder part: the 3 s ceiling takes the fader down to about -1.5
+            swell.feed (1.5, -26);    // a quiet moment: falling, the goal holds - the 15 s flow still wants about +0.5
             const auto from = swell.gains.size();
             const auto atSwell = swell.gains[from - 1];
-            for (int i = 0; i < 50; ++i) swell.step (-19.0 + 9.0 * i / 50.0);   // 0.5 s swell back up
-            swell.feed (4.0, -11);
+            for (int i = 0; i < 50; ++i) swell.step (-26.0 + 16.0 * i / 50.0);   // 0.5 s swell up to -10
+            swell.feed (4.0, -10);
             double highest = -100.0;
             for (size_t i = from; i < swell.gains.size(); ++i) highest = juce::jmax (highest, swell.gains[i]);
             metric ("swell out of a quiet moment: gain before it (dB)", atSwell);

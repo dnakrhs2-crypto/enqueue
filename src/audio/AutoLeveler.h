@@ -38,8 +38,9 @@ private:
         blocks, one burst - an effect - left out as in programPower): the program is still falling - a fade-out, a
         decay, the first second after a drop. */
     bool fallingNow() const noexcept;
-    /** The loudest input peak of this section's program so far (its last 3 s at most), one burst - an effect, a bang -
-        left out as in programPower. While a section is young (sectionYoungBlocks) any such peak may be its beat. */
+    /** The loudest input peak of this section's first 4 s (sectionYoungBlocks) still within the last 5 s, one burst - an
+        effect, a bang - left out as in programPower: any such peak may be the first of a beat, and a beat up to 5 s apart
+        has shown its second hit (and the recurring peak takes over) by the time it drops out. */
     float sectionPeak() const noexcept;
     /** Far too quiet for 2.1 s (hushSectionBlocks), no longer falling, and the flow more than 3 LU over the run: the
         music has changed to a much quieter song (or part) - not a fader the recurring peaks keep under the target. The
@@ -92,15 +93,17 @@ private:
     // 30 dB/s. A gap neither counts nor breaks the run (quiet talk has its pauses); a louder block or the user's own fade
     // starts it again.
     bool riseUp = false;     // a fast ride up is the move in progress
-    bool hushed = false;     // this decision: far too quiet right now, 7 blocks of the run
+    bool hushed = false;     // this decision: far too quiet right now (7 blocks), and so is the whole section
     bool hushSectionTaken = false;   // this quiet run has already become a section
     bool ceilingOn = false;  // the 3 s ceiling, held while most of the 3 s is still heard over the target
     bool loudNow = false;    // the last decision heard its last 0.4 s at the target or over it: no ride up starts
     int hushRun = 0;         // active blocks of the run
     int hushSpan = 0;        // blocks since the run began, its gaps included
     static constexpr int hushSectionBlocks = 21;   // 2.1 s: a 2 s dip in a song stays a dip
-    // A section's first 4 s: its peaks so far bound the ride up before two of them can show a beat (sectionPeak).
+    // A section's first 4 s: its peaks bound the ride up, each for 5 s, before two of them can show a beat (sectionPeak).
     static constexpr int sectionYoungBlocks = 40;
+    std::array<double, 50> pastEnergy {};   // the last 5 s of block powers by time (0 = not active), for sectionPeak
+    int pastPos = 0;
 
     // A blare inside a song (far too loud 7 blocks in a row, with at least 3 s of the song before it): the fader is
     // pulled down at once and the blare's loud blocks wait outside the flow (blareHeld) until it is clear what it was.
