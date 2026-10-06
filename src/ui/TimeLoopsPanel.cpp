@@ -6,6 +6,14 @@
 namespace gocue
 {
 
+namespace
+{
+    int textWidth (const juce::Font& font, const juce::String& text)
+    {
+        return (int) std::ceil (juce::GlyphArrangement::getStringWidth (font, text));
+    }
+}
+
 TimeLoopsPanel::TimeLoopsPanel (ProjectDocument& doc, AudioEngine& e, juce::AudioThumbnailCache& cache)
     : document (doc), engine (e), waveform (e.getFormatManager(), cache)
 {
@@ -25,6 +33,17 @@ TimeLoopsPanel::TimeLoopsPanel (ProjectDocument& doc, AudioEngine& e, juce::Audi
     setupLabel (envelopeLabel, "페이드 엔벨로프");
     setupLabel (zoomLabel, "확대");
     setupLabel (sizeLabel, "크기");
+    setupLabel (gainLabel, "게인 (dB)");
+
+    // the 기본 tab's gain control, on the same value (Cue::gainDb): the range, the step, the box and the double-click reset match
+    gainSlider.setSliderStyle (juce::Slider::LinearHorizontal);
+    gainSlider.setRange (Cue::minGainDb, Cue::maxGainDb, 0.1);
+    gainSlider.setTextBoxStyle (juce::Slider::TextBoxRight, false, 90, Palette::fieldHeight);
+    gainSlider.setTextValueSuffix (" dB");
+    gainSlider.setDoubleClickReturnValue (true, 0.0);
+    gainSlider.setWantsKeyboardFocus (false);
+    gainSlider.onValueChange = [this] { commitGain(); };
+    addAndMakeVisible (gainSlider);
 
     setupEditor (startEditor, "0123456789:.", 12);
     startEditor.onReturnKey = [this] { commitStart(); startEditor.giveAwayKeyboardFocus(); };
@@ -177,7 +196,7 @@ void TimeLoopsPanel::refresh()
                      static_cast<juce::Component*> (&countEditor), static_cast<juce::Component*> (&rateEditor),
                      static_cast<juce::Component*> (&infiniteToggle), static_cast<juce::Component*> (&envelopeToggle),
                      static_cast<juce::Component*> (&linearToggle), static_cast<juce::Component*> (&lockToggle),
-                     static_cast<juce::Component*> (&resetButton) })
+                     static_cast<juce::Component*> (&resetButton), static_cast<juce::Component*> (&gainSlider) })
         c->setEnabled (enabled);
 
     waveform.setCue (cue);
@@ -189,6 +208,7 @@ void TimeLoopsPanel::refresh()
         countEditor.setText ("", false);
         rateEditor.setText ("", false);
         lengthLabel.setText ("", juce::dontSendNotification);
+        gainSlider.setValue (0.0, juce::dontSendNotification);
         return;
     }
 
@@ -203,6 +223,8 @@ void TimeLoopsPanel::refresh()
 
         shownId = cue->id;
     }
+
+    gainSlider.setValue (cue->gainDb, juce::dontSendNotification);   // a change made on the 기본 / 레벨 tab or by undo shows here too
 
     if (! startEditor.hasKeyboardFocus (true))
         startEditor.setText (formatTimeMs (cue->regionStart()), false);
@@ -462,6 +484,29 @@ void TimeLoopsPanel::commitRate()
     updateSelected (ko ("속도"), [value] (Cue& c) { c.audio.rate = value; }, {}, LiveApply::rate);
 }
 
+void TimeLoopsPanel::commitGain()
+{
+    if (refreshing || cancellingEdit)
+        return;
+
+    // the cue the fields show, like every other edit here (updateSelected writes to the same one)
+    const int index = shownId.isNull() ? document.cues.getSelectedIndex() : document.cues.indexOf (shownId);
+
+    if (! document.cues.isValidIndex (index))
+        return;
+
+    const auto& cue = document.cues.get (index);
+    const double value = gainSlider.getValue();
+
+    if (juce::approximatelyEqual (cue.gainDb, value))
+        return;
+
+    // the 기본 tab's edit: the same undo name and key, so a drag on either slider is one undo step
+    const auto id = cue.id;
+    updateSelected (ko ("게인 변경"), [value] (Cue& c) { c.gainDb = value; }, "gain:" + id.toString(), LiveApply::none);
+    engine.setLiveGainDb (id, value);   // a running instance follows at once
+}
+
 //==============================================================================
 void TimeLoopsPanel::showContextMenu (juce::Point<int> screenPosition)
 {
@@ -551,14 +596,20 @@ void TimeLoopsPanel::resized()
     row.removeFromLeft (6);
     pitchToggle.setBounds (row.removeFromLeft (84));
 
+    // the envelope on one row, each toggle as wide as its text; under it the gain, where the 기본 tab has it
+    // (the last row of this 400px column, the same slider length), right over the wave it reshapes
     area = clusters.playback;
     row = nextRow();
-    envelopeLabel.setBounds (row.removeFromLeft (104));
-    envelopeToggle.setBounds (row.removeFromLeft (60));
+    const auto place = [&row] (juce::Component& c, int width, int gapAfter) { c.setBounds (row.removeFromLeft (width)); row.removeFromLeft (gapAfter); };
+    const auto toggleFont = Palette::font (Palette::timeSize);
+    const auto toggleWidth = [&toggleFont] (const juce::ToggleButton& t) { return 23 + textWidth (toggleFont, t.getButtonText()) + 2; };   // tick + text (drawToggleButton)
+    place (envelopeLabel, textWidth (envelopeLabel.getFont(), envelopeLabel.getText()) + envelopeLabel.getBorderSize().getLeftAndRight(), 6);
+    place (envelopeToggle, toggleWidth (envelopeToggle), 12);
+    place (linearToggle, toggleWidth (linearToggle), 12);
+    place (lockToggle, toggleWidth (lockToggle), 0);
     row = nextRow();
-    row.removeFromLeft (104);
-    linearToggle.setBounds (row.removeFromLeft (140));
-    lockToggle.setBounds (row.removeFromLeft (130));
+    gainLabel.setBounds (row.removeFromLeft (64));
+    gainSlider.setBounds (row);
 
     area = clusters.trigger;
     row = nextRow();

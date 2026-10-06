@@ -50,6 +50,7 @@ private:
     void commitEnd();
     void commitPlayCount();
     void commitRate();
+    void commitGain();
     void setupEditor (juce::TextEditor& editor, const juce::String& allowed, int maxLength);
     void setupToggle (juce::ToggleButton& toggle, const char* text);
     void cancelEdit();
@@ -59,10 +60,13 @@ private:
     AudioEngine& engine;
     WaveformView waveform;
 
-    juce::Label startLabel, endLabel, lengthLabel, countLabel, rateLabel, envelopeLabel, zoomLabel, sizeLabel;
+    juce::Label startLabel, endLabel, lengthLabel, countLabel, rateLabel, envelopeLabel, zoomLabel, sizeLabel, gainLabel;
     juce::TextEditor startEditor, endEditor, countEditor, rateEditor;
     juce::ToggleButton infiniteToggle, envelopeToggle, linearToggle, lockToggle, pitchToggle;
     juce::TextButton resetButton, zoomInButton, zoomOutButton, sizeUpButton, sizeDownButton;
+    /** The cue's gain, the same value as the 기본 tab's slider: moving either moves the other, and this tab's wave
+        follows at once (WaveformView draws with the cue's level). */
+    juce::Slider gainSlider;
     bool refreshing = false;
     juce::uint32 lastLiveEnvelopePush = 0;   // commitEnvelope throttle
     juce::Uuid shownId = juce::Uuid::null();   // the cue the fields show (focus-lost commits go there)
