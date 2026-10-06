@@ -1,7 +1,21 @@
 juce_add_console_app(EnqueueTests PRODUCT_NAME "EnqueueTests")
+gocue_add_app_version(EnqueueTests)
+
+# Like the GUI apps, refresh JUCE's VERSIONINFO when the project version changes.
+get_target_property(_enqueue_tests_generated_dir EnqueueTests JUCE_GENERATED_SOURCES_DIRECTORY)
+set(_enqueue_tests_rc_file "${_enqueue_tests_generated_dir}/EnqueueTests_resources.rc")
+if(EXISTS "${_enqueue_tests_rc_file}")
+    file(READ "${_enqueue_tests_rc_file}" _enqueue_tests_rc_text)
+    string(REPLACE "." "," _enqueue_tests_version_commas "${PROJECT_VERSION}")
+    if(NOT _enqueue_tests_rc_text MATCHES "FILEVERSION[ \t]+${_enqueue_tests_version_commas},0")
+        file(REMOVE "${_enqueue_tests_rc_file}")
+        message(STATUS "EnqueueTests: version resource was stale -> regenerating for ${PROJECT_VERSION}")
+    endif()
+endif()
 
 target_sources(EnqueueTests PRIVATE
     TestMain.cpp
+    AppVersionTests.cpp
     AutoLevelTests.cpp
     AutoLevelRenderTests.cpp
     AutoLevelIntegrationTests.cpp
@@ -131,15 +145,19 @@ target_sources(EnqueueTests PRIVATE
 
 target_compile_definitions(EnqueueTests PRIVATE
     JUCE_APPLICATION_NAME_STRING="EnqueueTests"
-    GOCUE_HAS_WINSPARKLE=0
-    JUCE_APPLICATION_VERSION_STRING="${PROJECT_VERSION}")
+    GOCUE_HAS_WINSPARKLE=0)
 
 target_link_libraries(EnqueueTests PRIVATE GoCueCore LiveMixUI)
 
+# Runtime test data keeps the expected PROJECT_VERSION out of compile definitions.
+file(CONFIGURE OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/AppVersion.expected" CONTENT "${PROJECT_VERSION}\n" @ONLY)
+set_property(SOURCE AppVersionTests.cpp APPEND PROPERTY COMPILE_DEFINITIONS
+    "GOCUE_EXPECTED_APP_VERSION_FILE=\"${CMAKE_CURRENT_BINARY_DIR}/AppVersion.expected\"")
+
 # Tiny real VERSIONINFO-bearing DLLs: installer tests exercise the Windows version reader,
 # copy them only into temporary roots, and never load OBS or depend on a plugin build.
-file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/obs_installer_fixture.c"
-    "__declspec(dllexport) int fixture(void) { return 1; }\n")
+file(CONFIGURE OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/obs_installer_fixture.c"
+    CONTENT "__declspec(dllexport) int fixture(void) { return 1; }\n" @ONLY)
 foreach(_fixture IN ITEMS OLD CURRENT OBS32 OBS33)
     if(_fixture STREQUAL "OLD")
         set(_fixture_version "0,10,0,0")
@@ -151,8 +169,8 @@ foreach(_fixture IN ITEMS OLD CURRENT OBS32 OBS33)
         set(_fixture_version "33,0,0,0")
     endif()
     set(_fixture_rc "${CMAKE_CURRENT_BINARY_DIR}/obs_installer_${_fixture}.rc")
-    file(WRITE "${_fixture_rc}"
-        "#include <windows.h>\n1 VERSIONINFO\nFILEVERSION ${_fixture_version}\nPRODUCTVERSION ${_fixture_version}\nFILEOS VOS_NT_WINDOWS32\nFILETYPE VFT_DLL\nBEGIN\nEND\n")
+    file(CONFIGURE OUTPUT "${_fixture_rc}"
+        CONTENT "#include <windows.h>\n1 VERSIONINFO\nFILEVERSION ${_fixture_version}\nPRODUCTVERSION ${_fixture_version}\nFILEOS VOS_NT_WINDOWS32\nFILETYPE VFT_DLL\nBEGIN\nEND\n" @ONLY)
     add_library(ObsInstallerFixture${_fixture} SHARED "${CMAKE_CURRENT_BINARY_DIR}/obs_installer_fixture.c" "${_fixture_rc}")
     set_property(TARGET ObsInstallerFixture${_fixture} PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
     add_dependencies(EnqueueTests ObsInstallerFixture${_fixture})

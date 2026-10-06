@@ -165,6 +165,8 @@ target_link_options(GoCueCore INTERFACE $<$<CXX_COMPILER_ID:MSVC>:/DELAYLOAD:mfp
 # ---------------------------------------------------------------------------
 # Application
 # ---------------------------------------------------------------------------
+include(cmake/AppVersion.cmake)
+
 juce_add_gui_app(Enqueue
     PRODUCT_NAME "Enqueue"
     COMPANY_NAME "Gomtwigim"
@@ -173,6 +175,8 @@ juce_add_gui_app(Enqueue
     ICON_SMALL "${CMAKE_CURRENT_SOURCE_DIR}/assets/icon_512.png"
     NEEDS_WEB_BROWSER FALSE
     NEEDS_CURL FALSE)
+
+gocue_add_app_version(Enqueue)
 
 # JUCE regenerates GoCue_resources.rc (VERSIONINFO) only when the icon changes, so on an
 # incremental build a version bump would ship with the old file version. Drop a stale one here.
@@ -223,7 +227,6 @@ target_sources(Enqueue PRIVATE
 
 target_compile_definitions(Enqueue PRIVATE
     JUCE_APPLICATION_NAME_STRING="$<TARGET_PROPERTY:Enqueue,JUCE_PRODUCT_NAME>"
-    JUCE_APPLICATION_VERSION_STRING="$<TARGET_PROPERTY:Enqueue,JUCE_VERSION>"
     GOCUE_HAS_WINSPARKLE=${GOCUE_HAS_WINSPARKLE}
     GOCUE_APPCAST_URL="${GOCUE_APPCAST_URL}"
     GOCUE_EDDSA_PUBLIC_KEY="${GOCUE_EDDSA_PUBLIC_KEY}")
@@ -315,6 +318,8 @@ juce_add_gui_app(LiveMix
     NEEDS_WEB_BROWSER FALSE
     NEEDS_CURL FALSE)
 
+gocue_add_app_version(LiveMix)
+
 get_target_property(_livemix_generated_dir LiveMix JUCE_GENERATED_SOURCES_DIRECTORY)
 set(_livemix_rc_file "${_livemix_generated_dir}/LiveMix_resources.rc")
 if(EXISTS "${_livemix_rc_file}")
@@ -348,7 +353,6 @@ target_sources(LiveMix PRIVATE livemix/src/Main.cpp)
 target_include_directories(LiveMix PRIVATE livemix/src livemix/src/ui)
 target_compile_definitions(LiveMix PRIVATE
     JUCE_APPLICATION_NAME_STRING="$<TARGET_PROPERTY:LiveMix,JUCE_PRODUCT_NAME>"
-    JUCE_APPLICATION_VERSION_STRING="$<TARGET_PROPERTY:LiveMix,JUCE_VERSION>"
     GOCUE_HAS_WINSPARKLE=${GOCUE_HAS_WINSPARKLE}
     GOCUE_APPCAST_URL="${LIVEMIX_APPCAST_URL}"
     GOCUE_EDDSA_PUBLIC_KEY="${GOCUE_EDDSA_PUBLIC_KEY}"

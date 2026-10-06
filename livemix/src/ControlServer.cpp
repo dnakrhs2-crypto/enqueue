@@ -2,6 +2,7 @@
 #include "ControlDiscovery.h"
 #include "ControlDispatcher.h"
 #include "ControlLog.h"
+#include "app/AppVersion.h"
 
 #include <juce_cryptography/juce_cryptography.h>
 #include <juce_events/juce_events.h>
@@ -340,7 +341,7 @@ void ControlServer::Impl::start (Options settings)
     messageThread();
     stop();
     options = std::move (settings);
-    if (options.appVersion.isEmpty()) options.appVersion = JUCE_APPLICATION_VERSION_STRING;
+    if (options.appVersion.isEmpty()) options.appVersion = appVersionString();
     log = std::make_shared<ControlLog> (options.logDirectory);
     log->info ("start app=" + options.appVersion + " protocol=1");
     started = true;

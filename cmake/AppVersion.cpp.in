@@ -1,0 +1,11 @@
+#include "app/AppVersion.h"
+
+namespace gocue
+{
+
+juce::String appVersionString()
+{
+    return "@APP_VERSION@";
+}
+
+} // namespace gocue

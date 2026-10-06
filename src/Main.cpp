@@ -1,4 +1,5 @@
 #include "app/AppSettings.h"
+#include "app/AppVersion.h"
 #include "app/UiScale.h"
 #include "app/Updater.h"
 #include "audio/AudioEngine.h"
@@ -22,7 +23,7 @@ public:
     GoCueApplication() = default;
 
     const juce::String getApplicationName() override       { return JUCE_APPLICATION_NAME_STRING; }
-    const juce::String getApplicationVersion() override    { return JUCE_APPLICATION_VERSION_STRING; }
+    const juce::String getApplicationVersion() override    { return appVersionString(); }
     bool moreThanOneInstanceAllowed() override
     {
         // Only scan workers bypass forwarding Explorer project opens to the running window.
