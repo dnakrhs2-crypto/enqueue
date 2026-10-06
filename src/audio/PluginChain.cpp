@@ -530,7 +530,8 @@ void PluginChain::updateTailCache()
     // message thread only: 'slots' is iterated without the chain lock (see takeNewFaults), and no plugin callback lock
     // is taken either - a query the host may make while the plugin runs, and a lock here would make the callback pass
     // the plugin for a block on every bypass switch and parameter poll (see getStates)
-    double tail = 0.0;
+    double tail = 0.0, ring = 0.0;
+    bool tailFull = false;
 
     for (auto& slot : slots)
     {
@@ -539,23 +540,36 @@ void PluginChain::updateTailCache()
 
         // the plugin's latency is in flight on either path (its own delay when active, the dry line when bypassed or
         // faulted): a cue must play on for that long after its file ends or the last samples are cut
-        tail = juce::jmin (maxTailSeconds, tail + (double) slot->latency.load (std::memory_order_relaxed) / sampleRate);
+        const double latency = (double) slot->latency.load (std::memory_order_relaxed) / sampleRate;
+        const bool faulted = slot->faulted.load (std::memory_order_relaxed);
+        double t = faulted ? 0.0 : maxTailSeconds;   // a faulted plugin is not asked (nor run: nothing of it rings)
 
-        if (slot->bypassed.load() || slot->faulted.load (std::memory_order_relaxed))
-            continue;   // its output is discarded: its tail does not ring
-
-        double t = maxTailSeconds;
-
-        try
+        if (! faulted)
         {
-            t = slot->plugin->getTailLengthSeconds();
+            try
+            {
+                t = slot->plugin->getTailLengthSeconds();
+            }
+            catch (...) {}   // a plugin that throws here counts as the longest tail
         }
-        catch (...) {}   // a plugin that throws here counts as the longest tail
+
+        // what went in may come out for this long whatever the switch: a bypassed plugin keeps running (its tail stays
+        // current) and can be switched back in
+        ring = juce::jmin (maxTailSeconds, ring + latency + (std::isfinite (t) ? juce::jmax (0.0, t) : maxTailSeconds));
+
+        if (tailFull)
+            continue;
+
+        tail = juce::jmin (maxTailSeconds, tail + latency);
+
+        if (slot->bypassed.load() || faulted)
+            continue;   // its output is discarded: its tail does not ring
 
         if (! std::isfinite (t))
         {
             tail = maxTailSeconds;
-            break;
+            tailFull = true;
+            continue;
         }
 
         // Plugins run in series: a reverb tail feeding a delay rings for the sum of both.
@@ -563,6 +577,8 @@ void PluginChain::updateTailCache()
     }
 
     tailSecondsCache.store ((float) juce::jlimit (0.0, maxTailSeconds, tail), std::memory_order_relaxed);
+    ringSecondsCache.store ((float) juce::jlimit (0.0, maxTailSeconds, ring), std::memory_order_relaxed);
+    cacheVersion.fetch_add (1, std::memory_order_release);
 }
 
 void PluginChain::refreshPluginCaches()

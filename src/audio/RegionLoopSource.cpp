@@ -196,9 +196,13 @@ void RegionLoopSource::rebuildLayout()
 
     pushRun (runStart, end, runCount);
 
-    // judged before a whole-region repeat folds into the single run below: that repeat is the same sound, a slice's is not
-    l.plainSlices = firstCount == 1 && resolvedRuns.empty() && stopAfterStart < 0
-                    && std::all_of (markers.begin(), markers.end(), [] (const SliceMarker& m) { return m.playCount == 1; });
+    // judged before a whole-region repeat folds into the single run below: that repeat is the same sound, a slice's is not.
+    // A devamp only ends a loop sooner (or stops after the pass): on the single run of a region without slices that is
+    // the whole region's repeat count - the same sound; on a slice, a count other than once is that slice again
+    l.plainSlices = firstCount == 1
+                    && std::all_of (markers.begin(), markers.end(), [] (const SliceMarker& m) { return m.playCount == 1; })
+                    && (markers.empty()
+                        || std::all_of (resolvedRuns.begin(), resolvedRuns.end(), [] (const Resolved& r) { return r.count == 1; }));
 
     if (markers.empty() && l.numRuns == 1 && firstCount == 1)
     {

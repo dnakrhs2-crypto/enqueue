@@ -37,7 +37,7 @@ public:
             throw std::runtime_error ("prepare failed");
 
         resetDelay();
-        setLatencySamples (latencySamples);   // reported to the host, as a look-ahead limiter does
+        setLatencySamples (reportLatency ? latencySamples : 0);   // reported to the host, as a look-ahead limiter does
     }
     void releaseResources() override { ++releaseCount; }
 
@@ -89,7 +89,7 @@ public:
     {
         latencySamples = juce::jmax (0, newLatency);
         resetDelay();
-        setLatencySamples (latencySamples);
+        setLatencySamples (reportLatency ? latencySamples : 0);
     }
 
     void resetDelay()
@@ -158,6 +158,7 @@ public:
     bool emitNaN = false;          // writes a NaN into the first sample of every block
     bool throwOnPrepare = false;   // prepareToPlay throws
     int latencySamples = 0;        // set before the plugin is added: reported at prepare, and the output really lags by as much
+    bool reportLatency = true;     // false: the lag is not reported (an echo, 100 % wet: its repeat told as a tail instead)
     juce::AudioBuffer<float> delayLine;
     int delayPos = 0;
     static inline int liveInstances = 0;   // instances alive right now (a chain rebuild must destroy the old ones)

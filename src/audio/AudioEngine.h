@@ -13,6 +13,7 @@
 #include <juce_events/juce_events.h>
 
 #include <array>
+#include <functional>
 #include <optional>
 #include <atomic>
 #include <map>
@@ -254,10 +255,6 @@ public:
         goes off and on again before a block sees it); switching off also sizes the release's wait: the latency of the
         inserts after the cues (patch and master chains). Message thread. */
     void setAutoLevel (bool enabled, double targetLufs);
-    /** A switch-off's way home is in progress: the main component then keeps the inserts' latency current. Any thread. */
-    bool isAutoLevelReleasing() const noexcept { return autoLeveler.isReleasing(); }
-    /** The inserts' latency after the cues, read again (a plugin's look-ahead changed, one was added). Message thread. */
-    void refreshReleaseLatency() { matchReleaseLatency.store (insertLatencyAfterCues(), std::memory_order_relaxed); }
     double getAutoLevelGainDb() const noexcept { return autoLeveler.getGainDb(); }
     /** The last rendered block held the auto level (a fade, duck, volume change or panic was under way). */
     bool isAutoLevelHeld() const noexcept { return autoLeveler.isHeld(); }
@@ -306,6 +303,9 @@ public:
         passes what it really copies out, so a silenced device does not report a peak. */
     void renderBlock (juce::AudioBuffer<float>& output, int numSamples, const float* const* inputs = nullptr, int numInputs = 0,
                       int meteredChannels = -1);
+    /** Tests only: run on the audio thread as each block begins, before the engine lock is taken - where a switch and a
+        start from the message thread can land in a block. Empty in the app. */
+    std::function<void()> onBlockStartForTests;
 
     /** Destroys players that have finished. Called automatically on the message thread. */
     void reapFinishedPlayers();
@@ -399,9 +399,10 @@ private:
     // pairs one switch's state with another switch's generation
     std::atomic<juce::uint32> switchState { 0 };
     static constexpr juce::uint32 switchOnBit = 0x80000000u;
-    std::atomic<int> matchReleaseLatency { 0 };         // the inserts' latency after the cues, taken at a switch-off
     /** The latency the inserts after the cues add (a patch's cue-output and device-output chains, the master inserts). */
-    int insertLatencyAfterCues();
+    /** Callback, under the engine lock: how long the inserts after the cues (master, every patch's cue and device outputs)
+        may still give out what went in, as their caches tell; 'version' changes with any of them. */
+    double ringAfterCues (juce::uint32& version) const noexcept;
     /** The cue's measured match, or nothing (matching off, not measured, no audio cue): what its instances are handed -
         they make up for the master's hand themselves, on the audio thread, with the switch of the very block. */
     std::optional<double> fullMatchFor (const Cue& cue) const;

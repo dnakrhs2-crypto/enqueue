@@ -128,6 +128,13 @@ public:
     /** Sum of the tails of the active (non-bypassed) plugins in series plus every plugin's latency (in flight on the
         wet or the dry path), clamped to [0, maxTailSeconds]. Any thread. */
     double getTailSeconds() const;
+    /** How long a sound fed in now may still come out of the chain, whatever its switches do: every plugin's latency and
+        tail, a bypassed one's too (it keeps running, and can be switched back in with what it holds), clamped to
+        [0, maxTailSeconds]. Any thread. */
+    double getRingSeconds() const noexcept { return (double) ringSecondsCache.load (std::memory_order_relaxed); }
+    /** Changes each time the latency / tail figures are worked out again: a plugin added, removed, moved, switched, or
+        reporting a change. Any thread. */
+    juce::uint32 getCacheVersion() const noexcept { return cacheVersion.load (std::memory_order_acquire); }
     /** Recompute the cached tail (message thread): a plugin may report a longer / shorter tail after a parameter
         change without any structural edit. */
     void refreshTailCache() { updateTailCache(); }
@@ -200,6 +207,8 @@ private:
     std::atomic<bool> stallRaised { false };   // a slot crossed stallBlocks since takeNewStalls()
     std::atomic<bool> overflowRaised { false };   // a slot's backlog outgrew its ring: recoverAfterStalls() has work
     std::atomic<float> tailSecondsCache { 0.0f };   // getTailSeconds() for the audio thread
+    std::atomic<float> ringSecondsCache { 0.0f };   // getRingSeconds() for the audio thread
+    std::atomic<juce::uint32> cacheVersion { 0 };   // bumped by every updateTailCache()
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (PluginChain)
 };

@@ -533,6 +533,8 @@ void CuePlayer::adoptPublishedGains() noexcept
 
 void CuePlayer::mixIntoBus (juce::AudioBuffer<float>& bus, const juce::AudioBuffer<float>& rendered, int numSamples) noexcept
 {
+    matchBoosted = false;
+
     if (! isValid() || numSamples <= 0)
         return;
 
@@ -590,6 +592,8 @@ void CuePlayer::mixIntoBus (juce::AudioBuffer<float>& bus, const juce::AudioBuff
         const float up = matchLevel * stepRatio, down = matchLevel / stepRatio;
         matchLevel = matchGoal > matchLevel ? juce::jmin (matchGoal, up) : juce::jmax (matchGoal, down);
     }
+
+    matchBoosted = juce::jmax (matchStart, matchLevel) > 1.0f;   // the ramp is monotonic: its ends are its extremes
 
     for (int in = 0; in < ins; ++in)
     {

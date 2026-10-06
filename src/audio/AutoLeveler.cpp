@@ -1,5 +1,7 @@
 #include "audio/AutoLeveler.h"
 
+#include <utility>
+
 namespace gocue
 {
 
@@ -144,10 +146,10 @@ void AutoLeveler::reset() noexcept
     rampLeft = delayPos = maxHead = maxCount = attackPos = 0;
     sampleIndex = 0;
     wasEnabled = releasing = blockBegun = blockOn = false;
-    masterRises = flushed = blockMatched = false;
+    masterRises = blockBoosted = false;
     afterReset = true;
-    quietSamples = releaseLatency = 0;
-    releasingNow.store (false, std::memory_order_relaxed);
+    flushAfterReset = flushLeft > 0;   // a chain that kept what it held through the restart: still waited for
+    flushLeft = 0;
     homeDb = 0.0;
     handGain.store (0.0, std::memory_order_relaxed);
     delay.clear();
@@ -859,7 +861,7 @@ double AutoLeveler::limit (float peak) noexcept
     return juce::jlimit (0.0, 1.0, attackSum / delayLength);
 }
 
-double AutoLeveler::beginBlock (bool on, bool cuesMatched, int latencySamples) noexcept
+double AutoLeveler::beginBlock (bool on, bool cuesMatched, double ringSeconds, juce::uint32 ringVersion) noexcept
 {
     blockBegun = true;
     blockOn = on;
@@ -894,41 +896,32 @@ double AutoLeveler::beginBlock (bool on, bool cuesMatched, int latencySamples) n
     if (! on && moving) freezeGain();
     const double handDb = 20.0 * std::log10 (linear);
 
-    blockMatched = cuesMatched;
+    // how long boosted sound may still be on its way: the inserts' ring, plus 50 ms for the news of a change. Changed - a
+    // plugin added, removed, moved, switched, its latency or tail - what is on its way leaves within the new ring from
+    // now, and never sooner than already counted (a delay that shrank: a later insert still holds what an earlier one
+    // passed on)
+    const juce::int64 wait = (juce::int64) std::llround (rate * (juce::jmax (0.0, ringSeconds) + 0.05));
 
-    // off while cues play with a loudness match (also when the leveler started again switched off - a device that
-    // changed format at the switch-off): the limiter stays until the last matched sound has left every insert; a master
-    // that was down rises only then (one that was up comes down at once) - whatever the inserts delay, even a delay that
-    // grows meanwhile, the master never rises under a match still on its way
-    if (! on && ! releasing && cuesMatched)
+    if (wait != flushWait || ringVersion != seenRingVersion || flushAfterReset)
+    {
+        if (flushLeft > 0 || flushAfterReset)
+            flushLeft = juce::jmax (flushLeft, wait);
+
+        flushWait = wait;
+        seenRingVersion = ringVersion;
+        flushAfterReset = false;
+    }
+
+    // off while cues play with a loudness match, or boosted sound may still be on its way (a cue that ended just before;
+    // also when the leveler started again switched off - a device that changed format at the switch-off): the limiter
+    // stays until nothing boosted is left anywhere; a master that was down rises only then (one that was up comes down at
+    // once) - whatever the inserts delay or ring, the master never rises under a boost still on its way
+    if (! on && ! releasing && (cuesMatched || flushLeft > 0))
     {
         releasing = true;
         masterRises = handDb < 0.0;
-        quietSamples = 0;
     }
 
-    if (releasing)
-    {
-        releaseLatency = (juce::int64) juce::jmax (0, latencySamples) + (juce::int64) std::llround (rate * 0.05);
-
-        if (cuesMatched)
-            quietSamples = 0;
-
-        flushed = ! cuesMatched && quietSamples >= releaseLatency;
-
-        if (flushed && homeDb == -handDb)
-            releasing = false;  // home, and nothing matched left on its way: now the bypass crossfade
-    }
-
-    if (afterReset)
-    {
-        afterReset = false;
-
-        if (cuesMatched && (on || releasing))
-            wet = 1.0;          // the output broke anyway: the limiter for the matched cues from the first sample
-    }
-
-    releasingNow.store (releasing, std::memory_order_relaxed);
     return handDb;
 }
 
@@ -941,13 +934,30 @@ void AutoLeveler::reshape (int numChannels)
 void AutoLeveler::process (juce::AudioBuffer<float>& buffer, int numSamples) noexcept
 {
     if (! blockBegun)
-        beginBlock (enabled.load (std::memory_order_acquire), false, 0);   // no engine around it: the switch as it is now
+        beginBlock (enabled.load (std::memory_order_acquire), false, 0.0, seenRingVersion);   // no engine around it: the switch as it is now
     blockBegun = false;
+    const bool boosted = std::exchange (blockBoosted, false);
     if (numSamples <= 0 || channels == 0) return;
     const juce::ScopedNoDenormals noDenormals;
     const bool on = blockOn;
     const bool held = hold.load (std::memory_order_relaxed);
     if (on && held) easeOut();   // the user's own fade starts now: let go at once, without a corner
+    // the cues have mixed: a boost in this block may come out of the inserts for their ring after the block's end
+    if (boosted)
+    {
+        flushLeft = juce::jmax (flushLeft, flushWait + (juce::int64) numSamples);
+        if (! on && ! releasing)
+        {
+            releasing = true;              // a boost the switch-off did not see coming
+            masterRises = linear < 1.0;
+        }
+    }
+    if (std::exchange (afterReset, false) && boosted && (on || releasing))
+        wet = 1.0;                         // the output broke anyway: the limiter for boosted cues from the first sample
+    const bool flushed = flushLeft == 0;   // nothing boosted left on its way as this block begins
+    flushLeft = juce::jmax ((juce::int64) 0, flushLeft - (juce::int64) numSamples);
+    if (releasing && flushed && homeDb == -20.0 * std::log10 (linear))
+        releasing = false;                 // home, and nothing boosted left on its way: now the bypass crossfade
     if (! on && wet == 0.0 && ! releasing)
     {
         fillDelay (buffer, 0, numSamples); // bypass is zero latency and bit-for-bit, including signed zero
@@ -956,14 +966,12 @@ void AutoLeveler::process (juce::AudioBuffer<float>& buffer, int numSamples) noe
         return;
     }
     // the way home after a switch-off, on top of the hand (never while on: beginBlock hands it to the hand), 40 dB/s, a
-    // straight ramp across the block (1.0 throughout when there is none); a fader that has to rise waits until no matched
-    // sound is left on its way
+    // straight ramp across the block (1.0 throughout when there is none); a fader that has to rise waits until nothing
+    // boosted is left on its way
     const double homeTarget = -20.0 * std::log10 (linear);
     const double homeGoal = on ? 0.0
                           : releasing ? (! masterRises || flushed ? homeTarget : homeDb)
                           : (homeDb != 0.0 ? homeTarget : 0.0);
-    if (releasing && ! blockMatched)
-        quietSamples += numSamples;
     const double homeFrom = homeDb, homeStep = homeSpeed * (double) numSamples / rate;
     homeDb = homeGoal > homeDb ? juce::jmin (homeGoal, homeDb + homeStep) : juce::jmax (homeGoal, homeDb - homeStep);
     const double home0 = homeFrom == 0.0 ? 1.0 : std::pow (10.0, homeFrom / 20.0);
@@ -1007,7 +1015,9 @@ void AutoLeveler::process (juce::AudioBuffer<float>& buffer, int numSamples) noe
             const float delayed = delay.getSample (ch, delayPos);
             delay.setSample (ch, delayPos, (float) (raw * applied));
             const float limited = juce::jlimit (-ceiling, ceiling, (float) (delayed * attenuation));
-            buffer.setSample (ch, i, wet == 0.0 ? raw : wet == 1.0 ? limited : (float) (raw + wet * (limited - raw)));
+            // a crossfade while boosted sound may be on its way (switched on with a GO): its dry side kept under the ceiling too
+            const float dry = flushed ? raw : juce::jlimit (-ceiling, ceiling, raw);
+            buffer.setSample (ch, i, wet == 0.0 ? dry : wet == 1.0 ? limited : (float) (dry + wet * (limited - dry)));
         }
         delayPos = (delayPos + 1) % delayLength;
         if (on && ++measured == blockLength) finishMeasurement();

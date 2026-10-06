@@ -149,6 +149,8 @@ public:
     }
     /** Audio thread: the instance plays at its match, or is still on its way back to 0 dB. */
     bool isMatchApplied() const noexcept { return matchActive || matchLevel != 1.0f; }
+    /** After mixIntoBus: the block played above 0 dB of match at some point (what the master's limiter must take). */
+    bool wasMatchBoosted() const noexcept { return matchBoosted; }
     double getDuckDb() const noexcept { return duckDb.load (std::memory_order_relaxed); }
     /** Audio thread, after rendering, under the engine lock: intentional level changes in this block. */
     bool isAutoLevelHeld() const noexcept { return autoLevelHeld; }
@@ -291,6 +293,7 @@ private:
     bool matchActive = false;                       // audio thread: the instance plays at its match
     float matchComp = 1.0f;                         // audio thread: what its activation made up for the hand (linear)
     float matchLevel = 1.0f;                        // audio thread: the match the last mix ended at
+    bool matchBoosted = false;                      // audio thread: the last mix went above 0 dB of match
     std::atomic<bool> duckJump { false };      // setInitialDuckDb(): the audio thread puts duckInitial in place at once (a start, nothing to click) ...
     std::atomic<float> duckInitial { 1.0f };   // ... and then ramps to whatever goal came in since (a release sent before the first block)
     std::atomic<double> duckRampSeconds { 0.0 };

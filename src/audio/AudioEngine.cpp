@@ -1479,34 +1479,38 @@ void AudioEngine::setAutoLevel (bool enabled, double targetLufs)
     if (enabled == ((state & switchOnBit) != 0))
         return;
 
-    if (! enabled)
-        refreshReleaseLatency();
-
     switchState.store ((((state & ~switchOnBit) + 1u) & ~switchOnBit) | (enabled ? switchOnBit : 0u), std::memory_order_release);
     autoLeveler.setEnabled (enabled);
 }
 
-int AudioEngine::insertLatencyAfterCues()
+double AudioEngine::ringAfterCues (juce::uint32& version) const noexcept
 {
-    const juce::ScopedLock sl (lock);
-    int patches = 0;
+    double patches = 0.0;
+    version = masterChain.getCacheVersion();
 
     for (const auto& r : patchRuntimes)
     {
-        int cueOutputs = 0, deviceOutputs = 0;
+        double cueOutputs = 0.0, deviceOutputs = 0.0;
 
         for (const auto& [index, chain] : r->cueOutputChains)
             if (chain != nullptr)
-                cueOutputs = juce::jmax (cueOutputs, chain->getLatencySamples());
+            {
+                cueOutputs = juce::jmax (cueOutputs, chain->getRingSeconds());
+                version += chain->getCacheVersion();
+            }
 
         for (const auto& [index, chain] : r->deviceOutputChains)
             if (chain != nullptr)
-                deviceOutputs = juce::jmax (deviceOutputs, chain->getLatencySamples());
+            {
+                deviceOutputs = juce::jmax (deviceOutputs, chain->getRingSeconds());
+                version += chain->getCacheVersion();
+            }
 
-        patches = juce::jmax (patches, cueOutputs + deviceOutputs);
+        patches = juce::jmax (patches, cueOutputs + deviceOutputs);   // a patch's cue outputs feed its device outputs
+        version += 0x9e3779b9u;                                        // a patch added or removed: another sum too
     }
 
-    return masterChain.getLatencySamples() + patches;
+    return masterChain.getRingSeconds() + patches;
 }
 
 std::optional<double> AudioEngine::fullMatchFor (const Cue& cue) const
@@ -1792,9 +1796,6 @@ bool AudioEngine::consumePluginStateChanges()
 
     forEachPatchChain (poll);
 
-    if (changed)
-        refreshReleaseLatency();   // a latency that changed: a switch-off's way home waits for it
-
     return changed;
 }
 
@@ -1885,13 +1886,18 @@ void AudioEngine::renderBlock (juce::AudioBuffer<float>& output, int numSamples,
     {
         const int n = juce::jmin (chunkSize, numSamples - offset);
         mixBuffer.clear (0, n);
-        bool autoLevelHold = false, anyPaused = false;
-        const juce::uint32 switched = switchState.load (std::memory_order_acquire);   // the master's switch, once for the block,
-        const bool autoLevelOn = (switched & switchOnBit) != 0;                         // with its generation in the same word
-        const juce::uint32 generation = switched & ~switchOnBit;
+        bool autoLevelHold = false, anyPaused = false, anyBoosted = false;
+
+        if (onBlockStartForTests)
+            onBlockStartForTests();
 
         {
             const juce::ScopedLock sl (lock);
+            // the master's switch, once for the block with its generation in the same word - read under the lock that takes
+            // the GOs in, so a cue started with a switch plays in the very block that first sees that switch
+            const juce::uint32 switched = switchState.load (std::memory_order_acquire);
+            const bool autoLevelOn = (switched & switchOnBit) != 0;
+            const juce::uint32 generation = switched & ~switchOnBit;
             autoLevelHold = outputGateTarget.load (std::memory_order_relaxed) == 0
                             || outputGateCloseCountdown.load (std::memory_order_relaxed) >= 0
                             || outputGateGain < 1.0f || isResetOutstanding();
@@ -1909,7 +1915,9 @@ void AudioEngine::renderBlock (juce::AudioBuffer<float>& output, int numSamples,
                 if (! (p->hasFinished() && ! p->hasPendingLiveEdit()) && ! p->isLoadedNotStarted() && p->isMatchApplied())
                     anyMatched = true;
 
-            const double handDb = autoLeveler.beginBlock (autoLevelOn, anyMatched, matchReleaseLatency.load (std::memory_order_relaxed));
+            juce::uint32 ringVersion = 0;
+            const double ringSeconds = ringAfterCues (ringVersion);
+            const double handDb = autoLeveler.beginBlock (autoLevelOn, anyMatched, ringSeconds, ringVersion);
             int running = 0;
 
             for (auto& p : players)
@@ -1930,6 +1938,8 @@ void AudioEngine::renderBlock (juce::AudioBuffer<float>& output, int numSamples,
                 auto* r = static_cast<PatchRuntime*> (p->getBusTag());
                 p->setMatchContext (autoLevelOn, handDb, generation);
                 p->mixIntoBus (r != nullptr ? r->bus : mixBuffer, playerBuffer, n);
+                if (! p->isLoadedNotStarted())
+                    anyBoosted = anyBoosted || p->wasMatchBoosted();   // a GO of this very block too
 
                 if (! stillRunning)
                     anyFinished = true;
@@ -1946,6 +1956,7 @@ void AudioEngine::renderBlock (juce::AudioBuffer<float>& output, int numSamples,
         masterChain.process (mixBuffer, n);   // legacy master inserts on device outputs 1-2
         autoLeveler.setHold (autoLevelHold);
         autoLeveler.setPaused (anyPaused);
+        autoLeveler.noteBoosted (anyBoosted);
         autoLeveler.process (mixBuffer, n);
         applyOutputGate (mixBuffer, n);       // the panic gate: closed = silence, whatever the chains still ring with
         if (output.getNumChannels() > 0)

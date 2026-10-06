@@ -1344,6 +1344,269 @@ public:
             }
         }
 
+        beginTest ("a cue that ended just before the switch-off: what it left in a latent insert stays limited");
+        {
+            const auto clicks = writeClicks (scratch.folder.getChildFile ("ended-clicks.wav"), 1.0, 10);
+
+            for (const bool stopped : { false, true })
+            {
+                AudioEngine engine (0);
+                engine.prepare (rate, block);
+                auto latent = std::make_unique<TestGainPlugin> (1.0f);
+                latent->latencySamples = 24000;                      // 500 ms
+                engine.getMasterChain().addPlugin (std::move (latent));
+                engine.setAutoLevel (true, -16.0);
+                const auto cue = audioCueFor (clicks, 1.0);
+                engine.setLoudnessMatchDb (cue.id, 3.0);
+                engine.setLoudnessMatchActive (true);
+                expect (engine.play (cue));
+                juce::AudioBuffer<float> out (2, block);
+                for (int b = 0; b < (stopped ? 70 : 105); ++b)
+                    engine.renderBlock (out, block, nullptr, 0);
+                if (stopped)
+                {
+                    engine.stop (cue.id);
+                    for (int b = 0; b < 20; ++b)
+                        engine.renderBlock (out, block, nullptr, 0);
+                }
+                expect (! engine.isPlaying (cue.id), "the cue has ended before the switch-off");
+                engine.setLoudnessMatchActive (false);
+                engine.setAutoLevel (false, -16.0);
+                float loudest = 0.0f;
+                for (int b = 0; b < 150; ++b)
+                {
+                    engine.renderBlock (out, block, nullptr, 0);
+                    loudest = juce::jmax (loudest, out.getMagnitude (0, block));
+                }
+                logMessage (juce::String (stopped ? "stopped" : "ended") + " just before the switch-off, 500 ms insert: loudest sample "
+                            + juce::String (juce::Decibels::gainToDecibels (loudest), 2) + " dBFS");
+                expect (loudest <= 0.9f + 1.0e-4f, "never over the file's own clicks (-0.9 dBFS)");
+            }
+        }
+
+        beginTest ("the inserts' delay shrinks during the switch-off, or rings past what they report: no cue louder than before");
+        {
+            const auto file = writeTone (scratch.folder.getChildFile ("ringing.wav"), { { 30.0, -26.0 } });
+            double reference = 0.0;
+            {
+                std::unique_ptr<juce::AudioFormatReader> reader (formats.createReaderFor (file));
+                juce::AudioBuffer<float> all ((int) reader->numChannels, (int) reader->lengthInSamples);
+                reader->read (&all, 0, (int) reader->lengthInSamples, 0, true, true);
+                reference = all.getRMSLevel (0, 0, all.getNumSamples());
+            }
+
+            for (const bool echo : { false, true })
+            {
+                AudioEngine engine (0);
+                engine.prepare (rate, block);
+                TestGainPlugin* first = nullptr;
+
+                if (echo)
+                {
+                    // a 100 % wet echo: one repeat a second later, told as a 1 s tail and no latency
+                    auto plugin = std::make_unique<TestGainPlugin> (1.0f, 1.0);
+                    plugin->latencySamples = 48000;
+                    plugin->reportLatency = false;
+                    engine.getMasterChain().addPlugin (std::move (plugin));
+                }
+                else
+                {
+                    // two look-ahead inserts in series, 1 s each: the first one's goes to 0 during the switch-off
+                    for (int i = 0; i < 2; ++i)
+                    {
+                        auto plugin = std::make_unique<TestGainPlugin> (1.0f);
+                        plugin->latencySamples = 48000;
+                        if (i == 0)
+                            first = plugin.get();
+                        engine.getMasterChain().addPlugin (std::move (plugin));
+                    }
+                }
+
+                engine.setAutoLevel (true, -16.0);
+                const auto mic = micCueFor();
+                const auto cue = audioCueFor (file, 30.0);
+                engine.setLoudnessMatchDb (cue.id, 10.0);
+                engine.setLoudnessMatchActive (true);
+                juce::AudioBuffer<float> input (2, block), out (2, block);
+                Signal loud;
+                std::vector<float> left;
+                const auto render = [&] (int blocks, bool micOn, bool keep)
+                {
+                    for (int b = 0; b < blocks; ++b)
+                    {
+                        if (micOn)
+                            loud.fill (input, -6.0);
+                        else
+                            input.clear();
+                        engine.renderBlock (out, block, input.getArrayOfReadPointers(), 2);
+                        if (keep)
+                            left.insert (left.end(), out.getReadPointer (0), out.getReadPointer (0) + block);
+                    }
+                };
+                engine.play (mic);
+                render (800, true, false);                           // the master cuts a loud mic (-10), heard through the inserts
+                engine.stop (mic.id);
+                engine.play (cue);
+                render (300, false, true);                           // the matched cue through the inserts, steady
+                const size_t at = left.size();
+                engine.setLoudnessMatchActive (false);
+                engine.setAutoLevel (false, -16.0);
+                render (130, false, true);                           // the match back at 0 dB (0.5 s), 0.8 s more ...
+                if (first != nullptr)
+                {
+                    first->setLatencyLive (0);                       // ... and the first insert's look-ahead goes
+                    engine.consumePluginStateChanges();
+                }
+                render (400, false, true);
+                const double before = samplesDb (left, at - 1920, 1920, reference);
+                double loudest = -200.0;
+                for (size_t s = at; s + 1920 <= left.size(); s += 480)
+                    loudest = juce::jmax (loudest, samplesDb (left, s, 1920, reference));
+                logMessage (juce::String (echo ? "an echo told as a tail" : "a delay that shrank") + " during the switch-off: before "
+                            + juce::String (before, 2) + " dB, loudest after " + juce::String (loudest, 2));
+                expect (loudest <= before + 0.5, "no cue louder than before the switch");
+            }
+        }
+
+        beginTest ("a switch and a GO between a block's switch and its cues: the cue starts as its first block's switch says");
+        {
+            const auto file = writeTone (scratch.folder.getChildFile ("together.wav"), { { 6.0, -26.0 } });
+            double reference = 0.0;
+            {
+                std::unique_ptr<juce::AudioFormatReader> reader (formats.createReaderFor (file));
+                juce::AudioBuffer<float> all ((int) reader->numChannels, (int) reader->lengthInSamples);
+                reader->read (&all, 0, (int) reader->lengthInSamples, 0, true, true);
+                reference = all.getRMSLevel (0, 0, all.getNumSamples());
+            }
+
+            for (const bool switchOn : { true, false })
+            {
+                AudioEngine engine (0);
+                engine.prepare (rate, block);
+                const auto cue = audioCueFor (file, 6.0);
+                engine.setLoudnessMatchDb (cue.id, switchOn ? -12.0 : 10.0);
+                if (! switchOn)
+                {
+                    engine.setLoudnessMatchActive (true);
+                    engine.setAutoLevel (true, -16.0);
+                }
+                juce::AudioBuffer<float> out (2, block);
+                for (int b = 0; b < 10; ++b)
+                    engine.renderBlock (out, block, nullptr, 0);
+                bool fired = false;
+                engine.onBlockStartForTests = [&]
+                {
+                    if (std::exchange (fired, true))
+                        return;
+                    engine.setLoudnessMatchActive (switchOn);    // the box ticked (or cleared) ...
+                    engine.setAutoLevel (switchOn, -16.0);
+                    engine.play (cue);                          // ... and a GO in the same moment
+                };
+                std::vector<float> left;
+                for (int b = 0; b < 30; ++b)
+                {
+                    engine.renderBlock (out, block, nullptr, 0);
+                    left.insert (left.end(), out.getReadPointer (0), out.getReadPointer (0) + block);
+                }
+                engine.onBlockStartForTests = nullptr;
+                const double early = samplesDb (left, (size_t) (3 * block), (size_t) (3 * block), reference);   // 30-60 ms
+                const double wanted = switchOn ? -12.0 : 0.0;
+                logMessage (juce::String (switchOn ? "switched on" : "switched off") + " with a GO: 30-60 ms at " + juce::String (early, 2)
+                            + " dB from the file (wanted " + juce::String (wanted, 0) + ")");
+                expectWithinAbsoluteError (early, wanted, 0.5, "the cue starts as the switch of its first block says");
+            }
+        }
+
+        beginTest ("a GO right after a restart with a new format, or as the switch goes on: its clicks limited from the first sample");
+        {
+            const auto clicks = writeClicks (scratch.folder.getChildFile ("go-clicks.wav"), 6.0, 1);   // a click every 10 ms
+
+            for (const bool restart : { true, false })
+            {
+                AudioEngine engine (0);
+                engine.prepare (rate, block);
+                const auto cue = audioCueFor (clicks, 6.0);
+                engine.setLoudnessMatchDb (cue.id, 3.0);
+                if (restart)
+                {
+                    engine.setLoudnessMatchActive (true);
+                    engine.setAutoLevel (true, -16.0);
+                }
+                juce::AudioBuffer<float> out (2, block);
+                for (int b = 0; b < 30; ++b)
+                    engine.renderBlock (out, block, nullptr, 0);   // nothing playing yet
+                if (restart)
+                {
+                    engine.prepare (rate, 960);                     // another block size: everything prepared again ...
+                }
+                else
+                {
+                    engine.setLoudnessMatchActive (true);           // ... or the box ticked ...
+                    engine.setAutoLevel (true, -16.0);
+                }
+                expect (engine.play (cue));                         // ... and a GO before the next block
+                const int size = restart ? 960 : block;
+                juce::AudioBuffer<float> next (2, size);
+                float loudest = 0.0f;
+                for (int b = 0; b < 30; ++b)
+                {
+                    engine.renderBlock (next, size, nullptr, 0);
+                    loudest = juce::jmax (loudest, next.getMagnitude (0, size));
+                }
+                logMessage (juce::String (restart ? "a GO right after a restart" : "a GO as the switch goes on") + ": loudest sample "
+                            + juce::String (juce::Decibels::gainToDecibels (loudest), 2) + " dBFS");
+                expect (loudest <= 0.9f + 1.0e-4f, "never over the file's own clicks, from the first sample");
+            }
+        }
+
+        beginTest ("a whole-region loop told to finish its pass keeps its match through an off and on");
+        {
+            const auto file = writeTone (scratch.folder.getChildFile ("devamp.wav"), { { 4.0, -26.0 } });
+            double reference = 0.0;
+            {
+                std::unique_ptr<juce::AudioFormatReader> reader (formats.createReaderFor (file));
+                juce::AudioBuffer<float> all ((int) reader->numChannels, (int) reader->lengthInSamples);
+                reader->read (&all, 0, (int) reader->lengthInSamples, 0, true, true);
+                reference = all.getRMSLevel (0, 0, all.getNumSamples());
+            }
+
+            for (const bool stopAfter : { false, true })
+            {
+                for (const bool quick : { true, false })
+                {
+                    auto cue = audioCueFor (file, 4.0);
+                    cue.audio.infiniteLoop = true;
+                    AudioEngine engine (0);
+                    engine.prepare (rate, block);
+                    engine.setLoudnessMatchDb (cue.id, 10.0);
+                    engine.setLoudnessMatchActive (true);
+                    engine.setAutoLevel (true, -16.0);
+                    expect (engine.play (cue));
+                    juce::AudioBuffer<float> out (2, block);
+                    for (int b = 0; b < 30; ++b)
+                        engine.renderBlock (out, block, nullptr, 0);
+                    expect (engine.finishCurrentPass (cue.id, stopAfter) > 0.0, "a loop pass to finish");
+                    engine.setLoudnessMatchActive (false);
+                    engine.setAutoLevel (false, -16.0);
+                    if (! quick)
+                        for (int b = 0; b < 60; ++b)
+                            engine.renderBlock (out, block, nullptr, 0);
+                    engine.setLoudnessMatchActive (true);
+                    engine.setAutoLevel (true, -16.0);
+                    std::vector<float> left;
+                    for (int b = 0; b < 100; ++b)
+                    {
+                        engine.renderBlock (out, block, nullptr, 0);
+                        left.insert (left.end(), out.getReadPointer (0), out.getReadPointer (0) + block);
+                    }
+                    const double gain = samplesDb (left, 48000 - 9600, 9600, reference);   // 0.8-1.0 s after it was back on
+                    logMessage (juce::String (stopAfter ? "finishing with a stop" : "finishing") + (quick ? ", off and on at once" : ", off 0.6 s")
+                                + ": " + juce::String (gain, 2) + " dB from the file");
+                    expectWithinAbsoluteError (gain, 10.0, 0.5, "the same region pass after pass: still matched");
+                }
+            }
+        }
+
         beginTest ("a file saved over while a long region is measured: its answer withdrawn without waiting for that region");
         {
             LoudnessScan scan (formats, scratch.folder.getChildFile ("long-cache.json"));

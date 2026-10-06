@@ -24,17 +24,20 @@ public:
         when switched back on (0 dB once fully off). */
     double getHandGainDb() const noexcept { return handGain.load (std::memory_order_relaxed); }
     /** The block's switch, taken once before the cues are mixed (AudioEngine) so they and the master agree on it for the
-        whole block. 'cuesMatched': cues play with a loudness match (not 0 dB) as the block begins. Off while any does, the
-        matches go back to 0 dB at 40 dB/s and the limiter stays on until the last matched sound has left every insert
-        after the cues ('latencySamples', as it is now - it may grow meanwhile - plus 50 ms for news of a change); a master
-        that was up comes down at once, one that was down rises only after that. So whatever the inserts delay, no cue on
-        any path plays louder than before the switch (a cue may dip by the fader's cut for that moment). Switched back on
-        before the end, the master starts afresh from where it is. After a reset, matched cues get the limiter from the
-        first sample. Returns the hand's gain (dB) - while on, exactly what the master applies: what a starting cue makes up
-        for. process() takes the switch itself when this was not called. */
-    double beginBlock (bool on, bool cuesMatched, int latencySamples) noexcept;
-    /** A switch-off's way home is in progress (the message thread then keeps the inserts' latency up to date). Any thread. */
-    bool isReleasing() const noexcept { return releasingNow.load (std::memory_order_relaxed); }
+        whole block. 'cuesMatched': cues play with a loudness match (not 0 dB) as the block begins. 'ringSeconds': how long
+        the inserts after the cues may still give out what went in (latency and tails, every plugin, switched or not);
+        'ringVersion' changes with them. Off while a cue plays matched - or boosted sound may still be on its way, a cue
+        that ended just before - the matches go back to 0 dB at 40 dB/s and the limiter stays on until nothing boosted is
+        left anywhere: the inserts' ring (plus 50 ms for the news of a change) from the last block a cue played boosted,
+        restarted - never shortened - when the inserts change. A master that was up comes down at once, one that was down
+        rises only after that. So whatever the inserts delay or ring, no cue plays louder than before the switch (a cue may
+        dip by the fader's cut for that moment). Switched back on before the end, the master starts afresh from where it
+        is. Returns the hand's gain (dB) - while on, exactly what the master applies: what a starting cue makes up for.
+        process() takes the switch itself when this was not called. */
+    double beginBlock (bool on, bool cuesMatched, double ringSeconds, juce::uint32 ringVersion) noexcept;
+    /** After the cues mixed, before process(): any of them played this block above 0 dB of match (also one started in
+        this very block) - what the limiter must take from its first sample, and what the inserts may hold for their ring. */
+    void noteBoosted (bool boosted) noexcept { blockBoosted = boosted; }
     /** The device opened again at the same rate and block size, perhaps with another channel set: the fader, its glide
         home and what it has heard stay - the cues made up for its hand, and the inserts' audio on its way, go on in step;
         only the look-ahead line follows the channels. The audio context, like prepare (it may allocate). */
@@ -88,13 +91,13 @@ private:
     std::atomic<bool> enabled { false }, hold { false }, paused { false };
     std::atomic<double> target { -16.0 }, displayedGain { 0.0 }, handGain { 0.0 };
     bool releasing = false;   // switched off with matched cues playing: going home before the bypass crossfade
-    bool masterRises = false;          // ... the fader was down: it rises only once no matched sound is left on its way
-    bool flushed = false;              // ... no matched sound is left on its way (this block)
-    bool blockMatched = false;         // this block began with a match applied
+    bool masterRises = false;          // ... the fader was down: it rises only once nothing boosted is left on its way
+    bool blockBoosted = false;         // the cues of this block played above 0 dB of match (noteBoosted)
     bool afterReset = true;            // prepared or reset: the next block starts after a break in the output
-    juce::int64 quietSamples = 0;      // samples since the last block that began with a match applied
-    juce::int64 releaseLatency = 0;    // the inserts' latency now, with the margin
-    std::atomic<bool> releasingNow { false };
+    bool flushAfterReset = false;      // ... with boosted sound on its way before it (a chain may have kept it)
+    juce::int64 flushLeft = 0;         // samples until no boosted sound mixed so far can still come out of the inserts
+    juce::int64 flushWait = 0;         // the inserts' ring now, with the margin (samples)
+    juce::uint32 seenRingVersion = 0;  // the inserts as last seen
     bool blockBegun = false, blockOn = false;   // beginBlock() ran for this block, and the switch it took
     double homeDb = 0.0;      // the glide home on top of the hand (dB): minus the hand once home, 0 when none
     static constexpr double homeSpeed = 40.0;   // dB/s: the loudness match's own rate
