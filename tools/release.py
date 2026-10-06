@@ -16,6 +16,7 @@ Environment fallbacks: GOCUE_GITHUB_REPO, GOCUE_EDDSA_PRIVATE_KEY_FILE, WINSPARK
 The version comes from project(Enqueue VERSION x.y.z) in CMakeLists.txt.
 """
 import argparse
+import contextlib
 import datetime
 import email.utils
 import json
@@ -345,14 +346,29 @@ def wait_for_gate_idle(idle_s=GATE_IDLE_S, max_min=GATE_IDLE_MAX_MIN, idle_fn=se
         sleep(min(5.0, max(0.5, idle_s - idle)))
 
 
+def heavy_slot(what):
+    """The one PC-wide heavy-work slot shared with the cycle runner (tools/claude_harness/heavy_slot.py, 2026-10-06):
+    the release build and test gate wait while another session's build or full test run holds it, instead of all of
+    them fighting over the 6 cores (10/6: the gate's tests took 243~265 s instead of 206~210 s under load). Never
+    blocks for good (the helper starts anyway after an hour); a no-op when the helper is missing."""
+    try:
+        sys.path.insert(0, r"C:\Users\claude\tools\claude_harness")
+        import heavy_slot as helper
+    except ImportError:
+        return contextlib.nullcontext()
+    return helper.slot("heavy", what)
+
+
 def build(preset, skip_tests, gate_idle=GATE_IDLE_S, gate_idle_max_min=GATE_IDLE_MAX_MIN):
     run(["cmake", "--preset", preset])
-    run(["cmake", "--build", "--preset", preset + "-release", "--target", APP["target"], "EnqueueTests", "--", "-m", "-v:m", "-nologo"])
+    with heavy_slot("release build " + APP["name"]):
+        run(["cmake", "--build", "--preset", preset + "-release", "--target", APP["target"], "EnqueueTests", "--", "-m", "-v:m", "-nologo"])
     if not skip_tests:
         wait_for_gate_idle(gate_idle, gate_idle_max_min)
         # only this app's suites: the Recorder tests registered by recorder/CMakeLists.txt need RecorderTests.exe, which an
         # Enqueue / LiveMix build does not make (2026-09-14: the 0.10.2 release stopped on 41 "Not Run" Recorder tests)
-        run(["ctest", "--preset", preset + "-release"] + (["-R", APP["ctest_filter"]] if APP.get("ctest_filter") else []))
+        with heavy_slot("release test gate " + APP["name"]):
+            run(["ctest", "--preset", preset + "-release"] + (["-R", APP["ctest_filter"]] if APP.get("ctest_filter") else []))
 
 
 def stage_obs_plugin(source_dir):

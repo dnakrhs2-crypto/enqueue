@@ -2,8 +2,10 @@
 the idle reader, sleep and clock are fakes, and build()'s run() is recorded.  python tools/test_release_gate_idle.py"""
 import importlib.util
 import pathlib
+import sys
 import unittest
 
+sys.dont_write_bytecode = True   # tools/__pycache__/release.cpython-312.pyc is tracked: importing must not dirty the tree
 spec = importlib.util.spec_from_file_location("release", pathlib.Path(__file__).with_name("release.py"))
 release = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(release)
@@ -63,17 +65,45 @@ class GateIdleTests(unittest.TestCase):
 
     def test_build_waits_right_before_ctest_only_when_testing(self):
         calls = []
-        saved = release.run, release.wait_for_gate_idle
+        saved = release.run, release.wait_for_gate_idle, release.heavy_slot
+
+        class Slot:
+            def __init__(self, what):
+                self.what = what
+
+            def __enter__(self):
+                calls.append(("slot", self.what.split(" ")[1]))
+
+            def __exit__(self, *exc):
+                calls.append("free")
+
         release.run = lambda cmd, *a, **k: calls.append(cmd[0])
         release.wait_for_gate_idle = lambda idle_s, max_min: calls.append(("wait", idle_s, max_min))
+        release.heavy_slot = Slot
         try:
             release.build("local", False, 15, 2.0)
-            self.assertEqual(calls, ["cmake", "cmake", ("wait", 15, 2.0), "ctest"])
+            # the heavy slot covers the build and the gate, but not the idle wait (other sessions may build meanwhile)
+            self.assertEqual(calls, ["cmake", ("slot", "build"), "cmake", "free", ("wait", 15, 2.0),
+                                     ("slot", "test"), "ctest", "free"])
             calls.clear()
             release.build("local", True)
-            self.assertEqual(calls, ["cmake", "cmake"])
+            self.assertEqual(calls, ["cmake", ("slot", "build"), "cmake", "free"])
         finally:
-            release.run, release.wait_for_gate_idle = saved
+            release.run, release.wait_for_gate_idle, release.heavy_slot = saved
+
+    def test_heavy_slot_helper_is_found(self):
+        import os
+        import tempfile
+        old = os.environ.get("CLAUDE_HEAVY_SLOT_DIR")
+        os.environ["CLAUDE_HEAVY_SLOT_DIR"] = tempfile.mkdtemp(prefix="release_slot_test_")   # never wait on real builds
+        try:
+            with release.heavy_slot("release test probe") as waited:
+                self.assertTrue(waited is not None and 0 <= waited < 1)
+        finally:
+            if old is None:
+                os.environ.pop("CLAUDE_HEAVY_SLOT_DIR")
+            else:
+                os.environ["CLAUDE_HEAVY_SLOT_DIR"] = old
 
     def test_command_line_defaults(self):
         self.assertEqual((release.GATE_IDLE_S, release.GATE_IDLE_MAX_MIN), (20, 30.0))
