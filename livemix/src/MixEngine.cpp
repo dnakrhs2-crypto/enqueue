@@ -421,7 +421,7 @@ juce::String MixEngine::openSessionDevice (const MixDevice& device)
 {
     if (device.input.isEmpty()) return {};
     const auto current = getOpenDevice();
-    if (current.type == device.type && current.input == device.input
+    if (isRunningWhole() && current.type == device.type && current.input == device.input
         && current.output == (device.isAsio() ? device.input : device.output)
         && (device.type != "Windows Audio (Exclusive Mode)" || current.sampleFormat == device.sampleFormat)
         && (device.bufferSize <= 0 || device.type == "Windows Audio" || current.bufferSize == device.bufferSize)

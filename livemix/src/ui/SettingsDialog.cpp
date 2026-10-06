@@ -21,35 +21,40 @@ namespace
     public:
         SettingsContent (MixEngine& e, LiveMixSettings& s, std::function<void()> deviceChanged, std::function<void()> hotkeysChanged,
                          std::function<void (bool)> hotkeyCapture, std::function<ControlServer::Status()> controlStatus,
-                         std::function<void (bool)> controlEnabled, SettingsDialog::AcceptedFormatsQuery acceptedFormats)
-            : engine (e), settings (s), onDeviceChanged (std::move (deviceChanged)), onHotkeysChanged (std::move (hotkeysChanged)),
-              onHotkeyCapture (std::move (hotkeyCapture)), getControlStatus (std::move (controlStatus)),
-              onControlEnabled (std::move (controlEnabled)), getAcceptedFormats (std::move (acceptedFormats))
+                         std::function<void (bool)> controlEnabled, SettingsDialog::AcceptedFormatsQuery acceptedFormats,
+                         std::function<void()> openFailed)
+            : engine (e), settings (s), onDeviceChanged (std::move (deviceChanged)), onOpenFailed (std::move (openFailed)),
+              onHotkeysChanged (std::move (hotkeysChanged)), onHotkeyCapture (std::move (hotkeyCapture)),
+              getControlStatus (std::move (controlStatus)), onControlEnabled (std::move (controlEnabled)),
+              getAcceptedFormats (std::move (acceptedFormats))
         {
             styleCaption (typeCaption, ko ("장치 종류"));
             addAndMakeVisible (typeCaption);
             typeCombo.setComponentID ("device-type");
             typeCombo.setWantsKeyboardFocus (false);
-            typeCombo.onChange = [this] { applyType(); };
+            typeCombo.onChange = [this] { typeCombo.settle(); applyType(); };
             addAndMakeVisible (typeCombo);
             styleCaption (deviceCaption, ko ("ASIO 장치"));
             addAndMakeVisible (deviceCaption);
             deviceCombo.setComponentID ("device-input");
             deviceCombo.setWantsKeyboardFocus (false);
-            deviceCombo.onChange = [this] { applySelection(); };
+            deviceCombo.onChange = [this] { deviceCombo.settle(); applySelection(); };
+            deviceCombo.onRepick = [this] { reopenIfStopped(); };
             addAndMakeVisible (deviceCombo);
             styleCaption (outputCaption, ko ("출력 (모니터)"));
             addAndMakeVisible (outputCaption);
             outputCombo.setComponentID ("device-output");
             outputCombo.setWantsKeyboardFocus (false);
-            outputCombo.onChange = [this] { applySelection(); };
+            outputCombo.onChange = [this] { outputCombo.settle(); applySelection(); };
+            outputCombo.onRepick = [this] { reopenIfStopped(); };
             addAndMakeVisible (outputCombo);
             styleCaption (rateCaption, ko ("샘플레이트"));
             addAndMakeVisible (rateCaption);
             rateCombo.setComponentID ("device-rate");
             rateCombo.setWantsKeyboardFocus (false);
-            rateCombo.onChange = [this] { applySelection (true); };
+            rateCombo.onChange = [this] { rateCombo.settle(); applySelection (true); };
             addAndMakeVisible (rateCombo);
+            panelButton.setComponentID ("asio-panel");
             panelButton.setButtonText (ko ("ASIO 제어판 (버퍼 크기)..."));
             panelButton.onClick = [this]
             {
@@ -58,25 +63,30 @@ namespace
                 if (device == nullptr || ! device->hasControlPanel())
                     return;
 
-                if (device->showControlPanel())   // the driver asks for a restart (its buffer / rate changed)
+                if (! device->showControlPanel())   // no restart asked for: nothing changed
                 {
-                    const auto error = engine.restartDevice();
-
-                    if (error.isNotEmpty())
-                        juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon, ko ("장치를 다시 열지 못했습니다"), error, ko ("확인"));
+                    refreshDevices();
+                    return;
                 }
 
-                refreshDevices();
+                // the driver asks for a restart (its buffer / rate changed): what it opens is the operator's choice; a
+                // restart that failed leaves the session asking for its own device, like any open from here
+                const auto error = engine.restartDevice();
 
-                if (onDeviceChanged)
-                    onDeviceChanged();
+                if (error.isNotEmpty())
+                    juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon, ko ("장치를 다시 열지 못했습니다"), error, ko ("확인"));
+
+                refreshDevices();
+                auto& notify = error.isEmpty() ? onDeviceChanged : onOpenFailed;
+                if (notify)
+                    notify();
             };
             addAndMakeVisible (panelButton);
             styleCaption (bufferCaption, ko ("버퍼"));
             addAndMakeVisible (bufferCaption);
             bufferCombo.setComponentID ("device-buffer");
             bufferCombo.setWantsKeyboardFocus (false);
-            bufferCombo.onChange = [this] { applySelection(); };
+            bufferCombo.onChange = [this] { bufferCombo.settle(); applySelection(); };
             addAndMakeVisible (bufferCombo);
             styleCaption (sharedBufferNote, ko ("버퍼: 윈도우가 정함 (보통 10 ms)"));
             sharedBufferNote.setFont (bodyFont (12.5f));
@@ -86,8 +96,12 @@ namespace
             bitDepthCombo.setComponentID ("device-bitdepth");
             bitDepthCombo.setWantsKeyboardFocus (false);
             for (int id = 1; id <= 5; ++id) bitDepthCombo.addItem (DeviceFormatText::choiceName (id), id);
-            bitDepthCombo.onChange = [this] { applySelection(); };
+            bitDepthCombo.onChange = [this] { bitDepthCombo.settle(); applySelection(); };
             addAndMakeVisible (bitDepthCombo);
+            // a refill skipped in the middle of an earlier pick (the type changed by arrow key in its open list) is done
+            // before the next list shows: never the previous type's devices under the new type
+            for (auto* box : { &typeCombo, &deviceCombo, &outputCombo, &rateCombo, &bufferCombo, &bitDepthCombo })
+                box->beforeListOpens = [this] { if (refreshWaiting && ! anyListBusy()) refreshDevices(); };
             bitDepthDetail.setComponentID ("device-bitdepth-detail");
             bitDepthHint.setComponentID ("device-bitdepth-hint");
             bitDepthWarning.setComponentID ("device-bitdepth-warning");
@@ -245,15 +259,27 @@ namespace
 
         void refreshDevices()
         {
+            // Not in the middle of a pick (a list open, or a pick whose change is on its way): a refill (after a pick by
+            // arrow key, a device unplugged) would give it to another item or lose it. Caught up once the pick is through
+            // (the timer), or as a list is about to open.
+            refreshWaiting = anyListBusy();
+            if (refreshWaiting)
+                return;
+
             const juce::ScopedValueSetter<bool> guard (refreshing, true);
             const auto current = engine.getOpenDevice();
             shownDevice = current;
             types = AudioBackends::availableTypes (engine.getDeviceManager());
+            // a type whose device is being chosen stays up until one of its devices runs (or the type is gone)
+            if ((current.input.isNotEmpty() && current.type == choosingType) || ! types.contains (choosingType))
+                choosingType = {};
+            const bool choosing = choosingType.isNotEmpty();
             typeCombo.clear (juce::dontSendNotification);
             for (int i = 0; i < types.size(); ++i)
                 typeCombo.addItem (AudioBackends::label (types[i]), i + 1);
             // With no open device (including safe mode), offer the first available type without opening it.
-            const int typeIndex = types.contains (current.type) ? types.indexOf (current.type) : (types.isEmpty() ? -1 : 0);
+            const auto showing = choosing ? choosingType : current.type;
+            const int typeIndex = types.contains (showing) ? types.indexOf (showing) : (types.isEmpty() ? -1 : 0);
             typeCombo.setSelectedId (typeIndex + 1, juce::dontSendNotification);
             shownType = types[typeIndex];
             const bool asio = shownType.containsIgnoreCase ("ASIO");
@@ -269,12 +295,12 @@ namespace
                 outputNames = type->getDeviceNames (false);
             }
             for (int i = 0; i < names.size(); ++i)
-                deviceCombo.addItem (names[i], i + 1);
-            deviceCombo.setSelectedId (names.indexOf (current.input) + 1, juce::dontSendNotification);
-            deviceCombo.setTextWhenNothingSelected (asio ? ko ("ASIO 장치 없음") : ko ("입력 장치 없음"));
+                deviceCombo.addRepickableItem (names[i], i + 1);
+            deviceCombo.setSelectedId (choosing ? 0 : names.indexOf (current.input) + 1, juce::dontSendNotification);
+            deviceCombo.setTextWhenNothingSelected (! asio ? ko ("입력 장치 없음") : names.isEmpty() ? ko ("ASIO 장치 없음") : ko ("ASIO 장치를 고르세요"));
             outputCombo.clear (juce::dontSendNotification);
-            outputCombo.addItem (ko ("없음 (OBS로만 보내기)"), 1);
-            for (int i = 0; i < outputNames.size(); ++i) outputCombo.addItem (outputNames[i], i + 2);
+            outputCombo.addRepickableItem (ko ("없음 (OBS로만 보내기)"), 1);
+            for (int i = 0; i < outputNames.size(); ++i) outputCombo.addRepickableItem (outputNames[i], i + 2);
             outputCombo.setSelectedId (current.output.isEmpty() ? 1 : outputNames.indexOf (current.output) + 2, juce::dontSendNotification);
             outputCaption.setVisible (! asio);
             outputCombo.setVisible (! asio);
@@ -291,9 +317,10 @@ namespace
             juce::Array<double> rates;
             if (! asio)
                 rates.addArray ({ 44100.0, 48000.0 });
-            const double shownRate = asio && current.input.isEmpty() ? 0.0 : current.sampleRate;
+            const double shownRate = asio && (current.input.isEmpty() || choosing) ? 0.0 : current.sampleRate;
             panelButton.setVisible (false);
-            if (auto* device = engine.getDeviceManager().getCurrentAudioDevice())
+            // while another type's device plays, its rates, buffers and panel are not the chosen type's
+            if (auto* device = engine.getDeviceManager().getCurrentAudioDevice(); device != nullptr && ! choosing)
             {
                 const auto sizes = device->getAvailableBufferSizes();
                 for (int i = 0; i < sizes.size(); ++i)
@@ -310,11 +337,14 @@ namespace
             for (auto rate : rates) rateCombo.addItem (juce::String (juce::roundToInt (rate)) + " Hz", juce::roundToInt (rate));
             rateCombo.setTextWhenNothingSelected (ko ("장치 없음"));
             rateCombo.setSelectedId (juce::roundToInt (shownRate > 0.0 ? shownRate : (asio ? 0.0 : 48000.0)), juce::dontSendNotification);
+            for (auto* box : { &typeCombo, &deviceCombo, &outputCombo, &rateCombo, &bufferCombo })
+                box->settle();   // selected from here, nothing for an onChange to hand over
             juce::String note = ko ("USB 마이크·헤드셋 같은 일반 장치를 씁니다. 마이크와 모니터가 서로 다른 장치면 샘플레이트 차이를 자동으로 맞춥니다 (모니터 지연이 조금 늘어납니다).");
             if (shownType == "Windows Audio (Low Latency Mode)") note += ko (" 지원하지 않는 장치면 일반 모드로 여세요.");
             if (shownType == "Windows Audio (Exclusive Mode)") note += ko (" 독점 모드에서는 OBS 등 다른 프로그램이 같은 마이크를 쓸 수 없습니다.");
             deviceNote.setText (asio ? ko ("ASIO 장치만 씁니다. 버퍼가 작을수록 지연이 짧고 끊길 위험이 큽니다 (128~256 권장).") : note, juce::dontSendNotification);
             bitDepthCombo.setSelectedId (DeviceFormatText::choiceId (current.sampleFormat), juce::dontSendNotification);
+            bitDepthCombo.settle();
             syncedChoiceId = DeviceFormatText::choiceId (current.sampleFormat);
             refreshBitDepth();
             updateContentSize();
@@ -336,6 +366,18 @@ namespace
             MixDevice wanted;
             wanted.sampleFormat = current.sampleFormat;
             wanted.type = types[typeCombo.getSelectedId() - 1];
+            const bool backToRunning = choosingType.isNotEmpty() && current.input.isNotEmpty() && wanted.type == current.type;
+            choosingType = {};
+            if (backToRunning)   // left the type being chosen for the one that plays
+            {
+                // nothing to reopen while it plays whole; a part stopped meanwhile (a separate monitor output that did
+                // not come back from an unplug) is reopened as it was
+                if (engine.isRunningWhole())
+                    refreshDevices();
+                else
+                    applyDevice (current);
+                return;
+            }
             wanted.bufferSize = 0;
             wanted.sampleRate = wanted.isAsio() ? 0.0 : 48000.0;
             if (auto* type = findType (wanted.type))
@@ -347,7 +389,28 @@ namespace
                     : (! current.isAsio() && current.output.isEmpty()) ? juce::String()
                     : outs.contains (current.output) ? current.output : outs[juce::jmax (0, type->getDefaultDeviceIndex (false))];
             }
+            if (wanted.isAsio())
+            {
+                // The first driver listed is tried. One whose hardware is not plugged in (Ableton's driver, listed before a
+                // TOPPING interface's: "No device is connected to the PC." - 2026-10-06) leaves the ASIO list up to pick the
+                // right one, the running device kept - quietly, as nobody picked that driver.
+                choosingType = wanted.type;
+                applyDevice (wanted, true);
+                return;
+            }
             applyDevice (wanted);
+        }
+
+        /** The device or monitor output already selected, picked again: the device that runs is reopened as it is when
+            part of it stopped (the status line sends the operator here once it is plugged back in); one that plays whole
+            is left. One no longer open (closed under a list left open) is not reopened from what that list showed: the
+            refresh that follows lists what there is to pick afresh. */
+        void reopenIfStopped()
+        {
+            if (refreshing || choosingType.isNotEmpty() || engine.isRunningWhole()) return;
+            const auto current = engine.getOpenDevice();
+            if (current.input.isEmpty() || current.type != shownType || current.input != deviceCombo.getText()) return;
+            applyDevice (current);
         }
 
         /** 'rateChosen': the sample rate box changed. For ASIO that rate is asked of the driver; another change (device,
@@ -356,7 +419,7 @@ namespace
         {
             if (refreshing) return;
             auto wanted = engine.getOpenDevice();
-            const bool hadDevice = wanted.input.isNotEmpty();
+            const bool hadDevice = wanted.input.isNotEmpty() && choosingType.isEmpty();   // a device of the shown type plays
             wanted.type = shownType;
             wanted.input = deviceCombo.getSelectedId() > 0 ? deviceCombo.getText() : juce::String();
             wanted.output = wanted.isAsio() ? wanted.input : outputNames[outputCombo.getSelectedId() - 2];
@@ -428,20 +491,32 @@ namespace
             const auto now = engine.getOpenDevice();
             const bool changed = now.type != shownDevice.type || now.input != shownDevice.input || now.output != shownDevice.output
                                  || now.bufferSize != shownDevice.bufferSize || juce::roundToInt (now.sampleRate) != juce::roundToInt (shownDevice.sampleRate);
-            bool choosing = false;
-            for (auto* box : { &typeCombo, &deviceCombo, &outputCombo, &rateCombo, &bufferCombo, &bitDepthCombo })
-                choosing = choosing || box->isPopupActive();
-            return changed && ! choosing;
+            return changed && ! anyListBusy();
         }
 
-        bool applyDevice (const MixDevice& wanted)
+        /** The operator is in the middle of a pick from a list whose selection refreshDevices() sets (open, or a pick
+            whose change is on its way). */
+        bool anyListBusy() const
         {
+            const RepickComboBox* boxes[] { &typeCombo, &deviceCombo, &outputCombo, &rateCombo, &bufferCombo, &bitDepthCombo };
+            return std::any_of (std::begin (boxes), std::end (boxes), [] (const RepickComboBox* box) { return box->busy(); });
+        }
+
+        /** 'quietIfKept': a failure that left the running device as it was says nothing (a driver tried, not picked). */
+        bool applyDevice (const MixDevice& wanted, bool quietIfKept = false)
+        {
+            const auto before = engine.getOpenDevice();
             const auto error = engine.openDevice (wanted);
-            if (error.isNotEmpty())
+            const auto after = engine.getOpenDevice();
+            const bool kept = after.type == before.type && after.input == before.input && after.output == before.output
+                              && engine.isDeviceRunning() == before.input.isNotEmpty();
+            if (error.isNotEmpty() && ! (quietIfKept && kept))
                 juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon, ko ("오디오 장치를 열지 못했습니다"), error, ko ("확인"));
             refreshDevices();
-            if (onDeviceChanged)
-                onDeviceChanged();
+            // only a device that opened is the operator's choice: a failure leaves the session asking for its own device
+            auto& notify = error.isEmpty() ? onDeviceChanged : onOpenFailed;
+            if (notify)
+                notify();
             return error.isEmpty();
         }
 
@@ -507,8 +582,11 @@ namespace
                 bitDepthCombo.setItemEnabled (id, item.enabled);
             }
             bitDepthCombo.setSelectedId (choice, juce::dontSendNotification);
-            if (choice == runningChoice)
+            if (choice == runningChoice)   // no pick of the operator's on its way: what is selected is handled
+            {
                 syncedChoiceId = runningChoice;
+                bitDepthCombo.settle();
+            }
             if (previousHeight != bitDepthHeight())
             {
                 updateContentSize();
@@ -627,7 +705,14 @@ namespace
         void paint (juce::Graphics& g) override { g.fillAll (Palette::card); }
 
     private:
-        void timerCallback() override { refreshControlStatus(); followDevice(); refreshBitDepth(); }
+        void timerCallback() override
+        {
+            refreshControlStatus();
+            if (refreshWaiting && ! anyListBusy())   // a refill skipped in the middle of a pick, now that it is through
+                refreshDevices();
+            followDevice();
+            refreshBitDepth();
+        }
 
         void refreshControlStatus()
         {
@@ -645,13 +730,15 @@ namespace
 
         MixEngine& engine;
         LiveMixSettings& settings;
-        std::function<void()> onDeviceChanged, onHotkeysChanged;
+        std::function<void()> onDeviceChanged, onOpenFailed, onHotkeysChanged;
         std::function<void (bool)> onHotkeyCapture;
         std::function<ControlServer::Status()> getControlStatus;
         std::function<void (bool)> onControlEnabled;
         SettingsDialog::AcceptedFormatsQuery getAcceptedFormats;
         juce::StringArray types, names, outputNames;
         juce::String shownType;
+        juce::String choosingType;      // shown while another type's device plays: switched to, its first driver did not open
+        bool refreshWaiting = false;    // refreshDevices() skipped in the middle of a pick
         MixDevice shownDevice;          // what refreshDevices() last showed; followDevice() compares the running one
         double pendingRate = 0.0;       // an ASIO rate that just opened, watched for a reset that leaves it (3 s)
         juce::uint32 pendingSince = 0;
@@ -668,7 +755,7 @@ namespace
         HotkeyButton groupHotkey[MixSession::maxPluginGroups];
         juce::TextButton micHotkeyClear { "x" }, fxHotkeyClear { "x" }, windowHotkeyClear { "x" };
         juce::TextButton groupHotkeyClear[MixSession::maxPluginGroups];
-        juce::ComboBox typeCombo, deviceCombo, outputCombo, rateCombo, bufferCombo, bitDepthCombo;
+        RepickComboBox typeCombo, deviceCombo, outputCombo, rateCombo, bufferCombo, bitDepthCombo;
         juce::TextButton panelButton, soundSettingsButton;
         juce::ToggleButton minimiseToTray, closeAsk, closeToTray, startWithWindows, skipWhenOff, sendTransport, externalControl;
         bool refreshing = false;
@@ -724,7 +811,7 @@ namespace
 void SettingsDialog::show (MixEngine& engine, LiveMixSettings& settings, juce::Component* centreAround, std::function<void()> onDeviceChanged,
                            std::function<void()> onHotkeysChanged, std::function<void (bool capturing)> onHotkeyCapture,
                            std::function<ControlServer::Status()> controlStatus, std::function<void (bool)> controlEnabled,
-                           AcceptedFormatsQuery acceptedFormats)
+                           AcceptedFormatsQuery acceptedFormats, std::function<void()> onOpenFailed)
 {
     if (openDialog != nullptr)
     {
@@ -733,7 +820,8 @@ void SettingsDialog::show (MixEngine& engine, LiveMixSettings& settings, juce::C
     }
 
     auto* content = new SettingsContent (engine, settings, std::move (onDeviceChanged), std::move (onHotkeysChanged), std::move (onHotkeyCapture),
-                                         std::move (controlStatus), std::move (controlEnabled), std::move (acceptedFormats));
+                                         std::move (controlStatus), std::move (controlEnabled), std::move (acceptedFormats),
+                                         std::move (onOpenFailed));
     auto* scroller = new juce::Viewport();
     scroller->setViewedComponent (content, true);
     scroller->setScrollBarsShown (true, true);   // sideways only when a narrow display squeezed the window under the content's width

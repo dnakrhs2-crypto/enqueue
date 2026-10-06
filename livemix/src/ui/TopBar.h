@@ -23,6 +23,8 @@ public:
 
     void refresh();                                   // session name / dirty flag / device
     void setDevices (const juce::StringArray& deviceNames, const juce::String& current, const juce::String& typeName);
+    /** setDevices() came in the middle of a pick from the device list, and the pick is through: ask again. */
+    bool devicesWaiting() const noexcept { return waitingDevices && ! deviceCombo.busy(); }
     void setStatus (double sampleRate, int bufferSize, double latencyMs, double dspLoad, bool running, const MixEngine::DeviceFormat& format);
     static juce::String buildStatusText (double sampleRate, int bufferSize, double latencyMs, bool running,
                                          const MixEngine::DeviceFormat& format, bool showSampleWord = true);
@@ -31,6 +33,8 @@ public:
     void setMuteGroups (bool micMuted, bool fxMuted);
 
     std::function<void (const juce::String& deviceName)> onDeviceChosen;
+    std::function<void (const juce::String& deviceName)> onDeviceRepicked;   // the device already selected, picked again
+    std::function<void()> onDevicesWanted;   // the list opens with setDevices() skipped earlier: the app sets them now
     std::function<void()> onFxPanel;
     std::function<void()> onPluginManager;
 
@@ -46,11 +50,12 @@ private:
 
     MixDocument& document;
     juce::Label logoMark, logoText, sessionName, sessionState, deviceLabel, statusLabel, dspLabel, micMuteBadge, fxMuteBadge;
-    juce::ComboBox deviceCombo;
+    RepickComboBox deviceCombo;
     DspMeter dspMeter;
     juce::TextButton fxButton, pluginsButton;
     juce::String fullStatusText, shortStatusText, minimalStatusText;
     bool refreshing = false;
+    bool waitingDevices = false;   // setDevices() skipped in the middle of a pick from the device list
 };
 
 } // namespace gocue::livemix

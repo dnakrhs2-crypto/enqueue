@@ -137,6 +137,7 @@ private:
     void showLoudnessWindow();   // the LUFS meter (the master card's button, the 설정 menu)
     void showPluginGroups (const juce::Uuid& channelId);   // a mic channel's plugin groups (the card's button)
     void chooseDevice (const juce::String& name);
+    void reopenIfStopped (const juce::String& name);
     void deviceChosen();   // the operator picked a device / buffer: the session remembers it
     void loadSession (const juce::File& file);
     juce::String titleForChainOwner() const;
