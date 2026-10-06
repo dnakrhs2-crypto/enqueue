@@ -422,6 +422,31 @@ public:
             expect (slowBeat.leveler.getGainDb() >= 1.7, "and it gets there, first hit at " + label);
         }
 
+        beginTest ("27l. an effect late in a song's first 4 s stays an effect: its peak does not come back as a cap");
+        {
+            Rig late;
+            late.leveler.setTargetLufs (-22.0);
+            double lateAtChange = 0.0;
+            size_t lateChange = 0;
+            for (int b = 0; b < 1400; ++b)
+            {
+                if (b == 750)   // 7.5 s: the target goes up 6 LU, the song asks for +12 now
+                {
+                    late.leveler.setTargetLufs (-16.0);
+                    lateAtChange = late.leveler.getGainDb();
+                    lateChange = late.gains.size();
+                }
+                late.signal.fill (late.buffer, b >= 350 && b < 400 ? -6.0 : -28.0);   // a 0.5 s effect at 3.5 s
+                if (b == 390) late.buffer.setSample (0, 17, 1.0f);                     // with a 0 dBFS hit in it
+                late.leveler.process (late.buffer, block);
+                late.gains.push_back (late.leveler.getGainDb());
+            }
+            const double lateOne = reached (late.gains, lateChange, 12.0, 1.0);
+            metric ("gain when the target goes up (dB)", lateAtChange);
+            metric ("within 1 dB of +12 after the target change (s)", lateOne);
+            expect (lateOne > 0.0 && lateOne <= 3.0, "the effect's hit does not hold the ride back");
+        }
+
         beginTest ("27g. a louder pair that has gone quiet does not hide the taps still coming just under it");
         Rig masked;
         double maskedHighest = -100.0, maskedPeak = -100.0, maskedDrop = 0.0;

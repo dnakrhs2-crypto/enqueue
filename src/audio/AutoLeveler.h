@@ -39,8 +39,9 @@ private:
         decay, the first second after a drop. */
     bool fallingNow() const noexcept;
     /** The loudest input peak of this section's first 4 s (sectionYoungBlocks) still within the last 5 s, one burst - an
-        effect, a bang - left out as in programPower: any such peak may be the first of a beat, and a beat up to 5 s apart
-        has shown its second hit (and the recurring peak takes over) by the time it drops out. */
+        effect, a bang - left out as in programPower, told among all the section's blocks of those 5 s: any such peak may
+        be the first of a beat, and a beat up to 5 s apart has shown its second hit (and the recurring peak takes over)
+        by the time it drops out. */
     float sectionPeak() const noexcept;
     /** Far too quiet for 2.1 s (hushSectionBlocks), no longer falling, and the flow more than 3 LU over the run: the
         music has changed to a much quieter song (or part) - not a fader the recurring peaks keep under the target. The

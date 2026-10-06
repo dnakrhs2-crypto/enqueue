@@ -670,23 +670,24 @@ bool AutoLeveler::fallingNow() const noexcept
 
 float AutoLeveler::sectionPeak() const noexcept
 {
-    // the section's blocks from its first 4 s that are still within the last 5 s, in time order (newest last): ages
-    // 'newest' (the youngest such block) up to the section's first block or the ring's end; the peaks by the same age
+    // the section's blocks within the last 5 s in time order (newest last). One burst is told among all of them - with
+    // the song after it in view an effect late in the first 4 s stays one, however few of those 4 s are left - and the
+    // peak is taken from the first 4 s only: the oldest 'young' entries. The peaks by the same age.
     const int size = (int) pastEnergy.size(), peakSize = (int) peaks.size();
-    const int newest = juce::jmax (0, sectionClock - sectionYoungBlocks);
-    const int length = juce::jmin (sectionClock, size) - newest;
-    if (length <= 0)
+    const int length = juce::jmin (sectionClock, size);
+    const int young = length - juce::jmax (0, sectionClock - sectionYoungBlocks);
+    if (young <= 0)
         return 0.0f;
     std::array<double, 50> block {};
     for (int i = 0; i < length; ++i)
-        block[(size_t) i] = pastEnergy[(size_t) ((pastPos - newest - length + i + 2 * size) % size)];
+        block[(size_t) i] = pastEnergy[(size_t) ((pastPos - length + i + 2 * size) % size)];
     std::array<bool, 50> burstBlock {};
     if (! findBurst (block, length, 1, burstBlock))
         return 0.0f;
     float loudest = 0.0f;
-    for (int i = 0; i < length; ++i)
+    for (int i = 0; i < young; ++i)
         if (block[(size_t) i] > 0.0 && ! burstBlock[(size_t) i])
-            loudest = juce::jmax (loudest, peaks[(size_t) ((peakPos - newest - length + i + 2 * peakSize) % peakSize)]);
+            loudest = juce::jmax (loudest, peaks[(size_t) ((peakPos - length + i + 2 * peakSize) % peakSize)]);
     return loudest;
 }
 
