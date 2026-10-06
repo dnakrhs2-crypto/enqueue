@@ -423,6 +423,18 @@ void CuePlayer::setInitialDuckDb (double db) noexcept
     duckJump.store (true, std::memory_order_release);
 }
 
+void CuePlayer::setMatchDb (double matchDb) noexcept
+{
+    const double db = std::isfinite (matchDb) ? juce::jlimit (-40.0, 24.0, matchDb) : 0.0;
+    matchTarget.store ((float) juce::Decibels::decibelsToGain (db, -1000.0), std::memory_order_relaxed);
+}
+
+void CuePlayer::setInitialMatchDb (double matchDb) noexcept
+{
+    setMatchDb (matchDb);
+    matchJump.store (true, std::memory_order_release);
+}
+
 double CuePlayer::getLengthSeconds() const noexcept
 {
     if (micMode)
@@ -534,6 +546,20 @@ void CuePlayer::mixIntoBus (juce::AudioBuffer<float>& bus, const juce::AudioBuff
     const int outs = juce::jmin (numOutputs, bus.getNumChannels());
     const float alpha = (float) juce::jmin (1.0, (double) numSamples / (0.010 * currentSampleRate));   // ~10 ms level ramps
 
+    // the loudness match: from the first block at its starting value; a change while playing moves at most 40 dB/s
+    if (matchJump.exchange (false, std::memory_order_acq_rel))
+        matchLevel = matchTarget.load (std::memory_order_relaxed);
+
+    const float matchStart = matchLevel;
+    const float matchGoal = matchTarget.load (std::memory_order_relaxed);
+
+    if (matchGoal != matchLevel)
+    {
+        const float stepRatio = (float) std::pow (10.0, 40.0 * (double) numSamples / currentSampleRate / 20.0);
+        const float up = matchLevel * stepRatio, down = matchLevel / stepRatio;
+        matchLevel = matchGoal > matchLevel ? juce::jmin (matchGoal, up) : juce::jmax (matchGoal, down);
+    }
+
     for (int in = 0; in < ins; ++in)
     {
         const float* src = rendered.getReadPointer (in);
@@ -549,7 +575,7 @@ void CuePlayer::mixIntoBus (juce::AudioBuffer<float>& bus, const juce::AudioBuff
                 g1 = goal;
 
             if (g0 != 0.0f || g1 != 0.0f)
-                bus.addFromWithRamp (o, 0, src, numSamples, g0, g1);
+                bus.addFromWithRamp (o, 0, src, numSamples, g0 * matchStart, g1 * matchLevel);
 
             currentGains[idx] = g1;
         }

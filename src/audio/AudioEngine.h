@@ -13,6 +13,7 @@
 #include <juce_events/juce_events.h>
 
 #include <array>
+#include <optional>
 #include <atomic>
 #include <map>
 #include <memory>
@@ -41,6 +42,7 @@ public:
         float peak = 0.0f;
         int clippedBlocks = 0;
         int xruns = 0;
+        int readShortfalls = 0;   // blocks a cue's disk read-ahead had not filled in time (ReadAheadSource), since the device started
     };
 
     OutputDiagnostics takeOutputDiagnostics() noexcept;
@@ -256,6 +258,18 @@ public:
     double getAutoLevelGainDb() const noexcept { return autoLeveler.getGainDb(); }
     /** The last rendered block held the auto level (a fade, duck, volume change or panic was under way). */
     bool isAutoLevelHeld() const noexcept { return autoLeveler.isHeld(); }
+    /** 자동 레벨's loudness match: the gain that puts a measured audio cue at the target (0 dB when it is there already).
+        A start gets that less what the master leveler applies at that moment, so the two together are exactly the match
+        and the leveler, finding the cue where it should be, does not move (it may still be up for a quiet mic, say). An
+        instance already playing keeps what it started with - a later measurement or target is for its next start (the
+        leveler has been riding it meanwhile: two hands on one fader would overshoot). Message thread. */
+    void setLoudnessMatchDb (const juce::Uuid& cueId, double matchDb);
+    void clearLoudnessMatches();
+    /** The measured match of a cue, or nothing when it has none (not measured, or matching is not running for it). */
+    std::optional<double> getLoudnessMatchDb (const juce::Uuid& cueId) const;
+    /** Matching on (with 자동 레벨) or off: playing instances move to their match, or back to the file as it is. Message thread. */
+    void setLoudnessMatchActive (bool active);
+    bool isLoudnessMatchActive() const noexcept { return matchActive; }
     /** The cue's insert chain, created on demand. */
     PluginChain& getCueChain (const juce::Uuid& cueId);
     PluginChain* findCueChain (const juce::Uuid& cueId) const;
@@ -374,10 +388,16 @@ private:
 
     PluginChain masterChain;
     AutoLeveler autoLeveler;
+    std::map<juce::Uuid, double> matchByCue;   // message thread
+    bool matchActive = false;                  // message thread
+    /** The match a start of this cue gets now: its measured match less the master leveler's gain (0 dB when matching is
+        off, the cue is not measured or is no audio cue). */
+    double matchFor (const Cue& cue) const;
     livemix::LoudnessMeter loudness;
     std::atomic<float> outputPeakHold { 0.0f };      // the device outputs' sample peak since the last takeOutputDiagnostics()
     std::atomic<int> outputClippedBlocks { 0 };      // blocks with a device output over 0 dBFS since the device started
     std::atomic<int> xrunBaseline { 0 };             // the manager's count when the device started: the footer shows the increase since
+    std::atomic<int> shortfallBaseline { 0 };        // the same for the read-ahead shortfalls
     std::map<juce::String, std::unique_ptr<PluginChain>> cueChains;   // keyed by Uuid string
     PluginChain::Listener* chainListener = nullptr;
 

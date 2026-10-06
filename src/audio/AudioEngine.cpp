@@ -738,6 +738,7 @@ bool AudioEngine::play (const Cue& cue, const PlayOptions& options, juce::String
                     existing->seekToFileSeconds (cue.regionStart() + options.startSeconds);   // an explicit start place wins over the loaded one
 
                 existing->setBaseGainDb (cue.gainDb);   // a gain edited since the load is the level it plays at
+                existing->setInitialMatchDb (matchFor (cue));
                 if (options.hasStartGain)
                     existing->setInitialGainDb (options.startGainDb);
 
@@ -779,6 +780,7 @@ bool AudioEngine::play (const Cue& cue, const PlayOptions& options, juce::String
     }
 
     player->prepare (getSampleRate(), getBlockSize());
+    player->setInitialMatchDb (matchFor (cue));
     if (options.hasStartGain)
         player->setInitialGainDb (options.startGainDb);
 
@@ -833,6 +835,7 @@ bool AudioEngine::load (const Cue& cue, double startSeconds, juce::String* error
     }
 
     player->prepare (getSampleRate(), getBlockSize());
+    player->setInitialMatchDb (matchFor (cue));
     player->setChain (findCueChain (cue.id));
     player->setBusTag (runtime);
     player->armLoaded();
@@ -1465,6 +1468,52 @@ void AudioEngine::seekToFileSeconds (const juce::Uuid& cueId, double fileSeconds
             p->seekToFileSeconds (fileSeconds);
 }
 
+double AudioEngine::matchFor (const Cue& cue) const
+{
+    if (! matchActive || ! cue.isAudio())
+        return 0.0;
+
+    const auto it = matchByCue.find (cue.id);
+
+    if (it == matchByCue.end())
+        return 0.0;   // not measured: the leveler's gain applies to it as to any other sound
+
+    // the leveler's gain on top makes up the rest: together exactly the match, so the leveler finds the cue in place
+    return it->second - (autoLeveler.isEnabled() ? autoLeveler.getGainDb() : 0.0);
+}
+
+void AudioEngine::setLoudnessMatchDb (const juce::Uuid& cueId, double matchDb)
+{
+    if (std::isfinite (matchDb))
+        matchByCue[cueId] = matchDb;   // 0 dB too: measured and already at the target
+    else
+        matchByCue.erase (cueId);
+}
+
+void AudioEngine::clearLoudnessMatches()
+{
+    matchByCue.clear();
+}
+
+std::optional<double> AudioEngine::getLoudnessMatchDb (const juce::Uuid& cueId) const
+{
+    const auto it = matchByCue.find (cueId);
+    return it != matchByCue.end() ? std::optional<double> (it->second) : std::nullopt;
+}
+
+void AudioEngine::setLoudnessMatchActive (bool active)
+{
+    if (active == matchActive)
+        return;
+
+    matchActive = active;
+    const juce::ScopedLock sl (lock);
+
+    for (auto& p : players)
+        if (! p->hasFinished())
+            p->setMatchDb (matchFor (p->getCue()));   // moves there at most 40 dB/s: no step either way
+}
+
 void AudioEngine::setDuckDb (const juce::Uuid& cueId, double duckDb, double rampSeconds)
 {
     const juce::ScopedLock sl (lock);
@@ -1963,6 +2012,7 @@ void AudioEngine::audioDeviceAboutToStart (juce::AudioIODevice* device)
     outputPeakHold.store (0.0f, std::memory_order_relaxed);
     outputClippedBlocks.store (0, std::memory_order_relaxed);   // a device that starts counts from zero
     xrunBaseline.store (deviceManager.getXRunCount(), std::memory_order_relaxed);   // an ASIO device keeps its own count across a restart
+    shortfallBaseline.store (ReadAheadSource::getShortfallCount(), std::memory_order_relaxed);
     const bool multichannel = typeAllowsMultichannel (device->getTypeName());
     const int limit = multichannel ? maxDeviceOutputs : stereoOnlyOutputs;
     const auto active = device->getActiveOutputChannels();
@@ -1980,6 +2030,7 @@ AudioEngine::OutputDiagnostics AudioEngine::takeOutputDiagnostics() noexcept
     d.clippedBlocks = outputClippedBlocks.load (std::memory_order_relaxed);
     // the driver's overload reports plus the callbacks that ran over their budget, counted since the device started
     d.xruns = juce::jmax (0, deviceManager.getXRunCount() - xrunBaseline.load (std::memory_order_relaxed));
+    d.readShortfalls = juce::jmax (0, ReadAheadSource::getShortfallCount() - shortfallBaseline.load (std::memory_order_relaxed));
     return d;
 }
 

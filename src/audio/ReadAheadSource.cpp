@@ -66,6 +66,7 @@ int ReadAheadSource::getNumSamplesReady() const
 
 void ReadAheadSource::setNextReadPosition (juce::int64 newPosition)
 {
+    refilling.store (true, std::memory_order_relaxed);
     playPos.store (newPosition, std::memory_order_relaxed);
     thread.moveToFrontOfQueue (this);
 }
@@ -76,6 +77,7 @@ void ReadAheadSource::invalidate (juce::int64 fromPosition)
         const juce::ScopedLock sl (rangeLock);
         validStart = validEnd = 0;   // nothing in the ring describes the new content
         ++generation;                // a background fill that is still reading the old content will not publish
+        refilling.store (true, std::memory_order_relaxed);
         playPos.store (fromPosition, std::memory_order_relaxed);
     }
 
@@ -90,6 +92,7 @@ void ReadAheadSource::invalidateCurrent()
         const juce::ScopedLock sl (rangeLock);
         validStart = validEnd = 0;
         ++generation;              // playPos untouched: the audio thread keeps its place
+        refilling.store (true, std::memory_order_relaxed);
     }
 
     thread.moveToFrontOfQueue (this);
@@ -113,6 +116,15 @@ void ReadAheadSource::getNextAudioBlock (const juce::AudioSourceChannelInfo& inf
 
     const juce::int64 from = juce::jmax (pos, vStart);
     const juce::int64 to = juce::jmin (pos + (juce::int64) info.numSamples, vEnd);
+
+    // what this block should have had (nothing past the end of the material) against what the ring held
+    const juce::int64 total = upstream.getTotalLength();
+    const juce::int64 wanted = juce::jlimit ((juce::int64) 0, (juce::int64) info.numSamples, total - pos);
+
+    if ((to > from ? to - from : 0) >= wanted)
+        refilling.store (false, std::memory_order_relaxed);
+    else if (! refilling.load (std::memory_order_relaxed))
+        shortfalls().fetch_add (1, std::memory_order_relaxed);
 
     if (to <= from || ring.getNumSamples() == 0)
     {

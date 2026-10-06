@@ -310,6 +310,8 @@ MainComponent::MainComponent (AudioEngine& e, AppSettings& s, juce::ApplicationC
     setSize (1100, 820);
     updateTransportStandby();
     engine.setPatches (document.patches, true);   // the default patch of the empty project
+    loudnessScan = std::make_unique<LoudnessScan> (engine.getFormatManager(), settings.getLoudnessCacheFile());
+    loudnessScan->onResults = [this] { refreshLoudnessMatches(); };
     startTimerHz (30);
     scheduler.startTicking (1);   // pre-waits, post-waits, auto-follows
     controller.getFadeRunner().startTicking (10);   // fade cues at 100 Hz
@@ -1282,7 +1284,14 @@ bool MainComponent::perform (const InvocationInfo& info)
             break;
 
         case CommandIDs::autoLevelSettings:
-            if (! showMode) AutoLevelDialog::show (document, engine, this);
+            if (! showMode)
+                AutoLevelDialog::show (document, engine, this, [safe = juce::Component::SafePointer<MainComponent> (this)]
+                {
+                    AutoLevelDialog::MatchStatus status;
+                    if (safe != nullptr)
+                        status = { safe->matchAudioCues, safe->matchMatched, safe->matchWaiting };
+                    return status;
+                });
             break;
 
         case CommandIDs::pluginManager:
@@ -3382,10 +3391,14 @@ void MainComponent::updateAudioStatus()
     if (diag.clippedBlocks > 0)
         status << ko (" · 클립 ") << diag.clippedBlocks << ko ("회");
 
+    if (diag.readShortfalls > 0)
+        status << ko (" · 읽기 끊김 ") << diag.readShortfalls << ko ("회");
+
     status << " · xrun " << diag.xruns;
-    footer.setAudioStatus (status, diag.clippedBlocks > 0 || diag.xruns > 0,
+    footer.setAudioStatus (status, diag.clippedBlocks > 0 || diag.xruns > 0 || diag.readShortfalls > 0,
                            status + "\n" + ko ("피크 = 최근 갱신(약 1초) 구간에서 앱 출력이 낸 최고 샘플 레벨")
                                   + "\n" + ko ("클립 = 장치를 연 뒤 앱 출력이 0 dBFS를 넘은 블록 수(누적, 장치의 변환 전 값)")
+                                  + "\n" + ko ("읽기 끊김 = 장치를 연 뒤 큐 파일을 제때 읽지 못해 소리가 비었던 블록 수(누적, 위치를 옮긴 직후는 빼고)")
                                   + "\n" + ko ("xrun = 장치를 연 뒤 드라이버가 보고한 끊김 + 시간 예산을 넘긴 콜백 수(누적). 0이어도 끊김이 없다는 뜻은 아닙니다"));
 }
 
@@ -3430,6 +3443,9 @@ void MainComponent::installEscapePolicy (juce::Component& root)
 
 void MainComponent::timerCallback()
 {
+    if (loudnessScan != nullptr)
+        loudnessScan->setBusy (engine.mayBePlaying());   // cues playing: the scan reads slowly, playback's reads first
+
     if (releaseGoWhenSpaceUp && ! juce::KeyPress::isKeyCurrentlyDown (juce::KeyPress::spaceKey) && ! shortcutRouter->anyGoKeyHeld())
     {
         releaseGoWhenSpaceUp = false;
@@ -3578,11 +3594,13 @@ void MainComponent::cueListStructureChanged()
 {
     updateTransportStandby();
     commands.commandStatusChanged();
+    refreshLoudnessMatches();   // a new cue is measured, a removed one forgotten
 }
 
 void MainComponent::cueChanged (int index)
 {
     updateTransportStandby();
+    refreshLoudnessMatches();   // a new file or region is measured
 
     // a loaded instance holds a copy of the cue: after an edit it would play the old settings
     if (document.cues.isValidIndex (index))
@@ -3751,9 +3769,48 @@ void MainComponent::containersChanged()
     updateContainerView();
 }
 
+void MainComponent::refreshLoudnessMatches()
+{
+    const bool on = document.settings.autoLevelEnabled && loudnessScan != nullptr;
+    engine.clearLoudnessMatches();
+    matchAudioCues = matchMatched = matchWaiting = 0;
+
+    if (on)
+    {
+        const double target = document.settings.autoLevelTargetLufs;
+
+        document.forEachList ([this, target] (CueList& list)
+        {
+            for (const auto& c : list.getAll())
+            {
+                if (! c.isAudio() || c.file == juce::File())
+                    continue;
+
+                ++matchAudioCues;
+
+                if (const auto measured = loudnessScan->lookup (c.file, c.audio.startSeconds, c.audio.endSeconds))
+                {
+                    if (measured->valid)   // too short or silent: no match, the leveler rides it like any sound
+                    {
+                        engine.setLoudnessMatchDb (c.id, loudnessMatchDb (*measured, target));
+                        ++matchMatched;
+                    }
+                }
+                else
+                {
+                    ++matchWaiting;
+                }
+            }
+        });
+    }
+
+    engine.setLoudnessMatchActive (on);
+}
+
 void MainComponent::documentStateChanged()
 {
     engine.setAutoLevel (document.settings.autoLevelEnabled, document.settings.autoLevelTargetLufs);
+    refreshLoudnessMatches();
     unsavedChanges.store (document.isDirty(), std::memory_order_relaxed);
     updateInputsWanted();
     commands.commandStatusChanged();   // undo / redo names and availability

@@ -8,6 +8,7 @@
 #include "app/MidiTriggerRouter.h"
 #include "ui/ShortcutRouter.h"
 #include "audio/AudioEngine.h"
+#include "audio/LoudnessScan.h"
 #include "ui/ActiveCuesPanel.h"
 #include "ui/ActiveCuesWindow.h"
 #include "ui/ContainerTabs.h"
@@ -231,6 +232,12 @@ private:
     bool showMode = false;
     std::atomic<bool> showModeFlag { false };   // the same, for readers off the message thread (the updater's callbacks)
     int windowScanCountdown = 0;
+    /** 자동 레벨's loudness match: every audio cue measured once (a thread apart from playback), its gain to the target
+        handed to the engine for its next start. */
+    std::unique_ptr<LoudnessScan> loudnessScan;
+    /** The matches for every audio cue of every list from what is measured so far (the rest is queued); off: none. */
+    void refreshLoudnessMatches();
+    int matchAudioCues = 0, matchMatched = 0, matchWaiting = 0;   // the last refresh's counts, for the 자동 레벨 dialog
     juce::int64 lastLoudnessSubBlockCount = 0;
     double lastLoudnessSubBlockMs = 0.0;
     bool autoStartOnOpenAllowed = true;

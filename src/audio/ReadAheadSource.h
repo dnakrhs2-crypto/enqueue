@@ -41,6 +41,10 @@ public:
 
     /** Samples cached and playable from the current play position (tests). */
     int getNumSamplesReady() const;
+    /** Blocks, over every instance since the program started, that the read-ahead thread had not filled in time - played
+        partly or wholly silent. The refill right after a jump (a seek, a live trim) is not counted: that gap is the jump's,
+        playback that runs on is what has to keep up. Any thread. */
+    static int getShortfallCount() noexcept { return shortfalls().load (std::memory_order_relaxed); }
 
 private:
     int useTimeSlice() override;
@@ -59,6 +63,8 @@ private:
     juce::uint32 generation = 0;                 // bumped by invalidate(): a fill from before it is thrown away
     std::atomic<juce::int64> playPos { 0 };
     std::atomic<bool> prepared { false };
+    std::atomic<bool> refilling { false };   // jumped: until the ring holds the play position again, a gap is the jump's
+    static std::atomic<int>& shortfalls() noexcept { static std::atomic<int> count { 0 }; return count; }
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (ReadAheadSource)
 };

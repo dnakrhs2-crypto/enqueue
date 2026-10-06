@@ -322,6 +322,39 @@ public:
             expectEquals (gain->getText(), juce::String ("0 dB")); expect (gain->getAlpha() < 1.0f);
             on->onClick();
         }
+
+        beginTest ("the cues' match status beside the on/off pair: 큐 분석 중 x/y, then 큐 N개 맞춤; nothing when off");
+        expectEquals (AutoLevelDialog::Content::statusText (true, { 12, 0, 9 }), ko ("큐 분석 중 3/12"));
+        expectEquals (AutoLevelDialog::Content::statusText (true, { 12, 10, 0 }), ko ("큐 10개 맞춤"));
+        expectEquals (AutoLevelDialog::Content::statusText (true, { 0, 0, 0 }), juce::String());
+        expectEquals (AutoLevelDialog::Content::statusText (false, { 12, 10, 0 }), juce::String());
+        {
+            AutoLevelDialog::MatchStatus status { 120, 0, 117 };
+            AutoLevelDialog::Content withStatus (fixture.document(), fixture.engine, [] { return 0.0; }, [&status] { return status; });
+            withStatus.setLookAndFeel (&fixture.theme);
+            auto* label = volume_ui::child<juce::Label> (withStatus, [] (const auto& c) { return c.getComponentID() == "autoLevelCues"; });
+            auto* onSegment = volume_ui::child<juce::TextButton> (withStatus, [] (const auto& b) { return b.getButtonText() == ko ("켜기"); });
+            auto* offSegment = volume_ui::child<juce::TextButton> (withStatus, [] (const auto& b) { return b.getButtonText() == ko ("끄기"); });
+            expect (label != nullptr && onSegment != nullptr && offSegment != nullptr);
+            if (label != nullptr && onSegment != nullptr && offSegment != nullptr)
+            {
+                onSegment->onClick();
+                expectEquals (label->getText(), ko ("큐 분석 중 3/120"));
+                expectEquals (label->getBounds().getCentreY(), onSegment->getBounds().getCentreY());
+                expect (label->getX() >= onSegment->getRight() + Palette::gap, "beside the switch, clear of it");
+                expect (withStatus.getLocalBounds().reduced (Palette::dialogInset + Palette::gap).contains (label->getBounds()));
+                expect (juce::GlyphArrangement::getStringWidthInt (label->getFont(), ko ("큐 분석 중 9999/9999")) <= label->getWidth(),
+                        "the longest count fits");
+                expectEquals (withStatus.getHeight(), 2 * (Palette::dialogInset + Palette::gap) + 2 * Palette::formRowHeight + Palette::fieldHeight);
+                status = { 120, 118, 0 };
+                withStatus.refreshMeter();
+                expectEquals (label->getText(), ko ("큐 118개 맞춤"));
+                offSegment->onClick();
+                expectEquals (label->getText(), juce::String());
+                onSegment->onClick();
+            }
+            withStatus.setLookAndFeel (nullptr);
+        }
         expect (fixture.command (CommandIDs::toggleShowMode));
         expect ((info().flags & juce::ApplicationCommandInfo::isDisabled) != 0);
         expect (fixture.command (CommandIDs::autoLevelSettings)); // locked command cannot launch a native window

@@ -115,6 +115,8 @@ public:
     juce::File getDeadMansPedalFile() const;
     /** Scan coordinator log in this app's settings folder (%APPDATA%/Enqueue by default). */
     juce::File getPluginScanLogFile() const;
+    /** 자동 레벨's measured cue loudness (LoudnessScan's cache), in the same folder. */
+    juce::File getLoudnessCacheFile() const;
 
 private:
     void protectShortcutXml();

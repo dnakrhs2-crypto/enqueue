@@ -5,6 +5,7 @@ target_sources(EnqueueTests PRIVATE
     AutoLevelTests.cpp
     AutoLevelRenderTests.cpp
     AutoLevelIntegrationTests.cpp
+    LoudnessScanTests.cpp
     ShortcutTests.cpp
     ShortcutRouterTests.cpp
     ShortcutUiTests.cpp

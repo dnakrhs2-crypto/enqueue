@@ -125,6 +125,12 @@ public:
     void setDuckDb (double duckDb, double rampSeconds) noexcept;
     /** Before start(): the duck the instance begins at (a cue that starts while a duck cue runs). Message thread. */
     void setInitialDuckDb (double duckDb) noexcept;
+    /** 자동 레벨's loudness match: the cue measured beforehand and brought to the target. A gain apart from the cue's own
+        levels, applied as the block is mixed into the bus - after the inserts, so a plugin hears the file as it is - and,
+        when it changes while playing, moved at most 40 dB a second (no step). 0 dB = none. Any thread. */
+    void setMatchDb (double matchDb) noexcept;
+    /** Before start(): the match the instance begins at, from its first sample. Message thread. */
+    void setInitialMatchDb (double matchDb) noexcept;
     double getDuckDb() const noexcept { return duckDb.load (std::memory_order_relaxed); }
     /** Audio thread, after rendering, under the engine lock: intentional level changes in this block. */
     bool isAutoLevelHeld() const noexcept { return autoLevelHeld; }
@@ -255,6 +261,9 @@ private:
     std::atomic<double> liveRate { 1.0 };
     std::atomic<float> targetGain { 1.0f };
     std::atomic<float> duckTarget { 1.0f };
+    std::atomic<float> matchTarget { 1.0f };    // the loudness match (linear)
+    std::atomic<bool> matchJump { false };      // ... taken as it is by the next mix (the instance's first block)
+    float matchLevel = 1.0f;                    // audio thread: the match the last mix ended at
     std::atomic<bool> duckJump { false };      // setInitialDuckDb(): the audio thread puts duckInitial in place at once (a start, nothing to click) ...
     std::atomic<float> duckInitial { 1.0f };   // ... and then ramps to whatever goal came in since (a release sent before the first block)
     std::atomic<double> duckRampSeconds { 0.0 };

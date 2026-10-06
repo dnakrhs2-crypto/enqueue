@@ -6,8 +6,9 @@ namespace gocue::AutoLevelDialog
 {
 namespace { juce::Component::SafePointer<juce::DialogWindow> dialog; }
 
-Content::Content (ProjectDocument& doc, AudioEngine& e, std::function<double()> gainReader)
-    : document (doc), engine (e), readGain (gainReader ? std::move (gainReader) : [&e] { return e.getAutoLevelGainDb(); })
+Content::Content (ProjectDocument& doc, AudioEngine& e, std::function<double()> gainReader, std::function<MatchStatus()> statusReader)
+    : document (doc), engine (e), readGain (gainReader ? std::move (gainReader) : [&e] { return e.getAutoLevelGainDb(); }),
+      readStatus (std::move (statusReader))
 {
     offButton.setButtonText (ko ("끄기"));
     onButton.setButtonText (ko ("켜기"));
@@ -29,7 +30,7 @@ Content::Content (ProjectDocument& doc, AudioEngine& e, std::function<double()> 
     targetLabel.setText (ko ("목표"), juce::dontSendNotification);
     correctionLabel.setText (ko ("보정"), juce::dontSendNotification);
     unitsLabel.setText ("LUFS", juce::dontSendNotification);
-    for (auto* label : { &targetLabel, &correctionLabel, &unitsLabel, &gainLabel })
+    for (auto* label : { &targetLabel, &correctionLabel, &unitsLabel, &gainLabel, &statusLabel })
     {
         label->setFont (Palette::font (Palette::fieldLabelSize));
         label->setColour (juce::Label::textColourId, Palette::dimText);
@@ -38,6 +39,9 @@ Content::Content (ProjectDocument& doc, AudioEngine& e, std::function<double()> 
     gainLabel.setFont (Palette::monoFont (Palette::fieldValueSize));
     gainLabel.setJustificationType (juce::Justification::centredRight);
     gainLabel.setComponentID ("autoLevelGain");
+    statusLabel.setFont (Palette::font (Palette::fieldValueSize));
+    statusLabel.setJustificationType (juce::Justification::centredRight);
+    statusLabel.setComponentID ("autoLevelCues");
     targetEditor.setComponentID ("autoLevelTarget");
     targetEditor.setFont (Palette::monoFont (Palette::fieldValueSize));
     targetEditor.setInputRestrictions (8, "-+.0123456789");
@@ -87,12 +91,24 @@ void Content::documentStateChanged()
     refreshMeter();
 }
 
+juce::String Content::statusText (bool on, const MatchStatus& status)
+{
+    if (! on || status.audioCues <= 0)
+        return {};
+
+    if (status.waiting > 0)
+        return ko ("큐 분석 중 ") + juce::String (juce::jmax (0, status.audioCues - status.waiting)) + "/" + juce::String (status.audioCues);
+
+    return ko ("큐 ") + juce::String (status.matched) + ko ("개 맞춤");
+}
+
 void Content::refreshMeter()
 {
     const bool on = document.settings.autoLevelEnabled;
     shownGain = on ? juce::jlimit (-20.0, 12.0, readGain()) : 0.0;
     gainLabel.setText (on ? (shownGain > 0.0 ? "+" : "") + juce::String (shownGain, 1) + " dB" : "0 dB", juce::dontSendNotification);
     gainLabel.setAlpha (on ? 1.0f : Palette::disabledAlpha);
+    statusLabel.setText (statusText (on, readStatus ? readStatus() : MatchStatus()), juce::dontSendNotification);
     repaint (meterBounds);
 }
 
@@ -102,6 +118,7 @@ void Content::resized()
     auto row = area.removeFromTop (Palette::formRowHeight).withHeight (Palette::fieldHeight);
     offButton.setBounds (row.removeFromLeft (70));
     onButton.setBounds (row.removeFromLeft (70));
+    statusLabel.setBounds (row.withTrimmedLeft (Palette::gap));   // what turning it on did, beside the switch
     row = area.removeFromTop (Palette::formRowHeight).withHeight (Palette::fieldHeight);
     targetLabel.setBounds (row.removeFromLeft (44));
     targetEditor.setBounds (row.removeFromLeft (84));
@@ -139,10 +156,10 @@ void Content::paintOverChildren (juce::Graphics& g)
                             Palette::cornerRadius, Palette::borderWidth);
 }
 
-void show (ProjectDocument& document, AudioEngine& engine, juce::Component* centreAround)
+void show (ProjectDocument& document, AudioEngine& engine, juce::Component* centreAround, std::function<MatchStatus()> statusReader)
 {
     if (dialog != nullptr) { dialog->toFront (true); return; }
-    auto content = std::make_unique<Content> (document, engine);
+    auto content = std::make_unique<Content> (document, engine, std::function<double()>(), std::move (statusReader));
     const auto size = content->getBounds();
     juce::DialogWindow::LaunchOptions options;
     options.dialogTitle = ko ("자동 레벨 맞추기");
