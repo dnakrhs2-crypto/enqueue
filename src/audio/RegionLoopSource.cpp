@@ -196,6 +196,10 @@ void RegionLoopSource::rebuildLayout()
 
     pushRun (runStart, end, runCount);
 
+    // judged before a whole-region repeat folds into the single run below: that repeat is the same sound, a slice's is not
+    l.plainSlices = firstCount == 1 && resolvedRuns.empty() && stopAfterStart < 0
+                    && std::all_of (markers.begin(), markers.end(), [] (const SliceMarker& m) { return m.playCount == 1; });
+
     if (markers.empty() && l.numRuns == 1 && firstCount == 1)
     {
         // no slices: fold the sequence count into the single run so the old pass semantics hold
@@ -457,12 +461,7 @@ juce::int64 RegionLoopSource::virtualPositionFor (juce::int64 fileSample, const 
 bool RegionLoopSource::playsStraightThrough() const noexcept
 {
     const auto l = snapshot();
-
-    for (int i = 0; i < l.numRuns; ++i)
-        if (l.runs[i].count != 1)
-            return false;
-
-    return l.numRuns > 0;
+    return l.numRuns > 0 && l.plainSlices;
 }
 
 juce::int64 RegionLoopSource::getTotalLength() const

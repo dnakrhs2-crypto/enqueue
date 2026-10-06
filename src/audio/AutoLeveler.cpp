@@ -144,7 +144,10 @@ void AutoLeveler::reset() noexcept
     rampLeft = delayPos = maxHead = maxCount = attackPos = 0;
     sampleIndex = 0;
     wasEnabled = releasing = blockBegun = blockOn = false;
-    releaseWaitLeft = 0;
+    masterRises = flushed = blockMatched = false;
+    afterReset = true;
+    quietSamples = releaseLatency = 0;
+    releasingNow.store (false, std::memory_order_relaxed);
     homeDb = 0.0;
     handGain.store (0.0, std::memory_order_relaxed);
     delay.clear();
@@ -891,18 +894,41 @@ double AutoLeveler::beginBlock (bool on, bool cuesMatched, int latencySamples) n
     if (! on && moving) freezeGain();
     const double handDb = 20.0 * std::log10 (linear);
 
+    blockMatched = cuesMatched;
+
     // off while cues play with a loudness match (also when the leveler started again switched off - a device that
-    // changed format at the switch-off): the master goes home as the matches do, the limiter on throughout; a master that
-    // has to rise first lets the matches coming down pass the inserts after the cues
+    // changed format at the switch-off): the limiter stays until the last matched sound has left every insert; a master
+    // that was down rises only then (one that was up comes down at once) - whatever the inserts delay, even a delay that
+    // grows meanwhile, the master never rises under a match still on its way
     if (! on && ! releasing && cuesMatched)
     {
         releasing = true;
-        releaseWaitLeft = handDb < 0.0 ? juce::jmax (0, latencySamples) : 0;
+        masterRises = handDb < 0.0;
+        quietSamples = 0;
     }
 
-    if (releasing && ! cuesMatched && homeDb == -handDb)
-        releasing = false;      // home, and every match back at 0 dB: now the bypass crossfade
+    if (releasing)
+    {
+        releaseLatency = (juce::int64) juce::jmax (0, latencySamples) + (juce::int64) std::llround (rate * 0.05);
 
+        if (cuesMatched)
+            quietSamples = 0;
+
+        flushed = ! cuesMatched && quietSamples >= releaseLatency;
+
+        if (flushed && homeDb == -handDb)
+            releasing = false;  // home, and nothing matched left on its way: now the bypass crossfade
+    }
+
+    if (afterReset)
+    {
+        afterReset = false;
+
+        if (cuesMatched && (on || releasing))
+            wet = 1.0;          // the output broke anyway: the limiter for the matched cues from the first sample
+    }
+
+    releasingNow.store (releasing, std::memory_order_relaxed);
     return handDb;
 }
 
@@ -930,13 +956,14 @@ void AutoLeveler::process (juce::AudioBuffer<float>& buffer, int numSamples) noe
         return;
     }
     // the way home after a switch-off, on top of the hand (never while on: beginBlock hands it to the hand), 40 dB/s, a
-    // straight ramp across the block (1.0 throughout when there is none); a fader that has to rise waits out the inserts
+    // straight ramp across the block (1.0 throughout when there is none); a fader that has to rise waits until no matched
+    // sound is left on its way
     const double homeTarget = -20.0 * std::log10 (linear);
     const double homeGoal = on ? 0.0
-                          : releasing ? (releaseWaitLeft > 0 ? homeDb : homeTarget)
+                          : releasing ? (! masterRises || flushed ? homeTarget : homeDb)
                           : (homeDb != 0.0 ? homeTarget : 0.0);
-    if (releasing && releaseWaitLeft > 0)
-        releaseWaitLeft -= numSamples;
+    if (releasing && ! blockMatched)
+        quietSamples += numSamples;
     const double homeFrom = homeDb, homeStep = homeSpeed * (double) numSamples / rate;
     homeDb = homeGoal > homeDb ? juce::jmin (homeGoal, homeDb + homeStep) : juce::jmax (homeGoal, homeDb - homeStep);
     const double home0 = homeFrom == 0.0 ? 1.0 : std::pow (10.0, homeFrom / 20.0);

@@ -164,6 +164,30 @@ struct StuckFormat : juce::AudioFormat
     juce::WaitableEvent& gate;
 };
 
+/** A quiet tone (-30 LUFS) with a 1 ms click at -0.9 dBFS every 'everyBlocks' blocks: a match of +3 puts the clicks over full
+    scale, which only the master's limiter may take. */
+juce::File writeClicks (const juce::File& file, double seconds, int everyBlocks)
+{
+    file.deleteFile();
+    std::unique_ptr<juce::OutputStream> stream (file.createOutputStream());
+    juce::WavAudioFormat wav;
+    auto writer = wav.createWriterFor (stream, juce::AudioFormatWriterOptions().withSampleRate (rate).withNumChannels (2).withBitsPerSample (24));
+    Signal tone;
+    juce::AudioBuffer<float> buffer (2, block);
+
+    for (int b = 0; b < (int) std::llround (seconds * 100.0); ++b)
+    {
+        tone.fill (buffer, -30.0);
+        if (b % everyBlocks == everyBlocks / 2)
+            for (int ch = 0; ch < 2; ++ch)
+                juce::FloatVectorOperations::fill (buffer.getWritePointer (ch, 100), 0.9f, 48);
+        writer->writeFromAudioSampleBuffer (buffer, 0, block);
+    }
+
+    writer.reset();
+    return file;
+}
+
 /** RMS of 'samples' over [from, from + count), against 'reference' (dB). */
 double samplesDb (const std::vector<float>& samples, size_t from, size_t count, double reference)
 {
@@ -899,8 +923,9 @@ public:
                             if (afterMax > limitA)
                                 failures.add (where + "A " + juce::String (afterMax, 2) + " dB over a bound of " + juce::String (limitA, 2));
                             // nor a dip on the way: no lower than where it was, where it ends, or - while switched off - the
-                            // file itself (with B, the master pulls the 3 dB louder mix down by that much)
-                            const double offLevel = action == 3 ? before : 0.0;
+                            // file itself, less the fader's cut if it was down: such a fader rises only once no matched sound
+                            // is left on its way (with B, the master also pulls the 3 dB louder mix down by that much)
+                            const double offLevel = action == 3 ? before : juce::jmin (0.0, hand);
                             const double floorA = juce::jmin (juce::jmin (before, endWanted), offLevel) - (action == 4 ? 4.0 : 1.0);
                             if (afterMin < floorA)
                                 failures.add (where + "A dips to " + juce::String (afterMin, 2) + " dB under a floor of " + juce::String (floorA, 2));
@@ -1003,7 +1028,9 @@ public:
                     // the safe side's price: a master that comes down at once while a cue's match going up still crosses the
                     // insert leaves that cue up to 40 dB/s x the latency (4 dB here) quieter for that moment - waiting with the
                     // master as well would make a shorter path louder instead
-                    const double floor = (restart ? before : juce::jmin (before, 0.0)) - 1.0 - (restart ? 0.0 : 40.0 * 0.1);
+                    // ... and a fader that was down rises only once no matched sound is left in the insert: the cue dips by
+                    // its cut for that moment
+                    const double floor = (restart ? before : juce::jmin (juce::jmin (before, 0.0), hand)) - 1.0 - (restart ? 0.0 : 40.0 * 0.1);
                     const auto where = juce::String ("match ") + juce::String (matchDb, 0) + ", hand " + juce::String (hand, 1)
                                        + (restart ? " dB, restart: " : " dB, switch-off: ");
                     logMessage (where + "before " + juce::String (before, 2) + ", after " + juce::String (afterMin, 2) + " .. "
@@ -1172,6 +1199,149 @@ public:
             }
             logMessage ("switched off as the device restarted: loudest sample " + juce::String (juce::Decibels::gainToDecibels (loudest), 2) + " dBFS");
             expect (loudest <= 0.9f + 1.0e-4f, "never over the file's own clicks (-0.9 dBFS)");
+        }
+
+        beginTest ("switched off with a latent insert: the limiter stays until the last matched sound has left the insert");
+        {
+            const auto clicks = writeClicks (scratch.folder.getChildFile ("latent-clicks.wav"), 6.0, 10);
+            AudioEngine engine (0);
+            engine.prepare (rate, block);
+            auto latent = std::make_unique<TestGainPlugin> (1.0f);
+            latent->latencySamples = 4800;                       // 100 ms
+            engine.getMasterChain().addPlugin (std::move (latent));
+            engine.setAutoLevel (true, -16.0);
+            const auto cue = audioCueFor (clicks, 6.0);
+            engine.setLoudnessMatchDb (cue.id, 3.0);
+            engine.setLoudnessMatchActive (true);
+            expect (engine.play (cue));
+            juce::AudioBuffer<float> out (2, block);
+            for (int b = 0; b < 30; ++b)
+                engine.renderBlock (out, block, nullptr, 0);     // 0.3 s: the master at rest, the clicks limited
+            engine.setLoudnessMatchActive (false);
+            engine.setAutoLevel (false, -16.0);
+            float loudest = 0.0f;
+            for (int b = 0; b < 150; ++b)
+            {
+                engine.renderBlock (out, block, nullptr, 0);
+                loudest = juce::jmax (loudest, out.getMagnitude (0, block));
+            }
+            logMessage ("switched off through a 100 ms insert: loudest sample " + juce::String (juce::Decibels::gainToDecibels (loudest), 2) + " dBFS");
+            expect (loudest <= 0.9f + 1.0e-4f, "never over the file's own clicks (-0.9 dBFS)");
+        }
+
+        beginTest ("an insert's latency grows during the switch-off: no cue louder than before the switch");
+        {
+            const auto file = writeTone (scratch.folder.getChildFile ("growing.wav"), { { 30.0, -26.0 } });
+            double reference = 0.0;
+            {
+                std::unique_ptr<juce::AudioFormatReader> reader (formats.createReaderFor (file));
+                juce::AudioBuffer<float> all ((int) reader->numChannels, (int) reader->lengthInSamples);
+                reader->read (&all, 0, (int) reader->lengthInSamples, 0, true, true);
+                reference = all.getRMSLevel (0, 0, all.getNumSamples());
+            }
+            AudioEngine engine (0);
+            engine.prepare (rate, block);
+            auto plugin = std::make_unique<TestGainPlugin> (1.0f);   // no latency yet
+            auto* insert = plugin.get();
+            engine.getMasterChain().addPlugin (std::move (plugin));
+            engine.setAutoLevel (true, -16.0);
+            const auto mic = micCueFor();
+            const auto cue = audioCueFor (file, 30.0);
+            engine.setLoudnessMatchDb (cue.id, 10.0);
+            engine.setLoudnessMatchActive (true);
+            juce::AudioBuffer<float> input (2, block), out (2, block);
+            Signal loud;
+            std::vector<float> left;
+            const auto render = [&] (int blocks, bool micOn, bool keep)
+            {
+                for (int b = 0; b < blocks; ++b)
+                {
+                    if (micOn)
+                        loud.fill (input, -6.0);
+                    else
+                        input.clear();
+                    engine.renderBlock (out, block, input.getArrayOfReadPointers(), 2);
+                    if (keep)
+                        left.insert (left.end(), out.getReadPointer (0), out.getReadPointer (0) + block);
+                }
+            };
+            engine.play (mic);
+            render (600, true, false);                           // the master cuts a loud mic (-10)
+            engine.stop (mic.id);
+            engine.play (cue);
+            render (80, false, true);
+            const size_t at = left.size();
+            engine.setLoudnessMatchActive (false);
+            engine.setAutoLevel (false, -16.0);
+            render (5, false, true);                             // 50 ms into the way home ...
+            insert->setLatencyLive (4800);                       // ... the insert's look-ahead grows to 100 ms
+            engine.consumePluginStateChanges();                  // (the message thread hears of it)
+            render (250, false, true);
+            const double before = samplesDb (left, at - 1920, 1920, reference);
+            double loudest = -200.0;
+            for (size_t s = at; s + 1920 <= left.size(); s += 480)
+                loudest = juce::jmax (loudest, samplesDb (left, s, 1920, reference));
+            logMessage ("the latency grew during the switch-off: before " + juce::String (before, 2) + " dB, loudest after " + juce::String (loudest, 2));
+            expect (loudest <= before + 0.5, "no cue louder than before the switch");
+        }
+
+        beginTest ("a restart with a new format: the matched cues' clicks are limited from the first sample");
+        {
+            const auto clicks = writeClicks (scratch.folder.getChildFile ("restart-clicks.wav"), 6.0, 1);   // a click every 10 ms
+            AudioEngine engine (0);
+            engine.prepare (rate, block);
+            engine.setAutoLevel (true, -16.0);
+            const auto cue = audioCueFor (clicks, 6.0);
+            engine.setLoudnessMatchDb (cue.id, 3.0);
+            engine.setLoudnessMatchActive (true);
+            expect (engine.play (cue));
+            juce::AudioBuffer<float> out (2, block);
+            for (int b = 0; b < 30; ++b)
+                engine.renderBlock (out, block, nullptr, 0);
+            engine.prepare (rate, 960);                           // another block size: everything prepared again
+            juce::AudioBuffer<float> wide (2, 960);
+            float loudest = 0.0f;
+            for (int b = 0; b < 30; ++b)
+            {
+                engine.renderBlock (wide, 960, nullptr, 0);
+                loudest = juce::jmax (loudest, wide.getMagnitude (0, 960));
+            }
+            logMessage ("after a restart with a new block size: loudest sample " + juce::String (juce::Decibels::gainToDecibels (loudest), 2) + " dBFS");
+            expect (loudest <= 0.9f + 1.0e-4f, "never over the file's own clicks, from the first sample");
+        }
+
+        beginTest ("a cue that repeats its whole region (play count 2, or looping) keeps its match");
+        {
+            const auto file = writeTone (scratch.folder.getChildFile ("repeats.wav"), { { 4.0, -26.0 } });
+            double reference = 0.0;
+            {
+                std::unique_ptr<juce::AudioFormatReader> reader (formats.createReaderFor (file));
+                juce::AudioBuffer<float> all ((int) reader->numChannels, (int) reader->lengthInSamples);
+                reader->read (&all, 0, (int) reader->lengthInSamples, 0, true, true);
+                reference = all.getRMSLevel (0, 0, all.getNumSamples());
+            }
+            for (const bool forever : { false, true })
+            {
+                auto cue = audioCueFor (file, 4.0);
+                cue.audio.playCount = 2;
+                cue.audio.infiniteLoop = forever;
+                AudioEngine engine (0);
+                engine.prepare (rate, block);
+                engine.setLoudnessMatchDb (cue.id, 10.0);
+                engine.setLoudnessMatchActive (true);
+                engine.setAutoLevel (true, -16.0);
+                expect (engine.play (cue));
+                juce::AudioBuffer<float> out (2, block);
+                std::vector<float> left;
+                for (int b = 0; b < 30; ++b)
+                {
+                    engine.renderBlock (out, block, nullptr, 0);
+                    left.insert (left.end(), out.getReadPointer (0), out.getReadPointer (0) + block);
+                }
+                const double gain = samplesDb (left, 4800, 9600, reference);
+                logMessage (juce::String (forever ? "looping" : "played twice") + ": starts " + juce::String (gain, 2) + " dB from the file");
+                expectWithinAbsoluteError (gain, 10.0, 0.3, "the whole region again is the same sound: matched");
+            }
         }
 
         beginTest ("a file saved over while a long region is measured: its answer withdrawn without waiting for that region");

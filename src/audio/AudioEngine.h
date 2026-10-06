@@ -254,6 +254,10 @@ public:
         goes off and on again before a block sees it); switching off also sizes the release's wait: the latency of the
         inserts after the cues (patch and master chains). Message thread. */
     void setAutoLevel (bool enabled, double targetLufs);
+    /** A switch-off's way home is in progress: the main component then keeps the inserts' latency current. Any thread. */
+    bool isAutoLevelReleasing() const noexcept { return autoLeveler.isReleasing(); }
+    /** The inserts' latency after the cues, read again (a plugin's look-ahead changed, one was added). Message thread. */
+    void refreshReleaseLatency() { matchReleaseLatency.store (insertLatencyAfterCues(), std::memory_order_relaxed); }
     double getAutoLevelGainDb() const noexcept { return autoLeveler.getGainDb(); }
     /** The last rendered block held the auto level (a fade, duck, volume change or panic was under way). */
     bool isAutoLevelHeld() const noexcept { return autoLeveler.isHeld(); }
@@ -391,7 +395,10 @@ private:
     AutoLeveler autoLeveler;
     std::map<juce::Uuid, double> matchByCue;   // message thread
     bool matchActive = false;                  // message thread
-    std::atomic<juce::uint32> switchGeneration { 0 };   // 자동 레벨 switched (setAutoLevel): the cues re-adopt their match
+    // bit 31: 자동 레벨 on; the rest: switches so far (the cues re-adopt their match by it) - one atomic, so a block never
+    // pairs one switch's state with another switch's generation
+    std::atomic<juce::uint32> switchState { 0 };
+    static constexpr juce::uint32 switchOnBit = 0x80000000u;
     std::atomic<int> matchReleaseLatency { 0 };         // the inserts' latency after the cues, taken at a switch-off
     /** The latency the inserts after the cues add (a patch's cue-output and device-output chains, the master inserts). */
     int insertLatencyAfterCues();

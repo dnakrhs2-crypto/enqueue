@@ -3451,6 +3451,9 @@ void MainComponent::timerCallback()
     if (loudnessScan != nullptr)
         loudnessScan->setBusy (engine.mayBePlaying());   // cues playing: the scan reads slowly, playback's reads first
 
+    if (engine.isAutoLevelReleasing())
+        engine.refreshReleaseLatency();   // a switch-off's way home waits for what the inserts delay now (a plugin added, changed)
+
     if (releaseGoWhenSpaceUp && ! juce::KeyPress::isKeyCurrentlyDown (juce::KeyPress::spaceKey) && ! shortcutRouter->anyGoKeyHeld())
     {
         releaseGoWhenSpaceUp = false;

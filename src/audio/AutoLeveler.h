@@ -25,13 +25,16 @@ public:
     double getHandGainDb() const noexcept { return handGain.load (std::memory_order_relaxed); }
     /** The block's switch, taken once before the cues are mixed (AudioEngine) so they and the master agree on it for the
         whole block. 'cuesMatched': cues play with a loudness match (not 0 dB) as the block begins. Off while any does, the
-        master goes home at the matches' 40 dB/s with the limiter on until it is home and every match is back at 0 dB -
-        and a master that has to rise (it was down) first waits 'latencySamples', the inserts after the cues: a cue's
-        match coming down reaches the master through them, so the master never rises under a match still on its way and
-        no cue on any path plays louder than before the switch. Switched back on before the end, the master starts afresh
-        from where it is (no glide back). Returns the hand's gain (dB) - while on, exactly what the master applies: what a
-        starting cue makes up for. process() takes the switch itself when this was not called. */
+        matches go back to 0 dB at 40 dB/s and the limiter stays on until the last matched sound has left every insert
+        after the cues ('latencySamples', as it is now - it may grow meanwhile - plus 50 ms for news of a change); a master
+        that was up comes down at once, one that was down rises only after that. So whatever the inserts delay, no cue on
+        any path plays louder than before the switch (a cue may dip by the fader's cut for that moment). Switched back on
+        before the end, the master starts afresh from where it is. After a reset, matched cues get the limiter from the
+        first sample. Returns the hand's gain (dB) - while on, exactly what the master applies: what a starting cue makes up
+        for. process() takes the switch itself when this was not called. */
     double beginBlock (bool on, bool cuesMatched, int latencySamples) noexcept;
+    /** A switch-off's way home is in progress (the message thread then keeps the inserts' latency up to date). Any thread. */
+    bool isReleasing() const noexcept { return releasingNow.load (std::memory_order_relaxed); }
     /** The device opened again at the same rate and block size, perhaps with another channel set: the fader, its glide
         home and what it has heard stay - the cues made up for its hand, and the inserts' audio on its way, go on in step;
         only the look-ahead line follows the channels. The audio context, like prepare (it may allocate). */
@@ -85,7 +88,13 @@ private:
     std::atomic<bool> enabled { false }, hold { false }, paused { false };
     std::atomic<double> target { -16.0 }, displayedGain { 0.0 }, handGain { 0.0 };
     bool releasing = false;   // switched off with matched cues playing: going home before the bypass crossfade
-    juce::int64 releaseWaitLeft = 0;   // ... a fader that has to rise waits this long (the inserts' latency) first
+    bool masterRises = false;          // ... the fader was down: it rises only once no matched sound is left on its way
+    bool flushed = false;              // ... no matched sound is left on its way (this block)
+    bool blockMatched = false;         // this block began with a match applied
+    bool afterReset = true;            // prepared or reset: the next block starts after a break in the output
+    juce::int64 quietSamples = 0;      // samples since the last block that began with a match applied
+    juce::int64 releaseLatency = 0;    // the inserts' latency now, with the margin
+    std::atomic<bool> releasingNow { false };
     bool blockBegun = false, blockOn = false;   // beginBlock() ran for this block, and the switch it took
     double homeDb = 0.0;      // the glide home on top of the hand (dB): minus the hand once home, 0 when none
     static constexpr double homeSpeed = 40.0;   // dB/s: the loudness match's own rate

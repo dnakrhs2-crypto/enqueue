@@ -130,6 +130,7 @@ private:
         Run runs[maxRuns];
         int numRuns = 0;
         int sequenceCount = 1;   // -1 = forever
+        bool plainSlices = true; // every slice of the region plays once a pass (a whole-region repeat aside)
         juce::int64 regionStart = 0, regionLength = 0;
 
         juce::int64 sequenceLength() const noexcept;   // finite runs only

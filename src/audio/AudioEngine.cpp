@@ -1474,13 +1474,15 @@ void AudioEngine::setAutoLevel (bool enabled, double targetLufs)
 {
     autoLeveler.setTargetLufs (targetLufs);
 
-    if (enabled == autoLeveler.isEnabled())
+    const juce::uint32 state = switchState.load (std::memory_order_relaxed);
+
+    if (enabled == ((state & switchOnBit) != 0))
         return;
 
     if (! enabled)
-        matchReleaseLatency.store (insertLatencyAfterCues(), std::memory_order_relaxed);
+        refreshReleaseLatency();
 
-    switchGeneration.fetch_add (1, std::memory_order_release);
+    switchState.store ((((state & ~switchOnBit) + 1u) & ~switchOnBit) | (enabled ? switchOnBit : 0u), std::memory_order_release);
     autoLeveler.setEnabled (enabled);
 }
 
@@ -1790,6 +1792,9 @@ bool AudioEngine::consumePluginStateChanges()
 
     forEachPatchChain (poll);
 
+    if (changed)
+        refreshReleaseLatency();   // a latency that changed: a switch-off's way home waits for it
+
     return changed;
 }
 
@@ -1881,8 +1886,9 @@ void AudioEngine::renderBlock (juce::AudioBuffer<float>& output, int numSamples,
         const int n = juce::jmin (chunkSize, numSamples - offset);
         mixBuffer.clear (0, n);
         bool autoLevelHold = false, anyPaused = false;
-        const bool autoLevelOn = autoLeveler.isEnabled();   // the master's switch, taken once for the block ...
-        const juce::uint32 generation = switchGeneration.load (std::memory_order_acquire);   // ... and its generation
+        const juce::uint32 switched = switchState.load (std::memory_order_acquire);   // the master's switch, once for the block,
+        const bool autoLevelOn = (switched & switchOnBit) != 0;                         // with its generation in the same word
+        const juce::uint32 generation = switched & ~switchOnBit;
 
         {
             const juce::ScopedLock sl (lock);

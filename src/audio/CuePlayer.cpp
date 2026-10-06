@@ -550,9 +550,15 @@ void CuePlayer::mixIntoBus (juce::AudioBuffer<float>& bus, const juce::AudioBuff
     const float full = matchFull.load (std::memory_order_acquire);
     const auto adopt = [&]
     {
-        matchActive = contextOn && full > 0.0f && (source == nullptr || source->playsStraightThrough());
-        matchAdopted = matchActive ? full : 1.0f;
-        matchComp = 1.0f / contextHand;
+        const bool active = contextOn && full > 0.0f && (source == nullptr || source->playsStraightThrough());
+        const float adopted = active ? full : 1.0f;
+
+        // a switch that leaves this cue as it was (off and on again between two blocks, the same match) moves nothing
+        if (! (active && matchActive && contextOn == matchOn && adopted == matchAdopted))
+            matchComp = 1.0f / contextHand;
+
+        matchActive = active;
+        matchAdopted = adopted;
         matchOn = contextOn;
         matchGeneration = contextGeneration;
     };
@@ -566,6 +572,7 @@ void CuePlayer::mixIntoBus (juce::AudioBuffer<float>& bus, const juce::AudioBuff
     if (matchStartPending.exchange (false, std::memory_order_acq_rel))
     {
         adopt();
+        matchComp = 1.0f / contextHand;   // a start makes up for the hand as it is now
         matchLevel = matchActive ? juce::jlimit (0.01f, 100.0f, matchAdopted * matchComp) : 1.0f;   // from the first sample
     }
     else if (contextOn != matchOn || contextGeneration != matchGeneration)
