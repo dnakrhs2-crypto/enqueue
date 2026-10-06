@@ -6,6 +6,22 @@ namespace gocue::tests
 {
 using namespace auto_level;
 
+struct AutoLevelerTestAccess
+{
+    /** The quiet run's loudness when 'blocks' (oldest first, 0 = a slot a blare emptied) are the flow's newest entries
+        and the run is that long. */
+    static double hushLoudness (const std::vector<double>& blocks)
+    {
+        AutoLeveler leveler;
+        leveler.prepare (rate, block, 2);
+        for (size_t i = 0; i < blocks.size(); ++i)
+            leveler.flowEnergy[i] = blocks[i];
+        leveler.flowCount = leveler.flowPos = (int) blocks.size();
+        leveler.hushRun = (int) blocks.size();
+        return leveler.hushLoudness();
+    }
+};
+
 class AutoLevelTests : public juce::UnitTest
 {
 public:
@@ -1219,6 +1235,17 @@ public:
         expect (paused.leveler.getGainDb() <= paused.gains[pauseStart] - 4.0, "and the ride down went on after it");
 
         fastRise();
+
+        beginTest ("45. the quiet run's loudness leaves emptied slots out, and fewer than 10 blocks never count as quieter");
+        {
+            const double power = std::pow (10.0, (-26.0 + 0.691) / 10.0);
+            std::vector<double> ten (21, 0.0), nine (21, 0.0);
+            for (int i = 0; i < 10; ++i) ten[(size_t) (2 * i)] = power;   // 10 blocks, 11 emptied slots between and after them
+            for (int i = 0; i < 9; ++i) nine[(size_t) (2 * i)] = power;
+            metric ("10 blocks at -26 LUFS among 11 emptied slots (LUFS)", AutoLevelerTestAccess::hushLoudness (ten));
+            expectWithinAbsoluteError (AutoLevelerTestAccess::hushLoudness (ten), -26.0, 0.001);
+            expectEquals (AutoLevelerTestAccess::hushLoudness (nine), 100.0);
+        }
         extraCoverage();
         trace();
     }

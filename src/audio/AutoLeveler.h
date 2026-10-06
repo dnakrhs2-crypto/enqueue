@@ -4,6 +4,7 @@
 
 namespace gocue
 {
+namespace tests { struct AutoLevelerTestAccess; }
 
 /** Feed-forward master fader. prepare/reset belong to the audio context (prepare may allocate).
     Setters and the displayed gain are atomic; process never allocates, locks or logs. */
@@ -24,6 +25,7 @@ public:
     void process (juce::AudioBuffer<float>& buffer, int numSamples) noexcept;
 
 private:
+    friend struct tests::AutoLevelerTestAccess;
     void clearMeasurement() noexcept;
     void finishMeasurement() noexcept;
     void freezeGain() noexcept;
