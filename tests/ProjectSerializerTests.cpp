@@ -523,13 +523,15 @@ public:
             const juce::String json = "{\"app\":\"Enqueue\",\"version\":6,\"activeList\":0,\"lists\":["
                                       "{\"name\":\"Main\",\"cues\":[{\"name\":\"ok\"},"
                                       "{\"number\":\"2\",\"name\":\"Intro\",\"file\":\"C:\\\\gone\\\\show\\\\intro.wav\"}]},"
-                                      "{\"name\":\"Cart\",\"cart\":true,\"cues\":[{\"name\":\"Bell\",\"file\":\"C:\\\\gone\\\\fx\\\\bell.wav\"}]}]}";
+                                      "{\"name\":\"Cart\",\"cart\":true,\"cues\":[{\"name\":\"Bell\",\"file\":"
+                                      "\"C:\\\\Users\\\\someone\\\\Documents\\\\broadcast\\\\2026\\\\october\\\\sfx\\\\bell.wav\"}]}]}";
             Project q;
             juce::StringArray warnings;
             expect (ProjectSerializer::fromJson (json, q, &warnings, tempRoot).wasOk());
             expectEquals (warnings.size(), 2);
             expectEquals (warnings[0], juce::String::fromUTF8 ("#2 [2] Intro - 파일 없음: intro.wav\n위치: C:\\gone\\show"));
-            expectEquals (warnings[1], juce::String::fromUTF8 ("Cart #1 Bell - 파일 없음: bell.wav\n위치: C:\\gone\\fx"));
+            // a long folder keeps its drive and its last folders; the middle gives way
+            expectEquals (warnings[1], juce::String::fromUTF8 ("Cart #1 Bell - 파일 없음: bell.wav\n위치: C:\\…\\Documents\\broadcast\\2026\\october\\sfx"));
         }
 
         expect (tempRoot.deleteRecursively());

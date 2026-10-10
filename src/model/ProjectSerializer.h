@@ -78,6 +78,11 @@ namespace ProjectSerializer
     bool hasTrailingJsonData (const juce::String& json);
     std::vector<PluginSlotState> pluginSlotsFromVar (const juce::var& v);
     juce::Result load (const juce::File& file, Project& out, juce::StringArray* warnings = nullptr);
+
+    /** The open warning's and the warnings list's entry for a cue whose file is missing: the file's name first and its
+        folder on the next line, shortened in the middle when long ("C:\…\show\audio") - a warning window cannot wrap
+        a path, so its end (the folders that tell where) would be cut off. */
+    juce::String missingFileText (const juce::String& label, const juce::File& file);
 }
 
 } // namespace gocue

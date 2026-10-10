@@ -1054,10 +1054,9 @@ juce::Result fromJson (const juce::String& json, Project& out, juce::StringArray
 
             // the file's name first and its folder on the next line: a long path no longer hides the name
             if (cue.fileMissing && warnings != nullptr)
-                warnings->add ((listName.isNotEmpty() ? listName + " " : juce::String()) + "#" + juce::String ((int) into.size() + 1)
-                               + (cue.number.isNotEmpty() ? " [" + cue.number + "]" : juce::String()) + " " + cue.name
-                               + juce::String::fromUTF8 (" - 파일 없음: ") + cue.file.getFileName() + "\n"
-                               + juce::String::fromUTF8 ("위치: ") + cue.file.getParentDirectory().getFullPathName());
+                warnings->add (missingFileText ((listName.isNotEmpty() ? listName + " " : juce::String()) + "#" + juce::String ((int) into.size() + 1)
+                                                + (cue.number.isNotEmpty() ? " [" + cue.number + "]" : juce::String()) + " " + cue.name,
+                                                cue.file));
 
             into.push_back (std::move (cue));
         }
@@ -1178,6 +1177,32 @@ juce::var pluginSlotsToVar (const std::vector<PluginSlotState>& plugins)
 std::vector<PluginSlotState> pluginSlotsFromVar (const juce::var& v)
 {
     return pluginsFromVar (v);
+}
+
+juce::String missingFileText (const juce::String& label, const juce::File& file)
+{
+    constexpr int maxFolder = 48;   // fits the warning window's line; past it the middle gives way, not the end
+    auto folder = file.getParentDirectory().getFullPathName();
+    if (folder.length() > maxFolder)
+    {
+        juce::StringArray parts;
+        parts.addTokens (folder, "\\/", "");
+        parts.removeEmptyStrings();
+        if (parts.size() > 2)
+        {
+            const auto head = (folder.startsWith ("\\\\") ? juce::String ("\\\\") : juce::String()) + parts[0] + "\\";
+            juce::String tail;
+            for (int i = parts.size() - 1; i > 0; --i)
+            {
+                const auto longer = "\\" + parts[i] + tail;
+                if (tail.isNotEmpty() && head.length() + 1 + longer.length() > maxFolder)
+                    break;
+                tail = longer;
+            }
+            folder = head + juce::String::charToString ((juce::juce_wchar) 0x2026) + tail;
+        }
+    }
+    return label + juce::String::fromUTF8 (" - 파일 없음: ") + file.getFileName() + "\n" + juce::String::fromUTF8 ("위치: ") + folder;
 }
 
 juce::Result load (const juce::File& file, Project& out, juce::StringArray* warnings)
