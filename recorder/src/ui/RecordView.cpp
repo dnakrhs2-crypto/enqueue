@@ -3,6 +3,37 @@
 
 namespace gocue::recorder
 {
+namespace
+{
+// The note in an empty camera box, whole words only: one line if it fits, else two lines broken at a space (after a
+// " · " first), at the largest size from 17 down to 11 that fits. JUCE would otherwise split a Korean word ("설/정")
+// in the timeline tab's small box.
+void drawPlaceholder(juce::Graphics& g, const juce::String& text, juce::Rectangle<int> area)
+{
+    for (float size = 17.0f; size >= 11.0f; size -= 2.0f)
+    {
+        const juce::Font font { juce::FontOptions(size) };   // braces: with parentheses this declares a function
+        const auto width = [&font](const juce::String& s) { return juce::GlyphArrangement::getStringWidth(font, s); };
+        g.setFont(font);
+        if (width(text) <= float(area.getWidth())) { g.drawText(text, area, juce::Justification::centred, true); return; }
+        int split = text.indexOf(juce::String::fromUTF8(" · ")); if (split >= 0) split += 2;
+        if (split < 0)
+            for (int i = text.indexOfChar(' '); i >= 0; i = text.indexOfChar(i + 1, ' '))
+                if (split < 0 || std::abs(i - text.length() / 2) < std::abs(split - text.length() / 2)) split = i;
+        if (split <= 0) continue;
+        const auto first = text.substring(0, split).trimEnd(), second = text.substring(split).trimStart();
+        const int lineHeight = int(std::ceil(font.getHeight()));
+        if (width(first) <= float(area.getWidth()) && width(second) <= float(area.getWidth()) && 2 * lineHeight <= area.getHeight())
+        {
+            auto lines = area.withSizeKeepingCentre(area.getWidth(), 2 * lineHeight);
+            g.drawText(first, lines.removeFromTop(lineHeight), juce::Justification::centred, true);
+            g.drawText(second, lines, juce::Justification::centred, true);
+            return;
+        }
+    }
+    g.setFont(juce::Font(juce::FontOptions(11.0f))); g.drawFittedText(text, area, juce::Justification::centred, 2);
+}
+}
 RecordView::CameraCard::CameraCard() { addChildComponent(host); }
 void RecordView::CameraCard::ensureHost()
 {
@@ -26,7 +57,7 @@ void RecordView::CameraCard::paint(juce::Graphics& g)
     g.setColour(Palette::text); g.setFont(recorderFont(14, juce::Font::bold));
     g.drawFittedText(caption, heading, juce::Justification::centredLeft, 1);
     g.setColour(juce::Colours::black); g.fillRect(host.getBounds());
-    if (!showVideo) { g.setColour(Palette::dimText); g.setFont(juce::Font(juce::FontOptions(17))); g.drawFittedText(placeholder, host.getBounds().reduced(8), juce::Justification::centred, 2); }
+    if (!showVideo) { g.setColour(Palette::dimText); drawPlaceholder(g, placeholder, host.getBounds().reduced(8)); }
 }
 void RecordView::CameraCard::resized()
 {

@@ -157,8 +157,8 @@ void MainComponent::showSettings()
     audioPanel = &content->audio; cameraPanel = &content->camera; settingsError = &content->error;
     settingsWindow->setContentOwned(content, true);
     // The audio tab lays out four microphone slots per page (588 px); make them visible without scrolling.
-    settingsWindow->centreAroundComponent(this, 720, (std::min)(700, juce::Desktop::getInstance().getDisplays().getPrimaryDisplay() != nullptr
-        ? juce::Desktop::getInstance().getDisplays().getPrimaryDisplay()->userArea.getHeight() - 60 : 700));
+    settingsWindow->centreAroundComponent(this, 720, (std::min)(724, juce::Desktop::getInstance().getDisplays().getPrimaryDisplay() != nullptr
+        ? juce::Desktop::getInstance().getDisplays().getPrimaryDisplay()->userArea.getHeight() - 60 : 724));
     const auto configure = [this, content](UserSettings s)
     {
         s.shortcuts = settings.get().shortcuts;

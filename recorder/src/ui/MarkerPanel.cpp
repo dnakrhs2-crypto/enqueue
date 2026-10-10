@@ -14,7 +14,7 @@ MarkerPanel::MarkerPanel(TimelineEditController& c) : edits(c)
 {
     addAndMakeVisible(viewport); viewport.setViewedComponent(&content, false); viewport.setScrollBarsShown(true, false);
     content.addAndMakeVisible(list); list.setModel(this); list.setRowHeight(28);
-    for (auto* b : {&add, &change, &remove, &exportText}) { content.addAndMakeVisible(b); b->setWantsKeyboardFocus(false); }
+    for (auto* b : {&add, &change, &remove, &exportText}) { addAndMakeVisible(b); b->setWantsKeyboardFocus(false); }   // pinned under the scrolling part
     for (auto* e : {&name, &position}) { content.addAndMakeVisible(e); e->onReturnKey = [this] { apply(); }; }
     content.addAndMakeVisible(colours);
     content.addAndMakeVisible(inputError); inputError.setFont(recorderFont(11.5f));
@@ -192,10 +192,14 @@ void MarkerPanel::resized()
         juce::TextLayout layout; layout.createLayout(text, float(width - 6 - inputError.getBorderSize().getLeftAndRight()));
         errorHeight = int(std::ceil(layout.getHeight())) + inputError.getBorderSize().getTopAndBottom() + 4;
     }
-    viewport.setBounds(getLocalBounds()); content.setSize(width, juce::jmax(226 + swatchHeight + errorHeight, getHeight()));
-    auto a = content.getLocalBounds().reduced(3); exportText.setBounds(a.removeFromBottom(28)); a.removeFromBottom(4);
-    auto buttons = a.removeFromBottom(28); add.setBounds(buttons.removeFromLeft(92)); remove.setBounds(buttons.removeFromRight(50)); change.setBounds(buttons);
-    a.removeFromBottom(6); colours.setBounds(a.removeFromBottom(swatchHeight)); a.removeFromBottom(6);
+    // The buttons stay pinned under the scrolling part, so a short panel (1920x1080 at 150 %) still shows all four.
+    auto panel = getLocalBounds();
+    auto pinned = panel.removeFromBottom(6 + 28 + 4 + 28 + 3).withWidth(width).reduced(3, 0);
+    pinned.removeFromTop(6); exportText.setBounds(pinned.removeFromBottom(31).removeFromTop(28)); pinned.removeFromBottom(4);
+    auto buttons = pinned.removeFromBottom(28); add.setBounds(buttons.removeFromLeft(92)); remove.setBounds(buttons.removeFromRight(50)); change.setBounds(buttons);
+    viewport.setBounds(panel); content.setSize(width, juce::jmax(160 + swatchHeight + errorHeight, panel.getHeight()));
+    auto a = content.getLocalBounds().reduced(3);
+    colours.setBounds(a.removeFromBottom(swatchHeight)); a.removeFromBottom(6);
     if (!errorAtName) inputError.setBounds(a.removeFromBottom(errorHeight));
     position.setBounds(a.removeFromBottom(26)); a.removeFromBottom(2);
     if (errorAtName) inputError.setBounds(a.removeFromBottom(errorHeight));
