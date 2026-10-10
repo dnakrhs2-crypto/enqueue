@@ -29,8 +29,8 @@
 
   <section class="download-row">
     <div class="bigkeys">
-      <a class="download-button" id="download" href="https://github.com/dnakrhs2-crypto/recorder/releases/download/recorder-v0.1.14/Tally-Setup-0.1.14.exe">
-        <strong id="download-label">Tally 0.1.14 다운로드</strong>
+      <a class="download-button" id="download" href="https://github.com/dnakrhs2-crypto/recorder/releases/download/recorder-v0.1.15/Tally-Setup-0.1.15.exe">
+        <strong id="download-label">Tally 0.1.15 다운로드</strong>
         <span class="meta" id="download-meta"><span class="nb">&nbsp;</span></span>
       </a>
       <a class="kakao" id="feedback-button" href="https://open.kakao.com/o/pST4IRLi">
@@ -65,7 +65,7 @@
 <script>
 (function () {
   // latest.json is written by tools/release.py at every release: exact installer URL, size and date.
-  fetch('latest.json?rev=0.1.14', { cache: 'no-cache' })
+  fetch('latest.json?rev=0.1.15', { cache: 'no-cache' })
     .then(function (r) { return r.ok ? r.json() : null; })
     .then(function (info) {
       if (!info || !info.url || info.url.indexOf('/releases/download/') < 0) return;   // only a direct asset link counts as a download
