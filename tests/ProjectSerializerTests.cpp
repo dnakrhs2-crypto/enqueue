@@ -12,6 +12,7 @@ public:
 
     void runTest() override
     {
+        beginTest ("setup");   // first: the set-up checks below need a result to land in when this suite runs alone (name filter)
         const auto tempRoot = juce::File::getSpecialLocation (juce::File::tempDirectory)
                                   .getChildFile ("gocue_serializer_" + juce::Uuid().toString());
         expect (tempRoot.createDirectory().wasOk());

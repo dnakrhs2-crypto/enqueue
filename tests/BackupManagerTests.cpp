@@ -12,6 +12,7 @@ public:
 
     void runTest() override
     {
+        beginTest ("setup");   // first: the set-up checks below need a result to land in when this suite runs alone (name filter)
         const auto root = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("gocue_backup_" + juce::Uuid().toString());
         expect (root.createDirectory().wasOk());
         const auto project = root.getChildFile ("show.gocue");

@@ -45,6 +45,7 @@ public:
 
     void runTest() override
     {
+        beginTest ("setup");   // first: the set-up checks below need a result to land in when this suite runs alone (name filter)
         const auto dir = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("gocue_fade_" + juce::Uuid().toString());
         expect (dir.createDirectory().wasOk());
         const auto tone = writeSine (dir, "tone.wav", 20.0);
