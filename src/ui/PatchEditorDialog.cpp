@@ -142,7 +142,7 @@ namespace
             routingViewport.setViewedComponent (&routingGrid, false);
             routingViewport.setScrollBarsShown (true, true);
             routingPage.addAndMakeVisible (routingViewport);
-            styleLabel (routingHint, ko ("행 = 큐 출력, 열 = 장치 출력, 왼쪽 위 = 패치 메인. 드래그 / 더블클릭 / 숫자 입력 / 우클릭 겡 — 재생 중에도 즉시 반영"));
+            styleLabel (routingHint, ko ("행 = 큐 출력, 열 = 장치 출력, 왼쪽 위 = 패치 메인. 드래그 / 더블클릭 / 숫자 입력 / 우클릭 갱 — 재생 중에도 즉시 반영"));
             routingPage.addAndMakeVisible (routingHint);
             routingGrid.setEdgeLevelsVisible (false);
             routingGrid.onChange = [this] (double mainDb, const LevelMatrix& m, bool) { commitRouting (mainDb, m); };

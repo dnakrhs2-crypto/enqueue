@@ -259,7 +259,7 @@ namespace
         f.mode = mode == "in" ? FadeMode::fadeIn : mode == "out" ? FadeMode::fadeOut : mode == "volume" ? FadeMode::volume : FadeMode::custom;
 
         if (warnings != nullptr && mode != "in" && mode != "out" && mode != "custom" && mode != "volume")
-            warnings->add ("Unknown fade mode \"" + mode + "\" - treated as a custom fade");
+            warnings->add (juce::String::fromUTF8 ("알 수 없는 페이드 방식 \"") + mode + juce::String::fromUTF8 ("\" - 사용자 지정 페이드로 읽었습니다"));
         f.relative = (bool) v.getProperty ("relative", false);
         f.stopTargetWhenDone = (bool) v.getProperty ("stopTargetWhenDone", false);
         f.fadeLevels = (bool) v.getProperty ("fadeLevels", true);
@@ -556,12 +556,7 @@ namespace
         }
 
         if (c.file != juce::File() && ! c.file.existsAsFile())
-        {
-            c.fileMissing = true;
-
-            if (warnings != nullptr)
-                warnings->add ("File not found: " + c.file.getFullPathName());
-        }
+            c.fileMissing = true;   // reported with its row in readCues, which knows the list
 
         c.fadeOutMs       = intProperty (v, "fadeOutMs", 0);
         c.gainDb          = (double) v.getProperty ("gainDb", 0.0);
@@ -989,7 +984,7 @@ juce::Result fromJson (const juce::String& json, Project& out, juce::StringArray
 
     juce::StringArray seenIds;   // a cue id is unique across every list: they would share one player and one plugin chain
     juce::Array<juce::KeyPress> seenHotkeys;   // a hotkey fires one cue; a reserved key (Space, Esc, ...) would fire next to GO / panic
-    auto readCues = [&] (const juce::var& array, std::vector<Cue>& into)
+    auto readCues = [&] (const juce::var& array, std::vector<Cue>& into, const juce::String& listName)
     {
         const auto* cues = array.getArray();
 
@@ -1001,7 +996,7 @@ juce::Result fromJson (const juce::String& json, Project& out, juce::StringArray
             if (item.getDynamicObject() == nullptr)
             {
                 if (warnings != nullptr)
-                    warnings->add ("Skipped a malformed cue entry");
+                    warnings->add (juce::String::fromUTF8 ("형식이 잘못된 큐 항목 하나를 건너뛰었습니다"));
 
                 continue;
             }
@@ -1026,7 +1021,7 @@ juce::Result fromJson (const juce::String& json, Project& out, juce::StringArray
                 cue.id = juce::Uuid();
 
                 if (warnings != nullptr)
-                    warnings->add ("Duplicate cue id for \"" + cue.name + "\" - assigned a new one");
+                    warnings->add ("\"" + cue.name + juce::String::fromUTF8 ("\" 큐의 ID가 다른 큐와 겹쳐 새 ID를 붙였습니다"));
             }
 
             seenIds.add (cue.id.toString());
@@ -1041,7 +1036,7 @@ juce::Result fromJson (const juce::String& json, Project& out, juce::StringArray
                 if (Hotkeys::isReservedDescription (cue.hotkey))
                 {
                     if (warnings != nullptr)
-                        warnings->add ("Hotkey \"" + cue.hotkey + "\" of \"" + cue.name + "\" is a key the app uses - cleared");
+                        warnings->add ("\"" + cue.name + juce::String::fromUTF8 ("\" 큐의 단축키(") + cue.hotkey + juce::String::fromUTF8 (")는 앱이 쓰는 키라서 지웠습니다"));
 
                     cue.hotkey.clear();
                 }
@@ -1049,13 +1044,20 @@ juce::Result fromJson (const juce::String& json, Project& out, juce::StringArray
                          { return ShortcutKeyInput::keysOverlap (seen, parsed); }))
                 {
                     if (warnings != nullptr)
-                        warnings->add ("Hotkey \"" + cue.hotkey + "\" of \"" + cue.name + "\" is already used by another cue - cleared");
+                        warnings->add ("\"" + cue.name + juce::String::fromUTF8 ("\" 큐의 단축키(") + cue.hotkey + juce::String::fromUTF8 (")는 다른 큐가 이미 쓰고 있어 지웠습니다"));
 
                     cue.hotkey.clear();
                 }
                 else
                     seenHotkeys.add (parsed);
             }
+
+            // the file's name first and its folder on the next line: a long path no longer hides the name
+            if (cue.fileMissing && warnings != nullptr)
+                warnings->add ((listName.isNotEmpty() ? listName + " " : juce::String()) + "#" + juce::String ((int) into.size() + 1)
+                               + (cue.number.isNotEmpty() ? " [" + cue.number + "]" : juce::String()) + " " + cue.name
+                               + juce::String::fromUTF8 (" - 파일 없음: ") + cue.file.getFileName() + "\n"
+                               + juce::String::fromUTF8 ("위치: ") + cue.file.getParentDirectory().getFullPathName());
 
             into.push_back (std::move (cue));
         }
@@ -1075,7 +1077,7 @@ juce::Result fromJson (const juce::String& json, Project& out, juce::StringArray
             list.isCart = (bool) item.getProperty ("cart", false);
             list.cartRows = intProperty (item, "rows", 4);
             list.cartCols = intProperty (item, "cols", 4);
-            readCues (item.getProperty ("cues", juce::var()), list.cues);
+            readCues (item.getProperty ("cues", juce::var()), list.cues, lists->size() > 1 ? list.name : juce::String());
             list.sanitise();
             project.lists.push_back (std::move (list));
         }
@@ -1083,7 +1085,7 @@ juce::Result fromJson (const juce::String& json, Project& out, juce::StringArray
     else
     {
         // version <= 4: one flat cue list
-        readCues (root.getProperty ("cues", juce::var()), project.ensureMainList().cues);
+        readCues (root.getProperty ("cues", juce::var()), project.ensureMainList().cues, juce::String());
     }
 
     project.ensureMainList();
@@ -1117,7 +1119,7 @@ juce::Result fromJson (const juce::String& json, Project& out, juce::StringArray
                 p.id = juce::Uuid();
 
                 if (warnings != nullptr)
-                    warnings->add ("Audio patch '" + p.name + "' had a duplicate or empty id and was given a new one.");
+                    warnings->add (juce::String::fromUTF8 ("오디오 패치 '") + p.name + juce::String::fromUTF8 ("'의 ID가 비었거나 다른 패치와 겹쳐 새 ID를 붙였습니다"));
             }
 
             seen.insert (p.id.toString());
@@ -1179,7 +1181,7 @@ std::vector<PluginSlotState> pluginSlotsFromVar (const juce::var& v)
 juce::Result load (const juce::File& file, Project& out, juce::StringArray* warnings)
 {
     if (! file.existsAsFile())
-        return juce::Result::fail ("File not found: " + file.getFullPathName());
+        return juce::Result::fail (juce::String::fromUTF8 ("파일 없음: ") + file.getFullPathName());
 
     return fromJson (file.loadFileAsString(), out, warnings, file.getParentDirectory());
 }

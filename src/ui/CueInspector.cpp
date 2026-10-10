@@ -1296,7 +1296,7 @@ public:
         silenceButton.onClick = [this] { applyToLevels (ko ("전부 무음"), [] (Cue& c) { c.levels.silenceCrosspoints(); }); };
         addAndMakeVisible (silenceButton);
 
-        styleLabel (hint, ko ("드래그 = 레벨 (Shift = 0.1 dB) · 더블클릭 = 기본값 · 숫자 입력 (부호 없으면 음수, 빈칸 = 무음) · 우클릭 = 겡 · 재생 중에도 즉시 반영. 행 = 파일 채널, 열 = 패치의 큐 출력 (귀퉁이 표시 = 장치에 연결 안 됨)"), 13.0f);
+        styleLabel (hint, ko ("드래그 = 레벨 (Shift = 0.1 dB) · 더블클릭 = 기본값 · 숫자 입력 (부호 없으면 음수, 빈칸 = 무음) · 우클릭 = 갱 · 재생 중에도 즉시 반영. 행 = 파일 채널, 열 = 패치의 큐 출력 (귀퉁이 표시 = 장치에 연결 안 됨)"), 13.0f);
         hint.getProperties().set ("slateWrapAtSpaces", true);
         hint.setTooltip (hint.getText());
         addAndMakeVisible (hint);

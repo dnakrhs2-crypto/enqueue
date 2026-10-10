@@ -1248,6 +1248,8 @@ void CueTable::commitCellEdit (int row, ColumnId column, const juce::String& tex
             {
                 juce::LookAndFeel::getDefaultLookAndFeel().playAlertSound();   // numbers are unique: refused
                 setCellEditRejected (cue.id, column, true);
+                if (onStatus)   // the reason too: the border alone does not say why the entry went back
+                    onStatus (ko ("번호 ") + number + topicParticle (number) + ko (" 이미 쓰고 있습니다"));
                 break;
             }
 
@@ -1276,6 +1278,8 @@ void CueTable::commitCellEdit (int row, ColumnId column, const juce::String& tex
             if (seconds < 0.0)
             {
                 setCellEditRejected (cue.id, column, true);
+                if (onStatus)
+                    onStatus (ko ("시간을 읽을 수 없습니다 (예: 12.5 또는 1:02)"));
                 return;
             }
 

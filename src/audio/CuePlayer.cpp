@@ -36,13 +36,13 @@ CuePlayer::CuePlayer (const Cue& c, juce::AudioFormatManager& formats,
 
     if (cue.file == juce::File())
     {
-        errorMessage = "No audio file assigned to cue \"" + cue.name + "\"";
+        errorMessage = "\"" + cue.name + juce::String::fromUTF8 ("\" 큐에 오디오 파일이 지정되지 않았습니다");
         return;
     }
 
     if (! cue.file.existsAsFile())
     {
-        errorMessage = "File not found: " + cue.file.getFullPathName();
+        errorMessage = juce::String::fromUTF8 ("파일 없음: ") + cue.file.getFullPathName();
         return;
     }
 
@@ -50,7 +50,7 @@ CuePlayer::CuePlayer (const Cue& c, juce::AudioFormatManager& formats,
 
     if (reader == nullptr)
     {
-        errorMessage = "Unsupported or unreadable audio file: " + cue.file.getFileName();
+        errorMessage = juce::String::fromUTF8 ("읽을 수 없거나 지원하지 않는 오디오 파일: ") + cue.file.getFileName();
         return;
     }
 
@@ -90,13 +90,13 @@ CuePlayer::CuePlayer (const Cue& c, juce::AudioFormatManager& formats,
 
     if (regionSource->getRegionLength() <= 0)
     {
-        errorMessage = "The trimmed region of cue \"" + cue.name + "\" is empty";
+        errorMessage = "\"" + cue.name + juce::String::fromUTF8 ("\" 큐의 트림 구간이 비어 있습니다");
         return;
     }
 
     if (regionSource->getTotalLength() <= 0)
     {
-        errorMessage = "Every slice of cue \"" + cue.name + "\" is skipped (play count 0)";
+        errorMessage = "\"" + cue.name + juce::String::fromUTF8 ("\" 큐의 슬라이스가 모두 건너뜀입니다 (재생 0번)");
         return;
     }
 

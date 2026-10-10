@@ -16,6 +16,22 @@ inline juce::String ko (const char* utf8)
     return juce::String::fromUTF8 (utf8);
 }
 
+/** "은" or "는" after a word, by how its last character is read aloud: a Hangul syllable by its final consonant,
+    a digit as a Korean number (3 = 삼 -> 은, 2 = 이 -> 는), a Latin letter by its name (L, M, N, R -> 은);
+    "은(는)" when it cannot be told. */
+inline juce::String topicParticle (const juce::String& word)
+{
+    const auto last = word.trimEnd().getLastCharacter();
+    if (last >= 0xAC00 && last <= 0xD7A3)
+        return (last - 0xAC00) % 28 != 0 ? ko ("은") : ko ("는");
+    if (last >= '0' && last <= '9')
+        return juce::String ("013678").containsChar (last) ? ko ("은") : ko ("는");
+    const auto upper = juce::CharacterFunctions::toUpperCase (last);
+    if (upper >= 'A' && upper <= 'Z')
+        return juce::String ("LMNR").containsChar (upper) ? ko ("은") : ko ("는");
+    return ko ("은(는)");
+}
+
 /** 0 or negative -> "--:--", otherwise m:ss.t */
 inline juce::String formatSeconds (double seconds)
 {

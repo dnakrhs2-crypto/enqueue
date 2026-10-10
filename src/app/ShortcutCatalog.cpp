@@ -321,11 +321,7 @@ bool ShortcutCatalog::getCommandInfo (juce::CommandID commandID, juce::Applicati
 {
     if (const auto* entry = find (commandID))
     {
-        // Quit remains JUCE's existing menu text; the settings catalog has Korean labels.
-        if (commandID == juce::StandardApplicationCommandIDs::quit)
-            result.setInfo (TRANS ("Quit"), TRANS ("Quits the application"), "Application", entry->commandFlags);
-        else
-            result.setInfo (entry->name, entry->description, entry->menuCategory, entry->commandFlags);
+        result.setInfo (entry->name, entry->description, entry->menuCategory, entry->commandFlags);   // Quit too: '종료' as in the shortcut list
         result.defaultKeypresses = entry->defaultKeys;
         return true;
     }

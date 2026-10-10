@@ -2621,7 +2621,7 @@ void MainComponent::showWarnings()
         if (cue.file == juce::File())
             lines.add (label + ko (" - 파일이 지정되지 않음"));
         else if (cue.fileMissing)
-            lines.add (label + ko (" - 파일 없음: ") + cue.file.getFullPathName());
+            lines.add (label + ko (" - 파일 없음: ") + cue.file.getFileName() + "\n" + ko ("위치: ") + cue.file.getParentDirectory().getFullPathName());
     }
 
     const bool hasWarnings = ! lines.isEmpty();

@@ -668,11 +668,11 @@ void LevelMatrixComponent::showGangMenu (const CellRef& cell)
 {
     juce::PopupMenu menu;
     const int current = gangOf (cell);
-    menu.addItem (100, ko ("겡 없음"), true, current == 0);
+    menu.addItem (100, ko ("갱 없음"), true, current == 0);
     menu.addSeparator();
 
     for (int g = 1; g <= LevelMatrix::maxGang; ++g)
-        menu.addItem (100 + g, ko ("겡 ") + juce::String (g), true, current == g);
+        menu.addItem (100 + g, ko ("갱 ") + juce::String (g), true, current == g);
 
     menu.addSeparator();
     menu.addItem (200, ko ("기본값으로 (더블클릭)"));
