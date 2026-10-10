@@ -1,5 +1,6 @@
 #include "app/AppSettings.h"
 #include "app/AppVersion.h"
+#include "app/ShortcutCatalog.h"
 #include "app/UiScale.h"
 #include "app/Updater.h"
 #include "audio/AudioEngine.h"
@@ -23,6 +24,12 @@ public:
     GoCueApplication() = default;
 
     const juce::String getApplicationName() override       { return JUCE_APPLICATION_NAME_STRING; }
+
+    void getCommandInfo (juce::CommandID commandID, juce::ApplicationCommandInfo& result) override
+    {
+        juce::JUCEApplication::getCommandInfo (commandID, result);
+        ShortcutCatalog::get().getCommandInfo (commandID, result);   // Quit: 종료 in the File menu, as in the shortcut list
+    }
     const juce::String getApplicationVersion() override    { return appVersionString(); }
     bool moreThanOneInstanceAllowed() override
     {

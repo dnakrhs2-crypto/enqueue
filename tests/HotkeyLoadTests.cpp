@@ -76,7 +76,7 @@ public:
                     expect (loaded.lists[1].cues[3].hotkey.isEmpty());
                     int cleared = 0;
                     for (const auto& warning : warnings)
-                        if (warning.contains ("Hotkey") && warning.contains ("cleared")) ++cleared;
+                        if (warning.contains (juce::String::fromUTF8 ("단축키(")) && warning.contains (juce::String::fromUTF8 ("지웠습니다"))) ++cleared;
                     expectEquals (cleared, 4);
                 }
 
@@ -121,7 +121,7 @@ public:
             int cleared = 0;
 
             for (const auto& w : warnings)
-                if (w.contains ("Hotkey") && w.contains ("cleared"))
+                if (w.contains (juce::String::fromUTF8 ("단축키(")) && w.contains (juce::String::fromUTF8 ("지웠습니다")))
                     ++cleared;
 
             expectEquals (cleared, 3);

@@ -391,6 +391,7 @@ public:
         levels();
         for (bool cancel : { false, true }) levelsCompletion (cancel);
         levelsDrag();
+        refusedEntryReason();
         patchUndo();
         patchUndo (true, false);
         patchUndo (false, true);
@@ -659,6 +660,48 @@ private:
         f.document().newProject();
         dispatch0923();
         expect (f.document().cues.isEmpty() && ! f.document().isDirty() && ! f.document().canUndo(), "new project discards pending input");
+    }
+
+    void refusedEntryReason()
+    {
+        beginTest ("10/10: a refused number or time says why on the status line");
+        struct SilentLook : juce::LookAndFeel_V4 { void playAlertSound() override {} };   // a taken number beeps: not in a test run
+        SilentLook silent;
+        auto* previousLook = &juce::LookAndFeel::getDefaultLookAndFeel();
+        juce::LookAndFeel::setDefaultLookAndFeel (&silent);
+        {
+            Fixture0923 f;
+            if (! require (f.open (project0923 ({}, 3)), "open three cues numbered 1-3")) { juce::LookAndFeel::setDefaultLookAndFeel (previousLook); return; }
+            f.hiddenPeer();
+            auto* table = child0923<CueTable> (*f.main);
+            const auto shown = [&f] (const juce::String& wanted)
+            { return child0923<juce::Label> (*f.main, [&wanted] (const auto& l) { return l.isVisible() && l.getText() == wanted; }) != nullptr; };
+            const auto enter = [&] (int row, CueTable::ColumnId column, const juce::String& text)
+            {
+                table->beginCellEdit (row, column);
+                auto* editor = child0923<juce::TextEditor> (*table);
+                if (editor == nullptr) return false;
+                editor->setText (text, false);
+                editor->keyPressed (juce::KeyPress (juce::KeyPress::returnKey));
+                dispatch0923();
+                return true;
+            };
+            if (require (table != nullptr && enter (2, CueTable::colNumber, "2"), "edit the third cue's number"))
+            {
+                expect (shown (ko ("번호 2는 이미 쓰고 있습니다")), "a taken number gives its reason");
+                expectEquals (f.document().cues.get (2).number, juce::String ("3"), "and the number stays");
+            }
+            if (require (table != nullptr && enter (0, CueTable::colPreWait, "1:2:3:4"), "edit the first cue's pre-wait"))
+                expect (shown (ko ("시간을 읽을 수 없습니다 (예: 12.5 또는 1:02)")), "an unreadable time gives its reason");
+        }
+        juce::LookAndFeel::setDefaultLookAndFeel (previousLook);
+
+        beginTest ("10/10: topic particle (eun/neun) after a cue number");
+        const std::pair<const char*, const char*> particles[] = { { "3", "은" }, { "2", "는" }, { "10", "은" }, { "1.5", "는" },
+                                                                 { "L", "은" }, { "a", "는" }, { "오프닝", "은" }, { "인트로", "는" },
+                                                                 { "#", "은(는)" } };
+        for (const auto& [word, particle] : particles)
+            expectEquals (topicParticle (juce::String::fromUTF8 (word)), ko (particle), juce::String::fromUTF8 (word));
     }
 
     void basicsCancelAndInvalid()
