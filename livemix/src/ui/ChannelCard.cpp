@@ -74,8 +74,7 @@ struct ChannelCard::SendRow : public juce::Component
         auto r = getLocalBounds();
         badge.setBounds (r.removeFromLeft (34).reduced (0, 6));
         r.removeFromLeft (6);
-        const int nameWidth = editingName ? juce::jmax (120, r.getWidth() / 2)
-                                          : juce::jlimit (56, 140, labelWidthForText (fxName, fxName.getText()));
+        const int nameWidth = editingName ? juce::jmax (120, r.getWidth() / 2) : owner.sendNameWidth();
         preToggle.setBounds (r.removeFromRight (58).reduced (0, 5));
         r.removeFromRight (8);
         value.setBounds (r.removeFromRight (labelWidthForText (value, "100%")));
@@ -383,6 +382,18 @@ void ChannelCard::rebuildSends()
     }
 
     sends = std::move (next);
+    for (auto& row : sends)   // every row takes the card's one name width, now that all the names are in
+        row->resized();
+}
+
+int ChannelCard::sendNameWidth() const
+{
+    // one width for every send row of the card, so the faders start in one column: the longest name, 56 to 140
+    int width = 56;
+    for (const auto& row : sends)
+        if (row != nullptr)
+            width = juce::jmax (width, juce::jlimit (56, 140, labelWidthForText (row->fxName, row->fxName.getText())));
+    return width;
 }
 
 void ChannelCard::commitInput()

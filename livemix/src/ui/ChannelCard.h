@@ -83,6 +83,7 @@ private:
     static constexpr int chainFooter = 1 + 30 + 6 + 30;   // after the chip row step: chain actions, then group actions
     static constexpr int groupRowWidth = 112 + 8 + 66 + 5 * 30 + 4 * 4;
     std::vector<std::unique_ptr<SendRow>> sends;
+    int sendNameWidth() const;   // the send rows' shared name width
     Chip masterChip, directChip, muteGroupChip { ko ("뮤트그룹") };
     juce::ComboBox directCombo;
     MeterBar meter_;

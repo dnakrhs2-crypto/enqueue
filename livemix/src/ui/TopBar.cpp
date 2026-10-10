@@ -271,19 +271,19 @@ void TopBar::resized()
     int sessionWidth = sessionTarget;
     if (mode == Mode::wide)
     {
-        // Only spare width goes to the name, after the device text, full status and visible mute badges.
+        // Only spare width goes to the name, after the device text, full status and both mute badges (shown or
+        // not: a mute hotkey must not resize the name and push the rest along).
         // Keep the existing 160 px allowance before shortening status text; include the selector's text padding.
         const int deviceWidth = juce::jmax (160, juce::GlyphArrangement::getStringWidthInt (
             getLookAndFeel().getComboBoxFont (deviceCombo), deviceCombo.getText()) + 30 + 10 + 4);
         int reserved = stateWidth + gap + groupGap + deviceWidth + gap
                      + labelWidthForText (statusLabel, fullStatusText)
                      + (showType ? typeWidth + gap : 0)
-                     + (showCpu ? cpuWidth + gap : 0) + (showMeter ? 70 + gap : 0);
-        for (auto* badge : { &fxMuteBadge, &micMuteBadge })
-            if (badge->isVisible()) reserved += labelWidthForText (*badge, badge->getText()) + gap;
+                     + (showCpu ? cpuWidth + gap : 0) + (showMeter ? 70 + gap : 0) + badgeReservation;
         sessionWidth = juce::jlimit (160, sessionTarget, row1.getWidth() - reserved);
     }
-    auto session = row1.removeFromLeft (juce::jmin (row1.getWidth(), sessionWidth + gap + stateWidth));
+    // off the wide layout the name keeps the rest of its row, as before 0.13.4
+    auto session = mode == Mode::wide ? row1.removeFromLeft (juce::jmin (row1.getWidth(), sessionWidth + gap + stateWidth)) : row1;
     sessionState.setBounds (session.removeFromRight (stateWidth));
     session.removeFromRight (gap);
     sessionName.setBounds (session);
