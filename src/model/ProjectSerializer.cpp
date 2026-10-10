@@ -1077,7 +1077,9 @@ juce::Result fromJson (const juce::String& json, Project& out, juce::StringArray
             list.isCart = (bool) item.getProperty ("cart", false);
             list.cartRows = intProperty (item, "rows", 4);
             list.cartCols = intProperty (item, "cols", 4);
-            readCues (item.getProperty ("cues", juce::var()), list.cues, lists->size() > 1 ? list.name : juce::String());
+            // the list's name goes in front of its missing files only off the list the project opens on
+            const bool opensOnThis = (int) project.lists.size() == intProperty (root, "activeList", 0);
+            readCues (item.getProperty ("cues", juce::var()), list.cues, opensOnThis ? juce::String() : list.name);
             list.sanitise();
             project.lists.push_back (std::move (list));
         }

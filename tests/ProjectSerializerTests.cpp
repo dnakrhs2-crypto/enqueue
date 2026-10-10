@@ -518,6 +518,20 @@ public:
             expect (! legacy.lists[0].isCart);
         }
 
+        beginTest ("10/10: a missing file is named first, its folder on the next line, the list's name only off the opening list");
+        {
+            const juce::String json = "{\"app\":\"Enqueue\",\"version\":6,\"activeList\":0,\"lists\":["
+                                      "{\"name\":\"Main\",\"cues\":[{\"name\":\"ok\"},"
+                                      "{\"number\":\"2\",\"name\":\"Intro\",\"file\":\"C:\\\\gone\\\\show\\\\intro.wav\"}]},"
+                                      "{\"name\":\"Cart\",\"cart\":true,\"cues\":[{\"name\":\"Bell\",\"file\":\"C:\\\\gone\\\\fx\\\\bell.wav\"}]}]}";
+            Project q;
+            juce::StringArray warnings;
+            expect (ProjectSerializer::fromJson (json, q, &warnings, tempRoot).wasOk());
+            expectEquals (warnings.size(), 2);
+            expectEquals (warnings[0], juce::String::fromUTF8 ("#2 [2] Intro - 파일 없음: intro.wav\n위치: C:\\gone\\show"));
+            expectEquals (warnings[1], juce::String::fromUTF8 ("Cart #1 Bell - 파일 없음: bell.wav\n위치: C:\\gone\\fx"));
+        }
+
         expect (tempRoot.deleteRecursively());
     }
 };
