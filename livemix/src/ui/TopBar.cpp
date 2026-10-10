@@ -33,7 +33,7 @@ TopBar::TopBar (MixDocument& doc) : document (doc)
     sessionName.setMinimumHorizontalScale (1.0f);
     sessionName.setColour (juce::Label::backgroundColourId, Palette::card2);
     sessionName.setColour (juce::Label::outlineColourId, Palette::line);
-    sessionName.setTooltip (ko ("열린 세션. 세션 버튼에서 저장·열기"));
+    sessionName.setTooltip (ko ("열린 세션. 세션 메뉴에서 저장·열기"));
     addAndMakeVisible (sessionName);
     styleCaption (sessionState, "");
     sessionState.setComponentID ("session-state");
@@ -103,7 +103,7 @@ TopBar::TopBar (MixDocument& doc) : document (doc)
 void TopBar::refresh()
 {
     sessionName.setText (document.getDisplayName(), juce::dontSendNotification);
-    sessionName.setTooltip (ko ("열린 세션. 세션 버튼에서 저장·열기") + "\n" + document.getDisplayName());
+    sessionName.setTooltip (ko ("열린 세션. 세션 메뉴에서 저장·열기") + "\n" + document.getDisplayName());
     sessionState.setText (document.isDirty() ? ko ("저장 안 됨") : document.hasFile() ? ko ("저장됨") : ko ("아직 파일 없음"), juce::dontSendNotification);
     sessionState.setColour (juce::Label::textColourId, document.isDirty() ? Palette::meterYellow : Palette::dimText);
     resized();

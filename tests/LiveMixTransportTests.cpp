@@ -399,7 +399,7 @@ public:
                                 if (auto* toggle = dynamic_cast<juce::ToggleButton*> (child))
                                 {
                                     if (toggle->getButtonText() == juce::String::fromUTF8 ("재생 신호 보내기 (학습 플러그인 사용)")) found = toggle;
-                                    if (toggle->getButtonText() == juce::String::fromUTF8 ("OFF시 플러그인 OFF")) skip = toggle;
+                                    if (toggle->getButtonText() == juce::String::fromUTF8 ("꺼진 마이크는 플러그인도 멈춤")) skip = toggle;
                                     content = viewport->getViewedComponent();
                                 }
                 expect (found != nullptr && skip != nullptr);

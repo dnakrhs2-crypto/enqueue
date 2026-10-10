@@ -134,7 +134,7 @@ juce::Result PluginSet::fromJson (const juce::String& json, PluginSet& out)
     {
         const auto* array = root["sends"].getArray();
         if (array == nullptr)
-            return juce::Result::fail (k ("세트 파일의 FX 샌드 목록이 잘못됐습니다."));
+            return juce::Result::fail (k ("세트 파일의 FX 센드 목록이 잘못됐습니다."));
         set.sends.emplace();
         ids.clear();
         for (const auto& item : *array)
@@ -142,7 +142,7 @@ juce::Result PluginSet::fromJson (const juce::String& json, PluginSet& out)
             if (item.getDynamicObject() == nullptr || ! validId (item["fx"]) || ! item["name"].isString()
                 || ! numberIn (item["amount"], 0.0, 1.0) || ! item["pre"].isBool()
                 || ! ids.insert (juce::Uuid (item["fx"].toString())).second)
-                return juce::Result::fail (k ("세트 파일의 FX 샌드 항목이 잘못됐습니다."));
+                return juce::Result::fail (k ("세트 파일의 FX 센드 항목이 잘못됐습니다."));
             set.sends->push_back ({ juce::Uuid (item["fx"].toString()), item["name"].toString(), (double) item["amount"], (bool) item["pre"] });
         }
     }
@@ -228,7 +228,7 @@ juce::String PluginSet::summary() const
         text = text.substring (0, 48) + k ("…");
     text += " (" + juce::String ((int) plugins.size()) + k ("개)");
     if (sends || groups)
-        text += k (" · ") + (sends ? k ("샌드") : juce::String())
+        text += k (" · ") + (sends ? k ("센드") : juce::String())
             + (sends && groups ? k ("·") : juce::String()) + (groups ? k ("그룹") : juce::String());
     return text;
 }
@@ -335,7 +335,7 @@ PluginSetSendMatches matchPluginSetSends (const std::vector<PluginSetSend>& send
         if (targets[i] >= 0)
             result.sends.push_back ({ fx[(size_t) targets[i]].id, send.amount, send.pre });
         else if (send.amount > 0.0)
-            result.warnings.add (k ("샌드: '") + send.name + k ("' FX 채널이 이 세션에 없어 건너뛰었습니다"));
+            result.warnings.add (k ("센드: '") + send.name + k ("' FX 채널이 이 세션에 없어 건너뛰었습니다"));
     }
     return result;
 }

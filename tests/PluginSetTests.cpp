@@ -268,9 +268,9 @@ public:
             auto set = sampleSet();
             expectEquals (set.summary(), k ("EQ → Comp → Gate (3개)"));
             set.sends.emplace();
-            expectEquals (set.summary(), k ("EQ → Comp → Gate (3개) · 샌드"));
+            expectEquals (set.summary(), k ("EQ → Comp → Gate (3개) · 센드"));
             set.groups.emplace();
-            expectEquals (set.summary(), k ("EQ → Comp → Gate (3개) · 샌드·그룹"));
+            expectEquals (set.summary(), k ("EQ → Comp → Gate (3개) · 센드·그룹"));
             set.sends.reset();
             expectEquals (set.summary(), k ("EQ → Comp → Gate (3개) · 그룹"));
             set.plugins[0].name = juce::String::repeatedString (k ("한"), 60);
@@ -352,7 +352,7 @@ public:
                 expect (matched.sends[2].fx == fx[2].id);
             }
             expectEquals (matched.warnings.size(), 2);
-            expectEquals (matched.warnings[0], k ("샌드: 'Gone' FX 채널이 이 세션에 없어 건너뛰었습니다"));
+            expectEquals (matched.warnings[0], k ("센드: 'Gone' FX 채널이 이 세션에 없어 건너뛰었습니다"));
             const auto names = matchPluginSetSends ({ { juce::Uuid(), "Reverb", 0.0, false }, { juce::Uuid(), "Reverb", 0.8, true } }, fx);
             expectEquals ((int) names.sends.size(), 2);
             expect (names.sends[0].fx == fx[0].id && names.sends[1].fx == fx[1].id);
@@ -425,7 +425,7 @@ public:
             expectEquals (structures, 0);
             expect (listener.calls > 0);
             expectEquals (errors.size(), 4, "three missing plugins plus one send warning in the same result");
-            expect (errors.joinIntoString ("\n").contains (k ("샌드: 'Gone'")));
+            expect (errors.joinIntoString ("\n").contains (k ("센드: 'Gone'")));
             expectEquals (chain->getNumSlots(), 3);
             expectEquals ((int) channel.pluginGroups.size(), 2);
             expectEquals ((int) channel.pluginGroups[0].slots.size(), 1);

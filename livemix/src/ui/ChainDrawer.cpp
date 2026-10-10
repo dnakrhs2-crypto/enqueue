@@ -32,7 +32,7 @@ namespace
         {
             if (channel != nullptr)
             {
-                sends.setButtonText (hasFx ? ko ("FX 샌드값도 저장") : ko ("FX 샌드값도 저장 (FX 채널 없음)"));
+                sends.setButtonText (hasFx ? ko ("FX 센드값도 저장") : ko ("FX 센드값도 저장 (FX 채널 없음)"));
                 groups.setButtonText (! channel->pluginGroups.empty() ? ko ("플러그인 그룹도 저장") : ko ("플러그인 그룹도 저장 (그룹 없음)"));
                 sends.setEnabled (hasFx);
                 groups.setEnabled (! channel->pluginGroups.empty());
@@ -967,8 +967,8 @@ void ChainDrawer::loadSet (const PluginSet& set)
     const auto label = ko ("세트 ") + juce::String (set.number);
     auto message = ko ("지금 체인을 ") + setWithRo (set.number) + ko (" 바꿀까요?\n\n") + pluginLines (set);
     if (owningChannel() != nullptr && (set.sends || set.groups))
-        message += set.sends && set.groups ? ko ("\n\nFX 샌드값과 플러그인 그룹도 세트에 저장된 값으로 바뀝니다.")
-                 : set.sends ? ko ("\n\nFX 샌드값도 세트에 저장된 값으로 바뀝니다.")
+        message += set.sends && set.groups ? ko ("\n\nFX 센드값과 플러그인 그룹도 세트에 저장된 값으로 바뀝니다.")
+                 : set.sends ? ko ("\n\nFX 센드값도 세트에 저장된 값으로 바뀝니다.")
                              : ko ("\n\n플러그인 그룹도 세트에 저장된 값으로 바뀝니다.");
     auto* alert = new juce::AlertWindow (label + ko (" 불러오기"), message, juce::MessageBoxIconType::QuestionIcon);
     alert->addButton (ko ("바꾸기"), 1, juce::KeyPress (juce::KeyPress::returnKey));

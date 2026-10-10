@@ -1608,7 +1608,7 @@ void MainComponent::togglePluginGroupEverywhere (int group)
 
     if (channels == 0)
     {
-        showStatus (ko ("플러그인 그룹 ") + juce::String (group + 1) + ko ("이(가) 있는 마이크가 없습니다 (체인 열기 옆 '그룹'에서 만듭니다)"), true);
+        showStatus (ko ("플러그인 그룹 ") + juce::String (group + 1) + ko ("이(가) 있는 마이크가 없습니다 (체인 열기 아래 '플러그인 그룹'에서 만듭니다)"), true);
         return;
     }
 

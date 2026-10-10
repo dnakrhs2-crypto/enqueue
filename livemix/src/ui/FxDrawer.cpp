@@ -352,7 +352,7 @@ void FxDrawer::removeSelected()
     juce::AlertWindow::showAsync (juce::MessageBoxOptions()
                                       .withIconType (juce::MessageBoxIconType::QuestionIcon)
                                       .withTitle (ko ("FX 채널 삭제"))
-                                      .withMessage (ko ("이 FX 채널과 그 플러그인, 마이크들의 샌드 설정이 지워집니다.\n삭제할까요?"))
+                                      .withMessage (ko ("이 FX 채널과 그 플러그인, 마이크들의 센드 설정이 지워집니다.\n삭제할까요?"))
                                       .withButton (ko ("삭제"))
                                       .withButton (ko ("취소")),
                                   [safeThis, id] (int result)

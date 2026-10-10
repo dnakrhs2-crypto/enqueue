@@ -171,7 +171,7 @@ namespace
                 settings.setStartWithWindows (on);
                 SettingsDialog::setStartWithWindows (on);
             });
-            toggle (skipWhenOff, ko ("OFF시 플러그인 OFF"), settings.getSkipPluginsWhenOff(), [this] (bool on)
+            toggle (skipWhenOff, ko ("꺼진 마이크는 플러그인도 멈춤"), settings.getSkipPluginsWhenOff(), [this] (bool on)
             {
                 settings.setSkipPluginsWhenOff (on);
                 engine.setSkipChainWhenOff (on);
@@ -285,7 +285,7 @@ namespace
 
             styleCaption (backupCaption, ko ("온라인 백업"));
             addAndMakeVisible (backupCaption);
-            styleCaption (backupNote, ko ("위쪽 '온라인 백업' 버튼의 창에서 계정을 만들고 로그인합니다. 백업은 그 계정의 것만 보이고, 올리기·불러오기도 그 계정으로만 됩니다."));
+            styleCaption (backupNote, ko ("위쪽 '온라인 백업' 메뉴의 창에서 계정을 만들고 로그인합니다. 백업은 그 계정의 것만 보이고, 올리기·불러오기도 그 계정으로만 됩니다."));
             backupNote.setFont (bodyFont (12.5f));
             addAndMakeVisible (backupNote);
 
