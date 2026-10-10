@@ -217,13 +217,14 @@ void MasterCard::refresh()
     if (device.isAsio())
     {
         fillChannelCombo (outputCombo, outputNames, true, MixSession::maxDeviceChannels);
-        outputCombo.setSelectedId (document.getSession().master.outputFirst + 1, juce::dontSendNotification);
+        selectSavedChannel (outputCombo, outputNames, document.getSession().master.outputFirst, true);
     }
     else
     {
         outputCombo.clear (juce::dontSendNotification);
         outputCombo.addItem (device.output.isEmpty() ? ko ("없음 (OBS로만)") : juce::String ("1-2"), 1);
         outputCombo.setSelectedId (1, juce::dontSendNotification);
+        outputCombo.setColour (juce::ComboBox::textColourId, Palette::text);
     }
     obsToggle.setToggleState (document.getSession().master.sendToObs, juce::dontSendNotification);
     rebuildChain();

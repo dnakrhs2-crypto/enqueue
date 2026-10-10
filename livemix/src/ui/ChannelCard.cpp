@@ -66,6 +66,7 @@ struct ChannelCard::SendRow : public juce::Component
         value.setText (juce::String ((int) std::lround (send.amount * 100.0)) + "%", juce::dontSendNotification);
         preToggle.setToggleState (send.pre, juce::dontSendNotification);
         preToggle.setButtonText (send.pre ? ko ("프리") : ko ("포스트"));
+        resized();
     }
 
     void resized() override
@@ -73,7 +74,8 @@ struct ChannelCard::SendRow : public juce::Component
         auto r = getLocalBounds();
         badge.setBounds (r.removeFromLeft (34).reduced (0, 6));
         r.removeFromLeft (6);
-        const int nameWidth = editingName ? juce::jmax (120, r.getWidth() / 2) : 56;
+        const int nameWidth = editingName ? juce::jmax (120, r.getWidth() / 2)
+                                          : juce::jlimit (56, 140, labelWidthForText (fxName, fxName.getText()));
         preToggle.setBounds (r.removeFromRight (58).reduced (0, 5));
         r.removeFromRight (8);
         value.setBounds (r.removeFromRight (labelWidthForText (value, "100%")));
@@ -275,11 +277,11 @@ void ChannelCard::refresh()
     if (! name.isBeingEdited())
         name.setText (c->name, juce::dontSendNotification);
 
+    name.setTooltip (c->name + "\n" + ko ("더블클릭해서 이름 바꾸기"));
     micButton.setOn (c->on);
-    setAlpha (c->on ? 1.0f : 0.62f);
 
     fillChannelCombo (inputCombo, inputNames, c->stereo, MixSession::maxDeviceChannels);
-    inputCombo.setSelectedId (c->inputFirst + 1, juce::dontSendNotification);
+    selectSavedChannel (inputCombo, inputNames, c->inputFirst, c->stereo);
     stereoToggle.setToggleState (c->stereo, juce::dontSendNotification);
 
     masterChip.setToggleState (c->output.master, juce::dontSendNotification);
@@ -310,7 +312,10 @@ void ChannelCard::refresh()
 
     rebuildChain();
     rebuildSends();
+    for (auto* child : getChildren())
+        child->setAlpha (c->on || child == &micButton ? 1.0f : 0.62f);
     resized();
+    repaint();
 }
 
 void ChannelCard::setGroupMuted (bool muted)
@@ -636,11 +641,15 @@ void ChannelCard::resized()
 
 void ChannelCard::paint (juce::Graphics& g)
 {
+    const auto* c = channel();
+    const bool off = c != nullptr && ! c->on;
+    if (off) g.beginTransparencyLayer (0.62f);
     auto bounds = getLocalBounds().toFloat().reduced (0.5f);
     g.setColour (Palette::card);
     g.fillRoundedRectangle (bounds, Palette::cardRadius);
     g.setColour (Palette::line);
     g.drawRoundedRectangle (bounds, Palette::cardRadius, 1.0f);
+    if (off) g.endTransparencyLayer();
 }
 
 } // namespace gocue::livemix

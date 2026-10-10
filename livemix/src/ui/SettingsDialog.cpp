@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <cmath>
 #include <functional>
+#include <memory>
 #include <vector>
 
 namespace gocue::livemix
@@ -15,6 +16,33 @@ namespace gocue::livemix
 
 namespace
 {
+    /** Measure and draw the refusal with the same wrapping, at the guidance text's 15 px height. */
+    class HotkeyReason : public juce::Component
+    {
+    public:
+        juce::String text;
+
+        int heightForWidth (int width) const
+        {
+            return text.isEmpty() ? 0 : (int) std::ceil (textLayout (width).getHeight()) + 4;
+        }
+
+        void paint (juce::Graphics& g) override
+        {
+            textLayout (getWidth()).draw (g, getLocalBounds().toFloat());
+        }
+
+    private:
+        juce::TextLayout textLayout (int width) const
+        {
+            juce::AttributedString content;
+            content.append (text, bodyFont (12.5f), Palette::danger);
+            juce::TextLayout layout;
+            layout.createLayout (content, (float) juce::jmax (1, width));
+            return layout;
+        }
+    };
+
     class SettingsContent : public juce::Component,
                             private juce::Timer
     {
@@ -170,6 +198,16 @@ namespace
                 label.setColour (juce::Label::textColourId, Palette::text);
                 addAndMakeVisible (label);
                 button.setHotkey (get());
+                auto reason = std::make_unique<HotkeyReason>();
+                addChildComponent (*reason);
+                button.onRejectionChanged = [this, message = reason.get()] (const juce::String& text)
+                {
+                    message->text = text;
+                    message->setVisible (text.isNotEmpty());
+                    message->repaint();
+                    updateContentSize();
+                    resized();
+                };
                 button.validate = [this, &button] (const juce::KeyPress& key)
                 {
                     if (const auto why = GlobalHotkeys::reasonToRefuse (key); why.isNotEmpty())
@@ -203,7 +241,7 @@ namespace
                         onHotkeysChanged();
                 };
                 addAndMakeVisible (clear);
-                rows.push_back ({ &label, &button, &clear });
+                rows.push_back ({ &label, &button, &clear, std::move (reason) });
             };
 
             auto& prefs = settings;   // 'settings' is a reference member; the lambdas below keep it by name
@@ -597,7 +635,10 @@ namespace
         void updateContentSize()
         {
             const int deviceHeight = (shownType.containsIgnoreCase ("ASIO") ? 3 : 4) * 58 + bitDepthHeight() + deviceNoteHeight() + 12;
-            setSize (560, 848 + 28 + MixSession::maxPluginGroups * 36 - 160 + deviceHeight);
+            int reasonHeight = 0;
+            for (const auto& row : rows)
+                reasonHeight += row.reason->heightForWidth (560 - 40);
+            setSize (560, 848 + 28 + MixSession::maxPluginGroups * 36 - 160 + deviceHeight + reasonHeight);
         }
 
         ~SettingsContent() override
@@ -686,6 +727,7 @@ namespace
                 hotkey.clear->setBounds (r.removeFromRight (34));
                 r.removeFromRight (6);
                 hotkey.button->setBounds (r);
+                hotkey.reason->setBounds (area.removeFromTop (hotkey.reason->heightForWidth (area.getWidth())));
                 area.removeFromTop (6);
             }
 
@@ -743,7 +785,7 @@ namespace
         double pendingRate = 0.0;       // an ASIO rate that just opened, watched for a reset that leaves it (3 s)
         juce::uint32 pendingSince = 0;
         int pendingOpenCount = 0;       // engine.getOpenCount() then: any later openDevice() is no reset
-        struct Row { juce::Label* label; HotkeyButton* button; juce::TextButton* clear; };
+        struct Row { juce::Label* label; HotkeyButton* button; juce::TextButton* clear; std::unique_ptr<HotkeyReason> reason; };
         std::vector<Row> rows;   // the hotkey rows in the order they are drawn
         juce::Label deviceCaption, bufferCaption, deviceNote, backupCaption, backupNote, hotkeyCaption, hotkeyNote, micHotkeyLabel, fxHotkeyLabel, windowHotkeyLabel;
         juce::Label typeCaption, outputCaption, rateCaption, sharedBufferNote;

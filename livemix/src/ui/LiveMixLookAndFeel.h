@@ -66,6 +66,41 @@ public:
     juce::Font getComboBoxFont (juce::ComboBox&) override { return juce::Font (juce::FontOptions (pt (14.5f))); }
     juce::Font getLabelFont (juce::Label& label) override { return label.getFont(); }
 
+    /** V4 draws a 130 px icon from x = -13 over the title and message; this keeps the card look and puts a small
+        outlined mark in the 80 px JUCE's layout already leaves for the icon. */
+    void drawAlertBox (juce::Graphics& g, juce::AlertWindow& alert, const juce::Rectangle<int>&, juce::TextLayout& layout) override
+    {
+        const auto bounds = alert.getLocalBounds().toFloat();
+        g.setColour (alert.findColour (juce::AlertWindow::backgroundColourId));
+        g.fillRoundedRectangle (bounds, 4.0f);
+        g.setColour (alert.findColour (juce::AlertWindow::outlineColourId));
+        g.drawRoundedRectangle (bounds.reduced (0.5f), 4.0f, 1.0f);
+
+        const auto type = alert.getAlertType();
+        const bool hasIcon = type != juce::MessageBoxIconType::NoIcon;
+
+        if (hasIcon)
+        {
+            const bool warning = type == juce::MessageBoxIconType::WarningIcon;
+            const juce::Rectangle<float> icon (24.0f, 30.0f, 30.0f, 30.0f);
+            juce::Path shape;
+
+            if (warning)
+                shape.addTriangle (icon.getCentreX(), icon.getY(), icon.getRight(), icon.getBottom(), icon.getX(), icon.getBottom());
+            else
+                shape.addEllipse (icon);
+
+            g.setColour (warning ? Palette::meterYellow : Palette::accent);
+            g.strokePath (shape, juce::PathStrokeType (2.0f));
+            g.setFont (juce::Font (juce::FontOptions (pt (14.0f), juce::Font::bold)));
+            g.drawText (warning ? "!" : type == juce::MessageBoxIconType::InfoIcon ? "i" : "?",
+                        icon.translated (0.0f, warning ? 3.0f : 0.0f), juce::Justification::centred);
+        }
+
+        layout.draw (g, juce::Rectangle<int> (1 + (hasIcon ? 80 : 0), 30, alert.getWidth() - 2,
+                                              alert.getHeight() - getAlertWindowButtonHeight() - 22).toFloat());
+    }
+
     void drawToggleButton (juce::Graphics& g, juce::ToggleButton& button, bool isMouseOverButton, bool isButtonDown) override
     {
         // LookAndFeel_V4's drawing with the text in the scaled size (V4 hard-codes 15 px)

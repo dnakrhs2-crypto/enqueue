@@ -3,6 +3,25 @@
 namespace gocue::livemix
 {
 
+namespace
+{
+    class FxTabButton : public DoubleClickButton
+    {
+    public:
+        using DoubleClickButton::DoubleClickButton;
+
+        void paintButton (juce::Graphics& g, bool highlighted, bool down) override
+        {
+            auto& look = getLookAndFeel();
+            look.drawButtonBackground (g, *this, findColour (getToggleState() ? buttonOnColourId : buttonColourId), highlighted, down);
+            g.setFont (look.getTextButtonFont (*this, getHeight()));
+            g.setColour (findColour (getToggleState() ? textColourOnId : textColourOffId)
+                             .withMultipliedAlpha (isEnabled() ? 1.0f : 0.5f));
+            g.drawText (getButtonText(), getLocalBounds().reduced (10, 4), juce::Justification::centred, true);
+        }
+    };
+}
+
 /** Keep the amount and pre/post text visible when a mic's name is long. The outer label draws the row's frame. */
 struct FxDrawer::SenderRow : public juce::Label
 {
@@ -172,6 +191,11 @@ void FxDrawer::refresh()
     for (auto* c : std::initializer_list<juce::Component*> { &name, &openChainButton, &addPluginButton, &returnSlider, &masterChip, &directChip, &monoChip, &muteGroupChip, &directCombo, &removeFxButton })
         c->setEnabled (have);
 
+    for (auto* c : std::initializer_list<juce::Component*> { &chainCaption, &openChainButton, &addPluginButton,
+             &returnCaption, &returnSlider, &returnValue, &outputCaption, &masterChip, &directChip, &monoChip,
+             &muteGroupChip, &directCombo, &removeFxButton, &meterCaption, &meter_, &sendersCaption, &note })
+        c->setVisible (have);
+
     addFxButton.setEnabled ((int) session.fx.size() < MixSession::maxFx);
 
     if (have)
@@ -215,9 +239,9 @@ void FxDrawer::rebuildTabs()
         const auto& f = session.fx[i];
         const auto badge = "FX" + juce::String ((int) i + 1);
         const bool defaultName = f.name.trim() == "FX " + juce::String ((int) i + 1);   // the default name says no more than the badge
-        auto tab = std::make_unique<DoubleClickButton> (defaultName ? badge : badge + "  " + f.name);
+        auto tab = std::make_unique<FxTabButton> (defaultName ? badge : badge + "  " + f.name);
         tab->setWantsKeyboardFocus (false);
-        tab->setTooltip (ko ("더블클릭: 이름 바꾸기"));
+        tab->setTooltip (f.name + "\n" + ko ("더블클릭: 이름 바꾸기"));
         tab->setToggleState (f.id == selected, juce::dontSendNotification);
         tab->setColour (juce::TextButton::buttonOnColourId, Palette::accent);
         const auto id = f.id;
@@ -267,6 +291,9 @@ void FxDrawer::rebuildChain()
 void FxDrawer::rebuildSenders()
 {
     senders.clear();
+    if (selected.isNull())
+        return;
+
     const auto& session = document.getSession();
 
     for (size_t i = 0; i < session.channels.size(); ++i)
@@ -325,7 +352,7 @@ void FxDrawer::removeSelected()
     juce::AlertWindow::showAsync (juce::MessageBoxOptions()
                                       .withIconType (juce::MessageBoxIconType::QuestionIcon)
                                       .withTitle (ko ("FX 채널 삭제"))
-                                      .withMessage (ko ("이 FX 채널과 그 플러그인, 마이크들의 샌드 설정이 지워집니다. 삭제할까요?"))
+                                      .withMessage (ko ("이 FX 채널과 그 플러그인, 마이크들의 샌드 설정이 지워집니다.\n삭제할까요?"))
                                       .withButton (ko ("삭제"))
                                       .withButton (ko ("취소")),
                                   [safeThis, id] (int result)
@@ -357,24 +384,28 @@ int FxDrawer::layout (int width, bool apply)
     place (title, head);
     area.removeFromTop (10);
 
-    auto tabRow = area.removeFromTop (32);
-    place (addFxButton, tabRow.removeFromRight (90));
+    const int n = (int) tabs.size();
+    const int columns = n >= 3 ? 2 : juce::jmax (1, n);
+    const int tabRows = juce::jmax (1, (n + columns - 1) / columns);
+    auto tabRow = area.removeFromTop (tabRows * 38 - 6);
+    place (addFxButton, tabRow.removeFromRight (90).withHeight (32));
     tabRow.removeFromRight (6);
 
     if (! tabs.empty())
     {
-        const int n = (int) tabs.size();
-        const int w = juce::jmin (150, juce::jmax (40, (tabRow.getWidth() - 6 * (n - 1)) / n));   // equal widths from the row's whole width
+        const int w = juce::jmin (150, juce::jmax (40, (tabRow.getWidth() - 6 * (columns - 1)) / columns));
 
-        for (auto& tab : tabs)
-        {
-            place (*tab, tabRow.removeFromLeft (w));
-            tabRow.removeFromLeft (6);
-        }
+        for (int i = 0; i < n; ++i)
+            place (*tabs[(size_t) i], { tabRow.getX() + (i % columns) * (w + 6), tabRow.getY() + (i / columns) * 38, w, 32 });
     }
 
     area.removeFromTop (12);
     auto nameRow = area.removeFromTop (30);
+    if (fx() == nullptr)
+    {
+        place (name, nameRow);
+        return area.getY() + 16;
+    }
     place (removeFxButton, nameRow.removeFromRight (90));
     nameRow.removeFromRight (8);
     place (name, nameRow);

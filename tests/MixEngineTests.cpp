@@ -2013,6 +2013,8 @@ public:
                 }
             }
             beginTest ("top bar measures status text in all layouts down to 420 px without shrinking the device below 120 px");
+            auto* sessionName = dynamic_cast<juce::Label*> (bar.findChildWithID ("session-name"));
+            expect (sessionName != nullptr);
             for (int sessionState = 0; sessionState < 3; ++sessionState)
             {
                 if (sessionState == 1) expect (document.save (directory.getChildFile ("Top bar session.livemix")).wasOk());
@@ -2048,7 +2050,7 @@ public:
                                 if (auto* box = dynamic_cast<juce::ComboBox*> (child)) expectGreaterOrEqual (box->getWidth(), 120);
                                 if (auto* label = dynamic_cast<juce::Label*> (child))
                                 {
-                                    if (label->getTooltip() == ko ("열린 세션. 세션 버튼에서 저장·열기"))
+                                    if (label == sessionName)
                                         expectGreaterOrEqual (label->getWidth(), 160, "session name at " + juce::String (width));
                                     if (label->getText() == ko ("아직 파일 없음") || label->getText() == ko ("저장 안 됨") || label->getText() == ko ("저장됨"))
                                         expectGreaterOrEqual (label->getWidth(), labelWidthForText (*label, label->getText()), "session state at " + juce::String (width));

@@ -359,7 +359,7 @@ void MainComponent::rebuildCards()
                 juce::AlertWindow::showAsync (juce::MessageBoxOptions()
                                                   .withIconType (juce::MessageBoxIconType::QuestionIcon)
                                                   .withTitle (ko ("채널 삭제"))
-                                                  .withMessage (ko ("이 마이크 채널과 그 플러그인 설정이 지워집니다. 삭제할까요?"))
+                                                  .withMessage (ko ("이 마이크 채널과 그 플러그인 설정이 지워집니다.\n삭제할까요?"))
                                                   .withButton (ko ("삭제"))
                                                   .withButton (ko ("취소")),
                                               [safeThis, id] (int result)

@@ -130,7 +130,8 @@ public:
         {
             const float x = area.getX() + area.getWidth() * position (juce::Decibels::decibelsToGain (dbs[i]));
             const auto justification = i == 0 ? juce::Justification::centredLeft : i == 4 ? juce::Justification::centredRight : juce::Justification::centred;
-            g.drawText (marks[i], juce::Rectangle<int> ((int) x - 16, area.getY(), 32, scaleH), justification, false);
+            const int boxX = i == 0 ? 0 : i == 4 ? getWidth() - 32 : (int) x - 16;
+            g.drawText (marks[i], juce::Rectangle<int> (boxX, area.getY(), 32, scaleH), justification, false);
         }
     }
 
@@ -412,6 +413,8 @@ public:
     HotkeyButton() { setWantsKeyboardFocus (false); }
 
     std::function<void (const juce::String& description)> onHotkeyChanged;
+    /** The refusal text, or empty when a new capture starts or a hotkey is set/cleared. */
+    std::function<void (const juce::String& reason)> onRejectionChanged;
     /** A reason to refuse the key, or an empty string. */
     std::function<juce::String (const juce::KeyPress&)> validate;
     /** The capture began (true) / ended (false): the owner suspends the live hotkeys meanwhile, or the key being
@@ -424,6 +427,9 @@ public:
     {
         hotkey = description;
 
+        if (onRejectionChanged)
+            onRejectionChanged ({});
+
         if (! capturing)
             setButtonText (hotkey.isEmpty() ? ko ("없음 (눌러서 지정)") : hotkey);
     }
@@ -434,6 +440,9 @@ public:
     {
         if (capturing)
             return;
+
+        if (onRejectionChanged)
+            onRejectionChanged ({});
 
         capturing = true;
         setWantsKeyboardFocus (true);
@@ -461,9 +470,8 @@ public:
         {
             if (const auto reason = validate (key); reason.isNotEmpty())
             {
-                setButtonText (reason);
-                juce::Component::SafePointer<HotkeyButton> safeThis (this);
-                juce::Timer::callAfterDelay (2500, [safeThis] { if (safeThis != nullptr) safeThis->setHotkey (safeThis->hotkey); });
+                if (onRejectionChanged)
+                    onRejectionChanged (reason);
                 return true;
             }
         }
@@ -570,6 +578,23 @@ inline void fillChannelCombo (juce::ComboBox& combo, const juce::StringArray& na
         for (int i = 0; i < count; ++i)
             combo.addItem (names.isEmpty() ? juce::String (i + 1) : juce::String (i + 1) + "  " + names[i], i + 1);
     }
+}
+
+/** Select a saved input or master pair without changing its route. Direct-output lists use their own policy. */
+inline void selectSavedChannel (juce::ComboBox& combo, const juce::StringArray& names, int first, bool pairs)
+{
+    const bool available = first >= 0 && first + (pairs ? 1 : 0) < names.size();
+    auto text = juce::String (first + 1);
+    if (pairs) text += "-" + juce::String (first + 2);
+    if (first >= 0 && first < names.size()) text += "  " + names[first];
+
+    if (combo.indexOfItemId (first + 1) < 0 && available)
+        combo.addItem (text, first + 1);
+
+    combo.setSelectedId (first + 1, juce::dontSendNotification);
+    if (combo.getSelectedId() == 0)
+        combo.setText (text, juce::dontSendNotification);
+    combo.setColour (juce::ComboBox::textColourId, available ? Palette::text : Palette::meterYellow);
 }
 
 /** Display the effective pair without changing the session's requested ASIO routing. */

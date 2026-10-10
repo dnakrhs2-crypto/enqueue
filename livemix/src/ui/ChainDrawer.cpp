@@ -306,8 +306,35 @@ struct ChainDrawer::Row : public juce::Component
         remove.setButtonText (juce::String::fromUTF8 ("\xE2\x9C\x95"));
         remove.setWantsKeyboardFocus (false);
         remove.setTooltip (ko ("체인에서 빼기"));
-        remove.onClick = [this] { owner.removeSlot (index); };
+        remove.onClick = [this] { confirmRemoval(); };
         addAndMakeVisible (remove);
+    }
+
+    void confirmRemoval()
+    {
+        if (owner.chain == nullptr || index < 0 || index >= owner.chain->getNumSlots())
+            return;
+
+        juce::Component::SafePointer<Row> safeThis (this);
+        const int forRevision = owner.revision;
+        const auto* targetSlot = &owner.chain->getSlot (index);
+        juce::AlertWindow::showAsync (juce::MessageBoxOptions()
+                                          .withIconType (juce::MessageBoxIconType::QuestionIcon)
+                                          .withTitle (ko ("플러그인 삭제"))
+                                          .withMessage (ko ("이 플러그인과 그 설정이 지워집니다.\n삭제할까요?"))
+                                          .withButton (ko ("삭제"))
+                                          .withButton (ko ("취소")),
+                                      [safeThis, forRevision, targetSlot] (int result)
+        {
+            if (result != 1 || safeThis == nullptr)
+                return;
+
+            auto& drawer = safeThis->owner;
+            const int slotIndex = safeThis->index;
+            if (drawer.revision == forRevision && drawer.chain != nullptr && slotIndex < drawer.chain->getNumSlots()
+                && &drawer.chain->getSlot (slotIndex) == targetSlot)
+                drawer.removeSlot (slotIndex);
+        });
     }
 
     void set (const PluginChain::Slot& slot)

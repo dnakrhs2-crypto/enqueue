@@ -103,6 +103,7 @@ TopBar::TopBar (MixDocument& doc) : document (doc)
 void TopBar::refresh()
 {
     sessionName.setText (document.getDisplayName(), juce::dontSendNotification);
+    sessionName.setTooltip (ko ("열린 세션. 세션 버튼에서 저장·열기") + "\n" + document.getDisplayName());
     sessionState.setText (document.isDirty() ? ko ("저장 안 됨") : document.hasFile() ? ko ("저장됨") : ko ("아직 파일 없음"), juce::dontSendNotification);
     sessionState.setColour (juce::Label::textColourId, document.isDirty() ? Palette::meterYellow : Palette::dimText);
     resized();
@@ -120,7 +121,7 @@ void TopBar::setDevices (const juce::StringArray& names, const juce::String& cur
     const auto label = AudioBackends::label (typeName);
     deviceLabel.setText (label.upToFirstOccurrenceOf (" ", false, false), juce::dontSendNotification);
     deviceLabel.setTooltip (label);
-    deviceCombo.setTooltip (label);
+    deviceCombo.setTooltip (label + (current.isNotEmpty() ? "\n" + current : juce::String()));
     deviceCombo.clear (juce::dontSendNotification);
 
     for (int i = 0; i < names.size(); ++i)
@@ -216,6 +217,7 @@ void TopBar::resized()
 
     const int stateWidth = labelWidthForText (sessionState, sessionState.getText());
     const int sessionMinimum = 160 + gap + stateWidth;
+    const int sessionTarget = juce::jlimit (160, 320, labelWidthForText (sessionName, sessionName.getText()));
     const int typeWidth = labelWidthForText (deviceLabel, deviceLabel.getText());
     const int cpuWidth = labelWidthForText (dspLabel, dspLabel.getText());
     const int minimumStatus = labelWidthForText (statusLabel, minimalStatusText);
@@ -266,7 +268,22 @@ void TopBar::resized()
         logoText.setBounds (row1.removeFromLeft (84));
         row1.removeFromLeft (gap);
     }
-    auto session = mode == Mode::wide ? row1.removeFromLeft (sessionMinimum) : row1;
+    int sessionWidth = sessionTarget;
+    if (mode == Mode::wide)
+    {
+        // Only spare width goes to the name, after the device text, full status and visible mute badges.
+        // Keep the existing 160 px allowance before shortening status text; include the selector's text padding.
+        const int deviceWidth = juce::jmax (160, juce::GlyphArrangement::getStringWidthInt (
+            getLookAndFeel().getComboBoxFont (deviceCombo), deviceCombo.getText()) + 30 + 10 + 4);
+        int reserved = stateWidth + gap + groupGap + deviceWidth + gap
+                     + labelWidthForText (statusLabel, fullStatusText)
+                     + (showType ? typeWidth + gap : 0)
+                     + (showCpu ? cpuWidth + gap : 0) + (showMeter ? 70 + gap : 0);
+        for (auto* badge : { &fxMuteBadge, &micMuteBadge })
+            if (badge->isVisible()) reserved += labelWidthForText (*badge, badge->getText()) + gap;
+        sessionWidth = juce::jlimit (160, sessionTarget, row1.getWidth() - reserved);
+    }
+    auto session = row1.removeFromLeft (juce::jmin (row1.getWidth(), sessionWidth + gap + stateWidth));
     sessionState.setBounds (session.removeFromRight (stateWidth));
     session.removeFromRight (gap);
     sessionName.setBounds (session);

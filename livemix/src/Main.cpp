@@ -404,7 +404,8 @@ public:
             showWindow();
     }
 
-    class MainWindow : public juce::DocumentWindow
+    class MainWindow : public juce::DocumentWindow,
+                       private juce::AsyncUpdater
     {
     public:
         MainWindow (LiveMixApplication& a, MixDocument& document, LiveMixSettings& settings)
@@ -412,7 +413,7 @@ public:
         {
             setUsingNativeTitleBar (true);
             setResizable (true, false);
-            setResizeLimits (420, 720, 10000, 10000);   // before the content: its corner grip takes this constrainer. 420 wide: a tall (portrait) window; 720 high: the stacked master leaves room for the mics
+            updateDisplayBounds (false);   // before the content: its corner grip takes this constrainer
             auto* content = new MainComponent (document, settings);
             mainComponent = content;
             setContentOwned (content, true);
@@ -429,16 +430,7 @@ public:
                 centreWithSize (juce::jmin (1440, screen.getWidth() - frame.getLeftAndRight() - 24), juce::jmin (900, screen.getHeight() - frame.getTopAndBottom() - 24));
             }
 
-            // whatever was restored stays inside the display it is on, frame included (a state saved on a bigger or a
-            // second monitor, or before a scale change, must not leave the title bar or the grip off screen)
-            if (! isFullScreen())
-                if (auto* display = displays.getDisplayForRect (frame.addedTo (getBounds())))
-                {
-                    const auto screen = display->userBounds.toNearestInt();
-                    auto framed = frame.addedTo (getBounds());
-                    framed = framed.withSize (juce::jmin (framed.getWidth(), screen.getWidth()), juce::jmin (framed.getHeight(), screen.getHeight())).constrainedWithin (screen);
-                    setBounds (frame.subtractedFrom (framed));
-                }
+            updateDisplayBounds (true);   // keep the restored outer bounds on their display, with the current limits
 
             setVisible (true);
             document.onValueChanged = [this, original = document.onValueChanged, &document]
@@ -453,11 +445,30 @@ public:
 
         ~MainWindow() override
         {
+            cancelPendingUpdate();
             if (mainComponent != nullptr)
                 removeKeyListener (mainComponent);   // before the content goes
         }
 
         MainComponent& getMainComponent() { return *mainComponent; }
+
+        void moved() override
+        {
+            DocumentWindow::moved();
+            triggerAsyncUpdate();
+        }
+
+        void resized() override
+        {
+            DocumentWindow::resized();
+            triggerAsyncUpdate();
+        }
+
+        void parentSizeChanged() override
+        {
+            DocumentWindow::parentSizeChanged();
+            triggerAsyncUpdate();
+        }
 
         void closeButtonPressed() override
         {
@@ -504,6 +515,9 @@ public:
 
         void minimisationStateChanged (bool isNowMinimised) override
         {
+            if (! isNowMinimised)
+                updateDisplayBounds (true);
+
             // the native title bar's minimise button never reaches minimiseButtonPressed(): the window is already
             // minimised when this arrives, so it goes to the tray from here (not inside the peer's callback)
             if (isNowMinimised && prefs.getMinimiseToTray())
@@ -515,9 +529,35 @@ public:
         }
 
     private:
+        void handleAsyncUpdate() override { updateDisplayBounds (false); }
+
+        void updateDisplayBounds (bool fitWindow)
+        {
+            const auto frame = getPeer() != nullptr ? getPeer()->getFrameSize() : juce::BorderSize<int> (31, 8, 8, 8);
+            const auto& displays = juce::Desktop::getInstance().getDisplays();
+            const auto* display = displays.getDisplayForRect (frame.addedTo (getBounds()));
+            const auto screen = display != nullptr ? display->userBounds.getLargestIntegerWithin() : juce::Rectangle<int> (0, 0, 1920, 1080);
+
+            const int minimumHeight = juce::jmin (600, screen.getHeight() - 24);
+            if (getConstrainer() == nullptr || getConstrainer()->getMinimumWidth() != 420
+                || getConstrainer()->getMinimumHeight() != minimumHeight)
+                setResizeLimits (420, minimumHeight, 10000, 10000);
+
+            // only at start-up and when restored: moving or resizing (a drag onto another monitor included) only
+            // updates the limits, so the window never jumps under the mouse
+            auto framed = frame.addedTo (getBounds());
+            if (fitWindow && ! isFullScreen() && ! isMinimised())
+            {
+                framed = framed.withSize (juce::jmin (framed.getWidth(), screen.getWidth()),
+                                          juce::jmin (framed.getHeight(), screen.getHeight())).constrainedWithin (screen);
+                setBounds (frame.subtractedFrom (framed));
+            }
+        }
+
         LiveMixApplication& app;
         LiveMixSettings& prefs;
         MainComponent* mainComponent = nullptr;
+        juce::NativeScaleFactorNotifier scaleNotifier { this, [this] (float) { triggerAsyncUpdate(); } };
     };
 
 private:
