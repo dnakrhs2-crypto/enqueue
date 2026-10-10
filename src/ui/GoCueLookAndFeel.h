@@ -250,13 +250,91 @@ public:
         return label;
     }
 
+    /** Lines broken only at spaces (Korean words stay whole), at most maxLines; when words are left the rest rides
+        on the last line, which drawText then ends with an ellipsis. */
+    static juce::StringArray wrapAtSpaces (const juce::String& text, const juce::Font& font, float width, int maxLines)
+    {
+        juce::StringArray words;
+        words.addTokens (text, " ", "");
+        words.removeEmptyStrings();
+        juce::StringArray lines;
+        juce::String current;
+        for (int i = 0; i < words.size(); ++i)
+        {
+            const auto candidate = current.isEmpty() ? words[i] : current + " " + words[i];
+            if (current.isEmpty() || juce::GlyphArrangement::getStringWidth (font, candidate) <= width)
+            {
+                current = candidate;
+                continue;
+            }
+            if (lines.size() + 1 >= maxLines)
+            {
+                for (int j = i; j < words.size(); ++j)
+                    current << " " << words[j];
+                break;
+            }
+            lines.add (current);
+            current = words[i];
+        }
+        if (current.isNotEmpty())
+            lines.add (current);
+        return lines;
+    }
+
     void drawLabel (juce::Graphics& g, juce::Label& label) override
     {
+        if (label.getProperties().getWithDefault ("slateWrapAtSpaces", false))
+        {
+            // the inspector hints: as many lines as the label holds, broken at spaces only (no "즉/시"), the tooltip
+            // keeps the whole text when even that runs out
+            g.setColour (label.findColour (juce::Label::textColourId).withMultipliedAlpha (label.isEnabled() ? 1.0f : Palette::disabledAlpha));
+            g.setFont (label.getFont());
+            const auto area = label.getBorderSize().subtractedFrom (label.getLocalBounds());
+            const int lineHeight = juce::jmax (1, juce::roundToInt (label.getFont().getHeight()));
+            const auto lines = wrapAtSpaces (label.getText(), label.getFont(), (float) area.getWidth(),
+                                             juce::jmax (1, area.getHeight() / lineHeight));
+            int y = area.getY() + (area.getHeight() - lines.size() * lineHeight) / 2;
+            for (const auto& line : lines)
+            {
+                g.drawText (line, area.getX(), y, area.getWidth(), lineHeight,
+                            label.getJustificationType().getOnlyHorizontalFlags() | juce::Justification::verticallyCentred, true);
+                y += lineHeight;
+            }
+            return;
+        }
         if (label.getProperties().getWithDefault ("slateSingleLine", false))
         {
             g.setColour (label.findColour (juce::Label::textColourId).withMultipliedAlpha (label.isEnabled() ? 1.0f : Palette::disabledAlpha));
             g.setFont (label.getFont());
             g.drawText (label.getText(), label.getBorderSize().subtractedFrom (label.getLocalBounds()), label.getJustificationType(), true);
+            return;
+        }
+        if (label.getProperties().getWithDefault ("slateWholePieces", false) && label.getText().contains ("   "))
+        {
+            // pieces set apart by three spaces ("자식 3개   길이 0:40.0"): the first may be shortened, a later one shows
+            // whole or not at all; the tooltip keeps the whole text. Laid out in fractions of a pixel, with half a pixel
+            // of slack for a label sized to the rounded width of all of it.
+            const auto font = label.getFont();
+            g.setColour (label.findColour (juce::Label::textColourId).withMultipliedAlpha (label.isEnabled() ? 1.0f : Palette::disabledAlpha));
+            g.setFont (font);
+            const auto area = label.getBorderSize().subtractedFrom (label.getLocalBounds()).toFloat();
+            const auto widthOf = [&font] (const juce::String& text) { return juce::GlyphArrangement::getStringWidth (font, text); };
+            const float gap = widthOf ("   ");
+            float x = area.getX();
+            auto rest = label.getText();
+            for (bool first = true; rest.isNotEmpty() && x < area.getRight(); first = false)
+            {
+                const int at = rest.indexOf ("   ");
+                const auto piece = at < 0 ? rest : rest.substring (0, at);
+                rest = at < 0 ? juce::String() : rest.substring (at + 3).trimStart();
+                const float width = widthOf (piece);
+                const bool fits = x + width <= area.getRight() + 0.5f;
+                if (! first && ! fits)
+                    break;
+                g.drawText (piece, juce::Rectangle<float> (x, area.getY(), fits ? width + 0.5f : area.getRight() - x, area.getHeight()),
+                            juce::Justification::centredLeft, true);
+                x += width + gap;
+            }
             return;
         }
         if (! label.getProperties().getWithDefault ("slateField", false))

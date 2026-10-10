@@ -270,19 +270,26 @@ void FooterBar::AudioStatusLabel::paint (juce::Graphics& g)
         if (used[row] > 0)
             remaining[row].removeFromRight (juce::jmin (gap, remaining[row].getWidth()));
     }
+    // A setting shows whole or not at all ("출력 …", "480 samp…" read as noise); only the device name may be
+    // shortened, and only with real room. Items sharing a line keep their " · ".
     juce::StringArray metadata;
     if (device.isNotEmpty()) metadata.add (device);
     metadata.addArray (settings);
+    bool lineUsed[2] = {};
     line = 0;
-    for (const auto& item : metadata)
+    for (int i = 0; i < metadata.size(); ++i)
     {
-        const int wanted = widthOf (item);
-        if (line == 0 && wanted > remaining[0].getWidth() && wanted <= remaining[1].getWidth())
+        const bool isDevice = device.isNotEmpty() && i == 0;
+        const auto pieceFor = [&] (int row) { return (lineUsed[row] ? separator : juce::String()) + metadata[i]; };
+        if (line == 0 && widthOf (pieceFor (0)) > remaining[0].getWidth() && widthOf (pieceFor (1)) <= remaining[1].getWidth())
             line = 1;
-        if (remaining[line].isEmpty() && line == 0) line = 1;
-        auto bounds = remaining[line].removeFromLeft (juce::jmin (wanted, remaining[line].getWidth()));
-        g.drawText (item, bounds, juce::Justification::centredLeft, true);
-        remaining[line].removeFromLeft (juce::jmin (gap, remaining[line].getWidth()));
+        const auto piece = pieceFor (line);
+        const int wanted = widthOf (piece);
+        if (wanted > remaining[line].getWidth() && (! isDevice || remaining[line].getWidth() < 60))
+            continue;
+        g.drawText (piece, remaining[line].removeFromLeft (juce::jmin (wanted, remaining[line].getWidth())),
+                    juce::Justification::centredLeft, true);
+        lineUsed[line] = true;
     }
 }
 
@@ -294,7 +301,7 @@ void FooterBar::resized()
     const int countWidth = juce::GlyphArrangement::getStringWidthInt (countLabel.getFont(), countLabel.getText()) + 18;
     const int gap = getWidth() >= getPreferredWidth() ? 16 : 8;
     // the count and the warnings button first, whole (the host always leaves getEssentialWidth()); MIDI next; the
-    // mode hint takes what is left and shortens with an ellipsis (its tooltip has the full text)
+    // mode hint takes what is left (both only when they fit whole)
     const int countShown = juce::jmin (countWidth, area.getWidth());
     countLabel.setBounds (area.removeFromLeft (countShown).withSizeKeepingCentre (countShown, 24).translated (0, 1));
     area.removeFromLeft (juce::jmin (gap, area.getWidth()));   // 16 with room, 8 when only the essential part fits
@@ -304,10 +311,20 @@ void FooterBar::resized()
         warningsButton.setBounds (area.removeFromLeft (juce::jmin (warningWidth, area.getWidth())).withHeight (24).withY (6));
         area.removeFromLeft (juce::jmin (gap, area.getWidth()));
     }
+    // MIDI and then the mode hint show whole or not at all: squeezed, either reads as noise ("MID / I 0" folded onto
+    // two lines, "편집 모…")
     const int midiWidth = juce::GlyphArrangement::getStringWidthInt (midiStatus.getFont(), midiStatus.getText());
-    midiStatus.setBounds (area.removeFromRight (juce::jmin (midiWidth, area.getWidth())));
-    area.removeFromRight (juce::jmin (gap, area.getWidth()));
-    modeHint.setBounds (area);
+    if (midiWidth > 0 && midiWidth <= area.getWidth())
+    {
+        midiStatus.setBounds (area.removeFromRight (midiWidth));
+        area.removeFromRight (juce::jmin (gap, area.getWidth()));
+    }
+    else
+    {
+        midiStatus.setBounds ({});
+    }
+    const int hintWidth = juce::GlyphArrangement::getStringWidthInt (modeHint.getFont(), modeHint.getText());
+    modeHint.setBounds (hintWidth <= area.getWidth() ? area : juce::Rectangle<int>());
 }
 
 void FooterBar::setMidiStatus (const juce::String& text, const juce::String& tooltip, bool warning)

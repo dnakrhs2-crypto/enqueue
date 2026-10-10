@@ -314,8 +314,14 @@ void CueTable::resized()
         widths[(size_t) column] -= reduction;
         total -= reduction;
     };
+    // short of room: the file column gives way first, all the way to 100, so the name keeps what that frees;
+    // then the name down to 160; then the file column goes
+    if (total > available)
+    {
+        total -= widths[colFile] - juce::jmin (widths[colFile], 100);
+        widths[colFile] = juce::jmin (widths[colFile], 100);
+    }
     shrink (colName, 160);
-    shrink (colFile, 100);
     const bool showFile = total <= available;
     if (! showFile)
     {
@@ -1079,6 +1085,17 @@ void CueTable::cueChanged (int index)
 
 void CueTable::cueSelectionChanged (int)
 {
+    if (! rejectedCells.empty())   // a refused entry's border belongs to the moment: moving on to another cue clears it
+    {
+        const auto* selected = cues.getSelected();
+        const auto keep = selected != nullptr ? selected->id : juce::Uuid::null();
+        const auto before = rejectedCells.size();
+        rejectedCells.erase (std::remove_if (rejectedCells.begin(), rejectedCells.end(),
+                                             [&keep] (const auto& cell) { return cell.first != keep; }),
+                             rejectedCells.end());
+        if (rejectedCells.size() != before)
+            table.repaint();
+    }
     syncSelectionFromModel();
 }
 

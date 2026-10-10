@@ -1297,7 +1297,7 @@ public:
         addAndMakeVisible (silenceButton);
 
         styleLabel (hint, ko ("드래그 = 레벨 (Shift = 0.1 dB) · 더블클릭 = 기본값 · 숫자 입력 (부호 없으면 음수, 빈칸 = 무음) · 우클릭 = 겡 · 재생 중에도 즉시 반영. 행 = 파일 채널, 열 = 패치의 큐 출력 (귀퉁이 표시 = 장치에 연결 안 됨)"), 13.0f);
-        hint.getProperties().set ("slateSingleLine", true);
+        hint.getProperties().set ("slateWrapAtSpaces", true);
         hint.setTooltip (hint.getText());
         addAndMakeVisible (hint);
 
@@ -1505,7 +1505,7 @@ public:
     TrimPanel (ProjectDocument& doc, AudioEngine& e) : document (doc), cues (doc.cues), engine (e)
     {
         styleLabel (hint, ko ("트림은 레벨 매트릭스 뒤에 더해지는 고정 오프셋입니다 (페이드 큐의 영향을 받지 않음). 더블클릭 = 0 dB"), 13.0f);
-        hint.getProperties().set ("slateSingleLine", true);
+        hint.getProperties().set ("slateWrapAtSpaces", true);
         hint.setTooltip (hint.getText());
         addAndMakeVisible (hint);
 
@@ -3709,7 +3709,7 @@ public:
         : document (doc), cues (doc.cues), engine (e), chainStrip (e, windows)
     {
         styleLabel (hint, ko ("이 큐만 통과하는 VST3 플러그인 — ①→②→③ 순서대로 직렬 처리(1번을 거친 소리가 2번으로). < > 로 순서 변경, 활성/비활성으로 켜고 끔. 신호 흐름: 파일 → 페이드 → 게인 → 플러그인 → 믹스"), 14.0f);
-        hint.getProperties().set ("slateSingleLine", true);
+        hint.getProperties().set ("slateWrapAtSpaces", true);
         hint.setTooltip (hint.getText());
         addAndMakeVisible (hint);
 

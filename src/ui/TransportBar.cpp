@@ -141,10 +141,13 @@ void TransportBar::MetaLabel::paint (juce::Graphics& g)
                 break;
             }
         const int labelWidth = juce::GlyphArrangement::getStringWidthInt (labelFont, label);
+        const int valueWidth = juce::GlyphArrangement::getStringWidthInt (valueFont, value);
+        // every part shows whole or not at all (no "길이 0…"); the tooltip keeps the whole text
+        if (labelWidth + valueWidth > area.getWidth())
+            break;
         g.setFont (labelFont);
         g.setColour (Palette::muted);
         g.drawText (label, area.removeFromLeft (juce::jmin (area.getWidth(), labelWidth)), juce::Justification::centredLeft, true);
-        const int valueWidth = juce::GlyphArrangement::getStringWidthInt (valueFont, value);
         g.setFont (valueFont);
         g.setColour (Palette::text);
         g.drawText (value, area.removeFromLeft (juce::jmin (area.getWidth(), valueWidth)), juce::Justification::centredLeft, true);
@@ -206,6 +209,7 @@ TransportBar::TransportBar (juce::ApplicationCommandManager& cm)
 
     cueFile.setFont (Palette::monoFont (Palette::fileSize));
     cueFile.setColour (juce::Label::textColourId, Palette::dimText);
+    cueFile.getProperties().set ("slateWholePieces", true);   // a group's "자식 3개   길이 0:40.0" never ends in "길이 0…"
     addAndMakeVisible (cueFile);
 
     cueMeta.setFont (Palette::font (Palette::fileSize));
@@ -607,7 +611,10 @@ void TransportBar::resized()
     cueName.setBounds (main);
     area.removeFromTop (4);
     auto fileLine = area.removeFromTop (18);
-    const int fileWidth = juce::GlyphArrangement::getStringWidthInt (cueFile.getFont(), cueFile.getText());
+    auto fileWidth = juce::GlyphArrangement::getStringWidthInt (cueFile.getFont(), cueFile.getText());
+    // a group's "자식 3개   길이 0:40.0" past half the line shows only its first piece: it takes only that room
+    if (fileWidth > fileLine.getWidth() / 2 && cueFile.getText().contains ("   "))
+        fileWidth = juce::GlyphArrangement::getStringWidthInt (cueFile.getFont(), cueFile.getText().upToFirstOccurrenceOf ("   ", false, false));
     cueFile.setBounds (fileLine.removeFromLeft (juce::jmin (fileWidth, fileLine.getWidth() / 2)));
     fileLine.removeFromLeft (16);
     cueMeta.setBounds (fileLine);

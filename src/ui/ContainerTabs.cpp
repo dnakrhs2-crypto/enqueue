@@ -63,24 +63,37 @@ void ContainerTabs::resized()
     const int stripRight = juce::jmax (8, edge - (essential > 0 ? essential + 16 : 0));
     const int room = juce::jmax (0, stripRight - 8 - 26 - 8);
 
-    // Reserve the add button first. The active name keeps its measured width; other tabs can scroll.
+    // Reserve the add button first. The active name keeps its measured width while every other tab can still have
+    // 60; the others share what is left above 60 in proportion to what their names ask for, so together they never
+    // run past the room. No list leaves the strip until even 60 each cannot fit (then it scrolls).
     std::vector<int> widths;
-    int total = 0, activeWidth = 0;
-    for (const auto& t : tabs)
-    {
-        widths.push_back (juce::jlimit (60, 220, juce::GlyphArrangement::getStringWidthInt (font, t.name) + 44));
-        if (t.active) widths.back() = juce::jmin (widths.back(), juce::jmax (60, room - 2));
-        total += widths.back() + 2;
-        if (t.active) activeWidth = widths.back() + 2;
-    }
-    int x = 8, activeTab = -1;
+    int total = 0, activeTab = -1;
     for (size_t i = 0; i < tabs.size(); ++i)
     {
-        const int width = total <= room || tabs[i].active ? widths[i]
-            : juce::jmax (60, (widths[i] + 2) * juce::jmax (0, room - activeWidth) / juce::jmax (1, total - activeWidth) - 2);
-        tabs[i].bounds = { x, 6, width, getHeight() - 6 };
-        x += width + 2;
+        widths.push_back (juce::jlimit (60, 220, juce::GlyphArrangement::getStringWidthInt (font, tabs[i].name) + 44));
+        total += widths.back() + 2;
         if (tabs[i].active) activeTab = (int) i;
+    }
+    if (total > room)
+    {
+        const int count = (int) tabs.size();
+        if (activeTab >= 0)
+            widths[(size_t) activeTab] = juce::jlimit (60, widths[(size_t) activeTab], room - (count - 1) * (60 + 2) - 2);
+        const int spare = juce::jmax (0, room - count * (60 + 2) - (activeTab >= 0 ? widths[(size_t) activeTab] - 60 : 0));
+        int asked = 0;
+        for (size_t i = 0; i < tabs.size(); ++i)
+            if ((int) i != activeTab)
+                asked += widths[i] - 60;
+        if (asked > spare)
+            for (size_t i = 0; i < tabs.size(); ++i)
+                if ((int) i != activeTab)
+                    widths[i] = 60 + (int) ((juce::int64) (widths[i] - 60) * spare / asked);
+    }
+    int x = 8;
+    for (size_t i = 0; i < tabs.size(); ++i)
+    {
+        tabs[i].bounds = { x, 6, widths[i], getHeight() - 6 };
+        x += widths[i] + 2;
     }
 
     tabsRight = 8 + juce::jmin (room, x - 8);

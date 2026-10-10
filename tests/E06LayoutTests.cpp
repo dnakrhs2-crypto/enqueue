@@ -539,6 +539,30 @@ public:
         f.main->setSize (1440, 900);
         expectEquals (f.inspector().getHeight(), 324);   // round (720 * 0.45): the split area is 720 px under a 112 px transport
 
+        beginTest ("list tabs of mixed name lengths fit the strip whichever one is active");
+        {
+            ProjectDocument doc;   // one long name and five short ones, as a real project might have
+            doc.renameContainer (0, ko ("오프닝부터 엔딩까지 전체 진행 큐 리스트"));
+            for (int i = 1; i <= 5; ++i)
+                doc.addContainer (juce::String (i), false);
+            for (const int active : { 1, 0, 5 })
+            {
+                doc.setActiveContainer (active);
+                ContainerTabs strip (doc);
+                strip.setSize (506, ContainerTabs::height);   // 450 px of room: over 60 each, short of every name whole
+                const int stripEnd = 506 - 48;               // the + button keeps its 26 px and gaps at the right
+                int previousRight = 8 - 2;
+                for (int i = 0; i < doc.getNumContainers(); ++i)
+                {
+                    const auto r = strip.getTabBounds (i);
+                    expect (r.getWidth() >= 60, "tab " + juce::String (i) + " keeps 60: " + r.toString());
+                    expect (r.getX() >= previousRight + 2 && r.getRight() <= stripEnd,
+                            "active " + juce::String (active) + ", tab " + juce::String (i) + " inside the strip: " + r.toString());
+                    previousRight = r.getRight();
+                }
+            }
+        }
+
         // last in this run: it removes list 0, whose cues the earlier steps use
         beginTest ("a different list taking over the active tab's index is brought into view");
         {
