@@ -15,9 +15,9 @@ namespace
 {
 using namespace recovery;
 juce::String id(const juce::var& v)
-{ require(v.isString() && !juce::Uuid(v.toString()).isNull(), "Invalid recovery UUID"); return juce::Uuid(v.toString()).toString(); }
+{ require(v.isString() && !juce::Uuid(v.toString()).isNull(), juce::String::fromUTF8("복구 식별자가 올바르지 않습니다.")); return juce::Uuid(v.toString()).toString(); }
 std::uint32_t u32(const juce::var& v)
-{ const auto n = number(v); require(n >= 0 && n <= UINT32_MAX, "Recovery coordinate exceeds uint32 schema field"); return std::uint32_t(n); }
+{ const auto n = number(v); require(n >= 0 && n <= UINT32_MAX, juce::String::fromUTF8("복구 위치가 저장 형식의 허용 범위를 넘었습니다.")); return std::uint32_t(n); }
 juce::String rel(const juce::File& root, const juce::File& file) { return file.getRelativePathFrom(root).replaceCharacter('\\', '/'); }
 std::vector<Id> assetIds(const Take& t)
 {
@@ -30,7 +30,7 @@ std::vector<juce::String> paths(const MediaAsset& a)
 }
 juce::var fileEntry(const juce::File& root, const juce::String& path)
 {
-    auto v = object(); const auto file = child(root, path); require(file.existsAsFile(), "Missing file: " + path);
+    auto v = object(); const auto file = child(root, path); require(file.existsAsFile(), juce::String::fromUTF8("파일이 없습니다: ") + path);
     set(v, "path", path); set(v, "bytes", integer(file.getSize())); set(v, "sha256", sha256(file)); return v;
 }
 bool verifyFiles(const juce::File& root, const juce::var& files, bool hash)
@@ -185,9 +185,9 @@ void fillGaps(MediaAsset& a, Sample length)
     std::vector<SampleRange> merged;
     for (const auto& r : a.availableRanges)
     {
-        require(r.start >= 0 && r.length > 0 && r.start <= length && r.length <= length - r.start, "Recovery range outside take");
+        require(r.start >= 0 && r.length > 0 && r.start <= length && r.length <= length - r.start, juce::String::fromUTF8("복구 구간이 테이크 범위를 벗어났습니다."));
         if (!merged.empty() && r.start == merged.back().start + merged.back().length) merged.back().length += r.length;
-        else { require(merged.empty() || r.start >= merged.back().start + merged.back().length, "Overlapping recovered ranges"); merged.push_back(r); }
+        else { require(merged.empty() || r.start >= merged.back().start + merged.back().length, juce::String::fromUTF8("복구 구간이 겹칩니다.")); merged.push_back(r); }
     }
     a.availableRanges = merged; Sample end = 0;
     for (const auto& r : merged) { if (r.start > end) a.gaps.push_back({end, r.start - end}); end = r.start + r.length; }
@@ -197,28 +197,28 @@ std::uint64_t copyWav(const juce::File& source, const juce::File& dest, const Jo
                       const JournalFilePosition& pos, FileIoFaultAdapter* faults)
 {
     require((fmt.channels == 1 || fmt.channels == 2) && fmt.bitsPerSample == 24 && fmt.blockAlign == fmt.channels * 3 && pos.blockAlign == fmt.blockAlign
-        && pos.dataOffset == fmt.dataOffset && fmt.dataOffset >= 44 && fmt.sampleRate > 0, "Journal WAV fmt/offset mismatch");
+        && pos.dataOffset == fmt.dataOffset && fmt.dataOffset >= 44 && fmt.sampleRate > 0, juce::String::fromUTF8("녹화 기록의 WAV 형식이나 데이터 위치가 맞지 않습니다."));
     juce::FileInputStream input(source); check(input.getStatus());
     // RIFF length/data length may be torn. The durable journal, stable fmt
     // fields, actual length and block alignment are the authority.
     std::array<std::uint8_t, 36> old{};
-    require(input.read(old.data(), int(old.size())) == old.size(), "Truncated WAV fmt");
+    require(input.read(old.data(), int(old.size())) == old.size(), juce::String::fromUTF8("WAV 형식 정보가 잘렸습니다."));
     require(std::memcmp(old.data(), "RIFF", 4) == 0 && std::memcmp(old.data() + 8, "WAVEfmt ", 8) == 0
         && storageEncoding::get<std::uint32_t>(old.data() + 16) == 16 && storageEncoding::get<std::uint16_t>(old.data() + 20) == 1
         && storageEncoding::get<std::uint16_t>(old.data() + 22) == fmt.channels && storageEncoding::get<std::uint32_t>(old.data() + 24) == fmt.sampleRate
-        && storageEncoding::get<std::uint16_t>(old.data() + 32) == fmt.blockAlign && storageEncoding::get<std::uint16_t>(old.data() + 34) == 24, "WAV fmt differs from journal");
+        && storageEncoding::get<std::uint16_t>(old.data() + 32) == fmt.blockAlign && storageEncoding::get<std::uint16_t>(old.data() + 34) == 24, juce::String::fromUTF8("WAV 형식이 녹화 기록과 다릅니다."));
     std::array<std::uint8_t, 8> dataHeader{};
-    require(input.setPosition(fmt.dataOffset - 8) && input.read(dataHeader.data(), 8) == 8 && std::memcmp(dataHeader.data(), "data", 4) == 0, "WAV data offset differs from journal");
+    require(input.setPosition(fmt.dataOffset - 8) && input.read(dataHeader.data(), 8) == 8 && std::memcmp(dataHeader.data(), "data", 4) == 0, juce::String::fromUTF8("WAV 데이터 위치가 녹화 기록과 다릅니다."));
     const auto samples = RecoveryScanner::wavSamples(std::uint64_t(input.getTotalLength()), pos);
-    const auto bytes = samples * fmt.blockAlign; require(bytes <= UINT32_MAX - 37, "WAV chunk exceeds RIFF; RF64 export remains separate");
+    const auto bytes = samples * fmt.blockAlign; require(bytes <= UINT32_MAX - 37, juce::String::fromUTF8("WAV 조각이 RIFF 한도를 넘었습니다. RF64는 내보내기에서만 사용합니다."));
     std::array<std::uint8_t, 44> h{}; std::memcpy(h.data(), old.data(), old.size());
     storageEncoding::put(h.data() + 4, std::uint32_t(36 + bytes + (bytes & 1)));
     storageEncoding::put(h.data() + 28, fmt.sampleRate * fmt.blockAlign); std::memcpy(h.data() + 36, "data", 4); storageEncoding::put(h.data() + 40, std::uint32_t(bytes));
     check(dest.getParentDirectory().createDirectory()); DurableFile output(faults); check(output.open(dest, DurableFile::OpenMode::createNew)); check(output.write(h.data(), h.size()));
-    require(input.setPosition(pos.dataOffset), "Seek WAV data offset"); std::array<std::uint8_t, 3 * 16384> buffer{};
+    require(input.setPosition(pos.dataOffset), juce::String::fromUTF8("WAV 데이터 위치로 이동할 수 없습니다.")); std::array<std::uint8_t, 3 * 16384> buffer{};
     for (std::uint64_t left = bytes; left;)
     {
-        const int n = int(std::min<std::uint64_t>(left, buffer.size())); require(input.read(buffer.data(), n) == n, "Short WAV PCM read"); check(output.write(buffer.data(), std::size_t(n))); left -= std::uint64_t(n);
+        const int n = int(std::min<std::uint64_t>(left, buffer.size())); require(input.read(buffer.data(), n) == n, juce::String::fromUTF8("WAV PCM을 끝까지 읽지 못했습니다.")); check(output.write(buffer.data(), std::size_t(n))); left -= std::uint64_t(n);
     }
     if (bytes & 1) { const std::uint8_t pad = 0; check(output.write(&pad, 1)); }
     check(input.getStatus()); check(output.flushData()); check(output.close()); return samples;
@@ -240,7 +240,7 @@ juce::var RecoveryReport::toJson() const
 }
 std::uint64_t RecoveryScanner::wavSamples(std::uint64_t actual, const JournalFilePosition& pos)
 {
-    recovery::require(pos.blockAlign > 0 && pos.validBytes >= pos.dataOffset, "Invalid durable WAV coordinates");
+    recovery::require(pos.blockAlign > 0 && pos.validBytes >= pos.dataOffset, juce::String::fromUTF8("저장된 WAV 위치 정보가 올바르지 않습니다."));
     const auto bytes = std::min(actual, pos.validBytes);
     return bytes < pos.dataOffset ? 0 : std::min(pos.validSamples, (bytes - pos.dataOffset) / pos.blockAlign);
 }
@@ -249,7 +249,7 @@ void RecoveryScanner::appendEdit(const juce::File& file, const EditDelta& delta,
     using namespace recovery; check(result.validate());
     require(isId(delta.transactionId) && delta.projectId == result.projectId && delta.revision == result.editRevision
         && delta.baseRevision >= 0 && delta.baseRevision < INT64_MAX && delta.revision == delta.baseRevision + 1
-        && delta.validationHash == RecorderSerializer::fingerprint(RecorderSerializer::editStateToVar(result)), "Invalid durable edit ticket");
+        && delta.validationHash == RecorderSerializer::fingerprint(RecorderSerializer::editStateToVar(result)), juce::String::fromUTF8("저장된 편집 기록이 올바르지 않습니다."));
     auto v = object(); set(v, "projectId", delta.projectId); set(v, "baseRevision", integer(delta.baseRevision)); set(v, "revision", integer(delta.revision));
     set(v, "validationHash", delta.validationHash); set(v, "name", delta.name); set(v, "result", RecorderSerializer::toJson(result));
     juce::Array<juce::var> entities;
@@ -262,7 +262,7 @@ void RecoveryScanner::writeCheckpoint(const juce::File& file, const RecorderProj
 }
 void RecoveryScanner::writeTakeManifest(const juce::File& root, const RecorderProject& project, const Id& takeId)
 {
-    using namespace recovery; check(project.validate()); const auto* take = project.media->findTake(takeId); require(take != nullptr, "Manifest take missing");
+    using namespace recovery; check(project.validate()); const auto* take = project.media->findTake(takeId); require(take != nullptr, juce::String::fromUTF8("소재 정보 파일에 테이크가 없습니다."));
     auto v = object(); set(v, "schemaVersion", 1); set(v, "takeId", takeId); juce::Array<juce::var> files;
     for (const auto& asset : assetIds(*take)) for (const auto& path : paths(*project.media->findAsset(asset))) files.add(fileEntry(root, path));
     set(v, "files", files); set(v, "project", RecorderSerializer::toJson(project)); set(v, "checksum", RecorderSerializer::fingerprint(v));
@@ -273,7 +273,7 @@ juce::Result RecoveryScanner::run(const juce::File& root, RecoveryReport& report
     using namespace recovery; report = {};
     try
     {
-        require(root.isDirectory(), "Project folder does not exist");
+        require(root.isDirectory(), juce::String::fromUTF8("프로젝트 폴더가 없습니다."));
         WriterLock projectLock(child(root, "project.writer.lock")); WriterLock takeLock(child(root, "journal/takes.writer.lock"));
         const auto primary = child(root, "project.recorder"), backup = child(root, "project.recorder.bak");
         bool selected = false; std::set<Id> committedRecoveryTakes; juce::var chosenCommit;
@@ -293,7 +293,7 @@ juce::Result RecoveryScanner::run(const juce::File& root, RecoveryReport& report
             // Primary wins a same-revision backup tie: media finalization can
             // update registry state without a new user edit revision (round 08).
             else if (candidateInfo.generation == report.checkpointInfo.generation && candidate.editRevision == report.project.editRevision && !isBackup)
-                require(RecorderSerializer::toJson(candidate) == RecorderSerializer::toJson(report.project), "Conflicting checkpoints at the same revision");
+                require(RecorderSerializer::toJson(candidate) == RecorderSerializer::toJson(report.project), juce::String::fromUTF8("같은 편집 버전의 저장본 내용이 서로 다릅니다."));
         };
         choose(primary, false, {}); choose(backup, true, {});
         const auto recoveryRoot = child(root, "recovery");
@@ -316,9 +316,9 @@ juce::Result RecoveryScanner::run(const juce::File& root, RecoveryReport& report
         }
         if (!selected)
         {
-            report.warnings.add("No valid checksum/schema checkpoint; originals preserved");
+            report.warnings.add(juce::String::fromUTF8("검증값과 저장 형식이 올바른 저장본이 없습니다. 원본은 보존되었습니다."));
             report.attempt = child(root, "recovery/" + juce::Uuid().toDashedString()); writeJson(report.attempt.getChildFile("diagnostic.json"), report.toJson(), options.faults);
-            throw std::runtime_error("No valid checksum/schema checkpoint; originals preserved");
+            throw std::runtime_error(juce::String::fromUTF8("검증값과 저장 형식이 올바른 저장본이 없습니다. 원본은 보존되었습니다.").toStdString());
         }
         if (chosenCommit.isObject())
         {
@@ -393,7 +393,7 @@ juce::Result RecoveryScanner::run(const juce::File& root, RecoveryReport& report
                         p.firstSample = std::uint64_t(number(f["firstSample"])); p.dataOffset = u32(f["dataOffset"]); p.blockAlign = u32(f["blockAlign"]);
                         p.pts = number(f["pts"]); p.ptsTimeBaseNum = u32(f["ptsTimeBaseNum"]); p.ptsTimeBaseDen = u32(f["ptsTimeBaseDen"]);
                         const auto prior = t.positions.find(p.path);
-                        require(prior == t.positions.end() || (p.firstSample == prior->second.firstSample && p.validSamples >= prior->second.validSamples && p.validBytes >= prior->second.validBytes), "Regressing take checkpoint");
+                        require(prior == t.positions.end() || (p.firstSample == prior->second.firstSample && p.validSamples >= prior->second.validSamples && p.validBytes >= prior->second.validBytes), juce::String::fromUTF8("테이크 저장 위치가 이전 위치로 돌아갔습니다."));
                         t.positions[p.path] = p; referenced.insert(p.path);
                     }
                 else if (r.kind == JournalKind::TakeStopped) { t.stopped = true; t.stop = number(r.payload["Nstop"]); t.placementTransaction = id(r.payload["placementEditId"]); }
@@ -448,11 +448,11 @@ juce::Result RecoveryScanner::run(const juce::File& root, RecoveryReport& report
                 // overwrite at zero. It is independent of the input/output origin.
             }
             JournalPcmFormat fmt; const auto pcm = state.start["pcm"]; fmt.sampleRate = u32(pcm["sampleRate"]); fmt.dataOffset = u32(pcm["dataOffset"]);
-            require(fmt.sampleRate == report.project.Fs, "Take/project sample-rate mismatch");
+            require(fmt.sampleRate == report.project.Fs, juce::String::fromUTF8("테이크와 프로젝트의 샘플레이트가 다릅니다."));
             const bool fixedEnd = state.stopped || take.logicalLength > 0;
-            Sample length = take.logicalLength; if (state.stopped) { const auto origin = bool(state.start["usesOutputOrigin"]) ? take.O0 : take.N0; require(state.stop >= origin, "Negative stopped duration"); length = state.stop - origin; }
+            Sample length = take.logicalLength; if (state.stopped) { const auto origin = bool(state.start["usesOutputOrigin"]) ? take.O0 : take.N0; require(state.stop >= origin, juce::String::fromUTF8("정지한 녹화 구간의 길이가 음수입니다.")); length = state.stop - origin; }
             for (const auto& entry : state.positions)
-            { require(entry.second.firstSample <= std::uint64_t(INT64_MAX) - entry.second.validSamples, "WAV range overflow"); if (!fixedEnd) length = std::max(length, Sample(entry.second.firstSample + entry.second.validSamples)); }
+            { require(entry.second.firstSample <= std::uint64_t(INT64_MAX) - entry.second.validSamples, juce::String::fromUTF8("WAV 구간이 처리 가능한 범위를 넘었습니다.")); if (!fixedEnd) length = std::max(length, Sample(entry.second.firstSample + entry.second.validSamples)); }
             std::vector<MediaAsset> assets; juce::Array<juce::var> cameraReports;
             int microphone = 0;
             if (restoreComplete)
@@ -544,7 +544,7 @@ juce::Result RecoveryScanner::run(const juce::File& root, RecoveryReport& report
             if (length <= 0 || assets.empty())
             {
                 report.warnings.add("No durable media range for take: " + takeId);
-                require(report.project.editRevision < INT64_MAX, "Recovery revision overflow"); ++report.project.editRevision; ++report.changedTakes; committedRecoveryTakes.insert(takeId);
+                require(report.project.editRevision < INT64_MAX, juce::String::fromUTF8("복구 편집 버전이 처리 가능한 범위를 넘었습니다.")); ++report.project.editRevision; ++report.changedTakes; committedRecoveryTakes.insert(takeId);
                 auto summary = object(); set(summary, "takeId", takeId); set(summary, "noDurableMedia", true); report.takes.add(summary); continue;
             }
             take.logicalLength = length; take.state = restoreComplete ? TakeState::complete : TakeState::partial;
@@ -594,7 +594,7 @@ juce::Result RecoveryScanner::run(const juce::File& root, RecoveryReport& report
                         }
                     }
                     auto lane = std::find_if(report.project.tracks.begin(), report.project.tracks.end(), [&](const auto& t) { return t.kind == kind && t.microphoneIndex == mic; });
-                    if (lane == report.project.tracks.end()) { Track t; t.kind = kind; t.microphoneIndex = mic; t.name = kind == TrackKind::mic ? "Mic " + juce::String(mic + 1) : kind == TrackKind::cam2 ? "Cam 2" : "Cam 1"; report.project.tracks.push_back(t); lane = report.project.tracks.end() - 1; }
+                    if (lane == report.project.tracks.end()) { Track t; t.kind = kind; t.microphoneIndex = mic; t.name = kind == TrackKind::mic ? juce::String::fromUTF8("마이크 ") + juce::String(mic + 1) : kind == TrackKind::cam2 ? juce::String::fromUTF8("캠2") : juce::String::fromUTF8("캠1"); report.project.tracks.push_back(t); lane = report.project.tracks.end() - 1; }
                     placements.emplace_back(a.assetId, lane->trackId); targets.push_back(lane->trackId);
                 }
                 if (take.mode == TakeMode::normal)
@@ -611,7 +611,7 @@ juce::Result RecoveryScanner::run(const juce::File& root, RecoveryReport& report
                 }
                 if (link.clipIds.size() > 1) report.project.linkGroups.push_back(link);
             }
-            require(report.project.editRevision < INT64_MAX, "Recovery revision overflow"); ++report.project.editRevision; ++report.changedTakes; committedRecoveryTakes.insert(takeId); report.messages.add(message);
+            require(report.project.editRevision < INT64_MAX, juce::String::fromUTF8("복구 편집 버전이 처리 가능한 범위를 넘었습니다.")); ++report.project.editRevision; ++report.changedTakes; committedRecoveryTakes.insert(takeId); report.messages.add(message);
             auto summary = object(); set(summary, "takeId", takeId); set(summary, "number", take.number); set(summary, "logicalSamples", integer(length)); set(summary, "cameras", cameraReports); set(summary, "assets", assetReports);
             set(summary, "captureStopKnown", state.stopped); set(summary, "completeManifestReused", restoreComplete); set(summary, "message", message); report.takes.add(summary);
         }
@@ -625,7 +625,7 @@ juce::Result RecoveryScanner::run(const juce::File& root, RecoveryReport& report
             || report.ignoredEditTail || native.legacy)
         {
             const auto dir = attempt(); const auto checkpoint = dir.getChildFile("project.recorder");
-            require(maximumGeneration < INT64_MAX, "Recovery checkpoint generation overflow");
+            require(maximumGeneration < INT64_MAX, juce::String::fromUTF8("복구 저장본의 세대 번호가 처리 가능한 범위를 넘었습니다."));
             auto cursor = report.checkpointInfo; cursor.generation = maximumGeneration + 1; cursor.checkpointRevision = report.project.editRevision;
             cursor.sourceFile = checkpoint;
             cursor.journalPath = rel(root, dir) + "/journal"; cursor.journalSegment = 1; cursor.journalSequence = 0;

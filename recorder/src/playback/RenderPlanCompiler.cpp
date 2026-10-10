@@ -18,7 +18,7 @@ CompiledRenderPlan::CompiledRenderPlan(const RecorderProject& p, std::vector<Ren
 std::shared_ptr<const CompiledRenderPlan> RenderPlanCompiler::compile(const RecorderProject& p)
 {
     const auto valid = p.validate(); if (valid.failed()) throw std::invalid_argument(valid.getErrorMessage().toStdString());
-    if (p.Fs > 768000) throw std::invalid_argument("Unsupported render sample rate");
+    if (p.Fs > 768000) throw std::invalid_argument("지원하지 않는 렌더링 샘플레이트입니다.");
     std::vector<RenderClip> clips; std::vector<RenderTrackPlan> tracks;
     std::vector<MicrofadeBoundary> fades;
     const auto timelineEnd = p.activeTimelineEnd();
@@ -109,7 +109,7 @@ Sample RenderPlanCompiler::sourceUnitAt(const RenderSpan& s, Sample t, bool vide
     if (s.sourceUnitsDenominator - remainder <= (s.sourceUnitsNumerator - 1) / 2)
     {
         if (frame == static_cast<std::uint64_t>((std::numeric_limits<Sample>::max)()))
-            throw std::overflow_error("Rounded source frame exceeds the coordinate range");
+            throw std::overflow_error("반올림한 소재 프레임이 처리 가능한 범위를 넘었습니다.");
         ++frame;
     }
     return static_cast<Sample>(frame);

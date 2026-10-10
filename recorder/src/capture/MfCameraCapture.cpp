@@ -19,7 +19,7 @@ struct CallbackState
     explicit CallbackState(CaptureTelemetry& t) : telemetry(t)
     {
         sampleReady = CreateEventW(nullptr, FALSE, FALSE, nullptr);
-        if (!sampleReady) checkHr(HRESULT_FROM_WIN32(GetLastError()), "Create prepared sample wake event");
+        if (!sampleReady) checkHr(HRESULT_FROM_WIN32(GetLastError()), "카메라 샘플 준비 이벤트를 만들 수 없습니다.");
     }
     ~CallbackState() { if (sampleReady) CloseHandle(sampleReady); }
     BoundedSpscQueue<SampleEnvelope, 2> queue;
@@ -114,8 +114,8 @@ private:
 };
 CaptureOpenInfo configureReader(IMFSourceReader* reader, CameraMode requested, bool mfDecode)
 {
-    checkHr(reader->SetStreamSelection(allSourceStreams, FALSE), "Deselect streams");
-    checkHr(reader->SetStreamSelection(firstVideoStream, TRUE), "Select camera stream");
+    checkHr(reader->SetStreamSelection(allSourceStreams, FALSE), "카메라 스트림 선택을 해제할 수 없습니다.");
+    checkHr(reader->SetStreamSelection(firstVideoStream, TRUE), "카메라 스트림을 선택할 수 없습니다.");
     ComPtr<IMFMediaType> native;
     CameraMode actualNative;
     for (DWORD index = 0; ; ++index)
@@ -123,16 +123,16 @@ CaptureOpenInfo configureReader(IMFSourceReader* reader, CameraMode requested, b
         ComPtr<IMFMediaType> type;
         const auto hr = reader->GetNativeMediaType(firstVideoStream, index, &type);
         if (hr == MF_E_NO_MORE_TYPES) break;
-        checkHr(hr, "GetNativeMediaType(capture)");
+        checkHr(hr, "카메라 입력 모드를 읽을 수 없습니다.");
         auto mode = CameraCatalog::readMode(type.Get(), index);
         if (mode && mode->sameSignal(requested)) { native = type; actualNative = *mode; break; }
     }
-    if (!native) throw std::runtime_error("Selected native mode no longer exists: " + requested.text());
+    if (!native) throw std::runtime_error("선택한 입력 모드가 더 이상 없습니다: " + requested.text());
     ComPtr<IMFSourceReaderEx> extended;
-    checkHr(reader->QueryInterface(IID_PPV_ARGS(&extended)), "IMFSourceReaderEx (pin native input)");
+    checkHr(reader->QueryInterface(IID_PPV_ARGS(&extended)), "카메라 입력 모드를 고정할 수 없습니다.");
     DWORD flags = 0;
-    checkHr(extended->SetNativeMediaType(firstVideoStream, native.Get(), &flags), "SetNativeMediaType");
-    checkHr(reader->SetCurrentMediaType(firstVideoStream, nullptr, native.Get()), "Select native output");
+    checkHr(extended->SetNativeMediaType(firstVideoStream, native.Get(), &flags), "카메라 입력 모드를 설정할 수 없습니다.");
+    checkHr(reader->SetCurrentMediaType(firstVideoStream, nullptr, native.Get()), "카메라 원본 출력 모드를 선택할 수 없습니다.");
     if (mfDecode)
     {
         if (requested.subtype != CaptureSubtype::mjpeg) throw std::invalid_argument("MF decoder comparison requires a native MJPEG mode");
@@ -158,10 +158,10 @@ CaptureOpenInfo configureReader(IMFSourceReader* reader, CameraMode requested, b
             throw std::runtime_error("MF comparison decoder input is not the selected native MJPEG signal");
     }
     ComPtr<IMFMediaType> current;
-    checkHr(reader->GetCurrentMediaType(firstVideoStream, &current), "Get actual output type");
+    checkHr(reader->GetCurrentMediaType(firstVideoStream, &current), "카메라의 실제 출력 형식을 읽을 수 없습니다.");
     const auto actual = CameraCatalog::readMode(current.Get());
     auto expected = requested; if (mfDecode) expected.subtype = CaptureSubtype::nv12;
-    if (!actual || !actual->sameSignal(expected)) throw std::runtime_error("SourceReader output differs from exact requested subtype/size/rational FPS");
+    if (!actual || !actual->sameSignal(expected)) throw std::runtime_error("카메라 출력의 형식·크기·fps가 요청한 입력 모드와 다릅니다.");
     return {actualNative, *actual, mfDecode, 0, mfDecode ? "MF SourceReader MJPEG -> NV12 (pre-callback)" : "native / FFmpeg CPU MJPEG"};
 }
 }
@@ -194,14 +194,14 @@ struct MfCameraCapture::State
             {
                 source = CameraCatalog::openSource(link);
                 ComPtr<IMFAttributes> attributes;
-                checkHr(MFCreateAttributes(&attributes, 7), "Capture attributes");
-                checkHr(attributes->SetUnknown(MF_SOURCE_READER_ASYNC_CALLBACK, cb.Get()), "Set async callback");
-                checkHr(attributes->SetUINT32(MF_LOW_LATENCY, TRUE), "Set low latency");
-                checkHr(attributes->SetUINT32(MF_READWRITE_DISABLE_CONVERTERS, mfDecode ? FALSE : TRUE), "Set converter policy");
-                checkHr(attributes->SetUINT32(MF_SOURCE_READER_ENABLE_VIDEO_PROCESSING, FALSE), "Disable software RGB processing");
-                checkHr(attributes->SetUINT32(MF_SOURCE_READER_ENABLE_ADVANCED_VIDEO_PROCESSING, FALSE), "Disable advanced video processing");
-                checkHr(attributes->SetUINT32(MF_READWRITE_ENABLE_HARDWARE_TRANSFORMS, FALSE), "Use controlled CPU MF comparison");
-                checkHr(MFCreateSourceReaderFromMediaSource(source.Get(), attributes.Get(), &reader), "Create async source reader");
+                checkHr(MFCreateAttributes(&attributes, 7), "카메라 캡처 속성을 준비할 수 없습니다.");
+                checkHr(attributes->SetUnknown(MF_SOURCE_READER_ASYNC_CALLBACK, cb.Get()), "카메라 비동기 콜백을 설정할 수 없습니다.");
+                checkHr(attributes->SetUINT32(MF_LOW_LATENCY, TRUE), "카메라 저지연 모드를 설정할 수 없습니다.");
+                checkHr(attributes->SetUINT32(MF_READWRITE_DISABLE_CONVERTERS, mfDecode ? FALSE : TRUE), "카메라 형식 변환 정책을 설정할 수 없습니다.");
+                checkHr(attributes->SetUINT32(MF_SOURCE_READER_ENABLE_VIDEO_PROCESSING, FALSE), "카메라 소프트웨어 RGB 처리를 끌 수 없습니다.");
+                checkHr(attributes->SetUINT32(MF_SOURCE_READER_ENABLE_ADVANCED_VIDEO_PROCESSING, FALSE), "카메라 고급 영상 처리를 끌 수 없습니다.");
+                checkHr(attributes->SetUINT32(MF_READWRITE_ENABLE_HARDWARE_TRANSFORMS, FALSE), "카메라의 Media Foundation 처리 방식을 설정할 수 없습니다.");
+                checkHr(MFCreateSourceReaderFromMediaSource(source.Get(), attributes.Get(), &reader), "카메라 비동기 읽기를 준비할 수 없습니다.");
                 auto info = configureReader(reader.Get(), mode, mfDecode);
                 CaptureFrameDecoder decoder(info.outputMode, threads, ColourDevice::hardware,
                     mfDecode ? CaptureDecodeOrigin::mfMjpeg : CaptureDecodeOrigin::native);
@@ -216,7 +216,7 @@ struct MfCameraCapture::State
                 }
                 callback->accepting.store(!stopRequested.load());
                 if (!stopRequested.load())
-                    checkHr(reader->ReadSample(firstVideoStream, 0, nullptr, nullptr, nullptr, nullptr), "Initial ReadSample");
+                    checkHr(reader->ReadSample(firstVideoStream, 0, nullptr, nullptr, nullptr, nullptr), "첫 카메라 샘플을 요청할 수 없습니다.");
                 if (!openReported) { opened.set_value(info); openReported = true; }
                 std::int64_t previousPts = 0, previousQpc = 0;
                 std::uint64_t previousFrame = 0;
@@ -343,7 +343,7 @@ MfCameraCapture::MfCameraCapture(std::shared_ptr<CaptureTelemetry> t, VideoSurfa
 MfCameraCapture::~MfCameraCapture() { stop(); }
 CaptureOpenInfo MfCameraCapture::start(const std::string& link, CameraMode mode, bool mfDecode, int threads, std::shared_future<void> measurementStart, std::uint64_t deviceGeneration)
 {
-    if (state->worker.joinable()) throw std::logic_error("Capture instance is single-use");
+    if (state->worker.joinable()) throw std::logic_error("이미 사용한 카메라 캡처는 다시 시작할 수 없습니다.");
     static std::atomic<std::uint64_t> generation{0};
     state->callback = std::make_shared<CallbackState>(*state->telemetry);
     state->callback->generation = deviceGeneration ? deviceGeneration : ++generation;

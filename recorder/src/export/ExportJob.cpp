@@ -12,23 +12,23 @@ void exportRequire(bool ok, const char* message) { if (!ok) throw std::runtime_e
 void exportRename(const juce::File& from, const juce::File& to)
 {
     if (!MoveFileExW(from.getFullPathName().toWideCharPointer(), to.getFullPathName().toWideCharPointer(), MOVEFILE_WRITE_THROUGH))
-        throw std::runtime_error("Publish without replacement failed (Win32 " + std::to_string(GetLastError()) + ")");
+        throw std::runtime_error("기존 파일을 덮어쓰지 않고 내보내기를 완료할 수 없습니다 (Win32 " + std::to_string(GetLastError()) + ")");
 }
 ExportRange ExportRange::expand(SampleRange requested, std::uint32_t Fs, FrameRate fps)
 {
     const auto limit = (std::numeric_limits<Sample>::max)();
     exportRequire(Fs && Fs <= 768000 && fps.numerator && fps.denominator
         && std::uint64_t(Fs) * fps.denominator >= fps.numerator && requested.start >= 0
-        && requested.length > 0 && requested.start <= limit - requested.length, "Invalid export range/timebase");
+        && requested.length > 0 && requested.start <= limit - requested.length, "내보내기 구간이나 시간 기준이 올바르지 않습니다.");
     const auto end = requested.start + requested.length;
     // Use the same rounded sample grid as ClipEdits/MediaIndex, including Fs/fps
     // combinations where an exact frame boundary lies between audio samples.
     auto first = sampleToFrame(requested.start, Fs, fps), last = sampleToFrame(end, Fs, fps);
     if (frameToSample(first, Fs, fps) > requested.start) --first;
-    if (frameToSample(last, Fs, fps) < end) { exportRequire(last < limit, "Export frame end overflows"); ++last; }
-    exportRequire(last > first, "Empty expanded export range");
+    if (frameToSample(last, Fs, fps) < end) { exportRequire(last < limit, "내보내기 끝 프레임이 처리 가능한 범위를 넘었습니다."); ++last; }
+    exportRequire(last > first, "프레임에 맞춘 내보내기 구간이 비어 있습니다.");
     const auto start = frameToSample(first, Fs, fps), count = frameToSample(last - first, Fs, fps);
-    exportRequire(count > 0 && start <= limit - count, "Export PCM range overflows");
+    exportRequire(count > 0 && start <= limit - count, "내보낼 PCM 구간이 처리 가능한 범위를 넘었습니다.");
     return {requested, first, last - first, start, count};
 }
 double ExportRange::startSeconds(std::uint32_t, FrameRate fps) const
@@ -52,7 +52,7 @@ void ExportActivity::endRecording()
 ExportActivity::Lease::Lease(ExportActivity& a) : activity(a)
 {
     auto expected = State::idle;
-    exportRequire(activity.state.compare_exchange_strong(expected, State::exporting, std::memory_order_acq_rel), "Recording/export is already active");
+    exportRequire(activity.state.compare_exchange_strong(expected, State::exporting, std::memory_order_acq_rel), "녹화 또는 내보내기가 진행 중입니다.");
 }
 ExportActivity::Lease::~Lease() { activity.state.store(State::idle, std::memory_order_release); }
 void ExportControl::checkpoint() const { if (cancelled.load(std::memory_order_acquire)) throw ExportCancelled(); }
@@ -60,9 +60,9 @@ namespace
 {
 RecorderProject freeze(const RecorderProject& p, bool recording)
 {
-    exportRequire(!recording, "Cannot export while the document is recording");
+    exportRequire(!recording, "녹화 중에는 내보낼 수 없습니다.");
     exportCheck(p.validate());
-    for (const auto& take : p.media->takes) exportRequire(take.state != TakeState::recording, "Cannot snapshot a recording take");
+    for (const auto& take : p.media->takes) exportRequire(take.state != TakeState::recording, "녹화 중인 테이크는 내보낼 수 없습니다.");
     auto copy = p; copy.media = std::make_shared<const MediaRegistry>(*p.media);
     return copy;
 }
@@ -70,7 +70,7 @@ juce::File destination(const juce::File& project, juce::File requested, const Id
 {
     if (requested == juce::File()) return project.getChildFile("exports").getChildFile(id);
     if (requested.isDirectory()) return requested.getChildFile(id);
-    exportRequire(!requested.exists(), "Export destination is an existing file");
+    exportRequire(!requested.exists(), "내보낼 위치에 같은 이름의 파일이 있습니다.");
     return requested;
 }
 }
@@ -127,9 +127,9 @@ juce::var ExportJob::manifest(const juce::Array<juce::var>& files) const
 }
 ExportPublication::ExportPublication(const ExportJob& j) : job(j)
 {
-    exportRequire(!job.outputDirectory.exists() && !job.partialDirectory.exists(), "Export output collision");
+    exportRequire(!job.outputDirectory.exists() && !job.partialDirectory.exists(), "내보낼 위치에 같은 이름의 파일이나 폴더가 있습니다.");
     exportCheck(job.partialDirectory.getParentDirectory().createDirectory());
-    exportRequire(CreateDirectoryW(job.partialDirectory.getFullPathName().toWideCharPointer(), nullptr) != FALSE, "Cannot exclusively create export partial directory");
+    exportRequire(CreateDirectoryW(job.partialDirectory.getFullPathName().toWideCharPointer(), nullptr) != FALSE, "내보내기 임시 폴더를 새로 만들 수 없습니다.");
     owns = true;
 }
 ExportPublication::~ExportPublication()
@@ -140,18 +140,18 @@ ExportPublication::~ExportPublication()
 juce::File ExportPublication::file(const juce::String& name) const
 {
     exportRequire(isProjectRelativePath(name) && !name.containsChar('/') && !name.endsWith(".partial")
-        && name != "export-manifest.json", "Invalid export output filename");
+        && name != "export-manifest.json", "내보낼 파일 이름이 올바르지 않습니다.");
     return job.partialDirectory.getChildFile(name);
 }
 void ExportPublication::commit(const juce::Array<juce::var>& files, ExportControl& control, FileIoFaultAdapter* faults)
 {
-    exportRequire(owns && !published && !files.isEmpty(), "Cannot commit an empty/already published export"); control.checkpoint();
+    exportRequire(owns && !published && !files.isEmpty(), "결과물이 없거나 이미 완료된 내보내기는 저장할 수 없습니다."); control.checkpoint();
     std::set<juce::String> names;
     for (const auto& f : files)
     {
         const auto name = f["name"].toString(); const auto target = file(name);
         exportRequire(names.insert(name.toLowerCase()).second && f["verified"] == juce::var(true)
-            && target.getSiblingFile(name + ".partial").existsAsFile() && !target.exists(), "Unverified/missing/duplicate export output");
+            && target.getSiblingFile(name + ".partial").existsAsFile() && !target.exists(), "내보내기 결과물이 검증되지 않았거나 누락되었거나 중복되었습니다.");
     }
     const auto manifest = job.partialDirectory.getChildFile("export-manifest.json");
     DurableFile output(faults); exportCheck(output.open(manifest.getSiblingFile("export-manifest.json.partial"), DurableFile::OpenMode::createNew));

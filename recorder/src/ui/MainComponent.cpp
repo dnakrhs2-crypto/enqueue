@@ -134,8 +134,8 @@ void MainComponent::resized()
     row.removeFromRight(10);
     if (footerWidthsStale) // text widths are measured when a footer string changed, not on every 33 ms refresh
     {
-        for (unsigned i = 0; i < footerWidths.size(); ++i)
-            footerWidths[i] = juce::jlimit(56, i == 0 ? 340 : 220, juce::roundToInt(juce::GlyphArrangement::getStringWidth(footerLabels[i].getFont(), footerLabels[i].getText())) + 20);
+        for (unsigned i = 0; i < footerWidths.size(); ++i) // the camera pills hold "1080p 29.97 fps 입력 / 프로젝트 30 fps"
+            footerWidths[i] = juce::jlimit(56, i == 0 ? 340 : i < 3 ? 280 : 220, juce::roundToInt(juce::GlyphArrangement::getStringWidth(footerLabels[i].getFont(), footerLabels[i].getText())) + 20);
         footerWidthsStale = false;
     }
     int total = 0; for (const auto width : footerWidths) total += width;

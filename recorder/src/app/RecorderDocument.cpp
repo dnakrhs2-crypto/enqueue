@@ -78,7 +78,7 @@ juce::Result RecorderDocument::fail(const juce::String& message) { error = messa
 juce::String RecorderDocument::getStatusText() const
 {
     if (error.isNotEmpty()) return juce::String::fromUTF8("확인 필요");
-    if (dirty) return juce::String::fromUTF8("저장 중");
+    if (dirty) return juce::String::fromUTF8("저장 안 됨");
     return juce::String::fromUTF8("저장됨");
 }
 void RecorderDocument::newProject(const juce::String& name, std::uint32_t Fs, FrameRate fps)
@@ -250,7 +250,7 @@ juce::Result RecorderDocument::performEdit(const juce::String& name, const juce:
         auto& next = result.project;
         if (next.projectId != project->projectId || next.schemaVersion != project->schemaVersion || next.Fs != project->Fs
             || next.fps != project->fps || next.editRevision != project->editRevision || next.media != project->media)
-            return fail(juce::String::fromUTF8("편집은 프로젝트 식별자·시간 기준·미디어 registry를 변경할 수 없습니다."));
+            return fail(juce::String::fromUTF8("편집은 프로젝트 식별자·시간 기준·미디어 등록 정보를 변경할 수 없습니다."));
         auto selected = result.selection.value_or(selection); std::vector<Id> filtered;
         for (const auto& id : selected) if (const auto* c = next.findClip(id); c && next.isActive(*c) && std::find(filtered.begin(), filtered.end(), id) == filtered.end()) filtered.push_back(id);
         auto options = supplied; options.mergeKey = key;
@@ -466,11 +466,11 @@ juce::Result RecorderDocument::placeRecordedTake(Take take, std::vector<MediaAss
 {
     assertOwner();
     if (microphones.size() != take.microphoneAssetIds.size() || !placementMicrophones.empty())
-        return fail("Invalid recorded microphone placement");
+        return fail(juce::String::fromUTF8("녹음한 마이크의 배치가 올바르지 않습니다."));
     std::vector<int> seen;
     for (auto mic : microphones)
     {
-        if (mic < 0 || mic >= 8 || std::find(seen.begin(), seen.end(), mic) != seen.end()) return fail("Invalid logical microphone lane");
+        if (mic < 0 || mic >= 8 || std::find(seen.begin(), seen.end(), mic) != seen.end()) return fail(juce::String::fromUTF8("마이크 트랙 구성이 올바르지 않습니다."));
         seen.push_back(mic);
     }
     const juce::ScopedValueSetter<std::vector<int>> mapping(placementMicrophones, microphones);

@@ -16,7 +16,7 @@ juce::var object() { return new juce::DynamicObject(); }
 void set(juce::var& v, const char* k, const juce::var& x) { v.getDynamicObject()->setProperty(k, x); }
 juce::var integer(std::int64_t n) { return juce::var(static_cast<juce::int64>(n)); }
 std::int64_t number(const juce::var& v)
-{ require(v.isInt() || v.isInt64(), "Expected integer in recovery metadata"); return static_cast<juce::int64>(v); }
+{ require(v.isInt() || v.isInt64(), juce::String::fromUTF8("복구 정보의 값은 정수여야 합니다.")); return static_cast<juce::int64>(v); }
 void hit(const Hook& h, const char* name) { if (h) h(name); }
 void writeNew(const juce::File& f, const void* data, std::size_t bytes, FileIoFaultAdapter* faults)
 {
@@ -28,14 +28,14 @@ void writeJson(const juce::File& f, const juce::var& v, FileIoFaultAdapter* faul
 { const auto s = juce::JSON::toString(v, false); writeNew(f, s.toRawUTF8(), s.getNumBytesAsUTF8(), faults); }
 juce::File child(const juce::File& root, const juce::String& relative)
 {
-    require(isProjectRelativePath(relative), "Unsafe project-relative recovery path: " + relative);
+    require(isProjectRelativePath(relative), juce::String::fromUTF8("프로젝트 안에서 사용할 수 없는 복구 경로입니다: ") + relative);
     auto result = root.getChildFile(relative);
     // Do not follow junctions/symlinks out of a project, including output parents.
     for (auto f = result; f != root; f = f.getParentDirectory())
     {
-        require(f.isAChildOf(root), "Recovery path escapes project");
+        require(f.isAChildOf(root), juce::String::fromUTF8("복구 경로가 프로젝트 밖으로 벗어납니다."));
         const auto attributes = GetFileAttributesW(f.getFullPathName().toWideCharPointer());
-        require(attributes == INVALID_FILE_ATTRIBUTES || !(attributes & FILE_ATTRIBUTE_REPARSE_POINT), "Recovery path contains a reparse point");
+        require(attributes == INVALID_FILE_ATTRIBUTES || !(attributes & FILE_ATTRIBUTE_REPARSE_POINT), juce::String::fromUTF8("복구 경로에 다른 위치로 연결되는 경로가 있습니다."));
     }
     return result;
 }
@@ -44,7 +44,7 @@ WriterLock::WriterLock(const juce::File& path)
     check(path.getParentDirectory().createDirectory());
     handle = CreateFileW(path.getFullPathName().toWideCharPointer(), GENERIC_READ | GENERIC_WRITE, 0,
         nullptr, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
-    require(handle != INVALID_HANDLE_VALUE, "Project/journal writer lock unavailable (Win32 " + juce::String(int(GetLastError())) + "): " + path.getFullPathName());
+    require(handle != INVALID_HANDLE_VALUE, juce::String::fromUTF8("프로젝트 또는 기록의 쓰기 잠금을 얻을 수 없습니다 (Win32 ") + juce::String(int(GetLastError())) + "): " + path.getFullPathName());
 }
 WriterLock::~WriterLock() { if (handle != INVALID_HANDLE_VALUE) CloseHandle(handle); }
 juce::String sha256(const juce::File& path)
@@ -54,18 +54,18 @@ juce::String sha256(const juce::File& path)
         BCRYPT_ALG_HANDLE algorithm = nullptr; BCRYPT_HASH_HANDLE value = nullptr;
         ~Hash() { if (value) BCryptDestroyHash(value); if (algorithm) BCryptCloseAlgorithmProvider(algorithm, 0); }
     } h;
-    require(BCryptOpenAlgorithmProvider(&h.algorithm, BCRYPT_SHA256_ALGORITHM, nullptr, 0) >= 0, "Open SHA256");
-    require(BCryptCreateHash(h.algorithm, &h.value, nullptr, 0, nullptr, 0, 0) >= 0, "Create SHA256");
+    require(BCryptOpenAlgorithmProvider(&h.algorithm, BCRYPT_SHA256_ALGORITHM, nullptr, 0) >= 0, juce::String::fromUTF8("SHA256 검증을 시작할 수 없습니다."));
+    require(BCryptCreateHash(h.algorithm, &h.value, nullptr, 0, nullptr, 0, 0) >= 0, juce::String::fromUTF8("SHA256 검증값 계산을 준비할 수 없습니다."));
     juce::FileInputStream input(path); check(input.getStatus());
     std::array<unsigned char, 65536> bytes{};
     while (input.getPosition() < input.getTotalLength())
     {
         const auto n = input.read(bytes.data(), int(bytes.size()));
-        require(n > 0, "SHA256 short read: " + path.getFullPathName());
-        require(BCryptHashData(h.value, bytes.data(), ULONG(n), 0) >= 0, "Update SHA256");
+        require(n > 0, juce::String::fromUTF8("SHA256 검증을 위해 파일을 끝까지 읽지 못했습니다: ") + path.getFullPathName());
+        require(BCryptHashData(h.value, bytes.data(), ULONG(n), 0) >= 0, juce::String::fromUTF8("SHA256 검증값을 계산할 수 없습니다."));
     }
     check(input.getStatus()); std::array<unsigned char, 32> digest{};
-    require(BCryptFinishHash(h.value, digest.data(), ULONG(digest.size()), 0) >= 0, "Finish SHA256");
+    require(BCryptFinishHash(h.value, digest.data(), ULONG(digest.size()), 0) >= 0, juce::String::fromUTF8("SHA256 검증값 계산을 마무리할 수 없습니다."));
     return juce::String::toHexString(digest.data(), int(digest.size()), 0);
 }
 namespace
@@ -113,15 +113,15 @@ void Log::open(const juce::File& path, bool createNew)
 {
     check(path.getParentDirectory().createDirectory());
     const auto r = read(path, [](const Record&) { return true; });
-    require(!r.ignoredTail, "Cannot append to damaged log; preserve original"); sequence = r.sequence;
+    require(!r.ignoredTail, juce::String::fromUTF8("손상된 기록에 추가할 수 없습니다. 원본은 보존됩니다.")); sequence = r.sequence;
     check(file.open(path, createNew ? DurableFile::OpenMode::createNew : DurableFile::OpenMode::appendOrCreate));
 }
 void Log::append(Kind k, const juce::var& value, const juce::Uuid& txn, const Hook& hook)
 {
     using namespace storageEncoding;
-    require(!txn.isNull() && value.isObject() && sequence < std::uint64_t(INT64_MAX), "Invalid log record");
+    require(!txn.isNull() && value.isObject() && sequence < std::uint64_t(INT64_MAX), juce::String::fromUTF8("기록 항목이 올바르지 않습니다."));
     const auto json = juce::JSON::toString(value, true); const auto bytes = json.getNumBytesAsUTF8();
-    require(bytes <= limit - header - trailer, "Recovery log record exceeds 16 MiB");
+    require(bytes <= limit - header - trailer, juce::String::fromUTF8("복구 기록 항목이 16 MiB를 넘었습니다."));
     std::vector<std::uint8_t> out(header + bytes + trailer); auto* h = out.data();
     put(h, magic); put(h + 4, std::uint32_t(out.size())); put(h + 8, std::uint16_t(1)); put(h + 10, std::uint16_t(k)); put(h + 12, sequence + 1);
     std::memcpy(h + 20, txn.getRawData(), 16); put(h + 36, std::uint32_t(bytes)); put(h + 40, crc32(json.toRawUTF8(), bytes)); put(h + 44, crc32(h, 44));

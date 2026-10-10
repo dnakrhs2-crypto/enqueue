@@ -286,7 +286,7 @@ juce::Result TimelineEditController::editMarker(const Id& id, Sample at, const j
     if (at < 0 || name.trim().isEmpty() || colour.length() != 7 || colour[0] != '#'
         || !colour.substring(1).containsOnly("0123456789abcdefABCDEF")) return juce::Result::fail(k("마커 위치·이름·색을 확인하세요. 색은 #RRGGBB입니다."));
     return document.performEdit(text(TimelineAction::editMarker), [=](EditState& e)
-    { for (auto& m : e.markers) if (m.markerId == id) { m.sample = at; m.name = name; m.colour = colour; return; } throw std::invalid_argument("Marker missing"); });
+    { for (auto& m : e.markers) if (m.markerId == id) { m.sample = at; m.name = name; m.colour = colour; return; } throw std::invalid_argument(juce::String::fromUTF8("마커가 없습니다.").toStdString()); });
 }
 juce::Result TimelineEditController::deleteMarker(const Id& id)
 {

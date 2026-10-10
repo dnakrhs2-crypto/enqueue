@@ -52,6 +52,17 @@ RecorderLookAndFeel::RecorderLookAndFeel()
     : juce::LookAndFeel_V4(ColourScheme(Palette::background, Palette::card, Palette::card2, Palette::line,
           Palette::text, Palette::field, juce::Colours::white, Palette::accent, Palette::text))
 {
+    juce::LocalisedStrings::setCurrentMappings(new juce::LocalisedStrings(ko(R"translations(
+"Cut" = "잘라내기"
+"Copy" = "복사"
+"Paste" = "붙여넣기"
+"Delete" = "삭제"
+"Select All" = "모두 선택"
+"Undo" = "실행 취소"
+"Redo" = "다시 실행"
+"(no choices)" = "(선택 항목 없음)"
+"OK" = "확인"
+)translations"), false));
     setDefaultSansSerifTypefaceName("Malgun Gothic");
     setColour(juce::TextButton::buttonColourId, Palette::card2);
     setColour(juce::TextButton::buttonOnColourId, juce::Colour(0xff2f74c8));

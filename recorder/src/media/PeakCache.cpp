@@ -7,14 +7,14 @@ namespace gocue::recorder
 {
 PeakCache::PeakCache(unsigned Fs, unsigned channels, unsigned width)
 {
-    if (!Fs || !channels || channels > 16) throw std::invalid_argument("Invalid peak dimensions");
+    if (!Fs || !channels || channels > 16) throw std::invalid_argument("파형의 샘플레이트나 채널 수가 올바르지 않습니다.");
     state.sampleRate = Fs; state.channels = channels; state.samplesPerBin = width ? width : std::max(1u, Fs / 100);
     state.bins.reserve(maximumBins);
 }
 void PeakCache::append(const std::int32_t* pcm, unsigned frames, std::uint64_t first)
 {
     const std::lock_guard<std::mutex> lock(mutex);
-    if (!pcm || state.complete || first != state.samples) throw std::invalid_argument("Noncontiguous peak input");
+    if (!pcm || state.complete || first != state.samples) throw std::invalid_argument("파형 입력 구간이 연속되지 않습니다.");
     for (unsigned i = 0; i < frames; ++i)
     {
         if (state.samples % state.samplesPerBin == 0)

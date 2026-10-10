@@ -14,29 +14,29 @@ void resign(juce::var& v)
 { v.getDynamicObject()->removeProperty("checksum"); set(v, "checksum", RecorderSerializer::fingerprint(v)); }
 void mergeEntities(juce::var& edit, const juce::var& changes, const Id& project)
 {
-    require(changes.isArray(), "Missing entity deltas");
+    require(changes.isArray(), juce::String::fromUTF8("편집 대상의 변경 내역이 없습니다."));
     const std::map<juce::String, juce::String> fields{{"tracks", "trackId"}, {"markers", "markerId"}, {"linkGroups", "linkGroupId"}, {"takeStacks", "stackId"}};
     std::set<std::pair<juce::String, Id>> seen;
     for (const auto& d : *changes.getArray())
     {
         const auto collection = d["collection"].toString(), id = d["id"].toString(); const auto value = d["value"];
-        require(isId(id) && d["removed"].isBool() && seen.emplace(collection, id).second, "Invalid/duplicate entity delta");
+        require(isId(id) && d["removed"].isBool() && seen.emplace(collection, id).second, juce::String::fromUTF8("편집 대상의 변경 내역이 올바르지 않거나 중복되었습니다."));
         const bool removed = bool(d["removed"]);
         if (collection == "project")
-        { require(!removed && id == project && value.isString(), "Invalid project delta"); set(edit, "name", value); continue; }
+        { require(!removed && id == project && value.isString(), juce::String::fromUTF8("프로젝트 변경 내역이 올바르지 않습니다.")); set(edit, "name", value); continue; }
         const bool order = collection.endsWith("Order"); const auto name = order ? collection.dropLastCharacters(5) : collection;
-        const auto field = fields.find(name); require(field != fields.end(), "Unknown edit collection");
-        auto* list = edit.getDynamicObject()->getProperty(juce::Identifier(name)).getArray(); require(list != nullptr, "Missing collection");
+        const auto field = fields.find(name); require(field != fields.end(), juce::String::fromUTF8("알 수 없는 편집 목록입니다."));
+        auto* list = edit.getDynamicObject()->getProperty(juce::Identifier(name)).getArray(); require(list != nullptr, juce::String::fromUTF8("편집 목록이 없습니다."));
         if (order)
         {
-            require(!removed && id == project && value.isArray() && value.size() == list->size(), "Invalid entity order");
+            require(!removed && id == project && value.isArray() && value.size() == list->size(), juce::String::fromUTF8("편집 대상 순서가 올바르지 않습니다."));
             juce::Array<juce::var> next; std::set<Id> ids;
             for (const auto& v : *value.getArray())
             {
-                require(v.isString() && ids.insert(v.toString()).second, "Duplicate order ID"); bool found = false;
+                require(v.isString() && ids.insert(v.toString()).second, juce::String::fromUTF8("순서 목록의 식별자가 중복되었습니다.")); bool found = false;
                 for (const auto& item : *list) if (item.getProperty(juce::Identifier(field->second), {}).toString() == v.toString())
                 { next.add(item); found = true; break; }
-                require(found, "Missing ordered entity");
+                require(found, juce::String::fromUTF8("순서 목록에 있는 편집 대상이 없습니다."));
             }
             edit.getDynamicObject()->setProperty(name, next);
         }
@@ -44,10 +44,10 @@ void mergeEntities(juce::var& edit, const juce::var& changes, const Id& project)
         {
             int found = -1;
             for (int i = 0; i < list->size(); ++i) if ((*list)[i].getProperty(juce::Identifier(field->second), {}).toString() == id) { found = i; break; }
-            if (removed) { require(found >= 0, "Removal of missing entity"); list->remove(found); }
+            if (removed) { require(found >= 0, juce::String::fromUTF8("없는 편집 대상을 삭제할 수 없습니다.")); list->remove(found); }
             else
             {
-                require(value.isObject() && value.getProperty(juce::Identifier(field->second), {}).toString() == id, "Entity ID mismatch");
+                require(value.isObject() && value.getProperty(juce::Identifier(field->second), {}).toString() == id, juce::String::fromUTF8("편집 대상의 식별자가 맞지 않습니다."));
                 if (found >= 0) list->set(found, value.clone()); else list->add(value.clone());
             }
         }
@@ -59,19 +59,19 @@ void registryInvariant(const RecorderProject& before, const RecorderProject& aft
     const auto next = juce::JSON::parse(RecorderSerializer::toJson(after))["media"];
     for (const auto& asset : before.media->assets)
     {
-        const auto* a = after.media->findAsset(asset.assetId); require(a != nullptr, "Journal cannot remove registered media");
-        require(a->kind == asset.kind && a->contentIdentity == asset.contentIdentity && a->mediaGeneration >= asset.mediaGeneration, "Media identity/generation regression");
+        const auto* a = after.media->findAsset(asset.assetId); require(a != nullptr, juce::String::fromUTF8("편집 기록에서 등록된 소재를 제거할 수 없습니다."));
+        require(a->kind == asset.kind && a->contentIdentity == asset.contentIdentity && a->mediaGeneration >= asset.mediaGeneration, juce::String::fromUTF8("소재의 식별자나 세대 번호가 이전 상태로 돌아갔습니다."));
         juce::var x, y;
         for (const auto& v : *old["assets"].getArray()) if (v["assetId"].toString() == asset.assetId) x = v;
         for (const auto& v : *next["assets"].getArray()) if (v["assetId"].toString() == asset.assetId) y = v;
-        require(RecorderSerializer::fingerprint(x["originalFormat"]) == RecorderSerializer::fingerprint(y["originalFormat"]), "Original format changed");
-        require(a->mediaGeneration != asset.mediaGeneration || RecorderSerializer::fingerprint(x) == RecorderSerializer::fingerprint(y), "Changed media requires a new generation");
+        require(RecorderSerializer::fingerprint(x["originalFormat"]) == RecorderSerializer::fingerprint(y["originalFormat"]), juce::String::fromUTF8("원본 형식이 변경되었습니다."));
+        require(a->mediaGeneration != asset.mediaGeneration || RecorderSerializer::fingerprint(x) == RecorderSerializer::fingerprint(y), juce::String::fromUTF8("변경된 소재에는 새 세대 번호가 필요합니다."));
     }
     for (const auto& t : before.media->takes)
     {
-        const auto* n = after.media->findTake(t.takeId); require(n != nullptr, "Journal cannot remove registered takes");
+        const auto* n = after.media->findTake(t.takeId); require(n != nullptr, juce::String::fromUTF8("편집 기록에서 등록된 테이크를 제거할 수 없습니다."));
         require(t.cam1AssetId == n->cam1AssetId && t.cam2AssetId == n->cam2AssetId && t.microphoneAssetIds == n->microphoneAssetIds
-            && t.mode == n->mode && t.N0 == n->N0 && t.O0 == n->O0 && t.placementSample == n->placementSample, "Take identity/origin changed");
+            && t.mode == n->mode && t.N0 == n->N0 && t.O0 == n->O0 && t.placementSample == n->placementSample, juce::String::fromUTF8("테이크의 식별자나 시작점이 변경되었습니다."));
     }
 }
 }
@@ -82,7 +82,7 @@ juce::var EditJournal::payload(const RecorderProject& before, const EditDelta& d
 {
     using namespace recovery;
     check(after.validate()); require(isId(delta.transactionId) && delta.projectId == after.projectId && before.projectId == after.projectId
-        && delta.baseRevision == before.editRevision && delta.revision == after.editRevision, "Invalid edit ticket identity/revision");
+        && delta.baseRevision == before.editRevision && delta.revision == after.editRevision, juce::String::fromUTF8("편집 기록의 식별자나 편집 버전이 올바르지 않습니다."));
     auto p = object(); set(p, "projectId", delta.projectId); set(p, "baseRevision", integer(delta.baseRevision)); set(p, "revision", integer(delta.revision));
     set(p, "name", delta.name); set(p, "validationHash", delta.validationHash); set(p, "baseHash", hash(before)); set(p, "resultHash", hash(after));
     juce::Array<juce::var> entities;
@@ -100,26 +100,26 @@ RecorderProject EditJournal::apply(const RecorderProject& before, const juce::va
     using namespace recovery;
     const auto revision = number(record["revision"]), base = number(record["baseRevision"]);
     require(record["projectId"].toString() == before.projectId && base == before.editRevision && base >= 0
-        && (registryOnly ? revision == base : base < INT64_MAX && revision == base + 1), "Edit revision/project chain mismatch");
-    require(hash(before) == record["baseHash"].toString(), "Edit base hash mismatch");
+        && (registryOnly ? revision == base : base < INT64_MAX && revision == base + 1), juce::String::fromUTF8("편집 버전이나 프로젝트 기록의 연결이 맞지 않습니다."));
+    require(hash(before) == record["baseHash"].toString(), juce::String::fromUTF8("편집 전 상태의 검증값이 맞지 않습니다."));
     auto root = juce::JSON::parse(RecorderSerializer::toJson(before)); auto edit = root["edit"];
     if (registryOnly) // a registry commit edits nothing but the markers a time-base change rescaled
     {
-        require(record["entities"].isArray(), "Registry commit entities");
+        require(record["entities"].isArray(), juce::String::fromUTF8("소재 등록 기록의 항목이 올바르지 않습니다."));
         for (const auto& entity : *record["entities"].getArray())
-            require(record.hasProperty("timebase") && entity["collection"].toString() == "markers", "Registry commit cannot edit clips");
+            require(record.hasProperty("timebase") && entity["collection"].toString() == "markers", juce::String::fromUTF8("소재 등록 기록에서 클립을 편집할 수 없습니다."));
     }
     mergeEntities(edit, record["entities"], before.projectId);
-    require(RecorderSerializer::fingerprint(edit) == record["validationHash"].toString(), "Edit validation hash mismatch");
+    require(RecorderSerializer::fingerprint(edit) == record["validationHash"].toString(), juce::String::fromUTF8("편집 검증값이 맞지 않습니다."));
     if (record.hasProperty("media")) set(root, "media", record["media"]);
     if (record.hasProperty("timebase"))
     {
-        require(registryOnly && before.media->assets.empty(), "Timebase is locked after media registration");
+        require(registryOnly && before.media->assets.empty(), juce::String::fromUTF8("소재를 등록한 뒤에는 시간 기준을 바꿀 수 없습니다."));
         set(root, "Fs", record["timebase"]["Fs"]); set(root, "fps", record["timebase"]["fps"]);
     }
     set(root, "editRevision", integer(revision)); set(root, "checkpointRevision", integer(revision)); resign(root);
     RecorderProject after; check(RecorderSerializer::fromJson(juce::JSON::toString(root), after)); registryInvariant(before, after);
-    require(hash(after) == record["resultHash"].toString(), "Edit result hash mismatch"); return after;
+    require(hash(after) == record["resultHash"].toString(), juce::String::fromUTF8("편집 결과의 검증값이 맞지 않습니다.")); return after;
 }
 juce::Result EditJournal::replay(const juce::File& root, RecorderProject& project, const CheckpointInfo& cursor, EditJournalReplay& out)
 {
@@ -139,7 +139,7 @@ juce::Result EditJournal::replay(const juce::File& root, RecorderProject& projec
         {
             try
             {
-                require(r.payload["projectId"].toString() == project.projectId, "Foreign project in edit journal");
+                require(r.payload["projectId"].toString() == project.projectId, juce::String::fromUTF8("편집 기록에 다른 프로젝트가 들어 있습니다."));
                 if (r.kind == JournalKind::EditCheckpoint) continue;
                 const auto revision = number(r.payload["revision"]);
                 if (revision < project.editRevision || (r.kind != JournalKind::MediaRegistry && revision == project.editRevision)) continue;
@@ -160,7 +160,7 @@ juce::Result EditJournal::open(const juce::File& projectRoot, const RecorderProj
     using namespace recovery;
     try
     {
-        require(!lock, "Edit journal already open"); check(durable.validate()); root = projectRoot;
+        require(!lock, juce::String::fromUTF8("편집 기록이 이미 열려 있습니다.")); check(durable.validate()); root = projectRoot;
         lock = std::make_unique<WriterLock>(child(root, "project.writer.lock")); current = durable; cursor = position;
         const auto file = child(root, "project.recorder");
         if (!file.existsAsFile()) check(RecorderSerializer::writeCheckpoint(file, current, cursor, options.faults, options.hook));
@@ -170,15 +170,15 @@ juce::Result EditJournal::open(const juce::File& projectRoot, const RecorderProj
             // from a stale root checkpoint. The caller passes its verified cursor.
             RecorderProject saved; CheckpointInfo savedInfo;
             const auto selected = position.sourceFile != juce::File() ? position.sourceFile : file;
-            require(selected.isAChildOf(root), "Checkpoint provenance is outside project");
+            require(selected.isAChildOf(root), juce::String::fromUTF8("저장본의 원본 위치가 프로젝트 밖에 있습니다."));
             child(root, selected.getRelativePathFrom(root).replaceCharacter('\\', '/'));
             check(RecorderSerializer::readCheckpoint(selected, saved, &savedInfo, position.sourceFile == juce::File()));
-            require(saved.projectId == current.projectId && saved.editRevision <= current.editRevision, "Stale/foreign journal opening");
+            require(saved.projectId == current.projectId && saved.editRevision <= current.editRevision, juce::String::fromUTF8("오래되었거나 다른 프로젝트의 기록을 열 수 없습니다."));
             if (position.generation == 0) cursor = savedInfo;
-            else require(position.generation == savedInfo.generation, "Checkpoint generation changed before journal opening");
+            else require(position.generation == savedInfo.generation, juce::String::fromUTF8("편집 기록을 열기 전에 저장본이 변경되었습니다."));
             RecorderProject replayed = saved; EditJournalReplay read; check(replay(root, replayed, cursor, read));
-            require(!read.legacy && !read.framing.ignoredTail, "Run RecoveryScanner before extending a legacy/damaged journal");
-            require(hash(replayed) == hash(current), "Document must adopt the recovered durable revision before editing");
+            require(!read.legacy && !read.framing.ignoredTail, juce::String::fromUTF8("이전 형식이거나 손상된 기록에 추가하기 전에 프로젝트를 복구하세요."));
+            require(hash(replayed) == hash(current), juce::String::fromUTF8("편집하기 전에 복구하여 저장한 편집 버전을 적용해야 합니다."));
             for (const auto& r : read.framing.records) if (r.kind == JournalKind::EditCheckpoint)
                 committedGenerations.emplace(number(r.payload["generation"]), r.payload["checksum"].toString());
         }
@@ -192,9 +192,9 @@ juce::Result EditJournal::append(const EditDelta& delta, const RecorderProject& 
     using namespace recovery;
     try
     {
-        require(lock != nullptr, "Edit journal is closed");
+        require(lock != nullptr, juce::String::fromUTF8("편집 기록이 닫혀 있습니다."));
         if (kind == JournalKind::EditTransaction && result.media->takes.size() > current.media->takes.size()) kind = JournalKind::TakePlacement;
-        require(kind == JournalKind::EditTransaction || kind == JournalKind::TakePlacement || kind == JournalKind::RetakeVersionSwitch, "Invalid edit transaction kind");
+        require(kind == JournalKind::EditTransaction || kind == JournalKind::TakePlacement || kind == JournalKind::RetakeVersionSwitch, juce::String::fromUTF8("편집 기록의 종류가 올바르지 않습니다."));
         const auto p = payload(current, delta, result); const auto next = apply(current, p);
         check(journal.appendEditRecord(kind, p, juce::Uuid(delta.transactionId), options.hook)); current = next; return juce::Result::ok();
     }
@@ -218,7 +218,7 @@ juce::Result EditJournal::checkpoint()
     using namespace recovery;
     try
     {
-        require(lock != nullptr, "Edit journal is closed"); check(journal.rotate());
+        require(lock != nullptr, juce::String::fromUTF8("편집 기록이 닫혀 있습니다.")); check(journal.rotate());
         auto next = cursor; next.generation = (std::max)(Sample{1}, cursor.generation);
         next.journalSegment = journal.currentSegment(); next.journalSequence = journal.durableSequence();
         auto file = child(root, "project.recorder");
@@ -257,7 +257,7 @@ juce::Result EditJournal::checkpoint()
             {
                 const auto n = candidate.getFileNameWithoutExtension().substring(6).getLargeIntValue();
                 if (n > 0 && n < prior.journalSegment && candidate == RecordingJournal::editLogFile(directory, static_cast<unsigned>(n)))
-                { child(root, candidate.getRelativePathFrom(root).replaceCharacter('\\', '/')); require(candidate.deleteFile(), "Could not collect old edit segment"); ++collected; }
+                { child(root, candidate.getRelativePathFrom(root).replaceCharacter('\\', '/')); require(candidate.deleteFile(), juce::String::fromUTF8("오래된 편집 기록 파일을 정리할 수 없습니다.")); ++collected; }
             }
         }
         return juce::Result::ok();
@@ -295,14 +295,14 @@ juce::Result EditJournalWorker::push(Work w)
 {
     const std::lock_guard<std::mutex> guard(mutex);
     if (error.failed()) return error;
-    if (stopping) return juce::Result::fail("Journal is shutting down");
-    if (pending.size() + completions.size() >= options.maxPending) return juce::Result::fail("Edit journal queue full; edit remains unsaved");
+    if (stopping) return juce::Result::fail(juce::String::fromUTF8("편집 기록을 종료하고 있습니다."));
+    if (pending.size() + completions.size() >= options.maxPending) return juce::Result::fail(juce::String::fromUTF8("편집 기록 대기열이 가득 찼습니다. 변경 사항이 저장되지 않았습니다."));
     pending.push_back(std::move(w)); wake.notify_one(); return juce::Result::ok();
 }
 juce::Result EditJournalWorker::waitUntilIdle(std::chrono::milliseconds timeout)
 {
     std::unique_lock<std::mutex> guard(mutex);
-    if (!idle.wait_for(guard, timeout, [&] { return finished || (!busy && pending.empty()); })) return juce::Result::fail("Timed out waiting for edit journal");
+    if (!idle.wait_for(guard, timeout, [&] { return finished || (!busy && pending.empty()); })) return juce::Result::fail(juce::String::fromUTF8("편집 기록 저장 대기 시간이 초과되었습니다."));
     return error;
 }
 juce::Result EditJournalWorker::shutdown()
@@ -329,7 +329,7 @@ void EditJournalWorker::drain()
 }
 void EditJournalWorker::run()
 {
-    EditJournal journal(options.journal); auto result = initial ? journal.open(root, *initial, cursor) : juce::Result::fail("Missing initial document");
+    EditJournal journal(options.journal); auto result = initial ? journal.open(root, *initial, cursor) : juce::Result::fail(juce::String::fromUTF8("초기 프로젝트가 없습니다."));
     auto nextCheckpoint = std::chrono::steady_clock::now() + options.checkpointInterval;
     bool dirty = false;
     for (;;)

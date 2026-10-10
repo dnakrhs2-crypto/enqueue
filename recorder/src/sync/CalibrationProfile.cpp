@@ -11,7 +11,7 @@ namespace
 const char* qualityName(CalibrationQuality q)
 {
     switch (q) { case CalibrationQuality::unmeasured: return "unmeasured"; case CalibrationQuality::softwareEstimated: return "software-estimated";
-        case CalibrationQuality::physicalMeasured: return "physical-measured"; default: throw std::invalid_argument("Invalid calibration quality"); }
+        case CalibrationQuality::physicalMeasured: return "physical-measured"; default: throw std::invalid_argument("보정 품질 값이 올바르지 않습니다."); }
 }
 void validate(const CalibrationProfile& p)
 {
@@ -23,22 +23,22 @@ void validate(const CalibrationProfile& p)
         || std::abs(static_cast<double>(p.cameraResidualLatency100ns)) > 100000000
         || std::abs(static_cast<double>(p.inputResidualLatencySamples)) > 10.0 * k.sampleRate
         || std::abs(static_cast<double>(p.outputResidualLatencySamples)) > 10.0 * k.sampleRate)
-        throw std::invalid_argument("Invalid calibration key/value");
+        throw std::invalid_argument("보정 조건이나 값이 올바르지 않습니다.");
     std::set<int> outputs;
-    for (const auto c : k.outputMapping) if (c < 0 || c > 1023 || !outputs.insert(c).second) throw std::invalid_argument("Invalid calibration output mapping");
-    if (k.inputMapping.size() > 24 || k.inputMapping.size() % 3) throw std::invalid_argument("Invalid calibration input mapping");
+    for (const auto c : k.outputMapping) if (c < 0 || c > 1023 || !outputs.insert(c).second) throw std::invalid_argument("보정용 출력 연결이 올바르지 않습니다.");
+    if (k.inputMapping.size() > 24 || k.inputMapping.size() % 3) throw std::invalid_argument("보정용 입력 연결이 올바르지 않습니다.");
     std::set<int> inputs, slots;
     for (std::size_t i = 0; i < k.inputMapping.size(); i += 3)
     {
         const auto mic = k.inputMapping[i], left = k.inputMapping[i + 1], right = k.inputMapping[i + 2];
         if (mic < 1 || mic > 8 || !slots.insert(mic).second || left < 0 || left > 255 || !inputs.insert(left).second
             || (right != -1 && (right != left + 1 || right > 255 || !inputs.insert(right).second)))
-            throw std::invalid_argument("Invalid calibration stereo input pair");
+            throw std::invalid_argument("보정용 스테레오 입력 쌍이 올바르지 않습니다.");
     }
     qualityName(p.quality);
     if (p.quality != CalibrationQuality::unmeasured
         && (p.measuredUtc.size() < 20 || p.measuredUtc[10] != 'T' || p.measuredUtc.back() != 'Z' || p.method.empty() || !p.measurementCount))
-        throw std::invalid_argument("Measured calibration requires UTC date, method and observations");
+        throw std::invalid_argument("측정한 보정에는 UTC 날짜, 측정 방법, 관측값이 필요합니다.");
 }
 const juce::var& field(const juce::var& v, const char* name)
 {
@@ -81,7 +81,7 @@ CalibrationKey calibrationKey(const std::string& cameraId, const CameraMode& mod
 void CalibrationProfile::requireMatch(const CalibrationKey& expected) const
 {
     validate(*this);
-    if (!(key == expected)) throw std::invalid_argument("Calibration profile does not match camera/native mode/fps/exposure/ASIO/Fs/buffer/output mapping");
+    if (!(key == expected)) throw std::invalid_argument("보정값이 카메라·입력 모드·fps·노출·ASIO·샘플레이트·버퍼·출력 연결과 맞지 않습니다.");
 }
 juce::var CalibrationProfile::toJson() const
 {

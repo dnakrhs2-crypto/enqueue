@@ -1,6 +1,6 @@
 #include "AudioImport.h"
 #include "audio/MediaFoundationAudioFormat.h"
-#include "model/SafeFileWrite.h"
+#include "storage/RecorderFileWrite.h"
 #include "storage/DurableFile.h"
 extern "C" {
 #include <libavformat/avformat.h>
@@ -34,7 +34,7 @@ std::unique_ptr<juce::AudioFormatReader> openNativeMf(const juce::File& file)
     gocue::MediaFoundationAudioFormat format;
     auto stream = file.createInputStream(); require(stream && stream->openedOk(), "MF 원본 파일 읽기 실패");
     std::unique_ptr<juce::AudioFormatReader> reader(format.createReaderFor(stream.release(), true));
-    require(reader != nullptr, "Media Foundation codec/DRM으로 오디오 파일을 열 수 없습니다."); return reader;
+    require(reader != nullptr, "Media Foundation 코덱 또는 DRM 문제로 오디오 파일을 열 수 없습니다."); return reader;
 }
 // MF's two-frame seek preroll still differed from a fresh sequential decode on the
 // local AAC fixture (max 0.01594776). Import never needs realtime source seeking:
@@ -72,8 +72,7 @@ private:
 void avChecked(int result, const char* operation)
 {
     if (result >= 0) return;
-    char text[AV_ERROR_MAX_STRING_SIZE]{}; av_strerror(result, text, sizeof(text));
-    throw std::runtime_error(std::string(operation) + ": " + text);
+    throw std::runtime_error(std::string(operation) + " (FFmpeg 오류 " + std::to_string(result) + ")");
 }
 struct AvInput
 {
@@ -93,26 +92,26 @@ void auditDecode(const juce::File& file, AudioImportControl& control, ImportedAu
     in.format = avformat_alloc_context();
     require(in.format && in.packet && in.frame, "오디오 검증 메모리가 부족합니다.");
     in.format->interrupt_callback = { [](void* p) -> int { return static_cast<AudioImportControl*>(p)->cancelled.load() ? 1 : 0; }, &control };
-    avChecked(avformat_open_input(&in.format, file.getFullPathName().toRawUTF8(), nullptr, nullptr), "오디오/codec/DRM 검사 실패");
+    avChecked(avformat_open_input(&in.format, file.getFullPathName().toRawUTF8(), nullptr, nullptr), "오디오·코덱·DRM 검사에 실패했습니다.");
     avChecked(avformat_find_stream_info(in.format, nullptr), "오디오 스트림 정보를 읽을 수 없습니다");
     const int streamIndex = av_find_best_stream(in.format, AVMEDIA_TYPE_AUDIO, -1, -1, nullptr, 0);
     avChecked(streamIndex, "지원하는 오디오 스트림이 없습니다");
     const auto* stream = in.format->streams[streamIndex];
     const auto* parameters = stream->codecpar;
     require(parameters->ch_layout.nb_channels == 1 || parameters->ch_layout.nb_channels == 2,
-            "완성 오디오는 mono/stereo(1~2채널)만 지원합니다. 자동 downmix는 지원하지 않습니다.");
+            "완성 오디오는 모노·스테레오(1~2채널)만 지원합니다. 자동 다운믹스는 지원하지 않습니다.");
     require(parameters->sample_rate == static_cast<int>(info.sampleRate)
-            && parameters->ch_layout.nb_channels == info.channels, "원본과 reader의 샘플레이트/채널이 다릅니다.");
+            && parameters->ch_layout.nb_channels == info.channels, "원본과 읽어 들인 오디오의 샘플레이트·채널 수가 다릅니다.");
     info.codec = avcodec_get_name(parameters->codec_id);
     const auto* codec = avcodec_find_decoder(parameters->codec_id);
-    require(codec != nullptr, "지원하지 않는 codec이거나 DRM으로 보호된 파일입니다.");
+    require(codec != nullptr, "지원하지 않는 코덱이거나 DRM으로 보호된 파일입니다.");
     in.decoder = avcodec_alloc_context3(codec);
     require(in.decoder != nullptr, "오디오 디코더 메모리가 부족합니다.");
     avChecked(avcodec_parameters_to_context(in.decoder, parameters), "오디오 포맷 오류");
     in.decoder->flags2 |= AV_CODEC_FLAG2_SKIP_MANUAL;
     in.decoder->err_recognition = AV_EF_CRCCHECK | AV_EF_BITSTREAM | AV_EF_BUFFER | AV_EF_EXPLODE;
     in.decoder->thread_count = 1;
-    avChecked(avcodec_open2(in.decoder, codec, nullptr), "codec/DRM으로 오디오를 해독할 수 없습니다");
+    avChecked(avcodec_open2(in.decoder, codec, nullptr), "코덱 또는 DRM 문제로 오디오를 해독할 수 없습니다.");
     bool hadSkip = false;
     const auto receive = [&]
     {
@@ -136,16 +135,16 @@ void auditDecode(const juce::File& file, AudioImportControl& control, ImportedAu
         control.checkpoint(Stage::verifying, .25);
         if (in.packet->stream_index == streamIndex)
         {
-            require(!(in.packet->flags & AV_PKT_FLAG_CORRUPT), "손상되거나 잘린 오디오 packet입니다.");
+            require(!(in.packet->flags & AV_PKT_FLAG_CORRUPT), "오디오 패킷이 손상되었거나 잘렸습니다.");
             size_t size = 0;
             if (const auto* skip = av_packet_get_side_data(in.packet, AV_PKT_DATA_SKIP_SAMPLES, &size); skip && size >= 10)
             {
                 // Only boundary skips are supported; midstream edit/discontinuity must not be collapsed.
                 const Sample lead = AV_RL32(skip), tail = AV_RL32(skip + 4);
-                require(lead == 0 || info.rawDecodedSamples == 0, "오디오 중간의 priming/edit list는 지원하지 않습니다.");
+                require(lead == 0 || info.rawDecodedSamples == 0, "오디오 중간의 인코딩 지연 보정이나 편집 목록은 지원하지 않습니다.");
                 info.leadingSkipSamples += lead; info.trailingSkipSamples += tail; hadSkip = true;
             }
-            avChecked(avcodec_send_packet(in.decoder, in.packet), "오디오 packet 디코드 실패");
+            avChecked(avcodec_send_packet(in.decoder, in.packet), "오디오 패킷 디코딩에 실패했습니다.");
             receive();
         }
         av_packet_unref(in.packet);
@@ -178,7 +177,7 @@ void auditMediaFoundation(const juce::File& file, AudioImportControl& control, I
 {
     using Microsoft::WRL::ComPtr;
     const auto hr = [](HRESULT value)
-    { require(SUCCEEDED(value), juce::String::fromUTF8("Media Foundation 오디오 검증 실패 (HRESULT 0x") + juce::String::toHexString(static_cast<int>(value)) + "). 지원하지 않는 codec/DRM 또는 손상된 파일일 수 있습니다."); };
+    { require(SUCCEEDED(value), juce::String::fromUTF8("Media Foundation 오디오 검증 실패 (HRESULT 0x") + juce::String::toHexString(static_cast<int>(value)) + "). 지원하지 않는 코덱·DRM 또는 손상된 파일일 수 있습니다."); };
     ComPtr<IMFAttributes> attributes; hr(MFCreateAttributes(&attributes, 1)); hr(attributes->SetUINT32(MF_LOW_LATENCY, FALSE));
     ComPtr<IMFSourceReader> reader; hr(MFCreateSourceReaderFromURL(file.getFullPathName().toWideCharPointer(), attributes.Get(), &reader));
     hr(reader->SetStreamSelection(MF_SOURCE_READER_ALL_STREAMS, FALSE)); hr(reader->SetStreamSelection(MF_SOURCE_READER_FIRST_AUDIO_STREAM, TRUE));
@@ -199,7 +198,7 @@ void auditMediaFoundation(const juce::File& file, AudioImportControl& control, I
         const Sample skip = (std::max)(Sample(0), -pendingAt);
         if (pendingFrames <= skip) return;
         const auto at = (std::max)(Sample(0), pendingAt);
-        require(std::abs(at - expected) <= 2, "MF 오디오 timestamp에 지원하지 않는 빈 구간 또는 불연속이 있습니다.");
+        require(std::abs(at - expected) <= 2, "MF 오디오 시각에 지원하지 않는 빈 구간이나 불연속이 있습니다.");
         info.readerDecodedSamples += pendingFrames - skip; expected = info.readerDecodedSamples; emitted = true;
     };
     for (;;)
@@ -269,7 +268,7 @@ juce::var ImportedAudioInfo::toVar() const
 }
 ImportedAudioInfo ImportedAudioInfo::fromVar(const juce::var& v)
 {
-    require(static_cast<int>(v["version"]) == 1, "오디오 import 메타데이터 버전을 지원하지 않습니다.");
+    require(static_cast<int>(v["version"]) == 1, "불러온 오디오의 메타데이터 버전을 지원하지 않습니다.");
     ImportedAudioInfo i;
     i.codec = v["codec"].toString(); i.reader = v["reader"].toString(); i.contentHash = v["contentHash"].toString();
     i.sampleRate = static_cast<std::uint32_t>(static_cast<int>(v["sampleRate"]));
@@ -289,7 +288,7 @@ ImportedAudioInfo ImportedAudioInfo::fromVar(const juce::var& v)
         && i.leadingSkipSamples <= i.rawDecodedSamples && i.trailingSkipSamples <= i.rawDecodedSamples - i.leadingSkipSamples
         && i.readerStartSample <= (std::numeric_limits<Sample>::max)() - i.decodedSamples
         && i.contentHash.length() == 64 && i.contentHash.containsOnly("0123456789abcdef"),
-        "오디오 import 메타데이터가 손상되었습니다.");
+        "불러온 오디오의 메타데이터가 손상되었습니다.");
     return i;
 }
 std::unique_ptr<juce::AudioFormatReader> AudioImport::openReader(const juce::File& file)
@@ -309,13 +308,13 @@ std::unique_ptr<juce::AudioFormatReader> AudioImport::openReader(const juce::Fil
     auto input = file.createInputStream();
     require(input && input->openedOk(), "오디오 파일을 열 수 없습니다. 파일 경로와 읽기 권한을 확인하세요.");
     std::unique_ptr<juce::AudioFormatReader> reader(format->createReaderFor(input.release(), true));
-    require(reader != nullptr, "오디오 codec을 읽을 수 없습니다. 손상된 파일, 지원하지 않는 codec 또는 DRM 보호 파일일 수 있습니다.");
+    require(reader != nullptr, "오디오 코덱을 읽을 수 없습니다. 손상된 파일, 지원하지 않는 코덱 또는 DRM 보호 파일일 수 있습니다.");
     return reader;
 }
 juce::String AudioImport::hashFile(const juce::File& file, AudioImportControl& control, Stage stage)
 {
     auto stream = file.createInputStream();
-    require(stream && stream->openedOk(), "원본 hash 검증을 위해 파일을 열 수 없습니다.");
+    require(stream && stream->openedOk(), "원본 검증값을 확인하기 위해 파일을 열 수 없습니다.");
     std::unique_ptr<AVSHA, decltype(&av_free)> sha(av_sha_alloc(), av_free);
     require(sha != nullptr && av_sha_init(sha.get(), 256) == 0, "SHA-256 초기화 실패");
     std::vector<std::uint8_t> block(256 * 1024); Sample count = 0;
@@ -326,7 +325,7 @@ juce::String AudioImport::hashFile(const juce::File& file, AudioImportControl& c
         if (n <= 0) break;
         count += n; av_sha_update(sha.get(), block.data(), n);
     }
-    require(stream->getStatus().wasOk() && count == file.getSize(), "원본 hash 검사 도중 파일 읽기에 실패했습니다.");
+    require(stream->getStatus().wasOk() && count == file.getSize(), "원본 검증값 확인 중 파일 읽기에 실패했습니다.");
     std::uint8_t bytes[32]; av_sha_final(sha.get(), bytes);
     return juce::String::toHexString(bytes, 32, 0);
 }
@@ -339,7 +338,7 @@ juce::Result AudioImport::inspect(const juce::File& file, AudioImportControl& co
         auto reader = openReader(file);
         ImportedAudioInfo info;
         require(reader->numChannels == 1 || reader->numChannels == 2,
-                "완성 오디오는 mono/stereo(1~2채널)만 지원합니다. 자동 downmix는 지원하지 않습니다.");
+                "완성 오디오는 모노·스테레오(1~2채널)만 지원합니다. 자동 다운믹스는 지원하지 않습니다.");
         require(std::isfinite(reader->sampleRate) && reader->sampleRate >= 1 && reader->sampleRate <= 768000
                 && reader->sampleRate == std::floor(reader->sampleRate), "지원하지 않는 오디오 샘플레이트입니다.");
         info.sampleRate = static_cast<std::uint32_t>(reader->sampleRate); info.channels = static_cast<int>(reader->numChannels);
@@ -352,7 +351,7 @@ juce::Result AudioImport::inspect(const juce::File& file, AudioImportControl& co
         if (file.hasFileExtension("wav;wave")) require(info.rawDecodedSamples == reader->lengthInSamples, "WAV의 선언 길이와 실제 디코드 길이가 다릅니다. 파일이 잘렸을 수 있습니다.");
         const auto count = nativeMf ? info.decodedSamples : info.rawDecodedSamples;
         // MP3 reader length is an estimate; the packet/decode audit is authoritative.
-        if (!file.hasFileExtension("mp3")) require(count <= reader->lengthInSamples, "reader 길이보다 검증된 오디오가 깁니다.");
+        if (!file.hasFileExtension("mp3")) require(count <= reader->lengthInSamples, "검증된 오디오가 읽어 들인 길이보다 깁니다.");
         reader->lengthInSamples = (std::max)(count, reader->lengthInSamples);
         juce::AudioBuffer<float> block(info.channels, 4096);
         for (Sample at = 0; at < count;)
@@ -392,7 +391,7 @@ juce::Result AudioImport::prepare(const AudioImportRequest& request, AudioImport
         const auto imports = request.projectDirectory.getChildFile("media/imports");
         checked(imports.createDirectory());
         const auto directory = imports.getChildFile(prepared->mediaAsset.assetId);
-        require(!directory.exists(), "오디오 import 경로가 이미 존재합니다.");
+        require(!directory.exists(), "오디오를 불러올 경로가 이미 있습니다.");
         checked(directory.createDirectory()); prepared->ownedDirectory = directory;
         prepared->copiedFile = directory.getChildFile(request.source.getFileName());
         // Deny concurrent writes/deletion of the external source while copying and comparing hashes.
@@ -427,7 +426,7 @@ juce::Result AudioImport::prepare(const AudioImportRequest& request, AudioImport
         auto& clip = prepared->importedClip; clip.assetId = asset.assetId; clip.trackId = track.trackId;
         clip.lengthSamples = asset.logicalLength; clip.timelineStartSample = request.playhead;
         track.clips.edit().push_back(clip);
-        checked(gocue::SafeFileWrite::writeTextVerified(directory.getChildFile(".import-info.json"), juce::JSON::toString(info.toVar()),
+        checked(writeRecorderTextVerified(directory.getChildFile(".import-info.json"), juce::JSON::toString(info.toVar()),
             [](const juce::String& value) { try { ImportedAudioInfo::fromVar(juce::JSON::parse(value)); return juce::Result::ok(); }
                 catch (const std::exception& e) { return juce::Result::fail(juce::String::fromUTF8(e.what())); } }));
         control.checkpoint(Stage::ready, 1); output = std::move(prepared); return juce::Result::ok();
@@ -441,12 +440,12 @@ juce::Result AudioImport::prepare(const AudioImportRequest& request, AudioImport
 ImportedAudioInfo AudioImport::loadInfo(const juce::File& projectDirectory, const MediaAsset& asset)
 {
     require(asset.kind == AssetKind::importAudio && isProjectRelativePath(asset.relativePath)
-            && asset.relativePath.startsWith("media/imports/"), "import 원본 경로가 올바르지 않습니다.");
+            && asset.relativePath.startsWith("media/imports/"), "불러온 원본의 경로가 올바르지 않습니다.");
     auto info = ImportedAudioInfo::fromVar(juce::JSON::parse(projectDirectory.getChildFile(asset.relativePath).getSiblingFile(".import-info.json")));
     require(info.contentHash == asset.contentIdentity && info.sampleRate == asset.originalFormat.sampleRate
         && info.channels == asset.originalFormat.channels && info.codec == asset.originalFormat.codec
         && asset.logicalLength == rescaleRound(info.decodedSamples, asset.sourceUnitsDenominator, asset.sourceUnitsNumerator),
-        "원본과 import 메타데이터가 다릅니다.");
+        "원본과 불러온 오디오의 메타데이터가 다릅니다.");
     return info;
 }
 juce::Result commitImportedAudio(RecorderDocument& document, PreparedAudioImport& prepared, AudioImportControl& control)

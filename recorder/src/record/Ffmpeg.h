@@ -19,6 +19,11 @@ inline void ffCheck(int code, const char* operation)
     av_strerror(code, message, sizeof(message));
     throw std::runtime_error(std::string(operation) + ": " + message);
 }
+inline void ffCheckLocalized(int code, const char* operation)
+{
+    if (code >= 0) return;
+    throw std::runtime_error(std::string(operation) + " (FFmpeg 오류 " + std::to_string(code) + ")");
+}
 struct CodecDelete { void operator()(AVCodecContext* p) const { avcodec_free_context(&p); } };
 struct FrameDelete { void operator()(AVFrame* p) const { av_frame_free(&p); } };
 struct PacketDelete { void operator()(AVPacket* p) const { av_packet_free(&p); } };
@@ -33,7 +38,7 @@ struct Dictionary
 {
     AVDictionary* value = nullptr;
     ~Dictionary() { av_dict_free(&value); }
-    void set(const char* key, const char* text) { ffCheck(av_dict_set(&value, key, text, 0), "Set FFmpeg option"); }
+    void set(const char* key, const char* text) { ffCheckLocalized(av_dict_set(&value, key, text, 0), "FFmpeg 설정을 적용할 수 없습니다."); }
     Dictionary() = default;
     Dictionary(const Dictionary&) = delete;
     Dictionary& operator=(const Dictionary&) = delete;

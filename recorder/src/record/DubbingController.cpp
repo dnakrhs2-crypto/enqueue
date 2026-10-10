@@ -55,7 +55,7 @@ public:
         }
         else
         {
-            need(from >= 0, "Negative recording playback position");
+            need(from >= 0, "녹화 중 재생 위치는 0 이상이어야 합니다.");
             // Keep even empty lanes: listeningMix's gain and solo rules must
             // remain identical to ordinary timeline playback.
             for (auto& lane : selected->tracks)

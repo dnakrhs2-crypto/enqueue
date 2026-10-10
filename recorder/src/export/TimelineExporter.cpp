@@ -13,8 +13,8 @@ ExportAudioRenderer::ExportAudioRenderer(const ExportJob& j, std::vector<AudioSo
 { renderer.setPlan(j.audioPlan->timeline, std::move(b), std::move(mask)); }
 void ExportAudioRenderer::render(Sample offset, unsigned frames, float* l, float* r) const
 {
-    exportRequire(offset >= 0 && offset <= job.range.sampleCount && frames <= std::uint64_t(job.range.sampleCount - offset), "PCM output range outside export");
-    exportRequire(l && r && l != r, "Separate export stereo buffers required");
+    exportRequire(offset >= 0 && offset <= job.range.sampleCount && frames <= std::uint64_t(job.range.sampleCount - offset), "PCM 출력 구간이 내보내기 범위를 벗어났습니다.");
+    exportRequire(l && r && l != r, "내보내기용 스테레오 버퍼는 좌우가 분리되어야 합니다.");
     const auto valid = (std::max)(Sample{0}, (std::min)(Sample(frames), job.range.requested.start + job.range.requested.length - job.range.startSample - offset));
     if (valid) renderer.renderAudio(job.range.startSample + offset, static_cast<unsigned>(valid), l, r);
     std::fill(l + valid, l + frames, 0.0f); std::fill(r + valid, r + frames, 0.0f);
@@ -48,7 +48,7 @@ std::vector<AudioSourceBinding> TimelineExporter::openSources(const ExportJob& j
     std::vector<CachedImportedAudio> caches; caches.reserve(j.audioPlan->sources.size()); std::vector<ImportedAudioBinding> imports;
     for (const auto& a : j.audioPlan->sources) if (a.kind == AssetKind::importAudio && used.contains(juce::var(a.assetId)))
     {
-        exportRequire(a.originalFormat.channels >= 1 && a.originalFormat.channels <= 2, "Completed audio supports mono/stereo only; 3+ channels cannot be downmixed");
+        exportRequire(a.originalFormat.channels >= 1 && a.originalFormat.channels <= 2, "완성 오디오는 모노·스테레오만 지원합니다. 채널이 3개 이상이면 다운믹스할 수 없습니다.");
         AudioImportControl cacheControl;
         cacheControl.onProgress = [&](AudioImportControl::Stage, double) { control.checkpoint(); };
         caches.emplace_back(); const auto info = AudioImport::loadInfo(j.projectDirectory, a);

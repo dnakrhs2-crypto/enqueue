@@ -16,11 +16,11 @@ namespace
 {
 unsigned queueBlocks(unsigned rate, unsigned frames)
 {
-    if (!rate || rate > 768000 || !frames || frames > 262144) throw std::invalid_argument("Invalid playback dimensions");
+    if (!rate || rate > 768000 || !frames || frames > 262144) throw std::invalid_argument("재생 버퍼 크기나 샘플레이트가 올바르지 않습니다.");
     return static_cast<unsigned>((std::max)(3ull, (rate + 2ull * frames - 1) / (2ull * frames) + 1));
 }
 static_assert(std::atomic<std::uint64_t>::is_always_lock_free && std::atomic<void*>::is_always_lock_free
-              && std::atomic<int>::is_always_lock_free, "Playback requires lock-free atomics");
+              && std::atomic<int>::is_always_lock_free, "재생에 필요한 잠금 없는 원자적 연산을 지원하지 않습니다.");
 }
 struct PlaybackBlockQueue::Impl
 {
@@ -54,7 +54,7 @@ struct PlaybackBlockQueue::Impl
     Impl(unsigned frames, unsigned count) : maximum(frames), capacity(count)
     {
         if (!frames || frames > 262144 || !count || count > 262144 || std::uint64_t(frames) * count * 2 > 32 * 1024 * 1024)
-            throw std::invalid_argument("Playback queue capacity out of range");
+            throw std::invalid_argument("재생 대기열 용량이 허용 범위를 벗어났습니다.");
         for (auto& bank : banks) { bank.pcm.resize(std::size_t(frames) * count * 2, 0); bank.blocks.resize(count); }
         reset();
     }
@@ -203,8 +203,8 @@ std::uint64_t PlaybackBlockQueue::begin(std::int64_t first, std::uint64_t gen, s
                                       std::uint64_t minimum, unsigned ramp, bool replacement, std::vector<PlaybackGenerationGuard> guards)
 {
     if (first < 0 || end < first || !gen || revision < 0 || minimum > std::uint64_t(impl->maximum) * impl->capacity)
-        throw std::invalid_argument("Invalid playback preparation range/depth");
-    for (const auto& guard : guards) if (!guard.epoch) throw std::invalid_argument("Missing playback media epoch");
+        throw std::invalid_argument("재생 준비 구간이나 버퍼 깊이가 올바르지 않습니다.");
+    for (const auto& guard : guards) if (!guard.epoch) throw std::invalid_argument("재생 소재의 세대 정보가 없습니다.");
     if (!replacement) reset();
     auto* retired = impl->pending.exchange(nullptr, std::memory_order_acq_rel);
     if (retired) retired->occupied.store(false, std::memory_order_release);
@@ -214,7 +214,7 @@ std::uint64_t PlaybackBlockQueue::begin(std::int64_t first, std::uint64_t gen, s
         bool free = false;
         if (candidate.occupied.compare_exchange_strong(free, true)) { bank = &candidate; break; }
     }
-    if (!bank) throw std::runtime_error("Playback revision bank unavailable");
+    if (!bank) throw std::runtime_error("재생 버전 버퍼를 사용할 수 없습니다.");
     bank->clear(); bank->first = bank->producerEnd = first; bank->end = end; bank->generation = gen; bank->revision = revision;
     bank->guards = std::move(guards);
     bank->minimum = (std::min)(minimum, static_cast<std::uint64_t>(end - first)); bank->ramp = ramp;
@@ -262,12 +262,12 @@ struct PlaybackProviderPump::Impl
     std::thread worker;
     Impl(unsigned Fs, unsigned block, std::unique_ptr<IPlaybackBlockProvider> provider) : blocks(block, queueBlocks(Fs, block))
     {
-        if (!provider) throw std::invalid_argument("Missing playback provider");
+        if (!provider) throw std::invalid_argument("재생할 오디오가 없습니다.");
         const auto ticket = blocks.begin(0, 1, 0, (std::numeric_limits<std::int64_t>::max)(), (Fs + 3ull) / 4);
         std::vector<float> initial(std::size_t(block) * 2);
         std::int64_t first = 0;
         while (!blocks.ready())
-        { provider->render(initial.data(), block, first, Fs); if (!blocks.tryPush(initial.data(), block)) throw std::runtime_error("Initial playback prefill failed"); first += block; }
+        { provider->render(initial.data(), block, first, Fs); if (!blocks.tryPush(initial.data(), block)) throw std::runtime_error("재생을 시작할 오디오를 미리 준비할 수 없습니다."); first += block; }
         worker = std::thread([this, Fs, block, first, ticket, provider = std::move(provider)]() mutable
         {
             try

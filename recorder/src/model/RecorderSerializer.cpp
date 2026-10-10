@@ -1,6 +1,6 @@
 #include "RecorderSerializer.h"
 #include "../app/ProductIdentity.h"
-#include "model/SafeFileWrite.h"
+#include "storage/RecorderFileWrite.h"
 #include "storage/DurableFile.h"
 #include <charconv>
 #include <limits>
@@ -160,7 +160,7 @@ CaptureSnapshot readCapture(const V& v)
     c.inputOffsetSamples = num(v, "inputOffsetSamples"); c.outputOffsetSamples = num(v, "outputOffsetSamples");
     c.physicalInputs = readArray<int>(field(v, "physicalInputs"), [](const V& x) { const auto n = number(x); require(n >= 0 && n <= (std::numeric_limits<int>::max)(), "물리 입력 범위가 잘못되었습니다."); return static_cast<int>(n); });
     if (v.hasProperty("physicalInputsRight"))
-        c.physicalInputsRight = readArray<int>(field(v, "physicalInputsRight"), [](const V& x) { const auto n = number(x); require(n >= -1 && n <= 255, "Invalid right physical input"); return static_cast<int>(n); });
+        c.physicalInputsRight = readArray<int>(field(v, "physicalInputsRight"), [](const V& x) { const auto n = number(x); require(n >= -1 && n <= 255, "오른쪽 물리 입력이 올바르지 않습니다."); return static_cast<int>(n); });
     return c;
 }
 Take readTake(const V& v)
@@ -270,11 +270,11 @@ juce::Result RecorderSerializer::fromJson(const juce::String& json, RecorderProj
         if (root.hasProperty("checkpoint"))
         {
             const auto c = field(root, "checkpoint");
-            require(c.isObject() && c.getDynamicObject()->getProperties().size() == 4, "잘못된 checkpoint 세대입니다.");
+            require(c.isObject() && c.getDynamicObject()->getProperties().size() == 4, "저장본의 세대가 올바르지 않습니다.");
             cursor.generation = num(c, "generation"); cursor.journalPath = stringField(c, "journalPath");
             cursor.journalSegment = u32(c, "segment"); const auto seq = num(c, "sequence");
-            require(cursor.generation > 0 && cursor.journalSegment > 0 && seq >= 0 && isProjectRelativePath(cursor.journalPath), "잘못된 checkpoint 저널 위치입니다.");
-            require(cursor.journalPath == "journal" || (cursor.journalPath.startsWith("recovery/") && cursor.journalPath.endsWith("/journal")), "지원하지 않는 checkpoint 저널 위치입니다.");
+            require(cursor.generation > 0 && cursor.journalSegment > 0 && seq >= 0 && isProjectRelativePath(cursor.journalPath), "저장본의 기록 위치가 올바르지 않습니다.");
+            require(cursor.journalPath == "journal" || (cursor.journalPath.startsWith("recovery/") && cursor.journalPath.endsWith("/journal")), "지원하지 않는 저장본 기록 위치입니다.");
             cursor.journalSequence = static_cast<std::uint64_t>(seq);
             root.getDynamicObject()->removeProperty("checkpoint");
         }
@@ -352,10 +352,10 @@ juce::Result RecorderSerializer::writeCheckpoint(const juce::File& file, const R
         if (backup.existsAsFile() && fromJson(backup.loadFileAsString(), bakProject, &bakInfo).wasOk())
         {
             if (bakProject.projectId != p.projectId || bakProject.editRevision > p.editRevision)
-                return juce::Result::fail("Cannot replace a foreign/newer backup checkpoint");
+                return juce::Result::fail(juce::String::fromUTF8("다른 프로젝트나 더 최근의 백업 저장본을 덮어쓸 수 없습니다."));
             generation = (std::max)(generation, bakInfo.generation);
         }
-        const auto savedBackup = gocue::SafeFileWrite::writeTextVerified(backup, old, verify);
+        const auto savedBackup = writeRecorderTextVerified(backup, old, verify);
         if (savedBackup.failed()) return savedBackup;
         const auto flushed = flush(backup); if (flushed.failed()) return flushed;
         if (hook) hook("checkpoint-backup-flushed");
@@ -367,18 +367,18 @@ juce::Result RecorderSerializer::writeCheckpoint(const juce::File& file, const R
     }
     if (unchanged.isNotEmpty())
     { const auto r = flush(file); if (r.wasOk()) written = nextInfo; return r; }
-    if (generation == (std::numeric_limits<Sample>::max)()) return juce::Result::fail("Checkpoint generation exhausted");
+    if (generation == (std::numeric_limits<Sample>::max)()) return juce::Result::fail(juce::String::fromUTF8("프로젝트 저장본의 세대 번호가 한도에 도달했습니다."));
     nextInfo.generation = generation + 1; nextInfo.checkpointRevision = p.editRevision;
     const auto json = toJson(p, nextInfo);
     if (hook) hook("checkpoint-replace");
-    const auto saved = gocue::SafeFileWrite::writeTextVerified(file, json, [&](const juce::String& text)
+    const auto saved = writeRecorderTextVerified(file, json, [&](const juce::String& text)
     { const auto r = verify(text); if (r.wasOk() && hook) hook("checkpoint-verified-before-replace"); return r; });
     if (saved.failed()) return saved;
     if (hook) hook("checkpoint-after-replace");
     const auto flushed = flush(file); if (flushed.failed()) return flushed;
     RecorderProject verified; CheckpointInfo checked; const auto read = fromJson(file.loadFileAsString(), verified, &checked);
     if (read.failed()) return read;
-    if (toJson(verified) != toJson(p) || checked.generation != nextInfo.generation) return juce::Result::fail("Checkpoint read-back mismatch");
+    if (toJson(verified) != toJson(p) || checked.generation != nextInfo.generation) return juce::Result::fail(juce::String::fromUTF8("프로젝트 저장본을 다시 읽은 결과가 맞지 않습니다."));
     written = checked; written.sourceFile = file; if (hook) hook("checkpoint-after-flush"); return juce::Result::ok();
     }
     catch (const std::exception& e) { return juce::Result::fail(juce::String::fromUTF8(e.what())); }

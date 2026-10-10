@@ -21,6 +21,11 @@ void avCheck(int result, const char* operation)
     av_strerror(result, message, sizeof(message));
     throw std::runtime_error(std::string(operation) + ": " + message);
 }
+void avCheckLocalized(int result, const char* operation)
+{
+    if (result >= 0) return;
+    throw std::runtime_error(std::string(operation) + " (FFmpeg 오류 " + std::to_string(result) + ")");
+}
 struct LockedBuffer
 {
     ComPtr<IMFMediaBuffer> buffer;
@@ -160,11 +165,11 @@ struct CaptureFrameDecoder::State
 CaptureFrameDecoder::CaptureFrameDecoder(const CameraMode& mode, int threads, ColourDevice device, CaptureDecodeOrigin origin)
     : state(std::make_unique<State>(mode, threads, device, origin))
 {
-    if (threads < 1 || threads > 16) throw std::invalid_argument("MJPEG threads must be 1..16");
+    if (threads < 1 || threads > 16) throw std::invalid_argument("MJPEG 처리 스레드 수는 1~16이어야 합니다.");
     if (!mode.width || !mode.height || mode.width > 8192 || mode.height > 8192 || mode.width % 2 || mode.height % 2)
-        throw std::invalid_argument("Invalid decoder dimensions");
+        throw std::invalid_argument("디코더의 영상 크기가 올바르지 않습니다.");
     if (mode.interlace != 0 && mode.interlace != MFVideoInterlace_Progressive)
-        throw std::invalid_argument("Interlaced source is unsupported; select a progressive native mode");
+        throw std::invalid_argument("인터레이스 입력은 지원하지 않습니다. 프로그레시브 입력 모드를 선택하세요.");
     auto& s = *state;
     s.frame = av_frame_alloc(); s.received = av_frame_alloc(); s.packet = av_packet_alloc();
     if (!s.frame || !s.received || !s.packet) throw std::bad_alloc();
@@ -172,7 +177,7 @@ CaptureFrameDecoder::CaptureFrameDecoder(const CameraMode& mode, int threads, Co
     if (mode.subtype == CaptureSubtype::mjpeg)
     {
         const auto* codec = avcodec_find_decoder(AV_CODEC_ID_MJPEG);
-        if (!codec) throw std::runtime_error("Pinned FFmpeg has no CPU MJPEG decoder");
+        if (!codec) throw std::runtime_error("현재 FFmpeg에 CPU MJPEG 디코더가 없습니다.");
         s.codec = avcodec_alloc_context3(codec);
         if (!s.codec) throw std::bad_alloc();
         // Pinned n8.1 MJPEG has no slice/frame threading capability. Requests are
@@ -183,7 +188,7 @@ CaptureFrameDecoder::CaptureFrameDecoder(const CameraMode& mode, int threads, Co
         // FFmpeg checks aligned allocation dimensions too (e.g. 16-wide JPEG -> 64).
         // Visible decoded dimensions are separately required to match the native mode.
         s.codec->max_pixels = static_cast<std::int64_t>((mode.width + 63) & ~63u) * ((mode.height + 63) & ~63u);
-        avCheck(avcodec_open2(s.codec, codec, nullptr), "Open MJPEG decoder");
+        avCheckLocalized(avcodec_open2(s.codec, codec, nullptr), "MJPEG 디코더를 열 수 없습니다.");
     }
     // MF JPEG provenance makes this conversion known before the first ReadSample.
     // Prepare the compute device/buffers here, outside the measured frame loop.

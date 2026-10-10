@@ -135,14 +135,14 @@ void Mp4RecoveryIndex::start(const juce::File& path, const AVFormatContext& form
     // initial serialized moov's parameters, because indexed payload is AVCC.
     // This runs on the sole mux owner, paused after the initial header flush.
     Input initial;
-    if (initialMp4 != juce::File()) ffCheck(avformat_open_input(&initial.p, initialMp4.getFullPathName().toRawUTF8(), nullptr, nullptr), "Read serialized initial MP4 codecs");
+    if (initialMp4 != juce::File()) ffCheckLocalized(avformat_open_input(&initial.p, initialMp4.getFullPathName().toRawUTF8(), nullptr, nullptr), "저장된 초기 MP4 코덱 정보를 읽을 수 없습니다.");
     log.open(path, true); auto v = object(); juce::Array<juce::var> streams;
     for (unsigned i = 0; i < format.nb_streams; ++i)
     {
         const auto& s = *format.streams[i]; const AVCodecParameters* actual = s.codecpar;
         if (initial.p) for (unsigned j = 0; j < initial.p->nb_streams; ++j) if (initial.p->streams[j]->id == s.id) actual = initial.p->streams[j]->codecpar;
         const auto& c = *actual; auto x = object();
-        require(c.extradata_size > 0 && c.extradata_size < 1024 * 1024, "Missing/oversize initial codec extradata");
+        require(c.extradata_size > 0 && c.extradata_size < 1024 * 1024, juce::String::fromUTF8("초기 코덱 부가 정보가 없거나 너무 큽니다."));
         set(x, "track", s.id); set(x, "codec", int(c.codec_id)); set(x, "type", int(c.codec_type));
         set(x, "width", c.width); set(x, "height", c.height); set(x, "rate", c.sample_rate); set(x, "channels", c.ch_layout.nb_channels);
         set(x, "timeNum", s.time_base.num); set(x, "timeDen", s.time_base.den); set(x, "fpsNum", s.avg_frame_rate.num); set(x, "fpsDen", s.avg_frame_rate.den);

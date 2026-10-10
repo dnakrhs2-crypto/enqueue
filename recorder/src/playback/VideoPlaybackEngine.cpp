@@ -24,7 +24,7 @@ extern "C"
 namespace gocue::recorder
 {
 PlaybackWakeEvent::PlaybackWakeEvent() : handle(CreateEventW(nullptr, FALSE, FALSE, nullptr))
-{ if (!handle) throw std::runtime_error("Create playback notification event failed"); }
+{ if (!handle) throw std::runtime_error("재생 알림 이벤트를 만들 수 없습니다."); }
 PlaybackWakeEvent::~PlaybackWakeEvent() { CloseHandle(handle); }
 void PlaybackWakeEvent::signal() const noexcept { SetEvent(handle); }
 PlaybackDecodePlan playbackDecodePlan(const VideoIndex& source, std::size_t target,
@@ -37,7 +37,7 @@ PlaybackDecodePlan playbackDecodePlan(const VideoIndex& source, std::size_t targ
 }
 PlaybackFrameCache::PlaybackFrameCache() : PlaybackFrameCache(Limits{}) {}
 PlaybackFrameCache::PlaybackFrameCache(Limits l) : limits(l)
-{ if (!l.frames || !l.bytes || !l.gops) throw std::invalid_argument("Empty video cache budget"); }
+{ if (!l.frames || !l.bytes || !l.gops) throw std::invalid_argument("영상 캐시 용량이 없습니다."); }
 void PlaybackFrameCache::evict(std::size_t i)
 {
     counters.bytes -= entries[i].bytes; entries.erase(entries.begin() + static_cast<std::ptrdiff_t>(i));
@@ -95,7 +95,7 @@ struct PlaybackResources
     {
         const auto count = textures.fetch_add(1) + 1, total = bytes.fetch_add(n) + n;
         if (count > maxTextures || total > maxBytes)
-        { --textures; bytes.fetch_sub(n); throw std::runtime_error("Playback BGRA memory/texture budget exceeded"); }
+        { --textures; bytes.fetch_sub(n); throw std::runtime_error("재생용 BGRA 메모리나 텍스처 용량을 넘었습니다."); }
         peak(peakTextures, count); peak(peakBytes, total);
     }
 };
@@ -137,15 +137,15 @@ struct ContextLock
 };
 ComPtr<IDXGIAdapter1> nvidiaAdapter()
 {
-    ComPtr<IDXGIFactory1> factory; checkHr(CreateDXGIFactory1(IID_PPV_ARGS(&factory)), "Create playback DXGI factory");
+    ComPtr<IDXGIFactory1> factory; checkHr(CreateDXGIFactory1(IID_PPV_ARGS(&factory)), "재생용 DXGI를 준비할 수 없습니다.");
     for (UINT i = 0;; ++i)
     {
         ComPtr<IDXGIAdapter1> gpu; const auto hr = factory->EnumAdapters1(i, &gpu);
         if (hr == DXGI_ERROR_NOT_FOUND) break;
-        checkHr(hr, "Enumerate playback GPU"); DXGI_ADAPTER_DESC1 desc{}; checkHr(gpu->GetDesc1(&desc), "Read playback GPU");
+        checkHr(hr, "재생용 GPU를 찾을 수 없습니다."); DXGI_ADAPTER_DESC1 desc{}; checkHr(gpu->GetDesc1(&desc), "재생용 GPU 정보를 읽을 수 없습니다.");
         if (desc.VendorId == 0x10de && !(desc.Flags & DXGI_ADAPTER_FLAG_SOFTWARE)) return gpu;
     }
-    throw std::runtime_error("NVIDIA D3D11VA adapter unavailable; CPU/WARP fallback disabled");
+    throw std::runtime_error("NVIDIA D3D11VA 장치를 사용할 수 없습니다. CPU/WARP 디코딩은 지원하지 않습니다.");
 }
 class HardwareDecoder final : public IVideoFrameDecoder
 {
@@ -153,36 +153,36 @@ public:
     explicit HardwareDecoder(std::shared_ptr<const VideoIndex> index, std::shared_ptr<PlaybackResources> budget)
         : source(std::move(index)), resources(std::move(budget))
     {
-        if (!source->current()) throw std::runtime_error("Stale video index");
-        ffCheck(avformat_open_input(&input.value, source->file.getFullPathName().toRawUTF8(), nullptr, nullptr), "Open indexed MP4 decoder");
-        ffCheck(avformat_find_stream_info(input.value, nullptr), "Read H.264 decoder configuration");
-        if (source->stream < 0 || static_cast<unsigned>(source->stream) >= input.value->nb_streams) throw std::runtime_error("MP4 stream changed");
+        if (!source->current()) throw std::runtime_error("영상 색인이 오래되었습니다.");
+        ffCheckLocalized(avformat_open_input(&input.value, source->file.getFullPathName().toRawUTF8(), nullptr, nullptr), "색인이 있는 MP4의 디코더를 열 수 없습니다.");
+        ffCheckLocalized(avformat_find_stream_info(input.value, nullptr), "H.264 디코더 설정을 읽을 수 없습니다.");
+        if (source->stream < 0 || static_cast<unsigned>(source->stream) >= input.value->nb_streams) throw std::runtime_error("MP4 스트림이 변경되었습니다.");
         const auto* decoder = avcodec_find_decoder(AV_CODEC_ID_H264);
-        if (!decoder) throw std::runtime_error("FFmpeg H.264 decoder unavailable");
+        if (!decoder) throw std::runtime_error("FFmpeg H.264 디코더를 사용할 수 없습니다.");
         bool supported = false;
         for (int i = 0; const auto* c = avcodec_get_hw_config(decoder, i); ++i)
             supported |= c->device_type == AV_HWDEVICE_TYPE_D3D11VA && (c->methods & AV_CODEC_HW_CONFIG_METHOD_HW_DEVICE_CTX);
-        if (!supported) throw std::runtime_error("H.264 D3D11VA hardware configuration unavailable");
+        if (!supported) throw std::runtime_error("H.264 D3D11VA 하드웨어 설정을 사용할 수 없습니다.");
         hardware.value = av_hwdevice_ctx_alloc(AV_HWDEVICE_TYPE_D3D11VA);
         if (!hardware.value) throw std::bad_alloc();
         auto* deviceContext = reinterpret_cast<AVHWDeviceContext*>(hardware.value->data);
         gpu = static_cast<AVD3D11VADeviceContext*>(deviceContext->hwctx);
         const auto adapter = nvidiaAdapter(); D3D_FEATURE_LEVEL level{};
-        checkHr(adapter->GetDesc1(&adapterDescription), "Read selected D3D11VA adapter");
+        checkHr(adapter->GetDesc1(&adapterDescription), "선택한 D3D11VA 장치 정보를 읽을 수 없습니다.");
         LARGE_INTEGER version{};
         if (SUCCEEDED(adapter->CheckInterfaceSupport(__uuidof(IDXGIDevice), &version))) driverVersion = juce::String::toHexString(version.QuadPart);
         const D3D_FEATURE_LEVEL levels[] = {D3D_FEATURE_LEVEL_11_1, D3D_FEATURE_LEVEL_11_0};
         checkHr(D3D11CreateDevice(adapter.Get(), D3D_DRIVER_TYPE_UNKNOWN, nullptr,
             D3D11_CREATE_DEVICE_VIDEO_SUPPORT | D3D11_CREATE_DEVICE_BGRA_SUPPORT, levels, 2, D3D11_SDK_VERSION,
-            &gpu->device, &level, &gpu->device_context), "Create dedicated D3D11VA decoder device");
-        ffCheck(av_hwdevice_ctx_init(hardware.value), "Initialize D3D11VA video device");
+            &gpu->device, &level, &gpu->device_context), "D3D11VA 디코딩 전용 장치를 만들 수 없습니다.");
+        ffCheckLocalized(av_hwdevice_ctx_init(hardware.value), "D3D11VA 영상 장치를 초기화할 수 없습니다.");
         codec.reset(avcodec_alloc_context3(decoder)); if (!codec) throw std::bad_alloc();
-        ffCheck(avcodec_parameters_to_context(codec.get(), input.value->streams[source->stream]->codecpar), "Copy H.264 parameters");
+        ffCheckLocalized(avcodec_parameters_to_context(codec.get(), input.value->streams[source->stream]->codecpar), "H.264 설정을 복사할 수 없습니다.");
         codec->hw_device_ctx = av_buffer_ref(hardware.value); if (!codec->hw_device_ctx) throw std::bad_alloc();
         codec->get_format = [](AVCodecContext*, const AVPixelFormat* formats)
         { for (; *formats != AV_PIX_FMT_NONE; ++formats) if (*formats == AV_PIX_FMT_D3D11) return *formats; return AV_PIX_FMT_NONE; };
         codec->thread_count = 1; // one camera worker; DPB belongs to this decoder
-        ffCheck(avcodec_open2(codec.get(), decoder, nullptr), "Open accelerated H.264 decoder (no software fallback)");
+        ffCheckLocalized(avcodec_open2(codec.get(), decoder, nullptr), "H.264 하드웨어 디코더를 열 수 없습니다. 소프트웨어 디코딩은 지원하지 않습니다.");
         initialiseConversion();
         PlaybackResources::peak(resources->peakDecoders, ++resources->decoders);
     }
@@ -203,7 +203,7 @@ public:
             // to flush and decode the same IDR prefix a second time.
             timing.fromIdr = true; timing.idrPacket = idr;
             const auto seekBegin = qpcNow();
-            ffCheck(av_seek_frame(input.value, source->stream, source->packets[idr].pts, AVSEEK_FLAG_BACKWARD), "Seek preceding IDR");
+            ffCheckLocalized(av_seek_frame(input.value, source->stream, source->packets[idr].pts, AVSEEK_FLAG_BACKWARD), "앞쪽 IDR 프레임으로 이동할 수 없습니다.");
             const auto flushBegin = qpcNow(); timing.idrSeekTicks = flushBegin - seekBegin;
             avcodec_flush_buffers(codec.get()); draining = false;
             timing.flushTicks = qpcNow() - flushBegin;
@@ -219,9 +219,9 @@ public:
             if (received == 0)
             {
                 ++timing.receivedFrames;
-                if (frame->format != AV_PIX_FMT_D3D11) throw std::runtime_error("Decoder returned a non-D3D11 frame; fallback rejected");
+                if (frame->format != AV_PIX_FMT_D3D11) throw std::runtime_error("디코더가 D3D11 형식이 아닌 프레임을 반환했습니다. 다른 방식으로 전환할 수 없습니다.");
                 const auto pts = frame->best_effort_timestamp;
-                if (pts > wanted.pts) throw std::runtime_error("Decoder skipped requested indexed frame");
+                if (pts > wanted.pts) throw std::runtime_error("디코더가 요청한 색인 프레임을 건너뛰었습니다.");
                 if (plan.convert(pts, *source))
                 {
                     lastFrame = target; const auto convertBegin = qpcNow();
@@ -236,15 +236,15 @@ public:
                 ++timing.decodeOnlyFrames; // no copy, colour conversion, sharing or publication for prefix
                 av_frame_unref(frame.get()); continue;
             }
-            if (received != AVERROR(EAGAIN)) { ffCheck(received, "Receive requested H.264 frame"); throw std::runtime_error("H.264 ended before requested frame"); }
-            if (draining) throw std::runtime_error("H.264 drain produced no requested frame");
+            if (received != AVERROR(EAGAIN)) { ffCheckLocalized(received, "요청한 H.264 프레임을 받을 수 없습니다."); throw std::runtime_error("요청한 프레임 전에 H.264 영상이 끝났습니다."); }
+            if (draining) throw std::runtime_error("H.264 디코딩을 마무리했지만 요청한 프레임이 나오지 않았습니다.");
             for (;;)
             {
                 const auto read = av_read_frame(input.value, packet.get());
-                if (read == AVERROR_EOF) { ffCheck(avcodec_send_packet(codec.get(), nullptr), "Drain H.264"); draining = true; break; }
-                ffCheck(read, "Read indexed H.264 packet");
+                if (read == AVERROR_EOF) { ffCheckLocalized(avcodec_send_packet(codec.get(), nullptr), "H.264 디코딩을 마무리할 수 없습니다."); draining = true; break; }
+                ffCheckLocalized(read, "색인에 있는 H.264 패킷을 읽을 수 없습니다.");
                 if (packet->stream_index == source->stream)
-                { ffCheck(avcodec_send_packet(codec.get(), packet.get()), "Decode H.264 packet"); av_packet_unref(packet.get()); break; }
+                { ffCheckLocalized(avcodec_send_packet(codec.get(), packet.get()), "H.264 패킷을 디코딩할 수 없습니다."); av_packet_unref(packet.get()); break; }
                 av_packet_unref(packet.get()); // MP4 reference AAC deliberately ignored
                 if (cancelled()) return {};
             }
@@ -259,12 +259,12 @@ private:
         D3D11_TEXTURE2D_DESC desc{}; desc.Width = source->width; desc.Height = source->height;
         desc.MipLevels = desc.ArraySize = desc.SampleDesc.Count = 1; desc.Format = DXGI_FORMAT_NV12;
         desc.Usage = D3D11_USAGE_DEFAULT; desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
-        checkHr(gpu->device->CreateTexture2D(&desc, nullptr, &nv12), "Create reusable NV12 conversion surface");
+        checkHr(gpu->device->CreateTexture2D(&desc, nullptr, &nv12), "NV12 변환용 화면 버퍼를 만들 수 없습니다.");
         D3D11_SHADER_RESOURCE_VIEW_DESC view{}; view.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
         view.Texture2D.MipLevels = 1; view.Format = DXGI_FORMAT_R8_UNORM;
-        checkHr(gpu->device->CreateShaderResourceView(nv12.Get(), &view, &luma), "Create NV12 luma view");
+        checkHr(gpu->device->CreateShaderResourceView(nv12.Get(), &view, &luma), "NV12 밝기 채널을 준비할 수 없습니다.");
         view.Format = DXGI_FORMAT_R8G8_UNORM;
-        checkHr(gpu->device->CreateShaderResourceView(nv12.Get(), &view, &chroma), "Create NV12 chroma view");
+        checkHr(gpu->device->CreateShaderResourceView(nv12.Get(), &view, &chroma), "NV12 색상 채널을 준비할 수 없습니다.");
         constexpr char shader[] = R"(
 Texture2D<float> luma : register(t0); Texture2D<float2> chroma : register(t1);
 SamplerState linearSampler : register(s0);
@@ -279,23 +279,23 @@ float4 psMain(Vertex v) : SV_Target {
         {
             ComPtr<ID3DBlob> code, errors;
             checkHr(D3DCompile(shader, sizeof(shader) - 1, "RecorderPlaybackConvert", nullptr, nullptr,
-                entry, profile, D3DCOMPILE_ENABLE_STRICTNESS | D3DCOMPILE_OPTIMIZATION_LEVEL3, 0, &code, &errors), "Compile NV12 conversion shader");
+                entry, profile, D3DCOMPILE_ENABLE_STRICTNESS | D3DCOMPILE_OPTIMIZATION_LEVEL3, 0, &code, &errors), "NV12 변환 셰이더를 컴파일할 수 없습니다.");
             return code;
         };
         const auto vs = compile("vsMain", "vs_5_0"), ps = compile("psMain", "ps_5_0");
-        checkHr(gpu->device->CreateVertexShader(vs->GetBufferPointer(), vs->GetBufferSize(), nullptr, &convertVs), "Create conversion VS");
-        checkHr(gpu->device->CreatePixelShader(ps->GetBufferPointer(), ps->GetBufferSize(), nullptr, &convertPs), "Create conversion PS");
+        checkHr(gpu->device->CreateVertexShader(vs->GetBufferPointer(), vs->GetBufferSize(), nullptr, &convertVs), "변환용 정점 셰이더를 만들 수 없습니다.");
+        checkHr(gpu->device->CreatePixelShader(ps->GetBufferPointer(), ps->GetBufferSize(), nullptr, &convertPs), "변환용 픽셀 셰이더를 만들 수 없습니다.");
         D3D11_SAMPLER_DESC sampler{}; sampler.Filter = D3D11_FILTER_MIN_MAG_MIP_LINEAR;
         sampler.AddressU = sampler.AddressV = sampler.AddressW = D3D11_TEXTURE_ADDRESS_CLAMP;
         sampler.MaxLOD = D3D11_FLOAT32_MAX;
-        checkHr(gpu->device->CreateSamplerState(&sampler, &convertSampler), "Create conversion sampler");
+        checkHr(gpu->device->CreateSamplerState(&sampler, &convertSampler), "변환용 샘플러를 만들 수 없습니다.");
         D3D11_RASTERIZER_DESC raster{}; raster.FillMode = D3D11_FILL_SOLID;
         raster.CullMode = D3D11_CULL_NONE; raster.DepthClipEnable = TRUE;
-        checkHr(gpu->device->CreateRasterizerState(&raster, &convertRaster), "Create conversion rasterizer");
+        checkHr(gpu->device->CreateRasterizerState(&raster, &convertRaster), "변환용 래스터라이저를 만들 수 없습니다.");
         ComPtr<ID3D11Device5> device5;
-        checkHr(gpu->device->QueryInterface(IID_PPV_ARGS(&device5)), "Playback requires D3D11 GPU completion events");
-        checkHr(gpu->device_context->QueryInterface(IID_PPV_ARGS(&context4)), "Get playback fence context");
-        checkHr(device5->CreateFence(0, D3D11_FENCE_FLAG_NONE, IID_PPV_ARGS(&fence)), "Create reusable playback fence");
+        checkHr(gpu->device->QueryInterface(IID_PPV_ARGS(&device5)), "재생하려면 D3D11 GPU 완료 이벤트가 필요합니다.");
+        checkHr(gpu->device_context->QueryInterface(IID_PPV_ARGS(&context4)), "재생용 GPU 동기화 컨텍스트를 가져올 수 없습니다.");
+        checkHr(device5->CreateFence(0, D3D11_FENCE_FLAG_NONE, IID_PPV_ARGS(&fence)), "재생용 GPU 동기화 객체를 만들 수 없습니다.");
     }
     std::shared_ptr<PlaybackTexture> acquireOutput()
     {
@@ -307,9 +307,9 @@ float4 psMain(Vertex v) : SV_Target {
             {
                 const auto hr = slot->mutex->AcquireSync(1, 0);
                 if (hr == S_OK) return slot;
-                if (hr != WAIT_TIMEOUT) throw std::runtime_error("Playback reuse mutex failed/abandoned");
+                if (hr != WAIT_TIMEOUT) throw std::runtime_error("재생 버퍼 재사용 잠금을 얻지 못했거나 잠금이 중단되었습니다.");
             }
-        if (outputs.size() == 12) throw std::runtime_error("Playback conversion surface pool exhausted");
+        if (outputs.size() == 12) throw std::runtime_error("재생 변환용 화면 버퍼가 부족합니다.");
         auto output = std::make_shared<PlaybackTexture>(); output->width = source->width; output->height = source->height;
         const auto bytes = std::size_t(output->width) * output->height * 4;
         resources->acquire(bytes); output->resources = resources; output->resourceBytes = bytes;
@@ -319,19 +319,19 @@ float4 psMain(Vertex v) : SV_Target {
         texture.MipLevels = texture.ArraySize = texture.SampleDesc.Count = 1; texture.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
         texture.Usage = D3D11_USAGE_DEFAULT; texture.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
         texture.MiscFlags = D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX;
-        checkHr(gpu->device->CreateTexture2D(&texture, nullptr, &output->texture), "Create shared display texture");
-        checkHr(output->texture.As(&output->mutex), "Get shared texture keyed mutex");
-        ComPtr<IDXGIResource> resource; checkHr(output->texture.As(&resource), "Get playback shared resource");
-        checkHr(resource->GetSharedHandle(&output->shared), "Share display texture");
-        checkHr(gpu->device->CreateRenderTargetView(output->texture.Get(), nullptr, &output->target), "Create reusable conversion target");
+        checkHr(gpu->device->CreateTexture2D(&texture, nullptr, &output->texture), "공유 화면 텍스처를 만들 수 없습니다.");
+        checkHr(output->texture.As(&output->mutex), "공유 텍스처의 동기화 잠금을 가져올 수 없습니다.");
+        ComPtr<IDXGIResource> resource; checkHr(output->texture.As(&resource), "재생용 공유 자원을 가져올 수 없습니다.");
+        checkHr(resource->GetSharedHandle(&output->shared), "화면 텍스처를 공유할 수 없습니다.");
+        checkHr(gpu->device->CreateRenderTargetView(output->texture.Get(), nullptr, &output->target), "변환용 출력 대상을 만들 수 없습니다.");
         outputs.push_back(output);
-        if (output->mutex->AcquireSync(0, 0) != S_OK) throw std::runtime_error("Cannot acquire new playback texture");
+        if (output->mutex->AcquireSync(0, 0) != S_OK) throw std::runtime_error("새 재생 텍스처를 사용할 수 없습니다.");
         return output;
     }
     std::shared_ptr<const PlaybackTexture> convert(const AVFrame& frame, const std::function<bool()>& cancelled)
     {
         if (frame.width != source->width || frame.height != source->height || frame.colorspace != AVCOL_SPC_BT709
-            || frame.color_range != AVCOL_RANGE_MPEG) throw std::runtime_error("Expected Recorder BT.709 limited H.264 surface");
+            || frame.color_range != AVCOL_RANGE_MPEG) throw std::runtime_error("탤리의 BT.709 제한 범위 H.264 화면이 필요합니다.");
         if (cancelled()) return {};
         auto output = acquireOutput();
         struct Unlock { IDXGIKeyedMutex* value; ~Unlock() { value->ReleaseSync(1); } } unlock{output->mutex.Get()};
@@ -339,7 +339,7 @@ float4 psMain(Vertex v) : SV_Target {
         {
             output->decoderFramePoolSize = reinterpret_cast<const AVHWFramesContext*>(frame.hw_frames_ctx->data)->initial_pool_size;
             if (output->decoderFramePoolSize <= 0 || output->decoderFramePoolSize > 32)
-                throw std::runtime_error("D3D11VA DPB capacity outside bounded playback profile");
+                throw std::runtime_error("D3D11VA 프레임 버퍼 용량이 재생 허용 범위를 벗어났습니다.");
             if (!dpbCapacity)
             {
                 dpbCapacity = unsigned(output->decoderFramePoolSize);
@@ -364,15 +364,15 @@ float4 psMain(Vertex v) : SV_Target {
             context->Draw(3, 0);
             ID3D11ShaderResourceView* empty[]{nullptr, nullptr}; context->PSSetShaderResources(0, 2, empty);
             context->OMSetRenderTargets(0, nullptr, nullptr);
-            checkHr(context4->Signal(fence.Get(), ++fenceValue), "Signal playback GPU completion");
+            checkHr(context4->Signal(fence.Get(), ++fenceValue), "재생용 GPU 작업 완료를 알릴 수 없습니다.");
             context->Flush(); timing.gpuSubmittedQpc = qpcNow();
         }
         // Keep the AVFrame/DPB slice alive until the GPU copy/draw has completed,
         // including cancellation. Wait on a real GPU event, outside FFmpeg's lock.
-        checkHr(fence->SetEventOnCompletion(fenceValue, gpuComplete.nativeHandle()), "Arm playback GPU completion event");
+        checkHr(fence->SetEventOnCompletion(fenceValue, gpuComplete.nativeHandle()), "재생용 GPU 완료 이벤트를 준비할 수 없습니다.");
         const auto waited = WaitForSingleObject(gpuComplete.nativeHandle(), 2000);
-        checkHr(gpu->device->GetDeviceRemovedReason(), "Playback decode device removed");
-        if (waited != WAIT_OBJECT_0) throw std::runtime_error("Playback GPU completion event failed/timed out");
+        checkHr(gpu->device->GetDeviceRemovedReason(), "재생 디코딩 장치의 연결이 끊겼습니다.");
+        if (waited != WAIT_OBJECT_0) throw std::runtime_error("재생용 GPU 완료 이벤트가 실패했거나 대기 시간이 초과되었습니다.");
         timing.gpuCompleteQpc = qpcNow();
         return cancelled() ? nullptr : output;
     }
@@ -444,7 +444,7 @@ std::array<std::shared_ptr<const VideoClips>, 2> validatedClips(std::vector<Play
             || c.sourceIn < 0 || c.lengthSamples <= 0 || c.sourceIn > clip.source->length || c.lengthSamples > clip.source->length - c.sourceIn
             || c.mediaGeneration != static_cast<Sample>(clip.source->generation)
             || c.timelineStartSample > (std::numeric_limits<Sample>::max)() - c.lengthSamples)
-            throw std::invalid_argument("Invalid video clip/source generation");
+            throw std::invalid_argument("영상 클립이나 소재 세대가 올바르지 않습니다.");
         // RenderClip gaps are clip-relative. Split only the view mapping; source
         // timestamps remain unchanged on both sides of the unavailable interval.
         Sample offset = 0;
@@ -462,7 +462,7 @@ std::array<std::shared_ptr<const VideoClips>, 2> validatedClips(std::vector<Play
         for (const auto& gap : c.gaps)
         {
             if (gap.start < offset || gap.length <= 0 || gap.start > c.lengthSamples || gap.length > c.lengthSamples - gap.start)
-                throw std::invalid_argument("Invalid video clip gap");
+                throw std::invalid_argument("영상 클립의 공백 구간이 올바르지 않습니다.");
             append(offset, gap.start); offset = gap.start + gap.length;
         }
         append(offset, c.lengthSamples);
@@ -474,7 +474,7 @@ std::array<std::shared_ptr<const VideoClips>, 2> validatedClips(std::vector<Play
         std::sort(clips.begin(), clips.end(), [](const auto& a, const auto& b) { return a.mapping.timelineStartSample < b.mapping.timelineStartSample; });
         Sample end = 0;
         for (const auto& c : clips)
-        { if (c.mapping.timelineStartSample < end) throw std::invalid_argument("Video clips overlap"); end = c.mapping.timelineStartSample + c.mapping.lengthSamples; }
+        { if (c.mapping.timelineStartSample < end) throw std::invalid_argument("영상 클립이 겹칩니다."); end = c.mapping.timelineStartSample + c.mapping.lengthSamples; }
         for (std::size_t n = 1; n < clips.size(); ++n)
         {
             auto& before = clips[n - 1]; const auto& after = clips[n];
@@ -510,13 +510,13 @@ class PreviewPresenter::PlaybackView
 public:
     PlaybackView(HWND window, VideoPlaybackEngine& source, unsigned camera) : hwnd(window), engine(source), camera(camera)
     {
-        if (GetWindowThreadProcessId(hwnd, nullptr) != GetCurrentThreadId()) throw std::invalid_argument("Playback HWND must attach on its control owner");
+        if (GetWindowThreadProcessId(hwnd, nullptr) != GetCurrentThreadId()) throw std::invalid_argument("재생 창은 해당 제어 스레드에서 연결해야 합니다.");
         placeholder = CreateWindowExW(0, L"STATIC", L"영상 없음", WS_CHILD | WS_VISIBLE | SS_CENTER | SS_CENTERIMAGE,
             0, 0, 1, 1, hwnd, nullptr, GetModuleHandleW(nullptr), nullptr);
-        if (!placeholder) throw std::runtime_error("Create playback gap placeholder failed");
+        if (!placeholder) throw std::runtime_error("재생 공백 화면을 만들 수 없습니다.");
         SendMessageW(placeholder, WM_SETFONT, reinterpret_cast<WPARAM>(GetStockObject(DEFAULT_GUI_FONT)), TRUE);
         if (!SetWindowSubclass(hwnd, overlayProcedure, reinterpret_cast<UINT_PTR>(this), reinterpret_cast<DWORD_PTR>(this)))
-        { DestroyWindow(placeholder); throw std::runtime_error("Attach playback placeholder failed"); }
+        { DestroyWindow(placeholder); throw std::runtime_error("재생 공백 화면을 연결할 수 없습니다."); }
         updateOverlay(1);
         try { thread = std::thread([this] { run(); }); }
         catch (...) { RemoveWindowSubclass(hwnd, overlayProcedure, reinterpret_cast<UINT_PTR>(this)); DestroyWindow(placeholder); throw; }
@@ -689,7 +689,7 @@ struct VideoPlaybackEngine::Impl
                 if (!cancelled() && !decoder)
                 {
                     decoder = factory ? factory(c.source) : std::make_unique<HardwareDecoder>(c.source, lane.resources);
-                    if (!decoder) throw std::runtime_error("Playback preroll factory returned null");
+                    if (!decoder) throw std::runtime_error("다음 영상의 재생 준비 디코더를 만들지 못했습니다.");
                     std::lock_guard<std::mutex> lock(lane.mutex);
                     ++lane.decoderOpens; lane.decoderCreateTicks += qpcNow() - begin;
                 }
@@ -830,7 +830,7 @@ struct VideoPlaybackEngine::Impl
                             { std::lock_guard<std::mutex> lock(lane.mutex); if (measureSeek && lane.timing.generation == gen) lane.timing.decoderBeginQpc = begin; }
                             try { decoder = factory ? factory(c.source) : std::make_unique<HardwareDecoder>(c.source, lane.resources); }
                             catch (...) { if (cancelled() || !c.source->current()) break; throw; }
-                            if (!decoder) throw std::runtime_error("Playback decoder factory returned null");
+                            if (!decoder) throw std::runtime_error("재생 디코더를 만들지 못했습니다.");
                             const auto finish = qpcNow();
                             std::lock_guard<std::mutex> lock(lane.mutex);
                             ++lane.decoderOpens; lane.decoderCreateTicks += finish - begin;
@@ -914,7 +914,7 @@ void VideoPlaybackEngine::prepare(std::vector<PlaybackVideoClip> clips)
 void VideoPlaybackEngine::handoff(std::vector<PlaybackVideoClip> clips, Sample sample, std::uint64_t gen)
 {
     auto plans = validatedClips(std::move(clips));
-    if (sample < 0 || gen <= impl->generation.load() || impl->stopping.load()) throw std::invalid_argument("Invalid video plan handoff generation");
+    if (sample < 0 || gen <= impl->generation.load() || impl->stopping.load()) throw std::invalid_argument("영상 재생 계획의 전환 세대가 올바르지 않습니다.");
     {
         std::scoped_lock lock(impl->lanes[0].mutex, impl->lanes[1].mutex);
         // Plan, generation and common target are published under both lane locks.
@@ -927,7 +927,7 @@ void VideoPlaybackEngine::handoff(std::vector<PlaybackVideoClip> clips, Sample s
 std::uint64_t VideoPlaybackEngine::seek(Sample sample) { const auto gen = impl->generation.load() + 1; seek(sample, gen); return gen; }
 void VideoPlaybackEngine::seek(Sample sample, std::uint64_t gen)
 {
-    if (sample < 0 || !gen || gen <= impl->generation.load()) throw std::invalid_argument("Seek generation must increase");
+    if (sample < 0 || !gen || gen <= impl->generation.load()) throw std::invalid_argument("이동 요청의 세대 번호는 이전보다 커야 합니다.");
     {
         // Pair target and generation under the same locks. A worker must never
         // adopt the new generation with the previous lane's target.
@@ -938,7 +938,7 @@ void VideoPlaybackEngine::seek(Sample sample, std::uint64_t gen)
 }
 bool VideoPlaybackEngine::requestFrame(unsigned camera, Sample sample, std::uint64_t gen, bool advancing)
 {
-    if (camera > 1 || sample < 0) throw std::invalid_argument("Invalid camera/frame request");
+    if (camera > 1 || sample < 0) throw std::invalid_argument("카메라나 프레임 요청이 올바르지 않습니다.");
     auto& lane = impl->lanes[camera];
     { std::lock_guard<std::mutex> lock(lane.mutex);
       if (gen != impl->generation.load()) { ++lane.stale; ++lane.staleRequests; return false; }
@@ -953,7 +953,7 @@ bool VideoPlaybackEngine::requestFrame(unsigned camera, Sample sample, std::uint
 }
 bool VideoPlaybackEngine::requestFrames(Sample sample, std::uint64_t gen, bool advancing)
 {
-    if (sample < 0) throw std::invalid_argument("Invalid audible sample");
+    if (sample < 0) throw std::invalid_argument("재생 중인 오디오 샘플 위치가 올바르지 않습니다.");
     std::array<bool, 2> changed{};
     {
         std::scoped_lock lock(impl->lanes[0].mutex, impl->lanes[1].mutex);
@@ -1047,7 +1047,7 @@ void VideoPlaybackEngine::presenterFailed(unsigned camera, const juce::String& e
 }
 void VideoPlaybackEngine::attachPlaybackView(unsigned camera, void* hwnd)
 {
-    if (camera > 1 || !IsWindow(static_cast<HWND>(hwnd))) throw std::invalid_argument("Playback needs an existing left/right HWND host");
+    if (camera > 1 || !IsWindow(static_cast<HWND>(hwnd))) throw std::invalid_argument("재생하려면 왼쪽·오른쪽 영상 창이 있어야 합니다.");
     impl->views[camera].reset(); impl->views[camera] = std::make_unique<PreviewPresenter::PlaybackView>(static_cast<HWND>(hwnd), *this, camera);
 }
 juce::Result VideoPlaybackEngine::status() const
@@ -1152,28 +1152,28 @@ void PreviewPresenter::PlaybackView::run()
             if (first.frame && first.frame->texture) break;
             const auto result = WaitForMultipleObjects(2, startupEvents, FALSE, INFINITE);
             if (result == WAIT_OBJECT_0) return;
-            if (result != WAIT_OBJECT_0 + 1) throw std::runtime_error("Wait for first playback frame failed");
+            if (result != WAIT_OBJECT_0 + 1) throw std::runtime_error("첫 재생 프레임을 기다릴 수 없습니다.");
         }
         if (stopping.load()) return;
         const auto initBegin = qpcNow();
         ComPtr<ID3D11Device> decoderDevice; first.frame->texture->texture->GetDevice(&decoderDevice);
-        ComPtr<IDXGIDevice> dxgi; checkHr(decoderDevice.As(&dxgi), "Get playback adapter device");
-        ComPtr<IDXGIAdapter> adapter; checkHr(dxgi->GetAdapter(&adapter), "Get playback adapter");
+        ComPtr<IDXGIDevice> dxgi; checkHr(decoderDevice.As(&dxgi), "재생용 그래픽 장치를 가져올 수 없습니다.");
+        ComPtr<IDXGIAdapter> adapter; checkHr(dxgi->GetAdapter(&adapter), "재생용 그래픽 어댑터를 가져올 수 없습니다.");
         ComPtr<ID3D11Device> device; ComPtr<ID3D11DeviceContext> context; D3D_FEATURE_LEVEL level{};
         checkHr(D3D11CreateDevice(adapter.Get(), D3D_DRIVER_TYPE_UNKNOWN, nullptr, D3D11_CREATE_DEVICE_BGRA_SUPPORT,
-            nullptr, 0, D3D11_SDK_VERSION, &device, &level, &context), "Create dedicated playback present device");
-        ComPtr<IDXGIFactory2> factory; checkHr(adapter->GetParent(IID_PPV_ARGS(&factory)), "Get playback swapchain factory");
+            nullptr, 0, D3D11_SDK_VERSION, &device, &level, &context), "재생 화면 표시 전용 장치를 만들 수 없습니다.");
+        ComPtr<IDXGIFactory2> factory; checkHr(adapter->GetParent(IID_PPV_ARGS(&factory)), "재생용 화면 교환 기능을 가져올 수 없습니다.");
         RECT client{}; GetClientRect(hwnd, &client);
         DXGI_SWAP_CHAIN_DESC1 desc{}; desc.Width = (std::max)(1L, client.right); desc.Height = (std::max)(1L, client.bottom);
         desc.Format = DXGI_FORMAT_B8G8R8A8_UNORM; desc.SampleDesc.Count = 1; desc.BufferCount = 2;
         desc.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT; desc.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
         desc.Flags = DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT;
-        ComPtr<IDXGISwapChain1> swap; checkHr(factory->CreateSwapChainForHwnd(device.Get(), hwnd, &desc, nullptr, nullptr, &swap), "Create playback swapchain");
+        ComPtr<IDXGISwapChain1> swap; checkHr(factory->CreateSwapChainForHwnd(device.Get(), hwnd, &desc, nullptr, nullptr, &swap), "재생용 화면 교환 버퍼를 만들 수 없습니다.");
         factory->MakeWindowAssociation(hwnd, DXGI_MWA_NO_ALT_ENTER);
-        ComPtr<IDXGISwapChain2> swap2; checkHr(swap.As(&swap2), "Get playback latency object");
-        checkHr(swap2->SetMaximumFrameLatency(1), "Set playback frame latency");
+        ComPtr<IDXGISwapChain2> swap2; checkHr(swap.As(&swap2), "재생 지연 제어 객체를 가져올 수 없습니다.");
+        checkHr(swap2->SetMaximumFrameLatency(1), "재생 프레임 지연을 설정할 수 없습니다.");
         struct Handle { HANDLE value; ~Handle() { if (value) CloseHandle(value); } } latency{swap2->GetFrameLatencyWaitableObject()};
-        if (!latency.value) throw std::runtime_error("Playback latency handle unavailable");
+        if (!latency.value) throw std::runtime_error("재생 지연 제어 핸들을 사용할 수 없습니다.");
         constexpr char shader[] = R"(
 Texture2D<float4> picture : register(t0); SamplerState linearSampler : register(s0);
 struct Vertex { float4 p : SV_Position; float2 uv : TEXCOORD0; };
@@ -1184,22 +1184,22 @@ float4 psMain(Vertex v) : SV_Target { return picture.Sample(linearSampler, v.uv)
         {
             ComPtr<ID3DBlob> code, errors;
             checkHr(D3DCompile(shader, sizeof(shader) - 1, "RecorderPlayback", nullptr, nullptr, entry, profile,
-                D3DCOMPILE_ENABLE_STRICTNESS | D3DCOMPILE_OPTIMIZATION_LEVEL3, 0, &code, &errors), "Compile playback display shader"); return code;
+                D3DCOMPILE_ENABLE_STRICTNESS | D3DCOMPILE_OPTIMIZATION_LEVEL3, 0, &code, &errors), "재생 화면 셰이더를 컴파일할 수 없습니다."); return code;
         };
         const auto vsCode = compile("vsMain", "vs_5_0"), psCode = compile("psMain", "ps_5_0");
         ComPtr<ID3D11VertexShader> vs; ComPtr<ID3D11PixelShader> ps;
-        checkHr(device->CreateVertexShader(vsCode->GetBufferPointer(), vsCode->GetBufferSize(), nullptr, &vs), "Create playback VS");
-        checkHr(device->CreatePixelShader(psCode->GetBufferPointer(), psCode->GetBufferSize(), nullptr, &ps), "Create playback PS");
+        checkHr(device->CreateVertexShader(vsCode->GetBufferPointer(), vsCode->GetBufferSize(), nullptr, &vs), "재생용 정점 셰이더를 만들 수 없습니다.");
+        checkHr(device->CreatePixelShader(psCode->GetBufferPointer(), psCode->GetBufferSize(), nullptr, &ps), "재생용 픽셀 셰이더를 만들 수 없습니다.");
         D3D11_SAMPLER_DESC sampling{}; sampling.Filter = D3D11_FILTER_MIN_MAG_MIP_LINEAR;
         sampling.AddressU = sampling.AddressV = sampling.AddressW = D3D11_TEXTURE_ADDRESS_CLAMP; sampling.MaxLOD = D3D11_FLOAT32_MAX;
-        ComPtr<ID3D11SamplerState> sampler; checkHr(device->CreateSamplerState(&sampling, &sampler), "Create playback sampler");
+        ComPtr<ID3D11SamplerState> sampler; checkHr(device->CreateSamplerState(&sampling, &sampler), "재생용 샘플러를 만들 수 없습니다.");
         D3D11_RASTERIZER_DESC rasterDesc{}; rasterDesc.FillMode = D3D11_FILL_SOLID; rasterDesc.CullMode = D3D11_CULL_NONE; rasterDesc.DepthClipEnable = TRUE;
-        ComPtr<ID3D11RasterizerState> raster; checkHr(device->CreateRasterizerState(&rasterDesc, &raster), "Create playback rasterizer");
+        ComPtr<ID3D11RasterizerState> raster; checkHr(device->CreateRasterizerState(&rasterDesc, &raster), "재생용 래스터라이저를 만들 수 없습니다.");
         ComPtr<ID3D11RenderTargetView> target;
         auto makeTarget = [&]
         {
-            ComPtr<ID3D11Texture2D> back; checkHr(swap->GetBuffer(0, IID_PPV_ARGS(&back)), "Get playback backbuffer");
-            checkHr(device->CreateRenderTargetView(back.Get(), nullptr, &target), "Create playback target");
+            ComPtr<ID3D11Texture2D> back; checkHr(swap->GetBuffer(0, IID_PPV_ARGS(&back)), "재생용 후면 버퍼를 가져올 수 없습니다.");
+            checkHr(device->CreateRenderTargetView(back.Get(), nullptr, &target), "재생 출력 대상을 만들 수 없습니다.");
         };
         makeTarget(); PresentPacing pacing; PlaybackPresentOpportunity opportunity;
         engine.presenterInitialised(camera, initBegin, qpcNow());
@@ -1209,7 +1209,7 @@ float4 psMain(Vertex v) : SV_Target { return picture.Sample(linearSampler, v.uv)
         struct TimerHandle { HANDLE value; ~TimerHandle() { if (value) CloseHandle(value); } } timer{
             CreateWaitableTimerExW(nullptr, nullptr, CREATE_WAITABLE_TIMER_HIGH_RESOLUTION, TIMER_ALL_ACCESS)};
         if (!timer.value) timer.value = CreateWaitableTimerW(nullptr, FALSE, nullptr);
-        if (!timer.value) throw std::runtime_error("Create playback cadence timer failed");
+        if (!timer.value) throw std::runtime_error("재생 간격 타이머를 만들 수 없습니다.");
         const auto period = qpcFrequency() / 60;
         auto nextTick = qpcNow(); bool immediate = true;
         while (!stopping.load())
@@ -1222,23 +1222,23 @@ float4 psMain(Vertex v) : SV_Target { return picture.Sample(linearSampler, v.uv)
             {
                 const auto remaining = (std::max)(std::int64_t{1}, nextTick - qpcNow());
                 LARGE_INTEGER due{}; due.QuadPart = -(std::max)(std::int64_t{1}, remaining * 10000000 / qpcFrequency());
-                if (!SetWaitableTimer(timer.value, &due, 0, nullptr, nullptr, FALSE)) throw std::runtime_error("Arm playback cadence timer failed");
+                if (!SetWaitableTimer(timer.value, &due, 0, nullptr, nullptr, FALSE)) throw std::runtime_error("재생 간격 타이머를 시작할 수 없습니다.");
                 const HANDLE events[]{stopWake.nativeHandle(), engine.presentationWakeHandle(camera), timer.value};
                 const auto result = WaitForMultipleObjects(3, events, FALSE, INFINITE);
                 if (result == WAIT_OBJECT_0) break;
-                if (result != WAIT_OBJECT_0 + 1 && result != WAIT_OBJECT_0 + 2) throw std::runtime_error("Wait for playback handoff failed");
+                if (result != WAIT_OBJECT_0 + 1 && result != WAIT_OBJECT_0 + 2) throw std::runtime_error("재생 화면 전환을 기다릴 수 없습니다.");
                 presentationTick = result == WAIT_OBJECT_0 + 2;
             }
             immediate = false; presentationTick |= qpcNow() >= nextTick;
             if (presentationTick) nextTick = qpcNow() + period;
             if (pacing.needsVisibilityTest())
-            { const auto hr = swap->Present(0, DXGI_PRESENT_TEST); checkHr(hr, "Test playback visibility"); pacing.visibilityTest(hr); if (pacing.needsVisibilityTest()) continue; }
+            { const auto hr = swap->Present(0, DXGI_PRESENT_TEST); checkHr(hr, "재생 화면의 표시 상태를 확인할 수 없습니다."); pacing.visibilityTest(hr); if (pacing.needsVisibilityTest()) continue; }
             if (opportunity.needsWait())
             {
                 const HANDLE events[]{stopWake.nativeHandle(), latency.value};
                 const auto wait = WaitForMultipleObjects(2, events, FALSE, INFINITE);
                 if (wait == WAIT_OBJECT_0) break;
-                if (wait != WAIT_OBJECT_0 + 1) throw std::runtime_error("Playback latency wait failed");
+                if (wait != WAIT_OBJECT_0 + 1) throw std::runtime_error("재생 지연 대기에 실패했습니다.");
                 opportunity.acquired();
             }
             GetClientRect(hwnd, &client);
@@ -1247,7 +1247,7 @@ float4 psMain(Vertex v) : SV_Target { return picture.Sample(linearSampler, v.uv)
             {
                 context->OMSetRenderTargets(0, nullptr, nullptr); target.Reset();
                 desc.Width = client.right; desc.Height = client.bottom;
-                checkHr(swap->ResizeBuffers(0, desc.Width, desc.Height, DXGI_FORMAT_UNKNOWN, desc.Flags), "Resize playback host"); makeTarget();
+                checkHr(swap->ResizeBuffers(0, desc.Width, desc.Height, DXGI_FORMAT_UNKNOWN, desc.Flags), "재생 창 크기를 바꿀 수 없습니다."); makeTarget();
             }
             const auto selection = engine.displaySelection(camera, presentationTick);
             const auto decision = display.select(selection);
@@ -1262,13 +1262,13 @@ float4 psMain(Vertex v) : SV_Target { return picture.Sample(linearSampler, v.uv)
             if (displayed && displayed->texture)
             {
                 const auto& surface = *displayed->texture;
-                ComPtr<ID3D11Texture2D> shared; checkHr(device->OpenSharedResource(surface.shared, IID_PPV_ARGS(&shared)), "Open playback GPU texture");
-                ComPtr<IDXGIKeyedMutex> keyed; checkHr(shared.As(&keyed), "Get present keyed mutex");
+                ComPtr<ID3D11Texture2D> shared; checkHr(device->OpenSharedResource(surface.shared, IID_PPV_ARGS(&shared)), "재생용 GPU 텍스처를 열 수 없습니다.");
+                ComPtr<IDXGIKeyedMutex> keyed; checkHr(shared.As(&keyed), "화면 표시용 동기화 잠금을 가져올 수 없습니다.");
                 const auto acquire = keyed->AcquireSync(1, 0);
                 if (acquire == WAIT_TIMEOUT) continue;
-                if (acquire != S_OK) throw std::runtime_error("Playback texture synchronization failed/abandoned");
+                if (acquire != S_OK) throw std::runtime_error("재생 텍스처 동기화가 실패했거나 중단되었습니다.");
                 struct Release { IDXGIKeyedMutex* p; ~Release() { p->ReleaseSync(1); } } release{keyed.Get()};
-                ComPtr<ID3D11ShaderResourceView> view; checkHr(device->CreateShaderResourceView(shared.Get(), nullptr, &view), "View playback BGRA texture");
+                ComPtr<ID3D11ShaderResourceView> view; checkHr(device->CreateShaderResourceView(shared.Get(), nullptr, &view), "재생용 BGRA 텍스처를 표시할 수 없습니다.");
                 const auto scale = (std::min)(static_cast<float>(desc.Width) / surface.width, static_cast<float>(desc.Height) / surface.height);
                 const D3D11_VIEWPORT viewport{(desc.Width - surface.width * scale) / 2, (desc.Height - surface.height * scale) / 2,
                     surface.width * scale, surface.height * scale, 0, 1};
@@ -1291,7 +1291,7 @@ float4 psMain(Vertex v) : SV_Target { return picture.Sample(linearSampler, v.uv)
             pacing.presented(hr);
             opportunity.submitted(hr == S_OK);
             if (hr == DXGI_STATUS_OCCLUDED || hr == DXGI_ERROR_WAS_STILL_DRAWING) continue;
-            checkHr(hr, "Playback Present");
+            checkHr(hr, "재생 화면을 표시할 수 없습니다.");
             if (hr != S_OK) continue;
             display.submitted(displayed);
             // A held pre-seek picture is visible continuity, never an exact

@@ -995,7 +995,7 @@ int runUiWiringTests()
         require(owner->registerTap(), "Reserve the synthetic ASIO owner before any device request");
         RecorderAudioEngine engine;
         const auto blocked = engine.openDevice("recorder-test-no-physical-device", 48000, 256);
-        require(blocked.failed() && (!AsioTimingBridge::hookCompiled() || blocked.getErrorMessage().contains("ASIO owner"))
+        require(blocked.failed() && (!AsioTimingBridge::hookCompiled() || blocked.getErrorMessage().contains(juce::String::fromUTF8("다른 탤리 작업이 ASIO 장치를 사용하고 있습니다.")))
             && engine.deviceInfo().sampleRate == 0, "The injected owner must reject before native device creation");
         // TestMain runs ui-wiring after ASIO ownership tests and before lifecycle.
         // That existing suite can otherwise open the PC's first real ASIO driver.

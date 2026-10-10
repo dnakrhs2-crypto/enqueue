@@ -107,7 +107,7 @@ struct Mp4TakeWriter::State
     }
     void observeFragments()
     {
-        avio_flush(io); ffCheck(io->error, "Flush MP4 AVIO");
+        avio_flush(io); ffCheckLocalized(io->error, "MP4 파일의 출력 버퍼를 비울 수 없습니다.");
         while (scanOffset + 8 <= highEnd)
         {
             uint8_t header[16]{}; readAt(scanOffset, header, 8);
@@ -169,36 +169,36 @@ Mp4TakeWriter::Mp4TakeWriter(const juce::File& file, const AVCodecContext& video
     : state(std::make_unique<State>(file, faults, std::move(hook)))
 {
     auto& s = *state;
-    if (file.getFileExtension() != ".mp4" || file.exists() || s.recording.exists()) throw std::invalid_argument("MP4 output exists or does not end in .mp4; use a new output directory");
+    if (file.getFileExtension() != ".mp4" || file.exists() || s.recording.exists()) throw std::invalid_argument("MP4 출력 파일이 이미 있거나 확장자가 .mp4가 아닙니다. 새 출력 폴더를 사용하세요.");
     if (video.codec_type != AVMEDIA_TYPE_VIDEO || audio.codec_id != AV_CODEC_ID_AAC || audio.sample_rate != 48000 || audio.ch_layout.nb_channels != 2)
-        throw std::invalid_argument("MP4 take requires video plus 48k stereo AAC");
+        throw std::invalid_argument("MP4 테이크에는 영상과 48kHz 스테레오 AAC가 필요합니다.");
     const auto directory = file.getParentDirectory().createDirectory();
     if (directory.failed()) throw std::runtime_error(directory.getErrorMessage().toStdString());
-    ffCheck(avformat_alloc_output_context2(&s.format, nullptr, "mp4", nullptr), "Allocate MP4 context");
+    ffCheckLocalized(avformat_alloc_output_context2(&s.format, nullptr, "mp4", nullptr), "MP4 저장을 준비할 수 없습니다.");
     s.videoBase = video.time_base; s.audioBase = audio.time_base;
     for (const auto* codec : {&video, &audio})
     {
         auto* stream = avformat_new_stream(s.format, nullptr); if (!stream) throw std::bad_alloc();
         stream->id = stream->index + 1; stream->time_base = codec->time_base;
-        ffCheck(avcodec_parameters_from_context(stream->codecpar, codec), "Copy MP4 codec parameters");
+        ffCheckLocalized(avcodec_parameters_from_context(stream->codecpar, codec), "MP4 코덱 설정을 복사할 수 없습니다.");
         if (codec == &video) stream->avg_frame_rate = codec->framerate;
     }
     s.format->avoid_negative_ts = AVFMT_AVOID_NEG_TS_DISABLED;
     s.format->max_interleave_delta = 250000;
     s.file = CreateFileW(s.recording.getFullPathName().toWideCharPointer(), GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ, nullptr, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, nullptr);
-    if (s.file == INVALID_HANDLE_VALUE) checkHr(HRESULT_FROM_WIN32(GetLastError()), "Create new .recording.mp4");
+    if (s.file == INVALID_HANDLE_VALUE) checkHr(HRESULT_FROM_WIN32(GetLastError()), "새 .recording.mp4 파일을 만들 수 없습니다.");
     s.reader = CreateFileW(s.recording.getFullPathName().toWideCharPointer(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
-    if (s.reader == INVALID_HANDLE_VALUE) checkHr(HRESULT_FROM_WIN32(GetLastError()), "Open MP4 box observer");
+    if (s.reader == INVALID_HANDLE_VALUE) checkHr(HRESULT_FROM_WIN32(GetLastError()), "MP4 구조 확인용 파일을 열 수 없습니다.");
     auto* buffer = static_cast<uint8_t*>(av_malloc(65536)); if (!buffer) throw std::bad_alloc();
     s.io = avio_alloc_context(buffer, 65536, 1, &s, nullptr, State::write, State::seek);
     if (!s.io) { av_free(buffer); throw std::bad_alloc(); }
     s.io->seekable = AVIO_SEEKABLE_NORMAL; s.format->pb = s.io; s.format->flags |= AVFMT_FLAG_CUSTOM_IO;
     Dictionary options;
     options.set("movflags", movFlags); options.set("use_editlist", "1"); options.set("movie_timescale", "48000");
-    ffCheck(avformat_write_header(s.format, &options.value), "Write hybrid MP4 header");
-    if (av_dict_count(options.value)) throw std::runtime_error("Unconsumed MP4 options");
+    ffCheckLocalized(avformat_write_header(s.format, &options.value), "녹화용 MP4 헤더를 쓸 수 없습니다.");
+    if (av_dict_count(options.value)) throw std::runtime_error("MP4에 적용하지 못한 설정이 있습니다.");
     s.observeFragments();
-    if (!FlushFileBuffers(s.file)) checkHr(HRESULT_FROM_WIN32(GetLastError()), "Flush initial MP4 codec header");
+    if (!FlushFileBuffers(s.file)) checkHr(HRESULT_FROM_WIN32(GetLastError()), "초기 MP4 코덱 헤더를 저장 장치에 반영할 수 없습니다.");
     s.index.start(Mp4RecoveryIndex::pathFor(s.recording), *s.format, s.recording); s.indexing = true;
 }
 Mp4TakeWriter::~Mp4TakeWriter() = default;

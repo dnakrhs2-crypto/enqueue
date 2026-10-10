@@ -5,7 +5,7 @@ namespace gocue::recorder
 {
 void VideoSurface::prepare(std::uint32_t w, std::uint32_t h)
 {
-    if (!w || !h || (w % 2) || (h % 2) || w > 8192 || h > 8192) throw std::invalid_argument("NV12 requires even dimensions <=8192");
+    if (!w || !h || (w % 2) || (h % 2) || w > 8192 || h > 8192) throw std::invalid_argument("NV12의 가로·세로 크기는 짝수이고 8192 이하여야 합니다.");
     width = w; height = h;
     nv12.resize(static_cast<size_t>(w) * h * 3 / 2);
 }

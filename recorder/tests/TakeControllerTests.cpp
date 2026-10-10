@@ -304,7 +304,7 @@ int runTakeControllerTests()
         require(manifest.createDirectory().wasOk(), "Inject metadata write exception");
         ok(f.controller.stop(start + 401));
         while (f.audio.stopSample() < 0) { f.feed(); f.controller.tick(); } f.complete();
-        require(f.controller.state() == TakeController::State::partialFailure && f.controller.error().contains("Take worker failed"), "future.get exception did not reach failure state");
+        require(f.controller.state() == TakeController::State::partialFailure && f.controller.error().contains(juce::String::fromUTF8("녹화 작업에 실패했습니다.")), "future.get exception did not reach failure state");
         require(!f.document.isRecordingStructureLocked() && !f.audio.shutdownBlocker()->load() && f.controller.shutdownComplete(), "Thrown worker retained lifecycle resources");
         require(f.document.isDirty() && f.document.getError().isNotEmpty(), "Thrown checkpoint was treated as saved");
         verifyFinalizedAssets(f);

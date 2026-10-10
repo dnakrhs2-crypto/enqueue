@@ -601,7 +601,7 @@ int runShortcutExceptionTests()
         session.audioEngine().processBlock(stamp, nullptr, 0, nullptr, output, 2); // acknowledge transport generation, then stop consuming commands
         auto result = juce::Result::ok();
         for (unsigned n = 0; n < 128 && result.wasOk(); ++n) result = session.pause();
-        require(result.failed() && result.getErrorMessage().contains("Transport command queue full"), "Queue saturation escaped or was not exercised");
+        require(result.failed() && result.getErrorMessage().contains(juce::String::fromUTF8("재생 명령 대기열이 가득 찼습니다.")), "Queue saturation escaped or was not exercised");
         require(!session.showingPlayback() && !session.playing(), "Rejected pause left ASIO playback attached");
     });
     suite.test("JUCE message queue exceptions write reports and later callbacks continue", []

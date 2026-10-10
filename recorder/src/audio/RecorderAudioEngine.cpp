@@ -20,6 +20,22 @@ namespace
 void pauseWorker() { std::this_thread::sleep_for(std::chrono::milliseconds(1)); }
 void check(const juce::Result& result) { if (result.failed()) throw std::runtime_error(result.getErrorMessage().toStdString()); }
 juce::Result failure(const char* message) { return juce::Result::fail(juce::String::fromUTF8(message)); }
+juce::String asioErrorText(const juce::String& message)
+{
+    const char* translations[][2] = {
+        {"Can't start device", "ASIO 장치를 시작할 수 없습니다."},
+        {"Device didn't start correctly", "ASIO 장치가 정상적으로 시작되지 않았습니다."},
+        {"Can't create i/o buffers", "ASIO 입출력 버퍼를 만들 수 없습니다."},
+        {"No Driver", "ASIO 드라이버가 없습니다."},
+        {"Driver failed to initialise", "ASIO 드라이버를 초기화할 수 없습니다."},
+        {"Can't detect buffer sizes", "ASIO 버퍼 크기를 확인할 수 없습니다."},
+        {"Can't detect asio channels", "ASIO 채널을 확인할 수 없습니다."},
+        {"No such device", "해당 ASIO 장치가 없습니다."}
+    };
+    for (const auto& row : translations)
+        if (message == row[0]) return juce::String::fromUTF8(row[1]);
+    return message;
+}
 juce::BigInteger mask(const std::vector<int>& channels) { juce::BigInteger v; for (auto i : channels) v.setBit(i); return v; }
 std::atomic<void*> deviceOwner{nullptr};
 static_assert(std::atomic<float>::is_always_lock_free && std::atomic<double>::is_always_lock_free
@@ -75,19 +91,19 @@ struct RecorderAudioEngine::Impl final : juce::AudioIODeviceCallback
                 if (dubbing || device.inputLatency < 0 || device.outputLatency < 0
                     || (parent.outputs.mono ? parent.outputs.monoChannel < 0 : parent.outputs.left < 0 && parent.outputs.right < 0)
                     || std::abs(double(config.inputResidualSamples)) > double(device.sampleRate) * 10)
-                    throw std::invalid_argument("Invalid recording input latency correction");
+                    throw std::invalid_argument("녹음 입력 지연 보정값이 올바르지 않습니다.");
                 inputCorrection = std::int64_t(device.inputLatency) + config.inputResidualSamples;
-                if (inputCorrection < 0) throw std::invalid_argument("Negative effective recording input latency");
+                if (inputCorrection < 0) throw std::invalid_argument("보정된 녹음 입력 지연이 음수입니다.");
             }
-            if (config.projectDirectory == juce::File() || config.takeId.isNull()) throw std::invalid_argument("Missing audio take directory/ID");
+            if (config.projectDirectory == juce::File() || config.takeId.isNull()) throw std::invalid_argument("오디오 테이크의 폴더나 식별자가 없습니다.");
             if (config.microphoneAssetIds.empty()) for (std::size_t i = 0; i < logical.size(); ++i) config.microphoneAssetIds.push_back(newId());
-            if (config.microphoneAssetIds.size() != logical.size()) throw std::invalid_argument("Audio asset IDs do not match armed microphones");
+            if (config.microphoneAssetIds.size() != logical.size()) throw std::invalid_argument("오디오 소재 식별자가 녹음할 마이크와 맞지 않습니다.");
             for (const auto& m : mapping)
             {
                 channelOffsets.push_back(pcmChannels); pcmChannels += m.channels();
                 for (int index : {m.activeIndex, m.rightActiveIndex})
                     if (index >= 0 && !NativePcmConverter::supports(nativeFormatForAsio(engine.nativeTypes[std::size_t(index)].load())))
-                        throw std::invalid_argument("Selected ASIO native input format cannot be preserved as PCM24");
+                        throw std::invalid_argument("선택한 ASIO 입력 형식을 PCM24로 그대로 저장할 수 없습니다.");
             }
             if (engine.device) AsioTimingBridge::readEvents(*engine.device, baselineEvents);
             raw.prepare(device.activeToPhysical, device.bufferFrames,
@@ -529,8 +545,8 @@ juce::Result RecorderAudioEngine::openDevice(const juce::String& name, unsigned 
 {
     auto& s = *impl;
     if (s.busy()) return failure("테이크가 끝난 뒤 오디오 장치를 변경하세요.");
-    if (Fs < 8000 || Fs > 768000 || requestedBuffer < 0 || requestedBuffer > 16384 || name.isEmpty()) return failure("Invalid ASIO device request");
-    if (!AsioTimingBridge::hookCompiled()) return failure("Recorder ASIO native hook unavailable");
+    if (Fs < 8000 || Fs > 768000 || requestedBuffer < 0 || requestedBuffer > 16384 || name.isEmpty()) return failure("ASIO 장치 설정 요청이 올바르지 않습니다.");
+    if (!AsioTimingBridge::hookCompiled()) return failure("탤리의 ASIO 입력 연결 기능을 사용할 수 없습니다.");
     // Vendor ASIO drivers are apartment-threaded COM objects: create/open/close them on the message thread only.
     jassert(juce::MessageManager::getInstanceWithoutCreating() == nullptr || juce::MessageManager::getInstance()->isThisTheMessageThread());
     const auto old = s.info;
@@ -539,43 +555,43 @@ juce::Result RecorderAudioEngine::openDevice(const juce::String& name, unsigned 
     {
         try
         {
-            if (deviceOwner.load() || recorderAsioTap.load()) return failure("Another Recorder ASIO owner is active");
+            if (deviceOwner.load() || recorderAsioTap.load()) return failure("다른 탤리 작업이 ASIO 장치를 사용하고 있습니다.");
             s.type.reset(juce::AudioIODeviceType::createAudioIODeviceType_ASIO());
-            if (!s.type) return failure("ASIO support unavailable");
+            if (!s.type) return failure("ASIO를 사용할 수 없습니다.");
             s.type->scanForDevices();
-            if (!s.type->getDeviceNames().contains(selected)) return failure("Selected ASIO device is missing; no automatic substitution");
+            if (!s.type->getDeviceNames().contains(selected)) return failure("선택한 ASIO 장치가 없습니다. 다른 장치로 자동 전환하지 않습니다.");
             s.device.reset(s.type->createDevice(selected, selected));
-            if (!s.device) return failure("ASIO device creation failed");
+            if (!s.device) return failure("ASIO 장치를 준비할 수 없습니다.");
             // JUCE keeps the driver-level failure (No such device / Driver failed to initialise / ...)
             // in the device object; surface it instead of a misleading channel/buffer complaint.
             if (const auto driverError = s.device->getLastError(); driverError.isNotEmpty())
-                throw std::runtime_error(("ASIO driver could not be opened: " + driverError).toStdString());
+                throw std::runtime_error((juce::String::fromUTF8("ASIO 드라이버를 열 수 없습니다: ") + asioErrorText(driverError)).toStdString());
             s.info = {}; s.info.name = selected; s.info.sampleRate = rate;
             s.info.bufferFrames = unsigned(block ? block : s.device->getDefaultBufferSize());
             s.info.physicalInputs = s.device->getInputChannelNames().size(); s.info.physicalOutputs = s.device->getOutputChannelNames().size();
             s.info.inputNames = s.device->getInputChannelNames(); s.info.outputNames = s.device->getOutputChannelNames();
             for (auto size : s.device->getAvailableBufferSizes()) s.info.availableBuffers.push_back(size);
             if (!s.info.bufferFrames || s.info.bufferFrames > 16384 || s.info.physicalOutputs <= 0 || s.info.physicalOutputs > 256)
-                throw std::runtime_error("ASIO requires an output callback and supported buffer size");
-            for (auto p : s.selectedInputs()) if (p >= s.info.physicalInputs) throw std::runtime_error("Selected physical input is unavailable");
-            for (auto p : {s.outputs.left, s.outputs.right, s.outputs.monoChannel}) if (p >= s.info.physicalOutputs) throw std::runtime_error("Selected physical output is unavailable");
+                throw std::runtime_error("ASIO 출력 콜백과 지원하는 버퍼 크기가 필요합니다.");
+            for (auto p : s.selectedInputs()) if (p >= s.info.physicalInputs) throw std::runtime_error("선택한 물리 입력을 사용할 수 없습니다.");
+            for (auto p : {s.outputs.left, s.outputs.right, s.outputs.monoChannel}) if (p >= s.info.physicalOutputs) throw std::runtime_error("선택한 물리 출력을 사용할 수 없습니다.");
             s.prepareDeviceState();
             juce::BigInteger outputMask; outputMask.setRange(0, s.info.physicalOutputs, true);
             void* absent = nullptr;
-            if (!deviceOwner.compare_exchange_strong(absent, &s)) throw std::runtime_error("ASIO device is already owned");
+            if (!deviceOwner.compare_exchange_strong(absent, &s)) throw std::runtime_error("ASIO 장치를 이미 사용하고 있습니다.");
             AsioTapFunction empty = nullptr;
-            if (!recorderAsioTap.compare_exchange_strong(empty, &Impl::tap)) { deviceOwner = nullptr; throw std::runtime_error("ASIO tap is already owned"); }
+            if (!recorderAsioTap.compare_exchange_strong(empty, &Impl::tap)) { deviceOwner = nullptr; throw std::runtime_error("ASIO 입력 연결 기능을 이미 사용하고 있습니다."); }
             s.ownsTap = true;
             const auto error = s.device->open(mask(s.info.activeToPhysical), outputMask, rate, int(s.info.bufferFrames));
-            if (error.isNotEmpty()) throw std::runtime_error(error.toStdString());
+            if (error.isNotEmpty()) throw std::runtime_error(asioErrorText(error).toStdString());
             if (s.device->getActiveInputChannels() != mask(s.info.activeToPhysical) || s.device->getActiveOutputChannels() != outputMask)
-                throw std::runtime_error("ASIO driver changed the fixed active/physical channel map");
+                throw std::runtime_error("ASIO 드라이버가 고정된 사용 채널과 물리 채널 연결을 변경했습니다.");
             // open itself primes native callbacks; close/start boundaries protect
             // the output scratch storage. No take exists during this negotiation.
             const auto actualRate = s.device->getCurrentSampleRate();
             const auto actualBlock = s.device->getCurrentBufferSizeSamples();
             if (!std::isfinite(actualRate) || actualRate < 8000 || actualRate > 768000 || actualRate != std::round(actualRate)
-                || actualBlock <= 0 || actualBlock > 16384) throw std::runtime_error("Invalid actual ASIO rate/buffer");
+                || actualBlock <= 0 || actualBlock > 16384) throw std::runtime_error("실제 ASIO 샘플레이트나 버퍼 크기가 올바르지 않습니다.");
             // open() already primes native taps, but there is no output callback
             // or take yet. Publish actual limits atomically, resize output scratch
             // before start(callback), and report the driver's chosen settings.
@@ -597,7 +613,7 @@ juce::Result RecorderAudioEngine::openDevice(const juce::String& name, unsigned 
     {
         const auto restored = old.synthetic ? openSynthetic(old.sampleRate, old.bufferFrames, old.physicalInputs, old.physicalOutputs, old.inputLatency, old.outputLatency)
                                             : attempt(old.name, old.sampleRate, int(old.bufferFrames));
-        if (restored.failed()) { s.info = {}; return juce::Result::fail(result.getErrorMessage() + "; previous device restore failed: " + restored.getErrorMessage()); }
+        if (restored.failed()) { s.info = {}; return juce::Result::fail(result.getErrorMessage() + juce::String::fromUTF8("; 이전 장치 복원에 실패했습니다: ") + restored.getErrorMessage()); }
     }
     else s.info = {};
     return result;
@@ -619,14 +635,14 @@ juce::Result RecorderAudioEngine::openSynthetic(unsigned Fs, unsigned block, int
 }
 juce::Result RecorderAudioEngine::closeDevice()
 {
-    if (impl->busy()) return failure("Stop and finish the take before closing ASIO");
+    if (impl->busy()) return failure("ASIO를 닫기 전에 녹화를 정지하고 마무리하세요.");
     impl->closePhysical(); impl->detach(); impl->session.reset(); impl->info = {}; return juce::Result::ok();
 }
 RecorderAudioEngine::DeviceInfo RecorderAudioEngine::deviceInfo() const { return impl->info; }
 juce::Result RecorderAudioEngine::setInputMap(const std::array<int, 8>& map, const std::array<bool, 8>& stereo)
 {
     auto& s = *impl;
-    if (s.busy()) return failure("Input mapping is fixed for the take");
+    if (s.busy()) return failure("녹화 중에는 입력 연결을 바꿀 수 없습니다.");
     UserSettings settings; settings.physicalInputs.assign(map.begin(), map.end()); settings.stereoSlots = stereo;
     const auto valid = settings.validate(s.info.sampleRate ? s.info.physicalInputs : 256); if (valid.failed()) return valid;
     const auto previous = s.inputs; const auto previousStereo = s.stereoSlots; const auto old = s.info;
@@ -640,19 +656,19 @@ juce::Result RecorderAudioEngine::setInputMap(const std::array<int, 8>& map, con
         s.closePhysical(); s.inputs = previous; s.stereoSlots = previousStereo;
         const auto restored = old.synthetic ? openSynthetic(old.sampleRate, old.bufferFrames, old.physicalInputs, old.physicalOutputs, old.inputLatency, old.outputLatency)
                                            : openDevice(old.name, old.sampleRate, int(old.bufferFrames));
-        if (restored.failed()) return juce::Result::fail(result.getErrorMessage() + "; map restore failed: " + restored.getErrorMessage());
+        if (restored.failed()) return juce::Result::fail(result.getErrorMessage() + juce::String::fromUTF8("; 입력 연결 복원에 실패했습니다: ") + restored.getErrorMessage());
     }
     return result;
 }
 juce::Result RecorderAudioEngine::setOutputMap(OutputMapping map)
 {
     auto& s = *impl;
-    if (s.busy()) return failure("Output mapping is fixed for the take");
+    if (s.busy()) return failure("녹화 중에는 출력 연결을 바꿀 수 없습니다.");
     for (auto p : {map.left, map.right, map.monoChannel})
-        if (p < -1 || p > 255 || (s.info.sampleRate && p >= s.info.physicalOutputs)) return failure("Selected output is unavailable");
-    if (!map.mono && map.left >= 0 && map.left == map.right) return failure("Left/right outputs must be different; use explicit mono mode");
-    if (map.mono && (map.left != -1 || map.right != -1)) return failure("Mono mapping requires only monoChannel");
-    if (!map.mono && map.monoChannel != -1) return failure("Stereo mapping cannot select a mono channel");
+        if (p < -1 || p > 255 || (s.info.sampleRate && p >= s.info.physicalOutputs)) return failure("선택한 출력을 사용할 수 없습니다.");
+    if (!map.mono && map.left >= 0 && map.left == map.right) return failure("좌우 출력은 서로 달라야 합니다. 하나로 출력하려면 모노를 선택하세요.");
+    if (map.mono && (map.left != -1 || map.right != -1)) return failure("모노 출력에는 모노 채널만 지정하세요.");
+    if (!map.mono && map.monoChannel != -1) return failure("스테레오 출력에는 모노 채널을 지정할 수 없습니다.");
     // stop() detaches the JUCE output callback; the raw tap/clock remains alive.
     if (s.device) { s.closing = true; s.device->stop(); }
     while (s.outputInFlight.load()) pauseWorker();
@@ -662,8 +678,8 @@ juce::Result RecorderAudioEngine::setOutputMap(OutputMapping map)
 }
 juce::Result RecorderAudioEngine::arm(unsigned mic, bool enabled)
 {
-    if (impl->busy()) return failure("Armed microphone count is fixed for the take");
-    if (mic >= 8 || (enabled && impl->inputs[mic] < 0)) return failure("Select a physical input before arming");
+    if (impl->busy()) return failure("녹화 중에는 녹음할 마이크 수를 바꿀 수 없습니다.");
+    if (mic >= 8 || (enabled && impl->inputs[mic] < 0)) return failure("녹음할 마이크의 물리 입력을 먼저 선택하세요.");
     impl->armedFlags[mic] = enabled; return juce::Result::ok();
 }
 std::vector<unsigned> RecorderAudioEngine::armedMicrophones() const { return impl->armed(); }
@@ -700,7 +716,7 @@ juce::Result RecorderAudioEngine::prepareDubbing(TakeConfig config, bool recordM
         || pstart < 0 || s.info.inputLatency < 0 || s.info.outputLatency < 0
         || (s.outputs.mono ? s.outputs.monoChannel < 0 : s.outputs.left < 0 && s.outputs.right < 0)
         || std::abs(double(residual)) > double(s.info.sampleRate) * 10)
-        return failure("Dubbing device/reference is not ready");
+        return failure("더빙 장치나 참조 오디오가 준비되지 않았습니다.");
     s.detach(); s.session.reset();
     s.shutdownBusy->store(true);
     try
@@ -716,9 +732,9 @@ juce::Result RecorderAudioEngine::stopDubbingAt(std::int64_t sample)
     auto* s = impl->session.get();
     if (!s || !s->dubbing || sample <= s->requestStart.load() || s->requestStart.load() < 0
         || sample < currentSample() - s->inputCorrection || s->nstop.load() >= 0)
-        return failure("Cannot schedule a past/empty dubbing stop");
+        return failure("이미 지났거나 비어 있는 구간에 더빙 정지를 예약할 수 없습니다.");
     auto old = s->requestStop.load();
-    do { if (old >= 0 && sample > old) return failure("Dubbing stop can only be shortened"); }
+    do { if (old >= 0 && sample > old) return failure("더빙 정지 시점은 앞당기기만 할 수 있습니다."); }
     while (!s->requestStop.compare_exchange_weak(old, sample));
     return juce::Result::ok();
 }
@@ -750,7 +766,7 @@ std::shared_ptr<PeakCache> RecorderAudioEngine::peakCache() const
 { return impl->session ? impl->session->peakCache : nullptr; }
 juce::Result RecorderAudioEngine::prepare(TakeConfig config)
 {
-    if (impl->busy() || !impl->info.sampleRate) return failure("ASIO device is not ready or a take is active");
+    if (impl->busy() || !impl->info.sampleRate) return failure("ASIO 장치가 준비되지 않았거나 녹화 작업이 진행 중입니다.");
     impl->detach(); impl->session.reset();
     impl->shutdownBusy->store(true);
     try
@@ -762,42 +778,42 @@ juce::Result RecorderAudioEngine::prepare(TakeConfig config)
 }
 juce::Result RecorderAudioEngine::startAt(std::int64_t sample)
 {
-    if (impl->reopenRequired.load()) return failure("Reopen the ASIO device after a clock discontinuity");
+    if (impl->reopenRequired.load()) return failure("시계가 불연속적으로 바뀌었습니다. ASIO 장치를 다시 연결하세요.");
     auto* s = impl->session.get();
-    if (!s || s->finishing.load() || sample < currentSample() || sample < 0) return failure("Cannot schedule a past/unprepared audio start");
+    if (!s || s->finishing.load() || sample < currentSample() || sample < 0) return failure("이미 지났거나 준비되지 않은 오디오 시작을 예약할 수 없습니다.");
     std::int64_t unset = -1;
-    if (!s->requestStart.compare_exchange_strong(unset, sample)) return failure("Audio start already scheduled");
+    if (!s->requestStart.compare_exchange_strong(unset, sample)) return failure("오디오 시작이 이미 예약되어 있습니다.");
     return juce::Result::ok();
 }
 juce::Result RecorderAudioEngine::stopAt(std::int64_t sample)
 {
     auto* s = impl->session.get();
     if (!s || sample < currentSample() || sample <= s->requestStart.load() || s->requestStart.load() < 0 || s->nstop.load() >= 0)
-        return failure("Cannot schedule a past/empty audio stop");
+        return failure("이미 지났거나 비어 있는 구간에 오디오 정지를 예약할 수 없습니다.");
     std::int64_t unset = -1;
-    if (!s->requestStop.compare_exchange_strong(unset, sample)) return failure("Audio stop already scheduled");
+    if (!s->requestStop.compare_exchange_strong(unset, sample)) return failure("오디오 정지가 이미 예약되어 있습니다.");
     return juce::Result::ok();
 }
 void RecorderAudioEngine::abort(Error reason) noexcept { if (impl->session) impl->session->signal(reason); }
 juce::Result RecorderAudioEngine::finishCapture(const juce::Uuid& edit)
 {
     auto* s = impl->session.get();
-    if (!s || (s->nstop.load() < 0 && s->fatal.load() == Error::none)) return failure("Audio stop has not been adopted");
+    if (!s || (s->nstop.load() < 0 && s->fatal.load() == Error::none)) return failure("오디오 정지가 아직 반영되지 않았습니다.");
     impl->detach();
     if (!s->finishing.load()) { s->editId = edit; s->finishing.store(true, std::memory_order_release); }
     if (s->worker.joinable()) s->worker.join();
     if (s->workerError.isNotEmpty()) return juce::Result::fail(s->workerError);
-    return s->fatal.load() == Error::none ? juce::Result::ok() : failure("Audio capture stopped with an error; completed media preserved");
+    return s->fatal.load() == Error::none ? juce::Result::ok() : failure("오류로 녹음이 중단되었습니다. 완료된 소재는 보존되었습니다.");
 }
 juce::Result RecorderAudioEngine::finishJournal(bool complete)
 {
     auto* s = impl->session.get();
-    if (!s || !s->finished.load()) return failure("Finish media before committing TakeFinalized");
+    if (!s || !s->finished.load()) return failure("테이크 완료를 기록하기 전에 소재 저장을 마무리하세요.");
     std::lock_guard<std::mutex> lock(s->journalMutex);
     auto result = juce::Result::ok();
     if (complete)
     {
-        if (s->fatal.load() != Error::none || s->referenceError.load() || !s->stoppedJournal) result = failure("Failed/incomplete take cannot commit TakeFinalized");
+        if (s->fatal.load() != Error::none || s->referenceError.load() || !s->stoppedJournal) result = failure("실패했거나 마무리되지 않은 테이크는 완료로 기록할 수 없습니다.");
         else result = s->journal.append(JournalTakeFinalized{s->config.takeId});
     }
     const auto closed = s->journal.close(); s->journalClosed = true;

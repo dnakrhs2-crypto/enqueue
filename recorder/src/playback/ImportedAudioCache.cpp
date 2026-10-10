@@ -1,6 +1,6 @@
 #include "ImportedAudioCache.h"
 #include "audio/HighQualityResampler.h"
-#include "model/SafeFileWrite.h"
+#include "storage/RecorderFileWrite.h"
 #include <windows.h>
 #include <algorithm>
 #include <cmath>
@@ -33,7 +33,7 @@ public:
         {
             control.checkpoint(Stage::cache, 0);
             const int n = static_cast<int>((std::min)(Sample(4096), info.readerStartSample - at));
-            require(reader->read(&discard, 0, n, at, true, info.channels == 2), "MP3 priming 읽기에 실패했습니다."); at += n;
+            require(reader->read(&discard, 0, n, at, true, info.channels == 2), "MP3의 인코딩 지연 보정 구간을 읽지 못했습니다."); at += n;
         }
     }
     void releaseResources() override {}
@@ -107,7 +107,7 @@ bool reuse(const juce::File& directory, const juce::File& manifest, const Import
 juce::String ImportedAudioCache::keyFor(const ImportedAudioInfo& info, std::uint32_t Fs)
 {
     require(Fs > 0 && Fs <= 768000 && info.contentHash.length() == 64
-        && info.contentHash.containsOnly("0123456789abcdef"), "원본 hash 또는 프로젝트 Fs가 잘못되었습니다.");
+        && info.contentHash.containsOnly("0123456789abcdef"), "원본 검증값이나 프로젝트 샘플레이트가 올바르지 않습니다.");
     return info.contentHash + "-" + juce::String(Fs) + "-v1-" + juce::String(info.readerStartSample) + "-" + juce::String(info.decodedSamples);
 }
 Sample ImportedAudioCache::sourceSampleFor(Sample projectSample, const ImportedAudioInfo& info, std::uint32_t Fs)
@@ -152,12 +152,12 @@ juce::Result ImportedAudioCache::build(const juce::File& projectDirectory, const
             && asset.relativePath.startsWith("media/imports/") && info.contentHash == asset.contentIdentity
             && info.sampleRate == asset.originalFormat.sampleRate && info.channels == asset.originalFormat.channels
             && asset.logicalLength == rescaleRound(info.decodedSamples, asset.sourceUnitsDenominator, asset.sourceUnitsNumerator),
-            "파생 캐시와 import 원본 정보가 다릅니다.");
+            "파생 캐시와 불러온 원본 정보가 다릅니다.");
         CachedImportedAudio cache; cache.key = keyFor(info, Fs); cache.sampleRate = Fs; cache.channels = info.channels;
         cache.samples = rescaleRound(info.decodedSamples, Fs, info.sampleRate);
         require(cache.samples > 0 && cache.channels >= 1 && cache.channels <= 2, "파생 캐시 길이/채널이 올바르지 않습니다.");
         const auto original = projectDirectory.getChildFile(asset.relativePath);
-        require(AudioImport::hashFile(original, control, Stage::cache) == info.contentHash, "원본 오디오 hash가 바뀌었습니다. 다시 불러오세요.");
+        require(AudioImport::hashFile(original, control, Stage::cache) == info.contentHash, "원본 오디오의 검증값이 바뀌었습니다. 다시 불러오세요.");
         const auto manifest = directory.getChildFile(cache.key + ".json");
         if (reuse(directory, manifest, info, control, cache))
         { control.checkpoint(Stage::ready, 1); result = std::move(cache); return juce::Result::ok(); }
@@ -177,7 +177,7 @@ juce::Result ImportedAudioCache::build(const juce::File& projectDirectory, const
             juce::WavAudioFormat format;
             auto writer = format.createWriterFor(stream, juce::AudioFormatWriterOptions{}.withSampleRate(Fs)
                 .withNumChannels(cache.channels).withBitsPerSample(32));
-            require(writer != nullptr, "float32 WAV 캐시 writer를 만들 수 없습니다.");
+            require(writer != nullptr, "32비트 실수 WAV 캐시 저장을 준비할 수 없습니다.");
             juce::AudioBuffer<float> block(cache.channels, 4096);
             ImportedPeak bin; int binSamples = 0;
             for (Sample at = 0; at < cache.samples;)
@@ -199,13 +199,13 @@ juce::Result ImportedAudioCache::build(const juce::File& projectDirectory, const
                 require(writer->writeFromAudioSampleBuffer(block, 0, n), "파생 PCM 캐시 쓰기에 실패했습니다."); at += n;
             }
             if (binSamples) cache.peaks.push_back(bin);
-            require(writer->flush(), "파생 PCM 캐시 flush에 실패했습니다."); checked(fileStream->getStatus());
+            require(writer->flush(), "파생 PCM 캐시를 저장 장치에 반영할 수 없습니다."); checked(fileStream->getStatus());
             writer.reset(); resampler.releaseResources();
         }
         writePeaks(cache); verifyPcm(cache); readPeaks(cache);
         const auto pcmHash = AudioImport::hashFile(cache.pcmFile, control, Stage::cache);
         const auto peaksHash = AudioImport::hashFile(cache.peaksFile, control, Stage::cache);
-        require(AudioImport::hashFile(original, control, Stage::cache) == info.contentHash, "캐시 생성 중 원본 hash가 바뀌었습니다.");
+        require(AudioImport::hashFile(original, control, Stage::cache) == info.contentHash, "캐시를 만드는 중 원본 검증값이 바뀌었습니다.");
         control.checkpoint(Stage::cache, .99);
         const auto finalDirectory = directory.getChildFile(generation);
         require(MoveFileW(owned.getFullPathName().toWideCharPointer(), finalDirectory.getFullPathName().toWideCharPointer()) != 0,
@@ -216,8 +216,8 @@ juce::Result ImportedAudioCache::build(const juce::File& projectDirectory, const
         m->setProperty("key", cache.key); m->setProperty("generation", generation); m->setProperty("sourceHash", info.contentHash);
         m->setProperty("Fs", static_cast<int>(Fs)); m->setProperty("samples", juce::int64(cache.samples)); m->setProperty("channels", cache.channels);
         m->setProperty("pcmHash", pcmHash); m->setProperty("peaksHash", peaksHash);
-        checked(gocue::SafeFileWrite::writeTextVerified(manifest, juce::JSON::toString(metadata),
-            [&](const juce::String& text) { return juce::JSON::parse(text)["generation"].toString() == generation ? juce::Result::ok() : juce::Result::fail(juce::String::fromUTF8("캐시 manifest 검증 실패")); }));
+        checked(writeRecorderTextVerified(manifest, juce::JSON::toString(metadata),
+            [&](const juce::String& text) { return juce::JSON::parse(text)["generation"].toString() == generation ? juce::Result::ok() : juce::Result::fail(juce::String::fromUTF8("캐시 정보 파일 검증에 실패했습니다.")); }));
         published = true; control.checkpoint(Stage::ready, 1); result = std::move(cache); return juce::Result::ok();
     }
     catch (const std::exception& e)

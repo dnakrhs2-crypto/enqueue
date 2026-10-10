@@ -20,7 +20,7 @@ const char* transportStateName(TransportState s) noexcept
 }
 TimelineTransport::TimelineTransport(std::uint32_t Fs, std::int64_t hz, PlaybackPcmQueue& q, Sample length)
     : rate(Fs), frequency(hz), queue(q), end(length), rtEnd(length)
-{ if (!rate || rate > 768000 || hz <= 0 || length < 0) throw std::invalid_argument("Invalid transport timebase"); }
+{ if (!rate || rate > 768000 || hz <= 0 || length < 0) throw std::invalid_argument("재생 시간 기준이 올바르지 않습니다."); }
 void TimelineTransport::send(Command c)
 {
     c.timelineEnd = end;
@@ -30,13 +30,13 @@ void TimelineTransport::send(Command c)
         latestSeek.generation.store(c.generation); latestSeek.target.store(c.target); latestSeek.timelineEnd.store(c.timelineEnd);
         latestSeek.sequence.fetch_add(1);
     }
-    else if (!commands.push(c)) throw std::runtime_error("Transport command queue full");
+    else if (!commands.push(c)) throw std::runtime_error("재생 명령 대기열이 가득 찼습니다.");
     wake->signal();
 }
 void TimelineTransport::seek(Sample sample)
 {
     if (dubbingLocked) throw std::logic_error("더빙 중에는 탐색할 수 없습니다.");
-    if (sample < 0) throw std::out_of_range("Negative timeline seek");
+    if (sample < 0) throw std::out_of_range("타임라인 이동 위치는 0 이상이어야 합니다.");
     send({Kind::prepare, requestedGeneration + 1, sample, 0});
     ++requestedGeneration; requestedSample = sample; armedGeneration = 0; stopAfterPrepare = false; scrubPending = false;
     timing = {}; timing.request = qpcNow();
@@ -79,7 +79,7 @@ void TimelineTransport::stagePlan(std::shared_ptr<const CompiledRenderPlan> plan
                                   std::vector<PlaybackVideoClip> videos, AudioSourceMask mask)
 {
     if (dubbingLocked) throw std::logic_error("더빙 중에는 재생 계획을 바꿀 수 없습니다.");
-    if (!plan || plan->Fs != rate || plan->timelineEnd < 0) throw std::invalid_argument("Invalid replacement playback plan");
+    if (!plan || plan->Fs != rate || plan->timelineEnd < 0) throw std::invalid_argument("교체할 재생 계획이 올바르지 않습니다.");
     const auto s = snapshot();
     const auto target = s.generation != requestedGeneration ? requestedSample : audibleCursor(s, rate, frequency, s.callbackQpc);
     auto next = std::make_unique<PendingPlan>(PendingPlan{std::move(plan), std::move(sources), std::move(videos), std::move(mask)});
@@ -91,7 +91,7 @@ void TimelineTransport::stagePlan(std::shared_ptr<const CompiledRenderPlan> plan
 void TimelineTransport::scrub(Sample sample, bool released, std::int64_t now)
 {
     if (dubbingLocked) throw std::logic_error("더빙 중에는 탐색할 수 없습니다.");
-    if (sample < 0) throw std::out_of_range("Negative timeline scrub");
+    if (sample < 0) throw std::out_of_range("타임라인 탐색 위치는 0 이상이어야 합니다.");
     wantPlay = false; pendingScrub = sample; scrubPending = true;
     ++scrubInputs;
     if (released || !lastScrubQpc || now - lastScrubQpc >= frequency / 15)
@@ -100,7 +100,7 @@ void TimelineTransport::scrub(Sample sample, bool released, std::int64_t now)
 void TimelineTransport::prepared(std::int64_t output, bool start)
 {
     if (dubbingLocked) throw std::logic_error("더빙 중에는 출력을 변경할 수 없습니다.");
-    if (snapshot().generation != requestedGeneration) throw std::logic_error("Prepare requires callback generation acknowledgement");
+    if (snapshot().generation != requestedGeneration) throw std::logic_error("재생을 준비하려면 오디오 콜백의 현재 작업 확인이 필요합니다.");
     if (requestedSample >= end) { start = wantPlay = false; stopAfterPrepare = true; }
     send({start ? Kind::start : stopAfterPrepare ? Kind::stopped : Kind::ready, requestedGeneration, requestedSample, output});
     armedGeneration = requestedGeneration;
@@ -271,7 +271,7 @@ void TimelineTransport::service(TimelineAudioRenderer& audio, VideoPlaybackEngin
         { seek(pendingScrub); lastScrubQpc = now; scrubPending = false; ++scrubDispatches; }
         const auto deviceStatus = output.status(); if (deviceStatus.failed()) throw std::runtime_error(deviceStatus.getErrorMessage().toStdString());
         const auto s = snapshot();
-        if (s.state == TransportState::failed) throw std::runtime_error("ASIO timing invalid; transport stopped");
+        if (s.state == TransportState::failed) throw std::runtime_error("ASIO 시간 정보가 올바르지 않아 재생을 정지했습니다.");
         if (s.state == TransportState::buffering && s.generation == requestedGeneration
             && audibleCursor(s, rate, frequency, now) == s.submittedEnd)
             seek(s.submittedEnd); // drain accepted device tail, then reprepare both streams

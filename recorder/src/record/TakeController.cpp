@@ -31,7 +31,7 @@ juce::Result takeException(const char* context)
 {
     try { throw; }
     catch (const std::exception& e) { return juce::Result::fail(juce::String::fromUTF8(context) + ": " + juce::String::fromUTF8(e.what())); }
-    catch (...) { return juce::Result::fail(juce::String::fromUTF8(context) + ": unknown exception"); }
+    catch (...) { return juce::Result::fail(juce::String::fromUTF8(context) + juce::String::fromUTF8(": 알 수 없는 오류")); }
 }
 template<class F> auto launchTakeWorker(const char* phase, F&& work)
 {
@@ -43,9 +43,9 @@ void flushExisting(const juce::File& file)
 {
     const auto handle = CreateFileW(file.getFullPathName().toWideCharPointer(), GENERIC_WRITE, FILE_SHARE_READ,
                                    nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
-    if (handle == INVALID_HANDLE_VALUE) checkHr(HRESULT_FROM_WIN32(GetLastError()), "Open completed metadata for flush");
+    if (handle == INVALID_HANDLE_VALUE) checkHr(HRESULT_FROM_WIN32(GetLastError()), "완료된 메타데이터를 저장하기 위해 열 수 없습니다.");
     const auto flushed = FlushFileBuffers(handle); const auto error = GetLastError(); CloseHandle(handle);
-    if (!flushed) checkHr(HRESULT_FROM_WIN32(error), "Flush completed metadata");
+    if (!flushed) checkHr(HRESULT_FROM_WIN32(error), "완료된 메타데이터를 저장 장치에 반영할 수 없습니다.");
 }
 void writeJsonDurable(const juce::File& file, const juce::var& json)
 {
@@ -53,7 +53,7 @@ void writeJsonDurable(const juce::File& file, const juce::var& json)
 }
 Sample checkedSample(std::optional<Sample> sample)
 {
-    if (!sample) throw std::overflow_error("Recording playback sample overflow");
+    if (!sample) throw std::overflow_error("녹화 중 재생할 샘플 위치가 처리 가능한 범위를 넘었습니다.");
     return *sample;
 }
 class PositionedAudio final : public IPlaybackBlockProvider
@@ -61,7 +61,7 @@ class PositionedAudio final : public IPlaybackBlockProvider
 public:
     PositionedAudio(std::unique_ptr<IPlaybackBlockProvider> source, Sample position)
         : provider(std::move(source)), at(position)
-    { if (!provider) throw std::invalid_argument("Missing recording listening mix"); }
+    { if (!provider) throw std::invalid_argument("녹화 중 들을 오디오 믹스가 없습니다."); }
     void render(float* stereo, unsigned frames, Sample first, unsigned Fs) override
     { provider->render(stereo, frames, checkedSample(clock_math::add(at, first)), Fs); }
 private:
@@ -634,7 +634,7 @@ struct TakeController::Impl
                 partial = true; failure = juce::String::fromUTF8(e.what()); c.video->sourceFailed(c.video->availableSamples());
                 c.report = jsonObject(); jsonSet(c.report,"finalizerError",e.what());
             }
-            catch (...) { partial = true; failure = "Unknown video finalizer exception"; c.video->sourceFailed(c.video->availableSamples()); }
+            catch (...) { partial = true; failure = juce::String::fromUTF8("영상 마무리 중 알 수 없는 오류가 발생했습니다."); c.video->sourceFailed(c.video->availableSamples()); }
         }
     }
     juce::File takeFolder() const { return config.projectDirectory.getChildFile("media/takes/" + config.takeId.toDashedString()); }
@@ -804,7 +804,7 @@ struct TakeController::Impl
         }
         catch (...)
         {
-            const auto result = takeException("Take preparation failed"); cleanupFailedWork(); return result;
+            const auto result = takeException("녹화 준비에 실패했습니다."); cleanupFailedWork(); return result;
         }
     }
     void setRanges(MediaAsset& asset, std::int64_t available)
@@ -908,7 +908,7 @@ struct TakeController::Impl
             for (const auto& asset : assets) requireResult(document.updateMediaAsset(asset));
             return document.updateTakeState(take.takeId, take.state);
         }
-        catch (...) { return takeException("Take media publication failed"); }
+        catch (...) { return takeException("녹화 소재 저장을 완료할 수 없습니다."); }
     }
     void placeStopped()
     {
@@ -921,7 +921,7 @@ struct TakeController::Impl
         placementMetadata.waveform = audio.peakCache();
         if (length <= 0)
         {
-            partial = true; failure = "No nonempty callback-confirmed take range";
+            partial = true; failure = juce::String::fromUTF8("오디오 장치에서 확인된 녹화 구간이 없습니다.");
         }
         else
         {
@@ -966,7 +966,7 @@ struct TakeController::Impl
             catch (...) { partial = true; mediaFinalizationMs = elapsedMs(start); throw; }
         });
         }
-        catch (...) { failedWorker(takeException("Take finalization could not start")); }
+        catch (...) { failedWorker(takeException("녹화 마무리를 시작할 수 없습니다.")); }
     }
 };
 TakeController::TakeController(RecorderDocument& d, RecorderAudioEngine& a, VideoFactory f) : impl(std::make_unique<Impl>(d, a, std::move(f))) {}
@@ -974,7 +974,7 @@ TakeController::~TakeController() = default;
 juce::Result TakeController::reset()
 {
     if (impl->work.valid() || (state() != State::idle && state() != State::done && state() != State::partialFailure))
-        return juce::Result::fail("Take is still active");
+        return juce::Result::fail(juce::String::fromUTF8("녹화 작업이 아직 진행 중입니다."));
     impl->detachSink(); ++impl->lifecycleGeneration; impl->shutdownRequested = false; impl->placementMetadata = {}; impl->length = 0; impl->placement = 0;
     impl->failure.clear(); impl->warning.clear(); impl->ownerProject.clear(); impl->current = State::idle;
     for (auto& c : impl->cameras) c.active = false;
@@ -984,21 +984,21 @@ juce::Result TakeController::prepare(Config config)
 {
     auto& s = *impl;
     const auto pressedQpc = qpcNow(); // the record press: prepare() runs synchronously from the click handler (first-take checkpoint save included)
-    if (s.shutdownRequested) return juce::Result::fail("Take shutdown blocks new commands");
-    if (s.current != State::idle && s.current != State::done && s.current != State::partialFailure) return juce::Result::fail("Take controller is busy");
-    if (s.work.valid()) return juce::Result::fail("Previous worker completion must be consumed");
+    if (s.shutdownRequested) return juce::Result::fail(juce::String::fromUTF8("녹화 종료 처리 중에는 새 명령을 실행할 수 없습니다."));
+    if (s.current != State::idle && s.current != State::done && s.current != State::partialFailure) return juce::Result::fail(juce::String::fromUTF8("녹화 작업을 처리하고 있습니다."));
+    if (s.work.valid()) return juce::Result::fail(juce::String::fromUTF8("이전 녹화 작업의 완료 처리가 필요합니다."));
     const auto device = s.audio.deviceInfo();
     Sample inputCorrection = 0, outputCorrection = 0;
-    if (config.placementSample < 0) return juce::Result::fail("Recording placement cannot be negative");
+    if (config.placementSample < 0) return juce::Result::fail(juce::String::fromUTF8("녹화 배치 위치는 0 이상이어야 합니다."));
     if (!device.sampleRate || config.projectDirectory == juce::File() || config.takeId.isNull()
         || (config.projectFps != 30 && config.projectFps != 60) || config.cameraMode.width != 1920 || config.cameraMode.height != 1080
         || !config.cameraMode.fps.numerator || !config.cameraMode.fps.denominator || (!config.synthetic && config.cameraSymbolicLink.empty()))
-        return juce::Result::fail("Select a ready ASIO device and cam1 1080p native mode / project 30 or 60");
+        return juce::Result::fail(juce::String::fromUTF8("준비된 ASIO 장치와 캠1의 1080p 입력 모드를 선택하고 프로젝트를 30 또는 60 fps로 설정하세요."));
     if (config.camera2.enabled && (config.camera2.synthetic || !config.camera2.symbolicLink.empty()))
     {
         const auto& m = config.camera2.mode;
         if (m.width != 1920 || m.height != 1080 || !m.fps.numerator || !m.fps.denominator)
-            return juce::Result::fail("Select a cam2 1080p native mode");
+            return juce::Result::fail(juce::String::fromUTF8("캠2의 1080p 입력 모드를 선택하세요."));
         if (!config.synthetic && !config.camera2.synthetic && CameraCatalog::sameDevice(config.cameraSymbolicLink, config.camera2.symbolicLink))
             return juce::Result::fail(juce::String::fromUTF8("같은 카메라를 두 번 선택할 수 없습니다."));
     }
@@ -1017,13 +1017,13 @@ juce::Result TakeController::prepare(Config config)
                 const auto& profile = *config.calibration[i];
                 if (common && (profile.inputResidualLatencySamples != common->inputResidualLatencySamples
                     || profile.outputResidualLatencySamples != common->outputResidualLatencySamples))
-                    return juce::Result::fail("Camera profiles disagree on ASIO input/output residual latency");
+                    return juce::Result::fail(juce::String::fromUTF8("카메라 보정값의 ASIO 입력·출력 잔여 지연이 서로 다릅니다."));
                 common = &profile;
             }
             inputCorrection = checkedSample(clock_math::add(device.inputLatency, common ? common->inputResidualLatencySamples : 0));
             outputCorrection = checkedSample(clock_math::add(device.outputLatency, common ? common->outputResidualLatencySamples : 0));
             if (device.inputLatency < 0 || device.outputLatency < 0 || inputCorrection < 0 || outputCorrection < 0)
-                return juce::Result::fail("Recording playback requires nonnegative effective input/output latency");
+                return juce::Result::fail(juce::String::fromUTF8("녹화 중 재생하려면 보정된 입력·출력 지연이 0 이상이어야 합니다."));
         }
     }
     catch (const std::exception& e) { return juce::Result::fail(juce::String::fromUTF8(e.what())); }
@@ -1059,7 +1059,7 @@ juce::Result TakeController::prepare(Config config)
     }
     catch (...)
     {
-        const auto result = takeException("Take preparation could not start");
+        const auto result = takeException("녹화 준비를 시작할 수 없습니다.");
         s.document.setRecordingStructureLock(false); s.transition(State::idle); s.ownerProject.clear();
         s.failure = result.getErrorMessage(); return result;
     }
@@ -1067,8 +1067,8 @@ juce::Result TakeController::prepare(Config config)
 juce::Result TakeController::start(std::int64_t N0)
 {
     auto& s = *impl;
-    if (s.shutdownRequested) return juce::Result::fail("Take shutdown blocks start");
-    if (s.current != State::armed || s.requestedN0 >= 0) return juce::Result::fail("Take must be armed before start");
+    if (s.shutdownRequested) return juce::Result::fail(juce::String::fromUTF8("녹화 종료 처리 중에는 시작할 수 없습니다."));
+    if (s.current != State::armed || s.requestedN0 >= 0) return juce::Result::fail(juce::String::fromUTF8("녹화를 시작하기 전에 준비를 마쳐야 합니다."));
     const auto device = s.audio.deviceInfo();
     try
     {
@@ -1077,7 +1077,7 @@ juce::Result TakeController::start(std::int64_t N0)
             N0 = checkedSample(clock_math::add(s.audio.currentSample(), s.startLead(device))); // see Impl::startLead
             if (s.listening) N0 = checkedSample(clock_math::add(N0, s.outputCorrection));
         }
-        if (!s.audio.clockReady()) return juce::Result::fail("ASIO clock is not stable");
+        if (!s.audio.clockReady()) return juce::Result::fail(juce::String::fromUTF8("ASIO 시계가 안정되지 않았습니다."));
         const auto master = s.audio.masterClock().snapshot();
         s.masterEpoch = master ? master->epoch : 0;
         if (s.listening)
@@ -1086,7 +1086,7 @@ juce::Result TakeController::start(std::int64_t N0)
             const auto origin = outputOriginSample(s.placement, device.outputLatency,
                 {submit, s.placement, device.bufferFrames, s.masterEpoch}, s.outputCorrection - device.outputLatency);
             if (!origin || *origin != N0 || submit < s.audio.currentSample())
-                return juce::Result::fail("Recording output origin is unavailable or in the past");
+                return juce::Result::fail(juce::String::fromUTF8("녹화 출력 시작점을 확인할 수 없거나 이미 지났습니다."));
             s.outputSubmission = submit;
         }
         const auto result = s.audio.startAt(N0); if (result.failed()) return result;
@@ -1103,12 +1103,12 @@ juce::Result TakeController::start(std::int64_t N0)
         }
         return juce::Result::ok();
     }
-    catch (...) { return takeException("Cannot schedule recording playback"); }
+    catch (...) { return takeException("녹화 중 재생 시작을 예약할 수 없습니다."); }
 }
 juce::Result TakeController::stop(std::int64_t Nstop)
 {
     auto& s = *impl;
-    if (s.current != State::recording && !(s.current == State::armed && s.requestedN0 >= 0)) return juce::Result::fail("No recording to stop");
+    if (s.current != State::recording && !(s.current == State::armed && s.requestedN0 >= 0)) return juce::Result::fail(juce::String::fromUTF8("정지할 녹화가 없습니다."));
     try
     {
         Sample outputStop = -1;
@@ -1118,13 +1118,13 @@ juce::Result TakeController::stop(std::int64_t Nstop)
                 Nstop = checkedSample(clock_math::add(checkedSample(clock_math::add(
                     std::max(s.audio.currentSample(), s.outputSubmission), s.deviceSnapshot.bufferFrames)), s.outputCorrection));
             outputStop = checkedSample(clock_math::subtract(Nstop, s.outputCorrection));
-            if (outputStop < s.audio.currentSample()) return juce::Result::fail("Recording cannot stop before already submitted audio");
+            if (outputStop < s.audio.currentSample()) return juce::Result::fail(juce::String::fromUTF8("이미 전달한 오디오보다 앞에서 녹화를 정지할 수 없습니다."));
         }
         else if (Nstop < 0) Nstop = std::max(s.audio.currentSample(), s.requestedN0) + s.audio.deviceInfo().bufferFrames;
         const auto result = s.audio.stopAt(Nstop); if (result.failed()) return result;
         s.stopQpc = qpcNow(); s.transition(State::stopping); return juce::Result::ok();
     }
-    catch (...) { return takeException("Cannot schedule recording playback stop"); }
+    catch (...) { return takeException("녹화 중 재생 정지를 예약할 수 없습니다."); }
 }
 void TakeController::tick()
 {
@@ -1133,7 +1133,7 @@ void TakeController::tick()
     if (s.ownerProject.isNotEmpty() && s.ownerProject != s.document.getProject().projectId)
     {
         if (s.work.valid() && s.work.wait_for(std::chrono::milliseconds(0)) != std::future_status::ready) return;
-        if (s.work.valid()) try { s.work.get(); } catch (...) { s.failure = takeException("Stale take worker failed").getErrorMessage(); }
+        if (s.work.valid()) try { s.work.get(); } catch (...) { s.failure = takeException("이전 녹화 작업에 실패했습니다.").getErrorMessage(); }
         s.cleanupFailedWork();
         s.shutdownRequested = true; s.transition(State::partialFailure); s.ownerProject.clear(); return;
     }
@@ -1142,7 +1142,7 @@ void TakeController::tick()
         if (s.work.wait_for(std::chrono::milliseconds(0)) != std::future_status::ready) return;
         auto result = juce::Result::ok();
         try { result = s.work.get(); }
-        catch (...) { s.failedWorker(takeException("Take worker failed")); return; }
+        catch (...) { s.failedWorker(takeException("녹화 작업에 실패했습니다.")); return; }
         if (result.failed()) { s.failure = result.getErrorMessage(); s.partial = true; }
         if (s.current == State::preparing) s.prepareDoneQpc = qpcNow(); // worker finished: what follows is the wait for frames/clocks
         if (s.current == State::preparing && result.failed())
@@ -1179,7 +1179,7 @@ void TakeController::tick()
                 catch (...) { throw; } // get() owns cleanup and checkpoint failure publication
             });
             }
-            catch (...) { s.failedWorker(takeException("Take save could not start")); }
+            catch (...) { s.failedWorker(takeException("녹화 저장을 시작할 수 없습니다.")); }
             return;
         }
     }
@@ -1187,7 +1187,7 @@ void TakeController::tick()
         && (s.current == State::preparing || s.current == State::armed || s.current == State::recording))
     {
         s.audio.abort(RecorderAudioEngine::Error::clockDiscontinuity);
-        s.failure = "Timeline audio prefetch failed; captured media preserved"; s.partial = true; s.transition(State::stopping);
+        s.failure = juce::String::fromUTF8("타임라인 오디오를 미리 읽지 못했습니다. 녹화한 소재는 보존되었습니다."); s.partial = true; s.transition(State::stopping);
     }
     if (s.current == State::preparing)
     {
@@ -1209,7 +1209,7 @@ void TakeController::tick()
         if (primaryReady && (s.cameraCount == 1 || s.cameras[1].video->ready() || s.cameras[1].video->failed())) { s.armedQpc = qpcNow(); s.transition(State::armed); }
         else if (elapsedMs(s.prepareQpc) > 10000)
         {
-            s.failure = "ASIO clock/camera did not become ready within 10 seconds"; s.partial = true;
+            s.failure = juce::String::fromUTF8("10초 안에 ASIO 시계나 카메라가 준비되지 않았습니다."); s.partial = true;
             s.audio.abort(RecorderAudioEngine::Error::cancelled); s.document.setRecordingStructureLock(false);
             s.transition(State::stopping);
         }
@@ -1324,13 +1324,13 @@ juce::var TakeController::report() const
 std::int64_t TakeController::frameCount(std::int64_t samples, unsigned Fs, FrameRate fps)
 {
     if (samples < 0 || !Fs || Fs > 768000 || !fps.numerator || !fps.denominator || fps.numerator > 1000000 || fps.denominator > 1000000)
-        throw std::invalid_argument("Invalid sample/CFR timebase");
+        throw std::invalid_argument("샘플이나 CFR 시간 기준이 올바르지 않습니다.");
     const auto denominator = std::uint64_t(Fs) * fps.denominator, n = std::uint64_t(samples);
     const auto quotient = n / denominator, remainder = n % denominator;
     const auto tail = remainder * fps.numerator;
     const auto extra = tail / denominator + (tail % denominator != 0);
     const auto maximum = std::uint64_t((std::numeric_limits<std::int64_t>::max)());
-    if (quotient > (maximum - extra) / fps.numerator) throw std::overflow_error("CFR frame count exceeds int64");
+    if (quotient > (maximum - extra) / fps.numerator) throw std::overflow_error("CFR 프레임 수가 처리 가능한 범위를 넘었습니다.");
     return std::int64_t(quotient * fps.numerator + extra);
 }
 const char* TakeController::stateName(State s) noexcept

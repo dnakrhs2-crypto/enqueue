@@ -153,7 +153,7 @@ int runJournalTests()
         replace(second, data.getData(), data.getSize() - 1); JournalReplay read; success(RecordingJournal::replay(dir, read));
         require(read.ignoredTail && read.records.size() == 1, "Tail stops replay across rotation");
         require(second.moveFileTo(dir.getChildFile("preserved-second.bad")), "Preserve fixture while simulating missing segment");
-        success(RecordingJournal::replay(dir, read)); require(read.ignoredTail && read.tailReason.contains("gap"), "Missing journal segment detected");
+        success(RecordingJournal::replay(dir, read)); require(read.ignoredTail && read.tailReason.contains(juce::String::fromUTF8("빠진 구간")), "Missing journal segment detected");
     });
     test("Journal flush failure never acknowledges sequence and directory has a single writer", []
     {

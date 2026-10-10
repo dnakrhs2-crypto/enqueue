@@ -57,7 +57,7 @@ std::uint32_t parsePositive(const std::string& text)
     std::uint32_t n = 0;
     const auto result = std::from_chars(text.data(), text.data() + text.size(), n);
     if (result.ec != std::errc{} || result.ptr != text.data() + text.size() || n == 0)
-        throw std::invalid_argument("Expected a positive uint32: " + text);
+        throw std::invalid_argument("1 이상 4294967295 이하의 정수가 필요합니다: " + text);
     return n;
 }
 std::string attributeString(IMFAttributes* attributes, REFGUID key)
@@ -82,7 +82,7 @@ struct ActivationList
 Rational Rational::parse(const std::string& text)
 {
     const auto slash = text.find('/');
-    if (slash == std::string::npos) throw std::invalid_argument("FPS must be numerator/denominator");
+    if (slash == std::string::npos) throw std::invalid_argument("fps는 분자/분모 형식이어야 합니다.");
     return {parsePositive(text.substr(0, slash)), parsePositive(text.substr(slash + 1))};
 }
 std::string Rational::text() const { return std::to_string(numerator) + "/" + std::to_string(denominator); }
@@ -124,18 +124,18 @@ CameraMode CameraMode::parse(const std::string& text)
 {
     std::istringstream stream(text);
     std::string subtypeText, dimensions, rate, extra;
-    if (!(stream >> subtypeText >> dimensions >> rate) || (stream >> extra)) throw std::invalid_argument("Mode must be 'NV12|YUY2|MJPEG WIDTHxHEIGHT NUM/DEN'");
+    if (!(stream >> subtypeText >> dimensions >> rate) || (stream >> extra)) throw std::invalid_argument("입력 모드는 NV12·YUY2·MJPEG 형식, 가로x세로, fps 분자/분모 순서여야 합니다.");
     CameraMode mode;
     if (subtypeText == "NV12") mode.subtype = CaptureSubtype::nv12;
     else if (subtypeText == "YUY2") mode.subtype = CaptureSubtype::yuy2;
     else if (subtypeText == "MJPEG") mode.subtype = CaptureSubtype::mjpeg;
-    else throw std::invalid_argument("Unsupported native subtype: " + subtypeText);
+    else throw std::invalid_argument("지원하지 않는 입력 형식입니다: " + subtypeText);
     const auto x = dimensions.find('x');
-    if (x == std::string::npos) throw std::invalid_argument("Mode dimensions require WIDTHxHEIGHT");
+    if (x == std::string::npos) throw std::invalid_argument("입력 크기는 가로x세로 형식이어야 합니다.");
     mode.width = parsePositive(dimensions.substr(0, x));
     mode.height = parsePositive(dimensions.substr(x + 1));
     if (mode.width > 8192 || mode.height > 8192 || (mode.width % 2) || (mode.height % 2))
-        throw std::invalid_argument("Mode dimensions must be even and <=8192");
+        throw std::invalid_argument("입력의 가로·세로 크기는 짝수이고 8192 이하여야 합니다.");
     mode.fps = Rational::parse(rate);
     return mode;
 }
@@ -168,20 +168,20 @@ std::optional<CameraMode> CameraCatalog::readMode(IMFMediaType* type, std::uint3
 ComPtr<IMFMediaSource> CameraCatalog::openSource(const std::string& link)
 {
     ComPtr<IMFAttributes> attributes;
-    checkHr(MFCreateAttributes(&attributes, 2), "MFCreateAttributes");
-    checkHr(attributes->SetGUID(MF_DEVSOURCE_ATTRIBUTE_SOURCE_TYPE, MF_DEVSOURCE_ATTRIBUTE_SOURCE_TYPE_VIDCAP_GUID), "Set source type");
-    checkHr(attributes->SetString(MF_DEVSOURCE_ATTRIBUTE_SOURCE_TYPE_VIDCAP_SYMBOLIC_LINK, juce::String::fromUTF8(link.c_str()).toWideCharPointer()), "Set symbolic link");
+    checkHr(MFCreateAttributes(&attributes, 2), "카메라 속성을 준비할 수 없습니다.");
+    checkHr(attributes->SetGUID(MF_DEVSOURCE_ATTRIBUTE_SOURCE_TYPE, MF_DEVSOURCE_ATTRIBUTE_SOURCE_TYPE_VIDCAP_GUID), "카메라 소스 종류를 설정할 수 없습니다.");
+    checkHr(attributes->SetString(MF_DEVSOURCE_ATTRIBUTE_SOURCE_TYPE_VIDCAP_SYMBOLIC_LINK, juce::String::fromUTF8(link.c_str()).toWideCharPointer()), "카메라 장치 경로를 설정할 수 없습니다.");
     ComPtr<IMFMediaSource> source;
-    checkHr(MFCreateDeviceSource(attributes.Get(), &source), "MFCreateDeviceSource");
+    checkHr(MFCreateDeviceSource(attributes.Get(), &source), "카메라 장치를 열 수 없습니다.");
     return source;
 }
 std::vector<CameraDevice> CameraCatalog::enumerate()
 {
     ComPtr<IMFAttributes> attributes;
-    checkHr(MFCreateAttributes(&attributes, 1), "MFCreateAttributes");
-    checkHr(attributes->SetGUID(MF_DEVSOURCE_ATTRIBUTE_SOURCE_TYPE, MF_DEVSOURCE_ATTRIBUTE_SOURCE_TYPE_VIDCAP_GUID), "Set source type");
+    checkHr(MFCreateAttributes(&attributes, 1), "카메라 속성을 준비할 수 없습니다.");
+    checkHr(attributes->SetGUID(MF_DEVSOURCE_ATTRIBUTE_SOURCE_TYPE, MF_DEVSOURCE_ATTRIBUTE_SOURCE_TYPE_VIDCAP_GUID), "카메라 소스 종류를 설정할 수 없습니다.");
     ActivationList devices;
-    checkHr(MFEnumDeviceSources(attributes.Get(), &devices.items, &devices.count), "MFEnumDeviceSources");
+    checkHr(MFEnumDeviceSources(attributes.Get(), &devices.items, &devices.count), "카메라 장치 목록을 읽을 수 없습니다.");
     std::vector<CameraDevice> result;
     for (UINT32 i = 0; i < devices.count; ++i)
     {
@@ -194,7 +194,7 @@ std::vector<CameraDevice> CameraCatalog::enumerate()
             device.symbolicLink = attributeString(devices.items[i], MF_DEVSOURCE_ATTRIBUTE_SOURCE_TYPE_VIDCAP_SYMBOLIC_LINK);
             source = openSource(device.symbolicLink);
             ComPtr<IMFAttributes> readerAttributes;
-            checkHr(MFCreateAttributes(&readerAttributes, 2), "MFCreateAttributes");
+            checkHr(MFCreateAttributes(&readerAttributes, 2), "카메라 속성을 준비할 수 없습니다.");
             readerAttributes->SetUINT32(MF_READWRITE_DISABLE_CONVERTERS, TRUE);
             readerAttributes->SetUINT32(MF_SOURCE_READER_ENABLE_VIDEO_PROCESSING, FALSE);
             ComPtr<IMFSourceReader> reader;

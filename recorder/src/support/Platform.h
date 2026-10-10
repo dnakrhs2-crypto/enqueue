@@ -52,14 +52,14 @@ inline std::string utcNowIso8601()
 struct ComApartment
 {
     HRESULT result = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
-    ComApartment() { checkHr(result, "CoInitializeEx(MTA)"); }
+    ComApartment() { checkHr(result, "COM 작업 환경을 초기화할 수 없습니다."); }
     ~ComApartment() { if (SUCCEEDED(result)) CoUninitialize(); }
     ComApartment(const ComApartment&) = delete;
     ComApartment& operator=(const ComApartment&) = delete;
 };
 struct MfRuntime
 {
-    MfRuntime() { checkHr(MFStartup(MF_VERSION, MFSTARTUP_FULL), "MFStartup"); }
+    MfRuntime() { checkHr(MFStartup(MF_VERSION, MFSTARTUP_FULL), "Media Foundation을 시작할 수 없습니다."); }
     ~MfRuntime() { MFShutdown(); }
     MfRuntime(const MfRuntime&) = delete;
     MfRuntime& operator=(const MfRuntime&) = delete;

@@ -70,7 +70,7 @@ ExportDialog::ExportDialog(RecorderDocument& d, RecorderSession& s, juce::Button
     retry.onClick = [this] { startExport(true); }; cancel.onClick = [this] { controller.cancel(); stopPreview(); };
     listen.onClick = [this] { if (preview || previewWork.valid()) stopPreview(); else startPreview(); };
     openFolder.onClick = [this] { const auto path = controller.status().outputDirectory; if (path.isDirectory()) path.startAsProcess(); };
-    retry.setTooltip(ko("실패하거나 취소된 작업의 기존 소스·범위·편집 revision으로 다시 내보냅니다. 설정을 바꾸려면 내보내기를 누르세요."));
+    retry.setTooltip(ko("실패하거나 취소된 작업의 기존 소스·범위·편집 버전으로 다시 내보냅니다. 설정을 바꾸려면 내보내기를 누르세요."));
     exportButton.setEnabled(true); exportButton.setTooltip(ko("소재 뽑기 / 최종본 뽑기"));
     exportButton.onClick = [this] { show(); };
     sourceStatus.setJustificationType(juce::Justification::topLeft); listLabel.setJustificationType(juce::Justification::topLeft);
@@ -158,9 +158,9 @@ std::optional<SampleRange> ExportDialog::selectedRange() const
     if (rangeChoice.getSelectedId() == 1) return {};
     const auto a = rangeStart.getText().getDoubleValue(), b = rangeEnd.getText().getDoubleValue();
     const auto Fs = document.getProject().Fs;
-    exportRequire(std::isfinite(a) && std::isfinite(b) && a >= 0 && b > a && b * Fs < 9.0e18, "Enter a valid selected range in seconds");
+    exportRequire(std::isfinite(a) && std::isfinite(b) && a >= 0 && b > a && b * Fs < 9.0e18, "선택 구간을 초 단위로 올바르게 입력하세요.");
     const Sample start = std::llround(a * Fs), end = std::llround(b * Fs);
-    exportRequire(end > start, "Selected range is shorter than one sample"); return SampleRange{start, end - start};
+    exportRequire(end > start, "선택 구간이 샘플 1개보다 짧습니다."); return SampleRange{start, end - start};
 }
 AudioSourceMask ExportDialog::selectedAudio(const ExportJob& job, bool reference) const
 {
@@ -263,13 +263,13 @@ void ExportDialog::refreshSelection()
         const auto r = request(); ExportJob job = ExportJob::fromDocument(document, ExportController::resolveDestination(r.destination), r.range);
         commonRange.setText(ko("예상 공통 범위: ") + juce::String(job.range.startSeconds(job.snapshot.Fs, job.snapshot.fps), 6) + " – "
             + juce::String(job.range.endSeconds(job.snapshot.Fs, job.snapshot.fps), 6) + ko("초 → 모든 파일 0 시작 · ")
-            + juce::String(job.range.frameCount) + " frames / " + juce::String(job.range.sampleCount) + " samples", juce::dontSendNotification);
+            + juce::String(job.range.frameCount) + ko(" 프레임 / ") + juce::String(job.range.sampleCount) + ko(" 샘플"), juce::dontSendNotification);
         const auto mask = finalMode ? r.finalSource.audio : r.materials.referenceAudio.value_or(AudioSourceMask{AudioSourceMask::Kind::microphoneMix});
         juce::String text;
         for (const auto& track : job.snapshot.tracks) if (track.trackId == mask.trackId && track.mute)
             text = mask.kind == AudioSourceMask::Kind::microphone ? ko("선택한 마이크가 음소거되어 있습니다") : ko("선택한 완성 오디오 파일이 음소거되어 있습니다");
         if (mask.kind == AudioSourceMask::Kind::microphoneMix && TimelineExporter::assetIds(job, mask).isEmpty()) text = ko("마이크 믹스에 포함할 트랙이 0개입니다. 무음으로 내보냅니다.");
-        if (!finalMode) text += (text.isNotEmpty() ? "\n" : "") + ko("소재 WAV는 mute/solo와 무관한 PCM24 · 프로젝트 Fs · 모노입니다. Stereo import는 L/R 두 WAV로 보존합니다.");
+        if (!finalMode) text += (text.isNotEmpty() ? "\n" : "") + ko("소재 WAV는 뮤트·솔로와 상관없이 24비트, 프로젝트 샘플레이트로 나갑니다. 마이크는 입력 그대로(모노는 모노, 스테레오는 스테레오 파일 1개), 불러온 스테레오 오디오는 왼쪽·오른쪽 2개 파일입니다.");
         sourceStatus.setText(text, juce::dontSendNotification); exportNow.setEnabled(true); listen.setEnabled(session.deviceInfo().sampleRate == job.snapshot.Fs);
     }
     catch (const std::exception& e) { commonRange.setText(ko("예상 공통 범위: 확인 필요"), juce::dontSendNotification); sourceStatus.setText(juce::String::fromUTF8(e.what()), juce::dontSendNotification); }
@@ -310,7 +310,7 @@ void ExportDialog::startPreview()
     {
         const auto r = request(); auto job = std::make_shared<ExportJob>(ExportJob::fromDocument(document, {}, r.range));
         const auto mask = selectedAudio(*job, !finalMode); const auto device = session.deviceInfo();
-        exportRequire(device.sampleRate == job->snapshot.Fs && device.bufferFrames > 0, "Connect the project sample-rate ASIO output for preview");
+        exportRequire(device.sampleRate == job->snapshot.Fs && device.bufferFrames > 0, "미리 들으려면 프로젝트 샘플레이트에 맞는 ASIO 출력을 연결하세요.");
         restoreTimeline = session.showingPlayback(); session.enterTimeline(false);
         previewControl = std::make_shared<ExportControl>(previewActivity);
         previewWork = std::async(std::launch::async, [job, mask, device, c = previewControl]
@@ -377,7 +377,7 @@ void ExportDialog::timerCallback()
     else if (state.state == S::cancelled) text = ko("취소했습니다. 재시도할 수 있습니다.");
     else if (state.state == S::failed) text = ko("내보내기에 실패했습니다. 출력 폴더와 남은 공간을 확인한 뒤 재시도하세요. ") + state.error;
     if (state.state == S::failed || state.state == S::cancelled)
-        text += ko("\n재시도: ") + (state.mode == ExportController::Mode::materials ? ko("소재 뽑기") : ko("최종본 뽑기")) + " · revision " + juce::String(state.editRevision) + ko("의 기존 설정");
+        text += ko("\n재시도: ") + (state.mode == ExportController::Mode::materials ? ko("소재 뽑기") : ko("최종본 뽑기")) + ko(" · 편집 버전 ") + juce::String(state.editRevision) + ko("의 기존 설정");
     if (state.notice.isNotEmpty()) text += "\n" + state.notice;
     progressLabel.setText(text, juce::dontSendNotification);
     cancel.setEnabled(controller.busy() || preview || previewWork.valid()); openFolder.setEnabled(state.state == S::completed);

@@ -47,8 +47,8 @@ CameraClockMapper::CameraClockMapper(const ClockMapper& m, std::int64_t frequenc
 {
     if (frequency <= 0 || frequency > 1000000000000LL || !native.numerator || !native.denominator
         || native.numerator > 1000000 || native.denominator > 1000000 || std::abs(static_cast<double>(latency)) > 100000000)
-        throw std::invalid_argument("CameraClockMapper: invalid clock, rate or residual latency");
-    if (master.qpcFrequency() != frequency) throw std::invalid_argument("Camera and master QPC frequencies differ");
+        throw std::invalid_argument("카메라 시계·프레임레이트·잔여 지연이 올바르지 않습니다.");
+    if (master.qpcFrequency() != frequency) throw std::invalid_argument("카메라와 기준 시계의 QPC 주파수가 다릅니다.");
     state.qpcFrequency = frequency; state.cameraResidualLatency100ns = latency;
     window.reserve(2048); directDelays.reserve(2048); published.publish(state);
 }

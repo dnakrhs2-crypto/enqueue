@@ -10,7 +10,7 @@ ClipInspector::ClipInspector(TimelineEditController& c) : edits(c)
     title.setText(ko("선택 속성"), juce::dontSendNotification); units.setText(ko("샘플 · 숫자 입력은 정확히 적용"), juce::dontSendNotification);
     title.setFont(recorderFont(13.5f, juce::Font::bold));
     for (auto* label : {&units, &link}) { label->setFont(recorderFont(12)); label->setColour(juce::Label::textColourId, Palette::dimText); }
-    const char* captions[] = {"시작", "끝", "source In", "source Out", "길이"};
+    const char* captions[] = {"시작", "끝", "소재 시작", "소재 끝", "길이"};
     for (unsigned i = 0; i < inputs.size(); ++i)
     {
         content.addAndMakeVisible(labels[i]); content.addAndMakeVisible(inputs[i]); labels[i].setText(ko(captions[i]), juce::dontSendNotification);

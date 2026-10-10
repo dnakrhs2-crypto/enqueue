@@ -10,9 +10,9 @@ void RawAudioTap::prepare(const std::vector<int>& channels, std::uint32_t maxBlo
     if (channels.size() > maxChannels || !maxBlock || maxBlock > 262144 || !blocks || blocks > 65536
         || !std::is_sorted(channels.begin(), channels.end()) || (!channels.empty() && channels.front() < 0)
         || std::adjacent_find(channels.begin(), channels.end()) != channels.end())
-        throw std::invalid_argument("RawAudioTap: invalid channel map, block size or queue capacity");
+        throw std::invalid_argument("원본 오디오 입력의 채널 연결·블록 크기·대기열 용량이 올바르지 않습니다.");
     const auto total = static_cast<std::uint64_t>(maxBlock) * maxStrideBytes * channels.size() * blocks;
-    if (total > 512ull * 1024 * 1024) throw std::invalid_argument("RawAudioTap: queue exceeds 512 MiB safety bound");
+    if (total > 512ull * 1024 * 1024) throw std::invalid_argument("원본 오디오 입력 대기열이 최대 크기 512 MiB를 넘었습니다.");
     auto storage = std::make_unique<std::uint8_t[]>(static_cast<std::size_t>(total)); // allocate and touch before callbacks
     std::vector<Block> prepared(blocks);
     mapping = channels; slots = std::move(prepared); bytes = std::move(storage);

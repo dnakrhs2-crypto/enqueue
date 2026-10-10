@@ -11,11 +11,11 @@ ExportController::ExportController(Runner r) : runner(std::move(r)) {}
 ExportController::~ExportController() { cancel(); wait(); }
 juce::File ExportController::resolveDestination(const juce::File& desired)
 {
-    exportRequire(desired != juce::File() && desired.getFileName().isNotEmpty(), "Choose an export destination folder");
+    exportRequire(desired != juce::File() && desired.getFileName().isNotEmpty(), "내보낼 폴더를 선택하세요.");
     auto result = desired;
     for (unsigned number = 2; result.exists(); ++number)
     {
-        exportRequire(number < 1000000, "Too many export destination collisions");
+        exportRequire(number < 1000000, "같은 이름의 내보내기 폴더가 너무 많습니다.");
         result = desired.getSiblingFile(desired.getFileName() + " (" + juce::String(number) + ")");
     }
     return result;
@@ -40,7 +40,7 @@ juce::Result ExportController::start(const RecorderProject& p, const juce::File&
         auto job = std::make_shared<ExportJob>(p, directory, destination, request.range, recording);
         // Detect the legacy constructor's UUID fallback if a directory appeared
         // between collision resolution and snapshot creation. Never silently nest.
-        exportRequire(job->outputDirectory == destination, "Export destination appeared; retry to choose the next suffix");
+        exportRequire(job->outputDirectory == destination, "내보낼 폴더가 이미 생겼습니다. 다시 시도해 다른 이름으로 저장하세요.");
         if (request.mode == Mode::materials) MaterialExporter::outputs(*job, request.materials);
         else FinalVideoExporter::validateSelection(*job, request.finalSource);
         auto lease = std::make_shared<ExportActivity::Lease>(activity);

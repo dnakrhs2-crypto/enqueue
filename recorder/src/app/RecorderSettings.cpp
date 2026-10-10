@@ -1,5 +1,5 @@
 #include "RecorderSettings.h"
-#include "model/SafeFileWrite.h"
+#include "storage/RecorderFileWrite.h"
 #include <algorithm>
 #include <charconv>
 #include <cstring>
@@ -79,10 +79,10 @@ juce::Result decode(const juce::String& text, UserSettings& out)
     if (!inputs.isArray() || !calibrationInputs.isArray() || !recent.isArray()) return juce::Result::fail(ko("설정의 입력 또는 최근 프로젝트 목록이 잘못되었습니다."));
     for (const auto& input : *inputs.getArray()) { if (!input.isInt()) return juce::Result::fail(ko("물리 입력 번호가 잘못되었습니다.")); s.physicalInputs.push_back(static_cast<int>(input)); }
     for (const auto& input : *calibrationInputs.getArray()) { if (!input.isInt()) return juce::Result::fail(ko("보정 입력 번호가 잘못되었습니다.")); s.calibration.physicalInputs.push_back(static_cast<int>(input)); }
-    if (!calibrationRight.isArray()) return juce::Result::fail("Invalid calibration right inputs");
+    if (!calibrationRight.isArray()) return juce::Result::fail(juce::String::fromUTF8("보정용 오른쪽 입력 목록이 올바르지 않습니다."));
     for (const auto& input : *calibrationRight.getArray())
     {
-        if (!input.isInt() || int(input) < -1 || int(input) > 255) return juce::Result::fail("Invalid calibration right input");
+        if (!input.isInt() || int(input) < -1 || int(input) > 255) return juce::Result::fail(juce::String::fromUTF8("보정용 오른쪽 입력이 올바르지 않습니다."));
         s.calibration.physicalInputsRight.push_back(int(input));
     }
     for (const auto& path : *recent.getArray()) { if (!path.isString()) return juce::Result::fail(ko("최근 프로젝트 경로가 잘못되었습니다.")); s.recentProjects.add(path.toString()); }
@@ -200,7 +200,7 @@ void RecorderSettings::run()
             if (pending.empty() && stopping) return;
             request = std::move(pending.front()); pending.pop_front();
         }
-        try { request.completion.set_value(gocue::SafeFileWrite::writeTextVerified(settingsFile, request.xml, [](const auto& text) { UserSettings verified; return decode(text, verified); })); }
+        try { request.completion.set_value(writeRecorderTextVerified(settingsFile, request.xml, [](const auto& text) { UserSettings verified; return decode(text, verified); })); }
         catch (const std::exception& e) { request.completion.set_value(juce::Result::fail(juce::String::fromUTF8(e.what()))); }
     }
 }

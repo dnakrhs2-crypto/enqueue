@@ -68,18 +68,18 @@ WavTrackWriter::Config checkedConfig(WavTrackWriter::Config c)
     if (c.sampleRate == 0 || c.mics == 0 || c.mics > 8 || c.framesPerBlock == 0 || c.framesPerBlock > 16384
         || static_cast<std::uint64_t>(c.sampleRate) * 30 * 6 + 37 >= std::numeric_limits<std::uint32_t>::max()
         || c.takeId.isNull() || c.devices.size() != c.mics || c.projectDirectory == juce::File())
-        throw std::invalid_argument("Invalid WAV configuration (Fs, 1..8 mics, block size, mapping, take ID, or RIFF size)");
+        throw std::invalid_argument("WAV 설정이 올바르지 않습니다. 샘플레이트·마이크 1~8개·블록 크기·입력 연결·테이크 식별자·RIFF 크기를 확인하세요.");
     if (c.logicalMicrophones.empty()) for (unsigned i = 1; i <= c.mics; ++i) c.logicalMicrophones.push_back(i);
-    if (c.logicalMicrophones.size() != c.mics) throw std::invalid_argument("Invalid logical microphone count");
+    if (c.logicalMicrophones.size() != c.mics) throw std::invalid_argument("마이크 수가 올바르지 않습니다.");
     if (c.slotChannels.empty()) c.slotChannels.assign(c.mics, 1);
     if (c.slotChannels.size() != c.mics || std::any_of(c.slotChannels.begin(), c.slotChannels.end(), [](auto n) { return n < 1 || n > 2; }))
-        throw std::invalid_argument("Invalid slot channel counts");
+        throw std::invalid_argument("마이크별 채널 수가 올바르지 않습니다.");
     const auto total = std::accumulate(c.slotChannels.begin(), c.slotChannels.end(), 0u);
-    if (c.peakCache && c.peakCache->snapshot().channels != total) throw std::invalid_argument("Peak channel count differs from PCM");
+    if (c.peakCache && c.peakCache->snapshot().channels != total) throw std::invalid_argument("파형의 채널 수가 PCM과 다릅니다.");
     std::array<bool, 8> seen{};
     for (auto mic : c.logicalMicrophones)
     {
-        if (mic < 1 || mic > 8 || seen[mic - 1]) throw std::invalid_argument("Invalid logical microphone IDs");
+        if (mic < 1 || mic > 8 || seen[mic - 1]) throw std::invalid_argument("마이크 식별자가 올바르지 않습니다.");
         seen[mic - 1] = true;
     }
     seen.fill(false);
@@ -88,11 +88,11 @@ WavTrackWriter::Config checkedConfig(WavTrackWriter::Config c)
         if (d.mic < 1 || d.mic > 8 || seen[static_cast<std::size_t>(d.mic - 1)]
             || std::find(c.logicalMicrophones.begin(), c.logicalMicrophones.end(), unsigned(d.mic)) == c.logicalMicrophones.end()
             || d.activeIndex < 0 || d.physicalIndex < 0 || d.deviceId.isEmpty())
-            throw std::invalid_argument("Invalid microphone/device mapping");
+            throw std::invalid_argument("마이크와 장치의 연결이 올바르지 않습니다.");
         const auto slot = std::size_t(std::find(c.logicalMicrophones.begin(), c.logicalMicrophones.end(), unsigned(d.mic)) - c.logicalMicrophones.begin());
         if (d.channels() != c.slotChannels[slot] || d.physicalIndex > 255
             || (d.channels() == 2 && (d.rightPhysicalIndex != d.physicalIndex + 1 || d.rightPhysicalIndex > 255 || d.rightActiveIndex != d.activeIndex + 1))
-            || (d.channels() == 1 && d.rightActiveIndex != -1)) throw std::invalid_argument("Slot format differs from physical input pair");
+            || (d.channels() == 1 && d.rightActiveIndex != -1)) throw std::invalid_argument("마이크 형식이 물리 입력 쌍과 다릅니다.");
         seen[static_cast<std::size_t>(d.mic - 1)] = true;
     }
     return c;
@@ -166,9 +166,9 @@ struct WavTrackWriter::Impl
         switch (failure.load(std::memory_order_acquire))
         {
             case Error::none: return juce::Result::ok();
-            case Error::queueOverflow: return juce::Result::fail("PCM queue overflow; capture must stop, no silence inserted");
-            case Error::invalidBlock: return juce::Result::fail("Invalid PCM input block");
-            default: return juce::Result::fail("WAV writer failed");
+            case Error::queueOverflow: return juce::Result::fail(juce::String::fromUTF8("PCM 대기열이 가득 찼습니다. 무음을 넣지 않고 녹음을 정지해야 합니다."));
+            case Error::invalidBlock: return juce::Result::fail(juce::String::fromUTF8("PCM 입력 블록이 올바르지 않습니다."));
+            default: return juce::Result::fail(juce::String::fromUTF8("WAV 저장에 실패했습니다."));
         }
     }
     bool openChunk()
@@ -250,12 +250,12 @@ struct WavTrackWriter::Impl
     bool process(const PcmQueue::Block& block, const std::int32_t* pcm)
     {
         const auto end = written.load(std::memory_order_relaxed);
-        if (block.first != end) { fail(Error::discontinuity, "PCM sample sequence gap/duplicate; take stopped"); return false; }
+        if (block.first != end) { fail(Error::discontinuity, juce::String::fromUTF8("PCM 샘플 순서가 비거나 중복되어 녹화를 정지했습니다.")); return false; }
         if (end > static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max()) - block.frames)
-        { fail(Error::invalidBlock, "Sample position exceeds int64"); return false; }
+        { fail(Error::invalidBlock, juce::String::fromUTF8("샘플 위치가 처리 가능한 범위를 넘었습니다.")); return false; }
         for (std::size_t i = 0; i < static_cast<std::size_t>(block.frames) * queue.mics; ++i)
             if (pcm[i] < -8388608 || pcm[i] > 8388607)
-            { fail(Error::invalidPcm, "Input is outside signed PCM24; no implicit clipping/conversion"); return false; }
+            { fail(Error::invalidPcm, juce::String::fromUTF8("입력이 부호 있는 PCM24 범위를 벗어났습니다. 자동으로 잘라내거나 변환하지 않습니다.")); return false; }
         const auto chunkFrames = config.testChunkFrames ? config.testChunkFrames : static_cast<std::uint64_t>(config.sampleRate) * chunkSeconds;
         std::uint32_t consumed = 0;
         while (consumed < block.frames)
@@ -323,7 +323,7 @@ struct WavTrackWriter::Impl
                 {
                     const auto samples = static_cast<std::int64_t>(written.load());
                     if (origin() > std::numeric_limits<std::int64_t>::max() - samples || nstop != origin() + samples)
-                        fail(Error::discontinuity, "Nstop does not match the accepted PCM sample range");
+                        fail(Error::discontinuity, juce::String::fromUTF8("녹음 정지 시점이 수신한 PCM 샘플 구간과 맞지 않습니다."));
                     else if ((config.checkpointSink || io(journal.append(JournalTakeStopped{config.takeId, nstop, editId})))
                              && checkpoint() && closeTracks() && (config.checkpointSink || io(journal.append(JournalTakeFinalized{config.takeId}))))
                         ++closedChunkSets;
@@ -335,7 +335,7 @@ struct WavTrackWriter::Impl
             }
         }
         catch (const std::exception& e) { fail(Error::internal, juce::String::fromUTF8(e.what())); }
-        catch (...) { fail(Error::internal, "Unknown writer worker exception"); }
+        catch (...) { fail(Error::internal, juce::String::fromUTF8("WAV 저장 중 알 수 없는 오류가 발생했습니다.")); }
         closeTracks(); io(journal.close());
         if (config.peakCache) config.peakCache->finish();
         if (failure.load(std::memory_order_acquire) == Error::none) current.store(State::stopped, std::memory_order_release);
@@ -357,7 +357,7 @@ WavTrackWriter::~WavTrackWriter()
 juce::Result WavTrackWriter::start()
 {
     auto expected = State::idle;
-    if (!impl->current.compare_exchange_strong(expected, State::starting)) return juce::Result::fail("WAV writer is single-use");
+    if (!impl->current.compare_exchange_strong(expected, State::starting)) return juce::Result::fail(juce::String::fromUTF8("이미 사용한 WAV 저장 작업은 다시 시작할 수 없습니다."));
     std::promise<juce::Result> ready; auto future = ready.get_future();
     try { impl->worker = std::thread([this, ready = std::move(ready)]() mutable { impl->run(std::move(ready)); }); }
     catch (const std::exception& e) { impl->fail(Error::internal, juce::String::fromUTF8(e.what())); return impl->result(); }
@@ -375,7 +375,7 @@ bool WavTrackWriter::tryPush(const std::int32_t* pcm, std::uint32_t frames, std:
 }
 juce::Result WavTrackWriter::stop(std::int64_t nstop, const juce::Uuid& editId)
 {
-    if (!impl->worker.joinable()) return impl->current.load() == State::idle ? juce::Result::fail("WAV writer was not started") : impl->result();
+    if (!impl->worker.joinable()) return impl->current.load() == State::idle ? juce::Result::fail(juce::String::fromUTF8("WAV 저장이 시작되지 않았습니다.")) : impl->result();
     impl->nstop = nstop; impl->editId = editId;
     auto expected = State::running; impl->current.compare_exchange_strong(expected, State::stopping);
     impl->stopRequested.store(true, std::memory_order_release); impl->worker.join(); return impl->result();

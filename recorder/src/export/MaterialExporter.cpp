@@ -76,16 +76,16 @@ AudioSourceMask MaterialExporter::referenceAudio(const ExportJob& j, const Mater
     {
         const auto& mask = *options.referenceAudio;
         exportRequire(mask.kind == (dub ? AudioSourceMask::Kind::completedAudio : AudioSourceMask::Kind::microphoneMix),
-                      "Material reference uses completed audio for dubbing and the microphone mix for a normal project");
+                      "소재의 참조 오디오는 더빙 프로젝트에서 완성 오디오, 일반 프로젝트에서 마이크 전체 믹스를 사용하세요.");
         if (mask.kind == AudioSourceMask::Kind::microphoneMix)
-            exportRequire(mask.trackId.isEmpty() && mask.assetId.isEmpty(), "Microphone mix cannot select another track/asset");
+            exportRequire(mask.trackId.isEmpty() && mask.assetId.isEmpty(), "마이크 전체 믹스에는 다른 트랙이나 소재를 지정할 수 없습니다.");
         else
         {
             const auto* asset = j.snapshot.media->findAsset(mask.assetId); bool found = false;
             for (const auto& t : j.snapshot.tracks) if (t.kind == TrackKind::importAudio && t.trackId == mask.trackId)
                 for (const auto& c : t.clips.items()) found |= j.snapshot.isActive(c) && c.assetId == mask.assetId;
             exportRequire(found && asset && asset->kind == AssetKind::importAudio && asset->originalFormat.channels >= 1 && asset->originalFormat.channels <= 2,
-                "Choose an active mono/stereo completed audio reference track and asset");
+                "활성 상태인 모노·스테레오 완성 오디오의 참조 트랙과 소재를 선택하세요.");
         }
         return mask;
     }
@@ -93,7 +93,7 @@ AudioSourceMask MaterialExporter::referenceAudio(const ExportJob& j, const Mater
     std::set<std::pair<Id, Id>> imports;
     for (const auto& t : j.snapshot.tracks) if (t.kind == TrackKind::importAudio)
         for (const auto& c : t.clips.items()) if (j.snapshot.isActive(c)) imports.insert({t.trackId, c.assetId});
-    exportRequire(imports.size() == 1, "Choose the completed audio reference source for this dubbing project");
+    exportRequire(imports.size() == 1, "더빙 프로젝트의 참조 소스로 사용할 완성 오디오를 선택하세요.");
     return referenceAudio(j, {false, AudioSourceMask{AudioSourceMask::Kind::completedAudio, imports.begin()->first, imports.begin()->second}});
 }
 std::vector<MaterialOutput> MaterialExporter::outputs(const ExportJob& j, const MaterialExportOptions& options)
@@ -116,12 +116,12 @@ std::vector<MaterialOutput> MaterialExporter::outputs(const ExportJob& j, const 
         for (const auto& c : j.plan().activeClips) if (c.trackId == t.trackId)
         {
             const auto* asset = j.snapshot.media->findAsset(c.assetId);
-            exportRequire(asset != nullptr, "Missing material audio asset");
+            exportRequire(asset != nullptr, "내보낼 오디오 소재가 없습니다.");
             if (t.kind == TrackKind::mic) channels = (std::max)(channels, asset->originalFormat.channels);
             if (t.kind == TrackKind::importAudio)
             {
                 exportRequire(asset->originalFormat.channels >= 1 && asset->originalFormat.channels <= 2,
-                              "Imported WAV materials support mono/stereo only; automatic downmix is unsupported");
+                              "불러온 WAV 소재는 모노·스테레오만 지원합니다. 자동 다운믹스는 지원하지 않습니다.");
                 channels = (std::max)(channels, asset->originalFormat.channels);
                 if (sourceName.isEmpty()) sourceName = j.projectDirectory.getChildFile(asset->relativePath).getFileNameWithoutExtension();
             }
@@ -146,7 +146,7 @@ std::vector<MaterialOutput> MaterialExporter::outputs(const ExportJob& j, const 
             names.insert(name.toLowerCase()); result.push_back({name, {}, mask, fileChannels == 2 ? -1 : ch, unsigned(fileChannels)});
         }
     }
-    exportRequire(!result.empty(), "No camera or audio material tracks");
+    exportRequire(!result.empty(), "내보낼 카메라나 오디오 소재 트랙이 없습니다.");
     return result;
 }
 juce::var MaterialExporter::run(const ExportJob& j, const MaterialExportOptions& options, ExportControl& control,
@@ -186,14 +186,14 @@ juce::var MaterialExporter::run(const ExportJob& j, const MaterialExportOptions&
                 : FinalVideoExporter::run(child, {*item.camera, item.audio}, childControl, {}, &relay);
             control.checkpoint();
             const auto* entries = manifest["files"].getArray();
-            exportRequire(entries && entries->size() == 1, "Camera child did not verify exactly one MP4");
+            exportRequire(entries && entries->size() == 1, "카메라 내보내기에서 MP4 파일 1개를 검증하지 못했습니다.");
             row = (*entries)[0].clone();
             exportRequire(row["verified"] == juce::var(true) && Sample(row["frameCount"]) == j.range.frameCount
-                && Sample(row["renderedPcmSampleCount"]) == j.range.sampleCount, "Camera material common count mismatch");
+                && Sample(row["renderedPcmSampleCount"]) == j.range.sampleCount, "카메라 소재의 프레임 수나 샘플 수가 공통 구간과 맞지 않습니다.");
             exportRename(child.outputDirectory.getChildFile("final.mp4"), publication.file(item.name).getSiblingFile(item.name + ".partial"));
             // Explicit ownership and containment before recursive cleanup.
-            exportRequire(child.outputDirectory.getParentDirectory() == j.partialDirectory && child.outputDirectory.getFileName().endsWith("-work"), "Unexpected child publication owner");
-            exportRequire(child.outputDirectory.deleteRecursively(), "Cannot clean camera work directory");
+            exportRequire(child.outputDirectory.getParentDirectory() == j.partialDirectory && child.outputDirectory.getFileName().endsWith("-work"), "카메라 내보내기 작업 폴더가 예상한 위치와 다릅니다.");
+            exportRequire(child.outputDirectory.deleteRecursively(), "카메라 작업 폴더를 정리할 수 없습니다.");
             ++cameraCount;
         }
         else
@@ -214,7 +214,7 @@ juce::var MaterialExporter::run(const ExportJob& j, const MaterialExportOptions&
             }
             control.checkpoint(); writer.finish();
             const auto header = WavExportWriter::inspect(writer.partialFile());
-            exportRequire(header.sampleCount == std::uint64_t(j.range.sampleCount), "Material WAV common count mismatch");
+            exportRequire(header.sampleCount == std::uint64_t(j.range.sampleCount), "소재 WAV의 샘플 수가 공통 구간과 맞지 않습니다.");
             row = jsonObject(); jsonSet(row, "verified", true); jsonSet(row, "trackId", item.audio.trackId);
             jsonSet(row, "assetIds", TimelineExporter::assetIds(j, item.audio)); jsonSet(row, "sourceChannel", item.sourceChannel);
             jsonSet(row, "sampleCount", j.range.sampleCount); jsonSet(row, "frameCount", j.range.frameCount);

@@ -120,8 +120,8 @@ bool RecorderSession::readyToRecord() const
 juce::String RecorderSession::cameraCaption(unsigned n) const
 {
     auto text = k(n ? "캠2" : "캠1");
-    if (cameraReady(n)) text += k(" · 1080p ") + juce::String(cameras[n]->mode.fps.value(), cameras[n]->mode.fps.denominator == 1 ? 0 : 2) + k(" 입력");
-    return text + k(" / 프로젝트 ") + juce::String(document.getProject().fps.numerator);
+    if (cameraReady(n)) text += k(" · 1080p ") + juce::String(cameras[n]->mode.fps.value(), cameras[n]->mode.fps.denominator == 1 ? 0 : 2) + k(" fps 입력");
+    return text + k(" / 프로젝트 ") + juce::String(document.getProject().fps.numerator) + " fps";
 }
 juce::Result RecorderSession::configure(UserSettings settings)
 {

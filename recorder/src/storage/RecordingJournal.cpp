@@ -115,22 +115,22 @@ juce::Result RecordingJournal::openEdits(const juce::File& dir, unsigned first, 
 { return openDomain(dir, rotation, true, first, preceding); }
 juce::Result RecordingJournal::openDomain(const juce::File& dir, std::uint64_t rotationBytes, bool editDomain, unsigned first, std::uint64_t preceding)
 {
-    if (writerLock != INVALID_HANDLE_VALUE) return fail(juce::Result::fail("Journal already open"));
+    if (writerLock != INVALID_HANDLE_VALUE) return fail(juce::Result::fail(juce::String::fromUTF8("녹화 기록이 이미 열려 있습니다.")));
     error = juce::Result::ok(); sequence = 0; segment = 0; directory = dir; edits = editDomain;
-    if (first == 0) return fail(juce::Result::fail("Invalid first journal segment"));
-    if (rotationBytes < headerBytes + commitBytes) return fail(juce::Result::fail("Journal rotation limit too small"));
+    if (first == 0) return fail(juce::Result::fail(juce::String::fromUTF8("첫 녹화 기록 파일이 올바르지 않습니다.")));
+    if (rotationBytes < headerBytes + commitBytes) return fail(juce::Result::fail(juce::String::fromUTF8("녹화 기록 파일의 분할 한도가 너무 작습니다.")));
     rotateAt = rotationBytes;
     if (fail(directory.createDirectory()).failed()) return error;
     const auto lockFile = directory.getChildFile(edits ? "edits.writer.lock" : "takes.writer.lock");
     writerLock = CreateFileW(lockFile.getFullPathName().toWideCharPointer(), GENERIC_READ | GENERIC_WRITE,
         0, nullptr, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
     if (writerLock == INVALID_HANDLE_VALUE)
-        return fail(juce::Result::fail("Journal writer lock failed (Win32 " + juce::String(static_cast<int>(GetLastError())) + ")"));
+        return fail(juce::Result::fail(juce::String::fromUTF8("녹화 기록의 쓰기 잠금을 얻을 수 없습니다 (Win32 ") + juce::String(static_cast<int>(GetLastError())) + ")"));
     JournalReplay read;
     if (fail(replayDomain(directory, read, edits, first, preceding)).failed()) { close(); return error; }
     if (read.ignoredTail)
     {
-        fail(juce::Result::fail("Journal needs recovery in a new copy; original tail preserved: " + read.tailReason));
+        fail(juce::Result::fail(juce::String::fromUTF8("녹화 기록을 새 복사본으로 복구해야 합니다. 원본 끝부분은 보존되었습니다: ") + read.tailReason));
         close(); return error;
     }
     sequence = read.lastSequence; segment = std::max(first, read.fileCount);
@@ -141,13 +141,13 @@ juce::Result RecordingJournal::appendEditRecord(JournalKind kind, const juce::va
                                                const std::function<void(const char*)>& hook)
 {
     if (!edits || kind < JournalKind::EditTransaction || kind > JournalKind::MediaRegistry)
-        return fail(juce::Result::fail("Wrong journal domain/kind"));
+        return fail(juce::Result::fail(juce::String::fromUTF8("기록 영역이나 종류가 올바르지 않습니다.")));
     return appendRecord(kind, txn, payload, hook);
 }
 juce::Result RecordingJournal::rotate()
 {
     if (error.failed()) return error;
-    if (!stream.isOpen() || segment == std::numeric_limits<unsigned>::max()) return fail(juce::Result::fail("Cannot rotate journal"));
+    if (!stream.isOpen() || segment == std::numeric_limits<unsigned>::max()) return fail(juce::Result::fail(juce::String::fromUTF8("다음 녹화 기록 파일로 전환할 수 없습니다.")));
     if (fail(stream.close()).failed()) return error;
     return fail(stream.open(edits ? editLogFile(directory, ++segment) : logFile(directory, ++segment), DurableFile::OpenMode::createNew));
 }
@@ -155,13 +155,13 @@ juce::Result RecordingJournal::appendRecord(JournalKind kind, const juce::Uuid& 
                                            const std::function<void(const char*)>& hook)
 {
     if (error.failed()) return error;
-    if (writerLock == INVALID_HANDLE_VALUE) return fail(juce::Result::fail("Journal is not open"));
-    if (txn.isNull() || !validPayload(kind, payload)) return fail(juce::Result::fail("Invalid journal payload/transaction"));
+    if (writerLock == INVALID_HANDLE_VALUE) return fail(juce::Result::fail(juce::String::fromUTF8("녹화 기록이 열려 있지 않습니다.")));
+    if (txn.isNull() || !validPayload(kind, payload)) return fail(juce::Result::fail(juce::String::fromUTF8("녹화 기록의 내용이나 작업 정보가 올바르지 않습니다.")));
     const auto json = juce::JSON::toString(payload, true);
     const auto bytes = json.getNumBytesAsUTF8();
     const auto total = headerBytes + bytes + commitBytes;
     if (total > maxRecordBytes || sequence == std::numeric_limits<std::uint64_t>::max())
-        return fail(juce::Result::fail("Journal record/sequence exceeds schema limits"));
+        return fail(juce::Result::fail(juce::String::fromUTF8("녹화 기록의 크기나 순서 번호가 저장 형식의 한도를 넘었습니다.")));
     std::vector<std::uint8_t> record(total, 0);
     auto* h = record.data();
     put(h, magic); put(h + 4, static_cast<std::uint32_t>(total));
@@ -238,7 +238,7 @@ juce::Result RecordingJournal::close()
     fail(stream.close());
     if (writerLock != INVALID_HANDLE_VALUE)
     {
-        if (!CloseHandle(writerLock)) fail(juce::Result::fail("Close journal writer lock failed"));
+        if (!CloseHandle(writerLock)) fail(juce::Result::fail(juce::String::fromUTF8("녹화 기록의 쓰기 잠금을 해제할 수 없습니다.")));
         writerLock = INVALID_HANDLE_VALUE;
     }
     return error;
@@ -259,7 +259,7 @@ juce::Result RecordingJournal::replayDomain(const juce::File& directory, Journal
         if (!name.containsOnly("0123456789") || name.length() < 6 || n < 1
             || n > std::numeric_limits<unsigned>::max()
             || (edits ? editLogFile(directory, static_cast<unsigned>(n)) : logFile(directory, static_cast<unsigned>(n))) != f)
-            return juce::Result::fail("Invalid journal segment name: " + f.getFileName());
+            return juce::Result::fail(juce::String::fromUTF8("녹화 기록 파일 이름이 올바르지 않습니다: ") + f.getFileName());
         if (n < first) continue;
         segments.emplace_back(static_cast<unsigned>(n), f);
     }
@@ -269,10 +269,10 @@ juce::Result RecordingJournal::replayDomain(const juce::File& directory, Journal
     {
         const auto stop = [&](const char* reason)
         {
-            out.ignoredTail = true; out.tailReason = reason; out.tailFile = entry.second;
+            out.ignoredTail = true; out.tailReason = juce::String::fromUTF8(reason); out.tailFile = entry.second;
             return juce::Result::ok();
         };
-        if (entry.first != out.fileCount + 1) return stop("Journal segment gap");
+        if (entry.first != out.fileCount + 1) return stop("기록 파일 사이에 빠진 구간이 있습니다.");
         ++out.fileCount; out.validBytesInLastFile = 0;
         juce::FileInputStream input(entry.second);
         if (input.failedToOpen()) return input.getStatus();
@@ -280,32 +280,32 @@ juce::Result RecordingJournal::replayDomain(const juce::File& directory, Journal
         while (input.getPosition() < length)
         {
             std::array<std::uint8_t, headerBytes> h{};
-            if (length - input.getPosition() < static_cast<std::int64_t>(h.size())) return stop("Truncated record header");
+            if (length - input.getPosition() < static_cast<std::int64_t>(h.size())) return stop("기록 헤더가 잘렸습니다.");
             if (input.read(h.data(), static_cast<int>(h.size())) != static_cast<int>(h.size()))
-                return input.getStatus().failed() ? input.getStatus() : juce::Result::fail("Journal header read was short");
+                return input.getStatus().failed() ? input.getStatus() : juce::Result::fail(juce::String::fromUTF8("녹화 기록의 헤더를 끝까지 읽지 못했습니다."));
             const auto total = get<std::uint32_t>(h.data() + 4), payloadSize = get<std::uint32_t>(h.data() + 36);
             const auto nextSequence = get<std::uint64_t>(h.data() + 12);
             const auto kind = static_cast<JournalKind>(get<std::uint16_t>(h.data() + 10));
-            if (edits != (kind >= JournalKind::EditTransaction && kind <= JournalKind::MediaRegistry)) return stop("Wrong journal domain/kind");
+            if (edits != (kind >= JournalKind::EditTransaction && kind <= JournalKind::MediaRegistry)) return stop("기록 영역이나 종류가 올바르지 않습니다.");
             if (get<std::uint32_t>(h.data()) != magic || get<std::uint32_t>(h.data() + 44) != crc32(h.data(), 44))
-                return stop("Record header magic/CRC mismatch");
-            if (get<std::uint16_t>(h.data() + 8) != schemaVersion) return stop("Unsupported journal schema");
+                return stop("기록 헤더의 식별값이나 CRC가 맞지 않습니다.");
+            if (get<std::uint16_t>(h.data() + 8) != schemaVersion) return stop("지원하지 않는 기록 저장 형식입니다.");
             if (total < headerBytes + commitBytes || total > maxRecordBytes || payloadSize != total - headerBytes - commitBytes)
-                return stop("Invalid record length");
+                return stop("기록 길이가 올바르지 않습니다.");
             if (out.lastSequence == std::numeric_limits<std::uint64_t>::max() || nextSequence != out.lastSequence + 1)
-                return stop("Non-contiguous journal sequence");
+                return stop("기록 순서가 연속되지 않습니다.");
             const auto remaining = static_cast<int>(total - headerBytes);
-            if (length - input.getPosition() < remaining) return stop("Truncated record payload/commit");
+            if (length - input.getPosition() < remaining) return stop("기록 내용이나 완료 정보가 잘렸습니다.");
             std::vector<std::uint8_t> body(static_cast<std::size_t>(remaining));
             if (input.read(body.data(), remaining) != remaining)
-                return input.getStatus().failed() ? input.getStatus() : juce::Result::fail("Journal payload read was short");
-            if (get<std::uint64_t>(body.data() + payloadSize) != committed) return stop("Missing commit marker");
-            if (get<std::uint32_t>(h.data() + 40) != crc32(body.data(), payloadSize)) return stop("Payload CRC mismatch");
+                return input.getStatus().failed() ? input.getStatus() : juce::Result::fail(juce::String::fromUTF8("녹화 기록의 내용을 끝까지 읽지 못했습니다."));
+            if (get<std::uint64_t>(body.data() + payloadSize) != committed) return stop("기록 완료 표시가 없습니다.");
+            if (get<std::uint32_t>(h.data() + 40) != crc32(body.data(), payloadSize)) return stop("기록 내용의 CRC가 맞지 않습니다.");
             juce::var payload;
             if (juce::JSON::parse(juce::String::fromUTF8(reinterpret_cast<const char*>(body.data()), static_cast<int>(payloadSize)), payload).failed()
-                || !validPayload(kind, payload)) return stop("Invalid record payload schema");
+                || !validPayload(kind, payload)) return stop("기록 내용의 저장 형식이 올바르지 않습니다.");
             juce::Uuid txn(h.data() + 20);
-            if (txn.isNull()) return stop("Null transaction UUID");
+            if (txn.isNull()) return stop("기록 작업의 식별자가 비어 있습니다.");
             out.lastSequence = nextSequence; out.validBytesInLastFile = static_cast<std::uint64_t>(input.getPosition());
             if (seen.insert(txn.toString().toStdString()).second) out.records.push_back({kind, nextSequence, txn, payload});
             else ++out.duplicateTransactions;
