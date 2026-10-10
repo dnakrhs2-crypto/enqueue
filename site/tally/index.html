@@ -31,7 +31,7 @@
     <div class="bigkeys">
       <a class="download-button" id="download" href="__DOWNLOAD_URL__">
         <strong id="download-label">__DOWNLOAD_LABEL__</strong>
-        <span class="meta" id="download-meta"><span class="nb">Windows 10 / 11 (64비트)</span></span>
+        <span class="meta" id="download-meta"><span class="nb">&nbsp;</span></span>
       </a>
       <a class="kakao" id="feedback-button" href="https://open.kakao.com/o/pST4IRLi">
         <svg viewBox="0 0 48 48" aria-hidden="true"><path d="M24 6C12.4 6 3 13.3 3 22.3c0 5.8 3.9 10.9 9.8 13.8-.4 1.4-1.5 5.3-1.7 6.1-.3 1 .4 1 .8.7.3-.2 5.1-3.4 7.2-4.8 1.6.2 3.2.4 4.9.4 11.6 0 21-7.3 21-16.2S35.6 6 24 6z"/></svg>
@@ -48,7 +48,7 @@
     <ul class="features features-main">
 <li>웹캠 1~2대(1080p)와 ASIO 마이크 최대 8개를 한 프로젝트에 동시 녹화</li><li>녹화를 멈추면 바로 타임라인에서 재생 · 자르기 · 이동 · 구간 삭제 · 마커</li><li>재생헤드 위치부터 이어서 녹화 (비어 있는 구간은 검정 화면으로 내보내기)</li><li>캠별 영상, 마이크별 오디오, 최종 MP4 내보내기</li>    </ul>
     <p class="cost">비용 : 완전 무료</p>
-    <figure class="screen"><img src="assets/screenshot.png" width="1440" height="900" alt="Tally 화면"></figure>
+    <figure class="screen"><a class="screen-link" href="assets/screenshot.png"><picture><source media="(max-width: 760px)" srcset="assets/screenshot-mobile.png" width="640" height="480"><img src="assets/screenshot.png" width="1440" height="900" alt="Tally 화면"></picture></a></figure>
   </section>
 
   <section class="body-section" id="sources">
@@ -72,12 +72,12 @@
       document.getElementById('download').href = info.url;
       document.getElementById('download-label').textContent = 'Tally ' + info.version + ' 다운로드';
       var mb = info.size ? (info.size / 1048576).toFixed(1) + ' MB' : '';
-      var date = info.date ? info.date.slice(0, 10) : '';
+      var when = info.date ? new Date(info.date) : null;
+      var date = when && !isNaN(when) ? new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Seoul', year: 'numeric', month: '2-digit', day: '2-digit' }).format(when) : '';   // 한국 날짜(UTC 앞 10글자는 0~9시 배포를 하루 이르게 보여 줌)
       // each part is its own no-wrap span, so a narrow screen breaks the line between parts, never inside one
       var meta = document.getElementById('download-meta');
       meta.textContent = '';
-      ['버전 ' + info.version, mb, date, 'Windows 10 / 11 (64비트)'].filter(Boolean).forEach(function (part, i) {
-        if (i) meta.appendChild(document.createTextNode(' · '));
+      ['버전 ' + info.version, mb, date].filter(Boolean).forEach(function (part, i) {
         var span = document.createElement('span');
         span.className = 'nb';
         span.textContent = part;
