@@ -48,7 +48,7 @@ void CameraSettingsPanel::timerCallback()
             acceptedDevices[i] = devices[i].getSelectedId();
             modesFor(i); devices[i].setEnabled(enabled[i].getToggleState()); modes[i].setEnabled(enabled[i].getToggleState());
         }
-        status.setText(cameras.empty() ? ko("연결된 카메라가 없습니다.") : replacedMode ? ko("입력 모드를 프로젝트 fps에 맞춰 다시 골랐습니다. 적용을 누르면 저장됩니다.") : ko("같은 카메라를 두 번 선택할 수 없습니다."), juce::dontSendNotification);
+        status.setText(cameras.empty() ? ko("연결된 카메라가 없습니다.") : replacedMode ? ko("입력 모드를 프로젝트 fps에 맞춰 다시 골랐습니다. 적용을 누르면 저장됩니다.") : juce::String(), juce::dontSendNotification);
         refreshCalibration();
     }
     catch (const std::exception& e) { status.setText(ko("카메라 목록을 읽을 수 없습니다. ") + juce::String::fromUTF8(e.what()), juce::dontSendNotification); }

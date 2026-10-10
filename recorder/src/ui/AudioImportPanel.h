@@ -1,5 +1,6 @@
 #pragma once
 #include "playback/ImportedAudioCache.h"
+#include "RecorderPalette.h"
 #include <juce_gui_basics/juce_gui_basics.h>
 
 namespace gocue::recorder
@@ -22,11 +23,11 @@ public:
     void setCompact(bool value) { compact = value; resized(); }
     void resized() override;
     std::function<void(const MediaAsset&, const CachedImportedAudio&)> onImported;
-    std::function<void(const juce::String&)> onStatusChanged;
+    std::function<void(const juce::String&, NoticeKind)> onStatusChanged;
     std::function<void()> onBusyChanged;
 private:
     friend struct ImportUiTestAccess;
-    void report(const juce::String&);
+    void report(const juce::String&, NoticeKind = NoticeKind::information);
     void timerCallback() override;
     RecorderDocument& document;
     juce::File directory;

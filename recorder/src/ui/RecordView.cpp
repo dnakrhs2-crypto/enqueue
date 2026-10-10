@@ -57,7 +57,7 @@ RecordView::RecordView()
 {
     for (auto* b : {&projectButton, &recordTab, &timelineTab, &importButton, &settingsButton, &exportButton, &startButton, &stopButton, &markerButton}) { addAndMakeVisible(b); b->setWantsKeyboardFocus(false); }
     for (auto* l : {&projectName, &statusLabel, &errorLabel, &noMicrophones}) { addAndMakeVisible(l); l->setFont(juce::Font(juce::FontOptions(17))); }
-    projectName.setFont(recorderFont(16, juce::Font::bold)); errorLabel.setColour(juce::Label::textColourId, Palette::danger);
+    projectName.setFont(recorderFont(16, juce::Font::bold));
     statusLabel.setFont(recorderMonoFont(12)); errorLabel.setFont(recorderFont(12));
     for (auto* b : {&projectButton, &recordTab, &timelineTab, &importButton, &settingsButton, &exportButton, &startButton, &stopButton, &markerButton})
         b->getProperties().set("recorderFontSize", 13.0f);
@@ -91,7 +91,7 @@ void RecordView::setCamera(unsigned i, const juce::String& caption, const juce::
     c.caption = caption; c.placeholder = state; c.showVideo = visible; c.host.setVisible(visible); c.repaint();
 }
 void RecordView::update(const RecorderUiState& ui, const RecorderProject& p, const UserSettings& s, const juce::String& status,
-                        const juce::String& banner, Sample elapsed, juce::int64 remaining, bool isTimeline)
+                        const juce::String& banner, Sample elapsed, juce::int64 remaining, bool isTimeline, NoticeKind kind)
 {
     const auto oldCount = stripCount; const auto wasTimeline = timeline; timeline = isTimeline;
     for (unsigned i = 0; i < 2; ++i)
@@ -106,7 +106,9 @@ void RecordView::update(const RecorderUiState& ui, const RecorderProject& p, con
         + (remaining < 0 ? ko("남은 공간 확인 중") : ko("남은 공간 ") + juce::String(double(remaining) / 1000000000.0, 1) + "GB") + "   ·   " + status, juce::dontSendNotification);
     statusLabel.setColour(juce::Label::textColourId, ui.live ? Palette::danger : Palette::dimText);
     const bool hadNotice = errorLabel.getText().isNotEmpty();
-    errorLabel.setText(banner.isNotEmpty() ? banner : ui.warning, juce::dontSendNotification); errorLabel.setTooltip(banner);
+    const auto notice = banner.isNotEmpty() ? banner : ui.warning;
+    setNoticeText(errorLabel, notice.replace("\r\n", " ").replaceCharacters("\r\n", "  "), banner.isNotEmpty() ? kind : NoticeKind::information);
+    errorLabel.setTooltip(notice);
     projectButton.setEnabled(!ui.structureLocked); settingsButton.setEnabled(!ui.structureLocked);
     recordTab.setToggleState(!timeline, juce::dontSendNotification); timelineTab.setToggleState(timeline, juce::dontSendNotification);
     startButton.setEnabled(ui.canRecord); stopButton.setEnabled(ui.canStop); markerButton.setEnabled(ui.live || !ui.structureLocked);
@@ -153,7 +155,7 @@ void RecordView::resized()
     statusLabel.setBounds(a.removeFromTop(26).reduced(12, 0));
     errorLabel.setBounds(a.removeFromTop(errorLabel.getText().isEmpty() ? 0 : 26).reduced(12, 0));
     a = a.reduced(12, 0); a.removeFromTop(8);
-    const int cameraHeight = timeline ? juce::jlimit(120, 236, a.getHeight() / 3)
+    const int cameraHeight = timeline ? juce::jmin(120, a.getHeight() / 3)
         : juce::jlimit(140, (a.getWidth() - 16) * 9 / 32 + 44, a.getHeight() - 228);
     auto cameraArea = a.removeFromTop(cameraHeight); auto l = cameraArea.removeFromLeft((cameraArea.getWidth() - 12) / 2); cameraArea.removeFromLeft(12); cameras[0].setBounds(l); cameras[1].setBounds(cameraArea);
     a.removeFromTop(8); auto controls = a.removeFromTop(38);

@@ -10,7 +10,7 @@ struct ExportDialog::Window final : juce::DocumentWindow
 {
     ExportDialog& owner;
     explicit Window(ExportDialog& d) : DocumentWindow(ko("내보내기"), Palette::background, closeButton), owner(d)
-    { setUsingNativeTitleBar(true); setContentNonOwned(&owner, true); setResizable(true, false); setResizeLimits(700, 640, 1400, 1000); centreWithSize(800, 700); }
+    { setUsingNativeTitleBar(true); setContentNonOwned(&owner, true); setResizable(true, false); setResizeLimits(700, 640, 1400, 1000); centreAroundComponent(owner.exportButton.getTopLevelComponent(), 800, 700); }
     void closeButtonPressed() override { owner.closeWindow(); }
     bool keyPressed(const juce::KeyPress& key) override
     { return owner.onShortcut && owner.onShortcut(key, juce::Component::getCurrentlyFocusedComponent()); }
@@ -97,6 +97,7 @@ void ExportDialog::releaseExportGate()
 void ExportDialog::show()
 {
     refreshSources(); if (!window) window = std::make_unique<Window>(*this);
+    fitRecorderWindowToDisplay(*window, 700, 640);
     window->setVisible(true); styleRecorderWindow(*window); window->toFront(true); refreshSelection();
 }
 bool ExportDialog::ownsShortcutOrigin(const juce::Component* origin) const
@@ -147,7 +148,8 @@ void ExportDialog::refreshSources()
     Sample first = 0, end = p.activeTimelineEnd(); bool selected = false;
     for (const auto& id : document.getSelection()) if (const auto* clip = p.findClip(id))
     { if (!selected) { first = clip->timelineStartSample; end = clip->timelineEnd(); selected = true; } else { first = (std::min)(first, clip->timelineStartSample); end = (std::max)(end, clip->timelineEnd()); } }
-    rangeStart.setText(juce::String(double(first) / p.Fs, 9), false); rangeEnd.setText(juce::String(double(end) / p.Fs, 9), false);
+    selectedStartText = juce::String(double(first) / p.Fs, 9); selectedEndText = juce::String(double(end) / p.Fs, 9);
+    showingSelectedRange = false;
     if (changedProject || folder.getText().isEmpty()) folder.setText(document.getFile().getParentDirectory().getChildFile("exports").getFullPathName(), false);
     updating = false; refreshSelection();
 }
@@ -211,16 +213,53 @@ void ExportDialog::refreshSelection()
 {
     if (updating) return;
     const bool busy = controller.busy() || session.busy() || document.isRecordingStructureLocked();
+    const bool hasCamera = videoChoice.getNumItems() > 0;
+    if (!hasCamera)
+    {
+        finalMode = false; materialsTab.setToggleState(true, juce::dontSendNotification); finalTab.setToggleState(false, juce::dontSendNotification);
+    }
+    const bool selected = rangeChoice.getSelectedId() == 2;
+    if (selected != showingSelectedRange)
+    {
+        if (showingSelectedRange) { selectedStartText = rangeStart.getText(); selectedEndText = rangeEnd.getText(); }
+        else { rangeStart.setText(selectedStartText, false); rangeEnd.setText(selectedEndText, false); }
+        showingSelectedRange = selected;
+    }
+    if (!selected)
+    {
+        rangeStart.setText(juce::String(0.0, 9), false);   // the same 9-decimal form as the end and a selected range
+        rangeEnd.setText(juce::String(double(document.getProject().activeTimelineEnd()) / document.getProject().Fs, 9), false);
+    }
     for (auto* c : std::initializer_list<juce::Component*>{&materialsTab, &finalTab, &rangeChoice, &rangeStart, &rangeEnd,
         &folder, &browse, &videoChoice, &audioChoice, &micChoice, &importChoice, &referenceChoice, &includeImports}) c->setEnabled(!busy);
     rangeStart.setEnabled(!busy && rangeChoice.getSelectedId() == 2); rangeEnd.setEnabled(rangeStart.isEnabled());
+    finalTab.setEnabled(!busy && hasCamera); videoChoice.setEnabled(!busy && hasCamera);
+    for (auto* field : {&rangeStart, &rangeEnd})
+    {
+        field->setColour(juce::TextEditor::textColourId, field->isEnabled() ? Palette::text : Palette::dimText);
+        field->applyColourToAllText(field->findColour(juce::TextEditor::textColourId), true);
+        setInputError(*field, false);
+    }
     includeImports.setVisible(!finalMode && !imports.empty()); listLabel.setVisible(!finalMode);
     referenceChoice.setVisible(!finalMode); referenceLabel.setVisible(!finalMode);
     videoLabel.setVisible(finalMode); videoChoice.setVisible(finalMode); audioLabel.setVisible(finalMode); audioChoice.setVisible(finalMode);
     micChoice.setVisible(finalMode && audioChoice.getSelectedId() == 2); importChoice.setVisible(finalMode && audioChoice.getSelectedId() == 3);
     exportNow.setEnabled(false); listen.setEnabled(false);
+    juce::String rangeError;
     if (!busy) try
     {
+        if (const auto range = selectedRange()) ExportRange::expand(*range, document.getProject().Fs, document.getProject().fps);
+    }
+    catch (const std::exception& e) { rangeError = juce::String::fromUTF8(e.what()); }
+    if (rangeError.isNotEmpty())
+    {
+        setNoticeText(commonRange, rangeError, NoticeKind::failure);
+        setInputError(rangeStart, true); setInputError(rangeEnd, true);
+        sourceStatus.setText({}, juce::dontSendNotification);
+    }
+    else if (!busy) try
+    {
+        commonRange.setColour(juce::Label::textColourId, Palette::text);
         const auto r = request(); ExportJob job = ExportJob::fromDocument(document, ExportController::resolveDestination(r.destination), r.range);
         commonRange.setText(ko("예상 공통 범위: ") + juce::String(job.range.startSeconds(job.snapshot.Fs, job.snapshot.fps), 6) + " – "
             + juce::String(job.range.endSeconds(job.snapshot.Fs, job.snapshot.fps), 6) + ko("초 → 모든 파일 0 시작 · ")

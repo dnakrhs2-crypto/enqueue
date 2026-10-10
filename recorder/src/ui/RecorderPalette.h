@@ -29,3 +29,13 @@ inline const juce::Colour soloOn          {0xfff2c53d};
 constexpr float cardRadius = 4.0f;
 constexpr float controlRadius = 4.0f;
 }
+
+namespace gocue::recorder
+{
+enum class NoticeKind { success, information, failure };
+inline juce::Colour noticeColour(NoticeKind kind)
+{
+    return kind == NoticeKind::failure ? juce::Colour(0xffff6b60)
+        : kind == NoticeKind::success ? Palette::text : Palette::dimText;
+}
+}

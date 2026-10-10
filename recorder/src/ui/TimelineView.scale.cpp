@@ -51,8 +51,8 @@ TimelineLayout::Box TimelineLayout::physical(Box b, double scale)
 }
 std::pair<int, int> TimelineLayout::visibleRows(int top, int bottom, int count)
 {
-    const auto a = (std::clamp)((top - rulerHeight) / rowHeight, 0, count);
-    const auto b = (std::clamp)((bottom - rulerHeight + rowHeight - 1) / rowHeight, a, count);
+    const auto a = (std::clamp)(top / rowHeight, 0, count);
+    const auto b = (std::clamp)((bottom + rowHeight - 1) / rowHeight, a, count);
     return {a, b};
 }
 std::pair<int, int> TimelineLayout::waveColumns(int left, int right, int clipLeft, int clipRight)

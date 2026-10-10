@@ -10,6 +10,17 @@ inline juce::Font recorderFont(float pixels, int style = juce::Font::plain)
 { return juce::Font(juce::FontOptions(pixels, style).withPointHeight(pixels)); }
 juce::Font recorderMonoFont(float height, int style = juce::Font::plain);
 void styleRecorderWindow(juce::DocumentWindow&);
+void fitRecorderWindowToDisplay(juce::DocumentWindow&, int minimumWidth, int minimumHeight);
+inline void setInputError(juce::TextEditor& editor, bool invalid)
+{
+    for (auto id : {juce::TextEditor::outlineColourId, juce::TextEditor::focusedOutlineColourId})
+        if (invalid) editor.setColour(id, Palette::danger); else editor.removeColour(id);
+}
+inline void setNoticeText(juce::Label& label, const juce::String& text, NoticeKind kind)
+{
+    label.setColour(juce::Label::textColourId, noticeColour(kind));
+    label.setText(text, juce::dontSendNotification);
+}
 class RecorderLookAndFeel : public juce::LookAndFeel_V4
 {
 public:

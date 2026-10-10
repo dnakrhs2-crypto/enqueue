@@ -18,7 +18,8 @@ MainComponent::MainComponent(RecorderDocument& d, RecorderSettings& s, TakeContr
     recordView.settingsButton.onClick = [this] { showSettings(); };
     recordView.importButton.onClick = [this] { importAudio(); };
     addChildComponent(audioImporter); audioImporter.setCompact(true);
-    audioImporter.onStatusChanged = [this](const juce::String& message) { showError(message + importPlacement); };
+    audioImporter.onStatusChanged = [this](const juce::String& message, NoticeKind kind)
+    { showError(message + (kind == NoticeKind::success ? importPlacement : juce::String()), kind); };
     audioImporter.onBusyChanged = [this] { audioImporter.setVisible(importBusy()); publishLifecycle(); refreshPending = true; };
     audioImporter.onImported = [this](const MediaAsset& asset, const CachedImportedAudio& cache)
     {
@@ -50,13 +51,13 @@ MainComponent::MainComponent(RecorderDocument& d, RecorderSettings& s, TakeContr
         settings.set(applied); persistSettings(); if (result.failed()) showError(result.getErrorMessage()); else banner.clear();
         if (audioPanel && !pendingConfigure) { audioPanel->setSettings(s); audioPanel->setDeviceInfo(session.deviceInfo()); } // a queued edit keeps the user's latest choices on screen
         if (cameraPanel) cameraPanel->setSettings(s);
-        if (settingsError) settingsError->setText(result.wasOk() ? ko("설정을 적용했습니다.") : result.getErrorMessage(), juce::dontSendNotification);
+        if (settingsError) setNoticeText(*settingsError, result.wasOk() ? ko("설정을 적용했습니다.") : result.getErrorMessage(), result.wasOk() ? NoticeKind::success : NoticeKind::failure);
         refreshPending = true;
         if (pendingConfigure)
         {
             const auto next = *pendingConfigure; pendingConfigure.reset();
             const auto queued = audioPanel ? audioPanel->configure(session, next, s) : session.configure(next);
-            if (settingsError) settingsError->setText(queued.failed() ? queued.getErrorMessage() : ko("장치를 연결하는 중입니다."), juce::dontSendNotification);
+            if (settingsError) setNoticeText(*settingsError, queued.failed() ? queued.getErrorMessage() : ko("장치를 연결하는 중입니다."), queued.failed() ? NoticeKind::failure : NoticeKind::information);
         }
     };
     session.onPeaks = [this](const Id& id, auto peaks, unsigned channel) { timelineView.setPeaks(id, peaks, channel); };
@@ -66,7 +67,7 @@ MainComponent::MainComponent(RecorderDocument& d, RecorderSettings& s, TakeContr
         if (markerWindow && markerProject != document.getProject().projectId) dismissMarkerPrompt();
         refreshPending = true; publishLifecycle();
     };
-    exportDialog = std::make_unique<ExportDialog>(document, session, recordView.exportButton, [this](const juce::String& text) { showError(text); });
+    exportDialog = std::make_unique<ExportDialog>(document, session, recordView.exportButton, [this](const juce::String& text) { showError(text, NoticeKind::information); });
     exportDialog->onShortcut = [this](const juce::KeyPress& key, juce::Component* origin) { return routeShortcut(key, origin); };
     aboutButton.setButtonText(ko("앱 정보")); updateButton.setButtonText(ko("업데이트")); retryButton.setButtonText(ko("마무리 재시도"));
     for (auto* button : {&aboutButton, &updateButton, &retryButton})
@@ -142,7 +143,7 @@ void MainComponent::resized()
     for (unsigned i = 0; i < footerWidths.size(); ++i)
     { footerLabels[i].setBounds(row.removeFromLeft(int(footerWidths[i] * scale))); if (i + 1 < footerWidths.size()) row.removeFromLeft(8); }
 }
-void MainComponent::showError(const juce::String& message) { banner = message; refreshPending = true; }
+void MainComponent::showError(const juce::String& message, NoticeKind kind) { banner = message; bannerKind = kind; refreshPending = true; }
 void MainComponent::showUnhandledException(const juce::File& report)
 {
     exceptionBanner = report == juce::File() ? ko("예상치 못한 오류가 발생했으며 오류 기록을 저장하지 못했습니다.")
@@ -165,8 +166,8 @@ bool MainComponent::canImportAudio() const
 }
 void MainComponent::importAudio(const juce::File& file)
 {
-    if (!canImportAudio()) { showError(ko("녹화·마무리와 파일 작업이 끝난 뒤 오디오를 불러오세요.")); return; }
-    if (document.getFile() == juce::File()) { showError(ko("먼저 프로젝트 > 새 프로젝트에서 저장할 폴더를 선택하세요.")); return; }
+    if (!canImportAudio()) { showError(ko("녹화·마무리와 파일 작업이 끝난 뒤 오디오를 불러오세요."), NoticeKind::information); return; }
+    if (document.getFile() == juce::File()) { showError(ko("먼저 프로젝트 > 새 프로젝트에서 저장할 폴더를 선택하세요."), NoticeKind::information); return; }
     const auto at = timeline ? session.playhead() : document.getProject().activeTimelineEnd();
     importPlacement = (timeline ? ko(" · 요청 시 재생헤드 ") : ko(" · 요청 시 타임라인 끝 "))
         + juce::String(double(at) / document.getProject().Fs, 3) + ko("초에 배치");
@@ -183,7 +184,7 @@ bool MainComponent::isInterestedInFileDrag(const juce::StringArray& files)
 { return !files.isEmpty(); } // also receive unsupported drops so the user gets a reason
 void MainComponent::filesDropped(const juce::StringArray& files, int, int)
 {
-    if (files.size() != 1) { showError(ko("오디오 파일은 한 번에 하나씩 끌어다 놓으세요.")); return; }
+    if (files.size() != 1) { showError(ko("오디오 파일은 한 번에 하나씩 끌어다 놓으세요."), NoticeKind::information); return; }
     const juce::File file(files[0]);
     if (!file.hasFileExtension("wav;wave;mp3;m4a;aac;m4b;mp4;wma"))
     { showError(ko("지원하지 않는 오디오 형식입니다. WAV · MP3 · M4A · AAC 파일을 선택하세요.")); return; }
@@ -218,6 +219,11 @@ void MainComponent::refresh()
     auto message = originalFailure.isNotEmpty() ? originalFailure : document.getError().isNotEmpty() ? recorderFaultText(RecorderFault::save) + " " + document.getError()
         : session.error.isNotEmpty() ? session.error : banner.isNotEmpty() ? banner : session.notice.isNotEmpty() ? session.notice
         : take.warning().isNotEmpty() ? take.warning() : document.getRecoveryMessage();
+    const auto messageKind = originalFailure.isNotEmpty() || document.getError().isNotEmpty() || session.error.isNotEmpty() || exceptionBanner.isNotEmpty()
+        ? NoticeKind::failure : banner.isNotEmpty() ? bannerKind
+        : session.notice.isNotEmpty() ? NoticeKind::information
+        : take.warning().isNotEmpty() ? (take.state() == TakeController::State::partialFailure ? NoticeKind::failure : NoticeKind::information)
+        : document.getRecoveryMessage().isNotEmpty() ? NoticeKind::success : NoticeKind::information;
     const auto delayed = recorderFaultText(RecorderFault::processingDelay);
     if (document.getFile() == juce::File() && !closeAction)
         message = ko("프로젝트 > 새 프로젝트에서 저장할 폴더를 선택하세요.")
@@ -240,7 +246,7 @@ void MainComponent::refresh()
     const auto stateColour = ui.live ? Palette::recording : Palette::text;
     if (footerLabels[3].findColour(juce::Label::textColourId) != stateColour) { footerLabels[3].setColour(juce::Label::textColourId, stateColour); footerChanged = true; }
     if (footerChanged) { footerWidthsStale = true; repaint(getLocalBounds().removeFromBottom(30)); } // static footer: no repaint or width measurement per 33 ms refresh
-    recordView.update(ui, document.getProject(), settings.get(), status, message, session.elapsed(), remainingBytes, timeline);
+    recordView.update(ui, document.getProject(), settings.get(), status, message, session.elapsed(), remainingBytes, timeline, messageKind);
     const auto& shortcuts = settings.get().shortcuts;
     recordView.startButton.setTooltip(ko("녹화 시작 · ") + shortcuts[RecorderCommand::recordStart]);
     recordView.stopButton.setTooltip(ko("녹화 정지 · ") + shortcuts[RecorderCommand::recordStop]);
@@ -385,11 +391,18 @@ void MainComponent::timerCallback()
         {
             session.lifecycleState()->set(RecorderLifecycle::recovering, true);
             session.lifecycleState()->invalidate();
-            banner = ko("저장된 자료를 복구하는 중입니다.");
+            banner.clear(); // A scan alone does not mean that anything needed recovery.
             startFileWork(r, [r]() mutable
             {
                 RecoveryReport recovered; r.result = RecoveryScanner().run(r.file.getParentDirectory(), recovered); r.recovered = true;
-                if (r.result.wasOk()) { r.loaded = std::move(recovered.project); r.info = recovered.checkpointInfo; r.info.recoveryMessage = recorderFaultText(RecorderFault::recovery); }
+                if (r.result.wasOk())
+                {
+                    r.loaded = std::move(recovered.project); r.info = recovered.checkpointInfo;
+                    const bool repaired = recovered.usedBackup || recovered.replayedEdits || recovered.registryCommits
+                        || recovered.changedTakes || recovered.addedClips || recovered.ignoredEditTail || recovered.ignoredTakeTail
+                        || recovered.checkpoint.isAChildOf(r.file.getParentDirectory().getChildFile("recovery"));
+                    r.info.recoveryMessage = repaired ? recorderFaultText(RecorderFault::recovery) : juce::String();
+                }
                 return r;
             });
             publishLifecycle(); return;
@@ -478,7 +491,7 @@ juce::String MainComponent::updateBlockedText(std::uint32_t flags, bool captureB
 void MainComponent::updateShutdownBlocked()
 {
     const auto state = session.lifecycleState();
-    showError(updateBlockedText(state->snapshot(), state->captureBusy()));
+    showError(updateBlockedText(state->snapshot(), state->captureBusy()), NoticeKind::information);
 }
 void MainComponent::updateShutdownRequested()
 {
@@ -488,7 +501,7 @@ void MainComponent::updateShutdownRequested()
 void MainComponent::checkForUpdates()
 {
     publishLifecycle(); if (!session.lifecycleState()->canShutdown()) { updateShutdownBlocked(); return; }
-    if (!RecorderUpdater::isAvailable()) { showError(ko("공개 업데이트 설정이 준비되지 않았습니다.")); return; }
+    if (!RecorderUpdater::isAvailable()) { showError(ko("공개 업데이트 설정이 준비되지 않았습니다."), NoticeKind::information); return; }
     RecorderUpdater::checkForUpdatesWithUI();
 }
 void MainComponent::retryFinalization()

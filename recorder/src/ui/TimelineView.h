@@ -91,6 +91,21 @@ private:
         void timerCallback() override;
         std::uint32_t lastAutoScroll = 0;
     } rows;
+    class Ruler : public juce::Component
+    {
+    public:
+        explicit Ruler(TimelineView& v) : view(v) {}
+        void paint(juce::Graphics&) override;
+        void mouseDown(const juce::MouseEvent& e) override { view.rows.mouseDown(e); }
+        void mouseDrag(const juce::MouseEvent& e) override { view.rows.mouseDrag(e); }
+        void mouseUp(const juce::MouseEvent& e) override { view.rows.mouseUp(e); }
+        void mouseWheelMove(const juce::MouseEvent& e, const juce::MouseWheelDetails& w) override { view.rows.mouseWheelMove(e, w); }
+    private:
+        TimelineView& view;
+    } ruler;
+    struct Tick { int x; juce::String text; };
+    std::vector<Tick> rulerTicks() const;
+    void paintGuides(juce::Graphics&, int height, bool onRuler);
     void rebuildHeaders();
     void rebuildPreview();
     void scrollBarMoved(juce::ScrollBar*, double) override;
@@ -109,6 +124,7 @@ private:
     bool isRecordingTrack(const Track&) const;
     void updateControls();
     void setRangeFromInputs();
+    void clearRangeError();
     bool keyPressed(const juce::KeyPress&, juce::Component*) override;
     void drawWave(juce::Graphics&, const Clip&, juce::Rectangle<float>);
     double xFor(Sample) const;
@@ -118,7 +134,7 @@ private:
     RecorderDocument::Snapshot shown;
     juce::Viewport viewport;
     juce::ScrollBar horizontal {false};
-    juce::Label selectionInfo;
+    juce::Label selectionInfo, rangeError;
     juce::Viewport toolbarViewport;
     juce::Component toolbar;
     juce::TextButton menuButton {ko("편집")}, snapButton {ko("스냅 켜짐")};

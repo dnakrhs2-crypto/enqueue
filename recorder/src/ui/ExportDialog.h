@@ -45,6 +45,8 @@ private:
     std::function<void()> pendingRecording;
     bool recordingReserved = false, finalMode = false, restoreTimeline = false, updating = false, previewAttached = false;
     bool exportGateHeld = false; // session lifecycle "exporting": blocks updater shutdown/quiet checks while a job runs
+    bool showingSelectedRange = false;
+    juce::String selectedStartText, selectedEndText;
     bool holdExportGate();
     void releaseExportGate();
     std::vector<AudioSourceMask> imports, microphones;

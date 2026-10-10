@@ -10,7 +10,8 @@ class RecordView : public juce::Component
 public:
     RecordView();
     void update(const RecorderUiState&, const RecorderProject&, const UserSettings&, const juce::String& status,
-                const juce::String& banner, Sample elapsed, juce::int64 remainingBytes, bool timelineMode);
+                const juce::String& banner, Sample elapsed, juce::int64 remainingBytes, bool timelineMode,
+                NoticeKind kind = NoticeKind::information);
     void updateMeters(const std::array<float, 8>&);
     void setCamera(unsigned, const juce::String& caption, const juce::String& placeholder, bool visible);
     std::array<void*, 2> nativeHosts();

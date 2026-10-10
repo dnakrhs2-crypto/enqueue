@@ -29,13 +29,32 @@ void styleRecorderWindow(juce::DocumentWindow& window)
     juce::ignoreUnused(window);
 #endif
 }
+void fitRecorderWindowToDisplay(juce::DocumentWindow& window, int minimumWidth, int minimumHeight)
+{
+    // Clamp the normal bounds too, so restoring a maximised window stays on screen.
+    const bool maximised = window.isFullScreen();
+    if (maximised) window.setFullScreen(false);
+    if (const auto* display = juce::Desktop::getInstance().getDisplays().getDisplayForRect(window.getBounds()))
+    {
+        auto area = display->userBounds.getLargestIntegerWithin();
+        if (const auto* peer = window.getPeer())
+            if (const auto frame = peer->getFrameSizeIfPresent()) frame->subtractFrom(area);
+        area = area.reduced(juce::jlimit(0, 8, (area.getWidth() - minimumWidth) / 2),
+                            juce::jlimit(0, 8, (area.getHeight() - minimumHeight) / 2));
+        const int width = juce::jlimit(minimumWidth, juce::jmax(minimumWidth, area.getWidth()), window.getWidth());
+        const int height = juce::jlimit(minimumHeight, juce::jmax(minimumHeight, area.getHeight()), window.getHeight());
+        window.setBounds(juce::jlimit(area.getX(), juce::jmax(area.getX(), area.getRight() - width), window.getX()),
+                         juce::jlimit(area.getY(), juce::jmax(area.getY(), area.getBottom() - height), window.getY()), width, height);
+    }
+    if (maximised) window.setFullScreen(true);
+}
 RecorderLookAndFeel::RecorderLookAndFeel()
     : juce::LookAndFeel_V4(ColourScheme(Palette::background, Palette::card, Palette::card2, Palette::line,
           Palette::text, Palette::field, juce::Colours::white, Palette::accent, Palette::text))
 {
     setDefaultSansSerifTypefaceName("Malgun Gothic");
     setColour(juce::TextButton::buttonColourId, Palette::card2);
-    setColour(juce::TextButton::buttonOnColourId, Palette::accent);
+    setColour(juce::TextButton::buttonOnColourId, juce::Colour(0xff2f74c8));
     setColour(juce::TextButton::textColourOffId, Palette::text);
     setColour(juce::TextButton::textColourOnId, juce::Colours::white);
     setColour(buttonOutlineColourId, Palette::line);
@@ -68,11 +87,11 @@ RecorderLookAndFeel::RecorderLookAndFeel()
     setColour(juce::Slider::textBoxHighlightColourId, Palette::selection);
     setColour(juce::PopupMenu::backgroundColourId, Palette::bar);
     setColour(juce::PopupMenu::textColourId, Palette::text);
-    setColour(juce::PopupMenu::highlightedBackgroundColourId, Palette::accent);
+    setColour(juce::PopupMenu::highlightedBackgroundColourId, juce::Colour(0xff2f74c8));
     setColour(juce::PopupMenu::highlightedTextColourId, juce::Colours::white);
     setColour(juce::PopupMenu::headerTextColourId, Palette::dimText);
     setColour(juce::ScrollBar::backgroundColourId, Palette::card);
-    setColour(juce::ScrollBar::thumbColourId, Palette::line);
+    setColour(juce::ScrollBar::thumbColourId, juce::Colour(0xff707070));
     setColour(juce::TooltipWindow::backgroundColourId, Palette::card2);
     setColour(juce::TooltipWindow::textColourId, Palette::text);
     setColour(juce::TooltipWindow::outlineColourId, Palette::line);
@@ -115,6 +134,8 @@ void RecorderLookAndFeel::drawButtonBackground(juce::Graphics& g, juce::Button& 
         g.setColour(button.findColour(buttonOutlineColourId).withMultipliedAlpha(alpha));
         g.strokePath(shape, juce::PathStrokeType(1));
     }
+    if (button.isEnabled() && button.hasKeyboardFocus(true))
+    { g.setColour(Palette::accent); g.strokePath(shape, juce::PathStrokeType(1)); }
 }
 void RecorderLookAndFeel::drawButtonText(juce::Graphics& g, juce::TextButton& button, bool, bool)
 {
@@ -150,6 +171,8 @@ void RecorderLookAndFeel::drawToggleButton(juce::Graphics& g, juce::ToggleButton
     g.setColour(button.findColour(juce::ToggleButton::textColourId).withMultipliedAlpha(button.isEnabled() ? 1.0f : .45f));
     g.setFont(juce::Font(juce::FontOptions(size)));
     g.drawFittedText(button.getButtonText(), button.getLocalBounds().withTrimmedLeft(juce::roundToInt(tick) + 10).withTrimmedRight(2), juce::Justification::centredLeft, 10);
+    if (button.isEnabled() && button.hasKeyboardFocus(true))
+    { g.setColour(Palette::accent); g.drawRoundedRectangle(button.getLocalBounds().toFloat().reduced(.5f), Palette::controlRadius, 1); }
 }
 void RecorderLookAndFeel::drawComboBox(juce::Graphics& g, int w, int h, bool, int, int, int, int, juce::ComboBox& box)
 {
@@ -184,5 +207,7 @@ void RecorderLookAndFeel::drawTabButton(juce::TabBarButton& button, juce::Graphi
     g.setColour((selected ? Palette::text : Palette::dimText).withMultipliedAlpha(alpha)); g.setFont(recorderFont(12.5f, juce::Font::bold));
     g.drawFittedText(button.getButtonText(), button.getLocalBounds().reduced(6, 2), juce::Justification::centred, 1);
     g.setColour((selected ? Palette::accent : Palette::line).withMultipliedAlpha(alpha)); g.fillRect(0, button.getHeight() - (selected ? 2 : 1), button.getWidth(), selected ? 2 : 1);
+    if (enabled && button.hasKeyboardFocus(true))
+    { g.setColour(Palette::accent); g.drawRect(button.getLocalBounds().toFloat().reduced(.5f), 1); }
 }
 }

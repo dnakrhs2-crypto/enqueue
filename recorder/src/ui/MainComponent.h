@@ -20,7 +20,7 @@ public:
     void resized() override;
     bool isInterestedInFileDrag(const juce::StringArray&) override;
     void filesDropped(const juce::StringArray&, int, int) override;
-    void showError(const juce::String&);
+    void showError(const juce::String&, NoticeKind = NoticeKind::failure);
     void showUnhandledException(const juce::File& report);
     bool routeShortcut(const juce::KeyPress&, juce::Component* origin);
     void showFault(RecorderFault fault) { showError(recorderFaultText(fault)); }
@@ -106,6 +106,7 @@ private:
     juce::Component::SafePointer<juce::Component> shortcutFocus;
     std::int64_t lastStopButtonQpc = 0;
     juce::String banner;
+    NoticeKind bannerKind = NoticeKind::information;
     juce::String exceptionBanner; // persists across device/status refreshes
     juce::TextButton aboutButton, updateButton, retryButton;
     std::array<juce::Label, 4> footerLabels;

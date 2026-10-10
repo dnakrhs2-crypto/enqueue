@@ -24,7 +24,8 @@ AudioSettingsPanel::AudioSettingsPanel(const UserSettings& s, const RecorderProj
     {
         refreshInputChoices();
         auto s = read(initial);
-        if (s.asioDeviceId != actual.name) { s.physicalInputs.clear(); s.stereoSlots.fill(false); s.output = {}; s.audioDefaultsApplied = false; } // a new device gets its first-run defaults
+        const auto previousDevice = initial.asioDeviceId.isNotEmpty() ? initial.asioDeviceId : actual.name;
+        if (s.asioDeviceId != previousDevice) { s.physicalInputs.clear(); s.stereoSlots.fill(false); s.output = {}; s.audioDefaultsApplied = false; } // only a different chosen device gets first-run defaults
         actualLabel.setText(ko("장치를 연결하는 중입니다."), juce::dontSendNotification);
         if (onChanged) onChanged(s);
     };
@@ -129,6 +130,7 @@ UserSettings AudioSettingsPanel::read(UserSettings s) const
 void AudioSettingsPanel::setDeviceInfo(const RecorderAudioEngine::DeviceInfo& info)
 {
     actual = info; const auto s = initial;
+    const bool unavailable = !info.sampleRate || (s.asioDeviceId.isNotEmpty() && s.asioDeviceId != info.name);
     actualLabel.setText(info.sampleRate ? ko("실제 ") + juce::String(info.sampleRate) + " Hz" + (fixed ? ko(" · 프로젝트 고정") : juce::String()) : ko("장치를 연결하면 실제 샘플레이트가 표시됩니다."), juce::dontSendNotification);
     latencyLabel.setText(info.sampleRate ? ko("입력 지연 ") + juce::String(info.inputLatency) + ko(" 샘플 / ") + juce::String(1000.0 * info.inputLatency / info.sampleRate, 2)
         + ko("ms   ·   출력 지연 ") + juce::String(info.outputLatency) + ko(" 샘플 / ") + juce::String(1000.0 * info.outputLatency / info.sampleRate, 2) + "ms" : ko("입출력 지연 확인 전"), juce::dontSendNotification);
@@ -138,6 +140,8 @@ void AudioSettingsPanel::setDeviceInfo(const RecorderAudioEngine::DeviceInfo& in
     {
         box->clear(juce::dontSendNotification); box->addItem(ko("선택 안 함"), 1);
         for (int i = 0; i < info.physicalOutputs; ++i) box->addItem(juce::String(i + 1) + " · " + info.outputNames[i], i + 2);
+        const auto saved = box == &left ? (s.output.mono ? s.output.monoChannel : s.output.left) : s.output.right;
+        if (unavailable && saved >= 0 && box->indexOfItemId(saved + 2) < 0) box->addItem(juce::String(saved + 1), saved + 2);
     }
     left.setSelectedId((s.output.mono ? s.output.monoChannel : s.output.left) + 2, juce::dontSendNotification);
     right.setSelectedId(s.output.right + 2, juce::dontSendNotification); right.setEnabled(!mono.getToggleState());
@@ -145,6 +149,8 @@ void AudioSettingsPanel::setDeviceInfo(const RecorderAudioEngine::DeviceInfo& in
     {
         auto& box = inputs[m]; box.clear(juce::dontSendNotification); box.addItem(ko("사용 안 함"), 1);
         for (int i = 0; i < info.physicalInputs; ++i) box.addItem(inputName(i), i + 2);
+        if (unavailable && m < s.physicalInputs.size() && s.physicalInputs[m] >= 0 && box.indexOfItemId(s.physicalInputs[m] + 2) < 0)
+            box.addItem(juce::String(s.physicalInputs[m] + 1), s.physicalInputs[m] + 2);
         box.setSelectedId(m < s.physicalInputs.size() && s.physicalInputs[m] >= 0 ? s.physicalInputs[m] + 2 : 1, juce::dontSendNotification);
         const bool stereo = box.getSelectedId() > 1 && s.stereoSlots[m];
         inputMono[m].setToggleState(box.getSelectedId() > 1 && !stereo, juce::dontSendNotification);
@@ -194,8 +200,9 @@ void AudioSettingsPanel::refreshInputChoices()
             + (stereo ? "+" + juce::String(leftInput + 2) + ko(" (스테레오)") : ko(" (모노)")) : ko("사용 안 함");
         inputLabels[i].setText(summary, juce::dontSendNotification);
         inputLabels[i].setColour(juce::Label::textColourId, active ? Palette::text : Palette::dimText);
+        // an unplugged device reports no inputs: every saved input would read as 'the last one', so that check waits for the device
         auto stereoReason = !active ? ko("물리 입력을 먼저 선택하세요.")
-            : leftInput + 1 >= actual.physicalInputs ? ko("마지막 입력에는 오른쪽 채널이 없습니다.")
+            : actual.physicalInputs > 0 && leftInput + 1 >= actual.physicalInputs ? ko("마지막 입력에는 오른쪽 채널이 없습니다.")
             : inputConflict(i, leftInput, true, s);
         inputMono[i].setEnabled(active);
         inputStereo[i].setEnabled(active && stereoReason.isEmpty());

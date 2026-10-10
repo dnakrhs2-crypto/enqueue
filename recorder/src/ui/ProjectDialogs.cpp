@@ -6,6 +6,11 @@ namespace gocue::recorder
 {
 namespace
 {
+juce::Result projectFolderStatus(const juce::File& folder)
+{
+    return folder.getChildFile(ProductIdentity::projectFileName()).exists() || folder.getChildFile("media").exists() || folder.getChildFile("journal").exists()
+        ? juce::Result::fail(ko("이미 프로젝트 자료가 있는 폴더입니다. 새 폴더를 선택하세요.")) : juce::Result::ok();
+}
 class MarkerPrompt final : public juce::AlertWindow
 {
 public:
@@ -38,7 +43,7 @@ public:
         audioScroll.setViewedComponent(&audio, false); cameraScroll.setViewedComponent(&camera, false);
         tabs.addTab(ko("오디오 장치"), Palette::card, &audioScroll, false); tabs.addTab(ko("카메라"), Palette::card, &cameraScroll, false);
         tabs.addTab(ko("단축키"), Palette::card, &shortcuts, false); tabs.setOutline(1); tabs.setTabBarDepth(34);
-        addAndMakeVisible(tabs); addAndMakeVisible(apply); addAndMakeVisible(close); addAndMakeVisible(error); error.setColour(juce::Label::textColourId, Palette::danger);
+        addAndMakeVisible(tabs); addAndMakeVisible(apply); addAndMakeVisible(close); addAndMakeVisible(error); error.setColour(juce::Label::textColourId, Palette::dimText);
     }
     void resized() override
     {
@@ -55,6 +60,7 @@ public:
     juce::ComboBox fps;
     juce::TextButton browse {ko("폴더 선택")}, create {ko("새 프로젝트")}, cancel {ko("취소")}, open {ko("기존 프로젝트 열기…")};
     std::unique_ptr<juce::FileChooser> chooser;
+    bool folderError = false;
     NewProjectForm()
     {
         for (auto* l : {&nameLabel, &folderLabel, &fpsLabel, &error}) addAndMakeVisible(l);
@@ -66,6 +72,7 @@ public:
         name.onEscapeKey = [this] { cancel.triggerClick(); };
         folder.onReturnKey = [this] { create.triggerClick(); };
         folder.onEscapeKey = [this] { cancel.triggerClick(); };
+        folder.onTextChange = [this] { if (folderError) { folderError = false; error.setText({}, juce::dontSendNotification); resized(); } };
         browse.onClick = [this]
         {
             chooser = std::make_unique<juce::FileChooser>(ko("프로젝트를 저장할 로컬 폴더"), juce::File(), juce::String()); const juce::Component::SafePointer<NewProjectForm> safe(this);
@@ -77,7 +84,9 @@ public:
     {
         auto a = getLocalBounds().reduced(20); auto row = a.removeFromTop(42); nameLabel.setBounds(row.removeFromLeft(118)); name.setBounds(row.reduced(2));
         row = a.removeFromTop(42); folderLabel.setBounds(row.removeFromLeft(118)); browse.setBounds(row.removeFromRight(112).reduced(2)); folder.setBounds(row.reduced(2));
-        row = a.removeFromTop(42); fpsLabel.setBounds(row.removeFromLeft(118)); fps.setBounds(row.removeFromLeft(140).reduced(2)); error.setBounds(a.removeFromTop(40));
+        if (folderError) error.setBounds(a.removeFromTop(40).withTrimmedLeft(118));
+        row = a.removeFromTop(42); fpsLabel.setBounds(row.removeFromLeft(118)); fps.setBounds(row.removeFromLeft(140).reduced(2));
+        if (!folderError) error.setBounds(a.removeFromTop(40));
         row = a.removeFromBottom(40); cancel.setBounds(row.removeFromRight(86).reduced(2)); create.setBounds(row.removeFromRight(140).reduced(2));
         open.setBounds(row.removeFromLeft(190).reduced(2));
     }
@@ -153,28 +162,31 @@ void MainComponent::showSettings()
     const auto configure = [this, content](UserSettings s)
     {
         s.shortcuts = settings.get().shortcuts;
-        if (session.configuring()) { pendingConfigure = s; content->error.setText(ko("이전 변경을 적용한 뒤 이어서 적용합니다."), juce::dontSendNotification); return; }
-        const auto result = content->audio.configure(session, s, settings.get()); content->error.setText(result.failed() ? result.getErrorMessage() : ko("장치를 연결하는 중입니다."), juce::dontSendNotification); if (result.wasOk()) banner.clear();
+        if (session.configuring()) { pendingConfigure = s; setNoticeText(content->error, ko("이전 변경을 적용한 뒤 이어서 적용합니다."), NoticeKind::information); return; }
+        const auto result = content->audio.configure(session, s, settings.get()); setNoticeText(content->error, result.failed() ? result.getErrorMessage() : ko("장치를 연결하는 중입니다."), result.failed() ? NoticeKind::failure : NoticeKind::information); if (result.wasOk()) banner.clear();
     };
     // Audio edits apply immediately with the saved camera choices, so running previews are left alone.
     content->audio.onChanged = [configure](UserSettings s) { configure(s); };
     content->audio.onControlPanel = [this, content]
-    { session.stopPlayback(); const auto result = session.audioEngine().showControlPanel(); if (result.failed()) content->error.setText(result.getErrorMessage(), juce::dontSendNotification); else session.configure(settings.get()); };
+    { session.stopPlayback(); const auto result = session.audioEngine().showControlPanel(); if (result.failed()) setNoticeText(content->error, result.getErrorMessage(), NoticeKind::failure); else session.configure(settings.get()); };
     content->apply.onClick = [this, content, configure]
     {
         if (content->tabs.getCurrentTabIndex() == 2)
         {
             const auto next = content->shortcuts.read(settings.get()); const auto result = settings.set(next);
-            content->error.setText(result.failed() ? result.getErrorMessage() : ko("단축키를 적용했습니다."), juce::dontSendNotification);
+            setNoticeText(content->error, result.failed() ? result.getErrorMessage() : ko("단축키를 적용했습니다."), result.failed() ? NoticeKind::failure : NoticeKind::success);
             if (result.wasOk()) { if (pendingConfigure) pendingConfigure->shortcuts = next.shortcuts; persistSettings(); refreshPending = true; }
             return;
         }
         const auto s = content->camera.read(content->audio.read(settings.get()));
         auto result = s.asioDeviceId.isEmpty() ? juce::Result::ok() : validateAudioSettings(s, session.deviceInfo(), document.getProject()); // cameras apply without an ASIO device
         if (result.wasOk()) result = content->camera.scanning() ? juce::Result::fail(ko("카메라 목록을 확인하는 중입니다.")) : validateCameraSettings(s, content->camera.catalog());
-        if (result.failed()) content->error.setText(result.getErrorMessage(), juce::dontSendNotification); else configure(s);
+        if (result.failed()) setNoticeText(content->error, result.getErrorMessage(), NoticeKind::failure); else configure(s);
     };
     content->close.onClick = [this] { settingsWindow->closeButtonPressed(); }; settingsWindow->setVisible(true); styleRecorderWindow(*settingsWindow);
+    if (auto* device = content->audio.findChildWithID("audioDevice"); device && device->isEnabled()) device->grabKeyboardFocus();
+    else for (int i = 0; i < content->tabs.getNumTabs(); ++i)
+        if (auto* tab = content->tabs.getTabbedButtonBar().getTabButton(i); tab && tab->isEnabled()) { tab->grabKeyboardFocus(); break; }
 }
 void MainComponent::newProjectDialog()
 {
@@ -187,22 +199,25 @@ void MainComponent::newProjectDialog()
     if (!settings.get().recentProjects.isEmpty())
     {
         const auto folder = juce::File(settings.get().recentProjects[0]).getParentDirectory();
-        if (folder.isDirectory()) content->folder.setText(folder.getFullPathName());
+        if (folder.isDirectory() && projectFolderStatus(folder).wasOk()) content->folder.setText(folder.getFullPathName());
     }
     content->cancel.onClick = [this] { projectWindow->setVisible(false); };
     content->open.onClick = [this] { chooseOpen(); };
     content->create.onClick = [this, content]
     {
+        content->folderError = false; content->error.setColour(juce::Label::textColourId, Palette::text); content->resized();
         if (session.busy() || fileWork.valid() || importBusy() || closeAction)
         { content->error.setText(ko("장치 연결과 현재 작업이 끝난 뒤 새 프로젝트를 만드세요."), juce::dontSendNotification); return; }
         const auto path = content->folder.getText().trim(), name = content->name.getText().trim();
         if (name.isEmpty() || !juce::File::isAbsolutePath(path) || path.startsWith("\\\\") || path.startsWith("//")) { content->error.setText(ko("프로젝트 이름과 로컬 폴더를 입력하세요."), juce::dontSendNotification); return; }
+        if (const auto result = projectFolderStatus(juce::File(path)); result.failed())
+        { content->folderError = true; setNoticeText(content->error, result.getErrorMessage(), NoticeKind::failure); content->resized(); return; }
         createProject(name, juce::File(path), unsigned(content->fps.getSelectedId())); projectWindow->setVisible(false);
     }; projectWindow->setVisible(true); styleRecorderWindow(*projectWindow); projectWindow->toFront(true); content->name.grabKeyboardFocus(); content->name.selectAll();
 }
 void MainComponent::beforeSwitch(std::function<void()> action)
 {
-    if (session.busy() || fileWork.valid() || importBusy() || closeAction) { showError(ko("녹화·오디오 불러오기와 저장이 끝난 뒤 프로젝트를 변경하세요.")); return; }
+    if (session.busy() || fileWork.valid() || importBusy() || closeAction) { showError(ko("녹화·오디오 불러오기와 저장이 끝난 뒤 프로젝트를 변경하세요."), NoticeKind::information); return; }
     dismissMarkerPrompt();
     session.stopPlayback(); if (document.isDirty() && document.getFile() != juce::File()) { afterSave = std::move(action); saveProject(); } else action();
 }
@@ -226,8 +241,8 @@ void MainComponent::createProject(const juce::String& name, const juce::File& fo
     startFileWork(context, [name, folder, fps]
     {
         FileResult r; r.opening = true; r.file = folder.getChildFile(ProductIdentity::projectFileName()); r.loaded.name = name; r.loaded.fps = {fps, 1};
-        if (r.file.exists() || folder.getChildFile("media").exists() || folder.getChildFile("journal").exists()) r.result = juce::Result::fail(ko("이미 프로젝트 자료가 있는 폴더입니다. 새 폴더를 선택하세요."));
-        else r.result = RecorderSerializer::writeCheckpoint(r.file, r.loaded); return r;
+        r.result = projectFolderStatus(folder);
+        if (r.result.wasOk()) r.result = RecorderSerializer::writeCheckpoint(r.file, r.loaded); return r;
     }); refreshPending = true;
 }
 void MainComponent::chooseOpen()
@@ -241,7 +256,17 @@ void MainComponent::openProject(const juce::File& path)
     {
         if (projectWindow) projectWindow->setVisible(false);
         FileResult context; context.opening = true; context.file = path;
-        startFileWork(context, [context]() mutable { context.result = RecorderSerializer::readCheckpoint(context.file, context.loaded, &context.info); return context; }); refreshPending = true;
+        startFileWork(context, [context, recentStartup = promptAfterStartupOpen]() mutable
+        {
+            context.result = RecorderSerializer::readCheckpoint(context.file, context.loaded, &context.info);
+            const auto folder = context.file.getParentDirectory();
+            // A missing recent project in an unused folder has nothing to recover.
+            // Scanning it would create journal/locks and make that empty parent fail the new-project check.
+            context.recovered = recentStartup && context.result.failed() && !context.file.exists() && projectFolderStatus(folder).wasOk()
+                && !context.file.getSiblingFile(context.file.getFileName() + ".bak").exists()
+                && !folder.getChildFile(ProductIdentity::projectFileName() + ".bak").exists() && !folder.getChildFile("recovery").exists();
+            return context;
+        }); refreshPending = true;
     });
 }
 void MainComponent::saveProject() { if (document.getFile() == juce::File()) newProjectDialog(); else saveTo(document.getFile()); }

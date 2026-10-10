@@ -103,7 +103,7 @@ int runCutEditStabilityTests()
         RecorderDocument document; require(document.adopt(makeTimelineUiFixture(), {}, {}).wasOk(), "fixture");
         TimelineView view(document); view.setSize(1180, 620);
         const auto before = document.snapshot();
-        const juce::Point<float> down{StabilityTestAccess::x(view, 240000), 70}, target{215, 70};
+        const juce::Point<float> down{StabilityTestAccess::x(view, 240000), 40}, target{215, 40};
         StabilityTestAccess::mouse(view, 0, down, down);
         StabilityTestAccess::mouse(view, 1, target, down);
         StabilityTestAccess::mouse(view, 2, target, down);
@@ -117,7 +117,7 @@ int runCutEditStabilityTests()
         const auto clip = document.getProject().tracks[0].clips.items()[0];
         require(document.performEdit("external delete", {}, [&](const auto& p) { return ClipEdits::remove(p, {clip.clipId}); }).wasOk(), "delete");
         const auto after = document.snapshot();
-        const juce::Point<float> down{StabilityTestAccess::x(view, 240000), 70};
+        const juce::Point<float> down{StabilityTestAccess::x(view, 240000), 40};
         StabilityTestAccess::mouse(view, 0, down, down); StabilityTestAccess::mouse(view, 2, down, down);
         require(document.snapshot() == after && !view.edits.dragPreview(), "stale hit mutated document");
     });

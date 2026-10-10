@@ -13,8 +13,8 @@ AudioImportPanel::AudioImportPanel(RecorderDocument& d) : document(d)
 AudioImportPanel::~AudioImportPanel() { onBusyChanged = {}; shutdown(); }
 void AudioImportPanel::shutdown()
 { stopTimer(); chooser.reset(); worker.reset(); if (onBusyChanged) onBusyChanged(); }
-void AudioImportPanel::report(const juce::String& text)
-{ status.setText(text, juce::dontSendNotification); if (onStatusChanged) onStatusChanged(text); }
+void AudioImportPanel::report(const juce::String& text, NoticeKind kind)
+{ status.setText(text, juce::dontSendNotification); if (onStatusChanged) onStatusChanged(text, kind); }
 void AudioImportPanel::setImportContext(juce::File folder, Sample sample)
 { directory = std::move(folder); playhead = sample; }
 void AudioImportPanel::setRecordingActive(bool active)
@@ -50,7 +50,7 @@ void AudioImportPanel::importFile(const juce::File& file)
     AudioImportRequest request; request.source = file; request.projectDirectory = directory;
     request.projectId = document.getProject().projectId; request.projectFs = document.getProject().Fs; request.playhead = playhead;
     try { worker = std::make_unique<ImportedAudioCache::Worker>(request, recording); }
-    catch (const std::exception& e) { report(juce::String::fromUTF8("오디오 불러오기를 시작하지 못했습니다. ") + juce::String::fromUTF8(e.what())); if (onBusyChanged) onBusyChanged(); return; }
+    catch (const std::exception& e) { report(juce::String::fromUTF8("오디오 불러오기를 시작하지 못했습니다. ") + juce::String::fromUTF8(e.what()), NoticeKind::failure); if (onBusyChanged) onBusyChanged(); return; }
     importButton.setEnabled(false); cancelButton.setEnabled(true); progressBar.setVisible(true); progress = 0;
     report(juce::String::fromUTF8("오디오를 불러오는 중입니다.")); startTimerHz(20);
     if (onBusyChanged) onBusyChanged();
@@ -93,7 +93,7 @@ void AudioImportPanel::timerCallback()
             messageText += juce::String(prepared->info().sampleRate) + " → " + juce::String(cache.sampleRate) + juce::String::fromUTF8(" Hz로 재생용 변환됨 · 원본 보존");
         else messageText += juce::String(cache.sampleRate) + juce::String::fromUTF8(" Hz · 샘플레이트 변환 없음");
     }
-    report(messageText);
+    report(messageText, result.wasOk() ? NoticeKind::success : cancelled ? NoticeKind::information : NoticeKind::failure);
     if (result.wasOk() && onImported) onImported(prepared->asset(), cache);
     if (onBusyChanged) onBusyChanged();
 }

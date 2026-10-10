@@ -25,6 +25,7 @@ private:
     void selectedRowsChanged(int) override;
     void listBoxItemDoubleClicked(int, const juce::MouseEvent&) override;
     void apply();
+    void clearInputError();
     juce::String rowTimeText(int) const;
     juce::File defaultExportFile() const;
     void chooseExportFile();
@@ -36,6 +37,8 @@ private:
     juce::Component content;
     juce::ListBox list;
     juce::TextEditor name, position;
+    juce::Label inputError;
+    bool errorAtName = false;
     MarkerColourSwatches colours;
     juce::TextButton add {ko("마커 추가")}, change {ko("이름 변경")}, remove {ko("삭제")};
     juce::TextButton exportText {ko("텍스트로 내보내기")};

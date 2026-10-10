@@ -33,11 +33,11 @@ private:
 struct TimelineLayout
 {
     struct Box { int x = 0, y = 0, width = 0, height = 0; };
-    static constexpr int headerWidth = 210, rulerHeight = 30, rowHeight = 72;
+    static constexpr int headerWidth = 210, rulerHeight = 50, rowHeight = 72;
     // JUCE uses logical coordinates; DPI is applied once at the HWND boundary.
     static std::array<Box, 2> cameras(int logicalWidth, int logicalHeight);
     static Box physical(Box, double scale);
-    static std::pair<int, int> visibleRows(int top, int bottom, int count);
+    static std::pair<int, int> visibleRows(int top, int bottom, int count); // Track-content coordinates, without the fixed ruler.
     static std::pair<int, int> waveColumns(int left, int right, int clipLeft, int clipRight);
 };
 // Metadata only; queries the same production interval/layout helpers. No latency

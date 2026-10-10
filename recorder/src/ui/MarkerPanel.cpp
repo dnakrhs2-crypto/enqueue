@@ -2,6 +2,7 @@
 #include "UiState.h"
 #include "model/MarkerExport.h"
 #include <algorithm>
+#include <cmath>
 #ifndef NOMINMAX
 #define NOMINMAX
 #endif
@@ -16,6 +17,10 @@ MarkerPanel::MarkerPanel(TimelineEditController& c) : edits(c)
     for (auto* b : {&add, &change, &remove, &exportText}) { content.addAndMakeVisible(b); b->setWantsKeyboardFocus(false); }
     for (auto* e : {&name, &position}) { content.addAndMakeVisible(e); e->onReturnKey = [this] { apply(); }; }
     content.addAndMakeVisible(colours);
+    content.addAndMakeVisible(inputError); inputError.setFont(recorderFont(11.5f));
+    inputError.setColour(juce::Label::textColourId, noticeColour(NoticeKind::failure));
+    inputError.setJustificationType(juce::Justification::topLeft); inputError.setMinimumHorizontalScale(1);
+    name.onTextChange = position.onTextChange = [this] { clearInputError(); };
     name.setTextToShowWhenEmpty(ko("이름"), Palette::dimText); position.setTextToShowWhenEmpty(ko("위치 · 시간 또는 샘플"), Palette::dimText);
     position.setTooltip(ko("위치 · mm:ss, mm:ss.mmm, h:mm:ss.mmm 또는 정수 샘플 · Enter로 적용"));
     name.setTooltip(ko("이름 · Enter로 적용"));
@@ -38,15 +43,19 @@ MarkerPanel::MarkerPanel(TimelineEditController& c) : edits(c)
 }
 void MarkerPanel::refresh()
 {
-    markers = edits.document.getProject().markers;
+    const auto& next = edits.document.getProject().markers;
+    if (inputError.getText().isNotEmpty())
+        for (const auto& before : markers) if (before.markerId == selected)
+            for (const auto& after : next) if (after.markerId == selected && (before.sample != after.sample || before.name != after.name || before.colour != after.colour)) clearInputError();
+    markers = next;
     std::stable_sort(markers.begin(), markers.end(), [](const Marker& a, const Marker& b) { return a.sample < b.sample; });
     list.updateContent(); int index = -1;
     for (unsigned i = 0; i < markers.size(); ++i) if (markers[i].markerId == selected) index = int(i);
-    if (index < 0) { selected.clear(); list.deselectAllRows(); name.clear(); position.clear(); colours.setSelected({}); }
+    if (index < 0) { selected.clear(); list.deselectAllRows(); name.clear(); position.clear(); colours.setSelected({}); clearInputError(); }
     else
     {
         list.selectRow(index); colours.setSelected(markers[std::size_t(index)].colour);
-        if (!name.hasKeyboardFocus(true) && !position.hasKeyboardFocus(true) && !colours.hasKeyboardFocus(true)) selectedRowsChanged(index);
+        if (inputError.getText().isEmpty() && !name.hasKeyboardFocus(true) && !position.hasKeyboardFocus(true) && !colours.hasKeyboardFocus(true)) selectedRowsChanged(index);
     }
     const bool canEdit = !selected.isEmpty() && edits.enabled(TimelineAction::editMarker);
     for (auto* e : {&name, &position}) e->setEnabled(canEdit);
@@ -57,6 +66,7 @@ void MarkerPanel::selectedRowsChanged(int row)
 {
     if (row < 0 || row >= int(markers.size())) return;
     const auto& m = markers[std::size_t(row)]; selected = m.markerId;
+    clearInputError();
     name.setText(m.name, false); position.setText(rowTimeText(row), false); colours.setSelected(m.colour);
     const bool canEdit = edits.enabled(TimelineAction::editMarker);
     for (auto* e : {&name, &position}) e->setEnabled(canEdit);
@@ -82,9 +92,24 @@ void MarkerPanel::apply()
     const auto valid = TimelineEditController::parseTimecode(text, project.Fs, at) || TimelineEditController::parseSample(text, at);
     // A displayed millisecond may contain several samples: renaming must preserve the exact stored position.
     for (const auto& marker : project.markers) if (marker.markerId == selected && text == formatMarkerTime(marker.sample, project.Fs)) at = marker.sample;
-    const auto r = valid ? edits.editMarker(selected, at, name.getText(), colours.selected())
-        : juce::Result::fail(ko("마커 위치는 시간(mm:ss, mm:ss.mmm, h:mm:ss.mmm) 또는 정수 샘플로 입력하세요."));
+    if (!valid)
+    {
+        inputError.setText(ko("마커 위치는 시간(mm:ss, mm:ss.mmm, h:mm:ss.mmm) 또는 정수 샘플로 입력하세요."), juce::dontSendNotification);
+        errorAtName = false; setInputError(name, false); setInputError(position, true); resized(); return;
+    }
+    clearInputError();
+    const auto r = edits.editMarker(selected, at, name.getText(), colours.selected());
+    if (r.failed() && name.getText().trim().isEmpty())
+    {
+        errorAtName = true; inputError.setText(r.getErrorMessage(), juce::dontSendNotification);
+        setInputError(name, true); resized(); return;
+    }
     if (onEdit) onEdit(r);
+}
+void MarkerPanel::clearInputError()
+{
+    if (inputError.getText().isEmpty()) return;
+    inputError.setText({}, juce::dontSendNotification); setInputError(position, false); setInputError(name, false); resized();
 }
 juce::String MarkerPanel::rowTimeText(int row) const
 {
@@ -160,10 +185,20 @@ void MarkerPanel::exportFile(const juce::File& file, const RecorderProject& proj
 void MarkerPanel::resized()
 {
     const auto width = juce::jmax(140, getWidth() - 18); const auto swatchHeight = colours.heightForWidth(width - 6);
-    viewport.setBounds(getLocalBounds()); content.setSize(width, juce::jmax(226 + swatchHeight, getHeight()));
+    int errorHeight = 0;
+    if (inputError.getText().isNotEmpty())
+    {
+        juce::AttributedString text; text.append(inputError.getText(), inputError.getFont(), noticeColour(NoticeKind::failure));
+        juce::TextLayout layout; layout.createLayout(text, float(width - 6 - inputError.getBorderSize().getLeftAndRight()));
+        errorHeight = int(std::ceil(layout.getHeight())) + inputError.getBorderSize().getTopAndBottom() + 4;
+    }
+    viewport.setBounds(getLocalBounds()); content.setSize(width, juce::jmax(226 + swatchHeight + errorHeight, getHeight()));
     auto a = content.getLocalBounds().reduced(3); exportText.setBounds(a.removeFromBottom(28)); a.removeFromBottom(4);
     auto buttons = a.removeFromBottom(28); add.setBounds(buttons.removeFromLeft(92)); remove.setBounds(buttons.removeFromRight(50)); change.setBounds(buttons);
     a.removeFromBottom(6); colours.setBounds(a.removeFromBottom(swatchHeight)); a.removeFromBottom(6);
-    position.setBounds(a.removeFromBottom(26)); a.removeFromBottom(2); name.setBounds(a.removeFromBottom(26)); a.removeFromBottom(4); list.setBounds(a);
+    if (!errorAtName) inputError.setBounds(a.removeFromBottom(errorHeight));
+    position.setBounds(a.removeFromBottom(26)); a.removeFromBottom(2);
+    if (errorAtName) inputError.setBounds(a.removeFromBottom(errorHeight));
+    name.setBounds(a.removeFromBottom(26)); a.removeFromBottom(4); list.setBounds(a);
 }
 }

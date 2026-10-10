@@ -117,7 +117,7 @@ juce::String RecorderUpdater::aboutText()
 }
 void RecorderUpdater::showAboutDialog()
 {
-    auto options = juce::MessageBoxOptions().withIconType(juce::MessageBoxIconType::InfoIcon)
+    auto options = juce::MessageBoxOptions().withIconType(juce::MessageBoxIconType::NoIcon)
         .withTitle(juce::String::fromUTF8("앱 정보")).withMessage(aboutText());
     if (ProductIdentity::publicationConfirmed()) options = options.withButton(juce::String::fromUTF8("대응 소스 열기"));
     options = options.withButton(juce::String::fromUTF8("닫기"));

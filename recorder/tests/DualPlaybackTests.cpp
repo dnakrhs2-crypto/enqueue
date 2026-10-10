@@ -164,7 +164,7 @@ int runDualPlaybackTests()
         }
         const auto columns = TimelineLayout::waveColumns(300, 600, -100000, 1000000);
         require(columns.second - columns.first == 300, "Waveform work scales with source length");
-        const auto rows = TimelineLayout::visibleRows(174, 318, 1000); require(rows.first == 2 && rows.second == 4, "Vertical track virtualization wrong");
+        const auto rows = TimelineLayout::visibleRows(144, 288, 1000); require(rows.first == 2 && rows.second == 4, "Vertical track virtualization wrong");
         RecorderProject p; Track t;
         for (const auto start : {Sample{0}, Sample{100}, Sample{200}})
         { Clip c; c.trackId = t.trackId; c.timelineStartSample = start; c.lengthSamples = start ? 50 : 1000; t.clips.edit().push_back(std::move(c)); }
