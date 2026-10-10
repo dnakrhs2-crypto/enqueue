@@ -49,6 +49,8 @@ public:
     void setWarningCount (int count);
     /** 'warning' paints the status in the stop colour (a clipped output or an xrun); 'tooltip' replaces the text as the tooltip. */
     void setAudioStatus (juce::String text, bool warning = false, juce::String tooltip = {});
+    void setAudioStatusParts (juce::String device, juce::StringArray settings, juce::StringArray measurements,
+                              bool warning = false, juce::String tooltip = {});
     void setMidiStatus (const juce::String& text, const juce::String& tooltip, bool warning);
 
     std::function<void()> onWarningsClicked;
@@ -57,9 +59,16 @@ public:
     void paint (juce::Graphics& g) override;
 
 private:
+    struct AudioStatusLabel : public juce::Label
+    {
+        void paint (juce::Graphics&) override;
+        juce::String device;
+        juce::StringArray settings, measurements;
+    };
     void updateLayout();
     juce::TextButton warningsButton;
-    juce::Label countLabel, modeHint, audioStatus, midiStatus;
+    juce::Label countLabel, modeHint, midiStatus;
+    AudioStatusLabel audioStatus;
     bool showMode = false;
     bool audioWarning = false;
 };

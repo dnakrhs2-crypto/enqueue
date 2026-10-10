@@ -59,12 +59,32 @@ namespace
 /** Tab "기본". */
 class CueInspector::BasicsPanel : public juce::Component,
                                   public juce::FileDragAndDropTarget,
+                                  private juce::FocusChangeListener,
                                   private juce::Timer
 {
     class PendingEditor : public juce::TextEditor
     {
     public:
-        PendingEditor() { onTextChange = [this] { pending = getText() != syncedText; }; }
+        PendingEditor()
+        {
+            onTextChange = [this]
+            {
+                pending = getText() != syncedText;
+                if (pending) setRejected (false);
+            };
+        }
+
+        void setRejected (bool rejected)
+        {
+            getProperties().set ("slateInputError", rejected);
+            repaint();
+        }
+
+        void focusGained (FocusChangeType cause) override
+        {
+            setRejected (false);
+            juce::TextEditor::focusGained (cause);
+        }
 
         void syncText (const juce::String& text)
         {
@@ -291,6 +311,31 @@ public:
         notesEditor.onFocusLost = [this] { commitNotes(); };
         notesEditor.onEscapeKey = [this] { cancelEdit(); };
         addAndMakeVisible (notesEditor);
+
+        int focusOrder = 1;
+        for (auto* field : std::initializer_list<juce::Component*> { &numberEditor, &nameEditor, &preEditor, &postEditor,
+                                                                   &fadeOutEditor, &gainSlider, &notesEditor })
+            field->setExplicitFocusOrder (focusOrder++);
+        juce::Desktop::getInstance().addFocusChangeListener (this);
+    }
+
+    ~BasicsPanel() override
+    {
+        juce::Desktop::getInstance().removeFocusChangeListener (this);
+    }
+
+    void globalFocusChanged (juce::Component* focused) override
+    {
+        if (focused == nullptr || ! isParentOf (focused)) return;
+        if (auto* page = findParentComponentOfClass<InspectorPage>())
+        {
+            const auto field = getLocalArea (focused, focused->getLocalBounds());
+            const auto view = page->getViewArea();
+            int y = view.getY();
+            if (field.getBottom() > view.getBottom()) y = field.getBottom() - view.getHeight();
+            if (field.getY() < y) y = field.getY();
+            page->setViewPosition (view.getX(), y);
+        }
     }
 
     std::function<void()> onCancelEdit;
@@ -348,7 +393,10 @@ public:
         if (cue == nullptr)
         {
             for (auto* e : std::initializer_list<PendingEditor*> { &numberEditor, &nameEditor, &preEditor, &postEditor, &fadeOutEditor, &notesEditor })
+            {
                 e->syncText ("");
+                e->setRejected (false);
+            }
 
             shownId = juce::Uuid::null();
 
@@ -370,6 +418,7 @@ public:
 
         auto setIfIdle = [selectionChanged, modelReplaced] (PendingEditor& e, const juce::String& text)
         {
+            if (modelReplaced || selectionChanged) e.setRejected (false);
             // Undo/redo replaces the model before restoring the selection. Drop
             // stale input then; an ordinary property update keeps a focused edit.
             if (modelReplaced || selectionChanged || ! e.hasKeyboardFocus (true)) e.syncText (text);
@@ -606,16 +655,23 @@ private:
             return;
 
         if (number == cue->number)
+        {
+            if (shownId == id) numberEditor.setRejected (false);
             return;
+        }
 
         if (document.isNumberTaken (number, id))
         {
             juce::LookAndFeel::getDefaultLookAndFeel().playAlertSound();   // numbers are unique in the project (every list / cart)
             if (shownId == id)
+            {
                 numberEditor.syncText (cue->number);
+                numberEditor.setRejected (true);
+            }
             return;
         }
 
+        if (shownId == id) numberEditor.setRejected (false);
         document.setCueNumber (id, number);   // renumbers and moves the row into numeric order (one undo step)
     }
 
@@ -714,7 +770,13 @@ private:
         const double current = pre ? cue->preWaitSeconds : cue->postWaitSeconds;
         const double value = parseTimeText (editor.getText());
 
-        if (! editor.takePendingEdit() || value < 0.0 || juce::approximatelyEqual (value, current))
+        if (! editor.takePendingEdit())
+        {
+            editor.syncText (formatTimeMs (current));
+            return;
+        }
+        editor.setRejected (value < 0.0);
+        if (value < 0.0 || juce::approximatelyEqual (value, current))
         {
             editor.syncText (formatTimeMs (current));
             return;
@@ -755,7 +817,13 @@ private:
 
         const auto text = fadeOutEditor.getText().trim();
 
-        if (! fadeOutEditor.takePendingEdit() || text.isEmpty())
+        if (! fadeOutEditor.takePendingEdit())
+        {
+            fadeOutEditor.syncText (juce::String (cue->fadeOutMs));
+            return;
+        }
+        fadeOutEditor.setRejected (text.isEmpty());
+        if (text.isEmpty())
         {
             fadeOutEditor.syncText (juce::String (cue->fadeOutMs));
             return;
@@ -893,7 +961,14 @@ public:
 
         // wall clock
         styleToggle (wallToggle, ko ("시간 트리거 (시:분:초)"));
-        wallToggle.onClick = [this] { const bool on = wallToggle.getToggleState(); edit (ko ("시간 트리거"), [on] (Cue& c) { c.wallClock.enabled = on; }); };
+        // the toggles take no focus: a time still being typed is committed before the toggle disables (and refills) its fields
+        wallToggle.onClick = [this]
+        {
+            const bool on = wallToggle.getToggleState();
+            if (hourEditor.hasKeyboardFocus (true) || minuteEditor.hasKeyboardFocus (true) || secondEditor.hasKeyboardFocus (true))
+                commitWallClock();
+            edit (ko ("시간 트리거"), [on] (Cue& c) { c.wallClock.enabled = on; });
+        };
         addAndMakeVisible (wallToggle);
 
         for (auto* e : { &hourEditor, &minuteEditor, &secondEditor })
@@ -914,6 +989,7 @@ public:
             b.setClickingTogglesState (true);
             b.setWantsKeyboardFocus (false);
             b.setColour (juce::TextButton::buttonOnColourId, Palette::accent);
+            b.setColour (juce::TextButton::textColourOnId, Palette::background);
             b.getProperties().set ("slatePill", true);
             b.getProperties().set ("slateSmall", true);
             b.onClick = [this, d]
@@ -932,7 +1008,13 @@ public:
 
         // fade & stop others
         styleToggle (fadeStopToggle, ko ("시작할 때 다른 큐 페이드 정지"));
-        fadeStopToggle.onClick = [this] { const bool on = fadeStopToggle.getToggleState(); edit (ko ("다른 큐 페이드 정지"), [on] (Cue& c) { c.fadeStopOthers.enabled = on; }); };
+        fadeStopToggle.onClick = [this]
+        {
+            const bool on = fadeStopToggle.getToggleState();
+            if (fadeStopSecondsEditor.hasKeyboardFocus (true))
+                commitFadeStop();
+            edit (ko ("다른 큐 페이드 정지"), [on] (Cue& c) { c.fadeStopOthers.enabled = on; });
+        };
         addAndMakeVisible (fadeStopToggle);
         styleLabel (fadeStopSecondsLabel, ko ("시간 (초)"));
         addAndMakeVisible (fadeStopSecondsLabel);
@@ -958,7 +1040,13 @@ public:
 
         // duck
         styleToggle (duckToggle, ko ("재생 중 다른 큐 덕 / 부스트"));
-        duckToggle.onClick = [this] { const bool on = duckToggle.getToggleState(); edit (ko ("덕/부스트"), [on] (Cue& c) { c.duck.enabled = on; }); };
+        duckToggle.onClick = [this]
+        {
+            const bool on = duckToggle.getToggleState();
+            if (duckLevelEditor.hasKeyboardFocus (true) || duckSecondsEditor.hasKeyboardFocus (true))
+                commitDuck();
+            edit (ko ("덕/부스트"), [on] (Cue& c) { c.duck.enabled = on; });
+        };
         addAndMakeVisible (duckToggle);
         styleLabel (duckLevelLabel, ko ("레벨 (dB, 음수 = 덕)"));
         addAndMakeVisible (duckLevelLabel);
@@ -1001,13 +1089,18 @@ public:
             shownId = cue != nullptr ? cue->id : juce::Uuid::null();
         }
 
-        for (auto* c : std::initializer_list<juce::Component*> { &secondCombo, &wallToggle, &hourEditor, &minuteEditor, &secondEditor,
-                                                                 &fadeStopToggle, &fadeStopSecondsEditor, &fadeStopScopeCombo,
-                                                                 &duckToggle, &duckLevelEditor, &duckSecondsEditor })
+        for (auto* c : std::initializer_list<juce::Component*> { &secondCombo, &wallToggle, &fadeStopToggle, &duckToggle })
             c->setEnabled (enabled);
 
+        const bool wallEnabled = enabled && cue->wallClock.enabled;
+        for (auto* editor : { &hourEditor, &minuteEditor, &secondEditor })
+            editor->setEnabled (wallEnabled);
         for (auto& b : dayButtons)
-            b.setEnabled (enabled);
+            b.setEnabled (wallEnabled);
+        fadeStopSecondsEditor.setEnabled (enabled && cue->fadeStopOthers.enabled);
+        fadeStopScopeCombo.setEnabled (enabled && cue->fadeStopOthers.enabled);
+        duckLevelEditor.setEnabled (enabled && cue->duck.enabled);
+        duckSecondsEditor.setEnabled (enabled && cue->duck.enabled);
 
         if (cue == nullptr)
         {
@@ -1204,6 +1297,8 @@ public:
         addAndMakeVisible (silenceButton);
 
         styleLabel (hint, ko ("드래그 = 레벨 (Shift = 0.1 dB) · 더블클릭 = 기본값 · 숫자 입력 (부호 없으면 음수, 빈칸 = 무음) · 우클릭 = 겡 · 재생 중에도 즉시 반영. 행 = 파일 채널, 열 = 패치의 큐 출력 (귀퉁이 표시 = 장치에 연결 안 됨)"), 13.0f);
+        hint.getProperties().set ("slateSingleLine", true);
+        hint.setTooltip (hint.getText());
         addAndMakeVisible (hint);
 
         viewport.setViewedComponent (&grid, false);
@@ -1410,6 +1505,8 @@ public:
     TrimPanel (ProjectDocument& doc, AudioEngine& e) : document (doc), cues (doc.cues), engine (e)
     {
         styleLabel (hint, ko ("트림은 레벨 매트릭스 뒤에 더해지는 고정 오프셋입니다 (페이드 큐의 영향을 받지 않음). 더블클릭 = 0 dB"), 13.0f);
+        hint.getProperties().set ("slateSingleLine", true);
+        hint.setTooltip (hint.getText());
         addAndMakeVisible (hint);
 
         styleLabel (mainLabel, ko ("메인 트림 (dB)"));
@@ -3206,7 +3303,13 @@ public:
 
         styleToggle (crossfadeToggle, ko ("크로스페이드"));
         crossfadeToggle.setTooltip (ko ("플레이리스트: 다음 자식을 이 시간만큼 먼저 시작하고 현재 자식을 그 시간에 걸쳐 페이드아웃"));
-        crossfadeToggle.onClick = [this] { const bool on = crossfadeToggle.getToggleState(); edit (ko ("크로스페이드"), [on] (Cue& c) { c.group.crossfade = on; }); };
+        crossfadeToggle.onClick = [this]
+        {
+            const bool on = crossfadeToggle.getToggleState();   // taken first: committing refreshes the toggle from the cue
+            if (crossfadeEditor.hasKeyboardFocus (true))
+                commitCrossfade();
+            edit (ko ("크로스페이드"), [on] (Cue& c) { c.group.crossfade = on; });
+        };
         addAndMakeVisible (crossfadeToggle);
 
         crossfadeEditor.setJustification (juce::Justification::centredRight);
@@ -3233,8 +3336,9 @@ public:
         const bool enabled = cue != nullptr && cue->isGroup() && editable;
         shownId = cue != nullptr && cue->isGroup() ? cue->id : juce::Uuid::null();
 
-        for (auto* c : std::initializer_list<juce::Component*> { &modeCombo, &loopToggle, &shuffleToggle, &crossfadeToggle, &crossfadeEditor })
+        for (auto* c : std::initializer_list<juce::Component*> { &modeCombo, &loopToggle, &shuffleToggle, &crossfadeToggle })
             c->setEnabled (enabled);
+        crossfadeEditor.setEnabled (enabled && cue->group.crossfade);
 
         if (cue != nullptr && cue->isGroup())
         {
@@ -3370,7 +3474,7 @@ private:
                 g.setColour (Palette::outline);
                 g.drawVerticalLine ((int) x, (float) axisHeight, (float) getHeight());
                 g.setColour (Palette::dimText);
-                g.drawText (formatSeconds (t), (int) x + 2, 0, 60, axisHeight, juce::Justification::centredLeft);
+                g.drawText (t == 0.0 ? juce::String ("0:00.0") : formatSeconds (t), (int) x + 2, 0, 60, axisHeight, juce::Justification::centredLeft);
             }
 
             const int h = rowHeight();
@@ -3393,7 +3497,8 @@ private:
                 if (! c.armed)
                     colour = colour.withAlpha (0.4f);
 
-                g.setColour (colour.withAlpha (selected ? 0.95f : 0.7f));
+                const auto barColour = colour.withAlpha (selected ? 0.95f : 0.7f);
+                g.setColour (barColour);
                 g.fillRoundedRectangle (bar, 3.0f);
 
                 if (selected)
@@ -3402,7 +3507,12 @@ private:
                     g.drawRoundedRectangle (bar, 3.0f, 1.5f);
                 }
 
-                g.setColour (Palette::onBright);
+                const auto composite = Palette::background.overlaidWith (barColour);
+                const auto linear = [] (float channel)
+                { return channel <= 0.04045f ? (double) channel / 12.92 : std::pow (((double) channel + 0.055) / 1.055, 2.4); };
+                const double luminance = 0.2126 * linear (composite.getFloatRed()) + 0.7152 * linear (composite.getFloatGreen())
+                                       + 0.0722 * linear (composite.getFloatBlue());
+                g.setColour ((luminance + 0.05) / 0.05 >= 1.05 / (luminance + 0.05) ? juce::Colours::black : juce::Colours::white);
                 g.setFont (Palette::font (h < 20 ? Palette::kickerSize : Palette::fieldLabelSize));   // the text spans the row, not the bar
                 g.drawText (formatTimeMs (c.preWaitSeconds), juce::Rectangle<int> ((int) bar.getX() + 4, y, juce::jmax (0, (int) bar.getWidth() - 4), h),
                             juce::Justification::centredLeft, true);
@@ -3599,6 +3709,8 @@ public:
         : document (doc), cues (doc.cues), engine (e), chainStrip (e, windows)
     {
         styleLabel (hint, ko ("이 큐만 통과하는 VST3 플러그인 — ①→②→③ 순서대로 직렬 처리(1번을 거친 소리가 2번으로). < > 로 순서 변경, 활성/비활성으로 켜고 끔. 신호 흐름: 파일 → 페이드 → 게인 → 플러그인 → 믹스"), 14.0f);
+        hint.getProperties().set ("slateSingleLine", true);
+        hint.setTooltip (hint.getText());
         addAndMakeVisible (hint);
 
         chainStrip.performEdit = [this] (const juce::String& name, const std::function<void()>& edit)

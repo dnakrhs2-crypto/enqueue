@@ -60,30 +60,35 @@ void ContainerTabs::resized()
     const int edge = juce::jmax (0, getWidth() - 14);
     // the cue count and the broken-cue warnings button always keep their room at the right
     const int essential = statusBar != nullptr ? statusBar->getEssentialWidth() : 0;
-    tabsRight = juce::jmax (8, edge - (essential > 0 ? essential + 16 : 0));
+    const int stripRight = juce::jmax (8, edge - (essential > 0 ? essential + 16 : 0));
+    const int room = juce::jmax (0, stripRight - 8 - 26 - 8);
 
-    // the lists' tabs at their own widths (as before the status moved in); when they do not fit they shrink, never
-    // below 60 px, and anything past tabsRight is clipped (the status stays readable and clickable)
+    // Reserve the add button first. The active name keeps its measured width; other tabs can scroll.
     std::vector<int> widths;
-    int total = 0;
+    int total = 0, activeWidth = 0;
     for (const auto& t : tabs)
     {
         widths.push_back (juce::jlimit (60, 220, juce::GlyphArrangement::getStringWidthInt (font, t.name) + 44));
+        if (t.active) widths.back() = juce::jmin (widths.back(), juce::jmax (60, room - 2));
         total += widths.back() + 2;
+        if (t.active) activeWidth = widths.back() + 2;
     }
-    const int room = juce::jmax (0, tabsRight - 16 - 28 - 8);
     int x = 8, activeTab = -1;
     for (size_t i = 0; i < tabs.size(); ++i)
     {
-        const int width = total <= room ? widths[i] : juce::jmax (60, (widths[i] + 2) * room / juce::jmax (1, total) - 2);
+        const int width = total <= room || tabs[i].active ? widths[i]
+            : juce::jmax (60, (widths[i] + 2) * juce::jmax (0, room - activeWidth) / juce::jmax (1, total - activeWidth) - 2);
         tabs[i].bounds = { x, 6, width, getHeight() - 6 };
         x += width + 2;
         if (tabs[i].active) activeTab = (int) i;
     }
 
-    // when even 60 px tabs do not fit, the strip scrolls (wheel); a newly active list is brought into view, and an
+    tabsRight = 8 + juce::jmin (room, x - 8);
+    addButton = { tabsRight + 8, 6, 26, getHeight() - 6 };
+
+    // when the tabs do not fit, the strip scrolls (wheel); a newly active list is brought into view, and an
     // active list that was in view stays in view when the strip narrows (unless the wheel had moved away from it)
-    maxTabsScroll = juce::jmax (0, x + 2 + 26 - tabsRight);
+    maxTabsScroll = juce::jmax (0, x - 2 - tabsRight);
     const auto revealingScroll = [&] (int scroll)
     {
         const auto& active = tabs[(size_t) activeTab].bounds;
@@ -100,19 +105,33 @@ void ContainerTabs::resized()
     followActive = activeTab < 0 || revealingScroll (tabsScroll) == tabsScroll;
     for (auto& t : tabs)
         t.bounds.translate (-tabsScroll, 0);
-    x -= tabsScroll;
-
-    addButton = { x + 2, 6, 26, getHeight() - 6 };
 
     // the status (its essential part whole) and the selection info at the right end share what the tabs leave;
     // the selection info and then the status's mode hint give way first
     auto right = juce::Rectangle<int> (0, 6, edge, juce::jmax (0, getHeight() - 6));
     right.setLeft (juce::jlimit (0, edge, juce::jmin (addButton.getRight() + 16, edge - essential)));
     const int infoWidth = juce::GlyphArrangement::getStringWidthInt (Palette::font (Palette::headerSize), infoText);
-    const int statusWidth = statusBar == nullptr ? 0
+    int statusWidth = statusBar == nullptr ? 0
         : juce::jlimit (juce::jmin (essential, right.getWidth()), juce::jmax (juce::jmin (essential, right.getWidth()), statusBar->getPreferredWidth()),
                         right.getWidth() - 16 - infoWidth);
-    infoBounds = right.removeFromRight (juce::jlimit (0, infoWidth, right.getWidth() - statusWidth - (statusWidth > 0 ? 16 : 0)));
+    const int shownInfoWidth = juce::jlimit (0, infoWidth, right.getWidth() - statusWidth - (statusWidth > 0 ? 16 : 0));
+    const auto firstInfo = infoText.upToFirstOccurrenceOf (ko (" · "), false, false);
+    const int firstInfoWidth = juce::GlyphArrangement::getStringWidthInt (Palette::font (Palette::headerSize), firstInfo);
+    infoBounds = {};
+    infoShown = {};
+    if (shownInfoWidth >= infoWidth && infoWidth > 0)
+    {
+        infoBounds = right.removeFromRight (infoWidth);
+        infoShown = infoText;
+    }
+    else if (shownInfoWidth >= firstInfoWidth && firstInfoWidth > 0)
+    {
+        // the first item whole ('선택 2') rather than a line the ellipsis cuts down to '선택 …'
+        infoBounds = right.removeFromRight (shownInfoWidth);
+        infoShown = firstInfo;
+    }
+    else if (statusBar != nullptr)
+        statusWidth = juce::jmin (right.getWidth(), statusBar->getPreferredWidth());
     if (statusBar != nullptr)
     {
         right.removeFromRight (juce::jmin (statusWidth > 0 && infoBounds.getWidth() > 0 ? 16 : 0, right.getWidth()));
@@ -158,11 +177,10 @@ void ContainerTabs::paint (juce::Graphics& g)
 
     g.setColour (Palette::accent.withMultipliedAlpha (editable ? 1.0f : Palette::disabledAlpha));
     g.setFont (Palette::font (Palette::bodySize, true));
-    if (addButton.getRight() <= tabsRight)
-        g.drawText ("+", addButton, juce::Justification::centred, false);
+    g.drawText ("+", addButton, juce::Justification::centred, false);
     g.setColour (Palette::muted);
     g.setFont (Palette::font (Palette::headerSize));
-    g.drawText (infoText, infoBounds, juce::Justification::centredRight, true);
+    g.drawText (infoShown, infoBounds, juce::Justification::centredRight, true);
 }
 
 int ContainerTabs::tabAt (juce::Point<int> p) const
@@ -174,6 +192,12 @@ int ContainerTabs::tabAt (juce::Point<int> p) const
             return i;
 
     return -1;
+}
+
+juce::String ContainerTabs::getTooltip()
+{
+    const int tab = tabAt (getMouseXYRelative());
+    return tab >= 0 ? tabs[(size_t) tab].name : juce::String();
 }
 
 void ContainerTabs::mouseDown (const juce::MouseEvent& e)
@@ -207,7 +231,7 @@ void ContainerTabs::mouseDown (const juce::MouseEvent& e)
         return;
     }
 
-    if (addButton.contains (e.getPosition()) && addButton.getRight() <= tabsRight && editable)
+    if (addButton.contains (e.getPosition()) && editable)
         showAddMenu();
 }
 

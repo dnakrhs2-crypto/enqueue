@@ -7,8 +7,10 @@
 
 #include <juce_gui_basics/juce_gui_basics.h>
 
+#include <array>
 #include <functional>
 #include <memory>
+#include <utility>
 #include <vector>
 
 namespace gocue
@@ -162,6 +164,7 @@ private:
     void cycleContinueMode (int row);
     int insertionIndexForY (int y) const;
     void commitCellEdit (int row, ColumnId column, const juce::String& text);
+    void setCellEditRejected (const juce::Uuid& id, ColumnId column, bool rejected);
     std::vector<int> rowsForEdit (int row) const;
 
     /** juce::ListBox eats Up/Down regardless of modifiers; let Ctrl/Alt combinations reach the command shortcuts,
@@ -177,6 +180,8 @@ private:
     juce::ApplicationCommandManager& commands;
     int editGeneration = 0;   // bumps for every cell editor so a stale async commit cannot close a newer one
     TableBox table;
+    std::array<int, colContinue + 1> preferredColumnWidths {}, layoutColumnWidths {};
+    std::vector<std::pair<juce::Uuid, ColumnId>> rejectedCells;
     std::vector<AudioEngine::PlayingCue> playing;
     std::vector<WaitProgress> waits;
     double waitClock = 0.0;   // the controller clock the waits were read at (their countdowns are drawn against it)

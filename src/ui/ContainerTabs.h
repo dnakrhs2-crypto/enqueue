@@ -13,7 +13,7 @@ class FooterBar;
 
 /** The strip above the cue list: one tab per cue list / cart of the project, the active one highlighted,
     and a "+" that adds a list or a cart. Right-click (or double-click) a tab for rename / cart / grid / delete. */
-class ContainerTabs : public juce::Component
+class ContainerTabs : public juce::Component, public juce::TooltipClient
 {
 public:
     explicit ContainerTabs (ProjectDocument& document);
@@ -41,6 +41,7 @@ public:
     void mouseWheelMove (const juce::MouseEvent& e, const juce::MouseWheelDetails& wheel) override;
     /** A tab's area in this component (tests: where a click lands). */
     juce::Rectangle<int> getTabBounds (int index) const;
+    juce::String getTooltip() override;
 
     static constexpr int height = Palette::tabBarHeight;
 
@@ -62,13 +63,14 @@ private:
     std::vector<Tab> tabs;
     juce::Rectangle<int> addButton;
     juce::Rectangle<int> infoBounds;
-    int tabsRight = 0;   // tabs and the + button draw and take clicks only left of this
+    int tabsRight = 0;   // tabs draw and take clicks only left of this; the + button has its own reserved area
     int tabsScroll = 0, maxTabsScroll = 0;   // px the tab strip is scrolled left (only when it does not fit)
     juce::Uuid revealedId = juce::Uuid::null();   // the active list last scrolled into view (by id: indices shift)
     bool followActive = true;                // the active tab was in view after the last layout: keep it there
     juce::Uuid pressedId = juce::Uuid::null();   // the list the first click of the current gesture landed on
     int indexOf (const juce::Uuid& id) const;
     juce::String infoText;
+    juce::String infoShown;   // what fits of infoText: all of it, its first item, or nothing
     bool editable = true;
     FooterBar* statusBar = nullptr;
 

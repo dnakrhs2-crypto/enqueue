@@ -393,6 +393,7 @@ void WaveformView::drawRuler (juce::Graphics& g) const
 
     g.setFont (Palette::monoFont (Palette::rulerSize));
 
+    int previousLabelRight = waveArea.getX() - 4;
     for (double t = std::floor (viewStart / minor) * minor; t <= viewEnd + 1e-9; t += minor)
     {
         const float x = xForTime (t);
@@ -410,8 +411,12 @@ void WaveformView::drawRuler (juce::Graphics& g) const
             const auto caption = formatTimeMs (t, interval < 1.0);
             const int width = juce::GlyphArrangement::getStringWidthInt (Palette::monoFont (Palette::rulerSize), caption);
             const int labelX = juce::jmax (waveArea.getX(), juce::jmin ((int) x + 3, waveArea.getRight() - width - 3));
-            g.drawText (caption, labelX, rulerArea.getY(), width, rulerArea.getHeight() - 2,
-                        juce::Justification::centredLeft, false);
+            const juce::Rectangle<int> labelBounds (labelX, rulerArea.getY(), width, rulerArea.getHeight() - 2);
+            if (labelBounds.getX() >= previousLabelRight + 4)
+            {
+                g.drawText (caption, labelBounds, juce::Justification::centredLeft, false);
+                previousLabelRight = labelBounds.getRight();
+            }
         }
     }
 }

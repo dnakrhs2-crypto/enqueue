@@ -267,7 +267,7 @@ public:
             expect (page != nullptr);
             if (page != nullptr)
             {
-                expect (page->getVerticalScrollBar().isVisible() && page->getHorizontalScrollBar().isVisible());
+                expect (page->getVerticalScrollBar().isVisible() && ! page->getHorizontalScrollBar().isVisible());
                 page->setViewPosition (juce::jmax (0, memo->getRight() - page->getViewArea().getWidth()), memo->getBottom());
                 expect (page->getViewArea().contains (memo->getBounds()));
                 page->setViewPosition (0, cueMidi->getY());

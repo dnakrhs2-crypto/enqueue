@@ -14,7 +14,7 @@ void styleSegmentButton (juce::TextButton& button)
     button.setColour (juce::TextButton::buttonColourId, Palette::panel);
     button.setColour (juce::TextButton::buttonOnColourId, Palette::accent);
     button.setColour (juce::TextButton::textColourOffId, Palette::muted);
-    button.setColour (juce::TextButton::textColourOnId, Palette::accentInk);
+    button.setColour (juce::TextButton::textColourOnId, Palette::background);
 }
 
 juce::String fullScreenLabel (bool fullScreen) { return fullScreen ? ko ("전체 화면 종료") : ko ("전체 화면"); }
@@ -123,6 +123,7 @@ FooterBar::FooterBar()
     modeHint.setColour (juce::Label::textColourId, Palette::dimText);
     modeHint.setFont (Palette::font (Palette::fileSize));
     modeHint.setJustificationType (juce::Justification::centredLeft);
+    modeHint.getProperties().set ("slateSingleLine", true);
     addAndMakeVisible (modeHint);
 
     audioStatus.setColour (juce::Label::textColourId, Palette::muted);
@@ -131,7 +132,7 @@ FooterBar::FooterBar()
     addAndMakeVisible (audioStatus);
     midiStatus.setFont (Palette::font (Palette::fileSize));
     addAndMakeVisible (midiStatus);
-    for (auto* label : { &countLabel, &modeHint, &audioStatus, &midiStatus })
+    for (auto* label : std::initializer_list<juce::Label*> { &countLabel, &modeHint, &audioStatus, &midiStatus })
     {
         label->setBorderSize (juce::BorderSize<int> (0));
         label->setMinimumHorizontalScale (1.0f);
@@ -204,15 +205,85 @@ void FooterBar::setWarningCount (int count)
 
 void FooterBar::setAudioStatus (juce::String text, bool warning, juce::String tooltip)
 {
+    setAudioStatusParts (std::move (text), {}, {}, warning, std::move (tooltip));
+}
+
+void FooterBar::setAudioStatusParts (juce::String device, juce::StringArray settings, juce::StringArray measurements,
+                                    bool warning, juce::String tooltip)
+{
+    juce::StringArray parts;
+    if (device.isNotEmpty()) parts.add (device);
+    parts.addArray (settings);
+    parts.addArray (measurements);
+    const auto text = parts.joinIntoString (ko (" · "));
     if (tooltip.isEmpty())
         tooltip = text;
 
-    if (audioStatus.getText() == text && audioWarning == warning && audioStatus.getTooltip() == tooltip)
+    if (audioStatus.getText() == text && audioWarning == warning && audioStatus.getTooltip() == tooltip
+        && audioStatus.device == device && audioStatus.settings == settings && audioStatus.measurements == measurements)
         return;
+    audioStatus.device = std::move (device);
+    audioStatus.settings = std::move (settings);
+    audioStatus.measurements = std::move (measurements);
     audioWarning = warning;
     audioStatus.setColour (juce::Label::textColourId, warning ? Palette::stopButton : Palette::muted);
     audioStatus.setText (text, juce::dontSendNotification);
     audioStatus.setTooltip (tooltip);
+    audioStatus.repaint();
+}
+
+void FooterBar::AudioStatusLabel::paint (juce::Graphics& g)
+{
+    g.setColour (findColour (juce::Label::textColourId));
+    g.setFont (getFont());
+    const auto widthOf = [this] (const juce::String& text)
+    { return juce::GlyphArrangement::getStringWidthInt (getFont(), text); };
+    if (widthOf (getText()) <= getWidth())
+    {
+        g.drawText (getText(), getLocalBounds(), juce::Justification::centredRight, false);
+        return;
+    }
+
+    const auto separator = ko (" · ");
+    const int gap = widthOf (separator);
+    juce::StringArray meterLines[2];
+    int used[2] = {};
+    int line = widthOf (measurements.joinIntoString (separator)) <= getWidth() ? 1 : 0;
+    for (const auto& item : measurements)
+    {
+        const int wanted = widthOf (item);
+        if (line == 0 && used[0] > 0 && used[0] + gap + wanted > getWidth())
+            line = 1;
+        const int available = getWidth() - used[line] - (used[line] > 0 ? gap : 0);
+        if (available <= 0) continue;
+        meterLines[line].add (item);
+        used[line] += (used[line] > 0 ? gap : 0) + juce::jmin (wanted, available);
+    }
+
+    // Measurements claim their room first. Device and settings use only the remaining space.
+    juce::Rectangle<int> remaining[2];
+    for (int row = 0; row < 2; ++row)
+    {
+        remaining[row] = { 0, row * 13, getWidth(), 13 };
+        const auto meters = remaining[row].removeFromRight (used[row]);
+        g.drawText (meterLines[row].joinIntoString (separator), meters, juce::Justification::centredRight, true);
+        if (used[row] > 0)
+            remaining[row].removeFromRight (juce::jmin (gap, remaining[row].getWidth()));
+    }
+    juce::StringArray metadata;
+    if (device.isNotEmpty()) metadata.add (device);
+    metadata.addArray (settings);
+    line = 0;
+    for (const auto& item : metadata)
+    {
+        const int wanted = widthOf (item);
+        if (line == 0 && wanted > remaining[0].getWidth() && wanted <= remaining[1].getWidth())
+            line = 1;
+        if (remaining[line].isEmpty() && line == 0) line = 1;
+        auto bounds = remaining[line].removeFromLeft (juce::jmin (wanted, remaining[line].getWidth()));
+        g.drawText (item, bounds, juce::Justification::centredLeft, true);
+        remaining[line].removeFromLeft (juce::jmin (gap, remaining[line].getWidth()));
+    }
 }
 
 void FooterBar::resized()

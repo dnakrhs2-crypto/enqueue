@@ -159,7 +159,7 @@ namespace Palette
     constexpr float crosspointAlpha = 0.22f, waveDimAlpha = 0.35f, envelopeAlpha = 0.9f;
     constexpr int fieldHeight = 30, formRowHeight = 38, matrixCellSize = 38;
     constexpr int matrixCellWidth = 62, matrixHeaderWidth = 104, matrixGap = 1;
-    constexpr int inspectorPageWidth = 860, inspectorBasicHeight = 192, inspectorPlotHeight = 192, inspectorFormHeight = 192;
+    constexpr int inspectorPageWidth = 800, inspectorBasicHeight = 192, inspectorPlotHeight = 192, inspectorFormHeight = 192;
     constexpr int inspectorControlWidth = 936, inspectorWideWidth = 1080;
     constexpr int modeToggleWidth = 164, loudnessWidth = 300, loudnessWindowWidth = 48, loudnessValueHeight = 46, loudnessLabelHeight = 18, weekdaySize = 26;
     constexpr int dialogInset = 8, pluginSlotWidth = 216, pluginSlotHeight = 72, pluginSlotGap = 26;
@@ -328,7 +328,8 @@ namespace Palette
     }
 
     inline void drawPill (juce::Graphics& g, juce::Rectangle<int> bounds, juce::Colour colour,
-                          const juce::String& label, const juce::Font& labelFont, bool filled = false)
+                          const juce::String& label, const juce::Font& labelFont, bool filled = false,
+                          std::optional<juce::Colour> textColour = std::nullopt)
     {
         const auto r = bounds.toFloat().reduced (0.5f);
         g.setColour (colour);
@@ -336,7 +337,7 @@ namespace Palette
             g.fillRoundedRectangle (r, pillRadius (r));
         else
             g.drawRoundedRectangle (r, pillRadius (r), borderWidth);
-        g.setColour (filled ? accentInk : colour);
+        g.setColour (textColour.value_or (filled ? accentInk : colour));
         g.setFont (labelFont);
         g.drawText (label, bounds.reduced (7, 0), juce::Justification::centred, true);
     }

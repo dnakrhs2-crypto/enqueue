@@ -552,9 +552,28 @@ void TransportBar::resized()
         area.removeFromTop (spare);
         area.removeFromBottom (spare);
     }
-    // the loudness readings stay at every width - they shrink, as they always did - and the cue lines get the rest
+    const bool stackedReadings = area.getWidth() < 490;   // under 490 the wide row leaves the average heading too little room
+    for (auto* value : { &momentaryValue, &averageValue })
+        value->setFont (Palette::monoFont (stackedReadings ? 20.0f : Palette::loudnessSize).boldened());
     for (auto* component : std::initializer_list<juce::Component*> { &momentaryLabel, &momentaryValue, &averageLabel, &averageValue, &averageWindow })
         component->setVisible (true);
+    if (stackedReadings)
+    {
+        auto readings = area.removeFromRight (juce::jmin (112, area.getWidth()));
+        area.removeFromRight (juce::jmin (8, area.getWidth()));
+        nextDivider = area.removeFromRight (juce::jmin (1, area.getWidth()));
+        area.removeFromRight (juce::jmin (8, area.getWidth()));
+        auto live = readings.removeFromTop (38);
+        momentaryLabel.setBounds (live.removeFromTop (18));
+        momentaryValue.setBounds (live.removeFromTop (20));
+        auto average = readings.removeFromTop (38);
+        auto heading = average.removeFromTop (18);
+        averageWindow.setBounds (heading.removeFromRight (juce::jmin (48, heading.getWidth())));
+        heading.removeFromRight (juce::jmin (8, heading.getWidth()));
+        averageLabel.setBounds (heading);
+        averageValue.setBounds (average.removeFromTop (20));
+    }
+    else
     {
         // 214 px at full width; never under 160 px (each value needs room for '-23.0'), the cue lines give way first
         auto readings = area.removeFromRight (juce::jlimit (0, juce::jmax (0, area.getWidth() - 31 - 60),

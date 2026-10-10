@@ -153,7 +153,10 @@ CueTable::CueTable (CueList& c, juce::AudioFormatManager& f, juce::ApplicationCo
     header.addColumn (ko ("길이"),         colDuration, Palette::durationColumnWidth, 60, 140, columnFlags);
     header.addColumn (ko ("포스트웨이트"), colPostWait, Palette::postWaitColumnWidth, 60, 120, columnFlags);
     header.addColumn (ko ("진행"),         colContinue, Palette::continueColumnWidth, Palette::continueColumnWidth, Palette::continueColumnWidth, juce::TableHeaderComponent::visible);
-    header.setStretchToFitActive (false);   // only the name flexes; the CSS widths stay exact
+    header.setStretchToFitActive (false);
+    for (int column = colStatus; column <= colContinue; ++column)
+        preferredColumnWidths[(size_t) column] = layoutColumnWidths[(size_t) column] = header.getColumnWidth (column);
+    preferredColumnWidths[colName] = 160;   // unused space goes to the name until the user chooses its width
 
     table.setModel (this);
     table.setRowHeight (Palette::rowHeights[1]);
@@ -288,12 +291,53 @@ void CueTable::finishEditing()
 
 void CueTable::resized()
 {
+    const int selectedRow = rowOf (cues.getSelectedIndex());
+    const auto oldView = table.getLocalArea (table.getViewport(), table.getViewport()->getLocalBounds());
+    const bool selectionWasVisible = selectedRow >= 0 && oldView.intersects (table.getRowPosition (selectedRow, true));
+
     table.setBounds (getLocalBounds());
     auto& header = table.getHeader();
+    // Compare with what we last applied, so temporary shrinking never becomes the user's preferred width.
+    for (int column = colStatus; column <= colContinue; ++column)
+        if (header.getColumnWidth (column) != layoutColumnWidths[(size_t) column])
+            preferredColumnWidths[(size_t) column] = header.getColumnWidth (column);
+
+    auto widths = preferredColumnWidths;
+    widths[colName] = juce::jmax (160, widths[colName]);
+    const int available = juce::jmax (0, getWidth() - Palette::scrollBarWidth);
+    int total = 0;
+    for (int column = colStatus; column <= colContinue; ++column)
+        total += widths[(size_t) column];
+    auto shrink = [&] (ColumnId column, int minimum)
+    {
+        const int reduction = juce::jmin (juce::jmax (0, total - available), juce::jmax (0, widths[(size_t) column] - minimum));
+        widths[(size_t) column] -= reduction;
+        total -= reduction;
+    };
+    shrink (colName, 160);
+    shrink (colFile, 100);
+    const bool showFile = total <= available;
+    if (! showFile)
+    {
+        total -= widths[colFile];
+        shrink (colPreWait, 72);
+        shrink (colDuration, 72);
+        shrink (colPostWait, 80);
+    }
+    header.setColumnVisible (colFile, showFile);
     int otherWidth = 0;
     for (const int column : { colStatus, colNumber, colFile, colPreWait, colDuration, colPostWait, colContinue })
-        otherWidth += header.getColumnWidth (column);
-    header.setColumnWidth (colName, juce::jmax (140, getWidth() - Palette::scrollBarWidth - otherWidth));
+        if (column != colFile || showFile)
+            otherWidth += widths[(size_t) column];
+    widths[colName] = juce::jmax (widths[colName], available - otherWidth);
+    for (int column = colStatus; column <= colContinue; ++column)
+    {
+        header.setColumnWidth (column, widths[(size_t) column]);
+        layoutColumnWidths[(size_t) column] = header.getColumnWidth (column);
+    }
+    table.resized();   // apply the final content width and scrollbars before revealing the selected row
+    if (selectionWasVisible)
+        table.scrollToEnsureRowIsOnscreen (rowOf (cues.getSelectedIndex()));
 
     if (cellEditor != nullptr)
         cellEditor.reset();
@@ -727,22 +771,28 @@ void CueTable::paintCell (juce::Graphics& g, int rowNumber, int columnId, int wi
         area.removeFromLeft (Palette::colourBarWidth + 8);
         const auto badge = badgeFor (index);
         const auto badgeFont = Palette::font (Palette::pillSize, true);
+        const bool warningBadge = badge.colour == Palette::missing;
+        const int warningWidth = warningBadge ? juce::GlyphArrangement::getStringWidthInt (badgeFont, badge.text) + Palette::pillPadding + Palette::pillGap : 0;
         if (const auto it = running != nullptr ? volumeBadges.find ({ cue.id, running->startOrder }) : volumeBadges.end(); it != volumeBadges.end())
         {
             const int wanted = juce::GlyphArrangement::getStringWidthInt (badgeFont, it->second) + Palette::pillPadding;
-            const int badgeWidth = juce::jmin (wanted, juce::jmax (0, area.getWidth() - Palette::nameStub));
-            const auto pill = area.removeFromRight (badgeWidth).withSizeKeepingCentre (badgeWidth, Palette::pillHeight);
-            Palette::drawPill (g, pill, Palette::accent.withMultipliedAlpha (alpha), it->second, badgeFont, false);
-            area.removeFromRight (Palette::pillGap);
+            if (area.getWidth() >= 96 + warningWidth + wanted + Palette::pillGap)
+            {
+                const auto pill = area.removeFromRight (wanted).withSizeKeepingCentre (wanted, Palette::pillHeight);
+                Palette::drawPill (g, pill, Palette::accent.withMultipliedAlpha (alpha), it->second, badgeFont, false);
+                area.removeFromRight (Palette::pillGap);
+            }
         }
         if (badge.text.isNotEmpty())
         {
             const int wanted = juce::GlyphArrangement::getStringWidthInt (badgeFont, badge.text) + 14;
-            const int badgeWidth = juce::jmin (wanted, juce::jmax (0, area.getWidth() - 32));
+            const int badgeWidth = warningBadge ? juce::jmin (wanted, juce::jmax (0, area.getWidth() - 32))
+                : area.getWidth() >= 96 + wanted + Palette::pillGap ? wanted : 0;
             if (badgeWidth > 0)
             {
                 const auto pill = area.removeFromRight (badgeWidth).withSizeKeepingCentre (badgeWidth, Palette::pillHeight);
-                Palette::drawPill (g, pill, badge.colour.withMultipliedAlpha (alpha), badge.text, badgeFont, badge.filled);
+                const auto ink = warningBadge ? Palette::text : badge.filled ? Palette::background : badge.colour;
+                Palette::drawPill (g, pill, badge.colour.withMultipliedAlpha (alpha), badge.text, badgeFont, badge.filled, ink.withMultipliedAlpha (alpha));
                 area.removeFromRight (8);
             }
         }
@@ -866,6 +916,8 @@ void CueTable::paintCell (juce::Graphics& g, int rowNumber, int columnId, int wi
                 text = effective < 0.0 ? ko ("∞") : formatSeconds (effective > 0.0 ? effective : cue.durationSeconds);
             }
             font = font.boldened();
+            if (text == ko ("∞"))
+                font = Palette::font (16.0f);
             break;
         default: break;
     }
@@ -880,6 +932,11 @@ void CueTable::paintCell (juce::Graphics& g, int rowNumber, int columnId, int wi
     setColour (colour);
     g.setFont (font);
     g.drawText (text, 6, 0, juce::jmax (0, width - 12), height, justification, true);
+    if (std::find (rejectedCells.begin(), rejectedCells.end(), std::make_pair (cue.id, (ColumnId) columnId)) != rejectedCells.end())
+    {
+        g.setColour (Palette::warn);
+        g.drawRect (0, 0, width, height, 1);
+    }
 }
 
 void CueTable::cellClicked (int rowNumber, int columnId, const juce::MouseEvent& e)
@@ -1137,10 +1194,20 @@ void CueTable::beginCellEdit (int row, ColumnId column)
     if (cell.isEmpty())
         return;
 
+    setCellEditRejected (cue.id, column, false);
     cellEditor = std::make_unique<CellEditor> (*this, row, column, initial);
     addAndMakeVisible (*cellEditor);
     cellEditor->setBounds (cell.translated (table.getX(), table.getY()));
     cellEditor->grabKeyboardFocus();
+}
+
+void CueTable::setCellEditRejected (const juce::Uuid& id, ColumnId column, bool rejected)
+{
+    const auto cell = std::make_pair (id, column);
+    rejectedCells.erase (std::remove (rejectedCells.begin(), rejectedCells.end(), cell), rejectedCells.end());
+    if (rejected)
+        rejectedCells.push_back (cell);
+    table.repaint();
 }
 
 void CueTable::commitCellEdit (int row, ColumnId column, const juce::String& text)
@@ -1149,6 +1216,7 @@ void CueTable::commitCellEdit (int row, ColumnId column, const juce::String& tex
         return;
 
     const auto& cue = cues.get (row);
+    setCellEditRejected (cue.id, column, false);
 
     switch (column)
     {
@@ -1162,6 +1230,7 @@ void CueTable::commitCellEdit (int row, ColumnId column, const juce::String& tex
             if (isNumberTaken ? isNumberTaken (number, cue.id) : cues.isNumberTaken (number, cue.id))
             {
                 juce::LookAndFeel::getDefaultLookAndFeel().playAlertSound();   // numbers are unique: refused
+                setCellEditRejected (cue.id, column, true);
                 break;
             }
 
@@ -1188,7 +1257,10 @@ void CueTable::commitCellEdit (int row, ColumnId column, const juce::String& tex
             const double seconds = parseTimeText (text);
 
             if (seconds < 0.0)
+            {
+                setCellEditRejected (cue.id, column, true);
                 return;
+            }
 
             const bool pre = column == colPreWait;
 
@@ -1480,7 +1552,7 @@ void CueTable::itemDropped (const SourceDetails& details)
     }
 
     if (onStatus)
-        onStatus (ko ("행 이동: ") + juce::String (index) + ko ("번째 자리로"));
+        onStatus (ko ("행 이동: ") + juce::String (index + 1) + ko ("번째 자리로"));
 
     if (onMoveRows)
         onMoveRows (rows, index);

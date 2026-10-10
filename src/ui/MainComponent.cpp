@@ -479,25 +479,28 @@ void MainComponent::showPanicSecondsMenu (juce::Point<int> screenPosition)
         alert->addTextEditor ("seconds", plainSeconds (forPanic ? panicNow : fadeNow), ko ("초"));
         alert->addButton (ko ("확인"), 1, juce::KeyPress (juce::KeyPress::returnKey));
         alert->addButton (ko ("취소"), 0, juce::KeyPress (juce::KeyPress::escapeKey));
-        ShortcutRouter::watchWindow (alert);
-        alert->enterModalState (true, juce::ModalCallbackFunction::create ([safeThis, alert, forPanic] (int r)
+        auto seconds = std::make_shared<std::optional<double>>();
+        alert->getButton (0)->onClick = [alert, seconds]
         {
-            if (safeThis == nullptr || r != 1)
-                return;
-
-            // a number only: an empty box, letters, two dots leave the setting as it is (they must not read as 0 = 큐별 / 즉시)
-            const auto typed = parseSeconds (alert->getTextEditorContents ("seconds"));
-
-            if (! typed.has_value())
+            if (! alert->isCurrentlyModal()) return;
+            *seconds = parseSeconds (alert->getTextEditorContents ("seconds"));
+            if (! seconds->has_value())
             {
-                safeThis->transport.showStatus (ko ("초를 숫자로 입력하세요 (예: 1.5)"), true);
+                alert->setMessage (ko ("초를 숫자로 입력하세요 (예: 1.5)"));
                 return;
             }
+            alert->exitModalState (1);
+        };
+        ShortcutRouter::watchWindow (alert);
+        alert->enterModalState (true, juce::ModalCallbackFunction::create ([safeThis, seconds, forPanic] (int r)
+        {
+            if (safeThis == nullptr || r != 1 || ! seconds->has_value())
+                return;
 
             if (forPanic)
-                safeThis->applyPanicSeconds (*typed);
+                safeThis->applyPanicSeconds (**seconds);
             else
-                safeThis->applyFadeOutSeconds (*typed);
+                safeThis->applyFadeOutSeconds (**seconds);
         }), true);
         focusAlertEditor (*alert, "seconds");
     });
@@ -2106,10 +2109,10 @@ void MainComponent::showLoadToTimeDialog()
     alert->setVisible (true);
 
     juce::Component::SafePointer<MainComponent> safeThis (this);
-    ShortcutRouter::watchWindow (alert);
-    alert->enterModalState (true, juce::ModalCallbackFunction::create ([safeThis, alert] (int result)
+    auto loadPosition = std::make_shared<std::optional<double>>();
+    alert->getButton (0)->onClick = [safeThis, alert, loadPosition]
     {
-        if (safeThis == nullptr || result != 1)
+        if (safeThis == nullptr || ! alert->isCurrentlyModal())
             return;
 
         const auto text = alert->getTextEditorContents ("time").trim();
@@ -2118,7 +2121,7 @@ void MainComponent::showLoadToTimeDialog()
 
         if (seconds < 0.0)
         {
-            safeThis->transport.showStatus (ko ("시간 형식을 읽을 수 없습니다: ") + text, true);
+            alert->setMessage (ko ("시간 형식을 읽을 수 없습니다: ") + text);
             return;
         }
 
@@ -2134,7 +2137,7 @@ void MainComponent::showLoadToTimeDialog()
         {
             if (total < 0.0)
             {
-                safeThis->transport.showStatus (ko ("무한 루프 큐는 끝에서부터 로드할 수 없습니다"), true);
+                alert->setMessage (ko ("무한 루프 큐는 끝에서부터 로드할 수 없습니다"));
                 return;
             }
 
@@ -2143,12 +2146,19 @@ void MainComponent::showLoadToTimeDialog()
 
         if (total >= 0.0 && seconds >= total)
         {
-            safeThis->transport.showStatus (ko ("큐 길이를 넘는 위치입니다: ") + formatTimeMs (seconds), true);
+            alert->setMessage (ko ("큐 길이를 넘는 위치입니다: ") + formatTimeMs (seconds));
             return;
         }
 
         const double passSeconds = c->passLength() > 0.0 ? std::fmod (seconds, c->passLength()) : 0.0;   // inside the first pass
-        safeThis->controller.loadSelected (passSeconds * c->audio.rate);
+        *loadPosition = passSeconds * c->audio.rate;
+        alert->exitModalState (1);
+    };
+    ShortcutRouter::watchWindow (alert);
+    alert->enterModalState (true, juce::ModalCallbackFunction::create ([safeThis, loadPosition] (int result)
+    {
+        if (safeThis != nullptr && result == 1 && loadPosition->has_value())
+            safeThis->controller.loadSelected (**loadPosition);
     }), true);
 
     focusAlertEditor (*alert, "time");
@@ -2169,25 +2179,54 @@ void MainComponent::showRenumberDialog()
     alert->addTextEditor ("suffix", "", ko ("접미"));
     alert->addButton (ko ("적용"), 1, juce::KeyPress (juce::KeyPress::returnKey));
     alert->addButton (ko ("취소"), 0, juce::KeyPress (juce::KeyPress::escapeKey));
+    for (const auto* name : { "start", "increment" })
+    {
+        auto* editor = alert->getTextEditor (name);
+        editor->onTextChange = [editor]
+        {
+            editor->getProperties().set ("slateInputError", false);
+            editor->repaint();
+        };
+    }
+    auto options = std::make_shared<CueNumbering::RenumberOptions>();
+    alert->getButton (0)->onClick = [alert, options]
+    {
+        if (! alert->isCurrentlyModal()) return;
+        const auto start = alert->getTextEditorContents ("start").trim();
+        const auto increment = alert->getTextEditorContents ("increment").trim();
+        const auto isNumber = [] (const juce::String& text)
+        {
+            const auto digits = text.startsWithChar ('-') || text.startsWithChar ('+') ? text.substring (1) : text;
+            return CueNumbering::isNumeric (digits) && ! digits.endsWithChar ('.') && std::isfinite (text.getDoubleValue());
+        };
+        const bool startValid = isNumber (start);
+        const bool incrementValid = isNumber (increment) && increment.getDoubleValue() > 0.0;
+        auto mark = [alert] (const char* name, bool valid)
+        {
+            auto* editor = alert->getTextEditor (name);
+            editor->getProperties().set ("slateInputError", ! valid);
+            editor->repaint();
+        };
+        mark ("start", startValid);
+        mark ("increment", incrementValid);
+        if (! startValid || ! incrementValid) return;
+
+        options->start = start.getDoubleValue();
+        options->increment = increment.getDoubleValue();
+        options->prefix = alert->getTextEditorContents ("prefix").trim();
+        options->suffix = alert->getTextEditorContents ("suffix").trim();
+        alert->exitModalState (1);
+    };
     alert->setVisible (true);
 
     juce::Component::SafePointer<MainComponent> safeThis (this);
     ShortcutRouter::watchWindow (alert);
-    alert->enterModalState (true, juce::ModalCallbackFunction::create ([safeThis, alert, rows] (int result)
+    alert->enterModalState (true, juce::ModalCallbackFunction::create ([safeThis, options, rows] (int result)
     {
         if (safeThis == nullptr || result != 1)
             return;
 
-        CueNumbering::RenumberOptions options;
-        options.start = alert->getTextEditorContents ("start").getDoubleValue();
-        options.increment = alert->getTextEditorContents ("increment").getDoubleValue();
-        options.prefix = alert->getTextEditorContents ("prefix").trim();
-        options.suffix = alert->getTextEditorContents ("suffix").trim();
-
-        if (! (options.increment > 0.0))
-            options.increment = 1.0;
-
-        const auto numbers = CueNumbering::generate ((int) rows.size(), options);
+        const auto numbers = CueNumbering::generate ((int) rows.size(), *options);
 
         safeThis->document.perform (ko ("재번호"), [safeThis, rows, numbers]
         {
@@ -2585,12 +2624,13 @@ void MainComponent::showWarnings()
             lines.add (label + ko (" - 파일 없음: ") + cue.file.getFullPathName());
     }
 
-    if (lines.isEmpty())
+    const bool hasWarnings = ! lines.isEmpty();
+    if (! hasWarnings)
         lines.add (ko ("문제 있는 큐가 없습니다."));
     else
         lines.add (juce::String() + "\n" + ko ("큐 > 없어진 파일 찾기... 로 다른 폴더에서 같은 이름의 파일을 다시 연결할 수 있습니다."));
 
-    showAlert (ko ("경고 (") + juce::String (countBrokenCues()) + ")", lines.joinIntoString ("\n"), false);
+    showAlert (ko ("경고 (") + juce::String (countBrokenCues()) + ")", lines.joinIntoString ("\n"), hasWarnings);
 }
 
 void MainComponent::findMissingFiles()
@@ -2754,7 +2794,7 @@ void MainComponent::openProjectFile (const juce::File& file, bool allowAutoStart
     transport.showStatus (ko ("열림: ") + file.getFileName(), false);
 
     if (! warnings.isEmpty())
-        showAlert (ko ("프로젝트를 열었지만 확인이 필요합니다"), warnings.joinIntoString ("\n"), false);
+        showAlert (ko ("프로젝트를 열었지만 확인이 필요합니다"), warnings.joinIntoString ("\n"), true);
 
     // never after a warning (a missing file, a cleared hotkey: the operator reads that first), never on a launch that
     // must stay quiet (safe mode, an update restart, a fallback device)
@@ -3369,38 +3409,44 @@ void MainComponent::updateAudioStatus()
     const double rate = device->getCurrentSampleRate();
     const int buffer = device->getCurrentBufferSizeSamples();
     const int reportedLatency = device->getOutputLatencyInSamples();
-    juce::String status = devices.getCurrentAudioDeviceType() + ko (" · ") + device->getName();
+    const auto deviceText = devices.getCurrentAudioDeviceType() + ko (" · ") + device->getName();
+    juce::StringArray deviceSettings, measurements;
     if (rate > 0.0 && std::isfinite (rate))
     {
-        status << ko (" · ") << juce::String (rate / 1000.0, std::fmod (rate, 1000.0) == 0.0 ? 0 : 1) << " kHz";
-        status << ko (" · ") << buffer << " samples";
+        deviceSettings.add (juce::String (rate / 1000.0, std::fmod (rate, 1000.0) == 0.0 ? 0 : 1) + " kHz");
+        deviceSettings.add (juce::String (buffer) + " samples");
         const int latencySamples = reportedLatency > 0 ? reportedLatency : juce::jmax (0, buffer);
-        status << ko (" · 출력 지연 ") << juce::String ((double) latencySamples / rate * 1000.0, 1) << " ms";
+        deviceSettings.add (ko ("출력 지연 ") + juce::String ((double) latencySamples / rate * 1000.0, 1) + " ms");
     }
-    status << ko (" · CPU ") << juce::String (devices.getCpuUsage() * 100.0, 1) << "%";
+    measurements.add ("CPU " + juce::String (devices.getCpuUsage() * 100.0, 1) + "%");
 
     // what went out since the last second: the peak, the blocks over 0 dBFS (an ASIO driver clips there) and the xruns
     const auto diag = engine.takeOutputDiagnostics();
-    status << ko (" · 피크 ");
+    juce::String peak = ko ("피크 ");
 
     if (diag.peak > 0.0f)
     {
         const float db = juce::Decibels::gainToDecibels (diag.peak, -100.0f);
-        status << (db > 0.0f ? "+" : "") << juce::String (db, 1) << " dB";
+        peak << (db > 0.0f ? "+" : "") << juce::String (db, 1) << " dB";
     }
     else
     {
-        status << "--";
+        peak << "--";
     }
+    measurements.add (peak);
 
     if (diag.clippedBlocks > 0)
-        status << ko (" · 클립 ") << diag.clippedBlocks << ko ("회");
+        measurements.add (ko ("클립 ") + juce::String (diag.clippedBlocks) + ko ("회"));
 
     if (diag.readShortfalls > 0)
-        status << ko (" · 읽기 끊김 ") << diag.readShortfalls << ko ("회");
+        measurements.add (ko ("읽기 끊김 ") + juce::String (diag.readShortfalls) + ko ("회"));
 
-    status << " · xrun " << diag.xruns;
-    footer.setAudioStatus (status, diag.clippedBlocks > 0 || diag.xruns > 0 || diag.readShortfalls > 0,
+    measurements.add ("xrun " + juce::String (diag.xruns));
+    juce::StringArray parts { deviceText };
+    parts.addArray (deviceSettings);
+    parts.addArray (measurements);
+    const auto status = parts.joinIntoString (ko (" · "));
+    footer.setAudioStatusParts (deviceText, deviceSettings, measurements, diag.clippedBlocks > 0 || diag.xruns > 0 || diag.readShortfalls > 0,
                            status + "\n" + ko ("피크 = 최근 갱신(약 1초) 구간에서 앱 출력이 낸 최고 샘플 레벨")
                                   + "\n" + ko ("클립 = 장치를 연 뒤 앱 출력이 0 dBFS를 넘은 블록 수(누적, 장치의 변환 전 값)")
                                   + "\n" + ko ("읽기 끊김 = 장치를 연 뒤 큐 파일을 제때 읽지 못해 소리가 비었던 블록 수(누적, 위치를 옮긴 직후는 빼고)")

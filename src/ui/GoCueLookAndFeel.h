@@ -124,7 +124,7 @@ public:
             g.fillPath (sortArrow, sortArrow.getTransformToScaleToFit (area.removeFromRight (height / 2).reduced (2).toFloat(), true));
         }
 
-        g.setColour (columnName == ko ("진행") ? Palette::accent : header.findColour (juce::TableHeaderComponent::textColourId));
+        g.setColour (columnName == ko ("진행") ? Palette::text : header.findColour (juce::TableHeaderComponent::textColourId));
         auto font = Palette::font (Palette::headerSize, true);
         font.setExtraKerningFactor (Palette::headerTracking);
         g.setFont (font);
@@ -233,6 +233,13 @@ public:
         label.setFont (getComboBoxFont (box));
     }
 
+    void drawComboBoxTextWhenNothingSelected (juce::Graphics& g, juce::ComboBox& box, juce::Label& label) override
+    {
+        g.setColour (box.findColour (juce::ComboBox::textColourId).withMultipliedAlpha (0.5f));
+        g.setFont (getComboBoxFont (box));
+        g.drawText (box.getTextWhenNothingSelected(), label.getBounds(), label.getJustificationType(), true);
+    }
+
     juce::Label* createSliderTextBox (juce::Slider& slider) override
     {
         auto* label = juce::LookAndFeel_V4::createSliderTextBox (slider);
@@ -245,6 +252,13 @@ public:
 
     void drawLabel (juce::Graphics& g, juce::Label& label) override
     {
+        if (label.getProperties().getWithDefault ("slateSingleLine", false))
+        {
+            g.setColour (label.findColour (juce::Label::textColourId).withMultipliedAlpha (label.isEnabled() ? 1.0f : Palette::disabledAlpha));
+            g.setFont (label.getFont());
+            g.drawText (label.getText(), label.getBorderSize().subtractedFrom (label.getLocalBounds()), label.getJustificationType(), true);
+            return;
+        }
         if (! label.getProperties().getWithDefault ("slateField", false))
         {
             juce::LookAndFeel_V4::drawLabel (g, label);
@@ -312,8 +326,16 @@ public:
 
     void drawTextEditorOutline (juce::Graphics& g, int width, int height, juce::TextEditor& editor) override
     {
-        g.setColour (editor.findColour (editor.hasKeyboardFocus (true) ? juce::TextEditor::focusedOutlineColourId : juce::TextEditor::outlineColourId));
-        g.drawRoundedRectangle (juce::Rectangle<int> (width, height).toFloat().reduced (0.5f), Palette::fieldRadius, Palette::borderWidth);
+        const auto bounds = juce::Rectangle<int> (width, height).toFloat().reduced (0.5f);
+        if (! editor.isEnabled())
+        {
+            g.setColour (editor.findColour (juce::TextEditor::backgroundColourId).withAlpha (0.45f));
+            g.fillRoundedRectangle (bounds, Palette::fieldRadius);
+        }
+        const auto colour = editor.getProperties().getWithDefault ("slateInputError", false) ? Palette::warn
+            : editor.findColour (editor.hasKeyboardFocus (true) ? juce::TextEditor::focusedOutlineColourId : juce::TextEditor::outlineColourId);
+        g.setColour (colour.withMultipliedAlpha (editor.isEnabled() ? 1.0f : Palette::disabledAlpha));
+        g.drawRoundedRectangle (bounds, Palette::fieldRadius, Palette::borderWidth);
     }
 
     void drawToggleButton (juce::Graphics& g, juce::ToggleButton& button, bool over, bool down) override

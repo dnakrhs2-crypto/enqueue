@@ -11,6 +11,7 @@ class InspectorPage : public juce::Viewport
 public:
     InspectorPage (juce::Component& c, int height, int width) : content (c), minHeight (height), minWidth (width)
     {
+        setWantsKeyboardFocus (false);
         setScrollBarsShown (true, true);
         setScrollOnDragMode (ScrollOnDragMode::never);
         setViewedComponent (&content, false);
