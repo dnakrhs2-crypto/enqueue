@@ -526,3 +526,50 @@ a.key.is-current .lcd .label { color: #FFFFFF; }
   article.notes { padding: 20px 18px 6px; border-radius: 14px; }
   main > article > h1 { margin-top: 32px; font-size: 26px; }
 }
+
+/* ── 2026-10-10 시안(Taste-Skill 검토) ───────────────────── */
+/* 1) 다운로드가 주 버튼, 카카오톡은 보조: 흰 키 + 노란 아이콘 */
+.bigkeys { grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); }
+.kakao {
+  border-color: #E4E4E0;
+  background: var(--paper);
+  box-shadow: 0 0 0 1px #CFCFCA, 0 3px 0 #C4C4BF, 0 18px 30px -24px rgba(0, 0, 0, 0.35);
+}
+.kakao svg { background: var(--kakao); }
+.kakao b { font-size: 16px; }
+/* 2) 정보 줄: 점 대신 간격 */
+.download-button > span#download-meta { display: flex; flex-wrap: wrap; column-gap: 14px; }
+/* 4) 접었다 펴는 '문제가 생기면' */
+details.trouble { margin: 30px 0 0; max-width: 780px; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+details.trouble > summary {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 16px 4px; cursor: pointer; list-style: none;
+  font-size: 18px; font-weight: 800;
+}
+details.trouble > summary::-webkit-details-marker { display: none; }
+details.trouble > summary::after {
+  content: ""; flex: none; width: 10px; height: 10px; margin-right: 6px;
+  border-right: 2.5px solid var(--ink); border-bottom: 2.5px solid var(--ink);
+  transform: rotate(45deg) translateY(-3px); transition: transform 160ms ease;
+}
+details.trouble[open] > summary::after { transform: rotate(-135deg) translateY(-1px); }
+details.trouble > summary:focus-visible { outline: 3px solid var(--link); outline-offset: 2px; border-radius: 6px; }
+details.trouble > ul.features { margin-top: 4px; padding-bottom: 6px; }
+details.trouble > summary h3 { margin: 0; font: inherit; }   /* 제목 구조는 남기고 모양은 summary 그대로 */
+@media (prefers-reduced-motion: reduce) { details.trouble > summary::after { transition: none; } }
+.screen-link { display: block; }
+@supports selector(:has(*)) {   /* 사진 틀은 overflow:hidden 이라 테를 틀에 — :has() 없는 브라우저는 링크 기본 테 */
+  .screen-link:focus-visible { outline: none; }
+  .screen:has(> .screen-link:focus-visible) { outline: 3px solid var(--link); outline-offset: 3px; }
+}
+.body-section code { word-break: normal; }   /* 경로가 단어 중간에서 끊기지 않게(overflow-wrap:anywhere 는 그대로) */
+@media (min-width: 761px) and (max-width: 900px) {   /* 태블릿 세로: 카카오톡 키 글자가 3줄로 쪼개지지 않게 */
+  .bigkeys { grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr); }
+}
+@media (max-width: 760px) {
+  .bigkeys { grid-template-columns: 1fr; }
+  .kakao { padding-top: 10px; padding-bottom: 10px; }
+  .kakao svg { width: 40px; height: 40px; padding: 9px; }
+  /* 3) 휴대폰: 앱 화면은 왼쪽 위 핵심만 크게, 누르면 원본 */
+  .page-enqueue .screen img { aspect-ratio: 4 / 3; object-fit: cover; object-position: 0 0; }
+}
