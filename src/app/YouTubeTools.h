@@ -53,7 +53,8 @@ public:
         paths, or an error text for the user. */
     static juce::String prepare (Paths& paths, const juce::String& appVersion);
 
-    /** "2026.08.19" from `yt-dlp --version`; empty when the program cannot run. */
+    /** "2026.10.10.233141" (the nightly build the app ships; `-U` keeps it on that channel) or "2026.08.19" (a
+        stable release) from `yt-dlp --version`; empty when the program cannot run. */
     static juce::String ytDlpVersion (const juce::File& exe, const std::atomic<bool>* cancel = nullptr);
 
     /** Runs yt-dlp's own updater (it replaces its executable). At most once an hour: a later call within the
@@ -65,14 +66,16 @@ public:
     //==============================================================================
     // Pure helpers (unit-tested)
 
-    /** Whether the bundled yt-dlp replaces the per-user copy: no copy yet, or a bundled version ("YYYY.MM.DD")
-        that is not older than the copy's. An unreadable version counts as old (a broken file is replaced). */
+    /** Whether the bundled yt-dlp replaces the per-user copy: no copy yet, or a bundled version ("YYYY.MM.DD",
+        a nightly "YYYY.MM.DD.HHMMSS") that is not older than the copy's. An unreadable version counts as old (a
+        broken file is replaced). */
     static bool shouldReplaceWithBundled (const juce::String& userVersion, const juce::String& bundledVersion);
 
     /** True when an update was attempted less than 'minIntervalMs' ago. */
     static bool isRateLimited (juce::int64 lastAttemptMs, juce::int64 nowMs, juce::int64 minIntervalMs);
 
-    /** The version out of yt-dlp's `--version` output (the first token that looks like YYYY.MM.DD, else empty). */
+    /** The version out of yt-dlp's `--version` output (the first token that looks like YYYY.MM.DD or a nightly's
+        YYYY.MM.DD.HHMMSS, else empty). */
     static juce::String versionFromOutput (const juce::String& output);
 
 private:

@@ -57,11 +57,13 @@ public:
     static double parseProgress (const juce::String& line);
 
     /** What went wrong, from yt-dlp's output: a Korean message and the kind of problem - the video itself
-        (private, removed, no audio format, a bad address), the network (offline, YouTube unreachable), or the
-        tool (anything else: what a yt-dlp update may fix). */
+        (private, members-only, a bad address), the network (offline, YouTube unreachable), the tool (anything
+        else: what a yt-dlp update may fix), or videoOrTool: "unavailable" / "no such format", which a removed
+        video gives but so does a yt-dlp that YouTube has outrun (every 'made for kids' video, October 2026) -
+        an update is tried first and the video's message shown when there is none. */
     struct Failure
     {
-        enum class Kind { video, network, tool };
+        enum class Kind { video, network, tool, videoOrTool };
         juce::String message;
         Kind kind = Kind::tool;
     };

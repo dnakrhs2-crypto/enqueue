@@ -53,17 +53,27 @@ public:
             expectEquals (D::parseProgress (""), -1.0);
         }
 
-        beginTest ("classifyFailure tells video, network and tool problems apart (only a tool problem earns an update)");
+        beginTest ("classifyFailure tells video, network and tool problems apart (a tool problem, or a video error an outdated yt-dlp also gives, earns an update)");
         {
             using Kind = D::Failure::Kind;
             auto f = D::classifyFailure ({ "[youtube] x: Downloading webpage", "ERROR: [youtube] x: Private video. Sign in if you've been granted access to this video" });
             expect (f.kind == Kind::video);
             expect (f.message.isNotEmpty());
 
+            // what yt-dlp 2026.08.19 said about every 'made for kids' video in October 2026 (fixed in a later yt-dlp):
+            // the video's message stays, but an update is worth a try first
             f = D::classifyFailure ({ "ERROR: [youtube] x: Video unavailable" });
-            expect (f.kind == Kind::video);
+            expect (f.kind == Kind::videoOrTool);
+
+            f = D::classifyFailure ({ "ERROR: [youtube] 6srEO4PALsg: This video is not available" });
+            expect (f.kind == Kind::videoOrTool);
+            expect (f.message.contains (juce::String::fromUTF8 ("볼 수 없는 영상")));
 
             f = D::classifyFailure ({ "ERROR: [youtube] x: Requested format is not available. Use --list-formats for a list of available formats" });
+            expect (f.kind == Kind::videoOrTool);
+            expect (f.message.contains ("AAC"));
+
+            f = D::classifyFailure ({ "ERROR: [youtube] x: This live event will begin in 3 hours." , "ERROR: [youtube] x: x is a live event" });
             expect (f.kind == Kind::video);
 
             f = D::classifyFailure ({ "ERROR: [generic] 'abc' is not a valid URL." });
@@ -153,9 +163,18 @@ public:
             using T = YouTubeTools;
             expectEquals (T::versionFromOutput ("2026.08.19\r\n"), juce::String ("2026.08.19"));
             expectEquals (T::versionFromOutput ("yt-dlp 2025.12.08"), juce::String ("2025.12.08"));
-            expectEquals (T::versionFromOutput ("2026.08.19.232500"), juce::String());   // a nightly stamp is not what we expect
+            expectEquals (T::versionFromOutput ("2026.10.10.233141\r\n"), juce::String ("2026.10.10.233141"));   // the nightly build the app ships
+            expectEquals (T::versionFromOutput ("2026.10.10."), juce::String());
+            expectEquals (T::versionFromOutput ("2026.1.10"), juce::String());
             expectEquals (T::versionFromOutput ("error: not found"), juce::String());
             expectEquals (T::versionFromOutput (""), juce::String());
+
+            // every install so far holds the stable 2026.08.19: the nightly bundle has to win over it (else the
+            // fixed yt-dlp never reaches the per-user folder), and a nightly the copy updated itself to stays
+            expect (T::shouldReplaceWithBundled ("2026.08.19", "2026.10.10.233141"));
+            expect (T::shouldReplaceWithBundled ("2026.10.10.233141", "2026.10.10.233141"));
+            expect (! T::shouldReplaceWithBundled ("2026.10.21.231502", "2026.10.10.233141"));
+            expect (! T::shouldReplaceWithBundled ("2026.10.11.000102", "2026.10.10.233141"));
 
             expect (T::shouldReplaceWithBundled ("", "2026.08.19"));           // no user copy
             expect (T::shouldReplaceWithBundled ("", ""));                     // nothing readable at all: copy anyway

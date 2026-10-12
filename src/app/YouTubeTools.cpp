@@ -283,8 +283,15 @@ juce::String YouTubeTools::versionFromOutput (const juce::String& output)
     {
         const auto t = token.trim();
 
-        if (t.length() >= 10 && t.length() <= 12 && t.containsOnly ("0123456789.")
-            && t.substring (4, 5) == "." && t.substring (7, 8) == ".")
+        if (! t.containsOnly ("0123456789."))
+            continue;
+
+        // "2026.08.19" (a stable release) or "2026.10.10.233141" (a nightly build: the date, then the build time)
+        const auto parts = juce::StringArray::fromTokens (t, ".", {});
+
+        if ((parts.size() == 3 || parts.size() == 4)
+            && parts[0].length() == 4 && parts[1].length() == 2 && parts[2].length() == 2
+            && (parts.size() == 3 || parts[3].isNotEmpty()))
             return t;
     }
 

@@ -138,10 +138,10 @@ YouTubeDownloader::Failure YouTubeDownloader::classifyFailure (const juce::Strin
     static const Known known[] = {
         { "Sign in to confirm",                     "유튜브가 로그인(봇 확인)을 요구합니다. 잠시 뒤 다시 하거나 다른 네트워크에서 시도해 주세요.", Failure::Kind::tool },
         { "Private video",                          "비공개 영상입니다.", Failure::Kind::video },
-        { "Video unavailable",                      "볼 수 없는 영상입니다 (삭제되었거나 이 지역에서 막혀 있습니다).", Failure::Kind::video },
-        { "This video is not available",            "볼 수 없는 영상입니다 (삭제되었거나 이 지역에서 막혀 있습니다).", Failure::Kind::video },
+        { "Video unavailable",                      "볼 수 없는 영상입니다 (삭제되었거나 이 지역에서 막혀 있습니다).", Failure::Kind::videoOrTool },
+        { "This video is not available",            "볼 수 없는 영상입니다 (삭제되었거나 이 지역에서 막혀 있습니다).", Failure::Kind::videoOrTool },
         { "members-only",                           "멤버십 전용 영상입니다.", Failure::Kind::video },
-        { "Requested format is not available",      "받을 수 있는 오디오(AAC) 형식이 없는 영상입니다.", Failure::Kind::video },
+        { "Requested format is not available",      "받을 수 있는 오디오(AAC) 형식이 없는 영상입니다.", Failure::Kind::videoOrTool },
         { "is not a valid URL",                     "올바른 주소가 아닙니다.", Failure::Kind::video },
         { "Unsupported URL",                        "지원하지 않는 주소입니다.", Failure::Kind::video },
         { "is a live event",                        "아직 시작하지 않은 실시간 방송입니다.", Failure::Kind::video },
@@ -392,7 +392,8 @@ void YouTubeDownloader::run()
     if (cancelRequested.load())
         return cancelled();
 
-    // 2. yt-dlp, with one more try after a self-update when the tool (not the video, not the network) is the problem
+    // 2. yt-dlp, with one more try after a self-update when the tool (not the video, not the network) is the problem -
+    //    or may be: an "unavailable" / "no such format" that a yt-dlp YouTube has outrun also gives
     const auto work = juce::File::getSpecialLocation (juce::File::tempDirectory)
                           .getChildFile ("Enqueue-youtube").getChildFile (juce::String::toHexString (juce::Random::getSystemRandom().nextInt64()));
     work.createDirectory();
@@ -432,7 +433,7 @@ void YouTubeDownloader::run()
         for (int i = juce::jmax (0, lines.size() - 8); i < lines.size(); ++i)
             tail.add (lines[i]);
 
-        if (attempt == 1 || failure.kind != Failure::Kind::tool)
+        if (attempt == 1 || (failure.kind != Failure::Kind::tool && failure.kind != Failure::Kind::videoOrTool))
         {
             fail (failure.message, tail.joinIntoString ("\n"));
             return;
