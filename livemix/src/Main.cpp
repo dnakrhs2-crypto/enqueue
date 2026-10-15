@@ -1,4 +1,5 @@
 #include "LiveMixSettings.h"
+#include "CollabSession.h"
 #include "ControlServer.h"
 #include "MixDocument.h"
 #include "MixEngine.h"
@@ -182,6 +183,7 @@ public:
 
         settings = std::make_unique<LiveMixSettings>();
         engine = std::make_unique<MixEngine>();
+        collabSession = std::make_unique<collab::CollabSession> (*engine, *settings);
         engine->setSkipChainWhenOff (settings->getSkipPluginsWhenOff());
         engine->setSendTransport (settings->getSendTransport());
         engine->getPluginHost().setVst2Enabled (settings->getVst2Enabled());          // before the session's chains come back
@@ -210,6 +212,7 @@ public:
         tray = std::make_unique<TrayIcon> ([this] (int item) { trayMenu (item); });
 
         auto& main = mainWindow->getMainComponent();
+        main.setCollabSession (collabSession.get());
         main.onToggleWindow = [this] { toggleWindow(); };
         main.setSafeMode (safeMode);
 
@@ -328,6 +331,9 @@ public:
             mainWindow->getMainComponent().detachControlServer();
         controlServer = nullptr;
         mainWindow = nullptr;
+
+        if (collabSession != nullptr) collabSession->leave();
+        collabSession = nullptr;
 
         if (engine != nullptr)
         {
@@ -599,6 +605,7 @@ private:
     std::unique_ptr<LiveMixLookAndFeel> lookAndFeel;
     std::unique_ptr<LiveMixSettings> settings;
     std::unique_ptr<MixEngine> engine;
+    std::unique_ptr<collab::CollabSession> collabSession;
     std::unique_ptr<MixDocument> document;
     std::unique_ptr<MainWindow> mainWindow;
     std::unique_ptr<ControlServer> controlServer;

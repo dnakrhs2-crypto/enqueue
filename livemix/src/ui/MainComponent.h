@@ -26,6 +26,7 @@
 
 namespace gocue::livemix
 {
+namespace collab { class CollabSession; }
 
 /** Injectable boundaries keep UI installer tests on temporary roots and avoid an actual UAC prompt. */
 struct ObsPluginActions
@@ -44,6 +45,9 @@ class MainComponent : public juce::Component,
 public:
     MainComponent (MixDocument& document, LiveMixSettings& settings, ObsPluginActions obsActions = {});
     ~MainComponent() override;
+
+    void setCollabSession (collab::CollabSession* session) noexcept { collabSession = session; }
+    collab::CollabSession* getCollabSession() const noexcept { return collabSession; }
 
     /** Session files. new / open first secure what is open (see withSessionSecured). */
     void newSession();
@@ -167,6 +171,7 @@ private:
 
     MixDocument& document;
     LiveMixSettings& settings;
+    collab::CollabSession* collabSession = nullptr; // owned by the app, survives session-file changes
     MixEngine& engine;
     MuteGroups muteGroups { document };
     ControlServer* controlServer = nullptr;

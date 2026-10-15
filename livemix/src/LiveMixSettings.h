@@ -51,6 +51,16 @@ public:
     bool getExternalControlEnabled() const;
     void setExternalControlEnabled (bool on);
 
+    juce::String getCollabNick() const;
+    void setCollabNick (const juce::String& nick);
+    int getCollabPort() const;
+    void setCollabPort (int port);
+    float getCollabMonitorVolume() const;
+    void setCollabMonitorVolume (float volume01);
+    bool getCollabMonitorOn() const;
+    void setCollabMonitorOn (bool on);
+    juce::String getCollabInstallId();   // created and saved on first use
+
     /** The global hotkeys as KeyPress descriptions ("F9", "ctrl + alt + M"); empty = none. */
     juce::String getMicMuteHotkey() const;
     void setMicMuteHotkey (const juce::String& description);

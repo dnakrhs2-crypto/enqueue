@@ -82,6 +82,9 @@ struct CollabTransport::Impl
     uint32_t sender = 1, peerSender = 0;
     PeerInfo me, peer;
     Nonce nonce {};
+    struct RecentProbe { Nonce nonce {}; uint64_t receivedAt = 0; };
+    std::array<RecentProbe, 8> recentProbes {};
+    size_t nextProbe = 0;
     sockaddr_in peerAddress {};
     std::vector<sockaddr_in> candidates;
     std::array<double, 5> rtts {};
@@ -116,6 +119,11 @@ struct CollabTransport::Impl
     }
     void acceptPeer (const Header& h, const PeerInfo& info, const sockaddr_in& from, uint64_t now)
     {
+        if (! havePeer || peerSender != h.sender)
+        {
+            changeState (State::waiting); // resets the attached playout before accepting a replacement
+            rttCount = rttIndex = 0; rttMs = 0; lastPing = 0;
+        }
         peerSender = h.sender; peer = info; peerAddress = from; havePeer = true; lastReceived = now;
         changeState (State::connected);
     }
@@ -135,6 +143,8 @@ struct CollabTransport::Impl
             const juce::ScopedLock lock (control);
             if (h.kind == Kind::probe)
             {
+                auto& recent = recentProbes[nextProbe++ % recentProbes.size()];
+                std::copy_n (payload, recent.nonce.size(), recent.nonce.begin()); recent.receivedAt = now;
                 if (probeExpected && std::equal (nonce.begin(), nonce.end(), payload)) probeSeen.store (true);
                 continue;
             }
@@ -143,7 +153,9 @@ struct CollabTransport::Impl
             {
                 PeerInfo info;
                 if (! readPeerInfo (payload, h.payloadBytes, info)) continue;
-                if (havePeer && h.sender != peerSender) { sendControl (Kind::bye, from); continue; }
+                if (havePeer && h.sender != peerSender && state.load() != State::peerLeft
+                    && state.load() != State::disconnected
+                    && now - lastReceived < 3000000000ULL) { sendControl (Kind::bye, from); continue; }
                 acceptPeer (h, info, from, now); sendControl (Kind::welcome, from); received.fetch_add (1);
                 continue;
             }
@@ -284,7 +296,13 @@ void CollabTransport::startGuest (uint64_t session, const std::vector<Address>& 
 }
 void CollabTransport::expectProbe (const Nonce& nonce)
 {
-    const juce::ScopedLock lock (impl->control); impl->nonce = nonce; impl->probeExpected = true; impl->probeSeen.store (false);
+    const juce::ScopedLock lock (impl->control);
+    impl->nonce = nonce; impl->probeExpected = true;
+    const auto now = nowNs();
+    impl->probeSeen.store (std::any_of (impl->recentProbes.begin(), impl->recentProbes.end(), [&] (const auto& probe)
+    {
+        return probe.receivedAt != 0 && now - probe.receivedAt <= 10000000000ULL && probe.nonce == nonce;
+    }));
 }
 bool CollabTransport::hasProbe() const noexcept { return impl->probeSeen.load(); }
 int CollabTransport::getLocalPort() const noexcept { return impl->port.load(); }
@@ -316,6 +334,8 @@ void CollabTransport::stop()
     if (i.socket != INVALID_SOCKET) { closesocket (i.socket); i.socket = INVALID_SOCKET; }
     const juce::ScopedLock lock (i.control);
     i.port.store (0); i.havePeer = i.roleStarted = false; i.changeState (State::off);
+    i.probeExpected = false; i.probeSeen.store (false); i.recentProbes = {}; i.nextProbe = 0;
+    i.peer = {}; i.peerSender = 0; i.candidates.clear();
 }
 void CollabTransport::attachAudio (CollabAudio& a)
 {

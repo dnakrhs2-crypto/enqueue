@@ -250,6 +250,15 @@ set_property(DIRECTORY PROPERTY VS_STARTUP_PROJECT Enqueue)
 # Tests
 # ---------------------------------------------------------------------------
 enable_testing()
+# UPnP is used only by LiveMix. Keep the vendored client static and out of install/sample targets.
+set(UPNPC_BUILD_STATIC ON CACHE BOOL "" FORCE)
+set(UPNPC_BUILD_SHARED OFF CACHE BOOL "" FORCE)
+set(UPNPC_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+set(UPNPC_BUILD_SAMPLE OFF CACHE BOOL "" FORCE)
+set(UPNPC_NO_INSTALL ON CACHE BOOL "" FORCE)
+add_subdirectory(third_party/miniupnpc EXCLUDE_FROM_ALL)
+set_property(TARGET libminiupnpc-static PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+target_compile_options(libminiupnpc-static PRIVATE $<$<C_COMPILER_ID:MSVC>:/utf-8>)
 # LiveMix (the live mic VST3 host) shares the core: its model and engine are a second interface library
 add_library(LiveMixCore INTERFACE)
 target_compile_features(LiveMixCore INTERFACE c_std_17)
@@ -266,6 +275,10 @@ target_sources(LiveMixCore INTERFACE
     ${CMAKE_CURRENT_SOURCE_DIR}/livemix/src/CollabPlayout.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/livemix/src/CollabTransport.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/livemix/src/CollabAudio.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/livemix/src/CollabUpnp.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/livemix/src/CollabHostCheck.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/livemix/src/CollabRoom.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/livemix/src/CollabSession.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/livemix/src/ObsPluginInstaller.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/livemix/src/MixDocument.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/livemix/src/MuteGroups.cpp
@@ -284,7 +297,7 @@ target_sources(LiveMixCore INTERFACE
 target_include_directories(LiveMixCore INTERFACE
     ${CMAKE_CURRENT_SOURCE_DIR}/livemix/src
     ${CMAKE_CURRENT_SOURCE_DIR}/livemix/shared)
-target_link_libraries(LiveMixCore INTERFACE GoCueCore)
+target_link_libraries(LiveMixCore INTERFACE GoCueCore libminiupnpc-static)
 if(WIN32)
     target_link_libraries(LiveMixCore INTERFACE bcrypt advapi32 version shell32 ole32 ws2_32 avrt)
 endif()

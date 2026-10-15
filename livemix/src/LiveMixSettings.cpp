@@ -26,6 +26,11 @@ namespace Keys
     constexpr const char* skipPluginsWhenOff = "skipPluginsWhenOff";
     constexpr const char* sendTransportToPlugins = "sendTransportToPlugins";
     constexpr const char* externalControlEnabled = "externalControlEnabled";
+    constexpr const char* collabNick = "collabNick";
+    constexpr const char* collabPort = "collabPort";
+    constexpr const char* collabMonitorVolume = "collabMonitorVolume";
+    constexpr const char* collabMonitorOn = "collabMonitorOn";
+    constexpr const char* collabInstallId = "collabInstallId";
     constexpr const char* backupUrl = "backupUrl";
     constexpr const char* backupFolder = "backupFolder";
     constexpr const char* backupUser = "backupUser";
@@ -154,6 +159,25 @@ void LiveMixSettings::setSendTransport (bool on) { settings->setValue (Keys::sen
 
 bool LiveMixSettings::getExternalControlEnabled() const { return settings->getBoolValue (Keys::externalControlEnabled, false); }
 void LiveMixSettings::setExternalControlEnabled (bool on) { settings->setValue (Keys::externalControlEnabled, on); }
+
+juce::String LiveMixSettings::getCollabNick() const { return settings->getValue (Keys::collabNick); }
+void LiveMixSettings::setCollabNick (const juce::String& nick) { settings->setValue (Keys::collabNick, nick.trim()); }
+int LiveMixSettings::getCollabPort() const { return juce::jlimit (1024, 65535, settings->getIntValue (Keys::collabPort, 49731)); }
+void LiveMixSettings::setCollabPort (int port) { settings->setValue (Keys::collabPort, juce::jlimit (1024, 65535, port)); }
+float LiveMixSettings::getCollabMonitorVolume() const { return (float) juce::jlimit (0.0, 1.0, settings->getDoubleValue (Keys::collabMonitorVolume, 1.0)); }
+void LiveMixSettings::setCollabMonitorVolume (float volume01) { settings->setValue (Keys::collabMonitorVolume, juce::jlimit (0.0f, 1.0f, volume01)); }
+bool LiveMixSettings::getCollabMonitorOn() const { return settings->getBoolValue (Keys::collabMonitorOn, true); }
+void LiveMixSettings::setCollabMonitorOn (bool on) { settings->setValue (Keys::collabMonitorOn, on); }
+juce::String LiveMixSettings::getCollabInstallId()
+{
+    // made on the first room created or joined, so a LiveMix that never collabs keeps its settings file as it was
+    if (settings->getValue (Keys::collabInstallId).isEmpty())
+    {
+        settings->setValue (Keys::collabInstallId, juce::Uuid().toString());
+        saveIfNeeded();
+    }
+    return settings->getValue (Keys::collabInstallId);
+}
 
 juce::String LiveMixSettings::getMicMuteHotkey() const { return settings->getValue (Keys::micMuteHotkey); }
 void LiveMixSettings::setMicMuteHotkey (const juce::String& description) { settings->setValue (Keys::micMuteHotkey, description.trim()); }

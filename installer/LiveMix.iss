@@ -64,6 +64,7 @@ Name: "obsplugin"; Description: "{cm:ObsPluginTask}"; GroupDescription: "{cm:Obs
 [Files]
 Source: "{#SourceDir}\{#AppExe}"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#SourceDir}\WinSparkle.dll"; DestDir: "{app}"; Flags: ignoreversion skipifsourcedoesntexist
+Source: "..\third_party\miniupnpc\LICENSE"; DestDir: "{app}\licenses\miniupnpc"; Flags: ignoreversion
 Source: "{#SourceDir}\obs-plugin\livemix-obs\livemix-obs.dll"; DestDir: "{app}\obs-plugin\livemix-obs"; Flags: ignoreversion
 Source: "{#SourceDir}\obs-plugin\livemix-obs\data\locale\*.ini"; DestDir: "{app}\obs-plugin\livemix-obs\data\locale"; Flags: ignoreversion recursesubdirs
 Source: "coupang.ico"; DestDir: "{app}"; Flags: ignoreversion

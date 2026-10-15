@@ -107,6 +107,40 @@ public:
             remapped.send (host.getLocalPort(), h, payload.data()); expect (waitFor ([&] { return host.getState() == CollabTransport::State::connected; }));
         }
 
+        beginTest ("probe received before the HTTP response is remembered by expectProbe");
+        {
+            CollabTransport host; expect (host.open (0, true).isEmpty());
+            RawPeer raw; Nonce nonce {}; nonce[0] = 87; nonce[15] = 35;
+            Header h; h.kind = Kind::probe; h.payloadBytes = 16;
+            raw.send (host.getLocalPort(), h, nonce.data());
+            std::this_thread::sleep_for (std::chrono::milliseconds (100));
+            host.expectProbe (nonce); expect (host.hasProbe());
+            auto other = nonce; other[2] = 42;
+            host.expectProbe (other); expect (! host.hasProbe());
+        }
+
+        beginTest ("new sender replaces a guest whose socket closed without bye");
+        {
+            CollabTransport host; CollabAudio audio;
+            audio.prepare (48000, 120); audio.attach (host);
+            expect (host.open (0, true).isEmpty()); host.startHost (77, { "host" });
+            std::array<uint8_t, 128> payload;
+            Header hello; hello.kind = Kind::hello; hello.session = 77; hello.sender = 201;
+            {
+                RawPeer first;
+                hello.payloadBytes = (uint16_t) writePeerInfo (payload.data(), { "guest A" });
+                first.send (host.getLocalPort(), hello, payload.data());
+                expect (waitFor ([&] { return host.getState() == CollabTransport::State::connected; }));
+            }
+            expect (waitFor ([&] { return host.getState() == CollabTransport::State::disconnected; }, 4500));
+            RawPeer second;
+            hello.sender = 202; hello.payloadBytes = (uint16_t) writePeerInfo (payload.data(), { "guest B" });
+            second.send (host.getLocalPort(), hello, payload.data());
+            expect (waitFor ([&] { return host.getState() == CollabTransport::State::connected; }));
+            expectEquals (host.getStats().peer.nickname, juce::String ("guest B"));
+            expectEquals (host.getStats().address.port, second.port);
+        }
+
         beginTest ("connected audio survives device-rate restart and attachment destruction");
         {
             CollabTransport host, guest; CollabAudio a, b;
