@@ -385,11 +385,19 @@ public:
                                       [&rig, &settings] { return TrackHotkeys::settingsRows (rig.doc.getSession(), settings); });
 
                 juce::Component* content = nullptr;
+                juce::DialogWindow* settingsWindow = nullptr;
                 auto& desktop = juce::Desktop::getInstance();
                 for (int i = 0; i < desktop.getNumComponents(); ++i)
                     if (auto* dialog = dynamic_cast<juce::DialogWindow*> (desktop.getComponent (i)); dialog != nullptr && dialog->getName() == ko ("설정"))
                         if (auto* viewport = dynamic_cast<juce::Viewport*> (dialog->getContentComponent()))
+                        {
                             content = viewport->getViewedComponent();
+                            settingsWindow = dialog;
+                        }
+
+                // 0.14.1 (verification of 0.14.0's last fix): LiveMix had no TooltipWindow, so no setTooltip() was ever
+                // shown - the settings window owns one, or a shortened row's whole name never appears
+                expect (settingsWindow != nullptr && childOfType<juce::TooltipWindow> (*settingsWindow) != nullptr);
 
                 expect (content != nullptr);
                 if (content != nullptr)

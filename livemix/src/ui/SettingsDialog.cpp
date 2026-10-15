@@ -958,6 +958,10 @@ namespace
 
         ~SettingsWindow() override { limits.frameNow = nullptr; }   // the window's own teardown must not ask a half-gone window
 
+        // LiveMix has no app-wide TooltipWindow: without this one no setTooltip() in the settings would ever show
+        // (a shortened row's whole channel name, the x's '핫키 지우기')
+        juce::TooltipWindow tooltips { this, 700 };
+
         void useClientLimits (const SettingsDialog::Placement& place)
         {
             limits.setClientLimits (place.minWidth, place.maxWidth, place.minHeight, place.maxHeight);
