@@ -386,6 +386,31 @@ public:
                 expect (! collabWindow->isVisible()); expect (session.getSnapshot().state == State::off);
             }
         }
+
+        beginTest ("the main, collab and loudness windows each own a tooltip window, and the main one shows its tips");
+        {
+            // LiveMix has no app-wide TooltipWindow; one per window shows only that window's tips (JUCE matches the peer)
+            const auto tipsOf = [] (juce::Component& owner) -> juce::TooltipWindow*
+            {
+                for (auto* c : owner.getChildren()) if (auto* t = dynamic_cast<juce::TooltipWindow*> (c)) return t;
+                return nullptr;
+            };
+            auto* mainTips = tipsOf (main);
+            expect (mainTips != nullptr, "main window");
+            for (int i = 0; i < juce::TopLevelWindow::getNumTopLevelWindows(); ++i)
+                if (auto* w = dynamic_cast<CollabWindow*> (juce::TopLevelWindow::getTopLevelWindow (i)))
+                    expect (tipsOf (*w) != nullptr, "collab window");
+            LoudnessWindow loudness (engine, settings);
+            expect (tipsOf (loudness) != nullptr, "loudness window");
+            if (mainTips != nullptr)
+            {
+                main.setSize (1100, 640);
+                mainTips->displayTip (main.localPointToGlobal (juce::Point<int> (420, 150)), ko ("마스터를 거쳐 메인 출력으로"));
+                expect (mainTips->isVisible() && main.getLocalBounds().contains (mainTips->getBounds()));
+                for (float scale : { 1.0f, 1.5f }) snapshot (main, "tooltip-main", scale);
+                mainTips->hideTip(); expect (! mainTips->isVisible());
+            }
+        }
     }
 
 private:

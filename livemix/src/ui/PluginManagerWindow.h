@@ -35,6 +35,7 @@ public:
 private:
     class Content;
     Content* content = nullptr;
+    juce::TooltipWindow tooltips { this, 700 };   // LiveMix has no app-wide one: this window's tips
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (PluginManagerWindow)
 };

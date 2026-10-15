@@ -231,6 +231,9 @@ private:
     juce::String obsInstallNote;
     bool obsInstallError = false;
     std::unique_ptr<juce::FileChooser> chooser;
+    // LiveMix has no app-wide TooltipWindow: each window owns one (it shows only its own window's tips), so every
+    // setTooltip() of the main window - top bar, cards, drawers - shows through this
+    juce::TooltipWindow tooltips { this, 700 };
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (MainComponent)
 };

@@ -1202,6 +1202,9 @@ namespace
         {
             juce::MessageManager::callAsync ([] { BackupDialog::closeIfOpen(); });   // not from inside the window's own callback
         }
+
+    private:
+        juce::TooltipWindow tooltips { this, 700 };   // LiveMix has no app-wide one: this window's tips
     };
 
     juce::Component* currentWindow()
