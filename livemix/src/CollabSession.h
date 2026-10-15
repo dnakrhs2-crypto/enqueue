@@ -24,6 +24,8 @@ public:
         juce::String reason, message;
         float monitorVolume = 1.0f;
         bool monitorOn = true;
+        CollabAudio::Route route = CollabAudio::Route::master;
+        int routeFirst = 0;
         uint32_t wireRate = defaultWireRate;
     };
     struct Options
@@ -42,6 +44,7 @@ public:
     void leave(); // immediately off; network cleanup completes on the worker
     void rebuffer();
     void setMonitor (float volume01, bool on);
+    void setRoute (CollabAudio::Route, int directFirst);
     Snapshot getSnapshot() const;
     static juce::StringArray lanAddresses();
 

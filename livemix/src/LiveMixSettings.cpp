@@ -1,5 +1,6 @@
 #include "LiveMixSettings.h"
 #include "CollabProtocol.h"
+#include "MixModel.h"
 
 #include "WebDavBackup.h"
 
@@ -32,6 +33,8 @@ namespace Keys
     constexpr const char* collabRate = "collabRate";
     constexpr const char* collabMonitorVolume = "collabMonitorVolume";
     constexpr const char* collabMonitorOn = "collabMonitorOn";
+    constexpr const char* collabRoute = "collabRoute";
+    constexpr const char* collabRouteFirst = "collabRouteFirst";
     constexpr const char* collabInstallId = "collabInstallId";
     constexpr const char* backupUrl = "backupUrl";
     constexpr const char* backupFolder = "backupFolder";
@@ -179,6 +182,20 @@ float LiveMixSettings::getCollabMonitorVolume() const { return (float) juce::jli
 void LiveMixSettings::setCollabMonitorVolume (float volume01) { settings->setValue (Keys::collabMonitorVolume, juce::jlimit (0.0f, 1.0f, volume01)); }
 bool LiveMixSettings::getCollabMonitorOn() const { return settings->getBoolValue (Keys::collabMonitorOn, true); }
 void LiveMixSettings::setCollabMonitorOn (bool on) { settings->setValue (Keys::collabMonitorOn, on); }
+int LiveMixSettings::getCollabRoute() const
+{
+    const int route = settings->getIntValue (Keys::collabRoute, 0);
+    return route >= 0 && route <= 2 ? route : 0;
+}
+void LiveMixSettings::setCollabRoute (int route) { settings->setValue (Keys::collabRoute, route >= 0 && route <= 2 ? route : 0); }
+int LiveMixSettings::getCollabRouteFirst() const
+{
+    return juce::jlimit (0, MixSession::maxDeviceChannels - 2, settings->getIntValue (Keys::collabRouteFirst, 0));
+}
+void LiveMixSettings::setCollabRouteFirst (int first)
+{
+    settings->setValue (Keys::collabRouteFirst, juce::jlimit (0, MixSession::maxDeviceChannels - 2, first));
+}
 juce::String LiveMixSettings::getCollabInstallId()
 {
     // made on the first room created or joined, so a LiveMix that never collabs keeps its settings file as it was

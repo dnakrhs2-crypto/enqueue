@@ -112,6 +112,8 @@ CollabSession::CollabSession (CollabAudio& a, LiveMixSettings& prefs, std::uniqu
     snapshot.myNick = settings.getCollabNick();
     snapshot.monitorVolume = settings.getCollabMonitorVolume(); snapshot.monitorOn = settings.getCollabMonitorOn();
     audio.setMonitor (snapshot.monitorVolume, snapshot.monitorOn);
+    snapshot.route = (CollabAudio::Route) settings.getCollabRoute(); snapshot.routeFirst = settings.getCollabRouteFirst();
+    audio.setRoute (snapshot.route, snapshot.routeFirst);
     startTimer (50);
 }
 
@@ -260,6 +262,14 @@ void CollabSession::setMonitor (float volume, bool on)
     snapshot.monitorVolume = juce::jlimit (0.0f, 1.0f, std::isfinite (volume) ? volume : 0.0f); snapshot.monitorOn = on;
     audio.setMonitor (snapshot.monitorVolume, on);
     settings.setCollabMonitorVolume (snapshot.monitorVolume); settings.setCollabMonitorOn (on); settings.saveIfNeeded();
+    sendChangeMessage();
+}
+void CollabSession::setRoute (CollabAudio::Route route, int first)
+{
+    messageThread();
+    settings.setCollabRoute ((int) route); settings.setCollabRouteFirst (first); settings.saveIfNeeded();
+    snapshot.route = (CollabAudio::Route) settings.getCollabRoute(); snapshot.routeFirst = settings.getCollabRouteFirst();
+    audio.setRoute (snapshot.route, snapshot.routeFirst);
     sendChangeMessage();
 }
 

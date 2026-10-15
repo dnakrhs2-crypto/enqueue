@@ -61,6 +61,10 @@ public:
     void setCollabMonitorVolume (float volume01);
     bool getCollabMonitorOn() const;
     void setCollabMonitorOn (bool on);
+    int getCollabRoute() const;          // the partner's output: 0 master, 1 direct pair, 2 heard in OBS
+    void setCollabRoute (int route);
+    int getCollabRouteFirst() const;     // first channel of the partner's direct pair (0 = 1-2)
+    void setCollabRouteFirst (int first);
     juce::String getCollabInstallId();   // created and saved on first use
 
     /** The global hotkeys as KeyPress descriptions ("F9", "ctrl + alt + M"); empty = none. */

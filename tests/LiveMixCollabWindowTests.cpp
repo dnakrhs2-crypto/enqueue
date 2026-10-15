@@ -64,7 +64,14 @@ public:
         Folder folder;
         LiveMixSettings settings (folder.file);
         settings.setCollabNick (ko ("하람"));
-        CollabPanel panel (settings, {});
+        CollabPanel::Actions renderActions;
+        renderActions.outputs = []
+        {
+            CollabPanel::OutputPairs pairs;
+            pairs.names = { "Out 1", "Out 2", "Out 3", "Out 4" }; pairs.asio = pairs.hasOutput = pairs.running = true; pairs.numOutputs = 4;
+            return pairs;
+        };
+        CollabPanel panel (settings, renderActions);
 
         beginTest ("all states render at 440x430, 400x400 and tall sizes, at 100/125/150 percent");
         std::vector<collab::CollabSession::Snapshot> snapshots;
@@ -93,6 +100,11 @@ public:
         for (int index : { 3, 4, 5 })
         {
             auto s = snapshots[(size_t) index]; s.wireRate = 44100;
+            snapshots.push_back (s);
+        }
+        for (auto route : { collab::CollabAudio::Route::direct, collab::CollabAudio::Route::obs })
+        {
+            auto s = snapshots[4]; s.route = route; s.routeFirst = 2;
             snapshots.push_back (s);
         }
         auto longName = snapshots[4];
@@ -190,6 +202,14 @@ public:
         actions.join = [&] (const auto& code, const auto& nick) { ++joins; joinedCode = code; joinedNick = nick; };
         actions.leave = [&] { ++leaves; }; actions.rebuffer = [&] { ++rebuffers; }; actions.hide = [&] { ++hides; };
         actions.monitor = [&] (float value, bool on) { monitorVolume = value; monitorOn = on; };
+        auto routed = collab::CollabAudio::Route::master; int routedFirst = -1;
+        actions.route = [&] (collab::CollabAudio::Route route, int first) { routed = route; routedFirst = first; };
+        actions.outputs = []
+        {
+            CollabPanel::OutputPairs pairs;
+            pairs.names = { "Out 1", "Out 2", "Out 3", "Out 4" }; pairs.asio = pairs.hasOutput = pairs.running = true; pairs.numOutputs = 4;
+            return pairs;
+        };
         CollabPanel input (settings, actions);
         InputWindow window (input);
         auto& code = child<CollabCodeEntry> (input, "code");
@@ -260,6 +280,37 @@ public:
         expectWithinAbsoluteError (monitorVolume, 0.37f, 0.0001f); expect (monitorOn);
         expectEquals (child<juce::Label> (input, "volume-value").getText(), juce::String ("37%"));
         input.setSnapshot ({}); nick.keyPressed (juce::KeyPress (juce::KeyPress::escapeKey)); dispatch(); expectEquals (hides, 1);
+
+        beginTest ("the partner's output chips and pair choose the route, and listening in OBS dims the headphone controls");
+        {
+            using Route = collab::CollabAudio::Route;
+            auto call = snapshots[4];
+            input.setSnapshot (call);
+            auto& toMaster = child<Chip> (input, "route-master");
+            auto& toDirect = child<Chip> (input, "route-direct");
+            auto& inObs = child<Chip> (input, "route-obs");
+            auto& pair = child<juce::ComboBox> (input, "route-pair");
+            expect (toMaster.getToggleState() && ! toDirect.getToggleState() && ! inObs.getToggleState());
+            expect (toMaster.isVisible() && pair.isVisible() && ! pair.isEnabled());
+            toDirect.onClick(); expect (routed == Route::direct); expectEquals (routedFirst, 0);
+            call.route = Route::direct; input.setSnapshot (call);
+            expect (toDirect.getToggleState() && pair.isEnabled()); expectEquals (pair.getNumItems(), 2);
+            pair.setSelectedId (3, juce::sendNotificationSync); expect (routed == Route::direct); expectEquals (routedFirst, 2);
+            inObs.onClick(); expect (routed == Route::obs);
+            call.route = Route::obs; call.routeFirst = 2; input.setSnapshot (call);
+            expect (inObs.getToggleState() && ! pair.isEnabled());
+            expect (! child<LampButton> (input, "headphones").isEnabled() && ! child<juce::Slider> (input, "volume").isEnabled());
+            call.route = Route::master; input.setSnapshot (call);
+            expect (child<LampButton> (input, "headphones").isEnabled() && child<juce::Slider> (input, "volume").isEnabled());
+            settings.setCollabRoute (2); settings.setCollabRouteFirst (4); settings.saveIfNeeded();
+            {
+                LiveMixSettings reloaded (folder.file);
+                expectEquals (reloaded.getCollabRoute(), 2); expectEquals (reloaded.getCollabRouteFirst(), 4);
+            }
+            settings.setCollabRoute (7); expectEquals (settings.getCollabRoute(), 0);
+            settings.setCollabRouteFirst (0); settings.saveIfNeeded();
+            input.setSnapshot ({});
+        }
 
         beginTest ("top bar controls and reserved mute badges fit in every mode, including long peer names");
         MixEngine engine ("Local\\LiveMix.CollabUi." + juce::Uuid().toString());

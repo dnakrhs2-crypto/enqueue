@@ -24,6 +24,13 @@ public:
         'LiveMix 합방 상대' source without the master switch. Message thread. */
     void setObsEnabled (bool enabled) { obsWanted = enabled; peerObs.setEnabled (obsWanted || collabOpen); }
     void setCollabOpen (bool open) { if (collabOpen == open) return; collabOpen = open; peerObs.setEnabled (obsWanted || collabOpen); }
+    /** Where the partner plays: on the master's pair after the master (never inside the master bus, which the partner
+        and the 'LiveMix' OBS source receive), on a pair of its own, or nowhere when it is heard through OBS monitoring.
+        The peer OBS ring is written in every route. Any thread. */
+    enum class Route { master = 0, direct = 1, obs = 2 };
+    void setRoute (Route r, int directFirst) noexcept { route.store ((int) r); routeFirst.store (directFirst < 0 ? 0 : directFirst); }
+    Route getRoute() const noexcept { return (Route) route.load(); }
+    int getRouteFirst() const noexcept { return routeFirst.load(); }
     ObsSender& getPeerObs() noexcept { return peerObs; }
     CollabPlayout::Stats getStats() const noexcept
     {
@@ -64,6 +71,7 @@ private:
     std::atomic<float> volume { 1.0f };
     std::atomic<float> peakLeft { 0.0f }, peakRight { 0.0f };
     std::atomic<bool> monitorOn { true };
+    std::atomic<int> route { 0 }, routeFirst { 0 };
     std::atomic<double> publishedRate { defaultWireRate };
     std::atomic<uint32_t> wireRate { defaultWireRate };
     float gain = 1.0f, gainTarget = 1.0f, gainStep = 0.0f;

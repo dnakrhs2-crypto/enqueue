@@ -45,12 +45,21 @@ private:
 class CollabPanel : public juce::Component
 {
 public:
+    // The open device's output pairs, as a channel's direct output lists them.
+    struct OutputPairs
+    {
+        juce::StringArray names;
+        bool asio = false, hasOutput = false, running = false;
+        int numOutputs = 0;
+    };
     struct Actions
     {
         std::function<void (const juce::String&)> create;
         std::function<void (const juce::String&, const juce::String&)> join;
         std::function<void()> leave, rebuffer, hide;
         std::function<void (float, bool)> monitor;
+        std::function<void (collab::CollabAudio::Route, int)> route;
+        std::function<OutputPairs()> outputs;
     };
     CollabPanel (LiveMixSettings&, Actions);
     void setSnapshot (const collab::CollabSession::Snapshot&);
@@ -82,7 +91,11 @@ private:
     LiveMixSettings& settings;
     Actions actions;
     collab::CollabSession::Snapshot snapshot;
-    juce::Label nickCaption, codeCaption, rateCaption, roomRate, waiting, notice, peerNick, connection, volumeCaption, volumeValue;
+    juce::Label nickCaption, codeCaption, rateCaption, roomRate, waiting, notice, peerNick, connection, volumeCaption, volumeValue,
+                routeCaption;
+    std::array<Chip, 3> routeChips;   // 마스터, 직접 출력, OBS에서 듣기
+    juce::ComboBox routePair;
+    juce::String routePairKey;        // the combo is refilled only when the pairs or the choice change
     CollabField nickname;
     CollabCodeEntry code;
     std::array<juce::Label, 4> roomDigits;
@@ -99,7 +112,7 @@ private:
 class CollabWindow : public juce::DocumentWindow, private juce::Timer
 {
 public:
-    CollabWindow (collab::CollabSession&, LiveMixSettings&);
+    CollabWindow (collab::CollabSession&, LiveMixSettings&, std::function<CollabPanel::OutputPairs()> outputs = {});
     ~CollabWindow() override;
     void open();
     void closeButtonPressed() override;

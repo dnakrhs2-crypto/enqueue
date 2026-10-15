@@ -741,7 +741,14 @@ void MainComponent::showCollabWindow()
     if (collabSession == nullptr) return;
     if (collabWindow == nullptr)
     {
-        collabWindow = std::make_unique<CollabWindow> (*collabSession, settings);
+        collabWindow = std::make_unique<CollabWindow> (*collabSession, settings, [this]
+        {
+            const auto device = engine.getOpenDevice();
+            CollabPanel::OutputPairs pairs;
+            pairs.names = outputNames; pairs.asio = device.isAsio(); pairs.hasOutput = device.output.isNotEmpty();
+            pairs.running = engine.isDeviceRunning(); pairs.numOutputs = engine.getNumDeviceOutputs();
+            return pairs;
+        });
         collabWindow->centreAroundComponent (this, collabWindow->getWidth(), collabWindow->getHeight());
     }
     collabWindow->open();

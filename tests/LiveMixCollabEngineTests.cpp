@@ -131,6 +131,23 @@ public:
         expectWithinAbsoluteError (half, 0.0f, 1.0e-5f);
         expectWithinAbsoluteError (outB.getSample (2, 119), 0.125f, 1.0e-5f);
 
+        beginTest ("partner route: a direct pair of its own, or no output when heard in OBS, the peer ring in every route");
+        b.getCollab().setRoute (CollabAudio::Route::direct, 0);
+        for (int n = 0; n < 20; ++n) render();
+        expectWithinAbsoluteError (outB.getSample (0, 119), 0.25f, 1.0e-5f);
+        expectWithinAbsoluteError (outB.getSample (1, 119), 0.25f, 1.0e-5f);
+        expectWithinAbsoluteError (outB.getSample (2, 119), -0.125f, 1.0e-6f);
+        expectWithinAbsoluteError (local.last (0), -0.125f, 1.0e-6f);   // the master bus and its OBS source stay without the partner
+        b.getCollab().setRoute (CollabAudio::Route::obs, 0);
+        for (int n = 0; n < 20; ++n) render();
+        expectEquals (outB.getMagnitude (0, 0, 120), 0.0f);
+        expectWithinAbsoluteError (outB.getSample (2, 119), -0.125f, 1.0e-6f);
+        expectWithinAbsoluteError (remote.last (0), 0.25f, 1.0e-5f);
+        b.getCollab().setRoute (CollabAudio::Route::master, 0);
+        for (int n = 0; n < 20; ++n) render();
+        expectWithinAbsoluteError (outB.getSample (2, 119), 0.125f, 1.0e-5f);
+        expectEquals (outB.getMagnitude (0, 0, 120), 0.0f);
+
         beginTest ("busy graph still plays remote and sends local silence with uninterrupted packet clock");
         {
             const juce::ScopedLock held (CollabEngineTestAccess::graphLock (b));

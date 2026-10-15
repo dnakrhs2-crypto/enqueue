@@ -268,6 +268,30 @@ CollabPanel::CollabPanel (LiveMixSettings& prefs, Actions callbacks) : settings 
         if (actions.monitor) actions.monitor ((float) volume.getValue() / 100.0f, headphones.isOn());
     };
     addAndMakeVisible (volume);
+    // the partner's output, as a channel card's 출력 row: 마스터, a direct pair, or OBS monitoring only
+    label (routeCaption, "route-caption", ko ("출력"), captionFont(), Palette::dimText);
+    const juce::String routeTexts[] { ko ("마스터"), ko ("직접 출력"), ko ("OBS에서 듣기") };
+    const char* routeIds[] { "route-master", "route-direct", "route-obs" };
+    for (int i = 0; i < 3; ++i)
+    {
+        auto& chip = routeChips[(size_t) i];
+        chip.setComponentID (routeIds[i]); chip.setButtonText (routeTexts[i]); chip.setClickingTogglesState (false);
+        chip.onClick = [this, i]
+        {
+            if (actions.route) actions.route ((collab::CollabAudio::Route) i, snapshot.routeFirst);
+        };
+        addAndMakeVisible (chip);
+    }
+    routePair.setComponentID ("route-pair"); routePair.setWantsKeyboardFocus (false);
+    routePair.onChange = [this]
+    {
+        // like a channel's direct output: a pair picked on a running ASIO device is stored; Windows shows 1-2 only
+        const int sel = routePair.getSelectedId();
+        const auto outputs = actions.outputs ? actions.outputs() : OutputPairs {};
+        if (sel > 0 && outputs.asio && outputs.running && sel + 1 <= outputs.numOutputs && actions.route)
+            actions.route (collab::CollabAudio::Route::direct, sel - 1);
+    };
+    addAndMakeVisible (routePair);
     meter.setComponentID ("peer-meter"); addAndMakeVisible (meter);
     const juce::String captions[] { ko ("지연"), ko ("버퍼"), ko ("손실"), ko ("샘플레이트") };
     for (int i = 0; i < 4; ++i)
@@ -306,8 +330,26 @@ void CollabPanel::setSnapshot (const collab::CollabSession::Snapshot& value)
     for (int i = 0; i < 4; ++i) roomDigits[(size_t) i].setText (snapshot.code.substring (i, i + 1), juce::dontSendNotification);
     leaveButton.setButtonText (snapshot.isHost ? ko ("방 닫기") : ko ("나가기"));
     for (auto* c : std::initializer_list<juce::Component*> { &peerNick, &connection, &headphones, &volumeCaption,
-                                                           &volumeValue, &volume, &meter, &rebufferButton }) c->setVisible (call);
+                                                           &volumeValue, &volume, &meter, &rebufferButton, &routePair, &routeCaption })
+        c->setVisible (call);
     for (auto& stat : stats) stat.setVisible (call);
+    for (auto& chip : routeChips) chip.setVisible (call);
+    for (int i = 0; i < 3; ++i) routeChips[(size_t) i].setToggleState ((int) snapshot.route == i, juce::dontSendNotification);
+    const auto outputs = actions.outputs ? actions.outputs() : OutputPairs {};
+    const bool direct = snapshot.route == collab::CollabAudio::Route::direct;
+    const auto pairKey = outputs.names.joinIntoString ("\n") + "|" + juce::String ((int) outputs.asio) + juce::String ((int) outputs.hasOutput)
+                         + "|" + juce::String (snapshot.routeFirst) + "|" + juce::String ((int) direct);
+    if (pairKey != routePairKey && ! routePair.isPopupActive())
+    {
+        routePairKey = pairKey;
+        fillDirectOutputCombo (routePair, routeChips[1], outputs.names, outputs.asio, outputs.hasOutput, snapshot.routeFirst, direct);
+    }
+    // heard in OBS: LiveMix plays no partner, so the headphone switch and volume have nothing to change
+    const bool audible = snapshot.route != collab::CollabAudio::Route::obs;
+    for (auto* c : std::initializer_list<juce::Component*> { &headphones, &volume, &volumeCaption, &volumeValue })
+    {
+        c->setEnabled (audible); c->setAlpha (audible ? 1.0f : 0.4f);
+    }
     connection.setText (state == State::disconnected ? ko ("연결 끊김") : ko ("연결됨"), juce::dontSendNotification);
     connection.setColour (juce::Label::textColourId, state == State::disconnected ? Palette::danger : Palette::lampOn);
     headphones.setOn (snapshot.monitorOn);
@@ -364,19 +406,30 @@ void CollabPanel::resized()
     const int outerGap = compact ? 6 : 12;
     if (inCall (state))
     {
-        firstCard = area.removeFromTop (222);
+        // the 출력 row keeps every control at its size: the 400 px window only tightens the gaps
+        const int callGap = compact ? 6 : 10;
+        firstCard = area.removeFromTop (28 + 21 + 32 + 40 + 15 + 32 + 46 + 5 * callGap);
         auto inner = firstCard.reduced (14);
         auto row = inner.removeFromTop (21);
         connection.setBounds (row.removeFromRight (labelWidthForText (connection, connection.getText())));
         row.removeFromRight (10); peerNick.setBounds (row);
         peerNick.setText (ellipsisedText (peerNick.getFont(), snapshot.peerNick, row.getWidth()), juce::dontSendNotification);
         peerNick.setTooltip (snapshot.peerNick);
-        inner.removeFromTop (10); headphones.setBounds (inner.removeFromTop (40));
-        inner.removeFromTop (10); row = inner.removeFromTop (15);
+        inner.removeFromTop (callGap); row = inner.removeFromTop (32);
+        // 마스터 62, 직접 출력 78, OBS에서 듣기 104 and at least 70 for the pair; the caption shows when it fits too
+        const bool captioned = row.getWidth() >= 40 + 62 + 78 + 104 + 3 * 6 + 70;
+        routeCaption.setVisible (captioned);
+        if (captioned) { routeCaption.setBounds (row.removeFromLeft (34)); row.removeFromLeft (6); }
+        routeChips[0].setBounds (row.removeFromLeft (62)); row.removeFromLeft (6);
+        routeChips[1].setBounds (row.removeFromLeft (78)); row.removeFromLeft (6);
+        routeChips[2].setBounds (row.removeFromRight (104)); row.removeFromRight (6);
+        routePair.setBounds (row);
+        inner.removeFromTop (callGap); headphones.setBounds (inner.removeFromTop (40));
+        inner.removeFromTop (callGap); row = inner.removeFromTop (15);
         volumeValue.setBounds (row.removeFromRight (60)); volumeCaption.setBounds (row);
-        inner.removeFromTop (10); volume.setBounds (inner.removeFromTop (32));
-        inner.removeFromTop (10); meter.setBounds (inner.removeFromTop (46));
-        area.removeFromTop (12);
+        inner.removeFromTop (callGap); volume.setBounds (inner.removeFromTop (32));
+        inner.removeFromTop (callGap); meter.setBounds (inner.removeFromTop (46));
+        area.removeFromTop (outerGap);
         row = area.removeFromTop (58);
         const int statWidth = (row.getWidth() - 24) / 4;
         for (int i = 0; i < 4; ++i)
@@ -384,7 +437,7 @@ void CollabPanel::resized()
             stats[(size_t) i].setBounds (i == 3 ? row : row.removeFromLeft (statWidth));
             if (i < 3) row.removeFromLeft (8);
         }
-        area.removeFromTop (12); row = area.removeFromTop (36);
+        area.removeFromTop (outerGap); row = area.removeFromTop (36);
         rebufferButton.setBounds (row.removeFromLeft ((row.getWidth() - 8) / 2));
         row.removeFromLeft (8); leaveButton.setBounds (row);
         return;
@@ -447,11 +500,13 @@ void CollabPanel::paint (juce::Graphics& g)
         }
 }
 
-CollabWindow::CollabWindow (collab::CollabSession& collab, LiveMixSettings& settings)
+CollabWindow::CollabWindow (collab::CollabSession& collab, LiveMixSettings& settings, std::function<CollabPanel::OutputPairs()> outputs)
     : DocumentWindow (ko ("합방"), Palette::background, DocumentWindow::allButtons), session (collab)
 {
     setUsingNativeTitleBar (true);
     CollabPanel::Actions actions;
+    actions.route = [this] (collab::CollabAudio::Route route, int first) { session.setRoute (route, first); timerCallback(); };
+    actions.outputs = std::move (outputs);
     actions.create = [this] (const auto& nick) { session.createRoom (nick); timerCallback(); };
     actions.join = [this] (const auto& code, const auto& nick) { session.joinRoom (code, nick); timerCallback(); };
     actions.leave = [this] { session.leave(); timerCallback(); };

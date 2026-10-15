@@ -536,11 +536,17 @@ void MixEngine::setObsEnabled (bool enabled)
 void MixEngine::finishOutput (float* const* outputs, int numOutputs, int offset, int frames,
                              float* const* splitBuffer, MonitorOutput* monitorOutput) noexcept
 {
-    const int first = outputFirst (master.outputFirst.load (std::memory_order_relaxed));
+    // The partner joins after the master on the master's pair, on a pair of its own, or nowhere when it is heard
+    // through OBS monitoring; never the master bus, which the partner and the 'LiveMix' OBS source receive.
+    using Route = collab::CollabAudio::Route;
+    const auto route = collab.getRoute();
+    const int first = outputFirst (route == Route::direct ? collab.getRouteFirst() : master.outputFirst.load (std::memory_order_relaxed));
+    const int count = splitBuffer != nullptr ? 2 : numOutputs;
     float* pair[2] {};
-    for (int ch = 0; ch < 2; ++ch)
-        pair[ch] = splitBuffer != nullptr ? splitBuffer[ch]
-            : (first + ch < numOutputs && outputs[first + ch] != nullptr ? outputs[first + ch] + offset : nullptr);
+    for (int ch = 0; ch < 2 && route != Route::obs; ++ch)
+        if (first + ch < count)
+            pair[ch] = splitBuffer != nullptr ? splitBuffer[first + ch]
+                : (outputs[first + ch] != nullptr ? outputs[first + ch] + offset : nullptr);
     collab.renderRemote (pair, 2, 0, frames);
     if (splitBuffer != nullptr && monitorOutput != nullptr)
         monitorOutput->push (splitBuffer[0], splitBuffer[1], frames);
