@@ -123,6 +123,7 @@ private:
     void timerCallback() override;
     collab::CollabSession& session;
     CollabPanel* content = nullptr;
+    juce::TooltipWindow tooltips { this, 700 };   // LiveMix has no app-wide one: the full peer name and the pair note
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (CollabWindow)
 };
 }

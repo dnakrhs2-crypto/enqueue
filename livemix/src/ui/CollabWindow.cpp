@@ -343,12 +343,15 @@ void CollabPanel::setSnapshot (const collab::CollabSession::Snapshot& value)
     {
         routePairKey = pairKey;
         fillDirectOutputCombo (routePair, routeChips[1], outputs.names, outputs.asio, outputs.hasOutput, snapshot.routeFirst, direct);
+        routeChips[1].setAlpha (routeChips[1].isEnabled() ? 1.0f : 0.45f);   // no output device: it looks as off as it is
     }
-    // heard in OBS: LiveMix plays no partner, so the headphone switch and volume have nothing to change
+    // heard in OBS: LiveMix plays no partner, so the headphone switch and volume have nothing to change (the two labels
+    // only fade: a disabled Label already halves its text)
     const bool audible = snapshot.route != collab::CollabAudio::Route::obs;
     for (auto* c : std::initializer_list<juce::Component*> { &headphones, &volume, &volumeCaption, &volumeValue })
     {
-        c->setEnabled (audible); c->setAlpha (audible ? 1.0f : 0.4f);
+        if (c != &volumeCaption && c != &volumeValue) c->setEnabled (audible);
+        c->setAlpha (audible ? 1.0f : 0.4f);
     }
     connection.setText (state == State::disconnected ? ko ("연결 끊김") : ko ("연결됨"), juce::dontSendNotification);
     connection.setColour (juce::Label::textColourId, state == State::disconnected ? Palette::danger : Palette::lampOn);
@@ -416,13 +419,14 @@ void CollabPanel::resized()
         peerNick.setText (ellipsisedText (peerNick.getFont(), snapshot.peerNick, row.getWidth()), juce::dontSendNotification);
         peerNick.setTooltip (snapshot.peerNick);
         inner.removeFromTop (callGap); row = inner.removeFromTop (32);
-        // 마스터 62, 직접 출력 78, OBS에서 듣기 104 and at least 70 for the pair; the caption shows when it fits too
-        const bool captioned = row.getWidth() >= 40 + 62 + 78 + 104 + 3 * 6 + 70;
+        // 마스터 58, 직접 출력 74, OBS에서 듣기 100; the pair keeps the 88 px of a channel card's direct output, where
+        // '31-32 …' reads in full; the caption shows only when it fits too
+        const bool captioned = row.getWidth() >= 40 + 58 + 74 + 100 + 3 * 6 + 88;
         routeCaption.setVisible (captioned);
         if (captioned) { routeCaption.setBounds (row.removeFromLeft (34)); row.removeFromLeft (6); }
-        routeChips[0].setBounds (row.removeFromLeft (62)); row.removeFromLeft (6);
-        routeChips[1].setBounds (row.removeFromLeft (78)); row.removeFromLeft (6);
-        routeChips[2].setBounds (row.removeFromRight (104)); row.removeFromRight (6);
+        routeChips[0].setBounds (row.removeFromLeft (58)); row.removeFromLeft (6);
+        routeChips[1].setBounds (row.removeFromLeft (74)); row.removeFromLeft (6);
+        routeChips[2].setBounds (row.removeFromRight (100)); row.removeFromRight (6);
         routePair.setBounds (row);
         inner.removeFromTop (callGap); headphones.setBounds (inner.removeFromTop (40));
         inner.removeFromTop (callGap); row = inner.removeFromTop (15);

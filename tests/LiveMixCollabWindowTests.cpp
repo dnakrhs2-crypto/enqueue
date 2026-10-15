@@ -129,6 +129,11 @@ public:
                         expect (juce::GlyphArrangement::getStringWidthInt (captionFont(), stat.caption) <= stat.getWidth() - 16,
                                 "stat caption fits " + tag + "/" + juce::String ((int) i));
                     }
+                    // the partner's pair box reads a named ASIO pair up to '31-32 …', as a channel card's direct output
+                    for (auto* c : child<juce::ComboBox> (panel, "route-pair").getChildren())
+                        if (auto* text = dynamic_cast<juce::Label*> (c))
+                            expect (juce::GlyphArrangement::getStringWidthInt (text->getFont(), "31-32 ...")
+                                        <= text->getWidth() - text->getBorderSize().getLeftAndRight(), "the widest pair reads in full " + tag);
                     const auto& rate = CollabPanelTestAccess::statistic (panel, 3);
                     expectEquals (rate.caption, ko ("샘플레이트")); expectEquals (rate.unit, juce::String ("kHz"));
                     expectEquals (rate.value, juce::String (snapshots[n].wireRate == 44100 ? "44.1" : "48"));
@@ -300,6 +305,8 @@ public:
             call.route = Route::obs; call.routeFirst = 2; input.setSnapshot (call);
             expect (inObs.getToggleState() && ! pair.isEnabled());
             expect (! child<LampButton> (input, "headphones").isEnabled() && ! child<juce::Slider> (input, "volume").isEnabled());
+            auto& volumeCaption = child<juce::Label> (input, "volume-caption");   // faded once, not also disabled (half again)
+            expect (volumeCaption.isEnabled() && volumeCaption.getAlpha() < 1.0f);
             call.route = Route::master; input.setSnapshot (call);
             expect (child<LampButton> (input, "headphones").isEnabled() && child<juce::Slider> (input, "volume").isEnabled());
             settings.setCollabRoute (2); settings.setCollabRouteFirst (4); settings.saveIfNeeded();
