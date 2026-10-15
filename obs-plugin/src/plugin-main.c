@@ -23,10 +23,16 @@ OBS_DECLARE_MODULE()
 OBS_MODULE_USE_DEFAULT_LOCALE("livemix-obs", "en-US")
 
 static lm_connection *connection;
+static lm_connection *peer_connection;
 
 lm_connection *livemix_obs_connection(void)
 {
 	return connection;
+}
+
+lm_connection *livemix_obs_peer_connection(void)
+{
+	return peer_connection;
 }
 
 static void receiver_log(void *context, enum lm_log_level level, const char *format, const char *message)
@@ -57,10 +63,27 @@ bool obs_module_load(void)
 		lm_connection_destroy(connection);
 		connection = NULL;
 		blog(LOG_ERROR, "[livemix-obs] Could not start the connection manager");
-		return false;
 	}
+	lm_connection_config peer_config = {0};
+	peer_config.ring_name = L"Local\\LiveMix.ObsAudio.v1.Peer";
+	peer_config.log = receiver_log;
+	wchar_t test_peer_ring[128];
+	DWORD test_peer_ring_length = GetEnvironmentVariableW(L"LIVEMIX_OBS_PEER_RING", test_peer_ring, 128);
+	if (test_peer_ring_length > 0 && test_peer_ring_length < 128) {
+		peer_config.ring_name = test_peer_ring;
+		blog(LOG_INFO, "[livemix-obs] Test ring from LIVEMIX_OBS_PEER_RING");
+	}
+	peer_connection = lm_connection_create(&peer_config);
+	if (!peer_connection || !lm_connection_start(peer_connection)) {
+		lm_connection_destroy(peer_connection);
+		peer_connection = NULL;
+		blog(LOG_ERROR, "[livemix-obs] Could not start the peer connection manager");
+	}
+	if (!connection && !peer_connection)
+		return false;
 	obs_register_source(&livemix_master_source);
 	obs_register_source(&livemix_master_filter);
+	obs_register_source(&livemix_peer_source);
 	blog(LOG_INFO, "[livemix-obs] Loaded version %s", PLUGIN_VERSION);
 	return true;
 }
@@ -69,4 +92,6 @@ void obs_module_unload(void)
 {
 	lm_connection_destroy(connection);
 	connection = NULL;
+	lm_connection_destroy(peer_connection);
+	peer_connection = NULL;
 }

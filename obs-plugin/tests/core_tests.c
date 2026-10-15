@@ -105,7 +105,6 @@ static bool fixture_open(fixture *f)
 	swprintf(f->readers_name, 144, L"%ls.Readers", f->ring_name);
 	lm_connection_config config = {0};
 	config.ring_name = f->ring_name;
-	config.readers_name = f->readers_name;
 	config.now = test_now;
 	config.clock_context = f;
 	config.qpc_frequency = TEST_QPC;
@@ -946,6 +945,94 @@ done:
 	return ok;
 }
 
+static bool test_independent_connections(void)
+{
+	fixture streams[2] = {0};
+	fixture *master = &streams[0], *peer = &streams[1];
+	HANDLE mappings[2] = {0};
+	lm_obs_readers *readers[2] = {0};
+	lm_obs_reader_slot *slots[2] = {0};
+	bool ok = true;
+	CHECK(fixture_open(master));
+	CHECK(fixture_open(peer));
+	CHECK(writer_open(master, (DWORD)RING_BYTES));
+	/* The master works while the partner's ring has not been created yet. */
+	for (int i = 0; i < 300; ++i) {
+		tick(master, true, true);
+		tick(peer, false, true);
+	}
+	CHECK(lm_receiver_connected(master->receiver) && settled(master, 0.5f));
+	CHECK(!lm_receiver_connected(peer->receiver) && silent(peer));
+
+	peer->rate = 44100;
+	peer->value = -0.25f;
+	CHECK(writer_open(peer, (DWORD)RING_BYTES));
+	for (int i = 0; i < 300; ++i) {
+		tick(master, true, true);
+		tick(peer, true, true);
+	}
+	CHECK(lm_receiver_connected(master->receiver) && settled(master, 0.5f));
+	CHECK(lm_receiver_connected(peer->receiver) && settled(peer, -0.25f));
+	/* Each connection derives its own <ring_name>.Readers and process slot. */
+	for (int stream = 0; stream < 2; ++stream) {
+		mappings[stream] = OpenFileMappingW(FILE_MAP_READ, FALSE, streams[stream].readers_name);
+		CHECK(mappings[stream] != NULL);
+		readers[stream] = MapViewOfFile(mappings[stream], FILE_MAP_READ, 0, 0, sizeof(lm_obs_readers));
+		CHECK(readers[stream] != NULL);
+		int claimed = 0;
+		for (int i = 0; i < LM_OBS_MAX_READERS; ++i) {
+			if (lm_obs_load_acquire(&readers[stream]->slot[i].pid) == GetCurrentProcessId()) {
+				slots[stream] = &readers[stream]->slot[i];
+				++claimed;
+			}
+		}
+		CHECK(claimed == 1);
+		CHECK(lm_obs_load_acquire(&slots[stream]->kind) == 1);
+		CHECK(streams[stream].now - lm_obs_load_acquire(&slots[stream]->heartbeat_qpc) <= TEST_QPC);
+	}
+
+	lm_obs_store_release(&peer->header->send_enabled, 0);
+	for (int i = 0; i < 100; ++i) {
+		tick(master, true, true);
+		tick(peer, false, true);
+	}
+	CHECK(lm_receiver_connected(master->receiver) && settled(master, 0.5f));
+	CHECK(!lm_receiver_connected(peer->receiver) && silent(peer));
+	writer_restart(peer, TEST_RATE, 0.25f);
+	for (int i = 0; i < 300; ++i) {
+		tick(master, true, true);
+		tick(peer, true, true);
+	}
+	CHECK(settled(master, 0.5f) && settled(peer, 0.25f));
+	lm_receiver_stats master_stats, peer_stats;
+	lm_receiver_get_stats(master->receiver, &master_stats);
+	lm_receiver_get_stats(peer->receiver, &peer_stats);
+	CHECK(master_stats.connected && peer_stats.connected);
+	CHECK(master_stats.epoch == 1 && peer_stats.epoch == 2);
+	CHECK(master_stats.underruns == 0 && master_stats.overruns == 0);
+
+	/* Unloading the master leaves the peer's audio and reader slot active. */
+	lm_receiver_destroy(master->receiver);
+	master->receiver = NULL;
+	lm_connection_destroy(master->connection);
+	master->connection = NULL;
+	for (int i = 0; i < 200; ++i)
+		tick(peer, true, true);
+	CHECK(lm_receiver_connected(peer->receiver) && settled(peer, 0.25f));
+	CHECK(lm_obs_load_acquire(&slots[0]->pid) == 0);
+	CHECK(lm_obs_load_acquire(&slots[1]->pid) == GetCurrentProcessId());
+	CHECK(peer->now - lm_obs_load_acquire(&slots[1]->heartbeat_qpc) <= TEST_QPC);
+done:
+	for (int stream = 0; stream < 2; ++stream) {
+		fixture_close(&streams[stream]);
+		if (readers[stream])
+			UnmapViewOfFile(readers[stream]);
+		if (mappings[stream])
+			CloseHandle(mappings[stream]);
+	}
+	return ok;
+}
+
 static bool test_large_pull(void)
 {
 	fixture f;
@@ -1389,6 +1476,7 @@ int main(int argc, char **argv)
 	run_test("audio continues when readers mapping access is denied", test_presence_optional);
 	run_test("concurrent heartbeat and stale buffered audio", test_heartbeat_boundaries);
 	run_test("independent receivers sharing one process slot", test_independent_receivers);
+	run_test("independent master and peer connections use separate rings and reader slots", test_independent_connections);
 	run_test("large pull bounds, exact length and silence", test_large_pull);
 	run_test("background manager and concurrent ASRC handoff", test_threaded_format_handoff);
 	run_test("diagnostics: source events survive bursts outside audio pulls", test_source_events);

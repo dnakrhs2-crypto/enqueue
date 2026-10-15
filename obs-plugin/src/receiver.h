@@ -35,7 +35,7 @@ typedef struct lm_receiver_stats {
 	bool connected;
 } lm_receiver_stats;
 
-/* One connection per module. All create/destroy/start operations are off the
+/* One connection per ring. All create/destroy/start operations are off the
  * audio thread. Destroy receivers before their connection, and stop their
  * audio callbacks before destroying a receiver. Published views live until
  * connection destruction, including while the writer is stopped/restarted. */

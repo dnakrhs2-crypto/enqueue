@@ -82,6 +82,12 @@ static const char *source_name(void *type_data)
 	return obs_module_text("Source.Name");
 }
 
+static const char *peer_source_name(void *type_data)
+{
+	(void)type_data;
+	return obs_module_text("PeerSource.Name");
+}
+
 static void source_destroy(void *data)
 {
 	livemix_source *s = data;
@@ -96,16 +102,15 @@ static void source_destroy(void *data)
 	free(s);
 }
 
-static void *source_create(obs_data_t *settings, obs_source_t *source)
+static void *source_create_for_connection(obs_source_t *source, lm_connection *connection)
 {
-	(void)settings;
 	livemix_source *s = calloc(1, sizeof(*s));
 	if (!s)
 		return NULL;
 	s->source = source;
 	audio_t *audio = obs_get_audio();
 	uint32_t rate = audio ? audio_output_get_sample_rate(audio) : 48000;
-	s->receiver = lm_receiver_create(livemix_obs_connection(), rate);
+	s->receiver = lm_receiver_create(connection, rate);
 	if (s->receiver)
 		s->thread = CreateThread(NULL, 0, source_worker, s, 0, NULL);
 	if (!s->thread) {
@@ -115,13 +120,35 @@ static void *source_create(obs_data_t *settings, obs_source_t *source)
 	return s;
 }
 
-static obs_properties_t *source_properties(void *data)
+static void *source_create(obs_data_t *settings, obs_source_t *source)
+{
+	(void)settings;
+	return source_create_for_connection(source, livemix_obs_connection());
+}
+
+static void *peer_source_create(obs_data_t *settings, obs_source_t *source)
+{
+	(void)settings;
+	return source_create_for_connection(source, livemix_obs_peer_connection());
+}
+
+static obs_properties_t *source_properties_for_status(void *data, const char *connected_key, const char *waiting_key)
 {
 	livemix_source *s = data;
 	obs_properties_t *properties = obs_properties_create();
-	const char *key = s && lm_receiver_connected(s->receiver) ? "Status.Connected" : "Status.Waiting";
+	const char *key = s && lm_receiver_connected(s->receiver) ? connected_key : waiting_key;
 	obs_properties_add_text(properties, "status", obs_module_text(key), OBS_TEXT_INFO);
 	return properties;
+}
+
+static obs_properties_t *source_properties(void *data)
+{
+	return source_properties_for_status(data, "Status.Connected", "Status.Waiting");
+}
+
+static obs_properties_t *peer_source_properties(void *data)
+{
+	return source_properties_for_status(data, "PeerStatus.Connected", "PeerStatus.Waiting");
 }
 
 struct obs_source_info livemix_master_source = {
@@ -132,4 +159,14 @@ struct obs_source_info livemix_master_source = {
 	.create = source_create,
 	.destroy = source_destroy,
 	.get_properties = source_properties,
+};
+
+struct obs_source_info livemix_peer_source = {
+	.id = "livemix_peer_source",
+	.type = OBS_SOURCE_TYPE_INPUT,
+	.output_flags = OBS_SOURCE_AUDIO,
+	.get_name = peer_source_name,
+	.create = peer_source_create,
+	.destroy = source_destroy,
+	.get_properties = peer_source_properties,
 };
