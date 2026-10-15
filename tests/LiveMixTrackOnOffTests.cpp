@@ -419,6 +419,23 @@ public:
                     expect (labelWithText (*content, ko ("게스트 마이크 ON/OFF")) != nullptr);
                     expect (labelWithText (*content, ko ("마이크 2 ON/OFF")) == nullptr);
 
+                    // design check: a long channel name is shortened with '…', never squeezed, and ' ON/OFF' stays;
+                    // the whole name is in the tooltip
+                    const auto longName = ko ("게스트 마이크 - 무선 핸드헬드 (왼쪽 스탠드, 2번 수신기)");
+                    rig.doc.renameChannel (rig.doc.getSession().channels[1].id, longName);
+                    SettingsDialog::tracksChanged();
+                    juce::Label* longRow = nullptr;
+                    for (auto* child : content->getChildren())
+                        if (auto* l = dynamic_cast<juce::Label*> (child); l != nullptr && l->getTooltip() == longName + " ON/OFF")
+                            longRow = l;
+                    expect (longRow != nullptr);
+                    if (longRow != nullptr)
+                    {
+                        expect (longRow->getText().endsWith (" ON/OFF") && longRow->getText().contains (juce::String::fromUTF8 ("\xe2\x80\xa6")));
+                        expectEquals (longRow->getMinimumHorizontalScale(), 1.0f);
+                        expect (labelWidthForText (*longRow, longRow->getText()) <= longRow->getWidth());
+                    }
+
                     // review 1 (P2): mic 2 keeps F11, mic 2 is removed: its key stays in sight (dimmed, clearable) and
                     // FX 1 cannot take it, or both would claim F11 once a second mic is back
                     TrackHotkeys::setKey (settings, Kind::mic, 2, "F11");

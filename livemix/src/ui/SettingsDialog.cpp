@@ -677,13 +677,16 @@ namespace
             int labelWidth = 0;
 
             for (const auto* hotkey : order)
-                labelWidth = juce::jmax (labelWidth, labelWidthForText (*hotkey->label, hotkey->label->getText()));
+                labelWidth = juce::jmax (labelWidth, labelWidthForText (*hotkey->label, hotkey->text));
 
             labelWidth = juce::jmin (labelWidth, 240);   // a long mic / FX name gives way before the key does
 
             for (const auto* hotkey : order)
             {
                 auto r = area.removeFromTop (30);
+                const auto shown = fitRowText (*hotkey->label, hotkey->text, labelWidth);
+                hotkey->label->setText (shown, juce::dontSendNotification);
+                hotkey->label->setTooltip (shown != hotkey->text ? hotkey->text : juce::String());
                 hotkey->label->setBounds (r.removeFromLeft (labelWidth));
                 hotkey->clear->setBounds (r.removeFromRight (34));
                 r.removeFromRight (6);
@@ -747,7 +750,36 @@ namespace
         double pendingRate = 0.0;       // an ASIO rate that just opened, watched for a reset that leaves it (3 s)
         juce::uint32 pendingSince = 0;
         int pendingOpenCount = 0;       // engine.getOpenCount() then: any later openDevice() is no reset
-        struct Row { juce::Label* label = nullptr; HotkeyButton* button = nullptr; juce::TextButton* clear = nullptr; std::unique_ptr<HotkeyReason> reason; };
+        struct Row
+        {
+            juce::Label* label = nullptr;
+            HotkeyButton* button = nullptr;
+            juce::TextButton* clear = nullptr;
+            std::unique_ptr<HotkeyReason> reason;
+            juce::String text;   // the whole row name: the label shows it, shortened to its column if need be
+        };
+
+        /** A row name too wide for the label column: the channel's name gives way with '…', never its ' ON/OFF'
+            (design check, 10/15: JUCE would squeeze the letters and then cut the end off). */
+        static juce::String fitRowText (const juce::Label& label, const juce::String& text, int width)
+        {
+            if (labelWidthForText (label, text) <= width)
+                return text;
+
+            const juce::String suffix = text.endsWith (" ON/OFF") ? " ON/OFF" : "";
+            const auto name = text.dropLastCharacters (suffix.length());
+            const auto ellipsis = juce::String::fromUTF8 ("\xe2\x80\xa6");
+
+            for (int keep = name.length() - 1; keep > 0; --keep)
+            {
+                const auto shortened = name.substring (0, keep).trimEnd() + ellipsis + suffix;
+
+                if (labelWidthForText (label, shortened) <= width)
+                    return shortened;
+            }
+
+            return ellipsis + suffix;
+        }
 
         /** A mic's / an FX's ON/OFF row: widgets of its own, made again when the session's tracks change. */
         struct TrackRow
@@ -770,7 +802,9 @@ namespace
             label.setText (text, juce::dontSendNotification);
             label.setFont (bodyFont (14.0f));
             label.setColour (juce::Label::textColourId, Palette::text);
+            label.setMinimumHorizontalScale (1.0f);   // shortened by fitRowText, never squeezed
             addAndMakeVisible (label);
+            row.text = text;
             button.setHotkey (get());
             row.reason = std::make_unique<HotkeyReason>();
             addChildComponent (*row.reason);
