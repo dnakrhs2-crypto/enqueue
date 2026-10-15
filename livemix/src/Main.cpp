@@ -182,7 +182,8 @@ public:
         juce::LookAndFeel::setDefaultLookAndFeel (lookAndFeel.get());
 
         settings = std::make_unique<LiveMixSettings>();
-        engine = std::make_unique<MixEngine>();
+        // tests only (as the OBS plugin's LIVEMIX_OBS_RING): two copies on one PC write their own rings, <name>.Peer too
+        engine = std::make_unique<MixEngine> (juce::SystemStats::getEnvironmentVariable ("LIVEMIX_OBS_RING", {}));
         collabSession = std::make_unique<collab::CollabSession> (*engine, *settings);
         engine->setSkipChainWhenOff (settings->getSkipPluginsWhenOff());
         engine->setSendTransport (settings->getSendTransport());

@@ -1,4 +1,5 @@
 #include "LiveMixSettings.h"
+#include "CollabProtocol.h"
 
 #include "WebDavBackup.h"
 
@@ -28,6 +29,7 @@ namespace Keys
     constexpr const char* externalControlEnabled = "externalControlEnabled";
     constexpr const char* collabNick = "collabNick";
     constexpr const char* collabPort = "collabPort";
+    constexpr const char* collabRate = "collabRate";
     constexpr const char* collabMonitorVolume = "collabMonitorVolume";
     constexpr const char* collabMonitorOn = "collabMonitorOn";
     constexpr const char* collabInstallId = "collabInstallId";
@@ -164,6 +166,15 @@ juce::String LiveMixSettings::getCollabNick() const { return settings->getValue 
 void LiveMixSettings::setCollabNick (const juce::String& nick) { settings->setValue (Keys::collabNick, nick.trim().substring (0, 40)); }
 int LiveMixSettings::getCollabPort() const { return juce::jlimit (1024, 65535, settings->getIntValue (Keys::collabPort, 49731)); }
 void LiveMixSettings::setCollabPort (int port) { settings->setValue (Keys::collabPort, juce::jlimit (1024, 65535, port)); }
+int LiveMixSettings::getCollabRate() const
+{
+    const int rate = settings->getIntValue (Keys::collabRate, collab::defaultWireRate);
+    return collab::isValidWireRate (rate) ? rate : collab::defaultWireRate;
+}
+void LiveMixSettings::setCollabRate (int rate)
+{
+    if (collab::isValidWireRate (rate)) settings->setValue (Keys::collabRate, rate);
+}
 float LiveMixSettings::getCollabMonitorVolume() const { return (float) juce::jlimit (0.0, 1.0, settings->getDoubleValue (Keys::collabMonitorVolume, 1.0)); }
 void LiveMixSettings::setCollabMonitorVolume (float volume01) { settings->setValue (Keys::collabMonitorVolume, juce::jlimit (0.0f, 1.0f, volume01)); }
 bool LiveMixSettings::getCollabMonitorOn() const { return settings->getBoolValue (Keys::collabMonitorOn, true); }

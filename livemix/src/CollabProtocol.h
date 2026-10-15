@@ -6,7 +6,9 @@
 
 namespace gocue::livemix::collab
 {
-inline constexpr int wireRate = 48000, framesPerPacket = 120, channels = 2, bytesPerSample = 3;
+inline constexpr int defaultWireRate = 48000, framesPerPacket = 120, channels = 2, bytesPerSample = 3;
+inline constexpr bool isValidWireRate (uint32_t rate) { return rate == 44100 || rate == 48000; }
+inline constexpr double packetDurationMs (uint32_t rate) { return framesPerPacket * 1000.0 / rate; }
 inline constexpr int headerBytes = 36, maxDatagram = 1200, audioBytes = framesPerPacket * channels * bytesPerSample;
 inline constexpr uint32_t magic = 0x42434d4c;
 inline constexpr uint8_t version = 1;
@@ -27,14 +29,16 @@ struct Header
 
 // hello/welcome: u8 nicknameBytes @0, UTF-8 nickname @1 (0..64 bytes),
 // u32 inputLatencyUs, u32 outputLatencyUs, u8 versionBytes, UTF-8 appVersion
-// (0..32 bytes), u32 deviceRateHz. The last field accounts for the sender ASRC.
+// (0..32 bytes), u32 deviceRateHz, u32 wireRateHz (44100 or 48000).
+// deviceRateHz accounts for the sender ASRC. The host's welcome sets the room wire rate;
+// the guest's hello reports its initial preference, then the accepted room rate.
 // ping/pong: u64 monotonic nanoseconds @0 (pong echoes ping unchanged).
 // bye: empty. probe: 16 opaque nonce bytes; all header fields except kind/length zero.
 struct PeerInfo
 {
     juce::String nickname, appVersion = "0.15.0";
     double inputLatencyMs = 0.0, outputLatencyMs = 0.0;
-    uint32_t deviceRate = wireRate;
+    uint32_t deviceRate = defaultWireRate, wireRate = defaultWireRate;
 };
 using Nonce = std::array<uint8_t, 16>;
 

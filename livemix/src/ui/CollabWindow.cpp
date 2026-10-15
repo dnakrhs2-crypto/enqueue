@@ -7,6 +7,7 @@ namespace
 {
 using State = collab::CollabSession::State;
 bool inCall (State state) { return state == State::connected || state == State::disconnected; }
+juce::String rateNumber (uint32_t rate) { return rate == 44100 ? "44.1" : "48"; }
 void card (juce::Graphics& g, juce::Rectangle<int> bounds, juce::Colour line = Palette::line)
 {
     if (bounds.isEmpty()) return;
@@ -15,11 +16,11 @@ void card (juce::Graphics& g, juce::Rectangle<int> bounds, juce::Colour line = P
     g.setColour (line);
     g.drawRoundedRectangle (bounds.toFloat().reduced (0.5f), Palette::cardRadius, 1.0f);
 }
-juce::TextLayout messageLayout (const juce::String& text, int width)
+juce::TextLayout messageLayout (const juce::String& text, int width, float size, juce::Colour colour)
 {
     if (width <= 0) return {};
     // DirectWrite permits breaks inside Korean words; the reference uses word-break: keep-all.
-    const auto font = bodyFont (15.0f);
+    const auto font = bodyFont (size);
     juce::String wrapped, line;
     for (const auto& word : juce::StringArray::fromTokens (text, " ", ""))
     {
@@ -33,7 +34,7 @@ juce::TextLayout messageLayout (const juce::String& text, int width)
     }
     juce::AttributedString attributed;
     attributed.setWordWrap (juce::AttributedString::none);
-    attributed.append (wrapped + line, font, Palette::text);
+    attributed.append (wrapped + line, font, colour);
     juce::TextLayout layout;
     layout.createLayout (attributed, (float) width);
     return layout;
@@ -151,24 +152,31 @@ void CollabCodeEntry::resized()
 }
 
 void CollabPanel::Message::setText (const juce::String& value) { text = value; resized(); repaint(); }
-void CollabPanel::Message::resized() { layout = messageLayout (text, getWidth()); }
+void CollabPanel::Message::resized() { layout = messageLayout (text, getWidth(), size, colour); }
 void CollabPanel::Message::paint (juce::Graphics& g) { layout.draw (g, getLocalBounds().toFloat()); }
-int CollabPanel::Message::heightFor (int width) const { return (int) std::ceil (messageLayout (text, width).getHeight()); }
+int CollabPanel::Message::heightFor (int width) const
+{
+    return (int) std::ceil (messageLayout (text, width, size, colour).getHeight());
+}
 void CollabPanel::Statistic::paint (juce::Graphics& g)
 {
     g.setColour (Palette::card2);
     g.fillRoundedRectangle (getLocalBounds().toFloat(), Palette::controlRadius);
     g.setColour (Palette::line);
     g.drawRoundedRectangle (getLocalBounds().toFloat().reduced (0.5f), Palette::controlRadius, 1.0f);
-    auto area = getLocalBounds().reduced (12, 8);
+    auto area = getLocalBounds().reduced (8, 8);
     g.setColour (Palette::dimText); g.setFont (captionFont());
     g.drawText (caption, area.removeFromTop (15), juce::Justification::centredLeft);
     area.removeFromTop (2);
     const int unitWidth = juce::GlyphArrangement::getStringWidthInt (bodyFont (14.0f), unit);
-    const auto shown = ellipsisedText (titleFont (20.0f), value, area.getWidth() - unitWidth - 3);
-    const int width = juce::GlyphArrangement::getStringWidthInt (titleFont (20.0f), shown);
-    g.setColour (Palette::text); g.setFont (titleFont (20.0f));
-    g.drawText (shown, area.removeFromLeft (width), juce::Justification::centredLeft);
+    auto valueFont = titleFont (20.0f);
+    const int available = area.getWidth() - unitWidth - 3;
+    const int naturalWidth = juce::GlyphArrangement::getStringWidthInt (valueFont, value);
+    if (naturalWidth > available && available > 0)
+        valueFont.setHeight (valueFont.getHeight() * available / naturalWidth);
+    const int width = juce::GlyphArrangement::getStringWidthInt (valueFont, value);
+    g.setColour (Palette::text); g.setFont (valueFont);
+    g.drawText (value, area.removeFromLeft (width), juce::Justification::centredLeft);
     area.removeFromLeft (3);
     g.setColour (Palette::dimText); g.setFont (bodyFont (14.0f));
     g.drawText (unit, area.withTrimmedTop (5), juce::Justification::centredLeft);
@@ -184,8 +192,10 @@ CollabPanel::CollabPanel (LiveMixSettings& prefs, Actions callbacks) : settings 
     };
     label (nickCaption, "nick-caption", ko ("닉네임"), captionFont(), Palette::dimText);
     label (codeCaption, "code-caption", ko ("방 코드"), captionFont(), Palette::dimText);
+    label (rateCaption, "rate-caption", ko ("샘플레이트"), captionFont(), Palette::dimText);
+    label (roomRate, "room-rate", {}, titleFont (14.0f), Palette::dimText);
+    roomRate.setJustificationType (juce::Justification::centredRight);
     label (waiting, "waiting", ko ("상대를 기다리는 중"), titleFont (14.0f), Palette::dimText);
-    label (reason, "reason", {}, bodyFont (14.0f), Palette::dimText);
     label (notice, "notice", {}, bodyFont (14.0f), Palette::danger);
     label (peerNick, "peer-nick", {}, titleFont(), Palette::text);
     label (connection, "connection", {}, titleFont (14.0f), Palette::lampOn);
@@ -201,11 +211,29 @@ CollabPanel::CollabPanel (LiveMixSettings& prefs, Actions callbacks) : settings 
     }
     auto button = [this] (juce::TextButton& b, const char* id, const juce::String& text, std::function<void()> action)
     {
-        b.setComponentID (id); b.setButtonText (text); b.onClick = std::move (action); addAndMakeVisible (b);
+        // no keyboard focus (the app's rule): hiding the focused nickname must not hand Enter to 방 닫기
+        b.setComponentID (id); b.setButtonText (text); b.onClick = std::move (action); b.setWantsKeyboardFocus (false);
+        addAndMakeVisible (b);
     };
-    const auto create = [this] { if (actions.create) actions.create (settings.getCollabNick()); };
+    const auto create = [this]
+    {
+        if (snapshot.state != State::checkingHost && actions.create) actions.create (settings.getCollabNick());
+    };
     button (createButton, "create", ko ("방 만들기"), create);
     createButton.setToggleState (true, juce::dontSendNotification);
+    for (int i = 0; i < 2; ++i)
+    {
+        auto& chip = rateChips[(size_t) i];
+        const int rate = i == 0 ? 48000 : 44100;
+        chip.setComponentID ("rate-" + juce::String (rate));
+        chip.setButtonText (rateNumber (rate) + " kHz");
+        chip.setClickingTogglesState (false); chip.setWantsKeyboardFocus (false);
+        chip.onClick = [this, rate]
+        {
+            settings.setCollabRate (rate); settings.saveIfNeeded(); updateEnabled();
+        };
+        addAndMakeVisible (chip);
+    }
     button (joinButton, "join", ko ("참가"), [this] { join(); });
     button (retryButton, "retry", ko ("다시 확인"), create);
     button (dismissButton, "dismiss", ko ("닫기"), actions.leave);
@@ -223,6 +251,7 @@ CollabPanel::CollabPanel (LiveMixSettings& prefs, Actions callbacks) : settings 
     code.setComponentID ("code"); code.onChange = [this] { updateEnabled(); };
     code.onSubmit = [this] { join(); }; code.onEscape = actions.hide; addAndMakeVisible (code);
     message.setComponentID ("host-message"); addAndMakeVisible (message);
+    reason.setComponentID ("reason"); reason.size = 14.0f; reason.colour = Palette::dimText; addAndMakeVisible (reason);
     headphones.setComponentID ("headphones");
     headphones.setTexts (ko ("헤드폰 ON"), ko ("헤드폰 OFF"), {});
     headphones.onClick = [this]
@@ -240,10 +269,10 @@ CollabPanel::CollabPanel (LiveMixSettings& prefs, Actions callbacks) : settings 
     };
     addAndMakeVisible (volume);
     meter.setComponentID ("peer-meter"); addAndMakeVisible (meter);
-    const juce::String captions[] { ko ("지연"), ko ("버퍼"), ko ("손실") };
-    for (int i = 0; i < 3; ++i)
+    const juce::String captions[] { ko ("지연"), ko ("버퍼"), ko ("손실"), ko ("샘플레이트") };
+    for (int i = 0; i < 4; ++i)
     {
-        auto& stat = stats[(size_t) i]; stat.caption = captions[i]; stat.unit = i == 2 ? "%" : "ms";
+        auto& stat = stats[(size_t) i]; stat.caption = captions[i]; stat.unit = i == 3 ? "kHz" : i == 2 ? "%" : "ms";
         stat.setComponentID ("stat-" + juce::String (i)); addAndMakeVisible (stat);
     }
     setSize (440, 430);
@@ -260,11 +289,15 @@ void CollabPanel::setSnapshot (const collab::CollabSession::Snapshot& value)
     nickname.setReadOnly (! entry || state == State::checkingHost || state == State::joining);
     codeCaption.setVisible (! call); code.setVisible (entry);
     createButton.setVisible (entry && ! failed); joinButton.setVisible (entry);
+    rateCaption.setVisible (entry && ! failed);
+    for (auto& chip : rateChips) chip.setVisible (entry && ! failed);
+    roomRate.setVisible (host);
+    roomRate.setText (rateNumber (snapshot.wireRate) + " kHz", juce::dontSendNotification);
     for (auto& digit : roomDigits) digit.setVisible (host);
     waiting.setVisible (host); leaveButton.setVisible (host || call);
     message.setVisible (failed); reason.setVisible (failed); retryButton.setVisible (failed); dismissButton.setVisible (failed);
     message.setText (snapshot.message.upToFirstOccurrenceOf ("\n", false, false));
-    reason.setText (snapshot.reason, juce::dontSendNotification); reason.setTooltip (snapshot.reason);
+    reason.setText (snapshot.reason);
     notice.setText (snapshot.message, juce::dontSendNotification); notice.setTooltip (snapshot.message);
     notice.setVisible (entry && ! failed && snapshot.message.isNotEmpty());
     notice.setColour (juce::Label::textColourId, state == State::error ? Palette::danger : Palette::dimText);
@@ -281,21 +314,31 @@ void CollabPanel::setSnapshot (const collab::CollabSession::Snapshot& value)
     if (! volume.isMouseButtonDown()) volume.setValue (std::lround (snapshot.monitorVolume * 100.0f), juce::dontSendNotification);
     volumeValue.setText (juce::String ((int) volume.getValue()) + "%", juce::dontSendNotification);
     stats[0].value = juce::String ((int) std::lround (snapshot.estimatedOneWayMs));
-    stats[1].value = juce::String (snapshot.bufferMs, 2).trimCharactersAtEnd ("0").trimCharactersAtEnd (".");
+    stats[1].value = juce::String (juce::roundToInt (snapshot.bufferMs));   // whole ms, as the delay beside it
     stats[2].value = juce::String (snapshot.lossPercent, 1);
+    stats[3].value = rateNumber (snapshot.wireRate);
     updateEnabled(); resized(); repaint();
 }
 void CollabPanel::updateEnabled()
 {
     const bool available = snapshot.state == State::off || snapshot.state == State::error || snapshot.state == State::hostUnavailable;
     const bool named = settings.getCollabNick().isNotEmpty();
-    createButton.setEnabled (available && named); retryButton.setEnabled (available && named);
-    joinButton.setEnabled (available && named && code.complete()); code.setEnabled (available);
+    // while busy, the pressed button reads 포트 확인 중 / 연결 중 at full strength (its click does nothing then)
+    const bool checking = snapshot.state == State::checkingHost, joining = snapshot.state == State::joining;
+    createButton.setEnabled ((available && named) || checking); retryButton.setEnabled (available && named);
+    joinButton.setEnabled ((available && named && code.complete()) || joining); code.setEnabled (available);
+    createButton.setInterceptsMouseClicks (! checking, false); joinButton.setInterceptsMouseClicks (! joining, false);
+    for (int i = 0; i < 2; ++i)
+    {
+        auto& chip = rateChips[(size_t) i];
+        chip.setEnabled (available); chip.setAlpha (available ? 1.0f : 0.45f);
+        chip.setToggleState (settings.getCollabRate() == (i == 0 ? 48000 : 44100), juce::dontSendNotification);
+    }
     for (auto* button : { &createButton, &joinButton, &retryButton }) button->setAlpha (button->isEnabled() ? 1.0f : 0.45f);
 }
 void CollabPanel::join()
 {
-    if (joinButton.isEnabled() && actions.join) actions.join (code.getCode(), settings.getCollabNick());
+    if (joinButton.isEnabled() && snapshot.state != State::joining && actions.join) actions.join (code.getCode(), settings.getCollabNick());
 }
 bool CollabPanel::keyPressed (const juce::KeyPress& key)
 {
@@ -309,9 +352,16 @@ void CollabPanel::resized()
     firstCard = joinCard = {};
     const auto state = snapshot.state;
     const bool failed = state == State::hostUnavailable;
+    // roomy height of the cause layout: margins, nickname row, the cause card and the join card; a long cause
+    // (a second router, a carrier's shared address) wraps to a second line instead of ending in …
+    const int textWidth = area.getWidth() - 28;
+    const int failedHeight = failed ? 32 + (15 + 12 + 36 + 12) + (28 + message.heightFor (textWidth) + reason.heightFor (textWidth)
+                                                                  + 20 + 36) + 12 + (28 + 15 + 58 + 44 + 20) : 0;
     // The 400 px minimum preserves type and control sizes by tightening only card padding and inner gaps.
-    const int padding = failed && getHeight() < 430 ? 10 : 14;
-    const int gap = failed && getHeight() < 430 ? 6 : 10;
+    const bool compact = getHeight() < 430 || (notice.isVisible() && getHeight() < 458) || getHeight() < failedHeight;
+    const int padding = compact ? 10 : 14;
+    const int gap = compact ? 6 : 10;
+    const int outerGap = compact ? 6 : 12;
     if (inCall (state))
     {
         firstCard = area.removeFromTop (222);
@@ -328,24 +378,26 @@ void CollabPanel::resized()
         inner.removeFromTop (10); meter.setBounds (inner.removeFromTop (46));
         area.removeFromTop (12);
         row = area.removeFromTop (58);
-        const int statWidth = (row.getWidth() - 16) / 3;
-        for (int i = 0; i < 3; ++i)
+        const int statWidth = (row.getWidth() - 24) / 4;
+        for (int i = 0; i < 4; ++i)
         {
-            stats[(size_t) i].setBounds (i == 2 ? row : row.removeFromLeft (statWidth));
-            if (i < 2) row.removeFromLeft (8);
+            stats[(size_t) i].setBounds (i == 3 ? row : row.removeFromLeft (statWidth));
+            if (i < 3) row.removeFromLeft (8);
         }
         area.removeFromTop (12); row = area.removeFromTop (36);
         rebufferButton.setBounds (row.removeFromLeft ((row.getWidth() - 8) / 2));
         row.removeFromLeft (8); leaveButton.setBounds (row);
         return;
     }
-    nickCaption.setBounds (area.removeFromTop (15)); area.removeFromTop (12);
-    nickname.setBounds (area.removeFromTop (36)); area.removeFromTop (12);
+    nickCaption.setBounds (area.removeFromTop (15)); area.removeFromTop (outerGap);
+    nickname.setBounds (area.removeFromTop (36)); area.removeFromTop (outerGap);
     if (state == State::hostWaiting)
     {
-        firstCard = area.removeFromTop (200);
+        firstCard = area.removeFromTop (202);
         auto inner = firstCard.reduced (14);
-        codeCaption.setBounds (inner.removeFromTop (15)); inner.removeFromTop (10);
+        auto caption = inner.removeFromTop (17);
+        roomRate.setBounds (caption.removeFromRight (labelWidthForText (roomRate, roomRate.getText())));
+        codeCaption.setBounds (caption); inner.removeFromTop (10);
         const auto row = inner.removeFromTop (74);
         for (int i = 0; i < 4; ++i) roomDigits[(size_t) i].setBounds (row.getX() + i * 76, row.getY(), 66, 74);
         inner.removeFromTop (10); waiting.setBounds (inner.removeFromTop (17));
@@ -355,25 +407,31 @@ void CollabPanel::resized()
     if (failed)
     {
         const int messageHeight = message.heightFor (area.getWidth() - 2 * padding);
-        firstCard = area.removeFromTop (2 * padding + messageHeight + 17 + 36 + 2 * gap);
+        const int reasonHeight = reason.heightFor (area.getWidth() - 2 * padding);
+        firstCard = area.removeFromTop (2 * padding + messageHeight + reasonHeight + 36 + 2 * gap);
         auto inner = firstCard.reduced (padding);
         message.setBounds (inner.removeFromTop (messageHeight)); inner.removeFromTop (gap);
-        reason.setBounds (inner.removeFromTop (17)); inner.removeFromTop (gap);
+        reason.setBounds (inner.removeFromTop (reasonHeight)); inner.removeFromTop (gap);
         auto row = inner.removeFromTop (36);
         retryButton.setBounds (row.removeFromLeft ((row.getWidth() - 8) / 2));
         row.removeFromLeft (8); dismissButton.setBounds (row);
     }
     else
     {
-        firstCard = area.removeFromTop (72);
-        createButton.setBounds (firstCard.reduced (14));
+        firstCard = area.removeFromTop (2 * padding + 15 + 34 + 44 + 2 * gap);
+        auto inner = firstCard.reduced (padding);
+        rateCaption.setBounds (inner.removeFromTop (15)); inner.removeFromTop (gap);
+        auto row = inner.removeFromTop (34);
+        rateChips[0].setBounds (row.removeFromLeft ((row.getWidth() - 8) / 2));
+        row.removeFromLeft (8); rateChips[1].setBounds (row);
+        inner.removeFromTop (gap); createButton.setBounds (inner.removeFromTop (44));
     }
-    area.removeFromTop (12);
-    joinCard = area.removeFromTop (2 * padding + 15 + 58 + 44 + 2 * gap + (notice.isVisible() ? 28 : 0));
+    area.removeFromTop (outerGap);
+    joinCard = area.removeFromTop (2 * padding + 15 + 58 + 44 + 2 * gap + (notice.isVisible() ? 18 + gap : 0));
     auto inner = joinCard.reduced (padding);
     codeCaption.setBounds (inner.removeFromTop (15)); inner.removeFromTop (gap);
     code.setBounds (inner.removeFromTop (58).withWidth (256)); inner.removeFromTop (gap);
-    joinButton.setBounds (inner.removeFromTop (44)); inner.removeFromTop (10);
+    joinButton.setBounds (inner.removeFromTop (44)); inner.removeFromTop (gap);
     notice.setBounds (inner.removeFromTop (18));
 }
 void CollabPanel::paint (juce::Graphics& g)

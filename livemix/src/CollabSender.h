@@ -14,7 +14,7 @@ public:
     CollabSender();
     ~CollabSender();
     // Lifecycle thread, with producer and consumer excluded by CollabAudio.
-    void prepare (double deviceRate, int maxBlock);
+    void prepare (double deviceRate, int maxBlock, uint32_t wireRate = defaultWireRate);
     void resetSession() noexcept;
     void push (const float* left, const float* right, int frames) noexcept; // audio producer
     void drain (const Sink&); // one sender thread (or an offline test)

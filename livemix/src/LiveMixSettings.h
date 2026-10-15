@@ -55,6 +55,8 @@ public:
     void setCollabNick (const juce::String& nick);
     int getCollabPort() const;
     void setCollabPort (int port);
+    int getCollabRate() const;
+    void setCollabRate (int rate);
     float getCollabMonitorVolume() const;
     void setCollabMonitorVolume (float volume01);
     bool getCollabMonitorOn() const;

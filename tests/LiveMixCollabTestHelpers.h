@@ -14,7 +14,7 @@ struct Packet
     std::array<uint8_t, audioBytes> payload {};
     uint64_t arrival = 0;
 };
-inline Packet tone (uint64_t number, float level = 0.25f, double hz = 0, bool stereo = true)
+inline Packet tone (uint64_t number, float level = 0.25f, double hz = 0, bool stereo = true, uint32_t wireRate = defaultWireRate)
 {
     Packet p; p.header.firstFrame = number * framesPerPacket; p.header.sender = 1;
     p.header.frames = framesPerPacket; p.header.payloadBytes = audioBytes;
@@ -25,7 +25,7 @@ inline Packet tone (uint64_t number, float level = 0.25f, double hz = 0, bool st
         right[(size_t) n] = stereo ? left[(size_t) n] : 0.0f;
     }
     packPcm24 (p.payload.data(), left.data(), right.data(), framesPerPacket);
-    p.arrival = number * 2500000ULL;
+    p.arrival = (uint64_t) (p.header.firstFrame * 1.0e9 / wireRate);
     return p;
 }
 inline bool push (CollabPlayout& play, const Packet& p) { return play.push (p.header, p.payload.data(), p.arrival); }

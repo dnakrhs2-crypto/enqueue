@@ -5,8 +5,10 @@
 
 namespace gocue::livemix::collab
 {
-void CollabPlayout::prepare (double rate, int maxBlock)
+void CollabPlayout::prepare (double rate, int maxBlock, uint32_t roomRate)
 {
+    if (! isValidWireRate (roomRate)) return;
+    wireRate = roomRate; packetMs = packetDurationMs (wireRate);
     deviceRate = rate; blockSize = std::max (1, maxBlock);
     slots = std::make_unique<Slot[]> (slotCount);
     asrcStorage.resize ((lm_asrc_size (channels) + sizeof (double) - 1) / sizeof (double));
@@ -16,8 +18,8 @@ void CollabPlayout::prepare (double rate, int maxBlock)
     readyFrames.store (0); publishedEpoch.store (0); cursorEpoch.store (0); cursor.store (0);
     producerEpoch = audioEpoch = 0; sender = 0;
     seenRebuffer = rebufferRequest.load(); seenMeasurement = measurementRequest.load();
-    measuring = true; delayCount = 0; measuredFloor.store (2.5); measuredVersion.store (0); seenVersion = 0;
-    target = 10.0; floor = 2.5; stableSeconds = lossClock = 0.0; lossBucket = 0;
+    measuring = true; delayCount = 0; measuredFloor.store (packetMs); measuredVersion.store (0); seenVersion = 0;
+    target = 10.0; floor = packetMs; stableSeconds = lossClock = 0.0; lossBucket = 0;
     recentTotal.fill (0); recentLost.fill (0);
     received.store (0); lost.store (0); late.store (0); underruns.store (0);
     playing = false; packetPosition = framesPerPacket; packetReal = concealed = false;
@@ -70,12 +72,12 @@ void CollabPlayout::measure (const Header& h, uint64_t now) noexcept
     for (size_t i = 0; i < delayCount; ++i)
         residual = std::max (residual, std::abs (delays[i] - delays[0] - intercept - slope * (frameTimes[i] - frameTimes[0])));
     const double estimate = (1.0 / (1.0 + slope) - 1.0) * 1.0e6;
-    const bool complete = std::abs (high - low - (delayCount - 1) * 2.5) < 0.001;
+    const bool complete = std::abs (high - low - (delayCount - 1) * packetMs) < 0.001;
     measuredClock.store (complete && residual < 1000.0 / wireRate && std::abs (estimate) <= 1500.0
                          ? estimate : std::numeric_limits<double>::quiet_NaN());
     std::sort (delays.begin(), delays.begin() + delayCount);
     const auto percentile = (size_t) std::ceil (0.99 * (double) delayCount) - 1;
-    measuredFloor.store (std::clamp (delays[percentile] - delays[0] + 2.5, 2.5, 80.0));
+    measuredFloor.store (std::clamp (delays[percentile] - delays[0] + packetMs, packetMs, 80.0));
     measuredVersion.fetch_add (1); measuring = false;
 }
 
@@ -155,7 +157,7 @@ void CollabPlayout::resetPlayback (uint64_t epoch, bool newSender) noexcept
     if (newSender)
     {
         cursorEpoch.store (0);
-        target = 10.0; floor = 2.5; resetDrift();
+        target = 10.0; floor = packetMs; resetDrift();
         recentTotal.fill (0); recentLost.fill (0); lossPercent.store (0);
     }
 }
@@ -163,7 +165,7 @@ void CollabPlayout::resetPlayback (uint64_t epoch, bool newSender) noexcept
 bool CollabPlayout::startPlayback (int frames) noexcept
 {
     // Fill is measured AFTER each device block. Reserve its consumption while priming, so a large
-    // device period does not repeatedly empty a perfectly steady 2.5 ms network buffer.
+    // device period does not repeatedly empty a perfectly steady one-packet network buffer.
     const double reserve = frames * (double) wireRate / deviceRate * (1.0 + drift.ppm * 1.0e-6);
     if (releaseRemaining > 0 || queued() < target * wireRate / 1000.0 + reserve) return false;
     uint64_t earliest = std::numeric_limits<uint64_t>::max();
@@ -216,7 +218,7 @@ bool CollabPlayout::loadPacket() noexcept
     if (! found && readyFrames.load() == 0)
     {
         recordPacket (true); underruns.fetch_add (1);
-        target = std::min (120.0, target + 2.5); beginRefill();
+        target = std::min (120.0, target + packetMs); beginRefill();
         return false;
     }
     recordPacket (! found);
@@ -253,13 +255,13 @@ void CollabPlayout::pull (float* left, float* right, int frames) noexcept
     if (request != seenRebuffer)
     {
         seenRebuffer = request; measurementRequest.fetch_add (1);
-        resetPlayback (audioEpoch, false); target = 10.0; floor = 2.5;
+        resetPlayback (audioEpoch, false); target = 10.0; floor = packetMs;
     }
     const auto measurement = measuredVersion.load();
     if (measurement != seenVersion)
     {
         seenVersion = measurement; floor = measuredFloor.load();
-        if (std::abs (target - floor) > 2.5) beginRefill();
+        if (std::abs (target - floor) > packetMs) beginRefill();
         target = floor;
         const double estimate = measuredClock.load();
         if (std::isfinite (estimate))
@@ -297,7 +299,7 @@ void CollabPlayout::pull (float* left, float* right, int frames) noexcept
         if (playing && ! concealed && fadeIn == 0)
         {
             stableSeconds += dt;
-            if (stableSeconds >= 30.0) { target = std::max (floor, target - 1.25); stableSeconds = 0; }
+            if (stableSeconds >= 30.0) { target = std::max (floor, target - packetMs * 0.5); stableSeconds = 0; }
             drift.target = target * wireRate / 1000.0;
             // One datagram is indivisible. A half-packet deadband keeps PI from chasing its
             // arrival phase, which otherwise looks like a slow clock error at small ppm offsets.

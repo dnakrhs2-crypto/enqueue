@@ -333,6 +333,47 @@ public:
             expectGreaterThan (listener.changes, 0); host.session->removeChangeListener (&listener);
         }
 
+        for (int roomRate : { 44100, 48000 })
+        for (const auto devices : { std::pair<int, int> { 48000, 44100 }, { 44100, 48000 }, { 44100, 44100 } })
+        {
+            beginTest ("welcome chooses room " + juce::String (roomRate) + " before audio attach, devices "
+                       + juce::String (devices.first) + "/" + juce::String (devices.second));
+            auto service = std::make_shared<FakeService>();
+            Fixture host (service), guest (service);
+            const int guestPreference = roomRate == 44100 ? 48000 : 44100;
+            host.settings.setCollabRate (roomRate); guest.settings.setCollabRate (guestPreference);
+            host.audio.prepare (devices.first, devices.first / 100);
+            guest.audio.prepare (devices.second, devices.second / 100);
+            guest.audio.setWireRate (guestPreference);
+            host.session->createRoom ("host");
+            expect (host.reaches (State::hostWaiting));
+            expectEquals ((int) host.session->getSnapshot().wireRate, roomRate);
+            expectEquals ((int) host.audio.getWireRate(), roomRate);
+            guest.session->joinRoom ("0842", "guest");
+            expect (guest.reaches (State::connected)); expect (host.reaches (State::connected));
+            expectEquals ((int) guest.audio.getWireRate(), roomRate);
+            expectEquals ((int) guest.session->getSnapshot().wireRate, roomRate);
+            expectEquals ((int) host.session->getSnapshot().wireRate, roomRate);
+            expectEquals (guest.settings.getCollabRate(), guestPreference);
+            expectEquals ((int) host.audio.getDeviceRate(), devices.first);
+            expectEquals ((int) guest.audio.getDeviceRate(), devices.second);
+            const auto& transport = CollabSessionTestAccess::transport (*guest.session);
+            expectEquals ((int) transport.getStats().peer.wireRate, roomRate);
+            const auto stats = transport.getStats();
+            const double expectedDelay = packetDurationMs (roomRate) * 0.5 + stats.rttMs * 0.5
+                + guest.audio.getStats().targetMs + 16000.0 / roomRate
+                + (devices.first != roomRate ? 16000.0 / devices.first : 0.0);
+            expectWithinAbsoluteError (transport.estimatedOneWayMs(), expectedDelay, 0.01);
+            // A normal device restart must keep the room rate selected by welcome.
+            guest.audio.prepare (96000, 960);
+            expectEquals (guest.audio.getWireRate(), (uint32_t) roomRate);
+            expectEquals (guest.audio.getDeviceRate(), 96000.0);
+            expect (until ([&] { return CollabSessionTestAccess::transport (*host.session).getStats().peer.deviceRate == 96000; }));
+            expectEquals ((int) CollabSessionTestAccess::transport (*host.session).getStats().peer.wireRate, roomRate);
+            guest.session->leave(); expect (host.reaches (State::hostWaiting));
+            expectEquals ((int) host.session->getSnapshot().wireRate, roomRate);
+        }
+
         beginTest ("connected audio survives heartbeat failures and stops heartbeats after a missing room");
         {
             auto service = std::make_shared<FakeService>();
@@ -440,6 +481,20 @@ public:
             expectEquals (host.session->getSnapshot().reason, ko ("공유기 자동 포트 열기(UPnP)가 꺼져 있습니다"));
             expect (host.session->getSnapshot().code.isEmpty()); expectEquals (host.port(), 0);
             expectEquals (host.upnp->removals.load(), 1);
+        }
+
+        beginTest ("the partner's OBS ring runs while a room is open, with or without the master's OBS switch");
+        {
+            auto service = std::make_shared<FakeService>();
+            Fixture host (service);
+            expect (! host.audio.getPeerObs().isEnabled());
+            host.session->createRoom ("host"); expect (host.reaches (State::hostWaiting));
+            expect (host.audio.getPeerObs().isEnabled());
+            host.session->leave(); expect (! host.audio.getPeerObs().isEnabled());
+            host.audio.setObsEnabled (true); expect (host.audio.getPeerObs().isEnabled());
+            host.session->createRoom ("host"); expect (host.reaches (State::hostWaiting));
+            host.session->leave(); expect (host.audio.getPeerObs().isEnabled());   // the master switch keeps it on
+            host.audio.setObsEnabled (false); expect (! host.audio.getPeerObs().isEnabled());
         }
 
         beginTest ("manual port forwarding permits hosting when UPnP is absent");

@@ -24,6 +24,7 @@ public:
         juce::String reason, message;
         float monitorVolume = 1.0f;
         bool monitorOn = true;
+        uint32_t wireRate = defaultWireRate;
     };
     struct Options
     {

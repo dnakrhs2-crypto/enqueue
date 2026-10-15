@@ -23,6 +23,7 @@ public:
         Address address;
         double rttMs = 0;
         uint64_t sent = 0, received = 0;
+        uint32_t wireRate = defaultWireRate;
     };
     CollabTransport();
     ~CollabTransport();

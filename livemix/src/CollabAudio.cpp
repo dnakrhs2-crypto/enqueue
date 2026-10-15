@@ -30,7 +30,7 @@ void CollabAudio::prepare (double rate, int maxBlock)
 {
     const juce::ScopedLock lock (lifecycle);
     suspend();
-    sender.prepare (rate, maxBlock); playout.prepare (rate, maxBlock);
+    sender.prepare (rate, maxBlock, wireRate.load()); playout.prepare (rate, maxBlock, wireRate.load());
     left.assign ((size_t) maxBlock, 0); right.assign ((size_t) maxBlock, 0);
     rampFrames = std::max (1, (int) std::lround (rate * 0.005));
     gain = gainTarget = monitorOn.load() ? volume.load() : 0.0f;
@@ -38,6 +38,18 @@ void CollabAudio::prepare (double rate, int maxBlock)
     peakLeft.store (0.0f); peakRight.store (0.0f);
     peerObs.deviceStarted (rate); publishedRate.store (rate);
     ready.store (true);
+}
+
+bool CollabAudio::setWireRate (uint32_t rate)
+{
+    if (! isValidWireRate (rate)) return false;
+    const juce::ScopedLock lock (lifecycle);
+    if (wireRate.load() != rate)
+    {
+        wireRate.store (rate);
+        if (ready.load()) prepare (publishedRate.load(), (int) left.size());
+    }
+    return true;
 }
 
 void CollabAudio::attach (CollabTransport& t)

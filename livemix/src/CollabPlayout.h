@@ -17,14 +17,14 @@ public:
         double targetMs, fillMs, correctionPpm, lossPercent10s;
         uint64_t received, lost, late, underruns;
     };
-    void prepare (double deviceRate, int maxBlock); // lifecycle: both users excluded
+    void prepare (double deviceRate, int maxBlock, uint32_t roomRate = defaultWireRate); // lifecycle: both users excluded
     bool push (const Header&, const uint8_t* payload, uint64_t arrivalNs) noexcept; // receiver only
     void pull (float* left, float* right, int frames) noexcept; // audio only
     void rebuffer() noexcept { rebufferRequest.fetch_add (1); }
     Stats getStats() const noexcept;
 
 private:
-    static constexpr size_t slotCount = 1024; // 2.56 seconds, indexed by wire frame number
+    static constexpr size_t slotCount = 1024; // at least 2.56 seconds, indexed by wire frame number
     struct Slot
     {
         // CAS gives exclusive access to PCM/metadata, never spins. Release publishes complete packets.
@@ -46,13 +46,15 @@ private:
     std::vector<float> output;
     lm_asrc* asrc = nullptr;
     lm_drift drift {};
-    double deviceRate = wireRate;
+    double deviceRate = defaultWireRate;
+    uint32_t wireRate = defaultWireRate;
+    double packetMs = packetDurationMs (defaultWireRate);
     int blockSize = 0;
 
     std::atomic<int> readyFrames { 0 };
     std::atomic<uint64_t> publishedEpoch { 0 }, cursorEpoch { 0 }, cursor { 0 };
     std::atomic<unsigned> rebufferRequest { 0 }, measurementRequest { 0 }, measuredVersion { 0 };
-    std::atomic<double> measuredFloor { 2.5 };
+    std::atomic<double> measuredFloor { packetDurationMs (defaultWireRate) };
     std::atomic<double> measuredClock { 0 };
     // Receiver-owned measurement and stream identity.
     uint32_t sender = 0;
@@ -71,7 +73,7 @@ private:
     int skipAtStart = 0;
     std::array<float, framesPerPacket * channels> packet {};
     std::array<float, 2> lastInput {}, lastOutput {}, releaseTail {};
-    double target = 10.0, floor = 2.5, stableSeconds = 0.0, lossClock = 0.0;
+    double target = 10.0, floor = packetDurationMs (defaultWireRate), stableSeconds = 0.0, lossClock = 0.0;
     std::array<uint32_t, 100> recentTotal {}, recentLost {};
     size_t lossBucket = 0;
 

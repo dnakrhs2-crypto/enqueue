@@ -23,7 +23,7 @@ bool valid (const Header& h) noexcept
     switch (h.kind)
     {
         case Kind::audio: return h.frames == framesPerPacket && h.payloadBytes == audioBytes && h.firstFrame % framesPerPacket == 0;
-        case Kind::hello: case Kind::welcome: return h.frames == 0 && h.payloadBytes >= 14 && h.payloadBytes <= 110;
+        case Kind::hello: case Kind::welcome: return h.frames == 0 && h.payloadBytes >= 18 && h.payloadBytes <= 114;
         case Kind::ping: case Kind::pong: return h.frames == 0 && h.payloadBytes == 8;
         case Kind::bye: return h.frames == 0 && h.payloadBytes == 0;
         case Kind::probe: return h.payloadBytes == 16 && h.session == 0 && h.sender == 0 && h.seq == 0 && h.firstFrame == 0 && h.frames == 0;
@@ -88,6 +88,7 @@ void unpackPcm24 (const uint8_t* p, float* out, int frames) noexcept
 
 size_t writePeerInfo (uint8_t* p, const PeerInfo& info)
 {
+    if (! isValidWireRate (info.wireRate)) return 0;
     const size_t nick = utf8Prefix (info.nickname, 64), ver = utf8Prefix (info.appVersion, 32);
     size_t at = 0;
     p[at++] = (uint8_t) nick; std::memcpy (p + at, info.nickname.toRawUTF8(), nick); at += nick;
@@ -96,23 +97,25 @@ size_t writePeerInfo (uint8_t* p, const PeerInfo& info)
         put (p + at, (uint32_t) std::llround (std::clamp (std::isfinite (ms) ? ms : 0.0, 0.0, 4294967.0) * 1000.0), 4); at += 4;
     }
     p[at++] = (uint8_t) ver; std::memcpy (p + at, info.appVersion.toRawUTF8(), ver); at += ver;
-    put (p + at, info.deviceRate, 4);
+    put (p + at, info.deviceRate, 4); at += 4;
+    put (p + at, info.wireRate, 4);
     return at + 4;
 }
 
 bool readPeerInfo (const uint8_t* p, size_t bytes, PeerInfo& info)
 {
-    if (p == nullptr || bytes < 14 || p[0] > 64) return false;
+    if (p == nullptr || bytes < 18 || p[0] > 64) return false;
     const size_t nick = p[0], verAt = 1 + nick + 8;
-    if (verAt >= bytes || p[verAt] > 32 || bytes != verAt + 1 + p[verAt] + 4) return false;
+    if (verAt >= bytes || p[verAt] > 32 || bytes != verAt + 1 + p[verAt] + 8) return false;
     if (! juce::CharPointer_UTF8::isValidString (reinterpret_cast<const char*> (p + 1), (int) nick)
         || ! juce::CharPointer_UTF8::isValidString (reinterpret_cast<const char*> (p + verAt + 1), p[verAt])) return false;
     info.nickname = juce::String::fromUTF8 (reinterpret_cast<const char*> (p + 1), (int) nick);
     info.inputLatencyMs = get (p + 1 + nick, 4) / 1000.0;
     info.outputLatencyMs = get (p + 5 + nick, 4) / 1000.0;
     info.appVersion = juce::String::fromUTF8 (reinterpret_cast<const char*> (p + verAt + 1), p[verAt]);
-    info.deviceRate = (uint32_t) get (p + bytes - 4, 4);
-    return info.deviceRate > 0;
+    info.deviceRate = (uint32_t) get (p + bytes - 8, 4);
+    info.wireRate = (uint32_t) get (p + bytes - 4, 4);
+    return info.deviceRate > 0 && isValidWireRate (info.wireRate);
 }
 void writeTimestamp (uint8_t* p, uint64_t ns) noexcept { put (p, ns, 8); }
 uint64_t readTimestamp (const uint8_t* p) noexcept { return get (p, 8); }

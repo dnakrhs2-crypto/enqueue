@@ -34,6 +34,13 @@ public:
         expect (! readPacket (packet.data(), size - 1, read, payload));
         expect (! readPacket (packet.data(), size + 1, read, payload));
         expectEquals ((int) writePacket (packet.data(), 35, h, pcm.data()), 0);
+        for (int frames : { 119, 121, 240 })
+        {
+            auto bad = h; bad.frames = (uint16_t) frames;
+            expectEquals ((int) writePacket (packet.data(), packet.size(), bad, pcm.data()), 0);
+            auto broken = packet; broken[32] = (uint8_t) frames; broken[33] = 0;
+            expect (! readPacket (broken.data(), size, read, payload));
+        }
 
         beginTest ("PCM24 stereo round trip and clipping");
         std::array<float, framesPerPacket> left, right;
@@ -74,6 +81,31 @@ public:
         writeTimestamp (pcm.data(), 0x1122334455667788ULL);
         expect (readTimestamp (pcm.data()) == 0x1122334455667788ULL);
         expect (packet[4] == 1 && packet[5] == 7 && packet[34] == 16);
+
+        beginTest ("hello and welcome round trip both room rates, reject all other rates");
+        for (uint32_t rate : { 44100u, 48000u })
+        {
+            info.wireRate = rate;
+            info.appVersion = juce::String::repeatedString ("v", 32);
+            const auto bytes = writePeerInfo (pcm.data(), info);
+            expect (bytes <= 114);
+            for (auto kind : { Kind::hello, Kind::welcome })
+            {
+                Header control; control.kind = kind; control.payloadBytes = (uint16_t) bytes;
+                const auto total = writePacket (packet.data(), packet.size(), control, pcm.data());
+                expect (readPacket (packet.data(), total, read, payload));
+                expect (readPeerInfo (payload, read.payloadBytes, copy));
+                expectEquals (copy.wireRate, rate); expectEquals (copy.deviceRate, 44100u);
+            }
+            for (uint32_t invalid : { 0u, 32000u, 96000u })
+            {
+                auto bad = info; bad.wireRate = invalid;
+                expectEquals ((int) writePeerInfo (packet.data(), bad), 0);
+                auto broken = pcm;
+                for (int i = 0; i < 4; ++i) broken[bytes - 4 + i] = (uint8_t) (invalid >> (8 * i));
+                expect (! readPeerInfo (broken.data(), bytes, copy));
+            }
+        }
     }
 };
 static LiveMixCollabProtocolTests liveMixCollabProtocolTests;

@@ -60,7 +60,8 @@ public:
     bool keyPressed (const juce::KeyPress&) override;
 
 private:
-    struct Message : juce::Component
+    friend struct CollabPanelTestAccess;
+    struct Message : juce::Component   // wraps whole Korean words (keep-all) and measures its own height
     {
         void setText (const juce::String&);
         void resized() override;
@@ -68,6 +69,8 @@ private:
         int heightFor (int width) const;
         juce::String text;
         juce::TextLayout layout;
+        float size = 15.0f;
+        juce::Colour colour = Palette::text;
     };
     struct Statistic : juce::Component
     {
@@ -79,16 +82,17 @@ private:
     LiveMixSettings& settings;
     Actions actions;
     collab::CollabSession::Snapshot snapshot;
-    juce::Label nickCaption, codeCaption, waiting, reason, notice, peerNick, connection, volumeCaption, volumeValue;
+    juce::Label nickCaption, codeCaption, rateCaption, roomRate, waiting, notice, peerNick, connection, volumeCaption, volumeValue;
     CollabField nickname;
     CollabCodeEntry code;
     std::array<juce::Label, 4> roomDigits;
     juce::TextButton createButton, joinButton, retryButton, dismissButton, leaveButton, rebufferButton;
+    std::array<Chip, 2> rateChips;
     LampButton headphones;
     juce::Slider volume;
     MeterBar meter { true };
-    Message message;
-    std::array<Statistic, 3> stats;
+    Message message, reason;
+    std::array<Statistic, 4> stats;
     juce::Rectangle<int> firstCard, joinCard;
 };
 

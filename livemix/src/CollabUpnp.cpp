@@ -24,7 +24,7 @@ public:
     Result discover (int boundPort) override
     {
         removeMapping();
-        FreeUPNPUrls (&urls); urls = {}; data = {}; result = {};
+        FreeUPNPUrls (&urls); urls = {}; data = {}; result = {}; permanentOnly = false;
         if (! winsock || juce::SystemStats::getEnvironmentVariable ("LIVEMIX_COLLAB_NO_UPNP", {}) == "1") return result;
 
         // Search all types together. miniupnpc can wait once more after the last reply,
@@ -52,8 +52,18 @@ public:
     bool renew() override
     {
         if (! result.found || result.lanIp.isEmpty()) return false;
-        const bool success = UPNP_AddPortMapping (urls.controlURL, data.first.servicetype, port.toRawUTF8(), port.toRawUTF8(),
-                                                 result.lanIp.toRawUTF8(), "LiveMix", "UDP", nullptr, "3600") == UPNPCOMMAND_SUCCESS;
+        const auto add = [this] (const char* lease)
+        {
+            return UPNP_AddPortMapping (urls.controlURL, data.first.servicetype, port.toRawUTF8(), port.toRawUTF8(),
+                                        result.lanIp.toRawUTF8(), "LiveMix", "UDP", nullptr, lease);
+        };
+        int code = add (permanentOnly ? "0" : "3600");
+        if (code == 725)   // OnlyPermanentLeasesSupported: such a router takes only lease 0; leave / quit still delete it
+        {
+            permanentOnly = true;
+            code = add ("0");
+        }
+        const bool success = code == UPNPCOMMAND_SUCCESS;
         if (success) mappingOwned = true;
         return success;
     }
@@ -66,7 +76,7 @@ public:
     }
 
 private:
-    bool winsock = false, mappingOwned = false;
+    bool winsock = false, mappingOwned = false, permanentOnly = false;
     UPNPUrls urls {};
     IGDdatas data {};
     Result result;

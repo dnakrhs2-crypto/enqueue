@@ -205,15 +205,17 @@ TopBar::Mode TopBar::modeFor (int width) const noexcept
 void TopBar::setCollabState (collab::CollabSession::State state, const juce::String& peerNick)
 {
     using State = collab::CollabSession::State;
-    const auto text = state == State::connected ? ko ("합방 · ") + peerNick
-                    : state == State::disconnected ? ko ("합방 끊김") : ko ("합방");
     const bool connected = state == State::connected, disconnected = state == State::disconnected;
-    if (collabText == text && collabButton.getToggleState() == connected && collabButton.disconnected == disconnected) return;
+    const auto title = connected ? ko ("합방 · ") + peerNick : disconnected ? ko ("합방 끊김") : ko ("합방");
+    // connected: the blue fill already says 합방, so the fixed width goes to the nickname (tooltip keeps both)
+    const auto text = connected && peerNick.isNotEmpty() ? peerNick : title;
+    if (collabText == text && collabButton.getTooltip() == title && collabButton.getToggleState() == connected
+        && collabButton.disconnected == disconnected) return;
     collabText = text;
     collabButton.disconnected = disconnected;
     collabButton.setToggleState (connected, juce::dontSendNotification);
     collabButton.setColour (juce::TextButton::textColourOffId, disconnected ? Palette::danger : Palette::text);
-    collabButton.setTooltip (text);
+    collabButton.setTooltip (title); collabButton.setTitle (title);
     resized();   // the width is fixed: only the shortened text changes
     collabButton.repaint();
 }

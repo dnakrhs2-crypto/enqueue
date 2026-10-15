@@ -10,8 +10,9 @@ namespace gocue::livemix::collab
 CollabSender::CollabSender() : event (CreateEventW (nullptr, FALSE, FALSE, nullptr)) {}
 CollabSender::~CollabSender() { if (event != nullptr) CloseHandle (event); }
 
-void CollabSender::prepare (double rate, int maxBlock)
+void CollabSender::prepare (double rate, int maxBlock, uint32_t wireRate)
 {
+    if (! isValidWireRate (wireRate)) return;
     capacity = 1;
     while (capacity < (uint64_t) std::max (rate * 2.0, maxBlock * 2.0)) capacity *= 2;
     fifo.assign ((size_t) capacity * channels, 0.0f);

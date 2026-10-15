@@ -6,6 +6,15 @@
 #include "ui/LiveMixLookAndFeel.h"
 #include "../livemix/src/ui/MainComponent.h"
 
+namespace gocue::livemix
+{
+struct CollabPanelTestAccess
+{
+    static const auto& statistic (const CollabPanel& panel, size_t index) { return panel.stats[index]; }
+    static const auto& reason (const CollabPanel& panel) { return panel.reason; }
+};
+}
+
 namespace gocue::tests
 {
 using namespace livemix;
@@ -81,6 +90,11 @@ public:
         }
         collab::CollabSession::Snapshot closed;
         closed.message = ko ("방장이 방을 닫았습니다"); snapshots.push_back (closed);
+        for (int index : { 3, 4, 5 })
+        {
+            auto s = snapshots[(size_t) index]; s.wireRate = 44100;
+            snapshots.push_back (s);
+        }
         auto longName = snapshots[4];
         longName.isHost = false; longName.peerNick = juce::String::repeatedString (ko ("긴닉네임"), 10);
         longName.bufferMs = 6.25; longName.lossPercent = 12.3; snapshots.push_back (longName);
@@ -91,6 +105,22 @@ public:
                 if (snapshots[n].state == State::connected) panel.pushMeter ({ 0.18f, 0.14f }, false);
                 const auto tag = juce::String ((int) n) + "-" + juce::String (size.x) + "x" + juce::String (size.y);
                 checkLayout (panel, tag);
+                if (snapshots[n].state == State::hostWaiting)
+                    expectEquals (child<juce::Label> (panel, "room-rate").getText(),
+                                  juce::String (snapshots[n].wireRate == 44100 ? "44.1 kHz" : "48 kHz"));
+                if (snapshots[n].state == State::connected || snapshots[n].state == State::disconnected)
+                {
+                    for (size_t i = 0; i < 4; ++i)
+                    {
+                        const auto& stat = CollabPanelTestAccess::statistic (panel, i);
+                        expect (stat.isVisible());
+                        expect (juce::GlyphArrangement::getStringWidthInt (captionFont(), stat.caption) <= stat.getWidth() - 16,
+                                "stat caption fits " + tag + "/" + juce::String ((int) i));
+                    }
+                    const auto& rate = CollabPanelTestAccess::statistic (panel, 3);
+                    expectEquals (rate.caption, ko ("샘플레이트")); expectEquals (rate.unit, juce::String ("kHz"));
+                    expectEquals (rate.value, juce::String (snapshots[n].wireRate == 44100 ? "44.1" : "48"));
+                }
                 if (snapshots[n].state == State::hostUnavailable)
                 {
                     const auto& block = *panel.findChildWithID ("host-message");
@@ -98,7 +128,12 @@ public:
                     text.append (snapshots[n].message.upToFirstOccurrenceOf ("\n", false, false), bodyFont (15.0f), livemix::Palette::text);
                     juce::TextLayout layout; layout.createLayout (text, (float) block.getWidth());
                     expect (layout.getHeight() <= block.getHeight(), "host verdict fits " + tag);
-                    expectEquals (child<juce::Label> (panel, "reason").getText(), snapshots[n].reason);
+                    // the cause wraps whole words (keep-all, as the verdict) into the height it measured, never …
+                    const auto& cause = CollabPanelTestAccess::reason (panel);
+                    expectEquals (cause.text, snapshots[n].reason);
+                    expect (cause.getHeight() >= cause.heightFor (cause.getWidth()), "host cause fits " + tag);
+                    if (snapshots[n].reason.contains (ko ("통신사")))   // the longest cause takes two lines in every size
+                        expect (cause.heightFor (cause.getWidth()) > juce::roundToInt (bodyFont (14.0f).getHeight() * 1.5f), tag);
                 }
                 if (n == snapshots.size() - 1)
                 {
@@ -108,6 +143,43 @@ public:
                 }
                 for (float scale : { 1.0f, 1.25f, 1.5f }) snapshot (panel, "collab-" + tag, scale);
             }
+
+        beginTest ("rate chips persist across reopening, use one selection, and disable while creating or joining");
+        {
+            Folder rateFolder;
+            LiveMixSettings prefs (rateFolder.file);
+            expectEquals (prefs.getCollabRate(), 48000);
+            prefs.setCollabNick (ko ("하람"));
+            int createdRate = 0;
+            CollabPanel::Actions choose;
+            choose.create = [&] (const auto&) { createdRate = prefs.getCollabRate(); };
+            CollabPanel selection (prefs, choose);
+            auto& rate48 = child<Chip> (selection, "rate-48000");
+            auto& rate44 = child<Chip> (selection, "rate-44100");
+            expect (rate48.getToggleState() && ! rate44.getToggleState());
+            rate44.onClick();
+            expect (! rate48.getToggleState() && rate44.getToggleState());
+            rate44.onClick(); expect (rate44.getToggleState());
+            expectEquals (prefs.getCollabRate(), 44100);
+            child<juce::TextButton> (selection, "create").onClick(); expectEquals (createdRate, 44100);
+            LiveMixSettings reloaded (rateFolder.file);
+            CollabPanel reopened (reloaded, {});
+            expectEquals (reloaded.getCollabRate(), 44100);
+            expect (child<Chip> (reopened, "rate-44100").getToggleState());
+            for (auto state : { State::checkingHost, State::joining })
+            {
+                collab::CollabSession::Snapshot busy; busy.state = state;
+                selection.setSnapshot (busy);
+                expect (! rate44.isEnabled() && ! rate48.isEnabled());
+                expect (rate44.getAlpha() < 1.0f && rate48.getAlpha() < 1.0f);
+            }
+            selection.setSnapshot ({}); rate48.onClick();
+            expect (rate48.getToggleState() && ! rate44.getToggleState());
+            expectEquals (prefs.getCollabRate(), 48000);
+            prefs.setCollabRate (96000); expectEquals (prefs.getCollabRate(), 48000);
+            collab::CollabAudio audio;
+            expect (! audio.setWireRate (96000)); expectEquals (audio.getWireRate(), 48000u);
+        }
 
         beginTest ("digits, next focus, backspace, clipboard paste and Enter use the join action");
         int creates = 0, joins = 0, leaves = 0, rebuffers = 0, hides = 0;
@@ -153,10 +225,27 @@ public:
         nick.selectAll(); nick.insertTextAtCaret (juce::String::repeatedString (ko ("가"), 50)); dispatch();
         expectEquals (nick.getText().length(), 40); expectEquals (settings.getCollabNick().length(), 40);
         create.onClick(); expectEquals (creates, 1); expectEquals (joinedNick.length(), 40);
+        // busy: the pressed button keeps full strength so 포트 확인 중 / 연결 중 reads, but it takes no click
+        const auto takesClicks = [] (juce::Component& c) { bool self = false, children = false; c.getInterceptsMouseClicks (self, children); return self; };
         auto busy = snapshots[1]; input.setSnapshot (busy);
-        expectEquals (create.getButtonText(), ko ("포트 확인 중")); expect (! create.isEnabled() && ! join.isEnabled());
-        input.setSnapshot (snapshots[2]); expectEquals (join.getButtonText(), ko ("연결 중"));
-        expect (! create.isEnabled() && ! join.isEnabled());
+        expectEquals (create.getButtonText(), ko ("포트 확인 중")); expectEquals (create.getAlpha(), 1.0f);
+        expect (! takesClicks (create) && ! join.isEnabled());
+        create.onClick(); expectEquals (creates, 1);
+        input.setSnapshot (snapshots[2]); expectEquals (join.getButtonText(), ko ("연결 중")); expectEquals (join.getAlpha(), 1.0f);
+        expect (! takesClicks (join) && ! create.isEnabled());
+        const int joinsBefore = joins; join.onClick(); expectEquals (joins, joinsBefore);
+
+        beginTest ("a partner arriving while the nickname has focus leaves Enter nothing to press");
+        input.setSnapshot ({}); expect (takesClicks (create) && takesClicks (join));
+        nick.grabKeyboardFocus(); expect (nick.hasKeyboardFocus (false));
+        input.setSnapshot (snapshots[3]); input.setSnapshot (snapshots[4]);
+        for (auto* c : input.getChildren())
+            if (auto* b = dynamic_cast<juce::Button*> (c)) expect (! b->getWantsKeyboardFocus(), "focusable " + b->getComponentID());
+        auto* focused = juce::Component::getCurrentlyFocusedComponent();
+        expect (dynamic_cast<juce::Button*> (focused) == nullptr);
+        const int leavesBefore = leaves;
+        if (focused != nullptr) focused->keyPressed (juce::KeyPress (juce::KeyPress::returnKey));
+        expectEquals (leaves, leavesBefore);
 
         beginTest ("retry, dismiss, leave, rebuffer, headphones and wheel-disabled volume use their actions");
         input.setSnapshot (snapshots[6]);
@@ -194,8 +283,15 @@ public:
                     expect (mode == bar.modeFor (width));
                     expect (sessionBounds == bar.findChildWithID ("session-name")->getBounds());
                 }
-                const auto& button = child<juce::TextButton> (bar, "collab");
-                if (state == State::connected) { expect (button.getToggleState()); expect (button.getButtonText().endsWith (ko ("…"))); }
+                auto& button = child<juce::TextButton> (bar, "collab");
+                if (state == State::connected)
+                {
+                    expect (button.getToggleState()); expect (button.getButtonText().startsWith (ko ("긴닉")));
+                    expect (button.getButtonText().endsWith (ko ("…"))); expectEquals (button.getTooltip(), ko ("합방 · ") + longName.peerNick);
+                    bar.setCollabState (state, ko ("김하람"));   // a short name shows whole; the tooltip and title keep 합방
+                    expectEquals (button.getButtonText(), ko ("김하람")); expectEquals (button.getTitle(), ko ("합방 · 김하람"));
+                    bar.setCollabState (state, longName.peerNick);
+                }
                 if (state == State::disconnected) expectEquals (button.getButtonText(), ko ("합방 끊김"));
                 snapshot (bar, "collab-topbar-" + juce::String (width) + "-" + juce::String ((int) state), 1.0f);
             }
@@ -248,7 +344,7 @@ private:
                     expect (! c->getBounds().intersects (other->getBounds()), context + " overlap " + id + " / " + other->getComponentID());
             if (auto* label = dynamic_cast<juce::Label*> (c))
             {
-                if (id != "reason" && id != "session-name")
+                if (id != "session-name")
                     expect (juce::GlyphArrangement::getStringWidthInt (label->getFont(), label->getText()) <= label->getWidth(), context + " text " + id);
             }
             if (auto* button = dynamic_cast<juce::TextButton*> (c))

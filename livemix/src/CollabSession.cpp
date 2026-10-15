@@ -137,6 +137,7 @@ PeerInfo CollabSession::localInfo (const juce::String& nick) const
 {
     auto info = peerInfo ? peerInfo() : PeerInfo {};
     info.nickname = nick; info.deviceRate = (uint32_t) audio.getDeviceRate();
+    info.wireRate = (uint32_t) settings.getCollabRate();
     return info;
 }
 
@@ -144,10 +145,12 @@ void CollabSession::setState (State state, const juce::String& message, const ju
 {
     messageThread();
     snapshot.state = state; snapshot.message = message; snapshot.reason = reason;
-    if (state == State::off || state == State::error || state == State::hostUnavailable)
+    const bool closed = state == State::off || state == State::error || state == State::hostUnavailable;
+    if (closed)
     {
         snapshot.code.clear(); snapshot.peerNick.clear(); started = false;
     }
+    audio.setCollabOpen (! closed);   // the partner's OBS source works while a room is open, 'OBS로 보내기' or not
     sendChangeMessage();
 }
 
@@ -155,6 +158,8 @@ void CollabSession::createRoom (const juce::String& nick)
 {
     messageThread(); leave();
     snapshot.isHost = true; snapshot.myNick = nick.trim();
+    snapshot.wireRate = (uint32_t) settings.getCollabRate();
+    audio.setWireRate (snapshot.wireRate);
     settings.setCollabNick (snapshot.myNick); settings.saveIfNeeded();
     setState (State::checkingHost);
     const auto id = impl->generation.load();
@@ -312,7 +317,12 @@ void CollabSession::timerCallback()
     const auto previous = snapshot.state;
     if (stats.state == CollabTransport::State::connected)
     {
-        if (! audioAttached) { audio.attach (transport); audioAttached = true; }
+        if (! audioAttached)
+        {
+            snapshot.wireRate = stats.wireRate;
+            audio.setWireRate (snapshot.wireRate);
+            audio.attach (transport); audioAttached = true;
+        }
         if (snapshot.state != State::connected || snapshot.peerNick != stats.peer.nickname)
         {
             snapshot.peerNick = stats.peer.nickname; setState (State::connected);

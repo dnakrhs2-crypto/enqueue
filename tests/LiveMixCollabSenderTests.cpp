@@ -80,6 +80,46 @@ public:
             }
             expectGreaterThan (energy, 1.0); expectEquals (rightEnergy, 0.0);
         }
+
+        for (const auto rates : { std::pair<int, int> { 48000, 44100 }, { 44100, 48000 }, { 44100, 44100 } })
+        {
+            beginTest ("44.1 kHz room, five simulated minutes: " + juce::String (rates.first) + " -> " + juce::String (rates.second));
+            const int inputFrames = rates.first / 100, outputFrames = rates.second / 100;
+            CollabSender sender; sender.prepare (rates.first, inputFrames, 44100);
+            CollabPlayout play; play.prepare (rates.second, outputFrames, 44100);
+            std::vector<float> input ((size_t) inputFrames), left ((size_t) outputFrames), right ((size_t) outputFrames), signal;
+            uint64_t sample = 0, nextFrame = 0;
+            bool numbering = true, stereo = true;
+            for (int block = 0; block < 30000; ++block)
+            {
+                for (auto& v : input) v = 0.5f * (float) std::sin (juce::MathConstants<double>::twoPi * 1000 * sample++ / rates.first);
+                sender.push (input.data(), input.data(), inputFrames);
+                sender.drain ([&] (const Header& h, const uint8_t* payload)
+                {
+                    numbering = numbering && h.firstFrame == nextFrame && h.frames == 120;
+                    nextFrame += framesPerPacket;
+                    play.push (h, payload, (uint64_t) block * 10000000ULL);
+                });
+                play.pull (left.data(), right.data(), outputFrames);
+                stereo = stereo && left == right;
+                if (block >= 29800) signal.insert (signal.end(), left.begin(), left.end());
+            }
+            double firstCross = -1, lastCross = 0; int crossings = 0;
+            for (size_t i = 1; i < signal.size(); ++i)
+                if (signal[i - 1] <= 0 && signal[i] > 0)
+                {
+                    const double crossing = (double) i - signal[i] / (signal[i] - signal[i - 1]);
+                    if (firstCross < 0) firstCross = crossing;
+                    lastCross = crossing; ++crossings;
+                }
+            const double frequency = (crossings - 1) * (double) rates.second / (lastCross - firstCross);
+            logMessage ("frequency=" + juce::String (frequency, 6) + " Hz, underruns=" + juce::String (play.getStats().underruns));
+            expectWithinAbsoluteError (frequency, 1000.0, 0.5);
+            expectGreaterThan (amplitude (signal, rates.second, frequency), 0.49);
+            expect (numbering && stereo); expect (sender.getOverruns() == 0);
+            expect (play.getStats().underruns == 0 && play.getStats().lost == 0);
+            expectWithinAbsoluteError ((double) nextFrame / 44100, 300.0, 0.01);
+        }
     }
 };
 static LiveMixCollabSenderTests liveMixCollabSenderTests;

@@ -12,13 +12,18 @@ public:
     explicit CollabAudio (const juce::String& peerMapping = "Local\\LiveMix.ObsAudio.v1.Peer");
     ~CollabAudio();
     void prepare (double deviceRate, int maxBlock);
+    bool setWireRate (uint32_t); // message thread, before attach; keeps the device format
+    uint32_t getWireRate() const noexcept { return wireRate.load(); }
     void attach (CollabTransport&); // lifecycle thread; transport and audio detach each other on destruction
     void detach();
     void pushLocal (const float* left, const float* right, int frames) noexcept;
     void pushLocalSilence (int frames) noexcept { pushLocal (nullptr, nullptr, frames); }
     void renderRemote (float* const* outputs, int numOutputs, int masterFirst, int frames) noexcept;
     void setMonitor (float volume01, bool on) noexcept;
-    void setObsEnabled (bool enabled) { peerObs.setEnabled (enabled); }
+    /** The partner's OBS ring runs while 'OBS로 보내기' is on or a collab is open, so either person can add the
+        'LiveMix 합방 상대' source without the master switch. Message thread. */
+    void setObsEnabled (bool enabled) { obsWanted = enabled; peerObs.setEnabled (obsWanted || collabOpen); }
+    void setCollabOpen (bool open) { if (collabOpen == open) return; collabOpen = open; peerObs.setEnabled (obsWanted || collabOpen); }
     ObsSender& getPeerObs() noexcept { return peerObs; }
     CollabPlayout::Stats getStats() const noexcept
     {
@@ -54,11 +59,13 @@ private:
     CollabSender sender;
     CollabPlayout playout;
     ObsSender peerObs;
+    bool obsWanted = false, collabOpen = false;   // message thread
     std::vector<float> left, right;
     std::atomic<float> volume { 1.0f };
     std::atomic<float> peakLeft { 0.0f }, peakRight { 0.0f };
     std::atomic<bool> monitorOn { true };
-    std::atomic<double> publishedRate { wireRate };
+    std::atomic<double> publishedRate { defaultWireRate };
+    std::atomic<uint32_t> wireRate { defaultWireRate };
     float gain = 1.0f, gainTarget = 1.0f, gainStep = 0.0f;
     int gainRemaining = 0, rampFrames = 240;
     bool wasConnected = false;

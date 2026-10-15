@@ -165,6 +165,7 @@ struct CollabTransport::Impl
                 if (state.load() == State::connected && ! sameAddress (peerAddress, from)) continue;
                 PeerInfo info;
                 if (! readPeerInfo (payload, h.payloadBytes, info)) continue;
+                me.wireRate = info.wireRate;
                 acceptPeer (h, info, from, now); received.fetch_add (1);
                 continue;
             }
@@ -310,15 +311,18 @@ CollabTransport::State CollabTransport::getState() const noexcept { return impl-
 CollabTransport::Stats CollabTransport::getStats() const
 {
     const juce::ScopedLock lock (impl->control);
-    return { impl->state.load(), impl->peer, impl->havePeer ? describe (impl->peerAddress) : Address {}, impl->rttMs, impl->sent.load(), impl->received.load() };
+    return { impl->state.load(), impl->peer, impl->havePeer ? describe (impl->peerAddress) : Address {}, impl->rttMs,
+             impl->sent.load(), impl->received.load(), impl->me.wireRate };
 }
 double CollabTransport::estimatedOneWayMs() const
 {
     const juce::ScopedLock lock (impl->control);
     const Impl::AudioAccess access (*impl);
     const double target = access.audio != nullptr ? access.audio->getStats().targetMs : 0;
+    const auto wireRate = impl->me.wireRate;
     const double senderAsrc = impl->peer.deviceRate != wireRate ? 16000.0 / impl->peer.deviceRate : 0;
-    return impl->peer.inputLatencyMs + 1.25 + impl->rttMs * 0.5 + target + senderAsrc + 16000.0 / wireRate + impl->me.outputLatencyMs;
+    return impl->peer.inputLatencyMs + packetDurationMs (wireRate) * 0.5 + impl->rttMs * 0.5
+        + target + senderAsrc + 16000.0 / wireRate + impl->me.outputLatencyMs;
 }
 void CollabTransport::stop()
 {
