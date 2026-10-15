@@ -138,12 +138,18 @@ MainComponent::MainComponent (MixDocument& doc, LiveMixSettings& s, ObsPluginAct
         else
             muteGroups.apply();   // rebuilt nodes start unmuted: the groups' state goes back in
 
+        if (registeredTrackCounts != trackCounts())
+            registerTrackHotkeys();   // a mic / FX number came or went: its ON/OFF key with it
+
+        SettingsDialog::tracksChanged();
+
         if (controlServer != nullptr)
             controlServer->documentChanged (ControlServer::ChangeKind::structure);
     };
     document.onValueChanged = [this]
     {
         refreshValues();
+        SettingsDialog::tracksChanged();   // a renamed mic / FX: its ON/OFF row says so
         if (controlServer != nullptr)
             controlServer->documentChanged (ControlServer::ChangeKind::values);
     };
@@ -168,7 +174,19 @@ MainComponent::MainComponent (MixDocument& doc, LiveMixSettings& s, ObsPluginAct
             default:
                 // 4 .. 3 + maxPluginGroups: plugin group 1 .. 5 on every mic channel at once
                 if (id >= firstPluginGroupHotkeyId && id < firstPluginGroupHotkeyId + MixSession::maxPluginGroups)
+                {
                     togglePluginGroupEverywhere (id - firstPluginGroupHotkeyId);
+                }
+                else
+                {
+                    // then one mic / FX ON/OFF by its number
+                    auto kind = TrackHotkeys::Kind::mic;
+                    int number = 0;
+
+                    if (TrackHotkeys::fromId (id, kind, number))
+                        if (const auto text = TrackHotkeys::toggle (document, kind, number); text.isNotEmpty())
+                            showStatus (text);
+                }
 
                 break;
         }
@@ -1570,31 +1588,62 @@ void MainComponent::showBackupDialog()
     BackupDialog::show (document, settings, backup, this, std::move (callbacks));
 }
 
+void MainComponent::setHotkey (juce::StringArray& failures, int id, const juce::String& description, const juce::String& what)
+{
+    if (description.isEmpty())
+    {
+        hotkeys.clear (id);
+        return;
+    }
+
+    juce::String error;
+
+    if (! hotkeys.set (id, juce::KeyPress::createFromDescription (description), error))
+        failures.add (what + ko (" 핫키(") + description + ko (") 등록 실패: ") + error);
+}
+
 void MainComponent::registerHotkeys()
 {
-    juce::StringArray failures;
-    const auto apply = [this, &failures] (int id, const juce::String& description, const juce::String& what)
-    {
-        if (description.isEmpty())
-        {
-            hotkeys.clear (id);
-            return;
-        }
-
-        juce::String error;
-
-        if (! hotkeys.set (id, juce::KeyPress::createFromDescription (description), error))
-            failures.add (what + ko (" 핫키(") + description + ko (") 등록 실패: ") + error);
-    };
-
-    apply (1, settings.getMicMuteHotkey(), ko ("마이크 뮤트그룹"));
-    apply (2, settings.getFxMuteHotkey(), ko ("FX 뮤트그룹"));
-    apply (3, settings.getWindowHotkey(), ko ("창 숨기기/불러오기"));
+    fixedKeyFailures.clear();
+    setHotkey (fixedKeyFailures, 1, settings.getMicMuteHotkey(), ko ("마이크 뮤트그룹"));
+    setHotkey (fixedKeyFailures, 2, settings.getFxMuteHotkey(), ko ("FX 뮤트그룹"));
+    setHotkey (fixedKeyFailures, 3, settings.getWindowHotkey(), ko ("창 숨기기/불러오기"));
 
     for (int group = 1; group <= MixSession::maxPluginGroups; ++group)
-        apply (firstPluginGroupHotkeyId + group - 1, settings.getPluginGroupHotkey (group),
-               ko ("플러그인 그룹 ") + juce::String (group));
+        setHotkey (fixedKeyFailures, firstPluginGroupHotkeyId + group - 1, settings.getPluginGroupHotkey (group),
+                   ko ("플러그인 그룹 ") + juce::String (group));
 
+    trackKeyFailures = applyTrackHotkeys();
+    showHotkeyFailures();
+}
+
+void MainComponent::registerTrackHotkeys()
+{
+    auto failures = applyTrackHotkeys();
+
+    if (failures == trackKeyFailures)
+        return;   // nothing new: a refusal the operator closed stays closed across session opens (audit LB-1)
+
+    trackKeyFailures = std::move (failures);
+    showHotkeyFailures();
+}
+
+juce::StringArray MainComponent::applyTrackHotkeys()
+{
+    // a mic / FX number the session has no track for is left unregistered: the other programs keep that key
+    juce::StringArray failures;
+
+    for (const auto& track : TrackHotkeys::registrations (document.getSession(), settings))
+        setHotkey (failures, track.id, track.key, track.what);
+
+    registeredTrackCounts = trackCounts();
+    return failures;
+}
+
+void MainComponent::showHotkeyFailures()
+{
+    auto failures = fixedKeyFailures;
+    failures.addArray (trackKeyFailures);
     hotkeyErrorNote = failures.joinIntoString (" / ");
     if (hotkeyErrorNote.isNotEmpty())
         hotkeyErrorNote += ko (" 설정에서 다른 키로 바꿔 주세요.");
@@ -1649,7 +1698,7 @@ void MainComponent::showSettingsDialog()
                               if (safe == nullptr) return;
                               // the key being chosen must not fire its current action
                               if (capturing)
-                                  for (int id = 1; id < firstPluginGroupHotkeyId + MixSession::maxPluginGroups; ++id)
+                                  for (int id = 1; id <= TrackHotkeys::lastId; ++id)
                                       safe->hotkeys.clear (id);
                               else
                                   safe->registerHotkeys();
@@ -1661,7 +1710,12 @@ void MainComponent::showSettingsDialog()
                                   safe->onExternalControlEnabled (on);
                           },
                           {},
-                          [safe] { if (safe != nullptr) safe->deviceChanged(); });   // a failed open: shown, not chosen
+                          [safe] { if (safe != nullptr) safe->deviceChanged(); },   // a failed open: shown, not chosen
+                          [safe]
+                          {
+                              return safe != nullptr ? TrackHotkeys::settingsRows (safe->document.getSession(), safe->settings)
+                                                     : std::vector<TrackHotkeys::Track>();
+                          });
 }
 
 } // namespace gocue::livemix

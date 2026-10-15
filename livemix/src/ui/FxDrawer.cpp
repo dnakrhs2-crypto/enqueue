@@ -5,6 +5,8 @@ namespace gocue::livemix
 
 namespace
 {
+    constexpr float offAlpha = 0.62f;   // as an OFF mic card
+
     class FxTabButton : public DoubleClickButton
     {
     public:
@@ -75,6 +77,14 @@ FxDrawer::FxDrawer (MixDocument& doc) : document (doc)
 
     name.onRenamed = [this] (const juce::String& text) { if (! selected.isNull()) document.renameFx (selected, text); };
     addAndMakeVisible (name);
+
+    lamp.setTexts ("FX ON", "FX OFF", ko ("뮤트그룹 - 뮤트 중"));
+    lamp.onClick = [this]
+    {
+        if (const auto* f = fx(); f != nullptr && ! refreshing)
+            document.setFxOn (f->id, ! f->on);
+    };
+    addAndMakeVisible (lamp);
 
     styleCaption (chainCaption, ko ("VST3 체인"));
     addAndMakeVisible (chainCaption);
@@ -188,10 +198,10 @@ void FxDrawer::refresh()
     const auto* f = fx();
     const bool have = f != nullptr;
 
-    for (auto* c : std::initializer_list<juce::Component*> { &name, &openChainButton, &addPluginButton, &returnSlider, &masterChip, &directChip, &monoChip, &muteGroupChip, &directCombo, &removeFxButton })
+    for (auto* c : std::initializer_list<juce::Component*> { &name, &lamp, &openChainButton, &addPluginButton, &returnSlider, &masterChip, &directChip, &monoChip, &muteGroupChip, &directCombo, &removeFxButton })
         c->setEnabled (have);
 
-    for (auto* c : std::initializer_list<juce::Component*> { &chainCaption, &openChainButton, &addPluginButton,
+    for (auto* c : std::initializer_list<juce::Component*> { &lamp, &chainCaption, &openChainButton, &addPluginButton,
              &returnCaption, &returnSlider, &returnValue, &outputCaption, &masterChip, &directChip, &monoChip,
              &muteGroupChip, &directCombo, &removeFxButton, &meterCaption, &meter_, &sendersCaption, &note })
         c->setVisible (have);
@@ -215,6 +225,8 @@ void FxDrawer::refresh()
                                f->output.directFirst, f->output.direct);
         monoChip.setToggleState (f->mono, juce::dontSendNotification);
         muteGroupChip.setToggleState (f->muteGroup, juce::dontSendNotification);
+        lamp.setOn (f->on);
+        lamp.setMuted (mutedNow);
     }
     else
     {
@@ -223,6 +235,21 @@ void FxDrawer::refresh()
 
     rebuildChain();
     rebuildSenders();
+
+    // an OFF FX is drawn as an OFF mic card is: everything of it dimmed but its switch
+    const float alpha = have && ! f->on ? offAlpha : 1.0f;
+
+    for (auto* c : std::initializer_list<juce::Component*> { &name, &removeFxButton, &chainCaption, &openChainButton, &addPluginButton,
+             &returnCaption, &returnSlider, &returnValue, &outputCaption, &masterChip, &directChip, &monoChip,
+             &muteGroupChip, &directCombo, &meterCaption, &meter_, &sendersCaption, &note })
+        c->setAlpha (alpha);
+
+    for (auto& chip : chips)
+        chip->setAlpha (alpha);
+
+    for (auto& sender : senders)
+        sender->setAlpha (alpha);
+
     resized();
 
     if (onPreferredHeightChanged && getPreferredHeight (getWidth()) != getHeight())
@@ -244,6 +271,7 @@ void FxDrawer::rebuildTabs()
         tab->setTooltip (f.name + "\n" + ko ("더블클릭: 이름 바꾸기"));
         tab->setToggleState (f.id == selected, juce::dontSendNotification);
         tab->setColour (juce::TextButton::buttonOnColourId, Palette::accent);
+        tab->setAlpha (f.on ? 1.0f : offAlpha);
         const auto id = f.id;
         tab->onClick = [this, id] { selectFx (id); };
         tab->onDoubleClick = [this, id]
@@ -409,6 +437,8 @@ int FxDrawer::layout (int width, bool apply)
     place (removeFxButton, nameRow.removeFromRight (90));
     nameRow.removeFromRight (8);
     place (name, nameRow);
+    area.removeFromTop (8);
+    place (lamp, area.removeFromTop (40));   // under the name, as on a mic card
     area.removeFromTop (12);
 
     place (chainCaption, area.removeFromTop (20));

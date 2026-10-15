@@ -59,6 +59,7 @@ struct MixFx
     std::vector<PluginSlotState> chain;
     double returnAmount = 1.0;   // 0..1
     bool mono = false;           // the FX output summed to mono (L+R)/2 on both sides
+    bool on = true;              // the FX's own ON/OFF: OFF silences its return, the amount kept (like a mic's switch)
     bool muteGroup = false;      // in the FX mute group: the group's hotkey silences its return
     MixOutput output;
 };

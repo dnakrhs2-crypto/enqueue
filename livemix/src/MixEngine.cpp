@@ -738,7 +738,8 @@ void MixEngine::renderBlock (const float* const* inputs, int numInputs, float* c
             auto& fx = *fxNodes[(size_t) f];
             auto& bus = fxBus[(size_t) f];
             fx.chain->process (bus, n);
-            const float ret = fx.muted.load (std::memory_order_relaxed) ? 0.0f : fx.returnAmount.load (std::memory_order_relaxed);
+            const float ret = fx.muted.load (std::memory_order_relaxed) || ! fx.on.load (std::memory_order_relaxed)
+                                  ? 0.0f : fx.returnAmount.load (std::memory_order_relaxed);
             const float retFrom = fx.returnCurrent;
             fx.returnCurrent = ret;
 
@@ -957,9 +958,10 @@ void MixEngine::applySession (const MixSession& session, juce::StringArray* erro
                 continue;   // beyond the limit (the session is sanitised, so this does not happen)
 
             node->returnAmount.store ((float) juce::jlimit (0.0, 1.0, f.returnAmount), std::memory_order_relaxed);
+            node->on.store (f.on, std::memory_order_relaxed);
 
             if (restoreChains)
-                node->returnCurrent = (float) juce::jlimit (0.0, 1.0, f.returnAmount);   // fresh: starts at its level
+                node->returnCurrent = f.on ? (float) juce::jlimit (0.0, 1.0, f.returnAmount) : 0.0f;   // fresh: starts at its level
 
             node->mono.store (f.mono, std::memory_order_relaxed);
             applyOutput (f.output, node->toMaster, node->direct, node->directFirst);
@@ -1131,6 +1133,12 @@ void MixEngine::setFxMono (const juce::Uuid& fxId, bool mono)
 {
     if (auto* node = findFx (fxId))
         node->mono.store (mono, std::memory_order_relaxed);
+}
+
+void MixEngine::setFxOn (const juce::Uuid& fxId, bool on)
+{
+    if (auto* node = findFx (fxId))
+        node->on.store (on, std::memory_order_relaxed);
 }
 
 void MixEngine::setFxMuted (const juce::Uuid& fxId, bool muted)

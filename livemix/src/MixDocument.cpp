@@ -346,6 +346,16 @@ void MixDocument::setFxMono (const juce::Uuid& id, bool mono)
     }
 }
 
+void MixDocument::setFxOn (const juce::Uuid& id, bool on)
+{
+    if (auto* f = session.findFx (id))
+    {
+        f->on = on;
+        engine.setFxOn (id, on);
+        valueChanged();
+    }
+}
+
 void MixDocument::setChannelMuteGroup (const juce::Uuid& id, bool inGroup)
 {
     if (auto* c = session.findChannel (id))

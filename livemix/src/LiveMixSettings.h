@@ -62,6 +62,12 @@ public:
         on across every mic channel that has one. */
     juce::String getPluginGroupHotkey (int group) const;
     void setPluginGroupHotkey (int group, const juce::String& description);
+    /** The ON/OFF hotkey of mic 'number' (1..MixSession::maxChannels) / FX 'number' (1..maxFx): it switches the
+        track at that number in whichever session is open (see TrackHotkeys). */
+    juce::String getMicOnHotkey (int number) const;
+    void setMicOnHotkey (int number, const juce::String& description);
+    juce::String getFxOnHotkey (int number) const;
+    void setFxOnHotkey (int number, const juce::String& description);
 
     /** The notice about a plugin with latency in a mic chain: closed once by the operator, never shown again. */
     bool getLatencyNoticeDismissed() const;

@@ -273,6 +273,7 @@ target_sources(LiveMixCore INTERFACE
     ${CMAKE_CURRENT_SOURCE_DIR}/livemix/src/ControlLog.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/livemix/src/LiveMixSettings.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/livemix/src/GlobalHotkeys.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/livemix/src/TrackHotkeys.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/livemix/src/PluginPreset.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/livemix/src/PluginSet.cpp)
 target_include_directories(LiveMixCore INTERFACE

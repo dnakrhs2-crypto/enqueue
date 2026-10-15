@@ -95,6 +95,7 @@ target_sources(EnqueueTests PRIVATE
     ChannelCardTests.cpp
     MasterCardTests.cpp
     MuteGroupsTests.cpp
+    LiveMixTrackOnOffTests.cpp
     ControlProtocolTests.cpp
     ControlDispatcherTests.cpp
     ControlStateTests.cpp

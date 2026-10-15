@@ -15,6 +15,7 @@
 #include "PluginManagerWindow.h"
 #include "PluginPreset.h"
 #include "TopBar.h"
+#include "TrackHotkeys.h"
 #include "WebDavBackup.h"
 #include "ui/PluginWindows.h"
 
@@ -115,6 +116,13 @@ private:
     void showBackupDialog();
     void showSettingsDialog();
     void registerHotkeys();      // from the settings; refused keys stay in the notice until retried or dismissed
+    /** Only the mic / FX ON/OFF keys, for the numbers the session has now (its tracks changed). The notice changes
+        only when what is refused changes: a refusal the operator closed is not brought back by a session open. */
+    void registerTrackHotkeys();
+    juce::StringArray applyTrackHotkeys();   // registers them and returns what was refused
+    void setHotkey (juce::StringArray& failures, int id, const juce::String& description, const juce::String& what);
+    void showHotkeyFailures();   // the notice line from both lists
+    juce::StringArray fixedKeyFailures, trackKeyFailures;   // the last registration's refusals
     /** While one is alive the global hotkeys do nothing: a session (or its plugins) is going into the engine, and
         WM_HOTKEY arrives straight from the message loop - a plugin that pumps messages while it is built would
         otherwise let a keypress edit the incoming session against the graph still running. */
@@ -131,6 +139,15 @@ private:
     /** The global hotkey of plugin group 'group' (0-based): that numbered group off / on across every mic channel. */
     void togglePluginGroupEverywhere (int group);
     static constexpr int firstPluginGroupHotkeyId = 4;   // 1 the mic mute group, 2 the FX mute group, 3 the window
+    static_assert (TrackHotkeys::firstId == firstPluginGroupHotkeyId + MixSession::maxPluginGroups,
+                   "the mic / FX ON/OFF hotkeys come right after the plugin groups'");
+    /** How many mics and FX the session has: the ON/OFF keys registered are for these numbers. */
+    std::pair<int, int> trackCounts() const
+    {
+        const auto& session = document.getSession();
+        return { (int) session.channels.size(), (int) session.fx.size() };
+    }
+    std::pair<int, int> registeredTrackCounts { -1, -1 };
     void layoutFxDrawer();       // the drawer's size inside its viewport
     void muteGroupsChanged();    // badges, cards, drawer
     void showPluginManager();

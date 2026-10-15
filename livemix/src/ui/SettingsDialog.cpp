@@ -50,11 +50,11 @@ namespace
         SettingsContent (MixEngine& e, LiveMixSettings& s, std::function<void()> deviceChanged, std::function<void()> hotkeysChanged,
                          std::function<void (bool)> hotkeyCapture, std::function<ControlServer::Status()> controlStatus,
                          std::function<void (bool)> controlEnabled, SettingsDialog::AcceptedFormatsQuery acceptedFormats,
-                         std::function<void()> openFailed)
+                         std::function<void()> openFailed, SettingsDialog::TrackList tracks)
             : engine (e), settings (s), onDeviceChanged (std::move (deviceChanged)), onOpenFailed (std::move (openFailed)),
               onHotkeysChanged (std::move (hotkeysChanged)), onHotkeyCapture (std::move (hotkeyCapture)),
               getControlStatus (std::move (controlStatus)), onControlEnabled (std::move (controlEnabled)),
-              getAcceptedFormats (std::move (acceptedFormats))
+              getAcceptedFormats (std::move (acceptedFormats)), getTracks (std::move (tracks))
         {
             styleCaption (typeCaption, ko ("장치 종류"));
             addAndMakeVisible (typeCaption);
@@ -184,81 +184,28 @@ namespace
 
             styleCaption (hotkeyCaption, ko ("전역 핫키"));
             addAndMakeVisible (hotkeyCaption);
-            styleCaption (hotkeyNote, ko ("LiveMix가 최소화·트레이 상태여도 듣는 전역 핫키입니다. 그동안 다른 프로그램은 그 키를 받지 못하니 F 키(F9 등)나 Ctrl+Alt 조합을 권합니다. 뮤트 대상은 각 마이크 카드와 FX의 '뮤트그룹' 칩으로 고릅니다. 세 번째 핫키는 창을 트레이로 숨기거나 다시 불러옵니다. 플러그인 그룹 핫키는 그 번호의 그룹을 마이크 전체에서 한꺼번에 껐다 켭니다 (그룹은 채널의 '체인 열기' 옆에서 만듭니다)."));
+            styleCaption (hotkeyNote, ko ("LiveMix가 최소화·트레이 상태여도 듣는 전역 핫키입니다. 그동안 다른 프로그램은 그 키를 받지 못하니 F 키(F9 등)나 Ctrl+Alt 조합을 권합니다. 뮤트 대상은 각 마이크 카드와 FX의 '뮤트그룹' 칩으로 고릅니다. ON/OFF 핫키는 그 번호의 마이크·FX 하나만 켜고 끕니다 (다른 세션에서도 같은 번호). '창 숨기기/불러오기'는 창을 트레이로 숨기거나 다시 불러옵니다. 플러그인 그룹 핫키는 그 번호의 그룹을 마이크 전체에서 한꺼번에 껐다 켭니다 (그룹은 채널의 '체인 열기' 옆에서 만듭니다)."));
             hotkeyNote.setFont (bodyFont (12.5f));
             addAndMakeVisible (hotkeyNote);
 
-            // every row is the same three widgets; 'rows' keeps them in the order they are drawn and is what the
-            // clash check walks, so a new hotkey is one hotkeyRow() call and nothing else
-            auto hotkeyRow = [this] (juce::Label& label, const juce::String& text, HotkeyButton& button, juce::TextButton& clear,
-                                     std::function<juce::String()> get, std::function<void (const juce::String&)> set)
-            {
-                label.setText (text, juce::dontSendNotification);
-                label.setFont (bodyFont (14.0f));
-                label.setColour (juce::Label::textColourId, Palette::text);
-                addAndMakeVisible (label);
-                button.setHotkey (get());
-                auto reason = std::make_unique<HotkeyReason>();
-                addChildComponent (*reason);
-                button.onRejectionChanged = [this, message = reason.get()] (const juce::String& text)
-                {
-                    message->text = text;
-                    message->setVisible (text.isNotEmpty());
-                    message->repaint();
-                    updateContentSize();
-                    resized();
-                };
-                button.validate = [this, &button] (const juce::KeyPress& key)
-                {
-                    if (const auto why = GlobalHotkeys::reasonToRefuse (key); why.isNotEmpty())
-                        return why;
-
-                    for (const auto& other : rows)
-                        if (other.button != &button && other.button->getHotkey().isNotEmpty()
-                            && key == juce::KeyPress::createFromDescription (other.button->getHotkey()))
-                            return ko ("다른 핫키가 쓰는 키입니다.");
-
-                    return juce::String();
-                };
-                button.onCaptureChanged = [this] (bool capturing) { if (onHotkeyCapture) onHotkeyCapture (capturing); };
-                button.onHotkeyChanged = [this, set, &button] (const juce::String& description)
-                {
-                    set (description);
-                    button.setHotkey (description);
-
-                    if (onHotkeysChanged)
-                        onHotkeysChanged();
-                };
-                addAndMakeVisible (button);
-                clear.setButtonText ("x");
-                clear.setTooltip (ko ("핫키 지우기"));
-                clear.onClick = [this, set, &button]
-                {
-                    set ({});
-                    button.setHotkey ({});
-
-                    if (onHotkeysChanged)
-                        onHotkeysChanged();
-                };
-                addAndMakeVisible (clear);
-                rows.push_back ({ &label, &button, &clear, std::move (reason) });
-            };
-
             auto& prefs = settings;   // 'settings' is a reference member; the lambdas below keep it by name
-            hotkeyRow (micHotkeyLabel, ko ("마이크 뮤트그룹"), micHotkey, micHotkeyClear,
-                       [&prefs] { return prefs.getMicMuteHotkey(); }, [&prefs] (const juce::String& d) { prefs.setMicMuteHotkey (d); });
-            hotkeyRow (fxHotkeyLabel, ko ("FX 뮤트그룹"), fxHotkey, fxHotkeyClear,
-                       [&prefs] { return prefs.getFxMuteHotkey(); }, [&prefs] (const juce::String& d) { prefs.setFxMuteHotkey (d); });
-            hotkeyRow (windowHotkeyLabel, ko ("창 숨기기/불러오기"), windowHotkey, windowHotkeyClear,
-                       [&prefs] { return prefs.getWindowHotkey(); }, [&prefs] (const juce::String& d) { prefs.setWindowHotkey (d); });
+            addFixedRow (micHotkeyLabel, ko ("마이크 뮤트그룹"), micHotkey, micHotkeyClear,
+                         [&prefs] { return prefs.getMicMuteHotkey(); }, [&prefs] (const juce::String& d) { prefs.setMicMuteHotkey (d); });
+            addFixedRow (fxHotkeyLabel, ko ("FX 뮤트그룹"), fxHotkey, fxHotkeyClear,
+                         [&prefs] { return prefs.getFxMuteHotkey(); }, [&prefs] (const juce::String& d) { prefs.setFxMuteHotkey (d); });
+            addFixedRow (windowHotkeyLabel, ko ("창 숨기기/불러오기"), windowHotkey, windowHotkeyClear,
+                         [&prefs] { return prefs.getWindowHotkey(); }, [&prefs] (const juce::String& d) { prefs.setWindowHotkey (d); });
 
             for (int i = 0; i < MixSession::maxPluginGroups; ++i)
             {
                 const int group = i + 1;   // the number on the card
-                hotkeyRow (groupHotkeyLabel[i], ko ("플러그인 그룹 ") + juce::String (group), groupHotkey[i], groupHotkeyClear[i],
-                           [&prefs, group] { return prefs.getPluginGroupHotkey (group); },
-                           [&prefs, group] (const juce::String& d) { prefs.setPluginGroupHotkey (group, d); });
+                addFixedRow (groupHotkeyLabel[i], ko ("플러그인 그룹 ") + juce::String (group), groupHotkey[i], groupHotkeyClear[i],
+                             [&prefs, group] { return prefs.getPluginGroupHotkey (group); },
+                             [&prefs, group] (const juce::String& d) { prefs.setPluginGroupHotkey (group, d); });
             }
+
+            rebuildTrackRows();
+            arrangeRows();
 
             styleCaption (controlCaption, ko ("외부 제어 (Stream Deck)"));
             addAndMakeVisible (controlCaption);
@@ -636,15 +583,27 @@ namespace
         {
             const int deviceHeight = (shownType.containsIgnoreCase ("ASIO") ? 3 : 4) * 58 + bitDepthHeight() + deviceNoteHeight() + 12;
             int reasonHeight = 0;
-            for (const auto& row : rows)
-                reasonHeight += row.reason->heightForWidth (560 - 40);
-            setSize (560, 848 + 28 + MixSession::maxPluginGroups * 36 - 160 + deviceHeight + reasonHeight);
+            for (const auto* row : order)
+                reasonHeight += row->reason->heightForWidth (560 - 40);
+            setSize (560, 848 + 28 + MixSession::maxPluginGroups * 36 - 160 + deviceHeight + reasonHeight
+                              + (int) trackRows.size() * 36 + hotkeyNoteHeight() - 90);
+        }
+
+        /** The session's mics / FX changed: their ON/OFF rows follow (nothing moves when the list is the same). */
+        void tracksChanged()
+        {
+            if (rebuildTrackRows())
+            {
+                arrangeRows();
+                updateContentSize();
+                resized();
+            }
         }
 
         ~SettingsContent() override
         {
             stopTimer();   // no timer can refer to the labels once SettingsWindow deletes this content
-            const bool capturing = std::any_of (rows.begin(), rows.end(), [] (const Row& r) { return r.button->isCapturing(); });
+            const bool capturing = std::any_of (order.begin(), order.end(), [] (const Row* r) { return r->button->isCapturing(); });
 
             if (capturing && onHotkeyCapture)
                 onHotkeyCapture (false);   // the dialog went away mid-capture: the hotkeys come back
@@ -712,22 +671,24 @@ namespace
             sendTransport.setBounds (area.removeFromTop (28));
             area.removeFromTop (16);
             hotkeyCaption.setBounds (area.removeFromTop (20));
-            hotkeyNote.setBounds (area.removeFromTop (90));
+            hotkeyNote.setBounds (area.removeFromTop (hotkeyNoteHeight()));
             area.removeFromTop (4);
 
             int labelWidth = 0;
 
-            for (const auto& hotkey : rows)
-                labelWidth = juce::jmax (labelWidth, labelWidthForText (*hotkey.label, hotkey.label->getText()));
+            for (const auto* hotkey : order)
+                labelWidth = juce::jmax (labelWidth, labelWidthForText (*hotkey->label, hotkey->label->getText()));
 
-            for (const auto& hotkey : rows)
+            labelWidth = juce::jmin (labelWidth, 240);   // a long mic / FX name gives way before the key does
+
+            for (const auto* hotkey : order)
             {
                 auto r = area.removeFromTop (30);
-                hotkey.label->setBounds (r.removeFromLeft (labelWidth));
-                hotkey.clear->setBounds (r.removeFromRight (34));
+                hotkey->label->setBounds (r.removeFromLeft (labelWidth));
+                hotkey->clear->setBounds (r.removeFromRight (34));
                 r.removeFromRight (6);
-                hotkey.button->setBounds (r);
-                hotkey.reason->setBounds (area.removeFromTop (hotkey.reason->heightForWidth (area.getWidth())));
+                hotkey->button->setBounds (r);
+                hotkey->reason->setBounds (area.removeFromTop (hotkey->reason->heightForWidth (area.getWidth())));
                 area.removeFromTop (6);
             }
 
@@ -777,6 +738,7 @@ namespace
         std::function<ControlServer::Status()> getControlStatus;
         std::function<void (bool)> onControlEnabled;
         SettingsDialog::AcceptedFormatsQuery getAcceptedFormats;
+        SettingsDialog::TrackList getTracks;
         juce::StringArray types, names, outputNames;
         juce::String shownType;
         juce::String choosingType;      // shown while another type's device plays: switched to, its first driver did not open
@@ -785,8 +747,144 @@ namespace
         double pendingRate = 0.0;       // an ASIO rate that just opened, watched for a reset that leaves it (3 s)
         juce::uint32 pendingSince = 0;
         int pendingOpenCount = 0;       // engine.getOpenCount() then: any later openDevice() is no reset
-        struct Row { juce::Label* label; HotkeyButton* button; juce::TextButton* clear; std::unique_ptr<HotkeyReason> reason; };
-        std::vector<Row> rows;   // the hotkey rows in the order they are drawn
+        struct Row { juce::Label* label = nullptr; HotkeyButton* button = nullptr; juce::TextButton* clear = nullptr; std::unique_ptr<HotkeyReason> reason; };
+
+        /** A mic's / an FX's ON/OFF row: widgets of its own, made again when the session's tracks change. */
+        struct TrackRow
+        {
+            TrackHotkeys::Track track;
+            juce::Label label;
+            HotkeyButton button;
+            juce::TextButton clear { "x" };
+            Row row;
+        };
+
+        std::vector<std::unique_ptr<Row>> fixedRows;           // the mute groups, the window, plugin groups 1..5
+        std::vector<std::unique_ptr<TrackRow>> trackRows;      // the session's mics, then its FX
+        std::vector<Row*> order;   // every row in the order drawn: what the layout and the clash check walk
+
+        // every row is the same three widgets, so a new hotkey is one more row and nothing else
+        void setUpRow (Row& row, juce::Label& label, const juce::String& text, HotkeyButton& button, juce::TextButton& clear,
+                       std::function<juce::String()> get, std::function<void (const juce::String&)> set)
+        {
+            label.setText (text, juce::dontSendNotification);
+            label.setFont (bodyFont (14.0f));
+            label.setColour (juce::Label::textColourId, Palette::text);
+            addAndMakeVisible (label);
+            button.setHotkey (get());
+            row.reason = std::make_unique<HotkeyReason>();
+            addChildComponent (*row.reason);
+            button.onRejectionChanged = [this, message = row.reason.get()] (const juce::String& reasonText)
+            {
+                message->text = reasonText;
+                message->setVisible (reasonText.isNotEmpty());
+                message->repaint();
+                updateContentSize();
+                resized();
+            };
+            button.validate = [this, &button] (const juce::KeyPress& key)
+            {
+                if (const auto why = GlobalHotkeys::reasonToRefuse (key); why.isNotEmpty())
+                    return why;
+
+                for (const auto* other : order)
+                    if (other->button != &button && other->button->getHotkey().isNotEmpty()
+                        && key == juce::KeyPress::createFromDescription (other->button->getHotkey()))
+                        return ko ("다른 핫키가 쓰는 키입니다.");
+
+                return juce::String();
+            };
+            button.onCaptureChanged = [this] (bool capturing) { if (onHotkeyCapture) onHotkeyCapture (capturing); };
+            button.onHotkeyChanged = [this, set, &button] (const juce::String& description)
+            {
+                set (description);
+                button.setHotkey (description);
+
+                if (onHotkeysChanged)
+                    onHotkeysChanged();
+            };
+            addAndMakeVisible (button);
+            clear.setButtonText ("x");
+            clear.setTooltip (ko ("핫키 지우기"));
+            clear.onClick = [this, set, &button]
+            {
+                set ({});
+                button.setHotkey ({});
+
+                if (onHotkeysChanged)
+                    onHotkeysChanged();
+            };
+            addAndMakeVisible (clear);
+            row.label = &label;
+            row.button = &button;
+            row.clear = &clear;
+        }
+
+        void addFixedRow (juce::Label& label, const juce::String& text, HotkeyButton& button, juce::TextButton& clear,
+                          std::function<juce::String()> get, std::function<void (const juce::String&)> set)
+        {
+            fixedRows.push_back (std::make_unique<Row>());
+            setUpRow (*fixedRows.back(), label, text, button, clear, std::move (get), std::move (set));
+        }
+
+        /** Makes the ON/OFF rows for the session's tracks as they are now; false (and nothing touched) when they match. */
+        bool rebuildTrackRows()
+        {
+            const auto list = getTracks ? getTracks() : std::vector<TrackHotkeys::Track>();
+            const bool same = list.size() == trackRows.size()
+                && std::equal (list.begin(), list.end(), trackRows.begin(), [] (const TrackHotkeys::Track& t, const std::unique_ptr<TrackRow>& r)
+                               { return t.kind == r->track.kind && t.number == r->track.number && t.label == r->track.label
+                                     && t.inSession == r->track.inSession; });
+
+            if (same)
+                return false;
+
+            order.clear();   // it points into the rows going away
+            trackRows.clear();
+            auto& prefs = settings;
+
+            for (const auto& t : list)
+            {
+                auto r = std::make_unique<TrackRow>();
+                r->track = t;
+                const auto kind = t.kind;
+                const int number = t.number;
+                r->button.setComponentID ((kind == TrackHotkeys::Kind::mic ? "hotkey-mic-" : "hotkey-fx-") + juce::String (number));
+                setUpRow (r->row, r->label, t.label, r->button, r->clear,
+                          [&prefs, kind, number] { return TrackHotkeys::getKey (prefs, kind, number); },
+                          [&prefs, kind, number] (const juce::String& d) { TrackHotkeys::setKey (prefs, kind, number, d); });
+
+                if (! t.inSession)
+                    r->label.setAlpha (0.62f);   // a number this session lacks: its key waits there, dimmed like an OFF mic
+
+                trackRows.push_back (std::move (r));
+            }
+
+            return true;
+        }
+
+        /** Each kind under its mute group (gom, 2026-10-15): the mic group, every mic, the FX group, every FX, then the
+            window and the plugin groups. */
+        void arrangeRows()
+        {
+            order.clear();
+            const auto tracksOf = [this] (TrackHotkeys::Kind kind)
+            {
+                for (auto& r : trackRows)
+                    if (r->track.kind == kind)
+                        order.push_back (&r->row);
+            };
+
+            order.push_back (fixedRows[0].get());   // 마이크 뮤트그룹
+            tracksOf (TrackHotkeys::Kind::mic);
+            order.push_back (fixedRows[1].get());   // FX 뮤트그룹
+            tracksOf (TrackHotkeys::Kind::fx);
+
+            for (size_t i = 2; i < fixedRows.size(); ++i)
+                order.push_back (fixedRows[i].get());
+        }
+
+        int hotkeyNoteHeight() const { return juce::jmax (90, textHeight (hotkeyNote)); }
         juce::Label deviceCaption, bufferCaption, deviceNote, backupCaption, backupNote, hotkeyCaption, hotkeyNote, micHotkeyLabel, fxHotkeyLabel, windowHotkeyLabel;
         juce::Label typeCaption, outputCaption, rateCaption, sharedBufferNote;
         juce::Label bitDepthCaption, bitDepthDetail, bitDepthHint, bitDepthWarning;
@@ -853,7 +951,7 @@ namespace
 void SettingsDialog::show (MixEngine& engine, LiveMixSettings& settings, juce::Component* centreAround, std::function<void()> onDeviceChanged,
                            std::function<void()> onHotkeysChanged, std::function<void (bool capturing)> onHotkeyCapture,
                            std::function<ControlServer::Status()> controlStatus, std::function<void (bool)> controlEnabled,
-                           AcceptedFormatsQuery acceptedFormats, std::function<void()> onOpenFailed)
+                           AcceptedFormatsQuery acceptedFormats, std::function<void()> onOpenFailed, TrackList tracks)
 {
     if (openDialog != nullptr)
     {
@@ -863,7 +961,7 @@ void SettingsDialog::show (MixEngine& engine, LiveMixSettings& settings, juce::C
 
     auto* content = new SettingsContent (engine, settings, std::move (onDeviceChanged), std::move (onHotkeysChanged), std::move (onHotkeyCapture),
                                          std::move (controlStatus), std::move (controlEnabled), std::move (acceptedFormats),
-                                         std::move (onOpenFailed));
+                                         std::move (onOpenFailed), std::move (tracks));
     auto* scroller = new juce::Viewport();
     scroller->setViewedComponent (content, true);
     scroller->setScrollBarsShown (true, true);   // sideways only when a narrow display squeezed the window under the content's width
@@ -894,6 +992,16 @@ void SettingsDialog::show (MixEngine& engine, LiveMixSettings& settings, juce::C
 void SettingsDialog::closeIfOpen()
 {
     openDialog.deleteAndZero();
+}
+
+void SettingsDialog::tracksChanged()
+{
+    if (openDialog == nullptr)
+        return;
+
+    if (auto* scroller = dynamic_cast<juce::Viewport*> (openDialog->getContentComponent()))
+        if (auto* content = dynamic_cast<SettingsContent*> (scroller->getViewedComponent()))
+            content->tracksChanged();
 }
 
 SettingsDialog::Placement SettingsDialog::placement (int width, int contentHeight, juce::Point<int> centre, juce::Rectangle<int> screen,

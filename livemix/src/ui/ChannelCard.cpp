@@ -313,6 +313,11 @@ void ChannelCard::refresh()
     rebuildSends();
     for (auto* child : getChildren())
         child->setAlpha (c->on || child == &micButton ? 1.0f : 0.62f);
+
+    for (auto& send : sends)   // a send into an OFF FX reaches nothing for now: dimmed like an OFF mic
+        if (const auto* f = session.findFx (send->fxId); f != nullptr && ! f->on)
+            send->setAlpha (0.62f);
+
     resized();
     repaint();
 }

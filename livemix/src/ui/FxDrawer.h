@@ -60,6 +60,7 @@ private:
     std::vector<std::unique_ptr<DoubleClickButton>> tabs;   // a click selects, a double-click renames
     juce::TextButton addFxButton, removeFxButton;
     NameLabel name;
+    LampButton lamp;   // the selected FX's own ON/OFF, like a mic card's
     std::vector<std::unique_ptr<juce::TextButton>> chips;
     juce::TextButton openChainButton, addPluginButton;
     juce::Slider returnSlider;

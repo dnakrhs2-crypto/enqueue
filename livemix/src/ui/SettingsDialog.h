@@ -3,6 +3,7 @@
 #include "LiveMixSettings.h"
 #include "ControlServer.h"
 #include "MixEngine.h"
+#include "TrackHotkeys.h"
 
 #include <juce_gui_basics/juce_gui_basics.h>
 
@@ -17,14 +18,19 @@ namespace gocue::livemix
 namespace SettingsDialog
 {
     using AcceptedFormatsQuery = std::function<std::pair<int, int>()>; // optional capability seam for non-WASAPI devices
+    /** The open session's mics and FX for their ON/OFF hotkey rows (asked again by tracksChanged()). */
+    using TrackList = std::function<std::vector<TrackHotkeys::Track>()>;
     /** 'onDeviceChanged': a device opened from here (a pick, a rate, a buffer) - the app takes it as the one chosen.
         'onOpenFailed': an open from here failed and the device that ran is back (or none runs) - the app shows what
         runs, and the session keeps asking for its own device. */
     void show (MixEngine& engine, LiveMixSettings& settings, juce::Component* centreAround, std::function<void()> onDeviceChanged,
                std::function<void()> onHotkeysChanged, std::function<void (bool capturing)> onHotkeyCapture,
                std::function<ControlServer::Status()> controlStatus, std::function<void (bool)> controlEnabled,
-               AcceptedFormatsQuery acceptedFormats = {}, std::function<void()> onOpenFailed = {});
+               AcceptedFormatsQuery acceptedFormats = {}, std::function<void()> onOpenFailed = {}, TrackList tracks = {});
     void closeIfOpen();
+    /** The session's mics / FX changed (added, removed, renamed, another session): an open settings window redraws
+        its ON/OFF hotkey rows. */
+    void tracksChanged();
 
     /** Where the window opens and how far its inside resizes, for the screen it opens on. */
     struct Placement

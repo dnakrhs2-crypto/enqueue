@@ -64,6 +64,7 @@ public:
     void renameFx (const juce::Uuid& id, const juce::String& name);
     void setFxReturn (const juce::Uuid& id, double amount);
     void setFxMono (const juce::Uuid& id, bool mono);
+    void setFxOn (const juce::Uuid& id, bool on);
     void setFxMuteGroup (const juce::Uuid& id, bool inGroup);
     void setFxOutput (const juce::Uuid& id, const MixOutput& output);
     void setMasterOutput (int first);

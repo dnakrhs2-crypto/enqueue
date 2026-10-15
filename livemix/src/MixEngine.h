@@ -129,6 +129,8 @@ public:
     void setSend (const juce::Uuid& channelId, const juce::Uuid& fxId, double amount, bool pre);
     void setFxReturn (const juce::Uuid& fxId, double amount);
     void setFxMono (const juce::Uuid& fxId, bool mono);
+    /** The FX's own ON/OFF: OFF ramps its return to silence like the mute group, the amount kept. */
+    void setFxOn (const juce::Uuid& fxId, bool on);
     /** The FX mute group: a muted FX's return ramps to silence, its return amount kept. */
     void setFxMuted (const juce::Uuid& fxId, bool muted);
     void setFxOutput (const juce::Uuid& fxId, const MixOutput& output);
@@ -196,6 +198,7 @@ private:
     {
         juce::Uuid id;
         std::atomic<float> returnAmount { 1.0f };
+        std::atomic<bool> on { true };       // its own switch: OFF is silent like the group's mute
         std::atomic<bool> muted { false };   // by the FX mute group: the return ramps to silence, the amount kept
         float returnCurrent = 1.0f;   // audio thread: the level the last block ended on
         std::atomic<bool> mono { false };

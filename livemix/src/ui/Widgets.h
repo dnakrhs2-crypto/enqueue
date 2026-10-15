@@ -182,6 +182,15 @@ public:
 
     bool isOn() const noexcept { return on; }
 
+    /** What it reads ON / OFF / muted by its group: a mic's by default, an FX's in the FX drawer. */
+    void setTexts (const juce::String& onText, const juce::String& offText, const juce::String& mutedText)
+    {
+        textOn = onText;
+        textOff = offText;
+        textMuted = mutedText;
+        repaint();
+    }
+
     /** Muted by the mic mute group: drawn red, whatever the switch says (the switch is kept). */
     void setMuted (bool shouldBeMuted)
     {
@@ -215,7 +224,7 @@ public:
             g.fillEllipse (juce::Rectangle<float> (lampR * 2.0f, lampR * 2.0f).withCentre (centre));
             g.setColour (Palette::danger);
             g.setFont (juce::Font (juce::FontOptions (pt (15.0f), juce::Font::bold)));
-            g.drawText (ko ("뮤트그룹 - 뮤트 중"), getLocalBounds().withTrimmedLeft (36), juce::Justification::centredLeft, false);
+            g.drawText (textMuted, getLocalBounds().withTrimmedLeft (36), juce::Justification::centredLeft, false);
             return;
         }
 
@@ -233,11 +242,12 @@ public:
 
         g.setColour (on ? Palette::text : Palette::dimText);
         g.setFont (juce::Font (juce::FontOptions (pt (15.0f), juce::Font::bold)));
-        g.drawText (on ? ko ("마이크 ON") : ko ("마이크 OFF"), getLocalBounds().withTrimmedLeft (36), juce::Justification::centredLeft, false);
+        g.drawText (on ? textOn : textOff, getLocalBounds().withTrimmedLeft (36), juce::Justification::centredLeft, false);
     }
 
 private:
     bool on = true, muted = false;
+    juce::String textOn { ko ("마이크 ON") }, textOff { ko ("마이크 OFF") }, textMuted { ko ("뮤트그룹 - 뮤트 중") };
 };
 
 /** A toggle chip (마스터 / 직접 출력): outlined in the accent colour when on. */
