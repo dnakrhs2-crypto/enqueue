@@ -1115,7 +1115,8 @@ public:
                 juce::Thread::sleep (10);                               // the recheck withdraws A ...
             scan.setRecheckInterval (60000, 60000);                     // ... and no more rounds: B answers with what B publishes
             std::optional<LoudnessScanResult> first;
-            for (int i = 0; i < 3000 && ! first; ++i)
+            // B is a busy (gentle) read of the whole minute, about 6 s: up to 30 s for it, as a loaded PC can triple it
+            for (int i = 0; i < 6000 && ! first; ++i)
             {
                 first = scan.lookup (file, 0.0, -1.0);
                 juce::Thread::sleep (5);
