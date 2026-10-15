@@ -4,6 +4,7 @@
 #include "MixModel.h"
 #include "HostTransport.h"
 #include "ObsSender.h"
+#include "CollabAudio.h"
 #include "audio/PluginChain.h"
 #include "audio/PluginHost.h"
 
@@ -87,6 +88,8 @@ public:
     juce::AudioDeviceManager& getDeviceManager() noexcept { return deviceManager; }
     PluginHost& getPluginHost() noexcept { return pluginHost; }
     ObsSender& getObsSender() noexcept { return obsSender; }
+    collab::CollabAudio& getCollab() noexcept { return collab; }
+    void setObsEnabled (bool enabled);
     bool isDeviceRunning() const noexcept { return deviceRunning.load (std::memory_order_acquire); }
     double getSampleRate() const noexcept { return sampleRate.load (std::memory_order_relaxed); }
     int getBlockSize() const noexcept { return blockSize.load (std::memory_order_relaxed); }
@@ -152,6 +155,7 @@ public:
 private:
     friend struct MixEngineTestAccess;
     friend struct MixTransportTestAccess;
+    friend struct CollabEngineTestAccess;
     struct MeterCell
     {
         std::atomic<float> left { 0.0f }, right { 0.0f };
@@ -232,9 +236,14 @@ private:
     FxNode* findFx (const juce::Uuid& id) const noexcept;
     void applyOutput (const MixOutput& output, std::atomic<bool>& toMaster, std::atomic<bool>& direct, std::atomic<int>& directFirst);
     static void addToOutputs (float* const* outputs, int numOutputs, int first, const juce::AudioBuffer<float>& source, int offset, int numSamples) noexcept;
+    void finishOutput (float* const* outputs, int numOutputs, int offset, int frames,
+                       float* const* splitBuffer, MonitorOutput*) noexcept;
     juce::AudioDeviceManager deviceManager;
     PluginHost pluginHost;
     ObsSender obsSender;
+    collab::CollabAudio collab;
+    // Busy-graph output must not touch buffers being resized by prepare().
+    std::array<std::array<float, 512>, 2> collabMonitorSilence {};
     bool callbackAdded = false;
     // Ownership stays on the message thread. Unpublish, then observe no readers before stop/destruction.
     // The graph and input lifecycle callbacks only use MonitorAccess; neither waits for a rebuild.

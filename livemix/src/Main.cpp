@@ -147,6 +147,7 @@ public:
     bool moreThanOneInstanceAllowed() override
     {
         return PluginScanWorker::isWorkerCommandLine (getCommandLineParameters())
+            || juce::SystemStats::getEnvironmentVariable ("LIVEMIX_ALLOW_MULTI", {}) == "1"
             || ObsPluginInstaller::isInstallCommandLine (getCommandLineParameters());
     }
 

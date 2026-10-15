@@ -81,7 +81,8 @@ struct MixEngine::MonitorAccess
 };
 static_assert (std::atomic<MonitorOutput*>::is_always_lock_free && std::atomic<unsigned>::is_always_lock_free);
 
-MixEngine::MixEngine (const juce::String& obsMappingName) : obsSender (obsMappingName)
+MixEngine::MixEngine (const juce::String& obsMappingName)
+    : obsSender (obsMappingName), collab (obsMappingName.isEmpty() ? "Local\\LiveMix.ObsAudio.v1.Peer" : obsMappingName + ".Peer")
 {
     master.chain->setTimingHook (&transport);
     prepare (48000.0, 256);
@@ -441,7 +442,7 @@ void MixEngine::shutdown()
 {
     stopTimer();
     removeCallback();
-    obsSender.setEnabled (false);
+    setObsEnabled (false);
     deviceManager.closeAudioDevice();
     if (monitor != nullptr) monitor->stop();
     monitor.reset();
@@ -523,6 +524,26 @@ void MixEngine::prepare (double newSampleRate, int newBlockSize)
     master.chain->prepare (newSampleRate, newBlockSize);
     loudness.prepare (newSampleRate);
     obsSender.deviceStarted (newSampleRate);
+    collab.prepare (newSampleRate, newBlockSize);
+}
+
+void MixEngine::setObsEnabled (bool enabled)
+{
+    obsSender.setEnabled (enabled);
+    collab.setObsEnabled (enabled);
+}
+
+void MixEngine::finishOutput (float* const* outputs, int numOutputs, int offset, int frames,
+                             float* const* splitBuffer, MonitorOutput* monitorOutput) noexcept
+{
+    const int first = outputFirst (master.outputFirst.load (std::memory_order_relaxed));
+    float* pair[2] {};
+    for (int ch = 0; ch < 2; ++ch)
+        pair[ch] = splitBuffer != nullptr ? splitBuffer[ch]
+            : (first + ch < numOutputs && outputs[first + ch] != nullptr ? outputs[first + ch] + offset : nullptr);
+    collab.renderRemote (pair, 2, 0, frames);
+    if (splitBuffer != nullptr && monitorOutput != nullptr)
+        monitorOutput->push (splitBuffer[0], splitBuffer[1], frames);
 }
 
 void MixEngine::addToOutputs (float* const* outputs, int numOutputs, int first, const juce::AudioBuffer<float>& source, int offset, int numSamples) noexcept
@@ -549,14 +570,21 @@ void MixEngine::renderBlock (const float* const* inputs, int numInputs, float* c
     const MonitorAccess monitorAccess (*this);
     auto* const monitorOutput = monitorAccess.output;
     // the graph is swapped on the message thread under this lock (a structural edit, a session): the callback never
-    // waits for it - this block stays silent (the outputs are cleared above) rather than stalling the driver
+    // waits for it. A busy graph sends local silence; the independent peer still reaches the output.
     const juce::ScopedTryLock sl (lock);
 
     if (! sl.isLocked())
     {
         obsSender.writeSilence (numSamples);
-        if (isSplitMonitor() && monitorOutput != nullptr)
-            monitorOutput->push (nullptr, nullptr, numSamples);
+        collab.pushLocalSilence (numSamples);
+        for (int offset = 0; offset < numSamples; offset += 512)
+        {
+            const int n = juce::jmin (512, numSamples - offset);
+            float* silence[2] { collabMonitorSilence[0].data(), collabMonitorSilence[1].data() };
+            const bool split = isSplitMonitor();
+            if (split) { std::fill_n (silence[0], n, 0.0f); std::fill_n (silence[1], n, 0.0f); }
+            finishOutput (outputs, numOutputs, offset, n, split ? silence : nullptr, monitorOutput);
+        }
         return; // the graph did not run: the sample clock does not advance
     }
 
@@ -770,9 +798,9 @@ void MixEngine::renderBlock (const float* const* inputs, int numInputs, float* c
         master.meter.push (masterBus.getMagnitude (0, 0, n), masterBus.getMagnitude (1, 0, n));
         loudness.process (masterBus.getReadPointer (0), masterBus.getReadPointer (1), n);
         obsSender.write (masterBus.getReadPointer (0), masterBus.getReadPointer (1), n);
+        collab.pushLocal (masterBus.getReadPointer (0), masterBus.getReadPointer (1), n);
         addToOutputs (routedOutputs, routedCount, outputFirst (master.outputFirst.load (std::memory_order_relaxed)), masterBus, routedOffset, n);
-        if (split && monitorOutput != nullptr)
-            monitorOutput->push (monitorStage.getReadPointer (0), monitorStage.getReadPointer (1), n);
+        finishOutput (outputs, numOutputs, offset, n, split ? monitorStage.getArrayOfWritePointers() : nullptr, monitorOutput);
     }
     transport.advance (numSamples); // once for the full device callback, never per chain or chunk
 }

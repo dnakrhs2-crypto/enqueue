@@ -261,6 +261,11 @@ target_sources(LiveMixCore INTERFACE
     ${CMAKE_CURRENT_SOURCE_DIR}/livemix/src/AudioBackends.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/livemix/src/MonitorOutput.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/livemix/src/ObsSender.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/livemix/src/CollabProtocol.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/livemix/src/CollabSender.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/livemix/src/CollabPlayout.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/livemix/src/CollabTransport.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/livemix/src/CollabAudio.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/livemix/src/ObsPluginInstaller.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/livemix/src/MixDocument.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/livemix/src/MuteGroups.cpp
@@ -281,11 +286,11 @@ target_include_directories(LiveMixCore INTERFACE
     ${CMAKE_CURRENT_SOURCE_DIR}/livemix/shared)
 target_link_libraries(LiveMixCore INTERFACE GoCueCore)
 if(WIN32)
-    target_link_libraries(LiveMixCore INTERFACE bcrypt advapi32 version shell32 ole32)
+    target_link_libraries(LiveMixCore INTERFACE bcrypt advapi32 version shell32 ole32 ws2_32 avrt)
 endif()
 target_sources(LiveMixCore INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/livemix/src/WebDavBackup.cpp)
 
-set(LIVEMIX_VERSION "0.14.1")   # LiveMix version (the Enqueue version is the project version); not a cache variable: a bump must reach existing build trees
+set(LIVEMIX_VERSION "0.15.0")   # LiveMix version (the Enqueue version is the project version); not a cache variable: a bump must reach existing build trees
 set(LIVEMIX_APPCAST_URL "" CACHE STRING "LiveMix WinSparkle appcast URL (empty disables update checks)")
 
 # The online backup's server account is built into the app from a JSON file that lives outside the repository

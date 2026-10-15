@@ -70,7 +70,7 @@ void MixDocument::applyToEngine()
 {
     if (PluginHost::isSafeMode()) session.master.sendToObs = false;
     engine.applySession (session, nullptr, true);
-    engine.getObsSender().setEnabled (session.master.sendToObs);
+    engine.setObsEnabled (session.master.sendToObs);
     graphApplied = true;
     notifyStructure();   // the views (and the chain listeners that close a removed plugin's editor) learn of the graph
 }
@@ -85,7 +85,7 @@ juce::String MixDocument::getDisplayName() const
 
 void MixDocument::newSession()
 {
-    engine.getObsSender().setEnabled (false);
+    engine.setObsEnabled (false);
     session = defaultSession();
     sessionGeneration = juce::Uuid();
     file = juce::File();
@@ -111,7 +111,7 @@ juce::Result MixDocument::load (const juce::File& newFile, juce::StringArray* wa
         return result;
     }
 
-    engine.getObsSender().setEnabled (false);
+    engine.setObsEnabled (false);
     session = std::move (loaded);
     savedPluginStates = pluginStates (session);
     pluginEditsDiscarded = false;
@@ -123,7 +123,7 @@ juce::Result MixDocument::load (const juce::File& newFile, juce::StringArray* wa
     dirty = false;
     juce::StringArray restoreErrors;
     engine.applySession (session, &restoreErrors, true);
-    engine.getObsSender().setEnabled (session.master.sendToObs);
+    engine.setObsEnabled (session.master.sendToObs);
     graphApplied = true;
 
     if (pluginErrors != nullptr)
@@ -394,7 +394,7 @@ void MixDocument::setMasterOutput (int first)
 
 void MixDocument::setSendToObs (bool enabled)
 {
-    engine.getObsSender().setEnabled (enabled);
+    engine.setObsEnabled (enabled);
     if (session.master.sendToObs == enabled)
         return;
 
