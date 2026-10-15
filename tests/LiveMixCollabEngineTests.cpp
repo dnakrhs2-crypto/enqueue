@@ -113,12 +113,18 @@ public:
         expect (b.getCollab().getStats().lost >= 1);
 
         beginTest ("headphone volume and OFF ramp affect only monitor, peer OBS stays before gain");
+        b.getCollab().readRemoteMeter();
         for (bool on : { true, false })
         {
             b.getCollab().setMonitor (on ? 0.0f : 1.0f, on);
             for (int n = 0; n < 20; ++n) render();
             expectWithinAbsoluteError (outB.getSample (2, 119), -0.125f, 1.0e-6f);
             expectWithinAbsoluteError (remote.last (0), 0.25f, 1.0e-5f);
+            const auto peaks = b.getCollab().readRemoteMeter();
+            expectWithinAbsoluteError (peaks.left, 0.25f, 1.0e-5f);
+            expectWithinAbsoluteError (peaks.right, 0.25f, 1.0e-5f);
+            const auto empty = b.getCollab().readRemoteMeter();
+            expectEquals (empty.left, 0.0f); expectEquals (empty.right, 0.0f);
         }
         b.getCollab().setMonitor (1.0f, true);
         render(); const float half = outB.getSample (2, 119); render();

@@ -28,6 +28,12 @@ public:
     }
     void rebuffer() noexcept { playout.rebuffer(); }
     double getDeviceRate() const noexcept { return publishedRate.load(); }
+    struct Meter { float left = 0, right = 0; };
+    // Pre-headphone stereo maxima since the UI's previous read, like MixEngine::MeterCell.
+    Meter readRemoteMeter() noexcept
+    {
+        return { peakLeft.exchange (0.0f, std::memory_order_relaxed), peakRight.exchange (0.0f, std::memory_order_relaxed) };
+    }
 
     // Transport receiver/sender entry points. The same entry points support offline packet tests.
     void receive (const Header&, const uint8_t*, uint64_t arrivalNs) noexcept;
@@ -50,6 +56,7 @@ private:
     ObsSender peerObs;
     std::vector<float> left, right;
     std::atomic<float> volume { 1.0f };
+    std::atomic<float> peakLeft { 0.0f }, peakRight { 0.0f };
     std::atomic<bool> monitorOn { true };
     std::atomic<double> publishedRate { wireRate };
     float gain = 1.0f, gainTarget = 1.0f, gainStep = 0.0f;

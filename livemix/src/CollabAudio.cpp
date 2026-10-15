@@ -35,6 +35,7 @@ void CollabAudio::prepare (double rate, int maxBlock)
     rampFrames = std::max (1, (int) std::lround (rate * 0.005));
     gain = gainTarget = monitorOn.load() ? volume.load() : 0.0f;
     gainRemaining = tailRemaining = 0; tailL = tailR = 0; wasConnected = false;
+    peakLeft.store (0.0f); peakRight.store (0.0f);
     peerObs.deviceStarted (rate); publishedRate.store (rate);
     ready.store (true);
 }
@@ -119,8 +120,11 @@ void CollabAudio::renderRemote (float* const* outputs, int count, int first, int
         {
             gainTarget = target; gainRemaining = rampFrames; gainStep = (target - gain) / rampFrames;
         }
+        float peakL = 0.0f, peakR = 0.0f;
         for (int i = 0; i < n; ++i)
         {
+            peakL = std::max (peakL, std::abs (left[(size_t) i]));
+            peakR = std::max (peakR, std::abs (right[(size_t) i]));
             if (gainRemaining > 0) { gain += gainStep; if (--gainRemaining == 0) gain = gainTarget; }
             // Skip exact silence, preserving every bit of the pre-collab output, including signed zero.
             if (first >= 0 && first < count && outputs[first] != nullptr && left[(size_t) i] != 0.0f)
@@ -128,6 +132,13 @@ void CollabAudio::renderRemote (float* const* outputs, int count, int first, int
             if (first + 1 >= 0 && first + 1 < count && outputs[first + 1] != nullptr && right[(size_t) i] != 0.0f)
                 outputs[first + 1][offset + i] += right[(size_t) i] * gain;
         }
+        const auto publish = [] (std::atomic<float>& cell, float peak)
+        {
+            if (! std::isfinite (peak)) return;
+            float previous = cell.load (std::memory_order_relaxed);
+            while (peak > previous && ! cell.compare_exchange_weak (previous, peak, std::memory_order_relaxed)) {}
+        };
+        publish (peakLeft, peakL); publish (peakRight, peakR);
         if (online) { tailL = left[(size_t) n - 1]; tailR = right[(size_t) n - 1]; }
     }
 }

@@ -107,6 +107,8 @@ CollabSession::CollabSession (CollabAudio& a, LiveMixSettings& prefs, std::uniqu
     : audio (a), settings (prefs), options (opt), impl (std::make_unique<Impl> (*this, std::move (room), std::move (upnp)))
 {
     messageThread();
+    options.loopbackOnly = options.loopbackOnly
+        || juce::SystemStats::getEnvironmentVariable ("LIVEMIX_COLLAB_LOOPBACK", {}) == "1";
     snapshot.myNick = settings.getCollabNick();
     snapshot.monitorVolume = settings.getCollabMonitorVolume(); snapshot.monitorOn = settings.getCollabMonitorOn();
     audio.setMonitor (snapshot.monitorVolume, snapshot.monitorOn);
@@ -234,7 +236,8 @@ void CollabSession::leave()
     ++impl->generation;
     if (audioAttached) audio.detach();
     audioAttached = started = mapped = heartbeatPending = renewPending = false;
-    heartbeatConnected = false;
+    heartbeatConnected = heartbeatStopped = false;
+    heartbeatFailures = 0;
     snapshot.isHost = false;
     impl->enqueue ([this] { impl->cleanup(); });
     setState (State::off);
@@ -259,6 +262,7 @@ CollabSession::Snapshot CollabSession::getSnapshot() const
 {
     messageThread();
     auto result = snapshot;
+    result.myNick = settings.getCollabNick();
     if (started && (result.state == State::connected || result.state == State::disconnected))
     {
         result.rttMs = transport.getStats().rttMs; result.estimatedOneWayMs = transport.estimatedOneWayMs();
@@ -269,7 +273,7 @@ CollabSession::Snapshot CollabSession::getSnapshot() const
 
 void CollabSession::sendHeartbeat()
 {
-    if (heartbeatPending) return;
+    if (heartbeatPending || heartbeatStopped) return;
     heartbeatPending = true; lastHeartbeat = nowMs();
     const auto id = impl->generation.load();
     const bool connected = snapshot.state == State::connected;
@@ -281,7 +285,20 @@ void CollabSession::sendHeartbeat()
         impl->complete (id, [this, reply]
         {
             heartbeatPending = false;
-            if (! reply.ok()) fail (reply.error);
+            if (reply.ok()) { heartbeatFailures = 0; return; }
+            const bool roomGone = reply.statusCode == 404 || reply.statusCode == 410;
+            const auto peerState = transport.getState();
+            if (snapshot.state == State::connected || snapshot.state == State::disconnected
+                || peerState == CollabTransport::State::connected || peerState == CollabTransport::State::disconnected)
+            {
+                // Audio is peer-to-peer: a room-server restart must not stop the transport.
+                heartbeatFailures = 0;
+                if (roomGone) heartbeatStopped = true;
+                return;
+            }
+            if (roomGone) { createRoom (snapshot.myNick); return; }
+            const bool temporary = reply.statusCode == 0 || reply.statusCode >= 500;
+            if (! temporary || ++heartbeatFailures >= 3) fail (reply.error);
         });
     });
 }
@@ -316,6 +333,11 @@ void CollabSession::timerCallback()
     }
     if (snapshot.isHost)
     {
+        if (snapshot.state == State::hostWaiting && heartbeatStopped)
+        {
+            createRoom (snapshot.myNick);
+            return;
+        }
         if (previous != snapshot.state || heartbeatConnected != (snapshot.state == State::connected)
             || now - lastHeartbeat >= options.heartbeatIntervalMs) sendHeartbeat();
         if (mapped && ! renewPending && now - lastRenew >= options.renewIntervalMs)

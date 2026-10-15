@@ -88,6 +88,7 @@ MainComponent::MainComponent (MixDocument& doc, LiveMixSettings& s, ObsPluginAct
     topBar.onDeviceRepicked = [this] (const juce::String& name) { reopenIfStopped (name); };
     topBar.onDevicesWanted = [this] { updateDeviceNames(); };
     topBar.onFxPanel = [this] { showDrawer (drawer == Drawer::fx ? Drawer::none : Drawer::fx); };
+    topBar.onCollab = [this] { showCollabWindow(); };
     topBar.onPluginManager = [this] { showPluginManager(); };
 
     statusLeft.setFont (bodyFont (12.5f));
@@ -209,6 +210,7 @@ MainComponent::~MainComponent()
     BackupDialog::closeIfOpen();   // its content refers to the document and the backup thread
     pluginManagerWindow.reset();
     loudnessWindow.reset();
+    collabWindow.reset();
     pluginGroupsWindow.reset();
     juce::ModalComponentManager::getInstance()->cancelAllModalComponents();   // open alerts refer to this window and its document
     windows.closeAll();
@@ -726,6 +728,25 @@ void MainComponent::showPluginGroups (const juce::Uuid& channelId)
     pluginGroupsWindow->open (channelId);
 }
 
+void MainComponent::setCollabSession (collab::CollabSession* session)
+{
+    if (collabSession != session) collabWindow.reset();
+    collabSession = session;
+    const auto snapshot = session != nullptr ? session->getSnapshot() : collab::CollabSession::Snapshot {};
+    topBar.setCollabState (snapshot.state, snapshot.peerNick);
+}
+
+void MainComponent::showCollabWindow()
+{
+    if (collabSession == nullptr) return;
+    if (collabWindow == nullptr)
+    {
+        collabWindow = std::make_unique<CollabWindow> (*collabSession, settings);
+        collabWindow->centreAroundComponent (this, collabWindow->getWidth(), collabWindow->getHeight());
+    }
+    collabWindow->open();
+}
+
 void MainComponent::showLoudnessWindow()
 {
     if (loudnessWindow == nullptr)
@@ -840,6 +861,15 @@ void MainComponent::deviceChosen()
 //==============================================================================
 void MainComponent::timerCallback()
 {
+    const auto peerMeter = engine.getCollab().readRemoteMeter();
+    if (collabWindow != nullptr) collabWindow->pushMeter (peerMeter);
+    const auto now = juce::Time::getMillisecondCounterHiRes();
+    if (collabSession != nullptr && now - lastCollabRefresh >= 200)
+    {
+        lastCollabRefresh = now;
+        const auto snapshot = collabSession->getSnapshot();
+        topBar.setCollabState (snapshot.state, snapshot.peerNick);
+    }
     engine.getLoudnessMeter().poll();   // the LUFS numbers keep up whether or not their window is open (an hour-long stream reads whole)
     const auto inView = viewport.getViewArea();   // a tall window scrolls: every meter is read and advances, only the cards on screen repaint
 
@@ -862,8 +892,6 @@ void MainComponent::timerCallback()
     const bool running = engine.isDeviceRunning();
     topBar.setStatus (engine.getSampleRate(), engine.getBlockSize(), engine.getLatencyMs(), engine.getDspLoad(), running, engine.getDeviceFormat());
     masterCard.setLatency (running ? engine.getLatencyMs() : 0.0, running ? engine.getBlockSize() : 0, engine.getSampleRate());
-
-    const double now = juce::Time::getMillisecondCounterHiRes();
 
     finishObsPluginCheck();
     if (now >= nextObsPollMs)

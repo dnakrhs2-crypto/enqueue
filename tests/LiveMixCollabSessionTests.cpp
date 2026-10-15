@@ -6,14 +6,20 @@
 #include "CollabSession.h"
 #include "LiveMixSettings.h"
 #include "ui/UiUtils.h"
+#include "ui/CollabWindow.h"
 #include <atomic>
 #include <mutex>
+#include <deque>
 
 namespace gocue::livemix::collab
 {
 struct CollabSessionTestAccess
 {
     static CollabTransport& transport (CollabSession& s) { return s.transport; }
+    static void heartbeat (CollabSession& s) { s.sendHeartbeat(); }
+    static bool heartbeatPending (CollabSession& s) { return s.heartbeatPending; }
+    static bool heartbeatStopped (CollabSession& s) { return s.heartbeatStopped; }
+    static bool loopbackOnly (CollabSession& s) { return s.options.loopbackOnly; }
 };
 }
 
@@ -107,7 +113,7 @@ public:
                 probe (port);
                 juce::Thread::sleep (100); // server probe arrives before a delayed HTTP response
             }
-            return response (object ({ { "code", "0842" }, { "session", sessionHex }, { "hostToken", "host-token" },
+            return response (object ({ { "code", roomCode }, { "session", sessionHex }, { "hostToken", "host-token" },
                                       { "publicIp", "203.0.113.8" }, { "nonce", nonceHex } }));
         }
         if (action == "confirm")
@@ -115,7 +121,15 @@ public:
             confirmed = (bool) body["reachable"];
             if (! confirmed) present = false;
         }
-        if (action == "heartbeat") connected = (bool) body["connected"];
+        if (action == "heartbeat")
+        {
+            connected = (bool) body["connected"];
+            if (! heartbeatStatuses.empty())
+            {
+                const int status = heartbeatStatuses.front(); heartbeatStatuses.pop_front();
+                if (status != 200) return { status, "{\"error\":\"room\"}" };
+            }
+        }
         if (action == "close") present = false;
         if (action == "join")
         {
@@ -149,6 +163,11 @@ public:
         return {};
     }
     bool sendProbe = true;
+    void heartbeats (std::initializer_list<int> statuses, const juce::String& nextCode = "0842")
+    {
+        const std::lock_guard<std::mutex> lock (mutex);
+        heartbeatStatuses = statuses; roomCode = nextCode;
+    }
     std::atomic<int> joinStatus { 200 };
     std::atomic<bool> ranOnMessageThread { false };
 private:
@@ -157,6 +176,8 @@ private:
     int port = 0;
     bool present = false, confirmed = false, connected = false;
     juce::String hostNick, guestInst;
+    juce::String roomCode = "0842";
+    std::deque<int> heartbeatStatuses;
 };
 
 struct TempDirectory
@@ -167,14 +188,15 @@ struct TempDirectory
 };
 struct Fixture
 {
-    explicit Fixture (const std::shared_ptr<FakeService>& service, CollabUpnp::Result upnpResult = { true, true, "203.0.113.8", "192.168.1.9" })
+    explicit Fixture (const std::shared_ptr<FakeService>& service, CollabUpnp::Result upnpResult = { true, true, "203.0.113.8", "192.168.1.9" },
+                      int heartbeatMs = 200, bool loopbackOnly = true)
         : settings (directory.file), audio ("Local\\LiveMix.Collab.Test." + juce::Uuid().toString())
     {
         audio.prepare (48000, 120);
         settings.setCollabPort (freePort()); upnp->result = upnpResult;
         CollabSession::Options options;
-        options.loopbackOnly = true; options.probeTimeoutMs = 250; options.connectTimeoutMs = 350;
-        options.heartbeatIntervalMs = 200; options.renewIntervalMs = 250;
+        options.loopbackOnly = loopbackOnly; options.probeTimeoutMs = 250; options.connectTimeoutMs = 350;
+        options.heartbeatIntervalMs = heartbeatMs; options.renewIntervalMs = 250;
         session = std::make_unique<CollabSession> (audio, settings,
             std::make_unique<CollabRoom> ([service] (const auto& request) { return service->request (request); }, "http://127.0.0.1:8899"),
             std::make_unique<FakeUpnp> (upnp), options);
@@ -309,6 +331,104 @@ public:
             expect (until ([&] { return service->count ("close") == 1 && host.upnp->removals.load() == 1 && host.port() == 0; }));
             expect (! service->ranOnMessageThread.load()); expect (! host.upnp->ranOnMessageThread.load());
             expectGreaterThan (listener.changes, 0); host.session->removeChangeListener (&listener);
+        }
+
+        beginTest ("connected audio survives heartbeat failures and stops heartbeats after a missing room");
+        {
+            auto service = std::make_shared<FakeService>();
+            Fixture host (service, {}, 60000), guest (service);
+            host.session->createRoom ("host"); expect (host.reaches (State::hostWaiting));
+            guest.session->joinRoom ("0842", "guest"); expect (guest.reaches (State::connected)); expect (host.reaches (State::connected));
+            {
+                CollabWindow window (*host.session, host.settings);
+                window.open(); window.closeButtonPressed();
+                expect (! window.isVisible()); expect (host.session->getSnapshot().state == State::connected);
+                window.open(); window.keyPressed (juce::KeyPress (juce::KeyPress::escapeKey));
+                expect (! window.isVisible()); expect (host.session->getSnapshot().state == State::connected);
+            }
+            expect (until ([&] { return ! CollabSessionTestAccess::heartbeatPending (*host.session); }));
+            const int port = host.port();
+            service->heartbeats ({ 0, 503, 404 });
+            for (int n = 0; n < 3; ++n)
+            {
+                CollabSessionTestAccess::heartbeat (*host.session);
+                expect (until ([&] { return ! CollabSessionTestAccess::heartbeatPending (*host.session); }));
+                expect (host.session->getSnapshot().state == State::connected);
+                expectEquals (host.port(), port);
+                auto& receiver = CollabSessionTestAccess::transport (*guest.session);
+                const auto received = receiver.getStats().received;
+                std::array<float, 120> pcm; pcm.fill (0.25f);
+                host.audio.pushLocal (pcm.data(), pcm.data(), 120);
+                expect (until ([&] { return receiver.getStats().received > received; }));
+            }
+            expect (CollabSessionTestAccess::heartbeatStopped (*host.session));
+            const int calls = service->count ("heartbeat");
+            CollabSessionTestAccess::heartbeat (*host.session);
+            expectEquals (service->count ("heartbeat"), calls);
+            expectEquals (service->count ("close"), 0);
+        }
+
+        beginTest ("a waiting host recreates a missing room with a fresh port check and new code");
+        for (int status : { 404, 410 })
+        {
+            auto service = std::make_shared<FakeService>(); Fixture host (service, {}, 60000);
+            host.session->createRoom ("host"); expect (host.reaches (State::hostWaiting));
+            service->heartbeats ({ status }, "4827");
+            CollabSessionTestAccess::heartbeat (*host.session);
+            expect (host.reaches (State::checkingHost));
+            expect (host.reaches (State::hostWaiting));
+            expectEquals (host.session->getSnapshot().code, juce::String ("4827"));
+            expectEquals (host.session->getSnapshot().myNick, juce::String ("host"));
+            expectEquals (service->count ("create"), 2); expectEquals (service->count ("confirm"), 2);
+            expectEquals (host.upnp->discovers.load(), 2);
+        }
+
+        beginTest ("waiting host retries temporary heartbeat errors twice, resets on success, fails on the third");
+        for (int status : { 0, 503 })
+        {
+            auto service = std::make_shared<FakeService>(); Fixture host (service, {}, 60000);
+            host.session->createRoom ("host"); expect (host.reaches (State::hostWaiting));
+            service->heartbeats ({ status, status, 200, status, status, status });
+            for (int i = 0; i < 6; ++i)
+            {
+                CollabSessionTestAccess::heartbeat (*host.session);
+                expect (until ([&] { return ! CollabSessionTestAccess::heartbeatPending (*host.session); }));
+                expect (host.session->getSnapshot().state == (i < 5 ? State::hostWaiting : State::error));
+            }
+            expectEquals (host.session->getSnapshot().message, CollabRoom::errorMessage (status));
+            expect (until ([&] { return host.port() == 0; }));
+        }
+
+        beginTest ("a reconnecting host keeps its socket when the room server loses the room");
+        {
+            auto service = std::make_shared<FakeService>(); Fixture host (service, {}, 60000);
+            host.session->createRoom ("host"); expect (host.reaches (State::hostWaiting));
+            juce::DatagramSocket guest;
+            expect (guest.bindToPort (0, "127.0.0.1"));
+            std::array<uint8_t, 128> payload;
+            Header h; h.kind = Kind::hello; h.session = sessionNumber; h.sender = 987;
+            h.payloadBytes = (uint16_t) writePeerInfo (payload.data(), { "guest" });
+            std::array<uint8_t, maxDatagram> packet;
+            const auto bytes = writePacket (packet.data(), packet.size(), h, payload.data());
+            guest.write ("127.0.0.1", host.port(), packet.data(), (int) bytes);
+            expect (host.reaches (State::connected));
+            expect (until ([&] { return host.session->getSnapshot().state == State::disconnected; }, 4500));
+            expect (until ([&] { return ! CollabSessionTestAccess::heartbeatPending (*host.session); }));
+            const int port = host.port();
+            service->heartbeats ({ 404 }); CollabSessionTestAccess::heartbeat (*host.session);
+            expect (until ([&] { return ! CollabSessionTestAccess::heartbeatPending (*host.session); }));
+            expect (host.session->getSnapshot().state == State::disconnected); expectEquals (host.port(), port);
+            expect (CollabSessionTestAccess::heartbeatStopped (*host.session));
+        }
+
+        beginTest ("loopback environment enables the same transport option used by local endpoint tests");
+        {
+            const auto previous = juce::SystemStats::getEnvironmentVariable ("LIVEMIX_COLLAB_LOOPBACK", {});
+            SetEnvironmentVariableW (L"LIVEMIX_COLLAB_LOOPBACK", L"1");
+            auto service = std::make_shared<FakeService>(); Fixture host (service, {}, 60000, false);
+            SetEnvironmentVariableW (L"LIVEMIX_COLLAB_LOOPBACK", previous.isEmpty() ? nullptr : previous.toWideCharPointer());
+            expect (CollabSessionTestAccess::loopbackOnly (*host.session));
+            host.session->createRoom ("host"); expect (host.reaches (State::hostWaiting));
         }
 
         beginTest ("missing probe confirms false, hides code, closes transport and removes mapping");

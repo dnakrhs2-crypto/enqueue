@@ -7,6 +7,7 @@
 #include "GlobalHotkeys.h"
 #include "LiveMixSettings.h"
 #include "LoudnessWindow.h"
+#include "CollabWindow.h"
 #include "MasterCard.h"
 #include "MixDocument.h"
 #include "MuteGroups.h"
@@ -46,7 +47,7 @@ public:
     MainComponent (MixDocument& document, LiveMixSettings& settings, ObsPluginActions obsActions = {});
     ~MainComponent() override;
 
-    void setCollabSession (collab::CollabSession* session) noexcept { collabSession = session; }
+    void setCollabSession (collab::CollabSession* session);
     collab::CollabSession* getCollabSession() const noexcept { return collabSession; }
 
     /** Session files. new / open first secure what is open (see withSessionSecured). */
@@ -156,6 +157,7 @@ private:
     void muteGroupsChanged();    // badges, cards, drawer
     void showPluginManager();
     void showLoudnessWindow();   // the LUFS meter (the master card's button, the 설정 menu)
+    void showCollabWindow();
     void showPluginGroups (const juce::Uuid& channelId);   // a mic channel's plugin groups (the card's button)
     void chooseDevice (const juce::String& name);
     void reopenIfStopped (const juce::String& name);
@@ -182,6 +184,8 @@ private:
     WebDavBackup backup;
     std::unique_ptr<PluginManagerWindow> pluginManagerWindow;   // made on first use, hidden on close
     std::unique_ptr<LoudnessWindow> loudnessWindow;             // the same
+    std::unique_ptr<CollabWindow> collabWindow;
+    double lastCollabRefresh = 0;
     std::unique_ptr<PluginGroupsWindow> pluginGroupsWindow;     // the same, showing one channel at a time
     bool safeMode = false;
     juce::StringArray faultedPlugins, stalledPlugins;   // told once each, kept in the notice until the session changes

@@ -161,7 +161,7 @@ bool LiveMixSettings::getExternalControlEnabled() const { return settings->getBo
 void LiveMixSettings::setExternalControlEnabled (bool on) { settings->setValue (Keys::externalControlEnabled, on); }
 
 juce::String LiveMixSettings::getCollabNick() const { return settings->getValue (Keys::collabNick); }
-void LiveMixSettings::setCollabNick (const juce::String& nick) { settings->setValue (Keys::collabNick, nick.trim()); }
+void LiveMixSettings::setCollabNick (const juce::String& nick) { settings->setValue (Keys::collabNick, nick.trim().substring (0, 40)); }
 int LiveMixSettings::getCollabPort() const { return juce::jlimit (1024, 65535, settings->getIntValue (Keys::collabPort, 49731)); }
 void LiveMixSettings::setCollabPort (int port) { settings->setValue (Keys::collabPort, juce::jlimit (1024, 65535, port)); }
 float LiveMixSettings::getCollabMonitorVolume() const { return (float) juce::jlimit (0.0, 1.0, settings->getDoubleValue (Keys::collabMonitorVolume, 1.0)); }

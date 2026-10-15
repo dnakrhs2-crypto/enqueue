@@ -363,6 +363,7 @@ target_sources(LiveMixUI INTERFACE
     ${CMAKE_CURRENT_SOURCE_DIR}/livemix/src/ui/SettingsDialog.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/livemix/src/ui/PluginManagerWindow.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/livemix/src/ui/LoudnessWindow.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/livemix/src/ui/CollabWindow.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/livemix/src/ui/PluginGroupsWindow.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/livemix/src/ui/BackupDialog.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/app/Updater.cpp

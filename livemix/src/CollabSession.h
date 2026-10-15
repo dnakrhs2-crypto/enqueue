@@ -61,7 +61,8 @@ private:
     std::function<PeerInfo()> peerInfo;
     Snapshot snapshot;
     bool started = false, audioAttached = false, mapped = false, heartbeatPending = false, renewPending = false;
-    bool heartbeatConnected = false;
+    bool heartbeatConnected = false, heartbeatStopped = false;
+    int heartbeatFailures = 0;
     double joinDeadline = 0, lastHeartbeat = 0, lastRenew = 0, lastNotification = 0;
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (CollabSession)
 };

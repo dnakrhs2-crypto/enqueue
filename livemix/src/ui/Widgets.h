@@ -12,6 +12,16 @@ namespace gocue::livemix
 inline juce::Font captionFont() { return juce::Font (juce::FontOptions (pt (12.5f), juce::Font::bold)); }
 inline juce::Font bodyFont (float size = 14.5f) { return juce::Font (juce::FontOptions (pt (size))); }
 
+inline juce::String ellipsisedText (const juce::Font& font, const juce::String& text, int width)
+{
+    if (juce::GlyphArrangement::getStringWidthInt (font, text) <= width) return text;
+    auto shortened = text;
+    const auto dots = ko ("…");
+    while (shortened.isNotEmpty() && juce::GlyphArrangement::getStringWidthInt (font, shortened + dots) > width)
+        shortened = shortened.dropLastCharacters (1);
+    return shortened + dots;
+}
+
 /** The shaped text at the label's actual font, rounded up, with its borders and a little breathing room. */
 inline int labelWidthForText (const juce::Label& label, const juce::String& text)
 {

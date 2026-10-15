@@ -87,6 +87,7 @@ target_sources(EnqueueTests PRIVATE
     LiveMixCollabTransportTests.cpp
     LiveMixCollabEngineTests.cpp
     LiveMixCollabSessionTests.cpp
+    LiveMixCollabWindowTests.cpp
     LiveMixMonitorTests.cpp
     MixEngineTests.cpp
     LiveMixRealDeviceTests.cpp
