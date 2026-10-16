@@ -2,7 +2,6 @@
 
 #include "MixDocument.h"
 #include "Widgets.h"
-#include "CollabSession.h"
 
 #include <juce_gui_basics/juce_gui_basics.h>
 
@@ -10,7 +9,7 @@ namespace gocue::livemix
 {
 
 /** The bar under the menu bar: logo, session name and state, audio device, rate / buffer / latency, CPU load, the
-    mute badges, and three buttons (합방, FX 채널, 플러그인 관리). The session, backup, settings, 합방 and help live in the menu bar. */
+    mute badges, and two buttons (FX 채널, 플러그인 관리). The session, backup, settings, 합방 and help live in the menu bar. */
 class TopBar : public juce::Component
 {
 public:
@@ -32,26 +31,17 @@ public:
     void setFxCount (int count);
     /** The mute groups' state: a red badge each while one is muted. */
     void setMuteGroups (bool micMuted, bool fxMuted);
-    /** The collab button: 합방, 합방 · <partner> while connected (accent), 합방 끊김 while reconnecting (danger). */
-    void setCollabState (collab::CollabSession::State, const juce::String& peerNick);
-    static constexpr int collabButtonWidth = 100;   // fixed: a state change never moves the bar
 
     std::function<void (const juce::String& deviceName)> onDeviceChosen;
     std::function<void (const juce::String& deviceName)> onDeviceRepicked;   // the device already selected, picked again
     std::function<void()> onDevicesWanted;   // the list opens with setDevices() skipped earlier: the app sets them now
     std::function<void()> onFxPanel;
-    std::function<void()> onCollab;
     std::function<void()> onPluginManager;
 
     void resized() override;
     void paint (juce::Graphics& g) override;
 
 private:
-    struct CollabButton : juce::TextButton
-    {
-        void paintButton (juce::Graphics&, bool over, bool down) override;
-        bool disconnected = false;
-    };
     struct DspMeter : public juce::Component
     {
         void paint (juce::Graphics& g) override;
@@ -63,8 +53,6 @@ private:
     RepickComboBox deviceCombo;
     DspMeter dspMeter;
     juce::TextButton fxButton, pluginsButton;
-    CollabButton collabButton;
-    juce::String collabText;
     juce::String fullStatusText, shortStatusText, minimalStatusText;
     bool refreshing = false;
     bool waitingDevices = false;   // setDevices() skipped in the middle of a pick from the device list

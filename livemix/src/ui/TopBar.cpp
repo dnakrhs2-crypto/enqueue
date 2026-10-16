@@ -5,16 +5,6 @@
 namespace gocue::livemix
 {
 
-void TopBar::CollabButton::paintButton (juce::Graphics& g, bool over, bool down)
-{
-    juce::TextButton::paintButton (g, over, down);
-    if (disconnected)
-    {
-        g.setColour (Palette::danger);
-        g.drawRoundedRectangle (getLocalBounds().toFloat().reduced (0.5f), Palette::controlRadius, 1.0f);
-    }
-}
-
 void TopBar::DspMeter::paint (juce::Graphics& g)
 {
     auto bar = getLocalBounds().toFloat().reduced (0.0f, (float) getHeight() * 0.5f - 4.0f);
@@ -103,9 +93,6 @@ TopBar::TopBar (MixDocument& doc) : document (doc)
         addAndMakeVisible (b);
     };
 
-    collabText = ko ("합방");
-    button (collabButton, collabText, [this] { if (onCollab) onCollab(); });
-    collabButton.setComponentID ("collab");
     button (fxButton, ko ("FX 채널"), [this] { if (onFxPanel) onFxPanel(); });
     button (pluginsButton, ko ("플러그인 관리"), [this] { if (onPluginManager) onPluginManager(); });
     pluginsButton.setTooltip (ko ("스캔한 플러그인의 사용 여부, VST2 스위치, 플러그인 프리셋"));
@@ -202,24 +189,6 @@ TopBar::Mode TopBar::modeFor (int width) const noexcept
     return width >= 1220 ? Mode::wide : width >= 700 ? Mode::compact : Mode::narrow;
 }
 
-void TopBar::setCollabState (collab::CollabSession::State state, const juce::String& peerNick)
-{
-    using State = collab::CollabSession::State;
-    const bool connected = state == State::connected, disconnected = state == State::disconnected;
-    const auto title = connected ? ko ("합방 · ") + peerNick : disconnected ? ko ("합방 끊김") : ko ("합방");
-    // connected: the blue fill already says 합방, so the fixed width goes to the nickname (tooltip keeps both)
-    const auto text = connected && peerNick.isNotEmpty() ? peerNick : title;
-    if (collabText == text && collabButton.getTooltip() == title && collabButton.getToggleState() == connected
-        && collabButton.disconnected == disconnected) return;
-    collabText = text;
-    collabButton.disconnected = disconnected;
-    collabButton.setToggleState (connected, juce::dontSendNotification);
-    collabButton.setColour (juce::TextButton::textColourOffId, disconnected ? Palette::danger : Palette::text);
-    collabButton.setTooltip (title); collabButton.setTitle (title);
-    resized();   // the width is fixed: only the shortened text changes
-    collabButton.repaint();
-}
-
 int TopBar::preferredHeight (int width) const noexcept
 {
     switch (modeFor (width))
@@ -265,14 +234,6 @@ void TopBar::resized()
     buttonRow.removeFromRight (gap);
     fxButton.setBounds (buttonRow.removeFromRight (fxWidth));
     buttonRow.removeFromRight (gap);
-    // 합방: one fixed width in every mode and state, so connecting or a long nickname never moves the bar. In the
-    // narrow layout the device shares the button row, so 합방 takes the session row instead (the device keeps its width;
-    // the logo text gives way there by the rule below, as it already did on a tight row).
-    collabButton.setButtonText (ellipsisedText (getLookAndFeel().getTextButtonFont (collabButton, h), collabText,
-                                                collabButtonWidth - 24));
-    auto& collabRow = mode == Mode::narrow ? row1 : buttonRow;
-    collabButton.setBounds (collabRow.removeFromRight (collabButtonWidth));
-    collabRow.removeFromRight (gap);
 
     auto& statusRow = mode == Mode::wide ? row1 : mode == Mode::compact ? row2 : row3;
     const int deviceMinimum = mode == Mode::narrow ? 0 : 120 + gap;
@@ -299,14 +260,8 @@ void TopBar::resized()
     const bool showType = required <= statusRow.getWidth();
     if (mode != Mode::wide) showLogo = row1.getWidth() >= 36 + 84 + gap + sessionMinimum;
 
-    // the narrowest windows (합방 shares the session row there): the mark gives way before the 160 px session does
-    const bool showMark = mode != Mode::narrow || row1.getWidth() >= 36 + sessionMinimum;
-    logoMark.setVisible (showMark);
-    if (showMark)
-    {
-        logoMark.setBounds (row1.removeFromLeft (28).reduced (0, 3));
-        row1.removeFromLeft (gap);
-    }
+    logoMark.setBounds (row1.removeFromLeft (28).reduced (0, 3));
+    row1.removeFromLeft (gap);
     logoText.setVisible (showLogo);
     if (showLogo)
     {

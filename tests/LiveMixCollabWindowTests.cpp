@@ -319,40 +319,30 @@ public:
             input.setSnapshot ({});
         }
 
-        beginTest ("top bar controls and reserved mute badges fit in every mode, including long peer names");
+        beginTest ("the top bar has no 합방 button (합방 is in the menu only) and still fits in every mode");
         MixEngine engine ("Local\\LiveMix.CollabUi." + juce::Uuid().toString());
         MixDocument document (engine);
         TopBar bar (document);
         bar.setDevices ({ "HDMI(StreamLine Mini+ GC311G2)" }, "HDMI(StreamLine Mini+ GC311G2)", "Windows Audio");
         MixEngine::DeviceFormat format; format.inputBits = 24;
         bar.setStatus (48000, 256, 10.7, 0.2, true, format); bar.setFxCount (4);
-        int opened = 0; bar.onCollab = [&] { ++opened; };
-        child<juce::TextButton> (bar, "collab").onClick(); expectEquals (opened, 1);
+        expect (bar.findChildWithID ("collab") == nullptr);
+        for (auto* c : bar.getChildren())
+            if (auto* b = dynamic_cast<juce::Button*> (c)) expect (! b->getButtonText().contains (ko ("합방")), b->getButtonText());
         for (int width : { 1440, 1420, 1220, 1000, 900, 700, 460, 420 })
-            for (auto state : { State::off, State::connected, State::disconnected })
+        {
+            bar.setSize (width, bar.preferredHeight (width));
+            bar.setMuteGroups (false, false);
+            const auto sessionBounds = bar.findChildWithID ("session-name")->getBounds();
+            const auto mode = bar.modeFor (width);
+            for (bool muted : { false, true })
             {
-                bar.setSize (width, bar.preferredHeight (width)); bar.setCollabState (state, longName.peerNick);
-                bar.setMuteGroups (false, false);
-                const auto sessionBounds = bar.findChildWithID ("session-name")->getBounds();
-                const auto mode = bar.modeFor (width);
-                for (bool muted : { false, true })
-                {
-                    bar.setMuteGroups (muted, muted); checkLayout (bar, "topbar " + juce::String (width));
-                    expect (mode == bar.modeFor (width));
-                    expect (sessionBounds == bar.findChildWithID ("session-name")->getBounds());
-                }
-                auto& button = child<juce::TextButton> (bar, "collab");
-                if (state == State::connected)
-                {
-                    expect (button.getToggleState()); expect (button.getButtonText().startsWith (ko ("긴닉")));
-                    expect (button.getButtonText().endsWith (ko ("…"))); expectEquals (button.getTooltip(), ko ("합방 · ") + longName.peerNick);
-                    bar.setCollabState (state, ko ("김하람"));   // a short name shows whole; the tooltip and title keep 합방
-                    expectEquals (button.getButtonText(), ko ("김하람")); expectEquals (button.getTitle(), ko ("합방 · 김하람"));
-                    bar.setCollabState (state, longName.peerNick);
-                }
-                if (state == State::disconnected) expectEquals (button.getButtonText(), ko ("합방 끊김"));
-                snapshot (bar, "collab-topbar-" + juce::String (width) + "-" + juce::String ((int) state), 1.0f);
+                bar.setMuteGroups (muted, muted); checkLayout (bar, "topbar " + juce::String (width));
+                expect (mode == bar.modeFor (width));
+                expect (sessionBounds == bar.findChildWithID ("session-name")->getBounds());
             }
+            snapshot (bar, "topbar-" + juce::String (width), 1.0f);
+        }
 
         beginTest ("main opens one native collab window, brings it forward, and X or Escape only hide it");
         settings.setMicMuteHotkey ({}); settings.setFxMuteHotkey ({}); settings.setWindowHotkey ({});
@@ -369,7 +359,7 @@ public:
         expect (top != nullptr);
         if (top != nullptr)
         {
-            top->onCollab();
+            main.menuItemSelected (1, 3);   // 합방 > 합방 창 열기...
             CollabWindow* collabWindow = nullptr;
             for (int i = 0; i < juce::TopLevelWindow::getNumTopLevelWindows(); ++i)
                 if (auto* w = dynamic_cast<CollabWindow*> (juce::TopLevelWindow::getTopLevelWindow (i))) collabWindow = w;
@@ -379,9 +369,9 @@ public:
                 expect (collabWindow->isUsingNativeTitleBar()); expectEquals (collabWindow->getName(), ko ("합방"));
                 auto* content = collabWindow->getContentComponent();
                 expectEquals (content->getWidth(), 440); expectEquals (content->getHeight(), 430);
-                top->onCollab(); expect (collabWindow->getContentComponent() == content);
+                main.menuItemSelected (1, 3); expect (collabWindow->getContentComponent() == content);
                 collabWindow->closeButtonPressed(); expect (! collabWindow->isVisible());
-                top->onCollab(); expect (collabWindow->isVisible());
+                main.menuItemSelected (1, 3); expect (collabWindow->isVisible());
                 child<juce::TextEditor> (*content, "nickname").keyPressed (juce::KeyPress (juce::KeyPress::escapeKey)); dispatch();
                 expect (! collabWindow->isVisible()); expect (session.getSnapshot().state == State::off);
             }

@@ -185,7 +185,6 @@ private:
     std::unique_ptr<PluginManagerWindow> pluginManagerWindow;   // made on first use, hidden on close
     std::unique_ptr<LoudnessWindow> loudnessWindow;             // the same
     std::unique_ptr<CollabWindow> collabWindow;
-    double lastCollabRefresh = 0;
     std::unique_ptr<PluginGroupsWindow> pluginGroupsWindow;     // the same, showing one channel at a time
     bool safeMode = false;
     juce::StringArray faultedPlugins, stalledPlugins;   // told once each, kept in the notice until the session changes
