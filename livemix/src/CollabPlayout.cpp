@@ -19,7 +19,7 @@ void CollabPlayout::prepare (double rate, int maxBlock, uint32_t roomRate)
     producerEpoch = audioEpoch = 0; sender = 0;
     seenRebuffer = rebufferRequest.load(); seenMeasurement = measurementRequest.load();
     measuring = true; delayCount = 0; measuredFloor.store (packetMs); measuredVersion.store (0); seenVersion = 0;
-    target = 10.0; floor = packetMs; stableSeconds = lossClock = 0.0; lossBucket = 0;
+    target = 10.0; floor = packetMs; stableSeconds = lossClock = 0.0; holdFloor = holdSeconds = 0.0; lossBucket = 0;
     recentTotal.fill (0); recentLost.fill (0);
     received.store (0); lost.store (0); late.store (0); underruns.store (0);
     playing = false; packetPosition = framesPerPacket; packetReal = concealed = false;
@@ -157,7 +157,7 @@ void CollabPlayout::resetPlayback (uint64_t epoch, bool newSender) noexcept
     if (newSender)
     {
         cursorEpoch.store (0);
-        target = 10.0; floor = packetMs; resetDrift();
+        target = 10.0; floor = packetMs; holdFloor = holdSeconds = 0.0; resetDrift();
         recentTotal.fill (0); recentLost.fill (0); lossPercent.store (0);
     }
 }
@@ -218,7 +218,7 @@ bool CollabPlayout::loadPacket() noexcept
     if (! found && readyFrames.load() == 0)
     {
         recordPacket (true); underruns.fetch_add (1);
-        target = std::min (120.0, target + packetMs); beginRefill();
+        target = std::min (120.0, target + packetMs); holdFloor = target; holdSeconds = underrunHoldSeconds; beginRefill();
         return false;
     }
     recordPacket (! found);
@@ -255,7 +255,7 @@ void CollabPlayout::pull (float* left, float* right, int frames) noexcept
     if (request != seenRebuffer)
     {
         seenRebuffer = request; measurementRequest.fetch_add (1);
-        resetPlayback (audioEpoch, false); target = 10.0; floor = packetMs;
+        resetPlayback (audioEpoch, false); target = 10.0; floor = packetMs; holdFloor = holdSeconds = 0.0;
     }
     const auto measurement = measuredVersion.load();
     if (measurement != seenVersion)
@@ -296,10 +296,16 @@ void CollabPlayout::pull (float* left, float* right, int frames) noexcept
             }
         }
         const double dt = n / deviceRate;
+        holdSeconds = std::max (0.0, holdSeconds - dt);
         if (playing && ! concealed && fadeIn == 0)
         {
             stableSeconds += dt;
-            if (stableSeconds >= 30.0) { target = std::max (floor, target - packetMs * 0.5); stableSeconds = 0; }
+            // 10/16 two-PC test: each return to the 5.4 ms first-second floor ended in the next delay spike's dropout
+            if (stableSeconds >= 30.0)
+            {
+                target = std::max ({ floor, holdSeconds > 0 ? holdFloor : floor, target - packetMs * 0.5 });
+                stableSeconds = 0;
+            }
             drift.target = target * wireRate / 1000.0;
             // One datagram is indivisible. A half-packet deadband keeps PI from chasing its
             // arrival phase, which otherwise looks like a slow clock error at small ppm offsets.

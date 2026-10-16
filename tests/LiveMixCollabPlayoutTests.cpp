@@ -52,23 +52,30 @@ public:
             expectLessOrEqual (maxStep, 2.0 * 0.5 * std::sin (juce::MathConstants<double>::pi * 137 / 48000) + 0.006);
         }
 
-        beginTest ("empty buffer increases target once, thirty stable seconds reduces it");
+        beginTest ("an empty buffer raises the target and holds it five minutes, a second one restarts the hold, then thirty stable seconds reduce it");
         for (uint32_t rate : { 48000u, 44100u })
         {
             CollabPlayout play; play.prepare (rate, 120, rate);
             std::array<float, 120> left {}, right {};
-            double before = 0, increased = 0;
-            for (int block = 0; block < 15000; ++block)
+            const auto at = [rate] (double seconds) { return (int) (seconds * rate / 120.0); };   // block index of a time
+            const int gap1 = 800, gap2 = gap1 + at (120.0);   // two 40-packet gaps two minutes apart (10/16 two-PC test)
+            const int checks[] { gap1 - 1, gap1 + 39, gap2 - 1, gap2 + 39, gap2 + at (290.0), gap2 + at (315.0) };
+            std::array<double, 6> target {};
+            for (int block = 0; block <= checks[5]; ++block)
             {
-                if (block < 800 || block >= 840) push (play, tone ((uint64_t) block, 0.25f, 0, true, rate));
+                const bool silent = (block >= gap1 && block < gap1 + 40) || (block >= gap2 && block < gap2 + 40);
+                if (! silent) push (play, tone ((uint64_t) block, 0.25f, 0, true, rate));
                 play.pull (left.data(), right.data(), 120);
-                if (block == 799) before = play.getStats().targetMs;
-                if (block == 839) increased = play.getStats().targetMs;
+                for (size_t i = 0; i < target.size(); ++i) if (block == checks[i]) target[i] = play.getStats().targetMs;
             }
-            expectWithinAbsoluteError (before, packetDurationMs (rate), 0.0001);
-            expectWithinAbsoluteError (increased, before + packetDurationMs (rate), 0.0001);
-            expect (play.getStats().underruns == 1);
-            expectWithinAbsoluteError (play.getStats().targetMs, increased - packetDurationMs (rate) * 0.5, 0.0001);
+            const double packet = packetDurationMs (rate);
+            expectWithinAbsoluteError (target[0], packet, 0.0001);
+            expectWithinAbsoluteError (target[1], packet * 2.0, 0.0001);          // raised by one packet
+            expectWithinAbsoluteError (target[2], packet * 2.0, 0.0001);          // held through two minutes of stable play
+            expectWithinAbsoluteError (target[3], packet * 3.0, 0.0001);          // raised again, the hold restarts
+            expectWithinAbsoluteError (target[4], packet * 3.0, 0.0001);          // still held 290 s later
+            expectWithinAbsoluteError (target[5], packet * 2.5, 0.0001);          // then one half-packet step down
+            expect (play.getStats().underruns == 2);
         }
 
         beginTest ("first second p99 jitter floor at 3, 10 and 30 ms, measured again after rebuffer");

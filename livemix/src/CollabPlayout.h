@@ -74,6 +74,10 @@ private:
     std::array<float, framesPerPacket * channels> packet {};
     std::array<float, 2> lastInput {}, lastOutput {}, releaseTail {};
     double target = 10.0, floor = packetDurationMs (defaultWireRate), stableSeconds = 0.0, lossClock = 0.0;
+    // An underrun's raised target is the lowest the stable decay may reach for five minutes: a link whose delay spikes
+    // every minute or two must not fall back to the first second's floor between spikes.
+    static constexpr double underrunHoldSeconds = 300.0;
+    double holdFloor = 0.0, holdSeconds = 0.0;
     std::array<uint32_t, 100> recentTotal {}, recentLost {};
     size_t lossBucket = 0;
 
