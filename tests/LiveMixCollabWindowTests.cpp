@@ -411,6 +411,38 @@ public:
                 mainTips->hideTip(); expect (! mainTips->isVisible());
             }
         }
+
+        beginTest ("the menu bar has 합방 between 설정 and 도움말, and its item opens the collab window");
+        {
+            expect (main.getMenuBarNames() == juce::StringArray { ko ("세션"), ko ("온라인 백업"), ko ("설정"), ko ("합방"), ko ("도움말") });
+            const auto itemsOf = [&main] (int index)
+            {
+                juce::StringArray texts;
+                juce::Array<bool> enabled;
+                const auto menu = main.getMenuForIndex (index, {});   // the iterator keeps a reference: no temporary
+                for (juce::PopupMenu::MenuItemIterator it (menu); it.next();)
+                    if (! it.getItem().isSeparator) { texts.add (it.getItem().text); enabled.add (it.getItem().isEnabled); }
+                return std::pair<juce::StringArray, juce::Array<bool>> { texts, enabled };
+            };
+            const auto collabMenu = itemsOf (3);
+            expect (collabMenu.first == juce::StringArray { ko ("합방 창 열기...") });
+            expect (collabMenu.second.size() == 1 && collabMenu.second[0]);
+            const auto help = itemsOf (4).first;   // 도움말 moved one place, unchanged
+            expect (help.size() == 3 && help[0] == ko ("커뮤니티 (카카오톡 오픈채팅)") && help[2] == ko ("LiveMix 정보"));
+            const auto findCollab = []
+            {
+                for (int i = 0; i < juce::TopLevelWindow::getNumTopLevelWindows(); ++i)
+                    if (auto* w = dynamic_cast<CollabWindow*> (juce::TopLevelWindow::getTopLevelWindow (i))) return w;
+                return static_cast<CollabWindow*> (nullptr);
+            };
+            if (auto* w = findCollab()) { w->closeButtonPressed(); expect (! w->isVisible()); }
+            main.menuItemSelected (1, 3);
+            auto* opened = findCollab();
+            expect (opened != nullptr && opened->isVisible());
+            if (opened != nullptr) opened->closeButtonPressed();
+            main.setSize (1100, 640);
+            for (float scale : { 1.0f, 1.5f }) snapshot (main, "menu-collab", scale);
+        }
     }
 
 private:

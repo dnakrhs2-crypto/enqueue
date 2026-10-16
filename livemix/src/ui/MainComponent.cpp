@@ -1428,7 +1428,7 @@ bool MainComponent::openFromCommandLine (const juce::String& commandLine)
 
 juce::StringArray MainComponent::getMenuBarNames()
 {
-    return { ko ("세션"), ko ("온라인 백업"), ko ("설정"), ko ("도움말") };
+    return { ko ("세션"), ko ("온라인 백업"), ko ("설정"), ko ("합방"), ko ("도움말") };
 }
 
 juce::PopupMenu MainComponent::getMenuForIndex (int topLevelMenuIndex, const juce::String&)
@@ -1482,6 +1482,10 @@ juce::PopupMenu MainComponent::getMenuForIndex (int topLevelMenuIndex, const juc
             break;
 
         case 3:
+            menu.addItem (1, ko ("합방 창 열기..."), collabSession != nullptr);
+            break;
+
+        case 4:
             menu.addItem (1, ko ("커뮤니티 (카카오톡 오픈채팅)"));
             menu.addItem (2, ko ("업데이트 확인..."), Updater::isAvailable());
             menu.addSeparator();
@@ -1538,6 +1542,11 @@ void MainComponent::menuItemSelected (int id, int topLevelMenuIndex)
             break;
 
         case 3:
+            if (id == 1)
+                showCollabWindow();
+            break;
+
+        case 4:
             if (id == 1)
                 juce::URL (Links::feedbackChat).launchInDefaultBrowser();
             else if (id == 2)

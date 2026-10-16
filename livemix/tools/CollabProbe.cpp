@@ -14,7 +14,7 @@
 //   LiveMixCollabProbe --join nnnn
 //   options: --role measure|reflect (default: the host measures, the guest reflects)  --seconds 60 (after connecting)
 //            --wait 180 (for the partner)  --block 128  --nick NAME  --record FILE.wav (first 20 s heard)
-//            --out FILE.json
+//            --out FILE.json  --log FILE (the per-second lines too, in case the remote session drops)
 // Prints "PROBE_SECOND {...}" every second and "PROBE_RESULT {...}" at the end, ASCII only.
 // Exit 0 = connected and measured, 2 = this PC cannot host, 3 = no partner or could not connect, 4 = other error.
 #ifndef NOMINMAX
@@ -295,7 +295,7 @@ juce::var percentiles (std::vector<double> values)
 struct Args
 {
     bool host = false;
-    juce::String code, role, nick, record, out;
+    juce::String code, role, nick, record, out, log;
     int port = 49731, rate = 48000, seconds = 60, wait = 180, block = 128;
 };
 
@@ -384,6 +384,7 @@ int run (const Args& args)
                     line->setProperty ("minLevel", second.windows > 0 ? round1 (second.minLevel * 100.0) / 100.0 : 0.0);
                     line->setProperty ("lateBlocks", second.lateBlocks);
                     printLine ("PROBE_SECOND " + toJson (lineVar));
+                    if (args.log.isNotEmpty()) juce::File (args.log).appendText ("PROBE_SECOND " + toJson (lineVar) + juce::newLine);
                     if (s.state == State::connected)
                     {
                         rtts.push_back (s.rttMs); estimates.push_back (s.estimatedOneWayMs);
@@ -395,6 +396,13 @@ int run (const Args& args)
                     maxLoss = std::max (maxLoss, stats.lossPercent10s);
                 }
                 clock.stopJudging();
+                // keep sending 2 s more, so the partner's last measured second does not hear this side leaving
+                for (const double until = nowMs() + 2000.0; nowMs() < until;)
+                {
+                    pump (20);
+                    const auto s = session.getSnapshot().state;
+                    if (s != State::connected && s != State::disconnected) break;
+                }
                 const auto stats = audio.getStats();
                 auto* playout = new juce::DynamicObject();
                 playout->setProperty ("received", (juce::int64) stats.received); playout->setProperty ("lost", (juce::int64) stats.lost);
@@ -452,6 +460,7 @@ int main (int argc, char* argv[])
         else if (a == "--nick") args.nick = next();
         else if (a == "--record") args.record = next();
         else if (a == "--out") args.out = next();
+        else if (a == "--log") args.log = next();
         else if (a == "--port") args.port = next().getIntValue();
         else if (a == "--rate") args.rate = next().getIntValue();
         else if (a == "--seconds") args.seconds = next().getIntValue();
@@ -464,7 +473,7 @@ int main (int argc, char* argv[])
         || args.block < 16 || args.block > 2048 || args.seconds < 1 || args.port < 1024 || args.port > 65535)
     {
         printLine ("PROBE_RESULT {\"exit\":4,\"failed\":\"usage: --host | --join CODE  [--role measure|reflect] [--seconds N] "
-                   "[--wait N] [--rate 48000|44100] [--block N] [--port N] [--nick NAME] [--record FILE.wav] [--out FILE.json]\"}");
+                   "[--wait N] [--rate 48000|44100] [--block N] [--port N] [--nick NAME] [--record FILE.wav] [--out FILE.json] [--log FILE]\"}");
         return 4;
     }
     return run (args);

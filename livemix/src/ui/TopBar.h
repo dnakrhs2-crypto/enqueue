@@ -10,7 +10,7 @@ namespace gocue::livemix
 {
 
 /** The bar under the menu bar: logo, session name and state, audio device, rate / buffer / latency, CPU load, the
-    mute badges, and three buttons (합방, FX 채널, 플러그인 관리). The session, backup, settings and help live in the menu bar. */
+    mute badges, and three buttons (합방, FX 채널, 플러그인 관리). The session, backup, settings, 합방 and help live in the menu bar. */
 class TopBar : public juce::Component
 {
 public:

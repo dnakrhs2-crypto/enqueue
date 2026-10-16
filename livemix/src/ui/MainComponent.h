@@ -40,7 +40,7 @@ struct ObsPluginActions
     Everything the operator does goes through the document; the timer feeds the meters. */
 class MainComponent : public juce::Component,
                       public juce::KeyListener,   // Ctrl+S / Ctrl+Shift+S / Ctrl+N, registered on the window
-                      public juce::MenuBarModel,  // 세션 · 온라인 백업 · 설정 · 도움말
+                      public juce::MenuBarModel,  // 세션 · 온라인 백업 · 설정 · 합방 · 도움말
                       private juce::Timer
 {
 public:
