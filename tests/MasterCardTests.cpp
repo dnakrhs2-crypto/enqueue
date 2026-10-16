@@ -430,8 +430,7 @@ public:
             expect (! master->isStrip());
         }
         main.setTransform ({});
-        // 0.15.0: the fixed 100 px 합방 button (+ 8 px gap) left of FX 채널 takes 108 px from the device (330 -> 222)
-        beginTest ("l03 top bar uses 24 px between groups and a 222 px device at the mockup status");
+        beginTest ("l03 top bar uses 24 px between groups and a 330 px device at the mockup status");
         MixEngine::DeviceFormat format;
         format.kind = MixEngine::DeviceFormat::Kind::windowsShared;
         format.inputBits = 16;
@@ -439,11 +438,11 @@ public:
         top->setStatus (48000.0, 480, 53.0, 0.03, true, format);
         for (auto* child : top->getChildren())
         {
-            if (dynamic_cast<juce::ComboBox*> (child) != nullptr) rect (*child, { 460, 15, 222, 34 });
+            if (dynamic_cast<juce::ComboBox*> (child) != nullptr) rect (*child, { 460, 15, 330, 34 });
             if (auto* label = dynamic_cast<juce::Label*> (child))
             {
                 if (label->getText() == ko ("윈도우")) rect (*child, { 404, 15, 48, 34 });
-                if (label->getText() == "CPU 3%") rect (*child, { 929, 15, 57, 34 });
+                if (label->getText() == "CPU 3%") rect (*child, { 1037, 15, 57, 34 });
                 if (label->getText() == ko ("저장 안 됨")) rect (*child, { 312, 15, 68, 34 });
             }
         }
