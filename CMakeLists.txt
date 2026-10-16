@@ -388,6 +388,18 @@ if(GOCUE_HAS_WINSPARKLE)
         COMMENT "Copying WinSparkle.dll next to LiveMix.exe")
 endif()
 
+# Not shipped: two copies on two PCs measure the 합방 network path with a test signal, with no audio device or window
+# (livemix/tools/CollabProbe.cpp). Only built when asked for: --target LiveMixCollabProbe
+juce_add_console_app(LiveMixCollabProbe PRODUCT_NAME "LiveMixCollabProbe" VERSION ${LIVEMIX_VERSION})
+gocue_add_app_version(LiveMixCollabProbe)
+target_sources(LiveMixCollabProbe PRIVATE livemix/tools/CollabProbe.cpp)
+target_compile_definitions(LiveMixCollabProbe PRIVATE
+    JUCE_APPLICATION_NAME_STRING="LiveMixCollabProbe"
+    GOCUE_HAS_WINSPARKLE=0)
+target_link_libraries(LiveMixCollabProbe PRIVATE LiveMixCore winmm)
+set_property(TARGET LiveMixCollabProbe PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+set_target_properties(LiveMixCollabProbe PROPERTIES EXCLUDE_FROM_ALL TRUE)
+
 add_subdirectory(tests)
 option(GOCUE_BUILD_RECORDER "Build Recorder with the pinned FFmpeg SDK when available" ON)
 if(GOCUE_BUILD_RECORDER)
