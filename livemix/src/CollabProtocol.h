@@ -12,7 +12,7 @@ inline constexpr double packetDurationMs (uint32_t rate) { return framesPerPacke
 inline constexpr int headerBytes = 36, maxDatagram = 1200, audioBytes = framesPerPacket * channels * bytesPerSample;
 inline constexpr uint32_t magic = 0x42434d4c;
 inline constexpr uint8_t version = 1;
-enum class Kind : uint8_t { audio = 1, hello, welcome, ping, pong, bye, probe };
+enum class Kind : uint8_t { audio = 1, hello, welcome, ping, pong, bye, probe, punch };
 
 // Wire offsets (little endian): magic u32 @0, version u8 @4, kind u8 @5,
 // flags u16 @6, session u64 @8, sender u32 @16, seq u32 @20,
@@ -34,6 +34,8 @@ struct Header
 // the guest's hello reports its initial preference, then the accepted room rate.
 // ping/pong: u64 monotonic nanoseconds @0 (pong echoes ping unchanged).
 // bye: empty. probe: 16 opaque nonce bytes; all header fields except kind/length zero.
+// punch: empty, host -> guest's public address while the host's port is closed (UDP hole punching); 0.15.2 and
+// older drop the unknown kind, so it never reaches them as anything else.
 struct PeerInfo
 {
     juce::String nickname, appVersion = "0.15.0";

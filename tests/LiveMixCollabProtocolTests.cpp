@@ -70,13 +70,17 @@ public:
         expectWithinAbsoluteError (copy.outputLatencyMs, info.outputLatencyMs, 0.0001);
         expect (copy.deviceRate == 44100);
         expect (! readPeerInfo (pcm.data(), count - 1, copy));
-        for (Kind kind : { Kind::hello, Kind::welcome, Kind::ping, Kind::pong, Kind::bye, Kind::probe })
+        for (Kind kind : { Kind::hello, Kind::welcome, Kind::ping, Kind::pong, Kind::bye, Kind::punch, Kind::probe })
         {
             Header control; control.kind = kind;
-            control.payloadBytes = (uint16_t) (kind == Kind::probe ? 16 : kind == Kind::bye ? 0
+            control.payloadBytes = (uint16_t) (kind == Kind::probe ? 16 : kind == Kind::bye || kind == Kind::punch ? 0
                 : kind == Kind::ping || kind == Kind::pong ? 8 : count);
             const auto bytes = writePacket (packet.data(), packet.size(), control, pcm.data());
             expect (bytes > 0 && readPacket (packet.data(), bytes, read, payload));
+        }
+        {
+            Header punch; punch.kind = Kind::punch; punch.session = 9; punch.sender = 3; punch.payloadBytes = 1;
+            expect (writePacket (packet.data(), packet.size(), punch, pcm.data()) == 0);   // a punch carries nothing
         }
         writeTimestamp (pcm.data(), 0x1122334455667788ULL);
         expect (readTimestamp (pcm.data()) == 0x1122334455667788ULL);

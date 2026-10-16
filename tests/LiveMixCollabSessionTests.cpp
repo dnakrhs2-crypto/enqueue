@@ -20,6 +20,7 @@ struct CollabSessionTestAccess
     static bool heartbeatPending (CollabSession& s) { return s.heartbeatPending; }
     static bool heartbeatStopped (CollabSession& s) { return s.heartbeatStopped; }
     static bool loopbackOnly (CollabSession& s) { return s.options.loopbackOnly; }
+    static bool punching (CollabSession& s) { return s.punching; }
 };
 }
 
@@ -108,6 +109,7 @@ public:
         if (action == "create")
         {
             port = (int) body["port"]; hostNick = body["nick"].toString(); present = true; confirmed = connected = false;
+            hostStun = body.hasProperty ("stun"); guestCandidates.clear();
             if (sendProbe)
             {
                 probe (port);
@@ -119,6 +121,12 @@ public:
         if (action == "confirm")
         {
             confirmed = (bool) body["reachable"];
+            // like the room server: a closed port keeps the room only for hole punching with a known public address
+            if (! confirmed && acceptPunch && (bool) body["punch"] && hostStun)
+            {
+                confirmed = true;
+                return response (object ({ { "ok", true }, { "punch", true } }));
+            }
             if (! confirmed) present = false;
         }
         if (action == "heartbeat")
@@ -129,6 +137,8 @@ public:
                 const int status = heartbeatStatuses.front(); heartbeatStatuses.pop_front();
                 if (status != 200) return { status, "{\"error\":\"room\"}" };
             }
+            if (! guestCandidates.isEmpty())
+                return response (object ({ { "ok", true }, { "guest", object ({ { "candidates", guestCandidates } }) } }));
         }
         if (action == "close") present = false;
         if (action == "join")
@@ -139,8 +149,10 @@ public:
             if (status == 200 && connected && body["inst"].toString() != guestInst) status = 409;
             if (status != 200) return { status, "{\"error\":\"room\"}" };
             guestInst = body["inst"].toString();
+            guestCandidates.clear();
+            if (body.hasProperty ("stun")) guestCandidates.add (object ({ { "ip", body["stun"]["ip"] }, { "port", body["stun"]["port"] } }));
             juce::Array<juce::var> candidates;
-            candidates.add (object ({ { "ip", "127.0.0.1" }, { "port", port } }));
+            candidates.add (object ({ { "ip", "127.0.0.1" }, { "port", unreachableHost.load() > 0 ? unreachableHost.load() : port } }));
             return response (object ({ { "session", sessionHex }, { "hostNick", hostNick },
                                       { "candidates", candidates }, { "sameNetwork", true } }));
         }
@@ -170,14 +182,45 @@ public:
     }
     std::atomic<int> joinStatus { 200 };
     std::atomic<bool> ranOnMessageThread { false };
+    std::atomic<bool> acceptPunch { false };
+    std::atomic<int> unreachableHost { 0 };   // > 0: the join hands the guest a dead host address, so only a punch can connect
 private:
     std::mutex mutex;
     std::vector<std::pair<juce::String, juce::var>> calls;
+    juce::Array<juce::var> guestCandidates;
     int port = 0;
-    bool present = false, confirmed = false, connected = false;
+    bool present = false, confirmed = false, connected = false, hostStun = false;
     juce::String hostNick, guestInst;
     juce::String roomCode = "0842";
     std::deque<int> heartbeatStatuses;
+};
+
+// Answers each STUN binding request with the asker's own address: on loopback no router changes it.
+struct StunEcho
+{
+    StunEcho() { socket.bindToPort (0, "127.0.0.1"); port = socket.getBoundPort(); worker = std::thread ([this] { run(); }); }
+    ~StunEcho() { stop.store (true); worker.join(); }
+    void run()
+    {
+        while (! stop.load())
+        {
+            if (socket.waitUntilReady (true, 50) != 1) continue;
+            std::array<uint8_t, 64> request; juce::String from; int fromPort = 0;
+            const int n = socket.read (request.data(), (int) request.size(), false, from, fromPort);
+            if (n < 20 || request[0] != 0x00 || request[1] != 0x01) continue;
+            std::array<uint8_t, 32> reply { 0x01, 0x01, 0x00, 0x0c, 0x21, 0x12, 0xA4, 0x42 };
+            std::copy (request.begin() + 8, request.begin() + 20, reply.begin() + 8);
+            const int x = fromPort ^ 0x2112;
+            const uint8_t attribute[12] { 0x00, 0x20, 0x00, 0x08, 0x00, 0x01, (uint8_t) (x >> 8), (uint8_t) x,
+                                          127 ^ 0x21, 0 ^ 0x12, 0 ^ 0xA4, 1 ^ 0x42 };
+            std::copy (std::begin (attribute), std::end (attribute), reply.begin() + 20);
+            socket.write (from, fromPort, reply.data(), (int) reply.size());
+        }
+    }
+    juce::DatagramSocket socket { false };
+    int port = 0;
+    std::atomic<bool> stop { false };
+    std::thread worker;
 };
 
 struct TempDirectory
@@ -189,7 +232,7 @@ struct TempDirectory
 struct Fixture
 {
     explicit Fixture (const std::shared_ptr<FakeService>& service, CollabUpnp::Result upnpResult = { true, true, "203.0.113.8", "192.168.1.9" },
-                      int heartbeatMs = 200, bool loopbackOnly = true)
+                      int heartbeatMs = 200, bool loopbackOnly = true, std::vector<CollabTransport::Address> stun = {})
         : settings (directory.file), audio ("Local\\LiveMix.Collab.Test." + juce::Uuid().toString())
     {
         audio.prepare (48000, 120);
@@ -197,11 +240,16 @@ struct Fixture
         CollabSession::Options options;
         options.loopbackOnly = loopbackOnly; options.probeTimeoutMs = 250; options.connectTimeoutMs = 350;
         options.heartbeatIntervalMs = heartbeatMs; options.renewIntervalMs = 250;
+        if (! stun.empty())
+        {
+            options.stunServers = stun; options.stunTimeoutMs = 500; options.punchHeartbeatMs = 100;
+            options.connectTimeoutMs = 3000;   // the guest waits for the host's knock instead of a reachable address
+        }
         session = std::make_unique<CollabSession> (audio, settings,
             std::make_unique<CollabRoom> ([service] (const auto& request) { return service->request (request); }, "http://127.0.0.1:8899"),
             std::make_unique<FakeUpnp> (upnp), options);
     }
-    bool reaches (State state) { return until ([&] { return session->getSnapshot().state == state; }); }
+    bool reaches (State state, int timeout = 2500) { return until ([&] { return session->getSnapshot().state == state; }, timeout); }
     int port() { return CollabSessionTestAccess::transport (*session).getLocalPort(); }
     TempDirectory directory;
     LiveMixSettings settings;
@@ -481,6 +529,83 @@ public:
             expectEquals (host.session->getSnapshot().reason, ko ("공유기 자동 포트 열기(UPnP)가 꺼져 있습니다"));
             expect (host.session->getSnapshot().code.isEmpty()); expectEquals (host.port(), 0);
             expectEquals (host.upnp->removals.load(), 1);
+        }
+
+        beginTest ("a closed port keeps the room by hole punching: the guest's public address comes back with the heartbeat and is punched");
+        {
+            // 10/16 two-PC test: doksan's router has UPnP off, so it could not host; both routers allow hole punching
+            StunEcho stun;
+            auto service = std::make_shared<FakeService>(); service->sendProbe = false; service->acceptPunch = true;
+            Fixture host (service, { false, false, {}, {} }, 200, true, { { "127.0.0.1", stun.port } });
+            host.session->createRoom ("host"); expect (host.reaches (State::hostWaiting));
+            const auto create = service->last ("create"), confirm = service->last ("confirm");
+            expectEquals (create["stun"]["ip"].toString(), juce::String ("127.0.0.1")); expectEquals ((int) create["stun"]["port"], host.port());
+            expect (! (bool) confirm["reachable"] && (bool) confirm["punch"]);
+            expect (CollabSessionTestAccess::punching (*host.session));
+            int dead;
+            { CollabTransport closed; closed.open (0, true); dead = closed.getLocalPort(); }
+            service->unreachableHost = dead;   // only the host's knock can reach the guest now
+            Fixture guest (service, {}, 200, true, { { "127.0.0.1", stun.port } });
+            guest.session->joinRoom ("0842", "guest");
+            expect (guest.reaches (State::connected, 5000)); expect (host.reaches (State::connected, 5000));
+            const auto join = service->last ("join");
+            expectEquals ((int) join["stun"]["port"], guest.port()); expectEquals ((int) join["port"], guest.port());
+            expectGreaterThan ((int) CollabSessionTestAccess::transport (*host.session).getStats().punched, 0);
+        }
+
+        beginTest ("an older room server that closes the room on a failed check still ends hosting as before");
+        {
+            StunEcho stun;
+            auto service = std::make_shared<FakeService>(); service->sendProbe = false;   // acceptPunch false = 0.15.2 server
+            Fixture host (service, { false, false, {}, {} }, 200, true, { { "127.0.0.1", stun.port } });
+            host.session->createRoom ("host"); expect (host.reaches (State::hostUnavailable));
+            expect ((bool) service->last ("confirm")["punch"]); expect (! CollabSessionTestAccess::punching (*host.session));
+            expect (host.session->getSnapshot().code.isEmpty()); expectEquals (host.port(), 0);
+        }
+
+        beginTest ("hole punching fields: create and join carry the public address, confirm asks to keep the room, heartbeat returns the guest");
+        {
+            std::vector<CollabRoom::Request> calls;
+            CollabRoom room ([&] (const auto& request)
+            {
+                calls.push_back (request);
+                if (request.url.endsWith ("/confirm")) return response (object ({ { "ok", true }, { "punch", true } }));
+                if (request.url.endsWith ("/heartbeat"))
+                {
+                    juce::Array<juce::var> list;
+                    list.add (object ({ { "ip", "198.51.100.4" }, { "port", 50123 } }));
+                    list.add (object ({ { "ip", "not an ip" }, { "port", 1 } }));
+                    list.add (object ({ { "ip", "198.51.100.4" }, { "port", 70000 } }));
+                    return response (object ({ { "ok", true }, { "guest", object ({ { "candidates", list } }) } }));
+                }
+                if (request.url.endsWith ("/join"))
+                {
+                    juce::Array<juce::var> candidates;
+                    candidates.add (object ({ { "ip", "203.0.113.8" }, { "port", 49731 } }));
+                    return response (object ({ { "session", sessionHex }, { "hostNick", "host" }, { "candidates", candidates }, { "sameNetwork", false } }));
+                }
+                return response (object ({ { "code", "0842" }, { "session", sessionHex }, { "hostToken", "token" },
+                                          { "publicIp", "203.0.113.8" }, { "nonce", nonceHex } }));
+            }, "http://127.0.0.1:8899/");
+            const CollabTransport::Mapping mapping { { "203.0.113.8", 61000 }, 2, true };
+            expect (room.create ("host", "install-id", 49731, {}, {}, mapping).ok());
+            auto body = juce::JSON::parse (calls.back().body);
+            expectEquals (body["stun"]["ip"].toString(), juce::String ("203.0.113.8")); expectEquals ((int) body["stun"]["port"], 61000);
+            expect (room.create ("host", "install-id", 49731, {}, {}, { { "203.0.113.8", 61000 }, 2, false }).ok());
+            expect (! juce::JSON::parse (calls.back().body).hasProperty ("stun"));   // a symmetric NAT cannot be punched
+            const auto confirmed = room.confirm ("0842", "token", false, "reason", true);
+            expect (confirmed.ok() && confirmed.punch); expect ((bool) juce::JSON::parse (calls.back().body)["punch"]);
+            expect (room.confirm ("0842", "token", true, {}).ok());
+            expect (! juce::JSON::parse (calls.back().body).hasProperty ("punch"));
+            const auto beat = room.heartbeat ("0842", "token", false);
+            expect (beat.ok()); expectEquals ((int) beat.guest.size(), 1);
+            if (! beat.guest.empty())
+            {
+                expectEquals (beat.guest[0].host, juce::String ("198.51.100.4")); expectEquals (beat.guest[0].port, 50123);
+            }
+            expect (room.join ("0842", "guest", "guest-id", mapping, 50999).ok());
+            body = juce::JSON::parse (calls.back().body);
+            expectEquals ((int) body["stun"]["port"], 61000); expectEquals ((int) body["port"], 50999);
         }
 
         beginTest ("the partner's OBS ring runs while a room is open, with or without the master's OBS switch");

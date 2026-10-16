@@ -36,13 +36,23 @@ public:
         std::vector<CollabTransport::Address> candidates;
         bool sameNetwork = false;
     };
+    struct Beat : Reply
+    {
+        std::vector<CollabTransport::Address> guest;   // a joined guest's public addresses, to punch toward
+    };
+    struct Confirmed : Reply
+    {
+        bool punch = false;   // the server kept the room for hole punching (an older server closes it instead)
+    };
 
     explicit CollabRoom (RequestFunction request = {}, juce::String server = {});
+    // 'stun' (this socket's public address) lets a host whose port is closed keep the room by hole punching.
     Created create (const juce::String& nick, const juce::String& inst, int port,
-                    const juce::StringArray& lan, const CollabUpnp::Result&);
-    Reply confirm (const juce::String& code, const juce::String& token, bool reachable, const juce::String& reason);
-    Reply heartbeat (const juce::String& code, const juce::String& token, bool connected);
-    Joined join (const juce::String& code, const juce::String& nick, const juce::String& inst);
+                    const juce::StringArray& lan, const CollabUpnp::Result&, const CollabTransport::Mapping& stun = {});
+    Confirmed confirm (const juce::String& code, const juce::String& token, bool reachable, const juce::String& reason, bool punch = false);
+    Beat heartbeat (const juce::String& code, const juce::String& token, bool connected);
+    Joined join (const juce::String& code, const juce::String& nick, const juce::String& inst,
+                 const CollabTransport::Mapping& stun = {}, int localPort = 0);
     Reply close (const juce::String& code, const juce::String& token);
     static juce::String errorMessage (int statusCode);
 

@@ -15,6 +15,20 @@ bool hex (const juce::String& text, int length)
 {
     return text.length() == length && text.containsOnly ("0123456789abcdefABCDEF");
 }
+// [{"ip": "a.b.c.d", "port": n}, ...] -> valid IPv4 addresses only
+std::vector<CollabTransport::Address> addresses (const juce::var& list)
+{
+    std::vector<CollabTransport::Address> result;
+    if (auto* items = list.getArray())
+        for (const auto& item : *items)
+        {
+            const auto ip = item["ip"].toString();
+            const int port = item["port"];
+            if (ip.containsOnly ("0123456789.") && juce::IPAddress (ip).toString() == ip && port > 0 && port <= 65535)
+                result.push_back ({ ip, port });
+        }
+    return result;
+}
 }
 
 CollabRoom::CollabRoom (RequestFunction fn, juce::String base) : request (fn ? std::move (fn) : httpRequest)
@@ -65,14 +79,16 @@ CollabRoom::Reply CollabRoom::command (const char* action, const juce::var& body
 }
 
 CollabRoom::Created CollabRoom::create (const juce::String& nick, const juce::String& inst, int port,
-                                      const juce::StringArray& lan, const CollabUpnp::Result& upnp)
+                                      const juce::StringArray& lan, const CollabUpnp::Result& upnp, const CollabTransport::Mapping& stun)
 {
-    juce::Array<juce::var> addresses;
-    for (const auto& ip : lan) if (addresses.size() < 8) addresses.add (ip);
+    juce::Array<juce::var> lanAddresses;
+    for (const auto& ip : lan) if (lanAddresses.size() < 8) lanAddresses.add (ip);
     juce::var json;
     Created result;
-    static_cast<Reply&> (result) = post ("create", object ({ { "nick", nick }, { "inst", inst }, { "port", port },
-        { "lan", addresses }, { "upnp", object ({ { "found", upnp.found }, { "mapped", upnp.mapped }, { "externalIp", upnp.externalIp } }) } }), json);
+    auto body = object ({ { "nick", nick }, { "inst", inst }, { "port", port }, { "lan", lanAddresses },
+        { "upnp", object ({ { "found", upnp.found }, { "mapped", upnp.mapped }, { "externalIp", upnp.externalIp } }) } });
+    if (stun.usable()) body.getDynamicObject()->setProperty ("stun", object ({ { "ip", stun.address.host }, { "port", stun.address.port } }));
+    static_cast<Reply&> (result) = post ("create", body, json);
     if (! result.ok()) return result;
     result.code = json["code"].toString(); result.hostToken = json["hostToken"].toString(); result.publicIp = json["publicIp"].toString();
     const auto session = json["session"].toString(), nonce = json["nonce"].toString();
@@ -87,34 +103,44 @@ CollabRoom::Created CollabRoom::create (const juce::String& nick, const juce::St
     return result;
 }
 
-CollabRoom::Reply CollabRoom::confirm (const juce::String& code, const juce::String& token, bool reachable, const juce::String& reason)
+CollabRoom::Confirmed CollabRoom::confirm (const juce::String& code, const juce::String& token, bool reachable, const juce::String& reason, bool punch)
 {
-    return command ("confirm", object ({ { "code", code }, { "hostToken", token }, { "reachable", reachable }, { "reason", reason } }));
+    auto body = object ({ { "code", code }, { "hostToken", token }, { "reachable", reachable }, { "reason", reason } });
+    if (punch) body.getDynamicObject()->setProperty ("punch", true);   // keep the room: the guest is reached by hole punching
+    juce::var json;
+    Confirmed result;
+    static_cast<Reply&> (result) = post ("confirm", body, json);
+    if (result.ok() && ! (bool) json.getProperty ("ok", false)) result.error = errorMessage (result.statusCode);
+    result.punch = result.ok() && (bool) json.getProperty ("punch", false);
+    return result;
 }
-CollabRoom::Reply CollabRoom::heartbeat (const juce::String& code, const juce::String& token, bool connected)
+CollabRoom::Beat CollabRoom::heartbeat (const juce::String& code, const juce::String& token, bool connected)
 {
-    return command ("heartbeat", object ({ { "code", code }, { "hostToken", token }, { "connected", connected } }));
+    juce::var json;
+    Beat result;
+    static_cast<Reply&> (result) = post ("heartbeat", object ({ { "code", code }, { "hostToken", token }, { "connected", connected } }), json);
+    if (result.ok() && ! (bool) json.getProperty ("ok", false)) result.error = errorMessage (result.statusCode);
+    if (result.ok()) result.guest = addresses (json["guest"]["candidates"]);
+    return result;
 }
 CollabRoom::Reply CollabRoom::close (const juce::String& code, const juce::String& token)
 {
     return command ("close", object ({ { "code", code }, { "hostToken", token } }));
 }
-CollabRoom::Joined CollabRoom::join (const juce::String& code, const juce::String& nick, const juce::String& inst)
+CollabRoom::Joined CollabRoom::join (const juce::String& code, const juce::String& nick, const juce::String& inst,
+                                    const CollabTransport::Mapping& stun, int localPort)
 {
     juce::var json;
     Joined result;
-    static_cast<Reply&> (result) = post ("join", object ({ { "code", code }, { "nick", nick }, { "inst", inst } }), json);
+    auto body = object ({ { "code", code }, { "nick", nick }, { "inst", inst } });
+    // where the host must knock when its own port is closed
+    if (stun.usable()) body.getDynamicObject()->setProperty ("stun", object ({ { "ip", stun.address.host }, { "port", stun.address.port } }));
+    if (localPort > 0) body.getDynamicObject()->setProperty ("port", localPort);
+    static_cast<Reply&> (result) = post ("join", body, json);
     if (! result.ok()) return result;
     const auto session = json["session"].toString();
     result.hostNick = json["hostNick"].toString(); result.sameNetwork = (bool) json["sameNetwork"];
-    if (auto* candidates = json["candidates"].getArray())
-        for (const auto& candidate : *candidates)
-        {
-            const auto ip = candidate["ip"].toString();
-            const int port = candidate["port"];
-            if (ip.containsOnly ("0123456789.") && juce::IPAddress (ip).toString() == ip && port > 0 && port <= 65535)
-                result.candidates.push_back ({ ip, port });
-        }
+    result.candidates = addresses (json["candidates"]);
     if (! hex (session, 16) || result.candidates.empty() || result.hostNick.isEmpty())
         result.error = errorMessage (result.statusCode);
     else result.session = (uint64_t) session.getHexValue64();

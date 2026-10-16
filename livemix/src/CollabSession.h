@@ -33,6 +33,12 @@ public:
         int probeTimeoutMs = 2500, connectTimeoutMs = 10000;
         int heartbeatIntervalMs = 10000, renewIntervalMs = 30 * 60 * 1000;
         bool loopbackOnly = false;
+        // UDP hole punching (10/16 two-PC test: a host behind a router without UPnP): this socket's public address
+        // from STUN servers; while punching, a waiting host asks the room server for the guest every second.
+        // Two providers: a symmetric NAT shows only to different server addresses (stun1.l.google.com is the
+        // same server as stun.l.google.com).
+        std::vector<CollabTransport::Address> stunServers { { "stun.l.google.com", 19302 }, { "stun.cloudflare.com", 3478 } };
+        int stunTimeoutMs = 1500, punchHeartbeatMs = 1000, punchMs = 10000;
     };
     CollabSession (MixEngine&, LiveMixSettings&);
     // Injectable service, UPnP and deadlines for loopback tests.
@@ -65,6 +71,7 @@ private:
     std::function<PeerInfo()> peerInfo;
     Snapshot snapshot;
     bool started = false, audioAttached = false, mapped = false, heartbeatPending = false, renewPending = false;
+    bool punching = false; // hosting with a closed port: the guest is reached by hole punching
     bool heartbeatConnected = false, heartbeatStopped = false;
     int heartbeatFailures = 0;
     double joinDeadline = 0, lastHeartbeat = 0, lastRenew = 0, lastNotification = 0;

@@ -25,7 +25,7 @@ bool valid (const Header& h) noexcept
         case Kind::audio: return h.frames == framesPerPacket && h.payloadBytes == audioBytes && h.firstFrame % framesPerPacket == 0;
         case Kind::hello: case Kind::welcome: return h.frames == 0 && h.payloadBytes >= 18 && h.payloadBytes <= 114;
         case Kind::ping: case Kind::pong: return h.frames == 0 && h.payloadBytes == 8;
-        case Kind::bye: return h.frames == 0 && h.payloadBytes == 0;
+        case Kind::bye: case Kind::punch: return h.frames == 0 && h.payloadBytes == 0;
         case Kind::probe: return h.payloadBytes == 16 && h.session == 0 && h.sender == 0 && h.seq == 0 && h.firstFrame == 0 && h.frames == 0;
         default: return false;
     }

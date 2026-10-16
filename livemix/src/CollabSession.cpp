@@ -177,12 +177,14 @@ void CollabSession::createRoom (const juce::String& nick)
         w.upnpUsed = true;
         const auto upnp = w.upnp->discover (transport.getLocalPort());
         if (w.generation.load() != id) return;
+        const auto stun = transport.discoverPublic (options.stunServers, options.stunTimeoutMs);
+        if (w.generation.load() != id) return;
         auto lan = lanAddresses();
         if (upnp.lanIp.isNotEmpty() && lan.contains (upnp.lanIp))
         {
             lan.removeString (upnp.lanIp); lan.insert (0, upnp.lanIp);
         }
-        const auto created = w.room->create (me.nickname, inst, transport.getLocalPort(), lan, upnp);
+        const auto created = w.room->create (me.nickname, inst, transport.getLocalPort(), lan, upnp, stun);
         w.code = created.code; w.token = created.hostToken;
         if (w.generation.load() != id) return;
         if (! created.ok()) { w.error (id, created.error); return; }
@@ -192,10 +194,14 @@ void CollabSession::createRoom (const juce::String& nick)
             std::this_thread::sleep_for (std::chrono::milliseconds (10));
         if (w.generation.load() != id) return;
         const auto check = CollabHostCheck::evaluate (transport.hasProbe(), upnp, created.publicIp);
-        const auto confirmed = w.room->confirm (created.code, created.hostToken, check.reachable, check.reason);
-        if (! check.reachable && confirmed.ok()) { w.code.clear(); w.token.clear(); } // confirm(false) closes the room
+        // A closed port no longer ends the room when this socket's public address is known: the guest's address
+        // comes back with the heartbeat and this side knocks first. Only a server that says so keeps the room.
+        const auto confirmed = w.room->confirm (created.code, created.hostToken, check.reachable, check.reason,
+                                                ! check.reachable && stun.usable());
+        const bool punch = ! check.reachable && confirmed.punch;
+        if (! check.reachable && ! punch && confirmed.ok()) { w.code.clear(); w.token.clear(); } // confirm(false) closes the room
         if (w.generation.load() != id) return;
-        if (! check.reachable)
+        if (! check.reachable && ! punch)
         {
             w.cleanup();
             w.complete (id, [this, check] { setState (State::hostUnavailable, check.message(), check.reason); });
@@ -203,9 +209,9 @@ void CollabSession::createRoom (const juce::String& nick)
         }
         if (! confirmed.ok()) { w.error (id, confirmed.error); return; }
         transport.startHost (created.session, me);
-        w.complete (id, [this, created, upnp]
+        w.complete (id, [this, created, upnp, punch]
         {
-            started = true; mapped = upnp.mapped; snapshot.code = created.code;
+            started = true; mapped = upnp.mapped; punching = punch; snapshot.code = created.code;
             lastHeartbeat = lastRenew = nowMs(); setState (State::hostWaiting);
         });
     });
@@ -224,11 +230,14 @@ void CollabSession::joinRoom (const juce::String& code, const juce::String& nick
     {
         auto& w = *impl;
         if (w.generation.load() != id) return;
-        const auto joined = w.room->join (roomCode, me.nickname, inst);
-        if (w.generation.load() != id) return;
-        if (! joined.ok()) { w.error (id, joined.error); return; }
+        // The socket first: its public address goes with the join, for a host whose port is closed to knock on.
         const auto error = transport.open (0, options.loopbackOnly);
         if (error.isNotEmpty()) { w.error (id, error); return; }
+        const auto stun = transport.discoverPublic (options.stunServers, options.stunTimeoutMs);
+        if (w.generation.load() != id) return;
+        const auto joined = w.room->join (roomCode, me.nickname, inst, stun, transport.getLocalPort());
+        if (w.generation.load() != id) return;
+        if (! joined.ok()) { w.error (id, joined.error); return; }
         transport.startGuest (joined.session, joined.candidates, me);
         w.complete (id, [this, joined]
         {
@@ -242,7 +251,7 @@ void CollabSession::leave()
     messageThread();
     ++impl->generation;
     if (audioAttached) audio.detach();
-    audioAttached = started = mapped = heartbeatPending = renewPending = false;
+    audioAttached = started = mapped = heartbeatPending = renewPending = punching = false;
     heartbeatConnected = heartbeatStopped = false;
     heartbeatFailures = 0;
     snapshot.isHost = false;
@@ -293,10 +302,13 @@ void CollabSession::sendHeartbeat()
     const auto id = impl->generation.load();
     const bool connected = snapshot.state == State::connected;
     heartbeatConnected = connected;
-    impl->enqueue ([this, id, connected]
+    const bool knock = punching && ! connected;
+    impl->enqueue ([this, id, connected, knock]
     {
         if (impl->generation.load() != id) return;
         const auto reply = impl->room->heartbeat (impl->code, impl->token, connected);
+        // the joined guest's public address: knock on it through this side's router until its hello gets in
+        if (knock && reply.ok() && ! reply.guest.empty()) transport.punch (reply.guest, options.punchMs);
         impl->complete (id, [this, reply]
         {
             heartbeatPending = false;
@@ -359,7 +371,8 @@ void CollabSession::timerCallback()
             return;
         }
         if (previous != snapshot.state || heartbeatConnected != (snapshot.state == State::connected)
-            || now - lastHeartbeat >= options.heartbeatIntervalMs) sendHeartbeat();
+            || now - lastHeartbeat >= (punching && snapshot.state == State::hostWaiting ? options.punchHeartbeatMs
+                                                                                         : options.heartbeatIntervalMs)) sendHeartbeat();
         if (mapped && ! renewPending && now - lastRenew >= options.renewIntervalMs)
         {
             renewPending = true; lastRenew = now;

@@ -46,6 +46,40 @@ struct RawPeer
     SOCKET socket;
     int port = 0;
 };
+// Answers every RFC 5389 binding request with a fixed XOR-MAPPED-ADDRESS (the address a router would show).
+struct FakeStun
+{
+    FakeStun (std::array<uint8_t, 4> ip, int mappedPort) : address (ip), mapped (mappedPort)
+    {
+        worker = std::thread ([this]
+        {
+            while (! stop.load())
+            {
+                std::array<uint8_t, 64> request; sockaddr_in from {}; int bytes = sizeof (from);
+                const int n = recvfrom (raw.socket, reinterpret_cast<char*> (request.data()), (int) request.size(), 0,
+                                        reinterpret_cast<sockaddr*> (&from), &bytes);
+                if (n < 20 || request[0] != 0x00 || request[1] != 0x01) continue;
+                ++requests;
+                std::array<uint8_t, 32> reply { 0x01, 0x01, 0x00, 0x0c, 0x21, 0x12, 0xA4, 0x42 };
+                std::copy (request.begin() + 8, request.begin() + 20, reply.begin() + 8);
+                const uint8_t cookie[4] { 0x21, 0x12, 0xA4, 0x42 };
+                const int port = mapped ^ 0x2112;
+                const uint8_t attribute[12] { 0x00, 0x20, 0x00, 0x08, 0x00, 0x01, (uint8_t) (port >> 8), (uint8_t) port,
+                                              (uint8_t) (address[0] ^ cookie[0]), (uint8_t) (address[1] ^ cookie[1]),
+                                              (uint8_t) (address[2] ^ cookie[2]), (uint8_t) (address[3] ^ cookie[3]) };
+                std::copy (std::begin (attribute), std::end (attribute), reply.begin() + 20);
+                sendto (raw.socket, reinterpret_cast<const char*> (reply.data()), 32, 0, reinterpret_cast<sockaddr*> (&from), sizeof (from));
+            }
+        });
+    }
+    ~FakeStun() { stop.store (true); worker.join(); }
+    RawPeer raw;
+    std::array<uint8_t, 4> address;
+    int mapped, port = raw.port;
+    std::atomic<int> requests { 0 };
+    std::atomic<bool> stop { false };
+    std::thread worker;
+};
 }
 class LiveMixCollabTransportTests : public juce::UnitTest
 {
@@ -179,6 +213,52 @@ public:
             expect (waitFor ([&] { return host.receiveKind (Kind::hello); }, 1000));
             host.send (guest.getLocalPort(), welcome, payload.data());
             expect (waitFor ([&] { return guest.getState() == CollabTransport::State::connected; }));
+        }
+
+        beginTest ("STUN binding answers give the socket's public address; servers that disagree give no usable mapping");
+        {
+            // 10/16 two-PC test: both routers kept 49761 -> 49761 for two Google STUN servers (hole punching works)
+            CollabTransport socket; expect (socket.open (0, true).isEmpty());   // first: it starts Winsock for the raw sockets
+            FakeStun first ({ 203, 0, 113, 7 }, 40000), second ({ 203, 0, 113, 7 }, 40000), other ({ 203, 0, 113, 7 }, 40001);
+            auto mapping = socket.discoverPublic ({ { "127.0.0.1", first.port }, { "127.0.0.1", second.port } }, 1500);
+            expectEquals (mapping.responses, 2); expect (mapping.consistent && mapping.usable());
+            expectEquals (mapping.address.host, juce::String ("203.0.113.7")); expectEquals (mapping.address.port, 40000);
+            mapping = socket.discoverPublic ({ { "127.0.0.1", first.port }, { "127.0.0.1", other.port } }, 1500);
+            expectEquals (mapping.responses, 2); expect (! mapping.consistent && ! mapping.usable());   // a symmetric NAT
+            int silent;
+            { RawPeer closed; silent = closed.port; }
+            mapping = socket.discoverPublic ({ { "127.0.0.1", first.port }, { "127.0.0.1", silent } }, 400);
+            expectEquals (mapping.responses, 1); expect (mapping.usable());
+            // two names of one server are asked once (10/16: stun.l.google.com and stun1.l.google.com were one address)
+            const int before = first.requests.load();
+            mapping = socket.discoverPublic ({ { "127.0.0.1", first.port }, { "127.0.0.1", first.port } }, 1500);
+            expectEquals (mapping.responses, 1); expectEquals (first.requests.load() - before, 1);
+            expect (first.requests.load() >= 3);
+            // a socket bound to 127.0.0.1 does not wait for servers it cannot reach
+            const auto started = juce::Time::getMillisecondCounterHiRes();
+            mapping = socket.discoverPublic ({ { "203.0.113.200", 3478 } }, 1500);
+            expectEquals (mapping.responses, 0); expectLessThan (juce::Time::getMillisecondCounterHiRes() - started, 200.0);
+        }
+
+        beginTest ("a host punches the guest's public addresses; a guest answers a punch of its session with hello");
+        {
+            CollabTransport host; expect (host.open (0, true).isEmpty()); host.startHost (55, { "host" });
+            RawPeer guestRouter;
+            host.punch ({ { "127.0.0.1", guestRouter.port } }, 1000);
+            expect (waitFor ([&] { return guestRouter.receiveKind (Kind::punch); }));
+            expectGreaterThan ((int) host.getStats().punched, 0);
+            CollabTransport guest; expect (guest.open (0, true).isEmpty());
+            int closedPort;
+            { RawPeer closed; closedPort = closed.port; }
+            guest.startGuest (56, { { "127.0.0.1", closedPort } }, { "guest" });
+            RawPeer stranger, hostRouter;
+            Header punch; punch.kind = Kind::punch; punch.session = 999; punch.sender = 4;
+            stranger.send (guest.getLocalPort(), punch, nullptr);                      // another room's knock
+            std::this_thread::sleep_for (std::chrono::milliseconds (300));
+            expect (! stranger.receiveKind (Kind::hello));
+            punch.session = 56; hostRouter.send (guest.getLocalPort(), punch, nullptr);
+            expect (waitFor ([&] { return hostRouter.receiveKind (Kind::hello); }));   // and then every 100 ms
+            expect (waitFor ([&] { return hostRouter.receiveKind (Kind::hello); }, 500));
         }
     }
 };
