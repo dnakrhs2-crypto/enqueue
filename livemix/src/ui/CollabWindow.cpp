@@ -199,7 +199,7 @@ CollabPanel::CollabPanel (LiveMixSettings& prefs, Actions callbacks) : settings 
     label (notice, "notice", {}, bodyFont (14.0f), Palette::danger);
     label (peerNick, "peer-nick", {}, titleFont(), Palette::text);
     label (connection, "connection", {}, titleFont (14.0f), Palette::lampOn);
-    label (volumeCaption, "volume-caption", ko ("헤드폰 음량"), captionFont(), Palette::dimText);
+    label (volumeCaption, "volume-caption", ko ("상대방 음량"), captionFont(), Palette::dimText);
     label (volumeValue, "volume-value", {}, captionFont(), Palette::text);
     volumeValue.setJustificationType (juce::Justification::centredRight);
     for (int i = 0; i < 4; ++i)
@@ -253,7 +253,7 @@ CollabPanel::CollabPanel (LiveMixSettings& prefs, Actions callbacks) : settings 
     message.setComponentID ("host-message"); addAndMakeVisible (message);
     reason.setComponentID ("reason"); reason.size = 14.0f; reason.colour = Palette::dimText; addAndMakeVisible (reason);
     headphones.setComponentID ("headphones");
-    headphones.setTexts (ko ("헤드폰 ON"), ko ("헤드폰 OFF"), {});
+    headphones.setTexts (ko ("상대방 목소리 ON"), ko ("상대방 목소리 OFF"), {});
     headphones.onClick = [this]
     {
         if (actions.monitor) actions.monitor ((float) volume.getValue() / 100.0f, ! headphones.isOn());
