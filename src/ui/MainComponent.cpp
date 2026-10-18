@@ -101,6 +101,7 @@ MainComponent::MainComponent (AudioEngine& e, AppSettings& s, juce::ApplicationC
     containerTabs.onAddCart = [this] { addContainer (true); };
     containerTabs.onRename = [this] (int index) { renameContainer (index); };
     containerTabs.onRemove = [this] (int index) { removeContainer (index); };
+    containerTabs.onMoveTab = [this] (int from, int to) { moveContainer (from, to); };
     containerTabs.onToggleCart = [this] (int index) { toggleContainerCart (index); };
     containerTabs.onGridSize = [this] (int index) { setContainerGrid (index); };
     cart.onTrigger = [this] (const Cue& cue)
@@ -3755,6 +3756,16 @@ void MainComponent::removeContainer (int index)
 
         document.removeContainer (index);
     }, { {}, true });
+}
+
+void MainComponent::moveContainer (int from, int to)
+{
+    const int count = document.getNumContainers();
+
+    if (showMode || from == to || ! juce::isPositiveAndBelow (from, count) || ! juce::isPositiveAndBelow (to, count))
+        return;
+
+    document.perform (ko ("탭 순서 변경"), [this, from, to] { document.moveContainer (from, to); });
 }
 
 void MainComponent::toggleContainerCart (int index)

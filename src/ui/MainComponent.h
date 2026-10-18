@@ -140,6 +140,8 @@ private:
     void addContainer (bool cart);
     void renameContainer (int index);
     void removeContainer (int index);
+    /** Moves a tab to index 'to' (a drag on the tab strip, or its menu's 왼쪽으로 / 오른쪽으로 이동): one undo step. */
+    void moveContainer (int from, int to);
     void setContainerGrid (int index);
     void toggleContainerCart (int index);
     /** Shows the table or the cart for the active container and refreshes the tabs. */

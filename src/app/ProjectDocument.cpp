@@ -139,6 +139,27 @@ bool ProjectDocument::removeContainer (int index)
     return true;
 }
 
+bool ProjectDocument::moveContainer (int from, int to)
+{
+    const int count = (int) containers.size();
+
+    if (! juce::isPositiveAndBelow (from, count) || ! juce::isPositiveAndBelow (to, count) || from == to)
+        return false;
+
+    const auto activeId = containers[(size_t) active]->info.id;
+    auto moving = std::move (containers[(size_t) from]);
+    containers.erase (containers.begin() + from);
+    containers.insert (containers.begin() + to, std::move (moving));
+
+    for (int i = 0; i < count; ++i)
+        if (containers[(size_t) i]->info.id == activeId)
+            active = i;   // 'cues' still holds that list's cues: only its index changed
+
+    markDirty();
+    notifyContainers();
+    return true;
+}
+
 void ProjectDocument::renameContainer (int index, const juce::String& name)
 {
     if (index < 0 || index >= (int) containers.size() || name.isEmpty())

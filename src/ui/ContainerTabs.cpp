@@ -16,6 +16,10 @@ ContainerTabs::ContainerTabs (ProjectDocument& d) : document (d)
 void ContainerTabs::setEditable (bool shouldBeEditable)
 {
     editable = shouldBeEditable;
+
+    if (! editable)
+        endDrag();   // show mode: tabs do not move
+
     repaint();
 }
 
@@ -166,8 +170,10 @@ void ContainerTabs::paint (juce::Graphics& g)
         g.reduceClipRegion (t.bounds.getIntersection ({ 8, 0, juce::jmax (0, tabsRight - 8), getHeight() }));
         auto r = t.bounds;
         Palette::drawTab (g, r, t.active);
+        // the tab being dragged stays where it is, dimmed; the marker shows where it will go
+        const float alpha = dragging && t.id == draggedId ? Palette::disabledAlpha : 1.0f;
         int textX = r.getX() + 12;
-        g.setColour (t.active ? Palette::text : Palette::muted);
+        g.setColour ((t.active ? Palette::text : Palette::muted).withMultipliedAlpha (alpha));
         const float gx = (float) textX, gy = (float) r.getCentreY() - 5.0f;
         juce::Path icon;
 
@@ -183,9 +189,18 @@ void ContainerTabs::paint (juce::Graphics& g)
         g.fillPath (icon);
         textX += 16;
 
-        g.setColour (t.active ? Palette::text : Palette::dimText);
+        g.setColour ((t.active ? Palette::text : Palette::dimText).withMultipliedAlpha (alpha));
         g.setFont (Palette::font (Palette::tabSize, t.active));
         g.drawText (t.name, textX, r.getY(), r.getRight() - textX - 6, r.getHeight(), juce::Justification::centredLeft, true);
+    }
+
+    if (const auto marker = getDropMarkerBounds(); ! marker.isEmpty())
+    {
+        // the cue table's row-drag bar, standing up in the gap between two tabs (5 = the gap before the first tab)
+        juce::Graphics::ScopedSaveState clip (g);
+        g.reduceClipRegion ({ 5, 0, juce::jmax (0, tabsRight + 3 - 5), getHeight() });
+        g.setColour (Palette::standby);
+        g.fillRect (marker);
     }
 
     g.setColour (Palette::accent.withMultipliedAlpha (editable ? 1.0f : Palette::disabledAlpha));
@@ -215,6 +230,7 @@ juce::String ContainerTabs::getTooltip()
 
 void ContainerTabs::mouseDown (const juce::MouseEvent& e)
 {
+    endDrag();   // a drag whose button-up never arrived does not carry over into this gesture
     int tab = tabAt (e.getPosition());
     // the second click of a double-click means the first click's list, found again by its id: the bar may have
     // relaid out in between (the newly selected list's cue count is measured into it) or lists come and gone;
@@ -246,6 +262,106 @@ void ContainerTabs::mouseDown (const juce::MouseEvent& e)
 
     if (addButton.contains (e.getPosition()) && editable)
         showAddMenu();
+}
+
+void ContainerTabs::mouseDrag (const juce::MouseEvent& e)
+{
+    if (! editable || e.mods.isPopupMenu() || pressedId.isNull())
+        return;
+
+    if (! dragging)
+    {
+        // a press that wanders a few px is still a click; past that the pressed tab follows the mouse
+        if (std::abs (e.getDistanceFromDragStartX()) < dragThreshold || indexOf (pressedId) < 0)
+            return;
+
+        dragging = true;
+        draggedId = pressedId;
+        setMouseCursor (juce::MouseCursor::DraggingHandCursor);
+        beginDragAutoRepeat (autoScrollRepeatMs);   // drag events keep coming while the mouse rests at an edge
+    }
+
+    scrollWhileDragging (e.x);
+    updateDropGap (e.x);
+}
+
+void ContainerTabs::mouseUp (const juce::MouseEvent& e)
+{
+    if (! dragging)
+        return;
+
+    updateDropGap (e.x);   // the drop position itself, not the last drag event
+    const int from = indexOf (draggedId);
+    const int gap = dropGap;
+    endDrag();
+
+    if (from >= 0 && gap >= 0 && onMoveTab)
+        onMoveTab (from, gap > from ? gap - 1 : gap);
+}
+
+int ContainerTabs::gapAt (int x) const
+{
+    // only what is visible counts: past the strip's ends the drop goes to the first / last visible gap
+    x = juce::jlimit (8, juce::jmax (8, tabsRight - 1), x);
+
+    for (int i = 0; i < (int) tabs.size(); ++i)
+        if (x < tabs[(size_t) i].bounds.getCentreX())
+            return i;
+
+    return (int) tabs.size();
+}
+
+void ContainerTabs::updateDropGap (int x)
+{
+    const int from = indexOf (draggedId);
+    const int gap = gapAt (x);
+    const int shown = from < 0 || gap == from || gap == from + 1 ? -1 : gap;   // either side of itself: no move
+
+    if (shown != dropGap)
+    {
+        dropGap = shown;
+        repaint();
+    }
+}
+
+void ContainerTabs::scrollWhileDragging (int x)
+{
+    if (maxTabsScroll <= 0)
+        return;
+
+    const int step = x < 8 + autoScrollEdge ? -autoScrollStep : x > tabsRight - autoScrollEdge ? autoScrollStep : 0;
+    const int scroll = juce::jlimit (0, maxTabsScroll, tabsScroll + step);
+
+    if (scroll == tabsScroll)
+        return;
+
+    tabsScroll = scroll;
+    followActive = false;   // like the wheel: this relayout does not pull the strip back to the active tab
+    resized();
+}
+
+void ContainerTabs::endDrag()
+{
+    if (! dragging)
+        return;
+
+    dragging = false;
+    draggedId = juce::Uuid::null();
+    dropGap = -1;
+    beginDragAutoRepeat (0);
+    setMouseCursor (juce::MouseCursor::NormalCursor);
+    repaint();
+}
+
+juce::Rectangle<int> ContainerTabs::getDropMarkerBounds() const
+{
+    if (! dragging || ! juce::isPositiveAndNotGreaterThan (dropGap, (int) tabs.size()) || tabs.empty())
+        return {};
+
+    // 3 px over the 2 px gap; above the strip's bottom border
+    const auto& first = tabs.front().bounds;
+    const int x = dropGap < (int) tabs.size() ? tabs[(size_t) dropGap].bounds.getX() - 2 : tabs.back().bounds.getRight();
+    return { x, first.getY(), 3, juce::jmax (0, first.getHeight() - 1) };
 }
 
 void ContainerTabs::mouseWheelMove (const juce::MouseEvent& e, const juce::MouseWheelDetails& wheel)
@@ -302,27 +418,42 @@ void ContainerTabs::showAddMenu()
     });
 }
 
-void ContainerTabs::showTabMenu (int index, juce::Point<int> screenPosition)
+juce::PopupMenu ContainerTabs::createTabMenu (int index) const
 {
     const auto info = document.getContainerInfo (index);
+    const int count = document.getNumContainers();
     juce::PopupMenu menu;
-    menu.addItem (1, juce::String::fromUTF8 ("이름 바꾸기..."));
-    menu.addItem (2, info.isCart ? juce::String::fromUTF8 ("큐 리스트로 전환") : juce::String::fromUTF8 ("카트로 전환"));
-    menu.addItem (3, juce::String::fromUTF8 ("카트 격자 크기...") + " (" + juce::String (info.cartRows) + " x " + juce::String (info.cartCols) + ")", info.isCart);
+    menu.addItem (renameItem, juce::String::fromUTF8 ("이름 바꾸기..."));
+    menu.addItem (cartItem, info.isCart ? juce::String::fromUTF8 ("큐 리스트로 전환") : juce::String::fromUTF8 ("카트로 전환"));
+    menu.addItem (gridItem, juce::String::fromUTF8 ("카트 격자 크기...") + " (" + juce::String (info.cartRows) + " x " + juce::String (info.cartCols) + ")", info.isCart);
     menu.addSeparator();
-    menu.addItem (4, juce::String::fromUTF8 ("삭제"), document.getNumContainers() > 1);
+    menu.addItem (moveLeftItem, juce::String::fromUTF8 ("왼쪽으로 이동"), index > 0);
+    menu.addItem (moveRightItem, juce::String::fromUTF8 ("오른쪽으로 이동"), index < count - 1);
+    menu.addSeparator();
+    menu.addItem (removeItem, juce::String::fromUTF8 ("삭제"), count > 1);
+    return menu;
+}
+
+void ContainerTabs::performTabMenuItem (int index, int itemId)
+{
+    if (itemId == renameItem && onRename)            onRename (index);
+    else if (itemId == cartItem && onToggleCart)     onToggleCart (index);
+    else if (itemId == gridItem && onGridSize)       onGridSize (index);
+    else if (itemId == removeItem && onRemove)       onRemove (index);
+    else if (itemId == moveLeftItem && onMoveTab && index > 0)
+        onMoveTab (index, index - 1);
+    else if (itemId == moveRightItem && onMoveTab && index + 1 < document.getNumContainers())
+        onMoveTab (index, index + 1);
+}
+
+void ContainerTabs::showTabMenu (int index, juce::Point<int> screenPosition)
+{
     juce::Component::SafePointer<ContainerTabs> safeThis (this);
-    menu.showMenuAsync (juce::PopupMenu::Options().withTargetScreenArea ({ screenPosition.x, screenPosition.y, 1, 1 }), [safeThis, index] (int result)
+    createTabMenu (index).showMenuAsync (juce::PopupMenu::Options().withTargetScreenArea ({ screenPosition.x, screenPosition.y, 1, 1 }),
+                                         [safeThis, index] (int result)
     {
-        if (safeThis == nullptr || result == 0)
-            return;
-
-        auto& self = *safeThis;
-
-        if (result == 1 && self.onRename)         self.onRename (index);
-        else if (result == 2 && self.onToggleCart) self.onToggleCart (index);
-        else if (result == 3 && self.onGridSize)   self.onGridSize (index);
-        else if (result == 4 && self.onRemove)     self.onRemove (index);
+        if (safeThis != nullptr && result != 0)
+            safeThis->performTabMenuItem (index, result);
     });
 }
 

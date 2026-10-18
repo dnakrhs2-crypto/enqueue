@@ -58,6 +58,9 @@ public:
     int addContainer (const juce::String& name, bool isCart);
     /** Removes a list / cart (the last one cannot go; removing the active one activates its neighbour). */
     bool removeContainer (int index);
+    /** Moves the list / cart at 'from' so that it ends up at index 'to' (0 .. count - 1); the others keep their order and
+        the active list stays the same list. Returns false, changing nothing, for a bad index or the same place. */
+    bool moveContainer (int from, int to);
     void renameContainer (int index, const juce::String& name);
     void setContainerCart (int index, bool isCart, int rows, int cols);
     /** The list a cue lives in (the active one is checked first), or nullptr. 'indexOut' gets the cue's index. */

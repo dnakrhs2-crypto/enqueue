@@ -124,6 +124,7 @@ target_sources(EnqueueTests PRIVATE
     SpaceBarPlayPauseTests.cpp
     WaveHeightTests.cpp
     PlayTabGainTests.cpp
+    TabReorderTests.cpp
     ReopenLastProjectTests.cpp
     CueIconsTests.cpp
     WaitProgressTests.cpp
