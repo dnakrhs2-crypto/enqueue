@@ -77,6 +77,8 @@ private:
     void updateDropGap (int x);
     void scrollWhileDragging (int x);
     void endDrag();
+    /** Scrolls a crowded strip so that tab 'id' (just moved by a drag or the menu) is in sight. */
+    void revealTab (const juce::Uuid& id);
 
     ProjectDocument& document;
     std::vector<Tab> tabs;
@@ -90,6 +92,7 @@ private:
     bool dragging = false;                        // the pressed tab is being dragged sideways
     juce::Uuid draggedId = juce::Uuid::null();   // by id: the strip may relay out (and refresh) during the drag
     int dropGap = -1;                             // gapAt() of the drag, -1 while a drop there would change nothing
+    juce::Uuid revealId = juce::Uuid::null();    // set only during revealTab's layout
     static constexpr int dragThreshold = 5, autoScrollEdge = 24, autoScrollStep = 14, autoScrollRepeatMs = 40;
     int indexOf (const juce::Uuid& id) const;
     juce::String infoText;

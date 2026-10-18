@@ -106,20 +106,22 @@ void ContainerTabs::resized()
     // when the tabs do not fit, the strip scrolls (wheel); a newly active list is brought into view, and an
     // active list that was in view stays in view when the strip narrows (unless the wheel had moved away from it)
     maxTabsScroll = juce::jmax (0, x - 2 - tabsRight);
-    const auto revealingScroll = [&] (int scroll)
+    const auto revealingScroll = [&] (int index, int scroll)
     {
-        const auto& active = tabs[(size_t) activeTab].bounds;
-        if (active.getRight() - scroll > tabsRight) scroll = active.getRight() - tabsRight;
-        if (active.getX() - scroll < 8) scroll = active.getX() - 8;
+        const auto& tab = tabs[(size_t) index].bounds;
+        if (tab.getRight() - scroll > tabsRight) scroll = tab.getRight() - tabsRight;
+        if (tab.getX() - scroll < 8) scroll = tab.getX() - 8;
         return juce::jlimit (0, maxTabsScroll, scroll);
     };
     if (activeTab >= 0 && (tabs[(size_t) activeTab].id != revealedId || followActive))
     {
-        tabsScroll = revealingScroll (tabsScroll);
+        tabsScroll = revealingScroll (activeTab, tabsScroll);
         revealedId = tabs[(size_t) activeTab].id;
     }
+    if (const int moved = indexOf (revealId); moved >= 0)
+        tabsScroll = revealingScroll (moved, tabsScroll);   // the tab just moved stays in sight
     tabsScroll = juce::jlimit (0, maxTabsScroll, tabsScroll);
-    followActive = activeTab < 0 || revealingScroll (tabsScroll) == tabsScroll;
+    followActive = activeTab < 0 || revealingScroll (activeTab, tabsScroll) == tabsScroll;
     for (auto& t : tabs)
         t.bounds.translate (-tabsScroll, 0);
 
@@ -291,12 +293,16 @@ void ContainerTabs::mouseUp (const juce::MouseEvent& e)
         return;
 
     updateDropGap (e.x);   // the drop position itself, not the last drag event
-    const int from = indexOf (draggedId);
+    const auto movedId = draggedId;
+    const int from = indexOf (movedId);
     const int gap = dropGap;
     endDrag();
 
     if (from >= 0 && gap >= 0 && onMoveTab)
+    {
         onMoveTab (from, gap > from ? gap - 1 : gap);
+        revealTab (movedId);   // a drag that scrolled the strip must not leave the moved (current) tab outside it
+    }
 }
 
 int ContainerTabs::gapAt (int x) const
@@ -351,6 +357,13 @@ void ContainerTabs::endDrag()
     beginDragAutoRepeat (0);
     setMouseCursor (juce::MouseCursor::NormalCursor);
     repaint();
+}
+
+void ContainerTabs::revealTab (const juce::Uuid& id)
+{
+    revealId = id;
+    resized();
+    revealId = juce::Uuid::null();
 }
 
 juce::Rectangle<int> ContainerTabs::getDropMarkerBounds() const
@@ -440,10 +453,12 @@ void ContainerTabs::performTabMenuItem (int index, int itemId)
     else if (itemId == cartItem && onToggleCart)     onToggleCart (index);
     else if (itemId == gridItem && onGridSize)       onGridSize (index);
     else if (itemId == removeItem && onRemove)       onRemove (index);
-    else if (itemId == moveLeftItem && onMoveTab && index > 0)
-        onMoveTab (index, index - 1);
-    else if (itemId == moveRightItem && onMoveTab && index + 1 < document.getNumContainers())
-        onMoveTab (index, index + 1);
+    else if (onMoveTab && ((itemId == moveLeftItem && index > 0) || (itemId == moveRightItem && index + 1 < document.getNumContainers())))
+    {
+        const auto movedId = document.getContainerInfo (index).id;
+        onMoveTab (index, itemId == moveLeftItem ? index - 1 : index + 1);
+        revealTab (movedId);   // moved past the strip's end it would vanish from sight
+    }
 }
 
 void ContainerTabs::showTabMenu (int index, juce::Point<int> screenPosition)

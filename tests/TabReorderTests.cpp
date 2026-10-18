@@ -290,6 +290,45 @@ public:
             expect (s.moves.size() == 1 && s.moves.back() == std::make_pair (0, 11), "T1 goes last");
         }
 
+        beginTest ("on a crowded strip the tab just moved stays in sight: after a drag that scrolled, and after 오른쪽으로 이동");
+        {
+            const auto crowded = [] (ProjectDocument& doc)
+            {
+                doc.renameContainer (0, "T1");
+                for (int i = 2; i <= 12; ++i)
+                    doc.addContainer ("T" + juce::String (i), false);
+            };
+            const auto inSight = [] (juce::Rectangle<int> r) { return r.getX() >= 8 && r.getRight() <= 372; };   // 420 px strip
+
+            ProjectDocument doc;
+            crowded (doc);
+            doc.setActiveContainer (11);
+            Strip s (doc, 420);
+            s.tabs.onMoveTab = [&] (int from, int to) { s.moves.push_back ({ from, to }); doc.moveContainer (from, to); s.tabs.refresh(); };
+            expect (inSight (s.tabs.getTabBounds (11)), "T12 is active and in sight");
+
+            const auto down = s.centre (11);
+            s.tabs.mouseDown (mouse (s.tabs, down, down));
+            for (int i = 0; i < 80; ++i)   // held at the left end: the strip scrolls back to T1
+                s.tabs.mouseDrag (mouse (s.tabs, { 10, down.y }, down, 1, true));
+            expectEquals (s.tabs.getTabBounds (0).getX(), 8);
+            s.tabs.mouseDrag (mouse (s.tabs, { 340, down.y }, down, 1, true));   // back right, into the T5|T6 gap at the visible end
+            s.tabs.mouseUp (mouse (s.tabs, { 340, down.y }, down, 1, true));
+            expect (s.moves.size() == 1 && s.moves.back() == std::make_pair (11, 5), "T12 lands after T5");
+            expectEquals (doc.getContainerInfo (5).name, juce::String ("T12"));
+            expect (inSight (s.tabs.getTabBounds (5)), "the moved (current) tab is in sight: " + s.tabs.getTabBounds (5).toString());
+            screenshot (s.tabs, "after_drop_crowded");
+
+            ProjectDocument doc2;
+            crowded (doc2);
+            Strip m (doc2, 420);
+            m.tabs.onMoveTab = [&] (int from, int to) { doc2.moveContainer (from, to); m.tabs.refresh(); };
+            expect (! inSight (m.tabs.getTabBounds (5)), "T6 is cut at the right end");
+            m.tabs.performTabMenuItem (5, ContainerTabs::moveRightItem);
+            expectEquals (doc2.getContainerInfo (6).name, juce::String ("T6"));
+            expect (inSight (m.tabs.getTabBounds (6)), "T6 moved right and is in sight: " + m.tabs.getTabBounds (6).toString());
+        }
+
         beginTest ("the tab menu moves a tab one step left or right; the first and last tab cannot go further");
         {
             ProjectDocument doc;
