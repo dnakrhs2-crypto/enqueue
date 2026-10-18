@@ -295,6 +295,10 @@ def create_release(gh, tag, assets, repo, options):
 
 GATE_IDLE_S = 20          # start the test gate only after this many seconds without keyboard/mouse input (0 = off)
 GATE_IDLE_MAX_MIN = 30.0  # ... but start anyway when the PC never went idle for that long within this many minutes
+# The studio build server (gom 2026-10-18: "디폴트는 저 pc로, 꺼져 있으면 이 PC로"): rbuild.py / rb.py, and the
+# toolchain mirrored at the same path on roomc.
+BUILD_SERVER = pathlib.Path(r"C:\Users\claude\tools\build_server")
+ROOMC_CMAKE_BIN = r"C:\Users\claude\tools\cmake\bin"
 
 
 def seconds_since_input():
@@ -359,7 +363,86 @@ def heavy_slot(what):
     return helper.slot("heavy", what)
 
 
-def build(preset, skip_tests, gate_idle=GATE_IDLE_S, gate_idle_max_min=GATE_IDLE_MAX_MIN):
+def roomc_ready():
+    """True when the studio build server answers and has its tools (rb.py's check); any SSH trouble = not ready."""
+    try:
+        sys.path.insert(0, str(BUILD_SERVER))
+        import rb
+        return rb.roomc_ready()
+    except (ImportError, OSError, SystemExit, subprocess.SubprocessError) as error:
+        print("BUILDER: roomc check failed (%s)" % error, flush=True)
+        return False
+
+
+def pick_builder(choice, ready=roomc_ready):
+    """--builder: 'local' = this PC as before, 'roomc' = the studio build server or stop, 'auto' = roomc when it
+    answers, else this PC. -> 'local' | 'roomc'."""
+    if choice == "local":
+        return "local"
+    if ready():
+        return "roomc"
+    if choice == "roomc":
+        sys.exit("--builder roomc: the build server does not answer (use --builder auto or local)")
+    print("BUILDER: roomc does not answer - building on this PC", flush=True)
+    return "local"
+
+
+def roomc_build_command(preset):
+    """PowerShell for roomc: configure, then build only when configure succeeded, so $LASTEXITCODE at the end is the
+    first failure - no `exit`, the job script must still record the code. Colon switches are written /m /v:m
+    (PowerShell splits -v:m)."""
+    cmake = ROOMC_CMAKE_BIN + r"\cmake.exe"
+    return ("& '%s' --preset %s ; if ($LASTEXITCODE -eq 0) { & '%s' --build --preset %s-release --target %s EnqueueTests "
+            "-- /m /v:m /nologo }" % (cmake, preset, cmake, preset, APP["target"]))
+
+
+def roomc_ctest_command(preset):
+    """PowerShell for roomc: this app's ctest gate."""
+    return "& '%s' --preset %s-release%s" % (ROOMC_CMAKE_BIN + r"\ctest.exe", preset,
+                                             (" -R '%s'" % APP["ctest_filter"]) if APP.get("ctest_filter") else "")
+
+
+def build_on_roomc(preset, skip_tests, working):
+    """Build and run the test gate on roomc, then bring this app's Release folder back to the same path here, so the
+    installer, signature and upload below run unchanged on this PC. The build shares the build server like any job;
+    the gate runs alone (rbuild --exclusive: no other job runs or starts meanwhile, light jobs included) - its focus
+    tests send real keys to the foreground window, and on 2026-10-18 a 'Windows 보안' window another session's job
+    opened took the foreground in the middle of the LiveMix keypad test. No quiet-moment wait: nobody types on roomc.
+    working: send uncommitted changes too (--package-only / --allow-dirty); a real release sends HEAD."""
+    sys.path.insert(0, str(BUILD_SERVER))
+    import rbuild
+    print("BUILDER: roomc %s (%s)" % (rbuild.HOST, "working tree snapshot" if working else "HEAD"), flush=True)
+    rbuild.cmd_sync(argparse.Namespace(worktree=str(ROOT), working=working, commit="", allow_dirty=working))
+    job = lambda command, alone: rbuild.cmd_run(argparse.Namespace(worktree=str(ROOT), command=[command], no_mp=False,
+                                                                   light=False, exclusive=alone))
+    code = job(roomc_build_command(preset), False)
+    if code:
+        sys.exit("roomc build failed (exit %s) - see the output above" % code)
+    if not skip_tests:
+        code = job(roomc_ctest_command(preset), True)
+        if code:
+            sys.exit("roomc test gate failed (exit %s) - see the output above" % code)
+    fetch_roomc_release(rbuild)
+
+
+def fetch_roomc_release(rbuild):
+    """Replace this app's Release folder here with roomc's: copied next to it first, swapped in only when complete."""
+    local = ROOT / "build" / "vs2022" / APP["artefacts"] / "Release"
+    incoming, previous = local.with_name("Release.roomc"), local.with_name("Release.previous")
+    shutil.rmtree(incoming, ignore_errors=True)
+    local.parent.mkdir(parents=True, exist_ok=True)
+    run(rbuild.SCP + ["-r", "%s@%s:%s" % (rbuild.USER, rbuild.HOST, rbuild.to_remote(local)), str(incoming)])
+    shutil.rmtree(previous, ignore_errors=True)
+    if local.exists():
+        local.rename(previous)
+    incoming.rename(local)
+    shutil.rmtree(previous, ignore_errors=True)
+    print("BUILDER: roomc build fetched to", local, flush=True)
+
+
+def build(preset, skip_tests, gate_idle=GATE_IDLE_S, gate_idle_max_min=GATE_IDLE_MAX_MIN, builder="local", working=False):
+    if pick_builder(builder) == "roomc":
+        return build_on_roomc(preset, skip_tests, working)
     run(["cmake", "--preset", preset])
     with heavy_slot("release build " + APP["name"]):
         run(["cmake", "--build", "--preset", preset + "-release", "--target", APP["target"], "EnqueueTests", "--", "-m", "-v:m", "-nologo"])
@@ -665,7 +748,7 @@ def latest_from_github(gh, repo, app=None, allow_missing=False):
 
 def package_legacy(args, version):
     """Opt-in local mode; the existing legacy release path below is unchanged."""
-    build(args.preset, False, args.gate_idle, args.gate_idle_max_min)
+    build(args.preset, False, args.gate_idle, args.gate_idle_max_min, args.builder, working=True)
     source = ROOT / "build/vs2022" / APP["artefacts"] / "Release"
     for name in (APP["exe"], "WinSparkle.dll"):
         if not (source / name).is_file():
@@ -986,6 +1069,9 @@ def main():
     parser.add_argument("--tools-dir", default=os.environ.get("ENQUEUE_TOOLS_DIR", "C:/Users/claude/SDKs/gocue_release/enqueue_tools"),
                         help="folder with yt-dlp.exe, qjs.exe, lame.exe (+ libsndfile-1.dll) bundled into the Enqueue installer (default: ENQUEUE_TOOLS_DIR)")
     parser.add_argument("--skip-build", action="store_true")
+    parser.add_argument("--builder", choices=("local", "roomc", "auto"), default="auto",
+                        help="Enqueue/LiveMix build + test gate (default auto, gom 2026-10-18): local = this PC, roomc = the studio build server, "
+                             "auto = roomc when it answers, else this PC (installer, signature and upload stay here)")
     parser.add_argument("--skip-tests", action="store_true")
     parser.add_argument("--gate-idle", type=int, default=GATE_IDLE_S,
                         help="start the test gate after this many seconds without keyboard/mouse input (default %d, 0 = off)" % GATE_IDLE_S)
@@ -1076,7 +1162,7 @@ def main():
     output_dir = ROOT / "installer" / "output"
 
     if not args.skip_build:
-        build(args.preset, args.skip_tests, args.gate_idle, args.gate_idle_max_min)
+        build(args.preset, args.skip_tests, args.gate_idle, args.gate_idle_max_min, args.builder, working=args.allow_dirty)
 
     for required in (APP["exe"], "WinSparkle.dll"):
         if not (source_dir / required).is_file():
