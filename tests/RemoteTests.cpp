@@ -2,6 +2,7 @@
 #include "ui/MidiModalScope.h"
 #include "app/Commands.h"
 #include "app/ShortcutCatalog.h"
+#include "app/UiScale.h"
 #include "RemoteClient.h"
 #include <windows.h>
 
@@ -29,6 +30,15 @@ struct RemoteTestAccess
         for (int i = 0; i < names.size(); ++i) width += m.menuBar.getLookAndFeel().getMenuBarItemWidth (m.menuBar, i, names[i]);
         return width <= m.menuBar.getWidth() && ! m.menuBar.getBounds().intersects (m.modeToggle.getBounds());
     }
+    static bool hasQr (const remote::Panel& p) { return p.qr != nullptr && p.qrImage.isValid(); }
+    static const juce::Label& noNetwork (const remote::Panel& p) { return p.noNetworkLabel; }
+    static juce::Rectangle<int> qrBounds (const remote::Panel& p) { return p.qrBounds; }
+    static juce::TextEditor& address (remote::Panel& p) { return p.addressField; }
+    static juce::TextButton& copy (remote::Panel& p) { return p.copy; }
+    static juce::ComboBox& network (remote::Panel& p) { return p.network; }
+    static juce::ListBox& devices (remote::Panel& p) { return p.deviceList; }
+    static std::vector<juce::Component*> verticalRows (remote::Panel& p)
+    { return { &p.modeLabel, &p.off, &p.addressLabel, &p.addressField, &p.networkLabel, &p.network, &p.devicesLabel, &p.deviceList, &p.renew }; }
 };
 namespace
 {
@@ -118,6 +128,18 @@ juce::var moveRequest (Fixture& f, const juce::Uuid& id, const juce::Uuid& befor
 {
     return object ({ { "t", "move" }, { "tab", f.tab() }, { "cue", id.toString() },
         { "before", before.isNull() ? juce::var() : juce::var (before.toString()) }, { "parent", parent.isNull() ? juce::var() : juce::var (parent.toString()) } });
+}
+juce::Image reviewImage (juce::Component& component, const juce::String& filename, float scale = 1.0f)
+{
+    auto image = component.createComponentSnapshot (component.getLocalBounds(), true, scale);
+    const auto output = juce::SystemStats::getEnvironmentVariable ("ENQUEUE_REMOTE_REVIEW_DIR", {});
+    if (output.isNotEmpty())
+    {
+        auto folder = juce::File (output); folder.createDirectory();
+        auto stream = folder.getChildFile (filename + ".png").createOutputStream();
+        if (stream != nullptr) { stream->setPosition (0); stream->truncate(); juce::PNGImageFormat().writeImageToStream (image, *stream); }
+    }
+    return image;
 }
 }
 
@@ -583,24 +605,40 @@ public:
         panel.setLookAndFeel (&f.theme);
         beginTest ("remote menu after help and stable command ids");
         const auto names = f.main->getMenuBarNames();
-        expectEquals (names[names.size() - 2], ko ("도움말")); expectEquals (names[names.size() - 1], ko ("외부기기 연동"));
-        for (const auto* id : { "remote.toggle", "remote.show", "remote.newKey" }) expect (ShortcutCatalog::get().find (id) != nullptr);
-        f.main->setSize (860, 608);
-        expect (RemoteTestAccess::menuFits (*f.main), "menu fits beside the mode toggle at the main window minimum width");
-        for (const auto& size : { juce::Point<int> (720, 448), juce::Point<int> (820, 470), juce::Point<int> (1050, 600) })
+        expectEquals (names[names.size() - 2], ko ("도움말")); expectEquals (names[names.size() - 1], ko ("모바일 연동"));
+        for (const auto* id : { "remote.toggle", "remote.show", "remote.newKey" })
         {
-            beginTest ("horizontal panel controls stay inside and do not overlap: " + size.toString());
-            panel.setSize (size.x, size.y);
-            for (auto* child : panel.getChildren())
+            const auto* entry = ShortcutCatalog::get().find (id);
+            expect (entry != nullptr);
+            if (entry != nullptr) expectEquals (entry->menuCategory, ko ("모바일 연동"));
+        }
+        for (const auto& entry : ShortcutCatalog::get().getCommands())
+            expect (! (entry.name + entry.description + entry.menuCategory).contains (ko ("외부기기 연동")));
+        {
+            remote::Window window (f.service(), [] {}, [] {});
+            expectEquals (window.getName(), ko ("모바일 연동"));
+            expect (! window.isOnDesktop());
+            expectEquals (window.getWidth(), 470);
+            window.setBoundsConstrained ({ 0, 0, 1, 1 });
+            auto* content = dynamic_cast<remote::Panel*> (window.getContentComponent());
+            expect (content != nullptr);
+            if (content != nullptr)
             {
-                expect (panel.getLocalBounds().contains (child->getBounds()));
-                expect (child->getHeight() >= 20 && child->getWidth() >= 60);
-                for (auto* other : panel.getChildren())
-                { if (other == child) break; expect (! child->getBounds().intersects (other->getBounds())); }
+                expectEquals (content->getWidth(), remote::Panel::minimumWidth);
+                expectEquals (content->getHeight(), remote::Panel::minimumHeight);
+                checkLayout (*content);
             }
         }
+        f.main->setSize (860, 608);
+        expect (RemoteTestAccess::menuFits (*f.main), "menu fits beside the mode toggle at the main window minimum width");
+        for (const auto& size : { juce::Point<int> (412, 598), juce::Point<int> (462, 700), juce::Point<int> (520, 850) })
+        {
+            beginTest ("vertical panel order and non-overlap at minimum/default/large size: " + size.toString());
+            panel.setSize (size.x, size.y);
+            checkLayout (panel);
+        }
         beginTest ("off address empty, on address readonly mono and QR can be rendered at 100/125/150 percent without a desktop window");
-        panel.setSize (820, 470);
+        panel.setSize (remote::Panel::preferredWidth, remote::Panel::preferredHeight);
         juce::TextEditor* address = nullptr;
         juce::ListBox* deviceList = nullptr;
         for (auto* child : panel.getChildren()) if (auto* text = dynamic_cast<juce::TextEditor*> (child)) address = text;
@@ -635,23 +673,128 @@ public:
                     deviceList->scrollToEnsureRowIsOnscreen (0);
                 }
             }
-            for (float scale : { 1.0f, 1.25f, 1.5f })
-            {
-                auto image = panel.createComponentSnapshot (panel.getLocalBounds(), true, scale);
-                expect (image.isValid()); expectEquals (image.getWidth(), juce::roundToInt (820 * scale));
-                const auto output = juce::SystemStats::getEnvironmentVariable ("ENQUEUE_REMOTE_REVIEW_DIR", {});
-                if (output.isNotEmpty())
-                {
-                    auto folder = juce::File (output); folder.createDirectory();
-                    auto stream = folder.getChildFile (juce::String (enabled ? "on-" : "off-") + juce::String (juce::roundToInt (scale * 100)) + ".png").createOutputStream();
-                    if (stream != nullptr) { stream->setPosition (0); stream->truncate(); juce::PNGImageFormat().writeImageToStream (image, *stream); }
-                }
-            }
+            checkWorkAreas (f, enabled);
         }
         f.service().setEnabled (false);
         if (deviceList != nullptr) expectEquals (deviceList->getListBoxModel()->getNumRows(), 0);
         if (address != nullptr) expect (address->getText().isEmpty());
         for (auto& client : devices) client->client.close();
+        panel.setLookAndFeel (nullptr);
+    }
+private:
+    void checkLayout (remote::Panel& panel)
+    {
+        const auto qr = RemoteTestAccess::qrBounds (panel);
+        expectEquals (qr.getWidth(), remote::Panel::qrTileSize);
+        expectEquals (qr.getHeight(), remote::Panel::qrTileSize);
+        expectEquals (qr.getCentreX(), panel.getWidth() / 2);
+        const auto rows = RemoteTestAccess::verticalRows (panel);
+        expect (qr.getBottom() <= rows.front()->getY());
+        for (size_t i = 1; i < rows.size(); ++i) expect (rows[i - 1]->getBottom() <= rows[i]->getY());
+        for (auto* child : panel.getChildren())
+        {
+            if (! child->isVisible()) continue;
+            expect (panel.getLocalBounds().contains (child->getBounds()));
+            expect (child->getHeight() >= 20 && child->getWidth() >= 60);
+            for (auto* other : panel.getChildren())
+            {
+                if (other == child) break;
+                if (other->isVisible()) expect (! child->getBounds().intersects (other->getBounds()));
+            }
+        }
+        expect (RemoteTestAccess::devices (panel).getHeight() >= 40);
+    }
+    void checkWorkAreas (Fixture& f, bool enabled)
+    {
+        for (const int percent : { 100, 125, 150 })
+        {
+            beginTest ("portrait window fits work areas at requested " + juce::String (percent) + "% (" + (enabled ? "on" : "off") + ")");
+            remote::Window window (f.service(), [] {}, [] {});
+            const auto preferred = window.getBounds().withPosition (1000, 800);
+            auto& content = *static_cast<remote::Panel*> (window.getContentComponent());
+            const auto initialRows = RemoteTestAccess::verticalRows (content);
+            std::vector<juce::Rectangle<int>> fixed;
+            for (auto* row : initialRows) fixed.push_back (row->getBounds());
+            const int initialListHeight = RemoteTestAccess::devices (content).getHeight();
+            for (bool compactDisplay : { false, true })
+            {
+                const juce::Rectangle<int> physicalArea (compactDisplay ? 1366 : 1920, compactDisplay ? 720 : 1032); // 48px taskbar
+                const int applied = UiScale::fitPercent (percent, physicalArea);
+                const float scale = static_cast<float> (applied) / 100.0f;
+                const juce::Rectangle<int> logicalArea (physicalArea.getWidth() * 100 / applied, physicalArea.getHeight() * 100 / applied);
+                window.setBounds (preferred);
+                UiScale::fitWindowIntoArea (window, logicalArea);
+                expect (! window.isOnDesktop());
+                expect (logicalArea.contains (window.getBounds()));
+                checkLayout (content);
+                const auto fittedRows = RemoteTestAccess::verticalRows (content);
+                for (size_t i = 0; i < fittedRows.size(); ++i)
+                {
+                    if (fittedRows[i] == &RemoteTestAccess::devices (content)) continue;
+                    expectEquals (fittedRows[i]->getWidth(), fixed[i].getWidth());
+                    expectEquals (fittedRows[i]->getHeight(), fixed[i].getHeight());
+                    if (i + 1 != fittedRows.size()) expect (fittedRows[i]->getBounds() == fixed[i]); // renew stays at bottom
+                }
+                expect (RemoteTestAccess::devices (content).getHeight() <= initialListHeight);
+                const auto suffix = juce::String (enabled ? "on-" : "off-") + juce::String (percent);
+                auto image = reviewImage (window, (compactDisplay ? "portrait-small-" : "portrait-") + suffix, scale);
+                expect (image.isValid());
+                expectEquals (image.getWidth(), juce::roundToInt (window.getWidth() * scale));
+                expect (image.getWidth() <= physicalArea.getWidth() && image.getHeight() <= physicalArea.getHeight());
+                logMessage ("requested=" + juce::String (percent) + " applied=" + juce::String (applied)
+                    + " work=" + juce::String (physicalArea.getWidth()) + "x" + juce::String (physicalArea.getHeight())
+                    + " image=" + juce::String (image.getWidth()) + "x" + juce::String (image.getHeight())
+                    + " list=" + juce::String (RemoteTestAccess::devices (content).getHeight()));
+            }
+        }
+    }
+};
+
+class RemoteNetworkTests : public juce::UnitTest
+{
+public:
+    RemoteNetworkTests() : UnitTest ("Remote private network", "Enqueue") {}
+    void runTest() override
+    {
+        beginTest ("only the three private IPv4 ranges are candidates, including their boundaries");
+        for (const auto* ip : { "10.0.0.1", "172.16.0.1", "172.31.255.254", "192.168.0.12",
+                               "10.0.0.0", "10.255.255.255", "172.16.0.0", "172.31.255.255", "192.168.0.0", "192.168.255.255" })
+            expect (remote::isPrivateIPv4 (ip), ip);
+        for (const auto* ip : { "172.15.255.255", "172.32.0.1", "169.254.1.1", "100.64.0.1", "8.8.8.8", "127.0.0.1",
+                               "9.255.255.255", "11.0.0.0", "192.167.255.255", "192.169.0.0", "0.0.0.0", "::1" })
+            expect (! remote::isPrivateIPv4 (ip), ip);
+
+        beginTest ("no candidates shows the router message, allows on/off, and refresh restores QR without changing the key");
+        Fixture f;
+        std::vector<remote::NetworkAddress> candidates;
+        remote::Service service (f.settings, f.document(), { {}, {}, [] { return false; } }, [&] { return candidates; });
+        remote::Panel panel (service, [] {}, [] {});
+        panel.setLookAndFeel (&f.theme);
+        const auto noNetwork = [&]
+        {
+            expect (RemoteTestAccess::noNetwork (panel).isVisible());
+            expectEquals (RemoteTestAccess::noNetwork (panel).getText(), ko ("공유기가 필요합니다"));
+            expect (! RemoteTestAccess::hasQr (panel));
+            expect (RemoteTestAccess::address (panel).getText().isEmpty());
+            expect (! RemoteTestAccess::copy (panel).isEnabled());
+            expect (! RemoteTestAccess::network (panel).isEnabled());
+        };
+        noNetwork();
+        service.setEnabled (true);
+        expect (service.isEnabled()); expect (service.getPort() > 0); noNetwork();
+        const auto key = service.key(); const int port = service.getPort();
+        reviewImage (panel, "portrait-no-router");
+        candidates = { { "ethernet", ko ("이더넷").toStdString(), "192.168.0.12", true } };
+        service.refreshNetworks();
+        expect (! RemoteTestAccess::noNetwork (panel).isVisible());
+        expect (RemoteTestAccess::hasQr (panel));
+        expect (RemoteTestAccess::copy (panel).isEnabled());
+        expect (RemoteTestAccess::network (panel).isEnabled());
+        expectEquals (RemoteTestAccess::address (panel).getText(), "http://192.168.0.12:" + juce::String (port));
+        expectEquals (service.key(), key); expectEquals (service.getPort(), port);
+        reviewImage (panel, "portrait-router-restored");
+        candidates.clear(); service.refreshNetworks(); noNetwork();
+        service.setEnabled (false); expect (! service.isEnabled()); noNetwork();
         panel.setLookAndFeel (nullptr);
     }
 };
@@ -661,4 +804,5 @@ static RemoteInputTests remoteInputTests;
 static RemoteMoveTests remoteMoveTests;
 static RemoteServerTests remoteServerTests;
 static RemotePanelTests remotePanelTests;
+static RemoteNetworkTests remoteNetworkTests;
 }

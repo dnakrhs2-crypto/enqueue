@@ -23,6 +23,15 @@ std::string utf8 (const wchar_t* value)
     return result;
 }
 }
+bool isPrivateIPv4 (const std::string& address)
+{
+    IN_ADDR parsed {};
+    if (InetPtonA (AF_INET, address.c_str(), &parsed) != 1) return false;
+    const auto ip = ntohl (parsed.s_addr);
+    return (ip & 0xff000000u) == 0x0a000000u
+        || (ip & 0xfff00000u) == 0xac100000u
+        || (ip & 0xffff0000u) == 0xc0a80000u;
+}
 std::vector<NetworkAddress> networkAddresses()
 {
     ULONG bytes = 16 * 1024;
@@ -57,9 +66,8 @@ std::vector<NetworkAddress> networkAddresses()
         {
             if (address->Address.lpSockaddr == nullptr || address->Address.lpSockaddr->sa_family != AF_INET) continue;
             const auto* ip = reinterpret_cast<sockaddr_in*> (address->Address.lpSockaddr);
-            if ((ntohl (ip->sin_addr.s_addr) >> 24) == 127 || ip->sin_addr.s_addr == 0) continue;
             char text[INET_ADDRSTRLEN] {};
-            if (InetNtopA (AF_INET, const_cast<IN_ADDR*> (&ip->sin_addr), text, sizeof (text)) != nullptr)
+            if (InetNtopA (AF_INET, const_cast<IN_ADDR*> (&ip->sin_addr), text, sizeof (text)) != nullptr && isPrivateIPv4 (text))
                 addresses.push_back ({ adapter->AdapterName, name, text, gateway && ! virtualAdapter });
         }
     }

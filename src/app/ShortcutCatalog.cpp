@@ -205,11 +205,11 @@ std::vector<ShortcutDefinition> makeCommands()
                  ko ("켜면 Space가 재생 중에는 일시정지, 일시정지 중에는 재개, 멈춰 있을 때는 GO. GO 버튼·MIDI는 그대로. 이 PC에 저장"),
                  Category::view, Scope::mainWindow, false, ko ("설정"), {}),
         command ("remote.toggle", CommandIDs::remoteToggle, ko ("웹리모트 켜기"), ko ("웹리모트 켜기"),
-                 Category::fileSettings, Scope::mainWindow, false, ko ("외부기기 연동"), {}),
+                 Category::fileSettings, Scope::mainWindow, false, ko ("모바일 연동"), {}),
         command ("remote.show", CommandIDs::remoteShow, ko ("QR 코드·주소 보기"), ko ("QR 코드·주소 보기"),
-                 Category::fileSettings, Scope::mainWindow, false, ko ("외부기기 연동"), {}),
+                 Category::fileSettings, Scope::mainWindow, false, ko ("모바일 연동"), {}),
         command ("remote.newKey", CommandIDs::remoteNewKey, ko ("QR 새로 만들기"), ko ("QR 새로 만들기"),
-                 Category::fileSettings, Scope::mainWindow, false, ko ("외부기기 연동"), {}),
+                 Category::fileSettings, Scope::mainWindow, false, ko ("모바일 연동"), {}),
         command ("app.quit", juce::StandardApplicationCommandIDs::quit, ko ("종료"), ko ("앱 종료"),
                  Category::fileSettings, Scope::mainWindow, false, "Application", { key ('Q', ModifierKeys::commandModifier) })
     };

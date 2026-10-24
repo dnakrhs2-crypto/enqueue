@@ -3,17 +3,23 @@
 #include "ui/GoCueLookAndFeel.h"
 #include "qrcodegen.hpp"
 
+namespace gocue::tests { struct RemoteTestAccess; }
+
 namespace gocue::remote
 {
 class Panel : public juce::Component, private juce::ChangeListener, private juce::ListBoxModel
 {
 public:
+    static constexpr int preferredWidth = 462, preferredHeight = 700;
+    static constexpr int minimumWidth = 412, minimumHeight = 598;
+    static constexpr int qrTileSize = 224;
     Panel (Service&, std::function<void()> renew, std::function<void()> enabledChanged);
     ~Panel() override;
     void paint (juce::Graphics&) override;
     void paintOverChildren (juce::Graphics&) override;
     void resized() override;
 private:
+    friend struct gocue::tests::RemoteTestAccess;
     void refresh();
     void changeListenerCallback (juce::ChangeBroadcaster*) override { refresh(); }
     int getNumRows() override { return static_cast<int> (devices.size()); }
@@ -21,7 +27,7 @@ private:
     void paintListBoxItem (int row, juce::Graphics&, int width, int height, bool selected) override;
     Service& service;
     std::function<void()> enabledChanged;
-    juce::Label modeLabel, addressLabel, networkLabel, devicesLabel;
+    juce::Label modeLabel, addressLabel, networkLabel, devicesLabel, noNetworkLabel;
     juce::TextButton off, on, copy, renew;
     juce::TextEditor addressField;
     juce::ComboBox network;

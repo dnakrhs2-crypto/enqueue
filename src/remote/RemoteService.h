@@ -20,7 +20,8 @@ public:
         std::function<bool()> showMode;
     };
     struct Device { uint64_t connection; juce::String name; juce::Time since; Session session; };
-    Service (AppSettings&, ProjectDocument&, Callbacks);
+    using NetworkDiscovery = std::function<std::vector<NetworkAddress>()>;
+    Service (AppSettings&, ProjectDocument&, Callbacks, NetworkDiscovery = {});
     ~Service() override;
     void restoreEnabled (bool safeMode);
     void setEnabled (bool);
@@ -54,6 +55,7 @@ private:
     AppSettings& settings;
     ProjectDocument& document;
     Callbacks callbacks;
+    NetworkDiscovery discoverNetworks;
     SnapshotModel model;
     std::unique_ptr<Server> server;
     std::mutex queueMutex;

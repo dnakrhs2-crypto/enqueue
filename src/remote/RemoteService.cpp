@@ -25,7 +25,8 @@ std::vector<Server::Asset> assets()
     return result;
 }
 }
-Service::Service (AppSettings& s, ProjectDocument& d, Callbacks cb) : settings (s), document (d), callbacks (std::move (cb)), model (d)
+Service::Service (AppSettings& s, ProjectDocument& d, Callbacks cb, NetworkDiscovery discovery)
+    : settings (s), document (d), callbacks (std::move (cb)), discoverNetworks (std::move (discovery)), model (d)
 {
     accessKey = settings.getRemoteKey();
     if (accessKey.isEmpty()) { accessKey = randomKey(); settings.setRemoteKey (accessKey); }
@@ -83,7 +84,8 @@ void Service::renewKey()
 }
 void Service::refreshNetworks()
 {
-    auto next = loopback ? std::vector<NetworkAddress> { { "loopback", "Loopback", "127.0.0.1", true } } : networkAddresses();
+    // The explicit loopback test mode keeps its synthetic address; production candidates are RFC 1918 only.
+    auto next = discoverNetworks ? discoverNetworks() : loopback ? std::vector<NetworkAddress> { { "loopback", "Loopback", "127.0.0.1", true } } : networkAddresses();
     const auto preference = settings.getRemoteAdapter().toStdString();
     const auto previousIp = juce::isPositiveAndBelow (selected, static_cast<int> (addresses.size()))
         ? addresses[static_cast<size_t> (selected)].ip : std::string();

@@ -1354,7 +1354,7 @@ bool MainComponent::perform (const InvocationInfo& info)
 //==============================================================================
 juce::StringArray MainComponent::getMenuBarNames()
 {
-    return { ko ("파일"), ko ("편집"), ko ("큐"), ko ("재생"), ko ("설정"), ko ("유튜브다운"), ko ("도움말"), ko ("외부기기 연동") };
+    return { ko ("파일"), ko ("편집"), ko ("큐"), ko ("재생"), ko ("설정"), ko ("유튜브다운"), ko ("도움말"), ko ("모바일 연동") };
 }
 
 juce::PopupMenu MainComponent::getMenuForIndex (int topLevelMenuIndex, const juce::String&)

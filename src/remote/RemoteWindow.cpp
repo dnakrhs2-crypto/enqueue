@@ -16,6 +16,11 @@ Panel::Panel (Service& s, std::function<void()> newKey, std::function<void()> on
         addAndMakeVisible (l);
     };
     label (modeLabel, "웹리모트"); label (addressLabel, "주소"); label (networkLabel, "네트워크"); label (devicesLabel, "연결된 기기 0");
+    noNetworkLabel.setText (ko ("공유기가 필요합니다"), juce::dontSendNotification);
+    noNetworkLabel.setFont (Palette::font());
+    noNetworkLabel.setColour (juce::Label::textColourId, Palette::background);
+    noNetworkLabel.setJustificationType (juce::Justification::centred);
+    addChildComponent (noNetworkLabel);
     const auto button = [this] (juce::TextButton& b, const char* text)
     { b.setButtonText (ko (text)); addAndMakeVisible (b); };
     button (off, "꺼짐"); button (on, "켜짐"); button (copy, "복사"); button (renew, "QR 새로 만들기");
@@ -50,14 +55,16 @@ Panel::Panel (Service& s, std::function<void()> newKey, std::function<void()> on
     addAndMakeVisible (deviceList);
     service.addChangeListener (this);
     refresh();
-    setSize (820, 470);
+    setSize (preferredWidth, preferredHeight);
 }
 Panel::~Panel() { service.removeChangeListener (this); deviceList.setModel (nullptr); }
 void Panel::refresh()
 {
     off.setToggleState (! service.isEnabled(), juce::dontSendNotification);
     on.setToggleState (service.isEnabled(), juce::dontSendNotification);
-    addressField.setText (service.failedToOpenPort() ? ko ("포트를 열 수 없습니다") : service.address(), false);
+    const bool hasNetwork = ! service.networks().empty();
+    noNetworkLabel.setVisible (! hasNetwork);
+    addressField.setText (! hasNetwork ? juce::String() : service.failedToOpenPort() ? ko ("포트를 열 수 없습니다") : service.address(), false);
     copy.setEnabled (service.link().isNotEmpty());
     network.clear (juce::dontSendNotification);
     int index = 1;
@@ -65,6 +72,7 @@ void Panel::refresh()
         network.addItem (juce::String (address.name) + ko (" · ") + juce::String (address.ip) + (address.recommended ? ko (" (추천)") : juce::String()), index++);
     network.setSelectedItemIndex (service.selectedNetwork(), juce::dontSendNotification);
     network.setTooltip (network.getText());
+    network.setEnabled (hasNetwork);
     devices.clear();
     for (const auto& entry : service.devices())
         devices.push_back ({ entry.second.name, entry.second.since.formatted ("%H:%M") + ko (" 연결") });
@@ -90,27 +98,27 @@ void Panel::refresh()
 }
 void Panel::resized()
 {
-    auto area = getLocalBounds().reduced (24);
-    const int tile = juce::jlimit (220, 320, (area.getWidth() - 28) * 42 / 100);
-    qrBounds = area.removeFromLeft (tile).withHeight (tile);
-    area.removeFromLeft (28);
+    auto area = getLocalBounds().reduced (16);
+    qrBounds = area.removeFromTop (qrTileSize).withSizeKeepingCentre (qrTileSize, qrTileSize);
+    noNetworkLabel.setBounds (qrBounds.reduced (12));
+    area.removeFromTop (12);
     modeLabel.setBounds (area.removeFromTop (20));
     segmentBounds = area.removeFromTop (40).withWidth (144);
     off.setBounds (segmentBounds.withWidth (72));
     on.setBounds (segmentBounds.withTrimmedLeft (72));
-    area.removeFromTop (18);
+    area.removeFromTop (12);
     addressLabel.setBounds (area.removeFromTop (20));
     auto address = area.removeFromTop (42);
     copy.setBounds (address.removeFromRight (76));
     address.removeFromRight (8);
     addressField.setBounds (address);
-    area.removeFromTop (16);
+    area.removeFromTop (12);
     networkLabel.setBounds (area.removeFromTop (20));
     network.setBounds (area.removeFromTop (38));
-    area.removeFromTop (16);
+    area.removeFromTop (12);
     devicesLabel.setBounds (area.removeFromTop (20));
     renew.setBounds (area.removeFromBottom (42).removeFromRight (136));
-    area.removeFromBottom (16);
+    area.removeFromBottom (12);
     deviceList.setBounds (area);
 }
 void Panel::paint (juce::Graphics& g)
@@ -157,15 +165,17 @@ juce::String Panel::getTooltipForRow (int row)
     return device.name + "\n" + device.time;
 }
 Window::Window (Service& service, std::function<void()> renew, std::function<void()> enabledChanged)
-    : DocumentWindow (ko ("외부기기 연동"), Palette::background, DocumentWindow::closeButton, false)
+    : DocumentWindow (ko ("모바일 연동"), Palette::background, DocumentWindow::closeButton, false)
 {
     setLookAndFeel (&theme);
     setUsingNativeTitleBar (false);
     setTitleBarHeight (Palette::menuBarHeight);
     setContentOwned (new Panel (service, std::move (renew), std::move (enabledChanged)), true);
     setResizable (true, false);
-    setResizeLimits (720, 480, Palette::windowMaxSize, Palette::windowMaxSize);
-    centreWithSize (820, 504);
+    const auto border = getContentComponentBorder();
+    setResizeLimits (Panel::minimumWidth + border.getLeftAndRight(), Panel::minimumHeight + border.getTopAndBottom(),
+                     Palette::windowMaxSize, Palette::windowMaxSize);
+    centreWithSize (Panel::preferredWidth + border.getLeftAndRight(), Panel::preferredHeight + border.getTopAndBottom());
 }
 Window::~Window() { clearContentComponent(); setLookAndFeel (nullptr); }
 void Window::open()

@@ -73,25 +73,15 @@ inline juce::Rectangle<int> workAreaAt100 (const juce::Component* window = nullp
     safe mode never applied it). */
 inline int lastRequestedPercent = defaultPercent;
 
-/** After a scale change (or on a smaller monitor than last time): the window keeps its minimum size and is shrunk
-    to its display's work area when it is bigger than that (frame included); with 'moveIntoView' it is also moved
-    so all of it is on screen. A maximised or minimised window is left alone; a window that cannot be resized by the
-    user (a fixed-size dialog) is never shrunk, only moved. */
-inline void fitWindowIntoDisplay (juce::ResizableWindow& window, bool moveIntoView = true)
+/** The display-independent part of fitting, also usable before a window has a native peer. */
+inline void fitWindowIntoArea (juce::ResizableWindow& window, juce::Rectangle<int> area,
+                               juce::BorderSize<int> frame = {}, bool moveIntoView = true)
 {
     if (window.isFullScreen() || window.isMinimised() || window.isKioskMode())
         return;
 
     window.setBoundsConstrained (window.getBounds());   // the minimum size first
 
-    auto* peer = window.getPeer();
-    const auto* display = juce::Desktop::getInstance().getDisplays().getDisplayForRect (window.getScreenBounds());
-
-    if (peer == nullptr || display == nullptr)
-        return;
-
-    const auto frame = peer->getFrameSize();
-    const auto area = display->userBounds.toNearestInt();
     const auto outer = frame.addedTo (window.getBounds());
     auto fitted = outer;
 
@@ -104,6 +94,20 @@ inline void fitWindowIntoDisplay (juce::ResizableWindow& window, bool moveIntoVi
 
     if (fitted != outer)
         window.setBoundsConstrained (frame.subtractedFrom (fitted));
+}
+
+/** After a scale change (or on a smaller monitor than last time): keep the minimum size and shrink into the
+    display work area, including the frame. Fixed-size dialogs are only moved; maximised/minimised windows stay. */
+inline void fitWindowIntoDisplay (juce::ResizableWindow& window, bool moveIntoView = true)
+{
+    if (window.isFullScreen() || window.isMinimised() || window.isKioskMode())
+        return;
+
+    window.setBoundsConstrained (window.getBounds());
+    auto* peer = window.getPeer();
+    const auto* display = juce::Desktop::getInstance().getDisplays().getDisplayForRect (window.getScreenBounds());
+    if (peer != nullptr && display != nullptr)
+        fitWindowIntoArea (window, display->userBounds.toNearestInt(), peer->getFrameSize(), moveIntoView);
 }
 
 /** For a window's resized(): coming back from the maximised state after a scale change, JUCE restores the old
