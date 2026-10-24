@@ -6,7 +6,7 @@
 
 namespace gocue
 {
-enum class InputKind { keyboard, midi, ui };
+enum class InputKind { keyboard, midi, ui, remote };
 struct InputToken
 {
     InputKind kind = InputKind::keyboard;

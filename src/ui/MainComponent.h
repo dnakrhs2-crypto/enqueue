@@ -22,6 +22,8 @@
 #include "ui/FooterBar.h"
 #include "ui/PluginWindows.h"
 #include "ui/TransportBar.h"
+#include "remote/RemoteService.h"
+#include "remote/RemoteWindow.h"
 
 #include <juce_gui_basics/juce_gui_basics.h>
 
@@ -35,7 +37,7 @@
 namespace gocue
 {
 
-namespace tests { struct ReopenLastProjectTestAccess; }
+namespace tests { struct ReopenLastProjectTestAccess; struct RemoteTestAccess; }
 
 /** The single main window content: menu bar / transport / cue table / inspector / footer.
     Owns the project document, the scheduler, the cue controller, the plugin editor windows and
@@ -56,6 +58,7 @@ public:
 
     ShortcutService& getShortcutService() noexcept { return *shortcuts; }
     MidiInputService& getMidiInputService() noexcept { return *midiInput; }
+    void startRemoteOnStartup (bool safeMode) { remoteService->restoreEnabled (safeMode); }
 
     void resized() override;
     void paint (juce::Graphics& g) override;
@@ -110,6 +113,17 @@ public:
 
 private:
     friend struct tests::ReopenLastProjectTestAccess;
+    friend struct tests::RemoteTestAccess;
+    juce::Result performRemote (uint64_t connection, const remote::Request&, double observedTimeMs);
+    void releaseRemote (uint64_t connection);
+    void showRemoteWindow();
+    void confirmRemoteNewKey();
+    void fireCartCue (const juce::Uuid&);
+    void stopCartCue (const juce::Uuid&);
+    void pauseActiveCue (const juce::Uuid&, bool resume);
+    void stopActiveCue (const juce::Uuid&);
+    void cancelActiveWait (const juce::Uuid&, WaitProgress::Kind, int startId);
+    void moveRowsInList (CueList&, const std::vector<int>&, int insertIndex, int intoGroup = -1);
     // FileDragAndDropTarget: audio files / folders dropped anywhere else in the window are appended,
     // a .gocue file is opened.
     bool isInterestedInFileDrag (const juce::StringArray& files) override;
@@ -227,6 +241,9 @@ private:
     CueController controller;
     std::unique_ptr<MidiTriggerRouter> midiRouter;
     std::unique_ptr<MidiInputService> midiInput;
+    std::unique_ptr<remote::Service> remoteService;
+    std::unique_ptr<remote::Window> remoteWindow;
+    bool remoteInput = false; // suppress only focus changes caused by this remote dispatch
     std::atomic<bool> unsavedChanges { false };
     double ignorePluginChangesUntilMs = 0.0;
     std::map<juce::String, double> lastSaveBackupByPath;

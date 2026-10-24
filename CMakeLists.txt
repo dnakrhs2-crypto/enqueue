@@ -232,7 +232,8 @@ target_compile_definitions(Enqueue PRIVATE
     GOCUE_APPCAST_URL="${GOCUE_APPCAST_URL}"
     GOCUE_EDDSA_PUBLIC_KEY="${GOCUE_EDDSA_PUBLIC_KEY}")
 
-target_link_libraries(Enqueue PRIVATE GoCueCore)
+include(cmake/EnqueueRemote.cmake)
+target_link_libraries(Enqueue PRIVATE GoCueCore EnqueueRemote)
 
 # Static VC runtime: the installed app must not depend on the VC++ redistributable.
 set_property(TARGET Enqueue PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")

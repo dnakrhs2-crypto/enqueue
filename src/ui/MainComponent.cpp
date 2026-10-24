@@ -106,14 +106,10 @@ MainComponent::MainComponent (AudioEngine& e, AppSettings& s, juce::ApplicationC
     containerTabs.onGridSize = [this] (int index) { setContainerGrid (index); };
     cart.onTrigger = [this] (const Cue& cue)
     {
-        const Cue copy = cue;   // the model row may move / vanish while the cue starts (a goto, a list switch)
-        const auto result = controller.fire (copy.id);   // like a hotkey: the cue alone, with its fade-stop-others and duck
-
-        if (result == CueController::GoResult::started)
-            transport.showStatus (ko ("카트: ") + copy.name, false);
+        fireCartCue (cue.id);
     };
     cart.onFilesDropped = [this] (const juce::StringArray& files, int slot) { addCuesFromFiles (files, slot); };
-    cart.onStop = [this] (const juce::Uuid& id) { controller.stopCue (id, true); };   // pending follows go too
+    cart.onStop = [this] (const juce::Uuid& id) { stopCartCue (id); };
     table.isNumberTaken = [this] (const juce::String& number, const juce::Uuid& exceptId) { return document.isNumberTaken (number, exceptId); };
     document.onPatchesChanged = [this] { inspector.refreshDeviceDependent(); updateTransportStandby(); };   // output columns and next-cue metadata follow the patch
     document.onBeforeContainerSwitch = [this] { table.finishEditing(); inspector.finishEditing(); };   // a half-typed field belongs to the list that is leaving
@@ -170,26 +166,13 @@ MainComponent::MainComponent (AudioEngine& e, AppSettings& s, juce::ApplicationC
     inspector.onReturnFocus = [this] { table.focusTable(); };
     activeCues.onPauseRequested = [this] (const juce::Uuid& id, bool resume)
     {
-        if (resume)
-            controller.resumeCue (id);   // through the panic latch
-        else
-            controller.pauseCue (id);
+        pauseActiveCue (id, resume);
     };
     activeCues.onStopRequested = [this] (const juce::Uuid& id)
     {
-        // an audio cue fades out over its stop fade (a restart of it still pending is dropped with it; the auto-continue
-        // behind the run goes on, as it always has); anything else (fade / group / wait) is stopped by the controller
-        if (engine.isPlaying (id))
-        {
-            engine.fadeOutAndStop (id);
-            controller.cancelScheduledStart (id);
-        }
-        else
-        {
-            controller.stopCue (id);
-        }
+        stopActiveCue (id);
     };
-    activeCues.onCancelWaitRequested = [this] (const juce::Uuid& id, WaitProgress::Kind kind, int startId) { controller.cancelWait (id, kind, startId); };
+    activeCues.onCancelWaitRequested = [this] (const juce::Uuid& id, WaitProgress::Kind kind, int startId) { cancelActiveWait (id, kind, startId); };
     activeCues.findCue = [this] (const juce::Uuid& id) { return document.findCueAnywhere (id); };   // a cue of another list runs too
     activeCues.onBigViewRequested = [this] { showActiveCuesWindow(); };
     table.findCue = activeCues.findCue;
@@ -292,6 +275,9 @@ MainComponent::MainComponent (AudioEngine& e, AppSettings& s, juce::ApplicationC
     midiCallbacks.requireGoKeyUp = [this] { return document.settings.requireKeyUp; };
     midiRouter = std::make_unique<MidiTriggerRouter> (*shortcuts, commands, document, std::move (midiCallbacks));
     midiInput = std::make_unique<MidiInputService> (*shortcuts, midiRouter->inputCallbacks());
+    remoteService = std::make_unique<remote::Service> (settings, document, remote::Service::Callbacks {
+        [this] (uint64_t connection, const remote::Request& request, double time) { return performRemote (connection, request, time); },
+        [this] (uint64_t connection) { releaseRemote (connection); }, [this] { return showMode; } });
     inspector.setShortcutService (*shortcuts, midiInput.get(), midiRouter.get());
     transport.setShortcutService (*shortcuts);
     footer.setShowMode (showMode, shortcuts.get());
@@ -320,6 +306,8 @@ MainComponent::MainComponent (AudioEngine& e, AppSettings& s, juce::ApplicationC
 
 MainComponent::~MainComponent()
 {
+    remoteWindow.reset();
+    remoteService.reset(); // release GO before the shortcut router / controller and close all sockets
     // the loudness scan first, before the engine whose formats it reads with: a read that does not return (a share that
     // stopped answering) is left to the process end - its results saved - rather than the thread killed mid-read
     if (loudnessScan != nullptr && ! loudnessScan->stopForExit (3000))
@@ -871,6 +859,10 @@ void MainComponent::getCommandInfo (juce::CommandID commandID, juce::Application
             result.setActive (canEdit && document.canRedo());
             break;
 
+        case CommandIDs::remoteToggle:
+            result.setTicked (remoteService != nullptr && remoteService->isEnabled());
+            break;
+
         case CommandIDs::toggleShowMode:
             result.shortName = showMode ? ko ("편집 모드로") : ko ("쇼 모드로 (편집 잠금)");
             break;
@@ -929,7 +921,8 @@ bool MainComponent::perform (const InvocationInfo& info)
 
     const auto* input = shortcuts->currentInvocation();
     const bool midi = input != nullptr && input->kind == InputKind::midi;
-    const bool physical = midi || info.invocationMethod == InvocationInfo::fromKeyPress;
+    const bool remote = input != nullptr && input->kind == InputKind::remote;
+    const bool physical = midi || remote || info.invocationMethod == InvocationInfo::fromKeyPress;
     // 설정 > 스페이스바 재생/일시정지: a plain Space key only - the GO button, MIDI and Alt+Space stay what they were
     const bool spaceBarPlayPause = settings.getSpaceBarPlayPause() && ! midi
                                    && info.invocationMethod == InvocationInfo::fromKeyPress
@@ -946,7 +939,7 @@ bool MainComponent::perform (const InvocationInfo& info)
             else
             {
                 controller.go (false, input != nullptr ? input->observedTimeMs * 0.001 : -1.0, spaceBarPlayPause);
-                if (! midi && (info.invocationMethod != InvocationInfo::fromKeyPress
+                if (! midi && ! remote && (info.invocationMethod != InvocationInfo::fromKeyPress
                     || (info.originatingComponent != nullptr && isParentOf (info.originatingComponent))))
                     table.focusTable();
                 if (! physical && ! shortcutRouter->anyGoKeyHeld())
@@ -972,6 +965,17 @@ bool MainComponent::perform (const InvocationInfo& info)
 
         case CommandIDs::fadeOutSelected:
             controller.fadeOutTarget();
+            break;
+
+        case CommandIDs::remoteToggle:
+            remoteService->setEnabled (! remoteService->isEnabled());
+            commands.commandStatusChanged();
+            break;
+        case CommandIDs::remoteShow:
+            showRemoteWindow();
+            break;
+        case CommandIDs::remoteNewKey:
+            confirmRemoteNewKey();
             break;
 
         case CommandIDs::panicAll:
@@ -1350,7 +1354,7 @@ bool MainComponent::perform (const InvocationInfo& info)
 //==============================================================================
 juce::StringArray MainComponent::getMenuBarNames()
 {
-    return { ko ("파일"), ko ("편집"), ko ("큐"), ko ("재생"), ko ("설정"), ko ("유튜브다운"), ko ("도움말") };
+    return { ko ("파일"), ko ("편집"), ko ("큐"), ko ("재생"), ko ("설정"), ko ("유튜브다운"), ko ("도움말"), ko ("외부기기 연동") };
 }
 
 juce::PopupMenu MainComponent::getMenuForIndex (int topLevelMenuIndex, const juce::String&)
@@ -1489,6 +1493,13 @@ juce::PopupMenu MainComponent::getMenuForIndex (int topLevelMenuIndex, const juc
             menu.addCommandItem (&commands, CommandIDs::checkForUpdates);
             menu.addSeparator();
             menu.addCommandItem (&commands, CommandIDs::about);
+            break;
+
+        case 7:
+            menu.addCommandItem (&commands, CommandIDs::remoteToggle);
+            menu.addCommandItem (&commands, CommandIDs::remoteShow);
+            menu.addSeparator();
+            menu.addCommandItem (&commands, CommandIDs::remoteNewKey);
             break;
 
         default:
@@ -2015,24 +2026,12 @@ void MainComponent::moveSelection (int delta)
 
 void MainComponent::moveRows (const std::vector<int>& rows, int insertIndex)
 {
-    if (rows.empty() || showMode)
-        return;
-
-    document.perform (ko ("큐 이동"), [this, rows, insertIndex] { document.cues.moveSubtrees (rows, insertIndex); });
+    moveRowsInList (document.cues, rows, insertIndex);
 }
 
 void MainComponent::moveRowsInto (const std::vector<int>& rows, int groupIndex)
 {
-    if (rows.empty() || showMode || ! document.cues.isValidIndex (groupIndex))
-        return;
-
-    const juce::Uuid groupId = document.cues.get (groupIndex).id;
-
-    document.perform (ko ("그룹으로 이동"), [this, rows, groupId]
-    {
-        if (document.cues.moveSubtreesInto (rows, document.cues.indexOf (groupId)))
-            document.cues.setCollapsed (document.cues.indexOf (groupId), false);   // show what just went in
-    });
+    if (document.cues.isValidIndex (groupIndex)) moveRowsInList (document.cues, rows, -1, groupIndex);
 }
 
 void MainComponent::editCues (const std::vector<int>& rows, const juce::String& name, const std::function<void (Cue&)>& mutator)
@@ -2062,6 +2061,7 @@ int MainComponent::applyUiScale (int percent)
 
 void MainComponent::setShowMode (bool shouldBeShowMode)
 {
+    if (showMode == shouldBeShowMode) return;
     if (shouldBeShowMode) AutoLevelDialog::closeIfOpen();
     showMode = shouldBeShowMode;
     shortcuts->setEditingLocked (showMode);
@@ -2079,7 +2079,7 @@ void MainComponent::setShowMode (bool shouldBeShowMode)
 
     commands.commandStatusChanged();
     transport.showStatus (showMode ? ko ("쇼 모드: 편집 잠김") : ko ("편집 모드"), false);
-    table.focusTable();
+    if (! remoteInput) table.focusTable();
 }
 
 namespace
@@ -3495,6 +3495,7 @@ void MainComponent::installEscapePolicy (juce::Component& root)
 
 void MainComponent::timerCallback()
 {
+    if (remoteService != nullptr) remoteService->dispatchPending();
     if (loudnessScan != nullptr)
         loudnessScan->setBusy (engine.mayBePlaying());   // cues playing: the scan reads slowly, playback's reads first
 
@@ -3562,38 +3563,13 @@ void MainComponent::timerCallback()
             && juce::Component::getCurrentlyFocusedComponent() == nullptr)
             activeCuesWindow->focusContent();
 
-    auto playing = engine.getPlayingCues();
-    const auto fades = controller.getFadeRunner().getRunning();
+    auto playback = remote::PlaybackSnapshot::capture (engine, controller);
+    auto& playing = playback.playing;
+    const auto& fades = playback.fades;
     const auto volumeBadges = VolumeCue::badgesFor (playing, fades, activeCues.findCue);
-
-    for (const auto& fade : fades)
-    {
-        AudioEngine::PlayingCue p;
-        p.id = fade.fadeId;
-        p.positionSeconds = fade.elapsedSeconds;
-        p.lengthSeconds = fade.durationSeconds;
-        p.remainingSeconds = juce::jmax (0.0, fade.durationSeconds - fade.elapsedSeconds);
-        p.progress = fade.durationSeconds > 0.0 ? juce::jlimit (0.0, 1.0, fade.elapsedSeconds / fade.durationSeconds) : 1.0;
-        p.startOrder = std::numeric_limits<juce::int64>::max() / 2;   // after the audio cues
-        playing.push_back (p);
-    }
-
-    int paused = 0, running = 0;
-
-    for (const auto& p : playing)
-    {
-        if (p.loaded)
-            continue;
-
-        ++running;
-
-        if (p.paused)
-            ++paused;
-    }
-
-    transport.setPlayingCount (running, paused);
-    activeCues.setPlayingCount (running, paused);
-    transport.setGoLocked (controller.isGoLocked());
+    transport.setPlayingCount (playback.running, playback.paused);
+    activeCues.setPlayingCount (playback.running, playback.paused);
+    transport.setGoLocked (playback.goLocked);
     inspector.setPlayback (playing);
 
     if (closeContinuation != nullptr)   // "start on close" cue: quit once its run has finished (or after the deadline)
@@ -3612,8 +3588,9 @@ void MainComponent::timerCallback()
 
     // the waits counting down (pre-waits to a scheduled start, post-waits, wait cues): the table's wait cells and the
     // active cues panel show them against the controller's clock
-    auto waits = controller.getRunningWaits();
-    const double waitClock = controller.clock();
+    auto& waits = playback.waits;
+    const double waitClock = playback.waitClock;
+    if (remoteService != nullptr) remoteService->publish (playback);
 
     if (activeCuesVisible)
         activeCues.setPlayingCues (playing, waits, waitClock, volumeBadges);
@@ -3820,6 +3797,7 @@ void MainComponent::updateContainerView()
     updateTransportStandby();
     commands.commandStatusChanged();
 
+    if (remoteInput) return;
     if (isCart)
         cart.grabKeyboardFocus();
     else

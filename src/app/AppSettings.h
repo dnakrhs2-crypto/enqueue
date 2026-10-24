@@ -83,6 +83,15 @@ public:
     bool getSpaceBarPlayPause() const;
     void setSpaceBarPlayPause (bool on);
 
+    bool getRemoteEnabled() const;
+    void setRemoteEnabled (bool);
+    juce::String getRemoteKey() const;
+    void setRemoteKey (const juce::String&);
+    juce::String getRemoteInstallId() const;
+    void setRemoteInstallId (const juce::String&);
+    juce::String getRemoteAdapter() const;
+    void setRemoteAdapter (const juce::String&);
+
     /** 플러그인 관리: the plugins whose "사용" switch is off (PluginHost::keyFor keys), out of every '+ 추가' menu. */
     juce::StringArray getDisabledPlugins() const;
     void setDisabledPlugins (const juce::StringArray& keys);

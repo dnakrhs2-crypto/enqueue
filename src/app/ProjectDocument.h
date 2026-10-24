@@ -22,6 +22,8 @@ public:
         virtual void containersChanged() {}
         virtual void midiTriggersChanged() {}
         virtual void projectReplaced() {}
+        /** Any list's content or playhead changed, independently of the dirty flag. */
+        virtual void cueListsChanged() {}
     };
 
     /** What the document knows about one list / cart besides its cues. */
@@ -167,10 +169,12 @@ private:
         }
 
         markDirty();
+        listeners.call ([] (Listener& l) { l.cueListsChanged(); });
         listeners.call ([] (Listener& l) { l.midiTriggersChanged(); });
     }
     bool flattening = false;
-    void cueChanged (int) override { markDirty(); listeners.call ([] (Listener& l) { l.midiTriggersChanged(); }); }
+    void cueChanged (int) override { markDirty(); listeners.call ([] (Listener& l) { l.cueListsChanged(); l.midiTriggersChanged(); }); }
+    void playheadChanged (int) override { listeners.call ([] (Listener& l) { l.cueListsChanged(); }); }
     void notify();
     void notifyContainers();
     /** Puts 'cues' aside into the active container and takes container 'index' into 'cues'. */

@@ -117,6 +117,7 @@ public:
         }
 
         mainWindow->getMainComponent().reopenLastProjectOnStartup (openedFromCommandLine, reopenedAfterUpdate, safeMode);
+        mainWindow->getMainComponent().startRemoteOnStartup (safeMode);
 
         if (safeMode)
             juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::InfoIcon, ko ("안전 모드"),

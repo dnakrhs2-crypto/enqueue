@@ -29,6 +29,8 @@ target_sources(EnqueueTests PRIVATE
     MidiDeviceTests.cpp
     MidiUiTests.cpp
     MidiMainComponentTests.cpp
+    RemoteTests.cpp
+    RemoteClient.cpp
     AuditFixUndoTests.cpp
     AuditFix0923EngineTests.cpp
     AuditFix0923CaptureFocusTests.cpp
@@ -158,7 +160,7 @@ target_compile_definitions(EnqueueTests PRIVATE
     JUCE_APPLICATION_NAME_STRING="EnqueueTests"
     GOCUE_HAS_WINSPARKLE=0)
 
-target_link_libraries(EnqueueTests PRIVATE GoCueCore LiveMixUI)
+target_link_libraries(EnqueueTests PRIVATE GoCueCore LiveMixUI EnqueueRemote)
 
 # Runtime test data keeps the expected PROJECT_VERSION out of compile definitions.
 file(CONFIGURE OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/AppVersion.expected" CONTENT "${PROJECT_VERSION}\n" @ONLY)

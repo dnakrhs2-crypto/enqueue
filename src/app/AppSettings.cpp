@@ -378,6 +378,15 @@ bool AppSettings::saveInputSettings (const InputSettingsTransaction& transaction
     return false;
 }
 
+bool AppSettings::getRemoteEnabled() const { return settings->getBoolValue ("remoteEnabled", false); }
+void AppSettings::setRemoteEnabled (bool enabled) { settings->setValue ("remoteEnabled", enabled); saveNow(); }
+juce::String AppSettings::getRemoteKey() const { return settings->getValue ("remoteKey"); }
+void AppSettings::setRemoteKey (const juce::String& key) { settings->setValue ("remoteKey", key); saveNow(); }
+juce::String AppSettings::getRemoteInstallId() const { return settings->getValue ("remoteInstallId"); }
+void AppSettings::setRemoteInstallId (const juce::String& id) { settings->setValue ("remoteInstallId", id); saveNow(); }
+juce::String AppSettings::getRemoteAdapter() const { return settings->getValue ("remoteAdapter"); }
+void AppSettings::setRemoteAdapter (const juce::String& id) { settings->setValue ("remoteAdapter", id); saveNow(); }
+
 bool AppSettings::saveNow()
 {
     if (! settings->saveIfNeeded())
