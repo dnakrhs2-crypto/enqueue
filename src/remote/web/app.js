@@ -33,6 +33,12 @@
   let locked = true;
   let drag = null;
   let pendingMove = null;
+  let observedHead = null;
+  let observedHeadTab = null;
+  let listTouching = false;
+  let fingerScrollUntil = 0;
+  let frameId = 0;
+  let previousFrame = 0;
 
   function element(tag, className, text) {
     const node = document.createElement(tag);
@@ -87,6 +93,7 @@
       view.node.tabIndex = locked ? -1 : 0;
       view.handle.disabled = locked || mode !== "edit" || Boolean(pendingMove);
     });
+    syncAnimation();
   }
 
   function showError(message) {
@@ -309,6 +316,7 @@
   }
 
   function receiveLists(message) {
+    const skipFollow = Boolean(drag) || listTouching || performance.now() < fingerScrollUntil;
     cancelDrag();
     if (renderedTab) scrollPositions.set(renderedTab, { list: listScroll.scrollTop, cart: $("cart-scroll").scrollTop });
     lists = message;
@@ -318,13 +326,38 @@
     renderCues();
     renderState();
     updateLayout();
+    followPlayhead(skipFollow);
     syncLocks();
   }
+
+  function followPlayhead(skip) {
+    const head = lists.playhead[lists.active] ?? null;
+    const changed = head !== observedHead || lists.active !== observedHeadTab;
+    observedHead = head;
+    observedHeadTab = lists.active;
+    if (changed && head && !skip && !$("content").hidden && !listScroll.hidden) {
+      rowViews.get(head)?.node.scrollIntoView({ block: "nearest", inline: "nearest" });
+    }
+  }
+
+  // touch events survive the pointercancel issued when the browser takes over a scroll.
+  listScroll.addEventListener("touchstart", event => {
+    if (event.target.closest(".drag-handle")) return;
+    listTouching = true;
+    fingerScrollUntil = performance.now() + 150;
+  }, { passive: true });
+  ["touchend", "touchcancel"].forEach(type => listScroll.addEventListener(type, event => {
+    listTouching = event.touches.length > 0;
+  }, { passive: true }));
+  listScroll.addEventListener("scroll", () => {
+    if (listTouching || performance.now() < fingerScrollUntil) fingerScrollUntil = performance.now() + 150;
+  }, { passive: true });
 
   function renderTabs() {
     const nodes = lists.tabs.map(tab => {
       const node = button("tab", tab.name, tab.kind === "cart" ? "cart" : "list");
       node.dataset.tab = tab.id;
+      node.title = tab.name;
       node.setAttribute("role", "tab");
       node.append(element("span", "", tab.name));
       node.addEventListener("click", () => {
@@ -356,7 +389,32 @@
       const selected = node.dataset.local === "active" ? showActive : !showActive && node.dataset.tab === lists.active;
       node.setAttribute("aria-selected", String(selected));
     });
+    revealSelectedTab();
   }
+  function updateTabEdges() {
+    const tabs = $("tabs");
+    $("tabs-strip").classList.toggle("can-scroll-left", tabs.scrollLeft > 1);
+    $("tabs-strip").classList.toggle("can-scroll-right", tabs.scrollLeft + tabs.clientWidth < tabs.scrollWidth - 1);
+  }
+  function revealSelectedTab() {
+    $("tabs").querySelector('[aria-selected="true"]')?.scrollIntoView({ block: "nearest", inline: "nearest" });
+    updateTabEdges();
+  }
+  $("tabs").addEventListener("scroll", updateTabEdges, { passive: true });
+
+  function fitNextName() {
+    const name = $("next-name");
+    name.parentElement.classList.remove("is-compact");
+    if (name.scrollHeight > name.clientHeight + 1 || name.scrollWidth > name.clientWidth + 1) {
+      name.parentElement.classList.add("is-compact");
+    }
+  }
+  const sizeObserver = new ResizeObserver(entries => {
+    if (entries.some(entry => entry.target === $("tabs-strip"))) revealSelectedTab();
+    if (entries.some(entry => entry.target === $("next-name").closest(".next-cue"))) fitNextName();
+  });
+  sizeObserver.observe($("tabs-strip"));
+  sizeObserver.observe($("next-name").closest(".next-cue"));
   wide.addEventListener("change", () => { cancelDrag(); updateLayout(); });
   window.addEventListener("resize", cancelDrag);
 
@@ -372,6 +430,7 @@
     if (!tab) return;
     const cues = lists.cues[tab.id] || [];
     if (tab.kind === "list") {
+      $("cue-list").style.setProperty("--no-ch", Math.max(1, ...cues.map(cue => String(cue.no).length)));
       const fragment = document.createDocumentFragment();
       cues.forEach(cue => {
         const node = element("div", "cue-row");
@@ -446,14 +505,38 @@
 
   function waitLabel(kind) { return kind === "pre" ? "프리웨이트" : kind === "post" ? "포스트웨이트" : "대기"; }
 
+  function groupStatuses() {
+    const statuses = new Map();
+    const rank = { wait: 1, pause: 2, play: 3 };
+    const merge = (id, status) => {
+      if (status && (!statuses.has(id) || rank[status] > rank[statuses.get(id)])) statuses.set(id, status);
+    };
+    const cues = lists.cues[lists.active] || [];
+    // Children precede their parent in this reverse walk, including nested groups.
+    for (let i = cues.length - 1; i >= 0; i--) {
+      const cue = cues[i];
+      const item = playingByCue.get(cue.id);
+      merge(cue.id, item ? item.st === "pause" ? "pause" : "play" : waitsByCue.has(cue.id) ? "wait" : null);
+      if (cue.parent) merge(cue.parent, statuses.get(cue.id));
+    }
+    return statuses;
+  }
+
   function renderState() {
+    const nextChanged = $("next-name").textContent !== String(state.next?.name ?? "")
+      || $("next-number").textContent !== String(state.next?.no ?? "");
     setText($("next-number"), state.next?.no);
     setText($("next-name"), state.next?.name);
     $("next-name").title = state.next?.name || "";
     setText($("next-length"), state.next?.len);
     $("next-length-line").hidden = !state.next;
+    if (nextChanged) fitNextName();
+    const groups = groupStatuses();
     rowViews.forEach(view => {
-      setStatus(view.node, playingByCue.get(view.cue.id), waitsByCue.get(view.cue.id));
+      if (view.cue.kind === "group") {
+        const status = groups.get(view.cue.id);
+        setStatus(view.node, status && status !== "wait" ? { st: status } : null, status === "wait");
+      } else setStatus(view.node, playingByCue.get(view.cue.id), waitsByCue.get(view.cue.id));
       view.node.classList.toggle("is-next", lists.playhead[lists.active] === view.cue.id);
     });
     cartViews.forEach(view => {
@@ -569,6 +652,7 @@
     ghost.style.left = `${rect.left}px`;
     ghost.style.top = `${rect.top}px`;
     ghost.style.width = `${rect.width}px`;
+    ghost.style.setProperty("--no-ch", $("cue-list").style.getPropertyValue("--no-ch"));
     root.append(ghost);
     node.classList.add("drag-source");
     const cues = lists.cues[tab];
@@ -579,6 +663,7 @@
       x: event.clientX, y: event.clientY, startX: event.clientX, startY: event.clientY, moved: false, target: null };
     handle.setPointerCapture(event.pointerId);
     calculateDrop();
+    syncAnimation();
   }
 
   function calculateDrop() {
@@ -608,6 +693,7 @@
     previous.node.classList.remove("drag-source");
     $("drop-line").hidden = true;
     if (previous.handle.hasPointerCapture(previous.pointer)) previous.handle.releasePointerCapture(previous.pointer);
+    syncAnimation();
   }
 
   window.addEventListener("pointermove", event => {
@@ -636,8 +722,23 @@
   window.addEventListener("pointercancel", event => { if (drag?.pointer === event.pointerId) cancelDrag(); });
   root.addEventListener("lostpointercapture", event => { if (drag?.pointer === event.pointerId) cancelDrag(); });
 
-  let previousFrame = performance.now();
+  function needsAnimation() {
+    return !locked && (Boolean(drag) || state.waits.length > 0 || state.playing.some(item => item.st !== "pause"));
+  }
+  function syncAnimation() {
+    if (needsAnimation()) {
+      if (!frameId) {
+        previousFrame = performance.now();
+        frameId = requestAnimationFrame(frame);
+      }
+    } else if (frameId) {
+      cancelAnimationFrame(frameId);
+      frameId = 0;
+    }
+  }
   function frame(now) {
+    frameId = 0;
+    if (!needsAnimation()) return;
     updateTimes(now);
     if (drag) {
       const rect = listScroll.getBoundingClientRect();
@@ -650,9 +751,8 @@
       }
     }
     previousFrame = now;
-    requestAnimationFrame(frame);
+    frameId = requestAnimationFrame(frame);
   }
   updateLayout();
   connect();
-  requestAnimationFrame(frame);
 })();

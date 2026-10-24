@@ -426,6 +426,9 @@ class Handler(BaseHTTPRequestHandler):
                     client.touches.clear()
             if "frozen" in data:
                 model.frozen = data["frozen"]
+            for name in ("pc", "project"):
+                if name in data:
+                    setattr(model, name, data[name])
             if "reject" in data:
                 self.server.reject_next = data["reject"]
             if "silence" in data:
