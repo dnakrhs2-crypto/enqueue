@@ -1,1 +1,51 @@
-<!doctype html><html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"><title>Enqueue</title><link rel="stylesheet" href="/app.css"></head><body><script src="/app.js"></script></body></html>
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#1f232a">
+  <meta name="color-scheme" content="dark">
+  <title>앤큐</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="/app.css">
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <main id="remote" class="remote is-locked">
+    <div id="connection-notice" class="connection-notice" role="status">다시 연결 중</div>
+    <div id="toast" class="toast" role="alert" hidden></div>
+    <div class="main-toolbar">
+      <div id="identity" class="identity">
+        <div id="project-identity" class="project-identity"><strong id="pc-name"></strong><span id="project-name"></span></div>
+        <div class="mode-switch">
+          <button type="button" data-show="false" aria-pressed="false" disabled>편집 모드</button>
+          <button type="button" data-show="true" aria-pressed="false" disabled>쇼 모드</button>
+        </div>
+        <span id="connection" class="connection"><span class="connection-dot" aria-hidden="true"></span><span id="connection-label">다시 연결 중</span></span>
+      </div>
+      <nav id="tabs" class="tabs" role="tablist"></nav>
+    </div>
+    <section class="transport">
+      <button id="go" class="go" type="button" disabled>GO</button>
+      <div class="next-cue">
+        <div class="next-label">다음 큐</div>
+        <div class="next-title"><span id="next-number" class="next-number mono"></span><strong id="next-name"></strong></div>
+        <div id="next-length-line" class="next-length" hidden>길이 <span id="next-length" class="mono"></span></div>
+      </div>
+      <div class="commands">
+        <button class="command pause" type="button" data-command="pause" disabled><span class="icon icon-pause" aria-hidden="true"></span>일시정지</button>
+        <button class="command fade" type="button" data-command="fade" disabled><span class="icon icon-fade" aria-hidden="true"></span>페이드아웃</button>
+        <button id="panic" class="command panic" type="button" disabled><span class="icon icon-stop" aria-hidden="true"></span>전체 페이드 정지</button>
+      </div>
+    </section>
+    <section id="content" class="content" role="tabpanel">
+      <div id="list-scroll" class="list-scroll" hidden><div id="cue-list" class="cue-list"></div><div id="drop-line" class="drop-line" hidden></div></div>
+      <div id="cart-scroll" class="cart-scroll" hidden><div id="cart-grid" class="cart-grid"></div></div>
+    </section>
+    <aside id="active-panel" class="active-panel" hidden>
+      <div class="active-header"><strong>활성 큐</strong><span id="active-counts">재생 중 <span id="playing-count" class="mono">0</span> · 대기 <span id="waiting-count" class="mono">0</span></span></div>
+      <div id="active-cues" class="active-cues"></div>
+    </aside>
+  </main>
+</body>
+</html>
